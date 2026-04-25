@@ -1,10 +1,11 @@
 import PageHeader from "@/components/PageHeader";
+import PagePermissionGuard from "@/components/PagePermissionGuard";
 import MatchesUploader from "@/components/MatchesUploader";
 import ReviewsUploader from "@/components/ReviewsUploader";
 
 export default function DataPage() {
   return (
-    <>
+    <PagePermissionGuard page="data">
       <PageHeader
         title="Data"
         subtitle="Upload CSVs from Retool. Each upload replaces the previous one for that data type."
@@ -25,7 +26,7 @@ export default function DataPage() {
         />
         <ReviewsUploader />
       </section>
-    </>
+    </PagePermissionGuard>
   );
 }
 

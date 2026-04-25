@@ -5,6 +5,7 @@ import PageHeader from "@/components/PageHeader";
 import { CityHealthPill } from "@/components/StatusPill";
 import MiniBarSparkline from "@/components/MiniBarSparkline";
 import TotalsBarChart from "@/components/TotalsBarChart";
+import PagePermissionGuard from "@/components/PagePermissionGuard";
 import { useMatchData } from "@/lib/useMatchData";
 import { useReviewData } from "@/lib/useReviewData";
 import {
@@ -21,6 +22,14 @@ import ManagerPodium from "@/components/ManagerPodium";
 import Reviews8WeekCard from "@/components/Reviews8WeekCard";
 
 export default function CitiesIndexPage() {
+  return (
+    <PagePermissionGuard page="cities">
+      <CitiesIndexContent />
+    </PagePermissionGuard>
+  );
+}
+
+function CitiesIndexContent() {
   const { rows, meta, loading } = useMatchData();
   const { rows: reviewRows, meta: reviewMeta, loading: reviewLoading } =
     useReviewData();

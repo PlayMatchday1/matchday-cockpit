@@ -3,8 +3,7 @@
 import { useEffect, useMemo, useState } from "react";
 import { supabase } from "@/lib/supabase";
 import { isEmptyHtml } from "@/lib/html";
-import { partitionDirectory } from "@/lib/org";
-import { useOrgDirectory } from "@/lib/useOrgDirectory";
+import { displayName, useAuth } from "@/lib/useAuth";
 import {
   COMMON_TAGS,
   TOPIC_STATUSES,
@@ -18,7 +17,6 @@ import {
 import { refetchTopics } from "@/lib/useTopics";
 import ActionItemRow from "./ActionItemRow";
 import CommentBody from "./CommentBody";
-import DirectoryOptions from "./DirectoryOptions";
 import RichCommentEditor from "./RichCommentEditor";
 
 function relativeTime(iso: string): string {
@@ -72,15 +70,10 @@ export default function TopicDetail({
   const [newItemBody, setNewItemBody] = useState("");
 
   const [commentBody, setCommentBody] = useState("");
-  const [author, setAuthor] = useState("");
   const [posting, setPosting] = useState(false);
   const [postError, setPostError] = useState<string | null>(null);
 
-  const dir = useOrgDirectory();
-  const partition = useMemo(
-    () => (dir ? partitionDirectory(dir) : null),
-    [dir],
-  );
+  const { appUser } = useAuth();
 
   async function reload() {
     const [aRes, cRes] = await Promise.all([
@@ -211,12 +204,13 @@ export default function TopicDetail({
   }
 
   async function postComment() {
-    if (isEmptyHtml(commentBody) || !author || posting) return;
+    if (isEmptyHtml(commentBody) || !appUser || posting) return;
     setPosting(true);
     setPostError(null);
     const { error } = await supabase.from("topic_comments").insert({
       topic_id: topic.id,
-      author,
+      author: displayName(appUser),
+      author_email: appUser.email,
       body: commentBody,
     });
     setPosting(false);
@@ -230,8 +224,8 @@ export default function TopicDetail({
 
   const sortedItems = useMemo(() => sortActionItems(items), [items]);
   const doneCount = items.filter((i) => i.is_done).length;
-  const canPost =
-    !isEmptyHtml(commentBody) && author.length > 0 && !posting;
+  const canPost = !isEmptyHtml(commentBody) && !!appUser && !posting;
+  const posterName = displayName(appUser);
 
   return (
     <div className="rounded-2xl border-[1.5px] border-cream-line bg-white p-6 shadow-md shadow-deep-green/10 md:p-7">
@@ -461,17 +455,11 @@ export default function TopicDetail({
         )}
 
         <div className="space-y-2">
-          <select
-            value={author}
-            onChange={(e) => setAuthor(e.target.value)}
-            className="w-full rounded-md border border-cream-line bg-cream px-2 py-1.5 text-xs font-medium text-deep-green focus:border-deep-green focus:outline-none"
-            aria-label="Comment author"
-          >
-            <option value="" disabled>
-              Choose author…
-            </option>
-            {partition && <DirectoryOptions partition={partition} />}
-          </select>
+          {posterName && (
+            <div className="text-[11px] text-deep-green/55">
+              Posting as <span className="font-bold">{posterName}</span>
+            </div>
+          )}
           <RichCommentEditor
             value={commentBody}
             onChange={setCommentBody}

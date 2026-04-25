@@ -3,14 +3,12 @@
 import { useMemo, useState } from "react";
 import { supabase } from "@/lib/supabase";
 import { isEmptyHtml } from "@/lib/html";
-import { partitionDirectory } from "@/lib/org";
-import { useOrgDirectory } from "@/lib/useOrgDirectory";
+import { displayName, useAuth } from "@/lib/useAuth";
 import {
   refetchGoalComments,
   useGoalComments,
 } from "@/lib/useGoalComments";
 import CommentBody from "./CommentBody";
-import DirectoryOptions from "./DirectoryOptions";
 import RichCommentEditor from "./RichCommentEditor";
 
 function relativeTime(iso: string): string {
@@ -30,17 +28,11 @@ function relativeTime(iso: string): string {
 
 export default function CardComments({ goalId }: { goalId: string }) {
   const { comments: allComments, loading } = useGoalComments();
+  const { appUser } = useAuth();
   const [collapsed, setCollapsed] = useState(false);
-  const [author, setAuthor] = useState<string>("");
   const [body, setBody] = useState("");
   const [posting, setPosting] = useState(false);
   const [postError, setPostError] = useState<string | null>(null);
-
-  const dir = useOrgDirectory();
-  const partition = useMemo(
-    () => (dir ? partitionDirectory(dir) : null),
-    [dir],
-  );
 
   const comments = useMemo(
     () =>
@@ -51,12 +43,15 @@ export default function CardComments({ goalId }: { goalId: string }) {
   );
 
   async function submitComment() {
-    if (isEmptyHtml(body) || !author || posting) return;
+    if (isEmptyHtml(body) || !appUser || posting) return;
     setPosting(true);
     setPostError(null);
-    const { error } = await supabase
-      .from("goal_comments")
-      .insert({ goal_id: goalId, author, body });
+    const { error } = await supabase.from("goal_comments").insert({
+      goal_id: goalId,
+      author: displayName(appUser),
+      author_email: appUser.email,
+      body,
+    });
     setPosting(false);
     if (error) {
       setPostError(error.message);
@@ -83,7 +78,8 @@ export default function CardComments({ goalId }: { goalId: string }) {
     refetchGoalComments();
   }
 
-  const canPost = !isEmptyHtml(body) && author.length > 0 && !posting;
+  const canPost = !isEmptyHtml(body) && !!appUser && !posting;
+  const posterName = displayName(appUser);
 
   return (
     <div className="space-y-3">
@@ -115,7 +111,7 @@ export default function CardComments({ goalId }: { goalId: string }) {
                 className="group relative rounded-lg bg-cream px-3 py-2 text-sm"
               >
                 <div className="text-xs font-bold text-deep-green">
-                  {c.author}{" "}
+                  {c.author || "—"}{" "}
                   <span className="font-normal text-deep-green/50">
                     · {relativeTime(c.created_at)}
                   </span>
@@ -146,17 +142,11 @@ export default function CardComments({ goalId }: { goalId: string }) {
         ))}
 
       <form onSubmit={onFormSubmit} className="space-y-2">
-        <select
-          value={author}
-          onChange={(e) => setAuthor(e.target.value)}
-          className="w-full rounded-md border border-cream-line bg-cream px-2 py-1.5 text-xs font-medium text-deep-green focus:border-deep-green focus:outline-none"
-          aria-label="Comment author"
-        >
-          <option value="" disabled>
-            Choose author…
-          </option>
-          {partition && <DirectoryOptions partition={partition} />}
-        </select>
+        {posterName && (
+          <div className="text-[11px] text-deep-green/55">
+            Posting as <span className="font-bold">{posterName}</span>
+          </div>
+        )}
         <RichCommentEditor
           value={body}
           onChange={setBody}

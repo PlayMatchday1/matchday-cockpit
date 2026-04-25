@@ -5,14 +5,17 @@ import Link from "next/link";
 import { useSearchParams } from "next/navigation";
 import HeroMessage from "@/components/HeroMessage";
 import HomeGoalsView from "@/components/HomeGoalsView";
+import PagePermissionGuard from "@/components/PagePermissionGuard";
 import QuickStats from "@/components/QuickStats";
 import TopicsView from "@/components/TopicsView";
 
 export default function ClubhousePage() {
   return (
-    <Suspense fallback={null}>
-      <ClubhouseContent />
-    </Suspense>
+    <PagePermissionGuard page="clubhouse">
+      <Suspense fallback={null}>
+        <ClubhouseContent />
+      </Suspense>
+    </PagePermissionGuard>
   );
 }
 

@@ -1,7 +1,7 @@
 import type { Metadata } from "next";
 import { Bebas_Neue, Geist, Geist_Mono } from "next/font/google";
 import "./globals.css";
-import TopNav from "@/components/TopNav";
+import AuthGate from "@/components/AuthGate";
 
 const geistSans = Geist({
   variable: "--font-geist-sans",
@@ -35,8 +35,7 @@ export default function RootLayout({
       className={`${geistSans.variable} ${geistMono.variable} ${bebas.variable} h-full antialiased`}
     >
       <body className="min-h-full">
-        <TopNav />
-        <main className="mx-auto max-w-6xl px-6 py-8">{children}</main>
+        <AuthGate>{children}</AuthGate>
       </body>
     </html>
   );
