@@ -2,6 +2,7 @@
 
 import { useEffect } from "react";
 import type { Goal, Status } from "@/lib/types";
+import { formatGoalDate, isTargetPastDue } from "@/lib/goals";
 import { GROUP_KIND_LABEL, lookupOwner } from "@/lib/org";
 import { useOrgDirectory } from "@/lib/useOrgDirectory";
 import StatusPill from "./StatusPill";
@@ -86,6 +87,33 @@ export default function GoalFocusZone({
               {lookup.kind === "group" && (
                 <span className="inline-flex rounded-full bg-cream-soft px-2 py-0.5 text-[10px] font-bold uppercase tracking-wider text-deep-green/60 ring-1 ring-inset ring-cream-line">
                   {GROUP_KIND_LABEL[lookup.group.kind]}
+                </span>
+              )}
+            </div>
+          </div>
+
+          <div className="space-y-1 text-xs text-deep-green/60">
+            <div>
+              <span className="text-deep-green/45">Created · </span>
+              {formatGoalDate(goal.created_at)}
+            </div>
+            <div className="flex flex-wrap items-center gap-2">
+              {goal.target_date ? (
+                <>
+                  <span>
+                    <span className="text-deep-green/45">Target · </span>
+                    {formatGoalDate(goal.target_date)}
+                  </span>
+                  {isTargetPastDue(goal.target_date) &&
+                    goal.status !== "Done" && (
+                      <span className="inline-flex rounded-full bg-coral-soft px-2 py-0.5 text-[10px] font-bold uppercase tracking-wider text-coral ring-1 ring-inset ring-coral/40">
+                        Past due
+                      </span>
+                    )}
+                </>
+              ) : (
+                <span className="italic text-deep-green/40">
+                  No target date
                 </span>
               )}
             </div>

@@ -86,18 +86,21 @@ function DrawerForm({
           owner: state.goal.owner,
           status: state.goal.status,
           progress: state.goal.progress,
+          targetDate: state.goal.target_date ?? "",
         }
       : {
           title: "",
           owner: "",
           status: "Not started" as Status,
           progress: 0,
+          targetDate: "",
         };
 
   const [title, setTitle] = useState(initial.title);
   const [owner, setOwner] = useState<string>(initial.owner);
   const [status, setStatus] = useState<Status>(initial.status);
   const [progress, setProgress] = useState(initial.progress);
+  const [targetDate, setTargetDate] = useState<string>(initial.targetDate);
   const [saving, setSaving] = useState(false);
   const [deleting, setDeleting] = useState(false);
 
@@ -119,10 +122,17 @@ function DrawerForm({
   async function save() {
     if (!title.trim() || !owner) return;
     setSaving(true);
+    const target_date = targetDate || null;
     if (state.mode === "edit") {
       const { error } = await supabase
         .from("goals")
-        .update({ title: title.trim(), owner, status, progress })
+        .update({
+          title: title.trim(),
+          owner,
+          status,
+          progress,
+          target_date,
+        })
         .eq("id", state.goal.id);
       setSaving(false);
       if (error) return alert(error.message);
@@ -139,6 +149,7 @@ function DrawerForm({
         scope: state.scope,
         city: state.city ?? null,
         sort_order,
+        target_date,
       });
       setSaving(false);
       if (error) return alert(error.message);
@@ -228,6 +239,25 @@ function DrawerForm({
               <option key={s}>{s}</option>
             ))}
           </select>
+        </Field>
+        <Field label="Target date">
+          <div className="flex items-center gap-2">
+            <input
+              type="date"
+              value={targetDate}
+              onChange={(e) => setTargetDate(e.target.value)}
+              className="rounded-md border border-cream-line bg-cream-soft px-3 py-2 text-sm text-deep-green focus:border-deep-green focus:outline-none"
+            />
+            {targetDate && (
+              <button
+                type="button"
+                onClick={() => setTargetDate("")}
+                className="text-xs font-medium text-deep-green/60 transition hover:text-deep-green"
+              >
+                Clear
+              </button>
+            )}
+          </div>
         </Field>
         <Field label="Progress">
           <div className="flex items-center gap-3">

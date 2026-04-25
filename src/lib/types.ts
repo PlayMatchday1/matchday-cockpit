@@ -47,6 +47,7 @@ export type Goal = {
   scope: Scope;
   city: City | null;
   sort_order: number | null;
+  target_date: string | null;
   created_at: string;
   updated_at: string;
 };

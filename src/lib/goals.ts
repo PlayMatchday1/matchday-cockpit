@@ -26,6 +26,39 @@ export async function swapGoalSortOrder(
   return { error: null };
 }
 
+function parseGoalDate(s: string): Date {
+  if (/^\d{4}-\d{2}-\d{2}$/.test(s)) {
+    const [yr, mo, dy] = s.split("-").map(Number);
+    return new Date(yr, mo - 1, dy);
+  }
+  return new Date(s);
+}
+
+export function formatGoalDate(s: string | null): string {
+  if (!s) return "";
+  return parseGoalDate(s).toLocaleDateString("en-US", {
+    month: "short",
+    day: "numeric",
+    year: "numeric",
+  });
+}
+
+export function formatGoalDateShort(s: string | null): string {
+  if (!s) return "";
+  return parseGoalDate(s).toLocaleDateString("en-US", {
+    month: "short",
+    day: "numeric",
+  });
+}
+
+export function isTargetPastDue(targetDate: string | null): boolean {
+  if (!targetDate) return false;
+  const target = parseGoalDate(targetDate);
+  const today = new Date();
+  today.setHours(0, 0, 0, 0);
+  return target < today;
+}
+
 export async function getNextSortOrder(
   scope: string,
   city: string | null,

@@ -2,6 +2,7 @@
 
 import { ChevronDown, ChevronUp } from "lucide-react";
 import type { Goal, Status } from "@/lib/types";
+import { formatGoalDateShort, isTargetPastDue } from "@/lib/goals";
 import { GROUP_KIND_LABEL, lookupOwner } from "@/lib/org";
 import { useOrgDirectory } from "@/lib/useOrgDirectory";
 import StatusPill from "./StatusPill";
@@ -129,6 +130,15 @@ export default function GoalCard({
           {goal.progress}%
         </span>
       </div>
+
+      {goal.target_date &&
+        (isTargetPastDue(goal.target_date) && goal.status !== "Done" ? (
+          <div className="mt-2 text-xs font-bold text-coral">Past due</div>
+        ) : (
+          <div className="mt-2 text-xs text-deep-green/50">
+            Target {formatGoalDateShort(goal.target_date)}
+          </div>
+        ))}
     </div>
   );
 }
