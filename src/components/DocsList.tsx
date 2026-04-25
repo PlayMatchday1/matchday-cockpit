@@ -2,33 +2,56 @@
 
 import { useCallback, useEffect, useState } from "react";
 import { supabase } from "@/lib/supabase";
-import type { Doc } from "@/lib/types";
+import type { Doc, DocSection } from "@/lib/types";
+import DocSectionCard from "./DocSectionCard";
+
+async function normalizeSectionSortOrders(
+  sections: DocSection[],
+): Promise<DocSection[]> {
+  const updates = sections.map((s, i) =>
+    supabase.from("doc_sections").update({ sort_order: i }).eq("id", s.id),
+  );
+  await Promise.all(updates);
+  return sections.map((s, i) => ({ ...s, sort_order: i }));
+}
 
 export default function DocsList() {
+  const [sections, setSections] = useState<DocSection[]>([]);
   const [docs, setDocs] = useState<Doc[]>([]);
   const [loading, setLoading] = useState(true);
   const [error, setError] = useState<string | null>(null);
 
-  const [adding, setAdding] = useState(false);
-  const [newTitle, setNewTitle] = useState("");
-  const [newUrl, setNewUrl] = useState("");
-  const [newNote, setNewNote] = useState("");
-  const [saving, setSaving] = useState(false);
-
-  const [editingId, setEditingId] = useState<string | null>(null);
-  const [editTitle, setEditTitle] = useState("");
-  const [editUrl, setEditUrl] = useState("");
-  const [editNote, setEditNote] = useState("");
+  const [addingSection, setAddingSection] = useState(false);
+  const [newSectionTitle, setNewSectionTitle] = useState("");
+  const [savingSection, setSavingSection] = useState(false);
 
   const load = useCallback(async () => {
     setLoading(true);
     setError(null);
-    const { data, error } = await supabase
-      .from("docs")
-      .select("*")
-      .order("added_at", { ascending: false });
-    if (error) setError(error.message);
-    else setDocs((data ?? []) as Doc[]);
+    const [sRes, dRes] = await Promise.all([
+      supabase
+        .from("doc_sections")
+        .select("*")
+        .order("sort_order", { ascending: true })
+        .order("created_at", { ascending: true }),
+      supabase
+        .from("docs")
+        .select("*")
+        .order("sort_order", { ascending: true })
+        .order("added_at", { ascending: false }),
+    ]);
+    if (sRes.error) {
+      setError(sRes.error.message);
+      setLoading(false);
+      return;
+    }
+    if (dRes.error) {
+      setError(dRes.error.message);
+      setLoading(false);
+      return;
+    }
+    setSections((sRes.data ?? []) as DocSection[]);
+    setDocs((dRes.data ?? []) as Doc[]);
     setLoading(false);
   }, []);
 
@@ -36,267 +59,128 @@ export default function DocsList() {
     load();
   }, [load]);
 
-  async function add(e: React.FormEvent) {
+  async function addSection(e: React.FormEvent) {
     e.preventDefault();
-    if (!newTitle.trim() || !newUrl.trim()) return;
-    setSaving(true);
-    const { error } = await supabase.from("docs").insert({
-      title: newTitle.trim(),
-      url: newUrl.trim(),
-      note: newNote.trim() || null,
+    const trimmed = newSectionTitle.trim();
+    if (!trimmed || savingSection) return;
+    setSavingSection(true);
+    const nextSort =
+      sections.length > 0
+        ? Math.max(...sections.map((s) => s.sort_order ?? 0)) + 1
+        : 0;
+    const { error } = await supabase.from("doc_sections").insert({
+      title: trimmed,
+      sort_order: nextSort,
     });
-    setSaving(false);
-    if (!error) {
-      setNewTitle("");
-      setNewUrl("");
-      setNewNote("");
-      setAdding(false);
-      load();
-    } else {
-      alert(error.message);
+    setSavingSection(false);
+    if (error) return alert(error.message);
+    setNewSectionTitle("");
+    setAddingSection(false);
+    load();
+  }
+
+  async function moveSection(sectionId: number, dir: "up" | "down") {
+    const idx = sections.findIndex((s) => s.id === sectionId);
+    if (idx === -1) return;
+    const targetIdx = dir === "up" ? idx - 1 : idx + 1;
+    if (targetIdx < 0 || targetIdx >= sections.length) return;
+
+    let working = sections;
+    const orders = new Set(sections.map((s) => s.sort_order));
+    if (orders.size !== sections.length) {
+      working = await normalizeSectionSortOrders(sections);
+      setSections(working);
     }
-  }
 
-  function startEdit(d: Doc) {
-    setEditingId(d.id);
-    setEditTitle(d.title);
-    setEditUrl(d.url);
-    setEditNote(d.note ?? "");
-  }
+    const a = working[idx];
+    const b = working[targetIdx];
+    const aOrder = a.sort_order;
+    const bOrder = b.sort_order;
 
-  async function saveEdit(id: string) {
-    const { error } = await supabase
-      .from("docs")
-      .update({
-        title: editTitle.trim(),
-        url: editUrl.trim(),
-        note: editNote.trim() || null,
-      })
-      .eq("id", id);
-    if (!error) {
-      setEditingId(null);
-      load();
-    } else {
-      alert(error.message);
-    }
-  }
-
-  async function remove(id: string) {
-    if (!confirm("Delete this doc?")) return;
-    const { error } = await supabase.from("docs").delete().eq("id", id);
-    if (!error) load();
+    const r1 = await supabase
+      .from("doc_sections")
+      .update({ sort_order: bOrder })
+      .eq("id", a.id);
+    if (r1.error) return alert(r1.error.message);
+    const r2 = await supabase
+      .from("doc_sections")
+      .update({ sort_order: aOrder })
+      .eq("id", b.id);
+    if (r2.error) return alert(r2.error.message);
+    load();
   }
 
   return (
-    <div className="space-y-4">
-      {!adding ? (
-        <button
-          onClick={() => setAdding(true)}
-          className="rounded-md border border-dashed border-gray-300 px-3 py-2 text-sm text-gray-600 hover:border-gray-400 hover:text-gray-900"
-        >
-          + Add doc
-        </button>
-      ) : (
+    <div className="space-y-6">
+      {addingSection ? (
         <form
-          onSubmit={add}
-          className="rounded-md border border-gray-200 bg-white p-4"
+          onSubmit={addSection}
+          className="flex flex-wrap items-center gap-2 rounded-2xl border-[1.5px] border-cream-line bg-white p-3 shadow-md shadow-deep-green/10"
         >
-          <div className="grid grid-cols-1 gap-3 sm:grid-cols-2">
-            <div>
-              <label className="block text-xs font-medium text-gray-600">
-                Title
-              </label>
-              <input
-                value={newTitle}
-                onChange={(e) => setNewTitle(e.target.value)}
-                className="mt-1 w-full rounded-md border border-gray-200 px-3 py-1.5 text-sm focus:border-gray-400 focus:outline-none"
-                placeholder="e.g., Q2 OKRs"
-                autoFocus
-              />
-            </div>
-            <div>
-              <label className="block text-xs font-medium text-gray-600">
-                Google Drive URL
-              </label>
-              <input
-                value={newUrl}
-                onChange={(e) => setNewUrl(e.target.value)}
-                className="mt-1 w-full rounded-md border border-gray-200 px-3 py-1.5 text-sm focus:border-gray-400 focus:outline-none"
-                placeholder="https://docs.google.com/…"
-              />
-            </div>
-            <div className="sm:col-span-2">
-              <label className="block text-xs font-medium text-gray-600">
-                Note <span className="text-gray-400">(optional)</span>
-              </label>
-              <input
-                value={newNote}
-                onChange={(e) => setNewNote(e.target.value)}
-                className="mt-1 w-full rounded-md border border-gray-200 px-3 py-1.5 text-sm focus:border-gray-400 focus:outline-none"
-                placeholder="e.g. Active through March"
-              />
-            </div>
-          </div>
-          <div className="mt-3 flex justify-end gap-2">
-            <button
-              type="button"
-              onClick={() => {
-                setAdding(false);
-                setNewTitle("");
-                setNewUrl("");
-                setNewNote("");
-              }}
-              className="rounded-md px-3 py-1.5 text-sm text-gray-600 hover:text-gray-900"
-            >
-              Cancel
-            </button>
-            <button
-              type="submit"
-              disabled={saving || !newTitle.trim() || !newUrl.trim()}
-              className="rounded-md bg-gray-900 px-3 py-1.5 text-sm text-white hover:bg-gray-700 disabled:opacity-50"
-            >
-              {saving ? "Saving…" : "Save doc"}
-            </button>
-          </div>
+          <input
+            autoFocus
+            value={newSectionTitle}
+            onChange={(e) => setNewSectionTitle(e.target.value)}
+            placeholder="Section title"
+            className="min-w-0 flex-1 rounded-md border border-cream-line bg-cream-soft px-3 py-1.5 text-sm text-deep-green focus:border-deep-green focus:outline-none"
+          />
+          <button
+            type="submit"
+            disabled={savingSection || !newSectionTitle.trim()}
+            className="rounded-full bg-mint px-4 py-1.5 text-sm font-bold text-deep-green transition hover:bg-mint-hover disabled:opacity-50"
+          >
+            {savingSection ? "Adding…" : "Add section"}
+          </button>
+          <button
+            type="button"
+            onClick={() => {
+              setAddingSection(false);
+              setNewSectionTitle("");
+            }}
+            className="rounded-full px-3 py-1.5 text-sm font-medium text-deep-green/70 hover:text-deep-green"
+          >
+            Cancel
+          </button>
         </form>
+      ) : (
+        <button
+          type="button"
+          onClick={() => setAddingSection(true)}
+          className="rounded-full bg-mint px-5 py-2 text-sm font-bold text-deep-green transition hover:bg-mint-hover"
+        >
+          + Add section
+        </button>
       )}
 
       {error && (
-        <div className="rounded-md border border-red-200 bg-red-50 p-3 text-sm text-red-700">
+        <div className="rounded-md border border-coral/40 bg-coral-soft px-3 py-2 text-sm text-coral">
           {error}
         </div>
       )}
 
-      <div className="overflow-hidden rounded-lg border border-gray-200 bg-white">
-        <table className="w-full text-left">
-          <thead className="bg-gray-50 text-xs uppercase tracking-wide text-gray-500">
-            <tr>
-              <th className="py-2 pl-4 pr-4 font-medium">Title</th>
-              <th className="py-2 pr-4 font-medium">URL</th>
-              <th className="py-2 pr-4 font-medium">Note</th>
-              <th className="py-2 pr-4 font-medium">Added</th>
-              <th className="py-2 pr-4 font-medium text-right">Actions</th>
-            </tr>
-          </thead>
-          <tbody>
-            {loading ? (
-              <tr>
-                <td colSpan={5} className="py-8 text-center text-sm text-gray-500">
-                  Loading…
-                </td>
-              </tr>
-            ) : docs.length === 0 ? (
-              <tr>
-                <td colSpan={5} className="py-8 text-center text-sm text-gray-500">
-                  No docs yet.
-                </td>
-              </tr>
-            ) : (
-              docs.map((d) => (
-                <tr
-                  key={d.id}
-                  className="border-t border-gray-200 hover:bg-gray-50"
-                >
-                  <td className="py-3 pl-4 pr-4 align-top">
-                    {editingId === d.id ? (
-                      <input
-                        value={editTitle}
-                        onChange={(e) => setEditTitle(e.target.value)}
-                        className="w-full rounded-md border border-gray-200 px-2 py-1 text-sm"
-                      />
-                    ) : (
-                      <span className="text-sm text-gray-900">{d.title}</span>
-                    )}
-                  </td>
-                  <td className="py-3 pr-4 align-top">
-                    {editingId === d.id ? (
-                      <input
-                        value={editUrl}
-                        onChange={(e) => setEditUrl(e.target.value)}
-                        className="w-full rounded-md border border-gray-200 px-2 py-1 text-sm"
-                      />
-                    ) : (
-                      <a
-                        href={d.url}
-                        target="_blank"
-                        rel="noreferrer"
-                        className="break-all text-sm text-blue-600 hover:underline"
-                      >
-                        {d.url}
-                      </a>
-                    )}
-                  </td>
-                  <td className="py-3 pr-4 align-top">
-                    {editingId === d.id ? (
-                      <input
-                        value={editNote}
-                        onChange={(e) => setEditNote(e.target.value)}
-                        placeholder="e.g. Active through March"
-                        className="w-full rounded-md border border-gray-200 px-2 py-1 text-sm"
-                      />
-                    ) : d.note ? (
-                      <span className="text-sm italic text-deep-green/60">
-                        {d.note}
-                      </span>
-                    ) : null}
-                  </td>
-                  <td className="whitespace-nowrap py-3 pr-4 align-top text-sm text-gray-500">
-                    {relativeAdded(d.added_at)}
-                  </td>
-                  <td className="py-3 pr-4 align-top text-right">
-                    {editingId === d.id ? (
-                      <div className="flex justify-end gap-2">
-                        <button
-                          onClick={() => setEditingId(null)}
-                          className="text-sm text-gray-500 hover:text-gray-800"
-                        >
-                          Cancel
-                        </button>
-                        <button
-                          onClick={() => saveEdit(d.id)}
-                          className="rounded-md bg-gray-900 px-2 py-1 text-sm text-white hover:bg-gray-700"
-                        >
-                          Save
-                        </button>
-                      </div>
-                    ) : (
-                      <div className="flex justify-end gap-3">
-                        <button
-                          onClick={() => startEdit(d)}
-                          className="text-sm text-gray-600 hover:text-gray-900"
-                        >
-                          Edit
-                        </button>
-                        <button
-                          onClick={() => remove(d.id)}
-                          className="text-sm text-gray-400 hover:text-red-600"
-                        >
-                          Delete
-                        </button>
-                      </div>
-                    )}
-                  </td>
-                </tr>
-              ))
-            )}
-          </tbody>
-        </table>
-      </div>
+      {loading ? (
+        <div className="rounded-2xl border-[1.5px] border-cream-line bg-white p-8 text-sm text-deep-green/60 shadow-md shadow-deep-green/10">
+          Loading…
+        </div>
+      ) : sections.length === 0 ? (
+        <div className="rounded-2xl border-[1.5px] border-cream-line bg-white p-8 text-sm text-deep-green/60 shadow-md shadow-deep-green/10">
+          No sections yet. Add one to start grouping docs.
+        </div>
+      ) : (
+        sections.map((s, i) => (
+          <DocSectionCard
+            key={s.id}
+            section={s}
+            docs={docs.filter((d) => d.section_id === s.id)}
+            allSections={sections}
+            canMoveUp={i > 0}
+            canMoveDown={i < sections.length - 1}
+            onMoveSection={(dir) => moveSection(s.id, dir)}
+            onSectionDeleted={load}
+            onChange={load}
+          />
+        ))
+      )}
     </div>
   );
-}
-
-function relativeAdded(iso: string | null | undefined): string {
-  if (!iso) return "—";
-  const d = new Date(iso);
-  if (Number.isNaN(d.getTime())) return "—";
-  const days = Math.floor((Date.now() - d.getTime()) / 86_400_000);
-  if (days < 1) return "today";
-  if (days === 1) return "1d ago";
-  if (days < 7) return `${days}d ago`;
-  if (days < 30) {
-    const weeks = Math.round(days / 7);
-    return `${weeks}w ago`;
-  }
-  return d.toLocaleDateString("en-US", { month: "short", day: "numeric" });
 }

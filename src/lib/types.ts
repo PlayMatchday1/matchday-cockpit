@@ -66,7 +66,16 @@ export type Doc = {
   title: string;
   url: string;
   note: string | null;
+  section_id: number | null;
+  sort_order: number;
   added_at: string;
+  created_at: string;
+};
+
+export type DocSection = {
+  id: number;
+  title: string;
+  sort_order: number;
   created_at: string;
 };
 
