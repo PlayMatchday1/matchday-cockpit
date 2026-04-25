@@ -586,42 +586,84 @@ export async function importSchedule(raw: string[][]): Promise<ImportResult> {
   };
 }
 
+const APR_TOTAL_RE = /^(apr|april)\s+total$/;
+const MAY_TOTAL_RE = /^may\s+total$/;
+const JUN_TOTAL_RE = /^(jun|june)\s+total$/;
+
+function detectManagerPayHeader(raw: string[][]):
+  | {
+      headerRowIndex: number;
+      headerRow: string[];
+      cityIdx: number;
+      aprIdx: number;
+      mayIdx: number;
+      junIdx: number;
+    }
+  | { error: string } {
+  const limit = Math.min(raw.length, 15);
+  for (let i = 0; i < limit; i++) {
+    const row = raw[i] ?? [];
+    let cityIdx = -1;
+    let aprIdx = -1;
+    let mayIdx = -1;
+    let junIdx = -1;
+    for (let j = 0; j < row.length; j++) {
+      const norm = normalizeHeader(row[j]);
+      if (cityIdx === -1 && norm === "city") cityIdx = j;
+      if (aprIdx === -1 && APR_TOTAL_RE.test(norm)) aprIdx = j;
+      if (mayIdx === -1 && MAY_TOTAL_RE.test(norm)) mayIdx = j;
+      if (junIdx === -1 && JUN_TOTAL_RE.test(norm)) junIdx = j;
+    }
+    if (cityIdx >= 0 && aprIdx >= 0 && mayIdx >= 0 && junIdx >= 0) {
+      return { headerRowIndex: i, headerRow: row, cityIdx, aprIdx, mayIdx, junIdx };
+    }
+  }
+  return {
+    error:
+      "Couldn't find a header row with 'City' + 'Apr Total' + 'May Total' + 'Jun Total' in the first 15 rows.",
+  };
+}
+
 export async function importManagerPay(
   raw: string[][],
 ): Promise<ImportResult> {
-  const detection = detectWideHeader(
-    raw,
-    [{ canonical: "City", required: true }],
-    (h) => extractMonthLabel(h) !== null,
-    1,
-  );
+  const detection = detectManagerPayHeader(raw);
   if ("error" in detection) throw new Error(detection.error);
-  const { headerRowIndex, headerRow, fixedIndex } = detection;
+  const { headerRowIndex, cityIdx, aprIdx, mayIdx, junIdx } = detection;
 
-  const cityIdx = fixedIndex["City"];
-  const monthCols: { index: number; month: string }[] = [];
-  for (let i = 0; i < headerRow.length; i++) {
-    if (i === cityIdx) continue;
-    const m = extractMonthLabel(headerRow[i]);
-    if (m) monthCols.push({ index: i, month: m });
-  }
+  const monthCols: { idx: number; month: string }[] = [
+    { idx: aprIdx, month: "Apr 2026" },
+    { idx: mayIdx, month: "May 2026" },
+    { idx: junIdx, month: "Jun 2026" },
+  ];
 
-  const longRows: { city: string; month: string; amount: number }[] = [];
+  const byKey = new Map<
+    string,
+    { city: string; month: string; amount: number }
+  >();
+
   for (let i = headerRowIndex + 1; i < raw.length; i++) {
     const row = raw[i] ?? [];
-    const city = trim(row[cityIdx]);
+    const cellRaw = String(row[cityIdx] ?? "");
+    if (/^\s/.test(cellRaw)) continue;
+    const city = cellRaw.trim();
     if (!city) continue;
+    if (/^grand\s*total/i.test(city)) continue;
+
     for (const mc of monthCols) {
-      const amount = parseNum(row[mc.index]);
-      if (amount === null) continue;
-      longRows.push({ city, month: mc.month, amount });
+      const amount = parseNum(row[mc.idx]) ?? 0;
+      if (amount === 0) continue;
+      const key = `${city}|${mc.month}`;
+      const existing = byKey.get(key);
+      if (existing) existing.amount += amount;
+      else byKey.set(key, { city, month: mc.month, amount });
     }
   }
 
+  const longRows = [...byKey.values()];
   if (longRows.length === 0) {
-    const detected = headerRow.filter((h) => h && h.trim()).join(" | ");
     throw new Error(
-      `Detected header: "${detected}". No (city, month, amount) rows produced.`,
+      `Detected header at row ${headerRowIndex + 1}, but no (city, month) rows produced any amount.`,
     );
   }
 
@@ -634,45 +676,102 @@ export async function importManagerPay(
 
 type ExpenseCategory = "city_manager" | "marketing" | "equipment";
 
-function parseMonthlyExpenseHeader(
-  header: string,
-): { category: ExpenseCategory; month: string } | null {
-  const lower = header.toLowerCase();
-  let category: ExpenseCategory | null = null;
-  if (lower.includes("city manager") || lower.includes("citymanager")) {
-    category = "city_manager";
-  } else if (lower.includes("marketing")) {
-    category = "marketing";
-  } else if (lower.includes("equipment")) {
-    category = "equipment";
+const FULL_MONTHS = [
+  "january",
+  "february",
+  "march",
+  "april",
+  "may",
+  "june",
+  "july",
+  "august",
+  "september",
+  "october",
+  "november",
+  "december",
+];
+
+function matchSimpleMonth(s: string): string | null {
+  const norm = normalizeHeader(s);
+  for (let i = 0; i < MONTH_KEYS.length; i++) {
+    if (norm === MONTH_KEYS[i] || norm === FULL_MONTHS[i]) {
+      return `${MONTH_LABELS[i]} ${DEFAULT_YEAR}`;
+    }
   }
-  if (!category) return null;
-  const month = extractMonthLabel(lower);
-  if (!month) return null;
-  return { category, month };
+  return null;
+}
+
+function detectMonthlyExpensesHeaders(raw: string[][]):
+  | {
+      monthRowIndex: number;
+      categoryRow: string[];
+      monthRow: string[];
+      cityIdx: number;
+    }
+  | { error: string } {
+  const limit = Math.min(raw.length, 15);
+  for (let i = 1; i < limit; i++) {
+    const row = raw[i] ?? [];
+    let cityIdx = -1;
+    let monthHits = 0;
+    for (let j = 0; j < row.length; j++) {
+      const norm = normalizeHeader(row[j]);
+      if (cityIdx === -1 && norm === "city") cityIdx = j;
+      if (matchSimpleMonth(row[j] ?? "")) monthHits++;
+    }
+    if (cityIdx >= 0 && monthHits >= 6) {
+      return {
+        monthRowIndex: i,
+        categoryRow: raw[i - 1] ?? [],
+        monthRow: row,
+        cityIdx,
+      };
+    }
+  }
+  return {
+    error:
+      "Couldn't find a month sub-header row (with 'City' and Apr/May/Jun) in the first 15 rows.",
+  };
 }
 
 export async function importMonthlyExpenses(
   raw: string[][],
 ): Promise<ImportResult> {
-  const detection = detectWideHeader(
-    raw,
-    [{ canonical: "City", required: true }],
-    (h) => parseMonthlyExpenseHeader(h) !== null,
-    1,
-  );
+  const detection = detectMonthlyExpensesHeaders(raw);
   if ("error" in detection) throw new Error(detection.error);
-  const { headerRowIndex, headerRow, fixedIndex } = detection;
+  const { monthRowIndex, categoryRow, monthRow, cityIdx } = detection;
 
-  const cityIdx = fixedIndex["City"];
-  const parsedHeaders: {
-    index: number;
-    parsed: { category: ExpenseCategory; month: string };
-  }[] = [];
-  for (let i = 0; i < headerRow.length; i++) {
-    if (i === cityIdx) continue;
-    const p = parseMonthlyExpenseHeader(headerRow[i] ?? "");
-    if (p) parsedHeaders.push({ index: i, parsed: p });
+  const colMap: { idx: number; category: ExpenseCategory; month: string }[] =
+    [];
+  let currentCategory: ExpenseCategory | "skip" | null = null;
+
+  for (let j = 0; j < monthRow.length; j++) {
+    if (j === cityIdx) {
+      currentCategory = null;
+      continue;
+    }
+
+    const catCell = String(categoryRow[j] ?? "").trim();
+    if (catCell) {
+      const lower = catCell.toLowerCase();
+      if (lower.includes("city manager")) currentCategory = "city_manager";
+      else if (lower.includes("marketing")) currentCategory = "marketing";
+      else if (lower.includes("equipment")) currentCategory = "equipment";
+      else currentCategory = "skip";
+    }
+
+    if (!currentCategory || currentCategory === "skip") continue;
+
+    const month = matchSimpleMonth(monthRow[j] ?? "");
+    if (!month) continue;
+
+    colMap.push({ idx: j, category: currentCategory, month });
+  }
+
+  if (colMap.length === 0) {
+    throw new Error(
+      "No (category, month) columns mapped. Expected categories like 'City Manager', 'Marketing / Paid Social', 'Equipment' above Apr/May/Jun.",
+    );
   }
 
   const byKey = new Map<
@@ -685,34 +784,37 @@ export async function importMonthlyExpenses(
       equipment: number;
     }
   >();
-  for (let i = headerRowIndex + 1; i < raw.length; i++) {
+
+  for (let i = monthRowIndex + 1; i < raw.length; i++) {
     const row = raw[i] ?? [];
-    const city = trim(row[cityIdx]);
+    const cellRaw = String(row[cityIdx] ?? "");
+    if (/^\s/.test(cellRaw)) continue;
+    const city = cellRaw.trim();
     if (!city) continue;
-    for (const ph of parsedHeaders) {
-      const num = parseNum(row[ph.index]);
-      if (num === null) continue;
-      const key = `${city}|${ph.parsed.month}`;
+    if (/^grand\s*total/i.test(city)) continue;
+
+    for (const cm of colMap) {
+      const value = parseNum(row[cm.idx]) ?? 0;
+      const key = `${city}|${cm.month}`;
       let entry = byKey.get(key);
       if (!entry) {
         entry = {
           city,
-          month: ph.parsed.month,
+          month: cm.month,
           city_manager: 0,
           marketing: 0,
           equipment: 0,
         };
         byKey.set(key, entry);
       }
-      entry[ph.parsed.category] = num;
+      entry[cm.category] = value;
     }
   }
 
   const longRows = [...byKey.values()];
   if (longRows.length === 0) {
-    const detected = headerRow.filter((h) => h && h.trim()).join(" | ");
     throw new Error(
-      `Detected header: "${detected}". No data rows produced.`,
+      `Detected month row ${monthRowIndex + 1} with categories above. No data rows produced.`,
     );
   }
   const { error } = await supabase
@@ -896,39 +998,57 @@ export async function importMemberSpots(
   return { count: longRows.length };
 }
 
-const COMMENTARY_SPEC: ColumnSpec[] = [
-  { canonical: "Eyebrow", required: true },
-  { canonical: "Body", required: true },
-];
-
 export async function importCommentary(
   raw: string[][],
 ): Promise<ImportResult> {
-  const result = preprocessFixed(raw, COMMENTARY_SPEC);
-  if ("error" in result) throw new Error(result.error);
-  const { rows, headerRow } = result;
+  let eyebrow: string | null = null;
+  let body: string | null = null;
 
-  if (rows.length === 0) {
-    const detected = headerRow.filter((h) => h && h.trim()).join(" | ");
+  for (const row of raw) {
+    if (!row || row.length === 0) continue;
+    const key = normalizeHeader(row[0]);
+    const value = trim(row[1]);
+    if (!value) continue;
+    if (key === "eyebrow") eyebrow = value;
+    else if (key === "body") body = value;
+  }
+
+  if (!eyebrow && !body) {
     throw new Error(
-      `Detected header: "${detected}". No data row found below the header.`,
+      "CSV must contain rows with 'Eyebrow' and 'Body' in column A and the values in column B.",
     );
   }
-  const r = rows[0];
-  const eyebrow = trim(r["Eyebrow"]);
-  const body = trim(r["Body"]);
-  if (!eyebrow || !body) {
-    throw new Error("First data row needs both Eyebrow and Body filled in.");
+  if (!eyebrow) throw new Error("Missing 'Eyebrow' row.");
+  if (!body) throw new Error("Missing 'Body' row.");
+
+  const { data: existingRow } = await supabase
+    .from("fin_commentary")
+    .select("id")
+    .order("id", { ascending: true })
+    .limit(1)
+    .maybeSingle();
+  const existing = existingRow as { id: number } | null;
+
+  if (existing) {
+    const { error } = await supabase
+      .from("fin_commentary")
+      .update({
+        eyebrow,
+        body,
+        updated_at: new Date().toISOString(),
+      })
+      .eq("id", existing.id);
+    if (error) throw new Error(error.message);
+    return { count: 1, note: "Updated existing entry." };
   }
 
-  await deleteAll("fin_commentary");
   const { error } = await supabase.from("fin_commentary").insert({
     eyebrow,
     body,
     updated_at: new Date().toISOString(),
   });
   if (error) throw new Error(error.message);
-  return { count: 1 };
+  return { count: 1, note: "Created new entry." };
 }
 
 export type ImporterConfig = {
@@ -988,17 +1108,18 @@ export const FINANCE_IMPORTERS: ImporterConfig[] = [
     key: "manager_pay",
     title: "6. Manager Pay",
     description:
-      "Wide format → long. City + month columns (e.g. 'Apr 2026'). Upserts by (city, month).",
-    expectedColumns: "City + month columns (Apr 2026, May 2026, …)",
+      "Reads only the monthly total columns (Apr Total / May Total / Jun Total). Skips weekly columns, indented sub-rows, blank cities, and 'GRAND TOTAL'. Upserts by (city, month).",
+    expectedColumns:
+      "Header row with City + Apr Total + May Total + Jun Total",
     importer: importManagerPay,
   },
   {
     key: "monthly_expenses",
     title: "7. Monthly Expenses",
     description:
-      "Wide format → long. Upserts by (city, month). Headers are matched on category + month.",
+      "Two-row header: category labels (City Manager / Marketing / Equipment) above Apr/May/Jun. The 'Q2 Category Totals' group is skipped. Includes the Corporate row. Upserts by (city, month).",
     expectedColumns:
-      "City + 'City Manager Apr 2026', 'Marketing Apr 2026', 'Equipment Apr 2026', … (one per category × month)",
+      "Category row above month row. Month row contains City + Apr/May/Jun (repeated under each category)",
     importer: importMonthlyExpenses,
   },
   {
@@ -1021,8 +1142,10 @@ export const FINANCE_IMPORTERS: ImporterConfig[] = [
   {
     key: "commentary",
     title: "10. Commentary",
-    description: "Single row. Replaces the existing commentary entry.",
-    expectedColumns: "Eyebrow, Body",
+    description:
+      "Key-value format. Reads the row where column A is 'Eyebrow' and the row where column A is 'Body' from column B. Updates the existing fin_commentary entry, or creates one if missing.",
+    expectedColumns:
+      "Two rows: 'Eyebrow,<text>' and 'Body,<text>' (anywhere in the file; the 'Label,Value' header is optional)",
     importer: importCommentary,
   },
 ];
