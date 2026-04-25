@@ -1,13 +1,5 @@
-import HeroMessage from "@/components/HeroMessage";
-import HomeGoalsView from "@/components/HomeGoalsView";
-import QuickStats from "@/components/QuickStats";
+import { redirect } from "next/navigation";
 
 export default function HomePage() {
-  return (
-    <>
-      <HeroMessage />
-      <QuickStats />
-      <HomeGoalsView />
-    </>
-  );
+  redirect("/clubhouse");
 }

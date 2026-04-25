@@ -5,7 +5,11 @@ import Link from "next/link";
 import { usePathname } from "next/navigation";
 
 const TABS = [
-  { href: "/", label: "Goals", match: (p: string) => p === "/" },
+  {
+    href: "/clubhouse",
+    label: "Clubhouse",
+    match: (p: string) => p.startsWith("/clubhouse"),
+  },
   {
     href: "/cities",
     label: "Cities",
@@ -31,7 +35,7 @@ export default function TopNav() {
     <header className="bg-deep-green text-cream">
       <div className="mx-auto max-w-6xl px-6">
         <div className="flex h-16 items-center justify-between">
-          <Link href="/" className="flex items-center gap-2" aria-label="MatchDay home">
+          <Link href="/clubhouse" className="flex items-center gap-2" aria-label="MatchDay home">
             <Image
               src="/matchday-logo.png"
               alt="MatchDay"

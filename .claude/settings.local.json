@@ -19,7 +19,11 @@
       "Bash(npm run *)",
       "Bash(git add *)",
       "Bash(git commit *)",
-      "Bash(git push *)"
+      "Bash(git push *)",
+      "Bash(curl -s -o /dev/null -w \"/ → %{http_code}\\\\n\" http://localhost:3000/ -L --max-redirs 3)",
+      "Bash(curl -s -o /dev/null -w \"/clubhouse → %{http_code}\\\\n\" http://localhost:3000/clubhouse)",
+      "Bash(curl -s -o /dev/null -w \"/clubhouse?tab=topics → %{http_code}\\\\n\" \"http://localhost:3000/clubhouse?tab=topics\")",
+      "Bash(curl -s -I http://localhost:3000/)"
     ]
   }
 }

@@ -2,6 +2,7 @@
 
 import { useMemo, useState } from "react";
 import { supabase } from "@/lib/supabase";
+import { isEmptyHtml } from "@/lib/html";
 import { partitionDirectory } from "@/lib/org";
 import { useOrgDirectory } from "@/lib/useOrgDirectory";
 import {
@@ -25,12 +26,6 @@ function relativeTime(iso: string): string {
   const mo = Math.round(d / 30);
   if (mo < 12) return `${mo}mo ago`;
   return `${Math.round(mo / 12)}y ago`;
-}
-
-function isEmptyHtml(html: string): boolean {
-  if (!html) return true;
-  const stripped = html.replace(/<[^>]*>/g, "").replace(/\s|&nbsp;/g, "");
-  return stripped.length === 0;
 }
 
 export default function CardComments({ goalId }: { goalId: string }) {
