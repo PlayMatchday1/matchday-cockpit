@@ -2,7 +2,7 @@
 
 import { useRef, useState } from "react";
 import Papa from "papaparse";
-import type { CsvRow, ImporterConfig } from "@/lib/financeImport";
+import type { ImporterConfig } from "@/lib/financeImport";
 
 type Stage =
   | "idle"
@@ -19,7 +19,7 @@ export default function FinanceImportDropzone({
 }) {
   const [stage, setStage] = useState<Stage>("idle");
   const [filename, setFilename] = useState<string>("");
-  const [rows, setRows] = useState<CsvRow[]>([]);
+  const [rawRows, setRawRows] = useState<string[][]>([]);
   const [error, setError] = useState<string | null>(null);
   const [resultCount, setResultCount] = useState<number>(0);
   const [resultNote, setResultNote] = useState<string>("");
@@ -30,7 +30,7 @@ export default function FinanceImportDropzone({
     setStage("idle");
     setError(null);
     setFilename("");
-    setRows([]);
+    setRawRows([]);
     setResultCount(0);
     setResultNote("");
   }
@@ -45,17 +45,19 @@ export default function FinanceImportDropzone({
     setError(null);
     setStage("parsing");
 
-    Papa.parse<CsvRow>(file, {
-      header: true,
+    Papa.parse<string[]>(file, {
+      header: false,
       skipEmptyLines: true,
       complete: (results) => {
-        const parsed = results.data;
-        if (parsed.length === 0) {
+        const raw = (results.data as string[][]).filter((row) =>
+          row.some((cell) => cell && String(cell).trim() !== ""),
+        );
+        if (raw.length === 0) {
           setError("CSV is empty.");
           setStage("error");
           return;
         }
-        setRows(parsed);
+        setRawRows(raw);
         setStage("ready");
       },
       error: (err) => {
@@ -69,7 +71,7 @@ export default function FinanceImportDropzone({
     setStage("importing");
     setError(null);
     try {
-      const result = await config.importer(rows);
+      const result = await config.importer(rawRows);
       setResultCount(result.count);
       setResultNote(result.note ?? "");
       setStage("success");
@@ -162,7 +164,8 @@ export default function FinanceImportDropzone({
               {filename}
             </div>
             <div className="mt-1 text-xs text-deep-green/65">
-              {rows.length.toLocaleString()} rows ready to import
+              {rawRows.length.toLocaleString()} non-empty CSV rows · header
+              row will be auto-detected
             </div>
             <div className="mt-3 flex items-center gap-2">
               <button
