@@ -1,7 +1,18 @@
 {
   "permissions": {
     "allow": [
-      "Bash(npx *)"
+      "Bash(npx *)",
+      "Bash(bash *)",
+      "Bash(curl -s -o /dev/null -w \"HTTP %{http_code} in %{time_total}s\\\\n\" http://localhost:3000/)",
+      "Bash(curl -s -o /dev/null -w \"HTTP %{http_code} in %{time_total}s\\\\n\" http://localhost:3000/cities)",
+      "Bash(curl -s -o /dev/null -w \"HTTP %{http_code} in %{time_total}s\\\\n\" http://localhost:3000/docs)",
+      "Bash(curl -s -o /dev/null -w \"/ → %{http_code}\\\\n\" http://localhost:3000/)",
+      "Bash(curl -s -o /dev/null -w \"/cities → %{http_code}\\\\n\" http://localhost:3000/cities)",
+      "Bash(curl -s -o /dev/null -w \"/cities/austin → %{http_code}\\\\n\" http://localhost:3000/cities/austin)",
+      "Bash(curl -s -o /dev/null -w \"/q2 \\(should 404\\) → %{http_code}\\\\n\" http://localhost:3000/q2)",
+      "Bash(curl -s -o /dev/null -w \"/monthly \\(should 404\\) → %{http_code}\\\\n\" http://localhost:3000/monthly)",
+      "Bash(curl -s -o /dev/null -w \"/docs → %{http_code}\\\\n\" http://localhost:3000/docs)",
+      "Bash(curl -s -o /dev/null -w \"/org → %{http_code}\\\\n\" http://localhost:3000/org)"
     ]
   }
 }

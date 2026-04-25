@@ -1,26 +1,65 @@
 @import "tailwindcss";
 
 :root {
-  --background: #ffffff;
-  --foreground: #171717;
+  --background: #f4eee1;
+  --foreground: #003326;
 }
 
 @theme inline {
   --color-background: var(--background);
   --color-foreground: var(--foreground);
+
+  /* MatchDay brand */
+  --color-cream: #f4eee1;
+  --color-cream-soft: #faf6ec;
+  --color-cream-line: #e6dec9;
+
+  --color-deep-green: #003326;
+  --color-deep-green-hover: #002418;
+  --color-deep-green-soft: #0a4a37;
+  --color-deep-green-line: #c2d1c9;
+
+  --color-mint: #2cdb87;
+  --color-mint-hover: #21bf72;
+  --color-mint-soft: #d5f7e6;
+
+  --color-yellow-pos: #ffff3e;
+  --color-yellow-soft: #fbfbc7;
+
+  --color-coral: #ff6955;
+  --color-coral-hover: #e8533f;
+  --color-coral-soft: #ffe0da;
+
+  --color-blue-info: #2e79ff;
+  --color-blue-info-hover: #1d5fd4;
+  --color-blue-soft: #d8e5ff;
+
+  --color-purple-done: #a671f4;
+  --color-purple-soft: #ecdeff;
+
+  --color-muted: #6f7e76;
+  --color-muted-soft: #dcd6c5;
+
   --font-sans: var(--font-geist-sans);
   --font-mono: var(--font-geist-mono);
-}
-
-@media (prefers-color-scheme: dark) {
-  :root {
-    --background: #0a0a0a;
-    --foreground: #ededed;
-  }
+  --font-display: var(--font-bebas);
 }
 
 body {
-  background: var(--background);
+  background-color: var(--background);
+  background-image: radial-gradient(
+    circle at 1px 1px,
+    rgba(0, 51, 38, 0.045) 1px,
+    transparent 0
+  );
+  background-size: 22px 22px;
   color: var(--foreground);
-  font-family: Arial, Helvetica, sans-serif;
+  font-family: var(--font-sans), ui-sans-serif, system-ui, sans-serif;
+}
+
+h1,
+h2,
+h3 {
+  font-weight: 800;
+  letter-spacing: -0.02em;
 }
