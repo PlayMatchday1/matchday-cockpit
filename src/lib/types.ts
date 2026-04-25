@@ -65,6 +65,8 @@ export type Doc = {
   id: string;
   title: string;
   url: string;
+  note: string | null;
+  added_at: string;
   created_at: string;
 };
 

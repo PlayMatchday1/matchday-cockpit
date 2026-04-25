@@ -12,11 +12,13 @@ export default function DocsList() {
   const [adding, setAdding] = useState(false);
   const [newTitle, setNewTitle] = useState("");
   const [newUrl, setNewUrl] = useState("");
+  const [newNote, setNewNote] = useState("");
   const [saving, setSaving] = useState(false);
 
   const [editingId, setEditingId] = useState<string | null>(null);
   const [editTitle, setEditTitle] = useState("");
   const [editUrl, setEditUrl] = useState("");
+  const [editNote, setEditNote] = useState("");
 
   const load = useCallback(async () => {
     setLoading(true);
@@ -24,7 +26,7 @@ export default function DocsList() {
     const { data, error } = await supabase
       .from("docs")
       .select("*")
-      .order("created_at", { ascending: false });
+      .order("added_at", { ascending: false });
     if (error) setError(error.message);
     else setDocs((data ?? []) as Doc[]);
     setLoading(false);
@@ -38,13 +40,16 @@ export default function DocsList() {
     e.preventDefault();
     if (!newTitle.trim() || !newUrl.trim()) return;
     setSaving(true);
-    const { error } = await supabase
-      .from("docs")
-      .insert({ title: newTitle.trim(), url: newUrl.trim() });
+    const { error } = await supabase.from("docs").insert({
+      title: newTitle.trim(),
+      url: newUrl.trim(),
+      note: newNote.trim() || null,
+    });
     setSaving(false);
     if (!error) {
       setNewTitle("");
       setNewUrl("");
+      setNewNote("");
       setAdding(false);
       load();
     } else {
@@ -56,12 +61,17 @@ export default function DocsList() {
     setEditingId(d.id);
     setEditTitle(d.title);
     setEditUrl(d.url);
+    setEditNote(d.note ?? "");
   }
 
   async function saveEdit(id: string) {
     const { error } = await supabase
       .from("docs")
-      .update({ title: editTitle.trim(), url: editUrl.trim() })
+      .update({
+        title: editTitle.trim(),
+        url: editUrl.trim(),
+        note: editNote.trim() || null,
+      })
       .eq("id", id);
     if (!error) {
       setEditingId(null);
@@ -115,6 +125,17 @@ export default function DocsList() {
                 placeholder="https://docs.google.com/…"
               />
             </div>
+            <div className="sm:col-span-2">
+              <label className="block text-xs font-medium text-gray-600">
+                Note <span className="text-gray-400">(optional)</span>
+              </label>
+              <input
+                value={newNote}
+                onChange={(e) => setNewNote(e.target.value)}
+                className="mt-1 w-full rounded-md border border-gray-200 px-3 py-1.5 text-sm focus:border-gray-400 focus:outline-none"
+                placeholder="e.g. Active through March"
+              />
+            </div>
           </div>
           <div className="mt-3 flex justify-end gap-2">
             <button
@@ -123,6 +144,7 @@ export default function DocsList() {
                 setAdding(false);
                 setNewTitle("");
                 setNewUrl("");
+                setNewNote("");
               }}
               className="rounded-md px-3 py-1.5 text-sm text-gray-600 hover:text-gray-900"
             >
@@ -151,25 +173,30 @@ export default function DocsList() {
             <tr>
               <th className="py-2 pl-4 pr-4 font-medium">Title</th>
               <th className="py-2 pr-4 font-medium">URL</th>
+              <th className="py-2 pr-4 font-medium">Note</th>
+              <th className="py-2 pr-4 font-medium">Added</th>
               <th className="py-2 pr-4 font-medium text-right">Actions</th>
             </tr>
           </thead>
           <tbody>
             {loading ? (
               <tr>
-                <td colSpan={3} className="py-8 text-center text-sm text-gray-500">
+                <td colSpan={5} className="py-8 text-center text-sm text-gray-500">
                   Loading…
                 </td>
               </tr>
             ) : docs.length === 0 ? (
               <tr>
-                <td colSpan={3} className="py-8 text-center text-sm text-gray-500">
+                <td colSpan={5} className="py-8 text-center text-sm text-gray-500">
                   No docs yet.
                 </td>
               </tr>
             ) : (
               docs.map((d) => (
-                <tr key={d.id} className="border-t border-gray-200 hover:bg-gray-50">
+                <tr
+                  key={d.id}
+                  className="border-t border-gray-200 hover:bg-gray-50"
+                >
                   <td className="py-3 pl-4 pr-4 align-top">
                     {editingId === d.id ? (
                       <input
@@ -193,11 +220,28 @@ export default function DocsList() {
                         href={d.url}
                         target="_blank"
                         rel="noreferrer"
-                        className="text-sm text-blue-600 hover:underline break-all"
+                        className="break-all text-sm text-blue-600 hover:underline"
                       >
                         {d.url}
                       </a>
                     )}
+                  </td>
+                  <td className="py-3 pr-4 align-top">
+                    {editingId === d.id ? (
+                      <input
+                        value={editNote}
+                        onChange={(e) => setEditNote(e.target.value)}
+                        placeholder="e.g. Active through March"
+                        className="w-full rounded-md border border-gray-200 px-2 py-1 text-sm"
+                      />
+                    ) : d.note ? (
+                      <span className="text-sm italic text-deep-green/60">
+                        {d.note}
+                      </span>
+                    ) : null}
+                  </td>
+                  <td className="whitespace-nowrap py-3 pr-4 align-top text-sm text-gray-500">
+                    {relativeAdded(d.added_at)}
                   </td>
                   <td className="py-3 pr-4 align-top text-right">
                     {editingId === d.id ? (
@@ -240,4 +284,19 @@ export default function DocsList() {
       </div>
     </div>
   );
+}
+
+function relativeAdded(iso: string | null | undefined): string {
+  if (!iso) return "—";
+  const d = new Date(iso);
+  if (Number.isNaN(d.getTime())) return "—";
+  const days = Math.floor((Date.now() - d.getTime()) / 86_400_000);
+  if (days < 1) return "today";
+  if (days === 1) return "1d ago";
+  if (days < 7) return `${days}d ago`;
+  if (days < 30) {
+    const weeks = Math.round(days / 7);
+    return `${weeks}w ago`;
+  }
+  return d.toLocaleDateString("en-US", { month: "short", day: "numeric" });
 }
