@@ -10,6 +10,7 @@ import {
   type Status,
 } from "@/lib/types";
 import { partitionDirectory } from "@/lib/org";
+import { getNextSortOrder } from "@/lib/goals";
 import { useOrgDirectory } from "@/lib/useOrgDirectory";
 import DirectoryOptions from "./DirectoryOptions";
 
@@ -126,6 +127,10 @@ function DrawerForm({
       setSaving(false);
       if (error) return alert(error.message);
     } else {
+      const sort_order = await getNextSortOrder(
+        state.scope,
+        state.city ?? null,
+      );
       const { error } = await supabase.from("goals").insert({
         title: title.trim(),
         owner,
@@ -133,6 +138,7 @@ function DrawerForm({
         progress,
         scope: state.scope,
         city: state.city ?? null,
+        sort_order,
       });
       setSaving(false);
       if (error) return alert(error.message);

@@ -18,7 +18,8 @@
       "Bash(curl -s -o /dev/null -w '/cities/__TRACKED_VAR__ → %{http_code}\\\\n' http://localhost:3000/cities/__TRACKED_VAR__)",
       "Bash(npm run *)",
       "Bash(git add *)",
-      "Bash(git commit *)"
+      "Bash(git commit *)",
+      "Bash(git push *)"
     ]
   }
 }

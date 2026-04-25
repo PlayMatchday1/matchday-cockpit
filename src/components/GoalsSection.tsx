@@ -1,7 +1,9 @@
 "use client";
 
+import { useState } from "react";
 import type { Goal } from "@/lib/types";
 import GoalCard from "./GoalCard";
+import GoalFocusZone from "./GoalFocusZone";
 
 export default function GoalsSection({
   title,
@@ -9,7 +11,7 @@ export default function GoalsSection({
   goals,
   onEdit,
   onAdd,
-  onChange,
+  onMove,
 }: {
   title: string;
   subtitle: string;
@@ -17,7 +19,13 @@ export default function GoalsSection({
   onEdit: (g: Goal) => void;
   onAdd: () => void;
   onChange: () => void;
+  onMove: (goal: Goal, direction: "up" | "down") => void;
 }) {
+  const [focusedId, setFocusedId] = useState<string | null>(null);
+  const focused = focusedId
+    ? (goals.find((g) => g.id === focusedId) ?? null)
+    : null;
+
   return (
     <section>
       <div className="mb-5 flex items-stretch gap-3">
@@ -29,19 +37,33 @@ export default function GoalsSection({
           <p className="mt-0.5 text-sm text-deep-green/60">{subtitle}</p>
         </div>
       </div>
+
+      {focused && (
+        <GoalFocusZone
+          key={focused.id}
+          goal={focused}
+          onClose={() => setFocusedId(null)}
+          onEdit={() => onEdit(focused)}
+        />
+      )}
+
       <div className="grid grid-cols-1 gap-4 md:grid-cols-2 lg:grid-cols-3">
-        {goals.map((g) => (
+        {goals.map((g, i) => (
           <GoalCard
             key={g.id}
             goal={g}
-            onEdit={() => onEdit(g)}
-            onChange={onChange}
+            onFocus={() => setFocusedId(g.id)}
+            isFocused={focusedId === g.id}
+            canMoveUp={i > 0}
+            canMoveDown={i < goals.length - 1}
+            onMoveUp={() => onMove(g, "up")}
+            onMoveDown={() => onMove(g, "down")}
           />
         ))}
         <button
           type="button"
           onClick={onAdd}
-          className="flex min-h-[200px] items-center justify-center rounded-2xl border-2 border-dashed border-deep-green/20 bg-cream-soft/40 text-sm font-semibold text-deep-green/60 transition hover:border-deep-green/50 hover:bg-cream-soft hover:text-deep-green"
+          className="flex min-h-[140px] items-center justify-center rounded-2xl border-2 border-dashed border-deep-green/20 bg-cream-soft/40 text-sm font-semibold text-deep-green/60 transition hover:border-deep-green/50 hover:bg-cream-soft hover:text-deep-green"
         >
           + Add goal
         </button>

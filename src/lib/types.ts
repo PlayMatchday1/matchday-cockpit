@@ -46,6 +46,7 @@ export type Goal = {
   progress: number;
   scope: Scope;
   city: City | null;
+  sort_order: number | null;
   created_at: string;
   updated_at: string;
 };
