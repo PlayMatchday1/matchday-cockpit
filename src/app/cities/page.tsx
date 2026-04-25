@@ -1,52 +1,194 @@
+"use client";
+
 import Link from "next/link";
 import PageHeader from "@/components/PageHeader";
 import { CityHealthPill } from "@/components/StatusPill";
-import { CITIES, CITY_STATS, citySlug } from "@/lib/types";
+import MiniBarSparkline from "@/components/MiniBarSparkline";
+import TotalsBarChart from "@/components/TotalsBarChart";
+import { useMatchData } from "@/lib/useMatchData";
+import {
+  getActiveVenues,
+  getCancelRate,
+  getCityStatus,
+  getWeeklySpots,
+  type CityStatus,
+  type WeeklySpotsEntry,
+} from "@/lib/cityStats";
+import { CITIES, citySlug } from "@/lib/types";
 
 export default function CitiesIndexPage() {
+  const { rows, meta, loading } = useMatchData();
+
+  const totals = getWeeklySpots(rows, null, 8);
+  const totalSpots = totals.reduce((s, w) => s + w.spots, 0);
+  const currentTotal = totals[totals.length - 1];
+
+  const cityData = CITIES.map((city) => {
+    const weekly = getWeeklySpots(rows, city, 8);
+    const cancel = getCancelRate(rows, city, 8);
+    const venues = getActiveVenues(rows, city, 8);
+    const status = getCityStatus(rows, city);
+    return {
+      city,
+      weekly,
+      cancel,
+      venues,
+      status,
+      currentWeek: weekly[weekly.length - 1],
+    };
+  });
+
+  const venueKeys = new Set<string>();
+  for (const c of cityData) {
+    for (const v of c.venues) venueKeys.add(`${c.city}|${v}`);
+  }
+  const totalActiveVenues = venueKeys.size;
+  const activeCities = cityData.filter(
+    (c) => c.currentWeek.matches > 0,
+  ).length;
+
   return (
     <>
       <PageHeader
         title="Cities"
         subtitle="Per-market venues, weekly matches, and goals."
       />
-      <div className="grid grid-cols-1 gap-4 sm:grid-cols-2 lg:grid-cols-3">
-        {CITIES.map((city) => {
-          const s = CITY_STATS[city];
-          return (
+
+      {loading ? (
+        <div className="rounded-2xl border-[1.5px] border-cream-line bg-white p-8 text-sm text-deep-green/60 shadow-md shadow-deep-green/10">
+          Loading match data…
+        </div>
+      ) : !meta ? (
+        <div className="rounded-2xl border-[1.5px] border-cream-line bg-white p-8 shadow-md shadow-deep-green/10">
+          <div className="text-base font-bold text-deep-green">
+            No data uploaded yet.
+          </div>
+          <div className="mt-1 text-sm text-deep-green/60">
+            Upload a CSV in{" "}
             <Link
-              key={city}
-              href={`/cities/${citySlug(city)}`}
-              className="block rounded-xl border border-cream-line bg-cream-soft p-5 shadow-sm transition hover:shadow-md"
+              href="/data"
+              className="font-bold text-mint-hover hover:underline"
             >
-              <div className="flex items-start justify-between gap-3">
-                <div className="text-base font-bold text-deep-green">
-                  {city}
-                </div>
-                <CityHealthPill health={s.health} />
-              </div>
-              <dl className="mt-3 grid grid-cols-2 gap-3 text-sm">
-                <div>
-                  <dt className="text-xs font-semibold uppercase tracking-wider text-deep-green/60">
-                    Venues
-                  </dt>
-                  <dd className="text-lg font-extrabold tabular-nums text-deep-green">
-                    {s.venues}
-                  </dd>
-                </div>
-                <div>
-                  <dt className="text-xs font-semibold uppercase tracking-wider text-deep-green/60">
-                    Matches / wk
-                  </dt>
-                  <dd className="text-lg font-extrabold tabular-nums text-deep-green">
-                    {s.matchesPerWeek}
-                  </dd>
-                </div>
-              </dl>
+              Data →
             </Link>
-          );
-        })}
-      </div>
+          </div>
+        </div>
+      ) : (
+        <>
+          <section className="mb-8 rounded-2xl border-[1.5px] border-cream-line bg-white p-6 shadow-md shadow-deep-green/10 sm:p-7">
+            <div className="text-[11px] font-bold uppercase tracking-[0.25em] text-deep-green/60">
+              MatchDay total · last 8 weeks
+            </div>
+            <div className="mt-3 flex flex-wrap items-baseline gap-x-3 gap-y-1">
+              <span className="font-display text-5xl uppercase leading-none tracking-tight text-deep-green md:text-6xl">
+                {currentTotal.matches}
+              </span>
+              <span className="text-sm font-medium text-deep-green/60">
+                matches this week
+              </span>
+            </div>
+            <div className="mt-1 text-sm text-deep-green/70">
+              {totalSpots.toLocaleString()} spots booked ·{" "}
+              {totalActiveVenues} venues active across {activeCities} cities
+            </div>
+            <div className="mt-6">
+              <TotalsBarChart weeks={totals} />
+            </div>
+          </section>
+
+          <div className="grid grid-cols-1 gap-4 sm:grid-cols-2 lg:grid-cols-3">
+            {cityData.map((c) => (
+              <CityCard key={c.city} {...c} />
+            ))}
+          </div>
+
+          <div className="mt-8 text-xs text-deep-green/60">
+            Last data refresh: {relativeFrom(meta.uploadedAt)} ·{" "}
+            <span className="text-deep-green/80">{meta.filename}</span> ·{" "}
+            {meta.rowCount.toLocaleString()} rows ·{" "}
+            <Link
+              href="/data"
+              className="font-bold text-mint-hover hover:underline"
+            >
+              Update →
+            </Link>
+          </div>
+        </>
+      )}
     </>
   );
+}
+
+function CityCard({
+  city,
+  weekly,
+  cancel,
+  venues,
+  status,
+  currentWeek,
+}: {
+  city: string;
+  weekly: WeeklySpotsEntry[];
+  cancel: { totalSpots: number; playerCancels: number; rate: number };
+  venues: string[];
+  status: CityStatus;
+  currentWeek: WeeklySpotsEntry;
+}) {
+  const dim = status === "Just launched";
+  const sparkData = weekly.map((w) => w.matches);
+  return (
+    <Link
+      href={`/cities/${citySlug(city as never)}`}
+      className={`block rounded-2xl border-[1.5px] border-cream-line bg-white p-5 shadow-md shadow-deep-green/10 transition-all duration-200 hover:-translate-y-0.5 hover:shadow-xl hover:shadow-deep-green/20 ${
+        dim ? "opacity-50" : ""
+      }`}
+    >
+      <div className="flex items-start justify-between gap-3">
+        <div className="text-base font-bold text-deep-green">{city}</div>
+        <CityHealthPill health={status} />
+      </div>
+      <div className="mt-4 grid grid-cols-4 gap-3">
+        <Stat label="Matches/wk" value={String(currentWeek.matches)} />
+        <Stat label="Venues" value={String(venues.length)} />
+        <div className="min-w-0">
+          <div className="text-[10px] font-bold uppercase tracking-wider text-deep-green/60">
+            8wk trend
+          </div>
+          <div className="mt-1.5">
+            <MiniBarSparkline data={sparkData} className="h-6 w-full" />
+          </div>
+        </div>
+        <Stat
+          label="Cancel %"
+          value={
+            cancel.totalSpots === 0 ? "—" : `${Math.round(cancel.rate)}%`
+          }
+        />
+      </div>
+    </Link>
+  );
+}
+
+function Stat({ label, value }: { label: string; value: string }) {
+  return (
+    <div className="min-w-0">
+      <div className="text-[10px] font-bold uppercase tracking-wider text-deep-green/60">
+        {label}
+      </div>
+      <div className="mt-0.5 text-lg font-extrabold tabular-nums text-deep-green">
+        {value}
+      </div>
+    </div>
+  );
+}
+
+function relativeFrom(d: Date): string {
+  const ms = Date.now() - d.getTime();
+  const min = Math.max(0, Math.round(ms / 60000));
+  if (min < 1) return "just now";
+  if (min < 60) return `${min}m ago`;
+  const hr = Math.round(min / 60);
+  if (hr < 24) return `${hr}h ago`;
+  const days = Math.round(hr / 24);
+  return `${days}d ago`;
 }

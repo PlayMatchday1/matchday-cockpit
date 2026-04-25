@@ -12,7 +12,13 @@
       "Bash(curl -s -o /dev/null -w \"/q2 \\(should 404\\) → %{http_code}\\\\n\" http://localhost:3000/q2)",
       "Bash(curl -s -o /dev/null -w \"/monthly \\(should 404\\) → %{http_code}\\\\n\" http://localhost:3000/monthly)",
       "Bash(curl -s -o /dev/null -w \"/docs → %{http_code}\\\\n\" http://localhost:3000/docs)",
-      "Bash(curl -s -o /dev/null -w \"/org → %{http_code}\\\\n\" http://localhost:3000/org)"
+      "Bash(curl -s -o /dev/null -w \"/org → %{http_code}\\\\n\" http://localhost:3000/org)",
+      "Bash(npm install *)",
+      "Bash(curl -s -o /dev/null -w \"/data → %{http_code}\\\\n\" http://localhost:3000/data)",
+      "Bash(curl -s -o /dev/null -w '/cities/__TRACKED_VAR__ → %{http_code}\\\\n' http://localhost:3000/cities/__TRACKED_VAR__)",
+      "Bash(npm run *)",
+      "Bash(git add *)",
+      "Bash(git commit *)"
     ]
   }
 }

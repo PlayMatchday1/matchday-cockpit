@@ -1,0 +1,205 @@
+"use client";
+
+import Link from "next/link";
+import { useState } from "react";
+import {
+  getActiveVenues,
+  getCancelRate,
+  getCityStatus,
+  getWeeklySpots,
+  STATUS_THRESHOLDS,
+} from "@/lib/cityStats";
+import { useMatchData } from "@/lib/useMatchData";
+import type { City } from "@/lib/types";
+import { CityHealthPill } from "./StatusPill";
+import TotalsBarChart from "./TotalsBarChart";
+import CancelHeatmap from "./CancelHeatmap";
+import CityGoalsView from "./CityGoalsView";
+
+function cancelRateColor(rate: number, hasData: boolean): string {
+  if (!hasData) return "text-deep-green/40";
+  if (rate >= STATUS_THRESHOLDS.atRiskCancelRate) return "text-coral";
+  if (rate >= STATUS_THRESHOLDS.healthyCancelRate) return "text-[#d97706]";
+  return "text-deep-green";
+}
+
+export default function CityDetailView({ city }: { city: City }) {
+  const { rows, meta, loading } = useMatchData();
+  const [showVenues, setShowVenues] = useState(false);
+
+  const weekly = getWeeklySpots(rows, city, 8);
+  const cancel = getCancelRate(rows, city, 8);
+  const venues = getActiveVenues(rows, city, 8);
+  const status = getCityStatus(rows, city);
+  const currentWeek = weekly[weekly.length - 1];
+  const hasData = cancel.totalSpots > 0;
+
+  if (loading) {
+    return (
+      <>
+        <BackLink />
+        <div className="rounded-2xl border-[1.5px] border-cream-line bg-white p-8 text-sm text-deep-green/60 shadow-md shadow-deep-green/10">
+          Loading match data…
+        </div>
+      </>
+    );
+  }
+
+  if (!meta) {
+    return (
+      <>
+        <BackLink />
+        <h1 className="mb-4 font-display text-5xl uppercase leading-none tracking-tight text-deep-green md:text-6xl">
+          {city}
+        </h1>
+        <div className="rounded-2xl border-[1.5px] border-cream-line bg-white p-8 shadow-md shadow-deep-green/10">
+          <div className="text-base font-bold text-deep-green">
+            No data uploaded yet.
+          </div>
+          <div className="mt-1 text-sm text-deep-green/60">
+            Upload a CSV in{" "}
+            <Link
+              href="/data"
+              className="font-bold text-mint-hover hover:underline"
+            >
+              Data →
+            </Link>
+          </div>
+        </div>
+      </>
+    );
+  }
+
+  return (
+    <>
+      <BackLink />
+      <div className="mb-8 flex flex-wrap items-baseline gap-x-4 gap-y-2">
+        <h1 className="font-display text-5xl uppercase leading-none tracking-tight text-deep-green md:text-6xl">
+          {city}
+        </h1>
+        <CityHealthPill health={status} />
+      </div>
+
+      <div className="mb-8">
+        <div className="grid grid-cols-2 gap-4 sm:grid-cols-4">
+          <StatCard
+            label="Matches this week"
+            value={String(currentWeek.matches)}
+            hint={`${currentWeek.spots} spots`}
+          />
+          <button
+            type="button"
+            onClick={() => {
+              if (venues.length > 0) setShowVenues((v) => !v);
+            }}
+            className="rounded-2xl border-[1.5px] border-cream-line bg-white p-5 text-left shadow-md shadow-deep-green/10 transition hover:shadow-lg"
+          >
+            <div className="text-[10px] font-bold uppercase tracking-wider text-deep-green/60">
+              Venues active
+            </div>
+            <div className="mt-1 flex items-baseline gap-1.5">
+              <span className="text-3xl font-extrabold tabular-nums text-deep-green">
+                {venues.length}
+              </span>
+              {venues.length > 0 && (
+                <span className="text-xs text-deep-green/40">
+                  {showVenues ? "▾" : "▸"}
+                </span>
+              )}
+            </div>
+            <div className="mt-1 text-xs text-deep-green/60">last 8 weeks</div>
+          </button>
+          <StatCard
+            label="Cancel rate"
+            value={hasData ? `${Math.round(cancel.rate)}%` : "—"}
+            hint="last 8 weeks"
+            valueClass={cancelRateColor(cancel.rate, hasData)}
+          />
+          <StatCard
+            label="Total spots"
+            value={cancel.totalSpots.toLocaleString()}
+            hint="last 8 weeks"
+          />
+        </div>
+
+        {showVenues && venues.length > 0 && (
+          <div className="mt-4 rounded-2xl border-[1.5px] border-cream-line bg-white p-5 shadow-md shadow-deep-green/10">
+            <div className="text-[10px] font-bold uppercase tracking-wider text-deep-green/60">
+              Active venues
+            </div>
+            <ul className="mt-2 grid gap-x-4 gap-y-1 text-sm text-deep-green sm:grid-cols-2 lg:grid-cols-3">
+              {venues.map((v) => (
+                <li key={v}>• {v}</li>
+              ))}
+            </ul>
+          </div>
+        )}
+      </div>
+
+      <section className="mb-8 rounded-2xl border-[1.5px] border-cream-line bg-white p-6 shadow-md shadow-deep-green/10">
+        <h2 className="mb-4 text-2xl font-bold tracking-tight text-deep-green">
+          Last 8 weeks
+        </h2>
+        <TotalsBarChart weeks={weekly} />
+      </section>
+
+      <div className="mb-4">
+        <h2 className="text-2xl font-extrabold tracking-tight text-deep-green">
+          {city} goals
+        </h2>
+        <p className="text-sm text-deep-green/60">
+          City-specific objectives and progress.
+        </p>
+      </div>
+      <div className="mb-8">
+        <CityGoalsView city={city} />
+      </div>
+
+      <section className="mb-8">
+        <h2 className="mb-4 text-2xl font-bold tracking-tight text-deep-green">
+          Cancellations
+        </h2>
+        <CancelHeatmap city={city} />
+      </section>
+    </>
+  );
+}
+
+function BackLink() {
+  return (
+    <div className="mb-3 text-sm">
+      <Link
+        href="/cities"
+        className="text-deep-green/60 transition hover:text-deep-green"
+      >
+        ← All cities
+      </Link>
+    </div>
+  );
+}
+
+function StatCard({
+  label,
+  value,
+  hint,
+  valueClass,
+}: {
+  label: string;
+  value: string;
+  hint?: string;
+  valueClass?: string;
+}) {
+  return (
+    <div className="rounded-2xl border-[1.5px] border-cream-line bg-white p-5 shadow-md shadow-deep-green/10">
+      <div className="text-[10px] font-bold uppercase tracking-wider text-deep-green/60">
+        {label}
+      </div>
+      <div
+        className={`mt-1 text-3xl font-extrabold tabular-nums ${valueClass ?? "text-deep-green"}`}
+      >
+        {value}
+      </div>
+      {hint && <div className="mt-1 text-xs text-deep-green/60">{hint}</div>}
+    </div>
+  );
+}
