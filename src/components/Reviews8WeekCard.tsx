@@ -1,14 +1,18 @@
 "use client";
 
-import { get8WeekStats, type WeekStat } from "@/lib/reviewStats";
+import { getRecentReviewStats, type WeekStat } from "@/lib/reviewStats";
 import type { ReviewRow } from "@/lib/useReviewData";
 
 const W = 800;
-const H = 140;
-const TOP_PAD = 22;
-const BOTTOM_PAD = 22;
+const H = 180;
+const TOP_PAD = 26;
+const BOTTOM_PAD = 44;
 const PLOT_H = H - TOP_PAD - BOTTOM_PAD;
 const BAR_FRAC = 0.7;
+
+const SCALE_MIN = 3.5;
+const SCALE_MAX = 5.0;
+const SCALE_RANGE = SCALE_MAX - SCALE_MIN;
 
 export default function Reviews8WeekCard({
   rows,
@@ -17,7 +21,7 @@ export default function Reviews8WeekCard({
   rows: ReviewRow[];
   city?: string | null;
 }) {
-  const stats = get8WeekStats(rows, city);
+  const stats = getRecentReviewStats(rows, city, 8);
   const weeklyAvg = stats.count > 0 ? Math.round(stats.count / 8) : 0;
 
   return (
@@ -48,7 +52,6 @@ export default function Reviews8WeekCard({
 }
 
 function ReviewsBarChart({ weeks }: { weeks: WeekStat[] }) {
-  const max = Math.max(...weeks.map((w) => w.count), 1);
   const slot = W / weeks.length;
   const barW = slot * BAR_FRAC;
 
@@ -57,7 +60,7 @@ function ReviewsBarChart({ weeks }: { weeks: WeekStat[] }) {
       viewBox={`0 0 ${W} ${H}`}
       className="block w-full"
       role="img"
-      aria-label="Reviews per week"
+      aria-label="Avg rating per week (3.5-5.0 scale)"
     >
       <defs>
         <pattern
@@ -73,40 +76,51 @@ function ReviewsBarChart({ weeks }: { weeks: WeekStat[] }) {
       </defs>
       {weeks.map((w, i) => {
         const isCurrent = i === weeks.length - 1;
-        const h = (w.count / max) * PLOT_H;
+        const hasData = w.count > 0;
+        const clamped = Math.max(
+          SCALE_MIN,
+          Math.min(SCALE_MAX, w.avgRating),
+        );
+        const fraction = hasData ? (clamped - SCALE_MIN) / SCALE_RANGE : 0;
+        const h = hasData ? Math.max(fraction * PLOT_H, 1) : 0;
         const cx = slot * i + slot / 2;
         const x = cx - barW / 2;
         const y = TOP_PAD + (PLOT_H - h);
         const fill = isCurrent ? "url(#reviews-stripes)" : "#2cdb87";
-        const ratingTxt = w.count > 0 ? `${w.avgRating.toFixed(1)}★` : "—";
+        const topLabel = hasData ? w.avgRating.toFixed(2) : "—";
+        const countLabel = hasData
+          ? `${w.count.toLocaleString()} ${w.count === 1 ? "review" : "reviews"}`
+          : "no reviews";
         return (
           <g key={i}>
             <text
               x={cx}
-              y={TOP_PAD - 6}
+              y={TOP_PAD - 8}
               textAnchor="middle"
               fontSize={13}
               fontWeight={700}
               fill="#003326"
               fontFamily="var(--font-geist-sans), system-ui, sans-serif"
             >
-              {w.count}
+              {topLabel}
             </text>
-            <rect
-              x={x}
-              y={y}
-              width={barW}
-              height={Math.max(h, 1)}
-              fill={fill}
-              rx={4}
-            >
-              <title>
-                {w.weekLabel}: {w.count} reviews · {ratingTxt}
-              </title>
-            </rect>
+            {hasData && (
+              <rect
+                x={x}
+                y={y}
+                width={barW}
+                height={h}
+                fill={fill}
+                rx={4}
+              >
+                <title>
+                  {w.weekLabel}: {topLabel}★ · {countLabel}
+                </title>
+              </rect>
+            )}
             <text
               x={cx}
-              y={H - 5}
+              y={H - 24}
               textAnchor="middle"
               fontSize={11}
               fill="#003326"
@@ -114,6 +128,17 @@ function ReviewsBarChart({ weeks }: { weeks: WeekStat[] }) {
               fontFamily="var(--font-geist-sans), system-ui, sans-serif"
             >
               {w.weekLabel}
+            </text>
+            <text
+              x={cx}
+              y={H - 8}
+              textAnchor="middle"
+              fontSize={10}
+              fill="#003326"
+              fillOpacity="0.45"
+              fontFamily="var(--font-geist-sans), system-ui, sans-serif"
+            >
+              {countLabel}
             </text>
           </g>
         );

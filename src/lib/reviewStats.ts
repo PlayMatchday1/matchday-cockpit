@@ -240,15 +240,16 @@ export type WeekStat = {
   avgRating: number;
 };
 
-export function get8WeekStats(
+export function getRecentReviewStats(
   rows: ReviewRow[],
   city: string | null,
+  weeksBack: number = 8,
   now: Date = new Date(),
 ): { count: number; avgRating: number; weeks: WeekStat[] } {
   const currentMonday = getMonday(now);
 
   const weeks: WeekStat[] = [];
-  for (let i = 7; i >= 0; i--) {
+  for (let i = weeksBack - 1; i >= 0; i--) {
     const ws = new Date(
       currentMonday.getFullYear(),
       currentMonday.getMonth(),
@@ -262,17 +263,18 @@ export function get8WeekStats(
     });
   }
 
-  const sums = new Array(8).fill(0);
-  const counts = new Array(8).fill(0);
+  const sums = new Array(weeksBack).fill(0);
+  const counts = new Array(weeksBack).fill(0);
 
   let totalCount = 0;
   let totalSum = 0;
 
   const earliestStart = weeks[0].weekStart;
+  const lastWeek = weeks[weeksBack - 1].weekStart;
   const latestEnd = new Date(
-    weeks[7].weekStart.getFullYear(),
-    weeks[7].weekStart.getMonth(),
-    weeks[7].weekStart.getDate() + 7,
+    lastWeek.getFullYear(),
+    lastWeek.getMonth(),
+    lastWeek.getDate() + 7,
   );
 
   for (const r of rows) {
@@ -283,14 +285,14 @@ export function get8WeekStats(
     );
     if (diffDays < 0) continue;
     const weekIdx = Math.floor(diffDays / 7);
-    if (weekIdx >= 8) continue;
+    if (weekIdx >= weeksBack) continue;
     sums[weekIdx] += r.starRating;
     counts[weekIdx] += 1;
     totalCount += 1;
     totalSum += r.starRating;
   }
 
-  for (let i = 0; i < 8; i++) {
+  for (let i = 0; i < weeksBack; i++) {
     weeks[i].count = counts[i];
     weeks[i].avgRating = counts[i] > 0 ? sums[i] / counts[i] : 0;
   }

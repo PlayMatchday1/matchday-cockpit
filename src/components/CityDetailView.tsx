@@ -12,8 +12,8 @@ import {
 import { useMatchData } from "@/lib/useMatchData";
 import { useReviewData } from "@/lib/useReviewData";
 import {
-  get8WeekStats,
   getActiveMonthWindow,
+  getRecentReviewStats,
 } from "@/lib/reviewStats";
 import type { City } from "@/lib/types";
 import { CityHealthPill } from "./StatusPill";
@@ -41,7 +41,7 @@ export default function CityDetailView({ city }: { city: City }) {
   const currentWeek = weekly[weekly.length - 1];
   const hasData = cancel.totalSpots > 0;
 
-  const reviews8wk = get8WeekStats(reviewRows, city);
+  const reviews4wk = getRecentReviewStats(reviewRows, city, 4);
   const reviewWindow = getActiveMonthWindow(reviewRows);
 
   if (loading) {
@@ -96,19 +96,19 @@ export default function CityDetailView({ city }: { city: City }) {
             Reviews
           </span>
           <span className="text-deep-green/40">—</span>
-          {reviews8wk.count > 0 ? (
+          {reviews4wk.count > 0 ? (
             <>
               <span className="font-bold tabular-nums text-mint-hover">
-                {reviews8wk.avgRating.toFixed(1)}
+                {reviews4wk.avgRating.toFixed(1)}
               </span>
               <span className="text-mint">★</span>
               <span className="text-deep-green/65">
-                from {reviews8wk.count} reviews · last 8 weeks
+                from {reviews4wk.count} reviews · last 4 weeks
               </span>
             </>
           ) : (
             <span className="text-deep-green/45">
-              no reviews in last 8 weeks
+              no reviews in last 4 weeks
             </span>
           )}
         </div>
