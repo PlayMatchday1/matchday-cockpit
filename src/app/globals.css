@@ -79,3 +79,16 @@ h3 {
 .focus-slide-in {
   animation: focus-slide-in 200ms ease-out;
 }
+
+@keyframes flash-mint {
+  0% {
+    background-color: rgb(213 247 230);
+  }
+  100% {
+    background-color: transparent;
+  }
+}
+
+.flash-mint {
+  animation: flash-mint 800ms ease-out;
+}
