@@ -5,7 +5,9 @@ import { supabase } from "@/lib/supabase";
 import { partitionDirectory } from "@/lib/org";
 import { useOrgDirectory } from "@/lib/useOrgDirectory";
 import type { GoalComment } from "@/lib/types";
+import CommentBody from "./CommentBody";
 import DirectoryOptions from "./DirectoryOptions";
+import RichCommentEditor from "./RichCommentEditor";
 
 function relativeTime(iso: string): string {
   const ms = Date.now() - new Date(iso).getTime();
@@ -20,6 +22,12 @@ function relativeTime(iso: string): string {
   const mo = Math.round(d / 30);
   if (mo < 12) return `${mo}mo ago`;
   return `${Math.round(mo / 12)}y ago`;
+}
+
+function isEmptyHtml(html: string): boolean {
+  if (!html) return true;
+  const stripped = html.replace(/<[^>]*>/g, "").replace(/\s|&nbsp;/g, "");
+  return stripped.length === 0;
 }
 
 export default function CardComments({ goalId }: { goalId: string }) {
@@ -53,15 +61,13 @@ export default function CardComments({ goalId }: { goalId: string }) {
     // eslint-disable-next-line react-hooks/exhaustive-deps
   }, [goalId]);
 
-  async function post(e: React.FormEvent) {
-    e.preventDefault();
-    const text = body.trim();
-    if (!text || !author) return;
+  async function submitComment() {
+    if (isEmptyHtml(body) || !author || posting) return;
     setPosting(true);
     setPostError(null);
     const { error } = await supabase
       .from("goal_comments")
-      .insert({ goal_id: goalId, author, body: text });
+      .insert({ goal_id: goalId, author, body });
     setPosting(false);
     if (error) {
       setPostError(error.message);
@@ -69,6 +75,11 @@ export default function CardComments({ goalId }: { goalId: string }) {
     }
     setBody("");
     load();
+  }
+
+  function onFormSubmit(e: React.FormEvent) {
+    e.preventDefault();
+    submitComment();
   }
 
   async function remove(id: string) {
@@ -84,7 +95,7 @@ export default function CardComments({ goalId }: { goalId: string }) {
     }
   }
 
-  const canPost = body.trim().length > 0 && author.length > 0 && !posting;
+  const canPost = !isEmptyHtml(body) && author.length > 0 && !posting;
 
   return (
     <div className="space-y-3">
@@ -121,8 +132,8 @@ export default function CardComments({ goalId }: { goalId: string }) {
                     · {relativeTime(c.created_at)}
                   </span>
                 </div>
-                <div className="mt-0.5 whitespace-pre-wrap text-deep-green/90">
-                  {c.body}
+                <div className="mt-0.5">
+                  <CommentBody html={c.body} />
                 </div>
                 <button
                   type="button"
@@ -146,7 +157,7 @@ export default function CardComments({ goalId }: { goalId: string }) {
           </ul>
         ))}
 
-      <form onSubmit={post} className="space-y-2">
+      <form onSubmit={onFormSubmit} className="space-y-2">
         <select
           value={author}
           onChange={(e) => setAuthor(e.target.value)}
@@ -158,17 +169,17 @@ export default function CardComments({ goalId }: { goalId: string }) {
           </option>
           {partition && <DirectoryOptions partition={partition} />}
         </select>
-        <div className="flex gap-2">
-          <input
-            value={body}
-            onChange={(e) => setBody(e.target.value)}
-            placeholder="Add a comment..."
-            className="min-w-0 flex-1 rounded-md border border-cream-line bg-cream px-3 py-1.5 text-sm text-deep-green placeholder:text-deep-green/40 focus:border-deep-green focus:outline-none"
-          />
+        <RichCommentEditor
+          value={body}
+          onChange={setBody}
+          placeholder="Add a comment..."
+          onSubmit={submitComment}
+        />
+        <div className="flex justify-end">
           <button
             type="submit"
             disabled={!canPost}
-            className="shrink-0 rounded-md bg-mint px-3 py-1.5 text-xs font-bold text-deep-green transition hover:bg-mint-hover disabled:cursor-not-allowed disabled:bg-cream-line disabled:text-deep-green/40"
+            className="rounded-md bg-mint px-3 py-1.5 text-xs font-bold text-deep-green transition hover:bg-mint-hover disabled:cursor-not-allowed disabled:bg-cream-line disabled:text-deep-green/40"
           >
             {posting ? "Posting…" : "Post"}
           </button>
