@@ -1,0 +1,127 @@
+"use client";
+
+import { useEffect, useState } from "react";
+import Link from "next/link";
+import AdminGuard from "@/components/AdminGuard";
+import { supabase } from "@/lib/supabase";
+
+export default function FinanceLandingPage() {
+  return (
+    <AdminGuard>
+      <FinanceLandingContent />
+    </AdminGuard>
+  );
+}
+
+function FinanceLandingContent() {
+  const [quarterLabel, setQuarterLabel] = useState<string>("");
+
+  useEffect(() => {
+    let cancelled = false;
+    supabase
+      .from("fin_config")
+      .select("value")
+      .eq("key", "quarter_label")
+      .maybeSingle()
+      .then(({ data }) => {
+        if (cancelled) return;
+        const v = (data as { value?: string } | null)?.value;
+        if (v) setQuarterLabel(v);
+      });
+    return () => {
+      cancelled = true;
+    };
+  }, []);
+
+  return (
+    <>
+      <div className="mb-10">
+        <h1 className="font-display text-5xl uppercase leading-none tracking-tight text-deep-green md:text-6xl">
+          Finance
+        </h1>
+        <p className="mt-2 text-sm text-deep-green/65">
+          {quarterLabel || "Loading…"}
+        </p>
+      </div>
+
+      <SectionHeader
+        title="Performance"
+        subtitle="Cash position, monthly flow, trend over time."
+      />
+      <div className="mb-12 grid grid-cols-1 gap-4 md:grid-cols-2 lg:grid-cols-3">
+        <PlaceholderCard title="Hero Metrics" phase="Phase 2" />
+        <PlaceholderCard title="Monthly Cash Flow" phase="Phase 2" />
+        <PlaceholderCard title="Trend Chart" phase="Phase 2" />
+      </div>
+
+      <SectionHeader
+        title="Detail"
+        subtitle="Per-city P&L, per-venue ranking, narrative."
+      />
+      <div className="mb-12 grid grid-cols-1 gap-4 md:grid-cols-2 lg:grid-cols-3">
+        <PlaceholderCard title="City P&L" phase="Phase 3" />
+        <PlaceholderCard title="Field Ranking" phase="Phase 3" />
+        <PlaceholderCard title="Insights" phase="Phase 4" />
+        <PlaceholderCard title="Executive Summary" phase="Phase 4" />
+      </div>
+
+      <SectionHeader
+        title="Data"
+        subtitle="One-time historical loads and ongoing uploads."
+      />
+      <div className="grid grid-cols-1 gap-4 md:grid-cols-2 lg:grid-cols-3">
+        <Link
+          href="/admin/finance/import"
+          className="block rounded-2xl border-[1.5px] border-cream-line bg-white p-6 shadow-md shadow-deep-green/10 transition-all duration-200 hover:-translate-y-0.5 hover:shadow-xl hover:shadow-deep-green/20"
+        >
+          <div className="text-base font-bold text-deep-green">
+            Q2 2026 import
+          </div>
+          <p className="mt-1 text-sm text-deep-green/60">
+            Upload the 10 Sheet tabs as CSVs to seed the database.
+          </p>
+          <div className="mt-3 text-xs font-bold uppercase tracking-wider text-mint-hover">
+            Open →
+          </div>
+        </Link>
+      </div>
+    </>
+  );
+}
+
+function SectionHeader({
+  title,
+  subtitle,
+}: {
+  title: string;
+  subtitle: string;
+}) {
+  return (
+    <div className="mb-5 flex items-stretch gap-3">
+      <span aria-hidden className="w-1 rounded-full bg-mint" />
+      <div className="py-0.5">
+        <h2 className="text-2xl font-bold tracking-tight text-deep-green">
+          {title}
+        </h2>
+        <p className="mt-0.5 text-sm text-deep-green/60">{subtitle}</p>
+      </div>
+    </div>
+  );
+}
+
+function PlaceholderCard({
+  title,
+  phase,
+}: {
+  title: string;
+  phase: string;
+}) {
+  return (
+    <div className="rounded-2xl border-2 border-dashed border-cream-line bg-cream-soft/40 p-6">
+      <div className="text-base font-bold text-deep-green/70">{title}</div>
+      <div className="mt-1 text-xs font-bold uppercase tracking-wider text-deep-green/40">
+        Coming in {phase}
+      </div>
+    </div>
+  );
+}

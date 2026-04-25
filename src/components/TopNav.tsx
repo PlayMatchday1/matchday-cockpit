@@ -55,7 +55,8 @@ export default function TopNav() {
   const { appUser, signOut } = useAuth();
 
   const visibleTabs = TABS.filter((t) => canAccess(appUser, t.page));
-  const adminActive = pathname?.startsWith("/admin") ?? false;
+  const adminActive = pathname === "/admin";
+  const financeActive = pathname?.startsWith("/admin/finance") ?? false;
 
   return (
     <header className="bg-deep-green text-cream">
@@ -92,6 +93,18 @@ export default function TopNav() {
                 </Link>
               );
             })}
+            {appUser?.is_admin && (
+              <Link
+                href="/admin/finance"
+                className={`rounded-full px-4 py-1.5 text-sm font-medium tracking-tight transition ${
+                  financeActive
+                    ? "bg-mint text-deep-green"
+                    : "text-cream/80 hover:bg-deep-green-soft hover:text-cream"
+                }`}
+              >
+                Finance
+              </Link>
+            )}
             {appUser?.is_admin && (
               <Link
                 href="/admin"
