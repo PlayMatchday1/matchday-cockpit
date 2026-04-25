@@ -124,15 +124,19 @@ function DrawerForm({
     setSaving(true);
     const target_date = targetDate || null;
     if (state.mode === "edit") {
+      const updateData: Record<string, unknown> = {
+        title: title.trim(),
+        owner,
+        status,
+        progress,
+        target_date,
+      };
+      if (progress !== state.goal.progress) {
+        updateData.last_progress_change_at = new Date().toISOString();
+      }
       const { error } = await supabase
         .from("goals")
-        .update({
-          title: title.trim(),
-          owner,
-          status,
-          progress,
-          target_date,
-        })
+        .update(updateData)
         .eq("id", state.goal.id);
       setSaving(false);
       if (error) return alert(error.message);

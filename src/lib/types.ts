@@ -48,6 +48,7 @@ export type Goal = {
   city: City | null;
   sort_order: number | null;
   target_date: string | null;
+  last_progress_change_at: string | null;
   created_at: string;
   updated_at: string;
 };

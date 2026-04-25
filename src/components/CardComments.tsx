@@ -1,10 +1,13 @@
 "use client";
 
-import { useEffect, useMemo, useState } from "react";
+import { useMemo, useState } from "react";
 import { supabase } from "@/lib/supabase";
 import { partitionDirectory } from "@/lib/org";
 import { useOrgDirectory } from "@/lib/useOrgDirectory";
-import type { GoalComment } from "@/lib/types";
+import {
+  refetchGoalComments,
+  useGoalComments,
+} from "@/lib/useGoalComments";
 import CommentBody from "./CommentBody";
 import DirectoryOptions from "./DirectoryOptions";
 import RichCommentEditor from "./RichCommentEditor";
@@ -31,8 +34,7 @@ function isEmptyHtml(html: string): boolean {
 }
 
 export default function CardComments({ goalId }: { goalId: string }) {
-  const [comments, setComments] = useState<GoalComment[]>([]);
-  const [loading, setLoading] = useState(true);
+  const { comments: allComments, loading } = useGoalComments();
   const [collapsed, setCollapsed] = useState(false);
   const [author, setAuthor] = useState<string>("");
   const [body, setBody] = useState("");
@@ -45,21 +47,13 @@ export default function CardComments({ goalId }: { goalId: string }) {
     [dir],
   );
 
-  async function load() {
-    setLoading(true);
-    const { data } = await supabase
-      .from("goal_comments")
-      .select("*")
-      .eq("goal_id", goalId)
-      .order("created_at", { ascending: true });
-    setComments((data ?? []) as GoalComment[]);
-    setLoading(false);
-  }
-
-  useEffect(() => {
-    load();
-    // eslint-disable-next-line react-hooks/exhaustive-deps
-  }, [goalId]);
+  const comments = useMemo(
+    () =>
+      allComments
+        .filter((c) => c.goal_id === goalId)
+        .sort((a, b) => a.created_at.localeCompare(b.created_at)),
+    [allComments, goalId],
+  );
 
   async function submitComment() {
     if (isEmptyHtml(body) || !author || posting) return;
@@ -74,7 +68,7 @@ export default function CardComments({ goalId }: { goalId: string }) {
       return;
     }
     setBody("");
-    load();
+    refetchGoalComments();
   }
 
   function onFormSubmit(e: React.FormEvent) {
@@ -83,16 +77,15 @@ export default function CardComments({ goalId }: { goalId: string }) {
   }
 
   async function remove(id: string) {
-    const prev = comments;
-    setComments((cs) => cs.filter((c) => c.id !== id));
     const { error } = await supabase
       .from("goal_comments")
       .delete()
       .eq("id", id);
     if (error) {
-      setComments(prev);
       alert(error.message);
+      return;
     }
+    refetchGoalComments();
   }
 
   const canPost = !isEmptyHtml(body) && author.length > 0 && !posting;

@@ -1,10 +1,12 @@
 "use client";
 
-import { useEffect } from "react";
+import { useEffect, useMemo } from "react";
 import type { Goal, Status } from "@/lib/types";
 import { formatGoalDate, isTargetPastDue } from "@/lib/goals";
+import { formatActivityDate, getGoalActivity } from "@/lib/goalActivity";
 import { GROUP_KIND_LABEL, lookupOwner } from "@/lib/org";
 import { useOrgDirectory } from "@/lib/useOrgDirectory";
+import { useGoalComments } from "@/lib/useGoalComments";
 import StatusPill from "./StatusPill";
 import CardComments from "./CardComments";
 
@@ -28,6 +30,12 @@ export default function GoalFocusZone({
   const dir = useOrgDirectory();
   const lookup = lookupOwner(goal.owner, dir);
 
+  const { comments } = useGoalComments();
+  const activity = useMemo(
+    () => getGoalActivity(goal, comments),
+    [goal, comments],
+  );
+
   useEffect(() => {
     function onKey(e: KeyboardEvent) {
       if (e.key === "Escape") onClose();
@@ -39,9 +47,16 @@ export default function GoalFocusZone({
   return (
     <div className="focus-slide-in mb-6 rounded-2xl border-[1.5px] border-cream-line bg-white p-6 shadow-lg shadow-deep-green/15 md:p-7">
       <div className="flex items-start justify-between gap-4">
-        <h3 className="min-w-0 text-2xl font-bold leading-snug tracking-tight text-deep-green md:text-3xl">
-          {goal.title}
-        </h3>
+        <div className="min-w-0">
+          <h3 className="text-2xl font-bold leading-snug tracking-tight text-deep-green md:text-3xl">
+            {goal.title}
+          </h3>
+          {activity.isActive && (
+            <span className="mt-2 inline-flex rounded-full bg-mint px-2 py-0.5 text-[10px] font-bold uppercase tracking-wider text-deep-green">
+              Active this week
+            </span>
+          )}
+        </div>
         <div className="flex shrink-0 items-center gap-2">
           <StatusPill status={goal.status} />
           <button
@@ -117,6 +132,18 @@ export default function GoalFocusZone({
                 </span>
               )}
             </div>
+            {activity.lastCommentAt && (
+              <div>
+                <span className="text-deep-green/45">Last comment · </span>
+                {formatActivityDate(activity.lastCommentAt)}
+              </div>
+            )}
+            {activity.lastProgressChangeAt && (
+              <div>
+                <span className="text-deep-green/45">Last progress · </span>
+                {formatActivityDate(activity.lastProgressChangeAt)}
+              </div>
+            )}
           </div>
 
           <div>

@@ -1,10 +1,13 @@
 "use client";
 
+import { useMemo } from "react";
 import { ChevronDown, ChevronUp } from "lucide-react";
 import type { Goal, Status } from "@/lib/types";
 import { formatGoalDateShort, isTargetPastDue } from "@/lib/goals";
+import { formatActivityDate, getGoalActivity } from "@/lib/goalActivity";
 import { GROUP_KIND_LABEL, lookupOwner } from "@/lib/org";
 import { useOrgDirectory } from "@/lib/useOrgDirectory";
+import { useGoalComments } from "@/lib/useGoalComments";
 import StatusPill from "./StatusPill";
 
 const STRIPE: Record<Status, string> = {
@@ -43,18 +46,33 @@ export default function GoalCard({
   const dir = useOrgDirectory();
   const lookup = lookupOwner(goal.owner, dir);
 
+  const { comments } = useGoalComments();
+  const activity = useMemo(
+    () => getGoalActivity(goal, comments),
+    [goal, comments],
+  );
+
+  const dim = activity.isStale && !isFocused;
+
   return (
     <div
       className={`relative box-border flex flex-col overflow-hidden rounded-2xl border-[1.5px] border-cream-line bg-white p-5 shadow-md shadow-deep-green/10 transition-all duration-200 ${
         isFocused
           ? "ring-2 ring-mint/60"
           : "hover:-translate-y-1 hover:shadow-xl hover:shadow-deep-green/20"
-      }`}
+      } ${dim ? "opacity-50" : ""}`}
     >
       <div
         aria-hidden
         className={`pointer-events-none absolute inset-x-0 top-0 h-[3px] ${STRIPE[goal.status]}`}
       />
+
+      {activity.isActive && (
+        <span
+          aria-label="Updated this week"
+          className="absolute right-2 top-2 h-2 w-2 rounded-full bg-mint shadow-sm shadow-mint/40"
+        />
+      )}
 
       <div className="flex items-start justify-between gap-2">
         <button
@@ -139,6 +157,19 @@ export default function GoalCard({
             Target {formatGoalDateShort(goal.target_date)}
           </div>
         ))}
+
+      {(activity.lastCommentAt || activity.lastProgressChangeAt) && (
+        <div className="mt-2 flex flex-wrap gap-x-3 gap-y-0.5 text-[11px] text-deep-green/45">
+          {activity.lastCommentAt && (
+            <span>Comment · {formatActivityDate(activity.lastCommentAt)}</span>
+          )}
+          {activity.lastProgressChangeAt && (
+            <span>
+              Progress · {formatActivityDate(activity.lastProgressChangeAt)}
+            </span>
+          )}
+        </div>
+      )}
     </div>
   );
 }
