@@ -6,6 +6,7 @@ import { CityHealthPill } from "@/components/StatusPill";
 import MiniBarSparkline from "@/components/MiniBarSparkline";
 import TotalsBarChart from "@/components/TotalsBarChart";
 import { useMatchData } from "@/lib/useMatchData";
+import { useReviewData } from "@/lib/useReviewData";
 import {
   getActiveVenues,
   getCancelRate,
@@ -14,10 +15,16 @@ import {
   type CityStatus,
   type WeeklySpotsEntry,
 } from "@/lib/cityStats";
+import { getActiveMonthWindow } from "@/lib/reviewStats";
 import { CITIES, citySlug } from "@/lib/types";
+import ManagerPodium from "@/components/ManagerPodium";
+import Reviews8WeekCard from "@/components/Reviews8WeekCard";
 
 export default function CitiesIndexPage() {
   const { rows, meta, loading } = useMatchData();
+  const { rows: reviewRows, meta: reviewMeta, loading: reviewLoading } =
+    useReviewData();
+  const reviewWindow = getActiveMonthWindow(reviewRows);
 
   const totals = getWeeklySpots(rows, null, 8);
   const totalSpots = totals.reduce((s, w) => s + w.spots, 0);
@@ -115,6 +122,48 @@ export default function CitiesIndexPage() {
           </div>
         </>
       )}
+
+      <section className="mt-12">
+        <div className="mb-6">
+          <h2 className="text-2xl font-bold tracking-tight text-deep-green">
+            Reviews
+          </h2>
+          {reviewMeta ? (
+            <p className="mt-1 text-sm text-deep-green/70">
+              Manager performance · {reviewWindow.monthName} {reviewWindow.year}
+            </p>
+          ) : (
+            <p className="mt-1 text-sm text-deep-green/70">
+              Manager performance
+            </p>
+          )}
+        </div>
+        {reviewLoading ? (
+          <div className="rounded-2xl border-[1.5px] border-cream-line bg-white p-8 text-sm text-deep-green/60 shadow-md shadow-deep-green/10">
+            Loading review data…
+          </div>
+        ) : !reviewMeta ? (
+          <div className="rounded-2xl border-[1.5px] border-cream-line bg-white p-8 shadow-md shadow-deep-green/10">
+            <div className="text-base font-bold text-deep-green">
+              No review data yet.
+            </div>
+            <div className="mt-1 text-sm text-deep-green/60">
+              Upload reviews CSV in{" "}
+              <Link
+                href="/data"
+                className="font-bold text-mint-hover hover:underline"
+              >
+                Data →
+              </Link>
+            </div>
+          </div>
+        ) : (
+          <div className="space-y-6">
+            <Reviews8WeekCard rows={reviewRows} />
+            <ManagerPodium rows={reviewRows} />
+          </div>
+        )}
+      </section>
     </>
   );
 }

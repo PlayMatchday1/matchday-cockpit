@@ -10,11 +10,17 @@ import {
   STATUS_THRESHOLDS,
 } from "@/lib/cityStats";
 import { useMatchData } from "@/lib/useMatchData";
+import { useReviewData } from "@/lib/useReviewData";
+import {
+  get8WeekStats,
+  getActiveMonthWindow,
+} from "@/lib/reviewStats";
 import type { City } from "@/lib/types";
 import { CityHealthPill } from "./StatusPill";
 import TotalsBarChart from "./TotalsBarChart";
 import CancelHeatmap from "./CancelHeatmap";
 import CityGoalsView from "./CityGoalsView";
+import CityManagerTable from "./CityManagerTable";
 
 function cancelRateColor(rate: number, hasData: boolean): string {
   if (!hasData) return "text-deep-green/40";
@@ -25,6 +31,7 @@ function cancelRateColor(rate: number, hasData: boolean): string {
 
 export default function CityDetailView({ city }: { city: City }) {
   const { rows, meta, loading } = useMatchData();
+  const { rows: reviewRows, meta: reviewMeta } = useReviewData();
   const [showVenues, setShowVenues] = useState(false);
 
   const weekly = getWeeklySpots(rows, city, 8);
@@ -33,6 +40,9 @@ export default function CityDetailView({ city }: { city: City }) {
   const status = getCityStatus(rows, city);
   const currentWeek = weekly[weekly.length - 1];
   const hasData = cancel.totalSpots > 0;
+
+  const reviews8wk = get8WeekStats(reviewRows, city);
+  const reviewWindow = getActiveMonthWindow(reviewRows);
 
   if (loading) {
     return (
@@ -79,6 +89,30 @@ export default function CityDetailView({ city }: { city: City }) {
         </h1>
         <CityHealthPill health={status} />
       </div>
+
+      {reviewMeta && (
+        <div className="mb-3 flex flex-wrap items-center gap-x-2 gap-y-1 text-sm">
+          <span className="font-bold uppercase tracking-wider text-deep-green/60 text-[11px]">
+            Reviews
+          </span>
+          <span className="text-deep-green/40">—</span>
+          {reviews8wk.count > 0 ? (
+            <>
+              <span className="font-bold tabular-nums text-mint-hover">
+                {reviews8wk.avgRating.toFixed(1)}
+              </span>
+              <span className="text-mint">★</span>
+              <span className="text-deep-green/65">
+                from {reviews8wk.count} reviews · last 8 weeks
+              </span>
+            </>
+          ) : (
+            <span className="text-deep-green/45">
+              no reviews in last 8 weeks
+            </span>
+          )}
+        </div>
+      )}
 
       <div className="mb-8">
         <div className="grid grid-cols-2 gap-4 sm:grid-cols-4">
@@ -161,6 +195,20 @@ export default function CityDetailView({ city }: { city: City }) {
         </h2>
         <CancelHeatmap city={city} />
       </section>
+
+      {reviewMeta && (
+        <section className="mb-8">
+          <div className="mb-4">
+            <h2 className="text-2xl font-bold tracking-tight text-deep-green">
+              {city} managers
+            </h2>
+            <p className="text-sm text-deep-green/60">
+              {reviewWindow.monthName} {reviewWindow.year} · sorted by avg rating
+            </p>
+          </div>
+          <CityManagerTable rows={reviewRows} city={city} />
+        </section>
+      )}
     </>
   );
 }
