@@ -1,4 +1,9 @@
 import type { FinanceData } from "./useFinanceData";
+import {
+  canonicalVenueCost,
+  perMatchTotalFor,
+  venueRentalLineFor,
+} from "./financeCosts";
 
 export const Q2_MONTHS = ["Apr 2026", "May 2026", "Jun 2026"] as const;
 export type Q2Month = (typeof Q2_MONTHS)[number];
@@ -207,14 +212,10 @@ export function perMatchVenueCostFor(
   data: FinanceData,
   month: Q2Month,
 ): number {
-  const perMatch = new Set(
-    data.venues
-      .filter((v) => v.billing_type === "per_match")
-      .map((v) => v.venue_name),
-  );
-  return data.schedule
-    .filter((s) => s.month === month && perMatch.has(s.venue))
-    .reduce((sum, s) => sum + (s.venue_cost ?? 0), 0);
+  // Override-aware total via the shared helper. Cash Flow's per-match line,
+  // hero metrics, and the Field Costs reconciliation footer all read from
+  // this so they agree by construction.
+  return perMatchTotalFor(data, month);
 }
 
 export function totalExpensesFor(
@@ -223,8 +224,15 @@ export function totalExpensesFor(
   mode: Mode,
   now: Date = new Date(),
 ): number {
+  // Pull "Venue Rental" out of the generic expenses sum and replace with the
+  // override-aware total, so hero metrics agree with the Field Costs page.
+  const venueRentalRx = /venue\s*rental/i;
+  const otherNonVenueRental = filterExpenseRows(data, month, mode, now)
+    .filter((r) => !venueRentalRx.test(r.category))
+    .reduce((s, r) => s + r.amount, 0);
   return (
-    otherExpensesFor(data, month, mode, now) +
+    otherNonVenueRental +
+    venueRentalLineFor(data, month) +
     managerPayFor(data, month) +
     monthlyExpenseCategoryFor(data, month, "city_manager") +
     monthlyExpenseCategoryFor(data, month, "marketing") +
@@ -368,6 +376,17 @@ export function venueCostFor(
   venue: string,
   month: Q2Month,
 ): number {
+  // Delegate to the canonical helper so per-(venue, month) overrides flow
+  // through City P&L cards, Field Ranking, and any other consumer of this
+  // function. Falls back to schedule.venue_cost only when no fin_venues row
+  // matches (e.g. a venue name that exists in fin_schedule but isn't in
+  // fin_venues yet).
+  const venueRow = data.venues.find(
+    (v) => v.city === city && v.venue_name === venue,
+  );
+  if (venueRow) {
+    return canonicalVenueCost(data, venueRow.id, month).amount;
+  }
   return data.schedule
     .filter((s) => s.city === city && s.venue === venue && s.month === month)
     .reduce((sum, s) => sum + (s.venue_cost ?? 0), 0);

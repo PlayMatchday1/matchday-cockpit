@@ -106,6 +106,16 @@ export type FinCommentary = {
   updated_at: string | null;
 };
 
+export type FinVenueCostOverride = {
+  id: number;
+  venue_id: number;
+  month: string;
+  override_amount: number;
+  reason: string | null;
+  created_at: string;
+  created_by: string;
+};
+
 export type FinanceData = {
   revenue: FinRevenue[];
   expenses: FinExpense[];
@@ -117,6 +127,7 @@ export type FinanceData = {
   members: FinMember[];
   pricing: FinPricing[];
   commentary: FinCommentary | null;
+  overrides: FinVenueCostOverride[];
   venueAliases: Map<string, string>;
   config: Record<string, string>;
 };
@@ -207,6 +218,7 @@ async function load(): Promise<void> {
     mbrRes,
     prcRes,
     cmtRes,
+    ovRes,
   ] = await Promise.all([
     supabase.from("fin_revenue").select("*"),
     supabase.from("fin_expenses").select("*"),
@@ -225,6 +237,7 @@ async function load(): Promise<void> {
       .order("id", { ascending: true })
       .limit(1)
       .maybeSingle(),
+    supabase.from("fin_venue_cost_overrides").select("*"),
   ]);
 
   for (const r of [
@@ -240,6 +253,7 @@ async function load(): Promise<void> {
     mbrRes,
     prcRes,
     cmtRes,
+    ovRes,
   ]) {
     if (r.error) {
       publish({ data: null, loading: false, error: r.error.message });
@@ -380,6 +394,16 @@ async function load(): Promise<void> {
       }
     : null;
 
+  const overrides: FinVenueCostOverride[] = (ovRes.data ?? []).map((r) => ({
+    id: r.id as number,
+    venue_id: r.venue_id as number,
+    month: normalizeMonth(cleanText(r.month)),
+    override_amount: asNumber(r.override_amount),
+    reason: cleanTextNullable(r.reason),
+    created_at: cleanText(r.created_at),
+    created_by: cleanText(r.created_by),
+  }));
+
   publish({
     data: {
       revenue,
@@ -392,6 +416,7 @@ async function load(): Promise<void> {
       members,
       pricing,
       commentary,
+      overrides,
       venueAliases,
       config,
     },

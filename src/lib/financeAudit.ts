@@ -1,6 +1,9 @@
 import { supabase } from "./supabase";
 
-export type AuditTable = "fin_revenue" | "fin_expenses";
+export type AuditTable =
+  | "fin_revenue"
+  | "fin_expenses"
+  | "fin_venue_cost_overrides";
 export type AuditAction = "insert" | "update" | "delete";
 
 type LogChangeOpts = {

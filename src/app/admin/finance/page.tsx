@@ -129,6 +129,12 @@ function FinanceLandingContent() {
           subtitle="Browse every fin_expenses row. Add or edit manual entries; CSV-imported rows are read-only."
         />
         <DataLink
+          href="/admin/finance/field-costs"
+          eyebrow="Manage"
+          title="Field Costs"
+          subtitle="Per-venue monthly cost. Override any (venue, month) where the real arrangement differs from the formula."
+        />
+        <DataLink
           href="/admin/finance/changelog"
           eyebrow="Audit"
           title="Change Log"

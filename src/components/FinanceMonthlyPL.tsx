@@ -21,6 +21,9 @@ import {
   startingCash,
   totalExpensesFor,
 } from "@/lib/financeStats";
+import { venueRentalLineFor } from "@/lib/financeCosts";
+
+const VENUE_RENTAL_LABEL_RX = /^venue\s*rental$/i;
 
 function fmt(n: number): string {
   const r = Math.round(n);
@@ -106,10 +109,14 @@ export default function FinanceMonthlyPL({
       monthlyExpenseCategoryFor(data, m, "equipment"),
     );
 
+    // Substitute the override-aware total for "Venue Rental"; sum the rest
+    // straight from fin_expenses.
     const otherCatRows: Row[] = otherCats.map((cat) => {
-      const perMonth = Q2_MONTHS.map(
-        (m) => otherExpensesByCategoryFor(data, m, mode).get(cat) ?? 0,
-      );
+      const perMonth = VENUE_RENTAL_LABEL_RX.test(cat)
+        ? Q2_MONTHS.map((m) => venueRentalLineFor(data, m))
+        : Q2_MONTHS.map(
+            (m) => otherExpensesByCategoryFor(data, m, mode).get(cat) ?? 0,
+          );
       return {
         kind: "data",
         label: cat,
