@@ -3,10 +3,14 @@
 import { useEffect, useState } from "react";
 import Link from "next/link";
 import AdminGuard from "@/components/AdminGuard";
+import CityPLCard from "@/components/CityPLCard";
+import FieldRankingTable from "@/components/FieldRankingTable";
 import FinanceHeroMetrics from "@/components/FinanceHeroMetrics";
 import FinanceMonthlyPL from "@/components/FinanceMonthlyPL";
 import FinanceTrendChart from "@/components/FinanceTrendChart";
+import { CITY_DISPLAY_ORDER, cityHasAnyQ2Activity } from "@/lib/financeStats";
 import { supabase } from "@/lib/supabase";
+import { useFinanceData } from "@/lib/useFinanceData";
 
 export default function FinanceLandingPage() {
   return (
@@ -60,14 +64,25 @@ function FinanceLandingContent() {
       </div>
 
       <SectionHeader
-        title="Detail"
-        subtitle="Per-city P&L, per-venue ranking, narrative."
+        title="City & Field P&L"
+        subtitle="Per-market field economics, membership allocation, and overhead."
+      />
+      <div className="mb-12">
+        <CityCardsGrid />
+      </div>
+
+      <div className="mb-12">
+        <FieldRankingTable />
+      </div>
+
+      <SectionHeader
+        title="More detail"
+        subtitle="Narrative + scenario thinking."
       />
       <div className="mb-12 grid grid-cols-1 gap-4 md:grid-cols-2 lg:grid-cols-3">
-        <PlaceholderCard title="City P&L" phase="Phase 3" />
-        <PlaceholderCard title="Field Ranking" phase="Phase 3" />
         <PlaceholderCard title="Insights" phase="Phase 4" />
         <PlaceholderCard title="Executive Summary" phase="Phase 4" />
+        <PlaceholderCard title="Forecasts" phase="Phase 5" />
       </div>
 
       <SectionHeader
@@ -91,6 +106,33 @@ function FinanceLandingContent() {
         </Link>
       </div>
     </>
+  );
+}
+
+function CityCardsGrid() {
+  const { data, loading } = useFinanceData();
+  if (loading) {
+    return (
+      <div className="rounded-2xl border-[1.5px] border-cream-line bg-white p-8 text-sm text-deep-green/60 shadow-md shadow-deep-green/10">
+        Loading…
+      </div>
+    );
+  }
+  if (!data) return null;
+  const cities = CITY_DISPLAY_ORDER.filter((c) => cityHasAnyQ2Activity(data, c));
+  if (cities.length === 0) {
+    return (
+      <div className="rounded-2xl border-[1.5px] border-cream-line bg-white p-8 text-sm text-deep-green/60 shadow-md shadow-deep-green/10">
+        No city activity yet.
+      </div>
+    );
+  }
+  return (
+    <div className="grid grid-cols-1 gap-4 md:grid-cols-2 xl:grid-cols-3">
+      {cities.map((c) => (
+        <CityPLCard key={c} city={c} />
+      ))}
+    </div>
   );
 }
 

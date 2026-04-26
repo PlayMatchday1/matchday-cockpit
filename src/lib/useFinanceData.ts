@@ -44,11 +44,50 @@ export type FinMonthlyExpense = {
   equipment: number;
 };
 
+export type FinSchedule = {
+  id: number;
+  date: string;
+  month: string;
+  city: string;
+  venue: string;
+  match_count: number;
+  total_hours: number | null;
+  venue_cost: number | null;
+};
+
+export type FinVenue = {
+  id: number;
+  venue_name: string;
+  city: string;
+  billing_type: "per_hour" | "per_match" | "monthly_flat";
+  hourly_rate: number | null;
+  monthly_flat: number | null;
+  per_match_rate: number | null;
+  max_spots: number | null;
+  notes: string | null;
+  launch_date: string | null;
+  is_active: boolean;
+};
+
+export type FinMemberSpotsRow = {
+  id: number;
+  venue: string;
+  city: string;
+  month: string;
+  member_spots: number;
+  dpp_spots: number;
+  other_spots: number;
+};
+
 export type FinanceData = {
   revenue: FinRevenue[];
   expenses: FinExpense[];
   managerPay: FinManagerPay[];
   monthlyExpenses: FinMonthlyExpense[];
+  schedule: FinSchedule[];
+  venues: FinVenue[];
+  memberSpots: FinMemberSpotsRow[];
+  venueAliases: Map<string, string>;
   config: Record<string, string>;
 };
 
@@ -125,19 +164,40 @@ function normalizeMonth(v: unknown): string {
 async function load(): Promise<void> {
   publish({ data: cached.data, loading: true, error: null });
 
-  const [revRes, expRes, mpRes, meRes, cfgRes] = await Promise.all([
-    supabase.from("fin_revenue").select("*"),
-    supabase.from("fin_expenses").select("*"),
-    supabase.from("fin_manager_pay").select("*"),
-    supabase.from("fin_monthly_expenses").select("*"),
-    supabase.from("fin_config").select("*"),
-  ]);
+  const [revRes, expRes, mpRes, meRes, cfgRes, schRes, vnRes, msRes, alRes] =
+    await Promise.all([
+      supabase.from("fin_revenue").select("*"),
+      supabase.from("fin_expenses").select("*"),
+      supabase.from("fin_manager_pay").select("*"),
+      supabase.from("fin_monthly_expenses").select("*"),
+      supabase.from("fin_config").select("*"),
+      supabase.from("fin_schedule").select("*"),
+      supabase.from("fin_venues").select("*"),
+      supabase.from("fin_member_spots").select("*"),
+      supabase.from("fin_venue_aliases").select("*"),
+    ]);
 
-  for (const r of [revRes, expRes, mpRes, meRes, cfgRes]) {
+  for (const r of [revRes, expRes, mpRes, meRes, cfgRes, schRes, vnRes, msRes, alRes]) {
     if (r.error) {
       publish({ data: null, loading: false, error: r.error.message });
       return;
     }
+  }
+
+  const venueAliases = new Map<string, string>();
+  for (const a of alRes.data ?? []) {
+    const alias = cleanText(a.alias);
+    const canonical = cleanText(a.canonical_venue);
+    if (alias && canonical) venueAliases.set(alias, canonical);
+  }
+  function canonVenue(v: unknown): string {
+    const c = cleanText(v);
+    return venueAliases.get(c) ?? c;
+  }
+  function canonVenueNullable(v: unknown): string | null {
+    const c = cleanTextNullable(v);
+    if (c === null) return null;
+    return venueAliases.get(c) ?? c;
   }
 
   const revenue: FinRevenue[] = (revRes.data ?? []).map((r) => ({
@@ -145,7 +205,7 @@ async function load(): Promise<void> {
     date: cleanText(r.date),
     month: normalizeMonth(cleanText(r.month)),
     city: cleanText(r.city),
-    venue: cleanTextNullable(r.venue),
+    venue: canonVenueNullable(r.venue),
     type: cleanText(r.type) as FinRevenue["type"],
     gross: asNumber(r.gross),
     fees: asNumber(r.fees),
@@ -181,13 +241,62 @@ async function load(): Promise<void> {
     equipment: asNumber(r.equipment),
   }));
 
+  const schedule: FinSchedule[] = (schRes.data ?? []).map((r) => ({
+    id: r.id as number,
+    date: cleanText(r.date),
+    month: normalizeMonth(cleanText(r.month)),
+    city: cleanText(r.city),
+    venue: canonVenue(r.venue),
+    match_count: Math.round(asNumber(r.match_count) || 0),
+    total_hours: r.total_hours === null ? null : asNumber(r.total_hours),
+    venue_cost: r.venue_cost === null ? null : asNumber(r.venue_cost),
+  }));
+
+  const venues: FinVenue[] = (vnRes.data ?? []).map((r) => ({
+    id: r.id as number,
+    venue_name: canonVenue(r.venue_name),
+    city: cleanText(r.city),
+    billing_type: cleanText(r.billing_type) as FinVenue["billing_type"],
+    hourly_rate: r.hourly_rate === null ? null : asNumber(r.hourly_rate),
+    monthly_flat: r.monthly_flat === null ? null : asNumber(r.monthly_flat),
+    per_match_rate:
+      r.per_match_rate === null ? null : asNumber(r.per_match_rate),
+    max_spots: r.max_spots === null ? null : Math.round(asNumber(r.max_spots)),
+    notes: cleanTextNullable(r.notes),
+    launch_date: cleanTextNullable(r.launch_date),
+    is_active:
+      r.is_active === null || r.is_active === undefined
+        ? true
+        : Boolean(r.is_active),
+  }));
+
+  const memberSpots: FinMemberSpotsRow[] = (msRes.data ?? []).map((r) => ({
+    id: r.id as number,
+    venue: canonVenue(r.venue),
+    city: cleanText(r.city),
+    month: normalizeMonth(cleanText(r.month)),
+    member_spots: Math.round(asNumber(r.member_spots) || 0),
+    dpp_spots: Math.round(asNumber(r.dpp_spots) || 0),
+    other_spots: Math.round(asNumber(r.other_spots) || 0),
+  }));
+
   const config: Record<string, string> = {};
   for (const r of cfgRes.data ?? []) {
     config[cleanText(r.key)] = cleanText(r.value);
   }
 
   publish({
-    data: { revenue, expenses, managerPay, monthlyExpenses, config },
+    data: {
+      revenue,
+      expenses,
+      managerPay,
+      monthlyExpenses,
+      schedule,
+      venues,
+      memberSpots,
+      venueAliases,
+      config,
+    },
     loading: false,
     error: null,
   });

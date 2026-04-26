@@ -286,3 +286,301 @@ export function projectedEndingCash(
 ): number {
   return startingCash(data) + q2NetPLProjected(data, now);
 }
+
+// ===== Phase 3 helpers: city cards + field ranking =====
+
+export const CITY_DISPLAY_ORDER = [
+  "Austin",
+  "Houston",
+  "San Antonio",
+  "Dallas",
+  "Atlanta",
+  "St. Louis",
+  "OKC",
+  "El Paso",
+] as const;
+
+export type CityName = (typeof CITY_DISPLAY_ORDER)[number];
+
+export function cityHasAnyQ2Activity(
+  data: FinanceData,
+  city: string,
+): boolean {
+  for (const m of Q2_MONTHS) {
+    const grossRev = data.revenue
+      .filter((r) => r.city === city && r.month === m)
+      .reduce((s, r) => s + r.gross, 0);
+    if (grossRev !== 0) return true;
+    const exp = data.expenses
+      .filter((r) => r.city === city && r.month === m)
+      .reduce((s, r) => s + r.amount, 0);
+    if (exp !== 0) return true;
+    const mp = data.managerPay
+      .filter((r) => r.city === city && r.month === m)
+      .reduce((s, r) => s + r.amount, 0);
+    if (mp !== 0) return true;
+    const me = data.monthlyExpenses.find(
+      (r) => r.city === city && r.month === m,
+    );
+    if (me && (me.city_manager || me.marketing || me.equipment)) return true;
+  }
+  return false;
+}
+
+export function venueDppRevenueFor(
+  data: FinanceData,
+  city: string,
+  venue: string,
+  month: Q2Month,
+): number {
+  return data.revenue
+    .filter(
+      (r) =>
+        r.city === city &&
+        r.venue === venue &&
+        r.month === month &&
+        r.type === "DPP",
+    )
+    .reduce((s, r) => s + r.net, 0);
+}
+
+export function venueCostFor(
+  data: FinanceData,
+  city: string,
+  venue: string,
+  month: Q2Month,
+): number {
+  return data.schedule
+    .filter((s) => s.city === city && s.venue === venue && s.month === month)
+    .reduce((sum, s) => sum + (s.venue_cost ?? 0), 0);
+}
+
+export function venueMatchCountFor(
+  data: FinanceData,
+  city: string,
+  venue: string,
+  month: Q2Month,
+): number {
+  return data.schedule
+    .filter((s) => s.city === city && s.venue === venue && s.month === month)
+    .reduce((sum, s) => sum + (s.match_count ?? 0), 0);
+}
+
+export function cityMembershipRevenueFor(
+  data: FinanceData,
+  city: string,
+  month: Q2Month,
+): number {
+  return data.revenue
+    .filter(
+      (r) => r.city === city && r.month === month && r.type === "Membership",
+    )
+    .reduce((s, r) => s + r.net, 0);
+}
+
+export type CityOverhead = {
+  matchManagerPay: number;
+  cityManager: number;
+  marketing: number;
+  equipment: number;
+  total: number;
+};
+
+export function cityOverheadFor(
+  data: FinanceData,
+  city: string,
+  month: Q2Month,
+): CityOverhead {
+  const matchManagerPay = data.managerPay
+    .filter((r) => r.city === city && r.month === month)
+    .reduce((s, r) => s + r.amount, 0);
+  const me = data.monthlyExpenses.find(
+    (r) => r.city === city && r.month === month,
+  );
+  const cityManager = me?.city_manager ?? 0;
+  const marketing = me?.marketing ?? 0;
+  const equipment = me?.equipment ?? 0;
+  return {
+    matchManagerPay,
+    cityManager,
+    marketing,
+    equipment,
+    total: matchManagerPay + cityManager + marketing + equipment,
+  };
+}
+
+export function activeVenuesForCity(
+  data: FinanceData,
+  city: string,
+  month: Q2Month,
+): string[] {
+  const venues = new Set<string>();
+  for (const r of data.revenue) {
+    if (
+      r.city === city &&
+      r.month === month &&
+      r.type === "DPP" &&
+      r.venue
+    ) {
+      venues.add(r.venue);
+    }
+  }
+  for (const s of data.schedule) {
+    if (s.city === city && s.month === month && s.venue) {
+      venues.add(s.venue);
+    }
+  }
+  return [...venues].sort();
+}
+
+export function cityGrossRevenueFor(
+  data: FinanceData,
+  city: string,
+  month: Q2Month,
+): number {
+  return data.revenue
+    .filter((r) => r.city === city && r.month === month)
+    .reduce((s, r) => s + r.gross, 0);
+}
+
+export type VenueMemberSpotBreakdown = {
+  member: number;
+  dpp: number;
+  other: number;
+  total: number;
+};
+
+export function venueMemberSpotsFor(
+  data: FinanceData,
+  city: string,
+  venue: string,
+  month: Q2Month,
+): VenueMemberSpotBreakdown {
+  const row = data.memberSpots.find(
+    (s) => s.city === city && s.venue === venue && s.month === month,
+  );
+  if (!row) return { member: 0, dpp: 0, other: 0, total: 0 };
+  return {
+    member: row.member_spots,
+    dpp: row.dpp_spots,
+    other: row.other_spots,
+    total: row.member_spots + row.dpp_spots + row.other_spots,
+  };
+}
+
+export function cityTotalMemberSpotsFor(
+  data: FinanceData,
+  city: string,
+  month: Q2Month,
+): number {
+  return data.memberSpots
+    .filter((s) => s.city === city && s.month === month)
+    .reduce((sum, s) => sum + s.member_spots, 0);
+}
+
+export function venueAllocatedMemberRevenueFor(
+  data: FinanceData,
+  city: string,
+  venue: string,
+  month: Q2Month,
+): number {
+  const venueSpots = venueMemberSpotsFor(data, city, venue, month).member;
+  const cityTotal = cityTotalMemberSpotsFor(data, city, month);
+  if (cityTotal === 0) return 0;
+  const cityMembership = cityMembershipRevenueFor(data, city, month);
+  return (venueSpots / cityTotal) * cityMembership;
+}
+
+export type RankingRow = {
+  venue: string;
+  city: string;
+  launchDate: string | null;
+  launchedMs: number;
+  dppRev: number;
+  memberRev: number;
+  cityMbrPct: number;
+  mbrMixPct: number;
+  dppMixPct: number;
+  cost: number;
+  matchCount: number;
+  billingType: FinanceData["venues"][number]["billing_type"] | null;
+  perMatchRate: number | null;
+  monthlyFlat: number | null;
+  netPL: number;
+  margin: number;
+};
+
+export function buildRankingRows(
+  data: FinanceData,
+  month: Q2Month,
+): RankingRow[] {
+  const out: RankingRow[] = [];
+  for (const v of data.venues) {
+    const dppRev = venueDppRevenueFor(data, v.city, v.venue_name, month);
+    const memberRev = venueAllocatedMemberRevenueFor(
+      data,
+      v.city,
+      v.venue_name,
+      month,
+    );
+    const cost = venueCostFor(data, v.city, v.venue_name, month);
+    const matchCount = venueMatchCountFor(data, v.city, v.venue_name, month);
+
+    if (dppRev === 0 && memberRev === 0 && cost === 0) continue;
+
+    const spots = venueMemberSpotsFor(data, v.city, v.venue_name, month);
+    const cityTotalMember = cityTotalMemberSpotsFor(data, v.city, month);
+    const cityMbrPct = cityTotalMember > 0 ? spots.member / cityTotalMember : 0;
+    const mbrMixPct = spots.total > 0 ? spots.member / spots.total : 0;
+    const dppMixPct = spots.total > 0 ? spots.dpp / spots.total : 0;
+    const totalRev = dppRev + memberRev;
+    const netPL = totalRev - cost;
+    const margin = totalRev > 0 ? netPL / totalRev : 0;
+
+    let launchedMs = Number.POSITIVE_INFINITY;
+    if (v.launch_date) {
+      const d = new Date(v.launch_date);
+      if (!Number.isNaN(d.getTime())) launchedMs = d.getTime();
+    }
+
+    out.push({
+      venue: v.venue_name,
+      city: v.city,
+      launchDate: v.launch_date,
+      launchedMs,
+      dppRev,
+      memberRev,
+      cityMbrPct,
+      mbrMixPct,
+      dppMixPct,
+      cost,
+      matchCount,
+      billingType: v.billing_type ?? null,
+      perMatchRate: v.per_match_rate,
+      monthlyFlat: v.monthly_flat,
+      netPL,
+      margin,
+    });
+  }
+  return out;
+}
+
+export function relativeTimeFromDate(iso: string | null): string {
+  if (!iso) return "—";
+  const d = new Date(iso);
+  if (Number.isNaN(d.getTime())) return "—";
+  const days = Math.floor((Date.now() - d.getTime()) / 86_400_000);
+  if (days < 0) return "—";
+  if (days < 30) return `${days}d`;
+  const months = Math.round(days / 30);
+  if (months < 12) return `${months}mo`;
+  const years = Math.round(months / 12);
+  return `${years}y`;
+}
+
+export function tabToMonths(tab: "Q2" | "Apr" | "May" | "Jun"): Q2Month[] {
+  if (tab === "Q2") return [...Q2_MONTHS];
+  if (tab === "Apr") return ["Apr 2026"];
+  if (tab === "May") return ["May 2026"];
+  return ["Jun 2026"];
+}
