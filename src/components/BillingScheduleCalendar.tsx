@@ -355,7 +355,7 @@ export default function BillingScheduleCalendar({
           </button>
         )}
       </div>
-      <div ref={scrollerRef} className="max-h-[70vh] overflow-auto">
+      <div ref={scrollerRef} className="overflow-x-auto overflow-y-clip">
         {/* Header row */}
         <div
           className="sticky top-0 z-30 grid"
