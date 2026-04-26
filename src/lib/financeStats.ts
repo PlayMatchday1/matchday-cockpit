@@ -88,6 +88,37 @@ function filterRevenueRows(
   }
 
   if (typeof window !== "undefined") {
+    const today = startOfDay(now);
+    const droppedDetails =
+      all.length !== result.length
+        ? all
+            .filter((r) => !result.includes(r))
+            .slice(0, 10)
+            .map((r) => {
+              const parsed = parseLocalDate(r.date);
+              const native = new Date(r.date);
+              return {
+                city: r.city,
+                type: r.type,
+                source: JSON.stringify(r.source),
+                isProjection: r.source === "PROJECTION",
+                rawDate: JSON.stringify(r.date),
+                rawDateTypeof: typeof r.date,
+                parseLocalValid: parsed !== null,
+                parseLocalISO: parsed ? parsed.toISOString() : null,
+                nativeDateValid: !Number.isNaN(native.getTime()),
+                nativeDateISO: Number.isNaN(native.getTime())
+                  ? null
+                  : native.toISOString(),
+                todayISO: today.toISOString(),
+                dateLeqToday:
+                  parsed !== null
+                    ? parsed.getTime() <= today.getTime()
+                    : null,
+                net: r.net,
+              };
+            })
+        : [];
     console.log("[FIN] filterRevenueRows", {
       month,
       mode,
@@ -99,18 +130,8 @@ function filterRevenueRows(
       afterFilterCount: result.length,
       monthMatchCities: [...new Set(all.map((r) => r.city))],
       resultCities: [...new Set(result.map((r) => r.city))],
-      droppedRows:
-        all.length !== result.length
-          ? all
-              .filter((r) => !result.includes(r))
-              .slice(0, 5)
-              .map((r) => ({
-                city: r.city,
-                source: r.source,
-                date: r.date,
-                net: r.net,
-              }))
-          : [],
+      monthMatchSources: [...new Set(all.map((r) => JSON.stringify(r.source)))],
+      droppedDetails,
     });
   }
 
