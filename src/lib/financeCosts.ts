@@ -9,6 +9,7 @@ import type {
   FinVenueCostOverride,
 } from "./useFinanceData";
 import type { Q2Month } from "./financeStats";
+import { getLegLabel, groupVenues, type VenueGroup } from "./venueGroups";
 
 export type VenueCostKind =
   | "override"
@@ -278,25 +279,10 @@ export function totalOverrideAmountFor(
   return { amount, venueCount: venueIds.size };
 }
 
-// ATH Katy combine helpers — used only by the Field Costs page UI. Other
-// pages keep treating ATH Katy + ATH Katy Sunday as separate venues so the
-// company-wide aggregation stays correct.
-
-export const ATH_KATY_PRIMARY_NAME = "ATH Katy";
-export const ATH_KATY_SUNDAY_NAME = "ATH Katy Sunday";
-
-export function findAthKatyPair(
-  data: FinanceData,
-): { primary: FinVenue; sunday: FinVenue } | null {
-  const primary = data.venues.find(
-    (v) => v.venue_name === ATH_KATY_PRIMARY_NAME,
-  );
-  const sunday = data.venues.find(
-    (v) => v.venue_name === ATH_KATY_SUNDAY_NAME,
-  );
-  if (!primary || !sunday) return null;
-  return { primary, sunday };
-}
+// Field Costs row builder — one row per VenueGroup (ATH Katy + ATH Katy
+// Sunday merge into a single "ATH Katy" row via groupVenues). Per-leg
+// breakdown is preserved on the row for the formula text and the click-
+// expand schedule view.
 
 export type FieldCostRow = {
   key: string;
@@ -313,9 +299,6 @@ export type FieldCostRow = {
   override: FinVenueCostOverride | null;
   autoAmount: number;
   autoFormula: string;
-  // Per-leg auto-cost detail for the ATH Katy combined row (and any future
-  // multi-leg combines): used both for the formula and for the click-expand
-  // schedule breakdown.
   legs: Array<{
     venueId: number;
     venueName: string;
@@ -325,39 +308,57 @@ export type FieldCostRow = {
   }>;
 };
 
+function combinedAutoFormula(
+  group: VenueGroup,
+  legAutos: ReturnType<typeof autoCost>[],
+): string {
+  const parts: string[] = [];
+  let total = 0;
+  for (let i = 0; i < group.legs.length; i++) {
+    const leg = group.legs[i];
+    const auto = legAutos[i];
+    const rate = leg.per_match_rate ?? 0;
+    total += auto.amount;
+    if (auto.matchCount > 0) {
+      parts.push(
+        `${auto.matchCount} ${getLegLabel(group, i)} × $${rate}`,
+      );
+    }
+  }
+  if (parts.length === 0) return "No matches scheduled";
+  return `${parts.join(" + ")} = $${total.toLocaleString("en-US")}`;
+}
+
 export function buildFieldCostRows(
   data: FinanceData,
   month: Q2Month,
 ): FieldCostRow[] {
+  const groups = groupVenues(data.venues);
   const rows: FieldCostRow[] = [];
-  const skip = new Set<number>();
-  const pair = findAthKatyPair(data);
 
-  for (const v of data.venues) {
-    if (skip.has(v.id)) continue;
+  for (const g of groups) {
+    const primary = g.legs[0];
 
-    if (pair && v.id === pair.primary.id) {
-      // ATH Katy combine
-      skip.add(pair.sunday.id);
-      const primaryAuto = autoCost(data, pair.primary, month);
-      const sundayAuto = autoCost(data, pair.sunday, month);
-      const override = findOverride(data, pair.primary.id, month);
-      const autoAmount = primaryAuto.amount + sundayAuto.amount;
-      const matchCount = primaryAuto.matchCount + sundayAuto.matchCount;
-      const autoFormula =
-        primaryAuto.matchCount > 0 || sundayAuto.matchCount > 0
-          ? `${primaryAuto.matchCount} weekday × $${pair.primary.per_match_rate ?? 0} + ${sundayAuto.matchCount} Sunday × $${pair.sunday.per_match_rate ?? 0} = $${autoAmount.toLocaleString("en-US")}`
-          : "No matches scheduled";
+    if (g.isCombined) {
+      const legAutos = g.legs.map((l) => autoCost(data, l, month));
+      const autoAmount = legAutos.reduce((s, a) => s + a.amount, 0);
+      const matchCount = legAutos.reduce((s, a) => s + a.matchCount, 0);
+      const totalHours = legAutos.reduce((s, a) => s + a.totalHours, 0);
+      const autoFormula = combinedAutoFormula(g, legAutos);
+      // The combined row's override target is the primary leg. Wave 2.5's
+      // override-write logic mirrors $0 onto the secondary legs so summed
+      // canonicalVenueCost stays correct everywhere.
+      const override = findOverride(data, primary.id, month);
       rows.push({
-        key: `combined-${pair.primary.id}`,
-        displayName: ATH_KATY_PRIMARY_NAME,
-        city: pair.primary.city,
-        billingType: pair.primary.billing_type,
-        primaryVenueId: pair.primary.id,
-        secondaryVenueIds: [pair.sunday.id],
+        key: `combined-${primary.id}`,
+        displayName: g.displayName,
+        city: g.city,
+        billingType: primary.billing_type,
+        primaryVenueId: primary.id,
+        secondaryVenueIds: g.legs.slice(1).map((l) => l.id),
         amount: override ? override.override_amount : autoAmount,
         matchCount,
-        totalHours: 0,
+        totalHours,
         formula: override
           ? (override.reason ?? "Override (no reason given)")
           : autoFormula,
@@ -367,34 +368,25 @@ export function buildFieldCostRows(
         override,
         autoAmount,
         autoFormula,
-        legs: [
-          {
-            venueId: pair.primary.id,
-            venueName: pair.primary.venue_name,
-            matchCount: primaryAuto.matchCount,
-            rate: pair.primary.per_match_rate ?? 0,
-            autoAmount: primaryAuto.amount,
-          },
-          {
-            venueId: pair.sunday.id,
-            venueName: pair.sunday.venue_name,
-            matchCount: sundayAuto.matchCount,
-            rate: pair.sunday.per_match_rate ?? 0,
-            autoAmount: sundayAuto.amount,
-          },
-        ],
+        legs: g.legs.map((leg, i) => ({
+          venueId: leg.id,
+          venueName: leg.venue_name,
+          matchCount: legAutos[i].matchCount,
+          rate: leg.per_match_rate ?? 0,
+          autoAmount: legAutos[i].amount,
+        })),
       });
       continue;
     }
 
-    const info = canonicalVenueCost(data, v.id, month);
-    const autoOnly = autoCost(data, v, month);
+    const info = canonicalVenueCost(data, primary.id, month);
+    const autoOnly = autoCost(data, primary, month);
     rows.push({
-      key: `single-${v.id}`,
-      displayName: v.venue_name,
-      city: v.city,
-      billingType: v.billing_type,
-      primaryVenueId: v.id,
+      key: `single-${primary.id}`,
+      displayName: primary.venue_name,
+      city: primary.city,
+      billingType: primary.billing_type,
+      primaryVenueId: primary.id,
       secondaryVenueIds: [],
       amount: info.amount,
       matchCount: info.matchCount,
@@ -405,13 +397,13 @@ export function buildFieldCostRows(
       autoAmount: autoOnly.amount,
       autoFormula: autoOnly.formula,
       legs:
-        v.billing_type === "per_match"
+        primary.billing_type === "per_match"
           ? [
               {
-                venueId: v.id,
-                venueName: v.venue_name,
+                venueId: primary.id,
+                venueName: primary.venue_name,
                 matchCount: autoOnly.matchCount,
-                rate: v.per_match_rate ?? 0,
+                rate: primary.per_match_rate ?? 0,
                 autoAmount: autoOnly.amount,
               },
             ]

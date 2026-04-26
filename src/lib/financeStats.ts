@@ -4,6 +4,7 @@ import {
   perMatchTotalFor,
   venueRentalLineFor,
 } from "./financeCosts";
+import { groupVenues } from "./venueGroups";
 
 export const Q2_MONTHS = ["Apr 2026", "May 2026", "Jun 2026"] as const;
 export type Q2Month = (typeof Q2_MONTHS)[number];
@@ -552,42 +553,78 @@ export function buildRankingRows(
   month: Q2Month,
 ): RankingRow[] {
   const out: RankingRow[] = [];
-  const seen = new Set<string>();
-  for (const v of data.venues) {
-    const dedupKey = `${v.city}|${v.venue_name}`;
-    if (seen.has(dedupKey)) continue;
-    seen.add(dedupKey);
-    const dppRev = venueDppRevenueFor(data, v.city, v.venue_name, month);
-    const memberRev = venueAllocatedMemberRevenueFor(
-      data,
-      v.city,
-      v.venue_name,
-      month,
-    );
-    const cost = venueCostFor(data, v.city, v.venue_name, month);
-    const matchCount = venueMatchCountFor(data, v.city, v.venue_name, month);
+  const groups = groupVenues(data.venues);
+
+  for (const g of groups) {
+    const primary = g.legs[0];
+    // Sum revenue, cost, match counts across all legs. Each leg is queried
+    // by its own venue_name so distinct-name legs (Case B) and same-name
+    // legs (Case A) both work — same-name legs return identical sums but
+    // are deduped by groupVenues bucketing.
+    const legNames = new Set(g.legs.map((l) => l.venue_name));
+    let dppRev = 0;
+    let memberRev = 0;
+    let cost = 0;
+    let matchCount = 0;
+    let memberSpots = 0;
+    let dppSpots = 0;
+    let otherSpots = 0;
+
+    if (legNames.size === g.legs.length) {
+      // Distinct-name legs: query each separately and sum.
+      for (const leg of g.legs) {
+        dppRev += venueDppRevenueFor(data, g.city, leg.venue_name, month);
+        memberRev += venueAllocatedMemberRevenueFor(
+          data,
+          g.city,
+          leg.venue_name,
+          month,
+        );
+        cost += canonicalVenueCost(data, leg.id, month).amount;
+        matchCount += venueMatchCountFor(data, g.city, leg.venue_name, month);
+        const spots = venueMemberSpotsFor(data, g.city, leg.venue_name, month);
+        memberSpots += spots.member;
+        dppSpots += spots.dpp;
+        otherSpots += spots.other;
+      }
+    } else {
+      // Same-name legs (alias-collapsed): one query covers both. Cost still
+      // sums per leg because rates differ.
+      const name = primary.venue_name;
+      dppRev = venueDppRevenueFor(data, g.city, name, month);
+      memberRev = venueAllocatedMemberRevenueFor(data, g.city, name, month);
+      matchCount = venueMatchCountFor(data, g.city, name, month);
+      const spots = venueMemberSpotsFor(data, g.city, name, month);
+      memberSpots = spots.member;
+      dppSpots = spots.dpp;
+      otherSpots = spots.other;
+      for (const leg of g.legs) {
+        cost += canonicalVenueCost(data, leg.id, month).amount;
+      }
+    }
 
     if (dppRev === 0 && memberRev === 0 && cost === 0) continue;
 
-    const spots = venueMemberSpotsFor(data, v.city, v.venue_name, month);
-    const cityTotalMember = cityTotalMemberSpotsFor(data, v.city, month);
-    const cityMbrPct = cityTotalMember > 0 ? spots.member / cityTotalMember : 0;
-    const mbrMixPct = spots.total > 0 ? spots.member / spots.total : 0;
-    const dppMixPct = spots.total > 0 ? spots.dpp / spots.total : 0;
+    const cityTotalMember = cityTotalMemberSpotsFor(data, g.city, month);
+    const totalSpots = memberSpots + dppSpots + otherSpots;
+    const cityMbrPct =
+      cityTotalMember > 0 ? memberSpots / cityTotalMember : 0;
+    const mbrMixPct = totalSpots > 0 ? memberSpots / totalSpots : 0;
+    const dppMixPct = totalSpots > 0 ? dppSpots / totalSpots : 0;
     const totalRev = dppRev + memberRev;
     const netPL = totalRev - cost;
     const margin = totalRev > 0 ? netPL / totalRev : 0;
 
     let launchedMs = Number.POSITIVE_INFINITY;
-    if (v.launch_date) {
-      const d = new Date(v.launch_date);
+    if (primary.launch_date) {
+      const d = new Date(primary.launch_date);
       if (!Number.isNaN(d.getTime())) launchedMs = d.getTime();
     }
 
     out.push({
-      venue: v.venue_name,
-      city: v.city,
-      launchDate: v.launch_date,
+      venue: g.displayName,
+      city: g.city,
+      launchDate: primary.launch_date,
       launchedMs,
       dppRev,
       memberRev,
@@ -596,9 +633,9 @@ export function buildRankingRows(
       dppMixPct,
       cost,
       matchCount,
-      billingType: v.billing_type ?? null,
-      perMatchRate: v.per_match_rate,
-      monthlyFlat: v.monthly_flat,
+      billingType: primary.billing_type ?? null,
+      perMatchRate: primary.per_match_rate,
+      monthlyFlat: primary.monthly_flat,
       netPL,
       margin,
     });

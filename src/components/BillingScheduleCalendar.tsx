@@ -8,6 +8,7 @@ import type {
   FinVenueCostOverride,
 } from "@/lib/useFinanceData";
 import type { Q2Month } from "@/lib/financeStats";
+import { getLegLabel, groupVenues } from "@/lib/venueGroups";
 
 type MonthFilter = Q2Month | "ALL" | "RANGE";
 
@@ -28,19 +29,16 @@ const MONTH_LABELS = [
 
 const DAY_OF_WEEK_LABELS = ["SUN", "MON", "TUE", "WED", "THU", "FRI", "SAT"];
 
-const ATH_KATY_PRIMARY = "ATH Katy";
-const ATH_KATY_SUNDAY = "ATH Katy Sunday";
-
 type VenueRow = {
   key: string;
   displayName: string;
   city: string;
   primaryVenue: FinVenue;
-  sundayVenue: FinVenue | null;
+  legs: FinVenue[];
   // venue_name strings used to look up rows in fin_schedule (which keys by string)
   scheduleNames: string[];
-  // venue_ids used for override lookup
-  venueIds: number[];
+  // labels in same order as legs (e.g. ["weekday", "Sunday"])
+  legLabels: string[];
 };
 
 type CellRows = {
@@ -126,45 +124,26 @@ function shortMonthDay(date: string): string {
 }
 
 function buildVenueRows(venues: FinVenue[]): VenueRow[] {
-  const out: VenueRow[] = [];
-  const skip = new Set<number>();
-  const primary = venues.find((v) => v.venue_name === ATH_KATY_PRIMARY);
-  const sunday = venues.find((v) => v.venue_name === ATH_KATY_SUNDAY);
-  const sortedVenues = [...venues].sort((a, b) =>
+  const groups = groupVenues(venues);
+  const out: VenueRow[] = groups.map((g) => ({
+    key: g.isCombined ? `combined-${g.legs[0].id}` : `single-${g.legs[0].id}`,
+    displayName: g.displayName,
+    city: g.city,
+    primaryVenue: g.legs[0],
+    legs: g.legs,
+    // Both raw venue_name and canonical displayName are looked up so the
+    // calendar finds rows whether aliases collapsed names or not.
+    scheduleNames: Array.from(
+      new Set([g.displayName, ...g.legs.map((l) => l.venue_name)]),
+    ),
+    legLabels: g.legs.map((_, i) => getLegLabel(g, i)),
+  }));
+  // Sort by city then display name for a stable, predictable row order.
+  out.sort((a, b) =>
     a.city === b.city
-      ? a.venue_name.localeCompare(b.venue_name)
+      ? a.displayName.localeCompare(b.displayName)
       : a.city.localeCompare(b.city),
   );
-
-  for (const v of sortedVenues) {
-    if (skip.has(v.id)) continue;
-    if (primary && sunday && v.id === primary.id) {
-      skip.add(sunday.id);
-      out.push({
-        key: `combined-${primary.id}`,
-        displayName: ATH_KATY_PRIMARY,
-        city: primary.city,
-        primaryVenue: primary,
-        sundayVenue: sunday,
-        scheduleNames: [primary.venue_name, sunday.venue_name],
-        venueIds: [primary.id, sunday.id],
-      });
-      continue;
-    }
-    if (sunday && v.id === sunday.id) {
-      // Already absorbed into primary if both exist; keep solo if primary missing
-      if (primary) continue;
-    }
-    out.push({
-      key: `single-${v.id}`,
-      displayName: v.venue_name,
-      city: v.city,
-      primaryVenue: v,
-      sundayVenue: null,
-      scheduleNames: [v.venue_name],
-      venueIds: [v.id],
-    });
-  }
   return out;
 }
 
@@ -277,10 +256,17 @@ export default function BillingScheduleCalendar({
       onEditRow(cell.rows[0]);
       return;
     }
-    // Empty cell → Add modal. For combined rows, route to leg by day-of-week.
+    // Empty cell → Add modal. For combined rows, route to the leg whose
+    // label matches the day-of-week (e.g. Sunday clicks → "Sunday" leg).
     let target = venueRow.primaryVenue;
-    if (venueRow.sundayVenue && getDayOfWeek(date) === 0) {
-      target = venueRow.sundayVenue;
+    if (venueRow.legs.length > 1) {
+      const isSunday = getDayOfWeek(date) === 0;
+      if (isSunday) {
+        const sundayIdx = venueRow.legLabels.findIndex(
+          (l) => l.toLowerCase() === "sunday",
+        );
+        if (sundayIdx >= 0) target = venueRow.legs[sundayIdx];
+      }
     }
     onAddCell(target, date);
   }
@@ -403,7 +389,7 @@ export default function BillingScheduleCalendar({
               <div className="sticky left-0 z-20 border-r border-cream-line bg-white px-4 py-2">
                 <div className="font-display text-base uppercase leading-tight tracking-tight text-deep-green">
                   {vr.displayName}
-                  {vr.sundayVenue && (
+                  {vr.legs.length > 1 && (
                     <span className="ml-1 text-[9px] font-normal lowercase tracking-normal text-deep-green/45">
                       (combined)
                     </span>

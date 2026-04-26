@@ -3,16 +3,16 @@
 import { useMemo, useState } from "react";
 import { useFinanceData } from "@/lib/useFinanceData";
 import {
-  activeVenuesForCity,
   cityGrossRevenueFor,
   cityMembershipRevenueFor,
   cityOverheadFor,
   tabToMonths,
-  venueCostFor,
   venueDppRevenueFor,
   venueMatchCountFor,
   type Q2Month,
 } from "@/lib/financeStats";
+import { canonicalVenueCost } from "@/lib/financeCosts";
+import { groupVenues } from "@/lib/venueGroups";
 
 type Tab = "Q2" | "Apr" | "May" | "Jun";
 
@@ -36,31 +36,44 @@ export default function CityPLCard({ city }: { city: string }) {
     if (!data) return null;
     const months: Q2Month[] = tabToMonths(tab);
 
-    const venueSet = new Set<string>();
-    for (const m of months) {
-      for (const v of activeVenuesForCity(data, city, m)) venueSet.add(v);
-    }
+    // Iterate venue GROUPS rather than venue names so split-rate venues
+    // like ATH Katy / ATH Katy Sunday show as one combined row.
+    const cityGroups = groupVenues(data.venues).filter(
+      (g) => g.city === city,
+    );
 
-    const fieldLevel = [...venueSet]
-      .map((venue) => {
+    const fieldLevel = cityGroups
+      .map((g) => {
+        const legNames = new Set(g.legs.map((l) => l.venue_name));
+        const sameNameLegs = legNames.size !== g.legs.length;
         let dppRev = 0;
         let cost = 0;
         let matchCount = 0;
         for (const m of months) {
-          dppRev += venueDppRevenueFor(data, city, venue, m);
-          cost += venueCostFor(data, city, venue, m);
-          matchCount += venueMatchCountFor(data, city, venue, m);
+          for (const leg of g.legs) {
+            cost += canonicalVenueCost(data, leg.id, m).amount;
+          }
+          if (sameNameLegs) {
+            // One query covers all legs (alias-collapsed canonical name).
+            dppRev += venueDppRevenueFor(data, city, g.displayName, m);
+            matchCount += venueMatchCountFor(data, city, g.displayName, m);
+          } else {
+            for (const leg of g.legs) {
+              dppRev += venueDppRevenueFor(data, city, leg.venue_name, m);
+              matchCount += venueMatchCountFor(data, city, leg.venue_name, m);
+            }
+          }
         }
-        const venueRow = data.venues.find((v) => v.venue_name === venue);
         return {
-          venue,
+          venue: g.displayName,
           dppRev,
           cost,
           matchCount,
           net: dppRev - cost,
-          billingType: venueRow?.billing_type ?? null,
-          perMatchRate: venueRow?.per_match_rate ?? null,
-          monthlyFlat: venueRow?.monthly_flat ?? null,
+          billingType: g.legs[0].billing_type ?? null,
+          perMatchRate: g.legs[0].per_match_rate ?? null,
+          monthlyFlat: g.legs[0].monthly_flat ?? null,
+          isCombined: g.isCombined,
         };
       })
       .filter((r) => r.dppRev !== 0 || r.cost !== 0)
@@ -159,14 +172,27 @@ export default function CityPLCard({ city }: { city: string }) {
                 {result.fieldLevel.map((f) => (
                   <tr key={f.venue} className="border-t border-cream-line/40">
                     <td className="py-1.5 pr-2">
-                      <div className="text-deep-green">{f.venue}</div>
-                      {f.billingType === "per_match" &&
-                        f.perMatchRate &&
-                        f.matchCount > 0 && (
-                          <div className="text-[10px] text-deep-green/45">
-                            {f.matchCount} × ${Math.round(f.perMatchRate)}
-                          </div>
+                      <div className="text-deep-green">
+                        {f.venue}
+                        {f.isCombined && (
+                          <span className="ml-1 text-[9px] font-normal lowercase tracking-normal text-deep-green/45">
+                            (combined)
+                          </span>
                         )}
+                      </div>
+                      {f.billingType === "per_match" &&
+                        f.matchCount > 0 &&
+                        (f.isCombined ? (
+                          <div className="text-[10px] text-deep-green/45">
+                            {f.matchCount} matches across legs
+                          </div>
+                        ) : (
+                          f.perMatchRate && (
+                            <div className="text-[10px] text-deep-green/45">
+                              {f.matchCount} × ${Math.round(f.perMatchRate)}
+                            </div>
+                          )
+                        ))}
                       {f.billingType === "monthly_flat" && (
                         <div className="text-[10px] text-deep-green/45">
                           monthly
