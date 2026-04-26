@@ -1249,6 +1249,7 @@ export type StripePreview = {
   latestDate: string | null;
   monthsAffected: string[];
   totalGross: number;
+  aggregatedRowCount: number;
   parsed: StripeAllocatedRow[];
 };
 
@@ -1287,6 +1288,57 @@ function cityFromIdentifier(code: string | null): string {
     if (upper.startsWith(p)) return STRIPE_CITY_PREFIX[p];
   }
   return UNMATCHED_CITY;
+}
+
+function aggregateStripeRows(
+  perTxn: StripeAllocatedRow[],
+): StripeAllocatedRow[] {
+  type Bucket = {
+    date: string;
+    month: string;
+    city: string;
+    venue: string | null;
+    type: "DPP" | "Membership";
+    gross: number;
+    fees: number;
+    txnCount: number;
+  };
+  const buckets = new Map<string, Bucket>();
+  for (const r of perTxn) {
+    // (date, city, type, venue) — venue stays in the key so per-venue Phase 3
+    // rollups (DPP) keep working when Stripe metadata supplies a venue.
+    const key = `${r.date}|${r.city}|${r.type}|${r.venue ?? ""}`;
+    const cur = buckets.get(key);
+    if (cur) {
+      cur.gross += r.gross;
+      cur.fees += r.fees;
+      cur.txnCount += 1;
+    } else {
+      buckets.set(key, {
+        date: r.date,
+        month: r.month,
+        city: r.city,
+        venue: r.venue,
+        type: r.type,
+        gross: r.gross,
+        fees: r.fees,
+        txnCount: 1,
+      });
+    }
+  }
+  return [...buckets.values()].map((b) => ({
+    date: b.date,
+    month: b.month,
+    city: b.city,
+    venue: b.venue,
+    type: b.type,
+    gross: b.gross,
+    fees: b.fees,
+    source: "Stripe" as const,
+    notes: `${b.txnCount} Stripe ${
+      b.type === "Membership" ? "subscription" : "DPP"
+    } txn${b.txnCount === 1 ? "" : "s"}`,
+  }));
 }
 
 export async function previewStripe(
@@ -1389,6 +1441,8 @@ export async function previewStripe(
     });
   }
 
+  const aggregated = aggregateStripeRows(parsed);
+
   return {
     filename,
     totalRows,
@@ -1403,7 +1457,8 @@ export async function previewStripe(
     latestDate,
     monthsAffected: [...monthSet].sort(),
     totalGross,
-    parsed,
+    aggregatedRowCount: aggregated.length,
+    parsed: aggregated,
   };
 }
 

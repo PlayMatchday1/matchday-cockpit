@@ -214,7 +214,13 @@ function renderStripePreview(p: StripePreview): React.ReactNode {
         Total gross:{" "}
         <span className="font-mono">
           ${Math.round(p.totalGross).toLocaleString("en-US")}
-        </span>
+        </span>{" "}
+        · Aggregates to{" "}
+        <span className="font-mono font-bold">
+          {p.aggregatedRowCount.toLocaleString()}
+        </span>{" "}
+        row{p.aggregatedRowCount === 1 ? "" : "s"} (one per date · city · type
+        · venue)
       </div>
       <div className="rounded-md border border-coral/30 bg-coral-soft/30 px-3 py-2 text-xs text-coral">
         This will replace existing Stripe-source rows in fin_revenue between{" "}
