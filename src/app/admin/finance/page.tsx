@@ -112,6 +112,31 @@ function FinanceLandingContent() {
       </div>
 
       <SectionHeader
+        title="Manage"
+        subtitle="Inspect, add, edit, and audit individual finance rows."
+      />
+      <div className="mb-10 grid grid-cols-1 gap-4 md:grid-cols-2 lg:grid-cols-3">
+        <DataLink
+          href="/admin/finance/revenue"
+          eyebrow="Manage"
+          title="Revenue"
+          subtitle="Browse every fin_revenue row. Add or edit manual entries; CSV-imported rows are read-only."
+        />
+        <DataLink
+          href="/admin/finance/expenses"
+          eyebrow="Manage"
+          title="Expenses"
+          subtitle="Browse every fin_expenses row. Add or edit manual entries; CSV-imported rows are read-only."
+        />
+        <DataLink
+          href="/admin/finance/changelog"
+          eyebrow="Audit"
+          title="Change Log"
+          subtitle="Every manual add, edit, and delete with before/after diff and the user who made the change."
+        />
+      </div>
+
+      <SectionHeader
         title="Data"
         subtitle="One-time historical loads and ongoing uploads."
       />
@@ -251,5 +276,33 @@ function PlaceholderCard({
         Coming in {phase}
       </div>
     </div>
+  );
+}
+
+function DataLink({
+  href,
+  eyebrow,
+  title,
+  subtitle,
+}: {
+  href: string;
+  eyebrow: string;
+  title: string;
+  subtitle: string;
+}) {
+  return (
+    <Link
+      href={href}
+      className="block rounded-2xl border-[1.5px] border-cream-line bg-white p-6 shadow-md shadow-deep-green/10 transition-all duration-200 hover:-translate-y-0.5 hover:shadow-xl hover:shadow-deep-green/20"
+    >
+      <div className="text-[11px] font-bold uppercase tracking-[0.2em] text-deep-green/45">
+        {eyebrow}
+      </div>
+      <div className="mt-1 text-base font-bold text-deep-green">{title}</div>
+      <p className="mt-1 text-sm text-deep-green/60">{subtitle}</p>
+      <div className="mt-3 text-xs font-bold uppercase tracking-wider text-mint-hover">
+        Open →
+      </div>
+    </Link>
   );
 }
