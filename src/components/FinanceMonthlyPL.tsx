@@ -17,6 +17,7 @@ import {
   netRevenueByCityFor,
   netRevenueFor,
   otherExpensesByCategoryFor,
+  perMatchVenueCostFor,
   startingCash,
   totalExpensesFor,
 } from "@/lib/financeStats";
@@ -71,12 +72,18 @@ export default function FinanceMonthlyPL({
       perMonth.reduce((s, n) => s + n, 0);
 
     const cityRows: Row[] = cities.map((city) => {
+      // The "Company-wide" bucket holds unmatched Venmo membership stubs that
+      // can't be tied to a specific city. It is not a projection source —
+      // always render the realized amount, regardless of mode toggle.
+      const isUnmatched = city === "Company-wide";
+      const rowMode: Mode = isUnmatched ? "mtd" : mode;
+      const label = isUnmatched ? "Corporate / Unmatched" : city;
       const perMonth = Q2_MONTHS.map(
-        (m) => netRevenueByCityFor(data, m, mode).get(city) ?? 0,
+        (m) => netRevenueByCityFor(data, m, rowMode).get(city) ?? 0,
       );
       return {
         kind: "data",
-        label: city,
+        label,
         values: [...perMonth, sumAcross(perMonth)],
       };
     });
@@ -86,6 +93,9 @@ export default function FinanceMonthlyPL({
     const netRevPerMonth = Q2_MONTHS.map((m) => netRevenueFor(data, m, mode));
 
     const matchPayPerMonth = Q2_MONTHS.map((m) => managerPayFor(data, m));
+    const perMatchPerMonth = Q2_MONTHS.map((m) =>
+      perMatchVenueCostFor(data, m),
+    );
     const cityMgrPerMonth = Q2_MONTHS.map((m) =>
       monthlyExpenseCategoryFor(data, m, "city_manager"),
     );
@@ -143,6 +153,11 @@ export default function FinanceMonthlyPL({
         kind: "data",
         label: "Match Manager Pay",
         values: [...matchPayPerMonth, sumAcross(matchPayPerMonth)],
+      },
+      {
+        kind: "data",
+        label: "Venue Costs (per-match)",
+        values: [...perMatchPerMonth, sumAcross(perMatchPerMonth)],
       },
       {
         kind: "data",

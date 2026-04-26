@@ -210,7 +210,7 @@ export default function FieldRankingTable({
             ) : (
               sorted.map((row, i) => (
                 <tr
-                  key={`${row.city}|${row.venue}`}
+                  key={`${i}|${row.city}|${row.venue}`}
                   className="border-t border-cream-line/40 hover:bg-cream-soft/50"
                 >
                   <td className="px-3 py-2 font-mono font-bold tabular-nums text-deep-green/70">

@@ -203,6 +203,20 @@ export function monthlyExpenseCategoryFor(
     .reduce((s, r) => s + r[key], 0);
 }
 
+export function perMatchVenueCostFor(
+  data: FinanceData,
+  month: Q2Month,
+): number {
+  const perMatch = new Set(
+    data.venues
+      .filter((v) => v.billing_type === "per_match")
+      .map((v) => v.venue_name),
+  );
+  return data.schedule
+    .filter((s) => s.month === month && perMatch.has(s.venue))
+    .reduce((sum, s) => sum + (s.venue_cost ?? 0), 0);
+}
+
 export function totalExpensesFor(
   data: FinanceData,
   month: Q2Month,
@@ -214,7 +228,8 @@ export function totalExpensesFor(
     managerPayFor(data, month) +
     monthlyExpenseCategoryFor(data, month, "city_manager") +
     monthlyExpenseCategoryFor(data, month, "marketing") +
-    monthlyExpenseCategoryFor(data, month, "equipment")
+    monthlyExpenseCategoryFor(data, month, "equipment") +
+    perMatchVenueCostFor(data, month)
   );
 }
 
