@@ -62,24 +62,59 @@ function filterRevenueRows(
   now: Date,
 ) {
   const all = data.revenue.filter((r) => r.month === month);
+
+  let result: typeof all;
+  let branch: string;
+
   if (mode === "mtd") {
+    branch = "mtd";
     const today = startOfDay(now);
-    return all.filter((r) => {
+    result = all.filter((r) => {
       if (r.source === "PROJECTION") return false;
       const d = parseLocalDate(r.date);
       return d !== null && d.getTime() <= today.getTime();
     });
-  }
-  // Projection mode
-  if (isCurrentQ2(now, month)) {
+  } else if (isCurrentQ2(now, month)) {
+    branch = "projection-current";
     const today = startOfDay(now);
-    return all.filter((r) => {
+    result = all.filter((r) => {
       if (r.source === "PROJECTION") return true;
       const d = parseLocalDate(r.date);
       return d !== null && d.getTime() <= today.getTime();
     });
+  } else {
+    branch = "projection-passthrough";
+    result = all;
   }
-  return all;
+
+  if (typeof window !== "undefined") {
+    console.log("[FIN] filterRevenueRows", {
+      month,
+      mode,
+      branch,
+      now: now.toISOString(),
+      currentQ2: getCurrentQ2Month(now),
+      totalRevenueRows: data.revenue.length,
+      monthMatchCount: all.length,
+      afterFilterCount: result.length,
+      monthMatchCities: [...new Set(all.map((r) => r.city))],
+      resultCities: [...new Set(result.map((r) => r.city))],
+      droppedRows:
+        all.length !== result.length
+          ? all
+              .filter((r) => !result.includes(r))
+              .slice(0, 5)
+              .map((r) => ({
+                city: r.city,
+                source: r.source,
+                date: r.date,
+                net: r.net,
+              }))
+          : [],
+    });
+  }
+
+  return result;
 }
 
 function applyDppExtrapolation<T extends { type: FinanceData["revenue"][number]["type"]; source: FinanceData["revenue"][number]["source"] }>(
@@ -154,6 +189,17 @@ export function netRevenueByCityFor(
     const value = isExtrap ? r.net * factor : r.net;
     byCity.set(r.city, (byCity.get(r.city) ?? 0) + value);
   }
+
+  if (typeof window !== "undefined") {
+    console.log("[FIN] netRevenueByCityFor", {
+      month,
+      mode,
+      factor,
+      rowCount: rows.length,
+      byCity: Object.fromEntries(byCity),
+    });
+  }
+
   return byCity;
 }
 
@@ -259,12 +305,31 @@ export function distinctExpenseCategories(
 
 export function distinctCitiesFromRevenue(data: FinanceData): string[] {
   const cities = new Set<string>();
+  let matched = 0;
+  let unmatched = 0;
+  const unmatchedMonths = new Set<string>();
   for (const r of data.revenue) {
     if ((Q2_MONTHS as readonly string[]).includes(r.month)) {
       cities.add(r.city);
+      matched++;
+    } else {
+      unmatched++;
+      unmatchedMonths.add(JSON.stringify(r.month));
     }
   }
-  return [...cities].sort();
+  const list = [...cities].sort();
+
+  if (typeof window !== "undefined") {
+    console.log("[FIN] distinctCitiesFromRevenue", {
+      matched,
+      unmatched,
+      cities: list,
+      Q2_MONTHS,
+      unmatchedMonthValues: [...unmatchedMonths],
+    });
+  }
+
+  return list;
 }
 
 // ===== Q2 hero values (always projection mode) =====

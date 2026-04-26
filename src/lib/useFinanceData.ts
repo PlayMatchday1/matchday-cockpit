@@ -174,6 +174,30 @@ async function load(): Promise<void> {
     config[r.key as string] = r.value as string;
   }
 
+  if (typeof window !== "undefined") {
+    console.log("[FIN] useFinanceData loaded", {
+      revenueCount: revenue.length,
+      expensesCount: expenses.length,
+      managerPayCount: managerPay.length,
+      monthlyExpensesCount: monthlyExpenses.length,
+      configKeys: Object.keys(config),
+      monthSet: [...new Set(revenue.map((r) => JSON.stringify(r.month)))],
+      citySet: [...new Set(revenue.map((r) => JSON.stringify(r.city)))],
+      typeSet: [...new Set(revenue.map((r) => r.type))],
+      sourceSet: [...new Set(revenue.map((r) => r.source))],
+      sampleRows: revenue
+        .slice(0, 6)
+        .map((r) => ({
+          month: r.month,
+          city: r.city,
+          type: r.type,
+          source: r.source,
+          net: r.net,
+          date: r.date,
+        })),
+    });
+  }
+
   publish({
     data: { revenue, expenses, managerPay, monthlyExpenses, config },
     loading: false,

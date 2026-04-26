@@ -57,6 +57,13 @@ export default function FinanceMonthlyPL() {
     if (!data) return [];
 
     const cities = distinctCitiesFromRevenue(data);
+    if (typeof window !== "undefined") {
+      console.log("[FIN] FinanceMonthlyPL rendering", {
+        mode,
+        cities,
+        revenueRowsTotal: data.revenue.length,
+      });
+    }
     const otherCats = distinctExpenseCategories(data, mode);
     const start = startingCash(data);
 
