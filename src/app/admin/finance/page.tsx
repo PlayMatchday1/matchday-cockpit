@@ -5,8 +5,10 @@ import Link from "next/link";
 import { ChevronDown, ChevronRight } from "lucide-react";
 import AdminGuard from "@/components/AdminGuard";
 import CityPLCard from "@/components/CityPLCard";
+import ExecutiveSummary from "@/components/ExecutiveSummary";
 import FieldRankingTable from "@/components/FieldRankingTable";
 import FinanceHeroMetrics from "@/components/FinanceHeroMetrics";
+import FinanceInsightsGrid from "@/components/FinanceInsightsGrid";
 import FinanceMonthlyPL from "@/components/FinanceMonthlyPL";
 import FinanceTrendChart from "@/components/FinanceTrendChart";
 import { CITY_DISPLAY_ORDER, cityHasAnyQ2Activity } from "@/lib/financeStats";
@@ -23,6 +25,7 @@ export default function FinanceLandingPage() {
 
 function FinanceLandingContent() {
   const [quarterLabel, setQuarterLabel] = useState<string>("");
+  const [insightsCollapsed, setInsightsCollapsed] = useState(false);
   const [monthlyCollapsed, setMonthlyCollapsed] = useState(false);
   const [cityCollapsed, setCityCollapsed] = useState(false);
   const [rankingCollapsed, setRankingCollapsed] = useState(false);
@@ -56,7 +59,18 @@ function FinanceLandingContent() {
       </div>
 
       <div className="mb-8">
+        <ExecutiveSummary />
+      </div>
+
+      <div className="mb-8">
         <FinanceHeroMetrics />
+      </div>
+
+      <div className="mb-8">
+        <FinanceInsightsGrid
+          collapsed={insightsCollapsed}
+          onToggle={() => setInsightsCollapsed((c) => !c)}
+        />
       </div>
 
       <div className="mb-8">
@@ -94,8 +108,6 @@ function FinanceLandingContent() {
         subtitle="Narrative + scenario thinking."
       />
       <div className="mb-12 grid grid-cols-1 gap-4 md:grid-cols-2 lg:grid-cols-3">
-        <PlaceholderCard title="Insights" phase="Phase 4" />
-        <PlaceholderCard title="Executive Summary" phase="Phase 4" />
         <PlaceholderCard title="Forecasts" phase="Phase 5" />
       </div>
 

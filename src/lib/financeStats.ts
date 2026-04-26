@@ -584,3 +584,385 @@ export function tabToMonths(tab: "Q2" | "Apr" | "May" | "Jun"): Q2Month[] {
   if (tab === "May") return ["May 2026"];
   return ["Jun 2026"];
 }
+
+// ===== Phase 4 helpers: insight calculations =====
+
+export type VenueInsightRow = {
+  city: string;
+  venue: string;
+  dppRev: number;
+  memberRev: number;
+  cost: number;
+  net: number;
+  spots: VenueMemberSpotBreakdown;
+  launchDate: string | null;
+  launchAgeDays: number | null;
+};
+
+function ageInDaysFrom(iso: string | null, now: Date): number | null {
+  if (!iso) return null;
+  const d = new Date(iso);
+  if (Number.isNaN(d.getTime())) return null;
+  return Math.floor((now.getTime() - d.getTime()) / 86_400_000);
+}
+
+export function buildVenueInsightRows(
+  data: FinanceData,
+  month: Q2Month,
+  now: Date = new Date(),
+): VenueInsightRow[] {
+  const out: VenueInsightRow[] = [];
+  for (const v of data.venues) {
+    const dppRev = venueDppRevenueFor(data, v.city, v.venue_name, month);
+    const memberRev = venueAllocatedMemberRevenueFor(
+      data,
+      v.city,
+      v.venue_name,
+      month,
+    );
+    const cost = venueCostFor(data, v.city, v.venue_name, month);
+    const spots = venueMemberSpotsFor(data, v.city, v.venue_name, month);
+    if (
+      dppRev === 0 &&
+      memberRev === 0 &&
+      cost === 0 &&
+      spots.total === 0
+    ) {
+      continue;
+    }
+    out.push({
+      city: v.city,
+      venue: v.venue_name,
+      dppRev,
+      memberRev,
+      cost,
+      net: dppRev + memberRev - cost,
+      spots,
+      launchDate: v.launch_date,
+      launchAgeDays: ageInDaysFrom(v.launch_date, now),
+    });
+  }
+  return out;
+}
+
+export type CityInsightRow = {
+  city: string;
+  fieldNet: number;
+  membershipRev: number;
+  overhead: number;
+  net: number;
+  grossRev: number;
+};
+
+export function buildCityInsightRows(
+  data: FinanceData,
+  month: Q2Month,
+  venueRows: VenueInsightRow[],
+): CityInsightRow[] {
+  const cities = new Set<string>();
+  for (const c of CITY_DISPLAY_ORDER) cities.add(c);
+  for (const r of venueRows) cities.add(r.city);
+
+  const fieldNetByCity = new Map<string, number>();
+  for (const r of venueRows) {
+    fieldNetByCity.set(r.city, (fieldNetByCity.get(r.city) ?? 0) + (r.dppRev - r.cost));
+  }
+
+  const out: CityInsightRow[] = [];
+  for (const city of cities) {
+    const fieldNet = fieldNetByCity.get(city) ?? 0;
+    const membershipRev = cityMembershipRevenueFor(data, city, month);
+    const overhead = cityOverheadFor(data, city, month).total;
+    const grossRev = cityGrossRevenueFor(data, city, month);
+    const net = fieldNet + membershipRev - overhead;
+    if (
+      fieldNet === 0 &&
+      membershipRev === 0 &&
+      overhead === 0 &&
+      grossRev === 0
+    ) {
+      continue;
+    }
+    out.push({ city, fieldNet, membershipRev, overhead, net, grossRev });
+  }
+  return out;
+}
+
+export function profitableFields(rows: VenueInsightRow[]): VenueInsightRow[] {
+  return rows.filter((r) => r.net > 0).sort((a, b) => b.net - a.net);
+}
+
+export function unprofitableFields(rows: VenueInsightRow[]): VenueInsightRow[] {
+  return rows.filter((r) => r.net < 0).sort((a, b) => a.net - b.net);
+}
+
+export function profitableCities(rows: CityInsightRow[]): CityInsightRow[] {
+  return rows.filter((r) => r.net > 0).sort((a, b) => b.net - a.net);
+}
+
+export function unprofitableCities(rows: CityInsightRow[]): CityInsightRow[] {
+  return rows.filter((r) => r.net < 0).sort((a, b) => a.net - b.net);
+}
+
+export function zeroCostWinners(rows: VenueInsightRow[]): VenueInsightRow[] {
+  return rows
+    .filter((r) => r.cost === 0 && r.dppRev + r.memberRev >= 1000)
+    .sort((a, b) => b.dppRev + b.memberRev - (a.dppRev + a.memberRev));
+}
+
+export function memberHeavyFields(rows: VenueInsightRow[]): VenueInsightRow[] {
+  return rows
+    .filter((r) => {
+      if (r.spots.total < 30) return false;
+      const mix = r.spots.member / r.spots.total;
+      return mix >= 0.5;
+    })
+    .sort(
+      (a, b) =>
+        b.spots.member / Math.max(1, b.spots.total) -
+        a.spots.member / Math.max(1, a.spots.total),
+    );
+}
+
+export function highPromoUsageFields(
+  rows: VenueInsightRow[],
+): VenueInsightRow[] {
+  return rows
+    .filter((r) => {
+      if (r.spots.total < 30) return false;
+      const mix = r.spots.other / r.spots.total;
+      return mix > 0.2;
+    })
+    .sort(
+      (a, b) =>
+        b.spots.other / Math.max(1, b.spots.total) -
+        a.spots.other / Math.max(1, a.spots.total),
+    );
+}
+
+export function newVenuesProfitable(
+  rows: VenueInsightRow[],
+): VenueInsightRow[] {
+  return rows
+    .filter(
+      (r) =>
+        r.launchAgeDays !== null &&
+        r.launchAgeDays >= 30 &&
+        r.launchAgeDays < 90 &&
+        r.net > 0,
+    )
+    .sort((a, b) => b.net - a.net);
+}
+
+export function newVenuesStruggling(
+  rows: VenueInsightRow[],
+): VenueInsightRow[] {
+  return rows
+    .filter(
+      (r) =>
+        r.launchAgeDays !== null &&
+        r.launchAgeDays >= 30 &&
+        r.launchAgeDays < 90 &&
+        r.net < 0,
+    )
+    .sort((a, b) => a.net - b.net);
+}
+
+export type OverheadBurdenRow = {
+  city: string;
+  overhead: number;
+  revenue: number;
+  burdenPct: number;
+};
+
+export function overheadBurdenCities(
+  rows: CityInsightRow[],
+): OverheadBurdenRow[] {
+  return rows
+    .filter((r) => r.grossRev > 0 && r.overhead / r.grossRev > 0.5)
+    .map((r) => ({
+      city: r.city,
+      overhead: r.overhead,
+      revenue: r.grossRev,
+      burdenPct: r.overhead / r.grossRev,
+    }))
+    .sort((a, b) => b.burdenPct - a.burdenPct);
+}
+
+export type SpotMixSummary = {
+  member: number;
+  dpp: number;
+  other: number;
+  total: number;
+  memberPct: number;
+  dppPct: number;
+  otherPct: number;
+};
+
+export function companySpotMix(
+  data: FinanceData,
+  month: Q2Month,
+): SpotMixSummary {
+  let member = 0;
+  let dpp = 0;
+  let other = 0;
+  for (const r of data.memberSpots) {
+    if (r.month !== month) continue;
+    member += r.member_spots;
+    dpp += r.dpp_spots;
+    other += r.other_spots;
+  }
+  const total = member + dpp + other;
+  return {
+    member,
+    dpp,
+    other,
+    total,
+    memberPct: total > 0 ? member / total : 0,
+    dppPct: total > 0 ? dpp / total : 0,
+    otherPct: total > 0 ? other / total : 0,
+  };
+}
+
+export type CashRunwayInfo = {
+  state: "near_breakeven" | "burning" | "profitable";
+  monthlyNet: number;
+  currentCash: number;
+  runwayMonths: number | null;
+};
+
+export function cashRunway(
+  data: FinanceData,
+  now: Date = new Date(),
+): CashRunwayInfo {
+  const netByMonth = Q2_MONTHS.map((m) => netPLFor(data, m, "projection", now));
+  const monthlyNet = netByMonth.reduce((s, n) => s + n, 0) / Q2_MONTHS.length;
+  const currentCash = startingCash(data) + q2NetPLProjected(data, now);
+  if (Math.abs(monthlyNet) <= 500) {
+    return {
+      state: "near_breakeven",
+      monthlyNet,
+      currentCash,
+      runwayMonths: null,
+    };
+  }
+  if (monthlyNet > 0) {
+    return {
+      state: "profitable",
+      monthlyNet,
+      currentCash,
+      runwayMonths: null,
+    };
+  }
+  const burn = Math.abs(monthlyNet);
+  const runway = currentCash > 0 ? currentCash / burn : 0;
+  return {
+    state: "burning",
+    monthlyNet,
+    currentCash,
+    runwayMonths: runway,
+  };
+}
+
+export type MembershipHealthVerdict =
+  | "strong"
+  | "break_even_plus"
+  | "marginal"
+  | "overpaying";
+
+export type MembershipHealthRow = {
+  city: string;
+  members: number;
+  actualMatchesPerMember: number;
+  breakEvenMatches: number;
+  ratio: number;
+  verdict: MembershipHealthVerdict;
+  memberPriceDollars: number;
+  weightedDppPriceDollars: number;
+};
+
+export function membershipHealthAvailable(data: FinanceData): boolean {
+  return (
+    data.members.length > 0 &&
+    data.memberSpots.length > 0 &&
+    data.pricing.length > 0
+  );
+}
+
+export function buildMembershipHealthRows(
+  data: FinanceData,
+  month: Q2Month,
+): MembershipHealthRow[] {
+  if (!membershipHealthAvailable(data)) return [];
+
+  const memberCountByCity = new Map<string, number>();
+  const memberPriceTotalByCity = new Map<string, number>();
+  for (const m of data.members) {
+    if (m.status !== "ACTIVE") continue;
+    if (m.price_cents <= 0) continue;
+    memberCountByCity.set(m.city, (memberCountByCity.get(m.city) ?? 0) + 1);
+    memberPriceTotalByCity.set(
+      m.city,
+      (memberPriceTotalByCity.get(m.city) ?? 0) + m.price_cents,
+    );
+  }
+
+  const pricingByVenue = new Map<string, { dpp: number; member: number }>();
+  for (const p of data.pricing) {
+    pricingByVenue.set(p.venue_name, {
+      dpp: p.dpp_price,
+      member: p.member_price,
+    });
+  }
+
+  const cities = [...memberCountByCity.keys()];
+  const out: MembershipHealthRow[] = [];
+
+  for (const city of cities) {
+    const members = memberCountByCity.get(city) ?? 0;
+    if (members < 5) continue;
+
+    let weightedDppNumer = 0;
+    let weightedDppDenom = 0;
+    let cityMemberSpots = 0;
+
+    for (const s of data.memberSpots) {
+      if (s.city !== city || s.month !== month) continue;
+      const venueSpots = s.member_spots;
+      if (venueSpots <= 0) continue;
+      cityMemberSpots += venueSpots;
+      const venuePricing = pricingByVenue.get(s.venue);
+      if (venuePricing && venuePricing.dpp > 0) {
+        weightedDppNumer += venuePricing.dpp * venueSpots;
+        weightedDppDenom += venueSpots;
+      }
+    }
+
+    const weightedDpp =
+      weightedDppDenom > 0 ? weightedDppNumer / weightedDppDenom : 0;
+    const memberPriceCents = (memberPriceTotalByCity.get(city) ?? 0) / members;
+    const memberPriceDollars = memberPriceCents / 100;
+    const breakEven = weightedDpp > 0 ? memberPriceDollars / weightedDpp : 0;
+    const actualMatchesPerMember = members > 0 ? cityMemberSpots / members : 0;
+    const ratio = breakEven > 0 ? actualMatchesPerMember / breakEven : 0;
+
+    let verdict: MembershipHealthVerdict;
+    if (ratio >= 1.5) verdict = "strong";
+    else if (ratio >= 1) verdict = "break_even_plus";
+    else if (ratio >= 0.7) verdict = "marginal";
+    else verdict = "overpaying";
+
+    out.push({
+      city,
+      members,
+      actualMatchesPerMember,
+      breakEvenMatches: breakEven,
+      ratio,
+      verdict,
+      memberPriceDollars,
+      weightedDppPriceDollars: weightedDpp,
+    });
+  }
+
+  return out.sort((a, b) => b.ratio - a.ratio);
+}

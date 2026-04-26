@@ -79,6 +79,31 @@ export type FinMemberSpotsRow = {
   other_spots: number;
 };
 
+export type FinMember = {
+  id: number;
+  member_id: string;
+  status: string;
+  price_cents: number;
+  city: string;
+  email: string | null;
+};
+
+export type FinPricing = {
+  id: number;
+  venue_name: string;
+  city: string;
+  dpp_price: number;
+  member_price: number;
+  notes: string | null;
+};
+
+export type FinCommentary = {
+  id: number;
+  eyebrow: string | null;
+  body: string | null;
+  updated_at: string | null;
+};
+
 export type FinanceData = {
   revenue: FinRevenue[];
   expenses: FinExpense[];
@@ -87,6 +112,9 @@ export type FinanceData = {
   schedule: FinSchedule[];
   venues: FinVenue[];
   memberSpots: FinMemberSpotsRow[];
+  members: FinMember[];
+  pricing: FinPricing[];
+  commentary: FinCommentary | null;
   venueAliases: Map<string, string>;
   config: Record<string, string>;
 };
@@ -164,20 +192,53 @@ function normalizeMonth(v: unknown): string {
 async function load(): Promise<void> {
   publish({ data: cached.data, loading: true, error: null });
 
-  const [revRes, expRes, mpRes, meRes, cfgRes, schRes, vnRes, msRes, alRes] =
-    await Promise.all([
-      supabase.from("fin_revenue").select("*"),
-      supabase.from("fin_expenses").select("*"),
-      supabase.from("fin_manager_pay").select("*"),
-      supabase.from("fin_monthly_expenses").select("*"),
-      supabase.from("fin_config").select("*"),
-      supabase.from("fin_schedule").select("*"),
-      supabase.from("fin_venues").select("*"),
-      supabase.from("fin_member_spots").select("*"),
-      supabase.from("fin_venue_aliases").select("*"),
-    ]);
+  const [
+    revRes,
+    expRes,
+    mpRes,
+    meRes,
+    cfgRes,
+    schRes,
+    vnRes,
+    msRes,
+    alRes,
+    mbrRes,
+    prcRes,
+    cmtRes,
+  ] = await Promise.all([
+    supabase.from("fin_revenue").select("*"),
+    supabase.from("fin_expenses").select("*"),
+    supabase.from("fin_manager_pay").select("*"),
+    supabase.from("fin_monthly_expenses").select("*"),
+    supabase.from("fin_config").select("*"),
+    supabase.from("fin_schedule").select("*"),
+    supabase.from("fin_venues").select("*"),
+    supabase.from("fin_member_spots").select("*"),
+    supabase.from("fin_venue_aliases").select("*"),
+    supabase.from("fin_members").select("*"),
+    supabase.from("fin_pricing").select("*"),
+    supabase
+      .from("fin_commentary")
+      .select("*")
+      .order("id", { ascending: true })
+      .limit(1)
+      .maybeSingle(),
+  ]);
 
-  for (const r of [revRes, expRes, mpRes, meRes, cfgRes, schRes, vnRes, msRes, alRes]) {
+  for (const r of [
+    revRes,
+    expRes,
+    mpRes,
+    meRes,
+    cfgRes,
+    schRes,
+    vnRes,
+    msRes,
+    alRes,
+    mbrRes,
+    prcRes,
+    cmtRes,
+  ]) {
     if (r.error) {
       publish({ data: null, loading: false, error: r.error.message });
       return;
@@ -285,6 +346,36 @@ async function load(): Promise<void> {
     config[cleanText(r.key)] = cleanText(r.value);
   }
 
+  const members: FinMember[] = (mbrRes.data ?? []).map((r) => ({
+    id: r.id as number,
+    member_id: cleanText(r.member_id),
+    status: cleanText(r.status),
+    price_cents: Math.round(asNumber(r.price_cents) || 0),
+    city: cleanText(r.city),
+    email: cleanTextNullable(r.email),
+  }));
+
+  const pricing: FinPricing[] = (prcRes.data ?? []).map((r) => ({
+    id: r.id as number,
+    venue_name: canonVenue(r.venue_name),
+    city: cleanText(r.city),
+    dpp_price: asNumber(r.dpp_price),
+    member_price: asNumber(r.member_price),
+    notes: cleanTextNullable(r.notes),
+  }));
+
+  const commentaryRow = cmtRes.data as
+    | { id: number; eyebrow?: string | null; body?: string | null; updated_at?: string | null }
+    | null;
+  const commentary: FinCommentary | null = commentaryRow
+    ? {
+        id: commentaryRow.id,
+        eyebrow: cleanTextNullable(commentaryRow.eyebrow),
+        body: commentaryRow.body == null ? null : String(commentaryRow.body),
+        updated_at: cleanTextNullable(commentaryRow.updated_at),
+      }
+    : null;
+
   publish({
     data: {
       revenue,
@@ -294,6 +385,9 @@ async function load(): Promise<void> {
       schedule,
       venues,
       memberSpots,
+      members,
+      pricing,
+      commentary,
       venueAliases,
       config,
     },
