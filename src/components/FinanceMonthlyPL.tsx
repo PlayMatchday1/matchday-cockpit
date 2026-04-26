@@ -1,6 +1,7 @@
 "use client";
 
 import { useMemo, useState } from "react";
+import { ChevronDown, ChevronRight } from "lucide-react";
 import { useFinanceData } from "@/lib/useFinanceData";
 import {
   Q2_MONTHS,
@@ -49,7 +50,13 @@ type Row = {
   values?: number[];
 };
 
-export default function FinanceMonthlyPL() {
+export default function FinanceMonthlyPL({
+  collapsed = false,
+  onToggle,
+}: {
+  collapsed?: boolean;
+  onToggle?: () => void;
+} = {}) {
   const { data, loading, error } = useFinanceData();
   const [mode, setMode] = useState<Mode>("mtd");
 
@@ -193,40 +200,71 @@ export default function FinanceMonthlyPL() {
   }
   if (!data) return null;
 
+  const headerInteractive = Boolean(onToggle);
+
   return (
     <div className="rounded-2xl border-[1.5px] border-cream-line bg-white shadow-md shadow-deep-green/10">
-      <div className="flex flex-wrap items-center justify-between gap-3 px-5 py-4">
-        <div>
-          <h2 className="font-display text-3xl uppercase tracking-tight text-deep-green md:text-4xl">
-            Monthly Cash Flow
-          </h2>
-          <p className="text-xs text-deep-green/60">
-            {mode === "mtd"
-              ? "Realized rows only · through today"
-              : "Current month DPP extrapolated · future months use projections"}
-          </p>
+      <div
+        className={`flex flex-wrap items-center justify-between gap-3 px-5 py-4 ${
+          headerInteractive
+            ? "cursor-pointer rounded-t-2xl hover:bg-cream-soft/40"
+            : ""
+        }`}
+        onClick={headerInteractive ? onToggle : undefined}
+        role={headerInteractive ? "button" : undefined}
+        aria-expanded={headerInteractive ? !collapsed : undefined}
+      >
+        <div className="flex items-start gap-2">
+          {headerInteractive &&
+            (collapsed ? (
+              <ChevronRight
+                size={20}
+                aria-hidden
+                className="mt-1.5 shrink-0 text-deep-green/55"
+              />
+            ) : (
+              <ChevronDown
+                size={20}
+                aria-hidden
+                className="mt-1.5 shrink-0 text-deep-green/55"
+              />
+            ))}
+          <div>
+            <h2 className="font-display text-3xl uppercase tracking-tight text-deep-green md:text-4xl">
+              Monthly Cash Flow
+            </h2>
+            <p className="text-xs text-deep-green/60">
+              {mode === "mtd"
+                ? "Realized rows only · through today"
+                : "Current month DPP extrapolated · future months use projections"}
+            </p>
+          </div>
         </div>
-        <ModeToggle mode={mode} onChange={setMode} />
+        <div onClick={(e) => e.stopPropagation()}>
+          <ModeToggle mode={mode} onChange={setMode} />
+        </div>
       </div>
 
-      <div className="overflow-x-auto">
-        <table className="w-full font-mono text-sm">
-          <thead>
-            <tr className="border-y border-cream-line bg-cream-soft text-[10px] font-bold uppercase tracking-wider text-deep-green/60">
-              <th className="px-5 py-2.5 text-left">Item</th>
-              <th className="px-3 py-2.5 text-right">Apr</th>
-              <th className="px-3 py-2.5 text-right">May</th>
-              <th className="px-3 py-2.5 text-right">Jun</th>
-              <th className="px-3 py-2.5 text-right">Q2 Total</th>
-            </tr>
-          </thead>
-          <tbody>
-            {rows.map((row, i) => (
-              <PLRow key={i} row={row} />
-            ))}
-          </tbody>
-        </table>
-      </div>
+      {!collapsed && (
+        <div className="overflow-x-auto">
+          <table className="w-full font-mono text-sm">
+            <thead>
+              <tr className="border-y border-cream-line bg-cream-soft text-[10px] font-bold uppercase tracking-wider text-deep-green/60">
+                <th className="px-5 py-2.5 text-left">Item</th>
+                <th className="px-3 py-2.5 text-right">Apr</th>
+                <th className="px-3 py-2.5 text-right">May</th>
+                <th className="px-3 py-2.5 text-right">Jun</th>
+                <th className="px-3 py-2.5 text-right">Q2 Total</th>
+              </tr>
+            </thead>
+            <tbody>
+              {rows.map((row, i) => (
+                <PLRow key={i} row={row} />
+              ))}
+            </tbody>
+          </table>
+        </div>
+      )}
     </div>
   );
 }

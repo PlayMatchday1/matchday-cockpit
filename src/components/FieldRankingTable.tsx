@@ -1,6 +1,7 @@
 "use client";
 
 import { useMemo, useState } from "react";
+import { ChevronDown, ChevronRight } from "lucide-react";
 import { useFinanceData } from "@/lib/useFinanceData";
 import {
   Q2_MONTHS,
@@ -57,7 +58,13 @@ function fmtPct(n: number): string {
   return `${Math.round(n * 100)}%`;
 }
 
-export default function FieldRankingTable() {
+export default function FieldRankingTable({
+  collapsed = false,
+  onToggle,
+}: {
+  collapsed?: boolean;
+  onToggle?: () => void;
+} = {}) {
   const { data } = useFinanceData();
   const [month, setMonth] = useState<Q2Month>(
     () => getCurrentQ2Month(new Date()) ?? "Apr 2026",
@@ -99,21 +106,49 @@ export default function FieldRankingTable() {
 
   if (!data) return null;
 
+  const headerInteractive = Boolean(onToggle);
+
   return (
     <section className="rounded-2xl border-[1.5px] border-cream-line bg-white shadow-md shadow-deep-green/10">
-      <div className="flex flex-wrap items-center justify-between gap-3 px-5 py-4">
-        <div>
-          <h2 className="font-display text-3xl uppercase tracking-tight text-deep-green md:text-4xl">
-            Field Ranking
-          </h2>
-          <p className="text-xs text-deep-green/60">
-            Current month venue performance · per-venue DPP, allocated
-            memberships, cost, and margin
-          </p>
+      <div
+        className={`flex flex-wrap items-center justify-between gap-3 px-5 py-4 ${
+          headerInteractive
+            ? "cursor-pointer rounded-t-2xl hover:bg-cream-soft/40"
+            : ""
+        }`}
+        onClick={headerInteractive ? onToggle : undefined}
+        role={headerInteractive ? "button" : undefined}
+        aria-expanded={headerInteractive ? !collapsed : undefined}
+      >
+        <div className="flex items-start gap-2">
+          {headerInteractive &&
+            (collapsed ? (
+              <ChevronRight
+                size={20}
+                aria-hidden
+                className="mt-1.5 shrink-0 text-deep-green/55"
+              />
+            ) : (
+              <ChevronDown
+                size={20}
+                aria-hidden
+                className="mt-1.5 shrink-0 text-deep-green/55"
+              />
+            ))}
+          <div>
+            <h2 className="font-display text-3xl uppercase tracking-tight text-deep-green md:text-4xl">
+              Field Ranking
+            </h2>
+            <p className="text-xs text-deep-green/60">
+              Current month venue performance · per-venue DPP, allocated
+              memberships, cost, and margin
+            </p>
+          </div>
         </div>
         <select
           value={month}
           onChange={(e) => setMonth(e.target.value as Q2Month)}
+          onClick={(e) => e.stopPropagation()}
           className="rounded-full border border-cream-line bg-cream-soft px-4 py-1.5 text-xs font-bold text-deep-green focus:border-deep-green focus:outline-none"
           aria-label="Month"
         >
@@ -125,7 +160,8 @@ export default function FieldRankingTable() {
         </select>
       </div>
 
-      <div className="max-h-[600px] overflow-auto">
+      {!collapsed && (
+      <div>
         <table className="w-full text-xs">
           <thead className="sticky top-0 z-10 bg-cream-soft">
             <tr className="border-y border-cream-line text-[10px] font-bold uppercase tracking-wider text-deep-green/60">
@@ -233,6 +269,7 @@ export default function FieldRankingTable() {
           </tbody>
         </table>
       </div>
+      )}
     </section>
   );
 }

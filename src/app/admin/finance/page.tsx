@@ -2,6 +2,7 @@
 
 import { useEffect, useState } from "react";
 import Link from "next/link";
+import { ChevronDown, ChevronRight } from "lucide-react";
 import AdminGuard from "@/components/AdminGuard";
 import CityPLCard from "@/components/CityPLCard";
 import FieldRankingTable from "@/components/FieldRankingTable";
@@ -22,6 +23,9 @@ export default function FinanceLandingPage() {
 
 function FinanceLandingContent() {
   const [quarterLabel, setQuarterLabel] = useState<string>("");
+  const [monthlyCollapsed, setMonthlyCollapsed] = useState(false);
+  const [cityCollapsed, setCityCollapsed] = useState(false);
+  const [rankingCollapsed, setRankingCollapsed] = useState(false);
 
   useEffect(() => {
     let cancelled = false;
@@ -60,19 +64,29 @@ function FinanceLandingContent() {
       </div>
 
       <div className="mb-12">
-        <FinanceMonthlyPL />
+        <FinanceMonthlyPL
+          collapsed={monthlyCollapsed}
+          onToggle={() => setMonthlyCollapsed((c) => !c)}
+        />
       </div>
 
       <SectionHeader
         title="City & Field P&L"
         subtitle="Per-market field economics, membership allocation, and overhead."
+        collapsed={cityCollapsed}
+        onToggle={() => setCityCollapsed((c) => !c)}
       />
-      <div className="mb-12">
-        <CityCardsGrid />
-      </div>
+      {!cityCollapsed && (
+        <div className="mb-12">
+          <CityCardsGrid />
+        </div>
+      )}
 
       <div className="mb-12">
-        <FieldRankingTable />
+        <FieldRankingTable
+          collapsed={rankingCollapsed}
+          onToggle={() => setRankingCollapsed((c) => !c)}
+        />
       </div>
 
       <SectionHeader
@@ -139,21 +153,55 @@ function CityCardsGrid() {
 function SectionHeader({
   title,
   subtitle,
+  collapsed,
+  onToggle,
 }: {
   title: string;
   subtitle: string;
+  collapsed?: boolean;
+  onToggle?: () => void;
 }) {
-  return (
-    <div className="mb-5 flex items-stretch gap-3">
+  const interactive = Boolean(onToggle);
+  const content = (
+    <>
       <span aria-hidden className="w-1 rounded-full bg-mint" />
-      <div className="py-0.5">
-        <h2 className="text-2xl font-bold tracking-tight text-deep-green">
-          {title}
-        </h2>
-        <p className="mt-0.5 text-sm text-deep-green/60">{subtitle}</p>
+      <div className="flex flex-1 items-center gap-2 py-0.5">
+        {interactive &&
+          (collapsed ? (
+            <ChevronRight
+              size={18}
+              aria-hidden
+              className="shrink-0 text-deep-green/55"
+            />
+          ) : (
+            <ChevronDown
+              size={18}
+              aria-hidden
+              className="shrink-0 text-deep-green/55"
+            />
+          ))}
+        <div>
+          <h2 className="text-2xl font-bold tracking-tight text-deep-green">
+            {title}
+          </h2>
+          <p className="mt-0.5 text-sm text-deep-green/60">{subtitle}</p>
+        </div>
       </div>
-    </div>
+    </>
   );
+  if (interactive) {
+    return (
+      <div
+        role="button"
+        aria-expanded={!collapsed}
+        onClick={onToggle}
+        className="mb-5 flex cursor-pointer items-stretch gap-3 rounded-lg -mx-2 px-2 py-1 hover:bg-cream-soft/50"
+      >
+        {content}
+      </div>
+    );
+  }
+  return <div className="mb-5 flex items-stretch gap-3">{content}</div>;
 }
 
 function PlaceholderCard({

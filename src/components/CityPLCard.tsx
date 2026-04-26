@@ -1,7 +1,6 @@
 "use client";
 
 import { useMemo, useState } from "react";
-import { ChevronDown, ChevronRight } from "lucide-react";
 import { useFinanceData } from "@/lib/useFinanceData";
 import {
   activeVenuesForCity,
@@ -16,7 +15,6 @@ import {
 } from "@/lib/financeStats";
 
 type Tab = "Q2" | "Apr" | "May" | "Jun";
-type SectionKey = "field" | "membership" | "overhead";
 
 function fmt(n: number): string {
   const r = Math.round(n);
@@ -33,15 +31,6 @@ function fmtMoney(n: number): string {
 export default function CityPLCard({ city }: { city: string }) {
   const { data } = useFinanceData();
   const [tab, setTab] = useState<Tab>("Apr");
-  const [expanded, setExpanded] = useState<Record<SectionKey, boolean>>({
-    field: false,
-    membership: false,
-    overhead: false,
-  });
-
-  function toggle(key: SectionKey) {
-    setExpanded((prev) => ({ ...prev, [key]: !prev[key] }));
-  }
 
   const result = useMemo(() => {
     if (!data) return null;
@@ -146,122 +135,104 @@ export default function CityPLCard({ city }: { city: string }) {
         ))}
       </div>
 
-      <div className="mt-5 space-y-3">
+      <div className="mt-5 space-y-5">
         <section>
-          <CollapsibleHead
-            open={expanded.field}
-            onClick={() => toggle("field")}
-          >
+          <SectionHead>
             Field-level{" "}
             <span className="normal-case text-deep-green/45">(DPP only)</span>
-          </CollapsibleHead>
-          {expanded.field &&
-            (result.fieldLevel.length === 0 ? (
-              <div className="mt-2 text-xs italic text-deep-green/45">
-                No DPP activity
-              </div>
-            ) : (
-              <table className="mt-2 w-full text-xs">
-                <thead>
-                  <tr className="text-[10px] font-bold uppercase tracking-wider text-deep-green/55">
-                    <th className="py-1 text-left">Venue</th>
-                    <th className="py-1 pl-2 text-right">DPP Rev</th>
-                    <th className="py-1 pl-2 text-right">Cost</th>
-                    <th className="py-1 pl-2 text-right">Net</th>
-                  </tr>
-                </thead>
-                <tbody>
-                  {result.fieldLevel.map((f) => (
-                    <tr key={f.venue} className="border-t border-cream-line/40">
-                      <td className="py-1.5 pr-2">
-                        <div className="text-deep-green">{f.venue}</div>
-                        {f.billingType === "per_match" &&
-                          f.perMatchRate &&
-                          f.matchCount > 0 && (
-                            <div className="text-[10px] text-deep-green/45">
-                              {f.matchCount} × ${Math.round(f.perMatchRate)}
-                            </div>
-                          )}
-                        {f.billingType === "monthly_flat" && (
+          </SectionHead>
+          {result.fieldLevel.length === 0 ? (
+            <div className="text-xs italic text-deep-green/45">
+              No DPP activity
+            </div>
+          ) : (
+            <table className="w-full text-xs">
+              <thead>
+                <tr className="text-[10px] font-bold uppercase tracking-wider text-deep-green/55">
+                  <th className="py-1 text-left">Venue</th>
+                  <th className="py-1 pl-2 text-right">DPP Rev</th>
+                  <th className="py-1 pl-2 text-right">Cost</th>
+                  <th className="py-1 pl-2 text-right">Net</th>
+                </tr>
+              </thead>
+              <tbody>
+                {result.fieldLevel.map((f) => (
+                  <tr key={f.venue} className="border-t border-cream-line/40">
+                    <td className="py-1.5 pr-2">
+                      <div className="text-deep-green">{f.venue}</div>
+                      {f.billingType === "per_match" &&
+                        f.perMatchRate &&
+                        f.matchCount > 0 && (
                           <div className="text-[10px] text-deep-green/45">
-                            monthly
+                            {f.matchCount} × ${Math.round(f.perMatchRate)}
                           </div>
                         )}
-                      </td>
-                      <td className="py-1.5 pl-2 text-right font-mono tabular-nums text-mint-hover">
-                        {fmt(f.dppRev)}
-                      </td>
-                      <td className="py-1.5 pl-2 text-right font-mono tabular-nums text-coral">
-                        {fmt(f.cost)}
-                      </td>
-                      <td
-                        className={`py-1.5 pl-2 text-right font-mono font-bold tabular-nums ${
-                          f.net >= 0 ? "text-mint-hover" : "text-coral"
-                        }`}
-                      >
-                        {fmt(f.net)}
-                      </td>
-                    </tr>
-                  ))}
-                </tbody>
-              </table>
-            ))}
-        </section>
-
-        <section>
-          <CollapsibleHead
-            open={expanded.membership}
-            onClick={() => toggle("membership")}
-          >
-            Membership revenue
-          </CollapsibleHead>
-          {expanded.membership && (
-            <div className="mt-2 font-mono text-sm font-bold tabular-nums text-mint-hover">
-              {result.membershipRev > 0 ? fmtMoney(result.membershipRev) : "—"}
-            </div>
+                      {f.billingType === "monthly_flat" && (
+                        <div className="text-[10px] text-deep-green/45">
+                          monthly
+                        </div>
+                      )}
+                    </td>
+                    <td className="py-1.5 pl-2 text-right font-mono tabular-nums text-mint-hover">
+                      {fmt(f.dppRev)}
+                    </td>
+                    <td className="py-1.5 pl-2 text-right font-mono tabular-nums text-coral">
+                      {fmt(f.cost)}
+                    </td>
+                    <td
+                      className={`py-1.5 pl-2 text-right font-mono font-bold tabular-nums ${
+                        f.net >= 0 ? "text-mint-hover" : "text-coral"
+                      }`}
+                    >
+                      {fmt(f.net)}
+                    </td>
+                  </tr>
+                ))}
+              </tbody>
+            </table>
           )}
         </section>
 
         <section>
-          <CollapsibleHead
-            open={expanded.overhead}
-            onClick={() => toggle("overhead")}
-          >
-            Overhead
-          </CollapsibleHead>
-          {expanded.overhead && (
-            <div className="mt-2 space-y-1">
-              {result.overhead.matchManagerPay > 0 && (
-                <OverheadRow
-                  label="Match Manager Pay"
-                  value={result.overhead.matchManagerPay}
-                />
-              )}
-              {result.overhead.cityManager > 0 && (
-                <OverheadRow
-                  label="City Manager"
-                  value={result.overhead.cityManager}
-                />
-              )}
-              {result.overhead.marketing > 0 && (
-                <OverheadRow
-                  label="Marketing"
-                  value={result.overhead.marketing}
-                />
-              )}
-              {result.overhead.equipment > 0 && (
-                <OverheadRow
-                  label="Equipment"
-                  value={result.overhead.equipment}
-                />
-              )}
-              {result.overheadTotal === 0 && (
-                <div className="text-xs italic text-deep-green/45">
-                  No overhead
-                </div>
-              )}
-            </div>
-          )}
+          <SectionHead>Membership revenue</SectionHead>
+          <div className="font-mono text-sm font-bold tabular-nums text-mint-hover">
+            {result.membershipRev > 0 ? fmtMoney(result.membershipRev) : "—"}
+          </div>
+        </section>
+
+        <section>
+          <SectionHead>Overhead</SectionHead>
+          <div className="space-y-1">
+            {result.overhead.matchManagerPay > 0 && (
+              <OverheadRow
+                label="Match Manager Pay"
+                value={result.overhead.matchManagerPay}
+              />
+            )}
+            {result.overhead.cityManager > 0 && (
+              <OverheadRow
+                label="City Manager"
+                value={result.overhead.cityManager}
+              />
+            )}
+            {result.overhead.marketing > 0 && (
+              <OverheadRow
+                label="Marketing"
+                value={result.overhead.marketing}
+              />
+            )}
+            {result.overhead.equipment > 0 && (
+              <OverheadRow
+                label="Equipment"
+                value={result.overhead.equipment}
+              />
+            )}
+            {result.overheadTotal === 0 && (
+              <div className="text-xs italic text-deep-green/45">
+                No overhead
+              </div>
+            )}
+          </div>
         </section>
 
         <section className="border-t-2 border-deep-green/15 pt-3">
@@ -286,29 +257,11 @@ export default function CityPLCard({ city }: { city: string }) {
   );
 }
 
-function CollapsibleHead({
-  open,
-  onClick,
-  children,
-}: {
-  open: boolean;
-  onClick: () => void;
-  children: React.ReactNode;
-}) {
+function SectionHead({ children }: { children: React.ReactNode }) {
   return (
-    <button
-      type="button"
-      onClick={onClick}
-      aria-expanded={open}
-      className="-mx-1 flex w-full items-center gap-1.5 rounded px-1 py-0.5 text-left text-[10px] font-bold uppercase tracking-wider text-deep-green/55 hover:bg-cream-soft hover:text-deep-green/80"
-    >
-      {open ? (
-        <ChevronDown size={12} aria-hidden className="shrink-0" />
-      ) : (
-        <ChevronRight size={12} aria-hidden className="shrink-0" />
-      )}
-      <span>{children}</span>
-    </button>
+    <div className="mb-2 text-[10px] font-bold uppercase tracking-wider text-deep-green/55">
+      {children}
+    </div>
   );
 }
 
