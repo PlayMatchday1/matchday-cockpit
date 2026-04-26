@@ -55,6 +55,10 @@ export type FinSchedule = {
   match_count: number;
   total_hours: number | null;
   venue_cost: number | null;
+  notes: string | null;
+  manual_entry: boolean;
+  created_at: string | null;
+  created_by: string | null;
 };
 
 export type FinVenue = {
@@ -329,6 +333,10 @@ async function load(): Promise<void> {
     match_count: Math.round(asNumber(r.match_count) || 0),
     total_hours: r.total_hours === null ? null : asNumber(r.total_hours),
     venue_cost: r.venue_cost === null ? null : asNumber(r.venue_cost),
+    notes: cleanTextNullable(r.notes),
+    manual_entry: Boolean(r.manual_entry ?? false),
+    created_at: cleanTextNullable(r.created_at),
+    created_by: cleanTextNullable(r.created_by),
   }));
 
   const venues: FinVenue[] = (vnRes.data ?? []).map((r) => ({

@@ -550,6 +550,122 @@ const SCHEDULE_SPEC: ColumnSpec[] = [
   { canonical: "Notes", required: false },
 ];
 
+type SchedulePreviewRow = {
+  date: string;
+  month: string;
+  city: string;
+  venue: string;
+  match_count: number;
+  total_hours: number | null;
+  venue_cost: number | null;
+  notes: string | null;
+};
+
+type ScheduleManualConflict = {
+  id: number;
+  date: string;
+  month: string;
+  city: string;
+  venue: string;
+  match_count: number;
+  notes: string | null;
+  created_by: string | null;
+};
+
+export type SchedulePreview = {
+  filename: string;
+  rows: SchedulePreviewRow[];
+  monthsCovered: string[];
+  manualConflicts: ScheduleManualConflict[];
+};
+
+export async function parseSchedulePreview(
+  raw: string[][],
+  filename: string,
+): Promise<SchedulePreview> {
+  const result = preprocessFixed(raw, SCHEDULE_SPEC);
+  if ("error" in result) throw new Error(result.error);
+  const { rows, headerRow } = result;
+
+  const mapped: SchedulePreviewRow[] = rows
+    .map((r) => ({
+      date: parseDate(r["Date"]) ?? "",
+      month: trim(r["Month"]) ?? "",
+      city: trim(r["City"]) ?? "",
+      venue: trim(r["Venue"]) ?? "",
+      match_count: parseInteger(r["Match Count"]) ?? 1,
+      total_hours: parseNum(r["Total Hours"]),
+      venue_cost: parseNum(r["Venue Cost"]),
+      notes: trim(r["Notes"]),
+    }))
+    .filter((r) => r.date && r.month && r.city && r.venue);
+
+  if (mapped.length === 0) {
+    const detected = headerRow.filter((h) => h && h.trim()).join(" | ");
+    throw new Error(
+      `Detected header: "${detected}". No data rows had Date + Month + City + Venue filled in.`,
+    );
+  }
+
+  const monthsCovered = [...new Set(mapped.map((r) => r.month))].sort();
+
+  const { data: conflicts, error } = await supabase
+    .from("fin_schedule")
+    .select("id, date, month, city, venue, match_count, notes, created_by")
+    .in("month", monthsCovered)
+    .eq("manual_entry", true)
+    .order("date", { ascending: true });
+  if (error) throw new Error(`Manual-row lookup failed: ${error.message}`);
+
+  return {
+    filename,
+    rows: mapped,
+    monthsCovered,
+    manualConflicts: (conflicts ?? []) as ScheduleManualConflict[],
+  };
+}
+
+export async function commitScheduleImport(
+  preview: SchedulePreview,
+  mode: "preserve" | "replace",
+): Promise<ImportResult> {
+  if (preview.rows.length === 0) {
+    return { count: 0, note: "No rows to insert." };
+  }
+
+  if (mode === "replace") {
+    // Original behavior: drop all rows for the months covered, then insert.
+    await clearMonths("fin_schedule", preview.monthsCovered);
+  } else {
+    // Preserve manual entries: drop only Sheet-imported rows for those months.
+    const { error } = await supabase
+      .from("fin_schedule")
+      .delete()
+      .in("month", preview.monthsCovered)
+      .eq("manual_entry", false);
+    if (error) throw new Error(error.message);
+  }
+
+  const BATCH = 500;
+  for (let i = 0; i < preview.rows.length; i += BATCH) {
+    const chunk = preview.rows.slice(i, i + BATCH).map((r) => ({
+      ...r,
+      manual_entry: false,
+    }));
+    const { error } = await supabase.from("fin_schedule").insert(chunk);
+    if (error) throw new Error(error.message);
+  }
+
+  const note =
+    mode === "replace"
+      ? `Replaced everything (${preview.manualConflicts.length} manual rows deleted).`
+      : preview.manualConflicts.length > 0
+        ? `Preserved ${preview.manualConflicts.length} manual ${preview.manualConflicts.length === 1 ? "entry" : "entries"}.`
+        : undefined;
+
+  return { count: preview.rows.length, note };
+}
+
 export async function importSchedule(raw: string[][]): Promise<ImportResult> {
   const result = preprocessFixed(raw, SCHEDULE_SPEC);
   if ("error" in result) throw new Error(result.error);
@@ -575,14 +691,23 @@ export async function importSchedule(raw: string[][]): Promise<ImportResult> {
     );
   }
 
-  await clearMonths(
-    "fin_schedule",
-    mapped.map((r) => r.month!),
-  );
+  // Legacy one-shot path — preserves manual entries by default. The new
+  // /admin/finance/import Schedule card uses parseSchedulePreview +
+  // commitScheduleImport for the keep/replace dialog.
+  const monthsCovered = [...new Set(mapped.map((r) => r.month).filter(Boolean))] as string[];
+  const { error: delErr } = await supabase
+    .from("fin_schedule")
+    .delete()
+    .in("month", monthsCovered)
+    .eq("manual_entry", false);
+  if (delErr) throw new Error(delErr.message);
 
   const BATCH = 500;
   for (let i = 0; i < mapped.length; i += BATCH) {
-    const chunk = mapped.slice(i, i + BATCH);
+    const chunk = mapped.slice(i, i + BATCH).map((r) => ({
+      ...r,
+      manual_entry: false,
+    }));
     const { error } = await supabase.from("fin_schedule").insert(chunk);
     if (error) throw new Error(error.message);
   }

@@ -3,6 +3,7 @@
 import Link from "next/link";
 import { FINANCE_IMPORTERS } from "@/lib/financeImport";
 import FinanceImportDropzone from "./FinanceImportDropzone";
+import FinanceScheduleImportCard from "./FinanceScheduleImportCard";
 
 export default function FinanceImportView() {
   return (
@@ -27,9 +28,13 @@ export default function FinanceImportView() {
       </div>
 
       <div className="space-y-4">
-        {FINANCE_IMPORTERS.map((cfg) => (
-          <FinanceImportDropzone key={cfg.key} config={cfg} />
-        ))}
+        {FINANCE_IMPORTERS.map((cfg) =>
+          cfg.key === "schedule" ? (
+            <FinanceScheduleImportCard key={cfg.key} />
+          ) : (
+            <FinanceImportDropzone key={cfg.key} config={cfg} />
+          ),
+        )}
       </div>
     </>
   );

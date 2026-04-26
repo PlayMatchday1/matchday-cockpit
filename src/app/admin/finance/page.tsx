@@ -135,6 +135,12 @@ function FinanceLandingContent() {
           subtitle="Per-venue monthly cost. Override any (venue, month) where the real arrangement differs from the formula."
         />
         <DataLink
+          href="/admin/finance/billing-schedule"
+          eyebrow="Manage"
+          title="Billing Schedule"
+          subtitle="What each venue bills MatchDay for. Add / edit individual matches; the Sheet import preserves your manual entries."
+        />
+        <DataLink
           href="/admin/finance/changelog"
           eyebrow="Audit"
           title="Change Log"
