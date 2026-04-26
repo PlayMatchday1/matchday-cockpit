@@ -1157,7 +1157,14 @@ const STRIPE_SPEC: ColumnSpec[] = [
   },
   {
     canonical: "created",
-    aliases: ["Created", "Created (UTC)", "Created Date", "Date"],
+    aliases: [
+      "Created date (UTC)",
+      "Created Date (UTC)",
+      "Created Date",
+      "Created (UTC)",
+      "Created",
+      "Date",
+    ],
     required: true,
   },
   {
@@ -1188,6 +1195,7 @@ const STRIPE_SPEC: ColumnSpec[] = [
   {
     canonical: "city_identifier",
     aliases: [
+      "cityIdentifier (metadata)",
       "cityIdentifier",
       "City Identifier",
       "metadata[cityIdentifier]",
@@ -1196,8 +1204,19 @@ const STRIPE_SPEC: ColumnSpec[] = [
     required: false,
   },
   {
+    canonical: "stripe_type",
+    aliases: ["type (metadata)", "metadata[type]", "Type (metadata)"],
+    required: false,
+  },
+  {
     canonical: "venue",
-    aliases: ["Venue", "metadata[venue]", "metadata[venueName]"],
+    aliases: [
+      "Venue",
+      "venue (metadata)",
+      "metadata[venue]",
+      "venueName (metadata)",
+      "metadata[venueName]",
+    ],
     required: false,
   },
 ];
@@ -1243,9 +1262,17 @@ function monthLabelFromIsoDate(iso: string): string | null {
 }
 
 function looksLikeMembership(
+  stripeType: string | null,
   description: string | null,
   cityIdentifier: string | null,
 ): boolean {
+  // Prefer the explicit Stripe `type` metadata when present.
+  if (stripeType) {
+    const t = stripeType.toLowerCase();
+    if (/subscription|membership/.test(t)) return true;
+    if (/match|dpp/.test(t)) return false;
+    // Unknown explicit type — fall through to the heuristic below.
+  }
   if (!cityIdentifier) return true;
   if (description && /subscription|membership/i.test(description)) return true;
   return false;
@@ -1313,6 +1340,7 @@ export async function previewStripe(
     const emailRaw = trim(r["customer_email"]);
     const email = emailRaw ? emailRaw.toLowerCase() : null;
     const cityIdentifier = trim(r["city_identifier"]);
+    const stripeType = trim(r["stripe_type"]);
     const venue = trim(r["venue"]);
 
     paidRows++;
@@ -1322,7 +1350,11 @@ export async function previewStripe(
     const monthLabel = monthLabelFromIsoDate(date);
     if (monthLabel) monthSet.add(monthLabel);
 
-    const isMembership = looksLikeMembership(description, cityIdentifier);
+    const isMembership = looksLikeMembership(
+      stripeType,
+      description,
+      cityIdentifier,
+    );
     let allocatedCity: string;
     let type: "DPP" | "Membership";
     if (isMembership) {

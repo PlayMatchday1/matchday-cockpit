@@ -69,7 +69,7 @@ function FinanceUploadContent() {
           index={2}
           title="Stripe Activity"
           subtitle="Replaces Stripe-source rows in fin_revenue between the earliest and latest dates in this upload. Membership payments are allocated to the member's city via email lookup; match payments use the cityIdentifier code."
-          expectedColumns="Created (UTC), Amount, Fee, Status, Description, Customer Email, cityIdentifier (or metadata[cityIdentifier]), optional Venue"
+          expectedColumns="Created date (UTC), Amount, Fee, Status, Description, Customer Email, cityIdentifier (metadata), type (metadata) — falls back to Description if type is blank"
           preview={previewStripe}
           commit={commitStripe}
           renderPreview={renderStripePreview}
