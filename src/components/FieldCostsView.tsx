@@ -449,10 +449,11 @@ export default function FieldCostsView() {
                           ? data.schedule.filter(
                               (s) =>
                                 s.month === month &&
-                                (s.venue === row.displayName ||
-                                  row.legs.some(
-                                    (l) => l.venueName === s.venue,
-                                  )),
+                                row.legs.some(
+                                  (l) =>
+                                    l.rawVenueName === s.venue_raw ||
+                                    l.venueName === s.venue,
+                                ),
                             )
                           : []
                       }
@@ -598,7 +599,12 @@ function FieldCostTableRow({
   onToggleExpand: () => void;
   onSetOverride: () => void;
   onRemoveOverride: () => void;
-  scheduleRows: { date: string; venue: string; match_count: number }[];
+  scheduleRows: {
+    date: string;
+    venue: string;
+    venue_raw: string;
+    match_count: number;
+  }[];
 }) {
   const isOverride = Boolean(row.override);
   return (
@@ -712,7 +718,12 @@ function PerMatchExpand({
   scheduleRows,
 }: {
   row: FieldCostRow;
-  scheduleRows: { date: string; venue: string; match_count: number }[];
+  scheduleRows: {
+    date: string;
+    venue: string;
+    venue_raw: string;
+    match_count: number;
+  }[];
 }) {
   if (scheduleRows.length === 0) {
     return (
@@ -721,9 +732,13 @@ function PerMatchExpand({
       </div>
     );
   }
-  const rateByVenue = new Map<string, number>();
+  // Key rate lookup by raw venue name. For split-rate venues like ATH Katy,
+  // both legs share the canonical name post-alias, so canonical-keyed
+  // lookups would have one leg overwrite the other. raw_venue_name keeps
+  // them distinct.
+  const rateByRawVenue = new Map<string, number>();
   for (const leg of row.legs) {
-    rateByVenue.set(leg.venueName, leg.rate);
+    rateByRawVenue.set(leg.rawVenueName, leg.rate);
   }
   return (
     <div>
@@ -744,12 +759,17 @@ function PerMatchExpand({
           {[...scheduleRows]
             .sort((a, b) => a.date.localeCompare(b.date))
             .map((s, i) => {
-              const rate = rateByVenue.get(s.venue) ?? 0;
+              const rate =
+                rateByRawVenue.get(s.venue_raw) ??
+                rateByRawVenue.get(s.venue) ??
+                0;
               const cost = (s.match_count ?? 0) * rate;
               return (
                 <tr key={i} className="border-t border-cream-line/40">
                   <td className="py-1 pr-3 text-deep-green">{s.date}</td>
-                  <td className="py-1 pr-3 text-deep-green/65">{s.venue}</td>
+                  <td className="py-1 pr-3 text-deep-green/65">
+                    {s.venue_raw || s.venue}
+                  </td>
                   <td className="py-1 pr-3 text-right tabular-nums text-deep-green/75">
                     {s.match_count}
                   </td>

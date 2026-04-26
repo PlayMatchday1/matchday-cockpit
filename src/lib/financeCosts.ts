@@ -309,7 +309,9 @@ export type FieldCostRow = {
   autoFormula: string;
   legs: Array<{
     venueId: number;
-    venueName: string;
+    venueName: string;       // canonical (post-alias)
+    rawVenueName: string;    // pre-alias — keys schedule rows back to the
+                             // correct leg when aliases collapse the names.
     matchCount: number;
     rate: number;
     autoAmount: number;
@@ -379,6 +381,7 @@ export function buildFieldCostRows(
         legs: g.legs.map((leg, i) => ({
           venueId: leg.id,
           venueName: leg.venue_name,
+          rawVenueName: leg.raw_venue_name,
           matchCount: legAutos[i].matchCount,
           rate: leg.per_match_rate ?? 0,
           autoAmount: legAutos[i].amount,
@@ -410,6 +413,7 @@ export function buildFieldCostRows(
               {
                 venueId: primary.id,
                 venueName: primary.venue_name,
+                rawVenueName: primary.raw_venue_name,
                 matchCount: autoOnly.matchCount,
                 rate: primary.per_match_rate ?? 0,
                 autoAmount: autoOnly.amount,
