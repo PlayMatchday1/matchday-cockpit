@@ -47,8 +47,14 @@ function venueMatchCount(
   venue: FinVenue,
   month: Q2Month,
 ): number {
+  // Filter on venue_raw / raw_venue_name so split-rate venues (e.g. ATH Katy
+  // weekday + ATH Katy Sunday) are accounted per-leg even when an alias
+  // collapses their canonical names. For non-split venues raw and canonical
+  // are identical, so this is a no-op in the common case.
   return data.schedule
-    .filter((s) => s.venue === venue.venue_name && s.month === month)
+    .filter(
+      (s) => s.venue_raw === venue.raw_venue_name && s.month === month,
+    )
     .reduce((sum, s) => sum + (s.match_count ?? 0), 0);
 }
 
@@ -58,7 +64,9 @@ function venueTotalHours(
   month: Q2Month,
 ): number {
   return data.schedule
-    .filter((s) => s.venue === venue.venue_name && s.month === month)
+    .filter(
+      (s) => s.venue_raw === venue.raw_venue_name && s.month === month,
+    )
     .reduce((sum, s) => sum + (s.total_hours ?? 0), 0);
 }
 

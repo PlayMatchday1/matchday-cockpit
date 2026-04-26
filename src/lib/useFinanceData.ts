@@ -51,7 +51,10 @@ export type FinSchedule = {
   date: string;
   month: string;
   city: string;
-  venue: string;
+  venue: string;       // canonical (post-alias)
+  venue_raw: string;   // pre-alias — needed for per-leg accounting on
+                       // split-rate venues like ATH Katy / ATH Katy Sunday
+                       // where aliases collapse the canonical name.
   match_count: number;
   total_hours: number | null;
   venue_cost: number | null;
@@ -63,7 +66,8 @@ export type FinSchedule = {
 
 export type FinVenue = {
   id: number;
-  venue_name: string;
+  venue_name: string;       // canonical (post-alias)
+  raw_venue_name: string;   // pre-alias — see FinSchedule.venue_raw note.
   city: string;
   billing_type: "per_hour" | "per_match" | "monthly_flat";
   hourly_rate: number | null;
@@ -324,38 +328,47 @@ async function load(): Promise<void> {
     equipment: asNumber(r.equipment),
   }));
 
-  const schedule: FinSchedule[] = (schRes.data ?? []).map((r) => ({
-    id: r.id as number,
-    date: cleanText(r.date),
-    month: normalizeMonth(cleanText(r.month)),
-    city: cleanText(r.city),
-    venue: canonVenue(r.venue),
-    match_count: Math.round(asNumber(r.match_count) || 0),
-    total_hours: r.total_hours === null ? null : asNumber(r.total_hours),
-    venue_cost: r.venue_cost === null ? null : asNumber(r.venue_cost),
-    notes: cleanTextNullable(r.notes),
-    manual_entry: Boolean(r.manual_entry ?? false),
-    created_at: cleanTextNullable(r.created_at),
-    created_by: cleanTextNullable(r.created_by),
-  }));
+  const schedule: FinSchedule[] = (schRes.data ?? []).map((r) => {
+    const rawVenue = cleanText(r.venue);
+    return {
+      id: r.id as number,
+      date: cleanText(r.date),
+      month: normalizeMonth(cleanText(r.month)),
+      city: cleanText(r.city),
+      venue: venueAliases.get(rawVenue) ?? rawVenue,
+      venue_raw: rawVenue,
+      match_count: Math.round(asNumber(r.match_count) || 0),
+      total_hours: r.total_hours === null ? null : asNumber(r.total_hours),
+      venue_cost: r.venue_cost === null ? null : asNumber(r.venue_cost),
+      notes: cleanTextNullable(r.notes),
+      manual_entry: Boolean(r.manual_entry ?? false),
+      created_at: cleanTextNullable(r.created_at),
+      created_by: cleanTextNullable(r.created_by),
+    };
+  });
 
-  const venues: FinVenue[] = (vnRes.data ?? []).map((r) => ({
-    id: r.id as number,
-    venue_name: canonVenue(r.venue_name),
-    city: cleanText(r.city),
-    billing_type: cleanText(r.billing_type) as FinVenue["billing_type"],
-    hourly_rate: r.hourly_rate === null ? null : asNumber(r.hourly_rate),
-    monthly_flat: r.monthly_flat === null ? null : asNumber(r.monthly_flat),
-    per_match_rate:
-      r.per_match_rate === null ? null : asNumber(r.per_match_rate),
-    max_spots: r.max_spots === null ? null : Math.round(asNumber(r.max_spots)),
-    notes: cleanTextNullable(r.notes),
-    launch_date: cleanTextNullable(r.launch_date),
-    is_active:
-      r.is_active === null || r.is_active === undefined
-        ? true
-        : Boolean(r.is_active),
-  }));
+  const venues: FinVenue[] = (vnRes.data ?? []).map((r) => {
+    const rawName = cleanText(r.venue_name);
+    return {
+      id: r.id as number,
+      venue_name: venueAliases.get(rawName) ?? rawName,
+      raw_venue_name: rawName,
+      city: cleanText(r.city),
+      billing_type: cleanText(r.billing_type) as FinVenue["billing_type"],
+      hourly_rate: r.hourly_rate === null ? null : asNumber(r.hourly_rate),
+      monthly_flat: r.monthly_flat === null ? null : asNumber(r.monthly_flat),
+      per_match_rate:
+        r.per_match_rate === null ? null : asNumber(r.per_match_rate),
+      max_spots:
+        r.max_spots === null ? null : Math.round(asNumber(r.max_spots)),
+      notes: cleanTextNullable(r.notes),
+      launch_date: cleanTextNullable(r.launch_date),
+      is_active:
+        r.is_active === null || r.is_active === undefined
+          ? true
+          : Boolean(r.is_active),
+    };
+  });
 
   const memberSpots: FinMemberSpotsRow[] = (msRes.data ?? []).map((r) => ({
     id: r.id as number,
