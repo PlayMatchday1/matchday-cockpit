@@ -2,6 +2,7 @@
 
 import { useEffect, useState } from "react";
 import { supabase } from "./supabase";
+import { parseTags } from "./reviewTags";
 
 export type ReviewRow = {
   city: string;
@@ -16,6 +17,7 @@ export type ReviewRow = {
   userFirstName: string | null;
   userLastName: string | null;
   userEmail: string | null;
+  tags: string[];
 };
 
 export type ReviewMeta = {
@@ -82,7 +84,7 @@ async function load(): Promise<void> {
     const { data, error } = await supabase
       .from("reviews")
       .select(
-        "city, field_title, manager_first_name, manager_last_name, star_rating, start_date, user_id, rating_at, comment, user_first_name, user_last_name, user_email",
+        "city, field_title, manager_first_name, manager_last_name, star_rating, start_date, user_id, rating_at, comment, user_first_name, user_last_name, user_email, tags_rating",
       )
       .eq("upload_id", uploadId)
       .order("start_date")
@@ -105,6 +107,7 @@ async function load(): Promise<void> {
       user_first_name: string | null;
       user_last_name: string | null;
       user_email: string | null;
+      tags_rating: string | null;
     }>) {
       const startDate = parseLocal(r.start_date);
       if (!startDate) continue;
@@ -122,6 +125,7 @@ async function load(): Promise<void> {
         userFirstName: r.user_first_name,
         userLastName: r.user_last_name,
         userEmail: r.user_email,
+        tags: parseTags(r.tags_rating),
       });
     }
     if (data.length < PAGE) break;

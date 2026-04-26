@@ -3,6 +3,7 @@
 import { useMemo, useState } from "react";
 import type { ReviewRow } from "@/lib/useReviewData";
 import { getMonday, weekLabel } from "@/lib/cityStats";
+import { classifyTag, type TagCategory } from "@/lib/reviewTags";
 
 const WEEKS_BACK = 8;
 
@@ -72,6 +73,28 @@ function fmtDateOnly(d: Date | null): string {
   });
 }
 
+function TagPill({
+  tag,
+  category,
+}: {
+  tag: string;
+  category: TagCategory;
+}) {
+  const cls =
+    category === "positive"
+      ? "bg-mint/30 text-deep-green ring-mint/40"
+      : category === "negative"
+        ? "bg-coral/30 text-coral ring-coral/40"
+        : "bg-cream-soft text-deep-green/75 ring-cream-line";
+  return (
+    <span
+      className={`inline-block rounded-full px-2 py-0.5 text-[9px] font-bold uppercase tracking-wider ring-1 ring-inset ${cls}`}
+    >
+      {tag}
+    </span>
+  );
+}
+
 function StarRating({ rating }: { rating: number }) {
   const r = Math.round(rating);
   const filled = "★".repeat(r);
@@ -116,7 +139,9 @@ export default function ReviewsCommentsTable({
   const filtered = useMemo(() => {
     const out: ReviewRow[] = [];
     for (const r of rows) {
-      if (!r.comment || !r.comment.trim()) continue;
+      const hasComment = Boolean(r.comment && r.comment.trim());
+      const isOneStar = r.starRating === 1;
+      if (!hasComment && !isOneStar) continue;
       if (!r.ratingAt) continue;
       if (
         r.ratingAt.getTime() < week.weekStart.getTime() ||
@@ -190,13 +215,16 @@ export default function ReviewsCommentsTable({
         <span className="font-mono font-bold tabular-nums text-deep-green">
           {filtered.length}
         </span>{" "}
-        comment{filtered.length === 1 ? "" : "s"} ·{" "}
-        <span className="font-mono">{week.range}</span> · {cityLabel}
+        review{filtered.length === 1 ? "" : "s"}{" "}
+        <span className="text-deep-green/45">
+          (comments + 1-star ratings)
+        </span>{" "}
+        · <span className="font-mono">{week.range}</span> · {cityLabel}
       </div>
 
       {filtered.length === 0 ? (
         <div className="rounded-md border border-cream-line bg-cream-soft/40 px-4 py-10 text-center text-sm text-deep-green/55">
-          No comments left this week.
+          No comments or 1-star reviews this week.
         </div>
       ) : (
         <div className="overflow-x-auto">
@@ -206,6 +234,7 @@ export default function ReviewsCommentsTable({
                 <th className="px-3 py-2 text-left">Submitted</th>
                 <th className="px-3 py-2 text-left">Rating</th>
                 <th className="px-3 py-2 text-left">Comment</th>
+                <th className="px-3 py-2 text-left">Tags</th>
                 <th className="px-3 py-2 text-left">Player</th>
                 <th className="px-3 py-2 text-left">Email</th>
                 <th className="px-3 py-2 text-left">Match Date</th>
@@ -232,9 +261,28 @@ export default function ReviewsCommentsTable({
                       <StarRating rating={r.starRating} />
                     </td>
                     <td className="px-3 py-2 align-top text-deep-green">
-                      <div className="max-w-[460px] whitespace-pre-wrap break-words leading-snug">
-                        {r.comment}
-                      </div>
+                      {r.comment ? (
+                        <div className="max-w-[460px] whitespace-pre-wrap break-words leading-snug">
+                          {r.comment}
+                        </div>
+                      ) : (
+                        <span className="italic text-deep-green/40">
+                          (no comment)
+                        </span>
+                      )}
+                    </td>
+                    <td className="px-3 py-2 align-top">
+                      {r.tags.length > 0 && (
+                        <div className="flex max-w-[260px] flex-wrap gap-1">
+                          {r.tags.map((tag, ti) => (
+                            <TagPill
+                              key={`${tag}-${ti}`}
+                              tag={tag}
+                              category={classifyTag(tag)}
+                            />
+                          ))}
+                        </div>
+                      )}
                     </td>
                     <td className="px-3 py-2 align-top text-deep-green/85">
                       {player}

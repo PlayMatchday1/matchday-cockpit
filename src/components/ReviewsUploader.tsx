@@ -33,6 +33,7 @@ type MappedReview = {
   start_date: string | null;
   field_title: string | null;
   city: string;
+  tags_rating: string | null;
 };
 
 const BATCH_SIZE = 500;
@@ -117,6 +118,7 @@ export default function ReviewsUploader() {
         start_date: startDate || null,
         field_title: (row["field_title"] ?? "").trim() || null,
         city: cityNorm,
+        tags_rating: (row["tags_rating"] ?? "").trim() || null,
       });
 
       if (startDate) {
