@@ -11,6 +11,11 @@ export type ReviewRow = {
   starRating: number;
   startDate: Date;
   userId: string | null;
+  ratingAt: Date | null;
+  comment: string | null;
+  userFirstName: string | null;
+  userLastName: string | null;
+  userEmail: string | null;
 };
 
 export type ReviewMeta = {
@@ -77,7 +82,7 @@ async function load(): Promise<void> {
     const { data, error } = await supabase
       .from("reviews")
       .select(
-        "city, field_title, manager_first_name, manager_last_name, star_rating, start_date, user_id",
+        "city, field_title, manager_first_name, manager_last_name, star_rating, start_date, user_id, rating_at, comment, user_first_name, user_last_name, user_email",
       )
       .eq("upload_id", uploadId)
       .order("start_date")
@@ -95,6 +100,11 @@ async function load(): Promise<void> {
       star_rating: number | null;
       start_date: string | null;
       user_id: string | null;
+      rating_at: string | null;
+      comment: string | null;
+      user_first_name: string | null;
+      user_last_name: string | null;
+      user_email: string | null;
     }>) {
       const startDate = parseLocal(r.start_date);
       if (!startDate) continue;
@@ -107,6 +117,11 @@ async function load(): Promise<void> {
         starRating: Number(r.star_rating),
         startDate,
         userId: r.user_id,
+        ratingAt: parseLocal(r.rating_at),
+        comment: r.comment,
+        userFirstName: r.user_first_name,
+        userLastName: r.user_last_name,
+        userEmail: r.user_email,
       });
     }
     if (data.length < PAGE) break;

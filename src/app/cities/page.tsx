@@ -20,6 +20,7 @@ import { getActiveMonthWindow } from "@/lib/reviewStats";
 import { CITIES, citySlug } from "@/lib/types";
 import ManagerPodium from "@/components/ManagerPodium";
 import Reviews8WeekCard from "@/components/Reviews8WeekCard";
+import ReviewsCommentsTable from "@/components/ReviewsCommentsTable";
 
 export default function CitiesIndexPage() {
   return (
@@ -170,6 +171,7 @@ function CitiesIndexContent() {
           <div className="space-y-6">
             <Reviews8WeekCard rows={reviewRows} />
             <ManagerPodium rows={reviewRows} />
+            <ReviewsCommentsTable rows={reviewRows} />
           </div>
         )}
       </section>

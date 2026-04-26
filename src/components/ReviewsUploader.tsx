@@ -27,6 +27,7 @@ type MappedReview = {
   user_id: string | null;
   user_first_name: string | null;
   user_last_name: string | null;
+  user_email: string | null;
   manager_first_name: string | null;
   manager_last_name: string | null;
   start_date: string | null;
@@ -109,6 +110,8 @@ export default function ReviewsUploader() {
         user_id: (row["user_id"] ?? "").trim() || null,
         user_first_name: (row["user_first_name"] ?? "").trim() || null,
         user_last_name: (row["user_last_name"] ?? "").trim() || null,
+        user_email:
+          (row["user_email"] ?? "").trim().toLowerCase() || null,
         manager_first_name: (row["manager_first_name"] ?? "").trim() || null,
         manager_last_name: (row["manager_last_name"] ?? "").trim() || null,
         start_date: startDate || null,
