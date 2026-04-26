@@ -117,10 +117,31 @@ function FinanceLandingContent() {
       />
       <div className="grid grid-cols-1 gap-4 md:grid-cols-2 lg:grid-cols-3">
         <Link
+          href="/admin/finance/upload"
+          className="block rounded-2xl border-l-4 border-mint border-y-[1.5px] border-r-[1.5px] border-y-cream-line border-r-cream-line bg-white p-6 shadow-md shadow-deep-green/10 transition-all duration-200 hover:-translate-y-0.5 hover:shadow-xl hover:shadow-deep-green/20"
+        >
+          <div className="text-[11px] font-bold uppercase tracking-[0.2em] text-mint-hover">
+            Weekly
+          </div>
+          <div className="mt-1 text-base font-bold text-deep-green">
+            Weekly Update
+          </div>
+          <p className="mt-1 text-sm text-deep-green/60">
+            Drop the latest Members + Stripe exports. Replaces the rows it
+            covers; everything else is left alone.
+          </p>
+          <div className="mt-3 text-xs font-bold uppercase tracking-wider text-mint-hover">
+            Open →
+          </div>
+        </Link>
+        <Link
           href="/admin/finance/import"
           className="block rounded-2xl border-[1.5px] border-cream-line bg-white p-6 shadow-md shadow-deep-green/10 transition-all duration-200 hover:-translate-y-0.5 hover:shadow-xl hover:shadow-deep-green/20"
         >
-          <div className="text-base font-bold text-deep-green">
+          <div className="text-[11px] font-bold uppercase tracking-[0.2em] text-deep-green/45">
+            One-time
+          </div>
+          <div className="mt-1 text-base font-bold text-deep-green">
             Q2 2026 import
           </div>
           <p className="mt-1 text-sm text-deep-green/60">

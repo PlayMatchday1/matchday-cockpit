@@ -132,6 +132,12 @@ function deriveMemberCity(memberId: string): string | null {
   return null;
 }
 
+const UNMATCHED_CITY = "Corporate / Unmatched";
+
+function memberCityFromId(memberId: string): string {
+  return deriveMemberCity(memberId) ?? UNMATCHED_CITY;
+}
+
 function normalizeSource(s: string | null): string | null {
   if (!s) return null;
   const u = s.toUpperCase();
@@ -831,76 +837,155 @@ const MEMBERS_SPEC: ColumnSpec[] = [
     required: true,
   },
   {
+    canonical: "email",
+    aliases: ["Member Email", "Customer Email", "Email Address"],
+    required: false,
+  },
+  {
     canonical: "status",
-    aliases: ["Subscription Status"],
+    aliases: ["Subscription Status", "Membership Status"],
     required: true,
+  },
+  { canonical: "first_name", aliases: ["First Name", "FirstName"], required: false },
+  { canonical: "last_name", aliases: ["Last Name", "LastName"], required: false },
+  {
+    canonical: "phone",
+    aliases: ["Phone Number", "Phone", "Mobile"],
+    required: false,
+  },
+  {
+    canonical: "activation_date",
+    aliases: ["Member Activation Date", "Activation Date", "Activated At"],
+    required: false,
+  },
+  {
+    canonical: "membership_length",
+    aliases: ["Membership Length", "Plan Length"],
+    required: false,
   },
   {
     canonical: "price_cents",
     aliases: ["Price Cents", "Price"],
     required: true,
   },
-  { canonical: "email", required: false },
+  {
+    canonical: "canceled_at",
+    aliases: ["Canceled At", "Cancellation Date"],
+    required: false,
+  },
+  {
+    canonical: "cancel_reason",
+    aliases: ["Cancel Reason", "Cancellation Reason"],
+    required: false,
+  },
 ];
 
-export async function importMembers(raw: string[][]): Promise<ImportResult> {
+type MemberRow = {
+  member_id: string;
+  email: string | null;
+  status: string;
+  first_name: string | null;
+  last_name: string | null;
+  phone: string | null;
+  activation_date: string | null;
+  membership_length: string | null;
+  price_cents: number;
+  canceled_at: string | null;
+  cancel_reason: string | null;
+  city: string;
+};
+
+export type MembersPreview = {
+  filename: string;
+  totalMembers: number;
+  byStatus: Record<string, number>;
+  activeByCity: Record<string, number>;
+  parsed: MemberRow[];
+};
+
+function parseStripeTimestamp(v: string | undefined | null): string | null {
+  const t = trim(v);
+  if (!t) return null;
+  const d = new Date(t);
+  if (!Number.isNaN(d.getTime())) return d.toISOString();
+  return null;
+}
+
+function parseMembersRows(raw: string[][]): MemberRow[] {
   const result = preprocessFixed(raw, MEMBERS_SPEC);
   if ("error" in result) throw new Error(result.error);
   const { rows } = result;
 
-  let totalConsidered = 0;
-  let droppedNotActive = 0;
-  let droppedZeroPrice = 0;
-  let droppedNoCity = 0;
-  const mapped: {
-    member_id: string;
-    status: string;
-    price_cents: number;
-    city: string;
-    email: string | null;
-  }[] = [];
-
+  const out: MemberRow[] = [];
   for (const r of rows) {
     const memberId = trim(r["member_id"]);
     if (!memberId) continue;
-    totalConsidered++;
     const status = (trim(r["status"]) ?? "").toUpperCase();
-    if (status !== "ACTIVE") {
-      droppedNotActive++;
-      continue;
-    }
+    const emailRaw = trim(r["email"]);
+    const email = emailRaw ? emailRaw.toLowerCase() : null;
     const priceCents = parseInteger(r["price_cents"]) ?? 0;
-    if (priceCents === 0) {
-      droppedZeroPrice++;
-      continue;
-    }
-    const city = deriveMemberCity(memberId);
-    if (!city) {
-      droppedNoCity++;
-      continue;
-    }
-    mapped.push({
+    out.push({
       member_id: memberId,
+      email,
       status,
+      first_name: trim(r["first_name"]),
+      last_name: trim(r["last_name"]),
+      phone: trim(r["phone"]),
+      activation_date: parseDate(r["activation_date"]),
+      membership_length: trim(r["membership_length"]),
       price_cents: priceCents,
-      city,
-      email: trim(r["email"]),
+      canceled_at: parseStripeTimestamp(r["canceled_at"]),
+      cancel_reason: trim(r["cancel_reason"]),
+      city: memberCityFromId(memberId),
     });
   }
+  return out;
+}
 
-  await deleteAll("fin_members");
-  if (mapped.length > 0) {
-    const BATCH = 500;
-    for (let i = 0; i < mapped.length; i += BATCH) {
-      const chunk = mapped.slice(i, i + BATCH);
-      const { error } = await supabase.from("fin_members").insert(chunk);
-      if (error) throw new Error(error.message);
+export function previewMembers(raw: string[][], filename: string): MembersPreview {
+  const parsed = parseMembersRows(raw);
+  const byStatus: Record<string, number> = {};
+  const activeByCity: Record<string, number> = {};
+  for (const m of parsed) {
+    byStatus[m.status] = (byStatus[m.status] ?? 0) + 1;
+    if (m.status === "ACTIVE" && m.price_cents > 0) {
+      activeByCity[m.city] = (activeByCity[m.city] ?? 0) + 1;
     }
   }
   return {
-    count: mapped.length,
-    note: `${totalConsidered} input rows · dropped ${droppedNotActive} non-ACTIVE, ${droppedZeroPrice} zero-price, ${droppedNoCity} unrecognized prefix.`,
+    filename,
+    totalMembers: parsed.length,
+    byStatus,
+    activeByCity,
+    parsed,
   };
+}
+
+export async function commitMembers(
+  parsed: MemberRow[],
+): Promise<ImportResult> {
+  await deleteAll("fin_members");
+  if (parsed.length === 0) {
+    return { count: 0, note: "No rows to insert." };
+  }
+  const BATCH = 500;
+  for (let i = 0; i < parsed.length; i += BATCH) {
+    const chunk = parsed.slice(i, i + BATCH);
+    const { error } = await supabase.from("fin_members").insert(chunk);
+    if (error) throw new Error(error.message);
+  }
+  return { count: parsed.length };
+}
+
+export async function importMembers(raw: string[][]): Promise<ImportResult> {
+  const parsed = parseMembersRows(raw);
+  const r = await commitMembers(parsed);
+  const byStatus: Record<string, number> = {};
+  for (const m of parsed) byStatus[m.status] = (byStatus[m.status] ?? 0) + 1;
+  const note = Object.entries(byStatus)
+    .map(([s, n]) => `${s}: ${n}`)
+    .join(" · ");
+  return { count: r.count, note };
 }
 
 type SpotsType = "member" | "dpp" | "other";
@@ -1051,6 +1136,275 @@ export async function importCommentary(
   return { count: 1, note: "Created new entry." };
 }
 
+// ===== Stripe weekly upload =====
+
+const STRIPE_CITY_PREFIX: Record<string, string> = {
+  ATX: "Austin",
+  DFW: "Dallas",
+  HOU: "Houston",
+  SATX: "San Antonio",
+  ATL: "Atlanta",
+  STL: "St. Louis",
+  OKC: "OKC",
+  ELP: "El Paso",
+};
+
+const STRIPE_SPEC: ColumnSpec[] = [
+  {
+    canonical: "stripe_id",
+    aliases: ["id", "Charge ID", "Payment ID"],
+    required: false,
+  },
+  {
+    canonical: "created",
+    aliases: ["Created", "Created (UTC)", "Created Date", "Date"],
+    required: true,
+  },
+  {
+    canonical: "amount",
+    aliases: ["Amount", "Converted Amount", "Gross"],
+    required: true,
+  },
+  {
+    canonical: "fees",
+    aliases: ["Fee", "Stripe Fee", "Fees", "Application Fee"],
+    required: false,
+  },
+  {
+    canonical: "status",
+    aliases: ["Status", "Payment Status"],
+    required: true,
+  },
+  {
+    canonical: "description",
+    aliases: ["Description", "Statement Descriptor"],
+    required: false,
+  },
+  {
+    canonical: "customer_email",
+    aliases: ["Customer Email", "Email", "metadata[email]"],
+    required: false,
+  },
+  {
+    canonical: "city_identifier",
+    aliases: [
+      "cityIdentifier",
+      "City Identifier",
+      "metadata[cityIdentifier]",
+      "City Code",
+    ],
+    required: false,
+  },
+  {
+    canonical: "venue",
+    aliases: ["Venue", "metadata[venue]", "metadata[venueName]"],
+    required: false,
+  },
+];
+
+const PAID_STATUSES = new Set(["paid", "succeeded"]);
+
+type StripeAllocatedRow = {
+  date: string;
+  month: string;
+  city: string;
+  venue: string | null;
+  type: "DPP" | "Membership";
+  gross: number;
+  fees: number;
+  net: number;
+  source: "Stripe";
+  notes: string | null;
+};
+
+export type StripePreview = {
+  filename: string;
+  totalRows: number;
+  paidRows: number;
+  skippedRows: number;
+  membershipPayments: number;
+  emailAllocated: number;
+  unmatchedEmails: string[];
+  matchPayments: number;
+  matchUnmatchedCityCodes: string[];
+  earliestDate: string | null;
+  latestDate: string | null;
+  monthsAffected: string[];
+  totalGross: number;
+  parsed: StripeAllocatedRow[];
+};
+
+function monthLabelFromIsoDate(iso: string): string | null {
+  const m = iso.match(/^(\d{4})-(\d{2})-/);
+  if (!m) return null;
+  const monthIndex = parseInt(m[2], 10) - 1;
+  if (monthIndex < 0 || monthIndex > 11) return null;
+  return `${MONTH_LABELS[monthIndex]} ${m[1]}`;
+}
+
+function looksLikeMembership(
+  description: string | null,
+  cityIdentifier: string | null,
+): boolean {
+  if (!cityIdentifier) return true;
+  if (description && /subscription|membership/i.test(description)) return true;
+  return false;
+}
+
+function cityFromIdentifier(code: string | null): string {
+  if (!code) return UNMATCHED_CITY;
+  const upper = code.toUpperCase().trim();
+  const prefixes = Object.keys(STRIPE_CITY_PREFIX).sort(
+    (a, b) => b.length - a.length,
+  );
+  for (const p of prefixes) {
+    if (upper.startsWith(p)) return STRIPE_CITY_PREFIX[p];
+  }
+  return UNMATCHED_CITY;
+}
+
+export async function previewStripe(
+  raw: string[][],
+  filename: string,
+): Promise<StripePreview> {
+  const result = preprocessFixed(raw, STRIPE_SPEC);
+  if ("error" in result) throw new Error(result.error);
+  const { rows } = result;
+
+  // Build email → city map from fin_members
+  const { data: memberRows, error: mbErr } = await supabase
+    .from("fin_members")
+    .select("email, city");
+  if (mbErr) throw new Error(`Members lookup failed: ${mbErr.message}`);
+  const emailToCity = new Map<string, string>();
+  for (const m of (memberRows ?? []) as { email: string | null; city: string | null }[]) {
+    if (m.email) emailToCity.set(m.email.toLowerCase().trim(), m.city ?? UNMATCHED_CITY);
+  }
+
+  let totalRows = 0;
+  let paidRows = 0;
+  let skippedRows = 0;
+  let membershipPayments = 0;
+  let emailAllocated = 0;
+  const unmatchedEmailSet = new Set<string>();
+  let matchPayments = 0;
+  const matchUnmatchedCityCodes = new Set<string>();
+  const monthSet = new Set<string>();
+  let earliestDate: string | null = null;
+  let latestDate: string | null = null;
+  let totalGross = 0;
+  const parsed: StripeAllocatedRow[] = [];
+
+  for (const r of rows) {
+    totalRows++;
+    const status = (trim(r["status"]) ?? "").toLowerCase();
+    if (!PAID_STATUSES.has(status)) {
+      skippedRows++;
+      continue;
+    }
+    const date = parseDate(r["created"]);
+    if (!date) {
+      skippedRows++;
+      continue;
+    }
+    const gross = parseNum(r["amount"]) ?? 0;
+    const fees = parseNum(r["fees"]) ?? 0;
+    const description = trim(r["description"]);
+    const emailRaw = trim(r["customer_email"]);
+    const email = emailRaw ? emailRaw.toLowerCase() : null;
+    const cityIdentifier = trim(r["city_identifier"]);
+    const venue = trim(r["venue"]);
+
+    paidRows++;
+    totalGross += gross;
+    if (!earliestDate || date < earliestDate) earliestDate = date;
+    if (!latestDate || date > latestDate) latestDate = date;
+    const monthLabel = monthLabelFromIsoDate(date);
+    if (monthLabel) monthSet.add(monthLabel);
+
+    const isMembership = looksLikeMembership(description, cityIdentifier);
+    let allocatedCity: string;
+    let type: "DPP" | "Membership";
+    if (isMembership) {
+      type = "Membership";
+      membershipPayments++;
+      const lookup = email ? emailToCity.get(email) : undefined;
+      if (lookup && lookup !== UNMATCHED_CITY) {
+        allocatedCity = lookup;
+        emailAllocated++;
+      } else {
+        allocatedCity = UNMATCHED_CITY;
+        if (email) unmatchedEmailSet.add(email);
+      }
+    } else {
+      type = "DPP";
+      matchPayments++;
+      allocatedCity = cityFromIdentifier(cityIdentifier);
+      if (allocatedCity === UNMATCHED_CITY && cityIdentifier) {
+        matchUnmatchedCityCodes.add(cityIdentifier);
+      }
+    }
+
+    parsed.push({
+      date,
+      month: monthLabel ?? "",
+      city: allocatedCity,
+      venue: venue,
+      type,
+      gross,
+      fees,
+      net: gross - fees,
+      source: "Stripe",
+      notes: description,
+    });
+  }
+
+  return {
+    filename,
+    totalRows,
+    paidRows,
+    skippedRows,
+    membershipPayments,
+    emailAllocated,
+    unmatchedEmails: [...unmatchedEmailSet].sort(),
+    matchPayments,
+    matchUnmatchedCityCodes: [...matchUnmatchedCityCodes].sort(),
+    earliestDate,
+    latestDate,
+    monthsAffected: [...monthSet].sort(),
+    totalGross,
+    parsed,
+  };
+}
+
+export async function commitStripe(
+  preview: StripePreview,
+): Promise<ImportResult> {
+  if (preview.parsed.length === 0 || !preview.earliestDate || !preview.latestDate) {
+    return { count: 0, note: "No paid Stripe rows in the upload." };
+  }
+
+  // Date-range replace: drop existing Stripe rows in the covered window, then insert.
+  const { error: delErr } = await supabase
+    .from("fin_revenue")
+    .delete()
+    .eq("source", "Stripe")
+    .gte("date", preview.earliestDate)
+    .lte("date", preview.latestDate);
+  if (delErr) throw new Error(`Delete failed: ${delErr.message}`);
+
+  const BATCH = 500;
+  for (let i = 0; i < preview.parsed.length; i += BATCH) {
+    const chunk = preview.parsed.slice(i, i + BATCH);
+    const { error } = await supabase.from("fin_revenue").insert(chunk);
+    if (error) throw new Error(`Insert failed: ${error.message}`);
+  }
+  return {
+    count: preview.parsed.length,
+    note: `${preview.earliestDate} → ${preview.latestDate}`,
+  };
+}
+
 export type ImporterConfig = {
   key: string;
   title: string;
@@ -1126,8 +1480,9 @@ export const FINANCE_IMPORTERS: ImporterConfig[] = [
     key: "members",
     title: "8. Members",
     description:
-      "Drops non-ACTIVE rows and rows with price_cents = 0. City derived from member_id prefix (ATX/DFW/HOU/SATX/ATL/STL/OKC/ELP). Replaces all existing fin_members rows.",
-    expectedColumns: "member_id, status, price_cents, email",
+      "Keeps every member row regardless of status (needed for the Stripe email→city lookup). City derived from member_id prefix (ATX/DFW/HOU/SATX/ATL/STL/OKC/ELP); unrecognized prefixes go to Corporate / Unmatched. Replaces all existing fin_members rows.",
+    expectedColumns:
+      "Member ID, Member Email, Status, First Name, Last Name, Phone Number, Member Activation Date, Membership Length, Price, Canceled At, Cancel Reason",
     importer: importMembers,
   },
   {
