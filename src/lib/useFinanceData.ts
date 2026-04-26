@@ -78,6 +78,38 @@ function asNumber(v: unknown): number {
   return 0;
 }
 
+const MONTH_NORMALIZERS: { full: string; short: string; label: string }[] = [
+  { full: "january", short: "jan", label: "Jan" },
+  { full: "february", short: "feb", label: "Feb" },
+  { full: "march", short: "mar", label: "Mar" },
+  { full: "april", short: "apr", label: "Apr" },
+  { full: "may", short: "may", label: "May" },
+  { full: "june", short: "jun", label: "Jun" },
+  { full: "july", short: "jul", label: "Jul" },
+  { full: "august", short: "aug", label: "Aug" },
+  { full: "september", short: "sep", label: "Sep" },
+  { full: "october", short: "oct", label: "Oct" },
+  { full: "november", short: "nov", label: "Nov" },
+  { full: "december", short: "dec", label: "Dec" },
+];
+
+function normalizeMonth(v: unknown): string {
+  if (v === null || v === undefined) return "";
+  const raw = String(v).trim();
+  if (!raw) return "";
+  const lower = raw.toLowerCase();
+  for (const m of MONTH_NORMALIZERS) {
+    const reFull = new RegExp(`(?:^|[^a-z])${m.full}(?:[^a-z]|$)`);
+    const reShort = new RegExp(`(?:^|[^a-z])${m.short}(?:[^a-z]|$)`);
+    if (reFull.test(lower) || reShort.test(lower)) {
+      const yearMatch = lower.match(/(20\d{2})/);
+      const year = yearMatch ? yearMatch[1] : "2026";
+      return `${m.label} ${year}`;
+    }
+  }
+  return raw;
+}
+
 async function load(): Promise<void> {
   publish({ data: cached.data, loading: true, error: null });
 
@@ -99,8 +131,8 @@ async function load(): Promise<void> {
   const revenue: FinRevenue[] = (revRes.data ?? []).map((r) => ({
     id: r.id as number,
     date: r.date as string,
-    month: r.month as string,
-    city: r.city as string,
+    month: normalizeMonth(r.month),
+    city: (r.city as string)?.trim() ?? "",
     venue: (r.venue as string | null) ?? null,
     type: r.type as FinRevenue["type"],
     gross: asNumber(r.gross),
@@ -113,8 +145,8 @@ async function load(): Promise<void> {
   const expenses: FinExpense[] = (expRes.data ?? []).map((r) => ({
     id: r.id as number,
     date: r.date as string,
-    month: r.month as string,
-    city: r.city as string,
+    month: normalizeMonth(r.month),
+    city: (r.city as string)?.trim() ?? "",
     category: r.category as string,
     vendor: (r.vendor as string | null) ?? null,
     amount: asNumber(r.amount),
@@ -123,15 +155,15 @@ async function load(): Promise<void> {
 
   const managerPay: FinManagerPay[] = (mpRes.data ?? []).map((r) => ({
     id: r.id as number,
-    city: r.city as string,
-    month: r.month as string,
+    city: (r.city as string)?.trim() ?? "",
+    month: normalizeMonth(r.month),
     amount: asNumber(r.amount),
   }));
 
   const monthlyExpenses: FinMonthlyExpense[] = (meRes.data ?? []).map((r) => ({
     id: r.id as number,
-    city: r.city as string,
-    month: r.month as string,
+    city: (r.city as string)?.trim() ?? "",
+    month: normalizeMonth(r.month),
     city_manager: asNumber(r.city_manager),
     marketing: asNumber(r.marketing),
     equipment: asNumber(r.equipment),
