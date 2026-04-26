@@ -1231,7 +1231,6 @@ type StripeAllocatedRow = {
   type: "DPP" | "Membership";
   gross: number;
   fees: number;
-  net: number;
   source: "Stripe";
   notes: string | null;
 };
@@ -1385,7 +1384,6 @@ export async function previewStripe(
       type,
       gross,
       fees,
-      net: gross - fees,
       source: "Stripe",
       notes: description,
     });
