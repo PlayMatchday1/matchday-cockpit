@@ -3,6 +3,9 @@
 import { useEffect, useState } from "react";
 import Link from "next/link";
 import AdminGuard from "@/components/AdminGuard";
+import FinanceHeroMetrics from "@/components/FinanceHeroMetrics";
+import FinanceMonthlyPL from "@/components/FinanceMonthlyPL";
+import FinanceTrendChart from "@/components/FinanceTrendChart";
 import { supabase } from "@/lib/supabase";
 
 export default function FinanceLandingPage() {
@@ -44,14 +47,16 @@ function FinanceLandingContent() {
         </p>
       </div>
 
-      <SectionHeader
-        title="Performance"
-        subtitle="Cash position, monthly flow, trend over time."
-      />
-      <div className="mb-12 grid grid-cols-1 gap-4 md:grid-cols-2 lg:grid-cols-3">
-        <PlaceholderCard title="Hero Metrics" phase="Phase 2" />
-        <PlaceholderCard title="Monthly Cash Flow" phase="Phase 2" />
-        <PlaceholderCard title="Trend Chart" phase="Phase 2" />
+      <div className="mb-8">
+        <FinanceHeroMetrics />
+      </div>
+
+      <div className="mb-8">
+        <FinanceTrendChart />
+      </div>
+
+      <div className="mb-12">
+        <FinanceMonthlyPL />
       </div>
 
       <SectionHeader
