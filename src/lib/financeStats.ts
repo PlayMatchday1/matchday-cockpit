@@ -66,10 +66,13 @@ function filterRevenueRows(
     if (future) return [];
     return all.filter((r) => r.source !== "PROJECTION");
   }
-  // Projection mode: keep everything for the requested month, regardless of
-  // the row's specific date. Dates in this dataset are end-of-month buckets,
-  // not transaction dates — month membership is what makes a row "realized".
-  return all;
+  // Projection mode: realized for active/past months, PROJECTION for future
+  // months. Never blend the two — the active-month PROJECTION row covers the
+  // gap between realized-to-date and end-of-month, but here we extrapolate
+  // realized DPP via dppExtrapolationFactor instead, so PROJECTION rows for
+  // active/past months would double-count.
+  if (future) return all.filter((r) => r.source === "PROJECTION");
+  return all.filter((r) => r.source !== "PROJECTION");
 }
 
 function applyDppExtrapolation<T extends { type: FinanceData["revenue"][number]["type"]; source: FinanceData["revenue"][number]["source"] }>(
@@ -515,7 +518,11 @@ export function buildRankingRows(
   month: Q2Month,
 ): RankingRow[] {
   const out: RankingRow[] = [];
+  const seen = new Set<string>();
   for (const v of data.venues) {
+    const dedupKey = `${v.city}|${v.venue_name}`;
+    if (seen.has(dedupKey)) continue;
+    seen.add(dedupKey);
     const dppRev = venueDppRevenueFor(data, v.city, v.venue_name, month);
     const memberRev = venueAllocatedMemberRevenueFor(
       data,
