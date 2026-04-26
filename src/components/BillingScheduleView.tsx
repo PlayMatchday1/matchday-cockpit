@@ -1,8 +1,9 @@
 "use client";
 
-import { useMemo, useState } from "react";
+import { useEffect, useMemo, useState } from "react";
 import Link from "next/link";
-import { Layers, Lock, Pencil, Plus, Trash2 } from "lucide-react";
+import { CalendarDays, Layers, List, Lock, Pencil, Plus, Trash2 } from "lucide-react";
+import BillingScheduleCalendar from "@/components/BillingScheduleCalendar";
 import ConfirmDeleteDialog from "@/components/ConfirmDeleteDialog";
 import ScheduleBulkAddEditor, {
   type BulkScheduleDraft,
@@ -88,9 +89,35 @@ export default function BillingScheduleView() {
   const [editorOpen, setEditorOpen] = useState(false);
   const [editorMode, setEditorMode] = useState<"add" | "edit">("add");
   const [editorRow, setEditorRow] = useState<FinSchedule | null>(null);
+  const [editorPrefill, setEditorPrefill] = useState<{
+    date?: string;
+    venueId?: number;
+  } | null>(null);
 
   const [bulkOpen, setBulkOpen] = useState(false);
   const [deleteRow, setDeleteRow] = useState<FinSchedule | null>(null);
+
+  type ViewMode = "calendar" | "list";
+  const [view, setView] = useState<ViewMode>("calendar");
+  const [hideEmptyVenues, setHideEmptyVenues] = useState(false);
+
+  useEffect(() => {
+    try {
+      const saved = window.localStorage.getItem("billing-schedule-view");
+      if (saved === "list" || saved === "calendar") setView(saved);
+    } catch {
+      // localStorage unavailable; keep default
+    }
+  }, []);
+
+  function setViewPersisted(v: ViewMode) {
+    setView(v);
+    try {
+      window.localStorage.setItem("billing-schedule-view", v);
+    } catch {
+      // ignore
+    }
+  }
 
   const allRows = data?.schedule ?? [];
 
@@ -154,15 +181,17 @@ export default function BillingScheduleView() {
     }
   }
 
-  function openAdd() {
+  function openAdd(prefill?: { date?: string; venueId?: number }) {
     setEditorMode("add");
     setEditorRow(null);
+    setEditorPrefill(prefill ?? null);
     setEditorOpen(true);
   }
 
   function openEdit(row: FinSchedule) {
     setEditorMode("edit");
     setEditorRow(row);
+    setEditorPrefill(null);
     setEditorOpen(true);
   }
 
@@ -321,6 +350,40 @@ export default function BillingScheduleView() {
           </p>
         </div>
         <div className="flex flex-wrap items-center gap-2">
+          <div
+            role="tablist"
+            aria-label="View mode"
+            className="inline-flex rounded-full border border-cream-line bg-white p-1"
+          >
+            <button
+              type="button"
+              role="tab"
+              aria-selected={view === "calendar"}
+              onClick={() => setViewPersisted("calendar")}
+              className={`inline-flex items-center gap-1.5 rounded-full px-3 py-1 text-xs font-bold transition ${
+                view === "calendar"
+                  ? "bg-mint text-deep-green"
+                  : "text-deep-green/60 hover:text-deep-green"
+              }`}
+            >
+              <CalendarDays size={12} aria-hidden />
+              Calendar
+            </button>
+            <button
+              type="button"
+              role="tab"
+              aria-selected={view === "list"}
+              onClick={() => setViewPersisted("list")}
+              className={`inline-flex items-center gap-1.5 rounded-full px-3 py-1 text-xs font-bold transition ${
+                view === "list"
+                  ? "bg-mint text-deep-green"
+                  : "text-deep-green/60 hover:text-deep-green"
+              }`}
+            >
+              <List size={12} aria-hidden />
+              List
+            </button>
+          </div>
           <button
             type="button"
             onClick={() => setBulkOpen(true)}
@@ -331,7 +394,7 @@ export default function BillingScheduleView() {
           </button>
           <button
             type="button"
-            onClick={openAdd}
+            onClick={() => openAdd()}
             className="inline-flex items-center gap-2 rounded-full bg-mint px-5 py-2 text-sm font-bold text-deep-green hover:bg-mint-hover"
           >
             <Plus size={16} aria-hidden />
@@ -413,8 +476,37 @@ export default function BillingScheduleView() {
             <option value="MANUAL">Manual</option>
           </select>
         </Filter>
+        {view === "calendar" && (
+          <label className="flex cursor-pointer items-center gap-2 text-xs text-deep-green/75">
+            <input
+              type="checkbox"
+              checked={hideEmptyVenues}
+              onChange={(e) => setHideEmptyVenues(e.target.checked)}
+            />
+            Hide empty venues
+          </label>
+        )}
       </div>
 
+      {view === "calendar" && (
+        <BillingScheduleCalendar
+          rows={filtered}
+          venues={data?.venues ?? []}
+          overrides={data?.overrides ?? []}
+          monthFilter={monthFilter}
+          rangeFrom={rangeFrom}
+          rangeTo={rangeTo}
+          cityFilter={cityFilter}
+          venueFilter={venueFilter}
+          hideEmptyVenues={hideEmptyVenues}
+          onEditRow={openEdit}
+          onAddCell={(venue, date) =>
+            openAdd({ date, venueId: venue.id })
+          }
+        />
+      )}
+
+      {view === "list" && (
       <section className="overflow-hidden rounded-2xl border-[1.5px] border-cream-line bg-white shadow-md shadow-deep-green/10">
         <div className="overflow-x-auto">
           <table className="w-full text-xs">
@@ -583,14 +675,19 @@ export default function BillingScheduleView() {
           </div>
         </div>
       </section>
+      )}
 
       <ScheduleRowEditor
         open={editorOpen}
         mode={editorMode}
         initial={editorRow}
+        addPrefill={editorPrefill}
         venues={data?.venues ?? []}
         overrides={data?.overrides ?? []}
-        onClose={() => setEditorOpen(false)}
+        onClose={() => {
+          setEditorOpen(false);
+          setEditorPrefill(null);
+        }}
         onSubmit={handleSubmit}
       />
 

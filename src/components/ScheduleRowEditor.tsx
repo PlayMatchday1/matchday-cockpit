@@ -70,6 +70,7 @@ export default function ScheduleRowEditor({
   open,
   mode,
   initial,
+  addPrefill,
   venues,
   overrides,
   onClose,
@@ -78,6 +79,7 @@ export default function ScheduleRowEditor({
   open: boolean;
   mode: "add" | "edit";
   initial: FinSchedule | null;
+  addPrefill?: { date?: string; venueId?: number } | null;
   venues: FinVenue[];
   overrides: FinVenueCostOverride[];
   onClose: () => void;
@@ -96,10 +98,23 @@ export default function ScheduleRowEditor({
       setDraft(d);
       setMonthOverridden(d.month !== monthFromDate(d.date));
     } else {
-      setDraft(emptyDraft());
+      const base = emptyDraft();
+      if (addPrefill?.date) {
+        base.date = addPrefill.date;
+        base.month = monthFromDate(addPrefill.date);
+      }
+      if (addPrefill?.venueId) {
+        const v = venues.find((x) => x.id === addPrefill.venueId);
+        if (v) {
+          base.venue_id = v.id;
+          base.venue_name = v.venue_name;
+          base.city = v.city;
+        }
+      }
+      setDraft(base);
       setMonthOverridden(false);
     }
-  }, [open, initial, venues]);
+  }, [open, initial, addPrefill, venues]);
 
   const sortedVenues = useMemo(
     () => [...venues].sort((a, b) => a.venue_name.localeCompare(b.venue_name)),
