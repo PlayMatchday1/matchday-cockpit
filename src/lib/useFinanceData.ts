@@ -9,12 +9,13 @@ export type FinRevenue = {
   month: string;
   city: string;
   venue: string | null;
-  type: "DPP" | "Membership" | "Private Rental";
+  type: string;
   gross: number;
   fees: number;
   net: number;
-  source: "Stripe" | "Venmo" | "PROJECTION" | "Manual";
+  source: string;
   notes: string | null;
+  manual_entry: boolean;
 };
 
 export type FinExpense = {
@@ -26,6 +27,7 @@ export type FinExpense = {
   vendor: string | null;
   amount: number;
   notes: string | null;
+  manual_entry: boolean;
 };
 
 export type FinManagerPay = {
@@ -267,12 +269,13 @@ async function load(): Promise<void> {
     month: normalizeMonth(cleanText(r.month)),
     city: cleanText(r.city),
     venue: canonVenueNullable(r.venue),
-    type: cleanText(r.type) as FinRevenue["type"],
+    type: cleanText(r.type),
     gross: asNumber(r.gross),
     fees: asNumber(r.fees),
     net: asNumber(r.net),
-    source: cleanText(r.source) as FinRevenue["source"],
+    source: cleanText(r.source),
     notes: cleanTextNullable(r.notes),
+    manual_entry: Boolean(r.manual_entry ?? false),
   }));
 
   const expenses: FinExpense[] = (expRes.data ?? []).map((r) => ({
@@ -284,6 +287,7 @@ async function load(): Promise<void> {
     vendor: cleanTextNullable(r.vendor),
     amount: asNumber(r.amount),
     notes: cleanTextNullable(r.notes),
+    manual_entry: Boolean(r.manual_entry ?? false),
   }));
 
   const managerPay: FinManagerPay[] = (mpRes.data ?? []).map((r) => ({
