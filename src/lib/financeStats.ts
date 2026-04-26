@@ -17,15 +17,13 @@ const MONTH_DAYS: Record<Q2Month, number> = {
   "Jun 2026": 30,
 };
 
-function parseLocalDate(s: string | null | undefined): Date | null {
-  if (!s) return null;
-  const m = s.match(/^(\d{4})-(\d{2})-(\d{2})/);
-  if (!m) return null;
-  return new Date(Number(m[1]), Number(m[2]) - 1, Number(m[3]));
+function monthStartFor(month: Q2Month): Date {
+  return new Date(2026, MONTH_NUMBER[month], 1);
 }
 
-function startOfDay(d: Date): Date {
-  return new Date(d.getFullYear(), d.getMonth(), d.getDate());
+function isFutureMonth(month: Q2Month, now: Date): boolean {
+  const todayMonthStart = new Date(now.getFullYear(), now.getMonth(), 1);
+  return monthStartFor(month).getTime() > todayMonthStart.getTime();
 }
 
 export function getCurrentQ2Month(now: Date = new Date()): Q2Month | null {
@@ -62,80 +60,16 @@ function filterRevenueRows(
   now: Date,
 ) {
   const all = data.revenue.filter((r) => r.month === month);
-
-  let result: typeof all;
-  let branch: string;
+  const future = isFutureMonth(month, now);
 
   if (mode === "mtd") {
-    branch = "mtd";
-    const today = startOfDay(now);
-    result = all.filter((r) => {
-      if (r.source === "PROJECTION") return false;
-      const d = parseLocalDate(r.date);
-      return d !== null && d.getTime() <= today.getTime();
-    });
-  } else if (isCurrentQ2(now, month)) {
-    branch = "projection-current";
-    const today = startOfDay(now);
-    result = all.filter((r) => {
-      if (r.source === "PROJECTION") return true;
-      const d = parseLocalDate(r.date);
-      return d !== null && d.getTime() <= today.getTime();
-    });
-  } else {
-    branch = "projection-passthrough";
-    result = all;
+    if (future) return [];
+    return all.filter((r) => r.source !== "PROJECTION");
   }
-
-  if (typeof window !== "undefined") {
-    const today = startOfDay(now);
-    const droppedDetails =
-      all.length !== result.length
-        ? all
-            .filter((r) => !result.includes(r))
-            .slice(0, 10)
-            .map((r) => {
-              const parsed = parseLocalDate(r.date);
-              const native = new Date(r.date);
-              return {
-                city: r.city,
-                type: r.type,
-                source: JSON.stringify(r.source),
-                isProjection: r.source === "PROJECTION",
-                rawDate: JSON.stringify(r.date),
-                rawDateTypeof: typeof r.date,
-                parseLocalValid: parsed !== null,
-                parseLocalISO: parsed ? parsed.toISOString() : null,
-                nativeDateValid: !Number.isNaN(native.getTime()),
-                nativeDateISO: Number.isNaN(native.getTime())
-                  ? null
-                  : native.toISOString(),
-                todayISO: today.toISOString(),
-                dateLeqToday:
-                  parsed !== null
-                    ? parsed.getTime() <= today.getTime()
-                    : null,
-                net: r.net,
-              };
-            })
-        : [];
-    console.log("[FIN] filterRevenueRows", {
-      month,
-      mode,
-      branch,
-      now: now.toISOString(),
-      currentQ2: getCurrentQ2Month(now),
-      totalRevenueRows: data.revenue.length,
-      monthMatchCount: all.length,
-      afterFilterCount: result.length,
-      monthMatchCities: [...new Set(all.map((r) => r.city))],
-      resultCities: [...new Set(result.map((r) => r.city))],
-      monthMatchSources: [...new Set(all.map((r) => JSON.stringify(r.source)))],
-      droppedDetails,
-    });
-  }
-
-  return result;
+  // Projection mode: keep everything for the requested month, regardless of
+  // the row's specific date. Dates in this dataset are end-of-month buckets,
+  // not transaction dates — month membership is what makes a row "realized".
+  return all;
 }
 
 function applyDppExtrapolation<T extends { type: FinanceData["revenue"][number]["type"]; source: FinanceData["revenue"][number]["source"] }>(
@@ -210,17 +144,6 @@ export function netRevenueByCityFor(
     const value = isExtrap ? r.net * factor : r.net;
     byCity.set(r.city, (byCity.get(r.city) ?? 0) + value);
   }
-
-  if (typeof window !== "undefined") {
-    console.log("[FIN] netRevenueByCityFor", {
-      month,
-      mode,
-      factor,
-      rowCount: rows.length,
-      byCity: Object.fromEntries(byCity),
-    });
-  }
-
   return byCity;
 }
 
@@ -231,13 +154,7 @@ function filterExpenseRows(
   now: Date,
 ) {
   const all = data.expenses.filter((r) => r.month === month);
-  if (mode === "mtd") {
-    const today = startOfDay(now);
-    return all.filter((r) => {
-      const d = parseLocalDate(r.date);
-      return d !== null && d.getTime() <= today.getTime();
-    });
-  }
+  if (mode === "mtd" && isFutureMonth(month, now)) return [];
   return all;
 }
 
@@ -326,31 +243,12 @@ export function distinctExpenseCategories(
 
 export function distinctCitiesFromRevenue(data: FinanceData): string[] {
   const cities = new Set<string>();
-  let matched = 0;
-  let unmatched = 0;
-  const unmatchedMonths = new Set<string>();
   for (const r of data.revenue) {
     if ((Q2_MONTHS as readonly string[]).includes(r.month)) {
       cities.add(r.city);
-      matched++;
-    } else {
-      unmatched++;
-      unmatchedMonths.add(JSON.stringify(r.month));
     }
   }
-  const list = [...cities].sort();
-
-  if (typeof window !== "undefined") {
-    console.log("[FIN] distinctCitiesFromRevenue", {
-      matched,
-      unmatched,
-      cities: list,
-      Q2_MONTHS,
-      unmatchedMonthValues: [...unmatchedMonths],
-    });
-  }
-
-  return list;
+  return [...cities].sort();
 }
 
 // ===== Q2 hero values (always projection mode) =====

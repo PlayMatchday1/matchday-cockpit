@@ -72,10 +72,22 @@ function publish(s: State) {
 function asNumber(v: unknown): number {
   if (typeof v === "number") return v;
   if (typeof v === "string") {
-    const n = parseFloat(v);
+    const cleaned = v.replace(/^"+|"+$/g, "").trim();
+    const n = parseFloat(cleaned);
     return Number.isNaN(n) ? 0 : n;
   }
   return 0;
+}
+
+function cleanText(v: unknown): string {
+  if (v === null || v === undefined) return "";
+  return String(v).replace(/^"+|"+$/g, "").trim();
+}
+
+function cleanTextNullable(v: unknown): string | null {
+  if (v === null || v === undefined) return null;
+  const cleaned = String(v).replace(/^"+|"+$/g, "").trim();
+  return cleaned.length > 0 ? cleaned : null;
 }
 
 const MONTH_NORMALIZERS: { full: string; short: string; label: string }[] = [
@@ -130,40 +142,40 @@ async function load(): Promise<void> {
 
   const revenue: FinRevenue[] = (revRes.data ?? []).map((r) => ({
     id: r.id as number,
-    date: r.date as string,
-    month: normalizeMonth(r.month),
-    city: (r.city as string)?.trim() ?? "",
-    venue: (r.venue as string | null) ?? null,
-    type: r.type as FinRevenue["type"],
+    date: cleanText(r.date),
+    month: normalizeMonth(cleanText(r.month)),
+    city: cleanText(r.city),
+    venue: cleanTextNullable(r.venue),
+    type: cleanText(r.type) as FinRevenue["type"],
     gross: asNumber(r.gross),
     fees: asNumber(r.fees),
     net: asNumber(r.net),
-    source: r.source as FinRevenue["source"],
-    notes: (r.notes as string | null) ?? null,
+    source: cleanText(r.source) as FinRevenue["source"],
+    notes: cleanTextNullable(r.notes),
   }));
 
   const expenses: FinExpense[] = (expRes.data ?? []).map((r) => ({
     id: r.id as number,
-    date: r.date as string,
-    month: normalizeMonth(r.month),
-    city: (r.city as string)?.trim() ?? "",
-    category: r.category as string,
-    vendor: (r.vendor as string | null) ?? null,
+    date: cleanText(r.date),
+    month: normalizeMonth(cleanText(r.month)),
+    city: cleanText(r.city),
+    category: cleanText(r.category),
+    vendor: cleanTextNullable(r.vendor),
     amount: asNumber(r.amount),
-    notes: (r.notes as string | null) ?? null,
+    notes: cleanTextNullable(r.notes),
   }));
 
   const managerPay: FinManagerPay[] = (mpRes.data ?? []).map((r) => ({
     id: r.id as number,
-    city: (r.city as string)?.trim() ?? "",
-    month: normalizeMonth(r.month),
+    city: cleanText(r.city),
+    month: normalizeMonth(cleanText(r.month)),
     amount: asNumber(r.amount),
   }));
 
   const monthlyExpenses: FinMonthlyExpense[] = (meRes.data ?? []).map((r) => ({
     id: r.id as number,
-    city: (r.city as string)?.trim() ?? "",
-    month: normalizeMonth(r.month),
+    city: cleanText(r.city),
+    month: normalizeMonth(cleanText(r.month)),
     city_manager: asNumber(r.city_manager),
     marketing: asNumber(r.marketing),
     equipment: asNumber(r.equipment),
@@ -171,31 +183,7 @@ async function load(): Promise<void> {
 
   const config: Record<string, string> = {};
   for (const r of cfgRes.data ?? []) {
-    config[r.key as string] = r.value as string;
-  }
-
-  if (typeof window !== "undefined") {
-    console.log("[FIN] useFinanceData loaded", {
-      revenueCount: revenue.length,
-      expensesCount: expenses.length,
-      managerPayCount: managerPay.length,
-      monthlyExpensesCount: monthlyExpenses.length,
-      configKeys: Object.keys(config),
-      monthSet: [...new Set(revenue.map((r) => JSON.stringify(r.month)))],
-      citySet: [...new Set(revenue.map((r) => JSON.stringify(r.city)))],
-      typeSet: [...new Set(revenue.map((r) => r.type))],
-      sourceSet: [...new Set(revenue.map((r) => r.source))],
-      sampleRows: revenue
-        .slice(0, 6)
-        .map((r) => ({
-          month: r.month,
-          city: r.city,
-          type: r.type,
-          source: r.source,
-          net: r.net,
-          date: r.date,
-        })),
-    });
+    config[cleanText(r.key)] = cleanText(r.value);
   }
 
   publish({
