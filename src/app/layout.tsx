@@ -1,4 +1,4 @@
-import type { Metadata } from "next";
+import type { Metadata, Viewport } from "next";
 import { Bebas_Neue, Geist, Geist_Mono } from "next/font/google";
 import "./globals.css";
 import AuthGate from "@/components/AuthGate";
@@ -22,6 +22,21 @@ const bebas = Bebas_Neue({
 export const metadata: Metadata = {
   title: "MatchDay Cockpit",
   description: "Internal ops dashboard for MatchDay.",
+  manifest: "/site.webmanifest",
+  icons: {
+    icon: [
+      { url: "/favicon.ico", sizes: "any" },
+      { url: "/favicon.svg", type: "image/svg+xml" },
+      { url: "/favicon-96x96.png", type: "image/png", sizes: "96x96" },
+    ],
+    apple: { url: "/apple-touch-icon.png", sizes: "180x180" },
+  },
+};
+
+// theme-color belongs on the Viewport export in Next 14+; setting it
+// inside metadata is deprecated.
+export const viewport: Viewport = {
+  themeColor: "#003326",
 };
 
 export default function RootLayout({
