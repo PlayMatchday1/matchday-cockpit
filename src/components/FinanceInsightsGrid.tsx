@@ -326,7 +326,7 @@ export default function FinanceInsightsGrid({
                   }
                   subtitle={
                     computed.mhAvailable
-                      ? "Average matches played per member this month vs. matches needed to cover their membership cost. Min 5 active paying members per city."
+                      ? "Average matches played per member this month vs. matches needed to cover their membership cost."
                       : undefined
                   }
                   empty={computed.mhAvailable && computed.mhRows.length === 0}
@@ -542,48 +542,52 @@ function MembershipHealthList({ rows }: { rows: MembershipHealthRow[] }) {
     strong: "Strong",
     break_even_plus: "BE+",
     marginal: "Marginal",
-    overpaying: "Overpaying",
+    at_risk: "At Risk",
   };
+  // Pill palette per spec — inline arbitrary hexes since these don't
+  // map cleanly onto the existing brand tokens.
   const verdictCls: Record<MembershipHealthRow["verdict"], string> = {
-    strong: "bg-mint text-deep-green ring-mint/60",
-    break_even_plus: "bg-mint-soft text-deep-green ring-mint/40",
-    marginal: "bg-gold-soft text-deep-green ring-gold/60",
-    overpaying: "bg-coral-soft text-coral ring-coral/40",
+    strong: "bg-[#C8F1DD] text-[#0F6E56]",
+    break_even_plus: "bg-[#DCF5E8] text-[#1D9E75]",
+    marginal: "bg-[#FCE8C7] text-[#854F0B]",
+    at_risk: "bg-[#F7C1C1] text-[#A32D2D]",
   };
   return (
     <table className="w-full text-[11px]">
-      <thead className="text-[10px] font-bold uppercase tracking-wider text-deep-green/55">
+      <thead className="text-[10px] font-bold uppercase tracking-wider text-deep-green/50">
         <tr>
-          <th className="py-1 text-left">City</th>
-          <th className="py-1 text-right">Members</th>
-          <th className="py-1 text-right">Played</th>
-          <th className="py-1 text-right">Need</th>
-          <th className="py-1 text-center">Ratio</th>
-          <th className="py-1 text-right">Status</th>
+          <th className="py-1 pr-3 text-left">City</th>
+          <th className="px-2.5 py-1 text-right">Members</th>
+          <th className="px-2.5 py-1 text-right">Played</th>
+          <th className="px-2.5 py-1 text-right">Need</th>
+          <th className="px-2.5 py-1 text-right">Ratio</th>
+          <th className="py-1 pl-3 text-right">Status</th>
         </tr>
       </thead>
       <tbody>
         {rows.map((r) => (
           <tr key={r.city} className="border-t border-cream-line/40">
-            <td className="py-1.5 text-deep-green/85">{r.city}</td>
-            <td className="py-1.5 text-right font-mono tabular-nums text-deep-green/75">
+            <td className="py-1.5 pr-3 text-deep-green/85">{r.city}</td>
+            <td className="px-2.5 py-1.5 text-right font-mono tabular-nums text-deep-green/75">
               {r.members}
             </td>
-            <td className="py-1.5 text-right font-mono tabular-nums text-deep-green/75">
+            <td className="px-2.5 py-1.5 text-right font-mono tabular-nums text-deep-green/85">
               {r.actualMatchesPerMember.toFixed(1)}
             </td>
-            <td className="py-1.5 text-right font-mono tabular-nums text-deep-green/55">
+            <td className="px-2.5 py-1.5 text-right font-mono tabular-nums text-deep-green/55">
               {r.breakEvenMatches.toFixed(1)}
             </td>
-            <td className="py-1.5">
-              <RatioBar
-                played={r.actualMatchesPerMember}
-                need={r.breakEvenMatches}
-              />
+            <td
+              className="px-2.5 py-1.5 text-right font-mono tabular-nums text-deep-green/85"
+              title={`${r.actualMatchesPerMember.toFixed(1)} played / ${r.breakEvenMatches.toFixed(1)} need`}
+            >
+              {Number.isFinite(r.ratio) && r.ratio > 0
+                ? `${r.ratio.toFixed(1)}x`
+                : "—"}
             </td>
-            <td className="py-1.5 text-right">
+            <td className="py-1.5 pl-3 text-right">
               <span
-                className={`inline-flex items-center rounded-full px-1.5 py-0.5 text-[9px] font-bold uppercase tracking-wider ring-1 ring-inset ${verdictCls[r.verdict]}`}
+                className={`inline-flex items-center rounded-full px-2 py-0.5 text-[9px] font-bold uppercase tracking-wider ${verdictCls[r.verdict]}`}
               >
                 {verdictLabel[r.verdict]}
               </span>
@@ -592,51 +596,6 @@ function MembershipHealthList({ rows }: { rows: MembershipHealthRow[] }) {
         ))}
       </tbody>
     </table>
-  );
-}
-
-function RatioBar({ played, need }: { played: number; need: number }) {
-  // need=0 means we couldn't compute BE (no DPP data, no member matches);
-  // render an empty track so the row still aligns with the others.
-  if (!Number.isFinite(need) || need <= 0) {
-    return (
-      <div className="flex items-center gap-1.5">
-        <div className="h-1.5 w-20 rounded-full bg-deep-green/20" aria-hidden />
-        <span className="font-mono text-[10px] text-deep-green/45">—</span>
-      </div>
-    );
-  }
-  const ratio = played / need;
-  const atOrAboveBE = ratio >= 1;
-  const fillPct = atOrAboveBE ? 100 : Math.max(0, Math.round(ratio * 100));
-  const multiplierLabel =
-    atOrAboveBE && ratio >= 1.5 ? `${ratio.toFixed(1)}×` : null;
-  const pctLabel = !atOrAboveBE ? `${fillPct}%` : null;
-  return (
-    <div
-      className="flex items-center gap-1.5"
-      title={`${played.toFixed(1)} played / ${need.toFixed(1)} need = ${(ratio * 100).toFixed(0)}%`}
-    >
-      <div
-        className="relative h-1.5 w-20 overflow-hidden rounded-full bg-deep-green/20"
-        aria-label={`Played to need ratio ${(ratio * 100).toFixed(0)} percent`}
-      >
-        <div
-          className="absolute inset-y-0 left-0 rounded-full bg-mint"
-          style={{ width: `${fillPct}%` }}
-        />
-      </div>
-      {multiplierLabel && (
-        <span className="font-mono text-[10px] font-bold tabular-nums text-mint-hover">
-          {multiplierLabel}
-        </span>
-      )}
-      {pctLabel && (
-        <span className="font-mono text-[10px] tabular-nums text-deep-green/65">
-          {pctLabel}
-        </span>
-      )}
-    </div>
   );
 }
 

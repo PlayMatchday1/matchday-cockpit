@@ -939,7 +939,7 @@ export type MembershipHealthVerdict =
   | "strong"
   | "break_even_plus"
   | "marginal"
-  | "overpaying";
+  | "at_risk";
 
 export type MembershipHealthRow = {
   city: string;
@@ -1101,7 +1101,7 @@ export function buildMembershipHealthRows(
     if (ratio >= 1.5) verdict = "strong";
     else if (ratio >= 1) verdict = "break_even_plus";
     else if (ratio >= 0.7) verdict = "marginal";
-    else verdict = "overpaying";
+    else verdict = "at_risk";
 
     out.push({
       city,
@@ -1122,7 +1122,7 @@ export function buildMembershipHealthRows(
     strong: 0,
     break_even_plus: 1,
     marginal: 2,
-    overpaying: 3,
+    at_risk: 3,
   };
   return out.sort((a, b) => {
     const t = tierRank[a.verdict] - tierRank[b.verdict];
