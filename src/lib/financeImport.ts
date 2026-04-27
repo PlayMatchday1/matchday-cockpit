@@ -1,4 +1,5 @@
 import { supabase } from "./supabase";
+import { normalizeMatchName } from "./venueNormalization";
 
 export type ImportResult = { count: number; note?: string };
 
@@ -1344,6 +1345,20 @@ const STRIPE_SPEC: ColumnSpec[] = [
     ],
     required: false,
   },
+  {
+    canonical: "match_name",
+    aliases: [
+      "matchName (metadata)",
+      "metadata[matchName]",
+      "Match Name",
+    ],
+    required: false,
+  },
+  {
+    canonical: "match_id",
+    aliases: ["matchId (metadata)", "metadata[matchId]", "Match ID"],
+    required: false,
+  },
 ];
 
 const PAID_STATUSES = new Set(["paid", "succeeded"]);
@@ -1360,6 +1375,12 @@ type StripeAllocatedRow = {
   notes: string | null;
 };
 
+export type StripeVenueResolution = {
+  original: string;
+  canonical: string | null;
+  count: number;
+};
+
 export type StripePreview = {
   filename: string;
   totalRows: number;
@@ -1370,6 +1391,9 @@ export type StripePreview = {
   unmatchedEmails: string[];
   matchPayments: number;
   matchUnmatchedCityCodes: string[];
+  matchVenueResolutions: StripeVenueResolution[];
+  matchRowsWithVenue: number;
+  matchRowsWithoutVenue: number;
   earliestDate: string | null;
   latestDate: string | null;
   monthsAffected: string[];
@@ -1484,6 +1508,22 @@ export async function previewStripe(
     if (m.email) emailToCity.set(m.email.toLowerCase().trim(), m.city ?? UNMATCHED_CITY);
   }
 
+  // Build alias map from fin_venue_aliases for venue normalization on
+  // match-type rows.
+  const { data: aliasRows, error: alErr } = await supabase
+    .from("fin_venue_aliases")
+    .select("alias, canonical_venue");
+  if (alErr) throw new Error(`Alias lookup failed: ${alErr.message}`);
+  const aliasMap = new Map<string, string>();
+  for (const a of (aliasRows ?? []) as {
+    alias: string | null;
+    canonical_venue: string | null;
+  }[]) {
+    if (a.alias && a.canonical_venue) {
+      aliasMap.set(a.alias.trim(), a.canonical_venue.trim());
+    }
+  }
+
   let totalRows = 0;
   let paidRows = 0;
   let skippedRows = 0;
@@ -1497,6 +1537,11 @@ export async function previewStripe(
   let latestDate: string | null = null;
   let totalGross = 0;
   const parsed: StripeAllocatedRow[] = [];
+  // Track raw matchName → canonical venue for the dry-run preview.
+  type ResolutionAcc = { canonical: string | null; count: number };
+  const venueResolutions = new Map<string, ResolutionAcc>();
+  let matchRowsWithVenue = 0;
+  let matchRowsWithoutVenue = 0;
 
   for (const r of rows) {
     totalRows++;
@@ -1517,7 +1562,8 @@ export async function previewStripe(
     const email = emailRaw ? emailRaw.toLowerCase() : null;
     const cityIdentifier = trim(r["city_identifier"]);
     const stripeType = trim(r["stripe_type"]);
-    const venue = trim(r["venue"]);
+    const explicitVenue = trim(r["venue"]);
+    const matchName = trim(r["match_name"]);
 
     paidRows++;
     totalGross += gross;
@@ -1553,11 +1599,34 @@ export async function previewStripe(
       }
     }
 
+    // For DPP/match rows, resolve venue via the canonical normalizer:
+    // (1) explicit Venue/metadata[venue] wins if present, (2) else apply
+    // normalizeMatchName to the raw matchName (strips emoji, weekday
+    // suffixes, etc.; consults DB aliases + cross-venue + prefix rules).
+    let resolvedVenue: string | null = null;
+    if (type === "DPP") {
+      if (explicitVenue) {
+        resolvedVenue = explicitVenue;
+      } else if (matchName) {
+        const res = normalizeMatchName(matchName, aliasMap);
+        resolvedVenue = res.canonical;
+        const key = res.original;
+        const acc = venueResolutions.get(key);
+        if (acc) {
+          acc.count += 1;
+        } else {
+          venueResolutions.set(key, { canonical: res.canonical, count: 1 });
+        }
+      }
+      if (resolvedVenue) matchRowsWithVenue += 1;
+      else matchRowsWithoutVenue += 1;
+    }
+
     parsed.push({
       date,
       month: monthLabel ?? "",
       city: allocatedCity,
-      venue: venue,
+      venue: resolvedVenue,
       type,
       gross,
       fees,
@@ -1567,6 +1636,16 @@ export async function previewStripe(
   }
 
   const aggregated = aggregateStripeRows(parsed);
+
+  const matchVenueResolutions: StripeVenueResolution[] = [
+    ...venueResolutions.entries(),
+  ]
+    .map(([original, acc]) => ({
+      original,
+      canonical: acc.canonical,
+      count: acc.count,
+    }))
+    .sort((a, b) => b.count - a.count);
 
   return {
     filename,
@@ -1578,6 +1657,9 @@ export async function previewStripe(
     unmatchedEmails: [...unmatchedEmailSet].sort(),
     matchPayments,
     matchUnmatchedCityCodes: [...matchUnmatchedCityCodes].sort(),
+    matchVenueResolutions,
+    matchRowsWithVenue,
+    matchRowsWithoutVenue,
     earliestDate,
     latestDate,
     monthsAffected: [...monthSet].sort(),
