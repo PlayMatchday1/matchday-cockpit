@@ -1,7 +1,7 @@
 "use client";
 
 import Link from "next/link";
-import PageHeader from "@/components/PageHeader";
+import CitiesLegend from "@/components/CitiesLegend";
 import { CityHealthPill } from "@/components/StatusPill";
 import MiniBarSparkline from "@/components/MiniBarSparkline";
 import TotalsBarChart from "@/components/TotalsBarChart";
@@ -67,10 +67,15 @@ function CitiesIndexContent() {
 
   return (
     <>
-      <PageHeader
-        title="Cities"
-        subtitle="Per-market venues, weekly matches, and goals."
-      />
+      <div className="mb-6">
+        <h1 className="flex items-center gap-2 text-3xl font-extrabold tracking-tight text-deep-green">
+          Cities
+          <CitiesLegend />
+        </h1>
+        <p className="mt-1 text-sm text-deep-green/70">
+          Per-market venues, weekly matches, and goals.
+        </p>
+      </div>
 
       {loading ? (
         <div className="rounded-2xl border-[1.5px] border-cream-line bg-white p-8 text-sm text-deep-green/60 shadow-md shadow-deep-green/10">

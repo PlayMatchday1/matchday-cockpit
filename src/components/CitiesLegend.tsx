@@ -1,0 +1,100 @@
+"use client";
+
+import { useEffect, useRef, useState } from "react";
+
+// Small (i) info button + popover that explains the city tile status
+// buckets and Cancel % metric. Keyword tooltip is "click-pinnable":
+// hover opens it on desktop, click pins it open (so the user can read
+// it without holding the cursor in place), click again or click-outside
+// closes. Click-and-hold is the only sensible mobile interaction since
+// there's no hover, and the same toggle handles both.
+export default function CitiesLegend() {
+  const [pinned, setPinned] = useState(false);
+  const ref = useRef<HTMLDivElement>(null);
+
+  useEffect(() => {
+    if (!pinned) return;
+    function onPointerDown(e: PointerEvent) {
+      if (!ref.current) return;
+      if (!ref.current.contains(e.target as Node)) setPinned(false);
+    }
+    function onKey(e: KeyboardEvent) {
+      if (e.key === "Escape") setPinned(false);
+    }
+    document.addEventListener("pointerdown", onPointerDown);
+    document.addEventListener("keydown", onKey);
+    return () => {
+      document.removeEventListener("pointerdown", onPointerDown);
+      document.removeEventListener("keydown", onKey);
+    };
+  }, [pinned]);
+
+  return (
+    <div ref={ref} className="group relative inline-block align-middle">
+      <button
+        type="button"
+        onClick={() => setPinned((v) => !v)}
+        aria-label="What do these statuses mean?"
+        aria-expanded={pinned}
+        className="inline-flex h-[14px] w-[14px] items-center justify-center rounded-full bg-deep-green/15 text-[10px] font-bold leading-none text-deep-green/70 transition hover:bg-deep-green/25 hover:text-deep-green"
+      >
+        i
+      </button>
+      <div
+        role="tooltip"
+        className={`absolute left-1/2 top-[calc(100%+8px)] z-50 w-[280px] -translate-x-1/2 rounded-lg border border-cream-line bg-white p-3.5 text-xs leading-snug shadow-lg shadow-deep-green/15 transition-opacity ${
+          pinned
+            ? "opacity-100"
+            : "pointer-events-none opacity-0 group-hover:pointer-events-auto group-hover:opacity-100"
+        }`}
+      >
+        <div className="font-bold text-deep-green">
+          Status reflects match volume trend
+        </div>
+        <ul className="mt-2 space-y-1">
+          <LegendRow
+            tone="text-mint-hover"
+            label="Growing"
+            description="Recent 4 weeks ≥ +10% vs prior"
+          />
+          <LegendRow
+            tone="text-deep-green/65"
+            label="Stable"
+            description="Within ±10% of prior"
+          />
+          <LegendRow
+            tone="text-coral"
+            label="Declining"
+            description="Recent 4 weeks ≤ −10% vs prior"
+          />
+          <LegendRow
+            tone="text-blue-info"
+            label="Just launched"
+            description="< 8 matches in recent 4 weeks"
+          />
+        </ul>
+        <div className="mt-3 border-t border-cream-line/60 pt-2 text-deep-green/65">
+          <span className="font-bold text-deep-green">Cancel %</span> is matches
+          that didn&apos;t run / matches scheduled, last 8 weeks.
+        </div>
+      </div>
+    </div>
+  );
+}
+
+function LegendRow({
+  tone,
+  label,
+  description,
+}: {
+  tone: string;
+  label: string;
+  description: string;
+}) {
+  return (
+    <li className="flex items-baseline gap-2">
+      <span className={`shrink-0 font-bold ${tone}`}>{label}</span>
+      <span className="text-deep-green/65">{description}</span>
+    </li>
+  );
+}
