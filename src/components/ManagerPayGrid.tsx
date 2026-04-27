@@ -22,6 +22,41 @@ const CITIES = [
   "El Paso",
 ] as const;
 
+// Q2 2026 seed CSV. Used by the "Seed Q2 2026 from CSV" button below — it
+// DELETEs existing Match Manager Pay rows for Apr/May/Jun 2026 then bulk-
+// inserts these 104 rows. Idempotent: safe to re-run whenever the CSV is
+// the canonical source.
+const Q2_2026_SEED_AMOUNTS: Record<string, number[]> = {
+  Austin: [980, 870, 910, 910, 900, 980, 870, 910, 910, 980, 870, 910, 910],
+  Dallas: [130, 110, 170, 170, 170, 130, 110, 170, 170, 130, 110, 170, 170],
+  Houston: [440, 380, 390, 370, 370, 440, 380, 390, 370, 440, 380, 390, 370],
+  "San Antonio": [
+    340, 340, 320, 320, 280, 340, 340, 320, 320, 340, 340, 320, 320,
+  ],
+  Atlanta: [60, 60, 80, 120, 120, 60, 60, 80, 120, 60, 60, 80, 120],
+  "St. Louis": [120, 120, 100, 70, 120, 120, 120, 100, 70, 120, 120, 100, 70],
+  OKC: [120, 120, 120, 120, 40, 120, 120, 120, 120, 120, 120, 120, 120],
+  "El Paso": [0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0],
+};
+
+const Q2_2026_THURSDAYS_ISO = [
+  "2026-04-02",
+  "2026-04-09",
+  "2026-04-16",
+  "2026-04-23",
+  "2026-04-30",
+  "2026-05-07",
+  "2026-05-14",
+  "2026-05-21",
+  "2026-05-28",
+  "2026-06-04",
+  "2026-06-11",
+  "2026-06-18",
+  "2026-06-25",
+];
+
+const Q2_2026_MONTHS = ["Apr 2026", "May 2026", "Jun 2026"];
+
 const QUARTERS = ["Q1 2026", "Q2 2026", "Q3 2026"] as const;
 type Quarter = (typeof QUARTERS)[number];
 
@@ -97,6 +132,11 @@ export default function ManagerPayGrid() {
 
   const [quarter, setQuarter] = useState<Quarter>("Q2 2026");
   const [editing, setEditing] = useState<Map<string, CellState>>(new Map());
+  const [seedingState, setSeedingState] = useState<{
+    running: boolean;
+    message: string | null;
+    error: string | null;
+  }>({ running: false, message: null, error: null });
 
   const thursdays = useMemo(() => generateThursdays(quarter), [quarter]);
 
@@ -262,6 +302,79 @@ export default function ManagerPayGrid() {
     });
   }
 
+  async function seedQ2() {
+    if (
+      !window.confirm(
+        "Replace ALL Match Manager Pay rows for Apr–Jun 2026 with the CSV seed?\n\n" +
+          "This deletes any existing Q2 2026 Match Manager Pay rows in fin_expenses, " +
+          "then inserts 104 weekly rows (8 cities × 13 Thursdays).\n\n" +
+          "Run once. Re-running is safe — it always overwrites Q2.",
+      )
+    ) {
+      return;
+    }
+    setSeedingState({ running: true, message: "Clearing Q2 rows…", error: null });
+    try {
+      const { error: delErr } = await supabase
+        .from("fin_expenses")
+        .delete()
+        .eq("category", CATEGORY)
+        .in("month", Q2_2026_MONTHS);
+      if (delErr) throw new Error(`Delete failed: ${delErr.message}`);
+
+      const payload: Array<{
+        date: string;
+        month: string;
+        city: string;
+        category: string;
+        vendor: string;
+        amount: number;
+        notes: string;
+        manual_entry: boolean;
+      }> = [];
+      for (const [city, amounts] of Object.entries(Q2_2026_SEED_AMOUNTS)) {
+        for (let i = 0; i < Q2_2026_THURSDAYS_ISO.length; i++) {
+          const date = Q2_2026_THURSDAYS_ISO[i];
+          const monthIdx = parseInt(date.slice(5, 7), 10) - 1;
+          const monthLabel = `${MONTH_LABELS[monthIdx]} 2026`;
+          payload.push({
+            date,
+            month: monthLabel,
+            city,
+            category: CATEGORY,
+            vendor: VENDOR,
+            amount: amounts[i],
+            notes: `Weekly Thursday cash-out — week of ${date}`,
+            manual_entry: true,
+          });
+        }
+      }
+
+      setSeedingState({
+        running: true,
+        message: `Inserting ${payload.length} rows…`,
+        error: null,
+      });
+      const { error: insErr } = await supabase
+        .from("fin_expenses")
+        .insert(payload);
+      if (insErr) throw new Error(`Insert failed: ${insErr.message}`);
+
+      await refetchFinanceData();
+      setSeedingState({
+        running: false,
+        message: `✓ Seeded ${payload.length} rows. Verify Apr totals: Austin 4570, Houston 1950, Dallas 750, San Antonio 1600, Atlanta 440, St. Louis 530, OKC 520, El Paso 0.`,
+        error: null,
+      });
+    } catch (e) {
+      setSeedingState({
+        running: false,
+        message: null,
+        error: e instanceof Error ? e.message : String(e),
+      });
+    }
+  }
+
   // Totals — recompute from getDisplayValue so live edits show before save.
   const totals = useMemo(() => {
     const cityMonth = new Map<string, Map<string, number>>(); // city → month → sum
@@ -314,23 +427,51 @@ export default function ManagerPayGrid() {
             immediately and propagate to the city cards + Cash Flow.
           </p>
         </div>
-        <label className="block">
-          <div className="mb-1 text-[10px] font-bold uppercase tracking-[0.18em] text-deep-green/55">
-            Quarter
-          </div>
-          <select
-            value={quarter}
-            onChange={(e) => setQuarter(e.target.value as Quarter)}
-            className="rounded-md border border-cream-line bg-cream-soft px-3 py-1.5 text-sm font-bold text-deep-green focus:border-deep-green focus:outline-none"
+        <div className="flex flex-wrap items-end gap-3">
+          <label className="block">
+            <div className="mb-1 text-[10px] font-bold uppercase tracking-[0.18em] text-deep-green/55">
+              Quarter
+            </div>
+            <select
+              value={quarter}
+              onChange={(e) => setQuarter(e.target.value as Quarter)}
+              className="rounded-md border border-cream-line bg-cream-soft px-3 py-1.5 text-sm font-bold text-deep-green focus:border-deep-green focus:outline-none"
+            >
+              {QUARTERS.map((q) => (
+                <option key={q} value={q}>
+                  {q}
+                </option>
+              ))}
+            </select>
+          </label>
+          <button
+            type="button"
+            onClick={seedQ2}
+            disabled={seedingState.running}
+            className="rounded-full border border-cream-line bg-white px-4 py-2 text-xs font-bold text-deep-green hover:bg-cream-soft disabled:opacity-50"
+            title="One-time: clears Q2 2026 Match Manager Pay rows and inserts the CSV seed (104 rows)."
           >
-            {QUARTERS.map((q) => (
-              <option key={q} value={q}>
-                {q}
-              </option>
-            ))}
-          </select>
-        </label>
+            {seedingState.running ? "Seeding…" : "Seed Q2 2026 from CSV"}
+          </button>
+        </div>
       </div>
+
+      {seedingState.message && !seedingState.error && (
+        <div
+          className={`mb-4 rounded-md border px-3 py-2 text-xs ${
+            seedingState.running
+              ? "border-cream-line bg-cream-soft text-deep-green"
+              : "border-mint/40 bg-mint-soft text-deep-green"
+          }`}
+        >
+          {seedingState.message}
+        </div>
+      )}
+      {seedingState.error && (
+        <div className="mb-4 rounded-md border border-coral/40 bg-coral-soft/40 px-3 py-2 text-xs text-coral">
+          {seedingState.error}
+        </div>
+      )}
 
       {loading && !data ? (
         <div className="rounded-2xl border-[1.5px] border-cream-line bg-white p-8 text-sm text-deep-green/60 shadow-md shadow-deep-green/10">
@@ -348,7 +489,7 @@ export default function ManagerPayGrid() {
                   {thursdays.map((t) => (
                     <th
                       key={t.date}
-                      className="whitespace-nowrap px-2 py-2 text-center text-[10px] font-bold uppercase tracking-wider"
+                      className="min-w-[96px] whitespace-nowrap px-3 py-2.5 text-center text-[11px] font-bold uppercase tracking-wider"
                     >
                       {t.label}
                     </th>
@@ -380,7 +521,7 @@ export default function ManagerPayGrid() {
                       const state = editing.get(key) ?? null;
                       const stored = getStored(city, t.date);
                       return (
-                        <td key={t.date} className="px-1 py-1">
+                        <td key={t.date} className="min-w-[96px] px-1.5 py-1.5">
                           <CellInput
                             stored={stored}
                             state={state}
@@ -464,7 +605,7 @@ function CellInput({
 
   return (
     <div
-      className={`relative inline-flex w-full items-center rounded ${
+      className={`relative flex w-full items-center rounded-md ${
         showError
           ? "ring-2 ring-coral"
           : isZero
@@ -472,7 +613,7 @@ function CellInput({
             : "ring-1 ring-cream-line"
       } ${showFlash ? "flash-mint" : ""}`}
     >
-      <span className="px-1 text-[10px] text-deep-green/50">$</span>
+      <span className="pl-2 pr-0.5 text-xs text-deep-green/50">$</span>
       <input
         type="number"
         min="0"
@@ -491,15 +632,15 @@ function CellInput({
           }
         }}
         disabled={showSaving}
-        className="w-full bg-transparent py-1 pr-1 text-right font-mono text-xs tabular-nums text-deep-green focus:outline-none disabled:opacity-60"
+        className="w-full bg-transparent py-2 pr-6 text-right font-mono text-sm tabular-nums text-deep-green focus:outline-none disabled:opacity-60"
       />
       {showSaving && (
-        <span className="absolute right-1 top-1/2 inline-block h-2 w-2 -translate-y-1/2 animate-pulse rounded-full bg-deep-green/50" />
+        <span className="absolute right-2 top-1/2 inline-block h-2 w-2 -translate-y-1/2 animate-pulse rounded-full bg-deep-green/50" />
       )}
       {showError && (
         <span
           title={state?.error ?? ""}
-          className="absolute right-1 top-1/2 -translate-y-1/2 text-[9px] font-bold text-coral"
+          className="absolute right-2 top-1/2 -translate-y-1/2 text-[10px] font-bold text-coral"
         >
           !
         </span>
