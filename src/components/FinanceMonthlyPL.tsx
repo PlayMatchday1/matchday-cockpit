@@ -75,18 +75,12 @@ export default function FinanceMonthlyPL({
       perMonth.reduce((s, n) => s + n, 0);
 
     const cityRows: Row[] = cities.map((city) => {
-      // The "Company-wide" bucket holds unmatched Venmo membership stubs that
-      // can't be tied to a specific city. It is not a projection source —
-      // always render the realized amount, regardless of mode toggle.
-      const isUnmatched = city === "Company-wide";
-      const rowMode: Mode = isUnmatched ? "mtd" : mode;
-      const label = isUnmatched ? "Corporate / Unmatched" : city;
       const perMonth = Q2_MONTHS.map(
-        (m) => netRevenueByCityFor(data, m, rowMode).get(city) ?? 0,
+        (m) => netRevenueByCityFor(data, m, mode).get(city) ?? 0,
       );
       return {
         kind: "data",
-        label,
+        label: city,
         values: [...perMonth, sumAcross(perMonth)],
       };
     });

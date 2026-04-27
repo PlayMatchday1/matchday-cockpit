@@ -143,13 +143,20 @@ export function netRevenueByCityFor(
   mode: Mode,
   now: Date = new Date(),
 ): Map<string, number> {
-  const rows = filterRevenueRows(data, month, mode, now);
+  // Exclude PROJECTION rows from the per-city breakdown — they're topline
+  // placeholder estimates not attributable to a single market. The company-
+  // wide totals (netRevenueFor / grossRevenueFor) still pick them up via
+  // filterRevenueRows for future months, so the totals row reflects them
+  // even when the per-city columns are blank.
+  const rows = filterRevenueRows(data, month, mode, now).filter(
+    (r) => r.source !== "PROJECTION",
+  );
   const factor =
     mode === "projection" ? dppExtrapolationFactor(month, now) : 1;
 
   const byCity = new Map<string, number>();
   for (const r of rows) {
-    const isExtrap = factor !== 1 && r.source !== "PROJECTION" && r.type === "DPP";
+    const isExtrap = factor !== 1 && r.type === "DPP";
     const value = isExtrap ? r.net * factor : r.net;
     byCity.set(r.city, (byCity.get(r.city) ?? 0) + value);
   }
@@ -284,8 +291,12 @@ export function distinctExpenseCategories(
 }
 
 export function distinctCitiesFromRevenue(data: FinanceData): string[] {
+  // PROJECTION rows are topline placeholders not attributable to a market;
+  // they're rendered through the company-wide totals row, not as a per-city
+  // line, so we ignore them when building the per-city list.
   const cities = new Set<string>();
   for (const r of data.revenue) {
+    if (r.source === "PROJECTION") continue;
     if ((Q2_MONTHS as readonly string[]).includes(r.month)) {
       cities.add(r.city);
     }
