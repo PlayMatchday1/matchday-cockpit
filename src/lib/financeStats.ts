@@ -1115,5 +1115,18 @@ export function buildMembershipHealthRows(
     });
   }
 
-  return out.sort((a, b) => b.ratio - a.ratio);
+  // Sort by tier (Strong → BE+ → Marginal → Overpaying), then by member
+  // count desc within tier so the biggest cohorts surface first inside
+  // each band.
+  const tierRank: Record<MembershipHealthVerdict, number> = {
+    strong: 0,
+    break_even_plus: 1,
+    marginal: 2,
+    overpaying: 3,
+  };
+  return out.sort((a, b) => {
+    const t = tierRank[a.verdict] - tierRank[b.verdict];
+    if (t !== 0) return t;
+    return b.members - a.members;
+  });
 }
