@@ -11,6 +11,8 @@ import {
   distinctExpenseCategories,
   feesFor,
   grossRevenueFor,
+  isCurrentQ2Month,
+  isFutureMonth,
   managerPayFor,
   monthlyExpenseCategoryFor,
   netPLFor,
@@ -24,6 +26,7 @@ import {
 import { venueRentalLineFor } from "@/lib/financeCosts";
 
 const VENUE_RENTAL_LABEL_RX = /^venue\s*rental$/i;
+const DELETED_ACCOUNT_CITY = "Deleted Account Revenue";
 
 function fmt(n: number): string {
   const r = Math.round(n);
@@ -31,10 +34,25 @@ function fmt(n: number): string {
   return r.toLocaleString("en-US");
 }
 
-function moneyClass(n: number, bold = false): string {
-  const base = bold ? "font-bold" : "";
-  if (Math.round(n) < 0) return `${base} text-coral`;
-  return `${base} text-deep-green`;
+// Color treatment matches the per-city P&L cards: revenue is mint, costs/
+// deductions are coral, signed totals (Net P&L, Ending Cash) flip color
+// with sign, and zero-or-dash entries fall back to the muted deep-green
+// the dashboard uses for inactive cells.
+type Tone = "revenue" | "expense" | "signed" | "neutral";
+
+function toneClass(n: number, tone: Tone, bold = false): string {
+  const weight = bold ? "font-bold" : "";
+  if (Math.round(n) === 0) return `${weight} text-deep-green/45`;
+  switch (tone) {
+    case "revenue":
+      return `${weight} ${n < 0 ? "text-coral" : "text-mint-hover"}`;
+    case "expense":
+      return `${weight} ${n < 0 ? "text-mint-hover" : "text-coral"}`;
+    case "signed":
+      return `${weight} ${n < 0 ? "text-coral" : "text-mint-hover"}`;
+    case "neutral":
+      return `${weight} text-deep-green`;
+  }
 }
 
 type RowKind =
@@ -52,7 +70,17 @@ type Row = {
   kind: RowKind;
   label?: string;
   values?: number[];
+  tone?: Tone;
 };
+
+// Forces "Deleted Account Revenue" to the bottom of the city list so it
+// reads as a separate bucket below the real markets, not as just another
+// city sandwiched alphabetically between Austin and Dallas.
+function sortCitiesForDisplay(cities: string[]): string[] {
+  const realCities = cities.filter((c) => c !== DELETED_ACCOUNT_CITY).sort();
+  const hasDeleted = cities.includes(DELETED_ACCOUNT_CITY);
+  return hasDeleted ? [...realCities, DELETED_ACCOUNT_CITY] : realCities;
+}
 
 export default function FinanceMonthlyPL({
   collapsed = false,
@@ -67,7 +95,7 @@ export default function FinanceMonthlyPL({
   const rows = useMemo<Row[]>(() => {
     if (!data) return [];
 
-    const cities = distinctCitiesFromRevenue(data);
+    const cities = sortCitiesForDisplay(distinctCitiesFromRevenue(data));
     const otherCats = distinctExpenseCategories(data, mode);
     const start = startingCash(data);
 
@@ -81,6 +109,7 @@ export default function FinanceMonthlyPL({
       return {
         kind: "data",
         label: city,
+        tone: "revenue",
         values: [...perMonth, sumAcross(perMonth)],
       };
     });
@@ -114,6 +143,7 @@ export default function FinanceMonthlyPL({
       return {
         kind: "data",
         label: cat,
+        tone: "expense",
         values: [...perMonth, sumAcross(perMonth)],
       };
     });
@@ -136,16 +166,19 @@ export default function FinanceMonthlyPL({
       {
         kind: "memo",
         label: "Gross Revenue",
+        tone: "revenue",
         values: [...grossPerMonth, sumAcross(grossPerMonth)],
       },
       {
         kind: "memo",
         label: "Stripe Fees",
+        tone: "expense",
         values: [...feesPerMonth, sumAcross(feesPerMonth)],
       },
       {
         kind: "subtotal",
         label: "Net Revenue",
+        tone: "revenue",
         values: [...netRevPerMonth, sumAcross(netRevPerMonth)],
       },
       { kind: "divider" },
@@ -153,52 +186,87 @@ export default function FinanceMonthlyPL({
       {
         kind: "data",
         label: "Match Manager Pay",
+        tone: "expense",
         values: [...matchPayPerMonth, sumAcross(matchPayPerMonth)],
       },
       {
         kind: "data",
         label: "Venue Costs (per-match)",
+        tone: "expense",
         values: [...perMatchPerMonth, sumAcross(perMatchPerMonth)],
       },
       {
         kind: "data",
         label: "City Manager",
+        tone: "expense",
         values: [...cityMgrPerMonth, sumAcross(cityMgrPerMonth)],
       },
       {
         kind: "data",
         label: "Marketing",
+        tone: "expense",
         values: [...marketingPerMonth, sumAcross(marketingPerMonth)],
       },
       {
         kind: "data",
         label: "Equipment",
+        tone: "expense",
         values: [...equipmentPerMonth, sumAcross(equipmentPerMonth)],
       },
       ...otherCatRows,
       {
         kind: "totalExpenses",
         label: "Total Expenses",
+        tone: "expense",
         values: [...totalExpPerMonth, sumAcross(totalExpPerMonth)],
       },
       { kind: "divider" },
       {
         kind: "startingCash",
         label: "Starting Cash",
+        tone: "neutral",
         values: [start, 0, 0, start],
       },
       {
         kind: "netPL",
         label: "Net P&L",
+        tone: "signed",
         values: [...netPLPerMonth, sumAcross(netPLPerMonth)],
       },
       {
         kind: "endingCash",
         label: "Ending Cash",
+        tone: "signed",
         values: [...endingCash, endingCash[endingCash.length - 1]],
       },
     ];
   }, [data, mode]);
+
+  // Per-column projection markers — used to (a) tag every cell in a fully-
+  // projected month with " (proj)" and (b) tint that column's background.
+  // Q2 Total (index 3) is mixed by definition in projection mode (Apr
+  // realized + extrapolation; May/Jun pure projection) so it isn't tagged
+  // here.
+  const now = useMemo(() => new Date(), []);
+  const projectionFlags = useMemo(
+    () =>
+      Q2_MONTHS.map((m) => ({
+        month: m,
+        isFuture: isFutureMonth(m, now),
+        isCurrent: isCurrentQ2Month(m, now),
+      })),
+    [now],
+  );
+  const colIsProjected = (colIdx: number): boolean => {
+    if (mode !== "projection") return false;
+    if (colIdx >= Q2_MONTHS.length) return false; // Q2 Total
+    return projectionFlags[colIdx].isFuture;
+  };
+  const colIsMixed = (colIdx: number): boolean => {
+    if (mode !== "projection") return false;
+    if (colIdx >= Q2_MONTHS.length) return false;
+    return projectionFlags[colIdx].isCurrent;
+  };
 
   if (loading) {
     return (
@@ -249,11 +317,16 @@ export default function FinanceMonthlyPL({
             <h2 className="font-display text-3xl uppercase tracking-tight text-deep-green md:text-4xl">
               Monthly Cash Flow
             </h2>
-            <p className="text-xs text-deep-green/60">
-              {mode === "mtd"
-                ? "Realized rows only · through today"
-                : "Current month DPP extrapolated · future months use projections"}
-            </p>
+            {mode === "mtd" ? (
+              <p className="text-xs text-deep-green/60">
+                Realized rows only · through today
+              </p>
+            ) : (
+              <p className="mt-0.5 inline-flex items-center gap-1.5 rounded-md bg-gold-soft px-2 py-0.5 text-xs font-bold text-deep-green ring-1 ring-inset ring-gold/40">
+                Projection mode · current month DPP extrapolated · future
+                months use projections
+              </p>
+            )}
           </div>
         </div>
         <div onClick={(e) => e.stopPropagation()}>
@@ -267,15 +340,43 @@ export default function FinanceMonthlyPL({
             <thead>
               <tr className="border-y border-cream-line bg-cream-soft text-[10px] font-bold uppercase tracking-wider text-deep-green/60">
                 <th className="px-5 py-2.5 text-left">Item</th>
-                <th className="px-3 py-2.5 text-right">Apr</th>
-                <th className="px-3 py-2.5 text-right">May</th>
-                <th className="px-3 py-2.5 text-right">Jun</th>
+                {Q2_MONTHS.map((m, idx) => {
+                  const short = m.slice(0, 3);
+                  const projected = colIsProjected(idx);
+                  const mixed = colIsMixed(idx);
+                  return (
+                    <th
+                      key={m}
+                      className={`px-3 py-2.5 text-right ${
+                        projected
+                          ? "bg-gold-soft/60 text-deep-green/75"
+                          : ""
+                      }`}
+                    >
+                      {short}
+                      {mixed && (
+                        <span className="ml-1 font-normal normal-case text-deep-green/50">
+                          (mixed)
+                        </span>
+                      )}
+                      {projected && (
+                        <span className="ml-1 font-normal normal-case text-deep-green/55">
+                          (proj)
+                        </span>
+                      )}
+                    </th>
+                  );
+                })}
                 <th className="px-3 py-2.5 text-right">Q2 Total</th>
               </tr>
             </thead>
             <tbody>
               {rows.map((row, i) => (
-                <PLRow key={i} row={row} />
+                <PLRow
+                  key={i}
+                  row={row}
+                  colIsProjected={colIsProjected}
+                />
               ))}
             </tbody>
           </table>
@@ -320,7 +421,25 @@ function ModeToggle({
   );
 }
 
-function PLRow({ row }: { row: Row }) {
+type CellMeta = { projected: boolean };
+function ProjTag() {
+  return (
+    <span className="ml-1 text-[10px] font-normal text-deep-green/45">
+      (proj)
+    </span>
+  );
+}
+function colTint(meta: CellMeta): string {
+  return meta.projected ? "bg-gold-soft/40" : "";
+}
+
+function PLRow({
+  row,
+  colIsProjected,
+}: {
+  row: Row;
+  colIsProjected: (colIdx: number) => boolean;
+}) {
   if (row.kind === "section") {
     return (
       <tr className="border-t border-cream-line/60">
@@ -343,21 +462,26 @@ function PLRow({ row }: { row: Row }) {
   }
 
   const values = row.values ?? [];
+  const tone: Tone = row.tone ?? "neutral";
 
   if (row.kind === "memo") {
     return (
       <tr>
-        <td className="px-5 py-1.5 pl-9 text-xs italic text-deep-green/55">
+        <td className="px-5 py-1.5 pl-9 text-xs italic text-deep-green/65">
           {row.label}
         </td>
-        {values.map((v, i) => (
-          <td
-            key={i}
-            className="px-3 py-1.5 text-right text-xs italic tabular-nums text-deep-green/55"
-          >
-            {fmt(v)}
-          </td>
-        ))}
+        {values.map((v, i) => {
+          const meta: CellMeta = { projected: colIsProjected(i) };
+          return (
+            <td
+              key={i}
+              className={`px-3 py-1.5 text-right text-xs italic tabular-nums ${toneClass(v, tone)} ${colTint(meta)}`}
+            >
+              {fmt(v)}
+              {meta.projected && Math.round(v) !== 0 && <ProjTag />}
+            </td>
+          );
+        })}
       </tr>
     );
   }
@@ -368,14 +492,18 @@ function PLRow({ row }: { row: Row }) {
         <td className="px-5 py-2 text-sm font-bold text-deep-green">
           {row.label}
         </td>
-        {values.map((v, i) => (
-          <td
-            key={i}
-            className={`px-3 py-2 text-right tabular-nums ${moneyClass(v, true)}`}
-          >
-            {fmt(v)}
-          </td>
-        ))}
+        {values.map((v, i) => {
+          const meta: CellMeta = { projected: colIsProjected(i) };
+          return (
+            <td
+              key={i}
+              className={`px-3 py-2 text-right tabular-nums ${toneClass(v, tone, true)} ${colTint(meta)}`}
+            >
+              {fmt(v)}
+              {meta.projected && Math.round(v) !== 0 && <ProjTag />}
+            </td>
+          );
+        })}
       </tr>
     );
   }
@@ -384,14 +512,18 @@ function PLRow({ row }: { row: Row }) {
     return (
       <tr className="border-t border-cream-line/40 bg-coral-soft/30">
         <td className="px-5 py-2 text-sm font-bold text-coral">{row.label}</td>
-        {values.map((v, i) => (
-          <td
-            key={i}
-            className="px-3 py-2 text-right font-bold tabular-nums text-coral"
-          >
-            {fmt(v)}
-          </td>
-        ))}
+        {values.map((v, i) => {
+          const meta: CellMeta = { projected: colIsProjected(i) };
+          return (
+            <td
+              key={i}
+              className={`px-3 py-2 text-right font-bold tabular-nums ${toneClass(v, tone, true)} ${colTint(meta)}`}
+            >
+              {fmt(v)}
+              {meta.projected && Math.round(v) !== 0 && <ProjTag />}
+            </td>
+          );
+        })}
       </tr>
     );
   }
@@ -402,14 +534,17 @@ function PLRow({ row }: { row: Row }) {
         <td className="px-5 py-2 text-sm font-bold text-deep-green/70">
           {row.label}
         </td>
-        {values.map((v, i) => (
-          <td
-            key={i}
-            className="px-3 py-2 text-right font-semibold tabular-nums text-deep-green/70"
-          >
-            {v === 0 ? "" : `$${fmt(v)}`}
-          </td>
-        ))}
+        {values.map((v, i) => {
+          const meta: CellMeta = { projected: colIsProjected(i) };
+          return (
+            <td
+              key={i}
+              className={`px-3 py-2 text-right font-semibold tabular-nums text-deep-green/70 ${colTint(meta)}`}
+            >
+              {v === 0 ? "" : `$${fmt(v)}`}
+            </td>
+          );
+        })}
       </tr>
     );
   }
@@ -420,14 +555,18 @@ function PLRow({ row }: { row: Row }) {
         <td className="px-5 py-2 text-sm font-bold text-deep-green">
           {row.label}
         </td>
-        {values.map((v, i) => (
-          <td
-            key={i}
-            className={`px-3 py-2 text-right tabular-nums ${moneyClass(v, true)}`}
-          >
-            {fmt(v)}
-          </td>
-        ))}
+        {values.map((v, i) => {
+          const meta: CellMeta = { projected: colIsProjected(i) };
+          return (
+            <td
+              key={i}
+              className={`px-3 py-2 text-right tabular-nums ${toneClass(v, tone, true)} ${colTint(meta)}`}
+            >
+              {fmt(v)}
+              {meta.projected && Math.round(v) !== 0 && <ProjTag />}
+            </td>
+          );
+        })}
       </tr>
     );
   }
@@ -438,14 +577,18 @@ function PLRow({ row }: { row: Row }) {
         <td className="px-5 py-2.5 text-sm font-bold text-deep-green">
           {row.label}
         </td>
-        {values.map((v, i) => (
-          <td
-            key={i}
-            className="px-3 py-2.5 text-right font-bold tabular-nums text-deep-green"
-          >
-            ${fmt(v)}
-          </td>
-        ))}
+        {values.map((v, i) => {
+          const meta: CellMeta = { projected: colIsProjected(i) };
+          return (
+            <td
+              key={i}
+              className={`px-3 py-2.5 text-right font-bold tabular-nums ${toneClass(v, tone, true)} ${colTint(meta)}`}
+            >
+              ${fmt(v)}
+              {meta.projected && <ProjTag />}
+            </td>
+          );
+        })}
       </tr>
     );
   }
@@ -456,14 +599,18 @@ function PLRow({ row }: { row: Row }) {
       <td className="px-5 py-1.5 pl-9 text-sm text-deep-green/85">
         {row.label}
       </td>
-      {values.map((v, i) => (
-        <td
-          key={i}
-          className={`px-3 py-1.5 text-right tabular-nums ${moneyClass(v)}`}
-        >
-          {fmt(v)}
-        </td>
-      ))}
+      {values.map((v, i) => {
+        const meta: CellMeta = { projected: colIsProjected(i) };
+        return (
+          <td
+            key={i}
+            className={`px-3 py-1.5 text-right tabular-nums ${toneClass(v, tone)} ${colTint(meta)}`}
+          >
+            {fmt(v)}
+            {meta.projected && Math.round(v) !== 0 && <ProjTag />}
+          </td>
+        );
+      })}
     </tr>
   );
 }

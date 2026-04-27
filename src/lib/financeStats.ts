@@ -27,7 +27,7 @@ function monthStartFor(month: Q2Month): Date {
   return new Date(2026, MONTH_NUMBER[month], 1);
 }
 
-function isFutureMonth(month: Q2Month, now: Date): boolean {
+export function isFutureMonth(month: Q2Month, now: Date = new Date()): boolean {
   const todayMonthStart = new Date(now.getFullYear(), now.getMonth(), 1);
   return monthStartFor(month).getTime() > todayMonthStart.getTime();
 }
@@ -48,8 +48,11 @@ export function startingCash(data: FinanceData): number {
   return Number.isNaN(parsed) ? 80000 : parsed;
 }
 
-function isCurrentQ2(now: Date, month: Q2Month): boolean {
+export function isCurrentQ2Month(month: Q2Month, now: Date = new Date()): boolean {
   return month === getCurrentQ2Month(now);
+}
+function isCurrentQ2(now: Date, month: Q2Month): boolean {
+  return isCurrentQ2Month(month, now);
 }
 
 function dppExtrapolationFactor(month: Q2Month, now: Date): number {
