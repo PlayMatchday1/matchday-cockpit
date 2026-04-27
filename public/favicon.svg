@@ -1,6 +1,7 @@
+<?xml version="1.0" encoding="UTF-8"?>
 <svg xmlns="http://www.w3.org/2000/svg" viewBox="0 0 64 64">
-  <rect width="64" height="64" rx="9" fill="#003326"/>
-  <text x="50%" y="50%" text-anchor="middle" dominant-baseline="central"
+  <path d="M 8 8 L 56 8 L 56 38 Q 56 56 32 60 Q 8 56 8 38 Z" fill="#003326"/>
+  <text x="50%" y="48%" text-anchor="middle" dominant-baseline="central"
         font-family="Helvetica, Arial, sans-serif" font-weight="900"
-        font-size="36" fill="#2CDB87" letter-spacing="-2">MD</text>
+        font-size="34" fill="#2CDB87">M</text>
 </svg>
