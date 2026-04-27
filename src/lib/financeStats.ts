@@ -194,8 +194,14 @@ export function otherExpensesByCategoryFor(
 }
 
 export function managerPayFor(data: FinanceData, month: Q2Month): number {
-  return data.managerPay
-    .filter((r) => r.month === month)
+  // Source of truth is fin_expenses category='Match Manager Pay' (one row
+  // per (city, Thursday) week, written by /admin/finance/manager-pay).
+  // The legacy fin_manager_pay table is no longer read.
+  return data.expenses
+    .filter(
+      (r) =>
+        r.month === month && r.category === "Match Manager Pay",
+    )
     .reduce((s, r) => s + r.amount, 0);
 }
 
@@ -227,9 +233,15 @@ export function totalExpensesFor(
 ): number {
   // Pull "Venue Rental" out of the generic expenses sum and replace with the
   // override-aware total, so hero metrics agree with the Field Costs page.
+  // Also exclude Match Manager Pay rows — managerPayFor() adds them back as
+  // its own line below; including them here would double-count.
   const venueRentalRx = /venue\s*rental/i;
   const otherNonVenueRental = filterExpenseRows(data, month, mode, now)
-    .filter((r) => !venueRentalRx.test(r.category))
+    .filter(
+      (r) =>
+        !venueRentalRx.test(r.category) &&
+        r.category !== "Match Manager Pay",
+    )
     .reduce((s, r) => s + r.amount, 0);
   return (
     otherNonVenueRental +
@@ -265,7 +277,10 @@ export function distinctExpenseCategories(
       cats.add(c);
     }
   }
-  return [...cats].sort();
+  // Match Manager Pay is rendered via its own dedicated row (managerPayFor)
+  // and totalled separately, so don't surface it as a generic expense
+  // category — would double-render in the Cash Flow widget.
+  return [...cats].filter((c) => c !== "Match Manager Pay").sort();
 }
 
 export function distinctCitiesFromRevenue(data: FinanceData): string[] {
@@ -342,10 +357,8 @@ export function cityHasAnyQ2Activity(
       .filter((r) => r.city === city && r.month === m)
       .reduce((s, r) => s + r.amount, 0);
     if (exp !== 0) return true;
-    const mp = data.managerPay
-      .filter((r) => r.city === city && r.month === m)
-      .reduce((s, r) => s + r.amount, 0);
-    if (mp !== 0) return true;
+    // (Manager Pay is in fin_expenses now, already covered by `exp` above —
+    // legacy fin_manager_pay table is not consulted.)
     const me = data.monthlyExpenses.find(
       (r) => r.city === city && r.month === m,
     );
@@ -429,8 +442,15 @@ export function cityOverheadFor(
   city: string,
   month: Q2Month,
 ): CityOverhead {
-  const matchManagerPay = data.managerPay
-    .filter((r) => r.city === city && r.month === month)
+  // Match Manager Pay sourced from fin_expenses (category='Match Manager
+  // Pay'). Legacy fin_manager_pay table is no longer read.
+  const matchManagerPay = data.expenses
+    .filter(
+      (r) =>
+        r.city === city &&
+        r.month === month &&
+        r.category === "Match Manager Pay",
+    )
     .reduce((s, r) => s + r.amount, 0);
   const me = data.monthlyExpenses.find(
     (r) => r.city === city && r.month === month,

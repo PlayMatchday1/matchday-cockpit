@@ -1769,15 +1769,10 @@ export const FINANCE_IMPORTERS: ImporterConfig[] = [
       "Date, Month, City, Venue, Match Count, Total Hours, Venue Cost, Notes",
     importer: importSchedule,
   },
-  {
-    key: "manager_pay",
-    title: "6. Manager Pay",
-    description:
-      "Reads only the monthly total columns (Apr Total / May Total / Jun Total). Skips weekly columns, indented sub-rows, blank cities, and 'GRAND TOTAL'. Upserts by (city, month).",
-    expectedColumns:
-      "Header row with City + Apr Total + May Total + Jun Total",
-    importer: importManagerPay,
-  },
+  // Manager Pay CSV path is retired — Match Manager Pay now flows through
+  // /admin/finance/manager-pay (writes to fin_expenses, category='Match
+  // Manager Pay'). Importer + fin_manager_pay table left in place for
+  // archeology but no longer surfaced.
   {
     key: "monthly_expenses",
     title: "7. Monthly Expenses",

@@ -141,6 +141,12 @@ function FinanceLandingContent() {
           subtitle="What each venue bills MatchDay for. Add / edit individual matches; the Sheet import preserves your manual entries."
         />
         <DataLink
+          href="/admin/finance/manager-pay"
+          eyebrow="Manage"
+          title="Manager Pay"
+          subtitle="Weekly Thursday cash-out per city. Edits sync to fin_expenses → city cards + Cash Flow."
+        />
+        <DataLink
           href="/admin/finance/changelog"
           eyebrow="Audit"
           title="Change Log"
