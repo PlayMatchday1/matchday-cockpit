@@ -4,6 +4,7 @@ import { useMemo, useState } from "react";
 import { ChevronDown, ChevronRight } from "lucide-react";
 import FinanceInsightCard from "./FinanceInsightCard";
 import { useFinanceData } from "@/lib/useFinanceData";
+import { useMatchData } from "@/lib/useMatchData";
 import {
   Q2_MONTHS,
   buildCityInsightRows,
@@ -13,7 +14,6 @@ import {
   companySpotMix,
   getCurrentQ2Month,
   highPromoUsageFields,
-  memberHeavyFields,
   membershipHealthAvailable,
   newVenuesProfitable,
   newVenuesStruggling,
@@ -22,11 +22,16 @@ import {
   profitableFields,
   unprofitableCities,
   unprofitableFields,
-  zeroCostWinners,
   type MembershipHealthRow,
   type Q2Month,
   type VenueInsightRow,
 } from "@/lib/financeStats";
+import {
+  MEMBER_HEAVY_MIN_SPOTS,
+  MEMBER_HEAVY_THRESHOLD,
+  memberHeavyFieldsFromMatches,
+  type MemberHeavyRow,
+} from "@/lib/memberHeavyInsight";
 
 function fmtMoney(n: number, sign = false): string {
   const r = Math.round(n);
@@ -49,6 +54,7 @@ export default function FinanceInsightsGrid({
   onToggle?: () => void;
 } = {}) {
   const { data, loading } = useFinanceData();
+  const { rows: matchRows } = useMatchData();
   const [month, setMonth] = useState<Q2Month>(
     () => getCurrentQ2Month(new Date()) ?? "Apr 2026",
   );
@@ -62,8 +68,7 @@ export default function FinanceInsightsGrid({
       cityRows,
       profitableF: profitableFields(venueRows),
       profitableC: profitableCities(cityRows),
-      zeroCost: zeroCostWinners(venueRows),
-      memberHeavy: memberHeavyFields(venueRows),
+      memberHeavy: memberHeavyFieldsFromMatches(matchRows, data, month),
       newProfit: newVenuesProfitable(venueRows),
       unprofitableF: unprofitableFields(venueRows),
       unprofitableC: unprofitableCities(cityRows),
@@ -75,7 +80,7 @@ export default function FinanceInsightsGrid({
       mhAvailable: membershipHealthAvailable(data),
       mhRows: buildMembershipHealthRows(data, month),
     };
-  }, [data, month]);
+  }, [data, matchRows, month]);
 
   const headerInteractive = Boolean(onToggle);
 
@@ -179,47 +184,16 @@ export default function FinanceInsightsGrid({
 
                 <FinanceInsightCard
                   tone="working"
-                  title="Zero-Cost Winners"
-                  headline={
-                    computed.zeroCost.length === 0
-                      ? "No zero-cost venues"
-                      : `${computed.zeroCost.length} venue${computed.zeroCost.length === 1 ? "" : "s"}`
-                  }
-                  subtitle="$1K+ revenue, $0 venue cost"
-                  empty={computed.zeroCost.length === 0}
-                >
-                  <ul className="space-y-1 text-xs">
-                    {computed.zeroCost.map((r) => (
-                      <li
-                        key={`${r.city}|${r.venue}`}
-                        className="flex items-baseline justify-between gap-2"
-                      >
-                        <span className="truncate text-deep-green/85">
-                          {r.venue}
-                        </span>
-                        <span className="font-mono font-bold tabular-nums text-mint-hover">
-                          {fmtMoney(r.dppRev + r.memberRev)}
-                        </span>
-                      </li>
-                    ))}
-                  </ul>
-                </FinanceInsightCard>
-
-                <FinanceInsightCard
-                  tone="working"
                   title="Member-Heavy Fields"
                   headline={
                     computed.memberHeavy.length === 0
                       ? "None this month"
                       : `${computed.memberHeavy.length} field${computed.memberHeavy.length === 1 ? "" : "s"}`
                   }
-                  subtitle="≥50% members, 30+ spots"
+                  subtitle={`≥${Math.round(MEMBER_HEAVY_THRESHOLD * 100)}% members, ${MEMBER_HEAVY_MIN_SPOTS}+ spots`}
                   empty={computed.memberHeavy.length === 0}
                 >
-                  <VenueMixList
-                    rows={computed.memberHeavy.slice(0, 5)}
-                    metric="member"
-                  />
+                  <MemberHeavyList rows={computed.memberHeavy.slice(0, 5)} />
                 </FinanceInsightCard>
 
                 <FinanceInsightCard
@@ -464,6 +438,31 @@ function VenueNetList({
             className={`font-mono font-bold tabular-nums ${r.net >= 0 ? "text-mint-hover" : "text-coral"}`}
           >
             {fmtMoney(r.net, sign)}
+          </span>
+        </li>
+      ))}
+    </ul>
+  );
+}
+
+function MemberHeavyList({ rows }: { rows: MemberHeavyRow[] }) {
+  if (rows.length === 0) return null;
+  return (
+    <ul className="space-y-1 text-xs">
+      {rows.map((r) => (
+        <li
+          key={`${r.city}|${r.venue}`}
+          className="flex items-baseline justify-between gap-2"
+        >
+          <span className="truncate text-deep-green/85">
+            {r.venue}
+            <span className="ml-1 text-deep-green/45">· {r.city}</span>
+          </span>
+          <span
+            className="font-mono font-bold tabular-nums text-mint-hover"
+            title={`${r.memberCount} member · ${r.dailyCount} daily · ${r.total} total`}
+          >
+            {fmtPct(r.memberPct)}
           </span>
         </li>
       ))}

@@ -10,6 +10,10 @@ export type MatchRow = {
   matchStart: Date;
   matchCanceled: boolean;
   playerCanceledAt: Date | null;
+  // Type Of Payment column from user_analysis: 'MEMBER' | 'DAILY PAID' |
+  // promo / other / null. Used by the Member-Heavy Fields insight to
+  // measure each venue's actual member mix.
+  paymentType: string | null;
 };
 
 export type DataMeta = {
@@ -77,13 +81,16 @@ async function load(): Promise<void> {
     match_start: string;
     match_canceled: boolean;
     player_canceled_at: string | null;
+    payment_type: string | null;
   };
   let raw: MatchSelect[];
   try {
     raw = await selectAll<MatchSelect>(() =>
       supabase
         .from("match_registrations")
-        .select("city, field, match_start, match_canceled, player_canceled_at")
+        .select(
+          "city, field, match_start, match_canceled, player_canceled_at, payment_type",
+        )
         .eq("upload_id", uploadId)
         .order("match_start"),
     );
@@ -107,6 +114,7 @@ async function load(): Promise<void> {
       matchStart,
       matchCanceled: !!r.match_canceled,
       playerCanceledAt: parseLocal(r.player_canceled_at),
+      paymentType: r.payment_type,
     });
   }
 

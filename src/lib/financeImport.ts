@@ -1129,101 +1129,6 @@ export async function importMembers(raw: string[][]): Promise<ImportResult> {
   return { count: r.count, note };
 }
 
-type SpotsType = "member" | "dpp" | "other";
-
-function parseMemberSpotsHeader(
-  header: string,
-): { month: string; type: SpotsType } | null {
-  const lower = header.toLowerCase();
-  let type: SpotsType | null = null;
-  if (lower.includes("member")) type = "member";
-  else if (lower.includes("dpp")) type = "dpp";
-  else if (lower.includes("other")) type = "other";
-  if (!type) return null;
-  const month = extractMonthLabel(lower);
-  if (!month) return null;
-  return { month, type };
-}
-
-export async function importMemberSpots(
-  raw: string[][],
-): Promise<ImportResult> {
-  const detection = detectWideHeader(
-    raw,
-    [
-      { canonical: "Venue", required: true },
-      { canonical: "City", required: true },
-    ],
-    (h) => parseMemberSpotsHeader(h) !== null,
-    1,
-  );
-  if ("error" in detection) throw new Error(detection.error);
-  const { headerRowIndex, headerRow, fixedIndex } = detection;
-
-  const venueIdx = fixedIndex["Venue"];
-  const cityIdx = fixedIndex["City"];
-  const parsedHeaders: {
-    index: number;
-    parsed: { month: string; type: SpotsType };
-  }[] = [];
-  for (let i = 0; i < headerRow.length; i++) {
-    if (i === venueIdx || i === cityIdx) continue;
-    const p = parseMemberSpotsHeader(headerRow[i] ?? "");
-    if (p) parsedHeaders.push({ index: i, parsed: p });
-  }
-
-  const byKey = new Map<
-    string,
-    {
-      venue: string;
-      city: string;
-      month: string;
-      member_spots: number;
-      dpp_spots: number;
-      other_spots: number;
-    }
-  >();
-  for (let i = headerRowIndex + 1; i < raw.length; i++) {
-    const row = raw[i] ?? [];
-    const venue = trim(row[venueIdx]);
-    const city = trim(row[cityIdx]);
-    if (!venue || !city) continue;
-    for (const ph of parsedHeaders) {
-      const num = parseInteger(row[ph.index]);
-      if (num === null) continue;
-      const key = `${venue}|${ph.parsed.month}`;
-      let entry = byKey.get(key);
-      if (!entry) {
-        entry = {
-          venue,
-          city,
-          month: ph.parsed.month,
-          member_spots: 0,
-          dpp_spots: 0,
-          other_spots: 0,
-        };
-        byKey.set(key, entry);
-      }
-      if (ph.parsed.type === "member") entry.member_spots = num;
-      else if (ph.parsed.type === "dpp") entry.dpp_spots = num;
-      else entry.other_spots = num;
-    }
-  }
-
-  const longRows = [...byKey.values()];
-  if (longRows.length === 0) {
-    const detected = headerRow.filter((h) => h && h.trim()).join(" | ");
-    throw new Error(
-      `Detected header: "${detected}". No data rows produced.`,
-    );
-  }
-  const { error } = await supabase
-    .from("fin_member_spots")
-    .upsert(longRows, { onConflict: "venue,month" });
-  if (error) throw new Error(error.message);
-  return { count: longRows.length };
-}
-
 export async function importCommentary(
   raw: string[][],
 ): Promise<ImportResult> {
@@ -1814,15 +1719,6 @@ export const FINANCE_IMPORTERS: ImporterConfig[] = [
     expectedColumns:
       "Member ID, Member Email, Status, First Name, Last Name, Phone Number, Member Activation Date, Membership Length, Price, Canceled At, Cancel Reason",
     importer: importMembers,
-  },
-  {
-    key: "member_spots",
-    title: "9. Member Spots",
-    description:
-      "Wide format → long. Upserts by (venue, month). Headers are matched on month + type (Member / DPP / Other).",
-    expectedColumns:
-      "Venue, City + 'Apr 2026 Member Spots', 'Apr 2026 DPP Spots', 'Apr 2026 Other Spots', …",
-    importer: importMemberSpots,
   },
   {
     key: "commentary",
