@@ -23,7 +23,13 @@ export default function TopicsView() {
     params.set("tab", "topics");
     if (id) params.set("topic", id);
     else params.delete("topic");
-    router.replace(`/clubhouse?${params.toString()}`);
+    // push (not replace) — under Next 16 + React 19 + Turbopack,
+    // router.replace() with a same-pathname-different-query target
+    // doesn't reliably re-fire useSearchParams(), so the URL would
+    // change but selectedId stayed stale and the right panel never
+    // re-rendered. push() forces a fresh transition; bonus that
+    // browser back/forward steps through topic selections.
+    router.push(`/clubhouse?${params.toString()}`);
   }
 
   if (loading) {
