@@ -307,7 +307,7 @@ export default function CityPLCard({ city }: { city: string }) {
         {result.strikeRev > 0 && (
           <section>
             <SectionHead>Strikes</SectionHead>
-            <div className="font-mono text-sm italic font-bold tabular-nums text-deep-green/75">
+            <div className="font-mono text-sm font-bold tabular-nums text-mint-hover">
               {fmtMoney(result.strikeRev)}
             </div>
           </section>
