@@ -32,8 +32,10 @@ import {
   MEMBER_HEAVY_THRESHOLD,
   highPromoUsageFromMatches,
   memberHeavyFieldsFromMatches,
+  topPromoCodesFromMatches,
   type HighPromoRow,
   type MemberHeavyRow,
+  type TopPromoCodeRow,
 } from "@/lib/matchInsights";
 
 function fmtMoney(n: number, sign = false): string {
@@ -76,6 +78,7 @@ export default function FinanceInsightsGrid({
       unprofitableF: unprofitableFields(venueRows),
       unprofitableC: unprofitableCities(cityRows),
       highPromo: highPromoUsageFromMatches(matchRows, data, month),
+      topPromoCodes: topPromoCodesFromMatches(matchRows, month),
       newStruggling: newVenuesStruggling(venueRows),
       overheadBurden: overheadBurdenCities(cityRows),
       runway: cashRunway(data),
@@ -291,6 +294,22 @@ export default function FinanceInsightsGrid({
                     sign
                   />
                 </FinanceInsightCard>
+
+                <FinanceInsightCard
+                  tone="attention"
+                  title="Top Promo Codes"
+                  headline={
+                    computed.topPromoCodes.distinctCount === 0
+                      ? "No promo usage this month"
+                      : `${computed.topPromoCodes.distinctCount} code${computed.topPromoCodes.distinctCount === 1 ? "" : "s"}`
+                  }
+                  subtitle="Most-used discount codes this month"
+                  empty={computed.topPromoCodes.distinctCount === 0}
+                >
+                  <TopPromoCodesList
+                    rows={computed.topPromoCodes.rows.slice(0, 5)}
+                  />
+                </FinanceInsightCard>
               </div>
 
               <CategoryLabel tone="watch">Watch</CategoryLabel>
@@ -463,6 +482,27 @@ function MemberHeavyList({ rows }: { rows: MemberHeavyRow[] }) {
             title={`${r.memberCount} member · ${r.dailyCount} daily · ${r.total} total`}
           >
             {fmtPct(r.memberPct)}
+          </span>
+        </li>
+      ))}
+    </ul>
+  );
+}
+
+function TopPromoCodesList({ rows }: { rows: TopPromoCodeRow[] }) {
+  if (rows.length === 0) return null;
+  return (
+    <ul className="space-y-1 text-xs">
+      {rows.map((r) => (
+        <li
+          key={r.code}
+          className="flex items-baseline justify-between gap-2"
+        >
+          <span className="truncate font-mono text-deep-green/85">
+            {r.code}
+          </span>
+          <span className="font-mono font-bold tabular-nums text-coral">
+            {r.count.toLocaleString("en-US")}
           </span>
         </li>
       ))}

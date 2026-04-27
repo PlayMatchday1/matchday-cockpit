@@ -49,6 +49,12 @@ export type HighPromoRow = {
   promoPct: number;
 };
 
+export type TopPromoCodeRow = { code: string; count: number };
+export type TopPromoCodesResult = {
+  rows: TopPromoCodeRow[]; // sorted by count desc
+  distinctCount: number; // total distinct codes used in the month
+};
+
 function paymentBucket(paymentType: string | null): "member" | "daily" | "other" {
   if (!paymentType) return "other";
   const lc = paymentType.trim().toLowerCase();
@@ -174,4 +180,29 @@ export function highPromoUsageFromMatches(
   }
   rows.sort((a, b) => b.promoPct - a.promoPct);
   return rows;
+}
+
+// Top promo codes by usage in the active month. Case-sensitive bucketing
+// because "MATCHDAY" and "matchday" are different rows in the promo
+// admin and a finance reader looking at this card likely needs to see
+// them as separate entries (they may have different terms / expiries
+// even when the strings rhyme). Returns top-N rows + the distinct-code
+// total for the card header.
+export function topPromoCodesFromMatches(
+  matchRows: MatchRow[],
+  month: Q2Month,
+): TopPromoCodesResult {
+  const monthPrefix = Q2_MONTH_PREFIX[month];
+  const counts = new Map<string, number>();
+  for (const r of matchRows) {
+    if (r.matchCanceled) continue;
+    if (!isInMonth(r.matchStart, monthPrefix)) continue;
+    const code = r.promocode?.trim();
+    if (!code) continue;
+    counts.set(code, (counts.get(code) ?? 0) + 1);
+  }
+  const rows: TopPromoCodeRow[] = [...counts.entries()]
+    .map(([code, count]) => ({ code, count }))
+    .sort((a, b) => b.count - a.count);
+  return { rows, distinctCount: counts.size };
 }
