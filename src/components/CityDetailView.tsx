@@ -37,7 +37,7 @@ export default function CityDetailView({ city }: { city: City }) {
   const [showVenues, setShowVenues] = useState(false);
 
   const weekly = getWeeklySpots(rows, city, 8);
-  const cancel = getCancelRate(rows, city, 8);
+  const cancel = getCancelRate(rows, city);
   const venues = getActiveVenues(rows, city, 8);
   const status = getCityStatus(rows, city);
   const currentWeek = weekly[weekly.length - 1];
@@ -148,13 +148,13 @@ export default function CityDetailView({ city }: { city: City }) {
           <StatCard
             label="Cancel rate"
             value={hasData ? `${Math.round(cancel.rate)}%` : "—"}
-            hint="last 8 weeks"
+            hint="this month"
             valueClass={cancelRateColor(cancel.rate, hasData)}
           />
           <StatCard
             label="Total spots"
             value={cancel.totalSpots.toLocaleString()}
-            hint="last 8 weeks"
+            hint="this month"
           />
         </div>
 

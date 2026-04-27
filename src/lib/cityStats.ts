@@ -135,17 +135,19 @@ export function getWeeklySpots(
   }));
 }
 
-// Cancel rate as a city tile reader would expect: % of distinct
-// scheduled matches that didn't run. Match identity = (match_start +
-// field), de-duped across the many registration rows per match.
+// Cancel rate, scoped to the current calendar month (MTD): % of
+// distinct scheduled matches that didn't run. Match identity =
+// (match_start + field), de-duped across the many registration rows
+// per match. Same monthly boundary logic as Membership Health and
+// Spot Mix by City — first of the local-time month through "now".
 //
 // totalSpots is preserved on the return value because CityDetailView's
 // "Total spots" stat card still uses it — booked-spot count among
-// matches that ran is a useful operational metric on its own.
+// matches that ran is a useful operational metric on its own. Now
+// MTD-scoped to match the rest of the card.
 export function getCancelRate(
   rows: MatchRow[],
   city: string,
-  weeksBack = 8,
   now: Date = new Date(),
 ): {
   totalMatches: number;
@@ -153,7 +155,8 @@ export function getCancelRate(
   rate: number;
   totalSpots: number;
 } {
-  const { earliestMonday, windowEnd } = windowBounds(weeksBack, now);
+  const monthStart = new Date(now.getFullYear(), now.getMonth(), 1);
+  const monthEnd = new Date(now.getFullYear(), now.getMonth() + 1, 1);
 
   const matches = new Map<string, boolean>(); // matchKey → canceled
   let totalSpots = 0;
@@ -161,7 +164,7 @@ export function getCancelRate(
   for (const row of rows) {
     if (row.city !== city) continue;
     if (!row.field) continue;
-    if (row.matchStart < earliestMonday || row.matchStart >= windowEnd) continue;
+    if (row.matchStart < monthStart || row.matchStart >= monthEnd) continue;
     const key = `${row.matchStart.getTime()}|${row.field}`;
     if (!matches.has(key)) matches.set(key, row.matchCanceled);
     if (!row.matchCanceled) totalSpots++;

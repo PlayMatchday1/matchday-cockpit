@@ -43,7 +43,7 @@ function CitiesIndexContent() {
 
   const cityData = CITIES.map((city) => {
     const weekly = getWeeklySpots(rows, city, 8);
-    const cancel = getCancelRate(rows, city, 8);
+    const cancel = getCancelRate(rows, city);
     const venues = getActiveVenues(rows, city, 8);
     const status = getCityStatus(rows, city);
     return {
@@ -68,9 +68,8 @@ function CitiesIndexContent() {
   return (
     <>
       <div className="mb-6">
-        <h1 className="flex items-center gap-2 text-3xl font-extrabold tracking-tight text-deep-green">
+        <h1 className="text-3xl font-extrabold tracking-tight text-deep-green">
           Cities
-          <CitiesLegend />
         </h1>
         <p className="mt-1 text-sm text-deep-green/70">
           Per-market venues, weekly matches, and goals.
@@ -220,7 +219,10 @@ function CityCard({
     >
       <div className="flex items-start justify-between gap-3">
         <div className="text-base font-bold text-deep-green">{city}</div>
-        <CityHealthPill health={status} />
+        <div className="flex items-center gap-1.5">
+          <CityHealthPill health={status} />
+          <CitiesLegend />
+        </div>
       </div>
       <div className="mt-4 grid grid-cols-4 gap-3">
         <Stat label="Matches/wk" value={String(currentWeek.matches)} />
@@ -240,8 +242,8 @@ function CityCard({
           }
           title={
             cancel.totalMatches === 0
-              ? "No matches scheduled in the last 8 weeks."
-              : `${cancel.canceledMatches} of ${cancel.totalMatches} matches canceled in the last 8 weeks.`
+              ? "No matches scheduled this month."
+              : `${cancel.canceledMatches} of ${cancel.totalMatches} matches canceled this month.`
           }
         />
       </div>

@@ -36,7 +36,7 @@ export default function CitiesLegend() {
         onClick={() => setPinned((v) => !v)}
         aria-label="What do these statuses mean?"
         aria-expanded={pinned}
-        className="inline-flex h-[14px] w-[14px] items-center justify-center rounded-full bg-deep-green/15 text-[10px] font-bold leading-none text-deep-green/70 transition hover:bg-deep-green/25 hover:text-deep-green"
+        className="inline-flex h-[13px] w-[13px] items-center justify-center rounded-full bg-deep-green/15 text-[9px] font-bold leading-none text-deep-green/70 transition hover:bg-deep-green/25 hover:text-deep-green"
       >
         i
       </button>
@@ -55,17 +55,17 @@ export default function CitiesLegend() {
           <LegendRow
             tone="text-mint-hover"
             label="Growing"
-            description="Recent 4 weeks ≥ +10% vs prior"
+            description="Recent 4 weeks ≥ +10% vs prior 4 weeks"
           />
           <LegendRow
             tone="text-deep-green/65"
             label="Stable"
-            description="Within ±10% of prior"
+            description="Within ±10% of prior 4 weeks"
           />
           <LegendRow
             tone="text-coral"
             label="Declining"
-            description="Recent 4 weeks ≤ −10% vs prior"
+            description="Recent 4 weeks ≤ −10% vs prior 4 weeks"
           />
           <LegendRow
             tone="text-blue-info"
@@ -75,7 +75,7 @@ export default function CitiesLegend() {
         </ul>
         <div className="mt-3 border-t border-cream-line/60 pt-2 text-deep-green/65">
           <span className="font-bold text-deep-green">Cancel %</span> is matches
-          that didn&apos;t run / matches scheduled, last 8 weeks.
+          that didn&apos;t run / matches scheduled, current month to date.
         </div>
       </div>
     </div>
