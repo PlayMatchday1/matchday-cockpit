@@ -111,7 +111,7 @@ export default function FinanceScheduleImportCard() {
       <p className="mt-1 text-sm text-deep-green/60">
         Schedule import preserves manual entries by default. Choose{" "}
         <strong>Replace</strong> to overwrite everything (including any
-        cockpit-added matches) for the months covered.
+        clubhouse-added matches) for the months covered.
       </p>
       <div className="mt-2 rounded-md bg-cream-soft px-3 py-1.5 text-[11px] text-deep-green/55">
         <span className="font-bold uppercase tracking-wider">Columns:</span>{" "}

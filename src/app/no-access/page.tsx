@@ -17,7 +17,7 @@ export default function NoAccessPage() {
         </p>
         <div className="mt-6 flex flex-col items-center gap-3">
           <a
-            href="mailto:rmancuso@playmatchday.com?subject=Cockpit%20access%20request"
+            href="mailto:rmancuso@playmatchday.com?subject=Clubhouse%20access%20request"
             className="rounded-full bg-mint px-5 py-2 text-sm font-bold text-deep-green transition hover:bg-mint-hover"
           >
             Request access

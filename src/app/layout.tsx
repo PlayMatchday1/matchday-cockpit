@@ -20,7 +20,7 @@ const bebas = Bebas_Neue({
 });
 
 export const metadata: Metadata = {
-  title: "MatchDay Cockpit",
+  title: "MatchDay Clubhouse",
   description: "Internal ops dashboard for MatchDay.",
 };
 
