@@ -1,5 +1,5 @@
 <svg xmlns="http://www.w3.org/2000/svg" viewBox="0 0 64 64">
-  <rect width="64" height="64" rx="10" fill="#003326"/>
+  <rect width="64" height="64" rx="9" fill="#003326"/>
   <text x="50%" y="50%" text-anchor="middle" dominant-baseline="central"
         font-family="Helvetica, Arial, sans-serif" font-weight="900"
         font-size="36" fill="#2CDB87" letter-spacing="-2">MD</text>
