@@ -134,6 +134,10 @@ function CitiesIndexContent() {
         </>
       )}
 
+      <div className="mt-12">
+        <CancelPatterns />
+      </div>
+
       <section className="mt-12">
         <div className="mb-6">
           <h2 className="text-2xl font-bold tracking-tight text-deep-green">
@@ -172,7 +176,6 @@ function CitiesIndexContent() {
           <div className="space-y-6">
             <Reviews8WeekCard rows={reviewRows} />
             <ManagerPodium rows={reviewRows} />
-            <CancelPatterns />
             <ReviewsCommentsTable rows={reviewRows} />
           </div>
         )}
