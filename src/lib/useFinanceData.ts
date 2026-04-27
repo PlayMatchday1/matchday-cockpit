@@ -2,6 +2,7 @@
 
 import { useEffect, useState } from "react";
 import { supabase } from "./supabase";
+import { selectAll } from "./supabasePagination";
 
 export type FinRevenue = {
   id: number;
@@ -213,64 +214,97 @@ function normalizeMonth(v: unknown): string {
 async function load(): Promise<void> {
   publish({ data: cached.data, loading: true, error: null });
 
-  const [
-    revRes,
-    expRes,
-    mpRes,
-    meRes,
-    cfgRes,
-    schRes,
-    vnRes,
-    msRes,
-    alRes,
-    mbrRes,
-    prcRes,
-    cmtRes,
-    ovRes,
-  ] = await Promise.all([
-    supabase.from("fin_revenue").select("*"),
-    supabase.from("fin_expenses").select("*"),
-    supabase.from("fin_manager_pay").select("*"),
-    supabase.from("fin_monthly_expenses").select("*"),
-    supabase.from("fin_config").select("*"),
-    supabase.from("fin_schedule").select("*"),
-    supabase.from("fin_venues").select("*"),
-    supabase.from("fin_member_spots").select("*"),
-    supabase.from("fin_venue_aliases").select("*"),
-    supabase.from("fin_members").select("*"),
-    supabase.from("fin_pricing").select("*"),
-    supabase
+  // Multi-row reads go through selectAll() so they're not silently capped
+  // at PostgREST's 1000-row max. fin_commentary is intentionally a single-
+  // row read (`.limit(1).maybeSingle()`); fin_venues / fin_venue_aliases /
+  // fin_pricing / fin_config / fin_venue_cost_overrides are bounded by
+  // venue count and would never approach 1000, but we still paginate them
+  // for uniform error handling — selectAll exits after one round-trip
+  // when the table fits in a single page.
+  let revenueRows: Array<Record<string, unknown>>;
+  let expenseRows: Array<Record<string, unknown>>;
+  let mpRows: Array<Record<string, unknown>>;
+  let meRows: Array<Record<string, unknown>>;
+  let cfgRows: Array<Record<string, unknown>>;
+  let schRows: Array<Record<string, unknown>>;
+  let vnRows: Array<Record<string, unknown>>;
+  let msRows: Array<Record<string, unknown>>;
+  let alRows: Array<Record<string, unknown>>;
+  let mbrRows: Array<Record<string, unknown>>;
+  let prcRows: Array<Record<string, unknown>>;
+  let ovRows: Array<Record<string, unknown>>;
+  let cmtRow: Record<string, unknown> | null;
+  try {
+    [
+      revenueRows,
+      expenseRows,
+      mpRows,
+      meRows,
+      cfgRows,
+      schRows,
+      vnRows,
+      msRows,
+      alRows,
+      mbrRows,
+      prcRows,
+      ovRows,
+    ] = await Promise.all([
+      selectAll<Record<string, unknown>>(() =>
+        supabase.from("fin_revenue").select("*").order("id"),
+      ),
+      selectAll<Record<string, unknown>>(() =>
+        supabase.from("fin_expenses").select("*").order("id"),
+      ),
+      selectAll<Record<string, unknown>>(() =>
+        supabase.from("fin_manager_pay").select("*").order("id"),
+      ),
+      selectAll<Record<string, unknown>>(() =>
+        supabase.from("fin_monthly_expenses").select("*").order("id"),
+      ),
+      selectAll<Record<string, unknown>>(() =>
+        supabase.from("fin_config").select("*").order("key"),
+      ),
+      selectAll<Record<string, unknown>>(() =>
+        supabase.from("fin_schedule").select("*").order("id"),
+      ),
+      selectAll<Record<string, unknown>>(() =>
+        supabase.from("fin_venues").select("*").order("id"),
+      ),
+      selectAll<Record<string, unknown>>(() =>
+        supabase.from("fin_member_spots").select("*").order("id"),
+      ),
+      selectAll<Record<string, unknown>>(() =>
+        supabase.from("fin_venue_aliases").select("*").order("alias"),
+      ),
+      selectAll<Record<string, unknown>>(() =>
+        supabase.from("fin_members").select("*").order("id"),
+      ),
+      selectAll<Record<string, unknown>>(() =>
+        supabase.from("fin_pricing").select("*").order("id"),
+      ),
+      selectAll<Record<string, unknown>>(() =>
+        supabase.from("fin_venue_cost_overrides").select("*").order("id"),
+      ),
+    ]);
+    const cmtRes = await supabase
       .from("fin_commentary")
       .select("*")
       .order("id", { ascending: true })
       .limit(1)
-      .maybeSingle(),
-    supabase.from("fin_venue_cost_overrides").select("*"),
-  ]);
-
-  for (const r of [
-    revRes,
-    expRes,
-    mpRes,
-    meRes,
-    cfgRes,
-    schRes,
-    vnRes,
-    msRes,
-    alRes,
-    mbrRes,
-    prcRes,
-    cmtRes,
-    ovRes,
-  ]) {
-    if (r.error) {
-      publish({ data: null, loading: false, error: r.error.message });
-      return;
-    }
+      .maybeSingle();
+    if (cmtRes.error) throw new Error(cmtRes.error.message);
+    cmtRow = (cmtRes.data ?? null) as Record<string, unknown> | null;
+  } catch (e) {
+    publish({
+      data: null,
+      loading: false,
+      error: e instanceof Error ? e.message : "Failed to load finance data.",
+    });
+    return;
   }
 
   const venueAliases = new Map<string, string>();
-  for (const a of alRes.data ?? []) {
+  for (const a of alRows) {
     const alias = cleanText(a.alias);
     const canonical = cleanText(a.canonical_venue);
     if (alias && canonical) venueAliases.set(alias, canonical);
@@ -285,7 +319,7 @@ async function load(): Promise<void> {
     return venueAliases.get(c) ?? c;
   }
 
-  const revenue: FinRevenue[] = (revRes.data ?? []).map((r) => ({
+  const revenue: FinRevenue[] = revenueRows.map((r) => ({
     id: r.id as number,
     date: cleanText(r.date),
     month: normalizeMonth(cleanText(r.month)),
@@ -300,7 +334,7 @@ async function load(): Promise<void> {
     manual_entry: Boolean(r.manual_entry ?? false),
   }));
 
-  const expenses: FinExpense[] = (expRes.data ?? []).map((r) => ({
+  const expenses: FinExpense[] = expenseRows.map((r) => ({
     id: r.id as number,
     date: cleanText(r.date),
     month: normalizeMonth(cleanText(r.month)),
@@ -312,14 +346,14 @@ async function load(): Promise<void> {
     manual_entry: Boolean(r.manual_entry ?? false),
   }));
 
-  const managerPay: FinManagerPay[] = (mpRes.data ?? []).map((r) => ({
+  const managerPay: FinManagerPay[] = mpRows.map((r) => ({
     id: r.id as number,
     city: cleanText(r.city),
     month: normalizeMonth(cleanText(r.month)),
     amount: asNumber(r.amount),
   }));
 
-  const monthlyExpenses: FinMonthlyExpense[] = (meRes.data ?? []).map((r) => ({
+  const monthlyExpenses: FinMonthlyExpense[] = meRows.map((r) => ({
     id: r.id as number,
     city: cleanText(r.city),
     month: normalizeMonth(cleanText(r.month)),
@@ -328,7 +362,7 @@ async function load(): Promise<void> {
     equipment: asNumber(r.equipment),
   }));
 
-  const schedule: FinSchedule[] = (schRes.data ?? []).map((r) => {
+  const schedule: FinSchedule[] = schRows.map((r) => {
     const rawVenue = cleanText(r.venue);
     return {
       id: r.id as number,
@@ -347,7 +381,7 @@ async function load(): Promise<void> {
     };
   });
 
-  const venues: FinVenue[] = (vnRes.data ?? []).map((r) => {
+  const venues: FinVenue[] = vnRows.map((r) => {
     const rawName = cleanText(r.venue_name);
     return {
       id: r.id as number,
@@ -370,7 +404,7 @@ async function load(): Promise<void> {
     };
   });
 
-  const memberSpots: FinMemberSpotsRow[] = (msRes.data ?? []).map((r) => ({
+  const memberSpots: FinMemberSpotsRow[] = msRows.map((r) => ({
     id: r.id as number,
     venue: canonVenue(r.venue),
     city: cleanText(r.city),
@@ -381,11 +415,11 @@ async function load(): Promise<void> {
   }));
 
   const config: Record<string, string> = {};
-  for (const r of cfgRes.data ?? []) {
+  for (const r of cfgRows) {
     config[cleanText(r.key)] = cleanText(r.value);
   }
 
-  const members: FinMember[] = (mbrRes.data ?? []).map((r) => ({
+  const members: FinMember[] = mbrRows.map((r) => ({
     id: r.id as number,
     member_id: cleanText(r.member_id),
     status: cleanText(r.status),
@@ -394,7 +428,7 @@ async function load(): Promise<void> {
     email: cleanTextNullable(r.email),
   }));
 
-  const pricing: FinPricing[] = (prcRes.data ?? []).map((r) => ({
+  const pricing: FinPricing[] = prcRows.map((r) => ({
     id: r.id as number,
     venue_name: canonVenue(r.venue_name),
     city: cleanText(r.city),
@@ -403,7 +437,7 @@ async function load(): Promise<void> {
     notes: cleanTextNullable(r.notes),
   }));
 
-  const commentaryRow = cmtRes.data as
+  const commentaryRow = cmtRow as
     | { id: number; eyebrow?: string | null; body?: string | null; updated_at?: string | null }
     | null;
   const commentary: FinCommentary | null = commentaryRow
@@ -415,7 +449,7 @@ async function load(): Promise<void> {
       }
     : null;
 
-  const overrides: FinVenueCostOverride[] = (ovRes.data ?? []).map((r) => ({
+  const overrides: FinVenueCostOverride[] = ovRows.map((r) => ({
     id: r.id as number,
     venue_id: r.venue_id as number,
     month: normalizeMonth(cleanText(r.month)),

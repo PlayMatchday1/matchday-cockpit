@@ -2,6 +2,7 @@
 
 import { useEffect, useState } from "react";
 import { supabase } from "./supabase";
+import { selectAll } from "./supabasePagination";
 import { parseTags } from "./reviewTags";
 
 export type ReviewRow = {
@@ -77,59 +78,62 @@ async function load(): Promise<void> {
 
   const uploadId = (uploadRow as { id: string }).id;
 
-  const PAGE = 1000;
+  type ReviewSelect = {
+    city: string;
+    field_title: string | null;
+    manager_first_name: string | null;
+    manager_last_name: string | null;
+    star_rating: number | null;
+    start_date: string | null;
+    user_id: string | null;
+    rating_at: string | null;
+    comment: string | null;
+    user_first_name: string | null;
+    user_last_name: string | null;
+    user_email: string | null;
+    tags_rating: string | null;
+  };
+  let raw: ReviewSelect[];
+  try {
+    raw = await selectAll<ReviewSelect>(() =>
+      supabase
+        .from("reviews")
+        .select(
+          "city, field_title, manager_first_name, manager_last_name, star_rating, start_date, user_id, rating_at, comment, user_first_name, user_last_name, user_email, tags_rating",
+        )
+        .eq("upload_id", uploadId)
+        .order("start_date"),
+    );
+  } catch (e) {
+    publish({
+      rows: [],
+      meta: null,
+      loading: false,
+      error: e instanceof Error ? e.message : "Failed to load reviews.",
+    });
+    return;
+  }
+
   const all: ReviewRow[] = [];
-  let start = 0;
-  while (true) {
-    const { data, error } = await supabase
-      .from("reviews")
-      .select(
-        "city, field_title, manager_first_name, manager_last_name, star_rating, start_date, user_id, rating_at, comment, user_first_name, user_last_name, user_email, tags_rating",
-      )
-      .eq("upload_id", uploadId)
-      .order("start_date")
-      .range(start, start + PAGE - 1);
-    if (error) {
-      publish({ rows: [], meta: null, loading: false, error: error.message });
-      return;
-    }
-    if (!data || data.length === 0) break;
-    for (const r of data as Array<{
-      city: string;
-      field_title: string | null;
-      manager_first_name: string | null;
-      manager_last_name: string | null;
-      star_rating: number | null;
-      start_date: string | null;
-      user_id: string | null;
-      rating_at: string | null;
-      comment: string | null;
-      user_first_name: string | null;
-      user_last_name: string | null;
-      user_email: string | null;
-      tags_rating: string | null;
-    }>) {
-      const startDate = parseLocal(r.start_date);
-      if (!startDate) continue;
-      if (r.star_rating === null) continue;
-      all.push({
-        city: r.city,
-        fieldTitle: r.field_title ?? "",
-        managerFirstName: r.manager_first_name,
-        managerLastName: r.manager_last_name,
-        starRating: Number(r.star_rating),
-        startDate,
-        userId: r.user_id,
-        ratingAt: parseLocal(r.rating_at),
-        comment: r.comment,
-        userFirstName: r.user_first_name,
-        userLastName: r.user_last_name,
-        userEmail: r.user_email,
-        tags: parseTags(r.tags_rating),
-      });
-    }
-    if (data.length < PAGE) break;
-    start += PAGE;
+  for (const r of raw) {
+    const startDate = parseLocal(r.start_date);
+    if (!startDate) continue;
+    if (r.star_rating === null) continue;
+    all.push({
+      city: r.city,
+      fieldTitle: r.field_title ?? "",
+      managerFirstName: r.manager_first_name,
+      managerLastName: r.manager_last_name,
+      starRating: Number(r.star_rating),
+      startDate,
+      userId: r.user_id,
+      ratingAt: parseLocal(r.rating_at),
+      comment: r.comment,
+      userFirstName: r.user_first_name,
+      userLastName: r.user_last_name,
+      userEmail: r.user_email,
+      tags: parseTags(r.tags_rating),
+    });
   }
 
   const u = uploadRow as {

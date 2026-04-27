@@ -4,6 +4,7 @@ import { useEffect, useMemo, useState } from "react";
 import Link from "next/link";
 import { ChevronDown, ChevronRight } from "lucide-react";
 import { supabase } from "@/lib/supabase";
+import { selectAll } from "@/lib/supabasePagination";
 import type { AuditAction, AuditTable } from "@/lib/financeAudit";
 
 type ChangeLogEntry = {
@@ -123,23 +124,30 @@ export default function ChangeLogView() {
     let cancelled = false;
     setLoading(true);
     setError(null);
-    let q = supabase
-      .from("fin_change_log")
-      .select("*")
-      .order("changed_at", { ascending: false })
-      .limit(2000);
-    if (dateFrom) q = q.gte("changed_at", `${dateFrom}T00:00:00`);
-    if (dateTo) q = q.lte("changed_at", `${dateTo}T23:59:59`);
-    q.then(({ data, error: err }) => {
-      if (cancelled) return;
-      if (err) {
-        setError(err.message);
+    // Paginate via selectAll — `.limit(2000)` is silently truncated by
+    // PostgREST's default 1000-row max, so the prior code only ever
+    // returned the most-recent 1000 audit entries no matter what filters
+    // the user picked.
+    selectAll<ChangeLogEntry>(() => {
+      let q = supabase
+        .from("fin_change_log")
+        .select("*")
+        .order("changed_at", { ascending: false });
+      if (dateFrom) q = q.gte("changed_at", `${dateFrom}T00:00:00`);
+      if (dateTo) q = q.lte("changed_at", `${dateTo}T23:59:59`);
+      return q;
+    })
+      .then((rows) => {
+        if (cancelled) return;
+        setEntries(rows);
+        setLoading(false);
+      })
+      .catch((e: unknown) => {
+        if (cancelled) return;
+        setError(e instanceof Error ? e.message : "Failed to load changelog.");
         setEntries([]);
-      } else {
-        setEntries((data ?? []) as ChangeLogEntry[]);
-      }
-      setLoading(false);
-    });
+        setLoading(false);
+      });
     return () => {
       cancelled = true;
     };

@@ -1,4 +1,5 @@
 import { supabase } from "./supabase";
+import { selectAll } from "./supabasePagination";
 import { normalizeMatchName } from "./venueNormalization";
 
 export type ImportResult = { count: number; note?: string };
@@ -1504,13 +1505,22 @@ export async function previewStripe(
   if ("error" in result) throw new Error(result.error);
   const { rows } = result;
 
-  // Build email → city map from fin_members
-  const { data: memberRows, error: mbErr } = await supabase
-    .from("fin_members")
-    .select("email, city");
-  if (mbErr) throw new Error(`Members lookup failed: ${mbErr.message}`);
+  // Build email → city map from fin_members. Paginated — without it
+  // PostgREST silently caps at 1000 rows even though fin_members holds
+  // 2k+ customers, which leaves a chunk of email→city lookups stranded
+  // in the Corporate / Unmatched bucket.
+  let memberRows: Array<{ email: string | null; city: string | null }>;
+  try {
+    memberRows = await selectAll<{ email: string | null; city: string | null }>(
+      () => supabase.from("fin_members").select("email, city").order("id"),
+    );
+  } catch (e) {
+    throw new Error(
+      `Members lookup failed: ${e instanceof Error ? e.message : String(e)}`,
+    );
+  }
   const emailToCity = new Map<string, string>();
-  for (const m of (memberRows ?? []) as { email: string | null; city: string | null }[]) {
+  for (const m of memberRows) {
     if (m.email) emailToCity.set(m.email.toLowerCase().trim(), m.city ?? UNMATCHED_CITY);
   }
 

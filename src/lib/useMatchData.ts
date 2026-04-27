@@ -2,6 +2,7 @@
 
 import { useEffect, useState } from "react";
 import { supabase } from "./supabase";
+import { selectAll } from "./supabasePagination";
 
 export type MatchRow = {
   city: string;
@@ -70,40 +71,43 @@ async function load(): Promise<void> {
 
   const uploadId = (uploadRow as { id: string }).id;
 
-  const PAGE = 1000;
+  type MatchSelect = {
+    city: string;
+    field: string | null;
+    match_start: string;
+    match_canceled: boolean;
+    player_canceled_at: string | null;
+  };
+  let raw: MatchSelect[];
+  try {
+    raw = await selectAll<MatchSelect>(() =>
+      supabase
+        .from("match_registrations")
+        .select("city, field, match_start, match_canceled, player_canceled_at")
+        .eq("upload_id", uploadId)
+        .order("match_start"),
+    );
+  } catch (e) {
+    publish({
+      rows: [],
+      meta: null,
+      loading: false,
+      error: e instanceof Error ? e.message : "Failed to load match data.",
+    });
+    return;
+  }
+
   const all: MatchRow[] = [];
-  let start = 0;
-  while (true) {
-    const { data, error } = await supabase
-      .from("match_registrations")
-      .select("city, field, match_start, match_canceled, player_canceled_at")
-      .eq("upload_id", uploadId)
-      .order("match_start")
-      .range(start, start + PAGE - 1);
-    if (error) {
-      publish({ rows: [], meta: null, loading: false, error: error.message });
-      return;
-    }
-    if (!data || data.length === 0) break;
-    for (const r of data as Array<{
-      city: string;
-      field: string | null;
-      match_start: string;
-      match_canceled: boolean;
-      player_canceled_at: string | null;
-    }>) {
-      const matchStart = parseLocal(r.match_start);
-      if (!matchStart) continue;
-      all.push({
-        city: r.city,
-        field: r.field ?? "",
-        matchStart,
-        matchCanceled: !!r.match_canceled,
-        playerCanceledAt: parseLocal(r.player_canceled_at),
-      });
-    }
-    if (data.length < PAGE) break;
-    start += PAGE;
+  for (const r of raw) {
+    const matchStart = parseLocal(r.match_start);
+    if (!matchStart) continue;
+    all.push({
+      city: r.city,
+      field: r.field ?? "",
+      matchStart,
+      matchCanceled: !!r.match_canceled,
+      playerCanceledAt: parseLocal(r.player_canceled_at),
+    });
   }
 
   const u = uploadRow as {
