@@ -1,12 +1,12 @@
 "use client";
 
-import AdminGuard from "@/components/AdminGuard";
+import PagePermissionGuard from "@/components/PagePermissionGuard";
 import ChangeLogView from "@/components/ChangeLogView";
 
 export default function FinanceChangeLogPage() {
   return (
-    <AdminGuard>
+    <PagePermissionGuard page="finance">
       <ChangeLogView />
-    </AdminGuard>
+    </PagePermissionGuard>
   );
 }

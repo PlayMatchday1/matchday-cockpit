@@ -1,10 +1,12 @@
-import AdminGuard from "@/components/AdminGuard";
+"use client";
+
+import PagePermissionGuard from "@/components/PagePermissionGuard";
 import FinanceImportView from "@/components/FinanceImportView";
 
 export default function FinanceImportPage() {
   return (
-    <AdminGuard>
+    <PagePermissionGuard page="finance">
       <FinanceImportView />
-    </AdminGuard>
+    </PagePermissionGuard>
   );
 }

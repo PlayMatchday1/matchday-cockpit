@@ -1,12 +1,12 @@
 "use client";
 
-import AdminGuard from "@/components/AdminGuard";
+import PagePermissionGuard from "@/components/PagePermissionGuard";
 import BillingScheduleView from "@/components/BillingScheduleView";
 
 export default function FinanceBillingSchedulePage() {
   return (
-    <AdminGuard>
+    <PagePermissionGuard page="finance">
       <BillingScheduleView />
-    </AdminGuard>
+    </PagePermissionGuard>
   );
 }

@@ -10,6 +10,7 @@ type PermissionFlags = {
   can_access_org: boolean;
   can_access_data: boolean;
   can_access_docs: boolean;
+  can_access_finance: boolean;
 };
 
 const INITIAL_PERMISSIONS: PermissionFlags = {
@@ -19,6 +20,7 @@ const INITIAL_PERMISSIONS: PermissionFlags = {
   can_access_org: false,
   can_access_data: false,
   can_access_docs: false,
+  can_access_finance: false,
 };
 
 const PERMISSION_LABELS: { key: keyof PermissionFlags; label: string }[] = [
@@ -28,6 +30,7 @@ const PERMISSION_LABELS: { key: keyof PermissionFlags; label: string }[] = [
   { key: "can_access_org", label: "Org" },
   { key: "can_access_data", label: "Data" },
   { key: "can_access_docs", label: "Docs" },
+  { key: "can_access_finance", label: "Finance" },
 ];
 
 export default function AddUserModal({

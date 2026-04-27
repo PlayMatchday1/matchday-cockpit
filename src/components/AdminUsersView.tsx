@@ -13,7 +13,8 @@ type PermissionKey =
   | "can_access_cities"
   | "can_access_org"
   | "can_access_data"
-  | "can_access_docs";
+  | "can_access_docs"
+  | "can_access_finance";
 
 const PERMISSION_COLUMNS: { key: PermissionKey; label: string }[] = [
   { key: "is_admin", label: "Admin" },
@@ -22,6 +23,7 @@ const PERMISSION_COLUMNS: { key: PermissionKey; label: string }[] = [
   { key: "can_access_org", label: "Org" },
   { key: "can_access_data", label: "Data" },
   { key: "can_access_docs", label: "Docs" },
+  { key: "can_access_finance", label: "Finance" },
 ];
 
 function lastLoginText(iso: string | null): string {
@@ -80,6 +82,9 @@ export default function AdminUsersView() {
 
   async function togglePermission(user: AppUser, key: PermissionKey) {
     if (key === "is_admin" && appUser?.id === user.id) return;
+    // Admins always have Finance access via is_admin — block toggling it
+    // off on their own row so the UI doesn't mislead them.
+    if (key === "can_access_finance" && appUser?.id === user.id) return;
     const newValue = !user[key];
     const original = users;
     setUsers((prev) =>
@@ -220,7 +225,9 @@ export default function AdminUsersView() {
                       </td>
                       {PERMISSION_COLUMNS.map((c) => {
                         const on = u[c.key];
-                        const disabled = c.key === "is_admin" && isSelf;
+                        const disabled =
+                          (c.key === "is_admin" && isSelf) ||
+                          (c.key === "can_access_finance" && isSelf);
                         return (
                           <td
                             key={c.key}

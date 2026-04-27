@@ -3,7 +3,7 @@
 import { useEffect, useState } from "react";
 import Link from "next/link";
 import { ChevronDown, ChevronRight } from "lucide-react";
-import AdminGuard from "@/components/AdminGuard";
+import PagePermissionGuard from "@/components/PagePermissionGuard";
 import CityPLCard from "@/components/CityPLCard";
 import ExecutiveSummary from "@/components/ExecutiveSummary";
 import FieldRankingTable from "@/components/FieldRankingTable";
@@ -17,9 +17,9 @@ import { useFinanceData } from "@/lib/useFinanceData";
 
 export default function FinanceLandingPage() {
   return (
-    <AdminGuard>
+    <PagePermissionGuard page="finance">
       <FinanceLandingContent />
-    </AdminGuard>
+    </PagePermissionGuard>
   );
 }
 

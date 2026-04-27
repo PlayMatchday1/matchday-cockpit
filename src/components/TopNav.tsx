@@ -93,7 +93,7 @@ export default function TopNav() {
                 </Link>
               );
             })}
-            {appUser?.is_admin && (
+            {canAccess(appUser, "finance") && (
               <Link
                 href="/admin/finance"
                 className={`rounded-full px-4 py-1.5 text-sm font-medium tracking-tight transition ${

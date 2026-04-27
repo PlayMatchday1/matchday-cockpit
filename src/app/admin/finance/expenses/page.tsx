@@ -1,12 +1,12 @@
 "use client";
 
-import AdminGuard from "@/components/AdminGuard";
+import PagePermissionGuard from "@/components/PagePermissionGuard";
 import ExpenseAdminView from "@/components/ExpenseAdminView";
 
 export default function FinanceExpensesPage() {
   return (
-    <AdminGuard>
+    <PagePermissionGuard page="finance">
       <ExpenseAdminView />
-    </AdminGuard>
+    </PagePermissionGuard>
   );
 }

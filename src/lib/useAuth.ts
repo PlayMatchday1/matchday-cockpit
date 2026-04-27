@@ -14,11 +14,18 @@ export type AppUser = {
   can_access_org: boolean;
   can_access_data: boolean;
   can_access_docs: boolean;
+  can_access_finance: boolean;
   created_at: string;
   last_login_at: string | null;
 };
 
-export type PageName = "clubhouse" | "cities" | "org" | "data" | "docs";
+export type PageName =
+  | "clubhouse"
+  | "cities"
+  | "org"
+  | "data"
+  | "docs"
+  | "finance";
 
 export type AuthState = {
   user: SupabaseUser | null;
@@ -104,6 +111,8 @@ export function canAccess(
       return appUser.can_access_data;
     case "docs":
       return appUser.can_access_docs;
+    case "finance":
+      return appUser.can_access_finance;
   }
 }
 
@@ -115,7 +124,8 @@ export function hasAnyAccess(appUser: AppUser | null): boolean {
     appUser.can_access_cities ||
     appUser.can_access_org ||
     appUser.can_access_data ||
-    appUser.can_access_docs
+    appUser.can_access_docs ||
+    appUser.can_access_finance
   );
 }
 
@@ -126,6 +136,7 @@ export function firstAllowedPath(appUser: AppUser | null): string {
   if (appUser.can_access_org) return "/org";
   if (appUser.can_access_data) return "/data";
   if (appUser.can_access_docs) return "/docs";
+  if (appUser.can_access_finance) return "/admin/finance";
   return "/no-access";
 }
 

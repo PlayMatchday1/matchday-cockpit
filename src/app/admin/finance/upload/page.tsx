@@ -2,7 +2,7 @@
 
 import { useState } from "react";
 import Link from "next/link";
-import AdminGuard from "@/components/AdminGuard";
+import PagePermissionGuard from "@/components/PagePermissionGuard";
 import FinanceUploadCard from "@/components/FinanceUploadCard";
 import {
   commitMembers,
@@ -15,9 +15,9 @@ import {
 
 export default function FinanceUploadPage() {
   return (
-    <AdminGuard>
+    <PagePermissionGuard page="finance">
       <FinanceUploadContent />
-    </AdminGuard>
+    </PagePermissionGuard>
   );
 }
 
