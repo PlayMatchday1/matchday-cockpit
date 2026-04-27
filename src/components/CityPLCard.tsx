@@ -53,8 +53,11 @@ export default function CityPLCard({ city }: { city: string }) {
     // Aggregate DPP revenue per group + collect untagged (venue=null) so
     // the city card reconciles 1:1 with Cash Flow's per-city DPP number.
     // Strike revenue (type='Strike') is its own bucket — counted toward
-    // gross but not into the per-venue field totals.
+    // gross but not into the per-venue field totals. Private Rental rows
+    // (type='Private Rental') become synthetic field-level rows below.
     const perGroupDppRev = new Map<string, number>();
+    type PrivateRentalEntry = { venue: string | null; net: number };
+    const privateRentals: PrivateRentalEntry[] = [];
     let untaggedDppRev = 0;
     let strikeRev = 0;
     let membershipRev = 0;
@@ -69,6 +72,10 @@ export default function CityPLCard({ city }: { city: string }) {
         if (r.city !== city || r.month !== m) continue;
         if (r.type === "Strike") {
           strikeRev += r.net;
+          continue;
+        }
+        if (r.type === "Private Rental") {
+          privateRentals.push({ venue: r.venue, net: r.net });
           continue;
         }
         if (r.type === "DPP") {
@@ -98,6 +105,7 @@ export default function CityPLCard({ city }: { city: string }) {
     // surface.
     type FieldRow = {
       venue: string;
+      subLabel: string | null;
       dppRev: number;
       cost: number;
       matchCount: number;
@@ -107,6 +115,7 @@ export default function CityPLCard({ city }: { city: string }) {
       monthlyFlat: number | null;
       isCombined: boolean;
       isUntagged: boolean;
+      isPrivateRental: boolean;
     };
     const fieldLevel: FieldRow[] = cityGroups
       .map((g) => {
@@ -129,6 +138,7 @@ export default function CityPLCard({ city }: { city: string }) {
         const dppRev = perGroupDppRev.get(g.key) ?? 0;
         return {
           venue: g.displayName,
+          subLabel: null,
           dppRev,
           cost,
           matchCount,
@@ -138,14 +148,39 @@ export default function CityPLCard({ city }: { city: string }) {
           monthlyFlat: g.legs[0].monthly_flat ?? null,
           isCombined: g.isCombined,
           isUntagged: false,
+          isPrivateRental: false,
         };
       })
       .filter((r) => r.dppRev > 0 || r.cost > 0 || r.matchCount > 0)
       .sort((a, b) => b.dppRev - a.dppRev || b.cost - a.cost);
 
+    // Append Private Rental rows. They render as their own "Private Rentals"
+    // row in the field-level table, with the field-name as a subtitle and
+    // cost = 0 (the venue's regular cost row already captures that).
+    for (const pr of privateRentals) {
+      fieldLevel.push({
+        venue: "Private Rentals",
+        subLabel: pr.venue ?? "—",
+        dppRev: pr.net,
+        cost: 0,
+        matchCount: 0,
+        net: pr.net,
+        billingType: null,
+        perMatchRate: null,
+        monthlyFlat: null,
+        isCombined: false,
+        isUntagged: false,
+        isPrivateRental: true,
+      });
+    }
+
     const fieldDppTotal = fieldLevel.reduce((s, r) => s + r.dppRev, 0);
     const fieldCostTotal = fieldLevel.reduce((s, r) => s + r.cost, 0);
     const fieldNetTotal = fieldDppTotal - fieldCostTotal;
+    const privateRentalTotal = fieldLevel
+      .filter((r) => r.isPrivateRental)
+      .reduce((s, r) => s + r.dppRev, 0);
+    const venueDppTotal = fieldDppTotal - privateRentalTotal;
 
     const overheadTotal =
       overhead.matchManagerPay +
@@ -163,6 +198,8 @@ export default function CityPLCard({ city }: { city: string }) {
       fieldDppTotal,
       fieldCostTotal,
       fieldNetTotal,
+      venueDppTotal,
+      privateRentalTotal,
       strikeRev,
       untaggedDppRev,
       membershipRev,
@@ -244,7 +281,13 @@ export default function CityPLCard({ city }: { city: string }) {
                           </span>
                         )}
                       </div>
-                      {!f.isUntagged &&
+                      {f.isPrivateRental && f.subLabel && (
+                        <div className="text-[10px] text-deep-green/45">
+                          {f.subLabel}
+                        </div>
+                      )}
+                      {!f.isPrivateRental &&
+                        !f.isUntagged &&
                         f.billingType === "per_match" &&
                         f.matchCount > 0 &&
                         (f.isCombined ? (
@@ -258,11 +301,13 @@ export default function CityPLCard({ city }: { city: string }) {
                             </div>
                           )
                         ))}
-                      {!f.isUntagged && f.billingType === "monthly_flat" && (
-                        <div className="text-[10px] text-deep-green/45">
-                          monthly
-                        </div>
-                      )}
+                      {!f.isPrivateRental &&
+                        !f.isUntagged &&
+                        f.billingType === "monthly_flat" && (
+                          <div className="text-[10px] text-deep-green/45">
+                            monthly
+                          </div>
+                        )}
                     </td>
                     <td className="py-1.5 pl-2 text-right font-mono tabular-nums text-mint-hover">
                       {fmt(f.dppRev)}
@@ -338,7 +383,10 @@ export default function CityPLCard({ city }: { city: string }) {
             {fmtMoney(result.grossRev)}
           </div>
           <div className="mt-0.5 text-[10px] text-deep-green/45">
-            DPP {fmt(result.fieldDppTotal)}
+            DPP {fmt(result.venueDppTotal)}
+            {result.privateRentalTotal > 0
+              ? ` + Private Rentals ${fmt(result.privateRentalTotal)}`
+              : ""}
             {result.strikeRev > 0
               ? ` + Strikes ${fmt(result.strikeRev)}`
               : ""}
