@@ -223,6 +223,29 @@ function renderStripePreview(p: StripePreview): React.ReactNode {
           )}
         </div>
       </div>
+      {(p.strikePayments > 0 || p.strikeSkipped > 0) && (
+        <div className="rounded-md border border-cream-line bg-white p-3">
+          <div className="text-xs font-bold uppercase tracking-wider text-deep-green/60">
+            Strike payments
+          </div>
+          <ul className="mt-1 space-y-0.5 text-xs text-deep-green/80">
+            <li className="flex items-baseline gap-2">
+              <span className="text-mint-hover">•</span>
+              <span>Imported (Paid):</span>
+              <span className="font-mono font-bold tabular-nums">
+                {p.strikePayments.toLocaleString()}
+              </span>
+            </li>
+            <li className="flex items-baseline gap-2">
+              <span className="text-coral">•</span>
+              <span>Skipped (non-Paid status):</span>
+              <span className="font-mono font-bold tabular-nums">
+                {p.strikeSkipped.toLocaleString()}
+              </span>
+            </li>
+          </ul>
+        </div>
+      )}
       <div className="text-xs text-deep-green/65">
         Date range:{" "}
         <span className="font-mono">

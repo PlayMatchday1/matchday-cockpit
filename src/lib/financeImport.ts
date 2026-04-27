@@ -1368,7 +1368,7 @@ type StripeAllocatedRow = {
   month: string;
   city: string;
   venue: string | null;
-  type: "DPP" | "Membership";
+  type: "DPP" | "Membership" | "Strike";
   gross: number;
   fees: number;
   source: "Stripe";
@@ -1394,6 +1394,8 @@ export type StripePreview = {
   matchVenueResolutions: StripeVenueResolution[];
   matchRowsWithVenue: number;
   matchRowsWithoutVenue: number;
+  strikePayments: number;
+  strikeSkipped: number;
   earliestDate: string | null;
   latestDate: string | null;
   monthsAffected: string[];
@@ -1447,7 +1449,7 @@ function aggregateStripeRows(
     month: string;
     city: string;
     venue: string | null;
-    type: "DPP" | "Membership";
+    type: "DPP" | "Membership" | "Strike";
     gross: number;
     fees: number;
     txnCount: number;
@@ -1485,7 +1487,11 @@ function aggregateStripeRows(
     fees: b.fees,
     source: "Stripe" as const,
     notes: `${b.txnCount} Stripe ${
-      b.type === "Membership" ? "subscription" : "DPP"
+      b.type === "Membership"
+        ? "subscription"
+        : b.type === "Strike"
+          ? "strike"
+          : "DPP"
     } txn${b.txnCount === 1 ? "" : "s"}`,
   }));
 }
@@ -1542,12 +1548,18 @@ export async function previewStripe(
   const venueResolutions = new Map<string, ResolutionAcc>();
   let matchRowsWithVenue = 0;
   let matchRowsWithoutVenue = 0;
+  let strikePayments = 0;
+  let strikeSkipped = 0;
 
   for (const r of rows) {
     totalRows++;
     const status = (trim(r["status"]) ?? "").toLowerCase();
+    const stripeType = trim(r["stripe_type"]);
+    const isStrikeType =
+      stripeType !== null && stripeType.toLowerCase().includes("strike");
     if (!PAID_STATUSES.has(status)) {
       skippedRows++;
+      if (isStrikeType) strikeSkipped++;
       continue;
     }
     const date = parseDate(r["created"]);
@@ -1561,7 +1573,6 @@ export async function previewStripe(
     const emailRaw = trim(r["customer_email"]);
     const email = emailRaw ? emailRaw.toLowerCase() : null;
     const cityIdentifier = trim(r["city_identifier"]);
-    const stripeType = trim(r["stripe_type"]);
     const explicitVenue = trim(r["venue"]);
     const matchName = trim(r["match_name"]);
 
@@ -1572,14 +1583,20 @@ export async function previewStripe(
     const monthLabel = monthLabelFromIsoDate(date);
     if (monthLabel) monthSet.add(monthLabel);
 
-    const isMembership = looksLikeMembership(
-      stripeType,
-      description,
-      cityIdentifier,
-    );
     let allocatedCity: string;
-    let type: "DPP" | "Membership";
-    if (isMembership) {
+    let type: "DPP" | "Membership" | "Strike";
+
+    if (isStrikeType) {
+      // Strikes are city-attributed but have no venue concept.
+      type = "Strike";
+      strikePayments++;
+      allocatedCity = cityFromIdentifier(cityIdentifier);
+      if (allocatedCity === UNMATCHED_CITY && cityIdentifier) {
+        matchUnmatchedCityCodes.add(cityIdentifier);
+      }
+    } else if (
+      looksLikeMembership(stripeType, description, cityIdentifier)
+    ) {
       type = "Membership";
       membershipPayments++;
       const lookup = email ? emailToCity.get(email) : undefined;
@@ -1660,6 +1677,8 @@ export async function previewStripe(
     matchVenueResolutions,
     matchRowsWithVenue,
     matchRowsWithoutVenue,
+    strikePayments,
+    strikeSkipped,
     earliestDate,
     latestDate,
     monthsAffected: [...monthSet].sort(),

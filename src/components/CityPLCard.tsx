@@ -52,8 +52,11 @@ export default function CityPLCard({ city }: { city: string }) {
 
     // Aggregate DPP revenue per group + collect untagged (venue=null) so
     // the city card reconciles 1:1 with Cash Flow's per-city DPP number.
+    // Strike revenue (type='Strike') is its own bucket — counted toward
+    // gross but not into the per-venue field totals.
     const perGroupDppRev = new Map<string, number>();
     let untaggedDppRev = 0;
+    let strikeRev = 0;
     let membershipRev = 0;
     const overhead = {
       matchManagerPay: 0,
@@ -64,6 +67,10 @@ export default function CityPLCard({ city }: { city: string }) {
     for (const m of months) {
       for (const r of data.revenue) {
         if (r.city !== city || r.month !== m) continue;
+        if (r.type === "Strike") {
+          strikeRev += r.net;
+          continue;
+        }
         if (r.type === "DPP") {
           if (r.venue) {
             const key = venueToGroupKey.get(r.venue);
@@ -136,24 +143,6 @@ export default function CityPLCard({ city }: { city: string }) {
       .filter((r) => r.dppRev > 0 || r.cost > 0 || r.matchCount > 0)
       .sort((a, b) => b.dppRev - a.dppRev || b.cost - a.cost);
 
-    // Surface untagged DPP (rows with venue=null or with a venue not in
-    // fin_venues) as its own row so the Total Field DPP reconciles to
-    // Cash Flow's per-city DPP — no silent gap.
-    if (Math.abs(untaggedDppRev) > 0.5) {
-      fieldLevel.push({
-        venue: "Other field DPP",
-        dppRev: untaggedDppRev,
-        cost: 0,
-        matchCount: 0,
-        net: untaggedDppRev,
-        billingType: null,
-        perMatchRate: null,
-        monthlyFlat: null,
-        isCombined: false,
-        isUntagged: true,
-      });
-    }
-
     const fieldDppTotal = fieldLevel.reduce((s, r) => s + r.dppRev, 0);
     const fieldCostTotal = fieldLevel.reduce((s, r) => s + r.cost, 0);
     const fieldNetTotal = fieldDppTotal - fieldCostTotal;
@@ -164,7 +153,8 @@ export default function CityPLCard({ city }: { city: string }) {
       overhead.marketing +
       overhead.equipment;
 
-    const grossRev = fieldDppTotal + membershipRev;
+    const grossRev =
+      fieldDppTotal + strikeRev + untaggedDppRev + membershipRev;
     const netPL = grossRev - fieldCostTotal - overheadTotal;
     const margin = grossRev > 0 ? netPL / grossRev : 0;
 
@@ -173,6 +163,8 @@ export default function CityPLCard({ city }: { city: string }) {
       fieldDppTotal,
       fieldCostTotal,
       fieldNetTotal,
+      strikeRev,
+      untaggedDppRev,
       membershipRev,
       grossRev,
       overhead,
@@ -312,6 +304,27 @@ export default function CityPLCard({ city }: { city: string }) {
           )}
         </section>
 
+        {result.strikeRev > 0 && (
+          <section>
+            <SectionHead>Strikes</SectionHead>
+            <div className="font-mono text-sm italic font-bold tabular-nums text-deep-green/75">
+              {fmtMoney(result.strikeRev)}
+            </div>
+          </section>
+        )}
+
+        {Math.abs(result.untaggedDppRev) > 0.5 && (
+          <section>
+            <SectionHead>Other field DPP</SectionHead>
+            <div className="font-mono text-sm italic tabular-nums text-deep-green/65">
+              {fmtMoney(result.untaggedDppRev)}
+            </div>
+            <div className="mt-0.5 text-[10px] italic text-deep-green/45">
+              DPP rows with no venue tag — investigate if non-zero post Wave 6.5
+            </div>
+          </section>
+        )}
+
         <section>
           <SectionHead>Membership revenue</SectionHead>
           <div className="font-mono text-sm font-bold tabular-nums text-mint-hover">
@@ -325,8 +338,14 @@ export default function CityPLCard({ city }: { city: string }) {
             {fmtMoney(result.grossRev)}
           </div>
           <div className="mt-0.5 text-[10px] text-deep-green/45">
-            DPP {fmt(result.fieldDppTotal)} + Membership{" "}
-            {fmt(result.membershipRev)}
+            DPP {fmt(result.fieldDppTotal)}
+            {result.strikeRev > 0
+              ? ` + Strikes ${fmt(result.strikeRev)}`
+              : ""}
+            {Math.abs(result.untaggedDppRev) > 0.5
+              ? ` + Other ${fmt(result.untaggedDppRev)}`
+              : ""}
+            {" "}+ Membership {fmt(result.membershipRev)}
           </div>
         </section>
 
