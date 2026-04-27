@@ -45,10 +45,22 @@ function CallbackContent() {
         return;
       }
 
+      // Fire-and-forget last_login_at update. The Supabase query builder is
+      // lazy — without .then() / await it never sends a request, which is
+      // why this was silently failing on every sign-in. Log the error path
+      // so RLS or auth issues surface in the console.
       supabase
         .from("app_users")
         .update({ last_login_at: new Date().toISOString() })
-        .eq("id", appUser.id);
+        .eq("id", appUser.id)
+        .then(({ error: updateErr }) => {
+          if (updateErr) {
+            console.error(
+              "Failed to update last_login_at:",
+              updateErr.message,
+            );
+          }
+        });
 
       const next = sp.get("next");
       router.replace(next ?? firstAllowedPath(appUser));
