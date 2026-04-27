@@ -22,20 +22,6 @@ const bebas = Bebas_Neue({
 export const metadata: Metadata = {
   title: "MatchDay Cockpit",
   description: "Internal ops dashboard for MatchDay.",
-  manifest: "/site.webmanifest",
-  icons: {
-    icon: [
-      { url: "/favicon.ico", sizes: "any" },
-      { url: "/favicon.svg", type: "image/svg+xml" },
-      { url: "/favicon-96x96.png", type: "image/png", sizes: "96x96" },
-    ],
-    // Older browsers + link previews (Slack, older Safari/Edge) look
-    // for rel="shortcut icon" rather than rel="icon" — without this
-    // entry they fall back to the browser's default tab icon even
-    // when /favicon.ico is reachable.
-    shortcut: "/favicon.ico",
-    apple: { url: "/apple-touch-icon.png", sizes: "180x180" },
-  },
 };
 
 // theme-color belongs on the Viewport export in Next 14+; setting it
@@ -54,6 +40,13 @@ export default function RootLayout({
       lang="en"
       className={`${geistSans.variable} ${geistMono.variable} ${bebas.variable} h-full antialiased`}
     >
+      <head>
+        <link
+          rel="icon"
+          type="image/svg+xml"
+          href="/matchday-badge.svg"
+        />
+      </head>
       <body className="min-h-full">
         <AuthGate>{children}</AuthGate>
       </body>
