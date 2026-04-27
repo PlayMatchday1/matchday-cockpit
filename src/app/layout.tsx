@@ -29,6 +29,11 @@ export const metadata: Metadata = {
       { url: "/favicon.svg", type: "image/svg+xml" },
       { url: "/favicon-96x96.png", type: "image/png", sizes: "96x96" },
     ],
+    // Older browsers + link previews (Slack, older Safari/Edge) look
+    // for rel="shortcut icon" rather than rel="icon" — without this
+    // entry they fall back to the browser's default tab icon even
+    // when /favicon.ico is reachable.
+    shortcut: "/favicon.ico",
     apple: { url: "/apple-touch-icon.png", sizes: "180x180" },
   },
 };
