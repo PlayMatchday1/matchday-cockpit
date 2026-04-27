@@ -56,9 +56,12 @@ export function parseTags(raw: string | null | undefined): string[] {
       .filter((s) => s.length > 0);
   }
 
-  // Comma-separated fallback.
+  // Fallback: split on " - " (the actual separator in the user-analysis CSV)
+  // OR comma. The whitespace requirement around the dash is what
+  // distinguishes a separator from a hyphen inside a tag name like
+  // "ON-TIME START AND FINISH" — that one stays intact as a single tag.
   return t
-    .split(",")
+    .split(/\s-\s|,/)
     .map((s) => s.trim())
     .filter((s) => s.length > 0);
 }
