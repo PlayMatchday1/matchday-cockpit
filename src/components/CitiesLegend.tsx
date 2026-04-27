@@ -42,40 +42,47 @@ export default function CitiesLegend() {
       </button>
       <div
         role="tooltip"
-        className={`absolute left-1/2 top-[calc(100%+8px)] z-50 w-[280px] -translate-x-1/2 rounded-lg border border-cream-line bg-white p-3.5 text-xs leading-snug shadow-lg shadow-deep-green/15 transition-opacity ${
+        className={`absolute left-1/2 top-[calc(100%+8px)] z-50 w-[300px] -translate-x-1/2 rounded-lg border border-cream-line bg-white p-3.5 text-[12px] leading-snug shadow-lg shadow-deep-green/15 transition-opacity ${
           pinned
             ? "opacity-100"
             : "pointer-events-none opacity-0 group-hover:pointer-events-auto group-hover:opacity-100"
         }`}
       >
-        <div className="font-bold text-deep-green">
-          Status reflects match volume trend
+        <div className="text-[13px] font-bold text-deep-green">
+          Status — is this city growing?
         </div>
-        <ul className="mt-2 space-y-1">
+        <div className="mt-1 text-deep-green/65">
+          Compares match volume in the last 4 weeks vs the 4 weeks before.
+        </div>
+        <ul className="mt-2 space-y-1.5">
           <LegendRow
             tone="text-mint-hover"
             label="Growing"
-            description="Recent 4 weeks ≥ +10% vs prior 4 weeks"
+            description="Running more matches than a month ago"
+            formula="+10% or more"
           />
           <LegendRow
             tone="text-deep-green/65"
             label="Stable"
-            description="Within ±10% of prior 4 weeks"
+            description="Roughly the same volume as a month ago"
           />
           <LegendRow
             tone="text-coral"
             label="Declining"
-            description="Recent 4 weeks ≤ −10% vs prior 4 weeks"
+            description="Running fewer matches than a month ago"
+            formula="−10% or more"
           />
           <LegendRow
             tone="text-blue-info"
             label="Just launched"
-            description="< 8 matches in recent 4 weeks"
+            description="Less than 8 matches in the last 4 weeks"
           />
         </ul>
-        <div className="mt-3 border-t border-cream-line/60 pt-2 text-deep-green/65">
-          <span className="font-bold text-deep-green">Cancel %</span> is matches
-          that didn&apos;t run / matches scheduled, current month to date.
+        <div className="mt-3 border-t border-cream-line/60 pt-2.5">
+          <div className="text-[13px] font-bold text-deep-green">Cancel %</div>
+          <div className="mt-1 text-deep-green/65">
+            Matches that didn&apos;t run, out of matches scheduled this month.
+          </div>
         </div>
       </div>
     </div>
@@ -86,15 +93,20 @@ function LegendRow({
   tone,
   label,
   description,
+  formula,
 }: {
   tone: string;
   label: string;
   description: string;
+  formula?: string;
 }) {
   return (
-    <li className="flex items-baseline gap-2">
-      <span className={`shrink-0 font-bold ${tone}`}>{label}</span>
-      <span className="text-deep-green/65">{description}</span>
+    <li>
+      <span className={`font-bold ${tone}`}>{label}</span>
+      <span className="text-deep-green/65"> — {description}</span>
+      {formula && (
+        <span className="text-deep-green/40"> ({formula})</span>
+      )}
     </li>
   );
 }
