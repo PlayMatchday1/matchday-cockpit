@@ -267,14 +267,15 @@ export default function BillingScheduleView() {
     const email = appUser?.email;
     if (!email) throw new Error("Not signed in");
 
-    const note = `Bulk add: ${draft.dates.length} ${draft.dates.length === 1 ? "match" : "matches"} at ${draft.venue_name} for ${draft.month}`;
+    const totalMatches = draft.dates.length * draft.match_count;
+    const note = `Bulk add: ${draft.dates.length} date${draft.dates.length === 1 ? "" : "s"} × ${draft.match_count} = ${totalMatches} match${totalMatches === 1 ? "" : "es"} at ${draft.venue_name} for ${draft.month}`;
     const payloads = draft.dates.map((date) => ({
       date,
       month: draft.month,
       city: draft.city,
       venue: draft.venue_name,
-      match_count: 1,
-      total_hours: null,
+      match_count: draft.match_count,
+      total_hours: draft.total_hours,
       venue_cost: null,
       notes: null,
       manual_entry: true,

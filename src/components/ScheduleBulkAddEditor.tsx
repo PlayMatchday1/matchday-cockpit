@@ -10,6 +10,9 @@ export type BulkScheduleDraft = {
   city: string;
   month: Q2Month;
   dates: string[];
+  // Per-date multipliers — applied uniformly across every date.
+  match_count: number;
+  total_hours: number | null;
 };
 
 const ISO_DATE_RX = /^\d{4}-\d{2}-\d{2}$/;
@@ -66,6 +69,8 @@ export default function ScheduleBulkAddEditor({
   const [venueId, setVenueId] = useState<number | null>(null);
   const [month, setMonth] = useState<Q2Month>("Apr 2026");
   const [dateInput, setDateInput] = useState("");
+  const [matchCountInput, setMatchCountInput] = useState("1");
+  const [totalHoursInput, setTotalHoursInput] = useState("");
   const [saving, setSaving] = useState(false);
   const [error, setError] = useState<string | null>(null);
 
@@ -75,7 +80,20 @@ export default function ScheduleBulkAddEditor({
     setVenueId(null);
     setMonth("Apr 2026");
     setDateInput("");
+    setMatchCountInput("1");
+    setTotalHoursInput("");
   }, [open]);
+
+  const matchCountParsed = parseInt(matchCountInput, 10);
+  const matchCountValid =
+    Number.isFinite(matchCountParsed) && matchCountParsed >= 1;
+
+  const totalHoursTrimmed = totalHoursInput.trim();
+  const totalHoursParsed =
+    totalHoursTrimmed === "" ? null : parseFloat(totalHoursTrimmed);
+  const totalHoursValid =
+    totalHoursParsed === null ||
+    (Number.isFinite(totalHoursParsed) && totalHoursParsed >= 0);
 
   const venue = useMemo(
     () => (venueId ? (venues.find((v) => v.id === venueId) ?? null) : null),
@@ -117,6 +135,12 @@ export default function ScheduleBulkAddEditor({
         "Add at least one date that falls within the selected month.",
       );
     }
+    if (!matchCountValid) {
+      return setError("Match Count must be a whole number ≥ 1.");
+    }
+    if (!totalHoursValid) {
+      return setError("Total Hours must be a number ≥ 0 (or blank).");
+    }
     setSaving(true);
     try {
       await onSubmit({
@@ -125,6 +149,8 @@ export default function ScheduleBulkAddEditor({
         city: venue.city,
         month,
         dates: inMonth,
+        match_count: matchCountParsed,
+        total_hours: totalHoursParsed,
       });
     } catch (e) {
       setError(e instanceof Error ? e.message : String(e));
@@ -144,8 +170,9 @@ export default function ScheduleBulkAddEditor({
           Bulk Add Matches
         </h2>
         <p className="mt-1 text-xs text-deep-green/55">
-          One venue, one month, multiple dates. Each date inserts a single
-          match-count=1 schedule row. For varied per-date counts, use Add
+          One venue, one month, multiple dates. Each date inserts ONE
+          schedule row with the match count + hours below. For dates with
+          varied counts (e.g. 3 matches one night, 2 another), use Add
           Match individually after.
         </p>
 
@@ -220,23 +247,79 @@ export default function ScheduleBulkAddEditor({
             </p>
           </Field>
 
+          <div className="grid grid-cols-1 gap-4 md:grid-cols-2">
+            <Field label="Match Count (per date)">
+              <input
+                type="number"
+                min={1}
+                step={1}
+                value={matchCountInput}
+                onChange={(e) => setMatchCountInput(e.target.value)}
+                className={`w-full rounded-md border bg-white px-3 py-2 font-mono text-sm text-deep-green focus:outline-none ${
+                  matchCountValid
+                    ? "border-cream-line focus:border-deep-green"
+                    : "border-coral focus:border-coral"
+                }`}
+              />
+            </Field>
+            <Field label="Total Hours (optional, per date)">
+              <input
+                type="number"
+                min={0}
+                step="0.5"
+                value={totalHoursInput}
+                onChange={(e) => setTotalHoursInput(e.target.value)}
+                placeholder="—"
+                className={`w-full rounded-md border bg-white px-3 py-2 font-mono text-sm text-deep-green focus:outline-none ${
+                  totalHoursValid
+                    ? "border-cream-line focus:border-deep-green"
+                    : "border-coral focus:border-coral"
+                }`}
+              />
+            </Field>
+          </div>
+          <p className="-mt-2 text-[11px] text-deep-green/55">
+            Applied uniformly to every date entered. For varied per-date
+            counts, use Add Match individually.
+          </p>
+
           <div className="rounded-md border border-cream-line bg-cream-soft/30 p-3">
             <div className="text-[11px] font-bold uppercase tracking-wider text-deep-green/55">
               Preview
             </div>
             <div className="mt-1 text-sm text-deep-green">
-              {venue && inMonth.length > 0 ? (
+              {venue && inMonth.length > 0 && matchCountValid ? (
                 <>
-                  Adding{" "}
                   <span className="font-mono font-bold tabular-nums">
                     {inMonth.length}
                   </span>{" "}
-                  match{inMonth.length === 1 ? "" : "es"} at {venue.venue_name}{" "}
-                  in {month}
+                  date{inMonth.length === 1 ? "" : "s"} ×{" "}
+                  <span className="font-mono font-bold tabular-nums">
+                    {matchCountParsed}
+                  </span>{" "}
+                  match_count ={" "}
+                  <span className="font-mono font-bold tabular-nums">
+                    {inMonth.length * matchCountParsed}
+                  </span>{" "}
+                  match{inMonth.length * matchCountParsed === 1 ? "" : "es"} at{" "}
+                  {venue.venue_name} in {month}
+                  {totalHoursParsed !== null && totalHoursValid && (
+                    <>
+                      {" "}
+                      <span className="text-deep-green/55">
+                        ({(totalHoursParsed * inMonth.length).toLocaleString(
+                          "en-US",
+                          { maximumFractionDigits: 2 },
+                        )}{" "}
+                        hours total at {totalHoursParsed} hr/date)
+                      </span>
+                    </>
+                  )}
                 </>
               ) : (
                 <span className="italic text-deep-green/45">
-                  Pick a venue and add at least one date.
+                  Pick a venue, add at least one date, and confirm match
+                  count.
                 </span>
               )}
             </div>
@@ -280,12 +363,23 @@ export default function ScheduleBulkAddEditor({
           <button
             type="button"
             onClick={handleSubmit}
-            disabled={saving || inMonth.length === 0 || !venue}
+            disabled={
+              saving ||
+              inMonth.length === 0 ||
+              !venue ||
+              !matchCountValid ||
+              !totalHoursValid
+            }
             className="rounded-full bg-mint px-5 py-2 text-xs font-bold text-deep-green transition hover:bg-mint-hover disabled:opacity-50"
           >
             {saving
               ? "Adding…"
-              : `Add ${inMonth.length || ""} match${inMonth.length === 1 ? "" : "es"}`}
+              : (() => {
+                  const total = inMonth.length * (matchCountValid ? matchCountParsed : 0);
+                  return total > 0
+                    ? `Add ${total} match${total === 1 ? "" : "es"}`
+                    : "Add matches";
+                })()}
           </button>
         </div>
       </div>
