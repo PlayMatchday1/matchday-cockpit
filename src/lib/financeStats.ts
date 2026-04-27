@@ -809,22 +809,6 @@ export function unprofitableCities(rows: CityInsightRow[]): CityInsightRow[] {
   return rows.filter((r) => r.net < 0).sort((a, b) => a.net - b.net);
 }
 
-export function highPromoUsageFields(
-  rows: VenueInsightRow[],
-): VenueInsightRow[] {
-  return rows
-    .filter((r) => {
-      if (r.spots.total < 30) return false;
-      const mix = r.spots.other / r.spots.total;
-      return mix > 0.2;
-    })
-    .sort(
-      (a, b) =>
-        b.spots.other / Math.max(1, b.spots.total) -
-        a.spots.other / Math.max(1, a.spots.total),
-    );
-}
-
 export function newVenuesProfitable(
   rows: VenueInsightRow[],
 ): VenueInsightRow[] {

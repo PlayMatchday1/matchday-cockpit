@@ -13,7 +13,6 @@ import {
   cashRunway,
   companySpotMix,
   getCurrentQ2Month,
-  highPromoUsageFields,
   membershipHealthAvailable,
   newVenuesProfitable,
   newVenuesStruggling,
@@ -27,11 +26,15 @@ import {
   type VenueInsightRow,
 } from "@/lib/financeStats";
 import {
+  HIGH_PROMO_MIN_SPOTS,
+  HIGH_PROMO_THRESHOLD,
   MEMBER_HEAVY_MIN_SPOTS,
   MEMBER_HEAVY_THRESHOLD,
+  highPromoUsageFromMatches,
   memberHeavyFieldsFromMatches,
+  type HighPromoRow,
   type MemberHeavyRow,
-} from "@/lib/memberHeavyInsight";
+} from "@/lib/matchInsights";
 
 function fmtMoney(n: number, sign = false): string {
   const r = Math.round(n);
@@ -72,7 +75,7 @@ export default function FinanceInsightsGrid({
       newProfit: newVenuesProfitable(venueRows),
       unprofitableF: unprofitableFields(venueRows),
       unprofitableC: unprofitableCities(cityRows),
-      highPromo: highPromoUsageFields(venueRows),
+      highPromo: highPromoUsageFromMatches(matchRows, data, month),
       newStruggling: newVenuesStruggling(venueRows),
       overheadBurden: overheadBurdenCities(cityRows),
       runway: cashRunway(data),
@@ -266,13 +269,10 @@ export default function FinanceInsightsGrid({
                       ? "None flagged"
                       : `${computed.highPromo.length} field${computed.highPromo.length === 1 ? "" : "s"}`
                   }
-                  subtitle=">20% promo, 30+ spots"
+                  subtitle={`≥${Math.round(HIGH_PROMO_THRESHOLD * 100)}% promo, ${HIGH_PROMO_MIN_SPOTS}+ spots`}
                   empty={computed.highPromo.length === 0}
                 >
-                  <VenueMixList
-                    rows={computed.highPromo.slice(0, 5)}
-                    metric="other"
-                  />
+                  <HighPromoList rows={computed.highPromo.slice(0, 5)} />
                 </FinanceInsightCard>
 
                 <FinanceInsightCard
@@ -470,34 +470,27 @@ function MemberHeavyList({ rows }: { rows: MemberHeavyRow[] }) {
   );
 }
 
-function VenueMixList({
-  rows,
-  metric,
-}: {
-  rows: VenueInsightRow[];
-  metric: "member" | "other";
-}) {
+function HighPromoList({ rows }: { rows: HighPromoRow[] }) {
   if (rows.length === 0) return null;
   return (
     <ul className="space-y-1 text-xs">
-      {rows.map((r) => {
-        const value = metric === "member" ? r.spots.member : r.spots.other;
-        const pct = r.spots.total > 0 ? value / r.spots.total : 0;
-        return (
-          <li
-            key={`${r.city}|${r.venue}`}
-            className="flex items-baseline justify-between gap-2"
+      {rows.map((r) => (
+        <li
+          key={`${r.city}|${r.venue}`}
+          className="flex items-baseline justify-between gap-2"
+        >
+          <span className="truncate text-deep-green/85">
+            {r.venue}
+            <span className="ml-1 text-deep-green/45">· {r.city}</span>
+          </span>
+          <span
+            className="font-mono font-bold tabular-nums text-coral"
+            title={`${r.promoCount} promo / ${r.total} total`}
           >
-            <span className="truncate text-deep-green/85">
-              {r.venue}
-              <span className="ml-1 text-deep-green/45">· {r.city}</span>
-            </span>
-            <span className="font-mono font-bold tabular-nums text-deep-green/75">
-              {fmtPct(pct)}
-            </span>
-          </li>
-        );
-      })}
+            {fmtPct(r.promoPct)}
+          </span>
+        </li>
+      ))}
     </ul>
   );
 }

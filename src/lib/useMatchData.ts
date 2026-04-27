@@ -14,6 +14,10 @@ export type MatchRow = {
   // promo / other / null. Used by the Member-Heavy Fields insight to
   // measure each venue's actual member mix.
   paymentType: string | null;
+  // Promocode column from user_analysis — non-empty when the player
+  // redeemed a promo code on this registration. Used by the High Promo
+  // Usage insight.
+  promocode: string | null;
 };
 
 export type DataMeta = {
@@ -82,6 +86,7 @@ async function load(): Promise<void> {
     match_canceled: boolean;
     player_canceled_at: string | null;
     payment_type: string | null;
+    promocode: string | null;
   };
   let raw: MatchSelect[];
   try {
@@ -89,7 +94,7 @@ async function load(): Promise<void> {
       supabase
         .from("match_registrations")
         .select(
-          "city, field, match_start, match_canceled, player_canceled_at, payment_type",
+          "city, field, match_start, match_canceled, player_canceled_at, payment_type, promocode",
         )
         .eq("upload_id", uploadId)
         .order("match_start"),
@@ -115,6 +120,7 @@ async function load(): Promise<void> {
       matchCanceled: !!r.match_canceled,
       playerCanceledAt: parseLocal(r.player_canceled_at),
       paymentType: r.payment_type,
+      promocode: r.promocode,
     });
   }
 
