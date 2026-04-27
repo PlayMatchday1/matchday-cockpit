@@ -36,27 +36,27 @@ export default function StatusPill({ status }: { status: Status }) {
   );
 }
 
-type CityHealthValue = "Healthy" | "Building" | "At risk" | "Just launched";
+type CityHealthValue = "Growing" | "Stable" | "Declining" | "Just launched";
 
 const HEALTH_COLORS: Record<
   CityHealthValue,
   { pill: string; dot: string }
 > = {
-  Healthy: {
+  Growing: {
     pill: "bg-mint-soft text-deep-green ring-mint/40",
     dot: "bg-mint",
   },
-  Building: {
-    pill: "bg-blue-soft text-blue-info ring-blue-info/30",
-    dot: "bg-blue-info",
+  Stable: {
+    pill: "bg-muted-soft text-muted ring-cream-line",
+    dot: "bg-muted",
   },
-  "At risk": {
+  Declining: {
     pill: "bg-coral-soft text-coral ring-coral/40",
     dot: "bg-coral",
   },
   "Just launched": {
-    pill: "bg-muted-soft text-muted ring-cream-line",
-    dot: "bg-muted",
+    pill: "bg-blue-soft text-blue-info ring-blue-info/30",
+    dot: "bg-blue-info",
   },
 };
 

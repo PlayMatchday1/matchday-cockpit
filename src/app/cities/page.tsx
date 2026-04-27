@@ -194,7 +194,12 @@ function CityCard({
 }: {
   city: string;
   weekly: WeeklySpotsEntry[];
-  cancel: { totalSpots: number; playerCancels: number; rate: number };
+  cancel: {
+    totalMatches: number;
+    canceledMatches: number;
+    rate: number;
+    totalSpots: number;
+  };
   venues: string[];
   status: CityStatus;
   currentWeek: WeeklySpotsEntry;
@@ -226,7 +231,12 @@ function CityCard({
         <Stat
           label="Cancel %"
           value={
-            cancel.totalSpots === 0 ? "—" : `${Math.round(cancel.rate)}%`
+            cancel.totalMatches === 0 ? "—" : `${Math.round(cancel.rate)}%`
+          }
+          title={
+            cancel.totalMatches === 0
+              ? "No matches scheduled in the last 8 weeks."
+              : `${cancel.canceledMatches} of ${cancel.totalMatches} matches canceled in the last 8 weeks.`
           }
         />
       </div>
@@ -234,9 +244,17 @@ function CityCard({
   );
 }
 
-function Stat({ label, value }: { label: string; value: string }) {
+function Stat({
+  label,
+  value,
+  title,
+}: {
+  label: string;
+  value: string;
+  title?: string;
+}) {
   return (
-    <div className="min-w-0">
+    <div className="min-w-0" title={title}>
       <div className="text-[10px] font-bold uppercase tracking-wider text-deep-green/60">
         {label}
       </div>

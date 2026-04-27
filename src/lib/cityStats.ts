@@ -2,14 +2,16 @@ import type { MatchRow } from "./useMatchData";
 
 export const MATCH_DENOMINATOR = 18;
 
-export const STATUS_THRESHOLDS = {
-  buildingMatchesPerWeek: 10,
-  atRiskCancelRate: 15,
-  healthyMatchesPerWeek: 15,
-  healthyCancelRate: 8,
+// Trend-based status thresholds. Compares the most recent 4 complete
+// weeks (excluding the in-progress current week) against the prior 4
+// complete weeks. Just-launched cap is on the recent window only —
+// once a city sustains ≥ 8 matches across 4 weeks (avg 2/wk), it
+// graduates into the trend buckets.
+export const TREND_THRESHOLDS = {
+  growingPct: 10,                  // ≥ +10% recent vs prior → Growing
+  decliningPct: -10,               // ≤ −10% → Declining
+  justLaunchedRecentMatches: 8,    // < 8 matches in recent 4 weeks → Just launched
 };
-
-export const INSUFFICIENT_DATA_TOTAL_SPOTS = 20;
 
 const MONTH_ABBR = [
   "Jan",
@@ -133,25 +135,44 @@ export function getWeeklySpots(
   }));
 }
 
+// Cancel rate as a city tile reader would expect: % of distinct
+// scheduled matches that didn't run. Match identity = (match_start +
+// field), de-duped across the many registration rows per match.
+//
+// totalSpots is preserved on the return value because CityDetailView's
+// "Total spots" stat card still uses it — booked-spot count among
+// matches that ran is a useful operational metric on its own.
 export function getCancelRate(
   rows: MatchRow[],
   city: string,
   weeksBack = 8,
   now: Date = new Date(),
-): { totalSpots: number; playerCancels: number; rate: number } {
+): {
+  totalMatches: number;
+  canceledMatches: number;
+  rate: number;
+  totalSpots: number;
+} {
   const { earliestMonday, windowEnd } = windowBounds(weeksBack, now);
 
+  const matches = new Map<string, boolean>(); // matchKey → canceled
   let totalSpots = 0;
-  let playerCancels = 0;
+
   for (const row of rows) {
     if (row.city !== city) continue;
-    if (row.matchCanceled) continue;
+    if (!row.field) continue;
     if (row.matchStart < earliestMonday || row.matchStart >= windowEnd) continue;
-    totalSpots++;
-    if (row.playerCanceledAt !== null) playerCancels++;
+    const key = `${row.matchStart.getTime()}|${row.field}`;
+    if (!matches.has(key)) matches.set(key, row.matchCanceled);
+    if (!row.matchCanceled) totalSpots++;
   }
-  const rate = totalSpots === 0 ? 0 : (playerCancels / totalSpots) * 100;
-  return { totalSpots, playerCancels, rate };
+
+  let canceledMatches = 0;
+  for (const canceled of matches.values()) if (canceled) canceledMatches++;
+  const totalMatches = matches.size;
+  const rate = totalMatches === 0 ? 0 : (canceledMatches / totalMatches) * 100;
+
+  return { totalMatches, canceledMatches, rate, totalSpots };
 }
 
 export function getActiveVenues(
@@ -172,28 +193,55 @@ export function getActiveVenues(
   return [...venues].sort();
 }
 
-export type CityStatus = "Healthy" | "Building" | "At risk" | "Just launched";
+export type CityStatus = "Growing" | "Stable" | "Declining" | "Just launched";
 
+// Trend-based status: compare the most recent 4 complete weeks
+// (excluding the in-progress current week) against the prior 4
+// complete weeks. Direction-of-travel signal — answers "is this
+// city getting better, worse, or stagnating" rather than just "is
+// this city large or small".
 export function getCityStatus(
   rows: MatchRow[],
   city: string,
   now: Date = new Date(),
 ): CityStatus {
-  const cancel = getCancelRate(rows, city, 8, now);
-  if (cancel.totalSpots < INSUFFICIENT_DATA_TOTAL_SPOTS) return "Just launched";
-  if (cancel.rate >= STATUS_THRESHOLDS.atRiskCancelRate) return "At risk";
+  const thisMonday = getMonday(now);
+  // Walk back: weeks ending past Sunday, partitioned into recent-4
+  // and prior-4 buckets.
+  const olderStart = new Date(
+    thisMonday.getFullYear(),
+    thisMonday.getMonth(),
+    thisMonday.getDate() - 7 * 8,
+  );
+  const splitPoint = new Date(
+    thisMonday.getFullYear(),
+    thisMonday.getMonth(),
+    thisMonday.getDate() - 7 * 4,
+  );
+  const recentEnd = thisMonday; // exclusive: last completed week ends at thisMonday - 1 day
 
-  const weekly = getWeeklySpots(rows, city, 8, now);
-  const currentMatches = weekly[weekly.length - 1].matches;
-
-  if (currentMatches < STATUS_THRESHOLDS.buildingMatchesPerWeek) return "Building";
-  if (
-    currentMatches >= STATUS_THRESHOLDS.healthyMatchesPerWeek &&
-    cancel.rate < STATUS_THRESHOLDS.healthyCancelRate
-  ) {
-    return "Healthy";
+  const olderMatches = new Set<string>();
+  const recentMatches = new Set<string>();
+  for (const row of rows) {
+    if (row.city !== city) continue;
+    if (row.matchCanceled) continue;
+    if (!row.field) continue;
+    const ms = row.matchStart;
+    if (ms < olderStart || ms >= recentEnd) continue;
+    const key = `${ms.getTime()}|${row.field}`;
+    if (ms < splitPoint) olderMatches.add(key);
+    else recentMatches.add(key);
   }
-  return "Building";
+
+  if (recentMatches.size < TREND_THRESHOLDS.justLaunchedRecentMatches) {
+    return "Just launched";
+  }
+  if (olderMatches.size === 0) return "Growing"; // no prior baseline to compare → recent volume implies growth
+  const pctChange =
+    ((recentMatches.size - olderMatches.size) / olderMatches.size) * 100;
+  if (pctChange >= TREND_THRESHOLDS.growingPct) return "Growing";
+  if (pctChange <= TREND_THRESHOLDS.decliningPct) return "Declining";
+  return "Stable";
 }
 
 export type SlotWeekData = {

@@ -7,7 +7,6 @@ import {
   getCancelRate,
   getCityStatus,
   getWeeklySpots,
-  STATUS_THRESHOLDS,
 } from "@/lib/cityStats";
 import { useMatchData } from "@/lib/useMatchData";
 import { useReviewData } from "@/lib/useReviewData";
@@ -22,10 +21,13 @@ import CancelHeatmap from "./CancelHeatmap";
 import CityGoalsView from "./CityGoalsView";
 import CityManagerTable from "./CityManagerTable";
 
+// Color tiers calibrated for match-cancel rate (the new metric semantics).
+// Across the 8 cities the rate runs 4-30%; >25% reads as a real problem,
+// 15-25% as moderate operational drag, <15% as the working baseline.
 function cancelRateColor(rate: number, hasData: boolean): string {
   if (!hasData) return "text-deep-green/40";
-  if (rate >= STATUS_THRESHOLDS.atRiskCancelRate) return "text-coral";
-  if (rate >= STATUS_THRESHOLDS.healthyCancelRate) return "text-[#d97706]";
+  if (rate >= 25) return "text-coral";
+  if (rate >= 15) return "text-[#d97706]";
   return "text-deep-green";
 }
 
@@ -39,7 +41,7 @@ export default function CityDetailView({ city }: { city: City }) {
   const venues = getActiveVenues(rows, city, 8);
   const status = getCityStatus(rows, city);
   const currentWeek = weekly[weekly.length - 1];
-  const hasData = cancel.totalSpots > 0;
+  const hasData = cancel.totalMatches > 0;
 
   const reviews4wk = getRecentReviewStats(reviewRows, city, 4);
   const reviewWindow = getActiveMonthWindow(reviewRows);
