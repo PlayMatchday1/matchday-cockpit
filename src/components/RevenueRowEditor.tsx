@@ -23,7 +23,7 @@ const CITY_OPTIONS = [
   "St. Louis",
   "OKC",
   "El Paso",
-  "Corporate / Unmatched",
+  "Deleted Account Revenue",
 ];
 
 const SOURCE_OPTIONS = ["Venmo", "Cash", "Sponsorship", "Other"];

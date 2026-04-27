@@ -215,7 +215,7 @@ function renderStripePreview(p: StripePreview): React.ReactNode {
               <span className="font-mono">
                 {p.matchUnmatchedCityCodes.join(", ")}
               </span>{" "}
-              → Corporate / Unmatched
+              → Deleted Account Revenue
             </div>
           )}
           {p.matchVenueResolutions.length > 0 && (

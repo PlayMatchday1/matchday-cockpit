@@ -134,10 +134,16 @@ function deriveMemberCity(memberId: string): string | null {
   return null;
 }
 
-const UNMATCHED_CITY = "Corporate / Unmatched";
+// City label for revenue we can't attribute to a specific market. The
+// common cause is a Stripe membership payment whose customer email no
+// longer matches anything in fin_members — the player deleted their
+// account between paying and our next members sync, so the email→city
+// lookup misses. Surfaced as its own row at the bottom of Cash Flow's
+// Revenue by City list.
+const DELETED_ACCOUNT_CITY = "Deleted Account Revenue";
 
 function memberCityFromId(memberId: string): string {
-  return deriveMemberCity(memberId) ?? UNMATCHED_CITY;
+  return deriveMemberCity(memberId) ?? DELETED_ACCOUNT_CITY;
 }
 
 function normalizeSource(s: string | null): string | null {
@@ -1431,7 +1437,7 @@ function looksLikeMembership(
 }
 
 function cityFromIdentifier(code: string | null): string {
-  if (!code) return UNMATCHED_CITY;
+  if (!code) return DELETED_ACCOUNT_CITY;
   const upper = code.toUpperCase().trim();
   const prefixes = Object.keys(STRIPE_CITY_PREFIX).sort(
     (a, b) => b.length - a.length,
@@ -1439,7 +1445,7 @@ function cityFromIdentifier(code: string | null): string {
   for (const p of prefixes) {
     if (upper.startsWith(p)) return STRIPE_CITY_PREFIX[p];
   }
-  return UNMATCHED_CITY;
+  return DELETED_ACCOUNT_CITY;
 }
 
 function aggregateStripeRows(
@@ -1508,7 +1514,7 @@ export async function previewStripe(
   // Build email → city map from fin_members. Paginated — without it
   // PostgREST silently caps at 1000 rows even though fin_members holds
   // 2k+ customers, which leaves a chunk of email→city lookups stranded
-  // in the Corporate / Unmatched bucket.
+  // in the Deleted Account Revenue bucket.
   let memberRows: Array<{ email: string | null; city: string | null }>;
   try {
     memberRows = await selectAll<{ email: string | null; city: string | null }>(
@@ -1521,7 +1527,7 @@ export async function previewStripe(
   }
   const emailToCity = new Map<string, string>();
   for (const m of memberRows) {
-    if (m.email) emailToCity.set(m.email.toLowerCase().trim(), m.city ?? UNMATCHED_CITY);
+    if (m.email) emailToCity.set(m.email.toLowerCase().trim(), m.city ?? DELETED_ACCOUNT_CITY);
   }
 
   // Build alias map from fin_venue_aliases for venue normalization on
@@ -1601,7 +1607,7 @@ export async function previewStripe(
       type = "Strike";
       strikePayments++;
       allocatedCity = cityFromIdentifier(cityIdentifier);
-      if (allocatedCity === UNMATCHED_CITY && cityIdentifier) {
+      if (allocatedCity === DELETED_ACCOUNT_CITY && cityIdentifier) {
         matchUnmatchedCityCodes.add(cityIdentifier);
       }
     } else if (
@@ -1610,18 +1616,18 @@ export async function previewStripe(
       type = "Membership";
       membershipPayments++;
       const lookup = email ? emailToCity.get(email) : undefined;
-      if (lookup && lookup !== UNMATCHED_CITY) {
+      if (lookup && lookup !== DELETED_ACCOUNT_CITY) {
         allocatedCity = lookup;
         emailAllocated++;
       } else {
-        allocatedCity = UNMATCHED_CITY;
+        allocatedCity = DELETED_ACCOUNT_CITY;
         if (email) unmatchedEmailSet.add(email);
       }
     } else {
       type = "DPP";
       matchPayments++;
       allocatedCity = cityFromIdentifier(cityIdentifier);
-      if (allocatedCity === UNMATCHED_CITY && cityIdentifier) {
+      if (allocatedCity === DELETED_ACCOUNT_CITY && cityIdentifier) {
         matchUnmatchedCityCodes.add(cityIdentifier);
       }
     }
@@ -1796,7 +1802,7 @@ export const FINANCE_IMPORTERS: ImporterConfig[] = [
     key: "members",
     title: "8. Members",
     description:
-      "Keeps every member row regardless of status (needed for the Stripe email→city lookup). City derived from member_id prefix (ATX/DFW/HOU/SATX/ATL/STL/OKC/ELP); unrecognized prefixes go to Corporate / Unmatched. Replaces all existing fin_members rows.",
+      "Keeps every member row regardless of status (needed for the Stripe email→city lookup). City derived from member_id prefix (ATX/DFW/HOU/SATX/ATL/STL/OKC/ELP); unrecognized prefixes go to Deleted Account Revenue. Replaces all existing fin_members rows.",
     expectedColumns:
       "Member ID, Member Email, Status, First Name, Last Name, Phone Number, Member Activation Date, Membership Length, Price, Canceled At, Cancel Reason",
     importer: importMembers,
