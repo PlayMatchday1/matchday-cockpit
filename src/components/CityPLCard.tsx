@@ -7,7 +7,6 @@ import {
   cityMembershipRevenueFor,
   cityOverheadFor,
   tabToMonths,
-  venueDppRevenueFor,
   venueMatchCountFor,
   type Q2Month,
 } from "@/lib/financeStats";
@@ -42,45 +41,44 @@ export default function CityPLCard({ city }: { city: string }) {
       (g) => g.city === city,
     );
 
+    // Per-venue costs (still useful — fin_schedule is venue-keyed).
     const fieldLevel = cityGroups
       .map((g) => {
-        const legNames = new Set(g.legs.map((l) => l.venue_name));
-        const sameNameLegs = legNames.size !== g.legs.length;
-        let dppRev = 0;
         let cost = 0;
         let matchCount = 0;
+        const legNames = new Set(g.legs.map((l) => l.venue_name));
+        const sameNameLegs = legNames.size !== g.legs.length;
         for (const m of months) {
           for (const leg of g.legs) {
             cost += canonicalVenueCost(data, leg.id, m).amount;
           }
           if (sameNameLegs) {
-            // One query covers all legs (alias-collapsed canonical name).
-            dppRev += venueDppRevenueFor(data, city, g.displayName, m);
             matchCount += venueMatchCountFor(data, city, g.displayName, m);
           } else {
             for (const leg of g.legs) {
-              dppRev += venueDppRevenueFor(data, city, leg.venue_name, m);
               matchCount += venueMatchCountFor(data, city, leg.venue_name, m);
             }
           }
         }
         return {
           venue: g.displayName,
-          dppRev,
           cost,
           matchCount,
-          net: dppRev - cost,
           billingType: g.legs[0].billing_type ?? null,
           perMatchRate: g.legs[0].per_match_rate ?? null,
           monthlyFlat: g.legs[0].monthly_flat ?? null,
           isCombined: g.isCombined,
         };
       })
-      .filter((r) => r.dppRev !== 0 || r.cost !== 0)
-      .sort((a, b) => b.dppRev - a.dppRev);
+      .filter((r) => r.cost !== 0)
+      .sort((a, b) => b.cost - a.cost);
 
-    const fieldNetTotal = fieldLevel.reduce((s, r) => s + r.net, 0);
+    const fieldCostTotal = fieldLevel.reduce((s, r) => s + r.cost, 0);
 
+    // City-level DPP revenue: sum across ALL DPP rows in this city +
+    // month, no venue predicate. Stripe DPP rows have venue=null and so
+    // were invisible to the prior per-venue lookup; this captures them.
+    let dppRev = 0;
     let membershipRev = 0;
     let grossRev = 0;
     const overhead = {
@@ -90,6 +88,10 @@ export default function CityPLCard({ city }: { city: string }) {
       equipment: 0,
     };
     for (const m of months) {
+      for (const r of data.revenue) {
+        if (r.city !== city || r.month !== m) continue;
+        if (r.type === "DPP") dppRev += r.net;
+      }
       membershipRev += cityMembershipRevenueFor(data, city, m);
       grossRev += cityGrossRevenueFor(data, city, m);
       const o = cityOverheadFor(data, city, m);
@@ -104,11 +106,14 @@ export default function CityPLCard({ city }: { city: string }) {
       overhead.marketing +
       overhead.equipment;
 
+    const fieldNetTotal = dppRev - fieldCostTotal;
     const netPL = fieldNetTotal + membershipRev - overheadTotal;
     const margin = grossRev > 0 ? netPL / grossRev : 0;
 
     return {
       fieldLevel,
+      fieldCostTotal,
+      dppRev,
       fieldNetTotal,
       membershipRev,
       overhead,
@@ -152,20 +157,20 @@ export default function CityPLCard({ city }: { city: string }) {
         <section>
           <SectionHead>
             Field-level{" "}
-            <span className="normal-case text-deep-green/45">(DPP only)</span>
+            <span className="normal-case text-deep-green/45">
+              (cost per venue)
+            </span>
           </SectionHead>
           {result.fieldLevel.length === 0 ? (
             <div className="text-xs italic text-deep-green/45">
-              No DPP activity
+              No venue costs this period
             </div>
           ) : (
             <table className="w-full text-xs">
               <thead>
                 <tr className="text-[10px] font-bold uppercase tracking-wider text-deep-green/55">
                   <th className="py-1 text-left">Venue</th>
-                  <th className="py-1 pl-2 text-right">DPP Rev</th>
                   <th className="py-1 pl-2 text-right">Cost</th>
-                  <th className="py-1 pl-2 text-right">Net</th>
                 </tr>
               </thead>
               <tbody>
@@ -199,24 +204,29 @@ export default function CityPLCard({ city }: { city: string }) {
                         </div>
                       )}
                     </td>
-                    <td className="py-1.5 pl-2 text-right font-mono tabular-nums text-mint-hover">
-                      {fmt(f.dppRev)}
-                    </td>
                     <td className="py-1.5 pl-2 text-right font-mono tabular-nums text-coral">
                       {fmt(f.cost)}
                     </td>
-                    <td
-                      className={`py-1.5 pl-2 text-right font-mono font-bold tabular-nums ${
-                        f.net >= 0 ? "text-mint-hover" : "text-coral"
-                      }`}
-                    >
-                      {fmt(f.net)}
-                    </td>
                   </tr>
                 ))}
+                <tr className="border-t-2 border-deep-green/15">
+                  <td className="py-1.5 pr-2 text-[10px] font-bold uppercase tracking-wider text-deep-green/55">
+                    Total field cost
+                  </td>
+                  <td className="py-1.5 pl-2 text-right font-mono font-bold tabular-nums text-coral">
+                    {fmt(result.fieldCostTotal)}
+                  </td>
+                </tr>
               </tbody>
             </table>
           )}
+        </section>
+
+        <section>
+          <SectionHead>DPP revenue</SectionHead>
+          <div className="font-mono text-sm font-bold tabular-nums text-mint-hover">
+            {result.dppRev > 0 ? fmtMoney(result.dppRev) : "—"}
+          </div>
         </section>
 
         <section>
