@@ -75,6 +75,12 @@ export type FinVenue = {
   monthly_flat: number | null;
   per_match_rate: number | null;
   max_spots: number | null;
+  // Per-spot retail pricing. Edited inline on /admin/finance/field-costs;
+  // feeds the projection algorithm (scheduled_matches × dpp_price ×
+  // historical_fill_rate). Nullable so newly-added venues can be filled
+  // in lazily.
+  dpp_price: number | null;
+  member_price: number | null;
   notes: string | null;
   launch_date: string | null;
   is_active: boolean;
@@ -395,6 +401,14 @@ async function load(): Promise<void> {
         r.per_match_rate === null ? null : asNumber(r.per_match_rate),
       max_spots:
         r.max_spots === null ? null : Math.round(asNumber(r.max_spots)),
+      dpp_price:
+        r.dpp_price === null || r.dpp_price === undefined
+          ? null
+          : asNumber(r.dpp_price),
+      member_price:
+        r.member_price === null || r.member_price === undefined
+          ? null
+          : asNumber(r.member_price),
       notes: cleanTextNullable(r.notes),
       launch_date: cleanTextNullable(r.launch_date),
       is_active:

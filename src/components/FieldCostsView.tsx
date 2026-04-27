@@ -1,6 +1,6 @@
 "use client";
 
-import { useMemo, useState } from "react";
+import { useEffect, useMemo, useState } from "react";
 import Link from "next/link";
 import { ChevronDown, ChevronRight, Lock, Pencil, Pin, Plus, Trash2 } from "lucide-react";
 import ConfirmDeleteDialog from "@/components/ConfirmDeleteDialog";
@@ -26,8 +26,16 @@ import { useAuth } from "@/lib/useAuth";
 import {
   refetchFinanceData,
   useFinanceData,
+  type FinVenue,
   type FinVenueCostOverride,
 } from "@/lib/useFinanceData";
+
+type PriceField = "dpp_price" | "member_price";
+type PriceCellState = { saving: boolean; error: string | null; flash: boolean };
+type PriceEditMap = Map<string, PriceCellState>;
+function priceKey(venueId: number, field: PriceField): string {
+  return `${venueId}|${field}`;
+}
 
 type BillingFilter = "ALL" | "per_match" | "monthly_flat" | "per_hour" | "OVERRIDE";
 
@@ -57,6 +65,86 @@ export default function FieldCostsView() {
   const [removeRow, setRemoveRow] = useState<FieldCostRow | null>(null);
 
   const [oneOffOpen, setOneOffOpen] = useState(false);
+
+  const [priceEdits, setPriceEdits] = useState<PriceEditMap>(new Map());
+
+  const venueById = useMemo(() => {
+    const m = new Map<number, FinVenue>();
+    for (const v of data?.venues ?? []) m.set(v.id, v);
+    return m;
+  }, [data?.venues]);
+
+  async function savePrice(
+    venueId: number,
+    field: PriceField,
+    raw: string,
+  ): Promise<void> {
+    const email = appUser?.email;
+    const venue = venueById.get(venueId);
+    if (!email || !venue) return;
+    const key = priceKey(venueId, field);
+    const trimmed = raw.trim();
+    const parsed = trimmed === "" ? null : parseFloat(trimmed);
+    if (parsed !== null && (Number.isNaN(parsed) || parsed < 0)) {
+      setPriceEdits((m) => {
+        const next = new Map(m);
+        next.set(key, { saving: false, error: "Enter a positive number.", flash: false });
+        return next;
+      });
+      return;
+    }
+    setPriceEdits((m) => {
+      const next = new Map(m);
+      next.set(key, { saving: true, error: null, flash: false });
+      return next;
+    });
+    const before: Record<string, unknown> = {
+      id: venue.id,
+      [field]: venue[field],
+    };
+    try {
+      const { data: updated, error } = await supabase
+        .from("fin_venues")
+        .update({ [field]: parsed })
+        .eq("id", venueId)
+        .select()
+        .single();
+      if (error) throw error;
+      await logChange({
+        tableName: "fin_venues",
+        rowId: venueId,
+        action: "update",
+        changedBy: email,
+        before,
+        after: updated as Record<string, unknown>,
+      });
+      await refetchFinanceData();
+      setPriceEdits((m) => {
+        const next = new Map(m);
+        next.set(key, { saving: false, error: null, flash: true });
+        return next;
+      });
+      // Clear flash + state after the animation settles so the cell goes
+      // back to its default chrome.
+      setTimeout(() => {
+        setPriceEdits((m) => {
+          const next = new Map(m);
+          next.delete(key);
+          return next;
+        });
+      }, 900);
+    } catch (e) {
+      setPriceEdits((m) => {
+        const next = new Map(m);
+        next.set(key, {
+          saving: false,
+          error: e instanceof Error ? e.message : "Save failed.",
+          flash: false,
+        });
+        return next;
+      });
+    }
+  }
 
   const allRows: FieldCostRow[] = useMemo(() => {
     if (!data) return [];
@@ -402,6 +490,8 @@ export default function FieldCostsView() {
                 <th className="px-3 py-2 text-left">Venue</th>
                 <th className="px-3 py-2 text-left">City</th>
                 <th className="px-3 py-2 text-left">Billing</th>
+                <th className="px-3 py-2 text-right">DPP Price</th>
+                <th className="px-3 py-2 text-right">Member Price</th>
                 <th className="px-3 py-2 text-right">Match Count</th>
                 <th className="px-3 py-2 text-right">Cost</th>
                 <th className="px-3 py-2 text-left">How it's computed</th>
@@ -413,7 +503,7 @@ export default function FieldCostsView() {
               {loading && filtered.length === 0 ? (
                 <tr>
                   <td
-                    colSpan={9}
+                    colSpan={11}
                     className="px-3 py-8 text-center text-sm text-deep-green/55"
                   >
                     Loading field costs…
@@ -422,7 +512,7 @@ export default function FieldCostsView() {
               ) : filtered.length === 0 ? (
                 <tr>
                   <td
-                    colSpan={9}
+                    colSpan={11}
                     className="px-3 py-8 text-center text-sm text-deep-green/55"
                   >
                     No venues match these filters.
@@ -433,6 +523,7 @@ export default function FieldCostsView() {
                   const expanded = expandedKey === row.key;
                   const expandable =
                     row.billingType === "per_match" && row.legs.length > 0;
+                  const primaryVenue = venueById.get(row.primaryVenueId) ?? null;
                   return (
                     <FieldCostTableRow
                       key={row.key}
@@ -444,6 +535,14 @@ export default function FieldCostsView() {
                       }
                       onSetOverride={() => openSetOverride(row)}
                       onRemoveOverride={() => setRemoveRow(row)}
+                      primaryVenue={primaryVenue}
+                      priceState={(field) =>
+                        priceEdits.get(priceKey(row.primaryVenueId, field)) ??
+                        null
+                      }
+                      onSavePrice={(field, raw) =>
+                        savePrice(row.primaryVenueId, field, raw)
+                      }
                       scheduleRows={
                         data
                           ? data.schedule.filter(
@@ -591,6 +690,9 @@ function FieldCostTableRow({
   onToggleExpand,
   onSetOverride,
   onRemoveOverride,
+  primaryVenue,
+  priceState,
+  onSavePrice,
   scheduleRows,
 }: {
   row: FieldCostRow;
@@ -599,6 +701,9 @@ function FieldCostTableRow({
   onToggleExpand: () => void;
   onSetOverride: () => void;
   onRemoveOverride: () => void;
+  primaryVenue: FinVenue | null;
+  priceState: (field: PriceField) => PriceCellState | null;
+  onSavePrice: (field: PriceField, raw: string) => void;
   scheduleRows: {
     date: string;
     venue: string;
@@ -635,6 +740,26 @@ function FieldCostTableRow({
         <td className="px-3 py-2 text-deep-green/85">{row.city}</td>
         <td className="px-3 py-2 font-mono text-[10px] uppercase tracking-wider text-deep-green/65">
           {row.billingType ?? "—"}
+        </td>
+        <td
+          className="px-3 py-2 text-right"
+          onClick={(e) => e.stopPropagation()}
+        >
+          <PriceCell
+            stored={primaryVenue?.dpp_price ?? null}
+            state={priceState("dpp_price")}
+            onSave={(raw) => onSavePrice("dpp_price", raw)}
+          />
+        </td>
+        <td
+          className="px-3 py-2 text-right"
+          onClick={(e) => e.stopPropagation()}
+        >
+          <PriceCell
+            stored={primaryVenue?.member_price ?? null}
+            state={priceState("member_price")}
+            onSave={(raw) => onSavePrice("member_price", raw)}
+          />
         </td>
         <td className="px-3 py-2 text-right font-mono tabular-nums text-deep-green/75">
           {row.matchCount}
@@ -704,12 +829,82 @@ function FieldCostTableRow({
       </tr>
       {expanded && expandable && (
         <tr className="bg-cream-soft/40">
-          <td colSpan={9} className="px-5 py-3">
+          <td colSpan={11} className="px-5 py-3">
             <PerMatchExpand row={row} scheduleRows={scheduleRows} />
           </td>
         </tr>
       )}
     </>
+  );
+}
+
+function PriceCell({
+  stored,
+  state,
+  onSave,
+}: {
+  stored: number | null;
+  state: PriceCellState | null;
+  onSave: (raw: string) => void;
+}) {
+  const [local, setLocal] = useState<string>(stored == null ? "" : String(stored));
+
+  // Reset local input when stored value changes (after refetch) and we're
+  // not in the middle of an edit.
+  useEffect(() => {
+    if (!state) {
+      setLocal(stored == null ? "" : String(stored));
+    }
+  }, [stored, state]);
+
+  const isEmpty = stored == null && !state;
+  const showFlash = state?.flash;
+  const showError = Boolean(state?.error);
+  const showSaving = Boolean(state?.saving);
+
+  return (
+    <div
+      className={`relative inline-flex w-24 items-center rounded-md ${
+        showError
+          ? "ring-2 ring-coral"
+          : isEmpty
+            ? "ring-1 ring-coral/40"
+            : "ring-1 ring-cream-line"
+      } ${showFlash ? "flash-mint" : ""}`}
+      title={state?.error ?? ""}
+    >
+      <span className="pl-2 pr-0.5 text-xs text-deep-green/50">$</span>
+      <input
+        type="number"
+        min="0"
+        step="0.01"
+        value={local}
+        placeholder="—"
+        onChange={(e) => setLocal(e.target.value)}
+        onBlur={() => {
+          const cur = stored == null ? "" : String(stored);
+          if (local !== cur) onSave(local);
+        }}
+        onKeyDown={(e) => {
+          if (e.key === "Enter") {
+            (e.currentTarget as HTMLInputElement).blur();
+          } else if (e.key === "Escape") {
+            setLocal(stored == null ? "" : String(stored));
+            (e.currentTarget as HTMLInputElement).blur();
+          }
+        }}
+        disabled={showSaving}
+        className="w-full bg-transparent py-1.5 pr-6 text-right font-mono text-xs tabular-nums text-deep-green focus:outline-none disabled:opacity-60"
+      />
+      {showSaving && (
+        <span className="absolute right-2 top-1/2 inline-block h-2 w-2 -translate-y-1/2 animate-pulse rounded-full bg-deep-green/50" />
+      )}
+      {showError && !showSaving && (
+        <span className="absolute right-2 top-1/2 -translate-y-1/2 text-[10px] font-bold text-coral">
+          !
+        </span>
+      )}
+    </div>
   );
 }
 

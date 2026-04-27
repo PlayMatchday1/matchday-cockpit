@@ -4,7 +4,8 @@ export type AuditTable =
   | "fin_revenue"
   | "fin_expenses"
   | "fin_venue_cost_overrides"
-  | "fin_schedule";
+  | "fin_schedule"
+  | "fin_venues";
 export type AuditAction = "insert" | "update" | "delete";
 
 type LogChangeOpts = {
