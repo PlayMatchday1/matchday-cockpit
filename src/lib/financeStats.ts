@@ -876,46 +876,6 @@ export function overheadBurdenCities(
 }
 
 
-export type CashRunwayInfo = {
-  state: "near_breakeven" | "burning" | "profitable";
-  monthlyNet: number;
-  currentCash: number;
-  runwayMonths: number | null;
-};
-
-export function cashRunway(
-  data: FinanceData,
-  now: Date = new Date(),
-): CashRunwayInfo {
-  const netByMonth = Q2_MONTHS.map((m) => netPLFor(data, m, "projection", now));
-  const monthlyNet = netByMonth.reduce((s, n) => s + n, 0) / Q2_MONTHS.length;
-  const currentCash = startingCash(data) + q2NetPLProjected(data, now);
-  if (Math.abs(monthlyNet) <= 500) {
-    return {
-      state: "near_breakeven",
-      monthlyNet,
-      currentCash,
-      runwayMonths: null,
-    };
-  }
-  if (monthlyNet > 0) {
-    return {
-      state: "profitable",
-      monthlyNet,
-      currentCash,
-      runwayMonths: null,
-    };
-  }
-  const burn = Math.abs(monthlyNet);
-  const runway = currentCash > 0 ? currentCash / burn : 0;
-  return {
-    state: "burning",
-    monthlyNet,
-    currentCash,
-    runwayMonths: runway,
-  };
-}
-
 export type MembershipHealthVerdict =
   | "strong"
   | "break_even_plus"

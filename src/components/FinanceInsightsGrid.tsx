@@ -10,7 +10,6 @@ import {
   buildCityInsightRows,
   buildMembershipHealthRows,
   buildVenueInsightRows,
-  cashRunway,
   getCurrentQ2Month,
   membershipHealthAvailable,
   monthScopedTitle,
@@ -83,7 +82,6 @@ export default function FinanceInsightsGrid({
       topPromoCodes: topPromoCodesFromMatches(matchRows, month),
       newStruggling: newVenuesStruggling(venueRows),
       overheadBurden: overheadBurdenCities(cityRows),
-      runway: cashRunway(data),
       spotMix: spotMixByCityFromMatches(matchRows, month),
       mhAvailable: membershipHealthAvailable(data),
       mhRows: buildMembershipHealthRows(data, matchRows, month),
@@ -331,8 +329,8 @@ export default function FinanceInsightsGrid({
                   )}
                 </FinanceInsightCard>
 
-                {/* Row 2 — equal-width trio */}
-                <div className="grid grid-cols-1 gap-4 md:grid-cols-3">
+                {/* Row 2 — two equal-width cards (50/50 split) */}
+                <div className="grid grid-cols-1 gap-4 md:grid-cols-2">
                   <FinanceInsightCard
                     tone="watch"
                     title={monthScopedTitle("Overhead Burden", month)}
@@ -358,19 +356,6 @@ export default function FinanceInsightsGrid({
                       ))}
                     </ul>
                   </FinanceInsightCard>
-
-                  <FinanceInsightCard
-                    tone="watch"
-                    title="Cash Runway"
-                    headline={
-                      computed.runway.state === "near_breakeven"
-                        ? "Near breakeven"
-                        : computed.runway.state === "profitable"
-                          ? "Profitable — building cash"
-                          : `${computed.runway.runwayMonths !== null ? computed.runway.runwayMonths.toFixed(1) : "—"} mo runway`
-                    }
-                    subtitle={`${fmtMoney(computed.runway.currentCash)} cash · ${fmtMoney(computed.runway.monthlyNet, true)}/mo avg`}
-                  />
 
                   <FinanceInsightCard
                     tone="watch"
