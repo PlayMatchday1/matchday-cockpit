@@ -18,6 +18,7 @@ import {
 } from "@/lib/cityStats";
 import { getActiveMonthWindow } from "@/lib/reviewStats";
 import { CITIES, citySlug } from "@/lib/types";
+import CancelPatterns from "@/components/CancelPatterns";
 import ManagerPodium from "@/components/ManagerPodium";
 import Reviews8WeekCard from "@/components/Reviews8WeekCard";
 import ReviewsCommentsTable from "@/components/ReviewsCommentsTable";
@@ -171,6 +172,7 @@ function CitiesIndexContent() {
           <div className="space-y-6">
             <Reviews8WeekCard rows={reviewRows} />
             <ManagerPodium rows={reviewRows} />
+            <CancelPatterns />
             <ReviewsCommentsTable rows={reviewRows} />
           </div>
         )}
