@@ -15,8 +15,12 @@ export type VenueCostKind =
   | "override"
   | "per_match"
   | "monthly_flat"
+  | "lump_sum"
+  | "profit_share"
+  | "no_charge"
   | "per_hour_no_fee"
   | "per_hour_metered"
+  | "needs_override"
   | "unknown";
 
 export type VenueCostInfo = {
@@ -28,8 +32,6 @@ export type VenueCostInfo = {
   source: string;
   override: FinVenueCostOverride | null;
 };
-
-const VENUE_RENTAL_RX = /venue\s*rental/i;
 
 export function findOverride(
   data: FinanceData,
@@ -70,21 +72,6 @@ function venueTotalHours(
     .reduce((sum, s) => sum + (s.total_hours ?? 0), 0);
 }
 
-function monthlyFlatExpenseSum(
-  data: FinanceData,
-  venue: FinVenue,
-  month: Q2Month,
-): number {
-  return data.expenses
-    .filter(
-      (e) =>
-        e.month === month &&
-        VENUE_RENTAL_RX.test(e.category) &&
-        (e.vendor ?? "") === venue.venue_name,
-    )
-    .reduce((sum, e) => sum + e.amount, 0);
-}
-
 function autoCost(
   data: FinanceData,
   venue: FinVenue,
@@ -104,21 +91,6 @@ function autoCost(
           ? `${matchCount} ${matchCount === 1 ? "match" : "matches"} × $${rate}`
           : "No matches scheduled",
       source: "Auto from schedule",
-      override: null,
-    };
-  }
-  if (venue.billing_type === "monthly_flat") {
-    const amount = monthlyFlatExpenseSum(data, venue, month);
-    return {
-      amount,
-      kind: "monthly_flat",
-      matchCount: venueMatchCount(data, venue, month),
-      totalHours: 0,
-      formula:
-        amount > 0
-          ? `Monthly flat (from fin_expenses · vendor=${venue.venue_name})`
-          : "No matching fin_expenses entry",
-      source: "fin_expenses · Venue Rental",
       override: null,
     };
   }
@@ -146,13 +118,40 @@ function autoCost(
       override: null,
     };
   }
+  if (venue.billing_type === "no_charge") {
+    return {
+      amount: 0,
+      kind: "no_charge",
+      matchCount: venueMatchCount(data, venue, month),
+      totalHours: 0,
+      formula: "No venue fee",
+      source: venue.notes ?? "—",
+      override: null,
+    };
+  }
+  // monthly_flat / lump_sum / profit_share — cost lives entirely in
+  // fin_venue_cost_overrides per (venue, month). canonicalVenueCost reads
+  // the override before falling back to autoCost, so this branch only
+  // fires when an override is missing for the month — surface that as a
+  // visible "needs override" hint rather than silently returning $0.
+  const billingKind: VenueCostKind =
+    venue.billing_type === "monthly_flat"
+      ? "monthly_flat"
+      : venue.billing_type === "lump_sum"
+        ? "lump_sum"
+        : venue.billing_type === "profit_share"
+          ? "profit_share"
+          : "unknown";
   return {
     amount: 0,
-    kind: "unknown",
-    matchCount: 0,
+    kind: billingKind === "unknown" ? "unknown" : "needs_override",
+    matchCount: venueMatchCount(data, venue, month),
     totalHours: 0,
-    formula: "No billing model on file",
-    source: "—",
+    formula:
+      billingKind === "unknown"
+        ? "No billing model on file"
+        : `Set ${month} override below (${venue.billing_type.replace("_", " ")})`,
+    source: billingKind === "unknown" ? "—" : "Override required",
     override: null,
   };
 }
@@ -228,49 +227,28 @@ export function perHourTotalFor(
   return total;
 }
 
-// "Venue Rental" line for Cash Flow, override-aware:
-//   sum of canonical cost for monthly_flat venues (override-aware)
-//   + fin_expenses category=Venue Rental rows that are NOT for a monthly_flat
-//     venue (one-off field charges entered manually)
-export function venueRentalLineFor(
-  data: FinanceData,
-  month: Q2Month,
-): number {
-  const monthlyFlatVendors = new Set(
-    data.venues
-      .filter((v) => v.billing_type === "monthly_flat")
-      .map((v) => v.venue_name),
-  );
-  const oneOffSum = data.expenses
-    .filter(
-      (e) =>
-        e.month === month &&
-        VENUE_RENTAL_RX.test(e.category) &&
-        !monthlyFlatVendors.has(e.vendor ?? ""),
-    )
-    .reduce((s, e) => s + e.amount, 0);
-  return monthlyFlatTotalFor(data, month) + oneOffSum;
+// Single Field Costs total for the month — sum of override-aware
+// canonical cost across every venue. Replaces the prior
+// venueRentalLineFor + perMatchVenueCostFor split now that both flow
+// through fin_venue_cost_overrides as the only source of truth.
+export function fieldCostsFor(data: FinanceData, month: Q2Month): number {
+  let total = 0;
+  for (const v of data.venues) {
+    total += canonicalVenueCost(data, v.id, month).amount;
+  }
+  return total;
 }
 
-// One-off field charges = fin_expenses · category Venue Rental NOT for any
-// monthly_flat venue. Used by the Field Costs reconciliation footer.
-export function oneOffFieldCostsFor(
+// Sum of override rows for the month. Used in the Field Costs
+// reconciliation footer to show how much of fieldCostsFor came from
+// manual overrides vs auto-computed per_match/per_hour.
+export function overrideOnlyTotalFor(
   data: FinanceData,
   month: Q2Month,
 ): number {
-  const monthlyFlatVendors = new Set(
-    data.venues
-      .filter((v) => v.billing_type === "monthly_flat")
-      .map((v) => v.venue_name),
-  );
-  return data.expenses
-    .filter(
-      (e) =>
-        e.month === month &&
-        VENUE_RENTAL_RX.test(e.category) &&
-        !monthlyFlatVendors.has(e.vendor ?? ""),
-    )
-    .reduce((s, e) => s + e.amount, 0);
+  return data.overrides
+    .filter((o) => o.month === month)
+    .reduce((s, o) => s + Number(o.override_amount || 0), 0);
 }
 
 export function totalOverrideAmountFor(

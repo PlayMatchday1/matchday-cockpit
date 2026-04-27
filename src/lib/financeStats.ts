@@ -1,8 +1,8 @@
 import type { FinanceData } from "./useFinanceData";
 import {
   canonicalVenueCost,
+  fieldCostsFor,
   perMatchTotalFor,
-  venueRentalLineFor,
 } from "./financeCosts";
 import { groupVenues } from "./venueGroups";
 
@@ -241,26 +241,19 @@ export function totalExpensesFor(
   mode: Mode,
   now: Date = new Date(),
 ): number {
-  // Pull "Venue Rental" out of the generic expenses sum and replace with the
-  // override-aware total, so hero metrics agree with the Field Costs page.
-  // Also exclude Match Manager Pay rows — managerPayFor() adds them back as
-  // its own line below; including them here would double-count.
-  const venueRentalRx = /venue\s*rental/i;
-  const otherNonVenueRental = filterExpenseRows(data, month, mode, now)
-    .filter(
-      (r) =>
-        !venueRentalRx.test(r.category) &&
-        r.category !== "Match Manager Pay",
-    )
+  // All venue costs now flow through fieldCostsFor (one number,
+  // override-aware). Manager Pay still has its own line below, so exclude
+  // it here to avoid double-counting.
+  const otherNonManagerPay = filterExpenseRows(data, month, mode, now)
+    .filter((r) => r.category !== "Match Manager Pay")
     .reduce((s, r) => s + r.amount, 0);
   return (
-    otherNonVenueRental +
-    venueRentalLineFor(data, month) +
+    otherNonManagerPay +
+    fieldCostsFor(data, month) +
     managerPayFor(data, month) +
     monthlyExpenseCategoryFor(data, month, "city_manager") +
     monthlyExpenseCategoryFor(data, month, "marketing") +
-    monthlyExpenseCategoryFor(data, month, "equipment") +
-    perMatchVenueCostFor(data, month)
+    monthlyExpenseCategoryFor(data, month, "equipment")
   );
 }
 

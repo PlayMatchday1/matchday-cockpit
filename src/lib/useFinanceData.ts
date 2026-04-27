@@ -70,7 +70,18 @@ export type FinVenue = {
   venue_name: string;       // canonical (post-alias)
   raw_venue_name: string;   // pre-alias — see FinSchedule.venue_raw note.
   city: string;
-  billing_type: "per_hour" | "per_match" | "monthly_flat";
+  // Billing classification.
+  // - per_match / per_hour: cost auto-computed from schedule × rate.
+  // - monthly_flat / lump_sum / profit_share: cost lives in
+  //   fin_venue_cost_overrides per (venue, month) — no auto computation.
+  // - no_charge: always $0.
+  billing_type:
+    | "per_hour"
+    | "per_match"
+    | "monthly_flat"
+    | "lump_sum"
+    | "profit_share"
+    | "no_charge";
   hourly_rate: number | null;
   monthly_flat: number | null;
   per_match_rate: number | null;

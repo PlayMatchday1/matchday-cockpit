@@ -19,13 +19,11 @@ import {
   netRevenueByCityFor,
   netRevenueFor,
   otherExpensesByCategoryFor,
-  perMatchVenueCostFor,
   startingCash,
   totalExpensesFor,
 } from "@/lib/financeStats";
-import { venueRentalLineFor } from "@/lib/financeCosts";
+import { fieldCostsFor } from "@/lib/financeCosts";
 
-const VENUE_RENTAL_LABEL_RX = /^venue\s*rental$/i;
 const DELETED_ACCOUNT_CITY = "Deleted Account Revenue";
 
 function fmt(n: number): string {
@@ -119,9 +117,7 @@ export default function FinanceMonthlyPL({
     const netRevPerMonth = Q2_MONTHS.map((m) => netRevenueFor(data, m, mode));
 
     const matchPayPerMonth = Q2_MONTHS.map((m) => managerPayFor(data, m));
-    const perMatchPerMonth = Q2_MONTHS.map((m) =>
-      perMatchVenueCostFor(data, m),
-    );
+    const fieldCostsPerMonth = Q2_MONTHS.map((m) => fieldCostsFor(data, m));
     const cityMgrPerMonth = Q2_MONTHS.map((m) =>
       monthlyExpenseCategoryFor(data, m, "city_manager"),
     );
@@ -132,14 +128,13 @@ export default function FinanceMonthlyPL({
       monthlyExpenseCategoryFor(data, m, "equipment"),
     );
 
-    // Substitute the override-aware total for "Venue Rental"; sum the rest
-    // straight from fin_expenses.
+    // Generic expense categories from fin_expenses. Venue Rental is gone
+    // post-consolidation (Field Costs is now its own line above), so the
+    // VENUE_RENTAL_LABEL_RX substitution that used to live here is gone too.
     const otherCatRows: Row[] = otherCats.map((cat) => {
-      const perMonth = VENUE_RENTAL_LABEL_RX.test(cat)
-        ? Q2_MONTHS.map((m) => venueRentalLineFor(data, m))
-        : Q2_MONTHS.map(
-            (m) => otherExpensesByCategoryFor(data, m, mode).get(cat) ?? 0,
-          );
+      const perMonth = Q2_MONTHS.map(
+        (m) => otherExpensesByCategoryFor(data, m, mode).get(cat) ?? 0,
+      );
       return {
         kind: "data",
         label: cat,
@@ -191,9 +186,9 @@ export default function FinanceMonthlyPL({
       },
       {
         kind: "data",
-        label: "Venue Costs (per-match)",
+        label: "Field Costs",
         tone: "expense",
-        values: [...perMatchPerMonth, sumAcross(perMatchPerMonth)],
+        values: [...fieldCostsPerMonth, sumAcross(fieldCostsPerMonth)],
       },
       {
         kind: "data",

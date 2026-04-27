@@ -167,10 +167,18 @@ function normalizeType(s: string | null): string | null {
   return s;
 }
 
+const VALID_BILLING_TYPES = [
+  "per_hour",
+  "per_match",
+  "monthly_flat",
+  "lump_sum",
+  "profit_share",
+  "no_charge",
+];
 function normalizeBillingType(s: string | null): string | null {
   if (!s) return null;
   const lc = s.toLowerCase().replace(/[\s-]+/g, "_");
-  if (["per_hour", "per_match", "monthly_flat"].includes(lc)) return lc;
+  if (VALID_BILLING_TYPES.includes(lc)) return lc;
   return null;
 }
 
@@ -367,7 +375,7 @@ export async function importVenues(raw: string[][]): Promise<ImportResult> {
   const missingBilling = mapped.filter((r) => !r.billing_type);
   if (missingBilling.length > 0) {
     throw new Error(
-      `${missingBilling.length} row(s) have an invalid Billing Type. Must be per_hour, per_match, or monthly_flat (e.g. "${trim(rows[0]?.["Billing Type"]) ?? "—"}" not recognized).`,
+      `${missingBilling.length} row(s) have an invalid Billing Type. Must be one of ${VALID_BILLING_TYPES.join(", ")} (e.g. "${trim(rows[0]?.["Billing Type"]) ?? "—"}" not recognized).`,
     );
   }
 
@@ -1747,7 +1755,7 @@ export const FINANCE_IMPORTERS: ImporterConfig[] = [
     description:
       "Upserts by Venue Name. Header row is auto-detected in the first 10 rows.",
     expectedColumns:
-      "Venue Name (or Venue), City, Billing Type (per_hour | per_match | monthly_flat), Hourly Rate, Monthly Flat, Per Match Rate (or Per-Match Rate), Max Spots, Notes, Launch Date, Is Active",
+      "Venue Name (or Venue), City, Billing Type (per_hour | per_match | monthly_flat | lump_sum | profit_share | no_charge), Hourly Rate, Monthly Flat, Per Match Rate (or Per-Match Rate), Max Spots, Notes, Launch Date, Is Active",
     importer: importVenues,
   },
   {

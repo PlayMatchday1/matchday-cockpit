@@ -2,25 +2,21 @@
 
 import { useEffect, useMemo, useState } from "react";
 import Link from "next/link";
-import { ChevronDown, ChevronRight, Lock, Pencil, Pin, Plus, Trash2 } from "lucide-react";
+import { ChevronDown, ChevronRight, Lock, Pencil, Pin, Trash2 } from "lucide-react";
 import ConfirmDeleteDialog from "@/components/ConfirmDeleteDialog";
 import FieldCostOverrideEditor, {
   type OverrideDraft,
 } from "@/components/FieldCostOverrideEditor";
-import OneOffFieldCostEditor, {
-  type OneOffDraft,
-} from "@/components/OneOffFieldCostEditor";
 import { logChange } from "@/lib/financeAudit";
 import {
   buildFieldCostRows,
-  monthlyFlatTotalFor,
-  oneOffFieldCostsFor,
+  fieldCostsFor,
+  overrideOnlyTotalFor,
   perMatchTotalFor,
   totalOverrideAmountFor,
-  venueRentalLineFor,
   type FieldCostRow,
 } from "@/lib/financeCosts";
-import { Q2_MONTHS, perMatchVenueCostFor, type Q2Month } from "@/lib/financeStats";
+import { Q2_MONTHS, type Q2Month } from "@/lib/financeStats";
 import { supabase } from "@/lib/supabase";
 import { useAuth } from "@/lib/useAuth";
 import {
@@ -31,13 +27,26 @@ import {
 } from "@/lib/useFinanceData";
 
 type PriceField = "dpp_price" | "member_price";
-type PriceCellState = { saving: boolean; error: string | null; flash: boolean };
-type PriceEditMap = Map<string, PriceCellState>;
-function priceKey(venueId: number, field: PriceField): string {
+type EditableField = PriceField | "billing_type";
+type CellState = { saving: boolean; error: string | null; flash: boolean };
+type EditMap = Map<string, CellState>;
+function editKey(venueId: number, field: EditableField): string {
   return `${venueId}|${field}`;
 }
 
-type BillingFilter = "ALL" | "per_match" | "monthly_flat" | "per_hour" | "OVERRIDE";
+const BILLING_TYPE_OPTIONS: FinVenue["billing_type"][] = [
+  "per_match",
+  "monthly_flat",
+  "per_hour",
+  "lump_sum",
+  "profit_share",
+  "no_charge",
+];
+
+type BillingFilter =
+  | "ALL"
+  | FinVenue["billing_type"]
+  | "OVERRIDE";
 
 const ALL = "ALL";
 
@@ -64,9 +73,7 @@ export default function FieldCostsView() {
 
   const [removeRow, setRemoveRow] = useState<FieldCostRow | null>(null);
 
-  const [oneOffOpen, setOneOffOpen] = useState(false);
-
-  const [priceEdits, setPriceEdits] = useState<PriceEditMap>(new Map());
+  const [edits, setEdits] = useState<EditMap>(new Map());
 
   const venueById = useMemo(() => {
     const m = new Map<number, FinVenue>();
@@ -74,30 +81,30 @@ export default function FieldCostsView() {
     return m;
   }, [data?.venues]);
 
-  async function savePrice(
+  function setEditState(key: string, state: CellState | null) {
+    setEdits((m) => {
+      const next = new Map(m);
+      if (state === null) next.delete(key);
+      else next.set(key, state);
+      return next;
+    });
+  }
+
+  async function saveVenueField(
     venueId: number,
-    field: PriceField,
-    raw: string,
+    field: EditableField,
+    nextValue: number | string | null,
+    parsedValid: boolean,
   ): Promise<void> {
     const email = appUser?.email;
     const venue = venueById.get(venueId);
     if (!email || !venue) return;
-    const key = priceKey(venueId, field);
-    const trimmed = raw.trim();
-    const parsed = trimmed === "" ? null : parseFloat(trimmed);
-    if (parsed !== null && (Number.isNaN(parsed) || parsed < 0)) {
-      setPriceEdits((m) => {
-        const next = new Map(m);
-        next.set(key, { saving: false, error: "Enter a positive number.", flash: false });
-        return next;
-      });
+    const key = editKey(venueId, field);
+    if (!parsedValid) {
+      setEditState(key, { saving: false, error: "Invalid value.", flash: false });
       return;
     }
-    setPriceEdits((m) => {
-      const next = new Map(m);
-      next.set(key, { saving: true, error: null, flash: false });
-      return next;
-    });
+    setEditState(key, { saving: true, error: null, flash: false });
     const before: Record<string, unknown> = {
       id: venue.id,
       [field]: venue[field],
@@ -105,7 +112,7 @@ export default function FieldCostsView() {
     try {
       const { data: updated, error } = await supabase
         .from("fin_venues")
-        .update({ [field]: parsed })
+        .update({ [field]: nextValue })
         .eq("id", venueId)
         .select()
         .single();
@@ -119,31 +126,31 @@ export default function FieldCostsView() {
         after: updated as Record<string, unknown>,
       });
       await refetchFinanceData();
-      setPriceEdits((m) => {
-        const next = new Map(m);
-        next.set(key, { saving: false, error: null, flash: true });
-        return next;
-      });
-      // Clear flash + state after the animation settles so the cell goes
-      // back to its default chrome.
-      setTimeout(() => {
-        setPriceEdits((m) => {
-          const next = new Map(m);
-          next.delete(key);
-          return next;
-        });
-      }, 900);
+      setEditState(key, { saving: false, error: null, flash: true });
+      // Clear flash + state after the animation settles.
+      setTimeout(() => setEditState(key, null), 900);
     } catch (e) {
-      setPriceEdits((m) => {
-        const next = new Map(m);
-        next.set(key, {
-          saving: false,
-          error: e instanceof Error ? e.message : "Save failed.",
-          flash: false,
-        });
-        return next;
+      setEditState(key, {
+        saving: false,
+        error: e instanceof Error ? e.message : "Save failed.",
+        flash: false,
       });
     }
+  }
+
+  function savePrice(venueId: number, field: PriceField, raw: string): void {
+    const trimmed = raw.trim();
+    const parsed = trimmed === "" ? null : parseFloat(trimmed);
+    const valid = parsed === null || (!Number.isNaN(parsed) && parsed >= 0);
+    void saveVenueField(venueId, field, parsed, valid);
+  }
+
+  function saveBillingType(
+    venueId: number,
+    nextValue: FinVenue["billing_type"],
+  ): void {
+    const valid = BILLING_TYPE_OPTIONS.includes(nextValue);
+    void saveVenueField(venueId, "billing_type", nextValue, valid);
   }
 
   const allRows: FieldCostRow[] = useMemo(() => {
@@ -169,18 +176,19 @@ export default function FieldCostsView() {
     return rows.sort((a, b) => a.displayName.localeCompare(b.displayName));
   }, [allRows, cityFilter, billingFilter, hasOverrideOnly]);
 
-  // Reconciliation totals (always month-level, ignoring city/billing filters
-  // so the banner compares apples to apples with Cash Flow / hero metrics).
+  // Reconciliation: fieldCostsFor is now the canonical Cash Flow line, so
+  // its sum always matches the per-row total here by construction. We
+  // surface the breakdown for trust — per-match auto, override-billed,
+  // raw override count — so a glance confirms the page is reading from
+  // the same place Cash Flow renders.
   const recon = useMemo(() => {
     if (!data) return null;
     const fieldTotal = allRows.reduce((s, r) => s + r.amount, 0);
-    const cashFlowTotal =
-      perMatchVenueCostFor(data, month) + venueRentalLineFor(data, month);
+    const cashFlowTotal = fieldCostsFor(data, month);
     const filteredTotal = filtered.reduce((s, r) => s + r.amount, 0);
     const perMatch = perMatchTotalFor(data, month);
-    const monthlyFlat = monthlyFlatTotalFor(data, month);
     const overrideInfo = totalOverrideAmountFor(data, month);
-    const oneOff = oneOffFieldCostsFor(data, month);
+    const overrideRaw = overrideOnlyTotalFor(data, month);
     const perMatchVenueCount = data.venues.filter(
       (v) => v.billing_type === "per_match",
     ).length;
@@ -191,9 +199,8 @@ export default function FieldCostsView() {
       filteredTotal,
       diff: fieldTotal - cashFlowTotal,
       perMatch,
-      monthlyFlat,
       overrideInfo,
-      oneOff,
+      overrideRaw,
       perMatchVenueCount,
       totalMatchCount,
     };
@@ -357,37 +364,6 @@ export default function FieldCostsView() {
     setRemoveRow(null);
   }
 
-  async function handleOneOffSubmit(draft: OneOffDraft) {
-    const email = appUser?.email;
-    if (!email) throw new Error("Not signed in");
-    const payload = {
-      date: draft.date,
-      month: draft.month,
-      city: draft.city,
-      category: draft.category,
-      vendor: draft.vendor || null,
-      amount: draft.amount,
-      notes: draft.notes || null,
-      manual_entry: true,
-    };
-    const { data: inserted, error } = await supabase
-      .from("fin_expenses")
-      .insert(payload)
-      .select()
-      .single();
-    if (error) throw new Error(error.message);
-    await logChange({
-      tableName: "fin_expenses",
-      rowId: (inserted as { id: number }).id,
-      action: "insert",
-      changedBy: email,
-      after: inserted as Record<string, unknown>,
-      note: `One-off field cost · ${draft.venue_name}`,
-    });
-    await refetchFinanceData();
-    setOneOffOpen(false);
-  }
-
   return (
     <>
       <div className="mb-6 text-sm">
@@ -399,25 +375,17 @@ export default function FieldCostsView() {
         </Link>
       </div>
 
-      <div className="mb-6 flex flex-wrap items-end justify-between gap-4">
-        <div>
-          <h1 className="font-display text-5xl uppercase leading-none tracking-tight text-deep-green md:text-6xl">
-            Field Costs
-          </h1>
-          <p className="mt-2 text-sm text-deep-green/65">
-            Per-venue monthly cost. Auto-computed from billing model · override
-            any (venue, month) where the real arrangement differs (lump sums,
-            prepayments, profit-share adjustments).
-          </p>
-        </div>
-        <button
-          type="button"
-          onClick={() => setOneOffOpen(true)}
-          className="inline-flex items-center gap-2 rounded-full bg-mint px-5 py-2 text-sm font-bold text-deep-green hover:bg-mint-hover"
-        >
-          <Plus size={16} aria-hidden />
-          Add One-off Field Cost
-        </button>
+      <div className="mb-6">
+        <h1 className="font-display text-5xl uppercase leading-none tracking-tight text-deep-green md:text-6xl">
+          Field Costs
+        </h1>
+        <p className="mt-2 text-sm text-deep-green/65">
+          Single source of truth for venue costs. Per-match and per-hour
+          billing auto-compute from the schedule; monthly_flat / lump_sum /
+          profit_share venues read from per-month overrides — set them with
+          the row-level Override button. Cash Flow's Field Costs line sums
+          all of this.
+        </p>
       </div>
 
       <div className="mb-5 flex flex-wrap items-end gap-3 rounded-2xl border-[1.5px] border-cream-line bg-white p-4 shadow-md shadow-deep-green/10">
@@ -456,9 +424,11 @@ export default function FieldCostsView() {
             className="rounded-md border border-cream-line bg-cream-soft px-3 py-1.5 text-sm font-bold text-deep-green focus:border-deep-green focus:outline-none"
           >
             <option value="ALL">All</option>
-            <option value="per_match">per_match</option>
-            <option value="monthly_flat">monthly_flat</option>
-            <option value="per_hour">per_hour</option>
+            {BILLING_TYPE_OPTIONS.map((opt) => (
+              <option key={opt} value={opt}>
+                {opt}
+              </option>
+            ))}
             <option value="OVERRIDE">Override</option>
           </select>
         </Filter>
@@ -536,12 +506,14 @@ export default function FieldCostsView() {
                       onSetOverride={() => openSetOverride(row)}
                       onRemoveOverride={() => setRemoveRow(row)}
                       primaryVenue={primaryVenue}
-                      priceState={(field) =>
-                        priceEdits.get(priceKey(row.primaryVenueId, field)) ??
-                        null
+                      cellState={(field) =>
+                        edits.get(editKey(row.primaryVenueId, field)) ?? null
                       }
                       onSavePrice={(field, raw) =>
                         savePrice(row.primaryVenueId, field, raw)
+                      }
+                      onSaveBillingType={(next) =>
+                        saveBillingType(row.primaryVenueId, next)
                       }
                       scheduleRows={
                         data
@@ -578,7 +550,7 @@ export default function FieldCostsView() {
                 )}
               </div>
               <div className="text-[10px]">
-                Cash Flow venue costs ({month}):{" "}
+                Cash Flow Field Costs ({month}):{" "}
                 <span className="font-mono">
                   {fmtMoney(recon.cashFlowTotal, true)}
                 </span>
@@ -601,26 +573,12 @@ export default function FieldCostsView() {
               </li>
               <li className="flex items-baseline gap-2">
                 <span className="text-deep-green/55">•</span>
-                <span>Monthly flat:</span>
+                <span>Manual overrides ({month}):</span>
                 <span className="font-mono font-bold tabular-nums text-deep-green">
-                  {fmtMoney(recon.monthlyFlat, true)}
-                </span>
-              </li>
-              <li className="flex items-baseline gap-2">
-                <span className="text-deep-green/55">•</span>
-                <span>Overrides:</span>
-                <span className="font-mono font-bold tabular-nums text-deep-green">
-                  {fmtMoney(recon.overrideInfo.amount, true)}
+                  {fmtMoney(recon.overrideRaw, true)}
                 </span>
                 <span className="text-deep-green/55">
                   ({recon.overrideInfo.venueCount} venues)
-                </span>
-              </li>
-              <li className="flex items-baseline gap-2">
-                <span className="text-deep-green/55">•</span>
-                <span>One-off charges (from fin_expenses):</span>
-                <span className="font-mono font-bold tabular-nums text-deep-green">
-                  {fmtMoney(recon.oneOff, true)}
                 </span>
               </li>
             </ul>
@@ -668,17 +626,6 @@ export default function FieldCostsView() {
         onConfirm={handleRemoveOverride}
       />
 
-      <OneOffFieldCostEditor
-        open={oneOffOpen}
-        venues={data?.venues ?? []}
-        knownCategories={[
-          ...new Set(
-            (data?.expenses ?? []).map((e) => e.category).filter(Boolean),
-          ),
-        ].sort()}
-        onClose={() => setOneOffOpen(false)}
-        onSubmit={handleOneOffSubmit}
-      />
     </>
   );
 }
@@ -691,8 +638,9 @@ function FieldCostTableRow({
   onSetOverride,
   onRemoveOverride,
   primaryVenue,
-  priceState,
+  cellState,
   onSavePrice,
+  onSaveBillingType,
   scheduleRows,
 }: {
   row: FieldCostRow;
@@ -702,8 +650,9 @@ function FieldCostTableRow({
   onSetOverride: () => void;
   onRemoveOverride: () => void;
   primaryVenue: FinVenue | null;
-  priceState: (field: PriceField) => PriceCellState | null;
+  cellState: (field: EditableField) => CellState | null;
   onSavePrice: (field: PriceField, raw: string) => void;
+  onSaveBillingType: (next: FinVenue["billing_type"]) => void;
   scheduleRows: {
     date: string;
     venue: string;
@@ -712,6 +661,7 @@ function FieldCostTableRow({
   }[];
 }) {
   const isOverride = Boolean(row.override);
+  const isCombined = row.secondaryVenueIds.length > 0;
   return (
     <>
       <tr
@@ -731,15 +681,23 @@ function FieldCostTableRow({
         </td>
         <td className="px-3 py-2 font-semibold text-deep-green">
           {row.displayName}
-          {row.secondaryVenueIds.length > 0 && (
+          {isCombined && (
             <span className="ml-1 text-[10px] font-normal text-deep-green/45">
               (combined)
             </span>
           )}
         </td>
         <td className="px-3 py-2 text-deep-green/85">{row.city}</td>
-        <td className="px-3 py-2 font-mono text-[10px] uppercase tracking-wider text-deep-green/65">
-          {row.billingType ?? "—"}
+        <td
+          className="px-3 py-2"
+          onClick={(e) => e.stopPropagation()}
+        >
+          <BillingTypeCell
+            stored={primaryVenue?.billing_type ?? null}
+            combined={isCombined}
+            state={cellState("billing_type")}
+            onSave={onSaveBillingType}
+          />
         </td>
         <td
           className="px-3 py-2 text-right"
@@ -747,7 +705,7 @@ function FieldCostTableRow({
         >
           <PriceCell
             stored={primaryVenue?.dpp_price ?? null}
-            state={priceState("dpp_price")}
+            state={cellState("dpp_price")}
             onSave={(raw) => onSavePrice("dpp_price", raw)}
           />
         </td>
@@ -757,7 +715,7 @@ function FieldCostTableRow({
         >
           <PriceCell
             stored={primaryVenue?.member_price ?? null}
-            state={priceState("member_price")}
+            state={cellState("member_price")}
             onSave={(raw) => onSavePrice("member_price", raw)}
           />
         </td>
@@ -838,13 +796,82 @@ function FieldCostTableRow({
   );
 }
 
+function BillingTypeCell({
+  stored,
+  combined,
+  state,
+  onSave,
+}: {
+  stored: FinVenue["billing_type"] | null;
+  combined: boolean;
+  state: CellState | null;
+  onSave: (next: FinVenue["billing_type"]) => void;
+}) {
+  const showFlash = state?.flash;
+  const showError = Boolean(state?.error);
+  const showSaving = Boolean(state?.saving);
+
+  if (combined) {
+    return (
+      <span
+        title="Combined groups (e.g. ATH Katy + ATH Katy Sunday) edit billing on individual venue rows."
+        className="inline-flex items-center gap-1 font-mono text-[10px] uppercase tracking-wider text-deep-green/65"
+      >
+        {(stored ?? "—").toUpperCase()}
+        <span className="font-normal normal-case text-deep-green/40">
+          (combined)
+        </span>
+      </span>
+    );
+  }
+
+  return (
+    <div
+      className={`relative inline-flex items-center rounded-md ${
+        showError ? "ring-2 ring-coral" : "ring-1 ring-cream-line"
+      } ${showFlash ? "flash-mint" : ""}`}
+      title={state?.error ?? ""}
+    >
+      <select
+        value={stored ?? ""}
+        disabled={showSaving}
+        onChange={(e) => {
+          const next = e.target.value as FinVenue["billing_type"];
+          if (next === stored) return;
+          onSave(next);
+        }}
+        className="bg-transparent px-2 py-1.5 pr-7 font-mono text-[10px] uppercase tracking-wider text-deep-green focus:outline-none disabled:opacity-60"
+      >
+        {stored == null && (
+          <option value="" disabled>
+            —
+          </option>
+        )}
+        {BILLING_TYPE_OPTIONS.map((opt) => (
+          <option key={opt} value={opt}>
+            {opt}
+          </option>
+        ))}
+      </select>
+      {showSaving && (
+        <span className="absolute right-2 top-1/2 inline-block h-2 w-2 -translate-y-1/2 animate-pulse rounded-full bg-deep-green/50" />
+      )}
+      {showError && !showSaving && (
+        <span className="absolute right-2 top-1/2 -translate-y-1/2 text-[10px] font-bold text-coral">
+          !
+        </span>
+      )}
+    </div>
+  );
+}
+
 function PriceCell({
   stored,
   state,
   onSave,
 }: {
   stored: number | null;
-  state: PriceCellState | null;
+  state: CellState | null;
   onSave: (raw: string) => void;
 }) {
   const [local, setLocal] = useState<string>(stored == null ? "" : String(stored));
