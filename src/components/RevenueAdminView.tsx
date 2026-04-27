@@ -170,7 +170,7 @@ export default function RevenueAdminView() {
         date: draft.date,
         month,
         city: draft.city,
-        venue: null,
+        venue: draft.venue,
         type: draft.type,
         gross: draft.gross,
         fees: draft.fees,
@@ -198,6 +198,7 @@ export default function RevenueAdminView() {
         date: draft.date,
         month,
         city: draft.city,
+        venue: draft.venue,
         type: draft.type,
         gross: draft.gross,
         fees: draft.fees,
@@ -515,6 +516,7 @@ export default function RevenueAdminView() {
         open={editorOpen}
         mode={editorMode}
         initial={editorRow}
+        venues={data?.venues ?? []}
         onClose={() => setEditorOpen(false)}
         onSubmit={handleSubmit}
       />

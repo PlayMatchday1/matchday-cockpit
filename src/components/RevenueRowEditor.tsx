@@ -1,13 +1,14 @@
 "use client";
 
 import { useEffect, useMemo, useState } from "react";
-import type { FinRevenue } from "@/lib/useFinanceData";
+import type { FinRevenue, FinVenue } from "@/lib/useFinanceData";
 
 export type RevenueDraft = {
   date: string;
   city: string;
   source: string;
   type: string;
+  venue: string | null;
   gross: number;
   fees: number;
   notes: string;
@@ -43,6 +44,7 @@ function emptyDraft(): RevenueDraft {
     city: CITY_OPTIONS[0],
     source: SOURCE_OPTIONS[0],
     type: TYPE_OPTIONS[0],
+    venue: null,
     gross: 0,
     fees: 0,
     notes: "",
@@ -55,6 +57,7 @@ function fromExisting(row: FinRevenue): RevenueDraft {
     city: row.city || CITY_OPTIONS[0],
     source: row.source || SOURCE_OPTIONS[0],
     type: row.type || TYPE_OPTIONS[0],
+    venue: row.venue,
     gross: row.gross,
     fees: row.fees,
     notes: row.notes ?? "",
@@ -65,12 +68,14 @@ export default function RevenueRowEditor({
   open,
   mode,
   initial,
+  venues,
   onClose,
   onSubmit,
 }: {
   open: boolean;
   mode: "add" | "edit";
   initial: FinRevenue | null;
+  venues: FinVenue[];
   onClose: () => void;
   onSubmit: (draft: RevenueDraft) => Promise<void>;
 }) {
@@ -102,6 +107,33 @@ export default function RevenueRowEditor({
     return TYPE_OPTIONS;
   }, [mode, draft.type]);
 
+  // Venues filtered to the current city — used by the conditional Venue
+  // dropdown that shows for Private Rental rows. Dedup canonical names so
+  // ATH Katy + ATH Katy Sunday don't both appear.
+  const venuesForCity = useMemo(() => {
+    const seen = new Set<string>();
+    const out: string[] = [];
+    for (const v of venues) {
+      if (v.city !== draft.city) continue;
+      if (seen.has(v.venue_name)) continue;
+      seen.add(v.venue_name);
+      out.push(v.venue_name);
+    }
+    out.sort();
+    return out;
+  }, [venues, draft.city]);
+
+  // When city changes, drop venue selection if it no longer matches a venue
+  // in the new city.
+  useEffect(() => {
+    if (!open) return;
+    if (draft.venue && !venuesForCity.includes(draft.venue)) {
+      setDraft((d) => ({ ...d, venue: null }));
+    }
+  }, [open, draft.city, draft.venue, venuesForCity]);
+
+  const showVenueField = draft.type === "Private Rental";
+
   if (!open) return null;
 
   async function handleSave() {
@@ -118,9 +150,18 @@ export default function RevenueRowEditor({
       setError("Gross must be a number.");
       return;
     }
+    if (showVenueField && !draft.venue) {
+      setError("Venue is required for Private Rental rows.");
+      return;
+    }
+    // Strip venue for non-Private-Rental types so the type → venue rule is
+    // enforced one way (Private Rental sets it; everything else clears it).
+    const submission: RevenueDraft = showVenueField
+      ? draft
+      : { ...draft, venue: null };
     setSaving(true);
     try {
-      await onSubmit(draft);
+      await onSubmit(submission);
     } catch (e) {
       setError(e instanceof Error ? e.message : String(e));
     } finally {
@@ -197,6 +238,30 @@ export default function RevenueRowEditor({
               totals.
             </p>
           </Field>
+
+          {showVenueField && (
+            <Field label="Venue (required for Private Rental)">
+              <select
+                value={draft.venue ?? ""}
+                onChange={(e) =>
+                  setDraft({ ...draft, venue: e.target.value || null })
+                }
+                className="w-full rounded-md border border-cream-line bg-white px-3 py-2 text-sm text-deep-green focus:border-deep-green focus:outline-none"
+              >
+                <option value="">Pick a venue…</option>
+                {venuesForCity.map((v) => (
+                  <option key={v} value={v}>
+                    {v}
+                  </option>
+                ))}
+              </select>
+              {venuesForCity.length === 0 && (
+                <p className="mt-1 text-[11px] text-coral">
+                  No venues in {draft.city}. Add one in fin_venues first.
+                </p>
+              )}
+            </Field>
+          )}
 
           <div className="grid grid-cols-3 gap-4">
             <Field label="Gross ($)">
