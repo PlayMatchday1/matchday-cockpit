@@ -104,14 +104,6 @@ function FinanceLandingContent() {
       </div>
 
       <SectionHeader
-        title="More detail"
-        subtitle="Narrative + scenario thinking."
-      />
-      <div className="mb-12 grid grid-cols-1 gap-4 md:grid-cols-2 lg:grid-cols-3">
-        <PlaceholderCard title="Forecasts" phase="Phase 5" />
-      </div>
-
-      <SectionHeader
         title="Manage"
         subtitle="Inspect, add, edit, and audit individual finance rows."
       />
@@ -156,7 +148,7 @@ function FinanceLandingContent() {
 
       <SectionHeader
         title="Data"
-        subtitle="One-time historical loads and ongoing uploads."
+        subtitle="Ongoing uploads."
       />
       <div className="grid grid-cols-1 gap-4 md:grid-cols-2 lg:grid-cols-3">
         <Link
@@ -172,23 +164,6 @@ function FinanceLandingContent() {
           <p className="mt-1 text-sm text-deep-green/60">
             Drop the latest Members + Stripe exports. Replaces the rows it
             covers; everything else is left alone.
-          </p>
-          <div className="mt-3 text-xs font-bold uppercase tracking-wider text-mint-hover">
-            Open →
-          </div>
-        </Link>
-        <Link
-          href="/admin/finance/import"
-          className="block rounded-2xl border-[1.5px] border-cream-line bg-white p-6 shadow-md shadow-deep-green/10 transition-all duration-200 hover:-translate-y-0.5 hover:shadow-xl hover:shadow-deep-green/20"
-        >
-          <div className="text-[11px] font-bold uppercase tracking-[0.2em] text-deep-green/45">
-            One-time
-          </div>
-          <div className="mt-1 text-base font-bold text-deep-green">
-            Q2 2026 import
-          </div>
-          <p className="mt-1 text-sm text-deep-green/60">
-            Upload the 10 Sheet tabs as CSVs to seed the database.
           </p>
           <div className="mt-3 text-xs font-bold uppercase tracking-wider text-mint-hover">
             Open →
@@ -278,23 +253,6 @@ function SectionHeader({
     );
   }
   return <div className="mb-5 flex items-stretch gap-3">{content}</div>;
-}
-
-function PlaceholderCard({
-  title,
-  phase,
-}: {
-  title: string;
-  phase: string;
-}) {
-  return (
-    <div className="rounded-2xl border-2 border-dashed border-cream-line bg-cream-soft/40 p-6">
-      <div className="text-base font-bold text-deep-green/70">{title}</div>
-      <div className="mt-1 text-xs font-bold uppercase tracking-wider text-deep-green/40">
-        Coming in {phase}
-      </div>
-    </div>
-  );
 }
 
 function DataLink({
