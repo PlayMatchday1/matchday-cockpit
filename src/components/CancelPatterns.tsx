@@ -10,9 +10,9 @@ import {
 } from "@/lib/cancelPatterns";
 
 const PILL_COLORS: Record<CancelSlot["repeatCount"], string> = {
-  4: "bg-[#DC2626] text-[#FFF1F1]",
-  3: "bg-[#7F1D1D] text-[#FFE5E5]",
-  2: "bg-[#F59E0B] text-[#422006]",
+  4: "bg-[#DC2626] text-white",
+  3: "bg-[#7F1D1D] text-white",
+  2: "bg-[#F59E0B] text-[#1C1917]",
   1: "bg-[rgba(0,51,38,0.08)] text-[#003326]",
 };
 
@@ -65,7 +65,7 @@ export default function CancelPatterns() {
                     {wk.byDay[dowIdx].map((slot, i) => (
                       <div
                         key={`${slot.canonicalField}|${slot.time}|${i}`}
-                        className={`rounded-sm px-1.5 py-0.5 font-mono text-[10px] tabular-nums leading-tight ${PILL_COLORS[slot.repeatCount]}`}
+                        className={`rounded-sm px-1.5 py-0.5 font-mono text-[11px] font-bold tabular-nums leading-tight ${PILL_COLORS[slot.repeatCount]}`}
                         title={`${slot.canonicalField} · ${slot.dow} ${slot.time} · canceled ${slot.repeatCount} of 4 weeks`}
                       >
                         {slot.venueCode} {slot.time}
