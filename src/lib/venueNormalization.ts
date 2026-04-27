@@ -41,23 +41,31 @@ const BARE_FIELD_RX = /\s*[-–—]?\s*Field\s+\S+\s*$/i;
 const PREMIER_MATCH_AT_RX = /^Premier\s+match\s+at\s+(.+)$/i;
 
 // Cross-venue exact aliases. Different raw name → different canonical venue.
+// Canonicals here MUST match fin_venues.venue_name exactly so the
+// per-venue revenue lookup on the city cards finds them.
 const CROSS_VENUE_ALIASES: Record<string, string> = {
   Premier: "San Juan Diego",
   SJD: "San Juan Diego",
-  "Katy International Sports Complex": "KISC",
+  "Katy International Sports Complex": "KISC (Katy Intl)",
+  "The Hattrick": "Hattrick",
 };
 
 // Internal-variant collapses. The raw name STARTS WITH the prefix, optionally
 // followed by a space/dash/digit/letter, and resolves to the canonical name.
 // Longer prefixes are checked first.
+// Internal-variant collapses. The canonical name on the right MUST match
+// fin_venues.venue_name exactly so DPP revenue lands on the venue's row in
+// the City P&L card instead of the "Other field DPP" bucket.
 const INTERNAL_PREFIX_RULES: Array<{ prefix: string; canonical: string }> = [
   // Longest first so "ATH Katy Sunday" wins over "ATH Katy".
   { prefix: "ATH Katy Sunday", canonical: "ATH Katy Sunday" },
   { prefix: "ATH Pearland Tournament", canonical: "ATH Pearland" },
   { prefix: "ATH Pearland Tourney", canonical: "ATH Pearland" },
-  { prefix: "Katy International Sports Complex", canonical: "KISC" },
-  { prefix: "Katy International", canonical: "KISC" },
-  { prefix: "Katy Intl", canonical: "KISC" },
+  { prefix: "Katy International Sports Complex", canonical: "KISC (Katy Intl)" },
+  { prefix: "Carroll Senior High School", canonical: "Carroll Senior HS" },
+  { prefix: "Katy International", canonical: "KISC (Katy Intl)" },
+  { prefix: "Carroll Senior HS", canonical: "Carroll Senior HS" },
+  { prefix: "Katy Intl", canonical: "KISC (Katy Intl)" },
   { prefix: "ATH Pearland", canonical: "ATH Pearland" },
   { prefix: "ATH Katy", canonical: "ATH Katy" },
   { prefix: "Soccer Central", canonical: "Soccer Central" },
@@ -66,12 +74,12 @@ const INTERNAL_PREFIX_RULES: Array<{ prefix: string; canonical: string }> = [
   { prefix: "Round Rock", canonical: "Round Rock" },
   { prefix: "Stony Point", canonical: "Stony Point" },
   { prefix: "PAC Global", canonical: "PAC Global" },
-  { prefix: "Bicentennial", canonical: "Bicentennial" },
-  { prefix: "Scissortail", canonical: "Scissortail" },
+  { prefix: "Bicentennial", canonical: "Bicentennial Park" },
+  { prefix: "Scissortail", canonical: "Scissortail Park" },
   { prefix: "PRUMC", canonical: "PRUMC" },
   { prefix: "NEMP", canonical: "NEMP" },
   { prefix: "STAR", canonical: "STAR" },
-  { prefix: "KISC", canonical: "KISC" },
+  { prefix: "KISC", canonical: "KISC (Katy Intl)" },
 ];
 
 export type VenueResolution = {
@@ -107,10 +115,14 @@ function stripWeekdaySuffix(s: string): string {
 }
 
 function matchesPrefix(name: string, prefix: string): boolean {
-  if (name === prefix) return true;
-  if (!name.startsWith(prefix)) return false;
+  // Case-insensitive — raw matchNames sometimes arrive ALL-CAPS
+  // (e.g. "PAC GLOBAL FIELD 5") and we want them to collapse to the
+  // canonical-cased fin_venues.venue_name.
+  const nameLc = name.toLowerCase();
+  const prefixLc = prefix.toLowerCase();
+  if (nameLc === prefixLc) return true;
+  if (!nameLc.startsWith(prefixLc)) return false;
   const next = name.charAt(prefix.length);
-  // Must be followed by separator (space, dash, slash) or digit/letter.
   return next === " " || next === "-" || next === "/" || /[0-9A-Za-z]/.test(next);
 }
 
