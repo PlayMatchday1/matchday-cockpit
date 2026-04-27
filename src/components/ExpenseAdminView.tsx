@@ -47,7 +47,7 @@ export default function ExpenseAdminView() {
   const { data, loading } = useFinanceData();
   const { appUser } = useAuth();
 
-  const [monthFilter, setMonthFilter] = useState<MonthFilter>("Apr 2026");
+  const [monthFilter, setMonthFilter] = useState<MonthFilter>("ALL");
   const [rangeFrom, setRangeFrom] = useState("");
   const [rangeTo, setRangeTo] = useState("");
   const [cityFilter, setCityFilter] = useState<string>(ALL);
