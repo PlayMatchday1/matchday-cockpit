@@ -15,8 +15,12 @@
 //      "ATH Katy Sunday" beats "ATH Katy", and "Soccer Central 4A" beats
 //      anything starting with "Soccer").
 
+// The connector before the day can be plain whitespace OR a hyphen with
+// optional surrounding whitespace — matches " Thursday", " - Thursday",
+// "-Thursday", and "- Thursday". Sunday is intentionally absent from the
+// alternation so "ATH Katy Sunday" / "ATH Katy - Sunday" stay intact.
 const WEEKDAY_SUFFIX_RX =
-  /\s+(Mon|Mondays?|Tue|Tues?|Tuesdays?|Wed|Wednesdays?|Thu|Thurs?|Thursdays?|Fri|Fridays?|Sat|Saturdays?)$/i;
+  /(?:\s*[-–—]\s*|\s+)(Mon|Mondays?|Tue|Tues?|Tuesdays?|Wed|Wednesdays?|Thu|Thurs?|Thursdays?|Fri|Fridays?|Sat|Saturdays?)$/i;
 
 // "Foo (Bar)" → "Foo" — trailing parenthetical block.
 const PAREN_SUFFIX_RX = /\s*\([^)]*\)\s*$/;
