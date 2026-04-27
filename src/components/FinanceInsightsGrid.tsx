@@ -11,7 +11,6 @@ import {
   buildMembershipHealthRows,
   buildVenueInsightRows,
   cashRunway,
-  companySpotMix,
   getCurrentQ2Month,
   membershipHealthAvailable,
   newVenuesProfitable,
@@ -32,9 +31,11 @@ import {
   MEMBER_HEAVY_THRESHOLD,
   highPromoUsageFromMatches,
   memberHeavyFieldsFromMatches,
+  spotMixByCityFromMatches,
   topPromoCodesFromMatches,
   type HighPromoRow,
   type MemberHeavyRow,
+  type SpotMixCityRow,
   type TopPromoCodeRow,
 } from "@/lib/matchInsights";
 
@@ -82,7 +83,7 @@ export default function FinanceInsightsGrid({
       newStruggling: newVenuesStruggling(venueRows),
       overheadBurden: overheadBurdenCities(cityRows),
       runway: cashRunway(data),
-      mix: companySpotMix(data, month),
+      spotMix: spotMixByCityFromMatches(matchRows, month),
       mhAvailable: membershipHealthAvailable(data),
       mhRows: buildMembershipHealthRows(data, matchRows, month),
     };
@@ -201,20 +202,6 @@ export default function FinanceInsightsGrid({
                 >
                   <MemberHeavyList rows={computed.memberHeavy.slice(0, 5)} />
                 </FinanceInsightCard>
-
-                <FinanceInsightCard
-                  tone="working"
-                  title="New Venues Profitable"
-                  headline={
-                    computed.newProfit.length === 0
-                      ? "None this month"
-                      : `${computed.newProfit.length} new venue${computed.newProfit.length === 1 ? "" : "s"}`
-                  }
-                  subtitle="Launched 30–90 days ago"
-                  empty={computed.newProfit.length === 0}
-                >
-                  <VenueNetList rows={computed.newProfit.slice(0, 5)} sign />
-                </FinanceInsightCard>
               </div>
 
               <CategoryLabel tone="attention">Needs Attention</CategoryLabel>
@@ -313,7 +300,8 @@ export default function FinanceInsightsGrid({
               </div>
 
               <CategoryLabel tone="watch">Watch</CategoryLabel>
-              <div className="grid grid-cols-1 gap-4 md:grid-cols-2 lg:grid-cols-3">
+              <div className="space-y-4">
+                {/* Row 1 — full-width Membership Health */}
                 <FinanceInsightCard
                   tone="watch"
                   title="Membership Health"
@@ -342,60 +330,78 @@ export default function FinanceInsightsGrid({
                   )}
                 </FinanceInsightCard>
 
-                <FinanceInsightCard
-                  tone="watch"
-                  title="Overhead Burden"
-                  headline={
-                    computed.overheadBurden.length === 0
-                      ? "All cities under 50%"
-                      : `${computed.overheadBurden.length} cit${computed.overheadBurden.length === 1 ? "y" : "ies"}`
-                  }
-                  subtitle="Overhead > 50% of revenue"
-                  empty={computed.overheadBurden.length === 0}
-                >
-                  <ul className="space-y-1 text-xs">
-                    {computed.overheadBurden.map((r) => (
-                      <li
-                        key={r.city}
-                        className="flex items-baseline justify-between gap-2"
-                      >
-                        <span className="text-deep-green/85">{r.city}</span>
-                        <span className="font-mono font-bold tabular-nums text-coral">
-                          {fmtPct(r.burdenPct)}
-                        </span>
-                      </li>
-                    ))}
-                  </ul>
-                </FinanceInsightCard>
+                {/* Row 2 — equal-width trio */}
+                <div className="grid grid-cols-1 gap-4 md:grid-cols-3">
+                  <FinanceInsightCard
+                    tone="watch"
+                    title="Overhead Burden"
+                    headline={
+                      computed.overheadBurden.length === 0
+                        ? "All cities under 50%"
+                        : `${computed.overheadBurden.length} cit${computed.overheadBurden.length === 1 ? "y" : "ies"}`
+                    }
+                    subtitle="Overhead > 50% of revenue"
+                    empty={computed.overheadBurden.length === 0}
+                  >
+                    <ul className="space-y-1 text-xs">
+                      {computed.overheadBurden.map((r) => (
+                        <li
+                          key={r.city}
+                          className="flex items-baseline justify-between gap-2"
+                        >
+                          <span className="text-deep-green/85">{r.city}</span>
+                          <span className="font-mono font-bold tabular-nums text-coral">
+                            {fmtPct(r.burdenPct)}
+                          </span>
+                        </li>
+                      ))}
+                    </ul>
+                  </FinanceInsightCard>
 
-                <FinanceInsightCard
-                  tone="watch"
-                  title="Cash Runway"
-                  headline={
-                    computed.runway.state === "near_breakeven"
-                      ? "Near breakeven"
-                      : computed.runway.state === "profitable"
-                        ? "Profitable — building cash"
-                        : `${computed.runway.runwayMonths !== null ? computed.runway.runwayMonths.toFixed(1) : "—"} mo runway`
-                  }
-                  subtitle={
-                    computed.runway.state === "burning"
-                      ? `${fmtMoney(computed.runway.currentCash)} cash · ${fmtMoney(computed.runway.monthlyNet, true)}/mo avg`
-                      : `${fmtMoney(computed.runway.currentCash)} cash · ${fmtMoney(computed.runway.monthlyNet, true)}/mo avg`
-                  }
-                />
+                  <FinanceInsightCard
+                    tone="watch"
+                    title="Cash Runway"
+                    headline={
+                      computed.runway.state === "near_breakeven"
+                        ? "Near breakeven"
+                        : computed.runway.state === "profitable"
+                          ? "Profitable — building cash"
+                          : `${computed.runway.runwayMonths !== null ? computed.runway.runwayMonths.toFixed(1) : "—"} mo runway`
+                    }
+                    subtitle={`${fmtMoney(computed.runway.currentCash)} cash · ${fmtMoney(computed.runway.monthlyNet, true)}/mo avg`}
+                  />
 
+                  <FinanceInsightCard
+                    tone="watch"
+                    title="New Venues Profitable"
+                    headline={
+                      computed.newProfit.length === 0
+                        ? "None this month"
+                        : `${computed.newProfit.length} new venue${computed.newProfit.length === 1 ? "" : "s"}`
+                    }
+                    subtitle="Launched 30–90 days ago"
+                    empty={computed.newProfit.length === 0}
+                  >
+                    <VenueNetList
+                      rows={computed.newProfit.slice(0, 5)}
+                      sign
+                    />
+                  </FinanceInsightCard>
+                </div>
+
+                {/* Row 3 — full-width Spot Mix by City */}
                 <FinanceInsightCard
                   tone="watch"
-                  title="Spot Mix (Company-wide)"
+                  title="Spot Mix by City"
                   headline={
-                    computed.mix.total === 0
+                    computed.spotMix.grandTotal === 0
                       ? "No spots logged"
-                      : `${computed.mix.total.toLocaleString("en-US")} spots`
+                      : `${computed.spotMix.grandTotal.toLocaleString("en-US")} spots`
                   }
-                  empty={computed.mix.total === 0}
+                  subtitle="Composition of spots played this month by city. Higher member % indicates stronger retention."
+                  empty={computed.spotMix.rows.length === 0}
                 >
-                  <SpotMixBar mix={computed.mix} />
+                  <SpotMixByCityTable rows={computed.spotMix.rows} />
                 </FinanceInsightCard>
               </div>
             </>
@@ -599,38 +605,66 @@ function MembershipHealthList({ rows }: { rows: MembershipHealthRow[] }) {
   );
 }
 
-function SpotMixBar({
-  mix,
-}: {
-  mix: { memberPct: number; dppPct: number; otherPct: number; total: number };
-}) {
-  if (mix.total === 0) return null;
-  const memberPct = Math.round(mix.memberPct * 100);
-  const dppPct = Math.round(mix.dppPct * 100);
-  const otherPct = 100 - memberPct - dppPct;
+function SpotMixByCityTable({ rows }: { rows: SpotMixCityRow[] }) {
+  if (rows.length === 0) return null;
+  return (
+    <div className="space-y-3">
+      {/* Legend — three colored swatches keyed to the bar segments */}
+      <div className="flex flex-wrap items-center gap-x-4 gap-y-1 text-[10px] font-bold uppercase tracking-wider text-deep-green/55">
+        <span className="inline-flex items-center gap-1.5">
+          <span className="inline-block h-2 w-2 rounded-full bg-[#2CDB87]" aria-hidden />
+          Member
+        </span>
+        <span className="inline-flex items-center gap-1.5">
+          <span className="inline-block h-2 w-2 rounded-full bg-[#003326]" aria-hidden />
+          DPP
+        </span>
+        <span className="inline-flex items-center gap-1.5">
+          <span className="inline-block h-2 w-2 rounded-full bg-[#FFD43B]" aria-hidden />
+          Promo
+        </span>
+      </div>
+
+      {rows.map((r) => (
+        <SpotMixCityRowItem key={r.city} row={r} />
+      ))}
+    </div>
+  );
+}
+
+function SpotMixCityRowItem({ row }: { row: SpotMixCityRow }) {
+  const memberPct = Math.round(row.memberPct * 100);
+  const dppPct = Math.round(row.dppPct * 100);
+  // Force the three to sum to 100 for the rendered labels even when
+  // the raw fractions round inconsistently — keeps the eye trusting
+  // the row.
+  const promoPct = Math.max(0, 100 - memberPct - dppPct);
+  const memberHighlight = row.memberPct >= 0.35;
+  const promoHighlight = row.promoPct >= 0.1;
   return (
     <div>
-      <div className="flex h-3 w-full overflow-hidden rounded-full ring-1 ring-cream-line">
-        <div
-          className="h-full bg-mint"
-          style={{ width: `${memberPct}%` }}
-          aria-label={`Members ${memberPct}%`}
-        />
-        <div
-          className="h-full bg-deep-green"
-          style={{ width: `${dppPct}%` }}
-          aria-label={`DPP ${dppPct}%`}
-        />
-        <div
-          className="h-full bg-gold"
-          style={{ width: `${otherPct}%` }}
-          aria-label={`Promo ${otherPct}%`}
-        />
+      <div className="flex items-baseline justify-between text-xs">
+        <span className="font-bold text-deep-green/85">{row.city}</span>
+        <span className="font-mono tabular-nums text-deep-green/55">
+          {row.total.toLocaleString("en-US")}
+        </span>
       </div>
-      <div className="mt-2 flex flex-wrap justify-between gap-2 text-[10px] font-bold uppercase tracking-wider">
-        <span className="text-mint-hover">Members {memberPct}%</span>
-        <span className="text-deep-green/85">DPP {dppPct}%</span>
-        <span className="text-deep-green/65">Promo {otherPct}%</span>
+      <div
+        className="mt-1 flex h-2 w-full overflow-hidden rounded-full bg-deep-green/10"
+        title={`${row.member} member · ${row.dpp} dpp · ${row.promo} promo`}
+      >
+        <div className="h-full bg-[#2CDB87]" style={{ width: `${memberPct}%` }} />
+        <div className="h-full bg-[#003326]" style={{ width: `${dppPct}%` }} />
+        <div className="h-full bg-[#FFD43B]" style={{ width: `${promoPct}%` }} />
+      </div>
+      <div className="mt-1 flex gap-3 font-mono text-[10px] tabular-nums text-deep-green/55">
+        <span className={memberHighlight ? "font-bold text-mint-hover" : ""}>
+          {memberPct}% mbr
+        </span>
+        <span>{dppPct}% dpp</span>
+        <span className={promoHighlight ? "font-bold text-coral" : ""}>
+          {promoPct}% promo
+        </span>
       </div>
     </div>
   );

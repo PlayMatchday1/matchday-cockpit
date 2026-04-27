@@ -860,40 +860,6 @@ export function overheadBurdenCities(
     .sort((a, b) => b.burdenPct - a.burdenPct);
 }
 
-export type SpotMixSummary = {
-  member: number;
-  dpp: number;
-  other: number;
-  total: number;
-  memberPct: number;
-  dppPct: number;
-  otherPct: number;
-};
-
-export function companySpotMix(
-  data: FinanceData,
-  month: Q2Month,
-): SpotMixSummary {
-  let member = 0;
-  let dpp = 0;
-  let other = 0;
-  for (const r of data.memberSpots) {
-    if (r.month !== month) continue;
-    member += r.member_spots;
-    dpp += r.dpp_spots;
-    other += r.other_spots;
-  }
-  const total = member + dpp + other;
-  return {
-    member,
-    dpp,
-    other,
-    total,
-    memberPct: total > 0 ? member / total : 0,
-    dppPct: total > 0 ? dpp / total : 0,
-    otherPct: total > 0 ? other / total : 0,
-  };
-}
 
 export type CashRunwayInfo = {
   state: "near_breakeven" | "burning" | "profitable";
