@@ -1,35 +1,33 @@
 "use client";
 
 import { useState } from "react";
-import { useRouter, useSearchParams } from "next/navigation";
 import { useTopics } from "@/lib/useTopics";
 import NewTopicModal from "./NewTopicModal";
 import TopicDetail from "./TopicDetail";
 import TopicSidebarRow from "./TopicSidebarRow";
 
 export default function TopicsView() {
-  const router = useRouter();
-  const sp = useSearchParams();
   const { topics, loading } = useTopics();
   const [showModal, setShowModal] = useState(false);
   const [showResolved, setShowResolved] = useState(false);
   const [showArchived, setShowArchived] = useState(false);
 
-  const selectedId = sp.get("topic");
+  // Selection in local state instead of the URL — Next 16 + React 19
+  // + Turbopack didn't reliably re-fire useSearchParams() when
+  // router.push/replace updated only the query string, so the click
+  // handler would change the URL but selected stayed null and the
+  // right panel kept showing the placeholder. router.push() helped
+  // some sessions but not all — kept biting on accounts whose
+  // hydration timing differs (token refresh cadence etc). Local
+  // state sidesteps the whole router/searchParams/Suspense
+  // interaction. Trade-off: refresh loses selection and we can't
+  // deep-link. If deep-linking is needed, route at
+  // /clubhouse/topics/[id] instead (file-router is reliable here).
+  const [selectedId, setSelectedId] = useState<string | null>(null);
   const selected = topics.find((t) => t.id === selectedId) ?? null;
 
   function selectTopic(id: string | null) {
-    const params = new URLSearchParams(sp.toString());
-    params.set("tab", "topics");
-    if (id) params.set("topic", id);
-    else params.delete("topic");
-    // push (not replace) — under Next 16 + React 19 + Turbopack,
-    // router.replace() with a same-pathname-different-query target
-    // doesn't reliably re-fire useSearchParams(), so the URL would
-    // change but selectedId stayed stale and the right panel never
-    // re-rendered. push() forces a fresh transition; bonus that
-    // browser back/forward steps through topic selections.
-    router.push(`/clubhouse?${params.toString()}`);
+    setSelectedId(id);
   }
 
   if (loading) {
