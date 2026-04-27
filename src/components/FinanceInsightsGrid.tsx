@@ -84,7 +84,7 @@ export default function FinanceInsightsGrid({
       runway: cashRunway(data),
       mix: companySpotMix(data, month),
       mhAvailable: membershipHealthAvailable(data),
-      mhRows: buildMembershipHealthRows(data, month),
+      mhRows: buildMembershipHealthRows(data, matchRows, month),
     };
   }, [data, matchRows, month]);
 
@@ -333,8 +333,9 @@ export default function FinanceInsightsGrid({
                 >
                   {!computed.mhAvailable ? (
                     <div className="text-xs italic text-deep-green/55">
-                      Membership Health requires Members + Member Spots +
-                      Pricing data — re-import to enable.
+                      Membership Health requires fin_members + fin_venues
+                      with member_price set + a current user_analysis
+                      upload — re-import to enable.
                     </div>
                   ) : (
                     <MembershipHealthList rows={computed.mhRows} />

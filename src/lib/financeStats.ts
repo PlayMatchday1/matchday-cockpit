@@ -1,10 +1,12 @@
 import type { FinanceData } from "./useFinanceData";
+import type { MatchRow } from "./useMatchData";
 import {
   canonicalVenueCost,
   fieldCostsFor,
   perMatchTotalFor,
 } from "./financeCosts";
 import { groupVenues } from "./venueGroups";
+import { normalizeMatchName } from "./venueNormalization";
 
 export const Q2_MONTHS = ["Apr 2026", "May 2026", "Jun 2026"] as const;
 export type Q2Month = (typeof Q2_MONTHS)[number];
@@ -951,68 +953,148 @@ export type MembershipHealthRow = {
 };
 
 export function membershipHealthAvailable(data: FinanceData): boolean {
+  // After the BE rewrite, this card no longer needs fin_member_spots
+  // (the deprecated Sheet source). It needs members + at least one
+  // venue with a member_price set so we can determine the city sticker.
   return (
     data.members.length > 0 &&
-    data.memberSpots.length > 0 &&
-    data.pricing.length > 0
+    data.venues.some((v) => (v.member_price ?? 0) > 0)
   );
 }
 
+// Returns the canonical city sticker for a member: every active
+// fin_venues row in a city is seeded with the same member_price, so
+// pick any one. Falls back to fin_pricing if fin_venues hasn't been
+// seeded for that city yet.
+function cityMemberPriceFor(
+  data: FinanceData,
+  city: string,
+): number | null {
+  for (const v of data.venues) {
+    if (v.city !== city) continue;
+    if (v.member_price != null && v.member_price > 0) return v.member_price;
+  }
+  for (const p of data.pricing) {
+    if (p.city !== city) continue;
+    if (p.member_price > 0) return p.member_price;
+  }
+  return null;
+}
+
+function cityDppFor(
+  data: FinanceData,
+  canonicalVenue: string,
+): { dpp: number; city: string } | null {
+  const v = data.venues.find((x) => x.venue_name === canonicalVenue);
+  if (v && v.dpp_price != null && v.dpp_price > 0) {
+    return { dpp: v.dpp_price, city: v.city };
+  }
+  const p = data.pricing.find((x) => x.venue_name === canonicalVenue);
+  if (p && p.dpp_price > 0) return { dpp: p.dpp_price, city: p.city };
+  return null;
+}
+
+const Q2_MONTH_PREFIX: Record<Q2Month, string> = {
+  "Apr 2026": "2026-04",
+  "May 2026": "2026-05",
+  "Jun 2026": "2026-06",
+};
+
 export function buildMembershipHealthRows(
   data: FinanceData,
+  matchRows: MatchRow[],
   month: Q2Month,
 ): MembershipHealthRow[] {
   if (!membershipHealthAvailable(data)) return [];
 
+  // ─── Member cohort: ACTIVE + price > 0 only. Excludes $0 promo
+  // accounts from BOTH the count and the matches-played denominator.
   const memberCountByCity = new Map<string, number>();
-  const memberPriceTotalByCity = new Map<string, number>();
+  const memberPriceCentsTotalByCity = new Map<string, number>();
   for (const m of data.members) {
     if (m.status !== "ACTIVE") continue;
     if (m.price_cents <= 0) continue;
     memberCountByCity.set(m.city, (memberCountByCity.get(m.city) ?? 0) + 1);
-    memberPriceTotalByCity.set(
+    memberPriceCentsTotalByCity.set(
       m.city,
-      (memberPriceTotalByCity.get(m.city) ?? 0) + m.price_cents,
+      (memberPriceCentsTotalByCity.get(m.city) ?? 0) + m.price_cents,
     );
   }
 
-  const pricingByVenue = new Map<string, { dpp: number; member: number }>();
-  for (const p of data.pricing) {
-    pricingByVenue.set(p.venue_name, {
-      dpp: p.dpp_price,
-      member: p.member_price,
-    });
+  // ─── Matches played by members in the active month, per canonical
+  // venue → city. Source: match_registrations.payment_type='MEMBER',
+  // non-cancelled, in-month. Field names canonicalized through the
+  // same fin_venue_aliases pipeline that fin_revenue uses so combined
+  // venues (Premier at SJD → SJD) collapse correctly.
+  const monthPrefix = Q2_MONTH_PREFIX[month];
+  type CityMatchAcc = {
+    totalMemberRegs: number;
+    weightedDppNum: number;
+    weightedDppDenom: number;
+  };
+  const matchesByCity = new Map<string, CityMatchAcc>();
+  for (const r of matchRows) {
+    if (r.matchCanceled) continue;
+    const iso = `${r.matchStart.getFullYear()}-${String(
+      r.matchStart.getMonth() + 1,
+    ).padStart(2, "0")}`;
+    if (iso !== monthPrefix) continue;
+    const pt = (r.paymentType ?? "").trim().toLowerCase();
+    if (pt !== "member") continue;
+    const canonical = normalizeMatchName(r.field, data.venueAliases).canonical;
+    if (!canonical) continue;
+    const v = cityDppFor(data, canonical);
+    if (!v) continue;
+    const acc = matchesByCity.get(v.city) ?? {
+      totalMemberRegs: 0,
+      weightedDppNum: 0,
+      weightedDppDenom: 0,
+    };
+    acc.totalMemberRegs += 1;
+    acc.weightedDppNum += v.dpp;
+    acc.weightedDppDenom += 1;
+    matchesByCity.set(v.city, acc);
   }
 
-  const cities = [...memberCountByCity.keys()];
   const out: MembershipHealthRow[] = [];
-
-  for (const city of cities) {
+  for (const city of memberCountByCity.keys()) {
     const members = memberCountByCity.get(city) ?? 0;
     if (members < 5) continue;
 
-    let weightedDppNumer = 0;
-    let weightedDppDenom = 0;
-    let cityMemberSpots = 0;
+    // Numerator: city sticker. NOT the cohort average, which gets
+    // dragged down by grandfathered $1–10/mo deals (e.g. OKC averages
+    // $3.33 vs $15 sticker, Atlanta $10.67 vs $32.48 — see the
+    // possible-leak warning below).
+    const memberPriceDollars = cityMemberPriceFor(data, city);
+    if (memberPriceDollars == null) continue;
 
-    for (const s of data.memberSpots) {
-      if (s.city !== city || s.month !== month) continue;
-      const venueSpots = s.member_spots;
-      if (venueSpots <= 0) continue;
-      cityMemberSpots += venueSpots;
-      const venuePricing = pricingByVenue.get(s.venue);
-      if (venuePricing && venuePricing.dpp > 0) {
-        weightedDppNumer += venuePricing.dpp * venueSpots;
-        weightedDppDenom += venueSpots;
-      }
+    // Surface revenue-leak signal in the console for follow-up — fires
+    // when the cohort's avg paid price drifts >30% under the city
+    // sticker, which usually means too many grandfathered / promo
+    // members in a small market.
+    const cohortAvgPriceDollars =
+      (memberPriceCentsTotalByCity.get(city) ?? 0) / members / 100;
+    if (
+      cohortAvgPriceDollars > 0 &&
+      memberPriceDollars > 0 &&
+      cohortAvgPriceDollars / memberPriceDollars < 0.7
+    ) {
+      const pct = Math.round(
+        (1 - cohortAvgPriceDollars / memberPriceDollars) * 100,
+      );
+      console.warn(
+        `[membership-health] ${city}: avg paid price $${cohortAvgPriceDollars.toFixed(2)} vs $${memberPriceDollars.toFixed(2)} sticker (-${pct}%) — possible revenue leak (${members} active members)`,
+      );
     }
 
+    const cm = matchesByCity.get(city);
+    const totalMemberRegs = cm?.totalMemberRegs ?? 0;
     const weightedDpp =
-      weightedDppDenom > 0 ? weightedDppNumer / weightedDppDenom : 0;
-    const memberPriceCents = (memberPriceTotalByCity.get(city) ?? 0) / members;
-    const memberPriceDollars = memberPriceCents / 100;
+      cm && cm.weightedDppDenom > 0
+        ? cm.weightedDppNum / cm.weightedDppDenom
+        : 0;
+    const actualMatchesPerMember = members > 0 ? totalMemberRegs / members : 0;
     const breakEven = weightedDpp > 0 ? memberPriceDollars / weightedDpp : 0;
-    const actualMatchesPerMember = members > 0 ? cityMemberSpots / members : 0;
     const ratio = breakEven > 0 ? actualMatchesPerMember / breakEven : 0;
 
     let verdict: MembershipHealthVerdict;
