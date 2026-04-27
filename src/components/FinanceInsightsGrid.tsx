@@ -13,6 +13,7 @@ import {
   cashRunway,
   getCurrentQ2Month,
   membershipHealthAvailable,
+  monthScopedTitle,
   newVenuesProfitable,
   newVenuesStruggling,
   overheadBurdenCities,
@@ -154,7 +155,7 @@ export default function FinanceInsightsGrid({
               <div className="grid grid-cols-1 gap-4 md:grid-cols-2 lg:grid-cols-3">
                 <FinanceInsightCard
                   tone="working"
-                  title="Profitable Fields"
+                  title={monthScopedTitle("Profitable Fields", month)}
                   headline={`${computed.profitableF.length} ${computed.profitableF.length === 1 ? "field" : "fields"} profitable`}
                   subtitle={
                     computed.profitableF.length > 0
@@ -170,7 +171,7 @@ export default function FinanceInsightsGrid({
 
                 <FinanceInsightCard
                   tone="working"
-                  title="Profitable Cities"
+                  title={monthScopedTitle("Profitable Cities", month)}
                   headline={`${computed.profitableC.length} ${computed.profitableC.length === 1 ? "city" : "cities"} profitable`}
                   empty={computed.profitableC.length === 0}
                 >
@@ -191,7 +192,7 @@ export default function FinanceInsightsGrid({
 
                 <FinanceInsightCard
                   tone="working"
-                  title="Member-Heavy Fields"
+                  title={monthScopedTitle("Member-Heavy Fields", month)}
                   headline={
                     computed.memberHeavy.length === 0
                       ? "None this month"
@@ -208,7 +209,7 @@ export default function FinanceInsightsGrid({
               <div className="grid grid-cols-1 gap-4 md:grid-cols-2 lg:grid-cols-3">
                 <FinanceInsightCard
                   tone="attention"
-                  title="Unprofitable Fields"
+                  title={monthScopedTitle("Unprofitable Fields", month)}
                   headline={`${computed.unprofitableF.length} ${computed.unprofitableF.length === 1 ? "field" : "fields"} losing`}
                   subtitle={
                     computed.unprofitableF.length > 0
@@ -232,7 +233,7 @@ export default function FinanceInsightsGrid({
 
                 <FinanceInsightCard
                   tone="attention"
-                  title="Unprofitable Cities"
+                  title={monthScopedTitle("Unprofitable Cities", month)}
                   headline={`${computed.unprofitableC.length} ${computed.unprofitableC.length === 1 ? "city" : "cities"} losing`}
                   empty={computed.unprofitableC.length === 0}
                 >
@@ -253,7 +254,7 @@ export default function FinanceInsightsGrid({
 
                 <FinanceInsightCard
                   tone="attention"
-                  title="High Promo Usage"
+                  title={monthScopedTitle("High Promo Usage", month)}
                   headline={
                     computed.highPromo.length === 0
                       ? "None flagged"
@@ -284,7 +285,7 @@ export default function FinanceInsightsGrid({
 
                 <FinanceInsightCard
                   tone="attention"
-                  title="Top Promo Codes"
+                  title={monthScopedTitle("Top Promo Codes", month)}
                   headline={
                     computed.topPromoCodes.distinctCount === 0
                       ? "No promo usage this month"
@@ -304,7 +305,7 @@ export default function FinanceInsightsGrid({
                 {/* Row 1 — full-width Membership Health */}
                 <FinanceInsightCard
                   tone="watch"
-                  title="Membership Health"
+                  title={monthScopedTitle("Membership Health", month)}
                   headline={
                     !computed.mhAvailable
                       ? "Data needed"
@@ -334,7 +335,7 @@ export default function FinanceInsightsGrid({
                 <div className="grid grid-cols-1 gap-4 md:grid-cols-3">
                   <FinanceInsightCard
                     tone="watch"
-                    title="Overhead Burden"
+                    title={monthScopedTitle("Overhead Burden", month)}
                     headline={
                       computed.overheadBurden.length === 0
                         ? "All cities under 50%"
@@ -392,7 +393,7 @@ export default function FinanceInsightsGrid({
                 {/* Row 3 — full-width Spot Mix by City */}
                 <FinanceInsightCard
                   tone="watch"
-                  title="Spot Mix by City"
+                  title={monthScopedTitle("Spot Mix by City", month)}
                   headline={
                     computed.spotMix.grandTotal === 0
                       ? "No spots logged"

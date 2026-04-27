@@ -25,6 +25,21 @@ const MONTH_DAYS: Record<Q2Month, number> = {
   "Jun 2026": 30,
 };
 
+const MONTH_FULL_NAME: Record<Q2Month, string> = {
+  "Apr 2026": "APRIL",
+  "May 2026": "MAY",
+  "Jun 2026": "JUNE",
+};
+
+// Centralized eyebrow composer for time-scoped insight cards. Append
+// the active month so a glance at the card tells the reader what
+// window the numbers cover. Skip on rolling/cumulative cards (Cash
+// Runway) and rolling-window cards (New Venues Profitable/Struggling
+// run on a 30-90 day launch window, not the calendar month).
+export function monthScopedTitle(base: string, month: Q2Month): string {
+  return `${base} · ${MONTH_FULL_NAME[month]}`;
+}
+
 function monthStartFor(month: Q2Month): Date {
   return new Date(2026, MONTH_NUMBER[month], 1);
 }
