@@ -50,6 +50,13 @@ export type TopicComment = {
   id: string;
   topic_id: string;
   author: string | null;
+  // author_email is the canonical authorship signal (case-insensitive
+  // match against app_users.email). `author` is the display name and
+  // can collide; `author_email` is what the edit gate checks against.
+  author_email: string | null;
   body: string;
   created_at: string;
+  // null on insert, set to now() on edit. UI renders "(edited)" when
+  // non-null, no fuzzy timestamp comparisons against created_at.
+  updated_at: string | null;
 };
