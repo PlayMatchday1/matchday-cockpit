@@ -48,44 +48,65 @@ export default function CancelPatterns() {
         </div>
       ) : (
         <div className="mt-5 space-y-5">
-          {result.weeks.map((wk) => (
-            <div key={wk.rangeLabel}>
-              <div className="mb-2 text-[11px] font-bold uppercase tracking-wider text-deep-green/55">
-                {wk.rangeLabel}
-              </div>
-              <div className="grid grid-cols-7 gap-1.5">
-                {CANCEL_PATTERNS_DOW_LABELS.map((dowLabel, dowIdx) => (
-                  <div
-                    key={dowLabel}
-                    className="flex min-h-[68px] flex-col gap-1 rounded-md bg-cream-soft/60 p-1.5"
-                  >
-                    <div className="text-[9px] font-bold uppercase tracking-wider text-deep-green/45">
-                      {dowLabel}
-                    </div>
-                    {wk.byDay[dowIdx].map((slot, i) => (
-                      <div
-                        key={`${slot.canonicalField}|${slot.time}|${i}`}
-                        className={`rounded-sm px-1.5 py-0.5 font-mono text-[11px] font-bold tabular-nums leading-tight ${PILL_COLORS[slot.streak]}`}
-                        title={`${slot.canonicalField} · ${slot.dow} ${slot.time} · ${slot.streak === 1 ? "no consecutive pattern" : `${slot.streak} weeks running`}`}
-                      >
-                        {slot.venueCode} {slot.time}
+          {result.weeks.map((wk, weekIdx) => {
+            // Colors apply only to the current (top) week. Past weeks
+            // render every canceled cell as muted neutral so they read
+            // as historical context without competing with the
+            // actionable signal up top. Streak math is unchanged —
+            // the helper still computes the per-cell streak; we just
+            // ignore it visually for past weeks.
+            const isCurrentWeek = weekIdx === 0;
+            return (
+              <div key={wk.rangeLabel}>
+                <div className="mb-2 text-[11px] font-bold uppercase tracking-wider text-deep-green/55">
+                  {wk.rangeLabel}
+                  {isCurrentWeek && (
+                    <span className="ml-2 font-normal text-deep-green/45">
+                      (current)
+                    </span>
+                  )}
+                </div>
+                <div className="grid grid-cols-7 gap-1.5">
+                  {CANCEL_PATTERNS_DOW_LABELS.map((dowLabel, dowIdx) => (
+                    <div
+                      key={dowLabel}
+                      className="flex min-h-[68px] flex-col gap-1 rounded-md bg-cream-soft/60 p-1.5"
+                    >
+                      <div className="text-[9px] font-bold uppercase tracking-wider text-deep-green/45">
+                        {dowLabel}
                       </div>
-                    ))}
-                  </div>
-                ))}
+                      {wk.byDay[dowIdx].map((slot, i) => {
+                        const colorTier = isCurrentWeek ? slot.streak : 1;
+                        return (
+                          <div
+                            key={`${slot.canonicalField}|${slot.time}|${i}`}
+                            className={`rounded-sm px-1.5 py-0.5 font-mono text-[11px] font-bold tabular-nums leading-tight ${PILL_COLORS[colorTier]}`}
+                            title={`${slot.canonicalField} · ${slot.dow} ${slot.time} · ${slot.streak === 1 ? "canceled this week" : `${slot.streak} weeks running`}`}
+                          >
+                            {slot.venueCode} {slot.time}
+                          </div>
+                        );
+                      })}
+                    </div>
+                  ))}
+                </div>
               </div>
-            </div>
-          ))}
+            );
+          })}
         </div>
       )}
 
       {/* Legend */}
       <div className="mt-5 flex flex-wrap items-center gap-x-5 gap-y-2 text-[11px] text-deep-green/70">
-        <LegendSwatch tier={4} label="Canceled 4 of 4 weeks (chronic)" />
-        <LegendSwatch tier={3} label="3 of 4" />
-        <LegendSwatch tier={2} label="2 of 4" />
-        <LegendSwatch tier={1} label="1 of 4 (no pattern)" />
+        <LegendSwatch tier={4} label="Canceled 4 weeks running (chronic)" />
+        <LegendSwatch tier={3} label="3 weeks running" />
+        <LegendSwatch tier={2} label="2 weeks running" />
+        <LegendSwatch tier={1} label="Canceled this week" />
       </div>
+      <p className="mt-2 text-[11px] italic text-deep-green/50">
+        Color highlights apply to the current week only. Prior weeks
+        shown as context.
+      </p>
     </section>
   );
 }
