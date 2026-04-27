@@ -9,7 +9,7 @@ import {
   type CancelSlot,
 } from "@/lib/cancelPatterns";
 
-const PILL_COLORS: Record<CancelSlot["repeatCount"], string> = {
+const PILL_COLORS: Record<CancelSlot["streak"], string> = {
   4: "bg-[#DC2626] text-white",
   3: "bg-[#7F1D1D] text-white",
   2: "bg-[#F59E0B] text-[#1C1917]",
@@ -65,8 +65,8 @@ export default function CancelPatterns() {
                     {wk.byDay[dowIdx].map((slot, i) => (
                       <div
                         key={`${slot.canonicalField}|${slot.time}|${i}`}
-                        className={`rounded-sm px-1.5 py-0.5 font-mono text-[11px] font-bold tabular-nums leading-tight ${PILL_COLORS[slot.repeatCount]}`}
-                        title={`${slot.canonicalField} · ${slot.dow} ${slot.time} · canceled ${slot.repeatCount} of 4 weeks`}
+                        className={`rounded-sm px-1.5 py-0.5 font-mono text-[11px] font-bold tabular-nums leading-tight ${PILL_COLORS[slot.streak]}`}
+                        title={`${slot.canonicalField} · ${slot.dow} ${slot.time} · ${slot.streak === 1 ? "no consecutive pattern" : `${slot.streak} weeks running`}`}
                       >
                         {slot.venueCode} {slot.time}
                       </div>
@@ -84,7 +84,7 @@ export default function CancelPatterns() {
         <LegendSwatch tier={4} label="Canceled 4 of 4 weeks (chronic)" />
         <LegendSwatch tier={3} label="3 of 4" />
         <LegendSwatch tier={2} label="2 of 4" />
-        <LegendSwatch tier={1} label="1 of 4 (one-off)" />
+        <LegendSwatch tier={1} label="1 of 4 (no pattern)" />
       </div>
     </section>
   );
@@ -94,7 +94,7 @@ function LegendSwatch({
   tier,
   label,
 }: {
-  tier: CancelSlot["repeatCount"];
+  tier: CancelSlot["streak"];
   label: string;
 }) {
   return (
