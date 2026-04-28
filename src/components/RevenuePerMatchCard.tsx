@@ -5,6 +5,7 @@ import { useFinanceData } from "@/lib/useFinanceData";
 import { useMatchData } from "@/lib/useMatchData";
 import {
   computeRevenuePerMatchByCity,
+  computeRevenuePerMatchTotal,
   type RevenuePerMatchRow,
 } from "@/lib/financeStats";
 
@@ -15,8 +16,8 @@ export default function RevenuePerMatchCard() {
   const { rows: matchRows, loading: matchLoading } = useMatchData();
   const [sortBy, setSortBy] = useState<SortKey>("gross");
 
-  const rows = useMemo(() => {
-    if (!data) return [];
+  const { rows, total } = useMemo(() => {
+    if (!data) return { rows: [] as RevenuePerMatchRow[], total: null };
     const slim = matchRows.map((r) => ({
       city: r.city,
       field: r.field,
@@ -24,12 +25,16 @@ export default function RevenuePerMatchCard() {
       matchCanceled: r.matchCanceled,
     }));
     const computed = computeRevenuePerMatchByCity(data, slim);
+    // Total uses ALL cities (including any with revenue but no matches),
+    // not just the visible filtered list.
+    const totals = computeRevenuePerMatchTotal(computed);
     const visible = computed.filter((r) => r.matches > 0);
-    return visible.sort((a, b) => {
+    visible.sort((a, b) => {
       const av = sortBy === "gross" ? a.grossPerMatch : a.dppPerMatch;
       const bv = sortBy === "gross" ? b.grossPerMatch : b.dppPerMatch;
       return bv - av;
     });
+    return { rows: visible, total: totals };
   }, [data, matchRows, sortBy]);
 
   if (financeLoading || matchLoading) {
@@ -88,7 +93,10 @@ export default function RevenuePerMatchCard() {
                 </td>
               </tr>
             ) : (
-              rows.map((r) => <Row key={r.city} row={r} />)
+              <>
+                {rows.map((r) => <Row key={r.city} row={r} />)}
+                {total && total.matches > 0 && <TotalRow row={total} />}
+              </>
             )}
           </tbody>
         </table>
@@ -118,6 +126,34 @@ function Row({ row }: { row: RevenuePerMatchRow }) {
         {fmtDollars(row.dppPerMatch)}
       </td>
       <td className="px-2 py-2">
+        <MixBar pct={row.mixPct} />
+      </td>
+    </tr>
+  );
+}
+
+function TotalRow({ row }: { row: RevenuePerMatchRow }) {
+  return (
+    <tr
+      className="border-t-2"
+      style={{
+        borderTopColor: "rgba(0,51,38,0.15)",
+        backgroundColor: "rgba(0,51,38,0.03)",
+      }}
+    >
+      <td className="px-2 py-2.5 text-[11px] font-bold uppercase tracking-[0.18em] text-deep-green">
+        Total
+      </td>
+      <td className="px-2 py-2.5 text-right font-semibold tabular-nums text-deep-green">
+        {row.matches.toFixed(1)}
+      </td>
+      <td className="px-2 py-2.5 text-right font-bold tabular-nums text-deep-green">
+        {fmtDollars(row.grossPerMatch)}
+      </td>
+      <td className="px-2 py-2.5 text-right font-medium tabular-nums text-deep-green/65">
+        {fmtDollars(row.dppPerMatch)}
+      </td>
+      <td className="px-2 py-2.5">
         <MixBar pct={row.mixPct} />
       </td>
     </tr>

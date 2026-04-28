@@ -1192,3 +1192,28 @@ export function computeRevenuePerMatchByCity(
   }
   return out;
 }
+
+// Company-wide blended totals — NOT a simple average of city
+// per-match figures. Aggregates raw numerators and denominators
+// first, then divides, so big cities weight appropriately.
+export function computeRevenuePerMatchTotal(
+  rows: RevenuePerMatchRow[],
+): RevenuePerMatchRow {
+  let matches = 0;
+  let grossTotal = 0;
+  let dppTotal = 0;
+  for (const r of rows) {
+    matches += r.matches;
+    grossTotal += r.grossTotal;
+    dppTotal += r.dppTotal;
+  }
+  return {
+    city: "Total",
+    matches,
+    grossTotal,
+    dppTotal,
+    grossPerMatch: matches > 0 ? grossTotal / matches : 0,
+    dppPerMatch: matches > 0 ? dppTotal / matches : 0,
+    mixPct: grossTotal > 0 ? (dppTotal / grossTotal) * 100 : 0,
+  };
+}
