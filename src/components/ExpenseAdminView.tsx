@@ -70,9 +70,19 @@ export default function ExpenseAdminView() {
     return [...set].sort();
   }, [allRows]);
 
+  // Categories the user can SELECT when filtering or adding a new row.
+  // Excludes Match Manager Pay (managed on /admin/finance/manager-pay)
+  // and always includes Misc as a creatable bucket. Existing MMP rows
+  // still display in the table — only the dropdowns are filtered.
+  const selectableCategories = useMemo(() => {
+    const filtered = knownCategories.filter((c) => c !== "Match Manager Pay");
+    if (!filtered.includes("Misc")) filtered.push("Misc");
+    return filtered.sort();
+  }, [knownCategories]);
+
   const categoryOptions = useMemo(
-    () => [ALL, ...knownCategories],
-    [knownCategories],
+    () => [ALL, ...selectableCategories],
+    [selectableCategories],
   );
 
   const cityOptions = useMemo(() => {
@@ -149,7 +159,7 @@ export default function ExpenseAdminView() {
       const payload = {
         date: draft.date,
         month: draft.month,
-        city: draft.city,
+        city: draft.city || null,
         category: draft.category,
         vendor: draft.vendor || null,
         amount: draft.amount,
@@ -175,7 +185,7 @@ export default function ExpenseAdminView() {
       const updates = {
         date: draft.date,
         month: draft.month,
-        city: draft.city,
+        city: draft.city || null,
         category: draft.category,
         vendor: draft.vendor || null,
         amount: draft.amount,
@@ -391,7 +401,11 @@ export default function ExpenseAdminView() {
                     <td className="whitespace-nowrap px-3 py-2 font-mono tabular-nums text-deep-green">
                       {row.date}
                     </td>
-                    <td className="px-3 py-2 text-deep-green">{row.city}</td>
+                    <td className="px-3 py-2 text-deep-green">
+                      {row.city || (
+                        <span className="text-deep-green/45">—</span>
+                      )}
+                    </td>
                     <td className="px-3 py-2 text-deep-green/85">
                       {row.category}
                     </td>
@@ -466,7 +480,7 @@ export default function ExpenseAdminView() {
         open={editorOpen}
         mode={editorMode}
         initial={editorRow}
-        knownCategories={knownCategories}
+        knownCategories={selectableCategories}
         onClose={() => setEditorOpen(false)}
         onSubmit={handleSubmit}
       />

@@ -148,12 +148,16 @@ export default function ExpenseRowEditor({
       setError("Month is required.");
       return;
     }
-    if (!draft.city) {
-      setError("City is required.");
-      return;
-    }
     if (!draft.category.trim()) {
       setError("Category is required.");
+      return;
+    }
+    // City is required for every category EXCEPT Misc, which can be
+    // company-wide (no city tag).
+    if (!draft.city && draft.category.trim() !== "Misc") {
+      setError(
+        "City is required (or set Category to 'Misc' for company-wide rows).",
+      );
       return;
     }
     if (!Number.isFinite(draft.amount)) {
@@ -212,12 +216,18 @@ export default function ExpenseRowEditor({
               onChange={(e) => setDraft({ ...draft, city: e.target.value })}
               className="w-full rounded-md border border-cream-line bg-white px-3 py-2 text-sm text-deep-green focus:border-deep-green focus:outline-none"
             >
+              <option value="">— (Misc only)</option>
               {cityOptions.map((c) => (
                 <option key={c} value={c}>
                   {c}
                 </option>
               ))}
             </select>
+            {draft.category.trim() === "Misc" && (
+              <p className="mt-1 text-[11px] text-deep-green/55">
+                Misc rows can leave city blank for company-wide expenses.
+              </p>
+            )}
           </Field>
 
           <Field label="Category">
