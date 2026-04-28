@@ -46,16 +46,21 @@ export function lastNMonths(n: number, now: Date): Date[] {
   return out;
 }
 
-// 25-day cancel-policy carryover: anyone whose canceled_at is after
-// the 5th of the previous month and is still flagged ACTIVE hasn't
-// fully rolled off yet.
+// 25-day cancel-policy window: cancellations on the 6th of one month
+// through the 5th of the next month roll off at end of that next
+// month. So "currently churning" = members who cancelled in the
+// rolling window aligned to the cycle that ends on the 5th of THIS
+// month: [6th of prior month, 5th of this month] inclusive, still
+// flagged ACTIVE. Cancellations from the 6th of THIS month onward
+// belong to the next cycle and aren't churning yet.
 export function isChurning(m: FinMember, now: Date): boolean {
   if (!isPaidExternalMember(m)) return false;
   if (m.status !== "ACTIVE") return false;
   const canceled = parseMemberDate(m.canceled_at);
   if (!canceled) return false;
-  const cutoff = new Date(now.getFullYear(), now.getMonth() - 1, 5);
-  return canceled > cutoff;
+  const windowStart = new Date(now.getFullYear(), now.getMonth() - 1, 6);
+  const windowEnd = new Date(now.getFullYear(), now.getMonth(), 6); // exclusive — covers all of the 5th
+  return canceled >= windowStart && canceled < windowEnd;
 }
 
 export function isActiveMember(m: FinMember): boolean {
