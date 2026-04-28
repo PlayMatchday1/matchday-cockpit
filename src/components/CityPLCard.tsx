@@ -66,6 +66,7 @@ export default function CityPLCard({ city }: { city: string }) {
       cityManager: 0,
       marketing: 0,
       equipment: 0,
+      misc: 0,
     };
     for (const m of months) {
       for (const r of data.revenue) {
@@ -97,6 +98,7 @@ export default function CityPLCard({ city }: { city: string }) {
       overhead.cityManager += o.cityManager;
       overhead.marketing += o.marketing;
       overhead.equipment += o.equipment;
+      overhead.misc += o.misc;
     }
 
     // Per-venue rows: compute cost + match count via existing helpers, pull
@@ -186,7 +188,8 @@ export default function CityPLCard({ city }: { city: string }) {
       overhead.matchManagerPay +
       overhead.cityManager +
       overhead.marketing +
-      overhead.equipment;
+      overhead.equipment +
+      overhead.misc;
 
     const grossRev =
       fieldDppTotal + strikeRev + untaggedDppRev + membershipRev;
@@ -423,6 +426,9 @@ export default function CityPLCard({ city }: { city: string }) {
                 label="Equipment"
                 value={result.overhead.equipment}
               />
+            )}
+            {result.overhead.misc > 0 && (
+              <OverheadRow label="Misc" value={result.overhead.misc} />
             )}
             {result.overheadTotal === 0 && (
               <div className="text-xs italic text-deep-green/45">

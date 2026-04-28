@@ -462,6 +462,7 @@ export type CityOverhead = {
   cityManager: number;
   marketing: number;
   equipment: number;
+  misc: number;
   total: number;
 };
 
@@ -480,6 +481,18 @@ export function cityOverheadFor(
         r.category === "Match Manager Pay",
     )
     .reduce((s, r) => s + r.amount, 0);
+  // City-tagged Misc rows roll up into the city's overhead. Misc rows
+  // with city=null are company-wide and surface only in Cash Flow / Q2
+  // hero, not on a CityPLCard — that's the deliberate split: city tag
+  // on a Misc row means "attribute this expense to that city".
+  const misc = data.expenses
+    .filter(
+      (r) =>
+        r.city === city &&
+        r.month === month &&
+        r.category === "Misc",
+    )
+    .reduce((s, r) => s + r.amount, 0);
   const me = data.monthlyExpenses.find(
     (r) => r.city === city && r.month === month,
   );
@@ -491,7 +504,8 @@ export function cityOverheadFor(
     cityManager,
     marketing,
     equipment,
-    total: matchManagerPay + cityManager + marketing + equipment,
+    misc,
+    total: matchManagerPay + cityManager + marketing + equipment + misc,
   };
 }
 
