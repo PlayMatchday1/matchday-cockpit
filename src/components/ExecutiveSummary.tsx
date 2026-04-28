@@ -109,7 +109,7 @@ export default function ExecutiveSummary() {
   }
 
   return (
-    <div className="relative rounded-2xl border-l-4 border-gold bg-white p-8 shadow-md shadow-deep-green/10 sm:p-10">
+    <div className="relative rounded-2xl border-l-4 border-gold bg-white p-6 shadow-md shadow-deep-green/10 sm:p-8">
       {!editing && isAdmin && (
         <button
           type="button"
@@ -181,7 +181,7 @@ export default function ExecutiveSummary() {
           </div>
           {commentary?.body ? (
             <div
-              className="mt-4 max-w-4xl text-[18px] leading-8 text-deep-green [&>p]:m-0 [&>p+p]:mt-4 [&>p:first-of-type]:text-[22px] [&>p:first-of-type]:font-medium [&>p:first-of-type]:leading-9 [&>p:first-of-type]:text-deep-green"
+              className="mt-3 max-w-3xl text-[17px] leading-relaxed text-deep-green [&>p]:m-0 [&>p+p]:mt-3"
               dangerouslySetInnerHTML={{ __html: renderedBody }}
             />
           ) : (
