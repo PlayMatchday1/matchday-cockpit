@@ -1075,3 +1075,116 @@ export function buildMembershipHealthRows(
     return b.members - a.members;
   });
 }
+
+// ===== Revenue per match (last 4 weeks, by city) =====
+
+export type RevenuePerMatchRow = {
+  city: string;
+  matches: number;
+  grossTotal: number;
+  dppTotal: number;
+  grossPerMatch: number;
+  dppPerMatch: number;
+  mixPct: number; // 0–100, dpp share of gross
+};
+
+// "Last 4 ISO weeks ending this past Sunday".
+// Returns [start, end) — start at Monday 00:00 local, end exclusive
+// at the following Monday 00:00 local. If today is Sunday the
+// current week is treated as complete (Sun is its last day).
+export function lastFourCompleteIsoWeeks(now: Date): { start: Date; end: Date } {
+  const today = new Date(now.getFullYear(), now.getMonth(), now.getDate());
+  const dow = today.getDay(); // 0 Sun, 1 Mon, ..., 6 Sat
+  const daysToMon = dow === 0 ? 6 : dow - 1;
+  const thisMonday = new Date(
+    today.getFullYear(),
+    today.getMonth(),
+    today.getDate() - daysToMon,
+  );
+  const includesThisWeek = dow === 0;
+  const endMonday = includesThisWeek
+    ? new Date(
+        thisMonday.getFullYear(),
+        thisMonday.getMonth(),
+        thisMonday.getDate() + 7,
+      )
+    : thisMonday;
+  const start = new Date(
+    endMonday.getFullYear(),
+    endMonday.getMonth(),
+    endMonday.getDate() - 28,
+  );
+  return { start, end: endMonday };
+}
+
+// fin_revenue.date is YYYY-MM-DD plain date — parse as local
+// midnight to avoid UTC bucket shift on the 1st of the month.
+function parseRevenueDate(s: string): Date | null {
+  const m = s.match(/^(\d{4})-(\d{2})-(\d{2})/);
+  if (m) return new Date(+m[1], +m[2] - 1, +m[3]);
+  const d = new Date(s);
+  return Number.isNaN(d.getTime()) ? null : d;
+}
+
+export function computeRevenuePerMatchByCity(
+  data: FinanceData,
+  matchRows: Pick<MatchRow, "city" | "field" | "matchStart" | "matchCanceled">[],
+  now: Date = new Date(),
+): RevenuePerMatchRow[] {
+  const { start, end } = lastFourCompleteIsoWeeks(now);
+
+  // Revenue side: Stripe-only, bucketed by Stripe charge date.
+  // Membership rows don't have a match_start; their charge date is
+  // when the recurring payment hit our books, which is the right
+  // bucket for "what we earned in this 4-week window."
+  const grossByCity = new Map<string, number>();
+  const dppByCity = new Map<string, number>();
+  for (const r of data.revenue) {
+    if (r.source !== "Stripe") continue;
+    if (!r.city) continue;
+    const d = parseRevenueDate(r.date);
+    if (!d) continue;
+    if (d < start || d >= end) continue;
+    grossByCity.set(r.city, (grossByCity.get(r.city) ?? 0) + r.net);
+    if (r.type === "DPP") {
+      dppByCity.set(r.city, (dppByCity.get(r.city) ?? 0) + r.net);
+    }
+  }
+
+  // Match side: distinct (field, match_start) per city, only matches
+  // that ran. Same dedup pattern getCancelRate uses in cityStats.ts.
+  const matchKeysByCity = new Map<string, Set<string>>();
+  for (const m of matchRows) {
+    if (m.matchCanceled) continue;
+    if (!m.city || !m.field) continue;
+    if (m.matchStart < start || m.matchStart >= end) continue;
+    const key = `${m.matchStart.getTime()}|${m.field}`;
+    let set = matchKeysByCity.get(m.city);
+    if (!set) {
+      set = new Set();
+      matchKeysByCity.set(m.city, set);
+    }
+    set.add(key);
+  }
+
+  const cities = new Set<string>([
+    ...grossByCity.keys(),
+    ...matchKeysByCity.keys(),
+  ]);
+  const out: RevenuePerMatchRow[] = [];
+  for (const city of cities) {
+    const grossTotal = grossByCity.get(city) ?? 0;
+    const dppTotal = dppByCity.get(city) ?? 0;
+    const matches = matchKeysByCity.get(city)?.size ?? 0;
+    out.push({
+      city,
+      matches,
+      grossTotal,
+      dppTotal,
+      grossPerMatch: matches > 0 ? grossTotal / matches : 0,
+      dppPerMatch: matches > 0 ? dppTotal / matches : 0,
+      mixPct: grossTotal > 0 ? (dppTotal / grossTotal) * 100 : 0,
+    });
+  }
+  return out;
+}

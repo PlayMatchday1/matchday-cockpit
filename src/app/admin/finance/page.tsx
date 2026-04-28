@@ -11,6 +11,7 @@ import FinanceHeroMetrics from "@/components/FinanceHeroMetrics";
 import FinanceInsightsGrid from "@/components/FinanceInsightsGrid";
 import FinanceMonthlyPL from "@/components/FinanceMonthlyPL";
 import FinanceTrendChart from "@/components/FinanceTrendChart";
+import RevenuePerMatchCard from "@/components/RevenuePerMatchCard";
 import { CITY_DISPLAY_ORDER, cityHasAnyQ2Activity } from "@/lib/financeStats";
 import { supabase } from "@/lib/supabase";
 import { useFinanceData } from "@/lib/useFinanceData";
@@ -64,6 +65,10 @@ function FinanceLandingContent() {
 
       <div className="mb-8">
         <FinanceHeroMetrics />
+      </div>
+
+      <div className="mb-8">
+        <RevenuePerMatchCard />
       </div>
 
       <div className="mb-8">
