@@ -85,11 +85,28 @@ export default function ExpenseAdminView() {
     [selectableCategories],
   );
 
+  // Filter dropdown options. Real city names come from row data;
+  // "Company-wide" is synthetic — included when any row has city
+  // null/empty or the legacy "Company-wide" literal, and the filter
+  // logic below matches it against both shapes.
   const cityOptions = useMemo(() => {
     const set = new Set<string>();
-    for (const r of allRows) if (r.city) set.add(r.city);
+    let hasCompanyWide = false;
+    for (const r of allRows) {
+      if (!r.city || r.city === "Company-wide") {
+        hasCompanyWide = true;
+        continue;
+      }
+      set.add(r.city);
+    }
     const ordered: string[] = [ALL];
-    for (const c of CITY_DISPLAY) if (set.has(c)) ordered.push(c);
+    for (const c of CITY_DISPLAY) {
+      if (c === "Company-wide") {
+        if (hasCompanyWide) ordered.push(c);
+      } else if (set.has(c)) {
+        ordered.push(c);
+      }
+    }
     for (const c of [...set].sort()) {
       if (!CITY_DISPLAY.includes(c)) ordered.push(c);
     }
@@ -104,7 +121,13 @@ export default function ExpenseAdminView() {
     } else if (monthFilter !== "ALL") {
       rows = rows.filter((r) => r.month === monthFilter);
     }
-    if (cityFilter !== ALL) rows = rows.filter((r) => r.city === cityFilter);
+    if (cityFilter !== ALL) {
+      if (cityFilter === "Company-wide") {
+        rows = rows.filter((r) => !r.city || r.city === "Company-wide");
+      } else {
+        rows = rows.filter((r) => r.city === cityFilter);
+      }
+    }
     if (categoryFilter !== ALL)
       rows = rows.filter((r) => r.category === categoryFilter);
     return rows;
@@ -402,8 +425,12 @@ export default function ExpenseAdminView() {
                       {row.date}
                     </td>
                     <td className="px-3 py-2 text-deep-green">
-                      {row.city || (
-                        <span className="text-deep-green/45">—</span>
+                      {!row.city || row.city === "Company-wide" ? (
+                        <span className="text-deep-green/45">
+                          Company-wide
+                        </span>
+                      ) : (
+                        row.city
                       )}
                     </td>
                     <td className="px-3 py-2 text-deep-green/85">

@@ -22,7 +22,6 @@ const CITY_OPTIONS = [
   "St. Louis",
   "OKC",
   "El Paso",
-  "Company-wide",
 ];
 
 const MONTH_NAMES = [
@@ -70,10 +69,16 @@ function emptyDraft(): ExpenseDraft {
 }
 
 function fromExisting(row: FinExpense): ExpenseDraft {
+  // Normalize city for the dropdown:
+  //   null / "" / legacy literal "Company-wide" → "" (selects the
+  //   canonical Company-wide option, which writes null on save)
+  //   real city name → kept as-is
+  const cityForEditor =
+    !row.city || row.city === "Company-wide" ? "" : row.city;
   return {
     date: row.date,
     month: row.month || monthFromDate(row.date),
-    city: row.city || CITY_OPTIONS[0],
+    city: cityForEditor,
     category: row.category ?? "",
     vendor: row.vendor ?? "",
     amount: row.amount,
@@ -152,14 +157,8 @@ export default function ExpenseRowEditor({
       setError("Category is required.");
       return;
     }
-    // City is required for every category EXCEPT Misc, which can be
-    // company-wide (no city tag).
-    if (!draft.city && draft.category.trim() !== "Misc") {
-      setError(
-        "City is required (or set Category to 'Misc' for company-wide rows).",
-      );
-      return;
-    }
+    // City is optional for any category — empty selects the
+    // canonical Company-wide option (writes null on save).
     if (!Number.isFinite(draft.amount)) {
       setError("Amount must be a number.");
       return;
@@ -216,18 +215,13 @@ export default function ExpenseRowEditor({
               onChange={(e) => setDraft({ ...draft, city: e.target.value })}
               className="w-full rounded-md border border-cream-line bg-white px-3 py-2 text-sm text-deep-green focus:border-deep-green focus:outline-none"
             >
-              <option value="">— (Misc only)</option>
+              <option value="">Company-wide</option>
               {cityOptions.map((c) => (
                 <option key={c} value={c}>
                   {c}
                 </option>
               ))}
             </select>
-            {draft.category.trim() === "Misc" && (
-              <p className="mt-1 text-[11px] text-deep-green/55">
-                Misc rows can leave city blank for company-wide expenses.
-              </p>
-            )}
           </Field>
 
           <Field label="Category">
