@@ -1,8 +1,7 @@
 import { supabase } from "./supabase";
 import { selectAll } from "./supabasePagination";
 import { normalizeMatchName } from "./venueNormalization";
-import { computeMonthlySnapshot } from "./membershipStats";
-import { CITIES } from "./types";
+import { refreshMembershipSnapshots } from "./membershipSnapshots";
 
 export type ImportResult = { count: number; note?: string };
 
@@ -355,37 +354,12 @@ export async function commitMembers(
 
   // Auxiliary monthly snapshot(s) — best-effort. The fin_members rows
   // (source of truth) are already committed above, so a snapshot
-  // failure shouldn't fail the upload.
-  //
-  // On the first 5 days of a month we ALSO refresh the prior month's
-  // snapshot. Late activations (e.g. an Apr 30 signup that lands in
-  // a May 2 CSV due to Stripe processing delay) keep their permanent
-  // Member Activation Date and would otherwise be missed in April's
-  // numbers. The 5-day window matches the 25-day cancel-policy cutoff
-  // we already use for churning. Using the 15th of the prior month
-  // as the ref Date sidesteps month-arithmetic edge cases (Mar 31 →
-  // Feb 28 etc.).
+  // failure shouldn't fail the upload. The shared helper handles the
+  // early-month prior-month refresh internally.
   try {
-    const today = new Date();
-    const monthsToSnapshot: Date[] = [today];
-    if (today.getDate() <= 5) {
-      monthsToSnapshot.unshift(
-        new Date(today.getFullYear(), today.getMonth() - 1, 15),
-      );
-    }
-    for (const refDate of monthsToSnapshot) {
-      const snap = computeMonthlySnapshot(parsed, CITIES, refDate, sourceFileName);
-      const { error: snapErr } = await supabase
-        .from("members_monthly_snapshots")
-        .upsert(snap, { onConflict: "month" });
-      if (snapErr)
-        console.warn(
-          `Members snapshot upsert failed for ${snap.month}:`,
-          snapErr.message,
-        );
-    }
+    await refreshMembershipSnapshots({ sourceFileName });
   } catch (e) {
-    console.warn("Members snapshot computation failed:", e);
+    console.warn("Members snapshot refresh failed:", e);
   }
 
   return { count: parsed.length };

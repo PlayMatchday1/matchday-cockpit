@@ -6,6 +6,7 @@ import { supabase } from "@/lib/supabase";
 import { normalizeCity } from "@/lib/cityMap";
 import { normField } from "@/lib/normField";
 import { refetchMatchData } from "@/lib/useMatchData";
+import { refreshMembershipSnapshots } from "@/lib/membershipSnapshots";
 import UploaderShell from "./UploaderShell";
 
 type Stage = "idle" | "parsing" | "uploading" | "success" | "error";
@@ -27,6 +28,7 @@ type MappedRow = {
   city: string;
   field: string;
   match_start: string;
+  email: string | null;
   payment_type: string | null;
   promocode: string | null;
   preferable_city: string | null;
@@ -109,6 +111,8 @@ export default function MatchesUploader() {
       const prefCity = (row["Preferable City"] ?? "").trim() || null;
       const paymentType = (row["Type Of Payment"] ?? "").trim() || null;
       const pricePaid = parseFloat(row["Match price paid"] ?? "") || 0;
+      const emailRaw = (row["Email"] ?? "").trim();
+      const email = emailRaw ? emailRaw.toLowerCase() : null;
 
       mapped.push({
         user_id: userId,
@@ -116,6 +120,7 @@ export default function MatchesUploader() {
         city: cityNorm,
         field: normField(row["Field"]),
         match_start: matchStart,
+        email,
         payment_type: paymentType,
         promocode: promo,
         preferable_city: prefCity,
@@ -201,6 +206,16 @@ export default function MatchesUploader() {
         "Failed to delete prior match_registrations:",
         cleanErr.message,
       );
+    }
+
+    // Best-effort membership snapshot refresh. avg_matches_per_member
+    // and members_tracked depend on attendance — without this, those
+    // fields would lag the underlying data until the next Members CSV
+    // upload.
+    try {
+      await refreshMembershipSnapshots({ sourceFileName: filename });
+    } catch (e) {
+      console.warn("Membership snapshot refresh failed:", e);
     }
 
     setStage("success");

@@ -1,16 +1,20 @@
 "use client";
 
 import { useFinanceData } from "@/lib/useFinanceData";
+import { useMatchData } from "@/lib/useMatchData";
 import {
+  computeAvgMatchesPerMember,
   isActiveMember,
   isCancelledInMonth,
   isChurning,
   isNewInMonth,
   monthLabel,
+  type AttendanceRow,
 } from "@/lib/membershipStats";
 
 export default function MembershipSnapshot() {
   const { data, loading } = useFinanceData();
+  const { rows: matchRows } = useMatchData();
   const now = new Date();
 
   if (loading && !data) {
@@ -40,6 +44,23 @@ export default function MembershipSnapshot() {
     .length;
   const churning = members.filter((m) => isChurning(m, now)).length;
 
+  const attendance: AttendanceRow[] = matchRows.map((r) => ({
+    match_start: r.matchStart,
+    payment_type: r.paymentType,
+    email: r.email,
+  }));
+  const { avg, membersTracked } = computeAvgMatchesPerMember(
+    members,
+    attendance,
+    now,
+  );
+  const avgDisplay = membersTracked > 0 ? avg.toFixed(1) : "0";
+  const avgHint =
+    membersTracked > 0
+      ? `${membersTracked.toLocaleString()} members tracked`
+      : "0 members tracked";
+  const avgMuted = membersTracked === 0;
+
   return (
     <section className="rounded-2xl border-[1.5px] border-cream-line bg-white p-6 shadow-md shadow-deep-green/10 sm:p-7">
       <div className="text-[11px] font-bold uppercase tracking-[0.25em] text-deep-green/60">
@@ -67,9 +88,9 @@ export default function MembershipSnapshot() {
         />
         <KPI
           label="Avg Matches/Member"
-          value="0"
-          hint="0 members tracked"
-          muted
+          value={avgDisplay}
+          hint={avgHint}
+          muted={avgMuted}
         />
       </div>
     </section>

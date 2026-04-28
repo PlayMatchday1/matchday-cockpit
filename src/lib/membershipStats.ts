@@ -143,18 +143,89 @@ export function buildMonthlyBuckets(
   }));
 }
 
+// Subset of a match_registrations row needed to compute member
+// attendance. Both the in-app MatchRow (post-parsing) and the raw
+// DB row shape can satisfy this — pass match_start as either a Date
+// or a parseable string.
+export type AttendanceRow = {
+  match_start: string | Date;
+  payment_type: string | null;
+  email: string | null;
+};
+
+export type AvgMatchesResult = {
+  avg: number;
+  membersTracked: number;
+};
+
+// Average member attendance for the reference month.
+// - Filter attendance to type_of_payment === MEMBER and match_start in ref month.
+// - Lowercase-match attendance email to fin_members email (members
+//   already filtered through isPaidExternalMember, which excludes
+//   INCOMPLETE / internal / price=0 rows).
+// - Group by member email, count matches per member.
+// - avg = total_matches / members_with_at_least_one_match
+//   (denominator is "members tracked" — not the entire active base).
+// - Returns { avg: 0, membersTracked: 0 } when nothing matches.
+export function computeAvgMatchesPerMember(
+  members: MemberLike[],
+  attendance: AttendanceRow[],
+  ref: Date,
+): AvgMatchesResult {
+  const eligibleEmails = new Set<string>();
+  for (const m of members) {
+    if (!isPaidExternalMember(m)) continue;
+    if (!m.email) continue;
+    eligibleEmails.add(m.email.toLowerCase());
+  }
+  if (eligibleEmails.size === 0) return { avg: 0, membersTracked: 0 };
+
+  const matchesByMember = new Map<string, number>();
+  for (const a of attendance) {
+    if (!a.email) continue;
+    if ((a.payment_type ?? "").toUpperCase() !== "MEMBER") continue;
+    const matchDate =
+      a.match_start instanceof Date ? a.match_start : parseAttendanceDate(a.match_start);
+    if (!matchDate) continue;
+    if (!inMonth(matchDate, ref)) continue;
+    const key = a.email.toLowerCase();
+    if (!eligibleEmails.has(key)) continue;
+    matchesByMember.set(key, (matchesByMember.get(key) ?? 0) + 1);
+  }
+
+  const membersTracked = matchesByMember.size;
+  if (membersTracked === 0) return { avg: 0, membersTracked: 0 };
+  const total = [...matchesByMember.values()].reduce((s, n) => s + n, 0);
+  return { avg: total / membersTracked, membersTracked };
+}
+
+// Wall-clock parse for "YYYY-MM-DD HH:MM:SS"-style strings — same
+// idea as useMatchData's parseLocal, kept inline so this module
+// doesn't depend on UI code.
+function parseAttendanceDate(s: string): Date | null {
+  const parts = s.slice(0, 16).split(/[- T:]/);
+  if (parts.length < 3) return null;
+  const [yr, mo, dy, hr = "0", mn = "0"] = parts;
+  const [y, m, d, h, n] = [yr, mo, dy, hr, mn].map(Number);
+  if ([y, m, d, h, n].some((x) => Number.isNaN(x))) return null;
+  return new Date(y, m - 1, d, h, n);
+}
+
 export type MembershipSnapshotPayload = {
   month: string; // YYYY-MM-01
   active_count: number;
   new_count: number;
   cancelled_count: number;
   churning_count: number;
+  avg_matches_per_member: number | null;
+  members_tracked: number | null;
   by_city: Record<string, { active: number; new: number; cancelled: number }>;
   source_file_name?: string;
 };
 
 export function computeMonthlySnapshot(
   members: MemberLike[],
+  attendance: AttendanceRow[],
   cities: readonly string[],
   now: Date,
   sourceFileName?: string,
@@ -171,12 +242,20 @@ export function computeMonthlySnapshot(
     };
   }
 
+  const { avg, membersTracked } = computeAvgMatchesPerMember(
+    members,
+    attendance,
+    now,
+  );
+
   return {
     month: monthIso,
     active_count: members.filter(isActiveMember).length,
     new_count: members.filter((m) => isNewInMonth(m, now)).length,
     cancelled_count: members.filter((m) => isCancelledInMonth(m, now)).length,
     churning_count: members.filter((m) => isChurning(m, now)).length,
+    avg_matches_per_member: membersTracked > 0 ? avg : null,
+    members_tracked: membersTracked > 0 ? membersTracked : null,
     by_city: byCity,
     source_file_name: sourceFileName,
   };
