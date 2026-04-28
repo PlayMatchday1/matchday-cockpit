@@ -20,6 +20,9 @@ import { getActiveMonthWindow } from "@/lib/reviewStats";
 import { CITIES, citySlug } from "@/lib/types";
 import CancelPatterns from "@/components/CancelPatterns";
 import ManagerPodium from "@/components/ManagerPodium";
+import MembershipByCityTable from "@/components/MembershipByCityTable";
+import MembershipSnapshot from "@/components/MembershipSnapshot";
+import MembershipTrendChart from "@/components/MembershipTrendChart";
 import Reviews8WeekCard from "@/components/Reviews8WeekCard";
 import ReviewsCommentsTable from "@/components/ReviewsCommentsTable";
 
@@ -141,6 +144,22 @@ function CitiesIndexContent() {
       <div className="mt-12">
         <CancelPatterns />
       </div>
+
+      <section className="mt-12">
+        <div className="mb-6">
+          <h2 className="text-2xl font-bold tracking-tight text-deep-green">
+            Membership
+          </h2>
+          <p className="mt-1 text-sm text-deep-green/70">
+            Active members, growth, and per-city breakdown
+          </p>
+        </div>
+        <div className="space-y-6">
+          <MembershipSnapshot />
+          <MembershipTrendChart />
+          <MembershipByCityTable />
+        </div>
+      </section>
 
       <section className="mt-12">
         <div className="mb-6">

@@ -114,6 +114,8 @@ export type FinMember = {
   price_cents: number;
   city: string;
   email: string | null;
+  activation_date: string | null;
+  canceled_at: string | null;
 };
 
 export type FinPricing = {
@@ -451,6 +453,8 @@ async function load(): Promise<void> {
     price_cents: Math.round(asNumber(r.price_cents) || 0),
     city: cleanText(r.city),
     email: cleanTextNullable(r.email),
+    activation_date: cleanTextNullable(r.activation_date),
+    canceled_at: cleanTextNullable(r.canceled_at),
   }));
 
   const pricing: FinPricing[] = prcRows.map((r) => ({
