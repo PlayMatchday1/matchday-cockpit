@@ -20,6 +20,7 @@ import { getActiveMonthWindow } from "@/lib/reviewStats";
 import { CITIES, citySlug } from "@/lib/types";
 import CancelPatterns from "@/components/CancelPatterns";
 import ManagerPodium from "@/components/ManagerPodium";
+import MembershipActiveChart from "@/components/MembershipActiveChart";
 import MembershipByCityTable from "@/components/MembershipByCityTable";
 import MembershipSnapshot from "@/components/MembershipSnapshot";
 import MembershipTrendChart from "@/components/MembershipTrendChart";
@@ -156,6 +157,7 @@ function CitiesIndexContent() {
         </div>
         <div className="space-y-6">
           <MembershipSnapshot />
+          <MembershipActiveChart />
           <MembershipTrendChart />
           <MembershipByCityTable />
         </div>

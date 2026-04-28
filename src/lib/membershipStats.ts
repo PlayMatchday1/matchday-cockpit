@@ -2,7 +2,15 @@ import type { FinMember } from "./useFinanceData";
 
 const INTERNAL_EMAIL_RX = /@matchday\.|@playmatchday\./i;
 
-export function isPaidExternalMember(m: FinMember): boolean {
+// Structural subset that all membership predicates need. FinMember
+// (read path) and MemberRow (import path before insert, no id yet)
+// both satisfy this — lets us compute snapshots from either side.
+export type MemberLike = Pick<
+  FinMember,
+  "status" | "price_cents" | "email" | "activation_date" | "canceled_at" | "city"
+>;
+
+export function isPaidExternalMember(m: MemberLike): boolean {
   if (m.price_cents <= 0) return false;
   if (m.email && INTERNAL_EMAIL_RX.test(m.email)) return false;
   // Stripe INCOMPLETE / INCOMPLETE_EXPIRED never completed checkout —
@@ -53,7 +61,7 @@ export function lastNMonths(n: number, now: Date): Date[] {
 // month: [6th of prior month, 5th of this month] inclusive, still
 // flagged ACTIVE. Cancellations from the 6th of THIS month onward
 // belong to the next cycle and aren't churning yet.
-export function isChurning(m: FinMember, now: Date): boolean {
+export function isChurning(m: MemberLike, now: Date): boolean {
   if (!isPaidExternalMember(m)) return false;
   if (m.status !== "ACTIVE") return false;
   const canceled = parseMemberDate(m.canceled_at);
@@ -63,11 +71,11 @@ export function isChurning(m: FinMember, now: Date): boolean {
   return canceled >= windowStart && canceled < windowEnd;
 }
 
-export function isActiveMember(m: FinMember): boolean {
+export function isActiveMember(m: MemberLike): boolean {
   return m.status === "ACTIVE" && isPaidExternalMember(m);
 }
 
-export function isNewInMonth(m: FinMember, ref: Date): boolean {
+export function isNewInMonth(m: MemberLike, ref: Date): boolean {
   if (!isPaidExternalMember(m)) return false;
   return inMonth(parseMemberDate(m.activation_date), ref);
 }
@@ -75,7 +83,7 @@ export function isNewInMonth(m: FinMember, ref: Date): boolean {
 // Cancellations book-keeping: every canceled_at falling in the
 // reference month, regardless of past/future or status. Overlaps
 // intentionally with isChurning on the 1st-5th of the current month.
-export function isCancelledInMonth(m: FinMember, ref: Date): boolean {
+export function isCancelledInMonth(m: MemberLike, ref: Date): boolean {
   if (!isPaidExternalMember(m)) return false;
   return inMonth(parseMemberDate(m.canceled_at), ref);
 }
@@ -89,7 +97,7 @@ export type CityMembershipRow = {
 };
 
 export function buildCityMembershipRows(
-  members: FinMember[],
+  members: MemberLike[],
   cities: readonly string[],
   now: Date,
 ): CityMembershipRow[] {
@@ -121,7 +129,7 @@ export type MonthBucket = {
 };
 
 export function buildMonthlyBuckets(
-  members: FinMember[],
+  members: MemberLike[],
   monthsBack: number,
   now: Date,
 ): MonthBucket[] {
@@ -133,4 +141,43 @@ export function buildMonthlyBuckets(
     cancelledCount: members.filter((mb) => isCancelledInMonth(mb, m)).length,
     isCurrent: i === months.length - 1,
   }));
+}
+
+export type MembershipSnapshotPayload = {
+  month: string; // YYYY-MM-01
+  active_count: number;
+  new_count: number;
+  cancelled_count: number;
+  churning_count: number;
+  by_city: Record<string, { active: number; new: number; cancelled: number }>;
+  source_file_name?: string;
+};
+
+export function computeMonthlySnapshot(
+  members: MemberLike[],
+  cities: readonly string[],
+  now: Date,
+  sourceFileName?: string,
+): MembershipSnapshotPayload {
+  const monthIso = `${now.getFullYear()}-${String(now.getMonth() + 1).padStart(2, "0")}-01`;
+
+  const byCity: MembershipSnapshotPayload["by_city"] = {};
+  for (const city of cities) {
+    const cm = members.filter((m) => m.city === city);
+    byCity[city] = {
+      active: cm.filter(isActiveMember).length,
+      new: cm.filter((m) => isNewInMonth(m, now)).length,
+      cancelled: cm.filter((m) => isCancelledInMonth(m, now)).length,
+    };
+  }
+
+  return {
+    month: monthIso,
+    active_count: members.filter(isActiveMember).length,
+    new_count: members.filter((m) => isNewInMonth(m, now)).length,
+    cancelled_count: members.filter((m) => isCancelledInMonth(m, now)).length,
+    churning_count: members.filter((m) => isChurning(m, now)).length,
+    by_city: byCity,
+    source_file_name: sourceFileName,
+  };
 }

@@ -61,7 +61,7 @@ function FinanceUploadContent() {
           subtitle="Replaces all rows in fin_members. City is derived from Member ID prefix."
           expectedColumns="Member ID, Member Email, Status, First Name, Last Name, Phone Number, Member Activation Date, Membership Length, Price, Canceled At, Cancel Reason"
           preview={previewMembers}
-          commit={(p) => commitMembers(p.parsed)}
+          commit={(p) => commitMembers(p.parsed, p.filename)}
           renderPreview={renderMembersPreview}
           confirmLabel="Confirm Replace"
         />

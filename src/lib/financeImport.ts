@@ -1,6 +1,8 @@
 import { supabase } from "./supabase";
 import { selectAll } from "./supabasePagination";
 import { normalizeMatchName } from "./venueNormalization";
+import { computeMonthlySnapshot } from "./membershipStats";
+import { CITIES } from "./types";
 
 export type ImportResult = { count: number; note?: string };
 
@@ -338,6 +340,7 @@ export function previewMembers(raw: string[][], filename: string): MembersPrevie
 
 export async function commitMembers(
   parsed: MemberRow[],
+  sourceFileName?: string,
 ): Promise<ImportResult> {
   await deleteAll("fin_members");
   if (parsed.length === 0) {
@@ -349,6 +352,20 @@ export async function commitMembers(
     const { error } = await supabase.from("fin_members").insert(chunk);
     if (error) throw new Error(error.message);
   }
+
+  // Auxiliary monthly snapshot — best-effort. The fin_members rows
+  // (source of truth) are already committed above, so a snapshot
+  // failure shouldn't fail the upload.
+  try {
+    const snap = computeMonthlySnapshot(parsed, CITIES, new Date(), sourceFileName);
+    const { error: snapErr } = await supabase
+      .from("members_monthly_snapshots")
+      .upsert(snap, { onConflict: "month" });
+    if (snapErr) console.warn("Members snapshot upsert failed:", snapErr.message);
+  } catch (e) {
+    console.warn("Members snapshot computation failed:", e);
+  }
+
   return { count: parsed.length };
 }
 
