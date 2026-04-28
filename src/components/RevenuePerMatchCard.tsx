@@ -95,7 +95,9 @@ export default function RevenuePerMatchCard() {
       </div>
 
       <p className="mt-4 text-xs italic text-deep-green/55">
-        Mix bar shows what % of gross is walk-up DPP. Higher bar = less
+        Matches are 18-spot equivalents: total spots played / 18.
+        Normalizes for venues that run 14, 22, or 40-spot capacity.
+        Mix bar shows what % of gross is walk-up DPP — higher bar = less
         membership-dependent.
       </p>
     </section>
@@ -107,7 +109,7 @@ function Row({ row }: { row: RevenuePerMatchRow }) {
     <tr className="border-b border-cream-line/50 transition hover:bg-cream-soft/40">
       <td className="px-2 py-2 font-medium text-deep-green">{row.city}</td>
       <td className="px-2 py-2 text-right tabular-nums text-deep-green/65">
-        {row.matches.toLocaleString()}
+        {row.matches.toFixed(1)}
       </td>
       <td className="px-2 py-2 text-right font-bold tabular-nums text-deep-green">
         {fmtDollars(row.grossPerMatch)}

@@ -1078,9 +1078,15 @@ export function buildMembershipHealthRows(
 
 // ===== Revenue per match (last 4 weeks, by city) =====
 
+// `matches` here is 18-spot match-equivalents (total non-canceled
+// spots / 18), not raw distinct match count. Normalizes for venues
+// that run 14, 22, or 40-spot capacity so per-equivalent-match
+// revenue is comparable across cities.
+export const SPOTS_PER_MATCH_EQUIVALENT = 18;
+
 export type RevenuePerMatchRow = {
   city: string;
-  matches: number;
+  matches: number; // match-equivalents (float)
   grossTotal: number;
   dppTotal: number;
   grossPerMatch: number;
@@ -1151,31 +1157,29 @@ export function computeRevenuePerMatchByCity(
     }
   }
 
-  // Match side: distinct (field, match_start) per city, only matches
-  // that ran. Same dedup pattern getCancelRate uses in cityStats.ts.
-  const matchKeysByCity = new Map<string, Set<string>>();
+  // Match side: total non-canceled spots per city in the window,
+  // divided by 18 to give match-equivalents. One row per spot —
+  // same source as Spot Mix by City. Normalizes across mixed-
+  // capacity venues (14 / 22 / 40-spot) so a 40-spot match counts
+  // as ~2.2 equivalents and a 14-spot as ~0.78.
+  const spotsByCity = new Map<string, number>();
   for (const m of matchRows) {
     if (m.matchCanceled) continue;
-    if (!m.city || !m.field) continue;
+    if (!m.city) continue;
     if (m.matchStart < start || m.matchStart >= end) continue;
-    const key = `${m.matchStart.getTime()}|${m.field}`;
-    let set = matchKeysByCity.get(m.city);
-    if (!set) {
-      set = new Set();
-      matchKeysByCity.set(m.city, set);
-    }
-    set.add(key);
+    spotsByCity.set(m.city, (spotsByCity.get(m.city) ?? 0) + 1);
   }
 
   const cities = new Set<string>([
     ...grossByCity.keys(),
-    ...matchKeysByCity.keys(),
+    ...spotsByCity.keys(),
   ]);
   const out: RevenuePerMatchRow[] = [];
   for (const city of cities) {
     const grossTotal = grossByCity.get(city) ?? 0;
     const dppTotal = dppByCity.get(city) ?? 0;
-    const matches = matchKeysByCity.get(city)?.size ?? 0;
+    const spots = spotsByCity.get(city) ?? 0;
+    const matches = spots / SPOTS_PER_MATCH_EQUIVALENT;
     out.push({
       city,
       matches,
