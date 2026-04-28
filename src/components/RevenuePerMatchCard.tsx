@@ -55,8 +55,9 @@ export default function RevenuePerMatchCard() {
         By city
       </h3>
       <p className="mt-1 max-w-3xl text-sm text-deep-green/65">
-        Average dollars generated per played match. Gross includes DPP +
-        member spots + promos. DPP-only is walk-up cash per match.
+        Average dollars generated per match-equivalent (18 spots). Gross
+        includes DPP + membership revenue. DPP-only is per-match
+        payments, excluding membership.
       </p>
 
       <div className="mt-5 overflow-x-auto">
@@ -105,8 +106,8 @@ export default function RevenuePerMatchCard() {
       <p className="mt-4 text-xs italic text-deep-green/55">
         Matches are 18-spot equivalents: total spots played / 18.
         Normalizes for venues that run 14, 22, or 40-spot capacity.
-        Mix bar shows what % of gross is walk-up DPP — higher bar = less
-        membership-dependent.
+        Mix bar shows what % of gross is per-match payments — higher
+        bar = less membership-dependent.
       </p>
     </section>
   );
