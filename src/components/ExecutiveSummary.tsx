@@ -20,9 +20,14 @@ function renderMarkdown(raw: string): string {
   const escaped = escapeHtml(raw);
   const withBold = escaped.replace(/\*\*(.+?)\*\*/g, "<strong>$1</strong>");
   const withItalic = withBold.replace(/(^|[\s(])_(.+?)_(?=[\s).,!?:;]|$)/g, "$1<em>$2</em>");
-  const withBreaks = withItalic.replace(/\n/g, "<br />");
-  return DOMPurify.sanitize(withBreaks, {
-    ALLOWED_TAGS: ["strong", "em", "br"],
+  const html = withItalic
+    .split(/\n{2,}/)
+    .map((p) => p.trim())
+    .filter(Boolean)
+    .map((p) => `<p>${p.replace(/\n/g, "<br />")}</p>`)
+    .join("");
+  return DOMPurify.sanitize(html, {
+    ALLOWED_TAGS: ["p", "strong", "em", "br"],
     ALLOWED_ATTR: [],
   });
 }
@@ -104,12 +109,12 @@ export default function ExecutiveSummary() {
   }
 
   return (
-    <div className="relative rounded-2xl border-l-4 border-gold bg-white p-6 shadow-md shadow-deep-green/10">
+    <div className="relative rounded-2xl border-l-4 border-gold bg-white p-8 shadow-md shadow-deep-green/10 sm:p-10">
       {!editing && isAdmin && (
         <button
           type="button"
           onClick={() => setEditing(true)}
-          className="absolute right-4 top-4 inline-flex items-center gap-1 rounded-full border border-cream-line bg-cream-soft px-3 py-1 text-xs font-bold text-deep-green hover:bg-cream"
+          className="absolute right-5 top-5 inline-flex items-center gap-1 rounded-full border border-cream-line bg-cream-soft px-3 py-1 text-xs font-bold text-deep-green hover:bg-cream"
           aria-label="Edit executive summary"
         >
           <Pencil size={12} aria-hidden />
@@ -133,7 +138,7 @@ export default function ExecutiveSummary() {
           </div>
           <div>
             <label className="mb-1 block text-[11px] font-bold uppercase tracking-[0.18em] text-deep-green/55">
-              Body — supports **bold** and _italic_
+              Body — supports **bold**, _italic_, blank line for new paragraph
             </label>
             <textarea
               value={bodyDraft}
@@ -176,7 +181,7 @@ export default function ExecutiveSummary() {
           </div>
           {commentary?.body ? (
             <div
-              className="mt-3 max-w-3xl text-[18px] leading-relaxed text-deep-green"
+              className="mt-4 max-w-4xl text-[18px] leading-8 text-deep-green [&>p]:m-0 [&>p+p]:mt-4 [&>p:first-of-type]:text-[22px] [&>p:first-of-type]:font-medium [&>p:first-of-type]:leading-9 [&>p:first-of-type]:text-deep-green"
               dangerouslySetInnerHTML={{ __html: renderedBody }}
             />
           ) : (
