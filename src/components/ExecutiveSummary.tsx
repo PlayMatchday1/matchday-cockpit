@@ -181,7 +181,7 @@ export default function ExecutiveSummary() {
           </div>
           {commentary?.body ? (
             <div
-              className="mt-3 max-w-3xl text-[17px] leading-relaxed text-deep-green [&>p]:m-0 [&>p+p]:mt-3"
+              className="mt-3 text-[17px] leading-relaxed text-deep-green [&>p]:m-0 [&>p+p]:mt-3"
               dangerouslySetInnerHTML={{ __html: renderedBody }}
             />
           ) : (
