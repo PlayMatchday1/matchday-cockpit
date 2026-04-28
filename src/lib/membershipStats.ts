@@ -5,6 +5,10 @@ const INTERNAL_EMAIL_RX = /@matchday\.|@playmatchday\./i;
 export function isPaidExternalMember(m: FinMember): boolean {
   if (m.price_cents <= 0) return false;
   if (m.email && INTERNAL_EMAIL_RX.test(m.email)) return false;
+  // Stripe INCOMPLETE / INCOMPLETE_EXPIRED never completed checkout —
+  // they were never charged. ACTIVE / PAST_DUE / CANCELED / UNPAID all
+  // mean "paid at some point" and stay in scope.
+  if (m.status?.toUpperCase().startsWith("INCOMPLETE")) return false;
   return true;
 }
 
