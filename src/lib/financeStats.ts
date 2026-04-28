@@ -186,12 +186,16 @@ export function netRevenueByCityFor(
 function filterExpenseRows(
   data: FinanceData,
   month: Q2Month,
-  mode: Mode,
-  now: Date,
+  _mode: Mode,
+  _now: Date,
 ) {
-  const all = data.expenses.filter((r) => r.month === month);
-  if (mode === "mtd" && isFutureMonth(month, now)) return [];
-  return all;
+  // No future-month gate. fin_expenses rows are committed ledger entries
+  // (recurring subscriptions, salaries, contractor invoices dated on the
+  // last day of the month), not pending estimates — they should sum across
+  // every Q2 month regardless of mode. Revenue gates by future-month
+  // because customers haven't been billed yet; expenses don't have that
+  // ambiguity.
+  return data.expenses.filter((r) => r.month === month);
 }
 
 export function otherExpensesFor(
