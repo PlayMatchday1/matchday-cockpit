@@ -353,15 +353,37 @@ export async function commitMembers(
     if (error) throw new Error(error.message);
   }
 
-  // Auxiliary monthly snapshot — best-effort. The fin_members rows
+  // Auxiliary monthly snapshot(s) — best-effort. The fin_members rows
   // (source of truth) are already committed above, so a snapshot
   // failure shouldn't fail the upload.
+  //
+  // On the first 5 days of a month we ALSO refresh the prior month's
+  // snapshot. Late activations (e.g. an Apr 30 signup that lands in
+  // a May 2 CSV due to Stripe processing delay) keep their permanent
+  // Member Activation Date and would otherwise be missed in April's
+  // numbers. The 5-day window matches the 25-day cancel-policy cutoff
+  // we already use for churning. Using the 15th of the prior month
+  // as the ref Date sidesteps month-arithmetic edge cases (Mar 31 →
+  // Feb 28 etc.).
   try {
-    const snap = computeMonthlySnapshot(parsed, CITIES, new Date(), sourceFileName);
-    const { error: snapErr } = await supabase
-      .from("members_monthly_snapshots")
-      .upsert(snap, { onConflict: "month" });
-    if (snapErr) console.warn("Members snapshot upsert failed:", snapErr.message);
+    const today = new Date();
+    const monthsToSnapshot: Date[] = [today];
+    if (today.getDate() <= 5) {
+      monthsToSnapshot.unshift(
+        new Date(today.getFullYear(), today.getMonth() - 1, 15),
+      );
+    }
+    for (const refDate of monthsToSnapshot) {
+      const snap = computeMonthlySnapshot(parsed, CITIES, refDate, sourceFileName);
+      const { error: snapErr } = await supabase
+        .from("members_monthly_snapshots")
+        .upsert(snap, { onConflict: "month" });
+      if (snapErr)
+        console.warn(
+          `Members snapshot upsert failed for ${snap.month}:`,
+          snapErr.message,
+        );
+    }
   } catch (e) {
     console.warn("Members snapshot computation failed:", e);
   }
