@@ -3,8 +3,10 @@
 import { useFinanceData } from "@/lib/useFinanceData";
 import {
   projectedEndingCash,
+  q2ExpensesActual,
   q2ExpensesProjected,
   q2NetPLProjected,
+  q2NetRevenueActual,
   q2NetRevenueProjected,
   startingCash,
 } from "@/lib/financeStats";
@@ -42,6 +44,10 @@ export default function FinanceHeroMetrics() {
   const netRev = q2NetRevenueProjected(data);
   const totExp = q2ExpensesProjected(data);
   const netPL = q2NetPLProjected(data);
+  const netRevActual = q2NetRevenueActual(data);
+  const totExpActual = q2ExpensesActual(data);
+  const netRevProjected = netRev - netRevActual;
+  const totExpProjected = totExp - totExpActual;
 
   return (
     <div className="grid grid-cols-2 gap-4 lg:grid-cols-4">
@@ -57,14 +63,14 @@ export default function FinanceHeroMetrics() {
         toneFromValue={netPL}
       />
       <Card
-        label="Q2 Net Revenue"
+        label="Q2 Projected Net Revenue"
         value={fmtMoney(netRev)}
-        subtitle="Stripe + Venmo + projections"
+        subtitle={`${fmtMoney(netRevActual)} actual + ${fmtMoney(netRevProjected)} projected`}
       />
       <Card
-        label="Q2 Expenses"
+        label="Q2 Projected Expenses"
         value={fmtMoney(totExp)}
-        subtitle="Manager pay + ops + corporate"
+        subtitle={`${fmtMoney(totExpActual)} actual + ${fmtMoney(totExpProjected)} projected`}
       />
     </div>
   );

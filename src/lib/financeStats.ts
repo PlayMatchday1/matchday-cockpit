@@ -357,6 +357,71 @@ export function projectedEndingCash(
   return startingCash(data) + q2NetPLProjected(data, now);
 }
 
+function isoDateLocal(d: Date): string {
+  const y = d.getFullYear();
+  const mo = String(d.getMonth() + 1).padStart(2, "0");
+  const dy = String(d.getDate()).padStart(2, "0");
+  return `${y}-${mo}-${dy}`;
+}
+
+// Realized Q2 revenue booked through today: Stripe + Venmo rows
+// (source != PROJECTION) with date <= today. No DPP extrapolation,
+// no PROJECTION rows. The hero subtitle uses this as "actual" with
+// projected = q2NetRevenueProjected - q2NetRevenueActual.
+export function q2NetRevenueActual(
+  data: FinanceData,
+  now: Date = new Date(),
+): number {
+  const today = isoDateLocal(now);
+  let sum = 0;
+  for (const r of data.revenue) {
+    if (!Q2_MONTHS.includes(r.month as Q2Month)) continue;
+    if (r.source === "PROJECTION") continue;
+    if (r.date > today) continue;
+    sum += r.net;
+  }
+  return sum;
+}
+
+// Realized Q2 expenses booked through today.
+//
+// Three buckets, classified by the month each line item belongs to:
+//
+//   PAST month    → fully ACTUAL. fieldCostsFor and
+//                   monthlyExpenseCategoryFor for that month
+//                   represent paid operations, not forward-looking
+//                   budgets. fin_expenses rows for past months are
+//                   captured via the date <= today filter (any past
+//                   month's rows are dated in the past).
+//   CURRENT month → fin_expenses with date <= today are actual;
+//                   fieldCosts and monthly_expenses for the current
+//                   month stay PROJECTED (conservative — not all
+//                   matches have run, monthly bills not all paid).
+//   FUTURE month  → fully PROJECTED.
+//
+// projected = q2ExpensesProjected - q2ExpensesActual.
+export function q2ExpensesActual(
+  data: FinanceData,
+  now: Date = new Date(),
+): number {
+  const today = isoDateLocal(now);
+  let sum = 0;
+  for (const r of data.expenses) {
+    if (!Q2_MONTHS.includes(r.month as Q2Month)) continue;
+    if (r.date > today) continue;
+    sum += r.amount;
+  }
+  for (const month of Q2_MONTHS) {
+    if (isFutureMonth(month, now)) continue;
+    if (isCurrentQ2Month(month, now)) continue;
+    sum += fieldCostsFor(data, month);
+    sum += monthlyExpenseCategoryFor(data, month, "city_manager");
+    sum += monthlyExpenseCategoryFor(data, month, "marketing");
+    sum += monthlyExpenseCategoryFor(data, month, "equipment");
+  }
+  return sum;
+}
+
 // ===== Phase 3 helpers: city cards + field ranking =====
 
 export const CITY_DISPLAY_ORDER = [
