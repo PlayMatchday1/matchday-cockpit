@@ -3,6 +3,7 @@ import type { MatchRow } from "./useMatchData";
 import {
   canonicalVenueCost,
   fieldCostsFor,
+  findOverride,
   perMatchTotalFor,
 } from "./financeCosts";
 import { groupVenues } from "./venueGroups";
@@ -383,43 +384,133 @@ export function q2NetRevenueActual(
   return sum;
 }
 
-// Realized Q2 expenses booked through today.
+// Per-source actual breakdown for Q2 expenses. Useful for sanity
+// checks and inspectors; q2ExpensesActual sums these.
+export type Q2ExpensesActualBreakdown = {
+  managerPay: number;       // fin_expenses category=Match Manager Pay, date <= today
+  manualExpenses: number;   // all other fin_expenses, date <= today
+  fieldCosts: number;       // schedule-driven by match date; overrides counted in full for past+current months
+  monthlyExpenses: number;  // city_manager + marketing + equipment, past + current months
+  total: number;
+};
+
+// fieldCostsFor for a single month, classified actual vs projected
+// by date:
+//   - past month: fully actual (whole monthly canonical cost)
+//   - current month, override venues (monthly_flat / lump_sum /
+//     profit_share): full override amount counts as actual — the
+//     monthly bill is committed once the month begins
+//   - current month, schedule-driven venues (per_match / per_hour):
+//     iterate fin_schedule rows, count only rows with date <= today
+//   - future month: 0
+function fieldCostsActualFor(
+  data: FinanceData,
+  month: Q2Month,
+  now: Date,
+): number {
+  if (isFutureMonth(month, now)) return 0;
+  if (!isCurrentQ2Month(month, now)) return fieldCostsFor(data, month);
+  const today = isoDateLocal(now);
+  let total = 0;
+  for (const v of data.venues) {
+    const override = findOverride(data, v.id, month);
+    if (override) {
+      total += override.override_amount;
+      continue;
+    }
+    if (v.billing_type === "per_match") {
+      const rate = v.per_match_rate ?? 0;
+      for (const s of data.schedule) {
+        if (s.venue_raw !== v.raw_venue_name) continue;
+        if (s.month !== month) continue;
+        if (s.date > today) continue;
+        total += (s.match_count ?? 0) * rate;
+      }
+    } else if (v.billing_type === "per_hour") {
+      const rate = v.hourly_rate ?? 0;
+      if (rate > 0) {
+        for (const s of data.schedule) {
+          if (s.venue_raw !== v.raw_venue_name) continue;
+          if (s.month !== month) continue;
+          if (s.date > today) continue;
+          total += (s.total_hours ?? 0) * rate;
+        }
+      }
+    }
+    // no_charge / unknown: 0 contribution
+  }
+  return total;
+}
+
+// Sum of city_manager + marketing + equipment for a month.
+// Past + current months count as actual (fin_monthly_expenses has
+// no date column; presence of a row implies the bills are tracked).
+// Future months: 0.
+function monthlyExpensesActualFor(
+  data: FinanceData,
+  month: Q2Month,
+  now: Date,
+): number {
+  if (isFutureMonth(month, now)) return 0;
+  return (
+    monthlyExpenseCategoryFor(data, month, "city_manager") +
+    monthlyExpenseCategoryFor(data, month, "marketing") +
+    monthlyExpenseCategoryFor(data, month, "equipment")
+  );
+}
+
+// Realized Q2 expenses booked through today, classified by DATE
+// (not month bucket) so current-month spend that's already happened
+// counts as actual. Per-source classification:
 //
-// Three buckets, classified by the month each line item belongs to:
-//
-//   PAST month    → fully ACTUAL. fieldCostsFor and
-//                   monthlyExpenseCategoryFor for that month
-//                   represent paid operations, not forward-looking
-//                   budgets. fin_expenses rows for past months are
-//                   captured via the date <= today filter (any past
-//                   month's rows are dated in the past).
-//   CURRENT month → fin_expenses with date <= today are actual;
-//                   fieldCosts and monthly_expenses for the current
-//                   month stay PROJECTED (conservative — not all
-//                   matches have run, monthly bills not all paid).
-//   FUTURE month  → fully PROJECTED.
+//   fin_expenses (manual + imported):
+//     date <= today → actual; else projected.
+//     Includes Match Manager Pay (each Thursday cash-out is a
+//     separately dated row), Subscriptions, Corporate Salaries, etc.
+//   fieldCostsFor:
+//     past month → fully actual.
+//     current month → schedule-driven costs split by schedule row
+//       date; override-driven costs (monthly_flat / lump_sum /
+//       profit_share) counted in full as committed.
+//     future month → projected.
+//   monthlyExpenseCategoryFor (city_manager + marketing + equipment):
+//     past + current month → actual (presence of row implies tracked).
+//     future month → projected.
 //
 // projected = q2ExpensesProjected - q2ExpensesActual.
+export function q2ExpensesActualBreakdown(
+  data: FinanceData,
+  now: Date = new Date(),
+): Q2ExpensesActualBreakdown {
+  const today = isoDateLocal(now);
+  let managerPay = 0;
+  let manualExpenses = 0;
+  for (const r of data.expenses) {
+    if (!Q2_MONTHS.includes(r.month as Q2Month)) continue;
+    if (r.date > today) continue;
+    if (r.category === "Match Manager Pay") managerPay += r.amount;
+    else manualExpenses += r.amount;
+  }
+  let fieldCosts = 0;
+  let monthlyExpenses = 0;
+  for (const month of Q2_MONTHS) {
+    fieldCosts += fieldCostsActualFor(data, month, now);
+    monthlyExpenses += monthlyExpensesActualFor(data, month, now);
+  }
+  return {
+    managerPay,
+    manualExpenses,
+    fieldCosts,
+    monthlyExpenses,
+    total: managerPay + manualExpenses + fieldCosts + monthlyExpenses,
+  };
+}
+
 export function q2ExpensesActual(
   data: FinanceData,
   now: Date = new Date(),
 ): number {
-  const today = isoDateLocal(now);
-  let sum = 0;
-  for (const r of data.expenses) {
-    if (!Q2_MONTHS.includes(r.month as Q2Month)) continue;
-    if (r.date > today) continue;
-    sum += r.amount;
-  }
-  for (const month of Q2_MONTHS) {
-    if (isFutureMonth(month, now)) continue;
-    if (isCurrentQ2Month(month, now)) continue;
-    sum += fieldCostsFor(data, month);
-    sum += monthlyExpenseCategoryFor(data, month, "city_manager");
-    sum += monthlyExpenseCategoryFor(data, month, "marketing");
-    sum += monthlyExpenseCategoryFor(data, month, "equipment");
-  }
-  return sum;
+  return q2ExpensesActualBreakdown(data, now).total;
 }
 
 // ===== Phase 3 helpers: city cards + field ranking =====
