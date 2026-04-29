@@ -4,6 +4,7 @@ import { useEffect, useState } from "react";
 import Link from "next/link";
 import { ChevronDown, ChevronRight } from "lucide-react";
 import PagePermissionGuard from "@/components/PagePermissionGuard";
+import CheckInsButtonCard from "@/components/CheckInsButtonCard";
 import CityPLCard from "@/components/CityPLCard";
 import ExecutiveSummary from "@/components/ExecutiveSummary";
 import FieldRankingTable from "@/components/FieldRankingTable";
@@ -106,6 +107,10 @@ function FinanceLandingContent() {
           collapsed={rankingCollapsed}
           onToggle={() => setRankingCollapsed((c) => !c)}
         />
+      </div>
+
+      <div className="mb-12">
+        <CheckInsButtonCard />
       </div>
 
       <SectionHeader
