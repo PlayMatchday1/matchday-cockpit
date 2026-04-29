@@ -62,7 +62,7 @@ export default function CheckInsCalendar() {
                 return (
                   <div
                     key={d}
-                    className={`relative h-7 rounded-[3px] ${
+                    className={`flex h-7 items-center justify-center overflow-hidden rounded-[3px] ${
                       isPayday
                         ? "bg-mint shadow-[0_0_10px_rgba(44,219,135,0.45)]"
                         : "bg-cream-soft"
@@ -72,9 +72,7 @@ export default function CheckInsCalendar() {
                     title={isPayday ? `${m.name} · ${formatMoney(m.amount)}` : undefined}
                   >
                     {isPayday && (
-                      <span
-                        className="pointer-events-none absolute left-1/2 -top-4 -translate-x-1/2 whitespace-nowrap font-mono text-[9px] font-bold tabular-nums text-mint-hover"
-                      >
+                      <span className="text-[10px] font-bold tabular-nums leading-none text-deep-green">
                         {formatMoney(m.amount)}
                       </span>
                     )}
@@ -86,7 +84,7 @@ export default function CheckInsCalendar() {
         })}
 
         {/* Legend */}
-        <div className="mt-5 flex flex-wrap items-center gap-5 border-t border-cream-line/60 pt-3 font-mono text-[10px] uppercase tracking-wider text-deep-green/55">
+        <div className="mt-8 flex flex-wrap items-center gap-5 border-t border-cream-line/60 pt-3 font-mono text-[10px] uppercase tracking-wider text-deep-green/55">
           <div className="flex items-center gap-2">
             <span className="inline-block h-3 w-3 rounded-[2px] bg-mint" />
             Payday
