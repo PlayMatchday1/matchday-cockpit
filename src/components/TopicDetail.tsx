@@ -5,11 +5,15 @@ import { supabase } from "@/lib/supabase";
 import { isEmptyHtml } from "@/lib/html";
 import { displayName, useAuth } from "@/lib/useAuth";
 import {
-  COMMON_TAGS,
+  DEPARTMENTS,
+  DEPARTMENT_LABEL,
+  DEPARTMENT_PILL_CLASS,
   TOPIC_STATUSES,
   TOPIC_STATUS_LABEL,
   TOPIC_STATUS_PILL,
+  deptKey,
   type ActionItem,
+  type Department,
   type Topic,
   type TopicComment,
   type TopicStatus,
@@ -48,8 +52,6 @@ export default function TopicDetail({
   const [editingTitle, setEditingTitle] = useState(false);
   const [draftTitle, setDraftTitle] = useState(topic.title);
   const [editingDesc, setEditingDesc] = useState(false);
-  const [editingTag, setEditingTag] = useState(false);
-  const [draftTag, setDraftTag] = useState(topic.tag ?? "");
 
   const [adding, setAdding] = useState(false);
   const [newItemBody, setNewItemBody] = useState("");
@@ -91,11 +93,9 @@ export default function TopicDetail({
 
   useEffect(() => {
     setDraftTitle(topic.title);
-    setDraftTag(topic.tag ?? "");
     setEditingTitle(false);
     setEditingDesc(false);
-    setEditingTag(false);
-  }, [topic.id, topic.title, topic.tag]);
+  }, [topic.id, topic.title, topic.department]);
 
   async function saveTitle() {
     const trimmed = draftTitle.trim();
@@ -129,18 +129,13 @@ export default function TopicDetail({
     refetchTopics();
   }
 
-  async function saveTag() {
-    const trimmed = draftTag.trim();
-    const next = trimmed || null;
-    if (next === (topic.tag ?? null)) {
-      setEditingTag(false);
-      return;
-    }
+  async function saveDepartment(value: Department | "") {
+    const next = value || null;
+    if (next === (topic.department ?? null)) return;
     const { error } = await supabase
       .from("topics")
-      .update({ tag: next, updated_at: new Date().toISOString() })
+      .update({ department: next, updated_at: new Date().toISOString() })
       .eq("id", topic.id);
-    setEditingTag(false);
     if (error) return alert(error.message);
     refetchTopics();
   }
@@ -285,46 +280,21 @@ export default function TopicDetail({
             ))}
           </select>
 
-          {editingTag ? (
-            <>
-              <input
-                autoFocus
-                list="topic-tags-detail"
-                value={draftTag}
-                onChange={(e) => setDraftTag(e.target.value)}
-                onBlur={saveTag}
-                onKeyDown={(e) => {
-                  if (e.key === "Enter") {
-                    (e.target as HTMLInputElement).blur();
-                  } else if (e.key === "Escape") {
-                    setDraftTag(topic.tag ?? "");
-                    setEditingTag(false);
-                  }
-                }}
-                className="rounded-full border border-mint bg-white px-2 py-0.5 text-xs text-deep-green focus:outline-none"
-              />
-              <datalist id="topic-tags-detail">
-                {COMMON_TAGS.map((t) => (
-                  <option key={t} value={t} />
-                ))}
-              </datalist>
-            </>
-          ) : (
-            <button
-              type="button"
-              onClick={() => {
-                setDraftTag(topic.tag ?? "");
-                setEditingTag(true);
-              }}
-              className={`rounded-full px-2 py-0.5 text-[10px] font-bold uppercase tracking-wider ring-1 ring-inset transition ${
-                topic.tag
-                  ? "bg-mint-soft text-deep-green ring-mint/40 hover:bg-mint/30"
-                  : "text-deep-green/40 ring-cream-line hover:bg-cream-soft"
-              }`}
-            >
-              {topic.tag || "+ Tag"}
-            </button>
-          )}
+          <select
+            value={topic.department ?? ""}
+            onChange={(e) =>
+              saveDepartment(e.target.value as Department | "")
+            }
+            aria-label="Topic department"
+            className={`rounded-full px-2 py-0.5 text-[10px] font-bold uppercase tracking-wider ring-1 ring-inset focus:outline-none ${DEPARTMENT_PILL_CLASS[deptKey(topic.department)]}`}
+          >
+            <option value="">{DEPARTMENT_LABEL.general}</option>
+            {DEPARTMENTS.map((d) => (
+              <option key={d} value={d}>
+                {DEPARTMENT_LABEL[d]}
+              </option>
+            ))}
+          </select>
 
           <button
             type="button"

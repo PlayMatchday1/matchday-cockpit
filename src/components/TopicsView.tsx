@@ -1,16 +1,41 @@
 "use client";
 
-import { useState } from "react";
+import { useMemo, useState } from "react";
 import { useTopics } from "@/lib/useTopics";
+import {
+  DEPARTMENTS,
+  DEPARTMENT_LABEL,
+  DEPARTMENT_PILL_CLASS,
+  deptKey,
+  type Department,
+  type DepartmentKey,
+} from "@/lib/topics";
 import NewTopicModal from "./NewTopicModal";
 import TopicDetail from "./TopicDetail";
 import TopicSidebarRow from "./TopicSidebarRow";
+
+type DeptFilter = "all" | DepartmentKey;
+
+const DEPT_FILTER_OPTIONS: { value: DeptFilter; label: string }[] = [
+  { value: "all", label: "All" },
+  { value: "general", label: "General" },
+  ...DEPARTMENTS.map((d) => ({
+    value: d as DeptFilter,
+    label: DEPARTMENT_LABEL[d as Department],
+  })),
+];
 
 export default function TopicsView() {
   const { topics, loading } = useTopics();
   const [showModal, setShowModal] = useState(false);
   const [showResolved, setShowResolved] = useState(false);
   const [showArchived, setShowArchived] = useState(false);
+  const [deptFilter, setDeptFilter] = useState<DeptFilter>("all");
+
+  const filteredTopics = useMemo(() => {
+    if (deptFilter === "all") return topics;
+    return topics.filter((t) => deptKey(t.department) === deptFilter);
+  }, [topics, deptFilter]);
 
   // Selection in local state instead of the URL — Next 16 + React 19
   // + Turbopack didn't reliably re-fire useSearchParams() when
@@ -70,9 +95,9 @@ export default function TopicsView() {
     );
   }
 
-  const open = topics.filter((t) => t.status === "open");
-  const resolved = topics.filter((t) => t.status === "resolved");
-  const archived = topics.filter((t) => t.status === "archived");
+  const open = filteredTopics.filter((t) => t.status === "open");
+  const resolved = filteredTopics.filter((t) => t.status === "resolved");
+  const archived = filteredTopics.filter((t) => t.status === "archived");
 
   return (
     <>
@@ -86,6 +111,7 @@ export default function TopicsView() {
             + New topic
           </button>
           <div className="rounded-2xl border-[1.5px] border-cream-line bg-white p-2 shadow-md shadow-deep-green/10">
+            <DeptFilterRow value={deptFilter} onChange={setDeptFilter} />
             {open.length > 0 ? (
               <ul className="space-y-1">
                 {open.map((t) => (
@@ -168,6 +194,46 @@ export default function TopicsView() {
         />
       )}
     </>
+  );
+}
+
+function DeptFilterRow({
+  value,
+  onChange,
+}: {
+  value: DeptFilter;
+  onChange: (next: DeptFilter) => void;
+}) {
+  return (
+    <div className="mb-2 flex flex-wrap gap-1 px-1 pt-1">
+      {DEPT_FILTER_OPTIONS.map((opt) => {
+        const isActive = value === opt.value;
+        // Active filter previews the department's pill tint;
+        // inactive uses a subdued text-only style. "All" gets the
+        // mint-soft treatment when active so it doesn't visually
+        // borrow any single department's color.
+        const activeCls =
+          opt.value === "all"
+            ? "bg-mint-soft text-deep-green ring-mint/40"
+            : DEPARTMENT_PILL_CLASS[opt.value];
+        return (
+          <button
+            key={opt.value}
+            type="button"
+            onClick={() => onChange(opt.value)}
+            title={opt.label}
+            className={`rounded-full px-2.5 py-0.5 text-[10px] font-bold uppercase tracking-wider ring-1 ring-inset transition ${
+              isActive
+                ? activeCls
+                : "bg-transparent text-deep-green/55 ring-transparent hover:bg-cream-soft hover:text-deep-green"
+            }`}
+            aria-pressed={isActive}
+          >
+            {opt.label}
+          </button>
+        );
+      })}
+    </div>
   );
 }
 

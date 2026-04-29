@@ -2,7 +2,11 @@
 
 import { useEffect, useState } from "react";
 import { supabase } from "@/lib/supabase";
-import { COMMON_TAGS } from "@/lib/topics";
+import {
+  DEPARTMENTS,
+  DEPARTMENT_LABEL,
+  type Department,
+} from "@/lib/topics";
 import { refetchTopics } from "@/lib/useTopics";
 
 export default function NewTopicModal({
@@ -14,7 +18,8 @@ export default function NewTopicModal({
 }) {
   const [title, setTitle] = useState("");
   const [description, setDescription] = useState("");
-  const [tag, setTag] = useState("");
+  // "" represents the General/Org-wide default (department=null).
+  const [department, setDepartment] = useState<Department | "">("");
   const [saving, setSaving] = useState(false);
   const [error, setError] = useState<string | null>(null);
 
@@ -47,7 +52,7 @@ export default function NewTopicModal({
       .insert({
         title: title.trim(),
         description: description.trim() || null,
-        tag: tag.trim() || null,
+        department: department || null,
         status: "open",
         sort_order,
       })
@@ -97,19 +102,21 @@ export default function NewTopicModal({
               className="w-full resize-none rounded-md border border-cream-line bg-cream-soft px-3 py-2 text-sm text-deep-green placeholder:text-deep-green/40 focus:border-deep-green focus:outline-none"
             />
           </Field>
-          <Field label="Tag">
-            <input
-              list="topic-tags-modal"
-              value={tag}
-              onChange={(e) => setTag(e.target.value)}
-              placeholder="General, Austin, Houston…"
-              className="w-full rounded-md border border-cream-line bg-cream-soft px-3 py-2 text-sm text-deep-green placeholder:text-deep-green/40 focus:border-deep-green focus:outline-none"
-            />
-            <datalist id="topic-tags-modal">
-              {COMMON_TAGS.map((t) => (
-                <option key={t} value={t} />
+          <Field label="Department">
+            <select
+              value={department}
+              onChange={(e) =>
+                setDepartment(e.target.value as Department | "")
+              }
+              className="w-full rounded-md border border-cream-line bg-cream-soft px-3 py-2 text-sm text-deep-green focus:border-deep-green focus:outline-none"
+            >
+              <option value="">General</option>
+              {DEPARTMENTS.map((d) => (
+                <option key={d} value={d}>
+                  {DEPARTMENT_LABEL[d]}
+                </option>
               ))}
-            </datalist>
+            </select>
           </Field>
           {error && (
             <div className="rounded-md border border-coral/40 bg-coral-soft px-3 py-1.5 text-xs text-coral">

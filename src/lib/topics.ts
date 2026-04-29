@@ -1,5 +1,3 @@
-import { CITIES } from "./types";
-
 export const TOPIC_STATUSES = ["open", "resolved", "archived"] as const;
 export type TopicStatus = (typeof TOPIC_STATUSES)[number];
 
@@ -21,13 +19,46 @@ export const TOPIC_STATUS_PILL: Record<TopicStatus, string> = {
   archived: "bg-muted-soft text-muted ring-cream-line",
 };
 
-export const COMMON_TAGS: readonly string[] = ["General", ...CITIES];
+// Department categorization. NULL = General/Org-wide (default).
+// Schema: topics.department TEXT with CHECK constraint on the
+// three values below. NULL is allowed and the default.
+export const DEPARTMENTS = ["marketing", "ops", "growth_partnerships"] as const;
+export type Department = (typeof DEPARTMENTS)[number];
+
+// Internal key used by lookup tables — "general" is the synthetic
+// key for null department, since lookup tables can't be keyed by null.
+export type DepartmentKey = Department | "general";
+
+export function deptKey(d: Department | null): DepartmentKey {
+  return d ?? "general";
+}
+
+export const DEPARTMENT_LABEL: Record<DepartmentKey, string> = {
+  general: "General",
+  marketing: "Marketing",
+  ops: "Ops",
+  growth_partnerships: "Growth & Partnerships",
+};
+
+// Pill class palette — all four departments use the same treatment:
+// light tinted background, deep-green text, colored ring. Consistent
+// look-and-feel so the pills read as one component family.
+export const DEPARTMENT_PILL_CLASS: Record<DepartmentKey, string> = {
+  general: "bg-muted-soft text-deep-green ring-cream-line",
+  marketing: "bg-[#D4A017]/15 text-deep-green ring-[#D4A017]/40",
+  ops: "bg-[#00E676]/15 text-deep-green ring-[#00E676]/40",
+  growth_partnerships: "bg-[#8B5CF6]/15 text-deep-green ring-[#8B5CF6]/40",
+};
 
 export type Topic = {
   id: string;
   title: string;
   description: string | null;
+  // Legacy free-text tag column. Kept readable during the soak
+  // window after the department migration; UI no longer reads or
+  // writes it. Schedule a DROP COLUMN follow-up after a week.
   tag: string | null;
+  department: Department | null;
   status: TopicStatus;
   sort_order: number | null;
   created_at: string;

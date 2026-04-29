@@ -1,6 +1,7 @@
 "use client";
 
 import type { Topic } from "@/lib/topics";
+import DepartmentPill from "./DepartmentPill";
 
 function relativeShort(iso: string): string {
   const ms = Date.now() - new Date(iso).getTime();
@@ -42,11 +43,7 @@ export default function TopicSidebarRow({
           {topic.title}
         </div>
         <div className="mt-0.5 flex items-center gap-2 text-[11px] text-deep-green/55">
-          {topic.tag && (
-            <span className="inline-flex shrink-0 rounded-full bg-mint-soft px-1.5 py-0.5 text-[9px] font-bold uppercase tracking-wider text-deep-green ring-1 ring-inset ring-mint/40">
-              {topic.tag}
-            </span>
-          )}
+          <DepartmentPill department={topic.department} />
           <span className="shrink-0">{relativeShort(topic.updated_at)} ago</span>
         </div>
       </button>
