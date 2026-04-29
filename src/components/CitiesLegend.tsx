@@ -48,6 +48,13 @@ export default function CitiesLegend() {
             : "pointer-events-none opacity-0 group-hover:pointer-events-auto group-hover:opacity-100"
         }`}
       >
+        <div className="mb-2.5 text-deep-green/65">
+          Toggle{" "}
+          <span className="font-bold text-deep-green">
+            This week / Last week
+          </span>{" "}
+          to see complete-week numbers (current week is in-progress).
+        </div>
         <div className="text-[13px] font-bold text-deep-green">
           Status — is this city growing?
         </div>
@@ -82,6 +89,7 @@ export default function CitiesLegend() {
           <div className="text-[13px] font-bold text-deep-green">Cancel %</div>
           <div className="mt-1 text-deep-green/65">
             Matches that didn&apos;t run, out of matches scheduled this month.
+            Stays month-to-date regardless of week toggle for sample-size reasons.
           </div>
         </div>
       </div>

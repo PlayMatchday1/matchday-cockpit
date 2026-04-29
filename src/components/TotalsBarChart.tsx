@@ -9,8 +9,10 @@ const BAR_FRAC = 0.75;
 
 export default function TotalsBarChart({
   weeks,
+  highlightIndex,
 }: {
   weeks: WeeklySpotsEntry[];
+  highlightIndex?: number;
 }) {
   if (weeks.length === 0) return null;
 
@@ -43,6 +45,7 @@ export default function TotalsBarChart({
         const x = cx - barW / 2;
         const y = TOP_PAD + (PLOT_H - h);
         const fill = w.isCurrent ? "url(#totals-stripes)" : "#2cdb87";
+        const isHighlighted = highlightIndex === i;
         return (
           <g key={w.weekLabel}>
             <text
@@ -50,7 +53,7 @@ export default function TotalsBarChart({
               y={TOP_PAD - 8}
               textAnchor="middle"
               fontSize={14}
-              fontWeight={700}
+              fontWeight={isHighlighted ? 800 : 700}
               fill="#003326"
               fontFamily="var(--font-geist-sans), system-ui, sans-serif"
             >
@@ -62,6 +65,8 @@ export default function TotalsBarChart({
               width={barW}
               height={Math.max(h, 1)}
               fill={fill}
+              stroke={isHighlighted ? "#003326" : "none"}
+              strokeWidth={isHighlighted ? 2 : 0}
               rx={4}
             >
               <title>
@@ -73,8 +78,9 @@ export default function TotalsBarChart({
               y={H - 6}
               textAnchor="middle"
               fontSize={12}
+              fontWeight={isHighlighted ? 700 : 400}
               fill="#003326"
-              fillOpacity="0.6"
+              fillOpacity={isHighlighted ? 0.9 : 0.6}
               fontFamily="var(--font-geist-sans), system-ui, sans-serif"
             >
               {w.weekLabel}

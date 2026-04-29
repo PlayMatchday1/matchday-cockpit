@@ -1,5 +1,6 @@
 "use client";
 
+import { useState } from "react";
 import Link from "next/link";
 import CitiesLegend from "@/components/CitiesLegend";
 import { CityHealthPill } from "@/components/StatusPill";
@@ -35,15 +36,25 @@ export default function CitiesIndexPage() {
   );
 }
 
+type WeekScope = "current" | "last";
+
 function CitiesIndexContent() {
   const { rows, meta, loading } = useMatchData();
   const { rows: reviewRows, meta: reviewMeta, loading: reviewLoading } =
     useReviewData();
   const reviewWindow = getActiveMonthWindow(reviewRows);
+  const [weekScope, setWeekScope] = useState<WeekScope>("current");
 
   const totals = getWeeklySpots(rows, null, 8);
   const totalSpots = totals.reduce((s, w) => s + w.spots, 0);
-  const currentTotal = totals[totals.length - 1];
+  // Selected week index: last entry is the in-progress current week,
+  // second-to-last is the most recently completed week.
+  const selectedIdx =
+    weekScope === "current" ? totals.length - 1 : totals.length - 2;
+  const safeSelectedIdx = Math.max(0, selectedIdx);
+  const selectedTotal = totals[safeSelectedIdx];
+  const selectedLabel =
+    weekScope === "current" ? "matches this week" : "matches last week";
 
   const cityData = CITIES.map((city) => {
     const weekly = getWeeklySpots(rows, city, 8);
@@ -56,7 +67,7 @@ function CitiesIndexContent() {
       cancel,
       venues,
       status,
-      currentWeek: weekly[weekly.length - 1],
+      selectedWeek: weekly[safeSelectedIdx],
     };
   });
 
@@ -66,7 +77,7 @@ function CitiesIndexContent() {
   }
   const totalActiveVenues = venueKeys.size;
   const activeCities = cityData.filter(
-    (c) => c.currentWeek.matches > 0,
+    (c) => c.selectedWeek.matches > 0,
   ).length;
 
   return (
@@ -102,15 +113,18 @@ function CitiesIndexContent() {
       ) : (
         <>
           <section className="mb-8 rounded-2xl border-[1.5px] border-cream-line bg-white p-6 shadow-md shadow-deep-green/10 sm:p-7">
-            <div className="text-[11px] font-bold uppercase tracking-[0.25em] text-deep-green/60">
-              MatchDay total · last 8 weeks
+            <div className="flex flex-wrap items-start justify-between gap-3">
+              <div className="text-[11px] font-bold uppercase tracking-[0.25em] text-deep-green/60">
+                MatchDay total · last 8 weeks
+              </div>
+              <WeekScopeToggle value={weekScope} onChange={setWeekScope} />
             </div>
             <div className="mt-3 flex flex-wrap items-baseline gap-x-3 gap-y-1">
               <span className="font-display text-5xl uppercase leading-none tracking-tight text-deep-green md:text-6xl">
-                {currentTotal.matches}
+                {selectedTotal.matches}
               </span>
               <span className="text-sm font-medium text-deep-green/60">
-                matches this week
+                {selectedLabel}
               </span>
             </div>
             <div className="mt-1 text-sm text-deep-green/70">
@@ -118,7 +132,7 @@ function CitiesIndexContent() {
               {totalActiveVenues} venues active across {activeCities} cities
             </div>
             <div className="mt-6">
-              <TotalsBarChart weeks={totals} />
+              <TotalsBarChart weeks={totals} highlightIndex={safeSelectedIdx} />
             </div>
           </section>
 
@@ -215,7 +229,7 @@ function CityCard({
   cancel,
   venues,
   status,
-  currentWeek,
+  selectedWeek,
 }: {
   city: string;
   weekly: WeeklySpotsEntry[];
@@ -227,7 +241,7 @@ function CityCard({
   };
   venues: string[];
   status: CityStatus;
-  currentWeek: WeeklySpotsEntry;
+  selectedWeek: WeeklySpotsEntry;
 }) {
   const dim = status === "Just launched";
   const sparkData = weekly.map((w) => w.matches);
@@ -246,7 +260,7 @@ function CityCard({
         </div>
       </div>
       <div className="mt-4 grid grid-cols-4 gap-3">
-        <Stat label="Matches/wk" value={String(currentWeek.matches)} />
+        <Stat label="Matches/wk" value={String(selectedWeek.matches)} />
         <Stat label="Venues" value={String(venues.length)} />
         <div className="min-w-0">
           <div className="text-[10px] font-bold uppercase tracking-wider text-deep-green/60">
@@ -269,6 +283,41 @@ function CityCard({
         />
       </div>
     </Link>
+  );
+}
+
+function WeekScopeToggle({
+  value,
+  onChange,
+}: {
+  value: WeekScope;
+  onChange: (v: WeekScope) => void;
+}) {
+  return (
+    <div className="inline-flex rounded-full bg-cream-soft p-1 ring-1 ring-cream-line">
+      <button
+        type="button"
+        onClick={() => onChange("current")}
+        className={`rounded-full px-3 py-1 text-[11px] font-bold transition ${
+          value === "current"
+            ? "bg-mint text-deep-green shadow-sm"
+            : "text-deep-green/60 hover:text-deep-green"
+        }`}
+      >
+        This week
+      </button>
+      <button
+        type="button"
+        onClick={() => onChange("last")}
+        className={`rounded-full px-3 py-1 text-[11px] font-bold transition ${
+          value === "last"
+            ? "bg-mint text-deep-green shadow-sm"
+            : "text-deep-green/60 hover:text-deep-green"
+        }`}
+      >
+        Last week
+      </button>
+    </div>
   );
 }
 
