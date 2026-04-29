@@ -1,18 +1,11 @@
 "use client";
 
 import Link from "next/link";
-import { useAuth } from "@/lib/useAuth";
-import { canSeeCheckInsPreview, MANAGERS } from "@/lib/checkIns";
+import { MANAGERS } from "@/lib/checkIns";
 import { useCheckIns } from "@/lib/useCheckIns";
 
 export default function CheckInsButtonCard() {
-  const { appUser } = useAuth();
-  const visible = canSeeCheckInsPreview(appUser?.email);
   const { data, loading, error } = useCheckIns();
-
-  // Hidden entirely for non-allowlisted users during the preview
-  // window. Remove this guard in Phase 2.
-  if (!visible) return null;
 
   return (
     <Link

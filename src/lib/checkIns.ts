@@ -30,16 +30,51 @@ export const MANAGERS: Manager[] = [
 export const CHECK_INS_SHEET_URL =
   "https://docs.google.com/spreadsheets/d/e/2PACX-1vQmzasZGvZavVJan2QFpMxWuhc7HNzWIxRKcx1VsQS7jUZej13C9ODkhN1bw1NFOSUa2fgHKYfySrIE/pub?output=csv";
 
-// TEMPORARY preview gate. Remove once visual is locked and the
-// feature is ready to surface to everyone with finance access.
-export const CHECK_INS_PREVIEW_EMAILS: string[] = [
-  "rmancuso@playmatchday.com",
+const MONTH_SHORT = [
+  "Jan",
+  "Feb",
+  "Mar",
+  "Apr",
+  "May",
+  "Jun",
+  "Jul",
+  "Aug",
+  "Sep",
+  "Oct",
+  "Nov",
+  "Dec",
 ];
 
-export function canSeeCheckInsPreview(email: string | null | undefined): boolean {
-  if (!email) return false;
-  const lower = email.toLowerCase();
-  return CHECK_INS_PREVIEW_EMAILS.some((e) => e.toLowerCase() === lower);
+export function daysInMonth(year: number, month: number): number {
+  return new Date(year, month + 1, 0).getDate();
+}
+
+// Next pay date relative to `today` — this month's pay day if it
+// hasn't passed, otherwise next month's. Clamps the day to the
+// month's actual length (e.g. payDay=31 in February → Feb 28).
+export function getNextPayDate(payDay: number, today: Date): Date {
+  const todayMid = new Date(today.getFullYear(), today.getMonth(), today.getDate());
+  const dayThisMonth = Math.min(payDay, daysInMonth(today.getFullYear(), today.getMonth()));
+  const thisMonthPay = new Date(today.getFullYear(), today.getMonth(), dayThisMonth);
+  if (thisMonthPay >= todayMid) return thisMonthPay;
+  const nextMonth = today.getMonth() === 11 ? 0 : today.getMonth() + 1;
+  const nextYear = today.getMonth() === 11 ? today.getFullYear() + 1 : today.getFullYear();
+  const dayNextMonth = Math.min(payDay, daysInMonth(nextYear, nextMonth));
+  return new Date(nextYear, nextMonth, dayNextMonth);
+}
+
+export function daysUntil(date: Date, today: Date): number {
+  const t = new Date(today.getFullYear(), today.getMonth(), today.getDate());
+  const d = new Date(date.getFullYear(), date.getMonth(), date.getDate());
+  return Math.round((d.getTime() - t.getTime()) / (1000 * 60 * 60 * 24));
+}
+
+export function formatMonthDay(d: Date): string {
+  return `${MONTH_SHORT[d.getMonth()]} ${d.getDate()}`;
+}
+
+export function formatMoney(n: number): string {
+  return "$" + n.toLocaleString("en-US");
 }
 
 export type CheckInEntry = {

@@ -1,25 +1,15 @@
 "use client";
 
 import Link from "next/link";
-import { useAuth } from "@/lib/useAuth";
-import { canSeeCheckInsPreview, MANAGERS } from "@/lib/checkIns";
+import { MANAGERS } from "@/lib/checkIns";
 import { useCheckIns } from "@/lib/useCheckIns";
-import CheckInsStatusCard from "./CheckInsStatusCard";
+import CheckInsCalendar from "./CheckInsCalendar";
+import CheckInsNextPayments from "./CheckInsNextPayments";
+import CheckInsStatusGrid from "./CheckInsStatusGrid";
 
 export default function CheckInsView() {
-  const { appUser } = useAuth();
   const { data, loading, syncing, lastSyncedAt, error, autoRefresh, refresh, setAutoRefresh } =
     useCheckIns();
-
-  // Preview gate — additional layer on top of can_access_finance
-  // until the visual is locked. Remove in Phase 2.
-  if (!canSeeCheckInsPreview(appUser?.email)) {
-    return (
-      <div className="rounded-2xl border-[1.5px] border-cream-line bg-white p-8 text-sm text-deep-green/60 shadow-md shadow-deep-green/10">
-        Coming soon.
-      </div>
-    );
-  }
 
   const lastSyncedLabel = lastSyncedAt
     ? lastSyncedAt.toLocaleTimeString("en-US", {
@@ -78,14 +68,17 @@ export default function CheckInsView() {
         </button>
       </div>
 
-      <SectionHeader title="Payment Calendar" subtitle={`Pay days for ${MANAGERS.length} managers · current month`} />
-      <div className="mb-10 rounded-2xl border-2 border-dashed border-cream-line bg-cream-soft/40 p-6 text-sm italic text-deep-green/45">
-        Calendar grid renders here — Phase 2.
+      <SectionHeader
+        title="Payment Calendar"
+        subtitle={`Pay days for ${MANAGERS.length} managers · current month`}
+      />
+      <div className="mb-10">
+        <CheckInsCalendar />
       </div>
 
       <SectionHeader title="Next Payments" subtitle="Sorted by upcoming pay date" />
-      <div className="mb-10 rounded-2xl border-2 border-dashed border-cream-line bg-cream-soft/40 p-6 text-sm italic text-deep-green/45">
-        Payment cards render here — Phase 2.
+      <div className="mb-10">
+        <CheckInsNextPayments />
       </div>
 
       <SectionHeader
@@ -102,11 +95,7 @@ export default function CheckInsView() {
             Loading responses…
           </div>
         ) : !data ? null : (
-          // Phase 1: render ONE card only — first manager in the list — so
-          // the visual can be reviewed before the rest of the grid lands.
-          <div className="grid grid-cols-1 gap-4 md:grid-cols-2 xl:grid-cols-3">
-            <CheckInsStatusCard status={data.statuses[0]} />
-          </div>
+          <CheckInsStatusGrid statuses={data.statuses} />
         )}
       </div>
     </>
