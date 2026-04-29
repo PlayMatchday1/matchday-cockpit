@@ -515,15 +515,18 @@ export function q2ExpensesActual(
 
 // ===== Phase 3 helpers: city cards + field ranking =====
 
+// Hardcoded alphabetical order so OKC and St. Louis land predictably
+// regardless of how they're stored elsewhere ("Oklahoma City" vs OKC,
+// "St Louis" vs "St. Louis"). Don't swap to localeCompare.
 export const CITY_DISPLAY_ORDER = [
-  "Austin",
-  "Houston",
-  "San Antonio",
-  "Dallas",
   "Atlanta",
-  "St. Louis",
-  "OKC",
+  "Austin",
+  "Dallas",
   "El Paso",
+  "Houston",
+  "OKC",
+  "San Antonio",
+  "St. Louis",
 ] as const;
 
 export type CityName = (typeof CITY_DISPLAY_ORDER)[number];

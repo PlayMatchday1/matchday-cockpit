@@ -13,7 +13,7 @@ import FinanceInsightsGrid from "@/components/FinanceInsightsGrid";
 import FinanceMonthlyPL from "@/components/FinanceMonthlyPL";
 import FinanceTrendChart from "@/components/FinanceTrendChart";
 import RevenuePerMatchCard from "@/components/RevenuePerMatchCard";
-import { CITY_DISPLAY_ORDER, cityHasAnyQ2Activity } from "@/lib/financeStats";
+import { CITY_DISPLAY_ORDER } from "@/lib/financeStats";
 import { supabase } from "@/lib/supabase";
 import { useFinanceData } from "@/lib/useFinanceData";
 
@@ -194,17 +194,12 @@ function CityCardsGrid() {
     );
   }
   if (!data) return null;
-  const cities = CITY_DISPLAY_ORDER.filter((c) => cityHasAnyQ2Activity(data, c));
-  if (cities.length === 0) {
-    return (
-      <div className="rounded-2xl border-[1.5px] border-cream-line bg-white p-8 text-sm text-deep-green/60 shadow-md shadow-deep-green/10">
-        No city activity yet.
-      </div>
-    );
-  }
+  // Render every city in CITY_DISPLAY_ORDER (alphabetical, hardcoded).
+  // CityPLCard handles missing-data months gracefully — zero-state card
+  // in its alphabetical slot rather than dropping it from the layout.
   return (
     <div className="grid grid-cols-1 gap-4 md:grid-cols-2 xl:grid-cols-3">
-      {cities.map((c) => (
+      {CITY_DISPLAY_ORDER.map((c) => (
         <CityPLCard key={c} city={c} />
       ))}
     </div>
