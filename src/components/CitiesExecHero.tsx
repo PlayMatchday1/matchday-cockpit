@@ -29,7 +29,7 @@ export default function CitiesExecHero() {
   const currentWeek = weekly[weekly.length - 1];
   const cancelStats = getWeeklyCancellationStats(rows, null, 1);
   const currentCancel = cancelStats[cancelStats.length - 1];
-  const fillRate =
+  const runRate =
     currentCancel.scheduled === 0
       ? 0
       : (currentCancel.ran / currentCancel.scheduled) * 100;
@@ -46,9 +46,9 @@ export default function CitiesExecHero() {
           subtitle={`${currentWeek.spots.toLocaleString()} spots booked`}
         />
         <Stat
-          label="Fill rate this week"
+          label="Match run rate"
           value={
-            currentCancel.scheduled === 0 ? "—" : `${Math.round(fillRate)}%`
+            currentCancel.scheduled === 0 ? "—" : `${Math.round(runRate)}%`
           }
           subtitle={
             currentCancel.scheduled === 0
