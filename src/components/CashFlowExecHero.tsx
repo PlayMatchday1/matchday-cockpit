@@ -26,11 +26,13 @@ function projectionTooltipFor(item: MoMLineItem): string {
   return `PROJECTION estimate covers: ${parts.join(", ")}. Will be replaced as Stripe data is uploaded.`;
 }
 
-const VISIBLE_THRESHOLD = 500; // |Δ| < $500 → omitted from list
+const VISIBLE_THRESHOLD = 500; // default: |Δ| < $500 → omitted from list
+const FULL_DETAIL_THRESHOLD = 50; // "Show all changes": still drop sub-$50 noise
 
 export default function CashFlowExecHero() {
   const { data, loading, error } = useFinanceData();
   const [expanded, setExpanded] = useState<Set<string>>(new Set());
+  const [showAll, setShowAll] = useState(false);
 
   // Adjacent Q2 month pairs + the default-selected one.
   const pairs = useMemo(() => getQ2MonthPairs(), []);
@@ -103,8 +105,27 @@ export default function CashFlowExecHero() {
   }
 
   const { currentMonth, nextMonth, netDelta } = result;
+  const threshold = showAll ? FULL_DETAIL_THRESHOLD : VISIBLE_THRESHOLD;
   const visible = result.lineItems.filter(
-    (li) => Math.abs(li.delta) >= VISIBLE_THRESHOLD,
+    (li) => Math.abs(li.delta) >= threshold,
+  );
+
+  // Sparse-pair detection. The PROJECTION-driven combined-forecast row
+  // always exists for forward pairs and isn't really a "change" the
+  // operator can act on, so don't count it. If the strict $500 floor
+  // surfaces fewer than 2 actionable lines, the pair is intrinsically
+  // flat by data design (recurring monthly rows are cloned across Q2).
+  const significantCount = result.lineItems.filter(
+    (li) => !li.isProjectionDriven && Math.abs(li.delta) >= VISIBLE_THRESHOLD,
+  ).length;
+  const isSparse = significantCount < 2;
+
+  // The toggle is only meaningful when there's actually something
+  // hiding in the [$50, $500) zone. Otherwise it's a no-op button.
+  const hasExtras = result.lineItems.some(
+    (li) =>
+      Math.abs(li.delta) >= FULL_DETAIL_THRESHOLD &&
+      Math.abs(li.delta) < VISIBLE_THRESHOLD,
   );
 
   return (
@@ -122,6 +143,12 @@ export default function CashFlowExecHero() {
             />
           )}
         </div>
+        {isSparse && (
+          <p className="mt-3 text-[13px] italic text-deep-green/55">
+            Most expense categories repeat by design across Q2. Only forecast
+            revenue and schedule-driven shifts moved this pair.
+          </p>
+        )}
       </div>
 
       <div className="mt-3 px-6 sm:px-7">
@@ -143,6 +170,17 @@ export default function CashFlowExecHero() {
               );
             })}
           </ul>
+        )}
+        {hasExtras && (
+          <div className="mt-2 flex justify-end">
+            <button
+              type="button"
+              onClick={() => setShowAll((s) => !s)}
+              className="text-xs font-semibold text-deep-green/65 transition hover:text-deep-green hover:underline"
+            >
+              {showAll ? "Hide small changes ←" : "Show all changes →"}
+            </button>
+          </div>
         )}
       </div>
 
