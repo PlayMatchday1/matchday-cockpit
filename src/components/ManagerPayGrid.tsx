@@ -1,6 +1,6 @@
 "use client";
 
-import { useEffect, useMemo, useState } from "react";
+import { useEffect, useMemo, useRef, useState } from "react";
 import Link from "next/link";
 import { logChange } from "@/lib/financeAudit";
 import { supabase } from "@/lib/supabase";
@@ -81,6 +81,33 @@ function fmtMoney(n: number): string {
   return `$${Math.round(n).toLocaleString("en-US")}`;
 }
 
+// Index in `thursdays` of the column whose date is the Thursday of
+// the ISO week containing `now` (Mon-Sun anchor — Thursday is Mon+3).
+// Returns -1 if that Thursday isn't in the displayed quarter.
+function findCurrentWeekThursdayIndex(
+  thursdays: Thursday[],
+  now: Date,
+): number {
+  const today = new Date(now.getFullYear(), now.getMonth(), now.getDate());
+  const dow = today.getDay();
+  const daysToMon = dow === 0 ? 6 : dow - 1;
+  const monday = new Date(
+    today.getFullYear(),
+    today.getMonth(),
+    today.getDate() - daysToMon,
+  );
+  const thursday = new Date(
+    monday.getFullYear(),
+    monday.getMonth(),
+    monday.getDate() + 3,
+  );
+  const yyyy = thursday.getFullYear();
+  const mm = String(thursday.getMonth() + 1).padStart(2, "0");
+  const dd = String(thursday.getDate()).padStart(2, "0");
+  const target = `${yyyy}-${mm}-${dd}`;
+  return thursdays.findIndex((t) => t.date === target);
+}
+
 type CellState = {
   value: string;
   saving: boolean;
@@ -99,6 +126,23 @@ export default function ManagerPayGrid() {
   const [editing, setEditing] = useState<Map<string, CellState>>(new Map());
 
   const thursdays = useMemo(() => generateThursdays(quarter), [quarter]);
+  const currentWeekIdx = useMemo(
+    () => findCurrentWeekThursdayIndex(thursdays, new Date()),
+    [thursdays],
+  );
+  const currentHeaderRef = useRef<HTMLTableCellElement>(null);
+
+  // Bring the current-week column into view on mount + on quarter
+  // change. inline:"center" scrolls the parent overflow-x container
+  // horizontally; block:"nearest" avoids vertical jump.
+  useEffect(() => {
+    if (currentWeekIdx === -1 || !currentHeaderRef.current) return;
+    currentHeaderRef.current.scrollIntoView({
+      behavior: "smooth",
+      block: "nearest",
+      inline: "center",
+    });
+  }, [currentWeekIdx]);
 
   const monthsInQuarter = useMemo(() => {
     const set = new Set<string>();
@@ -347,14 +391,25 @@ export default function ManagerPayGrid() {
                   <th className="sticky left-0 z-10 bg-deep-green px-3 py-2 text-left text-[10px] font-bold uppercase tracking-wider">
                     City
                   </th>
-                  {thursdays.map((t) => (
-                    <th
-                      key={t.date}
-                      className="min-w-[96px] whitespace-nowrap px-3 py-2.5 text-center text-[11px] font-bold uppercase tracking-wider"
-                    >
-                      {t.label}
-                    </th>
-                  ))}
+                  {thursdays.map((t, i) => {
+                    const isCurrent = i === currentWeekIdx;
+                    return (
+                      <th
+                        key={t.date}
+                        ref={isCurrent ? currentHeaderRef : undefined}
+                        className={`min-w-[96px] whitespace-nowrap px-3 py-2 text-center text-[11px] font-bold uppercase tracking-wider ${
+                          isCurrent ? "bg-mint text-deep-green" : ""
+                        }`}
+                      >
+                        {t.label}
+                        {isCurrent && (
+                          <div className="mt-0.5 text-[8px] font-bold tracking-[0.18em] text-deep-green/75">
+                            THIS WEEK
+                          </div>
+                        )}
+                      </th>
+                    );
+                  })}
                   {monthsInQuarter.map((m) => (
                     <th
                       key={m}
@@ -377,12 +432,18 @@ export default function ManagerPayGrid() {
                     <td className="sticky left-0 z-10 bg-white px-3 py-2 font-bold text-deep-green">
                       {city}
                     </td>
-                    {thursdays.map((t) => {
+                    {thursdays.map((t, i) => {
                       const key = `${city}|${t.date}`;
                       const state = editing.get(key) ?? null;
                       const stored = getStored(city, t.date);
+                      const isCurrent = i === currentWeekIdx;
                       return (
-                        <td key={t.date} className="min-w-[96px] px-1.5 py-1.5">
+                        <td
+                          key={t.date}
+                          className={`min-w-[96px] px-1.5 py-1.5 ${
+                            isCurrent ? "bg-mint-soft/40" : ""
+                          }`}
+                        >
                           <CellInput
                             stored={stored}
                             state={state}
@@ -411,14 +472,19 @@ export default function ManagerPayGrid() {
                   <td className="sticky left-0 z-10 bg-cream-soft px-3 py-2 text-[10px] font-bold uppercase tracking-wider text-deep-green/65">
                     Grand Total
                   </td>
-                  {thursdays.map((t) => (
-                    <td
-                      key={t.date}
-                      className="px-2 py-2 text-center font-mono font-bold tabular-nums text-deep-green"
-                    >
-                      {fmtMoney(totals.colTotals.get(t.date) ?? 0)}
-                    </td>
-                  ))}
+                  {thursdays.map((t, i) => {
+                    const isCurrent = i === currentWeekIdx;
+                    return (
+                      <td
+                        key={t.date}
+                        className={`px-2 py-2 text-center font-mono font-bold tabular-nums text-deep-green ${
+                          isCurrent ? "bg-mint-soft/60" : ""
+                        }`}
+                      >
+                        {fmtMoney(totals.colTotals.get(t.date) ?? 0)}
+                      </td>
+                    );
+                  })}
                   {monthsInQuarter.map((m) => (
                     <td
                       key={m}
