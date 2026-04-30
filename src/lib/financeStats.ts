@@ -351,6 +351,37 @@ export function q2NetPLProjected(
   return q2NetRevenueProjected(data, now) - q2ExpensesProjected(data, now);
 }
 
+// "Closed-month actual" Q2 P&L for the hero subtitle. Includes each
+// Q2 month that has started — past months at their final realized
+// numbers, the current month at its full-month closed projection
+// (realized + dated-but-not-yet-fired rows like the Apr 30 corporate
+// salaries / last Thursday MMP). Future months contribute $0.
+//
+// Mechanism: for past + current months we just call netRevenueFor +
+// totalExpensesFor in projection mode. filterRevenueRows in
+// projection mode already excludes PROJECTION-source rows for
+// past/current months and only returns PROJECTION for future months
+// — so skipping future months gives us what we want without any
+// extra source filter.
+//
+// Result is what you'd see in the Cash Flow page's per-month Net P&L
+// row for the current month, summed across started months. Matches
+// the operator mental model of "where does this quarter close" minus
+// the May/Jun bootstrap estimates.
+export function q2NetPLActualClosedMonth(
+  data: FinanceData,
+  now: Date = new Date(),
+): number {
+  let total = 0;
+  for (const m of Q2_MONTHS) {
+    if (isFutureMonth(m, now)) continue;
+    total +=
+      netRevenueFor(data, m, "projection", now) -
+      totalExpensesFor(data, m, "projection", now);
+  }
+  return total;
+}
+
 export function projectedEndingCash(
   data: FinanceData,
   now: Date = new Date(),

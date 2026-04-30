@@ -6,10 +6,8 @@ import {
   getCurrentQ2Month,
   grossRevenueFor,
   priorMonthSameDayMtdGross,
-  q2ExpensesActual,
-  q2ExpensesProjected,
+  q2NetPLActualClosedMonth,
   q2NetPLProjected,
-  q2NetRevenueActual,
 } from "@/lib/financeStats";
 
 // Three-stat exec hero: Q2 Net P&L (actual + projected),
@@ -38,16 +36,13 @@ export default function FinanceExecHero() {
 
   const now = new Date();
   const netPLProjected = q2NetPLProjected(data, now);
-  const actualPL =
-    q2NetRevenueActual(data, now) - q2ExpensesActual(data, now);
+  // Closed-month actual: each Q2 month that has started, summed at
+  // its full-month projection (current month uses DPP daily extrap +
+  // dated-but-not-yet-fired expense rows; past months use realized).
+  // Future months contribute $0 — their value lives entirely in
+  // projectedPL via May/Jun PROJECTION-source rows.
+  const actualPL = q2NetPLActualClosedMonth(data, now);
   const projectedPL = netPLProjected - actualPL;
-
-  // Total expenses derived from the same actual+projected math used
-  // on the existing Q2 Net Revenue / Q2 Expenses cards — kept here so
-  // the subtitle reads as composition, not a parallel calculation.
-  // (Unused right now beyond Net P&L, but useful if we want to surface
-  // it alongside.)
-  void q2ExpensesProjected;
 
   const currentMonth = getCurrentQ2Month(now);
   const monthGrossMtd = currentMonth
