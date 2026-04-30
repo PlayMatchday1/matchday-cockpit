@@ -783,7 +783,6 @@ export function monthOverMonthDeltas(
   const revTypes = new Set<string>([...revCur.keys(), ...revNxt.keys()]);
   const nextIsFuture = isFutureMonth(nextMonth, now);
   let projectionDrivenSum = 0;
-  const projectionChildrenMap = new Map<string, number>();
   for (const type of revTypes) {
     const delta = (revNxt.get(type) ?? 0) - (revCur.get(type) ?? 0);
     if (Math.abs(delta) < NOISE) continue;
@@ -794,7 +793,6 @@ export function monthOverMonthDeltas(
     );
     if (fromProjection) {
       projectionDrivenSum += delta;
-      projectionChildrenMap.set(type, delta);
       continue;
     }
     lineItems.push({
@@ -803,19 +801,17 @@ export function monthOverMonthDeltas(
       delta,
       driver,
       isProjectionDriven: false,
-      // Realized-vs-realized revenue: per-venue DPP / per-city
-      // Membership would be possible but isn't in scope today since
-      // we never compare two realized months in current data.
     });
   }
   if (Math.abs(projectionDrivenSum) >= NOISE) {
+    // No children: the per-type split of a PROJECTION estimate is just
+    // an accounting allocation, not actionable signal.
     lineItems.push({
       kind: "revenue",
       name: "Expected revenue (forecast)",
       delta: projectionDrivenSum,
       driver: "Next month from PROJECTION estimate",
       isProjectionDriven: true,
-      children: buildChildren(projectionChildrenMap),
     });
   }
 
