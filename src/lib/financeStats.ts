@@ -391,28 +391,30 @@ export function projectedEndingCash(
 
 // ===== Month-over-month deltas (for /admin/finance/cash-flow hero) =====
 
-export type MoMDelta = {
-  /** Category name (for expenses) or revenue type (for revenue). */
-  label: string;
+export type MoMLineItem = {
+  /** "expense" for fin_expenses categories + Field Costs / City Manager
+   *  / Marketing / Equipment; "revenue" for DPP / Membership / etc. */
+  kind: "expense" | "revenue";
+  /** Category name (expenses) or type (revenue). */
+  name: string;
   /** Signed delta in dollars: nextMonth − currentMonth. */
   delta: number;
   /** Human-readable driver attribution. */
   driver: string;
-  /**
-   * True if either side of the comparison is sourced from
-   * `source = 'PROJECTION'` rows in fin_revenue (always the case for
-   * a future-month next side). Component uses this to render the (i)
-   * caveat icon next to the subtitle.
-   */
-  driverFromProjection: boolean;
+  /** True when the comparison's next-side value comes from a
+   *  `source = 'PROJECTION'` row in fin_revenue. UI uses this to
+   *  render the (i) caveat icon and visually de-emphasize the row. */
+  isProjectionDriven: boolean;
 };
 
 export type MonthOverMonthDeltas = {
   currentMonth: Q2Month | null;
   nextMonth: Q2Month | null;
-  /** null when there's no nextMonth in Q2 (June currentMonth) or no currentMonth. */
-  biggestExpenseDelta: MoMDelta | null;
-  biggestRevenueDelta: MoMDelta | null;
+  /** All non-zero (|Δ| ≥ $0.50) line items, sorted by |delta| desc.
+   *  Mixes expense and revenue items in one ranked list. UI applies
+   *  any further visibility threshold (e.g. ≥ $500). */
+  lineItems: MoMLineItem[];
+  /** null when nextMonth is null. */
   netDelta: { current: number; next: number; delta: number } | null;
 };
 
@@ -590,53 +592,55 @@ export function monthOverMonthDeltas(
     return {
       currentMonth,
       nextMonth: null,
-      biggestExpenseDelta: null,
-      biggestRevenueDelta: null,
+      lineItems: [],
       netDelta: null,
     };
   }
 
-  // Expense side
+  const lineItems: MoMLineItem[] = [];
+  const NOISE = 0.5; // sub-dollar rounding noise → drop
+
+  // Expense side — every category with non-trivial Δ
   const expCur = expensesByCategory(data, currentMonth, now);
   const expNxt = expensesByCategory(data, nextMonth, now);
   const expCats = new Set<string>([...expCur.keys(), ...expNxt.keys()]);
-  let topExp: MoMDelta | null = null;
   for (const cat of expCats) {
     const delta = (expNxt.get(cat) ?? 0) - (expCur.get(cat) ?? 0);
-    if (!topExp || Math.abs(delta) > Math.abs(topExp.delta)) {
-      topExp = {
-        label: cat,
-        delta,
-        driver: expenseDriverString(data, cat, currentMonth, nextMonth),
-        driverFromProjection: false,
-      };
-    }
+    if (Math.abs(delta) < NOISE) continue;
+    lineItems.push({
+      kind: "expense",
+      name: cat,
+      delta,
+      driver: expenseDriverString(data, cat, currentMonth, nextMonth),
+      isProjectionDriven: false, // fin_expenses has no PROJECTION source
+    });
   }
 
-  // Revenue side
+  // Revenue side — every type with non-trivial Δ
   const revCur = revenueByType(data, currentMonth, now);
   const revNxt = revenueByType(data, nextMonth, now);
   const revTypes = new Set<string>([...revCur.keys(), ...revNxt.keys()]);
   const nextIsFuture = isFutureMonth(nextMonth, now);
-  let topRev: MoMDelta | null = null;
   for (const type of revTypes) {
     const delta = (revNxt.get(type) ?? 0) - (revCur.get(type) ?? 0);
-    if (!topRev || Math.abs(delta) > Math.abs(topRev.delta)) {
-      const { driver, fromProjection } = revenueDriverString(
-        type,
-        nextMonth,
-        nextIsFuture,
-      );
-      topRev = {
-        label: type,
-        delta,
-        driver,
-        driverFromProjection: fromProjection,
-      };
-    }
+    if (Math.abs(delta) < NOISE) continue;
+    const { driver, fromProjection } = revenueDriverString(
+      type,
+      nextMonth,
+      nextIsFuture,
+    );
+    lineItems.push({
+      kind: "revenue",
+      name: type,
+      delta,
+      driver,
+      isProjectionDriven: fromProjection,
+    });
   }
 
-  // Net delta — sum revenue/expenses both sides for the headline
+  // Sort by absolute delta desc, mixing expense + revenue.
+  lineItems.sort((a, b) => Math.abs(b.delta) - Math.abs(a.delta));
+
   const curRevTotal = [...revCur.values()].reduce((s, v) => s + v, 0);
   const curExpTotal = [...expCur.values()].reduce((s, v) => s + v, 0);
   const nxtRevTotal = [...revNxt.values()].reduce((s, v) => s + v, 0);
@@ -647,8 +651,7 @@ export function monthOverMonthDeltas(
   return {
     currentMonth,
     nextMonth,
-    biggestExpenseDelta: topExp,
-    biggestRevenueDelta: topRev,
+    lineItems,
     netDelta: { current: curNet, next: nxtNet, delta: nxtNet - curNet },
   };
 }
