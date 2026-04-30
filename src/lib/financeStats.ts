@@ -405,6 +405,14 @@ export type MoMLineItem = {
    *  `source = 'PROJECTION'` row in fin_revenue. UI uses this to
    *  render the (i) caveat icon and visually de-emphasize the row. */
   isProjectionDriven: boolean;
+  /** Per-source breakdown of how this delta is composed (city,
+   *  venue, vendor, or revenue type depending on parent category).
+   *  Sorted by |delta| desc. Only items with |delta| ≥ $50 surface
+   *  individually; smaller items roll up into a single "Other (N
+   *  sources)" entry at the end. Undefined when no breakdown source
+   *  is available or when no individual source passes the threshold —
+   *  UI hides the chevron in either case. */
+  children?: Array<{ name: string; delta: number }>;
 };
 
 export type MonthOverMonthDeltas = {
@@ -561,6 +569,115 @@ function monthlyExpenseByCity(
   return byCity;
 }
 
+// Per-vendor breakdown for a generic fin_expenses category. Used as
+// the drill-down source for Contractors / Subscriptions / Corporate
+// Salaries / VEO Camera / Misc — anything without a per-city or
+// per-venue model.
+function finExpensesByVendor(
+  data: FinanceData,
+  month: Q2Month,
+  category: string,
+): Map<string, number> {
+  const byVendor = new Map<string, number>();
+  for (const r of data.expenses) {
+    if (r.month !== month) continue;
+    if (r.category !== category) continue;
+    const vendor = r.vendor || "(no vendor)";
+    byVendor.set(vendor, (byVendor.get(vendor) ?? 0) + r.amount);
+  }
+  return byVendor;
+}
+
+// Diff two per-source maps into a delta map (next − current). Keys
+// from either side surface; missing-side counts as 0.
+function deltasFromMaps(
+  cur: Map<string, number>,
+  nxt: Map<string, number>,
+): Map<string, number> {
+  const out = new Map<string, number>();
+  for (const k of new Set<string>([...cur.keys(), ...nxt.keys()])) {
+    out.set(k, (nxt.get(k) ?? 0) - (cur.get(k) ?? 0));
+  }
+  return out;
+}
+
+const CHILD_VISIBLE_THRESHOLD = 50; // |Δ| < $50 → rolls into "Other (N sources)"
+
+// Sorts a delta map into a children[] array: items with |Δ| ≥ $50
+// surface individually; smaller items collapse into a single
+// "Other (N sources)" tail row. Returns undefined when no
+// individual source passes the threshold (UI hides chevron then).
+function buildChildren(
+  deltas: Map<string, number>,
+): Array<{ name: string; delta: number }> | undefined {
+  const items = [...deltas.entries()]
+    .map(([name, delta]) => ({ name, delta }))
+    .filter((i) => Math.abs(i.delta) >= 0.5);
+  if (items.length === 0) return undefined;
+
+  const big = items.filter((i) => Math.abs(i.delta) >= CHILD_VISIBLE_THRESHOLD);
+  const small = items.filter((i) => Math.abs(i.delta) < CHILD_VISIBLE_THRESHOLD);
+  if (big.length === 0) return undefined;
+
+  big.sort((a, b) => Math.abs(b.delta) - Math.abs(a.delta));
+
+  if (small.length > 0) {
+    const otherDelta = small.reduce((s, i) => s + i.delta, 0);
+    if (Math.abs(otherDelta) >= 0.5) {
+      const label =
+        small.length === 1 ? "Other (1 source)" : `Other (${small.length} sources)`;
+      big.push({ name: label, delta: otherDelta });
+    }
+  }
+  return big;
+}
+
+// Per-category breakdown router. Returns the appropriate children
+// rollup for an expense category, or undefined when no per-source
+// breakdown applies (chevron hidden).
+function expenseCategoryChildren(
+  data: FinanceData,
+  category: string,
+  currentMonth: Q2Month,
+  nextMonth: Q2Month,
+): Array<{ name: string; delta: number }> | undefined {
+  if (category === "Field Costs") {
+    return buildChildren(
+      deltasFromMaps(
+        fieldCostsByVenue(data, currentMonth),
+        fieldCostsByVenue(data, nextMonth),
+      ),
+    );
+  }
+  if (category === "Match Manager Pay") {
+    return buildChildren(
+      deltasFromMaps(
+        mmpByCity(data, currentMonth),
+        mmpByCity(data, nextMonth),
+      ),
+    );
+  }
+  if (category === "City Manager" || category === "Marketing" || category === "Equipment") {
+    const key =
+      category === "City Manager" ? "city_manager"
+      : category === "Marketing" ? "marketing"
+      : "equipment";
+    return buildChildren(
+      deltasFromMaps(
+        monthlyExpenseByCity(data, currentMonth, key),
+        monthlyExpenseByCity(data, nextMonth, key),
+      ),
+    );
+  }
+  // Generic fin_expenses category — per-vendor breakdown.
+  return buildChildren(
+    deltasFromMaps(
+      finExpensesByVendor(data, currentMonth, category),
+      finExpensesByVendor(data, nextMonth, category),
+    ),
+  );
+}
+
 // Driver string for revenue type. When nextMonth is a future month,
 // its values come entirely from manually-seeded PROJECTION rows in
 // fin_revenue — flag that honestly rather than fabricate venue-level
@@ -613,6 +730,7 @@ export function monthOverMonthDeltas(
       delta,
       driver: expenseDriverString(data, cat, currentMonth, nextMonth),
       isProjectionDriven: false, // fin_expenses has no PROJECTION source
+      children: expenseCategoryChildren(data, cat, currentMonth, nextMonth),
     });
   }
 
@@ -627,6 +745,7 @@ export function monthOverMonthDeltas(
   const revTypes = new Set<string>([...revCur.keys(), ...revNxt.keys()]);
   const nextIsFuture = isFutureMonth(nextMonth, now);
   let projectionDrivenSum = 0;
+  const projectionChildrenMap = new Map<string, number>();
   for (const type of revTypes) {
     const delta = (revNxt.get(type) ?? 0) - (revCur.get(type) ?? 0);
     if (Math.abs(delta) < NOISE) continue;
@@ -637,6 +756,7 @@ export function monthOverMonthDeltas(
     );
     if (fromProjection) {
       projectionDrivenSum += delta;
+      projectionChildrenMap.set(type, delta);
       continue;
     }
     lineItems.push({
@@ -645,6 +765,9 @@ export function monthOverMonthDeltas(
       delta,
       driver,
       isProjectionDriven: false,
+      // Realized-vs-realized revenue: per-venue DPP / per-city
+      // Membership would be possible but isn't in scope today since
+      // we never compare two realized months in current data.
     });
   }
   if (Math.abs(projectionDrivenSum) >= NOISE) {
@@ -654,6 +777,7 @@ export function monthOverMonthDeltas(
       delta: projectionDrivenSum,
       driver: "Next month from PROJECTION estimate",
       isProjectionDriven: true,
+      children: buildChildren(projectionChildrenMap),
     });
   }
 

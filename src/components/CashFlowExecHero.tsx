@@ -1,6 +1,7 @@
 "use client";
 
-import { useMemo } from "react";
+import { useMemo, useState } from "react";
+import { ChevronDown, ChevronRight } from "lucide-react";
 import { useFinanceData } from "@/lib/useFinanceData";
 import {
   monthOverMonthDeltas,
@@ -15,11 +16,21 @@ const VISIBLE_THRESHOLD = 500; // |Δ| < $500 → omitted from list
 
 export default function CashFlowExecHero() {
   const { data, loading, error } = useFinanceData();
+  const [expanded, setExpanded] = useState<Set<string>>(new Set());
 
   const result: MonthOverMonthDeltas | null = useMemo(
     () => (data ? monthOverMonthDeltas(data) : null),
     [data],
   );
+
+  function toggle(key: string) {
+    setExpanded((prev) => {
+      const next = new Set(prev);
+      if (next.has(key)) next.delete(key);
+      else next.add(key);
+      return next;
+    });
+  }
 
   if (loading) {
     return (
@@ -77,9 +88,17 @@ export default function CashFlowExecHero() {
           </div>
         ) : (
           <ul className="divide-y divide-cream-line/60">
-            {visible.map((li) => (
-              <LineRow key={`${li.kind}|${li.name}`} item={li} />
-            ))}
+            {visible.map((li) => {
+              const key = `${li.kind}|${li.name}`;
+              return (
+                <LineRow
+                  key={key}
+                  item={li}
+                  expanded={expanded.has(key)}
+                  onToggle={() => toggle(key)}
+                />
+              );
+            })}
           </ul>
         )}
       </div>
@@ -114,7 +133,15 @@ function PanelHeader() {
   );
 }
 
-function LineRow({ item }: { item: MoMLineItem }) {
+function LineRow({
+  item,
+  expanded,
+  onToggle,
+}: {
+  item: MoMLineItem;
+  expanded: boolean;
+  onToggle: () => void;
+}) {
   // Tone: expenses up=coral / down=mint; revenue up=mint / down=coral.
   const isGood =
     item.kind === "expense" ? item.delta < 0 : item.delta > 0;
@@ -126,13 +153,10 @@ function LineRow({ item }: { item: MoMLineItem }) {
     : isGood
       ? "text-mint-hover"
       : "text-coral";
+  const hasChildren = (item.children?.length ?? 0) > 0;
 
-  return (
-    <li
-      className={`flex items-baseline justify-between gap-4 py-3 ${
-        projectionMuted ? "opacity-80" : ""
-      }`}
-    >
+  const headerInner = (
+    <>
       <div className="min-w-0 flex-1">
         <div className="text-sm font-bold text-deep-green">{item.name}</div>
         <div className="mt-0.5 flex items-center gap-1.5 text-xs text-deep-green/60">
@@ -140,12 +164,106 @@ function LineRow({ item }: { item: MoMLineItem }) {
           {item.isProjectionDriven && <ProjectionIcon />}
         </div>
       </div>
-      <div
-        className={`shrink-0 font-mono text-base font-bold tabular-nums ${valueCls}`}
-      >
-        {fmtSig(item.delta)}
+      <div className="flex shrink-0 items-baseline gap-2.5">
+        {hasChildren ? (
+          expanded ? (
+            <ChevronDown
+              size={16}
+              aria-hidden
+              className="self-center text-deep-green/45 transition group-hover:text-deep-green/75"
+            />
+          ) : (
+            <ChevronRight
+              size={16}
+              aria-hidden
+              className="self-center text-deep-green/45 transition group-hover:text-deep-green/75"
+            />
+          )
+        ) : (
+          <span aria-hidden className="inline-block w-4" />
+        )}
+        <div
+          className={`font-mono text-base font-bold tabular-nums ${valueCls}`}
+        >
+          {fmtSig(item.delta)}
+        </div>
       </div>
+    </>
+  );
+
+  return (
+    <li className={projectionMuted ? "opacity-80" : ""}>
+      {hasChildren ? (
+        <button
+          type="button"
+          onClick={onToggle}
+          aria-expanded={expanded}
+          className="group -mx-2 flex w-full cursor-pointer items-baseline justify-between gap-4 rounded px-2 py-3 text-left transition hover:bg-cream-soft/40"
+        >
+          {headerInner}
+        </button>
+      ) : (
+        <div className="-mx-2 flex items-baseline justify-between gap-4 px-2 py-3">
+          {headerInner}
+        </div>
+      )}
+
+      {hasChildren && (
+        // grid-rows trick — animates from 0fr → 1fr for smooth height
+        // transition without JS measurement. The inner overflow-hidden
+        // wrapper is what actually clips during the animation.
+        <div
+          className={`grid transition-[grid-template-rows] duration-200 ease-out ${
+            expanded ? "grid-rows-[1fr]" : "grid-rows-[0fr]"
+          }`}
+        >
+          <div className="overflow-hidden">
+            <div className="space-y-1.5 pb-3 pl-7 pr-1">
+              {item.children!.map((child) => (
+                <SubRow
+                  key={child.name}
+                  parentKind={item.kind}
+                  projectionMuted={projectionMuted}
+                  name={child.name}
+                  delta={child.delta}
+                />
+              ))}
+            </div>
+          </div>
+        </div>
+      )}
     </li>
+  );
+}
+
+function SubRow({
+  parentKind,
+  projectionMuted,
+  name,
+  delta,
+}: {
+  parentKind: "expense" | "revenue";
+  projectionMuted: boolean;
+  name: string;
+  delta: number;
+}) {
+  // Apply parent's tone palette to the sub-row's own delta sign:
+  // expenses up=coral/down=mint; revenue up=mint/down=coral.
+  const isGood = parentKind === "expense" ? delta < 0 : delta > 0;
+  const valueCls = projectionMuted
+    ? isGood
+      ? "text-mint-hover/60"
+      : "text-coral/60"
+    : isGood
+      ? "text-mint-hover"
+      : "text-coral";
+  return (
+    <div className="flex items-baseline justify-between gap-3 text-[13px]">
+      <span className="truncate text-deep-green/70">{name}</span>
+      <span className={`shrink-0 font-mono font-semibold tabular-nums ${valueCls}`}>
+        {fmtSig(delta)}
+      </span>
+    </div>
   );
 }
 
