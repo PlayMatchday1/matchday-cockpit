@@ -451,6 +451,10 @@ export type MoMLineItem = {
    *  is available or when no individual source passes the threshold —
    *  UI hides the chevron in either case. */
   children?: Array<{ name: string; delta: number }>;
+  /** Per-revenue-type PROJECTION amounts for the next month, sorted
+   *  by amount desc. Only set on the "Expected revenue (forecast)"
+   *  combined row — UI uses it to compose the (i) tooltip. */
+  projectionBreakdown?: Array<{ type: string; amount: number }>;
 };
 
 export type MonthOverMonthDeltas = {
@@ -656,8 +660,7 @@ function monthlyExpenseByCity(
 
 // Per-vendor breakdown for a generic fin_expenses category. Used as
 // the drill-down source for Contractors / Subscriptions / Corporate
-// Salaries / VEO Camera / Misc — anything without a per-city or
-// per-venue model.
+// Salaries / Misc — anything without a per-city or per-venue model.
 function finExpensesByVendor(
   data: FinanceData,
   month: Q2Month,
@@ -671,6 +674,25 @@ function finExpensesByVendor(
     byVendor.set(vendor, (byVendor.get(vendor) ?? 0) + r.amount);
   }
   return byVendor;
+}
+
+// Per-city breakdown for a generic fin_expenses category. NULL city
+// or the literal "Company-wide" string both surface as "Company-wide"
+// (don't drop). Used for VEO Camera, where vendor names collapse to
+// a single value but cost actually splits across cities.
+function finExpensesByCity(
+  data: FinanceData,
+  month: Q2Month,
+  category: string,
+): Map<string, number> {
+  const byCity = new Map<string, number>();
+  for (const r of data.expenses) {
+    if (r.month !== month) continue;
+    if (r.category !== category) continue;
+    const city = r.city && r.city !== "Company-wide" ? r.city : "Company-wide";
+    byCity.set(city, (byCity.get(city) ?? 0) + r.amount);
+  }
+  return byCity;
 }
 
 // Diff two per-source maps into a delta map (next − current). Keys
@@ -694,6 +716,10 @@ const CHILD_VISIBLE_THRESHOLD = 50; // |Δ| < $50 → rolls into "Other (N sourc
 // individual source passes the threshold (UI hides chevron then).
 function buildChildren(
   deltas: Map<string, number>,
+  unitLabel: { singular: string; plural: string } = {
+    singular: "source",
+    plural: "sources",
+  },
 ): Array<{ name: string; delta: number }> | undefined {
   const items = [...deltas.entries()]
     .map(([name, delta]) => ({ name, delta }))
@@ -710,7 +736,9 @@ function buildChildren(
     const otherDelta = small.reduce((s, i) => s + i.delta, 0);
     if (Math.abs(otherDelta) >= 0.5) {
       const label =
-        small.length === 1 ? "Other (1 source)" : `Other (${small.length} sources)`;
+        small.length === 1
+          ? `Other (1 ${unitLabel.singular})`
+          : `Other (${small.length} ${unitLabel.plural})`;
       big.push({ name: label, delta: otherDelta });
     }
   }
@@ -752,6 +780,18 @@ function expenseCategoryChildren(
         monthlyExpenseByCity(data, currentMonth, key),
         monthlyExpenseByCity(data, nextMonth, key),
       ),
+      { singular: "city", plural: "cities" },
+    );
+  }
+  if (category === "VEO Camera") {
+    // Vendor name collapses to a single "VEO" entry — break down by
+    // city instead, which is the actionable axis.
+    return buildChildren(
+      deltasFromMaps(
+        finExpensesByCity(data, currentMonth, category),
+        finExpensesByCity(data, nextMonth, category),
+      ),
+      { singular: "city", plural: "cities" },
     );
   }
   // Generic fin_expenses category — per-vendor breakdown.
@@ -909,13 +949,23 @@ export function monthOverMonthDeltas(
   }
   if (Math.abs(projectionDrivenSum) >= NOISE) {
     // No children: the per-type split of a PROJECTION estimate is just
-    // an accounting allocation, not actionable signal.
+    // an accounting allocation, not actionable signal. The tooltip
+    // surfaces the full per-type PROJECTION sums for the next month
+    // instead, so the operator can see what the estimate covers.
+    const projectionBreakdown: Array<{ type: string; amount: number }> = [];
+    for (const [type, agg] of revNxt) {
+      if (agg.projected < 1) continue;
+      projectionBreakdown.push({ type, amount: agg.projected });
+    }
+    projectionBreakdown.sort((a, b) => b.amount - a.amount);
     lineItems.push({
       kind: "revenue",
       name: "Expected revenue (forecast)",
       delta: projectionDrivenSum,
       driver: "Next month from PROJECTION estimate",
       isProjectionDriven: true,
+      projectionBreakdown:
+        projectionBreakdown.length > 0 ? projectionBreakdown : undefined,
     });
   }
 

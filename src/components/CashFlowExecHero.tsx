@@ -12,8 +12,19 @@ import {
   type Q2MonthPair,
 } from "@/lib/financeStats";
 
-const PROJECTION_TOOLTIP =
+const PROJECTION_TOOLTIP_FALLBACK =
   "Estimate seeded April 25. Will be replaced when next month's Stripe data is uploaded.";
+
+function fmtUsd(n: number): string {
+  return "$" + Math.round(n).toLocaleString("en-US");
+}
+
+function projectionTooltipFor(item: MoMLineItem): string {
+  const breakdown = item.projectionBreakdown;
+  if (!breakdown || breakdown.length === 0) return PROJECTION_TOOLTIP_FALLBACK;
+  const parts = breakdown.map((b) => `${b.type} ${fmtUsd(b.amount)}`);
+  return `PROJECTION estimate covers: ${parts.join(", ")}. Will be replaced as Stripe data is uploaded.`;
+}
 
 const VISIBLE_THRESHOLD = 500; // |Δ| < $500 → omitted from list
 
@@ -193,7 +204,9 @@ function LineRow({
         <div className="text-sm font-bold text-deep-green">{item.name}</div>
         <div className="mt-0.5 flex items-center gap-1.5 text-xs text-deep-green/60">
           <span className="truncate">{item.driver}</span>
-          {item.isProjectionDriven && <ProjectionIcon />}
+          {item.isProjectionDriven && (
+            <ProjectionIcon tooltip={projectionTooltipFor(item)} />
+          )}
         </div>
       </div>
       <div className="flex shrink-0 items-baseline gap-2.5">
@@ -334,11 +347,11 @@ function NetFooter({
   );
 }
 
-function ProjectionIcon() {
+function ProjectionIcon({ tooltip }: { tooltip: string }) {
   return (
     <span
-      title={PROJECTION_TOOLTIP}
-      aria-label={PROJECTION_TOOLTIP}
+      title={tooltip}
+      aria-label={tooltip}
       className="inline-flex h-[13px] w-[13px] shrink-0 cursor-help items-center justify-center rounded-full bg-deep-green/15 text-[9px] font-bold leading-none text-deep-green/70 transition hover:bg-deep-green/25 hover:text-deep-green"
     >
       i
