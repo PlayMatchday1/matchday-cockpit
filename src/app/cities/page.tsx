@@ -3,9 +3,11 @@
 import { useState } from "react";
 import Link from "next/link";
 import CitiesLegend from "@/components/CitiesLegend";
+import CitiesCancellationsLens from "@/components/CitiesCancellationsLens";
 import CitiesExecHero from "@/components/CitiesExecHero";
 import CitiesLensNav, { type CityLens } from "@/components/CitiesLensNav";
 import CitiesMembershipLens from "@/components/CitiesMembershipLens";
+import CitiesReviewsLens from "@/components/CitiesReviewsLens";
 import { CityHealthPill } from "@/components/StatusPill";
 import MiniBarSparkline from "@/components/MiniBarSparkline";
 import TotalsBarChart from "@/components/TotalsBarChart";
@@ -53,10 +55,8 @@ function CitiesIndexContent() {
 
       {lens === "overview" && <OverviewLens />}
       {lens === "membership" && <CitiesMembershipLens />}
-      {lens === "cancellations" && (
-        <LensPlaceholder lens="Cancellations" phase="C" />
-      )}
-      {lens === "reviews" && <LensPlaceholder lens="Reviews" phase="C" />}
+      {lens === "cancellations" && <CitiesCancellationsLens />}
+      {lens === "reviews" && <CitiesReviewsLens />}
     </>
   );
 }
@@ -168,15 +168,6 @@ function OverviewLens() {
         </Link>
       </div>
     </>
-  );
-}
-
-function LensPlaceholder({ lens, phase }: { lens: string; phase: string }) {
-  return (
-    <div className="rounded-2xl border-2 border-dashed border-cream-line bg-cream-soft/40 p-8 text-center text-sm text-deep-green/55">
-      <div className="text-base font-bold text-deep-green/70">{lens} lens</div>
-      <div className="mt-1">Wired in Phase {phase}.</div>
-    </div>
   );
 }
 
