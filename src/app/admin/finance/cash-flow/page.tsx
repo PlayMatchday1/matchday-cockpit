@@ -5,7 +5,10 @@ import Link from "next/link";
 import PagePermissionGuard from "@/components/PagePermissionGuard";
 import CashFlowExecHero from "@/components/CashFlowExecHero";
 import CashFlowLensNav, { type CashFlowLens } from "@/components/CashFlowLensNav";
+import FinanceInsightsGrid from "@/components/FinanceInsightsGrid";
 import FinanceMonthlyPL from "@/components/FinanceMonthlyPL";
+import FinanceTrendChart from "@/components/FinanceTrendChart";
+import RevenuePerMatchCard from "@/components/RevenuePerMatchCard";
 
 export default function FinanceCashFlowPage() {
   return (
@@ -44,14 +47,14 @@ function FinanceCashFlowContent() {
 
       <CashFlowLensNav value={lens} onChange={setLens} />
 
-      {lens === "cash-flow" && <CashFlowLens />}
-      {lens === "insights" && <LensPlaceholder lens="Insights" phase="B" />}
-      {lens === "trend" && <LensPlaceholder lens="Trend" phase="B" />}
+      {lens === "cash-flow" && <CashFlowLensView />}
+      {lens === "insights" && <InsightsLensView />}
+      {lens === "trend" && <TrendLensView />}
     </>
   );
 }
 
-function CashFlowLens() {
+function CashFlowLensView() {
   // Headline view of this lens — render expanded permanently. No
   // collapse toggle; the lens-tab pattern already gates visibility.
   return (
@@ -61,11 +64,19 @@ function CashFlowLens() {
   );
 }
 
-function LensPlaceholder({ lens, phase }: { lens: string; phase: string }) {
+function InsightsLensView() {
   return (
-    <div className="rounded-2xl border-2 border-dashed border-cream-line bg-cream-soft/40 p-8 text-center text-sm text-deep-green/55">
-      <div className="text-base font-bold text-deep-green/70">{lens} lens</div>
-      <div className="mt-1">Wired in Phase {phase}.</div>
+    <div className="space-y-8">
+      <FinanceInsightsGrid />
+      <RevenuePerMatchCard />
+    </div>
+  );
+}
+
+function TrendLensView() {
+  return (
+    <div className="mb-12">
+      <FinanceTrendChart />
     </div>
   );
 }
