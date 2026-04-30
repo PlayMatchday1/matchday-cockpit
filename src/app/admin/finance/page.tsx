@@ -7,12 +7,8 @@ import PagePermissionGuard from "@/components/PagePermissionGuard";
 import CheckInsButtonCard from "@/components/CheckInsButtonCard";
 import CityPLCard from "@/components/CityPLCard";
 import ExecutiveSummary from "@/components/ExecutiveSummary";
-import FieldRankingTable from "@/components/FieldRankingTable";
-import FinanceHeroMetrics from "@/components/FinanceHeroMetrics";
-import FinanceInsightsGrid from "@/components/FinanceInsightsGrid";
-import FinanceMonthlyPL from "@/components/FinanceMonthlyPL";
-import FinanceTrendChart from "@/components/FinanceTrendChart";
-import RevenuePerMatchCard from "@/components/RevenuePerMatchCard";
+import FinanceAnchorNav from "@/components/FinanceAnchorNav";
+import FinanceExecHero from "@/components/FinanceExecHero";
 import { CITY_DISPLAY_ORDER } from "@/lib/financeStats";
 import { supabase } from "@/lib/supabase";
 import { useFinanceData } from "@/lib/useFinanceData";
@@ -27,10 +23,7 @@ export default function FinanceLandingPage() {
 
 function FinanceLandingContent() {
   const [quarterLabel, setQuarterLabel] = useState<string>("");
-  const [insightsCollapsed, setInsightsCollapsed] = useState(false);
-  const [monthlyCollapsed, setMonthlyCollapsed] = useState(false);
   const [cityCollapsed, setCityCollapsed] = useState(false);
-  const [rankingCollapsed, setRankingCollapsed] = useState(false);
 
   useEffect(() => {
     let cancelled = false;
@@ -51,7 +44,7 @@ function FinanceLandingContent() {
 
   return (
     <>
-      <div className="mb-10">
+      <div className="mb-8">
         <h1 className="font-display text-5xl uppercase leading-none tracking-tight text-deep-green md:text-6xl">
           Finance
         </h1>
@@ -61,57 +54,48 @@ function FinanceLandingContent() {
       </div>
 
       <div className="mb-8">
-        <ExecutiveSummary />
+        <FinanceExecHero />
       </div>
 
-      <div className="mb-8">
-        <FinanceHeroMetrics />
-      </div>
+      <FinanceAnchorNav />
 
-      <div className="mb-8">
-        <RevenuePerMatchCard />
-      </div>
-
-      <div className="mb-8">
-        <FinanceInsightsGrid
-          collapsed={insightsCollapsed}
-          onToggle={() => setInsightsCollapsed((c) => !c)}
+      {/* Cities — primary visual focus. scroll-mt offsets for the
+          sticky nav so anchor jumps don't land under it. */}
+      <section id="cities" className="scroll-mt-20">
+        <SectionHeader
+          title="City & Field P&L"
+          subtitle="Per-market field economics, membership allocation, and overhead."
+          collapsed={cityCollapsed}
+          onToggle={() => setCityCollapsed((c) => !c)}
         />
-      </div>
+        {!cityCollapsed && (
+          <div className="mb-8">
+            <CityCardsGrid />
+          </div>
+        )}
 
-      <div className="mb-8">
-        <FinanceTrendChart />
-      </div>
-
-      <div className="mb-12">
-        <FinanceMonthlyPL
-          collapsed={monthlyCollapsed}
-          onToggle={() => setMonthlyCollapsed((c) => !c)}
-        />
-      </div>
-
-      <SectionHeader
-        title="City & Field P&L"
-        subtitle="Per-market field economics, membership allocation, and overhead."
-        collapsed={cityCollapsed}
-        onToggle={() => setCityCollapsed((c) => !c)}
-      />
-      {!cityCollapsed && (
-        <div className="mb-12">
-          <CityCardsGrid />
+        {/* Sub-page entry buttons — same shell as DataLink and the
+            existing CheckInsButtonCard so the row reads as one unit. */}
+        <div className="mb-12 grid grid-cols-1 gap-4 md:grid-cols-2 lg:grid-cols-3">
+          <DataLink
+            href="/admin/finance/fields"
+            eyebrow="View"
+            title="Field Ranking"
+            subtitle="Per-venue financial breakdown ranked by net contribution."
+          />
+          <DataLink
+            href="/admin/finance/cash-flow"
+            eyebrow="View"
+            title="Cash Flow"
+            subtitle="Monthly P&L, revenue trend, and operational financial detail."
+          />
+          <CheckInsButtonCard />
         </div>
-      )}
+      </section>
 
-      <div className="mb-12">
-        <FieldRankingTable
-          collapsed={rankingCollapsed}
-          onToggle={() => setRankingCollapsed((c) => !c)}
-        />
-      </div>
-
-      <div className="mb-12">
-        <CheckInsButtonCard />
-      </div>
+      <section id="exec-summary" className="mb-12 scroll-mt-20">
+        <ExecutiveSummary />
+      </section>
 
       <SectionHeader
         title="Manage"
