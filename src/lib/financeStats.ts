@@ -384,6 +384,47 @@ export function q2NetRevenueActual(
   return sum;
 }
 
+const MONTH_SHORT_LABELS = [
+  "Jan",
+  "Feb",
+  "Mar",
+  "Apr",
+  "May",
+  "Jun",
+  "Jul",
+  "Aug",
+  "Sep",
+  "Oct",
+  "Nov",
+  "Dec",
+] as const;
+
+// Same-day MTD gross for the calendar month before `now`. Sums
+// Stripe + Venmo (source != PROJECTION) gross where r.month is the
+// prior month label AND r.date <= the same day-of-month in the prior
+// month (clamped to that month's last day — e.g. if today is Mar 31,
+// cutoff is Feb 28). Pairs with grossRevenueFor(currentMonth, "mtd")
+// for the MTD-vs-same-day-last-month delta on the exec hero.
+export function priorMonthSameDayMtdGross(
+  data: FinanceData,
+  now: Date = new Date(),
+): number {
+  const priorYear = now.getMonth() === 0 ? now.getFullYear() - 1 : now.getFullYear();
+  const priorMonthIdx = now.getMonth() === 0 ? 11 : now.getMonth() - 1;
+  const lastDayOfPriorMonth = new Date(priorYear, priorMonthIdx + 1, 0).getDate();
+  const cutoffDay = Math.min(now.getDate(), lastDayOfPriorMonth);
+  const cutoffIso = isoDateLocal(new Date(priorYear, priorMonthIdx, cutoffDay));
+  const priorMonthLabel = `${MONTH_SHORT_LABELS[priorMonthIdx]} ${priorYear}`;
+  let sum = 0;
+  for (const r of data.revenue) {
+    if (r.month !== priorMonthLabel) continue;
+    if (r.source === "PROJECTION") continue;
+    if (r.date > cutoffIso) continue;
+    sum += r.gross;
+  }
+  return sum;
+}
+
 // Per-source actual breakdown for Q2 expenses. Useful for sanity
 // checks and inspectors; q2ExpensesActual sums these.
 export type Q2ExpensesActualBreakdown = {
