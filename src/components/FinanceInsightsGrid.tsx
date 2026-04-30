@@ -1,6 +1,7 @@
 "use client";
 
 import { useMemo, useState } from "react";
+import Link from "next/link";
 import { ChevronDown, ChevronRight } from "lucide-react";
 import FinanceInsightCard from "./FinanceInsightCard";
 import { useFinanceData } from "@/lib/useFinanceData";
@@ -8,10 +9,8 @@ import { useMatchData } from "@/lib/useMatchData";
 import {
   Q2_MONTHS,
   buildCityInsightRows,
-  buildMembershipHealthRows,
   buildVenueInsightRows,
   getCurrentQ2Month,
-  membershipHealthAvailable,
   monthScopedTitle,
   newVenuesProfitable,
   newVenuesStruggling,
@@ -20,7 +19,6 @@ import {
   profitableFields,
   unprofitableCities,
   unprofitableFields,
-  type MembershipHealthRow,
   type Q2Month,
   type VenueInsightRow,
 } from "@/lib/financeStats";
@@ -83,8 +81,6 @@ export default function FinanceInsightsGrid({
       newStruggling: newVenuesStruggling(venueRows),
       overheadBurden: overheadBurdenCities(cityRows),
       spotMix: spotMixByCityFromMatches(matchRows, month),
-      mhAvailable: membershipHealthAvailable(data),
-      mhRows: buildMembershipHealthRows(data, matchRows, month),
     };
   }, [data, matchRows, month]);
 
@@ -300,34 +296,19 @@ export default function FinanceInsightsGrid({
 
               <CategoryLabel tone="watch">Watch</CategoryLabel>
               <div className="space-y-4">
-                {/* Row 1 — full-width Membership Health */}
-                <FinanceInsightCard
-                  tone="watch"
-                  title={monthScopedTitle("Membership Health", month)}
-                  headline={
-                    !computed.mhAvailable
-                      ? "Data needed"
-                      : computed.mhRows.length === 0
-                        ? "No qualifying cities"
-                        : `${computed.mhRows.length} ${computed.mhRows.length === 1 ? "city" : "cities"}`
-                  }
-                  subtitle={
-                    computed.mhAvailable
-                      ? "Average matches played per member this month vs. matches needed to cover their membership cost."
-                      : undefined
-                  }
-                  empty={computed.mhAvailable && computed.mhRows.length === 0}
-                >
-                  {!computed.mhAvailable ? (
-                    <div className="text-xs italic text-deep-green/55">
-                      Membership Health requires fin_members + fin_venues
-                      with member_price set + a current user_analysis
-                      upload — re-import to enable.
-                    </div>
-                  ) : (
-                    <MembershipHealthList rows={computed.mhRows} />
-                  )}
-                </FinanceInsightCard>
+                {/* Row 1 — Membership Health relocated to /cities Membership lens */}
+                <div className="rounded-2xl border border-dashed border-cream-line bg-cream-soft/40 px-5 py-4 text-xs text-deep-green/65">
+                  Membership Health moved to{" "}
+                  <Link
+                    href="/cities"
+                    className="font-bold text-mint-hover hover:underline"
+                  >
+                    /cities → Membership lens
+                  </Link>
+                  . Same table, same data, same ratio-descending order — just
+                  surfaced under the operations view alongside per-city member
+                  counts and trend.
+                </div>
 
                 {/* Row 2 — two equal-width cards (50/50 split) */}
                 <div className="grid grid-cols-1 gap-4 md:grid-cols-2">
@@ -525,69 +506,6 @@ function HighPromoList({ rows }: { rows: HighPromoRow[] }) {
         </li>
       ))}
     </ul>
-  );
-}
-
-function MembershipHealthList({ rows }: { rows: MembershipHealthRow[] }) {
-  if (rows.length === 0) return null;
-  const verdictLabel: Record<MembershipHealthRow["verdict"], string> = {
-    strong: "Strong",
-    break_even_plus: "BE+",
-    marginal: "Marginal",
-    at_risk: "At Risk",
-  };
-  // Pill palette per spec — inline arbitrary hexes since these don't
-  // map cleanly onto the existing brand tokens.
-  const verdictCls: Record<MembershipHealthRow["verdict"], string> = {
-    strong: "bg-[#C8F1DD] text-[#0F6E56]",
-    break_even_plus: "bg-[#DCF5E8] text-[#1D9E75]",
-    marginal: "bg-[#FCE8C7] text-[#854F0B]",
-    at_risk: "bg-[#F7C1C1] text-[#A32D2D]",
-  };
-  return (
-    <table className="w-full text-[11px]">
-      <thead className="text-[10px] font-bold uppercase tracking-wider text-deep-green/50">
-        <tr>
-          <th className="py-1 pr-3 text-left">City</th>
-          <th className="px-2.5 py-1 text-right">Members</th>
-          <th className="px-2.5 py-1 text-right">Played</th>
-          <th className="px-2.5 py-1 text-right">Need</th>
-          <th className="px-2.5 py-1 text-right">Ratio</th>
-          <th className="py-1 pl-3 text-right">Status</th>
-        </tr>
-      </thead>
-      <tbody>
-        {rows.map((r) => (
-          <tr key={r.city} className="border-t border-cream-line/40">
-            <td className="py-1.5 pr-3 text-deep-green/85">{r.city}</td>
-            <td className="px-2.5 py-1.5 text-right font-mono tabular-nums text-deep-green/75">
-              {r.members}
-            </td>
-            <td className="px-2.5 py-1.5 text-right font-mono tabular-nums text-deep-green/85">
-              {r.actualMatchesPerMember.toFixed(1)}
-            </td>
-            <td className="px-2.5 py-1.5 text-right font-mono tabular-nums text-deep-green/55">
-              {r.breakEvenMatches.toFixed(1)}
-            </td>
-            <td
-              className="px-2.5 py-1.5 text-right font-mono tabular-nums text-deep-green/85"
-              title={`${r.actualMatchesPerMember.toFixed(1)} played / ${r.breakEvenMatches.toFixed(1)} need`}
-            >
-              {Number.isFinite(r.ratio) && r.ratio > 0
-                ? `${r.ratio.toFixed(1)}x`
-                : "—"}
-            </td>
-            <td className="py-1.5 pl-3 text-right">
-              <span
-                className={`inline-flex items-center rounded-full px-2 py-0.5 text-[9px] font-bold uppercase tracking-wider ${verdictCls[r.verdict]}`}
-              >
-                {verdictLabel[r.verdict]}
-              </span>
-            </td>
-          </tr>
-        ))}
-      </tbody>
-    </table>
   );
 }
 

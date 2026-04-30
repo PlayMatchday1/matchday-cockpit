@@ -5,6 +5,7 @@ import Link from "next/link";
 import CitiesLegend from "@/components/CitiesLegend";
 import CitiesExecHero from "@/components/CitiesExecHero";
 import CitiesLensNav, { type CityLens } from "@/components/CitiesLensNav";
+import CitiesMembershipLens from "@/components/CitiesMembershipLens";
 import { CityHealthPill } from "@/components/StatusPill";
 import MiniBarSparkline from "@/components/MiniBarSparkline";
 import TotalsBarChart from "@/components/TotalsBarChart";
@@ -51,7 +52,7 @@ function CitiesIndexContent() {
       <CitiesLensNav value={lens} onChange={setLens} />
 
       {lens === "overview" && <OverviewLens />}
-      {lens === "membership" && <LensPlaceholder lens="Membership" phase="B" />}
+      {lens === "membership" && <CitiesMembershipLens />}
       {lens === "cancellations" && (
         <LensPlaceholder lens="Cancellations" phase="C" />
       )}
