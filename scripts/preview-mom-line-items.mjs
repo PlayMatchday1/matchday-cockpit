@@ -137,14 +137,28 @@ const revCur = revenueByType(currentMonth);
 const revNxt = revenueByType(nextMonth);
 const revTypes = new Set([...revCur.keys(), ...revNxt.keys()]);
 const nextIsFuture = isFuture(nextMonth);
+// New: collapse PROJECTION-driven revenue into one combined line.
+let projSum = 0;
 for (const type of revTypes) {
   const delta = (revNxt.get(type) ?? 0) - (revCur.get(type) ?? 0);
   if (Math.abs(delta) < 0.5) continue;
+  if (nextIsFuture) {
+    projSum += delta;
+    continue;
+  }
   lineItems.push({
     kind: "revenue",
     name: type,
     delta,
-    isProjectionDriven: nextIsFuture,
+    isProjectionDriven: false,
+  });
+}
+if (Math.abs(projSum) >= 0.5) {
+  lineItems.push({
+    kind: "revenue",
+    name: "Expected revenue (forecast)",
+    delta: projSum,
+    isProjectionDriven: true,
   });
 }
 lineItems.sort((a, b) => Math.abs(b.delta) - Math.abs(a.delta));

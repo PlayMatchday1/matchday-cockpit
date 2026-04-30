@@ -616,11 +616,17 @@ export function monthOverMonthDeltas(
     });
   }
 
-  // Revenue side — every type with non-trivial Δ
+  // Revenue side. Per-type values are useful when both sides are
+  // realized, but PROJECTION-driven types are just the bootstrap
+  // estimate split into accounting buckets — the per-bucket split
+  // isn't real signal. Collapse all PROJECTION-driven revenue types
+  // into a single "Expected revenue (forecast)" line; keep any
+  // realized-vs-realized revenue rows per-type.
   const revCur = revenueByType(data, currentMonth, now);
   const revNxt = revenueByType(data, nextMonth, now);
   const revTypes = new Set<string>([...revCur.keys(), ...revNxt.keys()]);
   const nextIsFuture = isFutureMonth(nextMonth, now);
+  let projectionDrivenSum = 0;
   for (const type of revTypes) {
     const delta = (revNxt.get(type) ?? 0) - (revCur.get(type) ?? 0);
     if (Math.abs(delta) < NOISE) continue;
@@ -629,12 +635,25 @@ export function monthOverMonthDeltas(
       nextMonth,
       nextIsFuture,
     );
+    if (fromProjection) {
+      projectionDrivenSum += delta;
+      continue;
+    }
     lineItems.push({
       kind: "revenue",
       name: type,
       delta,
       driver,
-      isProjectionDriven: fromProjection,
+      isProjectionDriven: false,
+    });
+  }
+  if (Math.abs(projectionDrivenSum) >= NOISE) {
+    lineItems.push({
+      kind: "revenue",
+      name: "Expected revenue (forecast)",
+      delta: projectionDrivenSum,
+      driver: "Next month from PROJECTION estimate",
+      isProjectionDriven: true,
     });
   }
 
