@@ -389,6 +389,270 @@ export function projectedEndingCash(
   return startingCash(data) + q2NetPLProjected(data, now);
 }
 
+// ===== Month-over-month deltas (for /admin/finance/cash-flow hero) =====
+
+export type MoMDelta = {
+  /** Category name (for expenses) or revenue type (for revenue). */
+  label: string;
+  /** Signed delta in dollars: nextMonth − currentMonth. */
+  delta: number;
+  /** Human-readable driver attribution. */
+  driver: string;
+  /**
+   * True if either side of the comparison is sourced from
+   * `source = 'PROJECTION'` rows in fin_revenue (always the case for
+   * a future-month next side). Component uses this to render the (i)
+   * caveat icon next to the subtitle.
+   */
+  driverFromProjection: boolean;
+};
+
+export type MonthOverMonthDeltas = {
+  currentMonth: Q2Month | null;
+  nextMonth: Q2Month | null;
+  /** null when there's no nextMonth in Q2 (June currentMonth) or no currentMonth. */
+  biggestExpenseDelta: MoMDelta | null;
+  biggestRevenueDelta: MoMDelta | null;
+  netDelta: { current: number; next: number; delta: number } | null;
+};
+
+// Rolls up every expense category for a month, projection-mode.
+// Includes fin_expenses categories (MMP, Subscriptions, Corp Salaries,
+// Contractors, VEO Camera, Misc, etc.) plus the synthetic "Field
+// Costs", "City Manager", "Marketing", "Equipment" categories.
+function expensesByCategory(
+  data: FinanceData,
+  month: Q2Month,
+  now: Date,
+): Map<string, number> {
+  const byCat = new Map<string, number>(
+    otherExpensesByCategoryFor(data, month, "projection", now),
+  );
+  byCat.set("Field Costs", fieldCostsFor(data, month));
+  byCat.set("City Manager", monthlyExpenseCategoryFor(data, month, "city_manager"));
+  byCat.set("Marketing", monthlyExpenseCategoryFor(data, month, "marketing"));
+  byCat.set("Equipment", monthlyExpenseCategoryFor(data, month, "equipment"));
+  return byCat;
+}
+
+// Per-type revenue map for a month in projection mode. For current/
+// past months, sums realized non-PROJECTION rows with DPP × factor.
+// For future months, sums PROJECTION rows by their declared type.
+function revenueByType(
+  data: FinanceData,
+  month: Q2Month,
+  now: Date,
+): Map<string, number> {
+  const future = isFutureMonth(month, now);
+  const factor = dppExtrapolationFactor(month, now);
+  const byType = new Map<string, number>();
+  for (const r of data.revenue) {
+    if (r.month !== month) continue;
+    if (future ? r.source !== "PROJECTION" : r.source === "PROJECTION") continue;
+    const v = r.net;
+    const scaled =
+      factor !== 1 && r.source !== "PROJECTION" && r.type === "DPP"
+        ? v * factor
+        : v;
+    byType.set(r.type, (byType.get(r.type) ?? 0) + scaled);
+  }
+  return byType;
+}
+
+// Driver string for an expense category. Per-venue attribution for
+// Field Costs; per-city for MMP / City Manager / Marketing /
+// Equipment; generic Higher/Lower/New/Ends for everything else.
+function expenseDriverString(
+  data: FinanceData,
+  category: string,
+  currentMonth: Q2Month,
+  nextMonth: Q2Month,
+): string {
+  const fmtSig = (n: number) =>
+    n > 0 ? `+$${Math.round(n).toLocaleString("en-US")}`
+         : n < 0 ? `-$${Math.round(Math.abs(n)).toLocaleString("en-US")}`
+                : "$0";
+
+  if (category === "Field Costs") {
+    const cur = fieldCostsByVenue(data, currentMonth);
+    const nxt = fieldCostsByVenue(data, nextMonth);
+    return topMapDriver(cur, nxt, "Field-cost mix shift", fmtSig);
+  }
+  if (category === "Match Manager Pay") {
+    const cur = mmpByCity(data, currentMonth);
+    const nxt = mmpByCity(data, nextMonth);
+    return topMapDriver(cur, nxt, "Manager pay mix shift", fmtSig);
+  }
+  if (category === "City Manager" || category === "Marketing" || category === "Equipment") {
+    const key =
+      category === "City Manager" ? "city_manager"
+      : category === "Marketing" ? "marketing"
+      : "equipment";
+    const cur = monthlyExpenseByCity(data, currentMonth, key);
+    const nxt = monthlyExpenseByCity(data, nextMonth, key);
+    return topMapDriver(cur, nxt, `${category} mix shift`, fmtSig);
+  }
+
+  // Generic fin_expenses category (no per-X breakdown).
+  const finCur = data.expenses
+    .filter((r) => r.month === currentMonth && r.category === category)
+    .reduce((s, r) => s + r.amount, 0);
+  const finNxt = data.expenses
+    .filter((r) => r.month === nextMonth && r.category === category)
+    .reduce((s, r) => s + r.amount, 0);
+  if (finCur === 0 && finNxt > 0) return `New in ${nextMonth.split(" ")[0]}`;
+  if (finNxt === 0 && finCur > 0) return `Ends in ${currentMonth.split(" ")[0]}`;
+  if (finNxt > finCur) return "Higher next month";
+  return "Lower next month";
+}
+
+function topMapDriver(
+  cur: Map<string, number>,
+  nxt: Map<string, number>,
+  fallback: string,
+  fmtSig: (n: number) => string,
+): string {
+  const deltas = new Map<string, number>();
+  const keys = new Set<string>([...cur.keys(), ...nxt.keys()]);
+  for (const k of keys) deltas.set(k, (nxt.get(k) ?? 0) - (cur.get(k) ?? 0));
+  if (deltas.size === 0) return fallback;
+  const top = [...deltas.entries()].sort(
+    (a, b) => Math.abs(b[1]) - Math.abs(a[1]),
+  )[0];
+  if (!top || Math.abs(top[1]) < 1) return fallback;
+  return `Driven by ${top[0]} (${fmtSig(top[1])})`;
+}
+
+function fieldCostsByVenue(data: FinanceData, month: Q2Month): Map<string, number> {
+  const byVenue = new Map<string, number>();
+  for (const v of data.venues) {
+    const cost = canonicalVenueCost(data, v.id, month).amount;
+    if (cost > 0) {
+      byVenue.set(`${v.city} · ${v.venue_name}`, cost);
+    }
+  }
+  return byVenue;
+}
+
+function mmpByCity(data: FinanceData, month: Q2Month): Map<string, number> {
+  const byCity = new Map<string, number>();
+  for (const r of data.expenses) {
+    if (r.month !== month) continue;
+    if (r.category !== "Match Manager Pay") continue;
+    if (!r.city) continue;
+    byCity.set(r.city, (byCity.get(r.city) ?? 0) + r.amount);
+  }
+  return byCity;
+}
+
+function monthlyExpenseByCity(
+  data: FinanceData,
+  month: Q2Month,
+  key: "city_manager" | "marketing" | "equipment",
+): Map<string, number> {
+  const byCity = new Map<string, number>();
+  for (const r of data.monthlyExpenses) {
+    if (r.month !== month) continue;
+    const v = r[key];
+    if (v > 0) byCity.set(r.city, v);
+  }
+  return byCity;
+}
+
+// Driver string for revenue type. When nextMonth is a future month,
+// its values come entirely from manually-seeded PROJECTION rows in
+// fin_revenue — flag that honestly rather than fabricate venue-level
+// attribution that doesn't exist on PROJECTION rows.
+function revenueDriverString(
+  type: string,
+  nextMonth: Q2Month,
+  nextIsFuture: boolean,
+): { driver: string; fromProjection: boolean } {
+  if (nextIsFuture) {
+    return {
+      driver: `${nextMonth.split(" ")[0]} target from PROJECTION estimate`,
+      fromProjection: true,
+    };
+  }
+  return { driver: `${type} mix shift`, fromProjection: false };
+}
+
+export function monthOverMonthDeltas(
+  data: FinanceData,
+  now: Date = new Date(),
+): MonthOverMonthDeltas {
+  const currentMonth = getCurrentQ2Month(now);
+  const idx = currentMonth ? Q2_MONTHS.indexOf(currentMonth) : -1;
+  const nextMonth =
+    idx >= 0 && idx < Q2_MONTHS.length - 1 ? Q2_MONTHS[idx + 1] : null;
+
+  if (!currentMonth || !nextMonth) {
+    return {
+      currentMonth,
+      nextMonth: null,
+      biggestExpenseDelta: null,
+      biggestRevenueDelta: null,
+      netDelta: null,
+    };
+  }
+
+  // Expense side
+  const expCur = expensesByCategory(data, currentMonth, now);
+  const expNxt = expensesByCategory(data, nextMonth, now);
+  const expCats = new Set<string>([...expCur.keys(), ...expNxt.keys()]);
+  let topExp: MoMDelta | null = null;
+  for (const cat of expCats) {
+    const delta = (expNxt.get(cat) ?? 0) - (expCur.get(cat) ?? 0);
+    if (!topExp || Math.abs(delta) > Math.abs(topExp.delta)) {
+      topExp = {
+        label: cat,
+        delta,
+        driver: expenseDriverString(data, cat, currentMonth, nextMonth),
+        driverFromProjection: false,
+      };
+    }
+  }
+
+  // Revenue side
+  const revCur = revenueByType(data, currentMonth, now);
+  const revNxt = revenueByType(data, nextMonth, now);
+  const revTypes = new Set<string>([...revCur.keys(), ...revNxt.keys()]);
+  const nextIsFuture = isFutureMonth(nextMonth, now);
+  let topRev: MoMDelta | null = null;
+  for (const type of revTypes) {
+    const delta = (revNxt.get(type) ?? 0) - (revCur.get(type) ?? 0);
+    if (!topRev || Math.abs(delta) > Math.abs(topRev.delta)) {
+      const { driver, fromProjection } = revenueDriverString(
+        type,
+        nextMonth,
+        nextIsFuture,
+      );
+      topRev = {
+        label: type,
+        delta,
+        driver,
+        driverFromProjection: fromProjection,
+      };
+    }
+  }
+
+  // Net delta — sum revenue/expenses both sides for the headline
+  const curRevTotal = [...revCur.values()].reduce((s, v) => s + v, 0);
+  const curExpTotal = [...expCur.values()].reduce((s, v) => s + v, 0);
+  const nxtRevTotal = [...revNxt.values()].reduce((s, v) => s + v, 0);
+  const nxtExpTotal = [...expNxt.values()].reduce((s, v) => s + v, 0);
+  const curNet = curRevTotal - curExpTotal;
+  const nxtNet = nxtRevTotal - nxtExpTotal;
+
+  return {
+    currentMonth,
+    nextMonth,
+    biggestExpenseDelta: topExp,
+    biggestRevenueDelta: topRev,
+    netDelta: { current: curNet, next: nxtNet, delta: nxtNet - curNet },
+  };
+}
+
 function isoDateLocal(d: Date): string {
   const y = d.getFullYear();
   const mo = String(d.getMonth() + 1).padStart(2, "0");
