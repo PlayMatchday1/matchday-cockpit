@@ -93,20 +93,52 @@ function filterRevenueRows(
     if (future) return [];
     return all.filter((r) => r.source !== "PROJECTION");
   }
-  // Projection mode: realized for active/past months, PROJECTION for future
-  // months. Never blend the two — the active-month PROJECTION row covers the
-  // gap between realized-to-date and end-of-month, but here we extrapolate
-  // realized DPP via dppExtrapolationFactor instead, so PROJECTION rows for
-  // active/past months would double-count.
-  if (future) return all.filter((r) => r.source === "PROJECTION");
+  // Projection mode:
+  //   - active/past months: realized rows only. The active-month PROJECTION
+  //     row covers the gap between realized-to-date and end-of-month, but
+  //     here we extrapolate realized DPP via dppExtrapolationFactor instead,
+  //     so PROJECTION rows for active/past months would double-count.
+  //   - future months: BOTH realized and PROJECTION rows. Per-type the
+  //     PROJECTION sum is treated as a floor, with realized progress eating
+  //     into the unrealized portion (see aggregateRevenue). This lets a
+  //     manually-entered future-dated revenue row contribute to the
+  //     projection total instead of being silently dropped.
+  if (future) return all;
   return all.filter((r) => r.source !== "PROJECTION");
 }
 
-function applyDppExtrapolation<T extends { type: FinanceData["revenue"][number]["type"]; source: FinanceData["revenue"][number]["source"] }>(
+// Aggregate a set of revenue rows into a single number.
+//
+// For future months in projection mode (`isFutureProjection = true`):
+//   per type, total += max(sum of PROJECTION rows, sum of non-PROJECTION rows).
+//   PROJECTION acts as a floor — realized rows count toward the estimate but
+//   never inflate beyond it; if realized exceeds projection, realized wins
+//   (good news, the operator is outperforming the bootstrap estimate). DPP
+//   extrapolation does not apply (factor is always 1 for future months).
+//
+// Otherwise: applies the existing DPP daily-extrapolation factor to realized
+// DPP rows in the active month, leaving everything else as-is.
+function aggregateRevenue<T extends { type: FinanceData["revenue"][number]["type"]; source: FinanceData["revenue"][number]["source"] }>(
   rows: T[],
   pickField: (r: T) => number,
   factor: number,
+  isFutureProjection: boolean,
 ): number {
+  if (isFutureProjection) {
+    const proj = new Map<string, number>();
+    const real = new Map<string, number>();
+    for (const r of rows) {
+      const v = pickField(r);
+      const map = r.source === "PROJECTION" ? proj : real;
+      map.set(r.type, (map.get(r.type) ?? 0) + v);
+    }
+    const types = new Set<string>([...proj.keys(), ...real.keys()]);
+    let total = 0;
+    for (const t of types) {
+      total += Math.max(proj.get(t) ?? 0, real.get(t) ?? 0);
+    }
+    return total;
+  }
   if (factor === 1) {
     return rows.reduce((s, r) => s + pickField(r), 0);
   }
@@ -131,7 +163,9 @@ export function netRevenueFor(
   const rows = filterRevenueRows(data, month, mode, now);
   const factor =
     mode === "projection" ? dppExtrapolationFactor(month, now) : 1;
-  return applyDppExtrapolation(rows, (r) => r.net, factor);
+  const isFutureProjection =
+    mode === "projection" && isFutureMonth(month, now);
+  return aggregateRevenue(rows, (r) => r.net, factor, isFutureProjection);
 }
 
 export function grossRevenueFor(
@@ -143,7 +177,9 @@ export function grossRevenueFor(
   const rows = filterRevenueRows(data, month, mode, now);
   const factor =
     mode === "projection" ? dppExtrapolationFactor(month, now) : 1;
-  return applyDppExtrapolation(rows, (r) => r.gross, factor);
+  const isFutureProjection =
+    mode === "projection" && isFutureMonth(month, now);
+  return aggregateRevenue(rows, (r) => r.gross, factor, isFutureProjection);
 }
 
 export function feesFor(
@@ -155,7 +191,9 @@ export function feesFor(
   const rows = filterRevenueRows(data, month, mode, now);
   const factor =
     mode === "projection" ? dppExtrapolationFactor(month, now) : 1;
-  return applyDppExtrapolation(rows, (r) => r.fees, factor);
+  const isFutureProjection =
+    mode === "projection" && isFutureMonth(month, now);
+  return aggregateRevenue(rows, (r) => r.fees, factor, isFutureProjection);
 }
 
 export function netRevenueByCityFor(
@@ -445,28 +483,75 @@ function expensesByCategory(
   return byCat;
 }
 
-// Per-type revenue map for a month in projection mode. For current/
-// past months, sums realized non-PROJECTION rows with DPP × factor.
-// For future months, sums PROJECTION rows by their declared type.
+type RevenueTypeAggregate = {
+  // Value used in totals and MoM deltas.
+  effective: number;
+  // Sum of PROJECTION-source rows (only > 0 for future months).
+  projected: number;
+  // Sum of non-PROJECTION-source rows (DPP-extrapolated for current month).
+  realized: number;
+  // Which side won the max() for future months. Past/current months always
+  // = "realized" since PROJECTION rows are excluded there. Tiebreak (and
+  // equality) goes to "projection" so a type with no realized rows reads
+  // as projection-driven.
+  origin: "projection" | "realized";
+};
+
+// Per-type revenue breakdown for a month in projection mode.
+//
+//   - past/current months: PROJECTION rows are skipped entirely (the
+//     current month's PROJECTION row would double-count with DPP×factor).
+//     `realized` is the per-type sum; `projected` is always 0;
+//     origin = "realized".
+//   - future months: both PROJECTION rows (`projected`) and non-PROJECTION
+//     rows (`realized`) are summed per type. `effective = max(...)` —
+//     PROJECTION acts as a floor; realized rows eat into the unrealized
+//     portion. If realized exceeds projection, the type is realized-driven
+//     and should render as a normal revenue line in the MoM panel. (See
+//     aggregateRevenue for the parallel total-level computation.)
 function revenueByType(
   data: FinanceData,
   month: Q2Month,
   now: Date,
-): Map<string, number> {
+): Map<string, RevenueTypeAggregate> {
   const future = isFutureMonth(month, now);
   const factor = dppExtrapolationFactor(month, now);
-  const byType = new Map<string, number>();
+  const proj = new Map<string, number>();
+  const real = new Map<string, number>();
   for (const r of data.revenue) {
     if (r.month !== month) continue;
-    if (future ? r.source !== "PROJECTION" : r.source === "PROJECTION") continue;
+    const isProj = r.source === "PROJECTION";
+    // Past/current months: drop PROJECTION rows (would double-count with DPP
+    // factor on the realized DPP rows). Future months: keep both kinds.
+    if (!future && isProj) continue;
     const v = r.net;
     const scaled =
-      factor !== 1 && r.source !== "PROJECTION" && r.type === "DPP"
-        ? v * factor
-        : v;
-    byType.set(r.type, (byType.get(r.type) ?? 0) + scaled);
+      factor !== 1 && !isProj && r.type === "DPP" ? v * factor : v;
+    const map = isProj ? proj : real;
+    map.set(r.type, (map.get(r.type) ?? 0) + scaled);
   }
-  return byType;
+  const out = new Map<string, RevenueTypeAggregate>();
+  const types = new Set<string>([...proj.keys(), ...real.keys()]);
+  for (const t of types) {
+    const p = proj.get(t) ?? 0;
+    const re = real.get(t) ?? 0;
+    if (future) {
+      out.set(t, {
+        effective: Math.max(p, re),
+        projected: p,
+        realized: re,
+        origin: re > p ? "realized" : "projection",
+      });
+    } else {
+      out.set(t, {
+        effective: re,
+        projected: 0,
+        realized: re,
+        origin: "realized",
+      });
+    }
+  }
+  return out;
 }
 
 // Driver string for an expense category. Per-venue attribution for
@@ -678,19 +763,28 @@ function expenseCategoryChildren(
   );
 }
 
-// Driver string for revenue type. When nextMonth is a future month,
-// its values come entirely from manually-seeded PROJECTION rows in
-// fin_revenue — flag that honestly rather than fabricate venue-level
-// attribution that doesn't exist on PROJECTION rows.
+// Driver string for revenue type.
+//   - future + projection-origin: "<Month> target from PROJECTION estimate"
+//   - future + realized-origin (manual entries have outstripped the
+//     bootstrap projection floor for this type): "<Month> realized — manual
+//     entry"
+//   - past/current pair: "<Type> mix shift"
 function revenueDriverString(
   type: string,
   nextMonth: Q2Month,
   nextIsFuture: boolean,
+  nextOrigin: "projection" | "realized" | undefined,
 ): { driver: string; fromProjection: boolean } {
-  if (nextIsFuture) {
+  if (nextIsFuture && nextOrigin === "projection") {
     return {
       driver: `${nextMonth.split(" ")[0]} target from PROJECTION estimate`,
       fromProjection: true,
+    };
+  }
+  if (nextIsFuture && nextOrigin === "realized") {
+    return {
+      driver: `${nextMonth.split(" ")[0]} realized — manual entry`,
+      fromProjection: false,
     };
   }
   return { driver: `${type} mix shift`, fromProjection: false };
@@ -784,14 +878,24 @@ export function monthOverMonthDeltas(
   const nextIsFuture = isFutureMonth(nextMonth, now);
   let projectionDrivenSum = 0;
   for (const type of revTypes) {
-    const delta = (revNxt.get(type) ?? 0) - (revCur.get(type) ?? 0);
+    const curEff = revCur.get(type)?.effective ?? 0;
+    const nxtAgg = revNxt.get(type);
+    const nxtEff = nxtAgg?.effective ?? 0;
+    const delta = nxtEff - curEff;
     if (Math.abs(delta) < NOISE) continue;
+    // For future months, missing type = bootstrap PROJECTION didn't model it.
+    // Treat that absence as projection-origin so it folds into the combined
+    // forecast row instead of misleadingly rendering as a "manual entry" line.
+    const nextOrigin: "projection" | "realized" = nxtAgg?.origin
+      ?? (nextIsFuture ? "projection" : "realized");
     const { driver, fromProjection } = revenueDriverString(
       type,
       nextMonth,
       nextIsFuture,
+      nextOrigin,
     );
     if (fromProjection) {
+      // Folded into the combined "Expected revenue (forecast)" row below.
       projectionDrivenSum += delta;
       continue;
     }
@@ -818,9 +922,9 @@ export function monthOverMonthDeltas(
   // Sort by absolute delta desc, mixing expense + revenue.
   lineItems.sort((a, b) => Math.abs(b.delta) - Math.abs(a.delta));
 
-  const curRevTotal = [...revCur.values()].reduce((s, v) => s + v, 0);
+  const curRevTotal = [...revCur.values()].reduce((s, v) => s + v.effective, 0);
   const curExpTotal = [...expCur.values()].reduce((s, v) => s + v, 0);
-  const nxtRevTotal = [...revNxt.values()].reduce((s, v) => s + v, 0);
+  const nxtRevTotal = [...revNxt.values()].reduce((s, v) => s + v.effective, 0);
   const nxtExpTotal = [...expNxt.values()].reduce((s, v) => s + v, 0);
   const curNet = curRevTotal - curExpTotal;
   const nxtNet = nxtRevTotal - nxtExpTotal;

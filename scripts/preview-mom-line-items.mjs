@@ -99,18 +99,40 @@ function expensesByCategory(month) {
   return byCat;
 }
 
+// Returns Map<type, {effective, projected, realized, origin}>.
+// Future months: PROJECTION acts as a floor; effective = max(proj, real).
+// Past/current months: PROJECTION rows are skipped, realized only.
 function revenueByType(month) {
   const future = isFuture(month);
   const factor = dppFactor(month);
-  const byType = new Map();
+  const proj = new Map();
+  const real = new Map();
   for (const r of revenue) {
     if (r.month !== month) continue;
-    if (future ? r.source !== "PROJECTION" : r.source === "PROJECTION") continue;
+    const isProj = r.source === "PROJECTION";
+    if (!future && isProj) continue;
     const v = Number(r.net ?? 0);
-    const scaled = factor !== 1 && r.source !== "PROJECTION" && r.type === "DPP" ? v * factor : v;
-    byType.set(r.type, (byType.get(r.type) ?? 0) + scaled);
+    const scaled = factor !== 1 && !isProj && r.type === "DPP" ? v * factor : v;
+    const map = isProj ? proj : real;
+    map.set(r.type, (map.get(r.type) ?? 0) + scaled);
   }
-  return byType;
+  const out = new Map();
+  const types = new Set([...proj.keys(), ...real.keys()]);
+  for (const t of types) {
+    const p = proj.get(t) ?? 0;
+    const re = real.get(t) ?? 0;
+    if (future) {
+      out.set(t, {
+        effective: Math.max(p, re),
+        projected: p,
+        realized: re,
+        origin: re > p ? "realized" : "projection",
+      });
+    } else {
+      out.set(t, { effective: re, projected: 0, realized: re, origin: "realized" });
+    }
+  }
+  return out;
 }
 
 const currentMonth = Q2.find((m) => isCurrent(m));
@@ -137,12 +159,18 @@ const revCur = revenueByType(currentMonth);
 const revNxt = revenueByType(nextMonth);
 const revTypes = new Set([...revCur.keys(), ...revNxt.keys()]);
 const nextIsFuture = isFuture(nextMonth);
-// New: collapse PROJECTION-driven revenue into one combined line.
 let projSum = 0;
 for (const type of revTypes) {
-  const delta = (revNxt.get(type) ?? 0) - (revCur.get(type) ?? 0);
+  const curEff = revCur.get(type)?.effective ?? 0;
+  const nxtAgg = revNxt.get(type);
+  const nxtEff = nxtAgg?.effective ?? 0;
+  const delta = nxtEff - curEff;
   if (Math.abs(delta) < 0.5) continue;
-  if (nextIsFuture) {
+  const nextOrigin = nxtAgg?.origin ?? (nextIsFuture ? "projection" : "realized");
+  // Projection-driven only when the next-month value comes from the
+  // PROJECTION side. When realized has eaten through the floor, render
+  // as a normal line.
+  if (nextIsFuture && nextOrigin === "projection") {
     projSum += delta;
     continue;
   }
@@ -163,6 +191,21 @@ if (Math.abs(projSum) >= 0.5) {
 }
 lineItems.sort((a, b) => Math.abs(b.delta) - Math.abs(a.delta));
 
+console.log("=== Revenue type breakdown ===");
+for (const t of new Set([...revCur.keys(), ...revNxt.keys()])) {
+  const c = revCur.get(t);
+  const n = revNxt.get(t);
+  const cEff = c?.effective ?? 0;
+  const nEff = n?.effective ?? 0;
+  const nProj = n?.projected ?? 0;
+  const nReal = n?.realized ?? 0;
+  const nOrigin = n?.origin ?? "—";
+  console.log(
+    `${t.padEnd(20)} cur=${fmt(cEff).padStart(10)}  next=${fmt(nEff).padStart(10)}  (proj=${fmt(nProj)}, real=${fmt(nReal)}, origin=${nOrigin})  Δ=${fmtSig(nEff - cEff)}`,
+  );
+}
+console.log("");
+
 console.log("=== ALL line items (sorted by |Δ| desc) ===");
 console.log("KIND      NAME                          Δ            PROJECTION?");
 for (const li of lineItems) {
@@ -176,9 +219,9 @@ for (const li of lineItems.filter((x) => Math.abs(x.delta) >= 500)) {
   console.log(`${li.kind.padEnd(10)} ${li.name.padEnd(28)} ${fmtSig(li.delta).padStart(10)}   ${proj}`);
 }
 
-const curRevTotal = [...revCur.values()].reduce((s, v) => s + v, 0);
+const curRevTotal = [...revCur.values()].reduce((s, v) => s + v.effective, 0);
 const curExpTotal = [...expCur.values()].reduce((s, v) => s + v, 0);
-const nxtRevTotal = [...revNxt.values()].reduce((s, v) => s + v, 0);
+const nxtRevTotal = [...revNxt.values()].reduce((s, v) => s + v.effective, 0);
 const nxtExpTotal = [...expNxt.values()].reduce((s, v) => s + v, 0);
 const curNet = curRevTotal - curExpTotal;
 const nxtNet = nxtRevTotal - nxtExpTotal;
