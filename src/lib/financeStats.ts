@@ -696,19 +696,57 @@ function revenueDriverString(
   return { driver: `${type} mix shift`, fromProjection: false };
 }
 
+export type Q2MonthPair = {
+  current: Q2Month;
+  next: Q2Month;
+  label: string;
+  isDefault: boolean;
+};
+
+// Every adjacent month-pair within Q2, in chronological order.
+// Default selection: pair where current = today's actual current
+// month. If today is in the last Q2 month (no real "next" within
+// Q2), default to the last available pair — operator reads it as
+// "what just changed." Same fallback when today is outside Q2.
+export function getQ2MonthPairs(now: Date = new Date()): Q2MonthPair[] {
+  if (Q2_MONTHS.length < 2) return [];
+  const pairs: Q2MonthPair[] = [];
+  for (let i = 0; i < Q2_MONTHS.length - 1; i++) {
+    const cur = Q2_MONTHS[i];
+    const nxt = Q2_MONTHS[i + 1];
+    pairs.push({
+      current: cur,
+      next: nxt,
+      label: `${cur.split(" ")[0]} → ${nxt.split(" ")[0]}`,
+      isDefault: false,
+    });
+  }
+  const todayMonth = getCurrentQ2Month(now);
+  let defaultIdx = -1;
+  if (todayMonth) {
+    defaultIdx = pairs.findIndex((p) => p.current === todayMonth);
+    if (defaultIdx === -1) defaultIdx = pairs.length - 1;
+  } else {
+    defaultIdx = pairs.length - 1;
+  }
+  pairs[defaultIdx].isDefault = true;
+  return pairs;
+}
+
+// Pass an explicit (currentMonth, nextMonth) pair so the UI can
+// toggle between adjacent Q2 pairs without re-deriving from `now`.
+// `now` still drives DPP extrapolation factor and future-month
+// detection. When either side is null, returns empty/no-comparison.
 export function monthOverMonthDeltas(
   data: FinanceData,
+  currentMonth: Q2Month | null,
+  nextMonth: Q2Month | null,
   now: Date = new Date(),
 ): MonthOverMonthDeltas {
-  const currentMonth = getCurrentQ2Month(now);
-  const idx = currentMonth ? Q2_MONTHS.indexOf(currentMonth) : -1;
-  const nextMonth =
-    idx >= 0 && idx < Q2_MONTHS.length - 1 ? Q2_MONTHS[idx + 1] : null;
-
   if (!currentMonth || !nextMonth) {
     return {
       currentMonth,
-      nextMonth: null,
+      nextMonth,
       lineItems: [],
       netDelta: null,
     };

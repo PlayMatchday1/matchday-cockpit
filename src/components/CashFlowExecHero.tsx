@@ -1,12 +1,15 @@
 "use client";
 
-import { useMemo, useState } from "react";
+import { useEffect, useMemo, useState } from "react";
 import { ChevronDown, ChevronRight } from "lucide-react";
 import { useFinanceData } from "@/lib/useFinanceData";
 import {
+  getQ2MonthPairs,
   monthOverMonthDeltas,
   type MoMLineItem,
   type MonthOverMonthDeltas,
+  type Q2Month,
+  type Q2MonthPair,
 } from "@/lib/financeStats";
 
 const PROJECTION_TOOLTIP =
@@ -18,10 +21,30 @@ export default function CashFlowExecHero() {
   const { data, loading, error } = useFinanceData();
   const [expanded, setExpanded] = useState<Set<string>>(new Set());
 
-  const result: MonthOverMonthDeltas | null = useMemo(
-    () => (data ? monthOverMonthDeltas(data) : null),
-    [data],
+  // Adjacent Q2 month pairs + the default-selected one.
+  const pairs = useMemo(() => getQ2MonthPairs(), []);
+  const defaultPair = pairs.find((p) => p.isDefault) ?? pairs[0] ?? null;
+  const [selectedKey, setSelectedKey] = useState<string | null>(
+    defaultPair ? pairKey(defaultPair) : null,
   );
+  // Re-sync if the pair list changes (e.g., underlying data refresh
+  // shifted today's month). Cheap idempotent default-picker.
+  useEffect(() => {
+    if (!selectedKey && defaultPair) {
+      setSelectedKey(pairKey(defaultPair));
+    }
+  }, [selectedKey, defaultPair]);
+  const selectedPair =
+    pairs.find((p) => pairKey(p) === selectedKey) ?? defaultPair;
+
+  const result: MonthOverMonthDeltas | null = useMemo(() => {
+    if (!data) return null;
+    return monthOverMonthDeltas(
+      data,
+      selectedPair?.current ?? null,
+      selectedPair?.next ?? null,
+    );
+  }, [data, selectedPair]);
 
   function toggle(key: string) {
     setExpanded((prev) => {
@@ -76,8 +99,17 @@ export default function CashFlowExecHero() {
   return (
     <Panel>
       <div className="px-6 pt-5 sm:px-7 sm:pt-6">
-        <div className="text-[11px] font-bold uppercase tracking-[0.2em] text-deep-green/55">
-          Looking ahead — {shortMonth(nextMonth)} vs {shortMonth(currentMonth)}
+        <div className="flex flex-wrap items-center justify-between gap-x-4 gap-y-2">
+          <div className="text-[11px] font-bold uppercase tracking-[0.2em] text-deep-green/55">
+            Looking ahead — {shortMonth(nextMonth)} vs {shortMonth(currentMonth)}
+          </div>
+          {pairs.length > 1 && (
+            <PairToggle
+              pairs={pairs}
+              selectedKey={selectedKey}
+              onSelect={(p) => setSelectedKey(pairKey(p))}
+            />
+          )}
         </div>
       </div>
 
@@ -335,6 +367,49 @@ function SkeletonRows() {
 
 function shortMonth(month: string): string {
   return month.split(" ")[0];
+}
+
+function pairKey(p: { current: Q2Month; next: Q2Month }): string {
+  return `${p.current}|${p.next}`;
+}
+
+function PairToggle({
+  pairs,
+  selectedKey,
+  onSelect,
+}: {
+  pairs: Q2MonthPair[];
+  selectedKey: string | null;
+  onSelect: (p: Q2MonthPair) => void;
+}) {
+  return (
+    <div
+      role="tablist"
+      aria-label="Month-pair comparison"
+      className="inline-flex flex-wrap items-center gap-1.5"
+    >
+      {pairs.map((p) => {
+        const k = pairKey(p);
+        const active = selectedKey === k;
+        return (
+          <button
+            key={k}
+            type="button"
+            role="tab"
+            aria-selected={active}
+            onClick={() => onSelect(p)}
+            className={
+              active
+                ? "rounded-full bg-mint px-3 py-1 text-[11px] font-bold text-deep-green transition hover:bg-mint-hover"
+                : "rounded-full border border-cream-line bg-white px-3 py-1 text-[11px] font-bold text-deep-green/65 transition hover:bg-cream-soft hover:text-deep-green"
+            }
+          >
+            {p.label}
+          </button>
+        );
+      })}
+    </div>
+  );
 }
 
 function fmtSig(n: number): string {
