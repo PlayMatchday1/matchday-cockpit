@@ -135,6 +135,75 @@ export function getWeeklySpots(
   }));
 }
 
+// Per-week cancellation stats for `weeksBack` ISO weeks ending with
+// the current in-progress week. Same `(match_start.getTime(), field)`
+// dedup as getCancelRate. Pure composition over already-loaded
+// match_registrations — no new fetch.
+//
+// Pass `city = null` for network-wide totals (used by the /cities
+// exec hero); a city name for per-city breakdown (used by the
+// Cancellations lens sparklines).
+export type WeeklyCancellationEntry = {
+  weekStart: Date;
+  weekLabel: string;
+  scheduled: number; // distinct (field, match_start) keys in this week
+  ran: number;        // scheduled minus canceled
+  canceled: number;
+  rate: number;       // 0–100, percentage of scheduled that were canceled
+  isCurrent: boolean; // true on the last entry (in-progress week)
+};
+
+export function getWeeklyCancellationStats(
+  rows: MatchRow[],
+  city: string | null,
+  weeksBack = 8,
+  now: Date = new Date(),
+): WeeklyCancellationEntry[] {
+  const { currentMonday } = windowBounds(weeksBack, now);
+
+  type Bucket = {
+    weekStart: Date;
+    key: string;
+    matches: Map<string, boolean>; // matchKey → canceled
+  };
+  const buckets: Bucket[] = [];
+  for (let i = weeksBack - 1; i >= 0; i--) {
+    const ws = new Date(
+      currentMonday.getFullYear(),
+      currentMonday.getMonth(),
+      currentMonday.getDate() - 7 * i,
+    );
+    buckets.push({ weekStart: ws, key: weekKey(ws), matches: new Map() });
+  }
+  const byKey = new Map(buckets.map((b) => [b.key, b]));
+
+  for (const row of rows) {
+    if (city !== null && row.city !== city) continue;
+    if (!row.field) continue;
+    const k = weekKey(row.matchStart);
+    const b = byKey.get(k);
+    if (!b) continue;
+    const matchKey = `${row.matchStart.getTime()}|${row.field}`;
+    if (!b.matches.has(matchKey)) b.matches.set(matchKey, row.matchCanceled);
+  }
+
+  return buckets.map((b, i) => {
+    const scheduled = b.matches.size;
+    let canceled = 0;
+    for (const c of b.matches.values()) if (c) canceled++;
+    const ran = scheduled - canceled;
+    return {
+      weekStart: b.weekStart,
+      weekLabel: weekLabel(b.weekStart),
+      scheduled,
+      ran,
+      canceled,
+      rate: scheduled === 0 ? 0 : (canceled / scheduled) * 100,
+      isCurrent: i === buckets.length - 1,
+    };
+  });
+}
+
 // Cancel rate, scoped to the current calendar month (MTD): % of
 // distinct scheduled matches that didn't run. Match identity =
 // (match_start + field), de-duped across the many registration rows

@@ -3,12 +3,13 @@
 import { useState } from "react";
 import Link from "next/link";
 import CitiesLegend from "@/components/CitiesLegend";
+import CitiesExecHero from "@/components/CitiesExecHero";
+import CitiesLensNav, { type CityLens } from "@/components/CitiesLensNav";
 import { CityHealthPill } from "@/components/StatusPill";
 import MiniBarSparkline from "@/components/MiniBarSparkline";
 import TotalsBarChart from "@/components/TotalsBarChart";
 import PagePermissionGuard from "@/components/PagePermissionGuard";
 import { useMatchData } from "@/lib/useMatchData";
-import { useReviewData } from "@/lib/useReviewData";
 import {
   getActiveVenues,
   getCancelRate,
@@ -17,16 +18,7 @@ import {
   type CityStatus,
   type WeeklySpotsEntry,
 } from "@/lib/cityStats";
-import { getActiveMonthWindow } from "@/lib/reviewStats";
 import { CITIES, citySlug } from "@/lib/types";
-import CancelPatterns from "@/components/CancelPatterns";
-import ManagerPodium from "@/components/ManagerPodium";
-import MembershipActiveChart from "@/components/MembershipActiveChart";
-import MembershipByCityTable from "@/components/MembershipByCityTable";
-import MembershipSnapshot from "@/components/MembershipSnapshot";
-import MembershipTrendChart from "@/components/MembershipTrendChart";
-import Reviews8WeekCard from "@/components/Reviews8WeekCard";
-import ReviewsCommentsTable from "@/components/ReviewsCommentsTable";
 
 export default function CitiesIndexPage() {
   return (
@@ -39,16 +31,41 @@ export default function CitiesIndexPage() {
 type WeekScope = "current" | "last";
 
 function CitiesIndexContent() {
+  const [lens, setLens] = useState<CityLens>("overview");
+
+  return (
+    <>
+      <div className="mb-6">
+        <h1 className="text-3xl font-extrabold tracking-tight text-deep-green">
+          Cities
+        </h1>
+        <p className="mt-1 text-sm text-deep-green/70">
+          Per-market venues, weekly matches, and goals.
+        </p>
+      </div>
+
+      <div className="mb-8">
+        <CitiesExecHero />
+      </div>
+
+      <CitiesLensNav value={lens} onChange={setLens} />
+
+      {lens === "overview" && <OverviewLens />}
+      {lens === "membership" && <LensPlaceholder lens="Membership" phase="B" />}
+      {lens === "cancellations" && (
+        <LensPlaceholder lens="Cancellations" phase="C" />
+      )}
+      {lens === "reviews" && <LensPlaceholder lens="Reviews" phase="C" />}
+    </>
+  );
+}
+
+function OverviewLens() {
   const { rows, meta, loading } = useMatchData();
-  const { rows: reviewRows, meta: reviewMeta, loading: reviewLoading } =
-    useReviewData();
-  const reviewWindow = getActiveMonthWindow(reviewRows);
   const [weekScope, setWeekScope] = useState<WeekScope>("current");
 
   const totals = getWeeklySpots(rows, null, 8);
   const totalSpots = totals.reduce((s, w) => s + w.spots, 0);
-  // Selected week index: last entry is the in-progress current week,
-  // second-to-last is the most recently completed week.
   const selectedIdx =
     weekScope === "current" ? totals.length - 1 : totals.length - 2;
   const safeSelectedIdx = Math.max(0, selectedIdx);
@@ -80,146 +97,85 @@ function CitiesIndexContent() {
     (c) => c.selectedWeek.matches > 0,
   ).length;
 
+  if (loading) {
+    return (
+      <div className="rounded-2xl border-[1.5px] border-cream-line bg-white p-8 text-sm text-deep-green/60 shadow-md shadow-deep-green/10">
+        Loading match data…
+      </div>
+    );
+  }
+  if (!meta) {
+    return (
+      <div className="rounded-2xl border-[1.5px] border-cream-line bg-white p-8 shadow-md shadow-deep-green/10">
+        <div className="text-base font-bold text-deep-green">
+          No data uploaded yet.
+        </div>
+        <div className="mt-1 text-sm text-deep-green/60">
+          Upload a CSV in{" "}
+          <Link
+            href="/data"
+            className="font-bold text-mint-hover hover:underline"
+          >
+            Data →
+          </Link>
+        </div>
+      </div>
+    );
+  }
+
   return (
     <>
-      <div className="mb-6">
-        <h1 className="text-3xl font-extrabold tracking-tight text-deep-green">
-          Cities
-        </h1>
-        <p className="mt-1 text-sm text-deep-green/70">
-          Per-market venues, weekly matches, and goals.
-        </p>
-      </div>
-
-      {loading ? (
-        <div className="rounded-2xl border-[1.5px] border-cream-line bg-white p-8 text-sm text-deep-green/60 shadow-md shadow-deep-green/10">
-          Loading match data…
+      <section className="mb-8 rounded-2xl border-[1.5px] border-cream-line bg-white p-6 shadow-md shadow-deep-green/10 sm:p-7">
+        <div className="flex flex-wrap items-start justify-between gap-3">
+          <div className="text-[11px] font-bold uppercase tracking-[0.25em] text-deep-green/60">
+            MatchDay total · last 8 weeks
+          </div>
+          <WeekScopeToggle value={weekScope} onChange={setWeekScope} />
         </div>
-      ) : !meta ? (
-        <div className="rounded-2xl border-[1.5px] border-cream-line bg-white p-8 shadow-md shadow-deep-green/10">
-          <div className="text-base font-bold text-deep-green">
-            No data uploaded yet.
-          </div>
-          <div className="mt-1 text-sm text-deep-green/60">
-            Upload a CSV in{" "}
-            <Link
-              href="/data"
-              className="font-bold text-mint-hover hover:underline"
-            >
-              Data →
-            </Link>
-          </div>
+        <div className="mt-3 flex flex-wrap items-baseline gap-x-3 gap-y-1">
+          <span className="font-display text-5xl uppercase leading-none tracking-tight text-deep-green md:text-6xl">
+            {selectedTotal.matches}
+          </span>
+          <span className="text-sm font-medium text-deep-green/60">
+            {selectedLabel}
+          </span>
         </div>
-      ) : (
-        <>
-          <section className="mb-8 rounded-2xl border-[1.5px] border-cream-line bg-white p-6 shadow-md shadow-deep-green/10 sm:p-7">
-            <div className="flex flex-wrap items-start justify-between gap-3">
-              <div className="text-[11px] font-bold uppercase tracking-[0.25em] text-deep-green/60">
-                MatchDay total · last 8 weeks
-              </div>
-              <WeekScopeToggle value={weekScope} onChange={setWeekScope} />
-            </div>
-            <div className="mt-3 flex flex-wrap items-baseline gap-x-3 gap-y-1">
-              <span className="font-display text-5xl uppercase leading-none tracking-tight text-deep-green md:text-6xl">
-                {selectedTotal.matches}
-              </span>
-              <span className="text-sm font-medium text-deep-green/60">
-                {selectedLabel}
-              </span>
-            </div>
-            <div className="mt-1 text-sm text-deep-green/70">
-              {totalSpots.toLocaleString()} spots booked ·{" "}
-              {totalActiveVenues} venues active across {activeCities} cities
-            </div>
-            <div className="mt-6">
-              <TotalsBarChart weeks={totals} highlightIndex={safeSelectedIdx} />
-            </div>
-          </section>
-
-          <div className="grid grid-cols-1 gap-4 sm:grid-cols-2 lg:grid-cols-3">
-            {cityData.map((c) => (
-              <CityCard key={c.city} {...c} />
-            ))}
-          </div>
-
-          <div className="mt-8 text-xs text-deep-green/60">
-            Last data refresh: {relativeFrom(meta.uploadedAt)} ·{" "}
-            <span className="text-deep-green/80">{meta.filename}</span> ·{" "}
-            {meta.rowCount.toLocaleString()} rows ·{" "}
-            <Link
-              href="/data"
-              className="font-bold text-mint-hover hover:underline"
-            >
-              Update →
-            </Link>
-          </div>
-        </>
-      )}
-
-      <div className="mt-12">
-        <CancelPatterns />
-      </div>
-
-      <section className="mt-12">
-        <div className="mb-6">
-          <h2 className="text-2xl font-bold tracking-tight text-deep-green">
-            Membership
-          </h2>
-          <p className="mt-1 text-sm text-deep-green/70">
-            Active members, growth, and per-city breakdown
-          </p>
+        <div className="mt-1 text-sm text-deep-green/70">
+          {totalSpots.toLocaleString()} spots booked ·{" "}
+          {totalActiveVenues} venues active across {activeCities} cities
         </div>
-        <div className="space-y-6">
-          <MembershipSnapshot />
-          <MembershipActiveChart />
-          <MembershipTrendChart />
-          <MembershipByCityTable />
+        <div className="mt-6">
+          <TotalsBarChart weeks={totals} highlightIndex={safeSelectedIdx} />
         </div>
       </section>
 
-      <section className="mt-12">
-        <div className="mb-6">
-          <h2 className="text-2xl font-bold tracking-tight text-deep-green">
-            Reviews
-          </h2>
-          {reviewMeta ? (
-            <p className="mt-1 text-sm text-deep-green/70">
-              Manager performance · {reviewWindow.monthName} {reviewWindow.year}
-            </p>
-          ) : (
-            <p className="mt-1 text-sm text-deep-green/70">
-              Manager performance
-            </p>
-          )}
-        </div>
-        {reviewLoading ? (
-          <div className="rounded-2xl border-[1.5px] border-cream-line bg-white p-8 text-sm text-deep-green/60 shadow-md shadow-deep-green/10">
-            Loading review data…
-          </div>
-        ) : !reviewMeta ? (
-          <div className="rounded-2xl border-[1.5px] border-cream-line bg-white p-8 shadow-md shadow-deep-green/10">
-            <div className="text-base font-bold text-deep-green">
-              No review data yet.
-            </div>
-            <div className="mt-1 text-sm text-deep-green/60">
-              Upload reviews CSV in{" "}
-              <Link
-                href="/data"
-                className="font-bold text-mint-hover hover:underline"
-              >
-                Data →
-              </Link>
-            </div>
-          </div>
-        ) : (
-          <div className="space-y-6">
-            <Reviews8WeekCard rows={reviewRows} />
-            <ManagerPodium rows={reviewRows} />
-            <ReviewsCommentsTable rows={reviewRows} />
-          </div>
-        )}
-      </section>
+      <div className="grid grid-cols-1 gap-4 sm:grid-cols-2 lg:grid-cols-3">
+        {cityData.map((c) => (
+          <CityCard key={c.city} {...c} />
+        ))}
+      </div>
+
+      <div className="mt-8 text-xs text-deep-green/60">
+        Last data refresh: {relativeFrom(meta.uploadedAt)} ·{" "}
+        <span className="text-deep-green/80">{meta.filename}</span> ·{" "}
+        {meta.rowCount.toLocaleString()} rows ·{" "}
+        <Link
+          href="/data"
+          className="font-bold text-mint-hover hover:underline"
+        >
+          Update →
+        </Link>
+      </div>
     </>
+  );
+}
+
+function LensPlaceholder({ lens, phase }: { lens: string; phase: string }) {
+  return (
+    <div className="rounded-2xl border-2 border-dashed border-cream-line bg-cream-soft/40 p-8 text-center text-sm text-deep-green/55">
+      <div className="text-base font-bold text-deep-green/70">{lens} lens</div>
+      <div className="mt-1">Wired in Phase {phase}.</div>
+    </div>
   );
 }
 
