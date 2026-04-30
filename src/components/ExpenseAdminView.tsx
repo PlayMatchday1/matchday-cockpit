@@ -114,7 +114,11 @@ export default function ExpenseAdminView() {
   }, [allRows]);
 
   const filtered = useMemo(() => {
-    let rows = allRows.slice();
+    // Hide Match Manager Pay rows from this view at render time —
+    // they're managed on /admin/finance/manager-pay. Display-layer
+    // filter only; fin_expenses rows still exist and every other
+    // surface (city P&L cards, Cash Flow, Q2 hero) reads them.
+    let rows = allRows.filter((r) => r.category !== "Match Manager Pay");
     if (monthFilter === "RANGE") {
       if (rangeFrom) rows = rows.filter((r) => r.date && r.date >= rangeFrom);
       if (rangeTo) rows = rows.filter((r) => r.date && r.date <= rangeTo);
@@ -277,6 +281,16 @@ export default function ExpenseAdminView() {
           <p className="mt-2 text-sm text-deep-green/65">
             Inspect every fin_expenses row. Imported rows are read-only —
             re-upload via Q2 Import to change them.
+          </p>
+          <p className="mt-1 text-xs text-deep-green/55">
+            Match Manager Pay is managed separately on the{" "}
+            <Link
+              href="/admin/finance/manager-pay"
+              className="font-bold text-mint-hover hover:underline"
+            >
+              Manager Pay page
+            </Link>
+            .
           </p>
         </div>
         <button
