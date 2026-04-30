@@ -17,7 +17,7 @@ const SUBPAGE_LINKS: { label: string; href: string }[] = [
   { label: "Manager Pay", href: "/admin/finance/manager-pay" },
   { label: "Field Ranking", href: "/admin/finance/fields" },
   { label: "Cash Flow", href: "/admin/finance/cash-flow" },
-  { label: "Check-Ins", href: "/admin/finance/check-ins" },
+  { label: "City Manager Check-Ins", href: "/admin/finance/check-ins" },
 ];
 
 export default function FinanceAnchorNav() {
