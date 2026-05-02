@@ -1,7 +1,7 @@
 "use client";
 
 import { useState } from "react";
-import CashFlowExecHero from "@/components/CashFlowExecHero";
+import ExpenseForecastPanel from "@/components/ExpenseForecastPanel";
 import CashFlowLensNav, { type CashFlowLens } from "@/components/CashFlowLensNav";
 import FinanceInsightsGrid from "@/components/FinanceInsightsGrid";
 import FinanceMonthlyPL from "@/components/FinanceMonthlyPL";
@@ -18,7 +18,7 @@ export default function CashFlowTabContent() {
   return (
     <>
       <div className="mb-8">
-        <CashFlowExecHero />
+        <ExpenseForecastPanel />
       </div>
 
       <CashFlowLensNav value={lens} onChange={setLens} />

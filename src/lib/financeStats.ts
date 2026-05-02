@@ -987,6 +987,136 @@ export function monthOverMonthDeltas(
   };
 }
 
+// =====================================================================
+// Expense-only forecast (replaces the mixed-revenue Looking Ahead panel)
+// =====================================================================
+
+// Categories with absolute month-over-month change ≥ this threshold
+// surface in the "Movers" lane; the rest collapse into Static.
+export const EXPENSE_FORECAST_MOVER_THRESHOLD = 500;
+
+export type ExpenseForecastConfidence = "formula" | "mixed" | "manual";
+
+export type ExpenseForecastRow = {
+  category: string;
+  fromAmount: number;
+  toAmount: number;
+  delta: number;
+  // One-line description rendered under the category name on the
+  // panel. Tells the reader at a glance how trustworthy the
+  // projection is without needing tooltips.
+  sourceMethod: string;
+  // Bucket used for grouping/coloring; matches the diagnostic's
+  // three reliability lanes.
+  sourceConfidence: ExpenseForecastConfidence;
+  // Per-source breakdown when the category supports drill-down. In
+  // the redesigned panel, only Field Costs surfaces this — other
+  // categories are rendered without a chevron.
+  children?: Array<{ name: string; delta: number }>;
+};
+
+export type ExpenseForecast = {
+  fromMonth: Q2Month;
+  toMonth: Q2Month;
+  rows: ExpenseForecastRow[]; // all categories, sorted by |delta| desc
+  totals: {
+    from: number;
+    to: number;
+    delta: number;
+  };
+};
+
+// Source/method one-liner for each category. Hardcoded list mirrors
+// the categories surfaced by expensesByCategory: 4 synthetics +
+// whatever's in fin_expenses. Default fallback covers any future
+// ad-hoc category an admin adds.
+function classifyExpenseCategory(category: string): {
+  sourceMethod: string;
+  sourceConfidence: ExpenseForecastConfidence;
+} {
+  if (category === "Field Costs") {
+    return {
+      sourceMethod: "Formula: schedule × per-match rate (override-aware)",
+      sourceConfidence: "formula",
+    };
+  }
+  if (category === "Match Manager Pay") {
+    return {
+      sourceMethod: "Mixed: actuals + scheduled future weeks",
+      sourceConfidence: "mixed",
+    };
+  }
+  if (
+    category === "City Manager" ||
+    category === "Marketing" ||
+    category === "Equipment"
+  ) {
+    return {
+      sourceMethod: "Manual entry — recurring monthly per city",
+      sourceConfidence: "manual",
+    };
+  }
+  return {
+    sourceMethod: "Manual entry",
+    sourceConfidence: "manual",
+  };
+}
+
+export function expenseForecastDeltas(
+  data: FinanceData,
+  fromMonth: Q2Month,
+  toMonth: Q2Month,
+  now: Date = new Date(),
+): ExpenseForecast {
+  const fromCats = expensesByCategory(data, fromMonth, now);
+  const toCats = expensesByCategory(data, toMonth, now);
+  const allCats = new Set<string>([...fromCats.keys(), ...toCats.keys()]);
+  const rows: ExpenseForecastRow[] = [];
+  for (const category of allCats) {
+    const fromAmount = fromCats.get(category) ?? 0;
+    const toAmount = toCats.get(category) ?? 0;
+    if (Math.abs(fromAmount) < 0.5 && Math.abs(toAmount) < 0.5) continue;
+    const delta = toAmount - fromAmount;
+    const meta = classifyExpenseCategory(category);
+    const row: ExpenseForecastRow = {
+      category,
+      fromAmount,
+      toAmount,
+      delta,
+      sourceMethod: meta.sourceMethod,
+      sourceConfidence: meta.sourceConfidence,
+    };
+    // Only Field Costs ships a per-source drill-down in the new
+    // panel. expenseCategoryChildren returns per-venue deltas with
+    // a $50 noise floor + "Other (N cities)" rollup.
+    if (category === "Field Costs") {
+      const children = expenseCategoryChildren(
+        data,
+        category,
+        fromMonth,
+        toMonth,
+      );
+      if (children) row.children = children;
+    }
+    rows.push(row);
+  }
+  rows.sort((a, b) => Math.abs(b.delta) - Math.abs(a.delta));
+
+  const fromTotal = [...fromCats.values()].reduce((s, v) => s + v, 0);
+  const toTotal = [...toCats.values()].reduce((s, v) => s + v, 0);
+
+  return {
+    fromMonth,
+    toMonth,
+    rows,
+    totals: {
+      from: fromTotal,
+      to: toTotal,
+      delta: toTotal - fromTotal,
+    },
+  };
+}
+
 function isoDateLocal(d: Date): string {
   const y = d.getFullYear();
   const mo = String(d.getMonth() + 1).padStart(2, "0");
