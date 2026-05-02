@@ -101,20 +101,114 @@ export function makeAnonServerClient(): SupabaseClient {
   });
 }
 
+// Full partner_dashboards configuration, returned by fetchPartnerBySlug.
+// All payment fields are optional — only revenueSharePct has a default
+// (50%). paymentStartDate=null means the payment-tracking feature is
+// off for this partner; UI hides the Weekly Payments section entirely.
+export type PartnerConfig = {
+  id: string; // uuid
+  venueId: number;
+  partnerName: string;
+  revenueSharePct: number;
+  paymentStartDate: string | null; // YYYY-MM-DD
+  paymentDayOfWeek: number; // 0=Sun..6=Sat (display label only)
+};
+
 // Fetch the partner_dashboards row by slug. Returns null on miss or
 // when disabled — caller renders 404 either way (don't leak which).
+//
+// Resilient to the Phase C schema not yet being applied: if the new
+// payment_* columns don't exist, fall back to the legacy shape with
+// defaults. This keeps the partner-facing URL working through the
+// gap between deploying the code and applying migration 0003.
 export async function fetchPartnerBySlug(
   supabase: SupabaseClient,
   slug: string,
-): Promise<{ venueId: number; partnerName: string } | null> {
-  const { data, error } = await supabase
+): Promise<PartnerConfig | null> {
+  // eslint-disable-next-line @typescript-eslint/no-explicit-any
+  let data: any = null;
+  // eslint-disable-next-line @typescript-eslint/no-explicit-any
+  let error: any = null;
+  const primary = await supabase
     .from("partner_dashboards")
-    .select("venue_id, partner_name, enabled")
+    .select(
+      "id, venue_id, partner_name, enabled, revenue_share_pct, payment_start_date, payment_day_of_week",
+    )
     .eq("slug", slug)
     .maybeSingle();
+  data = primary.data;
+  error = primary.error;
+  if (error && error.code === "42703") {
+    // undefined_column → migration 0003 not yet applied. Re-query
+    // with the legacy column set so the existing dashboard keeps
+    // rendering. Payment fields default to "off" until the schema
+    // catches up.
+    const fallback = await supabase
+      .from("partner_dashboards")
+      .select("id, venue_id, partner_name, enabled")
+      .eq("slug", slug)
+      .maybeSingle();
+    data = fallback.data;
+    error = fallback.error;
+  }
   if (error || !data) return null;
   if (!data.enabled) return null;
-  return { venueId: data.venue_id, partnerName: data.partner_name };
+  return {
+    id: data.id as string,
+    venueId: data.venue_id as number,
+    partnerName: data.partner_name as string,
+    revenueSharePct: Number(data.revenue_share_pct ?? 50),
+    paymentStartDate: data.payment_start_date ?? null,
+    paymentDayOfWeek: Number(data.payment_day_of_week ?? 0),
+  };
+}
+
+// Persisted partner_weekly_payments row (verbatim from the table).
+// computeWeeklyPayments LEFT JOINs computed amounts against these to
+// produce the merged display rows.
+export type PartnerWeeklyPaymentRecord = {
+  id: string;
+  partner_dashboard_id: string;
+  week_start_date: string; // YYYY-MM-DD
+  calculated_amount: number;
+  status: "pending" | "paid" | "disputed";
+  paid_at: string | null;
+  paid_notes: string | null;
+  dispute_note: string | null;
+  disputed_at: string | null;
+};
+
+// Fetch all persisted weekly payment records for one partner_dashboard.
+// Returns [] when the table doesn't exist yet (pre-migration), so the
+// partner page still renders.
+export async function fetchPartnerWeeklyPayments(
+  supabase: SupabaseClient,
+  partnerDashboardId: string,
+): Promise<PartnerWeeklyPaymentRecord[]> {
+  const { data, error } = await supabase
+    .from("partner_weekly_payments")
+    .select(
+      "id, partner_dashboard_id, week_start_date, calculated_amount, status, paid_at, paid_notes, dispute_note, disputed_at",
+    )
+    .eq("partner_dashboard_id", partnerDashboardId)
+    .order("week_start_date", { ascending: true });
+  if (error) {
+    // 42P01 = undefined_table, PGRST205 = table not in schema cache
+    // (PostgREST equivalent). Both mean the migration isn't applied.
+    if (error.code === "42P01" || error.code === "PGRST205") return [];
+    throw new Error(`Weekly payments fetch failed: ${error.message}`);
+  }
+  return (data ?? []).map((r) => ({
+    id: r.id,
+    partner_dashboard_id: r.partner_dashboard_id,
+    week_start_date: String(r.week_start_date).slice(0, 10),
+    calculated_amount: Number(r.calculated_amount ?? 0),
+    status: r.status as "pending" | "paid" | "disputed",
+    paid_at: r.paid_at ?? null,
+    paid_notes: r.paid_notes ?? null,
+    dispute_note: r.dispute_note ?? null,
+    disputed_at: r.disputed_at ?? null,
+  }));
 }
 
 // Fetch venue + match registrations + non-match revenue rows. All
@@ -506,4 +600,185 @@ export function computePartnerStats(
     allStarts[allStarts.length - 1]?.slice(0, 10) ?? null;
 
   return { totals, weeks, byMonth, lastMatchDate, earliestMatchDate };
+}
+
+// =====================================================================
+// Phase C — weekly payment tracking
+// =====================================================================
+//
+// First-week rule (single source of truth — the admin "Start date"
+// tooltip and the partner-facing empty-state copy both reference this):
+//
+//   The first qualifying week is the first Sunday on or after the
+//   partner's payment_start_date. Weeks whose Sunday falls before
+//   payment_start_date are excluded entirely. This avoids partial-week
+//   math — every counted week is a complete Sun→Sat window.
+//
+// Past + current weeks only:
+//
+//   For each Sunday `S` from firstQualifyingSunday forward, include S
+//   only if S ≤ today (UTC date). The current week's row appears even
+//   if its Saturday is in the future — qualifying revenue accrues in
+//   real time. Future weeks not yet started don't appear.
+//
+// Qualifying revenue:
+//
+//   - DPP: sum of match_price_paid from match_registrations rows where
+//     payment_type='DAILY PAID' AND match_start ∈ [Sun, Sat] AND not
+//     staff AND not match_canceled. Mirrors the existing `dpRev` calc
+//     in computePartnerStats — same source rows, same filter.
+//   - Private Rental: sum of fin_revenue.gross where type='Private
+//     Rental' AND date ∈ [Sun, Sat]. Note: fin_revenue extras already
+//     exclude DPP/Membership at the fetch layer; here we tighten
+//     further to *just* Private Rental (Strike etc. don't count toward
+//     payment, only toward total revenue display).
+//
+// Owed = qualifyingRevenue × revenue_share_pct / 100. Persisted rows
+// (partner_weekly_payments) override the displayed status/paid_at —
+// computeWeeklyPayments does the LEFT-OUTER merge here.
+
+export type PartnerWeeklyPayment = {
+  weekStartDate: string; // YYYY-MM-DD (Sunday)
+  weekEndDate: string; // YYYY-MM-DD (Saturday)
+  qualifyingRevenue: number;
+  owedAmount: number; // qualifyingRevenue × pct/100, computed live
+  status: "pending" | "paid" | "disputed";
+  // When a partner_weekly_payments row exists for this week, these
+  // mirror the persisted row. When no row exists, status='pending'
+  // and the rest are null.
+  recordId: string | null;
+  calculatedAmount: number | null; // snapshot at time of marking paid
+  paidAt: string | null;
+  paidNotes: string | null;
+  disputeNote: string | null;
+  disputedAt: string | null;
+};
+
+export type PartnerPaymentInfo = {
+  enabled: boolean; // payment_start_date is not null
+  revenueSharePct: number;
+  paymentStartDate: string | null;
+  paymentDayOfWeek: number;
+  // YYYY-MM-DD of the first Sunday on or after payment_start_date.
+  // Null when paymentStartDate is null.
+  firstQualifyingSunday: string | null;
+  weeklyPayments: PartnerWeeklyPayment[];
+};
+
+// Today as a UTC YYYY-MM-DD string. Uses UTC to match the Sunday-
+// anchor logic, which also operates in UTC to avoid timezone drift
+// across date boundaries.
+function todayUtcYmd(now: Date = new Date()): string {
+  return now.toISOString().slice(0, 10);
+}
+
+// Ceil a YYYY-MM-DD date to the next Sunday (or itself if already
+// Sunday). Returns YYYY-MM-DD.
+function ceilToSunday(ymd: string): string {
+  const d = new Date(`${ymd}T00:00:00Z`);
+  const dow = d.getUTCDay(); // 0=Sun..6=Sat
+  if (dow === 0) return ymd;
+  const daysToAdd = 7 - dow;
+  d.setUTCDate(d.getUTCDate() + daysToAdd);
+  return d.toISOString().slice(0, 10);
+}
+
+// Add N days to a YYYY-MM-DD date (UTC). Returns YYYY-MM-DD.
+function addDays(ymd: string, days: number): string {
+  const d = new Date(`${ymd}T00:00:00Z`);
+  d.setUTCDate(d.getUTCDate() + days);
+  return d.toISOString().slice(0, 10);
+}
+
+export function computeWeeklyPayments(
+  matchRows: PartnerRegRow[],
+  finRevRows: PartnerExtraRevRow[],
+  config: {
+    revenueSharePct: number;
+    paymentStartDate: string | null;
+    paymentDayOfWeek: number;
+  },
+  records: PartnerWeeklyPaymentRecord[] = [],
+  now: Date = new Date(),
+): PartnerPaymentInfo {
+  if (!config.paymentStartDate) {
+    return {
+      enabled: false,
+      revenueSharePct: config.revenueSharePct,
+      paymentStartDate: null,
+      paymentDayOfWeek: config.paymentDayOfWeek,
+      firstQualifyingSunday: null,
+      weeklyPayments: [],
+    };
+  }
+
+  const firstSunday = ceilToSunday(config.paymentStartDate);
+  const today = todayUtcYmd(now);
+
+  // Filter source rows once: drop staff + match_canceled (mirrors the
+  // existing pacAll → pac transform in computePartnerStats).
+  const matchActive = matchRows.filter(
+    (r) =>
+      !(r.email && r.email.toLowerCase().includes(STAFF_EMAIL_DOMAIN)) &&
+      !r.match_canceled,
+  );
+
+  // Index persisted records by week_start_date for O(1) lookup.
+  const recordByWeek = new Map<string, PartnerWeeklyPaymentRecord>();
+  for (const rec of records) recordByWeek.set(rec.week_start_date, rec);
+
+  const weeks: PartnerWeeklyPayment[] = [];
+  // Iterate Sundays from firstSunday up to and including current Sunday.
+  // Past + current only: stop the first time the cursor exceeds today.
+  let cursor = firstSunday;
+  while (cursor <= today) {
+    const weekEnd = addDays(cursor, 6);
+
+    // DPP from match_registrations (date in [cursor, weekEnd] inclusive).
+    let dpRev = 0;
+    for (const r of matchActive) {
+      if (r.payment_type !== "DAILY PAID") continue;
+      const matchYmd = r.match_start.slice(0, 10);
+      if (matchYmd < cursor || matchYmd > weekEnd) continue;
+      dpRev += Number(r.match_price_paid ?? 0) || 0;
+    }
+
+    // Private Rental from fin_revenue.
+    let prRev = 0;
+    for (const e of finRevRows) {
+      if (e.type !== "Private Rental") continue;
+      if (!e.date || e.date < cursor || e.date > weekEnd) continue;
+      prRev += Number(e.gross ?? 0) || 0;
+    }
+
+    const qualifyingRevenue = dpRev + prRev;
+    const owedAmount =
+      Math.round(qualifyingRevenue * config.revenueSharePct) / 100;
+
+    const rec = recordByWeek.get(cursor);
+    weeks.push({
+      weekStartDate: cursor,
+      weekEndDate: weekEnd,
+      qualifyingRevenue,
+      owedAmount,
+      status: rec?.status ?? "pending",
+      recordId: rec?.id ?? null,
+      calculatedAmount: rec?.calculated_amount ?? null,
+      paidAt: rec?.paid_at ?? null,
+      paidNotes: rec?.paid_notes ?? null,
+      disputeNote: rec?.dispute_note ?? null,
+      disputedAt: rec?.disputed_at ?? null,
+    });
+
+    cursor = addDays(cursor, 7);
+  }
+
+  return {
+    enabled: true,
+    revenueSharePct: config.revenueSharePct,
+    paymentStartDate: config.paymentStartDate,
+    paymentDayOfWeek: config.paymentDayOfWeek,
+    firstQualifyingSunday: firstSunday,
+    weeklyPayments: weeks,
+  };
 }

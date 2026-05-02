@@ -1,8 +1,10 @@
 import { notFound } from "next/navigation";
 import {
   computePartnerStats,
+  computeWeeklyPayments,
   fetchPartnerBySlug,
   fetchPartnerRows,
+  fetchPartnerWeeklyPayments,
   makeAnonServerClient,
 } from "@/lib/partnerStats";
 import PartnerDashboard from "./PartnerDashboard";
@@ -25,9 +27,25 @@ export default async function PartnerPage({
   if (!partner) notFound(); // 404 — generic, no leak about why
 
   const { rows, extra } = await fetchPartnerRows(supabase, partner.venueId);
+  const records = await fetchPartnerWeeklyPayments(supabase, partner.id);
   const stats = computePartnerStats(rows, extra);
+  const payment = computeWeeklyPayments(
+    rows,
+    extra,
+    {
+      revenueSharePct: partner.revenueSharePct,
+      paymentStartDate: partner.paymentStartDate,
+      paymentDayOfWeek: partner.paymentDayOfWeek,
+    },
+    records,
+  );
 
   return (
-    <PartnerDashboard partnerName={partner.partnerName} stats={stats} />
+    <PartnerDashboard
+      partnerDashboardId={partner.id}
+      partnerName={partner.partnerName}
+      stats={stats}
+      payment={payment}
+    />
   );
 }

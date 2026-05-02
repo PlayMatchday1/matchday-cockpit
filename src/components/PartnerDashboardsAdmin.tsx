@@ -1,12 +1,14 @@
 "use client";
 
 import { useEffect, useMemo, useState } from "react";
+import Link from "next/link";
 import {
   Check,
   Copy,
   ExternalLink,
   Plus,
   RefreshCw,
+  Settings,
   Trash2,
 } from "lucide-react";
 import ConfirmDeleteDialog from "@/components/ConfirmDeleteDialog";
@@ -32,6 +34,14 @@ type PartnerRow = {
   partner_name: string;
   enabled: boolean;
   created_at: string;
+  payment_start_date: string | null;
+  revenue_share_pct: number;
+};
+
+type PaymentCounts = {
+  pending: number;
+  paid: number;
+  disputed: number;
 };
 
 const FMT_DATE = new Intl.DateTimeFormat("en-US", {
@@ -47,6 +57,9 @@ function partnerUrl(slug: string): string {
 export default function PartnerDashboardsAdmin() {
   const [rows, setRows] = useState<PartnerRow[]>([]);
   const [venues, setVenues] = useState<Venue[]>([]);
+  const [paymentCounts, setPaymentCounts] = useState<
+    Map<string, PaymentCounts>
+  >(new Map());
   const [loading, setLoading] = useState(true);
   const [error, setError] = useState<string | null>(null);
   const [addOpen, setAddOpen] = useState(false);
@@ -58,21 +71,71 @@ export default function PartnerDashboardsAdmin() {
     setLoading(true);
     setError(null);
     try {
-      const [{ data: pd, error: pdErr }, { data: vn, error: vnErr }] =
-        await Promise.all([
-          supabase
-            .from("partner_dashboards")
-            .select("id, slug, venue_id, partner_name, enabled, created_at")
-            .order("created_at", { ascending: false }),
-          supabase
-            .from("fin_venues")
-            .select("id, venue_name, city")
-            .order("venue_name"),
-        ]);
-      if (pdErr) throw new Error(pdErr.message);
+      // partner_dashboards: try the Phase C shape first; fall back to
+      // the legacy column set if migration 0003 hasn't been applied
+      // yet. Same defensive pattern as fetchPartnerBySlug.
+      let pdData: PartnerRow[] = [];
+      const pdResp = await supabase
+        .from("partner_dashboards")
+        .select(
+          "id, slug, venue_id, partner_name, enabled, created_at, payment_start_date, revenue_share_pct",
+        )
+        .order("created_at", { ascending: false });
+      if (pdResp.error && pdResp.error.code === "42703") {
+        const legacy = await supabase
+          .from("partner_dashboards")
+          .select("id, slug, venue_id, partner_name, enabled, created_at")
+          .order("created_at", { ascending: false });
+        if (legacy.error) throw new Error(legacy.error.message);
+        pdData = ((legacy.data ?? []) as Array<Omit<PartnerRow, "payment_start_date" | "revenue_share_pct">>).map((r) => ({
+          ...r,
+          payment_start_date: null,
+          revenue_share_pct: 50,
+        }));
+      } else if (pdResp.error) {
+        throw new Error(pdResp.error.message);
+      } else {
+        pdData = (pdResp.data ?? []) as PartnerRow[];
+      }
+      setRows(pdData);
+
+      const { data: vn, error: vnErr } = await supabase
+        .from("fin_venues")
+        .select("id, venue_name, city")
+        .order("venue_name");
       if (vnErr) throw new Error(vnErr.message);
-      setRows((pd ?? []) as PartnerRow[]);
       setVenues((vn ?? []) as Venue[]);
+
+      // partner_weekly_payments: empty if table doesn't exist.
+      const counts = new Map<string, PaymentCounts>();
+      const wpResp = await supabase
+        .from("partner_weekly_payments")
+        .select("partner_dashboard_id, status");
+      if (wpResp.error) {
+        // 42P01 / PGRST205 = table missing — leave counts empty.
+        if (
+          wpResp.error.code !== "42P01" &&
+          wpResp.error.code !== "PGRST205"
+        ) {
+          throw new Error(wpResp.error.message);
+        }
+      } else {
+        for (const r of (wpResp.data ?? []) as Array<{
+          partner_dashboard_id: string;
+          status: string;
+        }>) {
+          const c = counts.get(r.partner_dashboard_id) ?? {
+            pending: 0,
+            paid: 0,
+            disputed: 0,
+          };
+          if (r.status === "paid") c.paid += 1;
+          else if (r.status === "disputed") c.disputed += 1;
+          else c.pending += 1;
+          counts.set(r.partner_dashboard_id, c);
+        }
+      }
+      setPaymentCounts(counts);
     } catch (e) {
       setError(e instanceof Error ? e.message : String(e));
     } finally {
@@ -224,7 +287,11 @@ export default function PartnerDashboardsAdmin() {
                     className={i > 0 ? "border-t border-cream-line" : ""}
                   >
                     <td className="px-4 py-3 font-medium text-deep-green">
-                      {r.partner_name}
+                      <div>{r.partner_name}</div>
+                      <PaymentStatusSummary
+                        startDate={r.payment_start_date}
+                        counts={paymentCounts.get(r.id)}
+                      />
                     </td>
                     <td className="px-4 py-3 text-deep-green/80">{venueLabel}</td>
                     <td className="px-4 py-3 font-mono text-xs text-deep-green/70">
@@ -272,6 +339,13 @@ export default function PartnerDashboardsAdmin() {
                         >
                           {r.enabled ? "Disable" : "Enable"}
                         </button>
+                        <Link
+                          href={`/admin/finance/partners/${r.id}`}
+                          className="inline-flex h-7 w-7 items-center justify-center rounded-md text-deep-green/60 transition hover:bg-cream-soft hover:text-deep-green"
+                          title="Manage settings + weekly payments"
+                        >
+                          <Settings size={14} />
+                        </Link>
                         <IconBtn
                           title="Regenerate slug"
                           onClick={() => setRegenTarget(r)}
@@ -536,5 +610,44 @@ function PartnerAddDialog({
         </div>
       </div>
     </div>
+  );
+}
+
+function PaymentStatusSummary({
+  startDate,
+  counts,
+}: {
+  startDate: string | null;
+  counts: PaymentCounts | undefined;
+}) {
+  if (!startDate) {
+    return (
+      <p className="mt-0.5 text-[11px] italic text-deep-green/40">
+        Payments off
+      </p>
+    );
+  }
+  const c = counts ?? { pending: 0, paid: 0, disputed: 0 };
+  if (c.paid === 0 && c.pending === 0 && c.disputed === 0) {
+    return (
+      <p className="mt-0.5 text-[11px] text-deep-green/55">
+        Payments on · no records yet
+      </p>
+    );
+  }
+  return (
+    <p className="mt-0.5 text-[11px] text-deep-green/55">
+      <span className="text-mint-hover">Paid {c.paid}</span>
+      {" · "}
+      <span className="text-deep-green/55">Pending {c.pending}</span>
+      {c.disputed > 0 && (
+        <>
+          {" · "}
+          <span className="font-semibold text-coral">
+            Disputed {c.disputed}
+          </span>
+        </>
+      )}
+    </p>
   );
 }

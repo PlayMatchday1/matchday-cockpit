@@ -1,5 +1,6 @@
 "use client";
 
+import { useState } from "react";
 import {
   Bar,
   BarChart,
@@ -9,9 +10,12 @@ import {
   XAxis,
   YAxis,
 } from "recharts";
+import { supabase } from "@/lib/supabase";
 import type {
   PartnerMonthStat,
+  PartnerPaymentInfo,
   PartnerStats,
+  PartnerWeeklyPayment,
   PartnerWeekStat,
 } from "@/lib/partnerStats";
 
@@ -32,11 +36,15 @@ function fmtUsd(n: number): string {
 }
 
 export default function PartnerDashboard({
+  partnerDashboardId,
   partnerName,
   stats,
+  payment,
 }: {
+  partnerDashboardId: string;
   partnerName: string;
   stats: PartnerStats;
+  payment: PartnerPaymentInfo;
 }) {
   const subtitle = stats.lastMatchDate
     ? `Launch through ${fmtDateYmd(stats.lastMatchDate)} · Staff excluded · Revenue = match price paid`
@@ -72,6 +80,13 @@ export default function PartnerDashboard({
           <SecLabel className="mt-10">By month</SecLabel>
           <MonthlySummary months={stats.byMonth} />
         </>
+      )}
+
+      {payment.enabled && (
+        <WeeklyPaymentsSection
+          partnerDashboardId={partnerDashboardId}
+          payment={payment}
+        />
       )}
 
       <SecLabel className="mt-10">Week by week</SecLabel>
@@ -438,6 +453,282 @@ function RevenueChart({ weeks }: { weeks: PartnerWeekStat[] }) {
           <Bar dataKey="cancelled" fill="#ff9b8b" name="Cancel portion" />
         </BarChart>
       </ResponsiveContainer>
+    </div>
+  );
+}
+
+// =====================================================================
+// Weekly Payments section
+// =====================================================================
+
+function WeeklyPaymentsSection({
+  partnerDashboardId,
+  payment,
+}: {
+  partnerDashboardId: string;
+  payment: PartnerPaymentInfo;
+}) {
+  const [disputeTarget, setDisputeTarget] =
+    useState<PartnerWeeklyPayment | null>(null);
+
+  const subtitle = `${payment.revenueSharePct}% of qualifying revenue (DPP + Private Rental). Paid weekly on ${dowName(payment.paymentDayOfWeek)}s.`;
+
+  return (
+    <>
+      <div className="mt-10 flex flex-wrap items-baseline justify-between gap-x-4 gap-y-1">
+        <SecLabel>Weekly payments</SecLabel>
+        <p className="text-xs text-deep-green/55">{subtitle}</p>
+      </div>
+
+      {payment.weeklyPayments.length === 0 && payment.firstQualifyingSunday ? (
+        <div className="mt-3 rounded-xl border border-cream-line bg-cream-soft/40 px-4 py-5 text-sm italic text-deep-green/55">
+          First payment week begins {fmtDateYmd(payment.firstQualifyingSunday)}.
+        </div>
+      ) : (
+        <div className="mt-3 overflow-hidden rounded-xl border border-cream-line bg-white">
+          <table className="w-full text-sm">
+            <thead className="bg-cream-soft/60 text-[11px] font-semibold uppercase tracking-[0.06em] text-deep-green/55">
+              <tr>
+                <th className="px-4 py-2.5 text-left">Week of</th>
+                <th className="px-4 py-2.5 text-right">Qualifying revenue</th>
+                <th className="px-4 py-2.5 text-right">Payment owed</th>
+                <th className="px-4 py-2.5 text-left">Status</th>
+                <th className="px-4 py-2.5 text-left">Paid on</th>
+                <th className="px-4 py-2.5 text-right" />
+              </tr>
+            </thead>
+            <tbody>
+              {payment.weeklyPayments.map((w, i) => {
+                const displayAmount =
+                  w.status === "paid" && w.calculatedAmount != null
+                    ? w.calculatedAmount
+                    : w.owedAmount;
+                return (
+                  <tr
+                    key={w.weekStartDate}
+                    className={i > 0 ? "border-t border-cream-line" : ""}
+                  >
+                    <td className="px-4 py-2.5 text-deep-green">
+                      {fmtDateYmd(w.weekStartDate)}
+                    </td>
+                    <td className="px-4 py-2.5 text-right font-mono tabular-nums text-deep-green/80">
+                      {fmtUsd(w.qualifyingRevenue)}
+                    </td>
+                    <td className="px-4 py-2.5 text-right font-mono font-medium tabular-nums text-deep-green">
+                      ${displayAmount.toFixed(2)}
+                    </td>
+                    <td className="px-4 py-2.5">
+                      <StatusPill status={w.status} />
+                      {w.status === "disputed" && w.disputeNote && (
+                        <p className="mt-1 max-w-[16rem] text-[11px] italic text-deep-green/55">
+                          “{w.disputeNote}”
+                        </p>
+                      )}
+                    </td>
+                    <td className="px-4 py-2.5 text-deep-green/65">
+                      {fmtDateYmd(w.paidAt ? w.paidAt.slice(0, 10) : null)}
+                    </td>
+                    <td className="px-4 py-2.5 text-right">
+                      {/* Dispute is only meaningful for rows with a
+                          persisted record (status='paid' or already
+                          'disputed'). A purely-pending row with no
+                          record can't be disputed against — nothing
+                          has been claimed paid yet. */}
+                      {w.status === "paid" && (
+                        <button
+                          type="button"
+                          onClick={() => setDisputeTarget(w)}
+                          className="text-xs font-semibold text-deep-green/55 transition hover:text-deep-green hover:underline"
+                        >
+                          Didn&apos;t receive this?
+                        </button>
+                      )}
+                      {w.status === "disputed" && (
+                        <button
+                          type="button"
+                          onClick={() => setDisputeTarget(w)}
+                          className="text-xs font-semibold text-coral/65 transition hover:text-coral hover:underline"
+                        >
+                          Update dispute note
+                        </button>
+                      )}
+                    </td>
+                  </tr>
+                );
+              })}
+            </tbody>
+          </table>
+        </div>
+      )}
+
+      {disputeTarget && (
+        <DisputeModal
+          partnerDashboardId={partnerDashboardId}
+          week={disputeTarget}
+          onCancel={() => setDisputeTarget(null)}
+          onDone={() => {
+            setDisputeTarget(null);
+            // Reload the page so the new dispute state surfaces. Server
+            // component re-runs against fresh DB state.
+            if (typeof window !== "undefined") window.location.reload();
+          }}
+        />
+      )}
+    </>
+  );
+}
+
+function StatusPill({ status }: { status: "pending" | "paid" | "disputed" }) {
+  if (status === "paid") {
+    return (
+      <span className="inline-block rounded-full bg-mint-soft px-2.5 py-0.5 text-[11px] font-semibold text-mint-hover">
+        Paid
+      </span>
+    );
+  }
+  if (status === "disputed") {
+    return (
+      <span className="inline-block rounded-full bg-coral-soft px-2.5 py-0.5 text-[11px] font-semibold text-coral">
+        Disputed
+      </span>
+    );
+  }
+  return (
+    <span className="inline-block rounded-full bg-muted-soft px-2.5 py-0.5 text-[11px] font-semibold text-muted">
+      Pending
+    </span>
+  );
+}
+
+const DOW_NAMES = ["Sunday", "Monday", "Tuesday", "Wednesday", "Thursday", "Friday", "Saturday"];
+function dowName(dow: number): string {
+  return DOW_NAMES[dow] ?? "Sunday";
+}
+
+function DisputeModal({
+  partnerDashboardId,
+  week,
+  onCancel,
+  onDone,
+}: {
+  partnerDashboardId: string;
+  week: PartnerWeeklyPayment;
+  onCancel: () => void;
+  onDone: () => void;
+}) {
+  const [note, setNote] = useState(week.disputeNote ?? "");
+  const [busy, setBusy] = useState(false);
+  const [error, setError] = useState<string | null>(null);
+
+  async function handleSubmit() {
+    setBusy(true);
+    setError(null);
+    try {
+      // If a partner_weekly_payments row already exists, UPDATE it.
+      // Otherwise INSERT a new one. RLS allows anon UPDATE (status,
+      // dispute_note) on enabled dashboards' rows; INSERT is admin-
+      // only so for new rows we ask the admin path — but if no row
+      // exists yet, status is implicitly 'pending' with no record,
+      // and there's no INSERT permission for anon. So this UI only
+      // shows the dispute action on rows that already have a record
+      // OR pre-creates via the same mechanism… but anon can't INSERT.
+      //
+      // Resolution: when no record exists, anon disputes don't reach
+      // the DB. The admin path creates the row when marking paid;
+      // weeks without records can't be disputed (status='pending'
+      // with no row = nothing to dispute against). The UI hides the
+      // "Didn't receive this?" link when recordId is null and status
+      // is pending. (Disputable surface is "row exists, not yet
+      // received".)
+      if (!week.recordId) {
+        setError(
+          "This week has no payment record yet — there's nothing to dispute. Wait until the payment is marked paid, then flag it if you didn't receive the funds.",
+        );
+        setBusy(false);
+        return;
+      }
+      const { error } = await supabase
+        .from("partner_weekly_payments")
+        .update({
+          status: "disputed",
+          dispute_note: note.trim() || null,
+        })
+        .eq("id", week.recordId);
+      if (error) {
+        setError(error.message);
+        return;
+      }
+      onDone();
+    } catch (e) {
+      setError(e instanceof Error ? e.message : String(e));
+    } finally {
+      setBusy(false);
+    }
+  }
+
+  return (
+    <div className="fixed inset-0 z-50 flex items-start justify-center bg-deep-green/30 px-4 py-12 backdrop-blur-sm">
+      <div
+        role="dialog"
+        aria-modal="true"
+        className="w-full max-w-md rounded-2xl border-l-4 border-coral border-y-[1.5px] border-r-[1.5px] border-y-cream-line border-r-cream-line bg-white p-6 shadow-xl shadow-deep-green/30"
+      >
+        <h2 className="font-display text-2xl uppercase leading-none tracking-tight text-deep-green">
+          Flag missing payment
+        </h2>
+        <p className="mt-3 text-sm text-deep-green/65">
+          Week of {fmtDateYmd(week.weekStartDate)} · Owed{" "}
+          <b className="text-deep-green">${week.owedAmount.toFixed(2)}</b>
+          {week.paidAt && (
+            <>
+              {" "}
+              · Marked paid on{" "}
+              {fmtDateYmd(week.paidAt.slice(0, 10))}
+            </>
+          )}
+        </p>
+        <p className="mt-3 rounded-md border border-cream-line bg-cream-soft/40 px-3 py-2 text-xs text-deep-green/65">
+          Flagging this week alerts MatchDay that you didn&apos;t receive
+          the payment. Add a note (optional) so we can track down where
+          it went.
+        </p>
+
+        <label className="mt-4 block text-[11px] font-semibold uppercase tracking-[0.06em] text-deep-green/65">
+          Note (optional)
+        </label>
+        <textarea
+          value={note}
+          onChange={(e) => setNote(e.target.value)}
+          rows={3}
+          placeholder="e.g., 'Checked Venmo through Tuesday — nothing received.'"
+          className="mt-1 w-full rounded-md border border-cream-line bg-white px-3 py-2 text-sm text-deep-green focus:border-coral focus:outline-none"
+        />
+
+        {error && (
+          <div className="mt-3 rounded-md border border-coral/40 bg-coral-soft px-3 py-2 text-sm text-coral">
+            {error}
+          </div>
+        )}
+
+        <div className="mt-5 flex justify-end gap-2">
+          <button
+            type="button"
+            onClick={onCancel}
+            disabled={busy}
+            className="rounded-md border border-cream-line bg-white px-3 py-2 text-sm font-semibold text-deep-green/70 transition hover:bg-cream-soft hover:text-deep-green disabled:opacity-60"
+          >
+            Cancel
+          </button>
+          <button
+            type="button"
+            onClick={handleSubmit}
+            disabled={busy}
+            className="rounded-md bg-coral px-3 py-2 text-sm font-bold text-white transition hover:bg-coral-hover disabled:opacity-60"
+          >
+            {busy ? "Submitting…" : "Flag as not received"}
+          </button>
+        </div>
+      </div>
     </div>
   );
 }
