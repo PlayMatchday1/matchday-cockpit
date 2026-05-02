@@ -20,6 +20,7 @@ import FinanceTabNav, {
 import ManagerPayGrid from "@/components/ManagerPayGrid";
 import PartnerDashboardsAdmin from "@/components/PartnerDashboardsAdmin";
 import RevenueAdminView from "@/components/RevenueAdminView";
+import WeeklyProjectionsTab from "@/components/WeeklyProjectionsTab";
 import { CITY_DISPLAY_ORDER } from "@/lib/financeStats";
 import { supabase } from "@/lib/supabase";
 import { useFinanceData } from "@/lib/useFinanceData";
@@ -124,6 +125,9 @@ function FinanceLandingContent() {
       </TabPanel>
       <TabPanel id="cash-flow" active={activeTab} visited={visited}>
         <CashFlowTabContent />
+      </TabPanel>
+      <TabPanel id="projections" active={activeTab} visited={visited}>
+        <WeeklyProjectionsTab />
       </TabPanel>
       <TabPanel id="field-ranking" active={activeTab} visited={visited}>
         <FieldRankingTabContent />
