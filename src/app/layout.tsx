@@ -1,7 +1,10 @@
 import type { Metadata, Viewport } from "next";
 import { Bebas_Neue, Geist, Geist_Mono } from "next/font/google";
 import "./globals.css";
-import AuthGate from "@/components/AuthGate";
+
+// Root layout: HTML shell + fonts only. Authentication and internal
+// nav live inside `(internal)/layout.tsx` so unauthenticated routes
+// (login/, auth/, partners/) never inherit the AuthGate provider.
 
 const geistSans = Geist({
   variable: "--font-geist-sans",
@@ -47,9 +50,7 @@ export default function RootLayout({
           href="/matchday-badge.svg"
         />
       </head>
-      <body className="min-h-full">
-        <AuthGate>{children}</AuthGate>
-      </body>
+      <body className="min-h-full">{children}</body>
     </html>
   );
 }
