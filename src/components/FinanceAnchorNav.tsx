@@ -12,12 +12,15 @@ const ANCHOR_LINKS: { label: string; href: string }[] = [
   { label: "Exec Summary", href: "#exec-summary" },
 ];
 
-const SUBPAGE_LINKS: { label: string; href: string }[] = [
+// `newTab: true` opens in a new tab via plain <a target="_blank"> so
+// the admin doesn't lose their spot on the main finance page.
+const SUBPAGE_LINKS: { label: string; href: string; newTab?: boolean }[] = [
   { label: "Expenses", href: "/admin/finance/expenses" },
   { label: "Manager Pay", href: "/admin/finance/manager-pay" },
   { label: "Field Ranking", href: "/admin/finance/fields" },
   { label: "Cash Flow", href: "/admin/finance/cash-flow" },
   { label: "City Manager Check-Ins", href: "/admin/finance/check-ins" },
+  { label: "Partner Dashboards", href: "/admin/finance/partners", newTab: true },
 ];
 
 export default function FinanceAnchorNav() {
@@ -37,15 +40,25 @@ export default function FinanceAnchorNav() {
           </a>
         ))}
         <span aria-hidden className="mx-1 hidden h-4 w-px bg-cream-line sm:inline-block" />
-        {SUBPAGE_LINKS.map((l) => (
-          <Link
-            key={l.href}
-            href={l.href}
-            className="rounded-full border border-cream-line bg-white px-3 py-1.5 text-xs font-bold text-deep-green transition hover:bg-cream-soft"
-          >
-            {l.label}
-          </Link>
-        ))}
+        {SUBPAGE_LINKS.map((l) => {
+          const cls =
+            "rounded-full border border-cream-line bg-white px-3 py-1.5 text-xs font-bold text-deep-green transition hover:bg-cream-soft";
+          return l.newTab ? (
+            <a
+              key={l.href}
+              href={l.href}
+              target="_blank"
+              rel="noopener noreferrer"
+              className={cls}
+            >
+              {l.label}
+            </a>
+          ) : (
+            <Link key={l.href} href={l.href} className={cls}>
+              {l.label}
+            </Link>
+          );
+        })}
       </div>
     </nav>
   );

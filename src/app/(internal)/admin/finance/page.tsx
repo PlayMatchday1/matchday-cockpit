@@ -138,12 +138,6 @@ function FinanceLandingContent() {
           title="Change Log"
           subtitle="Every manual add, edit, and delete with before/after diff and the user who made the change."
         />
-        <DataLink
-          href="/admin/finance/partners"
-          eyebrow="Manage"
-          title="Partner Dashboards"
-          subtitle="Tokenized partner-facing dashboards. One enabled URL per venue; regenerate to invalidate."
-        />
       </div>
 
       <SectionHeader
