@@ -478,7 +478,11 @@ function WeeklyPaymentsSection({
   const [disputeTarget, setDisputeTarget] =
     useState<PartnerWeeklyPayment | null>(null);
 
-  const subtitle = `${payment.revenueSharePct}% of qualifying revenue (DPP + Private Rental). Paid weekly on ${dowName(payment.paymentDayOfWeek)}s.`;
+  // Week boundary is Sunday (Sun→Sat); the actual transfer hits the
+  // partner on Monday. The day-of-week stored on partner_dashboards
+  // is the (legacy) week-boundary indicator, not the transfer day —
+  // partner-facing copy uses the transfer day directly.
+  const subtitle = `${payment.revenueSharePct}% of qualifying revenue (DPP + Private Rental). Paid weekly on Mondays.`;
 
   return (
     <>
@@ -661,7 +665,7 @@ function WeeklyPaymentsSection({
         </>
       )}
 
-      {/* "First payment week begins …" — coexists with any pre-system
+      {/* "Next payment week begins …" — coexists with any pre-system
           rows above. Shows when no Sunday-anchored rows have appeared
           yet AND the first qualifying Sunday is in the future. */}
       {(() => {
@@ -676,7 +680,7 @@ function WeeklyPaymentsSection({
           <div
             className={`${payment.weeklyPayments.length > 0 ? "mt-3" : "mt-3"} rounded-xl border border-cream-line bg-cream-soft/40 px-4 py-5 text-sm italic text-deep-green/55`}
           >
-            First payment week begins{" "}
+            Next payment week begins{" "}
             {fmtDateYmd(payment.firstQualifyingSunday)}.
           </div>
         );
@@ -747,11 +751,6 @@ function StatusPill({ status }: { status: "pending" | "paid" | "disputed" }) {
       Pending
     </span>
   );
-}
-
-const DOW_NAMES = ["Sunday", "Monday", "Tuesday", "Wednesday", "Thursday", "Friday", "Saturday"];
-function dowName(dow: number): string {
-  return DOW_NAMES[dow] ?? "Sunday";
 }
 
 function DisputeModal({
