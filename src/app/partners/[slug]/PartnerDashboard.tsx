@@ -117,7 +117,14 @@ export default function PartnerDashboard({
       </div>
 
       <p className="mt-10 text-center text-xs text-deep-green/45">
-        MatchDay SC · playmatchday.com
+        <a
+          href="https://playmatchday.com"
+          target="_blank"
+          rel="noopener noreferrer"
+          className="transition hover:text-deep-green hover:underline"
+        >
+          playmatchday.com
+        </a>
       </p>
     </main>
   );
@@ -481,63 +488,152 @@ function WeeklyPaymentsSection({
       </div>
 
       {payment.weeklyPayments.length > 0 && (
-        <div className="mt-3 overflow-hidden rounded-xl border border-cream-line bg-white">
-          <table className="w-full text-sm">
-            <thead className="bg-cream-soft/60 text-[11px] font-semibold uppercase tracking-[0.06em] text-deep-green/55">
-              <tr>
-                <th className="px-4 py-2.5 text-left">Week of</th>
-                <th className="px-4 py-2.5 text-right">Qualifying revenue</th>
-                <th className="px-4 py-2.5 text-right">Payment owed</th>
-                <th className="px-4 py-2.5 text-left">Status</th>
-                <th className="px-4 py-2.5 text-left">Paid on</th>
-                <th className="px-4 py-2.5 text-right" />
-              </tr>
-            </thead>
-            <tbody>
-              {payment.weeklyPayments.map((w, i) => {
-                const displayAmount =
-                  w.status === "paid" && w.calculatedAmount != null
-                    ? w.calculatedAmount
-                    : w.owedAmount;
-                return (
-                  <tr
-                    key={`${w.isPreSystem ? "pre" : "wk"}-${w.weekStartDate}`}
-                    className={i > 0 ? "border-t border-cream-line" : ""}
-                  >
-                    <td className="px-4 py-2.5 text-deep-green">
-                      {w.isPreSystem ? (
-                        <>
-                          <div>Through {fmtDateYmd(w.weekStartDate)}</div>
-                          <p className="mt-0.5 text-[10px] italic text-deep-green/45">
-                            Pre-system settlement
+        <>
+          {/* Desktop (md+): table layout — unchanged from before. */}
+          <div className="mt-3 hidden overflow-hidden rounded-xl border border-cream-line bg-white md:block">
+            <table className="w-full text-sm">
+              <thead className="bg-cream-soft/60 text-[11px] font-semibold uppercase tracking-[0.06em] text-deep-green/55">
+                <tr>
+                  <th className="px-4 py-2.5 text-left">Week of</th>
+                  <th className="px-4 py-2.5 text-right">Qualifying revenue</th>
+                  <th className="px-4 py-2.5 text-right">Payment owed</th>
+                  <th className="px-4 py-2.5 text-left">Status</th>
+                  <th className="px-4 py-2.5 text-left">Paid on</th>
+                  <th className="px-4 py-2.5 text-right" />
+                </tr>
+              </thead>
+              <tbody>
+                {payment.weeklyPayments.map((w, i) => {
+                  const displayAmount =
+                    w.status === "paid" && w.calculatedAmount != null
+                      ? w.calculatedAmount
+                      : w.owedAmount;
+                  return (
+                    <tr
+                      key={`${w.isPreSystem ? "pre" : "wk"}-${w.weekStartDate}`}
+                      className={i > 0 ? "border-t border-cream-line" : ""}
+                    >
+                      <td className="px-4 py-2.5 text-deep-green">
+                        {w.isPreSystem ? (
+                          <>
+                            <div>Through {fmtDateYmd(w.weekStartDate)}</div>
+                            <p className="mt-0.5 text-[10px] italic text-deep-green/45">
+                              Pre-system settlement
+                            </p>
+                          </>
+                        ) : (
+                          fmtDateYmd(w.weekStartDate)
+                        )}
+                      </td>
+                      <td className="px-4 py-2.5 text-right font-mono tabular-nums text-deep-green/80">
+                        {w.isPreSystem ? "—" : fmtUsd(w.qualifyingRevenue)}
+                      </td>
+                      <td className="px-4 py-2.5 text-right font-mono font-medium tabular-nums text-deep-green">
+                        ${displayAmount.toFixed(2)}
+                      </td>
+                      <td className="px-4 py-2.5">
+                        <StatusPill status={w.status} />
+                        {w.status === "disputed" && w.disputeNote && (
+                          <p className="mt-1 max-w-[16rem] text-[11px] italic text-deep-green/55">
+                            “{w.disputeNote}”
                           </p>
-                        </>
-                      ) : (
-                        fmtDateYmd(w.weekStartDate)
-                      )}
-                    </td>
-                    <td className="px-4 py-2.5 text-right font-mono tabular-nums text-deep-green/80">
-                      {w.isPreSystem ? "—" : fmtUsd(w.qualifyingRevenue)}
-                    </td>
-                    <td className="px-4 py-2.5 text-right font-mono font-medium tabular-nums text-deep-green">
-                      ${displayAmount.toFixed(2)}
-                    </td>
-                    <td className="px-4 py-2.5">
-                      <StatusPill status={w.status} />
-                      {w.status === "disputed" && w.disputeNote && (
-                        <p className="mt-1 max-w-[16rem] text-[11px] italic text-deep-green/55">
-                          “{w.disputeNote}”
+                        )}
+                      </td>
+                      <td className="px-4 py-2.5 text-deep-green/65">
+                        {fmtDateYmd(w.paidAt ? w.paidAt.slice(0, 10) : null)}
+                      </td>
+                      <td className="px-4 py-2.5 text-right">
+                        {/* Dispute is meaningful for any row with a
+                            persisted record — including pre-system rows
+                            (in case the partner contests the historical
+                            settlement). */}
+                        {w.status === "paid" && (
+                          <button
+                            type="button"
+                            onClick={() => setDisputeTarget(w)}
+                            className="text-xs font-semibold text-deep-green/55 transition hover:text-deep-green hover:underline"
+                          >
+                            Didn&apos;t receive this?
+                          </button>
+                        )}
+                        {w.status === "disputed" && (
+                          <button
+                            type="button"
+                            onClick={() => setDisputeTarget(w)}
+                            className="text-xs font-semibold text-coral/65 transition hover:text-coral hover:underline"
+                          >
+                            Update dispute note
+                          </button>
+                        )}
+                      </td>
+                    </tr>
+                  );
+                })}
+              </tbody>
+            </table>
+          </div>
+
+          {/* Mobile (<md): stacked card per row. The table compresses to
+              ~70px per column at 390px viewport — labels wrap to 4 lines
+              and right-side cells get cut off. The card layout puts each
+              field on its own line with clear typographic hierarchy. */}
+          <div className="mt-3 space-y-2 md:hidden">
+            {payment.weeklyPayments.map((w) => {
+              const displayAmount =
+                w.status === "paid" && w.calculatedAmount != null
+                  ? w.calculatedAmount
+                  : w.owedAmount;
+              return (
+                <div
+                  key={`m-${w.isPreSystem ? "pre" : "wk"}-${w.weekStartDate}`}
+                  className="rounded-xl border border-cream-line bg-white p-4"
+                >
+                  <div className="flex items-start justify-between gap-3">
+                    <div className="min-w-0">
+                      <div className="whitespace-nowrap text-sm font-semibold text-deep-green">
+                        {w.isPreSystem
+                          ? `Through ${fmtDateYmd(w.weekStartDate)}`
+                          : fmtDateYmd(w.weekStartDate)}
+                      </div>
+                      {w.isPreSystem && (
+                        <p className="mt-0.5 text-[10px] italic text-deep-green/45">
+                          Pre-system settlement
                         </p>
                       )}
-                    </td>
-                    <td className="px-4 py-2.5 text-deep-green/65">
-                      {fmtDateYmd(w.paidAt ? w.paidAt.slice(0, 10) : null)}
-                    </td>
-                    <td className="px-4 py-2.5 text-right">
-                      {/* Dispute is meaningful for any row with a
-                          persisted record — including pre-system rows
-                          (in case the partner contests the historical
-                          settlement). */}
+                    </div>
+                    <StatusPill status={w.status} />
+                  </div>
+
+                  <div className="mt-3 grid grid-cols-2 gap-x-4 gap-y-2.5">
+                    <MobileField
+                      label="Qualifying revenue"
+                      value={
+                        w.isPreSystem ? "—" : fmtUsd(w.qualifyingRevenue)
+                      }
+                      mono
+                    />
+                    <MobileField
+                      label="Payment owed"
+                      value={`$${displayAmount.toFixed(2)}`}
+                      mono
+                      strong
+                    />
+                    <MobileField
+                      label="Paid on"
+                      value={fmtDateYmd(
+                        w.paidAt ? w.paidAt.slice(0, 10) : null,
+                      )}
+                    />
+                  </div>
+
+                  {w.status === "disputed" && w.disputeNote && (
+                    <p className="mt-3 text-[12px] italic text-deep-green/60">
+                      “{w.disputeNote}”
+                    </p>
+                  )}
+
+                  {(w.status === "paid" || w.status === "disputed") && (
+                    <div className="mt-3 border-t border-cream-line pt-2.5">
                       {w.status === "paid" && (
                         <button
                           type="button"
@@ -556,13 +652,13 @@ function WeeklyPaymentsSection({
                           Update dispute note
                         </button>
                       )}
-                    </td>
-                  </tr>
-                );
-              })}
-            </tbody>
-          </table>
-        </div>
+                    </div>
+                  )}
+                </div>
+              );
+            })}
+          </div>
+        </>
       )}
 
       {/* "First payment week begins …" — coexists with any pre-system
@@ -600,6 +696,34 @@ function WeeklyPaymentsSection({
         />
       )}
     </>
+  );
+}
+
+// Mobile-only label/value pair for the Weekly Payments card layout.
+// `mono` aligns dollar amounts with the rest of the dashboard's tabular
+// numerals; `strong` bumps weight for the headline "Payment owed" cell.
+function MobileField({
+  label,
+  value,
+  mono = false,
+  strong = false,
+}: {
+  label: string;
+  value: React.ReactNode;
+  mono?: boolean;
+  strong?: boolean;
+}) {
+  return (
+    <div className="min-w-0">
+      <div className="text-[10px] font-semibold uppercase tracking-[0.06em] text-deep-green/55">
+        {label}
+      </div>
+      <div
+        className={`mt-0.5 text-sm ${mono ? "font-mono tabular-nums" : ""} ${strong ? "font-semibold text-deep-green" : "text-deep-green/80"}`}
+      >
+        {value}
+      </div>
+    </div>
   );
 }
 
