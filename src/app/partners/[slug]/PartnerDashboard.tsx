@@ -511,8 +511,8 @@ function WeeklyPaymentsSection({
     payment.cadence === "monthly" ? "Monthly payments" : "Weekly payments";
   const subtitle =
     payment.cadence === "monthly"
-      ? `${payment.revenueSharePct}% of qualifying revenue (DPP + Morning Match). Paid on the 5th of the following month.`
-      : `${payment.revenueSharePct}% of qualifying revenue (DPP + Morning Match). Paid weekly on Mondays.`;
+      ? `${payment.revenueSharePct}% of qualifying revenue. Paid on the 5th of the following month.`
+      : `${payment.revenueSharePct}% of qualifying revenue. Paid weekly on Mondays.`;
 
   return (
     <>
