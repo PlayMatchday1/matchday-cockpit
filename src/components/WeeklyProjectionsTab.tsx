@@ -463,11 +463,19 @@ function FieldRow({
       {row.weeks.map((w, i) => (
         <td
           key={i}
-          className="min-w-[110px] px-2 py-2 align-top text-deep-green/65"
+          className="min-w-[120px] px-2 py-2 align-top text-deep-green/65"
         >
           <LabeledStack
             rows={[
               { label: "matches", value: String(w.matches) },
+              { label: "dpp spots", value: String(w.dppSpots) },
+              {
+                label: "avg price/spot",
+                value:
+                  w.avgPricePerSpot === null
+                    ? "—"
+                    : fmtUsdDec(w.avgPricePerSpot),
+              },
               {
                 label: "avg/match",
                 value: w.matches > 0 ? fmtUsdDec(w.avgPrice) : "—",
@@ -493,7 +501,7 @@ function FieldRow({
           />
         </td>
       ))}
-      <td className="min-w-[140px] px-2 py-2 align-top">
+      <td className="min-w-[150px] px-2 py-2 align-top">
         <div className="space-y-0.5 text-[11px]">
           <div className="flex items-center justify-between gap-2">
             <span className="text-deep-green/45">matches:</span>
@@ -505,6 +513,22 @@ function FieldRow({
               onChange={(e) => onMatchesChange(row.venueId, e.target.value)}
               className="h-6 w-16 rounded border border-cream-line bg-white px-1.5 text-right font-mono text-[12px] tabular-nums text-deep-green focus:border-mint focus:outline-none"
             />
+          </div>
+          {/* Static defaults from W-1 — read-only signal, not editable */}
+          {/* yet (per-spot planning is a phase-2 follow-up). */}
+          <div className="flex items-baseline justify-between gap-2">
+            <span className="text-deep-green/45">dpp spots:</span>
+            <span className="font-mono tabular-nums text-deep-green/55">
+              {w1.dppSpots}
+            </span>
+          </div>
+          <div className="flex items-baseline justify-between gap-2">
+            <span className="text-deep-green/45">avg price/spot:</span>
+            <span className="font-mono tabular-nums text-deep-green/55">
+              {w1.avgPricePerSpot === null
+                ? "—"
+                : fmtUsdDec(w1.avgPricePerSpot)}
+            </span>
           </div>
           <div className="flex items-center justify-between gap-2">
             <span className="text-deep-green/45">avg/match:</span>

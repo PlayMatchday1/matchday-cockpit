@@ -29,8 +29,13 @@ export type WeekWindow = {
 export type FieldWeekStats = {
   matches: number;
   cancels: number; // distinct match_starts where the whole match was canceled
+  dppSpots: number; // DAILY PAID registrations excluding match_canceled + player_canceled_at
   dppRev: number;
   avgPrice: number; // dppRev / matches; 0 when matches=0
+  // Per-spot price: rev for non-canceled DPP spots ÷ those spots.
+  // null = no DPP spots in window (renders as "—"); 0 = comp/promo
+  // priced at $0 (renders as "$0.00").
+  avgPricePerSpot: number | null;
 };
 
 export type FieldProjectionRow = {
@@ -156,6 +161,7 @@ export type RegistrationRow = {
   field: string | null;
   match_start: string;
   match_canceled: boolean;
+  player_canceled_at: string | null;
   payment_type: string | null;
   match_price_paid: number | null;
   email: string | null;
@@ -192,13 +198,25 @@ export function computeProjections(
   function statsForVenueWindow(venueId: number, w: WeekWindow): FieldWeekStats {
     const matchSet = new Set<string>();
     let dppRev = 0;
+    let dppSpots = 0;
+    let dppRevForSpots = 0; // sub-sum used as the per-spot numerator
     for (const r of active) {
       if (fieldToVenue.get(r.field as string) !== venueId) continue;
       const ymd = r.match_start.slice(0, 10);
       if (ymd < w.start || ymd > w.end) continue;
       matchSet.add(r.match_start);
       if (r.payment_type === "DAILY PAID") {
-        dppRev += Number(r.match_price_paid ?? 0) || 0;
+        const price = Number(r.match_price_paid ?? 0) || 0;
+        dppRev += price;
+        // Per-spot calc drops player-canceled rows on top of
+        // match_canceled (already filtered by `active`). Numerator and
+        // denominator stay consistent — both exclude the same rows.
+        const playerCancel =
+          !!r.player_canceled_at && r.player_canceled_at.trim() !== "";
+        if (!playerCancel) {
+          dppSpots += 1;
+          dppRevForSpots += price;
+        }
       }
     }
     // Canceled-match count is distinct match_starts where the whole
@@ -215,8 +233,10 @@ export function computeProjections(
     return {
       matches,
       cancels: cancelSet.size,
+      dppSpots,
       dppRev,
       avgPrice: matches > 0 ? dppRev / matches : 0,
+      avgPricePerSpot: dppSpots > 0 ? dppRevForSpots / dppSpots : null,
     };
   }
 
@@ -317,7 +337,7 @@ export async function fetchProjectionsData(
     const { data, error } = await supabase
       .from("match_registrations")
       .select(
-        "field, match_start, match_canceled, payment_type, match_price_paid, email",
+        "field, match_start, match_canceled, player_canceled_at, payment_type, match_price_paid, email",
       )
       .eq("upload_id", upload.id)
       .gte("match_start", `${earliest}T00:00:00Z`)
