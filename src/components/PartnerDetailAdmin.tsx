@@ -192,6 +192,19 @@ export default function PartnerDetailAdmin({
     // eslint-disable-next-line react-hooks/exhaustive-deps
   }, [partnerDashboardId]);
 
+  // Hint to /admin/finance to land on the Partner Dashboards tab on
+  // the next visit. Single-use: read + cleared by the landing page.
+  // Set on mount so the user's "← Back" lands on the right tab even
+  // if they navigated here directly.
+  useEffect(() => {
+    if (typeof window !== "undefined") {
+      window.sessionStorage.setItem(
+        "finance:returnTab",
+        "partner-dashboards",
+      );
+    }
+  }, []);
+
   const payment: PartnerPaymentInfo | null = useMemo(() => {
     if (!dashboard) return null;
     return computeWeeklyPayments(
@@ -230,7 +243,7 @@ export default function PartnerDetailAdmin({
   return (
     <>
       <Link
-        href="/admin/finance/partners"
+        href="/admin/finance"
         className="text-sm text-deep-green/60 hover:text-deep-green"
       >
         ← Back to Partner Dashboards
