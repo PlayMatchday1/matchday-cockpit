@@ -444,100 +444,132 @@ function FieldRow({
   const w1 = row.weeks[3];
   const matchDelta = (matches ?? 0) - w1.matches;
   const dppDelta = projected - w1.dppRev;
+  const matchDeltaTone =
+    matchDelta === 0
+      ? "text-deep-green/45"
+      : matchDelta > 0
+        ? "text-mint-hover"
+        : "text-coral";
+  const matchDeltaStr =
+    matchDelta > 0
+      ? `+${matchDelta}`
+      : matchDelta === 0
+        ? "0"
+        : `${matchDelta}`;
 
   return (
     <tr className="border-t border-cream-line/60">
       <td className="px-3 py-2 align-top text-deep-green">{row.venueName}</td>
       {row.weeks.map((w, i) => (
-        <td key={i} className="px-2 py-2 align-top text-right">
-          <CellStack
-            top={`${w.matches}m`}
-            mid={w.matches > 0 ? fmtUsdDec(w.avgPrice) : "—"}
-            bot={w.matches > 0 ? fmtUsd(w.dppRev) : "—"}
+        <td
+          key={i}
+          className="min-w-[110px] px-2 py-2 align-top text-deep-green/65"
+        >
+          <LabeledStack
+            rows={[
+              { label: "matches", value: String(w.matches) },
+              {
+                label: "avg/match",
+                value: w.matches > 0 ? fmtUsdDec(w.avgPrice) : "—",
+              },
+              {
+                label: "rev",
+                value: w.matches > 0 ? fmtUsd(w.dppRev) : "—",
+              },
+            ]}
             muted
           />
         </td>
       ))}
-      <td className="px-2 py-2 align-top text-right">
-        <div className="flex flex-col items-end gap-0.5">
-          <input
-            type="number"
-            min={0}
-            step={1}
-            value={matches ?? ""}
-            onChange={(e) => onMatchesChange(row.venueId, e.target.value)}
-            className="h-6 w-14 rounded border border-cream-line bg-white px-1.5 text-right font-mono text-[12px] tabular-nums text-deep-green focus:border-mint focus:outline-none"
-          />
-          <input
-            type="number"
-            min={0}
-            step={0.01}
-            value={avg.toFixed(2)}
-            onChange={(e) => onAvgPriceChange(row.venueId, e.target.value)}
-            className="h-6 w-20 rounded border border-cream-line bg-white px-1.5 text-right font-mono text-[12px] tabular-nums text-deep-green focus:border-mint focus:outline-none"
-          />
-          <span className="font-mono text-[12px] font-bold tabular-nums text-deep-green">
-            {fmtUsd(projected)}
-          </span>
+      <td className="min-w-[140px] px-2 py-2 align-top">
+        <div className="space-y-0.5 text-[11px]">
+          <div className="flex items-center justify-between gap-2">
+            <span className="text-deep-green/45">matches:</span>
+            <input
+              type="number"
+              min={0}
+              step={1}
+              value={matches ?? ""}
+              onChange={(e) => onMatchesChange(row.venueId, e.target.value)}
+              className="h-6 w-16 rounded border border-cream-line bg-white px-1.5 text-right font-mono text-[12px] tabular-nums text-deep-green focus:border-mint focus:outline-none"
+            />
+          </div>
+          <div className="flex items-center justify-between gap-2">
+            <span className="text-deep-green/45">avg/match:</span>
+            <input
+              type="number"
+              min={0}
+              step={0.01}
+              value={avg.toFixed(2)}
+              onChange={(e) => onAvgPriceChange(row.venueId, e.target.value)}
+              className="h-6 w-20 rounded border border-cream-line bg-white px-1.5 text-right font-mono text-[12px] tabular-nums text-deep-green focus:border-mint focus:outline-none"
+            />
+          </div>
+          <div className="flex items-baseline justify-between gap-2 pt-0.5">
+            <span className="text-deep-green/45">rev:</span>
+            <span className="font-mono text-[12px] font-bold tabular-nums text-deep-green">
+              {fmtUsd(projected)}
+            </span>
+          </div>
           {isEdited && (
-            <button
-              type="button"
-              onClick={() => onReset(row.venueId)}
-              className="text-[10px] text-deep-green/50 transition hover:text-deep-green hover:underline"
-            >
-              reset
-            </button>
+            <div className="pt-0.5 text-right">
+              <button
+                type="button"
+                onClick={() => onReset(row.venueId)}
+                className="text-[10px] text-deep-green/50 transition hover:text-deep-green hover:underline"
+              >
+                reset
+              </button>
+            </div>
           )}
         </div>
       </td>
-      <td className="px-3 py-2 align-top text-right">
-        <CellStack
-          top={
-            <span
-              className={
-                matchDelta === 0
-                  ? "text-deep-green/45"
-                  : matchDelta > 0
-                    ? "text-mint-hover"
-                    : "text-coral"
-              }
-            >
-              {matchDelta > 0 ? `+${matchDelta}m` : matchDelta === 0 ? "0m" : `${matchDelta}m`}
-            </span>
-          }
-          mid=""
-          bot={
-            <span className={`${revenueDeltaTone(dppDelta)} font-bold`}>
-              {fmtSig(dppDelta)}
-            </span>
-          }
+      <td className="min-w-[120px] px-3 py-2 align-top">
+        <LabeledStack
+          rows={[
+            {
+              label: "Δ matches",
+              value: <span className={matchDeltaTone}>{matchDeltaStr}</span>,
+            },
+            {
+              label: "Δ rev",
+              value: (
+                <span className={`${revenueDeltaTone(dppDelta)} font-bold`}>
+                  {fmtSig(dppDelta)}
+                </span>
+              ),
+            },
+          ]}
         />
       </td>
     </tr>
   );
 }
 
-// 3-line cell: matches / avg / DPP rev. Used for both historical
-// week cells and the Δ column.
-function CellStack({
-  top,
-  mid,
-  bot,
+// Vertical stack of labeled rows: muted small-caps label on the left,
+// value right-aligned. Replaces the prior CellStack which only showed
+// values without their role. Used in both history cells and the Δ
+// column; the editable Next column inlines this pattern around its
+// inputs (see FieldRow).
+function LabeledStack({
+  rows,
   muted = false,
 }: {
-  top: React.ReactNode;
-  mid: React.ReactNode;
-  bot: React.ReactNode;
+  rows: { label: string; value: React.ReactNode }[];
   muted?: boolean;
 }) {
-  const cls = muted ? "text-deep-green/65" : "text-deep-green";
+  const valCls = muted ? "text-deep-green/65" : "text-deep-green";
   return (
-    <div className={`flex flex-col items-end leading-tight ${cls}`}>
-      <span className="font-mono tabular-nums">{top}</span>
-      <span className="font-mono text-[11px] text-deep-green/45 tabular-nums">
-        {mid}
-      </span>
-      <span className="font-mono text-[11px] tabular-nums">{bot}</span>
+    <div className="space-y-0.5 text-[11px]">
+      {rows.map((r) => (
+        <div
+          key={r.label}
+          className="flex items-baseline justify-between gap-2"
+        >
+          <span className="text-deep-green/45">{r.label}:</span>
+          <span className={`font-mono tabular-nums ${valCls}`}>{r.value}</span>
+        </div>
+      ))}
     </div>
   );
 }
