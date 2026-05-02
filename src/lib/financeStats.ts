@@ -5,6 +5,7 @@ import {
   fieldCostsFor,
   findOverride,
   perMatchTotalFor,
+  type VenueCostInfo,
 } from "./financeCosts";
 import { groupVenues } from "./venueGroups";
 import { normalizeMatchName } from "./venueNormalization";
@@ -700,12 +701,18 @@ function finExpensesByCity(
 // Per-source row in a category drill-down. Carries before/after as
 // well as Δ so the UI can render "$X → $Y · +$Z" instead of just
 // the delta — useful for spotting zero-to-something rows or the
-// shape of a cost shift.
+// shape of a cost shift. Field Costs additionally populates
+// fromBreakdown/toBreakdown ("13 × $105" / "Monthly flat" /
+// "Lump sum" / "Pre-paid") so the panel can show whether a Δ is
+// driven by volume vs rate vs a fixed-cost transition. Other
+// categories leave breakdowns undefined.
 export type CategoryChild = {
   name: string;
   fromAmount: number;
   toAmount: number;
   delta: number;
+  fromBreakdown?: string;
+  toBreakdown?: string;
 };
 
 function deltasFromMaps(
@@ -728,8 +735,16 @@ const CHILD_VISIBLE_THRESHOLD = 50; // |Δ| < $50 → rolls into "Other (N sourc
 // "Other (N sources)" tail row whose from/to/delta are summed across
 // the rolled-up entries. Returns undefined when no individual source
 // passes the threshold (UI hides chevron then).
+type PerKeyValue = {
+  from: number;
+  to: number;
+  delta: number;
+  fromBreakdown?: string;
+  toBreakdown?: string;
+};
+
 function buildChildren(
-  perKey: Map<string, { from: number; to: number; delta: number }>,
+  perKey: Map<string, PerKeyValue>,
   unitLabel: { singular: string; plural: string } = {
     singular: "source",
     plural: "sources",
@@ -741,6 +756,8 @@ function buildChildren(
       fromAmount: v.from,
       toAmount: v.to,
       delta: v.delta,
+      fromBreakdown: v.fromBreakdown,
+      toBreakdown: v.toBreakdown,
     }))
     .filter((i) => Math.abs(i.delta) >= 0.5);
   if (items.length === 0) return undefined;
@@ -760,6 +777,8 @@ function buildChildren(
         small.length === 1
           ? `Other (1 ${unitLabel.singular})`
           : `Other (${small.length} ${unitLabel.plural})`;
+      // Rollup row: leave breakdowns undefined — the aggregated
+      // entries don't share a single coherent "N × $rate" answer.
       big.push({
         name: label,
         fromAmount: otherFrom,
@@ -769,6 +788,45 @@ function buildChildren(
     }
   }
   return big;
+}
+
+// Compact, panel-friendly description of a venue's monthly cost
+// composition. Drives the "Apr: 13 × $105   May: 14 × $105" line in
+// the Field Costs drill-down.
+//
+//   per_match (matches > 0)  → "{N} × ${rate}"  (rate = amount/N)
+//   per_match (no matches)   → "—"
+//   override (amount > 0)    → "Monthly flat" / "Lump sum" / "Profit
+//                              share" / "Override" — derived from
+//                              the override.reason prefix when present
+//   override (amount = 0)    → "Pre-paid"
+//   needs_override           → "Needs override"
+//   no_charge / per_hour_no_fee → "No fee"
+//   per_hour_metered         → "{H}h"
+//   unknown                  → "—"
+function compactCostBreakdown(info: VenueCostInfo): string {
+  if (info.kind === "override") {
+    if (info.amount === 0) return "Pre-paid";
+    const r = (info.override?.reason ?? "").toLowerCase();
+    if (r.includes("monthly_flat") || r.includes("monthly flat")) return "Monthly flat";
+    if (r.includes("lump_sum") || r.includes("lump sum")) return "Lump sum";
+    if (r.includes("profit_share") || r.includes("profit share")) return "Profit share";
+    return "Override";
+  }
+  if (info.kind === "per_match") {
+    if (info.matchCount === 0) return "—";
+    const rate = info.amount / info.matchCount;
+    const rateStr = Number.isInteger(rate) ? `$${rate}` : `$${rate.toFixed(2)}`;
+    return `${info.matchCount} × ${rateStr}`;
+  }
+  if (info.kind === "per_hour_metered") {
+    return `${info.totalHours}h`;
+  }
+  if (info.kind === "no_charge" || info.kind === "per_hour_no_fee") {
+    return "No fee";
+  }
+  if (info.kind === "needs_override") return "Needs override";
+  return "—";
 }
 
 // Per-category breakdown router. Returns the appropriate children
@@ -781,12 +839,28 @@ function expenseCategoryChildren(
   nextMonth: Q2Month,
 ): CategoryChild[] | undefined {
   if (category === "Field Costs") {
-    return buildChildren(
-      deltasFromMaps(
-        fieldCostsByVenue(data, currentMonth),
-        fieldCostsByVenue(data, nextMonth),
-      ),
-    );
+    // Bypass deltasFromMaps + the scalar fieldCostsByVenue: we need
+    // both the cost AND a per-month breakdown string ("13 × $105" /
+    // "Monthly flat" / "Pre-paid"). Build the perKey map directly
+    // from canonicalVenueCost, which already exposes kind /
+    // matchCount / override.reason / amount.
+    const perKey = new Map<string, PerKeyValue>();
+    for (const v of data.venues) {
+      const fromInfo = canonicalVenueCost(data, v.id, currentMonth);
+      const toInfo = canonicalVenueCost(data, v.id, nextMonth);
+      const from = fromInfo.amount;
+      const to = toInfo.amount;
+      if (from <= 0 && to <= 0) continue;
+      const label = `${v.city} · ${v.venue_name}`;
+      perKey.set(label, {
+        from,
+        to,
+        delta: to - from,
+        fromBreakdown: compactCostBreakdown(fromInfo),
+        toBreakdown: compactCostBreakdown(toInfo),
+      });
+    }
+    return buildChildren(perKey, { singular: "city", plural: "cities" });
   }
   if (category === "Match Manager Pay") {
     return buildChildren(

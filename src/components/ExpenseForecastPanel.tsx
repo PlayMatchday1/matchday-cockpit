@@ -332,30 +332,40 @@ function MoverRow({
           }`}
         >
           <div className="overflow-hidden">
-            <div className="space-y-1 pb-3 pl-7 pr-1">
+            <div className="space-y-2 pb-3 pl-7 pr-1">
               {row.children!.map((child) => (
-                <div
-                  key={child.name}
-                  className="flex items-baseline gap-3 text-[12px]"
-                >
-                  <span className="min-w-0 flex-1 truncate text-deep-green/65">
-                    {child.name}
-                  </span>
-                  {/* Three numeric columns mirror the parent row's
-                      alignment: from / to / Δ. Slightly narrower
-                      than parent (w-16 vs w-20) so the indented
-                      drill-down still nests visually. */}
-                  <span className="w-16 shrink-0 text-right font-mono tabular-nums text-deep-green/55">
-                    {fmtUsd(child.fromAmount)}
-                  </span>
-                  <span className="w-16 shrink-0 text-right font-mono tabular-nums text-deep-green/55">
-                    {fmtUsd(child.toAmount)}
-                  </span>
-                  <span
-                    className={`w-16 shrink-0 text-right font-mono font-semibold tabular-nums ${deltaToneClass(child.delta)}`}
-                  >
-                    {fmtSig(child.delta)}
-                  </span>
+                <div key={child.name}>
+                  <div className="flex items-baseline gap-3 text-[12px]">
+                    <span className="min-w-0 flex-1 truncate text-deep-green/65">
+                      {child.name}
+                    </span>
+                    {/* Three numeric columns mirror the parent row's
+                        alignment: from / to / Δ. Slightly narrower
+                        than parent (w-16 vs w-20) so the indented
+                        drill-down still nests visually. */}
+                    <span className="w-16 shrink-0 text-right font-mono tabular-nums text-deep-green/55">
+                      {fmtUsd(child.fromAmount)}
+                    </span>
+                    <span className="w-16 shrink-0 text-right font-mono tabular-nums text-deep-green/55">
+                      {fmtUsd(child.toAmount)}
+                    </span>
+                    <span
+                      className={`w-16 shrink-0 text-right font-mono font-semibold tabular-nums ${deltaToneClass(child.delta)}`}
+                    >
+                      {fmtSig(child.delta)}
+                    </span>
+                  </div>
+                  {/* Composition line — explains *why* the cost is
+                      what it is in each month. Field Costs only;
+                      other categories leave breakdowns undefined and
+                      this line doesn't render. */}
+                  {(child.fromBreakdown || child.toBreakdown) && (
+                    <div className="mt-0.5 text-[10px] text-deep-green/45">
+                      {shortMonth(fromMonth)}: {child.fromBreakdown ?? "—"}
+                      {"   "}
+                      {shortMonth(toMonth)}: {child.toBreakdown ?? "—"}
+                    </div>
+                  )}
                 </div>
               ))}
             </div>
