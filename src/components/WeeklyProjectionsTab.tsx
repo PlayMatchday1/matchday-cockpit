@@ -476,6 +476,18 @@ function FieldRow({
                 label: "rev",
                 value: w.matches > 0 ? fmtUsd(w.dppRev) : "—",
               },
+              {
+                label: "cancels",
+                value: (
+                  <span
+                    className={
+                      w.cancels > 0 ? "text-coral" : "text-deep-green/45"
+                    }
+                  >
+                    {w.cancels}
+                  </span>
+                ),
+              },
             ]}
             muted
           />

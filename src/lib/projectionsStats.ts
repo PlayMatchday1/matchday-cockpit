@@ -28,6 +28,7 @@ export type WeekWindow = {
 
 export type FieldWeekStats = {
   matches: number;
+  cancels: number; // distinct match_starts where the whole match was canceled
   dppRev: number;
   avgPrice: number; // dppRev / matches; 0 when matches=0
 };
@@ -171,17 +172,20 @@ export function computeProjections(
   saved: Map<string, SavedProjection>,
   windows: { windowsHistorical: WeekWindow[]; nextWindow: WeekWindow } = computeProjectionWindows(),
 ): ProjectionsView {
-  // 1. Active rows: drop staff + match_canceled.
-  const active = registrations.filter(
+  // 1. Drop staff. Keep canceled rows so we can count canceled matches
+  //    alongside played ones — they're a separate signal.
+  const regsExStaff = registrations.filter(
     (r) =>
       !!r.field &&
-      !(r.email && r.email.toLowerCase().includes(STAFF_EMAIL_DOMAIN)) &&
-      !r.match_canceled,
+      !(r.email && r.email.toLowerCase().includes(STAFF_EMAIL_DOMAIN)),
   );
+  const active = regsExStaff.filter((r) => !r.match_canceled);
+  const cancelled = regsExStaff.filter((r) => r.match_canceled);
 
-  // 2. Field → venue map.
+  // 2. Field → venue map. Built from BOTH active and canceled rows so a
+  //    venue that only has cancellations in a window still resolves.
   const fields = new Set<string>();
-  for (const r of active) if (r.field) fields.add(r.field);
+  for (const r of regsExStaff) if (r.field) fields.add(r.field);
   const fieldToVenue = buildFieldToVenueMap(fields, venues);
 
   // 3. Stats helper.
@@ -197,8 +201,23 @@ export function computeProjections(
         dppRev += Number(r.match_price_paid ?? 0) || 0;
       }
     }
+    // Canceled-match count is distinct match_starts where the whole
+    // match was canceled — not registration count. A canceled match
+    // with 12 paid spots = 1 cancel, not 12.
+    const cancelSet = new Set<string>();
+    for (const r of cancelled) {
+      if (fieldToVenue.get(r.field as string) !== venueId) continue;
+      const ymd = r.match_start.slice(0, 10);
+      if (ymd < w.start || ymd > w.end) continue;
+      cancelSet.add(r.match_start);
+    }
     const matches = matchSet.size;
-    return { matches, dppRev, avgPrice: matches > 0 ? dppRev / matches : 0 };
+    return {
+      matches,
+      cancels: cancelSet.size,
+      dppRev,
+      avgPrice: matches > 0 ? dppRev / matches : 0,
+    };
   }
 
   // 4. Per-venue rows.
