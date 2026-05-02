@@ -480,11 +480,7 @@ function WeeklyPaymentsSection({
         <p className="text-xs text-deep-green/55">{subtitle}</p>
       </div>
 
-      {payment.weeklyPayments.length === 0 && payment.firstQualifyingSunday ? (
-        <div className="mt-3 rounded-xl border border-cream-line bg-cream-soft/40 px-4 py-5 text-sm italic text-deep-green/55">
-          First payment week begins {fmtDateYmd(payment.firstQualifyingSunday)}.
-        </div>
-      ) : (
+      {payment.weeklyPayments.length > 0 && (
         <div className="mt-3 overflow-hidden rounded-xl border border-cream-line bg-white">
           <table className="w-full text-sm">
             <thead className="bg-cream-soft/60 text-[11px] font-semibold uppercase tracking-[0.06em] text-deep-green/55">
@@ -505,14 +501,23 @@ function WeeklyPaymentsSection({
                     : w.owedAmount;
                 return (
                   <tr
-                    key={w.weekStartDate}
+                    key={`${w.isPreSystem ? "pre" : "wk"}-${w.weekStartDate}`}
                     className={i > 0 ? "border-t border-cream-line" : ""}
                   >
                     <td className="px-4 py-2.5 text-deep-green">
-                      {fmtDateYmd(w.weekStartDate)}
+                      {w.isPreSystem ? (
+                        <>
+                          <div>Through {fmtDateYmd(w.weekStartDate)}</div>
+                          <p className="mt-0.5 text-[10px] italic text-deep-green/45">
+                            Pre-system settlement
+                          </p>
+                        </>
+                      ) : (
+                        fmtDateYmd(w.weekStartDate)
+                      )}
                     </td>
                     <td className="px-4 py-2.5 text-right font-mono tabular-nums text-deep-green/80">
-                      {fmtUsd(w.qualifyingRevenue)}
+                      {w.isPreSystem ? "—" : fmtUsd(w.qualifyingRevenue)}
                     </td>
                     <td className="px-4 py-2.5 text-right font-mono font-medium tabular-nums text-deep-green">
                       ${displayAmount.toFixed(2)}
@@ -529,11 +534,10 @@ function WeeklyPaymentsSection({
                       {fmtDateYmd(w.paidAt ? w.paidAt.slice(0, 10) : null)}
                     </td>
                     <td className="px-4 py-2.5 text-right">
-                      {/* Dispute is only meaningful for rows with a
-                          persisted record (status='paid' or already
-                          'disputed'). A purely-pending row with no
-                          record can't be disputed against — nothing
-                          has been claimed paid yet. */}
+                      {/* Dispute is meaningful for any row with a
+                          persisted record — including pre-system rows
+                          (in case the partner contests the historical
+                          settlement). */}
                       {w.status === "paid" && (
                         <button
                           type="button"
@@ -560,6 +564,27 @@ function WeeklyPaymentsSection({
           </table>
         </div>
       )}
+
+      {/* "First payment week begins …" — coexists with any pre-system
+          rows above. Shows when no Sunday-anchored rows have appeared
+          yet AND the first qualifying Sunday is in the future. */}
+      {(() => {
+        const hasSunday = payment.weeklyPayments.some((w) => !w.isPreSystem);
+        const todayYmd = new Date().toISOString().slice(0, 10);
+        const showMessage =
+          !hasSunday &&
+          payment.firstQualifyingSunday !== null &&
+          payment.firstQualifyingSunday > todayYmd;
+        if (!showMessage) return null;
+        return (
+          <div
+            className={`${payment.weeklyPayments.length > 0 ? "mt-3" : "mt-3"} rounded-xl border border-cream-line bg-cream-soft/40 px-4 py-5 text-sm italic text-deep-green/55`}
+          >
+            First payment week begins{" "}
+            {fmtDateYmd(payment.firstQualifyingSunday)}.
+          </div>
+        );
+      })()}
 
       {disputeTarget && (
         <DisputeModal

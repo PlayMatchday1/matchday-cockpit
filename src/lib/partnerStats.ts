@@ -166,35 +166,61 @@ export async function fetchPartnerBySlug(
 // Persisted partner_weekly_payments row (verbatim from the table).
 // computeWeeklyPayments LEFT JOINs computed amounts against these to
 // produce the merged display rows.
+//
+// is_pre_system_settlement = true marks lump-sum historical payments
+// that predate the weekly payment system. These rows are emitted
+// directly into the dashboard table (not generated from match data)
+// with a "Through <date>" label instead of a Sunday-anchored week.
 export type PartnerWeeklyPaymentRecord = {
   id: string;
   partner_dashboard_id: string;
-  week_start_date: string; // YYYY-MM-DD
+  week_start_date: string; // YYYY-MM-DD (Sunday for normal rows, through-date for pre-system)
   calculated_amount: number;
   status: "pending" | "paid" | "disputed";
   paid_at: string | null;
   paid_notes: string | null;
   dispute_note: string | null;
   disputed_at: string | null;
+  is_pre_system_settlement: boolean;
 };
 
 // Fetch all persisted weekly payment records for one partner_dashboard.
 // Returns [] when the table doesn't exist yet (pre-migration), so the
-// partner page still renders.
+// partner page still renders. Resilient to migration 0004 not yet
+// applied: if is_pre_system_settlement column is missing, falls back
+// to the legacy column set with the flag defaulted to false.
 export async function fetchPartnerWeeklyPayments(
   supabase: SupabaseClient,
   partnerDashboardId: string,
 ): Promise<PartnerWeeklyPaymentRecord[]> {
-  const { data, error } = await supabase
+  // eslint-disable-next-line @typescript-eslint/no-explicit-any
+  let data: any[] | null = null;
+  // eslint-disable-next-line @typescript-eslint/no-explicit-any
+  let error: any = null;
+  const primary = await supabase
     .from("partner_weekly_payments")
     .select(
-      "id, partner_dashboard_id, week_start_date, calculated_amount, status, paid_at, paid_notes, dispute_note, disputed_at",
+      "id, partner_dashboard_id, week_start_date, calculated_amount, status, paid_at, paid_notes, dispute_note, disputed_at, is_pre_system_settlement",
     )
     .eq("partner_dashboard_id", partnerDashboardId)
     .order("week_start_date", { ascending: true });
+  data = primary.data;
+  error = primary.error;
+  if (error && error.code === "42703") {
+    // is_pre_system_settlement column missing — pre-0004 schema.
+    const fallback = await supabase
+      .from("partner_weekly_payments")
+      .select(
+        "id, partner_dashboard_id, week_start_date, calculated_amount, status, paid_at, paid_notes, dispute_note, disputed_at",
+      )
+      .eq("partner_dashboard_id", partnerDashboardId)
+      .order("week_start_date", { ascending: true });
+    data = fallback.data;
+    error = fallback.error;
+  }
   if (error) {
     // 42P01 = undefined_table, PGRST205 = table not in schema cache
-    // (PostgREST equivalent). Both mean the migration isn't applied.
+    // (PostgREST equivalent). Both mean the table itself is missing.
     if (error.code === "42P01" || error.code === "PGRST205") return [];
     throw new Error(`Weekly payments fetch failed: ${error.message}`);
   }
@@ -208,6 +234,7 @@ export async function fetchPartnerWeeklyPayments(
     paid_notes: r.paid_notes ?? null,
     dispute_note: r.dispute_note ?? null,
     disputed_at: r.disputed_at ?? null,
+    is_pre_system_settlement: Boolean(r.is_pre_system_settlement ?? false),
   }));
 }
 
@@ -638,10 +665,10 @@ export function computePartnerStats(
 // computeWeeklyPayments does the LEFT-OUTER merge here.
 
 export type PartnerWeeklyPayment = {
-  weekStartDate: string; // YYYY-MM-DD (Sunday)
-  weekEndDate: string; // YYYY-MM-DD (Saturday)
-  qualifyingRevenue: number;
-  owedAmount: number; // qualifyingRevenue × pct/100, computed live
+  weekStartDate: string; // YYYY-MM-DD (Sunday for normal rows, through-date for pre-system)
+  weekEndDate: string; // YYYY-MM-DD (Saturday for normal rows, same as weekStartDate for pre-system)
+  qualifyingRevenue: number; // 0 for pre-system rows (UI renders "—")
+  owedAmount: number; // qualifyingRevenue × pct/100 for normal rows; calculated_amount for pre-system
   status: "pending" | "paid" | "disputed";
   // When a partner_weekly_payments row exists for this week, these
   // mirror the persisted row. When no row exists, status='pending'
@@ -652,6 +679,10 @@ export type PartnerWeeklyPayment = {
   paidNotes: string | null;
   disputeNote: string | null;
   disputedAt: string | null;
+  // True for lump-sum historical settlements that predate the
+  // weekly payment system. UI renders "Through <date>" instead of
+  // "Week of <date>" and shows the qualifying-revenue cell as "—".
+  isPreSystem: boolean;
 };
 
 export type PartnerPaymentInfo = {
@@ -701,14 +732,39 @@ export function computeWeeklyPayments(
   records: PartnerWeeklyPaymentRecord[] = [],
   now: Date = new Date(),
 ): PartnerPaymentInfo {
+  // Pre-system settlement rows are emitted regardless of whether
+  // payment_start_date is configured. They represent historical
+  // payments and exist independently of the qualifying-week generator.
+  const preSystemRecords = records.filter((r) => r.is_pre_system_settlement);
+  const preSystemRows: PartnerWeeklyPayment[] = preSystemRecords
+    .slice()
+    .sort((a, b) => a.week_start_date.localeCompare(b.week_start_date))
+    .map((r) => ({
+      weekStartDate: r.week_start_date, // through-date for pre-system rows
+      weekEndDate: r.week_start_date,
+      qualifyingRevenue: 0, // not meaningful for a lump sum; UI renders "—"
+      owedAmount: r.calculated_amount,
+      status: r.status,
+      recordId: r.id,
+      calculatedAmount: r.calculated_amount,
+      paidAt: r.paid_at,
+      paidNotes: r.paid_notes,
+      disputeNote: r.dispute_note,
+      disputedAt: r.disputed_at,
+      isPreSystem: true,
+    }));
+
   if (!config.paymentStartDate) {
+    // Payment system off, but pre-system settlements should still
+    // render if any exist (they're historical artifacts independent
+    // of weekly tracking).
     return {
-      enabled: false,
+      enabled: preSystemRows.length > 0,
       revenueSharePct: config.revenueSharePct,
       paymentStartDate: null,
       paymentDayOfWeek: config.paymentDayOfWeek,
       firstQualifyingSunday: null,
-      weeklyPayments: [],
+      weeklyPayments: preSystemRows,
     };
   }
 
@@ -723,11 +779,13 @@ export function computeWeeklyPayments(
       !r.match_canceled,
   );
 
-  // Index persisted records by week_start_date for O(1) lookup.
+  // Sunday-anchored records only — pre-system records are emitted
+  // separately above and don't participate in the LEFT-JOIN merge.
+  const sundayRecords = records.filter((r) => !r.is_pre_system_settlement);
   const recordByWeek = new Map<string, PartnerWeeklyPaymentRecord>();
-  for (const rec of records) recordByWeek.set(rec.week_start_date, rec);
+  for (const rec of sundayRecords) recordByWeek.set(rec.week_start_date, rec);
 
-  const weeks: PartnerWeeklyPayment[] = [];
+  const sundayRows: PartnerWeeklyPayment[] = [];
   // Iterate Sundays from firstSunday up to and including current Sunday.
   // Past + current only: stop the first time the cursor exceeds today.
   let cursor = firstSunday;
@@ -756,7 +814,7 @@ export function computeWeeklyPayments(
       Math.round(qualifyingRevenue * config.revenueSharePct) / 100;
 
     const rec = recordByWeek.get(cursor);
-    weeks.push({
+    sundayRows.push({
       weekStartDate: cursor,
       weekEndDate: weekEnd,
       qualifyingRevenue,
@@ -768,6 +826,7 @@ export function computeWeeklyPayments(
       paidNotes: rec?.paid_notes ?? null,
       disputeNote: rec?.dispute_note ?? null,
       disputedAt: rec?.disputed_at ?? null,
+      isPreSystem: false,
     });
 
     cursor = addDays(cursor, 7);
@@ -779,6 +838,7 @@ export function computeWeeklyPayments(
     paymentStartDate: config.paymentStartDate,
     paymentDayOfWeek: config.paymentDayOfWeek,
     firstQualifyingSunday: firstSunday,
-    weeklyPayments: weeks,
+    // Pre-system rows first (by week_start_date), then Sunday-anchored.
+    weeklyPayments: [...preSystemRows, ...sundayRows],
   };
 }

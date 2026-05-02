@@ -4,6 +4,7 @@ import { useEffect, useMemo, useState } from "react";
 import Link from "next/link";
 import {
   computeWeeklyPayments,
+  fetchPartnerWeeklyPayments,
   type PartnerExtraRevRow,
   type PartnerPaymentInfo,
   type PartnerRegRow,
@@ -58,6 +59,7 @@ export default function PartnerDetailAdmin({
   const [paidTarget, setPaidTarget] = useState<PartnerWeeklyPayment | null>(null);
   const [pendingTarget, setPendingTarget] = useState<PartnerWeeklyPayment | null>(null);
   const [resolveTarget, setResolveTarget] = useState<PartnerWeeklyPayment | null>(null);
+  const [preSystemOpen, setPreSystemOpen] = useState(false);
 
   async function load() {
     setLoading(true);
@@ -134,27 +136,9 @@ export default function PartnerDetailAdmin({
       }
       setExtraRows(ex);
 
-      const { data: wp, error: wpErr } = await supabase
-        .from("partner_weekly_payments")
-        .select(
-          "id, partner_dashboard_id, week_start_date, calculated_amount, status, paid_at, paid_notes, dispute_note, disputed_at",
-        )
-        .eq("partner_dashboard_id", partnerDashboardId)
-        .order("week_start_date", { ascending: true });
-      if (wpErr) throw new Error(`weekly payments: ${wpErr.message}`);
-      setRecords(
-        (wp ?? []).map((r) => ({
-          id: r.id,
-          partner_dashboard_id: r.partner_dashboard_id,
-          week_start_date: String(r.week_start_date).slice(0, 10),
-          calculated_amount: Number(r.calculated_amount ?? 0),
-          status: r.status as "pending" | "paid" | "disputed",
-          paid_at: r.paid_at ?? null,
-          paid_notes: r.paid_notes ?? null,
-          dispute_note: r.dispute_note ?? null,
-          disputed_at: r.disputed_at ?? null,
-        })),
-      );
+      // Reuse the resilient helper (defends against migration 0003/0004
+      // not yet applied — same defaults flow through).
+      setRecords(await fetchPartnerWeeklyPayments(supabase, partnerDashboardId));
     } catch (e) {
       setError(e instanceof Error ? e.message : String(e));
     } finally {
@@ -237,22 +221,35 @@ export default function PartnerDetailAdmin({
       />
 
       <div className="mt-10">
-        <h2 className="font-display text-2xl uppercase leading-none tracking-tight text-deep-green">
-          Weekly Payments
-        </h2>
-        <p className="mt-1 text-sm text-deep-green/60">
-          Most recent first. Past + current week only.
-        </p>
+        <div className="flex items-start justify-between gap-4">
+          <div>
+            <h2 className="font-display text-2xl uppercase leading-none tracking-tight text-deep-green">
+              Weekly Payments
+            </h2>
+            <p className="mt-1 text-sm text-deep-green/60">
+              Most recent first. Past + current week only.
+            </p>
+          </div>
+          <button
+            type="button"
+            onClick={() => setPreSystemOpen(true)}
+            className="rounded-md border border-cream-line bg-white px-3 py-2 text-xs font-semibold text-deep-green/70 transition hover:bg-cream-soft hover:text-deep-green"
+          >
+            + Add pre-system settlement
+          </button>
+        </div>
 
-        {!payment?.enabled ? (
-          <div className="mt-4 rounded-xl border border-cream-line bg-cream-soft/40 px-4 py-5 text-sm italic text-deep-green/55">
-            Payment tracking is off for this partner. Set a Start date above to enable.
-          </div>
-        ) : weeksDesc.length === 0 ? (
-          <div className="mt-4 rounded-xl border border-cream-line bg-cream-soft/40 px-4 py-5 text-sm italic text-deep-green/55">
-            First payment week begins{" "}
-            {fmtDateYmd(payment.firstQualifyingSunday)}.
-          </div>
+        {weeksDesc.length === 0 ? (
+          payment?.enabled === false ? (
+            <div className="mt-4 rounded-xl border border-cream-line bg-cream-soft/40 px-4 py-5 text-sm italic text-deep-green/55">
+              Payment tracking is off for this partner. Set a Start date above to enable, or add a pre-system settlement to record a historical lump-sum payout.
+            </div>
+          ) : (
+            <div className="mt-4 rounded-xl border border-cream-line bg-cream-soft/40 px-4 py-5 text-sm italic text-deep-green/55">
+              First payment week begins{" "}
+              {fmtDateYmd(payment?.firstQualifyingSunday ?? null)}.
+            </div>
+          )
         ) : (
           <div className="mt-4 overflow-hidden rounded-xl border border-cream-line bg-white">
             <table className="w-full text-sm">
@@ -274,14 +271,23 @@ export default function PartnerDetailAdmin({
                       : w.owedAmount;
                   return (
                     <tr
-                      key={w.weekStartDate}
+                      key={`${w.isPreSystem ? "pre" : "wk"}-${w.weekStartDate}`}
                       className={i > 0 ? "border-t border-cream-line" : ""}
                     >
                       <td className="px-4 py-2.5 text-deep-green">
-                        {fmtDateYmd(w.weekStartDate)}
+                        {w.isPreSystem ? (
+                          <>
+                            <div>Through {fmtDateYmd(w.weekStartDate)}</div>
+                            <p className="mt-0.5 text-[10px] italic text-deep-green/45">
+                              Pre-system settlement
+                            </p>
+                          </>
+                        ) : (
+                          fmtDateYmd(w.weekStartDate)
+                        )}
                       </td>
                       <td className="px-4 py-2.5 text-right font-mono tabular-nums text-deep-green/80">
-                        ${w.qualifyingRevenue.toFixed(2)}
+                        {w.isPreSystem ? "—" : `$${w.qualifyingRevenue.toFixed(2)}`}
                       </td>
                       <td className="px-4 py-2.5 text-right font-mono font-medium tabular-nums text-deep-green">
                         ${displayAmount.toFixed(2)}
@@ -335,7 +341,38 @@ export default function PartnerDetailAdmin({
             </table>
           </div>
         )}
+
+        {/* "First payment week begins …" — coexists with pre-system rows
+            above. Renders when no Sunday-anchored rows have appeared yet
+            but the first qualifying Sunday is in the future. */}
+        {(() => {
+          if (!payment?.enabled) return null;
+          const hasSunday = weeksDesc.some((w) => !w.isPreSystem);
+          const todayYmd = new Date().toISOString().slice(0, 10);
+          const showMessage =
+            !hasSunday &&
+            payment.firstQualifyingSunday !== null &&
+            payment.firstQualifyingSunday > todayYmd;
+          if (!showMessage) return null;
+          return (
+            <div className="mt-3 rounded-xl border border-cream-line bg-cream-soft/40 px-4 py-5 text-sm italic text-deep-green/55">
+              First payment week begins{" "}
+              {fmtDateYmd(payment.firstQualifyingSunday)}.
+            </div>
+          );
+        })()}
       </div>
+
+      {preSystemOpen && (
+        <AddPreSystemModal
+          partnerDashboardId={partnerDashboardId}
+          onCancel={() => setPreSystemOpen(false)}
+          onDone={() => {
+            setPreSystemOpen(false);
+            load();
+          }}
+        />
+      )}
 
       {paidTarget && (
         <MarkPaidModal
@@ -838,4 +875,154 @@ function Modal({
 
 function ModalFooter({ children }: { children: React.ReactNode }) {
   return <div className="mt-5 flex justify-end gap-2">{children}</div>;
+}
+
+// Pre-system settlement: a lump-sum historical payment that predates
+// the weekly payment system. Stored as a partner_weekly_payments row
+// with is_pre_system_settlement=true; the through-date goes in
+// week_start_date. Surfaces on the dashboard with a "Through <date>"
+// label instead of a Sunday-anchored "Week of" label.
+function AddPreSystemModal({
+  partnerDashboardId,
+  onCancel,
+  onDone,
+}: {
+  partnerDashboardId: string;
+  onCancel: () => void;
+  onDone: () => void;
+}) {
+  const today = new Date().toISOString().slice(0, 10);
+  const [throughDate, setThroughDate] = useState(today);
+  const [amount, setAmount] = useState("");
+  const [paidOn, setPaidOn] = useState(today);
+  const [notes, setNotes] = useState("");
+  const [busy, setBusy] = useState(false);
+  const [error, setError] = useState<string | null>(null);
+
+  async function handleConfirm() {
+    setBusy(true);
+    setError(null);
+    try {
+      const amt = Number(amount);
+      if (!Number.isFinite(amt) || amt <= 0) {
+        setError("Amount must be a positive number.");
+        setBusy(false);
+        return;
+      }
+      if (!throughDate) {
+        setError("Pick a Through date.");
+        setBusy(false);
+        return;
+      }
+      const paidAtIso = new Date(`${paidOn}T12:00:00Z`).toISOString();
+      const { error } = await supabase.from("partner_weekly_payments").insert({
+        partner_dashboard_id: partnerDashboardId,
+        week_start_date: throughDate,
+        calculated_amount: amt,
+        status: "paid",
+        paid_at: paidAtIso,
+        paid_notes: notes.trim() || null,
+        is_pre_system_settlement: true,
+      });
+      if (error) {
+        // 23505 = unique_violation on (partner_dashboard_id,
+        // week_start_date). Friendly message instead of constraint name.
+        if (error.code === "23505") {
+          setError(
+            "A weekly payment row already exists for that date. Pick a different through-date or update the existing row.",
+          );
+        } else {
+          setError(error.message);
+        }
+        return;
+      }
+      onDone();
+    } catch (e) {
+      setError(e instanceof Error ? e.message : String(e));
+    } finally {
+      setBusy(false);
+    }
+  }
+
+  return (
+    <Modal title="Add pre-system settlement" onCancel={onCancel}>
+      <p className="text-sm text-deep-green/65">
+        Records a lump-sum payment that predates the weekly system. Surfaces
+        on the partner&apos;s dashboard as &ldquo;Through {fmtDateYmd(throughDate)}&rdquo;
+        with a Pre-system settlement tag.
+      </p>
+
+      <label className="mt-4 block text-[11px] font-semibold uppercase tracking-[0.06em] text-deep-green/65">
+        Through date
+      </label>
+      <input
+        type="date"
+        value={throughDate}
+        onChange={(e) => setThroughDate(e.target.value)}
+        className="mt-1 w-full rounded-md border border-cream-line bg-white px-3 py-2 text-sm text-deep-green focus:border-mint focus:outline-none"
+      />
+      <p className="mt-1 text-[11px] text-deep-green/50">
+        Last day of the period covered by the lump sum.
+      </p>
+
+      <label className="mt-4 block text-[11px] font-semibold uppercase tracking-[0.06em] text-deep-green/65">
+        Amount paid (USD)
+      </label>
+      <input
+        type="number"
+        min={0}
+        step={0.01}
+        value={amount}
+        onChange={(e) => setAmount(e.target.value)}
+        placeholder="e.g., 169.50"
+        className="mt-1 w-full rounded-md border border-cream-line bg-white px-3 py-2 text-sm text-deep-green focus:border-mint focus:outline-none"
+      />
+
+      <label className="mt-4 block text-[11px] font-semibold uppercase tracking-[0.06em] text-deep-green/65">
+        Paid on
+      </label>
+      <input
+        type="date"
+        value={paidOn}
+        onChange={(e) => setPaidOn(e.target.value)}
+        className="mt-1 w-full rounded-md border border-cream-line bg-white px-3 py-2 text-sm text-deep-green focus:border-mint focus:outline-none"
+      />
+
+      <label className="mt-4 block text-[11px] font-semibold uppercase tracking-[0.06em] text-deep-green/65">
+        Notes (optional)
+      </label>
+      <textarea
+        value={notes}
+        onChange={(e) => setNotes(e.target.value)}
+        rows={3}
+        placeholder="e.g., 'Covers all March + April 2026 revenue. Paid via Venmo on 5/1.'"
+        className="mt-1 w-full rounded-md border border-cream-line bg-white px-3 py-2 text-sm text-deep-green focus:border-mint focus:outline-none"
+      />
+
+      {error && (
+        <div className="mt-3 rounded-md border border-coral/40 bg-coral-soft px-3 py-2 text-sm text-coral">
+          {error}
+        </div>
+      )}
+
+      <ModalFooter>
+        <button
+          type="button"
+          onClick={onCancel}
+          disabled={busy}
+          className="rounded-md border border-cream-line bg-white px-3 py-2 text-sm font-semibold text-deep-green/70 transition hover:bg-cream-soft hover:text-deep-green disabled:opacity-60"
+        >
+          Cancel
+        </button>
+        <button
+          type="button"
+          onClick={handleConfirm}
+          disabled={busy}
+          className="rounded-md bg-mint px-3 py-2 text-sm font-bold text-deep-green transition hover:bg-mint-hover disabled:opacity-60"
+        >
+          {busy ? "Saving…" : "Add settlement"}
+        </button>
+      </ModalFooter>
+    </Modal>
+  );
 }
