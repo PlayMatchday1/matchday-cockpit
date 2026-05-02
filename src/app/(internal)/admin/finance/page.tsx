@@ -9,6 +9,7 @@ import CityPLCard from "@/components/CityPLCard";
 import ExecutiveSummary from "@/components/ExecutiveSummary";
 import FinanceAnchorNav from "@/components/FinanceAnchorNav";
 import FinanceExecHero from "@/components/FinanceExecHero";
+import PartnerDashboardsAdmin from "@/components/PartnerDashboardsAdmin";
 import { CITY_DISPLAY_ORDER } from "@/lib/financeStats";
 import { supabase } from "@/lib/supabase";
 import { useFinanceData } from "@/lib/useFinanceData";
@@ -139,6 +140,13 @@ function FinanceLandingContent() {
           subtitle="Every manual add, edit, and delete with before/after diff and the user who made the change."
         />
       </div>
+
+      <section
+        id="partner-dashboards"
+        className="mb-12 scroll-mt-20"
+      >
+        <PartnerDashboardsAdmin inline />
+      </section>
 
       <SectionHeader
         title="Data"

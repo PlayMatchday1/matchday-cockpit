@@ -10,6 +10,7 @@ import Link from "next/link";
 const ANCHOR_LINKS: { label: string; href: string }[] = [
   { label: "Cities", href: "#cities" },
   { label: "Exec Summary", href: "#exec-summary" },
+  { label: "Partner Dashboards", href: "#partner-dashboards" },
 ];
 
 const SUBPAGE_LINKS: { label: string; href: string }[] = [
@@ -18,7 +19,6 @@ const SUBPAGE_LINKS: { label: string; href: string }[] = [
   { label: "Field Ranking", href: "/admin/finance/fields" },
   { label: "Cash Flow", href: "/admin/finance/cash-flow" },
   { label: "City Manager Check-Ins", href: "/admin/finance/check-ins" },
-  { label: "Partner Dashboards", href: "/admin/finance/partners" },
 ];
 
 export default function FinanceAnchorNav() {

@@ -55,7 +55,14 @@ function partnerUrl(slug: string): string {
   return `${PARTNER_BASE_URL}/partners/${slug}`;
 }
 
-export default function PartnerDashboardsAdmin() {
+// `inline` switches the heading from h1 (page-style) to h2 (section-
+// style) so the same component renders cleanly inside another page's
+// section flow. Used by /admin/finance to embed the partner list as
+// a #partner-dashboards section without disrupting the existing
+// section hierarchy on that page.
+export default function PartnerDashboardsAdmin({
+  inline = false,
+}: { inline?: boolean } = {}) {
   const [rows, setRows] = useState<PartnerRow[]>([]);
   const [venues, setVenues] = useState<Venue[]>([]);
   const [paymentCounts, setPaymentCounts] = useState<
@@ -243,9 +250,15 @@ export default function PartnerDashboardsAdmin() {
     <>
       <div className="mb-6 flex items-start justify-between gap-4">
         <div>
-          <h1 className="font-display text-4xl uppercase leading-none tracking-tight text-deep-green md:text-5xl">
-            Partner Dashboards
-          </h1>
+          {inline ? (
+            <h2 className="font-display text-3xl uppercase leading-none tracking-tight text-deep-green md:text-4xl">
+              Partner Dashboards
+            </h2>
+          ) : (
+            <h1 className="font-display text-4xl uppercase leading-none tracking-tight text-deep-green md:text-5xl">
+              Partner Dashboards
+            </h1>
+          )}
           <p className="mt-2 max-w-3xl text-sm text-deep-green/65">
             Manage tokenized partner-facing dashboards. Each partner sees
             only their venue&apos;s data.
