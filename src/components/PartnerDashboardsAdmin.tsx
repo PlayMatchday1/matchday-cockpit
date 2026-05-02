@@ -327,8 +327,8 @@ export default function PartnerDashboardsAdmin() {
                           as="a"
                           href={partnerUrl(r.slug)}
                           target="_blank"
-                          rel="noreferrer"
-                          title="Open in new tab"
+                          rel="noopener noreferrer"
+                          title="Open partner dashboard in new tab"
                         >
                           <ExternalLink size={14} />
                         </IconBtn>
