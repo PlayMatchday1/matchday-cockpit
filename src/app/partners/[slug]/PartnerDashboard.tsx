@@ -9,7 +9,11 @@ import {
   XAxis,
   YAxis,
 } from "recharts";
-import type { PartnerStats, PartnerWeekStat } from "@/lib/partnerStats";
+import type {
+  PartnerMonthStat,
+  PartnerStats,
+  PartnerWeekStat,
+} from "@/lib/partnerStats";
 
 const FMT_DATE = new Intl.DateTimeFormat("en-US", {
   month: "short",
@@ -62,6 +66,13 @@ export default function PartnerDashboard({
         <Metric label="Cancellations" value={stats.totals.cancels.toLocaleString()} sub="paid, didn't show" />
         <Metric label="Total revenue" value={fmtUsd(stats.totals.rev)} sub="match price paid" />
       </div>
+
+      {stats.byMonth.length > 0 && (
+        <>
+          <SecLabel className="mt-10">By month</SecLabel>
+          <MonthlySummary months={stats.byMonth} />
+        </>
+      )}
 
       <SecLabel className="mt-10">Week by week</SecLabel>
       <WeekGrid weeks={stats.weeks} />
@@ -185,6 +196,38 @@ function Legend({
   );
 }
 
+function MonthlySummary({ months }: { months: PartnerMonthStat[] }) {
+  return (
+    <div className="mt-3 overflow-hidden rounded-xl border border-cream-line bg-white">
+      <table className="w-full text-sm">
+        <thead className="bg-cream-soft/60 text-[11px] font-semibold uppercase tracking-[0.06em] text-deep-green/55">
+          <tr>
+            <th className="px-4 py-2.5 text-left">Month</th>
+            <th className="px-4 py-2.5 text-right">Total matches</th>
+            <th className="px-4 py-2.5 text-right">Total revenue</th>
+          </tr>
+        </thead>
+        <tbody>
+          {months.map((m, i) => (
+            <tr
+              key={m.ym}
+              className={i > 0 ? "border-t border-cream-line" : ""}
+            >
+              <td className="px-4 py-2.5 text-deep-green">{m.label}</td>
+              <td className="px-4 py-2.5 text-right font-mono tabular-nums text-deep-green">
+                {m.matches}
+              </td>
+              <td className="px-4 py-2.5 text-right font-mono font-medium tabular-nums text-deep-green">
+                {fmtUsd(m.revenue)}
+              </td>
+            </tr>
+          ))}
+        </tbody>
+      </table>
+    </div>
+  );
+}
+
 function WeekGrid({ weeks }: { weeks: PartnerWeekStat[] }) {
   return (
     <div className="mt-3 grid grid-cols-1 gap-2 sm:grid-cols-2 md:grid-cols-3 lg:grid-cols-5">
@@ -226,6 +269,7 @@ function WeekCard({
         <Row label="Members" value="—" />
         <Row label="Promo" value="—" />
         <Row label="Matches" value="0" />
+        <Row label="Avg price/match" value="—" />
         <Hr />
         <Row label="Cancels" value="—" />
         <Row label="Revenue" value="$0" />
@@ -265,6 +309,14 @@ function WeekCard({
       <Row label="Members" value={week.mem.toString()} />
       <Row label="Promo" value={week.promo.toString()} />
       <Row label="Matches" value={week.matches.toString()} />
+      <Row
+        label="Avg price/match"
+        value={
+          week.dpSpots > 0
+            ? `$${(week.dpRev / week.dpSpots).toFixed(2)}`
+            : "—"
+        }
+      />
       <Hr />
       <Row
         label="Cancels"

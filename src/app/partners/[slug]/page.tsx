@@ -24,8 +24,8 @@ export default async function PartnerPage({
   const partner = await fetchPartnerBySlug(supabase, slug);
   if (!partner) notFound(); // 404 — generic, no leak about why
 
-  const { rows } = await fetchPartnerRows(supabase, partner.venueId);
-  const stats = computePartnerStats(rows);
+  const { rows, extra } = await fetchPartnerRows(supabase, partner.venueId);
+  const stats = computePartnerStats(rows, extra);
 
   return (
     <PartnerDashboard partnerName={partner.partnerName} stats={stats} />
