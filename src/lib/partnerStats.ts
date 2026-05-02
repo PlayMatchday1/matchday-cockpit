@@ -59,8 +59,12 @@ export type PartnerWeekStat =
       // contributed by `extraRev`.
       dpRev: number;
       dpSpots: number;
-      // Non-match revenue (fin_revenue rows) bucketed into this week.
-      // Counted in totalRev but NOT in dpRev.
+      // Non-match revenue (fin_revenue rows) bucketed into this week,
+      // broken out per type so the UI can render one line item each
+      // (e.g., "Private Rental $100"). Sorted by amount desc. Empty
+      // when the week has no extras. Sum equals `extraRev`.
+      extras: Array<{ type: string; amount: number }>;
+      // Sum of `extras`. Counted in totalRev but NOT in dpRev.
       extraRev: number;
       isLatest: boolean;
     };
@@ -231,17 +235,22 @@ function fmtWeekLabel(firstYmd: string, lastYmd: string): string {
   return `${m1} ${day1}–${m1 === m2 ? day2 : `${m2} ${day2}`}`;
 }
 
-// Bucket extra (non-match) revenue by week-Monday and by year-month.
+// Bucket extra (non-match) revenue. Per-week is keyed (week → type →
+// amount) so the UI can render one line item per revenue type. Per-
+// month stays scalar (the monthly summary table only shows a single
+// total column).
 function bucketExtraRevenue(extra: PartnerExtraRevRow[]): {
-  byWeek: Map<string, number>;
+  byWeek: Map<string, Map<string, number>>;
   byMonth: Map<string, number>;
 } {
-  const byWeek = new Map<string, number>();
+  const byWeek = new Map<string, Map<string, number>>();
   const byMonth = new Map<string, number>();
   for (const e of extra) {
     if (!e.date) continue;
     const wk = getWeekMonday(e.date);
-    byWeek.set(wk, (byWeek.get(wk) ?? 0) + e.gross);
+    const typeMap = byWeek.get(wk) ?? new Map<string, number>();
+    typeMap.set(e.type, (typeMap.get(e.type) ?? 0) + e.gross);
+    byWeek.set(wk, typeMap);
     const ym = e.date.slice(0, 7); // YYYY-MM
     byMonth.set(ym, (byMonth.get(ym) ?? 0) + e.gross);
   }
@@ -252,6 +261,21 @@ const MONTH_NAMES = [
   "January", "February", "March", "April", "May", "June",
   "July", "August", "September", "October", "November", "December",
 ];
+
+// Convert a (type → amount) map into the sorted extras array shape
+// the UI expects. Empty types and zero-amount entries are dropped.
+function sortedExtrasFor(
+  typeMap: Map<string, number> | undefined,
+): Array<{ type: string; amount: number }> {
+  if (!typeMap || typeMap.size === 0) return [];
+  const out: Array<{ type: string; amount: number }> = [];
+  for (const [type, amount] of typeMap) {
+    if (!type || Math.abs(amount) < 0.005) continue;
+    out.push({ type, amount });
+  }
+  out.sort((a, b) => b.amount - a.amount);
+  return out;
+}
 
 function ymLabel(ym: string): string {
   // ym is "YYYY-MM"
@@ -380,7 +404,8 @@ export function computePartnerStats(
     const matches = new Set(wrows.map((r) => r.match_start)).size;
     const matchRev = wrows.reduce((s, r) => s + revenue(r), 0);
     const cancelRev = canceled.reduce((s, r) => s + revenue(r), 0);
-    const extraRev = extraByWeek.get(wkMonday) ?? 0;
+    const extras = sortedExtrasFor(extraByWeek.get(wkMonday));
+    const extraRev = extras.reduce((s, x) => s + x.amount, 0);
     const totalRev = matchRev + extraRev;
 
     // DPP-only slice (excludes Members, Promo, and any non-match
@@ -410,6 +435,7 @@ export function computePartnerStats(
       cancelCount: canceled.length,
       dpRev,
       dpSpots,
+      extras,
       extraRev,
       isLatest: wkMonday === lastWeekIso,
     });
@@ -435,8 +461,9 @@ export function computePartnerStats(
   // weekMap[wk] entry → no week stat created → its extraRev was never
   // pulled in). Add those to the all-time total so nothing is dropped.
   const accountedWeeks = new Set(weeks.map((w) => w.wkMonday));
-  for (const [wk, amt] of extraByWeek) {
-    if (!accountedWeeks.has(wk)) totals.rev += amt;
+  for (const [wk, typeMap] of extraByWeek) {
+    if (accountedWeeks.has(wk)) continue;
+    for (const amt of typeMap.values()) totals.rev += amt;
   }
 
   // Monthly summary: distinct match_start per month + sum match revenue

@@ -328,6 +328,14 @@ function WeekCard({
           </span>
         }
       />
+      {week.extras.map((x) => (
+        <Row
+          key={x.type}
+          label={x.type}
+          value={fmtUsd(x.amount)}
+          valueColor="text-mint-hover"
+        />
+      ))}
       <Row label="Revenue" value={fmtUsd(week.totalRev)} />
       {week.promoCodes.length > 0 && (
         <div className="mt-2 flex flex-wrap gap-1">
