@@ -25,6 +25,27 @@ function fmtDateYmd(ymd: string | null): string {
   return FMT_DATE.format(new Date(`${ymd}T12:00:00Z`));
 }
 
+const FMT_MONTH_YEAR = new Intl.DateTimeFormat("en-US", {
+  month: "long",
+  year: "numeric",
+  timeZone: "UTC",
+});
+function fmtMonthYear(ymd: string | null): string {
+  if (!ymd) return "—";
+  return FMT_MONTH_YEAR.format(new Date(`${ymd}T12:00:00Z`));
+}
+
+// Period label for an admin-side payment row.
+function periodLabel(
+  weekStartDate: string,
+  isPreSystem: boolean,
+  cadence: "weekly" | "monthly",
+): string {
+  if (isPreSystem) return `Through ${fmtDateYmd(weekStartDate)}`;
+  if (cadence === "monthly") return fmtMonthYear(weekStartDate);
+  return `Week of ${fmtDateYmd(weekStartDate)}`;
+}
+
 const DOW_NAMES = ["Sunday", "Monday", "Tuesday", "Wednesday", "Thursday", "Friday", "Saturday"];
 
 type DashboardRow = {
@@ -36,6 +57,7 @@ type DashboardRow = {
   revenue_share_pct: number;
   payment_start_date: string | null;
   payment_day_of_week: number;
+  payment_cadence: "weekly" | "monthly";
 };
 
 type Venue = {
@@ -65,16 +87,35 @@ export default function PartnerDetailAdmin({
     setLoading(true);
     setError(null);
     try {
-      const { data: pd, error: pdErr } = await supabase
+      // Try with payment_cadence first (post-0005); fall back without
+      // it for the brief pre-migration window.
+      let pd: DashboardRow | null = null;
+      const primary = await supabase
         .from("partner_dashboards")
         .select(
-          "id, slug, partner_name, enabled, venue_id, revenue_share_pct, payment_start_date, payment_day_of_week",
+          "id, slug, partner_name, enabled, venue_id, revenue_share_pct, payment_start_date, payment_day_of_week, payment_cadence",
         )
         .eq("id", partnerDashboardId)
         .maybeSingle();
-      if (pdErr) throw new Error(pdErr.message);
+      if (primary.error && primary.error.code === "42703") {
+        const fallback = await supabase
+          .from("partner_dashboards")
+          .select(
+            "id, slug, partner_name, enabled, venue_id, revenue_share_pct, payment_start_date, payment_day_of_week",
+          )
+          .eq("id", partnerDashboardId)
+          .maybeSingle();
+        if (fallback.error) throw new Error(fallback.error.message);
+        pd = fallback.data
+          ? ({ ...fallback.data, payment_cadence: "weekly" } as DashboardRow)
+          : null;
+      } else if (primary.error) {
+        throw new Error(primary.error.message);
+      } else {
+        pd = primary.data as DashboardRow | null;
+      }
       if (!pd) throw new Error("Partner dashboard not found.");
-      const dash = pd as DashboardRow;
+      const dash = pd;
       setDashboard(dash);
 
       const { data: vn, error: vnErr } = await supabase
@@ -160,6 +201,7 @@ export default function PartnerDetailAdmin({
         revenueSharePct: Number(dashboard.revenue_share_pct ?? 50),
         paymentStartDate: dashboard.payment_start_date,
         paymentDayOfWeek: dashboard.payment_day_of_week ?? 0,
+        paymentCadence: dashboard.payment_cadence ?? "weekly",
       },
       records,
     );
@@ -224,10 +266,11 @@ export default function PartnerDetailAdmin({
         <div className="flex items-start justify-between gap-4">
           <div>
             <h2 className="font-display text-2xl uppercase leading-none tracking-tight text-deep-green">
-              Weekly Payments
+              {payment?.cadence === "monthly" ? "Monthly Payments" : "Weekly Payments"}
             </h2>
             <p className="mt-1 text-sm text-deep-green/60">
-              Most recent first. Past + current week only.
+              Most recent first. Past + current{" "}
+              {payment?.cadence === "monthly" ? "month" : "week"} only.
             </p>
           </div>
           <button
@@ -246,8 +289,9 @@ export default function PartnerDetailAdmin({
             </div>
           ) : (
             <div className="mt-4 rounded-xl border border-cream-line bg-cream-soft/40 px-4 py-5 text-sm italic text-deep-green/55">
-              First payment week begins{" "}
-              {fmtDateYmd(payment?.firstQualifyingSunday ?? null)}.
+              {payment?.cadence === "monthly"
+                ? `First payment month begins ${fmtMonthYear(payment?.firstQualifyingPeriod ?? null)}.`
+                : `First payment week begins ${fmtDateYmd(payment?.firstQualifyingPeriod ?? payment?.firstQualifyingSunday ?? null)}.`}
             </div>
           )
         ) : (
@@ -255,7 +299,7 @@ export default function PartnerDetailAdmin({
             <table className="w-full text-sm">
               <thead className="bg-cream-soft/60 text-[11px] font-semibold uppercase tracking-[0.06em] text-deep-green/55">
                 <tr>
-                  <th className="px-4 py-2.5 text-left">Week of</th>
+                  <th className="px-4 py-2.5 text-left">Period</th>
                   <th className="px-4 py-2.5 text-right">Qualifying revenue</th>
                   <th className="px-4 py-2.5 text-right">Payment owed</th>
                   <th className="px-4 py-2.5 text-left">Status</th>
@@ -275,15 +319,17 @@ export default function PartnerDetailAdmin({
                       className={i > 0 ? "border-t border-cream-line" : ""}
                     >
                       <td className="px-4 py-2.5 text-deep-green">
-                        {w.isPreSystem ? (
-                          <>
-                            <div>Through {fmtDateYmd(w.weekStartDate)}</div>
-                            <p className="mt-0.5 text-[10px] italic text-deep-green/45">
-                              Pre-system settlement
-                            </p>
-                          </>
-                        ) : (
-                          fmtDateYmd(w.weekStartDate)
+                        <div>
+                          {periodLabel(
+                            w.weekStartDate,
+                            w.isPreSystem,
+                            payment?.cadence ?? "weekly",
+                          )}
+                        </div>
+                        {w.isPreSystem && (
+                          <p className="mt-0.5 text-[10px] italic text-deep-green/45">
+                            Pre-system settlement
+                          </p>
                         )}
                       </td>
                       <td className="px-4 py-2.5 text-right font-mono tabular-nums text-deep-green/80">
@@ -342,22 +388,23 @@ export default function PartnerDetailAdmin({
           </div>
         )}
 
-        {/* "First payment week begins …" — coexists with pre-system rows
-            above. Renders when no Sunday-anchored rows have appeared yet
-            but the first qualifying Sunday is in the future. */}
+        {/* "First payment {week|month} begins …" — coexists with
+            pre-system rows above. Renders when no generated rows have
+            appeared yet but the first qualifying period is in the
+            future. */}
         {(() => {
           if (!payment?.enabled) return null;
-          const hasSunday = weeksDesc.some((w) => !w.isPreSystem);
+          const hasGenerated = weeksDesc.some((w) => !w.isPreSystem);
           const todayYmd = new Date().toISOString().slice(0, 10);
+          const firstPeriod = payment.firstQualifyingPeriod;
           const showMessage =
-            !hasSunday &&
-            payment.firstQualifyingSunday !== null &&
-            payment.firstQualifyingSunday > todayYmd;
+            !hasGenerated && firstPeriod !== null && firstPeriod > todayYmd;
           if (!showMessage) return null;
           return (
             <div className="mt-3 rounded-xl border border-cream-line bg-cream-soft/40 px-4 py-5 text-sm italic text-deep-green/55">
-              First payment week begins{" "}
-              {fmtDateYmd(payment.firstQualifyingSunday)}.
+              {payment.cadence === "monthly"
+                ? `First payment month begins ${fmtMonthYear(firstPeriod)}.`
+                : `First payment week begins ${fmtDateYmd(firstPeriod)}.`}
             </div>
           );
         })()}
@@ -441,6 +488,9 @@ function PaymentSettingsForm({
   const [pct, setPct] = useState(String(dashboard.revenue_share_pct ?? 50));
   const [startDate, setStartDate] = useState(dashboard.payment_start_date ?? "");
   const [dow, setDow] = useState(String(dashboard.payment_day_of_week ?? 0));
+  const [cadence, setCadence] = useState<"weekly" | "monthly">(
+    dashboard.payment_cadence ?? "weekly",
+  );
   const [busy, setBusy] = useState(false);
   const [error, setError] = useState<string | null>(null);
   const [savedAt, setSavedAt] = useState<number | null>(null);
@@ -460,6 +510,7 @@ function PaymentSettingsForm({
           revenue_share_pct: pctNum,
           payment_start_date: startDate || null,
           payment_day_of_week: Number(dow),
+          payment_cadence: cadence,
         })
         .eq("id", dashboard.id);
       if (error) {
@@ -481,7 +532,7 @@ function PaymentSettingsForm({
         Payment Settings
       </h2>
 
-      <div className="mt-5 grid grid-cols-1 gap-4 sm:grid-cols-3">
+      <div className="mt-5 grid grid-cols-1 gap-4 sm:grid-cols-2 lg:grid-cols-4">
         <div>
           <label className="block text-[11px] font-semibold uppercase tracking-[0.06em] text-deep-green/65">
             Revenue share %
@@ -498,15 +549,42 @@ function PaymentSettingsForm({
         </div>
 
         <div>
+          <label className="block text-[11px] font-semibold uppercase tracking-[0.06em] text-deep-green/65">
+            Cadence
+          </label>
+          <select
+            value={cadence}
+            onChange={(e) =>
+              setCadence(e.target.value === "monthly" ? "monthly" : "weekly")
+            }
+            className="mt-1 w-full rounded-md border border-cream-line bg-white px-3 py-2 text-sm text-deep-green focus:border-mint focus:outline-none"
+          >
+            <option value="weekly">Weekly</option>
+            <option value="monthly">Monthly</option>
+          </select>
+          <p className="mt-1 text-[11px] text-deep-green/50">
+            Weekly = Sun→Sat, paid Mondays. Monthly = full calendar month, paid the 5th.
+          </p>
+        </div>
+
+        <div>
           <label
             className="block text-[11px] font-semibold uppercase tracking-[0.06em] text-deep-green/65"
-            title="First qualifying week is the first Sunday on or after this date. Weeks whose Sunday falls before this date are skipped."
+            title={
+              cadence === "monthly"
+                ? "First qualifying month is the first calendar month that starts on or after this date. Months whose 1st falls before this date are skipped."
+                : "First qualifying week is the first Sunday on or after this date. Weeks whose Sunday falls before this date are skipped."
+            }
           >
             Start date
             <span
               aria-hidden
               className="ml-1 inline-flex h-3.5 w-3.5 cursor-help items-center justify-center rounded-full bg-deep-green/15 text-[8px] font-bold text-deep-green/65"
-              title="First qualifying week is the first Sunday on or after this date. Weeks whose Sunday falls before this date are skipped."
+              title={
+                cadence === "monthly"
+                  ? "First qualifying month is the first calendar month that starts on or after this date. Months whose 1st falls before this date are skipped."
+                  : "First qualifying week is the first Sunday on or after this date. Weeks whose Sunday falls before this date are skipped."
+              }
             >
               i
             </span>
@@ -526,19 +604,27 @@ function PaymentSettingsForm({
           <label className="block text-[11px] font-semibold uppercase tracking-[0.06em] text-deep-green/65">
             Paid on (display)
           </label>
-          <select
-            value={dow}
-            onChange={(e) => setDow(e.target.value)}
-            className="mt-1 w-full rounded-md border border-cream-line bg-white px-3 py-2 text-sm text-deep-green focus:border-mint focus:outline-none"
-          >
-            {DOW_NAMES.map((name, idx) => (
-              <option key={idx} value={idx}>
-                {name}
-              </option>
-            ))}
-          </select>
+          {cadence === "monthly" ? (
+            <div className="mt-1 rounded-md border border-cream-line bg-cream-soft/40 px-3 py-2 text-sm text-deep-green/65">
+              5th of the following month
+            </div>
+          ) : (
+            <select
+              value={dow}
+              onChange={(e) => setDow(e.target.value)}
+              className="mt-1 w-full rounded-md border border-cream-line bg-white px-3 py-2 text-sm text-deep-green focus:border-mint focus:outline-none"
+            >
+              {DOW_NAMES.map((name, idx) => (
+                <option key={idx} value={idx}>
+                  {name}
+                </option>
+              ))}
+            </select>
+          )}
           <p className="mt-1 text-[11px] text-deep-green/50">
-            Label only — week buckets are always Sun→Sat.
+            {cadence === "monthly"
+              ? "Hardcoded — monthly cadence always pays the 5th of the following month."
+              : "Label only — week buckets are always Sun→Sat."}
           </p>
         </div>
       </div>

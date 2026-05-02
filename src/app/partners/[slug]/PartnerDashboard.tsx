@@ -35,6 +35,31 @@ function fmtUsd(n: number): string {
   return "$" + Math.round(n).toLocaleString("en-US");
 }
 
+const FMT_MONTH_YEAR = new Intl.DateTimeFormat("en-US", {
+  month: "long",
+  year: "numeric",
+  timeZone: "UTC",
+});
+
+function fmtMonthYear(ymd: string | null): string {
+  if (!ymd) return "—";
+  return FMT_MONTH_YEAR.format(new Date(`${ymd}T12:00:00Z`));
+}
+
+// Period label for a Weekly Payments / Monthly Payments row.
+//   - pre-system → "Through Apr 30, 2026"
+//   - weekly     → "Week of May 3, 2026"
+//   - monthly    → "May 2026"
+function periodLabel(
+  weekStartDate: string,
+  isPreSystem: boolean,
+  cadence: "weekly" | "monthly",
+): string {
+  if (isPreSystem) return `Through ${fmtDateYmd(weekStartDate)}`;
+  if (cadence === "monthly") return fmtMonthYear(weekStartDate);
+  return `Week of ${fmtDateYmd(weekStartDate)}`;
+}
+
 export default function PartnerDashboard({
   partnerDashboardId,
   partnerName,
@@ -478,16 +503,20 @@ function WeeklyPaymentsSection({
   const [disputeTarget, setDisputeTarget] =
     useState<PartnerWeeklyPayment | null>(null);
 
-  // Week boundary is Sunday (Sun→Sat); the actual transfer hits the
-  // partner on Monday. The day-of-week stored on partner_dashboards
-  // is the (legacy) week-boundary indicator, not the transfer day —
-  // partner-facing copy uses the transfer day directly.
-  const subtitle = `${payment.revenueSharePct}% of qualifying revenue (DPP + Private Rental). Paid weekly on Mondays.`;
+  // Header + subtitle vary by cadence. Weekly partners get the original
+  // Sunday-anchored copy; monthly partners get a calendar-month version
+  // with the "5th of the following month" transfer rule.
+  const headerLabel =
+    payment.cadence === "monthly" ? "Monthly payments" : "Weekly payments";
+  const subtitle =
+    payment.cadence === "monthly"
+      ? `${payment.revenueSharePct}% of qualifying revenue (DPP + Private Rental). Paid on the 5th of the following month.`
+      : `${payment.revenueSharePct}% of qualifying revenue (DPP + Private Rental). Paid weekly on Mondays.`;
 
   return (
     <>
       <div className="mt-10 flex flex-wrap items-baseline justify-between gap-x-4 gap-y-1">
-        <SecLabel>Weekly payments</SecLabel>
+        <SecLabel>{headerLabel}</SecLabel>
         <p className="text-xs text-deep-green/55">{subtitle}</p>
       </div>
 
@@ -498,7 +527,7 @@ function WeeklyPaymentsSection({
             <table className="w-full text-sm">
               <thead className="bg-cream-soft/60 text-[11px] font-semibold uppercase tracking-[0.06em] text-deep-green/55">
                 <tr>
-                  <th className="px-4 py-2.5 text-left">Week of</th>
+                  <th className="px-4 py-2.5 text-left">Period</th>
                   <th className="px-4 py-2.5 text-right">Qualifying revenue</th>
                   <th className="px-4 py-2.5 text-right">Payment owed</th>
                   <th className="px-4 py-2.5 text-left">Status</th>
@@ -518,15 +547,17 @@ function WeeklyPaymentsSection({
                       className={i > 0 ? "border-t border-cream-line" : ""}
                     >
                       <td className="px-4 py-2.5 text-deep-green">
-                        {w.isPreSystem ? (
-                          <>
-                            <div>Through {fmtDateYmd(w.weekStartDate)}</div>
-                            <p className="mt-0.5 text-[10px] italic text-deep-green/45">
-                              Pre-system settlement
-                            </p>
-                          </>
-                        ) : (
-                          fmtDateYmd(w.weekStartDate)
+                        <div>
+                          {periodLabel(
+                            w.weekStartDate,
+                            w.isPreSystem,
+                            payment.cadence,
+                          )}
+                        </div>
+                        {w.isPreSystem && (
+                          <p className="mt-0.5 text-[10px] italic text-deep-green/45">
+                            Pre-system settlement
+                          </p>
                         )}
                       </td>
                       <td className="px-4 py-2.5 text-right font-mono tabular-nums text-deep-green/80">
@@ -595,9 +626,11 @@ function WeeklyPaymentsSection({
                   <div className="flex items-start justify-between gap-3">
                     <div className="min-w-0">
                       <div className="whitespace-nowrap text-sm font-semibold text-deep-green">
-                        {w.isPreSystem
-                          ? `Through ${fmtDateYmd(w.weekStartDate)}`
-                          : fmtDateYmd(w.weekStartDate)}
+                        {periodLabel(
+                          w.weekStartDate,
+                          w.isPreSystem,
+                          payment.cadence,
+                        )}
                       </div>
                       {w.isPreSystem && (
                         <p className="mt-0.5 text-[10px] italic text-deep-green/45">
@@ -665,23 +698,25 @@ function WeeklyPaymentsSection({
         </>
       )}
 
-      {/* "Next payment week begins …" — coexists with any pre-system
-          rows above. Shows when no Sunday-anchored rows have appeared
-          yet AND the first qualifying Sunday is in the future. */}
+      {/* "Next payment {week|month} begins …" — coexists with any
+          pre-system rows above. Shows when no generated rows have
+          appeared yet AND the first qualifying period is in the
+          future. */}
       {(() => {
-        const hasSunday = payment.weeklyPayments.some((w) => !w.isPreSystem);
+        const hasGenerated = payment.weeklyPayments.some((w) => !w.isPreSystem);
         const todayYmd = new Date().toISOString().slice(0, 10);
         const showMessage =
-          !hasSunday &&
-          payment.firstQualifyingSunday !== null &&
-          payment.firstQualifyingSunday > todayYmd;
+          !hasGenerated &&
+          payment.firstQualifyingPeriod !== null &&
+          payment.firstQualifyingPeriod > todayYmd;
         if (!showMessage) return null;
+        const label =
+          payment.cadence === "monthly"
+            ? `Next payment month begins ${fmtMonthYear(payment.firstQualifyingPeriod)}.`
+            : `Next payment week begins ${fmtDateYmd(payment.firstQualifyingPeriod)}.`;
         return (
-          <div
-            className={`${payment.weeklyPayments.length > 0 ? "mt-3" : "mt-3"} rounded-xl border border-cream-line bg-cream-soft/40 px-4 py-5 text-sm italic text-deep-green/55`}
-          >
-            Next payment week begins{" "}
-            {fmtDateYmd(payment.firstQualifyingSunday)}.
+          <div className="mt-3 rounded-xl border border-cream-line bg-cream-soft/40 px-4 py-5 text-sm italic text-deep-green/55">
+            {label}
           </div>
         );
       })()}
@@ -825,7 +860,7 @@ function DisputeModal({
           Flag missing payment
         </h2>
         <p className="mt-3 text-sm text-deep-green/65">
-          Week of {fmtDateYmd(week.weekStartDate)} · Owed{" "}
+          {fmtDateYmd(week.weekStartDate)} · Owed{" "}
           <b className="text-deep-green">${week.owedAmount.toFixed(2)}</b>
           {week.paidAt && (
             <>

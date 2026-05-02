@@ -105,13 +105,16 @@ export function makeAnonServerClient(): SupabaseClient {
 // All payment fields are optional — only revenueSharePct has a default
 // (50%). paymentStartDate=null means the payment-tracking feature is
 // off for this partner; UI hides the Weekly Payments section entirely.
+export type PartnerPaymentCadence = "weekly" | "monthly";
+
 export type PartnerConfig = {
   id: string; // uuid
   venueId: number;
   partnerName: string;
   revenueSharePct: number;
   paymentStartDate: string | null; // YYYY-MM-DD
-  paymentDayOfWeek: number; // 0=Sun..6=Sat (display label only)
+  paymentDayOfWeek: number; // 0=Sun..6=Sat (legacy; weekly partners only)
+  paymentCadence: PartnerPaymentCadence;
 };
 
 // Fetch the partner_dashboards row by slug. Returns null on miss or
@@ -132,27 +135,41 @@ export async function fetchPartnerBySlug(
   const primary = await supabase
     .from("partner_dashboards")
     .select(
-      "id, venue_id, partner_name, enabled, revenue_share_pct, payment_start_date, payment_day_of_week",
+      "id, venue_id, partner_name, enabled, revenue_share_pct, payment_start_date, payment_day_of_week, payment_cadence",
     )
     .eq("slug", slug)
     .maybeSingle();
   data = primary.data;
   error = primary.error;
   if (error && error.code === "42703") {
-    // undefined_column → migration 0003 not yet applied. Re-query
-    // with the legacy column set so the existing dashboard keeps
-    // rendering. Payment fields default to "off" until the schema
-    // catches up.
-    const fallback = await supabase
+    // undefined_column → migration 0005 (or earlier) not yet applied.
+    // Re-query without payment_cadence first, then drop the rest of
+    // the payment columns if that still fails (pre-0003 schema).
+    const noCadence = await supabase
       .from("partner_dashboards")
-      .select("id, venue_id, partner_name, enabled")
+      .select(
+        "id, venue_id, partner_name, enabled, revenue_share_pct, payment_start_date, payment_day_of_week",
+      )
       .eq("slug", slug)
       .maybeSingle();
-    data = fallback.data;
-    error = fallback.error;
+    if (noCadence.error && noCadence.error.code === "42703") {
+      const legacy = await supabase
+        .from("partner_dashboards")
+        .select("id, venue_id, partner_name, enabled")
+        .eq("slug", slug)
+        .maybeSingle();
+      data = legacy.data;
+      error = legacy.error;
+    } else {
+      data = noCadence.data;
+      error = noCadence.error;
+    }
   }
   if (error || !data) return null;
   if (!data.enabled) return null;
+  const rawCadence = (data.payment_cadence ?? "weekly") as string;
+  const cadence: PartnerPaymentCadence =
+    rawCadence === "monthly" ? "monthly" : "weekly";
   return {
     id: data.id as string,
     venueId: data.venue_id as number,
@@ -160,6 +177,7 @@ export async function fetchPartnerBySlug(
     revenueSharePct: Number(data.revenue_share_pct ?? 50),
     paymentStartDate: data.payment_start_date ?? null,
     paymentDayOfWeek: Number(data.payment_day_of_week ?? 0),
+    paymentCadence: cadence,
   };
 }
 
@@ -686,12 +704,18 @@ export type PartnerWeeklyPayment = {
 };
 
 export type PartnerPaymentInfo = {
-  enabled: boolean; // payment_start_date is not null
+  enabled: boolean; // payment_start_date is not null OR pre-system rows exist
+  cadence: PartnerPaymentCadence;
   revenueSharePct: number;
   paymentStartDate: string | null;
   paymentDayOfWeek: number;
-  // YYYY-MM-DD of the first Sunday on or after payment_start_date.
-  // Null when paymentStartDate is null.
+  // First period boundary on or after payment_start_date. For weekly
+  // cadence: YYYY-MM-DD of the first Sunday. For monthly cadence:
+  // YYYY-MM-DD of the first day of the first qualifying calendar
+  // month. Null when paymentStartDate is null.
+  firstQualifyingPeriod: string | null;
+  // Legacy alias kept so existing callers don't break — same value as
+  // firstQualifyingPeriod for weekly partners.
   firstQualifyingSunday: string | null;
   weeklyPayments: PartnerWeeklyPayment[];
 };
@@ -721,6 +745,52 @@ function addDays(ymd: string, days: number): string {
   return d.toISOString().slice(0, 10);
 }
 
+// Ceil a YYYY-MM-DD to the next first-of-month (or itself if already
+// the 1st). Used by the monthly-cadence first-period rule.
+function ceilToMonthStart(ymd: string): string {
+  const d = new Date(`${ymd}T00:00:00Z`);
+  const day = d.getUTCDate();
+  if (day === 1) return ymd;
+  d.setUTCMonth(d.getUTCMonth() + 1);
+  d.setUTCDate(1);
+  return d.toISOString().slice(0, 10);
+}
+
+// Last day of the month for a given first-of-month YYYY-MM-DD.
+function lastDayOfMonth(monthStart: string): string {
+  const d = new Date(`${monthStart}T00:00:00Z`);
+  d.setUTCMonth(d.getUTCMonth() + 1);
+  d.setUTCDate(0); // day 0 of next month = last day of current month
+  return d.toISOString().slice(0, 10);
+}
+
+// First-of-next-month for monthly iteration.
+function nextMonthStart(monthStart: string): string {
+  const d = new Date(`${monthStart}T00:00:00Z`);
+  d.setUTCMonth(d.getUTCMonth() + 1);
+  d.setUTCDate(1);
+  return d.toISOString().slice(0, 10);
+}
+
+// Generates partner payment rows for both weekly and monthly cadences.
+// (Function name kept as-is to avoid touching every caller — name was
+// already a misnomer once pre-system rows were added.)
+//
+// MONTHLY CADENCE
+// ───────────────
+// For monthly partners, partner_weekly_payments.week_start_date stores
+// the FIRST DAY of the calendar month (e.g. 2026-04-01 for April
+// 2026). Period = the full calendar month (1st → last day inclusive).
+// Payments are sent on the 5th of the following month — so April's
+// payment goes out May 5.
+//
+// First qualifying month = the first calendar month that *starts* on
+// or after payment_start_date. payment_start_date='2026-05-05' means
+// May 2026 doesn't qualify (May 1 < May 5); first qualifying = June.
+// payment_start_date='2026-05-01' means May qualifies (May 1 = May 1).
+//
+// Past + current month only: rows for months whose first day is ≤
+// today. Future months don't appear.
 export function computeWeeklyPayments(
   matchRows: PartnerRegRow[],
   finRevRows: PartnerExtraRevRow[],
@@ -728,21 +798,23 @@ export function computeWeeklyPayments(
     revenueSharePct: number;
     paymentStartDate: string | null;
     paymentDayOfWeek: number;
+    paymentCadence?: PartnerPaymentCadence;
   },
   records: PartnerWeeklyPaymentRecord[] = [],
   now: Date = new Date(),
 ): PartnerPaymentInfo {
-  // Pre-system settlement rows are emitted regardless of whether
-  // payment_start_date is configured. They represent historical
-  // payments and exist independently of the qualifying-week generator.
+  const cadence: PartnerPaymentCadence = config.paymentCadence ?? "weekly";
+
+  // Pre-system rows are cadence-agnostic — they represent historical
+  // lump sums regardless of how the partner is currently paid.
   const preSystemRecords = records.filter((r) => r.is_pre_system_settlement);
   const preSystemRows: PartnerWeeklyPayment[] = preSystemRecords
     .slice()
     .sort((a, b) => a.week_start_date.localeCompare(b.week_start_date))
     .map((r) => ({
-      weekStartDate: r.week_start_date, // through-date for pre-system rows
+      weekStartDate: r.week_start_date,
       weekEndDate: r.week_start_date,
-      qualifyingRevenue: 0, // not meaningful for a lump sum; UI renders "—"
+      qualifyingRevenue: 0,
       owedAmount: r.calculated_amount,
       status: r.status,
       recordId: r.id,
@@ -755,90 +827,121 @@ export function computeWeeklyPayments(
     }));
 
   if (!config.paymentStartDate) {
-    // Payment system off, but pre-system settlements should still
-    // render if any exist (they're historical artifacts independent
-    // of weekly tracking).
     return {
       enabled: preSystemRows.length > 0,
+      cadence,
       revenueSharePct: config.revenueSharePct,
       paymentStartDate: null,
       paymentDayOfWeek: config.paymentDayOfWeek,
+      firstQualifyingPeriod: null,
       firstQualifyingSunday: null,
       weeklyPayments: preSystemRows,
     };
   }
 
-  const firstSunday = ceilToSunday(config.paymentStartDate);
   const today = todayUtcYmd(now);
-
-  // Filter source rows once: drop staff + match_canceled (mirrors the
-  // existing pacAll → pac transform in computePartnerStats).
   const matchActive = matchRows.filter(
     (r) =>
       !(r.email && r.email.toLowerCase().includes(STAFF_EMAIL_DOMAIN)) &&
       !r.match_canceled,
   );
+  const generatedRecords = records.filter((r) => !r.is_pre_system_settlement);
+  const recordByPeriod = new Map<string, PartnerWeeklyPaymentRecord>();
+  for (const rec of generatedRecords) recordByPeriod.set(rec.week_start_date, rec);
 
-  // Sunday-anchored records only — pre-system records are emitted
-  // separately above and don't participate in the LEFT-JOIN merge.
-  const sundayRecords = records.filter((r) => !r.is_pre_system_settlement);
-  const recordByWeek = new Map<string, PartnerWeeklyPaymentRecord>();
-  for (const rec of sundayRecords) recordByWeek.set(rec.week_start_date, rec);
+  const generatedRows: PartnerWeeklyPayment[] = [];
+  let firstQualifyingPeriod: string;
 
-  const sundayRows: PartnerWeeklyPayment[] = [];
-  // Iterate Sundays from firstSunday up to and including current Sunday.
-  // Past + current only: stop the first time the cursor exceeds today.
-  let cursor = firstSunday;
-  while (cursor <= today) {
-    const weekEnd = addDays(cursor, 6);
-
-    // DPP from match_registrations (date in [cursor, weekEnd] inclusive).
-    let dpRev = 0;
-    for (const r of matchActive) {
-      if (r.payment_type !== "DAILY PAID") continue;
-      const matchYmd = r.match_start.slice(0, 10);
-      if (matchYmd < cursor || matchYmd > weekEnd) continue;
-      dpRev += Number(r.match_price_paid ?? 0) || 0;
+  if (cadence === "monthly") {
+    firstQualifyingPeriod = ceilToMonthStart(config.paymentStartDate);
+    let cursor = firstQualifyingPeriod;
+    while (cursor <= today) {
+      const monthEnd = lastDayOfMonth(cursor);
+      let dpRev = 0;
+      for (const r of matchActive) {
+        if (r.payment_type !== "DAILY PAID") continue;
+        const matchYmd = r.match_start.slice(0, 10);
+        if (matchYmd < cursor || matchYmd > monthEnd) continue;
+        dpRev += Number(r.match_price_paid ?? 0) || 0;
+      }
+      let prRev = 0;
+      for (const e of finRevRows) {
+        if (e.type !== "Private Rental") continue;
+        if (!e.date || e.date < cursor || e.date > monthEnd) continue;
+        prRev += Number(e.gross ?? 0) || 0;
+      }
+      const qualifyingRevenue = dpRev + prRev;
+      const owedAmount =
+        Math.round(qualifyingRevenue * config.revenueSharePct) / 100;
+      const rec = recordByPeriod.get(cursor);
+      generatedRows.push({
+        weekStartDate: cursor,
+        weekEndDate: monthEnd,
+        qualifyingRevenue,
+        owedAmount,
+        status: rec?.status ?? "pending",
+        recordId: rec?.id ?? null,
+        calculatedAmount: rec?.calculated_amount ?? null,
+        paidAt: rec?.paid_at ?? null,
+        paidNotes: rec?.paid_notes ?? null,
+        disputeNote: rec?.dispute_note ?? null,
+        disputedAt: rec?.disputed_at ?? null,
+        isPreSystem: false,
+      });
+      cursor = nextMonthStart(cursor);
     }
-
-    // Private Rental from fin_revenue.
-    let prRev = 0;
-    for (const e of finRevRows) {
-      if (e.type !== "Private Rental") continue;
-      if (!e.date || e.date < cursor || e.date > weekEnd) continue;
-      prRev += Number(e.gross ?? 0) || 0;
+  } else {
+    firstQualifyingPeriod = ceilToSunday(config.paymentStartDate);
+    let cursor = firstQualifyingPeriod;
+    while (cursor <= today) {
+      const weekEnd = addDays(cursor, 6);
+      let dpRev = 0;
+      for (const r of matchActive) {
+        if (r.payment_type !== "DAILY PAID") continue;
+        const matchYmd = r.match_start.slice(0, 10);
+        if (matchYmd < cursor || matchYmd > weekEnd) continue;
+        dpRev += Number(r.match_price_paid ?? 0) || 0;
+      }
+      let prRev = 0;
+      for (const e of finRevRows) {
+        if (e.type !== "Private Rental") continue;
+        if (!e.date || e.date < cursor || e.date > weekEnd) continue;
+        prRev += Number(e.gross ?? 0) || 0;
+      }
+      const qualifyingRevenue = dpRev + prRev;
+      const owedAmount =
+        Math.round(qualifyingRevenue * config.revenueSharePct) / 100;
+      const rec = recordByPeriod.get(cursor);
+      generatedRows.push({
+        weekStartDate: cursor,
+        weekEndDate: weekEnd,
+        qualifyingRevenue,
+        owedAmount,
+        status: rec?.status ?? "pending",
+        recordId: rec?.id ?? null,
+        calculatedAmount: rec?.calculated_amount ?? null,
+        paidAt: rec?.paid_at ?? null,
+        paidNotes: rec?.paid_notes ?? null,
+        disputeNote: rec?.dispute_note ?? null,
+        disputedAt: rec?.disputed_at ?? null,
+        isPreSystem: false,
+      });
+      cursor = addDays(cursor, 7);
     }
-
-    const qualifyingRevenue = dpRev + prRev;
-    const owedAmount =
-      Math.round(qualifyingRevenue * config.revenueSharePct) / 100;
-
-    const rec = recordByWeek.get(cursor);
-    sundayRows.push({
-      weekStartDate: cursor,
-      weekEndDate: weekEnd,
-      qualifyingRevenue,
-      owedAmount,
-      status: rec?.status ?? "pending",
-      recordId: rec?.id ?? null,
-      calculatedAmount: rec?.calculated_amount ?? null,
-      paidAt: rec?.paid_at ?? null,
-      paidNotes: rec?.paid_notes ?? null,
-      disputeNote: rec?.dispute_note ?? null,
-      disputedAt: rec?.disputed_at ?? null,
-      isPreSystem: false,
-    });
-
-    cursor = addDays(cursor, 7);
   }
 
   return {
     enabled: true,
+    cadence,
     revenueSharePct: config.revenueSharePct,
     paymentStartDate: config.paymentStartDate,
     paymentDayOfWeek: config.paymentDayOfWeek,
-    firstQualifyingSunday: firstSunday,
-    // Pre-system rows first (by week_start_date), then Sunday-anchored.
-    weeklyPayments: [...preSystemRows, ...sundayRows],
+    firstQualifyingPeriod,
+    firstQualifyingSunday: firstQualifyingPeriod, // legacy alias
+    weeklyPayments: [...preSystemRows, ...generatedRows],
   };
 }
+
+// Forward-looking alias. New callers should prefer this name; existing
+// callers continue to use computeWeeklyPayments for now.
+export const computePartnerPayments = computeWeeklyPayments;

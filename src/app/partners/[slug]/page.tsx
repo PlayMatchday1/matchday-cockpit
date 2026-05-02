@@ -36,6 +36,7 @@ export default async function PartnerPage({
       revenueSharePct: partner.revenueSharePct,
       paymentStartDate: partner.paymentStartDate,
       paymentDayOfWeek: partner.paymentDayOfWeek,
+      paymentCadence: partner.paymentCadence,
     },
     records,
   );

@@ -36,6 +36,7 @@ type PartnerRow = {
   created_at: string;
   payment_start_date: string | null;
   revenue_share_pct: number;
+  payment_cadence: "weekly" | "monthly";
 };
 
 type PaymentCounts = {
@@ -78,20 +79,42 @@ export default function PartnerDashboardsAdmin() {
       const pdResp = await supabase
         .from("partner_dashboards")
         .select(
-          "id, slug, venue_id, partner_name, enabled, created_at, payment_start_date, revenue_share_pct",
+          "id, slug, venue_id, partner_name, enabled, created_at, payment_start_date, revenue_share_pct, payment_cadence",
         )
         .order("created_at", { ascending: false });
       if (pdResp.error && pdResp.error.code === "42703") {
-        const legacy = await supabase
+        // Try the pre-0005 shape (no payment_cadence), then fall back
+        // further to the pre-0003 shape (no payment columns at all).
+        const noCadence = await supabase
           .from("partner_dashboards")
-          .select("id, slug, venue_id, partner_name, enabled, created_at")
+          .select(
+            "id, slug, venue_id, partner_name, enabled, created_at, payment_start_date, revenue_share_pct",
+          )
           .order("created_at", { ascending: false });
-        if (legacy.error) throw new Error(legacy.error.message);
-        pdData = ((legacy.data ?? []) as Array<Omit<PartnerRow, "payment_start_date" | "revenue_share_pct">>).map((r) => ({
-          ...r,
-          payment_start_date: null,
-          revenue_share_pct: 50,
-        }));
+        if (noCadence.error && noCadence.error.code === "42703") {
+          const legacy = await supabase
+            .from("partner_dashboards")
+            .select("id, slug, venue_id, partner_name, enabled, created_at")
+            .order("created_at", { ascending: false });
+          if (legacy.error) throw new Error(legacy.error.message);
+          pdData = ((legacy.data ?? []) as Array<
+            Omit<
+              PartnerRow,
+              "payment_start_date" | "revenue_share_pct" | "payment_cadence"
+            >
+          >).map((r) => ({
+            ...r,
+            payment_start_date: null,
+            revenue_share_pct: 50,
+            payment_cadence: "weekly" as const,
+          }));
+        } else if (noCadence.error) {
+          throw new Error(noCadence.error.message);
+        } else {
+          pdData = ((noCadence.data ?? []) as Array<
+            Omit<PartnerRow, "payment_cadence">
+          >).map((r) => ({ ...r, payment_cadence: "weekly" as const }));
+        }
       } else if (pdResp.error) {
         throw new Error(pdResp.error.message);
       } else {
@@ -290,6 +313,7 @@ export default function PartnerDashboardsAdmin() {
                       <div>{r.partner_name}</div>
                       <PaymentStatusSummary
                         startDate={r.payment_start_date}
+                        cadence={r.payment_cadence}
                         counts={paymentCounts.get(r.id)}
                       />
                     </td>
@@ -483,6 +507,7 @@ function PartnerAddDialog({
 }) {
   const [venueId, setVenueId] = useState<number | null>(null);
   const [partnerName, setPartnerName] = useState("");
+  const [cadence, setCadence] = useState<"weekly" | "monthly">("weekly");
   const [busy, setBusy] = useState(false);
   const [error, setError] = useState<string | null>(null);
 
@@ -520,16 +545,32 @@ function PartnerAddDialog({
         venue_id: venueId,
         partner_name: partnerName.trim(),
         enabled: true,
+        payment_cadence: cadence,
       });
       if (error) {
-        if (error.code === "23505") {
+        // 42703 = payment_cadence column missing (pre-0005). Retry
+        // without the field — the row is still created, just defaults
+        // to weekly. Admin can flip cadence later in the detail view.
+        if (error.code === "42703") {
+          const retry = await supabase.from("partner_dashboards").insert({
+            slug,
+            venue_id: venueId,
+            partner_name: partnerName.trim(),
+            enabled: true,
+          });
+          if (retry.error) {
+            setError(retry.error.message);
+            return;
+          }
+        } else if (error.code === "23505") {
           setError(
             "A partner dashboard already exists for this venue (DB-level). Refresh and try again.",
           );
+          return;
         } else {
           setError(error.message);
+          return;
         }
-        return;
       }
       await onCreated();
     } catch (e) {
@@ -584,6 +625,24 @@ function PartnerAddDialog({
           Shown to the partner as the dashboard header.
         </p>
 
+        <label className="mt-4 block text-[11px] font-semibold uppercase tracking-[0.06em] text-deep-green/65">
+          Payment cadence
+        </label>
+        <select
+          value={cadence}
+          onChange={(e) =>
+            setCadence(e.target.value === "monthly" ? "monthly" : "weekly")
+          }
+          className="mt-1 w-full rounded-md border border-cream-line bg-white px-3 py-2 text-sm text-deep-green focus:border-mint focus:outline-none"
+        >
+          <option value="weekly">Weekly (Sun→Sat, paid Mondays)</option>
+          <option value="monthly">Monthly (paid 5th of next month)</option>
+        </select>
+        <p className="mt-1.5 text-xs text-deep-green/55">
+          Configure start date + revenue share % from the partner&apos;s
+          detail page after creating.
+        </p>
+
         {error && (
           <div className="mt-4 rounded-md border border-coral/40 bg-coral-soft px-3 py-2 text-sm text-coral">
             {error}
@@ -615,9 +674,11 @@ function PartnerAddDialog({
 
 function PaymentStatusSummary({
   startDate,
+  cadence,
   counts,
 }: {
   startDate: string | null;
+  cadence: "weekly" | "monthly";
   counts: PaymentCounts | undefined;
 }) {
   if (!startDate) {
@@ -627,16 +688,19 @@ function PaymentStatusSummary({
       </p>
     );
   }
+  const cadenceLabel = `(${cadence})`;
   const c = counts ?? { pending: 0, paid: 0, disputed: 0 };
   if (c.paid === 0 && c.pending === 0 && c.disputed === 0) {
     return (
       <p className="mt-0.5 text-[11px] text-deep-green/55">
-        Payments on · no records yet
+        Payments on {cadenceLabel} · no records yet
       </p>
     );
   }
   return (
     <p className="mt-0.5 text-[11px] text-deep-green/55">
+      Payments on {cadenceLabel}
+      {" · "}
       <span className="text-mint-hover">Paid {c.paid}</span>
       {" · "}
       <span className="text-deep-green/55">Pending {c.pending}</span>
