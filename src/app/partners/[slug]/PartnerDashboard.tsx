@@ -71,7 +71,7 @@ export default function PartnerDashboard({
         <Metric label="Total spots filled" value={stats.totals.spots.toLocaleString()} sub="players who showed up" />
         <Metric label="MatchDay players" value={stats.totals.md.toLocaleString()} sub="registered app users" />
         <Metric label="Guests brought" value={stats.totals.guests.toLocaleString()} sub="brought by players" />
-        <Metric label="Cancellations" value={stats.totals.cancels.toLocaleString()} sub="paid, didn't show" />
+        <Metric label="Cancellations" value={stats.totals.cancels.toLocaleString()} sub="non-refundable cancel within 24 hrs" />
         <Metric label="Total revenue" value={fmtUsd(stats.totals.rev)} sub="match price paid" />
       </div>
 
