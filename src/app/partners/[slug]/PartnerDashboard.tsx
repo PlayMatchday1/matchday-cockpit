@@ -11,12 +11,13 @@ import {
   YAxis,
 } from "recharts";
 import { supabase } from "@/lib/supabase";
-import type {
-  PartnerMonthStat,
-  PartnerPaymentInfo,
-  PartnerStats,
-  PartnerWeeklyPayment,
-  PartnerWeekStat,
+import {
+  partnerLabelForType,
+  type PartnerMonthStat,
+  type PartnerPaymentInfo,
+  type PartnerStats,
+  type PartnerWeeklyPayment,
+  type PartnerWeekStat,
 } from "@/lib/partnerStats";
 
 const FMT_DATE = new Intl.DateTimeFormat("en-US", {
@@ -378,7 +379,7 @@ function WeekCard({
       {week.extras.map((x) => (
         <Row
           key={x.type}
-          label={x.type}
+          label={partnerLabelForType(x.type)}
           value={fmtUsd(x.amount)}
           valueColor="text-mint-hover"
         />
@@ -510,8 +511,8 @@ function WeeklyPaymentsSection({
     payment.cadence === "monthly" ? "Monthly payments" : "Weekly payments";
   const subtitle =
     payment.cadence === "monthly"
-      ? `${payment.revenueSharePct}% of qualifying revenue (DPP + Private Rental). Paid on the 5th of the following month.`
-      : `${payment.revenueSharePct}% of qualifying revenue (DPP + Private Rental). Paid weekly on Mondays.`;
+      ? `${payment.revenueSharePct}% of qualifying revenue (DPP + Morning Match). Paid on the 5th of the following month.`
+      : `${payment.revenueSharePct}% of qualifying revenue (DPP + Morning Match). Paid weekly on Mondays.`;
 
   return (
     <>

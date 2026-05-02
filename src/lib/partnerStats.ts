@@ -90,6 +90,19 @@ export type PartnerStats = {
   earliestMatchDate: string | null;
 };
 
+// Display-only label translation for partner-facing UI. The canonical
+// type column stays "Private Rental" everywhere — in the database,
+// fin_revenue importer, admin pages, and internal stats. Partners
+// just see the renamed copy ("Morning Match" reads better than
+// "Private Rental" for the Saturday-morning Hattrick rentals).
+//
+// New mappings should live here so every partner-facing surface picks
+// them up uniformly. Internal admin pages do NOT call this helper.
+export function partnerLabelForType(type: string): string {
+  if (type === "Private Rental") return "Morning Match";
+  return type;
+}
+
 export function makeAnonServerClient(): SupabaseClient {
   const url = process.env.NEXT_PUBLIC_SUPABASE_URL;
   const key = process.env.NEXT_PUBLIC_SUPABASE_PUBLISHABLE_KEY;
