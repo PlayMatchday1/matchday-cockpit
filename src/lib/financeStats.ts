@@ -450,7 +450,7 @@ export type MoMLineItem = {
    *  sources)" entry at the end. Undefined when no breakdown source
    *  is available or when no individual source passes the threshold —
    *  UI hides the chevron in either case. */
-  children?: Array<{ name: string; delta: number }>;
+  children?: CategoryChild[];
   /** Per-revenue-type PROJECTION amounts for the next month, sorted
    *  by amount desc. Only set on the "Expected revenue (forecast)"
    *  combined row — UI uses it to compose the (i) tooltip. */
@@ -697,32 +697,51 @@ function finExpensesByCity(
 
 // Diff two per-source maps into a delta map (next − current). Keys
 // from either side surface; missing-side counts as 0.
+// Per-source row in a category drill-down. Carries before/after as
+// well as Δ so the UI can render "$X → $Y · +$Z" instead of just
+// the delta — useful for spotting zero-to-something rows or the
+// shape of a cost shift.
+export type CategoryChild = {
+  name: string;
+  fromAmount: number;
+  toAmount: number;
+  delta: number;
+};
+
 function deltasFromMaps(
   cur: Map<string, number>,
   nxt: Map<string, number>,
-): Map<string, number> {
-  const out = new Map<string, number>();
+): Map<string, { from: number; to: number; delta: number }> {
+  const out = new Map<string, { from: number; to: number; delta: number }>();
   for (const k of new Set<string>([...cur.keys(), ...nxt.keys()])) {
-    out.set(k, (nxt.get(k) ?? 0) - (cur.get(k) ?? 0));
+    const from = cur.get(k) ?? 0;
+    const to = nxt.get(k) ?? 0;
+    out.set(k, { from, to, delta: to - from });
   }
   return out;
 }
 
 const CHILD_VISIBLE_THRESHOLD = 50; // |Δ| < $50 → rolls into "Other (N sources)"
 
-// Sorts a delta map into a children[] array: items with |Δ| ≥ $50
+// Sorts a per-source map into a children[] array: items with |Δ| ≥ $50
 // surface individually; smaller items collapse into a single
-// "Other (N sources)" tail row. Returns undefined when no
-// individual source passes the threshold (UI hides chevron then).
+// "Other (N sources)" tail row whose from/to/delta are summed across
+// the rolled-up entries. Returns undefined when no individual source
+// passes the threshold (UI hides chevron then).
 function buildChildren(
-  deltas: Map<string, number>,
+  perKey: Map<string, { from: number; to: number; delta: number }>,
   unitLabel: { singular: string; plural: string } = {
     singular: "source",
     plural: "sources",
   },
-): Array<{ name: string; delta: number }> | undefined {
-  const items = [...deltas.entries()]
-    .map(([name, delta]) => ({ name, delta }))
+): CategoryChild[] | undefined {
+  const items: CategoryChild[] = [...perKey.entries()]
+    .map(([name, v]) => ({
+      name,
+      fromAmount: v.from,
+      toAmount: v.to,
+      delta: v.delta,
+    }))
     .filter((i) => Math.abs(i.delta) >= 0.5);
   if (items.length === 0) return undefined;
 
@@ -733,13 +752,20 @@ function buildChildren(
   big.sort((a, b) => Math.abs(b.delta) - Math.abs(a.delta));
 
   if (small.length > 0) {
-    const otherDelta = small.reduce((s, i) => s + i.delta, 0);
+    const otherFrom = small.reduce((s, i) => s + i.fromAmount, 0);
+    const otherTo = small.reduce((s, i) => s + i.toAmount, 0);
+    const otherDelta = otherTo - otherFrom;
     if (Math.abs(otherDelta) >= 0.5) {
       const label =
         small.length === 1
           ? `Other (1 ${unitLabel.singular})`
           : `Other (${small.length} ${unitLabel.plural})`;
-      big.push({ name: label, delta: otherDelta });
+      big.push({
+        name: label,
+        fromAmount: otherFrom,
+        toAmount: otherTo,
+        delta: otherDelta,
+      });
     }
   }
   return big;
@@ -753,7 +779,7 @@ function expenseCategoryChildren(
   category: string,
   currentMonth: Q2Month,
   nextMonth: Q2Month,
-): Array<{ name: string; delta: number }> | undefined {
+): CategoryChild[] | undefined {
   if (category === "Field Costs") {
     return buildChildren(
       deltasFromMaps(
@@ -1012,7 +1038,7 @@ export type ExpenseForecastRow = {
   // Per-source breakdown when the category supports drill-down. In
   // the redesigned panel, only Field Costs surfaces this — other
   // categories are rendered without a chevron.
-  children?: Array<{ name: string; delta: number }>;
+  children?: CategoryChild[];
 };
 
 export type ExpenseForecast = {

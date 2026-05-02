@@ -146,18 +146,24 @@ export default function ExpenseForecastPanel() {
             this pair.
           </div>
         ) : (
-          <ul className="mt-2 divide-y divide-cream-line/60">
-            {movers.map((r) => (
-              <MoverRow
-                key={r.category}
-                row={r}
-                fromMonth={forecast.fromMonth}
-                toMonth={forecast.toMonth}
-                expanded={expanded.has(r.category)}
-                onToggle={() => toggleRow(r.category)}
-              />
-            ))}
-          </ul>
+          <>
+            <ColumnHeaderRow
+              fromMonth={forecast.fromMonth}
+              toMonth={forecast.toMonth}
+            />
+            <ul className="divide-y divide-cream-line/60">
+              {movers.map((r) => (
+                <MoverRow
+                  key={r.category}
+                  row={r}
+                  fromMonth={forecast.fromMonth}
+                  toMonth={forecast.toMonth}
+                  expanded={expanded.has(r.category)}
+                  onToggle={() => toggleRow(r.category)}
+                />
+              ))}
+            </ul>
+          </>
         )}
       </div>
 
@@ -207,6 +213,32 @@ function SecLabel({ children }: { children: React.ReactNode }) {
     <p className="text-[10px] font-semibold uppercase tracking-[0.07em] text-deep-green/55">
       {children}
     </p>
+  );
+}
+
+// Column headers above the movers list. Mirrors the row layout:
+// flex item with min-w-0 fills the left "Category" column, three
+// w-20 right-aligned numeric columns (From / To / Δ). Same column
+// widths used in MoverRow so values line up under the headers.
+function ColumnHeaderRow({
+  fromMonth,
+  toMonth,
+}: {
+  fromMonth: Q2Month;
+  toMonth: Q2Month;
+}) {
+  // Mirrors MoverRow's outer flex (justify-between gap-4) + inner
+  // numeric flex (gap-3, three w-20 cells) so header text lines up
+  // under the values.
+  return (
+    <div className="mt-2 flex items-baseline justify-between gap-4 border-b border-cream-line/60 pb-1 text-[10px] font-semibold uppercase tracking-[0.07em] text-deep-green/45">
+      <div className="min-w-0 flex-1">Category</div>
+      <div className="flex shrink-0 items-baseline gap-3">
+        <div className="w-20 text-right">{shortMonth(fromMonth)}</div>
+        <div className="w-20 text-right">{shortMonth(toMonth)}</div>
+        <div className="w-20 text-right">Δ</div>
+      </div>
+    </div>
   );
 }
 
@@ -304,13 +336,23 @@ function MoverRow({
               {row.children!.map((child) => (
                 <div
                   key={child.name}
-                  className="flex items-baseline justify-between gap-3 text-[12px]"
+                  className="flex items-baseline gap-3 text-[12px]"
                 >
-                  <span className="truncate text-deep-green/65">
+                  <span className="min-w-0 flex-1 truncate text-deep-green/65">
                     {child.name}
                   </span>
+                  {/* Three numeric columns mirror the parent row's
+                      alignment: from / to / Δ. Slightly narrower
+                      than parent (w-16 vs w-20) so the indented
+                      drill-down still nests visually. */}
+                  <span className="w-16 shrink-0 text-right font-mono tabular-nums text-deep-green/55">
+                    {fmtUsd(child.fromAmount)}
+                  </span>
+                  <span className="w-16 shrink-0 text-right font-mono tabular-nums text-deep-green/55">
+                    {fmtUsd(child.toAmount)}
+                  </span>
                   <span
-                    className={`shrink-0 font-mono font-semibold tabular-nums ${deltaToneClass(child.delta)}`}
+                    className={`w-16 shrink-0 text-right font-mono font-semibold tabular-nums ${deltaToneClass(child.delta)}`}
                   >
                     {fmtSig(child.delta)}
                   </span>
