@@ -4,7 +4,14 @@ import { selectAll } from "./supabasePagination";
 import { normalizeMatchName } from "./venueNormalization";
 import { refreshMembershipSnapshots } from "./membershipSnapshots";
 
-export type ImportResult = { count: number; note?: string };
+export type ImportResult = {
+  count: number;
+  // Number of fin_revenue rows deleted by the date-range-replace step
+  // before the new rows were inserted. Useful for sync-log
+  // observability; CSV callers can ignore it.
+  rowsReplaced?: number;
+  note?: string;
+};
 
 const MEMBER_CITY_PREFIX: Record<string, string> = {
   ATX: "Austin",
@@ -832,13 +839,17 @@ export async function commitStripe(
   }
 
   // Date-range replace: drop existing Stripe rows in the covered window, then insert.
-  const { error: delErr } = await client
+  // .select("id") makes PostgREST return the deleted row IDs so we can
+  // surface rowsReplaced in the sync log.
+  const { data: deleted, error: delErr } = await client
     .from("fin_revenue")
     .delete()
     .eq("source", "Stripe")
     .gte("date", input.earliestDate)
-    .lte("date", input.latestDate);
+    .lte("date", input.latestDate)
+    .select("id");
   if (delErr) throw new Error(`Delete failed: ${delErr.message}`);
+  const rowsReplaced = deleted?.length ?? 0;
 
   const BATCH = 500;
   for (let i = 0; i < input.rows.length; i += BATCH) {
@@ -848,6 +859,7 @@ export async function commitStripe(
   }
   return {
     count: input.rows.length,
+    rowsReplaced,
     note: `${input.earliestDate} → ${input.latestDate}`,
   };
 }
