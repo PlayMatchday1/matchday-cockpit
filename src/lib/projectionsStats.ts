@@ -45,11 +45,18 @@ export type FieldProjectionRow = {
   weeks: FieldWeekStats[]; // length 4: indices 0..3 = W-4..W-1
   defaults: {
     matches: number; // distinct match_start in next-week window (strict 0 if none)
-    avgPrice: number; // = weeks[3].avgPrice (W-1)
+    // dpp spots default = mean of W-4..W-1 dppSpots, rounded. Smooths
+    // single-week anomalies. Zero-spot weeks count toward the mean —
+    // a planned-zero week is real signal, not missing data.
+    dppSpots: number;
+    // avg price/spot default = W-1's per-spot price. null when W-1 had
+    // no DPP spots — input renders empty until operator types a price.
+    avgPricePerSpot: number | null;
   };
   saved: {
     matchesPlanned: number | null;
-    avgPricePlanned: number | null;
+    dppSpotsPlanned: number | null;
+    avgPricePerSpotPlanned: number | null;
   };
 };
 
@@ -169,7 +176,8 @@ export type RegistrationRow = {
 
 type SavedProjection = {
   matches_planned: number | null;
-  avg_price_planned: number | null;
+  dpp_spots_planned: number | null;
+  avg_price_per_spot_planned: number | null;
 };
 
 export function computeProjections(
@@ -258,17 +266,26 @@ export function computeProjections(
     const savedKey = `${v.id}|${windows.nextWindow.start}`;
     const savedRow = saved.get(savedKey) ?? {
       matches_planned: null,
-      avg_price_planned: null,
+      dpp_spots_planned: null,
+      avg_price_per_spot_planned: null,
     };
+    // Mean of W-4..W-1 dpp spots, rounded. Zero-spot weeks count.
+    const spotsMean =
+      weeks.reduce((s, w) => s + w.dppSpots, 0) / weeks.length;
     return {
       venueId: v.id,
       venueName: v.venue_name,
       city: v.city ?? "—",
       weeks,
-      defaults: { matches: nextSet.size, avgPrice: w1.avgPrice },
+      defaults: {
+        matches: nextSet.size,
+        dppSpots: Math.round(spotsMean),
+        avgPricePerSpot: w1.avgPricePerSpot,
+      },
       saved: {
         matchesPlanned: savedRow.matches_planned,
-        avgPricePlanned: savedRow.avg_price_planned,
+        dppSpotsPlanned: savedRow.dpp_spots_planned,
+        avgPricePerSpotPlanned: savedRow.avg_price_per_spot_planned,
       },
     };
   });
@@ -282,7 +299,9 @@ export function computeProjections(
     const anyHistorical = r.weeks.some((w) => w.matches > 0);
     const anyNext = r.defaults.matches > 0;
     const hasSaved =
-      r.saved.matchesPlanned !== null || r.saved.avgPricePlanned !== null;
+      r.saved.matchesPlanned !== null ||
+      r.saved.dppSpotsPlanned !== null ||
+      r.saved.avgPricePerSpotPlanned !== null;
     return anyHistorical || anyNext || hasSaved;
   });
 
@@ -368,15 +387,22 @@ export async function fetchSavedProjections(
 ): Promise<Map<string, SavedProjection>> {
   const { data, error } = await supabase
     .from("field_week_projections")
-    .select("venue_id, week_start_date, matches_planned, avg_price_planned")
+    .select(
+      "venue_id, week_start_date, matches_planned, dpp_spots_planned, avg_price_per_spot_planned",
+    )
     .eq("week_start_date", weekStartDate);
   if (error) throw new Error(`Saved projections fetch: ${error.message}`);
   const map = new Map<string, SavedProjection>();
   for (const r of data ?? []) {
     map.set(`${r.venue_id}|${r.week_start_date}`, {
-      matches_planned: r.matches_planned == null ? null : Number(r.matches_planned),
-      avg_price_planned:
-        r.avg_price_planned == null ? null : Number(r.avg_price_planned),
+      matches_planned:
+        r.matches_planned == null ? null : Number(r.matches_planned),
+      dpp_spots_planned:
+        r.dpp_spots_planned == null ? null : Number(r.dpp_spots_planned),
+      avg_price_per_spot_planned:
+        r.avg_price_per_spot_planned == null
+          ? null
+          : Number(r.avg_price_per_spot_planned),
     });
   }
   return map;
@@ -388,7 +414,8 @@ export async function saveProjection(
     venueId: number;
     weekStartDate: string;
     matchesPlanned: number | null;
-    avgPricePlanned: number | null;
+    dppSpotsPlanned: number | null;
+    avgPricePerSpotPlanned: number | null;
   },
 ): Promise<void> {
   const { error } = await supabase.from("field_week_projections").upsert(
@@ -396,7 +423,8 @@ export async function saveProjection(
       venue_id: args.venueId,
       week_start_date: args.weekStartDate,
       matches_planned: args.matchesPlanned,
-      avg_price_planned: args.avgPricePlanned,
+      dpp_spots_planned: args.dppSpotsPlanned,
+      avg_price_per_spot_planned: args.avgPricePerSpotPlanned,
     },
     { onConflict: "venue_id,week_start_date" },
   );

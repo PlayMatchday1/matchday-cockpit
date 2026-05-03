@@ -50,12 +50,17 @@ function revenueDeltaTone(delta: number): string {
   return r > 0 ? "text-mint-hover" : "text-coral";
 }
 
-// Effective values for a row — saved if present, defaults otherwise.
-function effectiveMatches(row: FieldProjectionRow): number {
-  return row.saved.matchesPlanned ?? row.defaults.matches;
-}
-function effectiveAvgPrice(row: FieldProjectionRow): number {
-  return row.saved.avgPricePlanned ?? row.defaults.avgPrice;
+// Resolve effective per-spot price for the rev calc. null defaults
+// (no W-1 DPP activity) collapse to 0 — the input renders empty until
+// the operator types a price; the math just contributes nothing to
+// totals in the meantime.
+function resolvePricePerSpot(
+  state: { avgPricePerSpotPlanned: number | null } | undefined,
+  row: FieldProjectionRow,
+): number {
+  return (
+    state?.avgPricePerSpotPlanned ?? row.defaults.avgPricePerSpot ?? 0
+  );
 }
 
 export default function WeeklyProjectionsTab() {
@@ -65,10 +70,14 @@ export default function WeeklyProjectionsTab() {
   const [collapsed, setCollapsed] = useState<Set<string>>(new Set());
 
   // Local edit cache: keyed by venueId. Stores the in-flight + saved
-  // values without re-fetching the world after each upsert.
+  // values without re-fetching the world after each upsert. Three
+  // planning levers: matches, dpp spots, avg price/spot. Rev is
+  // derived (dppSpots × pricePerSpot); avg/match is derived
+  // (rev / matches).
   type RowState = {
     matchesPlanned: number | null;
-    avgPricePlanned: number | null;
+    dppSpotsPlanned: number | null;
+    avgPricePerSpotPlanned: number | null;
   };
   const [rowState, setRowState] = useState<Map<number, RowState>>(
     new Map(),
@@ -95,7 +104,8 @@ export default function WeeklyProjectionsTab() {
         for (const f of c.fields) {
           next.set(f.venueId, {
             matchesPlanned: f.saved.matchesPlanned,
-            avgPricePlanned: f.saved.avgPricePlanned,
+            dppSpotsPlanned: f.saved.dppSpotsPlanned,
+            avgPricePerSpotPlanned: f.saved.avgPricePerSpotPlanned,
           });
         }
       }
@@ -120,6 +130,12 @@ export default function WeeklyProjectionsTab() {
     // eslint-disable-next-line react-hooks/exhaustive-deps
   }, []);
 
+  const EMPTY_ROW_STATE: RowState = {
+    matchesPlanned: null,
+    dppSpotsPlanned: null,
+    avgPricePerSpotPlanned: null,
+  };
+
   function scheduleSave(venueId: number, weekStart: string) {
     const existing = debounceTimers.current.get(venueId);
     if (existing) clearTimeout(existing);
@@ -131,7 +147,8 @@ export default function WeeklyProjectionsTab() {
           venueId,
           weekStartDate: weekStart,
           matchesPlanned: state.matchesPlanned,
-          avgPricePlanned: state.avgPricePlanned,
+          dppSpotsPlanned: state.dppSpotsPlanned,
+          avgPricePerSpotPlanned: state.avgPricePerSpotPlanned,
         });
       } catch (e) {
         // Surface but don't reset local state — operator can retry
@@ -148,20 +165,43 @@ export default function WeeklyProjectionsTab() {
     const parsed = raw === "" ? null : Math.max(0, Math.floor(Number(raw)));
     setRowState((prev) => {
       const next = new Map(prev);
-      const cur = next.get(venueId) ?? { matchesPlanned: null, avgPricePlanned: null };
-      next.set(venueId, { ...cur, matchesPlanned: Number.isFinite(parsed as number) ? parsed : null });
+      const cur = next.get(venueId) ?? EMPTY_ROW_STATE;
+      next.set(venueId, {
+        ...cur,
+        matchesPlanned: Number.isFinite(parsed as number) ? parsed : null,
+      });
       return next;
     });
     scheduleSave(venueId, view.nextWindow.start);
   }
 
-  function handleAvgPriceChange(venueId: number, raw: string) {
+  function handleDppSpotsChange(venueId: number, raw: string) {
+    if (!view) return;
+    const parsed = raw === "" ? null : Math.max(0, Math.floor(Number(raw)));
+    setRowState((prev) => {
+      const next = new Map(prev);
+      const cur = next.get(venueId) ?? EMPTY_ROW_STATE;
+      next.set(venueId, {
+        ...cur,
+        dppSpotsPlanned: Number.isFinite(parsed as number) ? parsed : null,
+      });
+      return next;
+    });
+    scheduleSave(venueId, view.nextWindow.start);
+  }
+
+  function handleAvgPricePerSpotChange(venueId: number, raw: string) {
     if (!view) return;
     const parsed = raw === "" ? null : Math.max(0, Number(raw));
     setRowState((prev) => {
       const next = new Map(prev);
-      const cur = next.get(venueId) ?? { matchesPlanned: null, avgPricePlanned: null };
-      next.set(venueId, { ...cur, avgPricePlanned: Number.isFinite(parsed as number) ? parsed : null });
+      const cur = next.get(venueId) ?? EMPTY_ROW_STATE;
+      next.set(venueId, {
+        ...cur,
+        avgPricePerSpotPlanned: Number.isFinite(parsed as number)
+          ? parsed
+          : null,
+      });
       return next;
     });
     scheduleSave(venueId, view.nextWindow.start);
@@ -173,10 +213,10 @@ export default function WeeklyProjectionsTab() {
     const existing = debounceTimers.current.get(venueId);
     if (existing) clearTimeout(existing);
     debounceTimers.current.delete(venueId);
-    // Optimistic local update.
+    // Optimistic local update — clear all 3 planning inputs.
     setRowState((prev) => {
       const next = new Map(prev);
-      next.set(venueId, { matchesPlanned: null, avgPricePlanned: null });
+      next.set(venueId, EMPTY_ROW_STATE);
       return next;
     });
     try {
@@ -213,7 +253,8 @@ export default function WeeklyProjectionsTab() {
   }
   if (!view) return null;
 
-  // Compute grand totals using the latest local state.
+  // Compute grand totals using the latest local state. Projected rev
+  // is dpp spots × price/spot — the new model — for both city + grand.
   const grandW1 = view.cities.reduce(
     (s, c) => s + c.fields.reduce((s2, f) => s2 + f.weeks[3].dppRev, 0),
     0,
@@ -222,11 +263,10 @@ export default function WeeklyProjectionsTab() {
     (s, c) =>
       s +
       c.fields.reduce((s2, f) => {
-        const m =
-          rowState.get(f.venueId)?.matchesPlanned ?? f.defaults.matches;
-        const a =
-          rowState.get(f.venueId)?.avgPricePlanned ?? f.defaults.avgPrice;
-        return s2 + (m ?? 0) * (a ?? 0);
+        const st = rowState.get(f.venueId);
+        const spots = st?.dppSpotsPlanned ?? f.defaults.dppSpots;
+        const price = resolvePricePerSpot(st, f);
+        return s2 + (spots ?? 0) * price;
       }, 0),
     0,
   );
@@ -260,7 +300,8 @@ export default function WeeklyProjectionsTab() {
             collapsed={collapsed.has(c.city)}
             onToggle={() => toggleCity(c.city)}
             onMatchesChange={handleMatchesChange}
-            onAvgPriceChange={handleAvgPriceChange}
+            onDppSpotsChange={handleDppSpotsChange}
+            onAvgPricePerSpotChange={handleAvgPricePerSpotChange}
             onReset={handleReset}
           />
         ))}
@@ -298,6 +339,12 @@ export default function WeeklyProjectionsTab() {
   );
 }
 
+type CellRowState = {
+  matchesPlanned: number | null;
+  dppSpotsPlanned: number | null;
+  avgPricePerSpotPlanned: number | null;
+};
+
 function CityCard({
   city,
   view,
@@ -305,27 +352,28 @@ function CityCard({
   collapsed,
   onToggle,
   onMatchesChange,
-  onAvgPriceChange,
+  onDppSpotsChange,
+  onAvgPricePerSpotChange,
   onReset,
 }: {
   city: CityProjection;
   view: ProjectionsView;
-  rowState: Map<
-    number,
-    { matchesPlanned: number | null; avgPricePlanned: number | null }
-  >;
+  rowState: Map<number, CellRowState>;
   collapsed: boolean;
   onToggle: () => void;
   onMatchesChange: (venueId: number, raw: string) => void;
-  onAvgPriceChange: (venueId: number, raw: string) => void;
+  onDppSpotsChange: (venueId: number, raw: string) => void;
+  onAvgPricePerSpotChange: (venueId: number, raw: string) => void;
   onReset: (venueId: number) => void;
 }) {
-  // City totals based on current rowState (live recompute).
+  // City totals based on current rowState (live recompute). Projected
+  // rev = Σ (dppSpots × pricePerSpot) — matches the per-row math.
   const cityW1 = city.fields.reduce((s, f) => s + f.weeks[3].dppRev, 0);
   const cityNext = city.fields.reduce((s, f) => {
-    const m = rowState.get(f.venueId)?.matchesPlanned ?? f.defaults.matches;
-    const a = rowState.get(f.venueId)?.avgPricePlanned ?? f.defaults.avgPrice;
-    return s + (m ?? 0) * (a ?? 0);
+    const st = rowState.get(f.venueId);
+    const spots = st?.dppSpotsPlanned ?? f.defaults.dppSpots;
+    const price = resolvePricePerSpot(st, f);
+    return s + (spots ?? 0) * price;
   }, 0);
   const cityDelta = cityNext - cityW1;
 
@@ -389,7 +437,8 @@ function CityCard({
                   row={f}
                   state={rowState.get(f.venueId)}
                   onMatchesChange={onMatchesChange}
-                  onAvgPriceChange={onAvgPriceChange}
+                  onDppSpotsChange={onDppSpotsChange}
+                  onAvgPricePerSpotChange={onAvgPricePerSpotChange}
                   onReset={onReset}
                 />
               ))}
@@ -425,24 +474,37 @@ function FieldRow({
   row,
   state,
   onMatchesChange,
-  onAvgPriceChange,
+  onDppSpotsChange,
+  onAvgPricePerSpotChange,
   onReset,
 }: {
   row: FieldProjectionRow;
-  state: { matchesPlanned: number | null; avgPricePlanned: number | null } | undefined;
+  state: CellRowState | undefined;
   onMatchesChange: (venueId: number, raw: string) => void;
-  onAvgPriceChange: (venueId: number, raw: string) => void;
+  onDppSpotsChange: (venueId: number, raw: string) => void;
+  onAvgPricePerSpotChange: (venueId: number, raw: string) => void;
   onReset: (venueId: number) => void;
 }) {
   const matches = state?.matchesPlanned ?? row.defaults.matches;
-  const avg = state?.avgPricePlanned ?? row.defaults.avgPrice;
-  const projected = (matches ?? 0) * (avg ?? 0);
+  const dppSpots = state?.dppSpotsPlanned ?? row.defaults.dppSpots;
+  // Price-per-spot input: render whatever's in state if set, else the
+  // W-1 default, else empty (no W-1 DPP activity to fall back on).
+  const pricePerSpotForInput =
+    state?.avgPricePerSpotPlanned ?? row.defaults.avgPricePerSpot;
+  const pricePerSpotForCalc = pricePerSpotForInput ?? 0;
+  const projected = (dppSpots ?? 0) * pricePerSpotForCalc;
+  // avg/match is now a derived display, not an input.
+  const avgPerMatch =
+    matches && matches > 0 ? projected / matches : 0;
 
   const isEdited =
-    state?.matchesPlanned != null || state?.avgPricePlanned != null;
+    state?.matchesPlanned != null ||
+    state?.dppSpotsPlanned != null ||
+    state?.avgPricePerSpotPlanned != null;
 
   const w1 = row.weeks[3];
   const matchDelta = (matches ?? 0) - w1.matches;
+  const spotsDelta = (dppSpots ?? 0) - w1.dppSpots;
   const dppDelta = projected - w1.dppRev;
   const matchDeltaTone =
     matchDelta === 0
@@ -456,6 +518,18 @@ function FieldRow({
       : matchDelta === 0
         ? "0"
         : `${matchDelta}`;
+  const spotsDeltaTone =
+    spotsDelta === 0
+      ? "text-deep-green/45"
+      : spotsDelta > 0
+        ? "text-mint-hover"
+        : "text-coral";
+  const spotsDeltaStr =
+    spotsDelta > 0
+      ? `+${spotsDelta}`
+      : spotsDelta === 0
+        ? "0"
+        : `${spotsDelta}`;
 
   return (
     <tr className="border-t border-cream-line/60">
@@ -501,7 +575,7 @@ function FieldRow({
           />
         </td>
       ))}
-      <td className="min-w-[150px] px-2 py-2 align-top">
+      <td className="min-w-[160px] px-2 py-2 align-top">
         <div className="space-y-0.5 text-[11px]">
           <div className="flex items-center justify-between gap-2">
             <span className="text-deep-green/45">matches:</span>
@@ -514,32 +588,42 @@ function FieldRow({
               className="h-6 w-16 rounded border border-cream-line bg-white px-1.5 text-right font-mono text-[12px] tabular-nums text-deep-green focus:border-mint focus:outline-none"
             />
           </div>
-          {/* Static defaults from W-1 — read-only signal, not editable */}
-          {/* yet (per-spot planning is a phase-2 follow-up). */}
-          <div className="flex items-baseline justify-between gap-2">
+          <div className="flex items-center justify-between gap-2">
             <span className="text-deep-green/45">dpp spots:</span>
-            <span className="font-mono tabular-nums text-deep-green/55">
-              {w1.dppSpots}
-            </span>
-          </div>
-          <div className="flex items-baseline justify-between gap-2">
-            <span className="text-deep-green/45">avg price/spot:</span>
-            <span className="font-mono tabular-nums text-deep-green/55">
-              {w1.avgPricePerSpot === null
-                ? "—"
-                : fmtUsdDec(w1.avgPricePerSpot)}
-            </span>
+            <input
+              type="number"
+              min={0}
+              step={1}
+              value={dppSpots ?? ""}
+              onChange={(e) => onDppSpotsChange(row.venueId, e.target.value)}
+              className="h-6 w-16 rounded border border-cream-line bg-white px-1.5 text-right font-mono text-[12px] tabular-nums text-deep-green focus:border-mint focus:outline-none"
+            />
           </div>
           <div className="flex items-center justify-between gap-2">
-            <span className="text-deep-green/45">avg/match:</span>
+            <span className="text-deep-green/45">avg price/spot:</span>
             <input
               type="number"
               min={0}
               step={0.01}
-              value={avg.toFixed(2)}
-              onChange={(e) => onAvgPriceChange(row.venueId, e.target.value)}
+              value={
+                pricePerSpotForInput == null
+                  ? ""
+                  : pricePerSpotForInput.toFixed(2)
+              }
+              onChange={(e) =>
+                onAvgPricePerSpotChange(row.venueId, e.target.value)
+              }
               className="h-6 w-20 rounded border border-cream-line bg-white px-1.5 text-right font-mono text-[12px] tabular-nums text-deep-green focus:border-mint focus:outline-none"
             />
+          </div>
+          {/* Derived display — recomputes as the operator edits any of */}
+          {/* the three inputs above. Italic + muted to read as "live   */}
+          {/* readout, not a knob you turn".                             */}
+          <div className="flex items-baseline justify-between gap-2">
+            <span className="text-deep-green/45 italic">avg/match:</span>
+            <span className="font-mono tabular-nums italic text-deep-green/55">
+              {matches && matches > 0 ? fmtUsdDec(avgPerMatch) : "—"}
+            </span>
           </div>
           <div className="flex items-baseline justify-between gap-2 pt-0.5">
             <span className="text-deep-green/45">rev:</span>
@@ -560,12 +644,16 @@ function FieldRow({
           )}
         </div>
       </td>
-      <td className="min-w-[120px] px-3 py-2 align-top">
+      <td className="min-w-[130px] px-3 py-2 align-top">
         <LabeledStack
           rows={[
             {
               label: "Δ matches",
               value: <span className={matchDeltaTone}>{matchDeltaStr}</span>,
+            },
+            {
+              label: "Δ dpp spots",
+              value: <span className={spotsDeltaTone}>{spotsDeltaStr}</span>,
             },
             {
               label: "Δ rev",
