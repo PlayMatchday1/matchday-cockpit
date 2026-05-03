@@ -1,3 +1,4 @@
+import type { SupabaseClient } from "@supabase/supabase-js";
 import { supabase } from "./supabase";
 import { selectAll } from "./supabasePagination";
 import { normalizeMatchName } from "./venueNormalization";
@@ -103,7 +104,7 @@ function deriveMemberCity(memberId: string): string | null {
 // account between paying and our next members sync, so the email→city
 // lookup misses. Surfaced as its own row at the bottom of Cash Flow's
 // Revenue by City list.
-const DELETED_ACCOUNT_CITY = "Deleted Account Revenue";
+export const DELETED_ACCOUNT_CITY = "Deleted Account Revenue";
 
 function memberCityFromId(memberId: string): string {
   return deriveMemberCity(memberId) ?? DELETED_ACCOUNT_CITY;
@@ -466,7 +467,7 @@ const STRIPE_SPEC: ColumnSpec[] = [
 
 const PAID_STATUSES = new Set(["paid", "succeeded"]);
 
-type StripeAllocatedRow = {
+export type StripeAllocatedRow = {
   date: string;
   month: string;
   city: string;
@@ -507,7 +508,7 @@ export type StripePreview = {
   parsed: StripeAllocatedRow[];
 };
 
-function monthLabelFromIsoDate(iso: string): string | null {
+export function monthLabelFromIsoDate(iso: string): string | null {
   const m = iso.match(/^(\d{4})-(\d{2})-/);
   if (!m) return null;
   const monthIndex = parseInt(m[2], 10) - 1;
@@ -515,7 +516,16 @@ function monthLabelFromIsoDate(iso: string): string | null {
   return `${MONTH_LABELS[monthIndex]} ${m[1]}`;
 }
 
-function looksLikeMembership(
+// Strike detection — single source of truth for both the CSV importer
+// and the Stripe API sync. Mirrors the inline check the CSV path used
+// before extraction: type metadata containing "strike". If we ever
+// need richer detection (description / amount patterns), update this
+// helper and both paths pick it up.
+export function isStrikeCharge(stripeType: string | null): boolean {
+  return stripeType !== null && stripeType.toLowerCase().includes("strike");
+}
+
+export function looksLikeMembership(
   stripeType: string | null,
   description: string | null,
   cityIdentifier: string | null,
@@ -532,7 +542,7 @@ function looksLikeMembership(
   return false;
 }
 
-function cityFromIdentifier(code: string | null): string {
+export function cityFromIdentifier(code: string | null): string {
   if (!code) return DELETED_ACCOUNT_CITY;
   const upper = code.toUpperCase().trim();
   const prefixes = Object.keys(STRIPE_CITY_PREFIX).sort(
@@ -544,7 +554,7 @@ function cityFromIdentifier(code: string | null): string {
   return DELETED_ACCOUNT_CITY;
 }
 
-function aggregateStripeRows(
+export function aggregateStripeRows(
   perTxn: StripeAllocatedRow[],
 ): StripeAllocatedRow[] {
   type Bucket = {
@@ -667,8 +677,7 @@ export async function previewStripe(
     totalRows++;
     const status = (trim(r["status"]) ?? "").toLowerCase();
     const stripeType = trim(r["stripe_type"]);
-    const isStrikeType =
-      stripeType !== null && stripeType.toLowerCase().includes("strike");
+    const isStrikeType = isStrikeCharge(stripeType);
     if (!PAID_STATUSES.has(status)) {
       skippedRows++;
       if (isStrikeType) strikeSkipped++;
@@ -800,30 +809,45 @@ export async function previewStripe(
   };
 }
 
+// What commitStripe actually needs — independent of source. Both the
+// CSV preview path and the Stripe API sync produce this shape and
+// hand it to the same commit function. Keeps the date-range-replace
+// behavior identical regardless of where rows came from.
+export type StripeCommitInput = {
+  rows: StripeAllocatedRow[];
+  earliestDate: string;
+  latestDate: string;
+};
+
+// Optional client param: defaults to the module-level browser client
+// for the existing CSV caller. The server-side API route passes a
+// per-request authenticated client (Bearer token from the user's
+// session) so RLS evaluates as the calling user.
 export async function commitStripe(
-  preview: StripePreview,
+  input: StripeCommitInput,
+  client: SupabaseClient = supabase,
 ): Promise<ImportResult> {
-  if (preview.parsed.length === 0 || !preview.earliestDate || !preview.latestDate) {
-    return { count: 0, note: "No paid Stripe rows in the upload." };
+  if (input.rows.length === 0) {
+    return { count: 0, note: "No paid Stripe rows to commit." };
   }
 
   // Date-range replace: drop existing Stripe rows in the covered window, then insert.
-  const { error: delErr } = await supabase
+  const { error: delErr } = await client
     .from("fin_revenue")
     .delete()
     .eq("source", "Stripe")
-    .gte("date", preview.earliestDate)
-    .lte("date", preview.latestDate);
+    .gte("date", input.earliestDate)
+    .lte("date", input.latestDate);
   if (delErr) throw new Error(`Delete failed: ${delErr.message}`);
 
   const BATCH = 500;
-  for (let i = 0; i < preview.parsed.length; i += BATCH) {
-    const chunk = preview.parsed.slice(i, i + BATCH);
-    const { error } = await supabase.from("fin_revenue").insert(chunk);
+  for (let i = 0; i < input.rows.length; i += BATCH) {
+    const chunk = input.rows.slice(i, i + BATCH);
+    const { error } = await client.from("fin_revenue").insert(chunk);
     if (error) throw new Error(`Insert failed: ${error.message}`);
   }
   return {
-    count: preview.parsed.length,
-    note: `${preview.earliestDate} → ${preview.latestDate}`,
+    count: input.rows.length,
+    note: `${input.earliestDate} → ${input.latestDate}`,
   };
 }

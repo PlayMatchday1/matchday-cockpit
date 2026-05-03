@@ -1,9 +1,10 @@
 "use client";
 
-import { useState } from "react";
+import { useEffect, useState } from "react";
 import Link from "next/link";
 import PagePermissionGuard from "@/components/PagePermissionGuard";
 import FinanceUploadCard from "@/components/FinanceUploadCard";
+import { supabase } from "@/lib/supabase";
 import {
   commitMembers,
   commitStripe,
@@ -66,13 +67,26 @@ function FinanceUploadContent() {
           confirmLabel="Confirm Replace"
         />
 
+        <StripeApiSyncCard />
+
         <FinanceUploadCard<StripePreview>
           index={2}
-          title="Stripe Activity"
-          subtitle="Replaces Stripe-source rows in fin_revenue between the earliest and latest dates in this upload. Membership payments are allocated to the member's city via email lookup; match payments use the cityIdentifier code."
+          title="Stripe Activity (manual CSV)"
+          subtitle="Manual fallback — replaces Stripe-source rows in fin_revenue between the earliest and latest dates in this upload. Membership payments are allocated to the member's city via email lookup; match payments use the cityIdentifier code."
           expectedColumns="Created date (UTC), Amount, Fee, Status, Description, Customer Email, cityIdentifier (metadata), type (metadata) — falls back to Description if type is blank"
           preview={previewStripe}
-          commit={commitStripe}
+          commit={(p) =>
+            p.earliestDate && p.latestDate
+              ? commitStripe({
+                  rows: p.parsed,
+                  earliestDate: p.earliestDate,
+                  latestDate: p.latestDate,
+                })
+              : Promise.resolve({
+                  count: 0,
+                  note: "No paid Stripe rows in the upload.",
+                })
+          }
           renderPreview={renderStripePreview}
           confirmLabel="Confirm Replace"
         />
@@ -332,6 +346,169 @@ function VenueResolutionsList({
         </div>
       )}
     </div>
+  );
+}
+
+type SyncResponse = {
+  since: string;
+  until: string;
+  totalCharges: number;
+  paidRows: number;
+  skippedNonPaid: number;
+  skippedNonUsd: number;
+  rowsImported: number;
+  earliestDate: string | null;
+  latestDate: string | null;
+  membershipPayments: number;
+  matchPayments: number;
+  strikePayments: number;
+  unmatchedEmails: string[];
+  unmatchedCityCodes: string[];
+  durationMs: number;
+  note?: string;
+};
+
+function StripeApiSyncCard() {
+  const [latestCharge, setLatestCharge] = useState<string | null>(null);
+  const [latestLoading, setLatestLoading] = useState(true);
+  const [syncing, setSyncing] = useState(false);
+  const [result, setResult] = useState<SyncResponse | null>(null);
+  const [error, setError] = useState<string | null>(null);
+
+  // The "last sync timestamp" the user asked for is really tracked by
+  // the Phase-2 fin_sync_log table. For Phase 1 we surface the next
+  // best signal — the date of the most recent Stripe charge in
+  // fin_revenue. That tells you how far the data extends today.
+  async function refreshLatestCharge() {
+    setLatestLoading(true);
+    const { data } = await supabase
+      .from("fin_revenue")
+      .select("date")
+      .eq("source", "Stripe")
+      .order("date", { ascending: false })
+      .limit(1)
+      .maybeSingle();
+    setLatestCharge(data?.date ?? null);
+    setLatestLoading(false);
+  }
+
+  useEffect(() => {
+    refreshLatestCharge();
+  }, []);
+
+  async function handleSync() {
+    setError(null);
+    setResult(null);
+    setSyncing(true);
+    try {
+      const { data: sessionData } = await supabase.auth.getSession();
+      const token = sessionData.session?.access_token;
+      if (!token) throw new Error("No active session — please sign in again.");
+
+      const res = await fetch("/api/sync/stripe", {
+        method: "POST",
+        headers: {
+          "Content-Type": "application/json",
+          Authorization: `Bearer ${token}`,
+        },
+        body: JSON.stringify({}),
+      });
+      const json = await res.json();
+      if (!res.ok) {
+        throw new Error(json.error ?? `Sync failed (HTTP ${res.status})`);
+      }
+      setResult(json as SyncResponse);
+      await refreshLatestCharge();
+    } catch (e) {
+      setError(e instanceof Error ? e.message : String(e));
+    } finally {
+      setSyncing(false);
+    }
+  }
+
+  return (
+    <section className="rounded-2xl border-[1.5px] border-cream-line bg-white p-5 shadow-md shadow-deep-green/10">
+      <div className="flex flex-wrap items-start justify-between gap-3">
+        <div className="min-w-0 flex-1">
+          <h3 className="text-base font-bold text-deep-green">
+            Sync from Stripe API
+          </h3>
+          <p className="mt-1 text-xs text-deep-green/65">
+            Pulls succeeded charges since the latest Stripe row in
+            fin_revenue and replaces overlapping rows. Same classification
+            as the manual CSV importer.
+          </p>
+          <p className="mt-1 text-[11px] text-deep-green/50">
+            Latest Stripe charge in DB:{" "}
+            <span className="font-mono">
+              {latestLoading ? "…" : (latestCharge ?? "(none yet)")}
+            </span>
+          </p>
+        </div>
+        <button
+          type="button"
+          onClick={handleSync}
+          disabled={syncing}
+          className="rounded-md bg-mint px-4 py-2 text-sm font-bold text-deep-green transition hover:bg-mint-hover disabled:cursor-not-allowed disabled:opacity-50"
+        >
+          {syncing ? "Syncing…" : "Sync now"}
+        </button>
+      </div>
+
+      {error && (
+        <div className="mt-3 rounded-md border border-coral/40 bg-coral-soft px-3 py-2 text-xs text-coral">
+          {error}
+        </div>
+      )}
+
+      {result && (
+        <div className="mt-3 space-y-2 rounded-md border border-cream-line bg-cream-soft/40 p-3 text-xs text-deep-green">
+          <div className="font-bold">
+            Synced {result.rowsImported.toLocaleString()} aggregated rows
+            {result.earliestDate && result.latestDate
+              ? ` · ${result.earliestDate} → ${result.latestDate}`
+              : ""}{" "}
+            <span className="font-normal text-deep-green/55">
+              ({(result.durationMs / 1000).toFixed(1)}s)
+            </span>
+          </div>
+          <ul className="space-y-0.5 pl-3 text-deep-green/75">
+            <li>
+              {result.totalCharges.toLocaleString()} charges fetched ·{" "}
+              {result.paidRows.toLocaleString()} succeeded ·{" "}
+              {result.skippedNonPaid.toLocaleString()} non-paid skipped
+              {result.skippedNonUsd > 0 ? (
+                <span className="text-coral">
+                  {" "}
+                  · {result.skippedNonUsd.toLocaleString()} non-USD skipped
+                  ⚠
+                </span>
+              ) : null}
+            </li>
+            <li>
+              By type: {result.membershipPayments.toLocaleString()} membership
+              · {result.matchPayments.toLocaleString()} match ·{" "}
+              {result.strikePayments.toLocaleString()} strike
+            </li>
+            {result.unmatchedEmails.length > 0 && (
+              <li className="text-coral">
+                {result.unmatchedEmails.length} unmatched membership email
+                {result.unmatchedEmails.length === 1 ? "" : "s"} → Deleted
+                Account Revenue
+              </li>
+            )}
+            {result.unmatchedCityCodes.length > 0 && (
+              <li className="text-coral">
+                Unrecognized city codes:{" "}
+                <span className="font-mono">
+                  {result.unmatchedCityCodes.join(", ")}
+                </span>
+              </li>
+            )}
+          </ul>
+        </div>
+      )}
+    </section>
   );
 }
 
