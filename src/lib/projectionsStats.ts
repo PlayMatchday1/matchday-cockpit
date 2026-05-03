@@ -1,9 +1,16 @@
 // Weekly Projections — data layer for /admin/finance Projections tab.
 //
-// 5-column view per field: 4 historical Sun-Sat weeks (W-4 .. W-1) +
-// next week. Stats per (venue, week): matches (distinct match_start),
+// Planning unit: a "slot" = unique (venue, day-of-week, match_start_time).
+// Examples: "NEMP Mon 7:30pm", "PRUMC Tue 7:00pm", "San Juan Diego Sat
+// 9:05am". Slots are auto-detected from match_registrations over the
+// last 4 weeks + next-week — anything that ran in any of those windows
+// shows up.
+//
+// 5-column view per slot: 4 historical Sun-Sat weeks (W-4 .. W-1) +
+// next week. Stats per (slot, week): matches (distinct match_start),
 // DPP rev (sum match_price_paid where payment_type='DAILY PAID'),
-// avg = dppRev / matches.
+// per-spot price (rev for non-canceled DPP spots ÷ those spots),
+// avg/match (= dppRev / matches).
 //
 // "Most recent week" rule: W-1 is the Sun-Sat window whose Saturday
 // is on or before today. Today=Sat → W-1 ends today. Today=Sun
@@ -19,6 +26,7 @@
 import type { SupabaseClient } from "@supabase/supabase-js";
 
 const STAFF_EMAIL_DOMAIN = "matchday.com";
+const DOW_LABELS = ["Sun", "Mon", "Tue", "Wed", "Thu", "Fri", "Sat"] as const;
 
 export type WeekWindow = {
   start: string; // YYYY-MM-DD (Sunday)
@@ -26,7 +34,7 @@ export type WeekWindow = {
   label: string; // e.g. "Apr 5-11" or "Apr 26-May 2"
 };
 
-export type FieldWeekStats = {
+export type SlotWeekStats = {
   matches: number;
   cancels: number; // distinct match_starts where the whole match was canceled
   dppSpots: number; // DAILY PAID registrations excluding match_canceled + player_canceled_at
@@ -38,19 +46,28 @@ export type FieldWeekStats = {
   avgPricePerSpot: number | null;
 };
 
-export type FieldProjectionRow = {
+export type SlotProjectionRow = {
+  // Identity
   venueId: number;
   venueName: string;
   city: string;
-  weeks: FieldWeekStats[]; // length 4: indices 0..3 = W-4..W-1
+  dow: number; // 0=Sun .. 6=Sat
+  slotTime: string; // "HH:MM" 24-hour, e.g. "19:30"
+  slotLabel: string; // "Mon 7:30pm" — for display
+
+  weeks: SlotWeekStats[]; // length 4: indices 0..3 = W-4..W-1
+  // Count of weeks where matches > 0 — drives the (N/4) thin-data
+  // badge. dppSpots default uses this denominator (rule B: mean over
+  // weeks where the slot actually ran, not over all 4).
+  weeksWithData: number;
+
   defaults: {
-    matches: number; // distinct match_start in next-week window (strict 0 if none)
-    // dpp spots default = mean of W-4..W-1 dppSpots, rounded. Smooths
-    // single-week anomalies. Zero-spot weeks count toward the mean —
-    // a planned-zero week is real signal, not missing data.
+    matches: number; // strict count of next-week scheduled match_starts (no historical fallback)
+    // Mean of dppSpots over weeks where matches > 0, rounded. If
+    // weeksWithData === 0 (only-next-week slot), falls to 0.
     dppSpots: number;
-    // avg price/spot default = W-1's per-spot price. null when W-1 had
-    // no DPP spots — input renders empty until operator types a price.
+    // W-1 slot's per-spot price. null when W-1 had no DPP — input
+    // renders empty until operator types a price.
     avgPricePerSpot: number | null;
   };
   saved: {
@@ -60,9 +77,16 @@ export type FieldProjectionRow = {
   };
 };
 
+export type VenueProjectionGroup = {
+  venueId: number;
+  venueName: string;
+  city: string;
+  slots: SlotProjectionRow[];
+};
+
 export type CityProjection = {
   city: string;
-  fields: FieldProjectionRow[];
+  venues: VenueProjectionGroup[];
 };
 
 export type ProjectionsView = {
@@ -131,6 +155,28 @@ export function computeProjectionWindows(now: Date = new Date()): {
 }
 
 // =====================================================================
+// Slot identity helpers
+// =====================================================================
+
+// match_start values look like "2026-04-28T19:00:00" — local match time
+// stored without TZ. Slice to get the parts we need.
+function dowFromYmd(ymd: string): number {
+  return new Date(`${ymd}T00:00:00Z`).getUTCDay();
+}
+function hhmmFromMatchStart(ms: string): string {
+  // chars 11-16 of "YYYY-MM-DDTHH:MM:SS"
+  return ms.slice(11, 16);
+}
+function fmtSlotLabel(dow: number, hhmm: string): string {
+  const [hStr, mStr] = hhmm.split(":");
+  const h = Number(hStr);
+  const m = Number(mStr);
+  const ampm = h >= 12 ? "pm" : "am";
+  const h12 = h === 0 ? 12 : h > 12 ? h - 12 : h;
+  return `${DOW_LABELS[dow]} ${h12}:${String(m).padStart(2, "0")}${ampm}`;
+}
+
+// =====================================================================
 // Venue resolver — longest-prefix substring match
 // =====================================================================
 
@@ -180,6 +226,43 @@ type SavedProjection = {
   avg_price_per_spot_planned: number | null;
 };
 
+// Saved-projection key: `${venueId}|${weekStart}|${dow}|${hhmm}`. Matches
+// the table's UNIQUE constraint after migration 0008.
+export function savedProjectionKey(
+  venueId: number,
+  weekStart: string,
+  dow: number,
+  slotTime: string,
+): string {
+  return `${venueId}|${weekStart}|${dow}|${slotTime}`;
+}
+
+// Per-slot accumulator. We collect across both historical and next-week
+// rows in one pass; finalize() splits out the stats.
+type SlotAccum = {
+  venueId: number;
+  dow: number;
+  hhmm: string;
+  weeks: {
+    matchSet: Set<string>;
+    cancelSet: Set<string>;
+    dppRev: number;
+    dppSpots: number;
+    dppRevForSpots: number;
+  }[];
+  nextMatchSet: Set<string>;
+};
+
+function emptyWeekAccum() {
+  return {
+    matchSet: new Set<string>(),
+    cancelSet: new Set<string>(),
+    dppRev: 0,
+    dppSpots: 0,
+    dppRevForSpots: 0,
+  };
+}
+
 export function computeProjections(
   registrations: RegistrationRow[],
   venues: { id: number; venue_name: string; city: string | null }[],
@@ -193,93 +276,130 @@ export function computeProjections(
       !!r.field &&
       !(r.email && r.email.toLowerCase().includes(STAFF_EMAIL_DOMAIN)),
   );
-  const active = regsExStaff.filter((r) => !r.match_canceled);
-  const cancelled = regsExStaff.filter((r) => r.match_canceled);
 
-  // 2. Field → venue map. Built from BOTH active and canceled rows so a
-  //    venue that only has cancellations in a window still resolves.
+  // 2. Field → venue map. Built from all rows so a venue that only has
+  //    cancellations or only next-week matches still resolves.
   const fields = new Set<string>();
   for (const r of regsExStaff) if (r.field) fields.add(r.field);
   const fieldToVenue = buildFieldToVenueMap(fields, venues);
+  const venueById = new Map(venues.map((v) => [v.id, v]));
 
-  // 3. Stats helper.
-  function statsForVenueWindow(venueId: number, w: WeekWindow): FieldWeekStats {
-    const matchSet = new Set<string>();
-    let dppRev = 0;
-    let dppSpots = 0;
-    let dppRevForSpots = 0; // sub-sum used as the per-spot numerator
-    for (const r of active) {
-      if (fieldToVenue.get(r.field as string) !== venueId) continue;
-      const ymd = r.match_start.slice(0, 10);
-      if (ymd < w.start || ymd > w.end) continue;
-      matchSet.add(r.match_start);
-      if (r.payment_type === "DAILY PAID") {
-        const price = Number(r.match_price_paid ?? 0) || 0;
-        dppRev += price;
-        // Per-spot calc drops player-canceled rows on top of
-        // match_canceled (already filtered by `active`). Numerator and
-        // denominator stay consistent — both exclude the same rows.
-        const playerCancel =
-          !!r.player_canceled_at && r.player_canceled_at.trim() !== "";
-        if (!playerCancel) {
-          dppSpots += 1;
-          dppRevForSpots += price;
+  // 3. Single pass: bucket every reg into a slot accumulator.
+  const slotMap = new Map<string, SlotAccum>();
+  function ensureSlot(venueId: number, dow: number, hhmm: string): SlotAccum {
+    const key = `${venueId}|${dow}|${hhmm}`;
+    let s = slotMap.get(key);
+    if (!s) {
+      s = {
+        venueId,
+        dow,
+        hhmm,
+        weeks: [emptyWeekAccum(), emptyWeekAccum(), emptyWeekAccum(), emptyWeekAccum()],
+        nextMatchSet: new Set<string>(),
+      };
+      slotMap.set(key, s);
+    }
+    return s;
+  }
+  function windowIndexFor(ymd: string): number {
+    for (let i = 0; i < 4; i++) {
+      const w = windows.windowsHistorical[i];
+      if (ymd >= w.start && ymd <= w.end) return i;
+    }
+    return -1;
+  }
+  for (const r of regsExStaff) {
+    const venueId = fieldToVenue.get(r.field as string);
+    if (venueId === undefined) continue;
+    const ymd = r.match_start.slice(0, 10);
+    const hhmm = hhmmFromMatchStart(r.match_start);
+    const dow = dowFromYmd(ymd);
+    const inNext =
+      ymd >= windows.nextWindow.start && ymd <= windows.nextWindow.end;
+    const wIdx = windowIndexFor(ymd);
+    if (wIdx === -1 && !inNext) continue;
+    const slot = ensureSlot(venueId, dow, hhmm);
+    if (inNext) {
+      // Next-window: only count non-canceled matches toward the
+      // matches default. Canceled next-week matches are in the data
+      // but don't seed the planning input.
+      if (!r.match_canceled) slot.nextMatchSet.add(r.match_start);
+    } else {
+      const w = slot.weeks[wIdx];
+      if (r.match_canceled) {
+        w.cancelSet.add(r.match_start);
+      } else {
+        w.matchSet.add(r.match_start);
+        if (r.payment_type === "DAILY PAID") {
+          const price = Number(r.match_price_paid ?? 0) || 0;
+          w.dppRev += price;
+          // Per-spot calc drops player-canceled rows. Numerator and
+          // denominator stay consistent — both exclude the same rows.
+          const playerCancel =
+            !!r.player_canceled_at && r.player_canceled_at.trim() !== "";
+          if (!playerCancel) {
+            w.dppSpots += 1;
+            w.dppRevForSpots += price;
+          }
         }
       }
     }
-    // Canceled-match count is distinct match_starts where the whole
-    // match was canceled — not registration count. A canceled match
-    // with 12 paid spots = 1 cancel, not 12.
-    const cancelSet = new Set<string>();
-    for (const r of cancelled) {
-      if (fieldToVenue.get(r.field as string) !== venueId) continue;
-      const ymd = r.match_start.slice(0, 10);
-      if (ymd < w.start || ymd > w.end) continue;
-      cancelSet.add(r.match_start);
-    }
-    const matches = matchSet.size;
-    return {
-      matches,
-      cancels: cancelSet.size,
-      dppSpots,
-      dppRev,
-      avgPrice: matches > 0 ? dppRev / matches : 0,
-      avgPricePerSpot: dppSpots > 0 ? dppRevForSpots / dppSpots : null,
-    };
   }
 
-  // 4. Per-venue rows.
-  const allRows: FieldProjectionRow[] = venues.map((v) => {
-    const weeks = windows.windowsHistorical.map((w) =>
-      statsForVenueWindow(v.id, w),
-    );
+  // 4. Finalize each slot into a projection row.
+  const allSlots: SlotProjectionRow[] = [];
+  for (const acc of slotMap.values()) {
+    const venue = venueById.get(acc.venueId);
+    if (!venue) continue;
+    const weeks: SlotWeekStats[] = acc.weeks.map((w) => {
+      const matches = w.matchSet.size;
+      return {
+        matches,
+        cancels: w.cancelSet.size,
+        dppSpots: w.dppSpots,
+        dppRev: w.dppRev,
+        avgPrice: matches > 0 ? w.dppRev / matches : 0,
+        avgPricePerSpot:
+          w.dppSpots > 0 ? w.dppRevForSpots / w.dppSpots : null,
+      };
+    });
+    const weeksWithData = weeks.filter((w) => w.matches > 0).length;
+    // Rule (B): mean of dppSpots over weeks where the slot actually
+    // ran. Avoids under-defaulting thin slots — a slot that ran once
+    // with 9 spots gets 9 as the default, not 2. The (N/4) badge in
+    // the UI carries the visibility burden for thin data.
+    const dppSpotsDefault =
+      weeksWithData > 0
+        ? Math.round(
+            weeks
+              .filter((w) => w.matches > 0)
+              .reduce((s, w) => s + w.dppSpots, 0) / weeksWithData,
+          )
+        : 0;
     const w1 = weeks[3];
-    // Next-week defaults: distinct match_starts already scheduled.
-    // Strict zero if none — no historical fallback.
-    const nextSet = new Set<string>();
-    for (const r of active) {
-      if (fieldToVenue.get(r.field as string) !== v.id) continue;
-      const ymd = r.match_start.slice(0, 10);
-      if (ymd < windows.nextWindow.start || ymd > windows.nextWindow.end) continue;
-      nextSet.add(r.match_start);
-    }
-    const savedKey = `${v.id}|${windows.nextWindow.start}`;
+    const savedKey = savedProjectionKey(
+      acc.venueId,
+      windows.nextWindow.start,
+      acc.dow,
+      acc.hhmm,
+    );
     const savedRow = saved.get(savedKey) ?? {
       matches_planned: null,
       dpp_spots_planned: null,
       avg_price_per_spot_planned: null,
     };
-    // Mean of W-4..W-1 dpp spots, rounded. Zero-spot weeks count.
-    const spotsMean =
-      weeks.reduce((s, w) => s + w.dppSpots, 0) / weeks.length;
-    return {
-      venueId: v.id,
-      venueName: v.venue_name,
-      city: v.city ?? "—",
+    allSlots.push({
+      venueId: acc.venueId,
+      venueName: venue.venue_name,
+      city: venue.city ?? "—",
+      dow: acc.dow,
+      slotTime: acc.hhmm,
+      slotLabel: fmtSlotLabel(acc.dow, acc.hhmm),
       weeks,
+      weeksWithData,
       defaults: {
-        matches: nextSet.size,
-        dppSpots: Math.round(spotsMean),
+        matches: acc.nextMatchSet.size,
+        dppSpots: dppSpotsDefault,
         avgPricePerSpot: w1.avgPricePerSpot,
       },
       saved: {
@@ -287,35 +407,53 @@ export function computeProjections(
         dppSpotsPlanned: savedRow.dpp_spots_planned,
         avgPricePerSpotPlanned: savedRow.avg_price_per_spot_planned,
       },
-    };
-  });
+    });
+  }
 
-  // 5. Drop venues with zero activity in any window AND zero saved
-  // projection. Keeps the planning view focused on live venues. If
-  // an admin wants to plan for a dormant venue, posting the first
-  // match in match_registrations (or saving a projection row) will
-  // surface it.
-  const visible = allRows.filter((r) => {
-    const anyHistorical = r.weeks.some((w) => w.matches > 0);
-    const anyNext = r.defaults.matches > 0;
+  // 5. Drop slots with zero activity AND zero saved projection. A slot
+  // gets here only if it appeared in some registration row, so this
+  // mostly filters slots that exist in the data but had matches
+  // canceled and no saved planning yet — typically empty noise.
+  const visible = allSlots.filter((s) => {
+    const anyHistorical = s.weeksWithData > 0 || s.weeks.some((w) => w.cancels > 0);
+    const anyNext = s.defaults.matches > 0;
     const hasSaved =
-      r.saved.matchesPlanned !== null ||
-      r.saved.dppSpotsPlanned !== null ||
-      r.saved.avgPricePerSpotPlanned !== null;
+      s.saved.matchesPlanned !== null ||
+      s.saved.dppSpotsPlanned !== null ||
+      s.saved.avgPricePerSpotPlanned !== null;
     return anyHistorical || anyNext || hasSaved;
   });
 
-  // 6. Group by city.
-  const cityMap = new Map<string, FieldProjectionRow[]>();
-  for (const r of visible) {
-    const arr = cityMap.get(r.city) ?? [];
-    arr.push(r);
-    cityMap.set(r.city, arr);
+  // 6. Group: slots → venues → cities.
+  const venueMap = new Map<number, VenueProjectionGroup>();
+  for (const s of visible) {
+    let g = venueMap.get(s.venueId);
+    if (!g) {
+      g = {
+        venueId: s.venueId,
+        venueName: s.venueName,
+        city: s.city,
+        slots: [],
+      };
+      venueMap.set(s.venueId, g);
+    }
+    g.slots.push(s);
+  }
+  for (const g of venueMap.values()) {
+    g.slots.sort((a, b) =>
+      a.dow !== b.dow ? a.dow - b.dow : a.slotTime.localeCompare(b.slotTime),
+    );
+  }
+  const cityMap = new Map<string, VenueProjectionGroup[]>();
+  for (const g of venueMap.values()) {
+    const arr = cityMap.get(g.city) ?? [];
+    arr.push(g);
+    cityMap.set(g.city, arr);
   }
   const cities: CityProjection[] = [...cityMap.entries()]
-    .map(([city, fields]) => ({
+    .map(([city, vs]) => ({
       city,
-      fields: fields.sort((a, b) => a.venueName.localeCompare(b.venueName)),
+      venues: vs.sort((a, b) => a.venueName.localeCompare(b.venueName)),
     }))
     .sort((a, b) => a.city.localeCompare(b.city));
 
@@ -388,13 +526,19 @@ export async function fetchSavedProjections(
   const { data, error } = await supabase
     .from("field_week_projections")
     .select(
-      "venue_id, week_start_date, matches_planned, dpp_spots_planned, avg_price_per_spot_planned",
+      "venue_id, week_start_date, slot_day_of_week, slot_time, matches_planned, dpp_spots_planned, avg_price_per_spot_planned",
     )
     .eq("week_start_date", weekStartDate);
   if (error) throw new Error(`Saved projections fetch: ${error.message}`);
   const map = new Map<string, SavedProjection>();
   for (const r of data ?? []) {
-    map.set(`${r.venue_id}|${r.week_start_date}`, {
+    const key = savedProjectionKey(
+      Number(r.venue_id),
+      r.week_start_date,
+      Number(r.slot_day_of_week),
+      String(r.slot_time),
+    );
+    map.set(key, {
       matches_planned:
         r.matches_planned == null ? null : Number(r.matches_planned),
       dpp_spots_planned:
@@ -413,6 +557,8 @@ export async function saveProjection(
   args: {
     venueId: number;
     weekStartDate: string;
+    slotDayOfWeek: number;
+    slotTime: string;
     matchesPlanned: number | null;
     dppSpotsPlanned: number | null;
     avgPricePerSpotPlanned: number | null;
@@ -422,23 +568,32 @@ export async function saveProjection(
     {
       venue_id: args.venueId,
       week_start_date: args.weekStartDate,
+      slot_day_of_week: args.slotDayOfWeek,
+      slot_time: args.slotTime,
       matches_planned: args.matchesPlanned,
       dpp_spots_planned: args.dppSpotsPlanned,
       avg_price_per_spot_planned: args.avgPricePerSpotPlanned,
     },
-    { onConflict: "venue_id,week_start_date" },
+    { onConflict: "venue_id,week_start_date,slot_day_of_week,slot_time" },
   );
   if (error) throw new Error(`Save projection: ${error.message}`);
 }
 
 export async function deleteProjection(
   supabase: SupabaseClient,
-  args: { venueId: number; weekStartDate: string },
+  args: {
+    venueId: number;
+    weekStartDate: string;
+    slotDayOfWeek: number;
+    slotTime: string;
+  },
 ): Promise<void> {
   const { error } = await supabase
     .from("field_week_projections")
     .delete()
     .eq("venue_id", args.venueId)
-    .eq("week_start_date", args.weekStartDate);
+    .eq("week_start_date", args.weekStartDate)
+    .eq("slot_day_of_week", args.slotDayOfWeek)
+    .eq("slot_time", args.slotTime);
   if (error) throw new Error(`Delete projection: ${error.message}`);
 }

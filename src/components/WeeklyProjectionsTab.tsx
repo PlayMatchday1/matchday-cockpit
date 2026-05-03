@@ -1,6 +1,6 @@
 "use client";
 
-import { useEffect, useMemo, useRef, useState } from "react";
+import { useEffect, useRef, useState } from "react";
 import { ChevronDown, ChevronRight } from "lucide-react";
 import { supabase } from "@/lib/supabase";
 import {
@@ -11,10 +11,9 @@ import {
   fetchSavedProjections,
   saveProjection,
   type CityProjection,
-  type FieldProjectionRow,
   type ProjectionsView,
-  type RegistrationRow,
-  type WeekWindow,
+  type SlotProjectionRow,
+  type VenueProjectionGroup,
 } from "@/lib/projectionsStats";
 
 // Debounce window for inline edits — saves an upsert ~300ms after the
@@ -50,40 +49,63 @@ function revenueDeltaTone(delta: number): string {
   return r > 0 ? "text-mint-hover" : "text-coral";
 }
 
+type SlotState = {
+  matchesPlanned: number | null;
+  dppSpotsPlanned: number | null;
+  avgPricePerSpotPlanned: number | null;
+};
+
+const EMPTY_SLOT_STATE: SlotState = {
+  matchesPlanned: null,
+  dppSpotsPlanned: null,
+  avgPricePerSpotPlanned: null,
+};
+
+// rowState key — stable across re-renders. Matches savedProjectionKey
+// minus the week (week is implicit from view.nextWindow.start).
+function slotKey(venueId: number, dow: number, slotTime: string): string {
+  return `${venueId}|${dow}|${slotTime}`;
+}
+
 // Resolve effective per-spot price for the rev calc. null defaults
 // (no W-1 DPP activity) collapse to 0 — the input renders empty until
 // the operator types a price; the math just contributes nothing to
 // totals in the meantime.
 function resolvePricePerSpot(
-  state: { avgPricePerSpotPlanned: number | null } | undefined,
-  row: FieldProjectionRow,
+  state: SlotState | undefined,
+  slot: SlotProjectionRow,
 ): number {
-  return (
-    state?.avgPricePerSpotPlanned ?? row.defaults.avgPricePerSpot ?? 0
-  );
+  return state?.avgPricePerSpotPlanned ?? slot.defaults.avgPricePerSpot ?? 0;
+}
+
+function projectedRevForSlot(
+  state: SlotState | undefined,
+  slot: SlotProjectionRow,
+): number {
+  const spots = state?.dppSpotsPlanned ?? slot.defaults.dppSpots;
+  const price = resolvePricePerSpot(state, slot);
+  return (spots ?? 0) * price;
 }
 
 export default function WeeklyProjectionsTab() {
   const [view, setView] = useState<ProjectionsView | null>(null);
   const [loading, setLoading] = useState(true);
   const [error, setError] = useState<string | null>(null);
-  const [collapsed, setCollapsed] = useState<Set<string>>(new Set());
-
-  // Local edit cache: keyed by venueId. Stores the in-flight + saved
-  // values without re-fetching the world after each upsert. Three
-  // planning levers: matches, dpp spots, avg price/spot. Rev is
-  // derived (dppSpots × pricePerSpot); avg/match is derived
-  // (rev / matches).
-  type RowState = {
-    matchesPlanned: number | null;
-    dppSpotsPlanned: number | null;
-    avgPricePerSpotPlanned: number | null;
-  };
-  const [rowState, setRowState] = useState<Map<number, RowState>>(
-    new Map(),
+  // Two collapse sets: cities and venues. Venue keys are stable across
+  // a load (venueId only — venue is a child of city, but we don't key
+  // on city to avoid collapse state churning when a venue moves).
+  const [collapsedCities, setCollapsedCities] = useState<Set<string>>(
+    new Set(),
+  );
+  const [collapsedVenues, setCollapsedVenues] = useState<Set<number>>(
+    new Set(),
   );
 
-  const debounceTimers = useRef<Map<number, ReturnType<typeof setTimeout>>>(
+  // Local edit cache: keyed by `${venueId}|${dow}|${hhmm}`. Lives across
+  // saves to avoid re-fetching after each upsert.
+  const [rowState, setRowState] = useState<Map<string, SlotState>>(new Map());
+
+  const debounceTimers = useRef<Map<string, ReturnType<typeof setTimeout>>>(
     new Map(),
   );
 
@@ -98,21 +120,25 @@ export default function WeeklyProjectionsTab() {
       ]);
       const v = computeProjections(registrations, venues, saved, windows);
       setView(v);
-      // Hydrate rowState from the saved values returned by compute.
-      const next = new Map<number, RowState>();
+      // Hydrate rowState from saved values per slot.
+      const next = new Map<string, SlotState>();
       for (const c of v.cities) {
-        for (const f of c.fields) {
-          next.set(f.venueId, {
-            matchesPlanned: f.saved.matchesPlanned,
-            dppSpotsPlanned: f.saved.dppSpotsPlanned,
-            avgPricePerSpotPlanned: f.saved.avgPricePerSpotPlanned,
-          });
+        for (const ven of c.venues) {
+          for (const s of ven.slots) {
+            next.set(slotKey(s.venueId, s.dow, s.slotTime), {
+              matchesPlanned: s.saved.matchesPlanned,
+              dppSpotsPlanned: s.saved.dppSpotsPlanned,
+              avgPricePerSpotPlanned: s.saved.avgPricePerSpotPlanned,
+            });
+          }
         }
       }
       setRowState(next);
       // Default-collapse all cities except the first — keeps the page
-      // tidy on initial load. Click to expand.
-      setCollapsed(new Set(v.cities.slice(1).map((c) => c.city)));
+      // tidy on initial load. Venues default to expanded so all slots
+      // are visible the moment a city is opened.
+      setCollapsedCities(new Set(v.cities.slice(1).map((c) => c.city)));
+      setCollapsedVenues(new Set());
     } catch (e) {
       setError(e instanceof Error ? e.message : String(e));
     } finally {
@@ -123,106 +149,97 @@ export default function WeeklyProjectionsTab() {
   useEffect(() => {
     load();
     return () => {
-      // Clear any pending debounced saves on unmount.
       for (const t of debounceTimers.current.values()) clearTimeout(t);
       debounceTimers.current.clear();
     };
     // eslint-disable-next-line react-hooks/exhaustive-deps
   }, []);
 
-  const EMPTY_ROW_STATE: RowState = {
-    matchesPlanned: null,
-    dppSpotsPlanned: null,
-    avgPricePerSpotPlanned: null,
-  };
-
-  function scheduleSave(venueId: number, weekStart: string) {
-    const existing = debounceTimers.current.get(venueId);
+  function scheduleSave(
+    venueId: number,
+    dow: number,
+    slotTime: string,
+    weekStart: string,
+  ) {
+    const key = slotKey(venueId, dow, slotTime);
+    const existing = debounceTimers.current.get(key);
     if (existing) clearTimeout(existing);
     const t = setTimeout(async () => {
-      const state = rowState.get(venueId);
+      const state = rowState.get(key);
       if (!state) return;
       try {
         await saveProjection(supabase, {
           venueId,
           weekStartDate: weekStart,
+          slotDayOfWeek: dow,
+          slotTime,
           matchesPlanned: state.matchesPlanned,
           dppSpotsPlanned: state.dppSpotsPlanned,
           avgPricePerSpotPlanned: state.avgPricePerSpotPlanned,
         });
       } catch (e) {
-        // Surface but don't reset local state — operator can retry
-        // by editing again.
         console.error("Save projection failed:", e);
         setError(e instanceof Error ? e.message : String(e));
       }
     }, SAVE_DEBOUNCE_MS);
-    debounceTimers.current.set(venueId, t);
+    debounceTimers.current.set(key, t);
   }
 
-  function handleMatchesChange(venueId: number, raw: string) {
+  function patchSlot(
+    venueId: number,
+    dow: number,
+    slotTime: string,
+    patch: Partial<SlotState>,
+  ) {
     if (!view) return;
-    const parsed = raw === "" ? null : Math.max(0, Math.floor(Number(raw)));
+    const key = slotKey(venueId, dow, slotTime);
     setRowState((prev) => {
       const next = new Map(prev);
-      const cur = next.get(venueId) ?? EMPTY_ROW_STATE;
-      next.set(venueId, {
-        ...cur,
-        matchesPlanned: Number.isFinite(parsed as number) ? parsed : null,
-      });
+      const cur = next.get(key) ?? EMPTY_SLOT_STATE;
+      next.set(key, { ...cur, ...patch });
       return next;
     });
-    scheduleSave(venueId, view.nextWindow.start);
+    scheduleSave(venueId, dow, slotTime, view.nextWindow.start);
   }
 
-  function handleDppSpotsChange(venueId: number, raw: string) {
-    if (!view) return;
+  function handleMatchesChange(slot: SlotProjectionRow, raw: string) {
     const parsed = raw === "" ? null : Math.max(0, Math.floor(Number(raw)));
-    setRowState((prev) => {
-      const next = new Map(prev);
-      const cur = next.get(venueId) ?? EMPTY_ROW_STATE;
-      next.set(venueId, {
-        ...cur,
-        dppSpotsPlanned: Number.isFinite(parsed as number) ? parsed : null,
-      });
-      return next;
+    patchSlot(slot.venueId, slot.dow, slot.slotTime, {
+      matchesPlanned: Number.isFinite(parsed as number) ? parsed : null,
     });
-    scheduleSave(venueId, view.nextWindow.start);
   }
-
-  function handleAvgPricePerSpotChange(venueId: number, raw: string) {
-    if (!view) return;
+  function handleDppSpotsChange(slot: SlotProjectionRow, raw: string) {
+    const parsed = raw === "" ? null : Math.max(0, Math.floor(Number(raw)));
+    patchSlot(slot.venueId, slot.dow, slot.slotTime, {
+      dppSpotsPlanned: Number.isFinite(parsed as number) ? parsed : null,
+    });
+  }
+  function handleAvgPricePerSpotChange(slot: SlotProjectionRow, raw: string) {
     const parsed = raw === "" ? null : Math.max(0, Number(raw));
-    setRowState((prev) => {
-      const next = new Map(prev);
-      const cur = next.get(venueId) ?? EMPTY_ROW_STATE;
-      next.set(venueId, {
-        ...cur,
-        avgPricePerSpotPlanned: Number.isFinite(parsed as number)
-          ? parsed
-          : null,
-      });
-      return next;
+    patchSlot(slot.venueId, slot.dow, slot.slotTime, {
+      avgPricePerSpotPlanned: Number.isFinite(parsed as number)
+        ? parsed
+        : null,
     });
-    scheduleSave(venueId, view.nextWindow.start);
   }
 
-  async function handleReset(venueId: number) {
+  async function handleReset(slot: SlotProjectionRow) {
     if (!view) return;
-    // Cancel any pending debounce.
-    const existing = debounceTimers.current.get(venueId);
+    const key = slotKey(slot.venueId, slot.dow, slot.slotTime);
+    const existing = debounceTimers.current.get(key);
     if (existing) clearTimeout(existing);
-    debounceTimers.current.delete(venueId);
-    // Optimistic local update — clear all 3 planning inputs.
+    debounceTimers.current.delete(key);
     setRowState((prev) => {
       const next = new Map(prev);
-      next.set(venueId, EMPTY_ROW_STATE);
+      next.set(key, EMPTY_SLOT_STATE);
       return next;
     });
     try {
       await deleteProjection(supabase, {
-        venueId,
+        venueId: slot.venueId,
         weekStartDate: view.nextWindow.start,
+        slotDayOfWeek: slot.dow,
+        slotTime: slot.slotTime,
       });
     } catch (e) {
       console.error("Delete projection failed:", e);
@@ -231,18 +248,24 @@ export default function WeeklyProjectionsTab() {
   }
 
   function toggleCity(city: string) {
-    setCollapsed((prev) => {
+    setCollapsedCities((prev) => {
       const next = new Set(prev);
       if (next.has(city)) next.delete(city);
       else next.add(city);
       return next;
     });
   }
+  function toggleVenue(venueId: number) {
+    setCollapsedVenues((prev) => {
+      const next = new Set(prev);
+      if (next.has(venueId)) next.delete(venueId);
+      else next.add(venueId);
+      return next;
+    });
+  }
 
   if (loading && !view) {
-    return (
-      <p className="text-sm text-deep-green/60">Loading projections…</p>
-    );
+    return <p className="text-sm text-deep-green/60">Loading projections…</p>;
   }
   if (error && !view) {
     return (
@@ -253,21 +276,33 @@ export default function WeeklyProjectionsTab() {
   }
   if (!view) return null;
 
-  // Compute grand totals using the latest local state. Projected rev
-  // is dpp spots × price/spot — the new model — for both city + grand.
+  // Grand total: sum across every slot in every venue in every city.
   const grandW1 = view.cities.reduce(
-    (s, c) => s + c.fields.reduce((s2, f) => s2 + f.weeks[3].dppRev, 0),
+    (s, c) =>
+      s +
+      c.venues.reduce(
+        (s2, v) => s2 + v.slots.reduce((s3, sl) => s3 + sl.weeks[3].dppRev, 0),
+        0,
+      ),
     0,
   );
   const grandNext = view.cities.reduce(
     (s, c) =>
       s +
-      c.fields.reduce((s2, f) => {
-        const st = rowState.get(f.venueId);
-        const spots = st?.dppSpotsPlanned ?? f.defaults.dppSpots;
-        const price = resolvePricePerSpot(st, f);
-        return s2 + (spots ?? 0) * price;
-      }, 0),
+      c.venues.reduce(
+        (s2, v) =>
+          s2 +
+          v.slots.reduce(
+            (s3, sl) =>
+              s3 +
+              projectedRevForSlot(
+                rowState.get(slotKey(sl.venueId, sl.dow, sl.slotTime)),
+                sl,
+              ),
+            0,
+          ),
+        0,
+      ),
     0,
   );
   const grandDelta = grandNext - grandW1;
@@ -279,7 +314,8 @@ export default function WeeklyProjectionsTab() {
           Weekly Projections
         </h2>
         <p className="mt-2 max-w-3xl text-sm text-deep-green/65">
-          Plan next week field-by-field. Compare against the last 4 weeks
+          Plan next week slot-by-slot. Each row is a recurring (venue, day,
+          time) — e.g., "NEMP Mon 7:30pm". Compare against the last 4 weeks
           of actuals.
         </p>
       </div>
@@ -297,8 +333,10 @@ export default function WeeklyProjectionsTab() {
             city={c}
             view={view}
             rowState={rowState}
-            collapsed={collapsed.has(c.city)}
-            onToggle={() => toggleCity(c.city)}
+            cityCollapsed={collapsedCities.has(c.city)}
+            collapsedVenues={collapsedVenues}
+            onToggleCity={() => toggleCity(c.city)}
+            onToggleVenue={toggleVenue}
             onMatchesChange={handleMatchesChange}
             onDppSpotsChange={handleDppSpotsChange}
             onAvgPricePerSpotChange={handleAvgPricePerSpotChange}
@@ -339,18 +377,14 @@ export default function WeeklyProjectionsTab() {
   );
 }
 
-type CellRowState = {
-  matchesPlanned: number | null;
-  dppSpotsPlanned: number | null;
-  avgPricePerSpotPlanned: number | null;
-};
-
 function CityCard({
   city,
   view,
   rowState,
-  collapsed,
-  onToggle,
+  cityCollapsed,
+  collapsedVenues,
+  onToggleCity,
+  onToggleVenue,
   onMatchesChange,
   onDppSpotsChange,
   onAvgPricePerSpotChange,
@@ -358,34 +392,39 @@ function CityCard({
 }: {
   city: CityProjection;
   view: ProjectionsView;
-  rowState: Map<number, CellRowState>;
-  collapsed: boolean;
-  onToggle: () => void;
-  onMatchesChange: (venueId: number, raw: string) => void;
-  onDppSpotsChange: (venueId: number, raw: string) => void;
-  onAvgPricePerSpotChange: (venueId: number, raw: string) => void;
-  onReset: (venueId: number) => void;
+  rowState: Map<string, SlotState>;
+  cityCollapsed: boolean;
+  collapsedVenues: Set<number>;
+  onToggleCity: () => void;
+  onToggleVenue: (venueId: number) => void;
+  onMatchesChange: (slot: SlotProjectionRow, raw: string) => void;
+  onDppSpotsChange: (slot: SlotProjectionRow, raw: string) => void;
+  onAvgPricePerSpotChange: (slot: SlotProjectionRow, raw: string) => void;
+  onReset: (slot: SlotProjectionRow) => void;
 }) {
-  // City totals based on current rowState (live recompute). Projected
-  // rev = Σ (dppSpots × pricePerSpot) — matches the per-row math.
-  const cityW1 = city.fields.reduce((s, f) => s + f.weeks[3].dppRev, 0);
-  const cityNext = city.fields.reduce((s, f) => {
-    const st = rowState.get(f.venueId);
-    const spots = st?.dppSpotsPlanned ?? f.defaults.dppSpots;
-    const price = resolvePricePerSpot(st, f);
-    return s + (spots ?? 0) * price;
-  }, 0);
+  const allSlots = city.venues.flatMap((v) => v.slots);
+  const cityW1 = allSlots.reduce((s, sl) => s + sl.weeks[3].dppRev, 0);
+  const cityNext = allSlots.reduce(
+    (s, sl) =>
+      s +
+      projectedRevForSlot(
+        rowState.get(slotKey(sl.venueId, sl.dow, sl.slotTime)),
+        sl,
+      ),
+    0,
+  );
   const cityDelta = cityNext - cityW1;
+  const slotCount = allSlots.length;
 
   return (
     <section className="overflow-hidden rounded-2xl border-[1.5px] border-cream-line bg-white shadow-md shadow-deep-green/10">
       <button
         type="button"
-        onClick={onToggle}
-        aria-expanded={!collapsed}
+        onClick={onToggleCity}
+        aria-expanded={!cityCollapsed}
         className="flex w-full items-center gap-3 px-5 py-4 text-left transition hover:bg-cream-soft/40"
       >
-        {collapsed ? (
+        {cityCollapsed ? (
           <ChevronRight size={18} aria-hidden className="text-deep-green/55" />
         ) : (
           <ChevronDown size={18} aria-hidden className="text-deep-green/55" />
@@ -393,8 +432,9 @@ function CityCard({
         <div className="min-w-0 flex-1">
           <div className="text-base font-bold text-deep-green">{city.city}</div>
           <p className="mt-0.5 text-[11px] text-deep-green/55">
-            {city.fields.length}{" "}
-            {city.fields.length === 1 ? "field" : "fields"}
+            {city.venues.length}{" "}
+            {city.venues.length === 1 ? "venue" : "venues"} · {slotCount}{" "}
+            {slotCount === 1 ? "slot" : "slots"}
           </p>
         </div>
         <div className="hidden items-baseline gap-2 font-mono text-sm tabular-nums sm:flex">
@@ -407,12 +447,12 @@ function CityCard({
         </div>
       </button>
 
-      {!collapsed && (
+      {!cityCollapsed && (
         <div className="overflow-x-auto border-t border-cream-line">
           <table className="w-full text-[12px]">
             <thead className="bg-cream-soft/60 text-[10px] font-semibold uppercase tracking-[0.06em] text-deep-green/55">
               <tr>
-                <th className="px-3 py-2 text-left">Field</th>
+                <th className="px-3 py-2 text-left">Slot</th>
                 {view.windowsHistorical.map((w, i) => (
                   <th key={w.start} className="px-2 py-2 text-right">
                     W-{4 - i}
@@ -431,11 +471,13 @@ function CityCard({
               </tr>
             </thead>
             <tbody>
-              {city.fields.map((f) => (
-                <FieldRow
-                  key={f.venueId}
-                  row={f}
-                  state={rowState.get(f.venueId)}
+              {city.venues.map((ven) => (
+                <VenueGroup
+                  key={ven.venueId}
+                  venue={ven}
+                  rowState={rowState}
+                  collapsed={collapsedVenues.has(ven.venueId)}
+                  onToggle={() => onToggleVenue(ven.venueId)}
                   onMatchesChange={onMatchesChange}
                   onDppSpotsChange={onDppSpotsChange}
                   onAvgPricePerSpotChange={onAvgPricePerSpotChange}
@@ -446,9 +488,7 @@ function CityCard({
             <tfoot className="bg-cream-soft/40 text-[11px] font-semibold text-deep-green">
               <tr className="border-t border-cream-line">
                 <td className="px-3 py-2 text-left">{city.city} total</td>
-                <td colSpan={3} className="px-2 py-2 text-right text-deep-green/55">
-                  {/* Spanning W-4..W-3..W-2 numerically would be noisy; leave blank. */}
-                </td>
+                <td colSpan={3} className="px-2 py-2 text-right text-deep-green/55"></td>
                 <td className="px-2 py-2 text-right font-mono tabular-nums">
                   {fmtUsd(cityW1)}
                 </td>
@@ -470,39 +510,124 @@ function CityCard({
   );
 }
 
-function FieldRow({
-  row,
+function VenueGroup({
+  venue,
+  rowState,
+  collapsed,
+  onToggle,
+  onMatchesChange,
+  onDppSpotsChange,
+  onAvgPricePerSpotChange,
+  onReset,
+}: {
+  venue: VenueProjectionGroup;
+  rowState: Map<string, SlotState>;
+  collapsed: boolean;
+  onToggle: () => void;
+  onMatchesChange: (slot: SlotProjectionRow, raw: string) => void;
+  onDppSpotsChange: (slot: SlotProjectionRow, raw: string) => void;
+  onAvgPricePerSpotChange: (slot: SlotProjectionRow, raw: string) => void;
+  onReset: (slot: SlotProjectionRow) => void;
+}) {
+  const venueW1 = venue.slots.reduce((s, sl) => s + sl.weeks[3].dppRev, 0);
+  const venueNext = venue.slots.reduce(
+    (s, sl) =>
+      s +
+      projectedRevForSlot(
+        rowState.get(slotKey(sl.venueId, sl.dow, sl.slotTime)),
+        sl,
+      ),
+    0,
+  );
+  const venueDelta = venueNext - venueW1;
+  const slotCount = venue.slots.length;
+
+  return (
+    <>
+      {/* Venue header — clickable, summarizes the slot rows beneath. */}
+      <tr className="border-t border-cream-line bg-cream-soft/30">
+        <td colSpan={7} className="px-3 py-2">
+          <button
+            type="button"
+            onClick={onToggle}
+            aria-expanded={!collapsed}
+            className="flex w-full items-center gap-2 text-left"
+          >
+            {collapsed ? (
+              <ChevronRight
+                size={14}
+                aria-hidden
+                className="text-deep-green/55"
+              />
+            ) : (
+              <ChevronDown
+                size={14}
+                aria-hidden
+                className="text-deep-green/55"
+              />
+            )}
+            <span className="font-bold text-deep-green">{venue.venueName}</span>
+            <span className="text-[10px] text-deep-green/55">
+              ({slotCount} {slotCount === 1 ? "slot" : "slots"})
+            </span>
+            <span className="ml-auto flex items-baseline gap-2 font-mono text-[12px] tabular-nums">
+              <span className="text-deep-green/55">{fmtUsd(venueW1)}</span>
+              <span aria-hidden className="text-deep-green/35">→</span>
+              <span className="text-deep-green">{fmtUsd(venueNext)}</span>
+              <span
+                className={`font-bold ${revenueDeltaTone(venueDelta)}`}
+              >
+                {fmtSig(venueDelta)}
+              </span>
+            </span>
+          </button>
+        </td>
+      </tr>
+      {!collapsed &&
+        venue.slots.map((sl) => (
+          <SlotRow
+            key={`${sl.venueId}-${sl.dow}-${sl.slotTime}`}
+            slot={sl}
+            state={rowState.get(slotKey(sl.venueId, sl.dow, sl.slotTime))}
+            onMatchesChange={onMatchesChange}
+            onDppSpotsChange={onDppSpotsChange}
+            onAvgPricePerSpotChange={onAvgPricePerSpotChange}
+            onReset={onReset}
+          />
+        ))}
+    </>
+  );
+}
+
+function SlotRow({
+  slot,
   state,
   onMatchesChange,
   onDppSpotsChange,
   onAvgPricePerSpotChange,
   onReset,
 }: {
-  row: FieldProjectionRow;
-  state: CellRowState | undefined;
-  onMatchesChange: (venueId: number, raw: string) => void;
-  onDppSpotsChange: (venueId: number, raw: string) => void;
-  onAvgPricePerSpotChange: (venueId: number, raw: string) => void;
-  onReset: (venueId: number) => void;
+  slot: SlotProjectionRow;
+  state: SlotState | undefined;
+  onMatchesChange: (slot: SlotProjectionRow, raw: string) => void;
+  onDppSpotsChange: (slot: SlotProjectionRow, raw: string) => void;
+  onAvgPricePerSpotChange: (slot: SlotProjectionRow, raw: string) => void;
+  onReset: (slot: SlotProjectionRow) => void;
 }) {
-  const matches = state?.matchesPlanned ?? row.defaults.matches;
-  const dppSpots = state?.dppSpotsPlanned ?? row.defaults.dppSpots;
-  // Price-per-spot input: render whatever's in state if set, else the
-  // W-1 default, else empty (no W-1 DPP activity to fall back on).
+  const matches = state?.matchesPlanned ?? slot.defaults.matches;
+  const dppSpots = state?.dppSpotsPlanned ?? slot.defaults.dppSpots;
   const pricePerSpotForInput =
-    state?.avgPricePerSpotPlanned ?? row.defaults.avgPricePerSpot;
+    state?.avgPricePerSpotPlanned ?? slot.defaults.avgPricePerSpot;
   const pricePerSpotForCalc = pricePerSpotForInput ?? 0;
   const projected = (dppSpots ?? 0) * pricePerSpotForCalc;
-  // avg/match is now a derived display, not an input.
-  const avgPerMatch =
-    matches && matches > 0 ? projected / matches : 0;
+  const avgPerMatch = matches && matches > 0 ? projected / matches : 0;
 
   const isEdited =
     state?.matchesPlanned != null ||
     state?.dppSpotsPlanned != null ||
     state?.avgPricePerSpotPlanned != null;
 
-  const w1 = row.weeks[3];
+  const w1 = slot.weeks[3];
   const matchDelta = (matches ?? 0) - w1.matches;
   const spotsDelta = (dppSpots ?? 0) - w1.dppSpots;
   const dppDelta = projected - w1.dppRev;
@@ -513,11 +638,7 @@ function FieldRow({
         ? "text-mint-hover"
         : "text-coral";
   const matchDeltaStr =
-    matchDelta > 0
-      ? `+${matchDelta}`
-      : matchDelta === 0
-        ? "0"
-        : `${matchDelta}`;
+    matchDelta > 0 ? `+${matchDelta}` : matchDelta === 0 ? "0" : `${matchDelta}`;
   const spotsDeltaTone =
     spotsDelta === 0
       ? "text-deep-green/45"
@@ -525,56 +646,74 @@ function FieldRow({
         ? "text-mint-hover"
         : "text-coral";
   const spotsDeltaStr =
-    spotsDelta > 0
-      ? `+${spotsDelta}`
-      : spotsDelta === 0
-        ? "0"
-        : `${spotsDelta}`;
+    spotsDelta > 0 ? `+${spotsDelta}` : spotsDelta === 0 ? "0" : `${spotsDelta}`;
+
+  // Thin-data badge: (N/4) when fewer than 4 weeks have data. Muted
+  // styling — informational, not alarming.
+  const showThinBadge = slot.weeksWithData < 4;
 
   return (
     <tr className="border-t border-cream-line/60">
-      <td className="px-3 py-2 align-top text-deep-green">{row.venueName}</td>
-      {row.weeks.map((w, i) => (
-        <td
-          key={i}
-          className="min-w-[120px] px-2 py-2 align-top text-deep-green/65"
-        >
-          <LabeledStack
-            rows={[
-              { label: "matches", value: String(w.matches) },
-              { label: "dpp spots", value: String(w.dppSpots) },
-              {
-                label: "avg price/spot",
-                value:
-                  w.avgPricePerSpot === null
-                    ? "—"
-                    : fmtUsdDec(w.avgPricePerSpot),
-              },
-              {
-                label: "avg/match",
-                value: w.matches > 0 ? fmtUsdDec(w.avgPrice) : "—",
-              },
-              {
-                label: "rev",
-                value: w.matches > 0 ? fmtUsd(w.dppRev) : "—",
-              },
-              {
-                label: "cancels",
-                value: (
-                  <span
-                    className={
-                      w.cancels > 0 ? "text-coral" : "text-deep-green/45"
-                    }
-                  >
-                    {w.cancels}
-                  </span>
-                ),
-              },
-            ]}
-            muted
-          />
-        </td>
-      ))}
+      <td className="px-3 py-2 pl-8 align-top">
+        <div className="flex items-baseline gap-2">
+          <span className="text-[12px] text-deep-green">{slot.slotLabel}</span>
+          {showThinBadge && (
+            <span className="text-[10px] text-deep-green/45 italic">
+              ({slot.weeksWithData}/4)
+            </span>
+          )}
+        </div>
+      </td>
+      {slot.weeks.map((w, i) => {
+        const noData = w.matches === 0 && w.cancels === 0;
+        return (
+          <td
+            key={i}
+            className="min-w-[120px] px-2 py-2 align-top text-deep-green/65"
+          >
+            {noData ? (
+              <span className="text-deep-green/35">—</span>
+            ) : (
+              <LabeledStack
+                rows={[
+                  { label: "matches", value: String(w.matches) },
+                  { label: "dpp spots", value: String(w.dppSpots) },
+                  {
+                    label: "avg price/spot",
+                    value:
+                      w.avgPricePerSpot === null
+                        ? "—"
+                        : fmtUsdDec(w.avgPricePerSpot),
+                  },
+                  {
+                    label: "avg/match",
+                    value: w.matches > 0 ? fmtUsdDec(w.avgPrice) : "—",
+                  },
+                  {
+                    label: "rev",
+                    value: w.matches > 0 ? fmtUsd(w.dppRev) : "—",
+                  },
+                  {
+                    label: "cancels",
+                    value: (
+                      <span
+                        className={
+                          w.cancels > 0
+                            ? "text-coral"
+                            : "text-deep-green/45"
+                        }
+                      >
+                        {w.cancels}
+                      </span>
+                    ),
+                  },
+                ]}
+                muted
+              />
+            )}
+          </td>
+        );
+      })}
       <td className="min-w-[160px] px-2 py-2 align-top">
         <div className="space-y-0.5 text-[11px]">
           <div className="flex items-center justify-between gap-2">
@@ -584,7 +723,7 @@ function FieldRow({
               min={0}
               step={1}
               value={matches ?? ""}
-              onChange={(e) => onMatchesChange(row.venueId, e.target.value)}
+              onChange={(e) => onMatchesChange(slot, e.target.value)}
               className="h-6 w-16 rounded border border-cream-line bg-white px-1.5 text-right font-mono text-[12px] tabular-nums text-deep-green focus:border-mint focus:outline-none"
             />
           </div>
@@ -595,7 +734,7 @@ function FieldRow({
               min={0}
               step={1}
               value={dppSpots ?? ""}
-              onChange={(e) => onDppSpotsChange(row.venueId, e.target.value)}
+              onChange={(e) => onDppSpotsChange(slot, e.target.value)}
               className="h-6 w-16 rounded border border-cream-line bg-white px-1.5 text-right font-mono text-[12px] tabular-nums text-deep-green focus:border-mint focus:outline-none"
             />
           </div>
@@ -610,15 +749,10 @@ function FieldRow({
                   ? ""
                   : pricePerSpotForInput.toFixed(2)
               }
-              onChange={(e) =>
-                onAvgPricePerSpotChange(row.venueId, e.target.value)
-              }
+              onChange={(e) => onAvgPricePerSpotChange(slot, e.target.value)}
               className="h-6 w-20 rounded border border-cream-line bg-white px-1.5 text-right font-mono text-[12px] tabular-nums text-deep-green focus:border-mint focus:outline-none"
             />
           </div>
-          {/* Derived display — recomputes as the operator edits any of */}
-          {/* the three inputs above. Italic + muted to read as "live   */}
-          {/* readout, not a knob you turn".                             */}
           <div className="flex items-baseline justify-between gap-2">
             <span className="text-deep-green/45 italic">avg/match:</span>
             <span className="font-mono tabular-nums italic text-deep-green/55">
@@ -635,7 +769,7 @@ function FieldRow({
             <div className="pt-0.5 text-right">
               <button
                 type="button"
-                onClick={() => onReset(row.venueId)}
+                onClick={() => onReset(slot)}
                 className="text-[10px] text-deep-green/50 transition hover:text-deep-green hover:underline"
               >
                 reset
@@ -670,11 +804,6 @@ function FieldRow({
   );
 }
 
-// Vertical stack of labeled rows: muted small-caps label on the left,
-// value right-aligned. Replaces the prior CellStack which only showed
-// values without their role. Used in both history cells and the Δ
-// column; the editable Next column inlines this pattern around its
-// inputs (see FieldRow).
 function LabeledStack({
   rows,
   muted = false,
