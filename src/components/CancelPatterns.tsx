@@ -7,10 +7,11 @@ import {
   CANCEL_PATTERNS_DOW_LABELS,
   getCancelPatterns,
   type CancelPatternsMode,
-  type CancelSlot,
 } from "@/lib/cancelPatterns";
 
-const PILL_COLORS: Record<CancelSlot["streak"], string> = {
+type ColorTier = 1 | 2 | 3 | 4;
+
+const PILL_COLORS: Record<ColorTier, string> = {
   4: "bg-[#DC2626] text-white",
   3: "bg-[#7F1D1D] text-white",
   2: "bg-[#F59E0B] text-[#1C1917]",
@@ -21,7 +22,7 @@ export default function CancelPatterns() {
   const { rows, meta, loading } = useMatchData();
   const { data: finData } = useFinanceData();
   const aliases = finData?.venueAliases ?? new Map<string, string>();
-  const [mode, setMode] = useState<CancelPatternsMode>("completed");
+  const [mode, setMode] = useState<CancelPatternsMode>("patterns");
 
   const result = useMemo(
     () => getCancelPatterns(rows, aliases, mode),
@@ -30,16 +31,16 @@ export default function CancelPatterns() {
 
   if (loading || !meta) return null;
 
-  const isCompleted = mode === "completed";
-  const subtitle = isCompleted
-    ? "Last 4 fully completed weeks · most recent week gets chronic colors"
+  const isPatterns = mode === "patterns";
+  const subtitle = isPatterns
+    ? "Last 4 fully completed weeks · color shows count of weeks canceled across the window"
     : "Current week + 3 prior · current week gets chronic colors (may be sparse mid-week)";
-  const topWeekTag = isCompleted ? "(most recent)" : "(current)";
-  const emptyText = isCompleted
+  const topWeekTag = isPatterns ? "(most recent)" : "(current)";
+  const emptyText = isPatterns
     ? "No cancellations in the last 4 completed weeks."
     : "No cancellations in the current view.";
-  const helperText = isCompleted
-    ? "Color highlights apply to the most recent completed week. Prior weeks shown as context."
+  const helperText = isPatterns
+    ? "Color highlights apply across all 4 weeks. Brighter = more weeks canceled, regardless of order."
     : "Color highlights apply to the current week. Prior weeks shown as context. Current week may be sparse early in the week.";
 
   return (
@@ -64,8 +65,8 @@ export default function CancelPatterns() {
         >
           {(
             [
-              { id: "completed", label: "Last 4 Weeks" },
-              { id: "live", label: "Live" },
+              { id: "patterns", label: "Patterns" },
+              { id: "live", label: "This Week" },
             ] as { id: CancelPatternsMode; label: string }[]
           ).map((opt) => {
             const active = mode === opt.id;
@@ -97,12 +98,12 @@ export default function CancelPatterns() {
       ) : (
         <div className="mt-5 space-y-5">
           {result.weeks.map((wk, weekIdx) => {
-            // Colors apply only to the current (top) week. Past weeks
-            // render every canceled cell as muted neutral so they read
-            // as historical context without competing with the
-            // actionable signal up top. Streak math is unchanged —
-            // the helper still computes the per-cell streak; we just
-            // ignore it visually for past weeks.
+            // Color tier sourcing differs by mode:
+            //   "patterns" — every cell uses cancelCount, so colors
+            //     surface the same slot in every week it canceled.
+            //   "live" — only the current (top) week uses streak;
+            //     older weeks render muted (tier 1) so the actionable
+            //     signal stays on this week.
             const isCurrentWeek = weekIdx === 0;
             return (
               <div key={wk.rangeLabel}>
@@ -124,12 +125,19 @@ export default function CancelPatterns() {
                         {dowLabel}
                       </div>
                       {wk.byDay[dowIdx].map((slot, i) => {
-                        const colorTier = isCurrentWeek ? slot.streak : 1;
+                        const colorTier: ColorTier = isPatterns
+                          ? slot.cancelCount
+                          : isCurrentWeek
+                            ? slot.streak
+                            : 1;
+                        const tooltip = isPatterns
+                          ? `${slot.canonicalField} · ${slot.dow} ${slot.time} · canceled ${slot.cancelCount} of 4 weeks`
+                          : `${slot.canonicalField} · ${slot.dow} ${slot.time} · ${slot.streak === 1 ? "canceled this week" : `${slot.streak} weeks running`}`;
                         return (
                           <div
                             key={`${slot.canonicalField}|${slot.time}|${i}`}
                             className={`rounded-sm px-1.5 py-0.5 font-mono text-[11px] font-bold tabular-nums leading-tight ${PILL_COLORS[colorTier]}`}
-                            title={`${slot.canonicalField} · ${slot.dow} ${slot.time} · ${slot.streak === 1 ? "canceled this week" : `${slot.streak} weeks running`}`}
+                            title={tooltip}
                           >
                             {slot.venueCode} {slot.time}
                           </div>
@@ -144,12 +152,24 @@ export default function CancelPatterns() {
         </div>
       )}
 
-      {/* Legend */}
+      {/* Legend — labels are mode-aware so the same color tokens
+          read correctly under each scoring rule. */}
       <div className="mt-5 flex flex-wrap items-center gap-x-5 gap-y-2 text-[11px] text-deep-green/70">
-        <LegendSwatch tier={4} label="Canceled 4 weeks running (chronic)" />
-        <LegendSwatch tier={3} label="3 weeks running" />
-        <LegendSwatch tier={2} label="2 weeks running" />
-        <LegendSwatch tier={1} label="Canceled this week" />
+        {isPatterns ? (
+          <>
+            <LegendSwatch tier={4} label="Canceled 4 of 4 weeks (chronic)" />
+            <LegendSwatch tier={3} label="3 of 4 weeks" />
+            <LegendSwatch tier={2} label="2 of 4 weeks" />
+            <LegendSwatch tier={1} label="1 week canceled" />
+          </>
+        ) : (
+          <>
+            <LegendSwatch tier={4} label="Canceled 4 weeks running (chronic)" />
+            <LegendSwatch tier={3} label="3 weeks running" />
+            <LegendSwatch tier={2} label="2 weeks running" />
+            <LegendSwatch tier={1} label="Canceled this week" />
+          </>
+        )}
       </div>
       <p className="mt-2 text-[11px] italic text-deep-green/50">{helperText}</p>
     </section>
@@ -160,7 +180,7 @@ function LegendSwatch({
   tier,
   label,
 }: {
-  tier: CancelSlot["streak"];
+  tier: ColorTier;
   label: string;
 }) {
   return (

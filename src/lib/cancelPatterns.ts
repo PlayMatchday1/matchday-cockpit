@@ -1,22 +1,28 @@
 // 4-week canceled-slot grid for the /cities index card.
 //
 // A "recurring slot" is identified by (canonical_field, day_of_week,
-// time_of_day). For each canceled cell we compute a CONSECUTIVE
-// backward streak: walk one week back at a time, increment if the
-// same slot was also canceled, STOP on the first week the slot
-// played successfully OR wasn't scheduled at all (gap-as-end is the
-// safer reading — we can't count cancellations through a missing
-// week of data without inventing signal).
+// time_of_day). Each rendered pill carries TWO independent metrics
+// the view picks between:
 //
-// Window depends on the caller's mode (see CancelPatternsMode):
-//   "completed" — 4 weeks ending the most-recent fully-completed week
-//     (last week if today is Mon-Sat, this week if today is Sunday;
-//     see the Sunday note in getCancelPatterns). The default. The view
-//     uses this for chronic-pattern detection because every cell has
-//     finished playing or has been canceled.
-//   "live" — current week + 3 prior. Useful mid-week to compare this
-//     week's cancellations against recent history; the current week
-//     may be sparse early in the week.
+//   cancelCount — count of weeks (out of 4) where this slot
+//     canceled, any order. Same value on every pill of the same
+//     slot. Drives the "patterns" view: brighter = more frequent,
+//     regardless of consecutive-ness.
+//
+//   streak — CONSECUTIVE backward streak from this cell's week.
+//     Walks one week back at a time, increments while the same slot
+//     is also canceled, STOPS on the first "played" or undefined
+//     gap (gap-as-end is conservative — can't count through missing
+//     data). Drives the "live" view's chronic-on-current logic.
+//
+// Mode controls anchor + which metric the colors come from:
+//   "patterns" — last 4 fully-completed weeks (last week if today is
+//     Mon-Sat, this week if today is Sunday — see the Sunday note in
+//     getCancelPatterns). Default. Pills colored by cancelCount on
+//     all 4 weeks; the operational view for spotting chronic slots.
+//   "live" — current week + 3 prior. Pills in the top (current) week
+//     colored by streak; pills in older weeks rendered muted. Useful
+//     mid-week to compare this week against recent history.
 // Display order is newest-first regardless of mode.
 
 import type { MatchRow } from "./useMatchData";
@@ -31,9 +37,14 @@ export type CancelSlot = {
   dowIdx: number; // 0=Mon, 6=Sun
   time: string; // formatted, e.g. "8p" or "11a"
   timeMinutes: number; // for sorting within a cell
-  // Consecutive backward streak from this cell's week, capped at the
-  // 4-week window. 1 = isolated cancellation, 4 = chronic.
+  // Consecutive backward streak from this cell's week, capped at
+  // the 4-week window. 1 = isolated, 4 = chronic by streak. Used
+  // by "live" mode where chronic colors apply to the current week.
   streak: 1 | 2 | 3 | 4;
+  // Count of weeks (out of 4) the slot canceled in the window — any
+  // order. Same value on every pill of the same slot. Used by
+  // "patterns" mode where colors apply across all 4 weeks.
+  cancelCount: 1 | 2 | 3 | 4;
 };
 
 export type CancelPatternsWeek = {
@@ -47,10 +58,12 @@ export type CancelPatternsWeek = {
 export type CancelPatternsResult = {
   weeks: CancelPatternsWeek[]; // newest → oldest (for display)
   totalSlots: number; // total slot pills across the grid
-  chronicCount: number; // distinct slots-week pairs with streak === 4
+  // Distinct slots whose cancelCount === 4 — i.e., canceled in all
+  // four weeks of the window. Counts each slot once, not per cell.
+  chronicCount: number;
 };
 
-export type CancelPatternsMode = "completed" | "live";
+export type CancelPatternsMode = "patterns" | "live";
 
 // Short codes used inside the slot pills. Keys are fin_venues.venue_name
 // canonicals (post-alias). Anything not in this map falls back to the
@@ -123,7 +136,7 @@ function fmtMonthDay(d: Date): string {
 export function getCancelPatterns(
   rows: MatchRow[],
   venueAliases: Map<string, string>,
-  mode: CancelPatternsMode = "completed",
+  mode: CancelPatternsMode = "patterns",
   now: Date = new Date(),
 ): CancelPatternsResult {
   // Build the 4 weeks chronologically (oldest → newest). Streak
@@ -132,8 +145,8 @@ export function getCancelPatterns(
   const thisMonday = getMonday(now);
 
   // Anchor for the newest week shown:
-  //   "live"      → thisMonday (current in-progress week is the top)
-  //   "completed" → most-recent week whose Sunday is past. On Mon-Sat
+  //   "live"     → thisMonday (current in-progress week is the top)
+  //   "patterns" → most-recent week whose Sunday is past. On Mon-Sat
   //     that's last week (thisMonday - 7). On Sunday we keep
   //     thisMonday because today's matches are typically done by
   //     evening, which is exactly when ops opens this view to review
@@ -141,7 +154,7 @@ export function getCancelPatterns(
   //     would be unintuitive. Single special case, intentional.
   const isSunday = now.getDay() === 0;
   const baseMonday =
-    mode === "completed" && !isSunday
+    mode === "patterns" && !isSunday
       ? new Date(
           thisMonday.getFullYear(),
           thisMonday.getMonth(),
@@ -264,10 +277,21 @@ export function getCancelPatterns(
   for (const [key, weekMap] of slotWeeks) {
     const meta = slotMeta.get(key);
     if (!meta) continue;
+
+    // Count canceled weeks for this slot once, then attach the same
+    // value to every pill of this slot. Slots with zero canceled
+    // cells fall through the inner loop and don't render anything.
+    let canceledWeeks = 0;
+    for (const state of weekMap.values()) {
+      if (state === "canceled") canceledWeeks++;
+    }
+    if (canceledWeeks === 0) continue;
+    const cancelCount = Math.min(canceledWeeks, 4) as 1 | 2 | 3 | 4;
+    if (cancelCount === 4) chronicCount++;
+
     for (const [weekIdx, state] of weekMap) {
       if (state !== "canceled") continue;
       const streak = backwardStreak(key, weekIdx) as 1 | 2 | 3 | 4;
-      if (streak === 4) chronicCount++;
       const slot: CancelSlot = {
         canonicalField: meta.canonical,
         venueCode: venueCodeFor(meta.canonical),
@@ -276,18 +300,24 @@ export function getCancelPatterns(
         time: meta.time,
         timeMinutes: meta.timeMinutes,
         streak,
+        cancelCount,
       };
       weeks[weekIdx].byDay[meta.dowIdx].push(slot);
       totalSlots++;
     }
   }
 
-  // Sort within each cell: streak desc (chronic at top), then earlier
-  // start time first.
+  // Sort within each cell: most-prominent color tier on top, then
+  // earlier start time. Sort key matches the metric the view colors
+  // on so visual order matches color order.
+  const primaryKey: keyof CancelSlot =
+    mode === "patterns" ? "cancelCount" : "streak";
   for (const w of weeks) {
     for (const day of w.byDay) {
       day.sort((a, b) => {
-        if (a.streak !== b.streak) return b.streak - a.streak;
+        const av = a[primaryKey] as number;
+        const bv = b[primaryKey] as number;
+        if (av !== bv) return bv - av;
         return a.timeMinutes - b.timeMinutes;
       });
     }
