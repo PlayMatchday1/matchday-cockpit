@@ -34,14 +34,25 @@ export default function CancelPatterns() {
   const isPatterns = mode === "patterns";
   const subtitle = isPatterns
     ? "Last 4 fully completed weeks · color shows count of weeks canceled across the window"
-    : "Current week + 3 prior · current week gets chronic colors (may be sparse mid-week)";
-  const topWeekTag = isPatterns ? "(most recent)" : "(current)";
+    : "Current week + 3 prior · most recent completed week gets chronic colors. Current week shown live for monitoring.";
   const emptyText = isPatterns
     ? "No cancellations in the last 4 completed weeks."
     : "No cancellations in the current view.";
   const helperText = isPatterns
     ? "Color highlights apply across all 4 weeks. Brighter = more weeks canceled, regardless of order."
-    : "Color highlights apply to the current week. Prior weeks shown as context. Current week may be sparse early in the week.";
+    : "Color highlights apply to the most recent completed week (the row below the current week). Current week shows live cancellations as they come in; older weeks shown muted as context.";
+
+  // Per-row tag in the week header. Patterns mode tags only the top
+  // (most-recent-completed) row. This Week mode tags both the
+  // current row and the most-recent-completed row beneath it — the
+  // chronic-color row needs a label so the operator knows which
+  // week the colors apply to.
+  function tagFor(weekIdx: number): string | null {
+    if (isPatterns) return weekIdx === 0 ? "(most recent)" : null;
+    if (weekIdx === 0) return "(current)";
+    if (weekIdx === 1) return "(most recent)";
+    return null;
+  }
 
   return (
     <section className="rounded-2xl border-[1.5px] border-cream-line bg-white p-6 shadow-md shadow-deep-green/10 sm:p-7">
@@ -101,17 +112,20 @@ export default function CancelPatterns() {
             // Color tier sourcing differs by mode:
             //   "patterns" — every cell uses cancelCount, so colors
             //     surface the same slot in every week it canceled.
-            //   "live" — only the current (top) week uses streak;
-            //     older weeks render muted (tier 1) so the actionable
-            //     signal stays on this week.
-            const isCurrentWeek = weekIdx === 0;
+            //   "live" — chronic colors land on the most-recent-
+            //     completed week (weekIdx 1), NOT the current week
+            //     (weekIdx 0). The current week is the live-monitoring
+            //     row — it stays muted because it has incomplete
+            //     data (especially early in the week). Older weeks
+            //     (weekIdx 2-3) also render muted as context.
+            const tag = tagFor(weekIdx);
             return (
               <div key={wk.rangeLabel}>
                 <div className="mb-2 text-[11px] font-bold uppercase tracking-wider text-deep-green/55">
                   {wk.rangeLabel}
-                  {isCurrentWeek && (
+                  {tag && (
                     <span className="ml-2 font-normal text-deep-green/45">
-                      {topWeekTag}
+                      {tag}
                     </span>
                   )}
                 </div>
@@ -127,7 +141,7 @@ export default function CancelPatterns() {
                       {wk.byDay[dowIdx].map((slot, i) => {
                         const colorTier: ColorTier = isPatterns
                           ? slot.cancelCount
-                          : isCurrentWeek
+                          : weekIdx === 1
                             ? slot.streak
                             : 1;
                         const tooltip = isPatterns
