@@ -12,9 +12,25 @@ const W = 800;
 const H = 220;
 const TOP_PAD = 32;
 const BOTTOM_PAD = 32;
-const SIDE_PAD = 24;
+// Asymmetric horizontal padding: extra room on the left for y-axis
+// tick labels, minimal on the right.
+const LEFT_PAD = 40;
+const RIGHT_PAD = 16;
 const PLOT_H = H - TOP_PAD - BOTTOM_PAD;
-const PLOT_W = W - SIDE_PAD * 2;
+const PLOT_W = W - LEFT_PAD - RIGHT_PAD;
+
+// Pick a "nice" y-axis step that yields ~5-7 ticks for the given max.
+// Hand-rolled so we don't need Recharts for one chart.
+function pickStep(max: number): number {
+  const target = Math.ceil(Math.max(1, max) / 6);
+  if (target <= 5) return 5;
+  if (target <= 10) return 10;
+  if (target <= 25) return 25;
+  if (target <= 50) return 50;
+  if (target <= 100) return 100;
+  if (target <= 250) return 250;
+  return Math.ceil(target / 100) * 100;
+}
 
 export default function MembershipActiveChart() {
   const [rows, setRows] = useState<SnapshotRow[] | null>(null);
@@ -119,12 +135,20 @@ export default function MembershipActiveChart() {
 
 function Chart({ rows }: { rows: SnapshotRow[] }) {
   const max = Math.max(...rows.map((r) => r.active_count));
+  // Round max up to the next step boundary so the top tick has a
+  // little headroom above the highest data point and the y-axis
+  // labels read as round numbers.
+  const step = pickStep(max);
+  const yMax = Math.max(step, Math.ceil(max / step) * step);
+  const ticks: number[] = [];
+  for (let t = 0; t <= yMax; t += step) ticks.push(t);
+
   const yScale = (v: number) =>
-    TOP_PAD + (PLOT_H - (v / Math.max(1, max * 1.1)) * PLOT_H);
+    TOP_PAD + (PLOT_H - (v / yMax) * PLOT_H);
   const xScale = (i: number) =>
     rows.length === 1
-      ? SIDE_PAD + PLOT_W / 2
-      : SIDE_PAD + (i / (rows.length - 1)) * PLOT_W;
+      ? LEFT_PAD + PLOT_W / 2
+      : LEFT_PAD + (i / (rows.length - 1)) * PLOT_W;
 
   const path = rows
     .map((r, i) => `${i === 0 ? "M" : "L"} ${xScale(i)} ${yScale(r.active_count)}`)
@@ -150,6 +174,36 @@ function Chart({ rows }: { rows: SnapshotRow[] }) {
         </pattern>
       </defs>
 
+      {/* Y-axis gridlines + tick labels. Rendered before the path
+          so the data line draws on top of the gridlines. */}
+      {ticks.map((t) => {
+        const y = yScale(t);
+        return (
+          <g key={`tick-${t}`}>
+            <line
+              x1={LEFT_PAD}
+              y1={y}
+              x2={W - RIGHT_PAD}
+              y2={y}
+              stroke="#003326"
+              strokeOpacity={0.08}
+              strokeWidth={1}
+            />
+            <text
+              x={LEFT_PAD - 8}
+              y={y + 3}
+              textAnchor="end"
+              fontSize={10}
+              fill="#003326"
+              fillOpacity="0.55"
+              fontFamily="var(--font-geist-sans), system-ui, sans-serif"
+            >
+              {t}
+            </text>
+          </g>
+        );
+      })}
+
       <path d={path} fill="none" stroke="#2cdb87" strokeWidth={2} strokeLinejoin="round" strokeLinecap="round" />
 
       {rows.map((r, i) => {
@@ -172,7 +226,7 @@ function Chart({ rows }: { rows: SnapshotRow[] }) {
               strokeOpacity={0.25}
             >
               <title>
-                {monthYearLabel(r.month)}: {r.active_count.toLocaleString()} active
+                {monthYearLabel(r.month)} · {r.active_count.toLocaleString()} active
               </title>
             </circle>
             {showTick && (
