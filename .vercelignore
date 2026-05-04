@@ -1,0 +1,10 @@
+# Local dev / diagnostic only — not part of the deployed app
+scripts/
+.claude/
+
+# macOS Finder duplicates (recreated locally; not the originals)
+* 2.*
+* 3.*
+
+# Orphan source file pending review
+src/lib/execSummarySignals.ts
