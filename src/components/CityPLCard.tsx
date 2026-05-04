@@ -26,9 +26,22 @@ function fmtMoney(n: number): string {
   return `${r < 0 ? "-" : ""}$${abs.toLocaleString("en-US")}`;
 }
 
+// Default tab = current month if it's in the Q2 selector, else fall
+// back to "Jun" (latest month in the selector — most recent available
+// data once we're past Q2). Lazy-evaluated once on mount; the operator
+// can always click another tab. Uses local timezone since this runs
+// client-side.
+function defaultTab(now: Date = new Date()): Tab {
+  const monthAbbr = now.toLocaleString("en-US", { month: "short" });
+  if (monthAbbr === "Apr" || monthAbbr === "May" || monthAbbr === "Jun") {
+    return monthAbbr;
+  }
+  return "Jun";
+}
+
 export default function CityPLCard({ city }: { city: string }) {
   const { data } = useFinanceData();
-  const [tab, setTab] = useState<Tab>("Apr");
+  const [tab, setTab] = useState<Tab>(() => defaultTab());
 
   const result = useMemo(() => {
     if (!data) return null;

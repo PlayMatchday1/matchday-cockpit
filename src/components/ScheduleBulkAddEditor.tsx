@@ -2,7 +2,11 @@
 
 import { useEffect, useMemo, useState } from "react";
 import type { FinVenue, FinVenueCostOverride } from "@/lib/useFinanceData";
-import { Q2_MONTHS, type Q2Month } from "@/lib/financeStats";
+import {
+  Q2_MONTHS,
+  getCurrentQ2Month,
+  type Q2Month,
+} from "@/lib/financeStats";
 
 export type BulkScheduleDraft = {
   venue_id: number;
@@ -67,7 +71,9 @@ export default function ScheduleBulkAddEditor({
   onSubmit: (draft: BulkScheduleDraft) => Promise<void>;
 }) {
   const [venueId, setVenueId] = useState<number | null>(null);
-  const [month, setMonth] = useState<Q2Month>("Apr 2026");
+  const [month, setMonth] = useState<Q2Month>(
+    () => getCurrentQ2Month() ?? "Jun 2026",
+  );
   const [dateInput, setDateInput] = useState("");
   const [matchCountInput, setMatchCountInput] = useState("1");
   const [totalHoursInput, setTotalHoursInput] = useState("");
@@ -78,7 +84,7 @@ export default function ScheduleBulkAddEditor({
     if (!open) return;
     setError(null);
     setVenueId(null);
-    setMonth("Apr 2026");
+    setMonth(getCurrentQ2Month() ?? "Jun 2026");
     setDateInput("");
     setMatchCountInput("1");
     setTotalHoursInput("");

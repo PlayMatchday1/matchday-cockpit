@@ -7,7 +7,7 @@ import type {
   FinVenue,
   FinVenueCostOverride,
 } from "@/lib/useFinanceData";
-import type { Q2Month } from "@/lib/financeStats";
+import { q2DateRange, type Q2Month } from "@/lib/financeStats";
 import { getLegLabel, groupVenues } from "@/lib/venueGroups";
 
 type MonthFilter = Q2Month | "ALL" | "RANGE";
@@ -72,7 +72,8 @@ function generateDates(
     return generateDateRange(rangeFrom, rangeTo);
   }
   if (monthFilter === "ALL") {
-    return generateDateRange("2026-04-01", "2026-06-30");
+    const { start, end } = q2DateRange();
+    return generateDateRange(start, end);
   }
   const m = monthFilter.match(/^(\w+)\s+(\d{4})$/);
   if (!m) return [];

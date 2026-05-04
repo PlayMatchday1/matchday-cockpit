@@ -121,7 +121,11 @@ export function getCancelPatterns(
   // at the end.
   const thisMonday = getMonday(now);
   const weeks: CancelPatternsWeek[] = [];
-  for (let i = 4; i >= 1; i--) {
+  // i=0 is the current week (Mon..Sun containing today). i=3 is 3
+  // weeks back. Building 4 weeks total, ending with the current week
+  // as the last entry so the post-loop reverse() puts it at index 0
+  // for display — that's the cell the UI labels "(current)".
+  for (let i = 3; i >= 0; i--) {
     const wMon = new Date(
       thisMonday.getFullYear(),
       thisMonday.getMonth(),

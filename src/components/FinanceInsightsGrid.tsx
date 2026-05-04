@@ -60,7 +60,7 @@ export default function FinanceInsightsGrid({
   const { data, loading } = useFinanceData();
   const { rows: matchRows } = useMatchData();
   const [month, setMonth] = useState<Q2Month>(
-    () => getCurrentQ2Month(new Date()) ?? "Apr 2026",
+    () => getCurrentQ2Month(new Date()) ?? "Jun 2026",
   );
 
   const computed = useMemo(() => {

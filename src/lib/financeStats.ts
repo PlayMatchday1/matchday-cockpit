@@ -51,6 +51,9 @@ export function isFutureMonth(month: Q2Month, now: Date = new Date()): boolean {
   return monthStartFor(month).getTime() > todayMonthStart.getTime();
 }
 
+// TODO: This helper is hardcoded to 2026. When the selector rolls forward to Q3 2026
+// (or any future quarter), update Q2_MONTHS, the year check, and the fallback values
+// across all call sites. Search "Q2_MONTHS" to find all consumers.
 export function getCurrentQ2Month(now: Date = new Date()): Q2Month | null {
   if (now.getFullYear() !== 2026) return null;
   const m = now.getMonth();
@@ -69,6 +72,26 @@ export function startingCash(data: FinanceData): number {
 
 export function isCurrentQ2Month(month: Q2Month, now: Date = new Date()): boolean {
   return month === getCurrentQ2Month(now);
+}
+
+// First day of Q2_MONTHS[0] → last day of Q2_MONTHS[last], as
+// "YYYY-MM-DD" strings. Drives the BillingScheduleCalendar's "ALL"
+// months range so the calendar's span follows Q2_MONTHS automatically
+// when the period rolls forward. Assumes all Q2_MONTHS entries share
+// a year (currently true; flagged in the TODO above getCurrentQ2Month
+// if that ever changes).
+export function q2DateRange(): { start: string; end: string } {
+  const first = Q2_MONTHS[0];
+  const last = Q2_MONTHS[Q2_MONTHS.length - 1];
+  const firstMonthIdx = MONTH_NUMBER[first];
+  const lastMonthIdx = MONTH_NUMBER[last];
+  const lastDays = MONTH_DAYS[last];
+  const year = first.split(" ")[1];
+  const pad = (n: number) => String(n).padStart(2, "0");
+  return {
+    start: `${year}-${pad(firstMonthIdx + 1)}-01`,
+    end: `${year}-${pad(lastMonthIdx + 1)}-${pad(lastDays)}`,
+  };
 }
 function isCurrentQ2(now: Date, month: Q2Month): boolean {
   return isCurrentQ2Month(month, now);

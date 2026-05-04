@@ -16,7 +16,11 @@ import {
   totalOverrideAmountFor,
   type FieldCostRow,
 } from "@/lib/financeCosts";
-import { Q2_MONTHS, type Q2Month } from "@/lib/financeStats";
+import {
+  Q2_MONTHS,
+  getCurrentQ2Month,
+  type Q2Month,
+} from "@/lib/financeStats";
 import { supabase } from "@/lib/supabase";
 import { useAuth } from "@/lib/useAuth";
 import {
@@ -61,7 +65,9 @@ export default function FieldCostsView() {
   const { data, loading } = useFinanceData();
   const { appUser } = useAuth();
 
-  const [month, setMonth] = useState<Q2Month>("Apr 2026");
+  const [month, setMonth] = useState<Q2Month>(
+    () => getCurrentQ2Month() ?? "Jun 2026",
+  );
   const [cityFilter, setCityFilter] = useState<string>(ALL);
   const [billingFilter, setBillingFilter] = useState<BillingFilter>("ALL");
   const [hasOverrideOnly, setHasOverrideOnly] = useState(false);

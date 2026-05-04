@@ -67,7 +67,7 @@ export default function FieldRankingTable({
 } = {}) {
   const { data } = useFinanceData();
   const [month, setMonth] = useState<Q2Month>(
-    () => getCurrentQ2Month(new Date()) ?? "Apr 2026",
+    () => getCurrentQ2Month(new Date()) ?? "Jun 2026",
   );
   const [sortKey, setSortKey] = useState<SortKey>("dppRev");
   const [sortDir, setSortDir] = useState<"asc" | "desc">("desc");

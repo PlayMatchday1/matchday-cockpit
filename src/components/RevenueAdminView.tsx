@@ -8,7 +8,11 @@ import RevenueRowEditor, {
   type RevenueDraft,
 } from "@/components/RevenueRowEditor";
 import { logChange } from "@/lib/financeAudit";
-import { Q2_MONTHS, type Q2Month } from "@/lib/financeStats";
+import {
+  Q2_MONTHS,
+  getCurrentQ2Month,
+  type Q2Month,
+} from "@/lib/financeStats";
 import { supabase } from "@/lib/supabase";
 import { useAuth } from "@/lib/useAuth";
 import {
@@ -69,7 +73,9 @@ export default function RevenueAdminView() {
   const { data, loading } = useFinanceData();
   const { appUser } = useAuth();
 
-  const [monthFilter, setMonthFilter] = useState<MonthFilter>("Apr 2026");
+  const [monthFilter, setMonthFilter] = useState<MonthFilter>(
+    () => getCurrentQ2Month() ?? "Jun 2026",
+  );
   const [rangeFrom, setRangeFrom] = useState("");
   const [rangeTo, setRangeTo] = useState("");
   const [cityFilter, setCityFilter] = useState<string>(ALL);
