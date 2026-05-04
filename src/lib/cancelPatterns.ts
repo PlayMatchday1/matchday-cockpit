@@ -8,9 +8,16 @@
 // safer reading — we can't count cancellations through a missing
 // week of data without inventing signal).
 //
-// Window is the 4 weeks ending the most recent past Sunday — the
-// in-progress current week is excluded so a partial week never gets
-// painted as a complete one. Display order is current-week-first.
+// Window depends on the caller's mode (see CancelPatternsMode):
+//   "completed" — 4 weeks ending the most-recent fully-completed week
+//     (last week if today is Mon-Sat, this week if today is Sunday;
+//     see the Sunday note in getCancelPatterns). The default. The view
+//     uses this for chronic-pattern detection because every cell has
+//     finished playing or has been canceled.
+//   "live" — current week + 3 prior. Useful mid-week to compare this
+//     week's cancellations against recent history; the current week
+//     may be sparse early in the week.
+// Display order is newest-first regardless of mode.
 
 import type { MatchRow } from "./useMatchData";
 import { normalizeMatchName } from "./venueNormalization";
@@ -42,6 +49,8 @@ export type CancelPatternsResult = {
   totalSlots: number; // total slot pills across the grid
   chronicCount: number; // distinct slots-week pairs with streak === 4
 };
+
+export type CancelPatternsMode = "completed" | "live";
 
 // Short codes used inside the slot pills. Keys are fin_venues.venue_name
 // canonicals (post-alias). Anything not in this map falls back to the
@@ -114,22 +123,43 @@ function fmtMonthDay(d: Date): string {
 export function getCancelPatterns(
   rows: MatchRow[],
   venueAliases: Map<string, string>,
+  mode: CancelPatternsMode = "completed",
   now: Date = new Date(),
 ): CancelPatternsResult {
   // Build the 4 weeks chronologically (oldest → newest). Streak
   // walk-back is more natural this direction; we reverse for display
-  // at the end.
+  // at the end (newest at index 0).
   const thisMonday = getMonday(now);
+
+  // Anchor for the newest week shown:
+  //   "live"      → thisMonday (current in-progress week is the top)
+  //   "completed" → most-recent week whose Sunday is past. On Mon-Sat
+  //     that's last week (thisMonday - 7). On Sunday we keep
+  //     thisMonday because today's matches are typically done by
+  //     evening, which is exactly when ops opens this view to review
+  //     the just-finishing week — pointing at the prior week instead
+  //     would be unintuitive. Single special case, intentional.
+  const isSunday = now.getDay() === 0;
+  const baseMonday =
+    mode === "completed" && !isSunday
+      ? new Date(
+          thisMonday.getFullYear(),
+          thisMonday.getMonth(),
+          thisMonday.getDate() - 7,
+        )
+      : thisMonday;
+
   const weeks: CancelPatternsWeek[] = [];
-  // i=0 is the current week (Mon..Sun containing today). i=3 is 3
-  // weeks back. Building 4 weeks total, ending with the current week
-  // as the last entry so the post-loop reverse() puts it at index 0
-  // for display — that's the cell the UI labels "(current)".
+  // i=0 is the anchor week (newest after reverse). i=3 is 3 weeks
+  // back. Building 4 weeks total, ending with the anchor week as the
+  // last entry so the post-loop reverse() puts it at index 0 — that's
+  // the cell the UI labels "(MOST RECENT)" or "(CURRENT)" depending
+  // on mode.
   for (let i = 3; i >= 0; i--) {
     const wMon = new Date(
-      thisMonday.getFullYear(),
-      thisMonday.getMonth(),
-      thisMonday.getDate() - 7 * i,
+      baseMonday.getFullYear(),
+      baseMonday.getMonth(),
+      baseMonday.getDate() - 7 * i,
     );
     const wSun = new Date(
       wMon.getFullYear(),

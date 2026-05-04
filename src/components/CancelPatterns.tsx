@@ -1,11 +1,12 @@
 "use client";
 
-import { useMemo } from "react";
+import { useMemo, useState } from "react";
 import { useFinanceData } from "@/lib/useFinanceData";
 import { useMatchData } from "@/lib/useMatchData";
 import {
   CANCEL_PATTERNS_DOW_LABELS,
   getCancelPatterns,
+  type CancelPatternsMode,
   type CancelSlot,
 } from "@/lib/cancelPatterns";
 
@@ -20,13 +21,26 @@ export default function CancelPatterns() {
   const { rows, meta, loading } = useMatchData();
   const { data: finData } = useFinanceData();
   const aliases = finData?.venueAliases ?? new Map<string, string>();
+  const [mode, setMode] = useState<CancelPatternsMode>("completed");
 
   const result = useMemo(
-    () => getCancelPatterns(rows, aliases),
-    [rows, aliases],
+    () => getCancelPatterns(rows, aliases, mode),
+    [rows, aliases, mode],
   );
 
   if (loading || !meta) return null;
+
+  const isCompleted = mode === "completed";
+  const subtitle = isCompleted
+    ? "Last 4 fully completed weeks · most recent week gets chronic colors"
+    : "Current week + 3 prior · current week gets chronic colors (may be sparse mid-week)";
+  const topWeekTag = isCompleted ? "(most recent)" : "(current)";
+  const emptyText = isCompleted
+    ? "No cancellations in the last 4 completed weeks."
+    : "No cancellations in the current view.";
+  const helperText = isCompleted
+    ? "Color highlights apply to the most recent completed week. Prior weeks shown as context."
+    : "Color highlights apply to the current week. Prior weeks shown as context. Current week may be sparse early in the week.";
 
   return (
     <section className="rounded-2xl border-[1.5px] border-cream-line bg-white p-6 shadow-md shadow-deep-green/10 sm:p-7">
@@ -42,9 +56,43 @@ export default function CancelPatterns() {
         canceled all 4 weeks running.
       </p>
 
+      <div className="mt-4 flex flex-wrap items-center gap-3">
+        <div
+          role="tablist"
+          aria-label="View mode"
+          className="inline-flex rounded-md border border-cream-line bg-cream-soft/60 p-0.5"
+        >
+          {(
+            [
+              { id: "completed", label: "Last 4 Weeks" },
+              { id: "live", label: "Live" },
+            ] as { id: CancelPatternsMode; label: string }[]
+          ).map((opt) => {
+            const active = mode === opt.id;
+            return (
+              <button
+                key={opt.id}
+                type="button"
+                role="tab"
+                aria-selected={active}
+                onClick={() => setMode(opt.id)}
+                className={`rounded px-3 py-1 text-[11px] font-bold uppercase tracking-wider transition ${
+                  active
+                    ? "bg-white text-deep-green shadow-sm"
+                    : "text-deep-green/55 hover:text-deep-green"
+                }`}
+              >
+                {opt.label}
+              </button>
+            );
+          })}
+        </div>
+        <span className="text-[11px] text-deep-green/55">{subtitle}</span>
+      </div>
+
       {result.totalSlots === 0 ? (
         <div className="mt-5 rounded-xl bg-cream-soft px-4 py-8 text-center text-sm text-deep-green/60">
-          No cancellations in the last 4 completed weeks.
+          {emptyText}
         </div>
       ) : (
         <div className="mt-5 space-y-5">
@@ -62,7 +110,7 @@ export default function CancelPatterns() {
                   {wk.rangeLabel}
                   {isCurrentWeek && (
                     <span className="ml-2 font-normal text-deep-green/45">
-                      (current)
+                      {topWeekTag}
                     </span>
                   )}
                 </div>
@@ -103,10 +151,7 @@ export default function CancelPatterns() {
         <LegendSwatch tier={2} label="2 weeks running" />
         <LegendSwatch tier={1} label="Canceled this week" />
       </div>
-      <p className="mt-2 text-[11px] italic text-deep-green/50">
-        Color highlights apply to the current week only. Prior weeks
-        shown as context.
-      </p>
+      <p className="mt-2 text-[11px] italic text-deep-green/50">{helperText}</p>
     </section>
   );
 }
