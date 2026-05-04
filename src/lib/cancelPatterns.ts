@@ -27,6 +27,7 @@
 
 import type { MatchRow } from "./useMatchData";
 import { normalizeMatchName } from "./venueNormalization";
+import { getMonday, mostRecentCompletedWeekMonday } from "./weekWindow";
 
 const DOW_ABBR = ["Mon", "Tue", "Wed", "Thu", "Fri", "Sat", "Sun"];
 
@@ -99,14 +100,6 @@ function venueCodeFor(canonical: string): string {
   return VENUE_CODE[canonical] ?? canonical.slice(0, 4).toUpperCase();
 }
 
-function getMonday(d: Date): Date {
-  const x = new Date(d.getFullYear(), d.getMonth(), d.getDate());
-  const dow = x.getDay();
-  const offset = dow === 0 ? -6 : 1 - dow;
-  x.setDate(x.getDate() + offset);
-  return x;
-}
-
 function dowIdxFromDate(d: Date): number {
   const day = d.getDay();
   return day === 0 ? 6 : day - 1;
@@ -142,25 +135,13 @@ export function getCancelPatterns(
   // Build the 4 weeks chronologically (oldest → newest). Streak
   // walk-back is more natural this direction; we reverse for display
   // at the end (newest at index 0).
-  const thisMonday = getMonday(now);
-
+  //
   // Anchor for the newest week shown:
   //   "live"     → thisMonday (current in-progress week is the top)
-  //   "patterns" → most-recent week whose Sunday is past. On Mon-Sat
-  //     that's last week (thisMonday - 7). On Sunday we keep
-  //     thisMonday because today's matches are typically done by
-  //     evening, which is exactly when ops opens this view to review
-  //     the just-finishing week — pointing at the prior week instead
-  //     would be unintuitive. Single special case, intentional.
-  const isSunday = now.getDay() === 0;
+  //   "patterns" → most-recent fully-completed week (lenient Sunday
+  //     rule lives in the shared helper).
   const baseMonday =
-    mode === "patterns" && !isSunday
-      ? new Date(
-          thisMonday.getFullYear(),
-          thisMonday.getMonth(),
-          thisMonday.getDate() - 7,
-        )
-      : thisMonday;
+    mode === "patterns" ? mostRecentCompletedWeekMonday(now) : getMonday(now);
 
   const weeks: CancelPatternsWeek[] = [];
   // i=0 is the anchor week (newest after reverse). i=3 is 3 weeks

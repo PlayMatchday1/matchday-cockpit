@@ -92,6 +92,11 @@ export type FinVenue = {
   // in lazily.
   dpp_price: number | null;
   member_price: number | null;
+  // Per-match unit cost for P&L analysis. Independent of
+  // per_match_rate (which drives cash-flow billing). Manually set
+  // per venue via the Field Costs config table; nullable until set.
+  // Migration 0010 added the column.
+  cost_per_match: number | null;
   notes: string | null;
   launch_date: string | null;
   is_active: boolean;
@@ -422,6 +427,10 @@ async function load(): Promise<void> {
         r.member_price === null || r.member_price === undefined
           ? null
           : asNumber(r.member_price),
+      cost_per_match:
+        r.cost_per_match === null || r.cost_per_match === undefined
+          ? null
+          : asNumber(r.cost_per_match),
       notes: cleanTextNullable(r.notes),
       launch_date: cleanTextNullable(r.launch_date),
       is_active:
