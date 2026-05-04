@@ -165,6 +165,13 @@ export function isChurningAsOf(m: MemberLike, asOf: Date): boolean {
 
 export function isNewInMonth(m: MemberLike, ref: Date): boolean {
   if (!isPaidExternalMember(m)) return false;
+  // Exclude members with status=CANCELED but no canceled_at — these are
+  // legacy/imported rows where we lost the full lifecycle. Counting them
+  // as "new" without a corresponding cancellation event creates phantom
+  // growth that doesn't show up in the active members chart. See audit
+  // diagnosis from May 4 2026 session.
+  const status = m.status?.toUpperCase() ?? "";
+  if (status === "CANCELED" && !parseMemberDate(m.canceled_at)) return false;
   return inMonth(parseMemberDate(m.activation_date), ref);
 }
 

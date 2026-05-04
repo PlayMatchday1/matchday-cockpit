@@ -26,7 +26,7 @@ export default function MembershipTrendChart() {
     return (
       <div className="rounded-2xl border-[1.5px] border-cream-line bg-white p-6 shadow-md shadow-deep-green/10 sm:p-7">
         <div className="text-[11px] font-bold uppercase tracking-[0.25em] text-deep-green/60">
-          New vs Cancelled · last 6 months
+          Subscriber Activity · last 6 months
         </div>
         <div className="mt-3 text-sm text-deep-green/55">
           No member data yet.
@@ -47,7 +47,7 @@ export default function MembershipTrendChart() {
     <section className="rounded-2xl border-[1.5px] border-cream-line bg-white p-6 shadow-md shadow-deep-green/10 sm:p-7">
       <div className="flex flex-wrap items-baseline justify-between gap-3">
         <div className="text-[11px] font-bold uppercase tracking-[0.25em] text-deep-green/60">
-          New vs Cancelled · last 6 months
+          Subscriber Activity · last 6 months
         </div>
         <div className="flex items-center gap-1.5 text-[11px] text-deep-green/65">
           <span className="inline-block h-2.5 w-2.5 rounded-sm bg-mint" />
@@ -66,6 +66,12 @@ export default function MembershipTrendChart() {
         </span>{" "}
         cumulative net over 6 months
       </div>
+      <p className="mt-2 max-w-3xl text-[12px] italic text-deep-green/55">
+        Activation and cancellation events per month. Net activity does not
+        directly equal active member changes — grace-period dynamics and
+        lifecycle data gaps cause expected differences with the All-Time
+        chart above.
+      </p>
       <div className="mt-5">
         <Chart buckets={buckets} />
       </div>
