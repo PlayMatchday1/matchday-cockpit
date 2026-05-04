@@ -75,6 +75,94 @@ export function isActiveMember(m: MemberLike): boolean {
   return m.status === "ACTIVE" && isPaidExternalMember(m);
 }
 
+// First moment a cancellation no longer counts as active. Mirrors the
+// 25-day grace cycle in isChurning: a cancellation on day [6, 31] of
+// month M rolls off at start of day 6 of M+1. A cancellation on day
+// [1, 5] of month M rolls off at start of day 6 of M (caught by the
+// same cycle ending on the 5th of M).
+function rollOffDate(canceled: Date): Date {
+  const day = canceled.getDate();
+  const monthOffset = day >= 6 ? 1 : 0;
+  return new Date(
+    canceled.getFullYear(),
+    canceled.getMonth() + monthOffset,
+    6,
+  );
+}
+
+// Point-in-time variant of isActiveMember. A member counts as active
+// at asOf when they were activated by then AND either:
+//   (a) their current status is ACTIVE (Stripe still considers them
+//       paying), with the standard cancel-at-period-end grace honored
+//       if a canceled_at is present; OR
+//   (b) their current status is CANCELED and they have an explicit
+//       canceled_at whose grace window still covers asOf — i.e., the
+//       historical case where someone was active back then but has
+//       since canceled and rolled off.
+//
+// Everything else — PAST_DUE, INCOMPLETE, UNPAID, CANCELED-without-
+// canceled_at — is excluded. Card failures aren't paying customers;
+// missing canceled_at means we can't reconstruct an active period.
+//
+// INTENTIONAL DISCREPANCY with the live KPI card (`isActiveMember`):
+//   - Live KPI (`isActiveMember`): strict `status === "ACTIVE"` only.
+//     Answers "how many members are fully paid up right now."
+//   - Historical (`isActiveAsOf`): also counts CANCELED members whose
+//     explicit canceled_at puts them inside their final-cycle grace
+//     window. Answers "how many members were active at this moment
+//     in time, including end-of-cycle grace."
+// Both are valid; they answer different questions. At asOf=today the
+// gap is typically 5-15 members and can spike to 30-40 on high-
+// cancellation days (e.g., a Stripe billing-batch day). Do NOT try
+// to unify these later without explicit thought — the historical
+// chart wants the grace-inclusive definition; the KPI wants the
+// strict one.
+//
+// KNOWN HISTORICAL UNDERCOUNT: ~439 CANCELED rows in fin_members have
+// canceled_at=NULL (legacy data). They're excluded entirely from
+// historical buckets because we can't tell when they stopped paying.
+// Earlier months in the chart undercount by 10–15% as a result;
+// growth shape stays correct. Recover these dates from Stripe directly
+// if exact historical counts are ever needed for investor reporting.
+export function isActiveAsOf(m: MemberLike, asOf: Date): boolean {
+  if (!isPaidExternalMember(m)) return false;
+  const activated = parseMemberDate(m.activation_date);
+  if (!activated || activated > asOf) return false;
+
+  const status = m.status?.toUpperCase() ?? "";
+  const canceled = parseMemberDate(m.canceled_at);
+
+  if (status === "ACTIVE") {
+    // Currently paying. Honor a cancel-at-period-end if it's already
+    // expired by asOf (rare — Stripe usually flips status to CANCELED
+    // after grace, but a few stragglers exist).
+    if (canceled && rollOffDate(canceled) <= asOf) return false;
+    return true;
+  }
+
+  if (status === "CANCELED" && canceled) {
+    // Historical-active path: were they still in grace at asOf?
+    return asOf < rollOffDate(canceled);
+  }
+
+  // PAST_DUE, INCOMPLETE, UNPAID, or CANCELED-without-date: excluded.
+  return false;
+}
+
+// Point-in-time variant of isChurning. Same rolling [6th of M-1,
+// 6th of M) window as isChurning, but anchored on asOf's calendar
+// month rather than now's. "Active at asOf" replaces the m.status
+// check for the same reason as isActiveAsOf.
+export function isChurningAsOf(m: MemberLike, asOf: Date): boolean {
+  if (!isPaidExternalMember(m)) return false;
+  if (!isActiveAsOf(m, asOf)) return false;
+  const canceled = parseMemberDate(m.canceled_at);
+  if (!canceled) return false;
+  const windowStart = new Date(asOf.getFullYear(), asOf.getMonth() - 1, 6);
+  const windowEnd = new Date(asOf.getFullYear(), asOf.getMonth(), 6); // exclusive
+  return canceled >= windowStart && canceled < windowEnd;
+}
+
 export function isNewInMonth(m: MemberLike, ref: Date): boolean {
   if (!isPaidExternalMember(m)) return false;
   return inMonth(parseMemberDate(m.activation_date), ref);
@@ -223,37 +311,43 @@ export type MembershipSnapshotPayload = {
   source_file_name?: string;
 };
 
+// `asOf` (formerly `now`) is the moment the snapshot represents — what
+// "active" and "churning" meant on that date. The month bucket is
+// derived from asOf's calendar month. New/cancelled stay month-based
+// (count activations/cancellations that fell within the bucket month)
+// and don't depend on asOf's day, so they read correctly for any
+// reasonable asOf in the target month.
 export function computeMonthlySnapshot(
   members: MemberLike[],
   attendance: AttendanceRow[],
   cities: readonly string[],
-  now: Date,
+  asOf: Date,
   sourceFileName?: string,
 ): MembershipSnapshotPayload {
-  const monthIso = `${now.getFullYear()}-${String(now.getMonth() + 1).padStart(2, "0")}-01`;
+  const monthIso = `${asOf.getFullYear()}-${String(asOf.getMonth() + 1).padStart(2, "0")}-01`;
 
   const byCity: MembershipSnapshotPayload["by_city"] = {};
   for (const city of cities) {
     const cm = members.filter((m) => m.city === city);
     byCity[city] = {
-      active: cm.filter(isActiveMember).length,
-      new: cm.filter((m) => isNewInMonth(m, now)).length,
-      cancelled: cm.filter((m) => isCancelledInMonth(m, now)).length,
+      active: cm.filter((m) => isActiveAsOf(m, asOf)).length,
+      new: cm.filter((m) => isNewInMonth(m, asOf)).length,
+      cancelled: cm.filter((m) => isCancelledInMonth(m, asOf)).length,
     };
   }
 
   const { avg, membersTracked } = computeAvgMatchesPerMember(
     members,
     attendance,
-    now,
+    asOf,
   );
 
   return {
     month: monthIso,
-    active_count: members.filter(isActiveMember).length,
-    new_count: members.filter((m) => isNewInMonth(m, now)).length,
-    cancelled_count: members.filter((m) => isCancelledInMonth(m, now)).length,
-    churning_count: members.filter((m) => isChurning(m, now)).length,
+    active_count: members.filter((m) => isActiveAsOf(m, asOf)).length,
+    new_count: members.filter((m) => isNewInMonth(m, asOf)).length,
+    cancelled_count: members.filter((m) => isCancelledInMonth(m, asOf)).length,
+    churning_count: members.filter((m) => isChurningAsOf(m, asOf)).length,
     avg_matches_per_member: membersTracked > 0 ? avg : null,
     members_tracked: membersTracked > 0 ? membersTracked : null,
     by_city: byCity,

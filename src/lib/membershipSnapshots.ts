@@ -13,10 +13,12 @@ import { CITIES } from "./types";
 // in the DB at that moment.
 //
 // On the 1st-5th of the month we ALSO refresh the prior month's
-// snapshot, so late activations / late attendance rows (Stripe delays
-// or late uploads) still reach the correct month bucket. Using day 15
-// as the ref Date for the prior month sidesteps month-arithmetic edge
-// cases.
+// snapshot, so late activations / late cancellations (Stripe delays
+// or late uploads) still reach the correct month bucket. Using the
+// last day of the prior month as ref keeps every snapshot's asOf
+// aligned with end-of-month semantics — important so the live
+// refresh and the historical backfill converge on the same value
+// for any given month, regardless of which path wrote the row last.
 export async function refreshMembershipSnapshots(opts: {
   sourceFileName?: string;
   now?: Date;
@@ -38,7 +40,8 @@ export async function refreshMembershipSnapshots(opts: {
 
   const refDates: Date[] = [now];
   if (now.getDate() <= 5) {
-    refDates.unshift(new Date(now.getFullYear(), now.getMonth() - 1, 15));
+    // Day 0 of the current month = last day of the prior month.
+    refDates.unshift(new Date(now.getFullYear(), now.getMonth(), 0));
   }
 
   for (const refDate of refDates) {
