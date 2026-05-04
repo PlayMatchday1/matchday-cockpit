@@ -156,19 +156,12 @@ function Chart({ rows }: { rows: SnapshotRow[] }) {
         const cx = xScale(i);
         const cy = yScale(r.active_count);
         const isCurrent = i === rows.length - 1;
+        // Render an x-axis tick label every 3 months (quarterly
+        // cadence) so 28 points stay readable. Hover tooltip on the
+        // dot still surfaces the exact month + count for any point.
+        const showTick = i % 3 === 0;
         return (
           <g key={r.month}>
-            <text
-              x={cx}
-              y={cy - 10}
-              textAnchor="middle"
-              fontSize={11}
-              fontWeight={700}
-              fill="#003326"
-              fontFamily="var(--font-geist-sans), system-ui, sans-serif"
-            >
-              {r.active_count.toLocaleString()}
-            </text>
             <circle
               cx={cx}
               cy={cy}
@@ -182,17 +175,19 @@ function Chart({ rows }: { rows: SnapshotRow[] }) {
                 {monthYearLabel(r.month)}: {r.active_count.toLocaleString()} active
               </title>
             </circle>
-            <text
-              x={cx}
-              y={H - 10}
-              textAnchor="middle"
-              fontSize={11}
-              fill="#003326"
-              fillOpacity="0.6"
-              fontFamily="var(--font-geist-sans), system-ui, sans-serif"
-            >
-              {monthShortYearTick(r.month)}
-            </text>
+            {showTick && (
+              <text
+                x={cx}
+                y={H - 10}
+                textAnchor="middle"
+                fontSize={11}
+                fill="#003326"
+                fillOpacity="0.6"
+                fontFamily="var(--font-geist-sans), system-ui, sans-serif"
+              >
+                {monthShortYearTick(r.month)}
+              </text>
+            )}
           </g>
         );
       })}
