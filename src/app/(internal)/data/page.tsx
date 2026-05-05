@@ -1,15 +1,46 @@
+"use client";
+
 import PageHeader from "@/components/PageHeader";
 import PagePermissionGuard from "@/components/PagePermissionGuard";
 import MatchesUploader from "@/components/MatchesUploader";
+import MembersUploader from "@/components/MembersUploader";
 import ReviewsUploader from "@/components/ReviewsUploader";
+import StripeUploader from "@/components/StripeUploader";
+import { canAccess, useAuth } from "@/lib/useAuth";
 
 export default function DataPage() {
+  const { appUser } = useAuth();
+  // Stripe + Members write to finance-domain tables (fin_revenue,
+  // fin_members), so they only render for users with finance access.
+  // Matches + Reviews remain available to anyone with data access.
+  const showFinanceSections = canAccess(appUser, "finance");
+
   return (
     <PagePermissionGuard page="data">
       <PageHeader
         title="Data"
-        subtitle="Upload CSVs from Retool. Each upload replaces the previous one for that data type."
+        subtitle="Upload CSVs and run on-demand syncs."
       />
+
+      {showFinanceSections && (
+        <>
+          <section className="mb-12">
+            <SectionHeader
+              title="Stripe data"
+              subtitle="Charges and subscription payments. API sync is the primary path; manual CSV upload is a fallback."
+            />
+            <StripeUploader />
+          </section>
+
+          <section className="mb-12">
+            <SectionHeader
+              title="Members data"
+              subtitle="Active subscribers and cancellations from Stripe."
+            />
+            <MembersUploader />
+          </section>
+        </>
+      )}
 
       <section className="mb-12">
         <SectionHeader

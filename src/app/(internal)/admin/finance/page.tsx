@@ -1,7 +1,6 @@
 "use client";
 
 import { useEffect, useState } from "react";
-import Link from "next/link";
 import PagePermissionGuard from "@/components/PagePermissionGuard";
 import BillingScheduleView from "@/components/BillingScheduleView";
 import CashFlowTabContent from "@/components/CashFlowTabContent";
@@ -148,36 +147,6 @@ function FinanceLandingContent() {
         <ChangeLogView />
       </TabPanel>
 
-      {/* Always-visible Data section. Weekly Update is a workflow
-          page (CSV upload + commit), not a view, so it doesn't fit
-          as a tab. Linked from here regardless of which tab is
-          active. */}
-      <div className="mt-16">
-        <h2 className="text-2xl font-bold tracking-tight text-deep-green">
-          Data
-        </h2>
-        <p className="mt-0.5 text-sm text-deep-green/60">Ongoing uploads.</p>
-        <div className="mt-5 grid grid-cols-1 gap-4 md:grid-cols-2 lg:grid-cols-3">
-          <Link
-            href="/admin/finance/upload"
-            className="block rounded-2xl border-l-4 border-mint border-y-[1.5px] border-r-[1.5px] border-y-cream-line border-r-cream-line bg-white p-6 shadow-md shadow-deep-green/10 transition-all duration-200 hover:-translate-y-0.5 hover:shadow-xl hover:shadow-deep-green/20"
-          >
-            <div className="text-[11px] font-bold uppercase tracking-[0.2em] text-mint-hover">
-              Weekly
-            </div>
-            <div className="mt-1 text-base font-bold text-deep-green">
-              Weekly Update
-            </div>
-            <p className="mt-1 text-sm text-deep-green/60">
-              Drop the latest Members + Stripe exports. Replaces the rows
-              it covers; everything else is left alone.
-            </p>
-            <div className="mt-3 text-xs font-bold uppercase tracking-wider text-mint-hover">
-              Open →
-            </div>
-          </Link>
-        </div>
-      </div>
     </>
   );
 }
