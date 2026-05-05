@@ -1,3 +1,7 @@
+// IMPORTANT: when MatchDay launches a new city (e.g., Phoenix), add
+// it here. useReviewData and the upload paths skip rows that don't
+// normalize, so reviews/matches in unmapped cities silently
+// disappear from dashboards.
 export const CSV_TO_COCKPIT_CITY: Record<string, string> = {
   "Dallas / Fort Worth": "Dallas",
   "Oklahoma City": "OKC",

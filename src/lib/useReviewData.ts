@@ -1,9 +1,32 @@
 "use client";
 
+// Reviews data hook. Reads from mdapi_reviews (the MatchDay API
+// mirror, populated by the daily cron + manual sync UI on /data).
+// Replaces the older path that read from the `reviews` table
+// populated by CSV upload via review_uploads metadata.
+//
+// The CSV upload path still works (still writes to the `reviews`
+// table) but its writes are no longer read by the dashboard. The
+// CSV uploader is deprecated for removal in Phase 4.
+//
+// What this hook returns is unchanged: a `ReviewRow[]` and a
+// `ReviewMeta`. Consumers (CitiesReviewsLens, ManagerPodium,
+// CityManagerTable, CityDetailView, Reviews8WeekCard,
+// ReviewsCommentsTable) are untouched.
+//
+// Two field renames between the old and new sources:
+//   reviews.city            → mdapi_reviews.city_name (raw, needs normalize)
+//   reviews.rating_at       → mdapi_reviews.updated_at_rating
+// One type coercion:
+//   reviews.user_id (text)  → mdapi_reviews.user_id (bigint) → coerce String()
+// Tags column: jsonb in mdapi_reviews; parseTags() already handles
+// JSON-array input.
+
 import { useEffect, useState } from "react";
 import { supabase } from "./supabase";
 import { selectAll } from "./supabasePagination";
 import { parseTags } from "./reviewTags";
+import { normalizeCity } from "./cityMap";
 
 export type ReviewRow = {
   city: string;
@@ -59,51 +82,53 @@ function publish(s: State) {
 async function load(): Promise<void> {
   publish({ rows: [], meta: null, loading: true, error: null });
 
-  const { data: uploadRow, error: uploadErr } = await supabase
-    .from("review_uploads")
-    .select("*")
-    .eq("is_current", true)
-    .order("created_at", { ascending: false })
-    .limit(1)
-    .maybeSingle();
-
-  if (uploadErr) {
-    publish({ rows: [], meta: null, loading: false, error: uploadErr.message });
-    return;
-  }
-  if (!uploadRow) {
-    publish({ rows: [], meta: null, loading: false, error: null });
-    return;
-  }
-
-  const uploadId = (uploadRow as { id: string }).id;
-
-  type ReviewSelect = {
-    city: string;
+  type MdapiReviewSelect = {
+    api_id: number;
+    city_name: string | null;
     field_title: string | null;
     manager_first_name: string | null;
     manager_last_name: string | null;
     star_rating: number | null;
     start_date: string | null;
-    user_id: string | null;
-    rating_at: string | null;
+    user_id: number | null;
+    updated_at_rating: string | null;
     comment: string | null;
     user_first_name: string | null;
     user_last_name: string | null;
     user_email: string | null;
-    tags_rating: string | null;
+    tags_rating: unknown;
   };
-  let raw: ReviewSelect[];
+
+  // Two parallel reads — they're independent.
+  //   1. mdapi_reviews rows (paginated; ~16k rows)
+  //   2. fin_sync_log latest mdapi-reviews completed_at (single row)
+  // Sort by start_date asc with api_id as a tiebreaker — without
+  // the secondary key, paginated reads can shift rows across pages
+  // on ties (the project's prior pagination-stability fix pattern).
+  let raw: MdapiReviewSelect[];
+  let lastSyncCompletedAt: string | null = null;
   try {
-    raw = await selectAll<ReviewSelect>(() =>
+    const [rows, lastSyncResult] = await Promise.all([
+      selectAll<MdapiReviewSelect>(() =>
+        supabase
+          .from("mdapi_reviews")
+          .select(
+            "api_id, city_name, field_title, manager_first_name, manager_last_name, star_rating, start_date, user_id, updated_at_rating, comment, user_first_name, user_last_name, user_email, tags_rating",
+          )
+          .order("start_date", { ascending: true })
+          .order("api_id", { ascending: true }),
+      ),
       supabase
-        .from("reviews")
-        .select(
-          "city, field_title, manager_first_name, manager_last_name, star_rating, start_date, user_id, rating_at, comment, user_first_name, user_last_name, user_email, tags_rating",
-        )
-        .eq("upload_id", uploadId)
-        .order("start_date"),
-    );
+        .from("fin_sync_log")
+        .select("completed_at")
+        .eq("source", "mdapi-reviews")
+        .not("completed_at", "is", null)
+        .order("completed_at", { ascending: false })
+        .limit(1)
+        .maybeSingle<{ completed_at: string }>(),
+    ]);
+    raw = rows;
+    lastSyncCompletedAt = lastSyncResult.data?.completed_at ?? null;
   } catch (e) {
     publish({
       rows: [],
@@ -116,44 +141,63 @@ async function load(): Promise<void> {
 
   const all: ReviewRow[] = [];
   for (const r of raw) {
+    // Skip rows missing the essentials. Same filters as the old
+    // CSV-backed path:
+    //   - unparseable start_date (parseLocal returns null)
+    //   - missing star_rating
+    //   - city not in the cockpit's known list (normalizeCity → null)
+    // The city filter silently drops "New York City" reviews (26 in
+    // mdapi_reviews as of May 2026) — cockpit has no NYC infra.
+    // When MatchDay launches new cities, add them to cityMap.ts or
+    // their reviews disappear from dashboards.
     const startDate = parseLocal(r.start_date);
     if (!startDate) continue;
     if (r.star_rating === null) continue;
+    const city = normalizeCity(r.city_name);
+    if (!city) continue;
+
     all.push({
-      city: r.city,
+      city,
       fieldTitle: r.field_title ?? "",
       managerFirstName: r.manager_first_name,
       managerLastName: r.manager_last_name,
       starRating: Number(r.star_rating),
       startDate,
-      userId: r.user_id,
-      ratingAt: parseLocal(r.rating_at),
+      userId: r.user_id != null ? String(r.user_id) : null,
+      ratingAt: parseLocal(r.updated_at_rating),
       comment: r.comment,
       userFirstName: r.user_first_name,
       userLastName: r.user_last_name,
       userEmail: r.user_email,
-      tags: parseTags(r.tags_rating),
+      // tags_rating is jsonb — Supabase auto-parses to JS value.
+      // parseTags handles arrays AND strings, so it works either way.
+      tags: parseTags(
+        typeof r.tags_rating === "string"
+          ? r.tags_rating
+          : r.tags_rating == null
+            ? null
+            : JSON.stringify(r.tags_rating),
+      ),
     });
   }
 
-  const u = uploadRow as {
-    filename: string;
-    created_at: string;
-    row_count: number;
-    earliest_review: string | null;
-    latest_review: string | null;
-  };
-  const earliestReview =
-    parseLocal(u.earliest_review) ?? all[0]?.startDate ?? new Date();
-  const latestReview =
-    parseLocal(u.latest_review) ?? all[all.length - 1]?.startDate ?? new Date();
+  // Rows are pre-sorted by start_date asc + api_id asc, so first/
+  // last give us the date range. The fallback to `new Date()` (now)
+  // covers the empty-rows case — preserves existing behavior.
+  const earliestReview = all[0]?.startDate ?? new Date();
+  const latestReview = all[all.length - 1]?.startDate ?? new Date();
 
   publish({
     rows: all,
     meta: {
-      filename: u.filename,
-      uploadedAt: new Date(u.created_at),
-      rowCount: u.row_count,
+      filename: "MatchDay API",
+      // First-deploy edge case: if no successful sync has run yet,
+      // fall back to `now` so the footer reads "just now". A real
+      // value will appear after the next cron or manual sync.
+      uploadedAt: lastSyncCompletedAt
+        ? new Date(lastSyncCompletedAt)
+        : new Date(),
+      rowCount: all.length,
       earliestReview,
       latestReview,
     },
