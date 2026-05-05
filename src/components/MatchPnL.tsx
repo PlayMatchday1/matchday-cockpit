@@ -7,6 +7,7 @@ import { useFinanceData } from "@/lib/useFinanceData";
 import {
   fetchWeekMatchPnL,
   summarize,
+  summarizeCanceled,
   type MatchPnLRow,
   type MatchPnLStatus,
 } from "@/lib/matchPnL";
@@ -31,6 +32,10 @@ const STATUS_PILL: Record<MatchPnLStatus, string> = {
   breakeven: "bg-[rgba(245,158,11,0.15)] text-[#92400E]",
   profit: "bg-mint-soft text-deep-green",
   "missing-cost": "bg-cream-soft text-deep-green/55",
+  // Distinct gray pill so canceled matches don't visually compete
+  // with active losses — the operator's eye should land on Loss
+  // rows first, then scan canceled separately.
+  canceled: "bg-deep-green/10 text-deep-green/55",
 };
 
 const STATUS_LABEL: Record<MatchPnLStatus, string> = {
@@ -38,6 +43,7 @@ const STATUS_LABEL: Record<MatchPnLStatus, string> = {
   breakeven: "Breakeven",
   profit: "Profit",
   "missing-cost": "No cost set",
+  canceled: "Canceled",
 };
 
 function fmtUsd(n: number): string {
@@ -66,7 +72,8 @@ export default function MatchPnL({
   const [weekStart, setWeekStart] = useState<Date>(
     () => mostRecentCompletedWeekMonday(),
   );
-  const [rows, setRows] = useState<MatchPnLRow[] | null>(null);
+  const [activeRows, setActiveRows] = useState<MatchPnLRow[] | null>(null);
+  const [canceledRows, setCanceledRows] = useState<MatchPnLRow[]>([]);
   const [error, setError] = useState<string | null>(null);
   const [fetchKey, setFetchKey] = useState(0);
   const [sortKey, setSortKey] = useState<SortKey>("net");
@@ -92,11 +99,14 @@ export default function MatchPnL({
   useEffect(() => {
     let cancelled = false;
     if (dataLoading || !data) return;
-    setRows(null);
+    setActiveRows(null);
+    setCanceledRows([]);
     setError(null);
     fetchWeekMatchPnL(supabase, weekStart, weekEnd, data.venues)
-      .then((r) => {
-        if (!cancelled) setRows(r);
+      .then((result) => {
+        if (cancelled) return;
+        setActiveRows(result.active);
+        setCanceledRows(result.canceled);
       })
       .catch((e) => {
         if (!cancelled) setError(e instanceof Error ? e.message : String(e));
@@ -134,12 +144,19 @@ export default function MatchPnL({
     }
   }
 
-  // Split rows: those with cost set sort + render in main table;
+  // Split active rows: those with cost set group + sort by city;
   // those without render in a separate "No cost set" section.
-  const { sorted, missingCost } = useMemo(() => {
-    if (!rows) return { sorted: [], missingCost: [] };
-    const main = rows.filter((r) => r.status !== "missing-cost");
-    const missing = rows.filter((r) => r.status === "missing-cost");
+  // Canceled rows render in their own bottom section, sorted city
+  // then time — independent of the active sort.
+  const { cityGroups, missingCost, canceledSorted } = useMemo(() => {
+    if (!activeRows)
+      return {
+        cityGroups: [] as { city: string; rows: MatchPnLRow[] }[],
+        missingCost: [] as MatchPnLRow[],
+        canceledSorted: [] as MatchPnLRow[],
+      };
+    const main = activeRows.filter((r) => r.status !== "missing-cost");
+    const missing = activeRows.filter((r) => r.status === "missing-cost");
     const cmp = (a: MatchPnLRow, b: MatchPnLRow): number => {
       const dir = sortDir === "asc" ? 1 : -1;
       switch (sortKey) {
@@ -164,15 +181,54 @@ export default function MatchPnL({
             breakeven: 1,
             profit: 2,
             "missing-cost": 3,
+            canceled: 4,
           };
           return (order[a.status] - order[b.status]) * dir;
         }
       }
     };
-    return { sorted: [...main].sort(cmp), missingCost: missing };
-  }, [rows, sortKey, sortDir]);
+    // Group active main rows by city, sort cities alphabetically,
+    // sort within each city by the current sort key.
+    const byCity = new Map<string, MatchPnLRow[]>();
+    for (const r of main) {
+      const arr = byCity.get(r.city) ?? [];
+      arr.push(r);
+      byCity.set(r.city, arr);
+    }
+    const groups = [...byCity.entries()]
+      .map(([city, rows]) => ({ city, rows: [...rows].sort(cmp) }))
+      .sort((a, b) => a.city.localeCompare(b.city));
 
-  const summary = useMemo(() => (rows ? summarize(rows) : null), [rows]);
+    const canceledSorted = [...canceledRows].sort(
+      (a, b) =>
+        a.city.localeCompare(b.city) ||
+        a.matchStart.getTime() - b.matchStart.getTime(),
+    );
+
+    return { cityGroups: groups, missingCost: missing, canceledSorted };
+  }, [activeRows, canceledRows, sortKey, sortDir]);
+
+  const summary = useMemo(
+    () => (activeRows ? summarize(activeRows) : null),
+    [activeRows],
+  );
+  const canceledSummary = useMemo(
+    () => summarizeCanceled(canceledRows),
+    [canceledRows],
+  );
+
+  // Per-city subtotals for the section headers.
+  function citySubtotal(rows: MatchPnLRow[]) {
+    let gross = 0;
+    let cost = 0;
+    let losses = 0;
+    for (const r of rows) {
+      gross += r.grossRevenue;
+      if (r.fieldCost !== null) cost += r.fieldCost;
+      if (r.status === "loss") losses++;
+    }
+    return { matches: rows.length, gross, cost, net: gross - cost, losses };
+  }
 
   return (
     <div className="space-y-5">
@@ -208,49 +264,67 @@ export default function MatchPnL({
           </button>
         </div>
         {summary && (
-          <div className="flex flex-wrap items-baseline gap-x-4 gap-y-1 text-[12px] text-deep-green/75">
-            <span>
-              <span className="font-bold tabular-nums text-deep-green">
-                {summary.totalMatches}
-              </span>{" "}
-              matches
-            </span>
-            <span>
-              gross{" "}
-              <span className="font-mono font-bold tabular-nums text-deep-green">
-                {fmtUsd(summary.totalRevenue)}
+          <div className="flex flex-col items-end gap-1 text-[12px] text-deep-green/75">
+            <div className="flex flex-wrap items-baseline justify-end gap-x-4 gap-y-1">
+              <span>
+                <span className="font-bold tabular-nums text-deep-green">
+                  {summary.totalMatches}
+                </span>{" "}
+                matches
               </span>
-            </span>
-            <span>
-              cost{" "}
-              <span className="font-mono font-bold tabular-nums text-deep-green">
-                {fmtUsd(summary.totalFieldCost)}
+              <span>
+                gross{" "}
+                <span className="font-mono font-bold tabular-nums text-deep-green">
+                  {fmtUsd(summary.totalRevenue)}
+                </span>
               </span>
-            </span>
-            <span>
-              net{" "}
-              <span
-                className={`font-mono font-bold tabular-nums ${
-                  summary.net > 10
-                    ? "text-mint-hover"
-                    : summary.net < -10
-                      ? "text-coral"
-                      : "text-deep-green/75"
-                }`}
-              >
-                {fmtSig(summary.net)}
+              <span>
+                cost{" "}
+                <span className="font-mono font-bold tabular-nums text-deep-green">
+                  {fmtUsd(summary.totalFieldCost)}
+                </span>
               </span>
-            </span>
-            <span>
-              <span className="font-bold tabular-nums text-coral">
-                {summary.losingMatches}
-              </span>{" "}
-              losing
-            </span>
-            {summary.matchesWithoutCost > 0 && (
-              <span className="text-deep-green/55">
-                · {summary.matchesWithoutCost} missing cost
+              <span>
+                net{" "}
+                <span
+                  className={`font-mono font-bold tabular-nums ${
+                    summary.net > 10
+                      ? "text-mint-hover"
+                      : summary.net < -10
+                        ? "text-coral"
+                        : "text-deep-green/75"
+                  }`}
+                >
+                  {fmtSig(summary.net)}
+                </span>
               </span>
+              <span>
+                <span className="font-bold tabular-nums text-coral">
+                  {summary.losingMatches}
+                </span>{" "}
+                losing
+              </span>
+              {summary.matchesWithoutCost > 0 && (
+                <span className="text-deep-green/55">
+                  · {summary.matchesWithoutCost} missing cost
+                </span>
+              )}
+            </div>
+            {canceledSummary.totalMatches > 0 && (
+              <div className="text-[11px] text-deep-green/55">
+                +{" "}
+                <span className="font-bold tabular-nums">
+                  {canceledSummary.totalMatches}
+                </span>{" "}
+                canceled match
+                {canceledSummary.totalMatches === 1 ? "" : "es"},{" "}
+                <span className="font-mono font-bold tabular-nums">
+                  {fmtUsd(canceledSummary.sunkCost)}
+                </span>{" "}
+                sunk cost
+                {canceledSummary.matchesWithoutCost > 0 &&
+                  ` (${canceledSummary.matchesWithoutCost} missing cost)`}
+              </div>
             )}
           </div>
         )}
@@ -277,14 +351,16 @@ export default function MatchPnL({
                 <SortHeader k="status" label="Status" sortKey={sortKey} sortDir={sortDir} onClick={toggleSort} align="left" />
               </tr>
             </thead>
-            <tbody>
-              {rows === null ? (
+            {activeRows === null ? (
+              <tbody>
                 <tr>
                   <td colSpan={7} className="px-3 py-8 text-center text-sm text-deep-green/55">
                     Loading match P&L…
                   </td>
                 </tr>
-              ) : sorted.length === 0 ? (
+              </tbody>
+            ) : cityGroups.length === 0 ? (
+              <tbody>
                 <tr>
                   <td colSpan={7} className="px-3 py-8 text-center text-sm text-deep-green/55">
                     No matches with cost data this week.
@@ -292,10 +368,57 @@ export default function MatchPnL({
                       ` (${missingCost.length} matches without cost set — see below.)`}
                   </td>
                 </tr>
-              ) : (
-                sorted.map((r) => <Row key={`${r.venueId ?? r.venueRawName}|${r.matchStartIso}`} row={r} onJumpToConfig={onJumpToConfig} />)
-              )}
-            </tbody>
+              </tbody>
+            ) : (
+              cityGroups.map((g) => {
+                const sub = citySubtotal(g.rows);
+                return (
+                  <tbody key={g.city}>
+                    <tr className="border-t-2 border-cream-line bg-cream-soft/50">
+                      <td
+                        colSpan={7}
+                        className="px-3 py-2 text-[10px] font-bold uppercase tracking-[0.12em] text-deep-green"
+                      >
+                        {g.city}
+                        <span className="ml-2 font-normal text-deep-green/55">
+                          · {sub.matches} match{sub.matches === 1 ? "" : "es"} ·
+                          gross {fmtUsd(sub.gross)} · cost {fmtUsd(sub.cost)} ·
+                          net{" "}
+                          <span
+                            className={`font-bold ${
+                              sub.net > 10
+                                ? "text-mint-hover"
+                                : sub.net < -10
+                                  ? "text-coral"
+                                  : "text-deep-green/55"
+                            }`}
+                          >
+                            {fmtSig(sub.net)}
+                          </span>
+                          {sub.losses > 0 && (
+                            <>
+                              {" "}
+                              ·{" "}
+                              <span className="font-bold text-coral">
+                                {sub.losses}
+                              </span>{" "}
+                              loss{sub.losses === 1 ? "" : "es"}
+                            </>
+                          )}
+                        </span>
+                      </td>
+                    </tr>
+                    {g.rows.map((r) => (
+                      <Row
+                        key={`${r.venueId ?? r.venueRawName}|${r.matchStartIso}`}
+                        row={r}
+                        onJumpToConfig={onJumpToConfig}
+                      />
+                    ))}
+                  </tbody>
+                );
+              })
+            )}
           </table>
         </div>
       </div>
@@ -324,6 +447,46 @@ export default function MatchPnL({
                       onJumpToConfig={onJumpToConfig}
                     />
                   ))}
+              </tbody>
+            </table>
+          </div>
+        </div>
+      )}
+
+      {/* Canceled-matches section — sunk cost (you paid the venue)
+          even though the match never ran and earned $0. Sorted city
+          then time. Limitation: only canceled matches that had at
+          least one registration appear; zero-registration cancellations
+          aren't visible from match_registrations alone. */}
+      {canceledSorted.length > 0 && (
+        <div className="overflow-hidden rounded-2xl border-[1.5px] border-cream-line bg-white shadow-md shadow-deep-green/10">
+          <div className="flex flex-wrap items-baseline justify-between gap-2 border-b border-cream-line bg-cream-soft/60 px-4 py-2">
+            <div className="text-[11px] font-bold uppercase tracking-wider text-deep-green/60">
+              Canceled Matches
+            </div>
+            <div className="text-[11px] text-deep-green/65">
+              <span className="font-bold tabular-nums text-deep-green">
+                {canceledSummary.totalMatches}
+              </span>{" "}
+              match{canceledSummary.totalMatches === 1 ? "" : "es"} ·{" "}
+              <span className="font-mono font-bold tabular-nums text-deep-green">
+                {fmtUsd(canceledSummary.sunkCost)}
+              </span>{" "}
+              in fixed field costs
+              {canceledSummary.matchesWithoutCost > 0 &&
+                ` · ${canceledSummary.matchesWithoutCost} missing cost`}
+            </div>
+          </div>
+          <div className="overflow-x-auto">
+            <table className="w-full text-xs">
+              <tbody>
+                {canceledSorted.map((r) => (
+                  <Row
+                    key={`${r.venueId ?? r.venueRawName}|${r.matchStartIso}`}
+                    row={r}
+                    onJumpToConfig={onJumpToConfig}
+                  />
+                ))}
               </tbody>
             </table>
           </div>
@@ -381,7 +544,11 @@ function Row({
       </td>
       <td className="px-3 py-2 align-top text-deep-green/75">{row.city}</td>
       <td className="px-3 py-2 text-right align-top font-mono tabular-nums text-deep-green">
-        {row.spotsSold}
+        {row.status === "canceled" ? (
+          <span className="text-deep-green/35">—</span>
+        ) : (
+          row.spotsSold
+        )}
       </td>
       <td className="px-3 py-2 text-right align-top font-mono tabular-nums text-deep-green">
         {fmtUsd(row.grossRevenue)}
