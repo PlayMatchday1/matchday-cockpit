@@ -2,8 +2,18 @@ import { getMonday, weekLabel } from "./cityStats";
 import type { ReviewRow } from "./useReviewData";
 
 export const MINIMUM_REVIEWS = 50;
+// Min review count for a manager to qualify in past-period rankings
+// (Last Month, Last 6 Months, All Time). The current-month flow uses
+// the on-pace-to-50 logic instead.
+export const MIN_REVIEWS_PAST = 25;
 export const STAR_MIN = 1;
 export const STAR_MAX = 5;
+
+export type ReviewPeriod =
+  | "thisMonth"
+  | "lastMonth"
+  | "last6Months"
+  | "allTime";
 
 const MONTH_NAMES = [
   "January",
@@ -231,6 +241,161 @@ export function getBottom3(
     return b.count - a.count;
   });
   return filtered.slice(0, 3);
+}
+
+// Closed-period (lastMonth / last6Months / allTime) manager stats.
+// Strict date window per period; pace-related fields collapse to
+// closed-period defaults since "still in progress" doesn't apply.
+function getClosedPeriodManagerStats(
+  rows: ReviewRow[],
+  period: Exclude<ReviewPeriod, "thisMonth">,
+  now: Date = new Date(),
+): ManagerStat[] {
+  let start: Date | null = null;
+  let end: Date | null = null;
+  if (period === "lastMonth") {
+    start = new Date(now.getFullYear(), now.getMonth() - 1, 1);
+    end = new Date(now.getFullYear(), now.getMonth(), 1);
+  } else if (period === "last6Months") {
+    // Rolling 6 months ending at now (not 6 calendar months). E.g.
+    // on May 5, 2026 the window is Nov 5 2025 → May 5 2026.
+    start = new Date(now.getFullYear(), now.getMonth() - 6, now.getDate());
+    end = new Date(
+      now.getFullYear(),
+      now.getMonth(),
+      now.getDate(),
+      23,
+      59,
+      59,
+      999,
+    );
+  }
+  // "allTime": both null → no date filter.
+
+  const groups = new Map<
+    string,
+    {
+      firstName: string;
+      lastName: string;
+      cityCounts: Map<string, number>;
+      sumRating: number;
+      count: number;
+    }
+  >();
+
+  for (const r of rows) {
+    if (start && r.startDate < start) continue;
+    if (end && r.startDate >= end) continue;
+    const key = managerKey(r);
+    if (!key) continue;
+    const existing = groups.get(key);
+    if (existing) {
+      existing.sumRating += r.starRating;
+      existing.count += 1;
+      existing.cityCounts.set(
+        r.city,
+        (existing.cityCounts.get(r.city) ?? 0) + 1,
+      );
+    } else {
+      const cm = new Map<string, number>();
+      cm.set(r.city, 1);
+      groups.set(key, {
+        firstName: (r.managerFirstName ?? "").trim(),
+        lastName: (r.managerLastName ?? "").trim(),
+        cityCounts: cm,
+        sumRating: r.starRating,
+        count: 1,
+      });
+    }
+  }
+
+  const out: ManagerStat[] = [];
+  for (const [key, g] of groups) {
+    let topCity = "";
+    let topCount = 0;
+    for (const [c, n] of g.cityCounts) {
+      if (n > topCount) {
+        topCount = n;
+        topCity = c;
+      }
+    }
+    const avg = g.count > 0 ? g.sumRating / g.count : 0;
+    out.push({
+      key,
+      firstName: g.firstName,
+      lastName: g.lastName,
+      displayName: managerDisplayName(g.firstName, g.lastName),
+      city: topCity,
+      count: g.count,
+      avgRating: avg,
+      sumRating: g.sumRating,
+      // Pace fields don't apply to closed periods.
+      qualified: g.count >= MIN_REVIEWS_PAST,
+      onPace: false,
+      projected: g.count,
+      paceThreshold: 0,
+      isEndOfMonth: true,
+    });
+  }
+  return out;
+}
+
+export type RankedManagers = {
+  top: ManagerStat[];
+  bottom: ManagerStat[];
+  // Total managers eligible under the period's qualifying rule.
+  // For thisMonth top: qualified or on-pace.
+  // For thisMonth bottom: any with count > 0.
+  // For closed periods: count >= MIN_REVIEWS_PAST (applies to both
+  // top and bottom — the "Only N MMs qualify" note in the UI uses
+  // this number to tell the operator the filter is biting).
+  topQualifyingCount: number;
+  bottomQualifyingCount: number;
+};
+
+export function getRankedManagersForPeriod(
+  rows: ReviewRow[],
+  period: ReviewPeriod,
+  now: Date = new Date(),
+): RankedManagers {
+  if (period === "thisMonth") {
+    const all = getMonthlyManagerStats(rows, null, now);
+    const topEligible = all
+      .filter((m) => m.qualified || m.onPace)
+      .sort((a, b) => {
+        if (b.avgRating !== a.avgRating) return b.avgRating - a.avgRating;
+        return b.count - a.count;
+      });
+    const bottomEligible = all
+      .filter((m) => m.count > 0)
+      .sort((a, b) => {
+        if (a.avgRating !== b.avgRating) return a.avgRating - b.avgRating;
+        return b.count - a.count;
+      });
+    return {
+      top: topEligible.slice(0, 3),
+      bottom: bottomEligible.slice(0, 3),
+      topQualifyingCount: topEligible.length,
+      bottomQualifyingCount: bottomEligible.length,
+    };
+  }
+
+  const all = getClosedPeriodManagerStats(rows, period, now);
+  const eligible = all.filter((m) => m.count >= MIN_REVIEWS_PAST);
+  const topSorted = [...eligible].sort((a, b) => {
+    if (b.avgRating !== a.avgRating) return b.avgRating - a.avgRating;
+    return b.count - a.count;
+  });
+  const bottomSorted = [...eligible].sort((a, b) => {
+    if (a.avgRating !== b.avgRating) return a.avgRating - b.avgRating;
+    return b.count - a.count;
+  });
+  return {
+    top: topSorted.slice(0, 3),
+    bottom: bottomSorted.slice(0, 3),
+    topQualifyingCount: eligible.length,
+    bottomQualifyingCount: eligible.length,
+  };
 }
 
 export type WeekStat = {
