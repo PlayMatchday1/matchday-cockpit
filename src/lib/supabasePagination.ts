@@ -13,6 +13,16 @@
 // org groups) can keep using a bare `.select(...)` — but err on the side
 // of paginating; the cost when the table is small is one extra HTTP
 // round-trip that returns 0 rows.
+//
+// REQUIRED: callers MUST include a stable `.order(<unique column>)` on
+// the returned builder. Without ORDER BY, Postgres is free to return
+// rows in any order across queries — pagination then silently drops or
+// duplicates rows because `.range(0,999)` and `.range(1000,1999)` see
+// inconsistent row positions. Use `.order("id")` for tables with an
+// integer PK; use a (non-unique-col, "id") tiebreaker pair if a display
+// order matters. The total returned count can match the true row count
+// even when individual rows are missing — there's no silent failure
+// signal, so this is an easy bug to ship.
 
 type RangedResult<T> = {
   data: T[] | null;

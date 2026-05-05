@@ -499,6 +499,8 @@ export async function fetchProjectionsData(
       .eq("upload_id", upload.id)
       .gte("match_start", `${earliest}T00:00:00Z`)
       .lte("match_start", `${latest}T23:59:59Z`)
+      // Stable ordering required for paginated .range().
+      .order("id")
       .range(from, from + 999);
     if (error) throw new Error(`Registrations fetch: ${error.message}`);
     if (!data || data.length === 0) break;

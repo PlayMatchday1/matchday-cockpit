@@ -148,7 +148,11 @@ export default function PartnerDetailAdmin({
             )
             .eq("upload_id", upload.id)
             .ilike("field", `%${venueName}%`)
+            // match_start alone isn't unique — many registrations share
+            // a match_start, so .range() pagination needs an id
+            // tiebreaker to stay stable across page queries.
             .order("match_start")
+            .order("id")
             .range(from, from + PAGE - 1);
           if (error) throw new Error(`Reg fetch: ${error.message}`);
           if (!data || data.length === 0) break;

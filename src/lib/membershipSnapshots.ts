@@ -26,15 +26,19 @@ export async function refreshMembershipSnapshots(opts: {
   const now = opts.now ?? new Date();
 
   const [members, attendance] = await Promise.all([
+    // Stable .order() required so selectAll's paginated .range()
+    // doesn't drop or duplicate rows — see supabasePagination.ts.
     selectAll<MemberLike>(() =>
       supabase
         .from("fin_members")
-        .select("status,price_cents,email,activation_date,canceled_at,city"),
+        .select("status,price_cents,email,activation_date,canceled_at,city")
+        .order("id"),
     ),
     selectAll<AttendanceRow>(() =>
       supabase
         .from("match_registrations")
-        .select("match_start,payment_type,email"),
+        .select("match_start,payment_type,email")
+        .order("id"),
     ),
   ]);
 

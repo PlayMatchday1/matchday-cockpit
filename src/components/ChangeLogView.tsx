@@ -129,10 +129,15 @@ export default function ChangeLogView() {
     // returned the most-recent 1000 audit entries no matter what filters
     // the user picked.
     selectAll<ChangeLogEntry>(() => {
+      // changed_at alone isn't unique — bulk operations can stamp
+      // multiple rows at the same millisecond — so add id desc as a
+      // tiebreaker to keep .range() pagination stable. Display order
+      // (most-recent first) is preserved.
       let q = supabase
         .from("fin_change_log")
         .select("*")
-        .order("changed_at", { ascending: false });
+        .order("changed_at", { ascending: false })
+        .order("id", { ascending: false });
       if (dateFrom) q = q.gte("changed_at", `${dateFrom}T00:00:00`);
       if (dateTo) q = q.lte("changed_at", `${dateTo}T23:59:59`);
       return q;

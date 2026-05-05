@@ -189,6 +189,10 @@ export async function fetchWeekMatchPnL(
       .eq("upload_id", uploadId)
       .gte("match_start", isoStart)
       .lte("match_start", isoEnd)
+      // Stable ordering required for paginated .range() — without an
+      // ORDER BY, Postgres can return rows in different orders across
+      // page queries, silently dropping or duplicating rows.
+      .order("id")
       .range(from, from + 999);
     if (error) throw new Error(`Match P&L fetch: ${error.message}`);
     if (!data || data.length === 0) break;
