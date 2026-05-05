@@ -27,7 +27,7 @@ export default function DataPage() {
           <section className="mb-12">
             <SectionHeader
               title="Stripe data"
-              subtitle="Charges and subscription payments. API sync is the primary path; manual CSV upload is a fallback."
+              subtitle="Charges and subscription payments. Synced automatically from Stripe."
             />
             <StripeUploader />
           </section>
