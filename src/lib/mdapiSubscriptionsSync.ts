@@ -3,38 +3,61 @@
 // Pipeline:
 //   1. Authenticate via the Phase 1 MatchDay API helper.
 //   2. Enumerate cities via /admin/cities (bare array, 9 cities).
-//   3. Nested loop: city × {ACTIVE, CANCELED} × pages. See "Why only
-//      two statuses?" below — this isn't an oversight, it's a
-//      deliberate workaround for a server-side filter bug.
+//   3. Nested loop: city × {ACTIVE, CANCELED, PAST_DUE} × pages.
+//      See "Status loop strategy" below — the 3-value choice is a
+//      deliberate workaround for an inconsistent server-side filter.
 //   4. Map each row to snake_case columns + raw + synced_at, with
 //      city_identifier synthesized from the loop variable (the row
 //      body has no cityIdentifier field, only a slug like "ATX13").
 //   5. Dedupe in memory by membership_id (same row can come back
-//      under both status queries; see workaround below).
+//      under multiple status queries; see strategy below).
 //   6. Upsert in batches of 500 onConflict=membership_id.
 //
-// === Why only two statuses? ===
+// === Status loop strategy ===
 // The /admin/subscriptions endpoint accepts a `status` filter param,
 // validated against a 9-value enum (ACTIVE, INACTIVE, CANCELED,
 // INCOMPLETE, INCOMPLETE_EXPIRED, PAST_DUE, PAUSED, UNPAID,
-// ADDED_FROM_ADMIN). But probe (May 2026) showed:
-//   - status=ACTIVE: filter is strict, returns only true actives.
-//   - status=anything-else: filter is silently IGNORED — returns
-//     all non-ACTIVE memberships in the city, paginated, regardless
-//     of which non-ACTIVE value was sent.
-// The row's `status` field on each record is ground truth (set per
-// record, not echoed from the query). So calling status=CANCELED
-// gives us the full non-active set in one paginated loop. We pick
-// CANCELED rather than (e.g.) PAUSED because CANCELED is what most
-// of those rows actually report as their stored status — least
-// confusing in logs.
+// ADDED_FROM_ADMIN). Probe (May 2026) found the filter behaves
+// inconsistently across values:
 //
-// If Vitaly fixes the broken filter someday, this sync will silently
-// undercount non-active members. The sanity log at the end of this
-// function catches that — ACTIVE-loop rows should be 100%
-// row.status=ACTIVE; CANCELED-loop rows should be 0%
-// row.status=ACTIVE. If those invariants break, the API behavior
-// shifted and the strategy needs revisiting.
+//   Filter STRICT (returns only matching rows):
+//     - ACTIVE   → returns only row.status=ACTIVE
+//     - PAST_DUE → returns only row.status=PAST_DUE
+//
+//   Filter IGNORED (returns the same dataset regardless of value):
+//     - CANCELED, INCOMPLETE, INCOMPLETE_EXPIRED, PAUSED, UNPAID,
+//       INACTIVE, ADDED_FROM_ADMIN
+//     The "ignored dump" returns CANCELED + PAST_DUE rows only,
+//     NOT all non-actives — INCOMPLETE_EXPIRED rows are excluded
+//     from the dump entirely.
+//
+// We loop over [ACTIVE, CANCELED, PAST_DUE] and dedupe by
+// membership_id:
+//   - ACTIVE   → strict; captures actives.
+//   - CANCELED → exploits the ignored-filter behavior to capture
+//                CANCELED + PAST_DUE rows in one paginated loop.
+//   - PAST_DUE → strict; defensive duplicate of the PAST_DUE rows
+//                already returned by the CANCELED dump. If Vitaly
+//                ever fixes CANCELED to be strict, the dump will
+//                drop its PAST_DUE rows and we'd silently lose them
+//                without this explicit loop.
+//
+// We deliberately do NOT capture INCOMPLETE_EXPIRED rows. They're
+// unreachable via /admin/subscriptions (no filter returns them),
+// and they represent abandoned Stripe checkouts that generated $0
+// revenue and never became real members. Not relevant to the
+// cockpit.
+//
+// The row's `status` field on each record is ground truth (set per
+// record, not echoed from the query). The sanity log at the end of
+// this function catches behavior shifts:
+//   - ACTIVE loop:   must be 100% row.status=ACTIVE
+//   - PAST_DUE loop: must be 100% row.status=PAST_DUE
+//   - CANCELED loop: must be 0% row.status=ACTIVE (ACTIVE bleeding
+//                    into the dump would mean the strict-ACTIVE
+//                    filter has loosened)
+// Any of these breaking means the API behavior shifted and the
+// strategy needs revisiting.
 //
 // === Other endpoint quirks (from probe, May 2026) ===
 //   - totalItems is broken (returns 0 even with 100 rows). Termination
@@ -57,10 +80,10 @@ import {
 const PAGE_LIMIT = 100;
 const UPSERT_BATCH = 500;
 
-// Two statuses by design — see "Why only two statuses?" in the file
-// header. ACTIVE gives us strict actives; CANCELED triggers the
-// broken-filter behavior that returns all non-actives.
-const STATUSES = ["ACTIVE", "CANCELED"] as const;
+// Three statuses by design — see "Status loop strategy" in the file
+// header. ACTIVE and PAST_DUE are strict filters; CANCELED triggers
+// the ignored-filter dump (returns CANCELED + PAST_DUE rows).
+const STATUSES = ["ACTIVE", "CANCELED", "PAST_DUE"] as const;
 
 type CityRow = { abbr?: string };
 
@@ -125,13 +148,15 @@ export type MdapiSubscriptionsSyncResult = {
   // rather than crashing — we want partial progress over no progress.
   loopErrors: Record<string, string>;
   // Sanity invariants — see file header. Healthy state:
-  //   activeLoop.actuallyActive === activeLoop.fetched (100%)
-  //   canceledLoop.actuallyActive === 0 (0%)
-  // If these break, the broken-filter workaround has broken (Vitaly
-  // fixed it server-side) and the sync strategy needs revisiting.
+  //   activeLoop:   actuallyActive === fetched (100%)
+  //   pastDueLoop:  actuallyPastDue === fetched (100%)
+  //   canceledLoop: actuallyActive === 0 (no ACTIVE bleed)
+  // If any of these break, API behavior shifted and the strategy
+  // needs revisiting.
   loopSanity: {
     activeLoop: { fetched: number; actuallyActive: number };
     canceledLoop: { fetched: number; actuallyActive: number };
+    pastDueLoop: { fetched: number; actuallyPastDue: number };
   };
   durationMs: number;
 };
@@ -181,6 +206,7 @@ export async function syncMdapiSubscriptions(
   const sanity = {
     activeLoop: { fetched: 0, actuallyActive: 0 },
     canceledLoop: { fetched: 0, actuallyActive: 0 },
+    pastDueLoop: { fetched: 0, actuallyPastDue: 0 },
   };
   const syncedAt = new Date().toISOString();
 
@@ -221,9 +247,17 @@ export async function syncMdapiSubscriptions(
           }
           fetchedTotal++;
           // Track sanity invariants by which loop the row came from.
-          const counter = status === "ACTIVE" ? sanity.activeLoop : sanity.canceledLoop;
-          counter.fetched++;
-          if (r.status === "ACTIVE") counter.actuallyActive++;
+          if (status === "ACTIVE") {
+            sanity.activeLoop.fetched++;
+            if (r.status === "ACTIVE") sanity.activeLoop.actuallyActive++;
+          } else if (status === "PAST_DUE") {
+            sanity.pastDueLoop.fetched++;
+            if (r.status === "PAST_DUE") sanity.pastDueLoop.actuallyPastDue++;
+          } else {
+            // CANCELED loop — measures unwanted ACTIVE bleed.
+            sanity.canceledLoop.fetched++;
+            if (r.status === "ACTIVE") sanity.canceledLoop.actuallyActive++;
+          }
           dedupedById.set(r.membershipId, mapToDbRow(r, cityAbbr, syncedAt));
         }
         // totalItems is broken on this endpoint — terminate on
@@ -234,9 +268,10 @@ export async function syncMdapiSubscriptions(
   }
 
   // --- 3. Sanity log ---
-  // ACTIVE-loop should be 100% row.status=ACTIVE.
-  // CANCELED-loop should be 0% row.status=ACTIVE (broken filter
-  // returns non-actives only).
+  // ACTIVE loop:   should be 100% row.status=ACTIVE.
+  // PAST_DUE loop: should be 100% row.status=PAST_DUE.
+  // CANCELED loop: should be 0% row.status=ACTIVE (no ACTIVE bleed
+  //                into the dump).
   if (
     sanity.activeLoop.fetched > 0 &&
     sanity.activeLoop.actuallyActive < sanity.activeLoop.fetched
@@ -250,6 +285,19 @@ export async function syncMdapiSubscriptions(
         `(${pct}% actually active). Expected 100%. The strict-ACTIVE filter behavior may have changed.`,
     );
   }
+  if (
+    sanity.pastDueLoop.fetched > 0 &&
+    sanity.pastDueLoop.actuallyPastDue < sanity.pastDueLoop.fetched
+  ) {
+    const pct = (
+      (sanity.pastDueLoop.actuallyPastDue / sanity.pastDueLoop.fetched) *
+      100
+    ).toFixed(1);
+    console.warn(
+      `⚠ Sanity violation: PAST_DUE-loop returned ${sanity.pastDueLoop.fetched - sanity.pastDueLoop.actuallyPastDue} rows where row.status≠PAST_DUE ` +
+        `(${pct}% actually past_due). Expected 100%. The strict-PAST_DUE filter behavior may have changed.`,
+    );
+  }
   if (sanity.canceledLoop.actuallyActive > 0) {
     const pct = (
       (sanity.canceledLoop.actuallyActive / sanity.canceledLoop.fetched) *
@@ -257,7 +305,7 @@ export async function syncMdapiSubscriptions(
     ).toFixed(1);
     console.warn(
       `⚠ Sanity violation: CANCELED-loop returned ${sanity.canceledLoop.actuallyActive} rows with row.status=ACTIVE ` +
-        `(${pct}% of loop). Expected 0%. The broken-filter workaround may no longer apply — review sync strategy.`,
+        `(${pct}% of loop). Expected 0%. The strict-ACTIVE filter may have loosened — review sync strategy.`,
     );
   }
 
