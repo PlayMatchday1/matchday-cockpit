@@ -26,25 +26,13 @@ import { commitStripe } from "@/lib/financeImport";
 import { syncStripeCharges } from "@/lib/stripeSync";
 import { syncMdapiReviews } from "@/lib/mdapiReviewsSync";
 import { syncMdapiSubscriptions } from "@/lib/mdapiSubscriptionsSync";
+import { runWithLog, type TriggeredBy } from "@/lib/syncLogging";
 
 // Stripe ~60s + mdapi_reviews ~10s + mdapi_subscriptions ~60s typical.
 // 300s gives ~2× headroom; if we ever hit it, the right answer is
 // async-trigger pattern, not just bumping the cap further.
 export const maxDuration = 300;
 export const runtime = "nodejs";
-
-type TriggeredBy = "manual" | "cron";
-type SourceName = "stripe-api" | "mdapi-reviews" | "mdapi-subscriptions";
-
-// fin_sync_log columns the orchestrator writes on success. Stripe-
-// specific columns (charges_*) stay null for mdapi syncs.
-type LogPatch = Partial<{
-  rows_imported: number;
-  rows_replaced: number;
-  charges_fetched: number;
-  charges_succeeded: number;
-  charges_skipped: number;
-}>;
 
 function constantTimeMatch(a: string, b: string): boolean {
   const ab = Buffer.from(a, "utf8");
@@ -91,70 +79,6 @@ async function runStripeSync(supabase: SupabaseClient) {
     rowsReplaced = result.rowsReplaced ?? 0;
   }
   return { ...sync, rowsReplaced };
-}
-
-type RunResult<T> =
-  | { ok: true; result: T }
-  | { ok: false; error: string };
-
-async function runWithLog<T>(
-  source: SourceName,
-  triggeredBy: TriggeredBy,
-  supabase: SupabaseClient,
-  fn: (sb: SupabaseClient) => Promise<T>,
-  toLogPatch: (result: T) => LogPatch,
-): Promise<RunResult<T>> {
-  // Insert log row at start so a crash mid-sync still leaves a trace
-  // (started_at set, completed_at + error_message stay null).
-  const { data: logInsert, error: logErr } = await supabase
-    .from("fin_sync_log")
-    .insert({
-      source,
-      triggered_by: triggeredBy,
-      started_at: new Date().toISOString(),
-    })
-    .select("id")
-    .single();
-  if (logErr || !logInsert) {
-    return {
-      ok: false,
-      error: `Failed to create sync log row for ${source}: ${logErr?.message ?? "unknown"}`,
-    };
-  }
-  const logId = logInsert.id as string;
-
-  try {
-    const result = await fn(supabase);
-    const patch = toLogPatch(result);
-    const { error: updateErr } = await supabase
-      .from("fin_sync_log")
-      .update({ completed_at: new Date().toISOString(), ...patch })
-      .eq("id", logId);
-    if (updateErr) {
-      // Log-update failure is non-fatal — the sync itself succeeded.
-      console.warn(
-        `fin_sync_log update failed for ${source}/${logId}:`,
-        updateErr.message,
-      );
-    }
-    return { ok: true, result };
-  } catch (e) {
-    const msg = e instanceof Error ? e.message : String(e);
-    const { error: updateErr } = await supabase
-      .from("fin_sync_log")
-      .update({
-        completed_at: new Date().toISOString(),
-        error_message: msg,
-      })
-      .eq("id", logId);
-    if (updateErr) {
-      console.warn(
-        `fin_sync_log error-update failed for ${source}/${logId}:`,
-        updateErr.message,
-      );
-    }
-    return { ok: false, error: msg };
-  }
 }
 
 export async function POST(req: Request) {

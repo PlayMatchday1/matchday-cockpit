@@ -6,6 +6,7 @@ import MatchesUploader from "@/components/MatchesUploader";
 import MembersUploader from "@/components/MembersUploader";
 import ReviewsUploader from "@/components/ReviewsUploader";
 import StripeUploader from "@/components/StripeUploader";
+import SyncCard from "@/components/SyncCard";
 import { canAccess, useAuth } from "@/lib/useAuth";
 
 export default function DataPage() {
@@ -37,7 +38,16 @@ export default function DataPage() {
               title="Members data"
               subtitle="Active subscribers and cancellations from Stripe."
             />
-            <MembersUploader />
+            <div className="space-y-6">
+              <SyncCard
+                title="Sync from MatchDay API"
+                description="Refreshes mdapi_subscriptions from /admin/subscriptions across all cities."
+                source="mdapi-subscriptions"
+                endpoint="/api/sync/subscriptions"
+                estimatedDuration="~60 seconds"
+              />
+              <MembersUploader />
+            </div>
           </section>
         </>
       )}
@@ -55,7 +65,15 @@ export default function DataPage() {
           title="Reviews data"
           subtitle="Star ratings and manager attribution."
         />
-        <ReviewsUploader />
+        <div className="space-y-6">
+          <SyncCard
+            title="Sync from MatchDay API"
+            description="Refreshes mdapi_reviews from /admin/matches/reviews."
+            source="mdapi-reviews"
+            endpoint="/api/sync/reviews"
+          />
+          <ReviewsUploader />
+        </div>
       </section>
     </PagePermissionGuard>
   );
