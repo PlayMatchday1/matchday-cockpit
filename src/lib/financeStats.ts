@@ -1673,6 +1673,91 @@ export function venueAllocatedMemberRevenueFor(
   return (venueSpots / cityTotal) * cityMembership;
 }
 
+// Per-match member-revenue allocation for the Match P&L subtab.
+//
+// Extends `venueAllocatedMemberRevenueFor` one level deeper —
+// venue-month → venue-month-match — so individual matches reconcile
+// with the venue/month total Field Ranking already shows. Same
+// pro-rata mental model: split the venue's monthly member rev
+// across that month's matches in proportion to MEMBER fills at
+// each match.
+//
+//   match_member_rev =
+//     (member_spots_at_match / month_member_spots_at_venue)
+//     × venueAllocatedMemberRevenueFor(...)
+//
+// Sum across a venue's matches in a month equals the venue's monthly
+// member rev. Sum across venues equals city-month membership rev.
+//
+// month_member_spots_at_venue comes from the pre-aggregated
+// fin_member_spots table (same source Field Ranking uses) — keeps
+// the upload-aggregate as the single source of truth even though
+// the per-match count comes from match_registrations.
+const MONTH_NAMES_FROM_ISO = [
+  "Jan", "Feb", "Mar", "Apr", "May", "Jun",
+  "Jul", "Aug", "Sep", "Oct", "Nov", "Dec",
+];
+
+function isoToQ2Month(iso: string): Q2Month | null {
+  const m = iso.match(/^(\d{4})-(\d{2})-/);
+  if (!m) return null;
+  const monthIdx = parseInt(m[2], 10) - 1;
+  if (monthIdx < 0 || monthIdx > 11) return null;
+  const label = `${MONTH_NAMES_FROM_ISO[monthIdx]} ${m[1]}`;
+  if ((Q2_MONTHS as readonly string[]).includes(label)) {
+    return label as Q2Month;
+  }
+  return null;
+}
+
+export function matchAllocatedMemberRevenueFor(
+  data: FinanceData,
+  args: {
+    city: string;
+    venueName: string; // canonical (post-alias)
+    matchStartIso: string; // raw ISO timestamp; used for month bucketing
+    memberSpots: number; // count of MEMBER-payment registrations at this match
+  },
+): number {
+  if (args.memberSpots <= 0) return 0;
+
+  const month = isoToQ2Month(args.matchStartIso);
+  // Match outside Q2 (e.g. user navigated to a March or July week):
+  // Q2-keyed helpers would silently return 0 anyway, so short-circuit.
+  if (!month) return 0;
+
+  const monthMemberSpotsAtVenue = venueMemberSpotsFor(
+    data,
+    args.city,
+    args.venueName,
+    month,
+  ).member;
+
+  if (monthMemberSpotsAtVenue <= 0) {
+    // Venue has zero member spots in fin_member_spots for this month
+    // (e.g. fin_member_spots wasn't refreshed after a recent Members
+    // CSV upload, or a brand-new venue) but the match has MEMBER
+    // registrations. We can't compute pro-rata without the
+    // denominator — fall back to 0 so the column reads honest. Surface
+    // the discrepancy so it's investigable.
+    if (typeof console !== "undefined") {
+      console.warn(
+        `matchAllocatedMemberRevenueFor: ${args.venueName} ${month} has zero month_member_spots in fin_member_spots, but match ${args.matchStartIso} has ${args.memberSpots} MEMBER registrations — returning 0`,
+      );
+    }
+    return 0;
+  }
+
+  const monthMemberRev = venueAllocatedMemberRevenueFor(
+    data,
+    args.city,
+    args.venueName,
+    month,
+  );
+
+  return (args.memberSpots / monthMemberSpotsAtVenue) * monthMemberRev;
+}
+
 export type RankingRow = {
   venue: string;
   city: string;

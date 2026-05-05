@@ -22,6 +22,7 @@ type SortKey =
   | "city"
   | "spotsSold"
   | "grossRevenue"
+  | "memberRev"
   | "fieldCost"
   | "net"
   | "status";
@@ -102,7 +103,7 @@ export default function MatchPnL({
     setActiveRows(null);
     setCanceledRows([]);
     setError(null);
-    fetchWeekMatchPnL(supabase, weekStart, weekEnd, data.venues)
+    fetchWeekMatchPnL(supabase, weekStart, weekEnd, data)
       .then((result) => {
         if (cancelled) return;
         setActiveRows(result.active);
@@ -135,9 +136,12 @@ export default function MatchPnL({
     } else {
       setSortKey(k);
       // Default direction per column: net ascending (worst losses
-      // first), spotsSold/gross/cost descending, others ascending.
+      // first), spotsSold/gross/memberRev/cost descending, others ascending.
       setSortDir(
-        k === "spotsSold" || k === "grossRevenue" || k === "fieldCost"
+        k === "spotsSold" ||
+          k === "grossRevenue" ||
+          k === "memberRev" ||
+          k === "fieldCost"
           ? "desc"
           : "asc",
       );
@@ -171,6 +175,8 @@ export default function MatchPnL({
           return (a.spotsSold - b.spotsSold) * dir;
         case "grossRevenue":
           return (a.grossRevenue - b.grossRevenue) * dir;
+        case "memberRev":
+          return (a.allocatedMemberRev - b.allocatedMemberRev) * dir;
         case "fieldCost":
           return ((a.fieldCost ?? 0) - (b.fieldCost ?? 0)) * dir;
         case "net":
@@ -220,14 +226,23 @@ export default function MatchPnL({
   // Per-city subtotals for the section headers.
   function citySubtotal(rows: MatchPnLRow[]) {
     let gross = 0;
+    let memberRev = 0;
     let cost = 0;
     let losses = 0;
     for (const r of rows) {
       gross += r.grossRevenue;
+      memberRev += r.allocatedMemberRev;
       if (r.fieldCost !== null) cost += r.fieldCost;
       if (r.status === "loss") losses++;
     }
-    return { matches: rows.length, gross, cost, net: gross - cost, losses };
+    return {
+      matches: rows.length,
+      gross,
+      memberRev,
+      cost,
+      net: gross + memberRev - cost,
+      losses,
+    };
   }
 
   return (
@@ -276,6 +291,12 @@ export default function MatchPnL({
                 gross{" "}
                 <span className="font-mono font-bold tabular-nums text-deep-green">
                   {fmtUsd(summary.totalRevenue)}
+                </span>
+              </span>
+              <span>
+                + member rev{" "}
+                <span className="font-mono font-bold tabular-nums text-deep-green">
+                  {fmtUsd(summary.totalMemberRev)}
                 </span>
               </span>
               <span>
@@ -346,6 +367,15 @@ export default function MatchPnL({
                 <SortHeader k="city" label="City" sortKey={sortKey} sortDir={sortDir} onClick={toggleSort} align="left" />
                 <SortHeader k="spotsSold" label="Spots Sold" sortKey={sortKey} sortDir={sortDir} onClick={toggleSort} align="right" />
                 <SortHeader k="grossRevenue" label="Gross Revenue" sortKey={sortKey} sortDir={sortDir} onClick={toggleSort} align="right" />
+                <SortHeader
+                  k="memberRev"
+                  label="Allocated Member Rev"
+                  sortKey={sortKey}
+                  sortDir={sortDir}
+                  onClick={toggleSort}
+                  align="right"
+                  tooltip="Each match's share of monthly membership revenue, allocated based on member attendance at this venue. Reconciles with Field Ranking totals."
+                />
                 <SortHeader k="fieldCost" label="Field Cost" sortKey={sortKey} sortDir={sortDir} onClick={toggleSort} align="right" />
                 <SortHeader k="net" label="Net" sortKey={sortKey} sortDir={sortDir} onClick={toggleSort} align="right" />
                 <SortHeader k="status" label="Status" sortKey={sortKey} sortDir={sortDir} onClick={toggleSort} align="left" />
@@ -354,7 +384,7 @@ export default function MatchPnL({
             {activeRows === null ? (
               <tbody>
                 <tr>
-                  <td colSpan={7} className="px-3 py-8 text-center text-sm text-deep-green/55">
+                  <td colSpan={8} className="px-3 py-8 text-center text-sm text-deep-green/55">
                     Loading match P&L…
                   </td>
                 </tr>
@@ -362,7 +392,7 @@ export default function MatchPnL({
             ) : cityGroups.length === 0 ? (
               <tbody>
                 <tr>
-                  <td colSpan={7} className="px-3 py-8 text-center text-sm text-deep-green/55">
+                  <td colSpan={8} className="px-3 py-8 text-center text-sm text-deep-green/55">
                     No matches with cost data this week.
                     {missingCost.length > 0 &&
                       ` (${missingCost.length} matches without cost set — see below.)`}
@@ -376,13 +406,14 @@ export default function MatchPnL({
                   <tbody key={g.city}>
                     <tr className="border-t-2 border-cream-line bg-cream-soft/50">
                       <td
-                        colSpan={7}
+                        colSpan={8}
                         className="px-3 py-2 text-[10px] font-bold uppercase tracking-[0.12em] text-deep-green"
                       >
                         {g.city}
                         <span className="ml-2 font-normal text-deep-green/55">
                           · {sub.matches} match{sub.matches === 1 ? "" : "es"} ·
-                          gross {fmtUsd(sub.gross)} · cost {fmtUsd(sub.cost)} ·
+                          gross {fmtUsd(sub.gross)} · + member{" "}
+                          {fmtUsd(sub.memberRev)} · cost {fmtUsd(sub.cost)} ·
                           net{" "}
                           <span
                             className={`font-bold ${
@@ -503,6 +534,7 @@ function SortHeader({
   sortDir,
   onClick,
   align,
+  tooltip,
 }: {
   k: SortKey;
   label: string;
@@ -510,6 +542,7 @@ function SortHeader({
   sortDir: SortDir;
   onClick: (k: SortKey) => void;
   align: "left" | "right";
+  tooltip?: string;
 }) {
   const active = sortKey === k;
   const arrow = active ? (sortDir === "asc" ? " ▲" : " ▼") : "";
@@ -518,6 +551,7 @@ function SortHeader({
       <button
         type="button"
         onClick={() => onClick(k)}
+        title={tooltip}
         className={`inline-flex items-center gap-1 transition hover:text-deep-green ${active ? "text-deep-green" : ""}`}
       >
         {label}
@@ -552,6 +586,9 @@ function Row({
       </td>
       <td className="px-3 py-2 text-right align-top font-mono tabular-nums text-deep-green">
         {fmtUsd(row.grossRevenue)}
+      </td>
+      <td className="px-3 py-2 text-right align-top font-mono tabular-nums text-deep-green">
+        {fmtUsd(row.allocatedMemberRev)}
       </td>
       <td className="px-3 py-2 text-right align-top">
         {row.fieldCost === null ? (

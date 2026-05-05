@@ -32,7 +32,8 @@
 //         surfaced from this data source.
 
 import type { SupabaseClient } from "@supabase/supabase-js";
-import type { FinVenue } from "./useFinanceData";
+import type { FinanceData } from "./useFinanceData";
+import { matchAllocatedMemberRevenueFor } from "./financeStats";
 
 // Allow-list of player-booking payment types. Anything else (NULL,
 // rental codes, comp markers) gets filtered out as not a real
@@ -58,18 +59,27 @@ export type MatchPnLRow = {
   dayLabel: string; // "Mon"
   timeLabel: string; // "7:30 PM"
   // Metrics
-  spotsSold: number;
-  grossRevenue: number;
+  spotsSold: number; // total fills (DPP + Member)
+  memberSpots: number; // subset of spotsSold; drives allocatedMemberRev
+  grossRevenue: number; // DPP only — members pay $0 per match
+  // Pro-rata share of the venue's month membership rev. See
+  // matchAllocatedMemberRevenueFor in financeStats.ts. Reconciles
+  // with Field Ranking's per-venue-month total when summed across
+  // a venue's matches in a month.
+  allocatedMemberRev: number;
   fieldCost: number | null;
+  // net = grossRevenue + allocatedMemberRev − fieldCost. Null when
+  // fieldCost is null (cost not set on venue).
   net: number | null;
   status: MatchPnLStatus;
 };
 
 export type MatchPnLSummary = {
   totalMatches: number;
-  totalRevenue: number;
+  totalRevenue: number; // DPP gross
+  totalMemberRev: number; // allocated member rev
   totalFieldCost: number; // sum across rows where cost is known
-  net: number; // totalRevenue − totalFieldCost
+  net: number; // (totalRevenue + totalMemberRev) − totalFieldCost
   losingMatches: number;
   matchesWithoutCost: number;
 };
@@ -190,8 +200,9 @@ export async function fetchWeekMatchPnL(
   supabase: SupabaseClient,
   weekStart: Date,
   weekEnd: Date, // Sunday end-of-day
-  venues: FinVenue[],
+  data: FinanceData,
 ): Promise<FetchWeekMatchPnLResult> {
+  const venues = data.venues;
   const uploadId = await fetchCurrentUploadId(supabase);
   if (uploadId === null) return { active: [], canceled: [] };
 
@@ -256,6 +267,7 @@ export async function fetchWeekMatchPnL(
     venueDisplayName: string;
     city: string;
     spotsSold: number;
+    memberSpots: number;
     grossRevenue: number;
   };
   const buckets = new Map<string, Bucket>();
@@ -275,19 +287,39 @@ export async function fetchWeekMatchPnL(
         venueDisplayName: venue?.venue_name ?? (r.field as string),
         city: venue?.city ?? "—",
         spotsSold: 0,
+        memberSpots: 0,
         grossRevenue: 0,
       };
       buckets.set(key, b);
     }
     b.spotsSold += 1;
-    b.grossRevenue += Number(r.match_price_paid ?? 0) || 0;
+    if ((r.payment_type ?? "").toUpperCase() === "MEMBER") {
+      b.memberSpots += 1;
+    } else {
+      b.grossRevenue += Number(r.match_price_paid ?? 0) || 0;
+    }
   }
 
   const active: MatchPnLRow[] = [];
   for (const b of buckets.values()) {
     const venue = b.venueId !== null ? (venueById.get(b.venueId) ?? null) : null;
     const cost = venue?.cost_per_match ?? null;
-    const net = cost === null ? null : b.grossRevenue - cost;
+    // Allocated member rev: pro-rata of the venue's monthly membership
+    // rev (Field Ranking's number) split across the month's matches
+    // in proportion to MEMBER fills at each match. Returns 0 cleanly
+    // when memberSpots=0, when venue is unresolved, or when the match
+    // falls outside Q2 — see helper for edge-case handling.
+    const allocatedMemberRev =
+      venue && b.memberSpots > 0
+        ? matchAllocatedMemberRevenueFor(data, {
+            city: b.city,
+            venueName: venue.venue_name,
+            matchStartIso: b.matchStartIso,
+            memberSpots: b.memberSpots,
+          })
+        : 0;
+    const net =
+      cost === null ? null : b.grossRevenue + allocatedMemberRev - cost;
     active.push({
       matchStartIso: b.matchStartIso,
       matchStart: b.matchStart,
@@ -298,7 +330,9 @@ export async function fetchWeekMatchPnL(
       dayLabel: dayLabelFromDate(b.matchStart),
       timeLabel: timeLabelFromDate(b.matchStart),
       spotsSold: b.spotsSold,
+      memberSpots: b.memberSpots,
       grossRevenue: b.grossRevenue,
+      allocatedMemberRev,
       fieldCost: cost,
       net,
       status: statusFor(net),
@@ -330,7 +364,13 @@ export async function fetchWeekMatchPnL(
       dayLabel: dayLabelFromDate(matchStart),
       timeLabel: timeLabelFromDate(matchStart),
       spotsSold: 0,
+      memberSpots: 0,
       grossRevenue: 0,
+      // Canceled match → no members attended → zero allocation. The
+      // upload-time fin_member_spots aggregate already excludes
+      // canceled matches' rows, so we stay reconciled with the
+      // venue-month totals.
+      allocatedMemberRev: 0,
       fieldCost: cost,
       net: cost === null ? null : -cost,
       status: "canceled",
@@ -361,11 +401,13 @@ export function summarizeCanceled(rows: MatchPnLRow[]): CanceledSummary {
 
 export function summarize(rows: MatchPnLRow[]): MatchPnLSummary {
   let totalRevenue = 0;
+  let totalMemberRev = 0;
   let totalFieldCost = 0;
   let losingMatches = 0;
   let matchesWithoutCost = 0;
   for (const r of rows) {
     totalRevenue += r.grossRevenue;
+    totalMemberRev += r.allocatedMemberRev;
     if (r.fieldCost !== null) totalFieldCost += r.fieldCost;
     else matchesWithoutCost++;
     if (r.status === "loss") losingMatches++;
@@ -373,8 +415,9 @@ export function summarize(rows: MatchPnLRow[]): MatchPnLSummary {
   return {
     totalMatches: rows.length,
     totalRevenue,
+    totalMemberRev,
     totalFieldCost,
-    net: totalRevenue - totalFieldCost,
+    net: totalRevenue + totalMemberRev - totalFieldCost,
     losingMatches,
     matchesWithoutCost,
   };
