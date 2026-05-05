@@ -178,6 +178,42 @@ function aggregateRevenue<T extends { type: FinanceData["revenue"][number]["type
   return total;
 }
 
+// For the current month in projection mode, lift the aggregated total
+// when the operator's PROJECTION row for Membership exceeds realized
+// Membership. Membership bills in bursts (subscribers have rolling
+// renewal dates throughout the month), so realized accumulates over
+// the first ~10 days and lags the operator's full-month estimate. The
+// lib's default "realized only for current month" is correct for DPP
+// (steady daily flow + extrapolation factor handles the gap) but
+// understates Membership for the early portion of the month.
+//
+// Math: supplement = max(0, projectionMembership − realizedMembership)
+//   - Early month: projection > realized → supplement lifts to projection
+//   - Late month: realized has caught up or exceeded → supplement = 0
+//   - No PROJECTION row → projection = 0 → supplement = 0 (no-op)
+//
+// Applied to net, gross, and fees symmetrically so the breakdown
+// stays internally consistent.
+function currentMonthMembershipSupplement(
+  data: FinanceData,
+  month: Q2Month,
+  pickField: (r: FinanceData["revenue"][number]) => number,
+  mode: Mode,
+  now: Date,
+): number {
+  if (mode !== "projection") return 0;
+  if (!isCurrentQ2(now, month)) return 0;
+  let realized = 0;
+  let projection = 0;
+  for (const r of data.revenue) {
+    if (r.month !== month) continue;
+    if (r.type !== "Membership") continue;
+    if (r.source === "PROJECTION") projection += pickField(r);
+    else realized += pickField(r);
+  }
+  return Math.max(0, projection - realized);
+}
+
 export function netRevenueFor(
   data: FinanceData,
   month: Q2Month,
@@ -189,7 +225,10 @@ export function netRevenueFor(
     mode === "projection" ? dppExtrapolationFactor(month, now) : 1;
   const isFutureProjection =
     mode === "projection" && isFutureMonth(month, now);
-  return aggregateRevenue(rows, (r) => r.net, factor, isFutureProjection);
+  return (
+    aggregateRevenue(rows, (r) => r.net, factor, isFutureProjection) +
+    currentMonthMembershipSupplement(data, month, (r) => r.net, mode, now)
+  );
 }
 
 export function grossRevenueFor(
@@ -203,7 +242,10 @@ export function grossRevenueFor(
     mode === "projection" ? dppExtrapolationFactor(month, now) : 1;
   const isFutureProjection =
     mode === "projection" && isFutureMonth(month, now);
-  return aggregateRevenue(rows, (r) => r.gross, factor, isFutureProjection);
+  return (
+    aggregateRevenue(rows, (r) => r.gross, factor, isFutureProjection) +
+    currentMonthMembershipSupplement(data, month, (r) => r.gross, mode, now)
+  );
 }
 
 export function feesFor(
@@ -217,7 +259,10 @@ export function feesFor(
     mode === "projection" ? dppExtrapolationFactor(month, now) : 1;
   const isFutureProjection =
     mode === "projection" && isFutureMonth(month, now);
-  return aggregateRevenue(rows, (r) => r.fees, factor, isFutureProjection);
+  return (
+    aggregateRevenue(rows, (r) => r.fees, factor, isFutureProjection) +
+    currentMonthMembershipSupplement(data, month, (r) => r.fees, mode, now)
+  );
 }
 
 export function netRevenueByCityFor(
