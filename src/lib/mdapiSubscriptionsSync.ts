@@ -3,17 +3,43 @@
 // Pipeline:
 //   1. Authenticate via the Phase 1 MatchDay API helper.
 //   2. Enumerate cities via /admin/cities (bare array, 9 cities).
-//   3. Nested loop: city × status × pages. The endpoint requires
-//      cityIdentifier + status + sortColumn + sortDirection — sending
-//      anything less returns a 500 (validated empirically).
+//   3. Nested loop: city × {ACTIVE, CANCELED} × pages. See "Why only
+//      two statuses?" below — this isn't an oversight, it's a
+//      deliberate workaround for a server-side filter bug.
 //   4. Map each row to snake_case columns + raw + synced_at, with
 //      city_identifier synthesized from the loop variable (the row
 //      body has no cityIdentifier field, only a slug like "ATX13").
-//   5. Upsert in batches of 500 onConflict=membership_id.
+//   5. Dedupe in memory by membership_id (same row can come back
+//      under both status queries; see workaround below).
+//   6. Upsert in batches of 500 onConflict=membership_id.
 //
-// Endpoint quirks (from probe, May 2026):
+// === Why only two statuses? ===
+// The /admin/subscriptions endpoint accepts a `status` filter param,
+// validated against a 9-value enum (ACTIVE, INACTIVE, CANCELED,
+// INCOMPLETE, INCOMPLETE_EXPIRED, PAST_DUE, PAUSED, UNPAID,
+// ADDED_FROM_ADMIN). But probe (May 2026) showed:
+//   - status=ACTIVE: filter is strict, returns only true actives.
+//   - status=anything-else: filter is silently IGNORED — returns
+//     all non-ACTIVE memberships in the city, paginated, regardless
+//     of which non-ACTIVE value was sent.
+// The row's `status` field on each record is ground truth (set per
+// record, not echoed from the query). So calling status=CANCELED
+// gives us the full non-active set in one paginated loop. We pick
+// CANCELED rather than (e.g.) PAUSED because CANCELED is what most
+// of those rows actually report as their stored status — least
+// confusing in logs.
+//
+// If Vitaly fixes the broken filter someday, this sync will silently
+// undercount non-active members. The sanity log at the end of this
+// function catches that — ACTIVE-loop rows should be 100%
+// row.status=ACTIVE; CANCELED-loop rows should be 0%
+// row.status=ACTIVE. If those invariants break, the API behavior
+// shifted and the strategy needs revisiting.
+//
+// === Other endpoint quirks (from probe, May 2026) ===
 //   - totalItems is broken (returns 0 even with 100 rows). Termination
 //     uses data.length < limit — same pattern as mdapi_reviews.
+//   - sortColumn + sortDirection are REQUIRED (omitting either → 500).
 //   - sortDirection MUST be lowercase asc/desc (validator is strict).
 //   - Multi-value status (e.g. "ACTIVE,CANCELED") is rejected.
 //   - Bogus cityIdentifier returns 500, not 400 — caller responsibility
@@ -31,20 +57,10 @@ import {
 const PAGE_LIMIT = 100;
 const UPSERT_BATCH = 500;
 
-// All 9 statuses surfaced by the validator. Pulling all of them is
-// future-proof — easier to filter downstream than to discover missing
-// data later. Cost is negligible (~9× the per-city pagination loops).
-const STATUSES = [
-  "ACTIVE",
-  "INACTIVE",
-  "CANCELED",
-  "INCOMPLETE",
-  "INCOMPLETE_EXPIRED",
-  "PAST_DUE",
-  "PAUSED",
-  "UNPAID",
-  "ADDED_FROM_ADMIN",
-] as const;
+// Two statuses by design — see "Why only two statuses?" in the file
+// header. ACTIVE gives us strict actives; CANCELED triggers the
+// broken-filter behavior that returns all non-actives.
+const STATUSES = ["ACTIVE", "CANCELED"] as const;
 
 type CityRow = { abbr?: string };
 
@@ -99,7 +115,8 @@ type DbRow = {
 };
 
 export type MdapiSubscriptionsSyncResult = {
-  fetched: number; // rows received from API across all loops
+  fetched: number; // rows received from API across all loops (pre-dedupe)
+  uniqueMemberships: number; // rows after dedupe by membership_id
   upserted: number; // rows actually written
   cities: number;
   statuses: number;
@@ -107,6 +124,15 @@ export type MdapiSubscriptionsSyncResult = {
   // Per-(city, status) errors. Sync continues on per-loop failures
   // rather than crashing — we want partial progress over no progress.
   loopErrors: Record<string, string>;
+  // Sanity invariants — see file header. Healthy state:
+  //   activeLoop.actuallyActive === activeLoop.fetched (100%)
+  //   canceledLoop.actuallyActive === 0 (0%)
+  // If these break, the broken-filter workaround has broken (Vitaly
+  // fixed it server-side) and the sync strategy needs revisiting.
+  loopSanity: {
+    activeLoop: { fetched: number; actuallyActive: number };
+    canceledLoop: { fetched: number; actuallyActive: number };
+  };
   durationMs: number;
 };
 
@@ -139,9 +165,23 @@ export async function syncMdapiSubscriptions(
   }
 
   // --- 2. Nested loop: city × status × pages ---
-  const allRows: DbRow[] = [];
+  // Dedupe by membership_id — the broken-filter workaround means a
+  // row can appear in both ACTIVE and CANCELED loops if its true
+  // status is ACTIVE (CANCELED loop ignores filter, returns all
+  // non-actives... in theory; but if the filter ever starts working
+  // partially, we want last-write-wins to be safe). Cross-city
+  // collisions don't happen — verified by probe.
+  const dedupedById = new Map<number, DbRow>();
   const loopErrors: Record<string, string> = {};
   let apiCalls = 0;
+  let fetchedTotal = 0;
+  // Sanity counters — must be tracked separately per loop, not on the
+  // deduped Map (one row could come from either loop and we'd lose
+  // the attribution).
+  const sanity = {
+    activeLoop: { fetched: 0, actuallyActive: 0 },
+    canceledLoop: { fetched: 0, actuallyActive: 0 },
+  };
   const syncedAt = new Date().toISOString();
 
   for (const cityAbbr of cityAbbrs) {
@@ -179,7 +219,12 @@ export async function syncMdapiSubscriptions(
             // Skip malformed rows rather than crashing the upsert.
             continue;
           }
-          allRows.push(mapToDbRow(r, cityAbbr, syncedAt));
+          fetchedTotal++;
+          // Track sanity invariants by which loop the row came from.
+          const counter = status === "ACTIVE" ? sanity.activeLoop : sanity.canceledLoop;
+          counter.fetched++;
+          if (r.status === "ACTIVE") counter.actuallyActive++;
+          dedupedById.set(r.membershipId, mapToDbRow(r, cityAbbr, syncedAt));
         }
         // totalItems is broken on this endpoint — terminate on
         // partial-page only.
@@ -188,10 +233,41 @@ export async function syncMdapiSubscriptions(
     }
   }
 
-  // --- 3. Upsert in batches ---
+  // --- 3. Sanity log ---
+  // ACTIVE-loop should be 100% row.status=ACTIVE.
+  // CANCELED-loop should be 0% row.status=ACTIVE (broken filter
+  // returns non-actives only).
+  if (
+    sanity.activeLoop.fetched > 0 &&
+    sanity.activeLoop.actuallyActive < sanity.activeLoop.fetched
+  ) {
+    const pct = (
+      (sanity.activeLoop.actuallyActive / sanity.activeLoop.fetched) *
+      100
+    ).toFixed(1);
+    console.warn(
+      `⚠ Sanity violation: ACTIVE-loop returned ${sanity.activeLoop.fetched - sanity.activeLoop.actuallyActive} rows where row.status≠ACTIVE ` +
+        `(${pct}% actually active). Expected 100%. The strict-ACTIVE filter behavior may have changed.`,
+    );
+  }
+  if (sanity.canceledLoop.actuallyActive > 0) {
+    const pct = (
+      (sanity.canceledLoop.actuallyActive / sanity.canceledLoop.fetched) *
+      100
+    ).toFixed(1);
+    console.warn(
+      `⚠ Sanity violation: CANCELED-loop returned ${sanity.canceledLoop.actuallyActive} rows with row.status=ACTIVE ` +
+        `(${pct}% of loop). Expected 0%. The broken-filter workaround may no longer apply — review sync strategy.`,
+    );
+  }
+
+  // --- 4. Upsert in batches ---
+  // Snapshot the deduped values once, then iterate. Map.values() is
+  // an iterator — slicing it would re-walk from the start each batch.
+  const dbRows = [...dedupedById.values()];
   let upserted = 0;
-  for (let i = 0; i < allRows.length; i += UPSERT_BATCH) {
-    const chunk = allRows.slice(i, i + UPSERT_BATCH);
+  for (let i = 0; i < dbRows.length; i += UPSERT_BATCH) {
+    const chunk = dbRows.slice(i, i + UPSERT_BATCH);
     const { error } = await supabase
       .from("mdapi_subscriptions")
       .upsert(chunk, { onConflict: "membership_id" });
@@ -204,12 +280,14 @@ export async function syncMdapiSubscriptions(
   }
 
   return {
-    fetched: allRows.length,
+    fetched: fetchedTotal,
+    uniqueMemberships: dbRows.length,
     upserted,
     cities: cityAbbrs.length,
     statuses: STATUSES.length,
     apiCalls,
     loopErrors,
+    loopSanity: sanity,
     durationMs: Date.now() - startedAt,
   };
 }
