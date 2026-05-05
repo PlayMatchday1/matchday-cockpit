@@ -3,6 +3,7 @@
 import { useEffect, useState } from "react";
 import { supabase } from "./supabase";
 import { selectAll } from "./supabasePagination";
+import { cityFromAbbr } from "./cityMap";
 
 export type FinRevenue = {
   id: number;
@@ -300,8 +301,17 @@ async function load(): Promise<void> {
       selectAll<Record<string, unknown>>(() =>
         supabase.from("fin_venue_aliases").select("*").order("alias"),
       ),
+      // Phase 3b: switched from fin_members to mdapi_subscriptions.
+      // Column rename + price (dollars) → price_cents shim happens in
+      // the mapper below. CSV uploader still writes fin_members but
+      // those rows are no longer read; deprecates in Phase 4.
       selectAll<Record<string, unknown>>(() =>
-        supabase.from("fin_members").select("*").order("id"),
+        supabase
+          .from("mdapi_subscriptions")
+          .select(
+            "membership_id, city_member_slug, member_email, status, price, city_identifier, activation_date, canceled_at",
+          )
+          .order("membership_id"),
       ),
       selectAll<Record<string, unknown>>(() =>
         supabase.from("fin_pricing").select("*").order("id"),
@@ -455,16 +465,30 @@ async function load(): Promise<void> {
     config[cleanText(r.key)] = cleanText(r.value);
   }
 
-  const members: FinMember[] = mbrRows.map((r) => ({
-    id: r.id as number,
-    member_id: cleanText(r.member_id),
-    status: cleanText(r.status),
-    price_cents: Math.round(asNumber(r.price_cents) || 0),
-    city: cleanText(r.city),
-    email: cleanTextNullable(r.email),
-    activation_date: cleanTextNullable(r.activation_date),
-    canceled_at: cleanTextNullable(r.canceled_at),
-  }));
+  // Phase 3b mapper: mdapi_subscriptions → FinMember shape.
+  //   - city_identifier (abbr) → cockpit city via cityFromAbbr; rows
+  //     in unmapped cities (e.g., NYC) are skipped silently — same
+  //     behavior as the reviews migration.
+  //   - price (dollars) → price_cents (integer cents). Single
+  //     conversion site; downstream calcs (incl. financeStats.ts:2247
+  //     /100 division) keep working unchanged.
+  //   - city_member_slug ("ATX13") populates member_id since the
+  //     CSV-era format used the same slug shape.
+  const members: FinMember[] = [];
+  for (const r of mbrRows) {
+    const city = cityFromAbbr(cleanTextNullable(r.city_identifier));
+    if (!city) continue;
+    members.push({
+      id: r.membership_id as number,
+      member_id: cleanText(r.city_member_slug),
+      status: cleanText(r.status),
+      price_cents: Math.round((asNumber(r.price) || 0) * 100),
+      city,
+      email: cleanTextNullable(r.member_email),
+      activation_date: cleanTextNullable(r.activation_date),
+      canceled_at: cleanTextNullable(r.canceled_at),
+    });
+  }
 
   const pricing: FinPricing[] = prcRows.map((r) => ({
     id: r.id as number,

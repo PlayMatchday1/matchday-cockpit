@@ -18,3 +18,27 @@ export function normalizeCity(raw: string | undefined | null): string | null {
   if (!trimmed) return null;
   return CSV_TO_COCKPIT_CITY[trimmed] ?? null;
 }
+
+// Map MatchDay platform abbrs (city_identifier on mdapi_*) to cockpit
+// city names. Used by useFinanceData and membershipSnapshots when
+// reading mdapi_subscriptions, plus by stripeSync's email→city map.
+//
+// IMPORTANT: keep in sync with CSV_TO_COCKPIT_CITY above. New cities
+// (e.g., Phoenix) need to be added here AND to CSV_TO_COCKPIT_CITY,
+// or rows in unmapped cities silently disappear from dashboards.
+export const CITY_ABBR_TO_COCKPIT: Record<string, string> = {
+  ATX: "Austin",
+  HOU: "Houston",
+  SATX: "San Antonio",
+  DFW: "Dallas", // API uses DFW, not DAL
+  ATL: "Atlanta",
+  OKC: "OKC",
+  STL: "St. Louis",
+  ELP: "El Paso", // forward-compat; 0 rows today
+};
+
+export function cityFromAbbr(raw: string | undefined | null): string | null {
+  const trimmed = (raw ?? "").trim();
+  if (!trimmed) return null;
+  return CITY_ABBR_TO_COCKPIT[trimmed] ?? null;
+}

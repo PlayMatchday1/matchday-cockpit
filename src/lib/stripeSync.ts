@@ -21,6 +21,7 @@ import {
 } from "./financeImport";
 import { selectAll } from "./supabasePagination";
 import { normalizeMatchName } from "./venueNormalization";
+import { cityFromAbbr } from "./cityMap";
 
 export type StripeSyncOptions = {
   // Inclusive lower bound for charge.created. Required.
@@ -82,18 +83,24 @@ export async function syncStripeCharges(
 
   // Build email→city + alias maps. Same source-of-truth queries as
   // previewStripe, so the API path can't drift on city allocation.
+  // Phase 3b: reads mdapi_subscriptions instead of fin_members; the
+  // API stores city as abbr (city_identifier), normalized via
+  // cityFromAbbr to the cockpit city name expected downstream.
   const memberRows = await selectAll<{
-    email: string | null;
-    city: string | null;
+    member_email: string | null;
+    city_identifier: string | null;
   }>(() =>
-    supabase.from("fin_members").select("email, city").order("id"),
+    supabase
+      .from("mdapi_subscriptions")
+      .select("member_email, city_identifier")
+      .order("membership_id"),
   );
   const emailToCity = new Map<string, string>();
   for (const m of memberRows) {
-    if (m.email) {
+    if (m.member_email) {
       emailToCity.set(
-        m.email.toLowerCase().trim(),
-        m.city ?? DELETED_ACCOUNT_CITY,
+        m.member_email.toLowerCase().trim(),
+        cityFromAbbr(m.city_identifier) ?? DELETED_ACCOUNT_CITY,
       );
     }
   }

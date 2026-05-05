@@ -3,6 +3,7 @@ import { supabase } from "./supabase";
 import { selectAll } from "./supabasePagination";
 import { normalizeMatchName } from "./venueNormalization";
 import { refreshMembershipSnapshots } from "./membershipSnapshots";
+import { cityFromAbbr } from "./cityMap";
 
 export type ImportResult = {
   count: number;
@@ -624,14 +625,25 @@ export async function previewStripe(
   if ("error" in result) throw new Error(result.error);
   const { rows } = result;
 
-  // Build email → city map from fin_members. Paginated — without it
-  // PostgREST silently caps at 1000 rows even though fin_members holds
-  // 2k+ customers, which leaves a chunk of email→city lookups stranded
-  // in the Deleted Account Revenue bucket.
-  let memberRows: Array<{ email: string | null; city: string | null }>;
+  // Build email → city map from mdapi_subscriptions. Paginated —
+  // without it PostgREST silently caps at 1000 rows even though the
+  // table holds 2k+ customers, which leaves a chunk of email→city
+  // lookups stranded in the Deleted Account Revenue bucket.
+  // Phase 3b: switched from fin_members; city stored as abbr
+  // (city_identifier) → cockpit name via cityFromAbbr.
+  let memberRows: Array<{
+    member_email: string | null;
+    city_identifier: string | null;
+  }>;
   try {
-    memberRows = await selectAll<{ email: string | null; city: string | null }>(
-      () => supabase.from("fin_members").select("email, city").order("id"),
+    memberRows = await selectAll<{
+      member_email: string | null;
+      city_identifier: string | null;
+    }>(() =>
+      supabase
+        .from("mdapi_subscriptions")
+        .select("member_email, city_identifier")
+        .order("membership_id"),
     );
   } catch (e) {
     throw new Error(
@@ -640,7 +652,11 @@ export async function previewStripe(
   }
   const emailToCity = new Map<string, string>();
   for (const m of memberRows) {
-    if (m.email) emailToCity.set(m.email.toLowerCase().trim(), m.city ?? DELETED_ACCOUNT_CITY);
+    if (m.member_email)
+      emailToCity.set(
+        m.member_email.toLowerCase().trim(),
+        cityFromAbbr(m.city_identifier) ?? DELETED_ACCOUNT_CITY,
+      );
   }
 
   // Build alias map from fin_venue_aliases for venue normalization on

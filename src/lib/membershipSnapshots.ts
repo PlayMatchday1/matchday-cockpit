@@ -1,4 +1,5 @@
-import { supabase } from "./supabase";
+import { type SupabaseClient } from "@supabase/supabase-js";
+import { supabase as defaultClient } from "./supabase";
 import { selectAll } from "./supabasePagination";
 import {
   computeMonthlySnapshot,
@@ -6,11 +7,17 @@ import {
   type MemberLike,
 } from "./membershipStats";
 import { CITIES } from "./types";
+import { cityFromAbbr } from "./cityMap";
 
 // Single source of truth for membership snapshot writes. Called from
 // commitMembers (Members CSV upload) and MatchesUploader (user_analysis
 // upload) — whichever ran last refreshes the snapshot using whatever's
 // in the DB at that moment.
+//
+// Phase 3b: reads mdapi_subscriptions (was fin_members). Column
+// rename + price (dollars) → price_cents shim happens at the read
+// site below — MemberLike shape stays identical so the predicates
+// in membershipStats.ts continue to work unchanged.
 //
 // On the 1st-5th of the month we ALSO refresh the prior month's
 // snapshot, so late activations / late cancellations (Stripe delays
@@ -22,25 +29,60 @@ import { CITIES } from "./types";
 export async function refreshMembershipSnapshots(opts: {
   sourceFileName?: string;
   now?: Date;
+  // Optional service-role client for offline scripts (e.g.,
+  // scripts/refresh-membership-snapshots.ts). Defaults to the module-
+  // level supabase import which uses the publishable key — fine for
+  // CSV-upload callers running in the browser with an authed user.
+  client?: SupabaseClient;
 } = {}): Promise<void> {
+  const sb = opts.client ?? defaultClient;
   const now = opts.now ?? new Date();
 
-  const [members, attendance] = await Promise.all([
+  type MdapiSubRow = {
+    status: string | null;
+    price: number | null;
+    member_email: string | null;
+    activation_date: string | null;
+    canceled_at: string | null;
+    city_identifier: string | null;
+  };
+
+  const [rawMembers, attendance] = await Promise.all([
     // Stable .order() required so selectAll's paginated .range()
     // doesn't drop or duplicate rows — see supabasePagination.ts.
-    selectAll<MemberLike>(() =>
-      supabase
-        .from("fin_members")
-        .select("status,price_cents,email,activation_date,canceled_at,city")
-        .order("id"),
+    selectAll<MdapiSubRow>(() =>
+      sb
+        .from("mdapi_subscriptions")
+        .select(
+          "status, price, member_email, activation_date, canceled_at, city_identifier",
+        )
+        .order("membership_id"),
     ),
     selectAll<AttendanceRow>(() =>
-      supabase
+      sb
         .from("match_registrations")
         .select("match_start,payment_type,email")
         .order("id"),
     ),
   ]);
+
+  // Map to MemberLike + skip unknown cities (matches useFinanceData
+  // behavior). cityFromAbbr returns null for any abbr not in our
+  // cockpit map — those rows would have nowhere to go in CITIES
+  // anyway, so dropping them is the correct call.
+  const members: MemberLike[] = [];
+  for (const r of rawMembers) {
+    const city = cityFromAbbr(r.city_identifier);
+    if (!city) continue;
+    members.push({
+      status: r.status ?? "",
+      price_cents: Math.round((r.price ?? 0) * 100),
+      email: r.member_email,
+      activation_date: r.activation_date,
+      canceled_at: r.canceled_at,
+      city,
+    });
+  }
 
   const refDates: Date[] = [now];
   if (now.getDate() <= 5) {
@@ -56,7 +98,7 @@ export async function refreshMembershipSnapshots(opts: {
       refDate,
       opts.sourceFileName,
     );
-    const { error } = await supabase
+    const { error } = await sb
       .from("members_monthly_snapshots")
       .upsert(snap, { onConflict: "month" });
     if (error) {
