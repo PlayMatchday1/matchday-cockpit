@@ -12,6 +12,13 @@ import ExpenseAdminView from "@/components/ExpenseAdminView";
 import FieldCostsView from "@/components/FieldCostsView";
 import FieldRankingTabContent from "@/components/FieldRankingTabContent";
 import FinanceExecHero from "@/components/FinanceExecHero";
+import FinanceConfigureSubNav, {
+  isConfigureSubTab,
+  type ConfigureSubTabId,
+} from "@/components/FinanceConfigureSubNav";
+import FinanceSecondaryNav, {
+  type SecondaryId,
+} from "@/components/FinanceSecondaryNav";
 import FinanceTabNav, {
   FINANCE_TAB_IDS,
   type FinanceTabId,
@@ -26,6 +33,26 @@ import { supabase } from "@/lib/supabase";
 import { useFinanceData } from "@/lib/useFinanceData";
 
 const RETURN_TAB_KEY = "finance:returnTab";
+// Persists which Configure sub-tab was last viewed, so re-opening
+// Configure (after navigating to a primary pill and back) lands on
+// the same view instead of resetting to Revenue. Session-scoped.
+const LAST_CONFIGURE_KEY = "finance:lastConfigureSubTab";
+
+// Derive which secondary nav slot is "active" given the current tab.
+// Returns null when the user is on a primary pill instead.
+function deriveSecondary(tab: FinanceTabId): SecondaryId | null {
+  if (isConfigureSubTab(tab)) return "configure";
+  if (tab === "check-ins") return "check-ins";
+  if (tab === "partner-dashboards") return "partner-dashboards";
+  return null;
+}
+
+function getLastConfigureSubTab(): ConfigureSubTabId {
+  if (typeof window === "undefined") return "revenue";
+  const v = window.sessionStorage.getItem(LAST_CONFIGURE_KEY);
+  if (v && isConfigureSubTab(v)) return v;
+  return "revenue";
+}
 
 export default function FinanceLandingPage() {
   return (
@@ -69,6 +96,28 @@ function FinanceLandingContent() {
     setVisited((prev) => (prev.has(t) ? prev : new Set([...prev, t])));
   }
 
+  // Secondary nav click. "configure" opens the sub-strip and lands
+  // on the last-viewed Configure tab (default: Revenue). The other
+  // two are direct full-tab swaps.
+  function openSecondary(s: SecondaryId) {
+    if (s === "configure") {
+      selectTab(getLastConfigureSubTab());
+    } else {
+      selectTab(s);
+    }
+  }
+
+  // Remember the last Configure sub-tab in sessionStorage so the
+  // user can leave Configure (click a primary pill) and come back
+  // to the same view.
+  useEffect(() => {
+    if (isConfigureSubTab(activeTab) && typeof window !== "undefined") {
+      window.sessionStorage.setItem(LAST_CONFIGURE_KEY, activeTab);
+    }
+  }, [activeTab]);
+
+  const secondary = deriveSecondary(activeTab);
+
   useEffect(() => {
     let cancelled = false;
     supabase
@@ -97,11 +146,24 @@ function FinanceLandingContent() {
         </p>
       </div>
 
+      <FinanceSecondaryNav active={secondary} onChange={openSecondary} />
+
       <div className="mb-8">
         <FinanceExecHero />
       </div>
 
       <FinanceTabNav value={activeTab} onChange={selectTab} />
+
+      {secondary === "configure" && (
+        <FinanceConfigureSubNav
+          value={
+            isConfigureSubTab(activeTab)
+              ? (activeTab as ConfigureSubTabId)
+              : "revenue"
+          }
+          onChange={(id) => selectTab(id)}
+        />
+      )}
 
       {/* Render only visited tabs; toggle visibility for inactive
           ones via display:none so component-local state survives
