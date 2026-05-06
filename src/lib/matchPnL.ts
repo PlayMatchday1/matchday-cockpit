@@ -34,6 +34,7 @@
 import type { SupabaseClient } from "@supabase/supabase-js";
 import type { FinanceData } from "./useFinanceData";
 import { matchAllocatedMemberRevenueFor } from "./financeStats";
+import { fetchLegacyMatchRegistrations } from "./mdapiMatchesRead";
 
 // Allow-list of player-booking payment types. Anything else (NULL,
 // rental codes, comp markers) gets filtered out as not a real
@@ -169,27 +170,19 @@ function parseLocalTimestamp(s: string): Date | null {
 // Fetch + compute
 // =====================================================================
 
+// Subset of LegacyMatchRegRow that this file actually consumes.
+// Sourced from mdapi_matches + mdapi_match_players via the shared
+// mdapiMatchesRead lib. Field shape kept identical to the CSV-era
+// match_registrations row so the bucketing logic below stays
+// unchanged.
 type RegRow = {
-  field: string | null;
+  field: string;
   match_start: string;
   match_canceled: boolean;
   player_canceled_at: string | null;
   payment_type: string | null;
-  match_price_paid: number | null;
+  match_price_paid: number;
 };
-
-async function fetchCurrentUploadId(
-  supabase: SupabaseClient,
-): Promise<number | null> {
-  const { data } = await supabase
-    .from("data_uploads")
-    .select("id")
-    .eq("is_current", true)
-    .order("created_at", { ascending: false })
-    .limit(1)
-    .maybeSingle<{ id: number }>();
-  return data?.id ?? null;
-}
 
 export type FetchWeekMatchPnLResult = {
   active: MatchPnLRow[];
@@ -203,34 +196,17 @@ export async function fetchWeekMatchPnL(
   data: FinanceData,
 ): Promise<FetchWeekMatchPnLResult> {
   const venues = data.venues;
-  const uploadId = await fetchCurrentUploadId(supabase);
-  if (uploadId === null) return { active: [], canceled: [] };
 
-  // ISO bounds — match_start is stored as a timestamp; use a wide
-  // string range that covers the local Mon 00:00 → Sun 23:59:59.
-  const isoStart = `${weekStart.getFullYear()}-${String(weekStart.getMonth() + 1).padStart(2, "0")}-${String(weekStart.getDate()).padStart(2, "0")}T00:00:00`;
-  const isoEnd = `${weekEnd.getFullYear()}-${String(weekEnd.getMonth() + 1).padStart(2, "0")}-${String(weekEnd.getDate()).padStart(2, "0")}T23:59:59`;
-
-  const regs: RegRow[] = [];
-  for (let from = 0; ; from += 1000) {
-    const { data, error } = await supabase
-      .from("match_registrations")
-      .select(
-        "field, match_start, match_canceled, player_canceled_at, payment_type, match_price_paid",
-      )
-      .eq("upload_id", uploadId)
-      .gte("match_start", isoStart)
-      .lte("match_start", isoEnd)
-      // Stable ordering required for paginated .range() — without an
-      // ORDER BY, Postgres can return rows in different orders across
-      // page queries, silently dropping or duplicating rows.
-      .order("id")
-      .range(from, from + 999);
-    if (error) throw new Error(`Match P&L fetch: ${error.message}`);
-    if (!data || data.length === 0) break;
-    regs.push(...(data as RegRow[]));
-    if (data.length < 1000) break;
-  }
+  // Fetch matches+players from mdapi_matches/mdapi_match_players via
+  // the shared lib. Date filter is on mdapi_matches.start_date —
+  // YYYY-MM-DD bounds (the lib's gte/lte map to Postgres timestamptz
+  // comparisons that correctly span the local week).
+  const ymd = (d: Date) =>
+    `${d.getFullYear()}-${String(d.getMonth() + 1).padStart(2, "0")}-${String(d.getDate()).padStart(2, "0")}`;
+  const regs: RegRow[] = await fetchLegacyMatchRegistrations(supabase, {
+    fromDate: ymd(weekStart),
+    toDate: ymd(weekEnd),
+  });
 
   // Split into canceled (match_canceled=true) and active (the rest).
   // Canceled rows skip the active filter chain entirely — they go

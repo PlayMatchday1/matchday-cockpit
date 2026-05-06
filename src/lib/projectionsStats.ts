@@ -24,6 +24,7 @@
 // substring approach but disambiguates multi-leg cities.
 
 import type { SupabaseClient } from "@supabase/supabase-js";
+import { fetchLegacyMatchRegistrations } from "./mdapiMatchesRead";
 
 const STAFF_EMAIL_DOMAIN = "matchday.com";
 const DOW_LABELS = ["Sun", "Mon", "Tue", "Wed", "Thu", "Fri", "Sat"] as const;
@@ -474,39 +475,18 @@ export async function fetchProjectionsData(
   registrations: RegistrationRow[];
   venues: { id: number; venue_name: string; city: string | null }[];
 }> {
-  const { data: upload } = await supabase
-    .from("data_uploads")
-    .select("id")
-    .eq("is_current", true)
-    .order("created_at", { ascending: false })
-    .limit(1)
-    .maybeSingle();
-  if (!upload) {
-    return { registrations: [], venues: [] };
-  }
-
   const { windowsHistorical, nextWindow } = computeProjectionWindows();
   const earliest = windowsHistorical[0].start;
   const latest = nextWindow.end;
 
-  const registrations: RegistrationRow[] = [];
-  for (let from = 0; ; from += 1000) {
-    const { data, error } = await supabase
-      .from("match_registrations")
-      .select(
-        "field, match_start, match_canceled, player_canceled_at, payment_type, match_price_paid, email",
-      )
-      .eq("upload_id", upload.id)
-      .gte("match_start", `${earliest}T00:00:00Z`)
-      .lte("match_start", `${latest}T23:59:59Z`)
-      // Stable ordering required for paginated .range().
-      .order("id")
-      .range(from, from + 999);
-    if (error) throw new Error(`Registrations fetch: ${error.message}`);
-    if (!data || data.length === 0) break;
-    registrations.push(...(data as RegistrationRow[]));
-    if (data.length < 1000) break;
-  }
+  // Read from mdapi_matches/mdapi_match_players via the shared lib.
+  // earliest/latest are YYYY-MM-DD strings (per computeProjectionWindows).
+  // The lib's gte/lte filter on mdapi_matches.start_date covers the
+  // full local-time range correctly.
+  const registrations: RegistrationRow[] = await fetchLegacyMatchRegistrations(
+    supabase,
+    { fromDate: earliest, toDate: latest },
+  );
 
   const { data: venues, error: vErr } = await supabase
     .from("fin_venues")

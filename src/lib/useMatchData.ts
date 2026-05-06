@@ -1,27 +1,26 @@
 "use client";
 
+// Match data hook. Reads from mdapi_matches + mdapi_match_players via
+// the shared mdapiMatchesRead lib. Replaces the older path that read
+// from match_registrations populated by CSV upload via data_uploads.
+//
+// The CSV upload path still writes match_registrations (Phase 5d will
+// remove the uploader) but those writes are no longer read.
+//
+// MatchRow shape is preserved exactly for backward-compat with the
+// 13 components / 5 lib files that consume it. The shared lib
+// produces JoinedMatchPlayerRow which is a structural superset of
+// MatchRow — TypeScript covariance lets us assign directly.
+
 import { useEffect, useState } from "react";
 import { supabase } from "./supabase";
-import { selectAll } from "./supabasePagination";
+import {
+  fetchJoinedMatchPlayers,
+  type JoinedMatchPlayerRow,
+} from "./mdapiMatchesRead";
 
-export type MatchRow = {
-  city: string;
-  field: string;
-  matchStart: Date;
-  matchCanceled: boolean;
-  playerCanceledAt: Date | null;
-  // Type Of Payment column from user_analysis: 'MEMBER' | 'DAILY PAID' |
-  // promo / other / null. Used by the Member-Heavy Fields insight to
-  // measure each venue's actual member mix.
-  paymentType: string | null;
-  // Promocode column from user_analysis — non-empty when the player
-  // redeemed a promo code on this registration. Used by the High Promo
-  // Usage insight.
-  promocode: string | null;
-  // Player email, lowercased on ingest. Used to join attendance to
-  // fin_members for avg-matches-per-member.
-  email: string | null;
-};
+// Re-export MatchRow for any consumer that imports it from here.
+export type { MatchRow } from "./mdapiMatchesRead";
 
 export type DataMeta = {
   filename: string;
@@ -32,7 +31,7 @@ export type DataMeta = {
 } | null;
 
 type State = {
-  rows: MatchRow[];
+  rows: JoinedMatchPlayerRow[];
   meta: DataMeta;
   loading: boolean;
   error: string | null;
@@ -44,17 +43,6 @@ let cached: State | null = null;
 let pending: Promise<void> | null = null;
 const subscribers = new Set<(s: State) => void>();
 
-// Parse a Postgres timestamptz / CSV timestamp string as wall-clock local time.
-// Avoids the UTC shift that `new Date(str)` applies to ISO strings.
-function parseLocal(s: string | null | undefined): Date | null {
-  if (!s) return null;
-  const parts = s.slice(0, 16).split(/[- T:]/);
-  if (parts.length < 5) return null;
-  const [yr, mo, dy, hr, mn] = parts.map(Number);
-  if ([yr, mo, dy, hr, mn].some((n) => Number.isNaN(n))) return null;
-  return new Date(yr, mo - 1, dy, hr, mn);
-}
-
 function publish(s: State) {
   cached = s;
   subscribers.forEach((fn) => fn(s));
@@ -63,46 +51,27 @@ function publish(s: State) {
 async function load(): Promise<void> {
   publish({ rows: [], meta: null, loading: true, error: null });
 
-  const { data: uploadRow, error: uploadErr } = await supabase
-    .from("data_uploads")
-    .select("*")
-    .eq("is_current", true)
-    .order("created_at", { ascending: false })
-    .limit(1)
-    .maybeSingle();
-
-  if (uploadErr) {
-    publish({ rows: [], meta: null, loading: false, error: uploadErr.message });
-    return;
-  }
-  if (!uploadRow) {
-    publish({ rows: [], meta: null, loading: false, error: null });
-    return;
-  }
-
-  const uploadId = (uploadRow as { id: string }).id;
-
-  type MatchSelect = {
-    city: string;
-    field: string | null;
-    match_start: string;
-    match_canceled: boolean;
-    player_canceled_at: string | null;
-    payment_type: string | null;
-    promocode: string | null;
-    email: string | null;
-  };
-  let raw: MatchSelect[];
+  let rows: JoinedMatchPlayerRow[];
+  let lastSyncCompletedAt: string | null = null;
   try {
-    raw = await selectAll<MatchSelect>(() =>
+    const [rowsResult, lastSyncResult] = await Promise.all([
+      fetchJoinedMatchPlayers(supabase),
+      // Latest mdapi-matches sync completion — drives meta.uploadedAt.
+      // Will be populated by the cron orchestrator in Phase 5c. Until
+      // then, the manual backfill/incremental scripts also write to
+      // fin_sync_log (or will, once they're wired through runWithLog).
+      // Falls back to "now" if no row yet (first-run startup window).
       supabase
-        .from("match_registrations")
-        .select(
-          "city, field, match_start, match_canceled, player_canceled_at, payment_type, promocode, email",
-        )
-        .eq("upload_id", uploadId)
-        .order("match_start"),
-    );
+        .from("fin_sync_log")
+        .select("completed_at")
+        .eq("source", "mdapi-matches")
+        .not("completed_at", "is", null)
+        .order("completed_at", { ascending: false })
+        .limit(1)
+        .maybeSingle<{ completed_at: string }>(),
+    ]);
+    rows = rowsResult;
+    lastSyncCompletedAt = lastSyncResult.data?.completed_at ?? null;
   } catch (e) {
     publish({
       rows: [],
@@ -113,40 +82,19 @@ async function load(): Promise<void> {
     return;
   }
 
-  const all: MatchRow[] = [];
-  for (const r of raw) {
-    const matchStart = parseLocal(r.match_start);
-    if (!matchStart) continue;
-    all.push({
-      city: r.city,
-      field: r.field ?? "",
-      matchStart,
-      matchCanceled: !!r.match_canceled,
-      playerCanceledAt: parseLocal(r.player_canceled_at),
-      paymentType: r.payment_type,
-      promocode: r.promocode,
-      email: r.email,
-    });
-  }
-
-  const u = uploadRow as {
-    filename: string;
-    created_at: string;
-    row_count: number;
-    earliest_match: string | null;
-    latest_match: string | null;
-  };
-  const earliestMatch =
-    parseLocal(u.earliest_match) ?? all[0]?.matchStart ?? new Date();
-  const latestMatch =
-    parseLocal(u.latest_match) ?? all[all.length - 1]?.matchStart ?? new Date();
+  // Rows are pre-sorted by matchStart asc inside the shared lib, so
+  // first/last give the date range.
+  const earliestMatch = rows[0]?.matchStart ?? new Date();
+  const latestMatch = rows[rows.length - 1]?.matchStart ?? new Date();
 
   publish({
-    rows: all,
+    rows,
     meta: {
-      filename: u.filename,
-      uploadedAt: new Date(u.created_at),
-      rowCount: u.row_count,
+      filename: "MatchDay API",
+      uploadedAt: lastSyncCompletedAt
+        ? new Date(lastSyncCompletedAt)
+        : new Date(),
+      rowCount: rows.length,
       earliestMatch,
       latestMatch,
     },

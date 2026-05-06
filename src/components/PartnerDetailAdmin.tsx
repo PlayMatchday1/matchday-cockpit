@@ -12,6 +12,7 @@ import {
   type PartnerWeeklyPaymentRecord,
 } from "@/lib/partnerStats";
 import { supabase } from "@/lib/supabase";
+import { fetchLegacyMatchRegistrations } from "@/lib/mdapiMatchesRead";
 
 const FMT_DATE = new Intl.DateTimeFormat("en-US", {
   year: "numeric",
@@ -126,39 +127,15 @@ export default function PartnerDetailAdmin({
       if (vnErr) throw new Error(vnErr.message);
       setVenue((vn ?? null) as Venue | null);
 
-      // Active upload + match_registrations + fin_revenue (mirrors
-      // the partner page's server-side fetch).
-      const { data: upload } = await supabase
-        .from("data_uploads")
-        .select("id")
-        .eq("is_current", true)
-        .order("created_at", { ascending: false })
-        .limit(1)
-        .maybeSingle();
-
+      // Read this venue's matches+players from mdapi_matches /
+      // mdapi_match_players via the shared lib. Mirrors the
+      // server-side fetch in partnerStats.fetchPartnerRows.
       const venueName = (vn as Venue | null)?.venue_name ?? "";
       let mr: PartnerRegRow[] = [];
-      if (upload && venueName) {
-        const PAGE = 1000;
-        for (let from = 0; ; from += PAGE) {
-          const { data, error } = await supabase
-            .from("match_registrations")
-            .select(
-              "user_id, email, field, match_start, match_canceled, player_canceled_at, payment_type, promocode, match_price_paid",
-            )
-            .eq("upload_id", upload.id)
-            .ilike("field", `%${venueName}%`)
-            // match_start alone isn't unique — many registrations share
-            // a match_start, so .range() pagination needs an id
-            // tiebreaker to stay stable across page queries.
-            .order("match_start")
-            .order("id")
-            .range(from, from + PAGE - 1);
-          if (error) throw new Error(`Reg fetch: ${error.message}`);
-          if (!data || data.length === 0) break;
-          mr.push(...(data as PartnerRegRow[]));
-          if (data.length < PAGE) break;
-        }
+      if (venueName) {
+        mr = await fetchLegacyMatchRegistrations(supabase, {
+          fieldLike: `%${venueName}%`,
+        });
       }
       setMatchRows(mr);
 

@@ -8,6 +8,7 @@ import {
 } from "./membershipStats";
 import { CITIES } from "./types";
 import { cityFromAbbr } from "./cityMap";
+import { fetchJoinedMatchPlayers } from "./mdapiMatchesRead";
 
 // Single source of truth for membership snapshot writes. Called from
 // commitMembers (Members CSV upload) and MatchesUploader (user_analysis
@@ -47,7 +48,7 @@ export async function refreshMembershipSnapshots(opts: {
     city_identifier: string | null;
   };
 
-  const [rawMembers, attendance] = await Promise.all([
+  const [rawMembers, joinedMatches] = await Promise.all([
     // Stable .order() required so selectAll's paginated .range()
     // doesn't drop or duplicate rows — see supabasePagination.ts.
     selectAll<MdapiSubRow>(() =>
@@ -58,13 +59,17 @@ export async function refreshMembershipSnapshots(opts: {
         )
         .order("membership_id"),
     ),
-    selectAll<AttendanceRow>(() =>
-      sb
-        .from("match_registrations")
-        .select("match_start,payment_type,email")
-        .order("id"),
-    ),
+    // Phase 5b: attendance reads from mdapi_matches +
+    // mdapi_match_players via the shared lib. Project the joined
+    // rows to the AttendanceRow shape (match_start as Date is
+    // accepted by computeAvgMatchesPerMember).
+    fetchJoinedMatchPlayers(sb),
   ]);
+  const attendance: AttendanceRow[] = joinedMatches.map((r) => ({
+    match_start: r.matchStart,
+    payment_type: r.paymentType,
+    email: r.email,
+  }));
 
   // Map to MemberLike + skip unknown cities (matches useFinanceData
   // behavior). cityFromAbbr returns null for any abbr not in our

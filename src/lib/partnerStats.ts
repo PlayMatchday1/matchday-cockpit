@@ -4,6 +4,7 @@
 // partner page.
 
 import { createClient, type SupabaseClient } from "@supabase/supabase-js";
+import { fetchLegacyMatchRegistrations } from "./mdapiMatchesRead";
 
 const STAFF_EMAIL_DOMAIN = "matchday.com";
 
@@ -293,41 +294,12 @@ export async function fetchPartnerRows(
     throw new Error("Venue lookup failed");
   }
 
-  const { data: upload, error: uploadErr } = await supabase
-    .from("data_uploads")
-    .select("id")
-    .eq("is_current", true)
-    .order("created_at", { ascending: false })
-    .limit(1)
-    .maybeSingle();
-  if (uploadErr || !upload) {
-    return { rows: [], extra: [], venueName: venue.venue_name };
-  }
-
-  // Paginate. Single venue's PAC-Global-style dataset is small (~few
-  // hundred rows) but page anyway in case a high-volume partner is
-  // onboarded later.
-  const PAGE = 1000;
-  const out: PartnerRegRow[] = [];
-  for (let from = 0; ; from += PAGE) {
-    const { data, error } = await supabase
-      .from("match_registrations")
-      .select(
-        "user_id, email, field, match_start, match_canceled, player_canceled_at, payment_type, promocode, match_price_paid",
-      )
-      .eq("upload_id", upload.id)
-      .ilike("field", `%${venue.venue_name}%`)
-      // match_start alone isn't unique — many registrations share a
-      // match_start, so .range() pagination needs an id tiebreaker
-      // to stay stable across page queries.
-      .order("match_start")
-      .order("id")
-      .range(from, from + PAGE - 1);
-    if (error) throw new Error(`Registration fetch failed: ${error.message}`);
-    if (!data || data.length === 0) break;
-    out.push(...(data as PartnerRegRow[]));
-    if (data.length < PAGE) break;
-  }
+  // Read this venue's matches+players from mdapi_matches /
+  // mdapi_match_players via the shared lib. ILIKE filter on
+  // mdapi_matches.field_title mirrors the CSV-era venue match.
+  const out: PartnerRegRow[] = await fetchLegacyMatchRegistrations(supabase, {
+    fieldLike: `%${venue.venue_name}%`,
+  });
 
   // fin_revenue rows for this venue.
   //
