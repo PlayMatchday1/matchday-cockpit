@@ -2,7 +2,6 @@ import type { SupabaseClient } from "@supabase/supabase-js";
 import { supabase } from "./supabase";
 import { selectAll } from "./supabasePagination";
 import { normalizeMatchName } from "./venueNormalization";
-import { refreshMembershipSnapshots } from "./membershipSnapshots";
 import { cityFromAbbr } from "./cityMap";
 
 export type ImportResult = {
@@ -12,17 +11,6 @@ export type ImportResult = {
   // observability; CSV callers can ignore it.
   rowsReplaced?: number;
   note?: string;
-};
-
-const MEMBER_CITY_PREFIX: Record<string, string> = {
-  ATX: "Austin",
-  DFW: "Dallas",
-  HOU: "Houston",
-  SATX: "San Antonio",
-  ATL: "Atlanta",
-  STL: "St. Louis",
-  OKC: "OKC",
-  ELP: "El Paso",
 };
 
 const MONTH_LABELS = [
@@ -95,28 +83,13 @@ function normalizeHeader(s: string | undefined | null): string {
   return String(s).toLowerCase().replace(/[-_\s]+/g, " ").trim();
 }
 
-function deriveMemberCity(memberId: string): string | null {
-  const upper = memberId.toUpperCase();
-  const prefixes = Object.keys(MEMBER_CITY_PREFIX).sort(
-    (a, b) => b.length - a.length,
-  );
-  for (const prefix of prefixes) {
-    if (upper.startsWith(prefix)) return MEMBER_CITY_PREFIX[prefix];
-  }
-  return null;
-}
-
 // City label for revenue we can't attribute to a specific market. The
 // common cause is a Stripe membership payment whose customer email no
-// longer matches anything in fin_members — the player deleted their
-// account between paying and our next members sync, so the email→city
-// lookup misses. Surfaced as its own row at the bottom of Cash Flow's
-// Revenue by City list.
+// longer matches anything in mdapi_subscriptions — the player deleted
+// their account between paying and our next members sync, so the
+// email→city lookup misses. Surfaced as its own row at the bottom of
+// Cash Flow's Revenue by City list.
 export const DELETED_ACCOUNT_CITY = "Deleted Account Revenue";
-
-function memberCityFromId(memberId: string): string {
-  return deriveMemberCity(memberId) ?? DELETED_ACCOUNT_CITY;
-}
 
 // ===== Header detection =====
 
@@ -206,172 +179,6 @@ function preprocessFixed(
   }
 
   return { rows, headerRow };
-}
-
-// ===== Delete helpers =====
-
-async function deleteAll(table: string): Promise<void> {
-  const { error } = await supabase.from(table).delete().gt("id", 0);
-  if (error) throw new Error(error.message);
-}
-
-const MEMBERS_SPEC: ColumnSpec[] = [
-  {
-    canonical: "member_id",
-    aliases: ["Member ID", "Customer ID", "ID"],
-    required: true,
-  },
-  {
-    canonical: "email",
-    aliases: ["Member Email", "Customer Email", "Email Address"],
-    required: false,
-  },
-  {
-    canonical: "status",
-    aliases: ["Subscription Status", "Membership Status"],
-    required: true,
-  },
-  { canonical: "first_name", aliases: ["First Name", "FirstName"], required: false },
-  { canonical: "last_name", aliases: ["Last Name", "LastName"], required: false },
-  {
-    canonical: "phone",
-    aliases: ["Phone Number", "Phone", "Mobile"],
-    required: false,
-  },
-  {
-    canonical: "activation_date",
-    aliases: ["Member Activation Date", "Activation Date", "Activated At"],
-    required: false,
-  },
-  {
-    canonical: "membership_length",
-    aliases: ["Membership Length", "Plan Length"],
-    required: false,
-  },
-  {
-    canonical: "price_cents",
-    aliases: ["Price Cents", "Price"],
-    required: true,
-  },
-  {
-    canonical: "canceled_at",
-    aliases: ["Canceled At", "Cancellation Date"],
-    required: false,
-  },
-  {
-    canonical: "cancel_reason",
-    aliases: ["Cancel Reason", "Cancellation Reason"],
-    required: false,
-  },
-];
-
-type MemberRow = {
-  member_id: string;
-  email: string | null;
-  status: string;
-  first_name: string | null;
-  last_name: string | null;
-  phone: string | null;
-  activation_date: string | null;
-  membership_length: string | null;
-  price_cents: number;
-  canceled_at: string | null;
-  cancel_reason: string | null;
-  city: string;
-};
-
-export type MembersPreview = {
-  filename: string;
-  totalMembers: number;
-  byStatus: Record<string, number>;
-  activeByCity: Record<string, number>;
-  parsed: MemberRow[];
-};
-
-function parseStripeTimestamp(v: string | undefined | null): string | null {
-  const t = trim(v);
-  if (!t) return null;
-  const d = new Date(t);
-  if (!Number.isNaN(d.getTime())) return d.toISOString();
-  return null;
-}
-
-function parseMembersRows(raw: string[][]): MemberRow[] {
-  const result = preprocessFixed(raw, MEMBERS_SPEC);
-  if ("error" in result) throw new Error(result.error);
-  const { rows } = result;
-
-  const out: MemberRow[] = [];
-  for (const r of rows) {
-    const memberId = trim(r["member_id"]);
-    if (!memberId) continue;
-    const status = (trim(r["status"]) ?? "").toUpperCase();
-    const emailRaw = trim(r["email"]);
-    const email = emailRaw ? emailRaw.toLowerCase() : null;
-    const priceCents = parseInteger(r["price_cents"]) ?? 0;
-    out.push({
-      member_id: memberId,
-      email,
-      status,
-      first_name: trim(r["first_name"]),
-      last_name: trim(r["last_name"]),
-      phone: trim(r["phone"]),
-      activation_date: parseDate(r["activation_date"]),
-      membership_length: trim(r["membership_length"]),
-      price_cents: priceCents,
-      canceled_at: parseStripeTimestamp(r["canceled_at"]),
-      cancel_reason: trim(r["cancel_reason"]),
-      city: memberCityFromId(memberId),
-    });
-  }
-  return out;
-}
-
-export function previewMembers(raw: string[][], filename: string): MembersPreview {
-  const parsed = parseMembersRows(raw);
-  const byStatus: Record<string, number> = {};
-  const activeByCity: Record<string, number> = {};
-  for (const m of parsed) {
-    byStatus[m.status] = (byStatus[m.status] ?? 0) + 1;
-    if (m.status === "ACTIVE" && m.price_cents > 0) {
-      activeByCity[m.city] = (activeByCity[m.city] ?? 0) + 1;
-    }
-  }
-  return {
-    filename,
-    totalMembers: parsed.length,
-    byStatus,
-    activeByCity,
-    parsed,
-  };
-}
-
-export async function commitMembers(
-  parsed: MemberRow[],
-  sourceFileName?: string,
-): Promise<ImportResult> {
-  await deleteAll("fin_members");
-  if (parsed.length === 0) {
-    return { count: 0, note: "No rows to insert." };
-  }
-  const BATCH = 500;
-  for (let i = 0; i < parsed.length; i += BATCH) {
-    const chunk = parsed.slice(i, i + BATCH);
-    const { error } = await supabase.from("fin_members").insert(chunk);
-    if (error) throw new Error(error.message);
-  }
-
-  // Auxiliary monthly snapshot(s) — best-effort. The fin_members rows
-  // (source of truth) are already committed above, so a snapshot
-  // failure shouldn't fail the upload. The shared helper handles the
-  // early-month prior-month refresh internally.
-  try {
-    await refreshMembershipSnapshots({ sourceFileName });
-  } catch (e) {
-    console.warn("Members snapshot refresh failed:", e);
-  }
-
-  return { count: parsed.length };
 }
 
 // ===== Stripe weekly upload =====
