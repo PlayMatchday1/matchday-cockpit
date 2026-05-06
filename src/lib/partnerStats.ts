@@ -18,6 +18,7 @@ export type PartnerRegRow = {
   payment_type: string | null;
   promocode: string | null;
   match_price_paid: number | null;
+  user_type: string | null;
 };
 
 // Manual revenue rows from fin_revenue (Venmo / Stripe / Manual entries
@@ -513,7 +514,14 @@ export function computePartnerStats(
       continue;
     }
 
-    // Group by user+match_start so duplicate rows = guests.
+    // Group by user+match_start. Used below for payment-type host
+    // detection (dp/mem/promo per host bucket). NOT used for guest
+    // counting anymore — that switched to direct user_type tags from
+    // mdapi_match_players, the source-of-truth field. The old
+    // group-size heuristic over-counted guests when a player had
+    // multiple registrations on the same match (e.g. data anomalies)
+    // and under-counted when guest rows didn't share the host's
+    // user_id.
     const userMatch = new Map<string, PartnerRegRow[]>();
     for (const r of showed) {
       const key = `${r.user_id}|${r.match_start}`;
@@ -522,9 +530,8 @@ export function computePartnerStats(
       userMatch.set(key, arr);
     }
 
-    let guests = 0;
-    for (const v of userMatch.values()) guests += v.length - 1;
-    const mdPlayers = userMatch.size;
+    const mdPlayers = showed.filter((r) => r.user_type === "PLAYER").length;
+    const guests = showed.filter((r) => r.user_type === "GUEST").length;
     const totalPlayers = mdPlayers + guests;
 
     // New-vs-returning by user_id.

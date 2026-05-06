@@ -87,6 +87,12 @@ export type JoinedMatchPlayerRow = {
   userId: number;
   matchPricePaid: number; // amount in dollars
   registrationAt: Date | null;
+  // Raw API user_type. "PLAYER" = registered platform user, "GUEST"
+  // = guest brought by a player, occasionally null/other for legacy
+  // rows. Carried through so partner stats can count guests/MD
+  // registrations directly from this field instead of inferring
+  // them from (user_id, match_start) duplicate grouping.
+  userType: string | null;
 };
 
 // MatchRow is the legacy hook output type. Identical to a Pick of
@@ -119,6 +125,7 @@ export type LegacyMatchRegRow = {
   payment_type: string | null;
   promocode: string | null;
   match_price_paid: number;
+  user_type: string | null;
 };
 
 // ===== Helpers =====
@@ -215,6 +222,7 @@ function mapJoinedRow(
     // conversion, don't transform on ingest.
     matchPricePaid: (player.amount ?? 0) / 100,
     registrationAt: parseLocal(player.created_at),
+    userType: player.user_type,
   };
 }
 
@@ -261,6 +269,7 @@ export function toLegacyShape(r: JoinedMatchPlayerRow): LegacyMatchRegRow {
     payment_type: r.paymentType,
     promocode: r.promocode,
     match_price_paid: r.matchPricePaid,
+    user_type: r.userType,
   };
 }
 
