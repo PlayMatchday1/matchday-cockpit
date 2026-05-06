@@ -144,8 +144,10 @@ function FinanceLandingContent() {
   const selectTabRef = useRef(selectTab);
   selectTabRef.current = selectTab;
   useEffect(() => {
+    // Capture phase so this runs before Next.js's <Link> onClick
+    // (which would call preventDefault + router.push and leave us
+    // on the same route with stale tab state).
     function onClick(e: MouseEvent) {
-      if (e.defaultPrevented) return;
       if (e.button !== 0) return;
       if (e.metaKey || e.ctrlKey || e.shiftKey || e.altKey) return;
       const target = (e.target as Element | null)?.closest?.(
@@ -153,10 +155,11 @@ function FinanceLandingContent() {
       );
       if (!target) return;
       e.preventDefault();
+      e.stopPropagation();
       selectTabRef.current(lastPrimaryRef.current);
     }
-    document.addEventListener("click", onClick);
-    return () => document.removeEventListener("click", onClick);
+    document.addEventListener("click", onClick, true);
+    return () => document.removeEventListener("click", onClick, true);
   }, []);
 
   const secondary = deriveSecondary(activeTab);
