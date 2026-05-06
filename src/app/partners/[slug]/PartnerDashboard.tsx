@@ -138,7 +138,7 @@ export default function PartnerDashboard({
       <div className="mt-6 grid grid-cols-1 gap-4 lg:grid-cols-[1.4fr_1fr]">
         <Card>
           <SecLabel>New vs returning MatchDay players</SecLabel>
-          <PlayerChart weeks={stats.weeks} />
+          <PlayerChart weeks={stats.weeks} useIsoDateLabels={!!dataBaseline} />
           <Legend
             items={[
               { color: "#2e79ff", label: "New MatchDay" },
@@ -149,7 +149,7 @@ export default function PartnerDashboard({
         </Card>
         <Card>
           <SecLabel>Revenue by week</SecLabel>
-          <RevenueChart weeks={stats.weeks} />
+          <RevenueChart weeks={stats.weeks} useIsoDateLabels={!!dataBaseline} />
           <Legend
             items={[
               { color: "#21bf72", label: "Total revenue" },
@@ -503,9 +503,26 @@ function Row({
   );
 }
 
-function PlayerChart({ weeks }: { weeks: PartnerWeekStat[] }) {
+// Compact "M/D" label from a YYYY-MM-DD week-Monday string. Used as
+// the chart x-axis tick when the dashboard is scoped to a baseline
+// (currently Hattrick) — pairs with the date-only "Mar 30 – Apr 5"
+// week card headers above. M/D fits ~4 chars in the right-column
+// chart at 1fr without rotation, and scales as the visible week
+// count grows.
+function chartTickLabel(wkMonday: string): string {
+  const d = new Date(`${wkMonday}T12:00:00Z`);
+  return `${d.getUTCMonth() + 1}/${d.getUTCDate()}`;
+}
+
+function PlayerChart({
+  weeks,
+  useIsoDateLabels,
+}: {
+  weeks: PartnerWeekStat[];
+  useIsoDateLabels: boolean;
+}) {
   const data = weeks.map((w, i) => ({
-    name: `W${i + 1}`,
+    name: useIsoDateLabels ? chartTickLabel(w.wkMonday) : `W${i + 1}`,
     new: w.voided ? 0 : w.newP,
     returning: w.voided ? 0 : w.retP,
     guests: w.voided ? 0 : w.guests,
@@ -533,9 +550,15 @@ function PlayerChart({ weeks }: { weeks: PartnerWeekStat[] }) {
   );
 }
 
-function RevenueChart({ weeks }: { weeks: PartnerWeekStat[] }) {
+function RevenueChart({
+  weeks,
+  useIsoDateLabels,
+}: {
+  weeks: PartnerWeekStat[];
+  useIsoDateLabels: boolean;
+}) {
   const data = weeks.map((w, i) => ({
-    name: `W${i + 1}`,
+    name: useIsoDateLabels ? chartTickLabel(w.wkMonday) : `W${i + 1}`,
     total: w.voided ? 0 : w.totalRev,
     cancelled: w.voided ? 0 : w.cancelRev,
   }));
