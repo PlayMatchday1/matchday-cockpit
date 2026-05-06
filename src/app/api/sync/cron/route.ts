@@ -1,12 +1,18 @@
-// POST /api/sync/cron — orchestrator that runs all three daily syncs
-// (Stripe charges, mdapi_reviews, mdapi_subscriptions) sequentially
-// with per-source error isolation.
+// POST /api/sync/cron — orchestrator that runs four daily steps:
+// Stripe charges, mdapi_reviews, mdapi_subscriptions, and a
+// membership snapshot refresh — sequentially, with per-source error
+// isolation.
 //
-// Each sync gets its own fin_sync_log row. A throw in one wrapper
+// The snapshot refresh consumes mdapi_subscriptions, so it only
+// runs if that sync succeeded. If subs fail, the snapshot step is
+// skipped (a fin_sync_log row is still written for visibility, with
+// error_message explaining the skip).
+//
+// Each step gets its own fin_sync_log row. A throw in one wrapper
 // does NOT prevent the others from running. HTTP status: 200 if all
-// three succeed, 500 if any failed (Vercel cron monitoring surfaces
+// four succeed, 500 if any failed (Vercel cron monitoring surfaces
 // non-2xx as a failed cron — operator gets visibility on partial
-// failures even when 2/3 succeed).
+// failures even when 3/4 succeed).
 //
 // Auth: same dual-mode pattern as /api/sync/stripe.
 //   Cron mode:   Bearer ${CRON_SECRET} (constant-time compare),
@@ -26,11 +32,13 @@ import { commitStripe } from "@/lib/financeImport";
 import { syncStripeCharges } from "@/lib/stripeSync";
 import { syncMdapiReviews } from "@/lib/mdapiReviewsSync";
 import { syncMdapiSubscriptions } from "@/lib/mdapiSubscriptionsSync";
+import { refreshMembershipSnapshots } from "@/lib/membershipSnapshots";
 import { runWithLog, type TriggeredBy } from "@/lib/syncLogging";
 
-// Stripe ~60s + mdapi_reviews ~10s + mdapi_subscriptions ~60s typical.
-// 300s gives ~2× headroom; if we ever hit it, the right answer is
-// async-trigger pattern, not just bumping the cap further.
+// Stripe ~60s + mdapi_reviews ~10s + mdapi_subscriptions ~60s +
+// snapshot refresh ~2s. 300s gives ~2× headroom; if we ever hit
+// it, the right answer is async-trigger pattern, not just bumping
+// the cap further.
 export const maxDuration = 300;
 export const runtime = "nodejs";
 
@@ -166,8 +174,33 @@ export async function POST(req: Request) {
     (r) => ({ rows_imported: r.upserted }),
   );
 
+  // Snapshot refresh consumes mdapi_subscriptions data, so it only
+  // runs if that sync succeeded. The throw-on-skip pattern lets
+  // runWithLog handle the log row uniformly — error_message records
+  // why the snapshot was skipped so it shows up in Recent Syncs.
+  const snapshotResult = await runWithLog(
+    "membership-snapshots",
+    triggeredBy,
+    supabase,
+    async (sb) => {
+      if (!subscriptionsResult.ok) {
+        throw new Error(
+          "Skipped: mdapi_subscriptions sync failed; snapshot needs fresh data",
+        );
+      }
+      await refreshMembershipSnapshots({ client: sb, sourceFileName: "cron" });
+    },
+    // refreshMembershipSnapshots has no row counts to surface here —
+    // it upserts members_monthly_snapshots in-place. The success
+    // signal is the absence of an error_message on the log row.
+    () => ({}),
+  );
+
   const anyFailed =
-    !stripeResult.ok || !reviewsResult.ok || !subscriptionsResult.ok;
+    !stripeResult.ok ||
+    !reviewsResult.ok ||
+    !subscriptionsResult.ok ||
+    !snapshotResult.ok;
 
   return Response.json(
     {
@@ -177,6 +210,7 @@ export async function POST(req: Request) {
         stripe: stripeResult,
         mdapi_reviews: reviewsResult,
         mdapi_subscriptions: subscriptionsResult,
+        membership_snapshots: snapshotResult,
       },
     },
     { status: anyFailed ? 500 : 200 },

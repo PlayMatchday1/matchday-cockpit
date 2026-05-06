@@ -18,7 +18,8 @@ export type TriggeredBy = "manual" | "cron";
 export type SourceName =
   | "stripe-api"
   | "mdapi-reviews"
-  | "mdapi-subscriptions";
+  | "mdapi-subscriptions"
+  | "membership-snapshots";
 
 // fin_sync_log columns the orchestrator/manual routes write on
 // success. Stripe-specific columns (charges_*) stay null for mdapi
