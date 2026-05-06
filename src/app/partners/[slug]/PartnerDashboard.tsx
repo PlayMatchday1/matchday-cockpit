@@ -104,10 +104,18 @@ export default function PartnerDashboard({
       <SecLabel className="mt-10">{totalsLabel}</SecLabel>
       <div className="mt-3 grid grid-cols-2 gap-2.5 sm:grid-cols-3 lg:grid-cols-5">
         <Metric label="Total spots filled" value={stats.totals.spots.toLocaleString()} sub="players who showed up" />
-        <Metric label="MatchDay players" value={stats.totals.md.toLocaleString()} sub="registered app users" />
+        {dataBaseline ? (
+          <Metric label="MatchDay registrations" value={stats.totals.md.toLocaleString()} sub="registered app users" />
+        ) : (
+          <Metric label="MatchDay players" value={stats.totals.md.toLocaleString()} sub="registered app users" />
+        )}
         <Metric label="Guests brought" value={stats.totals.guests.toLocaleString()} sub="guest spots purchased by players" />
         <Metric label="Cancellations" value={stats.totals.cancels.toLocaleString()} sub="non-refundable cancel within 24 hrs" />
-        <Metric label="Total revenue" value={fmtUsd(stats.totals.rev)} sub="match price paid" />
+        {dataBaseline ? (
+          <Metric label="Unique players" value={stats.totals.uniquePlayers.toLocaleString()} sub="distinct people who showed up" />
+        ) : (
+          <Metric label="Total revenue" value={fmtUsd(stats.totals.rev)} sub="match price paid" />
+        )}
       </div>
 
       {stats.byMonth.length > 0 && (
@@ -125,7 +133,7 @@ export default function PartnerDashboard({
       )}
 
       <SecLabel className="mt-10">Week by week</SecLabel>
-      <WeekGrid weeks={stats.weeks} />
+      <WeekGrid weeks={stats.weeks} useIsoDateLabels={!!dataBaseline} />
 
       <div className="mt-6 grid grid-cols-1 gap-4 lg:grid-cols-[1.4fr_1fr]">
         <Card>
@@ -285,32 +293,81 @@ function MonthlySummary({ months }: { months: PartnerMonthStat[] }) {
   );
 }
 
-function WeekGrid({ weeks }: { weeks: PartnerWeekStat[] }) {
+function WeekGrid({
+  weeks,
+  useIsoDateLabels,
+}: {
+  weeks: PartnerWeekStat[];
+  useIsoDateLabels: boolean;
+}) {
   return (
     <div className="mt-3 grid grid-cols-1 gap-2 sm:grid-cols-2 md:grid-cols-3 lg:grid-cols-5">
       {weeks.map((w, i) => (
-        <WeekCard key={w.wkMonday} week={w} index={i} />
+        <WeekCard
+          key={w.wkMonday}
+          week={w}
+          index={i}
+          useIsoDateLabels={useIsoDateLabels}
+        />
       ))}
     </div>
   );
 }
 
+// Mon-Sun ISO week label, e.g. "Mar 31 – Apr 5". Includes year only
+// when the week straddles a year boundary. Used when the dashboard is
+// scoped to a baseline (currently Hattrick) — drops the "Week N" prefix
+// since the date range alone is the more useful identifier.
+function isoWeekRangeLabel(wkMonday: string): string {
+  const start = new Date(`${wkMonday}T12:00:00Z`);
+  const end = new Date(start);
+  end.setUTCDate(end.getUTCDate() + 6);
+  const sameYear = start.getUTCFullYear() === end.getUTCFullYear();
+  const fmtMD = new Intl.DateTimeFormat("en-US", {
+    month: "short",
+    day: "numeric",
+    timeZone: "UTC",
+  });
+  const fmtMDY = new Intl.DateTimeFormat("en-US", {
+    month: "short",
+    day: "numeric",
+    year: "numeric",
+    timeZone: "UTC",
+  });
+  if (sameYear) return `${fmtMD.format(start)} – ${fmtMD.format(end)}`;
+  return `${fmtMDY.format(start)} – ${fmtMDY.format(end)}`;
+}
+
 function WeekCard({
   week,
   index,
+  useIsoDateLabels,
 }: {
   week: PartnerWeekStat;
   index: number;
+  useIsoDateLabels: boolean;
 }) {
   const baseCls =
     "rounded-xl border border-cream-line bg-white p-3.5 text-sm";
+  const dateRangeLabel = useIsoDateLabels
+    ? isoWeekRangeLabel(week.wkMonday)
+    : null;
+
   if (week.voided) {
     return (
       <div className={`${baseCls} bg-cream-soft/60 opacity-60`}>
-        <p className="text-[10px] font-semibold uppercase tracking-[0.07em] text-deep-green/45">
-          Week {index + 1}
-        </p>
-        <p className="text-[11px] text-deep-green/55">{week.label}</p>
+        {dateRangeLabel ? (
+          <p className="text-[11px] font-semibold uppercase tracking-[0.07em] text-deep-green/55">
+            {dateRangeLabel}
+          </p>
+        ) : (
+          <>
+            <p className="text-[10px] font-semibold uppercase tracking-[0.07em] text-deep-green/45">
+              Week {index + 1}
+            </p>
+            <p className="text-[11px] text-deep-green/55">{week.label}</p>
+          </>
+        )}
         <p className="mt-2 font-mono text-2xl font-medium text-deep-green/30">
           —
         </p>
@@ -341,13 +398,24 @@ function WeekCard({
 
   return (
     <div className={cls}>
-      <p
-        className={`text-[10px] font-semibold uppercase tracking-[0.07em] ${isCurrent ? "text-mint-hover" : "text-deep-green/45"}`}
-      >
-        Week {index + 1}
-        {isCurrent && " · latest"}
-      </p>
-      <p className="text-[11px] text-deep-green/55">{week.label}</p>
+      {dateRangeLabel ? (
+        <p
+          className={`text-[11px] font-semibold uppercase tracking-[0.07em] ${isCurrent ? "text-mint-hover" : "text-deep-green/55"}`}
+        >
+          {dateRangeLabel}
+          {isCurrent && " · latest"}
+        </p>
+      ) : (
+        <>
+          <p
+            className={`text-[10px] font-semibold uppercase tracking-[0.07em] ${isCurrent ? "text-mint-hover" : "text-deep-green/45"}`}
+          >
+            Week {index + 1}
+            {isCurrent && " · latest"}
+          </p>
+          <p className="text-[11px] text-deep-green/55">{week.label}</p>
+        </>
+      )}
       <p className="mt-2 font-mono text-3xl font-medium leading-none text-deep-green">
         {week.totalPlayers}
       </p>

@@ -84,6 +84,11 @@ export type PartnerStats = {
     guests: number;
     cancels: number;
     rev: number;
+    // Distinct user_ids across non-staff, non-match-canceled,
+    // non-player-canceled rows. Counts people, not registrations
+    // (so always ≤ md). Guests don't have user_ids in mdapi rows,
+    // so they're not counted here.
+    uniquePlayers: number;
   };
   weeks: PartnerWeekStat[];
   byMonth: PartnerMonthStat[];
@@ -432,7 +437,14 @@ export function computePartnerStats(
 
   if (pacAll.length === 0 && extra.length === 0) {
     return {
-      totals: { spots: 0, md: 0, guests: 0, cancels: 0, rev: 0 },
+      totals: {
+        spots: 0,
+        md: 0,
+        guests: 0,
+        cancels: 0,
+        rev: 0,
+        uniquePlayers: 0,
+      },
       weeks: [],
       byMonth: [],
       lastMatchDate: null,
@@ -591,8 +603,19 @@ export function computePartnerStats(
       acc.rev += w.totalRev;
       return acc;
     },
-    { spots: 0, md: 0, guests: 0, cancels: 0, rev: 0 },
+    { spots: 0, md: 0, guests: 0, cancels: 0, rev: 0, uniquePlayers: 0 },
   );
+
+  // Cross-week distinct user_id count. Computed separately because the
+  // per-week aggregates can't dedup someone who showed up across
+  // multiple weeks. Excludes player-cancelled rows (those didn't show)
+  // and match_canceled (already excluded from `pac`).
+  const uniqueIds = new Set<string>();
+  for (const r of pac) {
+    if (isCanceled(r)) continue;
+    uniqueIds.add(r.user_id);
+  }
+  totals.uniquePlayers = uniqueIds.size;
 
   // Catch any extraRev that lands in a week with no match data (no
   // weekMap[wk] entry → no week stat created → its extraRev was never
