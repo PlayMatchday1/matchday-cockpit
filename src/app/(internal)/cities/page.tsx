@@ -12,7 +12,7 @@ import { CityHealthPill } from "@/components/StatusPill";
 import MiniBarSparkline from "@/components/MiniBarSparkline";
 import TotalsBarChart from "@/components/TotalsBarChart";
 import PagePermissionGuard from "@/components/PagePermissionGuard";
-import { useMatchData } from "@/lib/useMatchData";
+import { useMatchWindowData } from "@/lib/useMatchData";
 import {
   getActiveVenues,
   getCancelRate,
@@ -62,7 +62,10 @@ function CitiesIndexContent() {
 }
 
 function OverviewLens() {
-  const { rows, meta, loading } = useMatchData();
+  // 12-week window (covers the 8-week getWeeklySpots call + slack for
+  // current-month MTD). Server-side date filter avoids the 38k-row
+  // full-population pull on hydration. See useMatchWindowData header.
+  const { rows, meta, loading } = useMatchWindowData(12);
   const [weekScope, setWeekScope] = useState<WeekScope>("current");
 
   const totals = getWeeklySpots(rows, null, 8);

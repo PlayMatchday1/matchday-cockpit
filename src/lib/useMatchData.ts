@@ -126,3 +126,110 @@ export function useMatchData(): State {
 export async function refetchMatchData(): Promise<void> {
   await load();
 }
+
+// =====================================================================
+// Windowed variant — sibling of useMatchData, used by /cities to avoid
+// pulling all ~38k mdapi_match_players rows on hydration.
+//
+// fetchJoinedMatchPlayers applies fromDate as a Postgres `start_date >=`
+// predicate, so the row reduction happens server-side, not after a 15s
+// download. 12 weeks ≈ ~6k matches, ~12k players — one paginated round
+// trip on the matches side, ~3 IN-chunks on the players side.
+//
+// Each window size has its own singleton cache so two components calling
+// useMatchWindowData(12) share one fetch. Anchored at "now" — currently
+// stable enough across hydration that we don't need to revalidate when
+// the date crosses midnight.
+// =====================================================================
+
+const windowedCache = new Map<number, State>();
+const windowedPending = new Map<number, Promise<void>>();
+const windowedSubs = new Map<number, Set<(s: State) => void>>();
+
+function publishWindow(weeks: number, s: State) {
+  windowedCache.set(weeks, s);
+  windowedSubs.get(weeks)?.forEach((fn) => fn(s));
+}
+
+async function loadWindow(weeks: number): Promise<void> {
+  publishWindow(weeks, { rows: [], meta: null, loading: true, error: null });
+
+  // Pad the window edge by 14 days so MTD calcs (current-month
+  // cancellation rate, in-progress weeks) never miss matches that
+  // landed just before the strict 12-week cutoff.
+  const fromMs = Date.now() - (weeks * 7 + 14) * 86400 * 1000;
+  const fromDate = new Date(fromMs).toISOString().slice(0, 10);
+
+  let rows: JoinedMatchPlayerRow[];
+  let lastSyncCompletedAt: string | null = null;
+  try {
+    const [rowsResult, lastSyncResult] = await Promise.all([
+      fetchJoinedMatchPlayers(supabase, { fromDate }),
+      supabase
+        .from("fin_sync_log")
+        .select("completed_at")
+        .eq("source", "mdapi-matches")
+        .not("completed_at", "is", null)
+        .order("completed_at", { ascending: false })
+        .limit(1)
+        .maybeSingle<{ completed_at: string }>(),
+    ]);
+    rows = rowsResult;
+    lastSyncCompletedAt = lastSyncResult.data?.completed_at ?? null;
+  } catch (e) {
+    publishWindow(weeks, {
+      rows: [],
+      meta: null,
+      loading: false,
+      error: e instanceof Error ? e.message : "Failed to load match data.",
+    });
+    return;
+  }
+
+  const earliestMatch = rows[0]?.matchStart ?? new Date();
+  const latestMatch = rows[rows.length - 1]?.matchStart ?? new Date();
+
+  publishWindow(weeks, {
+    rows,
+    meta: {
+      filename: "MatchDay API",
+      uploadedAt: lastSyncCompletedAt
+        ? new Date(lastSyncCompletedAt)
+        : new Date(),
+      rowCount: rows.length,
+      earliestMatch,
+      latestMatch,
+    },
+    loading: false,
+    error: null,
+  });
+}
+
+export function useMatchWindowData(weeks: number): State {
+  const [s, setS] = useState<State>(windowedCache.get(weeks) ?? INITIAL);
+
+  useEffect(() => {
+    let subs = windowedSubs.get(weeks);
+    if (!subs) {
+      subs = new Set();
+      windowedSubs.set(weeks, subs);
+    }
+    subs.add(setS);
+
+    const cached = windowedCache.get(weeks);
+    if (cached) {
+      setS(cached);
+    } else if (!windowedPending.has(weeks)) {
+      const p = loadWindow(weeks).finally(() => {
+        windowedPending.delete(weeks);
+      });
+      windowedPending.set(weeks, p);
+    }
+
+    return () => {
+      subs?.delete(setS);
+    };
+  }, [weeks]);
+
+  return s;
+}

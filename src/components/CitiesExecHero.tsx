@@ -6,14 +6,16 @@ import {
 } from "@/lib/cityStats";
 import { isActiveMember } from "@/lib/membershipStats";
 import { useFinanceData } from "@/lib/useFinanceData";
-import { useMatchData } from "@/lib/useMatchData";
+import { useMatchWindowData } from "@/lib/useMatchData";
 
 // Network-wide ops hero for /cities. Four big stats, no toggles —
 // always reflects the in-progress current week. Same surface
 // treatment as FinanceExecHero so the two read as one design system.
 
 export default function CitiesExecHero() {
-  const { rows, meta, loading } = useMatchData();
+  // 12-week window — see useMatchWindowData header. Shares the cache
+  // with OverviewLens so /cities only fires one match-data fetch.
+  const { rows, meta, loading } = useMatchWindowData(12);
   const { data: finData } = useFinanceData();
 
   if (loading) {
