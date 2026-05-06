@@ -9,10 +9,10 @@ import { canAccess, useAuth } from "@/lib/useAuth";
 
 export default function DataPage() {
   const { appUser } = useAuth();
-  // Stripe + Members write to finance-domain tables (fin_revenue,
-  // mdapi_subscriptions), so they only render for users with finance
-  // access. Matches + Reviews remain available to anyone with data
-  // access.
+  // Sections gated on finance access write to finance-domain tables
+  // (fin_revenue, mdapi_subscriptions, members_monthly_snapshots) or
+  // surface finance-y data. Reviews + Matches stay open to data
+  // permission since they feed both finance and ops dashboards.
   const showFinanceSections = canAccess(appUser, "finance");
 
   return (
@@ -22,41 +22,24 @@ export default function DataPage() {
         subtitle="Upload CSVs and run on-demand syncs."
       />
 
-      {showFinanceSections && (
-        <>
-          <section className="mb-12">
-            <SectionHeader
-              title="Stripe data"
-              subtitle="Charges and subscription payments. Synced automatically from Stripe."
-            />
-            <StripeUploader />
-          </section>
+      {/* Section order matches the cron orchestrator's daily run:
+          stripe → reviews → subscriptions → promocodes → matches →
+          snapshots. Each card surfaces its last fin_sync_log row so
+          operators can see freshness at a glance. */}
 
-          <section className="mb-12">
-            <SectionHeader
-              title="Members data"
-              subtitle="Active subscribers and cancellations from Stripe."
-            />
-            <SyncCard
-              title="Sync from MatchDay API"
-              description="Refreshes mdapi_subscriptions from /admin/subscriptions across all cities."
-              source="mdapi-subscriptions"
-              endpoint="/api/sync/subscriptions"
-              estimatedDuration="~60 seconds"
-            />
-          </section>
-        </>
+      {/* 1. Stripe */}
+      {showFinanceSections && (
+        <section className="mb-12">
+          <SectionHeader
+            title="Stripe data"
+            subtitle="Charges and subscription payments. Synced automatically from Stripe."
+          />
+          <StripeUploader />
+        </section>
       )}
 
+      {/* 2. Reviews */}
       <section className="mb-12">
-        <SectionHeader
-          title="Matches data"
-          subtitle="Match registrations and cancellations."
-        />
-        <MatchesUploader />
-      </section>
-
-      <section>
         <SectionHeader
           title="Reviews data"
           subtitle="Star ratings and manager attribution."
@@ -68,6 +51,76 @@ export default function DataPage() {
           endpoint="/api/sync/reviews"
         />
       </section>
+
+      {/* 3. Members / Subscriptions */}
+      {showFinanceSections && (
+        <section className="mb-12">
+          <SectionHeader
+            title="Members data"
+            subtitle="Active subscribers and cancellations from Stripe."
+          />
+          <SyncCard
+            title="Sync from MatchDay API"
+            description="Refreshes mdapi_subscriptions from /admin/subscriptions across all cities."
+            source="mdapi-subscriptions"
+            endpoint="/api/sync/subscriptions"
+            estimatedDuration="~60 seconds"
+          />
+        </section>
+      )}
+
+      {/* 4. Promocodes (NEW Phase 5b followup) */}
+      {showFinanceSections && (
+        <section className="mb-12">
+          <SectionHeader
+            title="Promocodes"
+            subtitle="Promo code metadata — resolves promocode_id → code text in match insights."
+          />
+          <SyncCard
+            title="Sync from MatchDay API"
+            description="Refreshes mdapi_promocodes from /admin/promocodes (~6k rows)."
+            source="mdapi-promocodes"
+            endpoint="/api/sync/promocodes"
+            estimatedDuration="~2 seconds"
+          />
+        </section>
+      )}
+
+      {/* 5. Matches — new SyncCard at the top (Phase 5c), CSV uploader
+          stays below as the deprecated path until Phase 5d removes it. */}
+      <section className="mb-12">
+        <SectionHeader
+          title="Matches data"
+          subtitle="Match registrations and player rosters."
+        />
+        <div className="space-y-6">
+          <SyncCard
+            title="Sync from MatchDay API (incremental)"
+            description="Refreshes mdapi_matches + mdapi_match_players for the now-14d → now+60d window. The full backfill is CLI-only via scripts/sync-mdapi-matches-backfill.ts."
+            source="mdapi-matches"
+            endpoint="/api/sync/matches"
+            estimatedDuration="~150 seconds"
+          />
+          <MatchesUploader />
+        </div>
+      </section>
+
+      {/* 6. Membership snapshots (NEW Phase 5c) */}
+      {showFinanceSections && (
+        <section>
+          <SectionHeader
+            title="Membership snapshots"
+            subtitle="Per-month rollup driving the All-Time chart and historical KPIs."
+          />
+          <SyncCard
+            title="Refresh snapshots"
+            description="Recomputes members_monthly_snapshots from mdapi_subscriptions + mdapi_match_players. Useful after a data spot-fix; the cron also runs this nightly."
+            source="membership-snapshots"
+            endpoint="/api/sync/snapshots"
+            estimatedDuration="~5 seconds"
+          />
+        </section>
+      )}
     </PagePermissionGuard>
   );
 }

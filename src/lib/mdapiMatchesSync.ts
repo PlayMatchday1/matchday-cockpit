@@ -234,6 +234,24 @@ export type MdapiMatchesSyncOptions = {
   toDate?: string;
 };
 
+// Default window for daily incremental refresh: now - 14 days through
+// now + 60 days (per design doc Section 3.4).
+//   - 14 days back: past matches stable after that, no point re-fetching
+//   - 60 days forward: catches all open registration windows + a buffer
+// Shared between scripts/sync-mdapi-matches-incremental.ts and the
+// cron orchestrator so the window is defined in exactly one place.
+export function defaultIncrementalWindow(now: Date = new Date()): {
+  fromDate: string;
+  toDate: string;
+} {
+  const ymd = (d: Date) =>
+    `${d.getFullYear()}-${String(d.getMonth() + 1).padStart(2, "0")}-${String(d.getDate()).padStart(2, "0")}`;
+  return {
+    fromDate: ymd(new Date(now.getTime() - 14 * 86_400_000)),
+    toDate: ymd(new Date(now.getTime() + 60 * 86_400_000)),
+  };
+}
+
 export type MdapiMatchesSyncResult = {
   matchesFetched: number; // pre-upsert; matches the API list response
   matchesUpserted: number;

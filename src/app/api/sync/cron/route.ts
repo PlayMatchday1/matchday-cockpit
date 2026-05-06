@@ -1,19 +1,24 @@
-// POST /api/sync/cron — orchestrator that runs five daily steps:
-// Stripe charges, mdapi_reviews, mdapi_subscriptions, mdapi_promocodes,
-// and a membership snapshot refresh — sequentially, with per-source
+// POST /api/sync/cron — orchestrator that runs six daily steps:
+// stripe-api → mdapi-reviews → mdapi-subscriptions → mdapi-promocodes
+// → mdapi-matches → membership-snapshots. Sequential, per-source
 // error isolation.
 //
-// The snapshot refresh consumes mdapi_subscriptions, so it only
-// runs if that sync succeeded. If subs fail, the snapshot step is
-// skipped (a fin_sync_log row is still written for visibility, with
-// error_message explaining the skip). Promocodes are independent of
-// any upstream — they always run.
+// Skip-on-fail rules:
+//   - Snapshot refresh skips if mdapi-subscriptions failed (active
+//     count is the load-bearing KPI; member data must be fresh).
+//   - Snapshot refresh runs even if mdapi-matches failed (only the
+//     avg_matches stat goes stale; member metrics still fresh).
+//   - All other steps are independent.
 //
 // Each step gets its own fin_sync_log row. A throw in one wrapper
 // does NOT prevent the others from running. HTTP status: 200 if all
-// five succeed, 500 if any failed (Vercel cron monitoring surfaces
+// six succeed, 500 if any failed (Vercel cron monitoring surfaces
 // non-2xx as a failed cron — operator gets visibility on partial
-// failures even when 4/5 succeed).
+// failures even when 5/6 succeed).
+//
+// Timeout headroom: estimated ~280s typical (~93% of 300s
+// maxDuration). If observed timeouts, optimize matches via
+// updatedAt-watermark (cuts ~150s → ~30s).
 //
 // Auth: same dual-mode pattern as /api/sync/stripe.
 //   Cron mode:   Bearer ${CRON_SECRET} (constant-time compare),
@@ -34,6 +39,10 @@ import { syncStripeCharges } from "@/lib/stripeSync";
 import { syncMdapiReviews } from "@/lib/mdapiReviewsSync";
 import { syncMdapiSubscriptions } from "@/lib/mdapiSubscriptionsSync";
 import { syncMdapiPromocodes } from "@/lib/mdapiPromocodesSync";
+import {
+  syncMdapiMatches,
+  defaultIncrementalWindow,
+} from "@/lib/mdapiMatchesSync";
 import { refreshMembershipSnapshots } from "@/lib/membershipSnapshots";
 import { runWithLog, type TriggeredBy } from "@/lib/syncLogging";
 
@@ -188,6 +197,20 @@ export async function POST(req: Request) {
     (r) => ({ rows_imported: r.upserted }),
   );
 
+  // Matches — incremental refresh of mdapi_matches + mdapi_match_players
+  // for the now-14d → now+60d window. Independent of upstream syncs;
+  // snapshots will run even if this fails (only avg_matches stat goes
+  // stale, member metrics stay fresh). ~150s typical.
+  const matchesResult = await runWithLog(
+    "mdapi-matches",
+    triggeredBy,
+    supabase,
+    (sb) => syncMdapiMatches(sb, defaultIncrementalWindow()),
+    (r) => ({
+      rows_imported: r.matchesUpserted + r.playersUpserted,
+    }),
+  );
+
   // Snapshot refresh consumes mdapi_subscriptions data, so it only
   // runs if that sync succeeded. The throw-on-skip pattern lets
   // runWithLog handle the log row uniformly — error_message records
@@ -215,6 +238,7 @@ export async function POST(req: Request) {
     !reviewsResult.ok ||
     !subscriptionsResult.ok ||
     !promocodesResult.ok ||
+    !matchesResult.ok ||
     !snapshotResult.ok;
 
   return Response.json(
@@ -226,6 +250,7 @@ export async function POST(req: Request) {
         mdapi_reviews: reviewsResult,
         mdapi_subscriptions: subscriptionsResult,
         mdapi_promocodes: promocodesResult,
+        mdapi_matches: matchesResult,
         membership_snapshots: snapshotResult,
       },
     },

@@ -12,7 +12,10 @@
 
 import { createClient } from "@supabase/supabase-js";
 import { readFileSync } from "node:fs";
-import { syncMdapiMatches } from "../src/lib/mdapiMatchesSync";
+import {
+  syncMdapiMatches,
+  defaultIncrementalWindow,
+} from "../src/lib/mdapiMatchesSync";
 
 const env = readFileSync(
   "/Users/ryanmancuso/Desktop/matchday-cockpit/.env.local",
@@ -34,13 +37,6 @@ for (const v of [
 const supabaseUrl = readVar("NEXT_PUBLIC_SUPABASE_URL");
 const serviceKey = readVar("SUPABASE_SERVICE_ROLE_KEY");
 
-function ymd(d: Date): string {
-  const y = d.getFullYear();
-  const m = String(d.getMonth() + 1).padStart(2, "0");
-  const da = String(d.getDate()).padStart(2, "0");
-  return `${y}-${m}-${da}`;
-}
-
 async function main() {
   if (!supabaseUrl || !serviceKey) {
     console.error(
@@ -53,9 +49,7 @@ async function main() {
     process.exit(1);
   }
 
-  const now = new Date();
-  const fromDate = ymd(new Date(now.getTime() - 14 * 86_400_000));
-  const toDate = ymd(new Date(now.getTime() + 60 * 86_400_000));
+  const { fromDate, toDate } = defaultIncrementalWindow();
 
   const supabase = createClient(supabaseUrl, serviceKey, {
     auth: { persistSession: false, autoRefreshToken: false },

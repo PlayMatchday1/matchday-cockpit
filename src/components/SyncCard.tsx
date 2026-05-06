@@ -12,7 +12,12 @@
 import { useEffect, useState } from "react";
 import { supabase } from "@/lib/supabase";
 
-type Source = "mdapi-reviews" | "mdapi-subscriptions";
+type Source =
+  | "mdapi-reviews"
+  | "mdapi-subscriptions"
+  | "mdapi-promocodes"
+  | "mdapi-matches"
+  | "membership-snapshots";
 
 type LastSyncRow = {
   completed_at: string;
