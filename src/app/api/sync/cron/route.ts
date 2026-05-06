@@ -257,3 +257,8 @@ export async function POST(req: Request) {
     { status: anyFailed ? 500 : 200 },
   );
 }
+
+// Vercel cron triggers send HTTP GET
+// (https://vercel.com/docs/cron-jobs#how-cron-jobs-work). Same handler,
+// same auth — the bearer token is read from headers, no body is consumed.
+export const GET = POST;
