@@ -4,6 +4,12 @@ import { useEffect, useState } from "react";
 import { supabase } from "./supabase";
 import { selectAll } from "./supabasePagination";
 import { cityFromAbbr } from "./cityMap";
+import {
+  buildMdapiMemberSpotIndex,
+  emptyMdapiMemberSpotIndex,
+  type MdapiMemberSpotIndex,
+} from "./financeStats";
+import { fetchLegacyMatchRegistrations } from "./mdapiMatchesRead";
 
 export type FinRevenue = {
   id: number;
@@ -164,6 +170,11 @@ export type FinanceData = {
   overrides: FinVenueCostOverride[];
   venueAliases: Map<string, string>;
   config: Record<string, string>;
+  // Member-spot counts derived from mdapi_match_players, used as the
+  // denominator for the member-revenue allocation helpers in
+  // financeStats.ts. Replaces fin_member_spots in active read paths;
+  // see buildMdapiMemberSpotIndex for shape.
+  mdapiMemberSpots: MdapiMemberSpotIndex;
 };
 
 type State = {
@@ -258,6 +269,9 @@ async function load(): Promise<void> {
   let mbrRows: Array<Record<string, unknown>>;
   let prcRows: Array<Record<string, unknown>>;
   let ovRows: Array<Record<string, unknown>>;
+  let mdapiRegRows: Awaited<
+    ReturnType<typeof fetchLegacyMatchRegistrations>
+  >;
   let cmtRow: Record<string, unknown> | null;
   try {
     [
@@ -273,6 +287,7 @@ async function load(): Promise<void> {
       mbrRows,
       prcRows,
       ovRows,
+      mdapiRegRows,
     ] = await Promise.all([
       selectAll<Record<string, unknown>>(() =>
         supabase.from("fin_revenue").select("*").order("id"),
@@ -319,6 +334,14 @@ async function load(): Promise<void> {
       selectAll<Record<string, unknown>>(() =>
         supabase.from("fin_venue_cost_overrides").select("*").order("id"),
       ),
+      // Q2-wide mdapi pull. Feeds mdapiMemberSpots index used as the
+      // denominator in the member-rev allocation helpers (replaces
+      // the fin_member_spots manual aggregate). Bounds match Q2_MONTHS;
+      // when the quarter rolls, update both Q2_MONTHS and these bounds.
+      fetchLegacyMatchRegistrations(supabase, {
+        fromDate: "2026-04-01",
+        toDate: "2026-06-30",
+      }),
     ]);
     const cmtRes = await supabase
       .from("fin_commentary")
@@ -460,6 +483,12 @@ async function load(): Promise<void> {
     other_spots: Math.round(asNumber(r.other_spots) || 0),
   }));
 
+  // Build the mdapi-derived spot index from the Q2-wide registrations
+  // pull. Drives venueAllocatedMemberRevenueFor / matchAllocatedMemberRevenueFor.
+  const mdapiMemberSpots = mdapiRegRows
+    ? buildMdapiMemberSpotIndex(mdapiRegRows, venues)
+    : emptyMdapiMemberSpotIndex();
+
   const config: Record<string, string> = {};
   for (const r of cfgRows) {
     config[cleanText(r.key)] = cleanText(r.value);
@@ -536,6 +565,7 @@ async function load(): Promise<void> {
       overrides,
       venueAliases,
       config,
+      mdapiMemberSpots,
     },
     loading: false,
     error: null,

@@ -1,5 +1,6 @@
 import type { FinanceData } from "./useFinanceData";
 import type { MatchRow } from "./useMatchData";
+import type { LegacyMatchRegRow } from "./mdapiMatchesRead";
 import {
   canonicalVenueCost,
   fieldCostsFor,
@@ -1711,9 +1712,17 @@ export function venueAllocatedMemberRevenueFor(
   venue: string,
   month: Q2Month,
 ): number {
-  const venueSpots = venueMemberSpotsFor(data, city, venue, month).member;
-  const cityTotal = cityTotalMemberSpotsFor(data, city, month);
-  if (cityTotal === 0) return 0;
+  // Spot counts come from mdapi_match_players via data.mdapiMemberSpots
+  // (the index built once in useFinanceData). fin_member_spots was
+  // a manually-uploaded monthly aggregate; it drifted from real-time
+  // matches at month boundaries and produced $0 allocations for any
+  // match in a month before its row was uploaded. Same source for
+  // numerator/denominator means no drift.
+  const venueSpots =
+    data.mdapiMemberSpots.byVenueMonth.get(`${city}|${venue}|${month}`) ?? 0;
+  const cityTotal =
+    data.mdapiMemberSpots.byCityMonth.get(`${city}|${month}`) ?? 0;
+  if (cityTotal <= 0) return 0;
   const cityMembership = cityMembershipRevenueFor(data, city, month);
   return (venueSpots / cityTotal) * cityMembership;
 }
@@ -1759,7 +1768,7 @@ export function matchAllocatedMemberRevenueFor(
   data: FinanceData,
   args: {
     city: string;
-    venueName: string; // canonical (post-alias)
+    venueName: string; // canonical (post-alias) — kept for API compat
     matchStartIso: string; // raw ISO timestamp; used for month bucketing
     memberSpots: number; // count of MEMBER-payment registrations at this match
   },
@@ -1771,36 +1780,114 @@ export function matchAllocatedMemberRevenueFor(
   // Q2-keyed helpers would silently return 0 anyway, so short-circuit.
   if (!month) return 0;
 
-  const monthMemberSpotsAtVenue = venueMemberSpotsFor(
-    data,
-    args.city,
-    args.venueName,
-    month,
-  ).member;
+  // Algebra:
+  //   match_rev = (memberSpots / venueSpots)
+  //             × (venueSpots  / cityTotal)
+  //             × cityMembership
+  //           =  (memberSpots  / cityTotal)
+  //             × cityMembership
+  // The venue-level count cancels — we only need the city-month
+  // total as the denominator.
+  const cityTotal =
+    data.mdapiMemberSpots.byCityMonth.get(`${args.city}|${month}`) ?? 0;
+  if (cityTotal <= 0) return 0;
 
-  if (monthMemberSpotsAtVenue <= 0) {
-    // Venue has zero member spots in fin_member_spots for this month
-    // (e.g. fin_member_spots wasn't refreshed after a recent Members
-    // CSV upload, or a brand-new venue) but the match has MEMBER
-    // registrations. We can't compute pro-rata without the
-    // denominator — fall back to 0 so the column reads honest. Surface
-    // the discrepancy so it's investigable.
-    if (typeof console !== "undefined") {
-      console.warn(
-        `matchAllocatedMemberRevenueFor: ${args.venueName} ${month} has zero month_member_spots in fin_member_spots, but match ${args.matchStartIso} has ${args.memberSpots} MEMBER registrations — returning 0`,
-      );
-    }
-    return 0;
+  const cityMembership = cityMembershipRevenueFor(data, args.city, month);
+  return (args.memberSpots / cityTotal) * cityMembership;
+}
+
+// =====================================================================
+// MdapiMemberSpotIndex — derives member-spot counts directly from
+// mdapi_match_players, used as the denominator for the two member-rev
+// allocation helpers above. Replaces the fin_member_spots dependency
+// (a manually-uploaded monthly aggregate that drifted from real-time
+// match data at every month boundary).
+//
+// Built once in useFinanceData. Q2-scoped to match the cockpit's
+// quarterly window — pre-Q2 timestamps short-circuit isoToQ2Month
+// upstream so they never hit the index.
+// =====================================================================
+
+export type MdapiMemberSpotIndex = {
+  // key: `${city}|${canonicalVenueName}|${Q2Month}`
+  byVenueMonth: Map<string, number>;
+  // key: `${city}|${Q2Month}`
+  byCityMonth: Map<string, number>;
+};
+
+export function emptyMdapiMemberSpotIndex(): MdapiMemberSpotIndex {
+  return { byVenueMonth: new Map(), byCityMonth: new Map() };
+}
+
+export function buildMdapiMemberSpotIndex(
+  regs: LegacyMatchRegRow[],
+  venues: {
+    id: number;
+    venue_name: string;
+    raw_venue_name: string;
+    city: string;
+  }[],
+): MdapiMemberSpotIndex {
+  const byVenueMonth = new Map<string, number>();
+  const byCityMonth = new Map<string, number>();
+
+  // Field → venue resolution (longest-prefix match). Same semantics as
+  // matchPnL.ts's buildFieldToVenueMap; copy kept private here so the
+  // builder is self-contained.
+  const fields = new Set<string>();
+  for (const r of regs) if (r.field) fields.add(r.field);
+  const fieldToVenue = resolveFieldToVenue(fields, venues);
+  const venueById = new Map(venues.map((v) => [v.id, v]));
+
+  for (const r of regs) {
+    // Match-level filters mirror matchPnL.ts active eligibility.
+    if (r.match_canceled) continue;
+    if (r.player_canceled_at && r.player_canceled_at.trim() !== "") continue;
+    if ((r.payment_type ?? "").toUpperCase() !== "MEMBER") continue;
+
+    const month = isoToQ2Month(r.match_start);
+    if (!month) continue;
+
+    const venueId = fieldToVenue.get(r.field);
+    if (venueId == null) continue;
+    const v = venueById.get(venueId);
+    if (!v) continue;
+
+    const venueKey = `${v.city}|${v.venue_name}|${month}`;
+    byVenueMonth.set(venueKey, (byVenueMonth.get(venueKey) ?? 0) + 1);
+    const cityKey = `${v.city}|${month}`;
+    byCityMonth.set(cityKey, (byCityMonth.get(cityKey) ?? 0) + 1);
   }
 
-  const monthMemberRev = venueAllocatedMemberRevenueFor(
-    data,
-    args.city,
-    args.venueName,
-    month,
-  );
+  return { byVenueMonth, byCityMonth };
+}
 
-  return (args.memberSpots / monthMemberSpotsAtVenue) * monthMemberRev;
+function resolveFieldToVenue(
+  fields: Set<string>,
+  venues: { id: number; venue_name: string; raw_venue_name: string }[],
+): Map<string, number> {
+  const map = new Map<string, number>();
+  for (const field of fields) {
+    const lf = field.toLowerCase();
+    let best: { id: number; nameLen: number; rawName: string } | null = null;
+    for (const v of venues) {
+      const candidates = [v.raw_venue_name, v.venue_name];
+      for (const cand of candidates) {
+        const lc = cand.toLowerCase();
+        if (!lc || !lf.includes(lc)) continue;
+        if (
+          !best ||
+          lc.length > best.nameLen ||
+          (lc.length === best.nameLen && cand < best.rawName)
+        ) {
+          best = { id: v.id, nameLen: lc.length, rawName: cand };
+        }
+        break;
+      }
+    }
+    if (best) map.set(field, best.id);
+  }
+  return map;
 }
 
 export type RankingRow = {
