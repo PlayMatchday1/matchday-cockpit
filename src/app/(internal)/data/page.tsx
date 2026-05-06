@@ -2,7 +2,6 @@
 
 import PageHeader from "@/components/PageHeader";
 import PagePermissionGuard from "@/components/PagePermissionGuard";
-import MatchesUploader from "@/components/MatchesUploader";
 import StripeUploader from "@/components/StripeUploader";
 import SyncCard from "@/components/SyncCard";
 import { canAccess, useAuth } from "@/lib/useAuth";
@@ -86,23 +85,19 @@ export default function DataPage() {
         </section>
       )}
 
-      {/* 5. Matches — new SyncCard at the top (Phase 5c), CSV uploader
-          stays below as the deprecated path until Phase 5d removes it. */}
+      {/* 5. Matches */}
       <section className="mb-12">
         <SectionHeader
           title="Matches data"
           subtitle="Match registrations and player rosters."
         />
-        <div className="space-y-6">
-          <SyncCard
-            title="Sync from MatchDay API (incremental)"
-            description="Refreshes mdapi_matches + mdapi_match_players for the now-14d → now+60d window. The full backfill is CLI-only via scripts/sync-mdapi-matches-backfill.ts."
-            source="mdapi-matches"
-            endpoint="/api/sync/matches"
-            estimatedDuration="~150 seconds"
-          />
-          <MatchesUploader />
-        </div>
+        <SyncCard
+          title="Sync from MatchDay API (incremental)"
+          description="Refreshes mdapi_matches + mdapi_match_players for the now-14d → now+60d window. The full backfill is CLI-only via scripts/sync-mdapi-matches-backfill.ts."
+          source="mdapi-matches"
+          endpoint="/api/sync/matches"
+          estimatedDuration="~150 seconds"
+        />
       </section>
 
       {/* 6. Membership snapshots (NEW Phase 5c) */}

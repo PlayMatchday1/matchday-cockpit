@@ -55,8 +55,9 @@ export default function MembershipHealthTable() {
       <div className="mt-5">
         {!mhAvailable ? (
           <div className="text-xs italic text-deep-green/55">
-            Membership Health requires fin_members + fin_venues with member_price
-            set + a current user_analysis upload — re-import to enable.
+            Membership Health requires mdapi_subscriptions + fin_venues with
+            member_price set + recent mdapi_matches data — re-sync from /data
+            to enable.
           </div>
         ) : rows.length === 0 ? (
           <div className="text-xs italic text-deep-green/55">

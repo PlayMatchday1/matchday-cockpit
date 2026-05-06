@@ -11,9 +11,9 @@ import { cityFromAbbr } from "./cityMap";
 import { fetchJoinedMatchPlayers } from "./mdapiMatchesRead";
 
 // Single source of truth for membership snapshot writes. Called from
-// commitMembers (Members CSV upload) and MatchesUploader (user_analysis
-// upload) — whichever ran last refreshes the snapshot using whatever's
-// in the DB at that moment.
+// the cron orchestrator (6th step), the manual /api/sync/snapshots
+// endpoint backing the SyncCard on /data, and the standalone
+// scripts/refresh-membership-snapshots.ts runner.
 //
 // Phase 3b: reads mdapi_subscriptions (was fin_members). Column
 // rename + price (dollars) → price_cents shim happens at the read

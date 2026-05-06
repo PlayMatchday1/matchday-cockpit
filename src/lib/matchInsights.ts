@@ -1,4 +1,4 @@
-// Insights derived from user_analysis (match_registrations) — currently
+// Insights derived from mdapi_matches + mdapi_match_players — currently
 // Member-Heavy Fields and High Promo Usage. Both group non-cancelled
 // registrations for the active month by canonicalized field (same
 // fin_venue_aliases + cross-alias + prefix pipeline as fin_revenue),
@@ -82,7 +82,7 @@ function paymentBucket(paymentType: string | null): "member" | "daily" | "other"
 
 // Returns the canonical fin_venues.venue_name for the row's field, or
 // null if the field doesn't resolve to a tracked venue (e.g. typo,
-// archived test venue, or a venue that exists in user_analysis but not
+// archived test venue, or a venue that exists in mdapi_matches but not
 // in fin_venues yet).
 function resolveVenue(
   field: string,
@@ -200,7 +200,7 @@ export function highPromoUsageFromMatches(
 }
 
 // Per-city spot mix in the active month, sourced from
-// match_registrations (DB-side equivalent of user_analysis). Buckets
+// mdapi_matches + mdapi_match_players via mdapiMatchesRead. Buckets
 // payment_type into Member / DPP / Promo / Free; drops Free from the
 // rendered totals (logged for verification only). Cities with fewer
 // than MIN_TOTAL spots are filtered so a one-off rental doesn't get
