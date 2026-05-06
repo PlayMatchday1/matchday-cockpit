@@ -7,7 +7,6 @@ import ConfirmDeleteDialog from "@/components/ConfirmDeleteDialog";
 import FieldCostOverrideEditor, {
   type OverrideDraft,
 } from "@/components/FieldCostOverrideEditor";
-import MatchPnL from "@/components/MatchPnL";
 import { logChange } from "@/lib/financeAudit";
 import {
   buildFieldCostRows,
@@ -33,7 +32,6 @@ import {
 
 type PriceField = "dpp_price" | "member_price" | "cost_per_match";
 type EditableField = PriceField | "billing_type";
-type SubTab = "config" | "pnl";
 type CellState = { saving: boolean; error: string | null; flash: boolean };
 type EditMap = Map<string, CellState>;
 function editKey(venueId: number, field: EditableField): string {
@@ -66,13 +64,6 @@ function fmtMoney(n: number, signZero = false): string {
 export default function FieldCostsView() {
   const { data, loading } = useFinanceData();
   const { appUser } = useAuth();
-
-  const [subTab, setSubTab] = useState<SubTab>("config");
-  // When the Match P&L subtab links a missing-cost row back to
-  // Config, this state tells the Config table which venue's row to
-  // scroll into view + briefly highlight. Cleared by the row's
-  // effect after the highlight pulses.
-  const [scrollToVenueId, setScrollToVenueId] = useState<number | null>(null);
 
   const [month, setMonth] = useState<Q2Month>(
     () => getCurrentQ2Month() ?? "Jun 2026",
@@ -190,25 +181,6 @@ export default function FieldCostsView() {
     if (hasOverrideOnly) rows = rows.filter((r) => r.override !== null);
     return rows.sort((a, b) => a.displayName.localeCompare(b.displayName));
   }, [allRows, cityFilter, billingFilter, hasOverrideOnly]);
-
-  // Match P&L → Config deep-link: scroll the target row into view
-  // and let the highlight pulse for ~2s, then clear so a future
-  // navigation re-triggers cleanly.
-  useEffect(() => {
-    if (scrollToVenueId === null) return;
-    if (subTab !== "config") return;
-    // Wait one frame so the Config tab's tree is mounted before
-    // querying for the row's element.
-    const raf = requestAnimationFrame(() => {
-      const el = document.getElementById(`venue-row-${scrollToVenueId}`);
-      if (el) el.scrollIntoView({ behavior: "smooth", block: "center" });
-    });
-    const timeout = setTimeout(() => setScrollToVenueId(null), 2000);
-    return () => {
-      cancelAnimationFrame(raf);
-      clearTimeout(timeout);
-    };
-  }, [scrollToVenueId, subTab]);
 
   // Reconciliation: fieldCostsFor is now the canonical Cash Flow line, so
   // its sum always matches the per-row total here by construction. We
@@ -422,43 +394,6 @@ export default function FieldCostsView() {
         </p>
       </div>
 
-      {/* Sub-tab bar — Config (default) vs Match P&L. */}
-      <div className="mb-5 inline-flex rounded-md border border-cream-line bg-cream-soft/60 p-0.5">
-        {(
-          [
-            { id: "config", label: "Config" },
-            { id: "pnl", label: "Match P&L" },
-          ] as { id: SubTab; label: string }[]
-        ).map((opt) => {
-          const active = subTab === opt.id;
-          return (
-            <button
-              key={opt.id}
-              type="button"
-              role="tab"
-              aria-selected={active}
-              onClick={() => setSubTab(opt.id)}
-              className={`rounded px-3 py-1 text-[11px] font-bold uppercase tracking-wider transition ${
-                active
-                  ? "bg-white text-deep-green shadow-sm"
-                  : "text-deep-green/55 hover:text-deep-green"
-              }`}
-            >
-              {opt.label}
-            </button>
-          );
-        })}
-      </div>
-
-      {subTab === "pnl" ? (
-        <MatchPnL
-          onJumpToConfig={(venueId: number) => {
-            setSubTab("config");
-            setScrollToVenueId(venueId);
-          }}
-        />
-      ) : (
-      <>
       <div className="mb-5 flex flex-wrap items-end gap-3 rounded-2xl border-[1.5px] border-cream-line bg-white p-4 shadow-md shadow-deep-green/10">
         <Filter label="Month">
           <select
@@ -578,10 +513,7 @@ export default function FieldCostsView() {
                       onSetOverride={() => openSetOverride(row)}
                       onRemoveOverride={() => setRemoveRow(row)}
                       primaryVenue={primaryVenue}
-                      highlight={
-                        scrollToVenueId !== null &&
-                        scrollToVenueId === row.primaryVenueId
-                      }
+                      highlight={false}
                       cellState={(field) =>
                         edits.get(editKey(row.primaryVenueId, field)) ?? null
                       }
@@ -661,8 +593,6 @@ export default function FieldCostsView() {
           </div>
         )}
       </section>
-      </>
-      )}
 
       <FieldCostOverrideEditor
         open={overrideEditorOpen}

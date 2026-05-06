@@ -21,8 +21,9 @@ type SortKey =
   | "match"
   | "city"
   | "spotsSold"
-  | "grossRevenue"
-  | "memberRev"
+  | "grossRevenue" // labeled "DPP" in the UI; field name kept stable
+  | "memberRev" // labeled "Member"
+  | "total" // DPP + Member, NEW
   | "fieldCost"
   | "net"
   | "status";
@@ -64,9 +65,13 @@ function fmtMonthDay(d: Date): string {
 export default function MatchPnL({
   onJumpToConfig,
 }: {
-  // Lifted from the parent (FieldCostsView) — switches the parent
-  // sub-tab back to "config" and triggers a scroll-to-venue effect.
-  onJumpToConfig: (venueId: number) => void;
+  // Optional cross-tab deep link. When MatchPnL was nested under
+  // Field Costs, the parent passed a callback that switched its
+  // sub-tab to Config and scrolled to the venue. Now that Match P&L
+  // is its own top-level tab, no such parent exists and the prop is
+  // omitted; missing-cost cells render as plain text instead of a
+  // clickable button.
+  onJumpToConfig?: (venueId: number) => void;
 }) {
   const { data, loading: dataLoading } = useFinanceData();
 
@@ -141,6 +146,7 @@ export default function MatchPnL({
         k === "spotsSold" ||
           k === "grossRevenue" ||
           k === "memberRev" ||
+          k === "total" ||
           k === "fieldCost"
           ? "desc"
           : "asc",
@@ -177,6 +183,12 @@ export default function MatchPnL({
           return (a.grossRevenue - b.grossRevenue) * dir;
         case "memberRev":
           return (a.allocatedMemberRev - b.allocatedMemberRev) * dir;
+        case "total":
+          return (
+            (a.grossRevenue + a.allocatedMemberRev -
+              (b.grossRevenue + b.allocatedMemberRev)) *
+            dir
+          );
         case "fieldCost":
           return ((a.fieldCost ?? 0) - (b.fieldCost ?? 0)) * dir;
         case "net":
@@ -288,15 +300,21 @@ export default function MatchPnL({
                 matches
               </span>
               <span>
-                gross{" "}
+                DPP{" "}
                 <span className="font-mono font-bold tabular-nums text-deep-green">
                   {fmtUsd(summary.totalRevenue)}
                 </span>
               </span>
               <span>
-                + member rev{" "}
+                Member{" "}
                 <span className="font-mono font-bold tabular-nums text-deep-green">
                   {fmtUsd(summary.totalMemberRev)}
+                </span>
+              </span>
+              <span>
+                Total{" "}
+                <span className="font-mono font-bold tabular-nums text-deep-green">
+                  {fmtUsd(summary.totalRevenue + summary.totalMemberRev)}
                 </span>
               </span>
               <span>
@@ -366,15 +384,24 @@ export default function MatchPnL({
                 <SortHeader k="match" label="Match" sortKey={sortKey} sortDir={sortDir} onClick={toggleSort} align="left" />
                 <SortHeader k="city" label="City" sortKey={sortKey} sortDir={sortDir} onClick={toggleSort} align="left" />
                 <SortHeader k="spotsSold" label="Spots Sold" sortKey={sortKey} sortDir={sortDir} onClick={toggleSort} align="right" />
-                <SortHeader k="grossRevenue" label="Gross Revenue" sortKey={sortKey} sortDir={sortDir} onClick={toggleSort} align="right" />
+                <SortHeader k="grossRevenue" label="DPP" sortKey={sortKey} sortDir={sortDir} onClick={toggleSort} align="right" />
                 <SortHeader
                   k="memberRev"
-                  label="Allocated Member Rev"
+                  label="Member"
                   sortKey={sortKey}
                   sortDir={sortDir}
                   onClick={toggleSort}
                   align="right"
                   tooltip="Each match's share of monthly membership revenue, allocated based on member attendance at this venue. Reconciles with Field Ranking totals."
+                />
+                <SortHeader
+                  k="total"
+                  label="Total"
+                  sortKey={sortKey}
+                  sortDir={sortDir}
+                  onClick={toggleSort}
+                  align="right"
+                  tooltip="DPP + Member. The actual gross revenue for the match (cash spots + allocated membership share)."
                 />
                 <SortHeader k="fieldCost" label="Field Cost" sortKey={sortKey} sortDir={sortDir} onClick={toggleSort} align="right" />
                 <SortHeader k="net" label="Net" sortKey={sortKey} sortDir={sortDir} onClick={toggleSort} align="right" />
@@ -384,7 +411,7 @@ export default function MatchPnL({
             {activeRows === null ? (
               <tbody>
                 <tr>
-                  <td colSpan={8} className="px-3 py-8 text-center text-sm text-deep-green/55">
+                  <td colSpan={9} className="px-3 py-8 text-center text-sm text-deep-green/55">
                     Loading match P&L…
                   </td>
                 </tr>
@@ -392,7 +419,7 @@ export default function MatchPnL({
             ) : cityGroups.length === 0 ? (
               <tbody>
                 <tr>
-                  <td colSpan={8} className="px-3 py-8 text-center text-sm text-deep-green/55">
+                  <td colSpan={9} className="px-3 py-8 text-center text-sm text-deep-green/55">
                     No matches with cost data this week.
                     {missingCost.length > 0 &&
                       ` (${missingCost.length} matches without cost set — see below.)`}
@@ -406,15 +433,16 @@ export default function MatchPnL({
                   <tbody key={g.city}>
                     <tr className="border-t-2 border-cream-line bg-cream-soft/50">
                       <td
-                        colSpan={8}
+                        colSpan={9}
                         className="px-3 py-2 text-[10px] font-bold uppercase tracking-[0.12em] text-deep-green"
                       >
                         {g.city}
                         <span className="ml-2 font-normal text-deep-green/55">
                           · {sub.matches} match{sub.matches === 1 ? "" : "es"} ·
-                          gross {fmtUsd(sub.gross)} · + member{" "}
-                          {fmtUsd(sub.memberRev)} · cost {fmtUsd(sub.cost)} ·
-                          net{" "}
+                          DPP {fmtUsd(sub.gross)} · Member{" "}
+                          {fmtUsd(sub.memberRev)} · Total{" "}
+                          {fmtUsd(sub.gross + sub.memberRev)} · cost{" "}
+                          {fmtUsd(sub.cost)} · net{" "}
                           <span
                             className={`font-bold ${
                               sub.net > 10
@@ -566,7 +594,7 @@ function Row({
   onJumpToConfig,
 }: {
   row: MatchPnLRow;
-  onJumpToConfig: (venueId: number) => void;
+  onJumpToConfig?: (venueId: number) => void;
 }) {
   return (
     <tr className="border-t border-cream-line/60">
@@ -590,9 +618,12 @@ function Row({
       <td className="px-3 py-2 text-right align-top font-mono tabular-nums text-deep-green">
         {fmtUsd(row.allocatedMemberRev)}
       </td>
+      <td className="px-3 py-2 text-right align-top font-mono tabular-nums font-bold text-deep-green">
+        {fmtUsd(row.grossRevenue + row.allocatedMemberRev)}
+      </td>
       <td className="px-3 py-2 text-right align-top">
         {row.fieldCost === null ? (
-          row.venueId !== null ? (
+          row.venueId !== null && onJumpToConfig ? (
             <button
               type="button"
               onClick={() => onJumpToConfig(row.venueId as number)}
@@ -603,7 +634,7 @@ function Row({
             </button>
           ) : (
             <span className="font-mono text-[11px] italic text-deep-green/45">
-              $? — venue unresolved
+              $? — set in Field Costs
             </span>
           )
         ) : (

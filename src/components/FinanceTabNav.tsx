@@ -17,6 +17,7 @@ export const FINANCE_TAB_IDS = [
   "manager-pay",
   "cash-flow",
   "projections",
+  "match-pnl",
   "field-ranking",
   // Row 2 — admin / maintenance
   "check-ins",
@@ -36,6 +37,7 @@ const ROW_1: { id: FinanceTabId; label: string }[] = [
   { id: "manager-pay", label: "Manager Pay" },
   { id: "cash-flow", label: "Cash Flow" },
   { id: "projections", label: "Projections" },
+  { id: "match-pnl", label: "Match P&L" },
   { id: "field-ranking", label: "Field Ranking" },
 ];
 

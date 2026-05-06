@@ -17,6 +17,7 @@ import FinanceTabNav, {
   type FinanceTabId,
 } from "@/components/FinanceTabNav";
 import ManagerPayGrid from "@/components/ManagerPayGrid";
+import MatchPnL from "@/components/MatchPnL";
 import PartnerDashboardsAdmin from "@/components/PartnerDashboardsAdmin";
 import RevenueAdminView from "@/components/RevenueAdminView";
 import WeeklyProjectionsTab from "@/components/WeeklyProjectionsTab";
@@ -127,6 +128,9 @@ function FinanceLandingContent() {
       </TabPanel>
       <TabPanel id="projections" active={activeTab} visited={visited}>
         <WeeklyProjectionsTab />
+      </TabPanel>
+      <TabPanel id="match-pnl" active={activeTab} visited={visited}>
+        <MatchPnL />
       </TabPanel>
       <TabPanel id="field-ranking" active={activeTab} visited={visited}>
         <FieldRankingTabContent />
