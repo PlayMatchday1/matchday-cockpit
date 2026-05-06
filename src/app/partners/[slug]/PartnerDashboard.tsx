@@ -66,15 +66,24 @@ export default function PartnerDashboard({
   partnerName,
   stats,
   payment,
+  dataBaseline,
 }: {
   partnerDashboardId: string;
   partnerName: string;
   stats: PartnerStats;
   payment: PartnerPaymentInfo;
+  // YYYY-MM-DD when set; means stats sections were scoped to rows on
+  // or after this date. null = no scoping (default partner behavior).
+  // See PARTNER_DATA_BASELINE in the page.tsx server component.
+  dataBaseline: string | null;
 }) {
   const subtitle = stats.lastMatchDate
     ? `Launch through ${fmtDateYmd(stats.lastMatchDate)} · Staff excluded · Revenue = match price paid`
     : "Staff excluded · Revenue = match price paid";
+
+  const totalsLabel = dataBaseline
+    ? `Totals since ${fmtDateYmd(dataBaseline)}`
+    : "All-time totals";
 
   if (stats.weeks.length === 0) {
     return (
@@ -92,7 +101,7 @@ export default function PartnerDashboard({
     <main className="mx-auto max-w-7xl px-6 py-10 sm:px-8 sm:py-12">
       <Header partnerName={partnerName} subtitle={subtitle} />
 
-      <SecLabel className="mt-10">All-time totals</SecLabel>
+      <SecLabel className="mt-10">{totalsLabel}</SecLabel>
       <div className="mt-3 grid grid-cols-2 gap-2.5 sm:grid-cols-3 lg:grid-cols-5">
         <Metric label="Total spots filled" value={stats.totals.spots.toLocaleString()} sub="players who showed up" />
         <Metric label="MatchDay players" value={stats.totals.md.toLocaleString()} sub="registered app users" />
