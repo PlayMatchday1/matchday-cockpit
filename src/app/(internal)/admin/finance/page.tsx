@@ -1,6 +1,6 @@
 "use client";
 
-import { useEffect, useState } from "react";
+import { useEffect, useRef, useState } from "react";
 import PagePermissionGuard from "@/components/PagePermissionGuard";
 import BillingScheduleView from "@/components/BillingScheduleView";
 import CashFlowTabContent from "@/components/CashFlowTabContent";
@@ -37,6 +37,15 @@ const RETURN_TAB_KEY = "finance:returnTab";
 // Configure (after navigating to a primary pill and back) lands on
 // the same view instead of resetting to Revenue. Session-scoped.
 const LAST_CONFIGURE_KEY = "finance:lastConfigureSubTab";
+
+const PRIMARY_TAB_IDS: ReadonlySet<FinanceTabId> = new Set<FinanceTabId>([
+  "cities",
+  "cash-flow",
+  "field-ranking",
+  "match-pnl",
+  "exec-summary",
+  "projections",
+]);
 
 // Derive which secondary nav slot is "active" given the current tab.
 // Returns null when the user is on a primary pill instead.
@@ -115,6 +124,40 @@ function FinanceLandingContent() {
       window.sessionStorage.setItem(LAST_CONFIGURE_KEY, activeTab);
     }
   }, [activeTab]);
+
+  // Track the last primary pill so "← Back to Finance" links
+  // inside secondary views return to whichever pill the user was
+  // on (default: Cities).
+  const lastPrimaryRef = useRef<FinanceTabId>(
+    PRIMARY_TAB_IDS.has(activeTab) ? activeTab : "cities",
+  );
+  useEffect(() => {
+    if (PRIMARY_TAB_IDS.has(activeTab)) lastPrimaryRef.current = activeTab;
+  }, [activeTab]);
+
+  // Child views (Configure tabs, Check-Ins, Partner Dashboards)
+  // each render a `<Link href="/admin/finance">← Back to Finance</Link>`.
+  // Same-route Link clicks don't reset our local tab state, so
+  // intercept them here via event delegation and route to the last
+  // primary pill. Sub-detail routes like /admin/finance/partners/[id]
+  // mount on a different page and aren't affected.
+  const selectTabRef = useRef(selectTab);
+  selectTabRef.current = selectTab;
+  useEffect(() => {
+    function onClick(e: MouseEvent) {
+      if (e.defaultPrevented) return;
+      if (e.button !== 0) return;
+      if (e.metaKey || e.ctrlKey || e.shiftKey || e.altKey) return;
+      const target = (e.target as Element | null)?.closest?.(
+        'a[href="/admin/finance"]',
+      );
+      if (!target) return;
+      e.preventDefault();
+      selectTabRef.current(lastPrimaryRef.current);
+    }
+    document.addEventListener("click", onClick);
+    return () => document.removeEventListener("click", onClick);
+  }, []);
 
   const secondary = deriveSecondary(activeTab);
 
