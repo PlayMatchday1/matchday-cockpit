@@ -5,8 +5,8 @@ import {
   getWeeklySpots,
 } from "@/lib/cityStats";
 import { isActiveMember } from "@/lib/membershipStats";
-import { useFinanceData } from "@/lib/useFinanceData";
 import { useMatchWindowData } from "@/lib/useMatchData";
+import { useMembers } from "@/lib/useMembers";
 
 // Network-wide ops hero for /cities. Four big stats, no toggles —
 // always reflects the in-progress current week. Same surface
@@ -16,7 +16,10 @@ export default function CitiesExecHero() {
   // 12-week window — see useMatchWindowData header. Shares the cache
   // with OverviewLens so /cities only fires one match-data fetch.
   const { rows, meta, loading } = useMatchWindowData(12);
-  const { data: finData } = useFinanceData();
+  // useMembers pulls only mdapi_subscriptions for the active-member
+  // count below. Replaced useFinanceData so /cities no longer pays for
+  // the 13-table finance-page fetch just to render one stat tile.
+  const { members, loading: membersLoading } = useMembers();
 
   if (loading) {
     return (
@@ -36,7 +39,7 @@ export default function CitiesExecHero() {
       ? 0
       : (currentCancel.ran / currentCancel.scheduled) * 100;
 
-  const activeMembers = (finData?.members ?? []).filter(isActiveMember).length;
+  const activeMembers = members.filter(isActiveMember).length;
 
   return (
     <section className="overflow-hidden rounded-2xl border-[1.5px] border-cream-line bg-white shadow-md shadow-deep-green/10">
@@ -75,9 +78,7 @@ export default function CitiesExecHero() {
         <Stat
           label="Active members"
           value={activeMembers.toLocaleString()}
-          subtitle={
-            finData ? "network-wide" : "loading…"
-          }
+          subtitle={membersLoading ? "loading…" : "network-wide"}
         />
       </div>
     </section>
