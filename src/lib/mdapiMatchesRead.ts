@@ -34,7 +34,7 @@ import { normField } from "./normField";
 const MATCHES_COLS =
   "api_id, city_identifier, field_title, start_date, is_cancelled";
 const PLAYERS_COLS =
-  "api_id, match_api_id, user_id, user_email, user_type, paid_status, promocode_id, is_cancelled, canceled_at, amount, created_at";
+  "api_id, match_api_id, user_id, user_email, user_type, paid_status, promocode_id, is_cancelled, canceled_at, amount, created_at, is_absent, user_is_fake_player";
 
 // chunk size for .in("match_api_id", chunk) — keeps URL length under
 // PostgREST's ~2KB practical limit (200 ids × ~7 chars = ~1.4KB).
@@ -62,6 +62,8 @@ type PlayerSelect = {
   canceled_at: string | null;
   amount: number | null;
   created_at: string | null;
+  is_absent: boolean | null;
+  user_is_fake_player: boolean | null;
 };
 
 // ===== Public output shapes =====
@@ -174,6 +176,14 @@ function mapJoinedRow(
   promocodeMap: Map<number, string>,
 ): JoinedMatchPlayerRow | null {
   if (player.paid_status === "WAITING") return null;
+  // user_is_fake_player: synthetic fill placeholder (dummy roster slot
+  // used when a host needs a body for headcount but no real person
+  // showed up). is_absent: registered + paid but didn't physically
+  // show up. Both inflate spot-count metrics; drop at the mapper so
+  // every downstream consumer (Match P&L, partner stats, projections,
+  // partner detail) gets honest counts.
+  if (player.user_is_fake_player === true) return null;
+  if (player.is_absent === true) return null;
   const city = cityFromAbbr(match.city_identifier);
   if (!city) return null;
   const matchStart = parseLocal(match.start_date);
