@@ -90,63 +90,21 @@ function rollOffDate(canceled: Date): Date {
   );
 }
 
-// Point-in-time variant of isActiveMember. A member counts as active
-// at asOf when they were activated by then AND either:
-//   (a) their current status is ACTIVE (Stripe still considers them
-//       paying), with the standard cancel-at-period-end grace honored
-//       if a canceled_at is present; OR
-//   (b) their current status is CANCELED and they have an explicit
-//       canceled_at whose grace window still covers asOf — i.e., the
-//       historical case where someone was active back then but has
-//       since canceled and rolled off.
+// Point-in-time variant of isActiveMember. At asOf=today, equivalent
+// to isActiveMember (strict status=ACTIVE + paid). At asOf=past, used
+// by historical charts and snapshots — answers "who was an active
+// paying member on this date." Anyone in their cancellation cycle is
+// counted as churning by isChurning, not as active here.
 //
-// Everything else — PAST_DUE, INCOMPLETE, UNPAID, CANCELED-without-
-// canceled_at — is excluded. Card failures aren't paying customers;
-// missing canceled_at means we can't reconstruct an active period.
-//
-// INTENTIONAL DISCREPANCY with the live KPI card (`isActiveMember`):
-//   - Live KPI (`isActiveMember`): strict `status === "ACTIVE"` only.
-//     Answers "how many members are fully paid up right now."
-//   - Historical (`isActiveAsOf`): also counts CANCELED members whose
-//     explicit canceled_at puts them inside their final-cycle grace
-//     window. Answers "how many members were active at this moment
-//     in time, including end-of-cycle grace."
-// Both are valid; they answer different questions. At asOf=today the
-// gap is typically 5-15 members and can spike to 30-40 on high-
-// cancellation days (e.g., a Stripe billing-batch day). Do NOT try
-// to unify these later without explicit thought — the historical
-// chart wants the grace-inclusive definition; the KPI wants the
-// strict one.
-//
-// KNOWN HISTORICAL UNDERCOUNT: ~439 CANCELED rows in fin_members have
-// canceled_at=NULL (legacy data). They're excluded entirely from
-// historical buckets because we can't tell when they stopped paying.
-// Earlier months in the chart undercount by 10–15% as a result;
-// growth shape stays correct. Recover these dates from Stripe directly
-// if exact historical counts are ever needed for investor reporting.
+// Legacy data note: ~439 CANCELED rows have canceled_at=NULL and are
+// excluded from historical buckets entirely. Earlier months in the
+// All-Time chart undercount slightly as a result.
 export function isActiveAsOf(m: MemberLike, asOf: Date): boolean {
   if (!isPaidExternalMember(m)) return false;
   const activated = parseMemberDate(m.activation_date);
   if (!activated || activated > asOf) return false;
-
-  const status = m.status?.toUpperCase() ?? "";
-  const canceled = parseMemberDate(m.canceled_at);
-
-  if (status === "ACTIVE") {
-    // Currently paying. Honor a cancel-at-period-end if it's already
-    // expired by asOf (rare — Stripe usually flips status to CANCELED
-    // after grace, but a few stragglers exist).
-    if (canceled && rollOffDate(canceled) <= asOf) return false;
-    return true;
-  }
-
-  if (status === "CANCELED" && canceled) {
-    // Historical-active path: were they still in grace at asOf?
-    return asOf < rollOffDate(canceled);
-  }
-
-  // PAST_DUE, INCOMPLETE, UNPAID, or CANCELED-without-date: excluded.
-  return false;
+  if (m.status !== "ACTIVE") return false;
+  return true;
 }
 
 // Point-in-time variant of isChurning. Same rolling [6th of M-1,

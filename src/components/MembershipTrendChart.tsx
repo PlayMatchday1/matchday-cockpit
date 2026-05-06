@@ -67,10 +67,9 @@ export default function MembershipTrendChart() {
         cumulative net over 6 months
       </div>
       <p className="mt-2 max-w-3xl text-[12px] italic text-deep-green/55">
-        Activation and cancellation events per month. Net activity does not
-        directly equal active member changes — grace-period dynamics and
-        lifecycle data gaps cause expected differences with the All-Time
-        chart above.
+        Activation and cancellation events per month. Net activity may not
+        exactly match month-over-month active member changes due to legacy
+        data with missing cancellation dates.
       </p>
       <div className="mt-5">
         <Chart buckets={buckets} />
