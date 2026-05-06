@@ -197,7 +197,13 @@ function mapJoinedRow(
     matchApiId: match.api_id,
     playerApiId: player.api_id,
     userId: player.user_id,
-    matchPricePaid: player.amount ?? 0,
+    // API stores `amount` in cents (Stripe convention). Single
+    // conversion site — fixes Match P&L, partner stats, projections,
+    // and partner detail in one shot. Any consumer of matchPricePaid
+    // (or the snake_case match_price_paid via toLegacyShape) gets
+    // dollars by default. Matches the Phase 3b convention: read-time
+    // conversion, don't transform on ingest.
+    matchPricePaid: (player.amount ?? 0) / 100,
     registrationAt: parseLocal(player.created_at),
   };
 }
