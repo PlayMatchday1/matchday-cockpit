@@ -165,8 +165,11 @@ export default function SyncCard({
       {result && result.ok && (
         <div className="mt-3 rounded-md border border-cream-line bg-cream-soft/40 p-3 text-xs text-deep-green">
           <div className="font-bold">
-            ✓ Synced{" "}
-            {(result.result.upserted ?? 0).toLocaleString()} rows
+            {result.result?.upserted == null ? (
+              <>✓ Refresh complete</>
+            ) : (
+              <>✓ Synced {result.result.upserted.toLocaleString()} rows</>
+            )}
             <span className="font-normal text-deep-green/55">
               {" "}
               ({(result.durationMs / 1000).toFixed(1)}s)
