@@ -134,6 +134,12 @@ export type PartnerConfig = {
 // Fetch the partner_dashboards row by slug. Returns null on miss or
 // when disabled — caller renders 404 either way (don't leak which).
 //
+// `enabled = true` is enforced both in SQL and again in JS below.
+// Belt-and-suspenders: callers that pass a service-role client (the
+// public /partners/[slug] page) bypass RLS, so the SQL filter is the
+// only DB-level gate; the JS check covers the (legacy) anon-client
+// path where RLS already filters but doesn't hurt to double-check.
+//
 // Resilient to the Phase C schema not yet being applied: if the new
 // payment_* columns don't exist, fall back to the legacy shape with
 // defaults. This keeps the partner-facing URL working through the
@@ -152,6 +158,7 @@ export async function fetchPartnerBySlug(
       "id, venue_id, partner_name, enabled, revenue_share_pct, payment_start_date, payment_day_of_week, payment_cadence",
     )
     .eq("slug", slug)
+    .eq("enabled", true)
     .maybeSingle();
   data = primary.data;
   error = primary.error;
@@ -165,12 +172,14 @@ export async function fetchPartnerBySlug(
         "id, venue_id, partner_name, enabled, revenue_share_pct, payment_start_date, payment_day_of_week",
       )
       .eq("slug", slug)
+      .eq("enabled", true)
       .maybeSingle();
     if (noCadence.error && noCadence.error.code === "42703") {
       const legacy = await supabase
         .from("partner_dashboards")
         .select("id, venue_id, partner_name, enabled")
         .eq("slug", slug)
+        .eq("enabled", true)
         .maybeSingle();
       data = legacy.data;
       error = legacy.error;

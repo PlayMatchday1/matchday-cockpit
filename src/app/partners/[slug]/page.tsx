@@ -5,13 +5,26 @@ import {
   fetchPartnerBySlug,
   fetchPartnerRows,
   fetchPartnerWeeklyPayments,
-  makeAnonServerClient,
 } from "@/lib/partnerStats";
+import { makeServerClient } from "@/lib/supabaseServer";
 import PartnerDashboard from "./PartnerDashboard";
 
-// Server component. Slug → venue_id resolution happens server-side
-// against an anon Supabase client. venue_id is never exposed as a URL
-// param, never client-mutable.
+// Server component. Slug → venue_id resolution and stats fetch run
+// server-side against a service-role Supabase client. venue_id is
+// never exposed as a URL param, never client-mutable.
+//
+// Why service-role and not anon: this URL is public (partners like
+// Cesar at Hattrick open it without a Supabase session), but the
+// post-Phase-5b data source — mdapi_matches + mdapi_match_players —
+// only grants SELECT TO authenticated. Player emails sit in those
+// tables, so we keep anon locked out of them. Server-rendered data
+// is aggregated into PartnerStats / PartnerPaymentInfo before it
+// hits the client; raw rows never leave the server.
+//
+// Service-role bypasses ALL RLS. The `enabled = true` gate that
+// previously came from partner_dashboards' anon SELECT policy is
+// now enforced explicitly inside fetchPartnerBySlug — keep it that
+// way (load-bearing).
 
 export const dynamic = "force-dynamic";
 
@@ -36,7 +49,7 @@ export default async function PartnerPage({
   params: Promise<{ slug: string }>;
 }) {
   const { slug } = await params;
-  const supabase = makeAnonServerClient();
+  const supabase = makeServerClient();
 
   const partner = await fetchPartnerBySlug(supabase, slug);
   if (!partner) notFound(); // 404 — generic, no leak about why
