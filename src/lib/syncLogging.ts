@@ -19,6 +19,7 @@ export type SourceName =
   | "stripe-api"
   | "mdapi-reviews"
   | "mdapi-subscriptions"
+  | "mdapi-promocodes"
   | "membership-snapshots";
 
 // fin_sync_log columns the orchestrator/manual routes write on

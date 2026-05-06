@@ -162,15 +162,28 @@ function derivePaymentType(p: PlayerSelect): string | null {
 //   - paid_status === "WAITING" (incomplete payment, not yet a spot)
 //   - city_identifier doesn't map to a cockpit city
 //   - start_date doesn't parse
+//
+// promocodeMap resolves promocode_id → code text (sourced from
+// mdapi_promocodes). Falls back to String(id) if the id isn't in the
+// map — preserves the "did this player use a promo?" boolean signal
+// downstream consumers rely on (e.g., the High Promo Usage insight),
+// even if the specific promocode hasn't synced yet or was hard-deleted.
 function mapJoinedRow(
   match: MatchSelect,
   player: PlayerSelect,
+  promocodeMap: Map<number, string>,
 ): JoinedMatchPlayerRow | null {
   if (player.paid_status === "WAITING") return null;
   const city = cityFromAbbr(match.city_identifier);
   if (!city) return null;
   const matchStart = parseLocal(match.start_date);
   if (!matchStart) return null;
+
+  let promocode: string | null = null;
+  if (player.promocode_id != null) {
+    promocode =
+      promocodeMap.get(player.promocode_id) ?? String(player.promocode_id);
+  }
 
   return {
     city,
@@ -179,7 +192,7 @@ function mapJoinedRow(
     matchCanceled: !!match.is_cancelled,
     playerCanceledAt: parseLocal(player.canceled_at),
     paymentType: derivePaymentType(player),
-    promocode: player.promocode_id != null ? String(player.promocode_id) : null,
+    promocode,
     email: player.user_email?.toLowerCase() ?? null,
     matchApiId: match.api_id,
     playerApiId: player.api_id,
@@ -187,6 +200,34 @@ function mapJoinedRow(
     matchPricePaid: player.amount ?? 0,
     registrationAt: parseLocal(player.created_at),
   };
+}
+
+// Look up promocode codes for a set of ids. Chunked to keep URL
+// length under PostgREST's ~2KB practical limit (200 ids × ~7 chars
+// = ~1.4KB). Returns Map<api_id, code>; missing entries fall back to
+// String(id) at the call site.
+async function fetchPromocodeCodes(
+  supabase: SupabaseClient,
+  ids: Set<number>,
+): Promise<Map<number, string>> {
+  const out = new Map<number, string>();
+  if (ids.size === 0) return out;
+  const list = [...ids];
+  const CHUNK = 200;
+  for (let from = 0; from < list.length; from += CHUNK) {
+    const chunk = list.slice(from, from + CHUNK);
+    const { data, error } = await supabase
+      .from("mdapi_promocodes")
+      .select("api_id, code")
+      .in("api_id", chunk);
+    if (error) {
+      throw new Error(`mdapi_promocodes lookup failed: ${error.message}`);
+    }
+    for (const r of (data ?? []) as { api_id: number; code: string }[]) {
+      out.set(r.api_id, r.code);
+    }
+  }
+  return out;
 }
 
 // Adapter: JoinedMatchPlayerRow → LegacyMatchRegRow. For consumers
@@ -285,16 +326,26 @@ export async function fetchJoinedMatchPlayers(
     }
   }
 
-  // 3. Join + map + filter
+  // 3. Resolve promocode_id → code text. Targeted lookup: only the
+  // distinct ids referenced by the players we just fetched, not the
+  // whole 6k-row mdapi_promocodes table. For typical loads this is
+  // 0–200 distinct ids, fits in one round trip.
+  const promoIds = new Set<number>();
+  for (const p of players) {
+    if (p.promocode_id != null) promoIds.add(p.promocode_id);
+  }
+  const promocodeMap = await fetchPromocodeCodes(supabase, promoIds);
+
+  // 4. Join + map + filter
   const out: JoinedMatchPlayerRow[] = [];
   for (const p of players) {
     const m = matchById.get(p.match_api_id);
     if (!m) continue;
-    const row = mapJoinedRow(m, p);
+    const row = mapJoinedRow(m, p, promocodeMap);
     if (row) out.push(row);
   }
 
-  // 4. Sort by matchStart asc (legacy useMatchData order).
+  // 5. Sort by matchStart asc (legacy useMatchData order).
   out.sort((a, b) => a.matchStart.getTime() - b.matchStart.getTime());
   return out;
 }

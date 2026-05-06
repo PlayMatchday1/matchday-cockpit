@@ -1,18 +1,19 @@
-// POST /api/sync/cron — orchestrator that runs four daily steps:
-// Stripe charges, mdapi_reviews, mdapi_subscriptions, and a
-// membership snapshot refresh — sequentially, with per-source error
-// isolation.
+// POST /api/sync/cron — orchestrator that runs five daily steps:
+// Stripe charges, mdapi_reviews, mdapi_subscriptions, mdapi_promocodes,
+// and a membership snapshot refresh — sequentially, with per-source
+// error isolation.
 //
 // The snapshot refresh consumes mdapi_subscriptions, so it only
 // runs if that sync succeeded. If subs fail, the snapshot step is
 // skipped (a fin_sync_log row is still written for visibility, with
-// error_message explaining the skip).
+// error_message explaining the skip). Promocodes are independent of
+// any upstream — they always run.
 //
 // Each step gets its own fin_sync_log row. A throw in one wrapper
 // does NOT prevent the others from running. HTTP status: 200 if all
-// four succeed, 500 if any failed (Vercel cron monitoring surfaces
+// five succeed, 500 if any failed (Vercel cron monitoring surfaces
 // non-2xx as a failed cron — operator gets visibility on partial
-// failures even when 3/4 succeed).
+// failures even when 4/5 succeed).
 //
 // Auth: same dual-mode pattern as /api/sync/stripe.
 //   Cron mode:   Bearer ${CRON_SECRET} (constant-time compare),
@@ -32,6 +33,7 @@ import { commitStripe } from "@/lib/financeImport";
 import { syncStripeCharges } from "@/lib/stripeSync";
 import { syncMdapiReviews } from "@/lib/mdapiReviewsSync";
 import { syncMdapiSubscriptions } from "@/lib/mdapiSubscriptionsSync";
+import { syncMdapiPromocodes } from "@/lib/mdapiPromocodesSync";
 import { refreshMembershipSnapshots } from "@/lib/membershipSnapshots";
 import { runWithLog, type TriggeredBy } from "@/lib/syncLogging";
 
@@ -174,6 +176,18 @@ export async function POST(req: Request) {
     (r) => ({ rows_imported: r.upserted }),
   );
 
+  // Promocodes — independent of upstream syncs (no skip-on-fail
+  // dependency). Cheap (~2s for ~6k rows) so position doesn't matter
+  // for budget. Placed here so all mdapi_* steps are grouped before
+  // the snapshot refresh.
+  const promocodesResult = await runWithLog(
+    "mdapi-promocodes",
+    triggeredBy,
+    supabase,
+    syncMdapiPromocodes,
+    (r) => ({ rows_imported: r.upserted }),
+  );
+
   // Snapshot refresh consumes mdapi_subscriptions data, so it only
   // runs if that sync succeeded. The throw-on-skip pattern lets
   // runWithLog handle the log row uniformly — error_message records
@@ -200,6 +214,7 @@ export async function POST(req: Request) {
     !stripeResult.ok ||
     !reviewsResult.ok ||
     !subscriptionsResult.ok ||
+    !promocodesResult.ok ||
     !snapshotResult.ok;
 
   return Response.json(
@@ -210,6 +225,7 @@ export async function POST(req: Request) {
         stripe: stripeResult,
         mdapi_reviews: reviewsResult,
         mdapi_subscriptions: subscriptionsResult,
+        mdapi_promocodes: promocodesResult,
         membership_snapshots: snapshotResult,
       },
     },
