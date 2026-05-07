@@ -43,11 +43,25 @@ const PREMIER_MATCH_AT_RX = /^Premier\s+match\s+at\s+(.+)$/i;
 // Cross-venue exact aliases. Different raw name → different canonical venue.
 // Canonicals here MUST match fin_venues.venue_name exactly so the
 // per-venue revenue lookup on the city cards finds them.
+//
+// Many of these "Tourney …" / "… at X" / "… Catholic High School" entries
+// were caught for free by the prior substring matcher (raw field happened
+// to contain the venue's canonical name). Once the substring matcher was
+// replaced by the prefix-based normalizer, leading-prefix names like
+// "Tourney ATH Pearland" stopped resolving — INTERNAL_PREFIX_RULES is
+// startsWith-only. Add them here as exact-match aliases so every distinct
+// field_title currently in mdapi_matches resolves the way the substring
+// matcher used to (verified by enumerating distinct field_title values
+// across all cities — see fix-up commit notes).
 const CROSS_VENUE_ALIASES: Record<string, string> = {
   Premier: "San Juan Diego",
   SJD: "San Juan Diego",
   "Katy International Sports Complex": "KISC (Katy Intl)",
   "The Hattrick": "Hattrick",
+  "Tourney ATH Pearland": "ATH Pearland",
+  "Tourney at Soccer Central": "Soccer Central",
+  "San Juan Diego Catholic High School": "San Juan Diego",
+  "Stadium Field at Round Rock M.C.": "Round Rock",
 };
 
 // Internal-variant collapses. The raw name STARTS WITH the prefix, optionally
