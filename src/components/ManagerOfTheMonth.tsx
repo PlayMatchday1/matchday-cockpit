@@ -19,7 +19,7 @@
 // dark theme + custom CSS variables don't leak into the rest of the
 // app. Animation keyframes are mlb-prefixed to avoid global collisions.
 
-import { useEffect, useMemo, useState } from "react";
+import { useEffect, useMemo, useRef, useState } from "react";
 import type { ReviewRow } from "@/lib/useReviewData";
 
 const MINIMUM_REVIEWS = 50;
@@ -239,6 +239,47 @@ export default function ManagerOfTheMonth({ rows }: { rows: ReviewRow[] }) {
     return computeView(rows, active.year, active.month);
   }, [rows, active]);
 
+  // Single-page PDF export via the browser's native print API. The plan:
+  //   1. Add `mlb-printing` class to <body>. CSS scoped to that class
+  //      condenses the on-screen layout (smaller fonts, tighter padding,
+  //      tabs/button hidden) so scrollHeight reflects the print layout.
+  //   2. Wait one frame for layout to reflow.
+  //   3. Measure scrollWidth/scrollHeight, compute the scale factor needed
+  //      to fit US Letter landscape minus 8mm margins (~996 × 756 CSS px
+  //      at 96 dpi).
+  //   4. Set --mlb-print-scale on the leaderboard element.
+  //   5. window.print() — @media print rules then position the leaderboard
+  //      absolutely at the page origin with transform: scale(var(...)) and
+  //      use the visibility-hidden trick to hide the rest of the app.
+  //   6. afterprint cleans up.
+  // The brief on-screen flicker (~16-32ms) while measurement happens is
+  // unavoidable but barely perceptible.
+  const leaderboardRef = useRef<HTMLDivElement>(null);
+  async function handlePrintPdf() {
+    const el = leaderboardRef.current;
+    if (!el) return;
+
+    document.body.classList.add("mlb-printing");
+    await new Promise<void>((r) => requestAnimationFrame(() => r()));
+
+    const naturalW = el.scrollWidth;
+    const naturalH = el.scrollHeight;
+    // US Letter landscape at 96 dpi minus 8mm margins (~30px each side).
+    const pageW = 11 * 96 - 60;
+    const pageH = 8.5 * 96 - 60;
+    const scale = Math.min(pageW / naturalW, pageH / naturalH, 1);
+    el.style.setProperty("--mlb-print-scale", String(scale));
+
+    await new Promise<void>((r) => requestAnimationFrame(() => r()));
+
+    function cleanup() {
+      document.body.classList.remove("mlb-printing");
+      el?.style.removeProperty("--mlb-print-scale");
+    }
+    window.addEventListener("afterprint", cleanup, { once: true });
+    window.print();
+  }
+
   return (
     <>
       {/* Google Fonts — React 19 hoists <link> to <head> and dedupes. */}
@@ -248,7 +289,7 @@ export default function ManagerOfTheMonth({ rows }: { rows: ReviewRow[] }) {
       />
       <style>{LEADERBOARD_CSS}</style>
 
-      <div className="manager-leaderboard">
+      <div ref={leaderboardRef} className="manager-leaderboard">
         <div className="mlb-month-tabs">
           {availableMonths.map((m) => {
             const label = `${MONTH_SHORT[m.month]} ${m.year}`;
@@ -542,6 +583,16 @@ export default function ManagerOfTheMonth({ rows }: { rows: ReviewRow[] }) {
               in month ≥ 50.
             </div>
           </div>
+        </div>
+
+        <div className="mlb-actions">
+          <button
+            type="button"
+            className="mlb-btn"
+            onClick={handlePrintPdf}
+          >
+            Download as PDF
+          </button>
         </div>
       </div>
     </>
@@ -1372,6 +1423,176 @@ const LEADERBOARD_CSS = `
   border-radius: 50%;
   display: inline-block;
 }
+/* PDF export button. Visually mirrors the original "Download as image"
+   placement at the bottom of the leaderboard card. */
+.manager-leaderboard .mlb-actions {
+  display: flex;
+  justify-content: center;
+  gap: 12px;
+  margin-top: 24px;
+}
+.manager-leaderboard .mlb-btn {
+  padding: 10px 20px;
+  background: transparent;
+  color: var(--mlb-paper);
+  border: 1px solid rgba(245, 239, 224, 0.2);
+  border-radius: 6px;
+  font-family: 'JetBrains Mono', monospace;
+  font-size: 0.75rem;
+  letter-spacing: 0.1em;
+  text-transform: uppercase;
+  cursor: pointer;
+  transition: all 0.2s;
+}
+.manager-leaderboard .mlb-btn:hover {
+  background: rgba(245, 239, 224, 0.08);
+  border-color: var(--mlb-paper);
+}
+
+/* ---------------------------------------------------------------
+   Print mode — engaged when the Download as PDF handler adds the
+   .mlb-printing class to body. The class condenses the layout
+   (smaller fonts, tighter padding, tabs/button hidden). Inside that
+   condensed state we measure scrollHeight, compute --mlb-print-scale,
+   then call window.print(). The @media print block hides the rest of
+   the app via the visibility-hidden trick and applies the scale.
+   --------------------------------------------------------------- */
+
+body.mlb-printing .manager-leaderboard .mlb-month-tabs,
+body.mlb-printing .manager-leaderboard .mlb-actions {
+  display: none;
+}
+body.mlb-printing .manager-leaderboard {
+  padding: 18px;
+}
+body.mlb-printing .manager-leaderboard .mlb-masthead {
+  padding-bottom: 12px;
+  margin-bottom: 16px;
+}
+body.mlb-printing .manager-leaderboard .mlb-h1 {
+  font-size: 2.6rem;
+}
+body.mlb-printing .manager-leaderboard .mlb-status-bar {
+  margin-bottom: 16px;
+}
+body.mlb-printing .manager-leaderboard .mlb-stat {
+  padding: 12px 18px;
+}
+body.mlb-printing .manager-leaderboard .mlb-stat-value {
+  font-size: 1.6rem;
+}
+body.mlb-printing .manager-leaderboard .mlb-section-label {
+  margin-bottom: 10px;
+}
+body.mlb-printing .manager-leaderboard .mlb-company-section {
+  margin-bottom: 16px;
+}
+body.mlb-printing .manager-leaderboard .mlb-company-totals {
+  padding: 18px 22px 16px;
+}
+body.mlb-printing .manager-leaderboard .mlb-totals-num {
+  font-size: 3rem;
+}
+body.mlb-printing .manager-leaderboard .mlb-monthly-chart {
+  padding: 16px 20px;
+}
+body.mlb-printing .manager-leaderboard .mlb-month-bars {
+  min-height: 110px;
+}
+body.mlb-printing .manager-leaderboard .mlb-bar-stack {
+  height: 90px;
+}
+body.mlb-printing .manager-leaderboard .mlb-podium-section {
+  margin-bottom: 18px;
+}
+body.mlb-printing .manager-leaderboard .mlb-podium-card {
+  padding: 18px 16px 22px;
+}
+body.mlb-printing .manager-leaderboard .mlb-podium-card.mlb-first {
+  padding-top: 30px;
+  padding-bottom: 26px;
+}
+body.mlb-printing .manager-leaderboard .mlb-podium-name {
+  font-size: 1.7rem;
+  margin-top: 12px;
+}
+body.mlb-printing .manager-leaderboard .mlb-first .mlb-podium-name {
+  font-size: 2.1rem;
+}
+body.mlb-printing .manager-leaderboard .mlb-rating-row {
+  margin-top: 14px;
+  padding-top: 12px;
+}
+body.mlb-printing .manager-leaderboard .mlb-rating-big {
+  font-size: 2.1rem;
+}
+body.mlb-printing .manager-leaderboard .mlb-first .mlb-rating-big {
+  font-size: 2.5rem;
+}
+body.mlb-printing .manager-leaderboard .mlb-cities-section {
+  margin-bottom: 18px;
+}
+body.mlb-printing .manager-leaderboard .mlb-cities-grid {
+  gap: 10px;
+}
+body.mlb-printing .manager-leaderboard .mlb-city-card {
+  padding: 14px 16px;
+}
+body.mlb-printing .manager-leaderboard .mlb-city-name {
+  font-size: 1.3rem;
+  margin-bottom: 10px;
+}
+body.mlb-printing .manager-leaderboard .mlb-city-rating-num {
+  font-size: 1.7rem;
+}
+body.mlb-printing .manager-leaderboard .mlb-row {
+  padding: 7px 16px;
+}
+body.mlb-printing .manager-leaderboard .mlb-row-header {
+  padding: 8px 16px;
+}
+body.mlb-printing .manager-leaderboard .mlb-rank-cell {
+  font-size: 1.1rem;
+}
+body.mlb-printing .manager-leaderboard .mlb-name-cell {
+  font-size: 0.92rem;
+}
+body.mlb-printing .manager-leaderboard .mlb-rating-cell {
+  font-size: 0.92rem;
+}
+body.mlb-printing .manager-leaderboard .mlb-count-cell {
+  font-size: 0.78rem;
+}
+body.mlb-printing .manager-leaderboard .mlb-footer-note {
+  padding-top: 14px;
+}
+
+@media print {
+  @page {
+    size: landscape;
+    margin: 8mm;
+  }
+  body.mlb-printing {
+    background: transparent !important;
+  }
+  body.mlb-printing * {
+    visibility: hidden !important;
+  }
+  body.mlb-printing .manager-leaderboard,
+  body.mlb-printing .manager-leaderboard * {
+    visibility: visible !important;
+  }
+  body.mlb-printing .manager-leaderboard {
+    position: absolute !important;
+    left: 0 !important;
+    top: 0 !important;
+    transform: scale(var(--mlb-print-scale, 0.4));
+    transform-origin: top left;
+    -webkit-print-color-adjust: exact;
+    print-color-adjust: exact;
+  }
+}
+
 @media (max-width: 800px) {
   .manager-leaderboard { padding: 20px; }
   .manager-leaderboard .mlb-podium { grid-template-columns: 1fr; gap: 16px; }
