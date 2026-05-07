@@ -180,3 +180,50 @@ export function normalizeMatchName(
   if (!original) return { original, canonical: null };
   return { original, canonical: resolveCanonical(original, aliases) };
 }
+
+// =====================================================================
+// Field-title → fin_venues.id resolver. Single source of truth for the
+// "which venue does this match's field_title belong to" lookup —
+// previously reinvented as substring-matchers in matchPnL.ts,
+// projectionsStats.ts, and financeStats.ts. Those all failed for
+// synonym pairs like "Katy International Sports Complex" (mdapi field)
+// vs "KISC (Katy Intl)" (fin_venues row): no shared substring → null.
+//
+// Pipeline: normalizeMatchName(field, aliases) → canonical name →
+// exact match against fin_venues.venue_name. Same canonical rules
+// (CROSS_VENUE_ALIASES + INTERNAL_PREFIX_RULES + DB aliases) the
+// CSV/Stripe import path has used since Phase 2, so identity is
+// consistent end-to-end.
+//
+// Returns a Map keyed by the original raw field strings → venue.id.
+// Unresolvable fields (no canonical, or canonical not in fin_venues)
+// are absent from the map — callers downstream check for this and
+// surface as "missing venue" / "no cost set", matching the prior
+// substring-matcher behavior.
+// =====================================================================
+
+export function buildFieldToVenueIdMap(
+  fields: Set<string>,
+  venues: { id: number; venue_name: string }[],
+  aliases: Map<string, string>,
+): Map<string, number> {
+  // venue_name → id. fin_venues.venue_name values are unique within a
+  // city, but the canonical names from venueNormalization are global,
+  // so multiple venues with the same canonical (shouldn't happen, but
+  // defensive) would race; first-write-wins. Tie-break warning lives
+  // here rather than at every call site.
+  const byCanonical = new Map<string, number>();
+  for (const v of venues) {
+    if (!byCanonical.has(v.venue_name)) {
+      byCanonical.set(v.venue_name, v.id);
+    }
+  }
+  const out = new Map<string, number>();
+  for (const field of fields) {
+    const canonical = normalizeMatchName(field, aliases).canonical;
+    if (!canonical) continue;
+    const id = byCanonical.get(canonical);
+    if (id != null) out.set(field, id);
+  }
+  return out;
+}

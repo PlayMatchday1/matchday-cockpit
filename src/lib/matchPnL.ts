@@ -35,6 +35,7 @@ import type { SupabaseClient } from "@supabase/supabase-js";
 import type { FinanceData } from "./useFinanceData";
 import { matchAllocatedMemberRevenueFor } from "./financeStats";
 import { fetchLegacyMatchRegistrations } from "./mdapiMatchesRead";
+import { buildFieldToVenueIdMap } from "./venueNormalization";
 
 // Allow-list of player-booking payment types. Anything else (NULL,
 // rental codes, comp markers) gets filtered out as not a real
@@ -96,42 +97,12 @@ export function statusFor(net: number | null): MatchPnLStatus {
   return "profit";
 }
 
-// =====================================================================
-// Field → venue resolution (longest-prefix match, same pattern as
-// projectionsStats and partnerStats — copied here so this lib stays
-// self-contained for the targeted-week fetch).
-// =====================================================================
-
-function buildFieldToVenueMap(
-  fields: Set<string>,
-  venues: { id: number; venue_name: string; raw_venue_name: string }[],
-): Map<string, number> {
-  const map = new Map<string, number>();
-  for (const field of fields) {
-    const lf = field.toLowerCase();
-    let best: { id: number; nameLen: number; rawName: string } | null = null;
-    for (const v of venues) {
-      // Match on raw_venue_name first (preserves split-rate venue
-      // distinctions like ATH Katy vs ATH Katy Sunday) — fall back
-      // to canonical venue_name if no raw match.
-      const candidates = [v.raw_venue_name, v.venue_name];
-      for (const cand of candidates) {
-        const lc = cand.toLowerCase();
-        if (!lc || !lf.includes(lc)) continue;
-        if (
-          !best ||
-          lc.length > best.nameLen ||
-          (lc.length === best.nameLen && cand < best.rawName)
-        ) {
-          best = { id: v.id, nameLen: lc.length, rawName: cand };
-        }
-        break;
-      }
-    }
-    if (best) map.set(field, best.id);
-  }
-  return map;
-}
+// Field → venue resolution lives in venueNormalization.ts
+// (buildFieldToVenueIdMap). Was a substring-match copy here that
+// dropped synonym pairs like "Katy International Sports Complex" →
+// "KISC (Katy Intl)" since they share no substring. The central
+// resolver runs the field through normalizeMatchName first, so
+// CROSS_VENUE_ALIASES + INTERNAL_PREFIX_RULES catch those.
 
 // =====================================================================
 // Display formatters
@@ -227,7 +198,7 @@ export async function fetchWeekMatchPnL(
   const fields = new Set<string>();
   for (const r of activeEligible) if (r.field) fields.add(r.field);
   for (const r of canceledRegs) if (r.field) fields.add(r.field);
-  const fieldToVenue = buildFieldToVenueMap(fields, venues);
+  const fieldToVenue = buildFieldToVenueIdMap(fields, venues, data.venueAliases);
   const venueById = new Map(venues.map((v) => [v.id, v]));
 
   // ===== Active aggregation =====

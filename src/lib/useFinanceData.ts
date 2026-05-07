@@ -485,8 +485,10 @@ async function load(): Promise<void> {
 
   // Build the mdapi-derived spot index from the Q2-wide registrations
   // pull. Drives venueAllocatedMemberRevenueFor / matchAllocatedMemberRevenueFor.
+  // Pass venueAliases so synonym pairs (e.g. "Katy International Sports
+  // Complex" → "KISC (Katy Intl)") resolve via normalizeMatchName.
   const mdapiMemberSpots = mdapiRegRows
-    ? buildMdapiMemberSpotIndex(mdapiRegRows, venues)
+    ? buildMdapiMemberSpotIndex(mdapiRegRows, venues, venueAliases)
     : emptyMdapiMemberSpotIndex();
 
   const config: Record<string, string> = {};

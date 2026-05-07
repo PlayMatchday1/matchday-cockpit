@@ -9,7 +9,10 @@ import {
   type VenueCostInfo,
 } from "./financeCosts";
 import { groupVenues } from "./venueGroups";
-import { normalizeMatchName } from "./venueNormalization";
+import {
+  buildFieldToVenueIdMap,
+  normalizeMatchName,
+} from "./venueNormalization";
 
 export const Q2_MONTHS = ["Apr 2026", "May 2026", "Jun 2026"] as const;
 export type Q2Month = (typeof Q2_MONTHS)[number];
@@ -1827,16 +1830,20 @@ export function buildMdapiMemberSpotIndex(
     raw_venue_name: string;
     city: string;
   }[],
+  // fin_venue_aliases as alias→canonical Map. Threaded through to
+  // buildFieldToVenueIdMap so synonym pairs (e.g. "Katy International
+  // Sports Complex" → "KISC (Katy Intl)") resolve, instead of being
+  // dropped from both byVenueMonth AND byCityMonth as the prior
+  // substring matcher did. Houston Apr 2026: includes 8 KISC member
+  // spots that were previously dropped — see Tier-2 deploy notes.
+  aliases: Map<string, string>,
 ): MdapiMemberSpotIndex {
   const byVenueMonth = new Map<string, number>();
   const byCityMonth = new Map<string, number>();
 
-  // Field → venue resolution (longest-prefix match). Same semantics as
-  // matchPnL.ts's buildFieldToVenueMap; copy kept private here so the
-  // builder is self-contained.
   const fields = new Set<string>();
   for (const r of regs) if (r.field) fields.add(r.field);
-  const fieldToVenue = resolveFieldToVenue(fields, venues);
+  const fieldToVenue = buildFieldToVenueIdMap(fields, venues, aliases);
   const venueById = new Map(venues.map((v) => [v.id, v]));
 
   for (const r of regs) {
@@ -1862,33 +1869,7 @@ export function buildMdapiMemberSpotIndex(
   return { byVenueMonth, byCityMonth };
 }
 
-function resolveFieldToVenue(
-  fields: Set<string>,
-  venues: { id: number; venue_name: string; raw_venue_name: string }[],
-): Map<string, number> {
-  const map = new Map<string, number>();
-  for (const field of fields) {
-    const lf = field.toLowerCase();
-    let best: { id: number; nameLen: number; rawName: string } | null = null;
-    for (const v of venues) {
-      const candidates = [v.raw_venue_name, v.venue_name];
-      for (const cand of candidates) {
-        const lc = cand.toLowerCase();
-        if (!lc || !lf.includes(lc)) continue;
-        if (
-          !best ||
-          lc.length > best.nameLen ||
-          (lc.length === best.nameLen && cand < best.rawName)
-        ) {
-          best = { id: v.id, nameLen: lc.length, rawName: cand };
-        }
-        break;
-      }
-    }
-    if (best) map.set(field, best.id);
-  }
-  return map;
-}
+// Field → venue resolution moved to venueNormalization.buildFieldToVenueIdMap.
 
 export type RankingRow = {
   venue: string;

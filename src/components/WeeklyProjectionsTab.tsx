@@ -114,11 +114,11 @@ export default function WeeklyProjectionsTab() {
     setError(null);
     try {
       const windows = computeProjectionWindows();
-      const [{ registrations, venues }, saved] = await Promise.all([
+      const [{ registrations, venues, aliases }, saved] = await Promise.all([
         fetchProjectionsData(supabase),
         fetchSavedProjections(supabase, windows.nextWindow.start),
       ]);
-      const v = computeProjections(registrations, venues, saved, windows);
+      const v = computeProjections(registrations, venues, saved, aliases, windows);
       setView(v);
       // Hydrate rowState from saved values per slot.
       const next = new Map<string, SlotState>();

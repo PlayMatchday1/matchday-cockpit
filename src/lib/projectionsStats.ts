@@ -17,14 +17,16 @@
 // (next day) → W-1 still ends previous Saturday. Stable across
 // the week.
 //
-// Venue resolution: longest-prefix substring match between a
-// match_registrations.field and fin_venues.venue_name. Handles
-// "The Hattrick" → Hattrick, "ATH Katy Sunday" → "ATH Katy Sunday"
-// (longer match wins over "ATH Katy"). Mirrors partnerStats.ts's
-// substring approach but disambiguates multi-leg cities.
+// Venue resolution: buildFieldToVenueIdMap from venueNormalization,
+// which runs the field through normalizeMatchName (CROSS_VENUE_ALIASES
+// + INTERNAL_PREFIX_RULES + DB aliases) before matching against
+// fin_venues. Handles synonym pairs ("Katy International Sports
+// Complex" → "KISC (Katy Intl)") that the prior substring-only matcher
+// dropped.
 
 import type { SupabaseClient } from "@supabase/supabase-js";
 import { fetchLegacyMatchRegistrations } from "./mdapiMatchesRead";
+import { buildFieldToVenueIdMap } from "./venueNormalization";
 
 const STAFF_EMAIL_DOMAIN = "matchday.com";
 const DOW_LABELS = ["Sun", "Mon", "Tue", "Wed", "Thu", "Fri", "Sat"] as const;
@@ -177,35 +179,7 @@ function fmtSlotLabel(dow: number, hhmm: string): string {
   return `${DOW_LABELS[dow]} ${h12}:${String(m).padStart(2, "0")}${ampm}`;
 }
 
-// =====================================================================
-// Venue resolver — longest-prefix substring match
-// =====================================================================
-
-function buildFieldToVenueMap(
-  fields: Set<string>,
-  venues: { id: number; venue_name: string }[],
-): Map<string, number> {
-  const map = new Map<string, number>();
-  for (const field of fields) {
-    const lf = field.toLowerCase();
-    let best: { id: number; nameLen: number; name: string } | null = null;
-    for (const v of venues) {
-      const ln = v.venue_name.toLowerCase();
-      if (!ln || !lf.includes(ln)) continue;
-      // Longer match wins. Tie-break alphabetically on venue_name
-      // for determinism.
-      if (
-        !best ||
-        ln.length > best.nameLen ||
-        (ln.length === best.nameLen && v.venue_name < best.name)
-      ) {
-        best = { id: v.id, nameLen: ln.length, name: v.venue_name };
-      }
-    }
-    if (best) map.set(field, best.id);
-  }
-  return map;
-}
+// Venue resolver lives in venueNormalization (buildFieldToVenueIdMap).
 
 // =====================================================================
 // Compute view
@@ -268,6 +242,12 @@ export function computeProjections(
   registrations: RegistrationRow[],
   venues: { id: number; venue_name: string; city: string | null }[],
   saved: Map<string, SavedProjection>,
+  // fin_venue_aliases as alias→canonical Map. Empty map is fine —
+  // normalizeMatchName will fall back to its built-in CROSS_VENUE_ALIASES
+  // / INTERNAL_PREFIX_RULES rules. Threading this through means CSV-side
+  // operator overrides (single existing row: "ATH Katy Sunday" → "ATH Katy")
+  // affect the projection venue assignment too.
+  aliases: Map<string, string>,
   windows: { windowsHistorical: WeekWindow[]; nextWindow: WeekWindow } = computeProjectionWindows(),
 ): ProjectionsView {
   // 1. Drop staff. Keep canceled rows so we can count canceled matches
@@ -282,7 +262,7 @@ export function computeProjections(
   //    cancellations or only next-week matches still resolves.
   const fields = new Set<string>();
   for (const r of regsExStaff) if (r.field) fields.add(r.field);
-  const fieldToVenue = buildFieldToVenueMap(fields, venues);
+  const fieldToVenue = buildFieldToVenueIdMap(fields, venues, aliases);
   const venueById = new Map(venues.map((v) => [v.id, v]));
 
   // 3. Single pass: bucket every reg into a slot accumulator.
@@ -474,6 +454,7 @@ export async function fetchProjectionsData(
 ): Promise<{
   registrations: RegistrationRow[];
   venues: { id: number; venue_name: string; city: string | null }[];
+  aliases: Map<string, string>;
 }> {
   const { windowsHistorical, nextWindow } = computeProjectionWindows();
   const earliest = windowsHistorical[0].start;
@@ -483,21 +464,30 @@ export async function fetchProjectionsData(
   // earliest/latest are YYYY-MM-DD strings (per computeProjectionWindows).
   // The lib's gte/lte filter on mdapi_matches.start_date covers the
   // full local-time range correctly.
-  const registrations: RegistrationRow[] = await fetchLegacyMatchRegistrations(
-    supabase,
-    { fromDate: earliest, toDate: latest },
-  );
+  const [registrations, venuesRes, aliasRes] = await Promise.all([
+    fetchLegacyMatchRegistrations(supabase, { fromDate: earliest, toDate: latest }),
+    supabase
+      .from("fin_venues")
+      .select("id, venue_name, city")
+      .order("city")
+      .order("venue_name"),
+    // fin_venue_aliases is bounded (currently 1 row) — single round trip
+    // is fine, no pagination needed. Feeds buildFieldToVenueIdMap so
+    // operator-level alias overrides reach the projection venue lookup.
+    supabase.from("fin_venue_aliases").select("alias, canonical_venue"),
+  ]);
+  if (venuesRes.error) throw new Error(`Venues fetch: ${venuesRes.error.message}`);
+  if (aliasRes.error) throw new Error(`Aliases fetch: ${aliasRes.error.message}`);
 
-  const { data: venues, error: vErr } = await supabase
-    .from("fin_venues")
-    .select("id, venue_name, city")
-    .order("city")
-    .order("venue_name");
-  if (vErr) throw new Error(`Venues fetch: ${vErr.message}`);
+  const aliases = new Map<string, string>();
+  for (const a of (aliasRes.data ?? []) as { alias: string | null; canonical_venue: string | null }[]) {
+    if (a.alias && a.canonical_venue) aliases.set(a.alias.trim(), a.canonical_venue.trim());
+  }
 
   return {
     registrations,
-    venues: (venues ?? []) as { id: number; venue_name: string; city: string | null }[],
+    venues: (venuesRes.data ?? []) as { id: number; venue_name: string; city: string | null }[],
+    aliases,
   };
 }
 
