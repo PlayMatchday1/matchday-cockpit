@@ -239,23 +239,42 @@ export default function ManagerOfTheMonth({ rows }: { rows: ReviewRow[] }) {
     return computeView(rows, active.year, active.month);
   }, [rows, active]);
 
-  // Image export. Dynamic-import keeps html2canvas out of the
-  // initial bundle for users who never click the button.
+  // Image export via modern-screenshot. Replaces html2canvas which
+  // dropped podium #1/#2, dimmed gradients, and squished the layout
+  // — its CSS variable + flex/gradient handling didn't keep up with
+  // the leaderboard's styling. modern-screenshot uses foreignObject
+  // SVG → canvas which preserves CSS vars, web fonts, and complex
+  // flex layouts faithfully.
+  //
+  // - Dynamic import keeps the lib (~40 KB gzipped) out of the
+  //   initial bundle for users who never click.
+  // - document.fonts.ready: forces Bebas Neue / Fraunces / JetBrains
+  //   Mono to finish loading before snapshot. Without this, web fonts
+  //   sometimes capture as a fallback (Times / Arial), which is part
+  //   of why the prior export looked "off."
+  // - Explicit width pinned to the on-screen render width so the
+  //   output matches what the user sees on the page.
+  // - scale: 2 for retina-density output.
   const exportRef = useRef<HTMLDivElement>(null);
   const [exporting, setExporting] = useState(false);
   async function handleExport() {
-    if (!exportRef.current) return;
+    const node = exportRef.current;
+    if (!node) return;
     setExporting(true);
     try {
-      const { default: html2canvas } = await import("html2canvas");
-      const canvas = await html2canvas(exportRef.current, {
+      if (typeof document !== "undefined" && document.fonts?.ready) {
+        await document.fonts.ready;
+      }
+      const { domToPng } = await import("modern-screenshot");
+      const dataUrl = await domToPng(node, {
         backgroundColor: "#0a1a10",
         scale: 2,
-        useCORS: true,
+        width: node.offsetWidth,
+        height: node.offsetHeight,
       });
       const link = document.createElement("a");
       link.download = `matchday-mgr-of-month-${MONTH_SHORT[active.month].toLowerCase()}-${active.year}.png`;
-      link.href = canvas.toDataURL("image/png");
+      link.href = dataUrl;
       link.click();
     } catch (e) {
       console.warn("Image export failed:", e);
