@@ -386,7 +386,13 @@ export default function MonthlyReportGenerator() {
   const nextMonthLabel = generated
     ? MONTH_LONG[nextMonth(generated.month).idx]
     : "";
-  const reviewLink = generated ? `/cities/${citySlug(generated.city)}` : "";
+  // Deep-link to the city detail page with the report month pre-selected
+  // on the Comments table. ?month=YYYY-MM is parsed by CityDetailView's
+  // search-params hook; #comments anchors to the section so the page
+  // scrolls past the four stat cards to the table on load.
+  const reviewLink = generated
+    ? `/cities/${citySlug(generated.city)}?month=${generated.month.year}-${String(generated.month.idx + 1).padStart(2, "0")}#comments`
+    : "";
 
   async function handleCopyEmail() {
     if (!generated) return;

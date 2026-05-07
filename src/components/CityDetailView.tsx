@@ -1,6 +1,7 @@
 "use client";
 
 import Link from "next/link";
+import { useSearchParams } from "next/navigation";
 import { useState } from "react";
 import {
   getActiveVenues,
@@ -20,6 +21,7 @@ import TotalsBarChart from "./TotalsBarChart";
 import CancelHeatmap from "./CancelHeatmap";
 import CityGoalsView from "./CityGoalsView";
 import CityManagerTable from "./CityManagerTable";
+import ReviewsCommentsTable from "./ReviewsCommentsTable";
 
 // Color tiers calibrated for match-cancel rate (the new metric semantics).
 // Across the 8 cities the rate runs 4-30%; >25% reads as a real problem,
@@ -35,6 +37,13 @@ export default function CityDetailView({ city }: { city: City }) {
   const { rows, meta, loading } = useMatchData();
   const { rows: reviewRows, meta: reviewMeta } = useReviewData();
   const [showVenues, setShowVenues] = useState(false);
+  // Pre-select the Comments month from ?month=YYYY-MM (set by the
+  // monthly-report-generator deep link). Falls through to the table's
+  // own previous-month default when absent or malformed.
+  const searchParams = useSearchParams();
+  const monthParam = searchParams?.get("month") ?? undefined;
+  const defaultMonthKey =
+    monthParam && /^\d{4}-\d{2}$/.test(monthParam) ? monthParam : undefined;
 
   const weekly = getWeeklySpots(rows, city, 8);
   const cancel = getCancelRate(rows, city);
@@ -209,6 +218,17 @@ export default function CityDetailView({ city }: { city: City }) {
             </p>
           </div>
           <CityManagerTable rows={reviewRows} city={city} />
+        </section>
+      )}
+
+      {reviewMeta && (
+        <section id="comments" className="mb-8 scroll-mt-20">
+          <ReviewsCommentsTable
+            scope="monthly"
+            rows={reviewRows}
+            city={city}
+            defaultMonthKey={defaultMonthKey}
+          />
         </section>
       )}
     </>
