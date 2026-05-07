@@ -265,12 +265,23 @@ export default function ManagerOfTheMonth({ rows }: { rows: ReviewRow[] }) {
       if (typeof document !== "undefined" && document.fonts?.ready) {
         await document.fonts.ready;
       }
+      // Read the live width at click time and force the cloned root to that
+      // width during capture. modern-screenshot wraps the node in a <foreignObject>
+      // detached from its parent's flex/grid context — without an explicit width,
+      // the clone can collapse to its intrinsic content width, leaving black
+      // margins where the configured canvas width is wider than the rendered DOM.
+      const w = node.offsetWidth;
+      const h = node.offsetHeight;
       const { domToPng } = await import("modern-screenshot");
       const dataUrl = await domToPng(node, {
         backgroundColor: "#0a1a10",
         scale: 2,
-        width: node.offsetWidth,
-        height: node.offsetHeight,
+        width: w,
+        height: h,
+        style: {
+          width: `${w}px`,
+          height: `${h}px`,
+        },
       });
       const link = document.createElement("a");
       link.download = `matchday-mgr-of-month-${MONTH_SHORT[active.month].toLowerCase()}-${active.year}.png`;
@@ -1081,7 +1092,6 @@ const LEADERBOARD_CSS = `
   border-radius: 12px;
   background: var(--mlb-paper);
   color: var(--mlb-ink);
-  overflow: hidden;
   transition: transform 0.3s ease;
   animation: mlb-rise 0.8s cubic-bezier(0.2, 0.8, 0.2, 1) both;
 }
