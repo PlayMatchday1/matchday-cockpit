@@ -56,12 +56,23 @@ const PREMIER_MATCH_AT_RX = /^Premier\s+match\s+at\s+(.+)$/i;
 const CROSS_VENUE_ALIASES: Record<string, string> = {
   Premier: "San Juan Diego",
   SJD: "San Juan Diego",
+  "Premier at SJD": "San Juan Diego",
   "Katy International Sports Complex": "KISC (Katy Intl)",
   "The Hattrick": "Hattrick",
   "Tourney ATH Pearland": "ATH Pearland",
   "Tourney at Soccer Central": "Soccer Central",
   "San Juan Diego Catholic High School": "San Juan Diego",
   "Stadium Field at Round Rock M.C.": "Round Rock",
+  "North East Metropolitan Park": "NEMP",
+  // Lou Fusz facility — fin_venues splits the same physical site into
+  // separate Indoor / Outdoor rows because they're billed differently.
+  // mdapi field_title is the user-facing facility name; the suffix
+  // ("Athletic Complex" vs "Athletic Training Center") disambiguates.
+  // Source of truth: schedule operator (no future Indoor matches —
+  // historic Q1-only — but the alias keeps backward-looking reports
+  // resolving correctly).
+  "Lou Fusz Athletic Complex": "Lou Fusz Outdoor",
+  "Lou Fusz Athletic Training Center": "Lou Fusz Indoor",
 };
 
 // Internal-variant collapses. The raw name STARTS WITH the prefix, optionally
