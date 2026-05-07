@@ -19,8 +19,9 @@
 // dark theme + custom CSS variables don't leak into the rest of the
 // app. Animation keyframes are mlb-prefixed to avoid global collisions.
 
-import { useEffect, useMemo, useState } from "react";
+import { useEffect, useMemo, useRef, useState } from "react";
 import type { ReviewRow } from "@/lib/useReviewData";
+import ManagerOfTheMonthPhoneCard from "./ManagerOfTheMonthPhoneCard";
 
 const MINIMUM_REVIEWS = 50;
 
@@ -238,6 +239,41 @@ export default function ManagerOfTheMonth({ rows }: { rows: ReviewRow[] }) {
   const view = useMemo(() => {
     return computeView(rows, active.year, active.month);
   }, [rows, active]);
+
+  // Phone-format PNG export. The phone card is always mounted in a
+  // fixed-offscreen wrapper (left: -10000px) so it's invisible to the
+  // user but capturable. On click:
+  //   1. await document.fonts.ready so Bebas/Fraunces/JetBrains Mono
+  //      embed correctly into the foreignObject SVG.
+  //   2. html-to-image's toPng clones the node, serializes via SVG,
+  //      paints to canvas, returns a data URL. pixelRatio: 2 for retina.
+  //   3. Trigger a download via a synthetic <a>.
+  const phoneCardRef = useRef<HTMLDivElement>(null);
+  const [downloading, setDownloading] = useState(false);
+  async function handleDownloadPng() {
+    const node = phoneCardRef.current;
+    if (!node) return;
+    setDownloading(true);
+    try {
+      if (typeof document !== "undefined" && document.fonts?.ready) {
+        await document.fonts.ready;
+      }
+      const { toPng } = await import("html-to-image");
+      const dataUrl = await toPng(node, {
+        pixelRatio: 2,
+        backgroundColor: "#0a1a10",
+        cacheBust: true,
+      });
+      const link = document.createElement("a");
+      link.download = `matchday-mgr-of-month-${MONTH_SHORT[active.month].toLowerCase()}-${active.year}.png`;
+      link.href = dataUrl;
+      link.click();
+    } catch (e) {
+      console.warn("PNG export failed:", e);
+    } finally {
+      setDownloading(false);
+    }
+  }
 
   return (
     <>
@@ -543,6 +579,38 @@ export default function ManagerOfTheMonth({ rows }: { rows: ReviewRow[] }) {
             </div>
           </div>
         </div>
+
+        <div className="mlb-actions">
+          <button
+            type="button"
+            className="mlb-btn"
+            onClick={handleDownloadPng}
+            disabled={downloading}
+          >
+            {downloading ? "Rendering…" : "Download for WhatsApp"}
+          </button>
+        </div>
+      </div>
+
+      {/* Offscreen phone-format render. Always mounted so it stays in
+          sync with the active month; html-to-image captures this node
+          when the user clicks the button. pointer-events: none so it
+          can't accidentally intercept input. */}
+      <div
+        aria-hidden="true"
+        style={{
+          position: "fixed",
+          left: "-10000px",
+          top: 0,
+          pointerEvents: "none",
+        }}
+      >
+        <ManagerOfTheMonthPhoneCard
+          ref={phoneCardRef}
+          view={view}
+          month={active.month}
+          year={active.year}
+        />
       </div>
     </>
   );
@@ -1371,6 +1439,35 @@ const LEADERBOARD_CSS = `
   height: 10px;
   border-radius: 50%;
   display: inline-block;
+}
+
+/* Download button — sits below the standings inside the dark card. */
+.manager-leaderboard .mlb-actions {
+  display: flex;
+  justify-content: center;
+  gap: 12px;
+  margin-top: 24px;
+}
+.manager-leaderboard .mlb-btn {
+  padding: 10px 20px;
+  background: transparent;
+  color: var(--mlb-paper);
+  border: 1px solid rgba(245, 239, 224, 0.2);
+  border-radius: 6px;
+  font-family: 'JetBrains Mono', monospace;
+  font-size: 0.75rem;
+  letter-spacing: 0.1em;
+  text-transform: uppercase;
+  cursor: pointer;
+  transition: all 0.2s;
+}
+.manager-leaderboard .mlb-btn:hover {
+  background: rgba(245, 239, 224, 0.08);
+  border-color: var(--mlb-paper);
+}
+.manager-leaderboard .mlb-btn:disabled {
+  opacity: 0.5;
+  cursor: not-allowed;
 }
 
 @media (max-width: 800px) {
