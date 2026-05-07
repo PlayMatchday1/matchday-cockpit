@@ -12,6 +12,7 @@ import { groupVenues } from "./venueGroups";
 import {
   buildFieldToVenueIdMap,
   normalizeMatchName,
+  resolveVenueForMatch,
 } from "./venueNormalization";
 
 export const Q2_MONTHS = ["Apr 2026", "May 2026", "Jun 2026"] as const;
@@ -1829,6 +1830,7 @@ export function buildMdapiMemberSpotIndex(
     venue_name: string;
     raw_venue_name: string;
     city: string;
+    cost_per_match: number | null;
   }[],
   // fin_venue_aliases as alias→canonical Map. Threaded through to
   // buildFieldToVenueIdMap so synonym pairs (e.g. "Katy International
@@ -1855,9 +1857,15 @@ export function buildMdapiMemberSpotIndex(
     const month = isoToQ2Month(r.match_start);
     if (!month) continue;
 
-    const venueId = fieldToVenue.get(r.field);
-    if (venueId == null) continue;
-    const v = venueById.get(venueId);
+    const baseVenueId = fieldToVenue.get(r.field);
+    if (baseVenueId == null) continue;
+    // Day-of-week swap: ATH Katy + Sun match → ATH Katy Sunday venue,
+    // so member spots bucket under the right rate-tier row. r.match_start
+    // is the wall-clock-stable ISO produced by toLegacyShape; new Date()
+    // parses as local, .getDay() is the local day-of-week.
+    const matchStart = new Date(r.match_start);
+    const resolved = resolveVenueForMatch(baseVenueId, matchStart, venues);
+    const v = venueById.get(resolved.venueId);
     if (!v) continue;
 
     const venueKey = `${v.city}|${v.venue_name}|${month}`;

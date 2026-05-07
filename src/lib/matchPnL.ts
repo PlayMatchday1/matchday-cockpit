@@ -35,7 +35,7 @@ import type { SupabaseClient } from "@supabase/supabase-js";
 import type { FinanceData } from "./useFinanceData";
 import { matchAllocatedMemberRevenueFor } from "./financeStats";
 import { fetchLegacyMatchRegistrations } from "./mdapiMatchesRead";
-import { buildFieldToVenueIdMap } from "./venueNormalization";
+import { buildFieldToVenueIdMap, resolveVenueForMatch } from "./venueNormalization";
 
 // Allow-list of player-booking payment types. Anything else (NULL,
 // rental codes, comp markers) gets filtered out as not a real
@@ -216,12 +216,23 @@ export async function fetchWeekMatchPnL(
     spotsSold: number;
     memberSpots: number;
     grossRevenue: number;
+    // Day-aware cost captured at row time so the bucket records the
+    // resolved rate (incl. the sibling-cost-null fallback to base
+    // venue's rate). See resolveVenueForMatch.
+    cost: number | null;
   };
   const buckets = new Map<string, Bucket>();
   for (const r of activeEligible) {
     const matchStart = parseLocalTimestamp(r.match_start);
     if (!matchStart) continue;
-    const venueId = fieldToVenue.get(r.field as string) ?? null;
+    const baseVenueId = fieldToVenue.get(r.field as string) ?? null;
+    // Day-of-week swap: ATH Katy + Sun match → ATH Katy Sunday venue.
+    // Sibling missing-cost falls back to base rate with a console.warn.
+    const resolved =
+      baseVenueId !== null
+        ? resolveVenueForMatch(baseVenueId, matchStart, venues)
+        : null;
+    const venueId = resolved?.venueId ?? null;
     const venue = venueId !== null ? (venueById.get(venueId) ?? null) : null;
     const key = `${venueId ?? `raw:${r.field}`}|${r.match_start}`;
     let b = buckets.get(key);
@@ -236,6 +247,7 @@ export async function fetchWeekMatchPnL(
         spotsSold: 0,
         memberSpots: 0,
         grossRevenue: 0,
+        cost: resolved?.cost ?? null,
       };
       buckets.set(key, b);
     }
@@ -250,7 +262,7 @@ export async function fetchWeekMatchPnL(
   const active: MatchPnLRow[] = [];
   for (const b of buckets.values()) {
     const venue = b.venueId !== null ? (venueById.get(b.venueId) ?? null) : null;
-    const cost = venue?.cost_per_match ?? null;
+    const cost = b.cost;
     // Allocated member rev: pro-rata of the venue's monthly membership
     // rev (Field Ranking's number) split across the month's matches
     // in proportion to MEMBER fills at each match. Returns 0 cleanly
@@ -295,12 +307,17 @@ export async function fetchWeekMatchPnL(
   for (const r of canceledRegs) {
     const matchStart = parseLocalTimestamp(r.match_start);
     if (!matchStart) continue;
-    const venueId = fieldToVenue.get(r.field as string) ?? null;
+    const baseVenueId = fieldToVenue.get(r.field as string) ?? null;
+    const resolved =
+      baseVenueId !== null
+        ? resolveVenueForMatch(baseVenueId, matchStart, venues)
+        : null;
+    const venueId = resolved?.venueId ?? null;
     const key = `${venueId ?? `raw:${r.field}`}|${r.match_start}`;
     if (canceledSeen.has(key)) continue;
     canceledSeen.add(key);
     const venue = venueId !== null ? (venueById.get(venueId) ?? null) : null;
-    const cost = venue?.cost_per_match ?? null;
+    const cost = resolved?.cost ?? null;
     canceled.push({
       matchStartIso: r.match_start,
       matchStart,

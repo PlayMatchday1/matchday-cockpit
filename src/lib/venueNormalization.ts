@@ -216,6 +216,89 @@ export function normalizeMatchName(
 // substring-matcher behavior.
 // =====================================================================
 
+// =====================================================================
+// Day-of-week aware sibling lookup. fin_venues encodes split-rate
+// venues as separate rows where the qualified row's venue_name is the
+// base name + " " + day-of-week (e.g. "ATH Katy" + "ATH Katy Sunday",
+// $140 weekday vs $160 Sunday). Generic — the same shape works for any
+// future split-rate venue that follows the convention.
+//
+// Pipeline at the call site:
+//   1. buildFieldToVenueIdMap → base venueId (from field_title)
+//   2. resolveVenueForMatch(baseVenueId, matchStart) → final venueId +
+//      cost. If a "<base name> <DayOfWeek>" sibling exists AND the
+//      match's start day matches, return the sibling. Otherwise base.
+//
+// Cost-fallback: if the sibling exists but its cost_per_match is null
+// (data not entered yet), return the SIBLING's id (so bucketing keeps
+// the rate-tier separation) but the BASE venue's cost (so callers
+// don't show "NO COST SET" for what's structurally just an unfilled
+// rate row). Logs a warning so the operator notices the missing data.
+// =====================================================================
+
+const DOW_NAMES = [
+  "Sunday",
+  "Monday",
+  "Tuesday",
+  "Wednesday",
+  "Thursday",
+  "Friday",
+  "Saturday",
+];
+
+export type DayAwareVenueResolution = {
+  venueId: number;
+  // Cost for this match — already day-aware. Use this instead of
+  // re-reading venue.cost_per_match by id. Null only when both the
+  // resolved venue AND the base venue (in cost-fallback case) lack a
+  // cost_per_match entry.
+  cost: number | null;
+  // Set to the BASE venue's id when the day-of-week swap fired but
+  // the sibling's cost was null and we fell back to the base rate.
+  // Display layers can show "ATH Katy Sunday — using ATH Katy rate"
+  // when this is non-null.
+  costFellBackTo: number | null;
+};
+
+export function resolveVenueForMatch(
+  baseVenueId: number,
+  matchStart: Date,
+  venues: { id: number; venue_name: string; cost_per_match: number | null }[],
+): DayAwareVenueResolution {
+  const base = venues.find((v) => v.id === baseVenueId);
+  if (!base) {
+    return { venueId: baseVenueId, cost: null, costFellBackTo: null };
+  }
+  const dayName = DOW_NAMES[matchStart.getDay()];
+  const siblingName = `${base.venue_name} ${dayName}`;
+  const sibling = venues.find((v) => v.venue_name === siblingName);
+  if (!sibling) {
+    return {
+      venueId: base.id,
+      cost: base.cost_per_match,
+      costFellBackTo: null,
+    };
+  }
+  if (sibling.cost_per_match != null) {
+    return {
+      venueId: sibling.id,
+      cost: sibling.cost_per_match,
+      costFellBackTo: null,
+    };
+  }
+  // Sibling exists but cost not set — keep sibling for bucketing,
+  // fall back to base rate for the cost value, log so operator sees
+  // the gap.
+  console.warn(
+    `[resolveVenueForMatch] ${dayName} sibling "${siblingName}" (id ${sibling.id}) exists in fin_venues but cost_per_match is null. Falling back to base "${base.venue_name}" rate ($${base.cost_per_match ?? "null"}). Set the cost on venue id ${sibling.id} in Field Costs admin to use the correct rate.`,
+  );
+  return {
+    venueId: sibling.id,
+    cost: base.cost_per_match,
+    costFellBackTo: base.id,
+  };
+}
+
 export function buildFieldToVenueIdMap(
   fields: Set<string>,
   venues: { id: number; venue_name: string }[],

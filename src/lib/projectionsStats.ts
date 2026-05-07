@@ -26,7 +26,7 @@
 
 import type { SupabaseClient } from "@supabase/supabase-js";
 import { fetchLegacyMatchRegistrations } from "./mdapiMatchesRead";
-import { buildFieldToVenueIdMap } from "./venueNormalization";
+import { buildFieldToVenueIdMap, resolveVenueForMatch } from "./venueNormalization";
 
 const STAFF_EMAIL_DOMAIN = "matchday.com";
 const DOW_LABELS = ["Sun", "Mon", "Tue", "Wed", "Thu", "Fri", "Sat"] as const;
@@ -240,7 +240,16 @@ function emptyWeekAccum() {
 
 export function computeProjections(
   registrations: RegistrationRow[],
-  venues: { id: number; venue_name: string; city: string | null }[],
+  // cost_per_match needed by resolveVenueForMatch for the day-of-week
+  // sibling swap (Sun matches at "ATH Katy" → "ATH Katy Sunday" venue).
+  // Projections don't use the cost value itself, but the helper needs
+  // it to decide the swap direction.
+  venues: {
+    id: number;
+    venue_name: string;
+    city: string | null;
+    cost_per_match: number | null;
+  }[],
   saved: Map<string, SavedProjection>,
   // fin_venue_aliases as alias→canonical Map. Empty map is fine —
   // normalizeMatchName will fall back to its built-in CROSS_VENUE_ALIASES
@@ -290,8 +299,8 @@ export function computeProjections(
     return -1;
   }
   for (const r of regsExStaff) {
-    const venueId = fieldToVenue.get(r.field as string);
-    if (venueId === undefined) continue;
+    const baseVenueId = fieldToVenue.get(r.field as string);
+    if (baseVenueId === undefined) continue;
     const ymd = r.match_start.slice(0, 10);
     const hhmm = hhmmFromMatchStart(r.match_start);
     const dow = dowFromYmd(ymd);
@@ -299,6 +308,12 @@ export function computeProjections(
       ymd >= windows.nextWindow.start && ymd <= windows.nextWindow.end;
     const wIdx = windowIndexFor(ymd);
     if (wIdx === -1 && !inNext) continue;
+    // Day-of-week swap: Sun matches at base "ATH Katy" map to "ATH Katy
+    // Sunday" venue. r.match_start is wall-clock-stable ISO from
+    // toLegacyShape; new Date() parses local, getDay matches the dow
+    // computed above from the YMD prefix.
+    const matchStart = new Date(r.match_start);
+    const venueId = resolveVenueForMatch(baseVenueId, matchStart, venues).venueId;
     const slot = ensureSlot(venueId, dow, hhmm);
     if (inNext) {
       // Next-window: only count non-canceled matches toward the
@@ -453,7 +468,12 @@ export async function fetchProjectionsData(
   supabase: SupabaseClient,
 ): Promise<{
   registrations: RegistrationRow[];
-  venues: { id: number; venue_name: string; city: string | null }[];
+  venues: {
+    id: number;
+    venue_name: string;
+    city: string | null;
+    cost_per_match: number | null;
+  }[];
   aliases: Map<string, string>;
 }> {
   const { windowsHistorical, nextWindow } = computeProjectionWindows();
@@ -468,7 +488,8 @@ export async function fetchProjectionsData(
     fetchLegacyMatchRegistrations(supabase, { fromDate: earliest, toDate: latest }),
     supabase
       .from("fin_venues")
-      .select("id, venue_name, city")
+      // cost_per_match needed by resolveVenueForMatch's day-of-week swap.
+      .select("id, venue_name, city, cost_per_match")
       .order("city")
       .order("venue_name"),
     // fin_venue_aliases is bounded (currently 1 row) — single round trip
@@ -486,7 +507,12 @@ export async function fetchProjectionsData(
 
   return {
     registrations,
-    venues: (venuesRes.data ?? []) as { id: number; venue_name: string; city: string | null }[],
+    venues: (venuesRes.data ?? []) as {
+      id: number;
+      venue_name: string;
+      city: string | null;
+      cost_per_match: number | null;
+    }[],
     aliases,
   };
 }
