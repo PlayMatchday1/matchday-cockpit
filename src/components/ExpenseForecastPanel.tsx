@@ -5,12 +5,21 @@ import { ChevronDown, ChevronRight } from "lucide-react";
 import { useFinanceData } from "@/lib/useFinanceData";
 import {
   EXPENSE_FORECAST_MOVER_THRESHOLD,
+  PINNED_FORECAST_CATEGORIES,
   expenseForecastDeltas,
   getQ2MonthPairs,
   type ExpenseForecastRow,
   type Q2Month,
   type Q2MonthPair,
 } from "@/lib/financeStats";
+
+// Pinned set lookup + declared-order index for the panel's render
+// order. Pinned categories always render top-level regardless of |Δ|;
+// non-pinned categories follow the legacy threshold rule.
+const PINNED_SET = new Set<string>(PINNED_FORECAST_CATEGORIES);
+const PINNED_ORDER = new Map<string, number>(
+  PINNED_FORECAST_CATEGORIES.map((c, i) => [c, i]),
+);
 
 // =====================================================================
 // Expense Forecast panel (replaces "Looking ahead").
@@ -106,11 +115,32 @@ export default function ExpenseForecastPanel() {
   }
   if (!forecast || !selectedPair) return null;
 
-  const movers = forecast.rows.filter(
-    (r) => Math.abs(r.delta) >= EXPENSE_FORECAST_MOVER_THRESHOLD,
-  );
+  // Top-level lane: pinned categories ALWAYS, plus any non-pinned
+  // category with |Δ| ≥ $500. Render order: pinned first in declared
+  // order (Field Costs → MMP → City Manager → Marketing → Equipment),
+  // then non-pinned movers sorted by |Δ| desc.
+  const movers = forecast.rows
+    .filter(
+      (r) =>
+        PINNED_SET.has(r.category) ||
+        Math.abs(r.delta) >= EXPENSE_FORECAST_MOVER_THRESHOLD,
+    )
+    .sort((a, b) => {
+      const aPinned = PINNED_SET.has(a.category);
+      const bPinned = PINNED_SET.has(b.category);
+      if (aPinned && bPinned) {
+        return (PINNED_ORDER.get(a.category) ?? 0) -
+          (PINNED_ORDER.get(b.category) ?? 0);
+      }
+      if (aPinned) return -1;
+      if (bPinned) return 1;
+      return Math.abs(b.delta) - Math.abs(a.delta);
+    });
+  // Static lane: non-pinned categories below the threshold.
   const staticRows = forecast.rows.filter(
-    (r) => Math.abs(r.delta) < EXPENSE_FORECAST_MOVER_THRESHOLD,
+    (r) =>
+      !PINNED_SET.has(r.category) &&
+      Math.abs(r.delta) < EXPENSE_FORECAST_MOVER_THRESHOLD,
   );
 
   return (
@@ -137,13 +167,10 @@ export default function ExpenseForecastPanel() {
       </div>
 
       <div className="mt-4 px-6 sm:px-7">
-        <SecLabel>
-          Movers · |Δ| ≥ {fmtUsd(EXPENSE_FORECAST_MOVER_THRESHOLD)}
-        </SecLabel>
+        <SecLabel>Top-level expenses</SecLabel>
         {movers.length === 0 ? (
           <div className="mt-2 rounded-md border border-cream-line bg-cream-soft/40 px-4 py-3 text-xs italic text-deep-green/55">
-            No category moved more than {fmtUsd(EXPENSE_FORECAST_MOVER_THRESHOLD)}{" "}
-            this pair.
+            No expense activity in this pair.
           </div>
         ) : (
           <>
@@ -416,12 +443,8 @@ function StaticSection({
   onToggle: () => void;
 }) {
   if (rows.length === 0) return null;
-  // Subtitle adapts to whether everything is exactly $0 or just below
-  // the threshold — both can land in the static lane.
-  const allZero = rows.every((r) => Math.round(r.delta) === 0);
-  const subtitle = allZero
-    ? "No change month-over-month. Update on Expenses tab as needed."
-    : `Below $${EXPENSE_FORECAST_MOVER_THRESHOLD} threshold. Update on Expenses tab as needed.`;
+  const subtitle =
+    "Stable categories · update on Expenses tab as needed.";
   return (
     <div className="rounded-md border border-cream-line bg-cream-soft/30">
       <button

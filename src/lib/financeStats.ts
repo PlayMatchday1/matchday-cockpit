@@ -1189,8 +1189,28 @@ export function monthOverMonthDeltas(
 // =====================================================================
 
 // Categories with absolute month-over-month change ≥ this threshold
-// surface in the "Movers" lane; the rest collapse into Static.
+// surface in the top-level lane on the Expense Forecast panel; the
+// rest collapse into Static — UNLESS they're in PINNED_FORECAST_CATEGORIES
+// below, which always render top-level regardless of |Δ|.
 export const EXPENSE_FORECAST_MOVER_THRESHOLD = 500;
+
+// Categories pinned to the top-level lane on the Expense Forecast
+// panel. These render every period regardless of |Δ|, so admins can
+// see month-over-month for the metrics they care about without
+// expanding the Static collapse. Order here = render order in the
+// panel (pinned first, then non-pinned movers sorted by |Δ| desc).
+//
+// Pinned categories are also exempt from the zero-zero filter in
+// expenseForecastDeltas — Equipment $0 / $0 still renders so admins
+// see "no equipment spending this month" instead of nothing.
+export const PINNED_FORECAST_CATEGORIES: readonly string[] = [
+  "Field Costs",
+  "Match Manager Pay",
+  "City Manager",
+  "Marketing",
+  "Equipment",
+];
+const PINNED_FORECAST_SET = new Set<string>(PINNED_FORECAST_CATEGORIES);
 
 export type ExpenseForecastConfidence = "formula" | "mixed" | "manual";
 
@@ -1268,11 +1288,28 @@ export function expenseForecastDeltas(
   const fromCats = expensesByCategory(data, fromMonth, now);
   const toCats = expensesByCategory(data, toMonth, now);
   const allCats = new Set<string>([...fromCats.keys(), ...toCats.keys()]);
+  // Ensure every pinned category appears in the output even if neither
+  // month produced a row for it. With expensesByCategory's explicit
+  // .set() calls for City Manager / Marketing / Equipment / Field Costs
+  // they should already be present, but Match Manager Pay only flows
+  // through if at least one MMP row exists; this guarantees the panel
+  // always renders the pinned set.
+  for (const c of PINNED_FORECAST_SET) allCats.add(c);
   const rows: ExpenseForecastRow[] = [];
   for (const category of allCats) {
     const fromAmount = fromCats.get(category) ?? 0;
     const toAmount = toCats.get(category) ?? 0;
-    if (Math.abs(fromAmount) < 0.5 && Math.abs(toAmount) < 0.5) continue;
+    // Pinned categories always render — including $0/$0 — so admins
+    // see "no spending this month" explicitly rather than silently.
+    // Non-pinned categories with zero on both sides drop out so the
+    // panel doesn't list dormant categories the user has never used.
+    if (
+      !PINNED_FORECAST_SET.has(category) &&
+      Math.abs(fromAmount) < 0.5 &&
+      Math.abs(toAmount) < 0.5
+    ) {
+      continue;
+    }
     const delta = toAmount - fromAmount;
     const meta = classifyExpenseCategory(category);
     const row: ExpenseForecastRow = {
