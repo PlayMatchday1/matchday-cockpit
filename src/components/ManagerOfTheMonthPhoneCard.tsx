@@ -354,6 +354,10 @@ const PHONE_CSS = `
 .mlb-phone .pc-row.pc-on-pace {
   border-left-color: #4ea8ff;
 }
+.mlb-phone .pc-row.pc-off-pace {
+  border-left-color: rgba(245, 239, 224, 0.18);
+  opacity: 0.55;
+}
 .mlb-phone .pc-row-rank {
   font-family: 'Bebas Neue', sans-serif;
   font-size: 40px;
@@ -414,6 +418,9 @@ const PHONE_CSS = `
 .mlb-phone .pc-row-status.is-on-pace {
   color: #4ea8ff;
 }
+.mlb-phone .pc-row-status.is-off-pace {
+  color: #7a8478;
+}
 
 /* Footer */
 .mlb-phone .pc-footer {
@@ -454,7 +461,18 @@ type PhoneCardProps = {
 
 const ManagerOfTheMonthPhoneCard = forwardRef<HTMLDivElement, PhoneCardProps>(
   function ManagerOfTheMonthPhoneCard({ view, month, year }, ref) {
-    const eligible = view.managers.filter((m) => m.qualified || m.onPace);
+    // Phone-card sort: qualified first (by avg desc), then on-pace
+    // (by avg desc), then off-pace (by avg desc). Within each group,
+    // review count breaks ties. Differs from the desktop sort, which
+    // mixes qualified+on-pace together — phone card groups them
+    // visually so the eye lands on qualified first.
+    const sortByAvg = (a: ManagerAgg, b: ManagerAgg) =>
+      b.avg !== a.avg ? b.avg - a.avg : b.count - a.count;
+    const allRanked = [
+      ...view.managers.filter((m) => m.qualified).sort(sortByAvg),
+      ...view.managers.filter((m) => m.onPace).sort(sortByAvg),
+      ...view.managers.filter((m) => m.offPace).sort(sortByAvg),
+    ];
     return (
       <div ref={ref} className="mlb-phone">
         <style>{PHONE_CSS}</style>
@@ -541,36 +559,55 @@ const ManagerOfTheMonthPhoneCard = forwardRef<HTMLDivElement, PhoneCardProps>(
           </>
         )}
 
-        {eligible.length > 0 && (
+        {allRanked.length > 0 && (
           <>
             <div className="pc-section-label">Full Standings</div>
             <div className="pc-standings">
-              {eligible.map((m, idx) => {
-                const visibleRank = idx + 1;
-                const cls = m.qualified ? "pc-qualified" : "pc-on-pace";
-                const statusText = m.qualified
-                  ? view.isEndOfMonth
-                    ? "WINNER"
-                    : "QUALIFIED"
-                  : `ON PACE · ${Math.round(m.projected)} PROJ`;
-                const statusCls = m.qualified ? "is-qualified" : "is-on-pace";
-                return (
-                  <div key={m.name} className={`pc-row ${cls}`}>
-                    <div className="pc-row-rank">{visibleRank}</div>
-                    <div className="pc-row-main">
-                      <div className="pc-row-name">{m.name}</div>
-                      <div className="pc-row-city">{m.city}</div>
-                    </div>
-                    <div className="pc-row-right">
-                      <div className="pc-row-rating">{m.avg.toFixed(2)}</div>
-                      <div className="pc-row-count">{m.count} reviews</div>
-                      <div className={`pc-row-status ${statusCls}`}>
-                        {statusText}
+              {(() => {
+                let visibleRank = 0;
+                return allRanked.map((m) => {
+                  let cls: string;
+                  let rankDisplay: string;
+                  let statusText: string;
+                  let statusCls: string;
+                  if (m.qualified) {
+                    visibleRank += 1;
+                    cls = "pc-qualified";
+                    rankDisplay = String(visibleRank);
+                    statusText = view.isEndOfMonth ? "WINNER" : "QUALIFIED";
+                    statusCls = "is-qualified";
+                  } else if (m.onPace) {
+                    visibleRank += 1;
+                    cls = "pc-on-pace";
+                    rankDisplay = String(visibleRank);
+                    statusText = `ON PACE · ${Math.round(m.projected)} PROJ`;
+                    statusCls = "is-on-pace";
+                  } else {
+                    cls = "pc-off-pace";
+                    rankDisplay = "—";
+                    statusText = "OFF PACE";
+                    statusCls = "is-off-pace";
+                  }
+                  return (
+                    <div key={m.name} className={`pc-row ${cls}`}>
+                      <div className="pc-row-rank">{rankDisplay}</div>
+                      <div className="pc-row-main">
+                        <div className="pc-row-name">{m.name}</div>
+                        <div className="pc-row-city">{m.city}</div>
+                      </div>
+                      <div className="pc-row-right">
+                        <div className="pc-row-rating">
+                          {m.avg.toFixed(2)}
+                        </div>
+                        <div className="pc-row-count">{m.count} reviews</div>
+                        <div className={`pc-row-status ${statusCls}`}>
+                          {statusText}
+                        </div>
                       </div>
                     </div>
-                  </div>
-                );
-              })}
+                  );
+                });
+              })()}
             </div>
           </>
         )}
@@ -590,6 +627,13 @@ const ManagerOfTheMonthPhoneCard = forwardRef<HTMLDivElement, PhoneCardProps>(
                 style={{ background: "#4ea8ff" }}
               />
               On Pace
+            </span>
+            <span className="pc-legend-item">
+              <span
+                className="pc-legend-dot"
+                style={{ background: "rgba(245, 239, 224, 0.25)" }}
+              />
+              Off Pace
             </span>
           </div>
           <div>
