@@ -1,19 +1,28 @@
 "use client";
 
+import { useState } from "react";
 import Link from "next/link";
+import ManagerOfTheMonth from "./ManagerOfTheMonth";
 import ManagerPodium from "./ManagerPodium";
 import Reviews8WeekCard from "./Reviews8WeekCard";
 import ReviewsCommentsTable from "./ReviewsCommentsTable";
 import { useReviewData } from "@/lib/useReviewData";
 import { getActiveMonthWindow } from "@/lib/reviewStats";
 
-// Wraps the three existing review components in their prior render
-// order. Same data hook (useReviewData), same components, same
-// loading + empty-state behavior — just relocated under the
-// Reviews lens.
+// Reviews tab: two sub-tabs.
+//   "Performance" (default) — original Reviews content (8-week chart,
+//                             ManagerPodium, comments table).
+//   "Leaderboard"           — ManagerOfTheMonth (dark themed).
+//
+// Sub-tab visual is intentionally smaller / underline-style so the
+// hierarchy reads clearly against the top-level pill nav above.
+
+type SubTab = "performance" | "leaderboard";
+
 export default function CitiesReviewsLens() {
   const { rows, meta, loading } = useReviewData();
-  const window = getActiveMonthWindow(rows);
+  const monthWindow = getActiveMonthWindow(rows);
+  const [subTab, setSubTab] = useState<SubTab>("performance");
 
   return (
     <section>
@@ -21,13 +30,6 @@ export default function CitiesReviewsLens() {
         <h2 className="text-2xl font-bold tracking-tight text-deep-green">
           Reviews
         </h2>
-        {meta ? (
-          <p className="mt-1 text-sm text-deep-green/70">
-            Manager performance · {window.monthName} {window.year}
-          </p>
-        ) : (
-          <p className="mt-1 text-sm text-deep-green/70">Manager performance</p>
-        )}
       </div>
       {loading ? (
         <div className="rounded-2xl border-[1.5px] border-cream-line bg-white p-8 text-sm text-deep-green/60 shadow-md shadow-deep-green/10">
@@ -39,7 +41,7 @@ export default function CitiesReviewsLens() {
             No review data yet.
           </div>
           <div className="mt-1 text-sm text-deep-green/60">
-            Upload reviews CSV in{" "}
+            Sync mdapi_reviews in{" "}
             <Link
               href="/data"
               className="font-bold text-mint-hover hover:underline"
@@ -49,12 +51,64 @@ export default function CitiesReviewsLens() {
           </div>
         </div>
       ) : (
-        <div className="space-y-6">
-          <Reviews8WeekCard rows={rows} />
-          <ManagerPodium rows={rows} />
-          <ReviewsCommentsTable rows={rows} />
-        </div>
+        <>
+          <div
+            role="tablist"
+            aria-label="Reviews view"
+            className="mb-5 flex items-center gap-5 border-b border-cream-line"
+          >
+            <SubTabButton
+              active={subTab === "performance"}
+              onClick={() => setSubTab("performance")}
+              label="Performance"
+            />
+            <SubTabButton
+              active={subTab === "leaderboard"}
+              onClick={() => setSubTab("leaderboard")}
+              label="Leaderboard"
+            />
+          </div>
+          {subTab === "performance" ? (
+            <div className="space-y-6">
+              <p className="text-sm text-deep-green/70">
+                Manager performance · {monthWindow.monthName}{" "}
+                {monthWindow.year}
+              </p>
+              <Reviews8WeekCard rows={rows} />
+              <ManagerPodium rows={rows} />
+              <ReviewsCommentsTable rows={rows} />
+            </div>
+          ) : (
+            <ManagerOfTheMonth rows={rows} />
+          )}
+        </>
       )}
     </section>
+  );
+}
+
+function SubTabButton({
+  active,
+  onClick,
+  label,
+}: {
+  active: boolean;
+  onClick: () => void;
+  label: string;
+}) {
+  return (
+    <button
+      type="button"
+      role="tab"
+      aria-selected={active}
+      onClick={onClick}
+      className={
+        active
+          ? "-mb-px border-b-2 border-mint-hover px-0.5 pb-2 text-[13px] font-bold tracking-tight text-deep-green"
+          : "-mb-px border-b-2 border-transparent px-0.5 pb-2 text-[13px] font-medium tracking-tight text-deep-green/55 transition hover:text-deep-green"
+      }
+    >
+      {label}
+    </button>
   );
 }
