@@ -40,6 +40,37 @@ const PLAYERS_COLS =
 // PostgREST's ~2KB practical limit (200 ids × ~7 chars = ~1.4KB).
 const IN_CHUNK = 200;
 
+// Max in-flight chunk requests when fan-out is parallel (filtered path
+// in fetchJoinedMatchPlayers). 4 keeps us well under any plausible
+// PostgREST/PgBouncer concurrency budget while still capturing most of
+// the wall-clock win versus the old sequential loop.
+const CHUNK_CONCURRENCY = 4;
+
+// Minimal worker-pool fan-out. Caps concurrency at `limit` and rejects
+// on the first failure (matching the sequential loop's behavior — caller
+// gets a clean single error, no partial data). In-flight requests after
+// the first failure can't be cancelled (no AbortController plumbed
+// through supabase-js here), but their resolutions are discarded once
+// Promise.all rejects, so callers never observe them.
+async function mapWithLimit<T, R>(
+  items: T[],
+  limit: number,
+  fn: (item: T) => Promise<R>,
+): Promise<R[]> {
+  const results: R[] = new Array(items.length);
+  let nextIdx = 0;
+  async function worker(): Promise<void> {
+    while (true) {
+      const idx = nextIdx++;
+      if (idx >= items.length) return;
+      results[idx] = await fn(items[idx]);
+    }
+  }
+  const n = Math.min(limit, items.length);
+  await Promise.all(Array.from({ length: n }, () => worker()));
+  return results;
+}
+
 // ===== Raw selects from the new tables =====
 
 type MatchSelect = {
@@ -338,15 +369,29 @@ export async function fetchJoinedMatchPlayers(
     players.push(...all);
   } else {
     const matchIds = [...matchById.keys()];
+    const chunks: number[][] = [];
     for (let from = 0; from < matchIds.length; from += IN_CHUNK) {
-      const chunk = matchIds.slice(from, from + IN_CHUNK);
-      const chunkPlayers = await selectAll<PlayerSelect>(() =>
-        supabase
-          .from("mdapi_match_players")
-          .select(PLAYERS_COLS)
-          .in("match_api_id", chunk)
-          .order("api_id"),
-      );
+      chunks.push(matchIds.slice(from, from + IN_CHUNK));
+    }
+    // Fan out chunks with a hard concurrency cap (see mapWithLimit
+    // header). Was a sequential for-await loop; the parallel form is
+    // ~3-4× faster on multi-chunk windows like the /cities 12-week
+    // pull (9 chunks → 4 concurrent waves vs 9 serial round-trip
+    // bundles). Order doesn't matter — players are joined back to
+    // matches by match_api_id at step 4.
+    const chunkResults = await mapWithLimit(
+      chunks,
+      CHUNK_CONCURRENCY,
+      (chunk) =>
+        selectAll<PlayerSelect>(() =>
+          supabase
+            .from("mdapi_match_players")
+            .select(PLAYERS_COLS)
+            .in("match_api_id", chunk)
+            .order("api_id"),
+        ),
+    );
+    for (const chunkPlayers of chunkResults) {
       players.push(...chunkPlayers);
     }
   }
