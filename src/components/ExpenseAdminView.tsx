@@ -70,15 +70,25 @@ export default function ExpenseAdminView() {
     return [...set].sort();
   }, [allRows]);
 
+  // Always-visible categories — surfaced in the Add Expense dropdown
+  // even before any rows exist. City Manager / Marketing / Equipment
+  // are line-item categories as of the 2026-05-07 migration; they were
+  // formerly placeholder columns in fin_monthly_expenses. Misc is the
+  // generic catch-all bucket.
+  const BASE_CATEGORIES = useMemo(
+    () => ["City Manager", "Equipment", "Marketing", "Misc"],
+    [],
+  );
+
   // Categories the user can SELECT when filtering or adding a new row.
-  // Excludes Match Manager Pay (managed on /admin/finance/manager-pay)
-  // and always includes Misc as a creatable bucket. Existing MMP rows
-  // still display in the table — only the dropdowns are filtered.
+  // Excludes Match Manager Pay (managed on /admin/finance/manager-pay).
+  // Existing MMP rows still display in the table — only the dropdowns
+  // are filtered.
   const selectableCategories = useMemo(() => {
-    const filtered = knownCategories.filter((c) => c !== "Match Manager Pay");
-    if (!filtered.includes("Misc")) filtered.push("Misc");
-    return filtered.sort();
-  }, [knownCategories]);
+    const set = new Set<string>([...knownCategories, ...BASE_CATEGORIES]);
+    set.delete("Match Manager Pay");
+    return [...set].sort();
+  }, [knownCategories, BASE_CATEGORIES]);
 
   const categoryOptions = useMemo(
     () => [ALL, ...selectableCategories],

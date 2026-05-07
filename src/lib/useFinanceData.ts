@@ -45,15 +45,6 @@ export type FinManagerPay = {
   amount: number;
 };
 
-export type FinMonthlyExpense = {
-  id: number;
-  city: string;
-  month: string;
-  city_manager: number;
-  marketing: number;
-  equipment: number;
-};
-
 export type FinSchedule = {
   id: number;
   date: string;
@@ -160,7 +151,6 @@ export type FinanceData = {
   revenue: FinRevenue[];
   expenses: FinExpense[];
   managerPay: FinManagerPay[];
-  monthlyExpenses: FinMonthlyExpense[];
   schedule: FinSchedule[];
   venues: FinVenue[];
   memberSpots: FinMemberSpotsRow[];
@@ -260,7 +250,6 @@ async function load(): Promise<void> {
   let revenueRows: Array<Record<string, unknown>>;
   let expenseRows: Array<Record<string, unknown>>;
   let mpRows: Array<Record<string, unknown>>;
-  let meRows: Array<Record<string, unknown>>;
   let cfgRows: Array<Record<string, unknown>>;
   let schRows: Array<Record<string, unknown>>;
   let vnRows: Array<Record<string, unknown>>;
@@ -278,7 +267,6 @@ async function load(): Promise<void> {
       revenueRows,
       expenseRows,
       mpRows,
-      meRows,
       cfgRows,
       schRows,
       vnRows,
@@ -297,9 +285,6 @@ async function load(): Promise<void> {
       ),
       selectAll<Record<string, unknown>>(() =>
         supabase.from("fin_manager_pay").select("*").order("id"),
-      ),
-      selectAll<Record<string, unknown>>(() =>
-        supabase.from("fin_monthly_expenses").select("*").order("id"),
       ),
       selectAll<Record<string, unknown>>(() =>
         supabase.from("fin_config").select("*").order("key"),
@@ -408,15 +393,6 @@ async function load(): Promise<void> {
     city: cleanText(r.city),
     month: normalizeMonth(cleanText(r.month)),
     amount: asNumber(r.amount),
-  }));
-
-  const monthlyExpenses: FinMonthlyExpense[] = meRows.map((r) => ({
-    id: r.id as number,
-    city: cleanText(r.city),
-    month: normalizeMonth(cleanText(r.month)),
-    city_manager: asNumber(r.city_manager),
-    marketing: asNumber(r.marketing),
-    equipment: asNumber(r.equipment),
   }));
 
   const schedule: FinSchedule[] = schRows.map((r) => {
@@ -557,7 +533,6 @@ async function load(): Promise<void> {
       revenue,
       expenses,
       managerPay,
-      monthlyExpenses,
       schedule,
       venues,
       memberSpots,

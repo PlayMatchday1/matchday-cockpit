@@ -349,14 +349,37 @@ export function managerPayFor(data: FinanceData, month: Q2Month): number {
     .reduce((s, r) => s + r.amount, 0);
 }
 
+// Map the legacy snake_case keys (left over from the retired
+// fin_monthly_expenses table) to the canonical fin_expenses.category
+// strings that are now the single source of truth for these three.
+const DEDICATED_LINE_CATEGORY: Record<
+  "city_manager" | "marketing" | "equipment",
+  string
+> = {
+  city_manager: "City Manager",
+  marketing: "Marketing",
+  equipment: "Equipment",
+};
+
+// Categories rendered as their own dedicated row on Cash Flow + handled
+// outside the generic otherCatRows loop. Anything in this set must be
+// excluded from generic-category aggregations to avoid double-counting.
+const DEDICATED_LINE_CATEGORIES = new Set<string>([
+  "Match Manager Pay",
+  "City Manager",
+  "Marketing",
+  "Equipment",
+]);
+
 export function monthlyExpenseCategoryFor(
   data: FinanceData,
   month: Q2Month,
   key: "city_manager" | "marketing" | "equipment",
 ): number {
-  return data.monthlyExpenses
-    .filter((r) => r.month === month)
-    .reduce((s, r) => s + r[key], 0);
+  const category = DEDICATED_LINE_CATEGORY[key];
+  return data.expenses
+    .filter((r) => r.month === month && r.category === category)
+    .reduce((s, r) => s + r.amount, 0);
 }
 
 export function perMatchVenueCostFor(
@@ -375,19 +398,19 @@ export function totalExpensesFor(
   mode: Mode,
   now: Date = new Date(),
 ): number {
-  // All venue costs now flow through fieldCostsFor (one number,
-  // override-aware). Manager Pay still has its own line below, so exclude
-  // it here to avoid double-counting.
-  const otherNonManagerPay = filterExpenseRows(data, month, mode, now)
+  // All venue costs flow through fieldCostsFor (one number, override-aware).
+  // Match Manager Pay has its own dedicated line via managerPayFor, so it's
+  // excluded here to avoid double-counting. City Manager / Marketing /
+  // Equipment are now line items in fin_expenses (post 2026-05-07 migration),
+  // so they're included in this generic accumulator the same way Contractors
+  // / Subscriptions / Corporate Salaries are — no separate add.
+  const linesNotInDedicatedTotal = filterExpenseRows(data, month, mode, now)
     .filter((r) => r.category !== "Match Manager Pay")
     .reduce((s, r) => s + r.amount, 0);
   return (
-    otherNonManagerPay +
+    linesNotInDedicatedTotal +
     fieldCostsFor(data, month) +
-    managerPayFor(data, month) +
-    monthlyExpenseCategoryFor(data, month, "city_manager") +
-    monthlyExpenseCategoryFor(data, month, "marketing") +
-    monthlyExpenseCategoryFor(data, month, "equipment")
+    managerPayFor(data, month)
   );
 }
 
@@ -414,10 +437,10 @@ export function distinctExpenseCategories(
       cats.add(c);
     }
   }
-  // Match Manager Pay is rendered via its own dedicated row (managerPayFor)
-  // and totalled separately, so don't surface it as a generic expense
-  // category — would double-render in the Cash Flow widget.
-  return [...cats].filter((c) => c !== "Match Manager Pay").sort();
+  // Filter out the dedicated lines (Match Manager Pay + City Manager +
+  // Marketing + Equipment). Each of those gets its own row in Cash Flow
+  // via a dedicated helper; including them here would double-render.
+  return [...cats].filter((c) => !DEDICATED_LINE_CATEGORIES.has(c)).sort();
 }
 
 export function distinctCitiesFromRevenue(data: FinanceData): string[] {
@@ -723,11 +746,12 @@ function monthlyExpenseByCity(
   month: Q2Month,
   key: "city_manager" | "marketing" | "equipment",
 ): Map<string, number> {
+  const category = DEDICATED_LINE_CATEGORY[key];
   const byCity = new Map<string, number>();
-  for (const r of data.monthlyExpenses) {
-    if (r.month !== month) continue;
-    const v = r[key];
-    if (v > 0) byCity.set(r.city, v);
+  for (const r of data.expenses) {
+    if (r.month !== month || r.category !== category) continue;
+    if (!r.city) continue;
+    byCity.set(r.city, (byCity.get(r.city) ?? 0) + r.amount);
   }
   return byCity;
 }
@@ -1361,9 +1385,8 @@ export function priorMonthSameDayMtdGross(
 // checks and inspectors; q2ExpensesActual sums these.
 export type Q2ExpensesActualBreakdown = {
   managerPay: number;       // fin_expenses category=Match Manager Pay, date <= today
-  manualExpenses: number;   // all other fin_expenses, date <= today
+  manualExpenses: number;   // all other fin_expenses (incl. City Manager / Marketing / Equipment line items), date <= today
   fieldCosts: number;       // schedule-driven by match date; overrides counted in full for past+current months
-  monthlyExpenses: number;  // city_manager + marketing + equipment, past + current months
   total: number;
 };
 
@@ -1415,23 +1438,6 @@ function fieldCostsActualFor(
   return total;
 }
 
-// Sum of city_manager + marketing + equipment for a month.
-// Past + current months count as actual (fin_monthly_expenses has
-// no date column; presence of a row implies the bills are tracked).
-// Future months: 0.
-function monthlyExpensesActualFor(
-  data: FinanceData,
-  month: Q2Month,
-  now: Date,
-): number {
-  if (isFutureMonth(month, now)) return 0;
-  return (
-    monthlyExpenseCategoryFor(data, month, "city_manager") +
-    monthlyExpenseCategoryFor(data, month, "marketing") +
-    monthlyExpenseCategoryFor(data, month, "equipment")
-  );
-}
-
 // Realized Q2 expenses booked through today, classified by DATE
 // (not month bucket) so current-month spend that's already happened
 // counts as actual. Per-source classification:
@@ -1439,15 +1445,14 @@ function monthlyExpensesActualFor(
 //   fin_expenses (manual + imported):
 //     date <= today → actual; else projected.
 //     Includes Match Manager Pay (each Thursday cash-out is a
-//     separately dated row), Subscriptions, Corporate Salaries, etc.
+//     separately dated row), City Manager / Marketing / Equipment
+//     (post-2026-05-07 migration — formerly fin_monthly_expenses),
+//     Subscriptions, Corporate Salaries, Contractors, etc.
 //   fieldCostsFor:
 //     past month → fully actual.
 //     current month → schedule-driven costs split by schedule row
 //       date; override-driven costs (monthly_flat / lump_sum /
 //       profit_share) counted in full as committed.
-//     future month → projected.
-//   monthlyExpenseCategoryFor (city_manager + marketing + equipment):
-//     past + current month → actual (presence of row implies tracked).
 //     future month → projected.
 //
 // projected = q2ExpensesProjected - q2ExpensesActual.
@@ -1465,17 +1470,14 @@ export function q2ExpensesActualBreakdown(
     else manualExpenses += r.amount;
   }
   let fieldCosts = 0;
-  let monthlyExpenses = 0;
   for (const month of Q2_MONTHS) {
     fieldCosts += fieldCostsActualFor(data, month, now);
-    monthlyExpenses += monthlyExpensesActualFor(data, month, now);
   }
   return {
     managerPay,
     manualExpenses,
     fieldCosts,
-    monthlyExpenses,
-    total: managerPay + manualExpenses + fieldCosts + monthlyExpenses,
+    total: managerPay + manualExpenses + fieldCosts,
   };
 }
 
@@ -1517,12 +1519,9 @@ export function cityHasAnyQ2Activity(
       .filter((r) => r.city === city && r.month === m)
       .reduce((s, r) => s + r.amount, 0);
     if (exp !== 0) return true;
-    // (Manager Pay is in fin_expenses now, already covered by `exp` above —
-    // legacy fin_manager_pay table is not consulted.)
-    const me = data.monthlyExpenses.find(
-      (r) => r.city === city && r.month === m,
-    );
-    if (me && (me.city_manager || me.marketing || me.equipment)) return true;
+    // Match Manager Pay + City Manager + Marketing + Equipment all live in
+    // fin_expenses now, already covered by `exp` above. Legacy
+    // fin_manager_pay and fin_monthly_expenses tables are not consulted.
   }
   return false;
 }
@@ -1603,34 +1602,24 @@ export function cityOverheadFor(
   city: string,
   month: Q2Month,
 ): CityOverhead {
-  // Match Manager Pay sourced from fin_expenses (category='Match Manager
-  // Pay'). Legacy fin_manager_pay table is no longer read.
-  const matchManagerPay = data.expenses
-    .filter(
-      (r) =>
-        r.city === city &&
-        r.month === month &&
-        r.category === "Match Manager Pay",
-    )
-    .reduce((s, r) => s + r.amount, 0);
-  // City-tagged Misc rows roll up into the city's overhead. Misc rows
+  // All five categories sourced from fin_expenses line items.
+  // City Manager / Marketing / Equipment moved here on 2026-05-07
+  // (migration retired the placeholder fin_monthly_expenses table).
+  // City-tagged Misc rows roll up into the city's overhead; Misc rows
   // with city=null are company-wide and surface only in Cash Flow / Q2
-  // hero, not on a CityPLCard — that's the deliberate split: city tag
-  // on a Misc row means "attribute this expense to that city".
-  const misc = data.expenses
-    .filter(
-      (r) =>
-        r.city === city &&
-        r.month === month &&
-        r.category === "Misc",
-    )
-    .reduce((s, r) => s + r.amount, 0);
-  const me = data.monthlyExpenses.find(
-    (r) => r.city === city && r.month === month,
-  );
-  const cityManager = me?.city_manager ?? 0;
-  const marketing = me?.marketing ?? 0;
-  const equipment = me?.equipment ?? 0;
+  // hero, not on a CityPLCard — deliberate split: city tag on a Misc
+  // row means "attribute this expense to that city".
+  const sumByCategory = (category: string) =>
+    data.expenses
+      .filter(
+        (r) => r.city === city && r.month === month && r.category === category,
+      )
+      .reduce((s, r) => s + r.amount, 0);
+  const matchManagerPay = sumByCategory("Match Manager Pay");
+  const cityManager = sumByCategory("City Manager");
+  const marketing = sumByCategory("Marketing");
+  const equipment = sumByCategory("Equipment");
+  const misc = sumByCategory("Misc");
   return {
     matchManagerPay,
     cityManager,
