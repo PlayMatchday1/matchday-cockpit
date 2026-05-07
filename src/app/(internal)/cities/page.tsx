@@ -5,6 +5,7 @@ import Link from "next/link";
 import CitiesLegend from "@/components/CitiesLegend";
 import CitiesCancellationsLens from "@/components/CitiesCancellationsLens";
 import CitiesExecHero from "@/components/CitiesExecHero";
+import CitiesLeaderboardLens from "@/components/CitiesLeaderboardLens";
 import CitiesLensNav, { type CityLens } from "@/components/CitiesLensNav";
 import CitiesMembershipLens from "@/components/CitiesMembershipLens";
 import CitiesReviewsLens from "@/components/CitiesReviewsLens";
@@ -57,6 +58,7 @@ function CitiesIndexContent() {
       {lens === "membership" && <CitiesMembershipLens />}
       {lens === "cancellations" && <CitiesCancellationsLens />}
       {lens === "reviews" && <CitiesReviewsLens />}
+      {lens === "leaderboard" && <CitiesLeaderboardLens />}
     </>
   );
 }

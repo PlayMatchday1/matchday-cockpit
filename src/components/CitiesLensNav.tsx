@@ -1,12 +1,18 @@
 "use client";
 
-export type CityLens = "overview" | "membership" | "cancellations" | "reviews";
+export type CityLens =
+  | "overview"
+  | "membership"
+  | "cancellations"
+  | "reviews"
+  | "leaderboard";
 
 const LENSES: { value: CityLens; label: string }[] = [
   { value: "overview", label: "Overview" },
   { value: "membership", label: "Membership" },
   { value: "cancellations", label: "Cancellations" },
   { value: "reviews", label: "Reviews" },
+  { value: "leaderboard", label: "Leaderboard" },
 ];
 
 // Sticky pill-tab nav. Active tab = mint solid, inactive = white

@@ -1,7 +1,6 @@
 "use client";
 
 import Link from "next/link";
-import ManagerOfTheMonth from "./ManagerOfTheMonth";
 import ManagerPodium from "./ManagerPodium";
 import Reviews8WeekCard from "./Reviews8WeekCard";
 import ReviewsCommentsTable from "./ReviewsCommentsTable";
@@ -51,11 +50,6 @@ export default function CitiesReviewsLens() {
         </div>
       ) : (
         <div className="space-y-6">
-          {/* New section, placed ABOVE the existing 8-week chart per
-              spec. Dark-themed leaderboard scoped under
-              .manager-leaderboard so its CSS doesn't leak into the
-              cream/green app theme. */}
-          <ManagerOfTheMonth rows={rows} />
           <Reviews8WeekCard rows={rows} />
           <ManagerPodium rows={rows} />
           <ReviewsCommentsTable rows={rows} />
