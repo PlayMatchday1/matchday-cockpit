@@ -79,7 +79,20 @@ export default function CitiesReviewsLens() {
               <ReviewsCommentsTable rows={rows} />
             </div>
           ) : (
-            <ManagerOfTheMonth rows={rows} />
+            // Break out of the parent's max-w-6xl content column so the
+            // leaderboard renders edge-to-edge (24px viewport gutters).
+            // The poster-style screenshot reads node.offsetWidth at click
+            // time, so widening the live container automatically widens
+            // the PNG output too.
+            <div
+              style={{
+                width: "calc(100vw - 48px)",
+                marginLeft: "calc(-50vw + 50% + 24px)",
+                marginRight: "calc(-50vw + 50% + 24px)",
+              }}
+            >
+              <ManagerOfTheMonth rows={rows} />
+            </div>
           )}
         </>
       )}
