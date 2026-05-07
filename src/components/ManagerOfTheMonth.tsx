@@ -19,7 +19,7 @@
 // dark theme + custom CSS variables don't leak into the rest of the
 // app. Animation keyframes are mlb-prefixed to avoid global collisions.
 
-import { useEffect, useMemo, useRef, useState } from "react";
+import { useEffect, useMemo, useState } from "react";
 import type { ReviewRow } from "@/lib/useReviewData";
 
 const MINIMUM_REVIEWS = 50;
@@ -239,61 +239,6 @@ export default function ManagerOfTheMonth({ rows }: { rows: ReviewRow[] }) {
     return computeView(rows, active.year, active.month);
   }, [rows, active]);
 
-  // Image export via modern-screenshot. Replaces html2canvas which
-  // dropped podium #1/#2, dimmed gradients, and squished the layout
-  // — its CSS variable + flex/gradient handling didn't keep up with
-  // the leaderboard's styling. modern-screenshot uses foreignObject
-  // SVG → canvas which preserves CSS vars, web fonts, and complex
-  // flex layouts faithfully.
-  //
-  // - Dynamic import keeps the lib (~40 KB gzipped) out of the
-  //   initial bundle for users who never click.
-  // - document.fonts.ready: forces Bebas Neue / Fraunces / JetBrains
-  //   Mono to finish loading before snapshot. Without this, web fonts
-  //   sometimes capture as a fallback (Times / Arial), which is part
-  //   of why the prior export looked "off."
-  // - Explicit width pinned to the on-screen render width so the
-  //   output matches what the user sees on the page.
-  // - scale: 2 for retina-density output.
-  const exportRef = useRef<HTMLDivElement>(null);
-  const [exporting, setExporting] = useState(false);
-  async function handleExport() {
-    const node = exportRef.current;
-    if (!node) return;
-    setExporting(true);
-    try {
-      if (typeof document !== "undefined" && document.fonts?.ready) {
-        await document.fonts.ready;
-      }
-      // Read the live width at click time and force the cloned root to that
-      // width during capture. modern-screenshot wraps the node in a <foreignObject>
-      // detached from its parent's flex/grid context — without an explicit width,
-      // the clone can collapse to its intrinsic content width, leaving black
-      // margins where the configured canvas width is wider than the rendered DOM.
-      const w = node.offsetWidth;
-      const h = node.offsetHeight;
-      const { domToPng } = await import("modern-screenshot");
-      const dataUrl = await domToPng(node, {
-        backgroundColor: "#0a1a10",
-        scale: 2,
-        width: w,
-        height: h,
-        style: {
-          width: `${w}px`,
-          height: `${h}px`,
-        },
-      });
-      const link = document.createElement("a");
-      link.download = `matchday-mgr-of-month-${MONTH_SHORT[active.month].toLowerCase()}-${active.year}.png`;
-      link.href = dataUrl;
-      link.click();
-    } catch (e) {
-      console.warn("Image export failed:", e);
-    } finally {
-      setExporting(false);
-    }
-  }
-
   return (
     <>
       {/* Google Fonts — React 19 hoists <link> to <head> and dedupes. */}
@@ -321,7 +266,7 @@ export default function ManagerOfTheMonth({ rows }: { rows: ReviewRow[] }) {
           })}
         </div>
 
-        <div ref={exportRef} className="mlb-canvas">
+        <div className="mlb-canvas">
           <header className="mlb-masthead">
             <div>
               <div className="mlb-brand">MatchDay · Manager of the Month</div>
@@ -597,17 +542,6 @@ export default function ManagerOfTheMonth({ rows }: { rows: ReviewRow[] }) {
               in month ≥ 50.
             </div>
           </div>
-        </div>
-
-        <div className="mlb-actions">
-          <button
-            type="button"
-            className="mlb-btn"
-            onClick={handleExport}
-            disabled={exporting}
-          >
-            {exporting ? "Rendering…" : "Download as image"}
-          </button>
         </div>
       </div>
     </>
@@ -1438,34 +1372,6 @@ const LEADERBOARD_CSS = `
   border-radius: 50%;
   display: inline-block;
 }
-.manager-leaderboard .mlb-actions {
-  display: flex;
-  justify-content: center;
-  gap: 12px;
-  margin-top: 24px;
-}
-.manager-leaderboard .mlb-btn {
-  padding: 10px 20px;
-  background: transparent;
-  color: var(--mlb-paper);
-  border: 1px solid rgba(245, 239, 224, 0.2);
-  border-radius: 6px;
-  font-family: 'JetBrains Mono', monospace;
-  font-size: 0.75rem;
-  letter-spacing: 0.1em;
-  text-transform: uppercase;
-  cursor: pointer;
-  transition: all 0.2s;
-}
-.manager-leaderboard .mlb-btn:hover {
-  background: rgba(245, 239, 224, 0.08);
-  border-color: var(--mlb-paper);
-}
-.manager-leaderboard .mlb-btn:disabled {
-  opacity: 0.5;
-  cursor: not-allowed;
-}
-
 @media (max-width: 800px) {
   .manager-leaderboard { padding: 20px; }
   .manager-leaderboard .mlb-podium { grid-template-columns: 1fr; gap: 16px; }
