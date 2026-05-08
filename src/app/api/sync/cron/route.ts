@@ -1,7 +1,7 @@
-// POST /api/sync/cron — orchestrator that runs six daily steps:
+// POST /api/sync/cron — orchestrator that runs seven daily steps:
 // stripe-api → mdapi-reviews → mdapi-subscriptions → mdapi-promocodes
-// → mdapi-matches → membership-snapshots. Sequential, per-source
-// error isolation.
+// → mdapi-matches → mdapi-users → membership-snapshots. Sequential,
+// per-source error isolation.
 //
 // Skip-on-fail rules:
 //   - Snapshot refresh skips if mdapi-subscriptions failed (active
@@ -43,6 +43,7 @@ import {
   syncMdapiMatches,
   defaultIncrementalWindow,
 } from "@/lib/mdapiMatchesSync";
+import { syncMdapiUsers } from "@/lib/mdapiUsersSync";
 import { refreshMembershipSnapshots } from "@/lib/membershipSnapshots";
 import { runWithLog, type TriggeredBy } from "@/lib/syncLogging";
 
@@ -211,6 +212,22 @@ export async function POST(req: Request) {
     }),
   );
 
+  // Users — full /admin/players re-sync into mdapi_users. Independent
+  // of upstream syncs. Estimated ~30s for ~24k rows at limit=250.
+  // console.time gives operator visibility on actual duration since
+  // this is the largest new step inside the 300s cron budget; if it
+  // breaches, the next move per Phase 1 spec is moving users sync to
+  // its own cron schedule rather than bumping maxDuration further.
+  console.time("mdapi-users sync");
+  const usersResult = await runWithLog(
+    "mdapi-users",
+    triggeredBy,
+    supabase,
+    syncMdapiUsers,
+    (r) => ({ rows_imported: r.rowsUpserted }),
+  );
+  console.timeEnd("mdapi-users sync");
+
   // Snapshot refresh consumes mdapi_subscriptions data, so it only
   // runs if that sync succeeded. The throw-on-skip pattern lets
   // runWithLog handle the log row uniformly — error_message records
@@ -239,6 +256,7 @@ export async function POST(req: Request) {
     !subscriptionsResult.ok ||
     !promocodesResult.ok ||
     !matchesResult.ok ||
+    !usersResult.ok ||
     !snapshotResult.ok;
 
   return Response.json(
@@ -251,6 +269,7 @@ export async function POST(req: Request) {
         mdapi_subscriptions: subscriptionsResult,
         mdapi_promocodes: promocodesResult,
         mdapi_matches: matchesResult,
+        mdapi_users: usersResult,
         membership_snapshots: snapshotResult,
       },
     },

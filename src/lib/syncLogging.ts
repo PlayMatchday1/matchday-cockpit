@@ -21,6 +21,7 @@ export type SourceName =
   | "mdapi-subscriptions"
   | "mdapi-promocodes"
   | "mdapi-matches"
+  | "mdapi-users"
   | "membership-snapshots";
 
 // fin_sync_log columns the orchestrator/manual routes write on
