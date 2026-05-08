@@ -1313,6 +1313,11 @@ function SmallMultiples({
 }
 
 const MINI_BAR_AREA_PX = 110;
+// Reserved space ABOVE the tallest bar for the always-visible count
+// label. Label height (~10px font + tiny breathing room) ensures
+// labels for tall bars don't clip the chart's top edge.
+const MINI_LABEL_PX = 14;
+const MINI_TOTAL_PX = MINI_BAR_AREA_PX + MINI_LABEL_PX;
 
 function CityMini({
   city,
@@ -1330,9 +1335,6 @@ function CityMini({
   const counts = buckets.map((b) => b.byCity[city] ?? 0);
   const total = counts.reduce((s, n) => s + n, 0);
   const max = Math.max(1, ...counts);
-  // Two-tick y-axis: 0 + max. If the data warrants it we add a mid
-  // tick. Cheap visual scale anchor without over-decorating.
-  const midTick = max >= 4 ? Math.round(max / 2) : null;
   const color = colorForCity(city);
   // Label-density rule: weekly view has 16 buckets — show every other
   // label so they don't crowd. Monthly view (12) is fine showing all.
@@ -1346,52 +1348,70 @@ function CityMini({
           {total.toLocaleString()} {metricLabel}
         </span>
       </div>
-      <div className="flex">
-        {/* y-axis tick labels */}
-        <div
-          className="mr-1 flex flex-col justify-between text-right text-[9px] tabular-nums text-deep-green/45"
-          style={{ height: `${MINI_BAR_AREA_PX}px`, width: "28px" }}
-        >
-          <span>{max.toLocaleString()}</span>
-          {midTick !== null && <span>{midTick.toLocaleString()}</span>}
-          <span>0</span>
-        </div>
-        {/* bars */}
-        <div className="flex flex-1 items-end gap-[2px]">
-          {buckets.map((b) => {
-            const n = b.byCity[city] ?? 0;
-            const dim = !inWindow(b.bucketStart);
-            const h = (n / max) * MINI_BAR_AREA_PX;
-            return (
+      {/* Bar area. y-axis tick labels were dropped — the per-bar count
+          labels above each bar make them redundant and would visually
+          collide. The bottom edge of the chart serves as the implicit
+          0 baseline. */}
+      <div className="flex flex-1 items-end gap-[2px]">
+        {buckets.map((b) => {
+          const n = b.byCity[city] ?? 0;
+          const dim = !inWindow(b.bucketStart);
+          const h = (n / max) * MINI_BAR_AREA_PX;
+          return (
+            <div
+              key={b.bucketStart}
+              className="flex flex-1 flex-col items-stretch"
+              style={{ opacity: dim ? 0.3 : 1 }}
+              title={`${city} · ${b.period}: ${n.toLocaleString()} ${metricLabel}${dim ? " (outside selected window)" : ""}`}
+            >
+              {/* Slot = bar + label, with the label always sitting just
+                  above the bar's top edge. Empty bars (n=0, h=0) drop
+                  the label down to the chart baseline so all 9 minis
+                  visually share the same baseline regardless of value. */}
               <div
-                key={b.bucketStart}
-                className="flex flex-1 flex-col items-stretch"
-                style={{ opacity: dim ? 0.3 : 1 }}
-                title={`${city} · ${b.period}: ${n.toLocaleString()} ${metricLabel}${dim ? " (outside selected window)" : ""}`}
+                style={{
+                  position: "relative",
+                  height: `${MINI_TOTAL_PX}px`,
+                }}
               >
+                {/* The bar itself, anchored to the bottom. */}
                 <div
                   style={{
-                    height: `${MINI_BAR_AREA_PX}px`,
-                    display: "flex",
-                    alignItems: "flex-end",
+                    position: "absolute",
+                    bottom: 0,
+                    left: 0,
+                    right: 0,
+                    height: `${h}px`,
+                    background: n === 0 ? "transparent" : color,
+                    borderRadius: "2px 2px 0 0",
+                  }}
+                />
+                {/* The count label, anchored above the bar's top edge.
+                    bottom: ${h} puts the label's bottom flush with the
+                    bar's top; height: MINI_LABEL_PX gives it room. */}
+                <div
+                  style={{
+                    position: "absolute",
+                    bottom: `${h}px`,
+                    left: 0,
+                    right: 0,
+                    height: `${MINI_LABEL_PX}px`,
+                    lineHeight: `${MINI_LABEL_PX}px`,
+                    fontSize: "10px",
+                    textAlign: "center",
+                    color: "rgba(10, 26, 16, 0.55)",
+                    fontVariantNumeric: "tabular-nums",
                   }}
                 >
-                  <div
-                    style={{
-                      width: "100%",
-                      height: `${h}px`,
-                      background: n === 0 ? "transparent" : color,
-                      borderRadius: "2px 2px 0 0",
-                    }}
-                  />
+                  {n.toLocaleString()}
                 </div>
               </div>
-            );
-          })}
-        </div>
+            </div>
+          );
+        })}
       </div>
       {/* x-axis labels under the bars */}
-      <div className="mt-1 flex pl-[32px]">
+      <div className="mt-1 flex">
         <div className="flex flex-1 gap-[2px]">
           {buckets.map((b, i) => (
             <div
