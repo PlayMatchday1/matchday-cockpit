@@ -49,6 +49,12 @@ type ByCityRow = {
   completedSignupPct: number;
   played1: number;
   played1Pct: number;
+  played3: number;
+  played3PctOfPlayed1: number;
+  played5: number;
+  played5PctOfPlayed1: number;
+  played10: number;
+  played10PctOfPlayed1: number;
   active30d: number;
   members: number;
   activationRate: number;
@@ -754,9 +760,12 @@ type SortKey = keyof Pick<
   | "registered"
   | "completedSignup"
   | "played1"
-  | "active30d"
+  | "played3"
+  | "played5"
+  | "played10"
   | "members"
   | "activationRate"
+  | "active30d"
 >;
 
 function UsersByCityTable({ rows }: { rows: ByCityRow[] }) {
@@ -776,21 +785,51 @@ function UsersByCityTable({ rows }: { rows: ByCityRow[] }) {
     return out;
   }, [rows, sortKey, sortDir]);
 
+  // Totals row sums absolute counts across cities. Percentage cells
+  // recompute from the totals (not a sum of per-city percentages),
+  // which is the only way the network rate matches what hero/funnel
+  // show.
   const totals = useMemo(() => {
     const t = rows.reduce(
       (acc, r) => ({
         registered: acc.registered + r.registered,
         completedSignup: acc.completedSignup + r.completedSignup,
         played1: acc.played1 + r.played1,
+        played3: acc.played3 + r.played3,
+        played5: acc.played5 + r.played5,
+        played10: acc.played10 + r.played10,
         active30d: acc.active30d + r.active30d,
         members: acc.members + r.members,
       }),
-      { registered: 0, completedSignup: 0, played1: 0, active30d: 0, members: 0 },
+      {
+        registered: 0,
+        completedSignup: 0,
+        played1: 0,
+        played3: 0,
+        played5: 0,
+        played10: 0,
+        active30d: 0,
+        members: 0,
+      },
     );
-    const completedPct = t.registered > 0 ? (t.completedSignup / t.registered) * 100 : 0;
-    const played1Pct = t.completedSignup > 0 ? (t.played1 / t.completedSignup) * 100 : 0;
-    const activationRate = t.registered > 0 ? (t.played1 / t.registered) * 100 : 0;
-    return { ...t, completedPct, played1Pct, activationRate };
+    const completedPct =
+      t.registered > 0 ? (t.completedSignup / t.registered) * 100 : 0;
+    const played1Pct =
+      t.completedSignup > 0 ? (t.played1 / t.completedSignup) * 100 : 0;
+    const played3Pct = t.played1 > 0 ? (t.played3 / t.played1) * 100 : 0;
+    const played5Pct = t.played1 > 0 ? (t.played5 / t.played1) * 100 : 0;
+    const played10Pct = t.played1 > 0 ? (t.played10 / t.played1) * 100 : 0;
+    const activationRate =
+      t.registered > 0 ? (t.played1 / t.registered) * 100 : 0;
+    return {
+      ...t,
+      completedPct,
+      played1Pct,
+      played3Pct,
+      played5Pct,
+      played10Pct,
+      activationRate,
+    };
   }, [rows]);
 
   function header(label: string, key: SortKey) {
@@ -817,9 +856,25 @@ function UsersByCityTable({ rows }: { rows: ByCityRow[] }) {
     );
   }
 
+  // Single cell render for "count (pct%)" right-aligned. Used by all
+  // played-N depth columns so the formatting stays in lockstep.
+  const numericCell = (count: number, pct: number) => (
+    <td className="px-3 py-2 text-right font-mono tabular-nums text-deep-green">
+      {count.toLocaleString()}
+      <span className="ml-1 text-[10px] text-deep-green/50">
+        ({pct.toFixed(1)}%)
+      </span>
+    </td>
+  );
+
   return (
     <section className="rounded-2xl border-[1.5px] border-cream-line bg-white p-6 shadow-md shadow-deep-green/10">
       <h3 className="mb-4 text-lg font-bold text-deep-green">Users by City</h3>
+      <p className="mb-3 text-[11px] text-deep-green/55">
+        Played 3+ / 5+ / 10+ percentages are share of THAT row&apos;s
+        Played 1+ — read across to see the retention curve narrow per
+        city.
+      </p>
       <div className="overflow-x-auto">
         <table className="w-full text-xs">
           <thead className="bg-cream-soft text-[10px] uppercase tracking-wider">
@@ -828,9 +883,12 @@ function UsersByCityTable({ rows }: { rows: ByCityRow[] }) {
               <th className="px-3 py-2 text-right">{header("Registered", "registered")}</th>
               <th className="px-3 py-2 text-right">{header("Completed Signup", "completedSignup")}</th>
               <th className="px-3 py-2 text-right">{header("Played 1+", "played1")}</th>
-              <th className="px-3 py-2 text-right">{header("Active 30d", "active30d")}</th>
+              <th className="px-3 py-2 text-right">{header("Played 3+", "played3")}</th>
+              <th className="px-3 py-2 text-right">{header("Played 5+", "played5")}</th>
+              <th className="px-3 py-2 text-right">{header("Played 10+", "played10")}</th>
               <th className="px-3 py-2 text-right">{header("Members", "members")}</th>
               <th className="px-3 py-2 text-right">{header("Activation", "activationRate")}</th>
+              <th className="px-3 py-2 text-right">{header("Active 30d", "active30d")}</th>
             </tr>
           </thead>
           <tbody>
@@ -843,26 +901,19 @@ function UsersByCityTable({ rows }: { rows: ByCityRow[] }) {
                 <td className="px-3 py-2 text-right font-mono tabular-nums text-deep-green">
                   {r.registered.toLocaleString()}
                 </td>
-                <td className="px-3 py-2 text-right font-mono tabular-nums text-deep-green">
-                  {r.completedSignup.toLocaleString()}
-                  <span className="ml-1 text-[10px] text-deep-green/50">
-                    ({r.completedSignupPct}%)
-                  </span>
-                </td>
-                <td className="px-3 py-2 text-right font-mono tabular-nums text-deep-green">
-                  {r.played1.toLocaleString()}
-                  <span className="ml-1 text-[10px] text-deep-green/50">
-                    ({r.played1Pct}%)
-                  </span>
-                </td>
-                <td className="px-3 py-2 text-right font-mono tabular-nums text-deep-green">
-                  {r.active30d.toLocaleString()}
-                </td>
+                {numericCell(r.completedSignup, r.completedSignupPct)}
+                {numericCell(r.played1, r.played1Pct)}
+                {numericCell(r.played3, r.played3PctOfPlayed1)}
+                {numericCell(r.played5, r.played5PctOfPlayed1)}
+                {numericCell(r.played10, r.played10PctOfPlayed1)}
                 <td className="px-3 py-2 text-right font-mono tabular-nums text-deep-green">
                   {r.members.toLocaleString()}
                 </td>
                 <td className="px-3 py-2 text-right font-mono tabular-nums font-bold text-deep-green">
                   {r.activationRate.toFixed(1)}%
+                </td>
+                <td className="px-3 py-2 text-right font-mono tabular-nums text-deep-green">
+                  {r.active30d.toLocaleString()}
                 </td>
               </tr>
             ))}
@@ -871,26 +922,19 @@ function UsersByCityTable({ rows }: { rows: ByCityRow[] }) {
               <td className="px-3 py-2 text-right font-mono tabular-nums text-deep-green">
                 {totals.registered.toLocaleString()}
               </td>
-              <td className="px-3 py-2 text-right font-mono tabular-nums text-deep-green">
-                {totals.completedSignup.toLocaleString()}{" "}
-                <span className="text-[10px] font-normal text-deep-green/50">
-                  ({totals.completedPct.toFixed(1)}%)
-                </span>
-              </td>
-              <td className="px-3 py-2 text-right font-mono tabular-nums text-deep-green">
-                {totals.played1.toLocaleString()}{" "}
-                <span className="text-[10px] font-normal text-deep-green/50">
-                  ({totals.played1Pct.toFixed(1)}%)
-                </span>
-              </td>
-              <td className="px-3 py-2 text-right font-mono tabular-nums text-deep-green">
-                {totals.active30d.toLocaleString()}
-              </td>
+              {numericCell(totals.completedSignup, totals.completedPct)}
+              {numericCell(totals.played1, totals.played1Pct)}
+              {numericCell(totals.played3, totals.played3Pct)}
+              {numericCell(totals.played5, totals.played5Pct)}
+              {numericCell(totals.played10, totals.played10Pct)}
               <td className="px-3 py-2 text-right font-mono tabular-nums text-deep-green">
                 {totals.members.toLocaleString()}
               </td>
               <td className="px-3 py-2 text-right font-mono tabular-nums text-deep-green">
                 {totals.activationRate.toFixed(1)}%
+              </td>
+              <td className="px-3 py-2 text-right font-mono tabular-nums text-deep-green">
+                {totals.active30d.toLocaleString()}
               </td>
             </tr>
           </tbody>

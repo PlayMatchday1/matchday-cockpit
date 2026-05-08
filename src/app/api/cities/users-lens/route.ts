@@ -55,6 +55,15 @@ export type ByCityRow = {
   completedSignupPct: number;
   played1: number;
   played1Pct: number;
+  // Retention depth: % values are share of THIS city's played1
+  // (not previous stage). Lets the lens render an at-a-glance
+  // retention curve per row that's directly comparable across cities.
+  played3: number;
+  played3PctOfPlayed1: number;
+  played5: number;
+  played5PctOfPlayed1: number;
+  played10: number;
+  played10PctOfPlayed1: number;
   active30d: number;
   members: number;
   activationRate: number;
@@ -413,6 +422,9 @@ function aggregate(
     const reg = inCity.length;
     const compl = inCity.filter((d) => d.completedAt).length;
     const p1 = inCity.filter((d) => d.played1).length;
+    const p3 = inCity.filter((d) => d.played3).length;
+    const p5 = inCity.filter((d) => d.played5).length;
+    const p10 = inCity.filter((d) => d.played10).length;
     const a30 = inCity.filter((d) => d.active30d).length;
     const mem = inCity.filter((d) => d.member).length;
     return {
@@ -422,6 +434,13 @@ function aggregate(
       completedSignupPct: safePct(compl, reg),
       played1: p1,
       played1Pct: safePct(p1, compl),
+      // Retention depth: % share of this city's played1.
+      played3: p3,
+      played3PctOfPlayed1: safePct(p3, p1),
+      played5: p5,
+      played5PctOfPlayed1: safePct(p5, p1),
+      played10: p10,
+      played10PctOfPlayed1: safePct(p10, p1),
       active30d: a30,
       members: mem,
       activationRate: safePct(p1, reg),
