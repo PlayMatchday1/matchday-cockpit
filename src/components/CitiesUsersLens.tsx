@@ -17,7 +17,7 @@ import { useRouter, useSearchParams } from "next/navigation";
 import { useCallback, useEffect, useMemo, useState } from "react";
 import { supabase } from "@/lib/supabase";
 import { CITY_STACK_ORDER, colorForCity } from "@/lib/cityColors";
-import { colorForField, textOnFieldColor } from "@/lib/fieldColors";
+import { colorForField } from "@/lib/fieldColors";
 
 // ---------------------------------------------------------------
 // Types — mirror the route's UsersLensPayload exactly.
@@ -1291,7 +1291,16 @@ function FunnelSpeedTable({
 // Window selector + Monthly/Weekly toggle drive the data.
 // ---------------------------------------------------------------
 
-const FMBF_BAR_AREA_PX = 130;
+// Line-chart layout dimensions. Each city renders a fixed-size SVG;
+// labels live inside the SVG so vertical centering with the legend
+// below stays consistent across cards.
+const FMBF_PLOT_HEIGHT = 130;
+const FMBF_LABEL_PAD_TOP = 18; // margin above the plot for marker labels
+const FMBF_X_LABEL_HEIGHT = 14;
+const FMBF_Y_AXIS_WIDTH = 30;
+const FMBF_SVG_WIDTH = 340;
+const FMBF_SVG_HEIGHT =
+  FMBF_LABEL_PAD_TOP + FMBF_PLOT_HEIGHT + FMBF_X_LABEL_HEIGHT;
 
 function FirstMatchByField({
   monthly,
@@ -1364,12 +1373,39 @@ function FirstMatchByField({
 }
 
 function CityFirstMatchChart({ city }: { city: FirstMatchByFieldCity }) {
-  // Max bar total across this city's buckets — used to scale heights.
-  const maxBucketTotal = Math.max(
+  // Max value across ANY (bucket, field) pair in this city — sets the
+  // y-axis ceiling so small fields stay readable while big fields
+  // anchor the top of the plot. NOT the max bucket total (that would
+  // squash small lines).
+  const maxValue = Math.max(
     1,
-    ...city.buckets.map((b) => b.total),
+    ...city.fields.flatMap((f) =>
+      city.buckets.map((b) => b.byField[f] ?? 0),
+    ),
   );
   const hasAnyData = city.buckets.some((b) => b.total > 0);
+  const bucketCount = city.buckets.length;
+
+  // SVG coordinate helpers. plot area sits inside the SVG with reserved
+  // padding above (for labels) and below (for x-axis tick text), and a
+  // y-axis-width column on the left for tick labels.
+  const plotLeft = FMBF_Y_AXIS_WIDTH;
+  const plotRight = FMBF_SVG_WIDTH;
+  const plotTop = FMBF_LABEL_PAD_TOP;
+  const plotBottom = FMBF_LABEL_PAD_TOP + FMBF_PLOT_HEIGHT;
+  const plotW = plotRight - plotLeft;
+  const slotW = plotW / Math.max(1, bucketCount);
+  const xFor = (i: number) => plotLeft + slotW * (i + 0.5);
+  const yFor = (n: number) =>
+    plotBottom - (n / maxValue) * FMBF_PLOT_HEIGHT;
+
+  // Y-axis ticks: 0 + max, plus midpoint when max >= 4 so the scale is
+  // legible for small-volume cities without cluttering bigger ones.
+  const midTick = maxValue >= 4 ? Math.round(maxValue / 2) : null;
+
+  // X-axis label stride: weekly view (16 buckets) shows every-other to
+  // avoid crowding; monthly (12) shows all.
+  const labelStride = bucketCount > 12 ? 2 : 1;
 
   return (
     <div className="rounded-lg border border-cream-line bg-cream-soft/30 p-3">
@@ -1383,32 +1419,146 @@ function CityFirstMatchChart({ city }: { city: FirstMatchByFieldCity }) {
       {!hasAnyData ? (
         <div
           className="rounded border border-dashed border-cream-line bg-white/40 px-3 py-6 text-center text-[11px] italic text-deep-green/45"
-          style={{ minHeight: `${FMBF_BAR_AREA_PX + 28}px` }}
+          style={{ minHeight: `${FMBF_PLOT_HEIGHT + 30}px` }}
         >
           No first matches in this window.
         </div>
       ) : (
         <>
-          <div className="flex items-end gap-[2px]">
-            {city.buckets.map((b) => (
-              <FirstMatchBucketColumn
-                key={b.bucketStart}
-                bucket={b}
-                fieldOrder={city.fields}
-                maxBucketTotal={maxBucketTotal}
-              />
-            ))}
-          </div>
-          <div className="mt-1 flex gap-[2px]">
-            {city.buckets.map((b) => (
-              <div
-                key={b.bucketStart}
-                className="flex-1 text-center text-[9px] text-deep-green/45"
-              >
-                {b.period.slice(0, 3)}
-              </div>
-            ))}
-          </div>
+          <svg
+            viewBox={`0 0 ${FMBF_SVG_WIDTH} ${FMBF_SVG_HEIGHT}`}
+            preserveAspectRatio="none"
+            className="w-full"
+            style={{ height: `${FMBF_SVG_HEIGHT}px` }}
+            role="img"
+            aria-label={`${city.city} first match by field over time`}
+          >
+            {/* y-axis tick lines + labels */}
+            <line
+              x1={plotLeft}
+              x2={plotRight}
+              y1={plotBottom}
+              y2={plotBottom}
+              stroke="rgba(10, 26, 16, 0.15)"
+              strokeWidth={1}
+            />
+            <text
+              x={plotLeft - 4}
+              y={plotBottom + 3}
+              fontSize={9}
+              textAnchor="end"
+              fill="rgba(10, 26, 16, 0.45)"
+            >
+              0
+            </text>
+            <text
+              x={plotLeft - 4}
+              y={plotTop + 3}
+              fontSize={9}
+              textAnchor="end"
+              fill="rgba(10, 26, 16, 0.45)"
+            >
+              {maxValue.toLocaleString()}
+            </text>
+            {midTick !== null && (
+              <>
+                <line
+                  x1={plotLeft}
+                  x2={plotRight}
+                  y1={yFor(midTick)}
+                  y2={yFor(midTick)}
+                  stroke="rgba(10, 26, 16, 0.08)"
+                  strokeWidth={1}
+                  strokeDasharray="2 2"
+                />
+                <text
+                  x={plotLeft - 4}
+                  y={yFor(midTick) + 3}
+                  fontSize={9}
+                  textAnchor="end"
+                  fill="rgba(10, 26, 16, 0.45)"
+                >
+                  {midTick.toLocaleString()}
+                </text>
+              </>
+            )}
+
+            {/* one polyline + markers + labels per field */}
+            {city.fields.map((f) => {
+              const color = colorForField(f);
+              const points = city.buckets.map((b, i) => ({
+                x: xFor(i),
+                y: yFor(b.byField[f] ?? 0),
+                v: b.byField[f] ?? 0,
+                period: b.period,
+              }));
+              const polyPoints = points
+                .map((p) => `${p.x},${p.y}`)
+                .join(" ");
+              return (
+                <g key={f}>
+                  <polyline
+                    points={polyPoints}
+                    fill="none"
+                    stroke={color}
+                    strokeWidth={1.75}
+                    strokeLinecap="round"
+                    strokeLinejoin="round"
+                  />
+                  {points.map((p, i) => (
+                    <g key={i}>
+                      <circle
+                        cx={p.x}
+                        cy={p.y}
+                        r={3}
+                        fill={color}
+                        stroke="white"
+                        strokeWidth={1}
+                      >
+                        <title>
+                          {`${f} · ${p.period}: ${p.v.toLocaleString()} first matches`}
+                        </title>
+                      </circle>
+                      {/* Numeric label above the marker. Skip zeros —
+                          a "0" label on a line dipping to baseline
+                          adds noise without information. */}
+                      {p.v > 0 && (
+                        <text
+                          x={p.x}
+                          y={p.y - 6}
+                          fontSize={9}
+                          textAnchor="middle"
+                          fill={color}
+                          fontWeight={600}
+                          style={{ paintOrder: "stroke" }}
+                          stroke="white"
+                          strokeWidth={3}
+                        >
+                          {p.v.toLocaleString()}
+                        </text>
+                      )}
+                    </g>
+                  ))}
+                </g>
+              );
+            })}
+
+            {/* x-axis period labels */}
+            {city.buckets.map((b, i) =>
+              i % labelStride === 0 ? (
+                <text
+                  key={b.bucketStart}
+                  x={xFor(i)}
+                  y={plotBottom + FMBF_X_LABEL_HEIGHT - 2}
+                  fontSize={9}
+                  textAnchor="middle"
+                  fill="rgba(10, 26, 16, 0.45)"
+                >
+                  {b.period.slice(0, 3)}
+                </text>
+              ) : null,
+            )}
+          </svg>
           <div className="mt-3 flex flex-wrap items-center gap-x-3 gap-y-1 text-[10px] text-deep-green/65">
             {city.fields.map((f) => (
               <span key={f} className="inline-flex items-center gap-1.5">
@@ -1423,83 +1573,6 @@ function CityFirstMatchChart({ city }: { city: FirstMatchByFieldCity }) {
           </div>
         </>
       )}
-    </div>
-  );
-}
-
-function FirstMatchBucketColumn({
-  bucket,
-  fieldOrder,
-  maxBucketTotal,
-}: {
-  bucket: FirstMatchByFieldBucket;
-  fieldOrder: string[];
-  maxBucketTotal: number;
-}) {
-  // Total bar height for this bucket, scaled to the city's max so all
-  // 12 / 16 buckets share the same visual axis.
-  const totalPx = (bucket.total / maxBucketTotal) * FMBF_BAR_AREA_PX;
-
-  // Tooltip with full breakdown — non-zero fields only.
-  const tooltipLines = [
-    `${bucket.period}: ${bucket.total.toLocaleString()} first matches`,
-    ...fieldOrder
-      .filter((f) => (bucket.byField[f] ?? 0) > 0)
-      .map((f) => `${f}: ${(bucket.byField[f] ?? 0).toLocaleString()}`),
-  ];
-  const tooltip = tooltipLines.join("\n");
-
-  return (
-    <div
-      className="flex min-w-[28px] flex-1 flex-col items-center"
-      title={tooltip}
-    >
-      <div
-        className="text-[10px] font-mono tabular-nums text-deep-green/65"
-        style={{ minHeight: "12px" }}
-      >
-        {bucket.total > 0 ? bucket.total.toLocaleString() : ""}
-      </div>
-      {/* Bar slot. flex-col-reverse stacks segments bottom-up so the
-          first field in fieldOrder (largest lifetime total) lands at
-          the bottom of the bar. */}
-      <div
-        className="flex w-full flex-col-reverse overflow-hidden rounded-t"
-        style={{ height: `${FMBF_BAR_AREA_PX}px` }}
-      >
-        <div style={{ flex: "1 0 auto" }} />
-        {fieldOrder.map((f) => {
-          const n = bucket.byField[f] ?? 0;
-          if (n === 0) return null;
-          // Each segment height = its share of the city's max-bucket
-          // total, NOT share of this bucket. Keeps absolute heights
-          // comparable across all bars in this city.
-          const segPx = (n / maxBucketTotal) * FMBF_BAR_AREA_PX;
-          const bg = colorForField(f);
-          // Drop the on-bar number for very thin segments (n<=2 OR the
-          // segment is shorter than ~12px) so the label doesn't clip.
-          const showLabel = n > 2 && segPx >= 14;
-          return (
-            <div
-              key={f}
-              style={{
-                height: `${segPx}px`,
-                background: bg,
-                flex: "0 0 auto",
-                display: "flex",
-                alignItems: "center",
-                justifyContent: "center",
-                fontSize: "10px",
-                fontVariantNumeric: "tabular-nums",
-                color: textOnFieldColor(bg),
-                overflow: "hidden",
-              }}
-            >
-              {showLabel ? n.toLocaleString() : ""}
-            </div>
-          );
-        })}
-      </div>
     </div>
   );
 }
