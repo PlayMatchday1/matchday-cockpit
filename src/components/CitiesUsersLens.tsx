@@ -38,6 +38,8 @@ type Funnel = {
   completedSignup: number;
   played1: number;
   played3: number;
+  played5: number;
+  played10: number;
   activeMember: number;
 };
 type ByCityRow = {
@@ -121,38 +123,77 @@ type LensPayload = {
 // Custom uses ?window=custom&from=YYYY-MM-DD&to=YYYY-MM-DD.
 // ---------------------------------------------------------------
 
-type WindowName = "all" | "2026_ytd" | "last_90" | "last_12m" | "custom";
+type WindowName =
+  | "all"
+  | "mtd"
+  | "qtd"
+  | "2026_ytd"
+  | "last_30"
+  | "last_90"
+  | "last_12m"
+  | "custom";
 
+// Pill order: All time first as default reset; current-period anchors
+// (MTD, QTD, YTD) in increasing length; rolling windows (Last 30/90/12mo)
+// in increasing length; Custom last. Wraps to two lines on narrow
+// viewports via flex-wrap on the parent.
 const WINDOW_PILLS: { value: WindowName; label: string }[] = [
   { value: "all", label: "All time" },
+  { value: "mtd", label: "MTD" },
+  { value: "qtd", label: "QTD" },
   { value: "2026_ytd", label: "2026 YTD" },
+  { value: "last_30", label: "Last 30 days" },
   { value: "last_90", label: "Last 90 days" },
   { value: "last_12m", label: "Last 12 months" },
   { value: "custom", label: "Custom" },
 ];
 
 function isoDay(d: Date): string {
-  // YYYY-MM-DD in local time. Used for URL params + native date inputs.
-  const y = d.getFullYear();
-  const m = String(d.getMonth() + 1).padStart(2, "0");
-  const day = String(d.getDate()).padStart(2, "0");
+  // YYYY-MM-DD in UTC so window boundaries are deterministic across
+  // user timezones. Custom date inputs and preset boundaries both
+  // pass through this so the route sees the same shape regardless
+  // of where the user is.
+  const y = d.getUTCFullYear();
+  const m = String(d.getUTCMonth() + 1).padStart(2, "0");
+  const day = String(d.getUTCDate()).padStart(2, "0");
   return `${y}-${m}-${day}`;
 }
 
-function presetDates(name: WindowName, now: Date): { from: string | null; to: string | null } {
+function presetDates(
+  name: WindowName,
+  now: Date,
+): { from: string | null; to: string | null } {
   if (name === "all") return { from: null, to: null };
+  const today = isoDay(now);
+  if (name === "mtd") {
+    // First day of current UTC month → today.
+    const y = now.getUTCFullYear();
+    const m = now.getUTCMonth();
+    const from = `${y}-${String(m + 1).padStart(2, "0")}-01`;
+    return { from, to: today };
+  }
+  if (name === "qtd") {
+    // First day of current UTC quarter (Jan/Apr/Jul/Oct 1) → today.
+    const y = now.getUTCFullYear();
+    const qStart = Math.floor(now.getUTCMonth() / 3) * 3;
+    const from = `${y}-${String(qStart + 1).padStart(2, "0")}-01`;
+    return { from, to: today };
+  }
   if (name === "2026_ytd") {
-    return { from: "2026-01-01", to: isoDay(now) };
+    return { from: "2026-01-01", to: today };
+  }
+  if (name === "last_30") {
+    const from = new Date(now.getTime() - 30 * 24 * 60 * 60 * 1000);
+    return { from: isoDay(from), to: today };
   }
   if (name === "last_90") {
-    const from = new Date(now);
-    from.setDate(from.getDate() - 90);
-    return { from: isoDay(from), to: isoDay(now) };
+    const from = new Date(now.getTime() - 90 * 24 * 60 * 60 * 1000);
+    return { from: isoDay(from), to: today };
   }
   if (name === "last_12m") {
     const from = new Date(now);
-    from.setFullYear(from.getFullYear() - 1);
-    return { from: isoDay(from), to: isoDay(now) };
+    from.setUTCFullYear(from.getUTCFullYear() - 1);
+    return { from: isoDay(from), to: today };
   }
   // custom — caller must supply from/to.
   return { from: null, to: null };
@@ -617,12 +658,17 @@ function Stat({
 // ---------------------------------------------------------------
 
 function ActivationFunnel({ funnel }: { funnel: Funnel }) {
+  // Played 3+/5+/10+ chain successively (each % is of the previous
+  // played-N). Active Member breaks that chain — its prevCount stays
+  // anchored to Played 1+ since member status is independent of how
+  // many matches the user has played.
   const stages = [
     { name: "Account Created", count: funnel.accountCreated, prevCount: null as number | null },
     { name: "Completed Signup", count: funnel.completedSignup, prevCount: funnel.accountCreated },
     { name: "Played 1+ Match", count: funnel.played1, prevCount: funnel.completedSignup },
     { name: "Played 3+ Matches", count: funnel.played3, prevCount: funnel.played1 },
-    // Active Member is % of Played 1+ per spec, not % of Played 3+.
+    { name: "Played 5+ Matches", count: funnel.played5, prevCount: funnel.played3 },
+    { name: "Played 10+ Matches", count: funnel.played10, prevCount: funnel.played5 },
     { name: "Active Member", count: funnel.activeMember, prevCount: funnel.played1 },
   ];
   // Identify the worst-performing stage by absolute drop-off count for
@@ -691,8 +737,8 @@ function ActivationFunnel({ funnel }: { funnel: Funnel }) {
       <p className="mt-4 text-[11px] leading-relaxed text-deep-green/55">
         Account Created → Completed Signup is the onboarding completion rate.
         Completed Signup → Played 1+ is the booking conversion rate.
-        Played 1+ → Played 3+ is the retention rate.
-        Played 1+ → Member is the monetization rate.
+        Played 1+ → Played 3+ → Played 5+ → Played 10+ shows deepening
+        retention. Played 1+ → Member is the monetization rate.
       </p>
     </section>
   );

@@ -125,6 +125,8 @@ export type UsersLensPayload = {
     completedSignup: number;
     played1: number;
     played3: number;
+    played5: number;
+    played10: number;
     activeMember: number;
   };
   byCity: ByCityRow[];
@@ -226,6 +228,8 @@ type DerivedUser = {
   completedAt: Date | null;
   played1: boolean;
   played3: boolean;
+  played5: boolean;
+  played10: boolean;
   active30d: boolean;
   active60d: boolean;
   member: boolean;
@@ -349,6 +353,8 @@ function aggregate(
       completedAt: u.completed_sign_up_at ? new Date(u.completed_sign_up_at) : null,
       played1: matchCount >= 1,
       played3: matchCount >= 3,
+      played5: matchCount >= 5,
+      played10: matchCount >= 10,
       active30d,
       active60d,
       member,
@@ -372,6 +378,8 @@ function aggregate(
   const completedSignup = cohort.filter((d) => d.completedAt).length;
   const played1 = cohort.filter((d) => d.played1).length;
   const played3 = cohort.filter((d) => d.played3).length;
+  const played5 = cohort.filter((d) => d.played5).length;
+  const played10 = cohort.filter((d) => d.played10).length;
   const members = cohort.filter((d) => d.member).length;
   // Network-wide (NOT cohort-filtered):
   const active30d = derived.filter((d) => d.active30d).length;
@@ -394,6 +402,8 @@ function aggregate(
     completedSignup,
     played1,
     played3,
+    played5,
+    played10,
     activeMember: members,
   };
 
