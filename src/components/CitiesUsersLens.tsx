@@ -181,6 +181,18 @@ function isoDay(d: Date): string {
   return `${y}-${m}-${day}`;
 }
 
+// Sub-tab partition: regrouping the 8-section page into three
+// focused views. Header + window selector stay at top (single source
+// of truth for cohort filter); sub-tab nav slots underneath; only
+// the active sub-tab's sections render.
+type SubTab = "overview" | "growth" | "acquisition";
+
+const SUB_TABS: { value: SubTab; label: string }[] = [
+  { value: "overview", label: "Overview" },
+  { value: "growth", label: "Growth" },
+  { value: "acquisition", label: "Acquisition" },
+];
+
 function presetDates(
   name: WindowName,
   now: Date,
@@ -265,6 +277,13 @@ export default function CitiesUsersLens() {
   // --- Growth metric (Phase 2c) ---
   // Default = "signups". Validated against the pill set so a stale
   // URL value can't break the page.
+  // Sub-tab partition (URL-driven). Default = overview; param dropped
+  // when overview so URLs stay clean for the no-param landing case.
+  const urlSubRaw = searchParams?.get("sub");
+  const validSubs = SUB_TABS.map((s) => s.value) as string[];
+  const activeSub: SubTab =
+    urlSubRaw && validSubs.includes(urlSubRaw) ? (urlSubRaw as SubTab) : "overview";
+
   const urlMetric = searchParams?.get("growth_metric") as GrowthMetric | null;
   const validMetric = (
     METRIC_PILLS.map((p) => p.value) as string[]
@@ -379,6 +398,17 @@ export default function CitiesUsersLens() {
     [router, searchParams],
   );
 
+  const setSub = useCallback(
+    (next: SubTab) => {
+      const params = new URLSearchParams(searchParams?.toString() ?? "");
+      if (next === "overview") params.delete("sub");
+      else params.set("sub", next);
+      const qs = params.toString();
+      router.push(qs ? `?${qs}` : "?", { scroll: false });
+    },
+    [router, searchParams],
+  );
+
   // --- Header always renders (with window selector) ---
   // Loading + error states swap into the body, but the pill row and
   // last-synced indicator stay visible so navigation between windows
@@ -429,6 +459,35 @@ export default function CitiesUsersLens() {
                 : ""}
           </p>
         )}
+
+        {/* Sub-tab nav. Underline-style (matches AdminSubNav and the
+            Reviews tab's Performance/Leaderboard sub-sub-tab) so it
+            reads as nested below the parent Cities pill nav. */}
+        <div
+          role="tablist"
+          aria-label="Users sub-section"
+          className="mt-4 flex items-center gap-5 border-b border-cream-line"
+        >
+          {SUB_TABS.map((t) => {
+            const isActive = t.value === activeSub;
+            return (
+              <button
+                key={t.value}
+                type="button"
+                role="tab"
+                aria-selected={isActive}
+                onClick={() => setSub(t.value)}
+                className={
+                  isActive
+                    ? "-mb-px border-b-2 border-mint-hover px-0.5 pb-2 text-[13px] font-bold tracking-tight text-deep-green"
+                    : "-mb-px border-b-2 border-transparent px-0.5 pb-2 text-[13px] font-medium tracking-tight text-deep-green/55 transition hover:text-deep-green"
+                }
+              >
+                {t.label}
+              </button>
+            );
+          })}
+        </div>
       </section>
 
       {loading && (
@@ -443,50 +502,64 @@ export default function CitiesUsersLens() {
       )}
       {data && !loading && !error && (
         <>
-          <HeroKpis hero={data.hero} />
-          <ActivationFunnel funnel={data.funnel} />
-          <UsersByCityTable rows={data.byCity} />
-          <GrowthChart
-            monthly={data.growthMonthly}
-            weekly={data.growthWeekly}
-            metric={activeMetric}
-            onMetricChange={setMetric}
-            windowFromIso={data.window.fromIso}
-            windowToIso={data.window.toIso}
-          />
-          <SmallMultiples
-            monthly={data.growthMonthly}
-            weekly={data.growthWeekly}
-            metric={activeMetric}
-            windowFromIso={data.window.fromIso}
-            windowToIso={data.window.toIso}
-          />
-          <FunnelSpeedTable
-            rows={data.funnelSpeed}
-            windowLabel={
-              WINDOW_PILLS.find((p) => p.value === activeWindow)?.label ??
-              "All time"
-            }
-          />
-          <FirstMatchByField
-            monthly={data.firstMatchByFieldMonthly}
-            weekly={data.firstMatchByFieldWeekly}
-            initialPeriod={
-              (searchParams?.get("field_period") === "weekly"
-                ? "weekly"
-                : "monthly") as "monthly" | "weekly"
-            }
-            onPeriodChange={(p) => {
-              const params = new URLSearchParams(
-                searchParams?.toString() ?? "",
-              );
-              if (p === "monthly") params.delete("field_period");
-              else params.set("field_period", "weekly");
-              const qs = params.toString();
-              router.push(qs ? `?${qs}` : "?", { scroll: false });
-            }}
-          />
-          <SignupMatrix matrix={data.matrix} />
+          {activeSub === "overview" && (
+            <>
+              <HeroKpis hero={data.hero} />
+              <ActivationFunnel funnel={data.funnel} />
+              <UsersByCityTable rows={data.byCity} />
+            </>
+          )}
+
+          {activeSub === "growth" && (
+            <>
+              <GrowthChart
+                monthly={data.growthMonthly}
+                weekly={data.growthWeekly}
+                metric={activeMetric}
+                onMetricChange={setMetric}
+                windowFromIso={data.window.fromIso}
+                windowToIso={data.window.toIso}
+              />
+              <SmallMultiples
+                monthly={data.growthMonthly}
+                weekly={data.growthWeekly}
+                metric={activeMetric}
+                windowFromIso={data.window.fromIso}
+                windowToIso={data.window.toIso}
+              />
+            </>
+          )}
+
+          {activeSub === "acquisition" && (
+            <>
+              <FunnelSpeedTable
+                rows={data.funnelSpeed}
+                windowLabel={
+                  WINDOW_PILLS.find((p) => p.value === activeWindow)?.label ??
+                  "All time"
+                }
+              />
+              <FirstMatchByField
+                monthly={data.firstMatchByFieldMonthly}
+                weekly={data.firstMatchByFieldWeekly}
+                initialPeriod={
+                  (searchParams?.get("field_period") === "weekly"
+                    ? "weekly"
+                    : "monthly") as "monthly" | "weekly"
+                }
+                onPeriodChange={(p) => {
+                  const params = new URLSearchParams(
+                    searchParams?.toString() ?? "",
+                  );
+                  if (p === "monthly") params.delete("field_period");
+                  else params.set("field_period", "weekly");
+                  const qs = params.toString();
+                  router.push(qs ? `?${qs}` : "?", { scroll: false });
+                }}
+              />
+              <SignupMatrix matrix={data.matrix} />
+            </>
+          )}
         </>
       )}
     </div>
