@@ -17,6 +17,7 @@ import { useRouter, useSearchParams } from "next/navigation";
 import { useCallback, useEffect, useMemo, useState } from "react";
 import { supabase } from "@/lib/supabase";
 import { CITY_STACK_ORDER, colorForCity } from "@/lib/cityColors";
+import { colorForField, textOnFieldColor } from "@/lib/fieldColors";
 
 // ---------------------------------------------------------------
 // Types — mirror the route's UsersLensPayload exactly.
@@ -112,6 +113,19 @@ type Matrix = {
   colTotals: number[];
   grandTotal: number;
 };
+type FirstMatchByFieldBucket = {
+  period: string;
+  bucketStart: string;
+  total: number;
+  byField: Record<string, number>;
+};
+type FirstMatchByFieldCity = {
+  city: string;
+  totalInWindow: number;
+  fields: string[];
+  buckets: FirstMatchByFieldBucket[];
+};
+
 type LensPayload = {
   lastSyncedAt: string | null;
   window: { fromIso: string | null; toIso: string | null };
@@ -122,6 +136,8 @@ type LensPayload = {
   growthWeekly: GrowthSeries;
   funnelSpeed: FunnelSpeedRow[];
   matrix: Matrix;
+  firstMatchByFieldMonthly: FirstMatchByFieldCity[];
+  firstMatchByFieldWeekly: FirstMatchByFieldCity[];
 };
 
 // ---------------------------------------------------------------
@@ -451,6 +467,24 @@ export default function CitiesUsersLens() {
               WINDOW_PILLS.find((p) => p.value === activeWindow)?.label ??
               "All time"
             }
+          />
+          <FirstMatchByField
+            monthly={data.firstMatchByFieldMonthly}
+            weekly={data.firstMatchByFieldWeekly}
+            initialPeriod={
+              (searchParams?.get("field_period") === "weekly"
+                ? "weekly"
+                : "monthly") as "monthly" | "weekly"
+            }
+            onPeriodChange={(p) => {
+              const params = new URLSearchParams(
+                searchParams?.toString() ?? "",
+              );
+              if (p === "monthly") params.delete("field_period");
+              else params.set("field_period", "weekly");
+              const qs = params.toString();
+              router.push(qs ? `?${qs}` : "?", { scroll: false });
+            }}
           />
           <SignupMatrix matrix={data.matrix} />
         </>
@@ -1249,6 +1283,226 @@ function FunnelSpeedTable({
 // Diagonal cells highlighted. Color intensity = magnitude on a single
 // teal ramp (lighter → darker).
 // ---------------------------------------------------------------
+
+// ---------------------------------------------------------------
+// First Match by Field — per-city stacked bars, one user counted
+// once at their first field. Cities rendered in alphabetical order
+// (ATL, ATX, DFW, ELP, HOU, OKC, SATX, STL, Unknown last) per spec.
+// Window selector + Monthly/Weekly toggle drive the data.
+// ---------------------------------------------------------------
+
+const FMBF_BAR_AREA_PX = 130;
+
+function FirstMatchByField({
+  monthly,
+  weekly,
+  initialPeriod,
+  onPeriodChange,
+}: {
+  monthly: FirstMatchByFieldCity[];
+  weekly: FirstMatchByFieldCity[];
+  initialPeriod: "monthly" | "weekly";
+  onPeriodChange: (p: "monthly" | "weekly") => void;
+}) {
+  const [period, setPeriod] = useState<"monthly" | "weekly">(initialPeriod);
+  // Keep local state in sync with URL changes (back/forward).
+  useEffect(() => {
+    setPeriod(initialPeriod);
+  }, [initialPeriod]);
+
+  const series = period === "monthly" ? monthly : weekly;
+
+  // Render order: alphabetical by city code, then Unknown last.
+  const ALPHA = ["ATL", "ATX", "DFW", "ELP", "HOU", "OKC", "SATX", "STL"];
+  const ordered = [
+    ...ALPHA.map((c) => series.find((s) => s.city === c)).filter(
+      (s): s is FirstMatchByFieldCity => !!s,
+    ),
+    ...series.filter((s) => s.city === "Unknown"),
+  ];
+
+  return (
+    <section className="rounded-2xl border-[1.5px] border-cream-line bg-white p-6 shadow-md shadow-deep-green/10">
+      <div className="mb-4 flex flex-wrap items-baseline justify-between gap-3">
+        <div>
+          <h3 className="text-lg font-bold text-deep-green">
+            First Match by Field
+          </h3>
+          <p className="mt-0.5 text-xs text-deep-green/60">
+            Where new players landed for their first ever match. Each user
+            counted once, at their first field.
+          </p>
+        </div>
+        <div className="inline-flex rounded-full bg-cream-soft p-1 ring-1 ring-cream-line">
+          {(["monthly", "weekly"] as const).map((v) => (
+            <button
+              key={v}
+              type="button"
+              onClick={() => {
+                setPeriod(v);
+                onPeriodChange(v);
+              }}
+              className={
+                period === v
+                  ? "rounded-full bg-mint px-3 py-1 text-[11px] font-bold text-deep-green"
+                  : "rounded-full px-3 py-1 text-[11px] font-bold text-deep-green/60 hover:text-deep-green"
+              }
+            >
+              {v === "monthly" ? "Monthly · 12mo" : "Weekly · 16wk"}
+            </button>
+          ))}
+        </div>
+      </div>
+
+      <div className="grid grid-cols-1 gap-4 sm:grid-cols-2 lg:grid-cols-3">
+        {ordered.map((c) => (
+          <CityFirstMatchChart key={c.city} city={c} />
+        ))}
+      </div>
+    </section>
+  );
+}
+
+function CityFirstMatchChart({ city }: { city: FirstMatchByFieldCity }) {
+  // Max bar total across this city's buckets — used to scale heights.
+  const maxBucketTotal = Math.max(
+    1,
+    ...city.buckets.map((b) => b.total),
+  );
+  const hasAnyData = city.buckets.some((b) => b.total > 0);
+
+  return (
+    <div className="rounded-lg border border-cream-line bg-cream-soft/30 p-3">
+      <div className="mb-1 flex items-baseline justify-between gap-2">
+        <span className="text-sm font-bold text-deep-green">{city.city}</span>
+        <span className="text-[10px] font-mono tabular-nums text-deep-green/55">
+          {city.totalInWindow.toLocaleString()} first matches
+        </span>
+      </div>
+
+      {!hasAnyData ? (
+        <div
+          className="rounded border border-dashed border-cream-line bg-white/40 px-3 py-6 text-center text-[11px] italic text-deep-green/45"
+          style={{ minHeight: `${FMBF_BAR_AREA_PX + 28}px` }}
+        >
+          No first matches in this window.
+        </div>
+      ) : (
+        <>
+          <div className="flex items-end gap-[2px]">
+            {city.buckets.map((b) => (
+              <FirstMatchBucketColumn
+                key={b.bucketStart}
+                bucket={b}
+                fieldOrder={city.fields}
+                maxBucketTotal={maxBucketTotal}
+              />
+            ))}
+          </div>
+          <div className="mt-1 flex gap-[2px]">
+            {city.buckets.map((b) => (
+              <div
+                key={b.bucketStart}
+                className="flex-1 text-center text-[9px] text-deep-green/45"
+              >
+                {b.period.slice(0, 3)}
+              </div>
+            ))}
+          </div>
+          <div className="mt-3 flex flex-wrap items-center gap-x-3 gap-y-1 text-[10px] text-deep-green/65">
+            {city.fields.map((f) => (
+              <span key={f} className="inline-flex items-center gap-1.5">
+                <span
+                  aria-hidden
+                  className="inline-block h-2 w-2 rounded-sm"
+                  style={{ background: colorForField(f) }}
+                />
+                {f}
+              </span>
+            ))}
+          </div>
+        </>
+      )}
+    </div>
+  );
+}
+
+function FirstMatchBucketColumn({
+  bucket,
+  fieldOrder,
+  maxBucketTotal,
+}: {
+  bucket: FirstMatchByFieldBucket;
+  fieldOrder: string[];
+  maxBucketTotal: number;
+}) {
+  // Total bar height for this bucket, scaled to the city's max so all
+  // 12 / 16 buckets share the same visual axis.
+  const totalPx = (bucket.total / maxBucketTotal) * FMBF_BAR_AREA_PX;
+
+  // Tooltip with full breakdown — non-zero fields only.
+  const tooltipLines = [
+    `${bucket.period}: ${bucket.total.toLocaleString()} first matches`,
+    ...fieldOrder
+      .filter((f) => (bucket.byField[f] ?? 0) > 0)
+      .map((f) => `${f}: ${(bucket.byField[f] ?? 0).toLocaleString()}`),
+  ];
+  const tooltip = tooltipLines.join("\n");
+
+  return (
+    <div
+      className="flex min-w-[28px] flex-1 flex-col items-center"
+      title={tooltip}
+    >
+      <div
+        className="text-[10px] font-mono tabular-nums text-deep-green/65"
+        style={{ minHeight: "12px" }}
+      >
+        {bucket.total > 0 ? bucket.total.toLocaleString() : ""}
+      </div>
+      {/* Bar slot. flex-col-reverse stacks segments bottom-up so the
+          first field in fieldOrder (largest lifetime total) lands at
+          the bottom of the bar. */}
+      <div
+        className="flex w-full flex-col-reverse overflow-hidden rounded-t"
+        style={{ height: `${FMBF_BAR_AREA_PX}px` }}
+      >
+        <div style={{ flex: "1 0 auto" }} />
+        {fieldOrder.map((f) => {
+          const n = bucket.byField[f] ?? 0;
+          if (n === 0) return null;
+          // Each segment height = its share of the city's max-bucket
+          // total, NOT share of this bucket. Keeps absolute heights
+          // comparable across all bars in this city.
+          const segPx = (n / maxBucketTotal) * FMBF_BAR_AREA_PX;
+          const bg = colorForField(f);
+          // Drop the on-bar number for very thin segments (n<=2 OR the
+          // segment is shorter than ~12px) so the label doesn't clip.
+          const showLabel = n > 2 && segPx >= 14;
+          return (
+            <div
+              key={f}
+              style={{
+                height: `${segPx}px`,
+                background: bg,
+                flex: "0 0 auto",
+                display: "flex",
+                alignItems: "center",
+                justifyContent: "center",
+                fontSize: "10px",
+                fontVariantNumeric: "tabular-nums",
+                color: textOnFieldColor(bg),
+                overflow: "hidden",
+              }}
+            >
+              {showLabel ? n.toLocaleString() : ""}
+            </div>
+          );
+        })}
+      </div>
+    </div>
+  );
+}
 
 function SignupMatrix({ matrix }: { matrix: Matrix }) {
   const max = Math.max(1, ...matrix.cells.flat());

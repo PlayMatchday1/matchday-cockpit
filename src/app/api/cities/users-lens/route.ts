@@ -24,6 +24,7 @@ import { createClient, type SupabaseClient } from "@supabase/supabase-js";
 import { isInternalUser } from "@/lib/users";
 import { KNOWN_CITY_CODES } from "@/lib/cityNormalization";
 import { selectAll } from "@/lib/supabasePagination";
+import { normField } from "@/lib/normField";
 
 export const runtime = "nodejs";
 // Heaviest computation: paginated fetch of 24k users + 38k match_players
@@ -155,6 +156,27 @@ export type UsersLensPayload = {
     colTotals: number[];
     grandTotal: number;
   };
+  // First match by field — one entry per city. Each entry carries an
+  // ordered field list (largest total → smallest, used for legend +
+  // stack order) and per-bucket field counts. Both monthly (12 buckets)
+  // and weekly (16 buckets) reuse the same bucket grids the growth
+  // chart uses, so first matches outside the grid are truncated.
+  firstMatchByFieldMonthly: FirstMatchByFieldCity[];
+  firstMatchByFieldWeekly: FirstMatchByFieldCity[];
+};
+
+export type FirstMatchByFieldBucket = {
+  period: string;
+  bucketStart: string;
+  total: number;
+  byField: Record<string, number>;
+};
+
+export type FirstMatchByFieldCity = {
+  city: string;
+  totalInWindow: number;
+  fields: string[];
+  buckets: FirstMatchByFieldBucket[];
 };
 
 // ---------------------------------------------------------------
@@ -186,6 +208,7 @@ export type MatchRow = {
   city_identifier: string | null;
   start_date: string | null;
   is_cancelled: boolean;
+  field_title: string | null;
 };
 
 export type SubRow = {
@@ -232,7 +255,7 @@ export async function fetchAll(supabase: SupabaseClient) {
   const matches = await selectAll<MatchRow>(() =>
     supabase
       .from("mdapi_matches")
-      .select("api_id, city_identifier, start_date, is_cancelled")
+      .select("api_id, city_identifier, start_date, is_cancelled, field_title")
       .order("api_id"),
   );
   console.log(
@@ -271,6 +294,9 @@ type DerivedUser = {
   member: boolean;
   firstMatchAt: Date | null;
   firstMatchCity: string | null; // ATX|...|ELP|Unknown|null (null = never played)
+  // Normalized field name of the first match (per normField). null
+  // when never played OR the match's field_title was empty.
+  firstMatchField: string | null;
   thirdMatchAt: Date | null;
 };
 
@@ -316,14 +342,21 @@ export function aggregate(
     return true;
   };
 
-  // --- Build match → city/date lookup ---
-  const matchInfo = new Map<number, { city: string | null; startDate: Date | null }>();
+  // --- Build match → city/date/field lookup ---
+  const matchInfo = new Map<
+    number,
+    { city: string | null; startDate: Date | null; field: string | null }
+  >();
   for (const m of matches) {
     if (!m.api_id) continue;
     if (m.is_cancelled) continue;
+    // normField returns "" when input is empty/whitespace; coerce to
+    // null so downstream can distinguish "no field" from a real name.
+    const normalized = m.field_title ? normField(m.field_title) : "";
     matchInfo.set(m.api_id, {
       city: m.city_identifier,
       startDate: m.start_date ? new Date(m.start_date) : null,
+      field: normalized || null,
     });
   }
 
@@ -332,7 +365,12 @@ export function aggregate(
   // match itself wasn't cancelled.
   const playsByUser = new Map<
     number,
-    Array<{ matchId: number; city: string | null; startDate: Date | null }>
+    Array<{
+      matchId: number;
+      city: string | null;
+      startDate: Date | null;
+      field: string | null;
+    }>
   >();
   for (const p of players) {
     if (!p.user_id || p.match_api_id == null) continue;
@@ -346,7 +384,12 @@ export function aggregate(
       arr = [];
       playsByUser.set(p.user_id, arr);
     }
-    arr.push({ matchId: p.match_api_id, city: m.city, startDate: m.startDate });
+    arr.push({
+      matchId: p.match_api_id,
+      city: m.city,
+      startDate: m.startDate,
+      field: m.field,
+    });
   }
   // Sort each user's plays ascending by date so first/third match
   // are well-defined.
@@ -396,6 +439,7 @@ export function aggregate(
       member,
       firstMatchAt: firstPlay?.startDate ?? null,
       firstMatchCity: firstPlay ? bucketCity(firstPlay.city ?? null) : null,
+      firstMatchField: firstPlay?.field ?? null,
       thirdMatchAt: thirdPlay?.startDate ?? null,
     };
   });
@@ -625,6 +669,68 @@ export function aggregate(
     };
   });
 
+  // --- First match by field: per-city stacked-bar series ---
+  // Per Phase 3 Step 2c-followup spec: "user counted once at first
+  // field". Windowed cohort + played 1+ + has firstMatchAt + has
+  // firstMatchField. Bucket by firstMatchAt over the same 12mo / 16wk
+  // grids the growth chart uses (truncates anything outside).
+  // Field bucketing key: firstMatchCity (the bucketed UI city, not
+  // raw city_identifier — keeps "Unknown" cohort together).
+  const buildFirstMatchByField = (
+    bs: Bucket[],
+  ): FirstMatchByFieldCity[] => {
+    return CITY_DISPLAY.map((city) => {
+      // 1. Filter cohort to users whose first match landed in THIS
+      //    city, ever (lifetime — bucket grid limits to recent window
+      //    via per-bucket date filter below).
+      const inCityFirstMatch = cohort.filter(
+        (u) => u.firstMatchCity === city && u.firstMatchAt,
+      );
+      // 2. Tally lifetime totals per field for legend ordering.
+      const totalsByField = new Map<string, number>();
+      for (const u of inCityFirstMatch) {
+        const f = u.firstMatchField ?? "(unknown field)";
+        totalsByField.set(f, (totalsByField.get(f) ?? 0) + 1);
+      }
+      // 3. Build per-bucket field counts. Buckets that don't intersect
+      //    any first-match dates simply have all-zero byField maps.
+      const buckets: FirstMatchByFieldBucket[] = bs.map((b) => {
+        const inBucket = inCityFirstMatch.filter(
+          (u) =>
+            u.firstMatchAt! >= b.start && u.firstMatchAt! < b.end,
+        );
+        const byField: Record<string, number> = {};
+        // Pre-fill with all known fields so the renderer's stack
+        // structure stays consistent across buckets (zero-fills get
+        // dropped in the UI before render).
+        for (const f of totalsByField.keys()) byField[f] = 0;
+        for (const u of inBucket) {
+          const f = u.firstMatchField ?? "(unknown field)";
+          byField[f] = (byField[f] ?? 0) + 1;
+        }
+        return {
+          period: b.period,
+          bucketStart: b.bucketStart,
+          total: inBucket.length,
+          byField,
+        };
+      });
+      // 4. Field order: largest lifetime total first. Stable across
+      //    buckets so the legend reads top → bottom of the stack.
+      const fields = [...totalsByField.entries()]
+        .sort((a, b) => b[1] - a[1] || a[0].localeCompare(b[0]))
+        .map(([f]) => f);
+      return {
+        city,
+        totalInWindow: inCityFirstMatch.length,
+        fields,
+        buckets,
+      };
+    });
+  };
+  const firstMatchByFieldMonthly = buildFirstMatchByField(monthlyGrid);
+  const firstMatchByFieldWeekly = buildFirstMatchByField(weeklyGrid);
+
   // --- Matrix: signup city × first-match city (windowed cohort) ---
   // Rows = signup city of the windowed cohort. First-match city is
   // lifetime per spec — users who registered in window may have first
@@ -662,6 +768,8 @@ export function aggregate(
     growthWeekly: weekBuckets,
     funnelSpeed,
     matrix: { rows, cols, cells, rowTotals, colTotals, grandTotal },
+    firstMatchByFieldMonthly,
+    firstMatchByFieldWeekly,
   };
 }
 
@@ -984,6 +1092,12 @@ function composePayloadFromSnapshot(
     },
     funnelSpeed: aggRow.funnel_speed as FunnelSpeedRow[],
     matrix: aggRow.matrix_data as UsersLensPayload['matrix'],
+    firstMatchByFieldMonthly:
+      (aggRow.first_match_by_field_monthly as FirstMatchByFieldCity[] | null) ??
+      [],
+    firstMatchByFieldWeekly:
+      (aggRow.first_match_by_field_weekly as FirstMatchByFieldCity[] | null) ??
+      [],
   };
 }
 

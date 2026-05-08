@@ -106,6 +106,12 @@ type AggregateRow = {
   funnel_speed: unknown;
   network_active_30d: number;
   network_played_1plus: number;
+  // First match by field — per-city stacked-bar series. Two views
+  // (12-month grid + 16-week grid). Migration 0024 added these as
+  // JSONB with default '[]'::jsonb so existing snapshot rows are
+  // valid until the next refresh repopulates them.
+  first_match_by_field_monthly: unknown;
+  first_match_by_field_weekly: unknown;
   computed_at: string;
 };
 
@@ -200,6 +206,8 @@ export async function refreshUsersLensSnapshot(
               payload.hero.active30dPctOfNetworkPlayed1
           : 0,
       ),
+      first_match_by_field_monthly: payload.firstMatchByFieldMonthly,
+      first_match_by_field_weekly: payload.firstMatchByFieldWeekly,
       computed_at: computedAtIso,
     });
   }
