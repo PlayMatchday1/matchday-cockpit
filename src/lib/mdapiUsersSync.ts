@@ -36,7 +36,13 @@ import {
 import { normalizeCityName } from "./cityNormalization";
 
 const PAGE_LIMIT = 250;
-const UPSERT_BATCH = 500;
+// DB-side upsert chunk size. Initial Phase 1 setting of 500 hit
+// Postgres statement_timeout at offset 16000 (table has 4 indexes +
+// jsonb raw column → index maintenance scales fast per-statement).
+// 100 is conservative; if this still times out drop to 50, if it's
+// fast we can raise later. Don't pre-optimize — this is the
+// minimum-blast-radius fix.
+const UPSERT_BATCH = 100;
 
 type ApiPlayer = {
   id?: number;
@@ -199,19 +205,29 @@ export async function syncMdapiUsers(
   }
 
   // --- 3. Upsert in batches ---
+  // Per-chunk timing log goes to Vercel logs (not the UI) so the next
+  // statement_timeout-style failure has more diagnostic data than
+  // "offset N failed". Format: chunk index / total / row count / ms.
   const dbRows = [...dedupedById.values()];
+  const totalChunks = Math.ceil(dbRows.length / UPSERT_BATCH);
   let upserted = 0;
   for (let i = 0; i < dbRows.length; i += UPSERT_BATCH) {
     const chunk = dbRows.slice(i, i + UPSERT_BATCH);
+    const chunkIndex = Math.floor(i / UPSERT_BATCH) + 1;
+    const t0 = Date.now();
     const { error } = await supabase
       .from("mdapi_users")
       .upsert(chunk, { onConflict: "id" });
+    const ms = Date.now() - t0;
     if (error) {
       throw new Error(
         `mdapi_users upsert failed at offset ${i}: ${error.message}`,
       );
     }
     upserted += chunk.length;
+    console.log(
+      `[mdapi-users] upserted chunk ${chunkIndex}/${totalChunks} (${chunk.length} rows) in ${ms}ms`,
+    );
   }
 
   return {
