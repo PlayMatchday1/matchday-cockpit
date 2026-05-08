@@ -1291,11 +1291,11 @@ function FunnelSpeedTable({
 // Window selector + Monthly/Weekly toggle drive the data.
 // ---------------------------------------------------------------
 
-// Line-chart layout dimensions. Each city renders a fixed-size SVG;
-// labels live inside the SVG so vertical centering with the legend
-// below stays consistent across cards.
-const FMBF_PLOT_HEIGHT = 130;
-const FMBF_LABEL_PAD_TOP = 18; // margin above the plot for marker labels
+// Line-chart layout dimensions. The card is now table-first; the
+// chart sits below as a visual trend supplement, ~30% shorter than
+// the line-only version since the table does the precision work.
+const FMBF_PLOT_HEIGHT = 90;
+const FMBF_LABEL_PAD_TOP = 16; // margin above the plot for marker labels
 const FMBF_X_LABEL_HEIGHT = 14;
 const FMBF_Y_AXIS_WIDTH = 30;
 const FMBF_SVG_WIDTH = 340;
@@ -1363,16 +1363,22 @@ function FirstMatchByField({
         </div>
       </div>
 
-      <div className="grid grid-cols-1 gap-4 sm:grid-cols-2 lg:grid-cols-3">
+      <div className="grid grid-cols-1 gap-4 lg:grid-cols-2">
         {ordered.map((c) => (
-          <CityFirstMatchChart key={c.city} city={c} />
+          <CityFirstMatchChart key={c.city} city={c} periodType={period} />
         ))}
       </div>
     </section>
   );
 }
 
-function CityFirstMatchChart({ city }: { city: FirstMatchByFieldCity }) {
+function CityFirstMatchChart({
+  city,
+  periodType,
+}: {
+  city: FirstMatchByFieldCity;
+  periodType: "monthly" | "weekly";
+}) {
   // Max value across ANY (bucket, field) pair in this city — sets the
   // y-axis ceiling so small fields stay readable while big fields
   // anchor the top of the plot. NOT the max bucket total (that would
@@ -1425,6 +1431,96 @@ function CityFirstMatchChart({ city }: { city: FirstMatchByFieldCity }) {
         </div>
       ) : (
         <>
+          {/* Per-field × per-period table — fields as rows (largest
+              total first, mirroring the route's `fields` ordering).
+              Empty cells render as a muted em-dash rather than "0"
+              so the eye skips them. Last column = row total; last
+              row = column totals. Horizontal scroll inside the card
+              for narrow viewports. */}
+          <div className="mb-3 overflow-x-auto">
+            <table className="w-full border-collapse text-[10px]">
+              <thead>
+                <tr className="border-b border-cream-line text-[9px] uppercase tracking-wider text-deep-green/55">
+                  <th className="px-2 py-1 text-left font-bold">Field</th>
+                  {city.buckets.map((b) => (
+                    <th
+                      key={b.bucketStart}
+                      className="px-1.5 py-1 text-right font-mono tabular-nums"
+                    >
+                      {periodType === "monthly"
+                        ? b.period.slice(0, 3)
+                        : b.period}
+                    </th>
+                  ))}
+                  <th className="px-2 py-1 text-right font-bold">Total</th>
+                </tr>
+              </thead>
+              <tbody>
+                {city.fields.map((f) => {
+                  const rowTotal = city.buckets.reduce(
+                    (s, b) => s + (b.byField[f] ?? 0),
+                    0,
+                  );
+                  return (
+                    <tr
+                      key={f}
+                      className="border-b border-cream-line/40"
+                    >
+                      <td className="whitespace-nowrap px-2 py-1 font-bold text-deep-green">
+                        <span className="inline-flex items-center gap-1.5">
+                          <span
+                            aria-hidden
+                            className="inline-block h-2 w-2 rounded-sm"
+                            style={{ background: colorForField(f) }}
+                          />
+                          {f}
+                        </span>
+                      </td>
+                      {city.buckets.map((b) => {
+                        const v = b.byField[f] ?? 0;
+                        return (
+                          <td
+                            key={b.bucketStart}
+                            className="px-1.5 py-1 text-right font-mono tabular-nums text-deep-green"
+                          >
+                            {v === 0 ? (
+                              <span className="text-deep-green/30">—</span>
+                            ) : (
+                              v.toLocaleString()
+                            )}
+                          </td>
+                        );
+                      })}
+                      <td className="px-2 py-1 text-right font-mono tabular-nums font-bold text-deep-green">
+                        {rowTotal.toLocaleString()}
+                      </td>
+                    </tr>
+                  );
+                })}
+                <tr className="border-t-2 border-cream-line bg-cream-soft/40">
+                  <td className="px-2 py-1 text-[9px] font-bold uppercase tracking-wider text-deep-green/70">
+                    Total
+                  </td>
+                  {city.buckets.map((b) => (
+                    <td
+                      key={b.bucketStart}
+                      className="px-1.5 py-1 text-right font-mono tabular-nums font-bold text-deep-green"
+                    >
+                      {b.total === 0 ? (
+                        <span className="text-deep-green/30">—</span>
+                      ) : (
+                        b.total.toLocaleString()
+                      )}
+                    </td>
+                  ))}
+                  <td className="px-2 py-1 text-right font-mono tabular-nums font-bold text-deep-green">
+                    {city.totalInWindow.toLocaleString()}
+                  </td>
+                </tr>
+              </tbody>
+            </table>
+          </div>
+
           <svg
             viewBox={`0 0 ${FMBF_SVG_WIDTH} ${FMBF_SVG_HEIGHT}`}
             preserveAspectRatio="none"
