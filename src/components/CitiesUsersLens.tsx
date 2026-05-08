@@ -725,14 +725,35 @@ function ActivationFunnel({ funnel }: { funnel: Funnel }) {
   // played-N). Active Member breaks that chain — its prevCount stays
   // anchored to Played 1+ since member status is independent of how
   // many matches the user has played.
-  const stages = [
-    { name: "Account Created", count: funnel.accountCreated, prevCount: null as number | null },
+  // Per-stage labels:
+  //   prevLabel — what the percentage is "of" (defaults to "prev"
+  //     since the first 5 stages chain step-by-step). Active Member
+  //     overrides because it's anchored to Played 1+, not Played 10+.
+  //   dropLabel — text shown under the bar when count < prevCount.
+  //     Defaults to "<N> dropped off here". Active Member overrides
+  //     to "<N> played 1+ but never became members" — same math, but
+  //     accurate framing for the cross-funnel anchor.
+  const stages: Array<{
+    name: string;
+    count: number;
+    prevCount: number | null;
+    prevLabel?: string;
+    dropLabel?: (drop: number) => string;
+  }> = [
+    { name: "Account Created", count: funnel.accountCreated, prevCount: null },
     { name: "Completed Signup", count: funnel.completedSignup, prevCount: funnel.accountCreated },
     { name: "Played 1+ Match", count: funnel.played1, prevCount: funnel.completedSignup },
     { name: "Played 3+ Matches", count: funnel.played3, prevCount: funnel.played1 },
     { name: "Played 5+ Matches", count: funnel.played5, prevCount: funnel.played3 },
     { name: "Played 10+ Matches", count: funnel.played10, prevCount: funnel.played5 },
-    { name: "Active Member", count: funnel.activeMember, prevCount: funnel.played1 },
+    {
+      name: "Active Member",
+      count: funnel.activeMember,
+      prevCount: funnel.played1,
+      prevLabel: "Played 1+",
+      dropLabel: (drop) =>
+        `${drop.toLocaleString()} played 1+ but never became members`,
+    },
   ];
   // Identify the worst-performing stage by absolute drop-off count for
   // coral highlighting. Skip the baseline (no prevCount).
@@ -775,7 +796,7 @@ function ActivationFunnel({ funnel }: { funnel: Funnel }) {
                   {s.count.toLocaleString()}
                   {s.prevCount !== null && (
                     <span className="ml-2 text-deep-green/55">
-                      ({pctOfPrev.toFixed(1)}% of prev)
+                      ({pctOfPrev.toFixed(1)}% of {s.prevLabel ?? "prev"})
                     </span>
                   )}
                 </span>
@@ -790,7 +811,9 @@ function ActivationFunnel({ funnel }: { funnel: Funnel }) {
               </div>
               {drop > 0 && (
                 <div className="mt-1 text-[11px] text-deep-green/50">
-                  {drop.toLocaleString()} dropped off here
+                  {s.dropLabel
+                    ? s.dropLabel(drop)
+                    : `${drop.toLocaleString()} dropped off here`}
                 </div>
               )}
             </div>
