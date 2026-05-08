@@ -54,11 +54,40 @@ type ByCityRow = {
 type GrowthBucket = {
   period: string;
   bucketStart: string;
-  signups: number;
-  completedPct: number;
-  played1Pct: number;
+  total: number;
   byCity: Record<string, number>;
+  completedPct?: number;
+  played1Pct?: number;
 };
+type GrowthSeries = {
+  signups: GrowthBucket[];
+  completed: GrowthBucket[];
+  played: GrowthBucket[];
+};
+
+type GrowthMetric = "signups" | "completed" | "played";
+
+const METRIC_PILLS: { value: GrowthMetric; label: string; explainer: string }[] =
+  [
+    {
+      value: "signups",
+      label: "Signups",
+      explainer:
+        "Anyone who created an account, including users who never finished onboarding.",
+    },
+    {
+      value: "completed",
+      label: "Completed signups",
+      explainer:
+        "Users who finished onboarding (selected a city, etc). Excludes ~70% of signups who abandon partway.",
+    },
+    {
+      value: "played",
+      label: "Played 1+",
+      explainer:
+        "First-time players, bucketed by their first match date. The truest growth metric.",
+    },
+  ];
 type FunnelSpeedRow = {
   city: string;
   medianDaysCreatedToCompleted: number | null;
@@ -81,8 +110,8 @@ type LensPayload = {
   hero: Hero;
   funnel: Funnel;
   byCity: ByCityRow[];
-  growthMonthly: GrowthBucket[];
-  growthWeekly: GrowthBucket[];
+  growthMonthly: GrowthSeries;
+  growthWeekly: GrowthSeries;
   funnelSpeed: FunnelSpeedRow[];
   matrix: Matrix;
 };
@@ -155,6 +184,16 @@ export default function CitiesUsersLens() {
     (searchParams?.get("window") as WindowName | null) ?? "all";
   const urlFrom = searchParams?.get("from") ?? null;
   const urlTo = searchParams?.get("to") ?? null;
+  // --- Growth metric (Phase 2c) ---
+  // Default = "signups". Validated against the pill set so a stale
+  // URL value can't break the page.
+  const urlMetric = searchParams?.get("growth_metric") as GrowthMetric | null;
+  const validMetric = (
+    METRIC_PILLS.map((p) => p.value) as string[]
+  ).includes(urlMetric ?? "");
+  const activeMetric: GrowthMetric = validMetric
+    ? (urlMetric as GrowthMetric)
+    : "signups";
 
   const isValidWindow = (WINDOW_PILLS.map((p) => p.value) as string[]).includes(
     urlWindow,
@@ -243,6 +282,17 @@ export default function CitiesUsersLens() {
     [router, searchParams],
   );
 
+  const setMetric = useCallback(
+    (next: GrowthMetric) => {
+      const params = new URLSearchParams(searchParams?.toString() ?? "");
+      if (next === "signups") params.delete("growth_metric");
+      else params.set("growth_metric", next);
+      const qs = params.toString();
+      router.push(qs ? `?${qs}` : "?", { scroll: false });
+    },
+    [router, searchParams],
+  );
+
   // --- Header always renders (with window selector) ---
   // Loading + error states swap into the body, but the pill row and
   // last-synced indicator stay visible so navigation between windows
@@ -313,6 +363,15 @@ export default function CitiesUsersLens() {
           <GrowthChart
             monthly={data.growthMonthly}
             weekly={data.growthWeekly}
+            metric={activeMetric}
+            onMetricChange={setMetric}
+            windowFromIso={data.window.fromIso}
+            windowToIso={data.window.toIso}
+          />
+          <SmallMultiples
+            monthly={data.growthMonthly}
+            weekly={data.growthWeekly}
+            metric={activeMetric}
             windowFromIso={data.window.fromIso}
             windowToIso={data.window.toIso}
           />
@@ -809,17 +868,22 @@ const BAR_AREA_PX = 150;
 function GrowthChart({
   monthly,
   weekly,
+  metric,
+  onMetricChange,
   windowFromIso,
   windowToIso,
 }: {
-  monthly: GrowthBucket[];
-  weekly: GrowthBucket[];
+  monthly: GrowthSeries;
+  weekly: GrowthSeries;
+  metric: GrowthMetric;
+  onMetricChange: (next: GrowthMetric) => void;
   windowFromIso: string | null;
   windowToIso: string | null;
 }) {
   const [view, setView] = useState<"monthly" | "weekly">("monthly");
-  const buckets = view === "monthly" ? monthly : weekly;
-  const max = Math.max(1, ...buckets.map((b) => b.signups));
+  const buckets = (view === "monthly" ? monthly : weekly)[metric];
+  const max = Math.max(1, ...buckets.map((b) => b.total));
+  const activePill = METRIC_PILLS.find((p) => p.value === metric);
   // Phase 2b: bars whose bucketStart falls outside the selected window
   // are dimmed to 30% opacity. When no window is set (All time), all
   // bars render at full opacity.
@@ -854,6 +918,34 @@ function GrowthChart({
         </div>
       </div>
 
+      {/* Metric toggle. Drives both this chart and the small-multiples
+          grid below. URL-persisted via ?growth_metric=. */}
+      <div className="mb-2 flex flex-wrap items-center gap-2">
+        {METRIC_PILLS.map((p) => {
+          const isActive = p.value === metric;
+          return (
+            <button
+              key={p.value}
+              type="button"
+              onClick={() => onMetricChange(p.value)}
+              aria-pressed={isActive}
+              className={
+                isActive
+                  ? "rounded-full bg-mint px-4 py-1.5 text-xs font-bold text-deep-green"
+                  : "rounded-full border border-cream-line bg-white px-4 py-1.5 text-xs font-bold text-deep-green/65 hover:bg-cream-soft hover:text-deep-green"
+              }
+            >
+              {p.label}
+            </button>
+          );
+        })}
+      </div>
+      {activePill && (
+        <p className="mb-3 text-[11px] text-deep-green/55">
+          {activePill.explainer}
+        </p>
+      )}
+
       {/* Legend — same color/order as the stacked segments below. */}
       <div className="mb-3 flex flex-wrap items-center gap-x-3 gap-y-1 text-[11px] text-deep-green/65">
         {CITY_STACK_ORDER.map((c) => (
@@ -873,21 +965,33 @@ function GrowthChart({
           const dim = !inWindow(b.bucketStart);
           // Build the per-city tooltip line. Order matches the stack
           // (ATX first → Unknown last). Only non-zero entries surface
-          // so a month with no SATX signups doesn't pollute the line.
+          // so a month with no SATX entries doesn't pollute the line.
           const cityLines = CITY_STACK_ORDER.filter(
             (c) => (b.byCity[c] ?? 0) > 0,
           )
             .map((c) => `${c} ${(b.byCity[c] ?? 0).toLocaleString()}`)
             .join(", ");
+          // Tooltip header: total + active metric label. For the
+          // Signups series we also surface the bucket-set's
+          // completed/played-1+ rates (only meaningful there).
+          const metricLabel = activePill?.label.toLowerCase() ?? "signups";
+          const ratesLine =
+            metric === "signups" &&
+            b.completedPct !== undefined &&
+            b.played1Pct !== undefined
+              ? `\n${b.completedPct}% completed · ${b.played1Pct}% played 1+`
+              : "";
           const tooltip =
             `${b.period}\n` +
-            `${b.signups.toLocaleString()} signups · ${b.completedPct}% completed · ${b.played1Pct}% played 1+\n` +
+            `${b.total.toLocaleString()} ${metricLabel}` +
+            ratesLine +
+            "\n" +
             (cityLines ? `By city: ${cityLines}` : "By city: (none)") +
             (dim ? "\noutside selected window" : "");
           // Total height for this bucket's stack (px). All buckets
           // share the same scale so visual heights are comparable
           // across periods.
-          const totalPx = (b.signups / max) * BAR_AREA_PX;
+          const totalPx = (b.total / max) * BAR_AREA_PX;
           // Render segments bottom-up via flex-col-reverse: first
           // child (ATX) lands at the bottom, last (Unknown) at top.
           return (
@@ -898,7 +1002,7 @@ function GrowthChart({
               style={{ opacity: dim ? 0.3 : 1 }}
             >
               <div className="mb-1 text-[10px] font-mono tabular-nums text-deep-green/65">
-                {b.signups.toLocaleString()}
+                {b.total.toLocaleString()}
               </div>
               <div
                 className="flex w-full flex-col-reverse overflow-hidden rounded-t"
@@ -1123,6 +1227,187 @@ function SignupMatrix({ matrix }: { matrix: Matrix }) {
         </table>
       </div>
     </section>
+  );
+}
+
+// ---------------------------------------------------------------
+// Small multiples — 9 mini bar charts in a 3×3 grid, one per city.
+// Each city gets its own y-axis (so ELP at hundreds and ATX at
+// thousands stay both readable). Driven by the same metric toggle +
+// view (Monthly/Weekly) + window dimming as the stacked chart above.
+// ---------------------------------------------------------------
+
+function SmallMultiples({
+  monthly,
+  weekly,
+  metric,
+  windowFromIso,
+  windowToIso,
+}: {
+  monthly: GrowthSeries;
+  weekly: GrowthSeries;
+  metric: GrowthMetric;
+  windowFromIso: string | null;
+  windowToIso: string | null;
+}) {
+  // Mirror the parent chart's view choice. Could be lifted into a
+  // shared parent state later; for now both default to Monthly so
+  // they read together on first paint.
+  const [view, setView] = useState<"monthly" | "weekly">("monthly");
+  const buckets = (view === "monthly" ? monthly : weekly)[metric];
+  const fromMs = windowFromIso ? new Date(windowFromIso).getTime() : null;
+  const toMs = windowToIso ? new Date(windowToIso).getTime() : null;
+  const inWindow = (bucketStart: string): boolean => {
+    if (fromMs === null && toMs === null) return true;
+    const t = new Date(`${bucketStart}T00:00:00.000Z`).getTime();
+    if (fromMs !== null && t < fromMs) return false;
+    if (toMs !== null && t > toMs) return false;
+    return true;
+  };
+
+  const metricLabel =
+    METRIC_PILLS.find((p) => p.value === metric)?.label.toLowerCase() ??
+    "signups";
+
+  return (
+    <section className="rounded-2xl border-[1.5px] border-cream-line bg-white p-6 shadow-md shadow-deep-green/10">
+      <div className="mb-4 flex flex-wrap items-baseline justify-between gap-3">
+        <div>
+          <h3 className="text-lg font-bold text-deep-green">By city</h3>
+          <p className="mt-0.5 text-xs text-deep-green/60">
+            Each city scaled to its own y-axis. Hover bars for exact counts.
+          </p>
+        </div>
+        <div className="inline-flex rounded-full bg-cream-soft p-1 ring-1 ring-cream-line">
+          {(["monthly", "weekly"] as const).map((v) => (
+            <button
+              key={v}
+              type="button"
+              onClick={() => setView(v)}
+              className={
+                view === v
+                  ? "rounded-full bg-mint px-3 py-1 text-[11px] font-bold text-deep-green"
+                  : "rounded-full px-3 py-1 text-[11px] font-bold text-deep-green/60 hover:text-deep-green"
+              }
+            >
+              {v === "monthly" ? "Monthly · 12mo" : "Weekly · 16wk"}
+            </button>
+          ))}
+        </div>
+      </div>
+
+      <div className="grid grid-cols-1 gap-4 sm:grid-cols-2 lg:grid-cols-3">
+        {CITY_STACK_ORDER.map((city) => (
+          <CityMini
+            key={city}
+            city={city}
+            buckets={buckets}
+            metricLabel={metricLabel}
+            inWindow={inWindow}
+            view={view}
+          />
+        ))}
+      </div>
+    </section>
+  );
+}
+
+const MINI_BAR_AREA_PX = 110;
+
+function CityMini({
+  city,
+  buckets,
+  metricLabel,
+  inWindow,
+  view,
+}: {
+  city: string;
+  buckets: GrowthBucket[];
+  metricLabel: string;
+  inWindow: (bucketStart: string) => boolean;
+  view: "monthly" | "weekly";
+}) {
+  const counts = buckets.map((b) => b.byCity[city] ?? 0);
+  const total = counts.reduce((s, n) => s + n, 0);
+  const max = Math.max(1, ...counts);
+  // Two-tick y-axis: 0 + max. If the data warrants it we add a mid
+  // tick. Cheap visual scale anchor without over-decorating.
+  const midTick = max >= 4 ? Math.round(max / 2) : null;
+  const color = colorForCity(city);
+  // Label-density rule: weekly view has 16 buckets — show every other
+  // label so they don't crowd. Monthly view (12) is fine showing all.
+  const labelStride = view === "weekly" ? 2 : 1;
+
+  return (
+    <div className="rounded-lg border border-cream-line bg-cream-soft/30 p-3">
+      <div className="mb-1 flex items-baseline justify-between gap-2">
+        <span className="text-sm font-bold text-deep-green">{city}</span>
+        <span className="text-[10px] font-mono tabular-nums text-deep-green/55">
+          {total.toLocaleString()} {metricLabel}
+        </span>
+      </div>
+      <div className="flex">
+        {/* y-axis tick labels */}
+        <div
+          className="mr-1 flex flex-col justify-between text-right text-[9px] tabular-nums text-deep-green/45"
+          style={{ height: `${MINI_BAR_AREA_PX}px`, width: "28px" }}
+        >
+          <span>{max.toLocaleString()}</span>
+          {midTick !== null && <span>{midTick.toLocaleString()}</span>}
+          <span>0</span>
+        </div>
+        {/* bars */}
+        <div className="flex flex-1 items-end gap-[2px]">
+          {buckets.map((b) => {
+            const n = b.byCity[city] ?? 0;
+            const dim = !inWindow(b.bucketStart);
+            const h = (n / max) * MINI_BAR_AREA_PX;
+            return (
+              <div
+                key={b.bucketStart}
+                className="flex flex-1 flex-col items-stretch"
+                style={{ opacity: dim ? 0.3 : 1 }}
+                title={`${city} · ${b.period}: ${n.toLocaleString()} ${metricLabel}${dim ? " (outside selected window)" : ""}`}
+              >
+                <div
+                  style={{
+                    height: `${MINI_BAR_AREA_PX}px`,
+                    display: "flex",
+                    alignItems: "flex-end",
+                  }}
+                >
+                  <div
+                    style={{
+                      width: "100%",
+                      height: `${h}px`,
+                      background: n === 0 ? "transparent" : color,
+                      borderRadius: "2px 2px 0 0",
+                    }}
+                  />
+                </div>
+              </div>
+            );
+          })}
+        </div>
+      </div>
+      {/* x-axis labels under the bars */}
+      <div className="mt-1 flex pl-[32px]">
+        <div className="flex flex-1 gap-[2px]">
+          {buckets.map((b, i) => (
+            <div
+              key={b.bucketStart}
+              className="flex-1 text-center text-[9px] text-deep-green/45"
+            >
+              {i % labelStride === 0
+                ? view === "monthly"
+                  ? b.period.slice(0, 3) // "Mar 2026" → "Mar"
+                  : b.period
+                : ""}
+            </div>
+          ))}
+        </div>
+      </div>
+    </div>
   );
 }
 

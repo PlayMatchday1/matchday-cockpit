@@ -60,17 +60,34 @@ export type ByCityRow = {
   activationRate: number;
 };
 
+// One bucket of a growth series. The same shape works for all three
+// growth metrics (signups / completed / played); the bucketing date
+// varies per metric (created_at for signups+completed, first_match
+// date for played) but the rendered shape is identical.
 export type GrowthBucket = {
   period: string;
   bucketStart: string; // ISO date
-  signups: number;
-  completedPct: number;
-  played1Pct: number;
-  // Per-city signup count for the period. Keys are the same set the
-  // lens consumes (KNOWN_CITY_CODES + "Unknown"). Cities with zero
-  // signups in the period get a 0 entry — predictable shape for the
-  // stacking renderer. Sums to `signups`.
+  total: number;
+  // Per-city count for the period. Keys are the same set the lens
+  // consumes (KNOWN_CITY_CODES + "Unknown"). Cities with zero in
+  // the period get a 0 entry — predictable shape for the stacking
+  // renderer + small multiples. Sums to `total`.
   byCity: Record<string, number>;
+  // Rate metadata only meaningful on the Signups series — the bucket
+  // member set is "users who signed up in this period", so we can
+  // ask what fraction completed onboarding / went on to play. For
+  // the Completed/Played series these would be ~100% by definition,
+  // so they're omitted.
+  completedPct?: number;
+  played1Pct?: number;
+};
+
+// Three parallel series share the same bucket grid (12 months / 16
+// weeks). The lens picks one based on the metric toggle.
+export type GrowthSeries = {
+  signups: GrowthBucket[];
+  completed: GrowthBucket[];
+  played: GrowthBucket[];
 };
 
 export type FunnelSpeedRow = {
@@ -111,10 +128,13 @@ export type UsersLensPayload = {
     activeMember: number;
   };
   byCity: ByCityRow[];
-  // Growth buckets are NOT cohort-filtered. The client dims buckets
-  // outside the selected window via window.fromIso / window.toIso.
-  growthMonthly: GrowthBucket[];
-  growthWeekly: GrowthBucket[];
+  // Growth series. Per Phase 2c spec, all three metrics respect the
+  // selected window — bucket counts are over the WINDOWED cohort,
+  // overriding Phase 2b's "growth chart unfiltered" decision. Out-of-
+  // window buckets render empty (and the lens keeps the dim-bar
+  // visual indicator from Phase 2b for the same buckets).
+  growthMonthly: GrowthSeries;
+  growthWeekly: GrowthSeries;
   funnelSpeed: FunnelSpeedRow[];
   matrix: {
     rows: string[];
@@ -413,52 +433,98 @@ function aggregate(
     return m;
   };
 
-  // --- Growth: monthly buckets (last 12 months, NOT cohort-filtered) ---
-  // Bars always show the full 12-month signup history. Client dims
-  // bars outside the selected window via window.fromIso/toIso.
-  const monthBuckets: GrowthBucket[] = [];
+  // Build three parallel series for one bucket grid.
+  // - signups: bucket users by createdAt; tooltip shows
+  //   completedPct + played1Pct of the bucket member set.
+  // - completed: same bucketing date (createdAt) but only counts
+  //   users with completed_sign_up_at present. Bucket label is the
+  //   created-at month — same x-axis as signups so the two are
+  //   directly comparable.
+  // - played: bucket users by FIRST MATCH DATE (firstMatchAt). Cohort
+  //   is windowed users who actually played; users with no firstMatch
+  //   date drop out entirely.
+  //
+  // Per Phase 2c spec, all three metrics use the WINDOWED cohort.
+  type Bucket = { start: Date; end: Date; period: string; bucketStart: string };
+  const buildSeries = (
+    bs: Bucket[],
+  ): GrowthSeries => {
+    const signups: GrowthBucket[] = [];
+    const completed: GrowthBucket[] = [];
+    const played: GrowthBucket[] = [];
+    for (const b of bs) {
+      // SIGNUPS — by createdAt over windowed cohort.
+      const signupRows = cohort.filter(
+        (u) => u.createdAt >= b.start && u.createdAt < b.end,
+      );
+      signups.push({
+        period: b.period,
+        bucketStart: b.bucketStart,
+        total: signupRows.length,
+        byCity: buildByCity(signupRows),
+        completedPct: safePct(
+          signupRows.filter((u) => u.completedAt).length,
+          signupRows.length,
+        ),
+        played1Pct: safePct(
+          signupRows.filter((u) => u.played1).length,
+          signupRows.length,
+        ),
+      });
+      // COMPLETED — same bucket date (createdAt) but only completers.
+      const completedRows = signupRows.filter((u) => u.completedAt);
+      completed.push({
+        period: b.period,
+        bucketStart: b.bucketStart,
+        total: completedRows.length,
+        byCity: buildByCity(completedRows),
+      });
+      // PLAYED 1+ — bucket by firstMatchAt. Windowed cohort + has
+      // played at least once.
+      const playedRows = cohort.filter(
+        (u) =>
+          u.played1 &&
+          u.firstMatchAt &&
+          u.firstMatchAt >= b.start &&
+          u.firstMatchAt < b.end,
+      );
+      played.push({
+        period: b.period,
+        bucketStart: b.bucketStart,
+        total: playedRows.length,
+        byCity: buildByCity(playedRows),
+      });
+    }
+    return { signups, completed, played };
+  };
+
+  // --- Bucket grids: 12 monthly + 16 weekly ---
+  const monthlyGrid: Bucket[] = [];
   for (let i = 11; i >= 0; i--) {
-    const d = new Date(now.getFullYear(), now.getMonth() - i, 1);
-    const next = new Date(now.getFullYear(), now.getMonth() - i + 1, 1);
-    const inBucket = derived.filter(
-      (u) => u.createdAt >= d && u.createdAt < next,
-    );
-    const signups = inBucket.length;
-    const compl = inBucket.filter((u) => u.completedAt).length;
-    const p1 = inBucket.filter((u) => u.played1).length;
-    monthBuckets.push({
-      period: `${d.toLocaleString("en-US", { month: "short" })} ${d.getFullYear()}`,
-      bucketStart: d.toISOString().slice(0, 10),
-      signups,
-      completedPct: safePct(compl, signups),
-      played1Pct: safePct(p1, signups),
-      byCity: buildByCity(inBucket),
+    const start = new Date(now.getFullYear(), now.getMonth() - i, 1);
+    const end = new Date(now.getFullYear(), now.getMonth() - i + 1, 1);
+    monthlyGrid.push({
+      start,
+      end,
+      period: `${start.toLocaleString("en-US", { month: "short" })} ${start.getFullYear()}`,
+      bucketStart: start.toISOString().slice(0, 10),
     });
   }
-
-  // --- Growth: weekly buckets (last 16 ISO weeks, NOT cohort-filtered) ---
-  const weekBuckets: GrowthBucket[] = [];
-  // Anchor on this week's Monday.
   const dow = (now.getDay() + 6) % 7; // 0=Mon..6=Sun
   const thisMon = new Date(now.getFullYear(), now.getMonth(), now.getDate() - dow);
+  const weeklyGrid: Bucket[] = [];
   for (let i = 15; i >= 0; i--) {
     const start = new Date(thisMon.getFullYear(), thisMon.getMonth(), thisMon.getDate() - i * 7);
     const end = new Date(start.getFullYear(), start.getMonth(), start.getDate() + 7);
-    const inBucket = derived.filter(
-      (u) => u.createdAt >= start && u.createdAt < end,
-    );
-    const signups = inBucket.length;
-    const compl = inBucket.filter((u) => u.completedAt).length;
-    const p1 = inBucket.filter((u) => u.played1).length;
-    weekBuckets.push({
+    weeklyGrid.push({
+      start,
+      end,
       period: `${start.getMonth() + 1}/${start.getDate()}`,
       bucketStart: start.toISOString().slice(0, 10),
-      signups,
-      completedPct: safePct(compl, signups),
-      played1Pct: safePct(p1, signups),
-      byCity: buildByCity(inBucket),
     });
   }
+  const monthBuckets = buildSeries(monthlyGrid);
+  const weekBuckets = buildSeries(weeklyGrid);
 
   // --- Funnel speed: per-city medians, windowed cohort ---
   // Cohort source is the same windowed cohort the hero/byCity use.
