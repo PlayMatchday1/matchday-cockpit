@@ -17,6 +17,7 @@ type Source =
   | "mdapi-subscriptions"
   | "mdapi-promocodes"
   | "mdapi-matches"
+  | "mdapi-users"
   | "membership-snapshots";
 
 type LastSyncRow = {
@@ -29,7 +30,14 @@ type SyncResponseOk = {
   triggeredBy: "manual" | "cron";
   durationMs: number;
   ok: true;
-  result: { upserted?: number; fetched?: number };
+  // unmappedCities is populated only by mdapi-users (raw city names
+  // returned by the API that didn't normalize). Other sources leave
+  // it undefined.
+  result: {
+    upserted?: number;
+    fetched?: number;
+    unmappedCities?: string[];
+  };
 };
 type SyncResponseErr = {
   triggeredBy?: "manual" | "cron";
@@ -177,6 +185,31 @@ export default function SyncCard({
           </div>
         </div>
       )}
+
+      {/* Unmapped-city warning. mdapi-users surfaces raw API city names
+          that didn't normalize; an empty array means every city in the
+          sync round-tripped to a canonical short code. A non-empty
+          array means CITY_MAP in src/lib/cityNormalization.ts is
+          missing entries — those users will bucket as null in the
+          Cities → Users sub-tab until added. */}
+      {result &&
+        result.ok &&
+        result.result?.unmappedCities &&
+        result.result.unmappedCities.length > 0 && (
+          <div className="mt-3 rounded-md border border-coral/40 bg-coral-soft p-3 text-xs text-coral">
+            <div className="font-bold">
+              ⚠ {result.result.unmappedCities.length} unmapped{" "}
+              {result.result.unmappedCities.length === 1 ? "city" : "cities"}
+            </div>
+            <div className="mt-1 font-mono text-coral/85">
+              {result.result.unmappedCities.join(", ")}
+            </div>
+            <div className="mt-1 text-coral/70">
+              Add to CITY_MAP in src/lib/cityNormalization.ts so these
+              users bucket correctly on the Users sub-tab.
+            </div>
+          </div>
+        )}
     </section>
   );
 }

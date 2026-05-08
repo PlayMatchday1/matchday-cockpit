@@ -23,8 +23,8 @@ export default function DataPage() {
 
       {/* Section order matches the cron orchestrator's daily run:
           stripe → reviews → subscriptions → promocodes → matches →
-          snapshots. Each card surfaces its last fin_sync_log row so
-          operators can see freshness at a glance. */}
+          users → snapshots. Each card surfaces its last fin_sync_log
+          row so operators can see freshness at a glance. */}
 
       {/* 1. Stripe */}
       {showFinanceSections && (
@@ -100,7 +100,22 @@ export default function DataPage() {
         />
       </section>
 
-      {/* 6. Membership snapshots (NEW Phase 5c) */}
+      {/* 6. Registered users (full re-sync) */}
+      <section className="mb-12">
+        <SectionHeader
+          title="Registered users data"
+          subtitle="Every MatchDay account, including users who never played a match."
+        />
+        <SyncCard
+          title="Sync Registered Users"
+          description="Pulls all registered users from MatchDay API into mdapi_users (~23,711 rows). Full re-sync each run — paginates /admin/players at limit=250."
+          source="mdapi-users"
+          endpoint="/api/sync/users"
+          estimatedDuration="~30-60 seconds"
+        />
+      </section>
+
+      {/* 7. Membership snapshots (NEW Phase 5c) */}
       {showFinanceSections && (
         <section>
           <SectionHeader

@@ -78,7 +78,7 @@ export type MdapiUsersSyncResult = {
   totalItems: number;
   pagesFetched: number;
   rowsReceived: number;     // pre-dedupe (paginated total)
-  rowsUpserted: number;
+  upserted: number;
   rowsSkipped: number;      // rows missing required fields
   unmappedCities: string[]; // raw city names that didn't map (deduped)
   apiCalls: number;
@@ -218,7 +218,7 @@ export async function syncMdapiUsers(
     totalItems,
     pagesFetched: totalPages,
     rowsReceived,
-    rowsUpserted: upserted,
+    upserted: upserted,
     rowsSkipped,
     unmappedCities: [...unmappedSet].sort(),
     apiCalls,

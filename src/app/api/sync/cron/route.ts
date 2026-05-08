@@ -224,7 +224,7 @@ export async function POST(req: Request) {
     triggeredBy,
     supabase,
     syncMdapiUsers,
-    (r) => ({ rows_imported: r.rowsUpserted }),
+    (r) => ({ rows_imported: r.upserted }),
   );
   console.timeEnd("mdapi-users sync");
 
