@@ -18,6 +18,7 @@ type Source =
   | "mdapi-promocodes"
   | "mdapi-matches"
   | "mdapi-users"
+  | "mdapi-users-lens-snapshot"
   | "membership-snapshots";
 
 type LastSyncRow = {

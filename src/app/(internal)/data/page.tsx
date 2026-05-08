@@ -113,6 +113,15 @@ export default function DataPage() {
           endpoint="/api/sync/users"
           estimatedDuration="~30-60 seconds"
         />
+        <div className="mt-4">
+          <SyncCard
+            title="Refresh Users lens snapshot"
+            description="Pre-aggregates the Cities → Users lens for stable windows (All time, 2026 YTD, last 90, last 12mo, plus 2025/2024 retroactive). Replaces the live ~4.6s cold load with a ~150ms snapshot read."
+            source="mdapi-users-lens-snapshot"
+            endpoint="/api/sync/users-lens-snapshot"
+            estimatedDuration="~6 seconds"
+          />
+        </div>
       </section>
 
       {/* 7. Membership snapshots (NEW Phase 5c) */}

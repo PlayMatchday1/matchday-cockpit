@@ -44,6 +44,7 @@ import {
   defaultIncrementalWindow,
 } from "@/lib/mdapiMatchesSync";
 import { syncMdapiUsers } from "@/lib/mdapiUsersSync";
+import { refreshUsersLensSnapshot } from "@/lib/usersLensSnapshot";
 import { refreshMembershipSnapshots } from "@/lib/membershipSnapshots";
 import { runWithLog, type TriggeredBy } from "@/lib/syncLogging";
 
@@ -228,6 +229,27 @@ export async function POST(req: Request) {
   );
   console.timeEnd("mdapi-users sync");
 
+  // Users lens snapshot — must run AFTER mdapi-users so the snapshot
+  // reflects fresh data. Estimated ~6s. Skips if mdapi-users failed
+  // (snapshot would just reproduce yesterday's data with a fresh
+  // computed_at, masking the upstream failure).
+  console.time("mdapi-users-lens-snapshot");
+  const usersLensSnapshotResult = await runWithLog(
+    "mdapi-users-lens-snapshot",
+    triggeredBy,
+    supabase,
+    async (sb) => {
+      if (!usersResult.ok) {
+        throw new Error(
+          "Skipped: mdapi-users sync failed; lens snapshot would reproduce stale data",
+        );
+      }
+      return refreshUsersLensSnapshot(sb);
+    },
+    (r) => ({ rows_imported: r.perCityRowsWritten + r.aggregateRowsWritten }),
+  );
+  console.timeEnd("mdapi-users-lens-snapshot");
+
   // Snapshot refresh consumes mdapi_subscriptions data, so it only
   // runs if that sync succeeded. The throw-on-skip pattern lets
   // runWithLog handle the log row uniformly — error_message records
@@ -257,6 +279,7 @@ export async function POST(req: Request) {
     !promocodesResult.ok ||
     !matchesResult.ok ||
     !usersResult.ok ||
+    !usersLensSnapshotResult.ok ||
     !snapshotResult.ok;
 
   return Response.json(
@@ -270,6 +293,7 @@ export async function POST(req: Request) {
         mdapi_promocodes: promocodesResult,
         mdapi_matches: matchesResult,
         mdapi_users: usersResult,
+        mdapi_users_lens_snapshot: usersLensSnapshotResult,
         membership_snapshots: snapshotResult,
       },
     },

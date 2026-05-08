@@ -163,7 +163,7 @@ export type UsersLensPayload = {
 // a stable .order() on a unique column; primary keys here cover that.
 // ---------------------------------------------------------------
 
-type UserRow = {
+export type UserRow = {
   id: number;
   email: string;
   created_at: string;
@@ -173,7 +173,7 @@ type UserRow = {
   is_member: boolean;
 };
 
-type MatchPlayerRow = {
+export type MatchPlayerRow = {
   user_id: number | null;
   match_api_id: number | null;
   is_cancelled: boolean;
@@ -181,14 +181,14 @@ type MatchPlayerRow = {
   user_type: string | null;
 };
 
-type MatchRow = {
+export type MatchRow = {
   api_id: number;
   city_identifier: string | null;
   start_date: string | null;
   is_cancelled: boolean;
 };
 
-type SubRow = {
+export type SubRow = {
   user_id: number;
   status: string | null;
   price: number | null;
@@ -201,7 +201,7 @@ type SubRow = {
 // table names by hand. Sequential fetches let us measure each one
 // in isolation; if we ever switch to Promise.all the labels still
 // work (each timer is keyed on its own label).
-async function fetchAll(supabase: SupabaseClient) {
+export async function fetchAll(supabase: SupabaseClient) {
   const t0 = Date.now();
   const users = await selectAll<UserRow>(() =>
     supabase
@@ -294,7 +294,7 @@ function bucketCity(raw: string | null): string {
   return UNKNOWN;
 }
 
-function aggregate(
+export function aggregate(
   users: UserRow[],
   players: MatchPlayerRow[],
   matches: MatchRow[],
@@ -716,9 +716,14 @@ export async function GET(req: Request) {
   // (open-ended on that side). Malformed dates are ignored — the
   // route returns the All-time aggregation rather than 400ing, which
   // is the more forgiving behavior for a shareable URL.
+  // Also accepts ?snapshot_key= — when present and recognized + rows
+  // are fresh in mdapi_users_lens_snapshot, the route serves the
+  // snapshot and skips the ~4.6s live aggregation. Falls through to
+  // live for unknown / stale / missing snapshot keys.
   const reqUrl = new URL(req.url);
   const fromParam = reqUrl.searchParams.get("from");
   const toParam = reqUrl.searchParams.get("to");
+  const snapshotKeyParam = reqUrl.searchParams.get("snapshot_key");
   const isoDateRx = /^\d{4}-\d{2}-\d{2}$/;
   const windowFrom =
     fromParam && isoDateRx.test(fromParam)
@@ -730,6 +735,91 @@ export async function GET(req: Request) {
       : null;
 
   const startedAt = Date.now();
+
+  // --- Snapshot read path (Phase 3 Step 2c) ---
+  // Stable windows pre-computed nightly. Reads should be <100ms.
+  const VALID_SNAPSHOT_KEYS = new Set([
+    "all_time",
+    "2026_ytd",
+    "2025_ytd",
+    "2024_ytd",
+    "last_90",
+    "last_12mo",
+  ]);
+  // Treat snapshot as fresh if computed_at is within 25h (gives the
+  // nightly cron a 1-hour grace window for slow runs). Older than
+  // that, fall through to live so a missed cron doesn't silently
+  // serve stale data.
+  const SNAPSHOT_FRESHNESS_MS = 25 * 60 * 60 * 1000;
+  if (snapshotKeyParam && VALID_SNAPSHOT_KEYS.has(snapshotKeyParam)) {
+    const tSnap = Date.now();
+    const [perCityRes, aggRes] = await Promise.all([
+      supabase
+        .from("mdapi_users_lens_snapshot")
+        .select("*")
+        .eq("window_key", snapshotKeyParam),
+      supabase
+        .from("mdapi_users_lens_aggregate_snapshot")
+        .select("*")
+        .eq("window_key", snapshotKeyParam)
+        .maybeSingle(),
+    ]);
+    if (
+      !perCityRes.error &&
+      !aggRes.error &&
+      perCityRes.data &&
+      perCityRes.data.length > 0 &&
+      aggRes.data
+    ) {
+      const computedAt = new Date(aggRes.data.computed_at as string);
+      const isFresh =
+        Date.now() - computedAt.getTime() <= SNAPSHOT_FRESHNESS_MS;
+      if (isFresh) {
+        const payload = composePayloadFromSnapshot(
+          snapshotKeyParam,
+          perCityRes.data as Array<Record<string, unknown>>,
+          aggRes.data as Record<string, unknown>,
+        );
+        // fin_sync_log lastSyncedAt is independent of snapshot — it's
+        // about mdapi-users freshness, which the operator wants to
+        // see at the top of the lens regardless of which read path
+        // served the page.
+        const { data: lastLog } = await supabase
+          .from("fin_sync_log")
+          .select("completed_at")
+          .eq("source", "mdapi-users")
+          .not("completed_at", "is", null)
+          .order("completed_at", { ascending: false })
+          .limit(1)
+          .maybeSingle<{ completed_at: string }>();
+        payload.lastSyncedAt = lastLog?.completed_at ?? null;
+        console.log(
+          `[users-lens] snapshot path key=${snapshotKeyParam} ${Date.now() - tSnap}ms`,
+        );
+        return Response.json(
+          {
+            ok: true,
+            triggeredBy,
+            durationMs: Date.now() - startedAt,
+            payload,
+            servedFrom: "snapshot",
+          },
+          {
+            status: 200,
+            headers: {
+              "Cache-Control":
+                "private, s-maxage=300, stale-while-revalidate=600",
+            },
+          },
+        );
+      }
+    }
+    console.log(
+      `[users-lens] snapshot path miss key=${snapshotKeyParam}; falling through to live`,
+    );
+  }
+
+  // --- Live path (fallback / dynamic windows) ---
   const tFetch = Date.now();
   const { users, players, matches, subs } = await fetchAll(supabase);
   console.log(
@@ -784,3 +874,167 @@ export async function GET(req: Request) {
     },
   );
 }
+
+
+// ---------------------------------------------------------------
+// Snapshot read path — compose UsersLensPayload from snapshot rows.
+// Mirrors aggregate()'s output shape exactly so the lens doesn't
+// care which path served the request.
+// ---------------------------------------------------------------
+
+function composePayloadFromSnapshot(
+  snapshotKey: string,
+  perCityRows: Array<Record<string, unknown>>,
+  aggRow: Record<string, unknown>,
+): UsersLensPayload {
+  const cityMap = new Map<string, Record<string, unknown>>();
+  for (const r of perCityRows) cityMap.set(String(r.city), r);
+
+  // Reconstruct byCity in the canonical CITY_DISPLAY order. Snapshot
+  // doesn't guarantee row order; this also zero-fills any missing
+  // city (defensive — shouldn't happen with truncate-and-insert).
+  const byCity: ByCityRow[] = CITY_DISPLAY.map((city) => {
+    const r = cityMap.get(city);
+    const reg = num(r, 'registered');
+    const compl = num(r, 'completed_signup');
+    const p1 = num(r, 'played_1plus');
+    const p3 = num(r, 'played_3plus');
+    const p5 = num(r, 'played_5plus');
+    const p10 = num(r, 'played_10plus');
+    const a30 = num(r, 'active_30d');
+    const mem = num(r, 'members');
+    return {
+      city,
+      registered: reg,
+      completedSignup: compl,
+      completedSignupPct: safePct(compl, reg),
+      played1: p1,
+      played1Pct: safePct(p1, compl),
+      played3: p3,
+      played3PctOfPlayed1: safePct(p3, p1),
+      played5: p5,
+      played5PctOfPlayed1: safePct(p5, p1),
+      played10: p10,
+      played10PctOfPlayed1: safePct(p10, p1),
+      active30d: a30,
+      members: mem,
+      activationRate: safePct(p1, reg),
+    };
+  });
+
+  // Hero / funnel: sum across cities (snapshot has per-city only).
+  const sum = (k: keyof ByCityRow) =>
+    byCity.reduce((s, c) => s + (c[k] as number), 0);
+  const registered = sum('registered');
+  const completedSignup = sum('completedSignup');
+  const played1 = sum('played1');
+  const played3 = sum('played3');
+  const played5 = sum('played5');
+  const played10 = sum('played10');
+  const members = sum('members');
+  const networkActive30d = num(aggRow, 'network_active_30d');
+  const networkPlayed1 = num(aggRow, 'network_played_1plus');
+
+  const hero = {
+    registered,
+    completedSignup,
+    completedSignupPctOfRegistered: safePct(completedSignup, registered),
+    played1,
+    played1PctOfCompleted: safePct(played1, completedSignup),
+    active30d: networkActive30d,
+    active30dPctOfNetworkPlayed1: safePct(networkActive30d, networkPlayed1),
+    members,
+    membersPctOfPlayed1: safePct(members, played1),
+  };
+
+  const funnel = {
+    accountCreated: registered,
+    completedSignup,
+    played1,
+    played3,
+    played5,
+    played10,
+    activeMember: members,
+  };
+
+  // Reconstruct window dates from snapshot key + computed_at so the
+  // lens summary line ('Showing X registered users from … (Mar 1 →
+  // May 8, 2026)') matches the data window on the snapshot.
+  const computedAt = new Date(String(aggRow.computed_at));
+  const windowDates = snapshotKeyToDates(snapshotKey, computedAt);
+
+  return {
+    lastSyncedAt: null, // populated by caller
+    window: {
+      fromIso: windowDates.from ? windowDates.from.toISOString() : null,
+      toIso: windowDates.to ? windowDates.to.toISOString() : null,
+    },
+    hero,
+    funnel,
+    byCity,
+    growthMonthly: {
+      signups: aggRow.growth_monthly_signups as GrowthBucket[],
+      completed: aggRow.growth_monthly_completed as GrowthBucket[],
+      played: aggRow.growth_monthly_played as GrowthBucket[],
+    },
+    growthWeekly: {
+      signups: aggRow.growth_weekly_signups as GrowthBucket[],
+      completed: aggRow.growth_weekly_completed as GrowthBucket[],
+      played: aggRow.growth_weekly_played as GrowthBucket[],
+    },
+    funnelSpeed: aggRow.funnel_speed as FunnelSpeedRow[],
+    matrix: aggRow.matrix_data as UsersLensPayload['matrix'],
+  };
+}
+
+function num(r: Record<string, unknown> | undefined, k: string): number {
+  if (!r) return 0;
+  const v = r[k];
+  return typeof v === 'number' ? v : 0;
+}
+
+// Mirror of usersLensSnapshot.snapshotKeyDates — kept inline here so
+// the route doesn't pull in the snapshot-builder module (which depends
+// on this file → would create a circular import). Exact same logic;
+// keep in sync if either changes.
+function snapshotKeyToDates(
+  key: string,
+  now: Date,
+): { from: Date | null; to: Date | null } {
+  const day = (d: Date) => {
+    const out = new Date(d);
+    out.setUTCHours(0, 0, 0, 0);
+    return out;
+  };
+  const dayEnd = (d: Date) => {
+    const out = new Date(d);
+    out.setUTCHours(23, 59, 59, 999);
+    return out;
+  };
+  if (key === 'all_time') return { from: null, to: null };
+  if (key === '2026_ytd') {
+    return { from: new Date(Date.UTC(2026, 0, 1)), to: dayEnd(now) };
+  }
+  if (key === '2025_ytd') {
+    return {
+      from: new Date(Date.UTC(2025, 0, 1)),
+      to: new Date(Date.UTC(2025, 11, 31, 23, 59, 59, 999)),
+    };
+  }
+  if (key === '2024_ytd') {
+    return {
+      from: new Date(Date.UTC(2024, 0, 1)),
+      to: new Date(Date.UTC(2024, 11, 31, 23, 59, 59, 999)),
+    };
+  }
+  if (key === 'last_90') {
+    return { from: day(new Date(now.getTime() - 90 * 86400000)), to: dayEnd(now) };
+  }
+  if (key === 'last_12mo') {
+    const f = new Date(now);
+    f.setUTCFullYear(f.getUTCFullYear() - 1);
+    return { from: day(f), to: dayEnd(now) };
+  }
+  return { from: null, to: null };
+}
+

@@ -205,6 +205,18 @@ function presetDates(
   return { from: null, to: null };
 }
 
+// Lens window name → snapshot_key for the route. Returns null for
+// dynamic windows (mtd / qtd / last_30 / custom) which the snapshot
+// doesn't pre-compute. 'all' maps to 'all_time' to match the
+// snapshot table's key naming.
+function lensWindowToSnapshotKey(name: WindowName): string | null {
+  if (name === "all") return "all_time";
+  if (name === "2026_ytd") return "2026_ytd";
+  if (name === "last_90") return "last_90";
+  if (name === "last_12m") return "last_12mo";
+  return null;
+}
+
 function fmtDateLabel(iso: string | null): string {
   if (!iso) return "";
   // Parse YYYY-MM-DD as local-noon to dodge UTC-rollover off-by-ones.
@@ -226,9 +238,12 @@ export default function CitiesUsersLens() {
   const searchParams = useSearchParams();
 
   // --- Read window state from URL ---
-  // Default = "all" when no params. Custom requires both from + to.
+  // Default = "2026_ytd" when no params (Phase 3 Step 2c — recent
+  // activity is more useful than 4 years of cumulative). Custom
+  // requires both from + to. URL-param-set windows still resolve
+  // as before; the default change only affects the no-param case.
   const urlWindow =
-    (searchParams?.get("window") as WindowName | null) ?? "all";
+    (searchParams?.get("window") as WindowName | null) ?? "2026_ytd";
   const urlFrom = searchParams?.get("from") ?? null;
   const urlTo = searchParams?.get("to") ?? null;
   // --- Growth metric (Phase 2c) ---
@@ -285,6 +300,12 @@ export default function CitiesUsersLens() {
         const qs = new URLSearchParams();
         if (fromForRoute) qs.set("from", fromForRoute);
         if (toForRoute) qs.set("to", toForRoute);
+        // Stable windows have pre-computed snapshots — pass
+        // ?snapshot_key= so the route serves <100ms instead of the
+        // ~4.6s live aggregation. Dynamic windows (mtd / qtd /
+        // last_30 / custom) and back-compat 'all' remain live.
+        const snapshotKey = lensWindowToSnapshotKey(activeWindow);
+        if (snapshotKey) qs.set("snapshot_key", snapshotKey);
         const url = qs.toString()
           ? `/api/cities/users-lens?${qs.toString()}`
           : `/api/cities/users-lens`;
@@ -310,7 +331,9 @@ export default function CitiesUsersLens() {
   const setWindow = useCallback(
     (next: WindowName, customFrom?: string, customTo?: string) => {
       const params = new URLSearchParams(searchParams?.toString() ?? "");
-      if (next === "all") {
+      if (next === "2026_ytd") {
+        // 2026_ytd is now the default — drop the param to keep the
+        // URL clean. The lens reads no-param URLs as 2026_ytd.
         params.delete("window");
         params.delete("from");
         params.delete("to");
