@@ -194,7 +194,15 @@ type SubRow = {
   price: number | null;
 };
 
+// Phase 3 audit instrumentation — per-table timing logged to Vercel
+// function logs. Server-side only, no UI surface. Output format:
+//   [users-lens] mdapi_users 482ms (24013 rows)
+// so we can spot slow tables without correlating console output to
+// table names by hand. Sequential fetches let us measure each one
+// in isolation; if we ever switch to Promise.all the labels still
+// work (each timer is keyed on its own label).
 async function fetchAll(supabase: SupabaseClient) {
+  const t0 = Date.now();
   const users = await selectAll<UserRow>(() =>
     supabase
       .from("mdapi_users")
@@ -203,6 +211,11 @@ async function fetchAll(supabase: SupabaseClient) {
       )
       .order("id"),
   );
+  console.log(
+    `[users-lens] mdapi_users ${Date.now() - t0}ms (${users.length} rows)`,
+  );
+
+  const t1 = Date.now();
   const players = await selectAll<MatchPlayerRow>(() =>
     supabase
       .from("mdapi_match_players")
@@ -211,18 +224,32 @@ async function fetchAll(supabase: SupabaseClient) {
       )
       .order("api_id"),
   );
+  console.log(
+    `[users-lens] mdapi_match_players ${Date.now() - t1}ms (${players.length} rows)`,
+  );
+
+  const t2 = Date.now();
   const matches = await selectAll<MatchRow>(() =>
     supabase
       .from("mdapi_matches")
       .select("api_id, city_identifier, start_date, is_cancelled")
       .order("api_id"),
   );
+  console.log(
+    `[users-lens] mdapi_matches ${Date.now() - t2}ms (${matches.length} rows)`,
+  );
+
+  const t3 = Date.now();
   const subs = await selectAll<SubRow>(() =>
     supabase
       .from("mdapi_subscriptions")
       .select("user_id, status, price, membership_id")
       .order("membership_id"),
   );
+  console.log(
+    `[users-lens] mdapi_subscriptions ${Date.now() - t3}ms (${subs.length} rows)`,
+  );
+
   return { users, players, matches, subs };
 }
 
@@ -703,7 +730,13 @@ export async function GET(req: Request) {
       : null;
 
   const startedAt = Date.now();
+  const tFetch = Date.now();
   const { users, players, matches, subs } = await fetchAll(supabase);
+  console.log(
+    `[users-lens] fetchAll total ${Date.now() - tFetch}ms`,
+  );
+
+  const tAgg = Date.now();
   const payload = aggregate(
     users,
     players,
@@ -713,8 +746,12 @@ export async function GET(req: Request) {
     windowFrom,
     windowTo,
   );
+  console.log(
+    `[users-lens] aggregate (JS, in-memory) ${Date.now() - tAgg}ms`,
+  );
 
   // --- Last-synced indicator from fin_sync_log ---
+  const tSync = Date.now();
   const { data: lastLog } = await supabase
     .from("fin_sync_log")
     .select("completed_at")
@@ -723,6 +760,9 @@ export async function GET(req: Request) {
     .order("completed_at", { ascending: false })
     .limit(1)
     .maybeSingle<{ completed_at: string }>();
+  console.log(
+    `[users-lens] fin_sync_log lookup ${Date.now() - tSync}ms`,
+  );
   payload.lastSyncedAt = lastLog?.completed_at ?? null;
 
   return Response.json(
