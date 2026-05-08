@@ -26,7 +26,17 @@ import PartnerDashboard from "./PartnerDashboard";
 // now enforced explicitly inside fetchPartnerBySlug — keep it that
 // way (load-bearing).
 
-export const dynamic = "force-dynamic";
+// Phase 3 Step 2a: 60s ISR replaces force-dynamic so a partner who
+// refreshes the page mid-conversation hits Vercel's edge cache
+// instead of triggering a full re-render. Vercel translates
+// `revalidate = 60` to Cache-Control: s-maxage=60, stale-while-
+// revalidate that lets stale-but-fresh-enough responses serve
+// while a background re-render runs. Auth/permission gate inside
+// fetchPartnerBySlug still runs at render time — at most a 60s
+// drift if a partner_dashboard's enabled flag flips from true →
+// false (deemed acceptable by the operator; partners aren't
+// disabled at second-by-second cadence).
+export const revalidate = 60;
 
 // Per-partner stats baseline (YYYY-MM-DD). When set, the dashboard's
 // totals / by-month / week-by-week sections only count match + extra
