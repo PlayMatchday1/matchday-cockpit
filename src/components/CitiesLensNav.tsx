@@ -1,9 +1,15 @@
 "use client";
 
-export type CityLens = "overview" | "membership" | "cancellations" | "reviews";
+export type CityLens =
+  | "overview"
+  | "users"
+  | "membership"
+  | "cancellations"
+  | "reviews";
 
 const LENSES: { value: CityLens; label: string }[] = [
   { value: "overview", label: "Overview" },
+  { value: "users", label: "Users" },
   { value: "membership", label: "Membership" },
   { value: "cancellations", label: "Cancellations" },
   { value: "reviews", label: "Reviews" },
