@@ -66,6 +66,11 @@ export type GrowthBucket = {
   signups: number;
   completedPct: number;
   played1Pct: number;
+  // Per-city signup count for the period. Keys are the same set the
+  // lens consumes (KNOWN_CITY_CODES + "Unknown"). Cities with zero
+  // signups in the period get a 0 entry — predictable shape for the
+  // stacking renderer. Sums to `signups`.
+  byCity: Record<string, number>;
 };
 
 export type FunnelSpeedRow = {
@@ -393,6 +398,21 @@ function aggregate(
     };
   });
 
+  // --- Growth bucket helpers ---
+  // Build a Record<city, count> with all CITY_DISPLAY keys present
+  // (zero-fills missing cities) so the lens stacking renderer has a
+  // predictable shape — no "is this key here?" branches per render.
+  const emptyByCity = (): Record<string, number> => {
+    const m: Record<string, number> = {};
+    for (const c of CITY_DISPLAY) m[c] = 0;
+    return m;
+  };
+  const buildByCity = (rows: DerivedUser[]): Record<string, number> => {
+    const m = emptyByCity();
+    for (const u of rows) m[u.signupCity] = (m[u.signupCity] ?? 0) + 1;
+    return m;
+  };
+
   // --- Growth: monthly buckets (last 12 months, NOT cohort-filtered) ---
   // Bars always show the full 12-month signup history. Client dims
   // bars outside the selected window via window.fromIso/toIso.
@@ -412,6 +432,7 @@ function aggregate(
       signups,
       completedPct: safePct(compl, signups),
       played1Pct: safePct(p1, signups),
+      byCity: buildByCity(inBucket),
     });
   }
 
@@ -435,6 +456,7 @@ function aggregate(
       signups,
       completedPct: safePct(compl, signups),
       played1Pct: safePct(p1, signups),
+      byCity: buildByCity(inBucket),
     });
   }
 

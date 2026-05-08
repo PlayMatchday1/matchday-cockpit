@@ -16,6 +16,7 @@ import Link from "next/link";
 import { useRouter, useSearchParams } from "next/navigation";
 import { useCallback, useEffect, useMemo, useState } from "react";
 import { supabase } from "@/lib/supabase";
+import { CITY_STACK_ORDER, colorForCity } from "@/lib/cityColors";
 
 // ---------------------------------------------------------------
 // Types — mirror the route's UsersLensPayload exactly.
@@ -56,6 +57,7 @@ type GrowthBucket = {
   signups: number;
   completedPct: number;
   played1Pct: number;
+  byCity: Record<string, number>;
 };
 type FunnelSpeedRow = {
   city: string;
@@ -798,6 +800,12 @@ function UsersByCityTable({ rows }: { rows: ByCityRow[] }) {
 // TODO: stacked-by-city variant — out of scope for Phase 2.
 // ---------------------------------------------------------------
 
+// Bar-area height in CSS pixels. Per spec, "Bar max height should be
+// ~140-160px so the chart isn't disproportionately tall." Sum of all
+// bucket segments scales to fill this area for the largest bucket;
+// other buckets scale proportionally.
+const BAR_AREA_PX = 150;
+
 function GrowthChart({
   monthly,
   weekly,
@@ -845,23 +853,88 @@ function GrowthChart({
           ))}
         </div>
       </div>
-      <div className="flex h-48 items-end gap-2 overflow-x-auto">
+
+      {/* Legend — same color/order as the stacked segments below. */}
+      <div className="mb-3 flex flex-wrap items-center gap-x-3 gap-y-1 text-[11px] text-deep-green/65">
+        {CITY_STACK_ORDER.map((c) => (
+          <span key={c} className="inline-flex items-center gap-1.5">
+            <span
+              aria-hidden
+              className="inline-block h-2.5 w-2.5 rounded-sm"
+              style={{ background: colorForCity(c) }}
+            />
+            {c}
+          </span>
+        ))}
+      </div>
+
+      <div className="flex items-end gap-2 overflow-x-auto">
         {buckets.map((b) => {
           const dim = !inWindow(b.bucketStart);
+          // Build the per-city tooltip line. Order matches the stack
+          // (ATX first → Unknown last). Only non-zero entries surface
+          // so a month with no SATX signups doesn't pollute the line.
+          const cityLines = CITY_STACK_ORDER.filter(
+            (c) => (b.byCity[c] ?? 0) > 0,
+          )
+            .map((c) => `${c} ${(b.byCity[c] ?? 0).toLocaleString()}`)
+            .join(", ");
+          const tooltip =
+            `${b.period}\n` +
+            `${b.signups.toLocaleString()} signups · ${b.completedPct}% completed · ${b.played1Pct}% played 1+\n` +
+            (cityLines ? `By city: ${cityLines}` : "By city: (none)") +
+            (dim ? "\noutside selected window" : "");
+          // Total height for this bucket's stack (px). All buckets
+          // share the same scale so visual heights are comparable
+          // across periods.
+          const totalPx = (b.signups / max) * BAR_AREA_PX;
+          // Render segments bottom-up via flex-col-reverse: first
+          // child (ATX) lands at the bottom, last (Unknown) at top.
           return (
             <div
               key={b.bucketStart}
-              className="flex min-w-[36px] flex-1 flex-col items-center justify-end"
-              title={`${b.period} · ${b.signups.toLocaleString()} signups · ${b.completedPct}% completed · ${b.played1Pct}% played 1+${dim ? " · outside selected window" : ""}`}
+              className="flex min-w-[36px] flex-1 flex-col items-center"
+              title={tooltip}
               style={{ opacity: dim ? 0.3 : 1 }}
             >
               <div className="mb-1 text-[10px] font-mono tabular-nums text-deep-green/65">
                 {b.signups.toLocaleString()}
               </div>
               <div
-                className="w-full rounded-t bg-deep-green/70 transition hover:bg-deep-green"
-                style={{ height: `${(b.signups / max) * 100}%` }}
-              />
+                className="flex w-full flex-col-reverse overflow-hidden rounded-t"
+                style={{ height: `${BAR_AREA_PX}px` }}
+              >
+                {/* Empty filler so an empty bucket still occupies the
+                    full height. The segments stack from the bottom
+                    upward via flex-col-reverse; this filler sits at
+                    the top of the column for non-zero bars. */}
+                <div style={{ flex: "1 0 auto" }} />
+                {CITY_STACK_ORDER.map((c) => {
+                  const n = b.byCity[c] ?? 0;
+                  if (n === 0) return null;
+                  const segPx = (n / max) * BAR_AREA_PX;
+                  return (
+                    <div
+                      key={c}
+                      style={{
+                        height: `${segPx}px`,
+                        background: colorForCity(c),
+                        flex: "0 0 auto",
+                      }}
+                    />
+                  );
+                })}
+                {/* Hairline cap so a single-segment bar gets a clean
+                    top edge against the background. */}
+                {totalPx > 0 && (
+                  <div
+                    style={{
+                      flex: "0 0 auto",
+                      height: 0,
+                    }}
+                  />
+                )}
+              </div>
               <div className="mt-1 text-[10px] text-deep-green/55">
                 {b.period}
               </div>
@@ -870,8 +943,9 @@ function GrowthChart({
         })}
       </div>
       <p className="mt-3 text-[11px] text-deep-green/55">
-        Bars outside the selected cohort window are dimmed. Hover a bar for the
-        period&apos;s onboarding-completion and played-1+ rates.
+        Bars are stacked by signup city in the order shown above. Bars outside
+        the selected cohort window are dimmed. Hover a bar for the period&apos;s
+        per-city breakdown plus onboarding-completion and played-1+ rates.
       </p>
     </section>
   );
