@@ -1,16 +1,20 @@
 "use client";
 
 // Cities → Users sub-tab. Reads from /api/cities/users-lens (single
-// server-side aggregation; lens UI is render-only). Six sections,
-// described in Phase 2 spec.
+// server-side aggregation; lens UI is render-only).
 //
-// Cohort filter: every count on this page excludes internal users
-// (isInternalUser — staff domains, +admin/+city/+test patterns,
-// isFakePlayer). Filter happens server-side in the route; lens
-// component just renders the numbers.
+// Phase 2: 6 sections rendered from the route's payload.
+// Phase 2b: time-window selector (All time / 2026 YTD / Last 90d /
+// Last 12mo / Custom). The window filters cohort-based metrics
+// (hero registered/completed/played1/members, funnel, byCity,
+// funnelSpeed, matrix). It does NOT filter Active 30d (current
+// activity) or growth-chart bars (which dim when outside window).
+// State persists in URL search params (?window=last_90, etc.) so
+// the page is shareable and back/forward navigates cleanly.
 
 import Link from "next/link";
-import { useEffect, useMemo, useState } from "react";
+import { useRouter, useSearchParams } from "next/navigation";
+import { useCallback, useEffect, useMemo, useState } from "react";
 import { supabase } from "@/lib/supabase";
 
 // ---------------------------------------------------------------
@@ -24,7 +28,7 @@ type Hero = {
   played1: number;
   played1PctOfCompleted: number;
   active30d: number;
-  active30dPctOfPlayed1: number;
+  active30dPctOfNetworkPlayed1: number;
   members: number;
   membersPctOfPlayed1: number;
 };
@@ -71,6 +75,7 @@ type Matrix = {
 };
 type LensPayload = {
   lastSyncedAt: string | null;
+  window: { fromIso: string | null; toIso: string | null };
   hero: Hero;
   funnel: Funnel;
   byCity: ByCityRow[];
@@ -81,10 +86,101 @@ type LensPayload = {
 };
 
 // ---------------------------------------------------------------
+// Window selector — pill names live in URL as ?window=<name>.
+// Custom uses ?window=custom&from=YYYY-MM-DD&to=YYYY-MM-DD.
+// ---------------------------------------------------------------
+
+type WindowName = "all" | "2026_ytd" | "last_90" | "last_12m" | "custom";
+
+const WINDOW_PILLS: { value: WindowName; label: string }[] = [
+  { value: "all", label: "All time" },
+  { value: "2026_ytd", label: "2026 YTD" },
+  { value: "last_90", label: "Last 90 days" },
+  { value: "last_12m", label: "Last 12 months" },
+  { value: "custom", label: "Custom" },
+];
+
+function isoDay(d: Date): string {
+  // YYYY-MM-DD in local time. Used for URL params + native date inputs.
+  const y = d.getFullYear();
+  const m = String(d.getMonth() + 1).padStart(2, "0");
+  const day = String(d.getDate()).padStart(2, "0");
+  return `${y}-${m}-${day}`;
+}
+
+function presetDates(name: WindowName, now: Date): { from: string | null; to: string | null } {
+  if (name === "all") return { from: null, to: null };
+  if (name === "2026_ytd") {
+    return { from: "2026-01-01", to: isoDay(now) };
+  }
+  if (name === "last_90") {
+    const from = new Date(now);
+    from.setDate(from.getDate() - 90);
+    return { from: isoDay(from), to: isoDay(now) };
+  }
+  if (name === "last_12m") {
+    const from = new Date(now);
+    from.setFullYear(from.getFullYear() - 1);
+    return { from: isoDay(from), to: isoDay(now) };
+  }
+  // custom — caller must supply from/to.
+  return { from: null, to: null };
+}
+
+function fmtDateLabel(iso: string | null): string {
+  if (!iso) return "";
+  // Parse YYYY-MM-DD as local-noon to dodge UTC-rollover off-by-ones.
+  const [y, m, d] = iso.split("-").map(Number);
+  const date = new Date(y, m - 1, d);
+  return date.toLocaleDateString("en-US", {
+    month: "short",
+    day: "numeric",
+    year: "numeric",
+  });
+}
+
+// ---------------------------------------------------------------
 // Lens component.
 // ---------------------------------------------------------------
 
 export default function CitiesUsersLens() {
+  const router = useRouter();
+  const searchParams = useSearchParams();
+
+  // --- Read window state from URL ---
+  // Default = "all" when no params. Custom requires both from + to.
+  const urlWindow =
+    (searchParams?.get("window") as WindowName | null) ?? "all";
+  const urlFrom = searchParams?.get("from") ?? null;
+  const urlTo = searchParams?.get("to") ?? null;
+
+  const isValidWindow = (WINDOW_PILLS.map((p) => p.value) as string[]).includes(
+    urlWindow,
+  );
+  const activeWindow: WindowName = isValidWindow ? urlWindow : "all";
+
+  // Compute concrete from/to dates for the route call. For presets,
+  // resolve at render time so a "Last 90 days" link viewed two weeks
+  // later picks up the rolling window. For custom, use URL values.
+  const { fromForRoute, toForRoute, fromLabel, toLabel } = useMemo(() => {
+    const now = new Date();
+    if (activeWindow === "custom") {
+      return {
+        fromForRoute: urlFrom,
+        toForRoute: urlTo,
+        fromLabel: urlFrom,
+        toLabel: urlTo,
+      };
+    }
+    const { from, to } = presetDates(activeWindow, now);
+    return {
+      fromForRoute: from,
+      toForRoute: to,
+      fromLabel: from,
+      toLabel: to,
+    };
+  }, [activeWindow, urlFrom, urlTo]);
+
   const [data, setData] = useState<LensPayload | null>(null);
   const [error, setError] = useState<string | null>(null);
   const [loading, setLoading] = useState(true);
@@ -98,7 +194,13 @@ export default function CitiesUsersLens() {
         const { data: sessionData } = await supabase.auth.getSession();
         const token = sessionData.session?.access_token;
         if (!token) throw new Error("No active session — please sign in again.");
-        const res = await fetch("/api/cities/users-lens", {
+        const qs = new URLSearchParams();
+        if (fromForRoute) qs.set("from", fromForRoute);
+        if (toForRoute) qs.set("to", toForRoute);
+        const url = qs.toString()
+          ? `/api/cities/users-lens?${qs.toString()}`
+          : `/api/cities/users-lens`;
+        const res = await fetch(url, {
           headers: { Authorization: `Bearer ${token}` },
         });
         const json = await res.json();
@@ -115,24 +217,34 @@ export default function CitiesUsersLens() {
     return () => {
       cancelled = true;
     };
-  }, []);
+  }, [fromForRoute, toForRoute]);
 
-  if (loading) {
-    return (
-      <section className="rounded-2xl border-[1.5px] border-cream-line bg-white p-8 text-sm text-deep-green/60 shadow-md shadow-deep-green/10">
-        Loading user data… (~2s)
-      </section>
-    );
-  }
-  if (error) {
-    return (
-      <section className="rounded-2xl border border-coral/40 bg-coral-soft p-6 text-sm text-coral">
-        {error}
-      </section>
-    );
-  }
-  if (!data) return null;
+  const setWindow = useCallback(
+    (next: WindowName, customFrom?: string, customTo?: string) => {
+      const params = new URLSearchParams(searchParams?.toString() ?? "");
+      if (next === "all") {
+        params.delete("window");
+        params.delete("from");
+        params.delete("to");
+      } else if (next === "custom") {
+        params.set("window", "custom");
+        if (customFrom) params.set("from", customFrom);
+        if (customTo) params.set("to", customTo);
+      } else {
+        params.set("window", next);
+        params.delete("from");
+        params.delete("to");
+      }
+      const qs = params.toString();
+      router.push(qs ? `?${qs}` : "?", { scroll: false });
+    },
+    [router, searchParams],
+  );
 
+  // --- Header always renders (with window selector) ---
+  // Loading + error states swap into the body, but the pill row and
+  // last-synced indicator stay visible so navigation between windows
+  // is responsive.
   return (
     <div className="space-y-8">
       <section>
@@ -143,7 +255,7 @@ export default function CitiesUsersLens() {
           <p className="text-sm text-deep-green/60">
             Cohort: every MatchDay account, including users who never played.
           </p>
-          {data.lastSyncedAt && (
+          {data?.lastSyncedAt && (
             <p className="mt-1 text-[11px] text-deep-green/50">
               Last synced: {timeAgo(data.lastSyncedAt)} ·{" "}
               <Link
@@ -155,14 +267,187 @@ export default function CitiesUsersLens() {
             </p>
           )}
         </div>
+        <WindowSelector
+          active={activeWindow}
+          urlFrom={urlFrom}
+          urlTo={urlTo}
+          onChange={setWindow}
+        />
+        {data && (
+          <p className="mt-2 text-xs text-deep-green/55">
+            Showing{" "}
+            <strong className="font-bold tabular-nums text-deep-green">
+              {data.hero.registered.toLocaleString()}
+            </strong>{" "}
+            registered users from{" "}
+            <strong className="font-bold text-deep-green">
+              {WINDOW_PILLS.find((p) => p.value === activeWindow)?.label ??
+                "All time"}
+            </strong>
+            {fromLabel && toLabel
+              ? ` (${fmtDateLabel(fromLabel)} → ${fmtDateLabel(toLabel)})`
+              : activeWindow === "all"
+                ? ""
+                : ""}
+          </p>
+        )}
       </section>
 
-      <HeroKpis hero={data.hero} />
-      <ActivationFunnel funnel={data.funnel} />
-      <UsersByCityTable rows={data.byCity} />
-      <GrowthChart monthly={data.growthMonthly} weekly={data.growthWeekly} />
-      <FunnelSpeedTable rows={data.funnelSpeed} />
-      <SignupMatrix matrix={data.matrix} />
+      {loading && (
+        <section className="rounded-2xl border-[1.5px] border-cream-line bg-white p-8 text-sm text-deep-green/60 shadow-md shadow-deep-green/10">
+          Loading user data… (~2s)
+        </section>
+      )}
+      {error && (
+        <section className="rounded-2xl border border-coral/40 bg-coral-soft p-6 text-sm text-coral">
+          {error}
+        </section>
+      )}
+      {data && !loading && !error && (
+        <>
+          <HeroKpis hero={data.hero} />
+          <ActivationFunnel funnel={data.funnel} />
+          <UsersByCityTable rows={data.byCity} />
+          <GrowthChart
+            monthly={data.growthMonthly}
+            weekly={data.growthWeekly}
+            windowFromIso={data.window.fromIso}
+            windowToIso={data.window.toIso}
+          />
+          <FunnelSpeedTable
+            rows={data.funnelSpeed}
+            windowLabel={
+              WINDOW_PILLS.find((p) => p.value === activeWindow)?.label ??
+              "All time"
+            }
+          />
+          <SignupMatrix matrix={data.matrix} />
+        </>
+      )}
+    </div>
+  );
+}
+
+// ---------------------------------------------------------------
+// Window selector — pill row + custom-range date inputs.
+// ---------------------------------------------------------------
+
+function WindowSelector({
+  active,
+  urlFrom,
+  urlTo,
+  onChange,
+}: {
+  active: WindowName;
+  urlFrom: string | null;
+  urlTo: string | null;
+  onChange: (next: WindowName, customFrom?: string, customTo?: string) => void;
+}) {
+  const today = useMemo(() => isoDay(new Date()), []);
+  // Default custom range to last 90 days when activating Custom for
+  // the first time. Once URL has from/to, those win.
+  const ninetyDaysAgo = useMemo(() => {
+    const d = new Date();
+    d.setDate(d.getDate() - 90);
+    return isoDay(d);
+  }, []);
+  const [customFrom, setCustomFrom] = useState<string>(
+    urlFrom ?? ninetyDaysAgo,
+  );
+  const [customTo, setCustomTo] = useState<string>(urlTo ?? today);
+  const [customError, setCustomError] = useState<string | null>(null);
+
+  // Sync local custom-input state when URL changes (e.g. via back/forward).
+  useEffect(() => {
+    if (urlFrom) setCustomFrom(urlFrom);
+    if (urlTo) setCustomTo(urlTo);
+  }, [urlFrom, urlTo]);
+
+  function applyCustom() {
+    setCustomError(null);
+    if (!customFrom || !customTo) {
+      setCustomError("Both start and end dates are required.");
+      return;
+    }
+    if (customFrom > customTo) {
+      setCustomError("Start date must be on or before end date.");
+      return;
+    }
+    if (customTo > today) {
+      setCustomError("End date can't be in the future.");
+      return;
+    }
+    onChange("custom", customFrom, customTo);
+  }
+
+  return (
+    <div>
+      <div className="flex flex-wrap items-center gap-2">
+        {WINDOW_PILLS.map((p) => {
+          const isActive = p.value === active;
+          return (
+            <button
+              key={p.value}
+              type="button"
+              onClick={() => {
+                if (p.value === "custom") {
+                  // Activating Custom for the first time pushes the
+                  // current local-state defaults to the URL.
+                  onChange("custom", customFrom, customTo);
+                } else {
+                  onChange(p.value);
+                }
+              }}
+              aria-pressed={isActive}
+              className={
+                isActive
+                  ? "rounded-full bg-mint px-4 py-1.5 text-xs font-bold text-deep-green transition hover:bg-mint-hover"
+                  : "rounded-full border border-cream-line bg-white px-4 py-1.5 text-xs font-bold text-deep-green/65 transition hover:bg-cream-soft hover:text-deep-green"
+              }
+            >
+              {p.label}
+            </button>
+          );
+        })}
+      </div>
+      {active === "custom" && (
+        <div className="mt-3 flex flex-wrap items-end gap-2 rounded-md border border-cream-line bg-cream-soft/40 p-3">
+          <label className="block">
+            <div className="mb-1 text-[10px] font-bold uppercase tracking-[0.18em] text-deep-green/55">
+              From
+            </div>
+            <input
+              type="date"
+              value={customFrom}
+              max={today}
+              onChange={(e) => setCustomFrom(e.target.value)}
+              className="rounded-md border border-cream-line bg-white px-3 py-1.5 text-sm font-mono text-deep-green focus:border-deep-green focus:outline-none"
+            />
+          </label>
+          <label className="block">
+            <div className="mb-1 text-[10px] font-bold uppercase tracking-[0.18em] text-deep-green/55">
+              To
+            </div>
+            <input
+              type="date"
+              value={customTo}
+              max={today}
+              onChange={(e) => setCustomTo(e.target.value)}
+              className="rounded-md border border-cream-line bg-white px-3 py-1.5 text-sm font-mono text-deep-green focus:border-deep-green focus:outline-none"
+            />
+          </label>
+          <button
+            type="button"
+            onClick={applyCustom}
+            className="rounded-md bg-deep-green px-4 py-1.5 text-sm font-bold text-cream transition hover:bg-deep-green-soft"
+          >
+            Apply
+          </button>
+          {customError && (
+            <span className="text-xs text-coral">{customError}</span>
+          )}
+        </div>
+      )}
     </div>
   );
 }
@@ -189,11 +474,13 @@ function HeroKpis({ hero }: { hero: Hero }) {
           label="Played 1+"
           value={hero.played1.toLocaleString()}
           hint={`${hero.played1PctOfCompleted}% of completed`}
+          tooltip="Recent cohorts may have lower activation rates simply because they haven't had time to play yet. Compare windows of equal length for fairer comparison."
         />
         <Stat
           label="Active 30d"
           value={hero.active30d.toLocaleString()}
-          hint={`${hero.active30dPctOfPlayed1}% of played 1+`}
+          hint={`${hero.active30dPctOfNetworkPlayed1}% of all-time players`}
+          subhint="network-wide, not cohort-filtered"
         />
         <Stat
           label="Members"
@@ -228,20 +515,38 @@ function Stat({
   label,
   value,
   hint,
+  subhint,
+  tooltip,
 }: {
   label: string;
   value: string;
   hint?: string;
+  subhint?: string;
+  tooltip?: string;
 }) {
   return (
     <div className="rounded-2xl border-[1.5px] border-cream-line bg-white p-5 shadow-md shadow-deep-green/10">
-      <div className="text-[10px] font-bold uppercase tracking-wider text-deep-green/60">
-        {label}
+      <div className="flex items-center gap-1.5">
+        <div className="text-[10px] font-bold uppercase tracking-wider text-deep-green/60">
+          {label}
+        </div>
+        {tooltip && (
+          <span
+            title={tooltip}
+            aria-label={tooltip}
+            className="inline-flex h-3.5 w-3.5 cursor-help items-center justify-center rounded-full bg-deep-green/15 text-[9px] font-bold text-deep-green/70"
+          >
+            i
+          </span>
+        )}
       </div>
       <div className="mt-1 text-3xl font-extrabold tabular-nums text-deep-green">
         {value}
       </div>
       {hint && <div className="mt-1 text-xs text-deep-green/60">{hint}</div>}
+      {subhint && (
+        <div className="text-[10px] italic text-deep-green/45">{subhint}</div>
+      )}
     </div>
   );
 }
@@ -496,13 +801,29 @@ function UsersByCityTable({ rows }: { rows: ByCityRow[] }) {
 function GrowthChart({
   monthly,
   weekly,
+  windowFromIso,
+  windowToIso,
 }: {
   monthly: GrowthBucket[];
   weekly: GrowthBucket[];
+  windowFromIso: string | null;
+  windowToIso: string | null;
 }) {
   const [view, setView] = useState<"monthly" | "weekly">("monthly");
   const buckets = view === "monthly" ? monthly : weekly;
   const max = Math.max(1, ...buckets.map((b) => b.signups));
+  // Phase 2b: bars whose bucketStart falls outside the selected window
+  // are dimmed to 30% opacity. When no window is set (All time), all
+  // bars render at full opacity.
+  const fromMs = windowFromIso ? new Date(windowFromIso).getTime() : null;
+  const toMs = windowToIso ? new Date(windowToIso).getTime() : null;
+  const inWindow = (bucketStart: string): boolean => {
+    if (fromMs === null && toMs === null) return true;
+    const t = new Date(`${bucketStart}T00:00:00.000Z`).getTime();
+    if (fromMs !== null && t < fromMs) return false;
+    if (toMs !== null && t > toMs) return false;
+    return true;
+  };
   return (
     <section className="rounded-2xl border-[1.5px] border-cream-line bg-white p-6 shadow-md shadow-deep-green/10">
       <div className="mb-4 flex flex-wrap items-baseline justify-between gap-3">
@@ -525,27 +846,32 @@ function GrowthChart({
         </div>
       </div>
       <div className="flex h-48 items-end gap-2 overflow-x-auto">
-        {buckets.map((b) => (
-          <div
-            key={b.bucketStart}
-            className="flex min-w-[36px] flex-1 flex-col items-center justify-end"
-            title={`${b.period} · ${b.signups.toLocaleString()} signups · ${b.completedPct}% completed · ${b.played1Pct}% played 1+`}
-          >
-            <div className="mb-1 text-[10px] font-mono tabular-nums text-deep-green/65">
-              {b.signups.toLocaleString()}
-            </div>
+        {buckets.map((b) => {
+          const dim = !inWindow(b.bucketStart);
+          return (
             <div
-              className="w-full rounded-t bg-deep-green/70 transition hover:bg-deep-green"
-              style={{ height: `${(b.signups / max) * 100}%` }}
-            />
-            <div className="mt-1 text-[10px] text-deep-green/55">
-              {b.period}
+              key={b.bucketStart}
+              className="flex min-w-[36px] flex-1 flex-col items-center justify-end"
+              title={`${b.period} · ${b.signups.toLocaleString()} signups · ${b.completedPct}% completed · ${b.played1Pct}% played 1+${dim ? " · outside selected window" : ""}`}
+              style={{ opacity: dim ? 0.3 : 1 }}
+            >
+              <div className="mb-1 text-[10px] font-mono tabular-nums text-deep-green/65">
+                {b.signups.toLocaleString()}
+              </div>
+              <div
+                className="w-full rounded-t bg-deep-green/70 transition hover:bg-deep-green"
+                style={{ height: `${(b.signups / max) * 100}%` }}
+              />
+              <div className="mt-1 text-[10px] text-deep-green/55">
+                {b.period}
+              </div>
             </div>
-          </div>
-        ))}
+          );
+        })}
       </div>
       <p className="mt-3 text-[11px] text-deep-green/55">
-        Hover a bar for the period&apos;s onboarding-completion and played-1+ rates.
+        Bars outside the selected cohort window are dimmed. Hover a bar for the
+        period&apos;s onboarding-completion and played-1+ rates.
       </p>
     </section>
   );
@@ -557,7 +883,13 @@ function GrowthChart({
 // this clamp with a window selector.
 // ---------------------------------------------------------------
 
-function FunnelSpeedTable({ rows }: { rows: FunnelSpeedRow[] }) {
+function FunnelSpeedTable({
+  rows,
+  windowLabel,
+}: {
+  rows: FunnelSpeedRow[];
+  windowLabel: string;
+}) {
   const fmt = (n: number | null) =>
     n == null ? "—" : n < 1 ? `<1d` : `${n.toFixed(1)}d`;
   return (
@@ -567,8 +899,10 @@ function FunnelSpeedTable({ rows }: { rows: FunnelSpeedRow[] }) {
           Acquisition Funnel Speed
         </h3>
         <p className="mt-0.5 text-xs text-deep-green/60">
-          Median days between stages. Cohort = users registered in the last 90 days.
-          Cells with n &lt; 5 show &quot;—&quot;.
+          Median days between stages. Cohort ={" "}
+          <strong className="font-bold text-deep-green">{windowLabel}</strong>{" "}
+          (matches the window selector at the top of the page). Cells with n
+          &lt; 5 show &quot;—&quot;.
         </p>
       </div>
       <div className="overflow-x-auto">

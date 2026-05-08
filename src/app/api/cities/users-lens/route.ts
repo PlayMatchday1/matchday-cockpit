@@ -79,14 +79,22 @@ export type FunnelSpeedRow = {
 
 export type UsersLensPayload = {
   lastSyncedAt: string | null;
+  // Echo of the applied cohort window so the client can render the
+  // summary line + accent the matching growth-chart bars. null when
+  // no window is applied (All time).
+  window: { fromIso: string | null; toIso: string | null };
   hero: {
     registered: number;
     completedSignup: number;
     completedSignupPctOfRegistered: number;
     played1: number;
     played1PctOfCompleted: number;
+    // Active 30d/60d are NOT cohort-filtered — they reflect current
+    // network activity. The percentage subtitle on the card uses
+    // network-wide all-time played-1+ as denominator so the metric is
+    // comparable across selected windows.
     active30d: number;
-    active30dPctOfPlayed1: number;
+    active30dPctOfNetworkPlayed1: number;
     members: number;
     membersPctOfPlayed1: number;
   };
@@ -98,6 +106,8 @@ export type UsersLensPayload = {
     activeMember: number;
   };
   byCity: ByCityRow[];
+  // Growth buckets are NOT cohort-filtered. The client dims buckets
+  // outside the selected window via window.fromIso / window.toIso.
   growthMonthly: GrowthBucket[];
   growthWeekly: GrowthBucket[];
   funnelSpeed: FunnelSpeedRow[];
@@ -225,11 +235,21 @@ function aggregate(
   matches: MatchRow[],
   subs: SubRow[],
   now: Date,
+  windowFrom: Date | null,
+  windowTo: Date | null,
 ): UsersLensPayload {
   // --- Filter users via isInternalUser (source-of-truth blocklist) ---
   const filteredUsers = users.filter(
     (u) => !isInternalUser(u.email, u.is_fake_player),
   );
+
+  // Cohort window predicate. Applied to created_at; null bounds = open
+  // ended on that side. "All time" = both null.
+  const inWindow = (createdAt: Date): boolean => {
+    if (windowFrom && createdAt < windowFrom) return false;
+    if (windowTo && createdAt > windowTo) return false;
+    return true;
+  };
 
   // --- Build match → city/date lookup ---
   const matchInfo = new Map<number, { city: string | null; startDate: Date | null }>();
@@ -313,13 +333,24 @@ function aggregate(
     };
   });
 
+  // --- Cohort split ---
+  // `cohort` = windowed (cohort-based metrics: hero registered/completed/
+  // played1/members, funnel, byCity, funnelSpeed, matrix rows).
+  // `derived` = full network (used for current-state metrics that
+  // shouldn't shift when the user changes window: Active 30d, growth
+  // chart bars, and the network-wide played-1+ denominator).
+  const cohort = derived.filter((u) => inWindow(u.createdAt));
+
   // --- Hero KPIs ---
-  const registered = derived.length;
-  const completedSignup = derived.filter((d) => d.completedAt).length;
-  const played1 = derived.filter((d) => d.played1).length;
-  const played3 = derived.filter((d) => d.played3).length;
+  // Cohort-based:
+  const registered = cohort.length;
+  const completedSignup = cohort.filter((d) => d.completedAt).length;
+  const played1 = cohort.filter((d) => d.played1).length;
+  const played3 = cohort.filter((d) => d.played3).length;
+  const members = cohort.filter((d) => d.member).length;
+  // Network-wide (NOT cohort-filtered):
   const active30d = derived.filter((d) => d.active30d).length;
-  const members = derived.filter((d) => d.member).length;
+  const networkPlayed1 = derived.filter((d) => d.played1).length;
 
   const hero = {
     registered,
@@ -328,7 +359,7 @@ function aggregate(
     played1,
     played1PctOfCompleted: safePct(played1, completedSignup),
     active30d,
-    active30dPctOfPlayed1: safePct(active30d, played1),
+    active30dPctOfNetworkPlayed1: safePct(active30d, networkPlayed1),
     members,
     membersPctOfPlayed1: safePct(members, played1),
   };
@@ -341,9 +372,9 @@ function aggregate(
     activeMember: members,
   };
 
-  // --- Per-city table ---
+  // --- Per-city table (windowed cohort) ---
   const byCity: ByCityRow[] = CITY_DISPLAY.map((city) => {
-    const inCity = derived.filter((d) => d.signupCity === city);
+    const inCity = cohort.filter((d) => d.signupCity === city);
     const reg = inCity.length;
     const compl = inCity.filter((d) => d.completedAt).length;
     const p1 = inCity.filter((d) => d.played1).length;
@@ -362,7 +393,9 @@ function aggregate(
     };
   });
 
-  // --- Growth: monthly buckets (last 12 months, oldest → newest) ---
+  // --- Growth: monthly buckets (last 12 months, NOT cohort-filtered) ---
+  // Bars always show the full 12-month signup history. Client dims
+  // bars outside the selected window via window.fromIso/toIso.
   const monthBuckets: GrowthBucket[] = [];
   for (let i = 11; i >= 0; i--) {
     const d = new Date(now.getFullYear(), now.getMonth() - i, 1);
@@ -382,7 +415,7 @@ function aggregate(
     });
   }
 
-  // --- Growth: weekly buckets (last 16 ISO weeks, Mon–Sun) ---
+  // --- Growth: weekly buckets (last 16 ISO weeks, NOT cohort-filtered) ---
   const weekBuckets: GrowthBucket[] = [];
   // Anchor on this week's Monday.
   const dow = (now.getDay() + 6) % 7; // 0=Mon..6=Sun
@@ -405,11 +438,10 @@ function aggregate(
     });
   }
 
-  // --- Funnel speed: per-city medians, last 90 days cohort ---
-  // Cohort = users whose createdAt falls in the last 90 days. Older
-  // signups aren't reflective of current acquisition velocity.
-  const ninetyDaysAgo = new Date(now.getTime() - 90 * 24 * 60 * 60 * 1000);
-  const cohort = derived.filter((u) => u.createdAt >= ninetyDaysAgo);
+  // --- Funnel speed: per-city medians, windowed cohort ---
+  // Cohort source is the same windowed cohort the hero/byCity use.
+  // No hardcoded 90-day clamp — Phase 2b's window selector is the
+  // single source of truth for cohort selection.
   const cityForSpeed = [...CITY_DISPLAY];
   const funnelSpeed: FunnelSpeedRow[] = cityForSpeed.map((city) => {
     const inCity = cohort.filter((d) => d.signupCity === city);
@@ -449,16 +481,17 @@ function aggregate(
     };
   });
 
-  // --- Matrix: signup city × first-match city ---
-  // Rows = signup city (CITY_DISPLAY), Cols = first-match city (same)
-  // + "Never played" trailing column.
+  // --- Matrix: signup city × first-match city (windowed cohort) ---
+  // Rows = signup city of the windowed cohort. First-match city is
+  // lifetime per spec — users who registered in window may have first
+  // played outside it, and we want to see that movement.
   const rows = [...CITY_DISPLAY];
   const cols = [...CITY_DISPLAY, NEVER_PLAYED];
   const cells: number[][] = rows.map(() => cols.map(() => 0));
   const rowTotals: number[] = rows.map(() => 0);
   const colTotals: number[] = cols.map(() => 0);
   let grandTotal = 0;
-  for (const u of derived) {
+  for (const u of cohort) {
     const ri = rows.indexOf(u.signupCity);
     if (ri < 0) continue;
     const ci =
@@ -474,6 +507,10 @@ function aggregate(
 
   return {
     lastSyncedAt: null, // populated by caller
+    window: {
+      fromIso: windowFrom ? windowFrom.toISOString() : null,
+      toIso: windowTo ? windowTo.toISOString() : null,
+    },
     hero,
     funnel,
     byCity,
@@ -530,9 +567,35 @@ export async function GET(req: Request) {
     auth: { persistSession: false, autoRefreshToken: false },
   });
 
+  // --- Parse window params ---
+  // Accepts ?from=YYYY-MM-DD&to=YYYY-MM-DD. Either can be omitted
+  // (open-ended on that side). Malformed dates are ignored — the
+  // route returns the All-time aggregation rather than 400ing, which
+  // is the more forgiving behavior for a shareable URL.
+  const reqUrl = new URL(req.url);
+  const fromParam = reqUrl.searchParams.get("from");
+  const toParam = reqUrl.searchParams.get("to");
+  const isoDateRx = /^\d{4}-\d{2}-\d{2}$/;
+  const windowFrom =
+    fromParam && isoDateRx.test(fromParam)
+      ? new Date(`${fromParam}T00:00:00.000Z`)
+      : null;
+  const windowTo =
+    toParam && isoDateRx.test(toParam)
+      ? new Date(`${toParam}T23:59:59.999Z`)
+      : null;
+
   const startedAt = Date.now();
   const { users, players, matches, subs } = await fetchAll(supabase);
-  const payload = aggregate(users, players, matches, subs, new Date());
+  const payload = aggregate(
+    users,
+    players,
+    matches,
+    subs,
+    new Date(),
+    windowFrom,
+    windowTo,
+  );
 
   // --- Last-synced indicator from fin_sync_log ---
   const { data: lastLog } = await supabase
