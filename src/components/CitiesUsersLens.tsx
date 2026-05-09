@@ -13,7 +13,7 @@
 // the page is shareable and back/forward navigates cleanly.
 
 import Link from "next/link";
-import { usePathname, useRouter, useSearchParams } from "next/navigation";
+import { useRouter, useSearchParams } from "next/navigation";
 import { useCallback, useEffect, useMemo, useState } from "react";
 import { supabase } from "@/lib/supabase";
 import { CITY_STACK_ORDER, colorForCity } from "@/lib/cityColors";
@@ -264,11 +264,6 @@ function fmtDateLabel(iso: string | null): string {
 export default function CitiesUsersLens() {
   const router = useRouter();
   const searchParams = useSearchParams();
-  // Used to build absolute URLs for router.push so the navigation
-  // resolves unambiguously. Pushing bare "?qs" relative URLs has
-  // edge cases on transitions where the previous URL is identical
-  // modulo a no-op param change; absolute paths sidestep that.
-  const pathname = usePathname() ?? "/cities";
 
   // --- Read window state from URL ---
   // Default = "2026_ytd" when no params (Phase 3 Step 2c — recent
@@ -368,14 +363,6 @@ export default function CitiesUsersLens() {
     };
   }, [fromForRoute, toForRoute]);
 
-  const pushWithParams = useCallback(
-    (params: URLSearchParams) => {
-      const qs = params.toString();
-      router.push(`${pathname}${qs ? `?${qs}` : ""}`, { scroll: false });
-    },
-    [router, pathname],
-  );
-
   const setWindow = useCallback(
     (next: WindowName, customFrom?: string, customTo?: string) => {
       const params = new URLSearchParams(searchParams?.toString() ?? "");
@@ -394,9 +381,10 @@ export default function CitiesUsersLens() {
         params.delete("from");
         params.delete("to");
       }
-      pushWithParams(params);
+      const qs = params.toString();
+      router.push(qs ? `?${qs}` : "?", { scroll: false });
     },
-    [searchParams, pushWithParams],
+    [router, searchParams],
   );
 
   const setMetric = useCallback(
@@ -404,9 +392,10 @@ export default function CitiesUsersLens() {
       const params = new URLSearchParams(searchParams?.toString() ?? "");
       if (next === "signups") params.delete("growth_metric");
       else params.set("growth_metric", next);
-      pushWithParams(params);
+      const qs = params.toString();
+      router.push(qs ? `?${qs}` : "?", { scroll: false });
     },
-    [searchParams, pushWithParams],
+    [router, searchParams],
   );
 
   const setSub = useCallback(
@@ -414,9 +403,10 @@ export default function CitiesUsersLens() {
       const params = new URLSearchParams(searchParams?.toString() ?? "");
       if (next === "overview") params.delete("sub");
       else params.set("sub", next);
-      pushWithParams(params);
+      const qs = params.toString();
+      router.push(qs ? `?${qs}` : "?", { scroll: false });
     },
-    [searchParams, pushWithParams],
+    [router, searchParams],
   );
 
   // --- Header always renders (with window selector) ---
@@ -563,7 +553,8 @@ export default function CitiesUsersLens() {
                   );
                   if (p === "monthly") params.delete("field_period");
                   else params.set("field_period", "weekly");
-                  pushWithParams(params);
+                  const qs = params.toString();
+                  router.push(qs ? `?${qs}` : "?", { scroll: false });
                 }}
               />
               <SignupMatrix matrix={data.matrix} />
