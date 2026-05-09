@@ -14,11 +14,16 @@ import { Fragment } from "react";
 // `active` is null when no secondary item is selected (the user is
 // on a primary pill instead).
 
-export type SecondaryId = "configure" | "check-ins" | "partner-dashboards";
+export type SecondaryId =
+  | "configure"
+  | "check-ins"
+  | "partner-dashboards"
+  | "match-manager-pay";
 
 const ITEMS: { id: SecondaryId; label: string }[] = [
   { id: "configure", label: "Configure" },
   { id: "check-ins", label: "City Manager Check-Ins" },
+  { id: "match-manager-pay", label: "Match Manager Pay" },
   { id: "partner-dashboards", label: "Partner Dashboards" },
 ];
 

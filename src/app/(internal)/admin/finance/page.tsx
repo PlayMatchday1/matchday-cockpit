@@ -24,6 +24,7 @@ import FinanceTabNav, {
   type FinanceTabId,
 } from "@/components/FinanceTabNav";
 import ManagerPayGrid from "@/components/ManagerPayGrid";
+import MatchManagerPayView from "@/components/MatchManagerPayView";
 import MatchPnL from "@/components/MatchPnL";
 import PartnerDashboardsAdmin from "@/components/PartnerDashboardsAdmin";
 import RevenueAdminView from "@/components/RevenueAdminView";
@@ -53,6 +54,7 @@ function deriveSecondary(tab: FinanceTabId): SecondaryId | null {
   if (isConfigureSubTab(tab)) return "configure";
   if (tab === "check-ins") return "check-ins";
   if (tab === "partner-dashboards") return "partner-dashboards";
+  if (tab === "match-manager-pay") return "match-manager-pay";
   return null;
 }
 
@@ -248,6 +250,9 @@ function FinanceLandingContent() {
       </TabPanel>
       <TabPanel id="partner-dashboards" active={activeTab} visited={visited}>
         <PartnerDashboardsAdmin inline />
+      </TabPanel>
+      <TabPanel id="match-manager-pay" active={activeTab} visited={visited}>
+        <MatchManagerPayView />
       </TabPanel>
       <TabPanel id="field-costs" active={activeTab} visited={visited}>
         <FieldCostsView />
