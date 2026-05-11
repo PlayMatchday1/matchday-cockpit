@@ -8,11 +8,12 @@
 // manager_pay_adjustments (cockpit-managed Additional Pay rows). No
 // external API calls.
 //
-// Pay rules:
-//   - maxPlayerCount > 22 → $30 per match per assigned manager
-//   - maxPlayerCount ≤ 22 → $20 per match per assigned manager
-//   - Both primary (manager_email) and secondary (lookup by
-//     second_manager_id → mdapi_users.email) get the full amount.
+// Pay rules (revised 2026-05-11):
+//   - Solo match, maxPlayerCount < 25 → primary earns $20
+//   - Solo tournament, maxPlayerCount ≥ 25 → primary earns $30
+//   - Co-managed (any maxPlayerCount, two managers assigned) →
+//     primary earns $20, secondary earns $20. Tournament premium
+//     does NOT apply when co-managed — the workload is split.
 //   - Cancelled matches do NOT pay (excluded from totals) but are
 //     still returned in the schedule with isCancelled=true so the
 //     calendar can render them struck through.
@@ -156,6 +157,7 @@ export type ManagerMatch = {
   maxPlayerCount: number | null;
   payAmount: number;
   role: "primary" | "secondary";
+  coManaged: boolean;
 };
 
 export type ManagerRow = {
@@ -199,8 +201,18 @@ export type ManagerPayWeekPayload = {
 
 const WEEKDAY_NAMES = ["Sun", "Mon", "Tue", "Wed", "Thu", "Fri", "Sat"];
 
-function payAmount(maxPlayerCount: number | null): number {
-  if (maxPlayerCount != null && maxPlayerCount > 22) return 30;
+// Returns the per-manager pay for one match under the 2026-05-11
+// rules. Tournament premium ($30) only applies when a single manager
+// runs the match alone.
+const TOURNAMENT_THRESHOLD = 25;
+
+function payAmount(
+  maxPlayerCount: number | null,
+  coManaged: boolean,
+): number {
+  if (coManaged) return 20;
+  if (maxPlayerCount != null && maxPlayerCount >= TOURNAMENT_THRESHOLD)
+    return 30;
   return 20;
 }
 
@@ -358,6 +370,15 @@ export async function GET(req: Request) {
     return { email: null, name: null };
   }
 
+  // A match is "co-managed" if it has a secondManager intent on the
+  // upstream row, regardless of whether we could resolve the email.
+  // Drives the pay rule (both $20) and the calendar/role labels.
+  function isCoManaged(m: MatchRow): boolean {
+    if (m.second_manager_id != null) return true;
+    const sm = m.raw?.secondManager;
+    return !!(sm && typeof sm === "object" && (sm.id || sm.email));
+  }
+
   const matchSummaries: MatchSummary[] = inWeek.map((m) => {
     const ct = centralDate(m.start_date ?? "") ?? weekStart;
     const cTime = m.start_date ? centralTime(m.start_date) ?? "" : "";
@@ -367,6 +388,7 @@ export async function GET(req: Request) {
       m.manager_last_name,
       m.manager_email ?? null,
     );
+    const coManaged = isCoManaged(m);
     return {
       matchId: m.api_id,
       cityIdentifier: m.city_identifier,
@@ -384,7 +406,9 @@ export async function GET(req: Request) {
       primaryManagerEmail: isAdmin ? (m.manager_email ?? null) : null,
       secondManagerName: second.name,
       secondManagerEmail: isAdmin ? second.email : null,
-      payPerManager: m.is_cancelled ? 0 : payAmount(m.max_player_count),
+      payPerManager: m.is_cancelled
+        ? 0
+        : payAmount(m.max_player_count, coManaged),
     };
   });
 
@@ -404,6 +428,7 @@ export async function GET(req: Request) {
     id: number | null,
     role: "primary" | "secondary",
     m: MatchRow,
+    coManaged: boolean,
   ) {
     if (!email) return;
     const key = email.toLowerCase();
@@ -435,8 +460,9 @@ export async function GET(req: Request) {
       centralTime: cTime,
       name: m.name,
       maxPlayerCount: m.max_player_count,
-      payAmount: payAmount(m.max_player_count),
+      payAmount: payAmount(m.max_player_count, coManaged),
       role,
+      coManaged,
     });
     const city = m.city_identifier ?? "Unknown";
     acc.cityCounts.set(city, (acc.cityCounts.get(city) ?? 0) + 1);
@@ -444,6 +470,7 @@ export async function GET(req: Request) {
 
   for (const m of inWeek) {
     if (m.is_cancelled) continue;
+    const coManaged = isCoManaged(m);
     if (m.manager_email) {
       addAssignment(
         m.manager_email,
@@ -452,6 +479,7 @@ export async function GET(req: Request) {
         m.manager_id,
         "primary",
         m,
+        coManaged,
       );
     }
     if (m.second_manager_id) {
@@ -463,6 +491,7 @@ export async function GET(req: Request) {
           m.second_manager_id,
           "secondary",
           m,
+          coManaged,
         );
       }
     }

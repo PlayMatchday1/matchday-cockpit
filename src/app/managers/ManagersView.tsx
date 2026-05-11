@@ -48,7 +48,10 @@ type ManagerMatch = {
   maxPlayerCount: number | null;
   payAmount: number;
   role: "primary" | "secondary";
+  coManaged: boolean;
 };
+
+const TOURNAMENT_THRESHOLD = 25;
 
 type ManagerRow = {
   managerEmail: string | null;
@@ -381,6 +384,10 @@ export default function ManagersView() {
           <p className="mt-2 max-w-3xl text-sm text-deep-green/65">
             Weekly schedule of matches, assigned managers, and pay. Updated daily.
           </p>
+          <p className="mt-1 max-w-3xl text-xs text-deep-green/55">
+            Solo &lt;25 = $20 · Solo tournament (25+) = $30 · Co-managed = $20
+            each · Pay date: Thursday (Sunday + 4)
+          </p>
         </div>
       </div>
 
@@ -686,6 +693,9 @@ function CalendarView({
 
 function MatchCard({ match }: { match: MatchSummary }) {
   const cancelled = match.isCancelled;
+  const isTournament =
+    match.maxPlayerCount != null &&
+    match.maxPlayerCount >= TOURNAMENT_THRESHOLD;
   return (
     <div
       className={`rounded-md border px-2 py-1.5 text-[11px] leading-tight ${
@@ -697,6 +707,11 @@ function MatchCard({ match }: { match: MatchSummary }) {
       <div
         className={`text-[11px] font-bold ${cancelled ? "line-through" : ""}`}
       >
+        {isTournament && (
+          <span aria-label="Tournament" title="Tournament (25+ max)">
+            🏆{" "}
+          </span>
+        )}
         {match.centralTime || "—"}
       </div>
       <div className={`text-[10px] ${cancelled ? "line-through" : ""}`}>
@@ -710,8 +725,8 @@ function MatchCard({ match }: { match: MatchSummary }) {
           </span>
           {match.secondManagerName ? (
             <>
-              {" "}· 2nd:{" "}
-              <span className="text-deep-green/85">
+              {" · "}
+              <span className="font-bold text-deep-green">
                 {match.secondManagerName}
               </span>
             </>
@@ -888,44 +903,66 @@ function ManagerRowExpandable({
                   </tr>
                 </thead>
                 <tbody>
-                  {manager.matches.map((mm) => (
-                    <tr key={mm.matchId} className="border-t border-cream-line/40">
-                      <td className="px-2 py-1 align-top">
-                        <span className="font-bold text-deep-green">
-                          {mm.centralWeekday}
-                        </span>{" "}
-                        <span className="text-deep-green/55">
-                          {fmtMonthDay(mm.centralDate)}
-                        </span>
-                      </td>
-                      <td className="px-2 py-1 align-top text-deep-green/80">
-                        {mm.centralTime ?? "—"}
-                      </td>
-                      <td className="px-2 py-1 align-top text-deep-green/80">
-                        {mm.name ?? `Match ${mm.matchId}`}
-                      </td>
-                      <td className="px-2 py-1 align-top text-deep-green/70">
-                        {mm.fieldTitle ?? "—"}
-                      </td>
-                      <td className="px-2 py-1 text-right align-top tabular-nums text-deep-green/70">
-                        {mm.maxPlayerCount ?? "—"}
-                      </td>
-                      <td className="px-2 py-1 align-top">
-                        <span
-                          className={`rounded-full px-2 py-0.5 text-[10px] font-bold uppercase tracking-[0.08em] ${
-                            mm.role === "primary"
-                              ? "bg-mint/30 text-deep-green"
-                              : "bg-blue-info/15 text-blue-info"
-                          }`}
-                        >
-                          {mm.role}
-                        </span>
-                      </td>
-                      <td className="px-2 py-1 text-right align-top tabular-nums">
-                        {formatMoney(mm.payAmount)}
-                      </td>
-                    </tr>
-                  ))}
+                  {manager.matches.map((mm) => {
+                    const isTour =
+                      mm.maxPlayerCount != null &&
+                      mm.maxPlayerCount >= TOURNAMENT_THRESHOLD;
+                    const roleLabel =
+                      mm.role === "secondary"
+                        ? "SECONDARY"
+                        : mm.coManaged
+                          ? "PRIMARY · CO-MANAGED"
+                          : "PRIMARY";
+                    return (
+                      <tr key={mm.matchId} className="border-t border-cream-line/40">
+                        <td className="px-2 py-1 align-top">
+                          <span className="font-bold text-deep-green">
+                            {mm.centralWeekday}
+                          </span>{" "}
+                          <span className="text-deep-green/55">
+                            {fmtMonthDay(mm.centralDate)}
+                          </span>
+                        </td>
+                        <td className="px-2 py-1 align-top text-deep-green/80">
+                          {mm.centralTime ?? "—"}
+                        </td>
+                        <td className="px-2 py-1 align-top text-deep-green/80">
+                          {isTour && (
+                            <span
+                              className="mr-1"
+                              aria-label="Tournament"
+                              title="Tournament (25+ max)"
+                            >
+                              🏆
+                            </span>
+                          )}
+                          {mm.name ?? `Match ${mm.matchId}`}
+                        </td>
+                        <td className="px-2 py-1 align-top text-deep-green/70">
+                          {mm.fieldTitle ?? "—"}
+                        </td>
+                        <td className="px-2 py-1 text-right align-top tabular-nums text-deep-green/70">
+                          {mm.maxPlayerCount ?? "—"}
+                        </td>
+                        <td className="px-2 py-1 align-top">
+                          <span
+                            className={`whitespace-nowrap rounded-full px-2 py-0.5 text-[10px] font-bold uppercase tracking-[0.08em] ${
+                              mm.role === "secondary"
+                                ? "bg-blue-info/15 text-blue-info"
+                                : mm.coManaged
+                                  ? "bg-mint/30 text-deep-green"
+                                  : "bg-mint/30 text-deep-green"
+                            }`}
+                          >
+                            {roleLabel}
+                          </span>
+                        </td>
+                        <td className="px-2 py-1 text-right align-top tabular-nums">
+                          {formatMoney(mm.payAmount)}
+                        </td>
+                      </tr>
+                    );
+                  })}
                 </tbody>
               </table>
             </div>
