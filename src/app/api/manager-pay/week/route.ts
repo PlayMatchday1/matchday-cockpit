@@ -41,29 +41,32 @@ function constantTimeMatch(a: string, b: string): boolean {
 }
 
 const ISO_DATE_RX = /^\d{4}-\d{2}-\d{2}$/;
-const CENTRAL_TZ = "America/Chicago";
 
-function centralDate(utcIso: string): string | null {
-  const d = new Date(utcIso);
+// mdapi_matches.start_date is the VENUE'S local wall-clock time
+// stored with a misleading "+00:00" / "Z" suffix (the upstream API
+// packages localDate as if it were UTC). Running it through a real
+// timezone converter would subtract the offset and produce wrong
+// numbers (e.g. an 18:00 CT match → 13:00 CT after a CT conversion).
+// We just read the wall-clock components directly — works for every
+// venue regardless of physical timezone, including ELP (Mountain),
+// because each row's stored clock-face already matches the venue.
+function venueDate(localIso: string): string | null {
+  const d = new Date(localIso);
   if (Number.isNaN(d.getTime())) return null;
-  const fmt = new Intl.DateTimeFormat("en-CA", {
-    timeZone: CENTRAL_TZ,
-    year: "numeric",
-    month: "2-digit",
-    day: "2-digit",
-  });
-  return fmt.format(d);
+  const y = d.getUTCFullYear();
+  const m = String(d.getUTCMonth() + 1).padStart(2, "0");
+  const day = String(d.getUTCDate()).padStart(2, "0");
+  return `${y}-${m}-${day}`;
 }
 
-function centralTime(utcIso: string): string | null {
-  const d = new Date(utcIso);
+function venueTime(localIso: string): string | null {
+  const d = new Date(localIso);
   if (Number.isNaN(d.getTime())) return null;
-  return new Intl.DateTimeFormat("en-US", {
-    timeZone: CENTRAL_TZ,
-    hour: "numeric",
-    minute: "2-digit",
-    hour12: true,
-  }).format(d);
+  const h24 = d.getUTCHours();
+  const min = d.getUTCMinutes();
+  const ampm = h24 >= 12 ? "PM" : "AM";
+  const h12 = ((h24 + 11) % 12) + 1;
+  return `${h12}:${String(min).padStart(2, "0")} ${ampm}`;
 }
 
 function weekdayUtc(yyyyMmDd: string): number {
@@ -302,7 +305,7 @@ export async function GET(req: Request) {
   // can render them. Pay/manager-roll-up below filters them out.
   const inWeek = matches.filter((m) => {
     if (!m.start_date) return false;
-    const ct = centralDate(m.start_date);
+    const ct = venueDate(m.start_date);
     if (!ct) return false;
     return ct >= weekStart && ct <= weekEnd;
   });
@@ -380,8 +383,8 @@ export async function GET(req: Request) {
   }
 
   const matchSummaries: MatchSummary[] = inWeek.map((m) => {
-    const ct = centralDate(m.start_date ?? "") ?? weekStart;
-    const cTime = m.start_date ? centralTime(m.start_date) ?? "" : "";
+    const ct = venueDate(m.start_date ?? "") ?? weekStart;
+    const cTime = m.start_date ? venueTime(m.start_date) ?? "" : "";
     const second = resolveSecond(m);
     const primaryName = displayName(
       m.manager_first_name,
@@ -448,8 +451,8 @@ export async function GET(req: Request) {
       }
       if (acc.managerId == null && id != null) acc.managerId = id;
     }
-    const ct = centralDate(m.start_date ?? "") ?? weekStart;
-    const cTime = m.start_date ? centralTime(m.start_date) ?? "" : "";
+    const ct = venueDate(m.start_date ?? "") ?? weekStart;
+    const cTime = m.start_date ? venueTime(m.start_date) ?? "" : "";
     acc.matches.push({
       matchId: m.api_id,
       cityIdentifier: m.city_identifier,
