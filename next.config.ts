@@ -10,6 +10,19 @@ const nextConfig: NextConfig = {
         destination: "/data",
         permanent: true,
       },
+      // Match Manager Pay consolidated into the public /managers page
+      // on 2026-05-11. Old admin tab + any legacy URL bookmarks
+      // redirect there.
+      {
+        source: "/finance/match-managers",
+        destination: "/managers",
+        permanent: true,
+      },
+      {
+        source: "/admin/finance/match-managers",
+        destination: "/managers",
+        permanent: true,
+      },
     ];
   },
 };

@@ -26,7 +26,6 @@ export const FINANCE_TAB_IDS = [
   // Standalone secondary-nav items
   "check-ins",
   "partner-dashboards",
-  "match-manager-pay",
 ] as const;
 
 export type FinanceTabId = (typeof FINANCE_TAB_IDS)[number];

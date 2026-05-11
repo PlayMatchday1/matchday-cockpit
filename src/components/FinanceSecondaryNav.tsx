@@ -17,13 +17,13 @@ import { Fragment } from "react";
 export type SecondaryId =
   | "configure"
   | "check-ins"
-  | "partner-dashboards"
-  | "match-manager-pay";
+  | "managers"
+  | "partner-dashboards";
 
 const ITEMS: { id: SecondaryId; label: string }[] = [
   { id: "configure", label: "Configure" },
   { id: "check-ins", label: "City Manager Check-Ins" },
-  { id: "match-manager-pay", label: "Match Manager Pay" },
+  { id: "managers", label: "Managers" },
   { id: "partner-dashboards", label: "Partner Dashboards" },
 ];
 

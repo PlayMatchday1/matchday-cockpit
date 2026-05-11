@@ -1,5 +1,6 @@
 "use client";
 
+import { useRouter } from "next/navigation";
 import { useEffect, useRef, useState } from "react";
 import PagePermissionGuard from "@/components/PagePermissionGuard";
 import BillingScheduleView from "@/components/BillingScheduleView";
@@ -24,7 +25,6 @@ import FinanceTabNav, {
   type FinanceTabId,
 } from "@/components/FinanceTabNav";
 import ManagerPayGrid from "@/components/ManagerPayGrid";
-import MatchManagerPayView from "@/components/MatchManagerPayView";
 import MatchPnL from "@/components/MatchPnL";
 import PartnerDashboardsAdmin from "@/components/PartnerDashboardsAdmin";
 import RevenueAdminView from "@/components/RevenueAdminView";
@@ -54,7 +54,6 @@ function deriveSecondary(tab: FinanceTabId): SecondaryId | null {
   if (isConfigureSubTab(tab)) return "configure";
   if (tab === "check-ins") return "check-ins";
   if (tab === "partner-dashboards") return "partner-dashboards";
-  if (tab === "match-manager-pay") return "match-manager-pay";
   return null;
 }
 
@@ -91,6 +90,7 @@ function getInitialTab(): FinanceTabId {
 }
 
 function FinanceLandingContent() {
+  const router = useRouter();
   const [quarterLabel, setQuarterLabel] = useState<string>("");
   const [activeTab, setActiveTab] = useState<FinanceTabId>(() => getInitialTab());
   // Lazy-mount strategy: tabs are mounted the first time they're
@@ -108,11 +108,14 @@ function FinanceLandingContent() {
   }
 
   // Secondary nav click. "configure" opens the sub-strip and lands
-  // on the last-viewed Configure tab (default: Revenue). The other
-  // two are direct full-tab swaps.
+  // on the last-viewed Configure tab (default: Revenue). "managers"
+  // navigates away to the public /managers page. The remaining two
+  // (check-ins, partner-dashboards) are direct in-page tab swaps.
   function openSecondary(s: SecondaryId) {
     if (s === "configure") {
       selectTab(getLastConfigureSubTab());
+    } else if (s === "managers") {
+      router.push("/managers");
     } else {
       selectTab(s);
     }
@@ -250,9 +253,6 @@ function FinanceLandingContent() {
       </TabPanel>
       <TabPanel id="partner-dashboards" active={activeTab} visited={visited}>
         <PartnerDashboardsAdmin inline />
-      </TabPanel>
-      <TabPanel id="match-manager-pay" active={activeTab} visited={visited}>
-        <MatchManagerPayView />
       </TabPanel>
       <TabPanel id="field-costs" active={activeTab} visited={visited}>
         <FieldCostsView />
