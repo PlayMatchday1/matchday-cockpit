@@ -145,6 +145,17 @@ function fmtMonthDayYear(yyyyMmDd: string): string {
   });
 }
 
+// Per-spot price stored in mdapi_matches.registration_price is in
+// cents (platform API convention). Always two decimals on the card.
+function formatSpotPrice(cents: number): string {
+  return (cents / 100).toLocaleString("en-US", {
+    style: "currency",
+    currency: "USD",
+    minimumFractionDigits: 2,
+    maximumFractionDigits: 2,
+  });
+}
+
 function formatMoney(n: number): string {
   return n.toLocaleString("en-US", {
     style: "currency",
@@ -711,7 +722,7 @@ function MatchCard({ match }: { match: MatchSummary }) {
       <div className="mt-0.5 text-[10px] text-deep-green/60">
         {match.playerCount ?? 0}/{match.maxPlayerCount ?? "?"} players
         {match.registrationPrice != null
-          ? ` · ${formatMoney(match.registrationPrice)}`
+          ? ` · ${formatSpotPrice(match.registrationPrice)}`
           : ""}
       </div>
     </div>
