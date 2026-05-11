@@ -796,11 +796,13 @@ function PayTable({
   if (city.managers.length === 0) return null;
   const cityTotals = cityCounts(city.managers);
   return (
-    <div className="overflow-hidden rounded-2xl border-[1.5px] border-cream-line bg-white shadow-md shadow-deep-green/10">
-      <table className="w-full text-sm">
+    <div className="overflow-x-auto rounded-2xl border-[1.5px] border-cream-line bg-white shadow-md shadow-deep-green/10 [-webkit-overflow-scrolling:touch]">
+      <table className="w-full min-w-[640px] text-sm">
         <thead className="bg-cream-soft text-[10px] font-bold uppercase tracking-[0.12em] text-deep-green/65">
           <tr>
-            <th className="px-4 py-2 text-left">Manager</th>
+            <th className="sticky left-0 z-10 bg-cream-soft px-4 py-2 text-left">
+              Manager
+            </th>
             <th className="px-4 py-2 text-right">$20 matches</th>
             <th className="px-4 py-2 text-right">$30 matches</th>
             <th className="px-4 py-2 text-right">Base</th>
@@ -818,8 +820,8 @@ function PayTable({
               onSaveAdjustment={onSaveAdjustment}
             />
           ))}
-          <tr className="border-t-2 border-cream-line bg-cream-soft/50 font-bold text-deep-green">
-            <td className="px-4 py-2 text-right">
+          <tr className="border-t-2 border-cream-line bg-cream-soft font-bold text-deep-green">
+            <td className="sticky left-0 z-10 bg-cream-soft px-4 py-2 text-right">
               {city.cityIdentifier} total
             </td>
             <td className="px-4 py-2 text-right tabular-nums">
@@ -870,7 +872,7 @@ function ManagerRowExpandable({
         }`}
         onClick={() => setOpen((o) => !o)}
       >
-        <td className="px-4 py-2 align-top">
+        <td className="sticky left-0 z-10 bg-white px-4 py-2 align-top">
           <div className="font-bold text-deep-green">
             <span
               aria-hidden
@@ -1164,8 +1166,8 @@ function TableView({
   const showCityCol = cityFilter === "ALL";
 
   return (
-    <div className="overflow-hidden rounded-2xl border-[1.5px] border-cream-line bg-white shadow-md shadow-deep-green/10">
-      <table className="w-full text-sm">
+    <div className="overflow-x-auto rounded-2xl border-[1.5px] border-cream-line bg-white shadow-md shadow-deep-green/10 [-webkit-overflow-scrolling:touch]">
+      <table className={`w-full text-sm ${showCityCol ? "min-w-[760px]" : "min-w-[640px]"}`}>
         <thead className="bg-cream-soft text-[10px] font-bold uppercase tracking-[0.12em] text-deep-green/65">
           <tr>
             <SortHeader
@@ -1174,6 +1176,7 @@ function TableView({
               onClick={() => onHeader("name")}
               align="left"
               arrow={arrow("name")}
+              sticky
             />
             {showCityCol && (
               <SortHeader
@@ -1233,7 +1236,7 @@ function TableView({
                   : "border-b border-cream-line/60"
               }
             >
-              <td className="px-4 py-2 align-top">
+              <td className="sticky left-0 z-10 bg-white px-4 py-2 align-top">
                 <div className="font-bold text-deep-green">{m.managerName}</div>
                 {isAdmin && m.managerEmail && (
                   <div className="text-[11px] text-deep-green/55">
@@ -1284,8 +1287,11 @@ function TableView({
             </tr>
             );
           })}
-          <tr className="border-t-2 border-cream-line bg-cream-soft/50 font-bold text-deep-green">
-            <td className="px-4 py-2 text-right" colSpan={showCityCol ? 2 : 1}>
+          <tr className="border-t-2 border-cream-line bg-cream-soft font-bold text-deep-green">
+            <td
+              className="sticky left-0 z-10 bg-cream-soft px-4 py-2 text-right"
+              colSpan={showCityCol ? 2 : 1}
+            >
               {cityFilter === "ALL" ? "Network total" : `${cityFilter} total`}
             </td>
             <td className="px-4 py-2 text-right tabular-nums">
@@ -1316,16 +1322,20 @@ function SortHeader({
   onClick,
   align,
   arrow,
+  sticky,
 }: {
   label: string;
   active: boolean;
   onClick: () => void;
   align: "left" | "right";
   arrow: string;
+  sticky?: boolean;
 }) {
   return (
     <th
-      className={`px-4 py-2 ${align === "left" ? "text-left" : "text-right"}`}
+      className={`px-4 py-2 ${align === "left" ? "text-left" : "text-right"} ${
+        sticky ? "sticky left-0 z-10 bg-cream-soft" : ""
+      }`}
     >
       <button
         type="button"
