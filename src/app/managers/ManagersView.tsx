@@ -53,6 +53,37 @@ type ManagerMatch = {
 
 const TOURNAMENT_THRESHOLD = 25;
 
+// Split a manager's match list into pay-tier counts. Drives the
+// "$20 matches" / "$30 matches" columns. Co-managed tournaments
+// count as $20 (the manager was paid $20, not $30) — the label
+// reflects pay tier, not match size.
+function payCounts(matches: ManagerMatch[]): {
+  count20: number;
+  count30: number;
+} {
+  let count20 = 0;
+  let count30 = 0;
+  for (const m of matches) {
+    if (m.payAmount === 30) count30++;
+    else count20++;
+  }
+  return { count20, count30 };
+}
+
+function cityCounts(managers: ManagerRow[]): {
+  count20: number;
+  count30: number;
+} {
+  let count20 = 0;
+  let count30 = 0;
+  for (const r of managers) {
+    const c = payCounts(r.matches);
+    count20 += c.count20;
+    count30 += c.count30;
+  }
+  return { count20, count30 };
+}
+
 type ManagerRow = {
   managerEmail: string | null;
   managerName: string;
@@ -763,13 +794,15 @@ function PayTable({
   ) => Promise<void>;
 }) {
   if (city.managers.length === 0) return null;
+  const cityTotals = cityCounts(city.managers);
   return (
     <div className="overflow-hidden rounded-2xl border-[1.5px] border-cream-line bg-white shadow-md shadow-deep-green/10">
       <table className="w-full text-sm">
         <thead className="bg-cream-soft text-[10px] font-bold uppercase tracking-[0.12em] text-deep-green/65">
           <tr>
             <th className="px-4 py-2 text-left">Manager</th>
-            <th className="px-4 py-2 text-right">Matches</th>
+            <th className="px-4 py-2 text-right">$20 matches</th>
+            <th className="px-4 py-2 text-right">$30 matches</th>
             <th className="px-4 py-2 text-right">Base</th>
             <th className="px-4 py-2 text-right">Additional</th>
             <th className="px-4 py-2 text-right">Total</th>
@@ -790,7 +823,10 @@ function PayTable({
               {city.cityIdentifier} total
             </td>
             <td className="px-4 py-2 text-right tabular-nums">
-              {city.matchCount}
+              {cityTotals.count20}
+            </td>
+            <td className="px-4 py-2 text-right tabular-nums">
+              {cityTotals.count30}
             </td>
             <td className="px-4 py-2 text-right tabular-nums">
               {formatMoney(city.baseTotal)}
@@ -825,6 +861,7 @@ function ManagerRowExpandable({
   ) => Promise<void>;
 }) {
   const [open, setOpen] = useState(false);
+  const { count20, count30 } = payCounts(manager.matches);
   return (
     <>
       <tr
@@ -850,7 +887,10 @@ function ManagerRowExpandable({
           )}
         </td>
         <td className="px-4 py-2 text-right align-top tabular-nums">
-          {manager.matchCount}
+          {count20}
+        </td>
+        <td className="px-4 py-2 text-right align-top tabular-nums">
+          {count30}
         </td>
         <td className="px-4 py-2 text-right align-top tabular-nums">
           {formatMoney(manager.baseTotal)}
@@ -888,7 +928,7 @@ function ManagerRowExpandable({
             isLast ? "" : "border-b border-cream-line/60"
           }`}
         >
-          <td colSpan={5} className="px-4 py-3">
+          <td colSpan={6} className="px-4 py-3">
             <div className="overflow-x-auto">
               <table className="w-full text-xs">
                 <thead className="text-[10px] font-bold uppercase tracking-[0.12em] text-deep-green/55">
@@ -1040,7 +1080,8 @@ function AdjustmentInput({
 type SortKey =
   | "name"
   | "city"
-  | "matchCount"
+  | "count20"
+  | "count30"
   | "baseTotal"
   | "adjustment"
   | "total";
@@ -1088,8 +1129,11 @@ function TableView({
         case "city":
           cmp = (a.cityIdentifier ?? "").localeCompare(b.cityIdentifier ?? "");
           break;
-        case "matchCount":
-          cmp = a.matchCount - b.matchCount;
+        case "count20":
+          cmp = payCounts(a.matches).count20 - payCounts(b.matches).count20;
+          break;
+        case "count30":
+          cmp = payCounts(a.matches).count30 - payCounts(b.matches).count30;
           break;
         case "baseTotal":
           cmp = a.baseTotal - b.baseTotal;
@@ -1141,11 +1185,18 @@ function TableView({
               />
             )}
             <SortHeader
-              label="Matches"
-              active={sortKey === "matchCount"}
-              onClick={() => onHeader("matchCount")}
+              label="$20 matches"
+              active={sortKey === "count20"}
+              onClick={() => onHeader("count20")}
               align="right"
-              arrow={arrow("matchCount")}
+              arrow={arrow("count20")}
+            />
+            <SortHeader
+              label="$30 matches"
+              active={sortKey === "count30"}
+              onClick={() => onHeader("count30")}
+              align="right"
+              arrow={arrow("count30")}
             />
             <SortHeader
               label="Base"
@@ -1171,7 +1222,9 @@ function TableView({
           </tr>
         </thead>
         <tbody>
-          {sorted.map((m, i) => (
+          {sorted.map((m, i) => {
+            const { count20, count30 } = payCounts(m.matches);
+            return (
             <tr
               key={m.managerName + (m.managerEmail ?? i)}
               className={
@@ -1194,7 +1247,10 @@ function TableView({
                 </td>
               )}
               <td className="px-4 py-2 text-right align-top tabular-nums">
-                {m.matchCount}
+                {count20}
+              </td>
+              <td className="px-4 py-2 text-right align-top tabular-nums">
+                {count30}
               </td>
               <td className="px-4 py-2 text-right align-top tabular-nums">
                 {formatMoney(m.baseTotal)}
@@ -1222,17 +1278,21 @@ function TableView({
                   </span>
                 )}
               </td>
-              <td className="px-4 py-2 text-right align-top font-bold tabular-nums text-deep-green">
+<td className="px-4 py-2 text-right align-top font-bold tabular-nums text-deep-green">
                 {formatMoney(m.total)}
               </td>
             </tr>
-          ))}
+            );
+          })}
           <tr className="border-t-2 border-cream-line bg-cream-soft/50 font-bold text-deep-green">
             <td className="px-4 py-2 text-right" colSpan={showCityCol ? 2 : 1}>
               {cityFilter === "ALL" ? "Network total" : `${cityFilter} total`}
             </td>
             <td className="px-4 py-2 text-right tabular-nums">
-              {network.matchCount}
+              {sorted.reduce((s, m) => s + payCounts(m.matches).count20, 0)}
+            </td>
+            <td className="px-4 py-2 text-right tabular-nums">
+              {sorted.reduce((s, m) => s + payCounts(m.matches).count30, 0)}
             </td>
             <td className="px-4 py-2 text-right tabular-nums">
               {formatMoney(network.baseTotal)}
