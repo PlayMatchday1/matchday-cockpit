@@ -1,21 +1,29 @@
-// GET /api/manager-pay/week?week=YYYY-MM-DD
+// GET /api/manager-pay/week?week=YYYY-MM-DD[&city=ATX]
 //
-// Computes Match Manager pay for the Mon–Sun Central-time work week
-// starting on the given Monday. Reads mdapi_matches (synced from the
-// MatchDay platform API) + mdapi_users (for second-manager email
-// lookup) + manager_pay_adjustments (cockpit-managed Additional Pay
-// rows). No external API calls.
+// Computes Match Manager pay AND returns the per-match schedule for
+// the Mon–Sun Central-time work week starting on the given Monday.
 //
-// Pay rules (per user spec):
+// Reads mdapi_matches (synced from the MatchDay platform API) +
+// mdapi_users (for second-manager name/email lookup) +
+// manager_pay_adjustments (cockpit-managed Additional Pay rows). No
+// external API calls.
+//
+// Pay rules:
 //   - maxPlayerCount > 22 → $30 per match per assigned manager
 //   - maxPlayerCount ≤ 22 → $20 per match per assigned manager
 //   - Both primary (manager_email) and secondary (lookup by
 //     second_manager_id → mdapi_users.email) get the full amount.
-//   - Cancelled matches are excluded.
+//   - Cancelled matches do NOT pay (excluded from totals) but are
+//     still returned in the schedule with isCancelled=true so the
+//     calendar can render them struck through.
 //   - Pay date = Thursday after the work week ends (Sunday + 4 days).
 //
-// Auth: dual-mode bearer — session token via supabase.auth.getUser
-// OR Bearer CRON_SECRET. Same pattern as /api/cities/users-lens.
+// Auth: dual-mode bearer + anonymous.
+//   - Valid bearer (session or CRON_SECRET) → admin response, emails
+//     included.
+//   - No bearer (or invalid) → public response, emails stripped
+//     server-side. Page is genuinely public so city managers and the
+//     ops team can share/bookmark week URLs.
 
 import { timingSafeEqual } from "node:crypto";
 import { createClient } from "@supabase/supabase-js";
@@ -34,9 +42,6 @@ function constantTimeMatch(a: string, b: string): boolean {
 const ISO_DATE_RX = /^\d{4}-\d{2}-\d{2}$/;
 const CENTRAL_TZ = "America/Chicago";
 
-// Returns the YYYY-MM-DD wall-clock date in America/Chicago for a
-// given UTC timestamp. Uses Intl rather than hardcoding -5/-6 so DST
-// transitions are correct.
 function centralDate(utcIso: string): string | null {
   const d = new Date(utcIso);
   if (Number.isNaN(d.getTime())) return null;
@@ -46,22 +51,30 @@ function centralDate(utcIso: string): string | null {
     month: "2-digit",
     day: "2-digit",
   });
-  return fmt.format(d); // en-CA → "YYYY-MM-DD"
+  return fmt.format(d);
 }
 
-// Weekday (0=Sun..6=Sat) for a YYYY-MM-DD interpreted as a UTC date.
+function centralTime(utcIso: string): string | null {
+  const d = new Date(utcIso);
+  if (Number.isNaN(d.getTime())) return null;
+  return new Intl.DateTimeFormat("en-US", {
+    timeZone: CENTRAL_TZ,
+    hour: "numeric",
+    minute: "2-digit",
+    hour12: true,
+  }).format(d);
+}
+
 function weekdayUtc(yyyyMmDd: string): number {
   return new Date(`${yyyyMmDd}T00:00:00.000Z`).getUTCDay();
 }
 
-// Add N calendar days to a YYYY-MM-DD string. Returns YYYY-MM-DD.
 function addDays(yyyyMmDd: string, n: number): string {
   const d = new Date(`${yyyyMmDd}T00:00:00.000Z`);
   d.setUTCDate(d.getUTCDate() + n);
   return d.toISOString().slice(0, 10);
 }
 
-// Pay date = Sunday (week_start + 6) + 4 calendar days = Thursday.
 function payDateForWeek(weekStart: string): string {
   return addDays(weekStart, 10);
 }
@@ -87,6 +100,8 @@ type MatchRow = {
   manager_last_name: string | null;
   second_manager_id: number | null;
   max_player_count: number | null;
+  player_count: number | null;
+  registration_price: number | null;
   name: string | null;
   raw: ApiMatchRaw | null;
 };
@@ -104,13 +119,39 @@ type AdjustmentRow = {
   notes: string | null;
 };
 
+// Per-match summary used by the calendar view (one row per match,
+// regardless of how many managers are assigned). Includes cancelled
+// matches.
+export type MatchSummary = {
+  matchId: number;
+  cityIdentifier: string | null;
+  fieldTitle: string | null;
+  startDate: string;
+  centralDate: string;
+  centralWeekday: string;
+  centralTime: string;
+  name: string | null;
+  maxPlayerCount: number | null;
+  playerCount: number | null;
+  registrationPrice: number | null;
+  isCancelled: boolean;
+  primaryManagerName: string | null;
+  primaryManagerEmail: string | null; // null in public response
+  secondManagerName: string | null;
+  secondManagerEmail: string | null; // null in public response
+  payPerManager: number; // 0 if cancelled
+};
+
+// Per-manager match assignment (used inside the expandable per-manager
+// detail row on the pay table).
 export type ManagerMatch = {
   matchId: number;
   cityIdentifier: string | null;
   fieldTitle: string | null;
-  startDate: string; // ISO UTC
-  centralDate: string; // YYYY-MM-DD in CT
-  centralWeekday: string; // Mon, Tue, ...
+  startDate: string;
+  centralDate: string;
+  centralWeekday: string;
+  centralTime: string;
   name: string | null;
   maxPlayerCount: number | null;
   payAmount: number;
@@ -118,7 +159,7 @@ export type ManagerMatch = {
 };
 
 export type ManagerRow = {
-  managerEmail: string;
+  managerEmail: string | null; // null in public response
   managerName: string;
   managerId: number | null;
   cityIdentifier: string | null;
@@ -133,6 +174,7 @@ export type ManagerRow = {
 export type CitySection = {
   cityIdentifier: string;
   managers: ManagerRow[];
+  matches: MatchSummary[];
   matchCount: number;
   baseTotal: number;
   adjustment: number;
@@ -140,10 +182,11 @@ export type CitySection = {
 };
 
 export type ManagerPayWeekPayload = {
-  weekStart: string; // YYYY-MM-DD (Monday)
-  weekEnd: string; // YYYY-MM-DD (Sunday)
-  payDate: string; // YYYY-MM-DD (Thursday after Sunday)
+  weekStart: string;
+  weekEnd: string;
+  payDate: string;
   computedAt: string;
+  isAdmin: boolean;
   cities: CitySection[];
   network: {
     matchCount: number;
@@ -164,46 +207,47 @@ function payAmount(maxPlayerCount: number | null): number {
 function displayName(
   first: string | null | undefined,
   last: string | null | undefined,
-  emailFallback: string,
-): string {
+  emailFallback: string | null,
+): string | null {
   const parts = [first, last].filter((s): s is string => !!s && s.trim() !== "");
   if (parts.length > 0) return parts.join(" ");
   return emailFallback;
 }
 
-export async function GET(req: Request) {
+// Check whether the request has a valid admin bearer token. Returns
+// true for CRON_SECRET matches or any logged-in Supabase session.
+async function checkAdmin(req: Request): Promise<boolean> {
   const auth = req.headers.get("authorization") ?? "";
-  if (!auth.startsWith("Bearer ")) {
-    return Response.json(
-      { error: "Missing Authorization header" },
-      { status: 401 },
-    );
-  }
+  if (!auth.startsWith("Bearer ")) return false;
   const token = auth.slice("Bearer ".length).trim();
-  if (!token) {
-    return Response.json({ error: "Empty bearer token" }, { status: 401 });
-  }
+  if (!token) return false;
 
   const supabaseUrl = process.env.NEXT_PUBLIC_SUPABASE_URL;
   const supabaseKey = process.env.NEXT_PUBLIC_SUPABASE_PUBLISHABLE_KEY;
+  if (!supabaseUrl || !supabaseKey) return false;
+
+  const cronSecret = process.env.CRON_SECRET;
+  if (cronSecret && constantTimeMatch(token, cronSecret)) return true;
+
+  const sessionClient = createClient(supabaseUrl, supabaseKey, {
+    global: { headers: { Authorization: `Bearer ${token}` } },
+    auth: { persistSession: false, autoRefreshToken: false },
+  });
+  const { data, error } = await sessionClient.auth.getUser(token);
+  return !error && !!data?.user;
+}
+
+export async function GET(req: Request) {
+  const supabaseUrl = process.env.NEXT_PUBLIC_SUPABASE_URL;
   const serviceKey = process.env.SUPABASE_SERVICE_ROLE_KEY;
-  if (!supabaseUrl || !supabaseKey || !serviceKey) {
+  if (!supabaseUrl || !serviceKey) {
     return Response.json(
       { error: "Supabase env not configured" },
       { status: 500 },
     );
   }
-  const cronSecret = process.env.CRON_SECRET;
-  if (!cronSecret || !constantTimeMatch(token, cronSecret)) {
-    const sessionClient = createClient(supabaseUrl, supabaseKey, {
-      global: { headers: { Authorization: `Bearer ${token}` } },
-      auth: { persistSession: false, autoRefreshToken: false },
-    });
-    const { data, error } = await sessionClient.auth.getUser(token);
-    if (error || !data?.user) {
-      return Response.json({ error: "Invalid session" }, { status: 401 });
-    }
-  }
+
+  const isAdmin = await checkAdmin(req);
 
   const supabase = createClient(supabaseUrl, serviceKey, {
     auth: { persistSession: false, autoRefreshToken: false },
@@ -228,8 +272,6 @@ export async function GET(req: Request) {
   const weekEnd = addDays(weekStart, 6);
   const payDate = payDateForWeek(weekStart);
 
-  // Pull matches in a generous UTC window around the CT week (±2 days
-  // covers any DST edge). Filter precisely after by Central wall-clock.
   const queryFrom = `${addDays(weekStart, -1)}T00:00:00Z`;
   const queryTo = `${addDays(weekEnd, 2)}T00:00:00Z`;
 
@@ -237,22 +279,24 @@ export async function GET(req: Request) {
     supabase
       .from("mdapi_matches")
       .select(
-        "api_id, city_identifier, field_title, start_date, is_cancelled, manager_id, manager_email, manager_first_name, manager_last_name, second_manager_id, max_player_count, name, raw",
+        "api_id, city_identifier, field_title, start_date, is_cancelled, manager_id, manager_email, manager_first_name, manager_last_name, second_manager_id, max_player_count, player_count, registration_price, name, raw",
       )
       .gte("start_date", queryFrom)
       .lt("start_date", queryTo)
       .order("api_id"),
   );
 
+  // All matches in the CT week — include cancelled so the calendar
+  // can render them. Pay/manager-roll-up below filters them out.
   const inWeek = matches.filter((m) => {
-    if (m.is_cancelled) return false;
     if (!m.start_date) return false;
     const ct = centralDate(m.start_date);
     if (!ct) return false;
     return ct >= weekStart && ct <= weekEnd;
   });
 
-  // Collect second-manager IDs that need email lookup.
+  // Collect second-manager IDs across all in-week matches (incl
+  // cancelled — we still want names for the calendar).
   const secondIds = new Set<number>();
   for (const m of inWeek) {
     if (m.second_manager_id) secondIds.add(m.second_manager_id);
@@ -261,9 +305,6 @@ export async function GET(req: Request) {
   const secondById = new Map<number, UserRow>();
   if (secondIds.size > 0) {
     const ids = Array.from(secondIds);
-    // PostgREST `in` supports a few hundred values per request without
-    // hitting URL-length limits; this is bounded by the number of
-    // distinct second managers in a single week (small).
     const { data, error } = await supabase
       .from("mdapi_users")
       .select("id, email, first_name, last_name")
@@ -279,7 +320,6 @@ export async function GET(req: Request) {
     }
   }
 
-  // Load adjustments keyed by manager_email (case-insensitive).
   const { data: adjData, error: adjErr } = await supabase
     .from("manager_pay_adjustments")
     .select("manager_email, amount, notes")
@@ -298,8 +338,57 @@ export async function GET(req: Request) {
     adjByEmail.set(key, { amount: amt, notes: row.notes });
   }
 
-  // Build per-manager rows. Key = lower(email) so primary/secondary
-  // appearances of the same person merge cleanly.
+  // --- Build per-match summaries (calendar view, all matches incl cancelled)
+  function resolveSecond(m: MatchRow): { email: string | null; name: string | null } {
+    if (!m.second_manager_id) return { email: null, name: null };
+    const u = secondById.get(m.second_manager_id);
+    if (u) {
+      return {
+        email: u.email ?? null,
+        name: displayName(u.first_name, u.last_name, u.email ?? null),
+      };
+    }
+    const sm = m.raw?.secondManager;
+    if (sm && typeof sm === "object" && sm.email) {
+      return {
+        email: sm.email,
+        name: displayName(sm.firstName, sm.lastName, sm.email),
+      };
+    }
+    return { email: null, name: null };
+  }
+
+  const matchSummaries: MatchSummary[] = inWeek.map((m) => {
+    const ct = centralDate(m.start_date ?? "") ?? weekStart;
+    const cTime = m.start_date ? centralTime(m.start_date) ?? "" : "";
+    const second = resolveSecond(m);
+    const primaryName = displayName(
+      m.manager_first_name,
+      m.manager_last_name,
+      m.manager_email ?? null,
+    );
+    return {
+      matchId: m.api_id,
+      cityIdentifier: m.city_identifier,
+      fieldTitle: m.field_title,
+      startDate: m.start_date ?? "",
+      centralDate: ct,
+      centralWeekday: WEEKDAY_NAMES[weekdayUtc(ct)],
+      centralTime: cTime,
+      name: m.name,
+      maxPlayerCount: m.max_player_count,
+      playerCount: m.player_count,
+      registrationPrice: m.registration_price,
+      isCancelled: !!m.is_cancelled,
+      primaryManagerName: primaryName,
+      primaryManagerEmail: isAdmin ? (m.manager_email ?? null) : null,
+      secondManagerName: second.name,
+      secondManagerEmail: isAdmin ? second.email : null,
+      payPerManager: m.is_cancelled ? 0 : payAmount(m.max_player_count),
+    };
+  });
+
+  // --- Per-manager roll-up (only non-cancelled matches pay)
   type ManagerAcc = {
     managerEmail: string;
     managerName: string;
@@ -329,21 +418,21 @@ export async function GET(req: Request) {
       };
       accByEmail.set(key, acc);
     } else {
-      // Prefer a non-empty name + numeric id if we encounter them later.
       if (!acc.managerName || acc.managerName === acc.managerEmail) {
         acc.managerName = name;
       }
       if (acc.managerId == null && id != null) acc.managerId = id;
     }
     const ct = centralDate(m.start_date ?? "") ?? weekStart;
-    const wd = WEEKDAY_NAMES[weekdayUtc(ct)];
+    const cTime = m.start_date ? centralTime(m.start_date) ?? "" : "";
     acc.matches.push({
       matchId: m.api_id,
       cityIdentifier: m.city_identifier,
       fieldTitle: m.field_title,
       startDate: m.start_date ?? "",
       centralDate: ct,
-      centralWeekday: wd,
+      centralWeekday: WEEKDAY_NAMES[weekdayUtc(ct)],
+      centralTime: cTime,
       name: m.name,
       maxPlayerCount: m.max_player_count,
       payAmount: payAmount(m.max_player_count),
@@ -354,35 +443,23 @@ export async function GET(req: Request) {
   }
 
   for (const m of inWeek) {
+    if (m.is_cancelled) continue;
     if (m.manager_email) {
       addAssignment(
         m.manager_email,
-        displayName(m.manager_first_name, m.manager_last_name, m.manager_email),
+        displayName(m.manager_first_name, m.manager_last_name, m.manager_email) ??
+          m.manager_email,
         m.manager_id,
         "primary",
         m,
       );
     }
     if (m.second_manager_id) {
-      let email: string | null = null;
-      let name: string | null = null;
-      const userRow = secondById.get(m.second_manager_id);
-      if (userRow) {
-        email = userRow.email;
-        name = displayName(userRow.first_name, userRow.last_name, userRow.email);
-      } else {
-        // Fallback to raw.secondManager if the sync stored it (older
-        // rows may not have run through mdapi_users sync yet).
-        const sm = m.raw?.secondManager;
-        if (sm && typeof sm === "object" && sm.email) {
-          email = sm.email;
-          name = displayName(sm.firstName, sm.lastName, sm.email);
-        }
-      }
-      if (email) {
+      const second = resolveSecond(m);
+      if (second.email) {
         addAssignment(
-          email,
-          name ?? email,
+          second.email,
+          second.name ?? second.email,
           m.second_manager_id,
           "secondary",
           m,
@@ -391,8 +468,6 @@ export async function GET(req: Request) {
     }
   }
 
-  // Reduce to ManagerRow (dominant city = the city with the most
-  // matches in the week; tie → first-seen).
   const managerRows: ManagerRow[] = [];
   for (const acc of accByEmail.values()) {
     let dominantCity: string | null = null;
@@ -406,7 +481,7 @@ export async function GET(req: Request) {
     const baseTotal = acc.matches.reduce((s, m) => s + m.payAmount, 0);
     const adj = adjByEmail.get(acc.managerEmail.toLowerCase());
     managerRows.push({
-      managerEmail: acc.managerEmail,
+      managerEmail: isAdmin ? acc.managerEmail : null,
       managerName: acc.managerName,
       managerId: acc.managerId,
       cityIdentifier: dominantCity,
@@ -421,25 +496,29 @@ export async function GET(req: Request) {
     });
   }
 
-  // Group into cities (dominant city). Sort cities alphabetically;
-  // managers within a city by name.
-  const cityMap = new Map<string, ManagerRow[]>();
-  for (const row of managerRows) {
-    const key = row.cityIdentifier ?? "Unknown";
-    const list = cityMap.get(key) ?? [];
-    list.push(row);
-    cityMap.set(key, list);
-  }
-  const cities: CitySection[] = Array.from(cityMap.entries())
-    .sort(([a], [b]) => a.localeCompare(b))
-    .map(([cityIdentifier, managers]) => {
-      managers.sort((a, b) => a.managerName.localeCompare(b.managerName));
+  // Group both managers and matches by city. A city is included if
+  // it has any matches in the week (so the calendar shows empty days)
+  // or any pay roll-up.
+  const allCityKeys = new Set<string>();
+  for (const m of matchSummaries) allCityKeys.add(m.cityIdentifier ?? "Unknown");
+  for (const r of managerRows) allCityKeys.add(r.cityIdentifier ?? "Unknown");
+
+  const cities: CitySection[] = Array.from(allCityKeys)
+    .sort((a, b) => a.localeCompare(b))
+    .map((cityKey) => {
+      const managers = managerRows
+        .filter((r) => (r.cityIdentifier ?? "Unknown") === cityKey)
+        .sort((a, b) => a.managerName.localeCompare(b.managerName));
+      const cityMatches = matchSummaries
+        .filter((m) => (m.cityIdentifier ?? "Unknown") === cityKey)
+        .sort((a, b) => a.startDate.localeCompare(b.startDate));
       const matchCount = managers.reduce((s, m) => s + m.matchCount, 0);
       const baseTotal = managers.reduce((s, m) => s + m.baseTotal, 0);
       const adjustment = managers.reduce((s, m) => s + m.adjustment, 0);
       return {
-        cityIdentifier,
+        cityIdentifier: cityKey,
         managers,
+        matches: cityMatches,
         matchCount,
         baseTotal,
         adjustment,
@@ -460,6 +539,7 @@ export async function GET(req: Request) {
     weekEnd,
     payDate,
     computedAt: new Date().toISOString(),
+    isAdmin,
     cities,
     network,
   };
