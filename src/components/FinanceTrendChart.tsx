@@ -12,8 +12,8 @@ import {
   YAxis,
 } from "recharts";
 import { useFinanceData } from "@/lib/useFinanceData";
+import { useFinanceQuarter } from "@/lib/financeQuarter";
 import {
-  Q2_MONTHS,
   netPLFor,
   netRevenueFor,
   totalExpensesFor,
@@ -32,6 +32,7 @@ function fmtTooltip(v: number): string {
 
 export default function FinanceTrendChart() {
   const { data, loading, error } = useFinanceData();
+  const quarter = useFinanceQuarter();
 
   if (loading) {
     return (
@@ -49,11 +50,11 @@ export default function FinanceTrendChart() {
   }
   if (!data) return null;
 
-  const chartData = Q2_MONTHS.map((m) => ({
-    month: m.replace(" 2026", ""),
-    revenue: Math.round(netRevenueFor(data, m, "projection")),
-    expenses: Math.round(totalExpensesFor(data, m, "projection")),
-    netPL: Math.round(netPLFor(data, m, "projection")),
+  const chartData = quarter.months.map((m) => ({
+    month: m.shortName,
+    revenue: Math.round(netRevenueFor(data, m.key, "projection")),
+    expenses: Math.round(totalExpensesFor(data, m.key, "projection")),
+    netPL: Math.round(netPLFor(data, m.key, "projection")),
   }));
 
   return (
@@ -61,7 +62,7 @@ export default function FinanceTrendChart() {
       <div className="mb-4 flex flex-wrap items-baseline justify-between gap-2">
         <div>
           <h2 className="font-display text-3xl uppercase tracking-tight text-deep-green md:text-4xl">
-            Q2 Trend
+            {quarter.label} Trend
           </h2>
           <p className="text-xs text-deep-green/60">
             Revenue + expenses by month · Net P&L line overlay · projected

@@ -3,13 +3,13 @@
 import { useMemo } from "react";
 import { useFinanceData } from "@/lib/useFinanceData";
 import { useMatchData } from "@/lib/useMatchData";
+import { useFinanceQuarter } from "@/lib/financeQuarter";
 import {
   buildMembershipHealthRows,
-  getCurrentQ2Month,
+  getCurrentMonthInQuarter,
   membershipHealthAvailable,
   monthScopedTitle,
   type MembershipHealthRow,
-  Q2_MONTHS,
   type Q2Month,
 } from "@/lib/financeStats";
 
@@ -20,11 +20,17 @@ import {
 export default function MembershipHealthTable() {
   const { data, loading: financeLoading } = useFinanceData();
   const { rows: matchRows, loading: matchLoading } = useMatchData();
+  const quarter = useFinanceQuarter();
 
+  // Default to current month in the active quarter; fall back to the
+  // last month of the quarter (so viewing past quarters lands on the
+  // final closed month, where the data is most meaningful).
   const month: Q2Month = useMemo(() => {
-    const cur = getCurrentQ2Month(new Date());
-    return cur ?? Q2_MONTHS[0];
-  }, []);
+    return (
+      getCurrentMonthInQuarter(quarter, new Date()) ??
+      quarter.months[quarter.months.length - 1].key
+    );
+  }, [quarter]);
 
   const mhAvailable = data ? membershipHealthAvailable(data) : false;
   const rows = useMemo(

@@ -1,16 +1,16 @@
 "use client";
 
-import { useMemo, useState } from "react";
+import { useEffect, useMemo, useState } from "react";
 import Link from "next/link";
 import { ChevronDown, ChevronRight } from "lucide-react";
 import FinanceInsightCard from "./FinanceInsightCard";
 import { useFinanceData } from "@/lib/useFinanceData";
 import { useMatchData } from "@/lib/useMatchData";
+import { useFinanceQuarter } from "@/lib/financeQuarter";
 import {
-  Q2_MONTHS,
   buildCityInsightRows,
   buildVenueInsightRows,
-  getCurrentQ2Month,
+  getCurrentMonthInQuarter,
   monthScopedTitle,
   newVenuesProfitable,
   newVenuesStruggling,
@@ -59,9 +59,20 @@ export default function FinanceInsightsGrid({
 } = {}) {
   const { data, loading } = useFinanceData();
   const { rows: matchRows } = useMatchData();
+  const quarter = useFinanceQuarter();
   const [month, setMonth] = useState<Q2Month>(
-    () => getCurrentQ2Month(new Date()) ?? "Jun 2026",
+    () =>
+      getCurrentMonthInQuarter(quarter, new Date()) ??
+      quarter.months[quarter.months.length - 1].key,
   );
+  useEffect(() => {
+    if (!quarter.months.some((m) => m.key === month)) {
+      setMonth(
+        getCurrentMonthInQuarter(quarter, new Date()) ??
+          quarter.months[quarter.months.length - 1].key,
+      );
+    }
+  }, [quarter, month]);
 
   const computed = useMemo(() => {
     if (!data) return null;
@@ -129,9 +140,9 @@ export default function FinanceInsightsGrid({
           className="rounded-full border border-cream-line bg-white px-4 py-1.5 text-xs font-bold text-deep-green focus:border-deep-green focus:outline-none"
           aria-label="Insights month"
         >
-          {Q2_MONTHS.map((m) => (
-            <option key={m} value={m}>
-              {m.replace(" 2026", "")}
+          {quarter.months.map((m) => (
+            <option key={m.key} value={m.key}>
+              {m.shortName}
             </option>
           ))}
         </select>

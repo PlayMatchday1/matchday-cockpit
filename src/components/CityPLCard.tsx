@@ -1,20 +1,26 @@
 "use client";
 
-import { useMemo, useState } from "react";
+import { useEffect, useMemo, useState } from "react";
 import { useFinanceData } from "@/lib/useFinanceData";
 import { useMatchData } from "@/lib/useMatchData";
+import { useFinanceQuarter } from "@/lib/financeQuarter";
 import {
   cityMembershipRevenueFor,
   cityOverheadFor,
-  tabToMonths,
+  quarterTabToMonths,
   venueMatchCountFor,
   venuePartnerRevenueFor,
   type Q2Month,
 } from "@/lib/financeStats";
 import { canonicalVenueCost } from "@/lib/financeCosts";
 import { groupVenues } from "@/lib/venueGroups";
+import { isCurrentMonth, type QuarterInfo } from "@/lib/quarters";
 
-type Tab = "Q2" | "Apr" | "May" | "Jun";
+// Tab key is either the quarter key (whole quarter) or a month's
+// shortName (e.g. "Apr"). Stored as string so it can hold any
+// quarter's identifier — Q3 2026's tab would be "2026Q3" / "Jul" /
+// "Aug" / "Sep".
+type Tab = string;
 
 function fmt(n: number): string {
   const r = Math.round(n);
@@ -28,27 +34,29 @@ function fmtMoney(n: number): string {
   return `${r < 0 ? "-" : ""}$${abs.toLocaleString("en-US")}`;
 }
 
-// Default tab = current month if it's in the Q2 selector, else fall
-// back to "Jun" (latest month in the selector — most recent available
-// data once we're past Q2). Lazy-evaluated once on mount; the operator
-// can always click another tab. Uses local timezone since this runs
-// client-side.
-function defaultTab(now: Date = new Date()): Tab {
-  const monthAbbr = now.toLocaleString("en-US", { month: "short" });
-  if (monthAbbr === "Apr" || monthAbbr === "May" || monthAbbr === "Jun") {
-    return monthAbbr;
-  }
-  return "Jun";
+// Default tab: the current calendar month within the active quarter
+// when today falls inside it, otherwise the quarter's last month
+// (operator reads "the latest available data" for past quarters).
+function defaultTab(quarter: QuarterInfo, now: Date = new Date()): Tab {
+  const cur = quarter.months.find((m) => isCurrentMonth(m, now));
+  if (cur) return cur.shortName;
+  return quarter.months[quarter.months.length - 1].shortName;
 }
 
 export default function CityPLCard({ city }: { city: string }) {
   const { data } = useFinanceData();
   const { rows: matchRegistrations } = useMatchData();
-  const [tab, setTab] = useState<Tab>(() => defaultTab());
+  const quarter = useFinanceQuarter();
+  const [tab, setTab] = useState<Tab>(() => defaultTab(quarter));
+  // Reset tab when quarter switches so we never render a stale
+  // shortName from the previous quarter.
+  useEffect(() => {
+    setTab(defaultTab(quarter));
+  }, [quarter]);
 
   const result = useMemo(() => {
     if (!data) return null;
-    const months: Q2Month[] = tabToMonths(tab);
+    const months: Q2Month[] = quarterTabToMonths(quarter, tab);
 
     // Iterate venue GROUPS rather than venue names so split-rate venues
     // like ATH Katy / ATH Katy Sunday show as one combined row.
@@ -204,7 +212,7 @@ export default function CityPLCard({ city }: { city: string }) {
       netPL,
       margin,
     };
-  }, [data, matchRegistrations, city, tab]);
+  }, [data, matchRegistrations, city, tab, quarter]);
 
   if (!data || !result) return null;
 
@@ -220,20 +228,26 @@ export default function CityPLCard({ city }: { city: string }) {
       </div>
 
       <div className="mt-4 inline-flex w-full rounded-full bg-cream-soft p-1 ring-1 ring-cream-line">
-        {(["Q2", "Apr", "May", "Jun"] as const).map((t) => (
-          <button
-            key={t}
-            type="button"
-            onClick={() => setTab(t)}
-            className={`flex-1 rounded-full px-3 py-1 text-xs font-bold transition ${
-              tab === t
-                ? "bg-mint text-deep-green shadow-sm"
-                : "text-deep-green/60 hover:text-deep-green"
-            }`}
-          >
-            {t}
-          </button>
-        ))}
+        {(() => {
+          const tabs: { key: string; label: string }[] = [
+            { key: `Q${quarter.quarter}`, label: `Q${quarter.quarter}` },
+            ...quarter.months.map((m) => ({ key: m.shortName, label: m.shortName })),
+          ];
+          return tabs.map((t) => (
+            <button
+              key={t.key}
+              type="button"
+              onClick={() => setTab(t.key)}
+              className={`flex-1 rounded-full px-3 py-1 text-xs font-bold transition ${
+                tab === t.key
+                  ? "bg-mint text-deep-green shadow-sm"
+                  : "text-deep-green/60 hover:text-deep-green"
+              }`}
+            >
+              {t.label}
+            </button>
+          ));
+        })()}
       </div>
 
       <div className="mt-5 space-y-5">
