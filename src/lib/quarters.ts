@@ -1,13 +1,6 @@
 // Quarter-aware date utilities. Source-of-truth for "which quarter
-// are we in" and "what months/dates does that quarter span." Designed
-// to be consumed by Finance surfaces in the staged Wave 1-4 rollout:
-//
-//   - Wave 1 (this file): foundation only. financeStats.ts's
-//     Q2_MONTHS becomes a derived value backed by
-//     getCurrentQuarter().months.map(m => m.key).
-//   - Waves 2-4: page-level selector + per-consumer migration.
-//
-// Reusable for Cities / Clubhouse later. Not wired into those today.
+// are we in" and "what months/dates does that quarter span." Consumed
+// by Finance surfaces; reusable for Cities / Clubhouse later.
 //
 // === Conventions ===
 //
@@ -17,8 +10,7 @@
 // - Month keys match the existing fin_revenue.month text format
 //   ("Apr 2026", "May 2026", ...) for back-compat with the DB.
 // - Date boundaries are local-midnight inclusive on both ends
-//   (start = Apr 1 00:00, end = Jun 30 00:00). Same semantics the
-//   existing Q2_MONTHS-derived helpers used.
+//   (start = Apr 1 00:00, end = Jun 30 00:00).
 // - EARLIEST_QUARTER caps the lower bound at 2026Q2 — Q1 2026 and
 //   prior have no cockpit data and intentionally don't appear in
 //   the selector.
@@ -164,8 +156,12 @@ export function getQuarterByKey(key: string): QuarterInfo | null {
   return buildQuarterInfo(year, quarter);
 }
 
-// Quarter list for the selector: EARLIEST_QUARTER → current, newest
-// first. Future quarters that haven't started yet are excluded.
+// Quarter list for the selector: EARLIEST_QUARTER → current + the
+// NEXT upcoming quarter (planning mode), newest first. The planning
+// quarter lets the operator pre-load expenses / revenue projections
+// / starting cash before the quarter actually begins. The +1 future
+// quarter is the only future quarter that ever surfaces — quarters
+// further out aren't selectable.
 export function getAvailableQuarters(now: Date = new Date()): QuarterInfo[] {
   const current = getCurrentQuarter(now);
   const out: QuarterInfo[] = [];
@@ -186,7 +182,22 @@ export function getAvailableQuarters(now: Date = new Date()): QuarterInfo[] {
       return [];
     }
   }
+  // Append the next-after-current quarter as the planning slot.
+  const planningYear = current.quarter === 4 ? current.year + 1 : current.year;
+  const planningQuarter = current.quarter === 4 ? 1 : ((current.quarter + 1) as Quarter);
+  out.push(buildQuarterInfo(planningYear, planningQuarter));
   return out.reverse();
+}
+
+// True when `quarter` starts after today's calendar date — i.e.,
+// the user is forward-planning before the quarter begins. Drives
+// the selector's "Planning" suffix and the page-level banner.
+export function isPlanningQuarter(
+  quarter: QuarterInfo,
+  now: Date = new Date(),
+): boolean {
+  const todayDay = new Date(now.getFullYear(), now.getMonth(), now.getDate());
+  return quarter.start.getTime() > todayDay.getTime();
 }
 
 // Predicates against a QuarterMonth.

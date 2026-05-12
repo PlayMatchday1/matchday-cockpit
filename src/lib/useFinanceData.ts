@@ -357,10 +357,13 @@ async function load(quarter: QuarterInfo): Promise<void> {
         quarterFetchBounds(quarter),
       ),
     ]);
+    // Per-quarter Exec Summary row (Wave 4 / migration 0026).
+    // Returns null when no commentary exists for the selected
+    // quarter — ExecutiveSummary renders the empty state.
     const cmtRes = await supabase
       .from("fin_commentary")
       .select("*")
-      .order("id", { ascending: true })
+      .eq("quarter_key", quarter.key)
       .limit(1)
       .maybeSingle();
     if (cmtRes.error) throw new Error(cmtRes.error.message);

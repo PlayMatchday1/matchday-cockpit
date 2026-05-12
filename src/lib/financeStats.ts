@@ -25,21 +25,10 @@ import {
   resolveVenueForMatch,
 } from "./venueNormalization";
 
-// Wave 1 (2026-05-11): Q2_MONTHS is now derived from today's quarter
-// via getCurrentQuarter() at module load. Today (May 11), this
-// produces ["Apr 2026", "May 2026", "Jun 2026"] — byte-identical to
-// the previous hardcoded value. On July 1 it would produce
-// ["Jul 2026", "Aug 2026", "Sep 2026"]. Wave 2 wires this into the
-// page-level selector so a user viewing past quarters still gets the
-// right months.
-//
-// Q2Month is relaxed from a string-literal union to a plain `string`
-// alias so the 20+ consumer files keep compiling regardless of which
-// quarter the array resolves to. Static-string narrowness was never
-// load-bearing on these helpers — every caller treats month as a
-// runtime key into the fin_revenue.month text column.
-export const Q2_MONTHS: readonly string[] =
-  getCurrentQuarter().months.map((m) => m.key);
+// Q2Month is a month-key string (e.g. "Apr 2026"). Kept as a named
+// alias so the dozen helpers that take a month parameter stay
+// readable. Month iteration is scoped to whichever quarter is
+// active in the page context (quarter.months).
 export type Q2Month = string;
 
 export type Mode = "mtd" | "projection";
@@ -55,7 +44,7 @@ export type Mode = "mtd" | "projection";
 // when forward-looking helpers (e.g. priorMonthSameDayMtdGross
 // crossing into the next quarter) need to resolve a month-after-now
 // key. Module-load is fine — `now` is captured once per page
-// hydration which matches how Q2_MONTHS itself is derived.
+// hydration.
 const MONTH_NUMBER: Record<string, number> = {};
 const MONTH_DAYS: Record<string, number> = {};
 const MONTH_FULL_NAME: Record<string, string> = {};
@@ -121,27 +110,30 @@ export function getCurrentMonthInQuarter(
   return found?.key ?? null;
 }
 
-// Back-compat shim. Today (May 2026) Q2_MONTHS = current quarter's
-// months, so this returns the same value the old hardcoded version
-// did. Once consumers migrate to getCurrentMonthInQuarter(quarter, now)
-// they can pass an explicit quarter (so selecting Q2 from a Q3
-// vantage still finds "May" inside Q2, etc.).
-export function getCurrentQ2Month(now: Date = new Date()): Q2Month | null {
-  return getCurrentMonthInQuarter(getCurrentQuarter(now), now);
-}
-
-export function startingCash(data: FinanceData): number {
-  // Keyed lookup will go in Wave 4 (starting_cash_2026q3, etc.).
-  // For now the Q2 row is the only one defined — historical behavior
-  // preserved.
-  const v = data.config["starting_cash_q2_2026"];
-  if (!v) return 80000;
+// Reads starting_cash_${quarter.key.toLowerCase()} from fin_config —
+// e.g. starting_cash_2026q2 ("80000"), starting_cash_2026q3 ("0").
+// Migration 0026 renamed the legacy `starting_cash_q2_2026` key to
+// the new convention. Quarters with no row default to 0 + a one-time
+// console.warn so the operator notices a missing seed.
+const STARTING_CASH_WARNED = new Set<string>();
+export function startingCash(
+  data: FinanceData,
+  quarter: QuarterInfo,
+): number {
+  const key = `starting_cash_${quarter.key.toLowerCase()}`;
+  const v = data.config[key];
+  if (!v) {
+    if (typeof console !== "undefined" && !STARTING_CASH_WARNED.has(key)) {
+      STARTING_CASH_WARNED.add(key);
+      console.warn(
+        `[financeStats] no fin_config row for ${key} — defaulting to $0. ` +
+          `Add a row in /admin/finance once the real Q opening balance is known.`,
+      );
+    }
+    return 0;
+  }
   const parsed = parseFloat(v);
-  return Number.isNaN(parsed) ? 80000 : parsed;
-}
-
-export function isCurrentQ2Month(month: Q2Month, now: Date = new Date()): boolean {
-  return month === getCurrentQ2Month(now);
+  return Number.isNaN(parsed) ? 0 : parsed;
 }
 
 // First day → last day of a quarter, as "YYYY-MM-DD" strings.
@@ -158,20 +150,17 @@ export function quarterDateRange(
   };
 }
 
-// Back-compat shim — same return shape, current quarter.
-export function q2DateRange(): { start: string; end: string } {
-  return quarterDateRange(getCurrentQuarter());
-}
-
-function isCurrentQ2(now: Date, month: Q2Month): boolean {
-  return isCurrentQ2Month(month, now);
-}
-
+// DPP daily extrapolation. Returns the multiplier from realized-MTD
+// → projected end-of-month for the given month's daily-paid revenue.
+// 1.0 for past/future months (no extrapolation); for the current
+// calendar month, scales realized-through-today by (days-in-month /
+// today's day-of-month) to project the full month.
 function dppExtrapolationFactor(month: Q2Month, now: Date): number {
-  if (!isCurrentQ2(now, month)) return 1;
+  const qm = MONTH_BY_KEY[month];
+  if (!qm || !isCurrentMonthQ(qm, now)) return 1;
   const elapsed = now.getDate();
   if (elapsed <= 0) return 1;
-  return (MONTH_DAYS[month] ?? 30) / elapsed;
+  return qm.daysInMonth / elapsed;
 }
 
 function filterRevenueRows(
@@ -272,7 +261,8 @@ function currentMonthMembershipSupplement(
   now: Date,
 ): number {
   if (mode !== "projection") return 0;
-  if (!isCurrentQ2(now, month)) return 0;
+  const qm = MONTH_BY_KEY[month];
+  if (!qm || !isCurrentMonthQ(qm, now)) return 0;
   let realized = 0;
   let projection = 0;
   for (const r of data.revenue) {
@@ -493,12 +483,13 @@ export function netPLFor(
 
 export function distinctExpenseCategories(
   data: FinanceData,
+  quarter: QuarterInfo,
   mode: Mode,
   now: Date = new Date(),
 ): string[] {
   const cats = new Set<string>();
-  for (const m of Q2_MONTHS) {
-    for (const c of otherExpensesByCategoryFor(data, m, mode, now).keys()) {
+  for (const m of quarter.months) {
+    for (const c of otherExpensesByCategoryFor(data, m.key, mode, now).keys()) {
       cats.add(c);
     }
   }
@@ -508,14 +499,18 @@ export function distinctExpenseCategories(
   return [...cats].filter((c) => !DEDICATED_LINE_CATEGORIES.has(c)).sort();
 }
 
-export function distinctCitiesFromRevenue(data: FinanceData): string[] {
+export function distinctCitiesFromRevenue(
+  data: FinanceData,
+  quarter: QuarterInfo,
+): string[] {
   // PROJECTION rows are topline placeholders not attributable to a market;
   // they're rendered through the company-wide totals row, not as a per-city
   // line, so we ignore them when building the per-city list.
+  const monthSet = new Set(quarter.months.map((m) => m.key));
   const cities = new Set<string>();
   for (const r of data.revenue) {
     if (r.source === "PROJECTION") continue;
-    if ((Q2_MONTHS as readonly string[]).includes(r.month)) {
+    if (monthSet.has(r.month)) {
       cities.add(r.city);
     }
   }
@@ -557,27 +552,6 @@ export function quarterNetPLProjected(
   );
 }
 
-// Back-compat shims — current quarter, same return as the old fns.
-export function q2NetRevenueProjected(
-  data: FinanceData,
-  now: Date = new Date(),
-): number {
-  return quarterNetRevenueProjected(data, getCurrentQuarter(now), now);
-}
-
-export function q2ExpensesProjected(
-  data: FinanceData,
-  now: Date = new Date(),
-): number {
-  return quarterExpensesProjected(data, getCurrentQuarter(now), now);
-}
-
-export function q2NetPLProjected(
-  data: FinanceData,
-  now: Date = new Date(),
-): number {
-  return quarterNetPLProjected(data, getCurrentQuarter(now), now);
-}
 
 // "Closed-month actual" quarter P&L for the hero subtitle. Includes
 // each month of the selected quarter that has started — past months
@@ -602,19 +576,12 @@ export function quarterNetPLActualClosedMonth(
   return total;
 }
 
-// Back-compat shim — current quarter.
-export function q2NetPLActualClosedMonth(
-  data: FinanceData,
-  now: Date = new Date(),
-): number {
-  return quarterNetPLActualClosedMonth(data, getCurrentQuarter(now), now);
-}
-
 export function projectedEndingCash(
   data: FinanceData,
+  quarter: QuarterInfo,
   now: Date = new Date(),
 ): number {
-  return startingCash(data) + q2NetPLProjected(data, now);
+  return startingCash(data, quarter) + quarterNetPLProjected(data, quarter, now);
 }
 
 // ===== Month-over-month deltas (for /admin/finance/cash-flow hero) =====
@@ -1162,10 +1129,6 @@ export function getQuarterMonthPairs(
   return pairs;
 }
 
-// Back-compat shim — current quarter.
-export function getQ2MonthPairs(now: Date = new Date()): Q2MonthPair[] {
-  return getQuarterMonthPairs(getCurrentQuarter(now), now);
-}
 
 // Pass an explicit (currentMonth, nextMonth) pair so the UI can
 // toggle between adjacent Q2 pairs without re-deriving from `now`.
@@ -1482,13 +1445,6 @@ export function quarterNetRevenueActual(
   return sum;
 }
 
-// Back-compat shim — current quarter.
-export function q2NetRevenueActual(
-  data: FinanceData,
-  now: Date = new Date(),
-): number {
-  return quarterNetRevenueActual(data, getCurrentQuarter(now), now);
-}
 
 const MONTH_SHORT_LABELS = [
   "Jan",
@@ -1531,8 +1487,8 @@ export function priorMonthSameDayMtdGross(
   return sum;
 }
 
-// Per-source actual breakdown for Q2 expenses. Useful for sanity
-// checks and inspectors; q2ExpensesActual sums these.
+// Per-source actual breakdown for quarter expenses. Useful for sanity
+// checks and inspectors; quarterExpensesActual sums these.
 export type Q2ExpensesActualBreakdown = {
   managerPay: number;       // fin_expenses category=Match Manager Pay, date <= today
   manualExpenses: number;   // all other fin_expenses (incl. City Manager / Marketing / Equipment line items), date <= today
@@ -1555,7 +1511,8 @@ function fieldCostsActualFor(
   now: Date,
 ): number {
   if (isFutureMonth(month, now)) return 0;
-  if (!isCurrentQ2Month(month, now)) return fieldCostsFor(data, month);
+  const qm = MONTH_BY_KEY[month];
+  if (!qm || !isCurrentMonthQ(qm, now)) return fieldCostsFor(data, month);
   const today = isoDateLocal(now);
   let total = 0;
   for (const v of data.venues) {
@@ -1588,7 +1545,7 @@ function fieldCostsActualFor(
   return total;
 }
 
-// Realized Q2 expenses booked through today, classified by DATE
+// Realized quarter expenses booked through today, classified by DATE
 // (not month bucket) so current-month spend that's already happened
 // counts as actual. Per-source classification:
 //
@@ -1605,7 +1562,7 @@ function fieldCostsActualFor(
 //       profit_share) counted in full as committed.
 //     future month → projected.
 //
-// projected = q2ExpensesProjected - q2ExpensesActual.
+// projected = quarterExpensesProjected - quarterExpensesActual.
 export function quarterExpensesActualBreakdown(
   data: FinanceData,
   quarter: QuarterInfo,
@@ -1641,20 +1598,6 @@ export function quarterExpensesActual(
   return quarterExpensesActualBreakdown(data, quarter, now).total;
 }
 
-// Back-compat shims — current quarter.
-export function q2ExpensesActualBreakdown(
-  data: FinanceData,
-  now: Date = new Date(),
-): Q2ExpensesActualBreakdown {
-  return quarterExpensesActualBreakdown(data, getCurrentQuarter(now), now);
-}
-
-export function q2ExpensesActual(
-  data: FinanceData,
-  now: Date = new Date(),
-): number {
-  return quarterExpensesActual(data, getCurrentQuarter(now), now);
-}
 
 // ===== Phase 3 helpers: city cards + field ranking =====
 
@@ -1673,26 +1616,6 @@ export const CITY_DISPLAY_ORDER = [
 ] as const;
 
 export type CityName = (typeof CITY_DISPLAY_ORDER)[number];
-
-export function cityHasAnyQ2Activity(
-  data: FinanceData,
-  city: string,
-): boolean {
-  for (const m of Q2_MONTHS) {
-    const grossRev = data.revenue
-      .filter((r) => r.city === city && r.month === m)
-      .reduce((s, r) => s + r.gross, 0);
-    if (grossRev !== 0) return true;
-    const exp = data.expenses
-      .filter((r) => r.city === city && r.month === m)
-      .reduce((s, r) => s + r.amount, 0);
-    if (exp !== 0) return true;
-    // Match Manager Pay + City Manager + Marketing + Equipment all live in
-    // fin_expenses now, already covered by `exp` above. Legacy
-    // fin_manager_pay and fin_monthly_expenses tables are not consulted.
-  }
-  return false;
-}
 
 export function venueDppRevenueFor(
   data: FinanceData,
@@ -1993,16 +1916,16 @@ const MONTH_NAMES_FROM_ISO = [
   "Jul", "Aug", "Sep", "Oct", "Nov", "Dec",
 ];
 
-function isoToQ2Month(iso: string): Q2Month | null {
+// Returns the canonical month-key ("Apr 2026") for a YYYY-MM-DD ISO
+// timestamp. Quarter-agnostic — any month resolves. Downstream
+// lookups (mdapiMemberSpots indexes) return 0 for keys they don't
+// have, which is the correct empty-state behavior.
+function isoToMonthKey(iso: string): Q2Month | null {
   const m = iso.match(/^(\d{4})-(\d{2})-/);
   if (!m) return null;
   const monthIdx = parseInt(m[2], 10) - 1;
   if (monthIdx < 0 || monthIdx > 11) return null;
-  const label = `${MONTH_NAMES_FROM_ISO[monthIdx]} ${m[1]}`;
-  if ((Q2_MONTHS as readonly string[]).includes(label)) {
-    return label as Q2Month;
-  }
-  return null;
+  return `${MONTH_NAMES_FROM_ISO[monthIdx]} ${m[1]}`;
 }
 
 export function matchAllocatedMemberRevenueFor(
@@ -2016,7 +1939,7 @@ export function matchAllocatedMemberRevenueFor(
 ): number {
   if (args.memberSpots <= 0) return 0;
 
-  const month = isoToQ2Month(args.matchStartIso);
+  const month = isoToMonthKey(args.matchStartIso);
   // Match outside Q2 (e.g. user navigated to a March or July week):
   // Q2-keyed helpers would silently return 0 anyway, so short-circuit.
   if (!month) return 0;
@@ -2045,7 +1968,7 @@ export function matchAllocatedMemberRevenueFor(
 // match data at every month boundary).
 //
 // Built once in useFinanceData. Q2-scoped to match the cockpit's
-// quarterly window — pre-Q2 timestamps short-circuit isoToQ2Month
+// quarterly window — pre-Q2 timestamps short-circuit isoToMonthKey
 // upstream so they never hit the index.
 // =====================================================================
 
@@ -2123,7 +2046,7 @@ export function buildMdapiMemberSpotIndex(
     else if (pt === "PROMOCODE") category = "other";
     else continue;
 
-    const month = isoToQ2Month(r.match_start);
+    const month = isoToMonthKey(r.match_start);
     if (!month) continue;
 
     const baseVenueId = fieldToVenue.get(r.field);
@@ -2305,12 +2228,6 @@ export function quarterTabToMonths(
   return quarter.months.map((m) => m.key);
 }
 
-// Back-compat shim — current quarter, hardcoded short-name set kept
-// so existing callers (CityPLCard's "Apr"/"May"/"Jun" tab strip)
-// keep working until Wave 3e migrates them to quarterTabToMonths.
-export function tabToMonths(tab: "Q2" | "Apr" | "May" | "Jun"): Q2Month[] {
-  return quarterTabToMonths(getCurrentQuarter(), tab);
-}
 
 // ===== Phase 4 helpers: insight calculations =====
 
@@ -2550,11 +2467,14 @@ function cityDppFor(
   return null;
 }
 
-const Q2_MONTH_PREFIX: Record<Q2Month, string> = {
-  "Apr 2026": "2026-04",
-  "May 2026": "2026-05",
-  "Jun 2026": "2026-06",
-};
+// Derives the "YYYY-MM" ISO prefix for any month-key (e.g. "Apr 2026"
+// → "2026-04"). Uses MONTH_BY_KEY so it works across every quarter
+// the page selector might expose.
+function monthIsoPrefix(month: Q2Month): string | null {
+  const qm = MONTH_BY_KEY[month];
+  if (!qm) return null;
+  return `${qm.year}-${String(qm.monthIndex + 1).padStart(2, "0")}`;
+}
 
 export function buildMembershipHealthRows(
   data: FinanceData,
@@ -2582,7 +2502,8 @@ export function buildMembershipHealthRows(
   // non-cancelled, in-month. Field names canonicalized through the
   // same fin_venue_aliases pipeline that fin_revenue uses so combined
   // venues (Premier at SJD → SJD) collapse correctly.
-  const monthPrefix = Q2_MONTH_PREFIX[month];
+  const monthPrefix = monthIsoPrefix(month);
+  if (!monthPrefix) return [];
   type CityMatchAcc = {
     totalMemberRegs: number;
     weightedDppNum: number;

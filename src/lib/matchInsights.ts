@@ -26,11 +26,20 @@ export const MEMBER_HEAVY_MIN_SPOTS = 30;
 export const HIGH_PROMO_THRESHOLD = 0.2;
 export const HIGH_PROMO_MIN_SPOTS = 30;
 
-const Q2_MONTH_PREFIX: Record<Q2Month, string> = {
-  "Apr 2026": "2026-04",
-  "May 2026": "2026-05",
-  "Jun 2026": "2026-06",
-};
+// Derives the "YYYY-MM" ISO prefix for any month-key (e.g. "Apr 2026"
+// → "2026-04"). Quarter-agnostic — parses the short-name + year out
+// of the key itself.
+const SHORT_MONTH_NAMES_BY_PREFIX = [
+  "Jan", "Feb", "Mar", "Apr", "May", "Jun",
+  "Jul", "Aug", "Sep", "Oct", "Nov", "Dec",
+];
+function monthIsoPrefix(month: Q2Month): string | null {
+  const [short, yearStr] = month.split(" ");
+  const idx = SHORT_MONTH_NAMES_BY_PREFIX.indexOf(short);
+  const year = parseInt(yearStr ?? "", 10);
+  if (idx < 0 || Number.isNaN(year)) return null;
+  return `${year}-${String(idx + 1).padStart(2, "0")}`;
+}
 
 export type MemberHeavyRow = {
   venue: string;
@@ -94,7 +103,8 @@ function resolveVenue(
   return venueByName.get(canonical) ?? null;
 }
 
-function isInMonth(d: Date, monthPrefix: string): boolean {
+function isInMonth(d: Date, monthPrefix: string | null): boolean {
+  if (!monthPrefix) return false;
   const iso = `${d.getFullYear()}-${String(d.getMonth() + 1).padStart(2, "0")}`;
   return iso === monthPrefix;
 }
@@ -112,7 +122,7 @@ export function memberHeavyFieldsFromMatches(
   data: FinanceData,
   month: Q2Month,
 ): MemberHeavyRow[] {
-  const monthPrefix = Q2_MONTH_PREFIX[month];
+  const monthPrefix = monthIsoPrefix(month);
   const venueByName = new Map<string, FinVenue>();
   for (const v of data.venues) venueByName.set(v.venue_name, v);
 
@@ -160,7 +170,7 @@ export function highPromoUsageFromMatches(
   data: FinanceData,
   month: Q2Month,
 ): HighPromoRow[] {
-  const monthPrefix = Q2_MONTH_PREFIX[month];
+  const monthPrefix = monthIsoPrefix(month);
   const venueByName = new Map<string, FinVenue>();
   for (const v of data.venues) venueByName.set(v.venue_name, v);
 
@@ -232,7 +242,7 @@ export function spotMixByCityFromMatches(
   matchRows: MatchRow[],
   month: Q2Month,
 ): SpotMixCityResult {
-  const monthPrefix = Q2_MONTH_PREFIX[month];
+  const monthPrefix = monthIsoPrefix(month);
   type Bucket = { Member: number; DPP: number; Promo: number; Free: number };
   const byCity = new Map<string, Bucket>();
   let freeCount = 0;
@@ -284,7 +294,7 @@ export function topPromoCodesFromMatches(
   matchRows: MatchRow[],
   month: Q2Month,
 ): TopPromoCodesResult {
-  const monthPrefix = Q2_MONTH_PREFIX[month];
+  const monthPrefix = monthIsoPrefix(month);
   const counts = new Map<string, number>();
   for (const r of matchRows) {
     if (r.matchCanceled) continue;

@@ -35,9 +35,9 @@ import {
   getAvailableQuarters,
   getCurrentQuarter,
   getQuarterByKey,
+  isPlanningQuarter,
   type QuarterInfo,
 } from "@/lib/quarters";
-import { supabase } from "@/lib/supabase";
 import { useFinanceData } from "@/lib/useFinanceData";
 
 const RETURN_TAB_KEY = "finance:returnTab";
@@ -120,10 +120,6 @@ function resolveQuarterFromUrl(
 function FinanceLandingContent() {
   const router = useRouter();
   const searchParams = useSearchParams();
-  // Seed value from fin_config.quarter_label — used as a fallback
-  // pre-Wave-3 if anything wants the operator-curated label string.
-  // The page subtitle reads from `quarter.label` now (e.g. "Q2 2026").
-  const [fallbackQuarterLabel, setFallbackQuarterLabel] = useState<string>("");
   const [activeTab, setActiveTab] = useState<FinanceTabId>(() => getInitialTab());
   // Lazy-mount strategy: tabs are mounted the first time they're
   // visited, then kept mounted (display:none for inactive). This
@@ -223,43 +219,35 @@ function FinanceLandingContent() {
     [router, searchParams],
   );
 
-  useEffect(() => {
-    let cancelled = false;
-    supabase
-      .from("fin_config")
-      .select("value")
-      .eq("key", "quarter_label")
-      .maybeSingle()
-      .then(({ data }) => {
-        if (cancelled) return;
-        const v = (data as { value?: string } | null)?.value;
-        if (v) setFallbackQuarterLabel(v);
-      });
-    return () => {
-      cancelled = true;
-    };
-  }, []);
+  const planning = isPlanningQuarter(quarter, new Date());
 
   return (
     <FinanceQuarterProvider quarter={quarter}>
-      <div className="mb-8 flex flex-wrap items-end justify-between gap-x-6 gap-y-3">
+      <div className="mb-3 flex flex-wrap items-end justify-between gap-x-6 gap-y-3">
         <div>
           <h1 className="font-display text-5xl uppercase leading-none tracking-tight text-deep-green md:text-6xl">
             Finance
           </h1>
-          <p className="mt-2 text-sm text-deep-green/65">
-            {quarter.label}
-            {fallbackQuarterLabel && fallbackQuarterLabel !== quarter.label
-              ? ` · ${fallbackQuarterLabel}`
-              : ""}
-          </p>
+          <p className="mt-2 text-sm text-deep-green/65">{quarter.label}</p>
         </div>
         <QuarterSelector
           available={availableQuarters}
           value={quarter.key}
           onChange={handleQuarterChange}
+          now={new Date()}
         />
       </div>
+
+      {planning && (
+        <div
+          role="note"
+          className="mb-6 rounded-2xl border-[1.5px] border-cream-line bg-cream-soft/60 px-5 py-3 text-sm text-deep-green/70 shadow-sm shadow-deep-green/5"
+        >
+          <span className="font-bold text-deep-green">{quarter.label}</span> ·
+          Planning quarter — actuals will populate as the quarter begins. Enter
+          expenses, revenue projections, and starting cash now to forecast.
+        </div>
+      )}
 
       <FinanceSecondaryNav active={secondary} onChange={openSecondary} />
 
@@ -339,10 +327,12 @@ function QuarterSelector({
   available,
   value,
   onChange,
+  now,
 }: {
   available: QuarterInfo[];
   value: string;
   onChange: (key: string) => void;
+  now: Date;
 }) {
   return (
     <label className="flex items-center gap-2 text-[11px] font-bold uppercase tracking-[0.18em] text-deep-green/55">
@@ -356,6 +346,7 @@ function QuarterSelector({
         {available.map((q) => (
           <option key={q.key} value={q.key}>
             {q.label}
+            {isPlanningQuarter(q, now) ? " · Planning" : ""}
           </option>
         ))}
       </select>

@@ -101,9 +101,11 @@ export default function FinanceMonthlyPL({
   const rows = useMemo<Row[]>(() => {
     if (!data) return [];
 
-    const cities = sortCitiesForDisplay(distinctCitiesFromRevenue(data));
-    const otherCats = distinctExpenseCategories(data, effectiveMode);
-    const start = startingCash(data);
+    const cities = sortCitiesForDisplay(
+      distinctCitiesFromRevenue(data, quarter),
+    );
+    const otherCats = distinctExpenseCategories(data, quarter, effectiveMode);
+    const start = startingCash(data, quarter);
 
     const sumAcross = (perMonth: number[]) =>
       perMonth.reduce((s, n) => s + n, 0);
