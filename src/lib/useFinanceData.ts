@@ -11,7 +11,7 @@ import {
 } from "./financeStats";
 import { fetchLegacyMatchRegistrations } from "./mdapiMatchesRead";
 import { useFinanceQuarter } from "./financeQuarter";
-import { getCurrentQuarter, type QuarterInfo } from "./quarters";
+import { getCurrentQuarter, getQuarterByKey, type QuarterInfo } from "./quarters";
 
 // Pad the quarter window by 14d on each side so MTD-vs-prior-month
 // math (priorMonthSameDayMtdGross) and the +14d forward window for
@@ -612,12 +612,36 @@ export function useFinanceData(): State {
   return s;
 }
 
-// Invalidates every quarter's cache and refetches the current
-// quarter. Called after admin saves — the row could affect any
-// month, so the safe move is to clear everything; consumers on
-// other quarters will re-fetch lazily when they remount.
+// Invalidates every quarter's cache and refetches every quarter
+// that currently has at least one live subscriber. Venue / config /
+// commentary rows aren't quarter-scoped — a save in any view can
+// change data the user is looking at in another view — so every
+// open consumer needs a fresh load(), not just the calendar's
+// current quarter. (Pre-Wave-4 only Q2 was selectable so this
+// distinction didn't matter; with Q3 planning now in the selector
+// a user editing on Q3 was getting their save persisted but their
+// React state never refreshed because load(getCurrentQuarter())
+// only published to Q2 subscribers.)
+//
+// Snapshot the active keys BEFORE clearing caches so we don't race
+// with a concurrent useFinanceData useEffect-mount that might pick
+// up an empty cache between clear() and load().
 export async function refetchFinanceData(): Promise<void> {
+  const activeKeys = [...subscribersByQuarter.entries()]
+    .filter(([, subs]) => subs.size > 0)
+    .map(([key]) => key);
   cachedByQuarter.clear();
   pendingByQuarter.clear();
-  await load(getCurrentQuarter());
+  if (activeKeys.length === 0) {
+    // No consumers mounted yet — warm the current-quarter cache so
+    // the next mount has a head start.
+    await load(getCurrentQuarter());
+    return;
+  }
+  await Promise.all(
+    activeKeys.map((key) => {
+      const q = getQuarterByKey(key);
+      return q ? load(q) : Promise.resolve();
+    }),
+  );
 }
