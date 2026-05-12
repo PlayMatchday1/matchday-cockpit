@@ -2289,14 +2289,15 @@ export function relativeTimeFromDate(iso: string | null): string {
   return `${years}y`;
 }
 
-// Quarter-aware tab → months. `tab` is either the quarter key (whole
-// quarter) or one of the quarter's month shortNames. Falls back to
-// the full quarter for unrecognized values.
+// Quarter-aware tab → months. `tab` is either the quarter key
+// ("2026Q2"), the bare quarter label ("Q2"), or one of the quarter's
+// month shortNames ("Apr"). Falls back to the full quarter for
+// unrecognized values.
 export function quarterTabToMonths(
   quarter: QuarterInfo,
   tab: string,
 ): Q2Month[] {
-  if (tab === quarter.key || tab === "Q2") {
+  if (tab === quarter.key || tab === `Q${quarter.quarter}`) {
     return quarter.months.map((m) => m.key);
   }
   const found = quarter.months.find((m) => m.shortName === tab);

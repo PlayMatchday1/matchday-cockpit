@@ -1,13 +1,13 @@
 "use client";
 
-import { useMemo, useState } from "react";
+import { useEffect, useMemo, useState } from "react";
 import { ChevronDown, ChevronRight } from "lucide-react";
 import { useFinanceData } from "@/lib/useFinanceData";
 import { useMatchData } from "@/lib/useMatchData";
+import { useFinanceQuarter } from "@/lib/financeQuarter";
 import {
-  Q2_MONTHS,
   buildRankingRows,
-  getCurrentQ2Month,
+  getCurrentMonthInQuarter,
   relativeTimeFromDate,
   type Q2Month,
   type RankingRow,
@@ -70,9 +70,25 @@ export default function FieldRankingTable({
 } = {}) {
   const { data } = useFinanceData();
   const { rows: matchRegistrations } = useMatchData();
+  const quarter = useFinanceQuarter();
+  // Default: current month within the active quarter; falls back to
+  // the last month of the quarter (operator reads "the most recent
+  // closed month" when viewing past quarters or pre-first-month).
   const [month, setMonth] = useState<Q2Month>(
-    () => getCurrentQ2Month(new Date()) ?? "Jun 2026",
+    () =>
+      getCurrentMonthInQuarter(quarter, new Date()) ??
+      quarter.months[quarter.months.length - 1].key,
   );
+  // Keep the selected month inside the active quarter when the
+  // quarter changes (e.g. after a selector swap).
+  useEffect(() => {
+    if (!quarter.months.some((m) => m.key === month)) {
+      setMonth(
+        getCurrentMonthInQuarter(quarter, new Date()) ??
+          quarter.months[quarter.months.length - 1].key,
+      );
+    }
+  }, [quarter, month]);
   const [sortKey, setSortKey] = useState<SortKey>("totalRevenue");
   const [sortDir, setSortDir] = useState<"asc" | "desc">("desc");
 
@@ -156,9 +172,9 @@ export default function FieldRankingTable({
           className="rounded-full border border-cream-line bg-cream-soft px-4 py-1.5 text-xs font-bold text-deep-green focus:border-deep-green focus:outline-none"
           aria-label="Month"
         >
-          {Q2_MONTHS.map((m) => (
-            <option key={m} value={m}>
-              {m.replace(" 2026", "")}
+          {quarter.months.map((m) => (
+            <option key={m.key} value={m.key}>
+              {m.shortName}
             </option>
           ))}
         </select>

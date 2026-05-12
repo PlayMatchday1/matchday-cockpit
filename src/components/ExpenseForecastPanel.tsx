@@ -3,11 +3,12 @@
 import { useEffect, useMemo, useState } from "react";
 import { ChevronDown, ChevronRight } from "lucide-react";
 import { useFinanceData } from "@/lib/useFinanceData";
+import { useFinanceQuarter } from "@/lib/financeQuarter";
 import {
   EXPENSE_FORECAST_MOVER_THRESHOLD,
   PINNED_FORECAST_CATEGORIES,
   expenseForecastDeltas,
-  getQ2MonthPairs,
+  getQuarterMonthPairs,
   type ExpenseForecastRow,
   type Q2Month,
   type Q2MonthPair,
@@ -64,17 +65,30 @@ function deltaToneClass(delta: number): string {
 
 export default function ExpenseForecastPanel() {
   const { data, loading, error } = useFinanceData();
+  const quarter = useFinanceQuarter();
   const [staticOpen, setStaticOpen] = useState(false);
   const [expanded, setExpanded] = useState<Set<string>>(new Set());
 
-  const pairs = useMemo(() => getQ2MonthPairs(), []);
+  const pairs = useMemo(
+    () => getQuarterMonthPairs(quarter, new Date()),
+    [quarter],
+  );
   const defaultPair = pairs.find((p) => p.isDefault) ?? pairs[0] ?? null;
   const [selectedKey, setSelectedKey] = useState<string | null>(
     defaultPair ? pairKey(defaultPair) : null,
   );
+  // When the quarter switches, the prior selection's pair-key is from
+  // the wrong quarter — drop it and re-seed from the new defaultPair.
   useEffect(() => {
-    if (!selectedKey && defaultPair) setSelectedKey(pairKey(defaultPair));
-  }, [selectedKey, defaultPair]);
+    if (!defaultPair) return;
+    if (!selectedKey) {
+      setSelectedKey(pairKey(defaultPair));
+      return;
+    }
+    if (!pairs.some((p) => pairKey(p) === selectedKey)) {
+      setSelectedKey(pairKey(defaultPair));
+    }
+  }, [selectedKey, defaultPair, pairs]);
   const selectedPair =
     pairs.find((p) => pairKey(p) === selectedKey) ?? defaultPair;
 
@@ -544,16 +558,15 @@ function TotalsFooter({
 }
 
 function isMonthInProgress(month: Q2Month, now: Date = new Date()): boolean {
-  // Q2 months are calendar 2026-Q2. "In progress" = today is within
-  // the calendar window for `month`.
-  const monthIndex: Record<string, number> = {
-    "Apr 2026": 3,
-    "May 2026": 4,
-    "Jun 2026": 5,
-  };
-  return (
-    now.getFullYear() === 2026 && now.getMonth() === monthIndex[month]
-  );
+  // "In progress" = today's calendar (year, month) matches the month
+  // key's calendar (year, month). Quarter-agnostic; works for any
+  // Q-month key like "Jul 2026".
+  const [shortName, yearStr] = month.split(" ");
+  const year = parseInt(yearStr, 10);
+  const SHORT = ["Jan", "Feb", "Mar", "Apr", "May", "Jun", "Jul", "Aug", "Sep", "Oct", "Nov", "Dec"];
+  const monthIdx = SHORT.indexOf(shortName);
+  if (monthIdx < 0 || Number.isNaN(year)) return false;
+  return now.getFullYear() === year && now.getMonth() === monthIdx;
 }
 
 function PairToggle({

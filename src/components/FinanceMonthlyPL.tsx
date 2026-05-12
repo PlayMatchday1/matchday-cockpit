@@ -3,16 +3,14 @@
 import { useMemo, useState } from "react";
 import { ChevronDown, ChevronRight } from "lucide-react";
 import { useFinanceData } from "@/lib/useFinanceData";
+import { useFinanceQuarter } from "@/lib/financeQuarter";
 import {
-  Q2_MONTHS,
   type Mode,
   type Q2Month,
   distinctCitiesFromRevenue,
   distinctExpenseCategories,
   feesFor,
   grossRevenueFor,
-  isCurrentQ2Month,
-  isFutureMonth,
   managerPayFor,
   monthlyExpenseCategoryFor,
   netPLFor,
@@ -23,6 +21,7 @@ import {
   totalExpensesFor,
 } from "@/lib/financeStats";
 import { fieldCostsFor } from "@/lib/financeCosts";
+import { isCurrentMonth, isCurrentQuarter, isFutureMonth } from "@/lib/quarters";
 
 const DELETED_ACCOUNT_CITY = "Deleted Account Revenue";
 
@@ -88,21 +87,30 @@ export default function FinanceMonthlyPL({
   onToggle?: () => void;
 } = {}) {
   const { data, loading, error } = useFinanceData();
+  const quarter = useFinanceQuarter();
+  const monthKeys = useMemo(
+    () => quarter.months.map((m) => m.key),
+    [quarter],
+  );
+  // Past quarters lock to MTD/realized — projection-mode extrapolation
+  // is meaningless once every month in the window is closed.
+  const isPastQuarter = !isCurrentQuarter(quarter, new Date());
   const [mode, setMode] = useState<Mode>("mtd");
+  const effectiveMode: Mode = isPastQuarter ? "mtd" : mode;
 
   const rows = useMemo<Row[]>(() => {
     if (!data) return [];
 
     const cities = sortCitiesForDisplay(distinctCitiesFromRevenue(data));
-    const otherCats = distinctExpenseCategories(data, mode);
+    const otherCats = distinctExpenseCategories(data, effectiveMode);
     const start = startingCash(data);
 
     const sumAcross = (perMonth: number[]) =>
       perMonth.reduce((s, n) => s + n, 0);
 
     const cityRows: Row[] = cities.map((city) => {
-      const perMonth = Q2_MONTHS.map(
-        (m) => netRevenueByCityFor(data, m, mode).get(city) ?? 0,
+      const perMonth = monthKeys.map(
+        (m) => netRevenueByCityFor(data, m, effectiveMode).get(city) ?? 0,
       );
       return {
         kind: "data",
@@ -112,28 +120,25 @@ export default function FinanceMonthlyPL({
       };
     });
 
-    const grossPerMonth = Q2_MONTHS.map((m) => grossRevenueFor(data, m, mode));
-    const feesPerMonth = Q2_MONTHS.map((m) => feesFor(data, m, mode));
-    const netRevPerMonth = Q2_MONTHS.map((m) => netRevenueFor(data, m, mode));
+    const grossPerMonth = monthKeys.map((m) => grossRevenueFor(data, m, effectiveMode));
+    const feesPerMonth = monthKeys.map((m) => feesFor(data, m, effectiveMode));
+    const netRevPerMonth = monthKeys.map((m) => netRevenueFor(data, m, effectiveMode));
 
-    const matchPayPerMonth = Q2_MONTHS.map((m) => managerPayFor(data, m));
-    const fieldCostsPerMonth = Q2_MONTHS.map((m) => fieldCostsFor(data, m));
-    const cityMgrPerMonth = Q2_MONTHS.map((m) =>
+    const matchPayPerMonth = monthKeys.map((m) => managerPayFor(data, m));
+    const fieldCostsPerMonth = monthKeys.map((m) => fieldCostsFor(data, m));
+    const cityMgrPerMonth = monthKeys.map((m) =>
       monthlyExpenseCategoryFor(data, m, "city_manager"),
     );
-    const marketingPerMonth = Q2_MONTHS.map((m) =>
+    const marketingPerMonth = monthKeys.map((m) =>
       monthlyExpenseCategoryFor(data, m, "marketing"),
     );
-    const equipmentPerMonth = Q2_MONTHS.map((m) =>
+    const equipmentPerMonth = monthKeys.map((m) =>
       monthlyExpenseCategoryFor(data, m, "equipment"),
     );
 
-    // Generic expense categories from fin_expenses. Venue Rental is gone
-    // post-consolidation (Field Costs is now its own line above), so the
-    // VENUE_RENTAL_LABEL_RX substitution that used to live here is gone too.
     const otherCatRows: Row[] = otherCats.map((cat) => {
-      const perMonth = Q2_MONTHS.map(
-        (m) => otherExpensesByCategoryFor(data, m, mode).get(cat) ?? 0,
+      const perMonth = monthKeys.map(
+        (m) => otherExpensesByCategoryFor(data, m, effectiveMode).get(cat) ?? 0,
       );
       return {
         kind: "data",
@@ -143,14 +148,14 @@ export default function FinanceMonthlyPL({
       };
     });
 
-    const totalExpPerMonth = Q2_MONTHS.map((m) =>
-      totalExpensesFor(data, m, mode),
+    const totalExpPerMonth = monthKeys.map((m) =>
+      totalExpensesFor(data, m, effectiveMode),
     );
-    const netPLPerMonth = Q2_MONTHS.map((m) => netPLFor(data, m, mode));
+    const netPLPerMonth = monthKeys.map((m) => netPLFor(data, m, effectiveMode));
 
     const endingCash: number[] = [];
     let runningCash = start;
-    for (let i = 0; i < Q2_MONTHS.length; i++) {
+    for (let i = 0; i < monthKeys.length; i++) {
       runningCash += netPLPerMonth[i];
       endingCash.push(runningCash);
     }
@@ -220,7 +225,13 @@ export default function FinanceMonthlyPL({
         kind: "startingCash",
         label: "Starting Cash",
         tone: "neutral",
-        values: [start, 0, 0, start],
+        // First month gets the starting balance, middle months 0,
+        // total column repeats the starting balance.
+        values: [
+          start,
+          ...monthKeys.slice(1).map(() => 0),
+          start,
+        ],
       },
       {
         kind: "netPL",
@@ -235,7 +246,7 @@ export default function FinanceMonthlyPL({
         values: [...endingCash, endingCash[endingCash.length - 1]],
       },
     ];
-  }, [data, mode]);
+  }, [data, effectiveMode, monthKeys]);
 
   // Per-column projection markers — used to (a) tag every cell in a fully-
   // projected month with " (proj)" and (b) tint that column's background.
@@ -245,21 +256,21 @@ export default function FinanceMonthlyPL({
   const now = useMemo(() => new Date(), []);
   const projectionFlags = useMemo(
     () =>
-      Q2_MONTHS.map((m) => ({
-        month: m,
+      quarter.months.map((m) => ({
+        month: m.key,
         isFuture: isFutureMonth(m, now),
-        isCurrent: isCurrentQ2Month(m, now),
+        isCurrent: isCurrentMonth(m, now),
       })),
-    [now],
+    [quarter, now],
   );
   const colIsProjected = (colIdx: number): boolean => {
-    if (mode !== "projection") return false;
-    if (colIdx >= Q2_MONTHS.length) return false; // Q2 Total
+    if (effectiveMode !== "projection") return false;
+    if (colIdx >= quarter.months.length) return false; // total column
     return projectionFlags[colIdx].isFuture;
   };
   const colIsMixed = (colIdx: number): boolean => {
-    if (mode !== "projection") return false;
-    if (colIdx >= Q2_MONTHS.length) return false;
+    if (effectiveMode !== "projection") return false;
+    if (colIdx >= quarter.months.length) return false;
     return projectionFlags[colIdx].isCurrent;
   };
 
@@ -312,7 +323,11 @@ export default function FinanceMonthlyPL({
             <h2 className="font-display text-3xl uppercase tracking-tight text-deep-green md:text-4xl">
               Monthly Cash Flow
             </h2>
-            {mode === "mtd" ? (
+            {isPastQuarter ? (
+              <p className="text-xs text-deep-green/60">
+                Realized · closed quarter
+              </p>
+            ) : effectiveMode === "mtd" ? (
               <p className="text-xs text-deep-green/60">
                 Realized rows only · through today
               </p>
@@ -324,9 +339,11 @@ export default function FinanceMonthlyPL({
             )}
           </div>
         </div>
-        <div onClick={(e) => e.stopPropagation()}>
-          <ModeToggle mode={mode} onChange={setMode} />
-        </div>
+        {!isPastQuarter && (
+          <div onClick={(e) => e.stopPropagation()}>
+            <ModeToggle mode={mode} onChange={setMode} />
+          </div>
+        )}
       </div>
 
       {!collapsed && (
@@ -335,20 +352,19 @@ export default function FinanceMonthlyPL({
             <thead>
               <tr className="border-y border-cream-line bg-cream-soft text-[10px] font-bold uppercase tracking-wider text-deep-green/60">
                 <th className="px-5 py-2.5 text-left">Item</th>
-                {Q2_MONTHS.map((m, idx) => {
-                  const short = m.slice(0, 3);
+                {quarter.months.map((m, idx) => {
                   const projected = colIsProjected(idx);
                   const mixed = colIsMixed(idx);
                   return (
                     <th
-                      key={m}
+                      key={m.key}
                       className={`px-3 py-2.5 text-right ${
                         projected
                           ? "bg-gold-soft/60 text-deep-green/75"
                           : ""
                       }`}
                     >
-                      {short}
+                      {m.shortName}
                       {mixed && (
                         <span className="ml-1 font-normal normal-case text-deep-green/50">
                           (mixed)
@@ -362,7 +378,7 @@ export default function FinanceMonthlyPL({
                     </th>
                   );
                 })}
-                <th className="px-3 py-2.5 text-right">Q2 Total</th>
+                <th className="px-3 py-2.5 text-right">{quarter.label} Total</th>
               </tr>
             </thead>
             <tbody>
