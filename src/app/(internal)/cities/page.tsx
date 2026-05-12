@@ -67,10 +67,10 @@ function OverviewLens() {
   // 12-week window (covers the 8-week getWeeklySpots call + slack for
   // current-month MTD). Server-side date filter avoids the 38k-row
   // full-population pull on hydration. See useMatchWindowData header.
-  const { rows, meta, loading } = useMatchWindowData(12);
+  const { rows, scheduledMatches, meta, loading } = useMatchWindowData(12);
   const [weekScope, setWeekScope] = useState<WeekScope>("current");
 
-  const totals = getWeeklySpots(rows, null, 8);
+  const totals = getWeeklySpots(rows, scheduledMatches, null, 8);
   const totalSpots = totals.reduce((s, w) => s + w.spots, 0);
   const selectedIdx =
     weekScope === "current" ? totals.length - 1 : totals.length - 2;
@@ -80,9 +80,9 @@ function OverviewLens() {
     weekScope === "current" ? "matches this week" : "matches last week";
 
   const cityData = CITIES.map((city) => {
-    const weekly = getWeeklySpots(rows, city, 8);
-    const cancel = getCancelRate(rows, city);
-    const venues = getActiveVenues(rows, city, 8);
+    const weekly = getWeeklySpots(rows, scheduledMatches, city, 8);
+    const cancel = getCancelRate(rows, scheduledMatches, city);
+    const venues = getActiveVenues(scheduledMatches, city, 8);
     const status = getCityStatus(rows, city);
     return {
       city,

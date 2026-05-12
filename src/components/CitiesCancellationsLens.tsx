@@ -10,7 +10,7 @@ import { useMatchData } from "@/lib/useMatchData";
 // below as supporting context.
 
 export default function CitiesCancellationsLens() {
-  const { rows, loading, meta } = useMatchData();
+  const { rows, scheduledMatches, loading, meta } = useMatchData();
 
   if (loading) {
     return (
@@ -29,7 +29,7 @@ export default function CitiesCancellationsLens() {
 
   const cityRows = CITIES.map((city) => ({
     city,
-    cancel: getCancelRate(rows, city),
+    cancel: getCancelRate(rows, scheduledMatches, city),
   }))
     .filter((c) => c.cancel.totalMatches > 0)
     .sort((a, b) => b.cancel.rate - a.cancel.rate);

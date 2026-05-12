@@ -17,10 +17,11 @@ import { supabase } from "./supabase";
 import {
   fetchJoinedMatchPlayers,
   type JoinedMatchPlayerRow,
+  type ScheduledMatch,
 } from "./mdapiMatchesRead";
 
-// Re-export MatchRow for any consumer that imports it from here.
-export type { MatchRow } from "./mdapiMatchesRead";
+// Re-export MatchRow + ScheduledMatch for consumers that import from here.
+export type { MatchRow, ScheduledMatch } from "./mdapiMatchesRead";
 
 export type DataMeta = {
   filename: string;
@@ -32,12 +33,36 @@ export type DataMeta = {
 
 type State = {
   rows: JoinedMatchPlayerRow[];
+  // Per-distinct-match view, complete inside the query window
+  // (includes matches with zero player rows). Use this — not `rows` —
+  // for any "matches scheduled in week X" / run-rate / cancel-rate
+  // denominator so empty/unbooked matches don't silently drop out.
+  scheduledMatches: ScheduledMatch[];
   meta: DataMeta;
   loading: boolean;
   error: string | null;
 };
 
-const INITIAL: State = { rows: [], meta: null, loading: true, error: null };
+const INITIAL: State = {
+  rows: [],
+  scheduledMatches: [],
+  meta: null,
+  loading: true,
+  error: null,
+};
+
+// Forward bound for all match-data fetches. Open-ended forward queries
+// scale with the schedule's expanding tail (matches scheduled months
+// ahead) instead of the user's window of interest. Cap at "now + 14
+// days" so the payload stays predictable AND we still cover the rest
+// of the current ISO week + the entire next ISO week (which the user
+// might be planning against). Updated lazily per call — fine because
+// the hooks read this at fetch time, not at module load.
+const FORWARD_BOUND_DAYS = 14;
+function forwardBoundIso(now: Date = new Date()): string {
+  const d = new Date(now.getTime() + FORWARD_BOUND_DAYS * 86400 * 1000);
+  return d.toISOString().slice(0, 10);
+}
 
 let cached: State | null = null;
 let pending: Promise<void> | null = null;
@@ -49,13 +74,20 @@ function publish(s: State) {
 }
 
 async function load(): Promise<void> {
-  publish({ rows: [], meta: null, loading: true, error: null });
+  publish({
+    rows: [],
+    scheduledMatches: [],
+    meta: null,
+    loading: true,
+    error: null,
+  });
 
   let rows: JoinedMatchPlayerRow[];
+  let scheduledMatches: ScheduledMatch[];
   let lastSyncCompletedAt: string | null = null;
   try {
     const [rowsResult, lastSyncResult] = await Promise.all([
-      fetchJoinedMatchPlayers(supabase),
+      fetchJoinedMatchPlayers(supabase, { toDate: forwardBoundIso() }),
       // Latest mdapi-matches sync completion — drives meta.uploadedAt.
       // Will be populated by the cron orchestrator in Phase 5c. Until
       // then, the manual backfill/incremental scripts also write to
@@ -70,11 +102,13 @@ async function load(): Promise<void> {
         .limit(1)
         .maybeSingle<{ completed_at: string }>(),
     ]);
-    rows = rowsResult;
+    rows = rowsResult.rows;
+    scheduledMatches = rowsResult.scheduledMatches;
     lastSyncCompletedAt = lastSyncResult.data?.completed_at ?? null;
   } catch (e) {
     publish({
       rows: [],
+      scheduledMatches: [],
       meta: null,
       loading: false,
       error: e instanceof Error ? e.message : "Failed to load match data.",
@@ -89,6 +123,7 @@ async function load(): Promise<void> {
 
   publish({
     rows,
+    scheduledMatches,
     meta: {
       filename: "MatchDay API",
       uploadedAt: lastSyncCompletedAt
@@ -152,19 +187,27 @@ function publishWindow(weeks: number, s: State) {
 }
 
 async function loadWindow(weeks: number): Promise<void> {
-  publishWindow(weeks, { rows: [], meta: null, loading: true, error: null });
+  publishWindow(weeks, {
+    rows: [],
+    scheduledMatches: [],
+    meta: null,
+    loading: true,
+    error: null,
+  });
 
   // Pad the window edge by 14 days so MTD calcs (current-month
   // cancellation rate, in-progress weeks) never miss matches that
   // landed just before the strict 12-week cutoff.
   const fromMs = Date.now() - (weeks * 7 + 14) * 86400 * 1000;
   const fromDate = new Date(fromMs).toISOString().slice(0, 10);
+  const toDate = forwardBoundIso();
 
   let rows: JoinedMatchPlayerRow[];
+  let scheduledMatches: ScheduledMatch[];
   let lastSyncCompletedAt: string | null = null;
   try {
     const [rowsResult, lastSyncResult] = await Promise.all([
-      fetchJoinedMatchPlayers(supabase, { fromDate }),
+      fetchJoinedMatchPlayers(supabase, { fromDate, toDate }),
       supabase
         .from("fin_sync_log")
         .select("completed_at")
@@ -174,11 +217,13 @@ async function loadWindow(weeks: number): Promise<void> {
         .limit(1)
         .maybeSingle<{ completed_at: string }>(),
     ]);
-    rows = rowsResult;
+    rows = rowsResult.rows;
+    scheduledMatches = rowsResult.scheduledMatches;
     lastSyncCompletedAt = lastSyncResult.data?.completed_at ?? null;
   } catch (e) {
     publishWindow(weeks, {
       rows: [],
+      scheduledMatches: [],
       meta: null,
       loading: false,
       error: e instanceof Error ? e.message : "Failed to load match data.",
@@ -191,6 +236,7 @@ async function loadWindow(weeks: number): Promise<void> {
 
   publishWindow(weeks, {
     rows,
+    scheduledMatches,
     meta: {
       filename: "MatchDay API",
       uploadedAt: lastSyncCompletedAt

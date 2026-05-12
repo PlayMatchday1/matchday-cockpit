@@ -34,7 +34,7 @@ function cancelRateColor(rate: number, hasData: boolean): string {
 }
 
 export default function CityDetailView({ city }: { city: City }) {
-  const { rows, meta, loading } = useMatchData();
+  const { rows, scheduledMatches, meta, loading } = useMatchData();
   const { rows: reviewRows, meta: reviewMeta } = useReviewData();
   const [showVenues, setShowVenues] = useState(false);
   // Pre-select the Comments month from ?month=YYYY-MM (set by the
@@ -45,9 +45,9 @@ export default function CityDetailView({ city }: { city: City }) {
   const defaultMonthKey =
     monthParam && /^\d{4}-\d{2}$/.test(monthParam) ? monthParam : undefined;
 
-  const weekly = getWeeklySpots(rows, city, 8);
-  const cancel = getCancelRate(rows, city);
-  const venues = getActiveVenues(rows, city, 8);
+  const weekly = getWeeklySpots(rows, scheduledMatches, city, 8);
+  const cancel = getCancelRate(rows, scheduledMatches, city);
+  const venues = getActiveVenues(scheduledMatches, city, 8);
   const status = getCityStatus(rows, city);
   const currentWeek = weekly[weekly.length - 1];
   const hasData = cancel.totalMatches > 0;

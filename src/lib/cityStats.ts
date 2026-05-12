@@ -1,4 +1,4 @@
-import type { MatchRow } from "./useMatchData";
+import type { MatchRow, ScheduledMatch } from "./useMatchData";
 
 export const MATCH_DENOMINATOR = 18;
 
@@ -94,26 +94,43 @@ export type WeeklySpotsEntry = {
   weekStart: Date;
   weekLabel: string;
   spots: number;
+  // 18-spot "match equivalents" — spots ÷ MATCH_DENOMINATOR, kept for
+  // revenue-planning continuity. Decimal by design.
   matches: number;
+  // Real scheduled-match count from mdapi_matches (incl. matches with
+  // zero player bookings). Use this when you want an integer
+  // denominator for run-rate / fill-rate / cancel-rate.
+  scheduledMatches: number;
   isCurrent: boolean;
 };
 
 export function getWeeklySpots(
   rows: MatchRow[],
+  scheduledMatches: ScheduledMatch[],
   city: string | null,
   weeksBack = 8,
   now: Date = new Date(),
 ): WeeklySpotsEntry[] {
   const { currentMonday } = windowBounds(weeksBack, now);
 
-  const buckets: { weekStart: Date; key: string; spots: number }[] = [];
+  const buckets: {
+    weekStart: Date;
+    key: string;
+    spots: number;
+    scheduledMatchKeys: Set<string>;
+  }[] = [];
   for (let i = weeksBack - 1; i >= 0; i--) {
     const ws = new Date(
       currentMonday.getFullYear(),
       currentMonday.getMonth(),
       currentMonday.getDate() - 7 * i,
     );
-    buckets.push({ weekStart: ws, key: weekKey(ws), spots: 0 });
+    buckets.push({
+      weekStart: ws,
+      key: weekKey(ws),
+      spots: 0,
+      scheduledMatchKeys: new Set<string>(),
+    });
   }
   const byKey = new Map(buckets.map((b) => [b.key, b]));
 
@@ -126,11 +143,23 @@ export function getWeeklySpots(
     if (b) b.spots++;
   }
 
+  for (const sm of scheduledMatches) {
+    if (city !== null && sm.city !== city) continue;
+    const k = weekKey(sm.matchStart);
+    const b = byKey.get(k);
+    if (!b) continue;
+    // Dedup defensively — scheduledMatches is already pre-deduped by
+    // (start, field) in fetchJoinedMatchPlayers, but we re-key here so
+    // any future change to its shape doesn't silently double-count.
+    b.scheduledMatchKeys.add(`${sm.matchStart.getTime()}|${sm.field}`);
+  }
+
   return buckets.map((b, i) => ({
     weekStart: b.weekStart,
     weekLabel: weekLabel(b.weekStart),
     spots: b.spots,
     matches: Math.round((b.spots / MATCH_DENOMINATOR) * 10) / 10,
+    scheduledMatches: b.scheduledMatchKeys.size,
     isCurrent: i === buckets.length - 1,
   }));
 }
@@ -154,7 +183,7 @@ export type WeeklyCancellationEntry = {
 };
 
 export function getWeeklyCancellationStats(
-  rows: MatchRow[],
+  scheduledMatches: ScheduledMatch[],
   city: string | null,
   weeksBack = 8,
   now: Date = new Date(),
@@ -177,14 +206,14 @@ export function getWeeklyCancellationStats(
   }
   const byKey = new Map(buckets.map((b) => [b.key, b]));
 
-  for (const row of rows) {
-    if (city !== null && row.city !== city) continue;
-    if (!row.field) continue;
-    const k = weekKey(row.matchStart);
+  for (const sm of scheduledMatches) {
+    if (city !== null && sm.city !== city) continue;
+    if (!sm.field) continue;
+    const k = weekKey(sm.matchStart);
     const b = byKey.get(k);
     if (!b) continue;
-    const matchKey = `${row.matchStart.getTime()}|${row.field}`;
-    if (!b.matches.has(matchKey)) b.matches.set(matchKey, row.matchCanceled);
+    const matchKey = `${sm.matchStart.getTime()}|${sm.field}`;
+    if (!b.matches.has(matchKey)) b.matches.set(matchKey, sm.matchCanceled);
   }
 
   return buckets.map((b, i) => {
@@ -216,6 +245,7 @@ export function getWeeklyCancellationStats(
 // MTD-scoped to match the rest of the card.
 export function getCancelRate(
   rows: MatchRow[],
+  scheduledMatches: ScheduledMatch[],
   city: string,
   now: Date = new Date(),
 ): {
@@ -227,15 +257,24 @@ export function getCancelRate(
   const monthStart = new Date(now.getFullYear(), now.getMonth(), 1);
   const monthEnd = new Date(now.getFullYear(), now.getMonth() + 1, 1);
 
+  // Match denominator (total + cancelled) — derived from scheduledMatches
+  // so empty/unbooked matches still count.
   const matches = new Map<string, boolean>(); // matchKey → canceled
-  let totalSpots = 0;
+  for (const sm of scheduledMatches) {
+    if (sm.city !== city) continue;
+    if (!sm.field) continue;
+    if (sm.matchStart < monthStart || sm.matchStart >= monthEnd) continue;
+    const key = `${sm.matchStart.getTime()}|${sm.field}`;
+    if (!matches.has(key)) matches.set(key, sm.matchCanceled);
+  }
 
+  // Spot numerator — still derived from player rows (the spot count
+  // is inherently per-player; empty matches contribute zero spots).
+  let totalSpots = 0;
   for (const row of rows) {
     if (row.city !== city) continue;
     if (!row.field) continue;
     if (row.matchStart < monthStart || row.matchStart >= monthEnd) continue;
-    const key = `${row.matchStart.getTime()}|${row.field}`;
-    if (!matches.has(key)) matches.set(key, row.matchCanceled);
     if (!row.matchCanceled) totalSpots++;
   }
 
@@ -248,19 +287,19 @@ export function getCancelRate(
 }
 
 export function getActiveVenues(
-  rows: MatchRow[],
+  scheduledMatches: ScheduledMatch[],
   city: string,
   weeksBack = 8,
   now: Date = new Date(),
 ): string[] {
   const { earliestMonday, windowEnd } = windowBounds(weeksBack, now);
   const venues = new Set<string>();
-  for (const row of rows) {
-    if (row.city !== city) continue;
-    if (row.matchCanceled) continue;
-    if (!row.field) continue;
-    if (row.matchStart < earliestMonday || row.matchStart >= windowEnd) continue;
-    venues.add(row.field);
+  for (const sm of scheduledMatches) {
+    if (sm.city !== city) continue;
+    if (sm.matchCanceled) continue;
+    if (!sm.field) continue;
+    if (sm.matchStart < earliestMonday || sm.matchStart >= windowEnd) continue;
+    venues.add(sm.field);
   }
   return [...venues].sort();
 }

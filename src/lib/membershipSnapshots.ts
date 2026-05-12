@@ -65,7 +65,7 @@ export async function refreshMembershipSnapshots(opts: {
     // accepted by computeAvgMatchesPerMember).
     fetchJoinedMatchPlayers(sb),
   ]);
-  const attendance: AttendanceRow[] = joinedMatches.map((r) => ({
+  const attendance: AttendanceRow[] = joinedMatches.rows.map((r) => ({
     match_start: r.matchStart,
     payment_type: r.paymentType,
     email: r.email,

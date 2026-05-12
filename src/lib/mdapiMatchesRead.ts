@@ -141,6 +141,30 @@ export type MatchRow = Pick<
   | "email"
 >;
 
+// Per-match shape — one row per distinct scheduled match (not per
+// player). Includes matches with zero player bookings so any
+// run-rate / cancellation / scheduled-count aggregator can derive
+// the *real* denominator instead of "matches with at least one
+// player," which is what falls out of the player-join.
+//
+// `field` is normField'd and `city` is cityFromAbbr'd to match
+// JoinedMatchPlayerRow's normalization — that way the dedup key
+// `(matchStart.getTime(), field)` reconciles across the two arrays.
+export type ScheduledMatch = {
+  city: string;
+  field: string;
+  matchStart: Date;
+  matchCanceled: boolean;
+};
+
+// New return shape for fetchJoinedMatchPlayers. `rows` is the legacy
+// per-player output, unchanged. `scheduledMatches` is the per-match
+// view, complete (incl. empty matches) within the query window.
+export type MatchDataset = {
+  rows: JoinedMatchPlayerRow[];
+  scheduledMatches: ScheduledMatch[];
+};
+
 // Drop-in shape for secondary readers that previously did
 // `from("match_registrations").select("user_id, email, field, ...")`.
 // All fields snake_case; timestamps as strings. Internal consumer
@@ -342,7 +366,7 @@ export type FetchJoinedOpts = {
 export async function fetchJoinedMatchPlayers(
   supabase: SupabaseClient,
   opts: FetchJoinedOpts = {},
-): Promise<JoinedMatchPlayerRow[]> {
+): Promise<MatchDataset> {
   // 1. Fetch matches in scope
   const matches = await selectAll<MatchSelect>(() => {
     let q = supabase.from("mdapi_matches").select(MATCHES_COLS);
@@ -351,7 +375,7 @@ export async function fetchJoinedMatchPlayers(
     if (opts.fieldLike) q = q.ilike("field_title", opts.fieldLike);
     return q.order("api_id");
   });
-  if (matches.length === 0) return [];
+  if (matches.length === 0) return { rows: [], scheduledMatches: [] };
 
   const matchById = new Map<number, MatchSelect>();
   for (const m of matches) matchById.set(m.api_id, m);
@@ -417,7 +441,43 @@ export async function fetchJoinedMatchPlayers(
 
   // 5. Sort by matchStart asc (legacy useMatchData order).
   out.sort((a, b) => a.matchStart.getTime() - b.matchStart.getTime());
-  return out;
+
+  // 6. Build the per-match view directly from `matches` (not from
+  //    `out`) — empty matches with zero player rows must survive
+  //    into scheduledMatches so denominators like run-rate /
+  //    cancel-rate / "matches scheduled this week" can include them.
+  //    Dedup by (matchStart, normField'd field): same key the
+  //    cancel-rate aggregator uses across rows[], so the two arrays
+  //    reconcile. Cancellation propagates: if any record of a key
+  //    is matchCanceled=true, the deduped entry is too.
+  const scheduledByKey = new Map<string, ScheduledMatch>();
+  for (const m of matches) {
+    const city = cityFromAbbr(m.city_identifier);
+    if (!city) continue;
+    const matchStart = parseLocal(m.start_date);
+    if (!matchStart) continue;
+    const field = normField(m.field_title ?? "");
+    if (!field) continue;
+    const key = `${matchStart.getTime()}|${field}`;
+    const prior = scheduledByKey.get(key);
+    if (prior) {
+      // Multiple mdapi_matches rows can share a (start, field) key
+      // when the same match is represented twice (rare; defensive).
+      if (m.is_cancelled) prior.matchCanceled = true;
+    } else {
+      scheduledByKey.set(key, {
+        city,
+        field,
+        matchStart,
+        matchCanceled: !!m.is_cancelled,
+      });
+    }
+  }
+  const scheduledMatches = [...scheduledByKey.values()].sort(
+    (a, b) => a.matchStart.getTime() - b.matchStart.getTime(),
+  );
+
+  return { rows: out, scheduledMatches };
 }
 
 // Convenience wrapper for secondary readers that want the CSV-era
@@ -426,6 +486,6 @@ export async function fetchLegacyMatchRegistrations(
   supabase: SupabaseClient,
   opts: FetchJoinedOpts = {},
 ): Promise<LegacyMatchRegRow[]> {
-  const joined = await fetchJoinedMatchPlayers(supabase, opts);
-  return joined.map(toLegacyShape);
+  const { rows } = await fetchJoinedMatchPlayers(supabase, opts);
+  return rows.map(toLegacyShape);
 }

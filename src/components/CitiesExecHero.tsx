@@ -15,7 +15,7 @@ import { useMembers } from "@/lib/useMembers";
 export default function CitiesExecHero() {
   // 12-week window — see useMatchWindowData header. Shares the cache
   // with OverviewLens so /cities only fires one match-data fetch.
-  const { rows, meta, loading } = useMatchWindowData(12);
+  const { rows, scheduledMatches, meta, loading } = useMatchWindowData(12);
   // useMembers pulls only mdapi_subscriptions for the active-member
   // count below. Replaced useFinanceData so /cities no longer pays for
   // the 13-table finance-page fetch just to render one stat tile.
@@ -30,9 +30,9 @@ export default function CitiesExecHero() {
   }
   if (!meta) return null;
 
-  const weekly = getWeeklySpots(rows, null, 8);
+  const weekly = getWeeklySpots(rows, scheduledMatches, null, 8);
   const currentWeek = weekly[weekly.length - 1];
-  const cancelStats = getWeeklyCancellationStats(rows, null, 1);
+  const cancelStats = getWeeklyCancellationStats(scheduledMatches, null, 1);
   const currentCancel = cancelStats[cancelStats.length - 1];
   const runRate =
     currentCancel.scheduled === 0
