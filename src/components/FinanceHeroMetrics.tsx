@@ -41,8 +41,8 @@ export default function FinanceHeroMetrics() {
   }
   if (!data) return null;
 
-  const start = startingCash(data);
-  const ending = projectedEndingCash(data);
+  const start = startingCash(data, quarter);
+  const ending = projectedEndingCash(data, quarter);
   const netRev = quarterNetRevenueProjected(data, quarter);
   const totExp = quarterExpensesProjected(data, quarter);
   const netPL = quarterNetPLProjected(data, quarter);
@@ -50,29 +50,41 @@ export default function FinanceHeroMetrics() {
   const totExpActual = quarterExpensesActual(data, quarter);
   const netRevProjected = netRev - netRevActual;
   const totExpProjected = totExp - totExpActual;
+  // Empty state — no revenue + no expenses for this quarter (typical
+  // for planning quarters before any data is entered). Render the
+  // em-dash placeholder in each card's value slot rather than $0.
+  const noData = netRev === 0 && totExp === 0 && netPL === 0;
 
   return (
     <div className="grid grid-cols-2 gap-4 lg:grid-cols-4">
       <Card
         label="Projected Ending Cash"
-        value={fmtMoney(ending)}
-        subtitle={`$${fmt(start)} start · $${fmt(netPL)} net P&L`}
+        value={noData ? null : fmtMoney(ending)}
+        subtitle={noData ? "No data yet" : `$${fmt(start)} start · $${fmt(netPL)} net P&L`}
       />
       <Card
         label={`${quarter.label} Net P&L`}
-        value={fmtMoney(netPL)}
-        subtitle={`$${fmt(netRev)} rev − $${fmt(totExp)} exp`}
-        toneFromValue={netPL}
+        value={noData ? null : fmtMoney(netPL)}
+        subtitle={noData ? "No data yet" : `$${fmt(netRev)} rev − $${fmt(totExp)} exp`}
+        toneFromValue={noData ? undefined : netPL}
       />
       <Card
         label={`${quarter.label} Projected Net Revenue`}
-        value={fmtMoney(netRev)}
-        subtitle={`${fmtMoney(netRevActual)} actual + ${fmtMoney(netRevProjected)} projected`}
+        value={noData ? null : fmtMoney(netRev)}
+        subtitle={
+          noData
+            ? "No data yet"
+            : `${fmtMoney(netRevActual)} actual + ${fmtMoney(netRevProjected)} projected`
+        }
       />
       <Card
         label={`${quarter.label} Projected Expenses`}
-        value={fmtMoney(totExp)}
-        subtitle={`${fmtMoney(totExpActual)} actual + ${fmtMoney(totExpProjected)} projected`}
+        value={noData ? null : fmtMoney(totExp)}
+        subtitle={
+          noData
+            ? "No data yet"
+            : `${fmtMoney(totExpActual)} actual + ${fmtMoney(totExpProjected)} projected`
+        }
       />
     </div>
   );
@@ -85,7 +97,10 @@ function Card({
   toneFromValue,
 }: {
   label: string;
-  value: string;
+  // null = empty-state (no data yet for this quarter); renders an
+  // em-dash placeholder in the same dimensions as a real value so
+  // the grid doesn't shift.
+  value: string | null;
   subtitle?: string;
   toneFromValue?: number;
 }) {
@@ -101,9 +116,9 @@ function Card({
         {label}
       </div>
       <div
-        className={`mt-2 font-display text-4xl uppercase leading-none tracking-tight md:text-5xl ${valueColor}`}
+        className={`mt-2 font-display text-4xl uppercase leading-none tracking-tight md:text-5xl ${value === null ? "text-deep-green/30" : valueColor}`}
       >
-        {value}
+        {value ?? "—"}
       </div>
       {subtitle && (
         <div className="mt-3 text-xs text-deep-green/55">{subtitle}</div>

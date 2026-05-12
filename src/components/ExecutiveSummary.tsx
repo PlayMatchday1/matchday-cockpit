@@ -5,6 +5,7 @@ import DOMPurify from "dompurify";
 import { Pencil } from "lucide-react";
 import { useAuth } from "@/lib/useAuth";
 import { useFinanceData, refetchFinanceData } from "@/lib/useFinanceData";
+import { useFinanceQuarter } from "@/lib/financeQuarter";
 import { supabase } from "@/lib/supabase";
 
 function escapeHtml(s: string): string {
@@ -52,6 +53,7 @@ function relativeTime(iso: string | null): string {
 export default function ExecutiveSummary() {
   const { data, loading } = useFinanceData();
   const { appUser } = useAuth();
+  const quarter = useFinanceQuarter();
   const [editing, setEditing] = useState(false);
   const [eyebrowDraft, setEyebrowDraft] = useState("");
   const [bodyDraft, setBodyDraft] = useState("");
@@ -87,18 +89,18 @@ export default function ExecutiveSummary() {
       eyebrow: eyebrowDraft.trim() || null,
       body: bodyDraft,
       updated_at: new Date().toISOString(),
+      quarter_key: quarter.key,
     };
     try {
-      if (commentary?.id) {
-        const { error } = await supabase
-          .from("fin_commentary")
-          .update(payload)
-          .eq("id", commentary.id);
-        if (error) throw error;
-      } else {
-        const { error } = await supabase.from("fin_commentary").insert(payload);
-        if (error) throw error;
-      }
+      // Upsert on quarter_key (UNIQUE per migration 0026). Saving
+      // from a Q3 view creates a new row; saving from Q2 updates
+      // the existing Q2 row. The active quarter's row is the only
+      // one ever loaded by useFinanceData (filtered by quarter_key),
+      // so the local `commentary.id` lookup is just a sanity guard.
+      const { error } = await supabase
+        .from("fin_commentary")
+        .upsert(payload, { onConflict: "quarter_key" });
+      if (error) throw error;
       await refetchFinanceData();
       setEditing(false);
     } catch (e) {
