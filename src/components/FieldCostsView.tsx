@@ -371,15 +371,16 @@ export default function FieldCostsView({
     const email = appUser?.email;
     if (!email) throw new Error("Not signed in");
 
-    // 1. Insert the venue. raw_venue_name = venue_name (canonical
-    //    has no alias-of-itself); is_active=true. Aliases (if any)
-    //    are written separately below — a unique index on
+    // 1. Insert the venue. is_active=true. Aliases (if any) are
+    //    written separately below — a unique index on
     //    (city, venue_name) will surface duplicates with a
     //    23505 / "duplicate key" error which we translate to a
-    //    friendlier message.
+    //    friendlier message. Note: FinVenue.raw_venue_name is a
+    //    hydrator-derived field (set from venue_name pre-alias in
+    //    useFinanceData's mapper); it is NOT a real DB column, so
+    //    we do not send it in the INSERT payload.
     const payload = {
       venue_name: draft.venue_name,
-      raw_venue_name: draft.venue_name,
       city: draft.city,
       billing_type: draft.billing_type,
       per_match_rate: draft.per_match_rate,
