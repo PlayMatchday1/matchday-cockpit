@@ -1,6 +1,7 @@
 "use client";
 
-import { useMatchData } from "@/lib/useMatchData";
+import { useMemo } from "react";
+import { useMatchWindowData } from "@/lib/useMatchData";
 import { getCancelHeatmap, weekLabel } from "@/lib/cityStats";
 
 function keyToLabel(key: string): string {
@@ -15,11 +16,19 @@ function rateColor(rate: number): string {
 }
 
 export default function CancelHeatmap({ city }: { city: string }) {
-  const { rows, meta, loading } = useMatchData();
+  // Shares the 12-week city-scoped cache entry with CityDetailView —
+  // same window, same city, same key, so this component piggybacks on
+  // the parent's already-pending or already-resolved fetch.
+  const { rows, meta, loading } = useMatchWindowData(12, city);
 
-  if (loading || !meta) return null;
+  const heatmap = useMemo(
+    () => (rows.length === 0 ? null : getCancelHeatmap(rows, city, 8)),
+    [rows, city],
+  );
 
-  const { weeks, slots } = getCancelHeatmap(rows, city, 8);
+  if (loading || !meta || !heatmap) return null;
+
+  const { weeks, slots } = heatmap;
 
   return (
     <div className="rounded-2xl border-[1.5px] border-cream-line bg-white p-6 shadow-md shadow-deep-green/10">

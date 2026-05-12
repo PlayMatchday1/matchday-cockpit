@@ -14,6 +14,7 @@
 
 import { useEffect, useState } from "react";
 import { supabase } from "./supabase";
+import { cityToAbbr } from "./cityMap";
 import {
   fetchJoinedMatchPlayers,
   type JoinedMatchPlayerRow,
@@ -177,17 +178,31 @@ export async function refetchMatchData(): Promise<void> {
 // the date crosses midnight.
 // =====================================================================
 
-const windowedCache = new Map<number, State>();
-const windowedPending = new Map<number, Promise<void>>();
-const windowedSubs = new Map<number, Set<(s: State) => void>>();
-
-function publishWindow(weeks: number, s: State) {
-  windowedCache.set(weeks, s);
-  windowedSubs.get(weeks)?.forEach((fn) => fn(s));
+// Cache key shape: `${weeks}|${cityOrAll}` — e.g. "12|" for the
+// network-wide /cities page, "12|ATX" for /cities/austin. Per-city
+// entries live alongside the network-wide one; no cross-pollution
+// because the keys differ. Navigating /cities → /cities/austin →
+// /cities triggers (at most) one network-wide fetch and one ATX
+// fetch, both then cached independently.
+function windowKey(weeks: number, city: string | null | undefined): string {
+  return `${weeks}|${city ?? ""}`;
 }
 
-async function loadWindow(weeks: number): Promise<void> {
-  publishWindow(weeks, {
+const windowedCache = new Map<string, State>();
+const windowedPending = new Map<string, Promise<void>>();
+const windowedSubs = new Map<string, Set<(s: State) => void>>();
+
+function publishWindow(key: string, s: State) {
+  windowedCache.set(key, s);
+  windowedSubs.get(key)?.forEach((fn) => fn(s));
+}
+
+async function loadWindow(
+  weeks: number,
+  city: string | null,
+): Promise<void> {
+  const key = windowKey(weeks, city);
+  publishWindow(key, {
     rows: [],
     scheduledMatches: [],
     meta: null,
@@ -207,7 +222,11 @@ async function loadWindow(weeks: number): Promise<void> {
   let lastSyncCompletedAt: string | null = null;
   try {
     const [rowsResult, lastSyncResult] = await Promise.all([
-      fetchJoinedMatchPlayers(supabase, { fromDate, toDate }),
+      fetchJoinedMatchPlayers(supabase, {
+        fromDate,
+        toDate,
+        cityIdentifier: city ?? undefined,
+      }),
       supabase
         .from("fin_sync_log")
         .select("completed_at")
@@ -221,7 +240,7 @@ async function loadWindow(weeks: number): Promise<void> {
     scheduledMatches = rowsResult.scheduledMatches;
     lastSyncCompletedAt = lastSyncResult.data?.completed_at ?? null;
   } catch (e) {
-    publishWindow(weeks, {
+    publishWindow(key, {
       rows: [],
       scheduledMatches: [],
       meta: null,
@@ -234,7 +253,7 @@ async function loadWindow(weeks: number): Promise<void> {
   const earliestMatch = rows[0]?.matchStart ?? new Date();
   const latestMatch = rows[rows.length - 1]?.matchStart ?? new Date();
 
-  publishWindow(weeks, {
+  publishWindow(key, {
     rows,
     scheduledMatches,
     meta: {
@@ -251,31 +270,40 @@ async function loadWindow(weeks: number): Promise<void> {
   });
 }
 
-export function useMatchWindowData(weeks: number): State {
-  const [s, setS] = useState<State>(windowedCache.get(weeks) ?? INITIAL);
+// Network-wide variant: useMatchWindowData(12). Per-city variant:
+// useMatchWindowData(12, "ATX"). The two share cache entries by key
+// (weeks + cityIdentifier), so /cities and /cities/[city] never
+// step on each other.
+export function useMatchWindowData(
+  weeks: number,
+  city: string | null = null,
+): State {
+  const cityIdentifier = cityToAbbr(city);
+  const key = windowKey(weeks, cityIdentifier);
+  const [s, setS] = useState<State>(windowedCache.get(key) ?? INITIAL);
 
   useEffect(() => {
-    let subs = windowedSubs.get(weeks);
+    let subs = windowedSubs.get(key);
     if (!subs) {
       subs = new Set();
-      windowedSubs.set(weeks, subs);
+      windowedSubs.set(key, subs);
     }
     subs.add(setS);
 
-    const cached = windowedCache.get(weeks);
+    const cached = windowedCache.get(key);
     if (cached) {
       setS(cached);
-    } else if (!windowedPending.has(weeks)) {
-      const p = loadWindow(weeks).finally(() => {
-        windowedPending.delete(weeks);
+    } else if (!windowedPending.has(key)) {
+      const p = loadWindow(weeks, cityIdentifier).finally(() => {
+        windowedPending.delete(key);
       });
-      windowedPending.set(weeks, p);
+      windowedPending.set(key, p);
     }
 
     return () => {
       subs?.delete(setS);
     };
-  }, [weeks]);
+  }, [key, weeks, cityIdentifier]);
 
   return s;
 }

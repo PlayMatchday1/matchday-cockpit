@@ -340,6 +340,13 @@ export type FetchJoinedOpts = {
   // ILIKE pattern on mdapi_matches.field_title. e.g. "%PRUMC%"
   // for partner views.
   fieldLike?: string;
+  // Exact match on mdapi_matches.city_identifier (e.g. "ATX").
+  // Drives the per-city detail-page payload reduction — Austin
+  // alone is ~40% of network volume; STL/ATL are ~5% each. With
+  // a city filter, the player IN-list shrinks proportionally
+  // (typically 1-5 chunks instead of 11), and the upstream byte
+  // count drops by 50-96% depending on the city.
+  cityIdentifier?: string;
 };
 
 // Fetch matches in scope, then their players, joined and mapped.
@@ -373,6 +380,7 @@ export async function fetchJoinedMatchPlayers(
     if (opts.fromDate) q = q.gte("start_date", opts.fromDate);
     if (opts.toDate) q = q.lte("start_date", opts.toDate);
     if (opts.fieldLike) q = q.ilike("field_title", opts.fieldLike);
+    if (opts.cityIdentifier) q = q.eq("city_identifier", opts.cityIdentifier);
     return q.order("api_id");
   });
   if (matches.length === 0) return { rows: [], scheduledMatches: [] };
@@ -381,7 +389,12 @@ export async function fetchJoinedMatchPlayers(
   for (const m of matches) matchById.set(m.api_id, m);
 
   // 2. Fetch players. Two paths (see comment above).
-  const hasFilter = !!(opts.fromDate || opts.toDate || opts.fieldLike);
+  const hasFilter = !!(
+    opts.fromDate ||
+    opts.toDate ||
+    opts.fieldLike ||
+    opts.cityIdentifier
+  );
   const players: PlayerSelect[] = [];
   if (!hasFilter) {
     const all = await selectAll<PlayerSelect>(() =>
