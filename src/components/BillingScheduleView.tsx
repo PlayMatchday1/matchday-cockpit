@@ -12,9 +12,9 @@ import ScheduleRowEditor, {
   type ScheduleDraft,
 } from "@/components/ScheduleRowEditor";
 import { logChange } from "@/lib/financeAudit";
+import { useFinanceQuarter } from "@/lib/financeQuarter";
 import {
-  Q2_MONTHS,
-  getCurrentQ2Month,
+  getCurrentMonthInQuarter,
   type Q2Month,
 } from "@/lib/financeStats";
 import { supabase } from "@/lib/supabase";
@@ -79,10 +79,24 @@ function monthFromDate(date: string): string {
 export default function BillingScheduleView() {
   const { data, loading } = useFinanceData();
   const { appUser } = useAuth();
+  const quarter = useFinanceQuarter();
 
   const [monthFilter, setMonthFilter] = useState<MonthFilter>(
-    () => getCurrentQ2Month() ?? "Jun 2026",
+    () =>
+      getCurrentMonthInQuarter(quarter, new Date()) ??
+      quarter.months[quarter.months.length - 1].key,
   );
+  // Re-clamp when the quarter changes so a stale Q2 month key
+  // doesn't carry into a Q3 view.
+  useEffect(() => {
+    if (monthFilter === "ALL" || monthFilter === "RANGE") return;
+    if (!quarter.months.some((m) => m.key === monthFilter)) {
+      setMonthFilter(
+        getCurrentMonthInQuarter(quarter, new Date()) ??
+          quarter.months[quarter.months.length - 1].key,
+      );
+    }
+  }, [quarter, monthFilter]);
   const [rangeFrom, setRangeFrom] = useState("");
   const [rangeTo, setRangeTo] = useState("");
   const [cityFilter, setCityFilter] = useState<string>(ALL);
@@ -418,9 +432,9 @@ export default function BillingScheduleView() {
             className="rounded-md border border-cream-line bg-cream-soft px-3 py-1.5 text-sm font-bold text-deep-green focus:border-deep-green focus:outline-none"
           >
             <option value="ALL">All months</option>
-            {Q2_MONTHS.map((m) => (
-              <option key={m} value={m}>
-                {m}
+            {quarter.months.map((m) => (
+              <option key={m.key} value={m.key}>
+                {m.key}
               </option>
             ))}
             <option value="RANGE">Custom range</option>

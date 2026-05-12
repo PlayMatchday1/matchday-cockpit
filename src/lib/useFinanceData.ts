@@ -10,6 +10,24 @@ import {
   type MdapiMemberSpotIndex,
 } from "./financeStats";
 import { fetchLegacyMatchRegistrations } from "./mdapiMatchesRead";
+import { useFinanceQuarter } from "./financeQuarter";
+import { getCurrentQuarter, type QuarterInfo } from "./quarters";
+
+// Pad the quarter window by 14d on each side so MTD-vs-prior-month
+// math (priorMonthSameDayMtdGross) and the +14d forward window for
+// matches that bleed into the next quarter both resolve cleanly.
+const QUARTER_FETCH_BUFFER_DAYS = 14;
+function quarterFetchBounds(quarter: QuarterInfo): {
+  fromDate: string;
+  toDate: string;
+} {
+  const fromMs = quarter.start.getTime() - QUARTER_FETCH_BUFFER_DAYS * 86400_000;
+  const toMs = quarter.end.getTime() + QUARTER_FETCH_BUFFER_DAYS * 86400_000;
+  return {
+    fromDate: new Date(fromMs).toISOString().slice(0, 10),
+    toDate: new Date(toMs).toISOString().slice(0, 10),
+  };
+}
 
 export type FinRevenue = {
   id: number;
@@ -175,13 +193,21 @@ type State = {
 
 const INITIAL: State = { data: null, loading: true, error: null };
 
-let cached: State = INITIAL;
-let pending: Promise<void> | null = null;
-const subscribers = new Set<(s: State) => void>();
+// Wave 3j: cache keyed by QuarterInfo.key. Each quarter gets its own
+// State entry so navigating Q2 → Q3 → Q2 reuses the earlier fetch
+// without a re-pull. Mirrors the per-city cache pattern in
+// useMatchData. Same pattern → same subscriber + pending tracking.
+const cachedByQuarter = new Map<string, State>();
+const pendingByQuarter = new Map<string, Promise<void>>();
+const subscribersByQuarter = new Map<string, Set<(s: State) => void>>();
 
-function publish(s: State) {
-  cached = s;
-  subscribers.forEach((fn) => fn(s));
+function publish(quarterKey: string, s: State) {
+  cachedByQuarter.set(quarterKey, s);
+  subscribersByQuarter.get(quarterKey)?.forEach((fn) => fn(s));
+}
+
+function getCachedFor(quarterKey: string): State {
+  return cachedByQuarter.get(quarterKey) ?? INITIAL;
 }
 
 function asNumber(v: unknown): number {
@@ -237,8 +263,10 @@ function normalizeMonth(v: unknown): string {
   return raw;
 }
 
-async function load(): Promise<void> {
-  publish({ data: cached.data, loading: true, error: null });
+async function load(quarter: QuarterInfo): Promise<void> {
+  const key = quarter.key;
+  const prior = cachedByQuarter.get(key);
+  publish(key, { data: prior?.data ?? null, loading: true, error: null });
 
   // Multi-row reads go through selectAll() so they're not silently capped
   // at PostgREST's 1000-row max. fin_commentary is intentionally a single-
@@ -319,14 +347,15 @@ async function load(): Promise<void> {
       selectAll<Record<string, unknown>>(() =>
         supabase.from("fin_venue_cost_overrides").select("*").order("id"),
       ),
-      // Q2-wide mdapi pull. Feeds mdapiMemberSpots index used as the
-      // denominator in the member-rev allocation helpers (replaces
-      // the fin_member_spots manual aggregate). Bounds match Q2_MONTHS;
-      // when the quarter rolls, update both Q2_MONTHS and these bounds.
-      fetchLegacyMatchRegistrations(supabase, {
-        fromDate: "2026-04-01",
-        toDate: "2026-06-30",
-      }),
+      // Quarter-wide mdapi pull. Feeds mdapiMemberSpots index used
+      // as the denominator in the member-rev allocation helpers
+      // (replaces the fin_member_spots manual aggregate). Bounds
+      // come from the active quarter ± 14d buffer so cross-month
+      // MTD-vs-prior comparisons resolve.
+      fetchLegacyMatchRegistrations(
+        supabase,
+        quarterFetchBounds(quarter),
+      ),
     ]);
     const cmtRes = await supabase
       .from("fin_commentary")
@@ -337,7 +366,7 @@ async function load(): Promise<void> {
     if (cmtRes.error) throw new Error(cmtRes.error.message);
     cmtRow = (cmtRes.data ?? null) as Record<string, unknown> | null;
   } catch (e) {
-    publish({
+    publish(key, {
       data: null,
       loading: false,
       error: e instanceof Error ? e.message : "Failed to load finance data.",
@@ -528,7 +557,7 @@ async function load(): Promise<void> {
     created_by: cleanText(r.created_by),
   }));
 
-  publish({
+  publish(key, {
     data: {
       revenue,
       expenses,
@@ -550,25 +579,42 @@ async function load(): Promise<void> {
 }
 
 export function useFinanceData(): State {
-  const [s, setS] = useState<State>(cached);
+  const quarter = useFinanceQuarter();
+  const key = quarter.key;
+  const [s, setS] = useState<State>(getCachedFor(key));
 
   useEffect(() => {
-    subscribers.add(setS);
-    if (cached.data) {
-      setS(cached);
-    } else if (!pending) {
-      pending = load().finally(() => {
-        pending = null;
-      });
+    let subs = subscribersByQuarter.get(key);
+    if (!subs) {
+      subs = new Set();
+      subscribersByQuarter.set(key, subs);
     }
+    subs.add(setS);
+
+    const entry = cachedByQuarter.get(key);
+    if (entry?.data) {
+      setS(entry);
+    } else if (!pendingByQuarter.has(key)) {
+      const p = load(quarter).finally(() => {
+        pendingByQuarter.delete(key);
+      });
+      pendingByQuarter.set(key, p);
+    }
+
     return () => {
-      subscribers.delete(setS);
+      subs?.delete(setS);
     };
-  }, []);
+  }, [key, quarter]);
 
   return s;
 }
 
+// Invalidates every quarter's cache and refetches the current
+// quarter. Called after admin saves — the row could affect any
+// month, so the safe move is to clear everything; consumers on
+// other quarters will re-fetch lazily when they remount.
 export async function refetchFinanceData(): Promise<void> {
-  await load();
+  cachedByQuarter.clear();
+  pendingByQuarter.clear();
+  await load(getCurrentQuarter());
 }

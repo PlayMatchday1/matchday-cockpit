@@ -2,9 +2,9 @@
 
 import { useEffect, useMemo, useState } from "react";
 import type { FinVenue, FinVenueCostOverride } from "@/lib/useFinanceData";
+import { useFinanceQuarter } from "@/lib/financeQuarter";
 import {
-  Q2_MONTHS,
-  getCurrentQ2Month,
+  getCurrentMonthInQuarter,
   type Q2Month,
 } from "@/lib/financeStats";
 
@@ -48,13 +48,14 @@ function fmtMoney(n: number): string {
 }
 
 function monthMatches(date: string, month: Q2Month): boolean {
-  // 'Apr 2026' → '2026-04'
-  const lookup: Record<Q2Month, string> = {
-    "Apr 2026": "2026-04",
-    "May 2026": "2026-05",
-    "Jun 2026": "2026-06",
-  };
-  return date.startsWith(lookup[month]);
+  // 'Apr 2026' → '2026-04'. Quarter-agnostic — parses any
+  // "<ShortName> <Year>" key, so Jul 2026 → "2026-07" etc.
+  const SHORT = ["Jan", "Feb", "Mar", "Apr", "May", "Jun", "Jul", "Aug", "Sep", "Oct", "Nov", "Dec"];
+  const [shortName, yearStr] = month.split(" ");
+  const idx = SHORT.indexOf(shortName);
+  if (idx < 0 || !yearStr) return false;
+  const prefix = `${yearStr}-${String(idx + 1).padStart(2, "0")}`;
+  return date.startsWith(prefix);
 }
 
 export default function ScheduleBulkAddEditor({
@@ -70,10 +71,12 @@ export default function ScheduleBulkAddEditor({
   onClose: () => void;
   onSubmit: (draft: BulkScheduleDraft) => Promise<void>;
 }) {
+  const quarter = useFinanceQuarter();
+  const defaultMonth = () =>
+    getCurrentMonthInQuarter(quarter, new Date()) ??
+    quarter.months[quarter.months.length - 1].key;
   const [venueId, setVenueId] = useState<number | null>(null);
-  const [month, setMonth] = useState<Q2Month>(
-    () => getCurrentQ2Month() ?? "Jun 2026",
-  );
+  const [month, setMonth] = useState<Q2Month>(defaultMonth);
   const [dateInput, setDateInput] = useState("");
   const [matchCountInput, setMatchCountInput] = useState("1");
   const [totalHoursInput, setTotalHoursInput] = useState("");
@@ -84,11 +87,12 @@ export default function ScheduleBulkAddEditor({
     if (!open) return;
     setError(null);
     setVenueId(null);
-    setMonth(getCurrentQ2Month() ?? "Jun 2026");
+    setMonth(defaultMonth());
     setDateInput("");
     setMatchCountInput("1");
     setTotalHoursInput("");
-  }, [open]);
+    // eslint-disable-next-line react-hooks/exhaustive-deps
+  }, [open, quarter]);
 
   const matchCountParsed = parseInt(matchCountInput, 10);
   const matchCountValid =
@@ -206,9 +210,9 @@ export default function ScheduleBulkAddEditor({
                 onChange={(e) => setMonth(e.target.value as Q2Month)}
                 className="w-full rounded-md border border-cream-line bg-white px-3 py-2 text-sm text-deep-green focus:border-deep-green focus:outline-none"
               >
-                {Q2_MONTHS.map((m) => (
-                  <option key={m} value={m}>
-                    {m}
+                {quarter.months.map((m) => (
+                  <option key={m.key} value={m.key}>
+                    {m.key}
                   </option>
                 ))}
               </select>

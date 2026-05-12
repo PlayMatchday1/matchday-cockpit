@@ -5,6 +5,8 @@ import Link from "next/link";
 import { logChange } from "@/lib/financeAudit";
 import { supabase } from "@/lib/supabase";
 import { useAuth } from "@/lib/useAuth";
+import { useFinanceQuarter } from "@/lib/financeQuarter";
+import type { QuarterInfo } from "@/lib/quarters";
 import {
   refetchFinanceData,
   useFinanceData,
@@ -21,9 +23,6 @@ const CITIES = [
   "OKC",
   "El Paso",
 ] as const;
-
-const QUARTERS = ["Q1 2026", "Q2 2026", "Q3 2026"] as const;
-type Quarter = (typeof QUARTERS)[number];
 
 const MONTH_LABELS = [
   "Jan",
@@ -47,12 +46,9 @@ type Thursday = {
   label: string; // "Apr 2"
 };
 
-function generateThursdays(quarter: Quarter): Thursday[] {
-  const m = quarter.match(/^Q(\d)\s+(\d{4})$/);
-  if (!m) return [];
-  const q = parseInt(m[1], 10);
-  const year = parseInt(m[2], 10);
-  const startMonth = (q - 1) * 3;
+function generateThursdays(quarter: QuarterInfo): Thursday[] {
+  const year = quarter.year;
+  const startMonth = (quarter.quarter - 1) * 3;
   const out: Thursday[] = [];
   for (let mi = startMonth; mi < startMonth + 3; mi++) {
     const firstOfMonth = new Date(year, mi, 1);
@@ -121,8 +117,8 @@ const VENDOR = "Weekly payroll";
 export default function ManagerPayGrid() {
   const { data, loading } = useFinanceData();
   const { appUser } = useAuth();
+  const quarter = useFinanceQuarter();
 
-  const [quarter, setQuarter] = useState<Quarter>("Q2 2026");
   const [editing, setEditing] = useState<Map<string, CellState>>(new Map());
 
   const thursdays = useMemo(() => generateThursdays(quarter), [quarter]);
@@ -358,23 +354,12 @@ export default function ManagerPayGrid() {
             immediately and propagate to the city cards + Cash Flow.
           </p>
         </div>
-        <div className="flex flex-wrap items-end gap-3">
-          <label className="block">
-            <div className="mb-1 text-[10px] font-bold uppercase tracking-[0.18em] text-deep-green/55">
-              Quarter
-            </div>
-            <select
-              value={quarter}
-              onChange={(e) => setQuarter(e.target.value as Quarter)}
-              className="rounded-md border border-cream-line bg-cream-soft px-3 py-1.5 text-sm font-bold text-deep-green focus:border-deep-green focus:outline-none"
-            >
-              {QUARTERS.map((q) => (
-                <option key={q} value={q}>
-                  {q}
-                </option>
-              ))}
-            </select>
-          </label>
+        {/* Quarter selector lives on the Finance page header — this
+            grid reads the active quarter from FinanceQuarter context
+            and re-renders when it changes. No internal selector here. */}
+        <div className="text-[10px] font-bold uppercase tracking-[0.18em] text-deep-green/55">
+          Quarter ·{" "}
+          <span className="text-deep-green">{quarter.label}</span>
         </div>
       </div>
 
@@ -419,7 +404,7 @@ export default function ManagerPayGrid() {
                     </th>
                   ))}
                   <th className="whitespace-nowrap bg-mint px-3 py-2 text-right text-[10px] font-bold uppercase tracking-wider text-deep-green">
-                    {quarter} Total
+                    {quarter.label} Total
                   </th>
                 </tr>
               </thead>

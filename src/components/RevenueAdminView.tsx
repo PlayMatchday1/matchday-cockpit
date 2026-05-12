@@ -8,9 +8,9 @@ import RevenueRowEditor, {
   type RevenueDraft,
 } from "@/components/RevenueRowEditor";
 import { logChange } from "@/lib/financeAudit";
+import { useFinanceQuarter } from "@/lib/financeQuarter";
 import {
-  Q2_MONTHS,
-  getCurrentQ2Month,
+  getCurrentMonthInQuarter,
   type Q2Month,
 } from "@/lib/financeStats";
 import { supabase } from "@/lib/supabase";
@@ -72,9 +72,12 @@ function monthFromDate(date: string): string {
 export default function RevenueAdminView() {
   const { data, loading } = useFinanceData();
   const { appUser } = useAuth();
+  const quarter = useFinanceQuarter();
 
   const [monthFilter, setMonthFilter] = useState<MonthFilter>(
-    () => getCurrentQ2Month() ?? "Jun 2026",
+    () =>
+      getCurrentMonthInQuarter(quarter, new Date()) ??
+      quarter.months[quarter.months.length - 1].key,
   );
   const [rangeFrom, setRangeFrom] = useState("");
   const [rangeTo, setRangeTo] = useState("");
@@ -116,12 +119,15 @@ export default function RevenueAdminView() {
       if (rangeTo) rows = rows.filter((r) => r.date && r.date <= rangeTo);
     } else if (monthFilter !== "ALL") {
       rows = rows.filter((r) => r.month === monthFilter);
+    } else {
+      const monthSet = new Set(quarter.months.map((m) => m.key));
+      rows = rows.filter((r) => monthSet.has(r.month));
     }
     if (cityFilter !== ALL) rows = rows.filter((r) => r.city === cityFilter);
     if (sourceFilter !== ALL)
       rows = rows.filter((r) => r.source === sourceFilter);
     return rows;
-  }, [allRows, monthFilter, rangeFrom, rangeTo, cityFilter, sourceFilter]);
+  }, [allRows, monthFilter, rangeFrom, rangeTo, cityFilter, sourceFilter, quarter]);
 
   const sorted = useMemo(() => {
     const rows = filtered.slice();
@@ -294,9 +300,9 @@ export default function RevenueAdminView() {
             className="rounded-md border border-cream-line bg-cream-soft px-3 py-1.5 text-sm font-bold text-deep-green focus:border-deep-green focus:outline-none"
           >
             <option value="ALL">All months</option>
-            {Q2_MONTHS.map((m) => (
-              <option key={m} value={m}>
-                {m}
+            {quarter.months.map((m) => (
+              <option key={m.key} value={m.key}>
+                {m.key}
               </option>
             ))}
             <option value="RANGE">Custom range</option>

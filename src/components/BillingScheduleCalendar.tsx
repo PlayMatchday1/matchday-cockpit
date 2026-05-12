@@ -7,7 +7,8 @@ import type {
   FinVenue,
   FinVenueCostOverride,
 } from "@/lib/useFinanceData";
-import { q2DateRange, type Q2Month } from "@/lib/financeStats";
+import { quarterDateRange, type Q2Month } from "@/lib/financeStats";
+import { useFinanceQuarter } from "@/lib/financeQuarter";
 import { getLegLabel, groupVenues } from "@/lib/venueGroups";
 
 type MonthFilter = Q2Month | "ALL" | "RANGE";
@@ -67,13 +68,13 @@ function generateDates(
   monthFilter: MonthFilter,
   rangeFrom: string,
   rangeTo: string,
+  quarterRange: { start: string; end: string },
 ): string[] {
   if (monthFilter === "RANGE") {
     return generateDateRange(rangeFrom, rangeTo);
   }
   if (monthFilter === "ALL") {
-    const { start, end } = q2DateRange();
-    return generateDateRange(start, end);
+    return generateDateRange(quarterRange.start, quarterRange.end);
   }
   const m = monthFilter.match(/^(\w+)\s+(\d{4})$/);
   if (!m) return [];
@@ -173,9 +174,11 @@ export default function BillingScheduleCalendar({
   onEditRow: (row: FinSchedule) => void;
   onAddCell: (venue: FinVenue, date: string) => void;
 }) {
+  const quarter = useFinanceQuarter();
+  const quarterRange = useMemo(() => quarterDateRange(quarter), [quarter]);
   const dates = useMemo(
-    () => generateDates(monthFilter, rangeFrom, rangeTo),
-    [monthFilter, rangeFrom, rangeTo],
+    () => generateDates(monthFilter, rangeFrom, rangeTo, quarterRange),
+    [monthFilter, rangeFrom, rangeTo, quarterRange],
   );
 
   const venueRows = useMemo(() => {
