@@ -1,13 +1,14 @@
 "use client";
 
 import { useFinanceData } from "@/lib/useFinanceData";
+import { useFinanceQuarter } from "@/lib/financeQuarter";
 import {
   projectedEndingCash,
-  q2ExpensesActual,
-  q2ExpensesProjected,
-  q2NetPLProjected,
-  q2NetRevenueActual,
-  q2NetRevenueProjected,
+  quarterExpensesActual,
+  quarterExpensesProjected,
+  quarterNetPLProjected,
+  quarterNetRevenueActual,
+  quarterNetRevenueProjected,
   startingCash,
 } from "@/lib/financeStats";
 
@@ -22,6 +23,7 @@ function fmtMoney(n: number): string {
 
 export default function FinanceHeroMetrics() {
   const { data, loading, error } = useFinanceData();
+  const quarter = useFinanceQuarter();
 
   if (loading) {
     return (
@@ -41,11 +43,11 @@ export default function FinanceHeroMetrics() {
 
   const start = startingCash(data);
   const ending = projectedEndingCash(data);
-  const netRev = q2NetRevenueProjected(data);
-  const totExp = q2ExpensesProjected(data);
-  const netPL = q2NetPLProjected(data);
-  const netRevActual = q2NetRevenueActual(data);
-  const totExpActual = q2ExpensesActual(data);
+  const netRev = quarterNetRevenueProjected(data, quarter);
+  const totExp = quarterExpensesProjected(data, quarter);
+  const netPL = quarterNetPLProjected(data, quarter);
+  const netRevActual = quarterNetRevenueActual(data, quarter);
+  const totExpActual = quarterExpensesActual(data, quarter);
   const netRevProjected = netRev - netRevActual;
   const totExpProjected = totExp - totExpActual;
 
@@ -57,18 +59,18 @@ export default function FinanceHeroMetrics() {
         subtitle={`$${fmt(start)} start · $${fmt(netPL)} net P&L`}
       />
       <Card
-        label="Q2 Net P&L"
+        label={`${quarter.label} Net P&L`}
         value={fmtMoney(netPL)}
         subtitle={`$${fmt(netRev)} rev − $${fmt(totExp)} exp`}
         toneFromValue={netPL}
       />
       <Card
-        label="Q2 Projected Net Revenue"
+        label={`${quarter.label} Projected Net Revenue`}
         value={fmtMoney(netRev)}
         subtitle={`${fmtMoney(netRevActual)} actual + ${fmtMoney(netRevProjected)} projected`}
       />
       <Card
-        label="Q2 Projected Expenses"
+        label={`${quarter.label} Projected Expenses`}
         value={fmtMoney(totExp)}
         subtitle={`${fmtMoney(totExpActual)} actual + ${fmtMoney(totExpProjected)} projected`}
       />
