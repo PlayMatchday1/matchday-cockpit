@@ -1587,21 +1587,24 @@ export function venueDppRevenueFor(
 // same revenue number contractually owed against. Sums two streams:
 //
 //   - DPP from match registrations: matchPricePaid for each non-staff,
-//     non-match-canceled DAILY-PAID player row whose field maps to one
-//     of this venue group's legs and whose matchStart is in `month`.
-//     Note: includes player-canceled rows (the partner-dashboard
-//     filter only excludes match-canceled and staff). Source-of-truth
-//     for revenue paid out on, not fin_revenue.DPP (which is the
-//     fees-deducted Stripe rollup).
+//     non-match-canceled DAILY-PAID player row whose field resolves to
+//     one of this venue group's canonical leg names AND whose
+//     matchStart is in `month`. Includes player-canceled rows (the
+//     partner-dashboard filter only excludes match-canceled and staff).
+//     Source-of-truth for revenue paid out on, not fin_revenue.DPP
+//     (which is the fees-deducted Stripe rollup).
 //
 //   - Private Rental from fin_revenue.gross for any leg's venue_name
 //     in `month`. fin_revenue Strike etc. are excluded by design —
 //     only Private Rental flows into partner payouts.
 //
-// `venueLegNames` is the set of fin_venues.venue_name values for the
-// venue group (multiple when same-name legs collapse, e.g. ATH Katy +
-// ATH Katy Sunday). matchRegistrations.field is normField'd, so we
-// match against the canonical leg names directly.
+// Field-title → canonical resolution runs through normalizeMatchName
+// (CROSS_VENUE_ALIASES + INTERNAL_PREFIX_RULES + DB aliases) so every
+// variant in mdapi_matches.field_title that the cockpit already knows
+// about ("The Hattrick", "Tourney ATH Pearland", "NEMP Tournaments",
+// etc.) attributes correctly. Without this canonicalization the raw
+// normField output ("The Hattrick") wouldn't match fin_venues.venue_name
+// ("Hattrick") and the venue would silently show $0 from the DPP stream.
 export function venuePartnerRevenueFor(
   data: FinanceData,
   matchRegistrations: JoinedMatchPlayerRow[],
@@ -1609,12 +1612,23 @@ export function venuePartnerRevenueFor(
   month: Q2Month,
 ): number {
   const targetMonth = MONTH_NUMBER[month];
+  // Cache canonical resolution per distinct r.field — the join can
+  // emit millions of player rows but only ~25 distinct field names.
+  const canonicalCache = new Map<string, string | null>();
+  function canonicalize(field: string): string | null {
+    const cached = canonicalCache.get(field);
+    if (cached !== undefined) return cached;
+    const c = normalizeMatchName(field, data.venueAliases).canonical;
+    canonicalCache.set(field, c);
+    return c;
+  }
   let dpRev = 0;
   for (const r of matchRegistrations) {
     if (r.matchCanceled) continue;
     if (r.email && r.email.toLowerCase().includes(STAFF_EMAIL_DOMAIN)) continue;
     if (r.paymentType !== "DAILY PAID") continue;
-    if (!venueLegNames.has(r.field)) continue;
+    const canonical = canonicalize(r.field);
+    if (!canonical || !venueLegNames.has(canonical)) continue;
     const d = r.matchStart;
     if (d.getFullYear() !== 2026 || d.getMonth() !== targetMonth) continue;
     dpRev += Number(r.matchPricePaid ?? 0) || 0;
