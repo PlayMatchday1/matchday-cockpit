@@ -1539,44 +1539,50 @@ function CityFirstMatchChart({
               than overflowing. overflow-x-auto on the wrapper is a
               fallback for very narrow viewports. */}
           {(() => {
-            // Period column count drives per-period width split.
-            // Monthly = 12, Weekly = 16. Field column gets 30/26%,
-            // Total gets 10/9%, periods share the remainder equally.
+            // Fixed pixel widths per column so 4-character weekly date
+            // headers (e.g. "1/26") can't collide. Field column wider
+            // (handles wrapped names like "San Juan Diego"); period
+            // columns 44px each — enough for "1/26" plus padding;
+            // Total column 56px for 3-digit numbers. Total table width
+            // exceeds the parent card on narrower viewports (esp. the
+            // 2-col lg grid), so the wrapper's overflow-x-auto kicks
+            // in and horizontal-scrolls instead of crushing columns.
             const isMonthly = periodType === "monthly";
-            const fieldColPct = isMonthly ? 30 : 26;
-            const totalColPct = isMonthly ? 10 : 9;
-            const periodColPct =
-              (100 - fieldColPct - totalColPct) / city.buckets.length;
+            const fieldColPx = 120;
+            const periodColPx = 44;
+            const totalColPx = 56;
+            const tableWidthPx =
+              fieldColPx + periodColPx * city.buckets.length + totalColPx;
             return (
               <div className="mb-3 overflow-x-auto">
                 <table
-                  className="w-full border-collapse text-[10px]"
-                  style={{ tableLayout: "fixed" }}
+                  className="border-collapse text-[10px]"
+                  style={{ tableLayout: "fixed", width: `${tableWidthPx}px` }}
                 >
                   <colgroup>
-                    <col style={{ width: `${fieldColPct}%` }} />
+                    <col style={{ width: `${fieldColPx}px` }} />
                     {city.buckets.map((b) => (
                       <col
                         key={b.bucketStart}
-                        style={{ width: `${periodColPct}%` }}
+                        style={{ width: `${periodColPx}px` }}
                       />
                     ))}
-                    <col style={{ width: `${totalColPct}%` }} />
+                    <col style={{ width: `${totalColPx}px` }} />
                   </colgroup>
                   <thead>
                     <tr className="border-b border-cream-line text-[9px] uppercase tracking-wider text-deep-green/55">
-                      <th className="px-1.5 py-1 text-left font-bold">
+                      <th className="px-2 py-1 text-left font-bold">
                         Field
                       </th>
                       {city.buckets.map((b) => (
                         <th
                           key={b.bucketStart}
-                          className="px-0.5 py-1 text-right font-mono tabular-nums"
+                          className="px-2 py-1 text-right font-mono tabular-nums"
                         >
                           {isMonthly ? b.period.slice(0, 3) : b.period}
                         </th>
                       ))}
-                      <th className="px-1.5 py-1 text-right font-bold">
+                      <th className="px-2 py-1 text-right font-bold">
                         Total
                       </th>
                     </tr>
@@ -1592,7 +1598,7 @@ function CityFirstMatchChart({
                           key={f}
                           className="border-b border-cream-line/40"
                         >
-                          <td className="px-1.5 py-1 align-top font-bold text-deep-green">
+                          <td className="px-2 py-1 align-top font-bold text-deep-green">
                             <span className="inline-flex items-start gap-1.5">
                               <span
                                 aria-hidden
@@ -1607,7 +1613,7 @@ function CityFirstMatchChart({
                             return (
                               <td
                                 key={b.bucketStart}
-                                className="px-0.5 py-1 text-right font-mono tabular-nums text-deep-green"
+                                className="px-2 py-1 text-right font-mono tabular-nums text-deep-green"
                               >
                                 {v === 0 ? (
                                   <span className="text-deep-green/30">
@@ -1619,20 +1625,20 @@ function CityFirstMatchChart({
                               </td>
                             );
                           })}
-                          <td className="px-1.5 py-1 text-right font-mono tabular-nums font-bold text-deep-green">
+                          <td className="px-2 py-1 text-right font-mono tabular-nums font-bold text-deep-green">
                             {rowTotal.toLocaleString()}
                           </td>
                         </tr>
                       );
                     })}
                     <tr className="border-t-2 border-cream-line bg-cream-soft/40">
-                      <td className="px-1.5 py-1 text-[9px] font-bold uppercase tracking-wider text-deep-green/70">
+                      <td className="px-2 py-1 text-[9px] font-bold uppercase tracking-wider text-deep-green/70">
                         Total
                       </td>
                       {city.buckets.map((b) => (
                         <td
                           key={b.bucketStart}
-                          className="px-0.5 py-1 text-right font-mono tabular-nums font-bold text-deep-green"
+                          className="px-2 py-1 text-right font-mono tabular-nums font-bold text-deep-green"
                         >
                           {b.total === 0 ? (
                             <span className="text-deep-green/30">—</span>
@@ -1641,7 +1647,7 @@ function CityFirstMatchChart({
                           )}
                         </td>
                       ))}
-                      <td className="px-1.5 py-1 text-right font-mono tabular-nums font-bold text-deep-green">
+                      <td className="px-2 py-1 text-right font-mono tabular-nums font-bold text-deep-green">
                         {city.totalInWindow.toLocaleString()}
                       </td>
                     </tr>
