@@ -11,6 +11,7 @@ import {
 } from "@/lib/types";
 import { partitionDirectory } from "@/lib/org";
 import { getNextSortOrder } from "@/lib/goals";
+import { useClubhouseQuarter } from "@/lib/clubhouseQuarter";
 import { useOrgDirectory } from "@/lib/useOrgDirectory";
 import DirectoryOptions from "./DirectoryOptions";
 
@@ -104,6 +105,7 @@ function DrawerForm({
   const [saving, setSaving] = useState(false);
   const [deleting, setDeleting] = useState(false);
 
+  const quarter = useClubhouseQuarter();
   const dir = useOrgDirectory();
   const partition = useMemo(
     () => (dir ? partitionDirectory(dir) : null),
@@ -154,6 +156,7 @@ function DrawerForm({
         city: state.city ?? null,
         sort_order,
         target_date,
+        quarter_key: quarter.key,
       });
       setSaving(false);
       if (error) return alert(error.message);
@@ -174,13 +177,14 @@ function DrawerForm({
     onSaved();
   }
 
+  const quarterShort = quarter.label.split(" ")[0]; // "Q2", "Q3"
   const heading =
     state.mode === "edit"
       ? "Edit goal"
       : state.scope === "city" && state.city
         ? `New ${state.city} goal`
         : state.scope === "q2"
-          ? "New Q2 goal"
+          ? `New ${quarterShort} goal`
           : `New ${state.scope} goal`;
 
   return (

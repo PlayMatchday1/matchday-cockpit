@@ -4,22 +4,31 @@ import { useCallback, useEffect, useState } from "react";
 import { supabase } from "@/lib/supabase";
 import { swapGoalSortOrder } from "@/lib/goals";
 import type { Goal, Scope } from "@/lib/types";
+import { useClubhouseQuarter } from "@/lib/clubhouseQuarter";
 import GoalsSection from "./GoalsSection";
 import GoalEditDrawer, { type DrawerState } from "./GoalEditDrawer";
 
 export default function HomeGoalsView() {
+  const quarter = useClubhouseQuarter();
   const [goals, setGoals] = useState<Goal[]>([]);
   const [drawer, setDrawer] = useState<DrawerState>(null);
 
   const load = useCallback(async () => {
+    // Pull every goal visible on this view: org (always — company-
+    // wide, quarter-agnostic) plus quarter + monthly goals for the
+    // selected quarter. Filtering in JS after pulling all visible
+    // rows is fine — there are only a handful of rows per quarter.
     const { data } = await supabase
       .from("goals")
       .select("*")
       .in("scope", ["org", "q2", "monthly"])
       .order("sort_order", { ascending: true, nullsFirst: false })
       .order("created_at", { ascending: true });
-    setGoals((data ?? []) as Goal[]);
-  }, []);
+    const all = (data ?? []) as Goal[];
+    setGoals(
+      all.filter((g) => g.scope === "org" || g.quarter_key === quarter.key),
+    );
+  }, [quarter.key]);
 
   useEffect(() => {
     load();
@@ -51,11 +60,14 @@ export default function HomeGoalsView() {
     }
   }
 
+  // Section titles for the quarterly + monthly buckets adapt to the
+  // active quarter. Org stays "Org goals" — company-wide.
+  const quarterShort = quarter.label.split(" ")[0]; // "Q2", "Q3"
   const sections: { scope: Scope; title: string; subtitle: string }[] = [
     { scope: "org", title: "Org goals", subtitle: "Company-wide objectives" },
     {
       scope: "q2",
-      title: "Q2 goals",
+      title: `${quarterShort} goals`,
       subtitle: "What we're shipping this quarter",
     },
     {

@@ -61,6 +61,10 @@ export type Topic = {
   department: Department | null;
   status: TopicStatus;
   sort_order: number | null;
+  // QuarterKey shape ("2026Q2"). Added in migration 0028 so topics
+  // can be filtered alongside Goals by the Clubhouse quarter
+  // selector.
+  quarter_key: string;
   created_at: string;
   updated_at: string;
 };

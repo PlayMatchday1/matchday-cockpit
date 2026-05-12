@@ -8,6 +8,7 @@ import {
   type Department,
 } from "@/lib/topics";
 import { refetchTopics } from "@/lib/useTopics";
+import { useClubhouseQuarter } from "@/lib/clubhouseQuarter";
 
 export default function NewTopicModal({
   onClose,
@@ -16,6 +17,7 @@ export default function NewTopicModal({
   onClose: () => void;
   onCreated: (id: string) => void;
 }) {
+  const quarter = useClubhouseQuarter();
   const [title, setTitle] = useState("");
   const [description, setDescription] = useState("");
   // "" represents the General/Org-wide default (department=null).
@@ -55,6 +57,7 @@ export default function NewTopicModal({
         department: department || null,
         status: "open",
         sort_order,
+        quarter_key: quarter.key,
       })
       .select()
       .single();

@@ -1,13 +1,22 @@
 "use client";
 
-import { Suspense } from "react";
+import { Suspense, useCallback, useMemo } from "react";
 import Link from "next/link";
-import { useSearchParams } from "next/navigation";
+import { useRouter, useSearchParams } from "next/navigation";
 import HeroMessage from "@/components/HeroMessage";
 import HomeGoalsView from "@/components/HomeGoalsView";
 import PagePermissionGuard from "@/components/PagePermissionGuard";
+import QuarterSelector from "@/components/QuarterSelector";
 import QuickStats from "@/components/QuickStats";
 import TopicsView from "@/components/TopicsView";
+import { ClubhouseQuarterProvider } from "@/lib/clubhouseQuarter";
+import {
+  getAvailableQuarters,
+  getCurrentQuarter,
+  isPlanningQuarter,
+  resolveQuarterFromUrl,
+  type QuarterInfo,
+} from "@/lib/quarters";
 
 export default function ClubhousePage() {
   return (
@@ -20,12 +29,53 @@ export default function ClubhousePage() {
 }
 
 function ClubhouseContent() {
+  const router = useRouter();
   const sp = useSearchParams();
-  const tab = sp.get("tab") === "topics" ? "topics" : "goals";
+  const tab = sp?.get("tab") === "topics" ? "topics" : "goals";
+
+  // Quarter selector + URL state. Same pattern as /admin/finance:
+  // ?q=<key> drives the active quarter; selecting the default
+  // (current calendar) quarter drops the param to keep URLs clean.
+  const availableQuarters = useMemo(() => getAvailableQuarters(), []);
+  const quarter = useMemo<QuarterInfo>(
+    () => resolveQuarterFromUrl(sp?.get("q") ?? null, new Date()),
+    [sp],
+  );
+  const handleQuarterChange = useCallback(
+    (key: string) => {
+      const qs = new URLSearchParams(sp?.toString() ?? "");
+      if (key === getCurrentQuarter().key) qs.delete("q");
+      else qs.set("q", key);
+      const s = qs.toString();
+      router.replace(s ? `?${s}` : "?");
+    },
+    [router, sp],
+  );
+
+  const planning = isPlanningQuarter(quarter, new Date());
 
   return (
-    <>
-      <HeroMessage />
+    <ClubhouseQuarterProvider quarter={quarter}>
+      <div className="mb-3 flex flex-wrap items-end justify-between gap-x-6 gap-y-3">
+        <HeroMessage />
+        <QuarterSelector
+          available={availableQuarters}
+          value={quarter.key}
+          onChange={handleQuarterChange}
+          now={new Date()}
+        />
+      </div>
+
+      {planning && (
+        <div
+          role="note"
+          className="mb-6 rounded-2xl border-[1.5px] border-cream-line bg-cream-soft/60 px-5 py-3 text-sm text-deep-green/70 shadow-sm shadow-deep-green/5"
+        >
+          <span className="font-bold text-deep-green">{quarter.label}</span> ·
+          Planning quarter — set goals and seed topics now to forecast.
+        </div>
+      )}
+
       <Tabs active={tab} />
       {tab === "goals" ? (
         <>
@@ -35,7 +85,7 @@ function ClubhouseContent() {
       ) : (
         <TopicsView />
       )}
-    </>
+    </ClubhouseQuarterProvider>
   );
 }
 
