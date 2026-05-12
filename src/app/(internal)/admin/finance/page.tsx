@@ -3,6 +3,7 @@
 import { useRouter, useSearchParams } from "next/navigation";
 import { useCallback, useEffect, useMemo, useRef, useState } from "react";
 import PagePermissionGuard from "@/components/PagePermissionGuard";
+import QuarterSelector from "@/components/QuarterSelector";
 import BillingScheduleView from "@/components/BillingScheduleView";
 import CashFlowTabContent from "@/components/CashFlowTabContent";
 import ChangeLogView from "@/components/ChangeLogView";
@@ -34,8 +35,8 @@ import { FinanceQuarterProvider } from "@/lib/financeQuarter";
 import {
   getAvailableQuarters,
   getCurrentQuarter,
-  getQuarterByKey,
   isPlanningQuarter,
+  resolveQuarterFromUrl,
   type QuarterInfo,
 } from "@/lib/quarters";
 import { useFinanceData } from "@/lib/useFinanceData";
@@ -99,27 +100,6 @@ function getInitialTab(): FinanceTabId {
     }
   }
   return "cities";
-}
-
-// Resolve `?q=<key>` from the URL into a QuarterInfo. Validation:
-//   - missing → current quarter
-//   - malformed ("garbage", "2026Q9") → current quarter
-//   - parseable but before EARLIEST_QUARTER (2026Q1, 2025Q4) → current
-//   - parseable but future (Q3 today) → current
-// Future-quarter rejection uses getAvailableQuarters so the selector
-// and the URL agree on what's selectable.
-function resolveQuarterFromUrl(
-  rawKey: string | null,
-  now: Date,
-): QuarterInfo {
-  if (!rawKey) return getCurrentQuarter(now);
-  const parsed = getQuarterByKey(rawKey);
-  if (!parsed) return getCurrentQuarter(now);
-  const available = getAvailableQuarters(now);
-  if (!available.some((q) => q.key === parsed.key)) {
-    return getCurrentQuarter(now);
-  }
-  return parsed;
 }
 
 function FinanceLandingContent() {
@@ -334,41 +314,6 @@ function FinanceLandingContent() {
         <ChangeLogView />
       </TabPanel>
     </FinanceQuarterProvider>
-  );
-}
-
-// Compact dropdown in the page header. Today the list has one entry
-// ("Q2 2026"); on Jul 1 it grows to two. Styling mirrors the small
-// pill controls used elsewhere on /finance (FinanceConfigureSubNav
-// font sizes + cream-line border).
-function QuarterSelector({
-  available,
-  value,
-  onChange,
-  now,
-}: {
-  available: QuarterInfo[];
-  value: string;
-  onChange: (key: string) => void;
-  now: Date;
-}) {
-  return (
-    <label className="flex items-center gap-2 text-[11px] font-bold uppercase tracking-[0.18em] text-deep-green/55">
-      <span aria-hidden>Quarter</span>
-      <select
-        value={value}
-        onChange={(e) => onChange(e.target.value)}
-        className="rounded-full border border-cream-line bg-white px-3 py-1.5 text-[12px] font-bold tracking-[0.05em] text-deep-green shadow-sm transition hover:border-deep-green/40 focus:border-deep-green focus:outline-none"
-        aria-label="Select quarter"
-      >
-        {available.map((q) => (
-          <option key={q.key} value={q.key}>
-            {q.label}
-            {isPlanningQuarter(q, now) ? " · Planning" : ""}
-          </option>
-        ))}
-      </select>
-    </label>
   );
 }
 

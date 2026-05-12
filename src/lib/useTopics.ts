@@ -1,7 +1,8 @@
 "use client";
 
-import { useEffect, useState } from "react";
+import { useEffect, useMemo, useState } from "react";
 import { supabase } from "./supabase";
+import { useClubhouseQuarter } from "./clubhouseQuarter";
 import {
   TOPIC_STATUS_ORDER,
   type Topic,
@@ -52,6 +53,7 @@ async function load(): Promise<void> {
 }
 
 export function useTopics(): State {
+  const quarter = useClubhouseQuarter();
   const [s, setS] = useState<State>(cached ?? INITIAL);
 
   useEffect(() => {
@@ -68,7 +70,16 @@ export function useTopics(): State {
     };
   }, []);
 
-  return s;
+  // Filter on the consumer side rather than per-quarter caching the
+  // fetch — topic counts are small (< a few hundred) so pulling all
+  // and filtering is cheaper than maintaining a per-quarter cache.
+  return useMemo<State>(
+    () => ({
+      ...s,
+      topics: s.topics.filter((t) => t.quarter_key === quarter.key),
+    }),
+    [s, quarter.key],
+  );
 }
 
 export async function refetchTopics(): Promise<void> {

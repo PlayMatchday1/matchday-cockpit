@@ -226,3 +226,26 @@ export function isCurrentQuarter(
   const cur = getCurrentQuarter(now);
   return q.year === cur.year && q.quarter === cur.quarter;
 }
+
+// Resolves a `?q=<key>` URL param into a QuarterInfo. Validation
+// matches the convention used across both /finance and /clubhouse:
+//   - missing             → current quarter
+//   - malformed           → current quarter
+//   - parseable but before EARLIEST_QUARTER (2026Q1 or older) → current
+//   - parseable but not in the selectable set (Q4 today)      → current
+//
+// Future-quarter rejection uses getAvailableQuarters so the selector
+// and the URL agree on what's selectable.
+export function resolveQuarterFromUrl(
+  rawKey: string | null,
+  now: Date = new Date(),
+): QuarterInfo {
+  if (!rawKey) return getCurrentQuarter(now);
+  const parsed = getQuarterByKey(rawKey);
+  if (!parsed) return getCurrentQuarter(now);
+  const available = getAvailableQuarters(now);
+  if (!available.some((q) => q.key === parsed.key)) {
+    return getCurrentQuarter(now);
+  }
+  return parsed;
+}

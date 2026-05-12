@@ -46,6 +46,10 @@ export type Goal = {
   progress: number;
   scope: Scope;
   city: City | null;
+  // QuarterKey shape ("2026Q2"). Org goals carry a value but
+  // consumer logic ignores it (org is quarter-agnostic). Added in
+  // migration 0028.
+  quarter_key: string;
   sort_order: number | null;
   target_date: string | null;
   last_progress_change_at: string | null;
