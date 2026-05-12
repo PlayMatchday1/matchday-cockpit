@@ -45,6 +45,11 @@ const RETURN_TAB_KEY = "finance:returnTab";
 // Configure (after navigating to a primary pill and back) lands on
 // the same view instead of resetting to Revenue. Session-scoped.
 const LAST_CONFIGURE_KEY = "finance:lastConfigureSubTab";
+// Cross-tab handoff for "I just added a venue — open the Billing
+// Schedule's add editor prefilled with this venue_id." Set by the
+// Field Costs post-save banner; consumed (and cleared) by
+// BillingScheduleView on first render after the tab switch.
+export const BILLING_SCHEDULE_PREFILL_VENUE_KEY = "billing-schedule:prefillVenueId";
 
 const PRIMARY_TAB_IDS: ReadonlySet<FinanceTabId> = new Set<FinanceTabId>([
   "cities",
@@ -307,7 +312,20 @@ function FinanceLandingContent() {
         <PartnerDashboardsAdmin inline />
       </TabPanel>
       <TabPanel id="field-costs" active={activeTab} visited={visited}>
-        <FieldCostsView />
+        <FieldCostsView
+          onAddedVenueGotoSchedule={(venueId) => {
+            try {
+              window.sessionStorage.setItem(
+                BILLING_SCHEDULE_PREFILL_VENUE_KEY,
+                String(venueId),
+              );
+            } catch {
+              // sessionStorage unavailable; user can still navigate
+              // manually
+            }
+            selectTab("billing-schedule");
+          }}
+        />
       </TabPanel>
       <TabPanel id="billing-schedule" active={activeTab} visited={visited}>
         <BillingScheduleView />
