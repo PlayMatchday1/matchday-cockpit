@@ -42,3 +42,17 @@ export function cityFromAbbr(raw: string | undefined | null): string | null {
   if (!trimmed) return null;
   return CITY_ABBR_TO_COCKPIT[trimmed] ?? null;
 }
+
+// Inverse of cityFromAbbr. Returns the upstream abbreviation
+// (mdapi_matches.city_identifier) for a cockpit city name, or null
+// if the city isn't in the map. Used by useMatchWindowData to
+// translate the City prop into the server-side filter value.
+const COCKPIT_TO_ABBR: Record<string, string> = Object.fromEntries(
+  Object.entries(CITY_ABBR_TO_COCKPIT).map(([abbr, city]) => [city, abbr]),
+);
+
+export function cityToAbbr(raw: string | undefined | null): string | null {
+  const trimmed = (raw ?? "").trim();
+  if (!trimmed) return null;
+  return COCKPIT_TO_ABBR[trimmed] ?? null;
+}
