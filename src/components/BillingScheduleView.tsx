@@ -208,6 +208,27 @@ export default function BillingScheduleView() {
     setEditorOpen(true);
   }
 
+  // Cross-tab handoff: Field Costs' "Add Venue" post-save banner
+  // drops the new venue_id into sessionStorage before switching the
+  // tab here. Read once on mount, then pop the key so a later visit
+  // doesn't re-open the editor.
+  useEffect(() => {
+    if (typeof window === "undefined") return;
+    try {
+      const raw = window.sessionStorage.getItem(
+        "billing-schedule:prefillVenueId",
+      );
+      if (!raw) return;
+      window.sessionStorage.removeItem("billing-schedule:prefillVenueId");
+      const venueId = parseInt(raw, 10);
+      if (Number.isFinite(venueId)) {
+        openAdd({ venueId });
+      }
+    } catch {
+      // sessionStorage unavailable; nothing to do
+    }
+  }, []);
+
   function openEdit(row: FinSchedule) {
     setEditorMode("edit");
     setEditorRow(row);

@@ -2,7 +2,16 @@
 
 import { useEffect, useMemo, useRef, useState } from "react";
 import Link from "next/link";
-import { ChevronDown, ChevronRight, Lock, Pencil, Pin, Trash2 } from "lucide-react";
+import {
+  ChevronDown,
+  ChevronRight,
+  Lock,
+  Pencil,
+  Pin,
+  Plus,
+  Trash2,
+} from "lucide-react";
+import AddVenueDialog, { type AddVenueDraft } from "@/components/AddVenueDialog";
 import ConfirmDeleteDialog from "@/components/ConfirmDeleteDialog";
 import FieldCostOverrideEditor, {
   type OverrideDraft,
@@ -61,7 +70,16 @@ function fmtMoney(n: number, signZero = false): string {
   return `${r < 0 ? "-" : ""}$${abs.toLocaleString("en-US")}`;
 }
 
-export default function FieldCostsView() {
+export default function FieldCostsView({
+  // Optional handoff: when set, the post-save banner's "Add it to
+  // Billing Schedule" button calls this with the new venue's id.
+  // Page wires it to switch the tab + drop a sessionStorage hint
+  // BillingScheduleView reads on mount to open its add editor
+  // prefilled with this venue.
+  onAddedVenueGotoSchedule,
+}: {
+  onAddedVenueGotoSchedule?: (venueId: number) => void;
+} = {}) {
   const { data, loading } = useFinanceData();
   const { appUser } = useAuth();
   const quarter = useFinanceQuarter();
@@ -89,6 +107,18 @@ export default function FieldCostsView() {
   const [overrideEditorRow, setOverrideEditorRow] = useState<FieldCostRow | null>(null);
 
   const [removeRow, setRemoveRow] = useState<FieldCostRow | null>(null);
+
+  const [addVenueOpen, setAddVenueOpen] = useState(false);
+  // After a successful Add Venue, surface a banner + flash the new
+  // row. lastAdded.venueId drives the `highlight` prop on
+  // FieldCostTableRow. Cleared by the banner's dismiss or after the
+  // post-save toast linger.
+  const [lastAdded, setLastAdded] = useState<{
+    venueId: number;
+    venueName: string;
+    city: string;
+  } | null>(null);
+  const [addVenueError, setAddVenueError] = useState<string | null>(null);
 
   const [edits, setEdits] = useState<EditMap>(new Map());
 
@@ -337,6 +367,94 @@ export default function FieldCostsView() {
     setOverrideEditorRow(null);
   }
 
+  async function handleSubmitAddVenue(draft: AddVenueDraft) {
+    const email = appUser?.email;
+    if (!email) throw new Error("Not signed in");
+
+    // 1. Insert the venue. raw_venue_name = venue_name (canonical
+    //    has no alias-of-itself); is_active=true. Aliases (if any)
+    //    are written separately below — a unique index on
+    //    (city, venue_name) will surface duplicates with a
+    //    23505 / "duplicate key" error which we translate to a
+    //    friendlier message.
+    const payload = {
+      venue_name: draft.venue_name,
+      raw_venue_name: draft.venue_name,
+      city: draft.city,
+      billing_type: draft.billing_type,
+      per_match_rate: draft.per_match_rate,
+      hourly_rate: draft.hourly_rate,
+      cost_per_match: draft.cost_per_match,
+      max_spots: draft.max_spots,
+      dpp_price: draft.dpp_price,
+      member_price: draft.member_price,
+      launch_date: draft.launch_date,
+      notes: draft.notes,
+      is_active: true,
+    };
+    const { data: inserted, error } = await supabase
+      .from("fin_venues")
+      .insert(payload)
+      .select()
+      .single();
+    if (error) {
+      if (
+        error.code === "23505" ||
+        /duplicate key/i.test(error.message ?? "")
+      ) {
+        throw new Error(
+          `A venue named "${draft.venue_name}" already exists in ${draft.city}. ` +
+            `Use a unique name or edit the existing entry.`,
+        );
+      }
+      throw new Error(error.message);
+    }
+    const insertedVenue = inserted as { id: number } & Record<string, unknown>;
+
+    // 2. Insert aliases (if any). Schema: fin_venue_aliases (id, alias,
+    //    canonical_venue, created_at). One row per comma-separated
+    //    entry. Best-effort: a failure here doesn't roll back the
+    //    venue insert — the venue still exists and the operator can
+    //    add aliases later from Supabase Studio.
+    if (draft.aliases.length > 0) {
+      const aliasRows = draft.aliases.map((alias) => ({
+        alias,
+        canonical_venue: draft.venue_name,
+      }));
+      const { error: aliasErr } = await supabase
+        .from("fin_venue_aliases")
+        .insert(aliasRows);
+      if (aliasErr) {
+        // Don't throw — the venue is created. Surface the partial
+        // failure in the banner.
+        setAddVenueError(
+          `Venue added, but alias insert failed: ${aliasErr.message}. ` +
+            `Add aliases manually from Supabase Studio.`,
+        );
+      }
+    }
+
+    // 3. Audit log.
+    await logChange({
+      tableName: "fin_venues",
+      rowId: insertedVenue.id,
+      action: "insert",
+      changedBy: email,
+      after: insertedVenue,
+    });
+
+    await refetchFinanceData();
+    setAddVenueOpen(false);
+    setLastAdded({
+      venueId: insertedVenue.id,
+      venueName: draft.venue_name,
+      city: draft.city,
+    });
+    // Banner + row highlight auto-dismiss after 12 seconds so the
+    // operator has time to read the "Add to Billing Schedule" CTA.
+    setTimeout(() => setLastAdded(null), 12000);
+  }
+
   async function handleRemoveOverride() {
     const email = appUser?.email;
     if (!email) throw new Error("Not signed in");
@@ -457,7 +575,52 @@ export default function FieldCostsView() {
           />
           Has override only
         </label>
+        <button
+          type="button"
+          onClick={() => {
+            setAddVenueError(null);
+            setAddVenueOpen(true);
+          }}
+          className="ml-auto inline-flex items-center gap-1.5 rounded-full bg-mint px-4 py-1.5 text-xs font-bold text-deep-green transition hover:bg-mint-hover"
+        >
+          <Plus size={14} aria-hidden />
+          Add Venue
+        </button>
       </div>
+
+      {lastAdded && (
+        <div className="mb-4 flex flex-wrap items-center justify-between gap-3 rounded-md border border-mint/50 bg-mint-soft/40 px-4 py-3 text-sm text-deep-green">
+          <div>
+            <span className="font-bold">{lastAdded.venueName}</span>
+            <span className="text-deep-green/70"> · {lastAdded.city}</span>
+            <span className="text-deep-green/70"> · added.</span>
+            {addVenueError && (
+              <div className="mt-1 text-xs text-coral">{addVenueError}</div>
+            )}
+          </div>
+          <div className="flex items-center gap-2">
+            {onAddedVenueGotoSchedule && (
+              <button
+                type="button"
+                onClick={() => onAddedVenueGotoSchedule(lastAdded.venueId)}
+                className="rounded-full bg-deep-green px-4 py-1.5 text-xs font-bold text-cream transition hover:bg-deep-green/85"
+              >
+                Add it to Billing Schedule →
+              </button>
+            )}
+            <button
+              type="button"
+              onClick={() => {
+                setLastAdded(null);
+                setAddVenueError(null);
+              }}
+              className="rounded-full border border-cream-line bg-white px-3 py-1.5 text-xs font-bold text-deep-green/65 hover:bg-cream-soft"
+            >
+              Dismiss
+            </button>
+          </div>
+        </div>
+      )}
 
       {recon && Math.abs(recon.diff) > 1 && (
         <div className="mb-4 rounded-md border border-coral/40 bg-coral-soft/40 px-4 py-3 text-sm text-coral">
@@ -524,7 +687,9 @@ export default function FieldCostsView() {
                       onSetOverride={() => openSetOverride(row)}
                       onRemoveOverride={() => setRemoveRow(row)}
                       primaryVenue={primaryVenue}
-                      highlight={false}
+                      highlight={
+                        lastAdded?.venueId === row.primaryVenueId
+                      }
                       cellState={(field) =>
                         edits.get(editKey(row.primaryVenueId, field)) ?? null
                       }
@@ -614,6 +779,12 @@ export default function FieldCostsView() {
           setOverrideEditorRow(null);
         }}
         onSubmit={handleSubmitOverride}
+      />
+
+      <AddVenueDialog
+        open={addVenueOpen}
+        onClose={() => setAddVenueOpen(false)}
+        onSubmit={handleSubmitAddVenue}
       />
 
       <ConfirmDeleteDialog
