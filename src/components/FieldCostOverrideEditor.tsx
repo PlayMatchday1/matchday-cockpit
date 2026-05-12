@@ -3,7 +3,7 @@
 import { useEffect, useState } from "react";
 import type { FieldCostRow } from "@/lib/financeCosts";
 import type { Q2Month } from "@/lib/financeStats";
-import { Q2_MONTHS } from "@/lib/financeStats";
+import { useFinanceQuarter } from "@/lib/financeQuarter";
 
 export type OverrideDraft = {
   month: Q2Month;
@@ -30,6 +30,7 @@ export default function FieldCostOverrideEditor({
   onClose: () => void;
   onSubmit: (draft: OverrideDraft) => Promise<void>;
 }) {
+  const quarter = useFinanceQuarter();
   const [draft, setDraft] = useState<OverrideDraft>({
     month: initialMonth,
     override_amount: 0,
@@ -109,9 +110,9 @@ export default function FieldCostOverrideEditor({
               }
               className="w-full rounded-md border border-cream-line bg-white px-3 py-2 text-sm text-deep-green focus:border-deep-green focus:outline-none"
             >
-              {Q2_MONTHS.map((m) => (
-                <option key={m} value={m}>
-                  {m}
+              {quarter.months.map((m) => (
+                <option key={m.key} value={m.key}>
+                  {m.key}
                 </option>
               ))}
             </select>

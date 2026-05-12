@@ -318,6 +318,9 @@ export default function WeeklyProjectionsTab() {
           time) — e.g., "NEMP Mon 7:30pm". Compare against the last 4 weeks
           of actuals.
         </p>
+        <p className="mt-3 inline-flex items-center gap-1.5 rounded-full bg-cream-soft px-3 py-1 text-[10px] font-bold uppercase tracking-[0.18em] text-deep-green/65 ring-1 ring-cream-line">
+          Forward projection · independent of quarter selector
+        </p>
       </div>
 
       {error && (

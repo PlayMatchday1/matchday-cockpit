@@ -16,9 +16,9 @@ import {
   totalOverrideAmountFor,
   type FieldCostRow,
 } from "@/lib/financeCosts";
+import { useFinanceQuarter } from "@/lib/financeQuarter";
 import {
-  Q2_MONTHS,
-  getCurrentQ2Month,
+  getCurrentMonthInQuarter,
   type Q2Month,
 } from "@/lib/financeStats";
 import { supabase } from "@/lib/supabase";
@@ -64,10 +64,21 @@ function fmtMoney(n: number, signZero = false): string {
 export default function FieldCostsView() {
   const { data, loading } = useFinanceData();
   const { appUser } = useAuth();
+  const quarter = useFinanceQuarter();
 
   const [month, setMonth] = useState<Q2Month>(
-    () => getCurrentQ2Month() ?? "Jun 2026",
+    () =>
+      getCurrentMonthInQuarter(quarter, new Date()) ??
+      quarter.months[quarter.months.length - 1].key,
   );
+  useEffect(() => {
+    if (!quarter.months.some((m) => m.key === month)) {
+      setMonth(
+        getCurrentMonthInQuarter(quarter, new Date()) ??
+          quarter.months[quarter.months.length - 1].key,
+      );
+    }
+  }, [quarter, month]);
   const [cityFilter, setCityFilter] = useState<string>(ALL);
   const [billingFilter, setBillingFilter] = useState<BillingFilter>("ALL");
   const [hasOverrideOnly, setHasOverrideOnly] = useState(false);
@@ -401,9 +412,9 @@ export default function FieldCostsView() {
             onChange={(e) => setMonth(e.target.value as Q2Month)}
             className="rounded-md border border-cream-line bg-cream-soft px-3 py-1.5 text-sm font-bold text-deep-green focus:border-deep-green focus:outline-none"
           >
-            {Q2_MONTHS.map((m) => (
-              <option key={m} value={m}>
-                {m}
+            {quarter.months.map((m) => (
+              <option key={m.key} value={m.key}>
+                {m.key}
               </option>
             ))}
           </select>
