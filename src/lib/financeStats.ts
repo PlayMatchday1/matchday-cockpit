@@ -1973,13 +1973,15 @@ export type RankingRow = {
   city: string;
   launchDate: string | null;
   launchedMs: number;
-  // Partner-dashboard "qualifying revenue" — sum of match-registration
+  // Drop-in / per-player revenue — sum of match-registration
   // DAILY-PAID matchPricePaid (excludes staff + match-canceled) plus
   // fin_revenue Private Rental gross. NOT the fees-deducted fin_revenue
-  // DPP net (which is what this column used to show as "DPP Rev"). The
-  // column label in the UI is now "Revenue" to reflect that privates
-  // are bundled in.
+  // DPP net. The Field Ranking table labels this column "DPP Revenue".
   revenue: number;
+  // memberRev + revenue — the venue's total revenue per the partner
+  // formula. Surfaced as the leading money column on Field Ranking
+  // and the default sort key.
+  totalRevenue: number;
   memberRev: number;
   cityMbrPct: number;
   mbrMixPct: number;
@@ -2079,6 +2081,7 @@ export function buildRankingRows(
       launchDate: primary.launch_date,
       launchedMs,
       revenue,
+      totalRevenue: revenue + memberRev,
       memberRev,
       cityMbrPct,
       mbrMixPct,
