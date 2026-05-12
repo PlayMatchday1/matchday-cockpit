@@ -2120,7 +2120,11 @@ export function tabToMonths(tab: "Q2" | "Apr" | "May" | "Jun"): Q2Month[] {
 export type VenueInsightRow = {
   city: string;
   venue: string;
-  dppRev: number;
+  // Partner-dashboard formula (match-reg DAILY-PAID + fin_revenue
+  // Private Rental, gross, canonical-resolved). Same number as the
+  // Field Ranking "Revenue" column. Replaces the legacy fin_revenue
+  // DPP.net sum.
+  revenue: number;
   memberRev: number;
   cost: number;
   net: number;
@@ -2138,12 +2142,18 @@ function ageInDaysFrom(iso: string | null, now: Date): number | null {
 
 export function buildVenueInsightRows(
   data: FinanceData,
+  matchRegistrations: JoinedMatchPlayerRow[],
   month: Q2Month,
   now: Date = new Date(),
 ): VenueInsightRow[] {
   const out: VenueInsightRow[] = [];
   for (const v of data.venues) {
-    const dppRev = venueDppRevenueFor(data, v.city, v.venue_name, month);
+    const revenue = venuePartnerRevenueFor(
+      data,
+      matchRegistrations,
+      new Set([v.venue_name]),
+      month,
+    );
     const memberRev = venueAllocatedMemberRevenueFor(
       data,
       v.city,
@@ -2153,7 +2163,7 @@ export function buildVenueInsightRows(
     const cost = venueCostFor(data, v.city, v.venue_name, month);
     const spots = venueMemberSpotsFor(data, v.city, v.venue_name, month);
     if (
-      dppRev === 0 &&
+      revenue === 0 &&
       memberRev === 0 &&
       cost === 0 &&
       spots.total === 0
@@ -2163,10 +2173,10 @@ export function buildVenueInsightRows(
     out.push({
       city: v.city,
       venue: v.venue_name,
-      dppRev,
+      revenue,
       memberRev,
       cost,
-      net: dppRev + memberRev - cost,
+      net: revenue + memberRev - cost,
       spots,
       launchDate: v.launch_date,
       launchAgeDays: ageInDaysFrom(v.launch_date, now),
@@ -2195,7 +2205,7 @@ export function buildCityInsightRows(
 
   const fieldNetByCity = new Map<string, number>();
   for (const r of venueRows) {
-    fieldNetByCity.set(r.city, (fieldNetByCity.get(r.city) ?? 0) + (r.dppRev - r.cost));
+    fieldNetByCity.set(r.city, (fieldNetByCity.get(r.city) ?? 0) + (r.revenue - r.cost));
   }
 
   const out: CityInsightRow[] = [];

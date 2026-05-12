@@ -65,7 +65,7 @@ export default function FinanceInsightsGrid({
 
   const computed = useMemo(() => {
     if (!data) return null;
-    const venueRows = buildVenueInsightRows(data, month);
+    const venueRows = buildVenueInsightRows(data, matchRows, month);
     const cityRows = buildCityInsightRows(data, month, venueRows);
     return {
       venueRows,

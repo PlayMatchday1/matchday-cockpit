@@ -2,11 +2,13 @@
 
 import { useMemo, useState } from "react";
 import { useFinanceData } from "@/lib/useFinanceData";
+import { useMatchData } from "@/lib/useMatchData";
 import {
   cityMembershipRevenueFor,
   cityOverheadFor,
   tabToMonths,
   venueMatchCountFor,
+  venuePartnerRevenueFor,
   type Q2Month,
 } from "@/lib/financeStats";
 import { canonicalVenueCost } from "@/lib/financeCosts";
@@ -41,6 +43,7 @@ function defaultTab(now: Date = new Date()): Tab {
 
 export default function CityPLCard({ city }: { city: string }) {
   const { data } = useFinanceData();
+  const { rows: matchRegistrations } = useMatchData();
   const [tab, setTab] = useState<Tab>(() => defaultTab());
 
   const result = useMemo(() => {
@@ -63,14 +66,13 @@ export default function CityPLCard({ city }: { city: string }) {
       }
     }
 
-    // Aggregate DPP revenue per group + collect untagged (venue=null) so
-    // the city card reconciles 1:1 with Cash Flow's per-city DPP number.
-    // Strike revenue (type='Strike') is its own bucket — counted toward
-    // gross but not into the per-venue field totals. Private Rental rows
-    // (type='Private Rental') become synthetic field-level rows below.
-    const perGroupDppRev = new Map<string, number>();
-    type PrivateRentalEntry = { venue: string | null; net: number };
-    const privateRentals: PrivateRentalEntry[] = [];
+    // Strike revenue (type='Strike') and untagged DPP (venue=null) are
+    // still walked from fin_revenue for the gross-rev tile — they don't
+    // attach to any venue group, so partner formula doesn't see them.
+    // Per-venue DPP+PR revenue now flows from venuePartnerRevenueFor
+    // (match-reg DAILY-PAID + fin_revenue Private Rental), matching
+    // Field Ranking exactly. Private Rentals fold INTO the venue's
+    // revenue rather than rendering as a separate row.
     let untaggedDppRev = 0;
     let strikeRev = 0;
     let membershipRev = 0;
@@ -88,21 +90,11 @@ export default function CityPLCard({ city }: { city: string }) {
           strikeRev += r.net;
           continue;
         }
-        if (r.type === "Private Rental") {
-          privateRentals.push({ venue: r.venue, net: r.net });
-          continue;
-        }
-        if (r.type === "DPP") {
-          if (r.venue) {
-            const key = venueToGroupKey.get(r.venue);
-            if (key) {
-              perGroupDppRev.set(key, (perGroupDppRev.get(key) ?? 0) + r.net);
-            } else {
-              untaggedDppRev += r.net;
-            }
-          } else {
-            untaggedDppRev += r.net;
-          }
+        // DPP with no venue → bucket as untagged so the gross-rev tile
+        // still includes it. Tagged DPP is folded into the per-venue
+        // partner-formula revenue below, so we skip it here.
+        if (r.type === "DPP" && !r.venue) {
+          untaggedDppRev += r.net;
         }
       }
       membershipRev += cityMembershipRevenueFor(data, city, m);
@@ -114,10 +106,11 @@ export default function CityPLCard({ city }: { city: string }) {
       overhead.misc += o.misc;
     }
 
-    // Per-venue rows: compute cost + match count via existing helpers, pull
-    // DPP from the group map. Filter to groups with ANY activity (cost,
-    // dpp, or matches) so silent venues drop off but free venues still
-    // surface.
+    // Per-venue rows: compute cost + match count via existing helpers
+    // and revenue via venuePartnerRevenueFor (match-reg DAILY-PAID +
+    // fin_revenue Private Rental, summed over the months and the
+    // group's legs). Private Rentals are folded into the venue's
+    // revenue here — there is no separate "Private Rentals" row.
     type FieldRow = {
       venue: string;
       subLabel: string | null;
@@ -138,6 +131,7 @@ export default function CityPLCard({ city }: { city: string }) {
         const sameNameLegs = legNames.size !== g.legs.length;
         let cost = 0;
         let matchCount = 0;
+        let dppRev = 0;
         for (const m of months) {
           for (const leg of g.legs) {
             cost += canonicalVenueCost(data, leg.id, m).amount;
@@ -149,8 +143,13 @@ export default function CityPLCard({ city }: { city: string }) {
               matchCount += venueMatchCountFor(data, city, leg.venue_name, m);
             }
           }
+          dppRev += venuePartnerRevenueFor(
+            data,
+            matchRegistrations,
+            legNames,
+            m,
+          );
         }
-        const dppRev = perGroupDppRev.get(g.key) ?? 0;
         return {
           venue: g.displayName,
           subLabel: null,
@@ -168,26 +167,6 @@ export default function CityPLCard({ city }: { city: string }) {
       })
       .filter((r) => r.dppRev > 0 || r.cost > 0 || r.matchCount > 0)
       .sort((a, b) => b.dppRev - a.dppRev || b.cost - a.cost);
-
-    // Append Private Rental rows. They render as their own "Private Rentals"
-    // row in the field-level table, with the field-name as a subtitle and
-    // cost = 0 (the venue's regular cost row already captures that).
-    for (const pr of privateRentals) {
-      fieldLevel.push({
-        venue: "Private Rentals",
-        subLabel: pr.venue ?? "—",
-        dppRev: pr.net,
-        cost: 0,
-        matchCount: 0,
-        net: pr.net,
-        billingType: null,
-        perMatchRate: null,
-        monthlyFlat: null,
-        isCombined: false,
-        isUntagged: false,
-        isPrivateRental: true,
-      });
-    }
 
     const fieldDppTotal = fieldLevel.reduce((s, r) => s + r.dppRev, 0);
     const fieldCostTotal = fieldLevel.reduce((s, r) => s + r.cost, 0);
@@ -225,7 +204,7 @@ export default function CityPLCard({ city }: { city: string }) {
       netPL,
       margin,
     };
-  }, [data, city, tab]);
+  }, [data, matchRegistrations, city, tab]);
 
   if (!data || !result) return null;
 
