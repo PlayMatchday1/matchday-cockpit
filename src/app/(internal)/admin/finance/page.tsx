@@ -1,7 +1,7 @@
 "use client";
 
-import { useRouter } from "next/navigation";
-import { useEffect, useRef, useState } from "react";
+import { useRouter, useSearchParams } from "next/navigation";
+import { useCallback, useEffect, useMemo, useRef, useState } from "react";
 import PagePermissionGuard from "@/components/PagePermissionGuard";
 import BillingScheduleView from "@/components/BillingScheduleView";
 import CashFlowTabContent from "@/components/CashFlowTabContent";
@@ -30,6 +30,13 @@ import PartnerDashboardsAdmin from "@/components/PartnerDashboardsAdmin";
 import RevenueAdminView from "@/components/RevenueAdminView";
 import WeeklyProjectionsTab from "@/components/WeeklyProjectionsTab";
 import { CITY_DISPLAY_ORDER } from "@/lib/financeStats";
+import { FinanceQuarterProvider } from "@/lib/financeQuarter";
+import {
+  getAvailableQuarters,
+  getCurrentQuarter,
+  getQuarterByKey,
+  type QuarterInfo,
+} from "@/lib/quarters";
 import { supabase } from "@/lib/supabase";
 import { useFinanceData } from "@/lib/useFinanceData";
 
@@ -89,9 +96,34 @@ function getInitialTab(): FinanceTabId {
   return "cities";
 }
 
+// Resolve `?q=<key>` from the URL into a QuarterInfo. Validation:
+//   - missing → current quarter
+//   - malformed ("garbage", "2026Q9") → current quarter
+//   - parseable but before EARLIEST_QUARTER (2026Q1, 2025Q4) → current
+//   - parseable but future (Q3 today) → current
+// Future-quarter rejection uses getAvailableQuarters so the selector
+// and the URL agree on what's selectable.
+function resolveQuarterFromUrl(
+  rawKey: string | null,
+  now: Date,
+): QuarterInfo {
+  if (!rawKey) return getCurrentQuarter(now);
+  const parsed = getQuarterByKey(rawKey);
+  if (!parsed) return getCurrentQuarter(now);
+  const available = getAvailableQuarters(now);
+  if (!available.some((q) => q.key === parsed.key)) {
+    return getCurrentQuarter(now);
+  }
+  return parsed;
+}
+
 function FinanceLandingContent() {
   const router = useRouter();
-  const [quarterLabel, setQuarterLabel] = useState<string>("");
+  const searchParams = useSearchParams();
+  // Seed value from fin_config.quarter_label — used as a fallback
+  // pre-Wave-3 if anything wants the operator-curated label string.
+  // The page subtitle reads from `quarter.label` now (e.g. "Q2 2026").
+  const [fallbackQuarterLabel, setFallbackQuarterLabel] = useState<string>("");
   const [activeTab, setActiveTab] = useState<FinanceTabId>(() => getInitialTab());
   // Lazy-mount strategy: tabs are mounted the first time they're
   // visited, then kept mounted (display:none for inactive). This
@@ -169,6 +201,28 @@ function FinanceLandingContent() {
 
   const secondary = deriveSecondary(activeTab);
 
+  // === Quarter selector + URL state (Wave 2) ===
+  // useMemo + searchParams so the resolution recomputes when the URL
+  // changes (back/forward, programmatic router.replace). `now` is
+  // captured per render — getCurrentQuarter calls are cheap.
+  const availableQuarters = useMemo(() => getAvailableQuarters(), []);
+  const quarter = useMemo<QuarterInfo>(
+    () => resolveQuarterFromUrl(searchParams?.get("q") ?? null, new Date()),
+    [searchParams],
+  );
+  const handleQuarterChange = useCallback(
+    (key: string) => {
+      const qs = new URLSearchParams(searchParams?.toString() ?? "");
+      // Default-quarter selection drops the param (clean URL); explicit
+      // non-default selection writes it.
+      if (key === getCurrentQuarter().key) qs.delete("q");
+      else qs.set("q", key);
+      const s = qs.toString();
+      router.replace(s ? `?${s}` : "?");
+    },
+    [router, searchParams],
+  );
+
   useEffect(() => {
     let cancelled = false;
     supabase
@@ -179,7 +233,7 @@ function FinanceLandingContent() {
       .then(({ data }) => {
         if (cancelled) return;
         const v = (data as { value?: string } | null)?.value;
-        if (v) setQuarterLabel(v);
+        if (v) setFallbackQuarterLabel(v);
       });
     return () => {
       cancelled = true;
@@ -187,14 +241,24 @@ function FinanceLandingContent() {
   }, []);
 
   return (
-    <>
-      <div className="mb-8">
-        <h1 className="font-display text-5xl uppercase leading-none tracking-tight text-deep-green md:text-6xl">
-          Finance
-        </h1>
-        <p className="mt-2 text-sm text-deep-green/65">
-          {quarterLabel || "Loading…"}
-        </p>
+    <FinanceQuarterProvider quarter={quarter}>
+      <div className="mb-8 flex flex-wrap items-end justify-between gap-x-6 gap-y-3">
+        <div>
+          <h1 className="font-display text-5xl uppercase leading-none tracking-tight text-deep-green md:text-6xl">
+            Finance
+          </h1>
+          <p className="mt-2 text-sm text-deep-green/65">
+            {quarter.label}
+            {fallbackQuarterLabel && fallbackQuarterLabel !== quarter.label
+              ? ` · ${fallbackQuarterLabel}`
+              : ""}
+          </p>
+        </div>
+        <QuarterSelector
+          available={availableQuarters}
+          value={quarter.key}
+          onChange={handleQuarterChange}
+        />
       </div>
 
       <FinanceSecondaryNav active={secondary} onChange={openSecondary} />
@@ -263,8 +327,39 @@ function FinanceLandingContent() {
       <TabPanel id="change-log" active={activeTab} visited={visited}>
         <ChangeLogView />
       </TabPanel>
+    </FinanceQuarterProvider>
+  );
+}
 
-    </>
+// Compact dropdown in the page header. Today the list has one entry
+// ("Q2 2026"); on Jul 1 it grows to two. Styling mirrors the small
+// pill controls used elsewhere on /finance (FinanceConfigureSubNav
+// font sizes + cream-line border).
+function QuarterSelector({
+  available,
+  value,
+  onChange,
+}: {
+  available: QuarterInfo[];
+  value: string;
+  onChange: (key: string) => void;
+}) {
+  return (
+    <label className="flex items-center gap-2 text-[11px] font-bold uppercase tracking-[0.18em] text-deep-green/55">
+      <span aria-hidden>Quarter</span>
+      <select
+        value={value}
+        onChange={(e) => onChange(e.target.value)}
+        className="rounded-full border border-cream-line bg-white px-3 py-1.5 text-[12px] font-bold tracking-[0.05em] text-deep-green shadow-sm transition hover:border-deep-green/40 focus:border-deep-green focus:outline-none"
+        aria-label="Select quarter"
+      >
+        {available.map((q) => (
+          <option key={q.key} value={q.key}>
+            {q.label}
+          </option>
+        ))}
+      </select>
+    </label>
   );
 }
 
