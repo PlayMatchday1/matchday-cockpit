@@ -1777,15 +1777,20 @@ export function venueMemberSpotsFor(
   venue: string,
   month: Q2Month,
 ): VenueMemberSpotBreakdown {
-  const row = data.memberSpots.find(
-    (s) => s.city === city && s.venue === venue && s.month === month,
-  );
-  if (!row) return { member: 0, dpp: 0, other: 0, total: 0 };
+  // Read from the live mdapi-derived index. The legacy
+  // data.memberSpots (fin_member_spots) is a manually-uploaded
+  // monthly aggregate that only exists for closed months — it left
+  // every in-progress month's % columns blank. mdapiMemberSpots is
+  // built every page-load from mdapi_match_players, so it tracks
+  // the current month incrementally.
+  const counts =
+    data.mdapiMemberSpots.byVenueMonth.get(`${city}|${venue}|${month}`) ??
+    ZERO_SPOT_COUNTS;
   return {
-    member: row.member_spots,
-    dpp: row.dpp_spots,
-    other: row.other_spots,
-    total: row.member_spots + row.dpp_spots + row.other_spots,
+    member: counts.member,
+    dpp: counts.dpp,
+    other: counts.other,
+    total: counts.member + counts.dpp + counts.other,
   };
 }
 
@@ -1794,9 +1799,13 @@ export function cityTotalMemberSpotsFor(
   city: string,
   month: Q2Month,
 ): number {
-  return data.memberSpots
-    .filter((s) => s.city === city && s.month === month)
-    .reduce((sum, s) => sum + s.member_spots, 0);
+  // Returns the MEMBER-spot total for the city in this month — the
+  // denominator for "this venue's share of city MEMBER fills."
+  // Reads from mdapiMemberSpots for the same reason as
+  // venueMemberSpotsFor above.
+  return (
+    data.mdapiMemberSpots.byCityMonth.get(`${city}|${month}`)?.member ?? 0
+  );
 }
 
 export function venueAllocatedMemberRevenueFor(
@@ -1812,9 +1821,10 @@ export function venueAllocatedMemberRevenueFor(
   // match in a month before its row was uploaded. Same source for
   // numerator/denominator means no drift.
   const venueSpots =
-    data.mdapiMemberSpots.byVenueMonth.get(`${city}|${venue}|${month}`) ?? 0;
+    data.mdapiMemberSpots.byVenueMonth.get(`${city}|${venue}|${month}`)?.member ??
+    0;
   const cityTotal =
-    data.mdapiMemberSpots.byCityMonth.get(`${city}|${month}`) ?? 0;
+    data.mdapiMemberSpots.byCityMonth.get(`${city}|${month}`)?.member ?? 0;
   if (cityTotal <= 0) return 0;
   const cityMembership = cityMembershipRevenueFor(data, city, month);
   return (venueSpots / cityTotal) * cityMembership;
@@ -1882,7 +1892,7 @@ export function matchAllocatedMemberRevenueFor(
   // The venue-level count cancels — we only need the city-month
   // total as the denominator.
   const cityTotal =
-    data.mdapiMemberSpots.byCityMonth.get(`${args.city}|${month}`) ?? 0;
+    data.mdapiMemberSpots.byCityMonth.get(`${args.city}|${month}`)?.member ?? 0;
   if (cityTotal <= 0) return 0;
 
   const cityMembership = cityMembershipRevenueFor(data, args.city, month);
@@ -1901,12 +1911,25 @@ export function matchAllocatedMemberRevenueFor(
 // upstream so they never hit the index.
 // =====================================================================
 
+// Per-key bucket of payment-type counts. `member` is the MEMBER fill
+// (FREE rows in mdapi_match_players); `dpp` is DAILY PAID (cash
+// per-player); `other` covers anything else with a valid paid_status
+// — in practice PROMOCODE. The three buckets sum to "active spots"
+// at the venue/city for that Q2 month.
+export type MdapiMemberSpotCounts = {
+  member: number;
+  dpp: number;
+  other: number;
+};
+
 export type MdapiMemberSpotIndex = {
   // key: `${city}|${canonicalVenueName}|${Q2Month}`
-  byVenueMonth: Map<string, number>;
+  byVenueMonth: Map<string, MdapiMemberSpotCounts>;
   // key: `${city}|${Q2Month}`
-  byCityMonth: Map<string, number>;
+  byCityMonth: Map<string, MdapiMemberSpotCounts>;
 };
+
+const ZERO_SPOT_COUNTS: MdapiMemberSpotCounts = { member: 0, dpp: 0, other: 0 };
 
 export function emptyMdapiMemberSpotIndex(): MdapiMemberSpotIndex {
   return { byVenueMonth: new Map(), byCityMonth: new Map() };
@@ -1929,19 +1952,38 @@ export function buildMdapiMemberSpotIndex(
   // spots that were previously dropped — see Tier-2 deploy notes.
   aliases: Map<string, string>,
 ): MdapiMemberSpotIndex {
-  const byVenueMonth = new Map<string, number>();
-  const byCityMonth = new Map<string, number>();
+  const byVenueMonth = new Map<string, MdapiMemberSpotCounts>();
+  const byCityMonth = new Map<string, MdapiMemberSpotCounts>();
 
   const fields = new Set<string>();
   for (const r of regs) if (r.field) fields.add(r.field);
   const fieldToVenue = buildFieldToVenueIdMap(fields, venues, aliases);
   const venueById = new Map(venues.map((v) => [v.id, v]));
 
+  function bucket(map: Map<string, MdapiMemberSpotCounts>, key: string) {
+    let cur = map.get(key);
+    if (!cur) {
+      cur = { member: 0, dpp: 0, other: 0 };
+      map.set(key, cur);
+    }
+    return cur;
+  }
+
   for (const r of regs) {
     // Match-level filters mirror matchPnL.ts active eligibility.
     if (r.match_canceled) continue;
     if (r.player_canceled_at && r.player_canceled_at.trim() !== "") continue;
-    if ((r.payment_type ?? "").toUpperCase() !== "MEMBER") continue;
+
+    // Categorize by payment_type. MEMBER → member; DAILY PAID → dpp;
+    // anything else with a recognized type (mostly PROMOCODE) → other.
+    // Unknown payment_type is dropped so the index doesn't accumulate
+    // garbage from rows the cockpit can't interpret.
+    const pt = (r.payment_type ?? "").toUpperCase();
+    let category: keyof MdapiMemberSpotCounts;
+    if (pt === "MEMBER") category = "member";
+    else if (pt === "DAILY PAID") category = "dpp";
+    else if (pt === "PROMOCODE") category = "other";
+    else continue;
 
     const month = isoToQ2Month(r.match_start);
     if (!month) continue;
@@ -1957,10 +1999,8 @@ export function buildMdapiMemberSpotIndex(
     const v = venueById.get(resolved.venueId);
     if (!v) continue;
 
-    const venueKey = `${v.city}|${v.venue_name}|${month}`;
-    byVenueMonth.set(venueKey, (byVenueMonth.get(venueKey) ?? 0) + 1);
-    const cityKey = `${v.city}|${month}`;
-    byCityMonth.set(cityKey, (byCityMonth.get(cityKey) ?? 0) + 1);
+    bucket(byVenueMonth, `${v.city}|${v.venue_name}|${month}`)[category] += 1;
+    bucket(byCityMonth, `${v.city}|${month}`)[category] += 1;
   }
 
   return { byVenueMonth, byCityMonth };
