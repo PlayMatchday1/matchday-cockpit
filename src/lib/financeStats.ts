@@ -1,6 +1,8 @@
 import type { FinanceData } from "./useFinanceData";
 import type { MatchRow } from "./useMatchData";
-import type { LegacyMatchRegRow } from "./mdapiMatchesRead";
+import type { JoinedMatchPlayerRow, LegacyMatchRegRow } from "./mdapiMatchesRead";
+
+const STAFF_EMAIL_DOMAIN = "matchday.com";
 import {
   canonicalVenueCost,
   fieldCostsFor,
@@ -1580,6 +1582,53 @@ export function venueDppRevenueFor(
     .reduce((s, r) => s + r.net, 0);
 }
 
+// Mirrors the partner-dashboard "qualifying revenue" formula
+// (partnerStats.computeWeeklyPayments) so Field Ranking shows the
+// same revenue number contractually owed against. Sums two streams:
+//
+//   - DPP from match registrations: matchPricePaid for each non-staff,
+//     non-match-canceled DAILY-PAID player row whose field maps to one
+//     of this venue group's legs and whose matchStart is in `month`.
+//     Note: includes player-canceled rows (the partner-dashboard
+//     filter only excludes match-canceled and staff). Source-of-truth
+//     for revenue paid out on, not fin_revenue.DPP (which is the
+//     fees-deducted Stripe rollup).
+//
+//   - Private Rental from fin_revenue.gross for any leg's venue_name
+//     in `month`. fin_revenue Strike etc. are excluded by design —
+//     only Private Rental flows into partner payouts.
+//
+// `venueLegNames` is the set of fin_venues.venue_name values for the
+// venue group (multiple when same-name legs collapse, e.g. ATH Katy +
+// ATH Katy Sunday). matchRegistrations.field is normField'd, so we
+// match against the canonical leg names directly.
+export function venuePartnerRevenueFor(
+  data: FinanceData,
+  matchRegistrations: JoinedMatchPlayerRow[],
+  venueLegNames: Set<string>,
+  month: Q2Month,
+): number {
+  const targetMonth = MONTH_NUMBER[month];
+  let dpRev = 0;
+  for (const r of matchRegistrations) {
+    if (r.matchCanceled) continue;
+    if (r.email && r.email.toLowerCase().includes(STAFF_EMAIL_DOMAIN)) continue;
+    if (r.paymentType !== "DAILY PAID") continue;
+    if (!venueLegNames.has(r.field)) continue;
+    const d = r.matchStart;
+    if (d.getFullYear() !== 2026 || d.getMonth() !== targetMonth) continue;
+    dpRev += Number(r.matchPricePaid ?? 0) || 0;
+  }
+  let prRev = 0;
+  for (const e of data.revenue) {
+    if (e.month !== month) continue;
+    if (e.type !== "Private Rental") continue;
+    if (!venueLegNames.has(e.venue ?? "")) continue;
+    prRev += Number(e.gross ?? 0) || 0;
+  }
+  return dpRev + prRev;
+}
+
 export function venueCostFor(
   data: FinanceData,
   city: string,
@@ -1910,7 +1959,13 @@ export type RankingRow = {
   city: string;
   launchDate: string | null;
   launchedMs: number;
-  dppRev: number;
+  // Partner-dashboard "qualifying revenue" — sum of match-registration
+  // DAILY-PAID matchPricePaid (excludes staff + match-canceled) plus
+  // fin_revenue Private Rental gross. NOT the fees-deducted fin_revenue
+  // DPP net (which is what this column used to show as "DPP Rev"). The
+  // column label in the UI is now "Revenue" to reflect that privates
+  // are bundled in.
+  revenue: number;
   memberRev: number;
   cityMbrPct: number;
   mbrMixPct: number;
@@ -1926,6 +1981,7 @@ export type RankingRow = {
 
 export function buildRankingRows(
   data: FinanceData,
+  matchRegistrations: JoinedMatchPlayerRow[],
   month: Q2Month,
 ): RankingRow[] {
   const out: RankingRow[] = [];
@@ -1938,7 +1994,15 @@ export function buildRankingRows(
     // legs (Case A) both work — same-name legs return identical sums but
     // are deduped by groupVenues bucketing.
     const legNames = new Set(g.legs.map((l) => l.venue_name));
-    let dppRev = 0;
+    // Revenue is computed once per group from the partner-dashboard
+    // formula — venuePartnerRevenueFor handles same-name vs distinct
+    // legs uniformly because it filters by the full leg-name set.
+    const revenue = venuePartnerRevenueFor(
+      data,
+      matchRegistrations,
+      legNames,
+      month,
+    );
     let memberRev = 0;
     let cost = 0;
     let matchCount = 0;
@@ -1949,7 +2013,6 @@ export function buildRankingRows(
     if (legNames.size === g.legs.length) {
       // Distinct-name legs: query each separately and sum.
       for (const leg of g.legs) {
-        dppRev += venueDppRevenueFor(data, g.city, leg.venue_name, month);
         memberRev += venueAllocatedMemberRevenueFor(
           data,
           g.city,
@@ -1967,7 +2030,6 @@ export function buildRankingRows(
       // Same-name legs (alias-collapsed): one query covers both. Cost still
       // sums per leg because rates differ.
       const name = primary.venue_name;
-      dppRev = venueDppRevenueFor(data, g.city, name, month);
       memberRev = venueAllocatedMemberRevenueFor(data, g.city, name, month);
       matchCount = venueMatchCountFor(data, g.city, name, month);
       const spots = venueMemberSpotsFor(data, g.city, name, month);
@@ -1979,7 +2041,7 @@ export function buildRankingRows(
       }
     }
 
-    if (dppRev === 0 && memberRev === 0 && cost === 0) continue;
+    if (revenue === 0 && memberRev === 0 && cost === 0) continue;
 
     const cityTotalMember = cityTotalMemberSpotsFor(data, g.city, month);
     const totalSpots = memberSpots + dppSpots + otherSpots;
@@ -1987,7 +2049,7 @@ export function buildRankingRows(
       cityTotalMember > 0 ? memberSpots / cityTotalMember : 0;
     const mbrMixPct = totalSpots > 0 ? memberSpots / totalSpots : 0;
     const dppMixPct = totalSpots > 0 ? dppSpots / totalSpots : 0;
-    const totalRev = dppRev + memberRev;
+    const totalRev = revenue + memberRev;
     const netPL = totalRev - cost;
     const margin = totalRev > 0 ? netPL / totalRev : 0;
 
@@ -2002,7 +2064,7 @@ export function buildRankingRows(
       city: g.city,
       launchDate: primary.launch_date,
       launchedMs,
-      dppRev,
+      revenue,
       memberRev,
       cityMbrPct,
       mbrMixPct,

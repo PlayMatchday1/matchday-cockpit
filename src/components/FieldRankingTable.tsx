@@ -3,6 +3,7 @@
 import { useMemo, useState } from "react";
 import { ChevronDown, ChevronRight } from "lucide-react";
 import { useFinanceData } from "@/lib/useFinanceData";
+import { useMatchData } from "@/lib/useMatchData";
 import {
   Q2_MONTHS,
   buildRankingRows,
@@ -16,7 +17,7 @@ type SortKey =
   | "venue"
   | "city"
   | "launchedMs"
-  | "dppRev"
+  | "revenue"
   | "memberRev"
   | "cityMbrPct"
   | "mbrMixPct"
@@ -36,7 +37,7 @@ const COLUMNS: ColumnDef[] = [
   { key: "venue", label: "Venue", align: "left" },
   { key: "city", label: "City", align: "left" },
   { key: "launchedMs", label: "Launched", align: "left" },
-  { key: "dppRev", label: "DPP Rev", align: "right" },
+  { key: "revenue", label: "Revenue", align: "right" },
   { key: "memberRev", label: "Member Rev", align: "right" },
   { key: "cityMbrPct", label: "City Mbr %", align: "right" },
   { key: "mbrMixPct", label: "Mbr Mix %", align: "right" },
@@ -66,16 +67,17 @@ export default function FieldRankingTable({
   onToggle?: () => void;
 } = {}) {
   const { data } = useFinanceData();
+  const { rows: matchRegistrations } = useMatchData();
   const [month, setMonth] = useState<Q2Month>(
     () => getCurrentQ2Month(new Date()) ?? "Jun 2026",
   );
-  const [sortKey, setSortKey] = useState<SortKey>("dppRev");
+  const [sortKey, setSortKey] = useState<SortKey>("revenue");
   const [sortDir, setSortDir] = useState<"asc" | "desc">("desc");
 
   const rows = useMemo<RankingRow[]>(() => {
     if (!data) return [];
-    return buildRankingRows(data, month);
-  }, [data, month]);
+    return buildRankingRows(data, matchRegistrations, month);
+  }, [data, matchRegistrations, month]);
 
   const sorted = useMemo(() => {
     const copy = [...rows];
@@ -236,7 +238,7 @@ export default function FieldRankingTable({
                     {relativeTimeFromDate(row.launchDate)}
                   </td>
                   <td className="px-3 py-2 text-right font-mono tabular-nums text-mint-hover">
-                    {fmtMoney(row.dppRev)}
+                    {fmtMoney(row.revenue)}
                   </td>
                   <td className="px-3 py-2 text-right font-mono tabular-nums text-mint-hover">
                     {fmtMoney(row.memberRev)}
