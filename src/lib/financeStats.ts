@@ -1,6 +1,7 @@
 import type { FinanceData } from "./useFinanceData";
 import type { MatchRow } from "./useMatchData";
 import type { JoinedMatchPlayerRow, LegacyMatchRegRow } from "./mdapiMatchesRead";
+import { getCurrentQuarter } from "./quarters";
 
 const STAFF_EMAIL_DOMAIN = "matchday.com";
 import {
@@ -17,24 +18,45 @@ import {
   resolveVenueForMatch,
 } from "./venueNormalization";
 
-export const Q2_MONTHS = ["Apr 2026", "May 2026", "Jun 2026"] as const;
-export type Q2Month = (typeof Q2_MONTHS)[number];
+// Wave 1 (2026-05-11): Q2_MONTHS is now derived from today's quarter
+// via getCurrentQuarter() at module load. Today (May 11), this
+// produces ["Apr 2026", "May 2026", "Jun 2026"] — byte-identical to
+// the previous hardcoded value. On July 1 it would produce
+// ["Jul 2026", "Aug 2026", "Sep 2026"]. Wave 2 wires this into the
+// page-level selector so a user viewing past quarters still gets the
+// right months.
+//
+// Q2Month is relaxed from a string-literal union to a plain `string`
+// alias so the 20+ consumer files keep compiling regardless of which
+// quarter the array resolves to. Static-string narrowness was never
+// load-bearing on these helpers — every caller treats month as a
+// runtime key into the fin_revenue.month text column.
+export const Q2_MONTHS: readonly string[] =
+  getCurrentQuarter().months.map((m) => m.key);
+export type Q2Month = string;
 
 export type Mode = "mtd" | "projection";
 
-const MONTH_NUMBER: Record<Q2Month, number> = {
+// WAVE 2: replace these three Records + monthStartFor() with derived
+// reads off QuarterMonth (year + monthIndex + daysInMonth + fullName
+// are all already on that type). Kept hardcoded against Apr/May/Jun
+// for this wave so the page renders byte-identically — they only get
+// hit when Q2_MONTHS resolves to those exact keys, which is true
+// today and through Jun 30. After Jul 1 these lookups would return
+// undefined; Wave 2 ships before that to fix it.
+const MONTH_NUMBER: Record<string, number> = {
   "Apr 2026": 3,
   "May 2026": 4,
   "Jun 2026": 5,
 };
 
-const MONTH_DAYS: Record<Q2Month, number> = {
+const MONTH_DAYS: Record<string, number> = {
   "Apr 2026": 30,
   "May 2026": 31,
   "Jun 2026": 30,
 };
 
-const MONTH_FULL_NAME: Record<Q2Month, string> = {
+const MONTH_FULL_NAME: Record<string, string> = {
   "Apr 2026": "APRIL",
   "May 2026": "MAY",
   "Jun 2026": "JUNE",
@@ -58,9 +80,12 @@ export function isFutureMonth(month: Q2Month, now: Date = new Date()): boolean {
   return monthStartFor(month).getTime() > todayMonthStart.getTime();
 }
 
-// TODO: This helper is hardcoded to 2026. When the selector rolls forward to Q3 2026
-// (or any future quarter), update Q2_MONTHS, the year check, and the fallback values
-// across all call sites. Search "Q2_MONTHS" to find all consumers.
+// WAVE 2: replace year hardcode + MONTH_NUMBER lookup with
+// quarter.months.find(m => isCurrentMonth(m, now)) reading from the
+// active QuarterInfo prop. For Wave 1 the year gate stays at 2026 so
+// behavior is byte-identical when today is May 11. After Jul 1 this
+// helper returns null until Wave 2 ships — acceptable because the
+// staged rollout completes before quarter rollover.
 export function getCurrentQ2Month(now: Date = new Date()): Q2Month | null {
   if (now.getFullYear() !== 2026) return null;
   const m = now.getMonth();
