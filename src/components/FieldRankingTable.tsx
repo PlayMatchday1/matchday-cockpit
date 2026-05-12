@@ -17,6 +17,7 @@ type SortKey =
   | "venue"
   | "city"
   | "launchedMs"
+  | "totalRevenue"
   | "revenue"
   | "memberRev"
   | "cityMbrPct"
@@ -37,7 +38,8 @@ const COLUMNS: ColumnDef[] = [
   { key: "venue", label: "Venue", align: "left" },
   { key: "city", label: "City", align: "left" },
   { key: "launchedMs", label: "Launched", align: "left" },
-  { key: "revenue", label: "Revenue", align: "right" },
+  { key: "totalRevenue", label: "Total Revenue", align: "right" },
+  { key: "revenue", label: "DPP Revenue", align: "right" },
   { key: "memberRev", label: "Member Rev", align: "right" },
   { key: "cityMbrPct", label: "City Mbr %", align: "right" },
   { key: "mbrMixPct", label: "Mbr Mix %", align: "right" },
@@ -71,7 +73,7 @@ export default function FieldRankingTable({
   const [month, setMonth] = useState<Q2Month>(
     () => getCurrentQ2Month(new Date()) ?? "Jun 2026",
   );
-  const [sortKey, setSortKey] = useState<SortKey>("revenue");
+  const [sortKey, setSortKey] = useState<SortKey>("totalRevenue");
   const [sortDir, setSortDir] = useState<"asc" | "desc">("desc");
 
   const rows = useMemo<RankingRow[]>(() => {
@@ -163,8 +165,8 @@ export default function FieldRankingTable({
       </div>
 
       {!collapsed && (
-      <div>
-        <table className="w-full text-xs">
+      <div className="overflow-x-auto">
+        <table className="w-full min-w-[1100px] text-xs">
           <thead className="sticky top-0 z-10 bg-cream-soft">
             <tr className="border-y border-cream-line text-[10px] font-bold uppercase tracking-wider text-deep-green/60">
               {COLUMNS.map((col) => {
@@ -236,6 +238,9 @@ export default function FieldRankingTable({
                   <td className="px-3 py-2 text-deep-green/85">{row.city}</td>
                   <td className="px-3 py-2 text-deep-green/65">
                     {relativeTimeFromDate(row.launchDate)}
+                  </td>
+                  <td className="px-3 py-2 text-right font-mono font-bold tabular-nums text-mint-hover">
+                    {fmtMoney(row.totalRevenue)}
                   </td>
                   <td className="px-3 py-2 text-right font-mono tabular-nums text-mint-hover">
                     {fmtMoney(row.revenue)}
