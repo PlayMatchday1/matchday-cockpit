@@ -43,6 +43,16 @@ const PAGE_LIMIT = 250;
 // fast we can raise later. Don't pre-optimize — this is the
 // minimum-blast-radius fix.
 const UPSERT_BATCH = 100;
+// Politeness delay between paginated /admin/players calls. With ~96
+// pages back-to-back the upstream platform has been observed to serve
+// transient 503s and HTML error pages (the "Unexpected token 'A'…"
+// failure mode). 200ms spreads the load and reduces upstream pressure
+// at the cost of ~20s of wall-clock time across the full sync.
+const INTER_PAGE_DELAY_MS = 200;
+
+function sleep(ms: number): Promise<void> {
+  return new Promise((resolve) => setTimeout(resolve, ms));
+}
 
 type ApiPlayer = {
   id?: number;
@@ -108,12 +118,12 @@ export async function syncMdapiUsers(
       sortDirection: "desc",
     });
   } catch (e) {
-    if (e instanceof MatchdayApiError) {
-      throw new Error(
-        `mdapi_users: /admin/players probe failed (HTTP ${e.status}): ${e.message}`,
-      );
-    }
-    throw e;
+    const rawMsg = e instanceof Error ? e.message : String(e);
+    const status =
+      e instanceof MatchdayApiError ? ` (HTTP ${e.status})` : "";
+    throw new Error(
+      `mdapi_users: /admin/players probe failed after retries${status}. Upstream: ${rawMsg}`,
+    );
   }
   const totalItems = typeof probe.totalItems === "number" ? probe.totalItems : 0;
   if (totalItems === 0) {
@@ -136,6 +146,9 @@ export async function syncMdapiUsers(
   let rowsSkipped = 0;
 
   for (let page = 1; page <= totalPages; page++) {
+    // Politeness delay between pages. Skipped before page 1 (no
+    // prior call to back off from).
+    if (page > 1) await sleep(INTER_PAGE_DELAY_MS);
     let res: ApiPage;
     try {
       res = await client.get<ApiPage>("/admin/players", {
@@ -146,12 +159,20 @@ export async function syncMdapiUsers(
       });
       apiCalls++;
     } catch (e) {
-      if (e instanceof MatchdayApiError) {
-        throw new Error(
-          `mdapi_users: page ${page} failed (HTTP ${e.status}): ${e.message}`,
-        );
-      }
-      throw e;
+      // fetchMatchDayJson has already burned its 3 internal retries
+      // for transient failures (502/503/504/429/parse-fail). Anything
+      // reaching us here is terminal — surface page + progress so
+      // the UI status card reads like a debuggable diagnostic, not
+      // an opaque "Unexpected token 'A'..." error.
+      const approxSynced = (page - 1) * PAGE_LIMIT;
+      const rawMsg = e instanceof Error ? e.message : String(e);
+      const status =
+        e instanceof MatchdayApiError ? ` (HTTP ${e.status})` : "";
+      throw new Error(
+        `mdapi_users: Failed on page ${page} of ~${totalPages} after retries${status}. ` +
+          `Synced ~${approxSynced.toLocaleString()} of ~${totalItems.toLocaleString()} users. ` +
+          `Upstream: ${rawMsg}`,
+      );
     }
     const rows = Array.isArray(res?.data) ? res.data : [];
     rowsReceived += rows.length;
