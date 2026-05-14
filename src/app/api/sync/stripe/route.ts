@@ -94,6 +94,15 @@ export async function POST(req: Request) {
   const cronSecret = process.env.CRON_SECRET;
   let triggeredBy: TriggeredBy;
   let supabase: SupabaseClient;
+  // Service-role-keyed client used ONLY by syncStripeCharges for the
+  // mdapi_users read that builds the email→city fallback map.
+  // mdapi_users RLS blocks the authenticated user role even for
+  // admin sessions, so without this the fallback silently returns
+  // zero rows. mdapi_subscriptions has more permissive RLS so the
+  // primary lookup + every other write stays on `supabase`. In cron
+  // mode this is the same as supabase (both service-role); in manual
+  // mode it's a separate client.
+  let serviceClient: SupabaseClient;
 
   if (cronSecret && constantTimeMatch(token, cronSecret)) {
     // Cron mode — service role bypasses RLS for the writes the cron
@@ -109,6 +118,7 @@ export async function POST(req: Request) {
     supabase = createClient(supabaseUrl, serviceKey, {
       auth: { persistSession: false, autoRefreshToken: false },
     });
+    serviceClient = supabase;
   } else {
     // Manual mode — validate the token resolves to a user, then use
     // it for the per-request authenticated client. RLS evaluates as
@@ -123,6 +133,16 @@ export async function POST(req: Request) {
     if (userErr || !userData?.user) {
       return Response.json({ error: "Invalid session" }, { status: 401 });
     }
+    const serviceKey = process.env.SUPABASE_SERVICE_ROLE_KEY;
+    if (!serviceKey) {
+      return Response.json(
+        { error: "SUPABASE_SERVICE_ROLE_KEY is not set (required for membership city fallback)" },
+        { status: 500 },
+      );
+    }
+    serviceClient = createClient(supabaseUrl, serviceKey, {
+      auth: { persistSession: false, autoRefreshToken: false },
+    });
   }
 
   // --- Insert fin_sync_log row at the start so a crash leaves a trace ---
@@ -174,7 +194,7 @@ export async function POST(req: Request) {
 
   // --- Sync + commit ---
   try {
-    const sync = await syncStripeCharges(supabase, { since, until });
+    const sync = await syncStripeCharges(supabase, { since, until }, serviceClient);
     let rowsReplaced = 0;
     let commitNote: string | undefined;
 
