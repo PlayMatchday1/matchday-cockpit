@@ -51,6 +51,17 @@ function StripeApiSyncCard() {
   const [syncing, setSyncing] = useState(false);
   const [result, setResult] = useState<SyncResponse | null>(null);
   const [error, setError] = useState<string | null>(null);
+  // Optional backfill range. When BOTH inputs are blank, "Sync now"
+  // preserves the existing daily-catch-up behavior (route defaults
+  // since = latest Stripe row + 1, until = now). When set, the
+  // values are passed as `since` / `until` in the POST body so
+  // operators can do historical backfills (e.g. Q1 Stripe data not
+  // yet in fin_revenue) without dropping a key into .env.local or
+  // touching the CLI. Date-only strings — the route's parseDateParam
+  // treats them as UTC midnight, matching Stripe's UTC charge.created
+  // semantics.
+  const [customSince, setCustomSince] = useState<string>("");
+  const [customUntil, setCustomUntil] = useState<string>("");
 
   // Surface the most recent Stripe charge in fin_revenue as the
   // "data freshness" signal — proxy for "how up-to-date is what
@@ -82,13 +93,18 @@ function StripeApiSyncCard() {
       const token = sessionData.session?.access_token;
       if (!token) throw new Error("No active session — please sign in again.");
 
+      // Only include since/until in the body when set. Empty body
+      // preserves the route's daily-catch-up default behavior.
+      const body: { since?: string; until?: string } = {};
+      if (customSince) body.since = customSince;
+      if (customUntil) body.until = customUntil;
       const res = await fetch("/api/sync/stripe", {
         method: "POST",
         headers: {
           "Content-Type": "application/json",
           Authorization: `Bearer ${token}`,
         },
-        body: JSON.stringify({}),
+        body: JSON.stringify(body),
       });
       const json = await res.json();
       if (!res.ok) {
@@ -131,6 +147,48 @@ function StripeApiSyncCard() {
         >
           {syncing ? "Syncing…" : "Sync now"}
         </button>
+      </div>
+
+      <div className="mt-4 flex flex-wrap items-end gap-3 rounded-md border border-cream-line bg-cream-soft/40 px-3 py-2">
+        <div className="text-[10px] font-bold uppercase tracking-wider text-deep-green/55">
+          Backfill range (optional)
+        </div>
+        <label className="flex items-center gap-1.5 text-[11px] text-deep-green/70">
+          <span className="font-bold">From</span>
+          <input
+            type="date"
+            value={customSince}
+            onChange={(e) => setCustomSince(e.target.value)}
+            disabled={syncing}
+            className="rounded border border-cream-line bg-white px-2 py-1 text-xs text-deep-green focus:border-deep-green focus:outline-none disabled:opacity-50"
+          />
+        </label>
+        <label className="flex items-center gap-1.5 text-[11px] text-deep-green/70">
+          <span className="font-bold">To</span>
+          <input
+            type="date"
+            value={customUntil}
+            onChange={(e) => setCustomUntil(e.target.value)}
+            disabled={syncing}
+            className="rounded border border-cream-line bg-white px-2 py-1 text-xs text-deep-green focus:border-deep-green focus:outline-none disabled:opacity-50"
+          />
+        </label>
+        {(customSince || customUntil) && (
+          <button
+            type="button"
+            onClick={() => {
+              setCustomSince("");
+              setCustomUntil("");
+            }}
+            disabled={syncing}
+            className="text-[11px] font-bold text-deep-green/60 transition hover:text-deep-green disabled:opacity-50"
+          >
+            Clear
+          </button>
+        )}
+        <div className="ml-auto text-[10px] text-deep-green/50">
+          Leave blank for daily catch-up from the latest Stripe row.
+        </div>
       </div>
 
       {error && (
