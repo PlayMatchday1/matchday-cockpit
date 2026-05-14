@@ -1,19 +1,25 @@
 "use client";
 
 // Field Ranking → Period Compare table. Cross-quarter view: ignores
-// the FinanceQuarterProvider value entirely. Reads venues + DPP
-// revenue + member-booking registrations and builds a per-venue ×
-// per-period grid with TWO sub-columns each (DPP $ and Member
-// Bookings count), plus MoM/WoW deltas.
+// the FinanceQuarterProvider value entirely. One column per period
+// (5 monthly or 8 weekly). Each cell stacks DPP $ (hero) over the
+// member-bookings count with an explicit " mbr" unit suffix so the
+// count can't be misread as dollars. Inline MoM/WoW % deltas live
+// next to their value on the same line.
 //
 // Sticky venue column on horizontal scroll: position: sticky;
 // left: 0; bg-white; z-index: 5 on every td in the venue column.
 // Same trick in the header cell. Works in every modern browser
 // without a JS scroll listener.
 //
-// Sort: clicking any column header (period-DPP, period-Bookings, or
-// the venue/city columns) re-sorts the rows. Default sort is the
-// current/most-recent period's DPP column, desc.
+// Sort: clicking a period header sorts by that period's DPP $.
+// Clicking the Venue header sorts alpha by venue. Default is the
+// current/most-recent period's DPP, desc.
+//
+// "Inactive" venues (no DPP $ and no member bookings in any period
+// in the visible window) are hidden by default; a toggle above the
+// table reveals them. Anchors the table on venues that actually
+// moved so the eye doesn't have to skip past dead rows.
 
 import { useMemo, useState } from "react";
 import { useFinanceData } from "@/lib/useFinanceData";
@@ -43,9 +49,11 @@ function fmtMoney(n: number): string {
   return `${r < 0 ? "-" : ""}$${abs.toLocaleString("en-US")}`;
 }
 
-function fmtCount(n: number): string {
-  if (n === 0) return "—";
-  return n.toLocaleString("en-US");
+// Always include the " mbr" suffix — it's the labeled unit that
+// prevents the count from being read as dollars.
+function fmtMbr(n: number): string {
+  if (n === 0) return "— mbr";
+  return `${n.toLocaleString("en-US")} mbr`;
 }
 
 function fmtDeltaPct(pct: number | null): {
@@ -65,7 +73,7 @@ function fmtDeltaPct(pct: number | null): {
   };
 }
 
-type RowKey = "venue" | string; // "venue" or period-key prefixed with "dpp:" or "mbr:"
+type VenueSortKey = "venue" | string; // "venue" or "dpp:<periodKey>"
 type SortDir = "asc" | "desc";
 
 export default function PeriodComparePanel({
@@ -120,33 +128,32 @@ export default function PeriodComparePanel({
     [matchRegistrations, periods, venueCanonicalByField],
   );
 
-  // City lookup so each row can show the venue's city. Per-venue
-  // city comes from data.venues; for venues that appear only in
-  // matchRegistrations (i.e., not yet in fin_venues), city is "—".
+  // City lookup so each row can show the venue's city under the
+  // venue name. For venues that appear only in matchRegistrations
+  // (not yet in fin_venues), city is "—".
   const cityByVenue = useMemo(() => {
     if (!data) return new Map<string, string>();
     return new Map(data.venues.map((v) => [v.venue_name, v.city]));
   }, [data]);
 
   // Default sort: current-period DPP descending. Sort key is either
-  // "venue", "city", or "dpp:<periodKey>" / "mbr:<periodKey>".
+  // "venue" or "dpp:<periodKey>".
   const currentPeriod = periods[periods.length - 1];
-  const [sortKey, setSortKey] = useState<RowKey>(`dpp:${currentPeriod.key}`);
+  const [sortKey, setSortKey] = useState<VenueSortKey>(`dpp:${currentPeriod.key}`);
   const [sortDir, setSortDir] = useState<SortDir>("desc");
+  const [showInactive, setShowInactive] = useState(false);
 
-  function toggleSort(key: RowKey) {
+  function toggleSort(key: VenueSortKey) {
     if (sortKey === key) {
       setSortDir((d) => (d === "desc" ? "asc" : "desc"));
     } else {
       setSortKey(key);
-      // Numeric columns default to desc on first click (high → low
-      // is the more useful default for revenue/bookings); text
-      // columns default to asc.
-      setSortDir(key === "venue" || key === "city" ? "asc" : "desc");
+      // Numeric defaults desc on first click; venue (text) defaults asc.
+      setSortDir(key === "venue" ? "asc" : "desc");
     }
   }
 
-  // Build the row set: union of venues across both tables.
+  // Row set: union of venues across both tables.
   const allVenues = useMemo(() => {
     const s = new Set<string>();
     for (const v of dppTable.venues) s.add(v);
@@ -154,25 +161,36 @@ export default function PeriodComparePanel({
     return [...s];
   }, [dppTable, mbrTable]);
 
+  // Active = at least one period has DPP $ > 0 or member bookings > 0.
+  // Inactives are hidden by default so the table anchors on venues
+  // with movement.
+  const activeVenues = useMemo(() => {
+    return allVenues.filter((v) => {
+      for (const p of periods) {
+        const dpp = dppTable.byVenue.get(v)?.get(p.key) ?? 0;
+        const mbr = mbrTable.byVenue.get(v)?.get(p.key) ?? 0;
+        if (dpp > 0 || mbr > 0) return true;
+      }
+      return false;
+    });
+  }, [allVenues, dppTable, mbrTable, periods]);
+
+  const inactiveCount = allVenues.length - activeVenues.length;
+
   const sortedVenues = useMemo(() => {
-    const arr = [...allVenues];
+    const base = showInactive ? allVenues : activeVenues;
+    const arr = [...base];
     arr.sort((a, b) => {
       if (sortKey === "venue") {
         return sortDir === "asc" ? a.localeCompare(b) : b.localeCompare(a);
       }
-      if (sortKey === "city") {
-        const ac = cityByVenue.get(a) ?? "";
-        const bc = cityByVenue.get(b) ?? "";
-        return sortDir === "asc" ? ac.localeCompare(bc) : bc.localeCompare(ac);
-      }
-      const [metric, periodKey] = sortKey.split(":") as ["dpp" | "mbr", string];
-      const table = metric === "dpp" ? dppTable : mbrTable;
-      const av = table.byVenue.get(a)?.get(periodKey) ?? 0;
-      const bv = table.byVenue.get(b)?.get(periodKey) ?? 0;
+      const periodKey = sortKey.slice("dpp:".length);
+      const av = dppTable.byVenue.get(a)?.get(periodKey) ?? 0;
+      const bv = dppTable.byVenue.get(b)?.get(periodKey) ?? 0;
       return sortDir === "desc" ? bv - av : av - bv;
     });
     return arr;
-  }, [allVenues, sortKey, sortDir, dppTable, mbrTable, cityByVenue]);
+  }, [showInactive, allVenues, activeVenues, sortKey, sortDir, dppTable]);
 
   // === Membership by City ===
   const membership: MembershipByCity = useMemo(() => {
@@ -208,8 +226,8 @@ export default function PeriodComparePanel({
             Period Compare
           </h2>
           <p className="text-xs text-deep-green/60">
-            Per-venue DPP $ and member bookings, side-by-side across
-            {" "}{mode === "monthly" ? "5 same-day-of-month windows" : "the last 8 ISO weeks"}.
+            Per-venue DPP $ with member bookings as supporting context,
+            across {mode === "monthly" ? "5 same-day-of-month windows" : "the last 8 ISO weeks"}.
             Quarter selector is ignored.
           </p>
         </div>
@@ -232,15 +250,28 @@ export default function PeriodComparePanel({
         </div>
       </div>
 
+      {inactiveCount > 0 && (
+        <div className="flex items-center gap-2 border-t border-cream-line/60 bg-cream-soft/30 px-5 py-2 text-[11px] text-deep-green/65">
+          <label className="flex cursor-pointer items-center gap-1.5 select-none">
+            <input
+              type="checkbox"
+              checked={showInactive}
+              onChange={(e) => setShowInactive(e.target.checked)}
+              className="h-3.5 w-3.5 accent-mint-hover"
+            />
+            <span className="font-bold">Show inactive venues</span>
+            <span className="text-deep-green/55">
+              ({inactiveCount} hidden — no $ or bookings in this window)
+            </span>
+          </label>
+        </div>
+      )}
+
       <div className="overflow-x-auto">
         <table className="w-full text-xs">
           <thead className="bg-cream-soft text-[10px] font-bold uppercase tracking-wider text-deep-green/60">
-            {/* Top row: period labels, each spanning 2 sub-columns */}
             <tr className="border-y border-cream-line">
-              <th
-                className="sticky left-0 z-20 bg-cream-soft px-3 py-2 text-left"
-                rowSpan={2}
-              >
+              <th className="sticky left-0 z-20 bg-cream-soft px-3 py-2 text-left">
                 <button
                   type="button"
                   onClick={() => toggleSort("venue")}
@@ -251,64 +282,29 @@ export default function PeriodComparePanel({
                   Venue {sortKey === "venue" ? (sortDir === "desc" ? "↓" : "↑") : ""}
                 </button>
               </th>
-              <th className="px-3 py-2 text-left" rowSpan={2}>
-                <button
-                  type="button"
-                  onClick={() => toggleSort("city")}
-                  className={`cursor-pointer select-none hover:text-deep-green ${
-                    sortKey === "city" ? "text-deep-green" : ""
-                  }`}
-                >
-                  City {sortKey === "city" ? (sortDir === "desc" ? "↓" : "↑") : ""}
-                </button>
-              </th>
-              {periods.map((p) => (
-                <th
-                  key={p.key}
-                  colSpan={2}
-                  className={`border-l border-cream-line px-3 py-2 text-center ${
-                    p.inProgress ? "bg-mint-soft/40" : ""
-                  }`}
-                >
-                  <div className="text-[11px] text-deep-green">{p.label}</div>
-                  {p.inProgress && (
-                    <div className="text-[9px] font-normal normal-case text-deep-green/55">
-                      {mode === "weekly" && p.daysElapsed
-                        ? `in progress, ${p.daysElapsed} of 7 days`
-                        : "in progress"}
-                    </div>
-                  )}
-                </th>
-              ))}
-            </tr>
-            {/* Sub-header row: DPP $ / Members under each period */}
-            <tr className="border-b border-cream-line">
               {periods.map((p) => {
-                const dppKey: RowKey = `dpp:${p.key}`;
-                const mbrKey: RowKey = `mbr:${p.key}`;
+                const key: VenueSortKey = `dpp:${p.key}`;
+                const isActive = sortKey === key;
                 return (
-                  <Sub key={p.key}>
-                    <th
-                      className={`border-l border-cream-line px-3 py-1.5 text-right ${
-                        sortKey === dppKey
-                          ? "bg-cream text-deep-green"
-                          : "cursor-pointer hover:bg-cream"
-                      }`}
-                      onClick={() => toggleSort(dppKey)}
-                    >
-                      DPP $ {sortKey === dppKey ? (sortDir === "desc" ? "↓" : "↑") : ""}
-                    </th>
-                    <th
-                      className={`px-3 py-1.5 text-right ${
-                        sortKey === mbrKey
-                          ? "bg-cream text-deep-green"
-                          : "cursor-pointer hover:bg-cream"
-                      }`}
-                      onClick={() => toggleSort(mbrKey)}
-                    >
-                      Mbr Bookings {sortKey === mbrKey ? (sortDir === "desc" ? "↓" : "↑") : ""}
-                    </th>
-                  </Sub>
+                  <th
+                    key={p.key}
+                    onClick={() => toggleSort(key)}
+                    className={`border-l border-cream-line px-3 py-2 text-right ${
+                      p.inProgress ? "bg-blue-soft/40" : ""
+                    } ${isActive ? "text-deep-green" : "cursor-pointer hover:bg-cream"}`}
+                  >
+                    <div className="text-[11px]">{p.label}</div>
+                    {p.inProgress && (
+                      <div className="text-[9px] font-normal normal-case text-deep-green/55">
+                        {mode === "weekly" && p.daysElapsed
+                          ? `in progress, ${p.daysElapsed} of 7 days`
+                          : "in progress"}
+                      </div>
+                    )}
+                    <div className="mt-0.5 text-[9px] text-deep-green/50">
+                      {isActive ? (sortDir === "desc" ? "↓ DPP $" : "↑ DPP $") : "DPP $"}
+                    </div>
+                  </th>
                 );
               })}
             </tr>
@@ -327,23 +323,25 @@ export default function PeriodComparePanel({
             ))}
           </tbody>
           <tfoot>
-            <tr className="border-t-[1.5px] border-cream-line bg-cream-soft/60 text-xs font-bold text-deep-green">
-              <td className="sticky left-0 z-20 bg-cream-soft/60 px-3 py-2.5">
+            <tr className="border-t-[1.5px] border-cream-line bg-cream-soft/60 text-deep-green">
+              <td className="sticky left-0 z-20 bg-cream-soft/60 px-3 py-2.5 font-bold">
                 Total ({sortedVenues.length} venues)
               </td>
-              <td className="px-3 py-2.5"></td>
               {periods.map((p) => {
                 const dppTot = periodColumnTotal(dppTable, p.key);
                 const mbrTot = periodColumnTotal(mbrTable, p.key);
                 return (
-                  <Sub key={p.key}>
-                    <td className="border-l border-cream-line px-3 py-2.5 text-right font-mono tabular-nums">
-                      {fmtMoney(dppTot)}
-                    </td>
-                    <td className="px-3 py-2.5 text-right font-mono tabular-nums">
-                      {fmtCount(mbrTot)}
-                    </td>
-                  </Sub>
+                  <td
+                    key={p.key}
+                    className={`border-l border-cream-line px-3 py-2.5 text-right font-mono tabular-nums ${
+                      p.inProgress ? "bg-blue-soft/20" : ""
+                    }`}
+                  >
+                    <div className="font-medium text-deep-green">{fmtMoney(dppTot)}</div>
+                    <div className="mt-0.5 text-[11px] font-normal text-deep-green/55">
+                      {fmtMbr(mbrTot)}
+                    </div>
+                  </td>
                 );
               })}
             </tr>
@@ -359,13 +357,6 @@ export default function PeriodComparePanel({
     />
     </div>
   );
-}
-
-// Render a fragment of <td>/<th> children. Used to group the
-// DPP/Members pair under each period without introducing a wrapper
-// element (would break table structure).
-function Sub({ children }: { children: React.ReactNode }) {
-  return <>{children}</>;
 }
 
 function VenueRow({
@@ -385,10 +376,10 @@ function VenueRow({
 }) {
   return (
     <tr className="border-t border-cream-line/40 text-deep-green hover:bg-cream-soft/40">
-      <td className="sticky left-0 z-10 bg-white px-3 py-2.5 font-bold">
-        {venue}
+      <td className="sticky left-0 z-10 bg-white px-3 py-2.5">
+        <div className="font-bold text-deep-green">{venue}</div>
+        <div className="text-[11px] font-normal text-deep-green/55">{city}</div>
       </td>
-      <td className="px-3 py-2.5 text-deep-green/75">{city}</td>
       {periods.map((p, i) => {
         const prior = i === 0 ? null : periods[i - 1];
         const dpp = dppTable.byVenue.get(venue)?.get(p.key) ?? 0;
@@ -406,34 +397,30 @@ function VenueRow({
         const mbrLabel = fmtDeltaPct(mbrDelta.pct);
 
         return (
-          <Sub key={p.key}>
-            <td
-              className={`border-l border-cream-line px-3 py-2.5 text-right font-mono tabular-nums ${
-                p.inProgress ? "bg-mint-soft/20" : ""
-              }`}
-              title={prior ? `${deltaLabel} vs ${prior.label}` : undefined}
-            >
+          <td
+            key={p.key}
+            className={`border-l border-cream-line px-3 py-2.5 text-right font-mono tabular-nums ${
+              p.inProgress ? "bg-blue-soft/20" : ""
+            }`}
+            title={prior ? `${deltaLabel} vs ${prior.label}` : undefined}
+          >
+            <div className="font-medium text-deep-green">
               {fmtMoney(dpp)}
               {dppLabel.text && (
-                <span className={`ml-1.5 text-[10px] font-bold ${dppLabel.className}`}>
+                <span className={`ml-1.5 text-[11px] font-bold ${dppLabel.className}`}>
                   {dppLabel.text}
                 </span>
               )}
-            </td>
-            <td
-              className={`px-3 py-2.5 text-right font-mono tabular-nums ${
-                p.inProgress ? "bg-mint-soft/20" : ""
-              }`}
-              title={prior ? `${deltaLabel} vs ${prior.label}` : undefined}
-            >
-              {fmtCount(mbr)}
+            </div>
+            <div className="mt-0.5 text-[11px] font-normal text-deep-green/55">
+              {fmtMbr(mbr)}
               {mbrLabel.text && (
-                <span className={`ml-1.5 text-[10px] font-bold ${mbrLabel.className}`}>
+                <span className={`ml-1.5 text-[11px] font-bold ${mbrLabel.className}`}>
                   {mbrLabel.text}
                 </span>
               )}
-            </td>
-          </Sub>
+            </div>
+          </td>
         );
       })}
     </tr>
