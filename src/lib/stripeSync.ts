@@ -46,14 +46,35 @@ export type StripeSyncResult = {
 };
 
 // Extract the email the CSV path would write into customer_email.
-// Precedence: billing_details.email → receipt_email → metadata.email.
+// Precedence: billing_details.email → receipt_email → metadata.email
+// → charge.customer.email (only when the customer field is expanded
+// — see the `expand` list on the charges.list call below).
 // Lowercased, trimmed, null if all missing.
+//
+// The customer.email fallback is critical for invoice-based
+// subscription charges (which is how MatchDay memberships bill):
+// for those charges, billing_details.email and receipt_email are
+// typically null because Stripe attaches the email to the customer
+// record rather than to each per-invoice charge. Without this
+// fallback, ~99% of subscription charges resolved to null email →
+// failed the emailToCity lookup → silently routed to Deleted
+// Account Revenue.
 function extractEmail(charge: Stripe.Charge): string | null {
-  const candidates = [
+  const candidates: (string | null | undefined)[] = [
     charge.billing_details?.email,
     charge.receipt_email,
     typeof charge.metadata?.email === "string" ? charge.metadata.email : null,
   ];
+  // charge.customer is `string | Customer | DeletedCustomer | null`.
+  // Only an expanded, non-deleted Customer carries .email; the
+  // string form is just an ID and DeletedCustomer has no .email.
+  if (
+    charge.customer &&
+    typeof charge.customer === "object" &&
+    !("deleted" in charge.customer && charge.customer.deleted)
+  ) {
+    candidates.push(charge.customer.email);
+  }
   for (const c of candidates) {
     if (c && c.trim()) return c.trim().toLowerCase();
   }
@@ -190,12 +211,14 @@ export async function syncStripeCharges(
   let latestDate: string | null = null;
 
   // expand: balance_transaction is required for fees (Stripe API
-  // doesn't include the fee on the charge itself). 100 per page is
-  // the API max.
+  // doesn't include the fee on the charge itself). customer is
+  // required so extractEmail can fall back to customer.email for
+  // invoice-based subscription charges where billing_details.email
+  // and receipt_email are null. 100 per page is the API max.
   const params: Stripe.ChargeListParams = {
     created: { gte: sinceSec, lte: untilSec },
     limit: 100,
-    expand: ["data.balance_transaction"],
+    expand: ["data.balance_transaction", "data.customer"],
   };
 
   for await (const charge of stripe.charges.list(params)) {
