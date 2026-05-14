@@ -18,14 +18,18 @@
 import { useMemo, useState } from "react";
 import { useFinanceData } from "@/lib/useFinanceData";
 import { useMatchData } from "@/lib/useMatchData";
+import { CITIES } from "@/lib/types";
 import { buildFieldToVenueIdMap } from "@/lib/venueNormalization";
 import {
   aggregateDppByVenue,
   aggregateMemberBookingsByVenue,
+  aggregateMembershipByCity,
   computeDelta,
   generateMonthlyPeriods,
   generateWeeklyPeriods,
+  membershipCityColumnTotal,
   periodColumnTotal,
+  type MembershipByCity,
   type Period,
   type VenuePeriodTable,
 } from "@/lib/periodCompare";
@@ -170,6 +174,12 @@ export default function PeriodComparePanel({
     return arr;
   }, [allVenues, sortKey, sortDir, dppTable, mbrTable, cityByVenue]);
 
+  // === Membership by City ===
+  const membership: MembershipByCity = useMemo(() => {
+    if (!data) return { byCity: new Map(), deletedAccount: new Map(), citiesPresent: new Set() };
+    return aggregateMembershipByCity(data.revenue, periods);
+  }, [data, periods]);
+
   if (!data) {
     return (
       <div className="rounded-2xl border-[1.5px] border-cream-line bg-white p-8 text-sm text-deep-green/60 shadow-md shadow-deep-green/10">
@@ -190,6 +200,7 @@ export default function PeriodComparePanel({
   const deltaLabel = mode === "monthly" ? "MoM" : "WoW";
 
   return (
+    <div className="space-y-6">
     <section className="rounded-2xl border-[1.5px] border-cream-line bg-white shadow-md shadow-deep-green/10">
       <div className="flex flex-wrap items-center justify-between gap-3 px-5 py-4">
         <div>
@@ -340,6 +351,13 @@ export default function PeriodComparePanel({
         </table>
       </div>
     </section>
+
+    <MembershipByCitySection
+      periods={periods}
+      membership={membership}
+      deltaLabel={deltaLabel}
+    />
+    </div>
   );
 }
 
@@ -416,6 +434,245 @@ function VenueRow({
               )}
             </td>
           </Sub>
+        );
+      })}
+    </tr>
+  );
+}
+
+// === Membership by City ===
+//
+// Same column shape as the venue table but simpler — one $ metric
+// per period (no booking sub-column). Row set is the canonical 8
+// cities from src/lib/types.ts (always rendered, even when zero, so
+// the layout is stable across periods) + any extra non-sentinel
+// city that appears in fin_revenue + a single "Deleted accounts"
+// row beneath the city block for transparency. Total row sums only
+// the real cities — the sentinel is intentionally excluded.
+
+type CitySortKey = "city" | string; // "city" or "p:<periodKey>"
+
+function MembershipByCitySection({
+  periods,
+  membership,
+  deltaLabel,
+}: {
+  periods: Period[];
+  membership: MembershipByCity;
+  deltaLabel: string;
+}) {
+  const currentPeriod = periods[periods.length - 1];
+  const [sortKey, setSortKey] = useState<CitySortKey>(`p:${currentPeriod.key}`);
+  const [sortDir, setSortDir] = useState<SortDir>("desc");
+
+  function toggleSort(key: CitySortKey) {
+    if (sortKey === key) {
+      setSortDir((d) => (d === "desc" ? "asc" : "desc"));
+    } else {
+      setSortKey(key);
+      setSortDir(key === "city" ? "asc" : "desc");
+    }
+  }
+
+  // Row set: canonical CITIES always + any extra cities the data
+  // contains that aren't already covered. Stable so the operator
+  // sees zero-rows for known cities instead of "where did Atlanta
+  // go this period."
+  const rowCities = useMemo(() => {
+    const set = new Set<string>(CITIES);
+    for (const c of membership.citiesPresent) set.add(c);
+    return [...set];
+  }, [membership.citiesPresent]);
+
+  const sortedCities = useMemo(() => {
+    const arr = [...rowCities];
+    arr.sort((a, b) => {
+      if (sortKey === "city") {
+        return sortDir === "asc" ? a.localeCompare(b) : b.localeCompare(a);
+      }
+      const periodKey = sortKey.slice(2); // strip "p:"
+      const av = membership.byCity.get(a)?.get(periodKey) ?? 0;
+      const bv = membership.byCity.get(b)?.get(periodKey) ?? 0;
+      return sortDir === "desc" ? bv - av : av - bv;
+    });
+    return arr;
+  }, [rowCities, sortKey, sortDir, membership]);
+
+  return (
+    <section className="rounded-2xl border-[1.5px] border-cream-line bg-white shadow-md shadow-deep-green/10">
+      <div className="border-b border-cream-line/60 px-5 py-4">
+        <h2 className="font-display text-2xl uppercase tracking-tight text-deep-green md:text-3xl">
+          Membership Revenue by City
+        </h2>
+        <p className="mt-1 text-xs text-deep-green/60">
+          Stripe-tracked membership $, same period windows as above.
+          Membership revenue, not member-bookings count — for booking
+          activity see the Mbr Bookings column in the venue table.
+        </p>
+      </div>
+
+      <div className="overflow-x-auto">
+        <table className="w-full text-xs">
+          <thead className="bg-cream-soft text-[10px] font-bold uppercase tracking-wider text-deep-green/60">
+            <tr className="border-b border-cream-line">
+              <th className="sticky left-0 z-20 bg-cream-soft px-3 py-2 text-left">
+                <button
+                  type="button"
+                  onClick={() => toggleSort("city")}
+                  className={`cursor-pointer select-none hover:text-deep-green ${
+                    sortKey === "city" ? "text-deep-green" : ""
+                  }`}
+                >
+                  City {sortKey === "city" ? (sortDir === "desc" ? "↓" : "↑") : ""}
+                </button>
+              </th>
+              {periods.map((p) => {
+                const key: CitySortKey = `p:${p.key}`;
+                const isActive = sortKey === key;
+                return (
+                  <th
+                    key={p.key}
+                    className={`border-l border-cream-line px-3 py-2 text-right ${
+                      p.inProgress ? "bg-mint-soft/40" : ""
+                    } ${isActive ? "text-deep-green" : "cursor-pointer hover:bg-cream"}`}
+                    onClick={() => toggleSort(key)}
+                  >
+                    <div className="text-[11px]">{p.label}</div>
+                    {p.inProgress && (
+                      <div className="text-[9px] font-normal normal-case text-deep-green/55">
+                        {p.daysElapsed != null
+                          ? `in progress, ${p.daysElapsed} of 7 days`
+                          : "in progress"}
+                      </div>
+                    )}
+                    <div className="mt-0.5 text-[9px] text-deep-green/50">
+                      {isActive ? (sortDir === "desc" ? "↓ Mbr $" : "↑ Mbr $") : "Mbr $"}
+                    </div>
+                  </th>
+                );
+              })}
+            </tr>
+          </thead>
+          <tbody>
+            {sortedCities.map((city) => (
+              <CityRow
+                key={city}
+                city={city}
+                periods={periods}
+                membership={membership}
+                deltaLabel={deltaLabel}
+              />
+            ))}
+            {/* Deleted Accounts row — labeled, separated by a soft top
+                border, intentionally excluded from the Total below. */}
+            <tr className="border-t-2 border-cream-line text-deep-green/65 hover:bg-cream-soft/40">
+              <td className="sticky left-0 z-10 bg-white px-3 py-2.5 italic">
+                Deleted accounts{" "}
+                <span className="text-[10px] font-normal not-italic text-deep-green/50">
+                  (excluded from city totals)
+                </span>
+              </td>
+              {periods.map((p, i) => {
+                const prior = i === 0 ? null : periods[i - 1];
+                const curr = membership.deletedAccount.get(p.key) ?? 0;
+                const priorV = prior
+                  ? (membership.deletedAccount.get(prior.key) ?? 0)
+                  : null;
+                const delta = computeDelta(curr, priorV);
+                const label = fmtDeltaPct(delta.pct);
+                return (
+                  <td
+                    key={p.key}
+                    className={`border-l border-cream-line px-3 py-2.5 text-right font-mono tabular-nums ${
+                      p.inProgress ? "bg-mint-soft/20" : ""
+                    }`}
+                    title={prior ? `${deltaLabel} vs ${prior.label}` : undefined}
+                  >
+                    {fmtMoney(curr)}
+                    {label.text && (
+                      <span className={`ml-1.5 text-[10px] font-bold ${label.className}`}>
+                        {label.text}
+                      </span>
+                    )}
+                  </td>
+                );
+              })}
+            </tr>
+          </tbody>
+          <tfoot>
+            <tr className="border-t-[1.5px] border-cream-line bg-cream-soft/60 text-xs font-bold text-deep-green">
+              <td className="sticky left-0 z-20 bg-cream-soft/60 px-3 py-2.5">
+                Total ({sortedCities.length} cities)
+              </td>
+              {periods.map((p, i) => {
+                const prior = i === 0 ? null : periods[i - 1];
+                const curr = membershipCityColumnTotal(membership, p.key);
+                const priorV = prior
+                  ? membershipCityColumnTotal(membership, prior.key)
+                  : null;
+                const delta = computeDelta(curr, priorV);
+                const label = fmtDeltaPct(delta.pct);
+                return (
+                  <td
+                    key={p.key}
+                    className={`border-l border-cream-line px-3 py-2.5 text-right font-mono tabular-nums ${
+                      p.inProgress ? "bg-mint-soft/20" : ""
+                    }`}
+                  >
+                    {fmtMoney(curr)}
+                    {label.text && (
+                      <span className={`ml-1.5 text-[10px] font-bold ${label.className}`}>
+                        {label.text}
+                      </span>
+                    )}
+                  </td>
+                );
+              })}
+            </tr>
+          </tfoot>
+        </table>
+      </div>
+    </section>
+  );
+}
+
+function CityRow({
+  city,
+  periods,
+  membership,
+  deltaLabel,
+}: {
+  city: string;
+  periods: Period[];
+  membership: MembershipByCity;
+  deltaLabel: string;
+}) {
+  return (
+    <tr className="border-t border-cream-line/40 text-deep-green hover:bg-cream-soft/40">
+      <td className="sticky left-0 z-10 bg-white px-3 py-2.5 font-bold">{city}</td>
+      {periods.map((p, i) => {
+        const prior = i === 0 ? null : periods[i - 1];
+        const curr = membership.byCity.get(city)?.get(p.key) ?? 0;
+        const priorV = prior
+          ? (membership.byCity.get(city)?.get(prior.key) ?? 0)
+          : null;
+        const delta = computeDelta(curr, priorV);
+        const label = fmtDeltaPct(delta.pct);
+        return (
+          <td
+            key={p.key}
+            className={`border-l border-cream-line px-3 py-2.5 text-right font-mono tabular-nums ${
+              p.inProgress ? "bg-mint-soft/20" : ""
+            }`}
+            title={prior ? `${deltaLabel} vs ${prior.label}` : undefined}
+          >
+            {fmtMoney(curr)}
+            {label.text && (
+              <span className={`ml-1.5 text-[10px] font-bold ${label.className}`}>
+                {label.text}
+              </span>
+            )}
+          </td>
         );
       })}
     </tr>

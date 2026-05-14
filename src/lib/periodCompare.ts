@@ -255,3 +255,83 @@ export function periodColumnTotal(table: VenuePeriodTable, periodKey: string): n
   }
   return sum;
 }
+
+// Sentinel city the existing financeImport allocator routes to when
+// a Stripe charge's email doesn't match a current mdapi_subscriptions
+// row (canceled / deleted customers). It IS a row in fin_revenue but
+// it isn't one of the canonical 8 cities; the UI separates it out
+// for transparency so deleted-account membership revenue stays
+// visible without inflating real city totals.
+export const DELETED_ACCOUNT_CITY = "Deleted Account Revenue";
+
+export type MembershipByCity = {
+  // city → period.key → $ — only the canonical/known cities
+  byCity: Map<string, Map<string, number>>;
+  // period.key → $ for the Deleted Account Revenue sentinel
+  deletedAccount: Map<string, number>;
+  // Every city name observed in the data (excludes the sentinel).
+  // Caller typically unions this with the canonical CITIES list so
+  // zero-revenue cities still render with em-dash cells.
+  citiesPresent: Set<string>;
+};
+
+function bumpCityPeriod(
+  m: Map<string, Map<string, number>>,
+  city: string,
+  periodKey: string,
+  delta: number,
+) {
+  let inner = m.get(city);
+  if (!inner) {
+    inner = new Map();
+    m.set(city, inner);
+  }
+  inner.set(periodKey, (inner.get(periodKey) ?? 0) + delta);
+}
+
+// Membership $ — fin_revenue rows with type='Membership' AND
+// source='Stripe', grouped by city × period. The Deleted Account
+// Revenue sentinel city is split into its own bucket so the city
+// total row sums to the real-city revenue cleanly. Same filter set
+// the rest of the cockpit uses for "Stripe-tracked membership" —
+// see financeImport.ts:aggregateStripeRows.
+export function aggregateMembershipByCity(
+  revenue: FinRevenue[],
+  periods: Period[],
+): MembershipByCity {
+  const byCity = new Map<string, Map<string, number>>();
+  const deletedAccount = new Map<string, number>();
+  const citiesPresent = new Set<string>();
+
+  for (const r of revenue) {
+    if (r.type !== "Membership") continue;
+    if (r.source !== "Stripe") continue;
+    if (!r.city) continue;
+    if (!r.date) continue;
+    const period = findPeriod(periods, r.date);
+    if (!period) continue;
+    const gross = r.gross ?? 0;
+    if (r.city === DELETED_ACCOUNT_CITY) {
+      deletedAccount.set(period.key, (deletedAccount.get(period.key) ?? 0) + gross);
+    } else {
+      bumpCityPeriod(byCity, r.city, period.key, gross);
+      citiesPresent.add(r.city);
+    }
+  }
+
+  return { byCity, deletedAccount, citiesPresent };
+}
+
+// Period total for the Membership-by-City table. Sums the real-city
+// buckets only — Deleted Account is intentionally not included in
+// the city Total row (it has its own labeled row beneath).
+export function membershipCityColumnTotal(
+  t: MembershipByCity,
+  periodKey: string,
+): number {
+  let sum = 0;
+  for (const inner of t.byCity.values()) {
+    sum += inner.get(periodKey) ?? 0;
+  }
+  return sum;
+}
