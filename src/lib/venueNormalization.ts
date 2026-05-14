@@ -73,6 +73,16 @@ const CROSS_VENUE_ALIASES: Record<string, string> = {
   // resolving correctly).
   "Lou Fusz Athletic Complex": "Lou Fusz Outdoor",
   "Lou Fusz Athletic Training Center": "Lou Fusz Indoor",
+  // No-trailing-token variants the stripFieldSuffix regexes don't
+  // catch (OUTDOOR_INDOOR_FIELD_RX / BARE_FIELD_RX both require
+  // \S+ after "Field"). Listed as exact-match aliases so Stripe
+  // charges whose metadata is one of these collapse to the
+  // canonical fin_venues row instead of producing stale variants.
+  "Lou Fusz - Outdoor Field": "Lou Fusz Outdoor",
+  "Lou Fusz - Indoor Field": "Lou Fusz Indoor",
+  "Lou Fusz - Indoor": "Lou Fusz Indoor",
+  "Lou Fusz TC Indoor Field": "Lou Fusz Indoor",
+  "MatchDay Combine at Lou Fusz": "Lou Fusz Outdoor",
 };
 
 // Internal-variant collapses. The raw name STARTS WITH the prefix, optionally

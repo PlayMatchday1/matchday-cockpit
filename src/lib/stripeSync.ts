@@ -293,10 +293,16 @@ export async function syncStripeCharges(
 
     let resolvedVenue: string | null = null;
     if (type === "DPP") {
-      if (explicitVenue) {
-        resolvedVenue = explicitVenue;
-      } else if (matchName) {
-        const res = normalizeMatchName(matchName, aliasMap);
+      // Prefer metadata.venue / metadata.venueName when present
+      // (intent: operator-set explicit override), but always run
+      // through the same normalizer the matchName path uses so
+      // metadata-supplied names can't bypass CROSS_VENUE_ALIASES,
+      // DB aliases, or the field-suffix / weekday strips. Without
+      // this, raw strings like "Lou Fusz - Outdoor Field" survived
+      // into fin_revenue.venue as stale duplicates.
+      const rawVenue = explicitVenue ?? matchName;
+      if (rawVenue) {
+        const res = normalizeMatchName(rawVenue, aliasMap);
         resolvedVenue = res.canonical;
       }
     }
