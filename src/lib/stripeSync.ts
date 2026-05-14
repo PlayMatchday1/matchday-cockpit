@@ -69,7 +69,22 @@ function utcDateFromUnix(unixSec: number): string {
 export async function syncStripeCharges(
   supabase: SupabaseClient,
   opts: StripeSyncOptions,
+  // Optional service-role-keyed client. Used ONLY for the
+  // mdapi_users read that builds the email→city fallback map.
+  // mdapi_users has RLS that blocks the authenticated user role
+  // even when the calling user is admin — so passing the user's
+  // JWT client returns 0 rows and the fallback silently fails.
+  // mdapi_subscriptions has more permissive RLS so the primary
+  // map build (still on `supabase`) works as-is. Other writes
+  // (commitStripe, etc.) also stay on `supabase` so audit / RLS
+  // attribution to the calling user is preserved.
+  //
+  // If omitted, defaults to `supabase` — backwards-compatible with
+  // cron mode (where supabase IS already service-role) and CLI
+  // scripts that pass a single service-role client.
+  serviceClient?: SupabaseClient,
 ): Promise<StripeSyncResult> {
+  const usersClient = serviceClient ?? supabase;
   const apiKey = process.env.STRIPE_SECRET_KEY;
   if (!apiKey) {
     throw new Error("STRIPE_SECRET_KEY is not set");
@@ -126,7 +141,7 @@ export async function syncStripeCharges(
     email: string | null;
     preferable_city_normalized: string | null;
   }>(() =>
-    supabase
+    usersClient
       .from("mdapi_users")
       .select("email, preferable_city_normalized")
       .not("email", "is", null)
