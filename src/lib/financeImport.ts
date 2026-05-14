@@ -458,13 +458,52 @@ export async function previewStripe(
     );
   }
   const emailToCity = new Map<string, string>();
+  // PRIMARY: mdapi_subscriptions.
+  let primaryCount = 0;
   for (const m of memberRows) {
-    if (m.member_email)
+    if (m.member_email) {
       emailToCity.set(
         m.member_email.toLowerCase().trim(),
         cityFromAbbr(m.city_identifier) ?? DELETED_ACCOUNT_CITY,
       );
+      primaryCount++;
+    }
   }
+  // FALLBACK: mdapi_users for emails the subscription table doesn't
+  // cover. Kept in parity with stripeSync.ts; see that file's comment
+  // block for the full rationale. Subscriptions wins when an email
+  // appears in both sources.
+  let fallbackCount = 0;
+  try {
+    const userRows = await selectAll<{
+      email: string | null;
+      preferable_city_normalized: string | null;
+    }>(() =>
+      supabase
+        .from("mdapi_users")
+        .select("email, preferable_city_normalized")
+        .not("email", "is", null)
+        .not("preferable_city_normalized", "is", null)
+        .order("id"),
+    );
+    for (const u of userRows) {
+      if (!u.email) continue;
+      const email = u.email.toLowerCase().trim();
+      if (emailToCity.has(email)) continue;
+      emailToCity.set(
+        email,
+        cityFromAbbr(u.preferable_city_normalized) ?? DELETED_ACCOUNT_CITY,
+      );
+      fallbackCount++;
+    }
+  } catch (e) {
+    throw new Error(
+      `Users fallback lookup failed: ${e instanceof Error ? e.message : String(e)}`,
+    );
+  }
+  console.log(
+    `[csv-import] Membership email→city map built: ${primaryCount} from subscriptions, ${fallbackCount} from users fallback (total ${emailToCity.size})`,
+  );
 
   // Build alias map from fin_venue_aliases for venue normalization on
   // match-type rows.
