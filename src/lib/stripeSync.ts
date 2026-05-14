@@ -96,14 +96,57 @@ export async function syncStripeCharges(
       .order("membership_id"),
   );
   const emailToCity = new Map<string, string>();
+  // PRIMARY: mdapi_subscriptions. Authoritative for any email it
+  // covers. Same logic as before.
+  let primaryCount = 0;
   for (const m of memberRows) {
     if (m.member_email) {
       emailToCity.set(
         m.member_email.toLowerCase().trim(),
         cityFromAbbr(m.city_identifier) ?? DELETED_ACCOUNT_CITY,
       );
+      primaryCount++;
     }
   }
+  // FALLBACK: mdapi_users for emails the subscription table doesn't
+  // cover. Background: mdapi_subscriptions is fed by MatchDay's
+  // admin /subscriptions endpoint, which only returns records the
+  // admin view still surfaces — hard-deleted / very-stale rows are
+  // gone. The Q1 2026 Stripe backfill exposed this: ~1,200 charges
+  // (~$51K) had emails that don't exist in subscriptions despite
+  // being clearly real member payments. mdapi_users covers a
+  // superset (~24k emails vs ~1.6k) with preferable_city_normalized
+  // populated for 84% of rows, and 100% of subscription emails are
+  // already in mdapi_users — so this is purely additive.
+  //
+  // The `if (!emailToCity.has(email))` guard preserves the primary's
+  // authority: an email in BOTH sources keeps the subscriptions
+  // mapping, even if the user's preferable city differs.
+  const userRows = await selectAll<{
+    email: string | null;
+    preferable_city_normalized: string | null;
+  }>(() =>
+    supabase
+      .from("mdapi_users")
+      .select("email, preferable_city_normalized")
+      .not("email", "is", null)
+      .not("preferable_city_normalized", "is", null)
+      .order("id"),
+  );
+  let fallbackCount = 0;
+  for (const u of userRows) {
+    if (!u.email) continue;
+    const email = u.email.toLowerCase().trim();
+    if (emailToCity.has(email)) continue;
+    emailToCity.set(
+      email,
+      cityFromAbbr(u.preferable_city_normalized) ?? DELETED_ACCOUNT_CITY,
+    );
+    fallbackCount++;
+  }
+  console.log(
+    `[stripe-sync] Membership email→city map built: ${primaryCount} from subscriptions, ${fallbackCount} from users fallback (total ${emailToCity.size})`,
+  );
   const { data: aliasRows, error: alErr } = await supabase
     .from("fin_venue_aliases")
     .select("alias, canonical_venue");
