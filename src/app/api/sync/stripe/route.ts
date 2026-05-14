@@ -19,7 +19,13 @@ import { createClient, type SupabaseClient } from "@supabase/supabase-js";
 import { commitStripe } from "@/lib/financeImport";
 import { syncStripeCharges } from "@/lib/stripeSync";
 
-export const maxDuration = 60;
+// Bumped from 60s to 300s on 2026-05-14 after a Jan 1-7 backfill
+// click via the new date-range UI hit Vercel's function-timeout
+// wall mid-pagination — 7-day historical windows pull ~7× more
+// charges than the default daily catch-up. 300s matches the budget
+// /api/sync/matches uses for the same reason; daily catch-up still
+// finishes in 3-13s well under the new ceiling.
+export const maxDuration = 300;
 export const runtime = "nodejs";
 
 type RequestBody = {
