@@ -1,20 +1,22 @@
+import { Suspense } from "react";
 import AdminGuard from "@/components/AdminGuard";
-import PageHeader from "@/components/PageHeader";
-import MatchChatsInbox from "./MatchChatsInbox";
+import MatchChatsClient from "./MatchChatsClient";
 
-// Phase 3 — Match Chats inbox. Two-section layout: Active (chats with
-// recent message activity) + Upcoming (matches in the next 3 days
-// without recent activity). Real-time updates land on the detail
-// page; the inbox itself refreshes via a manual button + on focus.
+// Phase 3 — two-pane Match Chats console. Left = tabbed inbox
+// (Active / Upcoming), right = selected chat with realtime listener
+// and composer. URL state: ?chatId=…&tab=active|upcoming.
+//
+// No PageHeader: the shell uses its own dense chrome to claim the
+// full viewport height for the two panes.
 
 export default function MatchChatsPage() {
   return (
     <AdminGuard>
-      <PageHeader
-        title="Match Chats"
-        subtitle="Group conversations attached to each match. Replies post as MatchDay."
-      />
-      <MatchChatsInbox />
+      {/* Suspense boundary required by Next 16 for any client tree
+          that calls useSearchParams. */}
+      <Suspense fallback={null}>
+        <MatchChatsClient />
+      </Suspense>
     </AdminGuard>
   );
 }
