@@ -16,7 +16,9 @@
 //               total_match_count } | null
 //   }
 
+import type { SupabaseClient } from "@supabase/supabase-js";
 import { authenticateCrm } from "@/lib/crmAuth";
+import { toNationalDigits } from "@/lib/phone";
 
 export const runtime = "nodejs";
 export const maxDuration = 10;
@@ -140,8 +142,161 @@ export async function GET(req: Request, ctx: RouteCtx) {
     }
   }
 
+  // Recent matches panel (Phase 2A). Two-step fetch because the
+  // mdapi_match_players → mdapi_matches join is a "soft FK" (no
+  // enforced constraint, see migration 0016), so PostgREST can't
+  // embed. Pull 50 most-recent registrations by mp.created_at DESC,
+  // batch the matches, sort by start_date DESC client-side, slice 5.
+  // 50 is enough to absorb a future-registration burst from a power
+  // user without missing their actual most-recent played match.
+  const recent_matches =
+    thread.player_id != null
+      ? await loadRecentMatches(supabase, thread.player_id as number)
+      : [];
+
+  // How many historical mdapi_users rows share this phone? Surfaced
+  // in the softened "N historical accounts on file" info note. Only
+  // computed for threads we've already flagged as ambiguous —
+  // otherwise the count is meaningless (always 1) and not worth the
+  // extra round-trips.
+  let historical_account_count: number | null = null;
+  if (thread.match_ambiguous === true) {
+    historical_account_count = await countHistoricalAccounts(
+      supabase,
+      thread.phone_number as string,
+    );
+  }
+
   return Response.json(
-    { thread, messages, player, assignee },
+    {
+      thread,
+      messages,
+      player,
+      assignee,
+      recent_matches,
+      historical_account_count,
+    },
     { status: 200 },
   );
+}
+
+async function countHistoricalAccounts(
+  supabase: SupabaseClient,
+  e164: string,
+): Promise<number | null> {
+  // Same two phone shapes the webhook matches on (E.164 and bare
+  // 10-digit national). Sum the head counts. Doing two HEAD queries
+  // is cheap because phone_number is indexed via the email_lower /
+  // city / completed_sign_up indexes on mdapi_users; the planner
+  // picks a btree on the equality predicate.
+  const national = toNationalDigits(e164);
+  const a = await supabase
+    .from("mdapi_users")
+    .select("id", { count: "exact", head: true })
+    .eq("phone_number", e164);
+  const aCount = a.error ? 0 : a.count ?? 0;
+  if (!national) return aCount;
+  const b = await supabase
+    .from("mdapi_users")
+    .select("id", { count: "exact", head: true })
+    .eq("phone_number", national);
+  const bCount = b.error ? 0 : b.count ?? 0;
+  return aCount + bCount;
+}
+
+// ============================================================
+// Recent matches helpers
+// ============================================================
+
+type RegRow = {
+  match_api_id: number;
+  is_cancelled: boolean | null;
+  is_absent: boolean | null;
+  created_at: string | null;
+};
+
+type MatchRow = {
+  api_id: number;
+  field_title: string | null;
+  field_address: string | null;
+  start_date: string | null;
+  is_cancelled: boolean | null;
+};
+
+type RecentMatch = {
+  match_api_id: number;
+  venue: string | null;
+  start_date: string | null;
+  status: "Played" | "Upcoming" | "No-show" | "Canceled";
+};
+
+const REG_WINDOW = 50; // pre-sort window
+const RECENT_LIMIT = 5; // final slice
+
+async function loadRecentMatches(
+  supabase: SupabaseClient,
+  playerId: number,
+): Promise<RecentMatch[]> {
+  // 1) most-recent registrations (window).
+  const regs = await supabase
+    .from("mdapi_match_players")
+    .select("match_api_id, is_cancelled, is_absent, created_at")
+    .eq("user_id", playerId)
+    .order("created_at", { ascending: false })
+    .limit(REG_WINDOW);
+  if (regs.error || !regs.data?.length) return [];
+
+  const regList = regs.data as RegRow[];
+  const matchIds = Array.from(
+    new Set(
+      regList
+        .map((r) => r.match_api_id)
+        .filter((x): x is number => typeof x === "number"),
+    ),
+  );
+  if (matchIds.length === 0) return [];
+
+  // 2) batch-fetch the matches.
+  const matches = await supabase
+    .from("mdapi_matches")
+    .select("api_id, field_title, field_address, start_date, is_cancelled")
+    .in("api_id", matchIds);
+  if (matches.error) return [];
+
+  const matchById = new Map<number, MatchRow>();
+  for (const m of matches.data as MatchRow[]) matchById.set(m.api_id, m);
+
+  // 3) derive status, sort by start_date DESC, slice top N.
+  const now = Date.now();
+  const joined: RecentMatch[] = [];
+  for (const r of regList) {
+    const m = matchById.get(r.match_api_id);
+    if (!m) continue;
+    joined.push({
+      match_api_id: m.api_id,
+      venue: m.field_title,
+      start_date: m.start_date,
+      status: deriveMatchStatus(r, m, now),
+    });
+  }
+  joined.sort((a, b) => {
+    // Nulls last on date — they shouldn't happen but defend anyway.
+    const at = a.start_date ? Date.parse(a.start_date) : -Infinity;
+    const bt = b.start_date ? Date.parse(b.start_date) : -Infinity;
+    return bt - at;
+  });
+  return joined.slice(0, RECENT_LIMIT);
+}
+
+function deriveMatchStatus(
+  r: RegRow,
+  m: MatchRow,
+  now: number,
+): RecentMatch["status"] {
+  if (r.is_cancelled === true || m.is_cancelled === true) return "Canceled";
+  const startTs = m.start_date ? Date.parse(m.start_date) : NaN;
+  const isPast = !Number.isNaN(startTs) && startTs < now;
+  if (r.is_absent === true && isPast) return "No-show";
+  if (isPast) return "Played";
+  return "Upcoming";
 }

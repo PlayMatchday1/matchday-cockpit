@@ -126,8 +126,16 @@ export async function POST(req: Request) {
 
   // ---------------- match against mdapi_users ----------------
   // Two candidate keys: E.164 ("+15125550123") and bare national
-  // ("5125550123"). Order by created_at ASC to make the tiebreak
-  // deterministic (oldest signup wins).
+  // ("5125550123"). Order by created_at DESC — newest signup wins.
+  //
+  // MatchDay enforces "one active account per phone number" at
+  // signup, so duplicate rows with the same phone are historical
+  // artifacts (abandoned re-registrations, legacy data) rather than
+  // parallel active accounts. The most recently created row is
+  // always the right active account to attach the conversation to.
+  // match_ambiguous still flips to true when duplicates exist — it
+  // now means "this phone has historical accounts on file" rather
+  // than "we don't know which player this is."
   const candidates: { id: number }[] = [];
   const national = toNationalDigits(phone);
 
@@ -135,7 +143,7 @@ export async function POST(req: Request) {
     .from("mdapi_users")
     .select("id, created_at")
     .eq("phone_number", phone)
-    .order("created_at", { ascending: true });
+    .order("created_at", { ascending: false });
   if (!e164Hit.error && e164Hit.data) {
     for (const r of e164Hit.data) candidates.push({ id: r.id as number });
   }
@@ -145,7 +153,7 @@ export async function POST(req: Request) {
       .from("mdapi_users")
       .select("id, created_at")
       .eq("phone_number", national)
-      .order("created_at", { ascending: true });
+      .order("created_at", { ascending: false });
     if (!natHit.error && natHit.data) {
       for (const r of natHit.data) {
         // Dedupe in case a user appears in both lookups (unlikely
