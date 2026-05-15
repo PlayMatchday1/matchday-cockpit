@@ -26,7 +26,13 @@ export type MatchChatInboxRow = {
   match: {
     api_id: number | null;
     field_title: string | null;
-    start_date: string | null; // ISO
+    // ISO. Sourced from mdapi_matches.start_date_utc — the column
+    // that is actually UTC. mdapi_matches also has a `start_date`
+    // column whose value is the LOCAL wall-clock time written with
+    // a +00 offset (i.e. mislabeled as UTC by the upstream API
+    // copy). Reading that column produces a 5-hour skew for CDT
+    // matches, etc. See PR notes.
+    start_date_utc: string | null;
     city_identifier: string | null;
     manager_email: string | null;
     is_cancelled: boolean;
