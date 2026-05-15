@@ -38,7 +38,7 @@ export async function GET(req: Request, ctx: RouteCtx) {
   const threadRes = await supabase
     .from("crm_threads")
     .select(
-      "id, phone_number, player_id, match_ambiguous, last_message_at, last_message_preview, created_at",
+      "id, phone_number, player_id, match_ambiguous, last_message_at, last_message_preview, created_at, assigned_to_user_id, assigned_at",
     )
     .eq("id", threadId)
     .maybeSingle();
@@ -50,6 +50,24 @@ export async function GET(req: Request, ctx: RouteCtx) {
     return Response.json({ error: "Thread not found" }, { status: 404 });
   }
   const thread = threadRes.data;
+
+  // Current assignee (Phase 1).
+  let assignee: { id: string; email: string; full_name: string | null } | null =
+    null;
+  if (thread.assigned_to_user_id) {
+    const a = await supabase
+      .from("app_users")
+      .select("id, email, full_name")
+      .eq("id", thread.assigned_to_user_id)
+      .maybeSingle();
+    if (!a.error && a.data) {
+      assignee = a.data as {
+        id: string;
+        email: string;
+        full_name: string | null;
+      };
+    }
+  }
 
   const messagesRes = await supabase
     .from("crm_messages")
@@ -122,5 +140,8 @@ export async function GET(req: Request, ctx: RouteCtx) {
     }
   }
 
-  return Response.json({ thread, messages, player }, { status: 200 });
+  return Response.json(
+    { thread, messages, player, assignee },
+    { status: 200 },
+  );
 }
