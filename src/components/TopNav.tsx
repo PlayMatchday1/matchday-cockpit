@@ -218,6 +218,18 @@ function UserMenu({
           })}
           {showAdmin && (
             <Link
+              href="/crm"
+              role="menuitem"
+              onClick={() => setOpen(false)}
+              className={`block px-3 py-1.5 text-sm transition hover:bg-cream-soft ${
+                pathname?.startsWith("/crm") ? "bg-mint-soft font-bold" : ""
+              }`}
+            >
+              CRM
+            </Link>
+          )}
+          {showAdmin && (
+            <Link
               href="/admin"
               role="menuitem"
               onClick={() => setOpen(false)}
