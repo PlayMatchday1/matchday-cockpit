@@ -230,6 +230,18 @@ function UserMenu({
           )}
           {showAdmin && (
             <Link
+              href="/match-chats"
+              role="menuitem"
+              onClick={() => setOpen(false)}
+              className={`block px-3 py-1.5 text-sm transition hover:bg-cream-soft ${
+                pathname?.startsWith("/match-chats") ? "bg-mint-soft font-bold" : ""
+              }`}
+            >
+              Match Chats
+            </Link>
+          )}
+          {showAdmin && (
+            <Link
               href="/admin"
               role="menuitem"
               onClick={() => setOpen(false)}
