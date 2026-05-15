@@ -1,16 +1,15 @@
 "use client";
 
-// Detail view for a single match chat.
-//   - Opens a Firestore listener on Chats/{chatId}/messages ordered
-//     by createdAt desc, limit 50. New messages stream in live.
-//   - "Load older" button at the top of the scroll region uses
-//     startAfter() to page back through history 50 at a time.
-//   - Composer at the bottom POSTs to /api/match-chats/[chatId]/reply.
-//     The route writes to Firestore as "MatchDay" and audit-logs the
-//     actual operator.
-//   - Sender role badges derived from the joined mdapi_matches data
-//     (manager_email match → "Manager", @playmatchday.com → "Staff",
-//     sentBy === "MatchDay" → "MatchDay").
+// Embedded chat pane — right side of the two-pane Match Chats shell.
+// Lifted from the original /match-chats/[chatId] page; differences:
+//   - No back-link / page-level chrome; the parent shell owns layout.
+//   - chatId arrives as a prop, not a route param. Resetting on change
+//     happens via keyed effects (the messages/listener state below).
+//   - Header uses formatMatchTitle so the city-local time is correct
+//     (mdapi_matches.start_date is UTC; rendering it in the viewer's
+//     zone gave wrong wall-clock times for non-CDT operators).
+//   - Realtime listener + Load Older pagination + composer are
+//     unchanged.
 
 import {
   useCallback,
@@ -19,7 +18,6 @@ import {
   useRef,
   useState,
 } from "react";
-import Link from "next/link";
 import {
   collection,
   doc,
@@ -45,8 +43,7 @@ import {
   MESSAGE_PAGE_SIZE,
   type FirestoreMessage,
 } from "@/lib/matchChats";
-
-// ---------------- types ----------------
+import { formatMatchTitle, timezoneFor } from "@/lib/cityTimezones";
 
 type MatchContext = {
   api_id: number;
@@ -99,9 +96,11 @@ async function bearerHeaders(): Promise<Record<string, string> | null> {
   };
 }
 
-// ---------------- main ----------------
+// ============================================================
+// main
+// ============================================================
 
-export default function ChatThreadClient({ chatId }: { chatId: string }) {
+export default function ChatPane({ chatId }: { chatId: string | null }) {
   const session = useFirebaseSession();
 
   const [match, setMatch] = useState<MatchContext | null>(null);
@@ -115,9 +114,104 @@ export default function ChatThreadClient({ chatId }: { chatId: string }) {
   const [loadingOlder, setLoadingOlder] = useState(false);
   const [listenError, setListenError] = useState<string | null>(null);
 
+  // Empty state — no selection.
+  if (!chatId) {
+    return (
+      <section className="flex flex-1 items-center justify-center bg-white">
+        <div className="flex flex-col items-center gap-2 px-6 text-center">
+          <div aria-hidden className="text-2xl opacity-70">
+            💬
+          </div>
+          <div className="text-sm font-bold text-deep-green">
+            Select a conversation
+          </div>
+          <div className="max-w-[32ch] text-xs text-deep-green/55">
+            Pick a match chat from the inbox to view messages and reply
+            as MatchDay.
+          </div>
+        </div>
+      </section>
+    );
+  }
+
+  return (
+    <ChatPaneInner
+      chatId={chatId}
+      session={session}
+      match={match}
+      setMatch={setMatch}
+      matchError={matchError}
+      setMatchError={setMatchError}
+      messages={messages}
+      setMessages={setMessages}
+      oldestCursor={oldestCursor}
+      setOldestCursor={setOldestCursor}
+      hasMore={hasMore}
+      setHasMore={setHasMore}
+      loadingOlder={loadingOlder}
+      setLoadingOlder={setLoadingOlder}
+      listenError={listenError}
+      setListenError={setListenError}
+    />
+  );
+}
+
+// Inner component so the outer one can guard on `chatId == null`
+// before any hooks fire. (React's rules-of-hooks won't let us early-
+// return between hook calls, so we lift them all into this child.)
+function ChatPaneInner({
+  chatId,
+  session,
+  match,
+  setMatch,
+  matchError,
+  setMatchError,
+  messages,
+  setMessages,
+  oldestCursor,
+  setOldestCursor,
+  hasMore,
+  setHasMore,
+  loadingOlder,
+  setLoadingOlder,
+  listenError,
+  setListenError,
+}: {
+  chatId: string;
+  session: ReturnType<typeof useFirebaseSession>;
+  match: MatchContext | null;
+  setMatch: (m: MatchContext | null) => void;
+  matchError: string | null;
+  setMatchError: (s: string | null) => void;
+  messages: WireMessage[];
+  setMessages: React.Dispatch<React.SetStateAction<WireMessage[]>>;
+  oldestCursor: DocumentSnapshot | null;
+  setOldestCursor: (d: DocumentSnapshot | null) => void;
+  hasMore: boolean;
+  setHasMore: (b: boolean) => void;
+  loadingOlder: boolean;
+  setLoadingOlder: (b: boolean) => void;
+  listenError: string | null;
+  setListenError: (s: string | null) => void;
+}) {
   const validId = isValidChatId(chatId);
 
-  // Fetch match context on mount.
+  // Reset transient state when the chatId changes (user clicked a
+  // different conversation).
+  useEffect(() => {
+    setMessages([]);
+    setOldestCursor(null);
+    setHasMore(true);
+    setListenError(null);
+    setMatch(null);
+    setMatchError(null);
+    // Listener + match-fetch effects below pick up the new chatId.
+    // setters used here are stable from useState — no need to
+    // include them in deps.
+    // eslint-disable-next-line react-hooks/exhaustive-deps
+  }, [chatId]);
+
+  // Match context.
   useEffect(() => {
     let cancelled = false;
     (async () => {
@@ -145,9 +239,9 @@ export default function ChatThreadClient({ chatId }: { chatId: string }) {
     return () => {
       cancelled = true;
     };
-  }, [chatId]);
+  }, [chatId, setMatch, setMatchError]);
 
-  // Realtime listener on the message subcollection, newest 50.
+  // Realtime listener.
   useEffect(() => {
     if (!validId) return;
     if (session.status !== "ready") return;
@@ -164,26 +258,20 @@ export default function ChatThreadClient({ chatId }: { chatId: string }) {
     const unsub = onSnapshot(
       q,
       (snap: QuerySnapshot) => {
-        // Replace the first-page slice each snapshot. Older pages
-        // (loaded via startAfter) stay in state untouched.
         setMessages((prev) => {
           const olderDocIds = new Set(
-            prev
-              .slice(MESSAGE_PAGE_SIZE)
-              .map((m) => m.__docId),
+            prev.slice(MESSAGE_PAGE_SIZE).map((m) => m.__docId),
           );
           const fresh: WireMessage[] = snap.docs.map((d) => ({
             ...(d.data() as FirestoreMessage),
             __docId: d.id,
           }));
           const older = prev.filter((m) => olderDocIds.has(m.__docId));
-          // Sort everything ascending for display.
           const combined = [...fresh, ...older].sort((a, b) => {
             const at = Date.parse(createdAtToIso(a.createdAt) ?? "") || 0;
             const bt = Date.parse(createdAtToIso(b.createdAt) ?? "") || 0;
             return at - bt;
           });
-          // Dedupe by Firestore doc id just in case.
           const seen = new Set<string>();
           const out: WireMessage[] = [];
           for (const m of combined) {
@@ -194,8 +282,6 @@ export default function ChatThreadClient({ chatId }: { chatId: string }) {
           return out;
         });
         if (snap.docs.length > 0) {
-          // The "oldest" cursor for pagination is the LAST doc in
-          // descending order = the oldest message in this snapshot.
           setOldestCursor(snap.docs[snap.docs.length - 1]);
         }
         if (snap.docs.length < MESSAGE_PAGE_SIZE) setHasMore(false);
@@ -206,7 +292,15 @@ export default function ChatThreadClient({ chatId }: { chatId: string }) {
       },
     );
     return () => unsub();
-  }, [chatId, validId, session]);
+  }, [
+    chatId,
+    validId,
+    session,
+    setMessages,
+    setOldestCursor,
+    setHasMore,
+    setListenError,
+  ]);
 
   const loadOlder = useCallback(async () => {
     if (loadingOlder || !hasMore || !oldestCursor) return;
@@ -254,7 +348,17 @@ export default function ChatThreadClient({ chatId }: { chatId: string }) {
     } finally {
       setLoadingOlder(false);
     }
-  }, [chatId, hasMore, loadingOlder, oldestCursor, session]);
+  }, [
+    chatId,
+    hasMore,
+    loadingOlder,
+    oldestCursor,
+    session,
+    setHasMore,
+    setLoadingOlder,
+    setMessages,
+    setOldestCursor,
+  ]);
 
   // Compose
   const [body, setBody] = useState("");
@@ -268,6 +372,12 @@ export default function ChatThreadClient({ chatId }: { chatId: string }) {
     const next = Math.min(240, Math.max(80, ta.scrollHeight));
     ta.style.height = `${next}px`;
   }, [body]);
+
+  // Reset compose state on chat switch.
+  useEffect(() => {
+    setBody("");
+    setSendError(null);
+  }, [chatId]);
 
   const submit = useCallback(async () => {
     if (sending) return;
@@ -313,9 +423,9 @@ export default function ChatThreadClient({ chatId }: { chatId: string }) {
     const el = scrollRef.current;
     if (!el) return;
     el.scrollTop = el.scrollHeight;
-  }, [messages.length]);
+  }, [messages.length, chatId]);
 
-  // ---------------- header rendering ----------------
+  // ---------------- header ----------------
   const headerNodes = useMemo(() => {
     if (!validId) {
       return <span className="italic text-deep-green/55">Invalid chat id</span>;
@@ -327,32 +437,27 @@ export default function ChatThreadClient({ chatId }: { chatId: string }) {
         </span>
       );
     }
-    const city = match.city_identifier;
+    const t = formatMatchTitle({
+      cityCode: match.city_identifier,
+      startDateIso: match.start_date,
+      fieldTitle: match.field_title,
+    });
     return (
       <div className="flex flex-wrap items-baseline gap-1.5">
-        {city && <CityChip code={city} size="sm" />}
-        {match.start_date && (
+        {t.cityCode && <CityChip code={t.cityCode} size="sm" />}
+        <Dot />
+        <span className="font-semibold text-deep-green">{t.date}</span>
+        {t.time && (
           <>
             <Dot />
-            <span className="font-semibold text-deep-green">
-              {new Date(match.start_date).toLocaleDateString(undefined, {
-                month: "short",
-                day: "numeric",
-              })}
-            </span>
-            <Dot />
-            <span className="text-deep-green/70">
-              {new Date(match.start_date).toLocaleTimeString(undefined, {
-                hour: "numeric",
-                minute: "2-digit",
-              })}
-            </span>
+            <span className="text-deep-green/70">{t.time}</span>
+            {t.isUtcFallback && (
+              <span className="text-[10px] text-deep-green/40">(UTC)</span>
+            )}
           </>
         )}
         <Dot />
-        <span className="font-semibold text-deep-green">
-          {match.field_title?.trim() || "(unknown venue)"}
-        </span>
+        <span className="font-semibold text-deep-green">{t.venue}</span>
         {match.is_cancelled === true && (
           <span className="rounded-full bg-muted-soft px-1.5 py-0.5 text-[10px] font-medium text-muted">
             Cancelled
@@ -363,27 +468,19 @@ export default function ChatThreadClient({ chatId }: { chatId: string }) {
   }, [validId, match, chatId]);
 
   return (
-    <div className="-mx-6 -my-8 flex h-[calc(100vh-4rem)] flex-col bg-cream">
-      <div className="border-b border-cream-line bg-cream px-6 py-3">
-        <div className="flex items-center justify-between gap-3">
-          <div className="min-w-0 flex-1">
-            <Link
-              href="/match-chats"
-              className="text-xs text-deep-green/60 hover:underline"
-            >
-              ← All match chats
-            </Link>
-            <div className="mt-1">{headerNodes}</div>
-            {match?.manager_email && (
-              <div className="mt-1 text-[11px] text-deep-green/50">
-                Manager:{" "}
-                <span className="font-medium text-deep-green/70">
-                  {match.manager_first_name} {match.manager_last_name}
-                </span>{" "}
-                · {match.manager_email}
-              </div>
-            )}
-          </div>
+    <section className="flex flex-1 flex-col bg-white">
+      <div className="border-b border-cream-line bg-cream px-4 py-3">
+        <div className="min-w-0">
+          {headerNodes}
+          {match?.manager_email && (
+            <div className="mt-1 text-[11px] text-deep-green/50">
+              Manager:{" "}
+              <span className="font-medium text-deep-green/70">
+                {match.manager_first_name} {match.manager_last_name}
+              </span>{" "}
+              · {match.manager_email}
+            </div>
+          )}
         </div>
       </div>
 
@@ -467,9 +564,11 @@ export default function ChatThreadClient({ chatId }: { chatId: string }) {
           </button>
         </div>
       </div>
-    </div>
+    </section>
   );
 }
+
+// Helpers — same shape as the old ChatThreadClient versions.
 
 function Dot() {
   return (
@@ -521,4 +620,12 @@ function MessageRow({
       </div>
     </li>
   );
+}
+
+// Unused locally but exported so the inbox can share the same
+// timezone source (single source of truth for "this city → this
+// IANA zone").
+// eslint-disable-next-line @typescript-eslint/no-unused-vars
+function _tzReferenceAnchor(x: typeof timezoneFor) {
+  return x;
 }

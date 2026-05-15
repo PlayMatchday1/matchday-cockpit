@@ -1,18 +1,20 @@
 "use client";
 
-// Two-section inbox: Active (last 7 days of message activity) +
-// Upcoming (matches in the next 3 days without recent activity).
-// Server computes both sections via /api/match-chats/active; this
-// component just renders.
+// Left pane of the two-pane Match Chats shell. Tabs (Active /
+// Upcoming) replace the previous stacked-section layout. Collapsible
+// to a 40px strip; collapse state persists in localStorage.
 //
-// Real-time updates: on first render we open a Firestore
-// collection-group listener mirroring the server's window so new
-// messages bump rows live. Falls back gracefully if the index
-// exemption hasn't been created yet (UI just shows whatever the
-// server returned).
+// Selection is owned by the parent (MatchChatsClient): this component
+// receives `selectedChatId` for the active-row highlight and calls
+// `onSelect(chatId)` when a row is clicked. URL state (chatId + tab)
+// is managed by the parent via useSearchParams.
+//
+// Realtime: a coarse collection-group listener triggers a full inbox
+// refetch whenever a new message lands in the active window. We keep
+// the existing match-title text up to date via formatMatchTitle so
+// city-local times stay correct as DST flips, etc.
 
 import { useCallback, useEffect, useMemo, useState } from "react";
-import Link from "next/link";
 import {
   collectionGroup,
   onSnapshot,
@@ -25,11 +27,15 @@ import { supabase } from "@/lib/supabase";
 import { useFirebaseSession } from "@/lib/useFirebaseSession";
 import {
   ACTIVE_WINDOW_DAYS,
-  isValidChatId,
   type MatchChatInboxResponse,
   type MatchChatInboxRow,
 } from "@/lib/matchChats";
+import { formatMatchTitle } from "@/lib/cityTimezones";
 import CityChip from "@/components/CityChip";
+
+export type InboxTab = "active" | "upcoming";
+
+const COLLAPSE_KEY = "cockpit:match-chats:inbox-collapsed";
 
 // ---------------- helpers ----------------
 
@@ -47,26 +53,6 @@ async function fetchInbox(): Promise<MatchChatInboxResponse> {
   return (await res.json()) as MatchChatInboxResponse;
 }
 
-function formatMatchDay(iso: string | null): string {
-  if (!iso) return "—";
-  const d = new Date(iso);
-  if (Number.isNaN(d.getTime())) return "—";
-  return d.toLocaleDateString(undefined, {
-    month: "short",
-    day: "numeric",
-  });
-}
-
-function formatMatchTime(iso: string | null): string {
-  if (!iso) return "";
-  const d = new Date(iso);
-  if (Number.isNaN(d.getTime())) return "";
-  return d.toLocaleTimeString(undefined, {
-    hour: "numeric",
-    minute: "2-digit",
-  });
-}
-
 function timeAgo(iso: string): string {
   const then = Date.parse(iso);
   if (Number.isNaN(then)) return "";
@@ -81,14 +67,56 @@ function timeAgo(iso: string): string {
   return new Date(then).toLocaleDateString();
 }
 
-// ---------------- main ----------------
+function readCollapse(): boolean {
+  if (typeof window === "undefined") return false;
+  try {
+    return window.localStorage.getItem(COLLAPSE_KEY) === "1";
+  } catch {
+    return false;
+  }
+}
 
-export default function MatchChatsInbox() {
+function writeCollapse(b: boolean): void {
+  if (typeof window === "undefined") return;
+  try {
+    window.localStorage.setItem(COLLAPSE_KEY, b ? "1" : "0");
+  } catch {
+    // private mode — no-op
+  }
+}
+
+// ============================================================
+// main
+// ============================================================
+
+export default function MatchChatsInbox({
+  selectedChatId,
+  tab,
+  onSelect,
+  onTabChange,
+}: {
+  selectedChatId: string | null;
+  tab: InboxTab;
+  onSelect: (chatId: string) => void;
+  onTabChange: (tab: InboxTab) => void;
+}) {
   const session = useFirebaseSession();
 
   const [data, setData] = useState<MatchChatInboxResponse | null>(null);
   const [error, setError] = useState<string | null>(null);
   const [loading, setLoading] = useState(true);
+
+  const [collapsed, setCollapsed] = useState(false);
+  useEffect(() => {
+    setCollapsed(readCollapse());
+  }, []);
+  const toggleCollapse = useCallback(() => {
+    setCollapsed((prev) => {
+      const next = !prev;
+      writeCollapse(next);
+      return next;
+    });
+  }, []);
 
   const load = useCallback(async () => {
     setError(null);
@@ -105,10 +133,7 @@ export default function MatchChatsInbox() {
     void load();
   }, [load]);
 
-  // Realtime hint: when ANY new message lands in the 7-day window,
-  // refetch the inbox. This is coarse on purpose — we'd rather pay
-  // one /api/match-chats/active call than reimplement the
-  // server-side dedupe + join in the browser.
+  // Realtime: coarse refetch on any new message in the active window.
   useEffect(() => {
     if (session.status !== "ready") return;
     const cutoff = new Date(
@@ -123,8 +148,6 @@ export default function MatchChatsInbox() {
     const unsub = onSnapshot(
       q,
       (snap) => {
-        // Skip the first snapshot — that's the initial state, not
-        // a delta. We already have the server's view.
         if (firstSnapshot) {
           firstSnapshot = false;
           return;
@@ -135,8 +158,6 @@ export default function MatchChatsInbox() {
         if (hasAdditions) void load();
       },
       (err) => {
-        // Likely missing index — surface in the error banner so we
-        // know to create the exemption. Doesn't break the page.
         console.warn(
           "[match-chats:inbox] realtime listener failed",
           err.message,
@@ -146,38 +167,116 @@ export default function MatchChatsInbox() {
     return () => unsub();
   }, [session, load]);
 
-  return (
-    <div>
-      <div className="mb-4 flex items-center justify-between gap-3">
-        <FirebaseStatus session={session} />
+  const activeCount = data?.active.length ?? 0;
+  const upcomingCount = data?.upcoming.length ?? 0;
+  const rows = (tab === "active" ? data?.active : data?.upcoming) ?? [];
+
+  // ---------------- collapsed strip ----------------
+  if (collapsed) {
+    return (
+      <aside
+        className="flex w-10 shrink-0 flex-col overflow-hidden border-r border-cream-line bg-cream-soft transition-[width] duration-200 ease-out"
+        style={{ width: 40 }}
+      >
+        <div className="flex h-9 items-center justify-center border-b border-cream-line bg-cream-soft">
+          <button
+            type="button"
+            onClick={toggleCollapse}
+            aria-label="Expand inbox"
+            className="inline-flex h-6 w-6 items-center justify-center rounded text-deep-green/60 transition hover:bg-white hover:text-deep-green"
+          >
+            ›
+          </button>
+        </div>
         <button
           type="button"
-          onClick={() => void load()}
-          className="rounded-full border border-cream-line bg-white px-3 py-1 text-xs font-medium text-deep-green transition hover:bg-cream-soft"
+          onClick={toggleCollapse}
+          aria-label="Expand inbox"
+          className="flex-1 text-[10px] uppercase tracking-widest text-deep-green/40 [writing-mode:vertical-rl]"
         >
-          Refresh
+          Inbox
         </button>
+      </aside>
+    );
+  }
+
+  // ---------------- expanded panel ----------------
+  return (
+    <aside
+      className="flex w-[320px] shrink-0 flex-col overflow-hidden border-r border-cream-line bg-cream-soft transition-[width] duration-200 ease-out"
+      style={{ width: 320 }}
+    >
+      {/* Header: status + collapse button */}
+      <div className="flex h-9 items-center justify-between border-b border-cream-line bg-cream-soft px-2">
+        <FirebaseStatus session={session} />
+        <div className="flex items-center gap-1">
+          <button
+            type="button"
+            onClick={() => void load()}
+            className="rounded border border-cream-line bg-white px-2 py-0.5 text-[10px] font-medium text-deep-green transition hover:bg-cream-soft"
+          >
+            Refresh
+          </button>
+          <button
+            type="button"
+            onClick={toggleCollapse}
+            aria-label="Collapse inbox"
+            className="inline-flex h-6 w-6 items-center justify-center rounded text-deep-green/60 transition hover:bg-white hover:text-deep-green"
+          >
+            ‹
+          </button>
+        </div>
+      </div>
+
+      {/* Tabs */}
+      <div className="flex shrink-0 gap-1 border-b border-cream-line bg-cream-soft px-2 py-1.5">
+        <TabButton
+          active={tab === "active"}
+          onClick={() => onTabChange("active")}
+          label="Active"
+          count={activeCount}
+        />
+        <TabButton
+          active={tab === "upcoming"}
+          onClick={() => onTabChange("upcoming")}
+          label="Upcoming"
+          count={upcomingCount}
+        />
       </div>
 
       {error && (
-        <div className="mb-4 rounded-md border border-coral/40 bg-coral-soft p-3 text-xs text-coral-hover">
+        <div className="m-2 rounded border border-coral/40 bg-coral-soft p-2 text-xs text-coral-hover">
           {error}
         </div>
       )}
 
-      {loading && !data && (
-        <div className="text-sm text-deep-green/50">Loading conversations…</div>
-      )}
-
-      {data && (
-        <div className="space-y-6">
-          <Section title="Active conversations" rows={data.active} />
-          <Section title="Upcoming matches" rows={data.upcoming} />
-        </div>
-      )}
-    </div>
+      <div className="flex-1 overflow-y-auto">
+        {loading && !data && (
+          <div className="p-3 text-xs text-deep-green/50">Loading…</div>
+        )}
+        {!loading && rows.length === 0 && !error && (
+          <div className="p-4 text-xs text-deep-green/45">
+            {tab === "active"
+              ? "No messages in the last 7 days."
+              : "No upcoming matches in the next 3 days."}
+          </div>
+        )}
+        <ul className="divide-y divide-cream-line">
+          {rows.map((r) => (
+            <InboxRow
+              key={r.chat_id}
+              row={r}
+              active={r.chat_id === selectedChatId}
+              onSelect={() => onSelect(r.chat_id)}
+            />
+          ))}
+        </ul>
+      </div>
+    </aside>
   );
 }
+
+// ---------------- pieces ----------------
 
 function FirebaseStatus({
   session,
@@ -188,7 +287,7 @@ function FirebaseStatus({
     session.status === "ready"
       ? "live"
       : session.status === "error"
-        ? `offline (${session.error})`
+        ? "offline"
         : "connecting…";
   const dot =
     session.status === "ready"
@@ -197,124 +296,111 @@ function FirebaseStatus({
         ? "bg-coral"
         : "bg-muted";
   return (
-    <span className="inline-flex items-center gap-1.5 text-xs text-deep-green/60">
+    <span className="inline-flex items-center gap-1.5 px-1 text-[11px] text-deep-green/60">
       <span className={`inline-block h-2 w-2 rounded-full ${dot}`} aria-hidden />
       {label}
     </span>
   );
 }
 
-function Section({
-  title,
-  rows,
+function TabButton({
+  active,
+  onClick,
+  label,
+  count,
 }: {
-  title: string;
-  rows: MatchChatInboxRow[];
+  active: boolean;
+  onClick: () => void;
+  label: string;
+  count: number;
 }) {
   return (
-    <section>
-      <div className="mb-2 flex items-baseline gap-2 border-b border-cream-line pb-1">
-        <h2 className="text-[11px] font-bold uppercase tracking-wider text-deep-green/60">
-          {title}
-        </h2>
-        <span className="text-[11px] font-medium text-deep-green/40">
-          · {rows.length}
-        </span>
-      </div>
-      {rows.length === 0 ? (
-        <div className="rounded-md border border-cream-line bg-white p-4 text-xs text-deep-green/45">
-          {title === "Active conversations"
-            ? "No messages in the last 7 days."
-            : "No upcoming matches in the next 3 days."}
-        </div>
-      ) : (
-        <ul className="divide-y divide-cream-line rounded-md border border-cream-line bg-white">
-          {rows.map((r) => (
-            <ChatRow key={r.chat_id} row={r} />
-          ))}
-        </ul>
-      )}
-    </section>
+    <button
+      type="button"
+      onClick={onClick}
+      className={`flex-1 rounded-full px-2.5 py-0.5 text-xs font-medium transition ${
+        active
+          ? "bg-deep-green text-cream"
+          : "border border-cream-line bg-white text-deep-green/70 hover:bg-cream-soft"
+      }`}
+    >
+      {label}
+      <span className={`ml-1 ${active ? "text-cream/70" : "text-deep-green/40"}`}>
+        · {count}
+      </span>
+    </button>
   );
 }
 
-function ChatRow({ row }: { row: MatchChatInboxRow }) {
+function InboxRow({
+  row,
+  active,
+  onSelect,
+}: {
+  row: MatchChatInboxRow;
+  active: boolean;
+  onSelect: () => void;
+}) {
   const m = row.match;
-  const city = m?.city_identifier ?? null;
-  const startIso = m?.start_date ?? null;
-  const venue = m?.field_title?.trim() ?? null;
   const isCancelled = m?.is_cancelled === true;
   const isOrphan = m == null;
-  const dim = isCancelled || row.section === "upcoming" || isOrphan;
+  const isUpcomingEmpty = row.section === "upcoming";
+  const dim = (isCancelled || isUpcomingEmpty || isOrphan) && !active;
 
-  // Inbox title:
-  //   "ATX · May 14 · 7:30pm · NEMP" when match data present
-  //   "Match 14613 · (no match data)" for orphans
-  const titleNodes: React.ReactNode[] = [];
-  if (isOrphan) {
-    titleNodes.push(
-      <span key="orphan" className="italic text-deep-green/55">
-        Match {row.chat_id} · (no match data)
-      </span>,
-    );
-  } else {
-    if (city) {
-      titleNodes.push(<CityChip key="city" code={city} />);
-      titleNodes.push(
-        <span key="sep-1" aria-hidden className="text-deep-green/30">
-          ·
-        </span>,
-      );
-    }
-    if (startIso) {
-      titleNodes.push(
-        <span key="date" className="font-semibold text-deep-green">
-          {formatMatchDay(startIso)}
-        </span>,
-      );
-      titleNodes.push(
-        <span key="sep-2" aria-hidden className="text-deep-green/30">
-          ·
-        </span>,
-      );
-      titleNodes.push(
-        <span key="time" className="text-deep-green/70">
-          {formatMatchTime(startIso)}
-        </span>,
-      );
-      titleNodes.push(
-        <span key="sep-3" aria-hidden className="text-deep-green/30">
-          ·
-        </span>,
-      );
-    }
-    titleNodes.push(
-      <span
-        key="venue"
-        className="truncate font-semibold text-deep-green"
-        title={venue ?? "(unknown venue)"}
-      >
-        {venue ?? "(unknown venue)"}
-      </span>,
-    );
-  }
+  const title = useMemo(() => {
+    if (isOrphan) return null;
+    return formatMatchTitle({
+      cityCode: m?.city_identifier ?? null,
+      startDateIso: m?.start_date ?? null,
+      fieldTitle: m?.field_title ?? null,
+    });
+  }, [m, isOrphan]);
 
   return (
     <li>
-      <Link
-        href={`/match-chats/${row.chat_id}`}
-        prefetch={false}
-        className={`block px-3 py-2.5 transition hover:bg-cream-soft ${
-          dim ? "opacity-60" : ""
-        }`}
+      <button
+        type="button"
+        onClick={onSelect}
+        className={`block w-full px-3 py-2.5 text-left transition ${
+          active
+            ? "bg-mint-soft"
+            : "border-l-2 border-l-transparent hover:bg-white"
+        } ${active ? "border-l-2 border-l-mint" : ""} ${dim ? "opacity-60" : ""}`}
       >
         <div className="flex items-baseline justify-between gap-2">
           <div className="flex min-w-0 flex-wrap items-center gap-1.5">
-            {titleNodes}
-            {isCancelled && (
-              <span className="rounded-full bg-muted-soft px-1.5 py-0.5 text-[10px] font-medium text-muted">
-                Cancelled
+            {isOrphan ? (
+              <span className="italic text-deep-green/55">
+                Match {row.chat_id} · (no match data)
               </span>
+            ) : (
+              <>
+                {title?.cityCode && <CityChip code={title.cityCode} />}
+                <span className="text-[10px] text-deep-green/30" aria-hidden>
+                  ·
+                </span>
+                <span className="font-semibold text-deep-green">
+                  {title?.date}
+                </span>
+                {title?.time && (
+                  <>
+                    <span className="text-[10px] text-deep-green/30" aria-hidden>
+                      ·
+                    </span>
+                    <span className="text-deep-green/70">{title.time}</span>
+                    {title.isUtcFallback && (
+                      <span className="text-[10px] text-deep-green/40">
+                        (UTC)
+                      </span>
+                    )}
+                  </>
+                )}
+                {isCancelled && (
+                  <span className="rounded-full bg-muted-soft px-1.5 py-0.5 text-[9px] font-medium text-muted">
+                    Cancelled
+                  </span>
+                )}
+              </>
             )}
           </div>
           {row.last_message && (
@@ -323,7 +409,12 @@ function ChatRow({ row }: { row: MatchChatInboxRow }) {
             </span>
           )}
         </div>
-        <div className="mt-1 truncate text-xs">
+        {!isOrphan && title?.venue && (
+          <div className="mt-0.5 truncate text-xs font-semibold text-deep-green">
+            {title.venue}
+          </div>
+        )}
+        <div className="mt-0.5 truncate text-xs">
           {row.last_message ? (
             <>
               {row.last_message.sent_by && (
@@ -339,18 +430,7 @@ function ChatRow({ row }: { row: MatchChatInboxRow }) {
             <span className="italic text-deep-green/40">No messages yet</span>
           )}
         </div>
-      </Link>
+      </button>
     </li>
   );
-}
-
-// Re-exported so the page knows the row count for the subtitle (not
-// currently used but stable).
-export type { MatchChatInboxResponse };
-
-// eslint-disable-next-line @typescript-eslint/no-unused-vars
-function _typeReferenceAnchor(x: typeof isValidChatId) {
-  // Keeps the matchChats import from being treeshaken-only for
-  // type imports — used by the realtime listener path above.
-  return x;
 }
