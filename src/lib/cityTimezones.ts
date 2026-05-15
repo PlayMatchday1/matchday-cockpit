@@ -10,7 +10,10 @@
 // All current MatchDay cities fall in three IANA zones. Daylight
 // savings is handled automatically by Intl.DateTimeFormat.
 
-import { type KnownCityCode } from "./cityNormalization";
+import {
+  normalizeCityName,
+  type KnownCityCode,
+} from "./cityNormalization";
 
 const CITY_TIMEZONES: Record<KnownCityCode, string> = {
   ATX: "America/Chicago",
@@ -26,9 +29,13 @@ const CITY_TIMEZONES: Record<KnownCityCode, string> = {
 // Returns the IANA timezone for a city code, or null if unknown.
 // Callers fall back to UTC display (with a "(UTC)" suffix) so the
 // gap is visible rather than silently wrong.
+//
+// Uppercase-normalize before lookup — defensive against any future
+// path that hands us a lowercase short code ("stl") instead of the
+// canonical "STL".
 export function timezoneFor(cityCode: string | null | undefined): string | null {
   if (!cityCode) return null;
-  const code = cityCode as KnownCityCode;
+  const code = cityCode.toUpperCase() as KnownCityCode;
   return CITY_TIMEZONES[code] ?? null;
 }
 
@@ -117,27 +124,84 @@ export type FormattedMatchTitle = {
 
 export function formatMatchTitle(opts: {
   cityCode: string | null | undefined;
+  // `cityName` is the human-readable name from mdapi_matches
+  // (e.g. "St. Louis") — used as a fallback when `cityCode` is null
+  // or doesn't map to a known IANA zone. This is the common case
+  // for older synced matches where MatchDay's API didn't return
+  // `field.city.abbr` and the sync wrote city_identifier as null.
+  // normalizeCityName turns "St. Louis" → "STL" → America/Chicago.
+  cityName?: string | null | undefined;
   startDateIso: string | null | undefined;
   fieldTitle: string | null | undefined;
 }): FormattedMatchTitle {
-  const cityCode = opts.cityCode ? opts.cityCode.toUpperCase() : null;
+  const rawCode = opts.cityCode ? opts.cityCode.toUpperCase() : null;
   const venue = opts.fieldTitle?.trim() || "(unknown venue)";
 
+  // Resolve the effective city code through three tiers:
+  //   1. `cityCode` exactly matching the IANA map
+  //   2. `cityCode` UPPER-cased (handled by timezoneFor)
+  //   3. `cityName` normalized via the existing CITY_MAP in
+  //      cityNormalization.ts (handles "St. Louis", "Saint Louis",
+  //      "Dallas / Fort Worth", etc.)
+  let resolvedCode = rawCode;
+  let tz = timezoneFor(resolvedCode);
+  if (!tz && opts.cityName) {
+    const normalized = normalizeCityName(opts.cityName);
+    if (normalized) {
+      resolvedCode = normalized;
+      tz = timezoneFor(normalized);
+    }
+  }
+
   if (!opts.startDateIso) {
-    return { cityCode, date: "—", time: "", venue, isUtcFallback: false };
+    return {
+      cityCode: resolvedCode,
+      date: "—",
+      time: "",
+      venue,
+      isUtcFallback: false,
+    };
   }
   const d = new Date(opts.startDateIso);
   if (Number.isNaN(d.getTime())) {
-    return { cityCode, date: "—", time: "", venue, isUtcFallback: false };
+    return {
+      cityCode: resolvedCode,
+      date: "—",
+      time: "",
+      venue,
+      isUtcFallback: false,
+    };
   }
 
-  const tz = timezoneFor(cityCode);
   const useZone = tz ?? "UTC";
-  return {
-    cityCode,
+  const out: FormattedMatchTitle = {
+    cityCode: resolvedCode,
     date: formatDateInZone(d, useZone),
     time: formatTimeInZone(d, useZone),
     venue,
     isUtcFallback: tz == null,
   };
+
+  // Gated debug log — set NEXT_PUBLIC_DEBUG_MATCH_TIMES=1 in
+  // .env.local to surface the inputs / resolved zone / outputs for
+  // every call in the browser console. Off by default so production
+  // doesn't spam.
+  if (
+    typeof process !== "undefined" &&
+    process.env.NEXT_PUBLIC_DEBUG_MATCH_TIMES === "1"
+  ) {
+    // eslint-disable-next-line no-console
+    console.debug("[match-times]", {
+      cityCodeIn: opts.cityCode ?? null,
+      cityNameIn: opts.cityName ?? null,
+      resolvedCode,
+      startDateIso: opts.startDateIso,
+      resolvedZone: useZone,
+      formattedDate: out.date,
+      formattedTime: out.time,
+      isUtcFallback: out.isUtcFallback,
+    });
+  }
+
+  return out;
 }

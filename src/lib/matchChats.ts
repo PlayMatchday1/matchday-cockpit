@@ -28,6 +28,7 @@ export type MatchChatInboxRow = {
     field_title: string | null;
     start_date: string | null; // ISO
     city_identifier: string | null;
+    city_name: string | null;
     manager_email: string | null;
     is_cancelled: boolean;
   } | null;

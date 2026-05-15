@@ -439,6 +439,7 @@ function ChatPaneInner({
     }
     const t = formatMatchTitle({
       cityCode: match.city_identifier,
+      cityName: match.city_name,
       startDateIso: match.start_date,
       fieldTitle: match.field_title,
     });

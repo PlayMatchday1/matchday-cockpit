@@ -49,6 +49,7 @@ type MatchRow = {
   field_title: string | null;
   start_date: string | null;
   city_identifier: string | null;
+  city_name: string | null;
   manager_email: string | null;
   is_cancelled: boolean | null;
 };
@@ -138,7 +139,7 @@ export async function GET(req: Request) {
   const upcomingRes = await supabase
     .from("mdapi_matches")
     .select(
-      "api_id, field_title, start_date, city_identifier, manager_email, is_cancelled",
+      "api_id, field_title, start_date, city_identifier, city_name, manager_email, is_cancelled",
     )
     .gte("start_date", nowIso)
     .lt("start_date", upperIso)
@@ -167,7 +168,7 @@ export async function GET(req: Request) {
       const r = await supabase
         .from("mdapi_matches")
         .select(
-          "api_id, field_title, start_date, city_identifier, manager_email, is_cancelled",
+          "api_id, field_title, start_date, city_identifier, city_name, manager_email, is_cancelled",
         )
         .in("api_id", idsNum);
       if (r.error) {
@@ -193,6 +194,7 @@ export async function GET(req: Request) {
             field_title: m.field_title,
             start_date: m.start_date,
             city_identifier: m.city_identifier,
+            city_name: m.city_name,
             manager_email: m.manager_email,
             is_cancelled: m.is_cancelled === true,
           }
@@ -213,6 +215,7 @@ export async function GET(req: Request) {
       field_title: m.field_title,
       start_date: m.start_date,
       city_identifier: m.city_identifier,
+      city_name: m.city_name,
       manager_email: m.manager_email,
       is_cancelled: m.is_cancelled === true,
     },

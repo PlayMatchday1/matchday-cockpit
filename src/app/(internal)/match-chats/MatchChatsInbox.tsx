@@ -351,6 +351,7 @@ function InboxRow({
     if (isOrphan) return null;
     return formatMatchTitle({
       cityCode: m?.city_identifier ?? null,
+      cityName: m?.city_name ?? null,
       startDateIso: m?.start_date ?? null,
       fieldTitle: m?.field_title ?? null,
     });
