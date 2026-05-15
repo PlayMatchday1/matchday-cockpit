@@ -5,9 +5,11 @@
 //   - No back-link / page-level chrome; the parent shell owns layout.
 //   - chatId arrives as a prop, not a route param. Resetting on change
 //     happens via keyed effects (the messages/listener state below).
-//   - Header uses formatMatchTitle so the city-local time is correct
-//     (mdapi_matches.start_date is UTC; rendering it in the viewer's
-//     zone gave wrong wall-clock times for non-CDT operators).
+//   - Header uses formatMatchTitle so the city-local time is correct.
+//     Reads mdapi_matches.start_date_utc (the actually-UTC column).
+//     The sibling start_date column on mdapi_matches is mislabeled
+//     UTC (it's local wall-clock with a +00 offset) — using it gave
+//     a 5-hour skew for CDT matches, etc.
 //   - Realtime listener + Load Older pagination + composer are
 //     unchanged.
 
@@ -49,7 +51,7 @@ type MatchContext = {
   api_id: number;
   field_title: string | null;
   field_address: string | null;
-  start_date: string | null;
+  start_date_utc: string | null;
   city_identifier: string | null;
   city_name: string | null;
   manager_email: string | null;
@@ -439,7 +441,7 @@ function ChatPaneInner({
     }
     const t = formatMatchTitle({
       cityCode: match.city_identifier,
-      startDateIso: match.start_date,
+      startDateIso: match.start_date_utc,
       fieldTitle: match.field_title,
     });
     return (

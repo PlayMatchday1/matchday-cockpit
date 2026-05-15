@@ -47,7 +47,10 @@ const SECTION_CAP = 100;
 type MatchRow = {
   api_id: number;
   field_title: string | null;
-  start_date: string | null;
+  // The actually-UTC column on mdapi_matches. See PR notes — the
+  // sibling `start_date` column is mislabeled (local wall-clock with
+  // a spurious +00 offset).
+  start_date_utc: string | null;
   city_identifier: string | null;
   manager_email: string | null;
   is_cancelled: boolean | null;
@@ -138,12 +141,12 @@ export async function GET(req: Request) {
   const upcomingRes = await supabase
     .from("mdapi_matches")
     .select(
-      "api_id, field_title, start_date, city_identifier, manager_email, is_cancelled",
+      "api_id, field_title, start_date_utc, city_identifier, manager_email, is_cancelled",
     )
-    .gte("start_date", nowIso)
-    .lt("start_date", upperIso)
+    .gte("start_date_utc", nowIso)
+    .lt("start_date_utc", upperIso)
     .neq("is_cancelled", true)
-    .order("start_date", { ascending: true })
+    .order("start_date_utc", { ascending: true })
     .limit(SECTION_CAP);
   if (upcomingRes.error) {
     console.error(
@@ -167,7 +170,7 @@ export async function GET(req: Request) {
       const r = await supabase
         .from("mdapi_matches")
         .select(
-          "api_id, field_title, start_date, city_identifier, manager_email, is_cancelled",
+          "api_id, field_title, start_date_utc, city_identifier, manager_email, is_cancelled",
         )
         .in("api_id", idsNum);
       if (r.error) {
@@ -191,7 +194,7 @@ export async function GET(req: Request) {
         ? {
             api_id: m.api_id,
             field_title: m.field_title,
-            start_date: m.start_date,
+            start_date_utc: m.start_date_utc,
             city_identifier: m.city_identifier,
             manager_email: m.manager_email,
             is_cancelled: m.is_cancelled === true,
@@ -211,7 +214,7 @@ export async function GET(req: Request) {
     match: {
       api_id: m.api_id,
       field_title: m.field_title,
-      start_date: m.start_date,
+      start_date_utc: m.start_date_utc,
       city_identifier: m.city_identifier,
       manager_email: m.manager_email,
       is_cancelled: m.is_cancelled === true,

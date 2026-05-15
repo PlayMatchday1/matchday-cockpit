@@ -1,11 +1,16 @@
 // City → IANA timezone mapping for rendering match start times.
 //
-// mdapi_matches.start_date is stored in UTC. The browser's default
-// locale would render in the viewer's local zone, which is wrong for
-// a multi-city operations dashboard — a St. Louis match at 9pm CDT
-// shouldn't read as "3:00 AM" for a viewer in Lisbon (or as
-// "10:00 PM" for a viewer in NYC). Every match should display in
-// its own city's wall clock.
+// Callers feed this formatter the value of
+// mdapi_matches.start_date_utc — the actually-UTC column. The
+// sibling mdapi_matches.start_date column stores local wall-clock
+// with a spurious +00 offset (mislabeled by the upstream sync) and
+// must NOT be passed here; doing so produces a multi-hour skew.
+//
+// The browser's default locale would render UTC in the viewer's
+// own zone, which is wrong for a multi-city operations dashboard —
+// a St. Louis match at 9pm CDT shouldn't read as "3:00 AM" for a
+// viewer in Lisbon. Every match should display in its own city's
+// wall clock.
 //
 // All current MatchDay cities fall in three IANA zones. Daylight
 // savings is handled automatically by Intl.DateTimeFormat.

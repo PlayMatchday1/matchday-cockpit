@@ -351,7 +351,7 @@ function InboxRow({
     if (isOrphan) return null;
     return formatMatchTitle({
       cityCode: m?.city_identifier ?? null,
-      startDateIso: m?.start_date ?? null,
+      startDateIso: m?.start_date_utc ?? null,
       fieldTitle: m?.field_title ?? null,
     });
   }, [m, isOrphan]);

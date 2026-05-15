@@ -34,7 +34,7 @@ export async function GET(req: Request, ctx: RouteCtx) {
   const r = await supabase
     .from("mdapi_matches")
     .select(
-      "api_id, field_title, field_address, start_date, city_identifier, city_name, manager_email, manager_first_name, manager_last_name, is_cancelled",
+      "api_id, field_title, field_address, start_date_utc, city_identifier, city_name, manager_email, manager_first_name, manager_last_name, is_cancelled",
     )
     .eq("api_id", apiId)
     .maybeSingle();
