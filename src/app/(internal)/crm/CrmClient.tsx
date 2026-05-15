@@ -34,6 +34,9 @@ import { KNOWN_CITY_CODES } from "@/lib/cityNormalization";
 import { colorForCity, UNKNOWN_CITY } from "@/lib/cityColors";
 import CityChip from "@/components/CityChip";
 import AssigneeChip, { type Assignee } from "@/components/AssigneeChip";
+import MatchStatusPill, {
+  type MatchStatus,
+} from "@/components/MatchStatusPill";
 
 // ---------------- types ----------------
 
@@ -80,11 +83,20 @@ type PlayerContext = {
   total_match_count: number | null;
 };
 
+type RecentMatch = {
+  match_api_id: number;
+  venue: string | null;
+  start_date: string | null;
+  status: MatchStatus;
+};
+
 type ThreadDetail = {
   thread: ThreadListRow;
   messages: Message[];
   player: PlayerContext | null;
   assignee: Assignee | null;
+  recent_matches: RecentMatch[];
+  historical_account_count: number | null;
 };
 
 type StatusFilter = "all" | "unassigned" | "mine";
@@ -923,10 +935,10 @@ function ThreadRow({
           <AssigneeChip assignee={t.assignee} size="sm" />
           {t.match_ambiguous && (
             <span
-              title="Multiple users share this phone number"
-              className="rounded-full bg-coral-soft px-1.5 py-0.5 text-[10px] font-medium text-coral-hover"
+              title="Phone has historical accounts on file — showing the most recent"
+              className="inline-flex items-center gap-0.5 rounded-full bg-muted-soft px-1.5 py-0.5 text-[10px] font-medium text-muted"
             >
-              ambiguous
+              <span aria-hidden>ⓘ</span> historical
             </span>
           )}
         </div>
@@ -1044,8 +1056,11 @@ function ConversationHeader({
           <span className="font-mono">{detail.thread.phone_number}</span>
           <CityChip code={cityCode} />
           {detail.thread.match_ambiguous && (
-            <span className="rounded-full bg-coral-soft px-1.5 py-0.5 text-[10px] font-medium text-coral-hover">
-              Multiple matches
+            <span
+              title="Phone has historical accounts on file — showing the most recent"
+              className="inline-flex items-center gap-0.5 rounded-full bg-muted-soft px-1.5 py-0.5 text-[10px] font-medium text-muted"
+            >
+              <span aria-hidden>ⓘ</span> historical
             </span>
           )}
         </div>
@@ -1400,14 +1415,22 @@ function PlayerCard({
 }) {
   const player = detail?.player ?? null;
   const ambiguous = selectedThread.match_ambiguous;
+  const historicalCount = detail?.historical_account_count ?? null;
 
   return (
     <>
       {ambiguous && (
-        <div className="mb-3 rounded-md border border-coral/40 bg-coral-soft p-2 text-xs text-coral-hover">
-          <span className="font-bold">Ambiguous match.</span> More than one
-          mdapi_users row shares this phone — the oldest signup was
-          auto-selected. Verify before replying.
+        <div className="mb-3 flex items-start gap-1.5 rounded-md border border-cream-line bg-cream-soft p-2 text-xs text-deep-green/60">
+          <span aria-hidden className="mt-px shrink-0">
+            ⓘ
+          </span>
+          <span>
+            Phone has{" "}
+            {historicalCount != null && historicalCount > 0
+              ? `${historicalCount} historical account${historicalCount === 1 ? "" : "s"}`
+              : "historical accounts"}{" "}
+            on file — showing the most recent.
+          </span>
         </div>
       )}
 
@@ -1472,8 +1495,74 @@ function PlayerCard({
           </div>
         </section>
       ) : null}
+
+      <RecentMatchesSection
+        matches={detail?.recent_matches ?? []}
+        hasPlayer={player != null}
+        loading={loading && !detail}
+      />
     </>
   );
+}
+
+function RecentMatchesSection({
+  matches,
+  hasPlayer,
+  loading,
+}: {
+  matches: RecentMatch[];
+  hasPlayer: boolean;
+  loading: boolean;
+}) {
+  return (
+    <section className="mt-3 rounded-md border border-cream-line bg-white p-3 shadow-sm">
+      <div className="text-[10px] font-semibold uppercase tracking-wide text-deep-green/40">
+        Recent matches
+      </div>
+      {loading ? (
+        <div className="mt-2 text-xs text-deep-green/50">Loading…</div>
+      ) : !hasPlayer ? (
+        <div className="mt-2 text-xs text-deep-green/45">
+          No player linked.
+        </div>
+      ) : matches.length === 0 ? (
+        <div className="mt-2 text-xs text-deep-green/45">
+          No recent matches.
+        </div>
+      ) : (
+        <ul className="mt-2 divide-y divide-cream-line">
+          {matches.map((m) => (
+            <li
+              key={m.match_api_id}
+              className="flex flex-col gap-1 py-2 first:pt-0 last:pb-0"
+            >
+              <div className="flex items-baseline justify-between gap-2">
+                <span className="truncate text-xs font-semibold text-deep-green">
+                  {m.venue?.trim() || "(no venue)"}
+                </span>
+                <span className="shrink-0 text-[10px] text-deep-green/50">
+                  {formatMatchDate(m.start_date)}
+                </span>
+              </div>
+              <div>
+                <MatchStatusPill status={m.status} />
+              </div>
+            </li>
+          ))}
+        </ul>
+      )}
+    </section>
+  );
+}
+
+function formatMatchDate(iso: string | null): string {
+  if (!iso) return "—";
+  const d = new Date(iso);
+  if (Number.isNaN(d.getTime())) return "—";
+  return d.toLocaleDateString(undefined, {
+    month: "short",
+    day: "numeric",
+  });
 }
 
 function Row({ label, children }: { label: string; children: ReactNode }) {
