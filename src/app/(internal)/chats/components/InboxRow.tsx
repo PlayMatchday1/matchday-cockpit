@@ -1,28 +1,23 @@
 "use client";
 
-// Single thread row in the Player Chat inbox. Mobile-first row
-// height (44px+ touch target). Visual states:
+// Single thread row in the Player Chat inbox. iMessage layout:
+// circular initials avatar, name + timestamp on the top line,
+// message preview + unread dot below, small metadata footer
+// (city, "Historical"). No yellow tint, no left stripe, no
+// chat-bubble overlay on the avatar. Unread is signaled by font
+// weight on name + preview plus a small green dot on the right.
 //
-//   - default        : white bg, no accent
-//   - active         : mint left border (4px), faint mint-soft bg
-//   - unread         : yellow-pos tinted bg + yellow-pos left
-//                      border, name bolder
-//   - ambiguous flag : muted "ⓘ historical" chip (PR #29 softening)
-//
-// Time pill: mint text when last activity < 1 hour, muted otherwise.
-// City + Member pills follow the brand palette.
-
-import { colorForCity, UNKNOWN_CITY } from "@/lib/cityColors";
-import PlayerAvatar from "@/components/PlayerAvatar";
-import type { CrmChannel } from "@/components/ChannelChip";
+// Selection state (active=true) on the desktop split view gets a
+// faint cream-soft bg so the selected row stays visually anchored
+// in the inbox column.
 
 export type InboxRowThread = {
   id: string;
   phone_number: string;
-  channel: CrmChannel;
   match_ambiguous: boolean;
   last_message_at: string;
   last_message_preview: string | null;
+  last_message_direction: "inbound" | "outbound" | null;
   player: {
     first_name: string | null;
     last_name: string | null;
@@ -41,19 +36,30 @@ function fullName(t: InboxRowThread): string {
   return out || t.phone_number;
 }
 
+function initialsOf(name: string): string {
+  const parts = name.trim().split(/\s+/).filter(Boolean);
+  if (parts.length === 0) return "?";
+  if (parts.length === 1) return parts[0].slice(0, 2).toUpperCase();
+  return (parts[0][0] + parts[parts.length - 1][0]).toUpperCase();
+}
+
 function cityForRow(t: InboxRowThread): string | null {
   return t.player?.preferable_city_normalized ?? null;
 }
 
-function timeAgoCompact(iso: string): { label: string; recent: boolean } {
+// Compact timestamp: "now", "5m", "3h", "2d", or a M/D date.
+function timeAgoCompact(iso: string): string {
   const then = Date.parse(iso);
-  if (Number.isNaN(then)) return { label: "", recent: false };
+  if (Number.isNaN(then)) return "";
   const diff = Math.max(0, Math.floor((Date.now() - then) / 1000));
-  if (diff < 45) return { label: "now", recent: true };
-  if (diff < 3600) return { label: `${Math.floor(diff / 60)}m`, recent: true };
-  if (diff < 86400) return { label: `${Math.floor(diff / 3600)}h`, recent: false };
-  if (diff < 604800) return { label: `${Math.floor(diff / 86400)}d`, recent: false };
-  return { label: new Date(then).toLocaleDateString(), recent: false };
+  if (diff < 45) return "now";
+  if (diff < 3600) return `${Math.floor(diff / 60)}m`;
+  if (diff < 86400) return `${Math.floor(diff / 3600)}h`;
+  if (diff < 604800) return `${Math.floor(diff / 86400)}d`;
+  return new Date(then).toLocaleDateString(undefined, {
+    month: "numeric",
+    day: "numeric",
+  });
 }
 
 export default function InboxRow({
@@ -66,90 +72,74 @@ export default function InboxRow({
   onSelect: () => void;
 }) {
   const name = fullName(thread);
+  const initials = initialsOf(name);
   const city = cityForRow(thread);
   const isMember = thread.player?.is_member === true;
-  const time = timeAgoCompact(thread.last_message_at);
+  const timeLabel = timeAgoCompact(thread.last_message_at);
+  const rawPreview = thread.last_message_preview ?? "(no messages)";
+  const preview =
+    thread.last_message_direction === "outbound"
+      ? `You: ${rawPreview}`
+      : rawPreview;
 
-  const rowBg = active
-    ? "bg-mint-soft"
-    : thread.unread
-      ? "bg-yellow-pos/10"
-      : "bg-white hover:bg-cream-soft";
-  const leftBorder = active
-    ? "border-l-[3px] border-l-mint"
-    : thread.unread
-      ? "border-l-[3px] border-l-yellow-pos"
-      : "border-l-[3px] border-l-transparent";
+  const metaBits: string[] = [];
+  if (city) metaBits.push(city);
+  if (isMember) metaBits.push("Member");
+  if (thread.match_ambiguous) metaBits.push("Historical");
 
   return (
     <li>
       <button
         type="button"
         onClick={onSelect}
-        className={`flex w-full items-center gap-3 px-3 py-2.5 text-left transition sm:px-4 ${rowBg} ${leftBorder}`}
+        style={{ touchAction: "manipulation" }}
+        className={`flex w-full items-center gap-3 px-3 py-3 text-left transition sm:px-4 ${
+          active ? "bg-cream-soft" : "bg-white hover:bg-cream-soft/60"
+        }`}
       >
-        <PlayerAvatar
-          name={thread.player ? name : null}
-          seed={thread.phone_number}
-          channel={thread.channel}
-          size="md"
-          isMember={isMember}
-        />
+        <span
+          aria-hidden
+          className="flex h-11 w-11 shrink-0 items-center justify-center rounded-full bg-cream-line text-[13px] font-medium text-muted"
+        >
+          {initials}
+        </span>
         <div className="min-w-0 flex-1">
           <div className="flex items-baseline justify-between gap-2">
             <span
-              className={`truncate text-sm tracking-tight text-deep-green ${
-                thread.unread ? "font-extrabold" : "font-semibold"
+              className={`truncate text-[15px] text-deep-green ${
+                thread.unread ? "font-medium" : "font-normal"
               }`}
             >
               {name}
             </span>
-            <span
-              className={`shrink-0 text-[10px] font-medium ${
-                time.recent ? "text-mint-hover" : "text-deep-green/45"
-              }`}
-            >
-              {time.label}
+            <span className="shrink-0 text-[12px] text-deep-green/45">
+              {timeLabel}
             </span>
           </div>
-          <div className="mt-0.5 truncate text-xs text-deep-green/65">
-            {thread.last_message_preview ?? "(no messages)"}
-          </div>
-          <div className="mt-1 flex flex-wrap items-center gap-1.5">
-            {city && <CityPill code={city} />}
-            {isMember && <MemberPill />}
-            {thread.match_ambiguous && (
+          <div className="mt-0.5 flex items-center justify-between gap-2">
+            <span
+              className={`truncate text-[13px] ${
+                thread.unread
+                  ? "font-medium text-deep-green"
+                  : "font-normal text-deep-green/55"
+              }`}
+            >
+              {preview}
+            </span>
+            {thread.unread && (
               <span
-                title="Phone has historical accounts on file — showing the most recent"
-                className="inline-flex items-center gap-0.5 rounded-full bg-muted-soft px-1.5 py-0.5 text-[10px] font-medium text-muted"
-              >
-                <span aria-hidden>ⓘ</span> historical
-              </span>
+                aria-label="Unread"
+                className="h-2 w-2 shrink-0 rounded-full bg-deep-green"
+              />
             )}
           </div>
+          {metaBits.length > 0 && (
+            <div className="mt-1 truncate text-[11px] text-deep-green/45">
+              {metaBits.join(" · ")}
+            </div>
+          )}
         </div>
       </button>
     </li>
-  );
-}
-
-function CityPill({ code }: { code: string }) {
-  const safe = code && code.length > 0 ? code : UNKNOWN_CITY;
-  const hex = colorForCity(safe);
-  return (
-    <span
-      className="rounded-full px-1.5 py-0.5 text-[10px] font-bold tracking-wider"
-      style={{ backgroundColor: "rgb(0 51 38)", color: hex }}
-    >
-      {safe}
-    </span>
-  );
-}
-
-function MemberPill() {
-  return (
-    <span className="rounded-full bg-purple-done/15 px-1.5 py-0.5 text-[10px] font-bold uppercase tracking-wider text-purple-done">
-      Member
-    </span>
   );
 }

@@ -104,7 +104,7 @@ export async function POST(req: Request, ctx: RouteCtx) {
         user: {
           _id: MATCHDAY_SENDER_USER_ID,
           name: MATCHDAY_SENDER_NAME,
-          avatar: null,
+          avatar: "",
         },
         createdAt: admin.firestore.FieldValue.serverTimestamp(),
       });

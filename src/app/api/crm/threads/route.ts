@@ -8,11 +8,16 @@
 // Response shape:
 //   { threads: Array<{
 //       id, phone_number, player_id, match_ambiguous,
-//       last_message_at, last_message_preview,
+//       last_message_at, last_message_preview, last_message_direction,
 //       assigned_to_user_id, assigned_at,
 //       player: { first_name, last_name, preferable_city_normalized } | null,
 //       assignee: { id, email, full_name } | null
 //     }> }
+//
+// last_message_direction is the direction of the most recent message
+// in the thread ("inbound" | "outbound" | null). Used by the inbox
+// to render a "You: " prefix when the last message was sent from
+// Cockpit, matching the Slack/iMessage convention.
 
 import { authenticateCrm } from "@/lib/crmAuth";
 
@@ -118,8 +123,31 @@ export async function GET(req: Request) {
     }
   }
 
+  // Latest-message direction per thread. PostgREST has no native
+  // "DISTINCT ON" so we issue one bounded query per thread in
+  // parallel rather than pulling the full message history. At 50
+  // threads this is one round of cheap .limit(1) queries; switch to
+  // a view or DB-maintained denormalized column if this ever shows
+  // up in slow logs.
+  const directionResults = await Promise.all(
+    threads.map(async (t) => {
+      const r = await supabase
+        .from("crm_messages")
+        .select("direction")
+        .eq("thread_id", t.id)
+        .order("sent_at", { ascending: false })
+        .limit(1)
+        .maybeSingle();
+      return [t.id, r.data?.direction ?? null] as const;
+    }),
+  );
+  const directionByThreadId = new Map<string, "inbound" | "outbound" | null>(
+    directionResults,
+  );
+
   const out = threads.map((t) => ({
     ...t,
+    last_message_direction: directionByThreadId.get(t.id) ?? null,
     player: t.player_id != null ? playersById.get(t.player_id) ?? null : null,
     assignee:
       t.assigned_to_user_id != null

@@ -1,19 +1,17 @@
 "use client";
 
-// Player Chat — three-pane desktop / single-pane mobile layout.
-// Replaces the old "CRM" page UI; the underlying data layer, route
-// (/crm), and DB tables (crm_threads, crm_messages) are unchanged.
+// Player Chat. Three-pane desktop / single-pane mobile layout.
+// Underlying data layer, route (/chats), and DB tables (crm_threads,
+// crm_messages) are unchanged.
 //
 // Composition:
 //
-//   Top of page (rendered by /crm/page.tsx)
-//     <CrmSubTabStrip />     ← Player Chat / Match Chats
-//
 //   This component (CrmClient)
-//     <FilterBar />          ← assignment + city filters
+//     <ChatsHeader />        : title bar, Players/Matches segmented
+//                              control, merged filter row, status
 //     ┌──────────────┬───────────────────┬──────────────┐
 //     │ InboxPane    │ ConversationPane  │ ContextPanel │
-//     │ (240px on    │ (flex-1)          │ (240px on    │
+//     │ (280px on    │ (flex-1)          │ (240px on    │
 //     │  lg:, full   │                   │  lg:, sheet  │
 //     │  width on    │                   │  on mobile)  │
 //     │  mobile when │                   │              │
@@ -39,8 +37,9 @@ import {
   useRef,
   useState,
 } from "react";
+import Link from "next/link";
 import { useRouter, useSearchParams } from "next/navigation";
-import { ChevronLeft, Info } from "lucide-react";
+import { ChevronLeft, Info, SlidersHorizontal } from "lucide-react";
 import { supabase } from "@/lib/supabase";
 import { useAuth } from "@/lib/useAuth";
 import { UNKNOWN_CITY } from "@/lib/cityColors";
@@ -77,6 +76,7 @@ type ThreadListRow = {
   match_ambiguous: boolean;
   last_message_at: string;
   last_message_preview: string | null;
+  last_message_direction: "inbound" | "outbound" | null;
   created_at: string;
   assigned_to_user_id: string | null;
   assigned_at: string | null;
@@ -371,6 +371,7 @@ export default function CrmClient() {
                     ...t,
                     last_message_at: m.sent_at,
                     last_message_preview: m.body.slice(0, 80),
+                    last_message_direction: m.direction,
                   }
                 : t,
             ),
@@ -566,6 +567,7 @@ export default function CrmClient() {
                 ...t,
                 last_message_at: msg.sent_at,
                 last_message_preview: msg.body.slice(0, 80),
+                last_message_direction: msg.direction,
               }
             : t,
         ),
@@ -591,34 +593,30 @@ export default function CrmClient() {
   const showConversationMobile = !!selectedId;
 
   return (
-    // Wrapper escape and viewport-height math now live in
-    // /crm/page.tsx so the sub-tab strip and this client share
-    // one full-bleed area. min-h-0 + flex-1 lets this column
-    // expand to fill whatever height the page wrapper grants.
+    // Wrapper escape and viewport-height math live in /chats/page.tsx
+    // so this client owns one full-bleed area flush under the top
+    // nav. min-h-0 + flex-1 lets this column expand to fill whatever
+    // height the page wrapper grants.
     <div className="flex min-h-0 flex-1 flex-col bg-cream">
-      {/* Header strip: status pill + active-filter summary. Kept tiny
-          so the inbox + conversation get every available pixel. */}
-      <PageStatusBar
-        loading={threadsLoading}
-        total={threads.length}
-        visible={filteredThreads.length}
+      <ChatsHeader
+        threadsLoading={threadsLoading}
+        totalThreads={threads.length}
+        visibleThreads={filteredThreads.length}
         realtimeOk={realtimeOk}
         onRefresh={() => void loadThreads()}
+        cities={cityFilter}
+        status={statusFilter}
+        onFilterChange={setFilters}
+        canFilterMine={!!appUser?.id}
       />
 
       <div className="flex min-h-0 flex-1">
-        {/* --- LEFT PANE: inbox + filter bar --- */}
+        {/* --- LEFT PANE: inbox (filter row lives in ChatsHeader) --- */}
         <aside
           className={`flex-col border-r border-cream-line bg-white lg:flex lg:w-[280px] lg:shrink-0 ${
             showInboxMobile ? "flex flex-1" : "hidden lg:flex"
           }`}
         >
-          <FilterBar
-            cities={cityFilter}
-            status={statusFilter}
-            onChange={setFilters}
-            canFilterMine={!!appUser?.id}
-          />
           <div className="flex-1 overflow-y-auto">
             {threadsError && (
               <div className="m-2 rounded border border-coral/40 bg-coral-soft p-2 text-xs text-coral-hover">
@@ -730,25 +728,44 @@ export default function CrmClient() {
 }
 
 // ============================================================
-// Page status bar — tiny header strip
+// Chats header — brand-aligned title bar + Players/Matches
+// segmented control + merged filter row + tiny status line.
+// Replaces the old PageStatusBar + CrmSubTabStrip combo.
 // ============================================================
-function PageStatusBar({
-  loading,
-  total,
-  visible,
+function ChatsHeader({
+  threadsLoading,
+  totalThreads,
+  visibleThreads,
   realtimeOk,
   onRefresh,
+  cities,
+  status,
+  onFilterChange,
+  canFilterMine,
 }: {
-  loading: boolean;
-  total: number;
-  visible: number;
+  threadsLoading: boolean;
+  totalThreads: number;
+  visibleThreads: number;
   realtimeOk: boolean | null;
   onRefresh: () => void;
+  cities: Set<string>;
+  status: StatusFilter;
+  onFilterChange: (next: {
+    cities?: Set<string>;
+    status?: StatusFilter;
+  }) => void;
+  canFilterMine: boolean;
 }) {
-  const filtered = visible !== total;
+  // Filter row defaults to visible. The icon collapses it when the
+  // operator wants the bare inbox; a small mint dot on the icon
+  // signals "filters are active" so a collapsed state never hides a
+  // surprising filtered view.
+  const [filtersOpen, setFiltersOpen] = useState(true);
+  const filtersActive = status !== "all" || cities.size > 0;
+
   const liveLabel =
     realtimeOk == null
-      ? "connecting…"
+      ? "connecting"
       : realtimeOk
         ? "live"
         : "offline";
@@ -758,30 +775,101 @@ function PageStatusBar({
       : realtimeOk
         ? "bg-mint"
         : "bg-coral";
+  const filtered = visibleThreads !== totalThreads;
+  const countLabel = threadsLoading
+    ? "Loading"
+    : filtered
+      ? `${visibleThreads} of ${totalThreads}`
+      : `${totalThreads} conversation${totalThreads === 1 ? "" : "s"}`;
 
   return (
-    <div className="flex shrink-0 items-center justify-between gap-3 border-b border-cream-line bg-cream px-3 py-2 text-xs sm:px-4">
-      <span className="text-deep-green/65">
-        {loading
-          ? "Loading…"
-          : filtered
-            ? `${visible} of ${total}`
-            : `${total} conversation${total === 1 ? "" : "s"}`}
-      </span>
-      <div className="flex items-center gap-2">
-        <span className="inline-flex items-center gap-1.5 text-deep-green/55">
-          <span className={`inline-block h-2 w-2 rounded-full ${liveDot}`} />
-          {liveLabel}
-        </span>
+    <header className="shrink-0">
+      {/* Title bar */}
+      <div className="flex h-12 items-center justify-between bg-deep-green px-3 sm:px-4">
+        <h1 className="text-base font-bold tracking-tight text-cream">Chats</h1>
         <button
           type="button"
-          onClick={onRefresh}
-          className="rounded-full border border-cream-line bg-white px-2.5 py-1 text-[11px] font-medium text-deep-green/75 transition hover:bg-cream-soft"
+          onClick={() => setFiltersOpen((o) => !o)}
+          aria-label={filtersOpen ? "Hide filters" : "Show filters"}
+          aria-expanded={filtersOpen}
+          style={{ touchAction: "manipulation" }}
+          className="relative flex h-11 w-11 items-center justify-center rounded-full text-cream/85 transition hover:bg-deep-green-soft hover:text-cream"
         >
-          Refresh
+          <SlidersHorizontal aria-hidden size={18} strokeWidth={1.75} />
+          {filtersActive && (
+            <span
+              aria-hidden
+              className="absolute right-2 top-2 h-2 w-2 rounded-full bg-mint"
+            />
+          )}
         </button>
       </div>
-    </div>
+
+      {/* Segmented control */}
+      <div className="border-b border-cream-line bg-cream px-3 py-2 sm:px-4">
+        <div className="grid grid-cols-2 gap-1 rounded-full border border-deep-green/15 bg-white p-0.5">
+          <SegmentLink href="/chats" label="Players" active />
+          <SegmentLink href="/match-chats" label="Matches" active={false} />
+        </div>
+      </div>
+
+      {/* Filter row */}
+      {filtersOpen && (
+        <FilterBar
+          cities={cities}
+          status={status}
+          onChange={onFilterChange}
+          canFilterMine={canFilterMine}
+        />
+      )}
+
+      {/* Status line */}
+      <div className="flex items-center justify-between gap-2 border-b border-cream-line bg-cream px-3 py-1 sm:px-4">
+        <span className="text-[11px] text-deep-green/55">{countLabel}</span>
+        <div className="flex items-center gap-2 text-[11px]">
+          <span className="inline-flex items-center gap-1 text-deep-green/55">
+            <span
+              aria-hidden
+              className={`inline-block h-1.5 w-1.5 rounded-full ${liveDot}`}
+            />
+            {liveLabel}
+          </span>
+          <button
+            type="button"
+            onClick={onRefresh}
+            style={{ touchAction: "manipulation" }}
+            className="rounded-full px-2 py-0.5 text-[11px] font-medium text-deep-green/70 transition hover:bg-cream-soft hover:text-deep-green"
+          >
+            Refresh
+          </button>
+        </div>
+      </div>
+    </header>
+  );
+}
+
+function SegmentLink({
+  href,
+  label,
+  active,
+}: {
+  href: string;
+  label: string;
+  active: boolean;
+}) {
+  return (
+    <Link
+      href={href}
+      aria-current={active ? "page" : undefined}
+      style={{ touchAction: "manipulation" }}
+      className={`flex h-9 items-center justify-center rounded-full text-sm font-medium transition ${
+        active
+          ? "bg-deep-green text-cream"
+          : "text-deep-green/60 hover:bg-cream-soft hover:text-deep-green"
+      }`}
+    >
+      {label}
+    </Link>
   );
 }
 

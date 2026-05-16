@@ -4,6 +4,17 @@
 :root {
   --background: #f4eee1;
   --foreground: #003326;
+
+  /* Fixed mobile bottom nav reserves vertical space on auth-gated
+     pages. 0 on desktop so the desktop top-nav stays the only chrome;
+     56px + safe-area inside the nav for the iOS home indicator. */
+  --bottom-nav-h: 0px;
+}
+
+@media (max-width: 767.98px) {
+  :root {
+    --bottom-nav-h: 56px;
+  }
 }
 
 @theme inline {

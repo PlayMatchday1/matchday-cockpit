@@ -5,6 +5,7 @@ import { usePathname, useRouter } from "next/navigation";
 import { hasAnyAccess, useAuth } from "@/lib/useAuth";
 import { supabase } from "@/lib/supabase";
 import TopNav from "./TopNav";
+import MobileBottomNav from "./MobileBottomNav";
 
 const PUBLIC_PATHS = ["/login", "/auth/callback"];
 
@@ -57,7 +58,13 @@ export default function AuthGate({ children }: { children: React.ReactNode }) {
   return (
     <>
       <TopNav />
-      <main className="mx-auto max-w-6xl px-6 py-8">{children}</main>
+      <main
+        className="mx-auto max-w-6xl px-6 py-8"
+        style={{ paddingBottom: "calc(2rem + var(--bottom-nav-h))" }}
+      >
+        {children}
+      </main>
+      <MobileBottomNav />
     </>
   );
 }
