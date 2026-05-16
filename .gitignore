@@ -42,3 +42,16 @@ next-env.d.ts
 
 # Claude Code local state (per-machine, do not commit)
 .claude/
+.env*.local
+
+# Firebase service account — local-only credential for Match Chats
+# investigation / dev. Production reads FIREBASE_SERVICE_ACCOUNT_JSON
+# from Vercel env (Sensitive). Never commit this file.
+firebase-service-account.json
+
+# macOS Finder copy-suffix dupes (e.g. "favicon 2.ico", "icon 3.png").
+# Created accidentally by Finder / iCloud sync; never something we
+# actually intend to commit. Cleaned out the 14 existing ones in
+# the PWA Phase 1 PR; this pattern prevents fresh ones from
+# polluting `git status` going forward.
+public/* [0-9].*
