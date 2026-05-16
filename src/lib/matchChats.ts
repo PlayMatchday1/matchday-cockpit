@@ -164,7 +164,25 @@ export function isValidChatId(id: string): boolean {
 // Players see a unified "MatchDay" voice; internal accountability
 // lives in match_chat_audit_log.
 export const MATCHDAY_SENDER_NAME = "MatchDay";
-export const MATCHDAY_SENDER_USER_ID = "cockpit:matchday-system";
+// Numeric sentinel chosen to match the player message shape: every
+// real player has `user._id` as a number (mdapi auto-increment id,
+// currently 4-digit range — player 4307 in our investigation
+// sample). The consumer React Native app appears to do arithmetic
+// or numeric comparisons on this field (probably via a custom
+// react-native-gifted-chat bubble renderer) — a string here
+// produces NaN and renders the Cockpit's bubble clipped off the
+// left edge of the screen.
+//
+// 9999999999 (10 digits, ~9.99 billion) is well past any plausible
+// mdapi auto-increment for decades, and well under Number
+// .MAX_SAFE_INTEGER (9.0 × 10¹⁵) so it round-trips through JSON
+// /Firestore without precision loss. Recognizable in logs as the
+// "all nines" Cockpit sender.
+//
+// avatar stays null (matches the legacy player shape pre-email
+// /phone — those messages render correctly today, so null is not
+// the bug). Only the _id type changes.
+export const MATCHDAY_SENDER_USER_ID = 9999999999;
 
 // Active section: messages newer than this many days.
 export const ACTIVE_WINDOW_DAYS = 7;
