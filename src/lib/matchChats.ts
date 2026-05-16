@@ -179,9 +179,10 @@ export const MATCHDAY_SENDER_NAME = "MatchDay";
 // /Firestore without precision loss. Recognizable in logs as the
 // "all nines" Cockpit sender.
 //
-// avatar stays null (matches the legacy player shape pre-email
-// /phone — those messages render correctly today, so null is not
-// the bug). Only the _id type changes.
+// avatar: "" matches modern player shape. Previously tried null (PR #37
+// comment asserted it was safe based on legacy-player rendering), but
+// clipping persisted on the consumer app. Moved to "" to match real
+// player payloads exactly.
 export const MATCHDAY_SENDER_USER_ID = 9999999999;
 
 // Active section: messages newer than this many days.
