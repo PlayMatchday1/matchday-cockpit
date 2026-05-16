@@ -44,8 +44,13 @@ function formatTime(iso: string): string {
 
 export default function MessageBubble({
   msg,
+  className,
 }: {
   msg: ConversationMessage;
+  // Parent-supplied margin class. The conversation list uses
+  // direction-aware spacing (mt-3 same-direction, mt-6 direction-
+  // switch, mt-0 right after a date divider). Defaults to mt-3.
+  className?: string;
 }) {
   const isInbound = msg.direction === "inbound";
   const senderLabel =
@@ -65,7 +70,7 @@ export default function MessageBubble({
 
   return (
     <li
-      className={`flex flex-col ${isInbound ? "items-start" : "items-end"}`}
+      className={`flex flex-col ${isInbound ? "items-start" : "items-end"} ${className ?? "mt-3"}`}
     >
       <div
         className={`max-w-[80%] px-3 py-2 text-sm leading-relaxed whitespace-pre-wrap ${bubbleShape} ${bubbleColor}`}
