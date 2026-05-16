@@ -597,7 +597,7 @@ export default function CrmClient() {
     // so this client owns one full-bleed area flush under the top
     // nav. min-h-0 + flex-1 lets this column expand to fill whatever
     // height the page wrapper grants.
-    <div className="flex min-h-0 flex-1 flex-col bg-cream">
+    <div className="flex min-h-0 min-w-0 flex-1 flex-col bg-cream">
       <ChatsHeader
         threadsLoading={threadsLoading}
         totalThreads={threads.length}
@@ -783,7 +783,7 @@ function ChatsHeader({
       : `${totalThreads} conversation${totalThreads === 1 ? "" : "s"}`;
 
   return (
-    <header className="shrink-0">
+    <header className="min-w-0 shrink-0">
       {/* Title bar */}
       <div className="flex h-12 items-center justify-between bg-deep-green px-3 sm:px-4">
         <h1 className="text-base font-bold tracking-tight text-cream">Chats</h1>
