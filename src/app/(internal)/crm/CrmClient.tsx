@@ -37,6 +37,15 @@ import AssigneeChip, { type Assignee } from "@/components/AssigneeChip";
 import MatchStatusPill, {
   type MatchStatus,
 } from "@/components/MatchStatusPill";
+import ChannelChip, {
+  channelDisplay,
+  type CrmChannel,
+} from "@/components/ChannelChip";
+
+// WhatsApp's 24-hour customer service window. Mirrored from
+// /api/crm/send — the server enforces, the client just hides the
+// composer + shows a muted hint when expired.
+const WHATSAPP_WINDOW_MS = 24 * 60 * 60 * 1000;
 
 // ---------------- types ----------------
 
@@ -50,6 +59,7 @@ type ThreadListRow = {
   created_at: string;
   assigned_to_user_id: string | null;
   assigned_at: string | null;
+  channel: CrmChannel;
   player: {
     first_name: string | null;
     last_name: string | null;
@@ -97,6 +107,10 @@ type ThreadDetail = {
   assignee: Assignee | null;
   recent_matches: RecentMatch[];
   historical_account_count: number | null;
+  // ISO timestamp of the newest inbound message for this thread,
+  // or null if no inbound exists yet. Used to evaluate the
+  // WhatsApp 24-hour window client-side. SMS ignores this.
+  latest_inbound_at: string | null;
 };
 
 type StatusFilter = "all" | "unassigned" | "mine";
@@ -932,6 +946,7 @@ function ThreadRow({
         </div>
         <div className="mt-1.5 flex flex-wrap items-center gap-1.5">
           <CityChip code={cityCode} />
+          <ChannelChip channel={t.channel ?? "sms"} />
           <AssigneeChip assignee={t.assignee} size="sm" />
           {t.match_ambiguous && (
             <span
@@ -1030,9 +1045,27 @@ function ConversationPane({
         threadId={selectedId}
         appUserId={appUserId}
         onSent={onSent}
+        channel={detail?.thread.channel ?? "sms"}
+        whatsappWindowExpired={computeWhatsAppExpired(detail)}
       />
     </section>
   );
+}
+
+// WhatsApp's 24-hour session rule: outbound text messages require an
+// inbound from the player in the last 24 hours. SMS threads are
+// always sendable. Returns true ONLY for WhatsApp threads where the
+// latest inbound is older than the window (or there is no inbound
+// at all). The server enforces the same rule and 422s if violated;
+// this client check just disables the composer pre-emptively.
+function computeWhatsAppExpired(detail: ThreadDetail | null): boolean {
+  if (!detail) return false;
+  if ((detail.thread.channel ?? "sms") !== "whatsapp") return false;
+  const iso = detail.latest_inbound_at;
+  if (!iso) return true; // no inbound yet → no window to ride
+  const t = Date.parse(iso);
+  if (Number.isNaN(t)) return true;
+  return Date.now() - t > WHATSAPP_WINDOW_MS;
 }
 
 function ConversationHeader({
@@ -1046,6 +1079,7 @@ function ConversationHeader({
 }) {
   const name = displayNameForThread(detail.thread);
   const cityCode = cityCodeForThread(detail.thread);
+  const channel = detail.thread.channel ?? "sms";
   return (
     <div className="flex items-center justify-between gap-4">
       <div className="min-w-0">
@@ -1055,6 +1089,10 @@ function ConversationHeader({
         <div className="mt-0.5 flex flex-wrap items-center gap-2 text-xs text-deep-green/60">
           <span className="font-mono">{detail.thread.phone_number}</span>
           <CityChip code={cityCode} />
+          <span className="inline-flex items-center gap-1 text-[11px] text-deep-green/55">
+            <ChannelChip channel={channel} />
+            via {channelDisplay(channel)}
+          </span>
           {detail.thread.match_ambiguous && (
             <span
               title="Phone has historical accounts on file — showing the most recent"
@@ -1218,10 +1256,14 @@ function Composer({
   threadId,
   appUserId,
   onSent,
+  channel,
+  whatsappWindowExpired,
 }: {
   threadId: string;
   appUserId: string | null;
   onSent: (m: Message) => void;
+  channel: CrmChannel;
+  whatsappWindowExpired: boolean;
 }) {
   const [body, setBody] = useState("");
   const [sending, setSending] = useState(false);
@@ -1287,40 +1329,54 @@ function Composer({
     [submit],
   );
 
+  const disabled = sending || !appUserId || whatsappWindowExpired;
+  const placeholder = !appUserId
+    ? "Sign in to send."
+    : whatsappWindowExpired
+      ? "WhatsApp session expired — player must message first to reopen the 24-hour window."
+      : "Type a reply. Enter to send, Shift+Enter for newline.";
+
   return (
     <div className="border-t border-cream-line bg-white px-4 py-3">
+      {whatsappWindowExpired && (
+        <div className="mb-2 rounded-md border border-cream-line bg-cream-soft px-2 py-1.5 text-[11px] text-deep-green/60">
+          <span aria-hidden className="mr-1">ⓘ</span>
+          WhatsApp session expired — player must message first to reopen the 24-hour window.
+        </div>
+      )}
       <textarea
         ref={taRef}
         value={body}
-        disabled={sending || !appUserId}
+        disabled={disabled}
         onChange={(e) => setBody(e.target.value)}
         onKeyDown={onKeyDown}
-        placeholder={
-          appUserId
-            ? "Type a reply. Enter to send, Shift+Enter for newline."
-            : "Sign in to send."
-        }
-        className="block w-full resize-none rounded-md border border-cream-line bg-white px-3 py-2 text-sm text-deep-green placeholder:text-deep-green/40 focus:border-deep-green focus:outline-none"
+        placeholder={placeholder}
+        className="block w-full resize-none rounded-md border border-cream-line bg-white px-3 py-2 text-sm text-deep-green placeholder:text-deep-green/40 focus:border-deep-green focus:outline-none disabled:bg-cream-soft disabled:text-deep-green/40"
         style={{ minHeight: 80, maxHeight: 240 }}
       />
       <div className="mt-2 flex items-center justify-between text-xs text-deep-green/60">
         <div>
           <span className="font-medium text-deep-green">{body.length}</span>{" "}
-          chars ·{" "}
-          {budget.encoding === "gsm7"
-            ? "GSM-7 (160/seg)"
-            : "UCS-2 (70/seg)"}{" "}
-          ·{" "}
-          <span className="font-medium text-deep-green">
-            {budget.segments}
-          </span>{" "}
-          segment{budget.segments === 1 ? "" : "s"}
+          chars
+          {channel === "sms" && (
+            <>
+              {" · "}
+              {budget.encoding === "gsm7"
+                ? "GSM-7 (160/seg)"
+                : "UCS-2 (70/seg)"}
+              {" · "}
+              <span className="font-medium text-deep-green">
+                {budget.segments}
+              </span>{" "}
+              segment{budget.segments === 1 ? "" : "s"}
+            </>
+          )}
           {error && <span className="ml-2 text-coral-hover">{error}</span>}
         </div>
         <button
           type="button"
           onClick={() => void submit()}
-          disabled={sending || !body.trim() || !appUserId}
+          disabled={sending || !body.trim() || !appUserId || whatsappWindowExpired}
           className="rounded-full bg-deep-green px-3 py-1 text-xs font-medium text-cream transition hover:bg-deep-green-hover disabled:opacity-40"
         >
           {sending ? "Sending…" : "Send"}

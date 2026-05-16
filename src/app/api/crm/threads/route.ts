@@ -31,6 +31,7 @@ type ThreadRow = {
   created_at: string;
   assigned_to_user_id: string | null;
   assigned_at: string | null;
+  channel: "sms" | "whatsapp";
 };
 
 type PlayerRow = {
@@ -56,7 +57,7 @@ export async function GET(req: Request) {
   const threadsRes = await supabase
     .from("crm_threads")
     .select(
-      "id, phone_number, player_id, match_ambiguous, last_message_at, last_message_preview, created_at, assigned_to_user_id, assigned_at",
+      "id, phone_number, player_id, match_ambiguous, last_message_at, last_message_preview, created_at, assigned_to_user_id, assigned_at, channel",
     )
     .order("last_message_at", { ascending: false })
     .limit(LIMIT);

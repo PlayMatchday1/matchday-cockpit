@@ -40,7 +40,7 @@ export async function GET(req: Request, ctx: RouteCtx) {
   const threadRes = await supabase
     .from("crm_threads")
     .select(
-      "id, phone_number, player_id, match_ambiguous, last_message_at, last_message_preview, created_at, assigned_to_user_id, assigned_at",
+      "id, phone_number, player_id, match_ambiguous, last_message_at, last_message_preview, created_at, assigned_to_user_id, assigned_at, channel",
     )
     .eq("id", threadId)
     .maybeSingle();
@@ -74,7 +74,7 @@ export async function GET(req: Request, ctx: RouteCtx) {
   const messagesRes = await supabase
     .from("crm_messages")
     .select(
-      "id, thread_id, direction, body, sent_at, sent_by_user_id, telnyx_message_id, segment_count",
+      "id, thread_id, direction, body, sent_at, sent_by_user_id, telnyx_message_id, external_message_id, segment_count, channel",
     )
     .eq("thread_id", threadId)
     .order("sent_at", { ascending: true });
@@ -167,6 +167,18 @@ export async function GET(req: Request, ctx: RouteCtx) {
     );
   }
 
+  // Latest inbound message timestamp — used client-side to enforce
+  // the WhatsApp 24-hour session window (compose disabled past it).
+  // Derived from the already-loaded messages so no extra query.
+  let latest_inbound_at: string | null = null;
+  for (let i = (messagesRes.data?.length ?? 0) - 1; i >= 0; i--) {
+    const m = messagesRes.data![i];
+    if (m.direction === "inbound" && typeof m.sent_at === "string") {
+      latest_inbound_at = m.sent_at;
+      break;
+    }
+  }
+
   return Response.json(
     {
       thread,
@@ -175,6 +187,7 @@ export async function GET(req: Request, ctx: RouteCtx) {
       assignee,
       recent_matches,
       historical_account_count,
+      latest_inbound_at,
     },
     { status: 200 },
   );
