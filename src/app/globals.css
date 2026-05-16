@@ -1,6 +1,16 @@
 @import "tailwindcss";
 @plugin "@tailwindcss/typography";
 
+/* Global horizontal-overflow guard at the root element. Lives on html
+   (not body) so it propagates to the viewport per CSS spec without
+   making body a containing block for position:fixed descendants. iOS
+   Safari PWA standalone treats body{overflow} as a scroll container
+   and re-anchors fixed elements to body height; html{overflow} does
+   not have that side effect. */
+html {
+  overflow-x: hidden;
+}
+
 :root {
   --background: #f4eee1;
   --foreground: #003326;
@@ -70,11 +80,6 @@ body {
   background-size: 22px 22px;
   color: var(--foreground);
   font-family: var(--font-sans), ui-sans-serif, system-ui, sans-serif;
-  /* Global safety net. Any subtree that accidentally grows wider than
-     the viewport (flex item min-width:auto, fixed-width images, long
-     unbroken text) gets clipped here instead of shifting the entire
-     page off-center. Vertical scroll is unaffected. */
-  overflow-x: hidden;
 }
 
 h1,

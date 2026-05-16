@@ -20,7 +20,7 @@ export const metadata: Metadata = {
 export default function MatchChatsPage() {
   return (
     <AdminGuard>
-      <div className="-mx-6 -my-8 flex h-[calc(100vh-4rem)] flex-col">
+      <div className="-mx-6 -my-8 flex h-[calc(100vh-4rem-env(safe-area-inset-top))] flex-col">
         <CrmSubTabStrip />
         <Suspense fallback={null}>
           <MatchChatsClient />
