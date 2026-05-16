@@ -588,7 +588,11 @@ export default function CrmClient() {
   const showConversationMobile = !!selectedId;
 
   return (
-    <div className="flex h-[calc(100vh-7rem)] flex-col bg-cream sm:h-[calc(100vh-7.5rem)]">
+    // Wrapper escape and viewport-height math now live in
+    // /crm/page.tsx so the sub-tab strip and this client share
+    // one full-bleed area. min-h-0 + flex-1 lets this column
+    // expand to fill whatever height the page wrapper grants.
+    <div className="flex min-h-0 flex-1 flex-col bg-cream">
       {/* Header strip: status pill + active-filter summary. Kept tiny
           so the inbox + conversation get every available pixel. */}
       <PageStatusBar
@@ -670,24 +674,29 @@ export default function CrmClient() {
           )}
         </section>
 
-        {/* --- RIGHT PANE: context (desktop column) --- */}
-        <ContextPanel
-          mode="column"
-          open={false}
-          thread={
-            selectedThread
-              ? {
-                  phone_number: selectedThread.phone_number,
-                  match_ambiguous: selectedThread.match_ambiguous,
-                }
-              : null
-          }
-          player={detail?.player ?? null}
-          recentMatches={detail?.recent_matches ?? []}
-          historicalAccountCount={detail?.historical_account_count ?? null}
-          supabaseProjectRef={supabaseProjectRef}
-          loading={detailLoading}
-        />
+        {/* --- RIGHT PANE: context (desktop column) ---
+            Conditional on a selected thread. Before this change the
+            column was mounted unconditionally and merely hidden via
+            CSS — that left a stray 240px placeholder on desktop
+            when no thread was selected and the empty state was the
+            only thing visible in the center pane. Now the column
+            unmounts when selectedThread is null so the center pane
+            expands to fill the freed width. */}
+        {selectedThread && (
+          <ContextPanel
+            mode="column"
+            open={false}
+            thread={{
+              phone_number: selectedThread.phone_number,
+              match_ambiguous: selectedThread.match_ambiguous,
+            }}
+            player={detail?.player ?? null}
+            recentMatches={detail?.recent_matches ?? []}
+            historicalAccountCount={detail?.historical_account_count ?? null}
+            supabaseProjectRef={supabaseProjectRef}
+            loading={detailLoading}
+          />
+        )}
       </div>
 
       {/* Mobile context sheet — only mounted under lg:. Always present

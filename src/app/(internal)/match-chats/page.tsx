@@ -8,9 +8,10 @@ import MatchChatsClient from "./MatchChatsClient";
 // Upcoming), right = selected chat with realtime listener and
 // composer. URL state: ?chatId=…&tab=active|upcoming.
 //
-// The sub-tab strip at the top lets operators bounce between Player
-// Chat (/crm) and Match Chats (/match-chats) without going through
-// the top nav — both surfaces handle live player conversations.
+// Outer div mirrors /crm — escapes AuthGate's main wrapper so the
+// sub-tab strip + client occupy a single full-bleed surface flush
+// with the top nav. The MatchChatsClient root no longer needs its
+// own `-mx-6 -my-8` escape; that responsibility moved up here.
 
 export const metadata: Metadata = {
   title: "Match Chats",
@@ -19,10 +20,12 @@ export const metadata: Metadata = {
 export default function MatchChatsPage() {
   return (
     <AdminGuard>
-      <CrmSubTabStrip />
-      <Suspense fallback={null}>
-        <MatchChatsClient />
-      </Suspense>
+      <div className="-mx-6 -my-8 flex h-[calc(100vh-4rem)] flex-col">
+        <CrmSubTabStrip />
+        <Suspense fallback={null}>
+          <MatchChatsClient />
+        </Suspense>
+      </div>
     </AdminGuard>
   );
 }

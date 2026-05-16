@@ -58,8 +58,13 @@ export default function MatchChatsClient() {
     [router, searchParams],
   );
 
+  // Wrapper escape and viewport-height math now live in
+  // /match-chats/page.tsx so the sub-tab strip and this client
+  // share one full-bleed area. min-h-0 + flex-1 lets the inner
+  // two-pane shell expand to fill whatever height the page
+  // wrapper grants.
   return (
-    <div className="-mx-6 -my-8 flex h-[calc(100vh-4rem)] bg-cream">
+    <div className="flex min-h-0 flex-1 bg-cream">
       <MatchChatsInbox
         selectedChatId={selectedChatId}
         tab={tab}
