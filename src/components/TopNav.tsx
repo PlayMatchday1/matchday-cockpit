@@ -92,7 +92,10 @@ export default function TopNav() {
   const adminActive = pathname === "/admin";
 
   return (
-    <header className="bg-deep-green text-cream">
+    <header
+      className="bg-deep-green text-cream"
+      style={{ paddingTop: "env(safe-area-inset-top)" }}
+    >
       <div className="mx-auto max-w-6xl px-4 sm:px-6">
         <div className="flex h-16 items-center justify-between gap-2 sm:gap-4">
           <Link
