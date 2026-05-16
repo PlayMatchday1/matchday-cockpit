@@ -25,23 +25,23 @@ const bebas = Bebas_Neue({
 });
 
 export const metadata: Metadata = {
-  title: "MatchDay Clubhouse",
+  title: "MD Clubhouse",
   description: "Internal ops dashboard for MatchDay.",
   // Web manifest for PWA install on iOS Safari + Android Chrome.
   // Served from public/manifest.json.
   manifest: "/manifest.json",
-  // iOS Safari ignores manifest icons for the home-screen install —
+  // iOS Safari ignores manifest icons for the home-screen install,
   // it requires <link rel="apple-touch-icon">. Next's metadata API
-  // surfaces these via `icons.apple`. The 180×180 covers iPhone
-  // retina; iPad sizes (152/167) are deferred to a future enhance-
-  // ment (operators are iPhone-only per Phase 1 scope).
+  // surfaces these via `icons.apple`. Points at the root-level
+  // /apple-touch-icon.png so iOS also picks it up via its default
+  // auto-discovery path.
   icons: {
     icon: [
       { url: "/matchday-badge.svg", type: "image/svg+xml" },
-      { url: "/icons/icon-192.png", sizes: "192x192", type: "image/png" },
+      { url: "/icon-512.png", sizes: "512x512", type: "image/png" },
     ],
     apple: [
-      { url: "/icons/apple-touch-icon-180.png", sizes: "180x180" },
+      { url: "/apple-touch-icon.png" },
     ],
   },
   // Home-screen launcher title on iOS. Distinct from `<title>`
@@ -49,7 +49,7 @@ export const metadata: Metadata = {
   // form fits under the icon.
   appleWebApp: {
     capable: true,
-    title: "MatchDay",
+    title: "MD Clubhouse",
     // black-translucent lets the dark-green TopNav extend up
     // behind the iPhone status bar area when launched from
     // Home Screen. Operators see a continuous green chrome
