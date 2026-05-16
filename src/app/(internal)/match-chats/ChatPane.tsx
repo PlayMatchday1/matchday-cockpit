@@ -560,7 +560,8 @@ function ChatPaneInner({
             type="button"
             onClick={() => void submit()}
             disabled={sending || !body.trim()}
-            className="rounded-full bg-deep-green px-3 py-1 text-xs font-medium text-cream transition hover:bg-deep-green-hover disabled:opacity-40"
+            style={{ touchAction: "manipulation" }}
+            className="h-11 min-w-[88px] rounded-full bg-deep-green px-4 text-sm font-medium text-cream transition hover:bg-deep-green-hover disabled:opacity-40"
           >
             {sending ? "Sending…" : "Send"}
           </button>
