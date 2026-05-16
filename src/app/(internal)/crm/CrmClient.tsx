@@ -881,11 +881,7 @@ function Conversation({
             No messages in this thread yet.
           </div>
         )}
-        <ul className="space-y-2.5">
-          {messages.map((m) => (
-            <MessageBubble key={m.id} msg={m as ConversationMessage} />
-          ))}
-        </ul>
+        <ConversationList messages={messages as ConversationMessage[]} />
       </div>
       <Composer
         threadId={selectedId}
@@ -895,6 +891,147 @@ function Conversation({
         onSent={onSent}
       />
     </>
+  );
+}
+
+// ============================================================
+// Conversation list with date dividers + direction-aware spacing
+// ============================================================
+// Replaces the flat `space-y-2.5` list. Visual rhythm:
+//
+//   ┌ same-direction bubble  (mt-3 = 12px gap above)
+//   ┌ different-direction    (mt-6 = 24px gap above)
+//   ─ date divider ─         (own py-3, ~32px total around it)
+//
+// Date divider triggers:
+//   - first message ever in the thread
+//   - calendar-day change between consecutive messages
+//   - >2 hour gap (renders a time label, not a date)
+//
+// Tight spacing on the SAME direction simulates the iOS Messages
+// idiom where rapid-fire replies stack close. Direction switches
+// get more breathing room so the eye can re-anchor.
+
+type ConversationItem =
+  | { kind: "msg"; msg: ConversationMessage; marginTop: string }
+  | { kind: "divider"; key: string; label: string };
+
+const GAP_MS = 2 * 60 * 60 * 1000; // 2 hours
+
+function dateKeyOf(d: Date): string {
+  return `${d.getFullYear()}-${d.getMonth()}-${d.getDate()}`;
+}
+
+function friendlyDateLabel(d: Date): string {
+  const today = new Date();
+  const todayKey = dateKeyOf(today);
+  const yest = new Date(today.getTime() - 24 * 60 * 60 * 1000);
+  const yestKey = dateKeyOf(yest);
+  const k = dateKeyOf(d);
+  if (k === todayKey) return "Today";
+  if (k === yestKey) return "Yesterday";
+  const diffDays = Math.floor(
+    (today.getTime() - d.getTime()) / (24 * 60 * 60 * 1000),
+  );
+  if (diffDays >= 0 && diffDays < 7) {
+    return d.toLocaleDateString(undefined, { weekday: "long" });
+  }
+  return d.toLocaleDateString(undefined, {
+    month: "short",
+    day: "numeric",
+    year:
+      d.getFullYear() === today.getFullYear() ? undefined : "numeric",
+  });
+}
+
+function friendlyTimeLabel(d: Date): string {
+  return d.toLocaleTimeString(undefined, {
+    hour: "numeric",
+    minute: "2-digit",
+  });
+}
+
+function buildConversationItems(
+  messages: ConversationMessage[],
+): ConversationItem[] {
+  const out: ConversationItem[] = [];
+  let prevDateKey: string | null = null;
+  let prevTime: number | null = null;
+  let prevDirection: "inbound" | "outbound" | null = null;
+
+  messages.forEach((m, i) => {
+    const d = new Date(m.sent_at);
+    const t = d.getTime();
+    const dKey = dateKeyOf(d);
+    const dayChanged = prevDateKey !== null && dKey !== prevDateKey;
+    const bigGap = prevTime !== null && t - prevTime > GAP_MS;
+    const isFirst = prevDateKey === null;
+
+    if (isFirst || dayChanged) {
+      out.push({
+        kind: "divider",
+        key: `d-${i}`,
+        label: friendlyDateLabel(d),
+      });
+    } else if (bigGap) {
+      // Mid-day gap — show the time the next message landed at.
+      out.push({
+        kind: "divider",
+        key: `g-${i}`,
+        label: friendlyTimeLabel(d),
+      });
+    }
+
+    let marginTop = "mt-3"; // 12px — same direction default
+    if (prevDirection !== null && prevDirection !== m.direction) {
+      marginTop = "mt-6"; // 24px — direction switch
+    }
+    if (isFirst || dayChanged || bigGap) {
+      marginTop = "mt-0"; // divider supplies the vertical rhythm
+    }
+
+    out.push({ kind: "msg", msg: m, marginTop });
+    prevDateKey = dKey;
+    prevTime = t;
+    prevDirection = m.direction;
+  });
+
+  return out;
+}
+
+function ConversationList({
+  messages,
+}: {
+  messages: ConversationMessage[];
+}) {
+  const items = useMemo(() => buildConversationItems(messages), [messages]);
+  return (
+    <ul>
+      {items.map((it) => {
+        if (it.kind === "divider") {
+          return (
+            <li
+              key={it.key}
+              className="flex items-center gap-2 py-3"
+              aria-label={`Conversation divider: ${it.label}`}
+            >
+              <hr className="flex-1 border-cream-line" />
+              <span className="text-[10px] font-medium uppercase tracking-wider text-deep-green/40">
+                {it.label}
+              </span>
+              <hr className="flex-1 border-cream-line" />
+            </li>
+          );
+        }
+        return (
+          <MessageBubble
+            key={it.msg.id}
+            msg={it.msg}
+            className={it.marginTop}
+          />
+        );
+      })}
+    </ul>
   );
 }
 
@@ -911,14 +1048,24 @@ function ConversationHeader({
   onBack: () => void;
   onOpenContext: () => void;
 }) {
+  // Wrap onBack so any underlying touchstart/click ordering bugs
+  // can't fall through to a parent handler. Bumped to h-11 w-11
+  // (44px) to clear the iOS recommended tap-target floor — at
+  // h-9 w-9 (36px) the chevron was tapping a hairline off-target
+  // on small phones and the user reported it as a no-op.
+  const handleBack = (e: React.MouseEvent | React.TouchEvent) => {
+    e.stopPropagation();
+    onBack();
+  };
+
   if (!detail) {
     return (
-      <div className="flex h-14 shrink-0 items-center gap-2 border-b border-cream-line bg-white px-3 sm:px-4">
+      <div className="flex h-14 shrink-0 items-center gap-2 border-b border-cream-line bg-white px-2 sm:px-4">
         <button
           type="button"
-          onClick={onBack}
+          onClick={handleBack}
           aria-label="Back to inbox"
-          className="inline-flex h-9 w-9 items-center justify-center rounded-full text-deep-green/70 hover:bg-cream-soft hover:text-deep-green lg:hidden"
+          className="inline-flex h-11 w-11 shrink-0 items-center justify-center rounded-full text-deep-green/70 hover:bg-cream-soft hover:text-deep-green lg:hidden"
         >
           <ChevronLeft aria-hidden className="h-5 w-5" />
         </button>
@@ -931,12 +1078,12 @@ function ConversationHeader({
   const channel = detail.thread.channel ?? "sms";
   const matchCount = detail.player?.total_match_count;
   return (
-    <div className="flex h-14 shrink-0 items-center gap-2 border-b border-cream-line bg-white px-2 sm:px-3">
+    <div className="flex h-14 shrink-0 items-center gap-2 border-b border-cream-line bg-white px-1 sm:px-3">
       <button
         type="button"
-        onClick={onBack}
+        onClick={handleBack}
         aria-label="Back to inbox"
-        className="inline-flex h-9 w-9 items-center justify-center rounded-full text-deep-green/70 hover:bg-cream-soft hover:text-deep-green lg:hidden"
+        className="inline-flex h-11 w-11 shrink-0 items-center justify-center rounded-full text-deep-green/70 hover:bg-cream-soft hover:text-deep-green lg:hidden"
       >
         <ChevronLeft aria-hidden className="h-5 w-5" />
       </button>
@@ -951,30 +1098,40 @@ function ConversationHeader({
         <div className="truncate text-sm font-extrabold tracking-tight text-deep-green">
           {name}
         </div>
+        {/* Mobile (<lg): show only the phone number under the name —
+            avatar already carries the channel icon. The richer chip
+            row (city, "via WhatsApp", match count, historical) lives
+            behind `hidden lg:flex` and stays accessible on mobile
+            via the info-icon sheet. */}
         <div className="mt-0.5 flex items-center gap-1.5 text-[10px] text-deep-green/55">
-          <CityChip code={cityCode} />
-          <span aria-hidden>·</span>
-          <span className="inline-flex items-center gap-0.5">
-            <ChannelChip channel={channel} />
-            via {channelDisplay(channel)}
+          <span className="truncate font-mono lg:hidden">
+            {detail.thread.phone_number}
           </span>
-          {typeof matchCount === "number" && (
-            <>
-              <span aria-hidden>·</span>
-              <span>{matchCount} matches</span>
-            </>
-          )}
-          {detail.thread.match_ambiguous && (
-            <>
-              <span aria-hidden>·</span>
-              <span
-                title="Phone has historical accounts on file — showing the most recent"
-                className="inline-flex items-center gap-0.5 rounded-full bg-muted-soft px-1.5 py-px font-medium text-muted"
-              >
-                <span aria-hidden>ⓘ</span> historical
-              </span>
-            </>
-          )}
+          <div className="hidden items-center gap-1.5 lg:flex">
+            <CityChip code={cityCode} />
+            <span aria-hidden>·</span>
+            <span className="inline-flex items-center gap-0.5">
+              <ChannelChip channel={channel} />
+              via {channelDisplay(channel)}
+            </span>
+            {typeof matchCount === "number" && (
+              <>
+                <span aria-hidden>·</span>
+                <span>{matchCount} matches</span>
+              </>
+            )}
+            {detail.thread.match_ambiguous && (
+              <>
+                <span aria-hidden>·</span>
+                <span
+                  title="Phone has historical accounts on file — showing the most recent"
+                  className="inline-flex items-center gap-0.5 rounded-full bg-muted-soft px-1.5 py-px font-medium text-muted"
+                >
+                  <span aria-hidden>ⓘ</span> historical
+                </span>
+              </>
+            )}
+          </div>
         </div>
       </div>
       <AssignDropdown
