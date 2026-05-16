@@ -146,13 +146,21 @@ export async function POST(req: Request) {
     }
   }
 
-  // 6) Fire Google Chat notifications AFTER ack-ing Meta. Meta's
-  //    retry window is short, Google Chat can be slow — but the
-  //    notifier helper has its own 3s timeout + swallow-and-log,
-  //    so even firing inline here is bounded. We await so the
-  //    serverless function doesn't shut down mid-send.
+  // 6) Fire Google Chat notifications AFTER ack-ing Meta. Belt-and-
+  //    suspenders bounding here: the notifier helper has its own
+  //    AbortSignal-based 2s timeout AND we Promise.race against a
+  //    2s timer at the call site. The race exists because a
+  //    previous bug had this await hang for the full 15s Vercel
+  //    timeout when the gchat fetch wedged, turning every new
+  //    thread into a 504. Notification is best-effort — failures
+  //    here must NEVER throw into the webhook response path.
   for (const n of notifications) {
-    await notifyNewWhatsAppThread(n);
+    await Promise.race([
+      notifyNewWhatsAppThread(n),
+      new Promise((resolve) => setTimeout(resolve, 2000)),
+    ]).catch((err) => {
+      console.error("[whatsapp:webhook] gchat notify failed:", err);
+    });
   }
 
   const elapsed = Date.now() - startedAt;

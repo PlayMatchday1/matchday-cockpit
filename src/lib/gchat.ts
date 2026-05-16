@@ -82,17 +82,18 @@ export async function notifyNewWhatsAppThread(
     ],
   };
 
-  // 3-second timeout — well under Meta's webhook retry window. If
-  // Google Chat is slow we'd rather skip the notification than have
-  // Meta retry.
-  const ac = new AbortController();
-  const t = setTimeout(() => ac.abort(), 3000);
+  // 2-second timeout via the native AbortSignal.timeout (Node 18+,
+  // ambient on Vercel). On expiry the fetch rejects with a
+  // DOMException name="TimeoutError" — caught + logged below.
+  // Belt-and-suspenders: the call site in /api/whatsapp/webhook
+  // also wraps this whole call in a 2s Promise.race so the webhook
+  // can't hang even if this fetch's signal somehow doesn't fire.
   try {
     const resp = await fetch(webhook, {
       method: "POST",
       headers: { "Content-Type": "application/json" },
       body: JSON.stringify(card),
-      signal: ac.signal,
+      signal: AbortSignal.timeout(2000),
     });
     if (!resp.ok) {
       const text = await resp.text().catch(() => "");
@@ -101,12 +102,11 @@ export async function notifyNewWhatsAppThread(
       );
     }
   } catch (err) {
-    // AbortError or network failure — swallowed by design.
+    // TimeoutError, AbortError, or network failure — swallowed by
+    // design. Logged so we can spot patterns in Vercel logs.
     console.warn(
       "[whatsapp:gchat] notification failed:",
       err instanceof Error ? err.message : String(err),
     );
-  } finally {
-    clearTimeout(t);
   }
 }
