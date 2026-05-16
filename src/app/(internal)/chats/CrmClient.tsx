@@ -65,6 +65,7 @@ import Composer from "./components/Composer";
 import ContextPanel, {
   type ContextPlayer,
   type ContextRecentMatch,
+  type ContextUpcomingMatch,
 } from "./components/ContextPanel";
 
 // ---------------- shared types ----------------
@@ -106,6 +107,7 @@ type Message = {
 };
 
 type RecentMatch = ContextRecentMatch;
+type UpcomingMatch = ContextUpcomingMatch;
 
 type ThreadDetail = {
   thread: ThreadListRow;
@@ -113,6 +115,7 @@ type ThreadDetail = {
   player: ContextPlayer | null;
   assignee: Assignee | null;
   recent_matches: RecentMatch[];
+  upcoming_matches: UpcomingMatch[];
   historical_account_count: number | null;
   latest_inbound_at: string | null;
 };
@@ -692,6 +695,7 @@ export default function CrmClient() {
             }}
             player={detail?.player ?? null}
             recentMatches={detail?.recent_matches ?? []}
+            upcomingMatches={detail?.upcoming_matches ?? []}
             historicalAccountCount={detail?.historical_account_count ?? null}
             supabaseProjectRef={supabaseProjectRef}
             loading={detailLoading}
@@ -716,6 +720,7 @@ export default function CrmClient() {
         }
         player={detail?.player ?? null}
         recentMatches={detail?.recent_matches ?? []}
+        upcomingMatches={detail?.upcoming_matches ?? []}
         historicalAccountCount={detail?.historical_account_count ?? null}
         supabaseProjectRef={supabaseProjectRef}
         loading={detailLoading}
@@ -1085,7 +1090,7 @@ function ConversationHeader({
   const name = fullNameOf(detail.thread);
   const cityCode = cityCodeForThread(detail.thread);
   const channel = detail.thread.channel ?? "sms";
-  const matchCount = detail.player?.total_match_count;
+  const matchCount = detail.player?.played_in_2026;
   return (
     <div className="flex h-14 shrink-0 items-center gap-2 border-b border-cream-line bg-white px-1 sm:px-3">
       <button

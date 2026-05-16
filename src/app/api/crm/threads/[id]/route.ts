@@ -129,16 +129,21 @@ export async function GET(req: Request, ctx: RouteCtx) {
       .eq("id", thread.player_id)
       .maybeSingle();
     if (!playerRes.error && playerRes.data) {
-      // Total matches "attended" (registrations not cancelled).
-      // Counted on mdapi_match_players.user_id with head + count to
-      // avoid pulling rows.
-      const matchCount = await supabase
-        .from("mdapi_match_players")
-        .select("api_id", { count: "exact", head: true })
-        .eq("user_id", thread.player_id)
-        .not("is_cancelled", "is", true);
-      const total_match_count = matchCount.error ? null : matchCount.count;
-      player = { ...playerRes.data, total_match_count };
+      // 2026 played count — registrations the player actually
+      // attended in the current calendar year. Mirrors the
+      // deriveMatchStatus() rules below: not cancelled on either
+      // side, not absent, and the match started before "now"
+      // (future 2026 matches haven't been played yet).
+      //
+      // Replaces the older "all-time non-cancelled registrations"
+      // count which conflated cancelled-but-still-non-flagged
+      // history with attended matches. Surfaced as
+      // "MATCHES (2026)" in the context panel.
+      const played_in_2026 = await loadPlayed2026Count(
+        supabase,
+        thread.player_id as number,
+      );
+      player = { ...playerRes.data, played_in_2026 };
     }
   }
 
@@ -152,6 +157,18 @@ export async function GET(req: Request, ctx: RouteCtx) {
   const recent_matches =
     thread.player_id != null
       ? await loadRecentMatches(supabase, thread.player_id as number)
+      : [];
+
+  // Upcoming bookings (Phase 3 of Chats context panel). Same
+  // mdapi_match_players → mdapi_matches join shape as Recent,
+  // but filtered to start_date > now() and unbounded in count —
+  // the system only books ~1 week out so per-player volume stays
+  // small. Cancelled future bookings ARE included; the UI
+  // de-emphasizes them so operators can see at a glance whether
+  // the player has already cancelled before they reply.
+  const upcoming_matches =
+    thread.player_id != null
+      ? await loadUpcomingMatches(supabase, thread.player_id as number)
       : [];
 
   // How many historical mdapi_users rows share this phone? Surfaced
@@ -186,6 +203,7 @@ export async function GET(req: Request, ctx: RouteCtx) {
       player,
       assignee,
       recent_matches,
+      upcoming_matches,
       historical_account_count,
       latest_inbound_at,
     },
@@ -312,4 +330,154 @@ function deriveMatchStatus(
   if (r.is_absent === true && isPast) return "No-show";
   if (isPast) return "Played";
   return "Upcoming";
+}
+
+// ============================================================
+// Upcoming matches helpers
+// ============================================================
+
+// One row per future booking the player has — used by the context
+// panel's "UPCOMING" section. Includes cancelled rows so operators
+// can see at a glance whether the player has already withdrawn.
+type UpcomingRegRow = {
+  match_api_id: number;
+  team: number | null;
+  player_number: number | null;
+  is_cancelled: boolean | null;
+};
+
+type UpcomingMatchRow = {
+  api_id: number;
+  field_title: string | null;
+  start_date: string | null;
+  is_cancelled: boolean | null;
+};
+
+type UpcomingMatch = {
+  match_api_id: number;
+  venue: string | null;
+  start_date: string | null;
+  team: number | null;
+  player_number: number | null;
+  is_cancelled: boolean;
+};
+
+async function loadUpcomingMatches(
+  supabase: SupabaseClient,
+  playerId: number,
+): Promise<UpcomingMatch[]> {
+  const nowIso = new Date().toISOString();
+
+  // Same two-step shape as recent_matches because the mdapi_match
+  // _players → mdapi_matches join is a soft FK (no enforced
+  // constraint per migration 0016) and PostgREST can't embed.
+  // Step 1: matches starting in the future. Limited to a finite
+  // window even though the system only books ~1 week out — a
+  // bound keeps a future sync glitch from returning thousands of
+  // rows here.
+  const FUTURE_WINDOW_DAYS = 60;
+  const cutoff = new Date(
+    Date.now() + FUTURE_WINDOW_DAYS * 24 * 60 * 60 * 1000,
+  ).toISOString();
+  const matches = await supabase
+    .from("mdapi_matches")
+    .select("api_id, field_title, start_date, is_cancelled")
+    .gt("start_date", nowIso)
+    .lt("start_date", cutoff)
+    .order("start_date", { ascending: true });
+  if (matches.error || !matches.data?.length) return [];
+
+  const matchIds = (matches.data as UpcomingMatchRow[]).map((m) => m.api_id);
+  if (matchIds.length === 0) return [];
+
+  // Step 2: the player's registrations on those matches.
+  const regs = await supabase
+    .from("mdapi_match_players")
+    .select("match_api_id, team, player_number, is_cancelled")
+    .eq("user_id", playerId)
+    .in("match_api_id", matchIds);
+  if (regs.error || !regs.data?.length) return [];
+
+  const matchById = new Map<number, UpcomingMatchRow>();
+  for (const m of matches.data as UpcomingMatchRow[]) {
+    matchById.set(m.api_id, m);
+  }
+
+  // Combine into the response shape. is_cancelled is true if
+  // EITHER the registration was cancelled OR the match itself
+  // was cancelled — operators just want to know it's a no-op.
+  const out: UpcomingMatch[] = [];
+  for (const r of regs.data as UpcomingRegRow[]) {
+    const m = matchById.get(r.match_api_id);
+    if (!m) continue;
+    out.push({
+      match_api_id: m.api_id,
+      venue: m.field_title,
+      start_date: m.start_date,
+      team: r.team,
+      player_number: r.player_number,
+      is_cancelled: r.is_cancelled === true || m.is_cancelled === true,
+    });
+  }
+
+  // Already ordered ASC by match.start_date from the query, but
+  // the regs.data scrambled the order — re-sort by start_date.
+  out.sort((a, b) => {
+    const at = a.start_date ? Date.parse(a.start_date) : Infinity;
+    const bt = b.start_date ? Date.parse(b.start_date) : Infinity;
+    return at - bt;
+  });
+  return out;
+}
+
+// ============================================================
+// 2026-played count
+// ============================================================
+// Counts the player's registrations that satisfy ALL of:
+//   - registration not cancelled
+//   - match not cancelled
+//   - player not marked absent
+//   - match.start_date is within 2026-01-01..2026-12-31 inclusive
+//   - match.start_date < now (Upcoming 2026 matches don't count
+//     as "played" yet)
+//
+// PostgREST limitation: we can't filter across two tables in a
+// single .select() — we have to two-step it (fetch player rows,
+// fetch match rows, intersect). For most players the result set
+// is small (single-digit matches per month), so this stays cheap.
+
+const YEAR = 2026;
+const YEAR_START_ISO = `${YEAR}-01-01T00:00:00Z`;
+const YEAR_END_ISO = `${YEAR + 1}-01-01T00:00:00Z`;
+
+async function loadPlayed2026Count(
+  supabase: SupabaseClient,
+  playerId: number,
+): Promise<number | null> {
+  // Step 1: candidate registrations — not cancelled, not absent.
+  const regs = await supabase
+    .from("mdapi_match_players")
+    .select("match_api_id")
+    .eq("user_id", playerId)
+    .not("is_cancelled", "is", true)
+    .not("is_absent", "is", true);
+  if (regs.error) return null;
+  const matchIds = (regs.data ?? [])
+    .map((r) => r.match_api_id as number | null)
+    .filter((x): x is number => typeof x === "number");
+  if (matchIds.length === 0) return 0;
+
+  // Step 2: count matches in those that are 2026 + already
+  // started + not match-cancelled.
+  const nowIso = new Date().toISOString();
+  const c = await supabase
+    .from("mdapi_matches")
+    .select("api_id", { count: "exact", head: true })
+    .in("api_id", matchIds)
+    .gte("start_date", YEAR_START_ISO)
+    .lt("start_date", YEAR_END_ISO)
+    .lt("start_date", nowIso)
+    .not("is_cancelled", "is", true);
+  if (c.error) return null;
+  return c.count ?? 0;
 }
