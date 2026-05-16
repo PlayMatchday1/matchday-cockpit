@@ -23,6 +23,16 @@ const nextConfig: NextConfig = {
         destination: "/managers",
         permanent: true,
       },
+      // Player Chat page moved from /crm → /chats on 2026-05-16
+      // (UI label was already "Chats"; the URL was the last
+      // mismatch). The /api/crm/* API routes and the underlying
+      // crm_* DB tables are NOT renamed — only the user-facing
+      // page route.
+      {
+        source: "/crm",
+        destination: "/chats",
+        permanent: true,
+      },
     ];
   },
 };
