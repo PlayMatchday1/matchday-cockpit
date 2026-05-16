@@ -1,11 +1,9 @@
 "use client";
 
-// Filter row above the inbox list. Two stacked axes:
-//   1. Assignment: All / Mine / Unassigned (segmented pills)
-//   2. City: All / 8 codes / Unknown (segmented pills)
-//
-// Desktop: stacked vertically with a thin divider. Mobile:
-// horizontal scroll, both rows still present, more compact spacing.
+// One horizontal-scroll row of pills. Assignment first (All /
+// Unassigned / Mine), then city codes (multi-select). Empty city
+// selection is treated as "all cities" implicitly, so there's no
+// separate "all cities" pill in the row.
 //
 // "Mine" is disabled when the viewer has no app_user id (vanishingly
 // unlikely past AdminGuard but defended).
@@ -28,13 +26,7 @@ export default function FilterBar({
   onChange: (next: { cities?: Set<string>; status?: StatusFilter }) => void;
   canFilterMine: boolean;
 }) {
-  const allCitiesActive = cities.size === 0;
-
   const toggleCity = (code: string) => {
-    if (allCitiesActive) {
-      onChange({ cities: new Set([code]) });
-      return;
-    }
     const next = new Set(cities);
     if (next.has(code)) next.delete(code);
     else next.add(code);
@@ -42,12 +34,8 @@ export default function FilterBar({
   };
 
   return (
-    <div className="border-b border-cream-line bg-cream-soft">
-      {/* Assignment row. Mobile: horizontal scroll (preserves the
-          status quo while mobile polish is deferred to a separate
-          PR). Desktop (lg:): wrap to a second line if needed so
-          nothing scrolls off-screen and gets clipped. */}
-      <div className="flex items-center gap-1 overflow-x-auto px-3 py-2 sm:px-4 lg:flex-wrap lg:overflow-x-visible">
+    <div className="border-b border-cream-line bg-cream">
+      <div className="flex items-center gap-1.5 overflow-x-auto px-3 py-2 sm:px-4">
         <FilterPill
           active={status === "all"}
           onClick={() => onChange({ status: "all" })}
@@ -64,21 +52,11 @@ export default function FilterBar({
           label="Mine"
           disabled={!canFilterMine}
         />
-      </div>
-      {/* City row — same mobile-scroll / desktop-wrap split. With
-          11 pills (All + 8 codes + Unknown) the desktop wrap
-          typically lands on a single line in a 280px inbox aside
-          but will gracefully drop to two when the column narrows. */}
-      <div className="flex items-center gap-1 overflow-x-auto border-t border-cream-line/60 px-3 py-2 sm:px-4 lg:flex-wrap lg:overflow-x-visible">
-        <FilterPill
-          active={allCitiesActive}
-          onClick={() => onChange({ cities: new Set() })}
-          label="All"
-        />
+        <span aria-hidden className="mx-1 h-4 w-px shrink-0 bg-deep-green/15" />
         {ALL_CITY_CODES.map((code) => (
           <FilterPill
             key={code}
-            active={!allCitiesActive && cities.has(code)}
+            active={cities.has(code)}
             onClick={() => toggleCity(code)}
             label={code}
           />
@@ -104,10 +82,11 @@ function FilterPill({
       type="button"
       onClick={onClick}
       disabled={disabled}
-      className={`shrink-0 rounded-full px-2.5 py-1 text-xs font-medium transition disabled:opacity-40 ${
+      style={{ touchAction: "manipulation" }}
+      className={`shrink-0 rounded-full px-3 py-1 text-xs font-medium transition disabled:opacity-40 ${
         active
-          ? "bg-deep-green text-mint"
-          : "border border-cream-line bg-white text-deep-green/70 hover:bg-cream-soft"
+          ? "bg-deep-green text-cream"
+          : "border border-deep-green/20 bg-transparent text-deep-green/70 hover:bg-cream-soft"
       }`}
     >
       {label}
