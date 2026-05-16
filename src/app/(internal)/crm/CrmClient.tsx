@@ -41,6 +41,7 @@ import ChannelChip, {
   channelDisplay,
   type CrmChannel,
 } from "@/components/ChannelChip";
+import { Check, CheckCheck } from "lucide-react";
 
 // WhatsApp's 24-hour customer service window. Mirrored from
 // /api/crm/send — the server enforces, the client just hides the
@@ -68,6 +69,14 @@ type ThreadListRow = {
   assignee: Assignee | null;
 };
 
+// Outbound delivery lifecycle. WhatsApp rides the full lane via the
+// statuses[] branch of the Meta webhook; SMS stops at 'sent' or
+// 'failed' (Telnyx delivery receipts are a Phase 2 follow-up).
+// 'pending' is rarely observed in practice — the send route writes
+// 'sent' on insert, so it only surfaces between optimistic UI ops
+// (none today) and the server response.
+type DeliveryStatus = "pending" | "sent" | "delivered" | "read" | "failed";
+
 type Message = {
   id: string;
   thread_id: string;
@@ -76,7 +85,11 @@ type Message = {
   sent_at: string;
   sent_by_user_id: string | null;
   telnyx_message_id: string | null;
+  external_message_id: string | null;
   segment_count: number;
+  channel: CrmChannel;
+  delivery_status: DeliveryStatus;
+  delivery_status_updated_at: string | null;
   sender?: { email: string; full_name: string | null } | null;
 };
 
@@ -406,6 +419,28 @@ export default function CrmClient() {
                 : t,
             ),
           );
+        },
+      )
+      .on(
+        // Delivery-status changes from the WhatsApp status webhook
+        // come through as row UPDATEs. Merge the new fields into
+        // whatever message is currently in state — no refetch
+        // needed. Only the open thread's messages are visible, so
+        // we only patch when thread_id matches.
+        "postgres_changes",
+        { event: "UPDATE", schema: "public", table: "crm_messages" },
+        (payload) => {
+          const m = payload.new as Message;
+          if (m.thread_id !== selectedRef.current) return;
+          setDetail((prev) => {
+            if (!prev) return prev;
+            const i = prev.messages.findIndex((x) => x.id === m.id);
+            if (i === -1) return prev;
+            const merged: Message = { ...prev.messages[i], ...m };
+            const next = prev.messages.slice();
+            next[i] = merged;
+            return { ...prev, messages: next };
+          });
         },
       )
       .on(
@@ -1219,6 +1254,48 @@ function AssignDropdown({
   );
 }
 
+// Outbound delivery state, rendered below the timestamp on each
+// outbound bubble. Mirrors the WhatsApp visual idiom: single check
+// = accepted by provider, double check = delivered to device, blue-
+// tinted double check = read. The old logic checked
+// `!telnyx_message_id` to render a red "not delivered" label, which
+// fired on every WhatsApp outbound (those store the id under
+// external_message_id) — that's the bug this PR closes.
+function DeliveryStatusLabel({ status }: { status: DeliveryStatus }) {
+  if (status === "failed") {
+    return (
+      <span className="ml-1 text-coral-hover">· failed to deliver</span>
+    );
+  }
+  if (status === "pending") {
+    return <span className="ml-1 text-deep-green/45">· sending…</span>;
+  }
+  if (status === "delivered") {
+    return (
+      <span className="ml-1 inline-flex items-center gap-0.5 text-deep-green/55">
+        · delivered
+        <Check aria-hidden className="h-2.5 w-2.5" strokeWidth={2.5} />
+      </span>
+    );
+  }
+  if (status === "read") {
+    return (
+      <span className="ml-1 inline-flex items-center gap-0.5 text-mint-hover">
+        · read
+        <CheckCheck aria-hidden className="h-2.5 w-2.5" strokeWidth={2.5} />
+      </span>
+    );
+  }
+  // 'sent' — quiet single check, no extra word. Matches the
+  // mobile-app idiom for "accepted by server, not yet on the
+  // recipient's device."
+  return (
+    <span className="ml-1 inline-flex items-center text-deep-green/50">
+      <Check aria-hidden className="h-2.5 w-2.5" strokeWidth={2.5} />
+    </span>
+  );
+}
+
 function MessageBubble({ msg }: { msg: Message }) {
   const isInbound = msg.direction === "inbound";
   const senderLabel =
@@ -1241,12 +1318,10 @@ function MessageBubble({ msg }: { msg: Message }) {
           <span className="mr-1 font-medium">{senderLabel} ·</span>
         )}
         <span>{formatTimestamp(msg.sent_at)}</span>
-        {!isInbound && msg.segment_count > 1 && (
+        {!isInbound && msg.channel === "sms" && msg.segment_count > 1 && (
           <span> · {msg.segment_count} segments</span>
         )}
-        {!isInbound && !msg.telnyx_message_id && (
-          <span className="ml-1 text-coral-hover">· not delivered</span>
-        )}
+        {!isInbound && <DeliveryStatusLabel status={msg.delivery_status} />}
       </div>
     </li>
   );

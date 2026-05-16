@@ -79,8 +79,21 @@ type WaMessage = {
   text?: { body?: string };
 };
 
+// Meta's status webhook entries — sent → delivered → read → failed.
+// Fire on the SAME callback URL as inbound messages, multiplexed
+// inside value.statuses[] instead of value.messages[].
+type WaStatus = {
+  id?: string; // wamid we issued on outbound send
+  status?: string; // "sent" | "delivered" | "read" | "failed"
+  timestamp?: string; // unix seconds, as string
+  recipient_id?: string;
+};
+
 type WaEntry = {
-  changes?: { value?: { messages?: WaMessage[] }; field?: string }[];
+  changes?: {
+    value?: { messages?: WaMessage[]; statuses?: WaStatus[] };
+    field?: string;
+  }[];
 };
 
 type WaWebhookEnvelope = {
@@ -112,12 +125,13 @@ export async function POST(req: Request) {
     return Response.json({ error: "Bad payload" }, { status: 400 });
   }
 
-  // Many notifications are NOT inbound messages — status updates
-  // (sent / delivered / read) arrive on this same hook in
-  // value.statuses[]. We skip them in Phase 1 and just 200.
+  // Two parallel branches: inbound messages and status updates
+  // (sent / delivered / read / failed). Both arrive on the same
+  // webhook URL but in different fields of the envelope.
   const messages = extractMessages(evt);
-  if (messages.length === 0) {
-    return Response.json({ ok: true, ignored: "no_messages" }, { status: 200 });
+  const statuses = extractStatuses(evt);
+  if (messages.length === 0 && statuses.length === 0) {
+    return Response.json({ ok: true, ignored: "no_payload" }, { status: 200 });
   }
 
   // 4) Supabase service-role client (bypasses RLS — same pattern as
@@ -146,6 +160,22 @@ export async function POST(req: Request) {
     }
   }
 
+  // 5b) Process delivery-status updates (sent / delivered / read /
+  //     failed). Bounded by a 2s race in case Meta sends a flood
+  //     and the per-status UPDATEs would otherwise blow our 1s
+  //     ack-fast budget — losing a status update is recoverable
+  //     (the lifecycle is monotonic and Meta re-sends terminal
+  //     states), but causing Meta to retry the whole envelope is
+  //     not.
+  if (statuses.length > 0) {
+    await Promise.race([
+      processStatusBatch(sb, statuses),
+      new Promise<void>((resolve) => setTimeout(resolve, 2000)),
+    ]).catch((err) => {
+      console.error("[whatsapp:webhook] status batch failed:", err);
+    });
+  }
+
   // 6) Fire Google Chat notifications AFTER ack-ing Meta. Belt-and-
   //    suspenders bounding here: the notifier helper has its own
   //    AbortSignal-based 2s timeout AND we Promise.race against a
@@ -165,7 +195,7 @@ export async function POST(req: Request) {
 
   const elapsed = Date.now() - startedAt;
   console.log(
-    `[whatsapp:webhook] processed messages=${messages.length} new_threads=${notifications.length} elapsed=${elapsed}ms`,
+    `[whatsapp:webhook] processed messages=${messages.length} statuses=${statuses.length} new_threads=${notifications.length} elapsed=${elapsed}ms`,
   );
 
   return Response.json({ ok: true }, { status: 200 });
@@ -208,6 +238,92 @@ function extractMessages(evt: WaWebhookEnvelope): WaMessage[] {
     }
   }
   return out;
+}
+
+function extractStatuses(evt: WaWebhookEnvelope): WaStatus[] {
+  const out: WaStatus[] = [];
+  for (const entry of evt.entry ?? []) {
+    for (const change of entry.changes ?? []) {
+      for (const s of change.value?.statuses ?? []) {
+        out.push(s);
+      }
+    }
+  }
+  return out;
+}
+
+// Lifecycle: pending < sent < delivered < read. failed can override
+// from any non-failed state. Each new status declares the set of
+// prior states it's allowed to overwrite — anything else is a no-op
+// at the UPDATE level so out-of-order webhook delivery (Meta does
+// occasionally re-send "sent" after we've already received
+// "delivered") can't downgrade a row. SMS messages will stay at
+// 'sent' permanently — Telnyx delivery webhooks are a separate
+// Phase 2 item.
+type DeliveryStatus = "pending" | "sent" | "delivered" | "read" | "failed";
+
+const STATUS_ALLOWED_PRIOR: Record<
+  Exclude<DeliveryStatus, "pending">,
+  DeliveryStatus[]
+> = {
+  sent: ["pending"],
+  delivered: ["pending", "sent"],
+  read: ["pending", "sent", "delivered"],
+  failed: ["pending", "sent", "delivered", "read"],
+};
+
+function isHandledStatus(
+  s: string,
+): s is Exclude<DeliveryStatus, "pending"> {
+  return s === "sent" || s === "delivered" || s === "read" || s === "failed";
+}
+
+async function processStatusBatch(
+  sb: SupabaseClient,
+  statuses: WaStatus[],
+): Promise<void> {
+  for (const s of statuses) {
+    try {
+      await processStatus(sb, s);
+    } catch (err) {
+      console.error("[whatsapp:webhook] status update threw", err);
+    }
+  }
+}
+
+async function processStatus(
+  sb: SupabaseClient,
+  status: WaStatus,
+): Promise<void> {
+  const wamid = status.id;
+  const metaStatus = (status.status ?? "").toLowerCase();
+  if (!wamid || !isHandledStatus(metaStatus)) return;
+
+  const allowedPrior = STATUS_ALLOWED_PRIOR[metaStatus];
+
+  const upd = await sb
+    .from("crm_messages")
+    .update({
+      delivery_status: metaStatus,
+      delivery_status_updated_at: new Date().toISOString(),
+    })
+    .eq("external_message_id", wamid)
+    .in("delivery_status", allowedPrior);
+  if (upd.error) {
+    console.error(
+      `[whatsapp:webhook] status update failed wamid=${wamid} status=${metaStatus}`,
+      upd.error,
+    );
+    return;
+  }
+  // We don't differentiate "row matched + updated" vs "row matched
+  // but prior-state filter blocked" vs "no row with this wamid" at
+  // this level — Supabase doesn't return affected-row counts by
+  // default. The log line confirms we processed the event; the
+  // actual lifecycle state is queryable from the DB.
+  console.log(
+    `[whatsapp:webhook] status update wamid=${wamid} status=${metaStatus}`,
+  );
 }
 
 // Returns the rendered body for the crm_messages row. Text messages

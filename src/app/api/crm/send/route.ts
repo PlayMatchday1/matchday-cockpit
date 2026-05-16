@@ -180,6 +180,10 @@ async function handleSmsSend({
       sent_by_user_id: appUserId,
       telnyx_message_id: telnyxMessageId,
       segment_count: segmentCount,
+      // TODO Phase 2: process Telnyx delivery receipts so SMS gets
+      // the full sent → delivered → failed lifecycle the WhatsApp
+      // path enjoys. For now SMS stops at 'sent' or 'failed'.
+      delivery_status: sendError ? "failed" : "sent",
     })
     .select("*")
     .single();
@@ -298,6 +302,14 @@ async function handleWhatsAppSend({
       external_message_id: wamid,
       // segment_count column is SMS-only; WhatsApp has no segments.
       // Leave at the DB default (1).
+      //
+      // 'sent' is the correct initial state after a 2xx from Meta —
+      // the wamid in hand means the message was accepted. The
+      // status webhook (handled in /api/whatsapp/webhook) will move
+      // it to 'delivered' or 'read' as confirmation arrives. Send-
+      // time failures go straight to 'failed' so the UI shows the
+      // outbound row in red even before any webhook lands.
+      delivery_status: sendError ? "failed" : "sent",
     })
     .select("*")
     .single();
