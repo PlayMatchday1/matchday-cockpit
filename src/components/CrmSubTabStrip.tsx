@@ -14,7 +14,7 @@ import Link from "next/link";
 import { usePathname } from "next/navigation";
 
 const TABS = [
-  { href: "/crm", label: "Player Chat", match: (p: string) => p.startsWith("/crm") },
+  { href: "/chats", label: "Player Chat", match: (p: string) => p.startsWith("/chats") },
   {
     href: "/match-chats",
     label: "Match Chats",

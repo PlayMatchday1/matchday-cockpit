@@ -214,7 +214,7 @@ export default function CrmClient() {
         else params.set("status", next.status);
       }
       const qs = params.toString();
-      router.replace(qs ? `/crm?${qs}` : "/crm", { scroll: false });
+      router.replace(qs ? `/chats?${qs}` : "/chats", { scroll: false });
     },
     [router, searchParams],
   );
@@ -225,7 +225,7 @@ export default function CrmClient() {
       if (id == null) params.delete("threadId");
       else params.set("threadId", id);
       const qs = params.toString();
-      router.replace(qs ? `/crm?${qs}` : "/crm", { scroll: false });
+      router.replace(qs ? `/chats?${qs}` : "/chats", { scroll: false });
     },
     [router, searchParams],
   );

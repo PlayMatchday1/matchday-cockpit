@@ -52,9 +52,9 @@ const PERMISSION_TABS: GatedTab[] = [
 // strip the canonical switch between the two surfaces.
 const ADMIN_PRIMARY_TABS: Tab[] = [
   {
-    href: "/crm",
+    href: "/chats",
     label: "Chats",
-    match: (p) => p.startsWith("/crm") || p.startsWith("/match-chats"),
+    match: (p) => p.startsWith("/chats") || p.startsWith("/match-chats"),
   },
 ];
 
