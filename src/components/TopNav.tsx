@@ -43,21 +43,18 @@ const PERMISSION_TABS: GatedTab[] = [
   },
 ];
 
-// Admin-only primary tabs. Promoted from the user dropdown in the
-// Player Chat redesign — both surfaces handle live player
-// conversations and want to be one click away. The user dropdown
-// now holds only the back-office destinations (Data, Org, Docs)
-// plus Admin + Sign out.
+// Admin-only primary tabs. Single "Chats" entry covers both
+// /crm (Player Chat) and /match-chats (Match Chats). The active-
+// state predicate matches BOTH routes — clicking Chats lands on
+// /crm by default; the sub-tab strip inside the page handles the
+// final hop to Match Chats. This was previously two separate
+// entries; consolidated to declutter the top nav and to make the
+// strip the canonical switch between the two surfaces.
 const ADMIN_PRIMARY_TABS: Tab[] = [
   {
     href: "/crm",
-    label: "Player Chat",
-    match: (p) => p.startsWith("/crm"),
-  },
-  {
-    href: "/match-chats",
-    label: "Match Chats",
-    match: (p) => p.startsWith("/match-chats"),
+    label: "Chats",
+    match: (p) => p.startsWith("/crm") || p.startsWith("/match-chats"),
   },
 ];
 

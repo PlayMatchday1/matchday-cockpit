@@ -1,14 +1,14 @@
 "use client";
 
 // Sub-nav pill strip rendered at the top of /crm and /match-chats.
-// Lets operators jump between the two CRM-adjacent surfaces without
-// going back through the user dropdown / top nav.
+// This is the canonical switch between the two surfaces — the top
+// nav consolidated "Player Chat" + "Match Chats" into a single
+// "Chats" entry, so this strip is how operators move between them.
 //
-// Two pills only — Player Chat (/crm) and Match Chats (/match-chats).
-// Active = deep-green pill with cream text; inactive = transparent
-// pill with deep-green text + cream-line hover. Uses the same
-// rounded-full pill geometry the rest of the cockpit uses for
-// segmented controls.
+// Two pills side-by-side. Active = filled deep-green / cream text.
+// Inactive = transparent with a thin deep-green/20 border so the
+// affordance reads as "tappable" without competing with the active
+// pill's mass.
 
 import Link from "next/link";
 import { usePathname } from "next/navigation";
@@ -27,7 +27,7 @@ export default function CrmSubTabStrip() {
   return (
     <nav
       aria-label="Player Chat / Match Chats"
-      className="flex shrink-0 items-center gap-1 border-b border-cream-line bg-cream px-3 py-2 sm:px-4"
+      className="flex shrink-0 items-center gap-2 border-b border-cream-line bg-cream px-3 py-2 sm:px-4"
     >
       {TABS.map((t) => {
         const active = t.match(pathname);
@@ -38,7 +38,7 @@ export default function CrmSubTabStrip() {
             className={`rounded-full px-3 py-1 text-xs font-medium transition sm:text-sm ${
               active
                 ? "bg-deep-green text-cream"
-                : "text-deep-green/70 hover:bg-cream-soft hover:text-deep-green"
+                : "border border-deep-green/20 text-deep-green hover:bg-cream-soft"
             }`}
           >
             {t.label}

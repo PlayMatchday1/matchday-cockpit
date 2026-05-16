@@ -43,8 +43,11 @@ export default function FilterBar({
 
   return (
     <div className="border-b border-cream-line bg-cream-soft">
-      {/* Assignment row */}
-      <div className="flex items-center gap-1 overflow-x-auto px-3 py-2 sm:px-4">
+      {/* Assignment row. Mobile: horizontal scroll (preserves the
+          status quo while mobile polish is deferred to a separate
+          PR). Desktop (lg:): wrap to a second line if needed so
+          nothing scrolls off-screen and gets clipped. */}
+      <div className="flex items-center gap-1 overflow-x-auto px-3 py-2 sm:px-4 lg:flex-wrap lg:overflow-x-visible">
         <FilterPill
           active={status === "all"}
           onClick={() => onChange({ status: "all" })}
@@ -62,8 +65,11 @@ export default function FilterBar({
           disabled={!canFilterMine}
         />
       </div>
-      {/* City row */}
-      <div className="flex items-center gap-1 overflow-x-auto border-t border-cream-line/60 px-3 py-2 sm:px-4">
+      {/* City row — same mobile-scroll / desktop-wrap split. With
+          11 pills (All + 8 codes + Unknown) the desktop wrap
+          typically lands on a single line in a 280px inbox aside
+          but will gracefully drop to two when the column narrows. */}
+      <div className="flex items-center gap-1 overflow-x-auto border-t border-cream-line/60 px-3 py-2 sm:px-4 lg:flex-wrap lg:overflow-x-visible">
         <FilterPill
           active={allCitiesActive}
           onClick={() => onChange({ cities: new Set() })}
