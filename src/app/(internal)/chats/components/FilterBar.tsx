@@ -34,7 +34,7 @@ export default function FilterBar({
   };
 
   return (
-    <div className="border-b border-cream-line bg-cream">
+    <div className="min-w-0 border-b border-cream-line bg-cream">
       <div className="flex items-center gap-1.5 overflow-x-auto px-3 py-2 sm:px-4">
         <FilterPill
           active={status === "all"}
