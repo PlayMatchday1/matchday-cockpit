@@ -1,19 +1,25 @@
 import { Suspense } from "react";
+import type { Metadata } from "next";
 import AdminGuard from "@/components/AdminGuard";
+import CrmSubTabStrip from "@/components/CrmSubTabStrip";
 import MatchChatsClient from "./MatchChatsClient";
 
-// Phase 3 — two-pane Match Chats console. Left = tabbed inbox
-// (Active / Upcoming), right = selected chat with realtime listener
-// and composer. URL state: ?chatId=…&tab=active|upcoming.
+// Two-pane Match Chats console. Left = tabbed inbox (Active /
+// Upcoming), right = selected chat with realtime listener and
+// composer. URL state: ?chatId=…&tab=active|upcoming.
 //
-// No PageHeader: the shell uses its own dense chrome to claim the
-// full viewport height for the two panes.
+// The sub-tab strip at the top lets operators bounce between Player
+// Chat (/crm) and Match Chats (/match-chats) without going through
+// the top nav — both surfaces handle live player conversations.
+
+export const metadata: Metadata = {
+  title: "Match Chats",
+};
 
 export default function MatchChatsPage() {
   return (
     <AdminGuard>
-      {/* Suspense boundary required by Next 16 for any client tree
-          that calls useSearchParams. */}
+      <CrmSubTabStrip />
       <Suspense fallback={null}>
         <MatchChatsClient />
       </Suspense>

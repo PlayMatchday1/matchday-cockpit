@@ -14,14 +14,21 @@ import {
 type Tab = {
   href: string;
   label: string;
-  page: PageName;
   match: (p: string) => boolean;
 };
 
-// Primary tabs — always-visible top nav. Secondary destinations
-// (Data, Org, Docs, Admin, Sign out) live in the user-name dropdown
-// on the right.
-const PRIMARY_TABS: Tab[] = [
+type GatedTab = Tab & {
+  // Page-permission tabs use the existing PageName / canAccess
+  // mechanism. Admin-only tabs (Player Chat, Match Chats) don't
+  // map to a PageName today — they render whenever is_admin is
+  // true.
+  page: PageName;
+};
+
+// Primary tabs gated by per-page permissions. Always rendered when
+// canAccess() returns true. Order matters — left-to-right reading
+// order in the header.
+const PERMISSION_TABS: GatedTab[] = [
   {
     href: "/clubhouse",
     label: "Clubhouse",
@@ -36,9 +43,26 @@ const PRIMARY_TABS: Tab[] = [
   },
 ];
 
-// Secondary tabs that go in the user-name dropdown above the
-// divider, in this order. Sign out is rendered separately below.
-const SECONDARY_TABS: Tab[] = [
+// Admin-only primary tabs. Promoted from the user dropdown in the
+// Player Chat redesign — both surfaces handle live player
+// conversations and want to be one click away. The user dropdown
+// now holds only the back-office destinations (Data, Org, Docs)
+// plus Admin + Sign out.
+const ADMIN_PRIMARY_TABS: Tab[] = [
+  {
+    href: "/crm",
+    label: "Player Chat",
+    match: (p) => p.startsWith("/crm"),
+  },
+  {
+    href: "/match-chats",
+    label: "Match Chats",
+    match: (p) => p.startsWith("/match-chats"),
+  },
+];
+
+// Secondary tabs (user-name dropdown).
+const SECONDARY_TABS: GatedTab[] = [
   {
     href: "/data",
     label: "Data",
@@ -63,14 +87,17 @@ export default function TopNav() {
   const pathname = usePathname();
   const { appUser, signOut } = useAuth();
 
-  const visiblePrimary = PRIMARY_TABS.filter((t) => canAccess(appUser, t.page));
+  const visiblePermission = PERMISSION_TABS.filter((t) =>
+    canAccess(appUser, t.page),
+  );
+  const isAdmin = !!appUser?.is_admin;
   const financeActive = pathname?.startsWith("/admin/finance") ?? false;
   const adminActive = pathname === "/admin";
 
   return (
     <header className="bg-deep-green text-cream">
-      <div className="mx-auto max-w-6xl px-6">
-        <div className="flex h-16 items-center justify-between gap-4">
+      <div className="mx-auto max-w-6xl px-4 sm:px-6">
+        <div className="flex h-16 items-center justify-between gap-2 sm:gap-4">
           <Link
             href="/clubhouse"
             className="flex shrink-0 items-center gap-2"
@@ -85,44 +112,65 @@ export default function TopNav() {
               className="h-7 w-auto"
             />
           </Link>
-          <nav className="flex flex-wrap items-center justify-center gap-1">
-            {visiblePrimary.map((tab) => {
+          {/* Primary tabs. Hidden on small screens — the user-menu
+              dropdown picks up the slack as a hamburger surrogate.
+              Above lg: full padding; between sm and lg: tighter
+              padding so the row doesn't wrap. */}
+          <nav className="hidden flex-1 items-center justify-center gap-0.5 md:flex">
+            {visiblePermission.map((tab) => {
               const active = pathname ? tab.match(pathname) : false;
               return (
-                <Link
+                <PrimaryLink
                   key={tab.href}
                   href={tab.href}
-                  className={`rounded-full px-4 py-1.5 text-sm font-medium tracking-tight transition ${
-                    active
-                      ? "bg-mint text-deep-green"
-                      : "text-cream/80 hover:bg-deep-green-soft hover:text-cream"
-                  }`}
-                >
-                  {tab.label}
-                </Link>
+                  active={active}
+                  label={tab.label}
+                />
               );
             })}
             {canAccess(appUser, "finance") && (
-              <Link
+              <PrimaryLink
                 href="/admin/finance"
-                className={`rounded-full px-4 py-1.5 text-sm font-medium tracking-tight transition ${
-                  financeActive
-                    ? "bg-mint text-deep-green"
-                    : "text-cream/80 hover:bg-deep-green-soft hover:text-cream"
-                }`}
-              >
-                Finance
-              </Link>
+                active={financeActive}
+                label="Finance"
+              />
             )}
+            {isAdmin &&
+              ADMIN_PRIMARY_TABS.map((tab) => {
+                const active = pathname ? tab.match(pathname) : false;
+                return (
+                  <PrimaryLink
+                    key={tab.href}
+                    href={tab.href}
+                    active={active}
+                    label={tab.label}
+                  />
+                );
+              })}
           </nav>
           {appUser ? (
             <UserMenu
               name={displayName(appUser)}
-              isAdmin={!!appUser.is_admin}
+              isAdmin={isAdmin}
               adminActive={adminActive}
               pathname={pathname}
               canAccessSecondary={(page: PageName) => canAccess(appUser, page)}
               onSignOut={signOut}
+              // On mobile (md:hidden zone) the dropdown also holds
+              // the primary tabs so we don't lose access to them.
+              mobilePrimaryTabs={[
+                ...visiblePermission,
+                ...(canAccess(appUser, "finance")
+                  ? [
+                      {
+                        href: "/admin/finance",
+                        label: "Finance",
+                        match: (p: string) => p.startsWith("/admin/finance"),
+                      },
+                    ]
+                  : []),
+                ...(isAdmin ? ADMIN_PRIMARY_TABS : []),
+              ]}
             />
           ) : (
             <div className="shrink-0" />
@@ -133,10 +181,32 @@ export default function TopNav() {
   );
 }
 
-// User-name dropdown trigger + menu panel. Secondary nav items
-// (Data, Org, Docs, Admin) are rendered in the order they're defined
-// above, with Sign out below a divider. Closes on click outside,
-// Escape, or any item activation.
+function PrimaryLink({
+  href,
+  active,
+  label,
+}: {
+  href: string;
+  active: boolean;
+  label: string;
+}) {
+  return (
+    <Link
+      href={href}
+      className={`rounded-full px-2.5 py-1.5 text-sm font-medium tracking-tight transition lg:px-4 ${
+        active
+          ? "bg-mint text-deep-green"
+          : "text-cream/80 hover:bg-deep-green-soft hover:text-cream"
+      }`}
+    >
+      {label}
+    </Link>
+  );
+}
+
+// User-name dropdown trigger + menu panel. On mobile (md:hidden) it
+// also surfaces the primary tabs so we don't strand users on small
+// screens after promoting Player Chat / Match Chats to primary.
 function UserMenu({
   name,
   isAdmin,
@@ -144,6 +214,7 @@ function UserMenu({
   pathname,
   canAccessSecondary,
   onSignOut,
+  mobilePrimaryTabs,
 }: {
   name: string;
   isAdmin: boolean;
@@ -151,6 +222,7 @@ function UserMenu({
   pathname: string | null;
   canAccessSecondary: (page: PageName) => boolean;
   onSignOut: () => void;
+  mobilePrimaryTabs: Tab[];
 }) {
   const [open, setOpen] = useState(false);
   const ref = useRef<HTMLDivElement>(null);
@@ -198,8 +270,32 @@ function UserMenu({
       {open && (
         <div
           role="menu"
-          className="absolute right-0 z-20 mt-2 w-44 overflow-hidden rounded-md border border-cream-line bg-white py-1 text-deep-green shadow-lg shadow-deep-green/20"
+          className="absolute right-0 z-20 mt-2 w-52 overflow-hidden rounded-md border border-cream-line bg-white py-1 text-deep-green shadow-lg shadow-deep-green/20"
         >
+          {/* Mobile-only primary tabs. md:hidden so desktop never
+              shows duplicates. */}
+          <div className="md:hidden">
+            {mobilePrimaryTabs.map((t) => {
+              const active = pathname ? t.match(pathname) : false;
+              return (
+                <Link
+                  key={t.href}
+                  href={t.href}
+                  role="menuitem"
+                  onClick={() => setOpen(false)}
+                  className={`block px-3 py-1.5 text-sm transition hover:bg-cream-soft ${
+                    active ? "bg-mint-soft font-bold" : ""
+                  }`}
+                >
+                  {t.label}
+                </Link>
+              );
+            })}
+            {mobilePrimaryTabs.length > 0 && (
+              <div aria-hidden className="my-1 h-px bg-cream-line" />
+            )}
+          </div>
+
           {visibleSecondary.map((t) => {
             const active = pathname ? t.match(pathname) : false;
             return (
@@ -216,30 +312,6 @@ function UserMenu({
               </Link>
             );
           })}
-          {showAdmin && (
-            <Link
-              href="/crm"
-              role="menuitem"
-              onClick={() => setOpen(false)}
-              className={`block px-3 py-1.5 text-sm transition hover:bg-cream-soft ${
-                pathname?.startsWith("/crm") ? "bg-mint-soft font-bold" : ""
-              }`}
-            >
-              CRM
-            </Link>
-          )}
-          {showAdmin && (
-            <Link
-              href="/match-chats"
-              role="menuitem"
-              onClick={() => setOpen(false)}
-              className={`block px-3 py-1.5 text-sm transition hover:bg-cream-soft ${
-                pathname?.startsWith("/match-chats") ? "bg-mint-soft font-bold" : ""
-              }`}
-            >
-              Match Chats
-            </Link>
-          )}
           {showAdmin && (
             <Link
               href="/admin"
