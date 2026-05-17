@@ -81,6 +81,10 @@ type ThreadListRow = {
   assigned_to_user_id: string | null;
   assigned_at: string | null;
   channel: CrmChannel;
+  // Server-computed per the assignment-aware rule. Authoritative —
+  // the client mirrors this for optimistic updates on mark-read but
+  // never recomputes the rule itself.
+  is_unread: boolean;
   player: {
     first_name: string | null;
     last_name: string | null;
@@ -132,31 +136,9 @@ type ThreadDetail = {
 
 // ---------------- constants ----------------
 
-const LAST_VIEWED_KEY = "crm:lastViewed:v1";
 const WHATSAPP_WINDOW_MS = 24 * 60 * 60 * 1000;
 
 // ---------------- helpers ----------------
-
-function readJson<T>(key: string, fallback: T): T {
-  if (typeof window === "undefined") return fallback;
-  try {
-    const raw = window.localStorage.getItem(key);
-    if (!raw) return fallback;
-    const parsed = JSON.parse(raw) as T;
-    return parsed ?? fallback;
-  } catch {
-    return fallback;
-  }
-}
-
-function writeJson<T>(key: string, value: T): void {
-  if (typeof window === "undefined") return;
-  try {
-    window.localStorage.setItem(key, JSON.stringify(value));
-  } catch {
-    /* private mode etc — silent */
-  }
-}
 
 function fullNameOf(t: ThreadListRow): string {
   if (t.player) {
@@ -181,6 +163,21 @@ async function bearerHeaders(): Promise<Record<string, string> | null> {
     Authorization: `Bearer ${token}`,
     "Content-Type": "application/json",
   };
+}
+
+// Fire-and-forget. Best-effort: if it fails the optimistic local
+// clear stays and we converge on the next realtime refetch.
+async function markThreadRead(threadId: string): Promise<void> {
+  const headers = await bearerHeaders();
+  if (!headers) return;
+  try {
+    await fetch(`/api/crm/threads/${threadId}/mark-read`, {
+      method: "POST",
+      headers,
+    });
+  } catch {
+    // Silent — the inbox will reconcile on the next refetch.
+  }
 }
 
 function computeWhatsAppExpired(detail: ThreadDetail | null): boolean {
@@ -258,16 +255,11 @@ export default function CrmClient() {
   const [detailLoading, setDetailLoading] = useState(false);
   const [detailError, setDetailError] = useState<string | null>(null);
 
-  const [lastViewed, setLastViewed] = useState<Record<string, string>>({});
   const [realtimeOk, setRealtimeOk] = useState<boolean | null>(null);
 
   // Mobile context-panel sheet open/close. Desktop ignores this —
   // the column variant is always visible at lg: + above.
   const [contextSheetOpen, setContextSheetOpen] = useState(false);
-
-  useEffect(() => {
-    setLastViewed(readJson<Record<string, string>>(LAST_VIEWED_KEY, {}));
-  }, []);
 
   // Lock document scroll while /chats is mounted. iOS Safari standalone
   // PWA scrolls the document when the keyboard opens (to keep the focused
@@ -388,11 +380,18 @@ export default function CrmClient() {
       return;
     }
     void loadDetail(selectedId);
-    setLastViewed((prev) => {
-      const next = { ...prev, [selectedId]: new Date().toISOString() };
-      writeJson(LAST_VIEWED_KEY, next);
-      return next;
-    });
+    // Mark-read fire-and-forget. Optimistic local patch first so the
+    // dot disappears immediately; server upsert follows. If the
+    // server call fails, the next inbox refetch (realtime or manual
+    // refresh) restores the true state. Display rule is also
+    // assignment-aware on the server, so a non-assignee opening an
+    // assigned thread won't suddenly see a phantom clear — the
+    // optimistic patch sets is_unread = false locally, which is
+    // exactly what the server would have computed for them anyway.
+    setThreads((prev) =>
+      prev.map((t) => (t.id === selectedId ? { ...t, is_unread: false } : t)),
+    );
+    void markThreadRead(selectedId);
   }, [selectedId, loadDetail]);
 
   // --------- realtime ---------
@@ -514,6 +513,24 @@ export default function CrmClient() {
           void loadThreads();
         },
       )
+      // Same-user multi-device read-state sync. When this viewer
+      // reads a thread on another device, their crm_thread_reads
+      // row updates and this session refetches to clear the dot.
+      // Cross-admin reads of unassigned threads converge through the
+      // separate crm_threads UPDATE subscription above, fired by the
+      // 0035 trigger that touches reads_updated_at.
+      .on(
+        "postgres_changes",
+        {
+          event: "*",
+          schema: "public",
+          table: "crm_thread_reads",
+          filter: appUser?.id ? `user_id=eq.${appUser.id}` : undefined,
+        },
+        () => {
+          void loadThreads();
+        },
+      )
       .subscribe((status) => {
         if (status === "SUBSCRIBED") setRealtimeOk(true);
         else if (
@@ -528,7 +545,7 @@ export default function CrmClient() {
     return () => {
       supabase.removeChannel(channel);
     };
-  }, [loadThreads, operatorsById, refreshDetailForMediaInsert]);
+  }, [loadThreads, operatorsById, refreshDetailForMediaInsert, appUser?.id]);
 
   // --------- derived list ---------
   const filteredThreads = useMemo(() => {
@@ -549,16 +566,8 @@ export default function CrmClient() {
           if (t.assigned_to_user_id !== appUser.id) return false;
         }
         return true;
-      })
-      .map((t) => {
-        const seenAt = lastViewed[t.id];
-        const unread =
-          !!t.last_message_preview &&
-          (seenAt == null ||
-            Date.parse(t.last_message_at) > Date.parse(seenAt));
-        return { ...t, unread };
       });
-  }, [threads, lastViewed, cityFilter, statusFilter, appUser?.id]);
+  }, [threads, cityFilter, statusFilter, appUser?.id]);
 
   const selectedThread =
     filteredThreads.find((t) => t.id === selectedId) ??

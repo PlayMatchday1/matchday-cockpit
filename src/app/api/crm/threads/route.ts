@@ -10,9 +10,15 @@
 //       id, phone_number, player_id, match_ambiguous,
 //       last_message_at, last_message_preview, last_message_direction,
 //       assigned_to_user_id, assigned_at,
+//       is_unread,                                  // per-viewer
 //       player: { first_name, last_name, preferable_city_normalized } | null,
 //       assignee: { id, email, full_name } | null
 //     }> }
+//
+// is_unread is computed per the viewer per the assignment-aware
+// resolution rule (see PR notes). Cron callers receive is_unread =
+// false everywhere since there is no "viewer" to compare against —
+// the unread dot is a human-facing UI signal only.
 //
 // last_message_direction is the direction of the most recent message
 // in the thread ("inbound" | "outbound" | null). Used by the inbox
@@ -57,7 +63,7 @@ export async function GET(req: Request) {
   if (!auth.ok) {
     return Response.json({ error: auth.error }, { status: auth.status });
   }
-  const { supabase } = auth;
+  const { supabase, appUserId: viewerId } = auth;
 
   const threadsRes = await supabase
     .from("crm_threads")
@@ -145,6 +151,75 @@ export async function GET(req: Request) {
     directionResults,
   );
 
+  // ---------------- Read state (assignment-aware) ----------------
+  // For each thread in the result set, compute is_unread for the
+  // viewer:
+  //
+  //   thread.assigned_to_user_id IS NULL → effective_last_read_at
+  //                                         = MAX(reads.last_read_at)
+  //                                           across all admins
+  //   thread.assigned_to_user_id  = viewer
+  //                                       → effective_last_read_at
+  //                                         = the assignee's row
+  //   thread.assigned_to_user_id  != viewer
+  //                                       → is_unread = false
+  //                                         (out of responsibility;
+  //                                         non-assignees never see
+  //                                         a dot for assigned
+  //                                         threads)
+  //
+  //   is_unread = (effective IS NULL OR last_message_at > effective)
+  //               AND last_message_preview IS NOT NULL
+  //
+  // Cron path (viewerId === null) gets is_unread = false on every
+  // row — no human viewer, no dot to show.
+  const threadIds = threads.map((t) => t.id);
+  let readsByThreadAll = new Map<string, string>(); // thread_id → MAX(last_read_at)
+  let readsForViewer = new Map<string, string>(); // thread_id → viewer's last_read_at
+  if (viewerId && threadIds.length > 0) {
+    // Pull all read rows for the visible thread set. Cap is 50
+    // threads × N admins (~few hundred rows at current volume).
+    const readsRes = await supabase
+      .from("crm_thread_reads")
+      .select("thread_id, user_id, last_read_at")
+      .in("thread_id", threadIds);
+    if (readsRes.error) {
+      console.error("[crm:threads.list] reads lookup error", readsRes.error);
+    } else {
+      for (const r of readsRes.data as {
+        thread_id: string;
+        user_id: string;
+        last_read_at: string;
+      }[]) {
+        const prevMax = readsByThreadAll.get(r.thread_id);
+        if (!prevMax || Date.parse(r.last_read_at) > Date.parse(prevMax)) {
+          readsByThreadAll.set(r.thread_id, r.last_read_at);
+        }
+        if (r.user_id === viewerId) {
+          readsForViewer.set(r.thread_id, r.last_read_at);
+        }
+      }
+    }
+  }
+
+  function computeUnread(t: ThreadRow): boolean {
+    // Cron / no viewer → no human-facing dot to show.
+    if (!viewerId) return false;
+    // No message preview → empty inbox, no dot.
+    if (!t.last_message_preview) return false;
+    let effective: string | null;
+    if (t.assigned_to_user_id == null) {
+      effective = readsByThreadAll.get(t.id) ?? null;
+    } else if (t.assigned_to_user_id === viewerId) {
+      effective = readsForViewer.get(t.id) ?? null;
+    } else {
+      // Assigned to someone else → never unread for this viewer.
+      return false;
+    }
+    if (effective == null) return true;
+    return Date.parse(t.last_message_at) > Date.parse(effective);
+  }
+
   const out = threads.map((t) => ({
     ...t,
     last_message_direction: directionByThreadId.get(t.id) ?? null,
@@ -153,6 +228,7 @@ export async function GET(req: Request) {
       t.assigned_to_user_id != null
         ? assigneesById.get(t.assigned_to_user_id) ?? null
         : null,
+    is_unread: computeUnread(t),
   }));
 
   return Response.json({ threads: out }, { status: 200 });
