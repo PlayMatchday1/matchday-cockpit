@@ -34,8 +34,8 @@ export default function FilterBar({
   };
 
   return (
-    <div className="min-w-0 border-b border-cream-line bg-cream">
-      <div className="flex items-center gap-1.5 overflow-x-auto px-3 py-2 sm:px-4">
+    <div className="min-w-0 overflow-hidden border-b border-cream-line bg-cream">
+      <div className="scrollbar-hide flex flex-nowrap items-center gap-1.5 overflow-x-auto px-3 py-2 pr-4 sm:px-4">
         <FilterPill
           active={status === "all"}
           onClick={() => onChange({ status: "all" })}
