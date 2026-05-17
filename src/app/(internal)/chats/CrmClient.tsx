@@ -779,7 +779,7 @@ function ChatsHeader({
     <header className="min-w-0 shrink-0">
       {/* Title bar */}
       <div
-        className="flex h-12 items-center justify-between bg-deep-green px-3 sm:px-4"
+        className="flex min-h-12 items-center justify-between bg-deep-green px-3 sm:px-4"
         style={{ paddingTop: "env(safe-area-inset-top)" }}
       >
         <h1 className="text-base font-bold tracking-tight text-cream">Chats</h1>
