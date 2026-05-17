@@ -137,7 +137,7 @@ export default function Composer({
   );
 
   return (
-    <div className="border-t border-cream-line bg-cream px-3 py-3 sm:px-4">
+    <div className="border-t border-cream-line bg-cream px-3 py-3 pb-[calc(0.75rem+env(safe-area-inset-bottom))] sm:px-4">
       {whatsappWindowExpired && (
         <div className="mb-2 rounded-md border border-cream-line bg-cream-soft px-2 py-1.5 text-[11px] text-deep-green/65">
           <span aria-hidden className="mr-1">
