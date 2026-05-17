@@ -11,6 +11,23 @@ html {
   overflow-x: hidden;
 }
 
+/* Lock document scroll for fixed-height app shells (e.g. /chats).
+   iOS Safari standalone PWA scrolls the document when the on-screen
+   keyboard opens and does not restore scrollTop on dismiss, which
+   leaves the page offset by ~58px and the title bar partially above
+   the visible viewport. Pages that opt in by toggling this class on
+   both <html> and <body> get a non-scrollable document; their
+   internal scrollable regions (inbox list, conversation messages)
+   continue working via their own overflow-y-auto. */
+html.app-shell-locked,
+body.app-shell-locked {
+  overflow: hidden;
+  height: 100%;
+}
+body.app-shell-locked {
+  margin: 0;
+}
+
 /* Hide scrollbars on horizontal chip strips. Used by FilterBar
    and reusable for any other horizontally swiping element. */
 .scrollbar-hide {

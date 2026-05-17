@@ -259,6 +259,21 @@ export default function CrmClient() {
     setLastViewed(readJson<Record<string, string>>(LAST_VIEWED_KEY, {}));
   }, []);
 
+  // Lock document scroll while /chats is mounted. iOS Safari standalone
+  // PWA scrolls the document when the keyboard opens (to keep the focused
+  // input visible) and does not restore scrollTop on dismiss. With the
+  // document scroll axis disabled, iOS has nothing to scroll, and the
+  // title bar + bottom nav stay anchored to the viewport. Inbox list and
+  // conversation messages keep their own internal scroll containers.
+  useEffect(() => {
+    document.documentElement.classList.add("app-shell-locked");
+    document.body.classList.add("app-shell-locked");
+    return () => {
+      document.documentElement.classList.remove("app-shell-locked");
+      document.body.classList.remove("app-shell-locked");
+    };
+  }, []);
+
   // --------- fetchers ---------
   const loadThreads = useCallback(async () => {
     setThreadsError(null);
