@@ -171,27 +171,31 @@ export default function MatchChatsInbox({
           </div>
         )}
 
-        <div className="min-w-0 flex-1 overflow-y-auto overflow-x-hidden">
+        <div className="flex min-w-0 flex-1 flex-col overflow-y-auto overflow-x-hidden">
           {loading && !data && (
-            <div className="p-3 text-xs text-deep-green/50">Loading…</div>
+            <div className="flex flex-1 items-center justify-center px-6 text-xs text-deep-green/50">
+              Loading…
+            </div>
           )}
           {!loading && rows.length === 0 && !error && (
-            <div className="p-4 text-xs text-deep-green/45">
+            <div className="flex flex-1 items-center justify-center px-6 text-center text-xs text-deep-green/45">
               {tab === "active"
                 ? "No messages in the last 7 days."
                 : "No upcoming matches in the next 3 days."}
             </div>
           )}
-          <ul className="divide-y divide-cream-line">
-            {rows.map((r) => (
-              <InboxRow
-                key={r.chat_id}
-                row={r}
-                active={r.chat_id === selectedChatId}
-                onSelect={() => onSelect(r.chat_id)}
-              />
-            ))}
-          </ul>
+          {rows.length > 0 && (
+            <ul className="divide-y divide-cream-line">
+              {rows.map((r) => (
+                <InboxRow
+                  key={r.chat_id}
+                  row={r}
+                  active={r.chat_id === selectedChatId}
+                  onSelect={() => onSelect(r.chat_id)}
+                />
+              ))}
+            </ul>
+          )}
         </div>
       </aside>
     </>

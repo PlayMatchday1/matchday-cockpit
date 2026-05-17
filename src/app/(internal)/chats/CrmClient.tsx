@@ -627,7 +627,7 @@ export default function CrmClient() {
             showInboxMobile ? "flex flex-1" : "hidden lg:flex"
           }`}
         >
-          <div className="flex-1 overflow-y-auto overflow-x-hidden">
+          <div className="flex flex-1 flex-col overflow-y-auto overflow-x-hidden">
             {threadsError && (
               <div className="m-2 rounded border border-coral/40 bg-coral-soft p-2 text-xs text-coral-hover">
                 {threadsError}
@@ -639,20 +639,22 @@ export default function CrmClient() {
             {!threadsLoading &&
               filteredThreads.length === 0 &&
               !threadsError && (
-                <div className="p-4 text-xs text-deep-green/45">
+                <div className="flex flex-1 items-center justify-center px-6 text-center text-xs text-deep-green/45">
                   No conversations match the current filters.
                 </div>
               )}
-            <ul className="divide-y divide-cream-line">
-              {filteredThreads.map((t) => (
-                <InboxRow
-                  key={t.id}
-                  thread={t as InboxRowThread}
-                  active={t.id === selectedId}
-                  onSelect={() => setSelected(t.id)}
-                />
-              ))}
-            </ul>
+            {filteredThreads.length > 0 && (
+              <ul className="divide-y divide-cream-line">
+                {filteredThreads.map((t) => (
+                  <InboxRow
+                    key={t.id}
+                    thread={t as InboxRowThread}
+                    active={t.id === selectedId}
+                    onSelect={() => setSelected(t.id)}
+                  />
+                ))}
+              </ul>
+            )}
           </div>
         </aside>
 
