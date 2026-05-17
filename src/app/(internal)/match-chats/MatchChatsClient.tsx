@@ -179,7 +179,13 @@ export default function MatchChatsClient() {
 
   return (
     <div className="flex min-h-0 min-w-0 flex-1 flex-col bg-cream">
-      <MatchChatsHeader session={session} onRefresh={() => void load()} />
+      <MatchChatsHeader
+        session={session}
+        onRefresh={() => void load()}
+        loading={loading}
+        activeCount={data?.active.length ?? 0}
+        upcomingCount={data?.upcoming.length ?? 0}
+      />
       <div className="flex min-h-0 min-w-0 flex-1">
         <MatchChatsInbox
           data={data}
@@ -202,17 +208,31 @@ export default function MatchChatsClient() {
 }
 
 // ============================================================
-// Header — deep-green title bar with the Players/Matches segmented
-// control on the left, live/offline + Refresh on the right. Matches
-// /chats ChatsHeader chrome (bg-deep-green, min-h-12, safe-area-top
-// padding via the SafeAreaInsetWatcher-backed CSS var).
+// Header — mirrors /chats ChatsHeader (CrmClient.tsx) so the in-page
+// header chrome reads the same on both routes:
+//   1. Deep-green title bar with "Chats" h1
+//   2. bg-cream segmented-control row (PlayersMatchesToggle)
+//   3. Status line: tab counts + live + refresh
+// /chats has a filter button in row 1 and a FilterBar row between 2
+// and 3. /match-chats omits both (no filters on this surface); the
+// title bar's right side stays empty so the min-h-12 still matches.
+//
+// Title bar is split into a safe-area spacer + content row stacked
+// vertically so iOS Safari doesn't mis-center the content against
+// the padding-top of a single combined div (PR #58 fix preserved).
 // ============================================================
 function MatchChatsHeader({
   session,
   onRefresh,
+  loading,
+  activeCount,
+  upcomingCount,
 }: {
   session: ReturnType<typeof useFirebaseSession>;
   onRefresh: () => void;
+  loading: boolean;
+  activeCount: number;
+  upcomingCount: number;
 }) {
   const liveLabel =
     session.status === "ready"
@@ -226,22 +246,28 @@ function MatchChatsHeader({
       : session.status === "error"
         ? "bg-coral"
         : "bg-muted";
+  const countLabel = loading
+    ? "Loading"
+    : `${activeCount} active · ${upcomingCount} upcoming`;
 
-  // Title bar is split into two stacked divs so safe-area clearance
-  // does not depend on the items-center + min-height + padding-top
-  // interaction. The first div is a pure spacer at exactly
-  // var(--safe-area-top); the second is the normal content row with
-  // its own min-h-12 + items-center. Both share bg-deep-green so the
-  // status bar overlay reads as one continuous deep-green chrome.
   return (
-    <header className="min-w-0 shrink-0 bg-deep-green">
-      <div aria-hidden style={{ height: "var(--safe-area-top)" }} />
-      <div className="flex min-h-12 items-center justify-between gap-3 px-3 pt-2 sm:px-4">
-        <div className="min-w-0 max-w-[280px] flex-1">
-          <PlayersMatchesToggle current="matches" />
-        </div>
-        <div className="flex shrink-0 items-center gap-2 text-[11px]">
-          <span className="inline-flex items-center gap-1.5 text-cream/75">
+    <header className="min-w-0 shrink-0">
+      {/* Title bar — safe-area spacer + content row */}
+      <div aria-hidden className="bg-deep-green" style={{ height: "var(--safe-area-top)" }} />
+      <div className="flex min-h-12 items-center justify-between bg-deep-green px-3 sm:px-4">
+        <h1 className="text-base font-bold tracking-tight text-cream">Chats</h1>
+      </div>
+
+      {/* Segmented control */}
+      <div className="border-b border-cream-line bg-cream px-3 py-2 sm:px-4">
+        <PlayersMatchesToggle current="matches" />
+      </div>
+
+      {/* Status line */}
+      <div className="flex items-center justify-between gap-2 border-b border-cream-line bg-cream px-3 py-1 sm:px-4">
+        <span className="text-[11px] text-deep-green/55">{countLabel}</span>
+        <div className="flex items-center gap-2 text-[11px]">
+          <span className="inline-flex items-center gap-1 text-deep-green/55">
             <span
               aria-hidden
               className={`inline-block h-1.5 w-1.5 rounded-full ${liveDot}`}
@@ -252,7 +278,7 @@ function MatchChatsHeader({
             type="button"
             onClick={onRefresh}
             style={{ touchAction: "manipulation" }}
-            className="rounded-full px-2 py-0.5 text-[11px] font-medium text-cream/85 transition hover:bg-deep-green-soft hover:text-cream"
+            className="rounded-full px-2 py-0.5 text-[11px] font-medium text-deep-green/70 transition hover:bg-cream-soft hover:text-deep-green"
           >
             Refresh
           </button>
