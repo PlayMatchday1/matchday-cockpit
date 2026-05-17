@@ -122,3 +122,132 @@ function readMessageId(parsed: unknown): string | null {
   }
   return null;
 }
+
+// ============================================================
+// Inbound media download
+// ============================================================
+// WhatsApp delivers media as a media_id on the webhook. To get the
+// bytes we:
+//   1. GET /v21.0/{media_id} with the bearer token to read the
+//      temporary signed URL plus mime_type, sha256, file_size.
+//   2. GET that URL (also bearer-authenticated) to download the
+//      binary.
+// The URL returned in step 1 is short-lived (minutes), so the caller
+// must complete the download immediately. We do not retry expired
+// URLs — calling this helper a second time issues a fresh URL fetch.
+
+const MEDIA_DOWNLOAD_TIMEOUT_MS = 10_000;
+
+export type DownloadedMedia = {
+  buffer: Buffer;
+  mimeType: string;
+  sha256: string | null;
+  fileSize: number;
+};
+
+export async function downloadWhatsAppMedia(
+  mediaId: string,
+): Promise<DownloadedMedia> {
+  const token = process.env.META_ACCESS_TOKEN;
+  if (!token) {
+    throw new WhatsAppApiError(500, "Missing META_ACCESS_TOKEN");
+  }
+  if (!mediaId) {
+    throw new WhatsAppApiError(400, "mediaId required");
+  }
+
+  // Step 1: metadata + temporary download URL.
+  const metaUrl = `https://graph.facebook.com/${GRAPH_VERSION}/${encodeURIComponent(mediaId)}`;
+  const metaResp = await fetchWithTimeout(
+    metaUrl,
+    {
+      method: "GET",
+      headers: { Authorization: `Bearer ${token}` },
+    },
+    MEDIA_DOWNLOAD_TIMEOUT_MS,
+  );
+  if (!metaResp.ok) {
+    const body = await readBodySafe(metaResp);
+    throw new WhatsAppApiError(
+      metaResp.status,
+      body,
+      "Media metadata fetch failed",
+    );
+  }
+  const metaJson = (await metaResp.json()) as {
+    url?: string;
+    mime_type?: string;
+    sha256?: string;
+    file_size?: number;
+  };
+  if (!metaJson.url || !metaJson.mime_type) {
+    throw new WhatsAppApiError(
+      502,
+      metaJson,
+      "Media response missing url or mime_type",
+    );
+  }
+
+  // Step 2: download the binary. Same bearer token.
+  const binResp = await fetchWithTimeout(
+    metaJson.url,
+    {
+      method: "GET",
+      headers: { Authorization: `Bearer ${token}` },
+    },
+    MEDIA_DOWNLOAD_TIMEOUT_MS,
+  );
+  if (!binResp.ok) {
+    const body = await readBodySafe(binResp);
+    throw new WhatsAppApiError(
+      binResp.status,
+      body,
+      "Media binary fetch failed",
+    );
+  }
+  const arrayBuf = await binResp.arrayBuffer();
+  const buffer = Buffer.from(arrayBuf);
+
+  return {
+    buffer,
+    mimeType: metaJson.mime_type,
+    sha256: metaJson.sha256 ?? null,
+    fileSize: metaJson.file_size ?? buffer.length,
+  };
+}
+
+async function fetchWithTimeout(
+  url: string,
+  init: RequestInit,
+  timeoutMs: number,
+): Promise<Response> {
+  const ctrl = new AbortController();
+  const timer = setTimeout(() => ctrl.abort(), timeoutMs);
+  try {
+    return await fetch(url, { ...init, signal: ctrl.signal });
+  } catch (err) {
+    if ((err as { name?: string }).name === "AbortError") {
+      throw new WhatsAppApiError(
+        504,
+        `Timeout after ${timeoutMs}ms`,
+        "Media fetch timed out",
+      );
+    }
+    throw new WhatsAppApiError(
+      502,
+      err instanceof Error ? err.message : String(err),
+      "Network error during media fetch",
+    );
+  } finally {
+    clearTimeout(timer);
+  }
+}
+
+async function readBodySafe(resp: Response): Promise<unknown> {
+  const text = await resp.text().catch(() => "");
+  try {
+    return JSON.parse(text);
+  } catch {
+    return text;
+  }
+}
