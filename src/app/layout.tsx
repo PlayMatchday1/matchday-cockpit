@@ -2,6 +2,7 @@ import type { Metadata, Viewport } from "next";
 import { Bebas_Neue, Geist, Geist_Mono } from "next/font/google";
 import "./globals.css";
 import ServiceWorkerRegistration from "@/components/ServiceWorkerRegistration";
+import { SafeAreaInsetWatcher } from "@/components/SafeAreaInsetWatcher";
 
 // Root layout: HTML shell + fonts + PWA shell only. Authentication
 // and internal nav live inside `(internal)/layout.tsx` so
@@ -90,6 +91,7 @@ export default function RootLayout({
       <body className="min-h-full">
         {children}
         <ServiceWorkerRegistration />
+        <SafeAreaInsetWatcher />
       </body>
     </html>
   );

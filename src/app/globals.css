@@ -28,6 +28,15 @@ html {
      pages. 0 on desktop so the desktop top-nav stays the only chrome;
      56px + safe-area inside the nav for the iOS home indicator. */
   --bottom-nav-h: 0px;
+
+  /* Safe-area-inset-top exposed as a custom property so JS can override
+     it with a freshly-computed value after iOS Safari PWA keyboard
+     cycles (env() returns stale 0 after keyboard dismiss). On first
+     paint and on non-iOS platforms the default env() resolves
+     correctly, so the variable is safe to use before any JS runs.
+     SafeAreaInsetWatcher writes to this from a visualViewport
+     resize listener. */
+  --safe-area-top: env(safe-area-inset-top);
 }
 
 @media (max-width: 767.98px) {
