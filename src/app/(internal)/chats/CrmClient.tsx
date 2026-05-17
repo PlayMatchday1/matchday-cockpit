@@ -605,10 +605,10 @@ export default function CrmClient() {
         canFilterMine={!!appUser?.id}
       />
 
-      <div className="flex min-h-0 flex-1">
+      <div className="flex min-h-0 min-w-0 flex-1">
         {/* --- LEFT PANE: inbox (filter row lives in ChatsHeader) --- */}
         <aside
-          className={`flex-col border-r border-cream-line bg-white lg:flex lg:w-[280px] lg:shrink-0 ${
+          className={`flex-col border-r border-cream-line bg-white min-w-0 lg:flex lg:w-[280px] lg:shrink-0 ${
             showInboxMobile ? "flex flex-1" : "hidden lg:flex"
           }`}
         >
