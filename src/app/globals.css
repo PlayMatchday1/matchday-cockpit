@@ -42,8 +42,13 @@ body.app-shell-locked {
   --foreground: #003326;
 
   /* Fixed mobile bottom nav reserves vertical space on auth-gated
-     pages. 0 on desktop so the desktop top-nav stays the only chrome;
-     56px + safe-area inside the nav for the iOS home indicator. */
+     pages. 0 on desktop so the desktop top-nav stays the only chrome.
+     On mobile the reservation must include env(safe-area-inset-bottom)
+     because the nav's own paddingBottom sits inside its bounding box
+     (h-14 content row + safe-area paddingBottom = ~90px total visual
+     height on iPhone X+). Reserving only 56px left a 34px slab of
+     wrapper bg visible above the nav and behind the home indicator
+     zone on app-shell-locked pages. */
   --bottom-nav-h: 0px;
 
   /* Safe-area-inset-top exposed as a custom property so JS can override
@@ -58,7 +63,7 @@ body.app-shell-locked {
 
 @media (max-width: 767.98px) {
   :root {
-    --bottom-nav-h: 56px;
+    --bottom-nav-h: calc(56px + env(safe-area-inset-bottom));
   }
 }
 
