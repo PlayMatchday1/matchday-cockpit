@@ -260,7 +260,7 @@ function MoreSheet({
           <X aria-hidden size={20} strokeWidth={2} />
         </button>
       </header>
-      <div className="flex-1 overflow-y-auto bg-white">
+      <div className="flex-1 overflow-y-auto overflow-x-hidden bg-white">
         <ul className="divide-y divide-cream-line">
           {items.map((it) => {
             const active = pathname.startsWith(it.href);

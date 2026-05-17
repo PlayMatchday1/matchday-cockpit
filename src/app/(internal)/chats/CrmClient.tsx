@@ -612,7 +612,7 @@ export default function CrmClient() {
             showInboxMobile ? "flex flex-1" : "hidden lg:flex"
           }`}
         >
-          <div className="flex-1 overflow-y-auto">
+          <div className="flex-1 overflow-y-auto overflow-x-hidden">
             {threadsError && (
               <div className="m-2 rounded border border-coral/40 bg-coral-soft p-2 text-xs text-coral-hover">
                 {threadsError}
@@ -964,7 +964,7 @@ function Conversation({
       />
       <div
         ref={scrollRef}
-        className="flex-1 overflow-y-auto bg-cream px-3 py-3 sm:px-4"
+        className="flex-1 overflow-y-auto overflow-x-hidden bg-cream px-3 py-3 sm:px-4"
       >
         {error && (
           <div className="mb-3 rounded border border-coral/40 bg-coral-soft p-2 text-xs text-coral-hover">

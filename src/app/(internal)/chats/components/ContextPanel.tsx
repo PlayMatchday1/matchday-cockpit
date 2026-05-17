@@ -109,7 +109,7 @@ export default function ContextPanel({
 
   if (mode === "column") {
     return (
-      <aside className="hidden w-[240px] shrink-0 flex-col overflow-y-auto border-l border-cream-line bg-cream-soft lg:flex">
+      <aside className="hidden w-[240px] shrink-0 flex-col overflow-y-auto overflow-x-hidden border-l border-cream-line bg-cream-soft lg:flex">
         <ContextBody {...props} />
       </aside>
     );
@@ -153,7 +153,7 @@ export default function ContextPanel({
             <X aria-hidden className="h-4 w-4" />
           </button>
         </div>
-        <div className="flex-1 overflow-y-auto">
+        <div className="flex-1 overflow-y-auto overflow-x-hidden">
           <ContextBody {...props} />
         </div>
       </div>
