@@ -28,6 +28,7 @@ export default function CrmSubTabStrip() {
     <nav
       aria-label="Player Chat / Match Chats"
       className="flex shrink-0 items-center gap-2 border-b border-cream-line bg-cream px-3 py-2 sm:px-4"
+      style={{ paddingTop: "calc(0.5rem + env(safe-area-inset-top))" }}
     >
       {TABS.map((t) => {
         const active = t.match(pathname);

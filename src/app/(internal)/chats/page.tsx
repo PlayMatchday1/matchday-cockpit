@@ -25,7 +25,7 @@ export const metadata: Metadata = {
 export default function PlayerChatPage() {
   return (
     <AdminGuard>
-      <div className="-mx-6 -my-8 flex h-[calc(100vh-4rem-env(safe-area-inset-top))] flex-col">
+      <div className="-mx-6 -my-8 flex h-[calc(100vh-env(safe-area-inset-top))] flex-col md:h-[calc(100vh-4rem-env(safe-area-inset-top))]">
         {/* Suspense boundary required by Next 16 for any client tree
             that calls useSearchParams (CrmClient owns ?threadId,
             ?cities, ?status). */}

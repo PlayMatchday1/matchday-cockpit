@@ -251,13 +251,21 @@ type MatchRow = {
   field_title: string | null;
   field_address: string | null;
   start_date: string | null;
+  start_date_utc: string | null;
+  city_identifier: string | null;
   is_cancelled: boolean | null;
 };
 
 type RecentMatch = {
   match_api_id: number;
   venue: string | null;
+  // Both start_date (mislabeled wall-clock-with-+00) and
+  // start_date_utc (the genuine UTC value) are returned. The client
+  // should prefer start_date_utc paired with city_identifier when
+  // rendering match times in the venue's local zone.
   start_date: string | null;
+  start_date_utc: string | null;
+  city_identifier: string | null;
   status: "Played" | "Upcoming" | "No-show" | "Canceled";
 };
 
@@ -290,7 +298,9 @@ async function loadRecentMatches(
   // 2) batch-fetch the matches.
   const matches = await supabase
     .from("mdapi_matches")
-    .select("api_id, field_title, field_address, start_date, is_cancelled")
+    .select(
+      "api_id, field_title, field_address, start_date, start_date_utc, city_identifier, is_cancelled",
+    )
     .in("api_id", matchIds);
   if (matches.error) return [];
 
@@ -307,6 +317,8 @@ async function loadRecentMatches(
       match_api_id: m.api_id,
       venue: m.field_title,
       start_date: m.start_date,
+      start_date_utc: m.start_date_utc,
+      city_identifier: m.city_identifier,
       status: deriveMatchStatus(r, m, now),
     });
   }
@@ -350,6 +362,8 @@ type UpcomingMatchRow = {
   api_id: number;
   field_title: string | null;
   start_date: string | null;
+  start_date_utc: string | null;
+  city_identifier: string | null;
   is_cancelled: boolean | null;
 };
 
@@ -357,6 +371,8 @@ type UpcomingMatch = {
   match_api_id: number;
   venue: string | null;
   start_date: string | null;
+  start_date_utc: string | null;
+  city_identifier: string | null;
   team: number | null;
   player_number: number | null;
   is_cancelled: boolean;
@@ -381,7 +397,9 @@ async function loadUpcomingMatches(
   ).toISOString();
   const matches = await supabase
     .from("mdapi_matches")
-    .select("api_id, field_title, start_date, is_cancelled")
+    .select(
+      "api_id, field_title, start_date, start_date_utc, city_identifier, is_cancelled",
+    )
     .gt("start_date", nowIso)
     .lt("start_date", cutoff)
     .order("start_date", { ascending: true });
@@ -414,6 +432,8 @@ async function loadUpcomingMatches(
       match_api_id: m.api_id,
       venue: m.field_title,
       start_date: m.start_date,
+      start_date_utc: m.start_date_utc,
+      city_identifier: m.city_identifier,
       team: r.team,
       player_number: r.player_number,
       is_cancelled: r.is_cancelled === true || m.is_cancelled === true,
