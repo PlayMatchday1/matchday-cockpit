@@ -417,3 +417,147 @@ export async function sendWhatsAppImage({
   }
   return { messageId };
 }
+
+// ============================================================
+// Outbound video / audio / document send
+// ============================================================
+// Same two-step pattern as sendWhatsAppImage: caller has already
+// called uploadWhatsAppMedia to get a media_id, then invokes the
+// per-type helper here to actually send. Each helper builds the
+// type-specific payload shape and routes through postWhatsAppMessage
+// for the shared fetch + parse loop.
+
+async function postWhatsAppMessage(
+  toPhone: string,
+  payload: Record<string, unknown>,
+): Promise<SendWhatsAppTextResult> {
+  const token = process.env.META_ACCESS_TOKEN;
+  const phoneNumberId = process.env.META_PHONE_NUMBER_ID;
+  if (!token || !phoneNumberId) {
+    throw new WhatsAppApiError(
+      500,
+      "Missing META_ACCESS_TOKEN or META_PHONE_NUMBER_ID",
+    );
+  }
+  const url = `https://graph.facebook.com/${GRAPH_VERSION}/${phoneNumberId}/messages`;
+  let resp: Response;
+  try {
+    resp = await fetch(url, {
+      method: "POST",
+      headers: {
+        Authorization: `Bearer ${token}`,
+        "Content-Type": "application/json",
+      },
+      body: JSON.stringify({
+        messaging_product: "whatsapp",
+        to: toMetaPhone(toPhone),
+        ...payload,
+      }),
+    });
+  } catch (err) {
+    throw new WhatsAppApiError(
+      502,
+      err instanceof Error ? err.message : String(err),
+      "Network error reaching Meta Cloud API",
+    );
+  }
+  const text = await resp.text();
+  let parsed: unknown = text;
+  try {
+    parsed = JSON.parse(text);
+  } catch {
+    /* keep raw text */
+  }
+  if (!resp.ok) {
+    throw new WhatsAppApiError(resp.status, parsed);
+  }
+  const messageId = readMessageId(parsed);
+  if (!messageId) {
+    throw new WhatsAppApiError(
+      502,
+      parsed,
+      "Meta response missing messages[0].id",
+    );
+  }
+  return { messageId };
+}
+
+export type SendWhatsAppVideoArgs = {
+  toPhone: string;
+  mediaId: string;
+  caption?: string;
+};
+
+export async function sendWhatsAppVideo({
+  toPhone,
+  mediaId,
+  caption,
+}: SendWhatsAppVideoArgs): Promise<SendWhatsAppTextResult> {
+  if (!toPhone || !mediaId) {
+    throw new WhatsAppApiError(400, "toPhone and mediaId are required");
+  }
+  if (caption && caption.length > WHATSAPP_MEDIA_CAPTION_MAX) {
+    throw new WhatsAppApiError(
+      400,
+      `caption exceeds ${WHATSAPP_MEDIA_CAPTION_MAX} chars`,
+    );
+  }
+  const video: { id: string; caption?: string } = { id: mediaId };
+  if (caption && caption.length > 0) video.caption = caption;
+  return postWhatsAppMessage(toPhone, { type: "video", video });
+}
+
+export type SendWhatsAppAudioArgs = {
+  toPhone: string;
+  mediaId: string;
+};
+
+// Audio messages cannot carry captions per Meta spec — the helper
+// signature reflects that.
+export async function sendWhatsAppAudio({
+  toPhone,
+  mediaId,
+}: SendWhatsAppAudioArgs): Promise<SendWhatsAppTextResult> {
+  if (!toPhone || !mediaId) {
+    throw new WhatsAppApiError(400, "toPhone and mediaId are required");
+  }
+  return postWhatsAppMessage(toPhone, {
+    type: "audio",
+    audio: { id: mediaId },
+  });
+}
+
+export type SendWhatsAppDocumentArgs = {
+  toPhone: string;
+  mediaId: string;
+  // Required by Meta — surfaces in the recipient's WhatsApp client
+  // as the displayed file label.
+  filename: string;
+  caption?: string;
+};
+
+export async function sendWhatsAppDocument({
+  toPhone,
+  mediaId,
+  filename,
+  caption,
+}: SendWhatsAppDocumentArgs): Promise<SendWhatsAppTextResult> {
+  if (!toPhone || !mediaId) {
+    throw new WhatsAppApiError(400, "toPhone and mediaId are required");
+  }
+  if (!filename) {
+    throw new WhatsAppApiError(400, "filename is required for documents");
+  }
+  if (caption && caption.length > WHATSAPP_MEDIA_CAPTION_MAX) {
+    throw new WhatsAppApiError(
+      400,
+      `caption exceeds ${WHATSAPP_MEDIA_CAPTION_MAX} chars`,
+    );
+  }
+  const document: { id: string; filename: string; caption?: string } = {
+    id: mediaId,
+    filename,
+  };
+  if (caption && caption.length > 0) document.caption = caption;
+  return postWhatsAppMessage(toPhone, { type: "document", document });
+}
