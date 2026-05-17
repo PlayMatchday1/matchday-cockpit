@@ -18,10 +18,10 @@ export type FirebaseTokenResponse = {
   expiresAt: string; // ISO; informational, SDK auto-refreshes ID tokens
 };
 
-// Inbox row shared by both sections. `section` lets the client render
-// without re-deriving categorization.
+// Inbox row shared by all three sections. `section` lets the client
+// render without re-deriving categorization.
 export type MatchChatInboxRow = {
-  section: "active" | "upcoming";
+  section: "active" | "upcoming" | "past";
   chat_id: string; // numeric string ("14613"); the Firestore parent doc id
   match: {
     api_id: number | null;
@@ -47,6 +47,7 @@ export type MatchChatInboxRow = {
 export type MatchChatInboxResponse = {
   active: MatchChatInboxRow[];
   upcoming: MatchChatInboxRow[];
+  past: MatchChatInboxRow[];
 };
 
 // ============================================================
@@ -190,6 +191,12 @@ export const ACTIVE_WINDOW_DAYS = 7;
 
 // Upcoming section: matches starting within this many days.
 export const UPCOMING_WINDOW_DAYS = 3;
+
+// Past section: matches whose end_date_utc fell within this many days
+// before now. Allowed to overlap with Active — a match that ended in
+// the last 7 days and ALSO had recent chat activity appears in both
+// tabs by design.
+export const PAST_WINDOW_DAYS = 7;
 
 // Detail-view pagination.
 export const MESSAGE_PAGE_SIZE = 50;

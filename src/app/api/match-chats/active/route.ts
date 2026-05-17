@@ -1,14 +1,21 @@
 // GET /api/match-chats/active — inbox data for /match-chats.
 //
-// Returns two sections:
+// Returns three sections:
 //   1. "active"   — chats with >= 1 message in the last 7 days,
 //                   newest message first.
 //   2. "upcoming" — matches starting in the next 3 days that are NOT
 //                   cancelled AND don't already appear in active
 //                   (dedupe on chat_id). Soonest first.
+//   3. "past"     — matches that ended within the last 7 days, NOT
+//                   cancelled. Allowed to overlap with active — a
+//                   match that ended recently and ALSO has recent
+//                   chat activity appears in BOTH active and past
+//                   by design (past is a fast lookup for recently-
+//                   finished games, not a separate inbox state).
+//                   Newest end-time first.
 //
-// Both lists are joined to mdapi_matches for the venue/city/manager
-// display payload. Orphans (Firestore chat with no matching
+// All three lists are joined to mdapi_matches for the venue/city/
+// manager display payload. Orphans (Firestore chat with no matching
 // mdapi_matches row) are returned with match=null and the UI renders
 // "Match {id} · (no match data)".
 //
@@ -24,6 +31,7 @@ import { authenticateCrm } from "@/lib/crmAuth";
 import { firestore } from "@/lib/firebaseAdmin";
 import {
   ACTIVE_WINDOW_DAYS,
+  PAST_WINDOW_DAYS,
   UPCOMING_WINDOW_DAYS,
   isValidChatId,
   type MatchChatInboxResponse,
@@ -222,12 +230,65 @@ export async function GET(req: Request) {
     last_message: null,
   }));
 
+  // ---------------- Section 3: Past ----------------
+  // Matches whose end_date_utc fell in the last PAST_WINDOW_DAYS,
+  // not cancelled. Overlap with active is allowed by design — no
+  // dedupe here, unlike upcoming. end_date_utc is the genuine UTC
+  // column on mdapi_matches; the sibling end_date column has the
+  // same +00-offset wall-clock mislabel as start_date and must not
+  // be used. Newest end-time first.
+  const pastLowerMs = Date.now() - PAST_WINDOW_DAYS * 24 * 60 * 60 * 1000;
+  const pastLowerIso = new Date(pastLowerMs).toISOString();
+  const pastRes = await supabase
+    .from("mdapi_matches")
+    .select(
+      "api_id, field_title, start_date_utc, city_identifier, manager_email, is_cancelled, end_date_utc",
+    )
+    .gte("end_date_utc", pastLowerIso)
+    .lt("end_date_utc", nowIso)
+    .neq("is_cancelled", true)
+    .order("end_date_utc", { ascending: false })
+    .limit(SECTION_CAP);
+  if (pastRes.error) {
+    console.error("[match-chats:active] past query failed", pastRes.error);
+    return Response.json({ error: "DB error" }, { status: 500 });
+  }
+  // Pull last-message for any past chats that have one in Firestore.
+  // We already have activeByChat keyed by chat_id for the overlap set;
+  // reuse it. Past matches without a recent message keep last_message
+  // null (same shape as upcoming).
+  const past: MatchChatInboxRow[] = ((pastRes.data ?? []) as MatchRow[]).map(
+    (m) => {
+      const chatId = String(m.api_id);
+      const overlap = activeByChat.get(chatId);
+      return {
+        section: "past",
+        chat_id: chatId,
+        match: {
+          api_id: m.api_id,
+          field_title: m.field_title,
+          start_date_utc: m.start_date_utc,
+          city_identifier: m.city_identifier,
+          manager_email: m.manager_email,
+          is_cancelled: m.is_cancelled === true,
+        },
+        last_message: overlap
+          ? {
+              sent_at: overlap.last_message_at,
+              body: overlap.last_message_text,
+              sent_by: overlap.last_message_sent_by,
+            }
+          : null,
+      };
+    },
+  );
+
   if (truncated) {
     console.warn(
       `[match-chats:active] CG sweep hit cap (${ACTIVE_CG_LIMIT}). Some active chats may be missing.`,
     );
   }
 
-  const body: MatchChatInboxResponse = { active, upcoming };
+  const body: MatchChatInboxResponse = { active, upcoming, past };
   return Response.json(body, { status: 200 });
 }

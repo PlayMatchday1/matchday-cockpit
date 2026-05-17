@@ -1,10 +1,10 @@
 "use client";
 
 // Left pane of the two-pane Match Chats shell. Tabs (Active /
-// Upcoming) above the row list. Inbox data, Firebase session, and
-// the realtime listener all live in the parent (MatchChatsClient)
-// now — this component is presentational and consumes data via
-// props.
+// Upcoming / Past) above the row list, with a city pill filter row
+// below the tabs. Inbox data, Firebase session, and the realtime
+// listener all live in the parent (MatchChatsClient) now — this
+// component is presentational and consumes data via props.
 //
 // Mobile flow: when showOnMobile is true the pane fills the screen
 // (flex-1 w-full); when false it hides (the chat pane takes over).
@@ -13,14 +13,12 @@
 // localStorage flag is ignored and the pane always renders expanded.
 
 import { useCallback, useEffect, useMemo, useState } from "react";
-import {
-  type MatchChatInboxResponse,
-  type MatchChatInboxRow,
-} from "@/lib/matchChats";
+import { type MatchChatInboxRow } from "@/lib/matchChats";
 import { formatMatchTitle } from "@/lib/cityTimezones";
 import CityChip from "@/components/CityChip";
+import MatchChatsFilterBar from "./components/MatchChatsFilterBar";
 
-export type InboxTab = "active" | "upcoming";
+export type InboxTab = "active" | "upcoming" | "past";
 
 const COLLAPSE_KEY = "cockpit:match-chats:inbox-collapsed";
 
@@ -58,28 +56,61 @@ function writeCollapse(b: boolean): void {
   }
 }
 
+function emptyStateFor(tab: InboxTab, cities: Set<string>): string {
+  const filtered = cities.size > 0;
+  if (tab === "active") {
+    return filtered
+      ? "No messages in the last 7 days for the selected city."
+      : "No messages in the last 7 days.";
+  }
+  if (tab === "upcoming") {
+    return filtered
+      ? "No upcoming matches in the next 3 days for the selected city."
+      : "No upcoming matches in the next 3 days.";
+  }
+  // past
+  return filtered
+    ? "No matches in the last 7 days for the selected city."
+    : "No matches in the last 7 days.";
+}
+
 // ============================================================
 // main
 // ============================================================
 
 export default function MatchChatsInbox({
-  data,
+  activeRows,
+  upcomingRows,
+  pastRows,
   error,
   loading,
+  dataReady,
   selectedChatId,
   tab,
   onSelect,
   onTabChange,
   showOnMobile,
+  cities,
+  onCitiesChange,
 }: {
-  data: MatchChatInboxResponse | null;
+  // Rows are already city-filtered by the parent — counts on tab
+  // buttons reflect the filter, matching /chats's "visible" convention.
+  activeRows: MatchChatInboxRow[];
+  upcomingRows: MatchChatInboxRow[];
+  pastRows: MatchChatInboxRow[];
   error: string | null;
   loading: boolean;
+  // True once the initial fetch resolved (even to an empty payload).
+  // Distinguishes "still loading" from "loaded, no rows in this tab"
+  // — the latter wants the empty-state copy.
+  dataReady: boolean;
   selectedChatId: string | null;
   tab: InboxTab;
   onSelect: (chatId: string) => void;
   onTabChange: (tab: InboxTab) => void;
   showOnMobile: boolean;
+  cities: Set<string>;
+  onCitiesChange: (next: Set<string>) => void;
 }) {
   const [collapsed, setCollapsed] = useState(false);
   useEffect(() => {
@@ -93,9 +124,15 @@ export default function MatchChatsInbox({
     });
   }, []);
 
-  const activeCount = data?.active.length ?? 0;
-  const upcomingCount = data?.upcoming.length ?? 0;
-  const rows = (tab === "active" ? data?.active : data?.upcoming) ?? [];
+  const activeCount = activeRows.length;
+  const upcomingCount = upcomingRows.length;
+  const pastCount = pastRows.length;
+  const rows =
+    tab === "active"
+      ? activeRows
+      : tab === "upcoming"
+        ? upcomingRows
+        : pastRows;
 
   return (
     <>
@@ -155,6 +192,12 @@ export default function MatchChatsInbox({
             label="Upcoming"
             count={upcomingCount}
           />
+          <TabButton
+            active={tab === "past"}
+            onClick={() => onTabChange("past")}
+            label="Past"
+            count={pastCount}
+          />
           <button
             type="button"
             onClick={toggleCollapse}
@@ -165,6 +208,9 @@ export default function MatchChatsInbox({
           </button>
         </div>
 
+        {/* City pill filter row — applies across all three tabs. */}
+        <MatchChatsFilterBar cities={cities} onChange={onCitiesChange} />
+
         {error && (
           <div className="m-2 rounded border border-coral/40 bg-coral-soft p-2 text-xs text-coral-hover">
             {error}
@@ -172,16 +218,14 @@ export default function MatchChatsInbox({
         )}
 
         <div className="flex min-w-0 flex-1 flex-col overflow-y-auto overflow-x-hidden">
-          {loading && !data && (
+          {loading && !dataReady && (
             <div className="flex flex-1 items-center justify-center px-6 text-xs text-deep-green/50">
               Loading…
             </div>
           )}
           {!loading && rows.length === 0 && !error && (
             <div className="flex flex-1 items-center justify-center px-6 text-center text-xs text-deep-green/45">
-              {tab === "active"
-                ? "No messages in the last 7 days."
-                : "No upcoming matches in the next 3 days."}
+              {emptyStateFor(tab, cities)}
             </div>
           )}
           {rows.length > 0 && (
@@ -246,8 +290,12 @@ function InboxRow({
   const m = row.match;
   const isCancelled = m?.is_cancelled === true;
   const isOrphan = m == null;
-  const isUpcomingEmpty = row.section === "upcoming";
-  const dim = (isCancelled || isUpcomingEmpty || isOrphan) && !active;
+  // Quiet rows: no Firestore message in the active window. Upcoming
+  // rows always qualify; past rows qualify when they don't overlap
+  // with the active section's last-message data. Dim them so the eye
+  // jumps to rows with fresh activity.
+  const isQuiet = row.last_message == null;
+  const dim = (isCancelled || isQuiet || isOrphan) && !active;
 
   const title = useMemo(() => {
     if (isOrphan) return null;
