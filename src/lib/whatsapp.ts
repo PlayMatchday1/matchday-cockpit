@@ -251,3 +251,169 @@ async function readBodySafe(resp: Response): Promise<unknown> {
     return text;
   }
 }
+
+// ============================================================
+// Outbound media upload + image send
+// ============================================================
+// Two-step pattern (Meta Cloud API):
+//   1. POST {PHONE_NUMBER_ID}/media with multipart/form-data — returns
+//      a media_id usable for ~30 days on Meta's side.
+//   2. POST {PHONE_NUMBER_ID}/messages with type=image and the
+//      media_id — actually sends the message, returns a wamid.
+// We do not retry an expired/used media_id. Each operator send
+// triggers a fresh upload + send pair.
+
+const MEDIA_UPLOAD_TIMEOUT_MS = 30_000;
+
+export type UploadWhatsAppMediaArgs = {
+  buffer: Buffer;
+  mimeType: string;
+  filename: string;
+};
+
+export async function uploadWhatsAppMedia({
+  buffer,
+  mimeType,
+  filename,
+}: UploadWhatsAppMediaArgs): Promise<{ mediaId: string }> {
+  const token = process.env.META_ACCESS_TOKEN;
+  const phoneNumberId = process.env.META_PHONE_NUMBER_ID;
+  if (!token || !phoneNumberId) {
+    throw new WhatsAppApiError(
+      500,
+      "Missing META_ACCESS_TOKEN or META_PHONE_NUMBER_ID",
+    );
+  }
+  if (!buffer || buffer.length === 0) {
+    throw new WhatsAppApiError(400, "buffer required");
+  }
+  if (!mimeType) {
+    throw new WhatsAppApiError(400, "mimeType required");
+  }
+
+  const url = `https://graph.facebook.com/${GRAPH_VERSION}/${phoneNumberId}/media`;
+  const form = new FormData();
+  form.append("messaging_product", "whatsapp");
+  form.append("type", mimeType);
+  // Wrap the Buffer as a Blob so FormData treats it as a file part.
+  // Filename is preserved for Meta's record but does not affect how
+  // the recipient sees the image.
+  form.append("file", new Blob([new Uint8Array(buffer)], { type: mimeType }), filename);
+
+  const resp = await fetchWithTimeout(
+    url,
+    {
+      method: "POST",
+      headers: { Authorization: `Bearer ${token}` },
+      body: form,
+    },
+    MEDIA_UPLOAD_TIMEOUT_MS,
+  );
+  const text = await resp.text();
+  let parsed: unknown = text;
+  try {
+    parsed = JSON.parse(text);
+  } catch {
+    /* keep raw text */
+  }
+  if (!resp.ok) {
+    throw new WhatsAppApiError(resp.status, parsed);
+  }
+
+  const mediaId =
+    parsed && typeof parsed === "object"
+      ? (parsed as { id?: unknown }).id
+      : null;
+  if (typeof mediaId !== "string" || mediaId.length === 0) {
+    throw new WhatsAppApiError(
+      502,
+      parsed,
+      "Meta media upload response missing id",
+    );
+  }
+  return { mediaId };
+}
+
+// Meta's documented caption limit is 1024 chars on image/video
+// messages. Enforced server-side so a UI bug can't truncate silently.
+export const WHATSAPP_MEDIA_CAPTION_MAX = 1024;
+
+export type SendWhatsAppImageArgs = {
+  toPhone: string;
+  mediaId: string;
+  caption?: string;
+};
+
+export async function sendWhatsAppImage({
+  toPhone,
+  mediaId,
+  caption,
+}: SendWhatsAppImageArgs): Promise<SendWhatsAppTextResult> {
+  const token = process.env.META_ACCESS_TOKEN;
+  const phoneNumberId = process.env.META_PHONE_NUMBER_ID;
+  if (!token || !phoneNumberId) {
+    throw new WhatsAppApiError(
+      500,
+      "Missing META_ACCESS_TOKEN or META_PHONE_NUMBER_ID",
+    );
+  }
+  if (!toPhone || !mediaId) {
+    throw new WhatsAppApiError(400, "toPhone and mediaId are required");
+  }
+  if (caption && caption.length > WHATSAPP_MEDIA_CAPTION_MAX) {
+    throw new WhatsAppApiError(
+      400,
+      `caption exceeds ${WHATSAPP_MEDIA_CAPTION_MAX} chars`,
+    );
+  }
+
+  const url = `https://graph.facebook.com/${GRAPH_VERSION}/${phoneNumberId}/messages`;
+  // Caption only included when non-empty — Meta rejects empty-string
+  // captions on some endpoint versions.
+  const image: { id: string; caption?: string } = { id: mediaId };
+  if (caption && caption.length > 0) image.caption = caption;
+  const payload = {
+    messaging_product: "whatsapp",
+    to: toMetaPhone(toPhone),
+    type: "image",
+    image,
+  };
+
+  let resp: Response;
+  try {
+    resp = await fetch(url, {
+      method: "POST",
+      headers: {
+        Authorization: `Bearer ${token}`,
+        "Content-Type": "application/json",
+      },
+      body: JSON.stringify(payload),
+    });
+  } catch (err) {
+    throw new WhatsAppApiError(
+      502,
+      err instanceof Error ? err.message : String(err),
+      "Network error reaching Meta Cloud API",
+    );
+  }
+
+  const text = await resp.text();
+  let parsed: unknown = text;
+  try {
+    parsed = JSON.parse(text);
+  } catch {
+    /* keep raw text */
+  }
+  if (!resp.ok) {
+    throw new WhatsAppApiError(resp.status, parsed);
+  }
+  const messageId = readMessageId(parsed);
+  if (!messageId) {
+    throw new WhatsAppApiError(
+      502,
+      parsed,
+      "Meta response missing messages[0].id",
+    );
+  }
+  return { messageId };
+}
