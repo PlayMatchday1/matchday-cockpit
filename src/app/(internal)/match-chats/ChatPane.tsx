@@ -1,17 +1,18 @@
 "use client";
 
-// Embedded chat pane — right side of the two-pane Match Chats shell.
-// Lifted from the original /match-chats/[chatId] page; differences:
-//   - No back-link / page-level chrome; the parent shell owns layout.
-//   - chatId arrives as a prop, not a route param. Resetting on change
-//     happens via keyed effects (the messages/listener state below).
+// Right pane of the two-pane Match Chats shell. On mobile (< lg) this
+// pane fills the screen when a chat is selected; a back chevron in
+// the header returns to the inbox. On lg+ it sits alongside the inbox
+// pane, and renders an empty state when no chat is selected.
+//
+// Differences from the legacy standalone /match-chats/[chatId] page:
+//   - No page-level chrome. The shell owns layout.
+//   - chatId arrives as a prop, not a route param. State resets on
+//     change via a keyed effect.
 //   - Header uses formatMatchTitle so the city-local time is correct.
 //     Reads mdapi_matches.start_date_utc (the actually-UTC column).
-//     The sibling start_date column on mdapi_matches is mislabeled
-//     UTC (it's local wall-clock with a +00 offset) — using it gave
-//     a 5-hour skew for CDT matches, etc.
-//   - Realtime listener + Load Older pagination + composer are
-//     unchanged.
+//   - Realtime listener + Load Older pagination + composer behavior
+//     are unchanged.
 
 import {
   useCallback,
@@ -32,6 +33,7 @@ import {
   type DocumentSnapshot,
   type QuerySnapshot,
 } from "firebase/firestore";
+import { ArrowUp, ChevronLeft } from "lucide-react";
 import { supabase } from "@/lib/supabase";
 import { useFirebaseSession } from "@/lib/useFirebaseSession";
 import CityChip from "@/components/CityChip";
@@ -102,7 +104,15 @@ async function bearerHeaders(): Promise<Record<string, string> | null> {
 // main
 // ============================================================
 
-export default function ChatPane({ chatId }: { chatId: string | null }) {
+export default function ChatPane({
+  chatId,
+  showOnMobile,
+  onBack,
+}: {
+  chatId: string | null;
+  showOnMobile: boolean;
+  onBack: () => void;
+}) {
   const session = useFirebaseSession();
 
   const [match, setMatch] = useState<MatchContext | null>(null);
@@ -116,18 +126,31 @@ export default function ChatPane({ chatId }: { chatId: string | null }) {
   const [loadingOlder, setLoadingOlder] = useState(false);
   const [listenError, setListenError] = useState<string | null>(null);
 
-  // Empty state — no selection.
+  // Mobile visibility:
+  //   showOnMobile=true  → flex flex-1, full-screen on mobile
+  //   showOnMobile=false → hidden on mobile, but visible on lg+
+  // On lg+ the pane is always visible.
+  const visibility = `${
+    showOnMobile ? "flex flex-1" : "hidden"
+  } lg:flex lg:flex-1`;
+
+  // Empty state — no selection. On mobile this is never reached
+  // because the parent sets showOnMobile=false here, but the inner
+  // `hidden lg:flex` belt-and-suspenders keeps it from ever showing
+  // at narrow widths even if that contract changes.
   if (!chatId) {
     return (
-      <section className="flex flex-1 items-center justify-center bg-white">
-        <div className="flex flex-col items-center gap-2 px-6 text-center">
+      <section
+        className={`min-w-0 flex-col items-center justify-center bg-white ${visibility}`}
+      >
+        <div className="hidden max-w-[32ch] flex-col items-center gap-2 px-6 text-center lg:flex">
           <div aria-hidden className="text-2xl opacity-70">
             💬
           </div>
           <div className="text-sm font-bold text-deep-green">
             Select a conversation
           </div>
-          <div className="max-w-[32ch] text-xs text-deep-green/55">
+          <div className="text-xs text-deep-green/55">
             Pick a match chat from the inbox to view messages and reply
             as MatchDay.
           </div>
@@ -140,6 +163,8 @@ export default function ChatPane({ chatId }: { chatId: string | null }) {
     <ChatPaneInner
       chatId={chatId}
       session={session}
+      visibility={visibility}
+      onBack={onBack}
       match={match}
       setMatch={setMatch}
       matchError={matchError}
@@ -160,10 +185,13 @@ export default function ChatPane({ chatId }: { chatId: string | null }) {
 
 // Inner component so the outer one can guard on `chatId == null`
 // before any hooks fire. (React's rules-of-hooks won't let us early-
-// return between hook calls, so we lift them all into this child.)
+// return between hook calls, so all state lives on the outer and is
+// passed in.)
 function ChatPaneInner({
   chatId,
   session,
+  visibility,
+  onBack,
   match,
   setMatch,
   matchError,
@@ -181,6 +209,8 @@ function ChatPaneInner({
 }: {
   chatId: string;
   session: ReturnType<typeof useFirebaseSession>;
+  visibility: string;
+  onBack: () => void;
   match: MatchContext | null;
   setMatch: (m: MatchContext | null) => void;
   matchError: string | null;
@@ -207,9 +237,7 @@ function ChatPaneInner({
     setListenError(null);
     setMatch(null);
     setMatchError(null);
-    // Listener + match-fetch effects below pick up the new chatId.
-    // setters used here are stable from useState — no need to
-    // include them in deps.
+    // setters from useState are stable — exhaustive-deps disabled.
     // eslint-disable-next-line react-hooks/exhaustive-deps
   }, [chatId]);
 
@@ -371,7 +399,7 @@ function ChatPaneInner({
     const ta = taRef.current;
     if (!ta) return;
     ta.style.height = "auto";
-    const next = Math.min(240, Math.max(80, ta.scrollHeight));
+    const next = Math.min(240, Math.max(44, ta.scrollHeight));
     ta.style.height = `${next}px`;
   }, [body]);
 
@@ -427,7 +455,7 @@ function ChatPaneInner({
     el.scrollTop = el.scrollHeight;
   }, [messages.length, chatId]);
 
-  // ---------------- header ----------------
+  // ---------------- header content ----------------
   const headerNodes = useMemo(() => {
     if (!validId) {
       return <span className="italic text-deep-green/55">Invalid chat id</span>;
@@ -445,7 +473,7 @@ function ChatPaneInner({
       fieldTitle: match.field_title,
     });
     return (
-      <div className="flex flex-wrap items-baseline gap-1.5">
+      <div className="flex min-w-0 flex-wrap items-baseline gap-1.5">
         {t.cityCode && <CityChip code={t.cityCode} size="sm" />}
         <Dot />
         <span className="font-semibold text-deep-green">{t.date}</span>
@@ -459,7 +487,9 @@ function ChatPaneInner({
           </>
         )}
         <Dot />
-        <span className="font-semibold text-deep-green">{t.venue}</span>
+        <span className="truncate font-semibold text-deep-green">
+          {t.venue}
+        </span>
         {match.is_cancelled === true && (
           <span className="rounded-full bg-muted-soft px-1.5 py-0.5 text-[10px] font-medium text-muted">
             Cancelled
@@ -470,12 +500,22 @@ function ChatPaneInner({
   }, [validId, match, chatId]);
 
   return (
-    <section className="flex flex-1 flex-col bg-white">
-      <div className="border-b border-cream-line bg-cream px-4 py-3">
-        <div className="min-w-0">
+    <section className={`min-w-0 flex-col bg-white ${visibility}`}>
+      {/* Header — h-14 sticky, back chevron on mobile only */}
+      <div className="flex h-14 shrink-0 items-center gap-2 border-b border-cream-line bg-white px-2 sm:px-4">
+        <button
+          type="button"
+          onClick={onBack}
+          aria-label="Back to inbox"
+          style={{ touchAction: "manipulation" }}
+          className="inline-flex h-11 w-11 shrink-0 items-center justify-center rounded-full text-deep-green/70 hover:bg-cream-soft hover:text-deep-green lg:hidden"
+        >
+          <ChevronLeft aria-hidden className="h-5 w-5" />
+        </button>
+        <div className="min-w-0 flex-1">
           {headerNodes}
           {match?.manager_email && (
-            <div className="mt-1 text-[11px] text-deep-green/50">
+            <div className="mt-0.5 truncate text-[10px] text-deep-green/50">
               Manager:{" "}
               <span className="font-medium text-deep-green/70">
                 {match.manager_first_name} {match.manager_last_name}
@@ -486,7 +526,11 @@ function ChatPaneInner({
         </div>
       </div>
 
-      <div ref={scrollRef} className="flex-1 overflow-y-auto bg-cream-soft px-4 py-3">
+      {/* Messages */}
+      <div
+        ref={scrollRef}
+        className="min-w-0 flex-1 overflow-y-auto overflow-x-hidden bg-cream-soft px-4 py-3"
+      >
         {matchError && (
           <div className="mb-2 rounded border border-coral/40 bg-coral-soft p-2 text-xs text-coral-hover">
             Match context: {matchError}
@@ -534,20 +578,36 @@ function ChatPaneInner({
         </ul>
       </div>
 
-      <div className="border-t border-cream-line bg-white px-4 py-3">
-        <textarea
-          ref={taRef}
-          value={body}
-          disabled={sending}
-          onChange={(e) => setBody(e.target.value)}
-          onKeyDown={onKeyDown}
-          placeholder="Reply as MatchDay. Enter to send, Shift+Enter for newline."
-          className="block w-full resize-none rounded-md border border-cream-line bg-white px-3 py-2 text-sm text-deep-green placeholder:text-deep-green/40 focus:border-deep-green focus:outline-none"
-          style={{ minHeight: 80, maxHeight: 240 }}
-        />
-        <div className="mt-2 flex items-center justify-between text-xs text-deep-green/60">
+      {/* Composer — round mint Send button inline with textarea,
+          safe-area bottom padding so iOS home indicator clears. */}
+      <div className="border-t border-cream-line bg-cream px-3 py-3 pb-[calc(0.75rem+env(safe-area-inset-bottom))] sm:px-4">
+        <div className="flex items-end gap-2">
+          <textarea
+            ref={taRef}
+            value={body}
+            disabled={sending}
+            onChange={(e) => setBody(e.target.value)}
+            onKeyDown={onKeyDown}
+            placeholder="Reply as MatchDay. Enter to send, Shift+Enter for newline."
+            className="block flex-1 resize-none rounded-2xl border border-cream-line bg-white px-3 py-2 text-sm text-deep-green placeholder:text-deep-green/40 focus:border-deep-green focus:outline-none disabled:bg-cream-soft disabled:text-deep-green/40"
+            style={{ minHeight: 44, maxHeight: 240 }}
+          />
+          <button
+            type="button"
+            onClick={() => void submit()}
+            disabled={sending || !body.trim()}
+            aria-label={sending ? "Sending message" : "Send message"}
+            style={{ touchAction: "manipulation" }}
+            className="flex h-11 w-11 shrink-0 items-center justify-center rounded-full bg-mint text-deep-green shadow-sm transition hover:bg-mint-hover disabled:opacity-40"
+          >
+            <ArrowUp aria-hidden className="h-5 w-5" strokeWidth={2.5} />
+          </button>
+        </div>
+        <div className="mt-1.5 flex items-center justify-between text-[10px] text-deep-green/55">
           <div>
-            <span className="font-medium text-deep-green">{body.length}</span>{" "}
+            <span className="font-medium text-deep-green/75">
+              {body.length}
+            </span>{" "}
             chars · posts as{" "}
             <span className="rounded-full bg-mint-soft px-1.5 py-0.5 text-[10px] font-bold uppercase tracking-wider text-deep-green">
               MatchDay
@@ -556,15 +616,6 @@ function ChatPaneInner({
               <span className="ml-2 text-coral-hover">{sendError}</span>
             )}
           </div>
-          <button
-            type="button"
-            onClick={() => void submit()}
-            disabled={sending || !body.trim()}
-            style={{ touchAction: "manipulation" }}
-            className="h-11 min-w-[88px] rounded-full bg-deep-green px-4 text-sm font-medium text-cream transition hover:bg-deep-green-hover disabled:opacity-40"
-          >
-            {sending ? "Sending…" : "Send"}
-          </button>
         </div>
       </div>
     </section>

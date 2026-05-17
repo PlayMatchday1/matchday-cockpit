@@ -1,17 +1,18 @@
 import { Suspense } from "react";
 import type { Metadata } from "next";
 import AdminGuard from "@/components/AdminGuard";
-import CrmSubTabStrip from "@/components/CrmSubTabStrip";
 import MatchChatsClient from "./MatchChatsClient";
 
 // Two-pane Match Chats console. Left = tabbed inbox (Active /
 // Upcoming), right = selected chat with realtime listener and
 // composer. URL state: ?chatId=…&tab=active|upcoming.
 //
-// Outer div mirrors /crm — escapes AuthGate's main wrapper so the
-// sub-tab strip + client occupy a single full-bleed surface flush
-// with the top nav. The MatchChatsClient root no longer needs its
-// own `-mx-6 -my-8` escape; that responsibility moved up here.
+// Mirrors /chats: outer div escapes AuthGate's <main> padding so the
+// header + client occupy one full-bleed area flush under the top nav.
+// Height math uses 100dvh + --bottom-nav-h so MobileBottomNav (under
+// md:) doesn't cover the composer. The Players/Matches segmented
+// control lives inside MatchChatsClient's header now, replacing the
+// old CrmSubTabStrip mount.
 
 export const metadata: Metadata = {
   title: "Match Chats",
@@ -20,8 +21,15 @@ export const metadata: Metadata = {
 export default function MatchChatsPage() {
   return (
     <AdminGuard>
-      <div className="-mx-6 -my-8 flex h-[calc(100vh-env(safe-area-inset-top))] flex-col md:h-[calc(100vh-4rem-env(safe-area-inset-top))]">
-        <CrmSubTabStrip />
+      <div
+        className="-mx-6 -mb-8 flex h-[calc(100dvh-var(--bottom-nav-h))] flex-col md:h-[calc(100dvh-4rem)]"
+        style={{
+          marginTop: "calc(-1 * max(env(safe-area-inset-top), 2rem))",
+        }}
+      >
+        {/* Suspense boundary required by Next 16 for any client tree
+            that calls useSearchParams (MatchChatsClient owns ?chatId
+            and ?tab). */}
         <Suspense fallback={null}>
           <MatchChatsClient />
         </Suspense>

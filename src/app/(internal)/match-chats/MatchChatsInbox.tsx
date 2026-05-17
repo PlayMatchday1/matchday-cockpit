@@ -1,32 +1,19 @@
 "use client";
 
 // Left pane of the two-pane Match Chats shell. Tabs (Active /
-// Upcoming) replace the previous stacked-section layout. Collapsible
-// to a 40px strip; collapse state persists in localStorage.
+// Upcoming) above the row list. Inbox data, Firebase session, and
+// the realtime listener all live in the parent (MatchChatsClient)
+// now — this component is presentational and consumes data via
+// props.
 //
-// Selection is owned by the parent (MatchChatsClient): this component
-// receives `selectedChatId` for the active-row highlight and calls
-// `onSelect(chatId)` when a row is clicked. URL state (chatId + tab)
-// is managed by the parent via useSearchParams.
-//
-// Realtime: a coarse collection-group listener triggers a full inbox
-// refetch whenever a new message lands in the active window. We keep
-// the existing match-title text up to date via formatMatchTitle so
-// city-local times stay correct as DST flips, etc.
+// Mobile flow: when showOnMobile is true the pane fills the screen
+// (flex-1 w-full); when false it hides (the chat pane takes over).
+// On lg+ the pane is always visible at 320px expanded or 40px
+// collapsed. Collapse is a desktop-only feature — on mobile the
+// localStorage flag is ignored and the pane always renders expanded.
 
 import { useCallback, useEffect, useMemo, useState } from "react";
 import {
-  collectionGroup,
-  onSnapshot,
-  orderBy,
-  query,
-  Timestamp,
-  where,
-} from "firebase/firestore";
-import { supabase } from "@/lib/supabase";
-import { useFirebaseSession } from "@/lib/useFirebaseSession";
-import {
-  ACTIVE_WINDOW_DAYS,
   type MatchChatInboxResponse,
   type MatchChatInboxRow,
 } from "@/lib/matchChats";
@@ -38,20 +25,6 @@ export type InboxTab = "active" | "upcoming";
 const COLLAPSE_KEY = "cockpit:match-chats:inbox-collapsed";
 
 // ---------------- helpers ----------------
-
-async function fetchInbox(): Promise<MatchChatInboxResponse> {
-  const { data } = await supabase.auth.getSession();
-  const token = data.session?.access_token;
-  if (!token) throw new Error("No active session — please sign in again.");
-  const res = await fetch("/api/match-chats/active", {
-    headers: { Authorization: `Bearer ${token}` },
-  });
-  if (!res.ok) {
-    const j = (await res.json().catch(() => ({}))) as { error?: string };
-    throw new Error(j.error ?? `HTTP ${res.status}`);
-  }
-  return (await res.json()) as MatchChatInboxResponse;
-}
 
 function timeAgo(iso: string): string {
   const then = Date.parse(iso);
@@ -90,22 +63,24 @@ function writeCollapse(b: boolean): void {
 // ============================================================
 
 export default function MatchChatsInbox({
+  data,
+  error,
+  loading,
   selectedChatId,
   tab,
   onSelect,
   onTabChange,
+  showOnMobile,
 }: {
+  data: MatchChatInboxResponse | null;
+  error: string | null;
+  loading: boolean;
   selectedChatId: string | null;
   tab: InboxTab;
   onSelect: (chatId: string) => void;
   onTabChange: (tab: InboxTab) => void;
+  showOnMobile: boolean;
 }) {
-  const session = useFirebaseSession();
-
-  const [data, setData] = useState<MatchChatInboxResponse | null>(null);
-  const [error, setError] = useState<string | null>(null);
-  const [loading, setLoading] = useState(true);
-
   const [collapsed, setCollapsed] = useState(false);
   useEffect(() => {
     setCollapsed(readCollapse());
@@ -118,190 +93,112 @@ export default function MatchChatsInbox({
     });
   }, []);
 
-  const load = useCallback(async () => {
-    setError(null);
-    try {
-      setData(await fetchInbox());
-    } catch (err) {
-      setError(err instanceof Error ? err.message : String(err));
-    } finally {
-      setLoading(false);
-    }
-  }, []);
-
-  useEffect(() => {
-    void load();
-  }, [load]);
-
-  // Realtime: coarse refetch on any new message in the active window.
-  useEffect(() => {
-    if (session.status !== "ready") return;
-    const cutoff = new Date(
-      Date.now() - ACTIVE_WINDOW_DAYS * 24 * 60 * 60 * 1000,
-    );
-    const q = query(
-      collectionGroup(session.db, "messages"),
-      where("createdAt", ">=", Timestamp.fromDate(cutoff)),
-      orderBy("createdAt", "desc"),
-    );
-    let firstSnapshot = true;
-    const unsub = onSnapshot(
-      q,
-      (snap) => {
-        if (firstSnapshot) {
-          firstSnapshot = false;
-          return;
-        }
-        const hasAdditions = snap
-          .docChanges()
-          .some((c) => c.type === "added");
-        if (hasAdditions) void load();
-      },
-      (err) => {
-        console.warn(
-          "[match-chats:inbox] realtime listener failed",
-          err.message,
-        );
-      },
-    );
-    return () => unsub();
-  }, [session, load]);
-
   const activeCount = data?.active.length ?? 0;
   const upcomingCount = data?.upcoming.length ?? 0;
   const rows = (tab === "active" ? data?.active : data?.upcoming) ?? [];
 
-  // ---------------- collapsed strip ----------------
-  if (collapsed) {
-    return (
-      <aside
-        className="flex w-10 shrink-0 flex-col overflow-hidden border-r border-cream-line bg-cream-soft transition-[width] duration-200 ease-out"
-        style={{ width: 40 }}
-      >
-        <div className="flex h-9 items-center justify-center border-b border-cream-line bg-cream-soft">
+  return (
+    <>
+      {/* Collapsed strip — lg+ only when collapsed=true. Mobile
+          ignores the localStorage flag and renders the expanded panel
+          below instead. */}
+      {collapsed && (
+        <aside
+          className="hidden w-10 shrink-0 flex-col overflow-hidden border-r border-cream-line bg-cream-soft transition-[width] duration-200 ease-out lg:flex"
+          style={{ width: 40 }}
+        >
+          <div className="flex h-9 items-center justify-center border-b border-cream-line bg-cream-soft">
+            <button
+              type="button"
+              onClick={toggleCollapse}
+              aria-label="Expand inbox"
+              className="inline-flex h-6 w-6 items-center justify-center rounded text-deep-green/60 transition hover:bg-white hover:text-deep-green"
+            >
+              ›
+            </button>
+          </div>
           <button
             type="button"
             onClick={toggleCollapse}
             aria-label="Expand inbox"
-            className="inline-flex h-6 w-6 items-center justify-center rounded text-deep-green/60 transition hover:bg-white hover:text-deep-green"
+            className="flex-1 text-[10px] uppercase tracking-widest text-deep-green/40 [writing-mode:vertical-rl]"
           >
-            ›
+            Inbox
           </button>
-        </div>
-        <button
-          type="button"
-          onClick={toggleCollapse}
-          aria-label="Expand inbox"
-          className="flex-1 text-[10px] uppercase tracking-widest text-deep-green/40 [writing-mode:vertical-rl]"
-        >
-          Inbox
-        </button>
-      </aside>
-    );
-  }
+        </aside>
+      )}
 
-  // ---------------- expanded panel ----------------
-  return (
-    <aside
-      className="flex w-[320px] shrink-0 flex-col overflow-hidden border-r border-cream-line bg-cream-soft transition-[width] duration-200 ease-out"
-      style={{ width: 320 }}
-    >
-      {/* Header: status + collapse button */}
-      <div className="flex h-9 items-center justify-between border-b border-cream-line bg-cream-soft px-2">
-        <FirebaseStatus session={session} />
-        <div className="flex items-center gap-1">
-          <button
-            type="button"
-            onClick={() => void load()}
-            className="rounded border border-cream-line bg-white px-2 py-0.5 text-[10px] font-medium text-deep-green transition hover:bg-cream-soft"
-          >
-            Refresh
-          </button>
+      {/* Expanded panel. Visibility:
+          - Mobile (< lg): renders full-width when showOnMobile, hidden
+            otherwise. The collapse flag is ignored.
+          - lg+: renders 320px when !collapsed, hidden when collapsed
+            (the strip above takes over). */}
+      <aside
+        className={`min-w-0 flex-col overflow-hidden border-r border-cream-line bg-cream-soft transition-[width] duration-200 ease-out ${
+          showOnMobile ? "flex w-full flex-1" : "hidden"
+        } ${
+          collapsed ? "lg:hidden" : "lg:flex lg:w-[320px] lg:shrink-0"
+        }`}
+      >
+        {/* Tabs row — also hosts the desktop-only collapse toggle on
+            the right edge. */}
+        <div className="flex shrink-0 items-center gap-1 border-b border-cream-line bg-cream-soft px-2 py-1.5">
+          <TabButton
+            active={tab === "active"}
+            onClick={() => onTabChange("active")}
+            label="Active"
+            count={activeCount}
+          />
+          <TabButton
+            active={tab === "upcoming"}
+            onClick={() => onTabChange("upcoming")}
+            label="Upcoming"
+            count={upcomingCount}
+          />
           <button
             type="button"
             onClick={toggleCollapse}
             aria-label="Collapse inbox"
-            className="inline-flex h-6 w-6 items-center justify-center rounded text-deep-green/60 transition hover:bg-white hover:text-deep-green"
+            className="ml-1 hidden h-6 w-6 shrink-0 items-center justify-center rounded text-deep-green/60 transition hover:bg-white hover:text-deep-green lg:inline-flex"
           >
             ‹
           </button>
         </div>
-      </div>
 
-      {/* Tabs */}
-      <div className="flex shrink-0 gap-1 border-b border-cream-line bg-cream-soft px-2 py-1.5">
-        <TabButton
-          active={tab === "active"}
-          onClick={() => onTabChange("active")}
-          label="Active"
-          count={activeCount}
-        />
-        <TabButton
-          active={tab === "upcoming"}
-          onClick={() => onTabChange("upcoming")}
-          label="Upcoming"
-          count={upcomingCount}
-        />
-      </div>
-
-      {error && (
-        <div className="m-2 rounded border border-coral/40 bg-coral-soft p-2 text-xs text-coral-hover">
-          {error}
-        </div>
-      )}
-
-      <div className="flex-1 overflow-y-auto">
-        {loading && !data && (
-          <div className="p-3 text-xs text-deep-green/50">Loading…</div>
-        )}
-        {!loading && rows.length === 0 && !error && (
-          <div className="p-4 text-xs text-deep-green/45">
-            {tab === "active"
-              ? "No messages in the last 7 days."
-              : "No upcoming matches in the next 3 days."}
+        {error && (
+          <div className="m-2 rounded border border-coral/40 bg-coral-soft p-2 text-xs text-coral-hover">
+            {error}
           </div>
         )}
-        <ul className="divide-y divide-cream-line">
-          {rows.map((r) => (
-            <InboxRow
-              key={r.chat_id}
-              row={r}
-              active={r.chat_id === selectedChatId}
-              onSelect={() => onSelect(r.chat_id)}
-            />
-          ))}
-        </ul>
-      </div>
-    </aside>
+
+        <div className="min-w-0 flex-1 overflow-y-auto overflow-x-hidden">
+          {loading && !data && (
+            <div className="p-3 text-xs text-deep-green/50">Loading…</div>
+          )}
+          {!loading && rows.length === 0 && !error && (
+            <div className="p-4 text-xs text-deep-green/45">
+              {tab === "active"
+                ? "No messages in the last 7 days."
+                : "No upcoming matches in the next 3 days."}
+            </div>
+          )}
+          <ul className="divide-y divide-cream-line">
+            {rows.map((r) => (
+              <InboxRow
+                key={r.chat_id}
+                row={r}
+                active={r.chat_id === selectedChatId}
+                onSelect={() => onSelect(r.chat_id)}
+              />
+            ))}
+          </ul>
+        </div>
+      </aside>
+    </>
   );
 }
 
 // ---------------- pieces ----------------
-
-function FirebaseStatus({
-  session,
-}: {
-  session: ReturnType<typeof useFirebaseSession>;
-}) {
-  const label =
-    session.status === "ready"
-      ? "live"
-      : session.status === "error"
-        ? "offline"
-        : "connecting…";
-  const dot =
-    session.status === "ready"
-      ? "bg-mint"
-      : session.status === "error"
-        ? "bg-coral"
-        : "bg-muted";
-  return (
-    <span className="inline-flex items-center gap-1.5 px-1 text-[11px] text-deep-green/60">
-      <span className={`inline-block h-2 w-2 rounded-full ${dot}`} aria-hidden />
-      {label}
-    </span>
-  );
-}
 
 function TabButton({
   active,
@@ -318,7 +215,8 @@ function TabButton({
     <button
       type="button"
       onClick={onClick}
-      className={`flex-1 rounded-full px-2.5 py-0.5 text-xs font-medium transition ${
+      style={{ touchAction: "manipulation" }}
+      className={`min-w-0 flex-1 rounded-full px-2.5 py-0.5 text-xs font-medium transition ${
         active
           ? "bg-deep-green text-cream"
           : "border border-cream-line bg-white text-deep-green/70 hover:bg-cream-soft"
@@ -361,16 +259,17 @@ function InboxRow({
       <button
         type="button"
         onClick={onSelect}
-        className={`block w-full px-3 py-2.5 text-left transition ${
+        style={{ touchAction: "manipulation" }}
+        className={`block w-full min-w-0 px-3 py-2.5 text-left transition ${
           active
             ? "bg-mint-soft"
             : "border-l-2 border-l-transparent hover:bg-white"
         } ${active ? "border-l-2 border-l-mint" : ""} ${dim ? "opacity-60" : ""}`}
       >
-        <div className="flex items-baseline justify-between gap-2">
+        <div className="flex min-w-0 items-baseline justify-between gap-2">
           <div className="flex min-w-0 flex-wrap items-center gap-1.5">
             {isOrphan ? (
-              <span className="italic text-deep-green/55">
+              <span className="truncate italic text-deep-green/55">
                 Match {row.chat_id} · (no match data)
               </span>
             ) : (
@@ -410,11 +309,11 @@ function InboxRow({
           )}
         </div>
         {!isOrphan && title?.venue && (
-          <div className="mt-0.5 truncate text-xs font-semibold text-deep-green">
+          <div className="mt-0.5 min-w-0 truncate text-xs font-semibold text-deep-green">
             {title.venue}
           </div>
         )}
-        <div className="mt-0.5 truncate text-xs">
+        <div className="mt-0.5 min-w-0 truncate text-xs">
           {row.last_message ? (
             <>
               {row.last_message.sent_by && (
