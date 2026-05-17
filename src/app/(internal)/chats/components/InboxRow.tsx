@@ -106,7 +106,7 @@ export default function InboxRow({
         <div className="min-w-0 flex-1">
           <div className="flex items-baseline justify-between gap-2">
             <span
-              className={`truncate text-[15px] text-deep-green ${
+              className={`min-w-0 truncate text-[15px] text-deep-green ${
                 thread.unread ? "font-medium" : "font-normal"
               }`}
             >
@@ -118,7 +118,7 @@ export default function InboxRow({
           </div>
           <div className="mt-0.5 flex items-center justify-between gap-2">
             <span
-              className={`truncate text-[13px] ${
+              className={`min-w-0 truncate text-[13px] ${
                 thread.unread
                   ? "font-medium text-deep-green"
                   : "font-normal text-deep-green/55"
