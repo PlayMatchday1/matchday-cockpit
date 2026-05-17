@@ -12,11 +12,10 @@ import CrmClient from "./CrmClient";
 // is calculated against TopNav (4rem) so the inner column can flex
 // to fill the rest of the viewport.
 //
-// CrmSubTabStrip used to render here as the Player/Match toggle.
-// Replaced in CrmClient by a brand-aligned header with an inline
-// segmented control. The /match-chats route still mounts
-// CrmSubTabStrip on its own page until that surface gets a matching
-// redesign.
+// The Players/Matches segmented control is rendered inside
+// CrmClient's ChatsHeader via the shared PlayersMatchesToggle
+// component; /match-chats mounts the same toggle inside its own
+// MatchChatsHeader.
 
 export const metadata: Metadata = {
   title: "Player Chat",

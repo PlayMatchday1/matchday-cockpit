@@ -37,9 +37,9 @@ import {
   useRef,
   useState,
 } from "react";
-import Link from "next/link";
 import { useRouter, useSearchParams } from "next/navigation";
 import { ChevronLeft, Info, SlidersHorizontal } from "lucide-react";
+import PlayersMatchesToggle from "@/components/PlayersMatchesToggle";
 import { supabase } from "@/lib/supabase";
 import { useAuth } from "@/lib/useAuth";
 import { UNKNOWN_CITY } from "@/lib/cityColors";
@@ -738,7 +738,7 @@ export default function CrmClient() {
 // ============================================================
 // Chats header — brand-aligned title bar + Players/Matches
 // segmented control + merged filter row + tiny status line.
-// Replaces the old PageStatusBar + CrmSubTabStrip combo.
+// Replaces the old PageStatusBar combo.
 // ============================================================
 function ChatsHeader({
   threadsLoading,
@@ -818,10 +818,7 @@ function ChatsHeader({
 
       {/* Segmented control */}
       <div className="border-b border-cream-line bg-cream px-3 py-2 sm:px-4">
-        <div className="grid grid-cols-2 gap-1 rounded-full border border-deep-green/15 bg-white p-0.5">
-          <SegmentLink href="/chats" label="Players" active />
-          <SegmentLink href="/match-chats" label="Matches" active={false} />
-        </div>
+        <PlayersMatchesToggle current="players" />
       </div>
 
       {/* Filter row */}
@@ -856,31 +853,6 @@ function ChatsHeader({
         </div>
       </div>
     </header>
-  );
-}
-
-function SegmentLink({
-  href,
-  label,
-  active,
-}: {
-  href: string;
-  label: string;
-  active: boolean;
-}) {
-  return (
-    <Link
-      href={href}
-      aria-current={active ? "page" : undefined}
-      style={{ touchAction: "manipulation" }}
-      className={`flex h-9 items-center justify-center rounded-full text-sm font-medium transition ${
-        active
-          ? "bg-deep-green text-cream"
-          : "text-deep-green/60 hover:bg-cream-soft hover:text-deep-green"
-      }`}
-    >
-      {label}
-    </Link>
   );
 }
 
