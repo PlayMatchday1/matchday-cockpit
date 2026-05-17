@@ -24,7 +24,10 @@ export type InboxRowThread = {
     preferable_city_normalized: string | null;
     is_member?: boolean | null;
   } | null;
-  unread: boolean;
+  // Server-computed unread state per the assignment-aware rule. The
+  // client never recomputes the rule — it just renders this flag and
+  // optimistically patches on mark-read.
+  is_unread: boolean;
 };
 
 function fullName(t: InboxRowThread): string {
@@ -107,7 +110,7 @@ export default function InboxRow({
           <div className="flex items-baseline justify-between gap-2">
             <span
               className={`min-w-0 truncate text-[15px] text-deep-green ${
-                thread.unread ? "font-medium" : "font-normal"
+                thread.is_unread ? "font-medium" : "font-normal"
               }`}
             >
               {name}
@@ -119,14 +122,14 @@ export default function InboxRow({
           <div className="mt-0.5 flex items-center justify-between gap-2">
             <span
               className={`min-w-0 truncate text-[13px] ${
-                thread.unread
+                thread.is_unread
                   ? "font-medium text-deep-green"
                   : "font-normal text-deep-green/55"
               }`}
             >
               {preview}
             </span>
-            {thread.unread && (
+            {thread.is_unread && (
               <span
                 aria-label="Unread"
                 className="h-2 w-2 shrink-0 rounded-full bg-deep-green"
