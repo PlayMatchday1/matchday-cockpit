@@ -171,13 +171,19 @@ export default function MobileBottomNav() {
           aria-label="More"
           aria-expanded={sheetOpen}
           style={{ touchAction: "manipulation" }}
-          className={`flex h-14 flex-col items-center justify-center gap-0.5 text-[10px] transition ${
+          className={`flex h-14 flex-col items-center justify-center gap-1 text-[10px] transition ${
             moreActive
               ? "font-medium text-deep-green"
               : "font-normal text-muted"
           }`}
         >
-          <MoreHorizontal aria-hidden size={22} strokeWidth={1.75} />
+          <span
+            className={`flex items-center justify-center rounded-2xl px-4 py-0.5 transition ${
+              moreActive ? "bg-deep-green/10" : ""
+            }`}
+          >
+            <MoreHorizontal aria-hidden size={22} strokeWidth={moreActive ? 2 : 1.75} />
+          </span>
           <span>More</span>
         </button>
       </nav>
@@ -214,11 +220,17 @@ function NavTab({
       aria-label={label}
       aria-current={active ? "page" : undefined}
       style={{ touchAction: "manipulation" }}
-      className={`flex h-14 flex-col items-center justify-center gap-0.5 text-[10px] transition ${
+      className={`flex h-14 flex-col items-center justify-center gap-1 text-[10px] transition ${
         active ? "font-medium text-deep-green" : "font-normal text-muted"
       }`}
     >
-      <Icon aria-hidden size={22} strokeWidth={active ? 2 : 1.75} />
+      <span
+        className={`flex items-center justify-center rounded-2xl px-4 py-0.5 transition ${
+          active ? "bg-deep-green/10" : ""
+        }`}
+      >
+        <Icon aria-hidden size={22} strokeWidth={active ? 2 : 1.75} />
+      </span>
       <span>{label}</span>
     </Link>
   );
