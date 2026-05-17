@@ -792,11 +792,14 @@ function ChatsHeader({
 
   return (
     <header className="min-w-0 shrink-0">
-      {/* Title bar */}
-      <div
-        className="flex min-h-12 items-center justify-between bg-deep-green px-3 sm:px-4"
-        style={{ paddingTop: "var(--safe-area-top)" }}
-      >
+      {/* Title bar — safe-area spacer + content row stacked. Splitting
+          the two means status-bar clearance does not depend on the
+          items-center + min-height + padding-top interaction, which
+          mis-centered the toggle on iOS Safari (PR #57 regression on
+          /match-chats). Same pattern applied here so /chats stays
+          robust to the same iOS quirk. */}
+      <div aria-hidden className="bg-deep-green" style={{ height: "var(--safe-area-top)" }} />
+      <div className="flex min-h-12 items-center justify-between bg-deep-green px-3 sm:px-4">
         <h1 className="text-base font-bold tracking-tight text-cream">Chats</h1>
         <button
           type="button"

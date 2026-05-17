@@ -227,12 +227,16 @@ function MatchChatsHeader({
         ? "bg-coral"
         : "bg-muted";
 
+  // Title bar is split into two stacked divs so safe-area clearance
+  // does not depend on the items-center + min-height + padding-top
+  // interaction. The first div is a pure spacer at exactly
+  // var(--safe-area-top); the second is the normal content row with
+  // its own min-h-12 + items-center. Both share bg-deep-green so the
+  // status bar overlay reads as one continuous deep-green chrome.
   return (
-    <header className="min-w-0 shrink-0">
-      <div
-        className="flex min-h-12 items-center justify-between gap-3 bg-deep-green px-3 sm:px-4"
-        style={{ paddingTop: "var(--safe-area-top)" }}
-      >
+    <header className="min-w-0 shrink-0 bg-deep-green">
+      <div aria-hidden style={{ height: "var(--safe-area-top)" }} />
+      <div className="flex min-h-12 items-center justify-between gap-3 px-3 sm:px-4">
         <div className="min-w-0 max-w-[280px] flex-1">
           <PlayersMatchesToggle current="matches" />
         </div>
