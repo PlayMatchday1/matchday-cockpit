@@ -7,17 +7,26 @@
 //                        for newline. SMS-only segment counter under
 //                        the row.
 //
-//   image mode (after picking a file via the paperclip): thumbnail +
-//                        filename · size + caption textarea + Send.
-//                        X button cancels and returns to text mode.
+//   image mode (after picking a file via the paperclip, drag-drop,
+//                        or Cmd+V paste): thumbnail + filename · size
+//                        + caption textarea + Send. X cancels back to
+//                        text mode.
+//
+// Three entry points for selecting an image, all routed through one
+// shared onImageSelected helper that handles compression + validation:
+//   1. Paperclip → <input type="file"> picker
+//   2. Drag-and-drop onto the composer (desktop)
+//   3. Cmd+V paste into either textarea (desktop)
+//
+// Client-side compression: iPhone camera roll photos routinely exceed
+// the WhatsApp 5 MB limit. Before validation we resize to a 1920 px
+// longest-edge JPEG and walk a quality ladder (0.85 → 0.7 → 0.55 →
+// 0.4) until the result is under 5 MB. If the original is already
+// <= 1 MB AND <= 1920 px on longest edge, compression is skipped.
 //
 // WhatsApp 24-hour window: when expired, BOTH modes are disabled and
 // the muted info banner explains why. Server enforces the same rule
 // and 422s if violated; the client check just avoids the round-trip.
-//
-// Image picker: <input type="file" accept="image/jpeg,image/png" />.
-// Client-side validation: must be JPEG or PNG, <= 5 MB. Server
-// re-validates on /api/crm/send-media.
 
 import {
   useCallback,
@@ -50,10 +59,92 @@ const MAX_IMAGE_BYTES = 5 * 1024 * 1024;
 const ALLOWED_IMAGE_TYPES = new Set(["image/jpeg", "image/png"]);
 const CAPTION_MAX = 1024;
 
+// Compression bounds. Skip-thresholds chosen so an already-reasonable
+// photo (small file AND modest resolution) goes through untouched.
+const COMPRESS_SKIP_BYTES = 1 * 1024 * 1024;
+const MAX_LONGEST_EDGE = 1920;
+// Quality fallback ladder. canvas.toBlob output is content-dependent;
+// noisy / high-detail photos compress worse so multiple steps help.
+const QUALITY_LADDER = [0.85, 0.7, 0.55, 0.4];
+
 function formatBytes(n: number): string {
   if (n < 1024) return `${n} B`;
   if (n < 1024 * 1024) return `${(n / 1024).toFixed(1)} KB`;
   return `${(n / (1024 * 1024)).toFixed(1)} MB`;
+}
+
+// Load a File as an HTMLImageElement so we can read its natural
+// dimensions and draw it into a canvas. Caller owns object-URL
+// cleanup.
+function loadImage(url: string): Promise<HTMLImageElement> {
+  return new Promise((resolve, reject) => {
+    const img = new Image();
+    img.onload = () => resolve(img);
+    img.onerror = () => reject(new Error("Could not decode image."));
+    img.src = url;
+  });
+}
+
+function canvasToBlob(
+  canvas: HTMLCanvasElement,
+  type: string,
+  quality: number,
+): Promise<Blob | null> {
+  return new Promise((resolve) => {
+    canvas.toBlob(resolve, type, quality);
+  });
+}
+
+function jpegNameOf(original: string | undefined): string {
+  const base = (original ?? "").replace(/\.[A-Za-z0-9]+$/, "");
+  return `${base || "photo"}.jpg`;
+}
+
+// Returns the compressed File, or null when no compression was
+// needed. Throws on canvas failure or when the quality ladder bottoms
+// out without getting under MAX_IMAGE_BYTES.
+async function maybeCompressImage(file: File): Promise<File | null> {
+  // Skip path: already small AND modest dimensions.
+  // (Dimensions only known after decode, so do that first regardless.)
+  const url = URL.createObjectURL(file);
+  let img: HTMLImageElement;
+  try {
+    img = await loadImage(url);
+  } finally {
+    URL.revokeObjectURL(url);
+  }
+
+  const longestEdge = Math.max(img.naturalWidth, img.naturalHeight);
+  if (file.size <= COMPRESS_SKIP_BYTES && longestEdge <= MAX_LONGEST_EDGE) {
+    return null;
+  }
+
+  // Resize via canvas. Aspect preserved by scaling both axes by the
+  // same factor.
+  const scale =
+    longestEdge > MAX_LONGEST_EDGE ? MAX_LONGEST_EDGE / longestEdge : 1;
+  const w = Math.max(1, Math.round(img.naturalWidth * scale));
+  const h = Math.max(1, Math.round(img.naturalHeight * scale));
+
+  const canvas = document.createElement("canvas");
+  canvas.width = w;
+  canvas.height = h;
+  const ctx = canvas.getContext("2d");
+  if (!ctx) {
+    throw new Error("Canvas 2D context unavailable.");
+  }
+  ctx.drawImage(img, 0, 0, w, h);
+
+  for (const quality of QUALITY_LADDER) {
+    const blob = await canvasToBlob(canvas, "image/jpeg", quality);
+    if (!blob) continue;
+    if (blob.size <= MAX_IMAGE_BYTES) {
+      return new File([blob], jpegNameOf(file.name), {
+        type: "image/jpeg",
+      });
+    }
+  }
+  throw new Error("Image too large even after compression.");
 }
 
 async function bearerHeaders(): Promise<Record<string, string> | null> {
@@ -93,15 +184,25 @@ export default function Composer({
   const [error, setError] = useState<string | null>(null);
   const taRef = useRef<HTMLTextAreaElement>(null);
 
-  // Image-mode state. file is the picked Blob; caption is its
-  // optional caption. previewUrl is the object URL we create for the
-  // thumbnail and revoke on unmount/change.
+  // Image-mode state.
+  // file is the picked Blob (potentially compressed); caption is its
+  // optional caption. previewUrl is the object URL for the thumbnail.
+  // originalSize is the pre-compression byte count, used to render
+  // the "compressed from X to Y" hint — null when no compression
+  // happened.
   const [file, setFile] = useState<File | null>(null);
   const [caption, setCaption] = useState("");
   const [previewUrl, setPreviewUrl] = useState<string | null>(null);
+  const [originalSize, setOriginalSize] = useState<number | null>(null);
   const fileInputRef = useRef<HTMLInputElement>(null);
   // Image-mode supports JPEG/PNG only and only on WhatsApp threads.
   const canSendImage = channel === "whatsapp" && !whatsappWindowExpired;
+
+  // Drag-and-drop state. dragCounterRef compensates for the React
+  // dragenter/dragleave child-traversal flicker by tracking how many
+  // active enter/leave pairs are outstanding.
+  const [dragActive, setDragActive] = useState(false);
+  const dragCounterRef = useRef(0);
 
   useEffect(() => {
     const ta = taRef.current;
@@ -131,9 +232,51 @@ export default function Composer({
     setError(null);
     setFile(null);
     setCaption("");
+    setOriginalSize(null);
+    setDragActive(false);
+    dragCounterRef.current = 0;
   }, [threadId]);
 
   const budget = useMemo(() => smsBudget(body), [body]);
+
+  // ---------------- shared image-selection helper ----------------
+  // All three entry points (file picker, drag-drop, paste) flow
+  // through this. Validates type, compresses if needed, validates
+  // final size, then populates preview state. Does NOT touch caption
+  // — paste-while-preview is supposed to keep whatever the operator
+  // already typed.
+  const onImageSelected = useCallback(async (picked: File): Promise<void> => {
+    setError(null);
+    if (!ALLOWED_IMAGE_TYPES.has(picked.type)) {
+      setError("Only JPEG or PNG images are supported.");
+      return;
+    }
+    if (picked.size === 0) {
+      setError("Image is empty.");
+      return;
+    }
+
+    let finalFile: File = picked;
+    let originalBytes: number | null = null;
+    try {
+      const compressed = await maybeCompressImage(picked);
+      if (compressed) {
+        finalFile = compressed;
+        originalBytes = picked.size;
+      }
+    } catch (err) {
+      setError(err instanceof Error ? err.message : "Failed to process image.");
+      return;
+    }
+
+    if (finalFile.size > MAX_IMAGE_BYTES) {
+      setError("Image too large even after compression.");
+      return;
+    }
+
+    setFile(finalFile);
+    setOriginalSize(originalBytes);
+  }, []);
 
   // ---------------- text-mode submit ----------------
   const disabled = sending || !appUserId || whatsappWindowExpired;
@@ -200,28 +343,15 @@ export default function Composer({
       // onChange (browsers skip the event if value is unchanged).
       e.target.value = "";
       if (!f) return;
-      if (!ALLOWED_IMAGE_TYPES.has(f.type)) {
-        setError("Only JPEG or PNG images are supported.");
-        return;
-      }
-      if (f.size > MAX_IMAGE_BYTES) {
-        setError("Image must be 5 MB or smaller.");
-        return;
-      }
-      if (f.size === 0) {
-        setError("Image is empty.");
-        return;
-      }
-      setError(null);
-      setFile(f);
-      setCaption("");
+      void onImageSelected(f);
     },
-    [],
+    [onImageSelected],
   );
 
   const cancelImage = useCallback(() => {
     setFile(null);
     setCaption("");
+    setOriginalSize(null);
     setError(null);
   }, []);
 
@@ -261,6 +391,7 @@ export default function Composer({
       // Reset to text mode after successful send.
       setFile(null);
       setCaption("");
+      setOriginalSize(null);
     } catch (err) {
       setError(err instanceof Error ? err.message : String(err));
       // Keep file + caption so operator can retry without re-picking.
@@ -269,9 +400,102 @@ export default function Composer({
     }
   }, [file, caption, threadId, sending, onSent]);
 
+  // ---------------- drag-and-drop ----------------
+  const onDragEnter = useCallback(
+    (e: React.DragEvent<HTMLDivElement>) => {
+      if (!canSendImage) return;
+      dragCounterRef.current += 1;
+      if (e.dataTransfer?.types && Array.from(e.dataTransfer.types).includes("Files")) {
+        setDragActive(true);
+      }
+    },
+    [canSendImage],
+  );
+
+  const onDragOver = useCallback(
+    (e: React.DragEvent<HTMLDivElement>) => {
+      if (!canSendImage) return;
+      // preventDefault on dragover is required to enable drop.
+      e.preventDefault();
+    },
+    [canSendImage],
+  );
+
+  const onDragLeave = useCallback(
+    (e: React.DragEvent<HTMLDivElement>) => {
+      if (!canSendImage) return;
+      dragCounterRef.current = Math.max(0, dragCounterRef.current - 1);
+      if (dragCounterRef.current === 0) {
+        setDragActive(false);
+      }
+    },
+    [canSendImage],
+  );
+
+  const onDrop = useCallback(
+    (e: React.DragEvent<HTMLDivElement>) => {
+      if (!canSendImage) return;
+      e.preventDefault();
+      dragCounterRef.current = 0;
+      setDragActive(false);
+      const f = e.dataTransfer?.files?.[0];
+      if (!f) return;
+      if (!f.type.startsWith("image/")) {
+        // Non-image drop: surface a transient error and auto-clear so
+        // the composer doesn't get stuck with a dead message.
+        const msg = "Only image files are supported.";
+        setError(msg);
+        setTimeout(() => {
+          setError((cur) => (cur === msg ? null : cur));
+        }, 3000);
+        return;
+      }
+      void onImageSelected(f);
+    },
+    [canSendImage, onImageSelected],
+  );
+
+  // ---------------- paste-from-clipboard ----------------
+  // Single handler shared by the text-mode textarea and the caption
+  // textarea inside ImagePreview. If the clipboard carries an image,
+  // intercept and route through onImageSelected (caption is preserved
+  // by the helper). Otherwise fall through so text paste still works.
+  const onPaste = useCallback(
+    (e: React.ClipboardEvent<HTMLTextAreaElement>) => {
+      if (!canSendImage) return;
+      const items = e.clipboardData?.items;
+      if (!items) return;
+      for (let i = 0; i < items.length; i++) {
+        const it = items[i];
+        if (it.type.startsWith("image/")) {
+          const f = it.getAsFile();
+          if (f) {
+            e.preventDefault();
+            void onImageSelected(f);
+            return;
+          }
+        }
+      }
+      // No image — let the default text paste behavior proceed.
+    },
+    [canSendImage, onImageSelected],
+  );
+
   // ---------------- render ----------------
   return (
-    <div className="border-t border-cream-line bg-cream px-3 py-3 pb-[calc(0.75rem+env(safe-area-inset-bottom))] sm:px-4">
+    <div
+      className="relative border-t border-cream-line bg-cream px-3 py-3 pb-[calc(0.75rem+env(safe-area-inset-bottom))] sm:px-4"
+      onDragEnter={onDragEnter}
+      onDragOver={onDragOver}
+      onDragLeave={onDragLeave}
+      onDrop={onDrop}
+    >
+      {dragActive && canSendImage && (
+        <div className="pointer-events-none absolute inset-1 z-10 flex items-center justify-center rounded-md border-2 border-dashed border-deep-green/40 bg-cream-soft/95 text-sm font-medium text-deep-green">
+          Drop image here
+        </div>
+      )}
+
       {whatsappWindowExpired && (
         <div className="mb-2 rounded-md border border-cream-line bg-cream-soft px-2 py-1.5 text-[11px] text-deep-green/65">
           <span aria-hidden className="mr-1">
@@ -289,9 +513,11 @@ export default function Composer({
           caption={caption}
           sending={sending}
           error={error}
+          originalSize={originalSize}
           onCaptionChange={setCaption}
           onCancel={cancelImage}
           onSend={() => void submitImage()}
+          onPaste={onPaste}
         />
       ) : (
         <>
@@ -314,6 +540,7 @@ export default function Composer({
               disabled={disabled}
               onChange={(e) => setBody(e.target.value)}
               onKeyDown={onKeyDown}
+              onPaste={onPaste}
               placeholder={placeholder}
               className="block flex-1 resize-none rounded-2xl border border-cream-line bg-white px-3 py-2 text-sm text-deep-green placeholder:text-deep-green/40 focus:border-deep-green focus:outline-none disabled:bg-cream-soft disabled:text-deep-green/40"
               style={{ minHeight: 44, maxHeight: 240 }}
@@ -379,18 +606,22 @@ function ImagePreview({
   caption,
   sending,
   error,
+  originalSize,
   onCaptionChange,
   onCancel,
   onSend,
+  onPaste,
 }: {
   file: File;
   previewUrl: string;
   caption: string;
   sending: boolean;
   error: string | null;
+  originalSize: number | null;
   onCaptionChange: (s: string) => void;
   onCancel: () => void;
   onSend: () => void;
+  onPaste: (e: React.ClipboardEvent<HTMLTextAreaElement>) => void;
 }) {
   return (
     <div className="relative rounded-md border border-cream-line bg-white p-3">
@@ -419,6 +650,12 @@ function ImagePreview({
           <div className="text-[10px] text-deep-green/55">
             {formatBytes(file.size)}
           </div>
+          {originalSize !== null && (
+            <div className="text-[10px] text-deep-green/45">
+              compressed from {formatBytes(originalSize)} to{" "}
+              {formatBytes(file.size)}
+            </div>
+          )}
         </div>
       </div>
 
@@ -426,6 +663,7 @@ function ImagePreview({
         value={caption}
         disabled={sending}
         onChange={(e) => onCaptionChange(e.target.value)}
+        onPaste={onPaste}
         placeholder="Add a caption (optional)"
         maxLength={CAPTION_MAX}
         className="mt-2 block w-full resize-none rounded-2xl border border-cream-line bg-white px-3 py-2 text-sm text-deep-green placeholder:text-deep-green/40 focus:border-deep-green focus:outline-none disabled:bg-cream-soft disabled:text-deep-green/40"
