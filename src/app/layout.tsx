@@ -67,6 +67,14 @@ export const metadata: Metadata = {
 export const viewport: Viewport = {
   themeColor: "#003326",
   viewportFit: "cover",
+  // iOS Safari standalone PWA: resize the layout viewport when the
+  // on-screen keyboard appears so dvh / env(safe-area-inset-*) stay
+  // accurate through keyboard open/close cycles. Without this the
+  // default "resizes-visual" leaves stale values after dismiss and
+  // breaks fixed chrome (status-bar safe area collapses, body becomes
+  // scrollable). Spec'd by the W3C virtual-keyboard proposal; iOS
+  // 16.4+ and Chrome 108+.
+  interactiveWidget: "resizes-content",
 };
 
 export default function RootLayout({
