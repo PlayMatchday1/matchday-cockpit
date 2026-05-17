@@ -11,6 +11,15 @@ html {
   overflow-x: hidden;
 }
 
+/* Hide scrollbars on horizontal chip strips. Used by FilterBar
+   and reusable for any other horizontally swiping element. */
+.scrollbar-hide {
+  scrollbar-width: none;
+}
+.scrollbar-hide::-webkit-scrollbar {
+  display: none;
+}
+
 :root {
   --background: #f4eee1;
   --foreground: #003326;
