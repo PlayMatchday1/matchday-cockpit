@@ -7,22 +7,30 @@
 //                        for newline. SMS-only segment counter under
 //                        the row.
 //
-//   image mode (after picking a file via the paperclip, drag-drop,
-//                        or Cmd+V paste): thumbnail + filename · size
-//                        + caption textarea + Send. X cancels back to
-//                        text mode.
+//   media mode (after picking a file via the paperclip, drag-drop,
+//                        or Cmd+V paste): kind-aware preview block
+//                        (thumbnail for image, inline player for
+//                        video, file-icon card for audio + document)
+//                        + optional caption textarea + Send. X
+//                        cancels back to text mode.
 //
-// Three entry points for selecting an image, all routed through one
-// shared onImageSelected helper that handles compression + validation:
+// Three entry points for selecting a file, all routed through one
+// shared onFileSelected helper:
 //   1. Paperclip → <input type="file"> picker
 //   2. Drag-and-drop onto the composer (desktop)
 //   3. Cmd+V paste into either textarea (desktop)
 //
-// Client-side compression: iPhone camera roll photos routinely exceed
-// the WhatsApp 5 MB limit. Before validation we resize to a 1920 px
+// Per-kind rules (mirrors src/lib/whatsappMediaKind.ts):
+//   image     JPEG/PNG, ≤ 5 MB.   Client compresses to fit.
+//   video     MP4/3GPP, ≤ 16 MB.  iOS .mov rejected with conversion hint.
+//   audio     AAC/MP3/MP4/AMR/OGG, ≤ 16 MB. NO caption (Meta spec).
+//   document  Broad MIME, ≤ 100 MB.
+// Server (/api/crm/send-media) re-validates the same rules.
+//
+// Client-side image compression: iPhone camera roll photos routinely
+// exceed 5 MB. Before validation we resize images to a 1920 px
 // longest-edge JPEG and walk a quality ladder (0.85 → 0.7 → 0.55 →
-// 0.4) until the result is under 5 MB. If the original is already
-// <= 1 MB AND <= 1920 px on longest edge, compression is skipped.
+// 0.4) until the result is under 5 MB. Skipped for non-image kinds.
 //
 // WhatsApp 24-hour window: when expired, BOTH modes are disabled and
 // the muted info banner explains why. Server enforces the same rule
@@ -35,10 +43,16 @@ import {
   useRef,
   useState,
 } from "react";
-import { ArrowUp, Paperclip, X } from "lucide-react";
+import { ArrowUp, FileText, Music, Paperclip, X } from "lucide-react";
 import { supabase } from "@/lib/supabase";
 import type { CrmChannel } from "@/components/ChannelChip";
 import type { ConversationMessage } from "./MessageBubble";
+import {
+  classifyOutboundMime,
+  COMPOSER_ACCEPT_ATTR,
+  MEDIA_BYTE_LIMITS,
+  type OutboundMediaKind,
+} from "@/lib/whatsappMediaKind";
 
 const GSM7_RX =
   /^[\n\rA-Za-z0-9 @£$¥èéùìòÇØøÅåΔ_ΦΓΛΩΠΨΣΘΞÆæßÉ!"#¤%&'()*+,\-./:;<=>?¡ÄÖÑÜ§¿äöñüà€\\[\]{}|~^]*$/;
@@ -55,8 +69,7 @@ function smsBudget(body: string): {
   return { encoding, segmentSize, segments };
 }
 
-const MAX_IMAGE_BYTES = 5 * 1024 * 1024;
-const ALLOWED_IMAGE_TYPES = new Set(["image/jpeg", "image/png"]);
+const MAX_IMAGE_BYTES = MEDIA_BYTE_LIMITS.image;
 const CAPTION_MAX = 1024;
 
 // Compression bounds. Skip-thresholds chosen so an already-reasonable
@@ -73,9 +86,6 @@ function formatBytes(n: number): string {
   return `${(n / (1024 * 1024)).toFixed(1)} MB`;
 }
 
-// Load a File as an HTMLImageElement so we can read its natural
-// dimensions and draw it into a canvas. Caller owns object-URL
-// cleanup.
 function loadImage(url: string): Promise<HTMLImageElement> {
   return new Promise((resolve, reject) => {
     const img = new Image();
@@ -100,12 +110,7 @@ function jpegNameOf(original: string | undefined): string {
   return `${base || "photo"}.jpg`;
 }
 
-// Returns the compressed File, or null when no compression was
-// needed. Throws on canvas failure or when the quality ladder bottoms
-// out without getting under MAX_IMAGE_BYTES.
 async function maybeCompressImage(file: File): Promise<File | null> {
-  // Skip path: already small AND modest dimensions.
-  // (Dimensions only known after decode, so do that first regardless.)
   const url = URL.createObjectURL(file);
   let img: HTMLImageElement;
   try {
@@ -119,8 +124,6 @@ async function maybeCompressImage(file: File): Promise<File | null> {
     return null;
   }
 
-  // Resize via canvas. Aspect preserved by scaling both axes by the
-  // same factor.
   const scale =
     longestEdge > MAX_LONGEST_EDGE ? MAX_LONGEST_EDGE / longestEdge : 1;
   const w = Math.max(1, Math.round(img.naturalWidth * scale));
@@ -157,8 +160,6 @@ async function bearerHeaders(): Promise<Record<string, string> | null> {
   };
 }
 
-// Same as bearerHeaders but without Content-Type — fetch sets the
-// multipart boundary automatically when body is FormData.
 async function bearerHeadersMultipart(): Promise<Record<string, string> | null> {
   const { data } = await supabase.auth.getSession();
   const token = data.session?.access_token;
@@ -184,25 +185,32 @@ export default function Composer({
   const [error, setError] = useState<string | null>(null);
   const taRef = useRef<HTMLTextAreaElement>(null);
 
-  // Image-mode state.
-  // file is the picked Blob (potentially compressed); caption is its
-  // optional caption. previewUrl is the object URL for the thumbnail.
-  // originalSize is the pre-compression byte count, used to render
-  // the "compressed from X to Y" hint — null when no compression
-  // happened.
+  // Media-mode state. file is the picked Blob (image: post-
+  // compression; others: as-picked). caption is the optional caption
+  // — hidden in the UI for audio since Meta does not allow it.
+  // previewUrl is the object URL used by the image/video preview.
+  // originalSize is the pre-compression byte count for the
+  // "compressed from X to Y" hint (image-only).
   const [file, setFile] = useState<File | null>(null);
   const [caption, setCaption] = useState("");
   const [previewUrl, setPreviewUrl] = useState<string | null>(null);
   const [originalSize, setOriginalSize] = useState<number | null>(null);
   const fileInputRef = useRef<HTMLInputElement>(null);
-  // Image-mode supports JPEG/PNG only and only on WhatsApp threads.
-  const canSendImage = channel === "whatsapp" && !whatsappWindowExpired;
+  // Media send only on WhatsApp threads inside the 24-hour window.
+  const canSendMedia = channel === "whatsapp" && !whatsappWindowExpired;
 
   // Drag-and-drop state. dragCounterRef compensates for the React
   // dragenter/dragleave child-traversal flicker by tracking how many
   // active enter/leave pairs are outstanding.
   const [dragActive, setDragActive] = useState(false);
   const dragCounterRef = useRef(0);
+
+  // Kind is derived from the picked file's MIME at render time.
+  const kind: OutboundMediaKind | null = useMemo(() => {
+    if (!file) return null;
+    const c = classifyOutboundMime(file.type);
+    return c.ok ? c.kind : null;
+  }, [file]);
 
   useEffect(() => {
     const ta = taRef.current;
@@ -212,8 +220,9 @@ export default function Composer({
     ta.style.height = `${next}px`;
   }, [body]);
 
-  // Manage the object URL lifecycle for the thumbnail. Recreate when
-  // the file changes; revoke on unmount or replacement.
+  // Object URL for image/video previews. Audio + document don't need
+  // one (they render a file-icon card), but creating it unconditionally
+  // is cheap and keeps the cleanup logic single-pathed.
   useEffect(() => {
     if (!file) {
       setPreviewUrl(null);
@@ -239,38 +248,50 @@ export default function Composer({
 
   const budget = useMemo(() => smsBudget(body), [body]);
 
-  // ---------------- shared image-selection helper ----------------
-  // All three entry points (file picker, drag-drop, paste) flow
-  // through this. Validates type, compresses if needed, validates
-  // final size, then populates preview state. Does NOT touch caption
-  // — paste-while-preview is supposed to keep whatever the operator
-  // already typed.
-  const onImageSelected = useCallback(async (picked: File): Promise<void> => {
+  // ---------------- shared file-selection helper ----------------
+  // All three entry points flow through this. Classifies MIME,
+  // validates size against the per-kind cap, compresses for images,
+  // then populates preview state. Does NOT touch caption — paste-
+  // while-preview preserves the operator's typed caption.
+  const onFileSelected = useCallback(async (picked: File): Promise<void> => {
     setError(null);
-    if (!ALLOWED_IMAGE_TYPES.has(picked.type)) {
-      setError("Only JPEG or PNG images are supported.");
+    if (picked.size === 0) {
+      setError("File is empty.");
       return;
     }
-    if (picked.size === 0) {
-      setError("Image is empty.");
+    const c = classifyOutboundMime(picked.type);
+    if (!c.ok) {
+      setError(c.error);
       return;
     }
 
     let finalFile: File = picked;
     let originalBytes: number | null = null;
-    try {
-      const compressed = await maybeCompressImage(picked);
-      if (compressed) {
-        finalFile = compressed;
-        originalBytes = picked.size;
+
+    // Compression only for images. Other kinds are passed through
+    // verbatim — Meta accepts them up to the per-kind size cap.
+    if (c.kind === "image") {
+      try {
+        const compressed = await maybeCompressImage(picked);
+        if (compressed) {
+          finalFile = compressed;
+          originalBytes = picked.size;
+        }
+      } catch (err) {
+        setError(
+          err instanceof Error ? err.message : "Failed to process image.",
+        );
+        return;
       }
-    } catch (err) {
-      setError(err instanceof Error ? err.message : "Failed to process image.");
-      return;
     }
 
-    if (finalFile.size > MAX_IMAGE_BYTES) {
-      setError("Image too large even after compression.");
+    const cap = MEDIA_BYTE_LIMITS[c.kind];
+    if (finalFile.size > cap) {
+      setError(
+        c.kind === "image"
+          ? "Image too large even after compression."
+          : `${c.kind} exceeds ${cap / (1024 * 1024)} MB limit.`,
+      );
       return;
     }
 
@@ -330,7 +351,7 @@ export default function Composer({
     [submitText],
   );
 
-  // ---------------- image-mode flow ----------------
+  // ---------------- media-mode flow ----------------
   const openFilePicker = useCallback(() => {
     setError(null);
     fileInputRef.current?.click();
@@ -343,21 +364,24 @@ export default function Composer({
       // onChange (browsers skip the event if value is unchanged).
       e.target.value = "";
       if (!f) return;
-      void onImageSelected(f);
+      void onFileSelected(f);
     },
-    [onImageSelected],
+    [onFileSelected],
   );
 
-  const cancelImage = useCallback(() => {
+  const cancelMedia = useCallback(() => {
     setFile(null);
     setCaption("");
     setOriginalSize(null);
     setError(null);
   }, []);
 
-  const submitImage = useCallback(async () => {
-    if (sending || !file) return;
-    if (caption.length > CAPTION_MAX) {
+  const submitMedia = useCallback(async () => {
+    if (sending || !file || !kind) return;
+    // Audio cannot carry captions; server will drop it but make the
+    // intent obvious by clearing here too.
+    const effectiveCaption = kind === "audio" ? "" : caption;
+    if (effectiveCaption.length > CAPTION_MAX) {
       setError(`Caption exceeds ${CAPTION_MAX} chars.`);
       return;
     }
@@ -373,7 +397,7 @@ export default function Composer({
       const form = new FormData();
       form.append("thread_id", threadId);
       form.append("file", file);
-      form.append("caption", caption);
+      form.append("caption", effectiveCaption);
       const res = await fetch("/api/crm/send-media", {
         method: "POST",
         headers,
@@ -388,7 +412,6 @@ export default function Composer({
         throw new Error(j.error || `HTTP ${res.status}`);
       }
       if (j.message) onSent(j.message);
-      // Reset to text mode after successful send.
       setFile(null);
       setCaption("");
       setOriginalSize(null);
@@ -398,87 +421,77 @@ export default function Composer({
     } finally {
       setSending(false);
     }
-  }, [file, caption, threadId, sending, onSent]);
+  }, [file, kind, caption, threadId, sending, onSent]);
 
   // ---------------- drag-and-drop ----------------
   const onDragEnter = useCallback(
     (e: React.DragEvent<HTMLDivElement>) => {
-      if (!canSendImage) return;
+      if (!canSendMedia) return;
       dragCounterRef.current += 1;
       if (e.dataTransfer?.types && Array.from(e.dataTransfer.types).includes("Files")) {
         setDragActive(true);
       }
     },
-    [canSendImage],
+    [canSendMedia],
   );
 
   const onDragOver = useCallback(
     (e: React.DragEvent<HTMLDivElement>) => {
-      if (!canSendImage) return;
+      if (!canSendMedia) return;
       // preventDefault on dragover is required to enable drop.
       e.preventDefault();
     },
-    [canSendImage],
+    [canSendMedia],
   );
 
   const onDragLeave = useCallback(
     (e: React.DragEvent<HTMLDivElement>) => {
-      if (!canSendImage) return;
+      if (!canSendMedia) return;
       dragCounterRef.current = Math.max(0, dragCounterRef.current - 1);
       if (dragCounterRef.current === 0) {
         setDragActive(false);
       }
     },
-    [canSendImage],
+    [canSendMedia],
   );
 
   const onDrop = useCallback(
     (e: React.DragEvent<HTMLDivElement>) => {
-      if (!canSendImage) return;
+      if (!canSendMedia) return;
       e.preventDefault();
       dragCounterRef.current = 0;
       setDragActive(false);
       const f = e.dataTransfer?.files?.[0];
       if (!f) return;
-      if (!f.type.startsWith("image/")) {
-        // Non-image drop: surface a transient error and auto-clear so
-        // the composer doesn't get stuck with a dead message.
-        const msg = "Only image files are supported.";
-        setError(msg);
-        setTimeout(() => {
-          setError((cur) => (cur === msg ? null : cur));
-        }, 3000);
-        return;
-      }
-      void onImageSelected(f);
+      // Any file kind: onFileSelected classifies and surfaces a
+      // per-MIME error if the type isn't accepted.
+      void onFileSelected(f);
     },
-    [canSendImage, onImageSelected],
+    [canSendMedia, onFileSelected],
   );
 
   // ---------------- paste-from-clipboard ----------------
-  // Single handler shared by the text-mode textarea and the caption
-  // textarea inside ImagePreview. If the clipboard carries an image,
-  // intercept and route through onImageSelected (caption is preserved
-  // by the helper). Otherwise fall through so text paste still works.
+  // Shared by the text-mode textarea and the caption textarea. Any
+  // clipboard "file" item routes through onFileSelected. Text items
+  // fall through so default paste still works.
   const onPaste = useCallback(
     (e: React.ClipboardEvent<HTMLTextAreaElement>) => {
-      if (!canSendImage) return;
+      if (!canSendMedia) return;
       const items = e.clipboardData?.items;
       if (!items) return;
       for (let i = 0; i < items.length; i++) {
         const it = items[i];
-        if (it.type.startsWith("image/")) {
-          const f = it.getAsFile();
-          if (f) {
-            e.preventDefault();
-            void onImageSelected(f);
-            return;
-          }
+        if (it.kind !== "file") continue;
+        const f = it.getAsFile();
+        if (f) {
+          e.preventDefault();
+          void onFileSelected(f);
+          return;
         }
       }
-      // No image — let the default text paste behavior proceed.
+      // No file — let the default text paste behavior proceed.
     },
-    [canSendImage, onImageSelected],
+    [canSendMedia, onFileSelected],
   );
 
   // ---------------- render ----------------
@@ -490,9 +503,9 @@ export default function Composer({
       onDragLeave={onDragLeave}
       onDrop={onDrop}
     >
-      {dragActive && canSendImage && (
+      {dragActive && canSendMedia && (
         <div className="pointer-events-none absolute inset-1 z-10 flex items-center justify-center rounded-md border-2 border-dashed border-deep-green/40 bg-cream-soft/95 text-sm font-medium text-deep-green">
-          Drop image here
+          Drop file here
         </div>
       )}
 
@@ -506,27 +519,28 @@ export default function Composer({
         </div>
       )}
 
-      {file && previewUrl ? (
-        <ImagePreview
+      {file && kind ? (
+        <MediaPreview
           file={file}
           previewUrl={previewUrl}
+          kind={kind}
           caption={caption}
           sending={sending}
           error={error}
           originalSize={originalSize}
           onCaptionChange={setCaption}
-          onCancel={cancelImage}
-          onSend={() => void submitImage()}
+          onCancel={cancelMedia}
+          onSend={() => void submitMedia()}
           onPaste={onPaste}
         />
       ) : (
         <>
           <div className="flex items-end gap-2">
-            {canSendImage && (
+            {canSendMedia && (
               <button
                 type="button"
                 onClick={openFilePicker}
-                aria-label="Attach image"
+                aria-label="Attach file"
                 disabled={sending || !appUserId}
                 style={{ touchAction: "manipulation" }}
                 className="flex h-11 w-11 shrink-0 items-center justify-center rounded-full text-deep-green/70 transition hover:bg-cream-soft hover:text-deep-green disabled:opacity-40"
@@ -585,11 +599,13 @@ export default function Composer({
         </>
       )}
 
-      {/* Hidden file picker — image-mode only on WhatsApp threads. */}
+      {/* Hidden file picker — broad accept covers image/video/audio
+          and the common document MIMEs. The classifier is still the
+          source of truth; the accept attribute is just a UX hint. */}
       <input
         ref={fileInputRef}
         type="file"
-        accept="image/jpeg,image/png"
+        accept={COMPOSER_ACCEPT_ATTR}
         hidden
         onChange={onFilePicked}
       />
@@ -597,12 +613,14 @@ export default function Composer({
   );
 }
 
-// Image-mode preview panel. Replaces the textarea row while a file
-// is selected. Caption is optional; Send is enabled whenever a file
-// is picked and no send is in flight.
-function ImagePreview({
+// Media-mode preview panel. Replaces the textarea row while a file
+// is selected. Caption shown for image/video/document; hidden for
+// audio per Meta spec. Image preview is a thumbnail; video preview
+// is an inline player; audio + document show a file-icon card.
+function MediaPreview({
   file,
   previewUrl,
+  kind,
   caption,
   sending,
   error,
@@ -613,7 +631,8 @@ function ImagePreview({
   onPaste,
 }: {
   file: File;
-  previewUrl: string;
+  previewUrl: string | null;
+  kind: OutboundMediaKind;
   caption: string;
   sending: boolean;
   error: string | null;
@@ -623,13 +642,15 @@ function ImagePreview({
   onSend: () => void;
   onPaste: (e: React.ClipboardEvent<HTMLTextAreaElement>) => void;
 }) {
+  const showCaption = kind !== "audio";
+
   return (
     <div className="relative rounded-md border border-cream-line bg-white p-3">
       <button
         type="button"
         onClick={onCancel}
         disabled={sending}
-        aria-label="Remove image"
+        aria-label="Remove file"
         style={{ touchAction: "manipulation" }}
         className="absolute right-1 top-1 flex h-9 w-9 items-center justify-center rounded-full text-deep-green/60 transition hover:bg-cream-soft hover:text-deep-green disabled:opacity-40"
       >
@@ -637,18 +658,20 @@ function ImagePreview({
       </button>
 
       <div className="flex gap-3 pr-9">
-        {/* eslint-disable-next-line @next/next/no-img-element */}
-        <img
-          src={previewUrl}
-          alt="Attachment preview"
-          className="h-20 w-20 shrink-0 rounded object-cover"
-        />
+        <PreviewThumb kind={kind} previewUrl={previewUrl} />
         <div className="min-w-0 flex-1 pt-1">
           <div className="truncate text-xs font-medium text-deep-green">
             {file.name || "attachment"}
           </div>
           <div className="text-[10px] text-deep-green/55">
-            {formatBytes(file.size)}
+            {formatBytes(file.size)} ·{" "}
+            {kind === "image"
+              ? "Image"
+              : kind === "video"
+                ? "Video"
+                : kind === "audio"
+                  ? "Audio file"
+                  : "Document"}
           </div>
           {originalSize !== null && (
             <div className="text-[10px] text-deep-green/45">
@@ -659,28 +682,36 @@ function ImagePreview({
         </div>
       </div>
 
-      <textarea
-        value={caption}
-        disabled={sending}
-        onChange={(e) => onCaptionChange(e.target.value)}
-        onPaste={onPaste}
-        placeholder="Add a caption (optional)"
-        maxLength={CAPTION_MAX}
-        className="mt-2 block w-full resize-none rounded-2xl border border-cream-line bg-white px-3 py-2 text-sm text-deep-green placeholder:text-deep-green/40 focus:border-deep-green focus:outline-none disabled:bg-cream-soft disabled:text-deep-green/40"
-        style={{ minHeight: 44, maxHeight: 120 }}
-      />
+      {showCaption && (
+        <textarea
+          value={caption}
+          disabled={sending}
+          onChange={(e) => onCaptionChange(e.target.value)}
+          onPaste={onPaste}
+          placeholder="Add a caption (optional)"
+          maxLength={CAPTION_MAX}
+          className="mt-2 block w-full resize-none rounded-2xl border border-cream-line bg-white px-3 py-2 text-sm text-deep-green placeholder:text-deep-green/40 focus:border-deep-green focus:outline-none disabled:bg-cream-soft disabled:text-deep-green/40"
+          style={{ minHeight: 44, maxHeight: 120 }}
+        />
+      )}
 
       {error && (
         <div className="mt-2 text-[11px] text-coral-hover">{error}</div>
       )}
 
       <div className="mt-2 flex items-center justify-between text-[10px] text-deep-green/55">
-        <span>
-          <span className="font-medium text-deep-green/75">
-            {caption.length}
-          </span>{" "}
-          / {CAPTION_MAX} chars
-        </span>
+        {showCaption ? (
+          <span>
+            <span className="font-medium text-deep-green/75">
+              {caption.length}
+            </span>{" "}
+            / {CAPTION_MAX} chars
+          </span>
+        ) : (
+          <span className="italic text-deep-green/45">
+            No caption — WhatsApp does not support captions on audio.
+          </span>
+        )}
         <button
           type="button"
           onClick={onSend}
@@ -692,6 +723,52 @@ function ImagePreview({
           {sending ? "Sending…" : "Send"}
         </button>
       </div>
+    </div>
+  );
+}
+
+// Kind-aware preview thumbnail. Image and video render the actual
+// pixels via the object URL; audio and document show a fixed-size
+// icon card so the operator can see what they're about to send
+// without paying preview-load cost.
+function PreviewThumb({
+  kind,
+  previewUrl,
+}: {
+  kind: OutboundMediaKind;
+  previewUrl: string | null;
+}) {
+  if (kind === "image" && previewUrl) {
+    return (
+      /* eslint-disable-next-line @next/next/no-img-element */
+      <img
+        src={previewUrl}
+        alt="Attachment preview"
+        className="h-20 w-20 shrink-0 rounded object-cover"
+      />
+    );
+  }
+  if (kind === "video" && previewUrl) {
+    return (
+      <video
+        src={previewUrl}
+        controls
+        preload="metadata"
+        className="h-20 w-32 shrink-0 rounded bg-black object-contain"
+      />
+    );
+  }
+  if (kind === "audio") {
+    return (
+      <div className="flex h-20 w-20 shrink-0 items-center justify-center rounded bg-cream-soft text-deep-green/70">
+        <Music aria-hidden className="h-8 w-8" strokeWidth={1.5} />
+      </div>
+    );
+  }
+  // document
+  return (
+    <div className="flex h-20 w-20 shrink-0 items-center justify-center rounded bg-cream-soft text-deep-green/70">
+      <FileText aria-hidden className="h-8 w-8" strokeWidth={1.5} />
     </div>
   );
 }
