@@ -7,8 +7,8 @@
 // Sections:
 //   - Header: avatar (lg), name, city + member pills
 //   - Vital stats grid: phone, email, total matches, member-since
-//   - Recent matches list (already loaded by /api/crm/threads/[id])
-//   - Overflow menu: View in Supabase, ambiguous-match info note
+//   - Upcoming + Recent matches lists (already loaded by /api/crm/threads/[id])
+//   - Ambiguous-match info note (top of body when match_ambiguous)
 //
 // Renders a body shell + a mobile-only sheet wrapper. Parent decides
 // which mode by passing `mode = "column" | "sheet"`.
@@ -16,6 +16,7 @@
 import { useEffect } from "react";
 import { X } from "lucide-react";
 import { UNKNOWN_CITY } from "@/lib/cityColors";
+import { formatMatchTitle } from "@/lib/cityTimezones";
 import PlayerAvatar from "@/components/PlayerAvatar";
 import CityChip from "@/components/CityChip";
 import MatchStatusPill, {
@@ -41,7 +42,13 @@ export type ContextPlayer = {
 export type ContextRecentMatch = {
   match_api_id: number;
   venue: string | null;
+  // start_date is the legacy mislabeled column (kept on the wire to
+  // avoid breaking other consumers mid-flight). start_date_utc is the
+  // genuine UTC value and is what the UI should use, paired with
+  // city_identifier so times render in the venue's local zone.
   start_date: string | null;
+  start_date_utc: string | null;
+  city_identifier: string | null;
   status: MatchStatus;
 };
 
@@ -57,6 +64,8 @@ export type ContextUpcomingMatch = {
   match_api_id: number;
   venue: string | null;
   start_date: string | null;
+  start_date_utc: string | null;
+  city_identifier: string | null;
   team: number | null;
   player_number: number | null;
   is_cancelled: boolean;
@@ -73,7 +82,6 @@ type Props = {
   recentMatches: ContextRecentMatch[];
   upcomingMatches: ContextUpcomingMatch[];
   historicalAccountCount: number | null;
-  supabaseProjectRef: string | null;
   loading: boolean;
 };
 
@@ -159,7 +167,6 @@ function ContextBody({
   recentMatches,
   upcomingMatches,
   historicalAccountCount,
-  supabaseProjectRef,
   loading,
 }: Props) {
   if (!thread) {
@@ -292,9 +299,10 @@ function ContextBody({
                   )}
                 </div>
                 <div className="text-[10px] text-deep-green/55">
-                  {formatUpcomingDate(m.start_date)}
-                  {" · "}
-                  {formatMatchTime(m.start_date)}
+                  <VenueLocalDateTime
+                    cityCode={m.city_identifier}
+                    startDateUtc={m.start_date_utc}
+                  />
                   {m.team != null && (
                     <>
                       {" · "}Team {m.team}
@@ -339,9 +347,10 @@ function ContextBody({
                     {m.venue?.trim() || "(no venue)"}
                   </span>
                   <span className="shrink-0 text-[10px] text-deep-green/50">
-                    {formatMatchDate(m.start_date)}
-                    {" · "}
-                    {formatMatchTime(m.start_date)}
+                    <VenueLocalDateTime
+                      cityCode={m.city_identifier}
+                      startDateUtc={m.start_date_utc}
+                    />
                   </span>
                 </div>
                 <div>
@@ -353,16 +362,6 @@ function ContextBody({
         )}
       </section>
 
-      {player && supabaseProjectRef && (
-        <a
-          href={`https://supabase.com/dashboard/project/${supabaseProjectRef}/editor?schema=public&table=mdapi_users&filter=id%3Aeq%3A${player.id}`}
-          target="_blank"
-          rel="noreferrer"
-          className="mt-3 inline-block text-xs font-medium text-deep-green underline decoration-deep-green/30 underline-offset-2 hover:decoration-deep-green"
-        >
-          View in Supabase →
-        </a>
-      )}
     </div>
   );
 }
@@ -386,39 +385,34 @@ function Cell({
   );
 }
 
-function formatMatchDate(iso: string | null): string {
-  if (!iso) return "—";
-  const d = new Date(iso);
-  if (Number.isNaN(d.getTime())) return "—";
-  return d.toLocaleDateString(undefined, { month: "short", day: "numeric" });
-}
-
-// "7:30 PM" — en-US `hour: numeric` already drops the leading
-// zero (gives "7" not "07"). Uses the viewer's local zone, same
-// as formatMatchDate — we deliberately don't introduce a new tz
-// convention for Recent / Upcoming.
-function formatMatchTime(iso: string | null): string {
-  if (!iso) return "—";
-  const d = new Date(iso);
-  if (Number.isNaN(d.getTime())) return "—";
-  return d.toLocaleTimeString(undefined, {
-    hour: "numeric",
-    minute: "2-digit",
+// Renders venue-local "Thu May 14 · 9:00 PM". cityCode is required
+// to look up the IANA zone via timezoneFor() inside formatMatchTitle;
+// when the city is unknown the formatter falls back to UTC and tags
+// the output with a small "(UTC)" so the visible gap is honest.
+function VenueLocalDateTime({
+  cityCode,
+  startDateUtc,
+}: {
+  cityCode: string | null;
+  startDateUtc: string | null;
+}) {
+  const t = formatMatchTitle({
+    cityCode,
+    startDateIso: startDateUtc,
+    fieldTitle: null,
   });
-}
-
-// "Fri May 23" — includes weekday so operators can scan the
-// Upcoming list and immediately tell a "tonight" booking from a
-// "Saturday morning" one. Recent matches use the shorter
-// formatMatchDate() because the status pill ("Played" /
-// "Canceled") already carries most of the temporal context.
-function formatUpcomingDate(iso: string | null): string {
-  if (!iso) return "—";
-  const d = new Date(iso);
-  if (Number.isNaN(d.getTime())) return "—";
-  return d.toLocaleDateString(undefined, {
-    weekday: "short",
-    month: "short",
-    day: "numeric",
-  });
+  return (
+    <>
+      {t.date}
+      {t.time && (
+        <>
+          {" · "}
+          {t.time}
+        </>
+      )}
+      {t.isUtcFallback && t.time && (
+        <span className="ml-0.5 text-deep-green/35">(UTC)</span>
+      )}
+    </>
+  );
 }

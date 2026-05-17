@@ -59,8 +59,15 @@ export default function AuthGate({ children }: { children: React.ReactNode }) {
     <>
       <TopNav />
       <main
-        className="mx-auto max-w-6xl px-6 py-8"
-        style={{ paddingBottom: "calc(2rem + var(--bottom-nav-h))" }}
+        className="mx-auto max-w-6xl px-6"
+        style={{
+          // max() so the top padding clears the iOS status bar on
+          // mobile PWA (TopNav hidden, no other chrome above) while
+          // staying at the standard 2rem buffer on desktop and any
+          // viewport where env() resolves to 0.
+          paddingTop: "max(env(safe-area-inset-top), 2rem)",
+          paddingBottom: "calc(2rem + var(--bottom-nav-h))",
+        }}
       >
         {children}
       </main>

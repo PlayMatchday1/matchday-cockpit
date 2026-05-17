@@ -577,11 +577,6 @@ export default function CrmClient() {
   );
 
   const whatsappExpired = computeWhatsAppExpired(detail);
-  const supabaseProjectRef =
-    process.env.NEXT_PUBLIC_SUPABASE_URL?.replace(
-      /^https:\/\/([^.]+)\..*/,
-      "$1",
-    ) ?? null;
 
   // Mobile flow rules:
   //   no selectedId             → inbox full-screen
@@ -695,7 +690,6 @@ export default function CrmClient() {
             recentMatches={detail?.recent_matches ?? []}
             upcomingMatches={detail?.upcoming_matches ?? []}
             historicalAccountCount={detail?.historical_account_count ?? null}
-            supabaseProjectRef={supabaseProjectRef}
             loading={detailLoading}
           />
         )}
@@ -720,7 +714,6 @@ export default function CrmClient() {
         recentMatches={detail?.recent_matches ?? []}
         upcomingMatches={detail?.upcoming_matches ?? []}
         historicalAccountCount={detail?.historical_account_count ?? null}
-        supabaseProjectRef={supabaseProjectRef}
         loading={detailLoading}
       />
     </div>
@@ -785,7 +778,10 @@ function ChatsHeader({
   return (
     <header className="min-w-0 shrink-0">
       {/* Title bar */}
-      <div className="flex h-12 items-center justify-between bg-deep-green px-3 sm:px-4">
+      <div
+        className="flex h-12 items-center justify-between bg-deep-green px-3 sm:px-4"
+        style={{ paddingTop: "env(safe-area-inset-top)" }}
+      >
         <h1 className="text-base font-bold tracking-tight text-cream">Chats</h1>
         <button
           type="button"

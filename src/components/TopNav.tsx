@@ -93,7 +93,7 @@ export default function TopNav() {
 
   return (
     <header
-      className="bg-deep-green text-cream"
+      className="hidden bg-deep-green text-cream md:block"
       style={{ paddingTop: "env(safe-area-inset-top)" }}
     >
       <div className="mx-auto max-w-6xl px-4 sm:px-6">
