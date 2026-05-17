@@ -37,7 +37,9 @@ import {
   ACTIVE_WINDOW_DAYS,
   isValidChatId,
   type MatchChatInboxResponse,
+  type MatchChatInboxRow,
 } from "@/lib/matchChats";
+import { UNKNOWN_CITY } from "@/lib/cityColors";
 import MatchChatsInbox, { type InboxTab } from "./MatchChatsInbox";
 import ChatPane from "./ChatPane";
 
@@ -59,7 +61,9 @@ async function fetchInbox(): Promise<MatchChatInboxResponse> {
 
 function readTab(search: URLSearchParams): InboxTab {
   const raw = search.get("tab");
-  return raw === "upcoming" ? "upcoming" : "active";
+  if (raw === "upcoming") return "upcoming";
+  if (raw === "past") return "past";
+  return "active";
 }
 
 function readChatId(search: URLSearchParams): string | null {
@@ -67,6 +71,28 @@ function readChatId(search: URLSearchParams): string | null {
   if (!raw) return null;
   // Numeric-id guard — refuses the 7 phantom non-numeric chats.
   return isValidChatId(raw) ? raw : null;
+}
+
+function readCities(search: URLSearchParams): Set<string> {
+  const raw = search.get("cities");
+  if (!raw) return new Set();
+  return new Set(raw.split(",").filter((c) => c.length > 0));
+}
+
+// Same city-filter rule the /chats Players inbox uses: empty set
+// means "all cities" (no-op pass-through). Match rows with a null or
+// empty city_identifier fall under UNKNOWN_CITY so the "Unknown" pill
+// can pick them up. Orphan rows (match=null) also bucket as Unknown.
+function filterByCities(
+  rows: MatchChatInboxRow[],
+  cities: Set<string>,
+): MatchChatInboxRow[] {
+  if (cities.size === 0) return rows;
+  return rows.filter((r) => {
+    const code = r.match?.city_identifier;
+    const effective = code && code.length > 0 ? code : UNKNOWN_CITY;
+    return cities.has(effective);
+  });
 }
 
 // ---------------- main ----------------
@@ -81,6 +107,7 @@ export default function MatchChatsClient() {
     () => readChatId(searchParams),
     [searchParams],
   );
+  const cityFilter = useMemo(() => readCities(searchParams), [searchParams]);
 
   // Inbox data lifted up from MatchChatsInbox so the header can show
   // live/offline state and Refresh.
@@ -152,7 +179,11 @@ export default function MatchChatsClient() {
   // Write a single URL update preserving other params. router.replace
   // keeps us out of browser history.
   const updateParams = useCallback(
-    (patch: { chatId?: string | null; tab?: InboxTab }) => {
+    (patch: {
+      chatId?: string | null;
+      tab?: InboxTab;
+      cities?: Set<string>;
+    }) => {
       const next = new URLSearchParams(searchParams.toString());
       if ("chatId" in patch) {
         if (patch.chatId == null) next.delete("chatId");
@@ -161,6 +192,10 @@ export default function MatchChatsClient() {
       if ("tab" in patch && patch.tab) {
         if (patch.tab === "active") next.delete("tab");
         else next.set("tab", patch.tab);
+      }
+      if (patch.cities !== undefined) {
+        if (patch.cities.size === 0) next.delete("cities");
+        else next.set("cities", [...patch.cities].join(","));
       }
       const qs = next.toString();
       router.replace(qs ? `/match-chats?${qs}` : "/match-chats", {
@@ -177,25 +212,46 @@ export default function MatchChatsClient() {
   const showInboxMobile = !selectedChatId;
   const showConversationMobile = !!selectedChatId;
 
+  // Apply city filter once per render. Counts on each tab reflect the
+  // filtered rows (matching /chats's "{visible}" convention), so an
+  // active city filter shrinks the tab counts in lockstep.
+  const filteredActive = useMemo(
+    () => filterByCities(data?.active ?? [], cityFilter),
+    [data, cityFilter],
+  );
+  const filteredUpcoming = useMemo(
+    () => filterByCities(data?.upcoming ?? [], cityFilter),
+    [data, cityFilter],
+  );
+  const filteredPast = useMemo(
+    () => filterByCities(data?.past ?? [], cityFilter),
+    [data, cityFilter],
+  );
+
   return (
     <div className="flex min-h-0 min-w-0 flex-1 flex-col bg-cream">
       <MatchChatsHeader
         session={session}
         onRefresh={() => void load()}
         loading={loading}
-        activeCount={data?.active.length ?? 0}
-        upcomingCount={data?.upcoming.length ?? 0}
+        activeCount={filteredActive.length}
+        upcomingCount={filteredUpcoming.length}
       />
       <div className="flex min-h-0 min-w-0 flex-1">
         <MatchChatsInbox
-          data={data}
+          activeRows={filteredActive}
+          upcomingRows={filteredUpcoming}
+          pastRows={filteredPast}
           error={error}
           loading={loading}
+          dataReady={data !== null}
           selectedChatId={selectedChatId}
           tab={tab}
           onSelect={(chatId) => updateParams({ chatId })}
           onTabChange={(t) => updateParams({ tab: t })}
           showOnMobile={showInboxMobile}
+          cities={cityFilter}
+          onCitiesChange={(c) => updateParams({ cities: c })}
         />
         <ChatPane
           chatId={selectedChatId}
