@@ -236,7 +236,7 @@ function MatchChatsHeader({
   return (
     <header className="min-w-0 shrink-0 bg-deep-green">
       <div aria-hidden style={{ height: "var(--safe-area-top)" }} />
-      <div className="flex min-h-12 items-center justify-between gap-3 px-3 sm:px-4">
+      <div className="flex min-h-12 items-center justify-between gap-3 px-3 pt-2 sm:px-4">
         <div className="min-w-0 max-w-[280px] flex-1">
           <PlayersMatchesToggle current="matches" />
         </div>
