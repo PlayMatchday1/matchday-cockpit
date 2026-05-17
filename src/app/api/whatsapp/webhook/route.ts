@@ -88,6 +88,41 @@ type WaMessage = {
     sha256?: string;
     caption?: string;
   };
+  // Inbound video. mime_type is video/mp4 or video/3gpp. Caption
+  // optional. No filename from Meta.
+  video?: {
+    id?: string;
+    mime_type?: string;
+    sha256?: string;
+    caption?: string;
+  };
+  // Inbound audio. mime_type is one of audio/aac, audio/mp4,
+  // audio/mpeg, audio/amr, audio/ogg. `voice` flag distinguishes
+  // press-and-hold voice notes from attached audio files. No caption
+  // per Meta spec.
+  audio?: {
+    id?: string;
+    mime_type?: string;
+    sha256?: string;
+    voice?: boolean;
+  };
+  // Inbound document. Carries an original filename — the only
+  // inbound media type that does. Caption optional.
+  document?: {
+    id?: string;
+    mime_type?: string;
+    sha256?: string;
+    filename?: string;
+    caption?: string;
+  };
+  // Inbound sticker. Always image/webp. animated flag distinguishes
+  // static vs animated. No caption.
+  sticker?: {
+    id?: string;
+    mime_type?: string;
+    sha256?: string;
+    animated?: boolean;
+  };
 };
 
 // Meta's status webhook entries — sent → delivered → read → failed.
@@ -354,89 +389,218 @@ type DerivedMessageRow = {
   media_kind: string | null;
 };
 
+type MediaKind = "image" | "video" | "audio" | "document" | "sticker";
+
+const NULL_MEDIA = {
+  media_url: null,
+  media_mime_type: null,
+  media_filename: null,
+  media_size_bytes: null,
+  media_kind: null,
+} as const;
+
+// Shared download + upload path for any inbound media type. On
+// failure (network, expired URL, Storage upload error) returns the
+// placeholder fallback row so the message still appears in the inbox
+// as a degraded text bubble. wamid is logged for triage.
+async function handleInboundMedia({
+  threadId,
+  mediaId,
+  kind,
+  body,
+  filename,
+  wamid,
+}: {
+  threadId: string;
+  mediaId: string;
+  kind: MediaKind;
+  body: string;
+  filename: string | null;
+  wamid: string | null;
+}): Promise<DerivedMessageRow> {
+  const newId = randomUUID();
+  try {
+    const downloaded = await downloadWhatsAppMedia(mediaId);
+    const storagePath = await uploadMessageMedia({
+      threadId,
+      messageId: newId,
+      buffer: downloaded.buffer,
+      mimeType: downloaded.mimeType,
+      filename,
+    });
+    return {
+      id: newId,
+      body,
+      media_url: storagePath,
+      media_mime_type: downloaded.mimeType,
+      media_filename: filename,
+      media_size_bytes: downloaded.fileSize,
+      media_kind: kind,
+    };
+  } catch (err) {
+    console.error(
+      `[whatsapp:webhook] ${kind} download/upload failed wamid=${wamid ?? "-"}`,
+      err,
+    );
+    return { body: MEDIA_PLACEHOLDER, ...NULL_MEDIA };
+  }
+}
+
+// Extension derived from the message MIME. Falls through to "bin"
+// for unfamiliar types. Used to label the Storage object for human
+// inspection in the dashboard — does NOT affect playback (Storage
+// serves the binary verbatim with the recorded mime_type).
+function extForMime(mime: string | undefined): string {
+  const m = (mime ?? "").toLowerCase().split(";")[0].trim();
+  switch (m) {
+    case "video/mp4":
+      return "mp4";
+    case "video/3gpp":
+      return "3gp";
+    case "audio/ogg":
+      return "ogg";
+    case "audio/mpeg":
+    case "audio/mp3":
+      return "mp3";
+    case "audio/aac":
+      return "aac";
+    case "audio/mp4":
+      return "m4a";
+    case "audio/amr":
+      return "amr";
+    case "image/webp":
+      return "webp";
+    case "image/jpeg":
+      return "jpg";
+    case "image/png":
+      return "png";
+    default: {
+      const slash = m.indexOf("/");
+      const sub = slash > -1 ? m.slice(slash + 1) : "";
+      return sub || "bin";
+    }
+  }
+}
+
 // Resolves the row to insert for an inbound message. For text:
-// straightforward, body verbatim. For image: download from Meta,
-// upload to crm-media, populate media_* columns. For other media
-// types (video, audio, document, sticker, ...): placeholder body
-// only — PR D extends this branch.
-//
-// Image errors degrade gracefully to the placeholder so the message
-// still appears in the inbox; the error is logged so we can debug.
+// straightforward, body verbatim. For each media type: download from
+// Meta, upload to crm-media, populate media_* columns. Per-type
+// branches set body (caption for image/video/document; empty for
+// audio/sticker which Meta does not allow captions on) and a
+// canonical filename (Meta-provided for documents; type-derived for
+// the rest).
 async function deriveMessageRow(
   threadId: string,
   msg: WaMessage,
 ): Promise<DerivedMessageRow> {
   const type = (msg.type ?? "").toLowerCase();
+  const wamid = msg.id ?? null;
 
   if (type === "text") {
     return {
       body: msg.text?.body ?? "",
-      media_url: null,
-      media_mime_type: null,
-      media_filename: null,
-      media_size_bytes: null,
-      media_kind: null,
+      ...NULL_MEDIA,
     };
   }
 
   if (type === "image" && msg.image?.id) {
-    const newId = randomUUID();
-    try {
-      const downloaded = await downloadWhatsAppMedia(msg.image.id);
-      const storagePath = await uploadMessageMedia({
-        threadId,
-        messageId: newId,
-        buffer: downloaded.buffer,
-        mimeType: downloaded.mimeType,
-        filename: null,
-      });
-      return {
-        id: newId,
-        body: msg.image.caption ?? "",
-        media_url: storagePath,
-        media_mime_type: downloaded.mimeType,
-        media_filename: null,
-        media_size_bytes: downloaded.fileSize,
-        media_kind: "image",
-      };
-    } catch (err) {
-      console.error(
-        `[whatsapp:webhook] image download/upload failed wamid=${msg.id ?? "-"}`,
-        err,
-      );
-      // Degraded fallback — message still appears as a placeholder
-      // text bubble. Operator can ask the player to resend.
-      return {
-        body: MEDIA_PLACEHOLDER,
-        media_url: null,
-        media_mime_type: null,
-        media_filename: null,
-        media_size_bytes: null,
-        media_kind: null,
-      };
-    }
+    return handleInboundMedia({
+      threadId,
+      mediaId: msg.image.id,
+      kind: "image",
+      body: msg.image.caption ?? "",
+      // Meta does not send filenames for images. Let crmMedia's
+      // sanitizer fall back to "attachment.{ext}" via mime sniff.
+      filename: null,
+      wamid,
+    });
   }
 
-  // Other non-text types stay on the legacy placeholder path until
-  // PR D.
-  return {
-    body: MEDIA_PLACEHOLDER,
-    media_url: null,
-    media_mime_type: null,
-    media_filename: null,
-    media_size_bytes: null,
-    media_kind: null,
-  };
+  if (type === "video" && msg.video?.id) {
+    return handleInboundMedia({
+      threadId,
+      mediaId: msg.video.id,
+      kind: "video",
+      body: msg.video.caption ?? "",
+      filename: `video.${extForMime(msg.video.mime_type)}`,
+      wamid,
+    });
+  }
+
+  if (type === "audio" && msg.audio?.id) {
+    const isVoice = msg.audio.voice === true;
+    return handleInboundMedia({
+      threadId,
+      mediaId: msg.audio.id,
+      kind: "audio",
+      // Audio messages cannot carry captions per Meta spec.
+      body: "",
+      filename: `${isVoice ? "voice-note" : "audio"}.${extForMime(msg.audio.mime_type)}`,
+      wamid,
+    });
+  }
+
+  if (type === "document" && msg.document?.id) {
+    // Document is the only inbound type Meta gives us a filename
+    // for. Pass it through; crmMedia's sanitizer strips any path
+    // components and unsafe chars. Fallback uses the mime ext when
+    // Meta surprisingly omits filename.
+    const original = msg.document.filename ?? null;
+    const fallback = `document.${extForMime(msg.document.mime_type)}`;
+    return handleInboundMedia({
+      threadId,
+      mediaId: msg.document.id,
+      kind: "document",
+      body: msg.document.caption ?? "",
+      filename: original || fallback,
+      wamid,
+    });
+  }
+
+  if (type === "sticker" && msg.sticker?.id) {
+    return handleInboundMedia({
+      threadId,
+      mediaId: msg.sticker.id,
+      kind: "sticker",
+      body: "",
+      // Stickers are always webp per Meta spec.
+      filename: "sticker.webp",
+      wamid,
+    });
+  }
+
+  // Unknown / unsupported types (location, contacts, interactive,
+  // reaction, order, system, ...) — degrade to the placeholder so
+  // the message still appears in the inbox.
+  return { body: MEDIA_PLACEHOLDER, ...NULL_MEDIA };
 }
 
 // Inbox-row preview string. Falls back to a media-kind hint when
 // body is empty so the inbox doesn't show a blank row for caption-
-// less images.
+// less media. Document preview surfaces the filename when available.
 function previewFor(row: DerivedMessageRow): string {
   const fromBody = row.body.slice(0, PREVIEW_LIMIT);
   if (fromBody) return fromBody;
-  if (row.media_kind === "image") return "📷 Image";
-  return "";
+  switch (row.media_kind) {
+    case "image":
+      return "📷 Image";
+    case "video":
+      return "🎬 Video";
+    case "audio":
+      // Distinguish voice notes from attached audio by reading the
+      // filename convention this file just wrote.
+      return (row.media_filename ?? "").startsWith("voice-note")
+        ? "🎤 Voice note"
+        : "🎵 Audio";
+    case "document":
+      return row.media_filename
+        ? `📄 ${row.media_filename.slice(0, PREVIEW_LIMIT - 3)}`
+        : "📄 Document";
+    case "sticker":
+      return "🌟 Sticker";
+    default:
+      return "";
+  }
 }
 
 type ProcessResult = { newThread?: NewWhatsAppThreadNotification };

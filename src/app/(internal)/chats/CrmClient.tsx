@@ -111,6 +111,8 @@ type Message = {
   // images that arrive via realtime fall back to caption-only
   // rendering until the next thread refetch.
   media_kind: "image" | "video" | "audio" | "document" | "sticker" | null;
+  media_filename?: string | null;
+  media_size_bytes?: number | null;
   signed_media_url?: string | null;
 };
 
