@@ -19,6 +19,7 @@
 import type { SupabaseClient } from "@supabase/supabase-js";
 import { authenticateCrm } from "@/lib/crmAuth";
 import { toNationalDigits } from "@/lib/phone";
+import { getSignedMediaUrl } from "@/lib/crmMedia";
 
 export const runtime = "nodejs";
 export const maxDuration = 10;
@@ -74,7 +75,7 @@ export async function GET(req: Request, ctx: RouteCtx) {
   const messagesRes = await supabase
     .from("crm_messages")
     .select(
-      "id, thread_id, direction, body, sent_at, sent_by_user_id, telnyx_message_id, external_message_id, segment_count, channel, delivery_status, delivery_status_updated_at",
+      "id, thread_id, direction, body, sent_at, sent_by_user_id, telnyx_message_id, external_message_id, segment_count, channel, delivery_status, delivery_status_updated_at, media_url, media_mime_type, media_filename, media_size_bytes, media_kind",
     )
     .eq("thread_id", threadId)
     .order("sent_at", { ascending: true });
@@ -110,13 +111,28 @@ export async function GET(req: Request, ctx: RouteCtx) {
       }
     }
   }
-  const messages = (messagesRes.data ?? []).map((m) => ({
-    ...m,
-    sender:
-      typeof m.sent_by_user_id === "string"
-        ? sendersById.get(m.sent_by_user_id) ?? null
-        : null,
-  }));
+  // Mint signed URLs for any media-bearing rows in parallel. The raw
+  // media_url (Storage path) is stripped from the response — clients
+  // only need the time-limited signed URL.
+  const rawMessages = messagesRes.data ?? [];
+  const signedUrls = await Promise.all(
+    rawMessages.map((m) =>
+      typeof m.media_url === "string" && m.media_url.length > 0
+        ? getSignedMediaUrl(supabase, m.media_url)
+        : Promise.resolve(null),
+    ),
+  );
+  const messages = rawMessages.map((m, i) => {
+    const { media_url: _omit, ...rest } = m;
+    return {
+      ...rest,
+      sender:
+        typeof m.sent_by_user_id === "string"
+          ? sendersById.get(m.sent_by_user_id) ?? null
+          : null,
+      signed_media_url: signedUrls[i],
+    };
+  });
 
   // Player context — only if thread has a player_id.
   let player: unknown = null;

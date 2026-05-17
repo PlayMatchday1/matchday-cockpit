@@ -104,6 +104,14 @@ type Message = {
   delivery_status: DeliveryStatus;
   delivery_status_updated_at: string | null;
   sender?: { email: string; full_name: string | null } | null;
+  // Media columns. media_url (Storage path) is stripped by the
+  // detail route; clients receive the short-lived signed_media_url
+  // instead. Realtime INSERT payloads from Supabase do NOT include
+  // signed_media_url (it is minted server-side per request), so
+  // images that arrive via realtime fall back to caption-only
+  // rendering until the next thread refetch.
+  media_kind: "image" | "video" | "audio" | "document" | "sticker" | null;
+  signed_media_url?: string | null;
 };
 
 type RecentMatch = ContextRecentMatch;
@@ -336,6 +344,33 @@ export default function CrmClient() {
     }
   }, []);
 
+  // Silent refetch used when a realtime INSERT carries a media_kind.
+  // The postgres_changes payload does NOT include signed_media_url
+  // (minted server-side per request), so for media rows we replace
+  // the local detail with a fresh fetch that includes signed URLs.
+  // Does NOT toggle detailLoading so the bubble area doesn't flash.
+  // Race-safe: re-checks selectedRef before applying.
+  const refreshDetailForMediaInsert = useCallback(
+    async (threadId: string): Promise<void> => {
+      if (selectedRef.current !== threadId) return;
+      const headers = await bearerHeaders();
+      if (!headers) return;
+      try {
+        const res = await fetch(`/api/crm/threads/${threadId}`, { headers });
+        if (!res.ok) return;
+        const j = (await res.json()) as ThreadDetail;
+        if (selectedRef.current !== threadId) return;
+        setDetail(j);
+      } catch {
+        // Silent best-effort. If the refetch fails, the optimistically
+        // appended raw payload is still in state with media_kind set
+        // but no signed URL; the bubble falls back to caption-text
+        // rendering until the next thread re-select.
+      }
+    },
+    [],
+  );
+
   useEffect(() => {
     void loadThreads();
     void loadOperators();
@@ -373,11 +408,24 @@ export default function CrmClient() {
         (payload) => {
           const m = payload.new as Message;
           if (m.thread_id === selectedRef.current) {
-            setDetail((prev) => {
-              if (!prev) return prev;
-              if (prev.messages.some((x) => x.id === m.id)) return prev;
-              return { ...prev, messages: [...prev.messages, m] };
-            });
+            if (m.media_kind) {
+              // Media row — the realtime payload lacks
+              // signed_media_url (minted server-side per request).
+              // Refetch the thread so the bubble can render the
+              // image instead of falling back to caption-only.
+              // Text-only rows skip this to avoid an extra round-
+              // trip on every inbound message.
+              console.debug(
+                `[crm:realtime] media INSERT, refetching thread=${m.thread_id} kind=${m.media_kind}`,
+              );
+              void refreshDetailForMediaInsert(m.thread_id);
+            } else {
+              setDetail((prev) => {
+                if (!prev) return prev;
+                if (prev.messages.some((x) => x.id === m.id)) return prev;
+                return { ...prev, messages: [...prev.messages, m] };
+              });
+            }
           }
           setThreads((prev) =>
             prev.map((t) =>
@@ -478,7 +526,7 @@ export default function CrmClient() {
     return () => {
       supabase.removeChannel(channel);
     };
-  }, [loadThreads, operatorsById]);
+  }, [loadThreads, operatorsById, refreshDetailForMediaInsert]);
 
   // --------- derived list ---------
   const filteredThreads = useMemo(() => {

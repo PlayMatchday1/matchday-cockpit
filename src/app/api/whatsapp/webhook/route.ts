@@ -25,13 +25,15 @@
 // can include PII (player names, phone, message text) in payloads;
 // keep logs to phone/wamid/elapsed.
 
-import { createHmac, timingSafeEqual } from "node:crypto";
+import { createHmac, randomUUID, timingSafeEqual } from "node:crypto";
 import { createClient, type SupabaseClient } from "@supabase/supabase-js";
 import { normalizePhone, toNationalDigits } from "@/lib/phone";
 import {
   notifyNewWhatsAppThread,
   type NewWhatsAppThreadNotification,
 } from "@/lib/gchat";
+import { downloadWhatsAppMedia } from "@/lib/whatsapp";
+import { uploadMessageMedia } from "@/lib/crmMedia";
 
 export const runtime = "nodejs";
 export const maxDuration = 15;
@@ -77,6 +79,15 @@ type WaMessage = {
   timestamp?: string;
   type?: string;
   text?: { body?: string };
+  // Inbound image. Meta does not send a filename for images; caption
+  // is optional. mime_type is one of image/jpeg, image/png (per Meta
+  // docs), occasionally image/webp.
+  image?: {
+    id?: string;
+    mime_type?: string;
+    sha256?: string;
+    caption?: string;
+  };
 };
 
 // Meta's status webhook entries — sent → delivered → read → failed.
@@ -326,14 +337,106 @@ async function processStatus(
   );
 }
 
-// Returns the rendered body for the crm_messages row. Text messages
-// store the body verbatim; media falls back to a placeholder per
-// Phase 1 spec (no file fetch in this PR).
-function deriveBody(msg: WaMessage): string {
-  if ((msg.type ?? "").toLowerCase() === "text") {
-    return msg.text?.body ?? "";
+// Derived row shape used by processInbound. Text messages set body
+// only; image messages may set both media_* columns AND body (the
+// caption). On image-handling failure we fall back to a placeholder
+// body and null media so the message still appears.
+type DerivedMessageRow = {
+  // Optional explicit UUID. Set only for media-bearing rows so the
+  // Storage object key (which depends on the row id) can be written
+  // in the same INSERT as the media columns.
+  id?: string;
+  body: string;
+  media_url: string | null;
+  media_mime_type: string | null;
+  media_filename: string | null;
+  media_size_bytes: number | null;
+  media_kind: string | null;
+};
+
+// Resolves the row to insert for an inbound message. For text:
+// straightforward, body verbatim. For image: download from Meta,
+// upload to crm-media, populate media_* columns. For other media
+// types (video, audio, document, sticker, ...): placeholder body
+// only — PR D extends this branch.
+//
+// Image errors degrade gracefully to the placeholder so the message
+// still appears in the inbox; the error is logged so we can debug.
+async function deriveMessageRow(
+  threadId: string,
+  msg: WaMessage,
+): Promise<DerivedMessageRow> {
+  const type = (msg.type ?? "").toLowerCase();
+
+  if (type === "text") {
+    return {
+      body: msg.text?.body ?? "",
+      media_url: null,
+      media_mime_type: null,
+      media_filename: null,
+      media_size_bytes: null,
+      media_kind: null,
+    };
   }
-  return MEDIA_PLACEHOLDER;
+
+  if (type === "image" && msg.image?.id) {
+    const newId = randomUUID();
+    try {
+      const downloaded = await downloadWhatsAppMedia(msg.image.id);
+      const storagePath = await uploadMessageMedia({
+        threadId,
+        messageId: newId,
+        buffer: downloaded.buffer,
+        mimeType: downloaded.mimeType,
+        filename: null,
+      });
+      return {
+        id: newId,
+        body: msg.image.caption ?? "",
+        media_url: storagePath,
+        media_mime_type: downloaded.mimeType,
+        media_filename: null,
+        media_size_bytes: downloaded.fileSize,
+        media_kind: "image",
+      };
+    } catch (err) {
+      console.error(
+        `[whatsapp:webhook] image download/upload failed wamid=${msg.id ?? "-"}`,
+        err,
+      );
+      // Degraded fallback — message still appears as a placeholder
+      // text bubble. Operator can ask the player to resend.
+      return {
+        body: MEDIA_PLACEHOLDER,
+        media_url: null,
+        media_mime_type: null,
+        media_filename: null,
+        media_size_bytes: null,
+        media_kind: null,
+      };
+    }
+  }
+
+  // Other non-text types stay on the legacy placeholder path until
+  // PR D.
+  return {
+    body: MEDIA_PLACEHOLDER,
+    media_url: null,
+    media_mime_type: null,
+    media_filename: null,
+    media_size_bytes: null,
+    media_kind: null,
+  };
+}
+
+// Inbox-row preview string. Falls back to a media-kind hint when
+// body is empty so the inbox doesn't show a blank row for caption-
+// less images.
+function previewFor(row: DerivedMessageRow): string {
+  const fromBody = row.body.slice(0, PREVIEW_LIMIT);
+  if (fromBody) return fromBody;
+  if (row.media_kind === "image") return "📷 Image";
+  return "";
 }
 
 type ProcessResult = { newThread?: NewWhatsAppThreadNotification };
@@ -356,8 +459,6 @@ async function processInbound(
     );
     return null;
   }
-
-  const body = deriveBody(msg);
 
   // -------- player match (mirrors Telnyx newest-wins) --------
   const candidates: { id: number }[] = [];
@@ -388,8 +489,13 @@ async function processInbound(
   const playerId = candidates[0]?.id ?? null;
   const ambiguous = candidates.length > 1;
 
-  // -------- thread upsert (per-channel, sticky-ambiguous) --------
-  const preview = body.slice(0, PREVIEW_LIMIT);
+  // -------- get-or-create threadId (per-channel) --------
+  // We need threadId BEFORE we can compute the Storage path for any
+  // inbound media (deriveMessageRow uses it). So thread upsert is
+  // split into a lookup-or-insert step followed by a finalize-fields
+  // UPDATE after the row is derived. The text-only path therefore
+  // takes one extra UPDATE per new thread compared to before — cheap
+  // and only on first inbound from a phone.
   const nowIso = new Date().toISOString();
 
   const existing = await sb
@@ -407,21 +513,6 @@ async function processInbound(
   let isNewThread = false;
   if (existing.data) {
     threadId = existing.data.id as string;
-    const patch: Record<string, unknown> = {
-      last_message_at: nowIso,
-      last_message_preview: preview,
-    };
-    if (existing.data.player_id == null && playerId != null) {
-      patch.player_id = playerId;
-    }
-    if (ambiguous && !existing.data.match_ambiguous) {
-      patch.match_ambiguous = true;
-    }
-    const upd = await sb.from("crm_threads").update(patch).eq("id", threadId);
-    if (upd.error) {
-      console.error("[whatsapp:webhook] thread update failed", upd.error);
-      throw new Error("thread update failed");
-    }
   } else {
     const ins = await sb
       .from("crm_threads")
@@ -431,7 +522,8 @@ async function processInbound(
         player_id: playerId,
         match_ambiguous: ambiguous,
         last_message_at: nowIso,
-        last_message_preview: preview,
+        // Placeholder preview — finalized below after deriveMessageRow.
+        last_message_preview: "",
       })
       .select("id")
       .single();
@@ -443,14 +535,46 @@ async function processInbound(
     isNewThread = true;
   }
 
+  // -------- derive message row (heavy: download + upload for media) --------
+  const row = await deriveMessageRow(threadId, msg);
+  const preview = previewFor(row);
+
+  // -------- finalize thread fields --------
+  const patch: Record<string, unknown> = {
+    last_message_at: nowIso,
+    last_message_preview: preview,
+  };
+  if (!isNewThread && existing.data) {
+    if (existing.data.player_id == null && playerId != null) {
+      patch.player_id = playerId;
+    }
+    if (ambiguous && !existing.data.match_ambiguous) {
+      patch.match_ambiguous = true;
+    }
+  }
+  const updT = await sb.from("crm_threads").update(patch).eq("id", threadId);
+  if (updT.error) {
+    console.error("[whatsapp:webhook] thread update failed", updT.error);
+    throw new Error("thread update failed");
+  }
+
   // -------- inbound message insert with wamid dedupe --------
   const msgInsert = await sb.from("crm_messages").insert({
+    // Explicit id only when deriveMessageRow pre-allocated one (image
+    // upload path — id is part of the Storage key). For all other
+    // rows the DB default uuid applies.
+    ...(row.id ? { id: row.id } : {}),
     thread_id: threadId,
     direction: "inbound",
     channel: "whatsapp",
-    body,
+    body: row.body,
     sent_at: nowIso,
     external_message_id: wamid,
+    media_url: row.media_url,
+    media_mime_type: row.media_mime_type,
+    media_filename: row.media_filename,
+    media_size_bytes: row.media_size_bytes,
+    media_kind: row.media_kind,
   });
   if (msgInsert.error) {
     if (msgInsert.error.code === "23505") {
@@ -464,7 +588,7 @@ async function processInbound(
   }
 
   console.log(
-    `[whatsapp:webhook] stored phone=${phone} player_id=${playerId ?? "-"} ambiguous=${ambiguous} new_thread=${isNewThread} wamid=${wamid ?? "-"}`,
+    `[whatsapp:webhook] stored phone=${phone} player_id=${playerId ?? "-"} ambiguous=${ambiguous} new_thread=${isNewThread} wamid=${wamid ?? "-"} kind=${row.media_kind ?? "text"}`,
   );
 
   if (!isNewThread) return null;
@@ -490,7 +614,7 @@ async function processInbound(
       threadId,
       cityCode,
       playerPhone: phone,
-      messageBody: body,
+      messageBody: preview,
     },
   };
 }
