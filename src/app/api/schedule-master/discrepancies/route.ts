@@ -2,11 +2,18 @@
 // schedule_master template against actual mdapi_matches in a
 // two-week window starting at week_start.
 //
-// Three buckets are reported:
+// Four buckets are reported:
 //   missing_in_db — schedule_master rows with no matching
 //                   mdapi_matches row on (city, venue, date, start time).
 //   extra_in_db   — mdapi_matches rows with no schedule_master row.
-//   mismatched    — same key, but max_spots or detail differ.
+//                   Includes cancelled mdapi rows that have no
+//                   template entry — they are still "extra".
+//   mismatched    — same key, but max_spots differs.
+//   cancelled     — mdapi_matches rows with is_cancelled=true AND a
+//                   matching schedule_master entry. This is the
+//                   operationally interesting case: the template
+//                   says the match should happen but the live row
+//                   has been cancelled (weather, low spots, etc).
 //
 // Matching key: (city_canonical, venue_canonical, match_date,
 // hh:mm).
@@ -112,6 +119,22 @@ type Out = {
     match_time: string;
     diffs: string[];
   }>;
+  // Cancelled mdapi matches that have a matching schedule_master
+  // entry. The lens cross-references these against the rendered
+  // grid to paint the corresponding bubble with the cancelled
+  // variant. `detail` and `match_time` come from the template row
+  // so the client can rebuild the same abbreviation + compact-time
+  // key the lens uses elsewhere.
+  cancelled: Array<{
+    schedule_master_id: string;
+    mdapi_match_id: number;
+    city: string;
+    venue: string;
+    detail: string;
+    match_date: string;
+    match_time: string;
+    max_spots: number;
+  }>;
 };
 
 export async function GET(req: Request) {
@@ -164,6 +187,7 @@ export async function GET(req: Request) {
   }
   const matchRows = (mRes.data ?? []) as MatchRow[];
   const matchRowsAlive = matchRows.filter((m) => m.is_cancelled !== true);
+  const matchRowsCancelled = matchRows.filter((m) => m.is_cancelled === true);
 
   // Build the comparison index off both sides. cityName is the
   // canonical display form on both sides ("Austin", "San Antonio",
@@ -202,25 +226,33 @@ export async function GET(req: Request) {
       row: r,
     });
   }
-  const mIndex: Array<Indexed & { row: MatchRow }> = [];
-  for (const m of matchRowsAlive) {
+  // Factored out so both the alive loop below and the cancelled
+  // loop further down can reuse the same canonicalization without
+  // drifting (both must produce the same key for a row that
+  // matches a schedule_master entry).
+  function indexMatch(m: MatchRow): (Indexed & { row: MatchRow }) | null {
     const cityName = mapCityIdentifier(m.city_identifier);
-    if (!cityName) continue;
+    if (!cityName) return null;
     const venueKey = venueKeyFor(m.field_title);
-    if (!venueKey) continue;
+    if (!venueKey) return null;
     const tz = timezoneFor(m.city_identifier ?? "");
     const startTz = matchStartInZone(m, tz);
-    if (!startTz) continue;
-    mIndex.push({
+    if (!startTz) return null;
+    return {
       cityName,
       venueKey,
       date: startTz.date,
       hhmm: startTz.hhmm,
       row: m,
-    });
+    };
+  }
+  const mIndex: Array<Indexed & { row: MatchRow }> = [];
+  for (const m of matchRowsAlive) {
+    const i = indexMatch(m);
+    if (i) mIndex.push(i);
   }
 
-  // Key: cityCode|venueNorm|date|hhmm. Multiple entries on either
+  // Key: cityName|venueKey|date|hhmm. Multiple entries on either
   // side with the same key are unusual but possible — pair them
   // positionally, with surplus on either side counted as missing /
   // extra.
@@ -241,6 +273,7 @@ export async function GET(req: Request) {
   const missing_in_db: Out["missing_in_db"] = [];
   const extra_in_db: Out["extra_in_db"] = [];
   const mismatched: Out["mismatched"] = [];
+  const cancelled: Out["cancelled"] = [];
 
   for (const key of allKeys) {
     const sBucket = sBuckets.get(key) ?? [];
@@ -298,6 +331,42 @@ export async function GET(req: Request) {
     }
   }
 
+  // Cancelled mdapi rows: same bucket lookup against the
+  // schedule_master side, but no diff is run. Two outcomes:
+  //   - schedule_master entry exists → cancelled bucket, with
+  //     fields sourced from the template row so the client can
+  //     rebuild the same abbr / time_short key the lens uses.
+  //   - no schedule_master entry → extra_in_db (the cancelled row
+  //     is still "extra" relative to the template).
+  for (const m of matchRowsCancelled) {
+    const indexed = indexMatch(m);
+    if (!indexed) continue;
+    const key = `${indexed.cityName}|${indexed.venueKey}|${indexed.date}|${indexed.hhmm}`;
+    const sBucket = sBuckets.get(key) ?? [];
+    if (sBucket.length > 0) {
+      const s = sBucket[0].row;
+      cancelled.push({
+        schedule_master_id: s.id,
+        mdapi_match_id: m.api_id,
+        city: s.city,
+        venue: s.venue,
+        detail: s.detail,
+        match_date: s.match_date,
+        match_time: s.match_time,
+        max_spots: s.max_spots,
+      });
+    } else {
+      extra_in_db.push({
+        mdapi_match_id: m.api_id,
+        city: m.city_identifier ?? "?",
+        venue: m.field_title ?? "?",
+        match_date: indexed.date,
+        match_time: hhmmTo12h(indexed.hhmm),
+        max_spots: m.max_player_count,
+      });
+    }
+  }
+
   // Stable ordering — date, then city, then time. Makes inspection
   // in the UI deterministic across requests.
   const byDateThenCityThenTime = (a: { match_date: string; city: string; match_time: string }, b: { match_date: string; city: string; match_time: string }) =>
@@ -307,6 +376,7 @@ export async function GET(req: Request) {
   missing_in_db.sort(byDateThenCityThenTime);
   extra_in_db.sort(byDateThenCityThenTime);
   mismatched.sort(byDateThenCityThenTime);
+  cancelled.sort(byDateThenCityThenTime);
 
   const out: Out = {
     week_start: startIso,
@@ -316,6 +386,7 @@ export async function GET(req: Request) {
     missing_in_db,
     extra_in_db,
     mismatched,
+    cancelled,
   };
   return Response.json(out, { status: 200 });
 }
