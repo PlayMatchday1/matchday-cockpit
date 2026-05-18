@@ -1,11 +1,13 @@
 "use client";
 
-import { useState } from "react";
+import { useCallback, useMemo, useState } from "react";
 import Link from "next/link";
+import { useRouter, useSearchParams } from "next/navigation";
 import CitiesLegend from "@/components/CitiesLegend";
 import CitiesCancellationsLens from "@/components/CitiesCancellationsLens";
 import CitiesExecHero from "@/components/CitiesExecHero";
 import CitiesLensNav, { type CityLens } from "@/components/CitiesLensNav";
+import CitiesMasterScheduleLens from "@/components/CitiesMasterScheduleLens";
 import CitiesMembershipLens from "@/components/CitiesMembershipLens";
 import CitiesReviewsLens from "@/components/CitiesReviewsLens";
 import CitiesUsersLens from "@/components/CitiesUsersLens";
@@ -34,8 +36,38 @@ export default function CitiesIndexPage() {
 
 type WeekScope = "current" | "last";
 
+const VALID_LENSES: CityLens[] = [
+  "overview",
+  "users",
+  "membership",
+  "cancellations",
+  "reviews",
+  "master-schedule",
+];
+
 function CitiesIndexContent() {
-  const [lens, setLens] = useState<CityLens>("overview");
+  const router = useRouter();
+  const searchParams = useSearchParams();
+  // URL-backed tab state — ?tab=master-schedule etc. Unknown or
+  // missing values fall back to overview. Done as derived state
+  // (no useState) so the URL is always the source of truth and
+  // back/forward + deep links work.
+  const lens: CityLens = useMemo(() => {
+    const raw = searchParams.get("tab");
+    return (VALID_LENSES as string[]).includes(raw ?? "")
+      ? (raw as CityLens)
+      : "overview";
+  }, [searchParams]);
+  const setLens = useCallback(
+    (next: CityLens) => {
+      const params = new URLSearchParams(searchParams.toString());
+      if (next === "overview") params.delete("tab");
+      else params.set("tab", next);
+      const qs = params.toString();
+      router.replace(qs ? `/cities?${qs}` : "/cities", { scroll: false });
+    },
+    [router, searchParams],
+  );
 
   return (
     <>
@@ -59,6 +91,7 @@ function CitiesIndexContent() {
       {lens === "membership" && <CitiesMembershipLens />}
       {lens === "cancellations" && <CitiesCancellationsLens />}
       {lens === "reviews" && <CitiesReviewsLens />}
+      {lens === "master-schedule" && <CitiesMasterScheduleLens />}
     </>
   );
 }
