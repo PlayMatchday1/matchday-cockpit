@@ -32,6 +32,7 @@ import {
 } from "firebase/firestore";
 import { supabase } from "@/lib/supabase";
 import { useFirebaseSession } from "@/lib/useFirebaseSession";
+import EnablePushNotificationsButton from "@/components/EnablePushNotificationsButton";
 import PlayersMatchesToggle from "@/components/PlayersMatchesToggle";
 import {
   ACTIVE_WINDOW_DAYS,
@@ -330,6 +331,7 @@ function MatchChatsHeader({
             />
             {liveLabel}
           </span>
+          <EnablePushNotificationsButton />
           <button
             type="button"
             onClick={onRefresh}
