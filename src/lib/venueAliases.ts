@@ -11,7 +11,24 @@
 // land in the server logs instead of becoming silent false-
 // positives in the discrepancy banner.
 
+// 21 canonical names. Migration 0040 normalizes schedule_master
+// .venue to one of these. mdapi_matches.field_title gets the same
+// canonicalization on read. Field-level granularity stays in
+// schedule_master.detail for the edit modal + bubble tooltip.
 export const VENUE_CANONICAL_MAP: Record<string, string[]> = {
+  "San Juan Diego": [
+    "San Juan Diego",
+    "San Juan Diego (SJD)",
+    "San Juan Diego Catholic High School",
+    "SJD",
+    "Premier at SJD",
+  ],
+  "Soccer Central": [
+    "Soccer Central",
+    "Soccer Central - SC Field 3",
+    "Soccer Central - SC Field 4",
+    "Soccer Central - SC Field 4A",
+  ],
   NEMP: [
     "NEMP",
     "North East Metropolitan Park",
@@ -19,22 +36,19 @@ export const VENUE_CANONICAL_MAP: Record<string, string[]> = {
     "NEMP Field 12",
     "NEMP Field 14",
   ],
-  "San Juan Diego": [
-    "San Juan Diego (SJD)",
-    "San Juan Diego",
-    "San Juan Diego Catholic High School",
-    "SJD",
-  ],
-  "The Hattrick": [
+  "ATH Pearland": ["ATH Pearland"],
+  "ATH Katy": ["ATH Katy"],
+  "Hattrick Leander": [
+    "Hattrick Leander",
     "The Hattrick",
     "The Hattrick L.",
     "The Hattrick L",
     "Hattrick",
   ],
-  "Onion Creek": ["Onion Creek"],
-  "Stony Point": ["Stony Point", "Stony Point High School"],
-  "Premier at SJD": ["Premier at SJD"],
-  "Round Rock MP": [
+  Bicentennial: ["Bicentennial", "Bicentennial Park"],
+  PRUMC: ["PRUMC"],
+  "Round Rock": [
+    "Round Rock",
     "Round Rock MP",
     "Round Rock MP - Field 1",
     "Round Rock MP - Field 1 (Syn)",
@@ -49,39 +63,33 @@ export const VENUE_CANONICAL_MAP: Record<string, string[]> = {
     "Round Rock MP - Field 10",
     "Round Rock MP - Field 10 (Syn)",
   ],
-  PRUMC: ["PRUMC"],
-  "Hammond Park": ["Hammond Park"],
-  "Galatzan Park": ["Galatzan Park"],
-  "Bicentennial Park": ["Bicentennial Park"],
-  "Scissortail Park": ["Scissortail Park"],
-  "Centennial Commons": ["Centennial Commons"],
-  "Carroll Senior HS": ["Carroll Senior HS", "Carroll Senior High School"],
-  "Majestic Gardens": ["Majestic Gardens"],
-  "ATH Katy": ["ATH Katy"],
-  "ATH Pearland": ["ATH Pearland"],
-  "Katy Intl": [
-    "Katy Intl",
-    "Katy Intl (KISC)",
-    "Katy International Sports Complex",
-    "KISC",
-  ],
-  "PAC Global": ["PAC Global"],
-  "Soccer Central": [
-    "Soccer Central",
-    "Soccer Central - SC Field 3",
-    "Soccer Central - SC Field 4",
-    "Soccer Central - SC Field 4A",
-  ],
-  "STAR Soccer Complex": [
-    "STAR Soccer Complex",
-    "STAR Soccer Complex - Field 1",
-    "STAR Soccer Complex - Field 2",
-  ],
   "Lou Fusz Outdoor": [
     "Lou Fusz Outdoor",
     "Lou Fusz Outdoor (Field 10)",
     "Lou Fusz Outdoor (Field 5)",
   ],
+  "Onion Creek": ["Onion Creek"],
+  "Scissortail Park": ["Scissortail Park"],
+  "Carroll Senior HS": ["Carroll Senior HS", "Carroll Senior High School"],
+  "Stony Point": ["Stony Point", "Stony Point High School"],
+  "Katy International": [
+    "Katy International",
+    "Katy Intl",
+    "Katy Intl (KISC)",
+    "KISC",
+    "Katy International Sports Complex",
+  ],
+  "Majestic Gardens": ["Majestic Gardens"],
+  "Hammond Park": ["Hammond Park"],
+  STAR: [
+    "STAR",
+    "STAR Soccer Complex",
+    "STAR Soccer Complex - Field 1",
+    "STAR Soccer Complex - Field 2",
+  ],
+  "PAC Global": ["PAC Global"],
+  "Galatzan Park": ["Galatzan Park"],
+  "Centennial Commons": ["Centennial Commons"],
 };
 
 // Reverse lookup built once at module load. Keyed on the
