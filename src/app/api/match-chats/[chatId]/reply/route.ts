@@ -38,16 +38,20 @@ export const maxDuration = 15;
 const MAX_BODY_LEN = 4000; // long enough for any reasonable reply
 
 // Public URL the MatchDay consumer React Native app fetches as the
-// avatar for Cockpit-authored messages. Sourced from public/web-
-// app-manifest-512x512.png in this repo (PWA icon, square, 512x512,
-// PNG). Previous shape parity attempts (PR #37, then c8e8ebf) tried
-// avatar: null and avatar: "" — both falsy, both produced clipping
-// in the consumer app's bubble renderer because the player-shape
-// avatar field is always a non-empty URL string. Pointing at our
-// own Vercel-hosted asset keeps the consumer app on the truthy-
-// avatar render path with no extra hosting infrastructure.
+// avatar for Cockpit-authored messages. This is the same branded
+// icon that powers the playmatchday.com marketing site's apple-
+// touch-icon and 192x192 favicon, uploaded 2023-06 and stable
+// since. Hosted outside the cockpit deployment so future cockpit
+// changes can't silently break historical Firestore messages.
+//
+// Previous values tried:
+//   - "" (PR #75): falsy, consumer app's bubble renderer collapsed
+//     the avatar slot and clipped the bubble.
+//   - https://matchday-clubhouse.vercel.app/web-app-manifest-
+//     512x512.png (PR #75 followup): 404, the PWA icons were
+//     never committed to git so they don't deploy.
 const MATCHDAY_AVATAR_URL =
-  "https://matchday-clubhouse.vercel.app/web-app-manifest-512x512.png";
+  "https://www.playmatchday.com/wp-content/uploads/2023/06/icon2-300x300.jpg";
 
 type ReplyBody = { body?: unknown };
 
