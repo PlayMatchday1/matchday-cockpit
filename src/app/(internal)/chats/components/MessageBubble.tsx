@@ -46,10 +46,23 @@ export type ConversationMessage = {
   delivery_status: DeliveryStatus;
   delivery_status_updated_at: string | null;
   sender?: { email: string; full_name: string | null } | null;
-  media_kind: "image" | "video" | "audio" | "document" | "sticker" | null;
+  media_kind:
+    | "image"
+    | "video"
+    | "audio"
+    | "document"
+    | "sticker"
+    | "reaction"
+    | null;
   media_filename?: string | null;
   media_size_bytes?: number | null;
   signed_media_url?: string | null;
+  // Set only for media_kind === "reaction" — wamid of the parent
+  // outbound message being reacted to. Surfaced by /api/crm/threads/
+  // [id]; v1 doesn't use it to position the note inline, but it's
+  // here so a v2 "render under the parent bubble" change has the
+  // data it needs without another wire change.
+  reaction_target_wamid?: string | null;
 };
 
 function formatBytes(n: number): string {
@@ -120,6 +133,22 @@ export default function MessageBubble({
       {!isInbound && <DeliveryStatusLabel status={msg.delivery_status} />}
     </div>
   );
+
+  // Reactions render as a small italic note, NO bubble chrome and
+  // NO footer. V1 keeps the placement simple (just inline at
+  // direction-aligned edge); v2 can re-render the note adjacent to
+  // the target bubble using reaction_target_wamid.
+  if (msg.media_kind === "reaction") {
+    return (
+      <li
+        className={`flex ${isInbound ? "items-start" : "items-end"} ${className ?? "mt-3"} flex-col`}
+      >
+        <div className="px-3 py-1 text-xs italic text-deep-green/60">
+          {msg.body}
+        </div>
+      </li>
+    );
+  }
 
   // Stickers render OUTSIDE the bubble per WhatsApp's own UX. No
   // background, no border, no caption.
