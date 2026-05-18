@@ -5,9 +5,12 @@
 // Backed by the schedule_master table (legacy MatchDay master
 // schedule HTML, seeded once in migration 0038).
 //
-// Bubbles render as "{time} {abbr}" using ops-team shorthand from
-// src/lib/venueAbbreviations.ts. Hovering a bubble shows the full
-// "{time-range} - {detail}" string via the title attribute.
+// Bubbles render as "{time} {venue}" using the canonical venue
+// name from schedule_master.venue (post-migration 0040 these are
+// always one of the 21 keys in src/lib/venueAliases.ts). Hovering
+// a bubble shows the full "{time-range} - {detail}" string via
+// the title attribute so the per-field granularity stays
+// accessible.
 //
 // Changes vs last week:
 //   The component fetches the selected week AND the previous week
@@ -16,8 +19,8 @@
 //   In the grid itself, added bubbles get a green dot, dropped
 //   bubbles render as a strikethrough "ghost" in the same day cell.
 //
-//   "Same slot" is keyed on (city, day_of_week, abbr). Multiple
-//   matches with the same abbr on the same day are paired
+//   "Same slot" is keyed on (city, day_of_week, venue). Multiple
+//   matches with the same venue on the same day are paired
 //   positionally after sort-by-time, so a Friday SJD@6PM + SJD@8PM
 //   versus a previous Friday with only SJD@6PM cleanly reports the
 //   8PM as added (not as a "SJD time changed").
@@ -25,7 +28,6 @@
 import { useCallback, useEffect, useMemo, useState } from "react";
 import { ChevronLeft, ChevronRight, Plus, X } from "lucide-react";
 import { supabase } from "@/lib/supabase";
-import { getAbbr } from "@/lib/venueAbbreviations";
 import MasterScheduleEditModal, {
   type EditableRow,
 } from "./MasterScheduleEditModal";
@@ -70,18 +72,18 @@ type Diff = {
 type GhostMatch = {
   id: string; // previous week match id
   detail: string;
-  abbr: string;
+  venue: string;
   time: string; // full string for tooltip
   time_short: string;
 };
 
 type ChangePill =
-  | { kind: "added"; dayOfWeek: string; abbr: string; time_short: string }
-  | { kind: "dropped"; dayOfWeek: string; abbr: string; time_short: string }
+  | { kind: "added"; dayOfWeek: string; venue: string; time_short: string }
+  | { kind: "dropped"; dayOfWeek: string; venue: string; time_short: string }
   | {
       kind: "changed";
       dayOfWeek: string;
-      abbr: string;
+      venue: string;
       oldTime: string;
       newTime: string;
     };
@@ -491,7 +493,7 @@ function ChangeRowPill({ pill }: { pill: ChangePill }) {
     return (
       <span className="inline-flex items-center gap-1 rounded-full bg-mint-soft px-2 py-0.5 text-[11px] font-medium text-deep-green ring-1 ring-mint/40">
         <span className="font-bold">+</span> {pill.dayOfWeek} {pill.time_short}{" "}
-        {pill.abbr}
+        {pill.venue}
       </span>
     );
   }
@@ -499,13 +501,13 @@ function ChangeRowPill({ pill }: { pill: ChangePill }) {
     return (
       <span className="inline-flex items-center gap-1 rounded-full bg-coral-soft px-2 py-0.5 text-[11px] font-medium text-coral-hover ring-1 ring-coral/40">
         <span className="font-bold">-</span> {pill.dayOfWeek} {pill.time_short}{" "}
-        {pill.abbr}
+        {pill.venue}
       </span>
     );
   }
   return (
     <span className="inline-flex items-center gap-1 rounded-full bg-yellow-soft px-2 py-0.5 text-[11px] font-medium text-deep-green ring-1 ring-yellow-pos/60">
-      {pill.dayOfWeek} {pill.abbr}: {pill.oldTime} → {pill.newTime}
+      {pill.dayOfWeek} {pill.venue}: {pill.oldTime} → {pill.newTime}
     </span>
   );
 }
@@ -551,12 +553,13 @@ function DayCell({
         ) : (
           <>
             {day.matches.map((m) => {
-              const key = `${city}|${day.date}|${getAbbr(m.detail)}|${compactTime(m.time)}`;
+              const key = `${city}|${day.date}|${m.venue}|${compactTime(m.time)}`;
               const cancelled = cancelledKeys.has(key);
               return (
                 <MatchPill
                   key={m.id}
                   time={m.time}
+                  venue={m.venue}
                   detail={m.detail}
                   dim={isPast}
                   added={addedIds.has(m.id)}
@@ -576,7 +579,12 @@ function DayCell({
               );
             })}
             {ghosts.map((g) => (
-              <GhostPill key={g.id} time={g.time} detail={g.detail} />
+              <GhostPill
+                key={g.id}
+                time={g.time}
+                venue={g.venue}
+                detail={g.detail}
+              />
             ))}
           </>
         )}
@@ -587,6 +595,7 @@ function DayCell({
 
 function MatchPill({
   time,
+  venue,
   detail,
   dim,
   added,
@@ -594,6 +603,7 @@ function MatchPill({
   onClick,
 }: {
   time: string;
+  venue: string;
   detail: string;
   dim: boolean;
   added: boolean;
@@ -601,7 +611,6 @@ function MatchPill({
   onClick: () => void;
 }) {
   const short = compactTime(time);
-  const abbr = getAbbr(detail);
   // Background respects added / dim / normal. Cancelled is a pure
   // text treatment (coral color + strikethrough) so an in-grid
   // cancellation reads as a subtle marker, not a loud red block —
@@ -633,9 +642,9 @@ function MatchPill({
           className="inline-block h-1.5 w-1.5 shrink-0 rounded-full bg-mint"
         />
       )}
-      <span className={`truncate ${cancelled ? "line-through" : ""}`}>
+      <span className={`min-w-0 break-words ${cancelled ? "line-through" : ""}`}>
         <span className="font-bold tabular-nums">{short}</span>{" "}
-        <span>{abbr}</span>
+        <span>{venue}</span>
       </span>
     </button>
   );
@@ -795,18 +804,25 @@ function DiscrepancyBanner({ data }: { data: Discrepancies }) {
   );
 }
 
-function GhostPill({ time, detail }: { time: string; detail: string }) {
+function GhostPill({
+  time,
+  venue,
+  detail,
+}: {
+  time: string;
+  venue: string;
+  detail: string;
+}) {
   const short = compactTime(time);
-  const abbr = getAbbr(detail);
   return (
     <div
-      className="flex items-center gap-1 truncate rounded border border-dashed border-coral/50 bg-coral-soft/40 px-1.5 py-0.5 text-[11px] leading-tight text-coral-hover/70 line-through"
+      className="flex items-center gap-1 rounded border border-dashed border-coral/50 bg-coral-soft/40 px-1.5 py-0.5 text-[11px] leading-tight text-coral-hover/70 line-through"
       title={`Dropped vs last week · ${time} - ${detail}`}
     >
       <X aria-hidden className="h-2.5 w-2.5 shrink-0" />
-      <span className="truncate">
+      <span className="min-w-0 break-words">
         <span className="font-bold tabular-nums">{short}</span>{" "}
-        <span>{abbr}</span>
+        <span>{venue}</span>
       </span>
     </div>
   );
@@ -828,6 +844,7 @@ function buildDiff(
     id: string;
     time: string;
     time_short: string;
+    venue: string;
     detail: string;
   };
   function bucketize(p: Payload): Map<string, Bucket[]> {
@@ -835,13 +852,19 @@ function buildDiff(
     for (const c of p.cities) {
       for (const d of c.days) {
         for (const m of d.matches) {
-          const abbr = getAbbr(m.detail);
-          const key = `${c.name}|${d.day_of_week}|${abbr}`;
+          // Bucket key uses the canonical venue (post-0040 the value
+          // already on schedule_master.venue). Multiple field
+          // numbers at the same venue collapse to one bucket — e.g.
+          // a Fri 8PM SJD Field 1 vs a Fri 8PM SJD Field 2 don't
+          // surface as a "dropped + added", they pair as the same
+          // slot.
+          const key = `${c.name}|${d.day_of_week}|${m.venue}`;
           if (!map.has(key)) map.set(key, []);
           map.get(key)!.push({
             id: m.id,
             time: m.time,
             time_short: compactTime(m.time),
+            venue: m.venue,
             detail: m.detail,
           });
         }
@@ -872,7 +895,7 @@ function buildDiff(
   }
 
   for (const key of allKeys) {
-    const [city, dayOfWeek, abbr] = key.split("|");
+    const [city, dayOfWeek, venue] = key.split("|");
     const cur = curMap.get(key) ?? [];
     const prev = prevMap.get(key) ?? [];
     const minLen = Math.min(cur.length, prev.length);
@@ -882,7 +905,7 @@ function buildDiff(
         pushPill(city, {
           kind: "changed",
           dayOfWeek,
-          abbr,
+          venue,
           oldTime: prev[i].time_short,
           newTime: cur[i].time_short,
         });
@@ -894,7 +917,7 @@ function buildDiff(
       pushPill(city, {
         kind: "added",
         dayOfWeek,
-        abbr,
+        venue,
         time_short: cur[i].time_short,
       });
     }
@@ -904,7 +927,7 @@ function buildDiff(
       ghostsByCell.get(cellKey)!.push({
         id: prev[i].id,
         detail: prev[i].detail,
-        abbr,
+        venue,
         time: prev[i].time,
         time_short: prev[i].time_short,
       });
@@ -912,7 +935,7 @@ function buildDiff(
       pushPill(city, {
         kind: "dropped",
         dayOfWeek,
-        abbr,
+        venue,
         time_short: prev[i].time_short,
       });
     }
@@ -949,11 +972,11 @@ function buildDiff(
 // Cancelled cross-refs
 // ============================================================
 //
-// Builds a Set of `${city}|${date}|${abbr}|${time_short}` keys off
-// the discrepancies response so DayCell can light up the matching
-// MatchPill with the cancelled text treatment. Reuses getAbbr and
-// compactTime so the keys built here match exactly what the grid
-// bubbles produce.
+// Builds a Set of `${city}|${date}|${venue}|${time_short}` keys
+// off the discrepancies response so DayCell can light up the
+// matching MatchPill with the cancelled text treatment. Same
+// shape DayCell uses to compute its lookup, so each side reads
+// off the canonical schedule_master.venue value.
 
 function buildCancelledRefs(
   disc: Discrepancies | null,
@@ -961,9 +984,8 @@ function buildCancelledRefs(
   const keys = new Set<string>();
   if (!disc) return { keys };
   for (const c of disc.cancelled) {
-    const abbr = getAbbr(c.detail);
     const time_short = compactTime(c.match_time);
-    keys.add(`${c.city}|${c.match_date}|${abbr}|${time_short}`);
+    keys.add(`${c.city}|${c.match_date}|${c.venue}|${time_short}`);
   }
   return { keys };
 }
