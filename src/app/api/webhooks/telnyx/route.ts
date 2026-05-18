@@ -29,6 +29,7 @@
 import { TelnyxWebhook, TelnyxWebhookVerificationError } from "telnyx";
 import { createClient } from "@supabase/supabase-js";
 import { normalizePhone, toNationalDigits } from "@/lib/phone";
+import { notifyInboundChatMessage } from "@/lib/crmPushNotify";
 
 export const runtime = "nodejs";
 export const maxDuration = 10;
@@ -247,6 +248,20 @@ export async function POST(req: Request) {
     console.error("[crm:webhook] message insert failed", msgInsert.error);
     return Response.json({ error: "DB error" }, { status: 500 });
   }
+
+  // Web Push fan-out. notifyInboundChatMessage self-bounds at 2s
+  // internally so a slow push service can't stall the Telnyx ack.
+  // Errors logged but never thrown — webhook ack must succeed
+  // regardless.
+  await notifyInboundChatMessage({
+    threadId,
+    phoneNumber: phone,
+    playerId,
+    body,
+    mediaKind: null,
+    mediaFilename: null,
+    supabase: sb,
+  });
 
   const elapsed = Date.now() - startedAt;
   console.log(
