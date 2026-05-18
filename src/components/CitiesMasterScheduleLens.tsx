@@ -78,6 +78,7 @@ type GhostMatch = {
 type ChangePill =
   | { kind: "added"; dayOfWeek: string; abbr: string; time_short: string }
   | { kind: "dropped"; dayOfWeek: string; abbr: string; time_short: string }
+  | { kind: "cancelled"; dayOfWeek: string; abbr: string; time_short: string }
   | {
       kind: "changed";
       dayOfWeek: string;
@@ -128,6 +129,16 @@ type Discrepancies = {
     match_date: string;
     match_time: string;
     diffs: string[];
+  }>;
+  cancelled: Array<{
+    schedule_master_id: string;
+    mdapi_match_id: number;
+    city: string;
+    venue: string;
+    detail: string;
+    match_date: string;
+    match_time: string;
+    max_spots: number;
   }>;
 };
 
@@ -242,6 +253,10 @@ export default function CitiesMasterScheduleLens() {
 
   const todayIso = useMemo(() => isoDate(mondayOfChicago(new Date(), 0)), []);
   const diff = useMemo(() => buildDiff(current, previous), [current, previous]);
+  const cancelledRefs = useMemo(
+    () => buildCancelledRefs(discrepancies),
+    [discrepancies],
+  );
 
   const shift = (days: number) => {
     const d = parseIso(weekStart);
@@ -306,6 +321,8 @@ export default function CitiesMasterScheduleLens() {
                 city={c}
                 todayIso={todayIso}
                 diff={diff}
+                cancelledKeys={cancelledRefs.keys}
+                cancelledPills={cancelledRefs.perCity.get(c.name) ?? []}
                 onEditMatch={openEdit}
               />
             ))}
@@ -421,14 +438,33 @@ function CitySection({
   city,
   todayIso,
   diff,
+  cancelledKeys,
+  cancelledPills,
   onEditMatch,
 }: {
   city: CityOut;
   todayIso: string;
   diff: Diff;
+  cancelledKeys: Set<string>;
+  cancelledPills: ChangePill[];
   onEditMatch: (row: EditableRow) => void;
 }) {
-  const pills = diff.perCity.get(city.name) ?? [];
+  // Week-vs-week diff pills + cancellation pills, combined in
+  // Mon..Sun order so the operator scans one row per city.
+  const dowIndex = new Map<string, number>(DOW_ORDER.map((d, i) => [d, i]));
+  const pills = useMemo(() => {
+    const combined = [
+      ...(diff.perCity.get(city.name) ?? []),
+      ...cancelledPills,
+    ];
+    combined.sort(
+      (a, b) =>
+        (dowIndex.get(a.dayOfWeek) ?? 99) - (dowIndex.get(b.dayOfWeek) ?? 99),
+    );
+    return combined;
+    // dowIndex is stable per render; safe to leave out of deps.
+    // eslint-disable-next-line react-hooks/exhaustive-deps
+  }, [diff, cancelledPills, city.name]);
   return (
     <div className="rounded-2xl border-[1.5px] border-cream-line bg-white p-5 shadow-md shadow-deep-green/10">
       <div className="mb-3 flex flex-wrap items-center justify-between gap-2">
@@ -454,6 +490,7 @@ function CitySection({
               day={d}
               todayIso={todayIso}
               addedIds={diff.addedIds}
+              cancelledKeys={cancelledKeys}
               ghosts={diff.ghostsByCell.get(cellKey) ?? []}
               onEditMatch={onEditMatch}
             />
@@ -481,6 +518,17 @@ function ChangeRowPill({ pill }: { pill: ChangePill }) {
       </span>
     );
   }
+  if (pill.kind === "cancelled") {
+    return (
+      <span className="inline-flex items-center gap-1 rounded-full bg-coral px-2 py-0.5 text-[11px] font-medium text-white ring-1 ring-coral-hover/60">
+        <span className="font-bold">×</span> {pill.dayOfWeek} {pill.time_short}{" "}
+        {pill.abbr}{" "}
+        <span className="font-bold uppercase tracking-wider opacity-90">
+          cancelled
+        </span>
+      </span>
+    );
+  }
   return (
     <span className="inline-flex items-center gap-1 rounded-full bg-yellow-soft px-2 py-0.5 text-[11px] font-medium text-deep-green ring-1 ring-yellow-pos/60">
       {pill.dayOfWeek} {pill.abbr}: {pill.oldTime} → {pill.newTime}
@@ -493,6 +541,7 @@ function DayCell({
   day,
   todayIso,
   addedIds,
+  cancelledKeys,
   ghosts,
   onEditMatch,
 }: {
@@ -500,6 +549,7 @@ function DayCell({
   day: DayOut;
   todayIso: string;
   addedIds: Set<string>;
+  cancelledKeys: Set<string>;
   ghosts: GhostMatch[];
   onEditMatch: (row: EditableRow) => void;
 }) {
@@ -526,26 +576,31 @@ function DayCell({
           <span className="text-[11px] text-deep-green/30">—</span>
         ) : (
           <>
-            {day.matches.map((m) => (
-              <MatchPill
-                key={m.id}
-                time={m.time}
-                detail={m.detail}
-                dim={isPast}
-                added={addedIds.has(m.id)}
-                onClick={() =>
-                  onEditMatch({
-                    id: m.id,
-                    city,
-                    venue: m.venue,
-                    detail: m.detail,
-                    match_date: day.date,
-                    match_time: m.time,
-                    max_spots: m.max_spots,
-                  })
-                }
-              />
-            ))}
+            {day.matches.map((m) => {
+              const key = `${city}|${day.date}|${getAbbr(m.detail)}|${compactTime(m.time)}`;
+              const cancelled = cancelledKeys.has(key);
+              return (
+                <MatchPill
+                  key={m.id}
+                  time={m.time}
+                  detail={m.detail}
+                  dim={isPast}
+                  added={addedIds.has(m.id)}
+                  cancelled={cancelled}
+                  onClick={() =>
+                    onEditMatch({
+                      id: m.id,
+                      city,
+                      venue: m.venue,
+                      detail: m.detail,
+                      match_date: day.date,
+                      match_time: m.time,
+                      max_spots: m.max_spots,
+                    })
+                  }
+                />
+              );
+            })}
             {ghosts.map((g) => (
               <GhostPill key={g.id} time={g.time} detail={g.detail} />
             ))}
@@ -561,40 +616,54 @@ function MatchPill({
   detail,
   dim,
   added,
+  cancelled,
   onClick,
 }: {
   time: string;
   detail: string;
   dim: boolean;
   added: boolean;
+  cancelled: boolean;
   onClick: () => void;
 }) {
   const short = compactTime(time);
   const abbr = getAbbr(detail);
+  // Style precedence: cancelled (red solid) > added (mint soft) >
+  // dim (past) > normal. When both cancelled AND added, the mint
+  // dot stays visible on top of the red background per the
+  // operator-requested behavior.
+  const variantClass = cancelled
+    ? "bg-coral text-white ring-1 ring-coral-hover/60 hover:ring-2 hover:ring-coral-hover"
+    : added
+      ? "bg-mint-soft text-deep-green ring-1 ring-mint/60 hover:ring-2 hover:ring-mint"
+      : dim
+        ? "bg-cream-soft text-deep-green/40 hover:ring-2 hover:ring-mint"
+        : "bg-white text-deep-green ring-1 ring-cream-line hover:ring-2 hover:ring-mint";
   return (
     <button
       type="button"
       onClick={onClick}
-      aria-label={`Edit ${time} ${detail}`}
-      className={`flex w-full items-center gap-1 truncate rounded px-1.5 py-0.5 text-left text-[11px] leading-tight transition hover:ring-2 hover:ring-mint focus:outline-none focus:ring-2 focus:ring-mint ${
-        added
-          ? "bg-mint-soft text-deep-green ring-1 ring-mint/60"
-          : dim
-            ? "bg-cream-soft text-deep-green/40"
-            : "bg-white text-deep-green ring-1 ring-cream-line"
-      }`}
-      title={`${time} - ${detail}`}
+      aria-label={`Edit ${time} ${detail}${cancelled ? " (cancelled)" : ""}`}
+      className={`flex w-full flex-col items-stretch rounded px-1.5 py-0.5 text-left text-[11px] leading-tight transition focus:outline-none focus:ring-2 focus:ring-mint ${variantClass}`}
+      title={cancelled ? `Cancelled match · ${time} - ${detail}` : `${time} - ${detail}`}
     >
-      {added && (
-        <span
-          aria-hidden
-          className="inline-block h-1.5 w-1.5 shrink-0 rounded-full bg-mint"
-        />
-      )}
-      <span className="truncate">
-        <span className="font-bold tabular-nums">{short}</span>{" "}
-        <span>{abbr}</span>
+      <span className="flex items-center gap-1 truncate">
+        {added && (
+          <span
+            aria-hidden
+            className="inline-block h-1.5 w-1.5 shrink-0 rounded-full bg-mint"
+          />
+        )}
+        <span className={`truncate ${cancelled ? "line-through" : ""}`}>
+          <span className="font-bold tabular-nums">{short}</span>{" "}
+          <span>{abbr}</span>
+        </span>
       </span>
+      {cancelled && (
+        <span className="mt-0.5 text-[9px] font-bold uppercase tracking-wider opacity-90">
+          Cancelled
+        </span>
+      )}
     </button>
   );
 }
@@ -606,14 +675,15 @@ function MatchPill({
 // counts are zero.
 function DiscrepancyBanner({ data }: { data: Discrepancies }) {
   const [open, setOpen] = useState<
-    "missing" | "extra" | "mismatched" | null
+    "missing" | "extra" | "mismatched" | "cancelled" | null
   >(null);
   const missing = data.missing_in_db.length;
   const extra = data.extra_in_db.length;
   const mism = data.mismatched.length;
-  if (missing === 0 && extra === 0 && mism === 0) return null;
+  const canc = data.cancelled.length;
+  if (missing === 0 && extra === 0 && mism === 0 && canc === 0) return null;
 
-  function toggle(k: "missing" | "extra" | "mismatched") {
+  function toggle(k: "missing" | "extra" | "mismatched" | "cancelled") {
     setOpen((cur) => (cur === k ? null : k));
   }
   const dateLabel = `${fmtShort(data.week_start)} - ${fmtShort(data.week_end)}`;
@@ -666,6 +736,20 @@ function DiscrepancyBanner({ data }: { data: Discrepancies }) {
             {mism} mismatched
           </button>
         )}
+        {canc > 0 && (
+          <button
+            type="button"
+            onClick={() => toggle("cancelled")}
+            aria-pressed={open === "cancelled"}
+            className={`rounded-full px-2 py-0.5 text-[11px] font-bold transition ${
+              open === "cancelled"
+                ? "bg-coral-hover text-white"
+                : "bg-coral text-white hover:bg-coral-hover"
+            }`}
+          >
+            {canc} cancelled this week and next
+          </button>
+        )}
       </div>
       {open === "missing" && (
         <ul className="mt-3 space-y-0.5">
@@ -713,6 +797,23 @@ function DiscrepancyBanner({ data }: { data: Discrepancies }) {
               <span className="text-deep-green/55">·</span> {r.match_time}{" "}
               <span className="text-deep-green/55">·</span>{" "}
               <span className="text-coral-hover">{r.diffs.join(" / ")}</span>
+            </li>
+          ))}
+        </ul>
+      )}
+      {open === "cancelled" && (
+        <ul className="mt-3 space-y-0.5">
+          {data.cancelled.map((r) => (
+            <li
+              key={r.schedule_master_id}
+              className="text-[11px] tabular-nums text-deep-green/75"
+            >
+              <span className="font-bold">{fmtShort(r.match_date)}</span>{" "}
+              <span className="text-deep-green/55">·</span> {r.city}{" "}
+              <span className="text-deep-green/55">·</span> {r.detail}{" "}
+              <span className="text-deep-green/55">·</span> {r.match_time}{" "}
+              <span className="text-deep-green/55">·</span> match #
+              {r.mdapi_match_id}
             </li>
           ))}
         </ul>
@@ -869,6 +970,59 @@ function buildDiff(
     droppedCount,
     changedCount,
   };
+}
+
+// ============================================================
+// Cancelled cross-refs
+// ============================================================
+//
+// Builds two derived shapes off the discrepancies response so the
+// grid render and the per-city pill row can both light up cancelled
+// slots without re-parsing the payload at every render:
+//
+//   keys     — Set keyed on `${city}|${date}|${abbr}|${time_short}`.
+//              Looked up in DayCell for each rendered MatchPill.
+//   perCity  — ChangePill list per city for the change row above
+//              each city section.
+//
+// Both reuse getAbbr + compactTime so the keys built here match
+// exactly what the grid bubbles produce.
+
+function buildCancelledRefs(
+  disc: Discrepancies | null,
+): { keys: Set<string>; perCity: Map<string, ChangePill[]> } {
+  const keys = new Set<string>();
+  const perCity = new Map<string, ChangePill[]>();
+  if (!disc) return { keys, perCity };
+  for (const c of disc.cancelled) {
+    const abbr = getAbbr(c.detail);
+    const time_short = compactTime(c.match_time);
+    keys.add(`${c.city}|${c.match_date}|${abbr}|${time_short}`);
+    const dayOfWeek = dayOfWeekFromIso(c.match_date);
+    if (!perCity.has(c.city)) perCity.set(c.city, []);
+    perCity.get(c.city)!.push({
+      kind: "cancelled",
+      dayOfWeek,
+      abbr,
+      time_short,
+    });
+  }
+  const dowIndex = new Map<string, number>(DOW_ORDER.map((d, i) => [d, i]));
+  for (const arr of perCity.values()) {
+    arr.sort(
+      (a, b) =>
+        (dowIndex.get(a.dayOfWeek) ?? 99) - (dowIndex.get(b.dayOfWeek) ?? 99),
+    );
+  }
+  return { keys, perCity };
+}
+
+function dayOfWeekFromIso(
+  iso: string,
+): "Mon" | "Tue" | "Wed" | "Thu" | "Fri" | "Sat" | "Sun" {
+  const d = new Date(`${iso}T00:00:00Z`);
+  const dow = d.getUTCDay();
+  return (["Sun", "Mon", "Tue", "Wed", "Thu", "Fri", "Sat"] as const)[dow];
 }
 
 // ============================================================
