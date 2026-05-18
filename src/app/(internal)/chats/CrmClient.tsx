@@ -39,6 +39,7 @@ import {
 } from "react";
 import { useRouter, useSearchParams } from "next/navigation";
 import { ChevronLeft, Info, SlidersHorizontal } from "lucide-react";
+import EnablePushNotificationsButton from "@/components/EnablePushNotificationsButton";
 import PlayersMatchesToggle from "@/components/PlayersMatchesToggle";
 import { supabase } from "@/lib/supabase";
 import { useAuth } from "@/lib/useAuth";
@@ -906,6 +907,7 @@ function ChatsHeader({
             />
             {liveLabel}
           </span>
+          <EnablePushNotificationsButton />
           <button
             type="button"
             onClick={onRefresh}

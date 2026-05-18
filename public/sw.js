@@ -12,7 +12,7 @@
 // Users get the new assets on their NEXT page load after the SW
 // activates (we skipWaiting so activation is immediate).
 
-const CACHE_VERSION = "v1";
+const CACHE_VERSION = "v2";
 const CACHE_NAME = `matchday-static-${CACHE_VERSION}`;
 
 // Static assets to precache on install. Same-origin, GET-safe,
@@ -96,4 +96,107 @@ self.addEventListener("fetch", (event) => {
 
   // Everything else → default network. No respondWith() call
   // means the browser handles the request normally.
+});
+
+// ============================================================
+// Web Push
+// ============================================================
+// The server (src/lib/webPush.ts) signs a JSON payload with the VAPID
+// keypair and sends it via web-push. The browser wakes this SW,
+// fires the "push" event with the payload as event.data, and waits
+// for us to call showNotification() inside event.waitUntil().
+//
+// On notification tap: focus an open PWA window if one exists and
+// route it to the deep link; otherwise open a new window pointed at
+// the deep link.
+//
+// Payload shape (mirrors src/lib/webPush.ts PushPayload):
+//   { title, body, tag?, data: { route, thread_id?, ... } }
+//
+// Notification options:
+//   icon       /icons/icon-192.png (Android lock-screen icon)
+//   badge      /icons/icon-192.png (Android status-bar monochrome
+//              hint; same asset is fine here)
+//   tag        thread_id when provided — collapses repeats on the
+//              same thread
+//   data       passed verbatim to notificationclick for deep-link
+//              routing
+//   renotify   true so a fresh notification with the same tag still
+//              re-buzzes (iOS / Android both honor)
+
+self.addEventListener("push", (event) => {
+  if (!event.data) return;
+
+  let payload;
+  try {
+    payload = event.data.json();
+  } catch {
+    // Malformed payload — log and bail. We'd rather silently drop
+    // than show a "(no content)" notification.
+    console.warn("[sw] push payload was not JSON");
+    return;
+  }
+
+  const title = typeof payload.title === "string" ? payload.title : "MatchDay";
+  const body = typeof payload.body === "string" ? payload.body : "";
+  const tag = typeof payload.tag === "string" ? payload.tag : undefined;
+  const data =
+    payload.data && typeof payload.data === "object" ? payload.data : {};
+
+  event.waitUntil(
+    self.registration.showNotification(title, {
+      body,
+      icon: "/icons/icon-192.png",
+      badge: "/icons/icon-192.png",
+      tag,
+      data,
+      renotify: !!tag,
+      requireInteraction: false,
+    }),
+  );
+});
+
+self.addEventListener("notificationclick", (event) => {
+  const route =
+    event.notification.data && typeof event.notification.data.route === "string"
+      ? event.notification.data.route
+      : "/";
+
+  event.notification.close();
+
+  event.waitUntil(
+    (async () => {
+      const allClients = await self.clients.matchAll({
+        type: "window",
+        includeUncontrolled: true,
+      });
+      const targetUrl = new URL(route, self.location.origin).href;
+
+      // Reuse an existing PWA window if we have one. Tries an exact
+      // URL match first, then any same-origin client.
+      const exact = allClients.find((c) => c.url === targetUrl);
+      if (exact) {
+        await exact.focus();
+        return;
+      }
+      const sameOrigin = allClients.find((c) =>
+        c.url.startsWith(self.location.origin),
+      );
+      if (sameOrigin) {
+        await sameOrigin.focus();
+        if ("navigate" in sameOrigin) {
+          try {
+            await sameOrigin.navigate(targetUrl);
+          } catch {
+            // Some browsers reject navigate() on focused clients —
+            // fall through and the focused window stays where it is.
+          }
+        }
+        return;
+      }
+
+      // No open window — open a fresh one at the deep link.
+      await self.clients.openWindow(targetUrl);
+    })(),
+  );
 });
