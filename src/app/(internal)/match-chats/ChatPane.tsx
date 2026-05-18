@@ -48,6 +48,8 @@ import {
   type FirestoreMessage,
 } from "@/lib/matchChats";
 import { formatMatchTitle, timezoneFor } from "@/lib/cityTimezones";
+import Linkify from "linkify-react";
+import { LINKIFY_OPTIONS } from "@/lib/linkify";
 
 type MatchContext = {
   api_id: number;
@@ -665,9 +667,13 @@ function MessageRow({
       >
         {kind !== "Text" && <MatchChatMessageMedia msg={msg} />}
         {kind !== "Text" && msg.text && (
-          <div className="mt-1.5">{msg.text}</div>
+          <div className="mt-1.5">
+            <Linkify options={LINKIFY_OPTIONS}>{msg.text}</Linkify>
+          </div>
         )}
-        {kind === "Text" && (msg.text ?? "")}
+        {kind === "Text" && (
+          <Linkify options={LINKIFY_OPTIONS}>{msg.text ?? ""}</Linkify>
+        )}
       </div>
       <div className="mt-0.5 px-1 text-[10px] text-deep-green/45">
         {formatTimestamp(iso)}
