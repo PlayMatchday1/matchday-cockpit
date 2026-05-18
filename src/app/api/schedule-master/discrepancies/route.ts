@@ -8,25 +8,58 @@
 //   extra_in_db   — mdapi_matches rows with no schedule_master row.
 //   mismatched    — same key, but max_spots or detail differ.
 //
-// Matching key: (city_code, venue_normalized, match_date, hh:mm).
-// City code is the short cockpit form (ATX / HOU / ...) derived
-// from schedule_master.city via normalizeCityName; mdapi_matches
-// stores it directly on city_identifier.
-// Venue normalized: lowercase, parens stripped, "field" dropped,
-// non-alphanumerics collapsed to single spaces. Same algorithm
-// applied to both sides so the comparison is on the same shape.
+// Matching key: (city_canonical, venue_canonical, match_date,
+// hh:mm).
+//
+// City canonical is the full display name ("Austin", "San
+// Antonio", etc). schedule_master.city stores the display form
+// directly; mdapi_matches.city_identifier stores 3-letter codes
+// (ATX, SAT, ...) which CITY_IDENTIFIER_MAP normalizes to the
+// same display form. Codes differ between the two systems (e.g.
+// SATX/SAT, OKC/OKC, ELP/ELP), so a shared display-name
+// canonicalization is the safer key.
+//
+// Venue canonical comes from src/lib/venueAliases.ts. Each
+// physical field has a canonical key plus a list of known
+// aliases (marketing variants, parenthetical field numbers,
+// long-form names). The previous "strip parens + drop field +
+// collapse non-alphanumerics" heuristic produced large false-
+// positive volumes whenever either side carried a surface form
+// the other didn't anticipate (e.g. "The Hattrick L." vs "The
+// Hattrick"). The explicit alias list is maintained by ops as
+// new venues appear.
 //
 // Auth: admin via authenticateCrm.
 
 import { authenticateCrm } from "@/lib/crmAuth";
-import { normalizeCityName } from "@/lib/cityNormalization";
 import { timezoneFor } from "@/lib/cityTimezones";
+import { canonicalizeVenue } from "@/lib/venueAliases";
 
 export const runtime = "nodejs";
 export const maxDuration = 15;
 
 const WINDOW_DAYS = 14; // current week + next week
 const ISO_DATE = /^\d{4}-\d{2}-\d{2}$/;
+
+// mdapi_matches.city_identifier 3-letter code → schedule_master.city
+// display name. Note: SATX (cockpit) vs SAT (mdapi) on San Antonio
+// is the historical reason this route's per-city counts diverged
+// from reality. Always go through this map on the mdapi side.
+const CITY_IDENTIFIER_MAP: Record<string, string> = {
+  ATX: "Austin",
+  ATL: "Atlanta",
+  HOU: "Houston",
+  DAL: "Dallas",
+  SAT: "San Antonio",
+  STL: "St. Louis",
+  OKC: "OKC",
+  ELP: "El Paso",
+};
+
+function mapCityIdentifier(code: string | null | undefined): string | null {
+  if (!code) return null;
+  return CITY_IDENTIFIER_MAP[code.toUpperCase()] ?? null;
+}
 
 type ScheduleRow = {
   id: string;
@@ -132,20 +165,38 @@ export async function GET(req: Request) {
   const matchRows = (mRes.data ?? []) as MatchRow[];
   const matchRowsAlive = matchRows.filter((m) => m.is_cancelled !== true);
 
-  // Build the comparison index off both sides.
+  // Build the comparison index off both sides. cityName is the
+  // canonical display form on both sides ("Austin", "San Antonio",
+  // ...). venueKey is the canonical venue from the alias map, or
+  // a softened literal fallback when the alias map doesn't yet
+  // know the surface form (canonicalizeVenue logs a one-time warn
+  // in that case so ops can add the alias).
   type Indexed = {
-    cityCode: string;
-    venueNorm: string;
+    cityName: string;
+    venueKey: string;
     date: string;
     hhmm: string;
   };
+  function venueKeyFor(raw: string | null | undefined): string {
+    const canonical = canonicalizeVenue(raw);
+    if (canonical) return canonical;
+    // Softened fallback for unknown venues: lowercase + alphanum
+    // only. Lets both sides still match on a literal-string basis
+    // and keeps the unknown surfaced in console.warn (already
+    // emitted by canonicalizeVenue) so ops can extend the alias
+    // map.
+    return (raw ?? "").toLowerCase().replace(/[^a-z0-9]/g, "");
+  }
   const sIndex: Array<Indexed & { row: ScheduleRow }> = [];
   for (const r of scheduleRows) {
-    const cityCode = normalizeCityName(r.city);
-    if (!cityCode) continue;
+    if (!r.city) continue;
     sIndex.push({
-      cityCode,
-      venueNorm: normalizeVenue(r.detail),
+      cityName: r.city,
+      // schedule_master.venue is the higher-level grouping (e.g.
+      // "NEMP", "Round Rock MP") which maps cleanly to the alias
+      // map's canonical keys. The per-field detail string still
+      // surfaces in the UI bubbles for operator readability.
+      venueKey: venueKeyFor(r.venue),
       date: r.match_date,
       hhmm: parseStartHHMM(r.match_time),
       row: r,
@@ -153,16 +204,16 @@ export async function GET(req: Request) {
   }
   const mIndex: Array<Indexed & { row: MatchRow }> = [];
   for (const m of matchRowsAlive) {
-    const cityCode = m.city_identifier ?? null;
-    if (!cityCode) continue;
-    const venueNorm = m.field_title ? normalizeVenue(m.field_title) : "";
-    if (!venueNorm) continue;
-    const tz = timezoneFor(cityCode);
+    const cityName = mapCityIdentifier(m.city_identifier);
+    if (!cityName) continue;
+    const venueKey = venueKeyFor(m.field_title);
+    if (!venueKey) continue;
+    const tz = timezoneFor(m.city_identifier ?? "");
     const startTz = matchStartInZone(m, tz);
     if (!startTz) continue;
     mIndex.push({
-      cityCode,
-      venueNorm,
+      cityName,
+      venueKey,
       date: startTz.date,
       hhmm: startTz.hhmm,
       row: m,
@@ -176,7 +227,7 @@ export async function GET(req: Request) {
   function bucketize<T extends Indexed>(arr: T[]): Map<string, T[]> {
     const map = new Map<string, T[]>();
     for (const x of arr) {
-      const key = `${x.cityCode}|${x.venueNorm}|${x.date}|${x.hhmm}`;
+      const key = `${x.cityName}|${x.venueKey}|${x.date}|${x.hhmm}`;
       if (!map.has(key)) map.set(key, []);
       map.get(key)!.push(x);
     }
@@ -297,19 +348,6 @@ function addDays(d: Date, n: number): Date {
 
 function isoDate(d: Date): string {
   return d.toISOString().slice(0, 10);
-}
-
-// Strip parens, drop "field", collapse non-alphanumerics. Same
-// rule on both sides of the comparison so "NEMP Field 12" and
-// "NEMP Field 12 (Syn)" both normalize to "nemp 12".
-function normalizeVenue(s: string): string {
-  return s
-    .toLowerCase()
-    .replace(/\(.*?\)/g, " ")
-    .replace(/\bfield\b/g, " ")
-    .replace(/[^a-z0-9]+/g, " ")
-    .trim()
-    .replace(/\s+/g, " ");
 }
 
 // "7:00 PM - 8:00 PM" → "19:00", "9:00 PM" → "21:00". Returns ""
