@@ -5,14 +5,27 @@
 // Backed by the schedule_master table (legacy MatchDay master
 // schedule HTML, seeded once in migration 0038).
 //
-// Data fetch: /api/schedule-master?week_start=YYYY-MM-DD. The route
-// returns all 8 cities in canonical order with exactly 7 day slots
-// each, so the render code is straight iteration with no missing-
-// day guards.
+// Bubbles render as "{time} {abbr}" using ops-team shorthand from
+// src/lib/venueAbbreviations.ts. Hovering a bubble shows the full
+// "{time-range} - {detail}" string via the title attribute.
+//
+// Changes vs last week:
+//   The component fetches the selected week AND the previous week
+//   in parallel. A small banner above the grid summarizes counts;
+//   per-city change rows list added / dropped / time-changed slots.
+//   In the grid itself, added bubbles get a green dot, dropped
+//   bubbles render as a strikethrough "ghost" in the same day cell.
+//
+//   "Same slot" is keyed on (city, day_of_week, abbr). Multiple
+//   matches with the same abbr on the same day are paired
+//   positionally after sort-by-time, so a Friday SJD@6PM + SJD@8PM
+//   versus a previous Friday with only SJD@6PM cleanly reports the
+//   8PM as added (not as a "SJD time changed").
 
 import { useCallback, useEffect, useMemo, useState } from "react";
-import { ChevronLeft, ChevronRight } from "lucide-react";
+import { ChevronLeft, ChevronRight, X } from "lucide-react";
 import { supabase } from "@/lib/supabase";
+import { getAbbr } from "@/lib/venueAbbreviations";
 
 type MatchOut = {
   id: string;
@@ -36,11 +49,58 @@ type Payload = {
   cities: CityOut[];
 };
 
+type Diff = {
+  hasAny: boolean;
+  // Current-week match ids that are new vs last week. Drives the
+  // green dot indicator in the grid.
+  addedIds: Set<string>;
+  // City|DayOfWeek → ghost matches to render in that cell.
+  ghostsByCell: Map<string, GhostMatch[]>;
+  // Per-city, day-ordered lists for the change row.
+  perCity: Map<string, ChangePill[]>;
+  // Totals for the top banner.
+  addedCount: number;
+  droppedCount: number;
+  changedCount: number;
+};
+
+type GhostMatch = {
+  id: string; // previous week match id
+  detail: string;
+  abbr: string;
+  time: string; // full string for tooltip
+  time_short: string;
+};
+
+type ChangePill =
+  | { kind: "added"; dayOfWeek: string; abbr: string; time_short: string }
+  | { kind: "dropped"; dayOfWeek: string; abbr: string; time_short: string }
+  | {
+      kind: "changed";
+      dayOfWeek: string;
+      abbr: string;
+      oldTime: string;
+      newTime: string;
+    };
+
+const EMPTY_DIFF: Diff = {
+  hasAny: false,
+  addedIds: new Set(),
+  ghostsByCell: new Map(),
+  perCity: new Map(),
+  addedCount: 0,
+  droppedCount: 0,
+  changedCount: 0,
+};
+
+const DOW_ORDER = ["Mon", "Tue", "Wed", "Thu", "Fri", "Sat", "Sun"] as const;
+
 export default function CitiesMasterScheduleLens() {
   const [weekStart, setWeekStart] = useState<string>(() =>
     isoDate(mondayOfChicago(new Date())),
   );
-  const [data, setData] = useState<Payload | null>(null);
+  const [current, setCurrent] = useState<Payload | null>(null);
+  const [previous, setPrevious] = useState<Payload | null>(null);
   const [loading, setLoading] = useState(true);
   const [error, setError] = useState<string | null>(null);
 
@@ -55,18 +115,24 @@ export default function CitiesMasterScheduleLens() {
         setLoading(false);
         return;
       }
-      const res = await fetch(`/api/schedule-master?week_start=${ws}`, {
-        headers: { Authorization: `Bearer ${token}` },
-      });
-      if (!res.ok) {
-        const j = await res.json().catch(() => ({}));
-        throw new Error(j.error || `HTTP ${res.status}`);
-      }
-      const j = (await res.json()) as Payload;
-      setData(j);
+      const prevWs = isoDate(addDays(parseIso(ws), -7));
+      const fetchWeek = async (w: string): Promise<Payload> => {
+        const res = await fetch(`/api/schedule-master?week_start=${w}`, {
+          headers: { Authorization: `Bearer ${token}` },
+        });
+        if (!res.ok) {
+          const j = await res.json().catch(() => ({}));
+          throw new Error(j.error || `HTTP ${res.status}`);
+        }
+        return (await res.json()) as Payload;
+      };
+      const [cur, prev] = await Promise.all([fetchWeek(ws), fetchWeek(prevWs)]);
+      setCurrent(cur);
+      setPrevious(prev);
     } catch (err) {
       setError(err instanceof Error ? err.message : String(err));
-      setData(null);
+      setCurrent(null);
+      setPrevious(null);
     } finally {
       setLoading(false);
     }
@@ -77,6 +143,7 @@ export default function CitiesMasterScheduleLens() {
   }, [load, weekStart]);
 
   const todayIso = useMemo(() => isoDate(mondayOfChicago(new Date(), 0)), []);
+  const diff = useMemo(() => buildDiff(current, previous), [current, previous]);
 
   const shift = (days: number) => {
     const d = parseIso(weekStart);
@@ -98,14 +165,14 @@ export default function CitiesMasterScheduleLens() {
         </div>
         <WeekNav
           weekStart={weekStart}
-          weekEnd={data?.week_end ?? weekStart}
+          weekEnd={current?.week_end ?? weekStart}
           onPrev={() => shift(-7)}
           onNext={() => shift(7)}
           onToday={goToday}
         />
       </div>
 
-      {loading && !data ? (
+      {loading && !current ? (
         <div className="rounded-2xl border-[1.5px] border-cream-line bg-white p-8 text-sm text-deep-green/60 shadow-md shadow-deep-green/10">
           Loading schedule…
         </div>
@@ -113,12 +180,26 @@ export default function CitiesMasterScheduleLens() {
         <div className="rounded-2xl border-[1.5px] border-coral/40 bg-coral-soft p-6 text-sm text-coral-hover shadow-md shadow-deep-green/10">
           {error}
         </div>
-      ) : !data ? null : (
-        <div className="space-y-5">
-          {data.cities.map((c) => (
-            <CitySection key={c.name} city={c} todayIso={todayIso} />
-          ))}
-        </div>
+      ) : !current ? null : (
+        <>
+          {diff.hasAny && (
+            <DiffSummaryBanner
+              addedCount={diff.addedCount}
+              droppedCount={diff.droppedCount}
+              changedCount={diff.changedCount}
+            />
+          )}
+          <div className="space-y-5">
+            {current.cities.map((c) => (
+              <CitySection
+                key={c.name}
+                city={c}
+                todayIso={todayIso}
+                diff={diff}
+              />
+            ))}
+          </div>
+        </>
       )}
     </section>
   );
@@ -137,7 +218,7 @@ function WeekNav({
   onNext: () => void;
   onToday: () => void;
 }) {
-  const label = `${fmtShort(weekStart)} – ${fmtShort(weekEnd)}`;
+  const label = `${fmtShort(weekStart)} - ${fmtShort(weekEnd)}`;
   return (
     <div className="inline-flex items-center gap-2">
       <button
@@ -170,25 +251,117 @@ function WeekNav({
   );
 }
 
-function CitySection({ city, todayIso }: { city: CityOut; todayIso: string }) {
+function DiffSummaryBanner({
+  addedCount,
+  droppedCount,
+  changedCount,
+}: {
+  addedCount: number;
+  droppedCount: number;
+  changedCount: number;
+}) {
+  return (
+    <div className="mb-5 flex flex-wrap items-center gap-2 rounded-2xl border-[1.5px] border-cream-line bg-cream-soft px-4 py-2.5 shadow-md shadow-deep-green/10">
+      <span className="text-[11px] font-bold uppercase tracking-wider text-deep-green/70">
+        Changes vs last week
+      </span>
+      {addedCount > 0 && (
+        <span className="rounded-full bg-mint-soft px-2 py-0.5 text-[11px] font-bold text-deep-green ring-1 ring-mint/40">
+          {addedCount} added
+        </span>
+      )}
+      {droppedCount > 0 && (
+        <span className="rounded-full bg-coral-soft px-2 py-0.5 text-[11px] font-bold text-coral-hover ring-1 ring-coral/40">
+          {droppedCount} dropped
+        </span>
+      )}
+      {changedCount > 0 && (
+        <span className="rounded-full bg-yellow-soft px-2 py-0.5 text-[11px] font-bold text-deep-green ring-1 ring-yellow-pos/60">
+          {changedCount} time changed
+        </span>
+      )}
+    </div>
+  );
+}
+
+function CitySection({
+  city,
+  todayIso,
+  diff,
+}: {
+  city: CityOut;
+  todayIso: string;
+  diff: Diff;
+}) {
+  const pills = diff.perCity.get(city.name) ?? [];
   return (
     <div className="rounded-2xl border-[1.5px] border-cream-line bg-white p-5 shadow-md shadow-deep-green/10">
-      <div className="mb-3 flex items-center justify-between">
+      <div className="mb-3 flex flex-wrap items-center justify-between gap-2">
         <h3 className="text-base font-bold text-deep-green">{city.name}</h3>
         <span className="rounded-full bg-cream-soft px-2 py-0.5 text-[10px] font-bold uppercase tracking-wider text-deep-green/65">
           {city.total} {city.total === 1 ? "match" : "matches"}
         </span>
       </div>
+      {pills.length > 0 && (
+        <div className="mb-3 flex flex-wrap gap-1.5">
+          {pills.map((p, i) => (
+            <ChangeRowPill key={i} pill={p} />
+          ))}
+        </div>
+      )}
       <div className="grid grid-cols-7 gap-2">
-        {city.days.map((d) => (
-          <DayCell key={d.date} day={d} todayIso={todayIso} />
-        ))}
+        {city.days.map((d) => {
+          const cellKey = `${city.name}|${d.day_of_week}`;
+          return (
+            <DayCell
+              key={d.date}
+              day={d}
+              todayIso={todayIso}
+              addedIds={diff.addedIds}
+              ghosts={diff.ghostsByCell.get(cellKey) ?? []}
+            />
+          );
+        })}
       </div>
     </div>
   );
 }
 
-function DayCell({ day, todayIso }: { day: DayOut; todayIso: string }) {
+function ChangeRowPill({ pill }: { pill: ChangePill }) {
+  if (pill.kind === "added") {
+    return (
+      <span className="inline-flex items-center gap-1 rounded-full bg-mint-soft px-2 py-0.5 text-[11px] font-medium text-deep-green ring-1 ring-mint/40">
+        <span className="font-bold">+</span> {pill.dayOfWeek} {pill.time_short}{" "}
+        {pill.abbr}
+      </span>
+    );
+  }
+  if (pill.kind === "dropped") {
+    return (
+      <span className="inline-flex items-center gap-1 rounded-full bg-coral-soft px-2 py-0.5 text-[11px] font-medium text-coral-hover ring-1 ring-coral/40">
+        <span className="font-bold">-</span> {pill.dayOfWeek} {pill.time_short}{" "}
+        {pill.abbr}
+      </span>
+    );
+  }
+  return (
+    <span className="inline-flex items-center gap-1 rounded-full bg-yellow-soft px-2 py-0.5 text-[11px] font-medium text-deep-green ring-1 ring-yellow-pos/60">
+      {pill.dayOfWeek} {pill.abbr}: {pill.oldTime} → {pill.newTime}
+    </span>
+  );
+}
+
+function DayCell({
+  day,
+  todayIso,
+  addedIds,
+  ghosts,
+}: {
+  day: DayOut;
+  todayIso: string;
+  addedIds: Set<string>;
+  ghosts: GhostMatch[];
+}) {
   const isToday = day.date === todayIso;
   const isPast = day.date < todayIso;
   return (
@@ -208,17 +381,23 @@ function DayCell({ day, todayIso }: { day: DayOut; todayIso: string }) {
         <span className="tabular-nums">{day.date.slice(8)}</span>
       </div>
       <div className="mt-1 flex flex-col gap-1">
-        {day.matches.length === 0 ? (
+        {day.matches.length === 0 && ghosts.length === 0 ? (
           <span className="text-[11px] text-deep-green/30">—</span>
         ) : (
-          day.matches.map((m) => (
-            <MatchPill
-              key={m.id}
-              time={m.time}
-              detail={m.detail}
-              dim={isPast}
-            />
-          ))
+          <>
+            {day.matches.map((m) => (
+              <MatchPill
+                key={m.id}
+                time={m.time}
+                detail={m.detail}
+                dim={isPast}
+                added={addedIds.has(m.id)}
+              />
+            ))}
+            {ghosts.map((g) => (
+              <GhostPill key={g.id} time={g.time} detail={g.detail} />
+            ))}
+          </>
         )}
       </div>
     </div>
@@ -229,26 +408,188 @@ function MatchPill({
   time,
   detail,
   dim,
+  added,
 }: {
   time: string;
   detail: string;
   dim: boolean;
+  added: boolean;
 }) {
-  // Compact start-time label: "7p" / "6:30p" / "9a".
   const short = compactTime(time);
+  const abbr = getAbbr(detail);
   return (
     <div
-      className={`truncate rounded px-1.5 py-0.5 text-[11px] leading-tight ${
-        dim
-          ? "bg-cream-soft text-deep-green/40"
-          : "bg-white text-deep-green ring-1 ring-cream-line"
+      className={`flex items-center gap-1 truncate rounded px-1.5 py-0.5 text-[11px] leading-tight ${
+        added
+          ? "bg-mint-soft text-deep-green ring-1 ring-mint/60"
+          : dim
+            ? "bg-cream-soft text-deep-green/40"
+            : "bg-white text-deep-green ring-1 ring-cream-line"
       }`}
-      title={`${time} · ${detail}`}
+      title={`${time} - ${detail}`}
     >
-      <span className="font-bold tabular-nums">{short}</span>{" "}
-      <span>{detail}</span>
+      {added && (
+        <span
+          aria-hidden
+          className="inline-block h-1.5 w-1.5 shrink-0 rounded-full bg-mint"
+        />
+      )}
+      <span className="truncate">
+        <span className="font-bold tabular-nums">{short}</span>{" "}
+        <span>{abbr}</span>
+      </span>
     </div>
   );
+}
+
+function GhostPill({ time, detail }: { time: string; detail: string }) {
+  const short = compactTime(time);
+  const abbr = getAbbr(detail);
+  return (
+    <div
+      className="flex items-center gap-1 truncate rounded border border-dashed border-coral/50 bg-coral-soft/40 px-1.5 py-0.5 text-[11px] leading-tight text-coral-hover/70 line-through"
+      title={`Dropped vs last week · ${time} - ${detail}`}
+    >
+      <X aria-hidden className="h-2.5 w-2.5 shrink-0" />
+      <span className="truncate">
+        <span className="font-bold tabular-nums">{short}</span>{" "}
+        <span>{abbr}</span>
+      </span>
+    </div>
+  );
+}
+
+// ============================================================
+// Diff
+// ============================================================
+
+function buildDiff(
+  current: Payload | null,
+  previous: Payload | null,
+): Diff {
+  if (!current || !previous) return EMPTY_DIFF;
+  const prevHasAny = previous.cities.some((c) => c.total > 0);
+  if (!prevHasAny) return EMPTY_DIFF;
+
+  type Bucket = {
+    id: string;
+    time: string;
+    time_short: string;
+    detail: string;
+  };
+  function bucketize(p: Payload): Map<string, Bucket[]> {
+    const map = new Map<string, Bucket[]>();
+    for (const c of p.cities) {
+      for (const d of c.days) {
+        for (const m of d.matches) {
+          const abbr = getAbbr(m.detail);
+          const key = `${c.name}|${d.day_of_week}|${abbr}`;
+          if (!map.has(key)) map.set(key, []);
+          map.get(key)!.push({
+            id: m.id,
+            time: m.time,
+            time_short: compactTime(m.time),
+            detail: m.detail,
+          });
+        }
+      }
+    }
+    // Sort each bucket by start time so positional pairing across
+    // weeks is deterministic.
+    for (const arr of map.values()) {
+      arr.sort((a, b) => startMinutes(a.time) - startMinutes(b.time));
+    }
+    return map;
+  }
+
+  const curMap = bucketize(current);
+  const prevMap = bucketize(previous);
+  const allKeys = new Set([...curMap.keys(), ...prevMap.keys()]);
+
+  const addedIds = new Set<string>();
+  const ghostsByCell = new Map<string, GhostMatch[]>();
+  const perCity = new Map<string, ChangePill[]>();
+  let addedCount = 0;
+  let droppedCount = 0;
+  let changedCount = 0;
+
+  function pushPill(city: string, pill: ChangePill) {
+    if (!perCity.has(city)) perCity.set(city, []);
+    perCity.get(city)!.push(pill);
+  }
+
+  for (const key of allKeys) {
+    const [city, dayOfWeek, abbr] = key.split("|");
+    const cur = curMap.get(key) ?? [];
+    const prev = prevMap.get(key) ?? [];
+    const minLen = Math.min(cur.length, prev.length);
+    for (let i = 0; i < minLen; i++) {
+      if (cur[i].time_short !== prev[i].time_short) {
+        changedCount++;
+        pushPill(city, {
+          kind: "changed",
+          dayOfWeek,
+          abbr,
+          oldTime: prev[i].time_short,
+          newTime: cur[i].time_short,
+        });
+      }
+    }
+    for (let i = minLen; i < cur.length; i++) {
+      addedIds.add(cur[i].id);
+      addedCount++;
+      pushPill(city, {
+        kind: "added",
+        dayOfWeek,
+        abbr,
+        time_short: cur[i].time_short,
+      });
+    }
+    for (let i = minLen; i < prev.length; i++) {
+      const cellKey = `${city}|${dayOfWeek}`;
+      if (!ghostsByCell.has(cellKey)) ghostsByCell.set(cellKey, []);
+      ghostsByCell.get(cellKey)!.push({
+        id: prev[i].id,
+        detail: prev[i].detail,
+        abbr,
+        time: prev[i].time,
+        time_short: prev[i].time_short,
+      });
+      droppedCount++;
+      pushPill(city, {
+        kind: "dropped",
+        dayOfWeek,
+        abbr,
+        time_short: prev[i].time_short,
+      });
+    }
+  }
+
+  // Sort per-city pills so Mon..Sun reads left-to-right.
+  const dowIndex = new Map<string, number>(DOW_ORDER.map((d, i) => [d, i]));
+  for (const arr of perCity.values()) {
+    arr.sort((a, b) => {
+      const ai = dowIndex.get(a.dayOfWeek) ?? 99;
+      const bi = dowIndex.get(b.dayOfWeek) ?? 99;
+      return ai - bi;
+    });
+  }
+
+  // Sort ghost lists within a cell by start time.
+  for (const arr of ghostsByCell.values()) {
+    arr.sort((a, b) => startMinutes(a.time) - startMinutes(b.time));
+  }
+
+  const hasAny = addedCount > 0 || droppedCount > 0 || changedCount > 0;
+  return {
+    hasAny,
+    addedIds,
+    ghostsByCell,
+    perCity,
+    addedCount,
+    droppedCount,
+    changedCount,
+  };
 }
 
 // ============================================================
@@ -263,9 +604,12 @@ function isoDate(d: Date): string {
   return d.toISOString().slice(0, 10);
 }
 
-// Monday-of-week relative to a given anchor day in America/Chicago.
-// `offsetDays = -daysFromMonday` snaps to Monday; pass 0 to get the
-// Chicago-calendar today (used for past/today styling).
+function addDays(d: Date, n: number): Date {
+  const out = new Date(d);
+  out.setUTCDate(out.getUTCDate() + n);
+  return out;
+}
+
 function mondayOfChicago(now: Date, offsetMode: "monday" | 0 = "monday"): Date {
   const todayChicagoIso = now.toLocaleDateString("en-CA", {
     timeZone: "America/Chicago",
@@ -287,14 +631,27 @@ function fmtShort(iso: string): string {
   });
 }
 
-// "7:00 PM - 8:00 PM" → "7p", "6:30 PM" → "6:30p", "9 AM" → "9a".
-// Falls back to the raw string if unparseable so nothing is hidden.
+// "7:00 PM - 8:00 PM" → "7PM", "6:30 PM" → "6:30PM", "9 AM" → "9AM".
+// Uppercase AM/PM reads better than lowercase in narrow grid cells
+// when paired with a 2-4 char venue abbreviation. Falls back to the
+// raw string if unparseable so nothing is hidden.
 function compactTime(time: string): string {
   const m = /^\s*(\d{1,2})(?::(\d{2}))?\s*(AM|PM|am|pm)?/.exec(time);
   if (!m) return time;
   const h = Number(m[1]);
   const min = m[2] ? Number(m[2]) : 0;
   const ampm = (m[3] ?? "").toUpperCase();
-  const suffix = ampm === "AM" ? "a" : ampm === "PM" ? "p" : "";
+  const suffix = ampm === "AM" ? "AM" : ampm === "PM" ? "PM" : "";
   return min === 0 ? `${h}${suffix}` : `${h}:${m[2]}${suffix}`;
+}
+
+function startMinutes(time: string): number {
+  const m = /^\s*(\d{1,2})(?::(\d{2}))?\s*(AM|PM|am|pm)?/.exec(time);
+  if (!m) return Number.MAX_SAFE_INTEGER;
+  let h = Number(m[1]);
+  const min = m[2] ? Number(m[2]) : 0;
+  const ampm = m[3]?.toUpperCase();
+  if (ampm === "PM" && h < 12) h += 12;
+  if (ampm === "AM" && h === 12) h = 0;
+  return h * 60 + min;
 }
