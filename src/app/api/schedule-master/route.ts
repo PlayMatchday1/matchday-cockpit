@@ -15,6 +15,11 @@
 // crm + /api/cities — cities/Master Schedule is a corp surface.
 
 import { authenticateCrm } from "@/lib/crmAuth";
+import {
+  validateScheduleMasterPayload,
+  writeScheduleMasterAudit,
+  type ScheduleMasterRow,
+} from "@/lib/scheduleMaster";
 
 export const runtime = "nodejs";
 export const maxDuration = 10;
@@ -142,6 +147,67 @@ export async function GET(req: Request) {
     },
     { status: 200 },
   );
+}
+
+// ============================================================
+// POST — create a schedule_master row
+// ============================================================
+//
+// Admin-only via authenticateCrm. The cron-bearer path is rejected
+// since CRUD operations need an attributable operator email for the
+// audit log.
+
+export async function POST(req: Request) {
+  const auth = await authenticateCrm(req);
+  if (!auth.ok) {
+    return Response.json({ error: auth.error }, { status: auth.status });
+  }
+  if (!auth.email) {
+    return Response.json(
+      { error: "Operator session required" },
+      { status: 403 },
+    );
+  }
+  const { supabase, email } = auth;
+
+  let body: unknown;
+  try {
+    body = await req.json();
+  } catch {
+    return Response.json({ error: "Body must be JSON" }, { status: 400 });
+  }
+
+  const v = validateScheduleMasterPayload(body, { isPartial: false });
+  if (!v.ok) return Response.json({ error: v.error }, { status: 400 });
+  const payload = v.value;
+
+  const ins = await supabase
+    .from("schedule_master")
+    .insert({
+      city: payload.city!,
+      venue: payload.venue!,
+      detail: payload.detail!,
+      match_date: payload.match_date!,
+      match_time: payload.match_time!,
+      max_spots: payload.max_spots!,
+    })
+    .select("id, city, venue, detail, match_date, match_time, max_spots")
+    .single();
+  if (ins.error || !ins.data) {
+    console.error("[schedule-master:create] insert failed", ins.error);
+    return Response.json({ error: "Insert failed" }, { status: 500 });
+  }
+  const row = ins.data as ScheduleMasterRow;
+
+  await writeScheduleMasterAudit(supabase, {
+    action: "create",
+    userEmail: email,
+    rowId: row.id,
+    oldValues: null,
+    newValues: row,
+  });
+
+  return Response.json({ row }, { status: 201 });
 }
 
 // ============================================================
