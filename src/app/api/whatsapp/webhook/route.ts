@@ -34,6 +34,10 @@ import {
 } from "@/lib/gchat";
 import { downloadWhatsAppMedia } from "@/lib/whatsapp";
 import { uploadMessageMedia } from "@/lib/crmMedia";
+import {
+  notifyInboundChatMessage,
+  type CrmInboundPushArgs,
+} from "@/lib/crmPushNotify";
 
 export const runtime = "nodejs";
 export const maxDuration = 15;
@@ -197,10 +201,12 @@ export async function POST(req: Request) {
   //    causes duplicates for messages that DID land. Per-message
   //    errors are logged.
   const notifications: NewWhatsAppThreadNotification[] = [];
+  const pushIntents: Omit<CrmInboundPushArgs, "supabase">[] = [];
   for (const msg of messages) {
     try {
       const result = await processInbound(sb, msg);
       if (result?.newThread) notifications.push(result.newThread);
+      if (result?.pushArgs) pushIntents.push(result.pushArgs);
     } catch (err) {
       console.error("[whatsapp:webhook] process failed", err);
     }
@@ -239,9 +245,28 @@ export async function POST(req: Request) {
     });
   }
 
+  // 7) Web Push fan-out. Every successful inbound store gets a push
+  //    intent. Each helper invocation self-bounds at 2s. Fire all
+  //    in parallel and cap the whole batch at 2s as well so a
+  //    pathological push-service stall can never blow the Vercel
+  //    timeout. Errors logged but never thrown — webhook ack must
+  //    succeed regardless.
+  if (pushIntents.length > 0) {
+    await Promise.race([
+      Promise.all(
+        pushIntents.map((args) =>
+          notifyInboundChatMessage({ ...args, supabase: sb }),
+        ),
+      ),
+      new Promise<void>((resolve) => setTimeout(resolve, 2000)),
+    ]).catch((err) => {
+      console.error("[whatsapp:webhook] push fan-out failed:", err);
+    });
+  }
+
   const elapsed = Date.now() - startedAt;
   console.log(
-    `[whatsapp:webhook] processed messages=${messages.length} statuses=${statuses.length} new_threads=${notifications.length} elapsed=${elapsed}ms`,
+    `[whatsapp:webhook] processed messages=${messages.length} statuses=${statuses.length} new_threads=${notifications.length} push_intents=${pushIntents.length} elapsed=${elapsed}ms`,
   );
 
   return Response.json({ ok: true }, { status: 200 });
@@ -603,7 +628,13 @@ function previewFor(row: DerivedMessageRow): string {
   }
 }
 
-type ProcessResult = { newThread?: NewWhatsAppThreadNotification };
+type ProcessResult = {
+  newThread?: NewWhatsAppThreadNotification;
+  // Set on every successful inbound store. Carries the data needed
+  // to fire a Web Push notification at the end of the request, after
+  // Meta has been ack'd.
+  pushArgs?: Omit<CrmInboundPushArgs, "supabase">;
+};
 
 async function processInbound(
   sb: SupabaseClient,
@@ -755,7 +786,24 @@ async function processInbound(
     `[whatsapp:webhook] stored phone=${phone} player_id=${playerId ?? "-"} ambiguous=${ambiguous} new_thread=${isNewThread} wamid=${wamid ?? "-"} kind=${row.media_kind ?? "text"}`,
   );
 
-  if (!isNewThread) return null;
+  // Push args for every inbound (new thread or existing). The caller
+  // fans out after acking Meta.
+  const pushArgs: Omit<CrmInboundPushArgs, "supabase"> = {
+    threadId,
+    phoneNumber: phone,
+    playerId,
+    body: row.body,
+    mediaKind: row.media_kind as
+      | "image"
+      | "video"
+      | "audio"
+      | "document"
+      | "sticker"
+      | null,
+    mediaFilename: row.media_filename,
+  };
+
+  if (!isNewThread) return { pushArgs };
 
   // -------- new-thread Google Chat notification --------
   // Resolve the player's city for the card subtitle (best-effort —
@@ -774,6 +822,7 @@ async function processInbound(
   }
 
   return {
+    pushArgs,
     newThread: {
       threadId,
       cityCode,
