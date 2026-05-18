@@ -78,7 +78,6 @@ type GhostMatch = {
 type ChangePill =
   | { kind: "added"; dayOfWeek: string; abbr: string; time_short: string }
   | { kind: "dropped"; dayOfWeek: string; abbr: string; time_short: string }
-  | { kind: "cancelled"; dayOfWeek: string; abbr: string; time_short: string }
   | {
       kind: "changed";
       dayOfWeek: string;
@@ -322,7 +321,6 @@ export default function CitiesMasterScheduleLens() {
                 todayIso={todayIso}
                 diff={diff}
                 cancelledKeys={cancelledRefs.keys}
-                cancelledPills={cancelledRefs.perCity.get(c.name) ?? []}
                 onEditMatch={openEdit}
               />
             ))}
@@ -439,32 +437,19 @@ function CitySection({
   todayIso,
   diff,
   cancelledKeys,
-  cancelledPills,
   onEditMatch,
 }: {
   city: CityOut;
   todayIso: string;
   diff: Diff;
   cancelledKeys: Set<string>;
-  cancelledPills: ChangePill[];
   onEditMatch: (row: EditableRow) => void;
 }) {
-  // Week-vs-week diff pills + cancellation pills, combined in
-  // Mon..Sun order so the operator scans one row per city.
-  const dowIndex = new Map<string, number>(DOW_ORDER.map((d, i) => [d, i]));
-  const pills = useMemo(() => {
-    const combined = [
-      ...(diff.perCity.get(city.name) ?? []),
-      ...cancelledPills,
-    ];
-    combined.sort(
-      (a, b) =>
-        (dowIndex.get(a.dayOfWeek) ?? 99) - (dowIndex.get(b.dayOfWeek) ?? 99),
-    );
-    return combined;
-    // dowIndex is stable per render; safe to leave out of deps.
-    // eslint-disable-next-line react-hooks/exhaustive-deps
-  }, [diff, cancelledPills, city.name]);
+  // Week-vs-week diff pills only. Cancellations show as in-grid
+  // strikethrough bubbles + the DB Sync count pill at the top of
+  // the tab; surfacing them again in the per-city row was loud
+  // and crowded out the diff signal.
+  const pills = diff.perCity.get(city.name) ?? [];
   return (
     <div className="rounded-2xl border-[1.5px] border-cream-line bg-white p-5 shadow-md shadow-deep-green/10">
       <div className="mb-3 flex flex-wrap items-center justify-between gap-2">
@@ -515,17 +500,6 @@ function ChangeRowPill({ pill }: { pill: ChangePill }) {
       <span className="inline-flex items-center gap-1 rounded-full bg-coral-soft px-2 py-0.5 text-[11px] font-medium text-coral-hover ring-1 ring-coral/40">
         <span className="font-bold">-</span> {pill.dayOfWeek} {pill.time_short}{" "}
         {pill.abbr}
-      </span>
-    );
-  }
-  if (pill.kind === "cancelled") {
-    return (
-      <span className="inline-flex items-center gap-1 rounded-full bg-coral px-2 py-0.5 text-[11px] font-medium text-white ring-1 ring-coral-hover/60">
-        <span className="font-bold">×</span> {pill.dayOfWeek} {pill.time_short}{" "}
-        {pill.abbr}{" "}
-        <span className="font-bold uppercase tracking-wider opacity-90">
-          cancelled
-        </span>
       </span>
     );
   }
@@ -746,7 +720,7 @@ function DiscrepancyBanner({ data }: { data: Discrepancies }) {
                 : "bg-coral text-white hover:bg-coral-hover"
             }`}
           >
-            {canc} cancelled this week and next
+            {canc} cancelled this week
           </button>
         )}
       </div>
@@ -975,53 +949,23 @@ function buildDiff(
 // Cancelled cross-refs
 // ============================================================
 //
-// Builds two derived shapes off the discrepancies response so the
-// grid render and the per-city pill row can both light up cancelled
-// slots without re-parsing the payload at every render:
-//
-//   keys     — Set keyed on `${city}|${date}|${abbr}|${time_short}`.
-//              Looked up in DayCell for each rendered MatchPill.
-//   perCity  — ChangePill list per city for the change row above
-//              each city section.
-//
-// Both reuse getAbbr + compactTime so the keys built here match
-// exactly what the grid bubbles produce.
+// Builds a Set of `${city}|${date}|${abbr}|${time_short}` keys off
+// the discrepancies response so DayCell can light up the matching
+// MatchPill with the cancelled text treatment. Reuses getAbbr and
+// compactTime so the keys built here match exactly what the grid
+// bubbles produce.
 
 function buildCancelledRefs(
   disc: Discrepancies | null,
-): { keys: Set<string>; perCity: Map<string, ChangePill[]> } {
+): { keys: Set<string> } {
   const keys = new Set<string>();
-  const perCity = new Map<string, ChangePill[]>();
-  if (!disc) return { keys, perCity };
+  if (!disc) return { keys };
   for (const c of disc.cancelled) {
     const abbr = getAbbr(c.detail);
     const time_short = compactTime(c.match_time);
     keys.add(`${c.city}|${c.match_date}|${abbr}|${time_short}`);
-    const dayOfWeek = dayOfWeekFromIso(c.match_date);
-    if (!perCity.has(c.city)) perCity.set(c.city, []);
-    perCity.get(c.city)!.push({
-      kind: "cancelled",
-      dayOfWeek,
-      abbr,
-      time_short,
-    });
   }
-  const dowIndex = new Map<string, number>(DOW_ORDER.map((d, i) => [d, i]));
-  for (const arr of perCity.values()) {
-    arr.sort(
-      (a, b) =>
-        (dowIndex.get(a.dayOfWeek) ?? 99) - (dowIndex.get(b.dayOfWeek) ?? 99),
-    );
-  }
-  return { keys, perCity };
-}
-
-function dayOfWeekFromIso(
-  iso: string,
-): "Mon" | "Tue" | "Wed" | "Thu" | "Fri" | "Sat" | "Sun" {
-  const d = new Date(`${iso}T00:00:00Z`);
-  const dow = d.getUTCDay();
-  return (["Sun", "Mon", "Tue", "Wed", "Thu", "Fri", "Sat"] as const)[dow];
+  return { keys };
 }
 
 // ============================================================

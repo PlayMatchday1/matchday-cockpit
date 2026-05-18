@@ -159,6 +159,12 @@ export async function GET(req: Request) {
     );
   }
   const weekEnd = addDays(weekStart, WINDOW_DAYS - 1);
+  // Cancelled bucket reports only the displayed (current) week, not
+  // the full two-week comparison window. Operators only act on
+  // cancellations for the visible Mon-Sun grid; showing next week's
+  // cancellations as well crowds the banner count without changing
+  // anything operationally.
+  const currentWeekEndIso = isoDate(addDays(weekStart, 6));
   const startIso = isoDate(weekStart);
   const endIso = isoDate(weekEnd);
 
@@ -345,6 +351,12 @@ export async function GET(req: Request) {
     const key = `${indexed.cityName}|${indexed.venueKey}|${indexed.date}|${indexed.hhmm}`;
     const sBucket = sBuckets.get(key) ?? [];
     if (sBucket.length > 0) {
+      // Matched-with-template cancellations only land in the
+      // cancelled bucket for the currently displayed week. Next-
+      // week matched cancellations are silently dropped from this
+      // response; they'll appear when the operator navigates
+      // forward. extra_in_db keeps its full 14-day window below.
+      if (indexed.date > currentWeekEndIso) continue;
       const s = sBucket[0].row;
       cancelled.push({
         schedule_master_id: s.id,
