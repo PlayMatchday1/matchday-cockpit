@@ -206,13 +206,19 @@ function csvCell(value: string | number): string {
 }
 
 function buildGustoCsv(payload: Payload, cityFilter: CityFilter): string {
+  // Column set matches Gusto's contractor CSV import format exactly.
+  // "Fixed amount" header is case-sensitive (lowercase 'a') per
+  // Gusto's docs — uppercase 'Amount' causes their import to
+  // unmatch the column and require manual mapping. Pay Date and
+  // Earnings Type were previously included for operator reference
+  // but Gusto's importer rejects them as unknown columns; the pay
+  // date is selected per-batch inside Gusto itself and the
+  // earnings type defaults to the contractor's configured one.
   const header = [
     "First Name",
     "Last Name",
     "Email",
-    "Earnings Type",
-    "Amount",
-    "Pay Date",
+    "Fixed amount",
     "Memo",
   ];
   const lines: string[] = [header.map(csvCell).join(",")];
@@ -228,9 +234,7 @@ function buildGustoCsv(payload: Payload, cityFilter: CityFilter): string {
           csvCell(first ?? ""),
           csvCell(last ?? ""),
           csvCell(m.managerEmail ?? ""),
-          csvCell("Bonus"),
           csvCell(m.total.toFixed(2)),
-          csvCell(payload.payDate),
           csvCell(memo),
         ].join(","),
       );
