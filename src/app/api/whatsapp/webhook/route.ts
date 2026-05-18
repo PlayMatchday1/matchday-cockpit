@@ -43,7 +43,16 @@ export const runtime = "nodejs";
 export const maxDuration = 15;
 
 const PREVIEW_LIMIT = 80;
+// Used by handleInboundMedia's catch path when a media fetch
+// genuinely fails (download from Meta, or upload to Storage).
 const MEDIA_PLACEHOLDER = "📎 Media attachment — view in WhatsApp app";
+// Used by the deriveMessageRow final fallback for inbound types
+// we don't handle yet (location, contacts, interactive, order,
+// system, ...). Wording deliberately does NOT mention "media" —
+// distinct from MEDIA_PLACEHOLDER so the bug-vs-coverage-gap
+// signal stays clear in the inbox.
+const UNSUPPORTED_PLACEHOLDER =
+  "[Unsupported message type — open WhatsApp to view]";
 
 // ============================================================
 // GET — Meta one-time webhook verification handshake
@@ -126,6 +135,16 @@ type WaMessage = {
     mime_type?: string;
     sha256?: string;
     animated?: boolean;
+  };
+  // Inbound reaction. Meta sends type="reaction" when a user
+  // reacts to one of our outbound messages with an emoji. The
+  // emoji string is empty when the user REMOVED their reaction.
+  // message_id is the wamid of the parent message being reacted
+  // to (always one of OUR outbound wamids — Meta does not deliver
+  // reactions to inbound messages back to us).
+  reaction?: {
+    message_id?: string;
+    emoji?: string;
   };
 };
 
@@ -412,6 +431,10 @@ type DerivedMessageRow = {
   media_filename: string | null;
   media_size_bytes: number | null;
   media_kind: string | null;
+  // Wamid of the parent message a reaction is attached to. Only set
+  // when media_kind === 'reaction'; null on every other row. Lets
+  // the UI later link the reaction note to its target bubble.
+  reaction_target_wamid?: string | null;
 };
 
 type MediaKind = "image" | "video" | "audio" | "document" | "sticker";
@@ -594,10 +617,30 @@ async function deriveMessageRow(
     });
   }
 
-  // Unknown / unsupported types (location, contacts, interactive,
-  // reaction, order, system, ...) — degrade to the placeholder so
-  // the message still appears in the inbox.
-  return { body: MEDIA_PLACEHOLDER, ...NULL_MEDIA };
+  if (type === "reaction") {
+    // emoji is "" when the user removed an existing reaction.
+    const emoji = (msg.reaction?.emoji ?? "").trim();
+    const targetWamid = msg.reaction?.message_id ?? null;
+    return {
+      body: emoji ? `Reacted ${emoji} to your message` : "Removed reaction",
+      ...NULL_MEDIA,
+      media_kind: "reaction",
+      reaction_target_wamid: targetWamid,
+    };
+  }
+
+  // Truly unsupported types (location, contacts, interactive, order,
+  // system, ...). Logged at warn level so we know when one becomes
+  // common enough to warrant its own branch. Stored as a degraded
+  // text bubble so the operator still sees that the player sent
+  // something — body string deliberately does NOT mention "media"
+  // (the old wording was misleading; reactions, location, etc are
+  // not failed media fetches).
+  console.warn(
+    "[whatsapp:webhook] unsupported type",
+    JSON.stringify({ type, wamid }),
+  );
+  return { body: UNSUPPORTED_PLACEHOLDER, ...NULL_MEDIA };
 }
 
 // Inbox-row preview string. Falls back to a media-kind hint when
@@ -642,6 +685,27 @@ async function processInbound(
 ): Promise<ProcessResult | null> {
   const wamid = msg.id ?? null;
   const fromRaw = msg.from ?? "";
+
+  // Pre-store diagnostic. Surfaces msg.type and which optional sub-
+  // payload Meta included on every inbound, so the next time an
+  // unfamiliar inbound shows up in /chats we can read the type from
+  // logs instead of recovering it from row state. No PII (no body,
+  // no caption, no media URL).
+  console.log(
+    "[whatsapp:webhook] inbound",
+    JSON.stringify({
+      wamid,
+      type: msg.type ?? null,
+      from: fromRaw || null,
+      has_text: !!msg.text,
+      has_image: !!msg.image,
+      has_video: !!msg.video,
+      has_audio: !!msg.audio,
+      has_document: !!msg.document,
+      has_sticker: !!msg.sticker,
+      has_reaction: !!msg.reaction,
+    }),
+  );
   // Meta delivers `from` without a leading '+'. normalizePhone
   // handles either via libphonenumber-js's default-region parsing,
   // but adding the '+' makes intent unambiguous.
@@ -770,6 +834,7 @@ async function processInbound(
     media_filename: row.media_filename,
     media_size_bytes: row.media_size_bytes,
     media_kind: row.media_kind,
+    reaction_target_wamid: row.reaction_target_wamid ?? null,
   });
   if (msgInsert.error) {
     if (msgInsert.error.code === "23505") {
@@ -787,19 +852,24 @@ async function processInbound(
   );
 
   // Push args for every inbound (new thread or existing). The caller
-  // fans out after acking Meta.
+  // fans out after acking Meta. Reactions intentionally pass
+  // mediaKind=null — the row body ("Reacted ❤️ to your message")
+  // is self-describing and bodyPreview will surface it verbatim
+  // without needing a kind-specific emoji prefix.
+  const pushMediaKind =
+    row.media_kind === "image" ||
+    row.media_kind === "video" ||
+    row.media_kind === "audio" ||
+    row.media_kind === "document" ||
+    row.media_kind === "sticker"
+      ? row.media_kind
+      : null;
   const pushArgs: Omit<CrmInboundPushArgs, "supabase"> = {
     threadId,
     phoneNumber: phone,
     playerId,
     body: row.body,
-    mediaKind: row.media_kind as
-      | "image"
-      | "video"
-      | "audio"
-      | "document"
-      | "sticker"
-      | null,
+    mediaKind: pushMediaKind,
     mediaFilename: row.media_filename,
   };
 
