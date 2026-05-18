@@ -8,7 +8,12 @@
 //   extra_in_db   — mdapi_matches rows with no schedule_master row.
 //                   Includes cancelled mdapi rows that have no
 //                   template entry — they are still "extra".
-//   mismatched    — same key, but max_spots differs.
+//   mismatched    — reserved. Always empty for now. max_spots
+//                   was the original criterion but drifts per
+//                   match in mdapi (bookings, weather), so it
+//                   was retired as a false-positive source.
+//                   Future: time-of-day drift inside the same
+//                   hour, or other real mismatch signals.
 //   cancelled     — mdapi_matches rows with is_cancelled=true AND a
 //                   matching schedule_master entry. This is the
 //                   operationally interesting case: the template
@@ -282,18 +287,14 @@ export async function GET(req: Request) {
     for (let i = 0; i < paired; i++) {
       const s = sBucket[i];
       const m = mBucket[i];
+      // Mismatch detection intentionally produces nothing right now.
+      // max_spots used to be the only criterion, but in practice
+      // mdapi.max_player_count drifts per match (booking, weather,
+      // field swaps) and the divergence isn't a real schedule
+      // mismatch. The bucket + response shape stay so we can plug in
+      // a real criterion later (e.g. time-of-day drift inside the
+      // same hour) without a wire change.
       const diffs: string[] = [];
-      if (
-        m.row.max_player_count != null &&
-        m.row.max_player_count !== s.row.max_spots
-      ) {
-        diffs.push(`max_spots ${s.row.max_spots} vs db ${m.row.max_player_count}`);
-      }
-      // Detail comparison is intentionally loose. If the normalized
-      // venue matches but the literal strings differ, that's expected
-      // (e.g. "NEMP Field 12" vs whatever exact label the API uses).
-      // We only flag a hard mismatch when both sides parse cleanly but
-      // disagree on max_spots.
       if (diffs.length > 0) {
         mismatched.push({
           schedule_master_id: s.row.id,

@@ -628,42 +628,41 @@ function MatchPill({
 }) {
   const short = compactTime(time);
   const abbr = getAbbr(detail);
-  // Style precedence: cancelled (red solid) > added (mint soft) >
-  // dim (past) > normal. When both cancelled AND added, the mint
-  // dot stays visible on top of the red background per the
-  // operator-requested behavior.
-  const variantClass = cancelled
-    ? "bg-coral text-white ring-1 ring-coral-hover/60 hover:ring-2 hover:ring-coral-hover"
-    : added
-      ? "bg-mint-soft text-deep-green ring-1 ring-mint/60 hover:ring-2 hover:ring-mint"
-      : dim
-        ? "bg-cream-soft text-deep-green/40 hover:ring-2 hover:ring-mint"
-        : "bg-white text-deep-green ring-1 ring-cream-line hover:ring-2 hover:ring-mint";
+  // Background respects added / dim / normal. Cancelled is a pure
+  // text treatment (coral color + strikethrough) so an in-grid
+  // cancellation reads as a subtle marker, not a loud red block —
+  // the loud per-city pill row at the top of each city section is
+  // where cancellations grab attention. Mint dot still renders
+  // when added, so an "added AND cancelled" slot keeps both
+  // signals.
+  const bgClass = added
+    ? "bg-mint-soft ring-1 ring-mint/60 hover:ring-2 hover:ring-mint"
+    : dim
+      ? "bg-cream-soft hover:ring-2 hover:ring-mint"
+      : "bg-white ring-1 ring-cream-line hover:ring-2 hover:ring-mint";
+  const textClass = cancelled
+    ? "text-coral-hover"
+    : dim
+      ? "text-deep-green/40"
+      : "text-deep-green";
   return (
     <button
       type="button"
       onClick={onClick}
       aria-label={`Edit ${time} ${detail}${cancelled ? " (cancelled)" : ""}`}
-      className={`flex w-full flex-col items-stretch rounded px-1.5 py-0.5 text-left text-[11px] leading-tight transition focus:outline-none focus:ring-2 focus:ring-mint ${variantClass}`}
+      className={`flex w-full items-center gap-1 rounded px-1.5 py-0.5 text-left text-[11px] leading-tight transition focus:outline-none focus:ring-2 focus:ring-mint ${bgClass} ${textClass}`}
       title={cancelled ? `Cancelled match · ${time} - ${detail}` : `${time} - ${detail}`}
     >
-      <span className="flex items-center gap-1 truncate">
-        {added && (
-          <span
-            aria-hidden
-            className="inline-block h-1.5 w-1.5 shrink-0 rounded-full bg-mint"
-          />
-        )}
-        <span className={`truncate ${cancelled ? "line-through" : ""}`}>
-          <span className="font-bold tabular-nums">{short}</span>{" "}
-          <span>{abbr}</span>
-        </span>
-      </span>
-      {cancelled && (
-        <span className="mt-0.5 text-[9px] font-bold uppercase tracking-wider opacity-90">
-          Cancelled
-        </span>
+      {added && (
+        <span
+          aria-hidden
+          className="inline-block h-1.5 w-1.5 shrink-0 rounded-full bg-mint"
+        />
       )}
+      <span className={`truncate ${cancelled ? "line-through" : ""}`}>
+        <span className="font-bold tabular-nums">{short}</span>{" "}
+        <span>{abbr}</span>
+      </span>
     </button>
   );
 }
