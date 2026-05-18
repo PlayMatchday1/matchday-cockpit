@@ -7,16 +7,19 @@
 // Sections:
 //   - Header: avatar (lg), name, city + member pills
 //   - Vital stats grid: phone, email, total matches, member-since
-//   - Upcoming + Recent matches lists (already loaded by /api/crm/threads/[id])
+//   - Upcoming + Recent matches lists
 //   - Ambiguous-match info note (top of body when match_ambiguous)
 //
-// Renders a body shell + a mobile-only sheet wrapper. Parent decides
-// which mode by passing `mode = "column" | "sheet"`.
+// Data: fetched lazily from /api/crm/threads/{id}/context, only when
+// the panel is visible. Results cached per thread_id in a ref Map so
+// switching back and forth doesn't refetch. The chat pane no longer
+// blocks on these heavier queries.
 
-import { useEffect } from "react";
+import { useEffect, useRef, useState } from "react";
 import { X } from "lucide-react";
 import { UNKNOWN_CITY } from "@/lib/cityColors";
 import { formatMatchTitle } from "@/lib/cityTimezones";
+import { supabase } from "@/lib/supabase";
 import PlayerAvatar from "@/components/PlayerAvatar";
 import CityChip from "@/components/CityChip";
 import MatchStatusPill, {
@@ -33,33 +36,18 @@ export type ContextPlayer = {
   preferable_city_name: string | null;
   is_member: boolean | null;
   created_at: string | null;
-  // Replaces the old all-time `total_match_count`. Counts only
-  // matches the player actually played in calendar-year 2026 —
-  // see loadPlayed2026Count in the API route.
   played_in_2026: number | null;
 };
 
 export type ContextRecentMatch = {
   match_api_id: number;
   venue: string | null;
-  // start_date is the legacy mislabeled column (kept on the wire to
-  // avoid breaking other consumers mid-flight). start_date_utc is the
-  // genuine UTC value and is what the UI should use, paired with
-  // city_identifier so times render in the venue's local zone.
   start_date: string | null;
   start_date_utc: string | null;
   city_identifier: string | null;
   status: MatchStatus;
 };
 
-// One row per future booking — listed in the new UPCOMING section
-// above Recent. Cancelled rows are included with is_cancelled=true
-// and rendered de-emphasized; operators see them so they don't
-// re-ask the player about a booking the player already withdrew.
-// team and player_number come straight from mdapi_match_players —
-// both integers. team renders as "Team N" because the upstream
-// API doesn't expose a string name (e.g. "Dark Tee" / "White Tee"
-// are consumer-app conventions, not values on our rows).
 export type ContextUpcomingMatch = {
   match_api_id: number;
   venue: string | null;
@@ -72,32 +60,44 @@ export type ContextUpcomingMatch = {
 };
 
 export type ContextThreadSummary = {
+  id: string;
   phone_number: string;
   match_ambiguous: boolean;
 };
 
-type Props = {
-  thread: ContextThreadSummary | null;
+type FetchedContext = {
   player: ContextPlayer | null;
   recentMatches: ContextRecentMatch[];
   upcomingMatches: ContextUpcomingMatch[];
   historicalAccountCount: number | null;
-  loading: boolean;
+};
+
+const EMPTY_CONTEXT: FetchedContext = {
+  player: null,
+  recentMatches: [],
+  upcomingMatches: [],
+  historicalAccountCount: null,
+};
+
+type Props = {
+  thread: ContextThreadSummary | null;
+  mode: "column" | "sheet";
+  open: boolean;
+  visible: boolean;
+  onClose?: () => void;
 };
 
 export default function ContextPanel({
+  thread,
   mode,
   open,
+  visible,
   onClose,
-  ...props
-}: Props & {
-  mode: "column" | "sheet";
-  open: boolean;
-  onClose?: () => void;
-}) {
-  // Sheet variant: backdrop + slide-up panel. Only mounted when
-  // `mode === "sheet"`. Desktop renders the column variant
-  // unconditionally as part of the page layout.
+}: Props) {
+  const cacheRef = useRef<Map<string, FetchedContext>>(new Map());
+  const [data, setData] = useState<FetchedContext>(EMPTY_CONTEXT);
+  const [loading, setLoading] = useState(false);
+
   useEffect(() => {
     if (mode !== "sheet" || !open || !onClose) return;
     function onKey(e: KeyboardEvent) {
@@ -107,33 +107,92 @@ export default function ContextPanel({
     return () => window.removeEventListener("keydown", onKey);
   }, [mode, open, onClose]);
 
+  // Lazy fetch: only when the panel is actually visible and a thread
+  // is selected. Cached results show instantly on revisit; we still
+  // refetch in the background so stale data converges. Bail on stale
+  // responses if the user switched threads mid-flight.
+  useEffect(() => {
+    if (!visible || !thread) return;
+    const threadId = thread.id;
+    const cached = cacheRef.current.get(threadId);
+    if (cached) {
+      setData(cached);
+    } else {
+      setData(EMPTY_CONTEXT);
+      setLoading(true);
+    }
+    let cancelled = false;
+    (async () => {
+      try {
+        const { data: sess } = await supabase.auth.getSession();
+        const token = sess.session?.access_token;
+        if (!token) return;
+        const res = await fetch(`/api/crm/threads/${threadId}/context`, {
+          headers: { Authorization: `Bearer ${token}` },
+        });
+        if (!res.ok) return;
+        const json = (await res.json()) as {
+          player: ContextPlayer | null;
+          recent_matches: ContextRecentMatch[];
+          upcoming_matches: ContextUpcomingMatch[];
+          historical_account_count: number | null;
+        };
+        const next: FetchedContext = {
+          player: json.player,
+          recentMatches: json.recent_matches ?? [],
+          upcomingMatches: json.upcoming_matches ?? [],
+          historicalAccountCount: json.historical_account_count,
+        };
+        cacheRef.current.set(threadId, next);
+        if (!cancelled) setData(next);
+      } catch (err) {
+        console.error("[ContextPanel] context fetch failed", err);
+      } finally {
+        if (!cancelled) setLoading(false);
+      }
+    })();
+    return () => {
+      cancelled = true;
+    };
+  }, [visible, thread]);
+
+  const bodyProps = {
+    thread,
+    player: data.player,
+    recentMatches: data.recentMatches,
+    upcomingMatches: data.upcomingMatches,
+    historicalAccountCount: data.historicalAccountCount,
+    loading,
+  };
+
   if (mode === "column") {
     return (
       <aside className="hidden w-[240px] shrink-0 flex-col overflow-y-auto overflow-x-hidden border-l border-cream-line bg-cream-soft lg:flex">
-        <ContextBody {...props} />
+        <ContextBody {...bodyProps} />
       </aside>
     );
   }
 
-  // Sheet mode (mobile). Mirrors GoalEditDrawer's structure but
-  // slides up from the bottom rather than in from the right.
+  // Sheet mode (mobile). When closed, return null so the dialog
+  // markup leaves the DOM entirely — closes a click-block surface at
+  // md viewports where lg:hidden doesn't apply and pointer-events:
+  // none on a parent doesn't always neutralize a child with
+  // role=dialog + aria-modal + transition-transform under iOS Safari.
+  //
+  // The open animation runs once on mount via the
+  // `animate-sheet-slide-up` keyframe defined in globals.css. We
+  // skip the close-out animation; the sheet unmounts immediately,
+  // which matches iOS native sheet dismissal behavior on backdrop
+  // tap.
+  if (!open) return null;
   return (
-    <div
-      className={`fixed inset-0 z-40 lg:hidden ${
-        open ? "" : "pointer-events-none"
-      }`}
-      aria-hidden={!open}
-    >
+    <div className="fixed inset-0 z-40 lg:hidden" role="presentation">
       <div
-        className={`absolute inset-0 bg-deep-green/40 transition-opacity duration-200 ${
-          open ? "opacity-100" : "opacity-0"
-        }`}
+        className="absolute inset-0 bg-deep-green/40 opacity-100"
         onClick={onClose}
       />
       <div
-        className={`absolute inset-x-0 bottom-0 flex max-h-[85vh] flex-col rounded-t-2xl bg-cream-soft shadow-2xl transition-transform duration-200 ease-out ${
-          open ? "translate-y-0" : "translate-y-full"
-        }`}
+        className="animate-sheet-slide-up absolute inset-x-0 bottom-0 flex max-h-[85vh] flex-col rounded-t-2xl bg-cream-soft shadow-2xl"
         role="dialog"
         aria-modal="true"
         aria-label="Player context"
@@ -154,12 +213,21 @@ export default function ContextPanel({
           </button>
         </div>
         <div className="flex-1 overflow-y-auto overflow-x-hidden">
-          <ContextBody {...props} />
+          <ContextBody {...bodyProps} />
         </div>
       </div>
     </div>
   );
 }
+
+type BodyProps = {
+  thread: ContextThreadSummary | null;
+  player: ContextPlayer | null;
+  recentMatches: ContextRecentMatch[];
+  upcomingMatches: ContextUpcomingMatch[];
+  historicalAccountCount: number | null;
+  loading: boolean;
+};
 
 function ContextBody({
   thread,
@@ -168,7 +236,7 @@ function ContextBody({
   upcomingMatches,
   historicalAccountCount,
   loading,
-}: Props) {
+}: BodyProps) {
   if (!thread) {
     return (
       <div className="p-4 text-xs text-deep-green/45">No player selected.</div>

@@ -62,11 +62,7 @@ import MessageBubble, {
   type ConversationMessage,
 } from "./components/MessageBubble";
 import Composer from "./components/Composer";
-import ContextPanel, {
-  type ContextPlayer,
-  type ContextRecentMatch,
-  type ContextUpcomingMatch,
-} from "./components/ContextPanel";
+import ContextPanel from "./components/ContextPanel";
 
 // ---------------- shared types ----------------
 
@@ -121,17 +117,15 @@ type Message = {
   signed_media_url?: string | null;
 };
 
-type RecentMatch = ContextRecentMatch;
-type UpcomingMatch = ContextUpcomingMatch;
-
+// Chat-pane data only. Player + recent/upcoming matches +
+// historical-account count moved to /api/crm/threads/{id}/context
+// (Phase 3 split, 2026-05-17). ContextPanel fetches that endpoint
+// lazily when it becomes visible. Keeps initial thread switching
+// fast — chat pane no longer waits on heavy match queries.
 type ThreadDetail = {
   thread: ThreadListRow;
   messages: Message[];
-  player: ContextPlayer | null;
   assignee: Assignee | null;
-  recent_matches: RecentMatch[];
-  upcoming_matches: UpcomingMatch[];
-  historical_account_count: number | null;
   latest_inbound_at: string | null;
 };
 
@@ -258,9 +252,34 @@ export default function CrmClient() {
 
   const [realtimeOk, setRealtimeOk] = useState<boolean | null>(null);
 
-  // Mobile context-panel sheet open/close. Desktop ignores this —
-  // the column variant is always visible at lg: + above.
+  // Mobile context-panel sheet open/close. Desktop uses the
+  // separate `contextOpen` state below.
   const [contextSheetOpen, setContextSheetOpen] = useState(false);
+
+  // Desktop (lg+) right-column toggle. Persisted per-browser via
+  // localStorage so the operator's preference survives reloads.
+  // Default: closed — keeps the chat pane wider on first visit, and
+  // anyone who wants the column back is one click away (Info button
+  // in the conversation header).
+  const [contextOpen, setContextOpen] = useState<boolean>(() => {
+    if (typeof window === "undefined") return false;
+    try {
+      const raw = window.localStorage.getItem("crm:contextOpen:v1");
+      return raw === "true";
+    } catch {
+      return false;
+    }
+  });
+  useEffect(() => {
+    try {
+      window.localStorage.setItem(
+        "crm:contextOpen:v1",
+        contextOpen ? "true" : "false",
+      );
+    } catch {
+      // Silent — Safari private-mode storage quota, etc.
+    }
+  }, [contextOpen]);
 
   // Lock document scroll while /chats is mounted. iOS Safari standalone
   // PWA scrolls the document when the keyboard opens (to keep the focused
@@ -742,56 +761,55 @@ export default function CrmClient() {
               onSent={onSent}
               onBack={() => setSelected(null)}
               onOpenContext={() => setContextSheetOpen(true)}
+              onToggleContext={() => setContextOpen((o) => !o)}
+              contextOpen={contextOpen}
+              isMember={selectedThread?.player?.is_member === true}
               whatsappWindowExpired={whatsappExpired}
             />
           )}
         </section>
 
         {/* --- RIGHT PANE: context (desktop column) ---
-            Conditional on a selected thread. Before this change the
-            column was mounted unconditionally and merely hidden via
-            CSS — that left a stray 240px placeholder on desktop
-            when no thread was selected and the empty state was the
-            only thing visible in the center pane. Now the column
-            unmounts when selectedThread is null so the center pane
-            expands to fill the freed width. */}
-        {selectedThread && (
+            Gated on both a selected thread AND the user's persisted
+            contextOpen preference. When closed, the column unmounts
+            entirely so the center pane expands to fill the freed
+            240px. The Info button in the conversation header toggles
+            it back. ContextPanel itself fetches player + matches
+            lazily via /api/crm/threads/{id}/context, so mounting
+            the column doesn't fire a fetch until it's actually
+            visible. */}
+        {selectedThread && contextOpen && (
           <ContextPanel
             mode="column"
             open={false}
+            visible
             thread={{
+              id: selectedThread.id,
               phone_number: selectedThread.phone_number,
               match_ambiguous: selectedThread.match_ambiguous,
             }}
-            player={detail?.player ?? null}
-            recentMatches={detail?.recent_matches ?? []}
-            upcomingMatches={detail?.upcoming_matches ?? []}
-            historicalAccountCount={detail?.historical_account_count ?? null}
-            loading={detailLoading}
           />
         )}
       </div>
 
-      {/* Mobile context sheet — only mounted under lg:. Always present
-          so the slide-up transition has a target; visibility gated
-          by `open`. */}
+      {/* Mobile context sheet — unmounted when closed (sheet branch
+          of ContextPanel returns null on !open), which avoids the
+          md-viewport click-block bug where role=dialog markup hung
+          around behind a CSS-hidden parent. */}
       <ContextPanel
         mode="sheet"
         open={contextSheetOpen}
+        visible={contextSheetOpen}
         onClose={() => setContextSheetOpen(false)}
         thread={
           selectedThread
             ? {
+                id: selectedThread.id,
                 phone_number: selectedThread.phone_number,
                 match_ambiguous: selectedThread.match_ambiguous,
               }
             : null
         }
-        player={detail?.player ?? null}
-        recentMatches={detail?.recent_matches ?? []}
-        upcomingMatches={detail?.upcoming_matches ?? []}
-        historicalAccountCount={detail?.historical_account_count ?? null}
-        loading={detailLoading}
       />
     </div>
   );
@@ -981,6 +999,9 @@ function Conversation({
   onSent,
   onBack,
   onOpenContext,
+  onToggleContext,
+  contextOpen,
+  isMember,
   whatsappWindowExpired,
 }: {
   selectedId: string;
@@ -993,6 +1014,9 @@ function Conversation({
   onSent: (m: Message) => void;
   onBack: () => void;
   onOpenContext: () => void;
+  onToggleContext: () => void;
+  contextOpen: boolean;
+  isMember: boolean;
   whatsappWindowExpired: boolean;
 }) {
   const messages = detail?.messages ?? [];
@@ -1014,6 +1038,9 @@ function Conversation({
         onAssign={onAssign}
         onBack={onBack}
         onOpenContext={onOpenContext}
+        onToggleContext={onToggleContext}
+        contextOpen={contextOpen}
+        isMember={isMember}
       />
       <div
         ref={scrollRef}
@@ -1192,12 +1219,18 @@ function ConversationHeader({
   onAssign,
   onBack,
   onOpenContext,
+  onToggleContext,
+  contextOpen,
+  isMember,
 }: {
   detail: ThreadDetail | null;
   operators: Assignee[];
   onAssign: (userId: string | null) => void;
   onBack: () => void;
   onOpenContext: () => void;
+  onToggleContext: () => void;
+  contextOpen: boolean;
+  isMember: boolean;
 }) {
   // Wrap onBack so any underlying touchstart/click ordering bugs
   // can't fall through to a parent handler. Bumped to h-11 w-11
@@ -1227,7 +1260,6 @@ function ConversationHeader({
   const name = fullNameOf(detail.thread);
   const cityCode = cityCodeForThread(detail.thread);
   const channel = detail.thread.channel ?? "sms";
-  const matchCount = detail.player?.played_in_2026;
   return (
     <div className="flex h-14 shrink-0 items-center gap-2 border-b border-cream-line bg-white px-1 sm:px-3">
       <button
@@ -1243,7 +1275,7 @@ function ConversationHeader({
         seed={detail.thread.phone_number}
         channel={channel}
         size="sm"
-        isMember={detail.player?.is_member === true}
+        isMember={isMember}
       />
       <div className="min-w-0 flex-1">
         <div className="truncate text-sm font-extrabold tracking-tight text-deep-green">
@@ -1251,9 +1283,9 @@ function ConversationHeader({
         </div>
         {/* Mobile (<lg): show only the phone number under the name —
             avatar already carries the channel icon. The richer chip
-            row (city, "via WhatsApp", match count, historical) lives
-            behind `hidden lg:flex` and stays accessible on mobile
-            via the info-icon sheet. */}
+            row (city, "via WhatsApp", historical) lives behind
+            `hidden lg:flex` and stays accessible on mobile via the
+            info-icon sheet. */}
         <div className="mt-0.5 flex items-center gap-1.5 text-[10px] text-deep-green/55">
           <span className="truncate font-mono lg:hidden">
             {detail.thread.phone_number}
@@ -1265,12 +1297,6 @@ function ConversationHeader({
               <ChannelChip channel={channel} />
               via {channelDisplay(channel)}
             </span>
-            {typeof matchCount === "number" && (
-              <>
-                <span aria-hidden>·</span>
-                <span>{matchCount} matches</span>
-              </>
-            )}
             {detail.thread.match_ambiguous && (
               <>
                 <span aria-hidden>·</span>
@@ -1301,11 +1327,31 @@ function ConversationHeader({
           />
         )}
       />
+      {/* Info button — toggles the context panel. Two variants
+          stacked behind responsive utilities so the same icon does
+          the right thing on each surface:
+            mobile (<lg): opens the slide-up sheet
+            desktop (lg+): toggles the right-column panel, preserves
+                           the open/closed state in localStorage
+                           (crm:contextOpen:v1). */}
       <button
         type="button"
         onClick={onOpenContext}
         aria-label="Player context"
         className="inline-flex h-9 w-9 items-center justify-center rounded-full text-deep-green/70 hover:bg-cream-soft hover:text-deep-green lg:hidden"
+      >
+        <Info aria-hidden className="h-4 w-4" />
+      </button>
+      <button
+        type="button"
+        onClick={onToggleContext}
+        aria-label={contextOpen ? "Hide player context" : "Show player context"}
+        aria-pressed={contextOpen}
+        className={`hidden h-9 w-9 items-center justify-center rounded-full transition lg:inline-flex ${
+          contextOpen
+            ? "bg-cream-soft text-deep-green"
+            : "text-deep-green/70 hover:bg-cream-soft hover:text-deep-green"
+        }`}
       >
         <Info aria-hidden className="h-4 w-4" />
       </button>
