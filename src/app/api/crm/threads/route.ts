@@ -207,6 +207,13 @@ export async function GET(req: Request) {
     if (!viewerId) return false;
     // No message preview → empty inbox, no dot.
     if (!t.last_message_preview) return false;
+    // Outbound-most-recent messages never produce a dot. The act of
+    // sending implies the admin saw the prior inbound; without this
+    // short-circuit, a small clock-skew gap between mark-read (fired
+    // on thread select) and the outbound send produced false-
+    // positive dots on threads the admin had literally just replied
+    // to from their own client.
+    if (directionByThreadId.get(t.id) !== "inbound") return false;
     let effective: string | null;
     if (t.assigned_to_user_id == null) {
       effective = readsByThreadAll.get(t.id) ?? null;
