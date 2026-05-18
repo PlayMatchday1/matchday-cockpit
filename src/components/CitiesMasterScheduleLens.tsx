@@ -23,9 +23,12 @@
 //   8PM as added (not as a "SJD time changed").
 
 import { useCallback, useEffect, useMemo, useState } from "react";
-import { ChevronLeft, ChevronRight, X } from "lucide-react";
+import { ChevronLeft, ChevronRight, Plus, X } from "lucide-react";
 import { supabase } from "@/lib/supabase";
 import { getAbbr } from "@/lib/venueAbbreviations";
+import MasterScheduleEditModal, {
+  type EditableRow,
+} from "./MasterScheduleEditModal";
 
 type MatchOut = {
   id: string;
@@ -95,14 +98,55 @@ const EMPTY_DIFF: Diff = {
 
 const DOW_ORDER = ["Mon", "Tue", "Wed", "Thu", "Fri", "Sat", "Sun"] as const;
 
+type Discrepancies = {
+  week_start: string;
+  week_end: string;
+  total_schedule_master: number;
+  total_mdapi_matches: number;
+  missing_in_db: Array<{
+    id: string;
+    city: string;
+    venue: string;
+    detail: string;
+    match_date: string;
+    match_time: string;
+    max_spots: number;
+  }>;
+  extra_in_db: Array<{
+    mdapi_match_id: number;
+    city: string;
+    venue: string;
+    match_date: string;
+    match_time: string;
+    max_spots: number | null;
+  }>;
+  mismatched: Array<{
+    schedule_master_id: string;
+    mdapi_match_id: number;
+    city: string;
+    venue: string;
+    match_date: string;
+    match_time: string;
+    diffs: string[];
+  }>;
+};
+
+type EditorState =
+  | { kind: "closed" }
+  | { kind: "edit"; row: EditableRow }
+  | { kind: "create"; defaults: { city?: string; match_date?: string } };
+
 export default function CitiesMasterScheduleLens() {
   const [weekStart, setWeekStart] = useState<string>(() =>
     isoDate(mondayOfChicago(new Date())),
   );
   const [current, setCurrent] = useState<Payload | null>(null);
   const [previous, setPrevious] = useState<Payload | null>(null);
+  const [discrepancies, setDiscrepancies] = useState<Discrepancies | null>(null);
   const [loading, setLoading] = useState(true);
   const [error, setError] = useState<string | null>(null);
+  const [editor, setEditor] = useState<EditorState>({ kind: "closed" });
+  const [toastMsg, setToastMsg] = useState<string | null>(null);
 
   const load = useCallback(async (ws: string) => {
     setLoading(true);
@@ -115,10 +159,11 @@ export default function CitiesMasterScheduleLens() {
         setLoading(false);
         return;
       }
+      const headers = { Authorization: `Bearer ${token}` };
       const prevWs = isoDate(addDays(parseIso(ws), -7));
       const fetchWeek = async (w: string): Promise<Payload> => {
         const res = await fetch(`/api/schedule-master?week_start=${w}`, {
-          headers: { Authorization: `Bearer ${token}` },
+          headers,
         });
         if (!res.ok) {
           const j = await res.json().catch(() => ({}));
@@ -126,13 +171,33 @@ export default function CitiesMasterScheduleLens() {
         }
         return (await res.json()) as Payload;
       };
-      const [cur, prev] = await Promise.all([fetchWeek(ws), fetchWeek(prevWs)]);
+      const fetchDiscrepancies = async (
+        w: string,
+      ): Promise<Discrepancies | null> => {
+        try {
+          const res = await fetch(
+            `/api/schedule-master/discrepancies?week_start=${w}`,
+            { headers },
+          );
+          if (!res.ok) return null;
+          return (await res.json()) as Discrepancies;
+        } catch {
+          return null;
+        }
+      };
+      const [cur, prev, disc] = await Promise.all([
+        fetchWeek(ws),
+        fetchWeek(prevWs),
+        fetchDiscrepancies(ws),
+      ]);
       setCurrent(cur);
       setPrevious(prev);
+      setDiscrepancies(disc);
     } catch (err) {
       setError(err instanceof Error ? err.message : String(err));
       setCurrent(null);
       setPrevious(null);
+      setDiscrepancies(null);
     } finally {
       setLoading(false);
     }
@@ -141,6 +206,39 @@ export default function CitiesMasterScheduleLens() {
   useEffect(() => {
     void load(weekStart);
   }, [load, weekStart]);
+
+  // Toast auto-dismiss after 2.5s.
+  useEffect(() => {
+    if (!toastMsg) return;
+    const t = window.setTimeout(() => setToastMsg(null), 2500);
+    return () => window.clearTimeout(t);
+  }, [toastMsg]);
+
+  const openCreate = useCallback(() => {
+    setEditor({
+      kind: "create",
+      defaults: { match_date: weekStart },
+    });
+  }, [weekStart]);
+
+  const openEdit = useCallback((row: EditableRow) => {
+    setEditor({ kind: "edit", row });
+  }, []);
+
+  const onSaved = useCallback(
+    (kind: "create" | "update" | "delete") => {
+      setEditor({ kind: "closed" });
+      setToastMsg(
+        kind === "create"
+          ? "Session created"
+          : kind === "update"
+            ? "Session updated"
+            : "Session deleted",
+      );
+      void load(weekStart);
+    },
+    [load, weekStart],
+  );
 
   const todayIso = useMemo(() => isoDate(mondayOfChicago(new Date(), 0)), []);
   const diff = useMemo(() => buildDiff(current, previous), [current, previous]);
@@ -163,13 +261,22 @@ export default function CitiesMasterScheduleLens() {
             Recurring weekly match slots, by city.
           </p>
         </div>
-        <WeekNav
-          weekStart={weekStart}
-          weekEnd={current?.week_end ?? weekStart}
-          onPrev={() => shift(-7)}
-          onNext={() => shift(7)}
-          onToday={goToday}
-        />
+        <div className="inline-flex items-center gap-2">
+          <WeekNav
+            weekStart={weekStart}
+            weekEnd={current?.week_end ?? weekStart}
+            onPrev={() => shift(-7)}
+            onNext={() => shift(7)}
+            onToday={goToday}
+          />
+          <button
+            type="button"
+            onClick={openCreate}
+            className="inline-flex items-center gap-1 rounded-full bg-mint px-3 py-1 text-xs font-bold text-deep-green transition hover:bg-mint-hover"
+          >
+            <Plus aria-hidden className="h-3.5 w-3.5" /> Add session
+          </button>
+        </div>
       </div>
 
       {loading && !current ? (
@@ -189,6 +296,9 @@ export default function CitiesMasterScheduleLens() {
               changedCount={diff.changedCount}
             />
           )}
+          {discrepancies && (
+            <DiscrepancyBanner data={discrepancies} />
+          )}
           <div className="space-y-5">
             {current.cities.map((c) => (
               <CitySection
@@ -196,10 +306,33 @@ export default function CitiesMasterScheduleLens() {
                 city={c}
                 todayIso={todayIso}
                 diff={diff}
+                onEditMatch={openEdit}
               />
             ))}
           </div>
         </>
+      )}
+
+      {editor.kind !== "closed" && (
+        <MasterScheduleEditModal
+          mode={
+            editor.kind === "edit"
+              ? { kind: "edit", row: editor.row }
+              : { kind: "create", defaults: editor.defaults }
+          }
+          onClose={() => setEditor({ kind: "closed" })}
+          onSaved={onSaved}
+        />
+      )}
+
+      {toastMsg && (
+        <div
+          role="status"
+          aria-live="polite"
+          className="fixed bottom-6 left-1/2 z-50 -translate-x-1/2 rounded-full bg-deep-green px-4 py-2 text-xs font-bold text-cream shadow-xl"
+        >
+          {toastMsg}
+        </div>
       )}
     </section>
   );
@@ -288,10 +421,12 @@ function CitySection({
   city,
   todayIso,
   diff,
+  onEditMatch,
 }: {
   city: CityOut;
   todayIso: string;
   diff: Diff;
+  onEditMatch: (row: EditableRow) => void;
 }) {
   const pills = diff.perCity.get(city.name) ?? [];
   return (
@@ -315,10 +450,12 @@ function CitySection({
           return (
             <DayCell
               key={d.date}
+              city={city.name}
               day={d}
               todayIso={todayIso}
               addedIds={diff.addedIds}
               ghosts={diff.ghostsByCell.get(cellKey) ?? []}
+              onEditMatch={onEditMatch}
             />
           );
         })}
@@ -352,15 +489,19 @@ function ChangeRowPill({ pill }: { pill: ChangePill }) {
 }
 
 function DayCell({
+  city,
   day,
   todayIso,
   addedIds,
   ghosts,
+  onEditMatch,
 }: {
+  city: string;
   day: DayOut;
   todayIso: string;
   addedIds: Set<string>;
   ghosts: GhostMatch[];
+  onEditMatch: (row: EditableRow) => void;
 }) {
   const isToday = day.date === todayIso;
   const isPast = day.date < todayIso;
@@ -392,6 +533,17 @@ function DayCell({
                 detail={m.detail}
                 dim={isPast}
                 added={addedIds.has(m.id)}
+                onClick={() =>
+                  onEditMatch({
+                    id: m.id,
+                    city,
+                    venue: m.venue,
+                    detail: m.detail,
+                    match_date: day.date,
+                    match_time: m.time,
+                    max_spots: m.max_spots,
+                  })
+                }
               />
             ))}
             {ghosts.map((g) => (
@@ -409,17 +561,22 @@ function MatchPill({
   detail,
   dim,
   added,
+  onClick,
 }: {
   time: string;
   detail: string;
   dim: boolean;
   added: boolean;
+  onClick: () => void;
 }) {
   const short = compactTime(time);
   const abbr = getAbbr(detail);
   return (
-    <div
-      className={`flex items-center gap-1 truncate rounded px-1.5 py-0.5 text-[11px] leading-tight ${
+    <button
+      type="button"
+      onClick={onClick}
+      aria-label={`Edit ${time} ${detail}`}
+      className={`flex w-full items-center gap-1 truncate rounded px-1.5 py-0.5 text-left text-[11px] leading-tight transition hover:ring-2 hover:ring-mint focus:outline-none focus:ring-2 focus:ring-mint ${
         added
           ? "bg-mint-soft text-deep-green ring-1 ring-mint/60"
           : dim
@@ -438,6 +595,128 @@ function MatchPill({
         <span className="font-bold tabular-nums">{short}</span>{" "}
         <span>{abbr}</span>
       </span>
+    </button>
+  );
+}
+
+// DB sync status banner. Compares schedule_master to mdapi_matches
+// over a two-week window via /api/schedule-master/discrepancies.
+// Each count pill is click-to-expand; sections fold to nothing if
+// their count is zero. The banner itself hides when all three
+// counts are zero.
+function DiscrepancyBanner({ data }: { data: Discrepancies }) {
+  const [open, setOpen] = useState<
+    "missing" | "extra" | "mismatched" | null
+  >(null);
+  const missing = data.missing_in_db.length;
+  const extra = data.extra_in_db.length;
+  const mism = data.mismatched.length;
+  if (missing === 0 && extra === 0 && mism === 0) return null;
+
+  function toggle(k: "missing" | "extra" | "mismatched") {
+    setOpen((cur) => (cur === k ? null : k));
+  }
+  const dateLabel = `${fmtShort(data.week_start)} - ${fmtShort(data.week_end)}`;
+
+  return (
+    <div className="mb-5 rounded-2xl border-[1.5px] border-cream-line bg-cream-soft px-4 py-2.5 shadow-md shadow-deep-green/10">
+      <div className="flex flex-wrap items-center gap-2">
+        <span className="text-[11px] font-bold uppercase tracking-wider text-deep-green/70">
+          DB Sync · {dateLabel}
+        </span>
+        {missing > 0 && (
+          <button
+            type="button"
+            onClick={() => toggle("missing")}
+            aria-pressed={open === "missing"}
+            className={`rounded-full px-2 py-0.5 text-[11px] font-bold transition ${
+              open === "missing"
+                ? "bg-coral text-white"
+                : "bg-coral-soft text-coral-hover ring-1 ring-coral/40 hover:bg-coral-soft/70"
+            }`}
+          >
+            {missing} missing in DB
+          </button>
+        )}
+        {extra > 0 && (
+          <button
+            type="button"
+            onClick={() => toggle("extra")}
+            aria-pressed={open === "extra"}
+            className={`rounded-full px-2 py-0.5 text-[11px] font-bold transition ${
+              open === "extra"
+                ? "bg-yellow-pos text-deep-green"
+                : "bg-yellow-soft text-deep-green ring-1 ring-yellow-pos/60 hover:bg-yellow-soft/70"
+            }`}
+          >
+            {extra} extra in DB
+          </button>
+        )}
+        {mism > 0 && (
+          <button
+            type="button"
+            onClick={() => toggle("mismatched")}
+            aria-pressed={open === "mismatched"}
+            className={`rounded-full px-2 py-0.5 text-[11px] font-bold transition ${
+              open === "mismatched"
+                ? "bg-coral text-white"
+                : "bg-coral-soft/60 text-coral-hover ring-1 ring-coral/30 hover:bg-coral-soft/40"
+            }`}
+          >
+            {mism} mismatched
+          </button>
+        )}
+      </div>
+      {open === "missing" && (
+        <ul className="mt-3 space-y-0.5">
+          {data.missing_in_db.map((r) => (
+            <li
+              key={r.id}
+              className="text-[11px] tabular-nums text-deep-green/75"
+            >
+              <span className="font-bold">{fmtShort(r.match_date)}</span>{" "}
+              <span className="text-deep-green/55">·</span> {r.city}{" "}
+              <span className="text-deep-green/55">·</span> {r.detail}{" "}
+              <span className="text-deep-green/55">·</span> {r.match_time}{" "}
+              <span className="text-deep-green/55">·</span> {r.max_spots} spots
+            </li>
+          ))}
+        </ul>
+      )}
+      {open === "extra" && (
+        <ul className="mt-3 space-y-0.5">
+          {data.extra_in_db.map((r) => (
+            <li
+              key={r.mdapi_match_id}
+              className="text-[11px] tabular-nums text-deep-green/75"
+            >
+              <span className="font-bold">{fmtShort(r.match_date)}</span>{" "}
+              <span className="text-deep-green/55">·</span> {r.city}{" "}
+              <span className="text-deep-green/55">·</span> {r.venue}{" "}
+              <span className="text-deep-green/55">·</span> {r.match_time}{" "}
+              <span className="text-deep-green/55">·</span> match #
+              {r.mdapi_match_id}
+            </li>
+          ))}
+        </ul>
+      )}
+      {open === "mismatched" && (
+        <ul className="mt-3 space-y-0.5">
+          {data.mismatched.map((r) => (
+            <li
+              key={r.schedule_master_id}
+              className="text-[11px] tabular-nums text-deep-green/75"
+            >
+              <span className="font-bold">{fmtShort(r.match_date)}</span>{" "}
+              <span className="text-deep-green/55">·</span> {r.city}{" "}
+              <span className="text-deep-green/55">·</span> {r.venue}{" "}
+              <span className="text-deep-green/55">·</span> {r.match_time}{" "}
+              <span className="text-deep-green/55">·</span>{" "}
+              <span className="text-coral-hover">{r.diffs.join(" / ")}</span>
+            </li>
+          ))}
+        </ul>
+      )}
     </div>
   );
 }

@@ -1,0 +1,396 @@
+"use client";
+
+// Edit / create modal for schedule_master rows. Opens from
+// CitiesMasterScheduleLens — either from clicking a bubble (edit)
+// or the "+ Add session" button (create).
+//
+// Validation matches the API (src/lib/scheduleMaster.ts) so a
+// well-formed local form will always be accepted server-side.
+// Errors from the API surface inline above the action buttons.
+
+import { useEffect, useRef, useState } from "react";
+import { X } from "lucide-react";
+import { supabase } from "@/lib/supabase";
+import { CANONICAL_CITIES } from "@/lib/scheduleMaster";
+
+export type EditableRow = {
+  id: string;
+  city: string;
+  venue: string;
+  detail: string;
+  match_date: string;
+  match_time: string;
+  max_spots: number;
+};
+
+export type CreateDefaults = {
+  city?: string;
+  match_date?: string;
+};
+
+type Mode =
+  | { kind: "edit"; row: EditableRow }
+  | { kind: "create"; defaults?: CreateDefaults };
+
+type FormState = {
+  city: string;
+  venue: string;
+  detail: string;
+  match_date: string;
+  match_time: string;
+  max_spots: string; // stored as string so the input doesn't fight the user
+};
+
+function initialForm(mode: Mode): FormState {
+  if (mode.kind === "edit") {
+    return {
+      city: mode.row.city,
+      venue: mode.row.venue,
+      detail: mode.row.detail,
+      match_date: mode.row.match_date,
+      match_time: mode.row.match_time,
+      max_spots: String(mode.row.max_spots),
+    };
+  }
+  return {
+    city: mode.defaults?.city ?? "",
+    venue: "",
+    detail: "",
+    match_date: mode.defaults?.match_date ?? "",
+    match_time: "",
+    max_spots: "0",
+  };
+}
+
+export default function MasterScheduleEditModal({
+  mode,
+  onClose,
+  onSaved,
+}: {
+  mode: Mode;
+  onClose: () => void;
+  // Called after a successful create / update / delete. Parent uses
+  // this to refetch and toast. Receives a coarse kind so the parent
+  // can show the right confirmation copy.
+  onSaved: (kind: "create" | "update" | "delete") => void;
+}) {
+  const [form, setForm] = useState<FormState>(() => initialForm(mode));
+  const [busy, setBusy] = useState<null | "save" | "delete">(null);
+  const [error, setError] = useState<string | null>(null);
+  const [confirmDelete, setConfirmDelete] = useState(false);
+  const firstFieldRef = useRef<HTMLSelectElement>(null);
+
+  // ESC closes; focus the first form field on open so keyboard
+  // users land on a useful target.
+  useEffect(() => {
+    function onKey(e: KeyboardEvent) {
+      if (e.key === "Escape" && !busy) onClose();
+    }
+    window.addEventListener("keydown", onKey);
+    firstFieldRef.current?.focus();
+    return () => window.removeEventListener("keydown", onKey);
+  }, [busy, onClose]);
+
+  async function authHeader(): Promise<HeadersInit | null> {
+    const { data } = await supabase.auth.getSession();
+    const token = data.session?.access_token;
+    if (!token) return null;
+    return {
+      Authorization: `Bearer ${token}`,
+      "Content-Type": "application/json",
+    };
+  }
+
+  function payloadFromForm(): {
+    ok: true;
+    value: {
+      city: string;
+      venue: string;
+      detail: string;
+      match_date: string;
+      match_time: string;
+      max_spots: number;
+    };
+  } | { ok: false; error: string } {
+    const trimmedVenue = form.venue.trim();
+    const trimmedDetail = form.detail.trim();
+    const trimmedTime = form.match_time.trim();
+    if (!form.city) return { ok: false, error: "City is required" };
+    if (!(CANONICAL_CITIES as readonly string[]).includes(form.city)) {
+      return { ok: false, error: "Pick one of the 8 cockpit cities" };
+    }
+    if (!trimmedVenue) return { ok: false, error: "Venue is required" };
+    if (!trimmedDetail) return { ok: false, error: "Detail is required" };
+    if (!/^\d{4}-\d{2}-\d{2}$/.test(form.match_date)) {
+      return { ok: false, error: "Match date must be a valid calendar date" };
+    }
+    if (!trimmedTime) return { ok: false, error: "Match time is required" };
+    const n = Number(form.max_spots);
+    if (!Number.isInteger(n) || n < 0) {
+      return { ok: false, error: "Max spots must be a non-negative integer" };
+    }
+    return {
+      ok: true,
+      value: {
+        city: form.city,
+        venue: trimmedVenue,
+        detail: trimmedDetail,
+        match_date: form.match_date,
+        match_time: trimmedTime,
+        max_spots: n,
+      },
+    };
+  }
+
+  async function onSave() {
+    const v = payloadFromForm();
+    if (!v.ok) {
+      setError(v.error);
+      return;
+    }
+    setError(null);
+    setBusy("save");
+    try {
+      const headers = await authHeader();
+      if (!headers) {
+        setError("No active session. Sign in again.");
+        setBusy(null);
+        return;
+      }
+      let res: Response;
+      if (mode.kind === "edit") {
+        res = await fetch(`/api/schedule-master/${mode.row.id}`, {
+          method: "PATCH",
+          headers,
+          body: JSON.stringify(v.value),
+        });
+      } else {
+        res = await fetch("/api/schedule-master", {
+          method: "POST",
+          headers,
+          body: JSON.stringify(v.value),
+        });
+      }
+      if (!res.ok) {
+        const j = await res.json().catch(() => ({}));
+        throw new Error(j.error || `HTTP ${res.status}`);
+      }
+      onSaved(mode.kind === "edit" ? "update" : "create");
+    } catch (err) {
+      setError(err instanceof Error ? err.message : String(err));
+    } finally {
+      setBusy(null);
+    }
+  }
+
+  async function onDelete() {
+    if (mode.kind !== "edit") return;
+    setError(null);
+    setBusy("delete");
+    try {
+      const headers = await authHeader();
+      if (!headers) {
+        setError("No active session. Sign in again.");
+        setBusy(null);
+        return;
+      }
+      const res = await fetch(`/api/schedule-master/${mode.row.id}`, {
+        method: "DELETE",
+        headers,
+      });
+      if (!res.ok) {
+        const j = await res.json().catch(() => ({}));
+        throw new Error(j.error || `HTTP ${res.status}`);
+      }
+      onSaved("delete");
+    } catch (err) {
+      setError(err instanceof Error ? err.message : String(err));
+    } finally {
+      setBusy(null);
+    }
+  }
+
+  const isEdit = mode.kind === "edit";
+  const titleText = isEdit ? "Edit session" : "Add session";
+
+  return (
+    <div
+      className="fixed inset-0 z-50 flex items-center justify-center"
+      role="presentation"
+    >
+      <div
+        className="absolute inset-0 bg-deep-green/40"
+        onClick={busy ? undefined : onClose}
+      />
+      <div
+        role="dialog"
+        aria-modal="true"
+        aria-label={titleText}
+        className="relative z-10 w-[min(540px,calc(100vw-2rem))] max-h-[calc(100vh-2rem)] overflow-y-auto rounded-2xl bg-cream-soft p-5 shadow-2xl"
+      >
+        <div className="mb-4 flex items-center justify-between">
+          <h2 className="text-lg font-extrabold tracking-tight text-deep-green">
+            {titleText}
+          </h2>
+          <button
+            type="button"
+            onClick={onClose}
+            disabled={busy != null}
+            aria-label="Close"
+            className="inline-flex h-8 w-8 items-center justify-center rounded-full text-deep-green/65 transition hover:bg-cream-line hover:text-deep-green disabled:opacity-40"
+          >
+            <X aria-hidden className="h-4 w-4" />
+          </button>
+        </div>
+
+        <div className="grid grid-cols-1 gap-3 sm:grid-cols-2">
+          <Field label="City">
+            <select
+              ref={firstFieldRef}
+              value={form.city}
+              onChange={(e) => setForm({ ...form, city: e.target.value })}
+              className="block w-full rounded-md border border-cream-line bg-white px-2 py-1.5 text-sm text-deep-green focus:border-mint focus:outline-none"
+            >
+              <option value="">Select a city</option>
+              {CANONICAL_CITIES.map((c) => (
+                <option key={c} value={c}>
+                  {c}
+                </option>
+              ))}
+            </select>
+          </Field>
+          <Field label="Match date">
+            <input
+              type="date"
+              value={form.match_date}
+              onChange={(e) => setForm({ ...form, match_date: e.target.value })}
+              className="block w-full rounded-md border border-cream-line bg-white px-2 py-1.5 text-sm text-deep-green focus:border-mint focus:outline-none"
+            />
+          </Field>
+          <Field label="Venue">
+            <input
+              type="text"
+              value={form.venue}
+              onChange={(e) => setForm({ ...form, venue: e.target.value })}
+              placeholder="NEMP"
+              className="block w-full rounded-md border border-cream-line bg-white px-2 py-1.5 text-sm text-deep-green focus:border-mint focus:outline-none"
+            />
+          </Field>
+          <Field label="Detail">
+            <input
+              type="text"
+              value={form.detail}
+              onChange={(e) => setForm({ ...form, detail: e.target.value })}
+              placeholder="NEMP Field 12"
+              className="block w-full rounded-md border border-cream-line bg-white px-2 py-1.5 text-sm text-deep-green focus:border-mint focus:outline-none"
+            />
+          </Field>
+          <Field label="Match time">
+            <input
+              type="text"
+              value={form.match_time}
+              onChange={(e) => setForm({ ...form, match_time: e.target.value })}
+              placeholder="7:00 PM - 8:00 PM"
+              className="block w-full rounded-md border border-cream-line bg-white px-2 py-1.5 text-sm text-deep-green focus:border-mint focus:outline-none"
+            />
+          </Field>
+          <Field label="Max spots">
+            <input
+              type="number"
+              min={0}
+              step={1}
+              value={form.max_spots}
+              onChange={(e) => setForm({ ...form, max_spots: e.target.value })}
+              className="block w-full rounded-md border border-cream-line bg-white px-2 py-1.5 text-sm text-deep-green focus:border-mint focus:outline-none"
+            />
+          </Field>
+        </div>
+
+        {error && (
+          <div className="mt-4 rounded-md border border-coral/40 bg-coral-soft p-2 text-xs text-coral-hover">
+            {error}
+          </div>
+        )}
+
+        <div className="mt-4 flex flex-wrap items-center justify-between gap-2">
+          <div>
+            {isEdit &&
+              (confirmDelete ? (
+                <div className="flex items-center gap-2">
+                  <span className="text-[11px] text-deep-green/70">
+                    Confirm delete?
+                  </span>
+                  <button
+                    type="button"
+                    onClick={onDelete}
+                    disabled={busy != null}
+                    className="rounded-full bg-coral px-3 py-1 text-xs font-bold text-white transition hover:bg-coral-hover disabled:opacity-60"
+                  >
+                    {busy === "delete" ? "Deleting…" : "Yes, delete"}
+                  </button>
+                  <button
+                    type="button"
+                    onClick={() => setConfirmDelete(false)}
+                    disabled={busy != null}
+                    className="text-[11px] font-medium text-deep-green/60 underline-offset-2 hover:underline disabled:opacity-40"
+                  >
+                    Cancel
+                  </button>
+                </div>
+              ) : (
+                <button
+                  type="button"
+                  onClick={() => setConfirmDelete(true)}
+                  disabled={busy != null}
+                  className="rounded-full border border-coral/40 bg-white px-3 py-1 text-xs font-bold text-coral-hover transition hover:bg-coral-soft disabled:opacity-50"
+                >
+                  Delete
+                </button>
+              ))}
+          </div>
+          <div className="flex items-center gap-2">
+            <button
+              type="button"
+              onClick={onClose}
+              disabled={busy != null}
+              className="rounded-full border border-cream-line bg-white px-3 py-1 text-xs font-bold text-deep-green/70 transition hover:bg-cream-line/40 disabled:opacity-50"
+            >
+              Cancel
+            </button>
+            <button
+              type="button"
+              onClick={onSave}
+              disabled={busy != null}
+              className="rounded-full bg-mint px-4 py-1 text-xs font-bold text-deep-green transition hover:bg-mint-hover disabled:opacity-60"
+            >
+              {busy === "save"
+                ? isEdit
+                  ? "Saving…"
+                  : "Creating…"
+                : isEdit
+                  ? "Save"
+                  : "Create"}
+            </button>
+          </div>
+        </div>
+      </div>
+    </div>
+  );
+}
+
+function Field({
+  label,
+  children,
+}: {
+  label: string;
+  children: React.ReactNode;
+}) {
+  return (
+    <label className="block">
+      <span className="mb-1 block text-[10px] font-bold uppercase tracking-wider text-deep-green/60">
+        {label}
+      </span>
+      {children}
+    </label>
+  );
+}
