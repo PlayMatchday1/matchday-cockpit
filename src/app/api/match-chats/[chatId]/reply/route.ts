@@ -37,6 +37,18 @@ export const maxDuration = 15;
 
 const MAX_BODY_LEN = 4000; // long enough for any reasonable reply
 
+// Public URL the MatchDay consumer React Native app fetches as the
+// avatar for Cockpit-authored messages. Sourced from public/web-
+// app-manifest-512x512.png in this repo (PWA icon, square, 512x512,
+// PNG). Previous shape parity attempts (PR #37, then c8e8ebf) tried
+// avatar: null and avatar: "" — both falsy, both produced clipping
+// in the consumer app's bubble renderer because the player-shape
+// avatar field is always a non-empty URL string. Pointing at our
+// own Vercel-hosted asset keeps the consumer app on the truthy-
+// avatar render path with no extra hosting infrastructure.
+const MATCHDAY_AVATAR_URL =
+  "https://matchday-clubhouse.vercel.app/web-app-manifest-512x512.png";
+
 type ReplyBody = { body?: unknown };
 
 type RouteCtx = { params: Promise<{ chatId: string }> };
@@ -102,9 +114,20 @@ export async function POST(req: Request, ctx: RouteCtx) {
         sentBy: MATCHDAY_SENDER_NAME,
         sentTo: "Group",
         user: {
+          // Full parity with player-sent shape. Real player rows
+          // always carry _id (number), name, avatar (URL), email,
+          // and phoneNumber. Setting empty strings for email and
+          // phoneNumber matches key presence even though we have
+          // no system-identity values to populate them with — the
+          // consumer app's bubble renderer appears to branch on
+          // key presence somewhere, and previous fixes that only
+          // adjusted _id type and avatar value did not resolve
+          // the clipping symptom.
           _id: MATCHDAY_SENDER_USER_ID,
           name: MATCHDAY_SENDER_NAME,
-          avatar: "",
+          avatar: MATCHDAY_AVATAR_URL,
+          email: "",
+          phoneNumber: "",
         },
         createdAt: admin.firestore.FieldValue.serverTimestamp(),
       });
