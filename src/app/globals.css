@@ -163,3 +163,19 @@ h3 {
 .flash-mint {
   animation: flash-mint 800ms ease-out;
 }
+
+/* Bottom-sheet open animation. Used by the /chats player context
+   drawer (ContextPanel sheet mode). Sheet unmounts on close, so
+   only the open transition needs an animation. */
+@keyframes sheet-slide-up {
+  from {
+    transform: translateY(100%);
+  }
+  to {
+    transform: translateY(0);
+  }
+}
+
+.animate-sheet-slide-up {
+  animation: sheet-slide-up 200ms ease-out;
+}
