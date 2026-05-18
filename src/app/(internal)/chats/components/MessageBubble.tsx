@@ -22,10 +22,12 @@
 
 import { useState } from "react";
 import { Download, FileText } from "lucide-react";
+import Linkify from "linkify-react";
 import DeliveryStatusLabel, {
   type DeliveryStatus,
 } from "@/components/DeliveryStatusLabel";
 import type { CrmChannel } from "@/components/ChannelChip";
+import { LINKIFY_OPTIONS } from "@/lib/linkify";
 
 // Shape matches the row returned by /api/crm/threads/[id] and
 // /api/crm/send. All DB columns are present so this type is
@@ -190,7 +192,7 @@ export default function MessageBubble({
         )}
         {showBody && (
           <div className="px-3 py-2 text-sm leading-relaxed whitespace-pre-wrap">
-            {msg.body}
+            <Linkify options={LINKIFY_OPTIONS}>{msg.body}</Linkify>
           </div>
         )}
       </div>
