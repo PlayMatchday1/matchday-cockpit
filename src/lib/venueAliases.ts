@@ -53,6 +53,7 @@ export const VENUE_CANONICAL_MAP: Record<string, string[]> = {
   "Round Rock": [
     "Round Rock",
     "Round Rock MP",
+    "Round Rock Tournaments",
     "Round Rock MP - Field 1",
     "Round Rock MP - Field 1 (Syn)",
     "Round Rock MP - Field 6",
