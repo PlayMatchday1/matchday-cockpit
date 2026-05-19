@@ -23,13 +23,14 @@
 // Matching key: (city_canonical, venue_canonical, match_date,
 // hh:mm).
 //
-// City canonical is the full display name ("Austin", "San
-// Antonio", etc). schedule_master.city stores the display form
-// directly; mdapi_matches.city_identifier stores 3-letter codes
-// (ATX, SAT, ...) which CITY_IDENTIFIER_MAP normalizes to the
-// same display form. Codes differ between the two systems (e.g.
-// SATX/SAT, OKC/OKC, ELP/ELP), so a shared display-name
-// canonicalization is the safer key.
+// City canonical is the short code produced by normalizeCityName
+// in src/lib/cityNormalization.ts. Both sides are run through the
+// same helper, which accepts either the human-readable name
+// ("Austin", "Dallas / Fort Worth") or the canonical code ("ATX",
+// "DFW") and returns the canonical code. On the mdapi side the
+// city is read from raw.field.city.name first (some rows have
+// their city info only in the raw JSONB and not in
+// city_identifier), then falls back to city_identifier.
 //
 // Venue canonical comes from src/lib/venueAliases.ts. Each
 // physical field has a canonical key plus a list of known
@@ -44,6 +45,7 @@
 // Auth: admin via authenticateCrm.
 
 import { authenticateCrm } from "@/lib/crmAuth";
+import { normalizeCityName } from "@/lib/cityNormalization";
 import { canonicalizeVenue } from "@/lib/venueAliases";
 
 export const runtime = "nodejs";
@@ -52,25 +54,14 @@ export const maxDuration = 15;
 const WINDOW_DAYS = 14; // current week + next week
 const ISO_DATE = /^\d{4}-\d{2}-\d{2}$/;
 
-// mdapi_matches.city_identifier code → schedule_master.city display
-// name. Codes are not all 3 letters: Dallas is DFW (not DAL) and
-// San Antonio is SATX (not SAT) per the real mdapi values, which
-// matches what the rest of the cockpit already uses via
-// src/lib/cityNormalization.
-const CITY_IDENTIFIER_MAP: Record<string, string> = {
-  ATX: "Austin",
-  ATL: "Atlanta",
-  HOU: "Houston",
-  DFW: "Dallas",
-  SATX: "San Antonio",
-  STL: "St. Louis",
-  OKC: "OKC",
-  ELP: "El Paso",
-};
-
-function mapCityIdentifier(code: string | null | undefined): string | null {
-  if (!code) return null;
-  return CITY_IDENTIFIER_MAP[code.toUpperCase()] ?? null;
+// Read the mdapi city from raw.field.city.name first, then fall
+// back to city_identifier. Both forms pass through
+// normalizeCityName which accepts either and returns the canonical
+// short code (or null for unknown cities).
+function matchCity(m: MatchRow): string | null {
+  const fromRaw = m.raw?.field?.city?.name;
+  const fromCode = m.city_identifier;
+  return normalizeCityName(fromRaw) ?? normalizeCityName(fromCode);
 }
 
 type ScheduleRow = {
@@ -90,6 +81,7 @@ type MatchRow = {
   start_date: string | null;
   is_cancelled: boolean | null;
   max_player_count: number | null;
+  raw: { field?: { city?: { name?: string | null } | null } | null } | null;
 };
 
 type Out = {
@@ -172,7 +164,7 @@ export async function GET(req: Request) {
   const mRes = await supabase
     .from("mdapi_matches")
     .select(
-      "api_id, city_identifier, field_title, start_date, is_cancelled, max_player_count",
+      "api_id, city_identifier, field_title, start_date, is_cancelled, max_player_count, raw",
     )
     .gte("start_date", startTs)
     .lte("start_date", endTs);
@@ -198,8 +190,10 @@ export async function GET(req: Request) {
   const sIndex: Array<Indexed & { row: ScheduleRow }> = [];
   for (const r of scheduleRows) {
     if (!r.city) continue;
+    const cityName = normalizeCityName(r.city);
+    if (!cityName) continue;
     sIndex.push({
-      cityName: r.city,
+      cityName,
       venueKey: venueKeyFor(r.venue),
       date: r.match_date,
       hhmm: parseStartHHMM(r.match_time),
@@ -207,7 +201,7 @@ export async function GET(req: Request) {
     });
   }
   function indexMatch(m: MatchRow): (Indexed & { row: MatchRow }) | null {
-    const cityName = mapCityIdentifier(m.city_identifier);
+    const cityName = matchCity(m);
     if (!cityName) return null;
     const venueKey = venueKeyFor(m.field_title);
     if (!venueKey) return null;
