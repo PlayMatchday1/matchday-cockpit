@@ -17,6 +17,11 @@ export type AddVenueDraft = {
   launch_date: string | null;
   notes: string | null;
   aliases: string[];
+  // Optional. When set, the caller writes a corresponding
+  // fin_venue_fields row after the fin_venues insert succeeds,
+  // linking this venue to its canonical mdapi field. Leave null
+  // for venues with no mdapi presence yet (e.g. retired, future).
+  mdapi_field_id: number | null;
 };
 
 const BILLING_TYPE_OPTIONS: FinVenue["billing_type"][] = [
@@ -42,6 +47,7 @@ function emptyDraft(): AddVenueDraft {
     launch_date: null,
     notes: null,
     aliases: [],
+    mdapi_field_id: null,
   };
 }
 
@@ -300,6 +306,31 @@ export default function AddVenueDialog({
               rows={2}
               className="w-full resize-y rounded-md border border-cream-line bg-white px-3 py-2 text-sm text-deep-green focus:border-deep-green focus:outline-none"
             />
+          </Field>
+        </div>
+
+        <div className="mt-4">
+          <Field label="mdapi field ID (optional)">
+            <input
+              type="number"
+              step="1"
+              min="1"
+              value={draft.mdapi_field_id ?? ""}
+              onChange={(e) =>
+                setDraft({
+                  ...draft,
+                  mdapi_field_id: parseNum(e.target.value),
+                })
+              }
+              placeholder="e.g., 430"
+              className="w-full rounded-md border border-cream-line bg-white px-3 py-2 text-right font-mono text-sm tabular-nums text-deep-green focus:border-deep-green focus:outline-none"
+            />
+            <div className="mt-1 text-[11px] text-deep-green/55">
+              MatchDay&apos;s canonical numeric field id. When set, a
+              fin_venue_fields row is created linking this venue to that
+              field. Leave blank if the venue has no mdapi presence yet
+              (retired, future, or admin-only).
+            </div>
           </Field>
         </div>
 

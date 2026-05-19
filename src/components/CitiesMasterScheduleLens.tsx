@@ -38,6 +38,7 @@ type MatchOut = {
   detail: string;
   time: string;
   max_spots: number;
+  mdapi_field_id: number | null;
 };
 
 type DayOut = {
@@ -573,6 +574,7 @@ function DayCell({
                       match_date: day.date,
                       match_time: m.time,
                       max_spots: m.max_spots,
+                      mdapi_field_id: m.mdapi_field_id,
                     })
                   }
                 />

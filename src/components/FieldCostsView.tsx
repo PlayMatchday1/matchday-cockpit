@@ -412,7 +412,28 @@ export default function FieldCostsView({
     }
     const insertedVenue = inserted as { id: number } & Record<string, unknown>;
 
-    // 2. Insert aliases (if any). Schema: fin_venue_aliases (id, alias,
+    // 2. If the operator supplied a canonical mdapi field_id, link
+    //    it via fin_venue_fields. Best-effort — a duplicate field_id
+    //    (UNIQUE violation) or any other failure surfaces as a
+    //    partial-success banner so the venue row still exists and
+    //    can be linked later from Supabase Studio.
+    if (draft.mdapi_field_id != null) {
+      const { error: linkErr } = await supabase
+        .from("fin_venue_fields")
+        .insert({
+          fin_venue_id: insertedVenue.id,
+          mdapi_field_id: draft.mdapi_field_id,
+          field_title_at_link: draft.venue_name,
+        });
+      if (linkErr) {
+        setAddVenueError(
+          `Venue added, but mdapi field link failed: ${linkErr.message}. ` +
+            `Add the fin_venue_fields row manually from Supabase Studio.`,
+        );
+      }
+    }
+
+    // 3. Insert aliases (if any). Schema: fin_venue_aliases (id, alias,
     //    canonical_venue, created_at). One row per comma-separated
     //    entry. Best-effort: a failure here doesn't roll back the
     //    venue insert — the venue still exists and the operator can
@@ -435,7 +456,7 @@ export default function FieldCostsView({
       }
     }
 
-    // 3. Audit log.
+    // 4. Audit log.
     await logChange({
       tableName: "fin_venues",
       rowId: insertedVenue.id,

@@ -21,6 +21,7 @@ export type EditableRow = {
   match_date: string;
   match_time: string;
   max_spots: number;
+  mdapi_field_id: number | null;
 };
 
 export type CreateDefaults = {
@@ -39,6 +40,19 @@ type FormState = {
   match_date: string;
   match_time: string;
   max_spots: string; // stored as string so the input doesn't fight the user
+  mdapi_field_id: number | null;
+};
+
+// One option in the venue combobox — a (fin_venue, mdapi_field_id)
+// pair sourced from fin_venues × fin_venue_fields. A fin_venues row
+// with multiple fin_venue_fields surfaces as one option per field
+// so the operator can pick "Round Rock — Round Rock Tournaments"
+// vs "Round Rock — Round Rock Multipurpose Complex".
+type VenueOption = {
+  venue_name: string;
+  city: string;
+  mdapi_field_id: number;
+  field_title: string | null;
 };
 
 function initialForm(mode: Mode): FormState {
@@ -50,6 +64,7 @@ function initialForm(mode: Mode): FormState {
       match_date: mode.row.match_date,
       match_time: mode.row.match_time,
       max_spots: String(mode.row.max_spots),
+      mdapi_field_id: mode.row.mdapi_field_id,
     };
   }
   return {
@@ -59,6 +74,7 @@ function initialForm(mode: Mode): FormState {
     match_date: mode.defaults?.match_date ?? "",
     match_time: "",
     max_spots: "0",
+    mdapi_field_id: null,
   };
 }
 
@@ -78,6 +94,14 @@ export default function MasterScheduleEditModal({
   const [busy, setBusy] = useState<null | "save" | "delete">(null);
   const [error, setError] = useState<string | null>(null);
   const [confirmDelete, setConfirmDelete] = useState(false);
+  const [venueOptions, setVenueOptions] = useState<VenueOption[]>([]);
+  const [venueOptionsLoaded, setVenueOptionsLoaded] = useState(false);
+  // Free-text fallback. Set when the operator picks "Other" or
+  // when an existing row's (venue, mdapi_field_id) doesn't match
+  // any loaded option (legacy rows pre-PR-D may have a venue
+  // string with no field_id link). Both write venue as-is and
+  // leave mdapi_field_id NULL.
+  const [freeTextVenue, setFreeTextVenue] = useState(false);
   const firstFieldRef = useRef<HTMLSelectElement>(null);
 
   // ESC closes; focus the first form field on open so keyboard
@@ -90,6 +114,88 @@ export default function MasterScheduleEditModal({
     firstFieldRef.current?.focus();
     return () => window.removeEventListener("keydown", onKey);
   }, [busy, onClose]);
+
+  // Load fin_venues × fin_venue_fields once. Two small queries
+  // (~25 + ~35 rows). Filtering and matching happen in JS below.
+  useEffect(() => {
+    let cancelled = false;
+    async function load() {
+      const [vRes, fRes] = await Promise.all([
+        supabase.from("fin_venues").select("id, venue_name, city"),
+        supabase
+          .from("fin_venue_fields")
+          .select("fin_venue_id, mdapi_field_id, field_title_at_link"),
+      ]);
+      if (cancelled) return;
+      if (vRes.error || fRes.error) {
+        setVenueOptionsLoaded(true);
+        return;
+      }
+      const venues = (vRes.data ?? []) as Array<{
+        id: number;
+        venue_name: string;
+        city: string;
+      }>;
+      const links = (fRes.data ?? []) as Array<{
+        fin_venue_id: number;
+        mdapi_field_id: number;
+        field_title_at_link: string | null;
+      }>;
+      const venueById = new Map(venues.map((v) => [v.id, v]));
+      const options: VenueOption[] = [];
+      for (const l of links) {
+        const v = venueById.get(l.fin_venue_id);
+        if (!v) continue;
+        options.push({
+          venue_name: v.venue_name,
+          city: v.city,
+          mdapi_field_id: l.mdapi_field_id,
+          field_title: l.field_title_at_link,
+        });
+      }
+      // Stable sort: by venue_name then field_title for predictable dropdown order.
+      options.sort(
+        (a, b) =>
+          a.venue_name.localeCompare(b.venue_name) ||
+          (a.field_title ?? "").localeCompare(b.field_title ?? ""),
+      );
+      setVenueOptions(options);
+      setVenueOptionsLoaded(true);
+    }
+    void load();
+    return () => {
+      cancelled = true;
+    };
+  }, []);
+
+  // Options filtered to the selected city. Empty city → empty list.
+  const cityOptions = form.city
+    ? venueOptions.filter((o) => o.city === form.city)
+    : [];
+
+  // Selected option key — uniquely identifies a (venue_name, field_id)
+  // pick. Used by the <select> to track its current value.
+  const selectedKey =
+    freeTextVenue || form.mdapi_field_id == null
+      ? ""
+      : `${form.venue}|${form.mdapi_field_id}`;
+
+  // On mount of an edit-mode row whose (venue, field_id) doesn't
+  // match any loaded option, fall back to free-text so the user
+  // sees the value they have and can re-pick from the dropdown.
+  useEffect(() => {
+    if (!venueOptionsLoaded || mode.kind !== "edit") return;
+    if (form.mdapi_field_id == null) {
+      setFreeTextVenue(true);
+      return;
+    }
+    const match = cityOptions.some(
+      (o) =>
+        o.venue_name === form.venue && o.mdapi_field_id === form.mdapi_field_id,
+    );
+    if (!match) setFreeTextVenue(true);
+    // eslint-disable-next-line react-hooks/exhaustive-deps
+  }, [venueOptionsLoaded]);
 
   async function authHeader(): Promise<HeadersInit | null> {
     const { data } = await supabase.auth.getSession();
@@ -110,6 +216,7 @@ export default function MasterScheduleEditModal({
       match_date: string;
       match_time: string;
       max_spots: number;
+      mdapi_field_id: number | null;
     };
   } | { ok: false; error: string } {
     const trimmedVenue = form.venue.trim();
@@ -138,6 +245,7 @@ export default function MasterScheduleEditModal({
         match_date: form.match_date,
         match_time: trimmedTime,
         max_spots: n,
+        mdapi_field_id: freeTextVenue ? null : form.mdapi_field_id,
       },
     };
   }
@@ -268,13 +376,88 @@ export default function MasterScheduleEditModal({
             />
           </Field>
           <Field label="Venue">
-            <input
-              type="text"
-              value={form.venue}
-              onChange={(e) => setForm({ ...form, venue: e.target.value })}
-              placeholder="NEMP"
-              className="block w-full rounded-md border border-cream-line bg-white px-2 py-1.5 text-sm text-deep-green focus:border-mint focus:outline-none"
-            />
+            {freeTextVenue ? (
+              <>
+                <input
+                  type="text"
+                  value={form.venue}
+                  onChange={(e) =>
+                    setForm({ ...form, venue: e.target.value, mdapi_field_id: null })
+                  }
+                  placeholder="NEMP"
+                  className="block w-full rounded-md border border-cream-line bg-white px-2 py-1.5 text-sm text-deep-green focus:border-mint focus:outline-none"
+                />
+                <div className="mt-1 flex items-center justify-between gap-2 text-[10px] text-deep-green/55">
+                  <span>
+                    Not linked to mdapi — saves venue text only, no field_id.
+                  </span>
+                  <button
+                    type="button"
+                    onClick={() => {
+                      setFreeTextVenue(false);
+                      setForm({ ...form, venue: "", mdapi_field_id: null });
+                    }}
+                    className="font-bold text-deep-green/70 underline-offset-2 hover:underline"
+                  >
+                    Pick from list
+                  </button>
+                </div>
+              </>
+            ) : (
+              <select
+                value={selectedKey}
+                onChange={(e) => {
+                  const v = e.target.value;
+                  if (v === "__OTHER__") {
+                    setFreeTextVenue(true);
+                    setForm({ ...form, venue: "", mdapi_field_id: null });
+                    return;
+                  }
+                  if (!v) {
+                    setForm({ ...form, venue: "", mdapi_field_id: null });
+                    return;
+                  }
+                  const opt = cityOptions.find(
+                    (o) => `${o.venue_name}|${o.mdapi_field_id}` === v,
+                  );
+                  if (!opt) return;
+                  setForm({
+                    ...form,
+                    venue: opt.venue_name,
+                    mdapi_field_id: opt.mdapi_field_id,
+                  });
+                }}
+                disabled={!form.city || !venueOptionsLoaded}
+                className="block w-full rounded-md border border-cream-line bg-white px-2 py-1.5 text-sm text-deep-green focus:border-mint focus:outline-none"
+              >
+                <option value="">
+                  {form.city
+                    ? venueOptionsLoaded
+                      ? "Select a venue"
+                      : "Loading…"
+                    : "Select a city first"}
+                </option>
+                {cityOptions.map((o) => {
+                  const key = `${o.venue_name}|${o.mdapi_field_id}`;
+                  // Show field_title sub-label only when the venue
+                  // has multiple field options — otherwise it's
+                  // visual noise.
+                  const dupes = cityOptions.filter(
+                    (x) => x.venue_name === o.venue_name,
+                  ).length;
+                  const label =
+                    dupes > 1 && o.field_title
+                      ? `${o.venue_name} — ${o.field_title}`
+                      : o.venue_name;
+                  return (
+                    <option key={key} value={key}>
+                      {label}
+                    </option>
+                  );
+                })}
+                <option value="__OTHER__">Other (not in list)…</option>
+              </select>
+            )}
           </Field>
           <Field label="Detail">
             <input

@@ -31,6 +31,10 @@ export type ScheduleMasterRow = {
   match_date: string;
   match_time: string;
   max_spots: number;
+  // PR-D: nullable during the transition. Populated by the
+  // venue combobox in MasterScheduleEditModal or by the one-time
+  // backfill script. Future writers should always supply it.
+  mdapi_field_id: number | null;
 };
 
 export type ScheduleMasterInput = {
@@ -40,6 +44,7 @@ export type ScheduleMasterInput = {
   match_date: string;
   match_time: string;
   max_spots: number;
+  mdapi_field_id: number | null;
 };
 
 export type ValidationResult<T> =
@@ -129,6 +134,23 @@ export function validateScheduleMasterPayload(
     return null;
   });
   if (err) return { ok: false, error: err };
+
+  // mdapi_field_id is optional on both create and update (older
+  // clients don't send it; the column is nullable). If present it
+  // must be either null (explicit unlink) or a positive integer.
+  if (b.mdapi_field_id !== undefined) {
+    const v = b.mdapi_field_id;
+    if (v === null) {
+      out.mdapi_field_id = null;
+    } else if (typeof v === "number" && Number.isInteger(v) && v > 0) {
+      out.mdapi_field_id = v;
+    } else {
+      return {
+        ok: false,
+        error: "mdapi_field_id must be a positive integer or null",
+      };
+    }
+  }
 
   if (opts.isPartial && Object.keys(out).length === 0) {
     return { ok: false, error: "Body must include at least one field" };

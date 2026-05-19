@@ -50,6 +50,7 @@ type Row = {
   match_date: string;
   match_time: string;
   max_spots: number;
+  mdapi_field_id: number | null;
 };
 
 type MatchOut = {
@@ -58,6 +59,7 @@ type MatchOut = {
   detail: string;
   time: string;
   max_spots: number;
+  mdapi_field_id: number | null;
 };
 
 type DayOut = {
@@ -92,7 +94,9 @@ export async function GET(req: Request) {
 
   const rowsRes = await supabase
     .from("schedule_master")
-    .select("id, city, venue, detail, match_date, match_time, max_spots")
+    .select(
+      "id, city, venue, detail, match_date, match_time, max_spots, mdapi_field_id",
+    )
     .gte("match_date", isoDate(weekStart))
     .lte("match_date", isoDate(weekEnd));
   if (rowsRes.error) {
@@ -133,6 +137,7 @@ export async function GET(req: Request) {
           detail: r.detail,
           time: r.match_time,
           max_spots: r.max_spots,
+          mdapi_field_id: r.mdapi_field_id,
         })),
       });
     }
@@ -190,8 +195,11 @@ export async function POST(req: Request) {
       match_date: payload.match_date!,
       match_time: payload.match_time!,
       max_spots: payload.max_spots!,
+      mdapi_field_id: payload.mdapi_field_id ?? null,
     })
-    .select("id, city, venue, detail, match_date, match_time, max_spots")
+    .select(
+      "id, city, venue, detail, match_date, match_time, max_spots, mdapi_field_id",
+    )
     .single();
   if (ins.error || !ins.data) {
     console.error("[schedule-master:create] insert failed", ins.error);
