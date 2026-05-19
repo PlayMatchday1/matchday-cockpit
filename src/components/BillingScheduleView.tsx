@@ -246,6 +246,11 @@ export default function BillingScheduleView() {
         month: draft.month,
         city: draft.city,
         venue: draft.venue_name,
+        // PR-F dual-write: ScheduleRowEditor already tracks
+        // venue_id in form state; persist it alongside the
+        // existing venue string so financeCosts.ts can drop the
+        // raw-name match in PR-G.
+        fin_venue_id: draft.venue_id,
         match_count: draft.match_count,
         total_hours: draft.total_hours,
         venue_cost: draft.venue_cost,
@@ -273,6 +278,8 @@ export default function BillingScheduleView() {
         month: draft.month,
         city: draft.city,
         venue: draft.venue_name,
+        // PR-F dual-write — same rationale as the add path above.
+        fin_venue_id: draft.venue_id,
         match_count: draft.match_count,
         total_hours: draft.total_hours,
         venue_cost: draft.venue_cost,
@@ -315,6 +322,10 @@ export default function BillingScheduleView() {
       month: draft.month,
       city: draft.city,
       venue: draft.venue_name,
+      // PR-F dual-write — same rationale as single-row add above.
+      // BulkScheduleDraft.venue_id is non-nullable so this always
+      // populates on bulk writes (the form requires a venue pick).
+      fin_venue_id: draft.venue_id,
       match_count: draft.match_count,
       total_hours: draft.total_hours,
       venue_cost: null,
