@@ -12,20 +12,31 @@
 // console.warn so a new city the API starts returning gets caught
 // before silently going to null.
 
+// Accepts either the human-readable name from MatchDay's API
+// ("Austin", "Dallas / Fort Worth") or the canonical short code
+// ("ATX", "DFW"). Self-aliases for the codes were added so the
+// discrepancy route can pass either form through this helper.
 const CITY_MAP: Record<string, string> = {
   austin: "ATX",
+  atx: "ATX",
   atlanta: "ATL",
+  atl: "ATL",
   dallas: "DFW",
   "dallas / fort worth": "DFW",
   "dallas/fort worth": "DFW",
+  dfw: "DFW",
   houston: "HOU",
+  hou: "HOU",
   "oklahoma city": "OKC",
   okc: "OKC",
   "san antonio": "SATX",
+  satx: "SATX",
   "st. louis": "STL",
   "st louis": "STL",
   "saint louis": "STL",
+  stl: "STL",
   "el paso": "ELP",
+  elp: "ELP",
 };
 
 // Cache so we only warn once per unmapped city per process.
