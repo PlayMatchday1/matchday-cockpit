@@ -72,6 +72,13 @@ export type FinSchedule = {
   venue_raw: string;   // pre-alias — needed for per-leg accounting on
                        // split-rate venues like ATH Katy / ATH Katy Sunday
                        // where aliases collapse the canonical name.
+  // PR-F: nullable during the transition. Populated by the
+  // billing-schedule UI (ScheduleRowEditor / ScheduleBulkAddEditor
+  // via BillingScheduleView) on new writes, and by the one-time
+  // backfill script for existing rows. financeCosts.ts internal
+  // helpers still read venue_raw for now; PR-G will switch them
+  // to fin_venue_id once population is complete.
+  fin_venue_id: number | null;
   match_count: number;
   total_hours: number | null;
   venue_cost: number | null;
@@ -461,6 +468,9 @@ async function load(quarter: QuarterInfo): Promise<void> {
       city: cleanText(r.city),
       venue: venueAliases.get(rawVenue) ?? rawVenue,
       venue_raw: rawVenue,
+      fin_venue_id: r.fin_venue_id === null || r.fin_venue_id === undefined
+        ? null
+        : Number(r.fin_venue_id),
       match_count: Math.round(asNumber(r.match_count) || 0),
       total_hours: r.total_hours === null ? null : asNumber(r.total_hours),
       venue_cost: r.venue_cost === null ? null : asNumber(r.venue_cost),
