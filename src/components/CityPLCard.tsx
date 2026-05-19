@@ -135,26 +135,23 @@ export default function CityPLCard({ city }: { city: string }) {
     };
     const fieldLevel: FieldRow[] = cityGroups
       .map((g) => {
-        const legNames = new Set(g.legs.map((l) => l.venue_name));
-        const sameNameLegs = legNames.size !== g.legs.length;
+        // PR-E: id-keyed leg set. Per-leg iteration replaces the
+        // prior same-name special case — venueMatchCountFor reads
+        // through fin_venues.id now, so each leg's count is
+        // independent regardless of name collision.
+        const legVenueIds = new Set(g.legs.map((l) => l.id));
         let cost = 0;
         let matchCount = 0;
         let dppRev = 0;
         for (const m of months) {
           for (const leg of g.legs) {
             cost += canonicalVenueCost(data, leg.id, m).amount;
-          }
-          if (sameNameLegs) {
-            matchCount += venueMatchCountFor(data, city, g.displayName, m);
-          } else {
-            for (const leg of g.legs) {
-              matchCount += venueMatchCountFor(data, city, leg.venue_name, m);
-            }
+            matchCount += venueMatchCountFor(data, leg.id, m);
           }
           dppRev += venuePartnerRevenueFor(
             data,
             matchRegistrations,
-            legNames,
+            legVenueIds,
             m,
           );
         }

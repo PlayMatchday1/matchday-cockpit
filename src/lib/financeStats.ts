@@ -20,7 +20,7 @@ import {
 } from "./financeCosts";
 import { groupVenues } from "./venueGroups";
 import {
-  buildFieldToVenueIdMap,
+  buildFieldIdToVenueIdMap,
   normalizeMatchName,
   resolveVenueForMatch,
 } from "./venueNormalization";
@@ -1650,17 +1650,17 @@ export function venueDppRevenueFor(
 //     in `month`. fin_revenue Strike etc. are excluded by design —
 //     only Private Rental flows into partner payouts.
 //
-// Field-title → canonical resolution runs through normalizeMatchName
-// (CROSS_VENUE_ALIASES + INTERNAL_PREFIX_RULES + DB aliases) so every
-// variant in mdapi_matches.field_title that the cockpit already knows
-// about ("The Hattrick", "Tourney ATH Pearland", "NEMP Tournaments",
-// etc.) attributes correctly. Without this canonicalization the raw
-// normField output ("The Hattrick") wouldn't match fin_venues.venue_name
-// ("Hattrick") and the venue would silently show $0 from the DPP stream.
+// PR-E: attribution is by fin_venues.id on both sides.
+//   mdapi side: r.fieldId → data.venueFields → fin_venues.id
+//   fin_revenue side: e.venue (canonical name from Stripe boundary)
+//     → look up fin_venues.id by venue_name (the boundary already
+//     ran fin_venue_aliases canonicalization on ingest).
+// Callers pass legVenueIds (Set<number>) for the venue group they
+// care about — same role as the prior venueLegNames Set<string>.
 export function venuePartnerRevenueFor(
   data: FinanceData,
   matchRegistrations: JoinedMatchPlayerRow[],
-  venueLegNames: Set<string>,
+  legVenueIds: Set<number>,
   month: Q2Month,
 ): number {
   // Year + month index together pinpoint the calendar month for the
@@ -1669,23 +1669,14 @@ export function venuePartnerRevenueFor(
   // from MONTH_BY_KEY which is seeded for every available quarter.
   const target = MONTH_BY_KEY[month];
   if (!target) return 0;
-  // Cache canonical resolution per distinct r.field — the join can
-  // emit millions of player rows but only ~25 distinct field names.
-  const canonicalCache = new Map<string, string | null>();
-  function canonicalize(field: string): string | null {
-    const cached = canonicalCache.get(field);
-    if (cached !== undefined) return cached;
-    const c = normalizeMatchName(field, data.venueAliases).canonical;
-    canonicalCache.set(field, c);
-    return c;
-  }
   let dpRev = 0;
   for (const r of matchRegistrations) {
     if (r.matchCanceled) continue;
     if (r.email && r.email.toLowerCase().includes(STAFF_EMAIL_DOMAIN)) continue;
     if (r.paymentType !== "DAILY PAID") continue;
-    const canonical = canonicalize(r.field);
-    if (!canonical || !venueLegNames.has(canonical)) continue;
+    if (r.fieldId == null) continue;
+    const venueId = data.venueFields.get(r.fieldId);
+    if (venueId == null || !legVenueIds.has(venueId)) continue;
     const d = r.matchStart;
     if (
       d.getFullYear() !== target.year ||
@@ -1694,46 +1685,57 @@ export function venuePartnerRevenueFor(
       continue;
     dpRev += Number(r.matchPricePaid ?? 0) || 0;
   }
+  // fin_revenue.venue is the canonical name (Stripe boundary already
+  // normalized via fin_venue_aliases on ingest). Map that to
+  // fin_venues.id via a one-time per-call lookup so the set
+  // membership test stays id-based.
   let prRev = 0;
-  for (const e of data.revenue) {
-    if (e.month !== month) continue;
-    if (e.type !== "Private Rental") continue;
-    if (!venueLegNames.has(e.venue ?? "")) continue;
-    prRev += Number(e.gross ?? 0) || 0;
+  if (data.revenue.length > 0) {
+    const nameToVenueId = new Map<string, number>();
+    for (const v of data.venues) nameToVenueId.set(v.venue_name, v.id);
+    for (const e of data.revenue) {
+      if (e.month !== month) continue;
+      if (e.type !== "Private Rental") continue;
+      const venueId = nameToVenueId.get(e.venue ?? "");
+      if (venueId == null || !legVenueIds.has(venueId)) continue;
+      prRev += Number(e.gross ?? 0) || 0;
+    }
   }
   return dpRev + prRev;
 }
 
 export function venueCostFor(
   data: FinanceData,
-  city: string,
-  venue: string,
+  venueId: number,
   month: Q2Month,
 ): number {
-  // Delegate to the canonical helper so per-(venue, month) overrides flow
-  // through City P&L cards, Field Ranking, and any other consumer of this
-  // function. Falls back to schedule.venue_cost only when no fin_venues row
-  // matches (e.g. a venue name that exists in fin_schedule but isn't in
-  // fin_venues yet).
-  const venueRow = data.venues.find(
-    (v) => v.city === city && v.venue_name === venue,
-  );
+  // PR-E: id-keyed signature. canonicalVenueCost already accepts a
+  // venue_id; this wrapper preserves the schedule fallback for
+  // venues that exist in fin_schedule but not fin_venues (edge case
+  // when a venue is renamed on one side but not the other). The
+  // fallback resolves the row's (city, venue_name) once for the
+  // string match — fin_schedule has no field_id today (PR-F).
+  const venueRow = data.venues.find((v) => v.id === venueId);
   if (venueRow) {
-    return canonicalVenueCost(data, venueRow.id, month).amount;
+    return canonicalVenueCost(data, venueId, month).amount;
   }
-  return data.schedule
-    .filter((s) => s.city === city && s.venue === venue && s.month === month)
-    .reduce((sum, s) => sum + (s.venue_cost ?? 0), 0);
+  return 0;
 }
 
 export function venueMatchCountFor(
   data: FinanceData,
-  city: string,
-  venue: string,
+  venueId: number,
   month: Q2Month,
 ): number {
+  const venueRow = data.venues.find((v) => v.id === venueId);
+  if (!venueRow) return 0;
   return data.schedule
-    .filter((s) => s.city === city && s.venue === venue && s.month === month)
+    .filter(
+      (s) =>
+        s.city === venueRow.city &&
+        s.venue === venueRow.venue_name &&
+        s.month === month,
+    )
     .reduce((sum, s) => sum + (s.match_count ?? 0), 0);
 }
 
@@ -1834,18 +1836,14 @@ export type VenueMemberSpotBreakdown = {
 
 export function venueMemberSpotsFor(
   data: FinanceData,
-  city: string,
-  venue: string,
+  venueId: number,
   month: Q2Month,
 ): VenueMemberSpotBreakdown {
-  // Read from the live mdapi-derived index. The legacy
-  // data.memberSpots (fin_member_spots) is a manually-uploaded
-  // monthly aggregate that only exists for closed months — it left
-  // every in-progress month's % columns blank. mdapiMemberSpots is
-  // built every page-load from mdapi_match_players, so it tracks
-  // the current month incrementally.
+  // PR-E: bucket key is `${venueId}|${month}`. City is implicit in
+  // venueId. Reads from the live mdapi-derived index built off
+  // mdapi_match_players + fin_venue_fields (field_id → venueId).
   const counts =
-    data.mdapiMemberSpots.byVenueMonth.get(`${city}|${venue}|${month}`) ??
+    data.mdapiMemberSpots.byVenueMonth.get(`${venueId}|${month}`) ??
     ZERO_SPOT_COUNTS;
   return {
     member: counts.member,
@@ -1871,23 +1869,22 @@ export function cityTotalMemberSpotsFor(
 
 export function venueAllocatedMemberRevenueFor(
   data: FinanceData,
-  city: string,
-  venue: string,
+  venueId: number,
   month: Q2Month,
 ): number {
-  // Spot counts come from mdapi_match_players via data.mdapiMemberSpots
-  // (the index built once in useFinanceData). fin_member_spots was
-  // a manually-uploaded monthly aggregate; it drifted from real-time
-  // matches at month boundaries and produced $0 allocations for any
-  // match in a month before its row was uploaded. Same source for
-  // numerator/denominator means no drift.
+  // PR-E: id-keyed venue lookup. City is resolved from the venue
+  // row for the cityMembershipRevenueFor denominator. byCityMonth
+  // keeps the `${city}|${month}` key — city is the correct grain
+  // for the denominator (total city membership revenue).
+  const venueRow = data.venues.find((v) => v.id === venueId);
+  if (!venueRow) return 0;
   const venueSpots =
-    data.mdapiMemberSpots.byVenueMonth.get(`${city}|${venue}|${month}`)?.member ??
-    0;
+    data.mdapiMemberSpots.byVenueMonth.get(`${venueId}|${month}`)?.member ?? 0;
   const cityTotal =
-    data.mdapiMemberSpots.byCityMonth.get(`${city}|${month}`)?.member ?? 0;
+    data.mdapiMemberSpots.byCityMonth.get(`${venueRow.city}|${month}`)?.member ??
+    0;
   if (cityTotal <= 0) return 0;
-  const cityMembership = cityMembershipRevenueFor(data, city, month);
+  const cityMembership = cityMembershipRevenueFor(data, venueRow.city, month);
   return (venueSpots / cityTotal) * cityMembership;
 }
 
@@ -1984,9 +1981,12 @@ export type MdapiMemberSpotCounts = {
 };
 
 export type MdapiMemberSpotIndex = {
-  // key: `${city}|${canonicalVenueName}|${Q2Month}`
+  // PR-E: key: `${fin_venues.id}|${Q2Month}`. City is implicit in
+  // the venue id; the byCityMonth map below carries the city
+  // grouping needed for the cityTotal denominator.
   byVenueMonth: Map<string, MdapiMemberSpotCounts>;
-  // key: `${city}|${Q2Month}`
+  // key: `${city}|${Q2Month}` — unchanged. City-level denominator
+  // for the member-revenue allocation algebra.
   byCityMonth: Map<string, MdapiMemberSpotCounts>;
 };
 
@@ -2005,20 +2005,20 @@ export function buildMdapiMemberSpotIndex(
     city: string;
     cost_per_match: number | null;
   }[],
-  // fin_venue_aliases as alias→canonical Map. Threaded through to
-  // buildFieldToVenueIdMap so synonym pairs (e.g. "Katy International
-  // Sports Complex" → "KISC (Katy Intl)") resolve, instead of being
-  // dropped from both byVenueMonth AND byCityMonth as the prior
-  // substring matcher did. Houston Apr 2026: includes 8 KISC member
-  // spots that were previously dropped — see Tier-2 deploy notes.
-  aliases: Map<string, string>,
+  // PR-E: venueFields is mdapi_field_id → fin_venues.id. Replaces
+  // the prior aliases-based name canonicalization, which dropped
+  // any field_title whose normalizeMatchName output didn't match a
+  // fin_venues.venue_name row. fin_venue_fields is the source of
+  // truth — adding a new mdapi field is one INSERT into that table,
+  // no normalizer rule changes.
+  venueFields: Map<number, number>,
 ): MdapiMemberSpotIndex {
   const byVenueMonth = new Map<string, MdapiMemberSpotCounts>();
   const byCityMonth = new Map<string, MdapiMemberSpotCounts>();
 
-  const fields = new Set<string>();
-  for (const r of regs) if (r.field) fields.add(r.field);
-  const fieldToVenue = buildFieldToVenueIdMap(fields, venues, aliases);
+  const fieldIds = new Set<number>();
+  for (const r of regs) if (r.field_id != null) fieldIds.add(r.field_id);
+  const fieldToVenue = buildFieldIdToVenueIdMap(fieldIds, venueFields);
   const venueById = new Map(venues.map((v) => [v.id, v]));
 
   function bucket(map: Map<string, MdapiMemberSpotCounts>, key: string) {
@@ -2049,7 +2049,8 @@ export function buildMdapiMemberSpotIndex(
     const month = isoToMonthKey(r.match_start);
     if (!month) continue;
 
-    const baseVenueId = fieldToVenue.get(r.field);
+    if (r.field_id == null) continue;
+    const baseVenueId = fieldToVenue.get(r.field_id);
     if (baseVenueId == null) continue;
     // Day-of-week swap: ATH Katy + Sun match → ATH Katy Sunday venue,
     // so member spots bucket under the right rate-tier row. r.match_start
@@ -2060,7 +2061,7 @@ export function buildMdapiMemberSpotIndex(
     const v = venueById.get(resolved.venueId);
     if (!v) continue;
 
-    bucket(byVenueMonth, `${v.city}|${v.venue_name}|${month}`)[category] += 1;
+    bucket(byVenueMonth, `${resolved.venueId}|${month}`)[category] += 1;
     bucket(byCityMonth, `${v.city}|${month}`)[category] += 1;
   }
 
@@ -2106,18 +2107,16 @@ export function buildRankingRows(
 
   for (const g of groups) {
     const primary = g.legs[0];
-    // Sum revenue, cost, match counts across all legs. Each leg is queried
-    // by its own venue_name so distinct-name legs (Case B) and same-name
-    // legs (Case A) both work — same-name legs return identical sums but
-    // are deduped by groupVenues bucketing.
-    const legNames = new Set(g.legs.map((l) => l.venue_name));
-    // Revenue is computed once per group from the partner-dashboard
-    // formula — venuePartnerRevenueFor handles same-name vs distinct
-    // legs uniformly because it filters by the full leg-name set.
+    // PR-E: keying on fin_venues.id. legVenueIds covers all legs in
+    // the group (e.g. ATH Katy weekday + ATH Katy Sunday). Each
+    // helper sums per-leg under the hood; the group iteration here
+    // sums per-leg explicitly for cost + match count + spots so
+    // split-rate legs accumulate independently.
+    const legVenueIds = new Set(g.legs.map((l) => l.id));
     const revenue = venuePartnerRevenueFor(
       data,
       matchRegistrations,
-      legNames,
+      legVenueIds,
       month,
     );
     let memberRev = 0;
@@ -2127,35 +2126,14 @@ export function buildRankingRows(
     let dppSpots = 0;
     let otherSpots = 0;
 
-    if (legNames.size === g.legs.length) {
-      // Distinct-name legs: query each separately and sum.
-      for (const leg of g.legs) {
-        memberRev += venueAllocatedMemberRevenueFor(
-          data,
-          g.city,
-          leg.venue_name,
-          month,
-        );
-        cost += canonicalVenueCost(data, leg.id, month).amount;
-        matchCount += venueMatchCountFor(data, g.city, leg.venue_name, month);
-        const spots = venueMemberSpotsFor(data, g.city, leg.venue_name, month);
-        memberSpots += spots.member;
-        dppSpots += spots.dpp;
-        otherSpots += spots.other;
-      }
-    } else {
-      // Same-name legs (alias-collapsed): one query covers both. Cost still
-      // sums per leg because rates differ.
-      const name = primary.venue_name;
-      memberRev = venueAllocatedMemberRevenueFor(data, g.city, name, month);
-      matchCount = venueMatchCountFor(data, g.city, name, month);
-      const spots = venueMemberSpotsFor(data, g.city, name, month);
-      memberSpots = spots.member;
-      dppSpots = spots.dpp;
-      otherSpots = spots.other;
-      for (const leg of g.legs) {
-        cost += canonicalVenueCost(data, leg.id, month).amount;
-      }
+    for (const leg of g.legs) {
+      memberRev += venueAllocatedMemberRevenueFor(data, leg.id, month);
+      cost += canonicalVenueCost(data, leg.id, month).amount;
+      matchCount += venueMatchCountFor(data, leg.id, month);
+      const spots = venueMemberSpotsFor(data, leg.id, month);
+      memberSpots += spots.member;
+      dppSpots += spots.dpp;
+      otherSpots += spots.other;
     }
 
     if (revenue === 0 && memberRev === 0 && cost === 0) continue;
@@ -2265,17 +2243,12 @@ export function buildVenueInsightRows(
     const revenue = venuePartnerRevenueFor(
       data,
       matchRegistrations,
-      new Set([v.venue_name]),
+      new Set([v.id]),
       month,
     );
-    const memberRev = venueAllocatedMemberRevenueFor(
-      data,
-      v.city,
-      v.venue_name,
-      month,
-    );
-    const cost = venueCostFor(data, v.city, v.venue_name, month);
-    const spots = venueMemberSpotsFor(data, v.city, v.venue_name, month);
+    const memberRev = venueAllocatedMemberRevenueFor(data, v.id, month);
+    const cost = venueCostFor(data, v.id, month);
+    const spots = venueMemberSpotsFor(data, v.id, month);
     if (
       revenue === 0 &&
       memberRev === 0 &&

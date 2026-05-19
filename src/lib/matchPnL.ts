@@ -35,7 +35,7 @@ import type { SupabaseClient } from "@supabase/supabase-js";
 import type { FinanceData } from "./useFinanceData";
 import { matchAllocatedMemberRevenueFor } from "./financeStats";
 import { fetchLegacyMatchRegistrations } from "./mdapiMatchesRead";
-import { buildFieldToVenueIdMap, resolveVenueForMatch } from "./venueNormalization";
+import { buildFieldIdToVenueIdMap, resolveVenueForMatch } from "./venueNormalization";
 
 // Allow-list of player-booking payment types. Anything else (NULL,
 // rental codes, comp markers) gets filtered out as not a real
@@ -148,6 +148,7 @@ function parseLocalTimestamp(s: string): Date | null {
 // unchanged.
 type RegRow = {
   field: string;
+  field_id: number | null;
   match_start: string;
   match_canceled: boolean;
   player_canceled_at: string | null;
@@ -193,12 +194,19 @@ export async function fetchWeekMatchPnL(
       ALLOWED_PAYMENT_TYPES.has((r.payment_type ?? "").toUpperCase()),
   );
 
-  // Build a single field-to-venue map covering both buckets so the
-  // resolver does the same work for canceled matches as for active.
-  const fields = new Set<string>();
-  for (const r of activeEligible) if (r.field) fields.add(r.field);
-  for (const r of canceledRegs) if (r.field) fields.add(r.field);
-  const fieldToVenue = buildFieldToVenueIdMap(fields, venues, data.venueAliases);
+  // PR-E: build the field_id → fin_venues.id map from
+  // data.venueFields (fin_venue_fields, populated by migration 0041).
+  // Field-title canonicalization via venueAliases is no longer the
+  // join key — field_id is. Rows with null field_id (older mdapi
+  // syncs) fall out of the resolver.
+  const fieldIds = new Set<number>();
+  for (const r of activeEligible) {
+    if (r.field_id != null) fieldIds.add(r.field_id);
+  }
+  for (const r of canceledRegs) {
+    if (r.field_id != null) fieldIds.add(r.field_id);
+  }
+  const fieldToVenue = buildFieldIdToVenueIdMap(fieldIds, data.venueFields);
   const venueById = new Map(venues.map((v) => [v.id, v]));
 
   // ===== Active aggregation =====
@@ -225,7 +233,8 @@ export async function fetchWeekMatchPnL(
   for (const r of activeEligible) {
     const matchStart = parseLocalTimestamp(r.match_start);
     if (!matchStart) continue;
-    const baseVenueId = fieldToVenue.get(r.field as string) ?? null;
+    const baseVenueId =
+      r.field_id != null ? (fieldToVenue.get(r.field_id) ?? null) : null;
     // Day-of-week swap: ATH Katy + Sun match → ATH Katy Sunday venue.
     // Sibling missing-cost falls back to base rate with a console.warn.
     const resolved =
@@ -307,7 +316,8 @@ export async function fetchWeekMatchPnL(
   for (const r of canceledRegs) {
     const matchStart = parseLocalTimestamp(r.match_start);
     if (!matchStart) continue;
-    const baseVenueId = fieldToVenue.get(r.field as string) ?? null;
+    const baseVenueId =
+      r.field_id != null ? (fieldToVenue.get(r.field_id) ?? null) : null;
     const resolved =
       baseVenueId !== null
         ? resolveVenueForMatch(baseVenueId, matchStart, venues)
