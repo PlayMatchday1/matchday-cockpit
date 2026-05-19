@@ -53,16 +53,17 @@ export const maxDuration = 15;
 const WINDOW_DAYS = 14; // current week + next week
 const ISO_DATE = /^\d{4}-\d{2}-\d{2}$/;
 
-// mdapi_matches.city_identifier 3-letter code → schedule_master.city
-// display name. Note: SATX (cockpit) vs SAT (mdapi) on San Antonio
-// is the historical reason this route's per-city counts diverged
-// from reality. Always go through this map on the mdapi side.
+// mdapi_matches.city_identifier code → schedule_master.city display
+// name. Codes are not all 3 letters: Dallas is DFW (not DAL) and
+// San Antonio is SATX (not SAT) per the real mdapi values, which
+// matches what the rest of the cockpit already uses via
+// src/lib/cityNormalization.
 const CITY_IDENTIFIER_MAP: Record<string, string> = {
   ATX: "Austin",
   ATL: "Atlanta",
   HOU: "Houston",
-  DAL: "Dallas",
-  SAT: "San Antonio",
+  DFW: "Dallas",
+  SATX: "San Antonio",
   STL: "St. Louis",
   OKC: "OKC",
   ELP: "El Paso",
