@@ -32,21 +32,23 @@
 // their city info only in the raw JSONB and not in
 // city_identifier), then falls back to city_identifier.
 //
-// Venue canonical comes from src/lib/venueAliases.ts. Each
-// physical field has a canonical key plus a list of known
-// aliases (marketing variants, parenthetical field numbers,
-// long-form names). The previous "strip parens + drop field +
-// collapse non-alphanumerics" heuristic produced large false-
-// positive volumes whenever either side carried a surface form
-// the other didn't anticipate (e.g. "The Hattrick L." vs "The
-// Hattrick"). The explicit alias list is maintained by ops as
-// new venues appear.
+// Venue canonical is the fin_venues.id integer, resolved on the
+// mdapi side from mdapi_matches.field_id → fin_venue_fields →
+// fin_venues.id, and on the schedule_master side from
+// (city, venue_name) → fin_venues.id. fin_venue_fields is the
+// source of truth for field_id → venue links (seeded in migration
+// 0041). The previous string-canonicalization path via
+// src/lib/venueAliases.ts is no longer used in this route — a
+// new tournament or marketing variant in mdapi (e.g. "Premier
+// Match at Soccer Central") needs a new fin_venue_fields row,
+// not a code change. venueAliases.ts stays in the repo because
+// other paths (manager pay, finance) still depend on it; it gets
+// removed in PR-G of the migration.
 //
 // Auth: admin via authenticateCrm.
 
 import { authenticateCrm } from "@/lib/crmAuth";
 import { normalizeCityName } from "@/lib/cityNormalization";
-import { canonicalizeVenue } from "@/lib/venueAliases";
 
 export const runtime = "nodejs";
 export const maxDuration = 15;
@@ -77,12 +79,34 @@ type ScheduleRow = {
 type MatchRow = {
   api_id: number;
   city_identifier: string | null;
+  field_id: number | null;
   field_title: string | null;
   start_date: string | null;
   is_cancelled: boolean | null;
   max_player_count: number | null;
   raw: { field?: { city?: { name?: string | null } | null } | null } | null;
 };
+
+// Deduped warning surfaces. Logged once per unmapped value per
+// process so a missing fin_venue_fields link doesn't spam logs
+// across requests.
+const warnedFieldIds = new Set<number>();
+const warnedScheduleVenues = new Set<string>();
+function warnUnmappedFieldId(fieldId: number, title: string | null): void {
+  if (warnedFieldIds.has(fieldId)) return;
+  warnedFieldIds.add(fieldId);
+  console.warn(
+    `[schedule-master:discrepancies] mdapi field_id ${fieldId} ("${title ?? ""}") has no fin_venue_fields entry — add the link in supabase/migrations or via ops.`,
+  );
+}
+function warnUnmappedScheduleVenue(city: string, venue: string): void {
+  const key = `${city}|${venue}`;
+  if (warnedScheduleVenues.has(key)) return;
+  warnedScheduleVenues.add(key);
+  console.warn(
+    `[schedule-master:discrepancies] schedule_master row (city="${city}", venue="${venue}") has no matching fin_venues row — check fin_venues.venue_name + city.`,
+  );
+}
 
 type Out = {
   week_start: string;
@@ -164,7 +188,7 @@ export async function GET(req: Request) {
   const mRes = await supabase
     .from("mdapi_matches")
     .select(
-      "api_id, city_identifier, field_title, start_date, is_cancelled, max_player_count, raw",
+      "api_id, city_identifier, field_id, field_title, start_date, is_cancelled, max_player_count, raw",
     )
     .gte("start_date", startTs)
     .lte("start_date", endTs);
@@ -176,25 +200,73 @@ export async function GET(req: Request) {
   const matchRowsAlive = matchRows.filter((m) => m.is_cancelled !== true);
   const matchRowsCancelled = matchRows.filter((m) => m.is_cancelled === true);
 
+  // Fetch the venue lookup maps. Two small queries (~25 fin_venues
+  // rows, ~35 fin_venue_fields rows today) — payload negligible.
+  const vRes = await supabase
+    .from("fin_venues")
+    .select("id, venue_name, city");
+  if (vRes.error) {
+    console.error("[schedule-master:discrepancies] fin_venues query failed", vRes.error);
+    return Response.json({ error: "DB error" }, { status: 500 });
+  }
+  const venueRows = (vRes.data ?? []) as Array<{
+    id: number;
+    venue_name: string;
+    city: string;
+  }>;
+
+  const vfRes = await supabase
+    .from("fin_venue_fields")
+    .select("fin_venue_id, mdapi_field_id");
+  if (vfRes.error) {
+    console.error("[schedule-master:discrepancies] fin_venue_fields query failed", vfRes.error);
+    return Response.json({ error: "DB error" }, { status: 500 });
+  }
+  const venueFieldRows = (vfRes.data ?? []) as Array<{
+    fin_venue_id: number;
+    mdapi_field_id: number;
+  }>;
+
+  // venueNameToVenueId keys on `${cityCode}|${nameLower}` to match
+  // the fin_venues UNIQUE (city, venue_name) constraint. Both
+  // sides of the lookup run the city through normalizeCityName so
+  // schedule_master "Austin" and fin_venues "Austin" converge on
+  // "ATX".
+  const venueNameToVenueId = new Map<string, number>();
+  for (const v of venueRows) {
+    const cityCode = normalizeCityName(v.city);
+    if (!cityCode) continue;
+    venueNameToVenueId.set(
+      `${cityCode}|${v.venue_name.trim().toLowerCase()}`,
+      v.id,
+    );
+  }
+  const fieldIdToVenueId = new Map<number, number>();
+  for (const vf of venueFieldRows) {
+    fieldIdToVenueId.set(vf.mdapi_field_id, vf.fin_venue_id);
+  }
+
   type Indexed = {
     cityName: string;
-    venueKey: string;
+    venueId: number;
     date: string;
     hhmm: string;
   };
-  function venueKeyFor(raw: string | null | undefined): string {
-    const canonical = canonicalizeVenue(raw);
-    if (canonical) return canonical;
-    return (raw ?? "").toLowerCase().replace(/[^a-z0-9]/g, "");
-  }
   const sIndex: Array<Indexed & { row: ScheduleRow }> = [];
   for (const r of scheduleRows) {
-    if (!r.city) continue;
+    if (!r.city || !r.venue) continue;
     const cityName = normalizeCityName(r.city);
     if (!cityName) continue;
+    const venueId = venueNameToVenueId.get(
+      `${cityName}|${r.venue.trim().toLowerCase()}`,
+    );
+    if (venueId == null) {
+      warnUnmappedScheduleVenue(r.city, r.venue);
+      continue;
+    }
     sIndex.push({
       cityName,
-      venueKey: venueKeyFor(r.venue),
+      venueId,
       date: r.match_date,
       hhmm: parseStartHHMM(r.match_time),
       row: r,
@@ -203,13 +275,17 @@ export async function GET(req: Request) {
   function indexMatch(m: MatchRow): (Indexed & { row: MatchRow }) | null {
     const cityName = matchCity(m);
     if (!cityName) return null;
-    const venueKey = venueKeyFor(m.field_title);
-    if (!venueKey) return null;
+    if (m.field_id == null) return null;
+    const venueId = fieldIdToVenueId.get(m.field_id);
+    if (venueId == null) {
+      warnUnmappedFieldId(m.field_id, m.field_title);
+      return null;
+    }
     const start = matchStart(m);
     if (!start) return null;
     return {
       cityName,
-      venueKey,
+      venueId,
       date: start.date,
       hhmm: start.hhmm,
       row: m,
@@ -233,7 +309,7 @@ export async function GET(req: Request) {
   function bucketize<T extends Indexed>(arr: T[]): Map<string, T[]> {
     const map = new Map<string, T[]>();
     for (const x of arr) {
-      const key = `${x.cityName}|${x.venueKey}|${x.date}|${x.hhmm}`;
+      const key = `${x.cityName}|${x.venueId}|${x.date}|${x.hhmm}`;
       if (!map.has(key)) map.set(key, []);
       map.get(key)!.push(x);
     }
