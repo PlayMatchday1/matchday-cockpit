@@ -60,13 +60,20 @@ function CitiesIndexContent() {
   }, [searchParams]);
   const setLens = useCallback(
     (next: CityLens) => {
-      const params = new URLSearchParams(searchParams.toString());
-      if (next === "overview") params.delete("tab");
-      else params.set("tab", next);
+      // Build a fresh URLSearchParams instead of inheriting the
+      // current one. Sub-lenses (Users, Reviews, Cancellations)
+      // write their own params (sub, window, from, to,
+      // growth_metric, field_period, ...) and those don't belong
+      // on a different top-level tab. Preserving them caused two
+      // visible bugs: an unexpected sub-tab landing after a top-
+      // level click, and a race window where an in-flight sub-
+      // lens router.push could clobber the tab param we just set.
+      const params = new URLSearchParams();
+      if (next !== "overview") params.set("tab", next);
       const qs = params.toString();
       router.replace(qs ? `/cities?${qs}` : "/cities", { scroll: false });
     },
-    [router, searchParams],
+    [router],
   );
 
   return (
