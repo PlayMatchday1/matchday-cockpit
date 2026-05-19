@@ -226,6 +226,15 @@ export async function GET(req: Request) {
     const i = indexMatch(m);
     if (i) mIndex.push(i);
   }
+  // Cancelled mdapi rows are indexed into a parallel bucket. A
+  // schedule_master entry whose only mdapi counterpart is cancelled
+  // must be reported in the cancelled bucket, not as missing — the
+  // match exists in mdapi, it's just been called off.
+  const mIndexCancelled: Array<Indexed & { row: MatchRow }> = [];
+  for (const m of matchRowsCancelled) {
+    const i = indexMatch(m);
+    if (i) mIndexCancelled.push(i);
+  }
 
   function bucketize<T extends Indexed>(arr: T[]): Map<string, T[]> {
     const map = new Map<string, T[]>();
@@ -239,7 +248,12 @@ export async function GET(req: Request) {
 
   const sBuckets = bucketize(sIndex);
   const mBuckets = bucketize(mIndex);
-  const allKeys = new Set([...sBuckets.keys(), ...mBuckets.keys()]);
+  const mBucketsCancelled = bucketize(mIndexCancelled);
+  const allKeys = new Set([
+    ...sBuckets.keys(),
+    ...mBuckets.keys(),
+    ...mBucketsCancelled.keys(),
+  ]);
 
   const missing_in_db: Out["missing_in_db"] = [];
   const extra_in_db: Out["extra_in_db"] = [];
@@ -249,8 +263,10 @@ export async function GET(req: Request) {
   for (const key of allKeys) {
     const sBucket = sBuckets.get(key) ?? [];
     const mBucket = mBuckets.get(key) ?? [];
-    const paired = Math.min(sBucket.length, mBucket.length);
-    for (let i = 0; i < paired; i++) {
+    const cBucket = mBucketsCancelled.get(key) ?? [];
+
+    const pairedAlive = Math.min(sBucket.length, mBucket.length);
+    for (let i = 0; i < pairedAlive; i++) {
       const s = sBucket[i];
       const m = mBucket[i];
       const diffs: string[] = [];
@@ -266,7 +282,40 @@ export async function GET(req: Request) {
         });
       }
     }
-    for (let i = paired; i < sBucket.length; i++) {
+
+    // Surplus schedule_master rows first pair against the cancelled
+    // bucket. Those entries belong in `cancelled`, not in
+    // missing_in_db — the template entry exists in mdapi, just
+    // cancelled. Pair positionally to handle multi-entry keys.
+    const pairedCancelled = Math.min(
+      sBucket.length - pairedAlive,
+      cBucket.length,
+    );
+    for (let i = 0; i < pairedCancelled; i++) {
+      const sEntry = sBucket[pairedAlive + i];
+      const m = cBucket[i].row;
+      // Out-of-week cancelled-with-template silently dropped. The
+      // displayed grid only spans the current week and operators
+      // only act on current-week cancellations; the extra noise
+      // would crowd the banner without changing anything
+      // operationally. extra_in_db keeps its full 14-day window.
+      if (sEntry.date > currentWeekEndIso) continue;
+      const s = sEntry.row;
+      cancelled.push({
+        schedule_master_id: s.id,
+        mdapi_match_id: m.api_id,
+        city: s.city,
+        venue: s.venue,
+        detail: s.detail,
+        match_date: s.match_date,
+        match_time: s.match_time,
+        max_spots: s.max_spots,
+      });
+    }
+
+    // Remaining schedule_master rows are truly missing — no mdapi
+    // counterpart, alive or cancelled.
+    for (let i = pairedAlive + pairedCancelled; i < sBucket.length; i++) {
       const s = sBucket[i].row;
       missing_in_db.push({
         id: s.id,
@@ -278,7 +327,9 @@ export async function GET(req: Request) {
         max_spots: s.max_spots,
       });
     }
-    for (let i = paired; i < mBucket.length; i++) {
+
+    // Surplus alive mdapi rows → extra_in_db (real extras).
+    for (let i = pairedAlive; i < mBucket.length; i++) {
       const m = mBucket[i].row;
       extra_in_db.push({
         mdapi_match_id: m.api_id,
@@ -289,33 +340,19 @@ export async function GET(req: Request) {
         max_spots: m.max_player_count,
       });
     }
-  }
 
-  for (const m of matchRowsCancelled) {
-    const indexed = indexMatch(m);
-    if (!indexed) continue;
-    const key = `${indexed.cityName}|${indexed.venueKey}|${indexed.date}|${indexed.hhmm}`;
-    const sBucket = sBuckets.get(key) ?? [];
-    if (sBucket.length > 0) {
-      if (indexed.date > currentWeekEndIso) continue;
-      const s = sBucket[0].row;
-      cancelled.push({
-        schedule_master_id: s.id,
-        mdapi_match_id: m.api_id,
-        city: s.city,
-        venue: s.venue,
-        detail: s.detail,
-        match_date: s.match_date,
-        match_time: s.match_time,
-        max_spots: s.max_spots,
-      });
-    } else {
+    // Surplus cancelled mdapi rows (no template entry left to pair
+    // against) → extra_in_db. A cancelled mdapi row with no
+    // schedule_master counterpart is still "extra" relative to the
+    // template.
+    for (let i = pairedCancelled; i < cBucket.length; i++) {
+      const m = cBucket[i].row;
       extra_in_db.push({
         mdapi_match_id: m.api_id,
         city: m.city_identifier ?? "?",
         venue: m.field_title ?? "?",
-        match_date: indexed.date,
-        match_time: hhmmTo12h(indexed.hhmm),
+        match_date: cBucket[i].date,
+        match_time: hhmmTo12h(cBucket[i].hhmm),
         max_spots: m.max_player_count,
       });
     }
