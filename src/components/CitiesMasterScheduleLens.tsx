@@ -448,7 +448,7 @@ function CitySection({
   onEditMatch: (row: EditableRow) => void;
 }) {
   // Week-vs-week diff pills only. Cancellations show as in-grid
-  // strikethrough bubbles + the DB Sync count pill at the top of
+  // strikethrough bubbles + the Schedule Sync count pill at the top of
   // the tab; surfacing them again in the per-city row was loud
   // and crowded out the diff signal.
   const pills = diff.perCity.get(city.name) ?? [];
@@ -674,7 +674,7 @@ function DiscrepancyBanner({ data }: { data: Discrepancies }) {
     <div className="mb-5 rounded-2xl border-[1.5px] border-cream-line bg-cream-soft px-4 py-2.5 shadow-md shadow-deep-green/10">
       <div className="flex flex-wrap items-center gap-2">
         <span className="text-[11px] font-bold uppercase tracking-wider text-deep-green/70">
-          DB Sync · {dateLabel}
+          Schedule Sync · {dateLabel}
         </span>
         {missing > 0 && (
           <button
@@ -687,7 +687,7 @@ function DiscrepancyBanner({ data }: { data: Discrepancies }) {
                 : "bg-coral-soft text-coral-hover ring-1 ring-coral/40 hover:bg-coral-soft/70"
             }`}
           >
-            {missing} missing in DB
+            {missing} missing on MatchDay
           </button>
         )}
         {extra > 0 && (
@@ -701,7 +701,7 @@ function DiscrepancyBanner({ data }: { data: Discrepancies }) {
                 : "bg-yellow-soft text-deep-green ring-1 ring-yellow-pos/60 hover:bg-yellow-soft/70"
             }`}
           >
-            {extra} extra in DB
+            {extra} missing on Clubhouse
           </button>
         )}
         {mism > 0 && (
