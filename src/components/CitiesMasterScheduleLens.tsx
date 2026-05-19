@@ -653,7 +653,7 @@ function MatchPill({
 }
 
 // DB sync status banner. Compares schedule_master to mdapi_matches
-// over a two-week window via /api/schedule-master/discrepancies.
+// over the selected week via /api/schedule-master/discrepancies.
 // Each count pill is click-to-expand; sections fold to nothing if
 // their count is zero. The banner itself hides when all three
 // counts are zero.
