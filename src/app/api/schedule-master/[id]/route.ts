@@ -16,7 +16,8 @@ import {
 export const runtime = "nodejs";
 export const maxDuration = 10;
 
-const SELECT_COLS = "id, city, venue, detail, match_date, match_time, max_spots";
+const SELECT_COLS =
+  "id, city, venue, detail, match_date, match_time, max_spots, mdapi_field_id";
 const UUID_RE = /^[0-9a-f]{8}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{12}$/i;
 
 type RouteCtx = { params: Promise<{ id: string }> };
