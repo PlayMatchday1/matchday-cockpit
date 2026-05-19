@@ -25,6 +25,8 @@ export const VENUE_CANONICAL_MAP: Record<string, string[]> = {
   ],
   "Soccer Central": [
     "Soccer Central",
+    "Soccer Central Complex",
+    "Tourney at Soccer Central",
     "Soccer Central - SC Field 3",
     "Soccer Central - SC Field 4",
     "Soccer Central - SC Field 4A",

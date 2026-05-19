@@ -44,7 +44,6 @@
 // Auth: admin via authenticateCrm.
 
 import { authenticateCrm } from "@/lib/crmAuth";
-import { timezoneFor } from "@/lib/cityTimezones";
 import { canonicalizeVenue } from "@/lib/venueAliases";
 
 export const runtime = "nodejs";
@@ -88,7 +87,6 @@ type MatchRow = {
   api_id: number;
   city_identifier: string | null;
   field_title: string | null;
-  start_date_utc: string | null;
   start_date: string | null;
   is_cancelled: boolean | null;
   max_player_count: number | null;
@@ -125,12 +123,6 @@ type Out = {
     match_time: string;
     diffs: string[];
   }>;
-  // Cancelled mdapi matches that have a matching schedule_master
-  // entry. The lens cross-references these against the rendered
-  // grid to paint the corresponding bubble with the cancelled
-  // variant. `detail` and `match_time` come from the template row
-  // so the client can rebuild the same abbreviation + compact-time
-  // key the lens uses elsewhere.
   cancelled: Array<{
     schedule_master_id: string;
     mdapi_match_id: number;
@@ -160,16 +152,10 @@ export async function GET(req: Request) {
     );
   }
   const weekEnd = addDays(weekStart, WINDOW_DAYS - 1);
-  // Cancelled bucket reports only the displayed (current) week, not
-  // the full two-week comparison window. Operators only act on
-  // cancellations for the visible Mon-Sun grid; showing next week's
-  // cancellations as well crowds the banner count without changing
-  // anything operationally.
   const currentWeekEndIso = isoDate(addDays(weekStart, 6));
   const startIso = isoDate(weekStart);
   const endIso = isoDate(weekEnd);
 
-  // schedule_master is keyed on a plain `date`, so range is direct.
   const sRes = await supabase
     .from("schedule_master")
     .select("id, city, venue, detail, match_date, match_time, max_spots")
@@ -181,15 +167,12 @@ export async function GET(req: Request) {
   }
   const scheduleRows = (sRes.data ?? []) as ScheduleRow[];
 
-  // mdapi_matches.start_date is a timestamptz. Convert window to
-  // UTC-anchored ISO strings padded out to the end of the day so a
-  // venue-local 11:30 PM start on the last day still gets included.
   const startTs = `${startIso}T00:00:00Z`;
   const endTs = `${endIso}T23:59:59Z`;
   const mRes = await supabase
     .from("mdapi_matches")
     .select(
-      "api_id, city_identifier, field_title, start_date_utc, start_date, is_cancelled, max_player_count",
+      "api_id, city_identifier, field_title, start_date, is_cancelled, max_player_count",
     )
     .gte("start_date", startTs)
     .lte("start_date", endTs);
@@ -201,12 +184,6 @@ export async function GET(req: Request) {
   const matchRowsAlive = matchRows.filter((m) => m.is_cancelled !== true);
   const matchRowsCancelled = matchRows.filter((m) => m.is_cancelled === true);
 
-  // Build the comparison index off both sides. cityName is the
-  // canonical display form on both sides ("Austin", "San Antonio",
-  // ...). venueKey is the canonical venue from the alias map, or
-  // a softened literal fallback when the alias map doesn't yet
-  // know the surface form (canonicalizeVenue logs a one-time warn
-  // in that case so ops can add the alias).
   type Indexed = {
     cityName: string;
     venueKey: string;
@@ -216,11 +193,6 @@ export async function GET(req: Request) {
   function venueKeyFor(raw: string | null | undefined): string {
     const canonical = canonicalizeVenue(raw);
     if (canonical) return canonical;
-    // Softened fallback for unknown venues: lowercase + alphanum
-    // only. Lets both sides still match on a literal-string basis
-    // and keeps the unknown surfaced in console.warn (already
-    // emitted by canonicalizeVenue) so ops can extend the alias
-    // map.
     return (raw ?? "").toLowerCase().replace(/[^a-z0-9]/g, "");
   }
   const sIndex: Array<Indexed & { row: ScheduleRow }> = [];
@@ -228,33 +200,24 @@ export async function GET(req: Request) {
     if (!r.city) continue;
     sIndex.push({
       cityName: r.city,
-      // schedule_master.venue is the higher-level grouping (e.g.
-      // "NEMP", "Round Rock MP") which maps cleanly to the alias
-      // map's canonical keys. The per-field detail string still
-      // surfaces in the UI bubbles for operator readability.
       venueKey: venueKeyFor(r.venue),
       date: r.match_date,
       hhmm: parseStartHHMM(r.match_time),
       row: r,
     });
   }
-  // Factored out so both the alive loop below and the cancelled
-  // loop further down can reuse the same canonicalization without
-  // drifting (both must produce the same key for a row that
-  // matches a schedule_master entry).
   function indexMatch(m: MatchRow): (Indexed & { row: MatchRow }) | null {
     const cityName = mapCityIdentifier(m.city_identifier);
     if (!cityName) return null;
     const venueKey = venueKeyFor(m.field_title);
     if (!venueKey) return null;
-    const tz = timezoneFor(m.city_identifier ?? "");
-    const startTz = matchStartInZone(m, tz);
-    if (!startTz) return null;
+    const start = matchStart(m);
+    if (!start) return null;
     return {
       cityName,
       venueKey,
-      date: startTz.date,
-      hhmm: startTz.hhmm,
+      date: start.date,
+      hhmm: start.hhmm,
       row: m,
     };
   }
@@ -264,10 +227,6 @@ export async function GET(req: Request) {
     if (i) mIndex.push(i);
   }
 
-  // Key: cityName|venueKey|date|hhmm. Multiple entries on either
-  // side with the same key are unusual but possible — pair them
-  // positionally, with surplus on either side counted as missing /
-  // extra.
   function bucketize<T extends Indexed>(arr: T[]): Map<string, T[]> {
     const map = new Map<string, T[]>();
     for (const x of arr) {
@@ -294,13 +253,6 @@ export async function GET(req: Request) {
     for (let i = 0; i < paired; i++) {
       const s = sBucket[i];
       const m = mBucket[i];
-      // Mismatch detection intentionally produces nothing right now.
-      // max_spots used to be the only criterion, but in practice
-      // mdapi.max_player_count drifts per match (booking, weather,
-      // field swaps) and the divergence isn't a real schedule
-      // mismatch. The bucket + response shape stay so we can plug in
-      // a real criterion later (e.g. time-of-day drift inside the
-      // same hour) without a wire change.
       const diffs: string[] = [];
       if (diffs.length > 0) {
         mismatched.push({
@@ -339,24 +291,12 @@ export async function GET(req: Request) {
     }
   }
 
-  // Cancelled mdapi rows: same bucket lookup against the
-  // schedule_master side, but no diff is run. Two outcomes:
-  //   - schedule_master entry exists → cancelled bucket, with
-  //     fields sourced from the template row so the client can
-  //     rebuild the same abbr / time_short key the lens uses.
-  //   - no schedule_master entry → extra_in_db (the cancelled row
-  //     is still "extra" relative to the template).
   for (const m of matchRowsCancelled) {
     const indexed = indexMatch(m);
     if (!indexed) continue;
     const key = `${indexed.cityName}|${indexed.venueKey}|${indexed.date}|${indexed.hhmm}`;
     const sBucket = sBuckets.get(key) ?? [];
     if (sBucket.length > 0) {
-      // Matched-with-template cancellations only land in the
-      // cancelled bucket for the currently displayed week. Next-
-      // week matched cancellations are silently dropped from this
-      // response; they'll appear when the operator navigates
-      // forward. extra_in_db keeps its full 14-day window below.
       if (indexed.date > currentWeekEndIso) continue;
       const s = sBucket[0].row;
       cancelled.push({
@@ -381,8 +321,6 @@ export async function GET(req: Request) {
     }
   }
 
-  // Stable ordering — date, then city, then time. Makes inspection
-  // in the UI deterministic across requests.
   const byDateThenCityThenTime = (a: { match_date: string; city: string; match_time: string }, b: { match_date: string; city: string; match_time: string }) =>
     a.match_date.localeCompare(b.match_date) ||
     a.city.localeCompare(b.city) ||
@@ -435,9 +373,6 @@ function isoDate(d: Date): string {
   return d.toISOString().slice(0, 10);
 }
 
-// "7:00 PM - 8:00 PM" → "19:00", "9:00 PM" → "21:00". Returns ""
-// for unparseable so the bucket key is stable but the entry will
-// only ever match another unparseable side.
 function parseStartHHMM(time: string): string {
   const m = /^\s*(\d{1,2})(?::(\d{2}))?\s*(AM|PM|am|pm)?/.exec(time);
   if (!m) return "";
@@ -449,8 +384,6 @@ function parseStartHHMM(time: string): string {
   return `${String(h).padStart(2, "0")}:${String(min).padStart(2, "0")}`;
 }
 
-// Convert hh:mm 24h back to a display-friendly "H:MM PM" form for
-// surfacing extra_in_db rows in the UI.
 function hhmmTo12h(hhmm: string): string {
   const [hStr, mStr] = hhmm.split(":");
   const h24 = Number(hStr ?? 0);
@@ -461,35 +394,23 @@ function hhmmTo12h(hhmm: string): string {
 }
 
 // Compute the venue-local calendar date + hh:mm for a single
-// mdapi_matches row. Uses start_date_utc when available (it's the
-// canonical UTC value) and falls back to start_date otherwise.
-// Returns null if neither value parses.
-function matchStartInZone(
-  m: MatchRow,
-  tz: string | null,
-): { date: string; hhmm: string } | null {
-  const raw = m.start_date_utc ?? m.start_date;
+// mdapi_matches row. mdapi.start_date stores venue-local wall
+// clock encoded as a timestamptz at UTC offset (see
+// src/lib/cityTimezones.ts header) — so reading its UTC parts
+// directly gives the local calendar date and 24h time. No IANA
+// timezone conversion needed. start_date_utc is the true UTC
+// instant; comparing its UTC date for bucketing crosses the day
+// boundary for evening matches in Central/Mountain/Eastern (a
+// Sunday 7 PM San Antonio match has start_date_utc = Mon 00:00,
+// which would false-positive as missing/extra).
+function matchStart(m: MatchRow): { date: string; hhmm: string } | null {
+  const raw = m.start_date;
   if (!raw) return null;
   const ts = Date.parse(raw);
   if (Number.isNaN(ts)) return null;
   const d = new Date(ts);
-  if (!tz) {
-    // No known zone — fall back to UTC. Won't match Central rows
-    // cleanly but at least won't crash. Logged at warn level by
-    // the cityTimezones helper already.
-    return {
-      date: d.toISOString().slice(0, 10),
-      hhmm: `${String(d.getUTCHours()).padStart(2, "0")}:${String(d.getUTCMinutes()).padStart(2, "0")}`,
-    };
-  }
-  // Intl-format the date in the venue's local zone then re-split.
-  // en-CA gives YYYY-MM-DD; en-GB gives HH:MM in 24h.
-  const date = d.toLocaleDateString("en-CA", { timeZone: tz });
-  const time = d.toLocaleTimeString("en-GB", {
-    timeZone: tz,
-    hour: "2-digit",
-    minute: "2-digit",
-    hour12: false,
-  });
-  return { date, hhmm: time };
+  return {
+    date: d.toISOString().slice(0, 10),
+    hhmm: `${String(d.getUTCHours()).padStart(2, "0")}:${String(d.getUTCMinutes()).padStart(2, "0")}`,
+  };
 }
