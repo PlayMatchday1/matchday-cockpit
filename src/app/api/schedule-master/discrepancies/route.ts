@@ -1,6 +1,6 @@
 // GET /api/schedule-master/discrepancies — compare the curated
 // schedule_master template against actual mdapi_matches in a
-// two-week window starting at week_start.
+// one-week window starting at week_start.
 //
 // Four buckets are reported:
 //   missing_in_db — schedule_master rows with no matching
@@ -53,7 +53,7 @@ import { normalizeCityName } from "@/lib/cityNormalization";
 export const runtime = "nodejs";
 export const maxDuration = 15;
 
-const WINDOW_DAYS = 14; // current week + next week
+const WINDOW_DAYS = 7; // selected week only
 const ISO_DATE = /^\d{4}-\d{2}-\d{2}$/;
 
 // Read the mdapi city from raw.field.city.name first, then fall
