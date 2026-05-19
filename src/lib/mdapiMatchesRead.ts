@@ -32,7 +32,7 @@ import { cityFromAbbr } from "./cityMap";
 import { normField } from "./normField";
 
 const MATCHES_COLS =
-  "api_id, city_identifier, field_title, start_date, is_cancelled";
+  "api_id, city_identifier, field_id, field_title, start_date, is_cancelled";
 const PLAYERS_COLS =
   "api_id, match_api_id, user_id, user_email, user_type, paid_status, promocode_id, is_cancelled, canceled_at, amount, created_at, is_absent, user_is_fake_player";
 
@@ -76,6 +76,7 @@ async function mapWithLimit<T, R>(
 type MatchSelect = {
   api_id: number;
   city_identifier: string | null;
+  field_id: number | null;
   field_title: string | null;
   start_date: string | null;
   is_cancelled: boolean | null;
@@ -114,6 +115,11 @@ export type JoinedMatchPlayerRow = {
   email: string | null;
   // === Extras for matchPnL / projections / partner / snapshots ===
   matchApiId: number;
+  // mdapi field_id — the canonical numeric venue id, populated since
+  // migration 0016. Threaded through here so PR-E's Finance read paths
+  // can join via fin_venue_fields instead of normalizing field_title
+  // through alias tables.
+  fieldId: number | null;
   playerApiId: number;
   userId: number;
   matchPricePaid: number; // amount in dollars
@@ -174,6 +180,7 @@ export type LegacyMatchRegRow = {
   user_id: string;
   email: string | null;
   field: string;
+  field_id: number | null;
   match_start: string;
   match_canceled: boolean;
   player_canceled_at: string | null;
@@ -267,6 +274,7 @@ function mapJoinedRow(
     promocode,
     email: player.user_email?.toLowerCase() ?? null,
     matchApiId: match.api_id,
+    fieldId: match.field_id,
     playerApiId: player.api_id,
     userId: player.user_id,
     // API stores `amount` in cents (Stripe convention). Single
@@ -316,6 +324,7 @@ export function toLegacyShape(r: JoinedMatchPlayerRow): LegacyMatchRegRow {
     user_id: String(r.userId),
     email: r.email,
     field: r.field,
+    field_id: r.fieldId,
     match_start: dateToLocalIso(r.matchStart),
     match_canceled: r.matchCanceled,
     player_canceled_at: r.playerCanceledAt
