@@ -27,6 +27,7 @@ export const VENUE_CANONICAL_MAP: Record<string, string[]> = {
     "Soccer Central",
     "Soccer Central Complex",
     "Tourney at Soccer Central",
+    "Premier Match at Soccer Central",
     "Soccer Central - SC Field 3",
     "Soccer Central - SC Field 4",
     "Soccer Central - SC Field 4A",
@@ -38,7 +39,7 @@ export const VENUE_CANONICAL_MAP: Record<string, string[]> = {
     "NEMP Field 12",
     "NEMP Field 14",
   ],
-  "ATH Pearland": ["ATH Pearland"],
+  "ATH Pearland": ["ATH Pearland", "Tourney ATH Pearland"],
   "ATH Katy": ["ATH Katy"],
   "Hattrick Leander": [
     "Hattrick Leander",
@@ -67,6 +68,7 @@ export const VENUE_CANONICAL_MAP: Record<string, string[]> = {
   ],
   "Lou Fusz Outdoor": [
     "Lou Fusz Outdoor",
+    "Lou Fusz Athletic Complex",
     "Lou Fusz Outdoor (Field 10)",
     "Lou Fusz Outdoor (Field 5)",
   ],
