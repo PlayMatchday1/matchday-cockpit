@@ -320,6 +320,24 @@ export function resolveVenueForMatch(
   };
 }
 
+// PR-E: field_id → fin_venues.id resolver. Same role as
+// buildFieldToVenueIdMap (above) but keyed on the stable numeric
+// mdapi field_id rather than canonicalizing field_title strings.
+// Called by all internal Finance read paths (Field Ranking, Match
+// P&L, Projections, member-spot index). venueAliases / normalize-
+// MatchName remain the Stripe boundary's name-based path.
+export function buildFieldIdToVenueIdMap(
+  fieldIds: Set<number>,
+  venueFields: Map<number, number>,
+): Map<number, number> {
+  const out = new Map<number, number>();
+  for (const fieldId of fieldIds) {
+    const venueId = venueFields.get(fieldId);
+    if (venueId != null) out.set(fieldId, venueId);
+  }
+  return out;
+}
+
 export function buildFieldToVenueIdMap(
   fields: Set<string>,
   venues: { id: number; venue_name: string }[],

@@ -26,7 +26,7 @@
 
 import type { SupabaseClient } from "@supabase/supabase-js";
 import { fetchLegacyMatchRegistrations } from "./mdapiMatchesRead";
-import { buildFieldToVenueIdMap, resolveVenueForMatch } from "./venueNormalization";
+import { buildFieldIdToVenueIdMap, resolveVenueForMatch } from "./venueNormalization";
 
 const STAFF_EMAIL_DOMAIN = "matchday.com";
 const DOW_LABELS = ["Sun", "Mon", "Tue", "Wed", "Thu", "Fri", "Sat"] as const;
@@ -187,6 +187,7 @@ function fmtSlotLabel(dow: number, hhmm: string): string {
 
 export type RegistrationRow = {
   field: string | null;
+  field_id: number | null;
   match_start: string;
   match_canceled: boolean;
   player_canceled_at: string | null;
@@ -251,12 +252,10 @@ export function computeProjections(
     cost_per_match: number | null;
   }[],
   saved: Map<string, SavedProjection>,
-  // fin_venue_aliases as alias→canonical Map. Empty map is fine —
-  // normalizeMatchName will fall back to its built-in CROSS_VENUE_ALIASES
-  // / INTERNAL_PREFIX_RULES rules. Threading this through means CSV-side
-  // operator overrides (single existing row: "ATH Katy Sunday" → "ATH Katy")
-  // affect the projection venue assignment too.
-  aliases: Map<string, string>,
+  // PR-E: mdapi field_id → fin_venues.id map. Sourced from
+  // data.venueFields (loaded from fin_venue_fields). Replaces the
+  // prior fin_venue_aliases name-canonicalization path.
+  venueFields: Map<number, number>,
   windows: { windowsHistorical: WeekWindow[]; nextWindow: WeekWindow } = computeProjectionWindows(),
 ): ProjectionsView {
   // 1. Drop staff. Keep canceled rows so we can count canceled matches
@@ -267,11 +266,13 @@ export function computeProjections(
       !(r.email && r.email.toLowerCase().includes(STAFF_EMAIL_DOMAIN)),
   );
 
-  // 2. Field → venue map. Built from all rows so a venue that only has
-  //    cancellations or only next-week matches still resolves.
-  const fields = new Set<string>();
-  for (const r of regsExStaff) if (r.field) fields.add(r.field);
-  const fieldToVenue = buildFieldToVenueIdMap(fields, venues, aliases);
+  // 2. field_id → venue map. Built from all rows so a venue that only
+  //    has cancellations or only next-week matches still resolves.
+  const fieldIds = new Set<number>();
+  for (const r of regsExStaff) {
+    if (r.field_id != null) fieldIds.add(r.field_id);
+  }
+  const fieldToVenue = buildFieldIdToVenueIdMap(fieldIds, venueFields);
   const venueById = new Map(venues.map((v) => [v.id, v]));
 
   // 3. Single pass: bucket every reg into a slot accumulator.
@@ -299,7 +300,8 @@ export function computeProjections(
     return -1;
   }
   for (const r of regsExStaff) {
-    const baseVenueId = fieldToVenue.get(r.field as string);
+    if (r.field_id == null) continue;
+    const baseVenueId = fieldToVenue.get(r.field_id);
     if (baseVenueId === undefined) continue;
     const ymd = r.match_start.slice(0, 10);
     const hhmm = hhmmFromMatchStart(r.match_start);
@@ -474,7 +476,7 @@ export async function fetchProjectionsData(
     city: string | null;
     cost_per_match: number | null;
   }[];
-  aliases: Map<string, string>;
+  venueFields: Map<number, number>;
 }> {
   const { windowsHistorical, nextWindow } = computeProjectionWindows();
   const earliest = windowsHistorical[0].start;
@@ -484,7 +486,7 @@ export async function fetchProjectionsData(
   // earliest/latest are YYYY-MM-DD strings (per computeProjectionWindows).
   // The lib's gte/lte filter on mdapi_matches.start_date covers the
   // full local-time range correctly.
-  const [registrations, venuesRes, aliasRes] = await Promise.all([
+  const [registrations, venuesRes, vfRes] = await Promise.all([
     fetchLegacyMatchRegistrations(supabase, { fromDate: earliest, toDate: latest }),
     supabase
       .from("fin_venues")
@@ -492,17 +494,21 @@ export async function fetchProjectionsData(
       .select("id, venue_name, city, cost_per_match")
       .order("city")
       .order("venue_name"),
-    // fin_venue_aliases is bounded (currently 1 row) — single round trip
-    // is fine, no pagination needed. Feeds buildFieldToVenueIdMap so
-    // operator-level alias overrides reach the projection venue lookup.
-    supabase.from("fin_venue_aliases").select("alias, canonical_venue"),
+    // PR-E: fin_venue_fields replaces fin_venue_aliases as the
+    // venue resolver source. ~35 rows; single round trip.
+    supabase
+      .from("fin_venue_fields")
+      .select("fin_venue_id, mdapi_field_id"),
   ]);
   if (venuesRes.error) throw new Error(`Venues fetch: ${venuesRes.error.message}`);
-  if (aliasRes.error) throw new Error(`Aliases fetch: ${aliasRes.error.message}`);
+  if (vfRes.error) throw new Error(`Venue fields fetch: ${vfRes.error.message}`);
 
-  const aliases = new Map<string, string>();
-  for (const a of (aliasRes.data ?? []) as { alias: string | null; canonical_venue: string | null }[]) {
-    if (a.alias && a.canonical_venue) aliases.set(a.alias.trim(), a.canonical_venue.trim());
+  const venueFields = new Map<number, number>();
+  for (const f of (vfRes.data ?? []) as {
+    fin_venue_id: number;
+    mdapi_field_id: number;
+  }[]) {
+    venueFields.set(f.mdapi_field_id, f.fin_venue_id);
   }
 
   return {
@@ -513,7 +519,7 @@ export async function fetchProjectionsData(
       city: string | null;
       cost_per_match: number | null;
     }[],
-    aliases,
+    venueFields,
   };
 }
 

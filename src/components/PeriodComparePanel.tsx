@@ -25,7 +25,7 @@ import { useMemo, useState } from "react";
 import { useFinanceData } from "@/lib/useFinanceData";
 import { useMatchData } from "@/lib/useMatchData";
 import { CITIES } from "@/lib/types";
-import { buildFieldToVenueIdMap } from "@/lib/venueNormalization";
+import { buildFieldIdToVenueIdMap } from "@/lib/venueNormalization";
 import {
   aggregateDppByVenue,
   aggregateMemberBookingsByVenue,
@@ -95,20 +95,26 @@ export default function PeriodComparePanel({
     [mode],
   );
 
+  // PR-E: build the field-title → canonical-venue-name display map
+  // by going field_id → fin_venue_id → fin_venues.venue_name. Output
+  // shape (Map<field_title, venue_name>) is preserved so downstream
+  // string-keyed aggregations are unchanged; only the resolution
+  // path moves from name canonicalization to fin_venue_fields.
   const venueCanonicalByField = useMemo(() => {
     if (!data) return new Map<string, string>();
-    const fields = new Set<string>();
-    for (const r of matchRegistrations) if (r.field) fields.add(r.field);
-    const fieldToVenueId = buildFieldToVenueIdMap(
-      fields,
-      data.venues,
-      data.venueAliases,
-    );
+    const fieldIds = new Set<number>();
+    for (const r of matchRegistrations) {
+      if (r.fieldId != null) fieldIds.add(r.fieldId);
+    }
+    const fieldIdToVenueId = buildFieldIdToVenueIdMap(fieldIds, data.venueFields);
     const venueNameById = new Map(data.venues.map((v) => [v.id, v.venue_name]));
     const out = new Map<string, string>();
-    for (const [field, vid] of fieldToVenueId.entries()) {
+    for (const r of matchRegistrations) {
+      if (r.fieldId == null || !r.field) continue;
+      const vid = fieldIdToVenueId.get(r.fieldId);
+      if (vid == null) continue;
       const name = venueNameById.get(vid);
-      if (name) out.set(field, name);
+      if (name) out.set(r.field, name);
     }
     return out;
   }, [data, matchRegistrations]);

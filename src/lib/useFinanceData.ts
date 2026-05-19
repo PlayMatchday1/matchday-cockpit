@@ -177,6 +177,12 @@ export type FinanceData = {
   commentary: FinCommentary | null;
   overrides: FinVenueCostOverride[];
   venueAliases: Map<string, string>;
+  // PR-E: mdapi field_id → fin_venues.id. Source of truth for the
+  // venue-side internal join now that Finance read paths key on
+  // field_id instead of name canonicalization. Seeded from
+  // fin_venue_fields (migration 0041). venueAliases stays for the
+  // Stripe boundary (fin_revenue.venue is a normalized name string).
+  venueFields: Map<number, number>;
   config: Record<string, string>;
   // Member-spot counts derived from mdapi_match_players, used as the
   // denominator for the member-revenue allocation helpers in
@@ -283,6 +289,7 @@ async function load(quarter: QuarterInfo): Promise<void> {
   let vnRows: Array<Record<string, unknown>>;
   let msRows: Array<Record<string, unknown>>;
   let alRows: Array<Record<string, unknown>>;
+  let vfRows: Array<Record<string, unknown>>;
   let mbrRows: Array<Record<string, unknown>>;
   let prcRows: Array<Record<string, unknown>>;
   let ovRows: Array<Record<string, unknown>>;
@@ -300,6 +307,7 @@ async function load(quarter: QuarterInfo): Promise<void> {
       vnRows,
       msRows,
       alRows,
+      vfRows,
       mbrRows,
       prcRows,
       ovRows,
@@ -328,6 +336,15 @@ async function load(quarter: QuarterInfo): Promise<void> {
       ),
       selectAll<Record<string, unknown>>(() =>
         supabase.from("fin_venue_aliases").select("*").order("alias"),
+      ),
+      // PR-E: fin_venue_fields is the canonical join table between
+      // mdapi field_id and fin_venues.id. Loaded once per quarter
+      // (~35 rows today) and surfaced as data.venueFields below.
+      selectAll<Record<string, unknown>>(() =>
+        supabase
+          .from("fin_venue_fields")
+          .select("fin_venue_id, mdapi_field_id")
+          .order("mdapi_field_id"),
       ),
       // Phase 3b: switched from fin_members to mdapi_subscriptions.
       // Column rename + price (dollars) → price_cents shim happens in
@@ -382,6 +399,14 @@ async function load(quarter: QuarterInfo): Promise<void> {
     const alias = cleanText(a.alias);
     const canonical = cleanText(a.canonical_venue);
     if (alias && canonical) venueAliases.set(alias, canonical);
+  }
+  const venueFields = new Map<number, number>();
+  for (const f of vfRows) {
+    const fieldId = Number(f.mdapi_field_id);
+    const venueId = Number(f.fin_venue_id);
+    if (Number.isFinite(fieldId) && Number.isFinite(venueId)) {
+      venueFields.set(fieldId, venueId);
+    }
   }
   function canonVenue(v: unknown): string {
     const c = cleanText(v);
@@ -493,10 +518,11 @@ async function load(quarter: QuarterInfo): Promise<void> {
 
   // Build the mdapi-derived spot index from the Q2-wide registrations
   // pull. Drives venueAllocatedMemberRevenueFor / matchAllocatedMemberRevenueFor.
-  // Pass venueAliases so synonym pairs (e.g. "Katy International Sports
-  // Complex" → "KISC (Katy Intl)") resolve via normalizeMatchName.
+  // PR-E: bucket key is fin_venues.id, resolved via field_id →
+  // fin_venue_fields. Replaces the name-canonicalization path (which
+  // dropped rows whose field_title didn't match any fin_venues row).
   const mdapiMemberSpots = mdapiRegRows
-    ? buildMdapiMemberSpotIndex(mdapiRegRows, venues, venueAliases)
+    ? buildMdapiMemberSpotIndex(mdapiRegRows, venues, venueFields)
     : emptyMdapiMemberSpotIndex();
 
   const config: Record<string, string> = {};
@@ -573,6 +599,7 @@ async function load(quarter: QuarterInfo): Promise<void> {
       commentary,
       overrides,
       venueAliases,
+      venueFields,
       config,
       mdapiMemberSpots,
     },
