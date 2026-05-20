@@ -697,7 +697,7 @@ function Row({
       <td className="px-3 py-2 align-top">
         <div className="font-bold text-deep-green">{row.venueDisplayName}</div>
         <div className="text-[11px] text-deep-green/55">
-          {row.dayLabel} {row.timeLabel}
+          {row.dayLabel}, {fmtMonthDay(row.matchStart)} · {row.timeLabel}
         </div>
       </td>
       <td className="px-3 py-2 align-top text-deep-green/75">{row.city}</td>
