@@ -591,7 +591,10 @@ function ChatPaneInner({
             onChange={(e) => setBody(e.target.value)}
             onKeyDown={onKeyDown}
             placeholder="Reply as MatchDay. Enter to send, Shift+Enter for newline."
-            className="block flex-1 resize-none rounded-2xl border border-cream-line bg-white px-3 py-2 text-sm text-deep-green placeholder:text-deep-green/40 focus:border-deep-green focus:outline-none disabled:bg-cream-soft disabled:text-deep-green/40"
+            // text-base (16px) so iOS doesn't auto-zoom on focus, which
+            // strands the fixed bottom nav mid-screen. See Composer.tsx
+            // for the full story.
+            className="block flex-1 resize-none rounded-2xl border border-cream-line bg-white px-3 py-2 text-base text-deep-green placeholder:text-deep-green/40 focus:border-deep-green focus:outline-none disabled:bg-cream-soft disabled:text-deep-green/40"
             style={{ minHeight: 44, maxHeight: 240 }}
           />
           <button
