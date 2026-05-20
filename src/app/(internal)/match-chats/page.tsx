@@ -1,6 +1,7 @@
 import { Suspense } from "react";
 import type { Metadata } from "next";
 import AdminGuard from "@/components/AdminGuard";
+import MobileBottomNav from "@/components/MobileBottomNav";
 import MatchChatsClient from "./MatchChatsClient";
 
 // Two-pane Match Chats console. Left = tabbed inbox (Active /
@@ -22,9 +23,13 @@ export default function MatchChatsPage() {
   return (
     <AdminGuard>
       <div
-        className="-mx-6 -mb-8 flex h-[calc(100dvh-var(--bottom-nav-h))] flex-col md:h-[calc(100dvh-4rem)]"
+        className="-mx-6 flex h-[100dvh] flex-col md:h-[calc(100dvh-4rem)]"
         style={{
+          // Cancel AuthGate <main>'s padding so the shell occupies the
+          // full viewport. See /chats page wrapper for the full
+          // rationale on the inline-nav layout.
           marginTop: "calc(-1 * max(env(safe-area-inset-top), 2rem))",
+          marginBottom: "calc(-1 * (2rem + var(--bottom-nav-h)))",
         }}
       >
         {/* Suspense boundary required by Next 16 for any client tree
@@ -33,6 +38,10 @@ export default function MatchChatsPage() {
         <Suspense fallback={null}>
           <MatchChatsClient />
         </Suspense>
+        {/* Inline bottom nav: last flex child of the 100dvh shell,
+            sidesteps the iOS PWA position:fixed quirk. See /chats
+            page for the full rationale. */}
+        <MobileBottomNav inline />
       </div>
     </AdminGuard>
   );

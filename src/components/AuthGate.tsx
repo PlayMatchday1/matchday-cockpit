@@ -55,6 +55,17 @@ export default function AuthGate({ children }: { children: React.ReactNode }) {
     return <FullPageSpinner />;
   }
 
+  // Chat shells (/chats, /match-chats) render their own MobileBottomNav
+  // inline as a flex child of their 100dvh shell, instead of relying on
+  // viewport-fixed positioning. iOS Safari PWA miscalculates
+  // position:fixed bottom:0 against the visual viewport in those
+  // locked-shell pages after a keyboard cycle. Skipping the fixed nav
+  // here keeps the rest of the app on the old (working) fixed-nav
+  // layout while letting chat routes opt into the inline pattern.
+  const onChatShell =
+    !!pathname &&
+    (pathname.startsWith("/chats") || pathname.startsWith("/match-chats"));
+
   return (
     <>
       <TopNav />
@@ -71,7 +82,7 @@ export default function AuthGate({ children }: { children: React.ReactNode }) {
       >
         {children}
       </main>
-      <MobileBottomNav />
+      {!onChatShell && <MobileBottomNav />}
     </>
   );
 }

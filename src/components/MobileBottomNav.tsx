@@ -75,7 +75,17 @@ type SheetItem = {
   visible: boolean;
 };
 
-export default function MobileBottomNav() {
+export default function MobileBottomNav({
+  inline = false,
+}: {
+  // When true, render as a normal block element instead of viewport-fixed.
+  // Used on chat shells (/chats, /match-chats) where the surrounding shell
+  // is a 100dvh flex column with overflow-locked html — iOS Safari PWA
+  // miscalculates position:fixed bottom:0 against the visual viewport in
+  // that locked-shell state after a keyboard cycle, stranding the nav
+  // mid-screen. Inline flex positioning sidesteps the iOS quirk entirely.
+  inline?: boolean;
+} = {}) {
   const pathname = usePathname() ?? "";
   const { appUser, signOut } = useAuth();
   const [sheetOpen, setSheetOpen] = useState(false);
@@ -150,7 +160,11 @@ export default function MobileBottomNav() {
     <>
       <nav
         aria-label="Primary"
-        className="fixed inset-x-0 bottom-0 z-30 grid grid-cols-4 border-t border-cream-line bg-white md:hidden"
+        className={
+          inline
+            ? "grid grid-cols-4 border-t border-cream-line bg-white md:hidden"
+            : "fixed inset-x-0 bottom-0 z-30 grid grid-cols-4 border-t border-cream-line bg-white md:hidden"
+        }
         style={{ paddingBottom: "env(safe-area-inset-bottom)" }}
       >
         {visibleTabs.map((t) => {
