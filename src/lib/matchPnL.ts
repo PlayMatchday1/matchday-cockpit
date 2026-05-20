@@ -33,7 +33,7 @@
 
 import type { SupabaseClient } from "@supabase/supabase-js";
 import type { FinanceData } from "./useFinanceData";
-import { matchAllocatedMemberRevenueFor } from "./financeStats";
+import { cityMembershipRevenueFor } from "./financeStats";
 import {
   fetchLegacyMatchRegistrations,
   loadActiveSubscriptionsByEmail,
@@ -73,21 +73,27 @@ export type MatchPnLRow = {
   // Metrics
   // Total non-cancelled attendees: MEMBER + DPP + PROMOCODE + FREE_NON_MEMBER.
   spotsSold: number;
+  // DAILY PAID only (excludes MEMBER, FREE_NON_MEMBER, PROMOCODE).
+  // The "real cash gate count" for that match.
+  paidSpots: number;
   // Subscription-joined members only. Drives allocatedMemberRev and
   // the city-month byCityMonth denominator.
   memberSpots: number;
   // paid_status='FREE' rows whose email did NOT match an ACTIVE
   // subscription at match time (first-match-free signups, guest
   // passes, manager-added fills). Surfaced as "+N free" next to
-  // Spots Sold so operators can see when comps inflate the count.
+  // Spots Booked so operators can see when comps inflate the count.
   freeNonMemberSpots: number;
   // DPP gate revenue: sum of match_price_paid for DAILY PAID rows
   // only. Promo and free spots contribute $0.
   grossRevenue: number;
-  // Pro-rata share of the venue's month membership rev. See
-  // matchAllocatedMemberRevenueFor in financeStats.ts. Reconciles
-  // with Field Ranking's per-venue-month total when summed across
-  // a venue's matches in a month.
+  // Member play valued at the April benchmark rate:
+  //   memberSpots × (cityAprMembershipRev / cityAprMemberSpots).
+  // NOT collected membership revenue — that lives only in fin_revenue
+  // and is surfaced on the /finance Cities tab. This column is a
+  // stable per-spot valuation so the per-row figure reconciles with
+  // the April benchmark sub-line on the city header, instead of
+  // drifting month-by-month under the prior match-month allocation.
   allocatedMemberRev: number;
   // Sum of credit_amount across every non-cancelled, non-fake,
   // non-absent player row at this match. Already included in
@@ -105,8 +111,9 @@ export type MatchPnLRow = {
 export type MatchPnLSummary = {
   totalMatches: number;
   totalRevenue: number; // DPP gross
-  totalMemberRev: number; // allocated member rev
+  totalMemberRev: number; // member spots valued at April rate
   totalMemberSpots: number; // count of MEMBER fills across all matches
+  totalPaidSpots: number; // count of DAILY PAID fills across all matches
   totalCredit: number; // sum of credit_amount across all matches
   totalFieldCost: number; // sum across rows where cost is known
   net: number; // (totalRevenue + totalMemberRev) − totalFieldCost
@@ -258,6 +265,7 @@ export async function fetchWeekMatchPnL(
     venueDisplayName: string;
     city: string;
     spotsSold: number;
+    paidSpots: number;
     memberSpots: number;
     freeNonMemberSpots: number;
     grossRevenue: number;
@@ -292,6 +300,7 @@ export async function fetchWeekMatchPnL(
         venueDisplayName: venue?.venue_name ?? (r.field as string),
         city: venue?.city ?? "—",
         spotsSold: 0,
+        paidSpots: 0,
         memberSpots: 0,
         freeNonMemberSpots: 0,
         grossRevenue: 0,
@@ -308,29 +317,38 @@ export async function fetchWeekMatchPnL(
     } else if (pt === "FREE_NON_MEMBER") {
       b.freeNonMemberSpots += 1;
     } else if (pt === "DAILY PAID") {
+      b.paidSpots += 1;
       b.grossRevenue += Number(r.match_price_paid ?? 0) || 0;
     }
-    // PROMOCODE rows count toward spotsSold + credit, but $0 to DPP/Member.
+    // PROMOCODE rows count toward spotsSold + credit, but $0 to DPP/Member
+    // and don't increment paidSpots.
+  }
+
+  // April benchmark rate per city: cityAprMembershipRev / cityAprMemberSpots.
+  // Computed once per city that appears in this week's buckets so every
+  // row in the same city values its MEMBER spots at the identical
+  // structural rate the April benchmark sub-line on the city header
+  // displays. Cities with no recorded April member spots get rate=0,
+  // so allocatedMemberRev = $0 for all their rows (reconciles with the
+  // "no member spots recorded" fallback on the city header).
+  const cityAprRate = new Map<string, number>();
+  for (const b of buckets.values()) {
+    if (cityAprRate.has(b.city)) continue;
+    const aprMemberRev = cityMembershipRevenueFor(data, b.city, "Apr 2026");
+    const aprMemberSpots =
+      data.mdapiMemberSpots.byCityMonth.get(`${b.city}|Apr 2026`)?.member ?? 0;
+    cityAprRate.set(b.city, aprMemberSpots > 0 ? aprMemberRev / aprMemberSpots : 0);
   }
 
   const active: MatchPnLRow[] = [];
   for (const b of buckets.values()) {
-    const venue = b.venueId !== null ? (venueById.get(b.venueId) ?? null) : null;
     const cost = b.cost;
-    // Allocated member rev: pro-rata of the venue's monthly membership
-    // rev (Field Ranking's number) split across the month's matches
-    // in proportion to MEMBER fills at each match. Returns 0 cleanly
-    // when memberSpots=0, when venue is unresolved, or when the match
-    // falls outside Q2 — see helper for edge-case handling.
-    const allocatedMemberRev =
-      venue && b.memberSpots > 0
-        ? matchAllocatedMemberRevenueFor(data, {
-            city: b.city,
-            venueName: venue.venue_name,
-            matchStartIso: b.matchStartIso,
-            memberSpots: b.memberSpots,
-          })
-        : 0;
+    // Member play valued at the city's April benchmark rate. Stable
+    // across the quarter regardless of which week the match falls in,
+    // so the per-row figure equals memberSpots × the April benchmark
+    // rate shown on the city header.
+    const aprRate = cityAprRate.get(b.city) ?? 0;
+    const allocatedMemberRev = b.memberSpots * aprRate;
     const net =
       cost === null ? null : b.grossRevenue + allocatedMemberRev - cost;
     active.push({
@@ -343,6 +361,7 @@ export async function fetchWeekMatchPnL(
       dayLabel: dayLabelFromDate(b.matchStart),
       timeLabel: timeLabelFromDate(b.matchStart),
       spotsSold: b.spotsSold,
+      paidSpots: b.paidSpots,
       memberSpots: b.memberSpots,
       freeNonMemberSpots: b.freeNonMemberSpots,
       grossRevenue: b.grossRevenue,
@@ -385,6 +404,7 @@ export async function fetchWeekMatchPnL(
       dayLabel: dayLabelFromDate(matchStart),
       timeLabel: timeLabelFromDate(matchStart),
       spotsSold: 0,
+      paidSpots: 0,
       memberSpots: 0,
       freeNonMemberSpots: 0,
       grossRevenue: 0,
@@ -426,6 +446,7 @@ export function summarize(rows: MatchPnLRow[]): MatchPnLSummary {
   let totalRevenue = 0;
   let totalMemberRev = 0;
   let totalMemberSpots = 0;
+  let totalPaidSpots = 0;
   let totalCredit = 0;
   let totalFieldCost = 0;
   let losingMatches = 0;
@@ -434,6 +455,7 @@ export function summarize(rows: MatchPnLRow[]): MatchPnLSummary {
     totalRevenue += r.grossRevenue;
     totalMemberRev += r.allocatedMemberRev;
     totalMemberSpots += r.memberSpots;
+    totalPaidSpots += r.paidSpots;
     totalCredit += r.credit;
     if (r.fieldCost !== null) totalFieldCost += r.fieldCost;
     else matchesWithoutCost++;
@@ -444,6 +466,7 @@ export function summarize(rows: MatchPnLRow[]): MatchPnLSummary {
     totalRevenue,
     totalMemberRev,
     totalMemberSpots,
+    totalPaidSpots,
     totalCredit,
     totalFieldCost,
     net: totalRevenue + totalMemberRev - totalFieldCost,
