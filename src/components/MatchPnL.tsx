@@ -21,10 +21,11 @@ import {
 type SortKey =
   | "match"
   | "city"
-  | "spotsSold"
+  | "spotsSold" // labeled "Spots Booked"
+  | "paidSpots"
   | "memberSpots"
-  | "grossRevenue" // labeled "DPP" in the UI; field name kept stable
-  | "memberRev" // labeled "Member"
+  | "grossRevenue" // labeled "DPP Rev"; field name kept stable
+  | "memberRev" // labeled "Member Rev"
   | "credit"
   | "total" // DPP + Member
   | "fieldCost"
@@ -147,6 +148,7 @@ export default function MatchPnL({
       // first), spotsSold/gross/memberRev/cost descending, others ascending.
       setSortDir(
         k === "spotsSold" ||
+          k === "paidSpots" ||
           k === "memberSpots" ||
           k === "grossRevenue" ||
           k === "memberRev" ||
@@ -184,6 +186,8 @@ export default function MatchPnL({
           return (a.city.localeCompare(b.city)) * dir;
         case "spotsSold":
           return (a.spotsSold - b.spotsSold) * dir;
+        case "paidSpots":
+          return (a.paidSpots - b.paidSpots) * dir;
         case "memberSpots":
           return (a.memberSpots - b.memberSpots) * dir;
         case "grossRevenue":
@@ -249,6 +253,7 @@ export default function MatchPnL({
     let gross = 0;
     let memberRev = 0;
     let memberSpots = 0;
+    let paidSpots = 0;
     let credit = 0;
     let freeNonMemberSpots = 0;
     let cost = 0;
@@ -257,6 +262,7 @@ export default function MatchPnL({
       gross += r.grossRevenue;
       memberRev += r.allocatedMemberRev;
       memberSpots += r.memberSpots;
+      paidSpots += r.paidSpots;
       credit += r.credit;
       freeNonMemberSpots += r.freeNonMemberSpots;
       if (r.fieldCost !== null) cost += r.fieldCost;
@@ -267,6 +273,7 @@ export default function MatchPnL({
       gross,
       memberRev,
       memberSpots,
+      paidSpots,
       credit,
       freeNonMemberSpots,
       cost,
@@ -318,21 +325,27 @@ export default function MatchPnL({
                 matches
               </span>
               <span>
-                DPP{" "}
-                <span className="font-mono font-bold tabular-nums text-deep-green">
-                  {fmtUsd(summary.totalRevenue)}
+                Paid spots{" "}
+                <span className="font-bold tabular-nums text-deep-green">
+                  {summary.totalPaidSpots}
                 </span>
               </span>
               <span>
-                Member{" "}
+                DPP Rev{" "}
                 <span className="font-mono font-bold tabular-nums text-deep-green">
-                  {fmtUsd(summary.totalMemberRev)}
+                  {fmtUsd(summary.totalRevenue)}
                 </span>
               </span>
               <span>
                 Member spots{" "}
                 <span className="font-bold tabular-nums text-deep-green">
                   {summary.totalMemberSpots}
+                </span>
+              </span>
+              <span>
+                Member Rev{" "}
+                <span className="font-mono font-bold tabular-nums text-deep-green">
+                  {fmtUsd(summary.totalMemberRev)}
                 </span>
               </span>
               <span>
@@ -413,7 +426,17 @@ export default function MatchPnL({
               <tr>
                 <SortHeader k="match" label="Match" sortKey={sortKey} sortDir={sortDir} onClick={toggleSort} align="left" />
                 <SortHeader k="city" label="City" sortKey={sortKey} sortDir={sortDir} onClick={toggleSort} align="left" />
-                <SortHeader k="spotsSold" label="Spots Sold" sortKey={sortKey} sortDir={sortDir} onClick={toggleSort} align="right" />
+                <SortHeader k="spotsSold" label="Spots Booked" sortKey={sortKey} sortDir={sortDir} onClick={toggleSort} align="right" />
+                <SortHeader
+                  k="paidSpots"
+                  label="Paid Spots"
+                  sortKey={sortKey}
+                  sortDir={sortDir}
+                  onClick={toggleSort}
+                  align="right"
+                  tooltip="Count of DAILY PAID fills at this match. Excludes MEMBER, FREE_NON_MEMBER, and PROMOCODE."
+                />
+                <SortHeader k="grossRevenue" label="DPP Rev" sortKey={sortKey} sortDir={sortDir} onClick={toggleSort} align="right" />
                 <SortHeader
                   k="memberSpots"
                   label="Member Spots"
@@ -421,17 +444,16 @@ export default function MatchPnL({
                   sortDir={sortDir}
                   onClick={toggleSort}
                   align="right"
-                  tooltip="Count of MEMBER fills at this match. Subset of Spots Sold; pairs with the allocated Member $ figure."
+                  tooltip="Count of MEMBER fills at this match (subscription-joined). Pairs with Member Rev valued at the April benchmark rate."
                 />
-                <SortHeader k="grossRevenue" label="DPP" sortKey={sortKey} sortDir={sortDir} onClick={toggleSort} align="right" />
                 <SortHeader
                   k="memberRev"
-                  label="Member"
+                  label="Member Rev"
                   sortKey={sortKey}
                   sortDir={sortDir}
                   onClick={toggleSort}
                   align="right"
-                  tooltip="Each match's share of monthly membership revenue, allocated based on member attendance at this venue. Reconciles with Field Ranking totals."
+                  tooltip="Member play valued at the city's April benchmark rate (memberSpots × April $/spot). Not collected membership revenue; that lives on /finance Cities."
                 />
                 <SortHeader
                   k="credit"
@@ -459,7 +481,7 @@ export default function MatchPnL({
             {activeRows === null ? (
               <tbody>
                 <tr>
-                  <td colSpan={11} className="px-3 py-8 text-center text-sm text-deep-green/55">
+                  <td colSpan={12} className="px-3 py-8 text-center text-sm text-deep-green/55">
                     Loading match P&L…
                   </td>
                 </tr>
@@ -467,7 +489,7 @@ export default function MatchPnL({
             ) : cityGroups.length === 0 ? (
               <tbody>
                 <tr>
-                  <td colSpan={11} className="px-3 py-8 text-center text-sm text-deep-green/55">
+                  <td colSpan={12} className="px-3 py-8 text-center text-sm text-deep-green/55">
                     No matches with cost data this week.
                     {missingCost.length > 0 &&
                       ` (${missingCost.length} matches without cost set — see below.)`}
@@ -501,14 +523,15 @@ export default function MatchPnL({
                   <tbody key={g.city}>
                     <tr className="border-t-2 border-cream-line bg-cream-soft/50">
                       <td
-                        colSpan={11}
+                        colSpan={12}
                         className="px-3 py-2 text-[10px] font-bold uppercase tracking-[0.12em] text-deep-green"
                       >
                         {g.city}
                         <span className="ml-2 font-normal text-deep-green/55">
                           · {sub.matches} match{sub.matches === 1 ? "" : "es"} ·
-                          DPP {fmtUsd(sub.gross)} · Member spots{" "}
-                          {sub.memberSpots} · Member{" "}
+                          Paid {sub.paidSpots} · DPP Rev{" "}
+                          {fmtUsd(sub.gross)} · Member spots{" "}
+                          {sub.memberSpots} · Member Rev{" "}
                           {fmtUsd(sub.memberRev)} · Credit{" "}
                           {fmtUsd(sub.credit)} · Total{" "}
                           {fmtUsd(sub.gross + sub.memberRev)} · cost{" "}
@@ -696,11 +719,18 @@ function Row({
         {row.status === "canceled" ? (
           <span className="text-deep-green/35">—</span>
         ) : (
-          row.memberSpots
+          row.paidSpots
         )}
       </td>
       <td className="px-3 py-2 text-right align-top font-mono tabular-nums text-deep-green">
         {fmtUsd(row.grossRevenue)}
+      </td>
+      <td className="px-3 py-2 text-right align-top font-mono tabular-nums text-deep-green">
+        {row.status === "canceled" ? (
+          <span className="text-deep-green/35">—</span>
+        ) : (
+          row.memberSpots
+        )}
       </td>
       <td className="px-3 py-2 text-right align-top font-mono tabular-nums text-deep-green">
         {fmtUsd(row.allocatedMemberRev)}
