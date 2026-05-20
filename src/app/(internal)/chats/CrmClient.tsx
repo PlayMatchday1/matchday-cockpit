@@ -398,6 +398,35 @@ export default function CrmClient() {
     void loadOperators();
   }, [loadThreads, loadOperators]);
 
+  // iOS PWA home-screen badge. Writes the unread thread count to the
+  // app icon every time `threads` updates — covers both fresh inbox
+  // loads and optimistic mark-read patches. Idempotent with the SW
+  // push handler's setAppBadge(); whichever writes last wins. No-op
+  // on browsers without the Badging API (desktop Chrome, Safari < 16.4,
+  // any non-installed PWA).
+  useEffect(() => {
+    if (typeof navigator === "undefined") return;
+    const setBadge = (
+      navigator as Navigator & {
+        setAppBadge?: (n: number) => Promise<void>;
+        clearAppBadge?: () => Promise<void>;
+      }
+    ).setAppBadge;
+    const clearBadge = (
+      navigator as Navigator & {
+        setAppBadge?: (n: number) => Promise<void>;
+        clearAppBadge?: () => Promise<void>;
+      }
+    ).clearAppBadge;
+    if (typeof setBadge !== "function") return;
+    const count = threads.reduce((n, t) => n + (t.is_unread ? 1 : 0), 0);
+    if (count === 0) {
+      clearBadge?.call(navigator).catch(() => {});
+    } else {
+      setBadge.call(navigator, count).catch(() => {});
+    }
+  }, [threads]);
+
   // Reload detail whenever the selection changes (or first mounts
   // with a threadId from the URL). Resetting detail to null
   // momentarily keeps the previous thread's messages from flashing.

@@ -31,6 +31,11 @@ export type PushPayload = {
   // into one on the lockscreen. Use thread_id so back-to-back
   // inbounds on the same thread coalesce.
   tag?: string;
+  // iOS PWA home-screen badge count. When present, the SW calls
+  // self.registration.setAppBadge(count). Per-recipient — different
+  // viewers have different unread tallies under the assignment-
+  // aware rule.
+  unread_count?: number;
   // Routed by the SW notificationclick handler. `route` is the
   // in-app path to focus/open when tapped.
   data: {

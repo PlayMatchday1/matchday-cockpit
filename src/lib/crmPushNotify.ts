@@ -90,7 +90,9 @@ async function doNotify({
   }
   if (recipientIds.length === 0) return;
 
-  // 2. Resolve push subscriptions for those recipients.
+  // 2. Resolve push subscriptions for those recipients, grouped by
+  // user_id. Per-user grouping lets us send a personalized payload
+  // (different unread_count per viewer) without re-querying subs.
   const subsRes = await supabase
     .from("push_subscriptions")
     .select("user_id, endpoint, p256dh, auth")
@@ -105,6 +107,12 @@ async function doNotify({
       `[crm:push] no subscriptions for thread=${threadId} recipients=${recipientIds.length}`,
     );
     return;
+  }
+  const subsByUser = new Map<string, StoredSubscription[]>();
+  for (const s of subs) {
+    const list = subsByUser.get(s.user_id) ?? [];
+    list.push(s);
+    subsByUser.set(s.user_id, list);
   }
 
   // 3. Title — player display name when we have one, else the
@@ -131,20 +139,137 @@ async function doNotify({
   // screen text matches the inbox row text.
   const previewBody = bodyPreview(body, mediaKind ?? null, mediaFilename ?? null);
 
-  const payload: PushPayload = {
-    title,
-    body: previewBody,
-    tag: threadId,
-    data: {
-      thread_id: threadId,
-      route: `/chats?threadId=${encodeURIComponent(threadId)}`,
-    },
-  };
-  const results = await sendPushNotificationToMany(subs, payload);
-  const okCount = results.filter((r) => r.ok).length;
-  console.log(
-    `[crm:push] sent thread=${threadId} recipients=${recipientIds.length} subs=${subs.length} delivered=${okCount}`,
+  // 5. Per-recipient unread counts for the iOS PWA home-screen badge.
+  // Shares the expensive direction / threads / reads queries across
+  // recipients so this stays O(threads) regardless of recipient count.
+  const unreadCounts = await computeUnreadCountsForUsers(
+    supabase,
+    Array.from(subsByUser.keys()),
   );
+
+  // 6. Fan out per recipient. Each recipient gets a payload with
+  // their own unread_count so the SW can call setAppBadge() to the
+  // right number.
+  let totalOk = 0;
+  for (const [userId, userSubs] of subsByUser) {
+    const payload: PushPayload = {
+      title,
+      body: previewBody,
+      tag: threadId,
+      unread_count: unreadCounts.get(userId) ?? 1,
+      data: {
+        thread_id: threadId,
+        route: `/chats?threadId=${encodeURIComponent(threadId)}`,
+      },
+    };
+    const results = await sendPushNotificationToMany(userSubs, payload);
+    totalOk += results.filter((r) => r.ok).length;
+  }
+  console.log(
+    `[crm:push] sent thread=${threadId} recipients=${recipientIds.length} subs=${subs.length} delivered=${totalOk}`,
+  );
+}
+
+// Computes per-user unread thread counts using the same rule as
+// GET /api/crm/threads (src/app/api/crm/threads/route.ts:205-228):
+//   - cap at 50 most-recent threads
+//   - require last_message_preview non-null
+//   - require latest message direction = "inbound"
+//   - unassigned threads: effective = MAX(last_read_at) across all admins
+//   - assigned-to-user: effective = that user's own last_read_at
+//   - assigned-to-someone-else: never unread for this viewer
+//   - is_unread = (effective IS NULL OR last_message_at > effective)
+//
+// Per-recipient counts are derived from a single set of shared
+// queries so this is O(threads) regardless of recipient count.
+async function computeUnreadCountsForUsers(
+  supabase: SupabaseClient,
+  userIds: string[],
+): Promise<Map<string, number>> {
+  const counts = new Map<string, number>();
+  for (const id of userIds) counts.set(id, 0);
+  if (userIds.length === 0) return counts;
+
+  const threadsRes = await supabase
+    .from("crm_threads")
+    .select("id, last_message_at, last_message_preview, assigned_to_user_id")
+    .order("last_message_at", { ascending: false })
+    .limit(50);
+  if (threadsRes.error || !threadsRes.data || threadsRes.data.length === 0) {
+    return counts;
+  }
+  const threads = threadsRes.data as Array<{
+    id: string;
+    last_message_at: string;
+    last_message_preview: string | null;
+    assigned_to_user_id: string | null;
+  }>;
+  const threadIds = threads.map((t) => t.id);
+
+  // Latest direction per thread — one bounded query each, same
+  // strategy as GET /api/crm/threads.
+  const directionResults = await Promise.all(
+    threads.map(async (t) => {
+      const r = await supabase
+        .from("crm_messages")
+        .select("direction")
+        .eq("thread_id", t.id)
+        .order("sent_at", { ascending: false })
+        .limit(1)
+        .maybeSingle();
+      return [t.id, (r.data?.direction as string | null) ?? null] as const;
+    }),
+  );
+  const directionByThreadId = new Map(directionResults);
+
+  const readsRes = await supabase
+    .from("crm_thread_reads")
+    .select("thread_id, user_id, last_read_at")
+    .in("thread_id", threadIds);
+  const readsRows = (readsRes.data ?? []) as Array<{
+    thread_id: string;
+    user_id: string;
+    last_read_at: string;
+  }>;
+
+  const readsByThreadMax = new Map<string, string>();
+  const readsByUserThread = new Map<string, Map<string, string>>();
+  for (const r of readsRows) {
+    const prev = readsByThreadMax.get(r.thread_id);
+    if (!prev || Date.parse(r.last_read_at) > Date.parse(prev)) {
+      readsByThreadMax.set(r.thread_id, r.last_read_at);
+    }
+    let perUser = readsByUserThread.get(r.user_id);
+    if (!perUser) {
+      perUser = new Map();
+      readsByUserThread.set(r.user_id, perUser);
+    }
+    perUser.set(r.thread_id, r.last_read_at);
+  }
+
+  for (const userId of userIds) {
+    let count = 0;
+    for (const t of threads) {
+      if (!t.last_message_preview) continue;
+      if (directionByThreadId.get(t.id) !== "inbound") continue;
+      let effective: string | null;
+      if (t.assigned_to_user_id == null) {
+        effective = readsByThreadMax.get(t.id) ?? null;
+      } else if (t.assigned_to_user_id === userId) {
+        effective = readsByUserThread.get(userId)?.get(t.id) ?? null;
+      } else {
+        continue;
+      }
+      if (
+        effective == null ||
+        Date.parse(t.last_message_at) > Date.parse(effective)
+      ) {
+        count++;
+      }
+    }
+    counts.set(userId, count);
+  }
+  return counts;
 }
 
 function bodyPreview(

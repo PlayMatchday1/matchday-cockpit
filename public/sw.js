@@ -123,6 +123,13 @@ self.addEventListener("fetch", (event) => {
 //              routing
 //   renotify   true so a fresh notification with the same tag still
 //              re-buzzes (iOS / Android both honor)
+//
+// App badge (iOS 16.4+ installed PWA): when payload.unread_count is a
+// number, we call self.registration.setAppBadge() so the home-screen
+// icon shows a red dot with the unread count. Best-effort and gated
+// on capability — older OSes / desktop browsers ignore. The page
+// client (CrmClient.tsx) is the other writer; both are idempotent
+// and converge.
 
 self.addEventListener("push", (event) => {
   if (!event.data) return;
@@ -142,8 +149,12 @@ self.addEventListener("push", (event) => {
   const tag = typeof payload.tag === "string" ? payload.tag : undefined;
   const data =
     payload.data && typeof payload.data === "object" ? payload.data : {};
+  const unreadCount =
+    typeof payload.unread_count === "number" && payload.unread_count >= 0
+      ? payload.unread_count
+      : null;
 
-  event.waitUntil(
+  const tasks = [
     self.registration.showNotification(title, {
       body,
       icon: "/icons/icon-192.png",
@@ -153,7 +164,20 @@ self.addEventListener("push", (event) => {
       renotify: !!tag,
       requireInteraction: false,
     }),
-  );
+  ];
+
+  if (
+    unreadCount !== null &&
+    typeof self.registration.setAppBadge === "function"
+  ) {
+    tasks.push(
+      self.registration.setAppBadge(unreadCount).catch(() => {
+        // Best-effort. Page client will reconcile on next inbox refresh.
+      }),
+    );
+  }
+
+  event.waitUntil(Promise.all(tasks));
 });
 
 self.addEventListener("notificationclick", (event) => {
