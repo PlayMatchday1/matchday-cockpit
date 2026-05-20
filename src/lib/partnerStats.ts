@@ -4,7 +4,10 @@
 // partner page.
 
 import { createClient, type SupabaseClient } from "@supabase/supabase-js";
-import { fetchLegacyMatchRegistrations } from "./mdapiMatchesRead";
+import {
+  fetchLegacyMatchRegistrations,
+  loadActiveSubscriptionsByEmail,
+} from "./mdapiMatchesRead";
 
 const STAFF_EMAIL_DOMAIN = "matchday.com";
 
@@ -312,9 +315,17 @@ export async function fetchPartnerRows(
   // Read this venue's matches+players from mdapi_matches /
   // mdapi_match_players via the shared lib. ILIKE filter on
   // mdapi_matches.field_title mirrors the CSV-era venue match.
-  const out: PartnerRegRow[] = await fetchLegacyMatchRegistrations(supabase, {
-    fieldLike: `%${venue.venue_name}%`,
-  });
+  //
+  // Subs map is passed so paid_status=FREE rows split into real
+  // MEMBER vs FREE_NON_MEMBER (first-match-free, guest passes,
+  // manager-added fills). Without it, partner MEMBER counts would
+  // diverge from /admin/finance Match P&L numbers post-2026-05-20.
+  const subscriptionsByEmail = await loadActiveSubscriptionsByEmail(supabase);
+  const out: PartnerRegRow[] = await fetchLegacyMatchRegistrations(
+    supabase,
+    { fieldLike: `%${venue.venue_name}%` },
+    subscriptionsByEmail,
+  );
 
   // fin_revenue rows for this venue.
   //

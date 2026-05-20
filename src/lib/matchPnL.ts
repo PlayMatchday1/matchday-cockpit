@@ -34,13 +34,23 @@
 import type { SupabaseClient } from "@supabase/supabase-js";
 import type { FinanceData } from "./useFinanceData";
 import { matchAllocatedMemberRevenueFor } from "./financeStats";
-import { fetchLegacyMatchRegistrations } from "./mdapiMatchesRead";
+import {
+  fetchLegacyMatchRegistrations,
+  loadActiveSubscriptionsByEmail,
+} from "./mdapiMatchesRead";
 import { buildFieldIdToVenueIdMap, resolveVenueForMatch } from "./venueNormalization";
 
-// Allow-list of player-booking payment types. Anything else (NULL,
-// rental codes, comp markers) gets filtered out as not a real
-// fill-the-spots booking event.
-const ALLOWED_PAYMENT_TYPES = new Set(["DAILY PAID", "MEMBER"]);
+// Allow-list of real-attendee payment types. Spots Sold counts every
+// real fill regardless of payment shape; only DAILY PAID contributes
+// to DPP $, and only MEMBER (subscription-joined) contributes to
+// allocated Member $. PROMOCODE and FREE_NON_MEMBER count as
+// attendees but contribute $0 to both revenue figures.
+const ALLOWED_PAYMENT_TYPES = new Set([
+  "DAILY PAID",
+  "MEMBER",
+  "PROMOCODE",
+  "FREE_NON_MEMBER",
+]);
 
 export type MatchPnLStatus =
   | "loss"
@@ -61,14 +71,30 @@ export type MatchPnLRow = {
   dayLabel: string; // "Mon"
   timeLabel: string; // "7:30 PM"
   // Metrics
-  spotsSold: number; // total fills (DPP + Member)
-  memberSpots: number; // subset of spotsSold; drives allocatedMemberRev
-  grossRevenue: number; // DPP only — members pay $0 per match
+  // Total non-cancelled attendees: MEMBER + DPP + PROMOCODE + FREE_NON_MEMBER.
+  spotsSold: number;
+  // Subscription-joined members only. Drives allocatedMemberRev and
+  // the city-month byCityMonth denominator.
+  memberSpots: number;
+  // paid_status='FREE' rows whose email did NOT match an ACTIVE
+  // subscription at match time (first-match-free signups, guest
+  // passes, manager-added fills). Surfaced as "+N free" next to
+  // Spots Sold so operators can see when comps inflate the count.
+  freeNonMemberSpots: number;
+  // DPP gate revenue: sum of match_price_paid for DAILY PAID rows
+  // only. Promo and free spots contribute $0.
+  grossRevenue: number;
   // Pro-rata share of the venue's month membership rev. See
   // matchAllocatedMemberRevenueFor in financeStats.ts. Reconciles
   // with Field Ranking's per-venue-month total when summed across
   // a venue's matches in a month.
   allocatedMemberRev: number;
+  // Sum of credit_amount across every non-cancelled, non-fake,
+  // non-absent player row at this match. Already included in
+  // grossRevenue via the booking-value amount; surfaced as its own
+  // column to make credit usage visible without changing the DPP
+  // math.
+  credit: number;
   fieldCost: number | null;
   // net = grossRevenue + allocatedMemberRev − fieldCost. Null when
   // fieldCost is null (cost not set on venue).
@@ -81,6 +107,7 @@ export type MatchPnLSummary = {
   totalRevenue: number; // DPP gross
   totalMemberRev: number; // allocated member rev
   totalMemberSpots: number; // count of MEMBER fills across all matches
+  totalCredit: number; // sum of credit_amount across all matches
   totalFieldCost: number; // sum across rows where cost is known
   net: number; // (totalRevenue + totalMemberRev) − totalFieldCost
   losingMatches: number;
@@ -144,9 +171,7 @@ function parseLocalTimestamp(s: string): Date | null {
 
 // Subset of LegacyMatchRegRow that this file actually consumes.
 // Sourced from mdapi_matches + mdapi_match_players via the shared
-// mdapiMatchesRead lib. Field shape kept identical to the CSV-era
-// match_registrations row so the bucketing logic below stays
-// unchanged.
+// mdapiMatchesRead lib.
 type RegRow = {
   field: string;
   field_id: number | null;
@@ -155,6 +180,7 @@ type RegRow = {
   player_canceled_at: string | null;
   payment_type: string | null;
   match_price_paid: number;
+  credit_paid: number;
 };
 
 export type FetchWeekMatchPnLResult = {
@@ -176,10 +202,19 @@ export async function fetchWeekMatchPnL(
   // comparisons that correctly span the local week).
   const ymd = (d: Date) =>
     `${d.getFullYear()}-${String(d.getMonth() + 1).padStart(2, "0")}-${String(d.getDate()).padStart(2, "0")}`;
-  const regs: RegRow[] = await fetchLegacyMatchRegistrations(supabase, {
-    fromDate: ymd(weekStart),
-    toDate: ymd(weekEnd),
-  });
+  // Load ACTIVE subscriptions so derivePaymentType can distinguish
+  // real members (FREE + active sub at match time) from FREE_NON_MEMBER
+  // (first-match-free, guest passes, manager-added fills). Without
+  // this map, the legacy "FREE → MEMBER" fallback over-counts members.
+  const subscriptionsByEmail = await loadActiveSubscriptionsByEmail(supabase);
+  const regs: RegRow[] = await fetchLegacyMatchRegistrations(
+    supabase,
+    {
+      fromDate: ymd(weekStart),
+      toDate: ymd(weekEnd),
+    },
+    subscriptionsByEmail,
+  );
 
   // Split into canceled (match_canceled=true) and active (the rest).
   // Canceled rows skip the active filter chain entirely — they go
@@ -224,7 +259,9 @@ export async function fetchWeekMatchPnL(
     city: string;
     spotsSold: number;
     memberSpots: number;
+    freeNonMemberSpots: number;
     grossRevenue: number;
+    credit: number;
     // Day-aware cost captured at row time so the bucket records the
     // resolved rate (incl. the sibling-cost-null fallback to base
     // venue's rate). See resolveVenueForMatch.
@@ -256,17 +293,24 @@ export async function fetchWeekMatchPnL(
         city: venue?.city ?? "—",
         spotsSold: 0,
         memberSpots: 0,
+        freeNonMemberSpots: 0,
         grossRevenue: 0,
+        credit: 0,
         cost: resolved?.cost ?? null,
       };
       buckets.set(key, b);
     }
+    const pt = (r.payment_type ?? "").toUpperCase();
     b.spotsSold += 1;
-    if ((r.payment_type ?? "").toUpperCase() === "MEMBER") {
+    b.credit += Number(r.credit_paid ?? 0) || 0;
+    if (pt === "MEMBER") {
       b.memberSpots += 1;
-    } else {
+    } else if (pt === "FREE_NON_MEMBER") {
+      b.freeNonMemberSpots += 1;
+    } else if (pt === "DAILY PAID") {
       b.grossRevenue += Number(r.match_price_paid ?? 0) || 0;
     }
+    // PROMOCODE rows count toward spotsSold + credit, but $0 to DPP/Member.
   }
 
   const active: MatchPnLRow[] = [];
@@ -300,8 +344,10 @@ export async function fetchWeekMatchPnL(
       timeLabel: timeLabelFromDate(b.matchStart),
       spotsSold: b.spotsSold,
       memberSpots: b.memberSpots,
+      freeNonMemberSpots: b.freeNonMemberSpots,
       grossRevenue: b.grossRevenue,
       allocatedMemberRev,
+      credit: b.credit,
       fieldCost: cost,
       net,
       status: statusFor(net),
@@ -340,12 +386,14 @@ export async function fetchWeekMatchPnL(
       timeLabel: timeLabelFromDate(matchStart),
       spotsSold: 0,
       memberSpots: 0,
+      freeNonMemberSpots: 0,
       grossRevenue: 0,
       // Canceled match → no members attended → zero allocation. The
       // upload-time fin_member_spots aggregate already excludes
       // canceled matches' rows, so we stay reconciled with the
       // venue-month totals.
       allocatedMemberRev: 0,
+      credit: 0,
       fieldCost: cost,
       net: cost === null ? null : -cost,
       status: "canceled",
@@ -378,6 +426,7 @@ export function summarize(rows: MatchPnLRow[]): MatchPnLSummary {
   let totalRevenue = 0;
   let totalMemberRev = 0;
   let totalMemberSpots = 0;
+  let totalCredit = 0;
   let totalFieldCost = 0;
   let losingMatches = 0;
   let matchesWithoutCost = 0;
@@ -385,6 +434,7 @@ export function summarize(rows: MatchPnLRow[]): MatchPnLSummary {
     totalRevenue += r.grossRevenue;
     totalMemberRev += r.allocatedMemberRev;
     totalMemberSpots += r.memberSpots;
+    totalCredit += r.credit;
     if (r.fieldCost !== null) totalFieldCost += r.fieldCost;
     else matchesWithoutCost++;
     if (r.status === "loss") losingMatches++;
@@ -394,6 +444,7 @@ export function summarize(rows: MatchPnLRow[]): MatchPnLSummary {
     totalRevenue,
     totalMemberRev,
     totalMemberSpots,
+    totalCredit,
     totalFieldCost,
     net: totalRevenue + totalMemberRev - totalFieldCost,
     losingMatches,
