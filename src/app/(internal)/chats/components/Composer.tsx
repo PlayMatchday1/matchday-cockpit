@@ -519,7 +519,11 @@ export default function Composer({
               onKeyDown={onKeyDown}
               onPaste={onPaste}
               placeholder={placeholder}
-              className="block flex-1 resize-none rounded-2xl border border-cream-line bg-white px-3 py-2 text-sm text-deep-green placeholder:text-deep-green/40 focus:border-deep-green focus:outline-none disabled:bg-cream-soft disabled:text-deep-green/40"
+              // text-base (16px) instead of text-sm (14px). iOS Safari
+              // auto-zooms on focus when an input's font-size is below
+              // 16px; staying at or above 16px prevents the zoom + the
+              // stale-viewport bug that pinned the bottom nav mid-screen.
+              className="block flex-1 resize-none rounded-2xl border border-cream-line bg-white px-3 py-2 text-base text-deep-green placeholder:text-deep-green/40 focus:border-deep-green focus:outline-none disabled:bg-cream-soft disabled:text-deep-green/40"
               style={{ minHeight: 44, maxHeight: 240 }}
             />
             <button
@@ -653,7 +657,9 @@ function MediaPreview({
           onPaste={onPaste}
           placeholder="Add a caption (optional)"
           maxLength={CAPTION_MAX}
-          className="mt-2 block w-full resize-none rounded-2xl border border-cream-line bg-white px-3 py-2 text-sm text-deep-green placeholder:text-deep-green/40 focus:border-deep-green focus:outline-none disabled:bg-cream-soft disabled:text-deep-green/40"
+          // text-base for the same iOS auto-zoom reason as the text-mode
+          // textarea above.
+          className="mt-2 block w-full resize-none rounded-2xl border border-cream-line bg-white px-3 py-2 text-base text-deep-green placeholder:text-deep-green/40 focus:border-deep-green focus:outline-none disabled:bg-cream-soft disabled:text-deep-green/40"
           style={{ minHeight: 44, maxHeight: 120 }}
         />
       )}

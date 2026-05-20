@@ -316,7 +316,13 @@ export default function CrmClient() {
       };
     }
     const onResize = () => {
-      if (vv.height >= window.innerHeight - 1) {
+      // Height check catches keyboard dismiss; scale check catches zoom
+      // restore (iOS auto-zooms on input focus when font-size < 16px,
+      // and the keyboard-dismiss path leaves the page zoomed even after
+      // the keyboard is gone). Either restoring to "normal" should
+      // clear the stale layout-viewport offset. -1 / 1.01 tolerances
+      // are for sub-pixel float rounding.
+      if (vv.height >= window.innerHeight - 1 && vv.scale <= 1.01) {
         window.scrollTo(0, 0);
       }
     };

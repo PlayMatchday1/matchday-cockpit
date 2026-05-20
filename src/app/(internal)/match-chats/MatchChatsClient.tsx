@@ -180,7 +180,9 @@ export default function MatchChatsClient() {
       };
     }
     const onResize = () => {
-      if (vv.height >= window.innerHeight - 1) {
+      // Height check catches keyboard dismiss; scale check catches zoom
+      // restore. See CrmClient.tsx for the full rationale.
+      if (vv.height >= window.innerHeight - 1 && vv.scale <= 1.01) {
         window.scrollTo(0, 0);
       }
     };
