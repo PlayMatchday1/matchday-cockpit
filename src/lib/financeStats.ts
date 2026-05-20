@@ -2034,6 +2034,12 @@ export function buildMdapiMemberSpotIndex(
     // Match-level filters mirror matchPnL.ts active eligibility.
     if (r.match_canceled) continue;
     if (r.player_canceled_at && r.player_canceled_at.trim() !== "") continue;
+    // GUEST rows are phantom seats from a host buying multiple spots
+    // (same person, second seat). They carry amount=0 and represent
+    // no distinct customer. Excluded here so the city-month member
+    // denominator feeding the April benchmark counts only real
+    // distinct attendees.
+    if (r.user_type === "GUEST") continue;
 
     // Categorize by payment_type. MEMBER → member; DAILY PAID → dpp;
     // anything else with a recognized type (mostly PROMOCODE) → other.

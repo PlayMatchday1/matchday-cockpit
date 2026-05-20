@@ -276,7 +276,14 @@ export async function loadActiveSubscriptionsByEmail(
 // activated on or before matchStartIso AND was not yet canceled at
 // matchStartIso. Cancel-window semantics: a cancellation strictly
 // after the match means the member was still active at match time.
-function hasActiveSubAtMatchTime(
+//
+// Exported so consumers (matchPnL.ts) can independently mark
+// paid-status='PAID' rows whose email has an active subscription as
+// member spots — those rows are correctly classified DAILY PAID by
+// derivePaymentType (since paid_status is PAID, not FREE) but still
+// represent a member's attendance for the per-row Member Spots
+// column.
+export function hasActiveSubAtMatchTime(
   email: string | null,
   matchStartIso: string,
   subs: ActiveSubscriptionsByEmail,
