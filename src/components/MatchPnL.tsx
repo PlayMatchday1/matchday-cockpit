@@ -470,7 +470,7 @@ export default function MatchPnL({
                   )?.member ?? 0;
                 const aprBenchmarkLabel =
                   aprMemberSpots > 0
-                    ? `April benchmark: ~$${(aprMemberRev / aprMemberSpots).toFixed(2)}/member spot`
+                    ? `April benchmark: ~$${(aprMemberRev / aprMemberSpots).toFixed(2)}/member spot (${fmtUsd(aprMemberRev)} ÷ ${aprMemberSpots} spots)`
                     : "April benchmark: no member spots recorded";
                 return (
                   <tbody key={g.city}>
