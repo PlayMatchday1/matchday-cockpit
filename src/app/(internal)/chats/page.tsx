@@ -1,6 +1,7 @@
 import { Suspense } from "react";
 import type { Metadata } from "next";
 import AdminGuard from "@/components/AdminGuard";
+import MobileBottomNav from "@/components/MobileBottomNav";
 import CrmClient from "./CrmClient";
 
 // Player Chat. AdminGuard is the page-level gate; the API routes
@@ -25,9 +26,18 @@ export default function PlayerChatPage() {
   return (
     <AdminGuard>
       <div
-        className="-mx-6 -mb-8 flex h-[calc(100dvh-var(--bottom-nav-h))] flex-col md:h-[calc(100dvh-4rem)]"
+        className="-mx-6 flex h-[100dvh] flex-col md:h-[calc(100dvh-4rem)]"
         style={{
+          // Cancel AuthGate <main>'s padding so the chat shell occupies
+          // the full viewport (top edge of viewport on mobile / under
+          // TopNav on md+, down to the bottom edge including the inline
+          // nav's safe-area padding). Top: -2rem or safe-area-top
+          // (whichever main used). Bottom: -(2rem + var(--bottom-nav-h))
+          // — AuthGate still reserves space for the fixed nav in its
+          // padding even though the fixed nav is suppressed on chat
+          // routes, so the negative margin has to cancel both pieces.
           marginTop: "calc(-1 * max(env(safe-area-inset-top), 2rem))",
+          marginBottom: "calc(-1 * (2rem + var(--bottom-nav-h)))",
         }}
       >
         {/* Suspense boundary required by Next 16 for any client tree
@@ -36,6 +46,12 @@ export default function PlayerChatPage() {
         <Suspense fallback={null}>
           <CrmClient />
         </Suspense>
+        {/* Inline bottom nav: last flex child of the 100dvh shell, so
+            iOS-handled flex layout positions it at the visible bottom
+            of the shrunken-by-dvh shell when the keyboard opens, and
+            back at the viewport bottom when it closes. No position:fixed
+            for the nav on this route — that's the whole point. */}
+        <MobileBottomNav inline />
       </div>
     </AdminGuard>
   );
