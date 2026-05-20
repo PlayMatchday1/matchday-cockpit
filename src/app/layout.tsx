@@ -76,15 +76,6 @@ export const viewport: Viewport = {
   // scrollable). Spec'd by the W3C virtual-keyboard proposal; iOS
   // 16.4+ and Chrome 108+.
   interactiveWidget: "resizes-content",
-  // Lock zoom to 1. iOS Safari PWA in standalone mode honors
-  // user-scalable=no; the bug surface here is the position:fixed
-  // bottom nav re-anchoring to a zoomed visual viewport (which sits
-  // partway up the layout viewport), stranding the nav mid-screen
-  // until the user pinches back to 1. Accessibility tradeoff
-  // accepted for an admin-gated internal tool; revisit if this app
-  // ever surfaces to a public audience.
-  maximumScale: 1,
-  userScalable: false,
 };
 
 export default function RootLayout({
