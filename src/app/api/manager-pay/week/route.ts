@@ -17,6 +17,12 @@
 //   - Cancelled matches do NOT pay (excluded from totals) but are
 //     still returned in the schedule with isCancelled=true so the
 //     calendar can render them struck through.
+//   - Orphan matches — past-start, not cancelled, 0 real + 0 fake
+//     players — are dropped entirely (not in pay, not in calendar).
+//     These represent matches a manager created then manually
+//     deleted from the app; mdapi retains the row with
+//     is_cancelled=false, so we filter them out here. See
+//     isOrphanedMatch() below.
 //   - Pay date = Thursday after the work week ends (Sunday + 4 days).
 //
 // Auth: dual-mode bearer + anonymous.
@@ -97,6 +103,7 @@ type MatchRow = {
   city_identifier: string | null;
   field_title: string | null;
   start_date: string | null;
+  start_date_utc: string | null;
   is_cancelled: boolean | null;
   manager_id: number | null;
   manager_email: string | null;
@@ -105,10 +112,29 @@ type MatchRow = {
   second_manager_id: number | null;
   max_player_count: number | null;
   player_count: number | null;
+  fake_player_count: number | null;
   registration_price: number | null;
   name: string | null;
   raw: ApiMatchRaw | null;
 };
+
+// Orphan: a match the manager created then deleted from the app.
+// mdapi keeps the row with is_cancelled=false, so the pay calc would
+// otherwise pay for it. Identified by: past its venue-local start
+// time (compared in true UTC via start_date_utc), not cancelled, and
+// zero attendance signal — neither real registrations nor fake
+// players bookkept against it. Future matches with 0/0 are kept
+// because they may still be filled before kickoff; cancelled matches
+// fall through a separate branch with payPerManager=0.
+function isOrphanedMatch(m: MatchRow, now: Date): boolean {
+  if (m.is_cancelled) return false;
+  if ((m.player_count ?? 0) > 0) return false;
+  if ((m.fake_player_count ?? 0) > 0) return false;
+  if (!m.start_date_utc) return false;
+  const startMs = Date.parse(m.start_date_utc);
+  if (Number.isNaN(startMs)) return false;
+  return startMs < now.getTime();
+}
 
 type UserRow = {
   id: number;
@@ -290,16 +316,21 @@ export async function GET(req: Request) {
   const queryFrom = `${addDays(weekStart, -1)}T00:00:00Z`;
   const queryTo = `${addDays(weekEnd, 2)}T00:00:00Z`;
 
-  const matches = await selectAll<MatchRow>(() =>
+  const rawMatches = await selectAll<MatchRow>(() =>
     supabase
       .from("mdapi_matches")
       .select(
-        "api_id, city_identifier, field_title, start_date, is_cancelled, manager_id, manager_email, manager_first_name, manager_last_name, second_manager_id, max_player_count, player_count, registration_price, name, raw",
+        "api_id, city_identifier, field_title, start_date, start_date_utc, is_cancelled, manager_id, manager_email, manager_first_name, manager_last_name, second_manager_id, max_player_count, player_count, fake_player_count, registration_price, name, raw",
       )
       .gte("start_date", queryFrom)
       .lt("start_date", queryTo)
       .order("api_id"),
   );
+
+  // Strip orphan matches before anything else — they shouldn't surface
+  // in the calendar OR the pay roll-up. See isOrphanedMatch().
+  const now = new Date();
+  const matches = rawMatches.filter((m) => !isOrphanedMatch(m, now));
 
   // All matches in the CT week — include cancelled so the calendar
   // can render them. Pay/manager-roll-up below filters them out.
