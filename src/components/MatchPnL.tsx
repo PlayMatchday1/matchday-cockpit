@@ -422,62 +422,11 @@ export default function MatchPnL({
       <div className="overflow-hidden rounded-2xl border-[1.5px] border-cream-line bg-white shadow-md shadow-deep-green/10">
         <div className="overflow-x-auto">
           <table className="w-full text-xs">
-            <thead className="bg-cream-soft text-[10px] font-bold uppercase tracking-wider text-deep-green/60">
-              <tr>
-                <SortHeader k="match" label="Match" sortKey={sortKey} sortDir={sortDir} onClick={toggleSort} align="left" />
-                <SortHeader k="city" label="City" sortKey={sortKey} sortDir={sortDir} onClick={toggleSort} align="left" />
-                <SortHeader k="spotsSold" label="Spots Booked" sortKey={sortKey} sortDir={sortDir} onClick={toggleSort} align="right" />
-                <SortHeader
-                  k="paidSpots"
-                  label="Paid Spots"
-                  sortKey={sortKey}
-                  sortDir={sortDir}
-                  onClick={toggleSort}
-                  align="right"
-                  tooltip="Count of DAILY PAID fills at this match. Excludes MEMBER, FREE_NON_MEMBER, and PROMOCODE."
-                />
-                <SortHeader k="grossRevenue" label="DPP Rev" sortKey={sortKey} sortDir={sortDir} onClick={toggleSort} align="right" />
-                <SortHeader
-                  k="memberSpots"
-                  label="Member Spots"
-                  sortKey={sortKey}
-                  sortDir={sortDir}
-                  onClick={toggleSort}
-                  align="right"
-                  tooltip="Count of MEMBER fills at this match (subscription-joined). Pairs with Member Rev valued at the April benchmark rate."
-                />
-                <SortHeader
-                  k="memberRev"
-                  label="Member Rev"
-                  sortKey={sortKey}
-                  sortDir={sortDir}
-                  onClick={toggleSort}
-                  align="right"
-                  tooltip="Member play valued at the city's April benchmark rate (memberSpots × April $/spot). Not collected membership revenue; that lives on /finance Cities."
-                />
-                <SortHeader
-                  k="credit"
-                  label="Credit"
-                  sortKey={sortKey}
-                  sortDir={sortDir}
-                  onClick={toggleSort}
-                  align="right"
-                  tooltip="Portion of DPP Rev paid via account credit (already included in DPP Rev, not additive)."
-                />
-                <SortHeader
-                  k="total"
-                  label="Total"
-                  sortKey={sortKey}
-                  sortDir={sortDir}
-                  onClick={toggleSort}
-                  align="right"
-                  tooltip="DPP + Member. The actual gross revenue for the match (cash spots + allocated membership share)."
-                />
-                <SortHeader k="fieldCost" label="Field Cost" sortKey={sortKey} sortDir={sortDir} onClick={toggleSort} align="right" />
-                <SortHeader k="net" label="Net" sortKey={sortKey} sortDir={sortDir} onClick={toggleSort} align="right" />
-                <SortHeader k="status" label="Status" sortKey={sortKey} sortDir={sortDir} onClick={toggleSort} align="left" />
-              </tr>
-            </thead>
+            {/* Column headers are not rendered as a single top <thead>;
+                instead, each city section renders its own copy of the
+                ColumnHeadersRow below its city-header summary row. This
+                keeps the labels visible while scrolling through long
+                city sections without needing a sticky header. */}
             {activeRows === null ? (
               <tbody>
                 <tr>
@@ -563,6 +512,11 @@ export default function MatchPnL({
                         </div>
                       </td>
                     </tr>
+                    <ColumnHeadersRow
+                      sortKey={sortKey}
+                      sortDir={sortDir}
+                      onClick={toggleSort}
+                    />
                     {g.rows.map((r) => (
                       <Row
                         key={`${r.venueId ?? r.venueRawName}|${r.matchStartIso}`}
@@ -648,6 +602,78 @@ export default function MatchPnL({
         </div>
       )}
     </div>
+  );
+}
+
+// Sortable column headers rendered as a <tr>. Lives inside each
+// city's <tbody> rather than a single top-of-table <thead> so the
+// labels stay visible while scrolling past long city sections.
+// Sort state + handler are threaded in so each repeated row still
+// drives the same global sort.
+function ColumnHeadersRow({
+  sortKey,
+  sortDir,
+  onClick,
+}: {
+  sortKey: SortKey;
+  sortDir: SortDir;
+  onClick: (k: SortKey) => void;
+}) {
+  return (
+    <tr className="bg-cream-soft text-[10px] font-bold uppercase tracking-wider text-deep-green/60">
+      <SortHeader k="match" label="Match" sortKey={sortKey} sortDir={sortDir} onClick={onClick} align="left" />
+      <SortHeader k="city" label="City" sortKey={sortKey} sortDir={sortDir} onClick={onClick} align="left" />
+      <SortHeader k="spotsSold" label="Spots Booked" sortKey={sortKey} sortDir={sortDir} onClick={onClick} align="right" />
+      <SortHeader
+        k="paidSpots"
+        label="Paid Spots"
+        sortKey={sortKey}
+        sortDir={sortDir}
+        onClick={onClick}
+        align="right"
+        tooltip="Count of DAILY PAID fills at this match. Excludes MEMBER, FREE_NON_MEMBER, and PROMOCODE."
+      />
+      <SortHeader k="grossRevenue" label="DPP Rev" sortKey={sortKey} sortDir={sortDir} onClick={onClick} align="right" />
+      <SortHeader
+        k="memberSpots"
+        label="Member Spots"
+        sortKey={sortKey}
+        sortDir={sortDir}
+        onClick={onClick}
+        align="right"
+        tooltip="Count of MEMBER fills at this match (subscription-joined). Pairs with Member Rev valued at the April benchmark rate."
+      />
+      <SortHeader
+        k="memberRev"
+        label="Member Rev"
+        sortKey={sortKey}
+        sortDir={sortDir}
+        onClick={onClick}
+        align="right"
+        tooltip="Member play valued at the city's April benchmark rate (memberSpots × April $/spot). Not collected membership revenue; that lives on /finance Cities."
+      />
+      <SortHeader
+        k="credit"
+        label="Credit"
+        sortKey={sortKey}
+        sortDir={sortDir}
+        onClick={onClick}
+        align="right"
+        tooltip="Portion of DPP Rev paid via account credit (already included in DPP Rev, not additive)."
+      />
+      <SortHeader
+        k="total"
+        label="Total"
+        sortKey={sortKey}
+        sortDir={sortDir}
+        onClick={onClick}
+        align="right"
+        tooltip="DPP + Member. The actual gross revenue for the match (cash spots + allocated membership share)."
+      />
+      <SortHeader k="fieldCost" label="Field Cost" sortKey={sortKey} sortDir={sortDir} onClick={onClick} align="right" />
+      <SortHeader k="net" label="Net" sortKey={sortKey} sortDir={sortDir} onClick={onClick} align="right" />
+      <SortHeader k="status" label="Status" sortKey={sortKey} sortDir={sortDir} onClick={onClick} align="left" />
+    </tr>
   );
 }
 
