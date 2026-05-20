@@ -9,7 +9,6 @@ import CashFlowTabContent from "@/components/CashFlowTabContent";
 import ChangeLogView from "@/components/ChangeLogView";
 import CheckInsView from "@/components/CheckInsView";
 import CityPLCard from "@/components/CityPLCard";
-import ExecutiveSummary from "@/components/ExecutiveSummary";
 import ExpenseAdminView from "@/components/ExpenseAdminView";
 import FieldCostsView from "@/components/FieldCostsView";
 import FieldRankingTabContent from "@/components/FieldRankingTabContent";
@@ -29,7 +28,6 @@ import ManagerPayGrid from "@/components/ManagerPayGrid";
 import MatchPnL from "@/components/MatchPnL";
 import PartnerDashboardsAdmin from "@/components/PartnerDashboardsAdmin";
 import RevenueAdminView from "@/components/RevenueAdminView";
-import WeeklyProjectionsTab from "@/components/WeeklyProjectionsTab";
 import { CITY_DISPLAY_ORDER } from "@/lib/financeStats";
 import { FinanceQuarterProvider } from "@/lib/financeQuarter";
 import {
@@ -57,8 +55,6 @@ const PRIMARY_TAB_IDS: ReadonlySet<FinanceTabId> = new Set<FinanceTabId>([
   "cash-flow",
   "field-ranking",
   "match-pnl",
-  "exec-summary",
-  "projections",
 ]);
 
 // Derive which secondary nav slot is "active" given the current tab.
@@ -261,9 +257,6 @@ function FinanceLandingContent() {
       <TabPanel id="cities" active={activeTab} visited={visited}>
         <CitiesTabContent />
       </TabPanel>
-      <TabPanel id="exec-summary" active={activeTab} visited={visited}>
-        <ExecutiveSummary />
-      </TabPanel>
       <TabPanel id="revenue" active={activeTab} visited={visited}>
         <RevenueAdminView />
       </TabPanel>
@@ -275,9 +268,6 @@ function FinanceLandingContent() {
       </TabPanel>
       <TabPanel id="cash-flow" active={activeTab} visited={visited}>
         <CashFlowTabContent />
-      </TabPanel>
-      <TabPanel id="projections" active={activeTab} visited={visited}>
-        <WeeklyProjectionsTab />
       </TabPanel>
       <TabPanel id="match-pnl" active={activeTab} visited={visited}>
         <MatchPnL />
