@@ -34,7 +34,7 @@ import { normField } from "./normField";
 const MATCHES_COLS =
   "api_id, city_identifier, field_id, field_title, start_date, is_cancelled";
 const PLAYERS_COLS =
-  "api_id, match_api_id, user_id, user_email, user_type, paid_status, promocode_id, is_cancelled, canceled_at, amount, created_at, is_absent, user_is_fake_player";
+  "api_id, match_api_id, user_id, user_email, user_type, paid_status, promocode_id, is_cancelled, canceled_at, amount, credit_amount, created_at, is_absent, user_is_fake_player";
 
 // chunk size for .in("match_api_id", chunk) — keeps URL length under
 // PostgREST's ~2KB practical limit (200 ids × ~7 chars = ~1.4KB).
@@ -93,6 +93,7 @@ type PlayerSelect = {
   is_cancelled: boolean | null;
   canceled_at: string | null;
   amount: number | null;
+  credit_amount: number | null;
   created_at: string | null;
   is_absent: boolean | null;
   user_is_fake_player: boolean | null;
@@ -123,6 +124,10 @@ export type JoinedMatchPlayerRow = {
   playerApiId: number;
   userId: number;
   matchPricePaid: number; // amount in dollars
+  // Portion of matchPricePaid funded by the player's MatchDay credit
+  // balance (cents in the API; converted to dollars at read time).
+  // Always <= matchPricePaid. Cash paid = matchPricePaid - creditPaid.
+  creditPaid: number;
   registrationAt: Date | null;
   // Raw API user_type. "PLAYER" = registered platform user, "GUEST"
   // = guest brought by a player, occasionally null/other for legacy
@@ -187,6 +192,9 @@ export type LegacyMatchRegRow = {
   payment_type: string | null;
   promocode: string | null;
   match_price_paid: number;
+  // Dollars; portion of match_price_paid funded via player credit
+  // balance. See JoinedMatchPlayerRow.creditPaid for the source.
+  credit_paid: number;
   user_type: string | null;
 };
 
@@ -213,15 +221,103 @@ function dateToLocalIso(d: Date): string {
   return `${d.getFullYear()}-${pad(d.getMonth() + 1)}-${pad(d.getDate())}T${pad(d.getHours())}:${pad(d.getMinutes())}:00`;
 }
 
-// Derive the cockpit's CSV-era "Type Of Payment" string from the
-// API's paid_status + promocode_id. Cross-tab probe (Phase 5b
-// investigation) confirmed:
-//   paid_status='FREE'    → MEMBER (no FREE+promo overlap in 38k rows)
-//   paid_status='PAID' + promocode_id  → PROMOCODE
-//   paid_status='PAID' (no promo)      → DAILY PAID
-//   paid_status='WAITING' → null (filtered upstream; defensive null here)
-function derivePaymentType(p: PlayerSelect): string | null {
-  if (p.paid_status === "FREE") return "MEMBER";
+// Active-subscription record used to decide whether a paid_status=FREE
+// row is a real member vs a non-member free spot (first-match-free
+// signup, guest pass, manager-added fill). Strings are raw ISO from
+// mdapi_subscriptions — compared lexicographically against the
+// match's ISO start_date, which is correct for any consistent ISO
+// format (date-only or full timestamp).
+export type ActiveSubscription = {
+  activation_date: string;
+  canceled_at: string | null;
+};
+
+export type ActiveSubscriptionsByEmail = Map<string, ActiveSubscription[]>;
+
+// Load every status=ACTIVE subscription, keyed by lowercased-trimmed
+// email. Returns a multimap because the same email can hold multiple
+// historical subscriptions (cancel + resubscribe). Callers ask
+// "did any of this email's subs cover the match timestamp?".
+//
+// Reads mdapi_subscriptions unfiltered by city — Phase 3b's
+// city-filtered FinMember mapping silently drops subs in unmapped
+// cities (e.g., Phoenix), which would misclassify those members'
+// FREE spots as FREE_NON_MEMBER.
+export async function loadActiveSubscriptionsByEmail(
+  supabase: SupabaseClient,
+): Promise<ActiveSubscriptionsByEmail> {
+  const rows = await selectAll<{
+    member_email: string | null;
+    activation_date: string | null;
+    canceled_at: string | null;
+  }>(() =>
+    supabase
+      .from("mdapi_subscriptions")
+      .select("member_email, activation_date, canceled_at")
+      .eq("status", "ACTIVE")
+      .order("membership_id"),
+  );
+  const map: ActiveSubscriptionsByEmail = new Map();
+  for (const r of rows) {
+    if (!r.member_email || !r.activation_date) continue;
+    const key = r.member_email.toLowerCase().trim();
+    if (!key) continue;
+    const list = map.get(key) ?? [];
+    list.push({
+      activation_date: r.activation_date,
+      canceled_at: r.canceled_at,
+    });
+    map.set(key, list);
+  }
+  return map;
+}
+
+// True if at least one ACTIVE subscription for this email was
+// activated on or before matchStartIso AND was not yet canceled at
+// matchStartIso. Cancel-window semantics: a cancellation strictly
+// after the match means the member was still active at match time.
+function hasActiveSubAtMatchTime(
+  email: string | null,
+  matchStartIso: string,
+  subs: ActiveSubscriptionsByEmail,
+): boolean {
+  if (!email) return false;
+  const key = email.toLowerCase().trim();
+  if (!key) return false;
+  const list = subs.get(key);
+  if (!list) return false;
+  for (const s of list) {
+    if (s.activation_date > matchStartIso) continue;
+    if (s.canceled_at && s.canceled_at <= matchStartIso) continue;
+    return true;
+  }
+  return false;
+}
+
+// Derive the cockpit's payment-type string from paid_status +
+// promocode_id, with FREE further split by subscription join:
+//   paid_status='FREE' + active sub at match time   → MEMBER
+//   paid_status='FREE' + no active sub              → FREE_NON_MEMBER
+//   paid_status='PAID' + promocode_id               → PROMOCODE
+//   paid_status='PAID' (no promo)                   → DAILY PAID
+//   paid_status='WAITING' / other                   → null
+//
+// When `subscriptionsByEmail` is undefined, falls back to the legacy
+// `FREE → MEMBER` behavior so consumers that haven't migrated to the
+// join-based classifier (e.g., useMatchData, PartnerDetailAdmin)
+// retain prior semantics. Pass the map from `loadActiveSubscriptions
+// ByEmail` to opt into the new, accurate classification.
+function derivePaymentType(
+  p: PlayerSelect,
+  matchStartIso: string,
+  subscriptionsByEmail?: ActiveSubscriptionsByEmail,
+): string | null {
+  if (p.paid_status === "FREE") {
+    if (!subscriptionsByEmail) return "MEMBER";
+    return hasActiveSubAtMatchTime(p.user_email, matchStartIso, subscriptionsByEmail)
+      ? "MEMBER"
+      : "FREE_NON_MEMBER";
+  }
   if (p.paid_status === "PAID") {
     return p.promocode_id != null ? "PROMOCODE" : "DAILY PAID";
   }
@@ -243,6 +339,7 @@ function mapJoinedRow(
   match: MatchSelect,
   player: PlayerSelect,
   promocodeMap: Map<number, string>,
+  subscriptionsByEmail?: ActiveSubscriptionsByEmail,
 ): JoinedMatchPlayerRow | null {
   if (player.paid_status === "WAITING") return null;
   // user_is_fake_player: synthetic fill placeholder (dummy roster slot
@@ -270,7 +367,11 @@ function mapJoinedRow(
     matchStart,
     matchCanceled: !!match.is_cancelled,
     playerCanceledAt: parseLocal(player.canceled_at),
-    paymentType: derivePaymentType(player),
+    paymentType: derivePaymentType(
+      player,
+      match.start_date ?? "",
+      subscriptionsByEmail,
+    ),
     promocode,
     email: player.user_email?.toLowerCase() ?? null,
     matchApiId: match.api_id,
@@ -284,6 +385,7 @@ function mapJoinedRow(
     // dollars by default. Matches the Phase 3b convention: read-time
     // conversion, don't transform on ingest.
     matchPricePaid: (player.amount ?? 0) / 100,
+    creditPaid: (player.credit_amount ?? 0) / 100,
     registrationAt: parseLocal(player.created_at),
     userType: player.user_type,
   };
@@ -333,6 +435,7 @@ export function toLegacyShape(r: JoinedMatchPlayerRow): LegacyMatchRegRow {
     payment_type: r.paymentType,
     promocode: r.promocode,
     match_price_paid: r.matchPricePaid,
+    credit_paid: r.creditPaid,
     user_type: r.userType,
   };
 }
@@ -382,6 +485,13 @@ export type FetchJoinedOpts = {
 export async function fetchJoinedMatchPlayers(
   supabase: SupabaseClient,
   opts: FetchJoinedOpts = {},
+  // Optional subscription map for the join-based payment-type
+  // classifier. When provided, paid_status='FREE' rows split into
+  // MEMBER (active sub at match time) vs FREE_NON_MEMBER. Omit to
+  // keep the legacy "FREE → MEMBER" behavior — current callers that
+  // rely on the old shape (useMatchData, PartnerDetailAdmin) don't
+  // need to change. See loadActiveSubscriptionsByEmail.
+  subscriptionsByEmail?: ActiveSubscriptionsByEmail,
 ): Promise<MatchDataset> {
   // 1. Fetch matches in scope
   const matches = await selectAll<MatchSelect>(() => {
@@ -457,7 +567,7 @@ export async function fetchJoinedMatchPlayers(
   for (const p of players) {
     const m = matchById.get(p.match_api_id);
     if (!m) continue;
-    const row = mapJoinedRow(m, p, promocodeMap);
+    const row = mapJoinedRow(m, p, promocodeMap, subscriptionsByEmail);
     if (row) out.push(row);
   }
 
@@ -507,7 +617,12 @@ export async function fetchJoinedMatchPlayers(
 export async function fetchLegacyMatchRegistrations(
   supabase: SupabaseClient,
   opts: FetchJoinedOpts = {},
+  subscriptionsByEmail?: ActiveSubscriptionsByEmail,
 ): Promise<LegacyMatchRegRow[]> {
-  const { rows } = await fetchJoinedMatchPlayers(supabase, opts);
+  const { rows } = await fetchJoinedMatchPlayers(
+    supabase,
+    opts,
+    subscriptionsByEmail,
+  );
   return rows.map(toLegacyShape);
 }

@@ -25,7 +25,8 @@ type SortKey =
   | "memberSpots"
   | "grossRevenue" // labeled "DPP" in the UI; field name kept stable
   | "memberRev" // labeled "Member"
-  | "total" // DPP + Member, NEW
+  | "credit"
+  | "total" // DPP + Member
   | "fieldCost"
   | "net"
   | "status";
@@ -149,6 +150,7 @@ export default function MatchPnL({
           k === "memberSpots" ||
           k === "grossRevenue" ||
           k === "memberRev" ||
+          k === "credit" ||
           k === "total" ||
           k === "fieldCost"
           ? "desc"
@@ -188,6 +190,8 @@ export default function MatchPnL({
           return (a.grossRevenue - b.grossRevenue) * dir;
         case "memberRev":
           return (a.allocatedMemberRev - b.allocatedMemberRev) * dir;
+        case "credit":
+          return (a.credit - b.credit) * dir;
         case "total":
           return (
             (a.grossRevenue + a.allocatedMemberRev -
@@ -245,12 +249,16 @@ export default function MatchPnL({
     let gross = 0;
     let memberRev = 0;
     let memberSpots = 0;
+    let credit = 0;
+    let freeNonMemberSpots = 0;
     let cost = 0;
     let losses = 0;
     for (const r of rows) {
       gross += r.grossRevenue;
       memberRev += r.allocatedMemberRev;
       memberSpots += r.memberSpots;
+      credit += r.credit;
+      freeNonMemberSpots += r.freeNonMemberSpots;
       if (r.fieldCost !== null) cost += r.fieldCost;
       if (r.status === "loss") losses++;
     }
@@ -259,6 +267,8 @@ export default function MatchPnL({
       gross,
       memberRev,
       memberSpots,
+      credit,
+      freeNonMemberSpots,
       cost,
       net: gross + memberRev - cost,
       losses,
@@ -323,6 +333,12 @@ export default function MatchPnL({
                 Member spots{" "}
                 <span className="font-bold tabular-nums text-deep-green">
                   {summary.totalMemberSpots}
+                </span>
+              </span>
+              <span>
+                Credit{" "}
+                <span className="font-mono font-bold tabular-nums text-deep-green">
+                  {fmtUsd(summary.totalCredit)}
                 </span>
               </span>
               <span>
@@ -418,6 +434,15 @@ export default function MatchPnL({
                   tooltip="Each match's share of monthly membership revenue, allocated based on member attendance at this venue. Reconciles with Field Ranking totals."
                 />
                 <SortHeader
+                  k="credit"
+                  label="Credit"
+                  sortKey={sortKey}
+                  sortDir={sortDir}
+                  onClick={toggleSort}
+                  align="right"
+                  tooltip="Portion of DPP $ funded via player credit balance, not new cash. Already included in DPP $; surfaced here to show how much of the gate was credit-paid."
+                />
+                <SortHeader
                   k="total"
                   label="Total"
                   sortKey={sortKey}
@@ -434,7 +459,7 @@ export default function MatchPnL({
             {activeRows === null ? (
               <tbody>
                 <tr>
-                  <td colSpan={10} className="px-3 py-8 text-center text-sm text-deep-green/55">
+                  <td colSpan={11} className="px-3 py-8 text-center text-sm text-deep-green/55">
                     Loading match P&L…
                   </td>
                 </tr>
@@ -442,7 +467,7 @@ export default function MatchPnL({
             ) : cityGroups.length === 0 ? (
               <tbody>
                 <tr>
-                  <td colSpan={10} className="px-3 py-8 text-center text-sm text-deep-green/55">
+                  <td colSpan={11} className="px-3 py-8 text-center text-sm text-deep-green/55">
                     No matches with cost data this week.
                     {missingCost.length > 0 &&
                       ` (${missingCost.length} matches without cost set — see below.)`}
@@ -476,7 +501,7 @@ export default function MatchPnL({
                   <tbody key={g.city}>
                     <tr className="border-t-2 border-cream-line bg-cream-soft/50">
                       <td
-                        colSpan={10}
+                        colSpan={11}
                         className="px-3 py-2 text-[10px] font-bold uppercase tracking-[0.12em] text-deep-green"
                       >
                         {g.city}
@@ -484,7 +509,8 @@ export default function MatchPnL({
                           · {sub.matches} match{sub.matches === 1 ? "" : "es"} ·
                           DPP {fmtUsd(sub.gross)} · Member spots{" "}
                           {sub.memberSpots} · Member{" "}
-                          {fmtUsd(sub.memberRev)} · Total{" "}
+                          {fmtUsd(sub.memberRev)} · Credit{" "}
+                          {fmtUsd(sub.credit)} · Total{" "}
                           {fmtUsd(sub.gross + sub.memberRev)} · cost{" "}
                           {fmtUsd(sub.cost)} · net{" "}
                           <span
@@ -656,7 +682,14 @@ function Row({
         {row.status === "canceled" ? (
           <span className="text-deep-green/35">—</span>
         ) : (
-          row.spotsSold
+          <>
+            {row.spotsSold}
+            {row.freeNonMemberSpots > 0 && (
+              <span className="ml-1 text-[10px] font-normal text-deep-green/45">
+                (+{row.freeNonMemberSpots} free)
+              </span>
+            )}
+          </>
         )}
       </td>
       <td className="px-3 py-2 text-right align-top font-mono tabular-nums text-deep-green">
@@ -671,6 +704,11 @@ function Row({
       </td>
       <td className="px-3 py-2 text-right align-top font-mono tabular-nums text-deep-green">
         {fmtUsd(row.allocatedMemberRev)}
+      </td>
+      <td className="px-3 py-2 text-right align-top font-mono tabular-nums text-deep-green">
+        {row.credit > 0 ? fmtUsd(row.credit) : (
+          <span className="text-deep-green/35">—</span>
+        )}
       </td>
       <td className="px-3 py-2 text-right align-top font-mono tabular-nums font-bold text-deep-green">
         {fmtUsd(row.grossRevenue + row.allocatedMemberRev)}

@@ -9,7 +9,10 @@ import {
   emptyMdapiMemberSpotIndex,
   type MdapiMemberSpotIndex,
 } from "./financeStats";
-import { fetchLegacyMatchRegistrations } from "./mdapiMatchesRead";
+import {
+  fetchLegacyMatchRegistrations,
+  loadActiveSubscriptionsByEmail,
+} from "./mdapiMatchesRead";
 import { useFinanceQuarter } from "./financeQuarter";
 import { getCurrentQuarter, getQuarterByKey, type QuarterInfo } from "./quarters";
 
@@ -366,9 +369,19 @@ async function load(quarter: QuarterInfo): Promise<void> {
       // (replaces the fin_member_spots manual aggregate). Bounds
       // come from the active quarter ± 14d buffer so cross-month
       // MTD-vs-prior comparisons resolve.
-      fetchLegacyMatchRegistrations(
-        supabase,
-        quarterFetchBounds(quarter),
+      //
+      // Subs map is loaded in parallel with the other fetches and
+      // chained into fetchLegacyMatchRegistrations so the join-based
+      // payment-type classifier sees real-member status for every
+      // FREE row before bucketing. Chaining (not awaiting separately
+      // before Promise.all) preserves parallelism: the registrations
+      // fetch is the longest leg, and subs adds only ~300ms on top.
+      loadActiveSubscriptionsByEmail(supabase).then((subs) =>
+        fetchLegacyMatchRegistrations(
+          supabase,
+          quarterFetchBounds(quarter),
+          subs,
+        ),
       ),
     ]);
   } catch (e) {
