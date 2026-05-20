@@ -43,7 +43,7 @@ import {
   useRef,
   useState,
 } from "react";
-import { ArrowUp, FileText, Music, Paperclip, X } from "lucide-react";
+import { ArrowUp, FileText, MessageSquareText, Music, Paperclip, X } from "lucide-react";
 import { supabase } from "@/lib/supabase";
 import type { CrmChannel } from "@/components/ChannelChip";
 import type { ConversationMessage } from "./MessageBubble";
@@ -53,6 +53,8 @@ import {
   MEDIA_BYTE_LIMITS,
   type OutboundMediaKind,
 } from "@/lib/whatsappMediaKind";
+import { formatBytes, maybeCompressImage } from "@/lib/imageCompression";
+import TemplatesPicker from "./TemplatesPicker";
 
 const GSM7_RX =
   /^[\n\rA-Za-z0-9 @£$¥èéùìòÇØøÅåΔ_ΦΓΛΩΠΨΣΘΞÆæßÉ!"#¤%&'()*+,\-./:;<=>?¡ÄÖÑÜ§¿äöñüà€\\[\]{}|~^]*$/;
@@ -71,84 +73,6 @@ function smsBudget(body: string): {
 
 const MAX_IMAGE_BYTES = MEDIA_BYTE_LIMITS.image;
 const CAPTION_MAX = 1024;
-
-// Compression bounds. Skip-thresholds chosen so an already-reasonable
-// photo (small file AND modest resolution) goes through untouched.
-const COMPRESS_SKIP_BYTES = 1 * 1024 * 1024;
-const MAX_LONGEST_EDGE = 1920;
-// Quality fallback ladder. canvas.toBlob output is content-dependent;
-// noisy / high-detail photos compress worse so multiple steps help.
-const QUALITY_LADDER = [0.85, 0.7, 0.55, 0.4];
-
-function formatBytes(n: number): string {
-  if (n < 1024) return `${n} B`;
-  if (n < 1024 * 1024) return `${(n / 1024).toFixed(1)} KB`;
-  return `${(n / (1024 * 1024)).toFixed(1)} MB`;
-}
-
-function loadImage(url: string): Promise<HTMLImageElement> {
-  return new Promise((resolve, reject) => {
-    const img = new Image();
-    img.onload = () => resolve(img);
-    img.onerror = () => reject(new Error("Could not decode image."));
-    img.src = url;
-  });
-}
-
-function canvasToBlob(
-  canvas: HTMLCanvasElement,
-  type: string,
-  quality: number,
-): Promise<Blob | null> {
-  return new Promise((resolve) => {
-    canvas.toBlob(resolve, type, quality);
-  });
-}
-
-function jpegNameOf(original: string | undefined): string {
-  const base = (original ?? "").replace(/\.[A-Za-z0-9]+$/, "");
-  return `${base || "photo"}.jpg`;
-}
-
-async function maybeCompressImage(file: File): Promise<File | null> {
-  const url = URL.createObjectURL(file);
-  let img: HTMLImageElement;
-  try {
-    img = await loadImage(url);
-  } finally {
-    URL.revokeObjectURL(url);
-  }
-
-  const longestEdge = Math.max(img.naturalWidth, img.naturalHeight);
-  if (file.size <= COMPRESS_SKIP_BYTES && longestEdge <= MAX_LONGEST_EDGE) {
-    return null;
-  }
-
-  const scale =
-    longestEdge > MAX_LONGEST_EDGE ? MAX_LONGEST_EDGE / longestEdge : 1;
-  const w = Math.max(1, Math.round(img.naturalWidth * scale));
-  const h = Math.max(1, Math.round(img.naturalHeight * scale));
-
-  const canvas = document.createElement("canvas");
-  canvas.width = w;
-  canvas.height = h;
-  const ctx = canvas.getContext("2d");
-  if (!ctx) {
-    throw new Error("Canvas 2D context unavailable.");
-  }
-  ctx.drawImage(img, 0, 0, w, h);
-
-  for (const quality of QUALITY_LADDER) {
-    const blob = await canvasToBlob(canvas, "image/jpeg", quality);
-    if (!blob) continue;
-    if (blob.size <= MAX_IMAGE_BYTES) {
-      return new File([blob], jpegNameOf(file.name), {
-        type: "image/jpeg",
-      });
-    }
-  }
-  throw new Error("Image too large even after compression.");
-}
 
 async function bearerHeaders(): Promise<Record<string, string> | null> {
   const { data } = await supabase.auth.getSession();
@@ -204,6 +128,10 @@ export default function Composer({
   // active enter/leave pairs are outstanding.
   const [dragActive, setDragActive] = useState(false);
   const dragCounterRef = useRef(0);
+
+  // Canned-response picker. Visible on both channels; image templates
+  // gate inside the picker based on canSendMedia.
+  const [templatesOpen, setTemplatesOpen] = useState(false);
 
   // Kind is derived from the picked file's MIME at render time.
   const kind: OutboundMediaKind | null = useMemo(() => {
@@ -272,7 +200,7 @@ export default function Composer({
     // verbatim — Meta accepts them up to the per-kind size cap.
     if (c.kind === "image") {
       try {
-        const compressed = await maybeCompressImage(picked);
+        const compressed = await maybeCompressImage(picked, MAX_IMAGE_BYTES);
         if (compressed) {
           finalFile = compressed;
           originalBytes = picked.size;
@@ -548,6 +476,41 @@ export default function Composer({
                 <Paperclip aria-hidden className="h-5 w-5" strokeWidth={1.75} />
               </button>
             )}
+            <div className="relative">
+              <button
+                type="button"
+                onClick={() => setTemplatesOpen((o) => !o)}
+                aria-label="Open templates"
+                aria-pressed={templatesOpen}
+                disabled={sending || !appUserId}
+                style={{ touchAction: "manipulation" }}
+                className="flex h-11 w-11 shrink-0 items-center justify-center rounded-full text-deep-green/70 transition hover:bg-cream-soft hover:text-deep-green disabled:opacity-40"
+              >
+                <MessageSquareText
+                  aria-hidden
+                  className="h-5 w-5"
+                  strokeWidth={1.75}
+                />
+              </button>
+              <TemplatesPicker
+                open={templatesOpen}
+                onClose={() => setTemplatesOpen(false)}
+                canSendMedia={canSendMedia}
+                showImageGate={!canSendMedia}
+                onPickText={(text) => {
+                  setBody(text);
+                  // Focus textarea after a tick so the value settles
+                  // before caret placement.
+                  setTimeout(() => taRef.current?.focus(), 0);
+                }}
+                onPickImage={(picked, captionText) => {
+                  void (async () => {
+                    await onFileSelected(picked);
+                    setCaption(captionText);
+                  })();
+                }}
+              />
+            </div>
             <textarea
               ref={taRef}
               value={body}
