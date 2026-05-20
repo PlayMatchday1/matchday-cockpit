@@ -4,6 +4,7 @@ import { useEffect, useMemo, useState } from "react";
 import { ChevronLeft, ChevronRight } from "lucide-react";
 import { supabase } from "@/lib/supabase";
 import { useFinanceData } from "@/lib/useFinanceData";
+import { cityMembershipRevenueFor } from "@/lib/financeStats";
 import {
   fetchWeekMatchPnL,
   summarize,
@@ -21,6 +22,7 @@ type SortKey =
   | "match"
   | "city"
   | "spotsSold"
+  | "memberSpots"
   | "grossRevenue" // labeled "DPP" in the UI; field name kept stable
   | "memberRev" // labeled "Member"
   | "total" // DPP + Member, NEW
@@ -144,6 +146,7 @@ export default function MatchPnL({
       // first), spotsSold/gross/memberRev/cost descending, others ascending.
       setSortDir(
         k === "spotsSold" ||
+          k === "memberSpots" ||
           k === "grossRevenue" ||
           k === "memberRev" ||
           k === "total" ||
@@ -179,6 +182,8 @@ export default function MatchPnL({
           return (a.city.localeCompare(b.city)) * dir;
         case "spotsSold":
           return (a.spotsSold - b.spotsSold) * dir;
+        case "memberSpots":
+          return (a.memberSpots - b.memberSpots) * dir;
         case "grossRevenue":
           return (a.grossRevenue - b.grossRevenue) * dir;
         case "memberRev":
@@ -239,11 +244,13 @@ export default function MatchPnL({
   function citySubtotal(rows: MatchPnLRow[]) {
     let gross = 0;
     let memberRev = 0;
+    let memberSpots = 0;
     let cost = 0;
     let losses = 0;
     for (const r of rows) {
       gross += r.grossRevenue;
       memberRev += r.allocatedMemberRev;
+      memberSpots += r.memberSpots;
       if (r.fieldCost !== null) cost += r.fieldCost;
       if (r.status === "loss") losses++;
     }
@@ -251,6 +258,7 @@ export default function MatchPnL({
       matches: rows.length,
       gross,
       memberRev,
+      memberSpots,
       cost,
       net: gross + memberRev - cost,
       losses,
@@ -309,6 +317,12 @@ export default function MatchPnL({
                 Member{" "}
                 <span className="font-mono font-bold tabular-nums text-deep-green">
                   {fmtUsd(summary.totalMemberRev)}
+                </span>
+              </span>
+              <span>
+                Member spots{" "}
+                <span className="font-bold tabular-nums text-deep-green">
+                  {summary.totalMemberSpots}
                 </span>
               </span>
               <span>
@@ -384,6 +398,15 @@ export default function MatchPnL({
                 <SortHeader k="match" label="Match" sortKey={sortKey} sortDir={sortDir} onClick={toggleSort} align="left" />
                 <SortHeader k="city" label="City" sortKey={sortKey} sortDir={sortDir} onClick={toggleSort} align="left" />
                 <SortHeader k="spotsSold" label="Spots Sold" sortKey={sortKey} sortDir={sortDir} onClick={toggleSort} align="right" />
+                <SortHeader
+                  k="memberSpots"
+                  label="Member Spots"
+                  sortKey={sortKey}
+                  sortDir={sortDir}
+                  onClick={toggleSort}
+                  align="right"
+                  tooltip="Count of MEMBER fills at this match. Subset of Spots Sold; pairs with the allocated Member $ figure."
+                />
                 <SortHeader k="grossRevenue" label="DPP" sortKey={sortKey} sortDir={sortDir} onClick={toggleSort} align="right" />
                 <SortHeader
                   k="memberRev"
@@ -411,7 +434,7 @@ export default function MatchPnL({
             {activeRows === null ? (
               <tbody>
                 <tr>
-                  <td colSpan={9} className="px-3 py-8 text-center text-sm text-deep-green/55">
+                  <td colSpan={10} className="px-3 py-8 text-center text-sm text-deep-green/55">
                     Loading match P&L…
                   </td>
                 </tr>
@@ -419,7 +442,7 @@ export default function MatchPnL({
             ) : cityGroups.length === 0 ? (
               <tbody>
                 <tr>
-                  <td colSpan={9} className="px-3 py-8 text-center text-sm text-deep-green/55">
+                  <td colSpan={10} className="px-3 py-8 text-center text-sm text-deep-green/55">
                     No matches with cost data this week.
                     {missingCost.length > 0 &&
                       ` (${missingCost.length} matches without cost set — see below.)`}
@@ -429,17 +452,38 @@ export default function MatchPnL({
             ) : (
               cityGroups.map((g) => {
                 const sub = citySubtotal(g.rows);
+                // April benchmark: structural monthly reference, same value
+                // regardless of selected week. Numerator: fin_revenue type
+                // 'Membership' for the city in Apr 2026. Denominator: total
+                // MEMBER fills for the city in Apr 2026 (mdapi-derived
+                // index, same source Field Ranking reads). Renders the
+                // fallback string when the denominator is zero, which
+                // includes cities with no recorded member spots yet AND
+                // any future quarter where Apr 2026 falls out of the
+                // loaded mdapi window.
+                const aprMemberRev = data
+                  ? cityMembershipRevenueFor(data, g.city, "Apr 2026")
+                  : 0;
+                const aprMemberSpots =
+                  data?.mdapiMemberSpots.byCityMonth.get(
+                    `${g.city}|Apr 2026`,
+                  )?.member ?? 0;
+                const aprBenchmarkLabel =
+                  aprMemberSpots > 0
+                    ? `April benchmark: ~$${(aprMemberRev / aprMemberSpots).toFixed(2)}/member spot`
+                    : "April benchmark: no member spots recorded";
                 return (
                   <tbody key={g.city}>
                     <tr className="border-t-2 border-cream-line bg-cream-soft/50">
                       <td
-                        colSpan={9}
+                        colSpan={10}
                         className="px-3 py-2 text-[10px] font-bold uppercase tracking-[0.12em] text-deep-green"
                       >
                         {g.city}
                         <span className="ml-2 font-normal text-deep-green/55">
                           · {sub.matches} match{sub.matches === 1 ? "" : "es"} ·
-                          DPP {fmtUsd(sub.gross)} · Member{" "}
+                          DPP {fmtUsd(sub.gross)} · Member spots{" "}
+                          {sub.memberSpots} · Member{" "}
                           {fmtUsd(sub.memberRev)} · Total{" "}
                           {fmtUsd(sub.gross + sub.memberRev)} · cost{" "}
                           {fmtUsd(sub.cost)} · net{" "}
@@ -465,6 +509,9 @@ export default function MatchPnL({
                             </>
                           )}
                         </span>
+                        <div className="mt-0.5 font-normal normal-case italic tracking-normal text-deep-green/45">
+                          {aprBenchmarkLabel}
+                        </div>
                       </td>
                     </tr>
                     {g.rows.map((r) => (
@@ -610,6 +657,13 @@ function Row({
           <span className="text-deep-green/35">—</span>
         ) : (
           row.spotsSold
+        )}
+      </td>
+      <td className="px-3 py-2 text-right align-top font-mono tabular-nums text-deep-green">
+        {row.status === "canceled" ? (
+          <span className="text-deep-green/35">—</span>
+        ) : (
+          row.memberSpots
         )}
       </td>
       <td className="px-3 py-2 text-right align-top font-mono tabular-nums text-deep-green">

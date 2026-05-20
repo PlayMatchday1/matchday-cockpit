@@ -80,6 +80,7 @@ export type MatchPnLSummary = {
   totalMatches: number;
   totalRevenue: number; // DPP gross
   totalMemberRev: number; // allocated member rev
+  totalMemberSpots: number; // count of MEMBER fills across all matches
   totalFieldCost: number; // sum across rows where cost is known
   net: number; // (totalRevenue + totalMemberRev) − totalFieldCost
   losingMatches: number;
@@ -376,12 +377,14 @@ export function summarizeCanceled(rows: MatchPnLRow[]): CanceledSummary {
 export function summarize(rows: MatchPnLRow[]): MatchPnLSummary {
   let totalRevenue = 0;
   let totalMemberRev = 0;
+  let totalMemberSpots = 0;
   let totalFieldCost = 0;
   let losingMatches = 0;
   let matchesWithoutCost = 0;
   for (const r of rows) {
     totalRevenue += r.grossRevenue;
     totalMemberRev += r.allocatedMemberRev;
+    totalMemberSpots += r.memberSpots;
     if (r.fieldCost !== null) totalFieldCost += r.fieldCost;
     else matchesWithoutCost++;
     if (r.status === "loss") losingMatches++;
@@ -390,6 +393,7 @@ export function summarize(rows: MatchPnLRow[]): MatchPnLSummary {
     totalMatches: rows.length,
     totalRevenue,
     totalMemberRev,
+    totalMemberSpots,
     totalFieldCost,
     net: totalRevenue + totalMemberRev - totalFieldCost,
     losingMatches,
