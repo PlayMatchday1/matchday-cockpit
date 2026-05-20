@@ -167,13 +167,27 @@ export default function MatchChatsClient() {
 
   // Lock document scroll while /match-chats is mounted. iOS Safari
   // standalone PWA scrolls the document when the keyboard opens and
-  // does not restore scrollTop on dismiss. Same mechanism /chats uses.
+  // does not restore scrollTop on dismiss. Same mechanism /chats uses;
+  // see CrmClient for the full rationale and the visualViewport
+  // listener that resets the layout-viewport offset after keyboard
+  // dismiss so MobileBottomNav re-anchors to the real viewport bottom.
   useEffect(() => {
     document.documentElement.classList.add("app-shell-locked");
-    document.body.classList.add("app-shell-locked");
+    const vv = typeof window !== "undefined" ? window.visualViewport : null;
+    if (!vv) {
+      return () => {
+        document.documentElement.classList.remove("app-shell-locked");
+      };
+    }
+    const onResize = () => {
+      if (vv.height >= window.innerHeight - 1) {
+        window.scrollTo(0, 0);
+      }
+    };
+    vv.addEventListener("resize", onResize);
     return () => {
+      vv.removeEventListener("resize", onResize);
       document.documentElement.classList.remove("app-shell-locked");
-      document.body.classList.remove("app-shell-locked");
     };
   }, []);
 
