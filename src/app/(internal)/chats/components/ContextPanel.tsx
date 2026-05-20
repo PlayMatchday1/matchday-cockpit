@@ -39,6 +39,15 @@ export type ContextPlayer = {
   played_in_2026: number | null;
 };
 
+// Resolved from fin_members (Retool-synced). Null when the player's
+// email + phone don't match any membership row.
+export type ContextMembership = {
+  member_id: string;
+  status: string;
+  canceled_at: string | null;
+  cancel_reason: string | null;
+};
+
 export type ContextRecentMatch = {
   match_api_id: number;
   venue: string | null;
@@ -67,6 +76,7 @@ export type ContextThreadSummary = {
 
 type FetchedContext = {
   player: ContextPlayer | null;
+  membership: ContextMembership | null;
   recentMatches: ContextRecentMatch[];
   upcomingMatches: ContextUpcomingMatch[];
   historicalAccountCount: number | null;
@@ -74,6 +84,7 @@ type FetchedContext = {
 
 const EMPTY_CONTEXT: FetchedContext = {
   player: null,
+  membership: null,
   recentMatches: [],
   upcomingMatches: [],
   historicalAccountCount: null,
@@ -133,12 +144,14 @@ export default function ContextPanel({
         if (!res.ok) return;
         const json = (await res.json()) as {
           player: ContextPlayer | null;
+          membership: ContextMembership | null;
           recent_matches: ContextRecentMatch[];
           upcoming_matches: ContextUpcomingMatch[];
           historical_account_count: number | null;
         };
         const next: FetchedContext = {
           player: json.player,
+          membership: json.membership ?? null,
           recentMatches: json.recent_matches ?? [],
           upcomingMatches: json.upcoming_matches ?? [],
           historicalAccountCount: json.historical_account_count,
@@ -159,6 +172,7 @@ export default function ContextPanel({
   const bodyProps = {
     thread,
     player: data.player,
+    membership: data.membership,
     recentMatches: data.recentMatches,
     upcomingMatches: data.upcomingMatches,
     historicalAccountCount: data.historicalAccountCount,
@@ -223,6 +237,7 @@ export default function ContextPanel({
 type BodyProps = {
   thread: ContextThreadSummary | null;
   player: ContextPlayer | null;
+  membership: ContextMembership | null;
   recentMatches: ContextRecentMatch[];
   upcomingMatches: ContextUpcomingMatch[];
   historicalAccountCount: number | null;
@@ -232,6 +247,7 @@ type BodyProps = {
 function ContextBody({
   thread,
   player,
+  membership,
   recentMatches,
   upcomingMatches,
   historicalAccountCount,
@@ -291,7 +307,29 @@ function ContextBody({
                   Member
                 </span>
               )}
+              {membership?.member_id && (
+                <span className="font-mono text-[10px] font-bold uppercase tracking-wider text-deep-green/60">
+                  {membership.member_id}
+                </span>
+              )}
             </div>
+            {/* Cancellation notice — only when fin_members says the
+                member has scheduled their membership to end but is
+                still active today. status='canceled' members are
+                already lapsed and don't need the row (the absence of
+                the MEMBER pill signals it). */}
+            {membership &&
+              membership.canceled_at &&
+              membership.status === "ACTIVE" && (
+                <div className="mt-2 flex flex-col items-center text-[10px] font-medium text-amber-700">
+                  <span>Cancelled on {formatCancelDate(membership.canceled_at)}</span>
+                  {membership.cancel_reason && (
+                    <span className="text-amber-700/80">
+                      Reason: {membership.cancel_reason}
+                    </span>
+                  )}
+                </div>
+              )}
           </div>
 
           <dl className="mt-4 grid grid-cols-2 gap-x-3 gap-y-2 text-xs">
@@ -432,6 +470,21 @@ function ContextBody({
 
     </div>
   );
+}
+
+// "2026-04-22" / "2026-04-22T...Z" → "Apr 22, 2026". Treats date-only
+// values as UTC (matches the rest of the panel's date rendering) so a
+// stored "2026-04-22" doesn't shift across the TZ boundary on west-
+// coast browsers.
+function formatCancelDate(iso: string): string {
+  const d = new Date(/^\d{4}-\d{2}-\d{2}$/.test(iso) ? `${iso}T00:00:00Z` : iso);
+  if (Number.isNaN(d.getTime())) return iso;
+  return d.toLocaleDateString(undefined, {
+    timeZone: "UTC",
+    month: "short",
+    day: "numeric",
+    year: "numeric",
+  });
 }
 
 function Cell({

@@ -11,10 +11,18 @@
 // Response:
 //   {
 //     player: { id, first_name, last_name, ..., played_in_2026 } | null,
+//     membership: { member_id, status, canceled_at, cancel_reason } | null,
 //     recent_matches: [...],
 //     upcoming_matches: [...],
 //     historical_account_count: number | null,
 //   }
+//
+// `membership` is resolved by joining fin_members against the
+// player's email (case-insensitive) or the thread's phone number
+// (rightmost 10 digits — fin_members.phone is E.164 with +1 prefix
+// per Retool sync). Used by ContextPanel to surface member_id and a
+// "Cancelled on …" notice when an active member has scheduled their
+// membership to end.
 
 import type { SupabaseClient } from "@supabase/supabase-js";
 import { authenticateCrm } from "@/lib/crmAuth";
@@ -54,7 +62,11 @@ export async function GET(req: Request, ctx: RouteCtx) {
   const thread = threadRes.data;
 
   // Player context — only if thread has a player_id.
-  let player: unknown = null;
+  type PlayerContext = Record<string, unknown> & {
+    email?: string | null;
+    phone_number?: string | null;
+  };
+  let player: PlayerContext | null = null;
   if (thread.player_id != null) {
     const playerRes = await supabase
       .from("mdapi_users")
@@ -72,9 +84,20 @@ export async function GET(req: Request, ctx: RouteCtx) {
         supabase,
         thread.player_id as number,
       );
-      player = { ...playerRes.data, played_in_2026 };
+      player = { ...playerRes.data, played_in_2026 } as PlayerContext;
     }
   }
+
+  // Membership lookup against the Retool-synced fin_members table.
+  // Joins on player email (case-insensitive) OR phone (rightmost 10
+  // digits, since fin_members.phone is E.164 with +1 prefix and the
+  // cockpit-side phone may be stored without). Returns null when no
+  // row matches — ContextPanel renders nothing in that case.
+  const membership = await loadMembership(supabase, {
+    email: player?.email ?? null,
+    threadPhone: thread.phone_number as string | null,
+    playerPhone: player?.phone_number ?? null,
+  });
 
   // Recent matches (last 5). Two-step fetch because the
   // mdapi_match_players → mdapi_matches join is a "soft FK" (no
@@ -109,12 +132,86 @@ export async function GET(req: Request, ctx: RouteCtx) {
   return Response.json(
     {
       player,
+      membership,
       recent_matches,
       upcoming_matches,
       historical_account_count,
     },
     { status: 200 },
   );
+}
+
+// ============================================================
+// Membership lookup (fin_members)
+// ============================================================
+
+type Membership = {
+  member_id: string;
+  status: string;
+  canceled_at: string | null;
+  cancel_reason: string | null;
+};
+
+async function loadMembership(
+  supabase: SupabaseClient,
+  args: {
+    email: string | null;
+    threadPhone: string | null;
+    playerPhone: string | null;
+  },
+): Promise<Membership | null> {
+  // Collect candidate predicates. Email gets a case-insensitive
+  // equality match; phone gets a "ends-with-last-10-digits" match so
+  // we tolerate the +1/national mismatch between fin_members (E.164)
+  // and other cockpit phone surfaces.
+  const orParts: string[] = [];
+  if (args.email && args.email.trim().length > 0) {
+    // ilike with no wildcards = case-insensitive equality. Email
+    // values are unlikely to contain PostgREST's special characters
+    // (comma, parens) — guard anyway by skipping any that do, since
+    // those would need escaping for the .or() comma-separated form.
+    const e = args.email.trim();
+    if (!/[,()]/.test(e)) {
+      orParts.push(`email.ilike.${e}`);
+    }
+  }
+  const lastTen = (s: string | null) => {
+    if (!s) return null;
+    const digits = s.replace(/\D/g, "");
+    return digits.length >= 10 ? digits.slice(-10) : null;
+  };
+  const phoneCandidates = new Set<string>();
+  const t = lastTen(args.threadPhone);
+  if (t) phoneCandidates.add(t);
+  const p = lastTen(args.playerPhone);
+  if (p) phoneCandidates.add(p);
+  for (const last10 of phoneCandidates) {
+    orParts.push(`phone.like.*${last10}`);
+  }
+
+  if (orParts.length === 0) return null;
+
+  const res = await supabase
+    .from("fin_members")
+    .select("member_id, status, canceled_at, cancel_reason")
+    .or(orParts.join(","))
+    .limit(1)
+    .maybeSingle();
+  if (res.error) {
+    console.error("[crm:threads.context] fin_members lookup failed", res.error);
+    return null;
+  }
+  if (!res.data) return null;
+  return {
+    member_id: String(res.data.member_id ?? ""),
+    status: String(res.data.status ?? ""),
+    canceled_at:
+      typeof res.data.canceled_at === "string" ? res.data.canceled_at : null,
+    cancel_reason:
+      typeof res.data.cancel_reason === "string"
+        ? res.data.cancel_reason
+        : null,
+  };
 }
 
 async function countHistoricalAccounts(
