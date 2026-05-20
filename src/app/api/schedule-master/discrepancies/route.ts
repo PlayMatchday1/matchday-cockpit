@@ -70,6 +70,7 @@ type ScheduleRow = {
   id: string;
   city: string;
   venue: string;
+  mdapi_field_id: number | null;
   detail: string;
   match_date: string;
   match_time: string;
@@ -174,7 +175,7 @@ export async function GET(req: Request) {
 
   const sRes = await supabase
     .from("schedule_master")
-    .select("id, city, venue, detail, match_date, match_time, max_spots")
+    .select("id, city, venue, mdapi_field_id, detail, match_date, match_time, max_spots")
     .gte("match_date", startIso)
     .lte("match_date", endIso);
   if (sRes.error) {
@@ -257,12 +258,21 @@ export async function GET(req: Request) {
     if (!r.city || !r.venue) continue;
     const cityName = normalizeCityName(r.city);
     if (!cityName) continue;
-    const venueId = venueNameToVenueId.get(
-      `${cityName}|${r.venue.trim().toLowerCase()}`,
-    );
+    // Prefer mdapi_field_id when present — mirrors the mdapi side
+    // and avoids string-mismatch drops when schedule_master.venue
+    // ("PRUMC") doesn't equal fin_venues.venue_name ("Peachtree
+    // Road UMC"). Falls back to the legacy string lookup for any
+    // pre-PR-D rows that still have NULL mdapi_field_id.
+    let venueId =
+      r.mdapi_field_id != null ? fieldIdToVenueId.get(r.mdapi_field_id) : undefined;
     if (venueId == null) {
-      warnUnmappedScheduleVenue(r.city, r.venue);
-      continue;
+      venueId = venueNameToVenueId.get(
+        `${cityName}|${r.venue.trim().toLowerCase()}`,
+      );
+      if (venueId == null) {
+        warnUnmappedScheduleVenue(r.city, r.venue);
+        continue;
+      }
     }
     sIndex.push({
       cityName,
