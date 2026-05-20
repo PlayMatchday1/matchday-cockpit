@@ -295,12 +295,35 @@ export default function CrmClient() {
   // document scroll axis disabled, iOS has nothing to scroll, and the
   // title bar + bottom nav stay anchored to the viewport. Inbox list and
   // conversation messages keep their own internal scroll containers.
+  //
+  // Class is added to <html> only, NOT <body>. iOS Safari standalone PWA
+  // treats body{overflow} as a scroll container and re-anchors
+  // position:fixed descendants (MobileBottomNav) to body's box instead
+  // of the viewport — see globals.css comment for the full story.
+  //
+  // visualViewport resize listener handles a second iOS PWA quirk:
+  // even with html overflow-hidden, dismissing the on-screen keyboard
+  // can leave the layout viewport's scroll offset stale, which anchors
+  // the fixed bottom nav partway up the screen. Whenever the visual
+  // viewport returns to full size (keyboard gone), scroll-to-top
+  // forces iOS to re-anchor against the real viewport bottom.
   useEffect(() => {
     document.documentElement.classList.add("app-shell-locked");
-    document.body.classList.add("app-shell-locked");
+    const vv = typeof window !== "undefined" ? window.visualViewport : null;
+    if (!vv) {
+      return () => {
+        document.documentElement.classList.remove("app-shell-locked");
+      };
+    }
+    const onResize = () => {
+      if (vv.height >= window.innerHeight - 1) {
+        window.scrollTo(0, 0);
+      }
+    };
+    vv.addEventListener("resize", onResize);
     return () => {
+      vv.removeEventListener("resize", onResize);
       document.documentElement.classList.remove("app-shell-locked");
-      document.body.classList.remove("app-shell-locked");
     };
   }, []);
 
