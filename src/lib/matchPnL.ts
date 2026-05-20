@@ -36,19 +36,18 @@ import type { FinanceData } from "./useFinanceData";
 import { cityMembershipRevenueFor } from "./financeStats";
 import {
   fetchLegacyMatchRegistrations,
+  hasActiveSubAtMatchTime,
   loadActiveSubscriptionsByEmail,
 } from "./mdapiMatchesRead";
 import { buildFieldIdToVenueIdMap, resolveVenueForMatch } from "./venueNormalization";
 
-// Allow-list of real-attendee payment types. Spots Sold counts every
-// real fill regardless of payment shape; only DAILY PAID contributes
-// to DPP $, and only MEMBER (subscription-joined) contributes to
-// allocated Member $. PROMOCODE and FREE_NON_MEMBER count as
-// attendees but contribute $0 to both revenue figures.
+// Allow-list of real-attendee payment types. Spots Booked counts every
+// non-promo, non-guest fill regardless of payment shape. PROMOCODE
+// rows are excluded entirely — they're a separate channel that
+// doesn't belong in the Match P&L view.
 const ALLOWED_PAYMENT_TYPES = new Set([
   "DAILY PAID",
   "MEMBER",
-  "PROMOCODE",
   "FREE_NON_MEMBER",
 ]);
 
@@ -182,12 +181,14 @@ function parseLocalTimestamp(s: string): Date | null {
 type RegRow = {
   field: string;
   field_id: number | null;
+  email: string | null;
   match_start: string;
   match_canceled: boolean;
   player_canceled_at: string | null;
   payment_type: string | null;
   match_price_paid: number;
   credit_paid: number;
+  user_type: string | null;
 };
 
 export type FetchWeekMatchPnLResult = {
@@ -226,11 +227,20 @@ export async function fetchWeekMatchPnL(
   // Split into canceled (match_canceled=true) and active (the rest).
   // Canceled rows skip the active filter chain entirely — they go
   // straight to the canceled bucketing pass.
-  const canceledRegs = regs.filter((r) => !!r.field && r.match_canceled);
+  //
+  // GUEST exclusion in both paths: user_type='GUEST' rows are phantom
+  // seats from a host buying multiple spots (same person, second seat).
+  // They carry amount=0 and represent no distinct customer. Excluded
+  // from spotsSold, paidSpots, memberSpots, freeNonMemberSpots, and
+  // from the canceled-match dedup so nothing is counted off them.
+  const canceledRegs = regs.filter(
+    (r) => !!r.field && r.match_canceled && r.user_type !== "GUEST",
+  );
   const activeEligible = regs.filter(
     (r) =>
       !!r.field &&
       !r.match_canceled &&
+      r.user_type !== "GUEST" &&
       !(
         r.player_canceled_at && r.player_canceled_at.trim() !== ""
       ) &&
@@ -310,18 +320,34 @@ export async function fetchWeekMatchPnL(
       buckets.set(key, b);
     }
     const pt = (r.payment_type ?? "").toUpperCase();
+    // Member status is checked INDEPENDENTLY of payment_type so a
+    // paid_status='PAID' row whose email has an active subscription
+    // at match time counts as both a paid spot AND a member spot
+    // (a member who paid full DPP for that match). derivePaymentType
+    // only flips to 'MEMBER' when paid_status='FREE' + active sub,
+    // so the cross-check here picks up PAID + active sub cases.
+    const isMember = hasActiveSubAtMatchTime(
+      r.email,
+      r.match_start,
+      subscriptionsByEmail,
+    );
     b.spotsSold += 1;
-    b.credit += Number(r.credit_paid ?? 0) || 0;
-    if (pt === "MEMBER") {
-      b.memberSpots += 1;
-    } else if (pt === "FREE_NON_MEMBER") {
+    if (isMember) b.memberSpots += 1;
+    if (pt === "FREE_NON_MEMBER") {
       b.freeNonMemberSpots += 1;
     } else if (pt === "DAILY PAID") {
-      b.paidSpots += 1;
-      b.grossRevenue += Number(r.match_price_paid ?? 0) || 0;
+      const amount = Number(r.match_price_paid ?? 0) || 0;
+      // DPP Rev and Credit always accumulate for eligible DAILY PAID
+      // rows. paidSpots only counts rows that actually moved money
+      // (amount > 0), so $0 placeholder rows don't inflate the
+      // paid-spot count.
+      b.grossRevenue += amount;
+      b.credit += Number(r.credit_paid ?? 0) || 0;
+      if (amount > 0) b.paidSpots += 1;
     }
-    // PROMOCODE rows count toward spotsSold + credit, but $0 to DPP/Member
-    // and don't increment paidSpots.
+    // pt === "MEMBER" (FREE + active sub) is already counted in
+    // memberSpots above; no other increment needed. PROMOCODE rows
+    // never reach here (excluded by ALLOWED_PAYMENT_TYPES).
   }
 
   // April benchmark rate per city: cityAprMembershipRev / cityAprMemberSpots.

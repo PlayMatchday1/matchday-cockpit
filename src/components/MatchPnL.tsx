@@ -462,7 +462,7 @@ export default function MatchPnL({
                   sortDir={sortDir}
                   onClick={toggleSort}
                   align="right"
-                  tooltip="Portion of DPP $ funded via player credit balance, not new cash. Already included in DPP $; surfaced here to show how much of the gate was credit-paid."
+                  tooltip="Portion of DPP Rev paid via account credit (already included in DPP Rev, not additive)."
                 />
                 <SortHeader
                   k="total"
