@@ -155,13 +155,6 @@ export type FinPricing = {
   notes: string | null;
 };
 
-export type FinCommentary = {
-  id: number;
-  eyebrow: string | null;
-  body: string | null;
-  updated_at: string | null;
-};
-
 export type FinVenueCostOverride = {
   id: number;
   venue_id: number;
@@ -181,7 +174,6 @@ export type FinanceData = {
   memberSpots: FinMemberSpotsRow[];
   members: FinMember[];
   pricing: FinPricing[];
-  commentary: FinCommentary | null;
   overrides: FinVenueCostOverride[];
   venueAliases: Map<string, string>;
   // PR-E: mdapi field_id → fin_venues.id. Source of truth for the
@@ -282,8 +274,7 @@ async function load(quarter: QuarterInfo): Promise<void> {
   publish(key, { data: prior?.data ?? null, loading: true, error: null });
 
   // Multi-row reads go through selectAll() so they're not silently capped
-  // at PostgREST's 1000-row max. fin_commentary is intentionally a single-
-  // row read (`.limit(1).maybeSingle()`); fin_venues / fin_venue_aliases /
+  // at PostgREST's 1000-row max. fin_venues / fin_venue_aliases /
   // fin_pricing / fin_config / fin_venue_cost_overrides are bounded by
   // venue count and would never approach 1000, but we still paginate them
   // for uniform error handling — selectAll exits after one round-trip
@@ -303,7 +294,6 @@ async function load(quarter: QuarterInfo): Promise<void> {
   let mdapiRegRows: Awaited<
     ReturnType<typeof fetchLegacyMatchRegistrations>
   >;
-  let cmtRow: Record<string, unknown> | null;
   try {
     [
       revenueRows,
@@ -381,17 +371,6 @@ async function load(quarter: QuarterInfo): Promise<void> {
         quarterFetchBounds(quarter),
       ),
     ]);
-    // Per-quarter Exec Summary row (Wave 4 / migration 0026).
-    // Returns null when no commentary exists for the selected
-    // quarter — ExecutiveSummary renders the empty state.
-    const cmtRes = await supabase
-      .from("fin_commentary")
-      .select("*")
-      .eq("quarter_key", quarter.key)
-      .limit(1)
-      .maybeSingle();
-    if (cmtRes.error) throw new Error(cmtRes.error.message);
-    cmtRow = (cmtRes.data ?? null) as Record<string, unknown> | null;
   } catch (e) {
     publish(key, {
       data: null,
@@ -574,18 +553,6 @@ async function load(quarter: QuarterInfo): Promise<void> {
     notes: cleanTextNullable(r.notes),
   }));
 
-  const commentaryRow = cmtRow as
-    | { id: number; eyebrow?: string | null; body?: string | null; updated_at?: string | null }
-    | null;
-  const commentary: FinCommentary | null = commentaryRow
-    ? {
-        id: commentaryRow.id,
-        eyebrow: cleanTextNullable(commentaryRow.eyebrow),
-        body: commentaryRow.body == null ? null : String(commentaryRow.body),
-        updated_at: cleanTextNullable(commentaryRow.updated_at),
-      }
-    : null;
-
   const overrides: FinVenueCostOverride[] = ovRows.map((r) => ({
     id: r.id as number,
     venue_id: r.venue_id as number,
@@ -606,7 +573,6 @@ async function load(quarter: QuarterInfo): Promise<void> {
       memberSpots,
       members,
       pricing,
-      commentary,
       overrides,
       venueAliases,
       venueFields,
