@@ -2,18 +2,23 @@
 
 import Link from "next/link";
 
-// Tabbed sub-nav shared between /admin (User access) and /admin/reports.
-// Each page renders this at the top so admins can swap between the two
-// without going back to the user-menu dropdown.
+// Tabbed sub-nav shared across the admin section. Each page renders
+// this at the top so admins can swap between sections without going
+// back to the user-menu dropdown.
 
 type Tab = { href: string; label: string };
 
 const TABS: Tab[] = [
   { href: "/admin", label: "User access" },
   { href: "/admin/reports", label: "Reports" },
+  { href: "/admin/canned-responses", label: "Canned responses" },
 ];
 
-export default function AdminSubNav({ active }: { active: "users" | "reports" }) {
+export default function AdminSubNav({
+  active,
+}: {
+  active: "users" | "reports" | "canned-responses";
+}) {
   return (
     <div
       role="tablist"
@@ -23,7 +28,9 @@ export default function AdminSubNav({ active }: { active: "users" | "reports" })
       {TABS.map((t) => {
         const isActive =
           (active === "users" && t.href === "/admin") ||
-          (active === "reports" && t.href === "/admin/reports");
+          (active === "reports" && t.href === "/admin/reports") ||
+          (active === "canned-responses" &&
+            t.href === "/admin/canned-responses");
         return (
           <Link
             key={t.href}
