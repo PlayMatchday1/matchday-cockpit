@@ -49,15 +49,16 @@ function venueMatchCount(
   venue: FinVenue,
   month: Q2Month,
 ): number {
-  // Filter on venue_raw / raw_venue_name so split-rate venues (e.g. ATH Katy
-  // weekday + ATH Katy Sunday) are accounted per-leg even when an alias
-  // collapses their canonical names. For non-split venues raw and canonical
-  // are identical, so this is a no-op in the common case.
-  return data.schedule
-    .filter(
-      (s) => s.venue_raw === venue.raw_venue_name && s.month === month,
-    )
-    .reduce((sum, s) => sum + (s.match_count ?? 0), 0);
+  // Source is data.masterSchedule (schedule_master, reconciled per-match).
+  // venue_id is pre-resolved in useFinanceData, including the
+  // day-of-week split-rate rule for ATH Katy — so weekday matches land
+  // on the weekday leg id and Sunday matches land on the Sunday leg id.
+  // One row = one match; count, don't sum.
+  let n = 0;
+  for (const s of data.masterSchedule) {
+    if (s.venue_id === venue.id && s.month === month) n += 1;
+  }
+  return n;
 }
 
 function venueTotalHours(
@@ -65,11 +66,11 @@ function venueTotalHours(
   venue: FinVenue,
   month: Q2Month,
 ): number {
-  return data.schedule
-    .filter(
-      (s) => s.venue_raw === venue.raw_venue_name && s.month === month,
-    )
-    .reduce((sum, s) => sum + (s.total_hours ?? 0), 0);
+  let h = 0;
+  for (const s of data.masterSchedule) {
+    if (s.venue_id === venue.id && s.month === month) h += s.duration_hours;
+  }
+  return h;
 }
 
 function autoCost(

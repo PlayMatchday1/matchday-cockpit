@@ -1523,20 +1523,20 @@ function fieldCostsActualFor(
     }
     if (v.billing_type === "per_match") {
       const rate = v.per_match_rate ?? 0;
-      for (const s of data.schedule) {
-        if (s.venue_raw !== v.raw_venue_name) continue;
+      for (const s of data.masterSchedule) {
+        if (s.venue_id !== v.id) continue;
         if (s.month !== month) continue;
-        if (s.date > today) continue;
-        total += (s.match_count ?? 0) * rate;
+        if (s.match_date > today) continue;
+        total += rate;
       }
     } else if (v.billing_type === "per_hour") {
       const rate = v.hourly_rate ?? 0;
       if (rate > 0) {
-        for (const s of data.schedule) {
-          if (s.venue_raw !== v.raw_venue_name) continue;
+        for (const s of data.masterSchedule) {
+          if (s.venue_id !== v.id) continue;
           if (s.month !== month) continue;
-          if (s.date > today) continue;
-          total += (s.total_hours ?? 0) * rate;
+          if (s.match_date > today) continue;
+          total += s.duration_hours * rate;
         }
       }
     }
@@ -1727,16 +1727,14 @@ export function venueMatchCountFor(
   venueId: number,
   month: Q2Month,
 ): number {
-  const venueRow = data.venues.find((v) => v.id === venueId);
-  if (!venueRow) return 0;
-  return data.schedule
-    .filter(
-      (s) =>
-        s.city === venueRow.city &&
-        s.venue === venueRow.venue_name &&
-        s.month === month,
-    )
-    .reduce((sum, s) => sum + (s.match_count ?? 0), 0);
+  // venue_id is pre-resolved on masterSchedule rows (including the
+  // split-rate day-of-week rule), so a direct id filter is correct
+  // here — no need to fan out across (city, venue_name).
+  let n = 0;
+  for (const s of data.masterSchedule) {
+    if (s.venue_id === venueId && s.month === month) n += 1;
+  }
+  return n;
 }
 
 export function cityMembershipRevenueFor(
@@ -1809,10 +1807,16 @@ export function activeVenuesForCity(
       venues.add(r.venue);
     }
   }
-  for (const s of data.schedule) {
-    if (s.city === city && s.month === month && s.venue) {
-      venues.add(s.venue);
-    }
+  // For masterSchedule, resolve the venue name through data.venues so the
+  // emitted string is the canonical fin_venues.venue_name. Drops any
+  // schedule_master/fin_venues string drift that would otherwise surface
+  // as two near-identical entries in the active-venues list.
+  for (const s of data.masterSchedule) {
+    if (s.month !== month) continue;
+    if (s.venue_id == null) continue;
+    const v = data.venues.find((x) => x.id === s.venue_id);
+    if (!v || v.city !== city) continue;
+    venues.add(v.venue_name);
   }
   return [...venues].sort();
 }

@@ -15,6 +15,7 @@ import {
 } from "./mdapiMatchesRead";
 import { useFinanceQuarter } from "./financeQuarter";
 import { getCurrentQuarter, getQuarterByKey, type QuarterInfo } from "./quarters";
+import { resolveSplitRateVenueId } from "./venueGroups";
 
 // Pad the quarter window by 14d on each side so MTD-vs-prior-month
 // math (priorMonthSameDayMtdGross) and the +14d forward window for
@@ -89,6 +90,35 @@ export type FinSchedule = {
   manual_entry: boolean;
   created_at: string | null;
   created_by: string | null;
+};
+
+// One row per actual match in schedule_master. Replaces fin_schedule as
+// the cost-calc source: schedule_master is reconciled against the live
+// consumer app via /api/schedule-master/discrepancies, while fin_schedule
+// was operator-curated and drifted stale.
+//
+// `venue_id` is resolved at load time via mdapi_field_id → venueFields,
+// with a (city, venue_name) string fallback for legacy rows whose
+// mdapi_field_id is null. Split-rate venues (ATH Katy) re-route by
+// day-of-week through resolveSplitRateVenueId — Sunday matches go to
+// the Sunday leg id even though their mdapi_field_id points at the
+// weekday leg.
+//
+// `duration_hours` is parsed from the match_time range ("7:00 PM -
+// 8:00 PM" → 1). Falls back to 1 when the time string isn't a parseable
+// range. Only consumed by per_hour cost paths; per_match cost is
+// row-count × rate.
+export type FinMasterSchedule = {
+  id: string;
+  city: string;
+  venue: string;
+  match_date: string;
+  match_time: string;
+  month: string;
+  max_spots: number;
+  mdapi_field_id: number | null;
+  venue_id: number | null;
+  duration_hours: number;
 };
 
 export type FinVenue = {
@@ -172,7 +202,14 @@ export type FinanceData = {
   revenue: FinRevenue[];
   expenses: FinExpense[];
   managerPay: FinManagerPay[];
+  // Operator-curated billing schedule. Still rendered + edited via the
+  // /admin/finance Billing Schedule tab and surfaced in the FieldCostsView
+  // drill-down, but no longer drives cost numbers — those moved to
+  // masterSchedule below.
   schedule: FinSchedule[];
+  // Reconciled schedule_master rows (one per match) with venue_id
+  // resolved and duration parsed. Source for every cost-calc helper.
+  masterSchedule: FinMasterSchedule[];
   venues: FinVenue[];
   memberSpots: FinMemberSpotsRow[];
   members: FinMember[];
@@ -254,6 +291,42 @@ const MONTH_NORMALIZERS: { full: string; short: string; label: string }[] = [
   { full: "december", short: "dec", label: "Dec" },
 ];
 
+// Derive "Mon YYYY" from a YYYY-MM-DD calendar date. UTC math is safe
+// because match_date is a calendar date with no timezone.
+function monthFromMatchDate(dateStr: string): string {
+  if (!dateStr) return "";
+  const d = new Date(`${dateStr}T00:00:00Z`);
+  if (Number.isNaN(d.getTime())) return "";
+  const label = MONTH_NORMALIZERS[d.getUTCMonth()]?.label ?? "";
+  return label ? `${label} ${d.getUTCFullYear()}` : "";
+}
+
+// Parse a schedule_master match_time string ("7:00 PM - 8:00 PM",
+// "9:30pm - 10:30pm", "9:00 PM") and return the duration in hours.
+// Falls back to 1h when only a start time is present or the string
+// doesn't parse — same default the backfill script writes for new rows.
+// Bounded to (0, 6] as a sanity guard; out-of-range values default to 1.
+function parseMatchDurationHours(matchTime: string): number {
+  const re =
+    /^\s*(\d{1,2})(?::(\d{2}))?\s*(AM|PM|am|pm)?\s*[-–—]\s*(\d{1,2})(?::(\d{2}))?\s*(AM|PM|am|pm)?/;
+  const m = re.exec(matchTime ?? "");
+  if (!m) return 1;
+  const toMin = (h: number, min: number, ampm: string | undefined) => {
+    let h24 = h;
+    const a = (ampm ?? "").toUpperCase();
+    if (a === "PM" && h24 < 12) h24 += 12;
+    if (a === "AM" && h24 === 12) h24 = 0;
+    return h24 * 60 + (min || 0);
+  };
+  const startMin = toMin(Number(m[1]), Number(m[2] ?? 0), m[3]);
+  const endMin = toMin(Number(m[4]), Number(m[5] ?? 0), m[6]);
+  let diff = endMin - startMin;
+  if (diff <= 0) diff += 24 * 60; // cross-midnight (rare; e.g. 11:30 PM - 12:30 AM)
+  const hours = diff / 60;
+  if (!Number.isFinite(hours) || hours <= 0 || hours > 6) return 1;
+  return hours;
+}
+
 function normalizeMonth(v: unknown): string {
   if (v === null || v === undefined) return "";
   const raw = String(v).trim();
@@ -287,6 +360,7 @@ async function load(quarter: QuarterInfo): Promise<void> {
   let mpRows: Array<Record<string, unknown>>;
   let cfgRows: Array<Record<string, unknown>>;
   let schRows: Array<Record<string, unknown>>;
+  let smsRows: Array<Record<string, unknown>>;
   let vnRows: Array<Record<string, unknown>>;
   let msRows: Array<Record<string, unknown>>;
   let alRows: Array<Record<string, unknown>>;
@@ -297,6 +371,7 @@ async function load(quarter: QuarterInfo): Promise<void> {
   let mdapiRegRows: Awaited<
     ReturnType<typeof fetchLegacyMatchRegistrations>
   >;
+  const smBounds = quarterFetchBounds(quarter);
   try {
     [
       revenueRows,
@@ -304,6 +379,7 @@ async function load(quarter: QuarterInfo): Promise<void> {
       mpRows,
       cfgRows,
       schRows,
+      smsRows,
       vnRows,
       msRows,
       alRows,
@@ -327,6 +403,26 @@ async function load(quarter: QuarterInfo): Promise<void> {
       ),
       selectAll<Record<string, unknown>>(() =>
         supabase.from("fin_schedule").select("*").order("id"),
+      ),
+      // schedule_master is the live, reconciled per-match source for
+      // cost calc. Bounded by match_date in the same ±14d quarter
+      // window the rest of the loader uses. Reads:
+      //   - mdapi_field_id: primary venue key, resolved against
+      //     venueFields below.
+      //   - city/venue: legacy string fallback for any row whose
+      //     mdapi_field_id is null (pre-PR-D leftovers).
+      //   - match_date + match_time: drive month bucket + per-row
+      //     duration_hours for per_hour cost.
+      //   - max_spots: surfaced for caller inspection; not in cost.
+      selectAll<Record<string, unknown>>(() =>
+        supabase
+          .from("schedule_master")
+          .select(
+            "id, city, venue, match_date, match_time, max_spots, mdapi_field_id",
+          )
+          .gte("match_date", smBounds.fromDate)
+          .lte("match_date", smBounds.toDate)
+          .order("match_date"),
       ),
       selectAll<Record<string, unknown>>(() =>
         supabase.from("fin_venues").select("*").order("id"),
@@ -508,6 +604,62 @@ async function load(quarter: QuarterInfo): Promise<void> {
     };
   });
 
+  // (city, lowercased venue_name) → venue_id. Fallback when a
+  // schedule_master row has no mdapi_field_id (pre-PR-D leftovers).
+  // venueAliases isn't applied here because schedule_master.venue is
+  // already the canonical post-alias name after migration 0040.
+  const nameToVenueId = new Map<string, number>();
+  for (const v of venues) {
+    nameToVenueId.set(
+      `${v.city.trim().toLowerCase()}|${v.venue_name.trim().toLowerCase()}`,
+      v.id,
+    );
+  }
+  let smUnresolved = 0;
+  const masterSchedule: FinMasterSchedule[] = smsRows.map((r) => {
+    const matchDate = cleanText(r.match_date);
+    const rawFieldId = r.mdapi_field_id;
+    const mdapiFieldId =
+      rawFieldId === null || rawFieldId === undefined
+        ? null
+        : Number(rawFieldId);
+    let initialVenueId: number | null =
+      mdapiFieldId != null ? (venueFields.get(mdapiFieldId) ?? null) : null;
+    if (initialVenueId == null) {
+      initialVenueId =
+        nameToVenueId.get(
+          `${cleanText(r.city).toLowerCase()}|${cleanText(r.venue).toLowerCase()}`,
+        ) ?? null;
+    }
+    let resolvedVenueId: number | null = initialVenueId;
+    if (resolvedVenueId != null && matchDate) {
+      resolvedVenueId = resolveSplitRateVenueId(
+        resolvedVenueId,
+        matchDate,
+        venues,
+      );
+    }
+    if (resolvedVenueId == null) smUnresolved += 1;
+    const matchTime = cleanText(r.match_time);
+    return {
+      id: String(r.id ?? ""),
+      city: cleanText(r.city),
+      venue: cleanText(r.venue),
+      match_date: matchDate,
+      match_time: matchTime,
+      month: monthFromMatchDate(matchDate),
+      max_spots: Math.round(asNumber(r.max_spots) || 0),
+      mdapi_field_id: mdapiFieldId,
+      venue_id: resolvedVenueId,
+      duration_hours: parseMatchDurationHours(matchTime),
+    };
+  });
+  if (smUnresolved > 0 && typeof console !== "undefined") {
+    console.warn(
+      `[useFinanceData] ${smUnresolved} schedule_master row(s) in the quarter window have no resolvable venue_id — they'll be excluded from cost calc. Check fin_venue_fields links and (city, venue_name) string match against fin_venues.`,
+    );
+  }
+
   const memberSpots: FinMemberSpotsRow[] = msRows.map((r) => ({
     id: r.id as number,
     venue: canonVenue(r.venue),
@@ -582,6 +734,7 @@ async function load(quarter: QuarterInfo): Promise<void> {
       expenses,
       managerPay,
       schedule,
+      masterSchedule,
       venues,
       memberSpots,
       members,

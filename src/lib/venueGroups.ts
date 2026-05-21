@@ -86,6 +86,40 @@ export function getLegLabel(group: VenueGroup, legIndex: number): string {
   return `leg ${legIndex + 1}`;
 }
 
+// Route a schedule row's resolved venue_id to the correct split-rate leg by
+// day-of-week. ATH Katy is the live case: the weekday leg ($140) has
+// mdapi_field_id 892; the Sunday leg ($160) has no field_id, so every
+// schedule_master row resolves to the weekday leg via the field_id path
+// and Sunday matches would silently underbill by $20 each. Sunday
+// (UTC-day-of-week = 0) routes to `secondary`; every other day stays on
+// `primary`. Symmetric: works whether the initial venue_id matched the
+// primary OR the secondary leg, so future split-rate configs can wire
+// fin_venue_fields up to either side without changing this code.
+//
+// matchDate must be YYYY-MM-DD. UTC math is correct here because the date
+// column is a calendar date with no timezone — same approach as
+// scripts/backfill-schedule-master-from-mdapi.mjs.
+export function resolveSplitRateVenueId(
+  initialVenueId: number,
+  matchDate: string,
+  venues: FinVenue[],
+): number {
+  const v = venues.find((x) => x.id === initialVenueId);
+  if (!v) return initialVenueId;
+  const cfg = COMBINE_BY_NAME.find(
+    (c) => c.primary === v.venue_name || c.secondary === v.venue_name,
+  );
+  if (!cfg) return initialVenueId;
+  const d = new Date(`${matchDate}T00:00:00Z`);
+  if (Number.isNaN(d.getTime())) return initialVenueId;
+  const targetName = d.getUTCDay() === 0 ? cfg.secondary : cfg.primary;
+  if (targetName === v.venue_name) return initialVenueId;
+  const target = venues.find(
+    (x) => x.city === v.city && x.venue_name === targetName,
+  );
+  return target?.id ?? initialVenueId;
+}
+
 // Find the group that owns a venue, by either canonical display name or any
 // leg's raw venue_name. Useful when a caller has a venue string and wants to
 // roll up to the group's view.
