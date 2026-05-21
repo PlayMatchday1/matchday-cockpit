@@ -1781,6 +1781,36 @@ export function venueMatchCountFor(
   return n;
 }
 
+// Realized-through-today match count. Mirrors venueRealizedCostFor's
+// date filter so the cost/count reconciliation invariant holds in
+// the Slate Review embed: realized cost = realized charged count ×
+// rate. Past month → full count (assumes the month is closed).
+// Future month → 0. Current month → only schedule rows with
+// match_date <= today. Used only when buildRankingRows runs in
+// "realized" scope; standalone Field Ranking keeps the full-month
+// venueMatchCountFor.
+export function venueRealizedMatchCountFor(
+  data: FinanceData,
+  venueId: number,
+  month: Q2Month,
+  now: Date = new Date(),
+): number {
+  if (isFutureMonth(month, now)) return 0;
+  const qm = MONTH_BY_KEY[month];
+  if (!qm || !isCurrentMonthQ(qm, now)) {
+    return venueMatchCountFor(data, venueId, month);
+  }
+  const today = isoDateLocal(now);
+  let n = 0;
+  for (const s of data.masterSchedule) {
+    if (s.venue_id !== venueId) continue;
+    if (s.month !== month) continue;
+    if (s.match_date > today) continue;
+    n += 1;
+  }
+  return n;
+}
+
 // Cancelled matches the venue charges for. Always 0 when the venue's
 // charge_on_cancel flag is false — that's the toggle's whole purpose.
 // Sourced from data.cancelledSchedule (mdapi_matches WHERE
@@ -1796,6 +1826,33 @@ export function venueChargedCancelCountFor(
   let n = 0;
   for (const s of data.cancelledSchedule) {
     if (s.venue_id === venueId && s.month === month) n += 1;
+  }
+  return n;
+}
+
+// Realized-through-today charged-cancel count. Same date filter as
+// venueRealizedCostFor's cancelled-row loop, so subtracting cost ÷ rate
+// against (realized alive + realized cxl) reconciles exactly.
+export function venueRealizedChargedCancelCountFor(
+  data: FinanceData,
+  venueId: number,
+  month: Q2Month,
+  now: Date = new Date(),
+): number {
+  const venue = data.venues.find((v) => v.id === venueId);
+  if (!venue || !venue.charge_on_cancel) return 0;
+  if (isFutureMonth(month, now)) return 0;
+  const qm = MONTH_BY_KEY[month];
+  if (!qm || !isCurrentMonthQ(qm, now)) {
+    return venueChargedCancelCountFor(data, venueId, month);
+  }
+  const today = isoDateLocal(now);
+  let n = 0;
+  for (const s of data.cancelledSchedule) {
+    if (s.venue_id !== venueId) continue;
+    if (s.month !== month) continue;
+    if (s.match_date > today) continue;
+    n += 1;
   }
   return n;
 }
@@ -2359,8 +2416,19 @@ export function buildRankingRows(
         scope === "realized"
           ? venueRealizedCostFor(data, leg.id, month, now)
           : canonicalVenueCost(data, leg.id, month).amount;
-      const alive = venueMatchCountFor(data, leg.id, month);
-      const cxl = venueChargedCancelCountFor(data, leg.id, month);
+      // Realized scope filters both alive and cancelled counts to
+      // match_date <= today during the current month so the subtitle's
+      // "N × $rate" reconciles to the realized cost number above.
+      // Past/future months pass through the same branches the realized
+      // helpers already handle (past → full count, future → 0).
+      const alive =
+        scope === "realized"
+          ? venueRealizedMatchCountFor(data, leg.id, month, now)
+          : venueMatchCountFor(data, leg.id, month);
+      const cxl =
+        scope === "realized"
+          ? venueRealizedChargedCancelCountFor(data, leg.id, month, now)
+          : venueChargedCancelCountFor(data, leg.id, month);
       aliveLegCounts.push(alive);
       cxlLegCounts.push(cxl);
       matchCount += alive;
