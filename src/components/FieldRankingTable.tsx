@@ -240,18 +240,48 @@ export default function FieldRankingTable({
                   </td>
                   <td className="px-3 py-2 font-semibold text-deep-green">
                     <div>{row.venue}</div>
-                    {row.billingType === "per_match" &&
-                      row.perMatchRate &&
-                      row.matchCount > 0 && (
-                        <div className="text-[10px] font-normal text-deep-green/45">
-                          {row.matchCount} × ${Math.round(row.perMatchRate)}
-                        </div>
-                      )}
-                    {row.billingType === "monthly_flat" && (
-                      <div className="text-[10px] font-normal text-deep-green/45">
-                        monthly
-                      </div>
-                    )}
+                    {(() => {
+                      // Split-rate groups (currently ATH Katy) render
+                      // every non-zero leg as "N × $rate", joined with
+                      // " + ". Single-leg per_match groups fall through
+                      // to the legacy single-rate subtitle below so the
+                      // visual stays identical for non-split venues.
+                      if (row.perMatchLegs.length > 0) {
+                        const visible = row.perMatchLegs.filter(
+                          (l) => l.matchCount > 0,
+                        );
+                        if (visible.length === 0) return null;
+                        return (
+                          <div className="text-[10px] font-normal text-deep-green/45">
+                            {visible
+                              .map(
+                                (l) =>
+                                  `${l.matchCount} × $${Math.round(l.rate)}`,
+                              )
+                              .join(" + ")}
+                          </div>
+                        );
+                      }
+                      if (
+                        row.billingType === "per_match" &&
+                        row.perMatchRate &&
+                        row.matchCount > 0
+                      ) {
+                        return (
+                          <div className="text-[10px] font-normal text-deep-green/45">
+                            {row.matchCount} × ${Math.round(row.perMatchRate)}
+                          </div>
+                        );
+                      }
+                      if (row.billingType === "monthly_flat") {
+                        return (
+                          <div className="text-[10px] font-normal text-deep-green/45">
+                            monthly
+                          </div>
+                        );
+                      }
+                      return null;
+                    })()}
                   </td>
                   <td className="px-3 py-2 text-deep-green/85">{row.city}</td>
                   <td className="px-3 py-2 text-deep-green/65">

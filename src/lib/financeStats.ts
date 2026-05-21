@@ -2103,6 +2103,13 @@ export type RankingRow = {
   billingType: FinanceData["venues"][number]["billing_type"] | null;
   perMatchRate: number | null;
   monthlyFlat: number | null;
+  // Per-leg matches × rate for combined split-rate groups (registered
+  // in venueGroups.COMBINE_BY_NAME — today: ATH Katy weekday $140 +
+  // Sunday $160). Populated only when the group has > 1 per_match leg
+  // so the table subtitle can render "12 × $140 + 5 × $160" instead
+  // of collapsing both legs into a single rate. Empty array on
+  // non-split rows. Legs come pre-sorted ASC by rate from groupVenues.
+  perMatchLegs: Array<{ matchCount: number; rate: number }>;
   netPL: number;
   margin: number;
 };
@@ -2135,16 +2142,30 @@ export function buildRankingRows(
     let memberSpots = 0;
     let dppSpots = 0;
     let otherSpots = 0;
+    const legCounts: number[] = [];
 
     for (const leg of g.legs) {
       memberRev += venueAllocatedMemberRevenueFor(data, leg.id, month);
       cost += canonicalVenueCost(data, leg.id, month).amount;
-      matchCount += venueMatchCountFor(data, leg.id, month);
+      const legMatches = venueMatchCountFor(data, leg.id, month);
+      legCounts.push(legMatches);
+      matchCount += legMatches;
       const spots = venueMemberSpotsFor(data, leg.id, month);
       memberSpots += spots.member;
       dppSpots += spots.dpp;
       otherSpots += spots.other;
     }
+    // Per-leg subtitle data, only for combined per_match groups.
+    // Single-leg groups fall through to the existing single-rate
+    // subtitle on the table. Non-per_match billing types don't drive
+    // a count × rate formula, so they're skipped here too.
+    const perMatchLegs: Array<{ matchCount: number; rate: number }> =
+      g.isCombined && primary.billing_type === "per_match"
+        ? g.legs.map((leg, idx) => ({
+            matchCount: legCounts[idx],
+            rate: leg.per_match_rate ?? 0,
+          }))
+        : [];
 
     if (revenue === 0 && memberRev === 0 && cost === 0) continue;
 
@@ -2180,6 +2201,7 @@ export function buildRankingRows(
       billingType: primary.billing_type ?? null,
       perMatchRate: primary.per_match_rate,
       monthlyFlat: primary.monthly_flat,
+      perMatchLegs,
       netPL,
       margin,
     });
