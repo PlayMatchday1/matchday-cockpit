@@ -17,6 +17,7 @@ type SortKey =
   | "venue"
   | "city"
   | "launchedMs"
+  | "matchCount"
   | "totalRevenue"
   | "revenue"
   | "memberRev"
@@ -38,6 +39,7 @@ const COLUMNS: ColumnDef[] = [
   { key: "venue", label: "Venue", align: "left" },
   { key: "city", label: "City", align: "left" },
   { key: "launchedMs", label: "Launched", align: "left" },
+  { key: "matchCount", label: "Matches", align: "right" },
   { key: "totalRevenue", label: "Total Revenue", align: "right" },
   { key: "revenue", label: "DPP Revenue", align: "right" },
   { key: "memberRev", label: "Member Rev", align: "right" },
@@ -182,7 +184,7 @@ export default function FieldRankingTable({
 
       {!collapsed && (
       <div className="overflow-x-auto">
-        <table className="w-full min-w-[1100px] text-xs">
+        <table className="w-full min-w-[1180px] text-xs">
           <thead className="sticky top-0 z-10 bg-cream-soft">
             <tr className="border-y border-cream-line text-[10px] font-bold uppercase tracking-wider text-deep-green/60">
               {COLUMNS.map((col) => {
@@ -254,6 +256,9 @@ export default function FieldRankingTable({
                   <td className="px-3 py-2 text-deep-green/85">{row.city}</td>
                   <td className="px-3 py-2 text-deep-green/65">
                     {relativeTimeFromDate(row.launchDate)}
+                  </td>
+                  <td className="px-3 py-2 text-right font-mono tabular-nums text-deep-green/85">
+                    {row.matchCount}
                   </td>
                   <td className="px-3 py-2 text-right font-mono font-bold tabular-nums text-mint-hover">
                     {fmtMoney(row.totalRevenue)}
