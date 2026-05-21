@@ -101,7 +101,7 @@ export default function FieldRankingTable({
   //   permit, Hattrick, Bicentennial) so per-venue Net P&L / Margin
   //   compare cleanly month-over-month.
   const [costMode, setCostMode] = useState<"as_billed" | "per_match">(
-    "as_billed",
+    "per_match",
   );
 
   const rows = useMemo<RankingRow[]>(() => {
