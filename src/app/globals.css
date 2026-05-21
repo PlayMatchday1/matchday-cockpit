@@ -35,6 +35,22 @@ html.app-shell-locked {
   height: 100%;
 }
 
+/* Chat-shell body background. On iOS standalone PWA the dvh value
+   can under-resolve the viewport by ~14px after a keyboard cycle,
+   exposing the body background below the inline bottom nav as a
+   beige stripe. Painting the body white on chat shells masks that
+   underfill so any exposed strip matches the nav's bg-white. The
+   shell-height JS variable below addresses the underfill directly;
+   this background rule is the bulletproof fallback in case the JS
+   tracker ever fails to fire (visualViewport unavailable, broken
+   iOS API). Both layers together: the shell hits the right height
+   AND the gap (if any) is invisible. */
+html.app-shell-locked,
+html.app-shell-locked body {
+  background-color: white;
+  background-image: none;
+}
+
 /* Hide scrollbars on horizontal chip strips. Used by FilterBar
    and reusable for any other horizontally swiping element. */
 .scrollbar-hide {

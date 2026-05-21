@@ -295,10 +295,35 @@ export default function CrmClient() {
   // document scroll axis disabled, iOS has nothing to scroll, and the
   // title bar + bottom nav stay anchored to the viewport. Inbox list and
   // conversation messages keep their own internal scroll containers.
+  //
+  // --shell-height: iOS standalone PWA's 100dvh under-resolves the
+  // viewport by ~14px after a keyboard cycle (measured: innerHeight=908,
+  // dvh=894 on the affected device). Writing window.innerHeight to a
+  // CSS variable lets the shell match the true viewport height. The
+  // value is refreshed on visualViewport resize (and window resize as a
+  // belt-and-suspenders fallback) so the shell shrinks correctly when
+  // the keyboard opens — interactiveWidget="resizes-content" makes
+  // innerHeight track the shrunk layout viewport — and restores to the
+  // full height on dismiss. Page wrappers consume the variable via
+  // h-[var(--shell-height,100dvh)] with 100dvh as the SSR/first-paint
+  // fallback.
   useEffect(() => {
     document.documentElement.classList.add("app-shell-locked");
     document.body.classList.add("app-shell-locked");
+    const updateHeight = () => {
+      document.documentElement.style.setProperty(
+        "--shell-height",
+        `${window.innerHeight}px`,
+      );
+    };
+    updateHeight();
+    const vv = typeof window !== "undefined" ? window.visualViewport : null;
+    vv?.addEventListener("resize", updateHeight);
+    window.addEventListener("resize", updateHeight);
     return () => {
+      vv?.removeEventListener("resize", updateHeight);
+      window.removeEventListener("resize", updateHeight);
+      document.documentElement.style.removeProperty("--shell-height");
       document.documentElement.classList.remove("app-shell-locked");
       document.body.classList.remove("app-shell-locked");
     };
