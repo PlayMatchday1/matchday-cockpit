@@ -439,11 +439,7 @@ function SlateReviewTabContent() {
         <SlateActionItems city={selectedCity} weekStart={weekStart} />
       </CollapsibleSection>
       <CollapsibleSection title="Cancellations">
-        <CancelHeatmap
-          city={selectedCity}
-          showAllSlots
-          highlightRecentCancels
-        />
+        <SlateReviewCancelSection city={selectedCity} />
       </CollapsibleSection>
     </div>
   );
@@ -527,6 +523,56 @@ function SlateReviewCityPills({
         })}
       </div>
     </section>
+  );
+}
+
+// Wraps CancelHeatmap with a Slate-Review-only mode toggle. "All
+// matches" shows the full city slate (showAllSlots=true, default —
+// every recurring slot, cancellations rendered inline). "Cancelled
+// only" reverts to the original CancelHeatmap behavior of filtering
+// to slots that had at least one cancellation. highlightRecentCancels
+// stays on in both modes so the row marker keeps surfacing recently-
+// cancelled slots regardless of filter. The CancelHeatmap usages on
+// /cities/[city] and /cities?tab=cancellations don't get this toggle —
+// it's a Slate Review affordance only.
+function SlateReviewCancelSection({ city }: { city: City }) {
+  const [showAllSlots, setShowAllSlots] = useState(true);
+  return (
+    <div>
+      <div className="mb-3 flex justify-end">
+        <div
+          className="inline-flex rounded-full border border-cream-line bg-cream-soft p-0.5 text-xs font-bold"
+          role="radiogroup"
+          aria-label="Cancellation view"
+        >
+          {(["all", "cancelled"] as const).map((opt) => {
+            const active =
+              (opt === "all" && showAllSlots) ||
+              (opt === "cancelled" && !showAllSlots);
+            return (
+              <button
+                key={opt}
+                type="button"
+                onClick={() => setShowAllSlots(opt === "all")}
+                aria-pressed={active}
+                className={`rounded-full px-3 py-1.5 transition ${
+                  active
+                    ? "bg-mint text-deep-green"
+                    : "text-deep-green/65 hover:text-deep-green"
+                }`}
+              >
+                {opt === "all" ? "All matches" : "Cancelled only"}
+              </button>
+            );
+          })}
+        </div>
+      </div>
+      <CancelHeatmap
+        city={city}
+        showAllSlots={showAllSlots}
+        highlightRecentCancels
+      />
+    </div>
   );
 }
 
