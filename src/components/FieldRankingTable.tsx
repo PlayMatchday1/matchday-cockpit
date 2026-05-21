@@ -93,14 +93,38 @@ export default function FieldRankingTable({
   }, [quarter, month]);
   const [sortKey, setSortKey] = useState<SortKey>("totalRevenue");
   const [sortDir, setSortDir] = useState<"asc" | "desc">("desc");
+  // "as_billed" = monthly_flat lumps, lump_sum quarterly hits, per_match
+  //   count × rate. Default — same shape as the rest of Finance (Cash
+  //   Flow, Cities P&L, hero metrics).
+  // "per_match" = cost_per_match × matches per leg. Smooths billing
+  //   timing across months for venues that bill in lumps (NEMP's quarterly
+  //   permit, Hattrick, Bicentennial) so per-venue Net P&L / Margin
+  //   compare cleanly month-over-month.
+  const [costMode, setCostMode] = useState<"as_billed" | "per_match">(
+    "as_billed",
+  );
 
   const rows = useMemo<RankingRow[]>(() => {
     if (!data) return [];
     return buildRankingRows(data, matchRegistrations, month);
   }, [data, matchRegistrations, month]);
 
+  // In per-match mode, swap cost / netPL / margin onto the displayed
+  // row so render + sort both see the normalized values. Other columns
+  // (revenue, totalRevenue, matchCount, mix %) are unchanged across
+  // modes.
+  const viewRows = useMemo<RankingRow[]>(() => {
+    if (costMode === "as_billed") return rows;
+    return rows.map((r) => ({
+      ...r,
+      cost: r.perMatchCost,
+      netPL: r.perMatchNetPL,
+      margin: r.perMatchMargin,
+    }));
+  }, [rows, costMode]);
+
   const sorted = useMemo(() => {
-    const copy = [...rows];
+    const copy = [...viewRows];
     copy.sort((a, b) => {
       const av = a[sortKey];
       const bv = b[sortKey];
@@ -115,7 +139,7 @@ export default function FieldRankingTable({
       return 0;
     });
     return copy;
-  }, [rows, sortKey, sortDir]);
+  }, [viewRows, sortKey, sortDir]);
 
   function toggleSort(key: SortKey) {
     if (sortKey === key) {
@@ -167,19 +191,44 @@ export default function FieldRankingTable({
             </p>
           </div>
         </div>
-        <select
-          value={month}
-          onChange={(e) => setMonth(e.target.value as Q2Month)}
+        <div
+          className="flex items-center gap-2"
           onClick={(e) => e.stopPropagation()}
-          className="rounded-full border border-cream-line bg-cream-soft px-4 py-1.5 text-xs font-bold text-deep-green focus:border-deep-green focus:outline-none"
-          aria-label="Month"
         >
-          {quarter.months.map((m) => (
-            <option key={m.key} value={m.key}>
-              {m.shortName}
-            </option>
-          ))}
-        </select>
+          <div
+            className="inline-flex rounded-full border border-cream-line bg-cream-soft p-0.5 text-xs font-bold"
+            role="radiogroup"
+            aria-label="Cost view"
+          >
+            {(["as_billed", "per_match"] as const).map((opt) => (
+              <button
+                key={opt}
+                type="button"
+                onClick={() => setCostMode(opt)}
+                className={`rounded-full px-3 py-1.5 transition ${
+                  costMode === opt
+                    ? "bg-mint text-deep-green"
+                    : "text-deep-green/65 hover:text-deep-green"
+                }`}
+                aria-pressed={costMode === opt}
+              >
+                {opt === "as_billed" ? "As Billed" : "Per-Match"}
+              </button>
+            ))}
+          </div>
+          <select
+            value={month}
+            onChange={(e) => setMonth(e.target.value as Q2Month)}
+            className="rounded-full border border-cream-line bg-cream-soft px-4 py-1.5 text-xs font-bold text-deep-green focus:border-deep-green focus:outline-none"
+            aria-label="Month"
+          >
+            {quarter.months.map((m) => (
+              <option key={m.key} value={m.key}>
+                {m.shortName}
+              </option>
+            ))}
+          </select>
+        </div>
       </div>
 
       {!collapsed && (

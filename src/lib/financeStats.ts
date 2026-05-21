@@ -2112,6 +2112,21 @@ export type RankingRow = {
   perMatchLegs: Array<{ matchCount: number; rate: number }>;
   netPL: number;
   margin: number;
+  // Alternative "per-match normalized" cost view. cost above is the
+  // as-billed amount (monthly_flat lumps, lump_sum quarterly hits, per_match
+  // count × rate); these three fields restate it as
+  //   Σ (leg.cost_per_match × leg matches in month)
+  // so a venue's per-match cost stays steady month-over-month even when
+  // its billing lump lands in only one of three months. fin_venues
+  // .cost_per_match is the operator-set per-match unit cost (the same
+  // value rendered in the Cost/Match column on the Field Costs config
+  // table and consumed by matchPnL.ts). When a secondary leg's
+  // cost_per_match is null we fall back to the primary's value — same
+  // shape as venueNormalization.resolveVenueForMatch's sibling-fallback.
+  // Null on both legs → $0 contribution per spec ("blank = $0").
+  perMatchCost: number;
+  perMatchNetPL: number;
+  perMatchMargin: number;
 };
 
 export function buildRankingRows(
@@ -2167,6 +2182,19 @@ export function buildRankingRows(
           }))
         : [];
 
+    // Per-match normalized cost: Σ over legs of (cost_per_match × leg
+    // matches), with the secondary-leg fallback to primary's value
+    // so an unset Sunday leg cpm still computes off the configured
+    // weekday cpm (mirrors matchPnL.ts logic). For non-split venues
+    // the loop reduces to (primary.cost_per_match ?? 0) × matchCount.
+    const primaryCpm = primary.cost_per_match;
+    let perMatchCost = 0;
+    for (let i = 0; i < g.legs.length; i++) {
+      const leg = g.legs[i];
+      const cpm = leg.cost_per_match ?? primaryCpm ?? 0;
+      perMatchCost += cpm * legCounts[i];
+    }
+
     if (revenue === 0 && memberRev === 0 && cost === 0) continue;
 
     const cityTotalMember = cityTotalMemberSpotsFor(data, g.city, month);
@@ -2178,6 +2206,8 @@ export function buildRankingRows(
     const totalRev = revenue + memberRev;
     const netPL = totalRev - cost;
     const margin = totalRev > 0 ? netPL / totalRev : 0;
+    const perMatchNetPL = totalRev - perMatchCost;
+    const perMatchMargin = totalRev > 0 ? perMatchNetPL / totalRev : 0;
 
     let launchedMs = Number.POSITIVE_INFINITY;
     if (primary.launch_date) {
@@ -2204,6 +2234,9 @@ export function buildRankingRows(
       perMatchLegs,
       netPL,
       margin,
+      perMatchCost,
+      perMatchNetPL,
+      perMatchMargin,
     });
   }
   return out;
