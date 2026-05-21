@@ -272,12 +272,12 @@ function ColumnHeaderRow({
   // numeric flex (gap-3, three w-20 cells) so header text lines up
   // under the values.
   return (
-    <div className="mt-2 flex items-baseline justify-between gap-4 border-b border-cream-line/60 pb-1 text-[10px] font-semibold uppercase tracking-[0.07em] text-deep-green/45">
+    <div className="mt-2 flex items-baseline justify-between gap-3 border-b border-cream-line/60 pb-1 text-[10px] font-semibold uppercase tracking-[0.07em] text-deep-green/45 sm:gap-4">
       <div className="min-w-0 flex-1">Category</div>
-      <div className="flex shrink-0 items-baseline gap-3">
-        <div className="w-20 text-right">{shortMonth(fromMonth)}</div>
-        <div className="w-20 text-right">{shortMonth(toMonth)}</div>
-        <div className="w-20 text-right">Δ</div>
+      <div className="flex shrink-0 items-baseline gap-2 sm:gap-3">
+        <div className="w-14 text-right sm:w-20">{shortMonth(fromMonth)}</div>
+        <div className="w-14 text-right sm:w-20">{shortMonth(toMonth)}</div>
+        <div className="w-14 text-right sm:w-20">Δ</div>
       </div>
     </div>
   );
@@ -300,7 +300,12 @@ function MoverRow({
   const headerInner = (
     <>
       <div className="min-w-0 flex-1">
-        <div className="flex items-center gap-1.5">
+        {/* flex-wrap so the badge can drop to a second line on narrow
+            viewports instead of bleeding into the numeric columns
+            (mobile bug: "FORMULA" was visually overlapping the
+            adjacent dollar value). Desktop still renders the badge
+            inline because there's room. */}
+        <div className="flex flex-wrap items-center gap-x-1.5 gap-y-1">
           {hasChildren ? (
             expanded ? (
               <ChevronDown
@@ -327,21 +332,24 @@ function MoverRow({
           {row.sourceMethod}
         </p>
       </div>
-      <div className="flex shrink-0 items-baseline gap-3 font-mono text-sm tabular-nums">
+      {/* Numeric columns: narrower on mobile (w-14) so the category
+          column has more room. sm: floors restore the desktop widths
+          where there's space. */}
+      <div className="flex shrink-0 items-baseline gap-2 font-mono text-sm tabular-nums sm:gap-3">
         <span
-          className="w-20 text-right text-deep-green/70"
+          className="w-14 text-right text-deep-green/70 sm:w-20"
           title={`${shortMonth(fromMonth)} actual`}
         >
           {fmtUsd(row.fromAmount)}
         </span>
         <span
-          className="w-20 text-right text-deep-green/70"
+          className="w-14 text-right text-deep-green/70 sm:w-20"
           title={`${shortMonth(toMonth)} planned`}
         >
           {fmtUsd(row.toAmount)}
         </span>
         <span
-          className={`w-20 text-right font-semibold ${deltaToneClass(row.delta)}`}
+          className={`w-14 text-right font-semibold sm:w-20 ${deltaToneClass(row.delta)}`}
         >
           {fmtSig(row.delta)}
         </span>
@@ -356,12 +364,12 @@ function MoverRow({
           type="button"
           onClick={onToggle}
           aria-expanded={expanded}
-          className="group -mx-2 flex w-full cursor-pointer items-baseline justify-between gap-4 rounded px-2 py-3 text-left transition hover:bg-cream-soft/40"
+          className="group -mx-2 flex w-full cursor-pointer items-baseline justify-between gap-3 rounded px-2 py-3 text-left transition hover:bg-cream-soft/40 sm:gap-4"
         >
           {headerInner}
         </button>
       ) : (
-        <div className="-mx-2 flex items-baseline justify-between gap-4 px-2 py-3">
+        <div className="-mx-2 flex items-baseline justify-between gap-3 px-2 py-3 sm:gap-4">
           {headerInner}
         </div>
       )}

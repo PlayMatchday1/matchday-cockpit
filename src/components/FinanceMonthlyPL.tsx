@@ -350,10 +350,17 @@ export default function FinanceMonthlyPL({
 
       {!collapsed && (
         <div className="overflow-x-auto">
-          <table className="w-full font-mono text-sm">
+          {/* min-w on the table keeps month columns from crushing on
+              mobile; first label column is sticky so city names stay
+              visible while month columns scroll horizontally. Solid
+              backgrounds on the sticky cells cover value cells passing
+              underneath during scroll — matching each row's tint. */}
+          <table className="w-full min-w-[640px] font-mono text-sm">
             <thead>
               <tr className="border-y border-cream-line bg-cream-soft text-[10px] font-bold uppercase tracking-wider text-deep-green/60">
-                <th className="px-5 py-2.5 text-left">Item</th>
+                <th className="sticky left-0 z-20 min-w-[150px] bg-cream-soft px-5 py-2.5 text-left">
+                  Item
+                </th>
                 {quarter.months.map((m, idx) => {
                   const projected = colIsProjected(idx);
                   const mixed = colIsMixed(idx);
@@ -480,7 +487,7 @@ function PLRow({
   if (row.kind === "memo") {
     return (
       <tr>
-        <td className="px-5 py-1.5 pl-9 text-xs italic text-deep-green/65">
+        <td className="sticky left-0 z-10 bg-white px-5 py-1.5 pl-9 text-xs italic text-deep-green/65">
           {row.label}
         </td>
         {values.map((v, i) => {
@@ -502,7 +509,7 @@ function PLRow({
   if (row.kind === "subtotal") {
     return (
       <tr className="border-t border-cream-line/40 bg-cream-soft/40">
-        <td className="px-5 py-2 text-sm font-bold text-deep-green">
+        <td className="sticky left-0 z-10 bg-cream-soft px-5 py-2 text-sm font-bold text-deep-green">
           {row.label}
         </td>
         {values.map((v, i) => {
@@ -524,7 +531,9 @@ function PLRow({
   if (row.kind === "totalExpenses") {
     return (
       <tr className="border-t border-cream-line/40 bg-coral-soft/30">
-        <td className="px-5 py-2 text-sm font-bold text-coral">{row.label}</td>
+        <td className="sticky left-0 z-10 bg-coral-soft px-5 py-2 text-sm font-bold text-coral">
+          {row.label}
+        </td>
         {values.map((v, i) => {
           const meta: CellMeta = { projected: colIsProjected(i) };
           return (
@@ -544,7 +553,7 @@ function PLRow({
   if (row.kind === "startingCash") {
     return (
       <tr>
-        <td className="px-5 py-2 text-sm font-bold text-deep-green/70">
+        <td className="sticky left-0 z-10 bg-white px-5 py-2 text-sm font-bold text-deep-green/70">
           {row.label}
         </td>
         {values.map((v, i) => {
@@ -565,7 +574,7 @@ function PLRow({
   if (row.kind === "netPL") {
     return (
       <tr className="bg-cream-soft/40">
-        <td className="px-5 py-2 text-sm font-bold text-deep-green">
+        <td className="sticky left-0 z-10 bg-cream-soft px-5 py-2 text-sm font-bold text-deep-green">
           {row.label}
         </td>
         {values.map((v, i) => {
@@ -587,7 +596,7 @@ function PLRow({
   if (row.kind === "endingCash") {
     return (
       <tr className="border-t-2 border-deep-green/30 bg-mint-soft/40">
-        <td className="px-5 py-2.5 text-sm font-bold text-deep-green">
+        <td className="sticky left-0 z-10 bg-mint-soft px-5 py-2.5 text-sm font-bold text-deep-green">
           {row.label}
         </td>
         {values.map((v, i) => {
@@ -609,7 +618,7 @@ function PLRow({
   // data row
   return (
     <tr className="border-t border-cream-line/30">
-      <td className="px-5 py-1.5 pl-9 text-sm text-deep-green/85">
+      <td className="sticky left-0 z-10 bg-white px-5 py-1.5 pl-9 text-sm text-deep-green/85">
         {row.label}
       </td>
       {values.map((v, i) => {
