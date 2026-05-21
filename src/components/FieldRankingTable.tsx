@@ -40,9 +40,9 @@ const COLUMNS: ColumnDef[] = [
   { key: "city", label: "City", align: "left" },
   { key: "launchedMs", label: "Launched", align: "left" },
   { key: "matchCount", label: "Matches", align: "right" },
-  { key: "totalRevenue", label: "Total Revenue", align: "right" },
-  { key: "revenue", label: "DPP Revenue", align: "right" },
-  { key: "memberRev", label: "Member Rev", align: "right" },
+  { key: "totalRevenue", label: "Total Rev", align: "right" },
+  { key: "revenue", label: "DPP Rev", align: "right" },
+  { key: "memberRev", label: "Mbr Rev", align: "right" },
   { key: "cityMbrPct", label: "City Mbr %", align: "right" },
   { key: "mbrMixPct", label: "Mbr Mix %", align: "right" },
   { key: "dppMixPct", label: "DPP Mix %", align: "right" },
@@ -247,7 +247,7 @@ export default function FieldRankingTable({
 
       {!collapsed && (
       <div className="overflow-x-auto">
-        <table className="w-full min-w-[1180px] text-xs">
+        <table className="w-full min-w-[980px] text-xs">
           <thead className="sticky top-0 z-10 bg-cream-soft">
             <tr className="border-y border-cream-line text-[10px] font-bold uppercase tracking-wider text-deep-green/60">
               {COLUMNS.map((col) => {
@@ -256,7 +256,7 @@ export default function FieldRankingTable({
                 return (
                   <th
                     key={col.key}
-                    className={`px-3 py-2 ${col.align === "right" ? "text-right" : "text-left"} ${
+                    className={`px-2 py-1.5 ${col.align === "right" ? "text-right" : "text-left"} ${
                       isSortable
                         ? "cursor-pointer select-none hover:bg-cream"
                         : ""
@@ -298,10 +298,10 @@ export default function FieldRankingTable({
                   key={`${i}|${row.city}|${row.venue}`}
                   className="border-t border-cream-line/40 hover:bg-cream-soft/50"
                 >
-                  <td className="px-3 py-2 font-mono font-bold tabular-nums text-deep-green/70">
+                  <td className="px-2 py-1.5 font-mono font-bold tabular-nums text-deep-green/70">
                     {i + 1}
                   </td>
-                  <td className="px-3 py-2 font-semibold text-deep-green">
+                  <td className="px-2 py-1.5 font-semibold text-deep-green">
                     <div>{row.venue}</div>
                     {(() => {
                       // Per-Match mode: uniform "N × $cpm" subtitle for
@@ -370,11 +370,11 @@ export default function FieldRankingTable({
                       return null;
                     })()}
                   </td>
-                  <td className="px-3 py-2 text-deep-green/85">{row.city}</td>
-                  <td className="px-3 py-2 text-deep-green/65">
+                  <td className="px-2 py-1.5 text-deep-green/85">{row.city}</td>
+                  <td className="px-2 py-1.5 text-deep-green/65">
                     {relativeTimeFromDate(row.launchDate)}
                   </td>
-                  <td className="px-3 py-2 text-right font-mono tabular-nums text-deep-green/85">
+                  <td className="px-2 py-1.5 text-right font-mono tabular-nums text-deep-green/85">
                     {row.matchCount}
                     {row.chargedCancelCount > 0 && (
                       <span className="ml-1 text-[10px] text-deep-green/45">
@@ -382,35 +382,35 @@ export default function FieldRankingTable({
                       </span>
                     )}
                   </td>
-                  <td className="px-3 py-2 text-right font-mono font-bold tabular-nums text-mint-hover">
+                  <td className="px-2 py-1.5 text-right font-mono font-bold tabular-nums text-mint-hover">
                     {fmtMoney(row.totalRevenue)}
                   </td>
-                  <td className="px-3 py-2 text-right font-mono tabular-nums text-mint-hover">
+                  <td className="px-2 py-1.5 text-right font-mono tabular-nums text-mint-hover">
                     {fmtMoney(row.revenue)}
                   </td>
-                  <td className="px-3 py-2 text-right font-mono tabular-nums text-mint-hover">
+                  <td className="px-2 py-1.5 text-right font-mono tabular-nums text-mint-hover">
                     {fmtMoney(row.memberRev)}
                   </td>
-                  <td className="px-3 py-2 text-right font-mono tabular-nums text-deep-green/75">
+                  <td className="px-2 py-1.5 text-right font-mono tabular-nums text-deep-green/75">
                     {fmtPct(row.cityMbrPct)}
                   </td>
-                  <td className="px-3 py-2 text-right font-mono tabular-nums text-deep-green/75">
+                  <td className="px-2 py-1.5 text-right font-mono tabular-nums text-deep-green/75">
                     {fmtPct(row.mbrMixPct)}
                   </td>
-                  <td className="px-3 py-2 text-right font-mono tabular-nums text-deep-green/75">
+                  <td className="px-2 py-1.5 text-right font-mono tabular-nums text-deep-green/75">
                     {fmtPct(row.dppMixPct)}
                   </td>
-                  <td className="px-3 py-2 text-right font-mono tabular-nums text-coral">
+                  <td className="px-2 py-1.5 text-right font-mono tabular-nums text-coral">
                     {fmtMoney(row.cost)}
                   </td>
                   <td
-                    className={`px-3 py-2 text-right font-mono font-bold tabular-nums ${
+                    className={`px-2 py-1.5 text-right font-mono font-bold tabular-nums ${
                       row.netPL >= 0 ? "text-mint-hover" : "text-coral"
                     }`}
                   >
                     {fmtMoney(row.netPL)}
                   </td>
-                  <td className="px-3 py-2 text-right">
+                  <td className="px-2 py-1.5 text-right">
                     <MarginPill margin={row.margin} />
                   </td>
                 </tr>
