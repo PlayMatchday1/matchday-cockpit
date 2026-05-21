@@ -374,6 +374,7 @@ export function getCancelHeatmap(
   city: string,
   weeksBack = 8,
   now: Date = new Date(),
+  options: { includeAllSlots?: boolean } = {},
 ): { weeks: string[]; slots: SlotRow[] } {
   const { currentMonday, earliestMonday, windowEnd } = windowBounds(weeksBack, now);
 
@@ -439,7 +440,12 @@ export function getCancelHeatmap(
         weeksOut[wk] = { cancelled: false, spots: wkRows.length, players };
       }
     }
-    if (!hasCancelled) continue;
+    // Filter: by default keep only slots with at least one cancellation
+    // in the window (the original "Cancel Heatmap" intent). Slate
+    // Review opts in to the full slate via includeAllSlots=true so
+    // attendance is visible across every recurring slot, with
+    // cancellations rendered inline alongside played matches.
+    if (!options.includeAllSlots && !hasCancelled) continue;
     result.push({
       field: slot.field,
       dow: slot.dow,

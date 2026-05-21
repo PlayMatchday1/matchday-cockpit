@@ -25,7 +25,7 @@ import FinanceTabNav, {
   type FinanceTabId,
 } from "@/components/FinanceTabNav";
 import ManagerPayGrid from "@/components/ManagerPayGrid";
-import CancelPatterns from "@/components/CancelPatterns";
+import CancelHeatmap from "@/components/CancelHeatmap";
 import CitiesMasterScheduleLens from "@/components/CitiesMasterScheduleLens";
 import CityFinancialsSnapshot from "@/components/CityFinancialsSnapshot";
 import MatchPnL from "@/components/MatchPnL";
@@ -414,7 +414,11 @@ function SlateReviewTabContent() {
       <SlateReviewEightWeekChart city={selectedCity} />
       <CityFinancialsSnapshot city={selectedCity} />
       <CitiesMasterScheduleLens city={selectedCity} />
-      <CancelPatterns city={selectedCity} />
+      <CancelHeatmap
+        city={selectedCity}
+        showAllSlots
+        highlightRecentCancels
+      />
     </div>
   );
 }
