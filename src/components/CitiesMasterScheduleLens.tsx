@@ -283,7 +283,13 @@ export default function CitiesMasterScheduleLens({
   );
 
   const todayIso = useMemo(() => isoDate(mondayOfChicago(new Date(), 0)), []);
-  const diff = useMemo(() => buildDiff(current, previous), [current, previous]);
+  // When the `city` prop is set (Slate Review embed), scope the
+  // diff totals and the per-city pill map to that city. Standalone
+  // /cities lens leaves city undefined → network-wide diff.
+  const diff = useMemo(
+    () => buildDiff(current, previous, city),
+    [current, previous, city],
+  );
   const cancelledRefs = useMemo(
     () => buildCancelledRefs(discrepancies),
     [discrepancies],
@@ -343,7 +349,7 @@ export default function CitiesMasterScheduleLens({
             />
           )}
           {discrepancies && (
-            <DiscrepancyBanner data={discrepancies} />
+            <DiscrepancyBanner data={discrepancies} city={city} />
           )}
           <div className="space-y-5">
             {current.cities
@@ -882,14 +888,37 @@ function MatchPill({
 // Each count pill is click-to-expand; sections fold to nothing if
 // their count is zero. The banner itself hides when all three
 // counts are zero.
-function DiscrepancyBanner({ data }: { data: Discrepancies }) {
+function DiscrepancyBanner({
+  data,
+  // When set (Slate Review embed), scope every count + drilldown
+  // list to that city. Network-wide totals are noise when the user
+  // is focused on one city; Atlanta should see Atlanta's missing /
+  // extra / mismatched / cancelled, not the network's. Unset →
+  // network-wide (standalone /cities lens).
+  city,
+}: {
+  data: Discrepancies;
+  city?: string;
+}) {
   const [open, setOpen] = useState<
     "missing" | "extra" | "mismatched" | "cancelled" | null
   >(null);
-  const missing = data.missing_in_db.length;
-  const extra = data.extra_in_db.length;
-  const mism = data.mismatched.length;
-  const canc = data.cancelled.length;
+  const missingRows = city
+    ? data.missing_in_db.filter((r) => r.city === city)
+    : data.missing_in_db;
+  const extraRows = city
+    ? data.extra_in_db.filter((r) => r.city === city)
+    : data.extra_in_db;
+  const mismatchedRows = city
+    ? data.mismatched.filter((r) => r.city === city)
+    : data.mismatched;
+  const cancelledRows = city
+    ? data.cancelled.filter((r) => r.city === city)
+    : data.cancelled;
+  const missing = missingRows.length;
+  const extra = extraRows.length;
+  const mism = mismatchedRows.length;
+  const canc = cancelledRows.length;
   if (missing === 0 && extra === 0 && mism === 0 && canc === 0) return null;
 
   function toggle(k: "missing" | "extra" | "mismatched" | "cancelled") {
@@ -962,7 +991,7 @@ function DiscrepancyBanner({ data }: { data: Discrepancies }) {
       </div>
       {open === "missing" && (
         <ul className="mt-3 space-y-0.5">
-          {data.missing_in_db.map((r) => (
+          {missingRows.map((r) => (
             <li
               key={r.id}
               className="text-[11px] tabular-nums text-deep-green/75"
@@ -978,7 +1007,7 @@ function DiscrepancyBanner({ data }: { data: Discrepancies }) {
       )}
       {open === "extra" && (
         <ul className="mt-3 space-y-0.5">
-          {data.extra_in_db.map((r) => (
+          {extraRows.map((r) => (
             <li
               key={r.mdapi_match_id}
               className="text-[11px] tabular-nums text-deep-green/75"
@@ -995,7 +1024,7 @@ function DiscrepancyBanner({ data }: { data: Discrepancies }) {
       )}
       {open === "mismatched" && (
         <ul className="mt-3 space-y-0.5">
-          {data.mismatched.map((r) => (
+          {mismatchedRows.map((r) => (
             <li
               key={r.schedule_master_id}
               className="text-[11px] tabular-nums text-deep-green/75"
@@ -1012,7 +1041,7 @@ function DiscrepancyBanner({ data }: { data: Discrepancies }) {
       )}
       {open === "cancelled" && (
         <ul className="mt-3 space-y-0.5">
-          {data.cancelled.map((r) => (
+          {cancelledRows.map((r) => (
             <li
               key={r.schedule_master_id}
               className="text-[11px] tabular-nums text-deep-green/75"
@@ -1062,9 +1091,16 @@ function GhostPill({
 function buildDiff(
   current: Payload | null,
   previous: Payload | null,
+  // When set, restrict every bucket / pill / count to this city.
+  // Slate Review (city prop) passes the selected city so the
+  // "Changes vs last week" banner only counts that city's slots.
+  // Unset → network-wide totals (standalone /cities lens).
+  cityFilter?: string,
 ): Diff {
   if (!current || !previous) return EMPTY_DIFF;
-  const prevHasAny = previous.cities.some((c) => c.total > 0);
+  const prevHasAny = previous.cities.some(
+    (c) => (!cityFilter || c.name === cityFilter) && c.total > 0,
+  );
   if (!prevHasAny) return EMPTY_DIFF;
 
   type Bucket = {
@@ -1077,6 +1113,7 @@ function buildDiff(
   function bucketize(p: Payload): Map<string, Bucket[]> {
     const map = new Map<string, Bucket[]>();
     for (const c of p.cities) {
+      if (cityFilter && c.name !== cityFilter) continue;
       for (const d of c.days) {
         for (const m of d.matches) {
           // Bucket key uses the canonical venue (post-0040 the value
