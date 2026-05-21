@@ -296,31 +296,38 @@ export default function CrmClient() {
   // title bar + bottom nav stay anchored to the viewport. Inbox list and
   // conversation messages keep their own internal scroll containers.
   //
-  // Keyboard-dismiss reflow nudge: iOS standalone PWA holds a stale
-  // layout for the 100dvh shell after the on-screen keyboard dismisses
-  // — the nav/composer don't reflow to match the restored viewport
-  // until something forces a recompute (confirmed in-app: navigating to
-  // another tab and back fixes it instantly). On every keyboard-dismiss
-  // event (visualViewport height returns to >= innerHeight), force a
-  // synchronous layout flush by reading documentElement.offsetHeight.
-  // The browser must compute layout to return that value, which
-  // invalidates whatever stale viewport cache iOS was holding. No DOM
-  // mutation, no style changes, no React state — the cheapest possible
-  // primitive that mimics the tab-navigation recompute.
+  // Keyboard-dismiss layer recomposite: iOS standalone PWA holds a
+  // stale composited GPU layer for the chat shell after the on-screen
+  // keyboard dismisses — the layout math is correct (a fresh mount or
+  // tab-switch-and-return renders perfectly) but iOS doesn't repaint
+  // the stale layer until something forces a re-composite. On every
+  // keyboard-dismiss event (visualViewport height returns to >=
+  // innerHeight), toggle transform: translateZ(0) on documentElement
+  // and clear it on the next animation frame. The on/off flip forces
+  // iOS to discard the stale layer and repaint fresh, mirroring what
+  // a tab-switch achieves. Prior attempt was a synchronous
+  // offsetHeight read; that flushed layout but not compositing, so
+  // didn't fix it.
   useEffect(() => {
     document.documentElement.classList.add("app-shell-locked");
     document.body.classList.add("app-shell-locked");
     const vv = typeof window !== "undefined" ? window.visualViewport : null;
+    let rafId = 0;
     const onResize = () => {
       if (vv && vv.height >= window.innerHeight - 1) {
-        // Assignment to void to prevent dead-code elimination from
-        // dropping the read. Reading offsetHeight forces a sync layout.
-        void document.documentElement.offsetHeight;
+        const el = document.documentElement;
+        el.style.transform = "translateZ(0)";
+        cancelAnimationFrame(rafId);
+        rafId = requestAnimationFrame(() => {
+          el.style.transform = "";
+        });
       }
     };
     vv?.addEventListener("resize", onResize);
     return () => {
+      cancelAnimationFrame(rafId);
       vv?.removeEventListener("resize", onResize);
+      document.documentElement.style.transform = "";
       document.documentElement.classList.remove("app-shell-locked");
       document.body.classList.remove("app-shell-locked");
     };
