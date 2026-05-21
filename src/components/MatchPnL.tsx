@@ -88,6 +88,20 @@ export default function MatchPnL({
   const [fetchKey, setFetchKey] = useState(0);
   const [sortKey, setSortKey] = useState<SortKey>("net");
   const [sortDir, setSortDir] = useState<SortDir>("asc");
+  // Mobile-only: which match cards have their secondary metrics
+  // section expanded. Keyed by `${venueId ?? venueRawName}|${matchStartIso}`
+  // (same key Row uses). Desktop ignores.
+  const [mobileExpanded, setMobileExpanded] = useState<Set<string>>(
+    () => new Set(),
+  );
+  function toggleMobileExpanded(key: string) {
+    setMobileExpanded((prev) => {
+      const next = new Set(prev);
+      if (next.has(key)) next.delete(key);
+      else next.add(key);
+      return next;
+    });
+  }
 
   const weekEnd = useMemo(() => sundayEndOf(weekStart), [weekStart]);
   const weekLabel = useMemo(() => {
@@ -418,8 +432,8 @@ export default function MatchPnL({
         </div>
       )}
 
-      {/* Main table */}
-      <div className="overflow-hidden rounded-2xl border-[1.5px] border-cream-line bg-white shadow-md shadow-deep-green/10">
+      {/* Main table — desktop */}
+      <div className="hidden md:block overflow-hidden rounded-2xl border-[1.5px] border-cream-line bg-white shadow-md shadow-deep-green/10">
         <div className="overflow-x-auto">
           <table className="w-full text-xs">
             {/* Column headers are not rendered as a single top <thead>;
@@ -532,11 +546,70 @@ export default function MatchPnL({
         </div>
       </div>
 
+      {/* Main cards — mobile. One outer card per city group; each
+          match becomes a tappable card with a 3-col Total/Cost/Net
+          grid and an expandable secondary-metrics row. Mirrors the
+          Field Ranking mobile pattern. */}
+      <div className="md:hidden space-y-3">
+        {activeRows === null ? (
+          <div className="rounded-2xl border-[1.5px] border-cream-line bg-white px-3 py-8 text-center text-sm text-deep-green/55 shadow-md shadow-deep-green/10">
+            Loading match P&L…
+          </div>
+        ) : cityGroups.length === 0 ? (
+          <div className="rounded-2xl border-[1.5px] border-cream-line bg-white px-3 py-8 text-center text-sm text-deep-green/55 shadow-md shadow-deep-green/10">
+            No matches with cost data this week.
+            {missingCost.length > 0 &&
+              ` (${missingCost.length} matches without cost set — see below.)`}
+          </div>
+        ) : (
+          cityGroups.map((g) => {
+            const sub = citySubtotal(g.rows);
+            const aprMemberRev = data
+              ? cityMembershipRevenueFor(data, g.city, "Apr 2026")
+              : 0;
+            const aprMemberSpots =
+              data?.mdapiMemberSpots.byCityMonth.get(
+                `${g.city}|Apr 2026`,
+              )?.member ?? 0;
+            const aprBenchmarkLabel =
+              aprMemberSpots > 0
+                ? `April benchmark: ~$${(aprMemberRev / aprMemberSpots).toFixed(2)}/member spot`
+                : "April benchmark: no member spots recorded";
+            return (
+              <div
+                key={g.city}
+                className="rounded-2xl border-[1.5px] border-cream-line bg-white p-3 shadow-md shadow-deep-green/10"
+              >
+                <MobileCityHeader
+                  city={g.city}
+                  sub={sub}
+                  aprBenchmarkLabel={aprBenchmarkLabel}
+                />
+                <div className="mt-3 space-y-2">
+                  {g.rows.map((r) => {
+                    const key = `${r.venueId ?? r.venueRawName}|${r.matchStartIso}`;
+                    return (
+                      <MobileMatchCard
+                        key={key}
+                        row={r}
+                        expanded={mobileExpanded.has(key)}
+                        onToggle={() => toggleMobileExpanded(key)}
+                        onJumpToConfig={onJumpToConfig}
+                      />
+                    );
+                  })}
+                </div>
+              </div>
+            );
+          })
+        )}
+      </div>
+
       {/* Missing-cost section — same shape as the main table but
           rendered separately so they don't pollute the loss/profit
           sort. */}
       {missingCost.length > 0 && (
-        <div className="overflow-hidden rounded-2xl border-[1.5px] border-cream-line bg-white shadow-md shadow-deep-green/10">
+        <div className="hidden md:block overflow-hidden rounded-2xl border-[1.5px] border-cream-line bg-white shadow-md shadow-deep-green/10">
           <div className="border-b border-cream-line bg-cream-soft/60 px-4 py-2 text-[11px] font-bold uppercase tracking-wider text-deep-green/60">
             No cost set ({missingCost.length})
           </div>
@@ -562,13 +635,43 @@ export default function MatchPnL({
         </div>
       )}
 
+      {/* Missing-cost cards — mobile. */}
+      {missingCost.length > 0 && (
+        <div className="md:hidden rounded-2xl border-[1.5px] border-cream-line bg-white p-3 shadow-md shadow-deep-green/10">
+          <div className="text-[11px] font-bold uppercase tracking-wider text-deep-green/60">
+            No cost set ({missingCost.length})
+          </div>
+          <div className="mt-3 space-y-2">
+            {missingCost
+              .slice()
+              .sort(
+                (a, b) =>
+                  a.venueDisplayName.localeCompare(b.venueDisplayName) ||
+                  a.matchStart.getTime() - b.matchStart.getTime(),
+              )
+              .map((r) => {
+                const key = `${r.venueId ?? r.venueRawName}|${r.matchStartIso}`;
+                return (
+                  <MobileMatchCard
+                    key={key}
+                    row={r}
+                    expanded={mobileExpanded.has(key)}
+                    onToggle={() => toggleMobileExpanded(key)}
+                    onJumpToConfig={onJumpToConfig}
+                  />
+                );
+              })}
+          </div>
+        </div>
+      )}
+
       {/* Canceled-matches section — sunk cost (you paid the venue)
           even though the match never ran and earned $0. Sorted city
           then time. Limitation: only canceled matches that had at
           least one registration appear; zero-registration cancellations
           aren't visible from match_registrations alone. */}
       {canceledSorted.length > 0 && (
-        <div className="overflow-hidden rounded-2xl border-[1.5px] border-cream-line bg-white shadow-md shadow-deep-green/10">
+        <div className="hidden md:block overflow-hidden rounded-2xl border-[1.5px] border-cream-line bg-white shadow-md shadow-deep-green/10">
           <div className="flex flex-wrap items-baseline justify-between gap-2 border-b border-cream-line bg-cream-soft/60 px-4 py-2">
             <div className="text-[11px] font-bold uppercase tracking-wider text-deep-green/60">
               Canceled Matches
@@ -598,6 +701,42 @@ export default function MatchPnL({
                 ))}
               </tbody>
             </table>
+          </div>
+        </div>
+      )}
+
+      {/* Canceled cards — mobile. */}
+      {canceledSorted.length > 0 && (
+        <div className="md:hidden rounded-2xl border-[1.5px] border-cream-line bg-white p-3 shadow-md shadow-deep-green/10">
+          <div className="flex flex-wrap items-baseline justify-between gap-2">
+            <div className="text-[11px] font-bold uppercase tracking-wider text-deep-green/60">
+              Canceled Matches
+            </div>
+            <div className="text-[11px] text-deep-green/65">
+              <span className="font-bold tabular-nums text-deep-green">
+                {canceledSummary.totalMatches}
+              </span>{" "}
+              · sunk{" "}
+              <span className="font-mono font-bold tabular-nums text-deep-green">
+                {fmtUsd(canceledSummary.sunkCost)}
+              </span>
+              {canceledSummary.matchesWithoutCost > 0 &&
+                ` · ${canceledSummary.matchesWithoutCost} no cost`}
+            </div>
+          </div>
+          <div className="mt-3 space-y-2">
+            {canceledSorted.map((r) => {
+              const key = `${r.venueId ?? r.venueRawName}|${r.matchStartIso}`;
+              return (
+                <MobileMatchCard
+                  key={key}
+                  row={r}
+                  expanded={mobileExpanded.has(key)}
+                  onToggle={() => toggleMobileExpanded(key)}
+                  onJumpToConfig={onJumpToConfig}
+                />
+              );
+            })}
           </div>
         </div>
       )}
@@ -816,5 +955,221 @@ function Row({
         </span>
       </td>
     </tr>
+  );
+}
+
+// Mobile-only city header. Compact subtitle wraps across multiple
+// lines rather than running off the right edge of the screen.
+function MobileCityHeader({
+  city,
+  sub,
+  aprBenchmarkLabel,
+}: {
+  city: string;
+  sub: {
+    matches: number;
+    gross: number;
+    memberRev: number;
+    memberSpots: number;
+    paidSpots: number;
+    credit: number;
+    cost: number;
+    net: number;
+    losses: number;
+  };
+  aprBenchmarkLabel: string;
+}) {
+  const netClass =
+    sub.net > 10
+      ? "text-mint-hover"
+      : sub.net < -10
+        ? "text-coral"
+        : "text-deep-green/55";
+  return (
+    <div className="border-b border-cream-line/60 pb-2">
+      <div className="flex items-baseline justify-between gap-2">
+        <span className="text-[11px] font-bold uppercase tracking-[0.12em] text-deep-green">
+          {city}
+        </span>
+        <span className="text-[10px] font-bold uppercase tracking-wider text-deep-green/55">
+          {sub.matches} {sub.matches === 1 ? "match" : "matches"}
+        </span>
+      </div>
+      <div className="mt-1 flex flex-wrap gap-x-3 gap-y-0.5 text-[11px] text-deep-green/65">
+        <span>
+          Total{" "}
+          <span className="font-mono font-bold tabular-nums text-deep-green">
+            {fmtUsd(sub.gross + sub.memberRev)}
+          </span>
+        </span>
+        <span>
+          Cost{" "}
+          <span className="font-mono tabular-nums text-deep-green">
+            {fmtUsd(sub.cost)}
+          </span>
+        </span>
+        <span>
+          Net{" "}
+          <span className={`font-mono font-bold tabular-nums ${netClass}`}>
+            {fmtSig(sub.net)}
+          </span>
+        </span>
+        {sub.losses > 0 && (
+          <span>
+            <span className="font-bold tabular-nums text-coral">
+              {sub.losses}
+            </span>{" "}
+            loss{sub.losses === 1 ? "" : "es"}
+          </span>
+        )}
+      </div>
+      <div className="mt-0.5 text-[10px] italic text-deep-green/45">
+        {aprBenchmarkLabel}
+      </div>
+    </div>
+  );
+}
+
+// Mobile-only match card. Used in all three sections (active by city,
+// no-cost, canceled). Adapts to each status:
+//   active           → spots populated, net colored
+//   canceled         → spots show "—" (match never ran)
+//   missing-cost     → cost cell renders the "$? — set in Field Costs"
+//                      affordance, net shows "—"
+function MobileMatchCard({
+  row,
+  expanded,
+  onToggle,
+  onJumpToConfig,
+}: {
+  row: MatchPnLRow;
+  expanded: boolean;
+  onToggle: () => void;
+  onJumpToConfig?: (venueId: number) => void;
+}) {
+  const isCanceled = row.status === "canceled";
+  const totalRev = row.grossRevenue + row.allocatedMemberRev;
+  const netClass =
+    row.net === null
+      ? ""
+      : row.net > 10
+        ? "text-mint-hover"
+        : row.net < -10
+          ? "text-coral"
+          : "text-deep-green/75";
+  return (
+    <div className="rounded-xl border border-cream-line bg-white p-3 shadow-sm">
+      <div className="flex items-baseline justify-between gap-2">
+        <div className="min-w-0 flex-1">
+          <div className="truncate font-semibold text-deep-green">
+            {row.venueDisplayName}
+          </div>
+          <div className="mt-0.5 text-[11px] text-deep-green/55">
+            {row.dayLabel}, {fmtMonthDay(row.matchStart)} · {row.timeLabel}
+          </div>
+        </div>
+        <span
+          className={`shrink-0 rounded-full px-2 py-0.5 text-[10px] font-bold uppercase tracking-wider ${STATUS_PILL[row.status]}`}
+        >
+          {STATUS_LABEL[row.status]}
+        </span>
+      </div>
+
+      <div className="mt-2 grid grid-cols-3 gap-2 text-[11px]">
+        <div className="flex flex-col rounded-md bg-cream-soft/50 px-2 py-1">
+          <span className="text-[10px] font-bold uppercase tracking-wider text-deep-green/55">
+            Total
+          </span>
+          <span className="font-mono font-bold tabular-nums text-deep-green">
+            {fmtUsd(totalRev)}
+          </span>
+        </div>
+        <div className="flex flex-col rounded-md bg-cream-soft/50 px-2 py-1">
+          <span className="text-[10px] font-bold uppercase tracking-wider text-deep-green/55">
+            Cost
+          </span>
+          {row.fieldCost === null ? (
+            row.venueId !== null && onJumpToConfig ? (
+              <button
+                type="button"
+                onClick={() => onJumpToConfig(row.venueId as number)}
+                className="text-left font-mono italic text-coral underline-offset-2 hover:underline"
+              >
+                $?
+              </button>
+            ) : (
+              <span className="font-mono italic text-deep-green/45">$?</span>
+            )
+          ) : (
+            <span className="font-mono tabular-nums text-deep-green">
+              {fmtUsd(row.fieldCost)}
+            </span>
+          )}
+        </div>
+        <div className="flex flex-col rounded-md bg-cream-soft/50 px-2 py-1">
+          <span className="text-[10px] font-bold uppercase tracking-wider text-deep-green/55">
+            Net
+          </span>
+          {row.net === null ? (
+            <span className="font-mono text-deep-green/35">—</span>
+          ) : (
+            <span className={`font-mono font-bold tabular-nums ${netClass}`}>
+              {fmtSig(row.net)}
+            </span>
+          )}
+        </div>
+      </div>
+
+      <button
+        type="button"
+        onClick={onToggle}
+        aria-expanded={expanded}
+        className="mt-2 flex w-full items-center justify-center gap-1 rounded-md py-1 text-[10px] font-bold uppercase tracking-wider text-deep-green/55 transition hover:bg-cream-soft hover:text-deep-green"
+      >
+        <span aria-hidden>{expanded ? "▴" : "▾"}</span>
+        {expanded ? "Less" : "More"}
+      </button>
+
+      {expanded && (
+        <div className="mt-1 grid grid-cols-2 gap-x-3 gap-y-1 border-t border-cream-line/60 pt-2 text-[11px]">
+          <InlineMetric
+            label="Spots Booked"
+            value={
+              isCanceled
+                ? "—"
+                : row.freeNonMemberSpots > 0
+                  ? `${row.spotsSold} (+${row.freeNonMemberSpots} free)`
+                  : String(row.spotsSold)
+            }
+          />
+          <InlineMetric
+            label="Paid Spots"
+            value={isCanceled ? "—" : String(row.paidSpots)}
+          />
+          <InlineMetric
+            label="Member Spots"
+            value={isCanceled ? "—" : String(row.memberSpots)}
+          />
+          <InlineMetric label="DPP Rev" value={fmtUsd(row.grossRevenue)} />
+          <InlineMetric
+            label="Member Rev"
+            value={fmtUsd(row.allocatedMemberRev)}
+          />
+          <InlineMetric
+            label="Credit"
+            value={row.credit > 0 ? fmtUsd(row.credit) : "—"}
+          />
+        </div>
+      )}
+    </div>
+  );
+}
+
+function InlineMetric({ label, value }: { label: string; value: string }) {
+  return (
+    <div className="flex items-baseline justify-between">
+      <span className="text-deep-green/55">{label}</span>
+      <span className="font-mono tabular-nums text-deep-green/85">{value}</span>
+    </div>
   );
 }

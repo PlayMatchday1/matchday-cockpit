@@ -499,7 +499,7 @@ function CitySection({
           ))}
         </div>
       )}
-      <div className="grid grid-cols-7 gap-2">
+      <div className="hidden md:grid grid-cols-7 gap-2">
         {city.days.map((d) => {
           const cellKey = `${city.name}|${d.day_of_week}`;
           return (
@@ -516,6 +516,200 @@ function CitySection({
           );
         })}
       </div>
+      {/* Mobile agenda — vertical day-by-day list. Replaces the 7-col
+          grid whose day-of-week labels otherwise wrap one letter per
+          line on narrow screens. */}
+      <div className="md:hidden space-y-2">
+        {city.days.map((d) => {
+          const cellKey = `${city.name}|${d.day_of_week}`;
+          return (
+            <DayAgenda
+              key={d.date}
+              city={city.name}
+              day={d}
+              todayIso={todayIso}
+              addedIds={diff.addedIds}
+              cancelledKeys={cancelledKeys}
+              ghosts={diff.ghostsByCell.get(cellKey) ?? []}
+              onEditMatch={onEditMatch}
+            />
+          );
+        })}
+      </div>
+    </div>
+  );
+}
+
+// Mobile agenda row for one day. Renders a day header (DOW + date),
+// then the day's matches (or a thin "—" row for empty days, to keep
+// the Mon→Sun rhythm visible while scrolling). Match rows reuse the
+// same proposed-change states as DayCell: green dot for added,
+// strikethrough+coral for cancelled, dashed-border ghost row for
+// dropped-vs-last-week. Today gets a mint header strip; past days
+// dim their match rows.
+function DayAgenda({
+  city,
+  day,
+  todayIso,
+  addedIds,
+  cancelledKeys,
+  ghosts,
+  onEditMatch,
+}: {
+  city: string;
+  day: DayOut;
+  todayIso: string;
+  addedIds: Set<string>;
+  cancelledKeys: Set<string>;
+  ghosts: GhostMatch[];
+  onEditMatch: (row: EditableRow) => void;
+}) {
+  const isToday = day.date === todayIso;
+  const isPast = day.date < todayIso;
+  const hasContent = day.matches.length > 0 || ghosts.length > 0;
+  return (
+    <div>
+      <div
+        className={`flex items-baseline justify-between rounded-md px-2 py-1 text-[11px] font-bold uppercase tracking-wider ${
+          isToday
+            ? "bg-mint-soft text-deep-green"
+            : isPast
+              ? "text-deep-green/40"
+              : "text-deep-green/65"
+        }`}
+      >
+        <span>
+          {day.day_of_week} <span className="tabular-nums">{day.date.slice(8)}</span>
+        </span>
+        {isToday && (
+          <span className="rounded-full bg-mint px-1.5 py-0.5 text-[9px] text-deep-green">
+            Today
+          </span>
+        )}
+      </div>
+      <div className="mt-1 space-y-1 pl-1">
+        {!hasContent ? (
+          <div className="px-2 py-0.5 text-[11px] text-deep-green/30">—</div>
+        ) : (
+          <>
+            {day.matches.map((m) => {
+              const key = `${city}|${day.date}|${m.venue}|${compactTime(m.time)}`;
+              const cancelled = cancelledKeys.has(key);
+              return (
+                <AgendaMatchRow
+                  key={m.id}
+                  time={m.time}
+                  venue={m.venue}
+                  detail={m.detail}
+                  dim={isPast}
+                  added={addedIds.has(m.id)}
+                  cancelled={cancelled}
+                  onClick={() =>
+                    onEditMatch({
+                      id: m.id,
+                      city,
+                      venue: m.venue,
+                      detail: m.detail,
+                      match_date: day.date,
+                      match_time: m.time,
+                      max_spots: m.max_spots,
+                      mdapi_field_id: m.mdapi_field_id,
+                    })
+                  }
+                />
+              );
+            })}
+            {ghosts.map((g) => (
+              <AgendaGhostRow
+                key={g.id}
+                time={g.time}
+                venue={g.venue}
+                detail={g.detail}
+              />
+            ))}
+          </>
+        )}
+      </div>
+    </div>
+  );
+}
+
+function AgendaMatchRow({
+  time,
+  venue,
+  detail,
+  dim,
+  added,
+  cancelled,
+  onClick,
+}: {
+  time: string;
+  venue: string;
+  detail: string;
+  dim: boolean;
+  added: boolean;
+  cancelled: boolean;
+  onClick: () => void;
+}) {
+  const short = compactTime(time);
+  const bgClass = added
+    ? "bg-mint-soft ring-1 ring-mint/60"
+    : dim
+      ? "bg-cream-soft ring-1 ring-cream-line"
+      : "bg-white ring-1 ring-cream-line";
+  const textClass = cancelled
+    ? "text-coral-hover"
+    : dim
+      ? "text-deep-green/40"
+      : "text-deep-green";
+  return (
+    <button
+      type="button"
+      onClick={onClick}
+      aria-label={`Edit ${time} ${detail}${cancelled ? " (cancelled)" : ""}`}
+      className={`flex w-full items-center gap-2 rounded-md px-2 py-1.5 text-left text-xs transition focus:outline-none focus:ring-2 focus:ring-mint ${bgClass} ${textClass}`}
+      title={
+        cancelled
+          ? `Cancelled match · ${time} - ${detail}`
+          : `${time} - ${detail}`
+      }
+    >
+      {added && (
+        <span
+          aria-hidden
+          className="inline-block h-1.5 w-1.5 shrink-0 rounded-full bg-mint"
+        />
+      )}
+      <span
+        className={`min-w-[3rem] font-bold tabular-nums ${cancelled ? "line-through" : ""}`}
+      >
+        {short}
+      </span>
+      <span className={`min-w-0 flex-1 truncate ${cancelled ? "line-through" : ""}`}>
+        {venue}
+      </span>
+    </button>
+  );
+}
+
+function AgendaGhostRow({
+  time,
+  venue,
+  detail,
+}: {
+  time: string;
+  venue: string;
+  detail: string;
+}) {
+  const short = compactTime(time);
+  return (
+    <div
+      className="flex items-center gap-2 rounded-md border border-dashed border-coral/50 bg-coral-soft/40 px-2 py-1.5 text-xs text-coral-hover/70 line-through"
+      title={`Dropped vs last week · ${time} - ${detail}`}
+    >
+      <X aria-hidden className="h-3 w-3 shrink-0" />
+      <span className="min-w-[3rem] font-bold tabular-nums">{short}</span>
+      <span className="min-w-0 flex-1 truncate">{venue}</span>
     </div>
   );
 }
