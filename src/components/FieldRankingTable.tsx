@@ -290,11 +290,35 @@ export default function FieldRankingTable({
                   <td className="px-3 py-2 font-semibold text-deep-green">
                     <div>{row.venue}</div>
                     {(() => {
-                      // Split-rate groups (currently ATH Katy) render
-                      // every non-zero leg as "N × $rate", joined with
-                      // " + ". Single-leg per_match groups fall through
-                      // to the legacy single-rate subtitle below so the
-                      // visual stays identical for non-split venues.
+                      // Per-Match mode: uniform "N × $cpm" subtitle for
+                      // every venue, joined by " + " for split legs.
+                      // Same logic the Cities Per-Match view uses, sourcing
+                      // from costPerMatchLegs (cost_per_match with primary
+                      // fallback) so the two pages render identically and
+                      // the subtitle reconciles against the swapped cost
+                      // column. Zero-match legs filtered to keep the
+                      // breakdown clean across months.
+                      if (costMode === "per_match") {
+                        const visible = row.costPerMatchLegs.filter(
+                          (l) => l.matchCount > 0,
+                        );
+                        if (visible.length === 0) return null;
+                        return (
+                          <div className="text-[10px] font-normal text-deep-green/45">
+                            {visible
+                              .map(
+                                (l) =>
+                                  `${l.matchCount} × $${Math.round(l.cpm)}`,
+                              )
+                              .join(" + ")}
+                          </div>
+                        );
+                      }
+                      // As-Billed mode: combined per_match groups (ATH
+                      // Katy) render the split breakdown by billed rate;
+                      // single-leg per_match falls back to the legacy
+                      // "N × $rate"; monthly_flat shows "monthly"; rest
+                      // render nothing.
                       if (row.perMatchLegs.length > 0) {
                         const visible = row.perMatchLegs.filter(
                           (l) => l.matchCount > 0,

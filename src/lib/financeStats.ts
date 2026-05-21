@@ -2142,7 +2142,16 @@ export type RankingRow = {
   // so the table subtitle can render "12 × $140 + 5 × $160" instead
   // of collapsing both legs into a single rate. Empty array on
   // non-split rows. Legs come pre-sorted ASC by rate from groupVenues.
+  // Used by the As-Billed mode subtitle on Field Ranking.
   perMatchLegs: Array<{ matchCount: number; rate: number }>;
+  // Per-leg matches × cost_per_match for EVERY group (one entry per leg
+  // including single-leg venues). Drives the Per-Match mode subtitle
+  // on both Field Ranking and the Cities page so the uniform
+  // "N × $cpm" rendering matches across surfaces. cpm falls back from
+  // a null secondary leg to primary's value — same shape as
+  // groupPerMatchCostFor, so subtitle and cost agree by construction.
+  // Filter to matchCount > 0 at render time to suppress zero-match legs.
+  costPerMatchLegs: Array<{ matchCount: number; cpm: number }>;
   netPL: number;
   margin: number;
   // Alternative "per-match normalized" cost view. cost above is the
@@ -2215,6 +2224,16 @@ export function buildRankingRows(
           }))
         : [];
 
+    // Per-leg cost_per_match breakdown for the Per-Match mode subtitle.
+    // Always populated — non-split venues collapse to one entry. Same
+    // primary-fallback shape as groupPerMatchCostFor so the subtitle
+    // numbers reconcile against the swapped cost column.
+    const cpmPrimary = primary.cost_per_match;
+    const costPerMatchLegs = g.legs.map((leg, idx) => ({
+      matchCount: legCounts[idx],
+      cpm: leg.cost_per_match ?? cpmPrimary ?? 0,
+    }));
+
     // Per-match normalized cost via the shared helper so Field Ranking
     // and CityPLCard's Per-Match view agree by construction.
     const perMatchCost = groupPerMatchCostFor(data, g, month);
@@ -2256,6 +2275,7 @@ export function buildRankingRows(
       perMatchRate: primary.per_match_rate,
       monthlyFlat: primary.monthly_flat,
       perMatchLegs,
+      costPerMatchLegs,
       netPL,
       margin,
       perMatchCost,
