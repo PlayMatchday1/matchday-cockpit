@@ -26,6 +26,7 @@ import FinanceTabNav, {
 } from "@/components/FinanceTabNav";
 import ManagerPayGrid from "@/components/ManagerPayGrid";
 import CancelHeatmap from "@/components/CancelHeatmap";
+import CancelPatterns from "@/components/CancelPatterns";
 import CitiesMasterScheduleLens from "@/components/CitiesMasterScheduleLens";
 import CityFinancialsSnapshot from "@/components/CityFinancialsSnapshot";
 import SlateActionItems from "@/components/SlateActionItems";
@@ -440,6 +441,9 @@ function SlateReviewTabContent() {
       </CollapsibleSection>
       <CollapsibleSection title="Cancellations">
         <SlateReviewCancelSection city={selectedCity} />
+      </CollapsibleSection>
+      <CollapsibleSection title="Cancel patterns">
+        <CancelPatterns city={selectedCity} />
       </CollapsibleSection>
     </div>
   );
