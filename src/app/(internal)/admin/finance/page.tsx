@@ -25,9 +25,16 @@ import FinanceTabNav, {
   type FinanceTabId,
 } from "@/components/FinanceTabNav";
 import ManagerPayGrid from "@/components/ManagerPayGrid";
+import CancelPatterns from "@/components/CancelPatterns";
+import CitiesMasterScheduleLens from "@/components/CitiesMasterScheduleLens";
+import CityFinancialsSnapshot from "@/components/CityFinancialsSnapshot";
 import MatchPnL from "@/components/MatchPnL";
 import PartnerDashboardsAdmin from "@/components/PartnerDashboardsAdmin";
 import RevenueAdminView from "@/components/RevenueAdminView";
+import TotalsBarChart from "@/components/TotalsBarChart";
+import { CITIES, type City } from "@/lib/types";
+import { useMatchWindowData } from "@/lib/useMatchData";
+import { getWeeklySpots } from "@/lib/cityStats";
 import { CITY_DISPLAY_ORDER } from "@/lib/financeStats";
 import { FinanceQuarterProvider } from "@/lib/financeQuarter";
 import {
@@ -55,6 +62,7 @@ const PRIMARY_TAB_IDS: ReadonlySet<FinanceTabId> = new Set<FinanceTabId>([
   "cash-flow",
   "field-ranking",
   "match-pnl",
+  "slate-review",
 ]);
 
 // Derive which secondary nav slot is "active" given the current tab.
@@ -275,6 +283,9 @@ function FinanceLandingContent() {
       <TabPanel id="field-ranking" active={activeTab} visited={visited}>
         <FieldRankingTabContent />
       </TabPanel>
+      <TabPanel id="slate-review" active={activeTab} visited={visited}>
+        <SlateReviewTabContent />
+      </TabPanel>
       <TabPanel id="check-ins" active={activeTab} visited={visited}>
         <CheckInsView />
       </TabPanel>
@@ -381,5 +392,93 @@ function CitiesTabContent() {
         ))}
       </div>
     </div>
+  );
+}
+
+// Slate Review — per-city decision snapshot. Five sections from
+// existing components, scoped to one selected city via the pill row
+// at the top:
+//   1. City selector  (single-select pill row, this file)
+//   2. Last 8 weeks   (TotalsBarChart fed by useMatchWindowData + getWeeklySpots)
+//   3. City financials (CityFinancialsSnapshot — realized-through-today)
+//   4. Master schedule (CitiesMasterScheduleLens with city prop)
+//   5. Cancel patterns (CancelPatterns with city prop)
+// Defaults to Austin; selection lives in local state (operator browses
+// freely, no deep-link semantics needed since the tab is its own
+// entry point in the nav).
+function SlateReviewTabContent() {
+  const [selectedCity, setSelectedCity] = useState<City>("Austin");
+  return (
+    <div className="space-y-6">
+      <SlateReviewCityPills value={selectedCity} onChange={setSelectedCity} />
+      <SlateReviewEightWeekChart city={selectedCity} />
+      <CityFinancialsSnapshot city={selectedCity} />
+      <CitiesMasterScheduleLens city={selectedCity} />
+      <CancelPatterns city={selectedCity} />
+    </div>
+  );
+}
+
+function SlateReviewCityPills({
+  value,
+  onChange,
+}: {
+  value: City;
+  onChange: (next: City) => void;
+}) {
+  return (
+    <section
+      className="sticky top-14 z-20 -mx-4 border-y border-cream-line bg-cream-soft/95 px-4 py-3 backdrop-blur supports-[backdrop-filter]:bg-cream-soft/80 sm:-mx-6 sm:px-6"
+      aria-label="City selector"
+    >
+      <div
+        role="radiogroup"
+        aria-label="Selected city"
+        className="scrollbar-hide flex flex-nowrap items-center gap-1.5 overflow-x-auto"
+      >
+        {CITIES.map((c) => {
+          const active = c === value;
+          return (
+            <button
+              key={c}
+              type="button"
+              role="radio"
+              aria-checked={active}
+              onClick={() => onChange(c)}
+              className={`shrink-0 rounded-full px-3 py-1 text-xs font-medium transition ${
+                active
+                  ? "bg-deep-green text-cream"
+                  : "border border-deep-green/20 bg-transparent text-deep-green/70 hover:bg-cream-soft"
+              }`}
+            >
+              {c}
+            </button>
+          );
+        })}
+      </div>
+    </section>
+  );
+}
+
+function SlateReviewEightWeekChart({ city }: { city: City }) {
+  // Same call pattern as CityDetailView (12-week pull, last 8 rendered).
+  // Cache shared with /cities/[city] so this hook is effectively free
+  // after the user visits either surface.
+  const { rows, scheduledMatches, loading } = useMatchWindowData(12, city);
+  const weekly = useMemo(
+    () => getWeeklySpots(rows, scheduledMatches, city, 8),
+    [rows, scheduledMatches, city],
+  );
+  return (
+    <section className="rounded-2xl border-[1.5px] border-cream-line bg-white p-6 shadow-md shadow-deep-green/10">
+      <h2 className="mb-4 text-2xl font-bold tracking-tight text-deep-green">
+        Last 8 weeks
+      </h2>
+      {loading && weekly.length === 0 ? (
+        <div className="text-sm text-deep-green/60">Loading…</div>
+      ) : (
+        <TotalsBarChart weeks={weekly} />
+      )}
+    </section>
   );
 }

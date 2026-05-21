@@ -18,15 +18,24 @@ const PILL_COLORS: Record<ColorTier, string> = {
   1: "bg-[rgba(0,51,38,0.08)] text-[#003326]",
 };
 
-export default function CancelPatterns() {
+export default function CancelPatterns({ city }: { city?: string } = {}) {
   const { rows, meta, loading } = useMatchData();
   const { data: finData } = useFinanceData();
   const aliases = finData?.venueAliases ?? new Map<string, string>();
   const [mode, setMode] = useState<CancelPatternsMode>("patterns");
 
+  // City scoping. When set (Slate Review embed), filter rows by
+  // r.city before getCancelPatterns sees them — the helper is
+  // city-agnostic so this is the cleanest place to scope. Empty/null
+  // city ⇒ network-wide behavior (the original /cities lens usage).
+  const scopedRows = useMemo(() => {
+    if (!city) return rows;
+    return rows.filter((r) => r.city === city);
+  }, [rows, city]);
+
   const result = useMemo(
-    () => getCancelPatterns(rows, aliases, mode),
-    [rows, aliases, mode],
+    () => getCancelPatterns(scopedRows, aliases, mode),
+    [scopedRows, aliases, mode],
   );
 
   if (loading || !meta) return null;
@@ -60,12 +69,12 @@ export default function CancelPatterns() {
         Cancel Patterns · Last 4 Weeks
       </div>
       <h3 className="mt-1 font-display text-2xl uppercase leading-tight tracking-tight text-deep-green md:text-3xl">
-        All cities
+        {city ?? "All cities"}
       </h3>
       <p className="mt-2 max-w-3xl text-sm text-deep-green/65">
-        Every canceled match across all cities, week by week. Color shows how
-        chronic the slot is — bright red means the same slot has been
-        canceled all 4 weeks running.
+        {city
+          ? `Every canceled match in ${city}, week by week. Color shows how chronic the slot is — bright red means the same slot has been canceled all 4 weeks running.`
+          : "Every canceled match across all cities, week by week. Color shows how chronic the slot is — bright red means the same slot has been canceled all 4 weeks running."}
       </p>
 
       <div className="mt-4 flex flex-wrap items-center gap-3">

@@ -1539,6 +1539,55 @@ function fieldCostsActualFor(
   return total;
 }
 
+// Per-venue realized-through-today cost. Same arithmetic as
+// fieldCostsActualFor but scoped to one venue id so per-leg + per-venue
+// rendering (Slate Review's CityFinancialsSnapshot) reconciles to the
+// aggregate by construction:
+//
+//   sum over venues of venueRealizedCostFor(venue.id, m, now)
+//     === fieldCostsActualFor(m, now)
+//
+// Past month: full canonical cost (assumes bill is closed).
+// Future month: 0 (nothing realized).
+// Current month: override venues count the full override (committed
+//   once the month opens), schedule-driven per_match venues count only
+//   rows with match_date <= today, plus past charge-on-cancel rows.
+export function venueRealizedCostFor(
+  data: FinanceData,
+  venueId: number,
+  month: Q2Month,
+  now: Date = new Date(),
+): number {
+  const venue = data.venues.find((v) => v.id === venueId);
+  if (!venue) return 0;
+  if (isFutureMonth(month, now)) return 0;
+  const qm = MONTH_BY_KEY[month];
+  if (!qm || !isCurrentMonthQ(qm, now)) {
+    return canonicalVenueCost(data, venueId, month).amount;
+  }
+  const override = findOverride(data, venueId, month);
+  if (override) return override.override_amount;
+  if (venue.billing_type !== "per_match") return 0;
+  const today = isoDateLocal(now);
+  const rate = venue.per_match_rate ?? 0;
+  let total = 0;
+  for (const s of data.masterSchedule) {
+    if (s.venue_id !== venueId) continue;
+    if (s.month !== month) continue;
+    if (s.match_date > today) continue;
+    total += rate;
+  }
+  if (venue.charge_on_cancel) {
+    for (const s of data.cancelledSchedule) {
+      if (s.venue_id !== venueId) continue;
+      if (s.month !== month) continue;
+      if (s.match_date > today) continue;
+      total += rate;
+    }
+  }
+  return total;
+}
+
 // Realized quarter expenses booked through today, classified by DATE
 // (not month bucket) so current-month spend that's already happened
 // counts as actual. Per-source classification:

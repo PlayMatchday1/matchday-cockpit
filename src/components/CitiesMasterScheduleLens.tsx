@@ -149,7 +149,14 @@ type EditorState =
   | { kind: "edit"; row: EditableRow }
   | { kind: "create"; defaults: { city?: string; match_date?: string } };
 
-export default function CitiesMasterScheduleLens() {
+// Optional `city` prop filters the rendered grid to that city only.
+// The schedule_master fetch stays full-payload (the API doesn't have
+// a per-city filter and the payload is small — one week × 8 cities);
+// only the render loop scopes down. Slate Review uses this; the
+// /cities lens leaves the prop unset for the all-cities view.
+export default function CitiesMasterScheduleLens({
+  city,
+}: { city?: string } = {}) {
   const [weekStart, setWeekStart] = useState<string>(() =>
     isoDate(mondayOfChicago(new Date())),
   );
@@ -317,16 +324,18 @@ export default function CitiesMasterScheduleLens() {
             <DiscrepancyBanner data={discrepancies} />
           )}
           <div className="space-y-5">
-            {current.cities.map((c) => (
-              <CitySection
-                key={c.name}
-                city={c}
-                todayIso={todayIso}
-                diff={diff}
-                cancelledKeys={cancelledRefs.keys}
-                onEditMatch={openEdit}
-              />
-            ))}
+            {current.cities
+              .filter((c) => !city || c.name === city)
+              .map((c) => (
+                <CitySection
+                  key={c.name}
+                  city={c}
+                  todayIso={todayIso}
+                  diff={diff}
+                  cancelledKeys={cancelledRefs.keys}
+                  onEditMatch={openEdit}
+                />
+              ))}
           </div>
         </>
       )}
