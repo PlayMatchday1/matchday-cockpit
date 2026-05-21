@@ -1529,6 +1529,16 @@ function fieldCostsActualFor(
         if (s.match_date > today) continue;
         total += rate;
       }
+      // Past cancelled matches the venue charges for. Future cancelled
+      // not counted (not realized yet) — same filter as alive.
+      if (v.charge_on_cancel) {
+        for (const s of data.cancelledSchedule) {
+          if (s.venue_id !== v.id) continue;
+          if (s.month !== month) continue;
+          if (s.match_date > today) continue;
+          total += rate;
+        }
+      }
     } else if (v.billing_type === "per_hour") {
       const rate = v.hourly_rate ?? 0;
       if (rate > 0) {
@@ -1539,6 +1549,11 @@ function fieldCostsActualFor(
           total += s.duration_hours * rate;
         }
       }
+      // Per-hour cancelled hours intentionally skipped — schedule_master
+      // doesn't carry end times for cancelled mdapi rows, so we'd need
+      // a per-venue default duration. Today's per_hour venues (Onion
+      // Creek, SJD) have null hourly_rate so cost is $0 either way;
+      // revisit when an active per_hour venue gets configured.
     }
     // no_charge / unknown: 0 contribution
   }
@@ -1727,14 +1742,50 @@ export function venueMatchCountFor(
   venueId: number,
   month: Q2Month,
 ): number {
-  // venue_id is pre-resolved on masterSchedule rows (including the
-  // split-rate day-of-week rule), so a direct id filter is correct
-  // here — no need to fan out across (city, venue_name).
+  // Alive match count from schedule_master. The display number on the
+  // Matches column ("matches that actually ran") and the base used by
+  // venueChargedMatchCountFor below.
   let n = 0;
   for (const s of data.masterSchedule) {
     if (s.venue_id === venueId && s.month === month) n += 1;
   }
   return n;
+}
+
+// Cancelled matches the venue charges for. Always 0 when the venue's
+// charge_on_cancel flag is false — that's the toggle's whole purpose.
+// Sourced from data.cancelledSchedule (mdapi_matches WHERE
+// is_cancelled IS TRUE, resolved through the same field_id +
+// split-rate routing as masterSchedule).
+export function venueChargedCancelCountFor(
+  data: FinanceData,
+  venueId: number,
+  month: Q2Month,
+): number {
+  const venue = data.venues.find((v) => v.id === venueId);
+  if (!venue || !venue.charge_on_cancel) return 0;
+  let n = 0;
+  for (const s of data.cancelledSchedule) {
+    if (s.venue_id === venueId && s.month === month) n += 1;
+  }
+  return n;
+}
+
+// Total cost-driving count: alive + charged-cancelled. Used by every
+// helper that multiplies a count by a rate (autoCost, groupPerMatchCostFor,
+// fieldCostsActualFor). The Matches column on Field Ranking renders the
+// alive piece (venueMatchCountFor) plus a "+N cxl" badge from
+// venueChargedCancelCountFor, so the operator sees both the actual
+// matches and the cancellation surcharge contribution.
+export function venueChargedMatchCountFor(
+  data: FinanceData,
+  venueId: number,
+  month: Q2Month,
+): number {
+  return (
+    venueMatchCountFor(data, venueId, month) +
+    venueChargedCancelCountFor(data, venueId, month)
+  );
 }
 
 // Per-match-normalized cost for a venue group in a given month:
@@ -1765,7 +1816,10 @@ export function groupPerMatchCostFor(
   let total = 0;
   for (const leg of group.legs) {
     const cpm = leg.cost_per_match ?? primaryCpm ?? 0;
-    total += cpm * venueMatchCountFor(data, leg.id, month);
+    // Charged count (alive + cancelled-when-charge_on_cancel) so the
+    // Per-Match cost view reflects what we'd actually pay. Cancelled
+    // matches at a no-cancel-fee venue contribute zero.
+    total += cpm * venueChargedMatchCountFor(data, leg.id, month);
   }
   return total;
 }
@@ -2132,7 +2186,14 @@ export type RankingRow = {
   mbrMixPct: number;
   dppMixPct: number;
   cost: number;
+  // Alive matches in the month (matches that actually ran). Drives the
+  // Matches column's leading number. Sort key for the column too.
   matchCount: number;
+  // Cancelled matches the venue charges for. Renders as a "+N cxl"
+  // badge next to matchCount on the Matches column. Zero when the
+  // venue's charge_on_cancel is false or no matches were cancelled
+  // in the period — the badge is suppressed in either case.
+  chargedCancelCount: number;
   billingType: FinanceData["venues"][number]["billing_type"] | null;
   perMatchRate: number | null;
   monthlyFlat: number | null;
@@ -2196,22 +2257,36 @@ export function buildRankingRows(
     let memberRev = 0;
     let cost = 0;
     let matchCount = 0;
+    let chargedCancelCount = 0;
     let memberSpots = 0;
     let dppSpots = 0;
     let otherSpots = 0;
-    const legCounts: number[] = [];
+    // Track alive vs charged-cancelled per leg separately. Subtitles
+    // need charged-per-leg (so count × rate = cost arithmetic holds),
+    // while the Matches column shows alive with a "+cxl" badge.
+    const aliveLegCounts: number[] = [];
+    const cxlLegCounts: number[] = [];
 
     for (const leg of g.legs) {
       memberRev += venueAllocatedMemberRevenueFor(data, leg.id, month);
       cost += canonicalVenueCost(data, leg.id, month).amount;
-      const legMatches = venueMatchCountFor(data, leg.id, month);
-      legCounts.push(legMatches);
-      matchCount += legMatches;
+      const alive = venueMatchCountFor(data, leg.id, month);
+      const cxl = venueChargedCancelCountFor(data, leg.id, month);
+      aliveLegCounts.push(alive);
+      cxlLegCounts.push(cxl);
+      matchCount += alive;
+      chargedCancelCount += cxl;
       const spots = venueMemberSpotsFor(data, leg.id, month);
       memberSpots += spots.member;
       dppSpots += spots.dpp;
       otherSpots += spots.other;
     }
+    // Per-leg charged total (alive + charged-cancelled). Used for
+    // subtitle math so "N × $rate" on a per_match row always equals
+    // the cost number, regardless of cancellations.
+    const chargedLegCounts = aliveLegCounts.map(
+      (a, i) => a + cxlLegCounts[i],
+    );
     // Per-leg subtitle data, only for combined per_match groups.
     // Single-leg groups fall through to the existing single-rate
     // subtitle on the table. Non-per_match billing types don't drive
@@ -2219,7 +2294,9 @@ export function buildRankingRows(
     const perMatchLegs: Array<{ matchCount: number; rate: number }> =
       g.isCombined && primary.billing_type === "per_match"
         ? g.legs.map((leg, idx) => ({
-            matchCount: legCounts[idx],
+            // Charged per leg so "Na × $rateA + Nb × $rateB" reconciles
+            // to the as-billed cost (which includes cancelled charges).
+            matchCount: chargedLegCounts[idx],
             rate: leg.per_match_rate ?? 0,
           }))
         : [];
@@ -2227,10 +2304,11 @@ export function buildRankingRows(
     // Per-leg cost_per_match breakdown for the Per-Match mode subtitle.
     // Always populated — non-split venues collapse to one entry. Same
     // primary-fallback shape as groupPerMatchCostFor so the subtitle
-    // numbers reconcile against the swapped cost column.
+    // numbers reconcile against the swapped cost column. Charged
+    // counts here too — Per-Match cost is cpm × charged.
     const cpmPrimary = primary.cost_per_match;
     const costPerMatchLegs = g.legs.map((leg, idx) => ({
-      matchCount: legCounts[idx],
+      matchCount: chargedLegCounts[idx],
       cpm: leg.cost_per_match ?? cpmPrimary ?? 0,
     }));
 
@@ -2271,6 +2349,7 @@ export function buildRankingRows(
       dppMixPct,
       cost,
       matchCount,
+      chargedCancelCount,
       billingType: primary.billing_type ?? null,
       perMatchRate: primary.per_match_rate,
       monthlyFlat: primary.monthly_flat,

@@ -9,6 +9,7 @@ import {
   cityOverheadFor,
   groupPerMatchCostFor,
   quarterTabToMonths,
+  venueChargedCancelCountFor,
   venueMatchCountFor,
   venuePartnerRevenueFor,
   type Q2Month,
@@ -138,7 +139,12 @@ export default function CityPLCard({
       subLabel: string | null;
       dppRev: number;
       cost: number;
+      // Alive matches that actually ran ("honest" count for the
+      // descriptive "N matches across legs" subtitle). Cancelled
+      // matches the venue charges for appear separately as
+      // chargedCancelCount.
       matchCount: number;
+      chargedCancelCount: number;
       net: number;
       billingType: typeof cityGroups[number]["legs"][number]["billing_type"] | null;
       perMatchRate: number | null;
@@ -146,13 +152,11 @@ export default function CityPLCard({
       isCombined: boolean;
       isUntagged: boolean;
       isPrivateRental: boolean;
-      // Per-leg (matches × cost_per_match) breakdown used to render the
-      // uniform "N × $cpm" subtitle in Per-Match mode. cpm falls back from
-      // a null secondary leg to the primary's value — same shape as
-      // groupPerMatchCostFor so subtitle and cost agree by construction.
-      // For non-split venues this collapses to a one-entry array. Render
-      // filters legs with matchCount === 0 so a Sunday with no matches in
-      // a given month doesn't show up as "+ 0 × $rate".
+      // Per-leg (charged matches × cost_per_match) breakdown for the
+      // uniform "N × $cpm" subtitle in Per-Match mode. cpm falls back
+      // from a null secondary leg to the primary's value. matchCount
+      // here is the CHARGED count (alive + cxl when charge_on_cancel)
+      // so subtitle math reconciles to cost.
       perMatchLegs: Array<{ matchCount: number; cpm: number }>;
     };
     const fieldLevel: FieldRow[] = cityGroups
@@ -164,14 +168,21 @@ export default function CityPLCard({
         const legVenueIds = new Set(g.legs.map((l) => l.id));
         let cost = 0;
         let matchCount = 0;
+        let chargedCancelCount = 0;
         let dppRev = 0;
-        const legCounts: number[] = g.legs.map(() => 0);
+        // Track alive and cancelled-charged per leg separately so the
+        // Per-Match subtitle ("N × $cpm" per leg) sums to cost while
+        // the As-Billed "N matches across legs" subtitle stays honest
+        // about how many matches actually ran (with a +cxl badge).
+        const aliveLegCounts: number[] = g.legs.map(() => 0);
+        const cxlLegCounts: number[] = g.legs.map(() => 0);
         for (const m of months) {
           // Cost source toggles with the page-level mode. as_billed:
           // canonicalVenueCost (override-aware billing — monthly_flat
           // lumps, lump_sum quarterly hits, per_match × rate). per_match:
           // shared groupPerMatchCostFor helper so Cities + Field Ranking
-          // stay in lockstep.
+          // stay in lockstep. Both branches already include the
+          // charge_on_cancel surcharge under the hood.
           if (costMode === "per_match") {
             cost += groupPerMatchCostFor(data, g, m);
           } else {
@@ -180,9 +191,16 @@ export default function CityPLCard({
             }
           }
           for (let i = 0; i < g.legs.length; i++) {
-            const c = venueMatchCountFor(data, g.legs[i].id, m);
-            legCounts[i] += c;
-            matchCount += c;
+            const alive = venueMatchCountFor(data, g.legs[i].id, m);
+            const cxl = venueChargedCancelCountFor(
+              data,
+              g.legs[i].id,
+              m,
+            );
+            aliveLegCounts[i] += alive;
+            cxlLegCounts[i] += cxl;
+            matchCount += alive;
+            chargedCancelCount += cxl;
           }
           dppRev += venuePartnerRevenueFor(
             data,
@@ -192,8 +210,12 @@ export default function CityPLCard({
           );
         }
         const primaryCpm = g.legs[0].cost_per_match;
+        // Subtitle ("N × $cpm") uses CHARGED counts so its arithmetic
+        // matches the cost cell. The Matches-display side keeps alive
+        // + cxl badge separately via FieldRow.matchCount /
+        // .chargedCancelCount.
         const perMatchLegs = g.legs.map((leg, idx) => ({
-          matchCount: legCounts[idx],
+          matchCount: aliveLegCounts[idx] + cxlLegCounts[idx],
           cpm: leg.cost_per_match ?? primaryCpm ?? 0,
         }));
         return {
@@ -209,6 +231,7 @@ export default function CityPLCard({
           isCombined: g.isCombined,
           isUntagged: false,
           isPrivateRental: false,
+          chargedCancelCount,
           perMatchLegs,
         };
       })
@@ -371,14 +394,22 @@ export default function CityPLCard({
                           if (f.isCombined) {
                             return (
                               <div className="text-[10px] text-deep-green/45">
-                                {f.matchCount} matches across legs
+                                {f.matchCount}
+                                {f.chargedCancelCount > 0 &&
+                                  ` +${f.chargedCancelCount} cxl`}
+                                {" "}matches across legs
                               </div>
                             );
                           }
                           if (f.perMatchRate) {
+                            // Charged total × rate so the subtitle math
+                            // reconciles to the cost cell when
+                            // charge_on_cancel adds to the count.
+                            const charged =
+                              f.matchCount + f.chargedCancelCount;
                             return (
                               <div className="text-[10px] text-deep-green/45">
-                                {f.matchCount} × $
+                                {charged} × $
                                 {Math.round(f.perMatchRate)}
                               </div>
                             );

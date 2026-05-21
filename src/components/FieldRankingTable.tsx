@@ -362,6 +362,11 @@ export default function FieldRankingTable({
                   </td>
                   <td className="px-3 py-2 text-right font-mono tabular-nums text-deep-green/85">
                     {row.matchCount}
+                    {row.chargedCancelCount > 0 && (
+                      <span className="ml-1 text-[10px] text-deep-green/45">
+                        +{row.chargedCancelCount} cxl
+                      </span>
+                    )}
                   </td>
                   <td className="px-3 py-2 text-right font-mono font-bold tabular-nums text-mint-hover">
                     {fmtMoney(row.totalRevenue)}

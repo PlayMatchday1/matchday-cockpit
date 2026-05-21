@@ -40,7 +40,7 @@ import {
 } from "@/lib/useFinanceData";
 
 type PriceField = "dpp_price" | "member_price" | "cost_per_match";
-type EditableField = PriceField | "billing_type";
+type EditableField = PriceField | "billing_type" | "charge_on_cancel";
 type CellState = { saving: boolean; error: string | null; flash: boolean };
 type EditMap = Map<string, CellState>;
 function editKey(venueId: number, field: EditableField): string {
@@ -140,7 +140,7 @@ export default function FieldCostsView({
   async function saveVenueField(
     venueId: number,
     field: EditableField,
-    nextValue: number | string | null,
+    nextValue: number | string | boolean | null,
     parsedValid: boolean,
   ): Promise<void> {
     const email = appUser?.email;
@@ -198,6 +198,10 @@ export default function FieldCostsView({
   ): void {
     const valid = BILLING_TYPE_OPTIONS.includes(nextValue);
     void saveVenueField(venueId, "billing_type", nextValue, valid);
+  }
+
+  function saveChargeOnCancel(venueId: number, next: boolean): void {
+    void saveVenueField(venueId, "charge_on_cancel", next, true);
   }
 
   const allRows: FieldCostRow[] = useMemo(() => {
@@ -665,6 +669,7 @@ export default function FieldCostsView({
                 <th className="px-3 py-2 text-right">DPP Price</th>
                 <th className="px-3 py-2 text-right">Member Price</th>
                 <th className="px-3 py-2 text-right">Cost/Match</th>
+                <th className="px-3 py-2 text-center">Pay on Cancel</th>
                 <th className="px-3 py-2 text-right">Match Count</th>
                 <th className="px-3 py-2 text-right">Cost</th>
                 <th className="px-3 py-2 text-left">How it's computed</th>
@@ -720,6 +725,9 @@ export default function FieldCostsView({
                       }
                       onSaveBillingType={(next) =>
                         saveBillingType(row.primaryVenueId, next)
+                      }
+                      onSaveChargeOnCancel={(next) =>
+                        saveChargeOnCancel(row.primaryVenueId, next)
                       }
                       scheduleRows={
                         data
@@ -853,6 +861,7 @@ function FieldCostTableRow({
   cellState,
   onSavePrice,
   onSaveBillingType,
+  onSaveChargeOnCancel,
   scheduleRows,
   highlight,
 }: {
@@ -866,6 +875,7 @@ function FieldCostTableRow({
   cellState: (field: EditableField) => CellState | null;
   onSavePrice: (field: PriceField, raw: string) => void;
   onSaveBillingType: (next: FinVenue["billing_type"]) => void;
+  onSaveChargeOnCancel: (next: boolean) => void;
   scheduleRows: {
     date: string;
     venue: string;
@@ -944,6 +954,16 @@ function FieldCostTableRow({
             stored={primaryVenue?.cost_per_match ?? null}
             state={cellState("cost_per_match")}
             onSave={(raw) => onSavePrice("cost_per_match", raw)}
+          />
+        </td>
+        <td
+          className="px-3 py-2 text-center"
+          onClick={(e) => e.stopPropagation()}
+        >
+          <ChargeOnCancelCell
+            stored={primaryVenue?.charge_on_cancel ?? true}
+            state={cellState("charge_on_cancel")}
+            onSave={onSaveChargeOnCancel}
           />
         </td>
         <td className="px-3 py-2 text-right font-mono tabular-nums text-deep-green/75">
@@ -1089,6 +1109,49 @@ function BillingTypeCell({
         </span>
       )}
     </div>
+  );
+}
+
+// Click-to-toggle Yes/No pill for fin_venues.charge_on_cancel. Same
+// optimistic save + flash/error pattern as BillingTypeCell — drives
+// straight into saveVenueField via the onSave prop. Yes = mint
+// highlight (positive, matches the "active" affordance used by the
+// As Billed / Per-Match toggle), No = cream-soft.
+function ChargeOnCancelCell({
+  stored,
+  state,
+  onSave,
+}: {
+  stored: boolean;
+  state: CellState | null;
+  onSave: (next: boolean) => void;
+}) {
+  const showFlash = state?.flash;
+  const showError = Boolean(state?.error);
+  const showSaving = Boolean(state?.saving);
+  return (
+    <button
+      type="button"
+      disabled={showSaving}
+      onClick={() => onSave(!stored)}
+      title={state?.error ?? "Toggle whether this venue charges for cancelled matches"}
+      aria-pressed={stored}
+      className={`relative inline-flex items-center rounded-full px-3 py-0.5 text-[10px] font-bold uppercase tracking-wider ring-1 ${
+        stored
+          ? "bg-mint text-deep-green ring-mint/60"
+          : "bg-cream-soft text-deep-green/65 ring-cream-line"
+      } ${showError ? "ring-2 ring-coral" : ""} ${
+        showFlash ? "flash-mint" : ""
+      } disabled:opacity-60`}
+    >
+      {stored ? "Yes" : "No"}
+      {showSaving && (
+        <span className="ml-1 inline-block h-1.5 w-1.5 animate-pulse rounded-full bg-deep-green/50" />
+      )}
+      {showError && !showSaving && (
+        <span className="ml-1 text-[10px] font-bold text-coral">!</span>
+      )}
+    </button>
   );
 }
 

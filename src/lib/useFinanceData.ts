@@ -156,6 +156,13 @@ export type FinVenue = {
   notes: string | null;
   launch_date: string | null;
   is_active: boolean;
+  // True when the venue charges us for cancelled matches (most
+  // contracts). false for venues that waive the cancellation fee.
+  // Drives the count delta on venueChargedMatchCountFor — when true,
+  // cancelled mdapi rows are added to the schedule_master alive count
+  // for cost purposes. Migration column NOT NULL DEFAULT true so reads
+  // never see null; mapper still defaults defensively for cached rows.
+  charge_on_cancel: boolean;
 };
 
 export type FinMemberSpotsRow = {
@@ -210,6 +217,13 @@ export type FinanceData = {
   // Reconciled schedule_master rows (one per match) with venue_id
   // resolved and duration parsed. Source for every cost-calc helper.
   masterSchedule: FinMasterSchedule[];
+  // Cancelled mdapi_matches in the active quarter window, resolved
+  // to venue_id the same way. Surfaced separately from masterSchedule
+  // (which stays alive-only by design — see the backfill script) so
+  // each row can be conditionally counted at cost time based on the
+  // venue's charge_on_cancel flag. The Matches column also reads the
+  // cancelled-charged count from here to render its "+N cxl" badge.
+  cancelledSchedule: FinMasterSchedule[];
   venues: FinVenue[];
   memberSpots: FinMemberSpotsRow[];
   members: FinMember[];
@@ -361,6 +375,7 @@ async function load(quarter: QuarterInfo): Promise<void> {
   let cfgRows: Array<Record<string, unknown>>;
   let schRows: Array<Record<string, unknown>>;
   let smsRows: Array<Record<string, unknown>>;
+  let cmsRows: Array<Record<string, unknown>>;
   let vnRows: Array<Record<string, unknown>>;
   let msRows: Array<Record<string, unknown>>;
   let alRows: Array<Record<string, unknown>>;
@@ -380,6 +395,7 @@ async function load(quarter: QuarterInfo): Promise<void> {
       cfgRows,
       schRows,
       smsRows,
+      cmsRows,
       vnRows,
       msRows,
       alRows,
@@ -423,6 +439,23 @@ async function load(quarter: QuarterInfo): Promise<void> {
           .gte("match_date", smBounds.fromDate)
           .lte("match_date", smBounds.toDate)
           .order("match_date"),
+      ),
+      // Cancelled mdapi_matches in the same window — counted at cost
+      // time only when the resolved venue's charge_on_cancel is true.
+      // start_date is a timestamptz at UTC offset; same date window as
+      // schedule_master's match_date column, just expressed as ISO
+      // timestamps for the .gte/.lte. mdapi_matches.api_id is numeric,
+      // not a uuid, so id stringifies in the mapper.
+      selectAll<Record<string, unknown>>(() =>
+        supabase
+          .from("mdapi_matches")
+          .select(
+            "api_id, field_id, field_title, start_date, max_player_count",
+          )
+          .eq("is_cancelled", true)
+          .gte("start_date", `${smBounds.fromDate}T00:00:00Z`)
+          .lte("start_date", `${smBounds.toDate}T23:59:59Z`)
+          .order("start_date"),
       ),
       selectAll<Record<string, unknown>>(() =>
         supabase.from("fin_venues").select("*").order("id"),
@@ -601,6 +634,11 @@ async function load(quarter: QuarterInfo): Promise<void> {
         r.is_active === null || r.is_active === undefined
           ? true
           : Boolean(r.is_active),
+      // Default true — matches DB DEFAULT and the spec that most
+      // venues bill on cancel. Explicit `false` is the only way to
+      // opt out.
+      charge_on_cancel:
+        r.charge_on_cancel === false ? false : true,
     };
   });
 
@@ -657,6 +695,75 @@ async function load(quarter: QuarterInfo): Promise<void> {
   if (smUnresolved > 0 && typeof console !== "undefined") {
     console.warn(
       `[useFinanceData] ${smUnresolved} schedule_master row(s) in the quarter window have no resolvable venue_id — they'll be excluded from cost calc. Check fin_venue_fields links and (city, venue_name) string match against fin_venues.`,
+    );
+  }
+
+  // Cancelled mdapi_matches → FinMasterSchedule shape. Same venue_id
+  // resolution as masterSchedule (mdapi_field_id → venueFields →
+  // resolveSplitRateVenueId) so an ATH Katy Sunday cancellation lands
+  // on the Sunday leg id, not the weekday leg's. Time formatting
+  // mirrors the backfill script (start + 1h "H:MM AM - H:MM AM"); we
+  // don't have an mdapi end-time column, so duration_hours defaults to
+  // 1. The fin_venues lookup is only used for city/venue strings so
+  // unresolved rows still appear in the array (with empty strings) for
+  // debugging — but they're filtered out of cost via the venue_id null
+  // check in venueChargedMatchCountFor.
+  let cmsUnresolved = 0;
+  const cancelledSchedule: FinMasterSchedule[] = cmsRows.map((r) => {
+    const startDate = cleanText(r.start_date);
+    const matchDate = startDate
+      ? new Date(startDate).toISOString().slice(0, 10)
+      : "";
+    const rawFieldId = r.field_id;
+    const mdapiFieldId =
+      rawFieldId === null || rawFieldId === undefined
+        ? null
+        : Number(rawFieldId);
+    const initialVenueId =
+      mdapiFieldId != null ? (venueFields.get(mdapiFieldId) ?? null) : null;
+    let resolvedVenueId: number | null = initialVenueId;
+    if (resolvedVenueId != null && matchDate) {
+      resolvedVenueId = resolveSplitRateVenueId(
+        resolvedVenueId,
+        matchDate,
+        venues,
+      );
+    }
+    if (resolvedVenueId == null) cmsUnresolved += 1;
+    const v =
+      resolvedVenueId != null
+        ? venues.find((x) => x.id === resolvedVenueId)
+        : null;
+    let matchTime = "";
+    if (startDate) {
+      const d = new Date(startDate);
+      if (!Number.isNaN(d.getTime())) {
+        const fmt = (h: number, m: number) => {
+          const ampm = h >= 12 ? "PM" : "AM";
+          const h12 = h % 12 === 0 ? 12 : h % 12;
+          return `${h12}:${String(m).padStart(2, "0")} ${ampm}`;
+        };
+        const h = d.getUTCHours();
+        const min = d.getUTCMinutes();
+        matchTime = `${fmt(h, min)} - ${fmt((h + 1) % 24, min)}`;
+      }
+    }
+    return {
+      id: String(r.api_id ?? ""),
+      city: v?.city ?? "",
+      venue: v?.venue_name ?? "",
+      match_date: matchDate,
+      match_time: matchTime,
+      month: monthFromMatchDate(matchDate),
+      max_spots: Math.round(asNumber(r.max_player_count) || 0),
+      mdapi_field_id: mdapiFieldId,
+      venue_id: resolvedVenueId,
+      duration_hours: 1,
+    };
+  });
+  if (cmsUnresolved > 0 && typeof console !== "undefined") {
+    console.warn(
+      `[useFinanceData] ${cmsUnresolved} cancelled mdapi_matches row(s) in the quarter window have no resolvable venue_id — they'll be excluded from charge-on-cancel cost. Check fin_venue_fields links.`,
     );
   }
 
@@ -735,6 +842,7 @@ async function load(quarter: QuarterInfo): Promise<void> {
       managerPay,
       schedule,
       masterSchedule,
+      cancelledSchedule,
       venues,
       memberSpots,
       members,

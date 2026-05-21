@@ -49,14 +49,18 @@ function venueMatchCount(
   venue: FinVenue,
   month: Q2Month,
 ): number {
-  // Source is data.masterSchedule (schedule_master, reconciled per-match).
-  // venue_id is pre-resolved in useFinanceData, including the
-  // day-of-week split-rate rule for ATH Katy — so weekday matches land
-  // on the weekday leg id and Sunday matches land on the Sunday leg id.
-  // One row = one match; count, don't sum.
+  // Cost-driving count: alive matches in masterSchedule plus cancelled
+  // matches the venue charges for (only when venue.charge_on_cancel is
+  // true). venue_id pre-resolved on both arrays in useFinanceData,
+  // split-rate routing included.
   let n = 0;
   for (const s of data.masterSchedule) {
     if (s.venue_id === venue.id && s.month === month) n += 1;
+  }
+  if (venue.charge_on_cancel) {
+    for (const s of data.cancelledSchedule) {
+      if (s.venue_id === venue.id && s.month === month) n += 1;
+    }
   }
   return n;
 }
