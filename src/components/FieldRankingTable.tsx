@@ -104,6 +104,20 @@ export default function FieldRankingTable({
   }, [quarter, month]);
   const [sortKey, setSortKey] = useState<SortKey>("totalRevenue");
   const [sortDir, setSortDir] = useState<"asc" | "desc">("desc");
+  // Mobile-only: which cards have their secondary-metrics section
+  // expanded. Keyed by row index + city + venue (same shape as the
+  // desktop tr key). Desktop ignores this state.
+  const [expandedKeys, setExpandedKeys] = useState<Set<string>>(
+    () => new Set(),
+  );
+  function toggleExpanded(key: string) {
+    setExpandedKeys((prev) => {
+      const next = new Set(prev);
+      if (next.has(key)) next.delete(key);
+      else next.add(key);
+      return next;
+    });
+  }
   // "as_billed" = monthly_flat / profit_share lumps + per_match count
   //   × rate. Matches the rest of Finance (Cash Flow, Cities P&L, hero
   //   metrics).
@@ -246,7 +260,7 @@ export default function FieldRankingTable({
       </div>
 
       {!collapsed && (
-      <div className="overflow-x-auto">
+      <div className="hidden md:block overflow-x-auto">
         <table className="w-full min-w-[980px] text-xs">
           <thead className="sticky top-0 z-10 bg-cream-soft">
             <tr className="border-y border-cream-line text-[10px] font-bold uppercase tracking-wider text-deep-green/60">
@@ -303,72 +317,7 @@ export default function FieldRankingTable({
                   </td>
                   <td className="px-2 py-1.5 font-semibold text-deep-green">
                     <div>{row.venue}</div>
-                    {(() => {
-                      // Per-Match mode: uniform "N × $cpm" subtitle for
-                      // every venue, joined by " + " for split legs.
-                      // Same logic the Cities Per-Match view uses, sourcing
-                      // from costPerMatchLegs (cost_per_match with primary
-                      // fallback) so the two pages render identically and
-                      // the subtitle reconciles against the swapped cost
-                      // column. Zero-match legs filtered to keep the
-                      // breakdown clean across months.
-                      if (costMode === "per_match") {
-                        const visible = row.costPerMatchLegs.filter(
-                          (l) => l.matchCount > 0,
-                        );
-                        if (visible.length === 0) return null;
-                        return (
-                          <div className="text-[10px] font-normal text-deep-green/45">
-                            {visible
-                              .map(
-                                (l) =>
-                                  `${l.matchCount} × $${Math.round(l.cpm)}`,
-                              )
-                              .join(" + ")}
-                          </div>
-                        );
-                      }
-                      // As-Billed mode: combined per_match groups (ATH
-                      // Katy) render the split breakdown by billed rate;
-                      // single-leg per_match falls back to the legacy
-                      // "N × $rate"; monthly_flat shows "monthly"; rest
-                      // render nothing.
-                      if (row.perMatchLegs.length > 0) {
-                        const visible = row.perMatchLegs.filter(
-                          (l) => l.matchCount > 0,
-                        );
-                        if (visible.length === 0) return null;
-                        return (
-                          <div className="text-[10px] font-normal text-deep-green/45">
-                            {visible
-                              .map(
-                                (l) =>
-                                  `${l.matchCount} × $${Math.round(l.rate)}`,
-                              )
-                              .join(" + ")}
-                          </div>
-                        );
-                      }
-                      if (
-                        row.billingType === "per_match" &&
-                        row.perMatchRate &&
-                        row.matchCount > 0
-                      ) {
-                        return (
-                          <div className="text-[10px] font-normal text-deep-green/45">
-                            {row.matchCount} × ${Math.round(row.perMatchRate)}
-                          </div>
-                        );
-                      }
-                      if (row.billingType === "monthly_flat") {
-                        return (
-                          <div className="text-[10px] font-normal text-deep-green/45">
-                            monthly
-                          </div>
-                        );
-                      }
-                      return null;
-                    })()}
+                    <VenueSubtitle row={row} costMode={costMode} />
                   </td>
                   <td className="px-2 py-1.5 text-deep-green/85">{row.city}</td>
                   <td className="px-2 py-1.5 text-deep-green/65">
@@ -420,8 +369,244 @@ export default function FieldRankingTable({
         </table>
       </div>
       )}
+      {!collapsed && (
+        <div className="space-y-2 px-3 pb-3 pt-2 md:hidden">
+          {sorted.length === 0 ? (
+            <div className="rounded-xl bg-cream-soft px-3 py-8 text-center text-sm text-deep-green/50">
+              No venue activity for this month.
+            </div>
+          ) : (
+            sorted.map((row, i) => {
+              const key = `${i}|${row.city}|${row.venue}`;
+              const expanded = expandedKeys.has(key);
+              return (
+                <MobileRankingCard
+                  key={key}
+                  rank={i + 1}
+                  row={row}
+                  costMode={costMode}
+                  expanded={expanded}
+                  onToggle={() => toggleExpanded(key)}
+                />
+              );
+            })
+          )}
+        </div>
+      )}
     </section>
   );
+}
+
+// Mobile-only card view of a RankingRow. Header line (rank + venue +
+// city), per-leg subtitle, matches + margin pill summary, key money
+// numbers in a 3-col grid, then a collapsible secondary-metrics
+// section. Sort order follows the same `sorted` array the desktop
+// table consumes, so flipping the desktop sort header (when a user
+// switches between mobile and desktop on the same session) keeps
+// the order in sync.
+function MobileRankingCard({
+  rank,
+  row,
+  costMode,
+  expanded,
+  onToggle,
+}: {
+  rank: number;
+  row: RankingRow;
+  costMode: "as_billed" | "per_match";
+  expanded: boolean;
+  onToggle: () => void;
+}) {
+  return (
+    <div className="rounded-xl border border-cream-line bg-white p-3 shadow-sm">
+      <div className="flex items-baseline justify-between gap-2">
+        <div className="flex min-w-0 items-baseline gap-2">
+          <span className="font-mono text-xs font-bold tabular-nums text-deep-green/55">
+            #{rank}
+          </span>
+          <span className="truncate font-semibold text-deep-green">
+            {row.venue}
+          </span>
+        </div>
+        <span className="shrink-0 text-xs text-deep-green/65">{row.city}</span>
+      </div>
+
+      <div className="mt-0.5">
+        <VenueSubtitle row={row} costMode={costMode} />
+      </div>
+
+      <div className="mt-2 flex items-center justify-between gap-2 text-[11px]">
+        <span className="text-deep-green/85">
+          <span className="font-mono tabular-nums">{row.matchCount}</span>
+          {row.chargedCancelCount > 0 && (
+            <span className="ml-1 text-[10px] text-deep-green/45">
+              +{row.chargedCancelCount} cxl
+            </span>
+          )}
+          <span className="ml-1 text-deep-green/55">matches</span>
+        </span>
+        <MarginPill margin={row.margin} />
+      </div>
+
+      <div className="mt-2 grid grid-cols-3 gap-2 text-[11px]">
+        <MobileMetric
+          label="Total Rev"
+          value={fmtMoney(row.totalRevenue)}
+          tone="mint-bold"
+        />
+        <MobileMetric label="Cost" value={fmtMoney(row.cost)} tone="coral" />
+        <MobileMetric
+          label="Net P&L"
+          value={fmtMoney(row.netPL)}
+          tone={row.netPL >= 0 ? "mint-bold" : "coral-bold"}
+        />
+      </div>
+
+      <button
+        type="button"
+        onClick={onToggle}
+        aria-expanded={expanded}
+        className="mt-2 flex w-full items-center justify-center gap-1 rounded-md py-1 text-[10px] font-bold uppercase tracking-wider text-deep-green/55 transition hover:bg-cream-soft hover:text-deep-green"
+      >
+        <span aria-hidden>{expanded ? "▴" : "▾"}</span>
+        {expanded ? "Less" : "More"}
+      </button>
+
+      {expanded && (
+        <div className="mt-1 grid grid-cols-2 gap-x-3 gap-y-1 border-t border-cream-line/60 pt-2 text-[11px]">
+          <MobileMetric
+            label="DPP Rev"
+            value={fmtMoney(row.revenue)}
+            tone="mint"
+            inline
+          />
+          <MobileMetric
+            label="Mbr Rev"
+            value={fmtMoney(row.memberRev)}
+            tone="mint"
+            inline
+          />
+          <MobileMetric
+            label="City Mbr %"
+            value={fmtPct(row.cityMbrPct)}
+            tone="muted"
+            inline
+          />
+          <MobileMetric
+            label="Mbr Mix %"
+            value={fmtPct(row.mbrMixPct)}
+            tone="muted"
+            inline
+          />
+          <MobileMetric
+            label="DPP Mix %"
+            value={fmtPct(row.dppMixPct)}
+            tone="muted"
+            inline
+          />
+          <MobileMetric
+            label="Launched"
+            value={relativeTimeFromDate(row.launchDate)}
+            tone="muted"
+            inline
+          />
+        </div>
+      )}
+    </div>
+  );
+}
+
+function MobileMetric({
+  label,
+  value,
+  tone,
+  inline = false,
+}: {
+  label: string;
+  value: string;
+  tone: "mint" | "mint-bold" | "coral" | "coral-bold" | "muted";
+  inline?: boolean;
+}) {
+  const valueCls =
+    tone === "mint-bold"
+      ? "font-bold text-mint-hover"
+      : tone === "coral-bold"
+        ? "font-bold text-coral"
+        : tone === "mint"
+          ? "text-mint-hover"
+          : tone === "coral"
+            ? "text-coral"
+            : "text-deep-green/75";
+  if (inline) {
+    return (
+      <div className="flex items-baseline justify-between">
+        <span className="text-deep-green/55">{label}</span>
+        <span className={`font-mono tabular-nums ${valueCls}`}>{value}</span>
+      </div>
+    );
+  }
+  return (
+    <div className="flex flex-col rounded-md bg-cream-soft/50 px-2 py-1">
+      <span className="text-[10px] font-bold uppercase tracking-wider text-deep-green/55">
+        {label}
+      </span>
+      <span className={`font-mono tabular-nums ${valueCls}`}>{value}</span>
+    </div>
+  );
+}
+
+// "N × $rate" subtitle shared by the desktop Venue cell and the
+// mobile card view. Per-Match mode: charged per-leg matches × cpm
+// joined by " + " (zero-match legs filtered). As-Billed mode:
+// per_match split groups render charged per-leg matches × rate, the
+// single per_match falls back to the legacy "matchCount × rate",
+// monthly_flat shows "monthly", everything else renders nothing.
+function VenueSubtitle({
+  row,
+  costMode,
+}: {
+  row: RankingRow;
+  costMode: "as_billed" | "per_match";
+}) {
+  if (costMode === "per_match") {
+    const visible = row.costPerMatchLegs.filter((l) => l.matchCount > 0);
+    if (visible.length === 0) return null;
+    return (
+      <div className="text-[10px] font-normal text-deep-green/45">
+        {visible
+          .map((l) => `${l.matchCount} × $${Math.round(l.cpm)}`)
+          .join(" + ")}
+      </div>
+    );
+  }
+  if (row.perMatchLegs.length > 0) {
+    const visible = row.perMatchLegs.filter((l) => l.matchCount > 0);
+    if (visible.length === 0) return null;
+    return (
+      <div className="text-[10px] font-normal text-deep-green/45">
+        {visible
+          .map((l) => `${l.matchCount} × $${Math.round(l.rate)}`)
+          .join(" + ")}
+      </div>
+    );
+  }
+  if (
+    row.billingType === "per_match" &&
+    row.perMatchRate &&
+    row.matchCount > 0
+  ) {
+    return (
+      <div className="text-[10px] font-normal text-deep-green/45">
+        {row.matchCount} × ${Math.round(row.perMatchRate)}
+      </div>
+    );
+  }
+  if (row.billingType === "monthly_flat") {
+    return (
+      <div className="text-[10px] font-normal text-deep-green/45">monthly</div>
+    );
+  }
+  return null;
 }
 
 function MarginPill({ margin }: { margin: number }) {
