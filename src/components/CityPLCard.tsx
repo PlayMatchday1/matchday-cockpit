@@ -7,6 +7,7 @@ import { useFinanceQuarter } from "@/lib/financeQuarter";
 import {
   cityMembershipRevenueFor,
   cityOverheadFor,
+  groupPerMatchCostFor,
   quarterTabToMonths,
   venueMatchCountFor,
   venuePartnerRevenueFor,
@@ -43,7 +44,20 @@ function defaultTab(quarter: QuarterInfo, now: Date = new Date()): Tab {
   return quarter.months[quarter.months.length - 1].shortName;
 }
 
-export default function CityPLCard({ city }: { city: string }) {
+// costMode is page-level state owned by the Cities tab. Per-card local
+// state would let the cards drift out of sync. "as_billed" = current
+// behavior (canonicalVenueCost: per_match × rate + overrides). "per_match"
+// = groupPerMatchCostFor (cost_per_match × matches), the same calc the
+// Field Ranking Per-Match toggle uses.
+export type CityCostMode = "as_billed" | "per_match";
+
+export default function CityPLCard({
+  city,
+  costMode,
+}: {
+  city: string;
+  costMode: CityCostMode;
+}) {
   const { data } = useFinanceData();
   const { rows: matchRegistrations } = useMatchData();
   const quarter = useFinanceQuarter();
@@ -144,8 +158,19 @@ export default function CityPLCard({ city }: { city: string }) {
         let matchCount = 0;
         let dppRev = 0;
         for (const m of months) {
+          // Cost source toggles with the page-level mode. as_billed:
+          // canonicalVenueCost (override-aware billing — monthly_flat
+          // lumps, lump_sum quarterly hits, per_match × rate). per_match:
+          // shared groupPerMatchCostFor helper so Cities + Field Ranking
+          // stay in lockstep.
+          if (costMode === "per_match") {
+            cost += groupPerMatchCostFor(data, g, m);
+          } else {
+            for (const leg of g.legs) {
+              cost += canonicalVenueCost(data, leg.id, m).amount;
+            }
+          }
           for (const leg of g.legs) {
-            cost += canonicalVenueCost(data, leg.id, m).amount;
             matchCount += venueMatchCountFor(data, leg.id, m);
           }
           dppRev += venuePartnerRevenueFor(
@@ -209,7 +234,7 @@ export default function CityPLCard({ city }: { city: string }) {
       netPL,
       margin,
     };
-  }, [data, matchRegistrations, city, tab, quarter]);
+  }, [data, matchRegistrations, city, tab, quarter, costMode]);
 
   if (!data || !result) return null;
 

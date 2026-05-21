@@ -8,7 +8,7 @@ import BillingScheduleView from "@/components/BillingScheduleView";
 import CashFlowTabContent from "@/components/CashFlowTabContent";
 import ChangeLogView from "@/components/ChangeLogView";
 import CheckInsView from "@/components/CheckInsView";
-import CityPLCard from "@/components/CityPLCard";
+import CityPLCard, { type CityCostMode } from "@/components/CityPLCard";
 import ExpenseAdminView from "@/components/ExpenseAdminView";
 import FieldCostsView from "@/components/FieldCostsView";
 import FieldRankingTabContent from "@/components/FieldRankingTabContent";
@@ -335,6 +335,13 @@ function TabPanel({
 
 function CitiesTabContent() {
   const { data, loading } = useFinanceData();
+  // Page-level cost view, applied to every CityPLCard at once. Defaults
+  // to per_match so the page opens with billing-timing lumps already
+  // smoothed (NEMP's Q2 permit, Bicentennial's prepay, etc.). Field
+  // Ranking defaults to as_billed instead — different default per
+  // surface, but both pages share groupPerMatchCostFor under the hood
+  // so the numbers reconcile when an operator flips either toggle.
+  const [costMode, setCostMode] = useState<CityCostMode>("per_match");
   if (loading) {
     return (
       <div className="rounded-2xl border-[1.5px] border-cream-line bg-white p-8 text-sm text-deep-green/60 shadow-md shadow-deep-green/10">
@@ -344,10 +351,35 @@ function CitiesTabContent() {
   }
   if (!data) return null;
   return (
-    <div className="grid grid-cols-1 gap-4 md:grid-cols-2 xl:grid-cols-3">
-      {CITY_DISPLAY_ORDER.map((c) => (
-        <CityPLCard key={c} city={c} />
-      ))}
+    <div>
+      <div className="mb-4 flex justify-end">
+        <div
+          className="inline-flex rounded-full border border-cream-line bg-cream-soft p-0.5 text-xs font-bold"
+          role="radiogroup"
+          aria-label="Cost view"
+        >
+          {(["as_billed", "per_match"] as const).map((opt) => (
+            <button
+              key={opt}
+              type="button"
+              onClick={() => setCostMode(opt)}
+              className={`rounded-full px-3 py-1.5 transition ${
+                costMode === opt
+                  ? "bg-mint text-deep-green"
+                  : "text-deep-green/65 hover:text-deep-green"
+              }`}
+              aria-pressed={costMode === opt}
+            >
+              {opt === "as_billed" ? "As Billed" : "Per-Match"}
+            </button>
+          ))}
+        </div>
+      </div>
+      <div className="grid grid-cols-1 gap-4 md:grid-cols-2 xl:grid-cols-3">
+        {CITY_DISPLAY_ORDER.map((c) => (
+          <CityPLCard key={c} city={c} costMode={costMode} />
+        ))}
+      </div>
     </div>
   );
 }

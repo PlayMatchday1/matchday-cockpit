@@ -18,7 +18,7 @@ import {
   perMatchTotalFor,
   type VenueCostInfo,
 } from "./financeCosts";
-import { groupVenues } from "./venueGroups";
+import { groupVenues, type VenueGroup } from "./venueGroups";
 import {
   buildFieldIdToVenueIdMap,
   normalizeMatchName,
@@ -1737,6 +1737,39 @@ export function venueMatchCountFor(
   return n;
 }
 
+// Per-match-normalized cost for a venue group in a given month:
+//   Σ over legs of (leg.cost_per_match ?? primary.cost_per_match ?? 0)
+//   × venueMatchCountFor(leg.id, month)
+//
+// Independent of as-billed cost (which flows through canonicalVenueCost +
+// per_match_rate / overrides). cost_per_match is the operator-set per-match
+// unit cost on the Field Costs config table; it bypasses billing-timing
+// lumps (monthly_flat / lump_sum / quarterly permits) so a venue's cost
+// stays stable month-over-month across the period in which the bill
+// actually lands.
+//
+// Secondary-leg fallback to primary's value mirrors
+// venueNormalization.resolveVenueForMatch's sibling-fallback. For
+// non-split groups the loop reduces to (primary.cost_per_match ?? 0) ×
+// matchCount. Null on every leg → $0 per spec ("blank = $0").
+//
+// Shared by Field Ranking's Per-Match toggle (buildRankingRows.perMatchCost)
+// and CityPLCard's Per-Match mode so the two pages agree by construction.
+export function groupPerMatchCostFor(
+  data: FinanceData,
+  group: VenueGroup,
+  month: Q2Month,
+): number {
+  const primary = group.legs[0];
+  const primaryCpm = primary.cost_per_match;
+  let total = 0;
+  for (const leg of group.legs) {
+    const cpm = leg.cost_per_match ?? primaryCpm ?? 0;
+    total += cpm * venueMatchCountFor(data, leg.id, month);
+  }
+  return total;
+}
+
 export function cityMembershipRevenueFor(
   data: FinanceData,
   city: string,
@@ -2182,18 +2215,9 @@ export function buildRankingRows(
           }))
         : [];
 
-    // Per-match normalized cost: Σ over legs of (cost_per_match × leg
-    // matches), with the secondary-leg fallback to primary's value
-    // so an unset Sunday leg cpm still computes off the configured
-    // weekday cpm (mirrors matchPnL.ts logic). For non-split venues
-    // the loop reduces to (primary.cost_per_match ?? 0) × matchCount.
-    const primaryCpm = primary.cost_per_match;
-    let perMatchCost = 0;
-    for (let i = 0; i < g.legs.length; i++) {
-      const leg = g.legs[i];
-      const cpm = leg.cost_per_match ?? primaryCpm ?? 0;
-      perMatchCost += cpm * legCounts[i];
-    }
+    // Per-match normalized cost via the shared helper so Field Ranking
+    // and CityPLCard's Per-Match view agree by construction.
+    const perMatchCost = groupPerMatchCostFor(data, g, month);
 
     if (revenue === 0 && memberRev === 0 && cost === 0) continue;
 
