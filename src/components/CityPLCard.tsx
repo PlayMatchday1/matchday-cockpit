@@ -146,6 +146,14 @@ export default function CityPLCard({
       isCombined: boolean;
       isUntagged: boolean;
       isPrivateRental: boolean;
+      // Per-leg (matches × cost_per_match) breakdown used to render the
+      // uniform "N × $cpm" subtitle in Per-Match mode. cpm falls back from
+      // a null secondary leg to the primary's value — same shape as
+      // groupPerMatchCostFor so subtitle and cost agree by construction.
+      // For non-split venues this collapses to a one-entry array. Render
+      // filters legs with matchCount === 0 so a Sunday with no matches in
+      // a given month doesn't show up as "+ 0 × $rate".
+      perMatchLegs: Array<{ matchCount: number; cpm: number }>;
     };
     const fieldLevel: FieldRow[] = cityGroups
       .map((g) => {
@@ -157,6 +165,7 @@ export default function CityPLCard({
         let cost = 0;
         let matchCount = 0;
         let dppRev = 0;
+        const legCounts: number[] = g.legs.map(() => 0);
         for (const m of months) {
           // Cost source toggles with the page-level mode. as_billed:
           // canonicalVenueCost (override-aware billing — monthly_flat
@@ -170,8 +179,10 @@ export default function CityPLCard({
               cost += canonicalVenueCost(data, leg.id, m).amount;
             }
           }
-          for (const leg of g.legs) {
-            matchCount += venueMatchCountFor(data, leg.id, m);
+          for (let i = 0; i < g.legs.length; i++) {
+            const c = venueMatchCountFor(data, g.legs[i].id, m);
+            legCounts[i] += c;
+            matchCount += c;
           }
           dppRev += venuePartnerRevenueFor(
             data,
@@ -180,6 +191,11 @@ export default function CityPLCard({
             m,
           );
         }
+        const primaryCpm = g.legs[0].cost_per_match;
+        const perMatchLegs = g.legs.map((leg, idx) => ({
+          matchCount: legCounts[idx],
+          cpm: leg.cost_per_match ?? primaryCpm ?? 0,
+        }));
         return {
           venue: g.displayName,
           subLabel: null,
@@ -193,6 +209,7 @@ export default function CityPLCard({
           isCombined: g.isCombined,
           isUntagged: false,
           isPrivateRental: false,
+          perMatchLegs,
         };
       })
       .filter((r) => r.dppRev > 0 || r.cost > 0 || r.matchCount > 0)
@@ -312,33 +329,70 @@ export default function CityPLCard({
                           </span>
                         )}
                       </div>
-                      {f.isPrivateRental && f.subLabel && (
-                        <div className="text-[10px] text-deep-green/45">
-                          {f.subLabel}
-                        </div>
-                      )}
-                      {!f.isPrivateRental &&
-                        !f.isUntagged &&
-                        f.billingType === "per_match" &&
-                        f.matchCount > 0 &&
-                        (f.isCombined ? (
-                          <div className="text-[10px] text-deep-green/45">
-                            {f.matchCount} matches across legs
-                          </div>
-                        ) : (
-                          f.perMatchRate && (
+                      {(() => {
+                        // Subtitle. In Per-Match mode, render a uniform
+                        // "N × $cpm" for every venue (joined by " + " for
+                        // split-rate legs), keyed off the same numbers
+                        // that drive the Per-Match cost so the row
+                        // arithmetic is self-checking. In As Billed mode,
+                        // keep the legacy mix: per_match rows show
+                        // "N × $rate", combined per_match shows "N
+                        // matches across legs", monthly_flat shows
+                        // "monthly", others render nothing. Private
+                        // rental subLabel renders in both modes.
+                        if (f.isUntagged) return null;
+                        if (f.isPrivateRental) {
+                          return f.subLabel ? (
                             <div className="text-[10px] text-deep-green/45">
-                              {f.matchCount} × ${Math.round(f.perMatchRate)}
+                              {f.subLabel}
                             </div>
-                          )
-                        ))}
-                      {!f.isPrivateRental &&
-                        !f.isUntagged &&
-                        f.billingType === "monthly_flat" && (
-                          <div className="text-[10px] text-deep-green/45">
-                            monthly
-                          </div>
-                        )}
+                          ) : null;
+                        }
+                        if (costMode === "per_match") {
+                          const visible = f.perMatchLegs.filter(
+                            (l) => l.matchCount > 0,
+                          );
+                          if (visible.length === 0) return null;
+                          return (
+                            <div className="text-[10px] text-deep-green/45">
+                              {visible
+                                .map(
+                                  (l) =>
+                                    `${l.matchCount} × $${Math.round(l.cpm)}`,
+                                )
+                                .join(" + ")}
+                            </div>
+                          );
+                        }
+                        if (
+                          f.billingType === "per_match" &&
+                          f.matchCount > 0
+                        ) {
+                          if (f.isCombined) {
+                            return (
+                              <div className="text-[10px] text-deep-green/45">
+                                {f.matchCount} matches across legs
+                              </div>
+                            );
+                          }
+                          if (f.perMatchRate) {
+                            return (
+                              <div className="text-[10px] text-deep-green/45">
+                                {f.matchCount} × $
+                                {Math.round(f.perMatchRate)}
+                              </div>
+                            );
+                          }
+                        }
+                        if (f.billingType === "monthly_flat") {
+                          return (
+                            <div className="text-[10px] text-deep-green/45">
+                              monthly
+                            </div>
+                          );
+                        }
+                        return null;
+                      })()}
                     </td>
                     <td className="py-1.5 pl-2 text-right font-mono tabular-nums text-mint-hover">
                       {fmt(f.dppRev)}
