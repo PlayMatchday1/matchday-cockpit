@@ -28,13 +28,15 @@ import ManagerPayGrid from "@/components/ManagerPayGrid";
 import CancelHeatmap from "@/components/CancelHeatmap";
 import CitiesMasterScheduleLens from "@/components/CitiesMasterScheduleLens";
 import CityFinancialsSnapshot from "@/components/CityFinancialsSnapshot";
+import SlateActionItems from "@/components/SlateActionItems";
+import { ChevronDown, ChevronRight } from "lucide-react";
 import MatchPnL from "@/components/MatchPnL";
 import PartnerDashboardsAdmin from "@/components/PartnerDashboardsAdmin";
 import RevenueAdminView from "@/components/RevenueAdminView";
 import TotalsBarChart from "@/components/TotalsBarChart";
 import { CITIES, type City } from "@/lib/types";
 import { useMatchWindowData } from "@/lib/useMatchData";
-import { getWeeklySpots } from "@/lib/cityStats";
+import { getWeeklySpots, getMonday } from "@/lib/cityStats";
 import { CITY_DISPLAY_ORDER } from "@/lib/financeStats";
 import { FinanceQuarterProvider } from "@/lib/financeQuarter";
 import {
@@ -395,31 +397,95 @@ function CitiesTabContent() {
   );
 }
 
-// Slate Review — per-city decision snapshot. Five sections from
-// existing components, scoped to one selected city via the pill row
-// at the top:
+// Slate Review — per-city decision snapshot. Sections from existing
+// components, scoped to one selected city + selected week via state
+// owned at this level:
 //   1. City selector  (single-select pill row, this file)
 //   2. Last 8 weeks   (TotalsBarChart fed by useMatchWindowData + getWeeklySpots)
 //   3. City financials (CityFinancialsSnapshot — realized-through-today)
-//   4. Master schedule (CitiesMasterScheduleLens with city prop)
-//   5. Cancel patterns (CancelPatterns with city prop)
-// Defaults to Austin; selection lives in local state (operator browses
-// freely, no deep-link semantics needed since the tab is its own
-// entry point in the nav).
+//   4. Master schedule (CitiesMasterScheduleLens controlled via weekStart)
+//   5. Action items   (SlateActionItems scoped by city + weekStart)
+//   6. Cancellations  (CancelHeatmap with full-slate + recent-cancel row markers)
+// Defaults to Austin + current Monday. Local state; no URL persistence.
+// weekStart is shared by the Master Schedule and Action Items sections so
+// flipping the week selector inside the master schedule re-scopes the
+// to-do list to the same week.
 function SlateReviewTabContent() {
   const [selectedCity, setSelectedCity] = useState<City>("Austin");
+  const [weekStart, setWeekStart] = useState<string>(() => {
+    const mon = getMonday(new Date());
+    const y = mon.getFullYear();
+    const m = String(mon.getMonth() + 1).padStart(2, "0");
+    const d = String(mon.getDate()).padStart(2, "0");
+    return `${y}-${m}-${d}`;
+  });
   return (
-    <div className="space-y-6">
+    <div className="space-y-4">
       <SlateReviewCityPills value={selectedCity} onChange={setSelectedCity} />
-      <SlateReviewEightWeekChart city={selectedCity} />
-      <CityFinancialsSnapshot city={selectedCity} />
-      <CitiesMasterScheduleLens city={selectedCity} />
-      <CancelHeatmap
-        city={selectedCity}
-        showAllSlots
-        highlightRecentCancels
-      />
+      <CollapsibleSection title="Last 8 weeks">
+        <SlateReviewEightWeekChart city={selectedCity} />
+      </CollapsibleSection>
+      <CollapsibleSection title={`${selectedCity} financials`}>
+        <CityFinancialsSnapshot city={selectedCity} />
+      </CollapsibleSection>
+      <CollapsibleSection title="Master Schedule">
+        <CitiesMasterScheduleLens
+          city={selectedCity}
+          weekStart={weekStart}
+          onWeekStartChange={setWeekStart}
+        />
+      </CollapsibleSection>
+      <CollapsibleSection title="Action items">
+        <SlateActionItems city={selectedCity} weekStart={weekStart} />
+      </CollapsibleSection>
+      <CollapsibleSection title="Cancellations">
+        <CancelHeatmap
+          city={selectedCity}
+          showAllSlots
+          highlightRecentCancels
+        />
+      </CollapsibleSection>
     </div>
+  );
+}
+
+// Lightweight wrapper: clickable header strip with chevron toggles a
+// section open/closed. Default open. Local state per instance — no
+// persistence (operator collapses for focus on a single section, not
+// for long-term layout). Inner sections may render their own h2; we
+// accept the mild duplication rather than threading a `headerless`
+// prop through every child.
+function CollapsibleSection({
+  title,
+  defaultOpen = true,
+  children,
+}: {
+  title: string;
+  defaultOpen?: boolean;
+  children: React.ReactNode;
+}) {
+  const [open, setOpen] = useState(defaultOpen);
+  return (
+    <section className="rounded-2xl border-[1.5px] border-cream-line bg-white shadow-md shadow-deep-green/10">
+      <button
+        type="button"
+        onClick={() => setOpen((v) => !v)}
+        aria-expanded={open}
+        className="flex w-full items-center gap-2 px-5 py-3 text-left transition hover:bg-cream-soft/40"
+      >
+        {open ? (
+          <ChevronDown size={18} aria-hidden className="text-deep-green/55" />
+        ) : (
+          <ChevronRight size={18} aria-hidden className="text-deep-green/55" />
+        )}
+        <span className="text-lg font-bold tracking-tight text-deep-green">
+          {title}
+        </span>
+      </button>
+      {open && (
+        <div className="border-t border-cream-line/60 p-5">{children}</div>
+      )}
+    </section>
   );
 }
 

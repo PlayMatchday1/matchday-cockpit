@@ -154,12 +154,34 @@ type EditorState =
 // a per-city filter and the payload is small — one week × 8 cities);
 // only the render loop scopes down. Slate Review uses this; the
 // /cities lens leaves the prop unset for the all-cities view.
+//
+// Week selection is controlled-or-uncontrolled: pass both
+// `weekStart` and `onWeekStartChange` to share the week with another
+// section (Slate Review wires it to its action-items list so both
+// stay synced). Omit the props for self-managed state — the /cities
+// lens leaves them off and owns its own week.
 export default function CitiesMasterScheduleLens({
   city,
-}: { city?: string } = {}) {
-  const [weekStart, setWeekStart] = useState<string>(() =>
+  weekStart: controlledWeekStart,
+  onWeekStartChange,
+}: {
+  city?: string;
+  weekStart?: string;
+  onWeekStartChange?: (next: string) => void;
+} = {}) {
+  const [internalWeekStart, setInternalWeekStart] = useState<string>(() =>
     isoDate(mondayOfChicago(new Date())),
   );
+  const isControlled =
+    controlledWeekStart !== undefined && onWeekStartChange !== undefined;
+  const weekStart = isControlled ? controlledWeekStart! : internalWeekStart;
+  const setWeekStart = (next: string) => {
+    if (isControlled) {
+      onWeekStartChange!(next);
+    } else {
+      setInternalWeekStart(next);
+    }
+  };
   const [current, setCurrent] = useState<Payload | null>(null);
   const [previous, setPrevious] = useState<Payload | null>(null);
   const [discrepancies, setDiscrepancies] = useState<Discrepancies | null>(null);
