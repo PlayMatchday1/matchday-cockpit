@@ -28,7 +28,7 @@ import ManagerPayGrid from "@/components/ManagerPayGrid";
 import CancelHeatmap from "@/components/CancelHeatmap";
 import CancelPatterns from "@/components/CancelPatterns";
 import CitiesMasterScheduleLens from "@/components/CitiesMasterScheduleLens";
-import CityFinancialsSnapshot from "@/components/CityFinancialsSnapshot";
+import FieldRankingTable from "@/components/FieldRankingTable";
 import SlateActionItems from "@/components/SlateActionItems";
 import { ChevronDown, ChevronRight } from "lucide-react";
 import MatchPnL from "@/components/MatchPnL";
@@ -403,7 +403,7 @@ function CitiesTabContent() {
 // owned at this level:
 //   1. City selector  (single-select pill row, this file)
 //   2. Last 8 weeks   (TotalsBarChart fed by useMatchWindowData + getWeeklySpots)
-//   3. City financials (CityFinancialsSnapshot — realized-through-today)
+//   3. Field Ranking (FieldRankingTable city-filtered + costScope=realized)
 //   4. Master schedule (CitiesMasterScheduleLens controlled via weekStart)
 //   5. Action items   (SlateActionItems scoped by city + weekStart)
 //   6. Cancellations  (CancelHeatmap with full-slate + recent-cancel row markers)
@@ -426,8 +426,8 @@ function SlateReviewTabContent() {
       <CollapsibleSection title="Last 8 weeks">
         <SlateReviewEightWeekChart city={selectedCity} />
       </CollapsibleSection>
-      <CollapsibleSection title={`${selectedCity} financials`}>
-        <CityFinancialsSnapshot city={selectedCity} />
+      <CollapsibleSection title="Field Ranking">
+        <FieldRankingTable city={selectedCity} costScope="realized" />
       </CollapsibleSection>
       <CollapsibleSection title="Master Schedule">
         <CitiesMasterScheduleLens

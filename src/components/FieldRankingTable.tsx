@@ -66,9 +66,20 @@ function fmtPct(n: number): string {
 export default function FieldRankingTable({
   collapsed = false,
   onToggle,
+  city,
+  costScope = "projected",
 }: {
   collapsed?: boolean;
   onToggle?: () => void;
+  // Optional city filter. When set, only rows for that city render
+  // and sort. Standalone Field Ranking page leaves it unset for the
+  // all-cities view; Slate Review passes its selected city.
+  city?: string;
+  // Cost scope. "projected" (default) keeps the standalone behavior
+  // — full-month canonical / per-match cost. "realized" feeds the
+  // Slate Review embed: cost reflects only matches with date <=
+  // today in the current month.
+  costScope?: "projected" | "realized";
 } = {}) {
   const { data } = useFinanceData();
   const { rows: matchRegistrations } = useMatchData();
@@ -106,8 +117,11 @@ export default function FieldRankingTable({
 
   const rows = useMemo<RankingRow[]>(() => {
     if (!data) return [];
-    return buildRankingRows(data, matchRegistrations, month);
-  }, [data, matchRegistrations, month]);
+    const all = buildRankingRows(data, matchRegistrations, month, {
+      costScope,
+    });
+    return city ? all.filter((r) => r.city === city) : all;
+  }, [data, matchRegistrations, month, city, costScope]);
 
   // In per-match mode, swap cost / netPL / margin onto the displayed
   // row so render + sort both see the normalized values. Other columns

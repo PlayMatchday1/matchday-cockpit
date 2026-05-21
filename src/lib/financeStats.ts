@@ -1541,8 +1541,9 @@ function fieldCostsActualFor(
 
 // Per-venue realized-through-today cost. Same arithmetic as
 // fieldCostsActualFor but scoped to one venue id so per-leg + per-venue
-// rendering (Slate Review's CityFinancialsSnapshot) reconciles to the
-// aggregate by construction:
+// rendering (Slate Review's embedded Field Ranking via the realized
+// costScope on buildRankingRows) reconciles to the aggregate by
+// construction:
 //
 //   sum over venues of venueRealizedCostFor(venue.id, m, now)
 //     === fieldCostsActualFor(m, now)
@@ -1848,6 +1849,55 @@ export function groupPerMatchCostFor(
     // Per-Match cost view reflects what we'd actually pay. Cancelled
     // matches at a no-cancel-fee venue contribute zero.
     total += cpm * venueChargedMatchCountFor(data, leg.id, month);
+  }
+  return total;
+}
+
+// Realized-scope variant of groupPerMatchCostFor: same per-leg
+// cost_per_match formula, but the charged match count is filtered to
+// matches with date <= today during the current month (past months use
+// the full charged count, future months 0). Drives the Slate Review
+// embed of Field Ranking — operator sees only the cost that's
+// happened so far, not the full-month projection. Standalone Field
+// Ranking keeps the projected variant for forward-looking margin
+// math.
+export function groupPerMatchCostRealizedFor(
+  data: FinanceData,
+  group: VenueGroup,
+  month: Q2Month,
+  now: Date = new Date(),
+): number {
+  if (isFutureMonth(month, now)) return 0;
+  const qm = MONTH_BY_KEY[month];
+  const isCurrent = qm ? isCurrentMonthQ(qm, now) : false;
+  if (!isCurrent) {
+    // Past month — fully realized. Reuse the projected helper since
+    // every match's date is now in the past.
+    return groupPerMatchCostFor(data, group, month);
+  }
+  const today = isoDateLocal(now);
+  const primary = group.legs[0];
+  const primaryCpm = primary.cost_per_match;
+  let total = 0;
+  for (const leg of group.legs) {
+    const cpm = leg.cost_per_match ?? primaryCpm ?? 0;
+    let count = 0;
+    for (const s of data.masterSchedule) {
+      if (s.venue_id !== leg.id) continue;
+      if (s.month !== month) continue;
+      if (s.match_date > today) continue;
+      count += 1;
+    }
+    const venue = data.venues.find((v) => v.id === leg.id);
+    if (venue?.charge_on_cancel) {
+      for (const s of data.cancelledSchedule) {
+        if (s.venue_id !== leg.id) continue;
+        if (s.month !== month) continue;
+        if (s.match_date > today) continue;
+        count += 1;
+      }
+    }
+    total += cpm * count;
   }
   return total;
 }
@@ -2264,9 +2314,17 @@ export function buildRankingRows(
   data: FinanceData,
   matchRegistrations: JoinedMatchPlayerRow[],
   month: Q2Month,
+  options: { costScope?: "projected" | "realized"; now?: Date } = {},
 ): RankingRow[] {
   const out: RankingRow[] = [];
   const groups = groupVenues(data.venues);
+  // Cost scope. Default "projected" matches the standalone Field
+  // Ranking page (full-month canonical cost, supports forward-looking
+  // margin math). "realized" feeds the Slate Review embed: cost
+  // reflects only matches with date <= today during the current
+  // month; past months stay at canonical; future months return 0.
+  const scope = options.costScope ?? "projected";
+  const now = options.now ?? new Date();
 
   for (const g of groups) {
     const primary = g.legs[0];
@@ -2297,7 +2355,10 @@ export function buildRankingRows(
 
     for (const leg of g.legs) {
       memberRev += venueAllocatedMemberRevenueFor(data, leg.id, month);
-      cost += canonicalVenueCost(data, leg.id, month).amount;
+      cost +=
+        scope === "realized"
+          ? venueRealizedCostFor(data, leg.id, month, now)
+          : canonicalVenueCost(data, leg.id, month).amount;
       const alive = venueMatchCountFor(data, leg.id, month);
       const cxl = venueChargedCancelCountFor(data, leg.id, month);
       aliveLegCounts.push(alive);
@@ -2342,7 +2403,12 @@ export function buildRankingRows(
 
     // Per-match normalized cost via the shared helper so Field Ranking
     // and CityPLCard's Per-Match view agree by construction.
-    const perMatchCost = groupPerMatchCostFor(data, g, month);
+    // Realized scope uses the through-today variant; projected uses the
+    // full-month one.
+    const perMatchCost =
+      scope === "realized"
+        ? groupPerMatchCostRealizedFor(data, g, month, now)
+        : groupPerMatchCostFor(data, g, month);
 
     if (revenue === 0 && memberRev === 0 && cost === 0) continue;
 
