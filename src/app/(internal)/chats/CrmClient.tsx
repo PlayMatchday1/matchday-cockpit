@@ -296,38 +296,20 @@ export default function CrmClient() {
   // title bar + bottom nav stay anchored to the viewport. Inbox list and
   // conversation messages keep their own internal scroll containers.
   //
-  // Keyboard-dismiss layer recomposite: iOS standalone PWA holds a
-  // stale composited GPU layer for the chat shell after the on-screen
-  // keyboard dismisses — the layout math is correct (a fresh mount or
-  // tab-switch-and-return renders perfectly) but iOS doesn't repaint
-  // the stale layer until something forces a re-composite. On every
-  // keyboard-dismiss event (visualViewport height returns to >=
-  // innerHeight), toggle transform: translateZ(0) on documentElement
-  // and clear it on the next animation frame. The on/off flip forces
-  // iOS to discard the stale layer and repaint fresh, mirroring what
-  // a tab-switch achieves. Prior attempt was a synchronous
-  // offsetHeight read; that flushed layout but not compositing, so
-  // didn't fix it.
+  // Note on the transient post-keyboard layout glitch: iOS standalone
+  // PWA briefly holds a stale composited layer for the chat shell
+  // after the on-screen keyboard dismisses. Multiple attempted
+  // automatic nudges (visualViewport scrollTo, offsetHeight reflow,
+  // documentElement transform toggle) all failed to invalidate the
+  // stale layer — the only thing that reliably fixes it is a tab
+  // navigation, which forces a full remount. The white background
+  // mask in globals.css (html.app-shell-locked) ensures the glitch
+  // shows white not beige, so the visual artifact is minimal, and
+  // any tab switch self-heals it. Accepted as-is.
   useEffect(() => {
     document.documentElement.classList.add("app-shell-locked");
     document.body.classList.add("app-shell-locked");
-    const vv = typeof window !== "undefined" ? window.visualViewport : null;
-    let rafId = 0;
-    const onResize = () => {
-      if (vv && vv.height >= window.innerHeight - 1) {
-        const el = document.documentElement;
-        el.style.transform = "translateZ(0)";
-        cancelAnimationFrame(rafId);
-        rafId = requestAnimationFrame(() => {
-          el.style.transform = "";
-        });
-      }
-    };
-    vv?.addEventListener("resize", onResize);
     return () => {
-      cancelAnimationFrame(rafId);
-      vv?.removeEventListener("resize", onResize);
-      document.documentElement.style.transform = "";
       document.documentElement.classList.remove("app-shell-locked");
       document.body.classList.remove("app-shell-locked");
     };
