@@ -295,10 +295,32 @@ export default function CrmClient() {
   // document scroll axis disabled, iOS has nothing to scroll, and the
   // title bar + bottom nav stay anchored to the viewport. Inbox list and
   // conversation messages keep their own internal scroll containers.
+  //
+  // Keyboard-dismiss reflow nudge: iOS standalone PWA holds a stale
+  // layout for the 100dvh shell after the on-screen keyboard dismisses
+  // — the nav/composer don't reflow to match the restored viewport
+  // until something forces a recompute (confirmed in-app: navigating to
+  // another tab and back fixes it instantly). On every keyboard-dismiss
+  // event (visualViewport height returns to >= innerHeight), force a
+  // synchronous layout flush by reading documentElement.offsetHeight.
+  // The browser must compute layout to return that value, which
+  // invalidates whatever stale viewport cache iOS was holding. No DOM
+  // mutation, no style changes, no React state — the cheapest possible
+  // primitive that mimics the tab-navigation recompute.
   useEffect(() => {
     document.documentElement.classList.add("app-shell-locked");
     document.body.classList.add("app-shell-locked");
+    const vv = typeof window !== "undefined" ? window.visualViewport : null;
+    const onResize = () => {
+      if (vv && vv.height >= window.innerHeight - 1) {
+        // Assignment to void to prevent dead-code elimination from
+        // dropping the read. Reading offsetHeight forces a sync layout.
+        void document.documentElement.offsetHeight;
+      }
+    };
+    vv?.addEventListener("resize", onResize);
     return () => {
+      vv?.removeEventListener("resize", onResize);
       document.documentElement.classList.remove("app-shell-locked");
       document.body.classList.remove("app-shell-locked");
     };
