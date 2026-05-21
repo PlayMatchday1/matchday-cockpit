@@ -93,13 +93,13 @@ export default function FieldRankingTable({
   }, [quarter, month]);
   const [sortKey, setSortKey] = useState<SortKey>("totalRevenue");
   const [sortDir, setSortDir] = useState<"asc" | "desc">("desc");
-  // "as_billed" = monthly_flat lumps, lump_sum quarterly hits, per_match
-  //   count × rate. Default — same shape as the rest of Finance (Cash
-  //   Flow, Cities P&L, hero metrics).
+  // "as_billed" = monthly_flat / profit_share lumps + per_match count
+  //   × rate. Matches the rest of Finance (Cash Flow, Cities P&L, hero
+  //   metrics).
   // "per_match" = cost_per_match × matches per leg. Smooths billing
-  //   timing across months for venues that bill in lumps (NEMP's quarterly
-  //   permit, Hattrick, Bicentennial) so per-venue Net P&L / Margin
-  //   compare cleanly month-over-month.
+  //   timing across months for venues that bill in lumps (NEMP's
+  //   quarterly permit, Hattrick, Bicentennial) so per-venue Net P&L /
+  //   Margin compare cleanly month-over-month. Default.
   const [costMode, setCostMode] = useState<"as_billed" | "per_match">(
     "per_match",
   );

@@ -179,9 +179,9 @@ export default function CityPLCard({
         for (const m of months) {
           // Cost source toggles with the page-level mode. as_billed:
           // canonicalVenueCost (override-aware billing — monthly_flat
-          // lumps, lump_sum quarterly hits, per_match × rate). per_match:
-          // shared groupPerMatchCostFor helper so Cities + Field Ranking
-          // stay in lockstep. Both branches already include the
+          // / profit_share lumps, per_match × rate). per_match: shared
+          // groupPerMatchCostFor helper so Cities + Field Ranking stay
+          // in lockstep. Both branches already include the
           // charge_on_cancel surcharge under the hood.
           if (costMode === "per_match") {
             cost += groupPerMatchCostFor(data, g, m);

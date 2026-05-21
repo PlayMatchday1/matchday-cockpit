@@ -15,11 +15,7 @@ export type VenueCostKind =
   | "override"
   | "per_match"
   | "monthly_flat"
-  | "lump_sum"
   | "profit_share"
-  | "no_charge"
-  | "per_hour_no_fee"
-  | "per_hour_metered"
   | "needs_override"
   | "unknown";
 
@@ -65,18 +61,6 @@ function venueMatchCount(
   return n;
 }
 
-function venueTotalHours(
-  data: FinanceData,
-  venue: FinVenue,
-  month: Q2Month,
-): number {
-  let h = 0;
-  for (const s of data.masterSchedule) {
-    if (s.venue_id === venue.id && s.month === month) h += s.duration_hours;
-  }
-  return h;
-}
-
 function autoCost(
   data: FinanceData,
   venue: FinVenue,
@@ -99,64 +83,38 @@ function autoCost(
       override: null,
     };
   }
-  if (venue.billing_type === "per_hour") {
-    const totalHours = venueTotalHours(data, venue, month);
-    if (!venue.hourly_rate || venue.hourly_rate <= 0) {
-      return {
-        amount: 0,
-        kind: "per_hour_no_fee",
-        matchCount: venueMatchCount(data, venue, month),
-        totalHours,
-        formula: "No venue fee",
-        source: venue.notes ?? "Per-hour with no rate",
-        override: null,
-      };
-    }
-    const amount = totalHours * venue.hourly_rate;
-    return {
-      amount,
-      kind: "per_hour_metered",
-      matchCount: venueMatchCount(data, venue, month),
-      totalHours,
-      formula: `${totalHours} hr × $${venue.hourly_rate}`,
-      source: "Auto from schedule",
-      override: null,
-    };
-  }
-  if (venue.billing_type === "no_charge") {
-    return {
-      amount: 0,
-      kind: "no_charge",
-      matchCount: venueMatchCount(data, venue, month),
-      totalHours: 0,
-      formula: "No venue fee",
-      source: venue.notes ?? "—",
-      override: null,
-    };
-  }
-  // monthly_flat / lump_sum / profit_share — cost lives entirely in
+  // monthly_flat / profit_share — cost lives entirely in
   // fin_venue_cost_overrides per (venue, month). canonicalVenueCost reads
   // the override before falling back to autoCost, so this branch only
   // fires when an override is missing for the month — surface that as a
   // visible "needs override" hint rather than silently returning $0.
-  const billingKind: VenueCostKind =
-    venue.billing_type === "monthly_flat"
-      ? "monthly_flat"
-      : venue.billing_type === "lump_sum"
-        ? "lump_sum"
-        : venue.billing_type === "profit_share"
-          ? "profit_share"
-          : "unknown";
+  // Profit_share temporarily mirrors monthly_flat semantics; real
+  // profit-share logic is TBD.
+  if (
+    venue.billing_type === "monthly_flat" ||
+    venue.billing_type === "profit_share"
+  ) {
+    return {
+      amount: 0,
+      kind: "needs_override",
+      matchCount: venueMatchCount(data, venue, month),
+      totalHours: 0,
+      formula: `Set ${month} override below (${venue.billing_type.replace("_", " ")})`,
+      source: "Override required",
+      override: null,
+    };
+  }
+  // Defensive fallback. The narrowed billing_type union makes this
+  // unreachable in normal flow; a stale DB row carrying a retired
+  // billing_type would land here and surface as $0 with a clear
+  // "No billing model on file" instead of crashing.
   return {
     amount: 0,
-    kind: billingKind === "unknown" ? "unknown" : "needs_override",
+    kind: "unknown",
     matchCount: venueMatchCount(data, venue, month),
     totalHours: 0,
-    formula:
-      billingKind === "unknown"
-        ? "No billing model on file"
-        : `Set ${month} override below (${venue.billing_type.replace("_", " ")})`,
-    source: billingKind === "unknown" ? "—" : "Override required",
+    formula: "No billing model on file",
+    source: "—",
     override: null,
   };
 }
@@ -184,7 +142,10 @@ export function canonicalVenueCost(
       amount: override.override_amount,
       kind: "override",
       matchCount: venueMatchCount(data, venue, month),
-      totalHours: venueTotalHours(data, venue, month),
+      // Inert field on the result type — no current consumer reads it.
+      // Returning 0 instead of computing keeps the VenueCostInfo shape
+      // stable for callers that destructure it (e.g. compactCostBreakdown).
+      totalHours: 0,
       formula: override.reason ?? "Override (no reason given)",
       source: `Override · set by ${override.created_by} on ${override.created_at.slice(0, 10)}`,
       override,
@@ -220,18 +181,6 @@ export function monthlyFlatTotalFor(
   return total;
 }
 
-export function perHourTotalFor(
-  data: FinanceData,
-  month: Q2Month,
-): number {
-  let total = 0;
-  for (const v of data.venues) {
-    if (v.billing_type !== "per_hour") continue;
-    total += canonicalVenueCost(data, v.id, month).amount;
-  }
-  return total;
-}
-
 // Single Field Costs total for the month — sum of override-aware
 // canonical cost across every venue. Replaces the prior
 // venueRentalLineFor + perMatchVenueCostFor split now that both flow
@@ -246,7 +195,7 @@ export function fieldCostsFor(data: FinanceData, month: Q2Month): number {
 
 // Sum of override rows for the month. Used in the Field Costs
 // reconciliation footer to show how much of fieldCostsFor came from
-// manual overrides vs auto-computed per_match/per_hour.
+// manual overrides vs auto-computed per_match.
 export function overrideOnlyTotalFor(
   data: FinanceData,
   month: Q2Month,

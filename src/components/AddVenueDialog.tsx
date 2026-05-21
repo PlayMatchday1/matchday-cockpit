@@ -27,10 +27,7 @@ export type AddVenueDraft = {
 const BILLING_TYPE_OPTIONS: FinVenue["billing_type"][] = [
   "per_match",
   "monthly_flat",
-  "per_hour",
-  "lump_sum",
   "profit_share",
-  "no_charge",
 ];
 
 function emptyDraft(): AddVenueDraft {
@@ -90,7 +87,6 @@ export default function AddVenueDialog({
   if (!open) return null;
 
   const showPerMatch = draft.billing_type === "per_match";
-  const showPerHour = draft.billing_type === "per_hour";
 
   async function handleSave() {
     setError(null);
@@ -109,11 +105,11 @@ export default function AddVenueDialog({
       aliases: parseAliases(aliasesRaw),
       // Zero out rate fields that don't apply to the chosen billing
       // type so a stale value from before the user switched doesn't
-      // get persisted.
+      // get persisted. hourly_rate is always null now that per_hour is
+      // retired — the DB column lingers for legacy rows.
       per_match_rate: showPerMatch ? draft.per_match_rate : null,
-      hourly_rate: showPerHour ? draft.hourly_rate : null,
-      cost_per_match:
-        showPerMatch || showPerHour ? draft.cost_per_match : null,
+      hourly_rate: null,
+      cost_per_match: showPerMatch ? draft.cost_per_match : null,
     };
     setSaving(true);
     try {
@@ -205,25 +201,7 @@ export default function AddVenueDialog({
             </Field>
           )}
 
-          {showPerHour && (
-            <Field label="Hourly rate ($)">
-              <input
-                type="number"
-                step="0.01"
-                min="0"
-                value={draft.hourly_rate ?? ""}
-                onChange={(e) =>
-                  setDraft({
-                    ...draft,
-                    hourly_rate: parseNum(e.target.value),
-                  })
-                }
-                className="w-full rounded-md border border-cream-line bg-white px-3 py-2 text-right font-mono text-sm tabular-nums text-deep-green focus:border-deep-green focus:outline-none"
-              />
-            </Field>
-          )}
-
-          {(showPerMatch || showPerHour) && (
+          {showPerMatch && (
             <Field label="Cost/match ($) — for Match P&L">
               <input
                 type="number"

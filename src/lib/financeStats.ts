@@ -953,20 +953,17 @@ function buildChildren(
 //
 //   per_match (matches > 0)  → "{N} × ${rate}"  (rate = amount/N)
 //   per_match (no matches)   → "—"
-//   override (amount > 0)    → "Monthly flat" / "Lump sum" / "Profit
-//                              share" / "Override" — derived from
-//                              the override.reason prefix when present
+//   override (amount > 0)    → "Monthly flat" / "Profit share" /
+//                              "Override" — derived from the
+//                              override.reason prefix when present
 //   override (amount = 0)    → "Pre-paid"
 //   needs_override           → "Needs override"
-//   no_charge / per_hour_no_fee → "No fee"
-//   per_hour_metered         → "{H}h"
 //   unknown                  → "—"
 function compactCostBreakdown(info: VenueCostInfo): string {
   if (info.kind === "override") {
     if (info.amount === 0) return "Pre-paid";
     const r = (info.override?.reason ?? "").toLowerCase();
     if (r.includes("monthly_flat") || r.includes("monthly flat")) return "Monthly flat";
-    if (r.includes("lump_sum") || r.includes("lump sum")) return "Lump sum";
     if (r.includes("profit_share") || r.includes("profit share")) return "Profit share";
     return "Override";
   }
@@ -975,12 +972,6 @@ function compactCostBreakdown(info: VenueCostInfo): string {
     const rate = info.amount / info.matchCount;
     const rateStr = Number.isInteger(rate) ? `$${rate}` : `$${rate.toFixed(2)}`;
     return `${info.matchCount} × ${rateStr}`;
-  }
-  if (info.kind === "per_hour_metered") {
-    return `${info.totalHours}h`;
-  }
-  if (info.kind === "no_charge" || info.kind === "per_hour_no_fee") {
-    return "No fee";
   }
   if (info.kind === "needs_override") return "Needs override";
   return "—";
@@ -1499,11 +1490,12 @@ export type Q2ExpensesActualBreakdown = {
 // fieldCostsFor for a single month, classified actual vs projected
 // by date:
 //   - past month: fully actual (whole monthly canonical cost)
-//   - current month, override venues (monthly_flat / lump_sum /
-//     profit_share): full override amount counts as actual — the
-//     monthly bill is committed once the month begins
-//   - current month, schedule-driven venues (per_match / per_hour):
-//     iterate fin_schedule rows, count only rows with date <= today
+//   - current month, override venues (monthly_flat / profit_share):
+//     full override amount counts as actual — the monthly bill is
+//     committed once the month begins
+//   - current month, schedule-driven venues (per_match): iterate
+//     masterSchedule rows + cancelled-charged rows, count only rows
+//     with date <= today
 //   - future month: 0
 function fieldCostsActualFor(
   data: FinanceData,
@@ -1539,23 +1531,10 @@ function fieldCostsActualFor(
           total += rate;
         }
       }
-    } else if (v.billing_type === "per_hour") {
-      const rate = v.hourly_rate ?? 0;
-      if (rate > 0) {
-        for (const s of data.masterSchedule) {
-          if (s.venue_id !== v.id) continue;
-          if (s.month !== month) continue;
-          if (s.match_date > today) continue;
-          total += s.duration_hours * rate;
-        }
-      }
-      // Per-hour cancelled hours intentionally skipped — schedule_master
-      // doesn't carry end times for cancelled mdapi rows, so we'd need
-      // a per-venue default duration. Today's per_hour venues (Onion
-      // Creek, SJD) have null hourly_rate so cost is $0 either way;
-      // revisit when an active per_hour venue gets configured.
     }
-    // no_charge / unknown: 0 contribution
+    // monthly_flat / profit_share / unknown: handled above via the
+    // findOverride short-circuit. Override-less rows contribute 0
+    // (autoCost returns "needs_override" at amount=0).
   }
   return total;
 }
@@ -1795,9 +1774,9 @@ export function venueChargedMatchCountFor(
 // Independent of as-billed cost (which flows through canonicalVenueCost +
 // per_match_rate / overrides). cost_per_match is the operator-set per-match
 // unit cost on the Field Costs config table; it bypasses billing-timing
-// lumps (monthly_flat / lump_sum / quarterly permits) so a venue's cost
-// stays stable month-over-month across the period in which the bill
-// actually lands.
+// lumps (monthly_flat / profit_share / quarterly permits) so a venue's
+// cost stays stable month-over-month across the period in which the
+// bill actually lands.
 //
 // Secondary-leg fallback to primary's value mirrors
 // venueNormalization.resolveVenueForMatch's sibling-fallback. For
@@ -2216,7 +2195,7 @@ export type RankingRow = {
   netPL: number;
   margin: number;
   // Alternative "per-match normalized" cost view. cost above is the
-  // as-billed amount (monthly_flat lumps, lump_sum quarterly hits, per_match
+  // as-billed amount (monthly_flat / profit_share lumps, per_match
   // count × rate); these three fields restate it as
   //   Σ (leg.cost_per_match × leg matches in month)
   // so a venue's per-match cost stays steady month-over-month even when

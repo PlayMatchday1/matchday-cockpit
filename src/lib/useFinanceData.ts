@@ -126,18 +126,19 @@ export type FinVenue = {
   venue_name: string;       // canonical (post-alias)
   raw_venue_name: string;   // pre-alias — see FinSchedule.venue_raw note.
   city: string;
-  // Billing classification.
-  // - per_match / per_hour: cost auto-computed from schedule × rate.
-  // - monthly_flat / lump_sum / profit_share: cost lives in
-  //   fin_venue_cost_overrides per (venue, month) — no auto computation.
-  // - no_charge: always $0.
-  billing_type:
-    | "per_hour"
-    | "per_match"
-    | "monthly_flat"
-    | "lump_sum"
-    | "profit_share"
-    | "no_charge";
+  // Billing classification (narrowed to live values only — the
+  // per_hour / lump_sum / no_charge options were retired after every
+  // venue migrated off them).
+  // - per_match: cost auto-computed from schedule × per_match_rate.
+  // - monthly_flat / profit_share: cost lives in fin_venue_cost_overrides
+  //   per (venue, month). Profit_share currently behaves the same as
+  //   monthly_flat (override-driven); real profit-share logic TBD.
+  billing_type: "per_match" | "monthly_flat" | "profit_share";
+  // Inert column. Kept on the type for DB-row compatibility with venues
+  // created during the per_hour era. No UI writes it now and no cost
+  // path reads it. Safe to remove from the DB schema once those legacy
+  // rows are migrated forward and you're sure no historical view needs
+  // the value.
   hourly_rate: number | null;
   monthly_flat: number | null;
   per_match_rate: number | null;
@@ -320,6 +321,9 @@ function monthFromMatchDate(dateStr: string): string {
 // Falls back to 1h when only a start time is present or the string
 // doesn't parse — same default the backfill script writes for new rows.
 // Bounded to (0, 6] as a sanity guard; out-of-range values default to 1.
+// Currently inert — the only consumer was the retired per_hour cost path.
+// Kept because the parsing is cheap and may be useful if per_hour comes
+// back, or for other duration-aware features.
 function parseMatchDurationHours(matchTime: string): number {
   const re =
     /^\s*(\d{1,2})(?::(\d{2}))?\s*(AM|PM|am|pm)?\s*[-–—]\s*(\d{1,2})(?::(\d{2}))?\s*(AM|PM|am|pm)?/;
@@ -428,7 +432,7 @@ async function load(quarter: QuarterInfo): Promise<void> {
       //   - city/venue: legacy string fallback for any row whose
       //     mdapi_field_id is null (pre-PR-D leftovers).
       //   - match_date + match_time: drive month bucket + per-row
-      //     duration_hours for per_hour cost.
+      //     duration_hours (inert today — per_hour billing retired).
       //   - max_spots: surfaced for caller inspection; not in cost.
       selectAll<Record<string, unknown>>(() =>
         supabase

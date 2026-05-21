@@ -50,10 +50,7 @@ function editKey(venueId: number, field: EditableField): string {
 const BILLING_TYPE_OPTIONS: FinVenue["billing_type"][] = [
   "per_match",
   "monthly_flat",
-  "per_hour",
-  "lump_sum",
   "profit_share",
-  "no_charge",
 ];
 
 type BillingFilter =
@@ -541,10 +538,10 @@ export default function FieldCostsView({
           Field Costs
         </h1>
         <p className="mt-2 text-sm text-deep-green/65">
-          Single source of truth for venue costs. Per-match and per-hour
-          billing auto-compute from the schedule; monthly_flat / lump_sum /
-          profit_share venues read from per-month overrides — set them with
-          the row-level Override button. Cash Flow's Field Costs line sums
+          Single source of truth for venue costs. Per-match billing
+          auto-computes from the schedule; monthly_flat and profit_share
+          venues read from per-month overrides — set them with the
+          row-level Override button. Cash Flow&apos;s Field Costs line sums
           all of this.
         </p>
       </div>
