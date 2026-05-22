@@ -439,11 +439,11 @@ function SlateReviewTabContent() {
       <CollapsibleSection title="Action items">
         <SlateActionItems city={selectedCity} weekStart={weekStart} />
       </CollapsibleSection>
-      <CollapsibleSection title="Cancellations">
-        <SlateReviewCancelSection city={selectedCity} />
-      </CollapsibleSection>
       <CollapsibleSection title="Cancel patterns">
         <CancelPatterns city={selectedCity} />
+      </CollapsibleSection>
+      <CollapsibleSection title="Cancellations">
+        <SlateReviewCancelSection city={selectedCity} />
       </CollapsibleSection>
     </div>
   );
