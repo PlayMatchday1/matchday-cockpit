@@ -8,10 +8,14 @@ import {
   cityMembershipRevenueFor,
   cityOverheadFor,
   groupPerMatchCostFor,
+  groupPerMatchCostRealizedFor,
   quarterTabToMonths,
   venueChargedCancelCountFor,
   venueMatchCountFor,
   venuePartnerRevenueFor,
+  venueRealizedChargedCancelCountFor,
+  venueRealizedCostFor,
+  venueRealizedMatchCountFor,
   type Q2Month,
 } from "@/lib/financeStats";
 import { canonicalVenueCost } from "@/lib/financeCosts";
@@ -52,17 +56,34 @@ function defaultTab(quarter: QuarterInfo, now: Date = new Date()): Tab {
 // Field Ranking Per-Match toggle uses.
 export type CityCostMode = "as_billed" | "per_match";
 
+// costScope is also page-level. "fullMonth" = the full month's
+// projected cost (every scheduled match counts). "realized" = cost
+// through today only (current month filters by match_date <= today;
+// past months auto-collapse to full canonical cost; future months
+// return 0). Mirrors Slate Review's Field Ranking realized scope so
+// the numbers reconcile across surfaces. The toggle ONLY affects the
+// per-venue field-level cost + the matchCount / cancel-count display
+// that pairs with it. Overhead stays full-month in both scopes
+// (committed monthly, not match-by-match) and revenue is actual by
+// definition (venuePartnerRevenueFor reads paid registrations only).
+export type CityCostScope = "realized" | "fullMonth";
+
 export default function CityPLCard({
   city,
   costMode,
+  costScope,
 }: {
   city: string;
   costMode: CityCostMode;
+  costScope: CityCostScope;
 }) {
   const { data } = useFinanceData();
   const { rows: matchRegistrations } = useMatchData();
   const quarter = useFinanceQuarter();
   const [tab, setTab] = useState<Tab>(() => defaultTab(quarter));
+  // Single `now` for every realized-scope call in this render so all
+  // per-venue/cost/count branches read the same point-in-time.
+  const now = useMemo(() => new Date(), []);
   // Reset tab when quarter switches so we never render a stale
   // shortName from the previous quarter.
   useEffect(() => {
@@ -183,20 +204,41 @@ export default function CityPLCard({
           // groupPerMatchCostFor helper so Cities + Field Ranking stay
           // in lockstep. Both branches already include the
           // charge_on_cancel surcharge under the hood.
+          //
+          // costScope branches each cost helper to its realized
+          // variant (filters by match_date <= today in the current
+          // month; past months auto-collapse to full canonical;
+          // future months return 0). Match count + cancel count
+          // branch the same way so the per-leg "N × $cpm" subtitle
+          // and the matches/cxl badge reconcile to the cost cell,
+          // matching the Slate Review Field Ranking realized scope.
           if (costMode === "per_match") {
-            cost += groupPerMatchCostFor(data, g, m);
+            cost +=
+              costScope === "realized"
+                ? groupPerMatchCostRealizedFor(data, g, m, now)
+                : groupPerMatchCostFor(data, g, m);
           } else {
             for (const leg of g.legs) {
-              cost += canonicalVenueCost(data, leg.id, m).amount;
+              cost +=
+                costScope === "realized"
+                  ? venueRealizedCostFor(data, leg.id, m, now)
+                  : canonicalVenueCost(data, leg.id, m).amount;
             }
           }
           for (let i = 0; i < g.legs.length; i++) {
-            const alive = venueMatchCountFor(data, g.legs[i].id, m);
-            const cxl = venueChargedCancelCountFor(
-              data,
-              g.legs[i].id,
-              m,
-            );
+            const alive =
+              costScope === "realized"
+                ? venueRealizedMatchCountFor(data, g.legs[i].id, m, now)
+                : venueMatchCountFor(data, g.legs[i].id, m);
+            const cxl =
+              costScope === "realized"
+                ? venueRealizedChargedCancelCountFor(
+                    data,
+                    g.legs[i].id,
+                    m,
+                    now,
+                  )
+                : venueChargedCancelCountFor(data, g.legs[i].id, m);
             aliveLegCounts[i] += alive;
             cxlLegCounts[i] += cxl;
             matchCount += alive;
@@ -274,7 +316,7 @@ export default function CityPLCard({
       netPL,
       margin,
     };
-  }, [data, matchRegistrations, city, tab, quarter, costMode]);
+  }, [data, matchRegistrations, city, tab, quarter, costMode, costScope, now]);
 
   if (!data || !result) return null;
 

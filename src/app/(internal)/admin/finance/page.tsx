@@ -8,7 +8,10 @@ import BillingScheduleView from "@/components/BillingScheduleView";
 import CashFlowTabContent from "@/components/CashFlowTabContent";
 import ChangeLogView from "@/components/ChangeLogView";
 import CheckInsView from "@/components/CheckInsView";
-import CityPLCard, { type CityCostMode } from "@/components/CityPLCard";
+import CityPLCard, {
+  type CityCostMode,
+  type CityCostScope,
+} from "@/components/CityPLCard";
 import ExpenseAdminView from "@/components/ExpenseAdminView";
 import FieldCostsView from "@/components/FieldCostsView";
 import FieldRankingTabContent from "@/components/FieldRankingTabContent";
@@ -356,6 +359,13 @@ function CitiesTabContent() {
   // surface, but both pages share groupPerMatchCostFor under the hood
   // so the numbers reconcile when an operator flips either toggle.
   const [costMode, setCostMode] = useState<CityCostMode>("per_match");
+  // Realized = field cost through today only (current month filters by
+  // match_date <= today; past months auto-collapse to full canonical;
+  // future months return 0). Full Month = full month projected cost
+  // (current behavior). Revenue is actual in both modes; overhead stays
+  // full-month in both modes (committed monthly, not match-by-match).
+  // Default Realized so the card opens on the point-in-time read.
+  const [costScope, setCostScope] = useState<CityCostScope>("realized");
   if (loading) {
     return (
       <div className="rounded-2xl border-[1.5px] border-cream-line bg-white p-8 text-sm text-deep-green/60 shadow-md shadow-deep-green/10">
@@ -366,7 +376,7 @@ function CitiesTabContent() {
   if (!data) return null;
   return (
     <div>
-      <div className="mb-4 flex justify-end">
+      <div className="mb-4 flex flex-wrap justify-end gap-2">
         <div
           className="inline-flex rounded-full border border-cream-line bg-cream-soft p-0.5 text-xs font-bold"
           role="radiogroup"
@@ -388,10 +398,36 @@ function CitiesTabContent() {
             </button>
           ))}
         </div>
+        <div
+          className="inline-flex rounded-full border border-cream-line bg-cream-soft p-0.5 text-xs font-bold"
+          role="radiogroup"
+          aria-label="Cost timing"
+        >
+          {(["realized", "fullMonth"] as const).map((opt) => (
+            <button
+              key={opt}
+              type="button"
+              onClick={() => setCostScope(opt)}
+              className={`rounded-full px-3 py-1.5 transition ${
+                costScope === opt
+                  ? "bg-mint text-deep-green"
+                  : "text-deep-green/65 hover:text-deep-green"
+              }`}
+              aria-pressed={costScope === opt}
+            >
+              {opt === "realized" ? "Realized" : "Full Month"}
+            </button>
+          ))}
+        </div>
       </div>
       <div className="grid grid-cols-1 gap-4 md:grid-cols-2 xl:grid-cols-3">
         {CITY_DISPLAY_ORDER.map((c) => (
-          <CityPLCard key={c} city={c} costMode={costMode} />
+          <CityPLCard
+            key={c}
+            city={c}
+            costMode={costMode}
+            costScope={costScope}
+          />
         ))}
       </div>
     </div>
