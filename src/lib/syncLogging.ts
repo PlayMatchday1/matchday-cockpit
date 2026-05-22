@@ -23,7 +23,8 @@ export type SourceName =
   | "mdapi-matches"
   | "mdapi-users"
   | "mdapi-users-lens-snapshot"
-  | "membership-snapshots";
+  | "membership-snapshots"
+  | "manager-pay-recompute";
 
 // fin_sync_log columns the orchestrator/manual routes write on
 // success. Stripe-specific columns (charges_*) stay null for mdapi

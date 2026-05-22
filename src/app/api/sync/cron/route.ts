@@ -46,6 +46,7 @@ import {
 import { syncMdapiUsers } from "@/lib/mdapiUsersSync";
 import { refreshUsersLensSnapshot } from "@/lib/usersLensSnapshot";
 import { refreshMembershipSnapshots } from "@/lib/membershipSnapshots";
+import { recomputeManagerPayIntoFinExpenses } from "@/lib/managerPayCompute";
 import { runWithLog, type TriggeredBy } from "@/lib/syncLogging";
 
 // Stripe ~60s + mdapi_reviews ~10s + mdapi_subscriptions ~60s +
@@ -213,6 +214,29 @@ export async function POST(req: Request) {
     }),
   );
 
+  // Manager Pay recompute — rolls per-(city, payDate) totals into
+  // fin_expenses for the Finance Manager Pay grid. Runs AFTER
+  // mdapi-matches so it sees the freshly-synced manager assignments
+  // + player counts. Skips if mdapi-matches failed (recomputing
+  // against stale data would silently produce wrong totals;
+  // surfacing the skip in fin_sync_log gives operator visibility).
+  // Pre-cutover Thursdays are guaranteed untouched — the helper
+  // enforces a hard floor at MANAGER_PAY_CUTOVER_PAY_DATE.
+  const managerPayResult = await runWithLog(
+    "manager-pay-recompute",
+    triggeredBy,
+    supabase,
+    async (sb) => {
+      if (!matchesResult.ok) {
+        throw new Error(
+          "Skipped: mdapi-matches sync failed; recompute would use stale data",
+        );
+      }
+      return recomputeManagerPayIntoFinExpenses(sb);
+    },
+    (r) => ({ rows_imported: r.rowsWritten }),
+  );
+
   // Users — full /admin/players re-sync into mdapi_users. Independent
   // of upstream syncs. Estimated ~30s for ~24k rows at limit=250.
   // console.time gives operator visibility on actual duration since
@@ -278,6 +302,7 @@ export async function POST(req: Request) {
     !subscriptionsResult.ok ||
     !promocodesResult.ok ||
     !matchesResult.ok ||
+    !managerPayResult.ok ||
     !usersResult.ok ||
     !usersLensSnapshotResult.ok ||
     !snapshotResult.ok;
@@ -292,6 +317,7 @@ export async function POST(req: Request) {
         mdapi_subscriptions: subscriptionsResult,
         mdapi_promocodes: promocodesResult,
         mdapi_matches: matchesResult,
+        manager_pay_recompute: managerPayResult,
         mdapi_users: usersResult,
         mdapi_users_lens_snapshot: usersLensSnapshotResult,
         membership_snapshots: snapshotResult,

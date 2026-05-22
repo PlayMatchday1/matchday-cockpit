@@ -1,17 +1,23 @@
 "use client";
 
-import { useEffect, useMemo, useRef, useState } from "react";
+// Read-only Manager Pay grid.
+//
+// Numbers are computed by /managers and persisted into fin_expenses
+// by the daily recompute step in /api/sync/cron (see
+// src/lib/managerPayCompute.ts:recomputeManagerPayIntoFinExpenses).
+// This grid just reads those rows back out of fin_expenses; it does
+// not edit them.
+//
+// Pre-cutover Thursdays (pay-date < MANAGER_PAY_CUTOVER_PAY_DATE)
+// stay frozen as the existing manual rows — the recompute never
+// touches them. Adjustments to individual managers ("Additional Pay")
+// are edited on /managers and feed into the next computed total.
+
+import { useEffect, useMemo, useRef } from "react";
 import Link from "next/link";
-import { logChange } from "@/lib/financeAudit";
-import { supabase } from "@/lib/supabase";
-import { useAuth } from "@/lib/useAuth";
 import { useFinanceQuarter } from "@/lib/financeQuarter";
 import type { QuarterInfo } from "@/lib/quarters";
-import {
-  refetchFinanceData,
-  useFinanceData,
-  type FinExpense,
-} from "@/lib/useFinanceData";
+import { useFinanceData, type FinExpense } from "@/lib/useFinanceData";
 
 const CITIES = [
   "Austin",
@@ -104,22 +110,11 @@ function findCurrentWeekThursdayIndex(
   return thursdays.findIndex((t) => t.date === target);
 }
 
-type CellState = {
-  value: string;
-  saving: boolean;
-  error: string | null;
-  flash: boolean;
-};
-
 const CATEGORY = "Match Manager Pay";
-const VENDOR = "Weekly payroll";
 
 export default function ManagerPayGrid() {
   const { data, loading } = useFinanceData();
-  const { appUser } = useAuth();
   const quarter = useFinanceQuarter();
-
-  const [editing, setEditing] = useState<Map<string, CellState>>(new Map());
 
   const thursdays = useMemo(() => generateThursdays(quarter), [quarter]);
   const currentWeekIdx = useMemo(
@@ -161,148 +156,6 @@ export default function ManagerPayGrid() {
     return row?.amount ?? 0;
   }
 
-  function getDisplayValue(city: string, date: string): number {
-    const key = `${city}|${date}`;
-    const local = editing.get(key);
-    if (local && !local.saving && !local.error) {
-      const n = Number(local.value);
-      if (Number.isFinite(n)) return n;
-    }
-    return getStored(city, date);
-  }
-
-  async function saveCell(city: string, date: string, raw: string) {
-    const email = appUser?.email;
-    if (!email) {
-      setCellState(city, date, {
-        value: raw,
-        saving: false,
-        error: "Not signed in",
-        flash: false,
-      });
-      return;
-    }
-    const trimmed = raw.trim();
-    if (trimmed === "") {
-      setCellState(city, date, {
-        value: raw,
-        saving: false,
-        error: "Empty",
-        flash: false,
-      });
-      return;
-    }
-    const num = Number(trimmed);
-    if (!Number.isFinite(num) || num < 0) {
-      setCellState(city, date, {
-        value: raw,
-        saving: false,
-        error: "Bad number",
-        flash: false,
-      });
-      return;
-    }
-    const existing = rowsByKey.get(`${city}|${date}`);
-    if (existing && existing.amount === num) {
-      // No-op edit; just clear local state.
-      clearCellState(city, date);
-      return;
-    }
-
-    setCellState(city, date, {
-      value: raw,
-      saving: true,
-      error: null,
-      flash: false,
-    });
-
-    try {
-      const t = thursdays.find((x) => x.date === date);
-      const monthLabel = t?.month ?? "";
-      if (existing) {
-        const before = { ...existing };
-        const { data: updated, error } = await supabase
-          .from("fin_expenses")
-          .update({ amount: num })
-          .eq("id", existing.id)
-          .select()
-          .single();
-        if (error) throw new Error(error.message);
-        await logChange({
-          tableName: "fin_expenses",
-          rowId: existing.id,
-          action: "update",
-          changedBy: email,
-          before: before as unknown as Record<string, unknown>,
-          after: updated as Record<string, unknown>,
-          note: `Manager Pay edit · ${city} · ${date}`,
-        });
-      } else {
-        const payload = {
-          date,
-          month: monthLabel,
-          city,
-          category: CATEGORY,
-          vendor: VENDOR,
-          amount: num,
-          notes: `Weekly Thursday cash-out — week of ${date}`,
-          manual_entry: true,
-        };
-        const { data: inserted, error } = await supabase
-          .from("fin_expenses")
-          .insert(payload)
-          .select()
-          .single();
-        if (error) throw new Error(error.message);
-        await logChange({
-          tableName: "fin_expenses",
-          rowId: (inserted as { id: number }).id,
-          action: "insert",
-          changedBy: email,
-          after: inserted as Record<string, unknown>,
-          note: `Manager Pay insert · ${city} · ${date}`,
-        });
-      }
-
-      await refetchFinanceData();
-
-      // Brief mint flash, then clear local state so the cell returns to the
-      // refreshed stored value.
-      setCellState(city, date, {
-        value: raw,
-        saving: false,
-        error: null,
-        flash: true,
-      });
-      window.setTimeout(() => clearCellState(city, date), 800);
-    } catch (e) {
-      const msg = e instanceof Error ? e.message : String(e);
-      setCellState(city, date, {
-        value: raw,
-        saving: false,
-        error: msg,
-        flash: false,
-      });
-    }
-  }
-
-  function setCellState(city: string, date: string, s: CellState) {
-    setEditing((prev) => {
-      const next = new Map(prev);
-      next.set(`${city}|${date}`, s);
-      return next;
-    });
-  }
-
-  function clearCellState(city: string, date: string) {
-    setEditing((prev) => {
-      const next = new Map(prev);
-      next.delete(`${city}|${date}`);
-      return next;
-    });
-  }
-
-  // Totals — recompute from getDisplayValue so live edits show before save.
   const totals = useMemo(() => {
     const cityMonth = new Map<string, Map<string, number>>(); // city → month → sum
     const cityQuarter = new Map<string, number>();
@@ -312,7 +165,7 @@ export default function ManagerPayGrid() {
       const monthMap = new Map<string, number>();
       let cityTotal = 0;
       for (const t of thursdays) {
-        const v = getDisplayValue(city, t.date);
+        const v = getStored(city, t.date);
         monthMap.set(t.month, (monthMap.get(t.month) ?? 0) + v);
         cityTotal += v;
         colTotals.set(t.date, (colTotals.get(t.date) ?? 0) + v);
@@ -331,7 +184,7 @@ export default function ManagerPayGrid() {
     }
     return { cityMonth, cityQuarter, colTotals, monthGrand, grand };
     // eslint-disable-next-line react-hooks/exhaustive-deps
-  }, [thursdays, rowsByKey, editing, monthsInQuarter]);
+  }, [thursdays, rowsByKey, monthsInQuarter]);
 
   return (
     <>
@@ -350,8 +203,16 @@ export default function ManagerPayGrid() {
             Manager Pay
           </h1>
           <p className="mt-2 max-w-3xl text-sm text-deep-green/65">
-            Weekly Thursday cash-out per city. Edits sync to fin_expenses
-            immediately and propagate to the city cards + Cash Flow.
+            Computed from{" "}
+            <Link
+              href="/managers"
+              className="font-bold text-deep-green underline-offset-2 hover:underline"
+            >
+              /managers
+            </Link>
+            . One row per (city, pay-date Thursday), refreshed by the daily
+            sync. Edit Additional Pay on /managers — it flows into the next
+            recompute.
           </p>
         </div>
         {/* Quarter selector lives on the Finance page header — this
@@ -418,22 +279,16 @@ export default function ManagerPayGrid() {
                       {city}
                     </td>
                     {thursdays.map((t, i) => {
-                      const key = `${city}|${t.date}`;
-                      const state = editing.get(key) ?? null;
                       const stored = getStored(city, t.date);
                       const isCurrent = i === currentWeekIdx;
                       return (
                         <td
                           key={t.date}
-                          className={`min-w-[96px] px-1.5 py-1.5 ${
-                            isCurrent ? "bg-mint-soft/40" : ""
-                          }`}
+                          className={`min-w-[96px] px-3 py-2 text-right font-mono tabular-nums text-deep-green ${
+                            stored === 0 ? "text-deep-green/40" : ""
+                          } ${isCurrent ? "bg-mint-soft/40" : ""}`}
                         >
-                          <CellInput
-                            stored={stored}
-                            state={state}
-                            onSave={(v) => saveCell(city, t.date, v)}
-                          />
+                          {fmtMoney(stored)}
                         </td>
                       );
                     })}
@@ -488,75 +343,5 @@ export default function ManagerPayGrid() {
         </section>
       )}
     </>
-  );
-}
-
-function CellInput({
-  stored,
-  state,
-  onSave,
-}: {
-  stored: number;
-  state: CellState | null;
-  onSave: (raw: string) => void;
-}) {
-  const [local, setLocal] = useState<string>(String(stored));
-
-  // Reset local input when stored value changes (e.g. after refetch) and
-  // we're not in the middle of an edit.
-  useEffect(() => {
-    if (!state) {
-      setLocal(String(stored));
-    }
-  }, [stored, state]);
-
-  const isZero = stored === 0 && !state;
-  const showFlash = state?.flash;
-  const showError = Boolean(state?.error);
-  const showSaving = Boolean(state?.saving);
-
-  return (
-    <div
-      className={`relative flex w-full items-center rounded-md ${
-        showError
-          ? "ring-2 ring-coral"
-          : isZero
-            ? "ring-1 ring-coral/40"
-            : "ring-1 ring-cream-line"
-      } ${showFlash ? "flash-mint" : ""}`}
-    >
-      <span className="pl-2 pr-0.5 text-xs text-deep-green/50">$</span>
-      <input
-        type="number"
-        min="0"
-        step="1"
-        value={local}
-        onChange={(e) => setLocal(e.target.value)}
-        onBlur={() => {
-          if (local !== String(stored)) onSave(local);
-        }}
-        onKeyDown={(e) => {
-          if (e.key === "Enter") {
-            (e.currentTarget as HTMLInputElement).blur();
-          } else if (e.key === "Escape") {
-            setLocal(String(stored));
-            (e.currentTarget as HTMLInputElement).blur();
-          }
-        }}
-        disabled={showSaving}
-        className="w-full bg-transparent py-2 pr-6 text-right font-mono text-sm tabular-nums text-deep-green focus:outline-none disabled:opacity-60"
-      />
-      {showSaving && (
-        <span className="absolute right-2 top-1/2 inline-block h-2 w-2 -translate-y-1/2 animate-pulse rounded-full bg-deep-green/50" />
-      )}
-      {showError && (
-        <span
-          title={state?.error ?? ""}
-          className="absolute right-2 top-1/2 -translate-y-1/2 text-[10px] font-bold text-coral"
-        >
-          !
-        </span>
-      )}
-    </div>
   );
 }
