@@ -17,10 +17,19 @@
 --
 -- Apply via Supabase Dashboard → SQL Editor.
 
+-- NOTE: fin_venues has NO raw_venue_name column — that's a
+-- TypeScript-only derived field set by useFinanceData.ts's mapper
+-- (raw_venue_name = the unaliased DB venue_name). So this INSERT
+-- only writes the real DB columns; the mapper will produce
+-- raw_venue_name = 'Soccer Central Tournament' at read time, which
+-- is what COMBINE_BY_NAME in src/lib/venueGroups.ts looks for.
+--
+-- Unique constraint on (city, venue_name) was created by migration
+-- 0027 (fin_venues_city_name_uidx); ON CONFLICT below uses it.
+
 INSERT INTO fin_venues (
   city,
   venue_name,
-  raw_venue_name,
   billing_type,
   per_match_rate,
   cost_per_match,
@@ -28,7 +37,6 @@ INSERT INTO fin_venues (
 )
 SELECT
   city,
-  'Soccer Central Tournament',
   'Soccer Central Tournament',
   'per_match',
   120,
