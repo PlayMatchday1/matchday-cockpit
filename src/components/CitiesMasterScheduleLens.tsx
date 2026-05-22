@@ -15,15 +15,24 @@
 // Changes vs last week:
 //   The component fetches the selected week AND the previous week
 //   in parallel. A small banner above the grid summarizes counts;
-//   per-city change rows list added / dropped / time-changed slots.
-//   In the grid itself, added bubbles get a green dot, dropped
-//   bubbles render as a strikethrough "ghost" in the same day cell.
+//   per-city change rows list added / dropped slots. In the grid
+//   itself, added bubbles get a green dot, dropped bubbles render
+//   as a strikethrough "ghost" in the same day cell.
 //
-//   "Same slot" is keyed on (city, day_of_week, venue). Multiple
-//   matches with the same venue on the same day are paired
-//   positionally after sort-by-time, so a Friday SJD@6PM + SJD@8PM
-//   versus a previous Friday with only SJD@6PM cleanly reports the
-//   8PM as added (not as a "SJD time changed").
+//   Slot identity is (city, day_of_week, venue, time). Within each
+//   (city, day, venue) bucket we intersect by time string:
+//     - time in both prev and cur → unchanged (no pill)
+//     - time in cur only          → added
+//     - time in prev only         → dropped (ghost in the day cell)
+//
+//   No "time changed" pairing. The earlier positional-pairing logic
+//   mislabeled additions as moves whenever new slots were inserted
+//   at indices already occupied by existing-and-unchanged slots
+//   (e.g. adding a 9AM in front of an existing 6PM made the diff
+//   call it "6PM → 9AM"). Without a reliable per-slot identity
+//   beyond venue+time, a genuine move and a (drop + add) at
+//   different times are indistinguishable; we prefer the honest
+//   two-pill rendering.
 
 import { useCallback, useEffect, useMemo, useState } from "react";
 import { ChevronLeft, ChevronRight, Plus, X } from "lucide-react";
@@ -67,7 +76,6 @@ type Diff = {
   // Totals for the top banner.
   addedCount: number;
   droppedCount: number;
-  changedCount: number;
 };
 
 type GhostMatch = {
@@ -80,14 +88,7 @@ type GhostMatch = {
 
 type ChangePill =
   | { kind: "added"; dayOfWeek: string; venue: string; time_short: string }
-  | { kind: "dropped"; dayOfWeek: string; venue: string; time_short: string }
-  | {
-      kind: "changed";
-      dayOfWeek: string;
-      venue: string;
-      oldTime: string;
-      newTime: string;
-    };
+  | { kind: "dropped"; dayOfWeek: string; venue: string; time_short: string };
 
 const EMPTY_DIFF: Diff = {
   hasAny: false,
@@ -96,7 +97,6 @@ const EMPTY_DIFF: Diff = {
   perCity: new Map(),
   addedCount: 0,
   droppedCount: 0,
-  changedCount: 0,
 };
 
 const DOW_ORDER = ["Mon", "Tue", "Wed", "Thu", "Fri", "Sat", "Sun"] as const;
@@ -345,7 +345,6 @@ export default function CitiesMasterScheduleLens({
             <DiffSummaryBanner
               addedCount={diff.addedCount}
               droppedCount={diff.droppedCount}
-              changedCount={diff.changedCount}
             />
           )}
           {discrepancies && (
@@ -442,11 +441,9 @@ function WeekNav({
 function DiffSummaryBanner({
   addedCount,
   droppedCount,
-  changedCount,
 }: {
   addedCount: number;
   droppedCount: number;
-  changedCount: number;
 }) {
   return (
     <div className="mb-5 flex flex-wrap items-center gap-2 rounded-2xl border-[1.5px] border-cream-line bg-cream-soft px-4 py-2.5 shadow-md shadow-deep-green/10">
@@ -461,11 +458,6 @@ function DiffSummaryBanner({
       {droppedCount > 0 && (
         <span className="rounded-full bg-coral-soft px-2 py-0.5 text-[11px] font-bold text-coral-hover ring-1 ring-coral/40">
           {droppedCount} dropped
-        </span>
-      )}
-      {changedCount > 0 && (
-        <span className="rounded-full bg-yellow-soft px-2 py-0.5 text-[11px] font-bold text-deep-green ring-1 ring-yellow-pos/60">
-          {changedCount} time changed
         </span>
       )}
     </div>
@@ -729,17 +721,10 @@ function ChangeRowPill({ pill }: { pill: ChangePill }) {
       </span>
     );
   }
-  if (pill.kind === "dropped") {
-    return (
-      <span className="inline-flex items-center gap-1 rounded-full bg-coral-soft px-2 py-0.5 text-[11px] font-medium text-coral-hover ring-1 ring-coral/40">
-        <span className="font-bold">-</span> {pill.dayOfWeek} {pill.time_short}{" "}
-        {pill.venue}
-      </span>
-    );
-  }
   return (
-    <span className="inline-flex items-center gap-1 rounded-full bg-yellow-soft px-2 py-0.5 text-[11px] font-medium text-deep-green ring-1 ring-yellow-pos/60">
-      {pill.dayOfWeek} {pill.venue}: {pill.oldTime} → {pill.newTime}
+    <span className="inline-flex items-center gap-1 rounded-full bg-coral-soft px-2 py-0.5 text-[11px] font-medium text-coral-hover ring-1 ring-coral/40">
+      <span className="font-bold">-</span> {pill.dayOfWeek} {pill.time_short}{" "}
+      {pill.venue}
     </span>
   );
 }
@@ -1151,7 +1136,6 @@ function buildDiff(
   const perCity = new Map<string, ChangePill[]>();
   let addedCount = 0;
   let droppedCount = 0;
-  let changedCount = 0;
 
   function pushPill(city: string, pill: ChangePill) {
     if (!perCity.has(city)) perCity.set(city, []);
@@ -1162,45 +1146,39 @@ function buildDiff(
     const [city, dayOfWeek, venue] = key.split("|");
     const cur = curMap.get(key) ?? [];
     const prev = prevMap.get(key) ?? [];
-    const minLen = Math.min(cur.length, prev.length);
-    for (let i = 0; i < minLen; i++) {
-      if (cur[i].time_short !== prev[i].time_short) {
-        changedCount++;
-        pushPill(city, {
-          kind: "changed",
-          dayOfWeek,
-          venue,
-          oldTime: prev[i].time_short,
-          newTime: cur[i].time_short,
-        });
-      }
-    }
-    for (let i = minLen; i < cur.length; i++) {
-      addedIds.add(cur[i].id);
+    const prevTimes = new Set(prev.map((b) => b.time_short));
+    const curTimes = new Set(cur.map((b) => b.time_short));
+    // Added = cur slots whose time isn't in prev.
+    for (const b of cur) {
+      if (prevTimes.has(b.time_short)) continue;
+      addedIds.add(b.id);
       addedCount++;
       pushPill(city, {
         kind: "added",
         dayOfWeek,
         venue,
-        time_short: cur[i].time_short,
+        time_short: b.time_short,
       });
     }
-    for (let i = minLen; i < prev.length; i++) {
+    // Dropped = prev slots whose time isn't in cur. Render a ghost in
+    // the matching day cell so the user sees what disappeared.
+    for (const b of prev) {
+      if (curTimes.has(b.time_short)) continue;
       const cellKey = `${city}|${dayOfWeek}`;
       if (!ghostsByCell.has(cellKey)) ghostsByCell.set(cellKey, []);
       ghostsByCell.get(cellKey)!.push({
-        id: prev[i].id,
-        detail: prev[i].detail,
+        id: b.id,
+        detail: b.detail,
         venue,
-        time: prev[i].time,
-        time_short: prev[i].time_short,
+        time: b.time,
+        time_short: b.time_short,
       });
       droppedCount++;
       pushPill(city, {
         kind: "dropped",
         dayOfWeek,
         venue,
-        time_short: prev[i].time_short,
+        time_short: b.time_short,
       });
     }
   }
@@ -1220,7 +1198,7 @@ function buildDiff(
     arr.sort((a, b) => startMinutes(a.time) - startMinutes(b.time));
   }
 
-  const hasAny = addedCount > 0 || droppedCount > 0 || changedCount > 0;
+  const hasAny = addedCount > 0 || droppedCount > 0;
   return {
     hasAny,
     addedIds,
@@ -1228,7 +1206,6 @@ function buildDiff(
     perCity,
     addedCount,
     droppedCount,
-    changedCount,
   };
 }
 
