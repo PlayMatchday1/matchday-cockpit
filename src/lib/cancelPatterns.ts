@@ -46,6 +46,12 @@ export type CancelSlot = {
   // order. Same value on every pill of the same slot. Used by
   // "patterns" mode where colors apply across all 4 weeks.
   cancelCount: 1 | 2 | 3 | 4;
+  // Number of bookings on the cancelled match that this pill
+  // represents — i.e. the count of MatchRows for this (slot, week)
+  // where matchCanceled is true, irrespective of playerCanceledAt.
+  // Matches the heatmap's "# booked" number for cancelled cells
+  // (cell.spots) so the two views agree slot-for-slot.
+  bookedCount: number;
 };
 
 export type CancelPatternsWeek = {
@@ -184,6 +190,10 @@ export function getCancelPatterns(
   type WeekState = "canceled" | "played";
   type SlotKey = string; // `${canonical}|${dowIdx}|${timeStr}`
   const slotWeeks = new Map<SlotKey, Map<number, WeekState>>();
+  // Per-cell count of cancelled MatchRows. Same numerator the heatmap
+  // shows in cancelled cells (wkRows.length where r.matchCanceled).
+  // Keyed (slot, weekIdx) just like slotWeeks.
+  const bookedByCell = new Map<SlotKey, Map<number, number>>();
   type SlotMeta = {
     canonical: string;
     dowIdx: number;
@@ -234,6 +244,12 @@ export function getCancelPatterns(
       // Don't overwrite a "played" mark — partial success keeps the
       // slot "played" for streak purposes.
       if (existing !== "played") weekMap.set(weekIdx, "canceled");
+      let cellMap = bookedByCell.get(key);
+      if (!cellMap) {
+        cellMap = new Map();
+        bookedByCell.set(key, cellMap);
+      }
+      cellMap.set(weekIdx, (cellMap.get(weekIdx) ?? 0) + 1);
     } else {
       weekMap.set(weekIdx, "played");
     }
@@ -282,6 +298,7 @@ export function getCancelPatterns(
         timeMinutes: meta.timeMinutes,
         streak,
         cancelCount,
+        bookedCount: bookedByCell.get(key)?.get(weekIdx) ?? 0,
       };
       weeks[weekIdx].byDay[meta.dowIdx].push(slot);
       totalSlots++;

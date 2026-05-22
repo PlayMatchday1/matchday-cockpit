@@ -530,17 +530,17 @@ function SlateReviewCityPills({
   );
 }
 
-// Wraps CancelHeatmap with a Slate-Review-only mode toggle. "All
-// matches" shows the full city slate (showAllSlots=true, default —
-// every recurring slot, cancellations rendered inline). "Cancelled
-// only" reverts to the original CancelHeatmap behavior of filtering
-// to slots that had at least one cancellation. highlightRecentCancels
+// Wraps CancelHeatmap with a Slate-Review-only mode toggle.
+// "Cancelled only" (default) is the original CancelHeatmap behavior:
+// only slots with at least one cancellation in the window. "All
+// matches" expands to every recurring slot with cancellations
+// rendered inline alongside played matches. highlightRecentCancels
 // stays on in both modes so the row marker keeps surfacing recently-
 // cancelled slots regardless of filter. The CancelHeatmap usages on
 // /cities/[city] and /cities?tab=cancellations don't get this toggle —
 // it's a Slate Review affordance only.
 function SlateReviewCancelSection({ city }: { city: City }) {
-  const [showAllSlots, setShowAllSlots] = useState(true);
+  const [showAllSlots, setShowAllSlots] = useState(false);
   return (
     <div>
       <div className="mb-3 flex justify-end">

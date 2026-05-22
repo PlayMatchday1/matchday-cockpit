@@ -153,16 +153,17 @@ export default function CancelPatterns({ city }: { city?: string } = {}) {
                           : weekIdx === 1
                             ? slot.streak
                             : 1;
+                        const bookedSuffix = ` · ${slot.bookedCount} booked`;
                         const tooltip = isPatterns
-                          ? `${slot.canonicalField} · ${slot.dow} ${slot.time} · canceled ${slot.cancelCount} of 4 weeks`
-                          : `${slot.canonicalField} · ${slot.dow} ${slot.time} · ${slot.streak === 1 ? "canceled this week" : `${slot.streak} weeks running`}`;
+                          ? `${slot.canonicalField} · ${slot.dow} ${slot.time} · canceled ${slot.cancelCount} of 4 weeks${bookedSuffix}`
+                          : `${slot.canonicalField} · ${slot.dow} ${slot.time} · ${slot.streak === 1 ? "canceled this week" : `${slot.streak} weeks running`}${bookedSuffix}`;
                         return (
                           <div
                             key={`${slot.canonicalField}|${slot.time}|${i}`}
                             className={`rounded-sm px-1.5 py-0.5 font-mono text-[11px] font-bold tabular-nums leading-tight ${PILL_COLORS[colorTier]}`}
                             title={tooltip}
                           >
-                            {slot.venueCode} {slot.time}
+                            {slot.venueCode} {slot.time} · {slot.bookedCount}
                           </div>
                         );
                       })}
