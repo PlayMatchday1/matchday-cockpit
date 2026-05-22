@@ -860,7 +860,10 @@ function Row({
   return (
     <tr className="border-t border-cream-line/60">
       <td className="px-3 py-2 align-top">
-        <div className="font-bold text-deep-green">{row.venueDisplayName}</div>
+        <div className="flex items-center gap-1.5">
+          <span className="font-bold text-deep-green">{row.venueDisplayName}</span>
+          {row.isTournament && <TournamentBadge />}
+        </div>
         <div className="text-[11px] text-deep-green/55">
           {row.dayLabel}, {fmtMonthDay(row.matchStart)} · {row.timeLabel}
         </div>
@@ -1061,8 +1064,11 @@ function MobileMatchCard({
     <div className="rounded-xl border border-cream-line bg-white p-3 shadow-sm">
       <div className="flex items-baseline justify-between gap-2">
         <div className="min-w-0 flex-1">
-          <div className="truncate font-semibold text-deep-green">
-            {row.venueDisplayName}
+          <div className="flex items-center gap-1.5">
+            <span className="truncate font-semibold text-deep-green">
+              {row.venueDisplayName}
+            </span>
+            {row.isTournament && <TournamentBadge />}
           </div>
           <div className="mt-0.5 text-[11px] text-deep-green/55">
             {row.dayLabel}, {fmtMonthDay(row.matchStart)} · {row.timeLabel}
@@ -1171,5 +1177,20 @@ function InlineMetric({ label, value }: { label: string; value: string }) {
       <span className="text-deep-green/55">{label}</span>
       <span className="font-mono tabular-nums text-deep-green/85">{value}</span>
     </div>
+  );
+}
+
+// Small chip next to a Soccer Central match's venue name when the
+// row is on the Tournament leg ($120, two side-by-side 9v9 fields).
+// Same pattern as the existing status pills — mint pill so it reads
+// as informational rather than alarming.
+function TournamentBadge() {
+  return (
+    <span
+      title="Soccer Central tournament — two fields, $120"
+      className="shrink-0 rounded-full bg-mint-soft px-2 py-0.5 text-[9px] font-bold uppercase tracking-wider text-deep-green ring-1 ring-mint/40"
+    >
+      Tournament
+    </span>
   );
 }

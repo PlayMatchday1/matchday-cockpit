@@ -17,13 +17,28 @@ import type { FinVenue } from "./useFinanceData";
 
 const COMBINE_BY_NAME: Array<{ primary: string; secondary: string }> = [
   { primary: "ATH Katy", secondary: "ATH Katy Sunday" },
+  { primary: "Soccer Central", secondary: "Soccer Central Tournament" },
 ];
 
 const COMBINED_LEG_LABELS: Record<string, string[]> = {
   // Display name → leg labels in per_match_rate ASC order. legs[0] = lowest
   // rate (e.g. weekday $140), legs[1] = next (e.g. Sunday $160).
   "ATH Katy": ["weekday", "Sunday"],
+  "Soccer Central": ["normal", "tournament"],
 };
+
+// Soccer Central charges by field count: >22-player matches use two
+// side-by-side 9v9 fields ($120); ≤22 use one ($60). The threshold
+// is at the slot's configured capacity (max_player_count), not the
+// realized headcount — a half-filled tournament still bills $120.
+//
+// max_player_count null or 0 = special event (World Cup bracket
+// matches like Final, Semis, M1..M9). They have no fixed capacity
+// upstream and are excluded from cost on both legs — the resolver
+// returns null for these to signal "drop this row from the cost
+// rollup entirely" (existing null-venue-id path in
+// venueChargedMatchCountFor and friends already filters them out).
+const SC_TOURNAMENT_THRESHOLD = 22;
 
 export type VenueGroup = {
   key: string; // unique
@@ -110,7 +125,8 @@ export function resolveSplitRateVenueId(
   initialVenueId: number,
   matchDate: string,
   venues: FinVenue[],
-): number {
+  maxPlayerCount: number | null | undefined = null,
+): number | null {
   const v = venues.find((x) => x.id === initialVenueId);
   if (!v) return initialVenueId;
   const cfg = COMBINE_BY_NAME.find(
@@ -118,6 +134,24 @@ export function resolveSplitRateVenueId(
       c.primary === v.raw_venue_name || c.secondary === v.raw_venue_name,
   );
   if (!cfg) return initialVenueId;
+
+  // Soccer Central — route by configured capacity, not date.
+  if (cfg.primary === "Soccer Central") {
+    // Null/0 capacity = World Cup bracket "special event". Exclude
+    // from cost on both legs. Signaled to callers by returning null.
+    if (maxPlayerCount == null || maxPlayerCount <= 0) return null;
+    const targetName =
+      maxPlayerCount > SC_TOURNAMENT_THRESHOLD ? cfg.secondary : cfg.primary;
+    if (targetName === v.raw_venue_name) return initialVenueId;
+    const target = venues.find(
+      (x) => x.city === v.city && x.raw_venue_name === targetName,
+    );
+    return target?.id ?? initialVenueId;
+  }
+
+  // Default split rule (ATH Katy and any future name-based config) —
+  // Sunday matches go to the secondary leg; every other day stays
+  // on the primary.
   const d = new Date(`${matchDate}T00:00:00Z`);
   if (Number.isNaN(d.getTime())) return initialVenueId;
   const targetName = d.getUTCDay() === 0 ? cfg.secondary : cfg.primary;
@@ -126,6 +160,33 @@ export function resolveSplitRateVenueId(
     (x) => x.city === v.city && x.raw_venue_name === targetName,
   );
   return target?.id ?? initialVenueId;
+}
+
+// True iff this venue would route through the Soccer Central split.
+// Cheaper exported helper for callers that need to gate behavior on
+// "is this a Soccer Central row" without re-doing the COMBINE_BY_NAME
+// lookup.
+export function isSoccerCentralVenue(
+  venueId: number,
+  venues: FinVenue[],
+): boolean {
+  const v = venues.find((x) => x.id === venueId);
+  if (!v) return false;
+  return (
+    v.raw_venue_name === "Soccer Central" ||
+    v.raw_venue_name === "Soccer Central Tournament"
+  );
+}
+
+// Decide if a Soccer Central match counts as the tournament leg. The
+// caller has already established the venue belongs to the Soccer
+// Central group; this function only answers the >22 question. Returns
+// false for ≤22; throws conceptually for null/0 (use the resolver's
+// null return for those — this helper assumes a real capacity).
+export function isSoccerCentralTournament(
+  maxPlayerCount: number | null | undefined,
+): boolean {
+  return (maxPlayerCount ?? 0) > SC_TOURNAMENT_THRESHOLD;
 }
 
 // Find the group that owns a venue, by either canonical display name or any

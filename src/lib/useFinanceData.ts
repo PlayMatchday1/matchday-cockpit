@@ -658,6 +658,7 @@ async function load(quarter: QuarterInfo): Promise<void> {
     );
   }
   let smUnresolved = 0;
+  let smSpecialEventExcluded = 0;
   const masterSchedule: FinMasterSchedule[] = smsRows.map((r) => {
     const matchDate = cleanText(r.match_date);
     const rawFieldId = r.mdapi_field_id;
@@ -665,6 +666,12 @@ async function load(quarter: QuarterInfo): Promise<void> {
       rawFieldId === null || rawFieldId === undefined
         ? null
         : Number(rawFieldId);
+    // schedule_master.max_spots is the cached mdapi max_player_count
+    // (backfill maps m.max_player_count → max_spots). Feed it into
+    // the split-rate resolver for venues whose split is capacity-
+    // driven (Soccer Central). 0 = special event ("World Cup" bracket
+    // match) → resolver returns null and the row drops out of cost.
+    const maxPlayerCount = Math.round(asNumber(r.max_spots) || 0);
     let initialVenueId: number | null =
       mdapiFieldId != null ? (venueFields.get(mdapiFieldId) ?? null) : null;
     if (initialVenueId == null) {
@@ -675,13 +682,21 @@ async function load(quarter: QuarterInfo): Promise<void> {
     }
     let resolvedVenueId: number | null = initialVenueId;
     if (resolvedVenueId != null && matchDate) {
+      const beforeSplit = resolvedVenueId;
       resolvedVenueId = resolveSplitRateVenueId(
         resolvedVenueId,
         matchDate,
         venues,
+        maxPlayerCount,
       );
+      if (resolvedVenueId == null && beforeSplit != null) {
+        // Resolver dropped this row (Soccer Central special event).
+        // Not an "unresolved" row in the venue-mapping sense — count
+        // separately so the warn message stays honest.
+        smSpecialEventExcluded += 1;
+      }
     }
-    if (resolvedVenueId == null) smUnresolved += 1;
+    if (resolvedVenueId == null && initialVenueId == null) smUnresolved += 1;
     const matchTime = cleanText(r.match_time);
     return {
       id: String(r.id ?? ""),
@@ -701,6 +716,11 @@ async function load(quarter: QuarterInfo): Promise<void> {
       `[useFinanceData] ${smUnresolved} schedule_master row(s) in the quarter window have no resolvable venue_id — they'll be excluded from cost calc. Check fin_venue_fields links and (city, venue_name) string match against fin_venues.`,
     );
   }
+  if (smSpecialEventExcluded > 0 && typeof console !== "undefined") {
+    console.info(
+      `[useFinanceData] ${smSpecialEventExcluded} schedule_master row(s) excluded from cost as Soccer Central special events (max_player_count null/0).`,
+    );
+  }
 
   // Cancelled mdapi_matches → FinMasterSchedule shape. Same venue_id
   // resolution as masterSchedule (mdapi_field_id → venueFields →
@@ -713,6 +733,7 @@ async function load(quarter: QuarterInfo): Promise<void> {
   // debugging — but they're filtered out of cost via the venue_id null
   // check in venueChargedMatchCountFor.
   let cmsUnresolved = 0;
+  let cmsSpecialEventExcluded = 0;
   const cancelledSchedule: FinMasterSchedule[] = cmsRows.map((r) => {
     const startDate = cleanText(r.start_date);
     const matchDate = startDate
@@ -723,17 +744,30 @@ async function load(quarter: QuarterInfo): Promise<void> {
       rawFieldId === null || rawFieldId === undefined
         ? null
         : Number(rawFieldId);
+    // mdapi_matches.max_player_count drives the Soccer Central split
+    // (same predicate as masterSchedule above). Null/0 → special
+    // event → resolver returns null → row drops from cancelled-cost.
+    const rawMaxPlayerCount = r.max_player_count;
+    const maxPlayerCount =
+      rawMaxPlayerCount == null
+        ? null
+        : Math.round(Number(rawMaxPlayerCount) || 0);
     const initialVenueId =
       mdapiFieldId != null ? (venueFields.get(mdapiFieldId) ?? null) : null;
     let resolvedVenueId: number | null = initialVenueId;
     if (resolvedVenueId != null && matchDate) {
+      const beforeSplit = resolvedVenueId;
       resolvedVenueId = resolveSplitRateVenueId(
         resolvedVenueId,
         matchDate,
         venues,
+        maxPlayerCount,
       );
+      if (resolvedVenueId == null && beforeSplit != null) {
+        cmsSpecialEventExcluded += 1;
+      }
     }
-    if (resolvedVenueId == null) cmsUnresolved += 1;
+    if (resolvedVenueId == null && initialVenueId == null) cmsUnresolved += 1;
     const v =
       resolvedVenueId != null
         ? venues.find((x) => x.id === resolvedVenueId)
@@ -768,6 +802,11 @@ async function load(quarter: QuarterInfo): Promise<void> {
   if (cmsUnresolved > 0 && typeof console !== "undefined") {
     console.warn(
       `[useFinanceData] ${cmsUnresolved} cancelled mdapi_matches row(s) in the quarter window have no resolvable venue_id — they'll be excluded from charge-on-cancel cost. Check fin_venue_fields links.`,
+    );
+  }
+  if (cmsSpecialEventExcluded > 0 && typeof console !== "undefined") {
+    console.info(
+      `[useFinanceData] ${cmsSpecialEventExcluded} cancelled mdapi_matches row(s) excluded as Soccer Central special events (max_player_count null/0).`,
     );
   }
 
