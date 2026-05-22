@@ -33,6 +33,7 @@ import {
   type LucideIcon,
 } from "lucide-react";
 import { canAccess, useAuth, type PageName } from "@/lib/useAuth";
+import { useCrmUnreadCount } from "@/lib/useCrmUnreadCount";
 
 type TabKey = "chats" | "cities" | "finance" | "more";
 
@@ -89,6 +90,7 @@ export default function MobileBottomNav({
   const pathname = usePathname() ?? "";
   const { appUser, signOut } = useAuth();
   const [sheetOpen, setSheetOpen] = useState(false);
+  const crmUnread = useCrmUnreadCount();
 
   // Close the sheet on route change. Tapping a sheet row navigates
   // via <Link>, so we want the sheet gone by the time the next page
@@ -176,6 +178,7 @@ export default function MobileBottomNav({
               label={t.label}
               Icon={t.icon}
               active={active}
+              badgeCount={t.key === "chats" ? crmUnread : 0}
             />
           );
         })}
@@ -222,16 +225,24 @@ function NavTab({
   label,
   Icon,
   active,
+  badgeCount = 0,
 }: {
   href: string;
   label: string;
   Icon: LucideIcon;
   active: boolean;
+  badgeCount?: number;
 }) {
+  const badgeLabel =
+    badgeCount > 0 ? (badgeCount > 99 ? "99+" : String(badgeCount)) : null;
   return (
     <Link
       href={href}
-      aria-label={label}
+      aria-label={
+        badgeCount > 0
+          ? `${label}, ${badgeCount} unread customer ${badgeCount === 1 ? "chat" : "chats"}`
+          : label
+      }
       aria-current={active ? "page" : undefined}
       style={{ touchAction: "manipulation" }}
       className={`flex h-14 flex-col items-center justify-center gap-1 text-[10px] transition ${
@@ -245,7 +256,17 @@ function NavTab({
       >
         <Icon aria-hidden size={22} strokeWidth={active ? 2 : 1.75} />
       </span>
-      <span>{label}</span>
+      <span className="inline-flex items-center gap-1">
+        <span>{label}</span>
+        {badgeLabel && (
+          <span
+            aria-hidden
+            className="inline-flex h-[14px] min-w-[14px] items-center justify-center rounded-full bg-coral px-1 text-[9px] font-bold leading-none text-white tabular-nums"
+          >
+            {badgeLabel}
+          </span>
+        )}
+      </span>
     </Link>
   );
 }

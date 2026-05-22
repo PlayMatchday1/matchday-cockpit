@@ -182,7 +182,7 @@ async function doNotify({
 //
 // Per-recipient counts are derived from a single set of shared
 // queries so this is O(threads) regardless of recipient count.
-async function computeUnreadCountsForUsers(
+export async function computeUnreadCountsForUsers(
   supabase: SupabaseClient,
   userIds: string[],
 ): Promise<Map<string, number>> {

@@ -10,6 +10,7 @@ import {
   useAuth,
   type PageName,
 } from "@/lib/useAuth";
+import { useCrmUnreadCount } from "@/lib/useCrmUnreadCount";
 
 type Tab = {
   href: string;
@@ -90,6 +91,10 @@ export default function TopNav() {
   const isAdmin = !!appUser?.is_admin;
   const financeActive = pathname?.startsWith("/admin/finance") ?? false;
   const adminActive = pathname === "/admin";
+  // Customer-chat unread count for the "Chats" tab badge. Admin-only;
+  // the hook returns 0 for non-admins so non-admin renders never show
+  // a circle even if the prop is threaded in.
+  const crmUnread = useCrmUnreadCount();
 
   return (
     <header
@@ -144,6 +149,7 @@ export default function TopNav() {
                     href={tab.href}
                     active={active}
                     label={tab.label}
+                    badgeCount={tab.href === "/chats" ? crmUnread : 0}
                   />
                 );
               })}
@@ -156,6 +162,7 @@ export default function TopNav() {
               pathname={pathname}
               canAccessSecondary={(page: PageName) => canAccess(appUser, page)}
               onSignOut={signOut}
+              crmUnread={crmUnread}
               // On mobile (md:hidden zone) the dropdown also holds
               // the primary tabs so we don't lose access to them.
               mobilePrimaryTabs={[
@@ -185,22 +192,43 @@ function PrimaryLink({
   href,
   active,
   label,
+  badgeCount = 0,
 }: {
   href: string;
   active: boolean;
   label: string;
+  badgeCount?: number;
 }) {
   return (
     <Link
       href={href}
-      className={`rounded-full px-2.5 py-1.5 text-sm font-medium tracking-tight transition lg:px-4 ${
+      className={`inline-flex items-center gap-1.5 rounded-full px-2.5 py-1.5 text-sm font-medium tracking-tight transition lg:px-4 ${
         active
           ? "bg-mint text-deep-green"
           : "text-cream/80 hover:bg-deep-green-soft hover:text-cream"
       }`}
     >
-      {label}
+      <span>{label}</span>
+      {badgeCount > 0 && <UnreadCountCircle count={badgeCount} />}
     </Link>
+  );
+}
+
+// Small count pill used by the Chats nav badge. Hidden when count = 0
+// so consumers can render it unconditionally. Coral on white text for
+// contrast against both the dark TopNav (cream-on-deep-green) and the
+// light dropdown / bottom nav (white background). Caps display at
+// "99+" so a runaway inbox can't blow out the nav layout.
+function UnreadCountCircle({ count }: { count: number }) {
+  if (count <= 0) return null;
+  const label = count > 99 ? "99+" : String(count);
+  return (
+    <span
+      aria-label={`${count} unread customer ${count === 1 ? "chat" : "chats"}`}
+      className="inline-flex h-[18px] min-w-[18px] items-center justify-center rounded-full bg-coral px-1.5 text-[10px] font-bold leading-none text-white tabular-nums"
+    >
+      {label}
+    </span>
   );
 }
 
@@ -215,6 +243,7 @@ function UserMenu({
   canAccessSecondary,
   onSignOut,
   mobilePrimaryTabs,
+  crmUnread,
 }: {
   name: string;
   isAdmin: boolean;
@@ -223,6 +252,7 @@ function UserMenu({
   canAccessSecondary: (page: PageName) => boolean;
   onSignOut: () => void;
   mobilePrimaryTabs: Tab[];
+  crmUnread: number;
 }) {
   const [open, setOpen] = useState(false);
   const ref = useRef<HTMLDivElement>(null);
@@ -277,17 +307,19 @@ function UserMenu({
           <div className="md:hidden">
             {mobilePrimaryTabs.map((t) => {
               const active = pathname ? t.match(pathname) : false;
+              const showBadge = t.href === "/chats" && crmUnread > 0;
               return (
                 <Link
                   key={t.href}
                   href={t.href}
                   role="menuitem"
                   onClick={() => setOpen(false)}
-                  className={`block px-3 py-1.5 text-sm transition hover:bg-cream-soft ${
+                  className={`flex items-center gap-2 px-3 py-1.5 text-sm transition hover:bg-cream-soft ${
                     active ? "bg-mint-soft font-bold" : ""
                   }`}
                 >
-                  {t.label}
+                  <span>{t.label}</span>
+                  {showBadge && <UnreadCountCircle count={crmUnread} />}
                 </Link>
               );
             })}
