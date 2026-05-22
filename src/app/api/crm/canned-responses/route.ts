@@ -76,6 +76,17 @@ export async function POST(req: Request) {
   if (!auth.ok) {
     return Response.json({ error: auth.error }, { status: auth.status });
   }
+  // Template library is admin-only — a chats-only user can read +
+  // use templates but not create them. RLS also enforces this via
+  // the crm_canned_responses_admin_insert policy; this check is the
+  // application-layer mirror so the API returns a clean 403 instead
+  // of an opaque DB-permission error.
+  if (!auth.isAdmin) {
+    return Response.json(
+      { error: "Admin access required to manage canned responses" },
+      { status: 403 },
+    );
+  }
   const { supabase, appUserId } = auth;
 
   const id = randomUUID();

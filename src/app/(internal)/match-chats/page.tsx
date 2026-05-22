@@ -1,6 +1,6 @@
 import { Suspense } from "react";
 import type { Metadata } from "next";
-import AdminGuard from "@/components/AdminGuard";
+import PagePermissionGuard from "@/components/PagePermissionGuard";
 import MobileBottomNav from "@/components/MobileBottomNav";
 import MatchChatsClient from "./MatchChatsClient";
 
@@ -21,7 +21,7 @@ export const metadata: Metadata = {
 
 export default function MatchChatsPage() {
   return (
-    <AdminGuard>
+    <PagePermissionGuard page="chats">
       <div
         className="-mx-6 flex h-[100dvh] flex-col md:h-[calc(100dvh-4rem)]"
         style={{
@@ -43,6 +43,6 @@ export default function MatchChatsPage() {
             page for the full rationale. */}
         <MobileBottomNav inline />
       </div>
-    </AdminGuard>
+    </PagePermissionGuard>
   );
 }

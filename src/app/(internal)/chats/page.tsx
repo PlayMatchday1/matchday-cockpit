@@ -1,11 +1,15 @@
 import { Suspense } from "react";
 import type { Metadata } from "next";
-import AdminGuard from "@/components/AdminGuard";
+import PagePermissionGuard from "@/components/PagePermissionGuard";
 import MobileBottomNav from "@/components/MobileBottomNav";
 import CrmClient from "./CrmClient";
 
-// Player Chat. AdminGuard is the page-level gate; the API routes
-// also enforce the same check.
+// Player Chat. PagePermissionGuard checks canAccess(appUser,
+// "chats"); the API routes enforce the same check via authenticateCrm
+// and RLS policies on crm_* tables enforce it at the DB layer.
+// Admins pass via canAccess's is_admin shortcut; chats-only users
+// (can_access_chats = true without is_admin) pass via the explicit
+// permission check.
 //
 // The outer div escapes the AuthGate <main> wrapper's
 // `mx-auto max-w-6xl px-6 py-8` padding so CrmClient occupies a
@@ -24,7 +28,7 @@ export const metadata: Metadata = {
 
 export default function PlayerChatPage() {
   return (
-    <AdminGuard>
+    <PagePermissionGuard page="chats">
       <div
         className="-mx-6 flex h-[100dvh] flex-col md:h-[calc(100dvh-4rem)]"
         style={{
@@ -53,6 +57,6 @@ export default function PlayerChatPage() {
             for the nav on this route — that's the whole point. */}
         <MobileBottomNav inline />
       </div>
-    </AdminGuard>
+    </PagePermissionGuard>
   );
 }

@@ -5,6 +5,7 @@ import { supabase } from "@/lib/supabase";
 
 type PermissionFlags = {
   is_admin: boolean;
+  can_access_chats: boolean;
   can_access_clubhouse: boolean;
   can_access_cities: boolean;
   can_access_org: boolean;
@@ -15,6 +16,7 @@ type PermissionFlags = {
 
 const INITIAL_PERMISSIONS: PermissionFlags = {
   is_admin: false,
+  can_access_chats: false,
   can_access_clubhouse: true,
   can_access_cities: false,
   can_access_org: false,
@@ -25,6 +27,7 @@ const INITIAL_PERMISSIONS: PermissionFlags = {
 
 const PERMISSION_LABELS: { key: keyof PermissionFlags; label: string }[] = [
   { key: "is_admin", label: "Admin (full access + manage users)" },
+  { key: "can_access_chats", label: "Chats" },
   { key: "can_access_clubhouse", label: "Clubhouse" },
   { key: "can_access_cities", label: "Cities" },
   { key: "can_access_org", label: "Org" },

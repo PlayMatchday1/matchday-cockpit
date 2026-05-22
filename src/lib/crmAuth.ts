@@ -19,6 +19,13 @@ export type CrmAuthOk = {
   ok: true;
   appUserId: string | null;
   email: string | null;
+  // True iff the authenticated app_user has is_admin = true. False
+  // for chats-only users (can_access_chats = true but is_admin =
+  // false). Cron path (CRON_SECRET) sets this true since cron runs
+  // with full server authority. Routes that need to gate admin-only
+  // sub-features inside the chats domain (e.g. canned-response
+  // mutations) check this flag explicitly.
+  isAdmin: boolean;
   supabase: SupabaseClient;
 };
 
@@ -53,7 +60,13 @@ export async function authenticateCrm(req: Request): Promise<CrmAuthResult> {
     const sb = createClient(supabaseUrl, serviceKey, {
       auth: { persistSession: false, autoRefreshToken: false },
     });
-    return { ok: true, appUserId: null, email: null, supabase: sb };
+    return {
+      ok: true,
+      appUserId: null,
+      email: null,
+      isAdmin: true,
+      supabase: sb,
+    };
   }
 
   const sessionClient = createClient(supabaseUrl, supabaseKey, {
@@ -72,19 +85,27 @@ export async function authenticateCrm(req: Request): Promise<CrmAuthResult> {
   });
   const appUser = await sb
     .from("app_users")
-    .select("id, is_admin")
+    .select("id, is_admin, can_access_chats")
     .ilike("email", email)
     .maybeSingle();
   if (appUser.error || !appUser.data) {
     return { ok: false, status: 403, error: "Not a cockpit user" };
   }
-  if (appUser.data.is_admin !== true) {
-    return { ok: false, status: 403, error: "Corp access required" };
+  const isAdmin = appUser.data.is_admin === true;
+  const canAccessChats = appUser.data.can_access_chats === true;
+  // Chats access gates the CRM API at the application layer. RLS on
+  // crm_* tables enforces the same OR-clause underneath so this can't
+  // be bypassed even if a route forgets to call authenticateCrm.
+  // Admin-only sub-features (e.g. canned-response mutations) check
+  // the returned isAdmin flag explicitly.
+  if (!isAdmin && !canAccessChats) {
+    return { ok: false, status: 403, error: "Chats access required" };
   }
   return {
     ok: true,
     appUserId: appUser.data.id as string,
     email,
+    isAdmin,
     supabase: sb,
   };
 }

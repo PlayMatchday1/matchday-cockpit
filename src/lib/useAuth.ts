@@ -9,6 +9,7 @@ export type AppUser = {
   email: string;
   full_name: string | null;
   is_admin: boolean;
+  can_access_chats: boolean;
   can_access_clubhouse: boolean;
   can_access_cities: boolean;
   can_access_org: boolean;
@@ -20,6 +21,7 @@ export type AppUser = {
 };
 
 export type PageName =
+  | "chats"
   | "clubhouse"
   | "cities"
   | "org"
@@ -101,6 +103,8 @@ export function canAccess(
   if (!appUser) return false;
   if (appUser.is_admin) return true;
   switch (page) {
+    case "chats":
+      return appUser.can_access_chats;
     case "clubhouse":
       return appUser.can_access_clubhouse;
     case "cities":
@@ -120,6 +124,7 @@ export function hasAnyAccess(appUser: AppUser | null): boolean {
   if (!appUser) return false;
   return (
     appUser.is_admin ||
+    appUser.can_access_chats ||
     appUser.can_access_clubhouse ||
     appUser.can_access_cities ||
     appUser.can_access_org ||
@@ -137,6 +142,7 @@ export function firstAllowedPath(appUser: AppUser | null): string {
   if (appUser.can_access_data) return "/data";
   if (appUser.can_access_docs) return "/docs";
   if (appUser.can_access_finance) return "/admin/finance";
+  if (appUser.can_access_chats) return "/chats";
   return "/no-access";
 }
 

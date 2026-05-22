@@ -56,6 +56,12 @@ export async function PATCH(req: Request, ctx: RouteCtx) {
   if (!auth.ok) {
     return Response.json({ error: auth.error }, { status: auth.status });
   }
+  if (!auth.isAdmin) {
+    return Response.json(
+      { error: "Admin access required to manage canned responses" },
+      { status: 403 },
+    );
+  }
   const { supabase } = auth;
 
   const { id } = await ctx.params;
@@ -223,6 +229,12 @@ export async function DELETE(req: Request, ctx: RouteCtx) {
   const auth = await authenticateCrm(req);
   if (!auth.ok) {
     return Response.json({ error: auth.error }, { status: auth.status });
+  }
+  if (!auth.isAdmin) {
+    return Response.json(
+      { error: "Admin access required to manage canned responses" },
+      { status: 403 },
+    );
   }
   const { supabase } = auth;
 

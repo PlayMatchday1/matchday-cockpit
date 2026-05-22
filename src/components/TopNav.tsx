@@ -43,14 +43,14 @@ const PERMISSION_TABS: GatedTab[] = [
   },
 ];
 
-// Admin-only primary tabs. Single "Chats" entry covers both
-// /crm (Player Chat) and /match-chats (Match Chats). The active-
-// state predicate matches BOTH routes — clicking Chats lands on
-// /crm by default; the sub-tab strip inside the page handles the
-// final hop to Match Chats. This was previously two separate
-// entries; consolidated to declutter the top nav and to make the
-// strip the canonical switch between the two surfaces.
-const ADMIN_PRIMARY_TABS: Tab[] = [
+// Chats primary tab. Single entry covers both /chats (customer
+// inbox) and /match-chats (per-match chat rooms). The active-state
+// predicate matches BOTH routes — clicking Chats lands on /chats
+// by default; the sub-tab strip inside the page handles the final
+// hop to Match Chats. Gated on canAccess(appUser, "chats") so a
+// customer-service person with only can_access_chats = true sees
+// the tab without needing is_admin.
+const CHATS_PRIMARY_TABS: Tab[] = [
   {
     href: "/chats",
     label: "Chats",
@@ -135,8 +135,8 @@ export default function TopNav() {
                 label="Finance"
               />
             )}
-            {isAdmin &&
-              ADMIN_PRIMARY_TABS.map((tab) => {
+            {canAccess(appUser, "chats") &&
+              CHATS_PRIMARY_TABS.map((tab) => {
                 const active = pathname ? tab.match(pathname) : false;
                 return (
                   <PrimaryLink
@@ -169,7 +169,7 @@ export default function TopNav() {
                       },
                     ]
                   : []),
-                ...(isAdmin ? ADMIN_PRIMARY_TABS : []),
+                ...(canAccess(appUser, "chats") ? CHATS_PRIMARY_TABS : []),
               ]}
             />
           ) : (

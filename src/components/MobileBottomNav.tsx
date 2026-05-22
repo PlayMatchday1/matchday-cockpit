@@ -112,7 +112,7 @@ export default function MobileBottomNav({
 
   const isAdmin = !!appUser.is_admin;
   const visibleTabs = ROUTE_TABS.filter((t) => {
-    if (t.key === "chats") return isAdmin;
+    if (t.key === "chats") return canAccess(appUser, "chats");
     if (t.key === "cities") return canAccess(appUser, "cities");
     if (t.key === "finance") return canAccess(appUser, "finance");
     return true;

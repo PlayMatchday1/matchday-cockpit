@@ -9,6 +9,7 @@ import InlineEdit from "./InlineEdit";
 
 type PermissionKey =
   | "is_admin"
+  | "can_access_chats"
   | "can_access_clubhouse"
   | "can_access_cities"
   | "can_access_org"
@@ -18,6 +19,7 @@ type PermissionKey =
 
 const PERMISSION_COLUMNS: { key: PermissionKey; label: string }[] = [
   { key: "is_admin", label: "Admin" },
+  { key: "can_access_chats", label: "Chats" },
   { key: "can_access_clubhouse", label: "Clubhouse" },
   { key: "can_access_cities", label: "Cities" },
   { key: "can_access_org", label: "Org" },
