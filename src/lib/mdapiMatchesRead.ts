@@ -30,6 +30,7 @@ import type { SupabaseClient } from "@supabase/supabase-js";
 import { selectAll } from "./supabasePagination";
 import { cityFromAbbr } from "./cityMap";
 import { normField } from "./normField";
+import { isFakePlayerRow } from "./mdapiFakePlayer";
 
 const MATCHES_COLS =
   "api_id, city_identifier, field_id, field_title, start_date, is_cancelled";
@@ -349,13 +350,18 @@ function mapJoinedRow(
   subscriptionsByEmail?: ActiveSubscriptionsByEmail,
 ): JoinedMatchPlayerRow | null {
   if (player.paid_status === "WAITING") return null;
-  // user_is_fake_player: synthetic fill placeholder (dummy roster slot
+  // Fake player: synthetic fill placeholder (dummy roster slot
   // used when a host needs a body for headcount but no real person
   // showed up). is_absent: registered + paid but didn't physically
   // show up. Both inflate spot-count metrics; drop at the mapper so
   // every downstream consumer (Match P&L, partner stats, projections,
   // partner detail) gets honest counts.
-  if (player.user_is_fake_player === true) return null;
+  //
+  // Detection via isFakePlayerRow combines the platform's boolean
+  // flag with an anchored @matchday.com email check — defense-in-
+  // depth against the API's sparse use of the boolean. Safe against
+  // @playmatchday.com staff emails (which are real, not fakes).
+  if (isFakePlayerRow(player)) return null;
   if (player.is_absent === true) return null;
   const city = cityFromAbbr(match.city_identifier);
   if (!city) return null;

@@ -10,7 +10,7 @@ import {
   type QuarterMonth,
 } from "./quarters";
 
-const STAFF_EMAIL_DOMAIN = "matchday.com";
+import { isFakePlayerEmail } from "./mdapiFakePlayer";
 import {
   canonicalVenueCost,
   fieldCostsFor,
@@ -1716,7 +1716,11 @@ export function venuePartnerRevenueFor(
   let dpRev = 0;
   for (const r of matchRegistrations) {
     if (r.matchCanceled) continue;
-    if (r.email && r.email.toLowerCase().includes(STAFF_EMAIL_DOMAIN)) continue;
+    // Exclude synthetic @matchday.com fake players. Anchored
+    // pattern leaves @playmatchday.com staff IN as real revenue
+    // (prior code used .includes("matchday.com") which over-
+    // matched and silently dropped staff plays).
+    if (isFakePlayerEmail(r.email)) continue;
     if (r.paymentType !== "DAILY PAID") continue;
     if (r.fieldId == null) continue;
     const venueId = data.venueFields.get(r.fieldId);

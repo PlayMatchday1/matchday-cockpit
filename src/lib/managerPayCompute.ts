@@ -229,18 +229,26 @@ type AdjustmentRow = {
   notes: string | null;
 };
 
-// Orphan: a match the manager created then deleted from the app.
-// mdapi keeps the row with is_cancelled=false, so the pay calc would
-// otherwise pay for it. Identified by: past its venue-local start
-// time (compared in true UTC via start_date_utc), not cancelled, and
-// zero attendance signal — neither real registrations nor fake
-// players bookkept against it. Future matches with 0/0 are kept
-// because they may still be filled before kickoff; cancelled matches
-// fall through a separate branch with payPerManager=0.
+// Orphan: a past-start match with zero REAL attendance. mdapi
+// keeps these rows with is_cancelled=false (host created the slot,
+// no one showed up, host either deleted the player list or it
+// auto-filled with synthetic placeholders), so the pay calc would
+// otherwise credit the manager for a match that didn't really run.
+//
+// Real-player gate: a match counts as "ran" iff
+//   real_player_count = player_count − fake_player_count > 0
+// Mixed (some real + some fake) still pays — real players showed
+// up, the manager ran a real match, the fake fills don't dock it.
+// Only zero-real (whether 0/0 or 0/N) triggers the orphan skip.
+//
+// Future matches with 0 real are kept (the past-start check below
+// short-circuits) — they may still fill before kickoff. Cancelled
+// matches fall through a separate branch with payPerManager=0.
 function isOrphanedMatch(m: MatchRow, now: Date): boolean {
   if (m.is_cancelled) return false;
-  if ((m.player_count ?? 0) > 0) return false;
-  if ((m.fake_player_count ?? 0) > 0) return false;
+  const realPlayerCount =
+    (m.player_count ?? 0) - (m.fake_player_count ?? 0);
+  if (realPlayerCount > 0) return false;
   if (!m.start_date_utc) return false;
   const startMs = Date.parse(m.start_date_utc);
   if (Number.isNaN(startMs)) return false;

@@ -8,8 +8,7 @@ import {
   fetchLegacyMatchRegistrations,
   loadActiveSubscriptionsByEmail,
 } from "./mdapiMatchesRead";
-
-const STAFF_EMAIL_DOMAIN = "matchday.com";
+import { isFakePlayerEmail } from "./mdapiFakePlayer";
 
 export type PartnerRegRow = {
   user_id: string;
@@ -358,8 +357,12 @@ export async function fetchPartnerRows(
 
 // ----- pure compute (mirrors pac_global_dashboard.html buildDashboard) -----
 
-function isStaff(r: PartnerRegRow): boolean {
-  return !!r.email && r.email.toLowerCase().includes(STAFF_EMAIL_DOMAIN);
+// Renamed from isStaff: prior code used .includes("matchday.com")
+// which over-matched and treated real @playmatchday.com staff as
+// fakes/staff. Now narrowly excludes only synthetic @matchday.com
+// fills (anchored regex via isFakePlayerEmail).
+function isFake(r: PartnerRegRow): boolean {
+  return isFakePlayerEmail(r.email);
 }
 function isCanceled(r: PartnerRegRow): boolean {
   return !!r.player_canceled_at && r.player_canceled_at.trim() !== "";
@@ -442,7 +445,7 @@ export function computePartnerStats(
   rows: PartnerRegRow[],
   extra: PartnerExtraRevRow[] = [],
 ): PartnerStats {
-  const pacAll = rows.filter((r) => !isStaff(r));
+  const pacAll = rows.filter((r) => !isFake(r));
   const pac = pacAll.filter((r) => !r.match_canceled);
 
   const { byWeek: extraByWeek, byMonth: extraByMonth } = bucketExtraRevenue(extra);
@@ -880,9 +883,7 @@ export function computeWeeklyPayments(
 
   const today = todayUtcYmd(now);
   const matchActive = matchRows.filter(
-    (r) =>
-      !(r.email && r.email.toLowerCase().includes(STAFF_EMAIL_DOMAIN)) &&
-      !r.match_canceled,
+    (r) => !isFakePlayerEmail(r.email) && !r.match_canceled,
   );
   const generatedRecords = records.filter((r) => !r.is_pre_system_settlement);
   const recordByPeriod = new Map<string, PartnerWeeklyPaymentRecord>();
