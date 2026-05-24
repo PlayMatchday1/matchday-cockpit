@@ -12,7 +12,7 @@
 // Users get the new assets on their NEXT page load after the SW
 // activates (we skipWaiting so activation is immediate).
 
-const CACHE_VERSION = "v41";
+const CACHE_VERSION = "v42";
 const CACHE_NAME = `matchday-static-${CACHE_VERSION}`;
 
 // Static assets to precache on install. Same-origin, GET-safe,

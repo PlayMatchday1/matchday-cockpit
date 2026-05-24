@@ -10,6 +10,7 @@ import type {
 } from "./useFinanceData";
 import type { Q2Month } from "./financeStats";
 import { getLegLabel, groupVenues, type VenueGroup } from "./venueGroups";
+import { partnerPaymentOwedForMonth } from "./partnerStats";
 
 export type VenueCostKind =
   | "override"
@@ -83,23 +84,61 @@ function autoCost(
       override: null,
     };
   }
-  // monthly_flat / profit_share — cost lives entirely in
-  // fin_venue_cost_overrides per (venue, month). canonicalVenueCost reads
-  // the override before falling back to autoCost, so this branch only
-  // fires when an override is missing for the month — surface that as a
-  // visible "needs override" hint rather than silently returning $0.
-  // Profit_share temporarily mirrors monthly_flat semantics; real
-  // profit-share logic is TBD.
-  if (
-    venue.billing_type === "monthly_flat" ||
-    venue.billing_type === "profit_share"
-  ) {
+  // profit_share — cost is the partner-dashboard "Payment Owed" for
+  // this venue/month (qualifyingRevenue × revenueSharePct), computed
+  // by the same computeWeeklyPayments call the partner page renders.
+  // canonicalVenueCost still checks override first, so an override
+  // (when present) wins as a manual correction lever; otherwise the
+  // dashboard payout drives cost. No dashboard → null lookup →
+  // surfaces as "needs override" with a clear "No partner dashboard"
+  // hint rather than silently returning $0.
+  if (venue.billing_type === "profit_share") {
+    const owed = partnerPaymentOwedForMonth(
+      data.partnerDashboards,
+      data.partnerPayoutsByVenueMonth,
+      venue.id,
+      month,
+    );
+    if (owed == null) {
+      return {
+        amount: 0,
+        kind: "needs_override",
+        matchCount: venueMatchCount(data, venue, month),
+        totalHours: 0,
+        formula: "No partner dashboard configured",
+        source: "—",
+        override: null,
+      };
+    }
+    const dash = data.partnerDashboards.find((d) => d.venueId === venue.id);
+    const pct = dash?.revenueSharePct ?? 50;
+    // owed = qualifyingRevenue × pct/100, so qualifyingRevenue = owed × (100/pct).
+    const qualifyingRev = pct > 0 ? Math.round((owed * 100) / pct) : 0;
+    return {
+      amount: owed,
+      kind: "profit_share",
+      matchCount: venueMatchCount(data, venue, month),
+      totalHours: 0,
+      formula:
+        owed === 0
+          ? "No qualifying revenue this month"
+          : `${pct}% of $${qualifyingRev.toLocaleString()} qualifying`,
+      source: "Partner dashboard payout",
+      override: null,
+    };
+  }
+  // monthly_flat — cost lives entirely in fin_venue_cost_overrides per
+  // (venue, month). canonicalVenueCost reads the override before
+  // falling back to autoCost, so this branch only fires when an
+  // override is missing for the month — surface that as a visible
+  // "needs override" hint rather than silently returning $0.
+  if (venue.billing_type === "monthly_flat") {
     return {
       amount: 0,
       kind: "needs_override",
       matchCount: venueMatchCount(data, venue, month),
       totalHours: 0,
-      formula: `Set ${month} override below (${venue.billing_type.replace("_", " ")})`,
+      formula: `Set ${month} override below (monthly flat)`,
       source: "Override required",
       override: null,
     };

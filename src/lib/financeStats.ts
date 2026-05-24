@@ -11,6 +11,7 @@ import {
 } from "./quarters";
 
 import { isFakePlayerEmail } from "./mdapiFakePlayer";
+import { partnerPaymentOwedForMonth } from "./partnerStats";
 import {
   canonicalVenueCost,
   fieldCostsFor,
@@ -1568,6 +1569,20 @@ export function venueRealizedCostFor(
   }
   const override = findOverride(data, venueId, month);
   if (override) return override.override_amount;
+  // profit_share: full-month payout (partner invoices are issued
+  // whole-month, not date-realized). Same number under both Realized
+  // and Full Month — see autoCost's profit_share branch for the
+  // computation. Null lookup (no dashboard) falls through to 0.
+  if (venue.billing_type === "profit_share") {
+    return (
+      partnerPaymentOwedForMonth(
+        data.partnerDashboards,
+        data.partnerPayoutsByVenueMonth,
+        venueId,
+        month,
+      ) ?? 0
+    );
+  }
   if (venue.billing_type !== "per_match") return 0;
   const today = isoDateLocal(now);
   const rate = venue.per_match_rate ?? 0;

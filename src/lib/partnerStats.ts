@@ -152,6 +152,37 @@ export type PartnerConfig = {
 // payment_* columns don't exist, fall back to the legacy shape with
 // defaults. This keeps the partner-facing URL working through the
 // gap between deploying the code and applying migration 0003.
+// Same shape as fetchPartnerBySlug returns, but for ALL enabled
+// partner_dashboards rows. Used by useFinanceData to pre-compute
+// the per-(venue, month) partner-payout map that drives the
+// finance cost calc for profit_share venues. Service-role client
+// expected.
+export async function fetchAllEnabledPartnerDashboards(
+  supabase: SupabaseClient,
+): Promise<PartnerConfig[]> {
+  const { data, error } = await supabase
+    .from("partner_dashboards")
+    .select(
+      "id, venue_id, partner_name, enabled, revenue_share_pct, payment_start_date, payment_day_of_week, payment_cadence",
+    )
+    .eq("enabled", true);
+  if (error || !data) return [];
+  return data.map((row: Record<string, unknown>) => {
+    const rawCadence = (row.payment_cadence ?? "weekly") as string;
+    const cadence: PartnerPaymentCadence =
+      rawCadence === "monthly" ? "monthly" : "weekly";
+    return {
+      id: row.id as string,
+      venueId: row.venue_id as number,
+      partnerName: row.partner_name as string,
+      revenueSharePct: Number(row.revenue_share_pct ?? 50),
+      paymentStartDate: (row.payment_start_date ?? null) as string | null,
+      paymentDayOfWeek: Number(row.payment_day_of_week ?? 0),
+      paymentCadence: cadence,
+    };
+  });
+}
+
 export async function fetchPartnerBySlug(
   supabase: SupabaseClient,
   slug: string,
@@ -985,3 +1016,161 @@ export function computeWeeklyPayments(
 // Forward-looking alias. New callers should prefer this name; existing
 // callers continue to use computeWeeklyPayments for now.
 export const computePartnerPayments = computeWeeklyPayments;
+
+// Look up the partner-payout cost for a given profit_share venue and
+// month. Reads from the pre-computed map on FinanceData (built once at
+// data-load in useFinanceData.ts; see buildPartnerPayoutsByVenueMonth).
+//
+// Returns null when no enabled partner_dashboards row exists for the
+// venue — caller (autoCost / venueRealizedCostFor) uses that signal
+// to surface a "No partner dashboard configured" hint rather than
+// silently returning $0. Returns 0 when the dashboard exists but the
+// month has no qualifying revenue yet (correct semantics for a
+// future month or a month that hasn't filled in).
+//
+// IMPORTANT: this helper assumes the venue's billing_type === 'profit_share'.
+// Callers must gate on that first; otherwise the lookup may misattribute
+// payout to venues using other billing models.
+export function partnerPaymentOwedForMonth(
+  partnerDashboards: PartnerConfig[],
+  partnerPayoutsByVenueMonth: Map<string, number>,
+  venueId: number,
+  month: string,
+): number | null {
+  const hasDashboard = partnerDashboards.some((d) => d.venueId === venueId);
+  if (!hasDashboard) return null;
+  return partnerPayoutsByVenueMonth.get(`${venueId}|${month}`) ?? 0;
+}
+
+// Build the per-(venue, month) payout map for use in finance cost
+// calc. Loops every profit_share venue that has an enabled dashboard,
+// runs the same computeWeeklyPayments calc the partner dashboard page
+// renders, and aggregates the per-row owedAmount into a month bucket
+// keyed `${venueId}|${monthLabel}` (e.g. "10|Apr 2026").
+//
+// Weekly cadence: a week's payout lands in the bucket for its
+// weekStartDate's calendar month (matches how the dashboard table
+// displays each week). Cross-month weeks (e.g. Mar 29 → Apr 4 with
+// weekStartDate Mar 29) bucket into March — consistent with the
+// dashboard's column-by-week-start convention.
+//
+// Monthly cadence: weekStartDate is YYYY-MM-01, so it lands cleanly
+// in the corresponding month bucket.
+//
+// matchRegs + finRevRows are the already-loaded quarter window from
+// useFinanceData. We filter per-venue in-memory rather than re-
+// querying the DB.
+export function buildPartnerPayoutsByVenueMonth(
+  dashboards: PartnerConfig[],
+  venues: { id: number; venue_name: string; billing_type: string }[],
+  venueFields: Map<number, number>,
+  matchRegs: Array<{
+    field_id: number | null;
+    match_start: string;
+    match_canceled: boolean;
+    player_canceled_at: string | null;
+    payment_type: string | null;
+    promocode: string | null;
+    match_price_paid: number;
+    user_id: string;
+    email: string | null;
+    field: string;
+    user_type: string | null;
+  }>,
+  finRevRows: Array<{
+    date: string;
+    type: string;
+    gross: number;
+    source: string;
+    venue: string | null;
+    notes: string | null;
+  }>,
+  now: Date = new Date(),
+): Map<string, number> {
+  const map = new Map<string, number>();
+  for (const dash of dashboards) {
+    const venue = venues.find((v) => v.id === dash.venueId);
+    if (!venue) continue;
+    if (venue.billing_type !== "profit_share") continue;
+
+    // Filter match registrations to this venue via the mdapi field_id
+    // → fin_venues.id mapping (PR-E semantics). More reliable than the
+    // ILIKE-on-field_title pattern fetchPartnerRows uses.
+    const venueRegs: PartnerRegRow[] = matchRegs
+      .filter((r) => r.field_id != null && venueFields.get(r.field_id) === venue.id)
+      .map((r) => ({
+        user_id: r.user_id,
+        email: r.email,
+        field: r.field,
+        match_start: r.match_start,
+        match_canceled: r.match_canceled,
+        player_canceled_at: r.player_canceled_at,
+        payment_type: r.payment_type,
+        promocode: r.promocode,
+        match_price_paid: r.match_price_paid,
+        user_type: r.user_type,
+      }));
+
+    // Filter fin_revenue rows: venue name match (case-insensitive
+    // includes, matching the dashboard's ILIKE), exclude PROJECTION
+    // bootstrap rows, exclude DPP/Membership types (already double-
+    // counted via match registrations).
+    const venueNameLower = venue.venue_name.toLowerCase();
+    const venueExtra: PartnerExtraRevRow[] = finRevRows
+      .filter((r) => {
+        if (!r.venue) return false;
+        if (!r.venue.toLowerCase().includes(venueNameLower)) return false;
+        if (r.source === "PROJECTION") return false;
+        if (r.type === "DPP" || r.type === "Membership") return false;
+        return true;
+      })
+      .map((r) => ({
+        date: r.date,
+        type: r.type,
+        gross: r.gross,
+        source: r.source,
+        notes: r.notes,
+      }));
+
+    const payout = computeWeeklyPayments(
+      venueRegs,
+      venueExtra,
+      {
+        revenueSharePct: dash.revenueSharePct,
+        paymentStartDate: dash.paymentStartDate,
+        paymentDayOfWeek: dash.paymentDayOfWeek,
+        paymentCadence: dash.paymentCadence,
+      },
+      [], // no persisted records needed for cost calc
+      now,
+    );
+
+    // Bucket each row's owedAmount by the calendar month of its
+    // weekStartDate. Skip pre-system lump-sum rows — those represent
+    // historical settlements that pre-date the system, not ongoing
+    // cost. Pre-cutover months keep their existing override-driven
+    // cost; the recompute only owns post-cutover months.
+    for (const row of payout.weeklyPayments) {
+      if (row.isPreSystem) continue;
+      const monthLabel = monthLabelFromYmd(row.weekStartDate);
+      if (!monthLabel) continue;
+      const key = `${venue.id}|${monthLabel}`;
+      map.set(key, (map.get(key) ?? 0) + row.owedAmount);
+    }
+  }
+  return map;
+}
+
+const PAYOUT_MONTH_LABELS = [
+  "Jan", "Feb", "Mar", "Apr", "May", "Jun",
+  "Jul", "Aug", "Sep", "Oct", "Nov", "Dec",
+];
+
+// "2026-04-01" → "Apr 2026". UTC parse to match the rest of the
+// partner-payment date math.
+function monthLabelFromYmd(ymd: string): string {
+  if (!ymd || ymd.length < 7) return "";
+  const d = new Date(`${ymd}T00:00:00Z`);
+  if (Number.isNaN(d.getTime())) return "";
+  return `${PAYOUT_MONTH_LABELS[d.getUTCMonth()]} ${d.getUTCFullYear()}`;
+}

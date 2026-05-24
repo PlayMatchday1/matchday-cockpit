@@ -10,6 +10,11 @@ import {
   type MdapiMemberSpotIndex,
 } from "./financeStats";
 import {
+  buildPartnerPayoutsByVenueMonth,
+  fetchAllEnabledPartnerDashboards,
+  type PartnerConfig,
+} from "./partnerStats";
+import {
   fetchLegacyMatchRegistrations,
   loadActiveSubscriptionsByEmail,
 } from "./mdapiMatchesRead";
@@ -243,6 +248,19 @@ export type FinanceData = {
   // financeStats.ts. Replaces fin_member_spots in active read paths;
   // see buildMdapiMemberSpotIndex for shape.
   mdapiMemberSpots: MdapiMemberSpotIndex;
+  // Enabled partner_dashboards rows (1-to-1 with fin_venues via
+  // partner_dashboards.venue_id). Drives the profit_share cost calc
+  // branch — autoCost looks up the dashboard by venueId to know
+  // whether to compute a payout (dashboard present) or signal
+  // "needs override" (no dashboard).
+  partnerDashboards: PartnerConfig[];
+  // Pre-computed partner payout per (venue, month), keyed
+  // `${venueId}|${monthLabel}` (e.g. "10|Apr 2026"). Built once at
+  // data-load via buildPartnerPayoutsByVenueMonth. Profit_share
+  // venues read from here through partnerPaymentOwedForMonth().
+  // A null lookup means no dashboard; a 0 lookup means dashboard
+  // exists but no qualifying revenue in that month yet.
+  partnerPayoutsByVenueMonth: Map<string, number>;
 };
 
 type State = {
@@ -878,6 +896,43 @@ async function load(quarter: QuarterInfo): Promise<void> {
     created_by: cleanText(r.created_by),
   }));
 
+  // Partner dashboards + pre-computed per-(venue, month) payouts.
+  // Drives the profit_share branch in autoCost / venueRealizedCostFor
+  // — cost for a profit_share venue/month comes from the same
+  // computeWeeklyPayments calc the partner dashboard page renders,
+  // so there's one source of truth instead of double-entry via
+  // fin_venue_cost_overrides. Quiet failure: if the fetch errors,
+  // dashboards array is empty and every profit_share venue falls
+  // back to the "needs override" hint — no crash.
+  let partnerDashboards: PartnerConfig[] = [];
+  let partnerPayoutsByVenueMonth = new Map<string, number>();
+  try {
+    partnerDashboards = await fetchAllEnabledPartnerDashboards(supabase);
+    if (partnerDashboards.length > 0) {
+      partnerPayoutsByVenueMonth = buildPartnerPayoutsByVenueMonth(
+        partnerDashboards,
+        venues,
+        venueFields,
+        mdapiRegRows,
+        revenueRows.map((r) => ({
+          date: cleanText(r.date),
+          type: cleanText(r.type),
+          gross: asNumber(r.gross),
+          source: cleanText(r.source),
+          venue: cleanTextNullable(r.venue),
+          notes: cleanTextNullable(r.notes),
+        })),
+      );
+    }
+  } catch (e) {
+    if (typeof console !== "undefined") {
+      console.warn(
+        `[useFinanceData] partner-payout pre-compute failed (profit_share venues will fall back to needs-override):`,
+        e instanceof Error ? e.message : String(e),
+      );
+    }
+  }
+
   publish(key, {
     data: {
       revenue,
@@ -895,6 +950,8 @@ async function load(quarter: QuarterInfo): Promise<void> {
       venueFields,
       config,
       mdapiMemberSpots,
+      partnerDashboards,
+      partnerPayoutsByVenueMonth,
     },
     loading: false,
     error: null,
