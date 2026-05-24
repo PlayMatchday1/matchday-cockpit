@@ -873,14 +873,7 @@ function Row({
         {row.status === "canceled" ? (
           <span className="text-deep-green/35">—</span>
         ) : (
-          <>
-            {row.spotsSold}
-            {row.freeNonMemberSpots > 0 && (
-              <span className="ml-1 text-[10px] font-normal text-deep-green/45">
-                (+{row.freeNonMemberSpots} free)
-              </span>
-            )}
-          </>
+          row.spotsSold
         )}
       </td>
       <td className="px-3 py-2 text-right align-top font-mono tabular-nums text-deep-green">
@@ -1140,13 +1133,7 @@ function MobileMatchCard({
         <div className="mt-1 grid grid-cols-2 gap-x-3 gap-y-1 border-t border-cream-line/60 pt-2 text-[11px]">
           <InlineMetric
             label="Spots Booked"
-            value={
-              isCanceled
-                ? "—"
-                : row.freeNonMemberSpots > 0
-                  ? `${row.spotsSold} (+${row.freeNonMemberSpots} free)`
-                  : String(row.spotsSold)
-            }
+            value={isCanceled ? "—" : String(row.spotsSold)}
           />
           <InlineMetric
             label="Paid Spots"
