@@ -422,20 +422,24 @@ export async function GET(req: Request) {
     }
 
     // Surplus cancelled mdapi rows (no template entry left to pair
-    // against) → extra_in_db. A cancelled mdapi row with no
-    // schedule_master counterpart is still "extra" relative to the
-    // template.
-    for (let i = pairedCancelled; i < cBucket.length; i++) {
-      const m = cBucket[i].row;
-      extra_in_db.push({
-        mdapi_match_id: m.api_id,
-        city: m.city_identifier ?? "?",
-        venue: m.field_title ?? "?",
-        match_date: cBucket[i].date,
-        match_time: hhmmTo12h(cBucket[i].hhmm),
-        max_spots: m.max_player_count,
-      });
-    }
+    // against) are intentionally dropped — NOT reported.
+    //
+    // A cancelled mdapi row with no schedule_master counterpart
+    // represents platform-side activity that was never owed by the
+    // template: private rentals, one-off ad-hoc bookings, host-
+    // created matches that didn't go in the template and then got
+    // cancelled. There's no template entry to reconcile against and
+    // the match isn't running, so this is operationally a non-event
+    // — flagging it as `extra_in_db` ("missing on Clubhouse") just
+    // creates false-positive noise. The actionable cancelled
+    // signal — "template exists, platform cancelled the match" —
+    // is fully covered by the pairedCancelled loop above which
+    // populates the `cancelled` bucket.
+    //
+    // The surplus-alive loop just above (extra_in_db from mBucket)
+    // still fires for active platform matches with no template
+    // counterpart — those ARE meaningful (a manager booked a real
+    // match outside the planned schedule).
   }
 
   const byDateThenCityThenTime = (a: { match_date: string; city: string; match_time: string }, b: { match_date: string; city: string; match_time: string }) =>
