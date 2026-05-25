@@ -35,7 +35,7 @@
 //   two-pill rendering.
 
 import { useCallback, useEffect, useMemo, useState } from "react";
-import { ChevronLeft, ChevronRight, Plus, X } from "lucide-react";
+import { ChevronLeft, ChevronRight, Plus } from "lucide-react";
 import { supabase } from "@/lib/supabase";
 import MasterScheduleEditModal, {
   type EditableRow,
@@ -702,10 +702,10 @@ function AgendaGhostRow({
   const short = compactTime(time);
   return (
     <div
-      className="flex items-center gap-2 rounded-md border border-dashed border-coral/50 bg-coral-soft/40 px-2 py-1.5 text-xs text-coral-hover/70 line-through"
+      className="flex items-center gap-2 rounded-md border border-dashed border-deep-green/30 bg-cream-soft/60 px-2 py-1.5 text-xs text-deep-green/55"
       title={`Dropped vs last week · ${time} - ${detail}`}
     >
-      <X aria-hidden className="h-3 w-3 shrink-0" />
+      <span aria-hidden className="font-bold">-</span>
       <span className="min-w-[3rem] font-bold tabular-nums">{short}</span>
       <span className="min-w-0 flex-1 truncate">{venue}</span>
     </div>
@@ -1057,10 +1057,10 @@ function GhostPill({
   const short = compactTime(time);
   return (
     <div
-      className="flex items-center gap-1 rounded border border-dashed border-coral/50 bg-coral-soft/40 px-1.5 py-0.5 text-[11px] leading-tight text-coral-hover/70 line-through"
+      className="flex items-center gap-1 rounded border border-dashed border-deep-green/30 bg-cream-soft/60 px-1.5 py-0.5 text-[11px] leading-tight text-deep-green/55"
       title={`Dropped vs last week · ${time} - ${detail}`}
     >
-      <X aria-hidden className="h-2.5 w-2.5 shrink-0" />
+      <span aria-hidden className="font-bold">-</span>
       <span className="min-w-0 break-words">
         <span className="font-bold tabular-nums">{short}</span>{" "}
         <span>{venue}</span>
