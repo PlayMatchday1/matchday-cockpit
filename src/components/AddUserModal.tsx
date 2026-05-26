@@ -62,17 +62,72 @@ export default function AddUserModal({
     if (!email.trim() || saving) return;
     setSaving(true);
     setError(null);
-    const { error: insertErr } = await supabase.from("app_users").insert({
-      email: email.trim().toLowerCase(),
-      full_name: fullName.trim() || null,
-      ...perms,
-    });
-    setSaving(false);
-    if (insertErr) {
-      setError(insertErr.message);
+
+    // The route does the same trim+lowercase server-side, but
+    // normalize here too so app_users.email and the invite email
+    // resolve identically regardless of operator typing.
+    const normalizedEmail = email.trim().toLowerCase();
+    const normalizedFullName = fullName.trim() || null;
+
+    // Send the caller's session bearer so the route's
+    // isProvisioningOwner guard can resolve their Supabase UID and
+    // confirm the action is allowed.
+    const { data: sessionData } = await supabase.auth.getSession();
+    const accessToken = sessionData.session?.access_token;
+    if (!accessToken) {
+      setSaving(false);
+      setError("Your sign-in expired. Reload and try again.");
       return;
     }
-    onCreated();
+
+    let res: Response;
+    try {
+      res = await fetch("/api/admin/users/invite", {
+        method: "POST",
+        headers: {
+          "Content-Type": "application/json",
+          Authorization: `Bearer ${accessToken}`,
+        },
+        body: JSON.stringify({
+          email: normalizedEmail,
+          full_name: normalizedFullName,
+          permissions: perms,
+        }),
+      });
+    } catch (e) {
+      setSaving(false);
+      setError(
+        `Network error: ${e instanceof Error ? e.message : String(e)}`,
+      );
+      return;
+    }
+
+    setSaving(false);
+
+    if (res.ok) {
+      onCreated();
+      return;
+    }
+
+    // Adding users is locked to the provisioning owner. Other admins
+    // who somehow open this modal (the +Add user button is admin-
+    // gated, but isProvisioningOwner is stricter) get a clear note
+    // instead of a generic 401 string.
+    if (res.status === 401) {
+      setError(
+        "Only Ryan can provision new users. Ask him to add this account.",
+      );
+      return;
+    }
+
+    let detail = res.statusText || `HTTP ${res.status}`;
+    try {
+      const data = await res.json();
+      if (data && typeof data.error === "string") detail = data.error;
+    } catch {
+      // Non-JSON body — fall back to statusText.
+    }
+    setError(detail);
   }
 
   return (
