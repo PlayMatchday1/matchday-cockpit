@@ -32,8 +32,8 @@ import CancelHeatmap from "@/components/CancelHeatmap";
 import CancelPatterns from "@/components/CancelPatterns";
 import CitiesMasterScheduleLens from "@/components/CitiesMasterScheduleLens";
 import FieldRankingTable from "@/components/FieldRankingTable";
-import SlateActionItems from "@/components/SlateActionItems";
-import { ChevronDown, ChevronRight } from "lucide-react";
+import CollapsibleSection from "@/components/CollapsibleSection";
+import FinanceActions from "@/components/FinanceActions";
 import MatchPnL from "@/components/MatchPnL";
 import SlateMatchPnLSection from "@/components/SlateMatchPnLSection";
 import PartnerDashboardsAdmin from "@/components/PartnerDashboardsAdmin";
@@ -247,11 +247,26 @@ function FinanceLandingContent() {
 
       <FinanceSecondaryNav active={secondary} onChange={openSecondary} />
 
-      <div className="mb-8">
-        <FinanceExecHero />
-      </div>
+      {/* The 3-card exec banner is Cash-Flow-specific context (Q2
+          P&L, current-month gross, MTD vs prior). Hide on every
+          other tab so they get more vertical room for their own
+          content. */}
+      {activeTab === "cash-flow" && (
+        <div className="mb-8">
+          <FinanceExecHero />
+        </div>
+      )}
 
       <FinanceTabNav value={activeTab} onChange={selectTab} />
+
+      {/* Shared Actions list — renders at the top of every non-
+          Cash-Flow tab's content. Single instance kept mounted
+          across tab switches so the filter state survives. Hidden
+          (display:none) on Cash Flow rather than unmounted so the
+          fetched list doesn't re-load every time you bounce back. */}
+      <div className={activeTab === "cash-flow" ? "hidden" : "mt-4"}>
+        <FinanceActions />
+      </div>
 
       {secondary === "configure" && (
         <FinanceConfigureSubNav
@@ -438,16 +453,16 @@ function CitiesTabContent() {
 // Slate Review — per-city decision snapshot. Sections from existing
 // components, scoped to one selected city + selected week via state
 // owned at this level:
-//   1. City selector  (single-select pill row, this file)
-//   2. Last 8 weeks   (TotalsBarChart fed by useMatchWindowData + getWeeklySpots)
-//   3. Field Ranking (FieldRankingTable city-filtered + costScope=realized)
+//   1. City selector   (single-select pill row, this file)
+//   2. Last 8 weeks    (TotalsBarChart fed by useMatchWindowData + getWeeklySpots)
+//   3. Field Ranking   (FieldRankingTable city-filtered + costScope=realized)
 //   4. Master schedule (CitiesMasterScheduleLens controlled via weekStart)
-//   5. Action items   (SlateActionItems scoped by city + weekStart)
-//   6. Cancellations  (CancelHeatmap with full-slate + recent-cancel row markers)
+//   5. Cancel patterns (CancelPatterns city-scoped)
+//   6. Cancellations   (CancelHeatmap with full-slate + recent-cancel row markers)
+//   7. Match P&L       (SlateMatchPnLSection scoped to selected city)
 // Defaults to Austin + current Monday. Local state; no URL persistence.
-// weekStart is shared by the Master Schedule and Action Items sections so
-// flipping the week selector inside the master schedule re-scopes the
-// to-do list to the same week.
+// Action items used to live mid-page here; replaced by the shared
+// FinanceActions section that renders above every non-Cash-Flow tab.
 function SlateReviewTabContent() {
   const [selectedCity, setSelectedCity] = useState<City>("Austin");
   const [weekStart, setWeekStart] = useState<string>(() => {
@@ -473,9 +488,6 @@ function SlateReviewTabContent() {
           onWeekStartChange={setWeekStart}
         />
       </CollapsibleSection>
-      <CollapsibleSection title="Action items">
-        <SlateActionItems city={selectedCity} weekStart={weekStart} />
-      </CollapsibleSection>
       <CollapsibleSection title="Cancel patterns">
         <CancelPatterns city={selectedCity} />
       </CollapsibleSection>
@@ -486,46 +498,6 @@ function SlateReviewTabContent() {
         <SlateMatchPnLSection city={selectedCity} />
       </CollapsibleSection>
     </div>
-  );
-}
-
-// Lightweight wrapper: clickable header strip with chevron toggles a
-// section open/closed. Default open. Local state per instance — no
-// persistence (operator collapses for focus on a single section, not
-// for long-term layout). Inner sections may render their own h2; we
-// accept the mild duplication rather than threading a `headerless`
-// prop through every child.
-function CollapsibleSection({
-  title,
-  defaultOpen = true,
-  children,
-}: {
-  title: string;
-  defaultOpen?: boolean;
-  children: React.ReactNode;
-}) {
-  const [open, setOpen] = useState(defaultOpen);
-  return (
-    <section className="rounded-2xl border-[1.5px] border-cream-line bg-white shadow-md shadow-deep-green/10">
-      <button
-        type="button"
-        onClick={() => setOpen((v) => !v)}
-        aria-expanded={open}
-        className="flex w-full items-center gap-2 px-5 py-3 text-left transition hover:bg-cream-soft/40"
-      >
-        {open ? (
-          <ChevronDown size={18} aria-hidden className="text-deep-green/55" />
-        ) : (
-          <ChevronRight size={18} aria-hidden className="text-deep-green/55" />
-        )}
-        <span className="text-lg font-bold tracking-tight text-deep-green">
-          {title}
-        </span>
-      </button>
-      {open && (
-        <div className="border-t border-cream-line/60 p-5">{children}</div>
-      )}
-    </section>
   );
 }
 
