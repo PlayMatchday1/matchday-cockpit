@@ -35,6 +35,7 @@ import FieldRankingTable from "@/components/FieldRankingTable";
 import SlateActionItems from "@/components/SlateActionItems";
 import { ChevronDown, ChevronRight } from "lucide-react";
 import MatchPnL from "@/components/MatchPnL";
+import SlateMatchPnLSection from "@/components/SlateMatchPnLSection";
 import PartnerDashboardsAdmin from "@/components/PartnerDashboardsAdmin";
 import RevenueAdminView from "@/components/RevenueAdminView";
 import TotalsBarChart from "@/components/TotalsBarChart";
@@ -480,6 +481,9 @@ function SlateReviewTabContent() {
       </CollapsibleSection>
       <CollapsibleSection title="Cancellations">
         <SlateReviewCancelSection city={selectedCity} />
+      </CollapsibleSection>
+      <CollapsibleSection title="Match P&L">
+        <SlateMatchPnLSection city={selectedCity} />
       </CollapsibleSection>
     </div>
   );
