@@ -72,6 +72,16 @@ const PRIMARY_TAB_IDS: ReadonlySet<FinanceTabId> = new Set<FinanceTabId>([
   "slate-review",
 ]);
 
+// Tabs that get the shared FinanceActions section pinned at the top.
+// Intentionally narrower than "every non-cash-flow tab" — Configure
+// sub-tabs, Check-Ins, and Partner Dashboards don't surface Actions.
+const ACTIONS_TABS: ReadonlySet<FinanceTabId> = new Set<FinanceTabId>([
+  "cities",
+  "field-ranking",
+  "match-pnl",
+  "slate-review",
+]);
+
 // Derive which secondary nav slot is "active" given the current tab.
 // Returns null when the user is on a primary pill instead.
 function deriveSecondary(tab: FinanceTabId): SecondaryId | null {
@@ -259,14 +269,15 @@ function FinanceLandingContent() {
 
       <FinanceTabNav value={activeTab} onChange={selectTab} />
 
-      {/* Shared Actions list — renders at the top of every non-
-          Cash-Flow tab's content. Single instance kept mounted
-          across tab switches so the filter state survives. Hidden
-          (display:none) on Cash Flow rather than unmounted so the
-          fetched list doesn't re-load every time you bounce back. */}
-      <div className={activeTab === "cash-flow" ? "hidden" : "mt-4"}>
-        <FinanceActions />
-      </div>
+      {/* Shared Actions section — pinned just below the tab nav on
+          Cities / Field Ranking / Match P&L / Slate Review. Mounted
+          as a direct child of the page container (rather than wrapped
+          in a short flex/margin div) so the sticky bar inside it can
+          persist while scrolling through the tab content beneath.
+          State (filter, expanded, draft) is preserved across switches
+          within the 4 ACTIONS_TABS; switching to a non-Actions tab
+          unmounts and resets, which is fine — defaults are sensible. */}
+      {ACTIONS_TABS.has(activeTab) && <FinanceActions />}
 
       {secondary === "configure" && (
         <FinanceConfigureSubNav

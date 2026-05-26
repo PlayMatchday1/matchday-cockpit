@@ -1,26 +1,30 @@
 "use client";
 
-// Shared Finance Actions section. Renders at the top of every non-
-// Cash-Flow Finance tab and shows ONE global list across all users.
-// Each action carries a status (open / needs follow-up / blocked /
-// resolved), a city tag (8 markets or "Company-wide"), an author,
-// and a date, plus a threaded comments list. Any signed-in user can
-// add actions and comments.
+// Shared Finance Actions section. Renders pinned to the top of the
+// viewport (below the FinanceTabNav) on Cities, Field Ranking, Match
+// P&L, and Slate Review. ONE global list across all users.
+//
+// Sticky behavior: the header + filter pills + add-action row are
+// pinned at top-14 z-30 so the operator can add or filter actions
+// from anywhere on the tab without scrolling back up. The list of
+// existing actions lives inside the same sticky element but is only
+// rendered when expanded (default: collapsed), so the slim sticky
+// bar doesn't eat vertical space during normal scrolling. When
+// expanded the list scrolls internally (max-h 60vh) rather than
+// pushing the sticky bar's bottom off the viewport.
 //
 // The city filter on this section is intentionally independent of
 // the page's city pills — you can filter Actions to "Dallas" while
 // viewing the Match P&L tab without binding the two together.
 //
 // Storage: finance_actions + finance_action_comments (migration
-// 0050). RLS: authenticated read+write. Replaces the per-(city,
-// week_start) SlateActionItems section that used to live mid-page
-// in Slate Review.
+// 0050). RLS: authenticated read+write.
 
 import { useCallback, useEffect, useMemo, useState } from "react";
+import { ChevronDown, ChevronRight } from "lucide-react";
 import { supabase } from "@/lib/supabase";
 import { useAuth } from "@/lib/useAuth";
 import { CITIES } from "@/lib/types";
-import CollapsibleSection from "./CollapsibleSection";
 
 const COMPANY_WIDE = "Company-wide" as const;
 
@@ -79,7 +83,6 @@ type Comment = {
 
 function fmtWhen(iso: string): string {
   const d = new Date(iso);
-  // Compact "May 26" + time. Year omitted for current year.
   const now = new Date();
   const sameYear = d.getFullYear() === now.getFullYear();
   const month = d.toLocaleString("en-US", { month: "short" });
@@ -115,6 +118,10 @@ export default function FinanceActions() {
 
   // Filter — defaults to "All". Independent of page-level city pills.
   const [filterCity, setFilterCity] = useState<"All" | CityValue>("All");
+
+  // List expansion — default collapsed so the sticky bar stays slim.
+  // Toggling shows/hides the action list inside the sticky element.
+  const [expanded, setExpanded] = useState(false);
 
   const load = useCallback(async () => {
     setLoading(true);
@@ -237,18 +244,49 @@ export default function FinanceActions() {
   );
 
   return (
-    <CollapsibleSection
-      title="Actions"
-      rightSlot={
-        <span className="text-[11px] font-normal text-deep-green/55">
-          <span className="font-bold tabular-nums text-deep-green">
-            {openCount}
-          </span>{" "}
-          active · {actions.length} total
-        </span>
-      }
-    >
-      <div className="space-y-4">
+    // Sticky bar: pinned at top-14 (below FinanceTabNav which sits at
+    // top-0). z-30 matches the tab nav and beats SlateReviewCityPills
+    // (z-20) so the Slate Review city selector cleanly slides under
+    // this bar when both want to occupy top-14 simultaneously.
+    //
+    // Solid cream-soft background + backdrop-blur so scrolled-under
+    // content doesn't bleed through. Edge-to-edge via -mx-4/sm:-mx-6
+    // matching the SlateReviewCityPills + FinanceTabNav pattern.
+    <div className="sticky top-14 z-30 -mx-4 mt-4 border-y border-cream-line bg-cream-soft/95 backdrop-blur supports-[backdrop-filter]:bg-cream-soft/80 sm:-mx-6">
+      <div className="space-y-2 px-4 py-3 sm:px-6">
+        {/* Header row: chevron toggle + title + active/total count */}
+        <div className="flex items-center gap-2">
+          <button
+            type="button"
+            onClick={() => setExpanded((v) => !v)}
+            aria-expanded={expanded}
+            className="flex items-center gap-2 rounded-md text-left transition hover:opacity-75"
+          >
+            {expanded ? (
+              <ChevronDown
+                size={18}
+                aria-hidden
+                className="text-deep-green/55"
+              />
+            ) : (
+              <ChevronRight
+                size={18}
+                aria-hidden
+                className="text-deep-green/55"
+              />
+            )}
+            <span className="text-base font-bold tracking-tight text-deep-green sm:text-lg">
+              Actions
+            </span>
+          </button>
+          <span className="text-[11px] font-normal text-deep-green/55">
+            <span className="font-bold tabular-nums text-deep-green">
+              {openCount}
+            </span>{" "}
+            active · {actions.length} total
+          </span>
+        </div>
+
         {/* Filter pills — independent of the page's city selection */}
         <div className="flex flex-wrap gap-1.5">
           <FilterPill
@@ -266,7 +304,8 @@ export default function FinanceActions() {
           ))}
         </div>
 
-        {/* Add-action input row */}
+        {/* Add-action row — input + city + Add. Flex-wrap so mobile
+            stacks gracefully on narrow viewports. */}
         <div className="flex flex-wrap items-stretch gap-2">
           <input
             type="text"
@@ -279,7 +318,7 @@ export default function FinanceActions() {
               }
             }}
             placeholder="Add an action…"
-            className="min-w-[200px] flex-1 rounded-md border border-cream-line bg-white px-3 py-2 text-sm text-deep-green placeholder:text-deep-green/40 focus:border-deep-green focus:outline-none"
+            className="min-w-[180px] flex-1 rounded-md border border-cream-line bg-white px-3 py-2 text-sm text-deep-green placeholder:text-deep-green/40 focus:border-deep-green focus:outline-none"
           />
           <select
             value={draftCity}
@@ -311,33 +350,39 @@ export default function FinanceActions() {
           </div>
         )}
 
-        {/* Action list */}
-        {loading ? (
-          <div className="text-xs italic text-deep-green/45">Loading…</div>
-        ) : filtered.length === 0 ? (
-          <div className="rounded-md border border-cream-line bg-cream-soft/40 px-3 py-6 text-center text-sm italic text-deep-green/50">
-            {actions.length === 0
-              ? "No actions yet. Add one above."
-              : `No actions for ${filterCity}.`}
+        {/* Expanded list — lives inside the sticky element so the
+            whole stack pins together when expanded. Internal scroll
+            (max-h 60vh) keeps the bar usable even with many actions. */}
+        {expanded && (
+          <div className="mt-3 max-h-[60vh] overflow-y-auto rounded-2xl border-[1.5px] border-cream-line bg-white p-3 shadow-md shadow-deep-green/10">
+            {loading ? (
+              <div className="text-xs italic text-deep-green/45">Loading…</div>
+            ) : filtered.length === 0 ? (
+              <div className="rounded-md border border-cream-line bg-cream-soft/40 px-3 py-6 text-center text-sm italic text-deep-green/50">
+                {actions.length === 0
+                  ? "No actions yet. Add one above."
+                  : `No actions for ${filterCity}.`}
+              </div>
+            ) : (
+              <ul className="space-y-2">
+                {filtered.map((a) => (
+                  <ActionRow
+                    key={a.id}
+                    action={a}
+                    comments={commentsByAction[a.id] ?? []}
+                    callerEmail={callerEmail}
+                    onChangeStatus={(s) => updateAction(a.id, { status: s })}
+                    onChangeCity={(c) => updateAction(a.id, { city: c })}
+                    onDelete={() => deleteAction(a.id)}
+                    onAddComment={(body) => addComment(a.id, body)}
+                  />
+                ))}
+              </ul>
+            )}
           </div>
-        ) : (
-          <ul className="space-y-2">
-            {filtered.map((a) => (
-              <ActionRow
-                key={a.id}
-                action={a}
-                comments={commentsByAction[a.id] ?? []}
-                callerEmail={callerEmail}
-                onChangeStatus={(s) => updateAction(a.id, { status: s })}
-                onChangeCity={(c) => updateAction(a.id, { city: c })}
-                onDelete={() => deleteAction(a.id)}
-                onAddComment={(body) => addComment(a.id, body)}
-              />
-            ))}
-          </ul>
         )}
       </div>
-    </CollapsibleSection>
+    </div>
   );
 }
 
@@ -411,7 +456,7 @@ function ActionRow({
   onDelete: () => void;
   onAddComment: (body: string) => void;
 }) {
-  const [expanded, setExpanded] = useState(false);
+  const [showComments, setShowComments] = useState(false);
   const [draft, setDraft] = useState("");
 
   function submitComment() {
@@ -427,7 +472,7 @@ function ActionRow({
         action.status === "resolved" ? "opacity-70" : ""
       }`}
     >
-      {/* Top row: status + city + body + delete */}
+      {/* Top row: status + city + body + per-row controls */}
       <div className="flex items-start gap-3">
         <div className="flex shrink-0 flex-col items-start gap-1">
           <StatusPill status={action.status} />
@@ -446,10 +491,10 @@ function ActionRow({
             <span>· {fmtWhen(action.created_at)}</span>
             <button
               type="button"
-              onClick={() => setExpanded((v) => !v)}
+              onClick={() => setShowComments((v) => !v)}
               className="font-bold uppercase tracking-wider text-deep-green/60 transition hover:text-deep-green"
             >
-              {expanded ? "Hide" : "Show"} comments
+              {showComments ? "Hide" : "Show"} comments
               {comments.length > 0 ? ` (${comments.length})` : ""}
             </button>
           </div>
@@ -490,7 +535,7 @@ function ActionRow({
         </div>
       </div>
 
-      {expanded && (
+      {showComments && (
         <div className="mt-3 border-t border-cream-line/60 pt-3">
           {comments.length === 0 ? (
             <div className="text-xs italic text-deep-green/45">
