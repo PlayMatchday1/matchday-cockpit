@@ -4,18 +4,28 @@
 // viewport (below the FinanceTabNav) on Cities, Field Ranking, Match
 // P&L, and Slate Review. ONE global list across all users.
 //
-// Sticky behavior: the header + filter pills + add-action row are
-// pinned at top-14 z-30 so the operator can add or filter actions
-// from anywhere on the tab without scrolling back up. The list of
-// existing actions lives inside the same sticky element but is only
-// rendered when expanded (default: collapsed), so the slim sticky
-// bar doesn't eat vertical space during normal scrolling. When
-// expanded the list scrolls internally (max-h 60vh) rather than
-// pushing the sticky bar's bottom off the viewport.
+// Sticky behavior: the header + add-action row are pinned at top-14
+// z-30 so the operator can add or scan actions from anywhere on the
+// tab without scrolling back up. The list of existing actions lives
+// inside the same sticky element but is only rendered when expanded
+// (default: collapsed), so the slim sticky bar doesn't eat vertical
+// space during normal scrolling. When expanded the list scrolls
+// internally (max-h 60vh) rather than pushing the sticky bar's
+// bottom off the viewport.
 //
-// The city filter on this section is intentionally independent of
-// the page's city pills — you can filter Actions to "Dallas" while
-// viewing the Match P&L tab without binding the two together.
+// City filtering FOLLOWS the page's selected city. When pageCity is
+// non-null (Slate Review only — the lone tab with a page-level city
+// selector), Actions defaults to {pageCity + Company-wide} so the
+// operator's slate context drives both the page sections AND the
+// actions list. A "Show all" toggle in the header is the escape
+// hatch for cross-city scans. On the other Actions tabs (Cities,
+// Field Ranking, Match P&L), pageCity is null and the list always
+// shows everything — those tabs have no per-city context to mirror.
+//
+// Pre-refactor this section carried its own filter pill row (All /
+// Company-wide / 8 cities). That competed visually with the Slate
+// Review page pills directly above it, so it was removed; the
+// header chip + Show-all toggle replaces it.
 //
 // Storage: finance_actions + finance_action_comments (migration
 // 0050). RLS: authenticated read+write.
@@ -24,7 +34,7 @@ import { useCallback, useEffect, useMemo, useState } from "react";
 import { ChevronDown, ChevronRight } from "lucide-react";
 import { supabase } from "@/lib/supabase";
 import { useAuth } from "@/lib/useAuth";
-import { CITIES } from "@/lib/types";
+import { CITIES, type City } from "@/lib/types";
 
 const COMPANY_WIDE = "Company-wide" as const;
 
@@ -100,7 +110,14 @@ function isCityValue(v: string): v is CityValue {
   return (CITY_OPTIONS as readonly string[]).includes(v);
 }
 
-export default function FinanceActions() {
+export default function FinanceActions({
+  pageCity,
+}: {
+  // The tab's currently-selected city (Slate Review only). null on
+  // tabs without a per-city context (Cities / Field Ranking / Match
+  // P&L) — those tabs show the full action list.
+  pageCity: City | null;
+}) {
   const { appUser } = useAuth();
   const callerEmail = appUser?.email ?? null;
 
@@ -111,13 +128,28 @@ export default function FinanceActions() {
   const [loading, setLoading] = useState(true);
   const [error, setError] = useState<string | null>(null);
 
-  // Add-action form state.
+  // Add-action form state. Default city follows the page city when
+  // one is set (typing a quick note while reviewing Atlanta most
+  // likely belongs to Atlanta). Operator can still flip to
+  // Company-wide via the dropdown.
   const [draftBody, setDraftBody] = useState("");
-  const [draftCity, setDraftCity] = useState<CityValue>(COMPANY_WIDE);
+  const [draftCity, setDraftCity] = useState<CityValue>(
+    pageCity ?? COMPANY_WIDE,
+  );
   const [adding, setAdding] = useState(false);
 
-  // Filter — defaults to "All". Independent of page-level city pills.
-  const [filterCity, setFilterCity] = useState<"All" | CityValue>("All");
+  // Sync the add-row default to pageCity changes so switching from
+  // Atlanta → Houston on Slate Review re-defaults the next action's
+  // city. The draft BODY is preserved — only the dropdown moves.
+  useEffect(() => {
+    setDraftCity(pageCity ?? COMPANY_WIDE);
+  }, [pageCity]);
+
+  // Escape hatch from the "follow page city" filter. Default false:
+  // mirror the page city. Toggle in the header lets the operator
+  // scan all cities without navigating away from their current tab.
+  // Irrelevant when pageCity is null (toggle is hidden).
+  const [showAll, setShowAll] = useState(false);
 
   // List expansion — default collapsed so the sticky bar stays slim.
   // Toggling shows/hides the action list inside the sticky element.
@@ -226,17 +258,25 @@ export default function FinanceActions() {
     void load();
   }
 
+  // Filtering rule:
+  //   - pageCity === null    → show everything (no per-tab context)
+  //   - showAll === true     → show everything (operator escape)
+  //   - pageCity && !showAll → show actions for that city PLUS every
+  //                            Company-wide action (global to-dos
+  //                            apply across all cities by design)
   const filtered = useMemo(() => {
-    const base =
-      filterCity === "All"
-        ? actions
-        : actions.filter((a) => a.city === filterCity);
-    return [...base].sort((a, b) => {
+    const scoped =
+      pageCity && !showAll
+        ? actions.filter(
+            (a) => a.city === pageCity || a.city === COMPANY_WIDE,
+          )
+        : actions;
+    return [...scoped].sort((a, b) => {
       const rank = STATUS_RANK[a.status] - STATUS_RANK[b.status];
       if (rank !== 0) return rank;
       return b.created_at.localeCompare(a.created_at);
     });
-  }, [actions, filterCity]);
+  }, [actions, pageCity, showAll]);
 
   const openCount = useMemo(
     () => actions.filter((a) => a.status !== "resolved").length,
@@ -254,8 +294,12 @@ export default function FinanceActions() {
     // matching the SlateReviewCityPills + FinanceTabNav pattern.
     <div className="sticky top-14 z-30 -mx-4 mt-4 border-y border-cream-line bg-cream-soft/95 backdrop-blur supports-[backdrop-filter]:bg-cream-soft/80 sm:-mx-6">
       <div className="space-y-2 px-4 py-3 sm:px-6">
-        {/* Header row: chevron toggle + title + active/total count */}
-        <div className="flex items-center gap-2">
+        {/* Header row: chevron toggle + title + scope chip + count.
+            The scope chip + Show-all toggle replaces the prior
+            filter-pill row so the Actions header doesn't visually
+            compete with the Slate Review page pills sitting just
+            above it. */}
+        <div className="flex flex-wrap items-center gap-x-3 gap-y-1">
           <button
             type="button"
             onClick={() => setExpanded((v) => !v)}
@@ -279,29 +323,31 @@ export default function FinanceActions() {
               Actions
             </span>
           </button>
-          <span className="text-[11px] font-normal text-deep-green/55">
+          <span className="flex flex-wrap items-baseline gap-x-2 text-[11px] text-deep-green/55">
+            <span>
+              Showing:{" "}
+              <span className="font-bold text-deep-green">
+                {pageCity && !showAll
+                  ? `${pageCity} + ${COMPANY_WIDE}`
+                  : "All cities"}
+              </span>
+            </span>
+            {pageCity && (
+              <button
+                type="button"
+                onClick={() => setShowAll((v) => !v)}
+                className="font-bold uppercase tracking-wider text-mint-hover transition hover:text-deep-green"
+              >
+                {showAll ? `Filter to ${pageCity}` : "Show all"}
+              </button>
+            )}
+          </span>
+          <span className="ml-auto text-[11px] font-normal text-deep-green/55">
             <span className="font-bold tabular-nums text-deep-green">
               {openCount}
             </span>{" "}
             active · {actions.length} total
           </span>
-        </div>
-
-        {/* Filter pills — independent of the page's city selection */}
-        <div className="flex flex-wrap gap-1.5">
-          <FilterPill
-            label="All"
-            active={filterCity === "All"}
-            onClick={() => setFilterCity("All")}
-          />
-          {CITY_OPTIONS.map((c) => (
-            <FilterPill
-              key={c}
-              label={c}
-              active={filterCity === c}
-              onClick={() => setFilterCity(c)}
-            />
-          ))}
         </div>
 
         {/* Add-action row — input + city + Add. Flex-wrap so mobile
@@ -361,7 +407,9 @@ export default function FinanceActions() {
               <div className="rounded-md border border-cream-line bg-cream-soft/40 px-3 py-6 text-center text-sm italic text-deep-green/50">
                 {actions.length === 0
                   ? "No actions yet. Add one above."
-                  : `No actions for ${filterCity}.`}
+                  : pageCity && !showAll
+                    ? `No actions for ${pageCity}.`
+                    : "No actions match the current view."}
               </div>
             ) : (
               <ul className="space-y-2">
@@ -383,31 +431,6 @@ export default function FinanceActions() {
         )}
       </div>
     </div>
-  );
-}
-
-function FilterPill({
-  label,
-  active,
-  onClick,
-}: {
-  label: string;
-  active: boolean;
-  onClick: () => void;
-}) {
-  return (
-    <button
-      type="button"
-      onClick={onClick}
-      aria-pressed={active}
-      className={`shrink-0 rounded-full px-3 py-1 text-xs font-medium transition ${
-        active
-          ? "bg-deep-green text-cream"
-          : "border border-deep-green/20 bg-transparent text-deep-green/70 hover:bg-cream-soft"
-      }`}
-    >
-      {label}
-    </button>
   );
 }
 

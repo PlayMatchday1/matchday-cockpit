@@ -137,6 +137,14 @@ function FinanceLandingContent() {
   const [visited, setVisited] = useState<Set<FinanceTabId>>(
     () => new Set([getInitialTab()]),
   );
+  // Slate Review's selected city lives at this level so FinanceActions
+  // can mirror it ("Showing: Atlanta + Company-wide"). Lifted out of
+  // SlateReviewTabContent to avoid a parallel pill row in Actions
+  // competing with the Slate Review page pills — a single source of
+  // truth for "the city the operator is looking at" feeds both
+  // surfaces. Slate Review's other local state (weekStart) stays
+  // inside SlateReviewTabContent; only city is cross-cutting.
+  const [slateCity, setSlateCity] = useState<City>("Austin");
 
   function selectTab(t: FinanceTabId) {
     setActiveTab(t);
@@ -276,10 +284,20 @@ function FinanceLandingContent() {
           as a direct child of the page container (rather than wrapped
           in a short flex/margin div) so the sticky bar inside it can
           persist while scrolling through the tab content beneath.
-          State (filter, expanded, draft) is preserved across switches
-          within the 4 ACTIONS_TABS; switching to a non-Actions tab
-          unmounts and resets, which is fine — defaults are sensible. */}
-      {ACTIONS_TABS.has(activeTab) && <FinanceActions />}
+          State (expanded, draft, showAll) is preserved across
+          switches within the 4 ACTIONS_TABS; switching to a non-
+          Actions tab unmounts and resets, which is fine.
+
+          pageCity is non-null only on Slate Review (the only tab
+          with a page-level city selector). When set, the Actions
+          list filters to {pageCity + Company-wide} by default, with
+          a "Show all" escape hatch in the section header. On Cities
+          / Field Ranking / Match P&L the list shows every action. */}
+      {ACTIONS_TABS.has(activeTab) && (
+        <FinanceActions
+          pageCity={activeTab === "slate-review" ? slateCity : null}
+        />
+      )}
 
       {secondary === "configure" && (
         <FinanceConfigureSubNav
@@ -319,7 +337,10 @@ function FinanceLandingContent() {
         <FieldRankingTabContent />
       </TabPanel>
       <TabPanel id="slate-review" active={activeTab} visited={visited}>
-        <SlateReviewTabContent />
+        <SlateReviewTabContent
+          selectedCity={slateCity}
+          onSelectedCityChange={setSlateCity}
+        />
       </TabPanel>
       <TabPanel id="check-ins" active={activeTab} visited={visited}>
         <CheckInsView />
@@ -476,8 +497,13 @@ function CitiesTabContent() {
 // Defaults to Austin + current Monday. Local state; no URL persistence.
 // Action items used to live mid-page here; replaced by the shared
 // FinanceActions section that renders above every non-Cash-Flow tab.
-function SlateReviewTabContent() {
-  const [selectedCity, setSelectedCity] = useState<City>("Austin");
+function SlateReviewTabContent({
+  selectedCity,
+  onSelectedCityChange,
+}: {
+  selectedCity: City;
+  onSelectedCityChange: (city: City) => void;
+}) {
   const [weekStart, setWeekStart] = useState<string>(() => {
     const mon = getMonday(new Date());
     const y = mon.getFullYear();
@@ -487,7 +513,7 @@ function SlateReviewTabContent() {
   });
   return (
     <div className="space-y-4">
-      <SlateReviewCityPills value={selectedCity} onChange={setSelectedCity} />
+      <SlateReviewCityPills value={selectedCity} onChange={onSelectedCityChange} />
       <CollapsibleSection title="Last 8 weeks">
         <SlateReviewEightWeekChart city={selectedCity} />
       </CollapsibleSection>
