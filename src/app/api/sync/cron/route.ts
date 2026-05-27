@@ -46,6 +46,7 @@ import {
 import { syncMdapiUsers } from "@/lib/mdapiUsersSync";
 import { refreshUsersLensSnapshot } from "@/lib/usersLensSnapshot";
 import { refreshMembershipSnapshots } from "@/lib/membershipSnapshots";
+import { refreshMembershipPriceSnapshots } from "@/lib/membershipPriceSnapshots";
 import { recomputeManagerPayIntoFinExpenses } from "@/lib/managerPayCompute";
 import { runWithLog, type TriggeredBy } from "@/lib/syncLogging";
 
@@ -274,6 +275,28 @@ export async function POST(req: Request) {
   );
   console.timeEnd("mdapi-users-lens-snapshot");
 
+  // Membership price snapshots — per-city MAX(active price). Same
+  // mdapi_subscriptions dependency as the broader members_monthly
+  // snapshot below, so skip-on-fail follows the same rule. Cheap
+  // (< 1s for ~425 active subs, single-row inserts only on change).
+  // Placed before the members_monthly refresh because both consume
+  // the same dataset and grouping the dependent steps keeps the
+  // ordering tractable.
+  const membershipPricesResult = await runWithLog(
+    "membership-prices",
+    triggeredBy,
+    supabase,
+    async (sb) => {
+      if (!subscriptionsResult.ok) {
+        throw new Error(
+          "Skipped: mdapi_subscriptions sync failed; price snapshot needs fresh data",
+        );
+      }
+      return refreshMembershipPriceSnapshots(sb);
+    },
+    (r) => ({ rows_imported: r.changesInserted }),
+  );
+
   // Snapshot refresh consumes mdapi_subscriptions data, so it only
   // runs if that sync succeeded. The throw-on-skip pattern lets
   // runWithLog handle the log row uniformly — error_message records
@@ -305,6 +328,7 @@ export async function POST(req: Request) {
     !managerPayResult.ok ||
     !usersResult.ok ||
     !usersLensSnapshotResult.ok ||
+    !membershipPricesResult.ok ||
     !snapshotResult.ok;
 
   return Response.json(
@@ -320,6 +344,7 @@ export async function POST(req: Request) {
         manager_pay_recompute: managerPayResult,
         mdapi_users: usersResult,
         mdapi_users_lens_snapshot: usersLensSnapshotResult,
+        membership_prices: membershipPricesResult,
         membership_snapshots: snapshotResult,
       },
     },

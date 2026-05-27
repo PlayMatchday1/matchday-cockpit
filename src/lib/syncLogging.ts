@@ -24,6 +24,7 @@ export type SourceName =
   | "mdapi-users"
   | "mdapi-users-lens-snapshot"
   | "membership-snapshots"
+  | "membership-prices"
   | "manager-pay-recompute";
 
 // fin_sync_log columns the orchestrator/manual routes write on

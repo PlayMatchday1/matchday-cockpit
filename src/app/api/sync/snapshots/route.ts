@@ -18,6 +18,7 @@
 import { timingSafeEqual } from "node:crypto";
 import { createClient, type SupabaseClient } from "@supabase/supabase-js";
 import { refreshMembershipSnapshots } from "@/lib/membershipSnapshots";
+import { refreshMembershipPriceSnapshots } from "@/lib/membershipPriceSnapshots";
 import { runWithLog, type TriggeredBy } from "@/lib/syncLogging";
 
 // Snapshot refresh is fast (~5s) — reads ~38k mdapi_subscriptions
@@ -86,6 +87,19 @@ export async function POST(req: Request) {
     }
   }
 
+  // Membership price snapshot — per-city MAX(active price), insert-
+  // on-change. Runs first so the operator hitting "Sync now" right
+  // after a fresh subscription sync also seeds price baselines for
+  // any city that doesn't have one yet. Logged separately so the
+  // Recent Syncs row count reflects price-change events written.
+  const priceResult = await runWithLog(
+    "membership-prices",
+    triggeredBy,
+    supabase,
+    refreshMembershipPriceSnapshots,
+    (r) => ({ rows_imported: r.changesInserted }),
+  );
+
   const result = await runWithLog(
     "membership-snapshots",
     triggeredBy,
@@ -97,12 +111,15 @@ export async function POST(req: Request) {
     () => ({}),
   );
 
+  const anyFailed = !priceResult.ok || !result.ok;
+
   return Response.json(
     {
       triggeredBy,
       durationMs: Date.now() - startedAt,
-      ...result,
+      membership_prices: priceResult,
+      membership_snapshots: result,
     },
-    { status: result.ok ? 200 : 500 },
+    { status: anyFailed ? 500 : 200 },
   );
 }

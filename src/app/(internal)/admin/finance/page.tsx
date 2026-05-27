@@ -35,7 +35,9 @@ import FieldRankingTable from "@/components/FieldRankingTable";
 import CollapsibleSection from "@/components/CollapsibleSection";
 import FinanceActions from "@/components/FinanceActions";
 import MatchPnL from "@/components/MatchPnL";
+import SlateDppPriceHistory from "@/components/SlateDppPriceHistory";
 import SlateMatchPnLSection from "@/components/SlateMatchPnLSection";
+import SlateMembershipPriceHistory from "@/components/SlateMembershipPriceHistory";
 import PartnerDashboardsAdmin from "@/components/PartnerDashboardsAdmin";
 import RevenueAdminView from "@/components/RevenueAdminView";
 import TotalsBarChart from "@/components/TotalsBarChart";
@@ -507,6 +509,12 @@ function SlateReviewTabContent() {
       </CollapsibleSection>
       <CollapsibleSection title="Match P&L">
         <SlateMatchPnLSection city={selectedCity} />
+      </CollapsibleSection>
+      <CollapsibleSection title="DPP price changes" defaultOpen={false}>
+        <SlateDppPriceHistory city={selectedCity} />
+      </CollapsibleSection>
+      <CollapsibleSection title="Membership price changes" defaultOpen={false}>
+        <SlateMembershipPriceHistory city={selectedCity} />
       </CollapsibleSection>
     </div>
   );
