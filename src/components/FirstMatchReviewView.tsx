@@ -3,11 +3,12 @@
 import { useEffect, useMemo, useState } from "react";
 import { supabase } from "@/lib/supabase";
 
-// Reads two RLS-gated sources directly via the browser client (same
-// pattern as AdminUsersView): the firstmatch_repeat_clusters view (the
-// actionable flags) and the firstmatch_ledger table (the full history).
-// Both are admin-only at the DB layer; this page is also wrapped in
-// AdminGuard.
+// Reads RLS-gated sources directly via the browser client (same pattern
+// as AdminUsersView): the firstmatch_repeat_clusters view (the
+// actionable flags) and the firstmatch_ledger table (full history).
+// Cluster entries are enriched client-side from mdapi_matches (venue +
+// venue-local start time) and mdapi_match_players (per-account deletion
+// status). All admin-only at the DB layer; the page is AdminGuard-wrapped.
 
 type ClusterEntry = {
   name: string | null;
@@ -42,6 +43,19 @@ type LedgerRow = {
   source: string;
 };
 
+// user_id -> deletion status. deletedApprox is the earliest synced_at at
+// which we observed the account's rows scrubbed; approximate because the
+// scrub timestamp itself is never logged.
+type ScrubInfo = { deleted: boolean; deletedApprox: string | null };
+type MatchInfo = { field_title: string | null; start_date: string | null };
+
+// MatchDay scrubs deleted accounts to del_<hex>@playmatchday.com / null
+// phone. Inlined (not imported from firstmatchLedger, which pulls in
+// node:crypto and would break the browser bundle).
+function isScrubbedRow(email: string | null, phone: string | null): boolean {
+  return !!email && email.startsWith("del_") && phone === null;
+}
+
 function fmtDate(iso: string | null): string {
   if (!iso) return "—";
   const d = new Date(iso);
@@ -53,14 +67,30 @@ function fmtDate(iso: string | null): string {
   });
 }
 
+// Venue-local start time. mdapi_matches.start_date stores the local wall
+// time with a cosmetic +00:00 offset (start_date_utc carries the true
+// UTC). Parse the wall-clock fields straight from the string — do NOT go
+// through Date(), which would convert into the reviewer's browser tz.
+function fmtVenueTime(startDate: string | null): string | null {
+  if (!startDate) return null;
+  const m = startDate.match(/T(\d{2}):(\d{2})/);
+  if (!m) return null;
+  let h = parseInt(m[1], 10);
+  const min = m[2];
+  const ampm = h >= 12 ? "PM" : "AM";
+  h = h % 12 || 12;
+  return `${h}:${min} ${ampm}`;
+}
+
 export default function FirstMatchReviewView() {
   const [clusters, setClusters] = useState<Cluster[]>([]);
   const [ledger, setLedger] = useState<LedgerRow[]>([]);
+  const [matchMap, setMatchMap] = useState<Map<number, MatchInfo>>(new Map());
+  const [scrubMap, setScrubMap] = useState<Map<number, ScrubInfo>>(new Map());
   const [loading, setLoading] = useState(true);
   const [error, setError] = useState<string | null>(null);
   // The view (migration 0054) is applied separately in the SQL Editor.
-  // If it isn't there yet, the ledger table still loads — show a hint
-  // instead of erroring the whole page.
+  // If it isn't there yet, the ledger table still loads — show a hint.
   const [viewMissing, setViewMissing] = useState(false);
 
   const [search, setSearch] = useState("");
@@ -73,10 +103,11 @@ export default function FirstMatchReviewView() {
       setError(null);
       setViewMissing(false);
 
-      // Clusters (the view).
+      // 1. Clusters (the view).
       const clusterRes = await supabase
         .from("firstmatch_repeat_clusters")
         .select("*");
+      let loaded: Cluster[] = [];
       if (clusterRes.error) {
         const e = clusterRes.error;
         if (e.code === "42P01" || /does not exist/i.test(e.message)) {
@@ -86,11 +117,70 @@ export default function FirstMatchReviewView() {
           setLoading(false);
           return;
         }
-      } else if (!cancelled) {
-        setClusters((clusterRes.data ?? []) as Cluster[]);
+      } else {
+        loaded = (clusterRes.data ?? []) as Cluster[];
+        if (!cancelled) setClusters(loaded);
       }
 
-      // Full ledger (paginated — a few thousand rows).
+      // 2. Enrich cluster entries (small set) with venue + deletion state.
+      const userIds = [
+        ...new Set(loaded.flatMap((c) => c.entries.map((e) => e.user_id))),
+      ];
+      const matchIds = [
+        ...new Set(
+          loaded.flatMap((c) =>
+            c.entries
+              .map((e) => e.match_api_id)
+              .filter((x): x is number => x !== null),
+          ),
+        ),
+      ];
+
+      if (matchIds.length > 0) {
+        const { data } = await supabase
+          .from("mdapi_matches")
+          .select("api_id, field_title, start_date")
+          .in("api_id", matchIds);
+        const mm = new Map<number, MatchInfo>();
+        for (const r of (data ?? []) as {
+          api_id: number;
+          field_title: string | null;
+          start_date: string | null;
+        }[]) {
+          mm.set(r.api_id, {
+            field_title: r.field_title,
+            start_date: r.start_date,
+          });
+        }
+        if (!cancelled) setMatchMap(mm);
+      }
+
+      if (userIds.length > 0) {
+        const { data } = await supabase
+          .from("mdapi_match_players")
+          .select("user_id, user_email, user_phone_number, synced_at")
+          .in("user_id", userIds);
+        const sm = new Map<number, ScrubInfo>();
+        for (const uid of userIds) sm.set(uid, { deleted: false, deletedApprox: null });
+        for (const r of (data ?? []) as {
+          user_id: number;
+          user_email: string | null;
+          user_phone_number: string | null;
+          synced_at: string;
+        }[]) {
+          if (!isScrubbedRow(r.user_email, r.user_phone_number)) continue;
+          const cur = sm.get(r.user_id) ?? { deleted: false, deletedApprox: null };
+          // Earliest observed scrubbed synced_at = approximate deletion.
+          const approx =
+            cur.deletedApprox && cur.deletedApprox < r.synced_at
+              ? cur.deletedApprox
+              : r.synced_at;
+          sm.set(r.user_id, { deleted: true, deletedApprox: approx });
+        }
+        if (!cancelled) setScrubMap(sm);
+      }
+
+      // 3. Full ledger (paginated).
       const all: LedgerRow[] = [];
       for (let from = 0; ; from += 1000) {
         const { data, error: lErr } = await supabase
@@ -137,31 +227,26 @@ export default function FirstMatchReviewView() {
     return <p className="text-[13px] text-deep-green/55">Loading…</p>;
   }
   if (error) {
-    return (
-      <p className="text-[13px] text-red-700">
-        Failed to load: {error}
-      </p>
-    );
+    return <p className="text-[13px] text-red-700">Failed to load: {error}</p>;
   }
 
   return (
-    <div className="space-y-8">
-      {/* ── Flagged repeat clusters ── */}
-      <section>
+    <div className="flex flex-col gap-8 lg:flex-row lg:items-start lg:gap-6">
+      {/* ── Left column: flagged repeat clusters ── */}
+      <section className="lg:w-[44%] lg:shrink-0 lg:max-h-[calc(100vh-180px)] lg:overflow-y-auto lg:pr-1">
         <h2 className="mb-1 text-[15px] font-bold tracking-tight text-deep-green">
           Flagged repeats
         </h2>
         <p className="mb-3 text-[12px] text-deep-green/55">
-          Same phone or email across two or more accounts. Review only — not
-          an auto-denial. Shared or recycled numbers produce false positives.
+          Same phone or email across two or more accounts. Review only — not an
+          auto-denial. Shared or recycled numbers produce false positives.
         </p>
 
         {viewMissing ? (
           <div className="rounded-md border border-amber-300 bg-amber-50 px-3 py-2 text-[12px] text-amber-800">
             Detection view not found. Apply migration{" "}
             <code>0054_firstmatch_repeat_clusters.sql</code> in the Supabase SQL
-            Editor to enable cluster detection. The full ledger below is
-            unaffected.
+            Editor to enable cluster detection. The full ledger is unaffected.
           </div>
         ) : clusters.length === 0 ? (
           <p className="text-[13px] text-deep-green/55">
@@ -188,41 +273,60 @@ export default function FirstMatchReviewView() {
                     {c.distinct_accounts} accounts
                   </span>
                   <span className="text-[12px] text-deep-green/55">
-                    {c.claim_count} claims · {fmtDate(c.first_claim)} →{" "}
-                    {fmtDate(c.last_claim)}
+                    {c.claim_count} claims
                   </span>
                 </div>
-                <table className="w-full text-[13px]">
-                  <tbody>
-                    {c.entries.map((e) => (
-                      <tr
+                <ul>
+                  {c.entries.map((e) => {
+                    const match = e.match_api_id
+                      ? matchMap.get(e.match_api_id)
+                      : undefined;
+                    const venue = match?.field_title ?? null;
+                    const time = fmtVenueTime(match?.start_date ?? null);
+                    const scrub = scrubMap.get(e.user_id);
+                    const meta = [
+                      fmtDate(e.claim_date),
+                      e.city ?? null,
+                      venue,
+                      time,
+                      e.is_cancelled ? "cancelled" : null,
+                    ]
+                      .filter(Boolean)
+                      .join(" · ");
+                    return (
+                      <li
                         key={e.player_api_id}
-                        className="border-b border-cream-line/60 last:border-0"
+                        className="border-b border-cream-line/60 px-3 py-2 last:border-0"
                       >
-                        <td className="px-3 py-1.5 font-medium text-deep-green">
-                          {e.name ?? "(no name)"}
-                        </td>
-                        <td className="px-3 py-1.5 text-deep-green/70">
-                          {fmtDate(e.claim_date)}
-                        </td>
-                        <td className="px-3 py-1.5 text-deep-green/70">
-                          {e.city ?? "—"}
-                        </td>
-                        <td className="px-3 py-1.5 text-right text-deep-green/45">
-                          {e.is_cancelled ? "cancelled" : ""}
-                        </td>
-                      </tr>
-                    ))}
-                  </tbody>
-                </table>
+                        <div className="flex items-baseline justify-between gap-2">
+                          <span className="text-[13px] font-medium text-deep-green">
+                            {e.name ?? "(no name)"}
+                          </span>
+                          {scrub?.deleted ? (
+                            <span className="shrink-0 rounded bg-amber-100 px-1.5 py-0.5 text-[11px] font-semibold text-amber-800">
+                              Deleted ~ {fmtDate(scrub.deletedApprox)}
+                            </span>
+                          ) : (
+                            <span className="shrink-0 rounded bg-mint-hover/20 px-1.5 py-0.5 text-[11px] font-semibold text-deep-green">
+                              Active
+                            </span>
+                          )}
+                        </div>
+                        <div className="text-[12px] text-deep-green/55">
+                          {meta}
+                        </div>
+                      </li>
+                    );
+                  })}
+                </ul>
               </div>
             ))}
           </div>
         )}
       </section>
 
-      {/* ── Full ledger ── */}
-      <section>
+      {/* ── Right column: full ledger ── */}
+      <section className="lg:flex-1 lg:max-h-[calc(100vh-180px)] lg:overflow-y-auto">
         <div className="mb-3 flex flex-wrap items-center gap-3">
           <h2 className="text-[15px] font-bold tracking-tight text-deep-green">
             All claims
