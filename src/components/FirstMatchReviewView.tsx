@@ -156,13 +156,38 @@ export default function FirstMatchReviewView() {
       }
 
       if (userIds.length > 0) {
-        const { data } = await supabase
+        const sm = new Map<number, ScrubInfo>();
+        for (const uid of userIds) sm.set(uid, { deleted: false, deletedApprox: null });
+
+        // Primary deletion oracle: mdapi_users is fully re-synced daily, so
+        // it reflects the CURRENT scrub state for every account. (We can't
+        // use mdapi_match_players for this — its out-of-window rows are
+        // frozen at pre-deletion values and never re-synced, so a deleted
+        // account whose claim match is older than the sync window still
+        // shows a real email there. That was the regression.)
+        const usersRes = await supabase
+          .from("mdapi_users")
+          .select("id, email, synced_at")
+          .in("id", userIds);
+        for (const u of (usersRes.data ?? []) as {
+          id: number;
+          email: string | null;
+          synced_at: string;
+        }[]) {
+          if (!u.email || !u.email.startsWith("del_")) continue;
+          // mdapi_users.synced_at is the latest full sync (~today). It's the
+          // fallback observation; an earlier player-row scrub (below) wins.
+          sm.set(u.id, { deleted: true, deletedApprox: u.synced_at });
+        }
+
+        // Refine the approximate date: when the scrub happened to be captured
+        // on an in-window match player row, that synced_at is an earlier (and
+        // truer) observation of when the account was deleted.
+        const playersRes = await supabase
           .from("mdapi_match_players")
           .select("user_id, user_email, user_phone_number, synced_at")
           .in("user_id", userIds);
-        const sm = new Map<number, ScrubInfo>();
-        for (const uid of userIds) sm.set(uid, { deleted: false, deletedApprox: null });
-        for (const r of (data ?? []) as {
+        for (const r of (playersRes.data ?? []) as {
           user_id: number;
           user_email: string | null;
           user_phone_number: string | null;
@@ -170,13 +195,13 @@ export default function FirstMatchReviewView() {
         }[]) {
           if (!isScrubbedRow(r.user_email, r.user_phone_number)) continue;
           const cur = sm.get(r.user_id) ?? { deleted: false, deletedApprox: null };
-          // Earliest observed scrubbed synced_at = approximate deletion.
-          const approx =
+          const earliest =
             cur.deletedApprox && cur.deletedApprox < r.synced_at
               ? cur.deletedApprox
               : r.synced_at;
-          sm.set(r.user_id, { deleted: true, deletedApprox: approx });
+          sm.set(r.user_id, { deleted: true, deletedApprox: earliest });
         }
+
         if (!cancelled) setScrubMap(sm);
       }
 
@@ -222,6 +247,11 @@ export default function FirstMatchReviewView() {
       );
     });
   }, [ledger, search, hideCancelled]);
+
+  const cancelledCount = useMemo(
+    () => ledger.filter((r) => r.is_cancelled).length,
+    [ledger],
+  );
 
   if (loading) {
     return <p className="text-[13px] text-deep-green/55">Loading…</p>;
@@ -347,7 +377,7 @@ export default function FirstMatchReviewView() {
               checked={hideCancelled}
               onChange={(e) => setHideCancelled(e.target.checked)}
             />
-            Hide cancelled
+            Hide cancelled ({cancelledCount})
           </label>
         </div>
 
