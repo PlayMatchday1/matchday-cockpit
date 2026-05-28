@@ -1,7 +1,7 @@
 // POST /api/sync/cron — orchestrator that runs seven daily steps:
 // stripe-api → mdapi-reviews → mdapi-subscriptions → mdapi-promocodes
-// → mdapi-matches → mdapi-users → membership-snapshots. Sequential,
-// per-source error isolation.
+// → mdapi-matches → firstmatch-ledger → mdapi-users →
+// membership-snapshots. Sequential, per-source error isolation.
 //
 // Skip-on-fail rules:
 //   - Snapshot refresh skips if mdapi-subscriptions failed (active
@@ -43,6 +43,7 @@ import {
   syncMdapiMatches,
   defaultIncrementalWindow,
 } from "@/lib/mdapiMatchesSync";
+import { syncFirstmatchLedger } from "@/lib/firstmatchLedgerSync";
 import { syncMdapiUsers } from "@/lib/mdapiUsersSync";
 import { refreshUsersLensSnapshot } from "@/lib/usersLensSnapshot";
 import { refreshMembershipSnapshots } from "@/lib/membershipSnapshots";
@@ -215,6 +216,21 @@ export async function POST(req: Request) {
     }),
   );
 
+  // First-match abuse ledger — captures one-way phone/email hashes for
+  // is_first_match=true claims so delete-and-remake repeat abuse is
+  // detectable for human review. Reads mdapi_match_players, so it runs
+  // after the matches sync. Insert-only (a row's hashes are write-once),
+  // so it processes the full accumulated table each run; independent of
+  // matches success (no skip-on-fail) — if matches failed it just won't
+  // see today's newest claims, which the next run picks up.
+  const firstmatchLedgerResult = await runWithLog(
+    "firstmatch-ledger",
+    triggeredBy,
+    supabase,
+    (sb) => syncFirstmatchLedger(sb, "sync"),
+    (r) => ({ rows_imported: r.inserted }),
+  );
+
   // Manager Pay recompute — rolls per-(city, payDate) totals into
   // fin_expenses for the Finance Manager Pay grid. Runs AFTER
   // mdapi-matches so it sees the freshly-synced manager assignments
@@ -325,6 +341,7 @@ export async function POST(req: Request) {
     !subscriptionsResult.ok ||
     !promocodesResult.ok ||
     !matchesResult.ok ||
+    !firstmatchLedgerResult.ok ||
     !managerPayResult.ok ||
     !usersResult.ok ||
     !usersLensSnapshotResult.ok ||
@@ -341,6 +358,7 @@ export async function POST(req: Request) {
         mdapi_subscriptions: subscriptionsResult,
         mdapi_promocodes: promocodesResult,
         mdapi_matches: matchesResult,
+        firstmatch_ledger: firstmatchLedgerResult,
         manager_pay_recompute: managerPayResult,
         mdapi_users: usersResult,
         mdapi_users_lens_snapshot: usersLensSnapshotResult,
