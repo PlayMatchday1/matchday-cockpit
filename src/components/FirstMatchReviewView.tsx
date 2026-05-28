@@ -87,6 +87,13 @@ export default function FirstMatchReviewView() {
   const [ledger, setLedger] = useState<LedgerRow[]>([]);
   const [matchMap, setMatchMap] = useState<Map<number, MatchInfo>>(new Map());
   const [scrubMap, setScrubMap] = useState<Map<number, ScrubInfo>>(new Map());
+  // player_api_id -> promocode_id (from the source match-player row), and
+  // promocode_id -> code text. firstmatchCatalogIds = the free-first-match
+  // promo records (code = 'firstmatch'); a claim using one of these is the
+  // financial-abuse signal vs a plain repeat.
+  const [promoByPlayer, setPromoByPlayer] = useState<Map<number, number | null>>(new Map());
+  const [codeById, setCodeById] = useState<Map<number, string>>(new Map());
+  const [catalogIds, setCatalogIds] = useState<Set<number>>(new Set());
   const [loading, setLoading] = useState(true);
   const [error, setError] = useState<string | null>(null);
   // The view (migration 0054) is applied separately in the SQL Editor.
@@ -95,6 +102,9 @@ export default function FirstMatchReviewView() {
 
   const [search, setSearch] = useState("");
   const [hideCancelled, setHideCancelled] = useState(false);
+  // Default off: show all repeat clusters. On: only clusters where a claim
+  // used a free-first-match promo code (the genuine financial abuse).
+  const [promoAbuseOnly, setPromoAbuseOnly] = useState(false);
 
   useEffect(() => {
     let cancelled = false;
@@ -205,6 +215,59 @@ export default function FirstMatchReviewView() {
         if (!cancelled) setScrubMap(sm);
       }
 
+      // 2b. Promo codes. Resolve promocode_id (which lives on the source
+      // match-player rows, not the ledger) to code text via mdapi_promocodes,
+      // and capture the free-first-match catalog ids (code = 'firstmatch')
+      // dynamically so new firstmatch records are picked up automatically.
+      const catalog = new Set<number>();
+      const catRes = await supabase
+        .from("mdapi_promocodes")
+        .select("api_id")
+        .ilike("code", "firstmatch");
+      for (const r of (catRes.data ?? []) as { api_id: number }[]) {
+        catalog.add(r.api_id);
+      }
+
+      const pbp = new Map<number, number | null>();
+      for (let from = 0; ; from += 1000) {
+        const { data, error: pErr } = await supabase
+          .from("mdapi_match_players")
+          .select("api_id, promocode_id")
+          .eq("is_first_match", true)
+          .order("api_id", { ascending: true })
+          .range(from, from + 999);
+        if (pErr) break; // non-fatal — promo column just falls back to "—"
+        const rows = (data ?? []) as {
+          api_id: number;
+          promocode_id: number | null;
+        }[];
+        for (const r of rows) pbp.set(r.api_id, r.promocode_id);
+        if (rows.length < 1000) break;
+      }
+
+      const cbi = new Map<number, string>();
+      const distinctPromoIds = [
+        ...new Set(
+          [...pbp.values()].filter((x): x is number => x !== null),
+        ),
+      ];
+      for (let i = 0; i < distinctPromoIds.length; i += 300) {
+        const chunk = distinctPromoIds.slice(i, i + 300);
+        const { data } = await supabase
+          .from("mdapi_promocodes")
+          .select("api_id, code")
+          .in("api_id", chunk);
+        for (const r of (data ?? []) as { api_id: number; code: string }[]) {
+          cbi.set(r.api_id, r.code);
+        }
+      }
+
+      if (!cancelled) {
+        setCatalogIds(catalog);
+        setPromoByPlayer(pbp);
+        setCodeById(cbi);
+      }
+
       // 3. Full ledger (paginated).
       const all: LedgerRow[] = [];
       for (let from = 0; ; from += 1000) {
@@ -253,6 +316,31 @@ export default function FirstMatchReviewView() {
     [ledger],
   );
 
+  const promoCodeFor = (playerApiId: number): string | null => {
+    const pid = promoByPlayer.get(playerApiId);
+    if (pid == null) return null;
+    return codeById.get(pid) ?? null;
+  };
+
+  const clusterUsedFreePromo = (c: Cluster): boolean =>
+    c.entries.some((e) => {
+      const pid = promoByPlayer.get(e.player_api_id);
+      return pid != null && catalogIds.has(pid);
+    });
+
+  const visibleClusters = useMemo(
+    () =>
+      promoAbuseOnly
+        ? clusters.filter((c) =>
+            c.entries.some((e) => {
+              const pid = promoByPlayer.get(e.player_api_id);
+              return pid != null && catalogIds.has(pid);
+            }),
+          )
+        : clusters,
+    [clusters, promoAbuseOnly, promoByPlayer, catalogIds],
+  );
+
   if (loading) {
     return <p className="text-[13px] text-deep-green/55">Loading…</p>;
   }
@@ -272,6 +360,20 @@ export default function FirstMatchReviewView() {
           auto-denial. Shared or recycled numbers produce false positives.
         </p>
 
+        {!viewMissing && clusters.length > 0 && (
+          <label className="mb-3 flex items-center gap-1.5 text-[12px] text-deep-green/70">
+            <input
+              type="checkbox"
+              checked={promoAbuseOnly}
+              onChange={(e) => setPromoAbuseOnly(e.target.checked)}
+            />
+            Promo abuse only
+            <span className="text-deep-green/45">
+              ({visibleClusters.length} of {clusters.length})
+            </span>
+          </label>
+        )}
+
         {viewMissing ? (
           <div className="rounded-md border border-amber-300 bg-amber-50 px-3 py-2 text-[12px] text-amber-800">
             Detection view not found. Apply migration{" "}
@@ -282,9 +384,13 @@ export default function FirstMatchReviewView() {
           <p className="text-[13px] text-deep-green/55">
             No repeat clusters detected.
           </p>
+        ) : visibleClusters.length === 0 ? (
+          <p className="text-[13px] text-deep-green/55">
+            No clusters used a free first-match promo code.
+          </p>
         ) : (
           <div className="space-y-3">
-            {clusters.map((c) => (
+            {visibleClusters.map((c) => (
               <div
                 key={`${c.match_type}:${c.match_hash}`}
                 className="rounded-md border border-cream-line"
@@ -305,6 +411,15 @@ export default function FirstMatchReviewView() {
                   <span className="text-[12px] text-deep-green/55">
                     {c.claim_count} claims
                   </span>
+                  {clusterUsedFreePromo(c) ? (
+                    <span className="ml-auto shrink-0 rounded bg-red-100 px-1.5 py-0.5 text-[11px] font-semibold text-red-700">
+                      Free promo used
+                    </span>
+                  ) : (
+                    <span className="ml-auto shrink-0 rounded bg-deep-green/5 px-1.5 py-0.5 text-[11px] font-medium text-deep-green/50">
+                      Full-price repeats
+                    </span>
+                  )}
                 </div>
                 <ul>
                   {c.entries.map((e) => {
@@ -314,11 +429,13 @@ export default function FirstMatchReviewView() {
                     const venue = match?.field_title ?? null;
                     const time = fmtVenueTime(match?.start_date ?? null);
                     const scrub = scrubMap.get(e.user_id);
+                    const code = promoCodeFor(e.player_api_id);
                     const meta = [
                       fmtDate(e.claim_date),
                       e.city ?? null,
                       venue,
                       time,
+                      `promo: ${code ?? "—"}`,
                       e.is_cancelled ? "cancelled" : null,
                     ]
                       .filter(Boolean)
@@ -388,6 +505,7 @@ export default function FirstMatchReviewView() {
                 <th className="px-3 py-2 font-semibold">Name</th>
                 <th className="px-3 py-2 font-semibold">Claim date</th>
                 <th className="px-3 py-2 font-semibold">City</th>
+                <th className="px-3 py-2 font-semibold">Promo</th>
                 <th className="px-3 py-2 font-semibold">Identifiers</th>
                 <th className="px-3 py-2 font-semibold">Status</th>
                 <th className="px-3 py-2 font-semibold">Source</th>
@@ -408,6 +526,9 @@ export default function FirstMatchReviewView() {
                   <td className="px-3 py-1.5 text-deep-green/70">
                     {r.city_identifier ?? "—"}
                   </td>
+                  <td className="px-3 py-1.5 text-[12px] text-deep-green/70">
+                    {promoCodeFor(r.player_api_id) ?? "—"}
+                  </td>
                   <td className="px-3 py-1.5 text-[12px] text-deep-green/55">
                     {r.is_unrecoverable
                       ? "identity scrubbed"
@@ -426,7 +547,7 @@ export default function FirstMatchReviewView() {
               {filteredLedger.length === 0 && (
                 <tr>
                   <td
-                    colSpan={6}
+                    colSpan={7}
                     className="px-3 py-4 text-center text-[13px] text-deep-green/55"
                   >
                     No matching claims.
