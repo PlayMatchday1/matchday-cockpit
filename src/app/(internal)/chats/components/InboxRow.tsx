@@ -1,5 +1,7 @@
 "use client";
 
+import { Star } from "lucide-react";
+
 // Single thread row in the Player Chat inbox. iMessage layout:
 // circular initials avatar, name + timestamp on the top line,
 // message preview + unread dot below, small metadata footer
@@ -28,6 +30,9 @@ export type InboxRowThread = {
   // client never recomputes the rule — it just renders this flag and
   // optimistically patches on mark-read.
   is_unread: boolean;
+  // Per-viewer follow-up star. Server-computed; optimistically patched
+  // on toggle.
+  is_follow_up: boolean;
 };
 
 function fullName(t: InboxRowThread): string {
@@ -69,10 +74,12 @@ export default function InboxRow({
   thread,
   active,
   onSelect,
+  onToggleFollowUp,
 }: {
   thread: InboxRowThread;
   active: boolean;
   onSelect: () => void;
+  onToggleFollowUp: () => void;
 }) {
   const name = fullName(thread);
   const initials = initialsOf(name);
@@ -91,12 +98,12 @@ export default function InboxRow({
   if (thread.match_ambiguous) metaBits.push("Historical");
 
   return (
-    <li>
+    <li className="relative">
       <button
         type="button"
         onClick={onSelect}
         style={{ touchAction: "manipulation" }}
-        className={`flex w-full items-center gap-3 px-3 py-3 text-left transition sm:px-4 ${
+        className={`flex w-full items-center gap-3 py-3 pl-3 pr-11 text-left transition sm:pl-4 ${
           active ? "bg-cream-soft" : "bg-white hover:bg-cream-soft/60"
         }`}
       >
@@ -142,6 +149,30 @@ export default function InboxRow({
             </div>
           )}
         </div>
+      </button>
+      {/* Follow-up star — a sibling button (not nested in the select
+          button, which would be invalid HTML). stopPropagation guards
+          against any wrapper handler; tapping it toggles the flag
+          without opening the thread. */}
+      <button
+        type="button"
+        onClick={(e) => {
+          e.stopPropagation();
+          onToggleFollowUp();
+        }}
+        aria-label={
+          thread.is_follow_up ? "Remove follow-up flag" : "Mark for follow up"
+        }
+        aria-pressed={thread.is_follow_up}
+        style={{ touchAction: "manipulation" }}
+        className="absolute right-1.5 top-1/2 flex h-8 w-8 -translate-y-1/2 items-center justify-center rounded-full text-deep-green/35 transition hover:bg-cream-line/60 hover:text-deep-green"
+      >
+        <Star
+          aria-hidden
+          size={16}
+          strokeWidth={1.75}
+          className={thread.is_follow_up ? "fill-coral text-coral" : ""}
+        />
       </button>
     </li>
   );

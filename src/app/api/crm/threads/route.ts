@@ -11,6 +11,7 @@
 //       last_message_at, last_message_preview, last_message_direction,
 //       assigned_to_user_id, assigned_at,
 //       is_unread,                                  // per-viewer
+//       is_follow_up,                               // per-viewer star
 //       player: { first_name, last_name, preferable_city_normalized } | null,
 //       assignee: { id, email, full_name } | null
 //     }> }
@@ -202,6 +203,38 @@ export async function GET(req: Request) {
     }
   }
 
+  // --------------- Follow-up state (per-viewer star) ---------------
+  // Presence of a crm_thread_follow_ups row for the viewer ⇒ starred.
+  // DEFENSIVE: any failure here leaves the set empty, so every thread
+  // reports is_follow_up=false. The inbox must never break because the
+  // follow-up table is slow/unavailable — same isolation discipline as
+  // the unread badge.
+  const followUpSet = new Set<string>();
+  if (viewerId && threadIds.length > 0) {
+    try {
+      const followRes = await supabase
+        .from("crm_thread_follow_ups")
+        .select("thread_id")
+        .eq("user_id", viewerId)
+        .in("thread_id", threadIds);
+      if (followRes.error) {
+        console.error(
+          "[crm:threads.list] follow-up lookup error",
+          followRes.error,
+        );
+      } else {
+        for (const r of (followRes.data ?? []) as { thread_id: string }[]) {
+          followUpSet.add(r.thread_id);
+        }
+      }
+    } catch (e) {
+      // Fully isolated: a query error OR a thrown exception leaves the
+      // set empty and the thread list loads normally with
+      // is_follow_up=false everywhere — the inbox never breaks.
+      console.error("[crm:threads.list] follow-up lookup threw", e);
+    }
+  }
+
   function computeUnread(t: ThreadRow): boolean {
     // Cron / no viewer → no human-facing dot to show.
     if (!viewerId) return false;
@@ -236,6 +269,7 @@ export async function GET(req: Request) {
         ? assigneesById.get(t.assigned_to_user_id) ?? null
         : null,
     is_unread: computeUnread(t),
+    is_follow_up: viewerId ? followUpSet.has(t.id) : false,
   }));
 
   return Response.json({ threads: out }, { status: 200 });

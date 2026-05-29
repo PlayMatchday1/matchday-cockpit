@@ -38,7 +38,7 @@ import {
   useState,
 } from "react";
 import { useRouter, useSearchParams } from "next/navigation";
-import { ChevronLeft, Info, SlidersHorizontal } from "lucide-react";
+import { ChevronLeft, Info, SlidersHorizontal, Star } from "lucide-react";
 import EnablePushNotificationsButton from "@/components/EnablePushNotificationsButton";
 import PlayersMatchesToggle from "@/components/PlayersMatchesToggle";
 import { supabase } from "@/lib/supabase";
@@ -82,6 +82,10 @@ type ThreadListRow = {
   // the client mirrors this for optimistic updates on mark-read but
   // never recomputes the rule itself.
   is_unread: boolean;
+  // Per-viewer follow-up star. Server-computed; optimistically patched
+  // on toggle. (Not a crm_threads column, so realtime crm_threads
+  // UPDATEs never carry it — the selective merge preserves it.)
+  is_follow_up: boolean;
   player: {
     first_name: string | null;
     last_name: string | null;
@@ -213,10 +217,20 @@ export default function CrmClient() {
     return "all";
   }, [searchParams]);
 
+  // Independent, composable follow-up filter (ANDs with city/status).
+  const followUpFilter = useMemo<boolean>(
+    () => searchParams.get("followup") === "1",
+    [searchParams],
+  );
+
   const selectedId = searchParams.get("threadId");
 
   const setFilters = useCallback(
-    (next: { cities?: Set<string>; status?: StatusFilter }) => {
+    (next: {
+      cities?: Set<string>;
+      status?: StatusFilter;
+      followUp?: boolean;
+    }) => {
       const params = new URLSearchParams(searchParams.toString());
       if (next.cities !== undefined) {
         if (next.cities.size === 0) params.delete("cities");
@@ -225,6 +239,10 @@ export default function CrmClient() {
       if (next.status !== undefined) {
         if (next.status === "all") params.delete("status");
         else params.set("status", next.status);
+      }
+      if (next.followUp !== undefined) {
+        if (next.followUp) params.set("followup", "1");
+        else params.delete("followup");
       }
       const qs = params.toString();
       router.replace(qs ? `/chats?${qs}` : "/chats", { scroll: false });
@@ -633,9 +651,18 @@ export default function CrmClient() {
           if (!appUser?.id) return false;
           if (t.assigned_to_user_id !== appUser.id) return false;
         }
+        // Independent follow-up filter — ANDs with the above.
+        if (followUpFilter && !t.is_follow_up) return false;
         return true;
       });
-  }, [threads, cityFilter, statusFilter, appUser?.id]);
+  }, [threads, cityFilter, statusFilter, followUpFilter, appUser?.id]);
+
+  // Count of the viewer's flagged threads among the loaded inbox (the
+  // set the filter can actually show). Drives the "Follow up (N)" pill.
+  const followUpCount = useMemo(
+    () => threads.reduce((n, t) => n + (t.is_follow_up ? 1 : 0), 0),
+    [threads],
+  );
 
   const selectedThread =
     filteredThreads.find((t) => t.id === selectedId) ??
@@ -718,6 +745,45 @@ export default function CrmClient() {
     [],
   );
 
+  // Follow-up star toggle. `desired` is passed from the call site (the
+  // row/header knows the current state), so it's an explicit set, not a
+  // blind toggle — matches the idempotent endpoint. Optimistic: patch
+  // both the list row and the open detail immediately, revert on failure.
+  const onToggleFollowUp = useCallback(
+    async (threadId: string, desired: boolean) => {
+      const patch = (value: boolean) => {
+        setThreads((prev) =>
+          prev.map((t) =>
+            t.id === threadId ? { ...t, is_follow_up: value } : t,
+          ),
+        );
+        setDetail((prev) =>
+          prev && prev.thread.id === threadId
+            ? { ...prev, thread: { ...prev.thread, is_follow_up: value } }
+            : prev,
+        );
+      };
+      patch(desired);
+      const headers = await bearerHeaders();
+      if (!headers) {
+        patch(!desired); // no session — undo the optimistic flip
+        return;
+      }
+      try {
+        const res = await fetch(`/api/crm/threads/${threadId}/follow-up`, {
+          method: "POST",
+          headers,
+          body: JSON.stringify({ follow_up: desired }),
+        });
+        if (!res.ok) throw new Error(`HTTP ${res.status}`);
+      } catch (err) {
+        console.error("[crm] follow-up toggle failed", err);
+        patch(!desired); // revert
+      }
+    },
+    [],
+  );
+
   const whatsappExpired = computeWhatsAppExpired(detail);
 
   // Mobile flow rules:
@@ -743,6 +809,8 @@ export default function CrmClient() {
         onRefresh={() => void loadThreads()}
         cities={cityFilter}
         status={statusFilter}
+        followUp={followUpFilter}
+        followUpCount={followUpCount}
         onFilterChange={setFilters}
         canFilterMine={!!appUser?.id}
       />
@@ -778,6 +846,9 @@ export default function CrmClient() {
                     thread={t as InboxRowThread}
                     active={t.id === selectedId}
                     onSelect={() => setSelected(t.id)}
+                    onToggleFollowUp={() =>
+                      onToggleFollowUp(t.id, !t.is_follow_up)
+                    }
                   />
                 ))}
               </ul>
@@ -812,6 +883,13 @@ export default function CrmClient() {
               onToggleContext={() => setContextOpen((o) => !o)}
               contextOpen={contextOpen}
               isMember={selectedThread?.player?.is_member === true}
+              isFollowUp={selectedThread?.is_follow_up ?? false}
+              onToggleFollowUp={() =>
+                onToggleFollowUp(
+                  selectedId,
+                  !(selectedThread?.is_follow_up ?? false),
+                )
+              }
               whatsappWindowExpired={whatsappExpired}
             />
           )}
@@ -876,6 +954,8 @@ function ChatsHeader({
   onRefresh,
   cities,
   status,
+  followUp,
+  followUpCount,
   onFilterChange,
   canFilterMine,
 }: {
@@ -886,9 +966,12 @@ function ChatsHeader({
   onRefresh: () => void;
   cities: Set<string>;
   status: StatusFilter;
+  followUp: boolean;
+  followUpCount: number;
   onFilterChange: (next: {
     cities?: Set<string>;
     status?: StatusFilter;
+    followUp?: boolean;
   }) => void;
   canFilterMine: boolean;
 }) {
@@ -897,7 +980,7 @@ function ChatsHeader({
   // signals "filters are active" so a collapsed state never hides a
   // surprising filtered view.
   const [filtersOpen, setFiltersOpen] = useState(true);
-  const filtersActive = status !== "all" || cities.size > 0;
+  const filtersActive = status !== "all" || cities.size > 0 || followUp;
 
   const liveLabel =
     realtimeOk == null
@@ -957,6 +1040,8 @@ function ChatsHeader({
         <FilterBar
           cities={cities}
           status={status}
+          followUp={followUp}
+          followUpCount={followUpCount}
           onChange={onFilterChange}
           canFilterMine={canFilterMine}
         />
@@ -1050,6 +1135,8 @@ function Conversation({
   onToggleContext,
   contextOpen,
   isMember,
+  isFollowUp,
+  onToggleFollowUp,
   whatsappWindowExpired,
 }: {
   selectedId: string;
@@ -1065,6 +1152,8 @@ function Conversation({
   onToggleContext: () => void;
   contextOpen: boolean;
   isMember: boolean;
+  isFollowUp: boolean;
+  onToggleFollowUp: () => void;
   whatsappWindowExpired: boolean;
 }) {
   const messages = detail?.messages ?? [];
@@ -1089,6 +1178,8 @@ function Conversation({
         onToggleContext={onToggleContext}
         contextOpen={contextOpen}
         isMember={isMember}
+        isFollowUp={isFollowUp}
+        onToggleFollowUp={onToggleFollowUp}
       />
       <div
         ref={scrollRef}
@@ -1270,6 +1361,8 @@ function ConversationHeader({
   onToggleContext,
   contextOpen,
   isMember,
+  isFollowUp,
+  onToggleFollowUp,
 }: {
   detail: ThreadDetail | null;
   operators: Assignee[];
@@ -1279,6 +1372,8 @@ function ConversationHeader({
   onToggleContext: () => void;
   contextOpen: boolean;
   isMember: boolean;
+  isFollowUp: boolean;
+  onToggleFollowUp: () => void;
 }) {
   // Wrap onBack so any underlying touchstart/click ordering bugs
   // can't fall through to a parent handler. Bumped to h-11 w-11
@@ -1375,6 +1470,24 @@ function ConversationHeader({
           />
         )}
       />
+      {/* Follow-up star — per-viewer flag for "return to this". Coral
+          fill when set; toggles optimistically via the same handler as
+          the inbox row. */}
+      <button
+        type="button"
+        onClick={onToggleFollowUp}
+        aria-label={isFollowUp ? "Remove follow-up flag" : "Mark for follow up"}
+        aria-pressed={isFollowUp}
+        className="inline-flex h-9 w-9 shrink-0 items-center justify-center rounded-full transition hover:bg-cream-soft"
+      >
+        <Star
+          aria-hidden
+          className={`h-4 w-4 ${
+            isFollowUp ? "fill-coral text-coral" : "text-deep-green/70"
+          }`}
+          strokeWidth={1.75}
+        />
+      </button>
       {/* Info button — toggles the context panel. Two variants
           stacked behind responsive utilities so the same icon does
           the right thing on each surface:
