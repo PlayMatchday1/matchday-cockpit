@@ -10,6 +10,8 @@ import {
   useAuth,
   type PageName,
 } from "@/lib/useAuth";
+import { useCrmUnreadCount } from "@/lib/useCrmUnreadCount";
+import UnreadCountCircle from "@/components/UnreadCountCircle";
 
 type Tab = {
   href: string;
@@ -83,6 +85,10 @@ const SECONDARY_TABS: GatedTab[] = [
 export default function TopNav() {
   const pathname = usePathname();
   const { appUser, signOut } = useAuth();
+  // Customer-chat unread count for the "Chats" tab badge. Polling-based
+  // (no realtime); returns 0 for non-admins, so the circle never renders
+  // for them even though the prop is threaded in unconditionally.
+  const crmUnread = useCrmUnreadCount();
 
   const visiblePermission = PERMISSION_TABS.filter((t) =>
     canAccess(appUser, t.page),
@@ -144,6 +150,7 @@ export default function TopNav() {
                     href={tab.href}
                     active={active}
                     label={tab.label}
+                    badgeCount={crmUnread}
                   />
                 );
               })}
@@ -185,21 +192,24 @@ function PrimaryLink({
   href,
   active,
   label,
+  badgeCount = 0,
 }: {
   href: string;
   active: boolean;
   label: string;
+  badgeCount?: number;
 }) {
   return (
     <Link
       href={href}
-      className={`rounded-full px-2.5 py-1.5 text-sm font-medium tracking-tight transition lg:px-4 ${
+      className={`inline-flex items-center gap-1.5 rounded-full px-2.5 py-1.5 text-sm font-medium tracking-tight transition lg:px-4 ${
         active
           ? "bg-mint text-deep-green"
           : "text-cream/80 hover:bg-deep-green-soft hover:text-cream"
       }`}
     >
-      {label}
+      <span>{label}</span>
+      {badgeCount > 0 && <UnreadCountCircle count={badgeCount} />}
     </Link>
   );
 }
