@@ -11,6 +11,7 @@ import {
   type PageName,
 } from "@/lib/useAuth";
 import { useCrmUnreadCount } from "@/lib/useCrmUnreadCount";
+import { useFaviconUnreadDot } from "@/lib/useFaviconUnreadDot";
 import UnreadCountCircle from "@/components/UnreadCountCircle";
 
 type Tab = {
@@ -89,6 +90,10 @@ export default function TopNav() {
   // (no realtime); returns 0 for non-admins, so the circle never renders
   // for them even though the prop is threaded in unconditionally.
   const crmUnread = useCrmUnreadCount();
+  // Trello-style red dot on the browser-tab favicon while chats are unread.
+  // TopNav mounts site-wide (via AuthGate), so the dot is visible from any
+  // page. Presence only, no number; the title is intentionally left as-is.
+  useFaviconUnreadDot(crmUnread);
 
   const visiblePermission = PERMISSION_TABS.filter((t) =>
     canAccess(appUser, t.page),
