@@ -378,8 +378,9 @@ function WeekCard({
           — MatchDay · — guests
         </p>
         <Hr />
-        <Row label="New" value="—" />
-        <Row label="Returning" value="—" />
+        <Row label="Distinct MatchDay players" value="—" />
+        <Row label="New players" value="—" />
+        <Row label="Returning players" value="—" />
         <Hr />
         <Row label="Daily paid" value="—" />
         <Row label="Members" value="—" />
@@ -429,8 +430,14 @@ function WeekCard({
         guests
       </p>
       <Hr />
-      <Row label="New" value={week.newP.toString()} valueColor="text-blue-info" />
-      <Row label="Returning" value={week.retP.toString()} valueColor="text-mint-hover" />
+      {/* Distinct MatchDay players = newP + retP (both are counts of
+          distinct user_ids — the first-appearance partition). Shown
+          above New/Returning so the split visibly reconciles: it sums
+          to this line, not to Total players (which counts spots, incl.
+          guests and a player's repeat matches in the week). */}
+      <Row label="Distinct MatchDay players" value={(week.newP + week.retP).toString()} />
+      <Row label="New players" value={week.newP.toString()} valueColor="text-blue-info" />
+      <Row label="Returning players" value={week.retP.toString()} valueColor="text-mint-hover" />
       <Hr />
       <Row label="Daily paid" value={week.dp.toString()} />
       <Row label="Members" value={week.mem.toString()} />
