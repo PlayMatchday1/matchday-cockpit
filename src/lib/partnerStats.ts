@@ -21,6 +21,14 @@ export type PartnerRegRow = {
   promocode: string | null;
   match_price_paid: number | null;
   user_type: string | null;
+  // Stable per-match identity + capacity, sourced from mdapi_matches.
+  // Used only by the per-match-minus-manager revenue model (to group
+  // rows into distinct matches and decide the $20/$30 manager rate via
+  // the ≥25 tournament threshold). Optional so the legacy/finance call
+  // sites that build PartnerRegRow by hand don't all need to populate
+  // them; the per-match calc treats a missing capacity as base-rate.
+  match_api_id?: number;
+  max_player_count?: number | null;
 };
 
 // Manual revenue rows from fin_revenue (Venmo / Stripe / Manual entries
@@ -129,6 +137,17 @@ export function makeAnonServerClient(): SupabaseClient {
 // off for this partner; UI hides the Weekly Payments section entirely.
 export type PartnerPaymentCadence = "weekly" | "monthly";
 
+// How a partner's payment owed is derived from match data:
+//   flat_percentage         → owed = qualifyingRevenue × revenueSharePct/100.
+//                             The original (and default) model. Hattrick,
+//                             PAC Global.
+//   per_match_minus_manager → for each match in the period, partner gets
+//                             max(0, matchRevenue − managerPay); summed across
+//                             the period. managerPay = managerPayBase, or
+//                             managerPayHigh when the match's player count
+//                             exceeds managerPayThreshold. Crossbar Rowlett.
+export type PartnerRevenueModel = "flat_percentage" | "per_match_minus_manager";
+
 export type PartnerConfig = {
   id: string; // uuid
   venueId: number;
@@ -137,6 +156,13 @@ export type PartnerConfig = {
   paymentStartDate: string | null; // YYYY-MM-DD
   paymentDayOfWeek: number; // 0=Sun..6=Sat (legacy; weekly partners only)
   paymentCadence: PartnerPaymentCadence;
+  // Revenue model + its per-match-minus-manager parameters. The manager
+  // params are only read when revenueModel === 'per_match_minus_manager';
+  // null otherwise. Defaults keep every existing partner on the flat model.
+  revenueModel: PartnerRevenueModel;
+  managerPayBase: number | null;
+  managerPayHigh: number | null;
+  managerPayThreshold: number | null;
 };
 
 // Fetch the partner_dashboards row by slug. Returns null on miss or
@@ -157,90 +183,108 @@ export type PartnerConfig = {
 // the per-(venue, month) partner-payout map that drives the
 // finance cost calc for profit_share venues. Service-role client
 // expected.
+// Column lists for the partner_dashboards select cascade. FULL includes
+// the migration-0057 revenue-model columns; NO_MODEL drops them (post-
+// 0005, pre-0057); the older tiers live inline in fetchPartnerBySlug.
+const PARTNER_COLS_FULL =
+  "id, venue_id, partner_name, enabled, revenue_share_pct, payment_start_date, payment_day_of_week, payment_cadence, revenue_model, manager_pay_base, manager_pay_high, manager_pay_threshold";
+const PARTNER_COLS_NO_MODEL =
+  "id, venue_id, partner_name, enabled, revenue_share_pct, payment_start_date, payment_day_of_week, payment_cadence";
+
+// Map a raw partner_dashboards row to PartnerConfig. Tolerates missing
+// columns (older schema tiers) by falling back to the flat-model
+// defaults — revenueModel='flat_percentage', null manager params.
+function rowToPartnerConfig(row: Record<string, unknown>): PartnerConfig {
+  const rawCadence = (row.payment_cadence ?? "weekly") as string;
+  const cadence: PartnerPaymentCadence =
+    rawCadence === "monthly" ? "monthly" : "weekly";
+  const rawModel = (row.revenue_model ?? "flat_percentage") as string;
+  const revenueModel: PartnerRevenueModel =
+    rawModel === "per_match_minus_manager"
+      ? "per_match_minus_manager"
+      : "flat_percentage";
+  const numOrNull = (v: unknown): number | null =>
+    v == null ? null : Number(v);
+  return {
+    id: row.id as string,
+    venueId: row.venue_id as number,
+    partnerName: row.partner_name as string,
+    revenueSharePct: Number(row.revenue_share_pct ?? 50),
+    paymentStartDate: (row.payment_start_date ?? null) as string | null,
+    paymentDayOfWeek: Number(row.payment_day_of_week ?? 0),
+    paymentCadence: cadence,
+    revenueModel,
+    managerPayBase: numOrNull(row.manager_pay_base),
+    managerPayHigh: numOrNull(row.manager_pay_high),
+    managerPayThreshold: numOrNull(row.manager_pay_threshold),
+  };
+}
+
 export async function fetchAllEnabledPartnerDashboards(
   supabase: SupabaseClient,
 ): Promise<PartnerConfig[]> {
-  const { data, error } = await supabase
-    .from("partner_dashboards")
-    .select(
-      "id, venue_id, partner_name, enabled, revenue_share_pct, payment_start_date, payment_day_of_week, payment_cadence",
-    )
-    .eq("enabled", true);
-  if (error || !data) return [];
-  return data.map((row: Record<string, unknown>) => {
-    const rawCadence = (row.payment_cadence ?? "weekly") as string;
-    const cadence: PartnerPaymentCadence =
-      rawCadence === "monthly" ? "monthly" : "weekly";
-    return {
-      id: row.id as string,
-      venueId: row.venue_id as number,
-      partnerName: row.partner_name as string,
-      revenueSharePct: Number(row.revenue_share_pct ?? 50),
-      paymentStartDate: (row.payment_start_date ?? null) as string | null,
-      paymentDayOfWeek: Number(row.payment_day_of_week ?? 0),
-      paymentCadence: cadence,
-    };
-  });
-}
-
-export async function fetchPartnerBySlug(
-  supabase: SupabaseClient,
-  slug: string,
-): Promise<PartnerConfig | null> {
   // eslint-disable-next-line @typescript-eslint/no-explicit-any
   let data: any = null;
   // eslint-disable-next-line @typescript-eslint/no-explicit-any
   let error: any = null;
   const primary = await supabase
     .from("partner_dashboards")
-    .select(
-      "id, venue_id, partner_name, enabled, revenue_share_pct, payment_start_date, payment_day_of_week, payment_cadence",
-    )
-    .eq("slug", slug)
-    .eq("enabled", true)
-    .maybeSingle();
+    .select(PARTNER_COLS_FULL)
+    .eq("enabled", true);
   data = primary.data;
   error = primary.error;
   if (error && error.code === "42703") {
-    // undefined_column → migration 0005 (or earlier) not yet applied.
-    // Re-query without payment_cadence first, then drop the rest of
-    // the payment columns if that still fails (pre-0003 schema).
-    const noCadence = await supabase
+    // migration 0057 not yet applied — retry without revenue-model cols.
+    const fallback = await supabase
       .from("partner_dashboards")
-      .select(
-        "id, venue_id, partner_name, enabled, revenue_share_pct, payment_start_date, payment_day_of_week",
-      )
+      .select(PARTNER_COLS_NO_MODEL)
+      .eq("enabled", true);
+    data = fallback.data;
+    error = fallback.error;
+  }
+  if (error || !data) return [];
+  return (data as Record<string, unknown>[]).map((row) =>
+    rowToPartnerConfig(row),
+  );
+}
+
+export async function fetchPartnerBySlug(
+  supabase: SupabaseClient,
+  slug: string,
+): Promise<PartnerConfig | null> {
+  // Column-set cascade, newest schema first. Each tier drops the
+  // columns added by one migration so the public URL keeps working
+  // through the gap between deploying code and applying the migration:
+  //   FULL        — incl. 0057 revenue-model cols
+  //   NO_MODEL    — incl. 0005 payment_cadence, no revenue-model cols
+  //   no-cadence  — incl. 0003 payment_* cols, no cadence
+  //   legacy      — pre-0003 (id, venue_id, partner_name, enabled)
+  const tiers = [
+    PARTNER_COLS_FULL,
+    PARTNER_COLS_NO_MODEL,
+    "id, venue_id, partner_name, enabled, revenue_share_pct, payment_start_date, payment_day_of_week",
+    "id, venue_id, partner_name, enabled",
+  ];
+  // eslint-disable-next-line @typescript-eslint/no-explicit-any
+  let data: any = null;
+  // eslint-disable-next-line @typescript-eslint/no-explicit-any
+  let error: any = null;
+  for (const cols of tiers) {
+    const res = await supabase
+      .from("partner_dashboards")
+      .select(cols)
       .eq("slug", slug)
       .eq("enabled", true)
       .maybeSingle();
-    if (noCadence.error && noCadence.error.code === "42703") {
-      const legacy = await supabase
-        .from("partner_dashboards")
-        .select("id, venue_id, partner_name, enabled")
-        .eq("slug", slug)
-        .eq("enabled", true)
-        .maybeSingle();
-      data = legacy.data;
-      error = legacy.error;
-    } else {
-      data = noCadence.data;
-      error = noCadence.error;
-    }
+    data = res.data;
+    error = res.error;
+    // Only fall through to an older tier on undefined_column; any other
+    // error (or success) is terminal.
+    if (!error || error.code !== "42703") break;
   }
   if (error || !data) return null;
   if (!data.enabled) return null;
-  const rawCadence = (data.payment_cadence ?? "weekly") as string;
-  const cadence: PartnerPaymentCadence =
-    rawCadence === "monthly" ? "monthly" : "weekly";
-  return {
-    id: data.id as string,
-    venueId: data.venue_id as number,
-    partnerName: data.partner_name as string,
-    revenueSharePct: Number(data.revenue_share_pct ?? 50),
-    paymentStartDate: data.payment_start_date ?? null,
-    paymentDayOfWeek: Number(data.payment_day_of_week ?? 0),
-    paymentCadence: cadence,
-  };
+  return rowToPartnerConfig(data as Record<string, unknown>);
 }
 
 // Persisted partner_weekly_payments row (verbatim from the table).
@@ -779,6 +823,10 @@ export type PartnerWeeklyPayment = {
 export type PartnerPaymentInfo = {
   enabled: boolean; // payment_start_date is not null OR pre-system rows exist
   cadence: PartnerPaymentCadence;
+  // Drives the payments-section subtitle copy. 'flat_percentage' →
+  // "{pct}% of qualifying revenue"; 'per_match_minus_manager' →
+  // "Match revenue minus manager pay".
+  revenueModel: PartnerRevenueModel;
   revenueSharePct: number;
   paymentStartDate: string | null;
   paymentDayOfWeek: number;
@@ -845,6 +893,109 @@ function nextMonthStart(monthStart: string): string {
   return d.toISOString().slice(0, 10);
 }
 
+// Manager-pay parameters for the per-match-minus-manager model. Passed
+// through from PartnerConfig; only read when revenueModel is that model.
+type PeriodCalcConfig = {
+  revenueModel: PartnerRevenueModel;
+  revenueSharePct: number;
+  managerPayBase: number | null;
+  managerPayHigh: number | null;
+  managerPayThreshold: number | null;
+};
+
+// Compute { qualifyingRevenue, owedAmount } for one [periodStart,
+// periodEnd] window (YYYY-MM-DD inclusive). Shared by the weekly and
+// monthly loops so both cadences support both revenue models.
+//
+// flat_percentage:
+//   qualifying = DPP (DAILY PAID match_price_paid) + Private Rental gross
+//   owed       = round(qualifying × revenueSharePct) / 100
+//
+// per_match_minus_manager (Crossbar Rowlett):
+//   Group the period's active match rows by match_api_id (the stable
+//   per-match key — two matches can share a start timestamp at one
+//   field). For each match:
+//     matchRevenue = sum of DAILY PAID match_price_paid  (DPP only;
+//                    member/promo excluded, mirroring the flat model's
+//                    qualifying-revenue definition)
+//     managerPay   = managerPayHigh when capacity (max_player_count) ≥
+//                    managerPayThreshold, else managerPayBase. Capacity-
+//                    based so it reconciles with managerPayCompute.ts —
+//                    the manager is paid on capacity (the tournament
+//                    threshold, 25), not on who showed up.
+//     partnerShare = max(0, matchRevenue − managerPay)   ($0 floor)
+//   qualifying = Σ matchRevenue;  owed = Σ partnerShare.
+//   Private Rental does NOT participate (it has no match/capacity, so
+//   the manager-pay subtraction is undefined for it). Crossbar has none.
+function periodOwed(
+  matchActive: PartnerRegRow[],
+  finRevRows: PartnerExtraRevRow[],
+  periodStart: string,
+  periodEnd: string,
+  cfg: PeriodCalcConfig,
+): { qualifyingRevenue: number; owedAmount: number } {
+  if (cfg.revenueModel === "per_match_minus_manager") {
+    const base = cfg.managerPayBase ?? 0;
+    const high = cfg.managerPayHigh ?? base;
+    // Missing threshold → no match ever clears it → always base rate.
+    const threshold = cfg.managerPayThreshold ?? Number.POSITIVE_INFINITY;
+    const byMatch = new Map<
+      string,
+      { dpRev: number; capacity: number | null }
+    >();
+    for (const r of matchActive) {
+      const matchYmd = r.match_start.slice(0, 10);
+      if (matchYmd < periodStart || matchYmd > periodEnd) continue;
+      // Fall back to match_start if api id is absent (finance-built rows
+      // that don't carry it); collisions there are acceptable since that
+      // path isn't used by per-match partners today.
+      const key =
+        r.match_api_id != null ? `id:${r.match_api_id}` : `ts:${r.match_start}`;
+      const g = byMatch.get(key) ?? { dpRev: 0, capacity: null };
+      if (r.payment_type === "DAILY PAID") {
+        g.dpRev += Number(r.match_price_paid ?? 0) || 0;
+      }
+      if (g.capacity == null && r.max_player_count != null) {
+        g.capacity = r.max_player_count;
+      }
+      byMatch.set(key, g);
+    }
+    let qualifyingRevenue = 0;
+    let owed = 0;
+    for (const g of byMatch.values()) {
+      qualifyingRevenue += g.dpRev;
+      const managerPay =
+        g.capacity != null && g.capacity >= threshold ? high : base;
+      owed += Math.max(0, g.dpRev - managerPay);
+    }
+    // Round to cents once at the end.
+    return {
+      qualifyingRevenue,
+      owedAmount: Math.round(owed * 100) / 100,
+    };
+  }
+
+  // flat_percentage (default)
+  let dpRev = 0;
+  for (const r of matchActive) {
+    if (r.payment_type !== "DAILY PAID") continue;
+    const matchYmd = r.match_start.slice(0, 10);
+    if (matchYmd < periodStart || matchYmd > periodEnd) continue;
+    dpRev += Number(r.match_price_paid ?? 0) || 0;
+  }
+  let prRev = 0;
+  for (const e of finRevRows) {
+    if (e.type !== "Private Rental") continue;
+    if (!e.date || e.date < periodStart || e.date > periodEnd) continue;
+    prRev += Number(e.gross ?? 0) || 0;
+  }
+  const qualifyingRevenue = dpRev + prRev;
+  return {
+    qualifyingRevenue,
+    owedAmount: Math.round(qualifyingRevenue * cfg.revenueSharePct) / 100,
+  };
+}
+
 // Generates partner payment rows for both weekly and monthly cadences.
 // (Function name kept as-is to avoid touching every caller — name was
 // already a misnomer once pre-system rows were added.)
@@ -872,11 +1023,25 @@ export function computeWeeklyPayments(
     paymentStartDate: string | null;
     paymentDayOfWeek: number;
     paymentCadence?: PartnerPaymentCadence;
+    // Optional so existing callers default to the flat model unchanged.
+    revenueModel?: PartnerRevenueModel;
+    managerPayBase?: number | null;
+    managerPayHigh?: number | null;
+    managerPayThreshold?: number | null;
   },
   records: PartnerWeeklyPaymentRecord[] = [],
   now: Date = new Date(),
 ): PartnerPaymentInfo {
   const cadence: PartnerPaymentCadence = config.paymentCadence ?? "weekly";
+  const revenueModel: PartnerRevenueModel =
+    config.revenueModel ?? "flat_percentage";
+  const calcConfig: PeriodCalcConfig = {
+    revenueModel,
+    revenueSharePct: config.revenueSharePct,
+    managerPayBase: config.managerPayBase ?? null,
+    managerPayHigh: config.managerPayHigh ?? null,
+    managerPayThreshold: config.managerPayThreshold ?? null,
+  };
 
   // Pre-system rows are cadence-agnostic — they represent historical
   // lump sums regardless of how the partner is currently paid.
@@ -903,6 +1068,7 @@ export function computeWeeklyPayments(
     return {
       enabled: preSystemRows.length > 0,
       cadence,
+      revenueModel,
       revenueSharePct: config.revenueSharePct,
       paymentStartDate: null,
       paymentDayOfWeek: config.paymentDayOfWeek,
@@ -928,22 +1094,13 @@ export function computeWeeklyPayments(
     let cursor = firstQualifyingPeriod;
     while (cursor <= today) {
       const monthEnd = lastDayOfMonth(cursor);
-      let dpRev = 0;
-      for (const r of matchActive) {
-        if (r.payment_type !== "DAILY PAID") continue;
-        const matchYmd = r.match_start.slice(0, 10);
-        if (matchYmd < cursor || matchYmd > monthEnd) continue;
-        dpRev += Number(r.match_price_paid ?? 0) || 0;
-      }
-      let prRev = 0;
-      for (const e of finRevRows) {
-        if (e.type !== "Private Rental") continue;
-        if (!e.date || e.date < cursor || e.date > monthEnd) continue;
-        prRev += Number(e.gross ?? 0) || 0;
-      }
-      const qualifyingRevenue = dpRev + prRev;
-      const owedAmount =
-        Math.round(qualifyingRevenue * config.revenueSharePct) / 100;
+      const { qualifyingRevenue, owedAmount } = periodOwed(
+        matchActive,
+        finRevRows,
+        cursor,
+        monthEnd,
+        calcConfig,
+      );
       const rec = recordByPeriod.get(cursor);
       generatedRows.push({
         weekStartDate: cursor,
@@ -966,22 +1123,13 @@ export function computeWeeklyPayments(
     let cursor = firstQualifyingPeriod;
     while (cursor <= today) {
       const weekEnd = addDays(cursor, 6);
-      let dpRev = 0;
-      for (const r of matchActive) {
-        if (r.payment_type !== "DAILY PAID") continue;
-        const matchYmd = r.match_start.slice(0, 10);
-        if (matchYmd < cursor || matchYmd > weekEnd) continue;
-        dpRev += Number(r.match_price_paid ?? 0) || 0;
-      }
-      let prRev = 0;
-      for (const e of finRevRows) {
-        if (e.type !== "Private Rental") continue;
-        if (!e.date || e.date < cursor || e.date > weekEnd) continue;
-        prRev += Number(e.gross ?? 0) || 0;
-      }
-      const qualifyingRevenue = dpRev + prRev;
-      const owedAmount =
-        Math.round(qualifyingRevenue * config.revenueSharePct) / 100;
+      const { qualifyingRevenue, owedAmount } = periodOwed(
+        matchActive,
+        finRevRows,
+        cursor,
+        weekEnd,
+        calcConfig,
+      );
       const rec = recordByPeriod.get(cursor);
       generatedRows.push({
         weekStartDate: cursor,
@@ -1004,6 +1152,7 @@ export function computeWeeklyPayments(
   return {
     enabled: true,
     cadence,
+    revenueModel,
     revenueSharePct: config.revenueSharePct,
     paymentStartDate: config.paymentStartDate,
     paymentDayOfWeek: config.paymentDayOfWeek,
@@ -1132,6 +1281,14 @@ export function buildPartnerPayoutsByVenueMonth(
         notes: r.notes,
       }));
 
+    // NOTE: per_match_minus_manager is only exercised by per_match
+    // venues (Crossbar Rowlett), which this profit_share-only loop
+    // skips. If a profit_share venue ever adopts that model, venueRegs
+    // here lack match_api_id/max_player_count (the finance matchRegs
+    // shape omits them), so periodOwed would group by start timestamp
+    // and default every match to the base manager rate. Thread the
+    // real per-match capacity through buildPartnerPayoutsByVenueMonth's
+    // inputs before relying on this path for such a venue.
     const payout = computeWeeklyPayments(
       venueRegs,
       venueExtra,
@@ -1140,6 +1297,10 @@ export function buildPartnerPayoutsByVenueMonth(
         paymentStartDate: dash.paymentStartDate,
         paymentDayOfWeek: dash.paymentDayOfWeek,
         paymentCadence: dash.paymentCadence,
+        revenueModel: dash.revenueModel,
+        managerPayBase: dash.managerPayBase,
+        managerPayHigh: dash.managerPayHigh,
+        managerPayThreshold: dash.managerPayThreshold,
       },
       [], // no persisted records needed for cost calc
       now,

@@ -33,7 +33,7 @@ import { normField } from "./normField";
 import { isFakePlayerRow } from "./mdapiFakePlayer";
 
 const MATCHES_COLS =
-  "api_id, city_identifier, field_id, field_title, start_date, is_cancelled";
+  "api_id, city_identifier, field_id, field_title, start_date, is_cancelled, max_player_count";
 const PLAYERS_COLS =
   "api_id, match_api_id, user_id, user_email, user_type, paid_status, promocode_id, is_cancelled, canceled_at, amount, credit_amount, created_at, is_absent, user_is_fake_player";
 
@@ -81,6 +81,7 @@ type MatchSelect = {
   field_title: string | null;
   start_date: string | null;
   is_cancelled: boolean | null;
+  max_player_count: number | null;
 };
 
 type PlayerSelect = {
@@ -122,6 +123,12 @@ export type JoinedMatchPlayerRow = {
   // can join via fin_venue_fields instead of normalizing field_title
   // through alias tables.
   fieldId: number | null;
+  // Match capacity (mdapi_matches.max_player_count). The "tournament"
+  // signal: ≥ TOURNAMENT_THRESHOLD (25) matches are paid at the higher
+  // manager rate. Carried through so the partner per-match-minus-manager
+  // revenue model can reconcile its manager-pay subtraction with the
+  // actual manager payout (managerPayCompute.ts uses the same column).
+  maxPlayerCount: number | null;
   playerApiId: number;
   userId: number;
   matchPricePaid: number; // amount in dollars
@@ -187,6 +194,13 @@ export type LegacyMatchRegRow = {
   email: string | null;
   field: string;
   field_id: number | null;
+  // Stable per-match identity (mdapi_matches.api_id). Carried so
+  // consumers can group player rows into distinct matches without
+  // colliding on (match_start, field) — two matches can share an
+  // identical start timestamp at the same field.
+  match_api_id: number;
+  // Match capacity. See JoinedMatchPlayerRow.maxPlayerCount.
+  max_player_count: number | null;
   match_start: string;
   match_canceled: boolean;
   player_canceled_at: string | null;
@@ -389,6 +403,7 @@ function mapJoinedRow(
     email: player.user_email?.toLowerCase() ?? null,
     matchApiId: match.api_id,
     fieldId: match.field_id,
+    maxPlayerCount: match.max_player_count,
     playerApiId: player.api_id,
     userId: player.user_id,
     // API stores `amount` in cents (Stripe convention). Single
@@ -440,6 +455,8 @@ export function toLegacyShape(r: JoinedMatchPlayerRow): LegacyMatchRegRow {
     email: r.email,
     field: r.field,
     field_id: r.fieldId,
+    match_api_id: r.matchApiId,
+    max_player_count: r.maxPlayerCount,
     match_start: dateToLocalIso(r.matchStart),
     match_canceled: r.matchCanceled,
     player_canceled_at: r.playerCanceledAt

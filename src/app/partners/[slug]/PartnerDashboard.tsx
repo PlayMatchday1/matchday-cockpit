@@ -103,19 +103,21 @@ export default function PartnerDashboard({
 
       <SecLabel className="mt-10">{totalsLabel}</SecLabel>
       <div className="mt-3 grid grid-cols-2 gap-2.5 sm:grid-cols-3 lg:grid-cols-5">
+        {/* The 5 header cards are identical across every partner
+            dashboard. They were previously gated on dataBaseline (only
+            Hattrick had one), so partners without a baseline showed
+            "MatchDay players" / "Total revenue" instead of "MatchDay
+            registrations" / "Unique players". uniquePlayers is computed
+            for every partner regardless of baseline, so the same layout
+            renders everywhere. dataBaseline keeps its other jobs (date-
+            scoping the stats, ISO-week labels) — it just no longer
+            drives this header. Revenue still appears in By-month and
+            Week-by-week below. */}
         <Metric label="Total spots filled" value={stats.totals.spots.toLocaleString()} sub="players who showed up" />
-        {dataBaseline ? (
-          <Metric label="MatchDay registrations" value={stats.totals.md.toLocaleString()} sub="registered app users" />
-        ) : (
-          <Metric label="MatchDay players" value={stats.totals.md.toLocaleString()} sub="registered app users" />
-        )}
+        <Metric label="MatchDay registrations" value={stats.totals.md.toLocaleString()} sub="registered app users" />
         <Metric label="Guests brought" value={stats.totals.guests.toLocaleString()} sub="guest spots purchased by players" />
         <Metric label="Cancellations" value={stats.totals.cancels.toLocaleString()} sub="non-refundable cancel within 24 hrs" />
-        {dataBaseline ? (
-          <Metric label="Unique players" value={stats.totals.uniquePlayers.toLocaleString()} sub="distinct people who showed up" />
-        ) : (
-          <Metric label="Total revenue" value={fmtUsd(stats.totals.rev)} sub="match price paid" />
-        )}
+        <Metric label="Unique players" value={stats.totals.uniquePlayers.toLocaleString()} sub="distinct people who showed up" />
       </div>
 
       {stats.byMonth.length > 0 && (
@@ -609,10 +611,18 @@ function WeeklyPaymentsSection({
   // with the "5th of the following month" transfer rule.
   const headerLabel =
     payment.cadence === "monthly" ? "Monthly payments" : "Weekly payments";
-  const subtitle =
+  // Revenue-model + cadence drive the subtitle. flat_percentage reads
+  // "{pct}% of qualifying revenue"; per_match_minus_manager reads "match
+  // revenue minus manager pay" (Crossbar Rowlett).
+  const modelClause =
+    payment.revenueModel === "per_match_minus_manager"
+      ? "Match revenue minus manager pay per match"
+      : `${payment.revenueSharePct}% of qualifying revenue`;
+  const cadenceClause =
     payment.cadence === "monthly"
-      ? `${payment.revenueSharePct}% of qualifying revenue. Paid on the 5th of the following month.`
-      : `${payment.revenueSharePct}% of qualifying revenue. Paid weekly on Mondays.`;
+      ? "Paid on the 5th of the following month."
+      : "Paid weekly on Mondays.";
+  const subtitle = `${modelClause}. ${cadenceClause}`;
 
   return (
     <>

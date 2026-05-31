@@ -100,6 +100,10 @@ export default async function PartnerPage({
       paymentStartDate: partner.paymentStartDate,
       paymentDayOfWeek: partner.paymentDayOfWeek,
       paymentCadence: partner.paymentCadence,
+      revenueModel: partner.revenueModel,
+      managerPayBase: partner.managerPayBase,
+      managerPayHigh: partner.managerPayHigh,
+      managerPayThreshold: partner.managerPayThreshold,
     },
     records,
   );
