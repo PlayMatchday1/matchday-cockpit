@@ -12,12 +12,60 @@ import {
   type MembershipHealthRow,
   type Q2Month,
 } from "@/lib/financeStats";
+import { type MembershipMonthView } from "@/lib/useMembershipSnapshots";
 
 // Self-contained card. Same data, same columns, same row order
 // (ratio descending, baked into buildMembershipHealthRows). Pulled
 // out of FinanceInsightsGrid so it can render on /cities under the
 // Membership lens — finance/cash-flow now links here instead.
-export default function MembershipHealthTable() {
+//
+// Unlike the other two switchable cards, this one has NO snapshot
+// fallback: per-city break-even ("need") is computed live from current
+// pricing + recent match data and is not captured in
+// members_monthly_snapshots, so a prior month can't be reconstructed
+// without drifting. For past months we show a note plus that month's one
+// captured Health-ish figure (overall avg matches/member).
+export default function MembershipHealthTable({
+  view,
+}: {
+  view: MembershipMonthView;
+}) {
+  if (!view.isCurrentMonth) return <HealthUnavailable view={view} />;
+  return <LiveMembershipHealth />;
+}
+
+function HealthUnavailable({ view }: { view: MembershipMonthView }) {
+  const { monthLabel, snapshotRow } = view;
+  const avg = snapshotRow?.avg_matches_per_member ?? null;
+  const tracked = snapshotRow?.members_tracked ?? null;
+  return (
+    <section className="rounded-2xl border-[1.5px] border-cream-line bg-white p-6 shadow-md shadow-deep-green/10 sm:p-7">
+      <div className="text-[11px] font-bold uppercase tracking-[0.25em] text-deep-green/60">
+        {`Membership Health · ${monthLabel}`.toUpperCase()}
+      </div>
+      <p className="mt-3 max-w-3xl text-sm text-deep-green/65">
+        Per-city break-even is computed live from current pricing and recent
+        match data, which isn&apos;t captured per month — so this table only
+        shows the current month.
+      </p>
+      {avg != null && (
+        <p className="mt-2 text-sm text-deep-green/75">
+          {monthLabel}&apos;s overall average was{" "}
+          <span className="font-bold tabular-nums text-deep-green">
+            {avg.toFixed(1)}
+          </span>{" "}
+          matches per member
+          {tracked != null
+            ? ` across ${tracked.toLocaleString()} tracked members`
+            : ""}
+          .
+        </p>
+      )}
+    </section>
+  );
+}
+
+function LiveMembershipHealth() {
   const { data, loading: financeLoading } = useFinanceData();
   const { rows: matchRows, loading: matchLoading } = useMatchData();
   const quarter = useFinanceQuarter();
