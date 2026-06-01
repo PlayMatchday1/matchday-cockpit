@@ -59,6 +59,24 @@
 // Any of these breaking means the API behavior shifted and the
 // strategy needs revisiting.
 //
+// === Defensive write order + collapse circuit breaker ===
+// On 2026-06-01 the CANCELED dump returned ~142 truly-active members
+// tagged status=CANCELED. With the old plain last-write-wins dedup
+// (CANCELED runs after ACTIVE), those overwrote the good ACTIVE writes
+// and silently flipped ~38% of the active base to CANCELED — the
+// sanity checks above did NOT fire (they look for ACTIVE bleeding into
+// the dump, not the reverse). Two guards now prevent a repeat:
+//
+//   1. ACTIVE-loop-wins: ids the strict ACTIVE filter claimed this run
+//      are recorded in `activeIds`; later non-ACTIVE loops may not
+//      overwrite them. Real cancellations are never returned by the
+//      strict ACTIVE filter, so they're unaffected.
+//   2. Collapse circuit breaker: before any write, abort if this run
+//      would drop the live ACTIVE count >20% vs the table's current
+//      value. Turns a silent mass-flip into a loud, non-2xx cron
+//      failure that preserves the prior good data. Does not block
+//      recovery (heal runs move the count UP).
+//
 // === Other endpoint quirks (from probe, May 2026) ===
 //   - totalItems is broken (returns 0 even with 100 rows). Termination
 //     uses data.length < limit — same pattern as mdapi_reviews.
@@ -158,6 +176,10 @@ export type MdapiSubscriptionsSyncResult = {
     canceledLoop: { fetched: number; actuallyActive: number };
     pastDueLoop: { fetched: number; actuallyPastDue: number };
   };
+  // Count of non-ACTIVE rows whose write was refused because the strict
+  // ACTIVE filter already claimed that membership_id this run. >0 means
+  // the CANCELED dump tried to flip actives and the guard caught it.
+  blockedActiveOverwrites: number;
   durationMs: number;
 };
 
@@ -200,6 +222,11 @@ export async function syncMdapiSubscriptions(
   const loopErrors: Record<string, string> = {};
   let apiCalls = 0;
   let fetchedTotal = 0;
+  // ACTIVE-loop-wins guard state (see "Defensive write order" in the
+  // file header). Membership ids the strict ACTIVE filter claimed this
+  // run, and a count of non-ACTIVE overwrites we refused.
+  const activeIds = new Set<number>();
+  let blockedActiveOverwrites = 0;
   // Sanity counters — must be tracked separately per loop, not on the
   // deduped Map (one row could come from either loop and we'd lose
   // the attribution).
@@ -258,6 +285,24 @@ export async function syncMdapiSubscriptions(
             sanity.canceledLoop.fetched++;
             if (r.status === "ACTIVE") sanity.canceledLoop.actuallyActive++;
           }
+          // === ACTIVE-loop-wins guard (see "Defensive write order" in
+          // the file header) === The strict ACTIVE filter is ground
+          // truth for who is active. Once it has claimed a membership_id
+          // this run, no later non-ACTIVE loop may overwrite it. This
+          // blocks the CANCELED "ignored-filter" dump from flipping
+          // truly-active members to CANCELED via last-write-wins (the
+          // June 1 2026 incident: ~142 actives silently lost). Real
+          // cancellations are never returned by the strict ACTIVE
+          // filter, so they pass through untouched. Loop order per city
+          // is [ACTIVE, CANCELED, PAST_DUE] and cross-city ids don't
+          // collide, so the ACTIVE set is always populated before its
+          // city's non-ACTIVE loops run.
+          if (status === "ACTIVE") {
+            activeIds.add(r.membershipId);
+          } else if (activeIds.has(r.membershipId)) {
+            blockedActiveOverwrites++;
+            continue;
+          }
           dedupedById.set(r.membershipId, mapToDbRow(r, cityAbbr, syncedAt));
         }
         // totalItems is broken on this endpoint — terminate on
@@ -309,10 +354,53 @@ export async function syncMdapiSubscriptions(
     );
   }
 
+  // The guard firing is itself a signal the upstream dump is
+  // misbehaving — surface it even though the data was protected.
+  if (blockedActiveOverwrites > 0) {
+    console.warn(
+      `ℹ ACTIVE-loop-wins guard blocked ${blockedActiveOverwrites} non-ACTIVE overwrite(s) of rows the strict ACTIVE filter claimed this run. ` +
+        `Expected 0 in normal operation — a positive count means the CANCELED dump is returning actives tagged non-ACTIVE (the June 1 2026 failure mode), now neutralized.`,
+    );
+  }
+
+  const dbRows = [...dedupedById.values()];
+
+  // --- 3b. Collapse circuit breaker ---
+  // Mechanism-agnostic backstop that runs BEFORE any write. If this run
+  // would cut the live ACTIVE population by >20% versus what's already
+  // in the table, something upstream is wrong (the June 1 2026 incident
+  // flipped ~38% of actives to CANCELED). Abort so the cron records a
+  // non-2xx failure and the prior good data + downstream snapshot are
+  // preserved, rather than silently overwritten. A real >20% one-day
+  // membership drop does not happen; if one ever legitimately does, the
+  // operator re-runs to acknowledge it. Note this does NOT block
+  // recovery: a heal run goes UP (e.g. 235 → 377), which trips nothing.
+  const COLLAPSE_FLOOR = 0.8;
+  const newActiveCount = dbRows.filter((r) => r.status === "ACTIVE").length;
+  const { count: prevActiveRaw, error: countErr } = await supabase
+    .from("mdapi_subscriptions")
+    .select("membership_id", { count: "exact", head: true })
+    .eq("status", "ACTIVE");
+  if (countErr) {
+    throw new Error(
+      `mdapi_subscriptions: ACTIVE-count preflight failed, refusing to upsert blind: ${countErr.message}`,
+    );
+  }
+  const prevActive = prevActiveRaw ?? 0;
+  if (prevActive > 0 && newActiveCount < prevActive * COLLAPSE_FLOOR) {
+    const pctDrop = (((prevActive - newActiveCount) / prevActive) * 100).toFixed(
+      0,
+    );
+    throw new Error(
+      `mdapi_subscriptions: ABORTED upsert — ACTIVE would collapse ${prevActive} → ${newActiveCount} ` +
+        `(${pctDrop}% drop, >20% circuit breaker). Upstream is likely mis-tagging actives; refusing to overwrite good data. ` +
+        `Re-run to acknowledge if this is a real drop. (blockedActiveOverwrites this run=${blockedActiveOverwrites})`,
+    );
+  }
+
   // --- 4. Upsert in batches ---
   // Snapshot the deduped values once, then iterate. Map.values() is
   // an iterator — slicing it would re-walk from the start each batch.
-  const dbRows = [...dedupedById.values()];
   let upserted = 0;
   for (let i = 0; i < dbRows.length; i += UPSERT_BATCH) {
     const chunk = dbRows.slice(i, i + UPSERT_BATCH);
@@ -336,6 +424,7 @@ export async function syncMdapiSubscriptions(
     apiCalls,
     loopErrors,
     loopSanity: sanity,
+    blockedActiveOverwrites,
     durationMs: Date.now() - startedAt,
   };
 }
