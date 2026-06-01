@@ -32,14 +32,13 @@ export type MembershipMonthView = {
   snapshotLoading: boolean;
 };
 
-// Churning was only reliably captured from the first live (non-backfill)
-// snapshot — April 2026 — onward. Earlier rows were backfilled with
-// churning_count = 0 because the rolling active+cancel window can't be
-// faithfully reconstructed from current-state data, so a stored 0 there
-// means "not measured", not "measured zero". Show "—" for those months.
-// (avg_matches_per_member / members_tracked are genuinely NULL before
-// March 2026, so those mask themselves.)
-export const CHURNING_TRACKED_SINCE_ISO = "2026-04-01";
+// Earliest selectable month. April 2026 is the first fully-instrumented
+// snapshot: real churning (the rolling active+cancel window can't be
+// reconstructed for earlier backfilled rows, which stored 0) and a real
+// avg_matches_per_member (NULL before March 2026). Every month at/after
+// this floor is complete, so the selector hides earlier months entirely
+// rather than rendering placeholder fields.
+export const MEMBERSHIP_SNAPSHOT_FLOOR_ISO = "2026-04-01";
 
 export function firstOfMonthIso(d: Date): string {
   return `${d.getFullYear()}-${String(d.getMonth() + 1).padStart(2, "0")}-01`;

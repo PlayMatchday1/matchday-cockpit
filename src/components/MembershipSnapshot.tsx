@@ -10,14 +10,7 @@ import {
   isNewInMonth,
   type AttendanceRow,
 } from "@/lib/membershipStats";
-import {
-  CHURNING_TRACKED_SINCE_ISO,
-  type MembershipMonthView,
-} from "@/lib/useMembershipSnapshots";
-
-// Em-dash, not "0" — for a field that wasn't captured, "—" says "not
-// available" where 0 would falsely read as "measured zero".
-const NA = "—";
+import { type MembershipMonthView } from "@/lib/useMembershipSnapshots";
 
 export default function MembershipSnapshot({
   view,
@@ -93,13 +86,8 @@ function LiveMonthKPIs({ label }: { label: string }) {
         />
         <KPI
           label="Avg Matches/Member"
-          value={membersTracked > 0 ? avg.toFixed(1) : NA}
-          hint={
-            membersTracked > 0
-              ? `${membersTracked.toLocaleString()} members tracked`
-              : "not tracked"
-          }
-          muted={membersTracked === 0}
+          value={avg.toFixed(1)}
+          hint={`${membersTracked.toLocaleString()} members tracked`}
         />
       </KPIGrid>
     </Frame>
@@ -107,7 +95,7 @@ function LiveMonthKPIs({ label }: { label: string }) {
 }
 
 function SnapshotMonthKPIs({ view }: { view: MembershipMonthView }) {
-  const { snapshotRow, snapshotLoading, monthLabel, monthIso } = view;
+  const { snapshotRow, snapshotLoading, monthLabel } = view;
 
   if (snapshotLoading) {
     return (
@@ -127,12 +115,6 @@ function SnapshotMonthKPIs({ view }: { view: MembershipMonthView }) {
       </Frame>
     );
   }
-
-  // Backfilled months stored churning as 0 — show "—" there. avg /
-  // members_tracked are genuinely NULL pre-instrumentation.
-  const churnTracked = monthIso >= CHURNING_TRACKED_SINCE_ISO;
-  const avg = snapshotRow.avg_matches_per_member;
-  const tracked = snapshotRow.members_tracked;
 
   return (
     <Frame label={monthLabel} eyebrow="captured snapshot">
@@ -155,20 +137,14 @@ function SnapshotMonthKPIs({ view }: { view: MembershipMonthView }) {
         />
         <KPI
           label="Churning"
-          value={churnTracked ? snapshotRow.churning_count.toLocaleString() : NA}
+          value={snapshotRow.churning_count.toLocaleString()}
           tone="down"
-          hint={churnTracked ? "still active" : "not tracked"}
-          muted={!churnTracked}
+          hint="still active"
         />
         <KPI
           label="Avg Matches/Member"
-          value={avg != null ? avg.toFixed(1) : NA}
-          hint={
-            tracked != null
-              ? `${tracked.toLocaleString()} members tracked`
-              : "not tracked"
-          }
-          muted={avg == null}
+          value={(snapshotRow.avg_matches_per_member ?? 0).toFixed(1)}
+          hint={`${(snapshotRow.members_tracked ?? 0).toLocaleString()} members tracked`}
         />
       </KPIGrid>
     </Frame>
@@ -207,17 +183,14 @@ function KPI({
   value,
   tone,
   hint,
-  muted,
 }: {
   label: string;
   value: string;
   tone?: "up" | "down";
   hint?: string;
-  muted?: boolean;
 }) {
-  const toneCls = muted
-    ? "text-deep-green/45"
-    : tone === "up"
+  const toneCls =
+    tone === "up"
       ? "text-mint-hover"
       : tone === "down"
         ? "text-coral"

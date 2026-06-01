@@ -11,6 +11,7 @@ import MembershipTrendChart from "./MembershipTrendChart";
 import {
   firstOfMonthIso,
   isoToMonthParam,
+  MEMBERSHIP_SNAPSHOT_FLOOR_ISO,
   monthLabelFromIso,
   monthParamToIso,
   useMembershipSnapshots,
@@ -32,16 +33,23 @@ export default function CitiesMembershipLens() {
 
   // Current calendar month is always the live view; everything else
   // reads its captured snapshot row. ?month=YYYY-MM deep-links a prior
-  // month; junk / missing falls back to current.
+  // month; junk, missing, or a below-floor month falls back to current.
   const currentIso = firstOfMonthIso(new Date());
-  const selectedIso = monthParamToIso(searchParams.get("month")) ?? currentIso;
+  const requestedIso = monthParamToIso(searchParams.get("month"));
+  const selectedIso =
+    requestedIso && requestedIso >= MEMBERSHIP_SNAPSHOT_FLOOR_ISO
+      ? requestedIso
+      : currentIso;
   const isCurrentMonth = selectedIso === currentIso;
 
-  // Option list: every snapshot month plus the current month (in case
-  // today's row hasn't been captured yet), newest first, de-duped.
+  // Option list: every snapshot month at/after the floor plus the
+  // current month (in case today's row hasn't been captured yet),
+  // newest first, de-duped.
   const monthOptions = useMemo(() => {
     const set = new Set<string>([currentIso, ...rows.map((r) => r.month)]);
-    return [...set].sort((a, b) => (a < b ? 1 : -1));
+    return [...set]
+      .filter((iso) => iso >= MEMBERSHIP_SNAPSHOT_FLOOR_ISO)
+      .sort((a, b) => (a < b ? 1 : -1));
   }, [rows, currentIso]);
 
   const snapshotRow = rows.find((r) => r.month === selectedIso) ?? null;
