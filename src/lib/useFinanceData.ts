@@ -334,33 +334,77 @@ function monthFromMatchDate(dateStr: string): string {
   return label ? `${label} ${d.getUTCFullYear()}` : "";
 }
 
-// Parse a schedule_master match_time string ("7:00 PM - 8:00 PM",
-// "9:30pm - 10:30pm", "9:00 PM") and return the duration in hours.
-// Falls back to 1h when only a start time is present or the string
-// doesn't parse — same default the backfill script writes for new rows.
-// Bounded to (0, 6] as a sanity guard; out-of-range values default to 1.
-// Currently inert — the only consumer was the retired per_hour cost path.
-// Kept because the parsing is cheap and may be useful if per_hour comes
-// back, or for other duration-aware features.
-function parseMatchDurationHours(matchTime: string): number {
-  const re =
-    /^\s*(\d{1,2})(?::(\d{2}))?\s*(AM|PM|am|pm)?\s*[-–—]\s*(\d{1,2})(?::(\d{2}))?\s*(AM|PM|am|pm)?/;
-  const m = re.exec(matchTime ?? "");
-  if (!m) return 1;
-  const toMin = (h: number, min: number, ampm: string | undefined) => {
-    let h24 = h;
-    const a = (ampm ?? "").toUpperCase();
-    if (a === "PM" && h24 < 12) h24 += 12;
-    if (a === "AM" && h24 === 12) h24 = 0;
-    return h24 * 60 + (min || 0);
+// Map a raw mdapi_matches row to the FinMasterSchedule shape the cost
+// calc consumes. Resolves field_id → fin_venue_id via fin_venue_fields,
+// then split-rate routing (ATH Katy by day-of-week, Soccer Central by
+// capacity). Both masterSchedule (is_cancelled=false) and
+// cancelledSchedule (is_cancelled=true) go through this, so they resolve
+// identically and form disjoint halves of mdapi_matches — no overlap,
+// no double-count. Replaces schedule_master as the billing source on
+// 2026-06-01 (schedule_master was a stale manual snapshot that diverged
+// from the live platform; it stays for the Master Schedule admin only).
+function mapMdapiRowToSchedule(
+  r: Record<string, unknown>,
+  venueFields: Map<number, number>,
+  venues: FinVenue[],
+  counters: { unresolved: number; specialEvent: number },
+): FinMasterSchedule {
+  const startDate = cleanText(r.start_date);
+  const matchDate = startDate
+    ? new Date(startDate).toISOString().slice(0, 10)
+    : "";
+  const rawFieldId = r.field_id;
+  const mdapiFieldId =
+    rawFieldId === null || rawFieldId === undefined ? null : Number(rawFieldId);
+  // max_player_count drives the Soccer Central capacity split (and 0/null
+  // = special event → resolver returns null → row drops from cost).
+  const rawMaxPlayerCount = r.max_player_count;
+  const maxPlayerCount =
+    rawMaxPlayerCount == null ? null : Math.round(Number(rawMaxPlayerCount) || 0);
+  const initialVenueId =
+    mdapiFieldId != null ? (venueFields.get(mdapiFieldId) ?? null) : null;
+  let resolvedVenueId: number | null = initialVenueId;
+  if (resolvedVenueId != null && matchDate) {
+    const beforeSplit = resolvedVenueId;
+    resolvedVenueId = resolveSplitRateVenueId(
+      resolvedVenueId,
+      matchDate,
+      venues,
+      maxPlayerCount,
+    );
+    if (resolvedVenueId == null && beforeSplit != null) counters.specialEvent += 1;
+  }
+  if (resolvedVenueId == null && initialVenueId == null) counters.unresolved += 1;
+  const v =
+    resolvedVenueId != null
+      ? venues.find((x) => x.id === resolvedVenueId)
+      : null;
+  let matchTime = "";
+  if (startDate) {
+    const d = new Date(startDate);
+    if (!Number.isNaN(d.getTime())) {
+      const fmt = (h: number, m: number) => {
+        const ampm = h >= 12 ? "PM" : "AM";
+        const h12 = h % 12 === 0 ? 12 : h % 12;
+        return `${h12}:${String(m).padStart(2, "0")} ${ampm}`;
+      };
+      const h = d.getUTCHours();
+      const min = d.getUTCMinutes();
+      matchTime = `${fmt(h, min)} - ${fmt((h + 1) % 24, min)}`;
+    }
+  }
+  return {
+    id: String(r.api_id ?? ""),
+    city: v?.city ?? "",
+    venue: v?.venue_name ?? "",
+    match_date: matchDate,
+    match_time: matchTime,
+    month: monthFromMatchDate(matchDate),
+    max_spots: Math.round(asNumber(r.max_player_count) || 0),
+    mdapi_field_id: mdapiFieldId,
+    venue_id: resolvedVenueId,
+    duration_hours: 1,
   };
-  const startMin = toMin(Number(m[1]), Number(m[2] ?? 0), m[3]);
-  const endMin = toMin(Number(m[4]), Number(m[5] ?? 0), m[6]);
-  let diff = endMin - startMin;
-  if (diff <= 0) diff += 24 * 60; // cross-midnight (rare; e.g. 11:30 PM - 12:30 AM)
-  const hours = diff / 60;
-  if (!Number.isFinite(hours) || hours <= 0 || hours > 6) return 1;
-  return hours;
 }
 
 function normalizeMonth(v: unknown): string {
@@ -442,25 +486,24 @@ async function load(quarter: QuarterInfo): Promise<void> {
       selectAll<Record<string, unknown>>(() =>
         supabase.from("fin_schedule").select("*").order("id"),
       ),
-      // schedule_master is the live, reconciled per-match source for
-      // cost calc. Bounded by match_date in the same ±14d quarter
-      // window the rest of the loader uses. Reads:
-      //   - mdapi_field_id: primary venue key, resolved against
-      //     venueFields below.
-      //   - city/venue: legacy string fallback for any row whose
-      //     mdapi_field_id is null (pre-PR-D leftovers).
-      //   - match_date + match_time: drive month bucket + per-row
-      //     duration_hours (inert today — per_hour billing retired).
-      //   - max_spots: surfaced for caller inspection; not in cost.
+      // ALIVE mdapi_matches in the quarter ±14d window — the billing
+      // source of truth (2026-06-01). Was schedule_master, a stale
+      // manual snapshot that double-counted now-cancelled matches and
+      // diverged from the live platform; mdapi is auto-synced. Resolved
+      // to venue_id the same way as cancelledSchedule below (field_id →
+      // venueFields → split-rate), so the two are disjoint halves of
+      // mdapi_matches. schedule_master stays for the Master Schedule
+      // admin editor + discrepancy tooling, just not for billing.
       selectAll<Record<string, unknown>>(() =>
         supabase
-          .from("schedule_master")
+          .from("mdapi_matches")
           .select(
-            "id, city, venue, match_date, match_time, max_spots, mdapi_field_id",
+            "api_id, field_id, field_title, start_date, max_player_count",
           )
-          .gte("match_date", smBounds.fromDate)
-          .lte("match_date", smBounds.toDate)
-          .order("match_date"),
+          .eq("is_cancelled", false)
+          .gte("start_date", `${smBounds.fromDate}T00:00:00Z`)
+          .lte("start_date", `${smBounds.toDate}T23:59:59Z`)
+          .order("start_date"),
       ),
       // Cancelled mdapi_matches in the same window — counted at cost
       // time only when the resolved venue's charge_on_cancel is true.
@@ -664,167 +707,40 @@ async function load(quarter: QuarterInfo): Promise<void> {
     };
   });
 
-  // (city, lowercased venue_name) → venue_id. Fallback when a
-  // schedule_master row has no mdapi_field_id (pre-PR-D leftovers).
-  // venueAliases isn't applied here because schedule_master.venue is
-  // already the canonical post-alias name after migration 0040.
-  const nameToVenueId = new Map<string, number>();
-  for (const v of venues) {
-    nameToVenueId.set(
-      `${v.city.trim().toLowerCase()}|${v.venue_name.trim().toLowerCase()}`,
-      v.id,
-    );
-  }
-  let smUnresolved = 0;
-  let smSpecialEventExcluded = 0;
-  const masterSchedule: FinMasterSchedule[] = smsRows.map((r) => {
-    const matchDate = cleanText(r.match_date);
-    const rawFieldId = r.mdapi_field_id;
-    const mdapiFieldId =
-      rawFieldId === null || rawFieldId === undefined
-        ? null
-        : Number(rawFieldId);
-    // schedule_master.max_spots is the cached mdapi max_player_count
-    // (backfill maps m.max_player_count → max_spots). Feed it into
-    // the split-rate resolver for venues whose split is capacity-
-    // driven (Soccer Central). 0 = special event ("World Cup" bracket
-    // match) → resolver returns null and the row drops out of cost.
-    const maxPlayerCount = Math.round(asNumber(r.max_spots) || 0);
-    let initialVenueId: number | null =
-      mdapiFieldId != null ? (venueFields.get(mdapiFieldId) ?? null) : null;
-    if (initialVenueId == null) {
-      initialVenueId =
-        nameToVenueId.get(
-          `${cleanText(r.city).toLowerCase()}|${cleanText(r.venue).toLowerCase()}`,
-        ) ?? null;
-    }
-    let resolvedVenueId: number | null = initialVenueId;
-    if (resolvedVenueId != null && matchDate) {
-      const beforeSplit = resolvedVenueId;
-      resolvedVenueId = resolveSplitRateVenueId(
-        resolvedVenueId,
-        matchDate,
-        venues,
-        maxPlayerCount,
-      );
-      if (resolvedVenueId == null && beforeSplit != null) {
-        // Resolver dropped this row (Soccer Central special event).
-        // Not an "unresolved" row in the venue-mapping sense — count
-        // separately so the warn message stays honest.
-        smSpecialEventExcluded += 1;
-      }
-    }
-    if (resolvedVenueId == null && initialVenueId == null) smUnresolved += 1;
-    const matchTime = cleanText(r.match_time);
-    return {
-      id: String(r.id ?? ""),
-      city: cleanText(r.city),
-      venue: cleanText(r.venue),
-      match_date: matchDate,
-      match_time: matchTime,
-      month: monthFromMatchDate(matchDate),
-      max_spots: Math.round(asNumber(r.max_spots) || 0),
-      mdapi_field_id: mdapiFieldId,
-      venue_id: resolvedVenueId,
-      duration_hours: parseMatchDurationHours(matchTime),
-    };
-  });
-  if (smUnresolved > 0 && typeof console !== "undefined") {
+  // Alive matches (is_cancelled=false) → FinMasterSchedule via the
+  // shared mdapi mapper. Same resolver as cancelledSchedule below, so
+  // the two are disjoint halves of mdapi_matches.
+  const smCounters = { unresolved: 0, specialEvent: 0 };
+  const masterSchedule: FinMasterSchedule[] = smsRows.map((r) =>
+    mapMdapiRowToSchedule(r, venueFields, venues, smCounters),
+  );
+  if (smCounters.unresolved > 0 && typeof console !== "undefined") {
     console.warn(
-      `[useFinanceData] ${smUnresolved} schedule_master row(s) in the quarter window have no resolvable venue_id — they'll be excluded from cost calc. Check fin_venue_fields links and (city, venue_name) string match against fin_venues.`,
+      `[useFinanceData] ${smCounters.unresolved} alive mdapi_matches row(s) in the quarter window have no resolvable venue_id — excluded from cost calc. Check fin_venue_fields links.`,
     );
   }
-  if (smSpecialEventExcluded > 0 && typeof console !== "undefined") {
+  if (smCounters.specialEvent > 0 && typeof console !== "undefined") {
     console.info(
-      `[useFinanceData] ${smSpecialEventExcluded} schedule_master row(s) excluded from cost as Soccer Central special events (max_player_count null/0).`,
+      `[useFinanceData] ${smCounters.specialEvent} alive mdapi_matches row(s) excluded from cost as Soccer Central special events (max_player_count null/0).`,
     );
   }
 
-  // Cancelled mdapi_matches → FinMasterSchedule shape. Same venue_id
-  // resolution as masterSchedule (mdapi_field_id → venueFields →
-  // resolveSplitRateVenueId) so an ATH Katy Sunday cancellation lands
-  // on the Sunday leg id, not the weekday leg's. Time formatting
-  // mirrors the backfill script (start + 1h "H:MM AM - H:MM AM"); we
-  // don't have an mdapi end-time column, so duration_hours defaults to
-  // 1. The fin_venues lookup is only used for city/venue strings so
-  // unresolved rows still appear in the array (with empty strings) for
-  // debugging — but they're filtered out of cost via the venue_id null
-  // check in venueChargedMatchCountFor.
-  let cmsUnresolved = 0;
-  let cmsSpecialEventExcluded = 0;
-  const cancelledSchedule: FinMasterSchedule[] = cmsRows.map((r) => {
-    const startDate = cleanText(r.start_date);
-    const matchDate = startDate
-      ? new Date(startDate).toISOString().slice(0, 10)
-      : "";
-    const rawFieldId = r.field_id;
-    const mdapiFieldId =
-      rawFieldId === null || rawFieldId === undefined
-        ? null
-        : Number(rawFieldId);
-    // mdapi_matches.max_player_count drives the Soccer Central split
-    // (same predicate as masterSchedule above). Null/0 → special
-    // event → resolver returns null → row drops from cancelled-cost.
-    const rawMaxPlayerCount = r.max_player_count;
-    const maxPlayerCount =
-      rawMaxPlayerCount == null
-        ? null
-        : Math.round(Number(rawMaxPlayerCount) || 0);
-    const initialVenueId =
-      mdapiFieldId != null ? (venueFields.get(mdapiFieldId) ?? null) : null;
-    let resolvedVenueId: number | null = initialVenueId;
-    if (resolvedVenueId != null && matchDate) {
-      const beforeSplit = resolvedVenueId;
-      resolvedVenueId = resolveSplitRateVenueId(
-        resolvedVenueId,
-        matchDate,
-        venues,
-        maxPlayerCount,
-      );
-      if (resolvedVenueId == null && beforeSplit != null) {
-        cmsSpecialEventExcluded += 1;
-      }
-    }
-    if (resolvedVenueId == null && initialVenueId == null) cmsUnresolved += 1;
-    const v =
-      resolvedVenueId != null
-        ? venues.find((x) => x.id === resolvedVenueId)
-        : null;
-    let matchTime = "";
-    if (startDate) {
-      const d = new Date(startDate);
-      if (!Number.isNaN(d.getTime())) {
-        const fmt = (h: number, m: number) => {
-          const ampm = h >= 12 ? "PM" : "AM";
-          const h12 = h % 12 === 0 ? 12 : h % 12;
-          return `${h12}:${String(m).padStart(2, "0")} ${ampm}`;
-        };
-        const h = d.getUTCHours();
-        const min = d.getUTCMinutes();
-        matchTime = `${fmt(h, min)} - ${fmt((h + 1) % 24, min)}`;
-      }
-    }
-    return {
-      id: String(r.api_id ?? ""),
-      city: v?.city ?? "",
-      venue: v?.venue_name ?? "",
-      match_date: matchDate,
-      match_time: matchTime,
-      month: monthFromMatchDate(matchDate),
-      max_spots: Math.round(asNumber(r.max_player_count) || 0),
-      mdapi_field_id: mdapiFieldId,
-      venue_id: resolvedVenueId,
-      duration_hours: 1,
-    };
-  });
-  if (cmsUnresolved > 0 && typeof console !== "undefined") {
+  // Cancelled matches (is_cancelled=true) → FinMasterSchedule via the
+  // shared mdapi mapper. Counted at cost time only when the resolved
+  // venue's charge_on_cancel is true. Disjoint from masterSchedule
+  // (alive) by construction, so no match is counted twice.
+  const cmsCounters = { unresolved: 0, specialEvent: 0 };
+  const cancelledSchedule: FinMasterSchedule[] = cmsRows.map((r) =>
+    mapMdapiRowToSchedule(r, venueFields, venues, cmsCounters),
+  );
+  if (cmsCounters.unresolved > 0 && typeof console !== "undefined") {
     console.warn(
-      `[useFinanceData] ${cmsUnresolved} cancelled mdapi_matches row(s) in the quarter window have no resolvable venue_id — they'll be excluded from charge-on-cancel cost. Check fin_venue_fields links.`,
+      `[useFinanceData] ${cmsCounters.unresolved} cancelled mdapi_matches row(s) in the quarter window have no resolvable venue_id — excluded from charge-on-cancel cost. Check fin_venue_fields links.`,
     );
   }
-  if (cmsSpecialEventExcluded > 0 && typeof console !== "undefined") {
+  if (cmsCounters.specialEvent > 0 && typeof console !== "undefined") {
     console.info(
-      `[useFinanceData] ${cmsSpecialEventExcluded} cancelled mdapi_matches row(s) excluded as Soccer Central special events (max_player_count null/0).`,
+      `[useFinanceData] ${cmsCounters.specialEvent} cancelled mdapi_matches row(s) excluded as Soccer Central special events (max_player_count null/0).`,
     );
   }
 

@@ -35,6 +35,7 @@ import { useAuth } from "@/lib/useAuth";
 import {
   refetchFinanceData,
   useFinanceData,
+  type FinanceData,
   type FinVenue,
   type FinVenueCostOverride,
 } from "@/lib/useFinanceData";
@@ -727,17 +728,7 @@ export default function FieldCostsView({
                         saveChargeOnCancel(row.primaryVenueId, next)
                       }
                       scheduleRows={
-                        data
-                          ? data.schedule.filter(
-                              (s) =>
-                                s.month === month &&
-                                row.legs.some(
-                                  (l) =>
-                                    l.rawVenueName === s.venue_raw ||
-                                    l.venueName === s.venue,
-                                ),
-                            )
-                          : []
+                        data ? buildMatchLineItems(data, row, month) : []
                       }
                     />
                   );
@@ -873,12 +864,7 @@ function FieldCostTableRow({
   onSavePrice: (field: PriceField, raw: string) => void;
   onSaveBillingType: (next: FinVenue["billing_type"]) => void;
   onSaveChargeOnCancel: (next: boolean) => void;
-  scheduleRows: {
-    date: string;
-    venue: string;
-    venue_raw: string;
-    match_count: number;
-  }[];
+  scheduleRows: MatchLineItem[];
   // Set briefly when the Match P&L tab links back to this row.
   // Renders a soft mint pulse so the operator can find the row.
   highlight?: boolean;
@@ -1222,44 +1208,68 @@ function PriceCell({
   );
 }
 
+// One row per actual match for this venue/month, straight from
+// mdapi_matches (data.masterSchedule = alive, data.cancelledSchedule =
+// cancelled). Built per leg by resolved venue_id so split-rate venues
+// (ATH Katy) attribute to the right leg + rate. Cancelled matches are
+// included only when that leg's venue charges on cancel — so the rows
+// sum exactly to the calc total.
+type MatchLineItem = {
+  date: string;
+  venue: string;
+  rate: number;
+  cancelled: boolean;
+};
+
+function buildMatchLineItems(
+  data: FinanceData,
+  row: FieldCostRow,
+  month: Q2Month,
+): MatchLineItem[] {
+  const items: MatchLineItem[] = [];
+  for (const leg of row.legs) {
+    const label = leg.rawVenueName || leg.venueName;
+    for (const s of data.masterSchedule) {
+      if (s.venue_id === leg.venueId && s.month === month) {
+        items.push({ date: s.match_date, venue: label, rate: leg.rate, cancelled: false });
+      }
+    }
+    const venue = data.venues.find((v) => v.id === leg.venueId);
+    if (venue?.charge_on_cancel) {
+      for (const s of data.cancelledSchedule) {
+        if (s.venue_id === leg.venueId && s.month === month) {
+          items.push({ date: s.match_date, venue: label, rate: leg.rate, cancelled: true });
+        }
+      }
+    }
+  }
+  return items;
+}
+
 function PerMatchExpand({
-  row,
   scheduleRows,
 }: {
   row: FieldCostRow;
-  scheduleRows: {
-    date: string;
-    venue: string;
-    venue_raw: string;
-    match_count: number;
-  }[];
+  scheduleRows: MatchLineItem[];
 }) {
   if (scheduleRows.length === 0) {
     return (
       <div className="text-xs italic text-deep-green/55">
-        No schedule entries for this month.
+        No matches for this month.
       </div>
     );
-  }
-  // Key rate lookup by raw venue name. For split-rate venues like ATH Katy,
-  // both legs share the canonical name post-alias, so canonical-keyed
-  // lookups would have one leg overwrite the other. raw_venue_name keeps
-  // them distinct.
-  const rateByRawVenue = new Map<string, number>();
-  for (const leg of row.legs) {
-    rateByRawVenue.set(leg.rawVenueName, leg.rate);
   }
   return (
     <div>
       <div className="mb-2 text-[10px] font-bold uppercase tracking-wider text-deep-green/55">
-        Underlying schedule entries
+        Underlying matches · from MatchDay
       </div>
       <table className="w-full font-mono text-[11px]">
         <thead className="text-[10px] font-bold uppercase tracking-wider text-deep-green/55">
           <tr>
             <th className="py-1 text-left">Date</th>
             <th className="py-1 text-left">Leg</th>
-            <th className="py-1 text-right">Matches</th>
+            <th className="py-1 text-left">Status</th>
             <th className="py-1 text-right">Rate</th>
             <th className="py-1 text-right">Cost</th>
           </tr>
@@ -1267,30 +1277,23 @@ function PerMatchExpand({
         <tbody>
           {[...scheduleRows]
             .sort((a, b) => a.date.localeCompare(b.date))
-            .map((s, i) => {
-              const rate =
-                rateByRawVenue.get(s.venue_raw) ??
-                rateByRawVenue.get(s.venue) ??
-                0;
-              const cost = (s.match_count ?? 0) * rate;
-              return (
-                <tr key={i} className="border-t border-cream-line/40">
-                  <td className="py-1 pr-3 text-deep-green">{s.date}</td>
-                  <td className="py-1 pr-3 text-deep-green/65">
-                    {s.venue_raw || s.venue}
-                  </td>
-                  <td className="py-1 pr-3 text-right tabular-nums text-deep-green/75">
-                    {s.match_count}
-                  </td>
-                  <td className="py-1 pr-3 text-right tabular-nums text-deep-green/55">
-                    ${rate}
-                  </td>
-                  <td className="py-1 text-right font-bold tabular-nums text-deep-green">
-                    {fmtMoney(cost, true)}
-                  </td>
-                </tr>
-              );
-            })}
+            .map((s, i) => (
+              <tr key={i} className="border-t border-cream-line/40">
+                <td className="py-1 pr-3 text-deep-green">{s.date}</td>
+                <td className="py-1 pr-3 text-deep-green/65">{s.venue}</td>
+                <td
+                  className={`py-1 pr-3 ${s.cancelled ? "text-[#9a6a00]" : "text-deep-green/45"}`}
+                >
+                  {s.cancelled ? "cancelled, charged" : "ran"}
+                </td>
+                <td className="py-1 pr-3 text-right tabular-nums text-deep-green/55">
+                  ${s.rate}
+                </td>
+                <td className="py-1 text-right font-bold tabular-nums text-deep-green">
+                  {fmtMoney(s.rate, true)}
+                </td>
+              </tr>
+            ))}
         </tbody>
       </table>
     </div>
