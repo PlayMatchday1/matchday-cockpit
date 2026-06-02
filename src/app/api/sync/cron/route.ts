@@ -327,12 +327,15 @@ export async function POST(req: Request) {
           "Skipped: mdapi_subscriptions sync failed; snapshot needs fresh data",
         );
       }
-      await refreshMembershipSnapshots({ client: sb, sourceFileName: "cron" });
+      return refreshMembershipSnapshots({ client: sb, sourceFileName: "cron" });
     },
-    // refreshMembershipSnapshots has no row counts to surface here —
-    // it upserts members_monthly_snapshots in-place. The success
-    // signal is the absence of an error_message on the log row.
-    () => ({}),
+    // rows_imported = months written; rows_replaced = months the
+    // regression guard refused (so the preflight is visible in
+    // fin_sync_log — a non-zero rows_replaced means a guard fired).
+    (r) => ({
+      rows_imported: r.writtenMonths.length,
+      rows_replaced: r.guardedMonths.length,
+    }),
   );
 
   const anyFailed =

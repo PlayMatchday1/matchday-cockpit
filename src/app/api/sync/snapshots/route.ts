@@ -105,10 +105,14 @@ export async function POST(req: Request) {
     triggeredBy,
     supabase,
     async (sb) => {
-      await refreshMembershipSnapshots({ client: sb, sourceFileName: "manual" });
+      return refreshMembershipSnapshots({ client: sb, sourceFileName: "manual" });
     },
-    // refreshMembershipSnapshots returns void — no row count to surface.
-    () => ({}),
+    // rows_imported = months written; rows_replaced = months the
+    // regression guard refused (visible in fin_sync_log).
+    (r) => ({
+      rows_imported: r.writtenMonths.length,
+      rows_replaced: r.guardedMonths.length,
+    }),
   );
 
   const anyFailed = !priceResult.ok || !result.ok;

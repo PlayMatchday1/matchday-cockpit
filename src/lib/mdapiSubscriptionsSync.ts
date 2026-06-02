@@ -366,34 +366,36 @@ export async function syncMdapiSubscriptions(
   const dbRows = [...dedupedById.values()];
 
   // --- 3b. Collapse circuit breaker ---
-  // Mechanism-agnostic backstop that runs BEFORE any write. If this run
-  // would cut the live ACTIVE population by >20% versus what's already
-  // in the table, something upstream is wrong (the June 1 2026 incident
-  // flipped ~38% of actives to CANCELED). Abort so the cron records a
-  // non-2xx failure and the prior good data + downstream snapshot are
-  // preserved, rather than silently overwritten. A real >20% one-day
-  // membership drop does not happen; if one ever legitimately does, the
-  // operator re-runs to acknowledge it. Note this does NOT block
-  // recovery: a heal run goes UP (e.g. 235 → 377), which trips nothing.
+  // Mechanism-agnostic backstop that runs BEFORE any write. Basis is
+  // ACTIVE + PAST_DUE (the live member base), NOT ACTIVE alone: the
+  // 1st-of-month billing batch legitimately flips many ACTIVE → PAST_DUE
+  // (cards declining on recharge), which preserves the sum, so it must
+  // NOT trip the breaker. Only a real loss — members leaving to CANCELED
+  // or the sync corrupting — drops the sum. If this run would cut the
+  // member base >20% versus what's already in the table, abort so the
+  // cron records a non-2xx failure and the prior good data + downstream
+  // snapshot are preserved rather than silently overwritten. Does NOT
+  // block recovery: a heal run goes UP, which trips nothing.
   const COLLAPSE_FLOOR = 0.8;
-  const newActiveCount = dbRows.filter((r) => r.status === "ACTIVE").length;
-  const { count: prevActiveRaw, error: countErr } = await supabase
+  const isMemberBase = (s: string | null) => s === "ACTIVE" || s === "PAST_DUE";
+  const newMemberCount = dbRows.filter((r) => isMemberBase(r.status)).length;
+  const { count: prevMemberRaw, error: countErr } = await supabase
     .from("mdapi_subscriptions")
     .select("membership_id", { count: "exact", head: true })
-    .eq("status", "ACTIVE");
+    .in("status", ["ACTIVE", "PAST_DUE"]);
   if (countErr) {
     throw new Error(
-      `mdapi_subscriptions: ACTIVE-count preflight failed, refusing to upsert blind: ${countErr.message}`,
+      `mdapi_subscriptions: member-count preflight failed, refusing to upsert blind: ${countErr.message}`,
     );
   }
-  const prevActive = prevActiveRaw ?? 0;
-  if (prevActive > 0 && newActiveCount < prevActive * COLLAPSE_FLOOR) {
-    const pctDrop = (((prevActive - newActiveCount) / prevActive) * 100).toFixed(
+  const prevMember = prevMemberRaw ?? 0;
+  if (prevMember > 0 && newMemberCount < prevMember * COLLAPSE_FLOOR) {
+    const pctDrop = (((prevMember - newMemberCount) / prevMember) * 100).toFixed(
       0,
     );
     throw new Error(
-      `mdapi_subscriptions: ABORTED upsert — ACTIVE would collapse ${prevActive} → ${newActiveCount} ` +
-        `(${pctDrop}% drop, >20% circuit breaker). Upstream is likely mis-tagging actives; refusing to overwrite good data. ` +
+      `mdapi_subscriptions: ABORTED upsert — member base (ACTIVE+PAST_DUE) would collapse ${prevMember} → ${newMemberCount} ` +
+        `(${pctDrop}% drop, >20% circuit breaker). Upstream is likely mis-tagging members; refusing to overwrite good data. ` +
         `Re-run to acknowledge if this is a real drop. (blockedActiveOverwrites this run=${blockedActiveOverwrites})`,
     );
   }

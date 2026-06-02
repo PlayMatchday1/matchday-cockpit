@@ -13,12 +13,18 @@ import { monthLabel } from "./membershipStats";
 export type MembershipSnapshotRow = {
   month: string; // YYYY-MM-DD, always first of month
   active_count: number;
+  // NULL for snapshots captured before the Past Due bucket shipped
+  // (June 2026); those render "—", never 0. Same for by_city.pastDue.
+  past_due_count: number | null;
   new_count: number;
   cancelled_count: number;
   churning_count: number;
   avg_matches_per_member: number | null;
   members_tracked: number | null;
-  by_city: Record<string, { active: number; new: number; cancelled: number }>;
+  by_city: Record<
+    string,
+    { active: number; new: number; cancelled: number; pastDue?: number }
+  >;
 };
 
 // View passed from CitiesMembershipLens down to each switchable card.
@@ -80,7 +86,7 @@ export function useMembershipSnapshots(): {
     supabase
       .from("members_monthly_snapshots")
       .select(
-        "month, active_count, new_count, cancelled_count, churning_count, avg_matches_per_member, members_tracked, by_city",
+        "month, active_count, past_due_count, new_count, cancelled_count, churning_count, avg_matches_per_member, members_tracked, by_city",
       )
       .order("month", { ascending: false })
       .then(({ data, error }) => {

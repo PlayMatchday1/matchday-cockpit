@@ -35,7 +35,7 @@ export async function refreshMembershipSnapshots(opts: {
   // level supabase import which uses the publishable key — fine for
   // CSV-upload callers running in the browser with an authed user.
   client?: SupabaseClient;
-} = {}): Promise<void> {
+} = {}): Promise<{ writtenMonths: string[]; guardedMonths: string[] }> {
   const sb = opts.client ?? defaultClient;
   const now = opts.now ?? new Date();
 
@@ -95,6 +95,18 @@ export async function refreshMembershipSnapshots(opts: {
     refDates.unshift(new Date(now.getFullYear(), now.getMonth(), 0));
   }
 
+  // Regression guard: refuse to overwrite a stored month whose active
+  // count would drop more than this fraction. A closed month re-computes
+  // within a few % from late backdated events; a >10% active drop means
+  // the source (mdapi_subscriptions) is corrupted — keep the stored row
+  // and warn loud rather than silently overwrite good history with bad
+  // data (the June 1 2026 incident overwrote May's 379 with a corrupted
+  // 232). Skip-and-warn per month: a guarded prior month does not block
+  // the legitimate current-month write.
+  const REGRESSION_FLOOR = 0.9;
+  const writtenMonths: string[] = [];
+  const guardedMonths: string[] = [];
+
   for (const refDate of refDates) {
     const snap = computeMonthlySnapshot(
       members,
@@ -103,6 +115,29 @@ export async function refreshMembershipSnapshots(opts: {
       refDate,
       opts.sourceFileName,
     );
+
+    const { data: existing } = await sb
+      .from("members_monthly_snapshots")
+      .select("active_count")
+      .eq("month", snap.month)
+      .maybeSingle<{ active_count: number }>();
+    if (
+      existing &&
+      existing.active_count > 0 &&
+      snap.active_count < existing.active_count * REGRESSION_FLOOR
+    ) {
+      const pct = Math.round(
+        (1 - snap.active_count / existing.active_count) * 100,
+      );
+      console.warn(
+        `⚠ membership-snapshots regression guard: refusing to overwrite ${snap.month} — ` +
+          `active ${existing.active_count} → ${snap.active_count} (${pct}% drop, >10% floor). ` +
+          `Keeping the stored row. Likely upstream subscription corruption — investigate before forcing a refresh.`,
+      );
+      guardedMonths.push(snap.month);
+      continue;
+    }
+
     const { error } = await sb
       .from("members_monthly_snapshots")
       .upsert(snap, { onConflict: "month" });
@@ -111,6 +146,10 @@ export async function refreshMembershipSnapshots(opts: {
         `Membership snapshot upsert failed for ${snap.month}:`,
         error.message,
       );
+      continue;
     }
+    writtenMonths.push(snap.month);
   }
+
+  return { writtenMonths, guardedMonths };
 }

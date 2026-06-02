@@ -8,6 +8,7 @@ import {
   isCancelledInMonth,
   isChurning,
   isNewInMonth,
+  isPastDueMember,
   type AttendanceRow,
 } from "@/lib/membershipStats";
 import { type MembershipMonthView } from "@/lib/useMembershipSnapshots";
@@ -46,6 +47,7 @@ function LiveMonthKPIs({ label }: { label: string }) {
 
   const members = data.members;
   const active = members.filter(isActiveMember).length;
+  const pastDue = members.filter(isPastDueMember).length;
   const newThisMonth = members.filter((m) => isNewInMonth(m, now)).length;
   const cancellations = members.filter((m) => isCancelledInMonth(m, now))
     .length;
@@ -66,6 +68,12 @@ function LiveMonthKPIs({ label }: { label: string }) {
     <Frame label={label} eyebrow="current snapshot">
       <KPIGrid>
         <KPI label="Active Members" value={active.toLocaleString()} />
+        <KPI
+          label="Past Due"
+          value={pastDue.toLocaleString()}
+          tone="info"
+          hint="card retrying"
+        />
         <KPI
           label="New This Month"
           value={newThisMonth.toLocaleString()}
@@ -124,6 +132,16 @@ function SnapshotMonthKPIs({ view }: { view: MembershipMonthView }) {
           value={snapshotRow.active_count.toLocaleString()}
         />
         <KPI
+          label="Past Due"
+          value={
+            snapshotRow.past_due_count == null
+              ? "—"
+              : snapshotRow.past_due_count.toLocaleString()
+          }
+          tone="info"
+          hint={snapshotRow.past_due_count == null ? "not captured" : "card retrying"}
+        />
+        <KPI
           label="New This Month"
           value={snapshotRow.new_count.toLocaleString()}
           tone="up"
@@ -172,7 +190,7 @@ function Frame({
 
 function KPIGrid({ children }: { children: React.ReactNode }) {
   return (
-    <div className="grid grid-cols-2 gap-x-6 gap-y-5 sm:grid-cols-3 lg:grid-cols-5">
+    <div className="grid grid-cols-2 gap-x-6 gap-y-5 sm:grid-cols-3 lg:grid-cols-6">
       {children}
     </div>
   );
@@ -186,15 +204,19 @@ function KPI({
 }: {
   label: string;
   value: string;
-  tone?: "up" | "down";
+  tone?: "up" | "down" | "info";
   hint?: string;
 }) {
+  // "info" (amber) = informational, not negative — used for Past Due,
+  // which is a recovery bucket, not churn.
   const toneCls =
     tone === "up"
       ? "text-mint-hover"
       : tone === "down"
         ? "text-coral"
-        : "text-deep-green";
+        : tone === "info"
+          ? "text-[#9a6a00]"
+          : "text-deep-green";
   return (
     <div>
       <div className="text-[10px] font-bold uppercase tracking-wider text-deep-green/60">

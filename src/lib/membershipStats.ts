@@ -75,6 +75,14 @@ export function isActiveMember(m: MemberLike): boolean {
   return m.status === "ACTIVE" && isPaidExternalMember(m);
 }
 
+// PAST_DUE members: card declined and is being retried in dunning, but
+// they're still real ongoing members and recovery candidates, not churn.
+// Surfaced as their own bucket next to active — deliberately NOT merged
+// into the active count (active stays strict ACTIVE-only).
+export function isPastDueMember(m: MemberLike): boolean {
+  return m.status === "PAST_DUE" && isPaidExternalMember(m);
+}
+
 // First moment a cancellation no longer counts as active. Mirrors the
 // 25-day grace cycle in isChurning: a cancellation on day [6, 31] of
 // month M rolls off at start of day 6 of M+1. A cancellation on day
@@ -105,6 +113,16 @@ export function isActiveAsOf(m: MemberLike, asOf: Date): boolean {
   if (!activated || activated > asOf) return false;
   if (m.status !== "ACTIVE") return false;
   return true;
+}
+
+// Point-in-time PAST_DUE, mirroring isActiveAsOf (activation <= asOf,
+// paid, status currently PAST_DUE). Used by the snapshot so prior
+// months can render their Past Due bucket.
+export function isPastDueAsOf(m: MemberLike, asOf: Date): boolean {
+  if (!isPaidExternalMember(m)) return false;
+  const activated = parseMemberDate(m.activation_date);
+  if (!activated || activated > asOf) return false;
+  return m.status === "PAST_DUE";
 }
 
 // Point-in-time variant of isChurning. Same rolling [6th of M-1,
@@ -144,6 +162,7 @@ export function isCancelledInMonth(m: MemberLike, ref: Date): boolean {
 export type CityMembershipRow = {
   city: string;
   active: number;
+  pastDue: number;
   newThisMonth: number;
   cancelled: number;
   net: number;
@@ -158,6 +177,7 @@ export function buildCityMembershipRows(
     .map((city) => {
       const cityMembers = members.filter((m) => m.city === city);
       const active = cityMembers.filter(isActiveMember).length;
+      const pastDue = cityMembers.filter(isPastDueMember).length;
       const newThisMonth = cityMembers.filter((m) => isNewInMonth(m, now))
         .length;
       const cancelled = cityMembers.filter((m) => isCancelledInMonth(m, now))
@@ -165,6 +185,7 @@ export function buildCityMembershipRows(
       return {
         city,
         active,
+        pastDue,
         newThisMonth,
         cancelled,
         net: newThisMonth - cancelled,
@@ -267,12 +288,16 @@ function parseAttendanceDate(s: string): Date | null {
 export type MembershipSnapshotPayload = {
   month: string; // YYYY-MM-01
   active_count: number;
+  past_due_count: number;
   new_count: number;
   cancelled_count: number;
   churning_count: number;
   avg_matches_per_member: number | null;
   members_tracked: number | null;
-  by_city: Record<string, { active: number; new: number; cancelled: number }>;
+  by_city: Record<
+    string,
+    { active: number; pastDue: number; new: number; cancelled: number }
+  >;
   source_file_name?: string;
 };
 
@@ -296,6 +321,7 @@ export function computeMonthlySnapshot(
     const cm = members.filter((m) => m.city === city);
     byCity[city] = {
       active: cm.filter((m) => isActiveAsOf(m, asOf)).length,
+      pastDue: cm.filter((m) => isPastDueAsOf(m, asOf)).length,
       new: cm.filter((m) => isNewInMonth(m, asOf)).length,
       cancelled: cm.filter((m) => isCancelledInMonth(m, asOf)).length,
     };
@@ -310,6 +336,7 @@ export function computeMonthlySnapshot(
   return {
     month: monthIso,
     active_count: members.filter((m) => isActiveAsOf(m, asOf)).length,
+    past_due_count: members.filter((m) => isPastDueAsOf(m, asOf)).length,
     new_count: members.filter((m) => isNewInMonth(m, asOf)).length,
     cancelled_count: members.filter((m) => isCancelledInMonth(m, asOf)).length,
     churning_count: members.filter((m) => isChurningAsOf(m, asOf)).length,
