@@ -8,6 +8,7 @@ import {
   type PartnerExtraRevRow,
   type PartnerPaymentInfo,
   type PartnerRegRow,
+  type PartnerRevenueModel,
   type PartnerWeeklyPayment,
   type PartnerWeeklyPaymentRecord,
 } from "@/lib/partnerStats";
@@ -59,6 +60,10 @@ type DashboardRow = {
   payment_start_date: string | null;
   payment_day_of_week: number;
   payment_cadence: "weekly" | "monthly";
+  revenue_model: PartnerRevenueModel;
+  manager_pay_base: number | null;
+  manager_pay_high: number | null;
+  manager_pay_threshold: number | null;
 };
 
 type Venue = {
@@ -94,7 +99,7 @@ export default function PartnerDetailAdmin({
       const primary = await supabase
         .from("partner_dashboards")
         .select(
-          "id, slug, partner_name, enabled, venue_id, revenue_share_pct, payment_start_date, payment_day_of_week, payment_cadence",
+          "id, slug, partner_name, enabled, venue_id, revenue_share_pct, payment_start_date, payment_day_of_week, payment_cadence, revenue_model, manager_pay_base, manager_pay_high, manager_pay_threshold",
         )
         .eq("id", partnerDashboardId)
         .maybeSingle();
@@ -108,7 +113,14 @@ export default function PartnerDetailAdmin({
           .maybeSingle();
         if (fallback.error) throw new Error(fallback.error.message);
         pd = fallback.data
-          ? ({ ...fallback.data, payment_cadence: "weekly" } as DashboardRow)
+          ? ({
+              ...fallback.data,
+              payment_cadence: "weekly",
+              revenue_model: "flat_percentage",
+              manager_pay_base: null,
+              manager_pay_high: null,
+              manager_pay_threshold: null,
+            } as DashboardRow)
           : null;
       } else if (primary.error) {
         throw new Error(primary.error.message);
@@ -196,6 +208,10 @@ export default function PartnerDetailAdmin({
         paymentStartDate: dashboard.payment_start_date,
         paymentDayOfWeek: dashboard.payment_day_of_week ?? 0,
         paymentCadence: dashboard.payment_cadence ?? "weekly",
+        revenueModel: dashboard.revenue_model ?? "flat_percentage",
+        managerPayBase: dashboard.manager_pay_base ?? null,
+        managerPayHigh: dashboard.manager_pay_high ?? null,
+        managerPayThreshold: dashboard.manager_pay_threshold ?? null,
       },
       records,
     );
