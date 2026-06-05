@@ -93,6 +93,7 @@ type MatchRow = {
 // across requests.
 const warnedFieldIds = new Set<number>();
 const warnedScheduleVenues = new Set<string>();
+const warnedBareTimes = new Set<string>();
 function warnUnmappedFieldId(fieldId: number, title: string | null): void {
   if (warnedFieldIds.has(fieldId)) return;
   warnedFieldIds.add(fieldId);
@@ -106,6 +107,13 @@ function warnUnmappedScheduleVenue(city: string, venue: string): void {
   warnedScheduleVenues.add(key);
   console.warn(
     `[schedule-master:discrepancies] schedule_master row (city="${city}", venue="${venue}") has no matching fin_venues row — check fin_venues.venue_name + city.`,
+  );
+}
+function warnBareScheduleTime(time: string): void {
+  if (warnedBareTimes.has(time)) return;
+  warnedBareTimes.add(time);
+  console.warn(
+    `[schedule-master:discrepancies] schedule_master match_time "${time}" has no AM/PM token; assuming PM. Fix the source row (e.g. "9:00" -> "9:00 PM").`,
   );
 }
 
@@ -501,7 +509,14 @@ function parseStartHHMM(time: string): string {
   const min = m[2] ? Number(m[2]) : 0;
   const ampm = m[3]?.toUpperCase();
   if (ampm === "PM" && h < 12) h += 12;
-  if (ampm === "AM" && h === 12) h = 0;
+  else if (ampm === "AM" && h === 12) h = 0;
+  else if (!ampm && h >= 5 && h <= 11) {
+    // Bare evening hour with no AM/PM token. MatchDay runs no 5-11 AM
+    // matches, so treat as PM. Warn so the source row can be cleaned up
+    // (e.g. "9:00" -> "9:00 PM"); the parse self-heals either way.
+    warnBareScheduleTime(time);
+    h += 12;
+  }
   return `${String(h).padStart(2, "0")}:${String(min).padStart(2, "0")}`;
 }
 
