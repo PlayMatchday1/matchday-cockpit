@@ -188,6 +188,9 @@ type MatchDbRow = {
   updated_at: string | null;
   raw: unknown;
   synced_at: string;
+  // Cleared (null) on every upsert: a match the API returns is alive,
+  // so a previously-tombstoned match that reappears is resurrected.
+  deleted_at: string | null;
 };
 
 type PlayerDbRow = {
@@ -263,6 +266,10 @@ export type MdapiMatchesSyncResult = {
   // affected match's player roster stays stale (or empty on first
   // backfill) until a re-run.
   perMatchErrors: Record<string, string>;
+  // Rows tombstoned (deleted_at set) this run because they went unseen
+  // upstream for >=2 consecutive runs. 0 unless a bounded incremental
+  // window ran and the sanity guards passed.
+  rowsSoftDeleted: number;
   durationMs: number;
 };
 
@@ -393,6 +400,21 @@ export async function syncMdapiMatches(
     playersUpserted += chunk.length;
   }
 
+  // === 5. Tombstone pass: soft-delete phantoms (deleted upstream) ===
+  // Only for bounded incremental windows (both dates set). Backfill
+  // (fromDate only) spans an unbounded forward range; tombstoning there
+  // could wrongly delete future matches the run didn't page deep enough
+  // to reach.
+  let rowsSoftDeleted = 0;
+  if (opts.fromDate && opts.toDate) {
+    rowsSoftDeleted = await tombstoneMissing(supabase, {
+      fromDate: opts.fromDate,
+      toDate: opts.toDate,
+      thisRunStartIso: new Date(startedAt).toISOString(),
+      thisRunRowCount: matchesUpserted + playersUpserted,
+    });
+  }
+
   return {
     matchesFetched: matches.length,
     matchesUpserted,
@@ -401,8 +423,98 @@ export async function syncMdapiMatches(
     pages,
     apiCalls,
     perMatchErrors,
+    rowsSoftDeleted,
     durationMs: Date.now() - startedAt,
   };
+}
+
+// Soft-delete mdapi_matches rows inside [fromDate, toDate] that this run
+// did not see, with a 2-run cooldown and an 80%-row-count sanity guard.
+//
+// Cooldown: the cutoff is the PREVIOUS run's start time. Live rows the
+// API returned this run were just upserted with a fresh synced_at (>
+// cutoff) and deleted_at cleared, so they never match. A row last seen
+// in the previous run (synced_at > cutoff) is spared — it has missed
+// only this run, which a single flaky upstream response could explain.
+// Only a row last seen two-or-more runs ago (synced_at < cutoff) is
+// tombstoned. Resurrection is automatic: if a tombstoned match later
+// reappears upstream, its next upsert clears deleted_at.
+async function tombstoneMissing(
+  supabase: SupabaseClient,
+  args: {
+    fromDate: string;
+    toDate: string;
+    thisRunStartIso: string;
+    thisRunRowCount: number;
+  },
+): Promise<number> {
+  const { fromDate, toDate, thisRunStartIso, thisRunRowCount } = args;
+
+  // Prior SUCCESSFUL mdapi-matches runs strictly before this one,
+  // newest first. completed_at NOT NULL + error_message NULL excludes
+  // (a) this run's own in-progress log row, which runWithLog inserts
+  // before calling the sync, and (b) crashed runs that never refreshed
+  // synced_at — counting those would prematurely tombstone live rows.
+  const { data: prior, error: priorErr } = await supabase
+    .from("fin_sync_log")
+    .select("started_at, rows_imported")
+    .eq("source", "mdapi-matches")
+    .lt("started_at", thisRunStartIso)
+    .not("completed_at", "is", null)
+    .is("error_message", null)
+    .order("started_at", { ascending: false })
+    .limit(2);
+  if (priorErr) {
+    console.warn(
+      `[mdapi-matches] tombstone skipped: prior-run lookup failed: ${priorErr.message}`,
+    );
+    return 0;
+  }
+  const prevRun = prior?.[0];
+  if (!prevRun?.started_at) {
+    console.log(
+      "[mdapi-matches] tombstone skipped: no prior run to anchor the cooldown",
+    );
+    return 0;
+  }
+
+  // Row-count sanity guard: a partial/flaky run that returned far fewer
+  // rows than usual must not tombstone live matches. Compare against the
+  // most recent prior run that recorded a count.
+  const baseline = prior.find(
+    (r) => typeof r.rows_imported === "number",
+  )?.rows_imported;
+  if (
+    typeof baseline === "number" &&
+    baseline > 0 &&
+    thisRunRowCount < 0.8 * baseline
+  ) {
+    console.warn(
+      `[mdapi-matches] tombstone skipped: this run rows=${thisRunRowCount} < 80% of prior ${baseline}`,
+    );
+    return 0;
+  }
+
+  const cutoff = prevRun.started_at;
+  const { data: tombstoned, error: updErr } = await supabase
+    .from("mdapi_matches")
+    .update({ deleted_at: new Date().toISOString() })
+    .is("deleted_at", null)
+    .lt("synced_at", cutoff)
+    .gte("start_date", `${fromDate}T00:00:00Z`)
+    .lte("start_date", `${toDate}T23:59:59Z`)
+    .select("api_id");
+  if (updErr) {
+    console.warn(`[mdapi-matches] tombstone update failed: ${updErr.message}`);
+    return 0;
+  }
+  const n = tombstoned?.length ?? 0;
+  if (n > 0) {
+    console.log(
+      `[mdapi-matches] soft-deleted ${n} phantom row(s) in ${fromDate}..${toDate} (synced before ${cutoff})`,
+    );
+  }
+  return n;
 }
 
 // ===== Mappers =====
@@ -450,6 +562,9 @@ function mapMatchToRow(m: ApiMatch, syncedAt: string): MatchDbRow {
     updated_at: m.updatedAt ?? null,
     raw: m,
     synced_at: syncedAt,
+    // The API returned this match, so it is alive — clear any prior
+    // tombstone (resurrection on re-appearance upstream).
+    deleted_at: null,
   };
 }
 

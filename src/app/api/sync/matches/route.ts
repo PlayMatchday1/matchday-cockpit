@@ -92,7 +92,10 @@ export async function POST(req: Request) {
     triggeredBy,
     supabase,
     (sb) => syncMdapiMatches(sb, defaultIncrementalWindow()),
-    (r) => ({ rows_imported: r.matchesUpserted + r.playersUpserted }),
+    (r) => ({
+      rows_imported: r.matchesUpserted + r.playersUpserted,
+      rows_soft_deleted: r.rowsSoftDeleted,
+    }),
   );
 
   return Response.json(

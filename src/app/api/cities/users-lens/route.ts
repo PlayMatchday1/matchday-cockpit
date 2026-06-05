@@ -256,6 +256,8 @@ export async function fetchAll(supabase: SupabaseClient) {
     supabase
       .from("mdapi_matches")
       .select("api_id, city_identifier, start_date, is_cancelled, field_title")
+      // Exclude soft-deleted phantoms from scheduled-match denominators.
+      .is("deleted_at", null)
       .order("api_id"),
   );
   console.log(

@@ -199,6 +199,9 @@ export async function GET(req: Request) {
     .select(
       "api_id, city_identifier, field_id, field_title, start_date, is_cancelled, max_player_count, raw",
     )
+    // Exclude soft-deleted phantoms so a match deleted upstream stops
+    // showing as extra_in_db ("missing on Clubhouse").
+    .is("deleted_at", null)
     .gte("start_date", startTs)
     .lte("start_date", endTs);
   if (mRes.error) {

@@ -213,6 +213,7 @@ export async function POST(req: Request) {
     (sb) => syncMdapiMatches(sb, defaultIncrementalWindow()),
     (r) => ({
       rows_imported: r.matchesUpserted + r.playersUpserted,
+      rows_soft_deleted: r.rowsSoftDeleted,
     }),
   );
 

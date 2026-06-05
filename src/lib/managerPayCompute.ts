@@ -289,6 +289,9 @@ export async function computeManagerPayForWeek(
       .select(
         "api_id, city_identifier, field_title, start_date, start_date_utc, is_cancelled, manager_id, manager_email, manager_first_name, manager_last_name, second_manager_id, max_player_count, player_count, fake_player_count, registration_price, name, raw",
       )
+      // Exclude soft-deleted phantoms so a match deleted upstream never
+      // pays a manager. Defense-in-depth alongside the orphan filter.
+      .is("deleted_at", null)
       .gte("start_date", queryFrom)
       .lt("start_date", queryTo)
       .order("api_id"),

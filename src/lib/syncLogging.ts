@@ -34,6 +34,7 @@ export type SourceName =
 export type LogPatch = Partial<{
   rows_imported: number;
   rows_replaced: number;
+  rows_soft_deleted: number;
   charges_fetched: number;
   charges_succeeded: number;
   charges_skipped: number;

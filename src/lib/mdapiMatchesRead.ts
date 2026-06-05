@@ -525,7 +525,14 @@ export async function fetchJoinedMatchPlayers(
 ): Promise<MatchDataset> {
   // 1. Fetch matches in scope
   const matches = await selectAll<MatchSelect>(() => {
-    let q = supabase.from("mdapi_matches").select(MATCHES_COLS);
+    // Exclude soft-deleted phantoms (deleted upstream in MatchDay). The
+    // player-join path drops zero-player phantoms already, but the
+    // scheduledMatches view (run-rate / cancel-rate denominators) reads
+    // these rows directly, so filter at the source. Defense-in-depth.
+    let q = supabase
+      .from("mdapi_matches")
+      .select(MATCHES_COLS)
+      .is("deleted_at", null);
     if (opts.fromDate) q = q.gte("start_date", opts.fromDate);
     if (opts.toDate) q = q.lte("start_date", opts.toDate);
     if (opts.fieldLike) q = q.ilike("field_title", opts.fieldLike);

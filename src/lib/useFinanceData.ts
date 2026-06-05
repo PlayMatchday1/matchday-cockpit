@@ -501,6 +501,10 @@ async function load(quarter: QuarterInfo): Promise<void> {
             "api_id, field_id, field_title, start_date, max_player_count",
           )
           .eq("is_cancelled", false)
+          // Exclude soft-deleted phantoms (deleted upstream in MatchDay)
+          // so existence-based field costs don't bill matches that no
+          // longer exist. See mdapiMatchesSync tombstone pass.
+          .is("deleted_at", null)
           .gte("start_date", `${smBounds.fromDate}T00:00:00Z`)
           .lte("start_date", `${smBounds.toDate}T23:59:59Z`)
           .order("start_date"),
@@ -518,6 +522,10 @@ async function load(quarter: QuarterInfo): Promise<void> {
             "api_id, field_id, field_title, start_date, max_player_count",
           )
           .eq("is_cancelled", true)
+          // Exclude soft-deleted phantoms here too: a cancelled match
+          // that was later deleted upstream should not bill at
+          // charge_on_cancel venues.
+          .is("deleted_at", null)
           .gte("start_date", `${smBounds.fromDate}T00:00:00Z`)
           .lte("start_date", `${smBounds.toDate}T23:59:59Z`)
           .order("start_date"),
