@@ -24,19 +24,19 @@ import {
 export const runtime = "nodejs";
 export const maxDuration = 10;
 
-// Display order requested for the Master Schedule tab. Slightly
-// different from src/lib/types.ts CITIES (which has Dallas before
-// Houston) — the ops team plans the master schedule with the
-// largest markets first, then alphabetical for the long tail.
+// The canonical set of cities emitted for the Master Schedule tab.
+// Listed alphabetically to match the rendered order; the response is
+// also explicitly sorted by name below so the order is guaranteed by
+// the sort, not by this literal.
 const CITY_ORDER = [
-  "Austin",
-  "Houston",
-  "San Antonio",
-  "Dallas",
   "Atlanta",
-  "St. Louis",
-  "OKC",
+  "Austin",
+  "Dallas",
   "El Paso",
+  "Houston",
+  "OKC",
+  "San Antonio",
+  "St. Louis",
 ] as const;
 type DisplayCity = (typeof CITY_ORDER)[number];
 
@@ -143,6 +143,9 @@ export async function GET(req: Request) {
     }
     cities.push({ name, total, days });
   }
+
+  // Sort city sections alphabetically A->Z by name.
+  cities.sort((a, b) => a.name.localeCompare(b.name));
 
   return Response.json(
     {
