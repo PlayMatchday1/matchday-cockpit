@@ -413,6 +413,18 @@ export async function syncMdapiMatches(
       thisRunStartIso: new Date(startedAt).toISOString(),
       thisRunRowCount: matchesUpserted + playersUpserted,
     });
+    // Same pass for player rows: a registration dropped from a match's
+    // roster upstream is upsert-only here too, so it lingers as a phantom.
+    // Folded into the same rows_soft_deleted counter. Matches whose player
+    // fetch errored this run are excluded so a transient upstream failure
+    // can't tombstone a live roster.
+    rowsSoftDeleted += await tombstonePlayersMissing(supabase, {
+      fromDate: opts.fromDate,
+      toDate: opts.toDate,
+      thisRunStartIso: new Date(startedAt).toISOString(),
+      thisRunRowCount: matchesUpserted + playersUpserted,
+      erroredMatchIds: new Set(Object.keys(perMatchErrors).map(Number)),
+    });
   }
 
   return {
@@ -512,6 +524,121 @@ async function tombstoneMissing(
   if (n > 0) {
     console.log(
       `[mdapi-matches] soft-deleted ${n} phantom row(s) in ${fromDate}..${toDate} (synced before ${cutoff})`,
+    );
+  }
+  return n;
+}
+
+// Soft-delete mdapi_match_players rows whose match falls inside
+// [fromDate, toDate] that this run did not refresh — the player-row
+// analogue of tombstoneMissing. Mirrors it exactly: cooldown cutoff is
+// the previous successful run's start (a row must miss >=2 runs), and the
+// same 80% row-count sanity guard skips a partial run. Players carry no
+// start_date, so the window is resolved through their match_api_id.
+//
+// One extra guard the matches pass doesn't need: players are fetched with
+// a per-match API call, so a single match's fetch can fail in isolation.
+// erroredMatchIds (this run's perMatchErrors) are excluded so a transient
+// roster-fetch failure never tombstones a live roster — the 2-run cooldown
+// already covers a one-run miss, this hardens the consecutive-failure case.
+async function tombstonePlayersMissing(
+  supabase: SupabaseClient,
+  args: {
+    fromDate: string;
+    toDate: string;
+    thisRunStartIso: string;
+    thisRunRowCount: number;
+    erroredMatchIds: Set<number>;
+  },
+): Promise<number> {
+  const { fromDate, toDate, thisRunStartIso, thisRunRowCount, erroredMatchIds } =
+    args;
+
+  const { data: prior, error: priorErr } = await supabase
+    .from("fin_sync_log")
+    .select("started_at, rows_imported")
+    .eq("source", "mdapi-matches")
+    .lt("started_at", thisRunStartIso)
+    .not("completed_at", "is", null)
+    .is("error_message", null)
+    .order("started_at", { ascending: false })
+    .limit(2);
+  if (priorErr) {
+    console.warn(
+      `[mdapi-players] tombstone skipped: prior-run lookup failed: ${priorErr.message}`,
+    );
+    return 0;
+  }
+  const prevRun = prior?.[0];
+  if (!prevRun?.started_at) {
+    console.log(
+      "[mdapi-players] tombstone skipped: no prior run to anchor the cooldown",
+    );
+    return 0;
+  }
+
+  const baseline = prior.find(
+    (r) => typeof r.rows_imported === "number",
+  )?.rows_imported;
+  if (
+    typeof baseline === "number" &&
+    baseline > 0 &&
+    thisRunRowCount < 0.8 * baseline
+  ) {
+    console.warn(
+      `[mdapi-players] tombstone skipped: this run rows=${thisRunRowCount} < 80% of prior ${baseline}`,
+    );
+    return 0;
+  }
+
+  const cutoff = prevRun.started_at;
+
+  // Match ids inside the covered window, minus any whose roster we failed
+  // to fetch this run.
+  const matchIds: number[] = [];
+  for (let from = 0; ; from += 1000) {
+    const { data, error } = await supabase
+      .from("mdapi_matches")
+      .select("api_id")
+      .gte("start_date", `${fromDate}T00:00:00Z`)
+      .lte("start_date", `${toDate}T23:59:59Z`)
+      .order("api_id", { ascending: true })
+      .range(from, from + 999);
+    if (error) {
+      console.warn(
+        `[mdapi-players] tombstone skipped: window match lookup failed: ${error.message}`,
+      );
+      return 0;
+    }
+    const rows = (data ?? []) as { api_id: number }[];
+    for (const r of rows) {
+      if (!erroredMatchIds.has(r.api_id)) matchIds.push(r.api_id);
+    }
+    if (rows.length < 1000) break;
+  }
+  if (matchIds.length === 0) return 0;
+
+  // Chunk the IN() list to keep URLs under PostgREST's practical limit.
+  let n = 0;
+  const CHUNK = 200;
+  for (let from = 0; from < matchIds.length; from += CHUNK) {
+    const chunk = matchIds.slice(from, from + CHUNK);
+    const { data: tombstoned, error: updErr } = await supabase
+      .from("mdapi_match_players")
+      .update({ deleted_at: new Date().toISOString() })
+      .is("deleted_at", null)
+      .lt("synced_at", cutoff)
+      .in("match_api_id", chunk)
+      .select("api_id");
+    if (updErr) {
+      console.warn(`[mdapi-players] tombstone update failed: ${updErr.message}`);
+      return n;
+    }
+    n += tombstoned?.length ?? 0;
+  }
+  if (n > 0) {
+    console.log(
+      `[mdapi-players] soft-deleted ${n} phantom player row(s) in ${fromDate}..${toDate} (synced before ${cutoff})`,
     );
   }
   return n;

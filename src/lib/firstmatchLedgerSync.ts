@@ -82,6 +82,8 @@ async function selectAllFirstMatchPlayers(
         "api_id, user_id, user_first_name, user_last_name, user_email, user_phone_number, created_at, synced_at, match_api_id, is_cancelled",
       )
       .eq("is_first_match", true)
+      // Phantom rows dropped upstream shouldn't count as first-match claims.
+      .is("deleted_at", null)
       .order("api_id", { ascending: true })
       .range(from, from + SELECT_PAGE - 1);
     if (error) {

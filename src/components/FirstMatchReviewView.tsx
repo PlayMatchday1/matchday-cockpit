@@ -234,6 +234,7 @@ export default function FirstMatchReviewView() {
           .from("mdapi_match_players")
           .select("api_id, promocode_id")
           .eq("is_first_match", true)
+          .is("deleted_at", null)
           .order("api_id", { ascending: true })
           .range(from, from + 999);
         if (pErr) break; // non-fatal — promo column just falls back to "—"

@@ -245,6 +245,8 @@ export async function fetchAll(supabase: SupabaseClient) {
       .select(
         "user_id, match_api_id, is_cancelled, user_is_fake_player, user_type, api_id",
       )
+      // Exclude phantom registrations soft-deleted upstream.
+      .is("deleted_at", null)
       .order("api_id"),
   );
   console.log(

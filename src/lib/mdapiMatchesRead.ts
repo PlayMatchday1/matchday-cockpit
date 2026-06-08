@@ -557,6 +557,9 @@ export async function fetchJoinedMatchPlayers(
       supabase
         .from("mdapi_match_players")
         .select(PLAYERS_COLS)
+        // Drop phantom registrations soft-deleted by the player tombstone
+        // pass (dropped from a match's roster upstream).
+        .is("deleted_at", null)
         .order("api_id"),
     );
     players.push(...all);
@@ -580,6 +583,7 @@ export async function fetchJoinedMatchPlayers(
           supabase
             .from("mdapi_match_players")
             .select(PLAYERS_COLS)
+            .is("deleted_at", null)
             .in("match_api_id", chunk)
             .order("api_id"),
         ),
