@@ -5,6 +5,7 @@ import { ChevronLeft, ChevronRight } from "lucide-react";
 import { supabase } from "@/lib/supabase";
 import { useFinanceData } from "@/lib/useFinanceData";
 import { cityMembershipRevenueFor } from "@/lib/financeStats";
+import { mostRecentCompletedMonth } from "@/lib/quarters";
 import {
   fetchWeekMatchPnL,
   summarize,
@@ -338,26 +339,29 @@ export default function MatchPnL({
             ) : (
               cityGroups.map((g) => {
                 const sub = citySubtotal(g.rows);
-                // April benchmark: structural monthly reference, same value
-                // regardless of selected week. Numerator: fin_revenue type
-                // 'Membership' for the city in Apr 2026. Denominator: total
-                // MEMBER fills for the city in Apr 2026 (mdapi-derived
-                // index, same source Field Ranking reads). Renders the
-                // fallback string when the denominator is zero, which
-                // includes cities with no recorded member spots yet AND
-                // any future quarter where Apr 2026 falls out of the
-                // loaded mdapi window.
-                const aprMemberRev = data
-                  ? cityMembershipRevenueFor(data, g.city, "Apr 2026")
+                // Benchmark: structural monthly reference, same value
+                // regardless of selected week, anchored on the most recent
+                // completed calendar month so it rolls forward on its own.
+                // Numerator: fin_revenue type 'Membership' for the city in
+                // that month. Denominator: total MEMBER fills for the city
+                // in that month (mdapi-derived index, same source Field
+                // Ranking reads). Renders the fallback string when the
+                // denominator is zero, which includes cities with no
+                // recorded member spots yet AND any quarter where the
+                // benchmark month falls out of the loaded mdapi window.
+                const { key: benchMonth, name: benchName } =
+                  mostRecentCompletedMonth();
+                const memberRev = data
+                  ? cityMembershipRevenueFor(data, g.city, benchMonth)
                   : 0;
-                const aprMemberSpots =
+                const memberSpots =
                   data?.mdapiMemberSpots.byCityMonth.get(
-                    `${g.city}|Apr 2026`,
+                    `${g.city}|${benchMonth}`,
                   )?.member ?? 0;
-                const aprBenchmarkLabel =
-                  aprMemberSpots > 0
-                    ? `April benchmark: ~$${(aprMemberRev / aprMemberSpots).toFixed(2)}/member spot (${fmtUsd(aprMemberRev)} ÷ ${aprMemberSpots} spots)`
-                    : "April benchmark: no member spots recorded";
+                const benchmarkLabel =
+                  memberSpots > 0
+                    ? `${benchName} benchmark: ~$${(memberRev / memberSpots).toFixed(2)}/member spot (${fmtUsd(memberRev)} ÷ ${memberSpots} spots)`
+                    : `${benchName} benchmark: no member spots recorded`;
                 return (
                   <tbody key={g.city}>
                     <tr className="border-t-2 border-cream-line bg-cream-soft/50">
@@ -398,7 +402,7 @@ export default function MatchPnL({
                           )}
                         </span>
                         <div className="mt-0.5 font-normal normal-case italic tracking-normal text-deep-green/45">
-                          {aprBenchmarkLabel}
+                          {benchmarkLabel}
                         </div>
                       </td>
                     </tr>
@@ -440,17 +444,19 @@ export default function MatchPnL({
         ) : (
           cityGroups.map((g) => {
             const sub = citySubtotal(g.rows);
-            const aprMemberRev = data
-              ? cityMembershipRevenueFor(data, g.city, "Apr 2026")
+            const { key: benchMonth, name: benchName } =
+              mostRecentCompletedMonth();
+            const memberRev = data
+              ? cityMembershipRevenueFor(data, g.city, benchMonth)
               : 0;
-            const aprMemberSpots =
+            const memberSpots =
               data?.mdapiMemberSpots.byCityMonth.get(
-                `${g.city}|Apr 2026`,
+                `${g.city}|${benchMonth}`,
               )?.member ?? 0;
-            const aprBenchmarkLabel =
-              aprMemberSpots > 0
-                ? `April benchmark: ~$${(aprMemberRev / aprMemberSpots).toFixed(2)}/member spot`
-                : "April benchmark: no member spots recorded";
+            const benchmarkLabel =
+              memberSpots > 0
+                ? `${benchName} benchmark: ~$${(memberRev / memberSpots).toFixed(2)}/member spot`
+                : `${benchName} benchmark: no member spots recorded`;
             return (
               <div
                 key={g.city}
@@ -459,7 +465,7 @@ export default function MatchPnL({
                 <MobileCityHeader
                   city={g.city}
                   sub={sub}
-                  aprBenchmarkLabel={aprBenchmarkLabel}
+                  benchmarkLabel={benchmarkLabel}
                 />
                 <div className="mt-3 space-y-2">
                   {g.rows.map((r) => {

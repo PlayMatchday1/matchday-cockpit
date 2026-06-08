@@ -81,6 +81,21 @@ const FULL_MONTH_NAMES = [
   "NOVEMBER",
   "DECEMBER",
 ];
+// Title-case month names, for prose labels like "May benchmark".
+const TITLE_MONTH_NAMES = [
+  "January",
+  "February",
+  "March",
+  "April",
+  "May",
+  "June",
+  "July",
+  "August",
+  "September",
+  "October",
+  "November",
+  "December",
+];
 
 // Returns the number of days in (year, monthIndex). Handles leap years
 // via Date(year, monthIndex + 1, 0) which is the last day of monthIndex.
@@ -217,6 +232,27 @@ export function isFutureMonth(
   const monthStart = new Date(month.year, month.monthIndex, 1);
   const todayMonthStart = new Date(now.getFullYear(), now.getMonth(), 1);
   return monthStart.getTime() > todayMonthStart.getTime();
+}
+
+// Most recent fully-completed calendar month, as a month-key (matching
+// fin_revenue.month text, e.g. "May 2026") plus a title-case display
+// name ("May"). On Jun 8 2026 this returns { key: "May 2026", name:
+// "May" }. It rolls forward on its own: on Jul 1 it returns June with no
+// code change. Drives the Match P&L member-spot benchmark, which values
+// member play at the prior completed month's $/member-spot rate.
+export function mostRecentCompletedMonth(now: Date = new Date()): {
+  key: string;
+  name: string;
+} {
+  // First day of the previous month. The Date constructor normalizes a
+  // monthIndex of -1 to December of the prior year, so January is handled
+  // without a special case.
+  const d = new Date(now.getFullYear(), now.getMonth() - 1, 1);
+  const mi = d.getMonth();
+  return {
+    key: `${SHORT_MONTH_NAMES[mi]} ${d.getFullYear()}`,
+    name: TITLE_MONTH_NAMES[mi],
+  };
 }
 
 export function isCurrentQuarter(

@@ -10,6 +10,7 @@
 import { useEffect, useMemo, useState } from "react";
 import { supabase } from "@/lib/supabase";
 import { cityMembershipRevenueFor } from "@/lib/financeStats";
+import { mostRecentCompletedMonth } from "@/lib/quarters";
 import {
   fetchWeekMatchPnL,
   type MatchPnLRow,
@@ -110,24 +111,28 @@ export default function SlateMatchPnLSection({ city }: { city: City }) {
 
   const sub = useMemo(() => (rows ? citySubtotal(rows) : null), [rows]);
 
-  const aprBenchmarkLabel = useMemo(() => {
+  // Benchmark rolls to the most recent completed month (May once we're in
+  // June, June once we're in July, ...) with no manual edit.
+  const benchmarkLabel = useMemo(() => {
     if (!data) return "";
-    const aprMemberRev = cityMembershipRevenueFor(data, city, "Apr 2026");
-    const aprMemberSpots =
-      data.mdapiMemberSpots.byCityMonth.get(`${city}|Apr 2026`)?.member ?? 0;
-    return aprMemberSpots > 0
-      ? `April benchmark: ~$${(aprMemberRev / aprMemberSpots).toFixed(2)}/member spot (${fmtUsd(aprMemberRev)} ÷ ${aprMemberSpots} spots)`
-      : "April benchmark: no member spots recorded";
+    const { key: month, name } = mostRecentCompletedMonth();
+    const memberRev = cityMembershipRevenueFor(data, city, month);
+    const memberSpots =
+      data.mdapiMemberSpots.byCityMonth.get(`${city}|${month}`)?.member ?? 0;
+    return memberSpots > 0
+      ? `${name} benchmark: ~$${(memberRev / memberSpots).toFixed(2)}/member spot (${fmtUsd(memberRev)} ÷ ${memberSpots} spots)`
+      : `${name} benchmark: no member spots recorded`;
   }, [data, city]);
 
-  const aprBenchmarkLabelMobile = useMemo(() => {
+  const benchmarkLabelMobile = useMemo(() => {
     if (!data) return "";
-    const aprMemberRev = cityMembershipRevenueFor(data, city, "Apr 2026");
-    const aprMemberSpots =
-      data.mdapiMemberSpots.byCityMonth.get(`${city}|Apr 2026`)?.member ?? 0;
-    return aprMemberSpots > 0
-      ? `April benchmark: ~$${(aprMemberRev / aprMemberSpots).toFixed(2)}/member spot`
-      : "April benchmark: no member spots recorded";
+    const { key: month, name } = mostRecentCompletedMonth();
+    const memberRev = cityMembershipRevenueFor(data, city, month);
+    const memberSpots =
+      data.mdapiMemberSpots.byCityMonth.get(`${city}|${month}`)?.member ?? 0;
+    return memberSpots > 0
+      ? `${name} benchmark: ~$${(memberRev / memberSpots).toFixed(2)}/member spot`
+      : `${name} benchmark: no member spots recorded`;
   }, [data, city]);
 
   if (error) {
@@ -210,7 +215,7 @@ export default function SlateMatchPnLSection({ city }: { city: City }) {
                       )}
                     </span>
                     <div className="mt-0.5 font-normal normal-case italic tracking-normal text-deep-green/45">
-                      {aprBenchmarkLabel}
+                      {benchmarkLabel}
                     </div>
                   </td>
                 </tr>
@@ -237,7 +242,7 @@ export default function SlateMatchPnLSection({ city }: { city: City }) {
           <MobileCityHeader
             city={city}
             sub={sub}
-            aprBenchmarkLabel={aprBenchmarkLabelMobile}
+            benchmarkLabel={benchmarkLabelMobile}
           />
           <div className="mt-3 space-y-2">
             {rows.map((r) => {

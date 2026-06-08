@@ -140,7 +140,7 @@ export function ColumnHeadersRow({
         sortDir={sortDir}
         onClick={onClick}
         align="right"
-        tooltip="Count of MEMBER fills at this match (subscription-joined). Pairs with Member Rev valued at the April benchmark rate."
+        tooltip="Count of MEMBER fills at this match (subscription-joined). Pairs with Member Rev valued at the latest completed month's benchmark rate."
       />
       <SortHeader
         k="memberRev"
@@ -149,7 +149,7 @@ export function ColumnHeadersRow({
         sortDir={sortDir}
         onClick={onClick}
         align="right"
-        tooltip="Member play valued at the city's April benchmark rate (memberSpots × April $/spot). Not collected membership revenue; that lives on /finance Cities."
+        tooltip="Member play valued at the city's benchmark rate (memberSpots × the latest completed month's $/spot). Not collected membership revenue; that lives on /finance Cities."
       />
       <SortHeader
         k="credit"
@@ -319,7 +319,7 @@ export function Row({
 export function MobileCityHeader({
   city,
   sub,
-  aprBenchmarkLabel,
+  benchmarkLabel,
 }: {
   city: string;
   sub: {
@@ -333,7 +333,7 @@ export function MobileCityHeader({
     net: number;
     losses: number;
   };
-  aprBenchmarkLabel: string;
+  benchmarkLabel: string;
 }) {
   const netClass =
     sub.net > 10
@@ -380,7 +380,7 @@ export function MobileCityHeader({
         )}
       </div>
       <div className="mt-0.5 text-[10px] italic text-deep-green/45">
-        {aprBenchmarkLabel}
+        {benchmarkLabel}
       </div>
     </div>
   );

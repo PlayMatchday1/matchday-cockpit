@@ -34,6 +34,7 @@
 import type { SupabaseClient } from "@supabase/supabase-js";
 import type { FinanceData } from "./useFinanceData";
 import { cityMembershipRevenueFor } from "./financeStats";
+import { mostRecentCompletedMonth } from "./quarters";
 import {
   fetchLegacyMatchRegistrations,
   hasActiveSubAtMatchTime,
@@ -87,13 +88,14 @@ export type MatchPnLRow = {
   // DPP gate revenue: sum of match_price_paid for DAILY PAID rows
   // only. Promo and free spots contribute $0.
   grossRevenue: number;
-  // Member play valued at the April benchmark rate:
-  //   memberSpots × (cityAprMembershipRev / cityAprMemberSpots).
-  // NOT collected membership revenue — that lives only in fin_revenue
-  // and is surfaced on the /finance Cities tab. This column is a
-  // stable per-spot valuation so the per-row figure reconciles with
-  // the April benchmark sub-line on the city header, instead of
-  // drifting month-by-month under the prior match-month allocation.
+  // Member play valued at the benchmark rate:
+  //   memberSpots × (cityBenchMembershipRev / cityBenchMemberSpots),
+  // where the benchmark month is the most recent completed calendar
+  // month. NOT collected membership revenue — that lives only in
+  // fin_revenue and is surfaced on the /finance Cities tab. This column
+  // is a stable per-spot valuation so the per-row figure reconciles with
+  // the benchmark sub-line on the city header, instead of drifting
+  // week-by-week under the prior match-month allocation.
   allocatedMemberRev: number;
   // Sum of credit_amount across every non-cancelled, non-fake,
   // non-absent player row at this match. Already included in
@@ -454,31 +456,34 @@ export async function fetchWeekMatchPnL(
     // never reach here (excluded by ALLOWED_PAYMENT_TYPES).
   }
 
-  // April benchmark rate per city: cityAprMembershipRev / cityAprMemberSpots.
-  // Computed once per city that appears in this week's buckets so every
-  // row in the same city values its MEMBER spots at the identical
-  // structural rate the April benchmark sub-line on the city header
-  // displays. Cities with no recorded April member spots get rate=0,
-  // so allocatedMemberRev = $0 for all their rows (reconciles with the
+  // Benchmark rate per city: cityBenchMembershipRev / cityBenchMemberSpots,
+  // anchored on the most recent completed calendar month (rolls forward on
+  // its own). Computed once per city that appears in this week's buckets so
+  // every row in the same city values its MEMBER spots at the identical
+  // structural rate the benchmark sub-line on the city header displays.
+  // Cities with no recorded member spots that month get rate=0, so
+  // allocatedMemberRev = $0 for all their rows (reconciles with the
   // "no member spots recorded" fallback on the city header).
-  const cityAprRate = new Map<string, number>();
+  const benchMonth = mostRecentCompletedMonth().key;
+  const cityBenchRate = new Map<string, number>();
   for (const b of buckets.values()) {
-    if (cityAprRate.has(b.city)) continue;
-    const aprMemberRev = cityMembershipRevenueFor(data, b.city, "Apr 2026");
-    const aprMemberSpots =
-      data.mdapiMemberSpots.byCityMonth.get(`${b.city}|Apr 2026`)?.member ?? 0;
-    cityAprRate.set(b.city, aprMemberSpots > 0 ? aprMemberRev / aprMemberSpots : 0);
+    if (cityBenchRate.has(b.city)) continue;
+    const memberRev = cityMembershipRevenueFor(data, b.city, benchMonth);
+    const memberSpots =
+      data.mdapiMemberSpots.byCityMonth.get(`${b.city}|${benchMonth}`)
+        ?.member ?? 0;
+    cityBenchRate.set(b.city, memberSpots > 0 ? memberRev / memberSpots : 0);
   }
 
   const active: MatchPnLRow[] = [];
   for (const b of buckets.values()) {
     const cost = b.cost;
-    // Member play valued at the city's April benchmark rate. Stable
-    // across the quarter regardless of which week the match falls in,
-    // so the per-row figure equals memberSpots × the April benchmark
-    // rate shown on the city header.
-    const aprRate = cityAprRate.get(b.city) ?? 0;
-    const allocatedMemberRev = b.memberSpots * aprRate;
+    // Member play valued at the city's benchmark rate. Stable across the
+    // quarter regardless of which week the match falls in, so the per-row
+    // figure equals memberSpots × the benchmark rate shown on the city
+    // header.
+    const benchRate = cityBenchRate.get(b.city) ?? 0;
+    const allocatedMemberRev = b.memberSpots * benchRate;
     const net =
       cost === null ? null : b.grossRevenue + allocatedMemberRev - cost;
     active.push({
