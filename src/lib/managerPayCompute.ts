@@ -387,7 +387,13 @@ export async function computeManagerPayForWeek(
       centralTime: cTime,
       name: m.name,
       maxPlayerCount: m.max_player_count,
-      playerCount: m.player_count,
+      // Subtract synthetic @matchday.com fills so the card shows real
+      // headcount. fake_player_count is already fetched above and used
+      // by isOrphanedMatch. Pay dollars are unaffected (capacity-based).
+      playerCount:
+        m.player_count == null
+          ? null
+          : Math.max(0, m.player_count - (m.fake_player_count ?? 0)),
       registrationPrice: m.registration_price,
       isCancelled: !!m.is_cancelled,
       primaryManagerName: primaryName,
