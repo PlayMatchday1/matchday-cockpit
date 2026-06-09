@@ -31,6 +31,12 @@ export type SourceName =
 // fin_sync_log columns the orchestrator/manual routes write on
 // success. Stripe-specific columns (charges_*) stay null for mdapi
 // syncs.
+//
+// error_message is included here (not just on the throw path) so a step
+// that SUCCEEDS but ran in a degraded/less-complete mode can surface a
+// visible advisory in Recent Syncs without failing the run. The cron's
+// anyFailed gate keys off ok (the throw/catch), never error_message, so
+// an advisory on a completed row does not flip the HTTP status.
 export type LogPatch = Partial<{
   rows_imported: number;
   rows_replaced: number;
@@ -38,6 +44,7 @@ export type LogPatch = Partial<{
   charges_fetched: number;
   charges_succeeded: number;
   charges_skipped: number;
+  error_message: string;
 }>;
 
 export type RunResult<T> =

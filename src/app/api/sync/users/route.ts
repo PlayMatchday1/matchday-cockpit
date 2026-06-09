@@ -6,12 +6,13 @@
 
 import { timingSafeEqual } from "node:crypto";
 import { createClient, type SupabaseClient } from "@supabase/supabase-js";
-import { syncMdapiUsers } from "@/lib/mdapiUsersSync";
+import { syncMdapiUsers, mdapiUsersLogPatch } from "@/lib/mdapiUsersSync";
 import { runWithLog, type TriggeredBy } from "@/lib/syncLogging";
 
-// Full re-sync: ~95 paginated GETs at 250/page, ~200ms each = ~19s
-// network + ~10s upserts ≈ 30s total. 120s gives ~4× headroom for
-// API latency or a doubled cohort.
+// Incremental by default (see mdapiUsersSync): a typical run fetches a
+// couple of pages. The first run / no-watermark case still does a full
+// re-sync (~95 paginated GETs at 250/page, ~19s network + ~10s upserts ≈
+// 30s). 120s leaves ~4× headroom for that full-sync path.
 export const maxDuration = 120;
 export const runtime = "nodejs";
 
@@ -95,7 +96,7 @@ export async function POST(req: Request) {
     triggeredBy,
     supabase,
     syncMdapiUsers,
-    (r) => ({ rows_imported: r.upserted }),
+    mdapiUsersLogPatch,
   );
 
   return Response.json(

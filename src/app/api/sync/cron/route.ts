@@ -44,7 +44,7 @@ import {
   defaultIncrementalWindow,
 } from "@/lib/mdapiMatchesSync";
 import { syncFirstmatchLedger } from "@/lib/firstmatchLedgerSync";
-import { syncMdapiUsers } from "@/lib/mdapiUsersSync";
+import { syncMdapiUsers, mdapiUsersLogPatch } from "@/lib/mdapiUsersSync";
 import { refreshUsersLensSnapshot } from "@/lib/usersLensSnapshot";
 import { refreshMembershipSnapshots } from "@/lib/membershipSnapshots";
 import { refreshMembershipPriceSnapshots } from "@/lib/membershipPriceSnapshots";
@@ -255,19 +255,22 @@ export async function POST(req: Request) {
     (r) => ({ rows_imported: r.rowsWritten }),
   );
 
-  // Users — full /admin/players re-sync into mdapi_users. Independent
-  // of upstream syncs. Estimated ~30s for ~24k rows at limit=250.
-  // console.time gives operator visibility on actual duration since
-  // this is the largest new step inside the 300s cron budget; if it
-  // breaches, the next move per Phase 1 spec is moving users sync to
-  // its own cron schedule rather than bumping maxDuration further.
+  // Users — INCREMENTAL /admin/players sync into mdapi_users. Walks
+  // newest→oldest on a watermark (updatedAt if the API ever exposes it,
+  // else createdAt) and stops once it pages past the last-synced cutoff,
+  // so a typical day fetches ~1-2 pages instead of all ~96. This was the
+  // cron's budget-killer: the old full re-sync (~140s) pushed the
+  // orchestrator past its 300s maxDuration and got killed mid-step,
+  // stranding the four steps after it. First run (no watermark) still
+  // does a full sync to bootstrap. console.time keeps operator
+  // visibility on actual duration.
   console.time("mdapi-users sync");
   const usersResult = await runWithLog(
     "mdapi-users",
     triggeredBy,
     supabase,
     syncMdapiUsers,
-    (r) => ({ rows_imported: r.upserted }),
+    mdapiUsersLogPatch,
   );
   console.timeEnd("mdapi-users sync");
 
