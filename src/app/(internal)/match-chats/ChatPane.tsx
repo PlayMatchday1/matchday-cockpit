@@ -33,7 +33,7 @@ import {
   type DocumentSnapshot,
   type QuerySnapshot,
 } from "firebase/firestore";
-import { ArrowUp, ChevronLeft } from "lucide-react";
+import { ArrowUp, ChevronLeft, Megaphone } from "lucide-react";
 import { supabase } from "@/lib/supabase";
 import { useFirebaseSession } from "@/lib/useFirebaseSession";
 import CityChip from "@/components/CityChip";
@@ -50,6 +50,7 @@ import {
 import { formatMatchTitle, timezoneFor } from "@/lib/cityTimezones";
 import Linkify from "linkify-react";
 import { LINKIFY_OPTIONS } from "@/lib/linkify";
+import NotifyPlayersDrawer from "./components/NotifyPlayersDrawer";
 
 type MatchContext = {
   api_id: number;
@@ -229,6 +230,7 @@ function ChatPaneInner({
   setListenError: (s: string | null) => void;
 }) {
   const validId = isValidChatId(chatId);
+  const [notifyOpen, setNotifyOpen] = useState(false);
 
   // Reset transient state when the chatId changes (user clicked a
   // different conversation).
@@ -526,6 +528,16 @@ function ChatPaneInner({
             </div>
           )}
         </div>
+        {validId && match && (
+          <button
+            type="button"
+            onClick={() => setNotifyOpen(true)}
+            className="inline-flex shrink-0 items-center gap-1.5 rounded-full border border-cream-line px-3 py-1.5 text-xs font-bold text-deep-green hover:bg-cream-soft"
+          >
+            <Megaphone aria-hidden className="h-3.5 w-3.5" />
+            <span className="hidden sm:inline">Notify players</span>
+          </button>
+        )}
       </div>
 
       {/* Messages */}
@@ -623,6 +635,13 @@ function ChatPaneInner({
           </div>
         </div>
       </div>
+
+      <NotifyPlayersDrawer
+        open={notifyOpen}
+        onClose={() => setNotifyOpen(false)}
+        chatId={chatId}
+        match={match}
+      />
     </section>
   );
 }
