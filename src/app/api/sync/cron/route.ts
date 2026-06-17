@@ -49,6 +49,7 @@ import { refreshUsersLensSnapshot } from "@/lib/usersLensSnapshot";
 import { refreshMembershipSnapshots } from "@/lib/membershipSnapshots";
 import { refreshMembershipPriceSnapshots } from "@/lib/membershipPriceSnapshots";
 import { recomputeManagerPayIntoFinExpenses } from "@/lib/managerPayCompute";
+import { ingestTelnyxSms } from "@/lib/telnyxSmsIngest";
 import { runWithLog, type TriggeredBy } from "@/lib/syncLogging";
 
 // Stripe ~60s + mdapi_reviews ~10s + mdapi_subscriptions ~60s +
@@ -342,6 +343,43 @@ export async function POST(req: Request) {
     }),
   );
 
+  // Telnyx SMS log — refresh the local outbound-SMS cache (migration
+  // 0063) so the /sms-log dashboard has fresh data and bodies are
+  // captured before Telnyx's ~10-day retention drops them. Independent
+  // of every other step (no skip-on-fail); 2-day lookback so a run that
+  // straddles the day boundary loses nothing (upsert makes the overlap
+  // idempotent). Cheap for a daily window (~35 outbound/day in the
+  // 7-day sample). Errors are isolated by runWithLog and only flip this
+  // one step + the cron's HTTP status, never block the steps above.
+  const telnyxSmsResult = await runWithLog(
+    "telnyx-sms",
+    triggeredBy,
+    supabase,
+    async (sb) => {
+      // telnyx_sms_log is SELECT-only for authenticated by design; the
+      // ingest upsert/prune need the service role. Cron mode has it;
+      // manual (session-token) mode does not. Skip in manual mode as a
+      // SUCCESSFUL no-op with an advisory (not a throw — a throw would
+      // flip the whole cron to HTTP 500 on every manual verification
+      // run). The dedicated POST /api/sms-log/ingest does the manual
+      // ingest with its own service-role client.
+      if (triggeredBy !== "cron") {
+        return {
+          skipped: "manual mode: ingest needs the service role; use POST /api/sms-log/ingest",
+          rowsUpserted: 0,
+        };
+      }
+      const r = await ingestTelnyxSms(sb, {
+        sinceISO: new Date(Date.now() - 2 * 24 * 60 * 60 * 1000).toISOString(),
+      });
+      return { skipped: null as string | null, rowsUpserted: r.rowsUpserted };
+    },
+    (r) =>
+      r.skipped
+        ? { rows_imported: 0, error_message: r.skipped }
+        : { rows_imported: r.rowsUpserted },
+  );
+
   const anyFailed =
     !stripeResult.ok ||
     !reviewsResult.ok ||
@@ -353,7 +391,8 @@ export async function POST(req: Request) {
     !usersResult.ok ||
     !usersLensSnapshotResult.ok ||
     !membershipPricesResult.ok ||
-    !snapshotResult.ok;
+    !snapshotResult.ok ||
+    !telnyxSmsResult.ok;
 
   return Response.json(
     {
@@ -371,6 +410,7 @@ export async function POST(req: Request) {
         mdapi_users_lens_snapshot: usersLensSnapshotResult,
         membership_prices: membershipPricesResult,
         membership_snapshots: snapshotResult,
+        telnyx_sms: telnyxSmsResult,
       },
     },
     { status: anyFailed ? 500 : 200 },

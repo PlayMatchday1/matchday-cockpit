@@ -26,7 +26,8 @@ export type SourceName =
   | "membership-snapshots"
   | "membership-prices"
   | "manager-pay-recompute"
-  | "firstmatch-ledger";
+  | "firstmatch-ledger"
+  | "telnyx-sms";
 
 // fin_sync_log columns the orchestrator/manual routes write on
 // success. Stripe-specific columns (charges_*) stay null for mdapi

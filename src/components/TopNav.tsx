@@ -339,6 +339,18 @@ function UserMenu({
               Admin
             </Link>
           )}
+          {showAdmin && (
+            <Link
+              href="/sms-log"
+              role="menuitem"
+              onClick={() => setOpen(false)}
+              className={`block px-3 py-1.5 text-sm transition hover:bg-cream-soft ${
+                pathname?.startsWith("/sms-log") ? "bg-mint-soft font-bold" : ""
+              }`}
+            >
+              SMS Log
+            </Link>
+          )}
           {(visibleSecondary.length > 0 || showAdmin) && (
             <div aria-hidden className="my-1 h-px bg-cream-line" />
           )}
