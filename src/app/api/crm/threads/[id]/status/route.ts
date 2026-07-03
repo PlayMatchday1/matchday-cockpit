@@ -1,10 +1,13 @@
-// POST /api/crm/threads/[id]/status — close or reopen a conversation.
+// POST /api/crm/threads/[id]/status — close or reopen one conversation.
 //
 // Body: { action: "close" | "reopen", reason?: string }
-//   close  → status='closed', closed_at=now(), closed_by_user_id=viewer
+//   close  → status='closed', closed_at=now(), closed_by=viewer
 //            audit row action='close'
-//   reopen → status='open',   closed_at=null,  closed_by_user_id=null
+//   reopen → status='open',   closed_at=null,  closed_by=null
 //            audit row action='reopen'
+//
+// Bulk close and undo-close (the post-close toast) go through
+// /api/crm/threads/bulk-status instead.
 //
 // Permissions: admin-only. Any app_users.is_admin = true operator can
 // close or reopen. City managers (can_access_chats without is_admin)
@@ -118,9 +121,7 @@ export async function POST(req: Request, ctx: RouteCtx) {
     reason,
   });
 
-  console.log(
-    `[crm:status] thread=${threadId} ${action} by=${appUserId}`,
-  );
+  console.log(`[crm:status] thread=${threadId} ${action} by=${appUserId}`);
 
   return Response.json({ thread: upd.data }, { status: 200 });
 }

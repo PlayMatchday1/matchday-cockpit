@@ -395,6 +395,24 @@ export default function CrmClient() {
     }
   }, []);
 
+  // Debounced reload for realtime bursts. A bulk close/reopen emits one
+  // crm_threads UPDATE per thread; coalescing them into a single
+  // refetch avoids a storm of N list loads. User-initiated actions call
+  // loadThreads directly (no debounce needed).
+  const reloadTimer = useRef<ReturnType<typeof setTimeout> | null>(null);
+  const scheduleReload = useCallback(() => {
+    if (reloadTimer.current) clearTimeout(reloadTimer.current);
+    reloadTimer.current = setTimeout(() => {
+      void loadThreads();
+    }, 300);
+  }, [loadThreads]);
+  useEffect(
+    () => () => {
+      if (reloadTimer.current) clearTimeout(reloadTimer.current);
+    },
+    [],
+  );
+
   const loadOperators = useCallback(async () => {
     const headers = await bearerHeaders();
     if (!headers) return;
@@ -601,17 +619,18 @@ export default function CrmClient() {
             const exists = prev.find((x) => x.id === t.id);
             if (!exists) {
               // Not in the current view — a reopen or reassignment may
-              // now make it belong here. Refetch to re-evaluate
-              // membership (and counts).
-              void loadThreads();
+              // now make it belong here. Refetch (debounced) to
+              // re-evaluate membership and counts.
+              scheduleReload();
               return prev;
             }
             // A status flip (close / reopen / auto-reopen) can change
             // which view this thread belongs to. Refetch rather than
             // patch so it drops out of / into the right list and the
-            // counts stay correct.
+            // counts stay correct. Debounced so a bulk close (N events)
+            // triggers one reload, not N.
             if ((exists.status ?? "open") !== (t.status ?? "open")) {
-              void loadThreads();
+              scheduleReload();
               return prev;
             }
             return prev.map((x) =>
@@ -657,7 +676,7 @@ export default function CrmClient() {
         "postgres_changes",
         { event: "INSERT", schema: "public", table: "crm_threads" },
         () => {
-          void loadThreads();
+          scheduleReload();
         },
       )
       // Same-user multi-device read-state sync. When this viewer
@@ -675,7 +694,7 @@ export default function CrmClient() {
           filter: appUser?.id ? `user_id=eq.${appUser.id}` : undefined,
         },
         () => {
-          void loadThreads();
+          scheduleReload();
         },
       )
       .subscribe((status) => {
@@ -692,7 +711,7 @@ export default function CrmClient() {
     return () => {
       supabase.removeChannel(channel);
     };
-  }, [loadThreads, operatorsById, refreshDetailForMediaInsert, appUser?.id]);
+  }, [scheduleReload, operatorsById, refreshDetailForMediaInsert, appUser?.id]);
 
   // --------- derived list ---------
   // The server already filtered by the active view. Here we only apply
@@ -854,11 +873,50 @@ export default function CrmClient() {
     [loadThreads],
   );
 
+  // ----- bulk selection (Open view, admins) -----
+  const [selectedIds, setSelectedIds] = useState<Set<string>>(new Set());
+  // Selection only applies to the Open view; clear it when leaving so a
+  // stale set can't carry into Closed/Starred/Mine.
+  useEffect(() => {
+    if (view !== "open") setSelectedIds(new Set());
+  }, [view]);
+  const toggleSelect = useCallback((id: string) => {
+    setSelectedIds((prev) => {
+      const next = new Set(prev);
+      if (next.has(id)) next.delete(id);
+      else next.add(id);
+      return next;
+    });
+  }, []);
+  const clearSelection = useCallback(() => setSelectedIds(new Set()), []);
+
+  // Undo toast shown for a few seconds after a close (single or bulk),
+  // so a misclick can be reverted without hunting through the Closed
+  // view. A new close replaces the toast (only the most recent batch is
+  // undoable).
+  const [closeToast, setCloseToast] = useState<{ threadIds: string[] } | null>(
+    null,
+  );
+  const closeToastTimer = useRef<ReturnType<typeof setTimeout> | null>(null);
+  useEffect(
+    () => () => {
+      if (closeToastTimer.current) clearTimeout(closeToastTimer.current);
+    },
+    [],
+  );
+  const showCloseToast = useCallback((threadIds: string[]) => {
+    if (threadIds.length === 0) return;
+    if (closeToastTimer.current) clearTimeout(closeToastTimer.current);
+    setCloseToast({ threadIds });
+    closeToastTimer.current = setTimeout(() => setCloseToast(null), 5000);
+  }, []);
+
   // Close / reopen the selected conversation (admin-only; the button is
   // hidden for non-admins and the API rejects them too). Optimistic:
   // flip the local status so the header button and inbox reflect it
   // immediately, then refetch in `finally` to reconcile view membership
-  // and counts (also self-heals if the request failed).
+  // and counts (also self-heals if the request failed). Close pops the
+  // Undo toast; there is no confirm step so closing stays fast.
   const onSetThreadStatus = useCallback(
     async (threadId: string, action: "close" | "reopen") => {
       const nextStatus = action === "close" ? "closed" : "open";
@@ -872,6 +930,7 @@ export default function CrmClient() {
           ? { ...prev, thread: { ...prev.thread, status: nextStatus } }
           : prev,
       );
+      if (action === "close") showCloseToast([threadId]);
       const headers = await bearerHeaders();
       if (!headers) {
         void loadThreads();
@@ -893,11 +952,109 @@ export default function CrmClient() {
         void loadThreads();
       }
     },
+    [loadThreads, showCloseToast],
+  );
+
+  // Bulk close the selected threads in one request, then offer undo.
+  // Optimistic: flip the selected rows to closed and clear the
+  // selection; the refetch reconciles membership + counts.
+  const onBulkClose = useCallback(async () => {
+    const ids = Array.from(selectedIds);
+    if (ids.length === 0) return;
+    const idSet = new Set(ids);
+    setThreads((prev) =>
+      prev.map((t) => (idSet.has(t.id) ? { ...t, status: "closed" } : t)),
+    );
+    clearSelection();
+    const headers = await bearerHeaders();
+    if (!headers) {
+      void loadThreads();
+      return;
+    }
+    try {
+      const res = await fetch(`/api/crm/threads/bulk-status`, {
+        method: "POST",
+        headers,
+        body: JSON.stringify({ action: "close", thread_ids: ids }),
+      });
+      if (!res.ok) {
+        const j = await res.json().catch(() => ({}));
+        throw new Error(j.error || `HTTP ${res.status}`);
+      }
+      const j = (await res.json()) as { closed_ids?: string[] };
+      showCloseToast(j.closed_ids?.length ? j.closed_ids : ids);
+    } catch (err) {
+      console.error("[crm] bulk close failed", err);
+    } finally {
+      void loadThreads();
+    }
+  }, [selectedIds, clearSelection, loadThreads, showCloseToast]);
+
+  // Undo a close batch (single or bulk): reopen the threads and drop
+  // their close audit rows via the bulk endpoint (handles one id or
+  // many). Dismisses the toast immediately.
+  const onUndoClose = useCallback(
+    async (threadIds: string[]) => {
+      if (threadIds.length === 0) return;
+      if (closeToastTimer.current) clearTimeout(closeToastTimer.current);
+      setCloseToast(null);
+      const idSet = new Set(threadIds);
+      setThreads((prev) =>
+        prev.map((t) => (idSet.has(t.id) ? { ...t, status: "open" } : t)),
+      );
+      setDetail((prev) =>
+        prev && idSet.has(prev.thread.id)
+          ? { ...prev, thread: { ...prev.thread, status: "open" } }
+          : prev,
+      );
+      const headers = await bearerHeaders();
+      if (!headers) {
+        void loadThreads();
+        return;
+      }
+      try {
+        const res = await fetch(`/api/crm/threads/bulk-status`, {
+          method: "POST",
+          headers,
+          body: JSON.stringify({ action: "undo_close", thread_ids: threadIds }),
+        });
+        if (!res.ok) {
+          const j = await res.json().catch(() => ({}));
+          throw new Error(j.error || `HTTP ${res.status}`);
+        }
+      } catch (err) {
+        console.error("[crm] undo close failed", err);
+      } finally {
+        void loadThreads();
+      }
+    },
     [loadThreads],
   );
 
   const whatsappExpired = computeWhatsAppExpired(detail);
   const canManageStatus = appUser?.is_admin === true;
+  // Bulk-select checkboxes only make sense in the Open view for admins.
+  const bulkSelectable = canManageStatus && view === "open";
+  // Select-all operates on the current filtered page only (visibleThreads
+  // is already city-filtered and server-capped) — never a phantom
+  // "select 200+ across pages".
+  const visibleIds = useMemo(
+    () => visibleThreads.map((t) => t.id),
+    [visibleThreads],
+  );
+  const allVisibleSelected =
+    visibleIds.length > 0 && visibleIds.every((id) => selectedIds.has(id));
+  const someVisibleSelected = visibleIds.some((id) => selectedIds.has(id));
+  const toggleSelectAllVisible = useCallback(() => {
+    setSelectedIds((prev) => {
+      const everySelected =
+        visibleIds.length > 0 && visibleIds.every((id) => prev.has(id));
+      const next = new Set(prev);
+      if (everySelected) visibleIds.forEach((id) => next.delete(id));
+      else visibleIds.forEach((id) => next.add(id));
+      return next;
+    });
+  }, [visibleIds]);
 
   // Mobile flow rules:
   //   no selectedId             → inbox full-screen
@@ -935,6 +1092,16 @@ export default function CrmClient() {
           }`}
         >
           <div className="flex flex-1 flex-col overflow-y-auto overflow-x-hidden">
+            {bulkSelectable && visibleThreads.length > 0 && (
+              <BulkSelectBar
+                selectedCount={selectedIds.size}
+                allSelected={allVisibleSelected}
+                someSelected={someVisibleSelected}
+                onToggleAll={toggleSelectAllVisible}
+                onClear={clearSelection}
+                onCloseSelected={() => void onBulkClose()}
+              />
+            )}
             {threadsError && (
               <div className="m-2 rounded border border-coral/40 bg-coral-soft p-2 text-xs text-coral-hover">
                 {threadsError}
@@ -961,6 +1128,9 @@ export default function CrmClient() {
                     onToggleFollowUp={() =>
                       onToggleFollowUp(t.id, !t.is_follow_up)
                     }
+                    selectable={bulkSelectable}
+                    selected={selectedIds.has(t.id)}
+                    onToggleSelect={() => toggleSelect(t.id)}
                   />
                 ))}
               </ul>
@@ -1052,6 +1222,117 @@ export default function CrmClient() {
             : null
         }
       />
+
+      {closeToast && (
+        <CloseUndoToast
+          count={closeToast.threadIds.length}
+          onUndo={() => onUndoClose(closeToast.threadIds)}
+          onDismiss={() => setCloseToast(null)}
+        />
+      )}
+    </div>
+  );
+}
+
+// ============================================================
+// Bulk-select action bar — sits at the top of the Open inbox for
+// admins. Select-all toggles the current page; when 1+ are selected
+// it shows the count plus Close selected / Clear selection.
+// ============================================================
+function BulkSelectBar({
+  selectedCount,
+  allSelected,
+  someSelected,
+  onToggleAll,
+  onClear,
+  onCloseSelected,
+}: {
+  selectedCount: number;
+  allSelected: boolean;
+  someSelected: boolean;
+  onToggleAll: () => void;
+  onClear: () => void;
+  onCloseSelected: () => void;
+}) {
+  return (
+    <div className="sticky top-0 z-10 flex items-center gap-2 border-b border-cream-line bg-cream px-3 py-1.5 sm:px-4">
+      <label className="flex cursor-pointer items-center gap-2 text-xs font-medium text-deep-green/70">
+        <input
+          type="checkbox"
+          aria-label="Select all conversations on this page"
+          checked={allSelected}
+          ref={(el) => {
+            if (el) el.indeterminate = someSelected && !allSelected;
+          }}
+          onChange={onToggleAll}
+          className="h-4 w-4 rounded border-deep-green/30 accent-deep-green focus:ring-deep-green/40"
+        />
+        {selectedCount > 0 ? `${selectedCount} selected` : "Select all"}
+      </label>
+      {selectedCount > 0 && (
+        <div className="ml-auto flex items-center gap-1.5">
+          <button
+            type="button"
+            onClick={onClear}
+            className="rounded-full px-2 py-1 text-xs font-medium text-deep-green/60 transition hover:bg-cream-soft hover:text-deep-green"
+          >
+            Clear selection
+          </button>
+          <button
+            type="button"
+            onClick={onCloseSelected}
+            className="inline-flex items-center gap-1 rounded-full bg-deep-green px-3 py-1 text-xs font-bold text-cream transition hover:bg-deep-green-soft"
+          >
+            <CircleCheck aria-hidden className="h-3.5 w-3.5" strokeWidth={2} />
+            Close selected
+          </button>
+        </div>
+      )}
+    </div>
+  );
+}
+
+// ============================================================
+// Undo toast — appears for ~5s after a close (timer lives in the
+// parent). Reverts the status and removes the close audit row(s).
+// Handles single and bulk closes via the count.
+// ============================================================
+function CloseUndoToast({
+  count,
+  onUndo,
+  onDismiss,
+}: {
+  count: number;
+  onUndo: () => void;
+  onDismiss: () => void;
+}) {
+  const label =
+    count === 1 ? "Thread closed" : `${count} threads closed`;
+  return (
+    <div
+      role="status"
+      aria-live="polite"
+      className="pointer-events-none fixed inset-x-0 bottom-4 z-50 flex justify-center px-4"
+      style={{ marginBottom: "var(--safe-area-bottom)" }}
+    >
+      <div className="pointer-events-auto flex items-center gap-3 rounded-full border border-deep-green-soft bg-deep-green px-4 py-2 text-sm text-cream shadow-lg shadow-deep-green/30">
+        <span className="font-medium">{label}</span>
+        <button
+          type="button"
+          onClick={onUndo}
+          className="rounded-full px-2 py-0.5 text-xs font-bold text-mint transition hover:bg-deep-green-soft"
+        >
+          Undo
+        </button>
+        <button
+          type="button"
+          onClick={onDismiss}
+          aria-label="Dismiss"
+          className="rounded-full px-1 text-cream/60 transition hover:text-cream"
+        >
+          ✕
+        </button>
+      </div>
     </div>
   );
 }
@@ -1509,10 +1790,6 @@ function ConversationHeader({
     onBack();
   };
 
-  // Close needs a confirm step (it removes the thread from the Open
-  // inbox); reopen is a direct, low-stakes action.
-  const [confirmClose, setConfirmClose] = useState(false);
-
   if (!detail) {
     return (
       <div className="flex h-14 shrink-0 items-center gap-2 border-b border-cream-line bg-white px-2 sm:px-4">
@@ -1617,13 +1894,14 @@ function ConversationHeader({
         />
       </button>
       {/* Close / Reopen — ticket workflow. Admin-only (city managers
-          can view but not action). Close confirms first (it drops the
-          thread from the Open inbox); Reopen is a direct action. */}
+          can view but not action). Close acts immediately (with an
+          Undo toast for a few seconds after); Reopen is a direct
+          action too. */}
       {canManageStatus &&
         (threadStatus === "open" ? (
           <button
             type="button"
-            onClick={() => setConfirmClose(true)}
+            onClick={() => onSetStatus("close")}
             aria-label="Close conversation"
             className="inline-flex h-9 shrink-0 items-center gap-1 rounded-full px-2.5 text-xs font-medium text-deep-green/70 transition hover:bg-cream-soft hover:text-deep-green"
           >
@@ -1669,64 +1947,6 @@ function ConversationHeader({
       >
         <Info aria-hidden className="h-4 w-4" />
       </button>
-      <ConfirmCloseDialog
-        open={confirmClose}
-        onCancel={() => setConfirmClose(false)}
-        onConfirm={() => {
-          setConfirmClose(false);
-          onSetStatus("close");
-        }}
-      />
-    </div>
-  );
-}
-
-// ============================================================
-// Close-conversation confirm dialog. Styled to match
-// ConfirmDeleteDialog but with close-specific, non-destructive copy
-// (deep-green confirm, not coral — closing is reversible).
-// ============================================================
-function ConfirmCloseDialog({
-  open,
-  onCancel,
-  onConfirm,
-}: {
-  open: boolean;
-  onCancel: () => void;
-  onConfirm: () => void;
-}) {
-  if (!open) return null;
-  return (
-    <div className="fixed inset-0 z-50 flex items-start justify-center bg-deep-green/30 px-4 py-12 backdrop-blur-sm">
-      <div
-        role="dialog"
-        aria-modal="true"
-        className="w-full max-w-md rounded-2xl border border-cream-line bg-white p-6 shadow-xl shadow-deep-green/30"
-      >
-        <h2 className="font-display text-2xl uppercase leading-none tracking-tight text-deep-green">
-          Close conversation
-        </h2>
-        <div className="mt-4 rounded-md border border-cream-line bg-cream-soft/40 p-3 text-sm text-deep-green">
-          It will be removed from the Open inbox and can be reopened from
-          Closed. A new reply from the player reopens it automatically.
-        </div>
-        <div className="mt-5 flex flex-wrap items-center justify-end gap-2">
-          <button
-            type="button"
-            onClick={onCancel}
-            className="rounded-full border border-cream-line bg-transparent px-4 py-2 text-xs font-bold text-deep-green hover:bg-cream-soft"
-          >
-            Cancel
-          </button>
-          <button
-            type="button"
-            onClick={onConfirm}
-            className="rounded-full bg-deep-green px-5 py-2 text-xs font-bold text-cream transition hover:bg-deep-green-soft"
-          >
-            Close conversation
-          </button>
-        </div>
-      </div>
     </div>
   );
 }

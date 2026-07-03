@@ -75,11 +75,20 @@ export default function InboxRow({
   active,
   onSelect,
   onToggleFollowUp,
+  selectable = false,
+  selected = false,
+  onToggleSelect,
 }: {
   thread: InboxRowThread;
   active: boolean;
   onSelect: () => void;
   onToggleFollowUp: () => void;
+  // Bulk-select checkbox (Open view, admins). When selectable, a
+  // checkbox renders at the left of the row; ticking it never opens
+  // the thread.
+  selectable?: boolean;
+  selected?: boolean;
+  onToggleSelect?: () => void;
 }) {
   const name = fullName(thread);
   const initials = initialsOf(name);
@@ -98,14 +107,33 @@ export default function InboxRow({
   if (thread.match_ambiguous) metaBits.push("Historical");
 
   return (
-    <li className="relative">
+    <li className="relative flex items-stretch">
+      {selectable && (
+        <label
+          className="flex shrink-0 cursor-pointer items-center pl-3 pr-1"
+          onClick={(e) => e.stopPropagation()}
+        >
+          <input
+            type="checkbox"
+            checked={selected}
+            onChange={(e) => {
+              e.stopPropagation();
+              onToggleSelect?.();
+            }}
+            aria-label={
+              selected ? "Deselect conversation" : "Select conversation"
+            }
+            className="h-4 w-4 rounded border-deep-green/30 text-deep-green accent-deep-green focus:ring-deep-green/40"
+          />
+        </label>
+      )}
       <button
         type="button"
         onClick={onSelect}
         style={{ touchAction: "manipulation" }}
-        className={`flex w-full items-center gap-3 py-3 pl-3 pr-11 text-left transition sm:pl-4 ${
-          active ? "bg-cream-soft" : "bg-white hover:bg-cream-soft/60"
-        }`}
+        className={`flex min-w-0 flex-1 items-center gap-3 py-3 pr-11 text-left transition ${
+          selectable ? "pl-2" : "pl-3 sm:pl-4"
+        } ${active ? "bg-cream-soft" : "bg-white hover:bg-cream-soft/60"}`}
       >
         <span
           aria-hidden
