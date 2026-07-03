@@ -1604,6 +1604,7 @@ function Conversation({
         appUserId={appUserId}
         channel={channel}
         whatsappWindowExpired={whatsappWindowExpired}
+        customerName={detail?.thread.player?.first_name?.trim() ?? ""}
         onSent={onSent}
       />
     </>

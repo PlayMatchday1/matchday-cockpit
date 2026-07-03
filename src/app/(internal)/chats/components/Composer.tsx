@@ -43,7 +43,15 @@ import {
   useRef,
   useState,
 } from "react";
-import { ArrowUp, FileText, MessageSquareText, Music, Paperclip, X } from "lucide-react";
+import {
+  ArrowUp,
+  FileText,
+  LayoutTemplate,
+  MessageSquareText,
+  Music,
+  Paperclip,
+  X,
+} from "lucide-react";
 import { supabase } from "@/lib/supabase";
 import type { CrmChannel } from "@/components/ChannelChip";
 import type { ConversationMessage } from "./MessageBubble";
@@ -55,6 +63,7 @@ import {
 } from "@/lib/whatsappMediaKind";
 import { formatBytes, maybeCompressImage } from "@/lib/imageCompression";
 import TemplatesPicker from "./TemplatesPicker";
+import TemplateSendModal from "./TemplateSendModal";
 
 const GSM7_RX =
   /^[\n\rA-Za-z0-9 @£$¥èéùìòÇØøÅåΔ_ΦΓΛΩΠΨΣΘΞÆæßÉ!"#¤%&'()*+,\-./:;<=>?¡ÄÖÑÜ§¿äöñüà€\\[\]{}|~^]*$/;
@@ -96,12 +105,16 @@ export default function Composer({
   appUserId,
   channel,
   whatsappWindowExpired,
+  customerName,
   onSent,
 }: {
   threadId: string;
   appUserId: string | null;
   channel: CrmChannel;
   whatsappWindowExpired: boolean;
+  // First name of the thread's linked player, "" if none. Pre-fills
+  // the customer_name variable in the WhatsApp template modal.
+  customerName: string;
   onSent: (m: ConversationMessage) => void;
 }) {
   const [body, setBody] = useState("");
@@ -132,6 +145,12 @@ export default function Composer({
   // Canned-response picker. Visible on both channels; image templates
   // gate inside the picker based on canSendMedia.
   const [templatesOpen, setTemplatesOpen] = useState(false);
+
+  // WhatsApp approved-template send modal. WhatsApp-only; the one path
+  // allowed outside the 24-hour window, so it's enabled regardless of
+  // whatsappWindowExpired.
+  const [templateSendOpen, setTemplateSendOpen] = useState(false);
+  const isWhatsApp = channel === "whatsapp";
 
   // Kind is derived from the picked file's MIME at render time.
   const kind: OutboundMediaKind | null = useMemo(() => {
@@ -438,12 +457,23 @@ export default function Composer({
       )}
 
       {whatsappWindowExpired && (
-        <div className="mb-2 rounded-md border border-cream-line bg-cream-soft px-2 py-1.5 text-[11px] text-deep-green/65">
-          <span aria-hidden className="mr-1">
-            ⓘ
+        <div className="mb-2 flex flex-wrap items-center justify-between gap-2 rounded-md border border-cream-line bg-cream-soft px-2 py-1.5 text-[11px] text-deep-green/65">
+          <span>
+            <span aria-hidden className="mr-1">
+              ⓘ
+            </span>
+            WhatsApp session expired — reply is closed until the player
+            messages, or send an approved template to re-open the conversation.
           </span>
-          WhatsApp session expired — player must message first to reopen the
-          24-hour window.
+          <button
+            type="button"
+            onClick={() => setTemplateSendOpen(true)}
+            disabled={!appUserId}
+            className="inline-flex shrink-0 items-center gap-1 rounded-full bg-deep-green px-3 py-1 text-[11px] font-bold text-cream transition hover:bg-deep-green-soft disabled:opacity-40"
+          >
+            <LayoutTemplate aria-hidden className="h-3.5 w-3.5" strokeWidth={2} />
+            Send template
+          </button>
         </div>
       )}
 
@@ -511,6 +541,23 @@ export default function Composer({
                 }}
               />
             </div>
+            {isWhatsApp && (
+              <button
+                type="button"
+                onClick={() => setTemplateSendOpen(true)}
+                aria-label="Send WhatsApp template"
+                title="Send an approved WhatsApp template"
+                disabled={sending || !appUserId}
+                style={{ touchAction: "manipulation" }}
+                className="flex h-11 w-11 shrink-0 items-center justify-center rounded-full text-deep-green/70 transition hover:bg-cream-soft hover:text-deep-green disabled:opacity-40"
+              >
+                <LayoutTemplate
+                  aria-hidden
+                  className="h-5 w-5"
+                  strokeWidth={1.75}
+                />
+              </button>
+            )}
             <textarea
               ref={taRef}
               value={body}
@@ -576,6 +623,16 @@ export default function Composer({
         hidden
         onChange={onFilePicked}
       />
+
+      {isWhatsApp && (
+        <TemplateSendModal
+          open={templateSendOpen}
+          onClose={() => setTemplateSendOpen(false)}
+          threadId={threadId}
+          initialCustomerName={customerName}
+          onSent={onSent}
+        />
+      )}
     </div>
   );
 }

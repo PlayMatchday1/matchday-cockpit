@@ -112,6 +112,97 @@ export async function sendWhatsAppText(
   return { messageId };
 }
 
+// Send a pre-approved WhatsApp template message. Unlike text/media
+// sends, templates are allowed OUTSIDE the 24-hour service window —
+// that's their purpose (re-engaging stale threads). bodyParams are
+// NAMED parameters (the support_followup template uses {{customer_name}}
+// and {{topic}}), passed in the template's variable order.
+export async function sendWhatsAppTemplate(args: {
+  toPhone: string;
+  templateName: string;
+  languageCode: string;
+  bodyParams: { name: string; text: string }[];
+}): Promise<SendWhatsAppTextResult> {
+  const { toPhone, templateName, languageCode, bodyParams } = args;
+  const token = process.env.META_ACCESS_TOKEN;
+  const phoneNumberId = process.env.META_PHONE_NUMBER_ID;
+  if (!token || !phoneNumberId) {
+    throw new WhatsAppApiError(
+      500,
+      "Missing META_ACCESS_TOKEN or META_PHONE_NUMBER_ID",
+    );
+  }
+  if (!toPhone || !templateName || !languageCode) {
+    throw new WhatsAppApiError(
+      400,
+      "toPhone, templateName and languageCode are required",
+    );
+  }
+
+  const url = `https://graph.facebook.com/${GRAPH_VERSION}/${phoneNumberId}/messages`;
+  const components =
+    bodyParams.length > 0
+      ? [
+          {
+            type: "body",
+            parameters: bodyParams.map((p) => ({
+              type: "text",
+              parameter_name: p.name,
+              text: p.text,
+            })),
+          },
+        ]
+      : [];
+  const payload = {
+    messaging_product: "whatsapp",
+    to: toMetaPhone(toPhone),
+    type: "template",
+    template: {
+      name: templateName,
+      language: { code: languageCode },
+      components,
+    },
+  };
+
+  let resp: Response;
+  try {
+    resp = await fetch(url, {
+      method: "POST",
+      headers: {
+        Authorization: `Bearer ${token}`,
+        "Content-Type": "application/json",
+      },
+      body: JSON.stringify(payload),
+    });
+  } catch (err) {
+    throw new WhatsAppApiError(
+      502,
+      err instanceof Error ? err.message : String(err),
+      "Network error reaching Meta Cloud API",
+    );
+  }
+
+  const text = await resp.text();
+  let parsed: unknown = text;
+  try {
+    parsed = JSON.parse(text);
+  } catch {
+    // Leave raw text (Meta occasionally returns HTML on infra errors).
+  }
+  if (!resp.ok) {
+    throw new WhatsAppApiError(resp.status, parsed);
+  }
+  const messageId = readMessageId(parsed);
+  if (!messageId) {
+    throw new WhatsAppApiError(
+      502,
+      parsed,
+      "Meta response missing messages[0].id",
+    );
+  }
+  return { messageId };
+}
+
 function readMessageId(parsed: unknown): string | null {
   if (parsed && typeof parsed === "object") {
     const arr = (parsed as { messages?: unknown }).messages;
