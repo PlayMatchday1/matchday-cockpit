@@ -23,7 +23,8 @@
 //                   desktop; switches between full-screen list
 //                   and full-screen conversation on mobile)
 //   ?cities=A,B   — multi-select city filter
-//   ?status=mine  — assignment filter (omitted when "all")
+//   ?view=…       — ticket status view: open (default, omitted) |
+//                   mine | starred | closed
 //
 // Realtime: postgres_changes on crm_threads (INSERT + UPDATE) and
 // crm_messages (INSERT + UPDATE — UPDATE added in PR #32 for
@@ -38,7 +39,14 @@ import {
   useState,
 } from "react";
 import { useRouter, useSearchParams } from "next/navigation";
-import { ChevronLeft, Info, SlidersHorizontal, Star } from "lucide-react";
+import {
+  ChevronLeft,
+  CircleCheck,
+  Info,
+  RotateCcw,
+  SlidersHorizontal,
+  Star,
+} from "lucide-react";
 import EnablePushNotificationsButton from "@/components/EnablePushNotificationsButton";
 import PlayersMatchesToggle from "@/components/PlayersMatchesToggle";
 import { supabase } from "@/lib/supabase";
@@ -55,6 +63,7 @@ import type { DeliveryStatus } from "@/components/DeliveryStatusLabel";
 import type { MatchStatus } from "@/components/MatchStatusPill";
 import FilterBar, {
   type StatusFilter,
+  type ViewCounts,
 } from "./components/FilterBar";
 import InboxRow, { type InboxRowThread } from "./components/InboxRow";
 import AssignDropdown from "./components/AssignDropdown";
@@ -78,6 +87,13 @@ type ThreadListRow = {
   assigned_to_user_id: string | null;
   assigned_at: string | null;
   channel: CrmChannel;
+  // Ticket status. 'open' threads live in the Open inbox; 'closed'
+  // ones move to the Closed view. Auto-reopens to 'open' on a new
+  // inbound. closed_at / closed_by_user_id are set on close, cleared
+  // on reopen.
+  status: "open" | "closed";
+  closed_at: string | null;
+  closed_by_user_id: string | null;
   // Server-computed per the assignment-aware rule. Authoritative —
   // the client mirrors this for optimistic updates on mark-read but
   // never recomputes the rule itself.
@@ -139,6 +155,16 @@ type ThreadDetail = {
   messages: Message[];
   assignee: Assignee | null;
   latest_inbound_at: string | null;
+};
+
+// One row of the lightweight all-threads index the server returns
+// alongside the list. Drives chip counts scoped to the selected
+// cities without refetching on every city toggle.
+type CountIndexRow = {
+  city: string;
+  status: "open" | "closed";
+  mine: boolean;
+  starred: boolean;
 };
 
 // ---------------- constants ----------------
@@ -211,38 +237,26 @@ export default function CrmClient() {
     return new Set(raw.split(",").filter((c) => c.length > 0));
   }, [searchParams]);
 
-  const statusFilter = useMemo<StatusFilter>(() => {
-    const raw = searchParams.get("status");
-    if (raw === "unassigned" || raw === "mine") return raw;
-    return "all";
+  // Ticket-style status view (single-select). Defaults to Open — the
+  // main inbox. Filtered server-side; changing it refetches.
+  const view = useMemo<StatusFilter>(() => {
+    const raw = searchParams.get("view");
+    if (raw === "mine" || raw === "starred" || raw === "closed") return raw;
+    return "open";
   }, [searchParams]);
-
-  // Independent, composable follow-up filter (ANDs with city/status).
-  const followUpFilter = useMemo<boolean>(
-    () => searchParams.get("followup") === "1",
-    [searchParams],
-  );
 
   const selectedId = searchParams.get("threadId");
 
   const setFilters = useCallback(
-    (next: {
-      cities?: Set<string>;
-      status?: StatusFilter;
-      followUp?: boolean;
-    }) => {
+    (next: { cities?: Set<string>; view?: StatusFilter }) => {
       const params = new URLSearchParams(searchParams.toString());
       if (next.cities !== undefined) {
         if (next.cities.size === 0) params.delete("cities");
         else params.set("cities", [...next.cities].join(","));
       }
-      if (next.status !== undefined) {
-        if (next.status === "all") params.delete("status");
-        else params.set("status", next.status);
-      }
-      if (next.followUp !== undefined) {
-        if (next.followUp) params.set("followup", "1");
-        else params.delete("followup");
+      if (next.view !== undefined) {
+        if (next.view === "open") params.delete("view");
+        else params.set("view", next.view);
       }
       const qs = params.toString();
       router.replace(qs ? `/chats?${qs}` : "/chats", { scroll: false });
@@ -265,6 +279,21 @@ export default function CrmClient() {
   const [threads, setThreads] = useState<ThreadListRow[]>([]);
   const [threadsError, setThreadsError] = useState<string | null>(null);
   const [threadsLoading, setThreadsLoading] = useState(true);
+
+  // Server-computed global per-view counts + a lightweight all-threads
+  // index used to recompute counts scoped to the selected cities.
+  const ZERO_COUNTS: ViewCounts = { open: 0, mine: 0, starred: 0, closed: 0 };
+  const [counts, setCounts] = useState<ViewCounts>(ZERO_COUNTS);
+  const [countIndex, setCountIndex] = useState<CountIndexRow[]>([]);
+
+  // The active view lives in the URL. loadThreads reads it through a
+  // ref so its identity stays stable — the realtime subscription
+  // depends on loadThreads and must not resubscribe on every view
+  // change.
+  const viewRef = useRef<StatusFilter>(view);
+  useEffect(() => {
+    viewRef.current = view;
+  }, [view]);
 
   const [operators, setOperators] = useState<Assignee[]>([]);
   const operatorsById = useMemo(
@@ -343,13 +372,22 @@ export default function CrmClient() {
       return;
     }
     try {
-      const res = await fetch("/api/crm/threads", { headers });
+      const res = await fetch(
+        `/api/crm/threads?view=${encodeURIComponent(viewRef.current)}`,
+        { headers },
+      );
       if (!res.ok) {
         const j = await res.json().catch(() => ({}));
         throw new Error(j.error || `HTTP ${res.status}`);
       }
-      const j = (await res.json()) as { threads: ThreadListRow[] };
+      const j = (await res.json()) as {
+        threads: ThreadListRow[];
+        counts?: ViewCounts;
+        index?: CountIndexRow[];
+      };
       setThreads(j.threads);
+      if (j.counts) setCounts(j.counts);
+      if (j.index) setCountIndex(j.index);
     } catch (err) {
       setThreadsError(err instanceof Error ? err.message : String(err));
     } finally {
@@ -423,9 +461,18 @@ export default function CrmClient() {
   );
 
   useEffect(() => {
-    void loadThreads();
     void loadOperators();
-  }, [loadThreads, loadOperators]);
+  }, [loadOperators]);
+
+  // (Re)load the thread list whenever the view changes. The list is
+  // filtered server-side per view, so switching Open/Mine/Starred/
+  // Closed is a refetch. City filtering stays client-side (below) and
+  // does not refetch. viewRef updates in the effect above this one, so
+  // it is already current when loadThreads reads it.
+  useEffect(() => {
+    setThreadsLoading(true);
+    void loadThreads();
+  }, [view, loadThreads]);
 
   // iOS PWA home-screen badge. Writes the unread thread count to the
   // app icon every time `threads` updates — covers both fresh inbox
@@ -553,6 +600,17 @@ export default function CrmClient() {
           setThreads((prev) => {
             const exists = prev.find((x) => x.id === t.id);
             if (!exists) {
+              // Not in the current view — a reopen or reassignment may
+              // now make it belong here. Refetch to re-evaluate
+              // membership (and counts).
+              void loadThreads();
+              return prev;
+            }
+            // A status flip (close / reopen / auto-reopen) can change
+            // which view this thread belongs to. Refetch rather than
+            // patch so it drops out of / into the right list and the
+            // counts stay correct.
+            if ((exists.status ?? "open") !== (t.status ?? "open")) {
               void loadThreads();
               return prev;
             }
@@ -566,6 +624,9 @@ export default function CrmClient() {
                     player_id: t.player_id,
                     assigned_to_user_id: t.assigned_to_user_id,
                     assigned_at: t.assigned_at,
+                    status: t.status,
+                    closed_at: t.closed_at,
+                    closed_by_user_id: t.closed_by_user_id,
                     assignee:
                       t.assigned_to_user_id != null
                         ? operatorsById.get(t.assigned_to_user_id) ??
@@ -634,38 +695,40 @@ export default function CrmClient() {
   }, [loadThreads, operatorsById, refreshDetailForMediaInsert, appUser?.id]);
 
   // --------- derived list ---------
-  const filteredThreads = useMemo(() => {
+  // The server already filtered by the active view. Here we only apply
+  // the client-side city filter (no refetch on city toggle) and, in the
+  // Starred view, drop rows the viewer just unstarred so removal is
+  // instant.
+  const visibleThreads = useMemo(() => {
     const arr = [...threads].sort(
-      (a, b) =>
-        Date.parse(b.last_message_at) - Date.parse(a.last_message_at),
+      (a, b) => Date.parse(b.last_message_at) - Date.parse(a.last_message_at),
     );
-    return arr
-      .filter((t) => {
-        if (cityFilter.size > 0) {
-          const code = cityCodeForThread(t);
-          if (!cityFilter.has(code)) return false;
-        }
-        if (statusFilter === "unassigned" && t.assigned_to_user_id != null)
-          return false;
-        if (statusFilter === "mine") {
-          if (!appUser?.id) return false;
-          if (t.assigned_to_user_id !== appUser.id) return false;
-        }
-        // Independent follow-up filter — ANDs with the above.
-        if (followUpFilter && !t.is_follow_up) return false;
-        return true;
-      });
-  }, [threads, cityFilter, statusFilter, followUpFilter, appUser?.id]);
+    return arr.filter((t) => {
+      if (cityFilter.size > 0 && !cityFilter.has(cityCodeForThread(t)))
+        return false;
+      if (view === "starred" && !t.is_follow_up) return false;
+      return true;
+    });
+  }, [threads, cityFilter, view]);
 
-  // Count of the viewer's flagged threads among the loaded inbox (the
-  // set the filter can actually show). Drives the "Follow up (N)" pill.
-  const followUpCount = useMemo(
-    () => threads.reduce((n, t) => n + (t.is_follow_up ? 1 : 0), 0),
-    [threads],
-  );
+  // Chip counts. The server sends global per-view counts plus a
+  // lightweight all-threads index. With no city selected we show the
+  // global counts; with cities selected we recompute scoped to those
+  // cities from the index (e.g. "Open + DFW" = open threads in DFW).
+  const displayedCounts = useMemo<ViewCounts>(() => {
+    if (cityFilter.size === 0) return counts;
+    const inCity = (r: CountIndexRow) => cityFilter.has(r.city);
+    return {
+      open: countIndex.filter((r) => r.status === "open" && inCity(r)).length,
+      mine: countIndex.filter((r) => r.mine && inCity(r)).length,
+      starred: countIndex.filter((r) => r.starred && inCity(r)).length,
+      closed: countIndex.filter((r) => r.status === "closed" && inCity(r))
+        .length,
+    };
+  }, [counts, countIndex, cityFilter]);
 
   const selectedThread =
-    filteredThreads.find((t) => t.id === selectedId) ??
+    visibleThreads.find((t) => t.id === selectedId) ??
     threads.find((t) => t.id === selectedId) ??
     null;
 
@@ -713,11 +776,15 @@ export default function CrmClient() {
               }
             : prev,
         );
+        // Assignment changes the Mine count and Mine-view membership.
+        // Refetch to reconcile counts and (if viewing Mine) drop/add
+        // the row.
+        void loadThreads();
       } catch (err) {
         console.error("[crm] assign failed", err);
       }
     },
-    [],
+    [loadThreads],
   );
 
   const onSent = useCallback(
@@ -776,15 +843,61 @@ export default function CrmClient() {
           body: JSON.stringify({ follow_up: desired }),
         });
         if (!res.ok) throw new Error(`HTTP ${res.status}`);
+        // Starred count (and the Starred view) depend on this flag.
+        // Refetch to keep the count and index in sync.
+        void loadThreads();
       } catch (err) {
         console.error("[crm] follow-up toggle failed", err);
         patch(!desired); // revert
       }
     },
-    [],
+    [loadThreads],
+  );
+
+  // Close / reopen the selected conversation (admin-only; the button is
+  // hidden for non-admins and the API rejects them too). Optimistic:
+  // flip the local status so the header button and inbox reflect it
+  // immediately, then refetch in `finally` to reconcile view membership
+  // and counts (also self-heals if the request failed).
+  const onSetThreadStatus = useCallback(
+    async (threadId: string, action: "close" | "reopen") => {
+      const nextStatus = action === "close" ? "closed" : "open";
+      setThreads((prev) =>
+        prev.map((t) =>
+          t.id === threadId ? { ...t, status: nextStatus } : t,
+        ),
+      );
+      setDetail((prev) =>
+        prev && prev.thread.id === threadId
+          ? { ...prev, thread: { ...prev.thread, status: nextStatus } }
+          : prev,
+      );
+      const headers = await bearerHeaders();
+      if (!headers) {
+        void loadThreads();
+        return;
+      }
+      try {
+        const res = await fetch(`/api/crm/threads/${threadId}/status`, {
+          method: "POST",
+          headers,
+          body: JSON.stringify({ action }),
+        });
+        if (!res.ok) {
+          const j = await res.json().catch(() => ({}));
+          throw new Error(j.error || `HTTP ${res.status}`);
+        }
+      } catch (err) {
+        console.error("[crm] status change failed", err);
+      } finally {
+        void loadThreads();
+      }
+    },
+    [loadThreads],
   );
 
   const whatsappExpired = computeWhatsAppExpired(detail);
+  const canManageStatus = appUser?.is_admin === true;
 
   // Mobile flow rules:
   //   no selectedId             → inbox full-screen
@@ -804,13 +917,12 @@ export default function CrmClient() {
       <ChatsHeader
         threadsLoading={threadsLoading}
         totalThreads={threads.length}
-        visibleThreads={filteredThreads.length}
+        visibleThreads={visibleThreads.length}
         realtimeOk={realtimeOk}
         onRefresh={() => void loadThreads()}
         cities={cityFilter}
-        status={statusFilter}
-        followUp={followUpFilter}
-        followUpCount={followUpCount}
+        view={view}
+        counts={displayedCounts}
         onFilterChange={setFilters}
         canFilterMine={!!appUser?.id}
       />
@@ -828,19 +940,19 @@ export default function CrmClient() {
                 {threadsError}
               </div>
             )}
-            {threadsLoading && filteredThreads.length === 0 && (
+            {threadsLoading && visibleThreads.length === 0 && (
               <InboxSkeleton />
             )}
             {!threadsLoading &&
-              filteredThreads.length === 0 &&
+              visibleThreads.length === 0 &&
               !threadsError && (
                 <div className="flex flex-1 items-center justify-center px-6 text-center text-xs text-deep-green/45">
                   No conversations match the current filters.
                 </div>
               )}
-            {filteredThreads.length > 0 && (
+            {visibleThreads.length > 0 && (
               <ul className="divide-y divide-cream-line">
-                {filteredThreads.map((t) => (
+                {visibleThreads.map((t) => (
                   <InboxRow
                     key={t.id}
                     thread={t as InboxRowThread}
@@ -890,6 +1002,9 @@ export default function CrmClient() {
                   !(selectedThread?.is_follow_up ?? false),
                 )
               }
+              threadStatus={detail?.thread.status ?? selectedThread?.status ?? "open"}
+              canManageStatus={canManageStatus}
+              onSetStatus={(action) => onSetThreadStatus(selectedId, action)}
               whatsappWindowExpired={whatsappExpired}
             />
           )}
@@ -953,9 +1068,8 @@ function ChatsHeader({
   realtimeOk,
   onRefresh,
   cities,
-  status,
-  followUp,
-  followUpCount,
+  view,
+  counts,
   onFilterChange,
   canFilterMine,
 }: {
@@ -965,22 +1079,18 @@ function ChatsHeader({
   realtimeOk: boolean | null;
   onRefresh: () => void;
   cities: Set<string>;
-  status: StatusFilter;
-  followUp: boolean;
-  followUpCount: number;
-  onFilterChange: (next: {
-    cities?: Set<string>;
-    status?: StatusFilter;
-    followUp?: boolean;
-  }) => void;
+  view: StatusFilter;
+  counts: ViewCounts;
+  onFilterChange: (next: { cities?: Set<string>; view?: StatusFilter }) => void;
   canFilterMine: boolean;
 }) {
   // Filter row defaults to visible. The icon collapses it when the
   // operator wants the bare inbox; a small mint dot on the icon
   // signals "filters are active" so a collapsed state never hides a
-  // surprising filtered view.
+  // surprising filtered view. "Open" with no city is the default view,
+  // so it does not count as an active filter.
   const [filtersOpen, setFiltersOpen] = useState(true);
-  const filtersActive = status !== "all" || cities.size > 0 || followUp;
+  const filtersActive = view !== "open" || cities.size > 0;
 
   const liveLabel =
     realtimeOk == null
@@ -1039,9 +1149,8 @@ function ChatsHeader({
       {filtersOpen && (
         <FilterBar
           cities={cities}
-          status={status}
-          followUp={followUp}
-          followUpCount={followUpCount}
+          view={view}
+          counts={counts}
           onChange={onFilterChange}
           canFilterMine={canFilterMine}
         />
@@ -1137,6 +1246,9 @@ function Conversation({
   isMember,
   isFollowUp,
   onToggleFollowUp,
+  threadStatus,
+  canManageStatus,
+  onSetStatus,
   whatsappWindowExpired,
 }: {
   selectedId: string;
@@ -1154,6 +1266,9 @@ function Conversation({
   isMember: boolean;
   isFollowUp: boolean;
   onToggleFollowUp: () => void;
+  threadStatus: "open" | "closed";
+  canManageStatus: boolean;
+  onSetStatus: (action: "close" | "reopen") => void;
   whatsappWindowExpired: boolean;
 }) {
   const messages = detail?.messages ?? [];
@@ -1180,6 +1295,9 @@ function Conversation({
         isMember={isMember}
         isFollowUp={isFollowUp}
         onToggleFollowUp={onToggleFollowUp}
+        threadStatus={threadStatus}
+        canManageStatus={canManageStatus}
+        onSetStatus={onSetStatus}
       />
       <div
         ref={scrollRef}
@@ -1363,6 +1481,9 @@ function ConversationHeader({
   isMember,
   isFollowUp,
   onToggleFollowUp,
+  threadStatus,
+  canManageStatus,
+  onSetStatus,
 }: {
   detail: ThreadDetail | null;
   operators: Assignee[];
@@ -1374,6 +1495,9 @@ function ConversationHeader({
   isMember: boolean;
   isFollowUp: boolean;
   onToggleFollowUp: () => void;
+  threadStatus: "open" | "closed";
+  canManageStatus: boolean;
+  onSetStatus: (action: "close" | "reopen") => void;
 }) {
   // Wrap onBack so any underlying touchstart/click ordering bugs
   // can't fall through to a parent handler. Bumped to h-11 w-11
@@ -1384,6 +1508,10 @@ function ConversationHeader({
     e.stopPropagation();
     onBack();
   };
+
+  // Close needs a confirm step (it removes the thread from the Open
+  // inbox); reopen is a direct, low-stakes action.
+  const [confirmClose, setConfirmClose] = useState(false);
 
   if (!detail) {
     return (
@@ -1488,6 +1616,31 @@ function ConversationHeader({
           strokeWidth={1.75}
         />
       </button>
+      {/* Close / Reopen — ticket workflow. Admin-only (city managers
+          can view but not action). Close confirms first (it drops the
+          thread from the Open inbox); Reopen is a direct action. */}
+      {canManageStatus &&
+        (threadStatus === "open" ? (
+          <button
+            type="button"
+            onClick={() => setConfirmClose(true)}
+            aria-label="Close conversation"
+            className="inline-flex h-9 shrink-0 items-center gap-1 rounded-full px-2.5 text-xs font-medium text-deep-green/70 transition hover:bg-cream-soft hover:text-deep-green"
+          >
+            <CircleCheck aria-hidden className="h-4 w-4" strokeWidth={1.75} />
+            <span className="hidden sm:inline">Close</span>
+          </button>
+        ) : (
+          <button
+            type="button"
+            onClick={() => onSetStatus("reopen")}
+            aria-label="Reopen conversation"
+            className="inline-flex h-9 shrink-0 items-center gap-1 rounded-full px-2.5 text-xs font-medium text-deep-green/70 transition hover:bg-cream-soft hover:text-deep-green"
+          >
+            <RotateCcw aria-hidden className="h-4 w-4" strokeWidth={1.75} />
+            <span className="hidden sm:inline">Reopen</span>
+          </button>
+        ))}
       {/* Info button — toggles the context panel. Two variants
           stacked behind responsive utilities so the same icon does
           the right thing on each surface:
@@ -1516,6 +1669,64 @@ function ConversationHeader({
       >
         <Info aria-hidden className="h-4 w-4" />
       </button>
+      <ConfirmCloseDialog
+        open={confirmClose}
+        onCancel={() => setConfirmClose(false)}
+        onConfirm={() => {
+          setConfirmClose(false);
+          onSetStatus("close");
+        }}
+      />
+    </div>
+  );
+}
+
+// ============================================================
+// Close-conversation confirm dialog. Styled to match
+// ConfirmDeleteDialog but with close-specific, non-destructive copy
+// (deep-green confirm, not coral — closing is reversible).
+// ============================================================
+function ConfirmCloseDialog({
+  open,
+  onCancel,
+  onConfirm,
+}: {
+  open: boolean;
+  onCancel: () => void;
+  onConfirm: () => void;
+}) {
+  if (!open) return null;
+  return (
+    <div className="fixed inset-0 z-50 flex items-start justify-center bg-deep-green/30 px-4 py-12 backdrop-blur-sm">
+      <div
+        role="dialog"
+        aria-modal="true"
+        className="w-full max-w-md rounded-2xl border border-cream-line bg-white p-6 shadow-xl shadow-deep-green/30"
+      >
+        <h2 className="font-display text-2xl uppercase leading-none tracking-tight text-deep-green">
+          Close conversation
+        </h2>
+        <div className="mt-4 rounded-md border border-cream-line bg-cream-soft/40 p-3 text-sm text-deep-green">
+          It will be removed from the Open inbox and can be reopened from
+          Closed. A new reply from the player reopens it automatically.
+        </div>
+        <div className="mt-5 flex flex-wrap items-center justify-end gap-2">
+          <button
+            type="button"
+            onClick={onCancel}
+            className="rounded-full border border-cream-line bg-transparent px-4 py-2 text-xs font-bold text-deep-green hover:bg-cream-soft"
+          >
+            Cancel
+          </button>
+          <button
+            type="button"
+            onClick={onConfirm}
+            className="rounded-full bg-deep-green px-5 py-2 text-xs font-bold text-cream transition hover:bg-deep-green-soft"
+          >
+            Close conversation
+          </button>
+        </div>
+      </div>
     </div>
   );
 }

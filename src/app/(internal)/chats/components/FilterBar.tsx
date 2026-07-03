@@ -1,42 +1,45 @@
 "use client";
 
-// One horizontal-scroll row of pills. Assignment first (All /
-// Unassigned / Mine), then a per-viewer "Follow up" toggle, then city
-// codes (multi-select). Empty city selection is treated as "all cities"
-// implicitly, so there's no separate "all cities" pill in the row.
+// One horizontal-scroll row of pills. Ticket-style status views first
+// (Open / Mine / Starred / Closed — mutually exclusive, single-select),
+// then city codes (multi-select). Empty city selection is treated as
+// "all cities" implicitly, so there's no separate "all cities" pill.
 //
+// Views:
+//   Open    — status = open (the main inbox, default)
+//   Mine    — open threads assigned to the viewer
+//   Starred — the viewer's starred threads, open or closed
+//   Closed  — status = closed
+//
+// Each status chip shows a "(N)" count for the current city selection.
 // "Mine" is disabled when the viewer has no app_user id (vanishingly
 // unlikely past AdminGuard but defended).
-//
-// "Follow up" is an INDEPENDENT toggle (not part of the mutually-
-// exclusive All/Unassigned/Mine group): it ANDs with whatever else is
-// active, so "Follow up" + "HOU" shows the viewer's HOU follow-ups. It
-// shows a "(N)" count of the viewer's flagged threads when N > 0.
 
 import { KNOWN_CITY_CODES } from "@/lib/cityNormalization";
 import { UNKNOWN_CITY } from "@/lib/cityColors";
 
-export type StatusFilter = "all" | "unassigned" | "mine";
+export type StatusFilter = "open" | "mine" | "starred" | "closed";
+
+export type ViewCounts = {
+  open: number;
+  mine: number;
+  starred: number;
+  closed: number;
+};
 
 const ALL_CITY_CODES: readonly string[] = [...KNOWN_CITY_CODES, UNKNOWN_CITY];
 
 export default function FilterBar({
   cities,
-  status,
-  followUp,
-  followUpCount,
+  view,
+  counts,
   onChange,
   canFilterMine,
 }: {
   cities: Set<string>;
-  status: StatusFilter;
-  followUp: boolean;
-  followUpCount: number;
-  onChange: (next: {
-    cities?: Set<string>;
-    status?: StatusFilter;
-    followUp?: boolean;
-  }) => void;
+  view: StatusFilter;
+  counts: ViewCounts;
+  onChange: (next: { cities?: Set<string>; view?: StatusFilter }) => void;
   canFilterMine: boolean;
 }) {
   const toggleCity = (code: string) => {
@@ -50,26 +53,29 @@ export default function FilterBar({
     <div className="min-w-0 overflow-hidden border-b border-cream-line bg-cream">
       <div className="scrollbar-hide flex flex-nowrap items-center gap-1.5 overflow-x-auto px-3 py-2 pr-4 sm:px-4">
         <FilterPill
-          active={status === "all"}
-          onClick={() => onChange({ status: "all" })}
-          label="All"
+          active={view === "open"}
+          onClick={() => onChange({ view: "open" })}
+          label="Open"
+          count={counts.open}
         />
         <FilterPill
-          active={status === "unassigned"}
-          onClick={() => onChange({ status: "unassigned" })}
-          label="Unassigned"
-        />
-        <FilterPill
-          active={status === "mine"}
-          onClick={() => onChange({ status: "mine" })}
+          active={view === "mine"}
+          onClick={() => onChange({ view: "mine" })}
           label="Mine"
+          count={counts.mine}
           disabled={!canFilterMine}
         />
         <FilterPill
-          active={followUp}
-          onClick={() => onChange({ followUp: !followUp })}
-          label="Follow up"
-          count={followUpCount}
+          active={view === "starred"}
+          onClick={() => onChange({ view: "starred" })}
+          label="Starred"
+          count={counts.starred}
+        />
+        <FilterPill
+          active={view === "closed"}
+          onClick={() => onChange({ view: "closed" })}
+          label="Closed"
+          count={counts.closed}
         />
         <span aria-hidden className="mx-1 h-4 w-px shrink-0 bg-deep-green/15" />
         {ALL_CITY_CODES.map((code) => (

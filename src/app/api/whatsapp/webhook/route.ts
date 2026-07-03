@@ -34,6 +34,7 @@ import {
 } from "@/lib/gchat";
 import { downloadWhatsAppMedia } from "@/lib/whatsapp";
 import { uploadMessageMedia } from "@/lib/crmMedia";
+import { writeThreadStatusLog } from "@/lib/crmThreadStatus";
 import {
   notifyInboundChatMessage,
   type CrmInboundPushArgs,
@@ -759,7 +760,7 @@ async function processInbound(
 
   const existing = await sb
     .from("crm_threads")
-    .select("id, player_id, match_ambiguous")
+    .select("id, player_id, match_ambiguous, status")
     .eq("phone_number", phone)
     .eq("channel", "whatsapp")
     .maybeSingle();
@@ -803,6 +804,7 @@ async function processInbound(
     last_message_at: nowIso,
     last_message_preview: preview,
   };
+  let didAutoReopen = false;
   if (!isNewThread && existing.data) {
     if (existing.data.player_id == null && playerId != null) {
       patch.player_id = playerId;
@@ -810,11 +812,27 @@ async function processInbound(
     if (ambiguous && !existing.data.match_ambiguous) {
       patch.match_ambiguous = true;
     }
+    // Auto-reopen: an inbound on a closed thread pulls it back into
+    // the Open inbox so the customer reply is never lost. Star state
+    // is independent and untouched.
+    if (((existing.data.status as string | null) ?? "open") === "closed") {
+      patch.status = "open";
+      patch.closed_at = null;
+      patch.closed_by_user_id = null;
+      didAutoReopen = true;
+    }
   }
   const updT = await sb.from("crm_threads").update(patch).eq("id", threadId);
   if (updT.error) {
     console.error("[whatsapp:webhook] thread update failed", updT.error);
     throw new Error("thread update failed");
+  }
+  if (didAutoReopen) {
+    await writeThreadStatusLog(sb, {
+      threadId,
+      action: "auto_reopen",
+      performedByUserId: null,
+    });
   }
 
   // -------- inbound message insert with wamid dedupe --------

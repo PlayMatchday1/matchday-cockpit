@@ -1,37 +1,49 @@
-// GET /api/crm/threads — 50 most-recent threads for the left-pane
-// list. Joined to mdapi_users for the display name + city chip, and
-// to app_users for the current assignee chip.
+// GET /api/crm/threads?view=open|mine|starred|closed
 //
-// No pagination in MVP (cap = 50). Auth: dual-mode bearer via
-// src/lib/crmAuth.
+// Ticket-style inbox. The active `view` is filtered SERVER-SIDE (the
+// list is no longer a rolling 50-row window the client re-filters):
+//   open    → status = 'open'
+//   mine    → status = 'open' AND assigned_to_user_id = viewer
+//   starred → viewer-starred threads, ANY status (open or closed)
+//   closed  → status = 'closed'
+// Default (missing / unknown param) is 'open'.
 //
-// Response shape:
-//   { threads: Array<{
-//       id, phone_number, player_id, match_ambiguous,
-//       last_message_at, last_message_preview, last_message_direction,
-//       assigned_to_user_id, assigned_at,
-//       is_unread,                                  // per-viewer
-//       is_follow_up,                               // per-viewer star
-//       player: { first_name, last_name, preferable_city_normalized } | null,
-//       assignee: { id, email, full_name } | null
-//     }> }
+// The list is capped at LIST_LIMIT most-recent threads for the view.
+// City filtering stays client-side (rows carry the player city) so
+// toggling a city chip does not re-hit the server.
 //
-// is_unread is computed per the viewer per the assignment-aware
-// resolution rule (see PR notes). Cron callers receive is_unread =
-// false everywhere since there is no "viewer" to compare against —
-// the unread dot is a human-facing UI signal only.
+// Response:
+//   { threads: ThreadListRow[],       // active view, newest first
+//     counts:  { open, mine, starred, closed },   // global, server-side
+//     index:   Array<{ city, status, mine, starred }> }  // for city-
+//                                         // scoped counts on the client
 //
-// last_message_direction is the direction of the most recent message
-// in the thread ("inbound" | "outbound" | null). Used by the inbox
-// to render a "You: " prefix when the last message was sent from
-// Cockpit, matching the Slack/iMessage convention.
+// counts are the global per-view totals. The client displays them
+// directly when no city is selected, and recomputes city-scoped counts
+// from `index` (a lightweight all-threads projection) when city chips
+// are active — matching "Open + DFW shows open threads in DFW".
+//
+// Auth: dual-mode bearer via src/lib/crmAuth. Cron callers (no viewer)
+// get is_unread=false everywhere and empty mine/starred views.
 
 import { authenticateCrm } from "@/lib/crmAuth";
+import { UNKNOWN_CITY } from "@/lib/cityColors";
 
 export const runtime = "nodejs";
 export const maxDuration = 10;
 
-const LIMIT = 50;
+const LIST_LIMIT = 100;
+const INDEX_PAGE = 1000;
+
+type ViewFilter = "open" | "mine" | "starred" | "closed";
+
+function parseView(raw: string | null): ViewFilter {
+  if (raw === "mine" || raw === "starred" || raw === "closed") return raw;
+  return "open";
+}
+
+const THREAD_COLS =
+  "id, phone_number, player_id, match_ambiguous, last_message_at, last_message_preview, created_at, assigned_to_user_id, assigned_at, channel, status, closed_at, closed_by_user_id";
 
 type ThreadRow = {
   id: string;
@@ -44,6 +56,9 @@ type ThreadRow = {
   assigned_to_user_id: string | null;
   assigned_at: string | null;
   channel: "sms" | "whatsapp";
+  status: "open" | "closed";
+  closed_at: string | null;
+  closed_by_user_id: string | null;
 };
 
 type PlayerRow = {
@@ -66,20 +81,61 @@ export async function GET(req: Request) {
   }
   const { supabase, appUserId: viewerId } = auth;
 
-  const threadsRes = await supabase
-    .from("crm_threads")
-    .select(
-      "id, phone_number, player_id, match_ambiguous, last_message_at, last_message_preview, created_at, assigned_to_user_id, assigned_at, channel",
-    )
-    .order("last_message_at", { ascending: false })
-    .limit(LIMIT);
-  if (threadsRes.error) {
-    console.error("[crm:threads.list] db error", threadsRes.error);
-    return Response.json({ error: "DB error" }, { status: 500 });
-  }
-  const threads = (threadsRes.data ?? []) as ThreadRow[];
+  const url = new URL(req.url);
+  const view = parseView(url.searchParams.get("view"));
 
-  // Batch-fetch players in one IN() query rather than per-thread.
+  // The viewer's full star set (all threads, any status). Used for the
+  // starred VIEW query, the per-row is_follow_up flag, and the starred
+  // COUNT. Isolated: any failure leaves the set empty so the inbox
+  // still loads with is_follow_up=false everywhere.
+  const starredThreadIds = new Set<string>();
+  if (viewerId) {
+    try {
+      const fr = await supabase
+        .from("crm_thread_follow_ups")
+        .select("thread_id")
+        .eq("user_id", viewerId);
+      if (fr.error) {
+        console.error("[crm:threads.list] follow-up lookup error", fr.error);
+      } else {
+        for (const r of (fr.data ?? []) as { thread_id: string }[]) {
+          starredThreadIds.add(r.thread_id);
+        }
+      }
+    } catch (e) {
+      console.error("[crm:threads.list] follow-up lookup threw", e);
+    }
+  }
+
+  // ---------------- active-view list query ----------------
+  let threads: ThreadRow[] = [];
+  const emptyView =
+    (view === "mine" && !viewerId) ||
+    (view === "starred" && (!viewerId || starredThreadIds.size === 0));
+
+  if (!emptyView) {
+    let q = supabase.from("crm_threads").select(THREAD_COLS);
+    if (view === "open") {
+      q = q.eq("status", "open");
+    } else if (view === "closed") {
+      q = q.eq("status", "closed");
+    } else if (view === "mine") {
+      q = q.eq("status", "open").eq("assigned_to_user_id", viewerId!);
+    } else {
+      // starred — any status, restricted to the viewer's star set.
+      q = q.in("id", Array.from(starredThreadIds));
+    }
+    const listRes = await q
+      .order("last_message_at", { ascending: false })
+      .limit(LIST_LIMIT);
+    if (listRes.error) {
+      console.error("[crm:threads.list] db error", listRes.error);
+      return Response.json({ error: "DB error" }, { status: 500 });
+    }
+    threads = (listRes.data ?? []) as ThreadRow[];
+  }
+
+  // Batch-fetch players for the visible list.
   const playerIds = Array.from(
     new Set(
       threads
@@ -87,7 +143,6 @@ export async function GET(req: Request) {
         .filter((x): x is number => typeof x === "number"),
     ),
   );
-
   let playersById = new Map<number, PlayerRow>();
   if (playerIds.length > 0) {
     const playersRes = await supabase
@@ -103,7 +158,7 @@ export async function GET(req: Request) {
     }
   }
 
-  // Same batch trick for assignees.
+  // Batch-fetch assignees for the visible list.
   const assigneeIds = Array.from(
     new Set(
       threads
@@ -111,7 +166,6 @@ export async function GET(req: Request) {
         .filter((x): x is string => typeof x === "string"),
     ),
   );
-
   let assigneesById = new Map<string, AssigneeRow>();
   if (assigneeIds.length > 0) {
     const assigneesRes = await supabase
@@ -130,12 +184,9 @@ export async function GET(req: Request) {
     }
   }
 
-  // Latest-message direction per thread. PostgREST has no native
-  // "DISTINCT ON" so we issue one bounded query per thread in
-  // parallel rather than pulling the full message history. At 50
-  // threads this is one round of cheap .limit(1) queries; switch to
-  // a view or DB-maintained denormalized column if this ever shows
-  // up in slow logs.
+  // Latest-message direction per visible thread. One bounded .limit(1)
+  // query per thread (capped at LIST_LIMIT). Switch to a view or a
+  // denormalized column if this shows up in slow logs.
   const directionResults = await Promise.all(
     threads.map(async (t) => {
       const r = await supabase
@@ -152,34 +203,11 @@ export async function GET(req: Request) {
     directionResults,
   );
 
-  // ---------------- Read state (assignment-aware) ----------------
-  // For each thread in the result set, compute is_unread for the
-  // viewer:
-  //
-  //   thread.assigned_to_user_id IS NULL → effective_last_read_at
-  //                                         = MAX(reads.last_read_at)
-  //                                           across all admins
-  //   thread.assigned_to_user_id  = viewer
-  //                                       → effective_last_read_at
-  //                                         = the assignee's row
-  //   thread.assigned_to_user_id  != viewer
-  //                                       → is_unread = false
-  //                                         (out of responsibility;
-  //                                         non-assignees never see
-  //                                         a dot for assigned
-  //                                         threads)
-  //
-  //   is_unread = (effective IS NULL OR last_message_at > effective)
-  //               AND last_message_preview IS NOT NULL
-  //
-  // Cron path (viewerId === null) gets is_unread = false on every
-  // row — no human viewer, no dot to show.
+  // ---------------- read state (assignment-aware) ----------------
   const threadIds = threads.map((t) => t.id);
-  let readsByThreadAll = new Map<string, string>(); // thread_id → MAX(last_read_at)
-  let readsForViewer = new Map<string, string>(); // thread_id → viewer's last_read_at
+  const readsByThreadAll = new Map<string, string>(); // thread_id → MAX(last_read_at)
+  const readsForViewer = new Map<string, string>(); // thread_id → viewer's last_read_at
   if (viewerId && threadIds.length > 0) {
-    // Pull all read rows for the visible thread set. Cap is 50
-    // threads × N admins (~few hundred rows at current volume).
     const readsRes = await supabase
       .from("crm_thread_reads")
       .select("thread_id, user_id, last_read_at")
@@ -203,49 +231,9 @@ export async function GET(req: Request) {
     }
   }
 
-  // --------------- Follow-up state (per-viewer star) ---------------
-  // Presence of a crm_thread_follow_ups row for the viewer ⇒ starred.
-  // DEFENSIVE: any failure here leaves the set empty, so every thread
-  // reports is_follow_up=false. The inbox must never break because the
-  // follow-up table is slow/unavailable — same isolation discipline as
-  // the unread badge.
-  const followUpSet = new Set<string>();
-  if (viewerId && threadIds.length > 0) {
-    try {
-      const followRes = await supabase
-        .from("crm_thread_follow_ups")
-        .select("thread_id")
-        .eq("user_id", viewerId)
-        .in("thread_id", threadIds);
-      if (followRes.error) {
-        console.error(
-          "[crm:threads.list] follow-up lookup error",
-          followRes.error,
-        );
-      } else {
-        for (const r of (followRes.data ?? []) as { thread_id: string }[]) {
-          followUpSet.add(r.thread_id);
-        }
-      }
-    } catch (e) {
-      // Fully isolated: a query error OR a thrown exception leaves the
-      // set empty and the thread list loads normally with
-      // is_follow_up=false everywhere — the inbox never breaks.
-      console.error("[crm:threads.list] follow-up lookup threw", e);
-    }
-  }
-
   function computeUnread(t: ThreadRow): boolean {
-    // Cron / no viewer → no human-facing dot to show.
     if (!viewerId) return false;
-    // No message preview → empty inbox, no dot.
     if (!t.last_message_preview) return false;
-    // Outbound-most-recent messages never produce a dot. The act of
-    // sending implies the admin saw the prior inbound; without this
-    // short-circuit, a small clock-skew gap between mark-read (fired
-    // on thread select) and the outbound send produced false-
-    // positive dots on threads the admin had literally just replied
-    // to from their own client.
     if (directionByThreadId.get(t.id) !== "inbound") return false;
     let effective: string | null;
     if (t.assigned_to_user_id == null) {
@@ -253,7 +241,6 @@ export async function GET(req: Request) {
     } else if (t.assigned_to_user_id === viewerId) {
       effective = readsForViewer.get(t.id) ?? null;
     } else {
-      // Assigned to someone else → never unread for this viewer.
       return false;
     }
     if (effective == null) return true;
@@ -269,8 +256,90 @@ export async function GET(req: Request) {
         ? assigneesById.get(t.assigned_to_user_id) ?? null
         : null,
     is_unread: computeUnread(t),
-    is_follow_up: viewerId ? followUpSet.has(t.id) : false,
+    is_follow_up: viewerId ? starredThreadIds.has(t.id) : false,
   }));
 
-  return Response.json({ threads: out }, { status: 200 });
+  // ---------------- counts + city index (all threads) ----------------
+  // A lightweight projection of every thread drives the chip counts.
+  // Paginated so it stays correct as closed threads accrue past 1000.
+  const indexRows: {
+    id: string;
+    status: string | null;
+    assigned_to_user_id: string | null;
+    player_id: number | null;
+  }[] = [];
+  {
+    let from = 0;
+    // Cap total scan at a sane ceiling to bound worst case.
+    while (from < 20000) {
+      const r = await supabase
+        .from("crm_threads")
+        .select("id, status, assigned_to_user_id, player_id")
+        .order("id", { ascending: true })
+        .range(from, from + INDEX_PAGE - 1);
+      if (r.error) {
+        console.error("[crm:threads.list] index scan error", r.error);
+        break;
+      }
+      const rows = (r.data ?? []) as typeof indexRows;
+      indexRows.push(...rows);
+      if (rows.length < INDEX_PAGE) break;
+      from += INDEX_PAGE;
+    }
+  }
+
+  // Player cities for the index (chunked IN queries).
+  const idxPlayerIds = Array.from(
+    new Set(
+      indexRows
+        .map((r) => r.player_id)
+        .filter((x): x is number => typeof x === "number"),
+    ),
+  );
+  const cityByPlayer = new Map<number, string | null>();
+  for (let i = 0; i < idxPlayerIds.length; i += 1000) {
+    const chunk = idxPlayerIds.slice(i, i + 1000);
+    const cr = await supabase
+      .from("mdapi_users")
+      .select("id, preferable_city_normalized")
+      .in("id", chunk);
+    if (cr.error) {
+      console.error("[crm:threads.list] index city lookup error", cr.error);
+      continue;
+    }
+    for (const p of (cr.data ?? []) as {
+      id: number;
+      preferable_city_normalized: string | null;
+    }[]) {
+      cityByPlayer.set(p.id, p.preferable_city_normalized);
+    }
+  }
+
+  function cityCodeFor(playerId: number | null): string {
+    if (playerId == null) return UNKNOWN_CITY;
+    const c = cityByPlayer.get(playerId);
+    return c && c.length > 0 ? c : UNKNOWN_CITY;
+  }
+
+  const index = indexRows.map((r) => {
+    const status = (r.status ?? "open") as "open" | "closed";
+    return {
+      city: cityCodeFor(r.player_id),
+      status,
+      mine:
+        status === "open" &&
+        !!viewerId &&
+        r.assigned_to_user_id === viewerId,
+      starred: starredThreadIds.has(r.id),
+    };
+  });
+
+  const counts = {
+    open: index.filter((r) => r.status === "open").length,
+    mine: index.filter((r) => r.mine).length,
+    starred: index.filter((r) => r.starred).length,
+    closed: index.filter((r) => r.status === "closed").length,
+  };
+
+  return Response.json({ threads: out, counts, index }, { status: 200 });
 }

@@ -42,7 +42,7 @@ export async function GET(req: Request, ctx: RouteCtx) {
   const threadRes = await supabase
     .from("crm_threads")
     .select(
-      "id, phone_number, player_id, match_ambiguous, last_message_at, last_message_preview, created_at, assigned_to_user_id, assigned_at, channel",
+      "id, phone_number, player_id, match_ambiguous, last_message_at, last_message_preview, created_at, assigned_to_user_id, assigned_at, channel, status, closed_at, closed_by_user_id",
     )
     .eq("id", threadId)
     .maybeSingle();

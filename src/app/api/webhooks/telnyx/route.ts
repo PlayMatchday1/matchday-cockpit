@@ -30,6 +30,7 @@ import { TelnyxWebhook, TelnyxWebhookVerificationError } from "telnyx";
 import { createClient } from "@supabase/supabase-js";
 import { normalizePhone, toNationalDigits } from "@/lib/phone";
 import { notifyInboundChatMessage } from "@/lib/crmPushNotify";
+import { writeThreadStatusLog } from "@/lib/crmThreadStatus";
 
 export const runtime = "nodejs";
 export const maxDuration = 10;
@@ -179,11 +180,13 @@ export async function POST(req: Request) {
   // (e.g. a temporary mdapi_users sync gap).
   const existing = await sb
     .from("crm_threads")
-    .select("id, player_id, match_ambiguous")
+    .select("id, player_id, match_ambiguous, status")
     .eq("phone_number", phone)
+    .eq("channel", "sms")
     .maybeSingle();
 
   let threadId: string;
+  let didAutoReopen = false;
   if (existing.error && existing.error.code !== "PGRST116") {
     console.error("[crm:webhook] thread lookup failed", existing.error);
     return Response.json({ error: "DB error" }, { status: 500 });
@@ -205,10 +208,26 @@ export async function POST(req: Request) {
     if (ambiguous && !existing.data.match_ambiguous) {
       patch.match_ambiguous = true;
     }
+    // Auto-reopen: a customer replying on a closed thread pulls it
+    // back into the Open inbox so the reply is never lost in the
+    // closed archive. Star state is independent and untouched.
+    if (((existing.data.status as string | null) ?? "open") === "closed") {
+      patch.status = "open";
+      patch.closed_at = null;
+      patch.closed_by_user_id = null;
+      didAutoReopen = true;
+    }
     const upd = await sb.from("crm_threads").update(patch).eq("id", threadId);
     if (upd.error) {
       console.error("[crm:webhook] thread update failed", upd.error);
       return Response.json({ error: "DB error" }, { status: 500 });
+    }
+    if (didAutoReopen) {
+      await writeThreadStatusLog(sb, {
+        threadId,
+        action: "auto_reopen",
+        performedByUserId: null,
+      });
     }
   } else {
     const ins = await sb
