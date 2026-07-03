@@ -9,6 +9,7 @@ import PagePermissionGuard from "@/components/PagePermissionGuard";
 import QuarterSelector from "@/components/QuarterSelector";
 import QuickStats from "@/components/QuickStats";
 import TopicsView from "@/components/TopicsView";
+import KanbanBoard from "./KanbanBoard";
 import { ClubhouseQuarterProvider } from "@/lib/clubhouseQuarter";
 import {
   getAvailableQuarters,
@@ -28,10 +29,18 @@ export default function ClubhousePage() {
   );
 }
 
+type ClubhouseTab = "goals" | "topics" | "field-pipeline" | "tech-roadmap";
+
 function ClubhouseContent() {
   const router = useRouter();
   const sp = useSearchParams();
-  const tab = sp?.get("tab") === "topics" ? "topics" : "goals";
+  const rawTab = sp?.get("tab");
+  const tab: ClubhouseTab =
+    rawTab === "topics" ||
+    rawTab === "field-pipeline" ||
+    rawTab === "tech-roadmap"
+      ? rawTab
+      : "goals";
 
   // Quarter selector + URL state. Same pattern as /admin/finance:
   // ?q=<key> drives the active quarter; selecting the default
@@ -77,41 +86,48 @@ function ClubhouseContent() {
       )}
 
       <Tabs active={tab} />
-      {tab === "goals" ? (
+      {tab === "goals" && (
         <>
           <QuickStats />
           <HomeGoalsView />
         </>
-      ) : (
-        <TopicsView />
       )}
+      {tab === "topics" && <TopicsView />}
+      {tab === "field-pipeline" && <KanbanBoard boardType="field_pipeline" />}
+      {tab === "tech-roadmap" && <KanbanBoard boardType="tech_roadmap" />}
     </ClubhouseQuarterProvider>
   );
 }
 
-function Tabs({ active }: { active: "goals" | "topics" }) {
+const TABS: { key: ClubhouseTab; label: string }[] = [
+  { key: "goals", label: "Goals" },
+  { key: "topics", label: "Topics" },
+  { key: "field-pipeline", label: "Field Pipeline" },
+  { key: "tech-roadmap", label: "Tech Roadmap" },
+];
+
+function Tabs({ active }: { active: ClubhouseTab }) {
   const base =
     "inline-flex items-center rounded-full px-4 py-1.5 text-sm font-bold tracking-tight transition";
   const activeCls = "bg-mint text-deep-green";
   const inactiveCls = "text-deep-green/70 hover:bg-cream-soft";
   return (
-    <nav className="mb-8 flex gap-2" role="tablist" aria-label="Clubhouse tabs">
-      <Link
-        href="/clubhouse?tab=goals"
-        className={`${base} ${active === "goals" ? activeCls : inactiveCls}`}
-        role="tab"
-        aria-selected={active === "goals"}
-      >
-        Goals
-      </Link>
-      <Link
-        href="/clubhouse?tab=topics"
-        className={`${base} ${active === "topics" ? activeCls : inactiveCls}`}
-        role="tab"
-        aria-selected={active === "topics"}
-      >
-        Topics
-      </Link>
+    <nav
+      className="mb-8 flex flex-wrap gap-2"
+      role="tablist"
+      aria-label="Clubhouse tabs"
+    >
+      {TABS.map((t) => (
+        <Link
+          key={t.key}
+          href={`/clubhouse?tab=${t.key}`}
+          className={`${base} ${active === t.key ? activeCls : inactiveCls}`}
+          role="tab"
+          aria-selected={active === t.key}
+        >
+          {t.label}
+        </Link>
+      ))}
     </nav>
   );
 }
