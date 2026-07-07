@@ -923,8 +923,11 @@ type PeriodCalcConfig = {
 //                    based so it reconciles with managerPayCompute.ts —
 //                    the manager is paid on capacity (the tournament
 //                    threshold, 25), not on who showed up.
-//     partnerShare = max(0, matchRevenue − managerPay)   ($0 floor)
-//   qualifying = Σ matchRevenue;  owed = Σ partnerShare.
+//   qualifying = Σ matchRevenue;  owed = max(0, qualifying − Σ managerPay).
+//   The $0 floor is applied ONCE at the monthly total, not per match: a
+//   match whose own revenue is below its manager rate still contributes
+//   its full manager-pay deduction to the month. The floor only keeps a
+//   whole underwater month (like a low-turnout May) from going negative.
 //   Private Rental does NOT participate (it has no match/capacity, so
 //   the manager-pay subtraction is undefined for it). Crossbar has none.
 function periodOwed(
@@ -961,13 +964,18 @@ function periodOwed(
       byMatch.set(key, g);
     }
     let qualifyingRevenue = 0;
-    let owed = 0;
+    let totalManagerPay = 0;
     for (const g of byMatch.values()) {
       qualifyingRevenue += g.dpRev;
       const managerPay =
         g.capacity != null && g.capacity >= threshold ? high : base;
-      owed += Math.max(0, g.dpRev - managerPay);
+      totalManagerPay += managerPay;
     }
+    // Floor once at the monthly total, not per match. A match whose own
+    // DPP revenue is below its manager rate still contributes its full
+    // manager-pay deduction to the month; the $0 floor exists only to stop
+    // the whole period from going negative (e.g. an all-underwater month).
+    const owed = Math.max(0, qualifyingRevenue - totalManagerPay);
     // Round to cents once at the end.
     return {
       qualifyingRevenue,
