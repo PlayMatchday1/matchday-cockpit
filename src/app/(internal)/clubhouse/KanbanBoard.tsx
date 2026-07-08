@@ -389,7 +389,14 @@ function Column({
         {grouped
           ? cityGroups.map((g) => {
               const key = `${stage.id}::${g.city}`;
-              const open = expanded[key] ?? false;
+              // Default to EXPANDED so every card (and its to-do box) is
+              // visible without a click. This is a shared team tool, not
+              // George's single-user prototype where collapsed-by-default
+              // was fine — hiding cards by default hurts visibility and
+              // defeats the "Open to-dos" summary counter. Users can still
+              // collapse a city; that explicit choice is recorded in
+              // `expanded` and wins over this default.
+              const open = expanded[key] ?? true;
               return (
                 <section
                   key={key}
