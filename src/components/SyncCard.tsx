@@ -11,6 +11,7 @@
 
 import { useEffect, useState } from "react";
 import { supabase } from "@/lib/supabase";
+import { isSyncAdvisory } from "@/lib/syncAdvisory";
 
 type Source =
   | "mdapi-reviews"
@@ -234,6 +235,19 @@ function FreshnessLine({
   }
   const ago = timeAgo(row.completed_at);
   if (row.error_message) {
+    // An "ADVISORY (sync OK)" message means the run completed but with a
+    // known limitation (e.g. mdapi-users createdAt-incremental mode).
+    // Render amber with the full note, not a red failure.
+    if (isSyncAdvisory(row.error_message)) {
+      return (
+        <span title={row.completed_at} className="text-deep-green/70">
+          <span className="mr-1 rounded bg-gold-soft px-1.5 py-0.5 font-semibold text-deep-green ring-1 ring-inset ring-gold/50">
+            Advisory
+          </span>
+          Last sync completed with advisory · {ago} · {row.error_message}
+        </span>
+      );
+    }
     return (
       <span title={row.completed_at} className="text-coral">
         Last sync FAILED · {ago} · {row.error_message}

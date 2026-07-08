@@ -2,6 +2,7 @@
 
 import { useEffect, useState } from "react";
 import { supabase } from "@/lib/supabase";
+import { isSyncAdvisory } from "@/lib/syncAdvisory";
 
 // Stripe data section. Two blocks:
 //   1. Sync from Stripe API (button + status)
@@ -264,8 +265,14 @@ type SyncLogRow = {
   error_message: string | null;
 };
 
-function syncStatus(row: SyncLogRow): "ok" | "error" | "running" {
-  if (row.error_message) return "error";
+function syncStatus(
+  row: SyncLogRow,
+): "ok" | "error" | "advisory" | "running" {
+  // An "ADVISORY (sync OK)" message rides in error_message but the run
+  // succeeded — classify it as advisory (amber), not error (red).
+  if (row.error_message) {
+    return isSyncAdvisory(row.error_message) ? "advisory" : "error";
+  }
   if (!row.completed_at) return "running";
   return "ok";
 }
@@ -364,24 +371,29 @@ function RecentSyncsCard() {
             ) : (
               rows?.map((r) => {
                 const status = syncStatus(r);
-                const isError = status === "error";
+                // Both error and advisory rows carry a message worth
+                // reading, so both are expandable.
+                const isExpandable =
+                  status === "error" || status === "advisory";
                 const isOpen = openId === r.id;
                 const tone =
                   status === "ok"
                     ? "text-mint-hover"
                     : status === "error"
                       ? "text-coral"
-                      : "text-deep-green/55";
+                      : status === "advisory"
+                        ? "text-deep-green/70"
+                        : "text-deep-green/55";
                 return (
                   <FragmentRow
                     key={r.id}
                     r={r}
-                    isError={isError}
+                    isExpandable={isExpandable}
                     isOpen={isOpen}
                     tone={tone}
                     status={status}
                     onToggle={() =>
-                      isError ? setOpenId(isOpen ? null : r.id) : null
+                      isExpandable ? setOpenId(isOpen ? null : r.id) : null
                     }
                   />
                 );
@@ -396,23 +408,27 @@ function RecentSyncsCard() {
 
 function FragmentRow({
   r,
-  isError,
+  isExpandable,
   isOpen,
   tone,
   status,
   onToggle,
 }: {
   r: SyncLogRow;
-  isError: boolean;
+  isExpandable: boolean;
   isOpen: boolean;
   tone: string;
-  status: "ok" | "error" | "running";
+  status: "ok" | "error" | "advisory" | "running";
   onToggle: () => void;
 }) {
+  const isAdvisory = status === "advisory";
+  const hoverTint = isAdvisory
+    ? "hover:bg-gold-soft/40"
+    : "hover:bg-coral-soft/30";
   return (
     <>
       <tr
-        className={`border-t border-cream-line/60 ${isError ? "cursor-pointer hover:bg-coral-soft/30" : ""}`}
+        className={`border-t border-cream-line/60 ${isExpandable ? `cursor-pointer ${hoverTint}` : ""}`}
         onClick={onToggle}
       >
         <td className="px-3 py-2 font-mono text-[11px] tabular-nums text-deep-green/75">
@@ -421,18 +437,29 @@ function FragmentRow({
         <td className="px-3 py-2 text-right font-mono tabular-nums text-deep-green">
           {r.rows_imported == null ? "—" : r.rows_imported.toLocaleString()}
         </td>
-        <td className={`px-3 py-2 font-bold ${tone}`}>
-          {status === "ok"
-            ? "ok"
-            : status === "error"
-              ? `error${isOpen ? " ▾" : " ▸"}`
-              : "running…"}
+        <td className="px-3 py-2 font-bold">
+          {status === "advisory" ? (
+            <span className="inline-flex items-center gap-1 rounded bg-gold-soft px-1.5 py-0.5 text-deep-green ring-1 ring-inset ring-gold/50">
+              advisory{isOpen ? " ▾" : " ▸"}
+            </span>
+          ) : (
+            <span className={tone}>
+              {status === "ok"
+                ? "ok"
+                : status === "error"
+                  ? `error${isOpen ? " ▾" : " ▸"}`
+                  : "running…"}
+            </span>
+          )}
         </td>
         <td className="px-3 py-2 text-deep-green/65">{r.triggered_by}</td>
       </tr>
-      {isError && isOpen && r.error_message && (
-        <tr className="bg-coral-soft/30">
-          <td colSpan={4} className="px-3 py-2 text-[11px] text-coral">
+      {isExpandable && isOpen && r.error_message && (
+        <tr className={isAdvisory ? "bg-gold-soft/40" : "bg-coral-soft/30"}>
+          <td
+            colSpan={4}
+            className={`px-3 py-2 text-[11px] ${isAdvisory ? "text-deep-green/80" : "text-coral"}`}
+          >
             <pre className="whitespace-pre-wrap break-words font-mono">
               {r.error_message}
             </pre>

@@ -108,7 +108,7 @@ export default function DataPage() {
         />
         <SyncCard
           title="Sync Registered Users"
-          description="Pulls all registered users from MatchDay API into mdapi_users (~23,711 rows). Full re-sync each run — paginates /admin/players at limit=250."
+          description="Pulls registered users from MatchDay API into mdapi_users (~23,711 rows). Incremental by default (new signups via createdAt watermark); the first run with no watermark does a full re-sync. /admin/players exposes no updatedAt, so edits to existing rows aren't picked up between full syncs."
           source="mdapi-users"
           endpoint="/api/sync/users"
           estimatedDuration="~30-60 seconds"
