@@ -33,7 +33,6 @@ import CancelPatterns from "@/components/CancelPatterns";
 import CitiesMasterScheduleLens from "@/components/CitiesMasterScheduleLens";
 import FieldRankingTable from "@/components/FieldRankingTable";
 import CollapsibleSection from "@/components/CollapsibleSection";
-import FinanceActions from "@/components/FinanceActions";
 import MatchPnL from "@/components/MatchPnL";
 import SlateDppPriceHistory from "@/components/SlateDppPriceHistory";
 import SlateMatchPnLSection from "@/components/SlateMatchPnLSection";
@@ -69,16 +68,6 @@ export const BILLING_SCHEDULE_PREFILL_VENUE_KEY = "billing-schedule:prefillVenue
 const PRIMARY_TAB_IDS: ReadonlySet<FinanceTabId> = new Set<FinanceTabId>([
   "cities",
   "cash-flow",
-  "field-ranking",
-  "match-pnl",
-  "slate-review",
-]);
-
-// Tabs that get the shared FinanceActions section pinned at the top.
-// Intentionally narrower than "every non-cash-flow tab" — Configure
-// sub-tabs, Check-Ins, and Partner Dashboards don't surface Actions.
-const ACTIONS_TABS: ReadonlySet<FinanceTabId> = new Set<FinanceTabId>([
-  "cities",
   "field-ranking",
   "match-pnl",
   "slate-review",
@@ -137,13 +126,8 @@ function FinanceLandingContent() {
   const [visited, setVisited] = useState<Set<FinanceTabId>>(
     () => new Set([getInitialTab()]),
   );
-  // Slate Review's selected city lives at this level so FinanceActions
-  // can mirror it ("Showing: Atlanta + Company-wide"). Lifted out of
-  // SlateReviewTabContent to avoid a parallel pill row in Actions
-  // competing with the Slate Review page pills — a single source of
-  // truth for "the city the operator is looking at" feeds both
-  // surfaces. Slate Review's other local state (weekStart) stays
-  // inside SlateReviewTabContent; only city is cross-cutting.
+  // Slate Review's selected city, lifted to page level. weekStart
+  // stays local to SlateReviewTabContent; only city is cross-cutting.
   const [slateCity, setSlateCity] = useState<City>("Austin");
 
   function selectTab(t: FinanceTabId) {
@@ -278,26 +262,6 @@ function FinanceLandingContent() {
       )}
 
       <FinanceTabNav value={activeTab} onChange={selectTab} />
-
-      {/* Shared Actions section — pinned just below the tab nav on
-          Cities / Field Ranking / Match P&L / Slate Review. Mounted
-          as a direct child of the page container (rather than wrapped
-          in a short flex/margin div) so the sticky bar inside it can
-          persist while scrolling through the tab content beneath.
-          State (expanded, draft, showAll) is preserved across
-          switches within the 4 ACTIONS_TABS; switching to a non-
-          Actions tab unmounts and resets, which is fine.
-
-          pageCity is non-null only on Slate Review (the only tab
-          with a page-level city selector). When set, the Actions
-          list filters to {pageCity + Company-wide} by default, with
-          a "Show all" escape hatch in the section header. On Cities
-          / Field Ranking / Match P&L the list shows every action. */}
-      {ACTIONS_TABS.has(activeTab) && (
-        <FinanceActions
-          pageCity={activeTab === "slate-review" ? slateCity : null}
-        />
-      )}
 
       {secondary === "configure" && (
         <FinanceConfigureSubNav
@@ -495,8 +459,6 @@ function CitiesTabContent() {
 //   6. Cancellations   (CancelHeatmap with full-slate + recent-cancel row markers)
 //   7. Match P&L       (SlateMatchPnLSection scoped to selected city)
 // Defaults to Austin + current Monday. Local state; no URL persistence.
-// Action items used to live mid-page here; replaced by the shared
-// FinanceActions section that renders above every non-Cash-Flow tab.
 function SlateReviewTabContent({
   selectedCity,
   onSelectedCityChange,

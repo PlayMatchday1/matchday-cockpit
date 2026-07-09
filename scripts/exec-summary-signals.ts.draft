@@ -1,0 +1,399 @@
+// Pure client-side aggregation that builds the JSON context the Executive
+// Summary LLM call consumes. Uses the same primitives the city cards /
+// Cash Flow / Field Costs surfaces already use, so the summary stays in
+// sync with the dashboard.
+
+import type { FinanceData } from "./useFinanceData";
+import {
+  Q2_MONTHS,
+  cityMembershipRevenueFor,
+  cityOverheadFor,
+  getCurrentQ2Month,
+  netPLFor,
+  netRevenueFor,
+  type Q2Month,
+} from "./financeStats";
+import { canonicalVenueCost } from "./financeCosts";
+import { groupVenues, type VenueGroup } from "./venueGroups";
+
+const CITIES = [
+  "Austin",
+  "Houston",
+  "Dallas",
+  "San Antonio",
+  "Atlanta",
+  "St. Louis",
+  "OKC",
+  "El Paso",
+] as const;
+
+const MONTH_DAYS: Record<Q2Month, number> = {
+  "Apr 2026": 30,
+  "May 2026": 31,
+  "Jun 2026": 30,
+};
+
+const QUARTER_DAYS_REMAINING_FROM_DAY: (now: Date) => number = (now) => {
+  // Q2 = Apr/May/Jun. Days from `now` to Jun 30 inclusive.
+  const end = new Date(2026, 5, 30); // 0-indexed month: 5 = Jun
+  const ms = end.getTime() - new Date(now.getFullYear(), now.getMonth(), now.getDate()).getTime();
+  return Math.max(0, Math.round(ms / 86_400_000) + 1);
+};
+
+function getMonday(d: Date): Date {
+  const day = d.getDay();
+  const diff = (day === 0 ? -6 : 1) - day;
+  const out = new Date(d.getFullYear(), d.getMonth(), d.getDate() + diff);
+  return out;
+}
+
+function isoDate(d: Date): string {
+  return `${d.getFullYear()}-${String(d.getMonth() + 1).padStart(2, "0")}-${String(d.getDate()).padStart(2, "0")}`;
+}
+
+function lastNWeekStarts(now: Date, n: number): Date[] {
+  const cur = getMonday(now);
+  const out: Date[] = [];
+  for (let i = n - 1; i >= 0; i--) {
+    out.push(new Date(cur.getFullYear(), cur.getMonth(), cur.getDate() - 7 * i));
+  }
+  return out;
+}
+
+function venueGroupNames(g: VenueGroup): Set<string> {
+  return new Set(g.legs.map((l) => l.venue_name));
+}
+
+type WeeklyBucket = { weekStart: string; dppRev: number };
+
+function weeklyDppForGroup(
+  data: FinanceData,
+  group: VenueGroup,
+  weekStarts: Date[],
+): WeeklyBucket[] {
+  const names = venueGroupNames(group);
+  const buckets = weekStarts.map((ws) => ({ weekStart: isoDate(ws), dppRev: 0 }));
+  for (const r of data.revenue) {
+    if (r.type !== "DPP" || !r.venue || !names.has(r.venue)) continue;
+    if (r.city !== group.city) continue;
+    const d = new Date(r.date + "T00:00:00");
+    if (Number.isNaN(d.getTime())) continue;
+    for (let i = 0; i < weekStarts.length; i++) {
+      const ws = weekStarts[i];
+      const we = new Date(ws.getFullYear(), ws.getMonth(), ws.getDate() + 7);
+      if (d >= ws && d < we) {
+        buckets[i].dppRev += r.net;
+        break;
+      }
+    }
+  }
+  return buckets;
+}
+
+function trailingGrowthStreak(values: number[]): number {
+  let streak = 0;
+  for (let i = values.length - 1; i > 0; i--) {
+    if (values[i] > values[i - 1] && values[i] > 0) streak++;
+    else break;
+  }
+  return streak;
+}
+
+function trailingDeclineStreak(values: number[]): number {
+  let streak = 0;
+  for (let i = values.length - 1; i > 0; i--) {
+    if (values[i] < values[i - 1] && values[i - 1] > 0) streak++;
+    else break;
+  }
+  return streak;
+}
+
+function isAccelerating(values: number[]): boolean {
+  if (values.length < 5) return false;
+  const last = values[values.length - 1];
+  const prior4 = values.slice(values.length - 5, values.length - 1);
+  const avg = prior4.reduce((s, n) => s + n, 0) / prior4.length;
+  return avg > 0 && last > avg * 1.25;
+}
+
+export type ExecSummarySignals = {
+  today: string;
+  currentMonth: Q2Month | null;
+  daysElapsedInMonth: number;
+  daysRemainingInMonth: number;
+  daysRemainingInQuarter: number;
+  cityPL: Array<{
+    city: string;
+    dppRev: number;
+    membershipRev: number;
+    strikeRev: number;
+    privateRentalRev: number;
+    totalFieldCost: number;
+    overheadTotal: number;
+    netPL: number;
+    margin: number;
+  }>;
+  venuePerformance: Array<{
+    city: string;
+    venue: string;
+    dppRev: number;
+    cost: number;
+    net: number;
+    matchCount: number;
+    isFlagship: boolean;
+    isStruggling: boolean;
+  }>;
+  weeklyTrends: Array<{
+    city: string;
+    venue: string;
+    weeks: WeeklyBucket[];
+    growthStreak: number;
+    declineStreak: number;
+    accelerating: boolean;
+  }>;
+  membershipHealth: Array<{
+    city: string;
+    activeMembers: number;
+    netNewThisMonth: number;
+    thinCoverage: boolean;
+  }>;
+  projections: {
+    currentMonth: Q2Month | null;
+    mtdGrossRevenue: number;
+    projectedMonthEndGross: number;
+    q2NetPLProjected: number;
+    citiesTrackingNetLossThisMonth: string[];
+  };
+  watchItems: string[];
+};
+
+export function buildExecSummarySignals(
+  data: FinanceData,
+  now: Date = new Date(),
+): ExecSummarySignals {
+  const currentMonth = getCurrentQ2Month(now);
+  const today = isoDate(now);
+  const daysElapsed = currentMonth ? now.getDate() : 0;
+  const daysInMonth = currentMonth ? MONTH_DAYS[currentMonth] : 0;
+  const daysRemainingInMonth = currentMonth ? Math.max(0, daysInMonth - daysElapsed) : 0;
+  const daysRemainingInQuarter = QUARTER_DAYS_REMAINING_FROM_DAY(now);
+
+  const groups = groupVenues(data.venues);
+
+  // CITY-LEVEL P&L for current month (mirrors CityPLCard logic).
+  const cityPL: ExecSummarySignals["cityPL"] = [];
+  if (currentMonth) {
+    for (const city of CITIES) {
+      const cityGroups = groups.filter((g) => g.city === city);
+      let dppRev = 0;
+      let strikeRev = 0;
+      let privateRentalRev = 0;
+      for (const r of data.revenue) {
+        if (r.city !== city || r.month !== currentMonth) continue;
+        if (r.type === "DPP") dppRev += r.net;
+        else if (r.type === "Strike") strikeRev += r.net;
+        else if (r.type === "Private Rental") privateRentalRev += r.net;
+      }
+      const membershipRev = cityMembershipRevenueFor(data, city, currentMonth);
+      let totalFieldCost = 0;
+      for (const g of cityGroups) {
+        for (const leg of g.legs) {
+          totalFieldCost += canonicalVenueCost(data, leg.id, currentMonth).amount;
+        }
+      }
+      const o = cityOverheadFor(data, city, currentMonth);
+      const grossRev = dppRev + strikeRev + privateRentalRev + membershipRev;
+      const netPL = grossRev - totalFieldCost - o.total;
+      const margin = grossRev > 0 ? netPL / grossRev : 0;
+      cityPL.push({
+        city,
+        dppRev: Math.round(dppRev),
+        membershipRev: Math.round(membershipRev),
+        strikeRev: Math.round(strikeRev),
+        privateRentalRev: Math.round(privateRentalRev),
+        totalFieldCost: Math.round(totalFieldCost),
+        overheadTotal: Math.round(o.total),
+        netPL: Math.round(netPL),
+        margin: Math.round(margin * 1000) / 10, // %, one decimal
+      });
+    }
+  }
+
+  // VENUE PERFORMANCE for current month.
+  const venuePerformance: ExecSummarySignals["venuePerformance"] = [];
+  if (currentMonth) {
+    for (const g of groups) {
+      const names = venueGroupNames(g);
+      let dppRev = 0;
+      for (const r of data.revenue) {
+        if (
+          r.type === "DPP" &&
+          r.city === g.city &&
+          r.month === currentMonth &&
+          r.venue &&
+          names.has(r.venue)
+        )
+          dppRev += r.net;
+      }
+      let cost = 0;
+      let matchCount = 0;
+      for (const leg of g.legs) {
+        const ci = canonicalVenueCost(data, leg.id, currentMonth);
+        cost += ci.amount;
+        matchCount += ci.matchCount;
+      }
+      if (dppRev === 0 && cost === 0 && matchCount === 0) continue;
+      venuePerformance.push({
+        city: g.city,
+        venue: g.displayName,
+        dppRev: Math.round(dppRev),
+        cost: Math.round(cost),
+        net: Math.round(dppRev - cost),
+        matchCount,
+        isFlagship: false,
+        isStruggling: dppRev - cost < -500,
+      });
+    }
+    // Mark top 5 by net as flagship (only positives).
+    const flagshipSet = new Set(
+      venuePerformance
+        .filter((v) => v.net > 0)
+        .sort((a, b) => b.net - a.net)
+        .slice(0, 5)
+        .map((v) => `${v.city}|${v.venue}`),
+    );
+    for (const v of venuePerformance) {
+      if (flagshipSet.has(`${v.city}|${v.venue}`)) v.isFlagship = true;
+    }
+    venuePerformance.sort((a, b) => b.net - a.net);
+  }
+
+  // WEEK-OVER-WEEK trends — last 6 weeks. Only emit groups with a notable
+  // streak (>= 3 growth, >= 3 decline, or accelerating) to keep the JSON
+  // tight and the LLM focused.
+  const weekStarts = lastNWeekStarts(now, 6);
+  const weeklyTrends: ExecSummarySignals["weeklyTrends"] = [];
+  for (const g of groups) {
+    const buckets = weeklyDppForGroup(data, g, weekStarts);
+    const values = buckets.map((b) => b.dppRev);
+    if (values.every((v) => v === 0)) continue;
+    const growth = trailingGrowthStreak(values);
+    const decline = trailingDeclineStreak(values);
+    const accelerating = isAccelerating(values);
+    if (growth >= 3 || decline >= 3 || accelerating) {
+      weeklyTrends.push({
+        city: g.city,
+        venue: g.displayName,
+        weeks: buckets.map((b) => ({
+          weekStart: b.weekStart,
+          dppRev: Math.round(b.dppRev),
+        })),
+        growthStreak: growth,
+        declineStreak: decline,
+        accelerating,
+      });
+    }
+  }
+
+  // MEMBERSHIP HEALTH per city, current-month MTD.
+  const membershipHealth: ExecSummarySignals["membershipHealth"] = [];
+  for (const city of CITIES) {
+    const cityMembers = data.members.filter(
+      (m) => m.city === city && m.status === "ACTIVE" && m.price_cents > 0,
+    );
+    const activeMembers = cityMembers.length;
+
+    let netNew = 0;
+    if (currentMonth) {
+      const monthIdx = ["Jan","Feb","Mar","Apr","May","Jun","Jul","Aug","Sep","Oct","Nov","Dec"].indexOf(
+        currentMonth.slice(0, 3),
+      );
+      const year = parseInt(currentMonth.slice(-4), 10);
+      const monthStart = new Date(year, monthIdx, 1);
+      const monthEnd = new Date(year, monthIdx + 1, 1);
+      let joins = 0;
+      let cancels = 0;
+      for (const m of data.members) {
+        if (m.city !== city) continue;
+        if (m.activation_date) {
+          const ad = new Date(m.activation_date + "T00:00:00");
+          if (ad >= monthStart && ad < monthEnd) joins++;
+        }
+        if (m.canceled_at) {
+          const cd = new Date(m.canceled_at);
+          if (cd >= monthStart && cd < monthEnd) cancels++;
+        }
+      }
+      netNew = joins - cancels;
+    }
+
+    membershipHealth.push({
+      city,
+      activeMembers,
+      netNewThisMonth: netNew,
+      thinCoverage: activeMembers < 10,
+    });
+  }
+
+  // PROJECTIONS.
+  let mtdGrossRev = 0;
+  let projectedMonthEndGross = 0;
+  if (currentMonth) {
+    mtdGrossRev = netRevenueFor(data, currentMonth, "mtd", now);
+    projectedMonthEndGross = netRevenueFor(data, currentMonth, "projection", now);
+  }
+  const q2NetPLProjected = Q2_MONTHS.reduce(
+    (s, m) => s + netPLFor(data, m, "projection", now),
+    0,
+  );
+  const citiesTrackingNetLossThisMonth = cityPL
+    .filter((c) => c.netPL < 0)
+    .map((c) => c.city);
+
+  // WATCH ITEMS — auto-derived flags.
+  const watchItems: string[] = [];
+  for (const v of venuePerformance) {
+    if (v.net < -500) {
+      watchItems.push(`evaluate ${v.venue} unit economics (net ${v.net} MTD)`);
+    }
+  }
+  for (const c of cityPL) {
+    if (c.netPL < -1000) {
+      watchItems.push(`${c.city} P&L intervention (net ${c.netPL} MTD)`);
+    }
+  }
+  for (const t of weeklyTrends) {
+    if (t.declineStreak >= 3) {
+      watchItems.push(
+        `${t.venue} trajectory at risk (${t.declineStreak} consecutive weeks of decline)`,
+      );
+    }
+  }
+  // Membership retention check uses prior-month active count if available;
+  // for now, just flag thin-coverage.
+  for (const m of membershipHealth) {
+    if (m.thinCoverage && m.activeMembers > 0) {
+      watchItems.push(`${m.city} member coverage thin (${m.activeMembers} active)`);
+    }
+  }
+
+  return {
+    today,
+    currentMonth,
+    daysElapsedInMonth: daysElapsed,
+    daysRemainingInMonth,
+    daysRemainingInQuarter,
+    cityPL,
+    venuePerformance,
+    weeklyTrends,
+    membershipHealth,
+    projections: {
+      currentMonth,
+      mtdGrossRevenue: Math.round(mtdGrossRev),
+      projectedMonthEndGross: Math.round(projectedMonthEndGross),
+      q2NetPLProjected: Math.round(q2NetPLProjected),
+      citiesTrackingNetLossThisMonth,
+    },
+    watchItems,
+  };
+}
