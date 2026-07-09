@@ -13,18 +13,18 @@ export type Manager = {
   amount: number; // monthly $
 };
 
-// 7 city managers, copied verbatim from the standalone HTML's
-// MANAGERS array. Mirror this when the form/Sheet manager universe
-// changes — the Sheet is read live but this list drives the calendar
-// rows, payment cards, and the one-card-per-manager grid.
+// 6 city managers. Mirror this when the form/Sheet manager universe
+// changes — the Sheet is read live for check-in submissions, but this
+// list drives the calendar rows, payment cards, and the one-card-per-
+// manager grid. Array order = calendar row order (top to bottom) and
+// the tie-break order within a shared pay day on the payment cards.
 export const MANAGERS: Manager[] = [
-  { name: "Yarra", city: "Houston", payDay: 5, amount: 500 },
-  { name: "Abraham", city: "San Antonio", payDay: 15, amount: 500 },
-  { name: "Gabe", city: "North Austin", payDay: 15, amount: 500 },
-  { name: "Willfried", city: "St Louis", payDay: 5, amount: 500 },
-  { name: "Anton", city: "El Paso", payDay: 11, amount: 500 },
-  { name: "Chris", city: "DFW", payDay: 15, amount: 800 },
+  { name: "Yarra", city: "Houston", payDay: 1, amount: 500 },
+  { name: "Garrett", city: "Austin", payDay: 1, amount: 500 },
   { name: "Rodrigo", city: "OKC", payDay: 1, amount: 500 },
+  { name: "Willfried", city: "St Louis", payDay: 1, amount: 500 },
+  { name: "Chris", city: "DFW", payDay: 15, amount: 800 },
+  { name: "Abraham", city: "San Antonio", payDay: 15, amount: 500 },
 ];
 
 export const CHECK_INS_SHEET_URL =
