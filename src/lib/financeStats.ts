@@ -1,4 +1,4 @@
-import type { FinanceData } from "./useFinanceData";
+import type { FinanceData, FinVenue } from "./useFinanceData";
 import type { MatchRow } from "./useMatchData";
 import type { JoinedMatchPlayerRow, LegacyMatchRegRow } from "./mdapiMatchesRead";
 import {
@@ -1893,9 +1893,35 @@ export function venueChargedMatchCountFor(
   );
 }
 
+// Per-leg per-match unit cost for the Per-Match normalized view. Single
+// source of truth for the three sites that used to inline this formula
+// (groupPerMatchCostFor, groupPerMatchCostRealizedFor, and
+// buildRankingRows' costPerMatchLegs subtitle) so the cost number and its
+// subtitle can't drift apart.
+//
+// Resolution order:
+//   1. The leg's own operator-set cost_per_match wins.
+//   2. Blank on a split-rate SECONDARY leg → the leg's own per_match_rate.
+//      A secondary leg exists precisely because its economics differ from
+//      the primary (ATH Katy Sunday $160 vs weekday $140), so borrowing the
+//      primary's cost_per_match would silently rebill the premium away at
+//      the primary's rate. Falling back to the leg's own billing rate keeps
+//      the split intact.
+//   3. Blank with no per_match_rate → primary's cost_per_match, then $0.
+//
+// For a single-leg group `leg === primary`, so this collapses to
+// (leg.cost_per_match ?? 0) — "blank = $0" per spec, unchanged.
+function legPerMatchUnitCost(leg: FinVenue, primary: FinVenue): number {
+  if (leg.cost_per_match != null) return leg.cost_per_match;
+  if (leg.id !== primary.id && leg.per_match_rate != null) {
+    return leg.per_match_rate;
+  }
+  return primary.cost_per_match ?? 0;
+}
+
 // Per-match-normalized cost for a venue group in a given month:
-//   Σ over legs of (leg.cost_per_match ?? primary.cost_per_match ?? 0)
-//   × venueMatchCountFor(leg.id, month)
+//   Σ over legs of legPerMatchUnitCost(leg, primary)
+//   × venueChargedMatchCountFor(leg.id, month)
 //
 // Independent of as-billed cost (which flows through canonicalVenueCost +
 // per_match_rate / overrides). cost_per_match is the operator-set per-match
@@ -1903,11 +1929,6 @@ export function venueChargedMatchCountFor(
 // lumps (monthly_flat / profit_share / quarterly permits) so a venue's
 // cost stays stable month-over-month across the period in which the
 // bill actually lands.
-//
-// Secondary-leg fallback to primary's value mirrors
-// venueNormalization.resolveVenueForMatch's sibling-fallback. For
-// non-split groups the loop reduces to (primary.cost_per_match ?? 0) ×
-// matchCount. Null on every leg → $0 per spec ("blank = $0").
 //
 // Shared by Field Ranking's Per-Match toggle (buildRankingRows.perMatchCost)
 // and CityPLCard's Per-Match mode so the two pages agree by construction.
@@ -1917,10 +1938,9 @@ export function groupPerMatchCostFor(
   month: Q2Month,
 ): number {
   const primary = group.legs[0];
-  const primaryCpm = primary.cost_per_match;
   let total = 0;
   for (const leg of group.legs) {
-    const cpm = leg.cost_per_match ?? primaryCpm ?? 0;
+    const cpm = legPerMatchUnitCost(leg, primary);
     // Charged count (alive + cancelled-when-charge_on_cancel) so the
     // Per-Match cost view reflects what we'd actually pay. Cancelled
     // matches at a no-cancel-fee venue contribute zero.
@@ -1953,10 +1973,9 @@ export function groupPerMatchCostRealizedFor(
   }
   const today = isoDateLocal(now);
   const primary = group.legs[0];
-  const primaryCpm = primary.cost_per_match;
   let total = 0;
   for (const leg of group.legs) {
-    const cpm = leg.cost_per_match ?? primaryCpm ?? 0;
+    const cpm = legPerMatchUnitCost(leg, primary);
     let count = 0;
     for (const s of data.masterSchedule) {
       if (s.venue_id !== leg.id) continue;
@@ -2359,12 +2378,13 @@ export type RankingRow = {
   // non-split rows. Legs come pre-sorted ASC by rate from groupVenues.
   // Used by the As-Billed mode subtitle on Field Ranking.
   perMatchLegs: Array<{ matchCount: number; rate: number }>;
-  // Per-leg matches × cost_per_match for EVERY group (one entry per leg
-  // including single-leg venues). Drives the Per-Match mode subtitle
-  // on both Field Ranking and the Cities page so the uniform
-  // "N × $cpm" rendering matches across surfaces. cpm falls back from
-  // a null secondary leg to primary's value — same shape as
-  // groupPerMatchCostFor, so subtitle and cost agree by construction.
+  // Per-leg matches × per-match unit cost for EVERY group (one entry per
+  // leg including single-leg venues). Drives the Per-Match mode subtitle
+  // on both Field Ranking and the Cities page so the uniform "N × $cpm"
+  // rendering matches across surfaces. cpm comes from legPerMatchUnitCost
+  // (same helper as groupPerMatchCostFor), so subtitle and cost agree by
+  // construction — including the split-rate case where a null secondary
+  // leg reflects its own per_match_rate.
   // Filter to matchCount > 0 at render time to suppress zero-match legs.
   costPerMatchLegs: Array<{ matchCount: number; cpm: number }>;
   netPL: number;
@@ -2377,10 +2397,10 @@ export type RankingRow = {
   // its billing lump lands in only one of three months. fin_venues
   // .cost_per_match is the operator-set per-match unit cost (the same
   // value rendered in the Cost/Match column on the Field Costs config
-  // table and consumed by matchPnL.ts). When a secondary leg's
-  // cost_per_match is null we fall back to the primary's value — same
-  // shape as venueNormalization.resolveVenueForMatch's sibling-fallback.
-  // Null on both legs → $0 contribution per spec ("blank = $0").
+  // table and consumed by matchPnL.ts). When a split-rate secondary leg's
+  // cost_per_match is null we fall back to that leg's own per_match_rate
+  // (see legPerMatchUnitCost) so a Sunday/tournament premium isn't rebilled
+  // at the primary's rate. Null on a single/primary leg → $0 ("blank = $0").
   perMatchCost: number;
   perMatchNetPL: number;
   perMatchMargin: number;
@@ -2478,14 +2498,15 @@ export function buildRankingRows(
         : [];
 
     // Per-leg cost_per_match breakdown for the Per-Match mode subtitle.
-    // Always populated — non-split venues collapse to one entry. Same
-    // primary-fallback shape as groupPerMatchCostFor so the subtitle
-    // numbers reconcile against the swapped cost column. Charged
-    // counts here too — Per-Match cost is cpm × charged.
-    const cpmPrimary = primary.cost_per_match;
+    // Always populated — non-split venues collapse to one entry. Routes
+    // through the same legPerMatchUnitCost helper as groupPerMatchCostFor
+    // so the subtitle numbers reconcile against the swapped cost column
+    // (a null split-rate secondary leg reflects its own per_match_rate,
+    // not the primary's cpm). Charged counts here too — Per-Match cost is
+    // cpm × charged.
     const costPerMatchLegs = g.legs.map((leg, idx) => ({
       matchCount: chargedLegCounts[idx],
-      cpm: leg.cost_per_match ?? cpmPrimary ?? 0,
+      cpm: legPerMatchUnitCost(leg, primary),
     }));
 
     // Per-match normalized cost via the shared helper so Field Ranking
