@@ -64,7 +64,6 @@ type PermissionFlags = {
   can_access_chats?: boolean;
   can_access_clubhouse?: boolean;
   can_access_cities?: boolean;
-  can_access_org?: boolean;
   can_access_data?: boolean;
   can_access_docs?: boolean;
   can_access_finance?: boolean;
@@ -78,7 +77,6 @@ const PERMISSION_KEYS: (keyof PermissionFlags)[] = [
   "can_access_chats",
   "can_access_clubhouse",
   "can_access_cities",
-  "can_access_org",
   "can_access_data",
   "can_access_docs",
   "can_access_finance",

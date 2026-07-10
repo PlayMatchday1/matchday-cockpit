@@ -12,7 +12,6 @@ type PermissionKey =
   | "can_access_chats"
   | "can_access_clubhouse"
   | "can_access_cities"
-  | "can_access_org"
   | "can_access_data"
   | "can_access_docs"
   | "can_access_finance";
@@ -22,7 +21,6 @@ const PERMISSION_COLUMNS: { key: PermissionKey; label: string }[] = [
   { key: "can_access_chats", label: "Chats" },
   { key: "can_access_clubhouse", label: "Clubhouse" },
   { key: "can_access_cities", label: "Cities" },
-  { key: "can_access_org", label: "Org" },
   { key: "can_access_data", label: "Data" },
   { key: "can_access_docs", label: "Docs" },
   { key: "can_access_finance", label: "Finance" },

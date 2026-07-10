@@ -12,7 +12,6 @@ export type AppUser = {
   can_access_chats: boolean;
   can_access_clubhouse: boolean;
   can_access_cities: boolean;
-  can_access_org: boolean;
   can_access_data: boolean;
   can_access_docs: boolean;
   can_access_finance: boolean;
@@ -24,7 +23,6 @@ export type PageName =
   | "chats"
   | "clubhouse"
   | "cities"
-  | "org"
   | "data"
   | "docs"
   | "finance";
@@ -109,8 +107,6 @@ export function canAccess(
       return appUser.can_access_clubhouse;
     case "cities":
       return appUser.can_access_cities;
-    case "org":
-      return appUser.can_access_org;
     case "data":
       return appUser.can_access_data;
     case "docs":
@@ -127,7 +123,6 @@ export function hasAnyAccess(appUser: AppUser | null): boolean {
     appUser.can_access_chats ||
     appUser.can_access_clubhouse ||
     appUser.can_access_cities ||
-    appUser.can_access_org ||
     appUser.can_access_data ||
     appUser.can_access_docs ||
     appUser.can_access_finance
