@@ -22,6 +22,22 @@ export const CITIES = [
 ] as const;
 export type City = (typeof CITIES)[number];
 
+// Cities hidden from forward-facing selectors, pills, planning entry, and
+// per-city card lists (paused / winding-down markets). This NEVER filters
+// historical data: the data-driven aggregations (Monthly/Match P&L, Field
+// Ranking, Cash Flow, buildCityInsightRows) still surface a hidden city
+// wherever it has real rows, and every city normalization / color /
+// timezone / abbreviation map stays intact so historical rows keep
+// resolving. Re-enable a city with zero data loss by removing it here.
+// Code-based surfaces (chat city chips) mirror this via
+// cityNormalization.HIDDEN_CITY_CODES — keep the two in sync.
+export const HIDDEN_CITIES = new Set<City>(["El Paso"]);
+export const VISIBLE_CITIES: readonly City[] = CITIES.filter(
+  (c) => !HIDDEN_CITIES.has(c),
+);
+export const isCityHidden = (city: string): boolean =>
+  HIDDEN_CITIES.has(city as City);
+
 export type CityHealth = "Healthy" | "Building" | "At risk";
 
 export const CITY_STATS: Record<

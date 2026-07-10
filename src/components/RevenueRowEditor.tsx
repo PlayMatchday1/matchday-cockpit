@@ -2,6 +2,7 @@
 
 import { useEffect, useMemo, useState } from "react";
 import type { FinRevenue, FinVenue } from "@/lib/useFinanceData";
+import { isCityHidden } from "@/lib/types";
 
 export type RevenueDraft = {
   date: string;
@@ -24,7 +25,7 @@ const CITY_OPTIONS = [
   "OKC",
   "El Paso",
   "Deleted Account Revenue",
-];
+].filter((c) => !isCityHidden(c));
 
 const SOURCE_OPTIONS = ["Venmo", "Cash", "Sponsorship", "Other"];
 

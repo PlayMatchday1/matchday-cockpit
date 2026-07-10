@@ -15,6 +15,7 @@
 // crm + /api/cities — cities/Master Schedule is a corp surface.
 
 import { authenticateCrm } from "@/lib/crmAuth";
+import { isCityHidden } from "@/lib/types";
 import {
   validateScheduleMasterPayload,
   writeScheduleMasterAudit,
@@ -119,6 +120,9 @@ export async function GET(req: Request) {
   // guard for missing days.
   const cities: CityOut[] = [];
   for (const name of CITY_ORDER) {
+    // Hidden cities (paused markets) are dropped from the forward-facing
+    // Master Schedule response. Historical rows remain in the DB.
+    if (isCityHidden(name)) continue;
     const byDate = byCity.get(name) ?? new Map<string, Row[]>();
     const days: DayOut[] = [];
     let total = 0;

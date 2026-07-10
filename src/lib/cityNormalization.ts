@@ -81,3 +81,10 @@ export const KNOWN_CITY_CODES = [
 ] as const;
 
 export type KnownCityCode = (typeof KNOWN_CITY_CODES)[number];
+
+// Code-based mirror of types.HIDDEN_CITIES for the chat city-chip filter
+// bars (which key off city CODES, not display names). ELP stays in
+// KNOWN_CITY_CODES above so historical El Paso rows still normalize,
+// color, and resolve — only the forward-facing chip is suppressed. Keep
+// this in sync with types.HIDDEN_CITIES.
+export const HIDDEN_CITY_CODES = new Set<string>(["ELP"]);

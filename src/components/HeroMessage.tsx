@@ -4,7 +4,7 @@ import { useEffect, useState } from "react";
 import { supabase } from "@/lib/supabase";
 
 const FALLBACK =
-  "Building the premier pickup soccer experience. From Austin to El Paso, we're rewriting how the world plays. 8 cities down. The whole map next.";
+  "Building the premier pickup soccer experience. From Austin to Atlanta. 7 cities down. The whole map next.";
 
 export default function HeroMessage() {
   const [value, setValue] = useState<string | null>(null);

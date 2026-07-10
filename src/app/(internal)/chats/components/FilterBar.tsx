@@ -15,7 +15,7 @@
 // "Mine" is disabled when the viewer has no app_user id (vanishingly
 // unlikely past AdminGuard but defended).
 
-import { KNOWN_CITY_CODES } from "@/lib/cityNormalization";
+import { KNOWN_CITY_CODES, HIDDEN_CITY_CODES } from "@/lib/cityNormalization";
 import { UNKNOWN_CITY } from "@/lib/cityColors";
 
 export type StatusFilter = "open" | "mine" | "starred" | "closed";
@@ -27,7 +27,10 @@ export type ViewCounts = {
   closed: number;
 };
 
-const ALL_CITY_CODES: readonly string[] = [...KNOWN_CITY_CODES, UNKNOWN_CITY];
+const ALL_CITY_CODES: readonly string[] = [
+  ...KNOWN_CITY_CODES.filter((c) => !HIDDEN_CITY_CODES.has(c)),
+  UNKNOWN_CITY,
+];
 
 export default function FilterBar({
   cities,

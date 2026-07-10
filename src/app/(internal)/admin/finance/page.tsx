@@ -40,7 +40,7 @@ import SlateMembershipPriceHistory from "@/components/SlateMembershipPriceHistor
 import PartnerDashboardsAdmin from "@/components/PartnerDashboardsAdmin";
 import RevenueAdminView from "@/components/RevenueAdminView";
 import TotalsBarChart from "@/components/TotalsBarChart";
-import { CITIES, type City } from "@/lib/types";
+import { VISIBLE_CITIES, isCityHidden, type City } from "@/lib/types";
 import { useMatchWindowData } from "@/lib/useMatchData";
 import { getWeeklySpots, getMonday } from "@/lib/cityStats";
 import { CITY_DISPLAY_ORDER } from "@/lib/financeStats";
@@ -435,7 +435,7 @@ function CitiesTabContent() {
         </div>
       </div>
       <div className="grid grid-cols-1 gap-4 md:grid-cols-2 xl:grid-cols-3">
-        {CITY_DISPLAY_ORDER.map((c) => (
+        {CITY_DISPLAY_ORDER.filter((c) => !isCityHidden(c)).map((c) => (
           <CityPLCard
             key={c}
             city={c}
@@ -525,7 +525,7 @@ function SlateReviewCityPills({
         aria-label="Selected city"
         className="scrollbar-hide flex flex-nowrap items-center gap-1.5 overflow-x-auto"
       >
-        {CITIES.map((c) => {
+        {VISIBLE_CITIES.map((c) => {
           const active = c === value;
           return (
             <button

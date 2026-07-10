@@ -2,6 +2,7 @@
 
 import { useEffect, useMemo, useState } from "react";
 import type { FinExpense } from "@/lib/useFinanceData";
+import { isCityHidden } from "@/lib/types";
 
 export type ExpenseDraft = {
   date: string;
@@ -22,7 +23,7 @@ const CITY_OPTIONS = [
   "St. Louis",
   "OKC",
   "El Paso",
-];
+].filter((c) => !isCityHidden(c));
 
 const MONTH_NAMES = [
   "Jan",

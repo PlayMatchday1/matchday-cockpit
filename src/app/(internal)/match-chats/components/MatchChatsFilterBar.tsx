@@ -9,10 +9,13 @@
 //   - The same KNOWN_CITY_CODES + UNKNOWN_CITY source is used so the
 //     two surfaces can never drift in city list or order.
 
-import { KNOWN_CITY_CODES } from "@/lib/cityNormalization";
+import { KNOWN_CITY_CODES, HIDDEN_CITY_CODES } from "@/lib/cityNormalization";
 import { UNKNOWN_CITY } from "@/lib/cityColors";
 
-const ALL_CITY_CODES: readonly string[] = [...KNOWN_CITY_CODES, UNKNOWN_CITY];
+const ALL_CITY_CODES: readonly string[] = [
+  ...KNOWN_CITY_CODES.filter((c) => !HIDDEN_CITY_CODES.has(c)),
+  UNKNOWN_CITY,
+];
 
 export default function MatchChatsFilterBar({
   cities,

@@ -18,17 +18,11 @@ import Link from "next/link";
 import { useFinanceQuarter } from "@/lib/financeQuarter";
 import type { QuarterInfo } from "@/lib/quarters";
 import { useFinanceData, type FinExpense } from "@/lib/useFinanceData";
+import { VISIBLE_CITIES } from "@/lib/types";
 
-const CITIES = [
-  "Austin",
-  "Dallas",
-  "Houston",
-  "San Antonio",
-  "Atlanta",
-  "St. Louis",
-  "OKC",
-  "El Paso",
-] as const;
+// Forward-facing grid — hidden cities (e.g. paused markets) are excluded
+// via VISIBLE_CITIES. Historical pay data is unaffected (it's data-driven).
+const CITIES = VISIBLE_CITIES;
 
 const MONTH_LABELS = [
   "Jan",

@@ -10,6 +10,7 @@ import type {
 } from "./useFinanceData";
 import type { Q2Month } from "./financeStats";
 import { getLegLabel, groupVenues, type VenueGroup } from "./venueGroups";
+import { isCityHidden } from "./types";
 import { partnerPaymentOwedForMonth } from "./partnerStats";
 
 export type VenueCostKind =
@@ -318,6 +319,9 @@ export function buildFieldCostRows(
   const rows: FieldCostRow[] = [];
 
   for (const g of groups) {
+    // Drop hidden-city venue groups (paused markets) from the forward-
+    // facing Field Costs config table. Historical data is untouched.
+    if (isCityHidden(g.city)) continue;
     const primary = g.legs[0];
 
     if (g.isCombined) {

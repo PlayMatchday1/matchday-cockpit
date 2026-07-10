@@ -24,7 +24,7 @@
 import { useMemo, useState } from "react";
 import { useFinanceData } from "@/lib/useFinanceData";
 import { useMatchData } from "@/lib/useMatchData";
-import { CITIES } from "@/lib/types";
+import { VISIBLE_CITIES } from "@/lib/types";
 import { buildFieldIdToVenueIdMap } from "@/lib/venueNormalization";
 import {
   aggregateDppByVenue,
@@ -472,7 +472,7 @@ function MembershipByCitySection({
   // sees zero-rows for known cities instead of "where did Atlanta
   // go this period."
   const rowCities = useMemo(() => {
-    const set = new Set<string>(CITIES);
+    const set = new Set<string>(VISIBLE_CITIES);
     for (const c of membership.citiesPresent) set.add(c);
     return [...set];
   }, [membership.citiesPresent]);

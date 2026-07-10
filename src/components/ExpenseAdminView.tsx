@@ -12,6 +12,7 @@ import { type Q2Month } from "@/lib/financeStats";
 import { useFinanceQuarter } from "@/lib/financeQuarter";
 import { supabase } from "@/lib/supabase";
 import { useAuth } from "@/lib/useAuth";
+import { isCityHidden } from "@/lib/types";
 import {
   refetchFinanceData,
   useFinanceData,
@@ -35,7 +36,7 @@ const CITY_DISPLAY = [
   "OKC",
   "El Paso",
   "Company-wide",
-];
+].filter((c) => !isCityHidden(c));
 
 function fmtMoney(n: number, signZero = false): string {
   const r = Math.round(n);

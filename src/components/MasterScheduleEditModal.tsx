@@ -12,6 +12,7 @@ import { useEffect, useRef, useState } from "react";
 import { X } from "lucide-react";
 import { supabase } from "@/lib/supabase";
 import { CANONICAL_CITIES } from "@/lib/scheduleMaster";
+import { isCityHidden } from "@/lib/types";
 
 export type EditableRow = {
   id: string;
@@ -360,7 +361,7 @@ export default function MasterScheduleEditModal({
               className="block w-full rounded-md border border-cream-line bg-white px-2 py-1.5 text-sm text-deep-green focus:border-mint focus:outline-none"
             >
               <option value="">Select a city</option>
-              {CANONICAL_CITIES.map((c) => (
+              {CANONICAL_CITIES.filter((c) => !isCityHidden(c)).map((c) => (
                 <option key={c} value={c}>
                   {c}
                 </option>

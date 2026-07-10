@@ -24,7 +24,7 @@ import {
   type CityStatus,
   type WeeklySpotsEntry,
 } from "@/lib/cityStats";
-import { CITIES, citySlug } from "@/lib/types";
+import { VISIBLE_CITIES, citySlug } from "@/lib/types";
 
 export default function CitiesIndexPage() {
   return (
@@ -119,7 +119,7 @@ function OverviewLens() {
   const selectedLabel =
     weekScope === "current" ? "matches this week" : "matches last week";
 
-  const cityData = CITIES.map((city) => {
+  const cityData = VISIBLE_CITIES.map((city) => {
     const weekly = getWeeklySpots(rows, scheduledMatches, city, 8);
     const cancel = getCancelRate(rows, scheduledMatches, city);
     const venues = getActiveVenues(scheduledMatches, city, 8);
