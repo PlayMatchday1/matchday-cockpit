@@ -138,7 +138,6 @@ export function firstAllowedPath(appUser: AppUser | null): string {
   if (!appUser) return "/login";
   if (appUser.is_admin || appUser.can_access_clubhouse) return "/clubhouse";
   if (appUser.can_access_cities) return "/cities";
-  if (appUser.can_access_org) return "/org";
   if (appUser.can_access_data) return "/data";
   if (appUser.can_access_docs) return "/docs";
   if (appUser.can_access_finance) return "/admin/finance";

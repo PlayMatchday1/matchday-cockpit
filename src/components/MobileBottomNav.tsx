@@ -19,7 +19,6 @@ import Link from "next/link";
 import { usePathname } from "next/navigation";
 import {
   BarChart3,
-  Building2,
   ChevronRight,
   Database,
   FileText,
@@ -135,12 +134,6 @@ export default function MobileBottomNav({
       label: "Data",
       icon: Database,
       visible: canAccess(appUser, "data"),
-    },
-    {
-      href: "/org",
-      label: "Org",
-      icon: Building2,
-      visible: canAccess(appUser, "org"),
     },
     {
       href: "/docs",

@@ -70,12 +70,6 @@ const SECONDARY_TABS: GatedTab[] = [
     match: (p) => p.startsWith("/data"),
   },
   {
-    href: "/org",
-    label: "Org",
-    page: "org",
-    match: (p) => p.startsWith("/org"),
-  },
-  {
     href: "/docs",
     label: "Docs",
     page: "docs",
