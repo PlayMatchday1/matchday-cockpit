@@ -16,6 +16,7 @@ import {
   canonicalVenueCost,
   fieldCostsFor,
   findOverride,
+  perMatchMinusManagerOwed,
   perMatchTotalFor,
   type VenueCostInfo,
 } from "./financeCosts";
@@ -1569,6 +1570,11 @@ export function venueRealizedCostFor(
   }
   const override = findOverride(data, venueId, month);
   if (override) return override.override_amount;
+  // per_match_minus_manager (Crossbar): partner-dashboard owed. Same
+  // whole-month figure under Realized and Full Month (the payout is
+  // revenue-driven, already realized). Null for every other venue.
+  const pmm = perMatchMinusManagerOwed(data, venueId, month);
+  if (pmm != null) return pmm;
   // profit_share: full-month payout (partner invoices are issued
   // whole-month, not date-realized). Same number under both Realized
   // and Full Month — see autoCost's profit_share branch for the
@@ -1938,6 +1944,11 @@ export function groupPerMatchCostFor(
   month: Q2Month,
 ): number {
   const primary = group.legs[0];
+  // per_match_minus_manager (Crossbar): cost is the partner-dashboard
+  // owed, not cost_per_match × matches. Single-venue group, so key off
+  // the primary leg. Null for every other venue → normal calc below.
+  const pmm = perMatchMinusManagerOwed(data, primary.id, month);
+  if (pmm != null) return pmm;
   let total = 0;
   for (const leg of group.legs) {
     const cpm = legPerMatchUnitCost(leg, primary);
@@ -1973,6 +1984,10 @@ export function groupPerMatchCostRealizedFor(
   }
   const today = isoDateLocal(now);
   const primary = group.legs[0];
+  // per_match_minus_manager (Crossbar): partner-dashboard owed, same
+  // under realized and full-month (revenue-driven). Null otherwise.
+  const pmm = perMatchMinusManagerOwed(data, primary.id, month);
+  if (pmm != null) return pmm;
   let total = 0;
   for (const leg of group.legs) {
     const cpm = legPerMatchUnitCost(leg, primary);

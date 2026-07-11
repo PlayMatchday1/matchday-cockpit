@@ -16,10 +16,36 @@ import { partnerPaymentOwedForMonth } from "./partnerStats";
 export type VenueCostKind =
   | "override"
   | "per_match"
+  | "per_match_minus_manager"
   | "monthly_flat"
   | "profit_share"
   | "needs_override"
   | "unknown";
+
+// Crossbar Rowlett's model: it's billed as `per_match` with a null rate,
+// but its cost is the partner-dashboard "owed" — match revenue minus a
+// per-match manager fee, floored at $0 monthly. That owed comes from the
+// same computeWeeklyPayments the partner page renders (via
+// partnerPaymentOwedForMonth), so Finance Cities / Field Ranking can't
+// drift from the dashboard. Returns null when the venue has no
+// per_match_minus_manager dashboard (i.e. every other venue), so callers
+// fall through to their normal per_match / cost_per_match logic.
+export function perMatchMinusManagerOwed(
+  data: FinanceData,
+  venueId: number,
+  month: Q2Month,
+): number | null {
+  const dash = data.partnerDashboards.find((d) => d.venueId === venueId);
+  if (dash?.revenueModel !== "per_match_minus_manager") return null;
+  return (
+    partnerPaymentOwedForMonth(
+      data.partnerDashboards,
+      data.partnerPayoutsByVenueMonth,
+      venueId,
+      month,
+    ) ?? 0
+  );
+}
 
 export type VenueCostInfo = {
   amount: number;
@@ -68,6 +94,25 @@ function autoCost(
   venue: FinVenue,
   month: Q2Month,
 ): VenueCostInfo {
+  // per_match_minus_manager (Crossbar Rowlett): cost is the partner
+  // dashboard's owed, not matchCount × rate. Checked before billing_type
+  // because the venue is stored as `per_match` (with a null rate) — the
+  // model lives on its partner dashboard, not on billing_type.
+  const pmm = perMatchMinusManagerOwed(data, venue.id, month);
+  if (pmm != null) {
+    return {
+      amount: pmm,
+      kind: "per_match_minus_manager",
+      matchCount: venueMatchCount(data, venue, month),
+      totalHours: 0,
+      formula:
+        pmm === 0
+          ? "Match revenue below manager cost this month"
+          : "Match revenue minus manager pay",
+      source: "Partner dashboard payout",
+      override: null,
+    };
+  }
   if (venue.billing_type === "per_match") {
     const matchCount = venueMatchCount(data, venue, month);
     const rate = venue.per_match_rate ?? 0;

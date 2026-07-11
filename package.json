@@ -6,7 +6,7 @@
     "dev": "next dev",
     "build": "next build",
     "start": "next start",
-    "test": "node --test 'src/**/*.test.ts'"
+    "test": "node --test 'src/**/*.test.ts' && npx --yes tsx --test 'src/**/*.finance-test.ts'"
   },
   "dependencies": {
     "@supabase/supabase-js": "^2.104.1",

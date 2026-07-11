@@ -1200,7 +1200,8 @@ export function partnerPaymentOwedForMonth(
 }
 
 // Build the per-(venue, month) payout map for use in finance cost
-// calc. Loops every profit_share venue that has an enabled dashboard,
+// calc. Loops every profit_share venue (plus per_match venues on the
+// per_match_minus_manager model, e.g. Crossbar) that has an enabled dashboard,
 // runs the same computeWeeklyPayments calc the partner dashboard page
 // renders, and aggregates the per-row owedAmount into a month bucket
 // keyed `${venueId}|${monthLabel}` (e.g. "10|Apr 2026").
@@ -1233,6 +1234,11 @@ export function buildPartnerPayoutsByVenueMonth(
     email: string | null;
     field: string;
     user_type: string | null;
+    // Required for per_match_minus_manager: periodOwed groups revenue by
+    // match_api_id and picks the manager rate from max_player_count vs
+    // the capacity threshold. flat_percentage partners ignore both.
+    match_api_id?: number;
+    max_player_count?: number | null;
   }>,
   finRevRows: Array<{
     date: string;
@@ -1248,7 +1254,16 @@ export function buildPartnerPayoutsByVenueMonth(
   for (const dash of dashboards) {
     const venue = venues.find((v) => v.id === dash.venueId);
     if (!venue) continue;
-    if (venue.billing_type !== "profit_share") continue;
+    // profit_share venues, plus per_match venues whose dashboard uses the
+    // per_match_minus_manager model (Crossbar Rowlett — billed per_match
+    // but paid match-revenue-minus-manager). Both need their owed in the
+    // payout map so Finance Cities / Field Ranking read the same number
+    // the partner dashboard shows.
+    const isPerMatchMinusManager =
+      dash.revenueModel === "per_match_minus_manager";
+    if (venue.billing_type !== "profit_share" && !isPerMatchMinusManager) {
+      continue;
+    }
 
     // Filter match registrations to this venue via the mdapi field_id
     // → fin_venues.id mapping (PR-E semantics). More reliable than the
@@ -1266,6 +1281,8 @@ export function buildPartnerPayoutsByVenueMonth(
         promocode: r.promocode,
         match_price_paid: r.match_price_paid,
         user_type: r.user_type,
+        match_api_id: r.match_api_id,
+        max_player_count: r.max_player_count,
       }));
 
     // Filter fin_revenue rows: venue name match (case-insensitive
@@ -1289,14 +1306,11 @@ export function buildPartnerPayoutsByVenueMonth(
         notes: r.notes,
       }));
 
-    // NOTE: per_match_minus_manager is only exercised by per_match
-    // venues (Crossbar Rowlett), which this profit_share-only loop
-    // skips. If a profit_share venue ever adopts that model, venueRegs
-    // here lack match_api_id/max_player_count (the finance matchRegs
-    // shape omits them), so periodOwed would group by start timestamp
-    // and default every match to the base manager rate. Thread the
-    // real per-match capacity through buildPartnerPayoutsByVenueMonth's
-    // inputs before relying on this path for such a venue.
+    // per_match_minus_manager (Crossbar Rowlett) now flows through here
+    // too — venueRegs carry match_api_id + max_player_count (threaded via
+    // the matchRegs param above), so periodOwed groups revenue by match
+    // and picks the capacity-based manager rate, matching the partner
+    // dashboard's computeWeeklyPayments exactly.
     const payout = computeWeeklyPayments(
       venueRegs,
       venueExtra,
