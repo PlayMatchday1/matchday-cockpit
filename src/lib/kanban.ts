@@ -3,7 +3,7 @@
 // discriminator plus per-board config drives everything. Board-
 // specific fields live in card.data (jsonb): Field Pipeline carries
 // { city, owner_label }, Tech Roadmap carries
-// { description, priority, planned_date }.
+// { description, priority, planned_date, estimated_hours }.
 
 import { KNOWN_CITY_CODES } from "./cityNormalization";
 import { CITY_COLORS } from "./cityColors";
@@ -154,6 +154,28 @@ export function cardDescription(card: KanbanCard): string {
 export function cardPlannedDate(card: KanbanCard): string {
   const d = card.data?.planned_date;
   return typeof d === "string" ? d : "";
+}
+
+// ---------------- estimated hours (Tech Roadmap) ----------------
+// Optional numeric estimate stored in data.estimated_hours (0.5-step
+// half-hour increments allowed). Absent/invalid -> null.
+export function cardEstimatedHours(card: KanbanCard): number | null {
+  const h = card.data?.estimated_hours;
+  return typeof h === "number" && Number.isFinite(h) && h >= 0 ? h : null;
+}
+
+// "8h" / "1.5h" — JS renders 8, 1.5, 0.5 without trailing zeros.
+export function formatHours(h: number): string {
+  return `${h}h`;
+}
+
+// Parse the Estimated-hours modal input: "" -> null (clears the field),
+// a valid non-negative number -> that number, anything else -> null.
+export function parseEstimatedHours(input: string): number | null {
+  const t = input.trim();
+  if (t === "") return null;
+  const n = Number(t);
+  return Number.isFinite(n) && n >= 0 ? n : null;
 }
 
 // Owner-label fallback: seed cards whose owner name did not match an

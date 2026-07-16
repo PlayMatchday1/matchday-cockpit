@@ -13,6 +13,8 @@ import {
   cardOwnerLabel,
   cardPlannedDate,
   cardPriority,
+  cardEstimatedHours,
+  formatHours,
   cityColor,
   cityLabel,
   firstName,
@@ -148,6 +150,20 @@ export default function KanbanBoard({ boardType }: { boardType: BoardType }) {
     };
   }, [boardType, cards, checklists]);
 
+  // Tech Roadmap: estimated-hours totals per stage (+ grand total).
+  const roadmapHours = useMemo(() => {
+    if (boardType !== "tech_roadmap") return null;
+    const byStage = new Map<string, number>();
+    let total = 0;
+    for (const c of cards) {
+      const h = cardEstimatedHours(c);
+      if (h == null) continue;
+      byStage.set(c.stage, (byStage.get(c.stage) ?? 0) + h);
+      total += h;
+    }
+    return { byStage, total };
+  }, [boardType, cards]);
+
   return (
     <div>
       {/* Toolbar */}
@@ -187,6 +203,25 @@ export default function KanbanBoard({ boardType }: { boardType: BoardType }) {
           <SummaryCard label="Fields" value={summary.fields} />
           <SummaryCard label="Confirmed" value={summary.confirmed} />
           <SummaryCard label="Open to-dos" value={summary.openTodos} />
+        </div>
+      )}
+
+      {roadmapHours && (
+        <div className="mb-4 flex flex-wrap items-center gap-x-4 gap-y-1 rounded-xl border border-cream-line bg-white px-3 py-2 text-sm shadow-sm shadow-deep-green/5">
+          <span className="text-[10px] font-bold uppercase tracking-wide text-deep-green/50">
+            Est. hours
+          </span>
+          {config.stages.map((s) => (
+            <span key={s.id} className="text-deep-green/60">
+              {s.title}{" "}
+              <span className="font-bold text-deep-green">
+                {formatHours(roadmapHours.byStage.get(s.id) ?? 0)}
+              </span>
+            </span>
+          ))}
+          <span className="ml-auto font-bold text-deep-green">
+            Total {formatHours(roadmapHours.total)}
+          </span>
         </div>
       )}
 
@@ -502,6 +537,7 @@ function Card({
   const city = cardCity(card);
   const priority = cardPriority(card);
   const planned = cardPlannedDate(card);
+  const hours = cardEstimatedHours(card);
   const doneCount = items.filter((i) => i.done).length;
 
   return (
@@ -570,6 +606,11 @@ function Card({
           {planned && (
             <span className="rounded-full bg-cream-soft px-2 py-0.5 text-[11px] font-bold text-deep-green/55">
               {planned}
+            </span>
+          )}
+          {hours != null && (
+            <span className="rounded-full bg-mint-soft px-2 py-0.5 text-[11px] font-bold text-deep-green/70">
+              {formatHours(hours)}
             </span>
           )}
         </div>

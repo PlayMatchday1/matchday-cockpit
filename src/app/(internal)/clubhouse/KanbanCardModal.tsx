@@ -14,6 +14,8 @@ import {
   PRIORITIES,
   cardCity,
   cardDescription,
+  cardEstimatedHours,
+  parseEstimatedHours,
   cardOwnerLabel,
   cardPlannedDate,
   cardPriority,
@@ -98,6 +100,9 @@ export default function KanbanCardModal({
   const [plannedDate, setPlannedDate] = useState(
     editing ? cardPlannedDate(editing) : "",
   );
+  const [estimatedHours, setEstimatedHours] = useState(
+    editing ? (cardEstimatedHours(editing)?.toString() ?? "") : "",
+  );
 
   useEffect(() => {
     function onKey(e: KeyboardEvent) {
@@ -167,6 +172,7 @@ export default function KanbanCardModal({
           description: description.trim(),
           priority,
           planned_date: plannedDate || null,
+          estimated_hours: parseEstimatedHours(estimatedHours),
         };
       }
 
@@ -312,6 +318,22 @@ export default function KanbanCardModal({
               </select>
             </label>
           </div>
+
+          {boardType === "tech_roadmap" && (
+            <label className={labelCls}>
+              Estimated hours
+              <input
+                type="number"
+                min={0}
+                step={0.5}
+                inputMode="decimal"
+                className={inputCls}
+                value={estimatedHours}
+                onChange={(e) => setEstimatedHours(e.target.value)}
+                placeholder="e.g. 1.5"
+              />
+            </label>
+          )}
 
           {citySelect === NEW_MARKET_SENTINEL &&
             boardType === "field_pipeline" && (
