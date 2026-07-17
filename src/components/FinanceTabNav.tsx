@@ -11,6 +11,7 @@ export const FINANCE_TAB_IDS = [
   // Primary pills (this component)
   "cities",
   "cash-flow",
+  "opex-calendar",
   "field-ranking",
   "match-pnl",
   "slate-review",
@@ -32,6 +33,7 @@ export type FinanceTabId = (typeof FINANCE_TAB_IDS)[number];
 const PRIMARY: { id: FinanceTabId; label: string }[] = [
   { id: "cities", label: "Cities" },
   { id: "cash-flow", label: "Cash Flow" },
+  { id: "opex-calendar", label: "OpEx Calendar" },
   { id: "field-ranking", label: "Field Ranking" },
   { id: "match-pnl", label: "Match P&L" },
   { id: "slate-review", label: "Slate Review" },

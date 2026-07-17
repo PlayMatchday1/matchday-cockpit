@@ -15,6 +15,7 @@ import CityPLCard, {
 import ExpenseAdminView from "@/components/ExpenseAdminView";
 import FieldCostsView from "@/components/FieldCostsView";
 import FieldRankingTabContent from "@/components/FieldRankingTabContent";
+import OpExCalendarView from "@/components/OpExCalendarView";
 import FinanceExecHero from "@/components/FinanceExecHero";
 import FinanceConfigureSubNav, {
   isConfigureSubTab,
@@ -293,6 +294,9 @@ function FinanceLandingContent() {
       </TabPanel>
       <TabPanel id="cash-flow" active={activeTab} visited={visited}>
         <CashFlowTabContent />
+      </TabPanel>
+      <TabPanel id="opex-calendar" active={activeTab} visited={visited}>
+        <OpExCalendarView />
       </TabPanel>
       <TabPanel id="match-pnl" active={activeTab} visited={visited}>
         <MatchPnL />
