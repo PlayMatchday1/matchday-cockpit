@@ -48,6 +48,7 @@ export default function OpExEntryModal({
   const [notes, setNotes] = useState(entry?.notes ?? "");
   const [busy, setBusy] = useState(false);
   const [err, setErr] = useState<string | null>(null);
+  const [confirming, setConfirming] = useState(false);
 
   useEffect(() => {
     function onKey(e: KeyboardEvent) {
@@ -220,36 +221,62 @@ export default function OpExEntryModal({
         </div>
 
         <div className="flex items-center justify-between gap-2 border-t border-cream-line bg-white px-5 py-3">
-          {editing ? (
-            <button
-              type="button"
-              onClick={del}
-              disabled={busy}
-              className="rounded-full border border-coral/40 bg-coral-soft px-3 py-1.5 text-xs font-bold text-coral-hover transition hover:bg-coral-soft/70 disabled:opacity-50"
-            >
-              Delete
-            </button>
+          {editing && confirming ? (
+            <div className="flex items-center gap-2">
+              <span className="text-xs font-bold text-coral-hover">
+                Delete this expense?
+              </span>
+              <button
+                type="button"
+                onClick={del}
+                disabled={busy}
+                className="rounded-full bg-coral px-3 py-1.5 text-xs font-bold text-cream transition hover:bg-coral-hover disabled:opacity-50"
+              >
+                {busy ? "Deleting…" : "Delete"}
+              </button>
+              <button
+                type="button"
+                onClick={() => setConfirming(false)}
+                disabled={busy}
+                className="rounded-full border border-cream-line bg-white px-3 py-1.5 text-xs font-bold text-deep-green/65 transition hover:bg-cream-soft disabled:opacity-50"
+              >
+                No
+              </button>
+            </div>
           ) : (
-            <span />
+            <>
+              {editing ? (
+                <button
+                  type="button"
+                  onClick={() => setConfirming(true)}
+                  disabled={busy}
+                  className="rounded-full border border-coral/40 bg-coral-soft px-3 py-1.5 text-xs font-bold text-coral-hover transition hover:bg-coral-soft/70 disabled:opacity-50"
+                >
+                  Delete
+                </button>
+              ) : (
+                <span />
+              )}
+              <div className="flex items-center gap-2">
+                <button
+                  type="button"
+                  onClick={onClose}
+                  disabled={busy}
+                  className="rounded-full border border-cream-line bg-white px-4 py-1.5 text-xs font-bold text-deep-green/65 transition hover:bg-cream-soft disabled:opacity-50"
+                >
+                  Cancel
+                </button>
+                <button
+                  type="button"
+                  onClick={save}
+                  disabled={busy}
+                  className="rounded-full bg-deep-green px-4 py-1.5 text-xs font-bold text-cream transition hover:bg-deep-green-soft disabled:opacity-50"
+                >
+                  {busy ? "Saving…" : editing ? "Save" : "Add"}
+                </button>
+              </div>
+            </>
           )}
-          <div className="flex items-center gap-2">
-            <button
-              type="button"
-              onClick={onClose}
-              disabled={busy}
-              className="rounded-full border border-cream-line bg-white px-4 py-1.5 text-xs font-bold text-deep-green/65 transition hover:bg-cream-soft disabled:opacity-50"
-            >
-              Cancel
-            </button>
-            <button
-              type="button"
-              onClick={save}
-              disabled={busy}
-              className="rounded-full bg-deep-green px-4 py-1.5 text-xs font-bold text-cream transition hover:bg-deep-green-soft disabled:opacity-50"
-            >
-              {busy ? "Saving…" : editing ? "Save" : "Add"}
-            </button>
-          </div>
         </div>
       </div>
     </div>

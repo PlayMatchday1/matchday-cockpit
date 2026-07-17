@@ -139,7 +139,7 @@ export default function OpExCalendarView() {
       )}
 
       <div className="overflow-x-auto rounded-2xl border-[1.5px] border-cream-line bg-white p-4 shadow-md shadow-deep-green/10">
-        <div className="min-w-[900px]">
+        <div className="min-w-[1180px]">
           {/* Day-number header */}
           <div className={GRID}>
             <div />
@@ -379,29 +379,31 @@ function TotalsRow({
         {label}
       </div>
       {dayCols.map((d) => {
-        if (d > days) return <div key={d} className="invisible h-5" />;
+        if (d > days) return <div key={d} className="invisible h-6" />;
         const v = values[d] ?? 0;
         const isToday = d === todayDay;
+        // Every in-month cell renders (value or "—") so the row visually
+        // spans all 31 columns like the category rows above it.
         return (
           <div
             key={d}
-            className={`flex h-5 items-center justify-center overflow-hidden rounded-[2px] ${
+            className={`flex h-6 items-center justify-center overflow-hidden rounded-[2px] bg-cream-soft/70 px-0.5 ${
               isToday
                 ? "outline outline-1 outline-offset-1 outline-dashed outline-coral"
                 : ""
             }`}
           >
-            {v > 0 && (
-              <span
-                className={`px-0.5 text-[8px] leading-none tabular-nums ${
-                  strong
+            <span
+              className={`text-[9px] leading-none tabular-nums ${
+                v > 0
+                  ? strong
                     ? "font-bold text-deep-green"
-                    : "font-medium text-deep-green/55"
-                }`}
-              >
-                {formatMoney(v)}
-              </span>
-            )}
+                    : "font-semibold text-deep-green/70"
+                  : "text-deep-green/25"
+              }`}
+            >
+              {v > 0 ? formatMoney(v) : "—"}
+            </span>
           </div>
         );
       })}
