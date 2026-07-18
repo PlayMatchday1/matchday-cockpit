@@ -33,7 +33,9 @@ export type WhatsAppTemplate = {
 export const WHATSAPP_TEMPLATES: Record<string, WhatsAppTemplate> = {
   support_followup: {
     name: "support_followup",
-    languageCode: "en_US",
+    // Registered in WhatsApp Manager under language "en" (not en_US).
+    // Sending en_US 404s with "does not exist in en_US".
+    languageCode: "en",
     category: "MARKETING",
     label: "Support follow-up",
     description:
