@@ -1,19 +1,23 @@
 // TEMPORARY admin-only diagnostic route.
 //
-// GET /api/admin/whatsapp/verify-template?name=support_followup
+// GET /api/admin/whatsapp/verify-template?name=support_followup&key=...
 //
 // Fetches a message template's definition straight from Meta's Graph
 // API so we can read back its real language, status, and category and
 // reconcile the local template registry. Read-only — no DB writes, no
 // Meta mutations.
 //
-// Auth: reuses authenticateCrm (session JWT or CRON_SECRET) and then
-// gates strictly on is_admin=true. Chats-only users are rejected.
+// Auth: gated by a shared secret in the query string
+// (VERIFY_TEMPLATE_KEY) rather than a session check. This app stores
+// its Supabase session in localStorage, not a cookie, so a plain
+// browser URL visit sends no session for the server to validate. The
+// secret key lets the route be hit by just pasting the URL into the
+// address bar while we reconcile the registry.
 //
-// Remove this file once the template registry is fixed (follow-up
-// commit).
+// Remove this file AND the VERIFY_TEMPLATE_KEY env var once the
+// template registry is fixed (follow-up commit).
 
-import { authenticateCrm } from "@/lib/crmAuth";
+import { timingSafeEqual } from "node:crypto";
 
 export const runtime = "nodejs";
 export const maxDuration = 15;
@@ -21,16 +25,29 @@ export const maxDuration = 15;
 // Matches GRAPH_VERSION in src/lib/whatsapp.ts.
 const GRAPH_VERSION = "v21.0";
 
+function constantTimeMatch(a: string, b: string): boolean {
+  const ab = Buffer.from(a, "utf8");
+  const bb = Buffer.from(b, "utf8");
+  if (ab.length !== bb.length) return false;
+  return timingSafeEqual(ab, bb);
+}
+
 export async function GET(req: Request) {
-  const auth = await authenticateCrm(req);
-  if (!auth.ok) {
-    return Response.json({ error: auth.error }, { status: auth.status });
+  const params = new URL(req.url).searchParams;
+
+  const expectedKey = process.env.VERIFY_TEMPLATE_KEY;
+  if (!expectedKey) {
+    return Response.json(
+      { error: "VERIFY_TEMPLATE_KEY not configured" },
+      { status: 500 },
+    );
   }
-  if (!auth.isAdmin) {
-    return Response.json({ error: "Admin access required" }, { status: 403 });
+  const key = params.get("key") ?? "";
+  if (!constantTimeMatch(key, expectedKey)) {
+    return Response.json({ error: "Invalid or missing key" }, { status: 401 });
   }
 
-  const name = new URL(req.url).searchParams.get("name")?.trim();
+  const name = params.get("name")?.trim();
   if (!name) {
     return Response.json(
       { error: "Missing ?name= query param" },
