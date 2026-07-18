@@ -181,6 +181,24 @@ export async function GET(req: Request) {
   const templateWabas = perWaba.filter((w) => w.template_matches.length > 0);
   const metaWabaEntry = perWaba.find((w) => w.waba_id === META_WABA_ID) ?? null;
 
+  // Full unfiltered template list for META_WABA_ID, to rule out a
+  // false-empty from the name= filter and to show exactly what this
+  // WABA does contain.
+  const fullList = await graphGet(
+    `${META_WABA_ID}/message_templates`,
+    { fields: "name,language,status,category", limit: "200" },
+    token,
+  );
+  const fullListData = Array.isArray((fullList.body as { data?: unknown[] })?.data)
+    ? ((fullList.body as { data: Array<{ name?: string; language?: string; status?: string }> }).data)
+    : [];
+  const metaWabaAllTemplates = {
+    status: fullList.status,
+    count: fullListData.length,
+    names: fullListData.map((t) => `${t.name} (${t.language}, ${t.status})`),
+    contains_support_followup: fullListData.some((t) => t.name === "support_followup"),
+  };
+
   return Response.json({
     ok: true,
     sending_phone_number_id: SENDING_PHONE_NUMBER_ID,
@@ -215,6 +233,7 @@ export async function GET(req: Request) {
         : { note: "META_WABA_ID not queried" },
     },
 
+    meta_waba_all_templates: metaWabaAllTemplates,
     debug_token: debug.body,
     per_waba: perWaba,
   });
