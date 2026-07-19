@@ -12,13 +12,20 @@
 //                       (city, Thursday). Aggregated per city.
 //   Field Costs       → buildFieldCostRows(data, month) — same total as
 //                       the Field Costs tab. DATED: per-match venues on
-//                       their real match days; flat/quarterly venues on
-//                       fin_venues.billing_day per cadence; anything
+//                       their real match days UNLESS they carry a
+//                       billing_day (priced per match but invoiced on a
+//                       fixed day → the month's per-match total collapses
+//                       onto that day per cadence); flat/quarterly venues
+//                       on fin_venues.billing_day per cadence; anything
 //                       without captured timing folds into an "undated
-//                       remainder" (never smeared onto day 1). The
-//                       group subtotal always equals the Field Costs
-//                       tab total — dating only moves money across days,
-//                       never changes the sum.
+//                       remainder" (never smeared onto day 1). Caveat: a
+//                       per-match venue set to quarterly/annual dates only
+//                       its billing-month total on the billing day; its
+//                       off-cycle months land in the undated remainder
+//                       (the per-month builder can't roll 3 months into
+//                       one lump). The group subtotal always equals the
+//                       Field Costs tab total — dating only moves money
+//                       across days, never changes the sum.
 //   Marketing/Personnel/Equipment/Other → fin_opex_entries.
 //
 // Every dated amount flows into Daily Total + Cumulative. The undated
@@ -216,14 +223,22 @@ function fieldCostGroup(
 
     // Try per-match dating first (real match days), but only accept it if
     // the dated cells reconcile to the row's monthly amount — otherwise
-    // (Crossbar dashboard payout, override, schedule drift) fall back to a
-    // single dated lump so the subtotal is never distorted.
+    // (Crossbar dashboard payout, override, schedule drift, or a per-match
+    // venue that's invoiced on a fixed day) fall back to a single dated
+    // lump so the subtotal is never distorted.
+    //
+    // billing_day set on a per_match venue means "priced per match, but
+    // invoiced on a fixed day" (e.g. ATH Katy/Pearland billed monthly).
+    // The amount is unchanged (matches × rate); we just collapse it onto
+    // the billing day via the fallback path instead of spreading it over
+    // match days. billing_day null keeps the auto-spread default.
     let cells: Record<number, number> = {};
     let datedSum = 0;
     const perMatchEligible =
       fc.billingType === "per_match" &&
       fc.override == null &&
-      !isDashboardDriven(data, fc.primaryVenueId);
+      !isDashboardDriven(data, fc.primaryVenueId) &&
+      primary?.billing_day == null;
 
     if (perMatchEligible) {
       for (const leg of fc.legs) {
