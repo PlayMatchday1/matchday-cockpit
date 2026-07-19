@@ -1305,6 +1305,15 @@ function BillingTimingCell({
             if (next !== cadence) {
               onSaveCadence(next as FinVenue["billing_cadence"]);
             }
+            // A schedule per-match venue's "auto" state IS billing_day
+            // null, and the day box only renders once mode leaves "auto".
+            // So choosing a cadence must also seed a billing_day, or mode
+            // derives straight back to "auto" and the box never appears
+            // (the deadlock). Default to day 1; the box now shows for the
+            // operator to set the real invoice day.
+            if (isSchedulePerMatch && venue.billing_day == null) {
+              onSaveDay("1");
+            }
           }}
           className="rounded-md border border-cream-line bg-cream-soft px-1.5 py-1 font-mono text-[10px] uppercase tracking-wider text-deep-green focus:border-deep-green focus:outline-none disabled:opacity-60"
         >
@@ -1363,12 +1372,6 @@ function BillingTimingCell({
             ))}
           </select>
         </div>
-      )}
-      {/* per_match: a cadence is picked but no day yet → still auto-spread */}
-      {isSchedulePerMatch && showDay && venue.billing_day == null && !anySaving && (
-        <span className="text-[9px] font-semibold text-coral/80">
-          enter a day — per-match until then
-        </span>
       )}
       {/* per_match caveat, surfaced (not silent): quarterly/annual only
           dates the billing-month total; off-cycle months land undated */}
