@@ -169,6 +169,15 @@ export type FinVenue = {
   // for cost purposes. Migration column NOT NULL DEFAULT true so reads
   // never see null; mapper still defaults defensively for cached rows.
   charge_on_cancel: boolean;
+  // Per-venue billing TIMING for the OpEx calendar (migration 0069).
+  // Only used to place a flat/quarterly venue's monthly amount on a real
+  // day; per_match venues date off their schedule instead. billing_day
+  // null = timing not captured (shown as an undated remainder, never
+  // defaulted to day 1). Defaults applied in the mapper so pre-migration
+  // cached rows read cleanly.
+  billing_cadence: "monthly" | "quarterly" | "annual";
+  billing_day: number | null;
+  billing_anchor_month: number | null;
 };
 
 export type FinMemberSpotsRow = {
@@ -712,6 +721,21 @@ async function load(quarter: QuarterInfo): Promise<void> {
       // opt out.
       charge_on_cancel:
         r.charge_on_cancel === false ? false : true,
+      // Billing timing (migration 0069). Pre-migration cached rows lack
+      // these keys → default to monthly / undated so nothing breaks
+      // before the columns land in prod.
+      billing_cadence:
+        r.billing_cadence === "quarterly" || r.billing_cadence === "annual"
+          ? r.billing_cadence
+          : "monthly",
+      billing_day:
+        r.billing_day === null || r.billing_day === undefined
+          ? null
+          : Math.round(asNumber(r.billing_day)),
+      billing_anchor_month:
+        r.billing_anchor_month === null || r.billing_anchor_month === undefined
+          ? null
+          : Math.round(asNumber(r.billing_anchor_month)),
     };
   });
 

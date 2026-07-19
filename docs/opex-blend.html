@@ -1,0 +1,261 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+<meta charset="UTF-8">
+<meta name="viewport" content="width=device-width, initial-scale=1.0">
+<title>OpEx Calendar — Blend v3 (collapsible)</title>
+<link rel="preconnect" href="https://fonts.googleapis.com">
+<link rel="preconnect" href="https://fonts.gstatic.com" crossorigin>
+<link href="https://fonts.googleapis.com/css2?family=Anton&family=Inter:wght@400;500;600;700;800&display=swap" rel="stylesheet">
+<style>
+  :root{
+    --cream:#f2ebdd;--cream-2:#efe7d6;--card:#ffffff;--ink:#17241d;--green-deep:#123d2c;
+    --green-bright:#2fbf6c;--green-mid:#3aa86a;--green-tint:#e6f4ec;--green-tint-2:#d5eddd;
+    --today:#d7f0e0;--today-head:#33c46f;--muted:#8b8f85;--muted-2:#a7a99d;--orange:#cf5a20;
+    --amber-bg:#fbeede;--amber-line:#e9a86a;--line:#e9e1d1;--line-soft:#f0e9db;
+  }
+  *{box-sizing:border-box;margin:0;padding:0}
+  body{font-family:'Inter',system-ui,sans-serif;background:var(--cream);color:var(--ink);padding:28px 26px 60px;-webkit-font-smoothing:antialiased}
+  .wrap{max-width:1240px;margin:0 auto}
+  .toolbar{display:flex;align-items:flex-end;justify-content:space-between;gap:20px;margin-bottom:16px;flex-wrap:wrap}
+  h1{font-family:'Anton',sans-serif;font-size:42px;letter-spacing:.5px;color:var(--green-deep);line-height:.95}
+  .sub{color:var(--muted);font-size:14px;margin-top:6px;font-weight:500}
+  .controls{display:flex;align-items:center;gap:8px}
+  .seg{display:flex;background:var(--card);border:1px solid var(--line);border-radius:11px;overflow:hidden}
+  .seg button{border:0;background:transparent;padding:9px 15px;font:600 13px 'Inter';color:var(--green-deep);cursor:pointer}
+  .seg button+button{border-left:1px solid var(--line)}
+  .seg button.on{background:var(--green-tint)}
+  .add{border:0;background:var(--green-bright);color:#06301d;font:700 13px 'Inter';padding:11px 17px;border-radius:11px;cursor:pointer}
+  .caveat{display:flex;gap:10px;align-items:flex-start;background:var(--amber-bg);border:1px solid var(--amber-line);border-radius:11px;padding:10px 14px;margin-bottom:16px;font-size:12.5px;color:#8a4a19;line-height:1.5}
+  .caveat b{color:#7a3f13}
+  .kpis{display:grid;grid-template-columns:repeat(4,1fr);gap:12px;margin-bottom:14px}
+  .kpi{background:var(--card);border:1px solid var(--line);border-radius:14px;padding:14px 16px}
+  .kpi .lab{font-size:11px;font-weight:700;letter-spacing:.9px;text-transform:uppercase;color:var(--muted)}
+  .kpi .val{font-family:'Anton',sans-serif;font-size:27px;color:var(--green-deep);margin-top:6px;letter-spacing:.3px}
+  .kpi .val small{font-family:'Inter';font-size:13px;font-weight:600;color:var(--muted-2);margin-left:5px}
+  .panel{background:var(--card);border:1px solid var(--line);border-radius:16px}
+  .bpanel{padding:16px 20px;margin-bottom:16px}
+  .ph{display:flex;align-items:baseline;justify-content:space-between;margin-bottom:6px}
+  .ph .t{font-weight:800;font-size:12.5px;letter-spacing:.7px;text-transform:uppercase;color:var(--green-deep)}
+  .ph .s{font-size:12px;color:var(--muted);font-weight:600}
+  .bar-row{display:grid;grid-template-columns:168px 1fr 88px 44px;align-items:center;gap:12px;padding:7px 0}
+  .bar-row+.bar-row{border-top:1px solid var(--line-soft)}
+  .bl .nm{font-weight:700;font-size:12.5px;color:var(--ink)}
+  .bl .src{font-size:10px;color:var(--muted-2);font-weight:500;margin-top:1px}
+  .track{height:18px;background:#f1ead9;border-radius:5px;overflow:hidden}
+  .fill{height:100%;background:linear-gradient(90deg,var(--green-mid),var(--green-bright));border-radius:5px;min-width:2px}
+  .amt{text-align:right;font-weight:800;font-size:13px;color:var(--green-deep);font-variant-numeric:tabular-nums}
+  .pct{text-align:right;font-size:11.5px;color:var(--muted);font-weight:600;font-variant-numeric:tabular-nums}
+  .bar-row.zero .nm,.bar-row.zero .amt{color:var(--muted-2)}
+  .bar-row.zero .track{background:#f6f1e6}
+
+  .caltitle{display:flex;align-items:baseline;justify-content:space-between;padding:16px 20px 12px;gap:12px;flex-wrap:wrap}
+  .caltitle .t{font-weight:800;font-size:12.5px;letter-spacing:.7px;text-transform:uppercase;color:var(--green-deep)}
+  .caltitle .s{font-size:12px;color:var(--muted);font-weight:600}
+  .expand{border:1px solid var(--line);background:#fff;border-radius:8px;padding:5px 11px;font:600 11px 'Inter';color:var(--green-deep);cursor:pointer}
+  .scroll{overflow-x:auto;border-top:1px solid var(--line)}
+  table{border-collapse:separate;border-spacing:0;width:100%;min-width:max-content}
+  th,td{white-space:nowrap}
+  thead th{position:sticky;top:0;z-index:3;background:var(--green-deep);color:#eaf5ee;font:700 12px 'Inter';height:50px}
+  thead th.corner{left:0;z-index:5;text-align:left;padding:0 18px;letter-spacing:.7px;text-transform:uppercase;color:#bfe0cd;font-size:11px;min-width:250px;width:250px}
+  .dcell{width:46px;min-width:46px;text-align:center;position:relative}
+  .dcell .dn{font-weight:700;font-size:14px}
+  .dcell .dw{font-size:9.5px;font-weight:600;color:#8fc2a4;margin-top:1px}
+  thead th.today-h{background:var(--today-head);color:#06301d}
+  thead th.today-h .dw{color:#0b4a2c}
+  thead th.today-h::after{content:'TODAY';position:absolute;font-size:7px;font-weight:800;letter-spacing:.5px;left:50%;transform:translate(-50%,14px)}
+  thead th.wknd{background:#173f2e}
+  tbody td{border-bottom:1px solid var(--line-soft);height:40px;text-align:center;font-size:12px}
+  tbody td.lab{position:sticky;left:0;z-index:2;background:var(--card);text-align:left;padding:0 18px;min-width:250px;width:250px;border-right:1px solid var(--line)}
+  td.today-c{background:var(--today)}
+  td.wknd-c{background:#faf7ef}
+  td.today-c.wknd-c{background:var(--today)}
+
+  tr.cat{cursor:pointer}
+  tr.cat td{background:var(--green-tint);border-bottom:1px solid var(--green-tint-2);height:44px}
+  tr.cat td.lab{background:var(--green-tint)}
+  tr.cat td.today-c{background:var(--green-tint-2)}
+  tr.cat:hover td{background:#def0e5}
+  tr.cat:hover td.lab{background:#def0e5}
+  .chev{display:inline-block;width:0;height:0;border-left:6px solid var(--green-deep);border-top:5px solid transparent;border-bottom:5px solid transparent;margin-right:9px;transition:transform .15s;vertical-align:middle}
+  tr.cat.open .chev{transform:rotate(90deg)}
+  .catname{display:flex;align-items:center;justify-content:space-between;gap:10px}
+  .catname .nm{font-weight:800;font-size:12px;letter-spacing:.5px;text-transform:uppercase;color:var(--green-deep)}
+  .catname .st{font-weight:800;font-size:12.5px;color:var(--green-deep);font-variant-numeric:tabular-nums}
+  .src{font-size:10px;color:#6f9a82;font-weight:600;margin-top:2px;padding-left:15px}
+  .tag{display:inline-block;font-size:8.5px;font-weight:800;letter-spacing:.4px;padding:1px 6px;border-radius:5px;background:#eaf3ec;color:#4b7a5f;text-transform:uppercase;margin-left:7px;vertical-align:middle}
+  .achip{display:inline-block;padding:3px 8px;border-radius:7px;background:#dff0e6;color:var(--green-deep);font-weight:700;font-size:11px;font-variant-numeric:tabular-nums;border:1px solid var(--green-tint-2)}
+  tr.cat.open .achip{display:none}
+
+  tr.child .lab{padding-left:34px}
+  tr.child .nm{font-weight:600;font-size:13px}
+  tr.child .city{font-size:11px;color:var(--muted);font-weight:500;margin-left:6px}
+  .vtag{display:inline-block;font-size:8px;font-weight:800;letter-spacing:.3px;padding:1px 5px;border-radius:4px;background:#eef1e9;color:#5c7a63;text-transform:uppercase;margin-left:7px;vertical-align:middle}
+  .vtag.q{background:#fbeede;color:#b5701f}
+  .chip{display:inline-block;padding:3px 9px;border-radius:7px;background:var(--green-tint);color:var(--green-deep);font-weight:700;font-size:11.5px;font-variant-numeric:tabular-nums;border:1px solid var(--green-tint-2)}
+  .chip.q{background:#fbeede;color:#a15a1f;border-color:var(--amber-line)}
+
+  tr.empty td{height:40px;background:#fbfaf5;border-bottom:1px solid var(--line-soft)}
+  tr.empty td.lab{background:#fbfaf5}
+  .enm{font-weight:700;font-size:11px;letter-spacing:.4px;text-transform:uppercase;color:var(--muted)}
+  td.espan{text-align:left !important;padding-left:18px;color:var(--muted-2);font-size:12.5px;font-weight:600}
+  .ehint{color:#bcb6a7;font-weight:500;font-size:11px}
+
+  tr.dtot td{height:44px;background:var(--cream-2);border-top:2px solid var(--green-deep);border-bottom:1px solid var(--line)}
+  tr.dtot td.lab{background:var(--cream-2);font-weight:800;font-size:11.5px;letter-spacing:.5px;text-transform:uppercase;color:var(--green-deep)}
+  tr.dtot td .n{font-weight:800;font-size:11.5px;color:var(--green-deep);font-variant-numeric:tabular-nums}
+  tr.dtot td.today-c{background:#e6ddc9}
+  tr.cum td{background:#fbf9f3}
+  tr.cum td.lab{background:#fbf9f3;font-weight:700;font-size:10.5px;letter-spacing:.5px;text-transform:uppercase;color:var(--muted)}
+  tr.cum td.spark{position:relative;height:54px;padding:0}
+  tr.cum td.spark .sv{display:block;width:100%;height:54px}
+  tr.cum td.spark .cend{position:absolute;top:8px;right:14px;font-size:11px;font-weight:800;color:var(--green-deep);font-variant-numeric:tabular-nums;background:rgba(251,249,243,.9);padding:2px 7px;border-radius:6px;border:1px solid var(--line)}
+
+  .recon{padding:14px 20px;background:#fbf9f3;border-top:1px solid var(--line);font-size:12.5px;color:#5c6b60;line-height:1.5}
+  .recon b{color:var(--green-deep);font-variant-numeric:tabular-nums}
+  .foot{margin-top:16px;font-size:12.5px;color:var(--muted);line-height:1.6;max-width:860px}
+  .foot b{color:var(--green-deep)}
+</style>
+</head>
+<body>
+<div class="wrap">
+
+  <div class="toolbar">
+    <div><h1>OpEx Calendar</h1><div class="sub">Operating cash outflow · July 2026 &nbsp;·&nbsp; blend v3 · collapsible</div></div>
+    <div class="controls">
+      <div class="seg"><button>‹ Prev</button><button class="on">Current</button><button>Next ›</button></div>
+      <button class="add">+ Add expense</button>
+    </div>
+  </div>
+
+  <div class="caveat"><span>⚠️</span>
+    <div><b>Illustrative preview.</b> Amounts come from your Expenses / Manager Pay / Field Costs screens; the <b>per-venue field-cost dates &amp; cadence</b> (which venue hits monthly vs quarterly, and on what day) are illustrative — that&rsquo;s the timing data Claude Code is confirming. React to the layout &amp; the collapse behavior.</div>
+  </div>
+
+  <div class="kpis">
+    <div class="kpi"><div class="lab">Total July outflow</div><div class="val">$38,135</div></div>
+    <div class="kpi"><div class="lab">Top category</div><div class="val">Field Costs<small>70%</small></div></div>
+    <div class="kpi"><div class="lab">Biggest hit</div><div class="val">Jul 1<small>$19,535</small></div></div>
+    <div class="kpi"><div class="lab">Categories with spend</div><div class="val">3<small>of 7</small></div></div>
+  </div>
+
+  <div class="panel bpanel">
+    <div class="ph"><span class="t">Where the money goes</span><span class="s">July 2026 · share of outflow</span></div>
+    <div id="bars"></div>
+  </div>
+
+  <div class="panel">
+    <div class="caltitle">
+      <span class="t">Calendar · when cash goes out</span>
+      <span class="s">click a category to expand · <button class="expand" id="toggleAll">Expand all</button></span>
+    </div>
+    <div class="scroll"><table id="cal"></table></div>
+    <div class="recon">Everything sits on its real pay / billing date · <b>July total $38,135</b>. Collapse a category to see its timing at a glance; expand to see which manager or venue drives each hit. <i>(Field-cost billing dates shown here are illustrative pending confirmation.)</i></div>
+  </div>
+
+  <div class="foot"><b>Blend v3:</b> your calendar, now with every source on its real date — so the cumulative actually jumps when a big venue bill lands. Each category collapses to a single row that still shows <b>when</b> money hits (aggregated chips), and expands to the per-manager / per-venue detail. Field Costs defaults collapsed so ~15 venues don&rsquo;t crowd the view, but one click shows the full timing — including quarterly lumps.</div>
+
+</div>
+
+<script>
+  const DAYS=31, TODAY=18, MONTH=6, YEAR=2026;
+  const wl=['S','M','T','W','T','F','S'];
+  const fmt=n=>'$'+n.toLocaleString('en-US');
+  const isW=d=>{const g=new Date(YEAR,MONTH,d).getDay();return g===0||g===6;};
+  const cls=d=>(d===TODAY?' today-c':'')+(isW(d)?' wknd-c':'');
+
+  // ---- data ----
+  const groups=[
+    {key:'city',name:'City Manager Pay',src:'from Expenses · fin_expenses',open:true,items:[
+      {nm:'Yarra',city:'Houston',cells:{1:500}},{nm:'Garrett',city:'Austin',cells:{1:500}},
+      {nm:'Rodrigo',city:'OKC',cells:{1:500}},{nm:'Willfried',city:'St. Louis',cells:{1:500}},
+      {nm:'Chris',city:'Dallas',cells:{15:800}},{nm:'Abraham',city:'San Antonio',cells:{15:500}},
+    ]},
+    {key:'match',name:'Match Manager Pay',tag:'weekly',src:'from Manager Pay page · per city',open:false,items:[
+      {nm:'Austin',cells:{2:1090,9:760,16:910,23:910}},{nm:'Dallas',cells:{2:100,9:40,16:120,23:120}},
+      {nm:'Houston',cells:{2:470,9:360,16:560,23:540}},{nm:'San Antonio',cells:{2:420,9:440,16:430,23:370}},
+      {nm:'Atlanta',cells:{2:80,9:60,16:100,23:100}},{nm:'St. Louis',cells:{2:20,9:40,16:40,23:60}},
+      {nm:'OKC',cells:{2:40,9:20,16:40,23:60}},
+    ]},
+    {key:'field',name:'Field Costs',tag:'monthly · quarterly',src:'from Field Costs config · per venue',open:false,items:[
+      {nm:'ATH Pearland',city:'Houston',vtag:'monthly',cells:{1:7040}},
+      {nm:'ATH Katy',city:'Houston',vtag:'monthly',cells:{1:2320}},
+      {nm:'Onion Creek',city:'Austin',vtag:'quarterly',q:true,cells:{10:9000}},
+      {nm:'Hattrick',city:'Austin',vtag:'monthly',cells:{1:648}},
+      {nm:'Centennial Commons',city:'St. Louis',vtag:'monthly',cells:{1:480}},
+      {nm:'Crossbar Rowlett',city:'Dallas',vtag:'monthly',cells:{1:480}},
+      {nm:'12 more venues',city:'',vtag:'monthly',cells:{1:6567}},
+    ]},
+  ];
+
+  // aggregates
+  const dayTot=Array(DAYS+1).fill(0);
+  groups.forEach(g=>{
+    g.agg={}; g.sub=0;
+    g.items.forEach(it=>Object.entries(it.cells).forEach(([d,v])=>{
+      g.agg[d]=(g.agg[d]||0)+v; g.sub+=v; dayTot[+d]+=v;
+    }));
+  });
+
+  // header
+  let head='<thead><tr><th class="corner">Category / line item</th>';
+  for(let d=1;d<=DAYS;d++){const gd=new Date(YEAR,MONTH,d).getDay();let c='dcell';if(d===TODAY)c+=' today-h';else if(gd===0||gd===6)c+=' wknd';
+    head+=`<th class="${c}"><div class="dn">${d}</div><div class="dw">${wl[gd]}</div></th>`;}
+  head+='</tr></thead>';
+
+  let body='<tbody>';
+  groups.forEach(g=>{
+    const tag=g.tag?`<span class="tag">${g.tag}</span>`:'';
+    body+=`<tr class="cat" id="h-${g.key}" onclick="toggle('${g.key}')"><td class="lab"><div class="catname"><span class="nm"><span class="chev"></span>${g.name}${tag}</span><span class="st">${fmt(g.sub)}</span></div><div class="src">${g.src}</div></td>`;
+    for(let d=1;d<=DAYS;d++)body+=`<td class="${cls(d)}">${g.agg[d]?`<span class="achip">${fmt(g.agg[d])}</span>`:''}</td>`;
+    body+='</tr>';
+    g.items.forEach(it=>{
+      body+=`<tr class="child grp-${g.key}"><td class="lab"><span class="nm">${it.nm}</span>${it.city?`<span class="city">${it.city}</span>`:''}${it.vtag?`<span class="vtag ${it.q?'q':''}">${it.vtag}</span>`:''}</td>`;
+      for(let d=1;d<=DAYS;d++)body+=`<td class="${cls(d)}">${it.cells[d]?`<span class="chip ${it.q?'q':''}">${fmt(it.cells[d])}</span>`:''}</td>`;
+      body+='</tr>';
+    });
+  });
+  // empties
+  body+=`<tr class="empty"><td class="lab"><span class="enm">No entries this month</span></td><td class="espan" colspan="${DAYS}">Marketing · Personnel · Equipment · Other &nbsp;&nbsp;<span class="ehint">add via + Add Expense</span></td></tr>`;
+  // daily total
+  body+='<tr class="dtot"><td class="lab">Daily total</td>';
+  for(let d=1;d<=DAYS;d++)body+=`<td class="${cls(d)}">${dayTot[d]?`<span class="n">${fmt(dayTot[d])}</span>`:'<span class="n" style="color:#c3bca9">—</span>'}</td>`;
+  body+='</tr>';
+  // cumulative sparkline
+  const cum=[];let run=0;for(let d=1;d<=DAYS;d++){run+=dayTot[d];cum[d]=run;}
+  const maxCum=run||1,W=DAYS*46,yB=42,yT=10;
+  const X=d=>(d-0.5)*46,Y=d=>yB-(cum[d]/maxCum)*(yB-yT);
+  let pts='';for(let d=1;d<=DAYS;d++)pts+=`${d>1?' L ':''}${X(d).toFixed(1)},${Y(d).toFixed(1)}`;
+  const area=`M ${X(1).toFixed(1)},${yB} L ${pts} L ${X(DAYS).toFixed(1)},${yB} Z`;
+  const sv=`<svg class="sv" viewBox="0 0 ${W} 54" preserveAspectRatio="none"><path d="${area}" fill="#e2f1e8"/><path d="M ${pts}" fill="none" stroke="#2fbf6c" stroke-width="2" vector-effect="non-scaling-stroke" stroke-linejoin="round"/></svg><span class="cend">${fmt(run)} by month end</span>`;
+  body+=`<tr class="cum"><td class="lab">Cumulative</td><td class="spark" colspan="${DAYS}">${sv}</td></tr>`;
+  body+='</tbody>';
+  document.getElementById('cal').innerHTML=head+body;
+
+  // ---- collapse behavior ----
+  const state={};
+  function apply(k){
+    const open=state[k];
+    document.querySelectorAll('.grp-'+k).forEach(r=>r.style.display=open?'':'none');
+    document.getElementById('h-'+k).classList.toggle('open',open);
+  }
+  window.toggle=function(k){state[k]=!state[k];apply(k);};
+  groups.forEach(g=>{state[g.key]=g.open;apply(g.key);});
+  document.getElementById('toggleAll').onclick=function(){
+    const anyClosed=groups.some(g=>!state[g.key]);
+    groups.forEach(g=>{state[g.key]=anyClosed;apply(g.key);});
+    this.textContent=anyClosed?'Collapse all':'Expand all';
+  };
+
+  // summary bars
+  const cats=groups.map(g=>({nm:g.name,src:g.src.split(' · ')[0],amt:g.sub}))
+    .concat([{nm:'Marketing',src:'from + Add Expense',amt:0},{nm:'Personnel',src:'from + Add Expense',amt:0},{nm:'Equipment',src:'from + Add Expense',amt:0},{nm:'Other',src:'from + Add Expense',amt:0}])
+    .sort((a,b)=>b.amt-a.amt);
+  const total=cats.reduce((s,c)=>s+c.amt,0),maxCat=Math.max(...cats.map(c=>c.amt));
+  document.getElementById('bars').innerHTML=cats.map(c=>{
+    const w=c.amt?Math.max(2,c.amt/maxCat*100):0,pct=c.amt?(c.amt/total*100).toFixed(0)+'%':'—';
+    return `<div class="bar-row ${c.amt?'':'zero'}"><div class="bl"><div class="nm">${c.nm}</div><div class="src">${c.src}</div></div><div class="track">${c.amt?`<div class="fill" style="width:${w}%"></div>`:''}</div><div class="amt">${c.amt?fmt(c.amt):'$0'}</div><div class="pct">${pct}</div></div>`;
+  }).join('');
+</script>
+</body>
+</html>
