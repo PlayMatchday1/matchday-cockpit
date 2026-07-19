@@ -1,326 +1,283 @@
 "use client";
 
-// OpEx Calendar — cash-outflow calendar on a 31-column date grid, in the
-// Payment Calendar visual language (mint pill = scheduled payment, coral
-// dashed outline = today). Rows group by category then subcategory. City
-// Manager Pay is derived read-only from the checkIns roster; all other
-// categories are user-editable via the entry modal. Phase 1.
+// OpEx Calendar — "blend v3" redesign. A cash-outflow calendar where
+// every source sits on its real date: City Manager Pay and Match Manager
+// Pay from fin_expenses, Field Costs dated per venue (per-match venues on
+// their match days, flat/quarterly venues on their billing day), and the
+// four editable categories from fin_opex_entries. Categories collapse to
+// a single timing row (aggregated chips) and expand to per-manager /
+// per-venue detail. Ported from docs/opex-blend.html (v3); tokens taken
+// from that mock's <style> block, display text uses the app's font-display.
+//
+// Data wiring lives in src/lib/opexSources.ts (buildOpexCalendar). This
+// component is presentation + collapse state + month nav + the add/edit
+// modal only.
 
 import { useMemo, useState } from "react";
 import { daysInMonth } from "@/lib/checkIns";
 import { useAuth } from "@/lib/useAuth";
+import { useFinanceData } from "@/lib/useFinanceData";
 import { useOpexEntries } from "@/lib/useOpexEntries";
-import {
-  OPEX_CATEGORIES,
-  cityManagerRows,
-  entryRows,
-  formatMoney,
-  monthLabel,
-  type OpexCategory,
-  type OpexDraft,
-  type OpexEntry,
-  type OpexRow,
-} from "@/lib/opex";
+import { formatMoney, monthLabel, type OpexDraft, type OpexEntry } from "@/lib/opex";
+import { buildOpexCalendar, type CalGroup } from "@/lib/opexSources";
 import OpExEntryModal from "./OpExEntryModal";
 
-const GRID = "grid grid-cols-[180px_repeat(31,minmax(0,1fr))] gap-[2px]";
+// Canonical category order for the "Where the money goes" bars (all 7,
+// including empty editable cats rendered muted).
+const ALL_CATEGORIES = [
+  "City Manager Pay",
+  "Match Manager Pay",
+  "Field Costs",
+  "Marketing",
+  "Personnel",
+  "Equipment",
+  "Other",
+];
+
+const WD = ["S", "M", "T", "W", "T", "F", "S"];
 
 export default function OpExCalendarView() {
   const { appUser } = useAuth();
+  const { data } = useFinanceData();
   const { entries, loading, error, create, update, remove } = useOpexEntries();
 
   const now = new Date();
   const [year, setYear] = useState(now.getFullYear());
   const [month0, setMonth0] = useState(now.getMonth());
   const [modal, setModal] = useState<{ entry: OpexEntry | null } | null>(null);
+  const [open, setOpen] = useState<Record<string, boolean>>({});
 
   const days = daysInMonth(year, month0);
-  const isThisMonth =
-    year === now.getFullYear() && month0 === now.getMonth();
-  const todayDay = isThisMonth ? now.getDate() : -1;
+  const isThisMonth = year === now.getFullYear() && month0 === now.getMonth();
+  const today = isThisMonth ? now.getDate() : -1;
 
-  // Rows per category (city_manager derived; the rest from entries).
-  const sections = useMemo(() => {
-    return OPEX_CATEGORIES.map((cat) => {
-      const rows: OpexRow[] =
-        cat.key === "city_manager"
-          ? cityManagerRows(year, month0)
-          : entryRows(entries, cat.key, year, month0);
-      const subtotal = rows.reduce(
-        (s, r) => s + r.amount * r.days.length,
-        0,
-      );
-      return { cat, rows, subtotal };
-    });
-  }, [entries, year, month0]);
-
-  // Daily totals + cumulative across every row.
-  const { daily, cumulative, monthTotal } = useMemo(() => {
-    const daily = new Array<number>(days + 1).fill(0); // 1-indexed
-    for (const s of sections) {
-      for (const r of s.rows) {
-        for (const d of r.days) daily[d] += r.amount;
-      }
-    }
-    const cumulative = new Array<number>(days + 1).fill(0);
-    let run = 0;
-    for (let d = 1; d <= days; d++) {
-      run += daily[d];
-      cumulative[d] = run;
-    }
-    return { daily, cumulative, monthTotal: run };
-  }, [sections, days]);
-
-  const breakdown = useMemo(
-    () =>
-      sections
-        .map((s) => ({
-          key: s.cat.key,
-          label: s.cat.label,
-          amount: s.subtotal,
-          pct: monthTotal > 0 ? (s.subtotal / monthTotal) * 100 : 0,
-        }))
-        .filter((b) => b.amount > 0),
-    [sections, monthTotal],
+  const cal = useMemo(
+    () => buildOpexCalendar(data, entries, year, month0),
+    [data, entries, year, month0],
   );
+
+  // Collapse state: fall back to each group's default until the user
+  // toggles it. Keyed by group.key so it persists across month nav.
+  const isOpen = (g: CalGroup) => open[g.key] ?? g.defaultOpen;
+  function toggle(key: string, def: boolean) {
+    setOpen((s) => ({ ...s, [key]: !(s[key] ?? def) }));
+  }
+  const anyClosed = cal.groups.some((g) => !isOpen(g));
+  function toggleAll() {
+    const next: Record<string, boolean> = {};
+    for (const g of cal.groups) next[g.key] = anyClosed; // expand if any closed
+    setOpen(next);
+  }
+
+  // Bars: every category, amount from its group (0 when absent/empty).
+  const bars = useMemo(() => {
+    const amtByName = new Map<string, number>();
+    for (const g of cal.groups) amtByName.set(g.name, g.subtotal);
+    const rows = ALL_CATEGORIES.map((name) => ({
+      name,
+      amount: amtByName.get(name) ?? 0,
+    }));
+    const total = rows.reduce((s, r) => s + r.amount, 0);
+    const max = Math.max(1, ...rows.map((r) => r.amount));
+    return rows
+      .sort((a, b) => b.amount - a.amount)
+      .map((r) => ({
+        ...r,
+        pct: total > 0 ? (r.amount / total) * 100 : 0,
+        width: r.amount ? Math.max(2, (r.amount / max) * 100) : 0,
+      }));
+  }, [cal.groups]);
+
+  const topCat = bars.find((b) => b.amount > 0) ?? null;
 
   function shiftMonth(delta: number) {
     const d = new Date(year, month0 + delta, 1);
     setYear(d.getFullYear());
     setMonth0(d.getMonth());
   }
-
   async function handleSave(id: string | null, draft: OpexDraft) {
     if (id) await update(id, draft);
     else await create(draft, appUser?.id ?? null);
   }
 
-  const dayCols = Array.from({ length: 31 }, (_, i) => i + 1);
+  const dayCols = Array.from({ length: days }, (_, i) => i + 1);
+  const cellCls = (d: number) =>
+    (d === today ? " today-c" : "") + (isWeekend(year, month0, d) ? " wknd-c" : "");
 
   return (
-    <div>
-      {/* Header */}
-      <div className="mb-5 flex flex-wrap items-end justify-between gap-3">
+    <div className="opex-cal">
+      <style>{OPEX_CSS}</style>
+
+      {/* Toolbar */}
+      <div className="ox-toolbar">
         <div>
-          <h2 className="text-2xl font-bold tracking-tight text-deep-green">
-            OpEx Calendar
-          </h2>
-          <p className="mt-0.5 text-sm text-deep-green/60">
-            Cash outflow calendar · {monthLabel(year, month0)}
-          </p>
+          <h1 className="font-display">OpEx Calendar</h1>
+          <div className="ox-sub">Operating cash outflow · {monthLabel(year, month0)}</div>
         </div>
-        <div className="flex items-center gap-2">
-          <div className="flex items-center gap-1">
-            <NavBtn onClick={() => shiftMonth(-1)}>‹ Prev</NavBtn>
-            <NavBtn
+        <div className="ox-controls">
+          <div className="ox-seg">
+            <button onClick={() => shiftMonth(-1)}>‹ Prev</button>
+            <button
+              className={isThisMonth ? "on" : ""}
               onClick={() => {
                 setYear(now.getFullYear());
                 setMonth0(now.getMonth());
               }}
             >
               Current
-            </NavBtn>
-            <NavBtn onClick={() => shiftMonth(1)}>Next ›</NavBtn>
+            </button>
+            <button onClick={() => shiftMonth(1)}>Next ›</button>
           </div>
-          <button
-            type="button"
-            onClick={() => setModal({ entry: null })}
-            className="rounded-full bg-deep-green px-4 py-1.5 text-xs font-bold text-cream transition hover:bg-deep-green-soft"
-          >
+          <button className="ox-add" onClick={() => setModal({ entry: null })}>
             + Add expense
           </button>
         </div>
       </div>
 
-      {error && (
-        <div className="mb-4 rounded-md border border-coral/40 bg-coral-soft px-3 py-2 text-xs text-coral-hover">
-          Failed to load: {error}
+      {error && <div className="ox-err">Failed to load entries: {error}</div>}
+
+      {/* KPI tiles */}
+      <div className="ox-kpis">
+        <Kpi label={`Total ${MONTHS[month0]} outflow`} value={formatMoney(cal.monthTotal)} />
+        <Kpi
+          label="Top category"
+          value={topCat ? topCat.name : "—"}
+          small={topCat ? `${Math.round(topCat.pct)}%` : undefined}
+        />
+        <Kpi
+          label="Biggest hit"
+          value={cal.biggestHit ? `${MONTHS[month0]} ${cal.biggestHit.day}` : "—"}
+          small={cal.biggestHit ? formatMoney(cal.biggestHit.amount) : undefined}
+        />
+        <Kpi
+          label="Categories with spend"
+          value={String(cal.categoriesWithSpend)}
+          small={`of ${ALL_CATEGORIES.length}`}
+        />
+      </div>
+
+      {/* Where the money goes */}
+      <div className="ox-panel ox-bpanel">
+        <div className="ox-ph">
+          <span className="t">Where the money goes</span>
+          <span className="s">{monthLabel(year, month0)} · share of outflow</span>
         </div>
-      )}
-
-      <div className="overflow-x-auto rounded-2xl border-[1.5px] border-cream-line bg-white p-4 shadow-md shadow-deep-green/10">
-        <div className="min-w-[1180px]">
-          {/* Day-number header */}
-          <div className={GRID}>
-            <div />
-            {dayCols.map((d) => (
-              <div
-                key={d}
-                className={`pb-1 text-center font-mono text-[9px] uppercase tracking-wider ${
-                  d > days
-                    ? "text-deep-green/20"
-                    : d === todayDay
-                      ? "font-bold text-coral"
-                      : "text-deep-green/45"
-                }`}
-              >
-                {d <= days ? d : ""}
+        <div>
+          {bars.map((b) => (
+            <div key={b.name} className={`ox-bar ${b.amount ? "" : "zero"}`}>
+              <div className="bl">
+                <div className="nm">{b.name}</div>
               </div>
-            ))}
-          </div>
-
-          {/* Category sections */}
-          {sections.map((s) => (
-            <div key={s.cat.key} className="mt-3 first:mt-2">
-              <div className="mb-1 flex items-center justify-between border-b border-cream-line px-1 pb-1">
-                <span className="text-[11px] font-bold uppercase tracking-wider text-deep-green">
-                  {s.cat.label}
-                </span>
-                <span className="font-mono text-xs font-bold tabular-nums text-deep-green/70">
-                  {formatMoney(s.subtotal)}
-                </span>
+              <div className="track">
+                {b.amount > 0 && <div className="fill" style={{ width: `${b.width}%` }} />}
               </div>
-              {s.rows.length === 0 ? (
-                <p className="px-1 py-1 text-[11px] italic text-deep-green/35">
-                  {s.cat.key === "city_manager"
-                    ? "No managers on the roster."
-                    : "No entries this month."}
-                </p>
-              ) : (
-                s.rows.map((r) => (
-                  <div key={r.key} className={`${GRID} items-center py-0.5`}>
-                    <div className="truncate pr-2 text-[12px] font-semibold text-deep-green">
-                      {r.label}
-                      {!r.editable && (
-                        <span className="ml-1 text-[9px] font-bold uppercase text-deep-green/35">
-                          auto
-                        </span>
-                      )}
-                    </div>
-                    {dayCols.map((d) => {
-                      if (d > days)
-                        return <div key={d} className="invisible h-6" />;
-                      const hit = r.days.includes(d);
-                      const isToday = d === todayDay;
-                      return (
-                        <div
-                          key={d}
-                          onClick={
-                            hit && r.editable && r.entryId
-                              ? () => {
-                                  const e = entries.find(
-                                    (x) => x.id === r.entryId,
-                                  );
-                                  if (e) setModal({ entry: e });
-                                }
-                              : undefined
-                          }
-                          className={`flex h-6 items-center justify-center overflow-hidden rounded-[3px] ${
-                            hit
-                              ? `bg-mint shadow-[0_0_8px_rgba(44,219,135,0.4)] ${
-                                  r.editable ? "cursor-pointer" : ""
-                                }`
-                              : "bg-cream-soft"
-                          } ${
-                            isToday
-                              ? "outline outline-1 outline-offset-1 outline-dashed outline-coral"
-                              : ""
-                          }`}
-                          title={
-                            hit
-                              ? `${r.label} · ${formatMoney(r.amount)}`
-                              : undefined
-                          }
-                        >
-                          {hit && (
-                            <span className="px-0.5 text-[9px] font-bold tabular-nums leading-none text-deep-green">
-                              {formatMoney(r.amount)}
-                            </span>
-                          )}
-                        </div>
-                      );
-                    })}
-                  </div>
-                ))
-              )}
+              <div className="amt">{b.amount ? formatMoney(b.amount) : "$0"}</div>
+              <div className="pct">{b.amount ? `${Math.round(b.pct)}%` : "—"}</div>
             </div>
           ))}
-
-          {/* Daily total + cumulative */}
-          <TotalsRow
-            label="Daily total"
-            values={daily}
-            days={days}
-            todayDay={todayDay}
-            strong
-          />
-          <TotalsRow
-            label="Cumulative"
-            values={cumulative}
-            days={days}
-            todayDay={todayDay}
-          />
         </div>
       </div>
 
-      {/* Month total + breakdown + legend */}
-      <div className="mt-4 grid grid-cols-1 gap-4 lg:grid-cols-[260px_1fr]">
-        <div className="flex flex-col justify-center rounded-2xl border-[1.5px] border-cream-line bg-white p-5 shadow-md shadow-deep-green/10">
-          <div className="text-[10px] font-bold uppercase tracking-wider text-deep-green/50">
-            Month total · {monthLabel(year, month0)}
-          </div>
-          <div className="mt-1 text-3xl font-extrabold tabular-nums text-deep-green">
-            {formatMoney(monthTotal)}
-          </div>
+      {/* Calendar */}
+      <div className="ox-panel">
+        <div className="ox-caltitle">
+          <span className="t">Calendar · when cash goes out</span>
+          <span className="s">
+            click a category to expand ·{" "}
+            <button className="ox-expand" onClick={toggleAll}>
+              {anyClosed ? "Expand all" : "Collapse all"}
+            </button>
+          </span>
         </div>
+        <div className="ox-scroll">
+          <table>
+            <thead>
+              <tr>
+                <th className="corner">Category / line item</th>
+                {dayCols.map((d) => {
+                  const wd = new Date(year, month0, d).getDay();
+                  const cls =
+                    "dcell" +
+                    (d === today ? " today-h" : wd === 0 || wd === 6 ? " wknd" : "");
+                  return (
+                    <th key={d} className={cls}>
+                      <div className="dn">{d}</div>
+                      <div className="dw">{WD[wd]}</div>
+                    </th>
+                  );
+                })}
+              </tr>
+            </thead>
+            <tbody>
+              {cal.groups.map((g) => {
+                const opened = isOpen(g);
+                return (
+                  <GroupRows
+                    key={g.key}
+                    group={g}
+                    opened={opened}
+                    days={days}
+                    dayCols={dayCols}
+                    cellCls={cellCls}
+                    onToggle={() => toggle(g.key, g.defaultOpen)}
+                    onEdit={(entryId) => {
+                      const e = entries.find((x) => x.id === entryId);
+                      if (e) setModal({ entry: e });
+                    }}
+                  />
+                );
+              })}
 
-        <div className="rounded-2xl border-[1.5px] border-cream-line bg-white p-5 shadow-md shadow-deep-green/10">
-          <div className="mb-3 text-[10px] font-bold uppercase tracking-wider text-deep-green/50">
-            Category breakdown
-          </div>
-          {breakdown.length === 0 ? (
-            <p className="text-sm italic text-deep-green/40">
-              {loading ? "Loading…" : "No expenses this month."}
-            </p>
-          ) : (
-            <div className="flex flex-col gap-1.5">
-              {breakdown.map((b) => (
-                <div key={b.key} className="flex items-center gap-3 text-sm">
-                  <span className="w-40 shrink-0 font-semibold text-deep-green">
-                    {b.label}
-                  </span>
-                  <div className="h-2 flex-1 overflow-hidden rounded-full bg-cream-soft">
-                    <div
-                      className="h-full rounded-full bg-mint"
-                      style={{ width: `${b.pct}%` }}
-                    />
-                  </div>
-                  <span className="w-14 text-right font-mono text-xs font-bold tabular-nums text-deep-green/70">
-                    {Math.round(b.pct)}%
-                  </span>
-                  <span className="w-20 text-right font-mono text-xs font-bold tabular-nums text-deep-green">
-                    {formatMoney(b.amount)}
-                  </span>
-                </div>
-              ))}
-              <div className="mt-2 flex items-center gap-3 border-t border-cream-line pt-2 text-sm">
-                <span className="w-40 shrink-0 font-bold text-deep-green">
-                  Total
-                </span>
-                <div className="flex-1" />
-                <span className="w-14" />
-                <span className="w-20 text-right font-mono text-sm font-extrabold tabular-nums text-deep-green">
-                  {formatMoney(monthTotal)}
-                </span>
-              </div>
-            </div>
+              {/* Empty editable categories collapse to one line */}
+              {cal.emptyEditable.length > 0 && (
+                <tr className="ox-empty">
+                  <td className="lab">
+                    <span className="enm">No entries this month</span>
+                  </td>
+                  <td className="espan" colSpan={days}>
+                    {cal.emptyEditable.join(" · ")}
+                    &nbsp;&nbsp;<span className="ehint">add via + Add Expense</span>
+                  </td>
+                </tr>
+              )}
+
+              {/* Daily total */}
+              <tr className="ox-dtot">
+                <td className="lab">Daily total</td>
+                {dayCols.map((d) => (
+                  <td key={d} className={cellCls(d)}>
+                    {cal.dayTotal[d] ? (
+                      <span className="n">{formatMoney(cal.dayTotal[d])}</span>
+                    ) : (
+                      <span className="n dash">—</span>
+                    )}
+                  </td>
+                ))}
+              </tr>
+
+              {/* Cumulative sparkline */}
+              <tr className="ox-cum">
+                <td className="lab">Cumulative</td>
+                <td className="spark" colSpan={days}>
+                  <Sparkline cumulative={cal.cumulative} days={days} />
+                  <span className="cend">{formatMoney(cal.monthTotal)} by month end</span>
+                </td>
+              </tr>
+            </tbody>
+          </table>
+        </div>
+        <div className="ox-recon">
+          Everything sits on its real pay / billing date ·{" "}
+          <b>{monthLabel(year, month0)} total {formatMoney(cal.monthTotal)}</b>.
+          {cal.undatedFieldCosts > 0 && (
+            <>
+              {" "}
+              {formatMoney(cal.datedTotal)} dated +{" "}
+              <b>{formatMoney(cal.undatedFieldCosts)}</b> field costs awaiting a
+              billing date (set cadence/day in Field Costs).
+            </>
           )}
-        </div>
-      </div>
-
-      {/* Legend */}
-      <div className="mt-4 flex flex-wrap items-center gap-5 font-mono text-[10px] uppercase tracking-wider text-deep-green/55">
-        <div className="flex items-center gap-2">
-          <span className="inline-block h-3 w-3 rounded-[2px] bg-mint" />
-          Scheduled payment
-        </div>
-        <div className="flex items-center gap-2">
-          <span className="inline-block h-3 w-3 rounded-[2px] outline outline-1 outline-dashed outline-coral" />
-          Today
-        </div>
-        <div className="flex items-center gap-2">
-          <span className="text-deep-green/35">auto</span>= derived from roster
-          (read-only)
+          {loading && <> · loading finance data…</>}
         </div>
       </div>
 
@@ -337,76 +294,236 @@ export default function OpExCalendarView() {
   );
 }
 
-function NavBtn({
-  onClick,
-  children,
-}: {
-  onClick: () => void;
-  children: React.ReactNode;
-}) {
-  return (
-    <button
-      type="button"
-      onClick={onClick}
-      className="rounded-full border border-cream-line bg-white px-3 py-1.5 text-xs font-bold text-deep-green/70 transition hover:bg-cream-soft"
-    >
-      {children}
-    </button>
-  );
-}
+// ---------------- subcomponents ----------------
 
-function TotalsRow({
-  label,
-  values,
-  days,
-  todayDay,
-  strong,
-}: {
-  label: string;
-  values: number[];
-  days: number;
-  todayDay: number;
-  strong?: boolean;
-}) {
-  const dayCols = Array.from({ length: 31 }, (_, i) => i + 1);
+function Kpi({ label, value, small }: { label: string; value: string; small?: string }) {
   return (
-    <div
-      className={`${GRID} mt-2 items-center border-t border-cream-line pt-1 ${
-        strong ? "" : ""
-      }`}
-    >
-      <div className="truncate pr-2 text-[11px] font-bold uppercase tracking-wider text-deep-green/60">
-        {label}
+    <div className="ox-kpi">
+      <div className="lab">{label}</div>
+      <div className="val font-display">
+        {value}
+        {small && <small>{small}</small>}
       </div>
-      {dayCols.map((d) => {
-        if (d > days) return <div key={d} className="invisible h-6" />;
-        const v = values[d] ?? 0;
-        const isToday = d === todayDay;
-        // Every in-month cell renders (value or "—") so the row visually
-        // spans all 31 columns like the category rows above it.
-        return (
-          <div
-            key={d}
-            className={`flex h-6 items-center justify-center overflow-hidden rounded-[2px] bg-cream-soft/70 px-0.5 ${
-              isToday
-                ? "outline outline-1 outline-offset-1 outline-dashed outline-coral"
-                : ""
-            }`}
-          >
-            <span
-              className={`text-[9px] leading-none tabular-nums ${
-                v > 0
-                  ? strong
-                    ? "font-bold text-deep-green"
-                    : "font-semibold text-deep-green/70"
-                  : "text-deep-green/25"
-              }`}
-            >
-              {v > 0 ? formatMoney(v) : "—"}
-            </span>
-          </div>
-        );
-      })}
     </div>
   );
 }
+
+function GroupRows({
+  group,
+  opened,
+  days,
+  dayCols,
+  cellCls,
+  onToggle,
+  onEdit,
+}: {
+  group: CalGroup;
+  opened: boolean;
+  days: number;
+  dayCols: number[];
+  cellCls: (d: number) => string;
+  onToggle: () => void;
+  onEdit: (entryId: string) => void;
+}) {
+  return (
+    <>
+      <tr className={`ox-cat ${opened ? "open" : ""}`} onClick={onToggle}>
+        <td className="lab">
+          <div className="catname">
+            <span className="nm">
+              <span className="chev" />
+              {group.name}
+              {group.tag && <span className="tag">{group.tag}</span>}
+            </span>
+            <span className="st">{formatMoney(group.subtotal)}</span>
+          </div>
+          <div className="src">{group.src}</div>
+        </td>
+        {dayCols.map((d) => (
+          <td key={d} className={cellCls(d)}>
+            {group.agg[d] ? <span className="achip">{formatMoney(group.agg[d])}</span> : ""}
+          </td>
+        ))}
+      </tr>
+
+      {opened &&
+        group.rows.map((r) => (
+          <tr
+            key={r.key}
+            className={`ox-child ${r.editable ? "editable" : ""}`}
+            onClick={r.editable && r.entryId ? () => onEdit(r.entryId!) : undefined}
+          >
+            <td className="lab">
+              <span className="nm">{r.label}</span>
+              {r.sublabel && <span className="city">{r.sublabel}</span>}
+              {r.tag && <span className={`vtag ${r.quarterly ? "q" : ""}`}>{r.tag}</span>}
+            </td>
+            {dayCols.map((d) => (
+              <td key={d} className={cellCls(d)}>
+                {r.cells[d] ? (
+                  <span className={`chip ${r.quarterly ? "q" : ""}`}>
+                    {formatMoney(r.cells[d])}
+                  </span>
+                ) : (
+                  ""
+                )}
+              </td>
+            ))}
+          </tr>
+        ))}
+
+      {/* Undated field-cost remainder (in subtotal, on no day) */}
+      {opened && group.undated > 0 && (
+        <tr className="ox-child">
+          <td className="lab">
+            <span className="nm undated">Undated — timing not set</span>
+          </td>
+          <td className="espan" colSpan={days}>
+            {formatMoney(group.undated)} awaiting a billing date
+          </td>
+        </tr>
+      )}
+    </>
+  );
+}
+
+// Filled step sparkline across the day columns. viewBox width matches the
+// day-column count so it stretches edge to edge; non-scaling stroke keeps
+// the line crisp under the horizontal scale.
+function Sparkline({ cumulative, days }: { cumulative: number[]; days: number }) {
+  const W = days * 46;
+  const yB = 42;
+  const yT = 10;
+  const run = cumulative[days] || 0;
+  const maxCum = run || 1;
+  const X = (d: number) => (d - 0.5) * 46;
+  const Y = (d: number) => yB - (cumulative[d] / maxCum) * (yB - yT);
+  let pts = "";
+  for (let d = 1; d <= days; d++) pts += `${d > 1 ? " L " : ""}${X(d).toFixed(1)},${Y(d).toFixed(1)}`;
+  const area = `M ${X(1).toFixed(1)},${yB} L ${pts} L ${X(days).toFixed(1)},${yB} Z`;
+  return (
+    <svg className="sv" viewBox={`0 0 ${W} 54`} preserveAspectRatio="none">
+      <path d={area} fill="#e2f1e8" />
+      <path
+        d={`M ${pts}`}
+        fill="none"
+        stroke="#2fbf6c"
+        strokeWidth={2}
+        vectorEffect="non-scaling-stroke"
+        strokeLinejoin="round"
+      />
+    </svg>
+  );
+}
+
+// ---------------- helpers ----------------
+
+const MONTHS = [
+  "January", "February", "March", "April", "May", "June",
+  "July", "August", "September", "October", "November", "December",
+];
+
+function isWeekend(year: number, month0: number, d: number): boolean {
+  const g = new Date(year, month0, d).getDay();
+  return g === 0 || g === 6;
+}
+
+// Scoped styles ported from docs/opex-blend.html (v3). Every selector is
+// namespaced under .opex-cal so nothing leaks into the rest of the app.
+const OPEX_CSS = `
+.opex-cal{--card:#fff;--ink:#17241d;--green-deep:#123d2c;--green-bright:#2fbf6c;--green-mid:#3aa86a;
+  --green-tint:#e6f4ec;--green-tint-2:#d5eddd;--today:#d7f0e0;--today-head:#33c46f;--muted:#8b8f85;
+  --muted-2:#a7a99d;--amber-bg:#fbeede;--amber-line:#e9a86a;--line:#e9e1d1;--line-soft:#f0e9db;--cream-2:#efe7d6;
+  color:var(--ink)}
+.opex-cal h1{font-size:38px;letter-spacing:.5px;color:var(--green-deep);line-height:.95;text-transform:uppercase}
+.opex-cal .ox-sub{color:var(--muted);font-size:14px;margin-top:6px;font-weight:500}
+.opex-cal .ox-toolbar{display:flex;align-items:flex-end;justify-content:space-between;gap:20px;margin-bottom:16px;flex-wrap:wrap}
+.opex-cal .ox-controls{display:flex;align-items:center;gap:8px}
+.opex-cal .ox-seg{display:flex;background:var(--card);border:1px solid var(--line);border-radius:11px;overflow:hidden}
+.opex-cal .ox-seg button{border:0;background:transparent;padding:9px 15px;font-weight:600;font-size:13px;color:var(--green-deep);cursor:pointer}
+.opex-cal .ox-seg button+button{border-left:1px solid var(--line)}
+.opex-cal .ox-seg button.on{background:var(--green-tint)}
+.opex-cal .ox-add{border:0;background:var(--green-bright);color:#06301d;font-weight:700;font-size:13px;padding:11px 17px;border-radius:11px;cursor:pointer}
+.opex-cal .ox-err{background:#fdecec;border:1px solid #e9a6a6;border-radius:11px;padding:10px 14px;margin-bottom:16px;font-size:12.5px;color:#9a3838}
+.opex-cal .ox-kpis{display:grid;grid-template-columns:repeat(4,1fr);gap:12px;margin-bottom:14px}
+.opex-cal .ox-kpi{background:var(--card);border:1px solid var(--line);border-radius:14px;padding:14px 16px}
+.opex-cal .ox-kpi .lab{font-size:11px;font-weight:700;letter-spacing:.9px;text-transform:uppercase;color:var(--muted)}
+.opex-cal .ox-kpi .val{font-size:25px;color:var(--green-deep);margin-top:6px;letter-spacing:.3px;line-height:1.05;text-transform:uppercase}
+.opex-cal .ox-kpi .val small{font-size:13px;font-weight:600;color:var(--muted-2);margin-left:5px}
+.opex-cal .ox-panel{background:var(--card);border:1px solid var(--line);border-radius:16px}
+.opex-cal .ox-bpanel{padding:16px 20px;margin-bottom:16px}
+.opex-cal .ox-ph{display:flex;align-items:baseline;justify-content:space-between;margin-bottom:6px}
+.opex-cal .ox-ph .t{font-weight:800;font-size:12.5px;letter-spacing:.7px;text-transform:uppercase;color:var(--green-deep)}
+.opex-cal .ox-ph .s{font-size:12px;color:var(--muted);font-weight:600}
+.opex-cal .ox-bar{display:grid;grid-template-columns:168px 1fr 88px 44px;align-items:center;gap:12px;padding:7px 0}
+.opex-cal .ox-bar+.ox-bar{border-top:1px solid var(--line-soft)}
+.opex-cal .ox-bar .bl .nm{font-weight:700;font-size:12.5px;color:var(--ink)}
+.opex-cal .ox-bar .track{height:18px;background:#f1ead9;border-radius:5px;overflow:hidden}
+.opex-cal .ox-bar .fill{height:100%;background:linear-gradient(90deg,var(--green-mid),var(--green-bright));border-radius:5px;min-width:2px}
+.opex-cal .ox-bar .amt{text-align:right;font-weight:800;font-size:13px;color:var(--green-deep);font-variant-numeric:tabular-nums}
+.opex-cal .ox-bar .pct{text-align:right;font-size:11.5px;color:var(--muted);font-weight:600;font-variant-numeric:tabular-nums}
+.opex-cal .ox-bar.zero .nm,.opex-cal .ox-bar.zero .amt{color:var(--muted-2)}
+.opex-cal .ox-bar.zero .track{background:#f6f1e6}
+.opex-cal .ox-caltitle{display:flex;align-items:baseline;justify-content:space-between;padding:16px 20px 12px;gap:12px;flex-wrap:wrap}
+.opex-cal .ox-caltitle .t{font-weight:800;font-size:12.5px;letter-spacing:.7px;text-transform:uppercase;color:var(--green-deep)}
+.opex-cal .ox-caltitle .s{font-size:12px;color:var(--muted);font-weight:600}
+.opex-cal .ox-expand{border:1px solid var(--line);background:#fff;border-radius:8px;padding:5px 11px;font-weight:600;font-size:11px;color:var(--green-deep);cursor:pointer}
+.opex-cal .ox-scroll{overflow-x:auto;border-top:1px solid var(--line)}
+.opex-cal table{border-collapse:separate;border-spacing:0;width:100%;min-width:max-content}
+.opex-cal th,.opex-cal td{white-space:nowrap}
+.opex-cal thead th{position:sticky;top:0;z-index:3;background:var(--green-deep);color:#eaf5ee;font-weight:700;font-size:12px;height:50px}
+.opex-cal thead th.corner{left:0;z-index:5;text-align:left;padding:0 18px;letter-spacing:.7px;text-transform:uppercase;color:#bfe0cd;font-size:11px;min-width:250px;width:250px}
+.opex-cal .dcell{width:46px;min-width:46px;text-align:center;position:relative}
+.opex-cal .dcell .dn{font-weight:700;font-size:14px}
+.opex-cal .dcell .dw{font-size:9.5px;font-weight:600;color:#8fc2a4;margin-top:1px}
+.opex-cal thead th.today-h{background:var(--today-head);color:#06301d}
+.opex-cal thead th.today-h .dw{color:#0b4a2c}
+.opex-cal thead th.today-h::after{content:'TODAY';position:absolute;font-size:7px;font-weight:800;letter-spacing:.5px;left:50%;transform:translate(-50%,14px)}
+.opex-cal thead th.wknd{background:#173f2e}
+.opex-cal tbody td{border-bottom:1px solid var(--line-soft);height:40px;text-align:center;font-size:12px}
+.opex-cal tbody td.lab{position:sticky;left:0;z-index:2;background:var(--card);text-align:left;padding:0 18px;min-width:250px;width:250px;border-right:1px solid var(--line)}
+.opex-cal td.today-c{background:var(--today)}
+.opex-cal td.wknd-c{background:#faf7ef}
+.opex-cal td.today-c.wknd-c{background:var(--today)}
+.opex-cal tr.ox-cat{cursor:pointer}
+.opex-cal tr.ox-cat td{background:var(--green-tint);border-bottom:1px solid var(--green-tint-2);height:44px}
+.opex-cal tr.ox-cat td.lab{background:var(--green-tint)}
+.opex-cal tr.ox-cat td.today-c{background:var(--green-tint-2)}
+.opex-cal tr.ox-cat:hover td{background:#def0e5}
+.opex-cal tr.ox-cat:hover td.lab{background:#def0e5}
+.opex-cal .chev{display:inline-block;width:0;height:0;border-left:6px solid var(--green-deep);border-top:5px solid transparent;border-bottom:5px solid transparent;margin-right:9px;transition:transform .15s;vertical-align:middle}
+.opex-cal tr.ox-cat.open .chev{transform:rotate(90deg)}
+.opex-cal .catname{display:flex;align-items:center;justify-content:space-between;gap:10px}
+.opex-cal .catname .nm{font-weight:800;font-size:12px;letter-spacing:.5px;text-transform:uppercase;color:var(--green-deep)}
+.opex-cal .catname .st{font-weight:800;font-size:12.5px;color:var(--green-deep);font-variant-numeric:tabular-nums}
+.opex-cal .src{font-size:10px;color:#6f9a82;font-weight:600;margin-top:2px;padding-left:15px}
+.opex-cal .tag{display:inline-block;font-size:8.5px;font-weight:800;letter-spacing:.4px;padding:1px 6px;border-radius:5px;background:#eaf3ec;color:#4b7a5f;text-transform:uppercase;margin-left:7px;vertical-align:middle}
+.opex-cal .achip{display:inline-block;padding:3px 8px;border-radius:7px;background:#dff0e6;color:var(--green-deep);font-weight:700;font-size:11px;font-variant-numeric:tabular-nums;border:1px solid var(--green-tint-2)}
+.opex-cal tr.ox-child .lab{padding-left:34px}
+.opex-cal tr.ox-child.editable{cursor:pointer}
+.opex-cal tr.ox-child.editable:hover td.lab{background:#f4fbf6}
+.opex-cal tr.ox-child .nm{font-weight:600;font-size:13px}
+.opex-cal tr.ox-child .nm.undated{color:var(--muted);font-style:italic;font-weight:600}
+.opex-cal tr.ox-child .city{font-size:11px;color:var(--muted);font-weight:500;margin-left:6px}
+.opex-cal .vtag{display:inline-block;font-size:8px;font-weight:800;letter-spacing:.3px;padding:1px 5px;border-radius:4px;background:#eef1e9;color:#5c7a63;text-transform:uppercase;margin-left:7px;vertical-align:middle}
+.opex-cal .vtag.q{background:#fbeede;color:#b5701f}
+.opex-cal .chip{display:inline-block;padding:3px 9px;border-radius:7px;background:var(--green-tint);color:var(--green-deep);font-weight:700;font-size:11.5px;font-variant-numeric:tabular-nums;border:1px solid var(--green-tint-2)}
+.opex-cal .chip.q{background:#fbeede;color:#a15a1f;border-color:var(--amber-line)}
+.opex-cal tr.ox-empty td{height:40px;background:#fbfaf5;border-bottom:1px solid var(--line-soft)}
+.opex-cal tr.ox-empty td.lab{background:#fbfaf5}
+.opex-cal .enm{font-weight:700;font-size:11px;letter-spacing:.4px;text-transform:uppercase;color:var(--muted)}
+.opex-cal td.espan{text-align:left !important;padding-left:18px;color:var(--muted-2);font-size:12.5px;font-weight:600}
+.opex-cal .ehint{color:#bcb6a7;font-weight:500;font-size:11px}
+.opex-cal tr.ox-dtot td{height:44px;background:var(--cream-2);border-top:2px solid var(--green-deep);border-bottom:1px solid var(--line)}
+.opex-cal tr.ox-dtot td.lab{background:var(--cream-2);font-weight:800;font-size:11.5px;letter-spacing:.5px;text-transform:uppercase;color:var(--green-deep)}
+.opex-cal tr.ox-dtot td .n{font-weight:800;font-size:11.5px;color:var(--green-deep);font-variant-numeric:tabular-nums}
+.opex-cal tr.ox-dtot td .n.dash{color:#c3bca9}
+.opex-cal tr.ox-dtot td.today-c{background:#e6ddc9}
+.opex-cal tr.ox-cum td{background:#fbf9f3}
+.opex-cal tr.ox-cum td.lab{background:#fbf9f3;font-weight:700;font-size:10.5px;letter-spacing:.5px;text-transform:uppercase;color:var(--muted)}
+.opex-cal tr.ox-cum td.spark{position:relative;height:54px;padding:0}
+.opex-cal tr.ox-cum td.spark .sv{display:block;width:100%;height:54px}
+.opex-cal tr.ox-cum td.spark .cend{position:absolute;top:8px;right:14px;font-size:11px;font-weight:800;color:var(--green-deep);font-variant-numeric:tabular-nums;background:rgba(251,249,243,.9);padding:2px 7px;border-radius:6px;border:1px solid var(--line)}
+.opex-cal .ox-recon{padding:14px 20px;background:#fbf9f3;border-top:1px solid var(--line);font-size:12.5px;color:#5c6b60;line-height:1.5}
+.opex-cal .ox-recon b{color:var(--green-deep);font-variant-numeric:tabular-nums}
+`;

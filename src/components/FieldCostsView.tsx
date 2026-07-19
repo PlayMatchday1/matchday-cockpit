@@ -41,7 +41,13 @@ import {
 } from "@/lib/useFinanceData";
 
 type PriceField = "dpp_price" | "member_price" | "cost_per_match";
-type EditableField = PriceField | "billing_type" | "charge_on_cancel";
+type EditableField =
+  | PriceField
+  | "billing_type"
+  | "charge_on_cancel"
+  | "billing_cadence"
+  | "billing_day"
+  | "billing_anchor_month";
 type CellState = { saving: boolean; error: string | null; flash: boolean };
 type EditMap = Map<string, CellState>;
 function editKey(venueId: number, field: EditableField): string {
@@ -201,6 +207,47 @@ export default function FieldCostsView({
   function saveChargeOnCancel(venueId: number, next: boolean): void {
     void saveVenueField(venueId, "charge_on_cancel", next, true);
   }
+
+  // OpEx billing-timing edits (migration 0069). These place a
+  // flat/quarterly venue's monthly cost on a real day in the OpEx
+  // calendar; they don't affect any cost total here.
+  function saveBillingCadence(
+    venueId: number,
+    next: FinVenue["billing_cadence"],
+  ): void {
+    void saveVenueField(venueId, "billing_cadence", next, true);
+  }
+  function saveBillingDay(venueId: number, raw: string): void {
+    const trimmed = raw.trim();
+    if (trimmed === "") {
+      void saveVenueField(venueId, "billing_day", null, true);
+      return;
+    }
+    const n = parseInt(trimmed, 10);
+    const valid = Number.isInteger(n) && n >= 1 && n <= 31;
+    void saveVenueField(venueId, "billing_day", valid ? n : trimmed, valid);
+  }
+  function saveBillingAnchorMonth(venueId: number, raw: string): void {
+    if (raw === "") {
+      void saveVenueField(venueId, "billing_anchor_month", null, true);
+      return;
+    }
+    const n = parseInt(raw, 10);
+    const valid = Number.isInteger(n) && n >= 1 && n <= 12;
+    void saveVenueField(venueId, "billing_anchor_month", valid ? n : raw, valid);
+  }
+
+  // Venues whose cost is a partner-dashboard payout (Crossbar's
+  // per_match_minus_manager) are stored as per_match but can't be dated
+  // off the schedule, so they DO get a billing-timing editor like
+  // flat/profit_share venues.
+  const dashboardDrivenIds = useMemo(() => {
+    const s = new Set<number>();
+    for (const d of data?.partnerDashboards ?? []) {
+      if (d.revenueModel === "per_match_minus_manager") s.add(d.venueId);
+    }
+    return s;
+  }, [data?.partnerDashboards]);
 
   const allRows: FieldCostRow[] = useMemo(() => {
     if (!data) return [];
@@ -670,6 +717,7 @@ export default function FieldCostsView({
                 <th className="px-3 py-2 text-center">Pay on Cancel</th>
                 <th className="px-3 py-2 text-right">Match Count</th>
                 <th className="px-3 py-2 text-right">Cost</th>
+                <th className="px-3 py-2 text-left">When it bills</th>
                 <th className="px-3 py-2 text-left">How it's computed</th>
                 <th className="px-3 py-2 text-left">Source</th>
                 <th className="px-3 py-2 text-right">&nbsp;</th>
@@ -679,7 +727,7 @@ export default function FieldCostsView({
               {loading && filtered.length === 0 ? (
                 <tr>
                   <td
-                    colSpan={12}
+                    colSpan={14}
                     className="px-3 py-8 text-center text-sm text-deep-green/55"
                   >
                     Loading field costs…
@@ -688,7 +736,7 @@ export default function FieldCostsView({
               ) : filtered.length === 0 ? (
                 <tr>
                   <td
-                    colSpan={12}
+                    colSpan={14}
                     className="px-3 py-8 text-center text-sm text-deep-green/55"
                   >
                     No venues match these filters.
@@ -726,6 +774,16 @@ export default function FieldCostsView({
                       }
                       onSaveChargeOnCancel={(next) =>
                         saveChargeOnCancel(row.primaryVenueId, next)
+                      }
+                      dashboardDriven={dashboardDrivenIds.has(row.primaryVenueId)}
+                      onSaveBillingCadence={(next) =>
+                        saveBillingCadence(row.primaryVenueId, next)
+                      }
+                      onSaveBillingDay={(raw) =>
+                        saveBillingDay(row.primaryVenueId, raw)
+                      }
+                      onSaveBillingAnchorMonth={(raw) =>
+                        saveBillingAnchorMonth(row.primaryVenueId, raw)
                       }
                       scheduleRows={
                         data ? buildMatchLineItems(data, row, month) : []
@@ -850,6 +908,10 @@ function FieldCostTableRow({
   onSavePrice,
   onSaveBillingType,
   onSaveChargeOnCancel,
+  dashboardDriven,
+  onSaveBillingCadence,
+  onSaveBillingDay,
+  onSaveBillingAnchorMonth,
   scheduleRows,
   highlight,
 }: {
@@ -864,6 +926,10 @@ function FieldCostTableRow({
   onSavePrice: (field: PriceField, raw: string) => void;
   onSaveBillingType: (next: FinVenue["billing_type"]) => void;
   onSaveChargeOnCancel: (next: boolean) => void;
+  dashboardDriven: boolean;
+  onSaveBillingCadence: (next: FinVenue["billing_cadence"]) => void;
+  onSaveBillingDay: (raw: string) => void;
+  onSaveBillingAnchorMonth: (raw: string) => void;
   scheduleRows: MatchLineItem[];
   // Set briefly when the Match P&L tab links back to this row.
   // Renders a soft mint pulse so the operator can find the row.
@@ -977,6 +1043,21 @@ function FieldCostTableRow({
             )}
           </span>
         </td>
+        <td
+          className="px-3 py-2"
+          onClick={(e) => e.stopPropagation()}
+        >
+          <BillingTimingCell
+            venue={primaryVenue}
+            dashboardDriven={dashboardDriven}
+            cadenceState={cellState("billing_cadence")}
+            dayState={cellState("billing_day")}
+            anchorState={cellState("billing_anchor_month")}
+            onSaveCadence={onSaveBillingCadence}
+            onSaveDay={onSaveBillingDay}
+            onSaveAnchorMonth={onSaveBillingAnchorMonth}
+          />
+        </td>
         <td className="px-3 py-2 text-deep-green/85">{row.formula}</td>
         <td className="px-3 py-2 text-deep-green/55">{row.source}</td>
         <td
@@ -1017,7 +1098,7 @@ function FieldCostTableRow({
       </tr>
       {expanded && expandable && (
         <tr className="bg-cream-soft/40">
-          <td colSpan={12} className="px-5 py-3">
+          <td colSpan={14} className="px-5 py-3">
             <PerMatchExpand row={row} scheduleRows={scheduleRows} />
           </td>
         </tr>
@@ -1135,6 +1216,142 @@ function ChargeOnCancelCell({
         <span className="ml-1 text-[10px] font-bold text-coral">!</span>
       )}
     </button>
+  );
+}
+
+const CADENCE_OPTIONS: FinVenue["billing_cadence"][] = [
+  "monthly",
+  "quarterly",
+  "annual",
+];
+const MONTH_ABBR = [
+  "Jan", "Feb", "Mar", "Apr", "May", "Jun",
+  "Jul", "Aug", "Sep", "Oct", "Nov", "Dec",
+];
+
+// Billing-timing editor for the OpEx calendar (migration 0069). Only
+// interactive for venues whose cost is a monthly amount that needs a
+// hit-date — flat / profit_share, and dashboard-driven per_match
+// (Crossbar). Schedule-dated per_match venues show a static
+// "per-match · auto" since their timing comes from the match dates.
+// Editing here writes fin_venues.billing_* via the same saveVenueField
+// path as the price cells; it never changes any cost total.
+function BillingTimingCell({
+  venue,
+  dashboardDriven,
+  cadenceState,
+  dayState,
+  anchorState,
+  onSaveCadence,
+  onSaveDay,
+  onSaveAnchorMonth,
+}: {
+  venue: FinVenue | null;
+  dashboardDriven: boolean;
+  cadenceState: CellState | null;
+  dayState: CellState | null;
+  anchorState: CellState | null;
+  onSaveCadence: (next: FinVenue["billing_cadence"]) => void;
+  onSaveDay: (raw: string) => void;
+  onSaveAnchorMonth: (raw: string) => void;
+}) {
+  const [day, setDay] = useState(
+    venue?.billing_day == null ? "" : String(venue.billing_day),
+  );
+  useEffect(() => {
+    if (!dayState) {
+      setDay(venue?.billing_day == null ? "" : String(venue.billing_day));
+    }
+  }, [venue?.billing_day, dayState]);
+
+  if (!venue) return null;
+  if (venue.billing_type === "per_match" && !dashboardDriven) {
+    return (
+      <span className="text-[11px] italic text-deep-green/45">
+        per-match · auto
+      </span>
+    );
+  }
+
+  const cadence = venue.billing_cadence ?? "monthly";
+  const anySaving = Boolean(
+    cadenceState?.saving || dayState?.saving || anchorState?.saving,
+  );
+  const anyError = cadenceState?.error || dayState?.error || anchorState?.error;
+
+  return (
+    <div className="flex flex-col gap-1">
+      <div className="flex items-center gap-1.5">
+        <select
+          value={cadence}
+          disabled={anySaving}
+          onChange={(e) => {
+            const next = e.target.value as FinVenue["billing_cadence"];
+            if (next !== cadence) onSaveCadence(next);
+          }}
+          className="rounded-md border border-cream-line bg-cream-soft px-1.5 py-1 font-mono text-[10px] uppercase tracking-wider text-deep-green focus:border-deep-green focus:outline-none disabled:opacity-60"
+        >
+          {CADENCE_OPTIONS.map((o) => (
+            <option key={o} value={o}>
+              {o}
+            </option>
+          ))}
+        </select>
+        <span className="text-[10px] text-deep-green/45">day</span>
+        <input
+          type="number"
+          min="1"
+          max="31"
+          value={day}
+          placeholder="—"
+          disabled={anySaving}
+          onChange={(e) => setDay(e.target.value)}
+          onBlur={() => {
+            const cur = venue.billing_day == null ? "" : String(venue.billing_day);
+            if (day !== cur) onSaveDay(day);
+          }}
+          onKeyDown={(e) => {
+            if (e.key === "Enter") (e.currentTarget as HTMLInputElement).blur();
+            else if (e.key === "Escape") {
+              setDay(venue.billing_day == null ? "" : String(venue.billing_day));
+              (e.currentTarget as HTMLInputElement).blur();
+            }
+          }}
+          className="w-12 rounded-md border border-cream-line bg-cream-soft px-1.5 py-1 text-right font-mono text-[11px] tabular-nums text-deep-green focus:border-deep-green focus:outline-none disabled:opacity-60"
+        />
+      </div>
+      {cadence !== "monthly" && (
+        <div className="flex items-center gap-1.5">
+          <span className="text-[10px] text-deep-green/45">
+            {cadence === "quarterly" ? "every 3mo from" : "in"}
+          </span>
+          <select
+            value={venue.billing_anchor_month ?? ""}
+            disabled={anySaving}
+            onChange={(e) => onSaveAnchorMonth(e.target.value)}
+            className="rounded-md border border-cream-line bg-cream-soft px-1.5 py-1 font-mono text-[10px] text-deep-green focus:border-deep-green focus:outline-none disabled:opacity-60"
+          >
+            <option value="">— month —</option>
+            {MONTH_ABBR.map((m, i) => (
+              <option key={m} value={i + 1}>
+                {m}
+              </option>
+            ))}
+          </select>
+        </div>
+      )}
+      {venue.billing_day == null && !anySaving && (
+        <span className="text-[9px] font-semibold text-coral/80">
+          no date → undated in OpEx
+        </span>
+      )}
+      {(cadence !== "monthly" && venue.billing_anchor_month == null && !anySaving) && (
+        <span className="text-[9px] font-semibold text-coral/80">
+          set anchor month
+        </span>
+      )}
+      {anyError && <span className="text-[9px] text-coral">! {anyError}</span>}
+    </div>
   );
 }
 
