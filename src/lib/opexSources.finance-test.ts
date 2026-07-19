@@ -191,6 +191,68 @@ test("month total = sum of subtotals; dated total excludes the undated remainder
   assert.equal(daySum, cal.datedTotal);
 });
 
+// A per-match-PRICED venue can be invoiced on a fixed day (ATH Katy /
+// Pearland billed monthly). billing_day set routes it through the collapse
+// path: the month's per-match total lands on one day instead of spreading
+// over match days. The amount is unchanged, so the Field Costs subtotal
+// still equals buildFieldCostRows.
+function makePerMatchBilledMonthly(): FinanceData {
+  const venues: FinVenue[] = [
+    venue({
+      id: 1,
+      venue_name: "ATH Katy",
+      city: "Houston",
+      billing_type: "per_match",
+      per_match_rate: 90,
+      billing_day: 10, // invoiced on the 10th, not per match day
+      charge_on_cancel: false,
+    }),
+  ];
+  // Three matches on days 3, 17, 24 → 3 × 90 = 270 for the month.
+  const masterSchedule = [
+    match("m1", 1, "Houston", 3),
+    match("m2", 1, "Houston", 17),
+    match("m3", 1, "Houston", 24),
+  ];
+  return {
+    revenue: [],
+    expenses: [],
+    managerPay: [],
+    schedule: [],
+    masterSchedule,
+    cancelledSchedule: [],
+    venues,
+    memberSpots: [],
+    members: [],
+    pricing: [],
+    overrides: [],
+    venueAliases: new Map(),
+    venueFields: new Map(),
+    config: {},
+    mdapiMemberSpots: new Map() as unknown as FinanceData["mdapiMemberSpots"],
+    partnerDashboards: [],
+    partnerPayoutsByVenueMonth: new Map(),
+  } as unknown as FinanceData;
+}
+
+test("per-match venue with billing_day collapses to one chip on that day; subtotal unchanged", () => {
+  const data = makePerMatchBilledMonthly();
+  const cal = buildOpexCalendar(data, [], YEAR, M0);
+  const field = cal.groups.find((g) => g.key === "field")!;
+
+  const katy = field.rows.find((r) => r.label === "ATH Katy")!;
+  // Collapsed onto the billing day (10), NOT spread over match days 3/17/24.
+  assert.deepEqual(katy.cells, { 10: 270 });
+  assert.equal(katy.tag, "monthly");
+  assert.ok(!field.agg[3] && !field.agg[17] && !field.agg[24], "no per-match day cells");
+
+  // Subtotal still equals the Field Costs tab total (dating never changes it).
+  const fcSum = buildFieldCostRows(data, MONTH).reduce((s, r) => s + r.amount, 0);
+  assert.equal(fcSum, 270);
+  assert.equal(field.subtotal, fcSum);
+  assert.equal(field.undated, 0);
+});
+
 test("biggest hit finds the largest single-day outflow", () => {
   const data = makeData();
   const cal = buildOpexCalendar(data, [], YEAR, M0);

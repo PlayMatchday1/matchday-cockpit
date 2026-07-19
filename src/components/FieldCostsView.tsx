@@ -1229,13 +1229,20 @@ const MONTH_ABBR = [
   "Jul", "Aug", "Sep", "Oct", "Nov", "Dec",
 ];
 
-// Billing-timing editor for the OpEx calendar (migration 0069). Only
-// interactive for venues whose cost is a monthly amount that needs a
-// hit-date — flat / profit_share, and dashboard-driven per_match
-// (Crossbar). Schedule-dated per_match venues show a static
-// "per-match · auto" since their timing comes from the match dates.
-// Editing here writes fin_venues.billing_* via the same saveVenueField
-// path as the price cells; it never changes any cost total.
+// Billing-timing editor for the OpEx calendar (migration 0069). Editing
+// here writes fin_venues.billing_* via the same saveVenueField path as
+// the price cells; it never changes any cost total, only WHEN the money
+// lands in the OpEx calendar.
+//
+// Flat / profit_share and dashboard-driven per_match (Crossbar) always
+// need a hit-date, so they show the cadence + day editor.
+//
+// Schedule-dated per_match venues default to "per match · auto" (each
+// match's cost dated on its match day, billing_day null). But some are
+// priced per match yet invoiced on a fixed day (ATH Katy/Pearland billed
+// monthly), so this cell lets them switch to a cadence + billing day —
+// which collapses the month's per-match total onto that day. The amount
+// is unchanged; only the dating moves.
 function BillingTimingCell({
   venue,
   dashboardDriven,
@@ -1265,65 +1272,82 @@ function BillingTimingCell({
   }, [venue?.billing_day, dayState]);
 
   if (!venue) return null;
-  if (venue.billing_type === "per_match" && !dashboardDriven) {
-    return (
-      <span className="text-[11px] italic text-deep-green/45">
-        per-match · auto
-      </span>
-    );
-  }
 
+  // Schedule-dated per_match venues (not Crossbar-style dashboard payouts)
+  // get an "auto" mode: billing_day null → dated on match days. Setting a
+  // cadence + day collapses the month's per-match total onto that day.
+  const isSchedulePerMatch =
+    venue.billing_type === "per_match" && !dashboardDriven;
   const cadence = venue.billing_cadence ?? "monthly";
+  const mode: "auto" | FinVenue["billing_cadence"] =
+    isSchedulePerMatch && venue.billing_day == null ? "auto" : cadence;
+
   const anySaving = Boolean(
     cadenceState?.saving || dayState?.saving || anchorState?.saving,
   );
   const anyError = cadenceState?.error || dayState?.error || anchorState?.error;
+  const showDay = mode !== "auto";
+  const showAnchor = mode !== "auto" && mode !== "monthly";
 
   return (
     <div className="flex flex-col gap-1">
       <div className="flex items-center gap-1.5">
         <select
-          value={cadence}
+          value={mode}
           disabled={anySaving}
           onChange={(e) => {
-            const next = e.target.value as FinVenue["billing_cadence"];
-            if (next !== cadence) onSaveCadence(next);
+            const next = e.target.value;
+            if (next === "auto") {
+              // Back to schedule-dated: clear the billing day.
+              if (venue.billing_day != null) onSaveDay("");
+              return;
+            }
+            if (next !== cadence) {
+              onSaveCadence(next as FinVenue["billing_cadence"]);
+            }
           }}
           className="rounded-md border border-cream-line bg-cream-soft px-1.5 py-1 font-mono text-[10px] uppercase tracking-wider text-deep-green focus:border-deep-green focus:outline-none disabled:opacity-60"
         >
+          {isSchedulePerMatch && (
+            <option value="auto">per match · auto</option>
+          )}
           {CADENCE_OPTIONS.map((o) => (
             <option key={o} value={o}>
               {o}
             </option>
           ))}
         </select>
-        <span className="text-[10px] text-deep-green/45">day</span>
-        <input
-          type="number"
-          min="1"
-          max="31"
-          value={day}
-          placeholder="—"
-          disabled={anySaving}
-          onChange={(e) => setDay(e.target.value)}
-          onBlur={() => {
-            const cur = venue.billing_day == null ? "" : String(venue.billing_day);
-            if (day !== cur) onSaveDay(day);
-          }}
-          onKeyDown={(e) => {
-            if (e.key === "Enter") (e.currentTarget as HTMLInputElement).blur();
-            else if (e.key === "Escape") {
-              setDay(venue.billing_day == null ? "" : String(venue.billing_day));
-              (e.currentTarget as HTMLInputElement).blur();
-            }
-          }}
-          className="w-12 rounded-md border border-cream-line bg-cream-soft px-1.5 py-1 text-right font-mono text-[11px] tabular-nums text-deep-green focus:border-deep-green focus:outline-none disabled:opacity-60"
-        />
+        {showDay && (
+          <>
+            <span className="text-[10px] text-deep-green/45">day</span>
+            <input
+              type="number"
+              min="1"
+              max="31"
+              value={day}
+              placeholder="—"
+              disabled={anySaving}
+              onChange={(e) => setDay(e.target.value)}
+              onBlur={() => {
+                const cur = venue.billing_day == null ? "" : String(venue.billing_day);
+                if (day !== cur) onSaveDay(day);
+              }}
+              onKeyDown={(e) => {
+                if (e.key === "Enter") (e.currentTarget as HTMLInputElement).blur();
+                else if (e.key === "Escape") {
+                  setDay(venue.billing_day == null ? "" : String(venue.billing_day));
+                  (e.currentTarget as HTMLInputElement).blur();
+                }
+              }}
+              className="w-12 rounded-md border border-cream-line bg-cream-soft px-1.5 py-1 text-right font-mono text-[11px] tabular-nums text-deep-green focus:border-deep-green focus:outline-none disabled:opacity-60"
+            />
+          </>
+        )}
       </div>
-      {cadence !== "monthly" && (
+      {showAnchor && (
         <div className="flex items-center gap-1.5">
           <span className="text-[10px] text-deep-green/45">
-            {cadence === "quarterly" ? "every 3mo from" : "in"}
+            {mode === "quarterly" ? "every 3mo from" : "in"}
           </span>
           <select
             value={venue.billing_anchor_month ?? ""}
@@ -1340,12 +1364,26 @@ function BillingTimingCell({
           </select>
         </div>
       )}
-      {venue.billing_day == null && !anySaving && (
+      {/* per_match: a cadence is picked but no day yet → still auto-spread */}
+      {isSchedulePerMatch && showDay && venue.billing_day == null && !anySaving && (
+        <span className="text-[9px] font-semibold text-coral/80">
+          enter a day — per-match until then
+        </span>
+      )}
+      {/* per_match caveat, surfaced (not silent): quarterly/annual only
+          dates the billing-month total; off-cycle months land undated */}
+      {isSchedulePerMatch && showAnchor && venue.billing_day != null && !anySaving && (
+        <span className="text-[9px] font-semibold text-[#9a6a00]">
+          off-cycle months land undated
+        </span>
+      )}
+      {/* flat / dashboard venue with no date → undated (no auto fallback) */}
+      {!isSchedulePerMatch && venue.billing_day == null && !anySaving && (
         <span className="text-[9px] font-semibold text-coral/80">
           no date → undated in OpEx
         </span>
       )}
-      {(cadence !== "monthly" && venue.billing_anchor_month == null && !anySaving) && (
+      {showAnchor && venue.billing_anchor_month == null && !anySaving && (
         <span className="text-[9px] font-semibold text-coral/80">
           set anchor month
         </span>
