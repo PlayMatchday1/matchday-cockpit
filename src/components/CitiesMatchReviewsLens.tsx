@@ -19,6 +19,10 @@ import { classifyTag } from "@/lib/reviewTags";
 const NEEDS_ATTENTION_MAX = 3.5; // avg strictly below → needs attention
 const STANDOUT_MIN = 4.8; // avg at/above → standout
 const HIGHLIGHT_MIN_REVIEWS = 3;
+// The highlight panels are a rolling "act now" window (today inclusive),
+// independent of the month filter. Tunable.
+const HIGHLIGHT_WINDOW_DAYS = 3;
+const HIGHLIGHT_WINDOW_LABEL = `last ${HIGHLIGHT_WINDOW_DAYS} days`;
 
 const ALL = "ALL";
 const MONTHS = ["Jan", "Feb", "Mar", "Apr", "May", "Jun", "Jul", "Aug", "Sep", "Oct", "Nov", "Dec"];
@@ -149,10 +153,31 @@ export default function CitiesMatchReviewsLens({
       .sort((a, b) => b.startDate.localeCompare(a.startDate));
   }, [monthMatches, city, venue, manager]);
 
-  const needsAttention = filtered.filter(
+  // Highlight pool: a rolling last-N-days window (today inclusive),
+  // independent of the month filter — these are operational "act now" lists,
+  // not monthly archives. City / venue / manager filters still apply so a
+  // city manager can scope to their own recent matches. Newest first.
+  const recentPool = useMemo(() => {
+    const now = new Date();
+    const cutoff = new Date(
+      now.getFullYear(),
+      now.getMonth(),
+      now.getDate() - (HIGHLIGHT_WINDOW_DAYS - 1),
+    );
+    const p = (n: number) => String(n).padStart(2, "0");
+    const cutoffIso = `${cutoff.getFullYear()}-${p(cutoff.getMonth() + 1)}-${p(cutoff.getDate())}`;
+    return enriched
+      .filter((m) => m.startDate.slice(0, 10) >= cutoffIso) // future already dropped upstream
+      .filter((m) => city === ALL || m.city === city)
+      .filter((m) => venue === ALL || m.fieldTitle === venue)
+      .filter((m) => manager === ALL || m.manager === manager)
+      .sort((a, b) => b.startDate.localeCompare(a.startDate));
+  }, [enriched, city, venue, manager]);
+
+  const needsAttention = recentPool.filter(
     (m) => m.reviewCount >= HIGHLIGHT_MIN_REVIEWS && m.avgRating < NEEDS_ATTENTION_MAX,
   );
-  const standouts = filtered.filter(
+  const standouts = recentPool.filter(
     (m) => m.reviewCount >= HIGHLIGHT_MIN_REVIEWS && m.avgRating >= STANDOUT_MIN,
   );
 
@@ -229,8 +254,8 @@ export default function CitiesMatchReviewsLens({
       <div className="mb-5 grid grid-cols-2 gap-3 md:grid-cols-4">
         <Kpi label={`Avg rating · ${monthLabel(activeMonth || "")}`} value={summary.volume ? fmtRating(summary.avg) : "—"} sub={`${summary.matchCount} matches`} />
         <Kpi label="Review volume" value={summary.volume.toLocaleString()} sub="this selection" />
-        <Kpi label="Needs attention" value={String(needsAttention.length)} sub={`avg < ${NEEDS_ATTENTION_MAX}, ≥${HIGHLIGHT_MIN_REVIEWS}`} tone={needsAttention.length ? "coral" : undefined} />
-        <Kpi label="Standouts" value={String(standouts.length)} sub={`avg ≥ ${STANDOUT_MIN}, ≥${HIGHLIGHT_MIN_REVIEWS}`} tone={standouts.length ? "mint" : undefined} />
+        <Kpi label={`Needs attention · ${HIGHLIGHT_WINDOW_LABEL}`} value={String(needsAttention.length)} sub={`avg < ${NEEDS_ATTENTION_MAX}, ≥${HIGHLIGHT_MIN_REVIEWS} reviews`} tone={needsAttention.length ? "coral" : undefined} />
+        <Kpi label={`Standouts · ${HIGHLIGHT_WINDOW_LABEL}`} value={String(standouts.length)} sub={`avg ≥ ${STANDOUT_MIN}, ≥${HIGHLIGHT_MIN_REVIEWS} reviews`} tone={standouts.length ? "mint" : undefined} />
       </div>
 
       {/* By-manager mini-table */}
@@ -255,13 +280,12 @@ export default function CitiesMatchReviewsLens({
         </div>
       )}
 
-      {/* Highlights */}
-      {(needsAttention.length > 0 || standouts.length > 0) && (
-        <div className="mb-6 grid grid-cols-1 gap-4 lg:grid-cols-2">
-          <HighlightCard title="Needs attention" tone="coral" matches={needsAttention} onOpen={setOpenKey} openKey={openKey} />
-          <HighlightCard title="Standouts" tone="mint" matches={standouts} onOpen={setOpenKey} openKey={openKey} />
-        </div>
-      )}
+      {/* Highlights — rolling window, always shown so the "last 3 days" state
+          (incl. "none") is explicit, independent of the month filter. */}
+      <div className="mb-6 grid grid-cols-1 gap-4 lg:grid-cols-2">
+        <HighlightCard title="Needs attention" tone="coral" matches={needsAttention} onOpen={setOpenKey} openKey={openKey} />
+        <HighlightCard title="Standouts" tone="mint" matches={standouts} onOpen={setOpenKey} openKey={openKey} />
+      </div>
 
       {/* All reviewed matches */}
       <div className="overflow-hidden rounded-2xl border-[1.5px] border-cream-line bg-white shadow-md shadow-deep-green/10">
@@ -409,11 +433,12 @@ function HighlightCard({ title, tone, matches, onOpen, openKey }: {
   const head = tone === "coral" ? "text-coral" : "text-mint-hover";
   return (
     <div className={`overflow-hidden rounded-2xl border-[1.5px] ${border} bg-white shadow-md shadow-deep-green/10`}>
-      <div className={`border-b border-cream-line bg-cream-soft/40 px-4 py-2 text-xs font-bold uppercase tracking-wider ${head}`}>
-        {title} · {matches.length}
+      <div className={`flex items-baseline gap-2 border-b border-cream-line bg-cream-soft/40 px-4 py-2 text-xs font-bold uppercase tracking-wider ${head}`}>
+        <span>{title} · {matches.length}</span>
+        <span className="text-[10px] font-semibold normal-case text-deep-green/45">{HIGHLIGHT_WINDOW_LABEL}</span>
       </div>
       {matches.length === 0 ? (
-        <div className="px-4 py-4 text-xs text-deep-green/50">None this selection.</div>
+        <div className="px-4 py-4 text-xs text-deep-green/50">None in the {HIGHLIGHT_WINDOW_LABEL}.</div>
       ) : (
         <ul className="divide-y divide-cream-line/40">
           {matches.map((m) => (
