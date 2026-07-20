@@ -10,7 +10,6 @@ import CitiesLensNav, { type CityLens } from "@/components/CitiesLensNav";
 import CitiesMasterScheduleLens from "@/components/CitiesMasterScheduleLens";
 import CitiesMembershipLens from "@/components/CitiesMembershipLens";
 import CitiesReviewsLens from "@/components/CitiesReviewsLens";
-import CitiesMatchReviewsLens from "@/components/CitiesMatchReviewsLens";
 import CitiesUsersLens from "@/components/CitiesUsersLens";
 import { CityHealthPill } from "@/components/StatusPill";
 import MiniBarSparkline from "@/components/MiniBarSparkline";
@@ -99,7 +98,6 @@ function CitiesIndexContent() {
       {lens === "membership" && <CitiesMembershipLens />}
       {lens === "cancellations" && <CitiesCancellationsLens />}
       {lens === "reviews" && <CitiesReviewsLens />}
-      {lens === "match-reviews" && <CitiesMatchReviewsLens />}
       {lens === "master-schedule" && <CitiesMasterScheduleLens />}
     </>
   );

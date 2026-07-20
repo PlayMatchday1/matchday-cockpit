@@ -73,7 +73,11 @@ type EnrichedMatch = MatchReviewRow & {
   tagCounts: [string, number][]; // sorted desc
 };
 
-export default function CitiesMatchReviewsLens() {
+export default function CitiesMatchReviewsLens({
+  // When rendered as a sub-tab of the Reviews lens, the outer lens + the
+  // "Match Reviews" sub-tab pill already title it, so hide the local h2.
+  embedded = false,
+}: { embedded?: boolean } = {}) {
   const { rows: matches, syncedAt, loading, error } = useMatchReviews();
   const { rows: reviews } = useReviewData();
 
@@ -172,7 +176,7 @@ export default function CitiesMatchReviewsLens() {
   if (loading) {
     return (
       <section>
-        <Header />
+        <Header embedded={embedded} />
         <div className="rounded-2xl border-[1.5px] border-cream-line bg-white p-8 text-sm text-deep-green/60 shadow-md shadow-deep-green/10">
           Loading match reviews…
         </div>
@@ -182,7 +186,7 @@ export default function CitiesMatchReviewsLens() {
   if (error) {
     return (
       <section>
-        <Header />
+        <Header embedded={embedded} />
         <div className="rounded-2xl border-[1.5px] border-coral/40 bg-coral-soft/40 p-8 text-sm text-coral">
           Failed to load match reviews: {error}
         </div>
@@ -192,7 +196,7 @@ export default function CitiesMatchReviewsLens() {
 
   return (
     <section>
-      <Header syncedAt={syncedAt} />
+      <Header syncedAt={syncedAt} embedded={embedded} />
 
       {/* Filters */}
       <div className="mb-5 flex flex-wrap items-end gap-3 rounded-2xl border-[1.5px] border-cream-line bg-white p-4 shadow-md shadow-deep-green/10">
@@ -289,13 +293,17 @@ export default function CitiesMatchReviewsLens() {
   );
 }
 
-function Header({ syncedAt }: { syncedAt?: string | null }) {
+function Header({ syncedAt, embedded }: { syncedAt?: string | null; embedded?: boolean }) {
   return (
     <div className="mb-6 flex flex-wrap items-end justify-between gap-2">
-      <div>
-        <h2 className="text-2xl font-bold tracking-tight text-deep-green">Match Reviews</h2>
-        <p className="mt-1 text-sm text-deep-green/60">Per-match review performance — low- and high-scoring matches.</p>
-      </div>
+      {embedded ? (
+        <p className="text-sm text-deep-green/60">Per-match review performance — low- and high-scoring matches.</p>
+      ) : (
+        <div>
+          <h2 className="text-2xl font-bold tracking-tight text-deep-green">Match Reviews</h2>
+          <p className="mt-1 text-sm text-deep-green/60">Per-match review performance — low- and high-scoring matches.</p>
+        </div>
+      )}
       {syncedAt !== undefined && (
         <span className="rounded-full border border-cream-line bg-cream-soft px-3 py-1 text-[10px] font-bold uppercase tracking-wider text-deep-green/55">
           reviews synced as of {fmtSyncedAt(syncedAt ?? null)}

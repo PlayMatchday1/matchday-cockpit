@@ -6,7 +6,6 @@ export type CityLens =
   | "membership"
   | "cancellations"
   | "reviews"
-  | "match-reviews"
   | "master-schedule";
 
 const LENSES: { value: CityLens; label: string }[] = [
@@ -15,7 +14,6 @@ const LENSES: { value: CityLens; label: string }[] = [
   { value: "membership", label: "Membership" },
   { value: "cancellations", label: "Cancellations" },
   { value: "reviews", label: "Reviews" },
-  { value: "match-reviews", label: "Match Reviews" },
   { value: "master-schedule", label: "Master Schedule" },
 ];
 
