@@ -33,16 +33,21 @@
 //                       remainder. The group subtotal always equals the
 //                       Field Costs tab total — dating only moves money
 //                       across days, never changes the sum.
-//   Marketing/Personnel/Equipment/Other → fin_opex_entries.
+//   Every other operating category → mirrored from fin_expenses, one
+//                       group per category (Marketing, Equipment,
+//                       Corporate Salaries, Contractors, Subscriptions,
+//                       …), itemized and dated on each row's expense date.
+//                       Same source as Cash Flow, so the two agree by
+//                       construction. Read-only here; edited on the
+//                       Expenses tab. (fin_opex_entries is retired.)
 //
 // Every dated amount flows into Daily Total + Cumulative. The undated
 // field-cost remainder is carried on the group (in the subtotal) but
 // sits on no day, so it is the one honest exception to "all dated".
 
-import type { FinanceData, FinVenue } from "./useFinanceData";
+import type { FinanceData, FinVenue, FinExpense } from "./useFinanceData";
 import { buildFieldCostRows } from "./financeCosts";
 import { daysInMonth } from "./checkIns";
-import { entryRows, type OpexEntry, type OpexCategory } from "./opex";
 
 const SHORT_MONTHS = [
   "Jan", "Feb", "Mar", "Apr", "May", "Jun",
@@ -75,8 +80,6 @@ export type CalRow = {
   cells: Record<number, number>;
   tag?: string;          // e.g. 'monthly' | 'quarterly' | 'per-match'
   quarterly?: boolean;   // amber accent
-  editable?: boolean;    // opens the entry modal
-  entryId?: string;
 };
 
 export type CalGroup = {
@@ -89,7 +92,6 @@ export type CalGroup = {
   agg: Record<number, number>;  // per-day sum across rows (collapsed chips)
   subtotal: number;             // includes undated
   undated: number;              // field-cost amount with no captured date
-  editableCat?: OpexCategory;   // set for the 4 user-editable categories
 };
 
 function aggregateAndSubtotal(rows: CalRow[]): { agg: Record<number, number>; dated: number } {
@@ -418,52 +420,76 @@ function fieldCostGroup(
   };
 }
 
-// ---------------- Editable categories ----------------
+// ---------------- Expense-category groups (mirror fin_expenses) ----------------
 
-const EDITABLE: { key: OpexCategory; label: string }[] = [
-  { key: "marketing", label: "Marketing" },
-  { key: "personnel", label: "Personnel" },
-  { key: "equipment", label: "Equipment" },
-  { key: "other", label: "Other" },
-];
+// City Manager Pay + Match Manager Pay are rendered as their own dedicated
+// groups above, so they're excluded from the generic mirror (matches Cash
+// Flow's DEDICATED_LINE_CATEGORIES). Field Costs is venue-derived, not a
+// fin_expenses category, so it never collides here.
+const DEDICATED_EXPENSE_CATEGORIES = new Set<string>([
+  "City Manager",
+  "Match Manager Pay",
+]);
 
-function editableGroup(
-  entries: OpexEntry[],
-  cat: OpexCategory,
-  label: string,
+// One group per remaining fin_expenses category with rows this month, each
+// itemized (one row per expense) and dated on the expense date. The group
+// subtotal is the full category-month total so it equals the Expenses tab's
+// filtered total by construction; a row whose date falls outside the month
+// (shouldn't happen — month is derived from date) lands in the undated
+// remainder rather than being dropped. Company-wide rows (no city) are
+// labeled explicitly, never silently bucketed under a city.
+function expenseCategoryGroups(
+  data: FinanceData,
+  monthKey: string,
   year: number,
   month0: number,
-): CalGroup {
-  const rows: CalRow[] = entryRows(entries, cat, year, month0).map((r) => {
-    const cells: Record<number, number> = {};
-    for (const d of r.days) cells[d] = (cells[d] ?? 0) + r.amount;
-    return {
-      key: r.key,
-      label: r.label,
-      cells,
-      editable: true,
-      entryId: r.entryId,
-    };
-  });
-  const { agg, dated } = aggregateAndSubtotal(rows);
-  return {
-    key: cat,
-    name: label,
-    src: "from + Add Expense",
-    defaultOpen: true,
-    rows,
-    agg,
-    subtotal: dated,
-    undated: 0,
-    editableCat: cat,
-  };
+): CalGroup[] {
+  const byCat = new Map<string, FinExpense[]>();
+  for (const r of data.expenses) {
+    if (r.month !== monthKey) continue;
+    if (DEDICATED_EXPENSE_CATEGORIES.has(r.category)) continue;
+    const arr = byCat.get(r.category);
+    if (arr) arr.push(r);
+    else byCat.set(r.category, [r]);
+  }
+
+  const groups: CalGroup[] = [];
+  for (const [cat, catRows] of byCat) {
+    let subtotal = 0;
+    const rows: CalRow[] = catRows
+      .map((r, i) => {
+        subtotal += r.amount;
+        const day = dayInMonth(r.date, year, month0);
+        const city = r.city?.trim();
+        return {
+          key: `exp:${r.id ?? `${cat}-${i}`}`,
+          label: r.vendor?.trim() || r.notes?.trim() || cat,
+          sublabel: city || "Company-wide",
+          cells: day ? { [day]: r.amount } : {},
+        };
+      })
+      .sort((a, b) => a.label.localeCompare(b.label));
+    const { agg, dated } = aggregateAndSubtotal(rows);
+    groups.push({
+      key: `expcat:${cat}`,
+      name: cat,
+      src: "from Expenses · fin_expenses",
+      defaultOpen: false,
+      rows,
+      agg,
+      subtotal,
+      undated: subtotal - dated,
+    });
+  }
+  // Biggest categories first (stable tiebreak on name).
+  groups.sort((a, b) => b.subtotal - a.subtotal || a.name.localeCompare(b.name));
+  return groups;
 }
 
 // ---------------- assembly ----------------
 
 export type OpexCalendar = {
-  groups: CalGroup[];        // the 3 auto groups + any non-empty editable groups
-  emptyEditable: string[];   // labels of editable cats with no rows (collapse to one line)
+  groups: CalGroup[];        // 3 dedicated groups + one per fin_expenses category present
   dayTotal: number[];        // 1-indexed, length days+1
   cumulative: number[];      // 1-indexed
   monthTotal: number;        // sum of every subtotal (incl. undated)
@@ -475,30 +501,20 @@ export type OpexCalendar = {
 
 export function buildOpexCalendar(
   data: FinanceData | null,
-  entries: OpexEntry[],
   year: number,
   month0: number,
 ): OpexCalendar {
   const monthKey = monthKeyFor(year, month0);
   const days = daysInMonth(year, month0);
 
-  const autoGroups: CalGroup[] = data
+  const groups: CalGroup[] = data
     ? [
         cityManagerGroup(data, monthKey, year, month0),
         matchManagerGroup(data, monthKey, year, month0),
         fieldCostGroup(data, monthKey, year, month0),
+        ...expenseCategoryGroups(data, monthKey, year, month0),
       ]
     : [];
-
-  const editableGroups = EDITABLE.map((e) =>
-    editableGroup(entries, e.key, e.label, year, month0),
-  );
-  const nonEmptyEditable = editableGroups.filter((g) => g.rows.length > 0);
-  const emptyEditable = editableGroups
-    .filter((g) => g.rows.length === 0)
-    .map((g) => g.name);
-
-  const groups = [...autoGroups, ...nonEmptyEditable];
 
   // Daily totals + cumulative across every dated cell.
   const dayTotal = new Array<number>(days + 1).fill(0);
@@ -530,7 +546,6 @@ export function buildOpexCalendar(
 
   return {
     groups,
-    emptyEditable,
     dayTotal,
     cumulative,
     monthTotal,
