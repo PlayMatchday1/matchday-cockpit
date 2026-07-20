@@ -98,9 +98,9 @@ function makeData(): FinanceData {
   const expenses: FinExpense[] = [
     expense({ id: 11, date: "2026-07-01", city: "Houston", category: "City Manager", notes: "Yara", amount: 500 }),
     expense({ id: 12, date: "2026-07-15", city: "Dallas", category: "City Manager", notes: "Chris", amount: 800 }),
-    // Match Manager Pay — two Thursdays, same city aggregates.
-    expense({ id: 21, date: "2026-07-02", city: "Austin", category: "Match Manager Pay", amount: 1090 }),
-    expense({ id: 22, date: "2026-07-09", city: "Austin", category: "Match Manager Pay", amount: 760 }),
+    // Match Manager Pay — two Tuesday pay dates, same city aggregates.
+    expense({ id: 21, date: "2026-07-07", city: "Austin", category: "Match Manager Pay", amount: 1090 }),
+    expense({ id: 22, date: "2026-07-14", city: "Austin", category: "Match Manager Pay", amount: 760 }),
   ];
 
   return {
@@ -163,12 +163,12 @@ test("flat venue with billing_day lands on that day; without one it is undated (
   assert.ok(!field.agg[1]);
 });
 
-test("Match Manager Pay aggregates per city on Thursday pay dates", () => {
+test("Match Manager Pay aggregates per city on Tuesday pay dates", () => {
   const data = makeData();
   const cal = buildOpexCalendar(data, [], YEAR, M0);
   const match = cal.groups.find((g) => g.key === "match")!;
   const austin = match.rows.find((r) => r.label === "Austin")!;
-  assert.deepEqual(austin.cells, { 2: 1090, 9: 760 });
+  assert.deepEqual(austin.cells, { 7: 1090, 14: 760 });
   assert.equal(match.subtotal, 1850);
 });
 
@@ -258,8 +258,8 @@ test("per-match venue with billing_day collapses to one chip on that day; subtot
 test("biggest hit finds the largest single-day outflow", () => {
   const data = makeData();
   const cal = buildOpexCalendar(data, [], YEAR, M0);
-  // Jul 2: match Austin 1090 is the largest single day here.
-  assert.equal(cal.biggestHit?.day, 2);
+  // Jul 7: match Austin 1090 is the largest single day here.
+  assert.equal(cal.biggestHit?.day, 7);
   assert.equal(cal.biggestHit?.amount, 1090);
 });
 

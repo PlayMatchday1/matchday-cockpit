@@ -421,7 +421,7 @@ export default function ManagersView() {
           </p>
           <p className="mt-1 max-w-3xl text-xs text-deep-green/55">
             Solo &lt;25 = $20 · Solo tournament (25+) = $30 · Co-managed = $20
-            each · Pay date: Thursday (Sunday + 4)
+            each · Pay date: Tuesday (Sunday + 2)
           </p>
         </div>
       </div>

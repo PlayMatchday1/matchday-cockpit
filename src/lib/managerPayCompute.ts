@@ -15,7 +15,8 @@
 //     calendar can render them struck through.
 //   - Orphan matches (past-start, not cancelled, 0 real + 0 fake
 //     players) are dropped entirely — see isOrphanedMatch().
-//   - Pay date = Thursday after the work week ends (Sunday + 4 days).
+//   - Pay date = Tuesday after the work week ends (Sunday + 2 days) —
+//     when payroll actually leaves the account.
 //
 // Two callers:
 //   - GET /api/manager-pay/week — admin/public view of one week.
@@ -152,15 +153,18 @@ export function addDays(yyyyMmDd: string, n: number): string {
   return d.toISOString().slice(0, 10);
 }
 
+// Pay date = the TUESDAY after the work week ends (Sunday + 2). Tuesday
+// is when payroll actually leaves the account. weekStart is the work-week
+// Monday; Monday + 8 = the following Tuesday.
 export function payDateForWeek(weekStart: string): string {
-  return addDays(weekStart, 10);
+  return addDays(weekStart, 8);
 }
 
-// Returns the Monday work-week start for a given pay-date Thursday.
+// Returns the Monday work-week start for a given pay-date Tuesday.
 // Inverse of payDateForWeek — used by the recompute cron which walks
-// pay-date Thursdays and needs the corresponding work week.
+// pay-date Tuesdays and needs the corresponding work week.
 export function workWeekStartForPayDate(payDate: string): string {
-  return addDays(payDate, -10);
+  return addDays(payDate, -8);
 }
 
 function payAmount(
@@ -568,13 +572,19 @@ export async function computeManagerPayForWeek(
 // Recompute → fin_expenses (cron entry point)
 // ============================================================
 //
-// Hard cutover floor. Pay-date Thursdays before this date stay
-// frozen as the existing manual fin_expenses rows — the recompute
-// never touches them. Cutover chosen because the manager_pay_adjust-
-// ments (Additional Pay) data is only correct from this week
-// forward; earlier weeks were tracked in a different system that
-// doesn't round-trip through manager_pay_adjustments.
-export const MANAGER_PAY_CUTOVER_PAY_DATE = "2026-05-21";
+// Hard cutover floor. Pay dates before this date stay frozen as the
+// existing manual fin_expenses rows — the recompute never touches them.
+// Cutover chosen because the manager_pay_adjustments (Additional Pay)
+// data is only correct from this week forward; earlier weeks were tracked
+// in a different system that doesn't round-trip through
+// manager_pay_adjustments.
+//
+// This is the Tuesday pay date of the first recomputed work week (Mon
+// 2026-05-11). It was the Thursday 2026-05-21 before pay dates moved to
+// Tuesdays; the -2 keeps the same work week (workWeekStartForPayDate →
+// 2026-05-11) so the recompute window is unchanged. The last frozen
+// Thursday is 2026-05-14, safely below this floor.
+export const MANAGER_PAY_CUTOVER_PAY_DATE = "2026-05-19";
 
 const MONTH_LABELS = [
   "Jan", "Feb", "Mar", "Apr", "May", "Jun",
@@ -608,10 +618,10 @@ export type RecomputeResult = {
 };
 
 // Recompute Match Manager Pay rows in fin_expenses for every
-// pay-date Thursday from MANAGER_PAY_CUTOVER_PAY_DATE forward to the
-// current in-flight work week's pay date. Pre-cutover Thursdays are
-// guaranteed untouched via the `.gte("date", cutover)` filter on the
-// delete.
+// pay-date Tuesday from MANAGER_PAY_CUTOVER_PAY_DATE forward to the
+// current in-flight work week's pay date. Pre-cutover rows (the frozen
+// manual Thursdays) are guaranteed untouched via the `.gte("date",
+// cutover)` filter on the delete.
 //
 // Strategy: bulk DELETE the recompute window, then bulk INSERT all
 // computed rows. Two queries total per run. There's a brief window
