@@ -33,6 +33,7 @@ import {
 import { supabase } from "@/lib/supabase";
 import { useAuth } from "@/lib/useAuth";
 import {
+  patchVenueOptimistic,
   refetchFinanceData,
   useFinanceData,
   type FinanceData,
@@ -155,11 +156,15 @@ export default function FieldCostsView({
       setEditState(key, { saving: false, error: "Invalid value.", flash: false });
       return;
     }
+    const oldValue = venue[field];
+    const before: Record<string, unknown> = { id: venue.id, [field]: oldValue };
+
+    // Optimistic: swap this one field in the cached row now, so the cell
+    // and this row's derived cost/warnings update in place. No cache clear,
+    // no reload, no lost scroll. Persist in the background; roll back on
+    // failure.
+    patchVenueOptimistic(venueId, { [field]: nextValue } as Partial<FinVenue>);
     setEditState(key, { saving: true, error: null, flash: false });
-    const before: Record<string, unknown> = {
-      id: venue.id,
-      [field]: venue[field],
-    };
     try {
       const { data: updated, error } = await supabase
         .from("fin_venues")
@@ -176,11 +181,12 @@ export default function FieldCostsView({
         before,
         after: updated as Record<string, unknown>,
       });
-      await refetchFinanceData();
       setEditState(key, { saving: false, error: null, flash: true });
       // Clear flash + state after the animation settles.
       setTimeout(() => setEditState(key, null), 900);
     } catch (e) {
+      // Revert the optimistic change to the value we captured.
+      patchVenueOptimistic(venueId, { [field]: oldValue } as Partial<FinVenue>);
       setEditState(key, {
         saving: false,
         error: e instanceof Error ? e.message : "Save failed.",
@@ -1266,7 +1272,10 @@ function BillingTimingCell({
     venue?.billing_day == null ? "" : String(venue.billing_day),
   );
   useEffect(() => {
-    if (!dayState) {
+    // Resync from the stored value when idle, and also on error so a failed
+    // save visibly reverts the input (the optimistic patch already rolled
+    // the stored value back).
+    if (!dayState || dayState.error) {
       setDay(venue?.billing_day == null ? "" : String(venue.billing_day));
     }
   }, [venue?.billing_day, dayState]);
@@ -1407,10 +1416,11 @@ function PriceCell({
 }) {
   const [local, setLocal] = useState<string>(stored == null ? "" : String(stored));
 
-  // Reset local input when stored value changes (after refetch) and we're
-  // not in the middle of an edit.
+  // Resync local input from the stored value when idle, and also on error
+  // so a failed save visibly reverts the cell (the optimistic patch already
+  // rolled the stored value back).
   useEffect(() => {
-    if (!state) {
+    if (!state || state.error) {
       setLocal(stored == null ? "" : String(stored));
     }
   }, [stored, state]);

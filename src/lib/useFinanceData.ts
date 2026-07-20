@@ -937,6 +937,36 @@ export function useFinanceData(): State {
   return s;
 }
 
+// Optimistic in-place update of one venue row across every cached quarter
+// (venues aren't quarter-scoped, so the same row lives in each quarter's
+// data). Unlike refetchFinanceData this never clears the cache or sets
+// loading:true — it republishes the existing data with just the one row
+// swapped, so subscribers re-render the touched row WITHOUT unmounting the
+// table (which is what loses scroll on every inline edit). Field Costs and
+// its warnings are derived downstream of data.venues, so patching here
+// revalidates them in place. Callers keep the prior field value and call
+// again with it to roll a failed save back. `patch` values must already be
+// in hydrated form (the shape load() would produce) — for the inline-edit
+// fields (prices, billing_type, charge_on_cancel, billing cadence/day/
+// anchor) the raw and hydrated values are identical, so passing the value
+// sent to the DB is correct.
+export function patchVenueOptimistic(
+  venueId: number,
+  patch: Partial<FinVenue>,
+): void {
+  for (const [key, state] of cachedByQuarter.entries()) {
+    if (!state.data) continue;
+    let changed = false;
+    const venues = state.data.venues.map((v) => {
+      if (v.id !== venueId) return v;
+      changed = true;
+      return { ...v, ...patch };
+    });
+    if (!changed) continue;
+    publish(key, { ...state, data: { ...state.data, venues }, loading: false });
+  }
+}
+
 // Invalidates every quarter's cache and refetches every quarter
 // that currently has at least one live subscriber. Venue / config /
 // commentary rows aren't quarter-scoped — a save in any view can
