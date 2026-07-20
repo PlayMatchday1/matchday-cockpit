@@ -175,9 +175,18 @@ export type FinVenue = {
   // null = timing not captured (shown as an undated remainder, never
   // defaulted to day 1). Defaults applied in the mapper so pre-migration
   // cached rows read cleanly.
-  billing_cadence: "monthly" | "quarterly" | "annual";
+  billing_cadence: "monthly" | "quarterly" | "annual" | "weekly" | "custom";
   billing_day: number | null;
   billing_anchor_month: number | null;
+  // WEEKLY cadence (migration 0070): day of week (0=Sun..6=Sat) the bill
+  // hits. NULL = timing not captured (undated remainder, never day 1).
+  billing_weekday: number | null;
+  // CUSTOM cadence (migration 0070): per-MONTH day-of-month map keyed by
+  // ISO year-month, e.g. {"2026-08":[20],"2026-11":[15]}. NEMP's 4
+  // irregular payments a year live here (not a repeating pattern). Carries
+  // only the day(s); a flat venue's per-month AMOUNT stays in
+  // fin_venue_cost_overrides. Pre-migration cached rows → {}.
+  billing_custom_days: Record<string, number[]>;
 };
 
 export type FinMemberSpotsRow = {
@@ -310,6 +319,35 @@ function asNumber(v: unknown): number {
 function cleanText(v: unknown): string {
   if (v === null || v === undefined) return "";
   return String(v).replace(/^"+|"+$/g, "").trim();
+}
+
+// Coerce the fin_venues.billing_custom_days jsonb into a clean
+// { "YYYY-MM": number[] } map. supabase-js returns jsonb already parsed,
+// but tolerate a raw JSON string too. Drops any malformed entry so a bad
+// value never crashes the calendar; pre-migration rows (undefined) → {}.
+function parseCustomDays(v: unknown): Record<string, number[]> {
+  let obj: unknown = v;
+  if (typeof v === "string") {
+    try {
+      obj = JSON.parse(v);
+    } catch {
+      return {};
+    }
+  }
+  if (!obj || typeof obj !== "object" || Array.isArray(obj)) return {};
+  const out: Record<string, number[]> = {};
+  for (const [key, raw] of Object.entries(obj as Record<string, unknown>)) {
+    if (!/^\d{4}-\d{2}$/.test(key) || !Array.isArray(raw)) continue;
+    const days = [
+      ...new Set(
+        raw
+          .map((n) => Math.round(asNumber(n)))
+          .filter((n) => Number.isInteger(n) && n >= 1 && n <= 31),
+      ),
+    ].sort((a, b) => a - b);
+    if (days.length > 0) out[key] = days;
+  }
+  return out;
 }
 
 function cleanTextNullable(v: unknown): string | null {
@@ -725,7 +763,10 @@ async function load(quarter: QuarterInfo): Promise<void> {
       // these keys → default to monthly / undated so nothing breaks
       // before the columns land in prod.
       billing_cadence:
-        r.billing_cadence === "quarterly" || r.billing_cadence === "annual"
+        r.billing_cadence === "quarterly" ||
+        r.billing_cadence === "annual" ||
+        r.billing_cadence === "weekly" ||
+        r.billing_cadence === "custom"
           ? r.billing_cadence
           : "monthly",
       billing_day:
@@ -736,6 +777,11 @@ async function load(quarter: QuarterInfo): Promise<void> {
         r.billing_anchor_month === null || r.billing_anchor_month === undefined
           ? null
           : Math.round(asNumber(r.billing_anchor_month)),
+      billing_weekday:
+        r.billing_weekday === null || r.billing_weekday === undefined
+          ? null
+          : Math.round(asNumber(r.billing_weekday)),
+      billing_custom_days: parseCustomDays(r.billing_custom_days),
     };
   });
 
@@ -964,6 +1010,41 @@ export function patchVenueOptimistic(
     });
     if (!changed) continue;
     publish(key, { ...state, data: { ...state.data, venues }, loading: false });
+  }
+}
+
+// In-place upsert/remove of one fin_venue_cost_overrides row across every
+// cached quarter, so the CUSTOM cadence's inline amount edit updates the
+// row (and its derived cost) without a full refetch. Overrides are keyed
+// by (venue_id, month); a quarter whose window doesn't include that month
+// simply won't hold the row. Publishes with data intact / loading:false
+// (same scroll-preserving contract as patchVenueOptimistic).
+export function patchOverrideOptimistic(
+  op:
+    | { type: "upsert"; row: FinVenueCostOverride }
+    | { type: "remove"; venueId: number; month: string },
+): void {
+  for (const [key, state] of cachedByQuarter.entries()) {
+    if (!state.data) continue;
+    const cur = state.data.overrides;
+    let next: FinVenueCostOverride[];
+    if (op.type === "remove") {
+      next = cur.filter(
+        (o) => !(o.venue_id === op.venueId && o.month === op.month),
+      );
+      if (next.length === cur.length) continue;
+    } else {
+      const idx = cur.findIndex(
+        (o) => o.venue_id === op.row.venue_id && o.month === op.row.month,
+      );
+      if (idx >= 0) {
+        next = cur.slice();
+        next[idx] = op.row;
+      } else {
+        next = [...cur, op.row];
+      }
+    }
+    publish(key, { ...state, data: { ...state.data, overrides: next }, loading: false });
   }
 }
 
