@@ -84,9 +84,18 @@ async function load(): Promise<void> {
         .maybeSingle<{ completed_at: string }>(),
     ]);
 
+    // A match can only be genuinely reviewed AFTER it's played. The MatchDay
+    // API stamps a recurring series' rolling star_rating onto every FUTURE
+    // instance (e.g. next Sunday's ATH Katy shows 5.0/8 with player_count 0
+    // before anyone plays it), so star_rating_count>0 alone surfaces phantom
+    // future rows. Drop anything not yet started; the daily snapshot means
+    // `now` is close enough that no genuinely-reviewed past match is excluded.
+    const nowMs = Date.now();
     const rows: MatchReviewRow[] = [];
     for (const r of raw) {
       if (!r.start_date || r.star_rating == null || !r.star_rating_count) continue;
+      const startMs = new Date(r.start_date).getTime();
+      if (Number.isNaN(startMs) || startMs > nowMs) continue; // future / unparseable
       const city = normalizeCity(r.city_name);
       if (!city) continue; // drop cities cockpit has no infra for (e.g. NYC)
       rows.push({
