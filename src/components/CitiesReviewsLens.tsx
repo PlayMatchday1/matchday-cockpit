@@ -6,23 +6,25 @@ import ManagerOfTheMonth from "./ManagerOfTheMonth";
 import ManagerPodium from "./ManagerPodium";
 import Reviews8WeekCard from "./Reviews8WeekCard";
 import ReviewsCommentsTable from "./ReviewsCommentsTable";
+import CitiesMatchReviewsLens from "./CitiesMatchReviewsLens";
 import { useReviewData } from "@/lib/useReviewData";
 import { getActiveMonthWindow } from "@/lib/reviewStats";
 
-// Reviews tab: two sub-tabs.
-//   "Performance" (default) — original Reviews content (8-week chart,
-//                             ManagerPodium, comments table).
-//   "Leaderboard"           — ManagerOfTheMonth (dark themed).
+// Reviews tab: three sub-tabs.
+//   "Match Reviews" (default) — per-match review performance (highlights,
+//                               tags, comments) — CitiesMatchReviewsLens.
+//   "Performance"             — 8-week chart, ManagerPodium, comments table.
+//   "Leaderboard"             — ManagerOfTheMonth (dark themed).
 //
 // Sub-tab visual is intentionally smaller / underline-style so the
 // hierarchy reads clearly against the top-level pill nav above.
 
-type SubTab = "performance" | "leaderboard";
+type SubTab = "match-reviews" | "performance" | "leaderboard";
 
 export default function CitiesReviewsLens() {
   const { rows, meta, loading } = useReviewData();
   const monthWindow = getActiveMonthWindow(rows);
-  const [subTab, setSubTab] = useState<SubTab>("performance");
+  const [subTab, setSubTab] = useState<SubTab>("match-reviews");
 
   return (
     <section>
@@ -58,6 +60,11 @@ export default function CitiesReviewsLens() {
             className="mb-5 flex items-center gap-5 border-b border-cream-line"
           >
             <SubTabButton
+              active={subTab === "match-reviews"}
+              onClick={() => setSubTab("match-reviews")}
+              label="Match Reviews"
+            />
+            <SubTabButton
               active={subTab === "performance"}
               onClick={() => setSubTab("performance")}
               label="Performance"
@@ -68,7 +75,9 @@ export default function CitiesReviewsLens() {
               label="Leaderboard"
             />
           </div>
-          {subTab === "performance" ? (
+          {subTab === "match-reviews" ? (
+            <CitiesMatchReviewsLens embedded />
+          ) : subTab === "performance" ? (
             <div className="space-y-6">
               <p className="text-sm text-deep-green/70">
                 Manager performance · {monthWindow.monthName}{" "}
