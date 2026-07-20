@@ -356,6 +356,26 @@ function combinedAutoFormula(
   return `${parts.join(" + ")} = $${total.toLocaleString("en-US")}`;
 }
 
+// Override-aware formula for a combined group: each leg shows its own basis
+// — an overridden leg as its override amount, an auto leg as matches × rate.
+function combinedFormula(
+  group: VenueGroup,
+  legInfos: VenueCostInfo[],
+): string {
+  const parts: string[] = [];
+  for (let i = 0; i < group.legs.length; i++) {
+    const info = legInfos[i];
+    const label = getLegLabel(group, i);
+    if (info.override) {
+      parts.push(`${label}: override $${info.amount.toLocaleString("en-US")}`);
+    } else if (info.matchCount > 0) {
+      parts.push(`${info.matchCount} ${label} × $${group.legs[i].per_match_rate ?? 0}`);
+    }
+  }
+  if (parts.length === 0) return "No matches scheduled";
+  return parts.join(" + ");
+}
+
 export function buildFieldCostRows(
   data: FinanceData,
   month: Q2Month,
@@ -371,14 +391,24 @@ export function buildFieldCostRows(
 
     if (g.isCombined) {
       const legAutos = g.legs.map((l) => autoCost(data, l, month));
+      // Cost per LEG, override-aware. A primary override covers the PRIMARY
+      // leg only; each secondary leg still bills its own canonical cost (its
+      // own override if set, else auto). Summing per leg makes the combined
+      // row equal fieldCostsFor's per-venue sum by construction, so Cash Flow
+      // and the Field Costs tab agree. Example — Soccer Central: #11 flat
+      // override ($5,600) + #53 tournament per-match ($120 × count) both
+      // count. ATH Katy's one-invoice model still nets out only if its Sunday
+      // leg carries an explicit $0 override; that is now an explicit per-venue
+      // data choice, not an assumption baked into this rollup.
+      const legInfos = g.legs.map((l) => canonicalVenueCost(data, l.id, month));
+      const amount = legInfos.reduce((s, a) => s + a.amount, 0);
       const autoAmount = legAutos.reduce((s, a) => s + a.amount, 0);
       const matchCount = legAutos.reduce((s, a) => s + a.matchCount, 0);
       const totalHours = legAutos.reduce((s, a) => s + a.totalHours, 0);
       const autoFormula = combinedAutoFormula(g, legAutos);
-      // The combined row's override target is the primary leg. Wave 2.5's
-      // override-write logic mirrors $0 onto the secondary legs so summed
-      // canonicalVenueCost stays correct everywhere.
+      // Override affordance still targets the primary leg (Pin + Set/Remove).
       const override = findOverride(data, primary.id, month);
+      const anyLegOverride = legInfos.some((i) => i.override);
       rows.push({
         key: `combined-${primary.id}`,
         displayName: g.displayName,
@@ -386,14 +416,12 @@ export function buildFieldCostRows(
         billingType: primary.billing_type,
         primaryVenueId: primary.id,
         secondaryVenueIds: g.legs.slice(1).map((l) => l.id),
-        amount: override ? override.override_amount : autoAmount,
+        amount,
         matchCount,
         totalHours,
-        formula: override
-          ? (override.reason ?? "Override (no reason given)")
-          : autoFormula,
-        source: override
-          ? `Override · set by ${override.created_by} on ${override.created_at.slice(0, 10)}`
+        formula: anyLegOverride ? combinedFormula(g, legInfos) : autoFormula,
+        source: anyLegOverride
+          ? "Per leg · override + auto from schedule"
           : "Auto from schedule",
         override,
         autoAmount,
