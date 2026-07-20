@@ -145,7 +145,8 @@ export default function CitiesMatchReviewsLens({
       .filter((m) => city === ALL || m.city === city)
       .filter((m) => venue === ALL || m.fieldTitle === venue)
       .filter((m) => manager === ALL || m.manager === manager)
-      .sort((a, b) => a.startDate.localeCompare(b.startDate));
+      // Newest match first (most recent date/time at the top).
+      .sort((a, b) => b.startDate.localeCompare(a.startDate));
   }, [monthMatches, city, venue, manager]);
 
   const needsAttention = filtered.filter(
