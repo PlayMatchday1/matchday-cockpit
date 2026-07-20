@@ -343,16 +343,16 @@ export default function FieldCostsView({
   }
 
   // CUSTOM cadence amount for the current month — works for ANY billing type
-  // (per_match included). Writes the per-month override so buildFieldCostRows,
-  // OpEx and Cash Flow all read the same number; empty clears it back to auto.
-  // For a combined venue the override lives on the primary, so secondary legs
-  // get a mirrored $0 override (cleared with the primary) — otherwise the
-  // per-venue sum in fieldCostsFor would double-count their auto cost.
+  // (per_match included). Writes the per-month override on THIS venue so
+  // buildFieldCostRows, OpEx and Cash Flow all read the same number; empty
+  // clears it back to auto. For a combined venue the override covers the
+  // primary leg only — secondary legs bill their own cost. To mark a
+  // secondary as covered by the primary invoice, set an explicit $0 override
+  // on that leg (no auto-mirror).
   async function saveCustomAmount(
     venueId: number,
     forMonth: Q2Month,
     raw: string,
-    secondaryVenueIds: number[],
   ): Promise<void> {
     const email = appUser?.email;
     if (!email) return;
@@ -362,9 +362,6 @@ export default function FieldCostsView({
     try {
       if (trimmed === "") {
         await writeOneOverride(venueId, forMonth, null, null, email);
-        for (const sid of secondaryVenueIds) {
-          await writeOneOverride(sid, forMonth, null, null, email);
-        }
       } else {
         const amount = parseFloat(trimmed);
         if (Number.isNaN(amount) || amount < 0) {
@@ -372,9 +369,6 @@ export default function FieldCostsView({
           return;
         }
         await writeOneOverride(venueId, forMonth, amount, "Custom billing month", email);
-        for (const sid of secondaryVenueIds) {
-          await writeOneOverride(sid, forMonth, 0, "Combined into primary override", email);
-        }
       }
       setEditState(key, { saving: false, error: null, flash: true });
       setTimeout(() => setEditState(key, null), 900);
@@ -508,59 +502,11 @@ export default function FieldCostsView({
       });
     }
 
-    // ATH Katy combine: ensure secondary venues have a $0 override for the
-    // same month so company-wide aggregations don't double-count the auto
-    // legs alongside the primary's combined override.
-    for (const sid of row.secondaryVenueIds) {
-      const existing = data?.overrides.find(
-        (o) => o.venue_id === sid && o.month === draft.month,
-      );
-      if (existing) {
-        if (existing.override_amount !== 0) {
-          const sBefore = existing;
-          const { data: sUpdated, error: sErr } = await supabase
-            .from("fin_venue_cost_overrides")
-            .update({
-              override_amount: 0,
-              reason: "Combined into primary override",
-            })
-            .eq("id", existing.id)
-            .select()
-            .single();
-          if (sErr) throw new Error(sErr.message);
-          await logChange({
-            tableName: "fin_venue_cost_overrides",
-            rowId: existing.id,
-            action: "update",
-            changedBy: email,
-            before: sBefore as unknown as Record<string, unknown>,
-            after: sUpdated as Record<string, unknown>,
-          });
-        }
-      } else {
-        const sPayload = {
-          venue_id: sid,
-          month: draft.month,
-          override_amount: 0,
-          reason: "Combined into primary override",
-          created_by: email,
-        };
-        const { data: sInserted, error: sErr } = await supabase
-          .from("fin_venue_cost_overrides")
-          .insert(sPayload)
-          .select()
-          .single();
-        if (sErr) throw new Error(sErr.message);
-        await logChange({
-          tableName: "fin_venue_cost_overrides",
-          rowId: (sInserted as { id: number }).id,
-          action: "insert",
-          changedBy: email,
-          after: sInserted as Record<string, unknown>,
-        });
-      }
-    }
-
+    // No secondary mirror: a combined primary's override covers the PRIMARY
+    // leg only. Each secondary leg bills its own canonical cost (buildField-
+    // CostRows sums per leg). To mark a secondary as covered by this invoice,
+    // set an explicit $0 override on that leg — surfaced as a hint in the
+    // editor.
     await refetchFinanceData();
     setOverrideEditorOpen(false);
     setOverrideEditorRow(null);
@@ -696,26 +642,9 @@ export default function FieldCostsView({
       .eq("id", primaryOverride.id);
     if (error) throw new Error(error.message);
 
-    for (const sid of row.secondaryVenueIds) {
-      const sec: FinVenueCostOverride | undefined = data?.overrides.find(
-        (o) => o.venue_id === sid && o.month === primaryOverride.month,
-      );
-      if (sec) {
-        await logChange({
-          tableName: "fin_venue_cost_overrides",
-          rowId: sec.id,
-          action: "delete",
-          changedBy: email,
-          before: sec as unknown as Record<string, unknown>,
-        });
-        const { error: sErr } = await supabase
-          .from("fin_venue_cost_overrides")
-          .delete()
-          .eq("id", sec.id);
-        if (sErr) throw new Error(sErr.message);
-      }
-    }
-
+    // Secondary-leg overrides are explicit, user-owned choices now (a $0
+    // override marks a leg as covered by the primary invoice). Removing the
+    // primary override no longer auto-deletes them.
     await refetchFinanceData();
     setRemoveRow(null);
   }
@@ -942,13 +871,9 @@ export default function FieldCostsView({
                         saveCustomDays(row.primaryVenueId, iso, days)
                       }
                       onSaveCustomAmount={(raw) =>
-                        void saveCustomAmount(
-                          row.primaryVenueId,
-                          month,
-                          raw,
-                          row.secondaryVenueIds,
-                        )
+                        void saveCustomAmount(row.primaryVenueId, month, raw)
                       }
+                      isCombinedPrimary={row.secondaryVenueIds.length > 0}
                       month={month}
                       autoAmount={row.autoAmount}
                       scheduleRows={
@@ -1081,6 +1006,7 @@ function FieldCostTableRow({
   onSaveBillingWeekday,
   onSaveCustomDays,
   onSaveCustomAmount,
+  isCombinedPrimary,
   month,
   autoAmount,
   scheduleRows,
@@ -1104,6 +1030,7 @@ function FieldCostTableRow({
   onSaveBillingWeekday: (raw: string) => void;
   onSaveCustomDays: (monthIso: string, days: number[]) => void;
   onSaveCustomAmount: (raw: string) => void;
+  isCombinedPrimary: boolean;
   month: Q2Month;
   autoAmount: number;
   scheduleRows: MatchLineItem[];
@@ -1226,6 +1153,7 @@ function FieldCostTableRow({
           <BillingTimingCell
             venue={primaryVenue}
             dashboardDriven={dashboardDriven}
+            isCombinedPrimary={isCombinedPrimary}
             month={month}
             autoAmount={autoAmount}
             monthOverride={row.override}
@@ -1457,6 +1385,7 @@ const parseCustomDays = (raw: string): number[] =>
 function BillingTimingCell({
   venue,
   dashboardDriven,
+  isCombinedPrimary,
   month,
   autoAmount,
   monthOverride,
@@ -1475,6 +1404,7 @@ function BillingTimingCell({
 }: {
   venue: FinVenue | null;
   dashboardDriven: boolean;
+  isCombinedPrimary: boolean;
   month: Q2Month;
   autoAmount: number;
   monthOverride: FinVenueCostOverride | null;
@@ -1730,6 +1660,14 @@ function BillingTimingCell({
         <span className="text-[9px] text-deep-green/45">
           auto: {fmtMoney(autoAmount, true)}
           {isOverridden ? " · overridden" : ""}
+        </span>
+      )}
+      {/* Combined-primary override covers this leg only; secondaries bill
+          their own cost unless explicitly $0-overridden. */}
+      {showCustom && isCombinedPrimary && !anySaving && (
+        <span className="text-[9px] font-semibold text-[#9a6a00]">
+          secondary legs still bill their own cost — set a $0 override on a leg
+          if this invoice covers it
         </span>
       )}
       {/* per_match caveat, surfaced (not silent): quarterly/annual only

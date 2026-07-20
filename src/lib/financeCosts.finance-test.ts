@@ -8,7 +8,7 @@
 
 import assert from "node:assert/strict";
 import { test } from "node:test";
-import { buildFieldCostRows, fieldCostsFor } from "./financeCosts";
+import { buildFieldCostRows, fieldCostsFor, canonicalVenueCost } from "./financeCosts";
 import type {
   FinanceData,
   FinVenue,
@@ -144,6 +144,28 @@ test("combined group: a $0 secondary override nets to the primary (explicit one-
   // 3000 primary override + 0 secondary override = 3000.
   assert.equal(katy.amount, 3000);
   assert.equal(rows.reduce((s, r) => s + r.amount, 0), fieldCostsFor(data, MONTH));
+});
+
+test("no auto-mirror: overriding the primary leaves the secondary at its own auto cost, not $0", () => {
+  // The write paths (handleSubmitOverride, saveCustomAmount) no longer write a
+  // $0 mirror onto secondary legs. At the data layer that means: with ONLY a
+  // primary override present, the secondary leg carries NO override and bills
+  // its own auto cost — and that cost flows into the combined row.
+  const data = makeData({
+    venues: [
+      venue({ id: 11, venue_name: "Soccer Central", city: "San Antonio", billing_type: "per_match", per_match_rate: 60 }),
+      venue({ id: 53, venue_name: "Soccer Central Tournament", city: "San Antonio", billing_type: "per_match", per_match_rate: 120 }),
+    ],
+    masterSchedule: [...rep(9, 11), ...rep(4, 53)],
+    overrides: [override(11, 5600)], // primary only — no secondary mirror row
+  });
+
+  const sec = canonicalVenueCost(data, 53, MONTH);
+  assert.equal(sec.override, null, "secondary leg has no (mirror) override");
+  assert.equal(sec.amount, 480, "secondary bills its own auto cost (4 × 120)");
+
+  const sc = buildFieldCostRows(data, MONTH).find((r) => r.displayName === "Soccer Central")!;
+  assert.equal(sc.amount, 5600 + 480);
 });
 
 test("combined group with no overrides sums both legs' auto cost (unchanged behavior)", () => {

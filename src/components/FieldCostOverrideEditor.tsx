@@ -152,10 +152,10 @@ export default function FieldCostOverrideEditor({
           </Field>
 
           {row.secondaryVenueIds.length > 0 && (
-            <div className="rounded-md border border-mint/40 bg-mint-soft/40 px-3 py-2 text-xs text-deep-green">
-              This override applies to the combined {row.displayName} row
-              (covers both weekday and Sunday legs). The Sunday leg will be
-              set to $0 so aggregations stay correct.
+            <div className="rounded-md border border-[#e9a86a]/50 bg-[#fbeede] px-3 py-2 text-xs text-[#7a4a12]">
+              This override applies to the <b>{row.displayName}</b> primary leg
+              only. Secondary legs still bill their own cost — set a $0 override
+              on a leg if this invoice covers it.
             </div>
           )}
         </div>
