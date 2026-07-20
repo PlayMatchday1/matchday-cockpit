@@ -138,20 +138,6 @@ export function startingCash(
   return Number.isNaN(parsed) ? 0 : parsed;
 }
 
-// First day → last day of a quarter, as "YYYY-MM-DD" strings.
-// Drives the BillingScheduleCalendar's "ALL" months range.
-export function quarterDateRange(
-  quarter: QuarterInfo,
-): { start: string; end: string } {
-  const pad = (n: number) => String(n).padStart(2, "0");
-  const first = quarter.months[0];
-  const last = quarter.months[quarter.months.length - 1];
-  return {
-    start: `${first.year}-${pad(first.monthIndex + 1)}-01`,
-    end: `${last.year}-${pad(last.monthIndex + 1)}-${pad(last.daysInMonth)}`,
-  };
-}
-
 // DPP daily extrapolation. Returns the multiplier from realized-MTD
 // → projected end-of-month for the given month's daily-paid revenue.
 // 1.0 for past/future months (no extrapolation); for the current
