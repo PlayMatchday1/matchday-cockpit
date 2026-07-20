@@ -270,40 +270,100 @@ export default function FieldCostsView({
     else next[monthIso] = days;
     void saveVenueField(venueId, "billing_custom_days", next, true);
   }
-  // CUSTOM cadence amount for a flat/profit_share venue: writes the EXISTING
-  // per-month override (fin_venue_cost_overrides) so buildFieldCostRows and
-  // the Override flow read one source of truth. Optimistic single-row patch,
-  // no full refetch. Empty clears the month's override.
-  async function saveCustomAmount(
+  // Write (or clear) one fin_venue_cost_overrides row for (venue, month),
+  // optimistically, with an audit entry. amount null = delete. Shared by the
+  // primary write and the combined-venue secondary mirror.
+  async function writeOneOverride(
     venueId: number,
     forMonth: Q2Month,
-    raw: string,
+    amount: number | null,
+    reason: string | null,
+    email: string,
   ): Promise<void> {
-    const email = appUser?.email;
-    if (!email) return;
-    const key = editKey(venueId, "custom_amount");
     const existing =
       data?.overrides.find(
         (o) => o.venue_id === venueId && o.month === forMonth,
       ) ?? null;
+    if (amount == null) {
+      if (!existing) return;
+      await logChange({
+        tableName: "fin_venue_cost_overrides",
+        rowId: existing.id,
+        action: "delete",
+        changedBy: email,
+        before: existing as unknown as Record<string, unknown>,
+      });
+      const { error } = await supabase
+        .from("fin_venue_cost_overrides")
+        .delete()
+        .eq("id", existing.id);
+      if (error) throw new Error(error.message);
+      patchOverrideOptimistic({ type: "remove", venueId, month: forMonth });
+      return;
+    }
+    if (existing) {
+      const { data: updated, error } = await supabase
+        .from("fin_venue_cost_overrides")
+        .update({ override_amount: amount, reason })
+        .eq("id", existing.id)
+        .select()
+        .single();
+      if (error) throw new Error(error.message);
+      await logChange({
+        tableName: "fin_venue_cost_overrides",
+        rowId: existing.id,
+        action: "update",
+        changedBy: email,
+        before: existing as unknown as Record<string, unknown>,
+        after: updated as Record<string, unknown>,
+      });
+      patchOverrideOptimistic({ type: "upsert", row: updated as FinVenueCostOverride });
+    } else {
+      const { data: inserted, error } = await supabase
+        .from("fin_venue_cost_overrides")
+        .insert({
+          venue_id: venueId,
+          month: forMonth,
+          override_amount: amount,
+          reason,
+          created_by: email,
+        })
+        .select()
+        .single();
+      if (error) throw new Error(error.message);
+      await logChange({
+        tableName: "fin_venue_cost_overrides",
+        rowId: (inserted as { id: number }).id,
+        action: "insert",
+        changedBy: email,
+        after: inserted as Record<string, unknown>,
+      });
+      patchOverrideOptimistic({ type: "upsert", row: inserted as FinVenueCostOverride });
+    }
+  }
+
+  // CUSTOM cadence amount for the current month — works for ANY billing type
+  // (per_match included). Writes the per-month override so buildFieldCostRows,
+  // OpEx and Cash Flow all read the same number; empty clears it back to auto.
+  // For a combined venue the override lives on the primary, so secondary legs
+  // get a mirrored $0 override (cleared with the primary) — otherwise the
+  // per-venue sum in fieldCostsFor would double-count their auto cost.
+  async function saveCustomAmount(
+    venueId: number,
+    forMonth: Q2Month,
+    raw: string,
+    secondaryVenueIds: number[],
+  ): Promise<void> {
+    const email = appUser?.email;
+    if (!email) return;
+    const key = editKey(venueId, "custom_amount");
     const trimmed = raw.trim();
     setEditState(key, { saving: true, error: null, flash: false });
     try {
       if (trimmed === "") {
-        if (existing) {
-          await logChange({
-            tableName: "fin_venue_cost_overrides",
-            rowId: existing.id,
-            action: "delete",
-            changedBy: email,
-            before: existing as unknown as Record<string, unknown>,
-          });
-          const { error } = await supabase
-            .from("fin_venue_cost_overrides")
-            .delete()
-            .eq("id", existing.id);
-          if (error) throw new Error(error.message);
-          patchOverrideOptimistic({ type: "remove", venueId, month: forMonth });
+        await writeOneOverride(venueId, forMonth, null, null, email);
+        for (const sid of secondaryVenueIds) {
+          await writeOneOverride(sid, forMonth, null, null, email);
         }
       } else {
         const amount = parseFloat(trimmed);
@@ -311,45 +371,9 @@ export default function FieldCostsView({
           setEditState(key, { saving: false, error: "Invalid amount.", flash: false });
           return;
         }
-        if (existing) {
-          const { data: updated, error } = await supabase
-            .from("fin_venue_cost_overrides")
-            .update({ override_amount: amount })
-            .eq("id", existing.id)
-            .select()
-            .single();
-          if (error) throw new Error(error.message);
-          await logChange({
-            tableName: "fin_venue_cost_overrides",
-            rowId: existing.id,
-            action: "update",
-            changedBy: email,
-            before: existing as unknown as Record<string, unknown>,
-            after: updated as Record<string, unknown>,
-          });
-          patchOverrideOptimistic({ type: "upsert", row: updated as FinVenueCostOverride });
-        } else {
-          const payload = {
-            venue_id: venueId,
-            month: forMonth,
-            override_amount: amount,
-            reason: "Custom billing month",
-            created_by: email,
-          };
-          const { data: inserted, error } = await supabase
-            .from("fin_venue_cost_overrides")
-            .insert(payload)
-            .select()
-            .single();
-          if (error) throw new Error(error.message);
-          await logChange({
-            tableName: "fin_venue_cost_overrides",
-            rowId: (inserted as { id: number }).id,
-            action: "insert",
-            changedBy: email,
-            after: inserted as Record<string, unknown>,
-          });
-          patchOverrideOptimistic({ type: "upsert", row: inserted as FinVenueCostOverride });
+        await writeOneOverride(venueId, forMonth, amount, "Custom billing month", email);
+        for (const sid of secondaryVenueIds) {
+          await writeOneOverride(sid, forMonth, 0, "Combined into primary override", email);
         }
       }
       setEditState(key, { saving: false, error: null, flash: true });
@@ -918,9 +942,15 @@ export default function FieldCostsView({
                         saveCustomDays(row.primaryVenueId, iso, days)
                       }
                       onSaveCustomAmount={(raw) =>
-                        void saveCustomAmount(row.primaryVenueId, month, raw)
+                        void saveCustomAmount(
+                          row.primaryVenueId,
+                          month,
+                          raw,
+                          row.secondaryVenueIds,
+                        )
                       }
                       month={month}
+                      autoAmount={row.autoAmount}
                       scheduleRows={
                         data ? buildMatchLineItems(data, row, month) : []
                       }
@@ -1052,6 +1082,7 @@ function FieldCostTableRow({
   onSaveCustomDays,
   onSaveCustomAmount,
   month,
+  autoAmount,
   scheduleRows,
   highlight,
 }: {
@@ -1074,6 +1105,7 @@ function FieldCostTableRow({
   onSaveCustomDays: (monthIso: string, days: number[]) => void;
   onSaveCustomAmount: (raw: string) => void;
   month: Q2Month;
+  autoAmount: number;
   scheduleRows: MatchLineItem[];
   // Set briefly when the Match P&L tab links back to this row.
   // Renders a soft mint pulse so the operator can find the row.
@@ -1195,6 +1227,7 @@ function FieldCostTableRow({
             venue={primaryVenue}
             dashboardDriven={dashboardDriven}
             month={month}
+            autoAmount={autoAmount}
             monthOverride={row.override}
             cadenceState={cellState("billing_cadence")}
             dayState={cellState("billing_day")}
@@ -1425,6 +1458,7 @@ function BillingTimingCell({
   venue,
   dashboardDriven,
   month,
+  autoAmount,
   monthOverride,
   cadenceState,
   dayState,
@@ -1442,6 +1476,7 @@ function BillingTimingCell({
   venue: FinVenue | null;
   dashboardDriven: boolean;
   month: Q2Month;
+  autoAmount: number;
   monthOverride: FinVenueCostOverride | null;
   cadenceState: CellState | null;
   dayState: CellState | null;
@@ -1514,9 +1549,12 @@ function BillingTimingCell({
   const showAnchor = mode === "quarterly" || mode === "annual";
   const showWeekday = mode === "weekly";
   const showCustom = mode === "custom";
-  // Custom amount is the per-month override, and only for override-costed
-  // venues (flat / profit_share). per_match custom keeps its auto amount.
-  const showCustomAmount = showCustom && venue.billing_type !== "per_match";
+  // Every billing type now takes a per-month amount override in the custom
+  // cell. per_match venues show the auto matches × rate as the baseline
+  // (placeholder + "auto: $X"); a typed value creates the override. flat /
+  // profit_share have no meaningful auto, so the amount IS the cost.
+  const hasAuto = venue.billing_type === "per_match";
+  const isOverridden = monthOverride != null;
 
   return (
     <div className="flex flex-col gap-1">
@@ -1648,29 +1686,51 @@ function BillingTimingCell({
             }}
             className="w-16 rounded-md border border-cream-line bg-cream-soft px-1.5 py-1 text-right font-mono text-[11px] tabular-nums text-deep-green focus:border-deep-green focus:outline-none disabled:opacity-60"
           />
-          {showCustomAmount && (
+          <span className="text-[10px] text-deep-green/45">$</span>
+          <input
+            value={amtInput}
+            // per_match shows the auto matches × rate as ghost text; a typed
+            // value creates the override for this month.
+            placeholder={hasAuto ? String(Math.round(autoAmount)) : "—"}
+            disabled={anySaving}
+            onChange={(e) => setAmtInput(e.target.value)}
+            onBlur={() => {
+              if (amtInput.trim() !== storedAmt) onSaveCustomAmount(amtInput);
+            }}
+            onKeyDown={(e) => {
+              if (e.key === "Enter") (e.currentTarget as HTMLInputElement).blur();
+              else if (e.key === "Escape") {
+                setAmtInput(storedAmt);
+                (e.currentTarget as HTMLInputElement).blur();
+              }
+            }}
+            className={`w-20 rounded-md border bg-cream-soft px-1.5 py-1 text-right font-mono text-[11px] tabular-nums text-deep-green focus:border-deep-green focus:outline-none disabled:opacity-60 ${
+              isOverridden ? "border-mint-hover ring-1 ring-mint/50" : "border-cream-line"
+            }`}
+          />
+          {isOverridden && (
             <>
-              <span className="text-[10px] text-deep-green/45">$</span>
-              <input
-                value={amtInput}
-                placeholder="—"
+              <span className="inline-flex items-center gap-0.5 rounded-full bg-mint px-1.5 py-0.5 text-[9px] font-bold uppercase tracking-wider text-deep-green">
+                <Pin size={9} aria-hidden />
+                override
+              </span>
+              <button
+                type="button"
                 disabled={anySaving}
-                onChange={(e) => setAmtInput(e.target.value)}
-                onBlur={() => {
-                  if (amtInput.trim() !== storedAmt) onSaveCustomAmount(amtInput);
-                }}
-                onKeyDown={(e) => {
-                  if (e.key === "Enter") (e.currentTarget as HTMLInputElement).blur();
-                  else if (e.key === "Escape") {
-                    setAmtInput(storedAmt);
-                    (e.currentTarget as HTMLInputElement).blur();
-                  }
-                }}
-                className="w-20 rounded-md border border-cream-line bg-cream-soft px-1.5 py-1 text-right font-mono text-[11px] tabular-nums text-deep-green focus:border-deep-green focus:outline-none disabled:opacity-60"
-              />
+                onClick={() => onSaveCustomAmount("")}
+                className="text-[9px] font-semibold text-coral/80 underline underline-offset-2 hover:text-coral disabled:opacity-60"
+              >
+                clear → auto
+              </button>
             </>
           )}
         </div>
+      )}
+      {showCustom && hasAuto && !anySaving && (
+        <span className="text-[9px] text-deep-green/45">
+          auto: {fmtMoney(autoAmount, true)}
+          {isOverridden ? " · overridden" : ""}
+        </span>
       )}
       {/* per_match caveat, surfaced (not silent): quarterly/annual only
           dates the billing-month total; off-cycle months land undated */}
@@ -1695,26 +1755,27 @@ function BillingTimingCell({
           pick a weekday → undated
         </span>
       )}
-      {/* custom per-month hints (this is a month-scoped entry) */}
+      {/* custom per-month hints (this is a month-scoped entry). A month
+          "has a cost" if it's overridden or the per-match auto is non-zero. */}
       {showCustom && !anySaving && (() => {
         const hasDay = storedDays.length > 0;
-        const hasAmt = showCustomAmount ? monthOverride != null : true;
+        const hasAmt = isOverridden || (hasAuto && autoAmount > 0.005);
         if (!hasDay && !hasAmt)
           return (
             <span className="text-[9px] italic text-deep-green/45">
               no payment this month
             </span>
           );
-        if (hasDay && !hasAmt)
-          return (
-            <span className="text-[9px] font-semibold text-coral/80">
-              set an amount for {month}
-            </span>
-          );
         if (!hasDay && hasAmt)
           return (
             <span className="text-[9px] font-semibold text-coral/80">
               no day → undated in OpEx
+            </span>
+          );
+        if (hasDay && !hasAmt && !hasAuto)
+          return (
+            <span className="text-[9px] font-semibold text-coral/80">
+              set an amount for {month}
             </span>
           );
         return null;
