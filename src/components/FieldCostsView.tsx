@@ -33,6 +33,7 @@ import {
 import { supabase } from "@/lib/supabase";
 import { useAuth } from "@/lib/useAuth";
 import {
+  patchOverrideOptimistic,
   patchVenueOptimistic,
   refetchFinanceData,
   useFinanceData,
@@ -48,10 +49,16 @@ type EditableField =
   | "charge_on_cancel"
   | "billing_cadence"
   | "billing_day"
-  | "billing_anchor_month";
+  | "billing_anchor_month"
+  | "billing_weekday"
+  | "billing_custom_days";
+// "custom_amount" is a virtual key for the CUSTOM cadence's per-month
+// amount cell — it writes fin_venue_cost_overrides, not a fin_venues
+// column, but shares the same saving/flash/error cell-state map.
+type CellStateKey = EditableField | "custom_amount";
 type CellState = { saving: boolean; error: string | null; flash: boolean };
 type EditMap = Map<string, CellState>;
-function editKey(venueId: number, field: EditableField): string {
+function editKey(venueId: number, field: CellStateKey): string {
   return `${venueId}|${field}`;
 }
 
@@ -145,7 +152,7 @@ export default function FieldCostsView({
   async function saveVenueField(
     venueId: number,
     field: EditableField,
-    nextValue: number | string | boolean | null,
+    nextValue: number | string | boolean | null | Record<string, number[]>,
     parsedValid: boolean,
   ): Promise<void> {
     const email = appUser?.email;
@@ -241,6 +248,119 @@ export default function FieldCostsView({
     const n = parseInt(raw, 10);
     const valid = Number.isInteger(n) && n >= 1 && n <= 12;
     void saveVenueField(venueId, "billing_anchor_month", valid ? n : raw, valid);
+  }
+  // WEEKLY cadence (migration 0070): day of week 0=Sun..6=Sat.
+  function saveBillingWeekday(venueId: number, raw: string): void {
+    if (raw === "") {
+      void saveVenueField(venueId, "billing_weekday", null, true);
+      return;
+    }
+    const n = parseInt(raw, 10);
+    const valid = Number.isInteger(n) && n >= 0 && n <= 6;
+    void saveVenueField(venueId, "billing_weekday", valid ? n : raw, valid);
+  }
+  // CUSTOM cadence (migration 0070): set/clear the current month's entry in
+  // the venue's per-month billing_custom_days map. Reads the whole map,
+  // updates one ISO-month key, writes it back (jsonb column).
+  function saveCustomDays(venueId: number, monthIso: string, days: number[]): void {
+    const venue = venueById.get(venueId);
+    if (!venue) return;
+    const next: Record<string, number[]> = { ...(venue.billing_custom_days ?? {}) };
+    if (days.length === 0) delete next[monthIso];
+    else next[monthIso] = days;
+    void saveVenueField(venueId, "billing_custom_days", next, true);
+  }
+  // CUSTOM cadence amount for a flat/profit_share venue: writes the EXISTING
+  // per-month override (fin_venue_cost_overrides) so buildFieldCostRows and
+  // the Override flow read one source of truth. Optimistic single-row patch,
+  // no full refetch. Empty clears the month's override.
+  async function saveCustomAmount(
+    venueId: number,
+    forMonth: Q2Month,
+    raw: string,
+  ): Promise<void> {
+    const email = appUser?.email;
+    if (!email) return;
+    const key = editKey(venueId, "custom_amount");
+    const existing =
+      data?.overrides.find(
+        (o) => o.venue_id === venueId && o.month === forMonth,
+      ) ?? null;
+    const trimmed = raw.trim();
+    setEditState(key, { saving: true, error: null, flash: false });
+    try {
+      if (trimmed === "") {
+        if (existing) {
+          await logChange({
+            tableName: "fin_venue_cost_overrides",
+            rowId: existing.id,
+            action: "delete",
+            changedBy: email,
+            before: existing as unknown as Record<string, unknown>,
+          });
+          const { error } = await supabase
+            .from("fin_venue_cost_overrides")
+            .delete()
+            .eq("id", existing.id);
+          if (error) throw new Error(error.message);
+          patchOverrideOptimistic({ type: "remove", venueId, month: forMonth });
+        }
+      } else {
+        const amount = parseFloat(trimmed);
+        if (Number.isNaN(amount) || amount < 0) {
+          setEditState(key, { saving: false, error: "Invalid amount.", flash: false });
+          return;
+        }
+        if (existing) {
+          const { data: updated, error } = await supabase
+            .from("fin_venue_cost_overrides")
+            .update({ override_amount: amount })
+            .eq("id", existing.id)
+            .select()
+            .single();
+          if (error) throw new Error(error.message);
+          await logChange({
+            tableName: "fin_venue_cost_overrides",
+            rowId: existing.id,
+            action: "update",
+            changedBy: email,
+            before: existing as unknown as Record<string, unknown>,
+            after: updated as Record<string, unknown>,
+          });
+          patchOverrideOptimistic({ type: "upsert", row: updated as FinVenueCostOverride });
+        } else {
+          const payload = {
+            venue_id: venueId,
+            month: forMonth,
+            override_amount: amount,
+            reason: "Custom billing month",
+            created_by: email,
+          };
+          const { data: inserted, error } = await supabase
+            .from("fin_venue_cost_overrides")
+            .insert(payload)
+            .select()
+            .single();
+          if (error) throw new Error(error.message);
+          await logChange({
+            tableName: "fin_venue_cost_overrides",
+            rowId: (inserted as { id: number }).id,
+            action: "insert",
+            changedBy: email,
+            after: inserted as Record<string, unknown>,
+          });
+          patchOverrideOptimistic({ type: "upsert", row: inserted as FinVenueCostOverride });
+        }
+      }
+      setEditState(key, { saving: false, error: null, flash: true });
+      setTimeout(() => setEditState(key, null), 900);
+    } catch (e) {
+      setEditState(key, {
+        saving: false,
+        error: e instanceof Error ? e.message : "Save failed.",
+        flash: false,
+      });
+    }
   }
 
   // Venues whose cost is a partner-dashboard payout (Crossbar's
@@ -791,6 +911,16 @@ export default function FieldCostsView({
                       onSaveBillingAnchorMonth={(raw) =>
                         saveBillingAnchorMonth(row.primaryVenueId, raw)
                       }
+                      onSaveBillingWeekday={(raw) =>
+                        saveBillingWeekday(row.primaryVenueId, raw)
+                      }
+                      onSaveCustomDays={(iso, days) =>
+                        saveCustomDays(row.primaryVenueId, iso, days)
+                      }
+                      onSaveCustomAmount={(raw) =>
+                        void saveCustomAmount(row.primaryVenueId, month, raw)
+                      }
+                      month={month}
                       scheduleRows={
                         data ? buildMatchLineItems(data, row, month) : []
                       }
@@ -918,6 +1048,10 @@ function FieldCostTableRow({
   onSaveBillingCadence,
   onSaveBillingDay,
   onSaveBillingAnchorMonth,
+  onSaveBillingWeekday,
+  onSaveCustomDays,
+  onSaveCustomAmount,
+  month,
   scheduleRows,
   highlight,
 }: {
@@ -928,7 +1062,7 @@ function FieldCostTableRow({
   onSetOverride: () => void;
   onRemoveOverride: () => void;
   primaryVenue: FinVenue | null;
-  cellState: (field: EditableField) => CellState | null;
+  cellState: (field: CellStateKey) => CellState | null;
   onSavePrice: (field: PriceField, raw: string) => void;
   onSaveBillingType: (next: FinVenue["billing_type"]) => void;
   onSaveChargeOnCancel: (next: boolean) => void;
@@ -936,6 +1070,10 @@ function FieldCostTableRow({
   onSaveBillingCadence: (next: FinVenue["billing_cadence"]) => void;
   onSaveBillingDay: (raw: string) => void;
   onSaveBillingAnchorMonth: (raw: string) => void;
+  onSaveBillingWeekday: (raw: string) => void;
+  onSaveCustomDays: (monthIso: string, days: number[]) => void;
+  onSaveCustomAmount: (raw: string) => void;
+  month: Q2Month;
   scheduleRows: MatchLineItem[];
   // Set briefly when the Match P&L tab links back to this row.
   // Renders a soft mint pulse so the operator can find the row.
@@ -1056,12 +1194,20 @@ function FieldCostTableRow({
           <BillingTimingCell
             venue={primaryVenue}
             dashboardDriven={dashboardDriven}
+            month={month}
+            monthOverride={row.override}
             cadenceState={cellState("billing_cadence")}
             dayState={cellState("billing_day")}
             anchorState={cellState("billing_anchor_month")}
+            weekdayState={cellState("billing_weekday")}
+            customDaysState={cellState("billing_custom_days")}
+            customAmountState={cellState("custom_amount")}
             onSaveCadence={onSaveBillingCadence}
             onSaveDay={onSaveBillingDay}
             onSaveAnchorMonth={onSaveBillingAnchorMonth}
+            onSaveWeekday={onSaveBillingWeekday}
+            onSaveCustomDays={onSaveCustomDays}
+            onSaveCustomAmount={onSaveCustomAmount}
           />
         </td>
         <td className="px-3 py-2 text-deep-green/85">{row.formula}</td>
@@ -1229,74 +1375,148 @@ const CADENCE_OPTIONS: FinVenue["billing_cadence"][] = [
   "monthly",
   "quarterly",
   "annual",
+  "weekly",
+  "custom",
 ];
+const WEEKDAY_ABBR = ["Sun", "Mon", "Tue", "Wed", "Thu", "Fri", "Sat"];
 const MONTH_ABBR = [
   "Jan", "Feb", "Mar", "Apr", "May", "Jun",
   "Jul", "Aug", "Sep", "Oct", "Nov", "Dec",
 ];
 
-// Billing-timing editor for the OpEx calendar (migration 0069). Editing
-// here writes fin_venues.billing_* via the same saveVenueField path as
-// the price cells; it never changes any cost total, only WHEN the money
-// lands in the OpEx calendar.
+// Q2Month ("Jul 2026") → ISO year-month ("2026-07"), the key format
+// fin_venues.billing_custom_days uses.
+function monthToIso(month: string): string | null {
+  const m = /^([A-Za-z]{3})\s+(\d{4})$/.exec(month.trim());
+  if (!m) return null;
+  const idx = MONTH_ABBR.indexOf(m[1]);
+  if (idx < 0) return null;
+  return `${m[2]}-${String(idx + 1).padStart(2, "0")}`;
+}
+
+// Billing-timing editor for the OpEx calendar (migrations 0069 + 0070).
+// Editing here writes fin_venues.billing_* (and, for CUSTOM amounts, the
+// per-month override) via the same optimistic path as the price cells; it
+// never changes any cost total, only WHEN the money lands in OpEx.
 //
-// Flat / profit_share and dashboard-driven per_match (Crossbar) always
-// need a hit-date, so they show the cadence + day editor.
+// Cadences and the controls they reveal:
+//   monthly/quarterly/annual → billing_day (+ anchor month) single lump.
+//   weekly                   → billing_weekday; the month splits across it.
+//   custom                   → this month's day(s), captured month by month
+//                              in billing_custom_days. For a flat venue the
+//                              AMOUNT input writes the per-month override
+//                              (single source of truth); per-match custom
+//                              keeps its auto matches × rate amount.
 //
-// Schedule-dated per_match venues default to "per match · auto" (each
-// match's cost dated on its match day, billing_day null). But some are
-// priced per match yet invoiced on a fixed day (ATH Katy/Pearland billed
-// monthly), so this cell lets them switch to a cadence + billing day —
-// which collapses the month's per-match total onto that day. The amount
-// is unchanged; only the dating moves.
+// Flat / profit_share and dashboard-driven per_match (Crossbar) always need
+// a hit-date. Schedule-dated per_match venues default to "per match · auto"
+// (each match dated on its day); picking a cadence switches them off auto.
+const parseCustomDays = (raw: string): number[] =>
+  [
+    ...new Set(
+      raw
+        .split(/[,\s]+/)
+        .map((s) => parseInt(s, 10))
+        .filter((n) => Number.isInteger(n) && n >= 1 && n <= 31),
+    ),
+  ].sort((a, b) => a - b);
+
 function BillingTimingCell({
   venue,
   dashboardDriven,
+  month,
+  monthOverride,
   cadenceState,
   dayState,
   anchorState,
+  weekdayState,
+  customDaysState,
+  customAmountState,
   onSaveCadence,
   onSaveDay,
   onSaveAnchorMonth,
+  onSaveWeekday,
+  onSaveCustomDays,
+  onSaveCustomAmount,
 }: {
   venue: FinVenue | null;
   dashboardDriven: boolean;
+  month: Q2Month;
+  monthOverride: FinVenueCostOverride | null;
   cadenceState: CellState | null;
   dayState: CellState | null;
   anchorState: CellState | null;
+  weekdayState: CellState | null;
+  customDaysState: CellState | null;
+  customAmountState: CellState | null;
   onSaveCadence: (next: FinVenue["billing_cadence"]) => void;
   onSaveDay: (raw: string) => void;
   onSaveAnchorMonth: (raw: string) => void;
+  onSaveWeekday: (raw: string) => void;
+  onSaveCustomDays: (monthIso: string, days: number[]) => void;
+  onSaveCustomAmount: (raw: string) => void;
 }) {
+  const iso = monthToIso(month);
+  const storedDays = (iso && venue?.billing_custom_days?.[iso]) || [];
+  const storedDaysStr = storedDays.join(", ");
+  const storedAmt = monthOverride ? String(monthOverride.override_amount) : "";
+
   const [day, setDay] = useState(
     venue?.billing_day == null ? "" : String(venue.billing_day),
   );
+  const [daysInput, setDaysInput] = useState(storedDaysStr);
+  const [amtInput, setAmtInput] = useState(storedAmt);
+
+  // Resync each input from its stored value when idle, and also on error so
+  // a failed save visibly reverts (the optimistic patch rolled it back).
   useEffect(() => {
-    // Resync from the stored value when idle, and also on error so a failed
-    // save visibly reverts the input (the optimistic patch already rolled
-    // the stored value back).
     if (!dayState || dayState.error) {
       setDay(venue?.billing_day == null ? "" : String(venue.billing_day));
     }
   }, [venue?.billing_day, dayState]);
+  useEffect(() => {
+    if (!customDaysState || customDaysState.error) setDaysInput(storedDaysStr);
+  }, [storedDaysStr, customDaysState]);
+  useEffect(() => {
+    if (!customAmountState || customAmountState.error) setAmtInput(storedAmt);
+  }, [storedAmt, customAmountState]);
 
   if (!venue) return null;
 
   // Schedule-dated per_match venues (not Crossbar-style dashboard payouts)
-  // get an "auto" mode: billing_day null → dated on match days. Setting a
-  // cadence + day collapses the month's per-match total onto that day.
+  // get an "auto" mode: cadence monthly + billing_day null → dated on match
+  // days. Any explicit cadence takes over. weekly/custom don't use
+  // billing_day, so mode follows the cadence directly for them.
   const isSchedulePerMatch =
     venue.billing_type === "per_match" && !dashboardDriven;
   const cadence = venue.billing_cadence ?? "monthly";
   const mode: "auto" | FinVenue["billing_cadence"] =
-    isSchedulePerMatch && venue.billing_day == null ? "auto" : cadence;
+    isSchedulePerMatch && cadence === "monthly" && venue.billing_day == null
+      ? "auto"
+      : cadence;
 
   const anySaving = Boolean(
-    cadenceState?.saving || dayState?.saving || anchorState?.saving,
+    cadenceState?.saving ||
+      dayState?.saving ||
+      anchorState?.saving ||
+      weekdayState?.saving ||
+      customDaysState?.saving ||
+      customAmountState?.saving,
   );
-  const anyError = cadenceState?.error || dayState?.error || anchorState?.error;
-  const showDay = mode !== "auto";
-  const showAnchor = mode !== "auto" && mode !== "monthly";
+  const anyError =
+    cadenceState?.error ||
+    dayState?.error ||
+    anchorState?.error ||
+    weekdayState?.error ||
+    customDaysState?.error ||
+    customAmountState?.error;
+  const showDay = mode === "monthly" || mode === "quarterly" || mode === "annual";
+  const showAnchor = mode === "quarterly" || mode === "annual";
+  const showWeekday = mode === "weekly";
+  const showCustom = mode === "custom";
+  // Custom amount is the per-month override, and only for override-costed
+  // venues (flat / profit_share). per_match custom keeps its auto amount.
+  const showCustomAmount = showCustom && venue.billing_type !== "per_match";
 
   return (
     <div className="flex flex-col gap-1">
@@ -1307,20 +1527,23 @@ function BillingTimingCell({
           onChange={(e) => {
             const next = e.target.value;
             if (next === "auto") {
-              // Back to schedule-dated: clear the billing day.
+              // Back to schedule-dated: monthly cadence, no billing day.
+              if (cadence !== "monthly") onSaveCadence("monthly");
               if (venue.billing_day != null) onSaveDay("");
               return;
             }
-            if (next !== cadence) {
-              onSaveCadence(next as FinVenue["billing_cadence"]);
-            }
-            // A schedule per-match venue's "auto" state IS billing_day
-            // null, and the day box only renders once mode leaves "auto".
-            // So choosing a cadence must also seed a billing_day, or mode
-            // derives straight back to "auto" and the box never appears
-            // (the deadlock). Default to day 1; the box now shows for the
-            // operator to set the real invoice day.
-            if (isSchedulePerMatch && venue.billing_day == null) {
+            const nextCadence = next as FinVenue["billing_cadence"];
+            if (nextCadence !== cadence) onSaveCadence(nextCadence);
+            // A schedule per-match venue's "auto" state IS cadence monthly +
+            // billing_day null. Picking "monthly" leaves cadence unchanged,
+            // so seed a billing_day or mode snaps back to "auto" and the day
+            // box never appears. weekly/custom/quarterly/annual leave auto
+            // via the cadence change itself, so no seed.
+            if (
+              isSchedulePerMatch &&
+              nextCadence === "monthly" &&
+              venue.billing_day == null
+            ) {
               onSaveDay("1");
             }
           }}
@@ -1361,6 +1584,24 @@ function BillingTimingCell({
             />
           </>
         )}
+        {showWeekday && (
+          <>
+            <span className="text-[10px] text-deep-green/45">on</span>
+            <select
+              value={venue.billing_weekday ?? ""}
+              disabled={anySaving}
+              onChange={(e) => onSaveWeekday(e.target.value)}
+              className="rounded-md border border-cream-line bg-cream-soft px-1.5 py-1 font-mono text-[10px] text-deep-green focus:border-deep-green focus:outline-none disabled:opacity-60"
+            >
+              <option value="">— day —</option>
+              {WEEKDAY_ABBR.map((w, i) => (
+                <option key={w} value={i}>
+                  {w}
+                </option>
+              ))}
+            </select>
+          </>
+        )}
       </div>
       {showAnchor && (
         <div className="flex items-center gap-1.5">
@@ -1382,6 +1623,55 @@ function BillingTimingCell({
           </select>
         </div>
       )}
+      {showCustom && (
+        <div className="flex items-center gap-1.5">
+          <span className="text-[10px] font-semibold text-deep-green/55">
+            {month}
+          </span>
+          <span className="text-[10px] text-deep-green/45">day(s)</span>
+          <input
+            value={daysInput}
+            placeholder="—"
+            disabled={anySaving || !iso}
+            onChange={(e) => setDaysInput(e.target.value)}
+            onBlur={() => {
+              if (!iso) return;
+              const days = parseCustomDays(daysInput);
+              if (days.join(",") !== storedDays.join(",")) onSaveCustomDays(iso, days);
+            }}
+            onKeyDown={(e) => {
+              if (e.key === "Enter") (e.currentTarget as HTMLInputElement).blur();
+              else if (e.key === "Escape") {
+                setDaysInput(storedDaysStr);
+                (e.currentTarget as HTMLInputElement).blur();
+              }
+            }}
+            className="w-16 rounded-md border border-cream-line bg-cream-soft px-1.5 py-1 text-right font-mono text-[11px] tabular-nums text-deep-green focus:border-deep-green focus:outline-none disabled:opacity-60"
+          />
+          {showCustomAmount && (
+            <>
+              <span className="text-[10px] text-deep-green/45">$</span>
+              <input
+                value={amtInput}
+                placeholder="—"
+                disabled={anySaving}
+                onChange={(e) => setAmtInput(e.target.value)}
+                onBlur={() => {
+                  if (amtInput.trim() !== storedAmt) onSaveCustomAmount(amtInput);
+                }}
+                onKeyDown={(e) => {
+                  if (e.key === "Enter") (e.currentTarget as HTMLInputElement).blur();
+                  else if (e.key === "Escape") {
+                    setAmtInput(storedAmt);
+                    (e.currentTarget as HTMLInputElement).blur();
+                  }
+                }}
+                className="w-20 rounded-md border border-cream-line bg-cream-soft px-1.5 py-1 text-right font-mono text-[11px] tabular-nums text-deep-green focus:border-deep-green focus:outline-none disabled:opacity-60"
+              />
+            </>
+          )}
+        </div>
+      )}
       {/* per_match caveat, surfaced (not silent): quarterly/annual only
           dates the billing-month total; off-cycle months land undated */}
       {isSchedulePerMatch && showAnchor && venue.billing_day != null && !anySaving && (
@@ -1390,7 +1680,7 @@ function BillingTimingCell({
         </span>
       )}
       {/* flat / dashboard venue with no date → undated (no auto fallback) */}
-      {!isSchedulePerMatch && venue.billing_day == null && !anySaving && (
+      {!isSchedulePerMatch && showDay && venue.billing_day == null && !anySaving && (
         <span className="text-[9px] font-semibold text-coral/80">
           no date → undated in OpEx
         </span>
@@ -1400,6 +1690,35 @@ function BillingTimingCell({
           set anchor month
         </span>
       )}
+      {showWeekday && venue.billing_weekday == null && !anySaving && (
+        <span className="text-[9px] font-semibold text-coral/80">
+          pick a weekday → undated
+        </span>
+      )}
+      {/* custom per-month hints (this is a month-scoped entry) */}
+      {showCustom && !anySaving && (() => {
+        const hasDay = storedDays.length > 0;
+        const hasAmt = showCustomAmount ? monthOverride != null : true;
+        if (!hasDay && !hasAmt)
+          return (
+            <span className="text-[9px] italic text-deep-green/45">
+              no payment this month
+            </span>
+          );
+        if (hasDay && !hasAmt)
+          return (
+            <span className="text-[9px] font-semibold text-coral/80">
+              set an amount for {month}
+            </span>
+          );
+        if (!hasDay && hasAmt)
+          return (
+            <span className="text-[9px] font-semibold text-coral/80">
+              no day → undated in OpEx
+            </span>
+          );
+        return null;
+      })()}
       {anyError && <span className="text-[9px] text-coral">! {anyError}</span>}
     </div>
   );

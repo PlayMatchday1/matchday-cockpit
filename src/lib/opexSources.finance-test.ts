@@ -38,6 +38,8 @@ function venue(over: Partial<FinVenue> & Pick<FinVenue, "id" | "venue_name" | "c
     billing_cadence: "monthly",
     billing_day: null,
     billing_anchor_month: null,
+    billing_weekday: null,
+    billing_custom_days: {},
     ...over,
   } as FinVenue;
 }
@@ -259,4 +261,182 @@ test("biggest hit finds the largest single-day outflow", () => {
   // Jul 2: match Austin 1090 is the largest single day here.
   assert.equal(cal.biggestHit?.day, 2);
   assert.equal(cal.biggestHit?.amount, 1090);
+});
+
+// ---- WEEKLY + CUSTOM cadences (migration 0070) ----
+
+// Minimal FinanceData shell so each cadence test can declare only the
+// venues / schedule / overrides it needs.
+function wrap(over: Partial<FinanceData>): FinanceData {
+  return {
+    revenue: [],
+    expenses: [],
+    managerPay: [],
+    schedule: [],
+    masterSchedule: [],
+    cancelledSchedule: [],
+    venues: [],
+    memberSpots: [],
+    members: [],
+    pricing: [],
+    overrides: [],
+    venueAliases: new Map(),
+    venueFields: new Map(),
+    config: {},
+    mdapiMemberSpots: new Map() as unknown as FinanceData["mdapiMemberSpots"],
+    partnerDashboards: [],
+    partnerPayoutsByVenueMonth: new Map(),
+    ...over,
+  } as unknown as FinanceData;
+}
+
+// July 2026 Thursdays (weekday 4) are the 2nd, 9th, 16th, 23rd, 30th.
+const JUL_THURSDAYS = [2, 9, 16, 23, 30];
+
+function fieldOf(data: FinanceData) {
+  const cal = buildOpexCalendar(data, [], YEAR, M0);
+  const field = cal.groups.find((g) => g.key === "field")!;
+  const fcSum = buildFieldCostRows(data, MONTH).reduce((s, r) => s + r.amount, 0);
+  const cellSum = field.rows.reduce(
+    (s, r) => s + Object.values(r.cells).reduce((a, b) => a + b, 0),
+    0,
+  );
+  return { field, fcSum, cellSum };
+}
+
+// Integer-cents view of a cells map, to compare exact splits without
+// floating-point fragility (200.03 etc. aren't exactly representable).
+function cents(cells: Record<number, number>): Record<number, number> {
+  return Object.fromEntries(
+    Object.entries(cells).map(([d, v]) => [d, Math.round(v * 100)]),
+  );
+}
+
+test("weekly flat: month total splits evenly across the weekday's hits, remainder on last", () => {
+  const data = wrap({
+    venues: [
+      venue({
+        id: 1,
+        venue_name: "Weekly Turf",
+        city: "Austin",
+        billing_type: "monthly_flat",
+        billing_cadence: "weekly",
+        billing_weekday: 4, // Thursday
+      }),
+    ],
+    overrides: [override(1, 1000.03)],
+  });
+  const { field, fcSum, cellSum } = fieldOf(data);
+  const row = field.rows.find((r) => r.label === "Weekly Turf")!;
+
+  // Five Thursdays: $200.00 x4, remainder cent on the last → $200.03.
+  assert.deepEqual(
+    Object.keys(row.cells).map(Number).sort((a, b) => a - b),
+    JUL_THURSDAYS,
+  );
+  assert.deepEqual(cents(row.cells), { 2: 20000, 9: 20000, 16: 20000, 23: 20000, 30: 20003 });
+  assert.equal(row.tag, "weekly");
+  // Invariant: placement preserves the total exactly, subtotal unchanged.
+  assert.ok(Math.abs(cellSum - 1000.03) < 1e-9, "cells sum to the month total");
+  assert.equal(field.subtotal, fcSum);
+  assert.equal(field.undated, 0);
+});
+
+test("weekly per-match: each match accrues onto the next weekly billing day", () => {
+  const data = wrap({
+    venues: [
+      venue({
+        id: 1,
+        venue_name: "Weekly Match Park",
+        city: "Austin",
+        billing_type: "per_match",
+        per_match_rate: 90,
+        billing_cadence: "weekly",
+        billing_weekday: 4, // Thursday
+        charge_on_cancel: false,
+      }),
+    ],
+    // Matches on Jul 3, 10, 17 → next Thursday on/after each: 9, 16, 23.
+    masterSchedule: [
+      match("m1", 1, "Austin", 3),
+      match("m2", 1, "Austin", 10),
+      match("m3", 1, "Austin", 17),
+    ],
+  });
+  const { field, fcSum, cellSum } = fieldOf(data);
+  const row = field.rows.find((r) => r.label === "Weekly Match Park")!;
+  assert.deepEqual(
+    Object.entries(row.cells).map(([d, v]) => [Number(d), v]).sort((a, b) => a[0] - b[0]),
+    [[9, 90], [16, 90], [23, 90]],
+  );
+  assert.equal(row.tag, "weekly");
+  assert.equal(cellSum, 270);
+  assert.equal(field.subtotal, fcSum);
+  assert.equal(field.undated, 0);
+});
+
+test("custom flat (NEMP): payment month lands on the captured day; amount is the override", () => {
+  const data = wrap({
+    venues: [
+      venue({
+        id: 1,
+        venue_name: "NEMP",
+        city: "Austin",
+        billing_type: "monthly_flat",
+        billing_cadence: "custom",
+        billing_custom_days: { "2026-07": [20], "2026-11": [15] },
+      }),
+    ],
+    overrides: [override(1, 2000)],
+  });
+  const { field, fcSum } = fieldOf(data);
+  const row = field.rows.find((r) => r.label === "NEMP")!;
+  assert.deepEqual(row.cells, { 20: 2000 });
+  assert.equal(row.tag, "custom");
+  assert.equal(field.subtotal, fcSum);
+  assert.equal(field.subtotal, 2000);
+  assert.equal(field.undated, 0);
+});
+
+test("custom multi-day splits evenly with remainder on the last date", () => {
+  const data = wrap({
+    venues: [
+      venue({
+        id: 1,
+        venue_name: "Custom Split",
+        city: "Austin",
+        billing_type: "monthly_flat",
+        billing_cadence: "custom",
+        billing_custom_days: { "2026-07": [10, 20, 31] },
+      }),
+    ],
+    overrides: [override(1, 100)],
+  });
+  const { field, cellSum } = fieldOf(data);
+  const row = field.rows.find((r) => r.label === "Custom Split")!;
+  assert.deepEqual(cents(row.cells), { 10: 3333, 20: 3333, 31: 3334 });
+  assert.ok(Math.abs(cellSum - 100) < 1e-9);
+  assert.equal(field.undated, 0);
+});
+
+test("custom month with a cost but no day set → undated remainder, never day 1", () => {
+  const data = wrap({
+    venues: [
+      venue({
+        id: 1,
+        venue_name: "Custom NoDay",
+        city: "Austin",
+        billing_type: "monthly_flat",
+        billing_cadence: "custom",
+        billing_custom_days: { "2026-11": [15] }, // nothing for July
+      }),
+    ],
+    overrides: [override(1, 500)],
+  });
+  const { field, fcSum } = fieldOf(data);
+  // No dated row for July, folded into the undated remainder.
+  assert.ok(!field.rows.some((r) => r.label === "Custom NoDay"));
+  assert.equal(field.undated, 500);
+  assert.equal(field.subtotal, fcSum);
+  assert.ok(!field.agg[1], "nothing smeared onto day 1");
 });
