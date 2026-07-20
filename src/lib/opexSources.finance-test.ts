@@ -8,7 +8,7 @@
 import assert from "node:assert/strict";
 import { test } from "node:test";
 import { buildOpexCalendar } from "./opexSources";
-import { buildFieldCostRows } from "./financeCosts";
+import { buildFieldCostRows, fieldCostsFor } from "./financeCosts";
 import type {
   FinanceData,
   FinVenue,
@@ -417,6 +417,51 @@ test("custom multi-day splits evenly with remainder on the last date", () => {
   assert.deepEqual(cents(row.cells), { 10: 3333, 20: 3333, 31: 3334 });
   assert.ok(Math.abs(cellSum - 100) < 1e-9);
   assert.equal(field.undated, 0);
+});
+
+test("per-match override applies everywhere (Field Costs, Cash Flow, OpEx) and reverts to auto when cleared", () => {
+  const venues = [
+    venue({
+      id: 1,
+      venue_name: "Katy Custom",
+      city: "Houston",
+      billing_type: "per_match",
+      per_match_rate: 90,
+      billing_cadence: "custom",
+      billing_custom_days: { "2026-07": [20] },
+      charge_on_cancel: false,
+    }),
+  ];
+  // 3 matches → auto = 3 × 90 = 270.
+  const masterSchedule = [
+    match("m1", 1, "Houston", 3),
+    match("m2", 1, "Houston", 10),
+    match("m3", 1, "Houston", 17),
+  ];
+
+  // --- overridden month: 500 replaces the 270 auto EVERYWHERE ---
+  const withOverride = wrap({ venues, masterSchedule, overrides: [override(1, 500)] });
+  const rowO = buildFieldCostRows(withOverride, MONTH).find((r) => r.displayName === "Katy Custom")!;
+  assert.equal(rowO.amount, 500, "Field Costs row uses the override");
+  assert.equal(rowO.autoAmount, 270, "auto still exposed as the override baseline");
+  assert.ok(rowO.override, "row flagged as overridden");
+  assert.equal(fieldCostsFor(withOverride, MONTH), 500, "Cash Flow uses the override");
+  const fieldO = buildOpexCalendar(withOverride, [], YEAR, M0).groups.find((g) => g.key === "field")!;
+  const chipO = fieldO.rows.find((r) => r.label === "Katy Custom")!;
+  assert.deepEqual(chipO.cells, { 20: 500 }, "OpEx dates the override on the custom day");
+  assert.equal(fieldO.subtotal, 500);
+  assert.equal(fieldO.undated, 0);
+
+  // --- cleared: back to the 270 auto EVERYWHERE ---
+  const noOverride = wrap({ venues, masterSchedule });
+  const rowA = buildFieldCostRows(noOverride, MONTH).find((r) => r.displayName === "Katy Custom")!;
+  assert.equal(rowA.amount, 270, "reverts to matches × rate");
+  assert.equal(rowA.override, null);
+  assert.equal(fieldCostsFor(noOverride, MONTH), 270);
+  const fieldA = buildOpexCalendar(noOverride, [], YEAR, M0).groups.find((g) => g.key === "field")!;
+  const chipA = fieldA.rows.find((r) => r.label === "Katy Custom")!;
+  assert.deepEqual(chipA.cells, { 20: 270 }, "OpEx dates the auto amount on the custom day");
+  assert.equal(fieldA.subtotal, 270);
 });
 
 test("custom month with a cost but no day set → undated remainder, never day 1", () => {
