@@ -13,6 +13,12 @@ import { useMemo, useState } from "react";
 import { useMatchReviews, type MatchReviewRow } from "@/lib/useMatchReviews";
 import { useReviewData, type ReviewRow } from "@/lib/useReviewData";
 import { classifyTag } from "@/lib/reviewTags";
+import {
+  fmtMatchDateTime,
+  matchLocalDate,
+  matchLocalMonth,
+  windowCutoffIso,
+} from "@/lib/matchReviewDates";
 
 // Highlight thresholds — tunable. A match needs at least MIN_REVIEWS to
 // qualify for either list, so a lone 1★ or 5★ never headlines.
@@ -34,20 +40,6 @@ function minuteKeyFromDate(d: Date): string {
   return `${d.getFullYear()}-${p(d.getMonth() + 1)}-${p(d.getDate())}T${p(d.getHours())}:${p(d.getMinutes())}`;
 }
 
-// "Jul 19 · 9:15 PM" from the ISO wall-clock (no timezone shift, matching
-// how reviews are grouped).
-function fmtDateTime(iso: string): string {
-  const m = /^(\d{4})-(\d{2})-(\d{2})T(\d{2}):(\d{2})/.exec(iso);
-  if (!m) return iso;
-  const [, , mo, d, hhS, mmS] = m;
-  let hh = Number(hhS);
-  const ampm = hh >= 12 ? "PM" : "AM";
-  hh = hh % 12 === 0 ? 12 : hh % 12;
-  return `${MONTHS[Number(mo) - 1]} ${Number(d)} · ${hh}:${mmS} ${ampm}`;
-}
-function isoMonth(iso: string): string {
-  return iso.slice(0, 7); // "2026-07"
-}
 function monthLabel(m: string): string {
   const [y, mo] = m.split("-");
   return `${MONTHS[Number(mo) - 1]} ${y}`;
@@ -106,7 +98,7 @@ export default function CitiesMatchReviewsLens({
       return {
         ...m,
         manager: managerName(m.managerFirstName, m.managerLastName),
-        month: isoMonth(m.startDate),
+        month: matchLocalMonth(m.startDate),
         reviews: rvs.slice().sort((a, b) => a.starRating - b.starRating),
         tagCounts: [...counts.entries()].sort((a, b) => b[1] - a[1]),
       };
@@ -158,16 +150,12 @@ export default function CitiesMatchReviewsLens({
   // not monthly archives. City / venue / manager filters still apply so a
   // city manager can scope to their own recent matches. Newest first.
   const recentPool = useMemo(() => {
-    const now = new Date();
-    const cutoff = new Date(
-      now.getFullYear(),
-      now.getMonth(),
-      now.getDate() - (HIGHLIGHT_WINDOW_DAYS - 1),
-    );
-    const p = (n: number) => String(n).padStart(2, "0");
-    const cutoffIso = `${cutoff.getFullYear()}-${p(cutoff.getMonth() + 1)}-${p(cutoff.getDate())}`;
+    // Window on the venue-LOCAL match day (start_date), consistent with what
+    // the rows display. Future matches are already excluded upstream via the
+    // true UTC instant, so this can't admit tonight's not-yet-played matches.
+    const cutoffIso = windowCutoffIso(new Date(), HIGHLIGHT_WINDOW_DAYS);
     return enriched
-      .filter((m) => m.startDate.slice(0, 10) >= cutoffIso) // future already dropped upstream
+      .filter((m) => matchLocalDate(m.startDate) >= cutoffIso)
       .filter((m) => city === ALL || m.city === city)
       .filter((m) => venue === ALL || m.fieldTitle === venue)
       .filter((m) => manager === ALL || m.manager === manager)
@@ -348,7 +336,7 @@ function MatchRow({ m, open, onToggle }: { m: EnrichedMatch; open: boolean; onTo
   return (
     <>
       <tr className="cursor-pointer border-t border-cream-line/40 hover:bg-cream-soft/50" onClick={onToggle}>
-        <td className="px-3 py-2 whitespace-nowrap font-semibold text-deep-green">{fmtDateTime(m.startDate)}</td>
+        <td className="px-3 py-2 whitespace-nowrap font-semibold text-deep-green">{fmtMatchDateTime(m.startDate)}</td>
         <td className="px-3 py-2 text-deep-green/85">{m.fieldTitle}</td>
         <td className="px-3 py-2 text-deep-green/70">{m.city}</td>
         <td className="px-3 py-2 text-deep-green/85">{m.manager}</td>
@@ -447,7 +435,7 @@ function HighlightCard({ title, tone, matches, onOpen, openKey }: {
                 <span className="text-xs font-semibold text-deep-green">{m.fieldTitle}</span>
                 <span className={`font-mono text-xs font-bold ${head}`}>{fmtRating(m.avgRating)}★ ({m.reviewCount})</span>
               </div>
-              <div className="text-[11px] text-deep-green/55">{fmtDateTime(m.startDate)} · {m.city} · {m.manager}</div>
+              <div className="text-[11px] text-deep-green/55">{fmtMatchDateTime(m.startDate)} · {m.city} · {m.manager}</div>
             </li>
           ))}
         </ul>
