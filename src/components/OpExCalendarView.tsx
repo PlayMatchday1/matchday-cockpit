@@ -3,48 +3,37 @@
 // OpEx Calendar — "blend v3" redesign. A cash-outflow calendar where
 // every source sits on its real date: City Manager Pay and Match Manager
 // Pay from fin_expenses, Field Costs dated per venue (per-match venues on
-// their match days, flat/quarterly venues on their billing day), and the
-// four editable categories from fin_opex_entries. Categories collapse to
-// a single timing row (aggregated chips) and expand to per-manager /
-// per-venue detail. Ported from docs/opex-blend.html (v3); tokens taken
-// from that mock's <style> block, display text uses the app's font-display.
+// their match days, flat/quarterly venues on their billing day), and every
+// other operating category mirrored from fin_expenses (one group per
+// category). Categories collapse to a single timing row (aggregated chips)
+// and expand to per-line detail. Read-only — expenses are added/edited on
+// the Expenses tab (+ Add expense deep-links there). Ported from
+// docs/opex-blend.html (v3).
 //
 // Data wiring lives in src/lib/opexSources.ts (buildOpexCalendar). This
-// component is presentation + collapse state + month nav + the add/edit
-// modal only.
+// component is presentation + collapse state + month nav only.
 
 import { useMemo, useState } from "react";
 import { daysInMonth } from "@/lib/checkIns";
-import { useAuth } from "@/lib/useAuth";
 import { useFinanceData } from "@/lib/useFinanceData";
-import { useOpexEntries } from "@/lib/useOpexEntries";
-import { formatMoney, monthLabel, type OpexDraft, type OpexEntry } from "@/lib/opex";
+import { formatMoney, monthLabel } from "@/lib/opex";
 import { buildOpexCalendar, type CalGroup } from "@/lib/opexSources";
-import OpExEntryModal from "./OpExEntryModal";
-
-// Canonical category order for the "Where the money goes" bars (all 7,
-// including empty editable cats rendered muted).
-const ALL_CATEGORIES = [
-  "City Manager Pay",
-  "Match Manager Pay",
-  "Field Costs",
-  "Marketing",
-  "Personnel",
-  "Equipment",
-  "Other",
-];
 
 const WD = ["S", "M", "T", "W", "T", "F", "S"];
 
-export default function OpExCalendarView() {
-  const { appUser } = useAuth();
-  const { data } = useFinanceData();
-  const { entries, loading, error, create, update, remove } = useOpexEntries();
+export default function OpExCalendarView({
+  // Wired by the Finance page to switch to the Expenses tab, where
+  // fin_expenses rows are added/edited (the single source this calendar
+  // mirrors). Optional so the component still renders standalone.
+  onAddExpense,
+}: {
+  onAddExpense?: () => void;
+} = {}) {
+  const { data, loading, error } = useFinanceData();
 
   const now = new Date();
   const [year, setYear] = useState(now.getFullYear());
   const [month0, setMonth0] = useState(now.getMonth());
-  const [modal, setModal] = useState<{ entry: OpexEntry | null } | null>(null);
   const [open, setOpen] = useState<Record<string, boolean>>({});
 
   const days = daysInMonth(year, month0);
@@ -52,8 +41,8 @@ export default function OpExCalendarView() {
   const today = isThisMonth ? now.getDate() : -1;
 
   const cal = useMemo(
-    () => buildOpexCalendar(data, entries, year, month0),
-    [data, entries, year, month0],
+    () => buildOpexCalendar(data, year, month0),
+    [data, year, month0],
   );
 
   // Collapse state: fall back to each group's default until the user
@@ -69,14 +58,10 @@ export default function OpExCalendarView() {
     setOpen(next);
   }
 
-  // Bars: every category, amount from its group (0 when absent/empty).
+  // Bars: one per group present this month (mirrors Cash Flow's category
+  // breakdown), biggest share first.
   const bars = useMemo(() => {
-    const amtByName = new Map<string, number>();
-    for (const g of cal.groups) amtByName.set(g.name, g.subtotal);
-    const rows = ALL_CATEGORIES.map((name) => ({
-      name,
-      amount: amtByName.get(name) ?? 0,
-    }));
+    const rows = cal.groups.map((g) => ({ name: g.name, amount: g.subtotal }));
     const total = rows.reduce((s, r) => s + r.amount, 0);
     const max = Math.max(1, ...rows.map((r) => r.amount));
     return rows
@@ -94,10 +79,6 @@ export default function OpExCalendarView() {
     const d = new Date(year, month0 + delta, 1);
     setYear(d.getFullYear());
     setMonth0(d.getMonth());
-  }
-  async function handleSave(id: string | null, draft: OpexDraft) {
-    if (id) await update(id, draft);
-    else await create(draft, appUser?.id ?? null);
   }
 
   const dayCols = Array.from({ length: days }, (_, i) => i + 1);
@@ -128,13 +109,13 @@ export default function OpExCalendarView() {
             </button>
             <button onClick={() => shiftMonth(1)}>Next ›</button>
           </div>
-          <button className="ox-add" onClick={() => setModal({ entry: null })}>
+          <button className="ox-add" onClick={() => onAddExpense?.()}>
             + Add expense
           </button>
         </div>
       </div>
 
-      {error && <div className="ox-err">Failed to load entries: {error}</div>}
+      {error && <div className="ox-err">Failed to load finance data: {error}</div>}
 
       {/* KPI tiles */}
       <div className="ox-kpis">
@@ -152,7 +133,7 @@ export default function OpExCalendarView() {
         <Kpi
           label="Categories with spend"
           value={String(cal.categoriesWithSpend)}
-          small={`of ${ALL_CATEGORIES.length}`}
+          small={`of ${cal.groups.length}`}
         />
       </div>
 
@@ -220,26 +201,9 @@ export default function OpExCalendarView() {
                     dayCols={dayCols}
                     cellCls={cellCls}
                     onToggle={() => toggle(g.key, g.defaultOpen)}
-                    onEdit={(entryId) => {
-                      const e = entries.find((x) => x.id === entryId);
-                      if (e) setModal({ entry: e });
-                    }}
                   />
                 );
               })}
-
-              {/* Empty editable categories collapse to one line */}
-              {cal.emptyEditable.length > 0 && (
-                <tr className="ox-empty">
-                  <td className="lab">
-                    <span className="enm">No entries this month</span>
-                  </td>
-                  <td className="espan" colSpan={days}>
-                    {cal.emptyEditable.join(" · ")}
-                    &nbsp;&nbsp;<span className="ehint">add via + Add Expense</span>
-                  </td>
-                </tr>
-              )}
 
               {/* Daily total */}
               <tr className="ox-dtot">
@@ -280,16 +244,6 @@ export default function OpExCalendarView() {
           {loading && <> · loading finance data…</>}
         </div>
       </div>
-
-      {modal && (
-        <OpExEntryModal
-          entry={modal.entry}
-          createdBy={appUser?.id ?? null}
-          onSave={handleSave}
-          onDelete={remove}
-          onClose={() => setModal(null)}
-        />
-      )}
     </div>
   );
 }
@@ -315,7 +269,6 @@ function GroupRows({
   dayCols,
   cellCls,
   onToggle,
-  onEdit,
 }: {
   group: CalGroup;
   opened: boolean;
@@ -323,7 +276,6 @@ function GroupRows({
   dayCols: number[];
   cellCls: (d: number) => string;
   onToggle: () => void;
-  onEdit: (entryId: string) => void;
 }) {
   return (
     <>
@@ -348,11 +300,7 @@ function GroupRows({
 
       {opened &&
         group.rows.map((r) => (
-          <tr
-            key={r.key}
-            className={`ox-child ${r.editable ? "editable" : ""}`}
-            onClick={r.editable && r.entryId ? () => onEdit(r.entryId!) : undefined}
-          >
+          <tr key={r.key} className="ox-child">
             <td className="lab">
               <span className="nm">{r.label}</span>
               {r.sublabel && <span className="city">{r.sublabel}</span>}

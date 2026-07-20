@@ -126,7 +126,7 @@ function makeData(): FinanceData {
 
 test("field-cost subtotal equals buildFieldCostRows sum (dating never changes the total)", () => {
   const data = makeData();
-  const cal = buildOpexCalendar(data, [], YEAR, M0);
+  const cal = buildOpexCalendar(data, YEAR, M0);
   const field = cal.groups.find((g) => g.key === "field");
   assert.ok(field, "field group present");
 
@@ -138,7 +138,7 @@ test("field-cost subtotal equals buildFieldCostRows sum (dating never changes th
 
 test("per-match venue is dated on its real match days (incl. charged cancellation)", () => {
   const data = makeData();
-  const cal = buildOpexCalendar(data, [], YEAR, M0);
+  const cal = buildOpexCalendar(data, YEAR, M0);
   const field = cal.groups.find((g) => g.key === "field")!;
   const alpha = field.rows.find((r) => r.label === "Alpha Park")!;
   assert.deepEqual(
@@ -150,7 +150,7 @@ test("per-match venue is dated on its real match days (incl. charged cancellatio
 
 test("flat venue with billing_day lands on that day; without one it is undated (never day 1)", () => {
   const data = makeData();
-  const cal = buildOpexCalendar(data, [], YEAR, M0);
+  const cal = buildOpexCalendar(data, YEAR, M0);
   const field = cal.groups.find((g) => g.key === "field")!;
 
   const beta = field.rows.find((r) => r.label === "Beta Fields")!;
@@ -165,7 +165,7 @@ test("flat venue with billing_day lands on that day; without one it is undated (
 
 test("Match Manager Pay aggregates per city on Tuesday pay dates", () => {
   const data = makeData();
-  const cal = buildOpexCalendar(data, [], YEAR, M0);
+  const cal = buildOpexCalendar(data, YEAR, M0);
   const match = cal.groups.find((g) => g.key === "match")!;
   const austin = match.rows.find((r) => r.label === "Austin")!;
   assert.deepEqual(austin.cells, { 7: 1090, 14: 760 });
@@ -174,7 +174,7 @@ test("Match Manager Pay aggregates per city on Tuesday pay dates", () => {
 
 test("City Manager Pay is itemized on real pay dates from fin_expenses", () => {
   const data = makeData();
-  const cal = buildOpexCalendar(data, [], YEAR, M0);
+  const cal = buildOpexCalendar(data, YEAR, M0);
   const city = cal.groups.find((g) => g.key === "city")!;
   assert.equal(city.subtotal, 1300);
   const chris = city.rows.find((r) => r.label === "Chris")!;
@@ -183,7 +183,7 @@ test("City Manager Pay is itemized on real pay dates from fin_expenses", () => {
 
 test("month total = sum of subtotals; dated total excludes the undated remainder", () => {
   const data = makeData();
-  const cal = buildOpexCalendar(data, [], YEAR, M0);
+  const cal = buildOpexCalendar(data, YEAR, M0);
   // city 1300 + match 1850 + field 1670 = 4820
   assert.equal(cal.monthTotal, 4820);
   assert.equal(cal.undatedFieldCosts, 500);
@@ -191,6 +191,45 @@ test("month total = sum of subtotals; dated total excludes the undated remainder
   // Daily totals sum to the dated total (undated sits on no day).
   const daySum = cal.dayTotal.reduce((s, v) => s + v, 0);
   assert.equal(daySum, cal.datedTotal);
+});
+
+test("expense categories mirror fin_expenses: itemized, dated, company-wide labeled, subtotal == category-month total", () => {
+  const data = wrap({
+    expenses: [
+      // Jul Marketing — mirrors the real acceptance shape (multiple rows on
+      // one day aggregate into a chip; two are company-wide, no city).
+      expense({ id: 1, date: "2026-07-10", city: "Houston", vendor: "Meta", category: "Marketing", amount: 600 }),
+      expense({ id: 2, date: "2026-07-10", city: "", vendor: "Cedar & Cactus", category: "Marketing", amount: 1000 }),
+      expense({ id: 3, date: "2026-07-19", city: "Austin", vendor: "Meta", category: "Marketing", amount: 450 }),
+      expense({ id: 4, date: "2026-07-24", city: "", vendor: "Teresa", category: "Marketing", amount: 400 }),
+      // A different category gets its own group.
+      expense({ id: 5, date: "2026-07-15", city: "Austin", vendor: "AWS", category: "Subscriptions", amount: 300 }),
+      // Dedicated categories must NOT spawn a generic mirror group.
+      expense({ id: 6, date: "2026-07-07", city: "Austin", category: "Match Manager Pay", amount: 999 }),
+      expense({ id: 7, date: "2026-07-01", city: "Austin", category: "City Manager", notes: "Yara", amount: 500 }),
+    ],
+  });
+  const cal = buildOpexCalendar(data, YEAR, M0);
+
+  const mkt = cal.groups.find((g) => g.name === "Marketing")!;
+  assert.ok(mkt, "Marketing group present");
+  assert.equal(mkt.subtotal, 2450, "subtotal == sum of the category's rows this month");
+  assert.deepEqual(mkt.agg, { 10: 1600, 19: 450, 24: 400 }, "chips aggregate per day");
+  assert.equal(mkt.undated, 0);
+
+  // Company-wide (no city) rows are labeled explicitly, never dropped.
+  const cw = mkt.rows.find((r) => r.label === "Cedar & Cactus")!;
+  assert.equal(cw.sublabel, "Company-wide");
+  assert.deepEqual(cw.cells, { 10: 1000 });
+
+  // Each non-dedicated category becomes its own group.
+  assert.ok(cal.groups.some((g) => g.name === "Subscriptions" && g.subtotal === 300));
+
+  // City Manager / Match Manager Pay keep their dedicated groups; no expcat
+  // mirror duplicates them.
+  assert.ok(!cal.groups.some((g) => g.key === "expcat:Match Manager Pay"));
+  assert.ok(!cal.groups.some((g) => g.key === "expcat:City Manager"));
+  assert.equal(cal.groups.filter((g) => g.name === "Match Manager Pay").length, 1);
 });
 
 // A per-match-PRICED venue can be invoiced on a fixed day (ATH Katy /
@@ -239,7 +278,7 @@ function makePerMatchBilledMonthly(): FinanceData {
 
 test("per-match venue with billing_day collapses to one chip on that day; subtotal unchanged", () => {
   const data = makePerMatchBilledMonthly();
-  const cal = buildOpexCalendar(data, [], YEAR, M0);
+  const cal = buildOpexCalendar(data, YEAR, M0);
   const field = cal.groups.find((g) => g.key === "field")!;
 
   const katy = field.rows.find((r) => r.label === "ATH Katy")!;
@@ -257,7 +296,7 @@ test("per-match venue with billing_day collapses to one chip on that day; subtot
 
 test("biggest hit finds the largest single-day outflow", () => {
   const data = makeData();
-  const cal = buildOpexCalendar(data, [], YEAR, M0);
+  const cal = buildOpexCalendar(data, YEAR, M0);
   // Jul 7: match Austin 1090 is the largest single day here.
   assert.equal(cal.biggestHit?.day, 7);
   assert.equal(cal.biggestHit?.amount, 1090);
@@ -294,7 +333,7 @@ function wrap(over: Partial<FinanceData>): FinanceData {
 const JUL_THURSDAYS = [2, 9, 16, 23, 30];
 
 function fieldOf(data: FinanceData) {
-  const cal = buildOpexCalendar(data, [], YEAR, M0);
+  const cal = buildOpexCalendar(data, YEAR, M0);
   const field = cal.groups.find((g) => g.key === "field")!;
   const fcSum = buildFieldCostRows(data, MONTH).reduce((s, r) => s + r.amount, 0);
   const cellSum = field.rows.reduce(
@@ -446,7 +485,7 @@ test("per-match override applies everywhere (Field Costs, Cash Flow, OpEx) and r
   assert.equal(rowO.autoAmount, 270, "auto still exposed as the override baseline");
   assert.ok(rowO.override, "row flagged as overridden");
   assert.equal(fieldCostsFor(withOverride, MONTH), 500, "Cash Flow uses the override");
-  const fieldO = buildOpexCalendar(withOverride, [], YEAR, M0).groups.find((g) => g.key === "field")!;
+  const fieldO = buildOpexCalendar(withOverride, YEAR, M0).groups.find((g) => g.key === "field")!;
   const chipO = fieldO.rows.find((r) => r.label === "Katy Custom")!;
   assert.deepEqual(chipO.cells, { 20: 500 }, "OpEx dates the override on the custom day");
   assert.equal(fieldO.subtotal, 500);
@@ -458,7 +497,7 @@ test("per-match override applies everywhere (Field Costs, Cash Flow, OpEx) and r
   assert.equal(rowA.amount, 270, "reverts to matches × rate");
   assert.equal(rowA.override, null);
   assert.equal(fieldCostsFor(noOverride, MONTH), 270);
-  const fieldA = buildOpexCalendar(noOverride, [], YEAR, M0).groups.find((g) => g.key === "field")!;
+  const fieldA = buildOpexCalendar(noOverride, YEAR, M0).groups.find((g) => g.key === "field")!;
   const chipA = fieldA.rows.find((r) => r.label === "Katy Custom")!;
   assert.deepEqual(chipA.cells, { 20: 270 }, "OpEx dates the auto amount on the custom day");
   assert.equal(fieldA.subtotal, 270);

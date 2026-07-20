@@ -296,7 +296,7 @@ function FinanceLandingContent() {
         <CashFlowTabContent />
       </TabPanel>
       <TabPanel id="opex-calendar" active={activeTab} visited={visited}>
-        <OpExCalendarView />
+        <OpExCalendarView onAddExpense={() => selectTab("expenses")} />
       </TabPanel>
       <TabPanel id="match-pnl" active={activeTab} visited={visited}>
         <MatchPnL />
