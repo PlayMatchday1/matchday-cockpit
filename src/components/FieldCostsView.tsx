@@ -82,16 +82,7 @@ function fmtMoney(n: number, signZero = false): string {
   return `${r < 0 ? "-" : ""}$${abs.toLocaleString("en-US")}`;
 }
 
-export default function FieldCostsView({
-  // Optional handoff: when set, the post-save banner's "Add it to
-  // Billing Schedule" button calls this with the new venue's id.
-  // Page wires it to switch the tab + drop a sessionStorage hint
-  // BillingScheduleView reads on mount to open its add editor
-  // prefilled with this venue.
-  onAddedVenueGotoSchedule,
-}: {
-  onAddedVenueGotoSchedule?: (venueId: number) => void;
-} = {}) {
+export default function FieldCostsView() {
   const { data, loading } = useFinanceData();
   const { appUser } = useAuth();
   const quarter = useFinanceQuarter();
@@ -749,15 +740,6 @@ export default function FieldCostsView({
             )}
           </div>
           <div className="flex items-center gap-2">
-            {onAddedVenueGotoSchedule && (
-              <button
-                type="button"
-                onClick={() => onAddedVenueGotoSchedule(lastAdded.venueId)}
-                className="rounded-full bg-deep-green px-4 py-1.5 text-xs font-bold text-cream transition hover:bg-deep-green/85"
-              >
-                Add it to Billing Schedule →
-              </button>
-            )}
             <button
               type="button"
               onClick={() => {

@@ -21,7 +21,6 @@ export const FINANCE_TAB_IDS = [
   "expenses",
   "manager-pay",
   "field-costs",
-  "billing-schedule",
   "change-log",
   // Standalone secondary-nav items
   "check-ins",

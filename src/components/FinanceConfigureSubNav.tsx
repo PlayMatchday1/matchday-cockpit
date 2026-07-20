@@ -13,7 +13,6 @@ export type ConfigureSubTabId = Extract<
   | "expenses"
   | "manager-pay"
   | "field-costs"
-  | "billing-schedule"
   | "change-log"
 >;
 
@@ -22,7 +21,6 @@ export const CONFIGURE_TAB_IDS: readonly ConfigureSubTabId[] = [
   "expenses",
   "manager-pay",
   "field-costs",
-  "billing-schedule",
   "change-log",
 ] as const;
 
@@ -31,7 +29,6 @@ const ITEMS: { id: ConfigureSubTabId; label: string }[] = [
   { id: "expenses", label: "Expenses" },
   { id: "manager-pay", label: "Manager Pay" },
   { id: "field-costs", label: "Field Costs" },
-  { id: "billing-schedule", label: "Billing Schedule" },
   { id: "change-log", label: "Change Log" },
 ];
 

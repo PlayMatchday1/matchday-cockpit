@@ -72,35 +72,11 @@ export type FinManagerPay = {
   amount: number;
 };
 
-export type FinSchedule = {
-  id: number;
-  date: string;
-  month: string;
-  city: string;
-  venue: string;       // canonical (post-alias)
-  venue_raw: string;   // pre-alias — needed for per-leg accounting on
-                       // split-rate venues like ATH Katy / ATH Katy Sunday
-                       // where aliases collapse the canonical name.
-  // PR-F: nullable during the transition. Populated by the
-  // billing-schedule UI (ScheduleRowEditor / ScheduleBulkAddEditor
-  // via BillingScheduleView) on new writes, and by the one-time
-  // backfill script for existing rows. financeCosts.ts internal
-  // helpers still read venue_raw for now; PR-G will switch them
-  // to fin_venue_id once population is complete.
-  fin_venue_id: number | null;
-  match_count: number;
-  total_hours: number | null;
-  venue_cost: number | null;
-  notes: string | null;
-  manual_entry: boolean;
-  created_at: string | null;
-  created_by: string | null;
-};
-
-// One row per actual match in schedule_master. Replaces fin_schedule as
-// the cost-calc source: schedule_master is reconciled against the live
-// consumer app via /api/schedule-master/discrepancies, while fin_schedule
-// was operator-curated and drifted stale.
+// One row per actual match, sourced from mdapi_matches. This is the
+// cost-calc source; the operator-curated fin_schedule "Billing Schedule"
+// table it replaced (2026-06-01) drifted stale and its UI has since been
+// removed. schedule_master remains a separate table for the Master Schedule
+// editor + discrepancy tooling, not billing.
 //
 // `venue_id` is resolved at load time via mdapi_field_id → venueFields,
 // with a (city, venue_name) string fallback for legacy rows whose
@@ -129,7 +105,9 @@ export type FinMasterSchedule = {
 export type FinVenue = {
   id: number;
   venue_name: string;       // canonical (post-alias)
-  raw_venue_name: string;   // pre-alias — see FinSchedule.venue_raw note.
+  raw_venue_name: string;   // pre-alias — used for per-leg accounting on
+                            // split-rate venues (ATH Katy / Sunday) where
+                            // aliases collapse the canonical name.
   city: string;
   // Billing classification (narrowed to live values only — the
   // per_hour / lump_sum / no_charge options were retired after every
@@ -233,13 +211,8 @@ export type FinanceData = {
   revenue: FinRevenue[];
   expenses: FinExpense[];
   managerPay: FinManagerPay[];
-  // Operator-curated billing schedule. Still rendered + edited via the
-  // /admin/finance Billing Schedule tab and surfaced in the FieldCostsView
-  // drill-down, but no longer drives cost numbers — those moved to
-  // masterSchedule below.
-  schedule: FinSchedule[];
-  // Reconciled schedule_master rows (one per match) with venue_id
-  // resolved and duration parsed. Source for every cost-calc helper.
+  // Reconciled mdapi_matches rows (one per match) with venue_id resolved
+  // and duration parsed. Source for every cost-calc helper.
   masterSchedule: FinMasterSchedule[];
   // Cancelled mdapi_matches in the active quarter window, resolved
   // to venue_id the same way. Surfaced separately from masterSchedule
@@ -486,7 +459,6 @@ async function load(quarter: QuarterInfo): Promise<void> {
   let expenseRows: Array<Record<string, unknown>>;
   let mpRows: Array<Record<string, unknown>>;
   let cfgRows: Array<Record<string, unknown>>;
-  let schRows: Array<Record<string, unknown>>;
   let smsRows: Array<Record<string, unknown>>;
   let cmsRows: Array<Record<string, unknown>>;
   let vnRows: Array<Record<string, unknown>>;
@@ -506,7 +478,6 @@ async function load(quarter: QuarterInfo): Promise<void> {
       expenseRows,
       mpRows,
       cfgRows,
-      schRows,
       smsRows,
       cmsRows,
       vnRows,
@@ -529,9 +500,6 @@ async function load(quarter: QuarterInfo): Promise<void> {
       ),
       selectAll<Record<string, unknown>>(() =>
         supabase.from("fin_config").select("*").order("key"),
-      ),
-      selectAll<Record<string, unknown>>(() =>
-        supabase.from("fin_schedule").select("*").order("id"),
       ),
       // ALIVE mdapi_matches in the quarter ±14d window — the billing
       // source of truth (2026-06-01). Was schedule_master, a stale
@@ -699,28 +667,6 @@ async function load(quarter: QuarterInfo): Promise<void> {
     month: normalizeMonth(cleanText(r.month)),
     amount: asNumber(r.amount),
   }));
-
-  const schedule: FinSchedule[] = schRows.map((r) => {
-    const rawVenue = cleanText(r.venue);
-    return {
-      id: r.id as number,
-      date: cleanText(r.date),
-      month: normalizeMonth(cleanText(r.month)),
-      city: cleanText(r.city),
-      venue: venueAliases.get(rawVenue) ?? rawVenue,
-      venue_raw: rawVenue,
-      fin_venue_id: r.fin_venue_id === null || r.fin_venue_id === undefined
-        ? null
-        : Number(r.fin_venue_id),
-      match_count: Math.round(asNumber(r.match_count) || 0),
-      total_hours: r.total_hours === null ? null : asNumber(r.total_hours),
-      venue_cost: r.venue_cost === null ? null : asNumber(r.venue_cost),
-      notes: cleanTextNullable(r.notes),
-      manual_entry: Boolean(r.manual_entry ?? false),
-      created_at: cleanTextNullable(r.created_at),
-      created_by: cleanTextNullable(r.created_by),
-    };
-  });
 
   const venues: FinVenue[] = vnRows.map((r) => {
     const rawName = cleanText(r.venue_name);
@@ -932,7 +878,6 @@ async function load(quarter: QuarterInfo): Promise<void> {
       revenue,
       expenses,
       managerPay,
-      schedule,
       masterSchedule,
       cancelledSchedule,
       venues,
