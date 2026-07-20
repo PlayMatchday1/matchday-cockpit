@@ -8,16 +8,19 @@
 // This grid just reads those rows back out of fin_expenses; it does
 // not edit them.
 //
-// Pre-cutover Thursdays (pay-date < MANAGER_PAY_CUTOVER_PAY_DATE)
-// stay frozen as the existing manual rows — the recompute never
-// touches them. Adjustments to individual managers ("Additional Pay")
-// are edited on /managers and feed into the next computed total.
+// Pre-cutover rows (pay-date < MANAGER_PAY_CUTOVER_PAY_DATE) stay
+// frozen as the existing manual Thursday rows — the recompute never
+// touches them. Post-cutover pay lands on Tuesdays; the grid generates
+// cutover-aware columns so both regimes render side by side. Adjustments
+// to individual managers ("Additional Pay") are edited on /managers and
+// feed into the next computed total.
 
 import { useEffect, useMemo, useRef } from "react";
 import Link from "next/link";
 import { useFinanceQuarter } from "@/lib/financeQuarter";
 import type { QuarterInfo } from "@/lib/quarters";
 import { useFinanceData, type FinExpense } from "@/lib/useFinanceData";
+import { MANAGER_PAY_CUTOVER_PAY_DATE } from "@/lib/managerPayCompute";
 import { VISIBLE_CITIES } from "@/lib/types";
 
 // Forward-facing grid — hidden cities (e.g. paused markets) are excluded
@@ -39,35 +42,74 @@ const MONTH_LABELS = [
   "Dec",
 ];
 
-type Thursday = {
+type PayColumn = {
   date: string; // YYYY-MM-DD
   month: string; // "Apr 2026"
   monthIdx: number; // 3 = Apr
   label: string; // "Apr 2"
 };
 
-function generateThursdays(quarter: QuarterInfo): Thursday[] {
+function pad2(n: number): string {
+  return String(n).padStart(2, "0");
+}
+function isoLocal(d: Date): string {
+  return `${d.getFullYear()}-${pad2(d.getMonth() + 1)}-${pad2(d.getDate())}`;
+}
+
+// The Monday of the first recomputed work week. The cutover pay date is
+// the Tuesday of that week (Mon + 8), so back off 8 days. Work weeks whose
+// Monday is before this stay on the frozen Thursday pay date (Mon + 10);
+// from here forward pay moves to Tuesday (Mon + 8).
+const CUTOVER_MONDAY: Date = (() => {
+  const [y, m, d] = MANAGER_PAY_CUTOVER_PAY_DATE.split("-").map(Number);
+  const dt = new Date(y, m - 1, d);
+  dt.setDate(dt.getDate() - 8);
+  return dt;
+})();
+
+// The pay date for a work-week Monday: Tuesday (Mon + 8) once the week is
+// at/after cutover, Thursday (Mon + 10) for the frozen pre-cutover history.
+// Keeps both regimes' columns aligned to the dates actually stored in
+// fin_expenses, so the grid renders frozen Thursdays and computed Tuesdays
+// side by side.
+function payDateForMonday(monday: Date): Date {
+  const offset = monday.getTime() < CUTOVER_MONDAY.getTime() ? 10 : 8;
+  const pay = new Date(monday);
+  pay.setDate(pay.getDate() + offset);
+  return pay;
+}
+
+// One pay-date column per work week whose pay date falls in the displayed
+// quarter, oldest first. Walks Mondays with a 2-week buffer on each side so
+// no boundary week is missed.
+function generatePayColumns(quarter: QuarterInfo): PayColumn[] {
   const year = quarter.year;
   const startMonth = (quarter.quarter - 1) * 3;
-  const out: Thursday[] = [];
-  for (let mi = startMonth; mi < startMonth + 3; mi++) {
-    const firstOfMonth = new Date(year, mi, 1);
-    const dow = firstOfMonth.getDay(); // 0=Sun, 4=Thu
-    const offset = (4 - dow + 7) % 7;
-    let day = 1 + offset;
-    while (true) {
-      const d = new Date(year, mi, day);
-      if (d.getMonth() !== mi) break;
-      const mm = String(mi + 1).padStart(2, "0");
-      const dd = String(day).padStart(2, "0");
-      out.push({
-        date: `${year}-${mm}-${dd}`,
-        month: `${MONTH_LABELS[mi]} ${year}`,
-        monthIdx: mi,
-        label: `${MONTH_LABELS[mi]} ${day}`,
-      });
-      day += 7;
-    }
+  const endMonth = startMonth + 2;
+
+  // Start two weeks before the quarter's first month, on a Monday.
+  const cursor = new Date(year, startMonth, 1);
+  const dow = cursor.getDay(); // 0=Sun..6=Sat
+  cursor.setDate(cursor.getDate() - ((dow + 6) % 7) - 14); // back to Monday, -2wk
+  const limit = new Date(year, endMonth + 1, 1);
+  limit.setDate(limit.getDate() + 14);
+
+  const out: PayColumn[] = [];
+  for (
+    const mon = new Date(cursor);
+    mon.getTime() < limit.getTime();
+    mon.setDate(mon.getDate() + 7)
+  ) {
+    const pay = payDateForMonday(mon);
+    if (pay.getFullYear() !== year) continue;
+    const mi = pay.getMonth();
+    if (mi < startMonth || mi > endMonth) continue;
+    out.push({
+      date: isoLocal(pay),
+      month: `${MONTH_LABELS[mi]} ${year}`,
+      monthIdx: mi,
+      label: `${MONTH_LABELS[mi]} ${pay.getDate()}`,
+    });
   }
   return out;
 }
@@ -77,31 +119,23 @@ function fmtMoney(n: number): string {
   return `$${Math.round(n).toLocaleString("en-US")}`;
 }
 
-// Index in `thursdays` of the column whose date is the Thursday of
-// the ISO week containing `now` (Mon-Sun anchor — Thursday is Mon+3).
-// Returns -1 if that Thursday isn't in the displayed quarter.
-function findCurrentWeekThursdayIndex(
-  thursdays: Thursday[],
-  now: Date,
-): number {
+// Index of the column whose date is the pay date of the work week that
+// closed for the calendar week containing `now`. That work week is the one
+// starting last Monday (this Monday − 7); its pay lands this week (Tuesday
+// now, Thursday for any pre-cutover week). Returns -1 if not in the quarter.
+function findCurrentWeekColumnIndex(cols: PayColumn[], now: Date): number {
   const today = new Date(now.getFullYear(), now.getMonth(), now.getDate());
   const dow = today.getDay();
   const daysToMon = dow === 0 ? 6 : dow - 1;
-  const monday = new Date(
+  const thisMonday = new Date(
     today.getFullYear(),
     today.getMonth(),
     today.getDate() - daysToMon,
   );
-  const thursday = new Date(
-    monday.getFullYear(),
-    monday.getMonth(),
-    monday.getDate() + 3,
-  );
-  const yyyy = thursday.getFullYear();
-  const mm = String(thursday.getMonth() + 1).padStart(2, "0");
-  const dd = String(thursday.getDate()).padStart(2, "0");
-  const target = `${yyyy}-${mm}-${dd}`;
-  return thursdays.findIndex((t) => t.date === target);
+  const workWeekMonday = new Date(thisMonday);
+  workWeekMonday.setDate(workWeekMonday.getDate() - 7);
+  const target = isoLocal(payDateForMonday(workWeekMonday));
+  return cols.findIndex((t) => t.date === target);
 }
 
 const CATEGORY = "Match Manager Pay";
@@ -110,10 +144,10 @@ export default function ManagerPayGrid() {
   const { data, loading } = useFinanceData();
   const quarter = useFinanceQuarter();
 
-  const thursdays = useMemo(() => generateThursdays(quarter), [quarter]);
+  const payCols = useMemo(() => generatePayColumns(quarter), [quarter]);
   const currentWeekIdx = useMemo(
-    () => findCurrentWeekThursdayIndex(thursdays, new Date()),
-    [thursdays],
+    () => findCurrentWeekColumnIndex(payCols, new Date()),
+    [payCols],
   );
   const currentHeaderRef = useRef<HTMLTableCellElement>(null);
 
@@ -131,9 +165,9 @@ export default function ManagerPayGrid() {
 
   const monthsInQuarter = useMemo(() => {
     const set = new Set<string>();
-    for (const t of thursdays) set.add(t.month);
+    for (const t of payCols) set.add(t.month);
     return [...set];
-  }, [thursdays]);
+  }, [payCols]);
 
   const rowsByKey = useMemo(() => {
     const map = new Map<string, FinExpense>();
@@ -158,7 +192,7 @@ export default function ManagerPayGrid() {
     for (const city of CITIES) {
       const monthMap = new Map<string, number>();
       let cityTotal = 0;
-      for (const t of thursdays) {
+      for (const t of payCols) {
         const v = getStored(city, t.date);
         monthMap.set(t.month, (monthMap.get(t.month) ?? 0) + v);
         cityTotal += v;
@@ -178,7 +212,7 @@ export default function ManagerPayGrid() {
     }
     return { cityMonth, cityQuarter, colTotals, monthGrand, grand };
     // eslint-disable-next-line react-hooks/exhaustive-deps
-  }, [thursdays, rowsByKey, monthsInQuarter]);
+  }, [payCols, rowsByKey, monthsInQuarter]);
 
   return (
     <>
@@ -204,7 +238,7 @@ export default function ManagerPayGrid() {
             >
               /managers
             </Link>
-            . One row per (city, pay-date Thursday), refreshed by the daily
+            . One row per (city, pay-date Tuesday), refreshed by the daily
             sync. Edit Additional Pay on /managers — it flows into the next
             recompute.
           </p>
@@ -231,7 +265,7 @@ export default function ManagerPayGrid() {
                   <th className="sticky left-0 z-10 bg-deep-green px-3 py-2 text-left text-[10px] font-bold uppercase tracking-wider">
                     City
                   </th>
-                  {thursdays.map((t, i) => {
+                  {payCols.map((t, i) => {
                     const isCurrent = i === currentWeekIdx;
                     return (
                       <th
@@ -272,7 +306,7 @@ export default function ManagerPayGrid() {
                     <td className="sticky left-0 z-10 bg-white px-3 py-2 font-bold text-deep-green">
                       {city}
                     </td>
-                    {thursdays.map((t, i) => {
+                    {payCols.map((t, i) => {
                       const stored = getStored(city, t.date);
                       const isCurrent = i === currentWeekIdx;
                       return (
@@ -306,7 +340,7 @@ export default function ManagerPayGrid() {
                   <td className="sticky left-0 z-10 bg-cream-soft px-3 py-2 text-[10px] font-bold uppercase tracking-wider text-deep-green/65">
                     Grand Total
                   </td>
-                  {thursdays.map((t, i) => {
+                  {payCols.map((t, i) => {
                     const isCurrent = i === currentWeekIdx;
                     return (
                       <td
