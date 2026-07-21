@@ -26,7 +26,7 @@ import {
 import { cityFromAbbr } from "../src/lib/cityMap";
 
 const env = readFileSync(
-  "/Users/ryanmancuso/Desktop/matchday-cockpit/.env.local",
+  "/Users/ryanmancuso/Code/matchday-cockpit/.env.local",
   "utf8",
 );
 function readVar(name: string): string | undefined {

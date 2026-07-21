@@ -1,6 +1,6 @@
-import { createClient } from "/Users/ryanmancuso/Desktop/matchday-cockpit/node_modules/@supabase/supabase-js/dist/index.mjs";
+import { createClient } from "/Users/ryanmancuso/Code/matchday-cockpit/node_modules/@supabase/supabase-js/dist/index.mjs";
 import { readFileSync } from "node:fs";
-const env = readFileSync("/Users/ryanmancuso/Desktop/matchday-cockpit/.env.local", "utf8");
+const env = readFileSync("/Users/ryanmancuso/Code/matchday-cockpit/.env.local", "utf8");
 function pick(name){ const m = env.match(new RegExp("^"+name+"=(.+)$","m")); if(!m) return null; return m[1].trim().replace(/^['"]|['"]$/g,""); }
 const url = pick("NEXT_PUBLIC_SUPABASE_URL");
 const key = pick("SUPABASE_SERVICE_ROLE_KEY");

@@ -4,7 +4,7 @@
 // rows still counted for DPP revenue, matching the flat model).
 import { createClient } from "@supabase/supabase-js";
 import { readFileSync } from "node:fs";
-const env = readFileSync("/Users/ryanmancuso/Desktop/matchday-cockpit/.env.local", "utf8");
+const env = readFileSync("/Users/ryanmancuso/Code/matchday-cockpit/.env.local", "utf8");
 const uq = (s) => s.trim().replace(/^["']|["']$/g, "");
 const sb = createClient(uq(env.match(/NEXT_PUBLIC_SUPABASE_URL=(.+)/)[1]), uq(env.match(/SUPABASE_SERVICE_ROLE_KEY=(.+)/)[1]));
 async function pageAll(b){const o=[];for(let f=0;;f+=1000){const{data,error}=await b().range(f,f+999);if(error)throw error;if(!data?.length)break;o.push(...data);if(data.length<1000)break;}return o;}

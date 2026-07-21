@@ -6,7 +6,7 @@ import { readFileSync } from "node:fs";
 import { mostRecentCompletedWeekMonday, sundayEndOf } from "../src/lib/weekWindow";
 import { fetchWeekMatchPnL } from "../src/lib/matchPnL";
 
-const env = readFileSync("/Users/ryanmancuso/Desktop/matchday-cockpit/.env.local", "utf8");
+const env = readFileSync("/Users/ryanmancuso/Code/matchday-cockpit/.env.local", "utf8");
 const url = env.match(/NEXT_PUBLIC_SUPABASE_URL=(.+)/)![1].trim();
 const key = env.match(/NEXT_PUBLIC_SUPABASE_PUBLISHABLE_KEY=(.+)/)![1].trim();
 const sb = createClient(url, key);

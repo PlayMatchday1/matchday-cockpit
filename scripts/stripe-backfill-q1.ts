@@ -24,7 +24,7 @@ import { readFileSync } from "node:fs";
 // won't use that module-level client (financeImport's commitStripe
 // accepts an explicit client param).
 const env = readFileSync(
-  "/Users/ryanmancuso/Desktop/matchday-cockpit/.env.local",
+  "/Users/ryanmancuso/Code/matchday-cockpit/.env.local",
   "utf8",
 );
 function readVar(name: string): string | undefined {

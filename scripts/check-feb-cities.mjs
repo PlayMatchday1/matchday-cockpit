@@ -1,6 +1,6 @@
 import { createClient } from "@supabase/supabase-js";
 import { readFileSync } from "node:fs";
-const envText = readFileSync("/Users/ryanmancuso/Desktop/matchday-cockpit/.env.local","utf8");
+const envText = readFileSync("/Users/ryanmancuso/Code/matchday-cockpit/.env.local","utf8");
 const envVars = {};
 for (const line of envText.split("\n")) {
   const m = line.match(/^([A-Z_][A-Z0-9_]*)\s*=\s*(.*)$/);

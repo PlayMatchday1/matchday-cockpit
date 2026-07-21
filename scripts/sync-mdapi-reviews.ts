@@ -16,7 +16,7 @@ import { syncMdapiReviews } from "../src/lib/mdapiReviewsSync";
 // Mirror env file → process.env so the auth helper picks up the
 // MATCHDAY_API_* vars (it reads from process.env at call time).
 const env = readFileSync(
-  "/Users/ryanmancuso/Desktop/matchday-cockpit/.env.local",
+  "/Users/ryanmancuso/Code/matchday-cockpit/.env.local",
   "utf8",
 );
 function readVar(name: string): string | undefined {

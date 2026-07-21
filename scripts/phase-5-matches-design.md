@@ -483,7 +483,7 @@ Plus **one direct DB read** outside the hook: `src/lib/membershipSnapshots.ts` r
 **`promocode` field is a text → number type change.** The CSV's "Promocode" column held the actual code text (e.g., `"FREEMATCH"`). The API's `promocodeId` is a foreign-key id (number). The cockpit's "High Promo Usage" insight in `matchInsights.ts` checks `r.promocode != null` — that still works with the id. But anywhere that displays the actual code text would now show an integer. **Need to grep — quick check below.**
 
 ```
-grep -rn "promocode" /Users/ryanmancuso/Desktop/matchday-cockpit/src/
+grep -rn "promocode" /Users/ryanmancuso/Code/matchday-cockpit/src/
 ```
 
 If the cockpit only checks "is this a promo registration" (boolean check), the change is invisible. If it shows the code text anywhere, we'd need to fetch promocodes separately (new endpoint?) or capture the code text at sync time (would need to look at the API response — the player object only had `promocodeId`, not the code text).

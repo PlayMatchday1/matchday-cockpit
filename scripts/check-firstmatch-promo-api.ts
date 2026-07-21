@@ -7,7 +7,7 @@
 import { readFileSync } from "node:fs";
 
 const env = readFileSync(
-  "/Users/ryanmancuso/Desktop/matchday-cockpit/.env.local",
+  "/Users/ryanmancuso/Code/matchday-cockpit/.env.local",
   "utf8",
 );
 const readEnv = (n: string) => {
