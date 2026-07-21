@@ -74,17 +74,29 @@ const vfRows = await selectAll<Record<string, unknown>>(() =>
 const venueFields = new Map<number, number>();
 for (const f of vfRows) venueFields.set(Number(f.mdapi_field_id), Number(f.fin_venue_id));
 
-// Raw UTC start per match, so membership-window checks compare true
-// instants (legacy match_start is wall-clock and would skew the compare).
-const matches = await selectAll<{ api_id: number; start_date: string }>(() =>
+// Two start stamps per match:
+//   start_date     — local wall-clock carrying a spurious +00:00 suffix
+//   start_date_utc — the true instant
+// mdapi_subscriptions activation_date/canceled_at are genuine UTC, so
+// membership-window checks must compare against start_date_utc. The
+// shipping code passes start_date, which runs 4–5h early per city DST
+// offset and drops members who activated during that gap.
+const matches = await selectAll<{
+  api_id: number;
+  start_date: string;
+  start_date_utc: string | null;
+}>(() =>
   sb
     .from("mdapi_matches")
-    .select("api_id, start_date")
+    .select("api_id, start_date, start_date_utc")
     .gte("start_date", `${FROM}T00:00:00`)
     .lte("start_date", `${TO}T23:59:59`)
     .order("api_id"),
 );
 const startByMatch = new Map(matches.map((m) => [m.api_id, m.start_date]));
+const startUtcByMatch = new Map(
+  matches.map((m) => [m.api_id, m.start_date_utc ?? m.start_date]),
+);
 
 // Base fetch: pass an empty map so every FREE row comes back as
 // FREE_NON_MEMBER and we reclassify below. All other pipeline filters
@@ -115,11 +127,22 @@ function coversMatch(s: Sub, matchMs: number): boolean {
   return true;
 }
 
-type Variant = { label: string; activeOnly: boolean; key: "email" | "user_id" };
+type Variant = {
+  label: string;
+  activeOnly: boolean;
+  key: "email" | "user_id";
+  utc?: boolean;
+};
 const VARIANTS: Variant[] = [
   { label: "A ships today (ACTIVE-only, email)", activeOnly: true, key: "email" },
   { label: "B all statuses, email", activeOnly: false, key: "email" },
-  { label: "C all statuses, user_id (corrected)", activeOnly: false, key: "user_id" },
+  { label: "C all statuses, user_id", activeOnly: false, key: "user_id" },
+  {
+    label: "D all statuses, user_id, true UTC instant (corrected)",
+    activeOnly: false,
+    key: "user_id",
+    utc: true,
+  },
 ];
 
 function subIndex(v: Variant): Map<string, Sub[]> {
@@ -157,7 +180,9 @@ for (const v of [{ label: "TODAY", activeOnly: true, key: "email" } as Variant, 
   const source = v.label === "TODAY" ? regsTrunc : regs;
   const reclassified = source.map((r) => {
     if (!isFreeRow(r)) return r;
-    const rawStart = startByMatch.get(r.match_api_id);
+    const rawStart = v.utc
+      ? startUtcByMatch.get(r.match_api_id)
+      : startByMatch.get(r.match_api_id);
     const matchMs = rawStart ? Date.parse(rawStart) : NaN;
     const k = v.key === "email" ? (r.email ?? "").toLowerCase().trim() : String(r.user_id ?? "");
     const list = k ? idx.get(k) : undefined;
@@ -195,29 +220,23 @@ const usd = (n: number) => `$${n.toFixed(2)}`;
 const rate = (rev: number, spots: number) => (spots > 0 ? usd(rev / spots) : "—");
 
 console.log(`\nfree-classified rows in window: ${freeRowStats.total}\n`);
+const cols = ["NOW", "A", "B", "C", "D"];
 console.log(
-  ["city", "memberRev", "NOW sp", "NOW $/sp", "A spots", "A $/spot", "B spots", "B $/spot", "C spots", "C $/spot"]
+  ["city", "memberRev", ...cols.flatMap((c) => [`${c} sp`, `${c} $/sp`])]
     .map((h, i) => (i === 0 ? h.padEnd(22) : h.padStart(10)))
     .join(""),
 );
 for (const city of cities) {
   const rev = memberRevByCity.get(city) ?? 0;
-  const t = results.get("TODAY")!.get(city) ?? 0;
-  const a = results.get(VARIANTS[0].label)!.get(city) ?? 0;
-  const b = results.get(VARIANTS[1].label)!.get(city) ?? 0;
-  const c = results.get(VARIANTS[2].label)!.get(city) ?? 0;
+  const counts = [
+    results.get("TODAY")!.get(city) ?? 0,
+    ...VARIANTS.map((v) => results.get(v.label)!.get(city) ?? 0),
+  ];
   console.log(
     [
       city.padEnd(22),
       usd(rev).padStart(10),
-      String(t).padStart(10),
-      rate(rev, t).padStart(10),
-      String(a).padStart(10),
-      rate(rev, a).padStart(10),
-      String(b).padStart(10),
-      rate(rev, b).padStart(10),
-      String(c).padStart(10),
-      rate(rev, c).padStart(10),
+      ...counts.flatMap((n) => [String(n).padStart(10), rate(rev, n).padStart(10)]),
     ].join(""),
   );
 }
