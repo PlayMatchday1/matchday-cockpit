@@ -27,6 +27,7 @@
 import type { SupabaseClient } from "@supabase/supabase-js";
 import { authenticateCrm } from "@/lib/crmAuth";
 import { toNationalDigits } from "@/lib/phone";
+import { isPastMatch, matchStartMs } from "@/lib/matchTime";
 
 export const runtime = "nodejs";
 export const maxDuration = 10;
@@ -325,8 +326,8 @@ async function loadRecentMatches(
     });
   }
   joined.sort((a, b) => {
-    const at = a.start_date ? Date.parse(a.start_date) : -Infinity;
-    const bt = b.start_date ? Date.parse(b.start_date) : -Infinity;
+    const at = matchStartMs(a.start_date_utc, a.start_date) ?? -Infinity;
+    const bt = matchStartMs(b.start_date_utc, b.start_date) ?? -Infinity;
     return bt - at;
   });
   return joined.slice(0, RECENT_LIMIT);
@@ -338,8 +339,11 @@ function deriveMatchStatus(
   now: number,
 ): RecentMatch["status"] {
   if (r.is_cancelled === true || m.is_cancelled === true) return "Canceled";
-  const startTs = m.start_date ? Date.parse(m.start_date) : NaN;
-  const isPast = !Number.isNaN(startTs) && startTs < now;
+  // start_date_utc, not start_date. The latter is venue-local wall-clock
+  // wearing a fake +00:00, so parsing it as an instant lands 4–5h early and
+  // a match that kicks off tonight reads as already "Played" (or "No-show"
+  // for an absent registration) from mid-afternoon onward.
+  const isPast = isPastMatch(m.start_date_utc, m.start_date, now);
   if (r.is_absent === true && isPast) return "No-show";
   if (isPast) return "Played";
   return "Upcoming";
@@ -391,9 +395,13 @@ async function loadUpcomingMatches(
     .select(
       "api_id, field_title, start_date, start_date_utc, city_identifier, is_cancelled",
     )
-    .gt("start_date", nowIso)
-    .lt("start_date", cutoff)
-    .order("start_date", { ascending: true });
+    // Both bounds on start_date_utc — these are genuine instants
+    // (now, now+60d). Filtering the wall-clock column against them
+    // dropped every match starting within the next 4–5h, i.e. exactly
+    // the imminent match a CRM conversation is most likely about.
+    .gt("start_date_utc", nowIso)
+    .lt("start_date_utc", cutoff)
+    .order("start_date_utc", { ascending: true });
   if (matches.error || !matches.data?.length) return [];
 
   const matchIds = (matches.data as UpcomingMatchRow[]).map((m) => m.api_id);
@@ -429,8 +437,8 @@ async function loadUpcomingMatches(
   }
 
   out.sort((a, b) => {
-    const at = a.start_date ? Date.parse(a.start_date) : Infinity;
-    const bt = b.start_date ? Date.parse(b.start_date) : Infinity;
+    const at = matchStartMs(a.start_date_utc, a.start_date) ?? Infinity;
+    const bt = matchStartMs(b.start_date_utc, b.start_date) ?? Infinity;
     return at - bt;
   });
   return out;
@@ -465,9 +473,14 @@ async function loadPlayed2026Count(
     .from("mdapi_matches")
     .select("api_id", { count: "exact", head: true })
     .in("api_id", matchIds)
+    // Year bounds stay on start_date: "played this YEAR" means the venue's
+    // local calendar year, and wall-clock-vs-calendar-boundary is the
+    // correct pairing. The already-happened check is a true-instant
+    // question, so it uses start_date_utc. Mixing columns here is
+    // deliberate — each comparison uses the column that matches its frame.
     .gte("start_date", YEAR_START_ISO)
     .lt("start_date", YEAR_END_ISO)
-    .lt("start_date", nowIso)
+    .lt("start_date_utc", nowIso)
     .not("is_cancelled", "is", true);
   if (c.error) return null;
   return c.count ?? 0;
