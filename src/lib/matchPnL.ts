@@ -37,8 +37,8 @@ import { cityMembershipRevenueFor } from "./financeStats";
 import { mostRecentCompletedMonth } from "./quarters";
 import {
   fetchLegacyMatchRegistrations,
-  hasActiveSubAtMatchTime,
-  loadActiveSubscriptionsByEmail,
+  hasMembershipAtMatchTime,
+  loadMembershipWindowsByUserId,
 } from "./mdapiMatchesRead";
 import { buildFieldIdToVenueIdMap, resolveVenueForMatch } from "./venueNormalization";
 import { selectAll } from "./supabasePagination";
@@ -192,7 +192,11 @@ type RegRow = {
   field: string;
   field_id: number | null;
   email: string | null;
+  // Stable platform identity — the join key for membership windows.
+  user_id: string;
   match_start: string;
+  // True instant; see LegacyMatchRegRow.match_start_utc.
+  match_start_utc: string;
   match_canceled: boolean;
   player_canceled_at: string | null;
   payment_type: string | null;
@@ -220,18 +224,18 @@ export async function fetchWeekMatchPnL(
   // comparisons that correctly span the local week).
   const ymd = (d: Date) =>
     `${d.getFullYear()}-${String(d.getMonth() + 1).padStart(2, "0")}-${String(d.getDate()).padStart(2, "0")}`;
-  // Load ACTIVE subscriptions so derivePaymentType can distinguish
-  // real members (FREE + active sub at match time) from FREE_NON_MEMBER
+  // Load membership windows so derivePaymentType can distinguish real
+  // members (membership covering match time) from FREE_NON_MEMBER
   // (first-match-free, guest passes, manager-added fills). Without
   // this map, the legacy "FREE → MEMBER" fallback over-counts members.
-  const subscriptionsByEmail = await loadActiveSubscriptionsByEmail(supabase);
+  const membershipWindows = await loadMembershipWindowsByUserId(supabase);
   const regs: RegRow[] = await fetchLegacyMatchRegistrations(
     supabase,
     {
       fromDate: ymd(weekStart),
       toDate: ymd(weekEnd),
     },
-    subscriptionsByEmail,
+    membershipWindows,
   );
 
   // Split into canceled (match_canceled=true) and active (the rest).
@@ -427,15 +431,18 @@ export async function fetchWeekMatchPnL(
     }
     const pt = (r.payment_type ?? "").toUpperCase();
     // Member status is checked INDEPENDENTLY of payment_type so a
-    // paid_status='PAID' row whose email has an active subscription
-    // at match time counts as both a paid spot AND a member spot
-    // (a member who paid full DPP for that match). derivePaymentType
-    // only flips to 'MEMBER' when paid_status='FREE' + active sub,
-    // so the cross-check here picks up PAID + active sub cases.
-    const isMember = hasActiveSubAtMatchTime(
-      r.email,
-      r.match_start,
-      subscriptionsByEmail,
+    // paid_status='PAID' row whose user holds a membership at match
+    // time counts as both a paid spot AND a member spot (a member who
+    // paid full DPP for that match). derivePaymentType only flips to
+    // 'MEMBER' when paid_status='FREE' + membership, so the cross-check
+    // here picks up PAID + membership cases.
+    //
+    // match_start_utc, not match_start — the latter is wall-clock and
+    // would compare 4–5h early against UTC subscription timestamps.
+    const isMember = hasMembershipAtMatchTime(
+      r.user_id,
+      r.match_start_utc,
+      membershipWindows,
     );
     b.spotsSold += 1;
     if (isMember) b.memberSpots += 1;

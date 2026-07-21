@@ -14,7 +14,7 @@ import { createClient } from "@supabase/supabase-js";
 import { readFileSync } from "node:fs";
 import { syncFirstmatchLedger } from "../src/lib/firstmatchLedgerSync";
 
-const ENV_PATH = "/Users/ryanmancuso/Desktop/matchday-cockpit/.env.local";
+const ENV_PATH = "/Users/ryanmancuso/Code/matchday-cockpit/.env.local";
 const env = readFileSync(ENV_PATH, "utf8");
 
 function readEnv(name: string): string | null {

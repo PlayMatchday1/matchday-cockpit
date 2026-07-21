@@ -7,7 +7,7 @@
 import { readFileSync } from "node:fs";
 import { createClient } from "@supabase/supabase-js";
 
-const env = readFileSync("/Users/ryanmancuso/Desktop/matchday-cockpit/.env.local", "utf8");
+const env = readFileSync("/Users/ryanmancuso/Code/matchday-cockpit/.env.local", "utf8");
 function readVar(name) {
   const m = env.match(new RegExp(`^${name}=(.+)$`, "m"));
   return m ? m[1].trim() : undefined;

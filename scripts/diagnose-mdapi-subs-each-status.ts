@@ -24,7 +24,7 @@
 import { readFileSync } from "node:fs";
 import { getMatchdayApiClient, MatchdayApiError } from "../src/lib/matchdayApi";
 
-const env = readFileSync("/Users/ryanmancuso/Desktop/matchday-cockpit/.env.local", "utf8");
+const env = readFileSync("/Users/ryanmancuso/Code/matchday-cockpit/.env.local", "utf8");
 function readVar(name: string): string | undefined {
   const m = env.match(new RegExp(`^${name}=(.+)$`, "m"));
   return m ? m[1].trim() : undefined;

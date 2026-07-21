@@ -10,7 +10,7 @@ import { readFileSync } from "node:fs";
 import webpush from "web-push";
 
 // --- 1. Load VAPID env (parse-tolerant: strips surrounding quotes) -----
-const envPath = "/Users/ryanmancuso/Desktop/matchday-cockpit/.env.local";
+const envPath = "/Users/ryanmancuso/Code/matchday-cockpit/.env.local";
 const env = readFileSync(envPath, "utf8");
 function readEnv(name) {
   const re = new RegExp(`^${name}=(.*)$`, "m");

@@ -1,7 +1,7 @@
 import { createClient } from "@supabase/supabase-js";
 import { readFileSync } from "node:fs";
 
-const env = readFileSync("/Users/ryanmancuso/Desktop/matchday-cockpit/.env.local", "utf8");
+const env = readFileSync("/Users/ryanmancuso/Code/matchday-cockpit/.env.local", "utf8");
 // Values in .env.local are quoted ("https://…"). Strip surrounding
 // quotes after trimming, or createClient throws "Invalid supabaseUrl".
 const readEnv = (name) => {

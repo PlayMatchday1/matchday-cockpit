@@ -7,7 +7,7 @@ import { readFileSync } from "node:fs";
 
 // Load .env.local manually — tsx doesn't auto-load Next env files.
 const envText = readFileSync(
-  "/Users/ryanmancuso/Desktop/matchday-cockpit/.env.local",
+  "/Users/ryanmancuso/Code/matchday-cockpit/.env.local",
   "utf8",
 );
 for (const line of envText.split("\n")) {

@@ -6,7 +6,7 @@
 import { createClient, type SupabaseClient } from "@supabase/supabase-js";
 import {
   fetchLegacyMatchRegistrations,
-  loadActiveSubscriptionsByEmail,
+  loadMembershipWindowsByUserId,
 } from "./mdapiMatchesRead";
 import { isFakePlayerEmail } from "./mdapiFakePlayer";
 
@@ -394,11 +394,11 @@ export async function fetchPartnerRows(
   // MEMBER vs FREE_NON_MEMBER (first-match-free, guest passes,
   // manager-added fills). Without it, partner MEMBER counts would
   // diverge from /admin/finance Match P&L numbers post-2026-05-20.
-  const subscriptionsByEmail = await loadActiveSubscriptionsByEmail(supabase);
+  const membershipWindows = await loadMembershipWindowsByUserId(supabase);
   const out: PartnerRegRow[] = await fetchLegacyMatchRegistrations(
     supabase,
     { fieldLike: `%${venue.venue_name}%` },
-    subscriptionsByEmail,
+    membershipWindows,
   );
 
   // fin_revenue rows for this venue.

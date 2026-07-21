@@ -20,7 +20,7 @@ const TAG = "q3-prefill-script";
 const NOTES = "Q3 prefill — planning";
 
 const env = readFileSync(
-  "/Users/ryanmancuso/Desktop/matchday-cockpit/.env.local",
+  "/Users/ryanmancuso/Code/matchday-cockpit/.env.local",
   "utf8",
 );
 const url = env.match(/NEXT_PUBLIC_SUPABASE_URL=(.+)/)[1].trim();

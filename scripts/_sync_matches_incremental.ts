@@ -2,7 +2,7 @@ import { createClient } from "@supabase/supabase-js";
 import { readFileSync } from "node:fs";
 import { syncMdapiMatches, defaultIncrementalWindow } from "../src/lib/mdapiMatchesSync";
 
-const env = readFileSync("/Users/ryanmancuso/Desktop/matchday-cockpit/.env.local", "utf8");
+const env = readFileSync("/Users/ryanmancuso/Code/matchday-cockpit/.env.local", "utf8");
 const readVar = (n: string): string | undefined => {
   const m = env.match(new RegExp(`^${n}=(.+)$`, "m"));
   return m ? m[1].trim().replace(/^['"]|['"]$/g, "") : undefined;
