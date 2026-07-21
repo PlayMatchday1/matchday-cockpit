@@ -1,4 +1,4 @@
-import type { FinanceData, FinVenue } from "./useFinanceData";
+import type { FinanceData, FinRevenue, FinVenue } from "./useFinanceData";
 import type { MatchRow } from "./useMatchData";
 import type { JoinedMatchPlayerRow, LegacyMatchRegRow } from "./mdapiMatchesRead";
 import {
@@ -2010,6 +2010,45 @@ export function cityMembershipRevenueFor(
     .reduce((s, r) => s + r.net, 0);
 }
 
+// Stale-projection guard.
+//
+// PROJECTION rows are operator placeholders ("Estimate — replace with
+// actuals"). Every other read path already drops them for active/past
+// months (see revenueRowsFor), but cityMembershipRevenueFor — the
+// Match P&L benchmark NUMERATOR — does not filter by source. A
+// PROJECTION row left behind in a completed month and tagged to a real
+// city would therefore inflate that city's $/spot rate silently, with
+// no visible sign that the number is a placeholder rather than money.
+//
+// As of Jul 2026 the four surviving stale rows are all tagged to the
+// pseudo-city "Deleted Account Revenue" (~$128k across May–Jun 2026),
+// so nothing leaks into a city rate today — this keeps it that way.
+// Scoped to STRICTLY COMPLETED months. The active month's PROJECTION
+// row is doing its job (covering realized-to-date → end-of-month) and
+// is deliberately superseded rather than stale — revenueRowsFor drops
+// it for a different reason. Only once a month closes does an
+// un-replaced placeholder become a data-integrity problem. That also
+// makes this exactly the benchmark month's scope.
+//
+// The month key is parsed directly rather than routed through
+// MONTH_BY_KEY, which only registers the quarters the cockpit knows
+// about — an unrecognized key there reads as "not future" and would be
+// mis-flagged.
+export function findStaleProjectionRevenue(
+  revenue: FinRevenue[],
+  now: Date = new Date(),
+): FinRevenue[] {
+  const nowIdx = now.getFullYear() * 12 + now.getMonth();
+  return revenue.filter((r) => {
+    if (r.source !== "PROJECTION") return false;
+    const m = /^([A-Za-z]{3})\s+(\d{4})$/.exec(r.month.trim());
+    if (!m) return false;
+    const monthIdx = MONTH_NAMES_FROM_ISO.indexOf(m[1]);
+    if (monthIdx < 0) return false;
+    return Number(m[2]) * 12 + monthIdx < nowIdx;
+  });
+}
+
 export type CityOverhead = {
   matchManagerPay: number;
   cityManager: number;
@@ -2182,7 +2221,7 @@ const MONTH_NAMES_FROM_ISO = [
 // timestamp. Quarter-agnostic — any month resolves. Downstream
 // lookups (mdapiMemberSpots indexes) return 0 for keys they don't
 // have, which is the correct empty-state behavior.
-function isoToMonthKey(iso: string): Q2Month | null {
+export function isoToMonthKey(iso: string): Q2Month | null {
   const m = iso.match(/^(\d{4})-(\d{2})-/);
   if (!m) return null;
   const monthIdx = parseInt(m[2], 10) - 1;

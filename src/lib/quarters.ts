@@ -285,3 +285,35 @@ export function resolveQuarterFromUrl(
   }
   return parsed;
 }
+
+const ymdLocal = (d: Date) =>
+  `${d.getFullYear()}-${String(d.getMonth() + 1).padStart(2, "0")}-${String(d.getDate()).padStart(2, "0")}`;
+
+// Exact calendar bounds of the benchmark month (the most recent
+// completed month), which matchPnL values every MEMBER fill against.
+//
+// The mdapiMemberSpots index MUST hold a COMPLETE count for this month
+// or the benchmark rate is computed against a partial denominator. The
+// quarter window alone does not guarantee that: at the top of a
+// quarter, `quarter.start − 14d` lands mid-month and clips the
+// benchmark month to its final two weeks. Q3 2026 opened covering only
+// Jun 17–30, which shrank the denominator ~4× and inflated the rate to
+// match (Dallas showed $131.18/spot against a true $28.52).
+export function benchmarkMonthFetchBounds(now: Date = new Date()): {
+  fromDate: string;
+  toDate: string;
+} {
+  const first = new Date(now.getFullYear(), now.getMonth() - 1, 1);
+  const last = new Date(now.getFullYear(), now.getMonth(), 0);
+  return { fromDate: ymdLocal(first), toDate: ymdLocal(last) };
+}
+
+// True when `bounds` already spans the whole benchmark month, making a
+// second targeted fetch redundant.
+export function coversBenchmarkMonth(
+  bounds: { fromDate: string; toDate: string },
+  now: Date = new Date(),
+): boolean {
+  const b = benchmarkMonthFetchBounds(now);
+  return bounds.fromDate <= b.fromDate && bounds.toDate >= b.toDate;
+}

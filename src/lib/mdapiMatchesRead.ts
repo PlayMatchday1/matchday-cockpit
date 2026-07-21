@@ -33,7 +33,7 @@ import { normField } from "./normField";
 import { isFakePlayerRow } from "./mdapiFakePlayer";
 
 const MATCHES_COLS =
-  "api_id, city_identifier, field_id, field_title, start_date, is_cancelled, max_player_count";
+  "api_id, city_identifier, field_id, field_title, start_date, start_date_utc, is_cancelled, max_player_count";
 const PLAYERS_COLS =
   "api_id, match_api_id, user_id, user_email, user_type, paid_status, promocode_id, is_cancelled, canceled_at, amount, credit_amount, created_at, is_absent, user_is_fake_player";
 
@@ -79,7 +79,15 @@ type MatchSelect = {
   city_identifier: string | null;
   field_id: number | null;
   field_title: string | null;
+  // WALL-CLOCK, despite the "+00:00" suffix the API stamps on it.
+  // Correct for display and for local day-of-week bucketing; WRONG for
+  // comparing against any genuine UTC timestamp. See start_date_utc.
   start_date: string | null;
+  // The true instant. mdapi_subscriptions.activation_date/canceled_at
+  // are genuine UTC, so membership-window checks must compare against
+  // this column — start_date runs 4–5h early (each city's DST offset),
+  // which silently drops members who activated during that gap.
+  start_date_utc: string | null;
   is_cancelled: boolean | null;
   max_player_count: number | null;
 };
@@ -117,6 +125,11 @@ export type JoinedMatchPlayerRow = {
   promocode: string | null;
   email: string | null;
   // === Extras for matchPnL / projections / partner / snapshots ===
+  // The match's true instant (mdapi_matches.start_date_utc). Distinct
+  // from matchStart, which is wall-clock. Use this — and only this —
+  // when comparing against genuine UTC timestamps such as subscription
+  // activation/cancellation dates.
+  matchStartUtcIso: string;
   matchApiId: number;
   // mdapi field_id — the canonical numeric venue id, populated since
   // migration 0016. Threaded through here so PR-E's Finance read paths
@@ -201,7 +214,12 @@ export type LegacyMatchRegRow = {
   match_api_id: number;
   // Match capacity. See JoinedMatchPlayerRow.maxPlayerCount.
   max_player_count: number | null;
+  // Wall-clock. Round-trips through parseLocalTimestamp for display
+  // and local day-of-week bucketing.
   match_start: string;
+  // True instant. See JoinedMatchPlayerRow.matchStartUtcIso — required
+  // for any comparison against genuine UTC timestamps.
+  match_start_utc: string;
   match_canceled: boolean;
   player_canceled_at: string | null;
   payment_type: string | null;
@@ -242,41 +260,55 @@ function dateToLocalIso(d: Date): string {
 // mdapi_subscriptions — compared lexicographically against the
 // match's ISO start_date, which is correct for any consistent ISO
 // format (date-only or full timestamp).
-export type ActiveSubscription = {
+export type MembershipWindow = {
   activation_date: string;
   canceled_at: string | null;
 };
 
-export type ActiveSubscriptionsByEmail = Map<string, ActiveSubscription[]>;
+export type MembershipWindowsByUserId = Map<string, MembershipWindow[]>;
 
-// Load every status=ACTIVE subscription, keyed by lowercased-trimmed
-// email. Returns a multimap because the same email can hold multiple
-// historical subscriptions (cancel + resubscribe). Callers ask
-// "did any of this email's subs cover the match timestamp?".
+// Load EVERY subscription — all statuses — keyed by user_id.
+//
+// Two deliberate choices, both load-bearing for the Match P&L
+// member-spot benchmark:
+//
+//  1. No status filter. `status` describes the subscription TODAY, not
+//     at match time. Filtering to status='ACTIVE' discards ~84% of the
+//     table (2056 CANCELED vs 391 ACTIVE as of Jul 2026) and silently
+//     erases anyone who played in the benchmark month and cancelled
+//     afterwards — deflating the member-spot denominator and inflating
+//     the $/spot rate. Membership is decided purely by the activation
+//     → cancel window straddling the match; see hasMembershipAtMatchTime.
+//
+//  2. Keyed by user_id, not email. user_id is the platform's stable
+//     identity and joins directly to mdapi_match_players.user_id;
+//     email is display data that can be edited, re-cased, or differ
+//     between the subscription and registration records.
 //
 // Reads mdapi_subscriptions unfiltered by city — Phase 3b's
 // city-filtered FinMember mapping silently drops subs in unmapped
 // cities (e.g., Phoenix), which would misclassify those members'
 // FREE spots as FREE_NON_MEMBER.
-export async function loadActiveSubscriptionsByEmail(
+//
+// Returns a multimap: one user can hold several historical
+// subscriptions (cancel + resubscribe).
+export async function loadMembershipWindowsByUserId(
   supabase: SupabaseClient,
-): Promise<ActiveSubscriptionsByEmail> {
+): Promise<MembershipWindowsByUserId> {
   const rows = await selectAll<{
-    member_email: string | null;
+    user_id: number | null;
     activation_date: string | null;
     canceled_at: string | null;
   }>(() =>
     supabase
       .from("mdapi_subscriptions")
-      .select("member_email, activation_date, canceled_at")
-      .eq("status", "ACTIVE")
+      .select("user_id, activation_date, canceled_at")
       .order("membership_id"),
   );
-  const map: ActiveSubscriptionsByEmail = new Map();
+  const map: MembershipWindowsByUserId = new Map();
   for (const r of rows) {
-    if (!r.member_email || !r.activation_date) continue;
-    const key = r.member_email.toLowerCase().trim();
-    if (!key) continue;
+    if (r.user_id == null || !r.activation_date) continue;
+    const key = String(r.user_id);
     const list = map.get(key) ?? [];
     list.push({
       activation_date: r.activation_date,
@@ -287,30 +319,43 @@ export async function loadActiveSubscriptionsByEmail(
   return map;
 }
 
-// True if at least one ACTIVE subscription for this email was
-// activated on or before matchStartIso AND was not yet canceled at
-// matchStartIso. Cancel-window semantics: a cancellation strictly
-// after the match means the member was still active at match time.
+// True if at least one subscription for this user was activated at or
+// before the match AND had not yet been cancelled when it kicked off.
+// Cancel-window semantics: a cancellation strictly after the match
+// means the member was still active at match time.
+//
+// `matchStartUtcIso` MUST be the true instant (mdapi_matches
+// .start_date_utc), NOT start_date — the latter is wall-clock wearing
+// a "+00:00" suffix, so comparing it against genuine-UTC subscription
+// timestamps runs 4–5h early and drops anyone who activated between
+// the match's local time and its real instant.
+//
+// Compared numerically rather than lexicographically: the two sides
+// come from different columns and are not guaranteed to share a
+// format, and string ordering silently misreads a mixed pair.
 //
 // Exported so consumers (matchPnL.ts) can independently mark
-// paid-status='PAID' rows whose email has an active subscription as
-// member spots — those rows are correctly classified DAILY PAID by
+// paid_status='PAID' rows whose user holds a membership as member
+// spots — those rows are correctly classified DAILY PAID by
 // derivePaymentType (since paid_status is PAID, not FREE) but still
-// represent a member's attendance for the per-row Member Spots
-// column.
-export function hasActiveSubAtMatchTime(
-  email: string | null,
-  matchStartIso: string,
-  subs: ActiveSubscriptionsByEmail,
+// represent a member's attendance for the per-row Member Spots column.
+export function hasMembershipAtMatchTime(
+  userId: string | number | null,
+  matchStartUtcIso: string,
+  subs: MembershipWindowsByUserId,
 ): boolean {
-  if (!email) return false;
-  const key = email.toLowerCase().trim();
-  if (!key) return false;
-  const list = subs.get(key);
+  if (userId == null || userId === "") return false;
+  const list = subs.get(String(userId));
   if (!list) return false;
+  const matchMs = Date.parse(matchStartUtcIso);
+  if (!Number.isFinite(matchMs)) return false;
   for (const s of list) {
-    if (s.activation_date > matchStartIso) continue;
-    if (s.canceled_at && s.canceled_at <= matchStartIso) continue;
+    const activatedMs = Date.parse(s.activation_date);
+    if (!Number.isFinite(activatedMs) || activatedMs > matchMs) continue;
+    if (s.canceled_at) {
+      const canceledMs = Date.parse(s.canceled_at);
+      if (Number.isFinite(canceledMs) && canceledMs <= matchMs) continue;
+    }
     return true;
   }
   return false;
@@ -324,19 +369,20 @@ export function hasActiveSubAtMatchTime(
 //   paid_status='PAID' (no promo)                   → DAILY PAID
 //   paid_status='WAITING' / other                   → null
 //
-// When `subscriptionsByEmail` is undefined, falls back to the legacy
+// When `membershipWindows` is undefined, falls back to the legacy
 // `FREE → MEMBER` behavior so consumers that haven't migrated to the
 // join-based classifier (e.g., useMatchData, PartnerDetailAdmin)
-// retain prior semantics. Pass the map from `loadActiveSubscriptions
-// ByEmail` to opt into the new, accurate classification.
+// retain prior semantics. Pass the map from
+// `loadMembershipWindowsByUserId` to opt into the new, accurate
+// classification.
 function derivePaymentType(
   p: PlayerSelect,
-  matchStartIso: string,
-  subscriptionsByEmail?: ActiveSubscriptionsByEmail,
+  matchStartUtcIso: string,
+  membershipWindows?: MembershipWindowsByUserId,
 ): string | null {
   if (p.paid_status === "FREE") {
-    if (!subscriptionsByEmail) return "MEMBER";
-    return hasActiveSubAtMatchTime(p.user_email, matchStartIso, subscriptionsByEmail)
+    if (!membershipWindows) return "MEMBER";
+    return hasMembershipAtMatchTime(p.user_id, matchStartUtcIso, membershipWindows)
       ? "MEMBER"
       : "FREE_NON_MEMBER";
   }
@@ -361,7 +407,7 @@ function mapJoinedRow(
   match: MatchSelect,
   player: PlayerSelect,
   promocodeMap: Map<number, string>,
-  subscriptionsByEmail?: ActiveSubscriptionsByEmail,
+  membershipWindows?: MembershipWindowsByUserId,
 ): JoinedMatchPlayerRow | null {
   if (player.paid_status === "WAITING") return null;
   // Fake player: synthetic fill placeholder (dummy roster slot
@@ -388,17 +434,19 @@ function mapJoinedRow(
       promocodeMap.get(player.promocode_id) ?? String(player.promocode_id);
   }
 
+  // True instant for membership-window math. Falls back to start_date
+  // only if the API hasn't populated start_date_utc — in that case the
+  // comparison is as good as it was before, never worse.
+  const matchStartUtcIso = match.start_date_utc ?? match.start_date ?? "";
+
   return {
     city,
     field: normField(match.field_title ?? ""),
     matchStart,
+    matchStartUtcIso,
     matchCanceled: !!match.is_cancelled,
     playerCanceledAt: parseLocal(player.canceled_at),
-    paymentType: derivePaymentType(
-      player,
-      match.start_date ?? "",
-      subscriptionsByEmail,
-    ),
+    paymentType: derivePaymentType(player, matchStartUtcIso, membershipWindows),
     promocode,
     email: player.user_email?.toLowerCase() ?? null,
     matchApiId: match.api_id,
@@ -458,6 +506,7 @@ export function toLegacyShape(r: JoinedMatchPlayerRow): LegacyMatchRegRow {
     match_api_id: r.matchApiId,
     max_player_count: r.maxPlayerCount,
     match_start: dateToLocalIso(r.matchStart),
+    match_start_utc: r.matchStartUtcIso,
     match_canceled: r.matchCanceled,
     player_canceled_at: r.playerCanceledAt
       ? dateToLocalIso(r.playerCanceledAt)
@@ -520,8 +569,8 @@ export async function fetchJoinedMatchPlayers(
   // MEMBER (active sub at match time) vs FREE_NON_MEMBER. Omit to
   // keep the legacy "FREE → MEMBER" behavior — current callers that
   // rely on the old shape (useMatchData, PartnerDetailAdmin) don't
-  // need to change. See loadActiveSubscriptionsByEmail.
-  subscriptionsByEmail?: ActiveSubscriptionsByEmail,
+  // need to change. See loadMembershipWindowsByUserId.
+  membershipWindows?: MembershipWindowsByUserId,
 ): Promise<MatchDataset> {
   // 1. Fetch matches in scope
   const matches = await selectAll<MatchSelect>(() => {
@@ -608,7 +657,7 @@ export async function fetchJoinedMatchPlayers(
   for (const p of players) {
     const m = matchById.get(p.match_api_id);
     if (!m) continue;
-    const row = mapJoinedRow(m, p, promocodeMap, subscriptionsByEmail);
+    const row = mapJoinedRow(m, p, promocodeMap, membershipWindows);
     if (row) out.push(row);
   }
 
@@ -658,12 +707,12 @@ export async function fetchJoinedMatchPlayers(
 export async function fetchLegacyMatchRegistrations(
   supabase: SupabaseClient,
   opts: FetchJoinedOpts = {},
-  subscriptionsByEmail?: ActiveSubscriptionsByEmail,
+  membershipWindows?: MembershipWindowsByUserId,
 ): Promise<LegacyMatchRegRow[]> {
   const { rows } = await fetchJoinedMatchPlayers(
     supabase,
     opts,
-    subscriptionsByEmail,
+    membershipWindows,
   );
   return rows.map(toLegacyShape);
 }

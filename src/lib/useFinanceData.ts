@@ -7,6 +7,8 @@ import { cityFromAbbr } from "./cityMap";
 import {
   buildMdapiMemberSpotIndex,
   emptyMdapiMemberSpotIndex,
+  findStaleProjectionRevenue,
+  isoToMonthKey,
   type MdapiMemberSpotIndex,
 } from "./financeStats";
 import {
@@ -16,10 +18,17 @@ import {
 } from "./partnerStats";
 import {
   fetchLegacyMatchRegistrations,
-  loadActiveSubscriptionsByEmail,
+  loadMembershipWindowsByUserId,
 } from "./mdapiMatchesRead";
 import { useFinanceQuarter } from "./financeQuarter";
-import { getCurrentQuarter, getQuarterByKey, type QuarterInfo } from "./quarters";
+import {
+  benchmarkMonthFetchBounds,
+  coversBenchmarkMonth,
+  getCurrentQuarter,
+  getQuarterByKey,
+  mostRecentCompletedMonth,
+  type QuarterInfo,
+} from "./quarters";
 import { resolveSplitRateVenueId } from "./venueGroups";
 
 // Pad the quarter window by 14d on each side so MTD-vs-prior-month
@@ -593,13 +602,34 @@ async function load(quarter: QuarterInfo): Promise<void> {
       // FREE row before bucketing. Chaining (not awaiting separately
       // before Promise.all) preserves parallelism: the registrations
       // fetch is the longest leg, and subs adds only ~300ms on top.
-      loadActiveSubscriptionsByEmail(supabase).then((subs) =>
-        fetchLegacyMatchRegistrations(
-          supabase,
-          quarterFetchBounds(quarter),
-          subs,
-        ),
-      ),
+      //
+      // Second, targeted fetch covers the benchmark month in full
+      // whenever the quarter window would clip it (see
+      // benchmarkMonthFetchBounds). Rows for that month then come
+      // exclusively from the targeted pull — the quarter rows are
+      // partitioned out by month key first, so the overlap can't
+      // double-count.
+      loadMembershipWindowsByUserId(supabase).then(async (subs) => {
+        const needsBenchmarkFetch = !coversBenchmarkMonth(smBounds);
+        const [quarterRows, benchmarkRows] = await Promise.all([
+          fetchLegacyMatchRegistrations(supabase, smBounds, subs),
+          needsBenchmarkFetch
+            ? fetchLegacyMatchRegistrations(
+                supabase,
+                benchmarkMonthFetchBounds(),
+                subs,
+              )
+            : Promise.resolve([]),
+        ]);
+        if (!needsBenchmarkFetch) return quarterRows;
+        const benchKey = mostRecentCompletedMonth().key;
+        return [
+          ...quarterRows.filter(
+            (r) => isoToMonthKey(r.match_start) !== benchKey,
+          ),
+          ...benchmarkRows,
+        ];
+      }),
     ]);
   } catch (e) {
     publish(key, {
@@ -648,6 +678,28 @@ async function load(quarter: QuarterInfo): Promise<void> {
     notes: cleanTextNullable(r.notes),
     manual_entry: Boolean(r.manual_entry ?? false),
   }));
+
+  // Stale PROJECTION placeholders in completed months. Harmless while
+  // they sit on the "Deleted Account Revenue" pseudo-city, but
+  // cityMembershipRevenueFor (the Match P&L benchmark numerator) does
+  // not filter by source, so one tagged to a real city would silently
+  // inflate that city's $/spot rate. Warn loudly rather than let a
+  // placeholder masquerade as money.
+  const staleProjections = findStaleProjectionRevenue(revenue);
+  if (staleProjections.length > 0 && typeof console !== "undefined") {
+    const total = staleProjections.reduce((s, r) => s + r.net, 0);
+    const months = [...new Set(staleProjections.map((r) => r.month))].join(", ");
+    const realCityRows = staleProjections.filter(
+      (r) => r.city !== "Deleted Account Revenue",
+    );
+    console.warn(
+      `[useFinanceData] ${staleProjections.length} PROJECTION revenue row(s) still present in completed month(s) ${months}, totalling $${total.toFixed(2)}. These are "replace with actuals" placeholders. ${
+        realCityRows.length > 0
+          ? `${realCityRows.length} is/are tagged to a REAL city (${[...new Set(realCityRows.map((r) => r.city))].join(", ")}) and WILL distort that city's member-spot benchmark rate.`
+          : `All are on the "Deleted Account Revenue" pseudo-city, so no city benchmark is affected yet.`
+      }`,
+    );
+  }
 
   const expenses: FinExpense[] = expenseRows.map((r) => ({
     id: r.id as number,
