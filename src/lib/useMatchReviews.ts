@@ -16,7 +16,7 @@ import { useEffect, useState } from "react";
 import { supabase } from "./supabase";
 import { selectAll } from "./supabasePagination";
 import { normalizeCity } from "./cityMap";
-import { isPastMatch } from "./matchReviewDates";
+import { isPastMatch } from "./matchTime";
 
 export type MatchReviewRow = {
   apiId: number;

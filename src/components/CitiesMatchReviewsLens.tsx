@@ -18,7 +18,7 @@ import {
   matchLocalDate,
   matchLocalMonth,
   windowCutoffIso,
-} from "@/lib/matchReviewDates";
+} from "@/lib/matchTime";
 
 // Highlight thresholds — tunable. A match needs at least MIN_REVIEWS to
 // qualify for either list, so a lone 1★ or 5★ never headlines.

@@ -1,5 +1,15 @@
-// Date helpers for Match Reviews. mdapi_matches carries two timestamps that
-// MUST NOT be mixed:
+// THE canonical time helpers for mdapi_matches. Every surface that asks
+// "has this match happened yet?", "how long between X and this match?", or
+// "which day does this match belong to?" should route through here rather
+// than parsing the raw columns inline.
+//
+// This module was originally scoped to Match Reviews (matchReviewDates.ts).
+// That name is why the CRM context route never found it and reimplemented
+// the comparison wrong — twice-bitten, hence the rename. If you are about to
+// write `new Date(start_date)` or `.gt("start_date", <an instant>)`, the
+// answer you want is already below.
+//
+// mdapi_matches carries two timestamps that MUST NOT be mixed:
 //
 //   start_date     — the venue-LOCAL wall-clock, stamped with a fake +00:00
 //                    offset (e.g. "2026-07-20T21:00:00+00:00" is 9:00 PM
@@ -44,6 +54,24 @@ export function isPastMatch(
 ): boolean {
   const ms = matchStartMs(startDateUtc, startDate);
   return ms != null && ms <= nowMs;
+}
+
+// Elapsed ms between a genuine-UTC instant and a match's real start.
+// Positive when the match is LATER than `otherUtcMs`.
+//
+// Exists because the tempting inline form —
+//   new Date(m.start_date).getTime() - Date.parse(user.created_at)
+// — subtracts a true instant from a wall-clock one and is silently off by
+// the venue's UTC offset (4h Atlanta, 5h everywhere else). Any duration
+// spanning a match and a non-match timestamp (signup → first match, match →
+// now) must come through here. Returns null if the match instant is unknown.
+export function msFromInstantToMatch(
+  startDateUtc: string | null | undefined,
+  startDate: string | null | undefined,
+  otherUtcMs: number,
+): number | null {
+  const ms = matchStartMs(startDateUtc, startDate);
+  return ms == null ? null : ms - otherUtcMs;
 }
 
 // The venue-local calendar date ("YYYY-MM-DD") from start_date's wall-clock —

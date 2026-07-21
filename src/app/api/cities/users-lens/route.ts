@@ -25,6 +25,7 @@ import { isInternalUser } from "@/lib/users";
 import { KNOWN_CITY_CODES } from "@/lib/cityNormalization";
 import { selectAll } from "@/lib/supabasePagination";
 import { normField } from "@/lib/normField";
+import { matchStartMs } from "@/lib/matchTime";
 
 export const runtime = "nodejs";
 // Heaviest computation: paginated fetch of 24k users + 38k match_players
@@ -206,7 +207,12 @@ export type MatchPlayerRow = {
 export type MatchRow = {
   api_id: number;
   city_identifier: string | null;
+  // Venue-local wall-clock (fake +00:00). Correct for "which day did this
+  // match fall on" bucketing; NEVER for arithmetic against a real instant.
   start_date: string | null;
+  // True instant. Required for durations/recency measured against
+  // genuine-UTC values (users.created_at, now). See lib/matchTime.ts.
+  start_date_utc: string | null;
   is_cancelled: boolean;
   field_title: string | null;
 };
@@ -257,7 +263,7 @@ export async function fetchAll(supabase: SupabaseClient) {
   const matches = await selectAll<MatchRow>(() =>
     supabase
       .from("mdapi_matches")
-      .select("api_id, city_identifier, start_date, is_cancelled, field_title")
+      .select("api_id, city_identifier, start_date, start_date_utc, is_cancelled, field_title")
       // Exclude soft-deleted phantoms from scheduled-match denominators.
       .is("deleted_at", null)
       .order("api_id"),
@@ -296,12 +302,16 @@ type DerivedUser = {
   active30d: boolean;
   active60d: boolean;
   member: boolean;
+  // Wall-clock Date — for bucketing a match into its local day/week/month.
   firstMatchAt: Date | null;
+  // True instant — for durations against genuine-UTC values.
+  firstMatchUtcMs: number | null;
   firstMatchCity: string | null; // ATX|...|ELP|Unknown|null (null = never played)
   // Normalized field name of the first match (per normField). null
   // when never played OR the match's field_title was empty.
   firstMatchField: string | null;
   thirdMatchAt: Date | null;
+  thirdMatchUtcMs: number | null;
 };
 
 function median(nums: number[]): number | null {
@@ -349,7 +359,12 @@ export function aggregate(
   // --- Build match → city/date/field lookup ---
   const matchInfo = new Map<
     number,
-    { city: string | null; startDate: Date | null; field: string | null }
+    {
+      city: string | null;
+      startDate: Date | null;
+      startUtcMs: number | null;
+      field: string | null;
+    }
   >();
   for (const m of matches) {
     if (!m.api_id) continue;
@@ -360,6 +375,7 @@ export function aggregate(
     matchInfo.set(m.api_id, {
       city: m.city_identifier,
       startDate: m.start_date ? new Date(m.start_date) : null,
+      startUtcMs: matchStartMs(m.start_date_utc, m.start_date),
       field: normalized || null,
     });
   }
@@ -373,6 +389,7 @@ export function aggregate(
       matchId: number;
       city: string | null;
       startDate: Date | null;
+      startUtcMs: number | null;
       field: string | null;
     }>
   >();
@@ -392,6 +409,7 @@ export function aggregate(
       matchId: p.match_api_id,
       city: m.city,
       startDate: m.startDate,
+      startUtcMs: m.startUtcMs,
       field: m.field,
     });
   }
@@ -416,8 +434,10 @@ export function aggregate(
   }
 
   // --- Derive per-user stats ---
-  const thirtyDaysAgo = new Date(now.getTime() - 30 * 24 * 60 * 60 * 1000);
-  const sixtyDaysAgo = new Date(now.getTime() - 60 * 24 * 60 * 60 * 1000);
+  // Recency boundaries are genuine instants, so they are compared against
+  // the match's true instant (startUtcMs), never the wall-clock Date.
+  const thirtyDaysAgoMs = now.getTime() - 30 * 24 * 60 * 60 * 1000;
+  const sixtyDaysAgoMs = now.getTime() - 60 * 24 * 60 * 60 * 1000;
 
   const derived: DerivedUser[] = filteredUsers.map((u) => {
     const plays = playsByUser.get(u.id) ?? [];
@@ -425,9 +445,9 @@ export function aggregate(
     const firstPlay = plays[0] ?? null;
     const thirdPlay = plays[2] ?? null;
     const lastPlay = plays[plays.length - 1] ?? null;
-    const lastDate = lastPlay?.startDate ?? null;
-    const active30d = !!(lastDate && lastDate >= thirtyDaysAgo);
-    const active60d = !!(lastDate && lastDate >= sixtyDaysAgo);
+    const lastUtcMs = lastPlay?.startUtcMs ?? null;
+    const active30d = lastUtcMs != null && lastUtcMs >= thirtyDaysAgoMs;
+    const active60d = lastUtcMs != null && lastUtcMs >= sixtyDaysAgoMs;
     const member = memberUserIds.has(u.id);
     return {
       id: u.id,
@@ -442,9 +462,11 @@ export function aggregate(
       active60d,
       member,
       firstMatchAt: firstPlay?.startDate ?? null,
+      firstMatchUtcMs: firstPlay?.startUtcMs ?? null,
       firstMatchCity: firstPlay ? bucketCity(firstPlay.city ?? null) : null,
       firstMatchField: firstPlay?.field ?? null,
       thirdMatchAt: thirdPlay?.startDate ?? null,
+      thirdMatchUtcMs: thirdPlay?.startUtcMs ?? null,
     };
   });
 
@@ -642,14 +664,15 @@ export function aggregate(
       .filter((d) => d.completedAt)
       .map((d) => (d.completedAt!.getTime() - d.createdAt.getTime()) / 86400000);
     const dCompletedToFirst = inCity
-      .filter((d) => d.completedAt && d.firstMatchAt)
+      .filter((d) => d.completedAt && d.firstMatchUtcMs != null)
       .map(
-        (d) => (d.firstMatchAt!.getTime() - d.completedAt!.getTime()) / 86400000,
+        // completedAt is genuine UTC, so the match side must be too.
+        (d) => (d.firstMatchUtcMs! - d.completedAt!.getTime()) / 86400000,
       );
     const dFirstToThird = inCity
-      .filter((d) => d.firstMatchAt && d.thirdMatchAt)
+      .filter((d) => d.firstMatchUtcMs != null && d.thirdMatchUtcMs != null)
       .map(
-        (d) => (d.thirdMatchAt!.getTime() - d.firstMatchAt!.getTime()) / 86400000,
+        (d) => (d.thirdMatchUtcMs! - d.firstMatchUtcMs!) / 86400000,
       );
     // Member-conversion-from-first-match: users who have a first match
     // AND are members. We don't store the member-activation date
@@ -658,8 +681,8 @@ export function aggregate(
     // a perfect "days to convert" — surface as "—" if cohort is too
     // small to be meaningful.
     const dFirstMatchToMember = inCity
-      .filter((d) => d.firstMatchAt && d.member)
-      .map((d) => (now.getTime() - d.firstMatchAt!.getTime()) / 86400000);
+      .filter((d) => d.firstMatchUtcMs != null && d.member)
+      .map((d) => (now.getTime() - d.firstMatchUtcMs!) / 86400000);
     // n < 5 → not enough signal, return null.
     const safeMedian = (xs: number[]): number | null =>
       xs.length < 5 ? null : Math.round((median(xs) ?? 0) * 10) / 10;
