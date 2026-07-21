@@ -1,0 +1,62 @@
+[
+  {
+    "id": 63,
+    "date": "2026-05-31",
+    "month": "May 2026",
+    "city": "Deleted Account Revenue",
+    "venue": "N/A",
+    "type": "Membership",
+    "gross": 19666.81,
+    "fees": 974.65,
+    "net": 18692.16,
+    "source": "PROJECTION",
+    "notes": "Estimate — May 2026 membership revenue (30.25% of $65,000 gross projection). Replace with actuals.",
+    "created_at": "2026-04-25T23:59:36.271278+00:00",
+    "manual_entry": false
+  },
+  {
+    "id": 64,
+    "date": "2026-05-31",
+    "month": "May 2026",
+    "city": "Deleted Account Revenue",
+    "venue": "N/A",
+    "type": "DPP",
+    "gross": 45275.7,
+    "fees": 2243.78,
+    "net": 43031.92,
+    "source": "PROJECTION",
+    "notes": "Estimate — May 2026 DPP revenue (69.67% of $65,000 gross projection). Replace with per-venue actuals from Stripe.",
+    "created_at": "2026-04-25T23:59:36.271278+00:00",
+    "manual_entry": false
+  },
+  {
+    "id": 65,
+    "date": "2026-06-30",
+    "month": "Jun 2026",
+    "city": "Deleted Account Revenue",
+    "venue": "N/A",
+    "type": "Membership",
+    "gross": 21179.64,
+    "fees": 1049.62,
+    "net": 20130.02,
+    "source": "PROJECTION",
+    "notes": "Estimate — Jun 2026 membership revenue (30.25% of $70,000 gross projection). Replace with actuals.",
+    "created_at": "2026-04-25T23:59:36.271278+00:00",
+    "manual_entry": false
+  },
+  {
+    "id": 66,
+    "date": "2026-06-30",
+    "month": "Jun 2026",
+    "city": "Deleted Account Revenue",
+    "venue": "N/A",
+    "type": "DPP",
+    "gross": 48758.44,
+    "fees": 2416.38,
+    "net": 46342.06,
+    "source": "PROJECTION",
+    "notes": "Estimate — Jun 2026 DPP revenue (69.67% of $70,000 gross projection). Replace with per-venue actuals from Stripe.",
+    "created_at": "2026-04-25T23:59:36.271278+00:00",
+    "manual_entry": false
+  }
+]
