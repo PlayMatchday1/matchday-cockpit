@@ -9,11 +9,10 @@
 // Bulk close and undo-close (the post-close toast) go through
 // /api/crm/threads/bulk-status instead.
 //
-// Permissions: admin-only. Any app_users.is_admin = true operator can
-// close or reopen. City managers (can_access_chats without is_admin)
-// can view threads but not action them, so a non-admin session is
-// rejected 403. The cron path has no attributable operator and is
-// rejected too — close/reopen must always name a human actor.
+// Permissions: any chat operator — is_admin OR can_access_chats — may
+// close or reopen (customer-service operators run the full ticket
+// workflow, not just view). The cron path has no attributable operator
+// and is rejected — close/reopen must always name a human actor.
 //
 // Two writes are sequential, not transactional: UPDATE crm_threads
 // then INSERT crm_thread_status_log. A failed audit insert is logged
@@ -40,11 +39,16 @@ export async function POST(req: Request, ctx: RouteCtx) {
   if (!auth.ok) {
     return Response.json({ error: auth.error }, { status: auth.status });
   }
-  const { supabase, appUserId, isAdmin } = auth;
+  const { supabase, appUserId, isAdmin, canAccessChats } = auth;
 
-  // Admin-only, and only from an attributable operator session.
-  if (!isAdmin) {
-    return Response.json({ error: "Admin access required" }, { status: 403 });
+  // Chat operators only (is_admin OR can_access_chats), and only from
+  // an attributable operator session — the cron path carries no human
+  // actor for the audit row.
+  if (!isAdmin && !canAccessChats) {
+    return Response.json(
+      { error: "Chat operator access required" },
+      { status: 403 },
+    );
   }
   if (!appUserId) {
     return Response.json(

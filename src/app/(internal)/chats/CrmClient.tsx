@@ -1032,8 +1032,13 @@ export default function CrmClient() {
   );
 
   const whatsappExpired = computeWhatsAppExpired(detail);
-  const canManageStatus = appUser?.is_admin === true;
-  // Bulk-select checkboxes only make sense in the Open view for admins.
+  // Chat operators (admins OR can_access_chats) run the full ticket
+  // workflow — close/reopen and bulk-close. Mirrors the status +
+  // bulk-status API gates; canned-response editing stays admin-only.
+  const canManageStatus =
+    appUser?.is_admin === true || appUser?.can_access_chats === true;
+  // Bulk-select checkboxes only make sense in the Open view for
+  // operators who can act on the selection.
   const bulkSelectable = canManageStatus && view === "open";
   // Select-all operates on the current filtered page only (visibleThreads
   // is already city-filtered and server-capped) — never a phantom
@@ -1894,10 +1899,9 @@ function ConversationHeader({
           strokeWidth={1.75}
         />
       </button>
-      {/* Close / Reopen — ticket workflow. Admin-only (city managers
-          can view but not action). Close acts immediately (with an
-          Undo toast for a few seconds after); Reopen is a direct
-          action too. */}
+      {/* Close / Reopen — ticket workflow. Any chat operator (admin or
+          can_access_chats). Close acts immediately (with an Undo toast
+          for a few seconds after); Reopen is a direct action too. */}
       {canManageStatus &&
         (threadStatus === "open" ? (
           <button
