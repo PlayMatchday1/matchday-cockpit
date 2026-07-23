@@ -1,22 +1,19 @@
 "use client";
 
-// One horizontal-scroll row of pills. Ticket-style status views first
-// (Open / Mine / Starred / Closed — mutually exclusive, single-select),
-// then city codes (multi-select). Empty city selection is treated as
-// "all cities" implicitly, so there's no separate "all cities" pill.
+// One horizontal-scroll row of ticket-style status views — mutually
+// exclusive, single-select: Open / Awaiting reply / Mine / Starred /
+// Closed. City filtering was removed as noise (the per-row city tag
+// still gives at-a-glance context); counts are global.
 //
 // Views:
-//   Open    — status = open (the main inbox, default)
-//   Mine    — open threads assigned to the viewer
-//   Starred — the viewer's starred threads, open or closed
-//   Closed  — status = closed
+//   Open          — status = open (the main inbox, default)
+//   Awaiting reply — open threads where the customer spoke last
+//   Mine          — open threads assigned to the viewer
+//   Starred       — the viewer's starred threads, open or closed
+//   Closed        — status = closed
 //
-// Each status chip shows a "(N)" count for the current city selection.
 // "Mine" is disabled when the viewer has no app_user id (vanishingly
 // unlikely past AdminGuard but defended).
-
-import { KNOWN_CITY_CODES, HIDDEN_CITY_CODES } from "@/lib/cityNormalization";
-import { UNKNOWN_CITY } from "@/lib/cityColors";
 
 export type StatusFilter =
   | "open"
@@ -34,31 +31,17 @@ export type ViewCounts = {
   awaiting: number;
 };
 
-const ALL_CITY_CODES: readonly string[] = [
-  ...KNOWN_CITY_CODES.filter((c) => !HIDDEN_CITY_CODES.has(c)),
-  UNKNOWN_CITY,
-];
-
 export default function FilterBar({
-  cities,
   view,
   counts,
   onChange,
   canFilterMine,
 }: {
-  cities: Set<string>;
   view: StatusFilter;
   counts: ViewCounts;
-  onChange: (next: { cities?: Set<string>; view?: StatusFilter }) => void;
+  onChange: (next: { view: StatusFilter }) => void;
   canFilterMine: boolean;
 }) {
-  const toggleCity = (code: string) => {
-    const next = new Set(cities);
-    if (next.has(code)) next.delete(code);
-    else next.add(code);
-    onChange({ cities: next });
-  };
-
   return (
     <div className="min-w-0 overflow-hidden border-b border-cream-line bg-cream">
       <div className="scrollbar-hide flex flex-nowrap items-center gap-1.5 overflow-x-auto px-3 py-2 pr-4 sm:px-4">
@@ -94,15 +77,6 @@ export default function FilterBar({
           label="Closed"
           count={counts.closed}
         />
-        <span aria-hidden className="mx-1 h-4 w-px shrink-0 bg-deep-green/15" />
-        {ALL_CITY_CODES.map((code) => (
-          <FilterPill
-            key={code}
-            active={cities.has(code)}
-            onClick={() => toggleCity(code)}
-            label={code}
-          />
-        ))}
       </div>
     </div>
   );
