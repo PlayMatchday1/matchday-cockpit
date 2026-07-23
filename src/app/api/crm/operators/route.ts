@@ -1,6 +1,9 @@
-// GET /api/crm/operators — list of corp operators eligible for
-// thread assignment. Populates the assignment dropdown in the
-// conversation header. Phase 1 = app_users where is_admin = true.
+// GET /api/crm/operators — list of operators eligible for thread
+// assignment. Populates the assignment dropdown in the conversation
+// header. Eligible = app_users with is_admin = true OR
+// can_access_chats = true, so a chats-only customer-service operator
+// can be assigned threads without holding any admin surface. The
+// write-side assign route validates the same OR on the target.
 //
 // Cached once per page load on the client; cheap to refetch on demand
 // (≤10 rows expected for the foreseeable future).
@@ -24,7 +27,7 @@ export async function GET(req: Request) {
   const res = await supabase
     .from("app_users")
     .select("id, email, full_name")
-    .eq("is_admin", true)
+    .or("is_admin.eq.true,can_access_chats.eq.true")
     .order("full_name", { ascending: true, nullsFirst: false });
   if (res.error) {
     console.error("[crm:operators] db error", res.error);

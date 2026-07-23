@@ -5,9 +5,10 @@
 //   - non-null uuid → set assigned_to_user_id, stamp assigned_at = now()
 //   - null         → unassign (the "Unassign" option in the dropdown)
 //
-// Auth: dual-mode bearer via src/lib/crmAuth. Session path enforces
-// corp gate (app_users.is_admin = true). Cron path records a log row
-// with changed_by_user_id = null (audit-honest about server writes).
+// Auth: dual-mode bearer via src/lib/crmAuth. Any chat operator
+// (is_admin OR can_access_chats) may assign; the assignee target must
+// also be a chat operator (validated below). Cron path records a log
+// row with changed_by_user_id = null (audit-honest about server writes).
 //
 // Two writes are sequential, not transactional: UPDATE crm_threads
 // then INSERT crm_assignment_log. If the log insert fails after the
@@ -96,8 +97,9 @@ export async function PATCH(req: Request, ctx: RouteCtx) {
   }
 
   // If a non-null toUserId was requested, make sure it's actually an
-  // admin operator. Frontend dropdown already filters, but defense in
-  // depth.
+  // eligible operator: is_admin OR can_access_chats. Mirrors the
+  // /api/crm/operators dropdown filter. Frontend already filters, but
+  // this is the authoritative check — defense in depth.
   let assignee: {
     id: string;
     email: string;
@@ -106,15 +108,15 @@ export async function PATCH(req: Request, ctx: RouteCtx) {
   if (toUserId != null) {
     const op = await supabase
       .from("app_users")
-      .select("id, email, full_name, is_admin")
+      .select("id, email, full_name, is_admin, can_access_chats")
       .eq("id", toUserId)
       .maybeSingle();
     if (op.error || !op.data) {
       return Response.json({ error: "User not found" }, { status: 404 });
     }
-    if (op.data.is_admin !== true) {
+    if (op.data.is_admin !== true && op.data.can_access_chats !== true) {
       return Response.json(
-        { error: "Target user is not a corp operator" },
+        { error: "Target user is not a chat operator" },
         { status: 403 },
       );
     }

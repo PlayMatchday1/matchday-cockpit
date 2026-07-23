@@ -17,9 +17,10 @@
 // discipline the single close/reopen and assign routes use. Each
 // statement is atomic across the whole batch (not N per-thread calls).
 //
-// Permissions: admin-only (app_users.is_admin), attributable operator
-// session required. Cron path rejected. Auto-reopen on new inbound
-// still applies to bulk-closed threads (webhook path is unchanged).
+// Permissions: any chat operator (is_admin OR can_access_chats),
+// attributable operator session required. Cron path rejected.
+// Auto-reopen on new inbound still applies to bulk-closed threads
+// (webhook path is unchanged).
 
 import { authenticateCrm } from "@/lib/crmAuth";
 
@@ -39,10 +40,13 @@ export async function POST(req: Request) {
   if (!auth.ok) {
     return Response.json({ error: auth.error }, { status: auth.status });
   }
-  const { supabase, appUserId, isAdmin } = auth;
+  const { supabase, appUserId, isAdmin, canAccessChats } = auth;
 
-  if (!isAdmin) {
-    return Response.json({ error: "Admin access required" }, { status: 403 });
+  if (!isAdmin && !canAccessChats) {
+    return Response.json(
+      { error: "Chat operator access required" },
+      { status: 403 },
+    );
   }
   if (!appUserId) {
     return Response.json(

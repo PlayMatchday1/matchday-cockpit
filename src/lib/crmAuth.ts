@@ -26,6 +26,14 @@ export type CrmAuthOk = {
   // sub-features inside the chats domain (e.g. canned-response
   // mutations) check this flag explicitly.
   isAdmin: boolean;
+  // True iff the authenticated app_user has can_access_chats = true
+  // (independently of is_admin). Cron path sets this true. Routes for
+  // chat-operator actions that used to be admin-only — close/reopen,
+  // bulk-status — gate on (isAdmin || canAccessChats) so a chats-only
+  // customer-service operator can fully work threads without Finance
+  // or any other admin surface. Being an assignee is validated against
+  // the same OR on the target user in the assign route.
+  canAccessChats: boolean;
   supabase: SupabaseClient;
 };
 
@@ -65,6 +73,7 @@ export async function authenticateCrm(req: Request): Promise<CrmAuthResult> {
       appUserId: null,
       email: null,
       isAdmin: true,
+      canAccessChats: true,
       supabase: sb,
     };
   }
@@ -106,6 +115,7 @@ export async function authenticateCrm(req: Request): Promise<CrmAuthResult> {
     appUserId: appUser.data.id as string,
     email,
     isAdmin,
+    canAccessChats,
     supabase: sb,
   };
 }
