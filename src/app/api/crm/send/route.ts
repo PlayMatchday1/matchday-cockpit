@@ -194,7 +194,14 @@ async function handleSmsSend({
 
   const upd = await supabase
     .from("crm_threads")
-    .update({ last_message_at: nowIso, last_message_preview: preview })
+    .update({
+      last_message_at: nowIso,
+      last_message_preview: preview,
+      // Outbound = we spoke last → thread is answered, awaiting flag
+      // clears. A plain reply is never a template.
+      last_message_direction: "outbound",
+      last_message_is_template: false,
+    })
     .eq("id", threadId);
   if (upd.error) {
     console.error("[crm:send] thread update failed", upd.error);
@@ -320,7 +327,14 @@ async function handleWhatsAppSend({
 
   const upd = await supabase
     .from("crm_threads")
-    .update({ last_message_at: nowIso, last_message_preview: preview })
+    .update({
+      last_message_at: nowIso,
+      last_message_preview: preview,
+      // Outbound = we spoke last → thread is answered, awaiting flag
+      // clears. A plain reply is never a template.
+      last_message_direction: "outbound",
+      last_message_is_template: false,
+    })
     .eq("id", threadId);
   if (upd.error) {
     console.error("[crm:send] thread update failed", upd.error);

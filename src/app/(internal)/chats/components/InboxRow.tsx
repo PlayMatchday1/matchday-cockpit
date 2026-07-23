@@ -1,6 +1,11 @@
 "use client";
 
 import { Star } from "lucide-react";
+import {
+  awaitingReplyState,
+  awaitingAgeLabel,
+  type AwaitingTier,
+} from "@/lib/awaitingReply";
 
 // Single thread row in the Player Chat inbox. iMessage layout:
 // circular initials avatar, name + timestamp on the top line,
@@ -20,12 +25,19 @@ export type InboxRowThread = {
   last_message_at: string;
   last_message_preview: string | null;
   last_message_direction: "inbound" | "outbound" | null;
+  // Last outbound was a WhatsApp template → answered row reads
+  // "template sent" instead of "replied".
+  last_message_is_template: boolean;
+  status: "open" | "closed";
   player: {
     first_name: string | null;
     last_name: string | null;
     preferable_city_normalized: string | null;
     is_member?: boolean | null;
   } | null;
+  // Current assignee — surfaced on the row so it's clear whose queue a
+  // waiting thread sits in.
+  assignee: { full_name: string | null; email: string } | null;
   // Server-computed unread state per the assignment-aware rule. The
   // client never recomputes the rule — it just renders this flag and
   // optimistically patches on mark-read.
@@ -53,6 +65,53 @@ function initialsOf(name: string): string {
 
 function cityForRow(t: InboxRowThread): string | null {
   return t.player?.preferable_city_normalized ?? null;
+}
+
+// Per-tier visual tokens for the awaiting chip + left edge. Green =
+// fresh, amber = free-reply window closing, red = window closed
+// (template required to reply).
+const TIER_STYLE: Record<
+  AwaitingTier,
+  { edge: string; chip: string; dot: string; rowBg: string; note: string }
+> = {
+  fresh: {
+    edge: "bg-mint",
+    chip: "bg-mint-soft text-deep-green",
+    dot: "bg-mint",
+    rowBg: "",
+    note: "",
+  },
+  closing: {
+    edge: "bg-amber-400",
+    chip: "bg-amber-50 text-amber-700 border border-amber-200",
+    dot: "bg-amber-400",
+    rowBg: "",
+    note: "text-amber-700",
+  },
+  closed: {
+    edge: "bg-red-500",
+    chip: "bg-red-50 text-red-700 border border-red-200",
+    dot: "bg-red-500",
+    // Faint warm wash so the past-window rows read as urgent even
+    // before the chip is read.
+    rowBg: "bg-red-50/40",
+    note: "text-red-700 font-semibold",
+  },
+};
+
+function assigneeLabel(
+  a: InboxRowThread["assignee"],
+): { text: string; assigned: boolean } {
+  if (!a) return { text: "Unassigned", assigned: false };
+  const name = a.full_name?.trim() || a.email.split("@")[0];
+  return { text: name, assigned: true };
+}
+
+// Quiet answered-state label: "replied 2h ago" / "template sent 5h ago".
+function answeredLabel(t: InboxRowThread, nowMs: number): string {
+  const age = awaitingAgeLabel(t.last_message_at, nowMs);
+  const verb = t.last_message_is_template ? "template sent" : "replied";
+  return `${verb} ${age} ago`;
 }
 
 // Compact timestamp: "now", "5m", "3h", "2d", or a M/D date.
@@ -94,20 +153,49 @@ export default function InboxRow({
   const initials = initialsOf(name);
   const city = cityForRow(thread);
   const isMember = thread.player?.is_member === true;
-  const timeLabel = timeAgoCompact(thread.last_message_at);
   const rawPreview = thread.last_message_preview ?? "(no messages)";
   const preview =
     thread.last_message_direction === "outbound"
       ? `You: ${rawPreview}`
       : rawPreview;
 
+  // Awaiting OUR reply = open thread where the customer spoke last.
+  const nowMs = Date.now();
+  const awaiting =
+    thread.status === "open" &&
+    thread.last_message_direction === "inbound" &&
+    !!thread.last_message_preview;
+  const state = awaiting
+    ? awaitingReplyState(thread.last_message_at, nowMs)
+    : null;
+  const tierStyle = state ? TIER_STYLE[state.tier] : null;
+  // Right-slot label: awaiting → colored age chip; answered (we spoke
+  // last) → quiet "replied/template sent"; otherwise plain time.
+  const answered =
+    !awaiting && thread.last_message_direction === "outbound";
+  const timeLabel = timeAgoCompact(thread.last_message_at);
+  const asg = assigneeLabel(thread.assignee);
+
   const metaBits: string[] = [];
   if (city) metaBits.push(city);
   if (isMember) metaBits.push("Member");
   if (thread.match_ambiguous) metaBits.push("Historical");
 
+  const buttonBg = active
+    ? "bg-cream-soft"
+    : state?.tier === "closed"
+      ? "bg-red-50/40 hover:bg-red-50/70"
+      : "bg-white hover:bg-cream-soft/60";
+
   return (
     <li className="relative flex items-stretch">
+      {/* Escalation edge — colored only while awaiting our reply. */}
+      {tierStyle && (
+        <span
+          aria-hidden
+          className={`absolute left-0 top-0 bottom-0 z-10 w-[3px] ${tierStyle.edge}`}
+        />
+      )}
       {selectable && (
         <label
           className="flex shrink-0 cursor-pointer items-center pl-3 pr-1"
@@ -133,7 +221,7 @@ export default function InboxRow({
         style={{ touchAction: "manipulation" }}
         className={`flex min-w-0 flex-1 items-center gap-3 py-3 pr-11 text-left transition ${
           selectable ? "pl-2" : "pl-3 sm:pl-4"
-        } ${active ? "bg-cream-soft" : "bg-white hover:bg-cream-soft/60"}`}
+        } ${buttonBg}`}
       >
         <span
           aria-hidden
@@ -150,9 +238,25 @@ export default function InboxRow({
             >
               {name}
             </span>
-            <span className="shrink-0 text-[12px] text-deep-green/45">
-              {timeLabel}
-            </span>
+            {awaiting && state && tierStyle ? (
+              <span
+                className={`inline-flex shrink-0 items-center gap-1 rounded-full px-2 py-0.5 text-[10.5px] font-bold ${tierStyle.chip}`}
+              >
+                <span
+                  aria-hidden
+                  className={`h-1.5 w-1.5 rounded-full ${tierStyle.dot}`}
+                />
+                {state.ageLabel}
+              </span>
+            ) : answered ? (
+              <span className="shrink-0 text-[11px] text-deep-green/40">
+                {answeredLabel(thread, nowMs)}
+              </span>
+            ) : (
+              <span className="shrink-0 text-[12px] text-deep-green/45">
+                {timeLabel}
+              </span>
+            )}
           </div>
           <div className="mt-0.5 flex items-center justify-between gap-2">
             <span
@@ -171,11 +275,35 @@ export default function InboxRow({
               />
             )}
           </div>
-          {metaBits.length > 0 && (
-            <div className="mt-1 truncate text-[11px] text-deep-green/45">
-              {metaBits.join(" · ")}
-            </div>
-          )}
+          <div className="mt-1 flex items-center gap-1.5 truncate text-[11px] text-deep-green/45">
+            {state?.note && tierStyle && (
+              <>
+                <span className={`shrink-0 ${tierStyle.note}`}>
+                  {state.note}
+                </span>
+                <span aria-hidden className="text-deep-green/25">
+                  ·
+                </span>
+              </>
+            )}
+            <span
+              className={
+                asg.assigned
+                  ? "shrink-0 text-deep-green/60"
+                  : "shrink-0 text-deep-green/35"
+              }
+            >
+              {asg.assigned ? `Assigned · ${asg.text}` : "Unassigned"}
+            </span>
+            {metaBits.length > 0 && (
+              <>
+                <span aria-hidden className="text-deep-green/25">
+                  ·
+                </span>
+                <span className="truncate">{metaBits.join(" · ")}</span>
+              </>
+            )}
+          </div>
         </div>
       </button>
       {/* Follow-up star — a sibling button (not nested in the select

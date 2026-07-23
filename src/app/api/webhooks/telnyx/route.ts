@@ -197,6 +197,9 @@ export async function POST(req: Request) {
     const patch: Record<string, unknown> = {
       last_message_at: nowIso,
       last_message_preview: preview,
+      // Inbound = customer spoke last → thread now awaits our reply.
+      last_message_direction: "inbound",
+      last_message_is_template: false,
     };
     // Only flip player_id if the thread was previously unlinked and
     // we now have a candidate. Never overwrite a known player.
@@ -238,6 +241,9 @@ export async function POST(req: Request) {
         match_ambiguous: ambiguous,
         last_message_at: nowIso,
         last_message_preview: preview,
+        // First message on a brand-new thread is inbound → awaiting.
+        last_message_direction: "inbound",
+        last_message_is_template: false,
       })
       .select("id")
       .single();

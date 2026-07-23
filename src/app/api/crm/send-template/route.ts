@@ -170,6 +170,10 @@ export async function POST(req: Request) {
   const patch: Record<string, unknown> = {
     last_message_at: nowIso,
     last_message_preview: preview,
+    // Outbound template = we spoke last → answered. is_template=true so
+    // the answered row reads "template sent" rather than "replied".
+    last_message_direction: "outbound",
+    last_message_is_template: true,
   };
   if (doReopen) {
     patch.status = "open";

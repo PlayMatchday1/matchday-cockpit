@@ -803,6 +803,11 @@ async function processInbound(
   const patch: Record<string, unknown> = {
     last_message_at: nowIso,
     last_message_preview: preview,
+    // Inbound = customer spoke last → thread awaits our reply. Applied
+    // here (not the insert above) since this patch runs for both new
+    // and existing threads.
+    last_message_direction: "inbound",
+    last_message_is_template: false,
   };
   let didAutoReopen = false;
   if (!isNewThread && existing.data) {

@@ -1,0 +1,204 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+<meta charset="UTF-8">
+<meta name="viewport" content="width=device-width, initial-scale=1.0">
+<title>Chats — Awaiting Reply Mock</title>
+<link rel="preconnect" href="https://fonts.googleapis.com">
+<link rel="preconnect" href="https://fonts.gstatic.com" crossorigin>
+<link href="https://fonts.googleapis.com/css2?family=Inter:wght@400;500;600;700;800&display=swap" rel="stylesheet">
+<style>
+  :root{
+    --cream:#f2ebdd;--card:#fff;--ink:#17241d;--green-deep:#123d2c;--green-nav:#0e3222;
+    --green-bright:#2fbf6c;--green-tint:#e6f4ec;--green-tint-2:#d5eddd;
+    --muted:#8b8f85;--muted-2:#a7a99d;--line:#e9e1d1;--line-soft:#f0e9db;
+    --amber:#b5701f;--amber-bg:#fbeede;--amber-line:#e9a86a;
+    --red:#c73a2a;--red-bg:#fdecea;--red-line:#eba79f;
+  }
+  *{box-sizing:border-box;margin:0;padding:0}
+  body{font-family:'Inter',system-ui,sans-serif;background:var(--cream);color:var(--ink);-webkit-font-smoothing:antialiased}
+  .topbar{background:var(--green-nav);color:#dff0e6;padding:14px 24px;display:flex;align-items:center;gap:24px}
+  .logo{font-weight:800;letter-spacing:1px;color:var(--green-bright);font-style:italic}
+  .topbar .nav{display:flex;gap:18px;font-size:13.5px;font-weight:600;color:#b9d6c4}
+  .topbar .nav .on{background:var(--green-bright);color:#06301d;padding:5px 14px;border-radius:20px}
+  .wrap{max-width:1160px;margin:0 auto;padding:20px 24px 60px}
+  .h{font-weight:800;font-size:18px;color:var(--green-deep);margin-bottom:12px}
+  .seg{display:flex;background:#fff;border:1px solid var(--line);border-radius:24px;overflow:hidden;margin-bottom:14px}
+  .seg div{flex:1;text-align:center;padding:10px;font-weight:700;font-size:13.5px;color:var(--green-deep)}
+  .seg .on{background:var(--green-deep);color:#fff;border-radius:24px}
+
+  .filters{display:flex;gap:8px;flex-wrap:wrap;margin-bottom:6px;align-items:center}
+  .pill{border:1px solid var(--line);background:#fff;border-radius:18px;padding:6px 13px;font-size:12px;font-weight:700;color:var(--green-deep)}
+  .pill.on{background:var(--green-deep);color:#fff;border-color:var(--green-deep)}
+  .pill.awaiting{display:flex;align-items:center;gap:7px}
+  .pill.awaiting.on{background:var(--red);border-color:var(--red)}
+  .pill .cnt{background:rgba(255,255,255,.25);border-radius:10px;padding:0 7px;font-size:11px}
+  .pill:not(.on) .cnt{background:var(--red-bg);color:var(--red)}
+  .meta{font-size:11.5px;color:var(--muted);margin:8px 2px 12px}
+  .meta b{color:var(--green-deep)}
+
+  .list{background:#fff;border:1px solid var(--line);border-radius:14px;overflow:hidden;max-width:560px}
+  .grp{padding:9px 16px;font-size:10.5px;font-weight:800;letter-spacing:.8px;text-transform:uppercase;background:#faf7ef;border-bottom:1px solid var(--line-soft)}
+  .grp.await{color:var(--red)}
+  .grp.done{color:var(--muted)}
+  .row{display:flex;gap:12px;padding:13px 16px;border-bottom:1px solid var(--line-soft);align-items:flex-start;position:relative}
+  .row:last-child{border-bottom:0}
+  .row.urgent{background:#fffbf9}
+  .row .edge{position:absolute;left:0;top:0;bottom:0;width:3px;border-radius:0 2px 2px 0}
+  .edge.g{background:var(--green-bright)}
+  .edge.a{background:var(--amber-line)}
+  .edge.r{background:var(--red)}
+  .av{width:36px;height:36px;border-radius:50%;background:var(--green-tint);display:flex;align-items:center;justify-content:center;font-weight:800;font-size:12.5px;color:var(--green-deep);flex-shrink:0}
+  .bd{flex:1;min-width:0}
+  .l1{display:flex;align-items:center;gap:8px}
+  .nm{font-weight:700;font-size:13.5px}
+  .city{font-size:10px;font-weight:800;letter-spacing:.4px;color:#6f9a82;background:var(--green-tint);border-radius:5px;padding:1.5px 6px}
+  .prev{font-size:12.5px;color:#5c6b60;white-space:nowrap;overflow:hidden;text-overflow:ellipsis;margin-top:3px;max-width:330px}
+  .prev .who{font-weight:700;color:var(--ink)}
+  .right{display:flex;flex-direction:column;align-items:flex-end;gap:6px;flex-shrink:0}
+  .chip{display:inline-flex;align-items:center;gap:5px;font-size:10.5px;font-weight:800;padding:3px 9px;border-radius:12px;white-space:nowrap}
+  .chip .dot{width:6px;height:6px;border-radius:50%}
+  .chip.g{background:var(--green-tint);color:#1c6b43;border:1px solid var(--green-tint-2)}
+  .chip.g .dot{background:var(--green-bright)}
+  .chip.a{background:var(--amber-bg);color:var(--amber);border:1px solid var(--amber-line)}
+  .chip.a .dot{background:var(--amber-line)}
+  .chip.r{background:var(--red-bg);color:var(--red);border:1px solid var(--red-line)}
+  .chip.r .dot{background:var(--red)}
+  .chip.none{background:transparent;color:var(--muted-2);border:1px solid transparent;font-weight:600}
+  .asg{font-size:10.5px;color:var(--muted);font-weight:600}
+  .asg b{color:var(--green-deep)}
+
+  .legend{margin-top:18px;max-width:560px;background:#fff;border:1px solid var(--line);border-radius:12px;padding:14px 16px}
+  .legend .t{font-weight:800;font-size:11px;letter-spacing:.7px;text-transform:uppercase;color:var(--green-deep);margin-bottom:10px}
+  .lrow{display:flex;align-items:center;gap:10px;font-size:12.5px;color:#5c6b60;padding:4px 0}
+  .note{margin-top:14px;max-width:560px;font-size:12px;color:var(--muted);line-height:1.6}
+  .note b{color:var(--green-deep)}
+</style>
+</head>
+<body>
+<div class="topbar"><span class="logo">MATCHDAY</span><div class="nav"><span>Clubhouse</span><span>Cities</span><span>Finance</span><span class="on">Chats</span></div></div>
+<div class="wrap">
+  <div class="h">Chats</div>
+  <div class="seg"><div class="on">Players</div><div>Matches</div></div>
+
+  <div class="filters">
+    <span class="pill">Open · 17</span>
+    <span class="pill awaiting on"><span>Awaiting reply</span><span class="cnt">6</span></span>
+    <span class="pill">Mine</span>
+    <span class="pill">Starred</span>
+    <span class="pill">Closed · 99+</span>
+    <span class="pill">ATX</span><span class="pill">DFW</span><span class="pill">HOU</span>
+  </div>
+  <div class="meta">Sorted <b>longest waiting first</b> · reply or template send clears the flag · assign/mark-read does not</div>
+
+  <div class="list">
+    <div class="grp await">Awaiting reply · 6</div>
+
+    <!-- window closed -->
+    <div class="row urgent"><span class="edge r"></span>
+      <div class="av">MC</div>
+      <div class="bd">
+        <div class="l1"><span class="nm">Maria Cardenas</span><span class="city">SATX</span></div>
+        <div class="prev"><span class="who">Maria:</span> I was charged twice for the Tuesday match, can someone check?</div>
+      </div>
+      <div class="right">
+        <span class="chip r"><span class="dot"></span>2d · window closed — template required</span>
+        <span class="asg">Unassigned</span>
+      </div>
+    </div>
+
+    <div class="row urgent"><span class="edge r"></span>
+      <div class="av">JT</div>
+      <div class="bd">
+        <div class="l1"><span class="nm">Jordan Tran</span><span class="city">HOU</span></div>
+        <div class="prev"><span class="who">Jordan:</span> Will I be able to use my guest pass this weekend?</div>
+      </div>
+      <div class="right">
+        <span class="chip r"><span class="dot"></span>27h · window closed — template required</span>
+        <span class="asg">Assigned · <b>Deonna</b></span>
+      </div>
+    </div>
+
+    <!-- window closing -->
+    <div class="row"><span class="edge a"></span>
+      <div class="av">AB</div>
+      <div class="bd">
+        <div class="l1"><span class="nm">Akshay Batra</span><span class="city">ATX</span></div>
+        <div class="prev"><span class="who">Akshay:</span> Is there still a match if both teams don't fill by 5?</div>
+      </div>
+      <div class="right">
+        <span class="chip a"><span class="dot"></span>18h · window closing</span>
+        <span class="asg">Assigned · <b>Deonna</b></span>
+      </div>
+    </div>
+
+    <div class="row"><span class="edge a"></span>
+      <div class="av">+1</div>
+      <div class="bd">
+        <div class="l1"><span class="nm">+1 210 708 4969</span><span class="city">SATX</span></div>
+        <div class="prev"><span class="who">Player:</span> En la aplicación por accidente cancelé mi lugar…</div>
+      </div>
+      <div class="right">
+        <span class="chip a"><span class="dot"></span>14h · window closing</span>
+        <span class="asg">Unassigned</span>
+      </div>
+    </div>
+
+    <!-- fresh -->
+    <div class="row"><span class="edge g"></span>
+      <div class="av">RD</div>
+      <div class="bd">
+        <div class="l1"><span class="nm">Ronin Donaldson</span><span class="city">HOU</span></div>
+        <div class="prev"><span class="who">Ronin:</span> Thanks — one more thing, can I switch to the 8pm?</div>
+      </div>
+      <div class="right">
+        <span class="chip g"><span class="dot"></span>3h</span>
+        <span class="asg">Assigned · <b>Deonna</b></span>
+      </div>
+    </div>
+
+    <div class="row"><span class="edge g"></span>
+      <div class="av">PR</div>
+      <div class="bd">
+        <div class="l1"><span class="nm">Prateek Raikar</span><span class="city">ATX</span></div>
+        <div class="prev"><span class="who">Prateek:</span> sorry he mistyped it, it's prateek.r@…</div>
+      </div>
+      <div class="right">
+        <span class="chip g"><span class="dot"></span>45m</span>
+        <span class="asg">Unassigned</span>
+      </div>
+    </div>
+
+    <div class="grp done">Answered · we sent the last message</div>
+
+    <div class="row">
+      <div class="av">DA</div>
+      <div class="bd">
+        <div class="l1"><span class="nm">daniel</span><span class="city">DFW</span></div>
+        <div class="prev"><span class="who">You:</span> No problem — you're all set for Thursday. 👍</div>
+      </div>
+      <div class="right"><span class="chip none">replied 2h ago</span><span class="asg">Assigned · <b>Ryan</b></span></div>
+    </div>
+
+    <div class="row">
+      <div class="av">CU</div>
+      <div class="bd">
+        <div class="l1"><span class="nm">chimdike ulonnam</span><span class="city">ATL</span></div>
+        <div class="prev"><span class="who">You:</span> Template: Hi Chimdike, we have an update on your recent…</div>
+      </div>
+      <div class="right"><span class="chip none">template sent 5h ago</span><span class="asg">Assigned · <b>Deonna</b></span></div>
+    </div>
+  </div>
+
+  <div class="legend">
+    <div class="t">Indicator states</div>
+    <div class="lrow"><span class="chip g"><span class="dot"></span>3h</span> Customer waiting &lt; 12h — reply normally</div>
+    <div class="lrow"><span class="chip a"><span class="dot"></span>18h · window closing</span> 12–24h — free-reply window closing soon</div>
+    <div class="lrow"><span class="chip r"><span class="dot"></span>2d · window closed — template required</span> &gt; 24h — replying now needs the (billable) support_followup template</div>
+    <div class="lrow"><span class="chip none">replied 2h ago</span> We sent the last message — nothing owed</div>
+  </div>
+
+  <div class="note"><b>Behavior:</b> awaiting-reply threads group above answered ones and sort oldest-inbound-first, so the top of the list is always the person who's waited longest. Only an outbound message (reply or template) clears the flag — assigning or marking read never does. The "Awaiting reply" pill shows the live count so an operator can drive the queue to zero.</div>
+</div>
+</body>
+</html>
