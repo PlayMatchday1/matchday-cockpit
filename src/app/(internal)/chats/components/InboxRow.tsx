@@ -90,8 +90,10 @@ function assigneeLabel(
   a: InboxRowThread["assignee"],
 ): { text: string; assigned: boolean } {
   if (!a) return { text: "Unassigned", assigned: false };
-  const name = a.full_name?.trim() || a.email.split("@")[0];
-  return { text: name, assigned: true };
+  // First name only for the compact row (matches the mock's
+  // "Assigned · Deonna"); keeps the right column narrow.
+  const first = a.full_name?.trim().split(/\s+/)[0];
+  return { text: first || a.email.split("@")[0], assigned: true };
 }
 
 // Quiet answered-state label: "replied 2h ago" / "template sent 5h ago",
@@ -268,24 +270,30 @@ export default function InboxRow({
             )}
           </div>
         </div>
-        {/* RIGHT: one combined status chip, assignment beneath it. */}
-        <div className="flex max-w-[46%] shrink-0 flex-col items-end gap-1.5 text-right">
+        {/* RIGHT: one combined status chip, assignment beneath it.
+            shrink-0 with no max-width (mirrors the mock's `.right`): the
+            column sizes to the nowrap chip and the LEFT column absorbs
+            the rest, so the chip can never overflow leftward over the
+            name. */}
+        <div className="flex shrink-0 flex-col items-end gap-1.5 text-right">
           {awaiting && state && tierStyle ? (
             <span
               title={state.note || undefined}
-              className={`inline-block max-w-full whitespace-nowrap rounded-lg px-2 py-0.5 text-[10.5px] font-bold ${tierStyle.chip}`}
+              className={`whitespace-nowrap rounded-lg px-2 py-0.5 text-[10.5px] font-bold ${tierStyle.chip}`}
             >
               {chipText}
             </span>
           ) : answered ? (
-            <span className="text-[11px] text-deep-green/40">
+            <span className="whitespace-nowrap text-[11px] text-deep-green/40">
               {answeredLabel(thread, nowMs)}
             </span>
           ) : (
-            <span className="text-[12px] text-deep-green/45">{timeLabel}</span>
+            <span className="whitespace-nowrap text-[12px] text-deep-green/45">
+              {timeLabel}
+            </span>
           )}
           <span
-            className={`text-[11px] leading-tight ${
+            className={`whitespace-nowrap text-[11px] leading-tight ${
               asg.assigned ? "text-deep-green/60" : "text-deep-green/35"
             }`}
           >
