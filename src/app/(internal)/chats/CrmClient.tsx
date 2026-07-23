@@ -22,9 +22,8 @@
 //   ?threadId=…   — selected thread (drives center pane on
 //                   desktop; switches between full-screen list
 //                   and full-screen conversation on mobile)
-//   ?cities=A,B   — multi-select city filter
 //   ?view=…       — ticket status view: open (default, omitted) |
-//                   mine | starred | closed
+//                   awaiting | mine | starred | closed
 //
 // Realtime: postgres_changes on crm_threads (INSERT + UPDATE) and
 // crm_messages (INSERT + UPDATE — UPDATE added in PR #32 for
@@ -164,17 +163,6 @@ type ThreadDetail = {
   latest_inbound_at: string | null;
 };
 
-// One row of the lightweight all-threads index the server returns
-// alongside the list. Drives chip counts scoped to the selected
-// cities without refetching on every city toggle.
-type CountIndexRow = {
-  city: string;
-  status: "open" | "closed";
-  mine: boolean;
-  starred: boolean;
-  awaiting: boolean;
-};
-
 // ---------------- constants ----------------
 
 const WHATSAPP_WINDOW_MS = 24 * 60 * 60 * 1000;
@@ -239,12 +227,6 @@ export default function CrmClient() {
   const searchParams = useSearchParams();
 
   // --------- URL state ---------
-  const cityFilter = useMemo<Set<string>>(() => {
-    const raw = searchParams.get("cities");
-    if (!raw) return new Set();
-    return new Set(raw.split(",").filter((c) => c.length > 0));
-  }, [searchParams]);
-
   // Ticket-style status view (single-select). Defaults to Open — the
   // main inbox. Filtered server-side; changing it refetches.
   const view = useMemo<StatusFilter>(() => {
@@ -262,16 +244,10 @@ export default function CrmClient() {
   const selectedId = searchParams.get("threadId");
 
   const setFilters = useCallback(
-    (next: { cities?: Set<string>; view?: StatusFilter }) => {
+    (next: { view: StatusFilter }) => {
       const params = new URLSearchParams(searchParams.toString());
-      if (next.cities !== undefined) {
-        if (next.cities.size === 0) params.delete("cities");
-        else params.set("cities", [...next.cities].join(","));
-      }
-      if (next.view !== undefined) {
-        if (next.view === "open") params.delete("view");
-        else params.set("view", next.view);
-      }
+      if (next.view === "open") params.delete("view");
+      else params.set("view", next.view);
       const qs = params.toString();
       router.replace(qs ? `/chats?${qs}` : "/chats", { scroll: false });
     },
@@ -304,7 +280,6 @@ export default function CrmClient() {
     awaiting: 0,
   };
   const [counts, setCounts] = useState<ViewCounts>(ZERO_COUNTS);
-  const [countIndex, setCountIndex] = useState<CountIndexRow[]>([]);
 
   // The active view lives in the URL. loadThreads reads it through a
   // ref so its identity stays stable — the realtime subscription
@@ -403,11 +378,9 @@ export default function CrmClient() {
       const j = (await res.json()) as {
         threads: ThreadListRow[];
         counts?: ViewCounts;
-        index?: CountIndexRow[];
       };
       setThreads(j.threads);
       if (j.counts) setCounts(j.counts);
-      if (j.index) setCountIndex(j.index);
     } catch (err) {
       setThreadsError(err instanceof Error ? err.message : String(err));
     } finally {
@@ -767,8 +740,6 @@ export default function CrmClient() {
       (a, b) => Date.parse(b.last_message_at) - Date.parse(a.last_message_at),
     );
     return arr.filter((t) => {
-      if (cityFilter.size > 0 && !cityFilter.has(cityCodeForThread(t)))
-        return false;
       if (view === "starred" && !t.is_follow_up) return false;
       // The server already scopes the awaiting view, but realtime
       // patches can drop a fresh row in — keep it inbound-only here so
@@ -777,7 +748,7 @@ export default function CrmClient() {
         return false;
       return true;
     });
-  }, [threads, cityFilter, view]);
+  }, [threads, view]);
 
   const isAwaiting = (t: ThreadListRow) => isAwaitingReply(t);
 
@@ -838,23 +809,6 @@ export default function CrmClient() {
       ? [{ key: view, label: null, tone: "quiet", rows: visibleThreads }]
       : [];
   }, [visibleThreads, view]);
-
-  // Chip counts. The server sends global per-view counts plus a
-  // lightweight all-threads index. With no city selected we show the
-  // global counts; with cities selected we recompute scoped to those
-  // cities from the index (e.g. "Open + DFW" = open threads in DFW).
-  const displayedCounts = useMemo<ViewCounts>(() => {
-    if (cityFilter.size === 0) return counts;
-    const inCity = (r: CountIndexRow) => cityFilter.has(r.city);
-    return {
-      open: countIndex.filter((r) => r.status === "open" && inCity(r)).length,
-      mine: countIndex.filter((r) => r.mine && inCity(r)).length,
-      starred: countIndex.filter((r) => r.starred && inCity(r)).length,
-      closed: countIndex.filter((r) => r.status === "closed" && inCity(r))
-        .length,
-      awaiting: countIndex.filter((r) => r.awaiting && inCity(r)).length,
-    };
-  }, [counts, countIndex, cityFilter]);
 
   const selectedThread =
     visibleThreads.find((t) => t.id === selectedId) ??
@@ -1200,9 +1154,8 @@ export default function CrmClient() {
         visibleThreads={visibleThreads.length}
         realtimeOk={realtimeOk}
         onRefresh={() => void loadThreads()}
-        cities={cityFilter}
         view={view}
-        counts={displayedCounts}
+        counts={counts}
         onFilterChange={setFilters}
         canFilterMine={!!appUser?.id}
       />
@@ -1486,7 +1439,6 @@ function ChatsHeader({
   visibleThreads,
   realtimeOk,
   onRefresh,
-  cities,
   view,
   counts,
   onFilterChange,
@@ -1497,10 +1449,9 @@ function ChatsHeader({
   visibleThreads: number;
   realtimeOk: boolean | null;
   onRefresh: () => void;
-  cities: Set<string>;
   view: StatusFilter;
   counts: ViewCounts;
-  onFilterChange: (next: { cities?: Set<string>; view?: StatusFilter }) => void;
+  onFilterChange: (next: { view: StatusFilter }) => void;
   canFilterMine: boolean;
 }) {
   // Filter row defaults to visible. The icon collapses it when the
@@ -1509,7 +1460,7 @@ function ChatsHeader({
   // surprising filtered view. "Open" with no city is the default view,
   // so it does not count as an active filter.
   const [filtersOpen, setFiltersOpen] = useState(true);
-  const filtersActive = view !== "open" || cities.size > 0;
+  const filtersActive = view !== "open";
 
   const liveLabel =
     realtimeOk == null
@@ -1567,7 +1518,6 @@ function ChatsHeader({
       {/* Filter row */}
       {filtersOpen && (
         <FilterBar
-          cities={cities}
           view={view}
           counts={counts}
           onChange={onFilterChange}

@@ -164,11 +164,13 @@ export default function InboxRow({
   const timeLabel = timeAgoCompact(thread.last_message_at);
   const asg = assigneeLabel(thread.assignee);
 
-  // ONE combined chip: age + window state, e.g. "18h · window closing",
-  // "4d · window closed — template required", or just "1m" when fresh.
+  // ONE combined chip, kept to a single line in the narrow list: age +
+  // the SHORT qualifier, e.g. "18h · closing", "5d · template required",
+  // or just "1m" when fresh. The full wording ("window closed — template
+  // required") rides in the chip's title tooltip.
   const chipText = state
-    ? state.note
-      ? `${state.ageLabel} · ${state.note}`
+    ? state.shortNote
+      ? `${state.ageLabel} · ${state.shortNote}`
       : state.ageLabel
     : null;
 
@@ -270,7 +272,8 @@ export default function InboxRow({
         <div className="flex max-w-[46%] shrink-0 flex-col items-end gap-1.5 text-right">
           {awaiting && state && tierStyle ? (
             <span
-              className={`inline-block max-w-full rounded-lg px-2 py-0.5 text-[10.5px] font-bold leading-snug ${tierStyle.chip}`}
+              title={state.note || undefined}
+              className={`inline-block max-w-full whitespace-nowrap rounded-lg px-2 py-0.5 text-[10.5px] font-bold ${tierStyle.chip}`}
             >
               {chipText}
             </span>

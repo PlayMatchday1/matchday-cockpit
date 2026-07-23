@@ -29,9 +29,17 @@ export type AwaitingState = {
   ageHours: number;
   // Compact age for the row chip: "45m", "18h", "2d".
   ageLabel: string;
-  // Short qualifier shown after the age on amber/red chips. Empty for
-  // fresh (the age alone reads fine).
+  // Full qualifier — used in tooltips and wider surfaces.
+  //   closing → "window closing"
+  //   closed  → "window closed — template required"
+  //   fresh   → "" (age alone reads fine)
   note: string;
+  // One-line qualifier for the narrow list chip, so the combined
+  // "age · note" never wraps and crushes the name.
+  //   closing → "closing"
+  //   closed  → "template required"
+  //   fresh   → ""
+  shortNote: string;
 };
 
 // Compact, human age. Minutes under an hour, hours up to two days (so a
@@ -93,10 +101,17 @@ export function awaitingReplyState(
       ageHours,
       ageLabel,
       note: "window closed — template required",
+      shortNote: "template required",
     };
   }
   if (ageHours >= AWAITING_WINDOW_CLOSING_HOURS) {
-    return { tier: "closing", ageHours, ageLabel, note: "window closing" };
+    return {
+      tier: "closing",
+      ageHours,
+      ageLabel,
+      note: "window closing",
+      shortNote: "closing",
+    };
   }
-  return { tier: "fresh", ageHours, ageLabel, note: "" };
+  return { tier: "fresh", ageHours, ageLabel, note: "", shortNote: "" };
 }

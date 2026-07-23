@@ -24,6 +24,7 @@ test("fresh: under 12h replies normally, no note", () => {
     const s = awaitingReplyState(hoursAgo(h), NOW);
     assert.equal(s.tier, "fresh", `${h}h should be fresh`);
     assert.equal(s.note, "");
+    assert.equal(s.shortNote, "");
   }
 });
 
@@ -32,6 +33,7 @@ test("closing: 12h up to (not incl.) 24h", () => {
     const s = awaitingReplyState(hoursAgo(h), NOW);
     assert.equal(s.tier, "closing", `${h}h should be closing`);
     assert.equal(s.note, "window closing");
+    assert.equal(s.shortNote, "closing");
   }
 });
 
@@ -40,7 +42,16 @@ test("closed: 24h and beyond needs the template", () => {
     const s = awaitingReplyState(hoursAgo(h), NOW);
     assert.equal(s.tier, "closed", `${h}h should be closed`);
     assert.equal(s.note, "window closed — template required");
+    assert.equal(s.shortNote, "template required");
   }
+});
+
+test("short note keeps the list chip to one line: 'age · shortNote'", () => {
+  // The compact list label — the full note lives in the chip tooltip.
+  const closed = awaitingReplyState(hoursAgo(120), NOW); // 5d
+  assert.equal(`${closed.ageLabel} · ${closed.shortNote}`, "5d · template required");
+  const closing = awaitingReplyState(hoursAgo(18), NOW);
+  assert.equal(`${closing.ageLabel} · ${closing.shortNote}`, "18h · closing");
 });
 
 test("boundaries are inclusive at the top (urgency surfaces sooner)", () => {
