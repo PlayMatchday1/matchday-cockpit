@@ -67,35 +67,22 @@ function cityForRow(t: InboxRowThread): string | null {
   return t.player?.preferable_city_normalized ?? null;
 }
 
-// Per-tier visual tokens for the awaiting chip + left edge. Green =
-// fresh, amber = free-reply window closing, red = window closed
-// (template required to reply).
-const TIER_STYLE: Record<
-  AwaitingTier,
-  { edge: string; chip: string; dot: string; rowBg: string; note: string }
-> = {
+// Per-tier visual tokens for the combined awaiting chip + left edge.
+// Green = fresh, amber = free-reply window closing, red = window closed
+// (template required to reply). The closed tier also washes the whole
+// row faintly warm (applied in buttonBg below).
+const TIER_STYLE: Record<AwaitingTier, { edge: string; chip: string }> = {
   fresh: {
     edge: "bg-mint",
     chip: "bg-mint-soft text-deep-green",
-    dot: "bg-mint",
-    rowBg: "",
-    note: "",
   },
   closing: {
     edge: "bg-amber-400",
     chip: "bg-amber-50 text-amber-700 border border-amber-200",
-    dot: "bg-amber-400",
-    rowBg: "",
-    note: "text-amber-700",
   },
   closed: {
     edge: "bg-red-500",
     chip: "bg-red-50 text-red-700 border border-red-200",
-    dot: "bg-red-500",
-    // Faint warm wash so the past-window rows read as urgent even
-    // before the chip is read.
-    rowBg: "bg-red-50/40",
-    note: "text-red-700 font-semibold",
   },
 };
 
@@ -107,11 +94,12 @@ function assigneeLabel(
   return { text: name, assigned: true };
 }
 
-// Quiet answered-state label: "replied 2h ago" / "template sent 5h ago".
+// Quiet answered-state label: "replied 2h ago" / "template sent 5h ago",
+// and "replied just now" for the first minute (never "replied now ago").
 function answeredLabel(t: InboxRowThread, nowMs: number): string {
   const age = awaitingAgeLabel(t.last_message_at, nowMs);
   const verb = t.last_message_is_template ? "template sent" : "replied";
-  return `${verb} ${age} ago`;
+  return age === "now" ? `${verb} just now` : `${verb} ${age} ago`;
 }
 
 // Compact timestamp: "now", "5m", "3h", "2d", or a M/D date.
@@ -176,10 +164,13 @@ export default function InboxRow({
   const timeLabel = timeAgoCompact(thread.last_message_at);
   const asg = assigneeLabel(thread.assignee);
 
-  const metaBits: string[] = [];
-  if (city) metaBits.push(city);
-  if (isMember) metaBits.push("Member");
-  if (thread.match_ambiguous) metaBits.push("Historical");
+  // ONE combined chip: age + window state, e.g. "18h · window closing",
+  // "4d · window closed — template required", or just "1m" when fresh.
+  const chipText = state
+    ? state.note
+      ? `${state.ageLabel} · ${state.note}`
+      : state.ageLabel
+    : null;
 
   const buttonBg = active
     ? "bg-cream-soft"
@@ -219,46 +210,45 @@ export default function InboxRow({
         type="button"
         onClick={onSelect}
         style={{ touchAction: "manipulation" }}
-        className={`flex min-w-0 flex-1 items-center gap-3 py-3 pr-11 text-left transition ${
-          selectable ? "pl-2" : "pl-3 sm:pl-4"
+        className={`flex min-w-0 flex-1 items-start gap-3 py-3.5 pr-10 text-left transition ${
+          selectable ? "pl-2" : "pl-3.5 sm:pl-4"
         } ${buttonBg}`}
       >
         <span
           aria-hidden
-          className="flex h-11 w-11 shrink-0 items-center justify-center rounded-full bg-cream-line text-[13px] font-medium text-muted"
+          className="mt-0.5 flex h-11 w-11 shrink-0 items-center justify-center rounded-full bg-cream-line text-[13px] font-medium text-muted"
         >
           {initials}
         </span>
+        {/* LEFT: name + city on line 1, preview on line 2. The name owns
+            the row's left width — chips live in the right column, so the
+            name is never truncated to make room for them. */}
         <div className="min-w-0 flex-1">
-          <div className="flex items-baseline justify-between gap-2">
+          <div className="flex min-w-0 items-center gap-1.5">
             <span
               className={`min-w-0 truncate text-[15px] text-deep-green ${
-                thread.is_unread ? "font-medium" : "font-normal"
+                thread.is_unread ? "font-semibold" : "font-medium"
               }`}
             >
               {name}
             </span>
-            {awaiting && state && tierStyle ? (
-              <span
-                className={`inline-flex shrink-0 items-center gap-1 rounded-full px-2 py-0.5 text-[10.5px] font-bold ${tierStyle.chip}`}
-              >
-                <span
-                  aria-hidden
-                  className={`h-1.5 w-1.5 rounded-full ${tierStyle.dot}`}
-                />
-                {state.ageLabel}
+            {city && (
+              <span className="shrink-0 rounded bg-mint-soft px-1.5 py-px text-[10px] font-bold tracking-wide text-deep-green/70">
+                {city}
               </span>
-            ) : answered ? (
-              <span className="shrink-0 text-[11px] text-deep-green/40">
-                {answeredLabel(thread, nowMs)}
+            )}
+            {isMember && (
+              <span className="shrink-0 text-[10px] font-semibold text-mint-hover">
+                Member
               </span>
-            ) : (
-              <span className="shrink-0 text-[12px] text-deep-green/45">
-                {timeLabel}
+            )}
+            {thread.match_ambiguous && (
+              <span className="shrink-0 text-[10px] text-deep-green/35">
+                Historical
               </span>
             )}
           </div>
-          <div className="mt-0.5 flex items-center justify-between gap-2">
+          <div className="mt-1 flex items-center gap-2">
             <span
               className={`min-w-0 truncate text-[13px] ${
                 thread.is_unread
@@ -275,35 +265,35 @@ export default function InboxRow({
               />
             )}
           </div>
-          <div className="mt-1 flex items-center gap-1.5 truncate text-[11px] text-deep-green/45">
-            {state?.note && tierStyle && (
-              <>
-                <span className={`shrink-0 ${tierStyle.note}`}>
-                  {state.note}
-                </span>
-                <span aria-hidden className="text-deep-green/25">
-                  ·
-                </span>
-              </>
-            )}
+        </div>
+        {/* RIGHT: one combined status chip, assignment beneath it. */}
+        <div className="flex max-w-[46%] shrink-0 flex-col items-end gap-1.5 text-right">
+          {awaiting && state && tierStyle ? (
             <span
-              className={
-                asg.assigned
-                  ? "shrink-0 text-deep-green/60"
-                  : "shrink-0 text-deep-green/35"
-              }
+              className={`inline-block max-w-full rounded-lg px-2 py-0.5 text-[10.5px] font-bold leading-snug ${tierStyle.chip}`}
             >
-              {asg.assigned ? `Assigned · ${asg.text}` : "Unassigned"}
+              {chipText}
             </span>
-            {metaBits.length > 0 && (
+          ) : answered ? (
+            <span className="text-[11px] text-deep-green/40">
+              {answeredLabel(thread, nowMs)}
+            </span>
+          ) : (
+            <span className="text-[12px] text-deep-green/45">{timeLabel}</span>
+          )}
+          <span
+            className={`text-[11px] leading-tight ${
+              asg.assigned ? "text-deep-green/60" : "text-deep-green/35"
+            }`}
+          >
+            {asg.assigned ? (
               <>
-                <span aria-hidden className="text-deep-green/25">
-                  ·
-                </span>
-                <span className="truncate">{metaBits.join(" · ")}</span>
+                Assigned · <span className="font-semibold">{asg.text}</span>
               </>
+            ) : (
+              "Unassigned"
             )}
-          </div>
+          </span>
         </div>
       </button>
       {/* Follow-up star — a sibling button (not nested in the select

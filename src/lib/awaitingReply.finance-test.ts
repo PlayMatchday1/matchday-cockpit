@@ -9,6 +9,8 @@ import { test } from "node:test";
 import {
   awaitingReplyState,
   awaitingAgeLabel,
+  isAwaitingReply,
+  isFreshThreadUpdate,
   AWAITING_WINDOW_CLOSING_HOURS,
   AWAITING_WINDOW_CLOSED_HOURS,
 } from "./awaitingReply";
@@ -71,6 +73,55 @@ test("age labels: minutes, hours (legible past 24h), then days", () => {
   assert.equal(awaitingAgeLabel(hoursAgo(27), NOW), "27h");
   assert.equal(awaitingAgeLabel(hoursAgo(48), NOW), "2d");
   assert.equal(awaitingAgeLabel(hoursAgo(72), NOW), "3d");
+});
+
+// ---------------------------------------------------------------
+// Clearing rule: an OUTBOUND message flips a thread out of awaiting.
+// This is the bug the +15127432386 thread hit — a reply updated the
+// preview but the row stayed in the green Awaiting group.
+// ---------------------------------------------------------------
+
+const awaitingThread = {
+  status: "open" as const,
+  last_message_direction: "inbound" as const,
+};
+
+test("an operator reply (outbound) clears the awaiting indicator", () => {
+  assert.equal(isAwaitingReply(awaitingThread), true, "inbound-last is awaiting");
+  // Apply the outbound patch the way onSent does.
+  const afterReply = { ...awaitingThread, last_message_direction: "outbound" as const };
+  assert.equal(
+    isAwaitingReply(afterReply),
+    false,
+    "after our reply the thread must be Answered, not Awaiting",
+  );
+});
+
+test("only status=open + inbound is awaiting", () => {
+  assert.equal(isAwaitingReply({ status: "open", last_message_direction: "inbound" }), true);
+  assert.equal(isAwaitingReply({ status: "open", last_message_direction: "outbound" }), false);
+  assert.equal(isAwaitingReply({ status: "open", last_message_direction: null }), false);
+  // A closed thread is never awaiting, even if the customer spoke last.
+  assert.equal(isAwaitingReply({ status: "closed", last_message_direction: "inbound" }), false);
+});
+
+test("a stale realtime payload can't revert a fresher reply", () => {
+  // The reply landed at 00:52; a delayed crm_threads event from the
+  // 00:48 inbound must be ignored so it can't drag the row back to
+  // Awaiting.
+  const replyAt = "2026-07-23T00:52:45Z";
+  const staleInboundAt = "2026-07-23T00:48:11Z";
+  assert.equal(isFreshThreadUpdate(replyAt, staleInboundAt), false, "older event is stale");
+  assert.equal(isFreshThreadUpdate(staleInboundAt, replyAt), true, "newer event applies");
+  // Equal timestamps (e.g. an assign event carrying the same
+  // last_message_at) still apply.
+  assert.equal(isFreshThreadUpdate(replyAt, replyAt), true);
+});
+
+test("missing/unparseable incoming timestamp never blocks an update", () => {
+  assert.equal(isFreshThreadUpdate("2026-07-23T00:52:45Z", null), true);
+  assert.equal(isFreshThreadUpdate("2026-07-23T00:52:45Z", undefined), true);
+  assert.equal(isFreshThreadUpdate("2026-07-23T00:52:45Z", "garbage"), true);
 });
 
 test("unparseable / future timestamps degrade to fresh, never crash", () => {

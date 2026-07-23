@@ -66,6 +66,7 @@ import FilterBar, {
   type ViewCounts,
 } from "./components/FilterBar";
 import InboxRow, { type InboxRowThread } from "./components/InboxRow";
+import { isAwaitingReply, isFreshThreadUpdate } from "@/lib/awaitingReply";
 import AssignDropdown from "./components/AssignDropdown";
 import MessageBubble, {
   type ConversationMessage,
@@ -127,6 +128,9 @@ type Message = {
   channel: CrmChannel;
   delivery_status: DeliveryStatus;
   delivery_status_updated_at: string | null;
+  // Set for WhatsApp template sends (crm_messages.template_name, 0067).
+  // Lets a realtime INSERT mark the thread "template sent" vs "replied".
+  template_name?: string | null;
   sender?: { email: string; full_name: string | null } | null;
   // Media columns. media_url (Storage path) is stripped by the
   // detail route; clients receive the short-lived signed_media_url
@@ -602,13 +606,17 @@ export default function CrmClient() {
                     ...t,
                     last_message_at: m.sent_at,
                     last_message_preview: m.body.slice(0, 80),
+                    // AUTHORITATIVE source of awaiting state. crm_messages
+                    // realtime always carries `direction` (+ template_name),
+                    // established columns unaffected by the 0071 realtime
+                    // schema-cache lag that can strip the denormalized
+                    // crm_threads columns. Every last_message change is
+                    // driven by a message insert, so owning direction here
+                    // means the indicator is always correct without
+                    // trusting the crm_threads UPDATE payload.
                     last_message_direction: m.direction,
-                    // A new inbound is never a template; an outbound
-                    // template's flag is corrected authoritatively by the
-                    // crm_threads UPDATE handler below (it carries the
-                    // denormalized column). is_template only affects the
-                    // answered label, so a brief inbound=false is safe.
-                    last_message_is_template: false,
+                    last_message_is_template:
+                      m.direction === "outbound" && !!m.template_name,
                   }
                 : t,
             ),
@@ -655,18 +663,26 @@ export default function CrmClient() {
               scheduleReload();
               return prev;
             }
+            // Ignore stale / out-of-order events: an older last_message_at
+            // than what we already hold would revert a fresher reply.
+            if (!isFreshThreadUpdate(exists.last_message_at, t.last_message_at)) {
+              return prev;
+            }
             return prev.map((x) =>
               x.id === t.id
                 ? {
                     ...x,
                     last_message_at: t.last_message_at,
                     last_message_preview: t.last_message_preview,
-                    // Authoritative awaiting state — the denormalized
-                    // columns ride on the realtime row, so a reply
-                    // (outbound) clears the indicator live and an inbound
-                    // raises it, without a refetch.
-                    last_message_direction: t.last_message_direction,
-                    last_message_is_template: t.last_message_is_template,
+                    // Deliberately does NOT touch last_message_direction /
+                    // last_message_is_template. Supabase's realtime schema
+                    // cache can lag an ALTER TABLE ADD COLUMN and deliver
+                    // these as undefined, which is exactly what left a
+                    // replied thread stuck in Awaiting. The crm_messages
+                    // INSERT handler above owns those fields from the
+                    // always-present message row; a last_message change is
+                    // always accompanied by a message insert, so this
+                    // handler never needs to set them.
                     match_ambiguous: t.match_ambiguous,
                     player_id: t.player_id,
                     assigned_to_user_id: t.assigned_to_user_id,
@@ -763,8 +779,7 @@ export default function CrmClient() {
     });
   }, [threads, cityFilter, view]);
 
-  const isAwaiting = (t: ThreadListRow) =>
-    t.status === "open" && t.last_message_direction === "inbound";
+  const isAwaiting = (t: ThreadListRow) => isAwaitingReply(t);
 
   // Render groups. In the Open / Mine views threads split into
   // "Awaiting reply" (customer spoke last, oldest first = longest
@@ -772,7 +787,13 @@ export default function CrmClient() {
   // first). The Awaiting view is a single awaiting group; every other
   // view is one ungrouped list in its existing order.
   const threadGroups = useMemo<
-    { key: string; label: string | null; tone: "await" | "quiet"; rows: ThreadListRow[] }[]
+    {
+      key: string;
+      label: string | null;
+      hint?: string;
+      tone: "await" | "quiet";
+      rows: ThreadListRow[];
+    }[]
   >(() => {
     const byOldest = (a: ThreadListRow, b: ThreadListRow) =>
       Date.parse(a.last_message_at) - Date.parse(b.last_message_at);
@@ -783,6 +804,7 @@ export default function CrmClient() {
       const groups: {
         key: string;
         label: string | null;
+        hint?: string;
         tone: "await" | "quiet";
         rows: ThreadListRow[];
       }[] = [];
@@ -790,13 +812,15 @@ export default function CrmClient() {
         groups.push({
           key: "awaiting",
           label: `Awaiting reply · ${awaiting.length}`,
+          hint: "The customer sent the last message — oldest waiting on top.",
           tone: "await",
           rows: awaiting,
         });
       if (answered.length > 0)
         groups.push({
           key: "answered",
-          label: "Answered · we sent the last message",
+          label: "Answered",
+          hint: "We sent the last message — nothing owed.",
           tone: "quiet",
           rows: answered,
         });
@@ -908,10 +932,14 @@ export default function CrmClient() {
                 ...t,
                 last_message_at: msg.sent_at,
                 last_message_preview: msg.body.slice(0, 80),
-                last_message_direction: msg.direction,
+                // onSent fires only after an operator's OWN send, so the
+                // last message is unambiguously outbound — hardcode it
+                // rather than trust msg.direction being populated. This
+                // is the synchronous, realtime-independent clear of the
+                // awaiting indicator.
+                last_message_direction: "outbound",
                 // Optimistic: assume a normal reply; a template send's
                 // flag is reconciled by the crm_threads realtime UPDATE.
-                // Either way this outbound clears the awaiting indicator.
                 last_message_is_template: false,
               }
             : t,
@@ -1217,10 +1245,11 @@ export default function CrmClient() {
                 <div key={g.key}>
                   {g.label && (
                     <div
-                      className={`px-4 py-1.5 text-[10.5px] font-bold uppercase tracking-wide ${
+                      title={g.hint}
+                      className={`flex items-center gap-1 px-4 py-1 text-[10px] font-semibold uppercase tracking-[0.08em] ${
                         g.tone === "await"
-                          ? "bg-red-50/60 text-red-700"
-                          : "bg-cream-soft/60 text-deep-green/45"
+                          ? "bg-red-50/50 text-red-700/90"
+                          : "bg-cream-soft/50 text-deep-green/40"
                       }`}
                     >
                       {g.label}

@@ -49,6 +49,32 @@ export function awaitingAgeLabel(fromIso: string, nowMs: number): string {
   return `${Math.floor(diffMs / (24 * HOUR_MS))}d`;
 }
 
+// A thread is awaiting OUR reply when it is open and the customer sent
+// the last message. This is the single source of truth for the
+// grouping, the row indicator, and the awaiting count — used by both
+// the render and the realtime reconciliation so they can never drift.
+export function isAwaitingReply(t: {
+  status: "open" | "closed";
+  last_message_direction: "inbound" | "outbound" | null;
+}): boolean {
+  return t.status === "open" && t.last_message_direction === "inbound";
+}
+
+// Guard against stale / out-of-order realtime crm_threads events
+// reverting a newer state. Returns true only when the incoming row is
+// at least as recent as the copy we already hold. A missing/unparseable
+// incoming timestamp is treated as "apply" (never block on bad data).
+export function isFreshThreadUpdate(
+  existingLastAt: string,
+  incomingLastAt: string | null | undefined,
+): boolean {
+  if (!incomingLastAt) return true;
+  const a = Date.parse(existingLastAt);
+  const b = Date.parse(incomingLastAt);
+  if (Number.isNaN(a) || Number.isNaN(b)) return true;
+  return b >= a;
+}
+
 // Escalation tier for an unanswered inbound of the given age. Boundaries
 // are inclusive at the top: exactly 12h is already "closing", exactly
 // 24h is already "closed" — erring toward surfacing urgency sooner.
