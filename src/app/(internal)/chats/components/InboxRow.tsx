@@ -278,7 +278,6 @@ export default function InboxRow({
         <div className="flex shrink-0 flex-col items-end gap-1.5 text-right">
           {awaiting && state && tierStyle ? (
             <span
-              title={state.note || undefined}
               className={`whitespace-nowrap rounded-lg px-2 py-0.5 text-[10.5px] font-bold ${tierStyle.chip}`}
             >
               {chipText}

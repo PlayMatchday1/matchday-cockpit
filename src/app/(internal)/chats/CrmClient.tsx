@@ -810,6 +810,24 @@ export default function CrmClient() {
       : [];
   }, [visibleThreads, view]);
 
+  // Stability guard for clicks. Rows move between the Awaiting and
+  // Answered groups as realtime events land; if a row relocates in the
+  // window between pointer-down and pointer-up, the browser's click
+  // never completes and the tap appears to do nothing. While the
+  // pointer is held down over the list we render a frozen snapshot of
+  // the groups so nothing reorders under the finger; the live groups
+  // resume (and reconcile any changes that arrived meanwhile) on
+  // release. Selection/unread still update live — only row ORDER is
+  // pinned, keyed by thread id.
+  const [frozenGroups, setFrozenGroups] = useState<
+    typeof threadGroups | null
+  >(null);
+  const renderGroups = frozenGroups ?? threadGroups;
+  const freezeGroups = useCallback(() => {
+    setFrozenGroups((prev) => prev ?? threadGroups);
+  }, [threadGroups]);
+  const thawGroups = useCallback(() => setFrozenGroups(null), []);
+
   const selectedThread =
     visibleThreads.find((t) => t.id === selectedId) ??
     threads.find((t) => t.id === selectedId) ??
@@ -1167,7 +1185,13 @@ export default function CrmClient() {
             showInboxMobile ? "flex flex-1" : "hidden lg:flex"
           }`}
         >
-          <div className="flex flex-1 flex-col overflow-y-auto overflow-x-hidden">
+          <div
+            className="flex flex-1 flex-col overflow-y-auto overflow-x-hidden"
+            onPointerDown={freezeGroups}
+            onPointerUp={thawGroups}
+            onPointerCancel={thawGroups}
+            onPointerLeave={thawGroups}
+          >
             {bulkSelectable && visibleThreads.length > 0 && (
               <BulkSelectBar
                 selectedCount={selectedIds.size}
@@ -1194,18 +1218,28 @@ export default function CrmClient() {
                 </div>
               )}
             {visibleThreads.length > 0 &&
-              threadGroups.map((g) => (
+              renderGroups.map((g) => (
                 <div key={g.key}>
                   {g.label && (
                     <div
-                      title={g.hint}
-                      className={`flex items-center gap-1 px-4 py-1 text-[10px] font-semibold uppercase tracking-[0.08em] ${
+                      className={`group relative flex items-center gap-1 px-4 py-1 text-[10px] font-semibold uppercase tracking-[0.08em] ${
                         g.tone === "await"
                           ? "bg-red-50/50 text-red-700/90"
                           : "bg-cream-soft/50 text-deep-green/40"
                       }`}
                     >
-                      {g.label}
+                      <span>{g.label}</span>
+                      {g.hint && (
+                        // Anchored above the header text, pointer-events
+                        // none — it can neither overlay the rows below nor
+                        // intercept a click on them.
+                        <span
+                          role="tooltip"
+                          className="pointer-events-none absolute bottom-full left-4 z-30 mb-1 hidden whitespace-nowrap rounded-md bg-deep-green px-2 py-1 text-[10px] font-medium normal-case tracking-normal text-cream shadow-md group-hover:block"
+                        >
+                          {g.hint}
+                        </span>
+                      )}
                     </div>
                   )}
                   <ul className="divide-y divide-cream-line">
