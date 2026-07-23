@@ -298,7 +298,13 @@ export async function POST(req: Request) {
   const preview = previewFor(kind, caption, filename);
   const upd = await supabase
     .from("crm_threads")
-    .update({ last_message_at: nowIso, last_message_preview: preview })
+    .update({
+      last_message_at: nowIso,
+      last_message_preview: preview,
+      // Outbound media = we spoke last → answered. Not a template send.
+      last_message_direction: "outbound",
+      last_message_is_template: false,
+    })
     .eq("id", threadId);
   if (upd.error) {
     console.error("[crm:send-media] thread update failed", upd.error);

@@ -18,13 +18,20 @@
 import { KNOWN_CITY_CODES, HIDDEN_CITY_CODES } from "@/lib/cityNormalization";
 import { UNKNOWN_CITY } from "@/lib/cityColors";
 
-export type StatusFilter = "open" | "mine" | "starred" | "closed";
+export type StatusFilter =
+  | "open"
+  | "awaiting"
+  | "mine"
+  | "starred"
+  | "closed";
 
 export type ViewCounts = {
   open: number;
   mine: number;
   starred: number;
   closed: number;
+  // Open threads where the customer sent the last message.
+  awaiting: number;
 };
 
 const ALL_CITY_CODES: readonly string[] = [
@@ -60,6 +67,13 @@ export default function FilterBar({
           onClick={() => onChange({ view: "open" })}
           label="Open"
           count={counts.open}
+        />
+        <FilterPill
+          active={view === "awaiting"}
+          onClick={() => onChange({ view: "awaiting" })}
+          label="Awaiting reply"
+          count={counts.awaiting}
+          tone="alert"
         />
         <FilterPill
           active={view === "mine"}
@@ -100,6 +114,7 @@ function FilterPill({
   label,
   disabled,
   count,
+  tone = "default",
 }: {
   active: boolean;
   onClick: () => void;
@@ -107,23 +122,41 @@ function FilterPill({
   disabled?: boolean;
   // When provided and > 0, rendered as a "(N)" suffix (capped 99+).
   count?: number;
+  // "alert" tints the pill red — used by Awaiting reply so an operator
+  // driving the queue to zero can spot it. The count badge stays red
+  // even when the pill is inactive, so the backlog reads at a glance.
+  tone?: "default" | "alert";
 }) {
   const showCount = typeof count === "number" && count > 0;
   const countLabel = showCount ? (count > 99 ? "99+" : String(count)) : null;
+  const alert = tone === "alert";
+  const base = alert
+    ? active
+      ? "bg-red-600 text-white"
+      : "border border-red-300 bg-transparent text-red-700 hover:bg-red-50"
+    : active
+      ? "bg-deep-green text-cream"
+      : "border border-deep-green/20 bg-transparent text-deep-green/70 hover:bg-cream-soft";
   return (
     <button
       type="button"
       onClick={onClick}
       disabled={disabled}
       style={{ touchAction: "manipulation" }}
-      className={`shrink-0 rounded-full px-3 py-1 text-xs font-medium transition disabled:opacity-40 ${
-        active
-          ? "bg-deep-green text-cream"
-          : "border border-deep-green/20 bg-transparent text-deep-green/70 hover:bg-cream-soft"
-      }`}
+      className={`shrink-0 rounded-full px-3 py-1 text-xs font-medium transition disabled:opacity-40 ${base}`}
     >
       {label}
-      {countLabel && <span className="ml-1 tabular-nums">({countLabel})</span>}
+      {countLabel && (
+        <span
+          className={`ml-1 tabular-nums ${
+            alert && !active
+              ? "rounded-full bg-red-100 px-1.5 text-red-700"
+              : ""
+          }`}
+        >
+          {alert && !active ? countLabel : `(${countLabel})`}
+        </span>
+      )}
     </button>
   );
 }

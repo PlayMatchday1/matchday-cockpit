@@ -1,22 +1,26 @@
-// GET /api/crm/threads?view=open|mine|starred|closed
+// GET /api/crm/threads?view=open|mine|starred|closed|awaiting
 //
 // Ticket-style inbox. The active `view` is filtered SERVER-SIDE (the
 // list is no longer a rolling 50-row window the client re-filters):
-//   open    → status = 'open'
-//   mine    → status = 'open' AND assigned_to_user_id = viewer
-//   starred → viewer-starred threads, ANY status (open or closed)
-//   closed  → status = 'closed'
-// Default (missing / unknown param) is 'open'.
+//   open     → status = 'open'
+//   mine     → status = 'open' AND assigned_to_user_id = viewer
+//   starred  → viewer-starred threads, ANY status (open or closed)
+//   closed   → status = 'closed'
+//   awaiting → status = 'open' AND last_message_direction = 'inbound'
+//              (customer spoke last), oldest first = longest waiting.
+// Default (missing / unknown param) is 'open'. The open/mine lists are
+// ordered awaiting-first so the client's Awaiting/Answered grouping is
+// stable within the row cap.
 //
 // The list is capped at LIST_LIMIT most-recent threads for the view.
 // City filtering stays client-side (rows carry the player city) so
 // toggling a city chip does not re-hit the server.
 //
 // Response:
-//   { threads: ThreadListRow[],       // active view, newest first
-//     counts:  { open, mine, starred, closed },   // global, server-side
-//     index:   Array<{ city, status, mine, starred }> }  // for city-
-//                                         // scoped counts on the client
+//   { threads: ThreadListRow[],       // active view, ordered per above
+//     counts:  { open, mine, starred, closed, awaiting },  // global
+//     index:   Array<{ city, status, mine, starred, awaiting }> }
+//                                         // for city-scoped counts
 //
 // counts are the global per-view totals. The client displays them
 // directly when no city is selected, and recomputes city-scoped counts
@@ -35,15 +39,21 @@ export const maxDuration = 10;
 const LIST_LIMIT = 100;
 const INDEX_PAGE = 1000;
 
-type ViewFilter = "open" | "mine" | "starred" | "closed";
+type ViewFilter = "open" | "mine" | "starred" | "closed" | "awaiting";
 
 function parseView(raw: string | null): ViewFilter {
-  if (raw === "mine" || raw === "starred" || raw === "closed") return raw;
+  if (
+    raw === "mine" ||
+    raw === "starred" ||
+    raw === "closed" ||
+    raw === "awaiting"
+  )
+    return raw;
   return "open";
 }
 
 const THREAD_COLS =
-  "id, phone_number, player_id, match_ambiguous, last_message_at, last_message_preview, created_at, assigned_to_user_id, assigned_at, channel, status, closed_at, closed_by_user_id";
+  "id, phone_number, player_id, match_ambiguous, last_message_at, last_message_preview, last_message_direction, last_message_is_template, created_at, assigned_to_user_id, assigned_at, channel, status, closed_at, closed_by_user_id";
 
 type ThreadRow = {
   id: string;
@@ -52,6 +62,11 @@ type ThreadRow = {
   match_ambiguous: boolean;
   last_message_at: string;
   last_message_preview: string | null;
+  // Denormalized on crm_threads (migration 0071). 'inbound' = customer
+  // spoke last → awaiting our reply; 'outbound' = we spoke last →
+  // answered. Replaces the former per-thread N+1 lookup.
+  last_message_direction: "inbound" | "outbound" | null;
+  last_message_is_template: boolean;
   created_at: string;
   assigned_to_user_id: string | null;
   assigned_at: string | null;
@@ -121,13 +136,33 @@ export async function GET(req: Request) {
       q = q.eq("status", "closed");
     } else if (view === "mine") {
       q = q.eq("status", "open").eq("assigned_to_user_id", viewerId!);
+    } else if (view === "awaiting") {
+      // Awaiting = open threads where the customer spoke last.
+      q = q.eq("status", "open").eq("last_message_direction", "inbound");
     } else {
       // starred — any status, restricted to the viewer's star set.
       q = q.in("id", Array.from(starredThreadIds));
     }
-    const listRes = await q
-      .order("last_message_at", { ascending: false })
-      .limit(LIST_LIMIT);
+
+    // Ordering:
+    //   awaiting          → oldest inbound first (longest waiting on top).
+    //   open / mine       → awaiting rows first ('inbound' sorts before
+    //                       'outbound'), so they can never be pushed past
+    //                       the LIST_LIMIT cap by fresher answered
+    //                       threads; the client then splits them into the
+    //                       Awaiting / Answered groups and sorts each.
+    //   starred / closed  → most-recent first (unchanged).
+    if (view === "awaiting") {
+      q = q.order("last_message_at", { ascending: true });
+    } else if (view === "open" || view === "mine") {
+      q = q
+        .order("last_message_direction", { ascending: true, nullsFirst: false })
+        .order("last_message_at", { ascending: false });
+    } else {
+      q = q.order("last_message_at", { ascending: false });
+    }
+
+    const listRes = await q.limit(LIST_LIMIT);
     if (listRes.error) {
       console.error("[crm:threads.list] db error", listRes.error);
       return Response.json({ error: "DB error" }, { status: 500 });
@@ -184,24 +219,9 @@ export async function GET(req: Request) {
     }
   }
 
-  // Latest-message direction per visible thread. One bounded .limit(1)
-  // query per thread (capped at LIST_LIMIT). Switch to a view or a
-  // denormalized column if this shows up in slow logs.
-  const directionResults = await Promise.all(
-    threads.map(async (t) => {
-      const r = await supabase
-        .from("crm_messages")
-        .select("direction")
-        .eq("thread_id", t.id)
-        .order("sent_at", { ascending: false })
-        .limit(1)
-        .maybeSingle();
-      return [t.id, r.data?.direction ?? null] as const;
-    }),
-  );
-  const directionByThreadId = new Map<string, "inbound" | "outbound" | null>(
-    directionResults,
-  );
+  // Latest-message direction now reads straight off the denormalized
+  // crm_threads.last_message_direction column (migration 0071),
+  // replacing the former per-thread N+1 into crm_messages.
 
   // ---------------- read state (assignment-aware) ----------------
   const threadIds = threads.map((t) => t.id);
@@ -234,7 +254,7 @@ export async function GET(req: Request) {
   function computeUnread(t: ThreadRow): boolean {
     if (!viewerId) return false;
     if (!t.last_message_preview) return false;
-    if (directionByThreadId.get(t.id) !== "inbound") return false;
+    if (t.last_message_direction !== "inbound") return false;
     let effective: string | null;
     if (t.assigned_to_user_id == null) {
       effective = readsByThreadAll.get(t.id) ?? null;
@@ -249,7 +269,6 @@ export async function GET(req: Request) {
 
   const out = threads.map((t) => ({
     ...t,
-    last_message_direction: directionByThreadId.get(t.id) ?? null,
     player: t.player_id != null ? playersById.get(t.player_id) ?? null : null,
     assignee:
       t.assigned_to_user_id != null
@@ -267,6 +286,7 @@ export async function GET(req: Request) {
     status: string | null;
     assigned_to_user_id: string | null;
     player_id: number | null;
+    last_message_direction: string | null;
   }[] = [];
   {
     let from = 0;
@@ -274,7 +294,9 @@ export async function GET(req: Request) {
     while (from < 20000) {
       const r = await supabase
         .from("crm_threads")
-        .select("id, status, assigned_to_user_id, player_id")
+        .select(
+          "id, status, assigned_to_user_id, player_id, last_message_direction",
+        )
         .order("id", { ascending: true })
         .range(from, from + INDEX_PAGE - 1);
       if (r.error) {
@@ -331,6 +353,10 @@ export async function GET(req: Request) {
         !!viewerId &&
         r.assigned_to_user_id === viewerId,
       starred: starredThreadIds.has(r.id),
+      // Awaiting our reply = open + customer spoke last. Carried on the
+      // index so the client can recompute the count scoped to selected
+      // cities, exactly like the other view counts.
+      awaiting: status === "open" && r.last_message_direction === "inbound",
     };
   });
 
@@ -339,6 +365,7 @@ export async function GET(req: Request) {
     mine: index.filter((r) => r.mine).length,
     starred: index.filter((r) => r.starred).length,
     closed: index.filter((r) => r.status === "closed").length,
+    awaiting: index.filter((r) => r.awaiting).length,
   };
 
   return Response.json({ threads: out, counts, index }, { status: 200 });

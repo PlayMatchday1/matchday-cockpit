@@ -83,6 +83,9 @@ type ThreadListRow = {
   last_message_at: string;
   last_message_preview: string | null;
   last_message_direction: "inbound" | "outbound" | null;
+  // True when the last outbound message was a WhatsApp template send —
+  // lets an answered row read "template sent" vs a plain "replied".
+  last_message_is_template: boolean;
   created_at: string;
   assigned_to_user_id: string | null;
   assigned_at: string | null;
@@ -165,6 +168,7 @@ type CountIndexRow = {
   status: "open" | "closed";
   mine: boolean;
   starred: boolean;
+  awaiting: boolean;
 };
 
 // ---------------- constants ----------------
@@ -241,7 +245,13 @@ export default function CrmClient() {
   // main inbox. Filtered server-side; changing it refetches.
   const view = useMemo<StatusFilter>(() => {
     const raw = searchParams.get("view");
-    if (raw === "mine" || raw === "starred" || raw === "closed") return raw;
+    if (
+      raw === "mine" ||
+      raw === "starred" ||
+      raw === "closed" ||
+      raw === "awaiting"
+    )
+      return raw;
     return "open";
   }, [searchParams]);
 
@@ -282,7 +292,13 @@ export default function CrmClient() {
 
   // Server-computed global per-view counts + a lightweight all-threads
   // index used to recompute counts scoped to the selected cities.
-  const ZERO_COUNTS: ViewCounts = { open: 0, mine: 0, starred: 0, closed: 0 };
+  const ZERO_COUNTS: ViewCounts = {
+    open: 0,
+    mine: 0,
+    starred: 0,
+    closed: 0,
+    awaiting: 0,
+  };
   const [counts, setCounts] = useState<ViewCounts>(ZERO_COUNTS);
   const [countIndex, setCountIndex] = useState<CountIndexRow[]>([]);
 
@@ -587,6 +603,12 @@ export default function CrmClient() {
                     last_message_at: m.sent_at,
                     last_message_preview: m.body.slice(0, 80),
                     last_message_direction: m.direction,
+                    // A new inbound is never a template; an outbound
+                    // template's flag is corrected authoritatively by the
+                    // crm_threads UPDATE handler below (it carries the
+                    // denormalized column). is_template only affects the
+                    // answered label, so a brief inbound=false is safe.
+                    last_message_is_template: false,
                   }
                 : t,
             ),
@@ -639,6 +661,12 @@ export default function CrmClient() {
                     ...x,
                     last_message_at: t.last_message_at,
                     last_message_preview: t.last_message_preview,
+                    // Authoritative awaiting state — the denormalized
+                    // columns ride on the realtime row, so a reply
+                    // (outbound) clears the indicator live and an inbound
+                    // raises it, without a refetch.
+                    last_message_direction: t.last_message_direction,
+                    last_message_is_template: t.last_message_is_template,
                     match_ambiguous: t.match_ambiguous,
                     player_id: t.player_id,
                     assigned_to_user_id: t.assigned_to_user_id,
@@ -726,9 +754,66 @@ export default function CrmClient() {
       if (cityFilter.size > 0 && !cityFilter.has(cityCodeForThread(t)))
         return false;
       if (view === "starred" && !t.is_follow_up) return false;
+      // The server already scopes the awaiting view, but realtime
+      // patches can drop a fresh row in — keep it inbound-only here so
+      // a just-answered thread leaves the view immediately.
+      if (view === "awaiting" && t.last_message_direction !== "inbound")
+        return false;
       return true;
     });
   }, [threads, cityFilter, view]);
+
+  const isAwaiting = (t: ThreadListRow) =>
+    t.status === "open" && t.last_message_direction === "inbound";
+
+  // Render groups. In the Open / Mine views threads split into
+  // "Awaiting reply" (customer spoke last, oldest first = longest
+  // waiting on top) above "Answered" (we spoke last, most recent
+  // first). The Awaiting view is a single awaiting group; every other
+  // view is one ungrouped list in its existing order.
+  const threadGroups = useMemo<
+    { key: string; label: string | null; tone: "await" | "quiet"; rows: ThreadListRow[] }[]
+  >(() => {
+    const byOldest = (a: ThreadListRow, b: ThreadListRow) =>
+      Date.parse(a.last_message_at) - Date.parse(b.last_message_at);
+
+    if (view === "open" || view === "mine") {
+      const awaiting = visibleThreads.filter(isAwaiting).sort(byOldest);
+      const answered = visibleThreads.filter((t) => !isAwaiting(t));
+      const groups: {
+        key: string;
+        label: string | null;
+        tone: "await" | "quiet";
+        rows: ThreadListRow[];
+      }[] = [];
+      if (awaiting.length > 0)
+        groups.push({
+          key: "awaiting",
+          label: `Awaiting reply · ${awaiting.length}`,
+          tone: "await",
+          rows: awaiting,
+        });
+      if (answered.length > 0)
+        groups.push({
+          key: "answered",
+          label: "Answered · we sent the last message",
+          tone: "quiet",
+          rows: answered,
+        });
+      return groups;
+    }
+
+    if (view === "awaiting") {
+      const rows = [...visibleThreads].sort(byOldest);
+      return rows.length > 0
+        ? [{ key: "awaiting", label: null, tone: "await", rows }]
+        : [];
+    }
+
+    return visibleThreads.length > 0
+      ? [{ key: view, label: null, tone: "quiet", rows: visibleThreads }]
+      : [];
+  }, [visibleThreads, view]);
 
   // Chip counts. The server sends global per-view counts plus a
   // lightweight all-threads index. With no city selected we show the
@@ -743,6 +828,7 @@ export default function CrmClient() {
       starred: countIndex.filter((r) => r.starred && inCity(r)).length,
       closed: countIndex.filter((r) => r.status === "closed" && inCity(r))
         .length,
+      awaiting: countIndex.filter((r) => r.awaiting && inCity(r)).length,
     };
   }, [counts, countIndex, cityFilter]);
 
@@ -823,6 +909,10 @@ export default function CrmClient() {
                 last_message_at: msg.sent_at,
                 last_message_preview: msg.body.slice(0, 80),
                 last_message_direction: msg.direction,
+                // Optimistic: assume a normal reply; a template send's
+                // flag is reconciled by the crm_threads realtime UPDATE.
+                // Either way this outbound clears the awaiting indicator.
+                last_message_is_template: false,
               }
             : t,
         ),
@@ -1122,24 +1212,38 @@ export default function CrmClient() {
                   No conversations match the current filters.
                 </div>
               )}
-            {visibleThreads.length > 0 && (
-              <ul className="divide-y divide-cream-line">
-                {visibleThreads.map((t) => (
-                  <InboxRow
-                    key={t.id}
-                    thread={t as InboxRowThread}
-                    active={t.id === selectedId}
-                    onSelect={() => setSelected(t.id)}
-                    onToggleFollowUp={() =>
-                      onToggleFollowUp(t.id, !t.is_follow_up)
-                    }
-                    selectable={bulkSelectable}
-                    selected={selectedIds.has(t.id)}
-                    onToggleSelect={() => toggleSelect(t.id)}
-                  />
-                ))}
-              </ul>
-            )}
+            {visibleThreads.length > 0 &&
+              threadGroups.map((g) => (
+                <div key={g.key}>
+                  {g.label && (
+                    <div
+                      className={`px-4 py-1.5 text-[10.5px] font-bold uppercase tracking-wide ${
+                        g.tone === "await"
+                          ? "bg-red-50/60 text-red-700"
+                          : "bg-cream-soft/60 text-deep-green/45"
+                      }`}
+                    >
+                      {g.label}
+                    </div>
+                  )}
+                  <ul className="divide-y divide-cream-line">
+                    {g.rows.map((t) => (
+                      <InboxRow
+                        key={t.id}
+                        thread={t as InboxRowThread}
+                        active={t.id === selectedId}
+                        onSelect={() => setSelected(t.id)}
+                        onToggleFollowUp={() =>
+                          onToggleFollowUp(t.id, !t.is_follow_up)
+                        }
+                        selectable={bulkSelectable}
+                        selected={selectedIds.has(t.id)}
+                        onToggleSelect={() => toggleSelect(t.id)}
+                      />
+                    ))}
+                  </ul>
+                </div>
+              ))}
           </div>
         </aside>
 
