@@ -13,25 +13,19 @@
 // stable within the row cap.
 //
 // The list is capped at LIST_LIMIT most-recent threads for the view.
-// City filtering stays client-side (rows carry the player city) so
-// toggling a city chip does not re-hit the server.
 //
 // Response:
 //   { threads: ThreadListRow[],       // active view, ordered per above
-//     counts:  { open, mine, starred, closed, awaiting },  // global
-//     index:   Array<{ city, status, mine, starred, awaiting }> }
-//                                         // for city-scoped counts
+//     counts:  { open, mine, starred, closed, awaiting } }  // global
 //
-// counts are the global per-view totals. The client displays them
-// directly when no city is selected, and recomputes city-scoped counts
-// from `index` (a lightweight all-threads projection) when city chips
-// are active — matching "Open + DFW shows open threads in DFW".
+// counts are the global per-view totals, derived from a lightweight
+// all-threads scan of crm_threads. (City filtering was removed from the
+// UI; the per-row city tag still comes from each thread's player.)
 //
 // Auth: dual-mode bearer via src/lib/crmAuth. Cron callers (no viewer)
 // get is_unread=false everywhere and empty mine/starred views.
 
 import { authenticateCrm } from "@/lib/crmAuth";
-import { UNKNOWN_CITY } from "@/lib/cityColors";
 
 export const runtime = "nodejs";
 export const maxDuration = 10;
@@ -278,14 +272,16 @@ export async function GET(req: Request) {
     is_follow_up: viewerId ? starredThreadIds.has(t.id) : false,
   }));
 
-  // ---------------- counts + city index (all threads) ----------------
+  // ---------------- global view counts (all threads) ----------------
   // A lightweight projection of every thread drives the chip counts.
   // Paginated so it stays correct as closed threads accrue past 1000.
+  // No per-player city lookup: city filtering was removed from the UI,
+  // so the counts are global and derive entirely from columns already
+  // on crm_threads.
   const indexRows: {
     id: string;
     status: string | null;
     assigned_to_user_id: string | null;
-    player_id: number | null;
     last_message_direction: string | null;
   }[] = [];
   {
@@ -294,13 +290,11 @@ export async function GET(req: Request) {
     while (from < 20000) {
       const r = await supabase
         .from("crm_threads")
-        .select(
-          "id, status, assigned_to_user_id, player_id, last_message_direction",
-        )
+        .select("id, status, assigned_to_user_id, last_message_direction")
         .order("id", { ascending: true })
         .range(from, from + INDEX_PAGE - 1);
       if (r.error) {
-        console.error("[crm:threads.list] index scan error", r.error);
+        console.error("[crm:threads.list] count scan error", r.error);
         break;
       }
       const rows = (r.data ?? []) as typeof indexRows;
@@ -310,63 +304,20 @@ export async function GET(req: Request) {
     }
   }
 
-  // Player cities for the index (chunked IN queries).
-  const idxPlayerIds = Array.from(
-    new Set(
-      indexRows
-        .map((r) => r.player_id)
-        .filter((x): x is number => typeof x === "number"),
-    ),
-  );
-  const cityByPlayer = new Map<number, string | null>();
-  for (let i = 0; i < idxPlayerIds.length; i += 1000) {
-    const chunk = idxPlayerIds.slice(i, i + 1000);
-    const cr = await supabase
-      .from("mdapi_users")
-      .select("id, preferable_city_normalized")
-      .in("id", chunk);
-    if (cr.error) {
-      console.error("[crm:threads.list] index city lookup error", cr.error);
-      continue;
-    }
-    for (const p of (cr.data ?? []) as {
-      id: number;
-      preferable_city_normalized: string | null;
-    }[]) {
-      cityByPlayer.set(p.id, p.preferable_city_normalized);
-    }
-  }
-
-  function cityCodeFor(playerId: number | null): string {
-    if (playerId == null) return UNKNOWN_CITY;
-    const c = cityByPlayer.get(playerId);
-    return c && c.length > 0 ? c : UNKNOWN_CITY;
-  }
-
-  const index = indexRows.map((r) => {
-    const status = (r.status ?? "open") as "open" | "closed";
-    return {
-      city: cityCodeFor(r.player_id),
-      status,
-      mine:
-        status === "open" &&
-        !!viewerId &&
-        r.assigned_to_user_id === viewerId,
-      starred: starredThreadIds.has(r.id),
-      // Awaiting our reply = open + customer spoke last. Carried on the
-      // index so the client can recompute the count scoped to selected
-      // cities, exactly like the other view counts.
-      awaiting: status === "open" && r.last_message_direction === "inbound",
-    };
-  });
-
+  const isOpen = (r: (typeof indexRows)[number]) =>
+    (r.status ?? "open") === "open";
   const counts = {
-    open: index.filter((r) => r.status === "open").length,
-    mine: index.filter((r) => r.mine).length,
-    starred: index.filter((r) => r.starred).length,
-    closed: index.filter((r) => r.status === "closed").length,
-    awaiting: index.filter((r) => r.awaiting).length,
+    open: indexRows.filter(isOpen).length,
+    mine: indexRows.filter(
+      (r) => isOpen(r) && !!viewerId && r.assigned_to_user_id === viewerId,
+    ).length,
+    starred: indexRows.filter((r) => starredThreadIds.has(r.id)).length,
+    closed: indexRows.filter((r) => (r.status ?? "open") === "closed").length,
+    // Awaiting our reply = open + customer spoke last.
+    awaiting: indexRows.filter(
+      (r) => isOpen(r) && r.last_message_direction === "inbound",
+    ).length,
   };
 
-  return Response.json({ threads: out, counts, index }, { status: 200 });
+  return Response.json({ threads: out, counts }, { status: 200 });
 }
