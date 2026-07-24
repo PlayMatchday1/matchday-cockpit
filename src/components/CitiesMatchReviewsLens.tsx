@@ -74,7 +74,13 @@ export default function CitiesMatchReviewsLens({
   // "Match Reviews" sub-tab pill already title it, so hide the local h2.
   embedded = false,
 }: { embedded?: boolean } = {}) {
-  const { rows: matches, syncedAt, loading, error } = useMatchReviews();
+  const {
+    rows: matches,
+    matchesSyncedAt,
+    reviewsSyncedAt,
+    loading,
+    error,
+  } = useMatchReviews();
   const { rows: reviews } = useReviewData();
 
   // Index reviews by (minute, field_title) so each match can pull its own.
@@ -210,7 +216,11 @@ export default function CitiesMatchReviewsLens({
 
   return (
     <section>
-      <Header syncedAt={syncedAt} embedded={embedded} />
+      <Header
+        matchesSyncedAt={matchesSyncedAt}
+        reviewsSyncedAt={reviewsSyncedAt}
+        embedded={embedded}
+      />
 
       {/* Filters */}
       <div className="mb-5 flex flex-wrap items-end gap-3 rounded-2xl border-[1.5px] border-cream-line bg-white p-4 shadow-md shadow-deep-green/10">
@@ -306,7 +316,27 @@ export default function CitiesMatchReviewsLens({
   );
 }
 
-function Header({ syncedAt, embedded }: { syncedAt?: string | null; embedded?: boolean }) {
+// The badge must name WHICH pull each number came from. The Rating /
+// Reviews columns are mdapi_matches (the `mdapi-matches` sync); the
+// drilldown tags + comments are mdapi_reviews (the `mdapi-reviews`
+// sync). The old single "reviews synced as of X" label read as a
+// blanket freshness claim and could say "synced 10 minutes ago" over
+// ratings that were 13 hours old. When both stamps land in the same
+// minute the label collapses to one clause — the common case, so the
+// split only shows up when it actually means something.
+function Header({
+  matchesSyncedAt,
+  reviewsSyncedAt,
+  embedded,
+}: {
+  matchesSyncedAt?: string | null;
+  reviewsSyncedAt?: string | null;
+  embedded?: boolean;
+}) {
+  const ratings = fmtSyncedAt(matchesSyncedAt ?? null);
+  const comments = fmtSyncedAt(reviewsSyncedAt ?? null);
+  const showStamp =
+    matchesSyncedAt !== undefined || reviewsSyncedAt !== undefined;
   return (
     <div className="mb-6 flex flex-wrap items-end justify-between gap-2">
       {embedded ? (
@@ -317,9 +347,14 @@ function Header({ syncedAt, embedded }: { syncedAt?: string | null; embedded?: b
           <p className="mt-1 text-sm text-deep-green/60">Per-match review performance — low- and high-scoring matches.</p>
         </div>
       )}
-      {syncedAt !== undefined && (
-        <span className="rounded-full border border-cream-line bg-cream-soft px-3 py-1 text-[10px] font-bold uppercase tracking-wider text-deep-green/55">
-          reviews synced as of {fmtSyncedAt(syncedAt ?? null)}
+      {showStamp && (
+        <span
+          title={`Rating and Reviews columns come from the matches sync (${ratings}). Tags and comments in the drilldown come from the reviews sync (${comments}).`}
+          className="rounded-full border border-cream-line bg-cream-soft px-3 py-1 text-[10px] font-bold uppercase tracking-wider text-deep-green/55"
+        >
+          {ratings === comments
+            ? `synced as of ${ratings}`
+            : `ratings as of ${ratings} · comments as of ${comments}`}
         </span>
       )}
     </div>

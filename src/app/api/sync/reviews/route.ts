@@ -102,3 +102,10 @@ export async function POST(req: Request) {
     { status: result.ok ? 200 : 500 },
   );
 }
+
+// Deliberately POST-only. The hourly freshness trigger
+// (.github/workflows/hourly-sync.yml) POSTs with the CRON_SECRET
+// bearer, so there's no reason to expose a GET that performs a write —
+// prefetchers and crawlers make that a footgun. If this ever moves to
+// a Vercel cron (which triggers via GET, and needs a paid plan for
+// sub-daily schedules), add `export const GET = POST` back here.
