@@ -265,26 +265,17 @@ export default function ChatsMetricsStrip() {
                 }
               />
 
-              {/* Tile 3 — Handled this period */}
+              {/* Tile 3 — Handled this period. Raw counts only: the
+                  headline is conversations touched, the sub-line is
+                  conversations closed in the period. No close-rate % —
+                  closed/opened exceeds 100% when clearing backlog and
+                  reads as a bug. */}
               <Tile
                 label="Handled this period"
                 value={intOrDash(m?.handled.count ?? null)}
                 unit="conversations"
                 loading={loading && !m}
-                sub={
-                  m
-                    ? `${intOrDash(m.handled.resolved)} resolved${
-                        m.handled.closeRatePct != null
-                          ? ` · ${Math.round(m.handled.closeRatePct)}% close rate`
-                          : ""
-                      }`
-                    : undefined
-                }
-                subTitle={
-                  m && m.handled.closeRatePct != null && m.handled.closeRatePct > 100
-                    ? "Closed / opened this period. Over 100% means more conversations were closed than opened — backlog is being cleared."
-                    : undefined
-                }
+                sub={m ? `${intOrDash(m.handled.resolved)} resolved` : undefined}
               />
 
               {/* Tile 4 — Awaiting now (LIVE) */}
@@ -322,7 +313,6 @@ function Tile({
   value,
   unit,
   sub,
-  subTitle,
   trend,
   loading,
 }: {
@@ -330,7 +320,6 @@ function Tile({
   value: string;
   unit?: string;
   sub?: string;
-  subTitle?: string;
   trend?: TrendChip;
   loading?: boolean;
 }) {
@@ -360,12 +349,7 @@ function Tile({
         </div>
       )}
       {sub && (
-        <div
-          className="mt-1.5 text-[11px] text-deep-green/50"
-          title={subTitle}
-        >
-          {sub}
-        </div>
+        <div className="mt-1.5 text-[11px] text-deep-green/50">{sub}</div>
       )}
     </div>
   );
