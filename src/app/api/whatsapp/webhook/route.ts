@@ -32,9 +32,13 @@ import {
   notifyNewWhatsAppThread,
   type NewWhatsAppThreadNotification,
 } from "@/lib/gchat";
-import { downloadWhatsAppMedia } from "@/lib/whatsapp";
+import { downloadWhatsAppMedia, sendWhatsAppText } from "@/lib/whatsapp";
 import { uploadMessageMedia } from "@/lib/crmMedia";
 import { writeThreadStatusLog } from "@/lib/crmThreadStatus";
+import {
+  shouldAutoReply,
+  OUT_OF_HOURS_AUTO_REPLY_TEXT,
+} from "@/lib/autoReply";
 import {
   notifyInboundChatMessage,
   type CrmInboundPushArgs,
@@ -222,11 +226,13 @@ export async function POST(req: Request) {
   //    errors are logged.
   const notifications: NewWhatsAppThreadNotification[] = [];
   const pushIntents: Omit<CrmInboundPushArgs, "supabase">[] = [];
+  const autoReplies: AutoReplyIntent[] = [];
   for (const msg of messages) {
     try {
       const result = await processInbound(sb, msg);
       if (result?.newThread) notifications.push(result.newThread);
       if (result?.pushArgs) pushIntents.push(result.pushArgs);
+      if (result?.autoReply) autoReplies.push(result.autoReply);
     } catch (err) {
       console.error("[whatsapp:webhook] process failed", err);
     }
@@ -284,9 +290,23 @@ export async function POST(req: Request) {
     });
   }
 
+  // 8) Out-of-hours auto-reply sends. Same discipline as gchat/push:
+  //    after the DB work, fired in parallel and capped at 3s so a slow
+  //    Meta call can never blow the webhook's ack budget. Debounce +
+  //    is_auto_reply were already committed during processInbound; this
+  //    is purely the external send + its message row.
+  if (autoReplies.length > 0) {
+    await Promise.race([
+      Promise.all(autoReplies.map((intent) => sendAutoReply(sb, intent))),
+      new Promise<void>((resolve) => setTimeout(resolve, 3000)),
+    ]).catch((err) => {
+      console.error("[whatsapp:webhook] auto-reply fan-out failed:", err);
+    });
+  }
+
   const elapsed = Date.now() - startedAt;
   console.log(
-    `[whatsapp:webhook] processed messages=${messages.length} statuses=${statuses.length} new_threads=${notifications.length} push_intents=${pushIntents.length} elapsed=${elapsed}ms`,
+    `[whatsapp:webhook] processed messages=${messages.length} statuses=${statuses.length} new_threads=${notifications.length} push_intents=${pushIntents.length} auto_replies=${autoReplies.length} elapsed=${elapsed}ms`,
   );
 
   return Response.json({ ok: true }, { status: 200 });
@@ -672,12 +692,22 @@ function previewFor(row: DerivedMessageRow): string {
   }
 }
 
+type AutoReplyIntent = {
+  threadId: string;
+  phone: string;
+};
+
 type ProcessResult = {
   newThread?: NewWhatsAppThreadNotification;
   // Set on every successful inbound store. Carries the data needed
   // to fire a Web Push notification at the end of the request, after
   // Meta has been ack'd.
   pushArgs?: Omit<CrmInboundPushArgs, "supabase">;
+  // Set when this inbound landed out of hours and the thread hasn't
+  // been greeted this closed gap. The actual Meta send + message write
+  // happen after the DB work, batched + time-bounded like push, so the
+  // slow external call never blows the webhook's ack budget.
+  autoReply?: AutoReplyIntent;
 };
 
 async function processInbound(
@@ -760,7 +790,7 @@ async function processInbound(
 
   const existing = await sb
     .from("crm_threads")
-    .select("id, player_id, match_ambiguous, status")
+    .select("id, player_id, match_ambiguous, status, auto_reply_sent_at")
     .eq("phone_number", phone)
     .eq("channel", "whatsapp")
     .maybeSingle();
@@ -874,6 +904,44 @@ async function processInbound(
     `[whatsapp:webhook] stored phone=${phone} player_id=${playerId ?? "-"} ambiguous=${ambiguous} new_thread=${isNewThread} wamid=${wamid ?? "-"} kind=${row.media_kind ?? "text"}`,
   );
 
+  // -------- out-of-hours auto-reply decision --------
+  // Decide AFTER the successful insert (so a Meta envelope retry, which
+  // dedupes on wamid above and returns early, never re-greets) and stamp
+  // auto_reply_sent_at BEFORE the send. Optimistic stamping debounces a
+  // same-batch burst — the next message's thread lookup sees the stamp —
+  // and pins us to one greeting per closed gap. A send that later fails
+  // just skips the courtesy this gap, which is the right trade vs.
+  // double-greeting. The Meta call itself is deferred to the caller,
+  // batched + time-bounded after the DB work.
+  const autoReplySentAtMs = existing.data?.auto_reply_sent_at
+    ? Date.parse(existing.data.auto_reply_sent_at as string)
+    : null;
+  const decision = shouldAutoReply({
+    nowMs: Date.parse(nowIso),
+    autoReplySentAtMs,
+  });
+  let autoReply: AutoReplyIntent | undefined;
+  if (decision.send) {
+    const stamp = await sb
+      .from("crm_threads")
+      .update({ auto_reply_sent_at: nowIso })
+      .eq("id", threadId);
+    if (stamp.error) {
+      // Couldn't claim the debounce slot — skip rather than risk a
+      // double-greet on a concurrent/retried delivery.
+      console.error("[whatsapp:webhook] auto_reply stamp failed", stamp.error);
+    } else {
+      autoReply = { threadId, phone };
+      console.log(
+        `[whatsapp:webhook] auto-reply queued thread=${threadId} gap_start=${
+          decision.closedPeriodStartMs
+            ? new Date(decision.closedPeriodStartMs).toISOString()
+            : "-"
+        }`,
+      );
+    }
+  }
+
   // Push args for every inbound (new thread or existing). The caller
   // fans out after acking Meta. Reactions intentionally pass
   // mediaKind=null — the row body ("Reacted ❤️ to your message")
@@ -896,7 +964,7 @@ async function processInbound(
     mediaFilename: row.media_filename,
   };
 
-  if (!isNewThread) return { pushArgs };
+  if (!isNewThread) return { pushArgs, autoReply };
 
   // -------- new-thread Google Chat notification --------
   // Resolve the player's city for the card subtitle (best-effort —
@@ -916,6 +984,7 @@ async function processInbound(
 
   return {
     pushArgs,
+    autoReply,
     newThread: {
       threadId,
       cityCode,
@@ -923,4 +992,49 @@ async function processInbound(
       messageBody: preview,
     },
   };
+}
+
+// Send the out-of-hours auto-reply and record it. The message is written
+// with is_auto_reply=true (so metrics exclude it) and — deliberately —
+// does NOT touch the thread's last_message_* fields. The customer's
+// inbound is still the last "real" message: the thread must stay in
+// Awaiting reply with their message as the preview, because a courtesy
+// greeting is an acknowledgment, not an answer. Best-effort: a failed
+// send is logged, never thrown (the webhook ack must still succeed).
+async function sendAutoReply(
+  sb: SupabaseClient,
+  intent: AutoReplyIntent,
+): Promise<void> {
+  let wamid: string | null = null;
+  try {
+    const res = await sendWhatsAppText(intent.phone, OUT_OF_HOURS_AUTO_REPLY_TEXT);
+    wamid = res.messageId;
+  } catch (err) {
+    console.error(
+      `[whatsapp:webhook] auto-reply send failed thread=${intent.threadId}`,
+      err,
+    );
+    return;
+  }
+
+  const ins = await sb.from("crm_messages").insert({
+    thread_id: intent.threadId,
+    direction: "outbound",
+    channel: "whatsapp",
+    body: OUT_OF_HOURS_AUTO_REPLY_TEXT,
+    sent_at: new Date().toISOString(),
+    sent_by_user_id: null, // system, not an operator
+    is_auto_reply: true,
+    external_message_id: wamid,
+  });
+  if (ins.error) {
+    console.error(
+      `[whatsapp:webhook] auto-reply message insert failed thread=${intent.threadId}`,
+      ins.error,
+    );
+    return;
+  }
+  console.log(
+    `[whatsapp:webhook] auto-reply sent thread=${intent.threadId} wamid=${wamid ?? "-"}`,
+  );
 }

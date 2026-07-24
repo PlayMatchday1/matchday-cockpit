@@ -205,6 +205,49 @@ export function businessMinutesBetween(
   return total / MINUTE_MS;
 }
 
+// Whether an instant falls inside the business window [startHour,
+// endHour) in the business timezone. The half-open convention matches
+// businessMinutesBetween: exactly 9:00am is open, exactly 9:00pm is
+// closed. Used by the out-of-hours auto-reply to decide whether to greet.
+export function isWithinBusinessHours(
+  instantMs: number,
+  cfg: BusinessHoursConfig = DEFAULT_BUSINESS_HOURS,
+): boolean {
+  if (!Number.isFinite(instantMs)) return false;
+  const p = wallClockPartsInZone(instantMs, cfg.tz);
+  const { openMs, closeMs } = windowForDay(p, cfg);
+  return instantMs >= openMs && instantMs < closeMs;
+}
+
+// For an out-of-hours instant, the UTC ms of the close boundary that
+// began the current closed period (the most recent close ≤ the instant).
+// Returns null when the instant is within business hours.
+//
+// This is the debounce key for the auto-reply: the closed gap runs from
+// one day's close (9pm) to the next day's open (9am), so both a 10pm and
+// a 6am-next-day inbound map to the SAME boundary (9pm the prior evening)
+// and are treated as one gap. An auto-reply stamped at/after this
+// boundary means we've already greeted this gap.
+export function currentClosedPeriodStartMs(
+  instantMs: number,
+  cfg: BusinessHoursConfig = DEFAULT_BUSINESS_HOURS,
+): number | null {
+  if (!Number.isFinite(instantMs)) return null;
+  const p = wallClockPartsInZone(instantMs, cfg.tz);
+  const { openMs, closeMs } = windowForDay(p, cfg);
+  if (instantMs >= openMs && instantMs < closeMs) return null; // in hours
+
+  // Evening (at/after today's close): the gap started at today's close.
+  if (instantMs >= closeMs) return closeMs;
+
+  // Early morning (before today's open): the gap started at YESTERDAY's
+  // close. Reconstruct yesterday's date via a noon-UTC anchor so the
+  // −1-day step is DST-safe, then resolve that day's close boundary.
+  const yesterdayAnchor = Date.UTC(p.year, p.month - 1, p.day, 12) - DAY_MS;
+  const y = wallClockPartsInZone(yesterdayAnchor, cfg.tz);
+  return zonedWallClockToUtcMs(y.year, y.month, y.day, cfg.endHour, 0, cfg.tz);
+}
+
 // Median of a numeric list. Returns null for an empty list. Sorts a copy
 // (never mutates the input). Even-length lists average the two middle
 // values.

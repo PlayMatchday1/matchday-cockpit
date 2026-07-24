@@ -26,7 +26,18 @@ export type MetricMessage = {
   threadId: string;
   direction: "inbound" | "outbound";
   sentAtMs: number;
+  // True for the out-of-hours system auto-reply. Excluded from every
+  // operator-response metric (first response, handled) so a courtesy
+  // greeting never fakes a ~0-minute response time or an operator touch.
+  isAutoReply?: boolean;
 };
+
+// A genuine operator reply — outbound and not the system auto-reply.
+// Both response-time and handled counts pivot on this, so it lives in
+// one place.
+function isOperatorOutbound(m: MetricMessage): boolean {
+  return m.direction === "outbound" && !m.isAutoReply;
+}
 
 // Minimal thread shape. openedAtMs = crm_threads.created_at;
 // closedAtMs = crm_threads.closed_at (null while open).
@@ -166,7 +177,7 @@ export function firstResponseBusinessMinutes(
   let firstReply = Infinity;
   for (const m of messages) {
     if (
-      m.direction === "outbound" &&
+      isOperatorOutbound(m) &&
       m.sentAtMs >= firstInbound &&
       m.sentAtMs < firstReply
     ) {
@@ -229,7 +240,9 @@ export function computePeriodMetrics(
   // team worked this week still counts as handled this week).
   const handledThreadIds = new Set<string>();
   for (const m of messages) {
-    if (m.direction === "outbound" && inPeriod(m.sentAtMs, period)) {
+    // Auto-replies don't count as handling — a thread greeted overnight
+    // but never worked by a person is not "handled".
+    if (isOperatorOutbound(m) && inPeriod(m.sentAtMs, period)) {
       handledThreadIds.add(m.threadId);
     }
   }

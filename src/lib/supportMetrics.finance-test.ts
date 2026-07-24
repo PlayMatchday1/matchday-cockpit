@@ -29,6 +29,14 @@ const msg = (
   at: string,
 ): MetricMessage => ({ threadId, direction, sentAtMs: iso(at) });
 
+// An out-of-hours auto-reply outbound row.
+const autoReply = (threadId: string, at: string): MetricMessage => ({
+  threadId,
+  direction: "outbound",
+  sentAtMs: iso(at),
+  isAutoReply: true,
+});
+
 // A generous "all of July" period for the tiles that filter by opened-at.
 const JULY: Period = {
   startMs: iso("2026-07-01T05:00:00Z"), // 7/1 00:00 CDT
@@ -76,6 +84,27 @@ test("unordered message input still finds the true first pair", () => {
     msg("t", "inbound", "2026-07-22T15:10:00Z"),
   ];
   assert.ok(approx(firstResponseBusinessMinutes(msgs), 20));
+});
+
+test("an out-of-hours auto-reply is skipped; the real reply sets the time", () => {
+  // Inbound 8:50pm, auto-reply seconds later, human answers 9:10am next
+  // day. The response time must be the 20 business-minute human reply,
+  // NOT the ~0-minute auto-reply.
+  const msgs = [
+    msg("t", "inbound", "2026-07-22T01:50:00Z"), // 8:50pm CDT
+    autoReply("t", "2026-07-22T01:50:20Z"), // auto-reply 20s later
+    msg("t", "outbound", "2026-07-22T14:10:00Z"), // 9:10am human reply
+  ];
+  const rt = firstResponseBusinessMinutes(msgs);
+  assert.ok(approx(rt, 20), `expected ~20, got ${rt}`);
+});
+
+test("a thread with ONLY an auto-reply counts as no reply yet (null)", () => {
+  const msgs = [
+    msg("t", "inbound", "2026-07-22T03:00:00Z"),
+    autoReply("t", "2026-07-22T03:00:10Z"),
+  ];
+  assert.equal(firstResponseBusinessMinutes(msgs), null);
 });
 
 // ---------------------------------------------------------------
@@ -194,6 +223,29 @@ test("handled counts operator activity in the period regardless of open date; cl
   assert.equal(m.handled.opened, 2); // new + open opened in July
   assert.equal(m.handled.resolved, 2); // old + new closed in July
   assert.ok(approx(m.handled.closeRatePct, 100)); // 2 resolved / 2 opened
+});
+
+test("auto-replies don't inflate handled, median, or within-1h", () => {
+  // Two convos opened in period. One gets a real reply (30 min); the
+  // other gets ONLY an overnight auto-reply. Metrics should reflect one
+  // handled conversation with a 30-min median — the auto-reply thread is
+  // neither handled nor a ~0-min response.
+  const threads = [
+    thread("real", "2026-07-10T15:00:00Z"),
+    thread("autoonly", "2026-07-11T03:00:00Z"),
+  ];
+  const messages = [
+    msg("real", "inbound", "2026-07-10T15:00:00Z"),
+    msg("real", "outbound", "2026-07-10T15:30:00Z"),
+    msg("autoonly", "inbound", "2026-07-11T03:00:00Z"),
+    autoReply("autoonly", "2026-07-11T03:00:15Z"),
+  ];
+  const m = computePeriodMetrics(threads, messages, JULY);
+  assert.equal(m.respondedCount, 1); // only "real"
+  assert.equal(m.awaitingFirstReplyCount, 1); // "autoonly" still awaits
+  assert.ok(approx(m.medianFirstResponseMin, 30));
+  assert.ok(approx(m.answeredWithin1hPct, 100));
+  assert.equal(m.handled.count, 1); // auto-reply is not a "handle"
 });
 
 test("empty period yields nulls, not NaN or zero-division", () => {

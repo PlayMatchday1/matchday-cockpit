@@ -14,6 +14,8 @@ import {
   median,
   zonedWallClockToUtcMs,
   wallClockPartsInZone,
+  isWithinBusinessHours,
+  currentClosedPeriodStartMs,
   BUSINESS_TZ,
   BUSINESS_HOURS_START,
   BUSINESS_HOURS_END,
@@ -172,6 +174,54 @@ test("non-finite timestamps yield 0, never NaN", () => {
   const a = iso("2026-07-22T15:00:00Z");
   assert.equal(businessMinutesBetween(NaN, a), 0);
   assert.equal(businessMinutesBetween(a, NaN), 0);
+});
+
+// ---------------------------------------------------------------
+// isWithinBusinessHours — the auto-reply gate
+// ---------------------------------------------------------------
+test("mid-morning is within business hours", () => {
+  // 10:00am CDT = 15:00Z.
+  assert.equal(isWithinBusinessHours(iso("2026-07-22T15:00:00Z")), true);
+});
+
+test("9:00am open is in-hours, 9:00pm close is out (half-open)", () => {
+  assert.equal(isWithinBusinessHours(iso("2026-07-22T14:00:00Z")), true); // 9:00am
+  assert.equal(isWithinBusinessHours(iso("2026-07-23T02:00:00Z")), false); // 9:00pm
+});
+
+test("late evening and pre-dawn are out of hours", () => {
+  assert.equal(isWithinBusinessHours(iso("2026-07-23T03:30:00Z")), false); // 10:30pm CDT
+  assert.equal(isWithinBusinessHours(iso("2026-07-22T12:00:00Z")), false); // 7:00am CDT
+});
+
+// ---------------------------------------------------------------
+// currentClosedPeriodStartMs — the debounce key
+// ---------------------------------------------------------------
+test("in-hours instant has no closed period", () => {
+  assert.equal(currentClosedPeriodStartMs(iso("2026-07-22T15:00:00Z")), null);
+});
+
+test("evening: closed period started at today's 9pm close", () => {
+  // 10:30pm CDT 7/22 (03:30Z 7/23). Gap start = 9pm CDT 7/22 = 02:00Z 7/23.
+  assert.equal(
+    currentClosedPeriodStartMs(iso("2026-07-23T03:30:00Z")),
+    iso("2026-07-23T02:00:00Z"),
+  );
+});
+
+test("early morning: closed period started at YESTERDAY's 9pm close", () => {
+  // 6:00am CDT 7/23 (11:00Z). Gap start = 9pm CDT 7/22 = 02:00Z 7/23.
+  assert.equal(
+    currentClosedPeriodStartMs(iso("2026-07-23T11:00:00Z")),
+    iso("2026-07-23T02:00:00Z"),
+  );
+});
+
+test("10pm and 6am-next map to the SAME gap start (one debounce window)", () => {
+  const evening = currentClosedPeriodStartMs(iso("2026-07-23T03:00:00Z")); // 10pm 7/22
+  const morning = currentClosedPeriodStartMs(iso("2026-07-23T11:00:00Z")); // 6am 7/23
+  assert.equal(evening, morning);
+  assert.equal(evening, iso("2026-07-23T02:00:00Z")); // 9pm CDT 7/22
 });
 
 // ---------------------------------------------------------------

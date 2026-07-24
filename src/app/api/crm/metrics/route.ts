@@ -57,6 +57,7 @@ type MessageScanRow = {
   thread_id: string;
   direction: "inbound" | "outbound";
   sent_at: string;
+  is_auto_reply: boolean | null;
 };
 
 // PostgREST caps a select at 1000 rows; page through so counts stay
@@ -137,7 +138,7 @@ export async function GET(req: Request) {
   const msgRes = await fetchAll<MessageScanRow>(async (from, to) => {
     const { data, error } = await supabase
       .from("crm_messages")
-      .select("thread_id, direction, sent_at")
+      .select("thread_id, direction, sent_at, is_auto_reply")
       .gte("sent_at", lowerBoundIso)
       .order("sent_at", { ascending: true })
       .range(from, to);
@@ -151,6 +152,7 @@ export async function GET(req: Request) {
     threadId: m.thread_id,
     direction: m.direction,
     sentAtMs: Date.parse(m.sent_at),
+    isAutoReply: m.is_auto_reply === true,
   }));
 
   // Tiles 1–3, current period.
