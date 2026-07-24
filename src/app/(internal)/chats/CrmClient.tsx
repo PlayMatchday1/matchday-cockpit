@@ -60,6 +60,7 @@ import ChannelChip, {
 import PlayerAvatar from "@/components/PlayerAvatar";
 import type { DeliveryStatus } from "@/components/DeliveryStatusLabel";
 import type { MatchStatus } from "@/components/MatchStatusPill";
+import ChatsMetricsStrip from "./components/ChatsMetricsStrip";
 import FilterBar, {
   type StatusFilter,
   type ViewCounts,
@@ -1548,6 +1549,11 @@ function ChatsHeader({
       <div className="border-b border-cream-line bg-cream px-3 py-2 sm:px-4">
         <PlayersMatchesToggle current="players" />
       </div>
+
+      {/* Support-performance metrics strip — sits above the filter row
+          per docs/chats-metrics-header-mock.html. Self-contained (owns
+          its period toggle, collapse state, and refresh). */}
+      <ChatsMetricsStrip />
 
       {/* Filter row */}
       {filtersOpen && (
