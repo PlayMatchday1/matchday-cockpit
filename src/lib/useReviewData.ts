@@ -27,6 +27,7 @@ import { supabase } from "./supabase";
 import { selectAll } from "./supabasePagination";
 import { parseTags } from "./reviewTags";
 import { normalizeCity } from "./cityMap";
+import { useRevalidateWhenStale } from "./cacheFreshness";
 
 export type ReviewRow = {
   city: string;
@@ -62,6 +63,9 @@ type State = {
 const INITIAL: State = { rows: [], meta: null, loading: true, error: null };
 
 let cached: State | null = null;
+// When the cached payload was fetched. Drives cache expiry — without it
+// a tab left open served the first fetch until a full page reload.
+let loadedAt: number | null = null;
 let pending: Promise<void> | null = null;
 const subscribers = new Set<(s: State) => void>();
 
@@ -79,8 +83,10 @@ function publish(s: State) {
   subscribers.forEach((fn) => fn(s));
 }
 
-async function load(): Promise<void> {
-  publish({ rows: [], meta: null, loading: true, error: null });
+// `silent` keeps the cached rows on screen while a background
+// revalidation runs, so a focus-triggered refresh never blanks the view.
+async function load(silent = false): Promise<void> {
+  if (!silent || !cached) publish({ rows: [], meta: null, loading: true, error: null });
 
   type MdapiReviewSelect = {
     api_id: number;
@@ -130,6 +136,10 @@ async function load(): Promise<void> {
     raw = rows;
     lastSyncCompletedAt = lastSyncResult.data?.completed_at ?? null;
   } catch (e) {
+    // A failed BACKGROUND revalidation must not wipe good cached rows —
+    // leave the cache in place and let the next signal retry.
+    if (silent && cached) return;
+    loadedAt = null;
     publish({
       rows: [],
       meta: null,
@@ -187,6 +197,7 @@ async function load(): Promise<void> {
   const earliestReview = all[0]?.startDate ?? new Date();
   const latestReview = all[all.length - 1]?.startDate ?? new Date();
 
+  loadedAt = Date.now();
   publish({
     rows: all,
     meta: {
@@ -206,6 +217,13 @@ async function load(): Promise<void> {
   });
 }
 
+function ensureLoad(silent = false) {
+  if (pending) return;
+  pending = load(silent).finally(() => {
+    pending = null;
+  });
+}
+
 export function useReviewData(): State {
   const [s, setS] = useState<State>(cached ?? INITIAL);
 
@@ -213,19 +231,25 @@ export function useReviewData(): State {
     subscribers.add(setS);
     if (cached) {
       setS(cached);
-    } else if (!pending) {
-      pending = load().finally(() => {
-        pending = null;
-      });
+    } else {
+      ensureLoad();
     }
     return () => {
       subscribers.delete(setS);
     };
   }, []);
 
+  // Expire the module cache on focus / visibility / poll so an open tab
+  // stops rendering yesterday's reviews.
+  useRevalidateWhenStale(
+    () => loadedAt,
+    () => ensureLoad(true),
+  );
+
   return s;
 }
 
 export async function refetchReviewData(): Promise<void> {
+  loadedAt = null;
   await load();
 }

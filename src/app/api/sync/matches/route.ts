@@ -21,9 +21,10 @@ import {
 } from "@/lib/mdapiMatchesSync";
 import { runWithLog, type TriggeredBy } from "@/lib/syncLogging";
 
-// Incremental sync runs ~150s typical (~750 matches × N+1 players).
-// 300s gives 2× headroom — same cap as the cron orchestrator since
-// this runs the same code path.
+// Incremental sync runs ~15-20s typical, measured off fin_sync_log
+// (the older ~150s note predated the window narrowing). 300s is far
+// more headroom than needed but stays aligned with the cron
+// orchestrator, which runs the same code path.
 export const maxDuration = 300;
 export const runtime = "nodejs";
 
@@ -107,3 +108,10 @@ export async function POST(req: Request) {
     { status: result.ok ? 200 : 500 },
   );
 }
+
+// Deliberately POST-only. The hourly freshness trigger
+// (.github/workflows/hourly-sync.yml) POSTs with the CRON_SECRET
+// bearer, so there's no reason to expose a GET that performs a write —
+// prefetchers and crawlers make that a footgun. If this ever moves to
+// a Vercel cron (which triggers via GET, and needs a paid plan for
+// sub-daily schedules), add `export const GET = POST` back here.

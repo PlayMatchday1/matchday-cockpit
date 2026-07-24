@@ -7,16 +7,26 @@
 // component from useReviewData (mdapi_reviews) by (start_date-minute,
 // field_title), since reviews carry no match_id.
 //
-// Both sources are stale snapshots synced daily; the lens shows a "reviews
-// synced as of <ts>" note so the staleness is honest. A future platform
-// change adding match_id to /admin/matches/reviews would let us key the
-// join precisely and upgrade the grain.
+// TWO SOURCES, TWO SYNC STAMPS — and they are not interchangeable:
+//   • the Rating / Reviews COLUMNS come from mdapi_matches → stamped by
+//     the `mdapi-matches` sync.
+//   • the drilldown tags + comments come from mdapi_reviews → stamped by
+//     the `mdapi-reviews` sync.
+// The lens used to show only the mdapi-reviews stamp, which let the badge
+// read "synced 10 minutes ago" while the numbers on screen came from a
+// matches pull many hours older. Both stamps are returned now so the
+// footer can label what it actually renders. (See the Soccer Central
+// 7/22 case: reviews were current, the 4/3.75 aggregate was 13h stale.)
+//
+// A future platform change adding match_id to /admin/matches/reviews would
+// let us key the join precisely and upgrade the grain.
 
 import { useEffect, useState } from "react";
 import { supabase } from "./supabase";
 import { selectAll } from "./supabasePagination";
 import { normalizeCity } from "./cityMap";
 import { isPastMatch } from "./matchTime";
+import { useRevalidateWhenStale } from "./cacheFreshness";
 
 export type MatchReviewRow = {
   apiId: number;
@@ -31,16 +41,29 @@ export type MatchReviewRow = {
 
 type State = {
   rows: MatchReviewRow[];
-  syncedAt: string | null;
+  // Stamps the Rating / Reviews columns — this is the honest stamp for
+  // the numbers this hook returns.
+  matchesSyncedAt: string | null;
+  // Stamps the joined tags/comments the lens pulls from useReviewData.
+  reviewsSyncedAt: string | null;
   loading: boolean;
   error: string | null;
 };
 
-const INITIAL: State = { rows: [], syncedAt: null, loading: true, error: null };
+const INITIAL: State = {
+  rows: [],
+  matchesSyncedAt: null,
+  reviewsSyncedAt: null,
+  loading: true,
+  error: null,
+};
 
 // Module-level cache + pub/sub, mirroring useReviewData — the lens mounts /
 // unmounts as the user switches lenses; we don't want to refetch each time.
+// `loadedAt` is what makes the cache expirable: without it a tab left open
+// served the first fetch forever.
 let cached: State | null = null;
+let loadedAt: number | null = null;
 let pending: Promise<void> | null = null;
 const subscribers = new Set<(s: State) => void>();
 
@@ -61,10 +84,26 @@ type MatchSelect = {
   star_rating_count: number | null;
 };
 
-async function load(): Promise<void> {
-  publish({ ...INITIAL, loading: true });
+// Latest successful completion for one fin_sync_log source.
+async function lastSyncFor(source: string): Promise<string | null> {
+  const res = await supabase
+    .from("fin_sync_log")
+    .select("completed_at")
+    .eq("source", source)
+    .not("completed_at", "is", null)
+    .order("completed_at", { ascending: false })
+    .limit(1)
+    .maybeSingle<{ completed_at: string }>();
+  return res.data?.completed_at ?? null;
+}
+
+// `silent` keeps the currently-cached rows on screen while a background
+// revalidation runs. Only the first load (and an explicit hard refetch)
+// flips `loading`, so a focus-triggered refresh never blanks the lens.
+async function load(silent = false): Promise<void> {
+  if (!silent || !cached) publish({ ...INITIAL, loading: true });
   try {
-    const [raw, lastSync] = await Promise.all([
+    const [raw, matchesSyncedAt, reviewsSyncedAt] = await Promise.all([
       selectAll<MatchSelect>(() =>
         supabase
           .from("mdapi_matches")
@@ -76,14 +115,8 @@ async function load(): Promise<void> {
           .order("start_date", { ascending: true })
           .order("api_id", { ascending: true }),
       ),
-      supabase
-        .from("fin_sync_log")
-        .select("completed_at")
-        .eq("source", "mdapi-reviews")
-        .not("completed_at", "is", null)
-        .order("completed_at", { ascending: false })
-        .limit(1)
-        .maybeSingle<{ completed_at: string }>(),
+      lastSyncFor("mdapi-matches"),
+      lastSyncFor("mdapi-reviews"),
     ]);
 
     // A match can only be genuinely reviewed AFTER it's played. The MatchDay
@@ -111,20 +144,35 @@ async function load(): Promise<void> {
         reviewCount: Math.round(Number(r.star_rating_count)),
       });
     }
+    loadedAt = Date.now();
     publish({
       rows,
-      syncedAt: lastSync.data?.completed_at ?? null,
+      matchesSyncedAt,
+      reviewsSyncedAt,
       loading: false,
       error: null,
     });
   } catch (e) {
+    // A failed BACKGROUND revalidation must not wipe good cached rows —
+    // leave the cache in place and let the next signal retry. Only a
+    // foreground load surfaces the error.
+    if (silent && cached) return;
+    loadedAt = null;
     publish({
       rows: [],
-      syncedAt: null,
+      matchesSyncedAt: null,
+      reviewsSyncedAt: null,
       loading: false,
       error: e instanceof Error ? e.message : "Failed to load match reviews.",
     });
   }
+}
+
+function ensureLoad(silent = false) {
+  if (pending) return;
+  pending = load(silent).finally(() => {
+    pending = null;
+  });
 }
 
 export function useMatchReviews(): State {
@@ -132,14 +180,25 @@ export function useMatchReviews(): State {
   useEffect(() => {
     subscribers.add(setState);
     if (cached) setState(cached);
-    else if (!pending) {
-      pending = load().finally(() => {
-        pending = null;
-      });
-    }
+    else ensureLoad();
     return () => {
       subscribers.delete(setState);
     };
   }, []);
+
+  // Expire the module cache on focus / visibility / poll so an open tab
+  // stops rendering yesterday's numbers.
+  useRevalidateWhenStale(
+    () => loadedAt,
+    () => ensureLoad(true),
+  );
+
   return state;
+}
+
+// Force a refetch regardless of cache age — for the /data "Sync now"
+// buttons, which know the underlying tables just changed.
+export async function refetchMatchReviews(): Promise<void> {
+  loadedAt = null;
+  await load(true);
 }

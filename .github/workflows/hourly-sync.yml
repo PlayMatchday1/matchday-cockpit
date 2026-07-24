@@ -1,0 +1,93 @@
+# Hourly freshness sync for the Match Reviews lens.
+#
+# WHY THIS EXISTS
+# The lens's Rating / Reviews columns render mdapi_matches.star_rating
+# and .star_rating_count — the MatchDay platform's own per-match
+# aggregate — NOT a count of mdapi_reviews rows. So the numbers on
+# screen are only as fresh as the `mdapi-matches` sync, regardless of
+# how recently reviews synced. That is exactly how Soccer Central
+# 7/22 21:00 showed 4 / 3.75 in Cockpit while the app showed 7 / 3.43:
+# players rated over ~19 hours, and the single daily sync had caught
+# only the first four.
+#
+# Hence BOTH endpoints run here. Syncing reviews alone would leave the
+# headline numbers just as stale while the footer claimed "current."
+#
+# WHY GITHUB ACTIONS AND NOT vercel.json
+# The Vercel project is on the Hobby plan, which caps cron jobs at two
+# per project AND at once-a-day frequency — an hourly `crons` entry is
+# rejected at deploy time. Actions gives hourly for free. If the
+# project ever moves to Pro, this file can be replaced by two `crons`
+# entries in vercel.json (and the routes need `export const GET = POST`
+# added back, since Vercel cron triggers via GET).
+#
+# SCHEDULE
+# Hourly, skipping 11:00 UTC. The daily orchestrator (/api/sync/cron,
+# still scheduled in vercel.json) already runs mdapi-reviews and
+# mdapi-matches at 11:00 as two of its TWELVE steps — the other ten
+# (stripe-api, subscriptions, promocodes, firstmatch-ledger,
+# manager-pay-recompute, users, users-lens-snapshot, membership-prices,
+# membership-snapshots, telnyx-sms) have no other trigger, so that cron
+# must stay. Skipping hour 11 here is what prevents the double-sync;
+# deleting the daily cron would silently kill those ten steps.
+#
+# SETUP
+# Requires a repository secret named CRON_SECRET whose value matches
+# the CRON_SECRET environment variable on the Vercel project. Both
+# endpoints compare the bearer against it in constant time and fall
+# through to session auth (→ 401) on any mismatch.
+
+name: Hourly reviews + matches sync
+
+on:
+  schedule:
+    # Every hour on the hour except 11:00 UTC (see SCHEDULE above).
+    # GitHub's scheduler is best-effort and can drift several minutes
+    # under load; that's well inside the freshness this is buying.
+    - cron: "0 0-10,12-23 * * *"
+  # Lets an operator force a sync from the Actions tab without waiting
+  # for the next hour.
+  workflow_dispatch:
+
+# Never let a slow run overlap the next hour's trigger.
+concurrency:
+  group: hourly-sync
+  cancel-in-progress: false
+
+jobs:
+  sync:
+    runs-on: ubuntu-latest
+    timeout-minutes: 15
+    env:
+      BASE_URL: https://matchday-clubhouse.vercel.app
+    steps:
+      - name: Check CRON_SECRET is configured
+        # Fail with a readable message rather than a wall of 401s.
+        run: |
+          if [ -z "${{ secrets.CRON_SECRET }}" ]; then
+            echo "::error::CRON_SECRET repository secret is not set. Add it under Settings → Secrets and variables → Actions, matching the CRON_SECRET env var on the Vercel project."
+            exit 1
+          fi
+
+      - name: Sync mdapi_reviews
+        id: reviews
+        run: |
+          curl --fail-with-body -sS -X POST \
+            --max-time 120 \
+            -H "Authorization: Bearer ${{ secrets.CRON_SECRET }}" \
+            "$BASE_URL/api/sync/reviews"
+          echo
+
+      - name: Sync mdapi_matches
+        # Runs even if the reviews step failed: the headline count and
+        # average come from THIS sync, so it is the one that must not
+        # be skipped. The job still reports failure overall.
+        # Not `always()` — that would also fire when the CRON_SECRET
+        # guard failed, producing a pointless 401.
+        if: success() || steps.reviews.outcome == 'failure'
+        run: |
+          curl --fail-with-body -sS -X POST \
+            --max-time 300 \
+            -H "Authorization: Bearer ${{ secrets.CRON_SECRET }}" \
+            "$BASE_URL/api/sync/matches"
+          echo
