@@ -913,6 +913,10 @@ async function processInbound(
   // just skips the courtesy this gap, which is the right trade vs.
   // double-greeting. The Meta call itself is deferred to the caller,
   // batched + time-bounded after the DB work.
+  // Reactions (a 👍 on one of our messages) are not a support question —
+  // greeting one with "we're available 9–9" reads as a bug. They never
+  // trigger the auto-reply, even out of hours.
+  const isReaction = row.media_kind === "reaction";
   const autoReplySentAtMs = existing.data?.auto_reply_sent_at
     ? Date.parse(existing.data.auto_reply_sent_at as string)
     : null;
@@ -921,7 +925,7 @@ async function processInbound(
     autoReplySentAtMs,
   });
   let autoReply: AutoReplyIntent | undefined;
-  if (decision.send) {
+  if (decision.send && !isReaction) {
     const stamp = await sb
       .from("crm_threads")
       .update({ auto_reply_sent_at: nowIso })
