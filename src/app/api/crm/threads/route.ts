@@ -26,6 +26,7 @@
 // get is_unread=false everywhere and empty mine/starred views.
 
 import { authenticateCrm } from "@/lib/crmAuth";
+import { isAwaitingReply } from "@/lib/awaitingReply";
 
 export const runtime = "nodejs";
 export const maxDuration = 10;
@@ -47,7 +48,7 @@ function parseView(raw: string | null): ViewFilter {
 }
 
 const THREAD_COLS =
-  "id, phone_number, player_id, match_ambiguous, last_message_at, last_message_preview, last_message_direction, last_message_is_template, created_at, assigned_to_user_id, assigned_at, channel, status, closed_at, closed_by_user_id";
+  "id, phone_number, player_id, match_ambiguous, last_message_at, last_message_preview, last_message_direction, last_message_is_template, created_at, assigned_to_user_id, assigned_at, channel, status, closed_at, closed_by_user_id, no_reply_needed_at";
 
 type ThreadRow = {
   id: string;
@@ -68,6 +69,9 @@ type ThreadRow = {
   status: "open" | "closed";
   closed_at: string | null;
   closed_by_user_id: string | null;
+  // Operator "Done · no reply needed" dismissal (0073). Governs the
+  // refined awaiting state alongside the acknowledgment heuristic.
+  no_reply_needed_at: string | null;
 };
 
 type PlayerRow = {
@@ -131,7 +135,10 @@ export async function GET(req: Request) {
     } else if (view === "mine") {
       q = q.eq("status", "open").eq("assigned_to_user_id", viewerId!);
     } else if (view === "awaiting") {
-      // Awaiting = open threads where the customer spoke last.
+      // Awaiting = open threads where the customer spoke last. The
+      // acknowledgment / manual-dismissal refinement can't be expressed
+      // in PostgREST, so this fetches the inbound-last set and the JS
+      // post-filter below drops the "no reply needed" ones.
       q = q.eq("status", "open").eq("last_message_direction", "inbound");
     } else {
       // starred — any status, restricted to the viewer's star set.
@@ -162,6 +169,14 @@ export async function GET(req: Request) {
       return Response.json({ error: "DB error" }, { status: 500 });
     }
     threads = (listRes.data ?? []) as ThreadRow[];
+
+    // The dedicated Awaiting view returns ONLY genuinely-awaiting threads
+    // — drop acknowledgments and operator-dismissed ones. (Open/Mine keep
+    // the full set; the client splits them into Awaiting / Wrapping up /
+    // Answered groups.)
+    if (view === "awaiting") {
+      threads = threads.filter((t) => isAwaitingReply(t));
+    }
   }
 
   // Batch-fetch players for the visible list.
@@ -283,6 +298,11 @@ export async function GET(req: Request) {
     status: string | null;
     assigned_to_user_id: string | null;
     last_message_direction: string | null;
+    // Added for the refined awaiting count: the acknowledgment heuristic
+    // reads the preview, the manual-dismissal check reads both timestamps.
+    last_message_preview: string | null;
+    last_message_at: string | null;
+    no_reply_needed_at: string | null;
   }[] = [];
   {
     let from = 0;
@@ -290,7 +310,9 @@ export async function GET(req: Request) {
     while (from < 20000) {
       const r = await supabase
         .from("crm_threads")
-        .select("id, status, assigned_to_user_id, last_message_direction")
+        .select(
+          "id, status, assigned_to_user_id, last_message_direction, last_message_preview, last_message_at, no_reply_needed_at",
+        )
         .order("id", { ascending: true })
         .range(from, from + INDEX_PAGE - 1);
       if (r.error) {
@@ -313,9 +335,18 @@ export async function GET(req: Request) {
     ).length,
     starred: indexRows.filter((r) => starredThreadIds.has(r.id)).length,
     closed: indexRows.filter((r) => (r.status ?? "open") === "closed").length,
-    // Awaiting our reply = open + customer spoke last.
-    awaiting: indexRows.filter(
-      (r) => isOpen(r) && r.last_message_direction === "inbound",
+    // Awaiting our reply = open + customer spoke last + actually needs a
+    // reply (not an acknowledgment, not operator-dismissed). isAwaitingReply
+    // is the single source of truth shared with the view + the client.
+    awaiting: indexRows.filter((r) =>
+      isAwaitingReply({
+        status: (r.status ?? "open") as "open" | "closed",
+        last_message_direction:
+          (r.last_message_direction as "inbound" | "outbound" | null) ?? null,
+        last_message_preview: r.last_message_preview,
+        last_message_at: r.last_message_at,
+        no_reply_needed_at: r.no_reply_needed_at,
+      }),
     ).length,
   };
 

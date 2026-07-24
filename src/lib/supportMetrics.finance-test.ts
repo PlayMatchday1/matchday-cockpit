@@ -99,6 +99,25 @@ test("an out-of-hours auto-reply is skipped; the real reply sets the time", () =
   assert.ok(approx(rt, 20), `expected ~20, got ${rt}`);
 });
 
+test("a trailing acknowledgment does not change the first-response time (median is awaiting-agnostic)", () => {
+  // The awaiting refinement (acks / no-reply-needed) governs the queue,
+  // NOT the metric. First response is first inbound → first outbound;
+  // a later "thanks" inbound must not touch it.
+  const withoutAck = [
+    msg("t", "inbound", "2026-07-22T15:00:00Z"), // 10:00am question
+    msg("t", "outbound", "2026-07-22T15:25:00Z"), // 10:25am reply → 25 min
+  ];
+  const withAck = [
+    ...withoutAck,
+    msg("t", "inbound", "2026-07-22T15:40:00Z"), // 10:40am "thanks"
+  ];
+  assert.equal(
+    firstResponseBusinessMinutes(withAck),
+    firstResponseBusinessMinutes(withoutAck),
+  );
+  assert.ok(approx(firstResponseBusinessMinutes(withAck), 25));
+});
+
 test("a thread with ONLY an auto-reply counts as no reply yet (null)", () => {
   const msgs = [
     msg("t", "inbound", "2026-07-22T03:00:00Z"),
