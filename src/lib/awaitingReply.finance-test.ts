@@ -10,6 +10,8 @@ import {
   awaitingReplyState,
   awaitingAgeLabel,
   isAwaitingReply,
+  isWrappingUp,
+  isAcknowledgment,
   isFreshThreadUpdate,
   AWAITING_WINDOW_CLOSING_HOURS,
   AWAITING_WINDOW_CLOSED_HOURS,
@@ -141,4 +143,138 @@ test("unparseable / future timestamps degrade to fresh, never crash", () => {
   const future = new Date(NOW + 3600_000).toISOString();
   assert.equal(awaitingReplyState(future, NOW).tier, "fresh");
   assert.equal(awaitingAgeLabel(future, NOW), "now");
+});
+
+// ============================================================
+// Acknowledgment detection + refined awaiting predicate
+// ============================================================
+
+test("isAcknowledgment: whole-message closing courtesies are acks", () => {
+  for (const s of [
+    "Thank you", "thanks", "Thanks!", "thank you so much", "Okay thanks",
+    "ok", "OK", "Ok.", "got it", "Perfect", "sounds good", "will do",
+    "no problem", "much appreciated", "cheers", "all good", "np",
+  ]) {
+    assert.equal(isAcknowledgment(s), true, `"${s}" should be an ack`);
+  }
+});
+
+test("isAcknowledgment: emoji-only thanks are acks (with modifiers/repeats)", () => {
+  for (const s of ["👍", "🙏", "❤️", "👍👍", "🙏 🙏", "👍🏽", "👌", "✅"]) {
+    assert.equal(isAcknowledgment(s), true, `"${s}" should be an ack`);
+  }
+});
+
+test("isAcknowledgment: anything with a question is NOT an ack", () => {
+  // The load-bearing case — a question must always stay awaiting.
+  assert.equal(isAcknowledgment("thanks, can you move me to green?"), false);
+  assert.equal(isAcknowledgment("ok but when does it start?"), false);
+  assert.equal(isAcknowledgment("when does it start?"), false);
+  assert.equal(isAcknowledgment("thanks?"), false); // even a bare "thanks?"
+});
+
+test("isAcknowledgment: substantive messages are NOT acks", () => {
+  assert.equal(isAcknowledgment("I need to cancel my membership"), false);
+  assert.equal(isAcknowledgment("thanks for that, one more thing"), false);
+  assert.equal(isAcknowledgment("please move me to the green team"), false);
+  assert.equal(isAcknowledgment("👍 but also I can't make it"), false); // emoji + words
+  assert.equal(isAcknowledgment("😡"), false); // non-ack emoji
+});
+
+test("isAcknowledgment: empty / whitespace / over-length are NOT acks", () => {
+  assert.equal(isAcknowledgment(null), false);
+  assert.equal(isAcknowledgment(undefined), false);
+  assert.equal(isAcknowledgment(""), false);
+  assert.equal(isAcknowledgment("   "), false);
+  // Under 20 chars but not a known phrase → stay awaiting (strict).
+  assert.equal(isAcknowledgment("move me please"), false);
+});
+
+test("refined isAwaitingReply: an acknowledgment last-message is NOT awaiting", () => {
+  const base = {
+    status: "open" as const,
+    last_message_direction: "inbound" as const,
+    last_message_at: "2026-07-22T17:00:00Z",
+    no_reply_needed_at: null,
+  };
+  // real example: "Thank you" / "Okay thanks" should drop out
+  assert.equal(
+    isAwaitingReply({ ...base, last_message_preview: "Thank you" }),
+    false,
+  );
+  assert.equal(
+    isAwaitingReply({ ...base, last_message_preview: "Okay thanks" }),
+    false,
+  );
+  // ...while a genuine request stays awaiting
+  assert.equal(
+    isAwaitingReply({
+      ...base,
+      last_message_preview: "thanks, can you move me to green?",
+    }),
+    true,
+  );
+  assert.equal(
+    isAwaitingReply({ ...base, last_message_preview: "when does it start?" }),
+    true,
+  );
+});
+
+test("refined isAwaitingReply: manual dismissal suppresses; a newer inbound revives it", () => {
+  const preview = "I need to cancel"; // genuine, not an ack
+  // Dismissed AFTER the last message → not awaiting (wrapping up).
+  assert.equal(
+    isAwaitingReply({
+      status: "open",
+      last_message_direction: "inbound",
+      last_message_preview: preview,
+      last_message_at: "2026-07-22T17:00:00Z",
+      no_reply_needed_at: "2026-07-22T17:05:00Z",
+    }),
+    false,
+  );
+  // A NEW inbound (later last_message_at) supersedes the old dismissal.
+  assert.equal(
+    isAwaitingReply({
+      status: "open",
+      last_message_direction: "inbound",
+      last_message_preview: preview,
+      last_message_at: "2026-07-22T18:00:00Z",
+      no_reply_needed_at: "2026-07-22T17:05:00Z",
+    }),
+    true,
+  );
+});
+
+test("isWrappingUp is the inbound-last complement of awaiting", () => {
+  const ack = {
+    status: "open" as const,
+    last_message_direction: "inbound" as const,
+    last_message_preview: "Thank you",
+    last_message_at: "2026-07-22T17:00:00Z",
+    no_reply_needed_at: null,
+  };
+  assert.equal(isWrappingUp(ack), true);
+  assert.equal(isAwaitingReply(ack), false);
+
+  const genuine = { ...ack, last_message_preview: "can you help?" };
+  assert.equal(isWrappingUp(genuine), false);
+  assert.equal(isAwaitingReply(genuine), true);
+
+  // Outbound-last is neither awaiting nor wrapping-up.
+  const answered = { ...ack, last_message_direction: "outbound" as const };
+  assert.equal(isWrappingUp(answered), false);
+  assert.equal(isAwaitingReply(answered), false);
+});
+
+test("backward-compat: callers passing only status+direction keep old behavior", () => {
+  // No preview / dismissal supplied → no suppression, exactly as before.
+  assert.equal(
+    isAwaitingReply({ status: "open", last_message_direction: "inbound" }),
+    true,
+  );
+  assert.equal(
+    isAwaitingReply({ status: "open", last_message_direction: "outbound" }),
+    false,
+  );
 });

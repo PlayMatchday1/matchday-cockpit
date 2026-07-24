@@ -51,6 +51,11 @@ type ThreadScanRow = {
   status: "open" | "closed";
   last_message_at: string;
   last_message_direction: "inbound" | "outbound" | null;
+  // For the refined "Awaiting now" tile: exclude acknowledgments and
+  // operator-dismissed threads via isAwaitingReply (same rule as the
+  // inbox count).
+  last_message_preview: string | null;
+  no_reply_needed_at: string | null;
 };
 
 type MessageScanRow = {
@@ -102,7 +107,9 @@ export async function GET(req: Request) {
   const threadRes = await fetchAll<ThreadScanRow>(async (from, to) => {
     const { data, error } = await supabase
       .from("crm_threads")
-      .select("id, created_at, closed_at, status, last_message_at, last_message_direction")
+      .select(
+        "id, created_at, closed_at, status, last_message_at, last_message_direction, last_message_preview, no_reply_needed_at",
+      )
       .order("created_at", { ascending: true })
       .range(from, to);
     return { data: data as ThreadScanRow[] | null, error };
@@ -178,6 +185,9 @@ export async function GET(req: Request) {
       isAwaitingReply({
         status: t.status,
         last_message_direction: t.last_message_direction,
+        last_message_preview: t.last_message_preview,
+        last_message_at: t.last_message_at,
+        no_reply_needed_at: t.no_reply_needed_at,
       }),
     )
     .map((t) => ({ lastInboundAtMs: Date.parse(t.last_message_at) }));

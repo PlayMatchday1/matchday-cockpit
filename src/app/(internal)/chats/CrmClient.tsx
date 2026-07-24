@@ -66,7 +66,11 @@ import FilterBar, {
   type ViewCounts,
 } from "./components/FilterBar";
 import InboxRow, { type InboxRowThread } from "./components/InboxRow";
-import { isAwaitingReply, isFreshThreadUpdate } from "@/lib/awaitingReply";
+import {
+  isAwaitingReply,
+  isWrappingUp,
+  isFreshThreadUpdate,
+} from "@/lib/awaitingReply";
 import AssignDropdown from "./components/AssignDropdown";
 import MessageBubble, {
   type ConversationMessage,
@@ -98,6 +102,10 @@ type ThreadListRow = {
   status: "open" | "closed";
   closed_at: string | null;
   closed_by_user_id: string | null;
+  // Operator "Done · no reply needed" dismissal (0073). Feeds the refined
+  // awaiting/wrapping-up split; null once "Reply anyway" clears it or a
+  // newer inbound supersedes it.
+  no_reply_needed_at: string | null;
   // Server-computed per the assignment-aware rule. Authoritative —
   // the client mirrors this for optimistic updates on mark-read but
   // never recomputes the rule itself.
@@ -678,6 +686,15 @@ export default function CrmClient() {
                     status: t.status,
                     closed_at: t.closed_at,
                     closed_by_user_id: t.closed_by_user_id,
+                    // Pick up a dismiss / "reply anyway" from another
+                    // operator's session. Guarded with `in` because the
+                    // realtime schema cache can lag a freshly-added column
+                    // and omit it; when present (including an explicit
+                    // null) we apply it, otherwise keep our value.
+                    no_reply_needed_at:
+                      "no_reply_needed_at" in t
+                        ? t.no_reply_needed_at
+                        : x.no_reply_needed_at,
                     assignee:
                       t.assigned_to_user_id != null
                         ? operatorsById.get(t.assigned_to_user_id) ??
@@ -757,48 +774,59 @@ export default function CrmClient() {
     return arr.filter((t) => {
       if (view === "starred" && !t.is_follow_up) return false;
       // The server already scopes the awaiting view, but realtime
-      // patches can drop a fresh row in — keep it inbound-only here so
-      // a just-answered thread leaves the view immediately.
-      if (view === "awaiting" && t.last_message_direction !== "inbound")
-        return false;
+      // patches can drop a fresh row in — re-apply the full refined rule
+      // here so a just-answered, acknowledged, or dismissed thread leaves
+      // the view immediately.
+      if (view === "awaiting" && !isAwaitingReply(t)) return false;
       return true;
     });
   }, [threads, view]);
 
   const isAwaiting = (t: ThreadListRow) => isAwaitingReply(t);
+  const isWrapping = (t: ThreadListRow) => isWrappingUp(t);
 
-  // Render groups. In the Open / Mine views threads split into
-  // "Awaiting reply" (customer spoke last, oldest first = longest
-  // waiting on top) above "Answered" (we spoke last, most recent
-  // first). The Awaiting view is a single awaiting group; every other
-  // view is one ungrouped list in its existing order.
+  // Render groups. In the Open / Mine views threads split three ways:
+  // "Awaiting reply" (customer spoke last AND needs a reply, oldest first
+  // = longest waiting on top), "Answered" (we spoke last), and "Wrapping
+  // up" (customer spoke last but it's a closing acknowledgment or an
+  // operator marked it no-reply-needed). Wrapping-up sinks to the bottom,
+  // muted — visible so nothing's lost, but out of the actionable queue.
+  // The Awaiting view is a single awaiting group; every other view is one
+  // ungrouped list in its existing order.
   const threadGroups = useMemo<
     {
       key: string;
       label: string | null;
       hint?: string;
-      tone: "await" | "quiet";
+      tone: "await" | "quiet" | "wrapping";
       rows: ThreadListRow[];
     }[]
   >(() => {
     const byOldest = (a: ThreadListRow, b: ThreadListRow) =>
       Date.parse(a.last_message_at) - Date.parse(b.last_message_at);
+    const byNewest = (a: ThreadListRow, b: ThreadListRow) =>
+      Date.parse(b.last_message_at) - Date.parse(a.last_message_at);
 
     if (view === "open" || view === "mine") {
       const awaiting = visibleThreads.filter(isAwaiting).sort(byOldest);
-      const answered = visibleThreads.filter((t) => !isAwaiting(t));
+      const wrapping = visibleThreads.filter(isWrapping).sort(byNewest);
+      // Answered = everything that's neither awaiting nor wrapping-up
+      // (i.e. we spoke last).
+      const answered = visibleThreads.filter(
+        (t) => !isAwaiting(t) && !isWrapping(t),
+      );
       const groups: {
         key: string;
         label: string | null;
         hint?: string;
-        tone: "await" | "quiet";
+        tone: "await" | "quiet" | "wrapping";
         rows: ThreadListRow[];
       }[] = [];
       if (awaiting.length > 0)
         groups.push({
           key: "awaiting",
           label: `Awaiting reply · ${awaiting.length}`,
-          hint: "The customer sent the last message — oldest waiting on top.",
+          hint: "The customer sent the last message and it needs a reply — oldest waiting on top.",
           tone: "await",
           rows: awaiting,
         });
@@ -809,6 +837,14 @@ export default function CrmClient() {
           hint: "We sent the last message — nothing owed.",
           tone: "quiet",
           rows: answered,
+        });
+      if (wrapping.length > 0)
+        groups.push({
+          key: "wrapping",
+          label: `Wrapping up · ${wrapping.length}`,
+          hint: "Customer's last message was a thanks / acknowledgment, or marked no reply needed. Tap “Reply anyway” to re-open it.",
+          tone: "wrapping",
+          rows: wrapping,
         });
       return groups;
     }
@@ -976,6 +1012,54 @@ export default function CrmClient() {
       }
     },
     [loadThreads],
+  );
+
+  // ----- "no reply needed" dismiss / reactivate -----
+  // dismiss  → "Done · no reply needed": moves an awaiting thread into the
+  //            muted Wrapping-up group without replying or closing.
+  // reactivate → "Reply anyway": clears the dismissal so the thread is
+  //            governed by direction + the ack heuristic again.
+  // Optimistic like the star: patch local state first (the realtime echo
+  // for a new column can lag Supabase's schema cache), reconcile on
+  // failure, and refetch to keep the awaiting count in sync.
+  const onSetNoReply = useCallback(
+    async (threadId: string, action: "dismiss" | "reactivate") => {
+      const value = action === "dismiss" ? new Date().toISOString() : null;
+      const patch = (v: string | null) => {
+        setThreads((prev) =>
+          prev.map((t) =>
+            t.id === threadId ? { ...t, no_reply_needed_at: v } : t,
+          ),
+        );
+        setDetail((prev) =>
+          prev && prev.thread.id === threadId
+            ? { ...prev, thread: { ...prev.thread, no_reply_needed_at: v } }
+            : prev,
+        );
+      };
+      const prevValue =
+        threads.find((t) => t.id === threadId)?.no_reply_needed_at ?? null;
+      patch(value);
+      const headers = await bearerHeaders();
+      if (!headers) {
+        patch(prevValue);
+        return;
+      }
+      try {
+        const res = await fetch(`/api/crm/threads/${threadId}/no-reply`, {
+          method: "POST",
+          headers,
+          body: JSON.stringify({ action }),
+        });
+        if (!res.ok) throw new Error(`HTTP ${res.status}`);
+        // The Awaiting count / view membership changed — resync.
+        void loadThreads();
+      } catch (err) {
+        console.error("[crm] no-reply toggle failed", err);
+        patch(prevValue); // revert
+      }
+    },
+    [threads, loadThreads],
   );
 
   // ----- bulk selection (Open view, admins) -----
@@ -1240,7 +1324,9 @@ export default function CrmClient() {
                       className={`group relative flex items-center gap-1 px-4 py-1 text-[10px] font-semibold uppercase tracking-[0.08em] ${
                         g.tone === "await"
                           ? "bg-red-50/50 text-red-700/90"
-                          : "bg-cream-soft/50 text-deep-green/40"
+                          : g.tone === "wrapping"
+                            ? "bg-cream-soft/40 text-deep-green/30"
+                            : "bg-cream-soft/50 text-deep-green/40"
                       }`}
                     >
                       <span>{g.label}</span>
@@ -1267,6 +1353,11 @@ export default function CrmClient() {
                         onToggleFollowUp={() =>
                           onToggleFollowUp(t.id, !t.is_follow_up)
                         }
+                        onMarkNoReply={() => onSetNoReply(t.id, "dismiss")}
+                        onReactivate={() => {
+                          onSetNoReply(t.id, "reactivate");
+                          setSelected(t.id);
+                        }}
                         selectable={bulkSelectable}
                         selected={selectedIds.has(t.id)}
                         onToggleSelect={() => toggleSelect(t.id)}

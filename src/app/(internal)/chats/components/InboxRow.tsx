@@ -1,9 +1,11 @@
 "use client";
 
-import { Star } from "lucide-react";
+import { Star, Check, Undo2 } from "lucide-react";
 import {
   awaitingReplyState,
   awaitingAgeLabel,
+  isAwaitingReply,
+  isWrappingUp,
   type AwaitingTier,
 } from "@/lib/awaitingReply";
 
@@ -28,6 +30,9 @@ export type InboxRowThread = {
   // Last outbound was a WhatsApp template → answered row reads
   // "template sent" instead of "replied".
   last_message_is_template: boolean;
+  // Operator "Done · no reply needed" dismissal (0073). With the ack
+  // heuristic, splits inbound-last threads into Awaiting vs Wrapping up.
+  no_reply_needed_at: string | null;
   status: "open" | "closed";
   player: {
     first_name: string | null;
@@ -124,6 +129,8 @@ export default function InboxRow({
   active,
   onSelect,
   onToggleFollowUp,
+  onMarkNoReply,
+  onReactivate,
   selectable = false,
   selected = false,
   onToggleSelect,
@@ -132,6 +139,12 @@ export default function InboxRow({
   active: boolean;
   onSelect: () => void;
   onToggleFollowUp: () => void;
+  // "Done · no reply needed" on an awaiting row → move it to Wrapping up
+  // without replying or closing.
+  onMarkNoReply?: () => void;
+  // "Reply anyway" on a wrapping-up row → clear the dismissal and open
+  // the thread to reply.
+  onReactivate?: () => void;
   // Bulk-select checkbox (Open view, admins). When selectable, a
   // checkbox renders at the left of the row; ticking it never opens
   // the thread.
@@ -149,12 +162,14 @@ export default function InboxRow({
       ? `You: ${rawPreview}`
       : rawPreview;
 
-  // Awaiting OUR reply = open thread where the customer spoke last.
+  // Refined states (shared source of truth with the server + grouping):
+  //   awaiting   — customer spoke last AND it needs a reply → colored chip
+  //   wrappingUp — customer spoke last but it's an acknowledgment or was
+  //                marked no-reply-needed → muted, "Reply anyway"
+  //   answered   — we spoke last
   const nowMs = Date.now();
-  const awaiting =
-    thread.status === "open" &&
-    thread.last_message_direction === "inbound" &&
-    !!thread.last_message_preview;
+  const awaiting = isAwaitingReply(thread) && !!thread.last_message_preview;
+  const wrappingUp = isWrappingUp(thread);
   const state = awaiting
     ? awaitingReplyState(thread.last_message_at, nowMs)
     : null;
@@ -162,7 +177,7 @@ export default function InboxRow({
   // Right-slot label: awaiting → colored age chip; answered (we spoke
   // last) → quiet "replied/template sent"; otherwise plain time.
   const answered =
-    !awaiting && thread.last_message_direction === "outbound";
+    !awaiting && !wrappingUp && thread.last_message_direction === "outbound";
   const timeLabel = timeAgoCompact(thread.last_message_at);
   const asg = assigneeLabel(thread.assignee);
 
@@ -282,6 +297,10 @@ export default function InboxRow({
             >
               {chipText}
             </span>
+          ) : wrappingUp ? (
+            <span className="whitespace-nowrap rounded-lg bg-cream-line/60 px-2 py-0.5 text-[10.5px] font-semibold text-deep-green/45">
+              no reply needed
+            </span>
           ) : answered ? (
             <span className="whitespace-nowrap text-[11px] text-deep-green/40">
               {answeredLabel(thread, nowMs)}
@@ -306,30 +325,88 @@ export default function InboxRow({
           </span>
         </div>
       </button>
-      {/* Follow-up star — a sibling button (not nested in the select
-          button, which would be invalid HTML). stopPropagation guards
-          against any wrapper handler; tapping it toggles the flag
-          without opening the thread. */}
-      <button
-        type="button"
-        onClick={(e) => {
-          e.stopPropagation();
-          onToggleFollowUp();
-        }}
-        aria-label={
-          thread.is_follow_up ? "Remove follow-up flag" : "Mark for follow up"
-        }
-        aria-pressed={thread.is_follow_up}
-        style={{ touchAction: "manipulation" }}
-        className="absolute right-1.5 top-1/2 flex h-8 w-8 -translate-y-1/2 items-center justify-center rounded-full text-deep-green/35 transition hover:bg-cream-line/60 hover:text-deep-green"
-      >
-        <Star
-          aria-hidden
-          size={16}
-          strokeWidth={1.75}
-          className={thread.is_follow_up ? "fill-coral text-coral" : ""}
-        />
-      </button>
+      {/* Right-gutter action buttons — siblings of the select button (a
+          nested button would be invalid HTML). When there's a row action
+          (Done on awaiting, Reply-anyway on wrapping-up) the star sits at
+          the top of the gutter and the action beneath it; otherwise the
+          star stays vertically centered. Both fit inside the existing
+          pr-10 gutter, so the chip column is never squeezed. */}
+      {(awaiting && onMarkNoReply) || (wrappingUp && onReactivate) ? (
+        <>
+          <button
+            type="button"
+            onClick={(e) => {
+              e.stopPropagation();
+              onToggleFollowUp();
+            }}
+            aria-label={
+              thread.is_follow_up
+                ? "Remove follow-up flag"
+                : "Mark for follow up"
+            }
+            aria-pressed={thread.is_follow_up}
+            style={{ touchAction: "manipulation" }}
+            className="absolute right-1.5 top-1.5 flex h-7 w-7 items-center justify-center rounded-full text-deep-green/35 transition hover:bg-cream-line/60 hover:text-deep-green"
+          >
+            <Star
+              aria-hidden
+              size={15}
+              strokeWidth={1.75}
+              className={thread.is_follow_up ? "fill-coral text-coral" : ""}
+            />
+          </button>
+          {awaiting ? (
+            <button
+              type="button"
+              onClick={(e) => {
+                e.stopPropagation();
+                onMarkNoReply?.();
+              }}
+              aria-label="Mark done — no reply needed"
+              title="Done · no reply needed"
+              style={{ touchAction: "manipulation" }}
+              className="absolute bottom-1.5 right-1.5 flex h-7 w-7 items-center justify-center rounded-full text-deep-green/35 transition hover:bg-mint-soft hover:text-mint-hover"
+            >
+              <Check aria-hidden size={16} strokeWidth={2.25} />
+            </button>
+          ) : (
+            <button
+              type="button"
+              onClick={(e) => {
+                e.stopPropagation();
+                onReactivate?.();
+              }}
+              aria-label="Reply anyway — move back to awaiting"
+              title="Reply anyway"
+              style={{ touchAction: "manipulation" }}
+              className="absolute bottom-1.5 right-1.5 flex h-7 w-7 items-center justify-center rounded-full text-deep-green/35 transition hover:bg-cream-line/60 hover:text-deep-green"
+            >
+              <Undo2 aria-hidden size={15} strokeWidth={1.9} />
+            </button>
+          )}
+        </>
+      ) : (
+        <button
+          type="button"
+          onClick={(e) => {
+            e.stopPropagation();
+            onToggleFollowUp();
+          }}
+          aria-label={
+            thread.is_follow_up ? "Remove follow-up flag" : "Mark for follow up"
+          }
+          aria-pressed={thread.is_follow_up}
+          style={{ touchAction: "manipulation" }}
+          className="absolute right-1.5 top-1/2 flex h-8 w-8 -translate-y-1/2 items-center justify-center rounded-full text-deep-green/35 transition hover:bg-cream-line/60 hover:text-deep-green"
+        >
+          <Star
+            aria-hidden
+            size={16}
+            strokeWidth={1.75}
+            className={thread.is_follow_up ? "fill-coral text-coral" : ""}
+          />
+        </button>
+      )}
     </li>
   );
 }
