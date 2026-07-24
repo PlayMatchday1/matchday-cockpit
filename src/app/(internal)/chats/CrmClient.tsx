@@ -131,6 +131,12 @@ type Message = {
   // Set for WhatsApp template sends (crm_messages.template_name, 0067).
   // Lets a realtime INSERT mark the thread "template sent" vs "replied".
   template_name?: string | null;
+  // True for the out-of-hours system auto-reply (0072). A courtesy
+  // greeting is an acknowledgment, not an answer: it must NOT move the
+  // thread out of Awaiting reply. The realtime INSERT handler skips the
+  // last_message_* patch for these, mirroring the server, which never
+  // touches those columns when writing an auto-reply.
+  is_auto_reply?: boolean;
   sender?: { email: string; full_name: string | null } | null;
   // Media columns. media_url (Storage path) is stripped by the
   // detail route; clients receive the short-lived signed_media_url
@@ -573,28 +579,36 @@ export default function CrmClient() {
               });
             }
           }
-          setThreads((prev) =>
-            prev.map((t) =>
-              t.id === m.thread_id
-                ? {
-                    ...t,
-                    last_message_at: m.sent_at,
-                    last_message_preview: m.body.slice(0, 80),
-                    // AUTHORITATIVE source of awaiting state. crm_messages
-                    // realtime always carries `direction` (+ template_name),
-                    // established columns unaffected by the 0071 realtime
-                    // schema-cache lag that can strip the denormalized
-                    // crm_threads columns. Every last_message change is
-                    // driven by a message insert, so owning direction here
-                    // means the indicator is always correct without
-                    // trusting the crm_threads UPDATE payload.
-                    last_message_direction: m.direction,
-                    last_message_is_template:
-                      m.direction === "outbound" && !!m.template_name,
-                  }
-                : t,
-            ),
-          );
+          // The out-of-hours auto-reply is intentionally invisible to the
+          // inbox row's state: it does not update last_message_* and must
+          // not clear Awaiting reply (the customer still needs a human).
+          // Mirrors the server, which writes the auto-reply message row
+          // without touching crm_threads.last_message_*. It still lands in
+          // the open conversation above so the operator sees it went out.
+          if (!m.is_auto_reply) {
+            setThreads((prev) =>
+              prev.map((t) =>
+                t.id === m.thread_id
+                  ? {
+                      ...t,
+                      last_message_at: m.sent_at,
+                      last_message_preview: m.body.slice(0, 80),
+                      // AUTHORITATIVE source of awaiting state. crm_messages
+                      // realtime always carries `direction` (+ template_name),
+                      // established columns unaffected by the 0071 realtime
+                      // schema-cache lag that can strip the denormalized
+                      // crm_threads columns. Every last_message change is
+                      // driven by a message insert, so owning direction here
+                      // means the indicator is always correct without
+                      // trusting the crm_threads UPDATE payload.
+                      last_message_direction: m.direction,
+                      last_message_is_template:
+                        m.direction === "outbound" && !!m.template_name,
+                    }
+                  : t,
+              ),
+            );
+          }
         },
       )
       .on(
