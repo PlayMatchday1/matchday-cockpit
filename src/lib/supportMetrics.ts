@@ -40,12 +40,15 @@ function isOperatorOutbound(m: MetricMessage): boolean {
 }
 
 // Minimal thread shape. openedAtMs = crm_threads.created_at;
-// closedAtMs = crm_threads.closed_at (null while open).
+// closedAtMs = crm_threads.closed_at (null while open);
+// noReplyNeededAtMs = crm_threads.no_reply_needed_at (null unless an
+// operator marked it "no reply needed").
 export type MetricThread = {
   id: string;
   openedAtMs: number;
   closedAtMs: number | null;
   status: "open" | "closed";
+  noReplyNeededAtMs?: number | null;
 };
 
 // Half-open period [startMs, endMs). Conversation membership is by
@@ -220,13 +223,28 @@ export function computePeriodMetrics(
   // close-rate denominator.
   const openedThreads = threads.filter((t) => inPeriod(t.openedAtMs, period));
 
+  // Response-time metrics (median, answered-within-1h) count ONLY
+  // conversations that received an actual operator outbound — no reply
+  // means there is no response to time, so it never enters these
+  // denominators and can never register as a slow response.
+  // firstResponseBusinessMinutes returns null precisely in that case
+  // (it pairs first inbound → first operator outbound and never falls
+  // back to close-time or no_reply_needed_at as a response timestamp).
   const responseMinutes: number[] = [];
   let awaitingFirstReplyCount = 0;
   for (const t of openedThreads) {
     const msgs = byThread.get(t.id) ?? [];
     const rt = firstResponseBusinessMinutes(msgs, cfg);
-    if (rt == null) awaitingFirstReplyCount++;
-    else responseMinutes.push(rt);
+    if (rt == null) {
+      // No operator reply. It only "still awaits" if it's genuinely open
+      // and unresolved — a closed / no-reply-needed thread was dealt
+      // with, not left hanging, so it does not count as awaiting.
+      const handledWithoutReply =
+        t.closedAtMs != null || t.noReplyNeededAtMs != null || t.status === "closed";
+      if (!handledWithoutReply) awaitingFirstReplyCount++;
+    } else {
+      responseMinutes.push(rt);
+    }
   }
 
   const respondedCount = responseMinutes.length;
@@ -235,15 +253,27 @@ export function computePeriodMetrics(
   const answeredWithin1hPct =
     respondedCount === 0 ? null : (within1h / respondedCount) * 100;
 
-  // Tile 3 — "handled" counts conversations with operator activity IN
-  // the period, regardless of when they were opened (an old thread the
-  // team worked this week still counts as handled this week).
+  // Tile 3 — "handled" = every conversation we DEALT WITH in the period,
+  // regardless of when it was opened or whether we replied. A ticket is
+  // handled if any of these happened in the period:
+  //   • an operator sent a reply (real outbound, not the auto-reply), OR
+  //   • it was closed, OR
+  //   • it was marked "no reply needed".
+  // The last two capture tickets resolved without a reply (spam, a
+  // duplicate, a self-resolved question we closed) — real volume we
+  // handled, even though they correctly stay OUT of the response-time
+  // metrics above.
   const handledThreadIds = new Set<string>();
   for (const m of messages) {
     // Auto-replies don't count as handling — a thread greeted overnight
     // but never worked by a person is not "handled".
     if (isOperatorOutbound(m) && inPeriod(m.sentAtMs, period)) {
       handledThreadIds.add(m.threadId);
+    }
+  }
+  for (const t of threads) {
+    if (inPeriod(t.closedAtMs, period) || inPeriod(t.noReplyNeededAtMs ?? null, period)) {
+      handledThreadIds.add(t.id);
     }
   }
 
