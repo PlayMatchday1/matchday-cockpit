@@ -14,7 +14,16 @@
 // field_name column is never referenced — see migration 0075).
 
 import { useCallback, useEffect, useMemo, useState } from "react";
-import { Pencil, Trash2, Plus, ExternalLink, Search, X } from "lucide-react";
+import {
+  Pencil,
+  Trash2,
+  Plus,
+  ExternalLink,
+  Search,
+  X,
+  Phone,
+  Mail,
+} from "lucide-react";
 import { supabase } from "@/lib/supabase";
 import CityChip from "@/components/CityChip";
 import { CITIES } from "@/lib/types";
@@ -23,6 +32,7 @@ import {
   cityManagerFor,
   buildFieldPayload,
   resolveDeleteAction,
+  contactLink,
   UNASSIGNED_CITY_MANAGER,
   type CityManagerRoster,
   type FieldFormInput,
@@ -294,7 +304,7 @@ export default function CitiesFieldsLens() {
                     Field Contact Name
                   </th>
                   <th className="border-b border-cream-line px-4 py-3 text-left font-extrabold">
-                    Field Contact Number
+                    Field Contact
                   </th>
                   <th className="border-b border-cream-line px-4 py-3 text-center font-extrabold">
                     Min Players
@@ -367,6 +377,30 @@ export default function CitiesFieldsLens() {
         />
       )}
     </section>
+  );
+}
+
+// Field Contact — a clickable tel:/mailto: link (phone → call, email →
+// email) with a matching icon. Falls back to plain text if the value has
+// nothing dialable/emailable, and "—" when empty.
+function ContactCell({ value }: { value: string | null }) {
+  if (!value) return <span className="text-deep-green/25">—</span>;
+  const link = contactLink(value);
+  if (!link) return <span>{value}</span>;
+  return (
+    <a
+      href={link.href}
+      className="inline-flex items-center gap-1.5 text-deep-green/80 underline decoration-cream-line decoration-1 underline-offset-2 transition hover:text-mint-hover hover:decoration-mint"
+    >
+      {link.kind === "email" ? (
+        <Mail aria-hidden size={13} className="shrink-0 text-deep-green/40" />
+      ) : (
+        <Phone aria-hidden size={13} className="shrink-0 text-deep-green/40" />
+      )}
+      <span className={link.kind === "phone" ? "tabular-nums" : ""}>
+        {value}
+      </span>
+    </a>
   );
 }
 
@@ -443,8 +477,8 @@ function FieldGroup({
           <td className="border-b border-cream-line/60 px-4 py-3 font-semibold text-deep-green/80">
             {v.contact_name ?? <span className="text-deep-green/25">—</span>}
           </td>
-          <td className="border-b border-cream-line/60 px-4 py-3 tabular-nums font-semibold text-deep-green/70">
-            {v.contact_number ?? <span className="text-deep-green/25">—</span>}
+          <td className="border-b border-cream-line/60 px-4 py-3 font-semibold text-deep-green/70">
+            <ContactCell value={v.contact_number} />
           </td>
           <td className="border-b border-cream-line/60 px-4 py-3 text-center tabular-nums font-bold text-deep-green/45">
             {v.min_players ?? <span className="text-deep-green/25">—</span>}
@@ -569,10 +603,11 @@ function FieldModal({
               className={inputCls}
             />
           </Labeled>
-          <Labeled label="Field Contact Number">
+          <Labeled label="Field Contact" hint="Phone or email — click to call/email">
             <input
               value={f.contact_number}
               onChange={(e) => set({ contact_number: e.target.value })}
+              placeholder="Phone or email"
               className={inputCls}
             />
           </Labeled>

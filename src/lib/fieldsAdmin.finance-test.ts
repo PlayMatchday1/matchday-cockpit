@@ -13,6 +13,7 @@ import {
   parseIntStrict,
   resolveDeleteAction,
   cityOptions,
+  contactLink,
   UNASSIGNED_CITY_MANAGER,
   type CityManagerRoster,
   type FieldFormInput,
@@ -177,6 +178,43 @@ test("delete resolves to a soft-deactivate (is_active=false), never a hard delet
   assert.deepEqual(action.patch, { is_active: false });
   // There is no hard-delete branch — a referenced venue is preserved, its
   // match/cost/schedule history intact, just dropped from active lists.
+});
+
+// ---------------------------------------------------------------
+// Field Contact → clickable tel: / mailto:
+// ---------------------------------------------------------------
+test("contactLink: a phone number → tel: with dialable digits", () => {
+  assert.deepEqual(contactLink("(713) 555-0110"), {
+    href: "tel:7135550110",
+    kind: "phone",
+  });
+  assert.deepEqual(contactLink("210-555-0142"), {
+    href: "tel:2105550142",
+    kind: "phone",
+  });
+});
+
+test("contactLink: an international number keeps its leading +", () => {
+  assert.deepEqual(contactLink("+1 (713) 555-0110"), {
+    href: "tel:+17135550110",
+    kind: "phone",
+  });
+});
+
+test("contactLink: an email → mailto:", () => {
+  assert.deepEqual(contactLink("marco@soccercentral.com"), {
+    href: "mailto:marco@soccercentral.com",
+    kind: "email",
+  });
+});
+
+test("contactLink: empty / non-dialable / malformed email → null (plain text)", () => {
+  assert.equal(contactLink(null), null);
+  assert.equal(contactLink(""), null);
+  assert.equal(contactLink("   "), null);
+  assert.equal(contactLink("ask at front desk"), null); // no digits
+  assert.equal(contactLink("not-an-email@"), null); // no domain
+  assert.equal(contactLink("@nodomain"), null); // no local part
 });
 
 // ---------------------------------------------------------------
