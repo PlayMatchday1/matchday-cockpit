@@ -16,19 +16,34 @@ import { CITIES, type City } from "./types";
 // El Paso today).
 export const UNASSIGNED_CITY_MANAGER = "Unassigned";
 
-// city → manager_name, straight from the city_managers table. Missing
-// entry → the city has no manager.
-export type CityManagerRoster = Map<string, string>;
+// One roster row from city_managers: the manager's name and optional
+// phone (E.164, e.g. "+15129541102"). Missing map entry → the city has no
+// manager (Atlanta, El Paso).
+export type CityManager = { name: string; phone: string | null };
 
-// The one place city→CM resolution happens. Everything (group headers,
-// the modal chip) reads through this so the derived value is identical
-// everywhere and can never be typed in by hand.
+// city → { name, phone }, straight from the city_managers table.
+export type CityManagerRoster = Map<string, CityManager>;
+
+// The one place city→CM name resolution happens. Everything (group
+// headers, the modal chip) reads through this so the derived value is
+// identical everywhere and can never be typed in by hand.
 export function cityManagerFor(
   city: string | null | undefined,
   roster: CityManagerRoster,
 ): string {
   if (!city) return UNASSIGNED_CITY_MANAGER;
-  return roster.get(city) ?? UNASSIGNED_CITY_MANAGER;
+  return roster.get(city)?.name ?? UNASSIGNED_CITY_MANAGER;
+}
+
+// The manager's phone (E.164) for a city, or null when the city has no
+// manager / no phone on file. Read through the SAME roster join as the
+// name, so the two can never drift.
+export function cityManagerPhoneFor(
+  city: string | null | undefined,
+  roster: CityManagerRoster,
+): string | null {
+  if (!city) return null;
+  return roster.get(city)?.phone ?? null;
 }
 
 // The canonical city options for the select — the same list the rest of
@@ -101,6 +116,21 @@ export function formatPhoneDisplay(value: string): string {
     return `${plus ? "+" : ""}1-${group(digits.slice(1))}`;
   }
   return trimmed; // international / partial / odd length → leave alone
+}
+
+// Pretty-format a stored E.164 US number for DISPLAY, e.g.
+// "+15129541102" → "+1 (512) 954-1102". Used for City-Manager phones,
+// which are stored E.164. The tel: href still comes from contactLink
+// (raw E.164), so it dials correctly. Non-US / non-E.164 values are
+// returned unchanged rather than mangled.
+export function formatE164UsPretty(value: string): string {
+  const v = value.trim();
+  const digits = v.replace(/\D/g, "");
+  if (v.startsWith("+1") && digits.length === 11) {
+    const d = digits.slice(1); // 10 national digits
+    return `+1 (${d.slice(0, 3)}) ${d.slice(3, 6)}-${d.slice(6)}`;
+  }
+  return v;
 }
 
 // Parse a player-count input to an integer, or null. STRICT: only whole
