@@ -77,13 +77,13 @@ export function parseIntStrict(
 }
 
 // Raw form state from the Add/Edit modal. Note there is NO cityManager
-// field — CM is derived, never entered.
+// field — CM is derived, never entered. (Field Name / field_name was
+// removed — we keep a single name, "Field" = venue_name.)
 export type FieldFormInput = {
   venue_name: string; // "Field" (short internal name)
   city: string;
-  field_name: string; // "Field Name" (full facility)
-  contact_name: string;
-  contact_number: string;
+  contact_name: string; // "Field Contact Name" — column stays contact_name
+  contact_number: string; // "Field Contact Number" — column stays contact_number
   min_players: string;
   max_players: string;
   schedule_url: string;
@@ -91,11 +91,11 @@ export type FieldFormInput = {
 
 // The validated, DB-ready payload written to fin_venues. Deliberately has
 // no City Manager key — a compile-time guarantee CM is never persisted on
-// the venue.
+// the venue. No field_name key — that column is retired (see migration
+// 0075); nothing in the payload touches it.
 export type FieldPayload = {
   venue_name: string;
   city: string;
-  field_name: string | null;
   contact_name: string | null;
   contact_number: string | null;
   min_players: number | null;
@@ -143,7 +143,6 @@ export function buildFieldPayload(input: FieldFormInput): ValidationResult {
     payload: {
       venue_name,
       city,
-      field_name: orNull(input.field_name),
       contact_name: orNull(input.contact_name),
       contact_number: orNull(input.contact_number),
       min_players: min.value,
