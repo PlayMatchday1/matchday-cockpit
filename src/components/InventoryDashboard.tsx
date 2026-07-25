@@ -28,13 +28,16 @@ import {
 const SELECT_COLS =
   "id, submitted_at, name, city, white, green, orange, blue, balls, needs";
 
-// Literal bib colors (from the mock).
+// Literal bib colors (six). Counts are SETS.
 const BIB: Record<BibColorKey, { label: string; style: React.CSSProperties }> = {
   white: { label: "White", style: { background: "#e7e4d8", boxShadow: "inset 0 0 0 1px #b9b6a8" } },
   green: { label: "Green", style: { background: "#4d9e22" } },
   orange: { label: "Orange", style: { background: "#ef9f27" } },
   blue: { label: "Blue", style: { background: "#378add" } },
+  black: { label: "Black", style: { background: "#1a1a1a" } },
+  red: { label: "Red", style: { background: "#c8332a" } },
 };
+const COLOR_KEYS: BibColorKey[] = ["white", "green", "orange", "blue", "black", "red"];
 
 function Dot({ color, size = 11 }: { color: BibColorKey; size?: number }) {
   return (
@@ -106,14 +109,15 @@ export default function InventoryDashboard() {
         .slice()
         .sort((a, b) => Date.parse(b.submitted_at) - Date.parse(a.submitted_at));
       const totals = cards.reduce(
-        (t, r) => ({
-          white: t.white + r.white,
-          green: t.green + r.green,
-          orange: t.orange + r.orange,
-          blue: t.blue + r.blue,
-          balls: t.balls + r.balls,
-        }),
-        { white: 0, green: 0, orange: 0, blue: 0, balls: 0 },
+        (t, r) => {
+          for (const k of COLOR_KEYS) t[k] += r[k];
+          t.balls += r.balls;
+          return t;
+        },
+        { white: 0, green: 0, orange: 0, blue: 0, black: 0, red: 0, balls: 0 } as Record<
+          BibColorKey | "balls",
+          number
+        >,
       );
       return { city, code: normalizeCityName(city) ?? city, cards, totals };
     });
@@ -196,16 +200,14 @@ export default function InventoryDashboard() {
             <SummaryCard label="Managers reporting" value={summary.managers} />
             <SummaryCard label="Total balls" value={summary.totalBalls} />
             <div className="rounded-2xl border border-cream-line bg-white px-4 py-3">
-              <div className="mb-1.5 flex items-center gap-1.5 text-[10.5px] font-extrabold uppercase tracking-wide text-deep-green/45">
-                Bib sets W·G·O·B
-                <Dot color="white" size={8} />
-                <Dot color="green" size={8} />
-                <Dot color="orange" size={8} />
-                <Dot color="blue" size={8} />
+              <div className="mb-1.5 flex flex-wrap items-center gap-1 text-[10.5px] font-extrabold uppercase tracking-wide text-deep-green/45">
+                Bib sets
+                {COLOR_KEYS.map((k) => (
+                  <Dot key={k} color={k} size={8} />
+                ))}
               </div>
-              <div className="text-[17px] font-extrabold tabular-nums text-deep-green">
-                {summary.bib.white} · {summary.bib.green} · {summary.bib.orange} ·{" "}
-                {summary.bib.blue}
+              <div className="text-[15px] font-extrabold tabular-nums text-deep-green">
+                {COLOR_KEYS.map((k) => summary.bib[k]).join(" · ")}
               </div>
             </div>
             <SummaryCard
@@ -231,18 +233,17 @@ export default function InventoryDashboard() {
                       {g.city}
                     </span>
                   </span>
-                  <div className="flex flex-wrap items-center gap-3 text-xs text-deep-green/50">
+                  <div className="flex flex-wrap items-center gap-2.5 text-xs text-deep-green/50">
                     <span>
                       {g.cards.length} manager{g.cards.length === 1 ? "" : "s"}
                     </span>
                     <span className="text-deep-green/25">·</span>
-                    {(["white", "green", "orange", "blue"] as BibColorKey[]).map((c) => (
+                    {COLOR_KEYS.map((c) => (
                       <span key={c} className="inline-flex items-center gap-1">
                         <Dot color={c} size={9} />
                         <b className="font-extrabold tabular-nums text-deep-green">
                           {g.totals[c]}
-                        </b>{" "}
-                        {c}
+                        </b>
                       </span>
                     ))}
                     <span className="text-deep-green/25">·</span>
@@ -341,9 +342,23 @@ function ManagerCard({ row, nowMs }: { row: InventoryRow; nowMs: number }) {
         </span>
       </div>
 
-      <div className="mb-2.5 grid grid-cols-2 gap-2">
-        <TeamBox heading="Team 1 options" rows={[["white", row.white], ["orange", row.orange]]} />
-        <TeamBox heading="Team 2 options" rows={[["green", row.green], ["blue", row.blue]]} />
+      <div className="mb-2.5 rounded-lg border border-cream-line px-3 py-2.5">
+        <div className="mb-2 text-[9.5px] font-extrabold uppercase tracking-wide text-deep-green/35">
+          Bib sets on hand
+        </div>
+        <div className="grid grid-cols-3 gap-x-3 gap-y-2">
+          {COLOR_KEYS.map((c) => (
+            <div key={c} className="flex items-center gap-1.5">
+              <Dot color={c} />
+              <span className="flex-1 text-[12.5px] text-deep-green/60">
+                {BIB[c].label}
+              </span>
+              <span className="text-[13.5px] font-extrabold tabular-nums text-deep-green">
+                {row[c]}
+              </span>
+            </div>
+          ))}
+        </div>
       </div>
 
       <div className="rounded-lg bg-cream-soft/70 px-3 py-2.5">
@@ -391,27 +406,3 @@ function ManagerCard({ row, nowMs }: { row: InventoryRow; nowMs: number }) {
   );
 }
 
-function TeamBox({
-  heading,
-  rows,
-}: {
-  heading: string;
-  rows: [BibColorKey, number][];
-}) {
-  return (
-    <div className="rounded-lg border border-cream-line px-3 py-2.5">
-      <div className="mb-2 text-[9.5px] font-extrabold uppercase tracking-wide text-deep-green/35">
-        {heading}
-      </div>
-      {rows.map(([color, count]) => (
-        <div key={color} className="mb-1.5 flex items-center gap-1.5 last:mb-0">
-          <Dot color={color} />
-          <span className="flex-1 text-[13px] text-deep-green/60">{BIB[color].label}</span>
-          <span className="text-[14px] font-extrabold tabular-nums text-deep-green">
-            {count}
-          </span>
-        </div>
-      ))}
-    </div>
-  );
-}

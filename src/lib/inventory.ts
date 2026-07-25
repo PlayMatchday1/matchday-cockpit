@@ -21,6 +21,36 @@ export const MAX_NEEDS_LEN = 500;
 
 // The raw shape the public form POSTs. Counts arrive as strings or
 // numbers; everything is validated/coerced below.
+// The six bib colors. Values are BIB SETS (1 set = enough to kit one team
+// at a field), NOT individual bibs. Order is the canonical display order.
+export type BibColorKey =
+  | "white"
+  | "green"
+  | "orange"
+  | "blue"
+  | "black"
+  | "red";
+export const BIB_COLOR_KEYS: readonly BibColorKey[] = [
+  "white",
+  "green",
+  "orange",
+  "blue",
+  "black",
+  "red",
+];
+export const BIB_LABELS: Record<BibColorKey, string> = {
+  white: "White",
+  green: "Green",
+  orange: "Orange",
+  blue: "Blue",
+  black: "Black",
+  red: "Red",
+};
+
+export type BibCounts = Record<BibColorKey, number>;
+
+// The raw shape the public form POSTs. Counts arrive as strings or
+// numbers; everything is validated/coerced below.
 export type InventorySubmissionInput = {
   name?: unknown;
   city?: unknown;
@@ -28,6 +58,8 @@ export type InventorySubmissionInput = {
   green?: unknown;
   orange?: unknown;
   blue?: unknown;
+  black?: unknown;
+  red?: unknown;
   balls?: unknown;
   needs?: unknown;
   // Honeypot — a hidden field real users never fill. Any value here means
@@ -35,14 +67,10 @@ export type InventorySubmissionInput = {
   website?: unknown;
 };
 
-// The clean, DB-ready row (minus server-set columns).
-export type InventorySubmission = {
+// The clean, DB-ready row (minus server-set columns). Counts are sets.
+export type InventorySubmission = BibCounts & {
   name: string;
   city: City;
-  white: number;
-  green: number;
-  orange: number;
-  blue: number;
   balls: number;
   needs: string | null;
 };
@@ -97,7 +125,7 @@ export function validateInventorySubmission(
   if (!isKnownCity(city)) return { ok: false, error: "Unrecognized city." };
 
   const counts: Record<string, number> = {};
-  for (const key of ["white", "green", "orange", "blue", "balls"] as const) {
+  for (const key of [...BIB_COLOR_KEYS, "balls"] as const) {
     const n = parseCount(input[key]);
     if (n == null) {
       return {
@@ -129,6 +157,8 @@ export function validateInventorySubmission(
       green: counts.green,
       orange: counts.orange,
       blue: counts.blue,
+      black: counts.black,
+      red: counts.red,
       balls: counts.balls,
       needs,
     },
@@ -138,41 +168,37 @@ export function validateInventorySubmission(
 // ============================================================
 // Read-path logic (ported from the current tool)
 // ============================================================
-// One stored submission row (server columns included).
-export type InventoryRow = {
+// One stored submission row (server columns included). Counts are sets.
+export type InventoryRow = BibCounts & {
   id: string;
   submitted_at: string;
   name: string;
   city: string;
-  white: number;
-  green: number;
-  orange: number;
-  blue: number;
   balls: number;
   needs: string | null;
 };
 
-export type BibCounts = { white: number; green: number; orange: number; blue: number };
-export type BibColorKey = "white" | "green" | "orange" | "blue";
-
-// --- Coverage optimizer (ported EXACTLY from the current tool) --------
-// A game needs two visually-distinct bib colors. There are 3 ways to pair
-// the 4 colors into 2 team-pairs; each pair yields min(a,b) games. The
-// tool tries all 3 and keeps the matching with the MOST total games,
-// preferring the earlier option on a tie (so [White·Orange][Green·Blue]
-// wins ties). Leftovers = the counts still unmatched under the winner.
-//
-// NB: the approved visual mock's card numbers are placeholder and do NOT
-// reflect this algorithm — the logic here is the source of truth, ported
-// verbatim from the tool being replaced.
-const COVERAGE_OPTIONS: [BibColorKey, BibColorKey][][] = [
-  [["white", "orange"], ["green", "blue"]],
-  [["white", "green"], ["orange", "blue"]],
-  [["white", "blue"], ["orange", "green"]],
-];
-// Leftover display order matches the tool's `{white, orange, green, blue}`
-// remainder-object iteration order.
-const LEFTOVER_ORDER: BibColorKey[] = ["white", "orange", "green", "blue"];
+// --- Coverage optimizer (generalized to 6 colors) -------------------
+// A game needs two DIFFERENT colors — any two distinct colors are a valid
+// pairing (no fixed team sides). To find the max concurrent games, try
+// every way to split the 6 colors into 3 disjoint pairs (there are 15),
+// take min(sets_a, sets_b) per pair, and keep the partition with the most
+// total games; leftovers are the sets still unmatched under the winner.
+// Ties resolve to the earlier partition (deterministic generation order).
+// This generalizes the original 4-color tool's "try-all-matchings" method.
+function pairPartitions(colors: BibColorKey[]): [BibColorKey, BibColorKey][][] {
+  if (colors.length === 0) return [[]];
+  const [first, ...rest] = colors;
+  const out: [BibColorKey, BibColorKey][][] = [];
+  for (let i = 0; i < rest.length; i++) {
+    const pair: [BibColorKey, BibColorKey] = [first, rest[i]];
+    const remaining = rest.filter((_, j) => j !== i);
+    for (const sub of pairPartitions(remaining)) out.push([pair, ...sub]);
+  }
+  return out;
+}
+// Precomputed once: the 15 partitions of the 6 colors into 3 pairs.
+const PAIR_PARTITIONS = pairPartitions([...BIB_COLOR_KEYS]);
 
 export type CoveragePairing = { a: BibColorKey; b: BibColorKey; games: number };
 export type CoverageLeftover = { color: BibColorKey; count: number };
@@ -186,10 +212,10 @@ export function calcCoverage(c: BibCounts): Coverage {
   let bestTotal = 0;
   let bestPairings: CoveragePairing[] = [];
   let bestLeftovers: CoverageLeftover[] = [];
-  for (const option of COVERAGE_OPTIONS) {
+  for (const partition of PAIR_PARTITIONS) {
     const rem: BibCounts = { ...c };
     const pairings: CoveragePairing[] = [];
-    for (const [a, b] of option) {
+    for (const [a, b] of partition) {
       const games = Math.min(rem[a], rem[b]);
       rem[a] -= games;
       rem[b] -= games;
@@ -199,7 +225,7 @@ export function calcCoverage(c: BibCounts): Coverage {
     if (total > bestTotal) {
       bestTotal = total;
       bestPairings = pairings;
-      bestLeftovers = LEFTOVER_ORDER.filter((k) => rem[k] > 0).map((color) => ({
+      bestLeftovers = BIB_COLOR_KEYS.filter((k) => rem[k] > 0).map((color) => ({
         color,
         count: rem[color],
       }));
@@ -279,15 +305,12 @@ export type InventorySummary = {
   stale: number;
 };
 export function summarize(latest: InventoryRow[], nowMs: number): InventorySummary {
-  const bib = { white: 0, green: 0, orange: 0, blue: 0 };
+  const bib: BibCounts = { white: 0, green: 0, orange: 0, blue: 0, black: 0, red: 0 };
   let totalBalls = 0;
   let requested = 0;
   let stale = 0;
   for (const r of latest) {
-    bib.white += r.white;
-    bib.green += r.green;
-    bib.orange += r.orange;
-    bib.blue += r.blue;
+    for (const k of BIB_COLOR_KEYS) bib[k] += r[k];
     totalBalls += r.balls;
     if (isRequested(r.needs)) requested++;
     if (isStale(r.submitted_at, nowMs)) stale++;

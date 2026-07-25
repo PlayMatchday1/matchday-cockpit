@@ -9,6 +9,8 @@
 -- (/api/inventory/submit) and the Field Ops → Inventory tab both need
 -- this table, so apply BEFORE deploying the feature.
 
+-- Counts are BIB SETS (1 set = enough to kit one team), not individual
+-- bibs. Six colors: white, green, orange, blue, black, red.
 CREATE TABLE IF NOT EXISTS inventory_submissions (
   id           uuid        PRIMARY KEY DEFAULT gen_random_uuid(),
   submitted_at timestamptz NOT NULL DEFAULT now(),
@@ -18,6 +20,8 @@ CREATE TABLE IF NOT EXISTS inventory_submissions (
   green        integer     NOT NULL DEFAULT 0,
   orange       integer     NOT NULL DEFAULT 0,
   blue         integer     NOT NULL DEFAULT 0,
+  black        integer     NOT NULL DEFAULT 0,
+  red          integer     NOT NULL DEFAULT 0,
   balls        integer     NOT NULL DEFAULT 0,
   needs        text,
   created_at   timestamptz NOT NULL DEFAULT now(),
@@ -33,6 +37,8 @@ CREATE TABLE IF NOT EXISTS inventory_submissions (
     green  BETWEEN 0 AND 999 AND
     orange BETWEEN 0 AND 999 AND
     blue   BETWEEN 0 AND 999 AND
+    black  BETWEEN 0 AND 999 AND
+    red    BETWEEN 0 AND 999 AND
     balls  BETWEEN 0 AND 999
   )
 );

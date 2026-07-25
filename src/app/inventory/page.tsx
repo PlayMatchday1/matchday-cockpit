@@ -20,15 +20,20 @@ const CITIES = [
 ] as const;
 
 const BIBS = [
-  { key: "white", label: "White", dot: "#e5e7eb", ring: "#cbd0d6" },
-  { key: "green", label: "Green", dot: "#2fbf6c", ring: "#2fbf6c" },
-  { key: "orange", label: "Orange", dot: "#e8862b", ring: "#e8862b" },
-  { key: "blue", label: "Blue", dot: "#3b82f6", ring: "#3b82f6" },
+  { key: "white", label: "White", dot: "#e7e4d8", ring: "#b9b6a8" },
+  { key: "green", label: "Green", dot: "#4d9e22", ring: "#4d9e22" },
+  { key: "orange", label: "Orange", dot: "#ef9f27", ring: "#ef9f27" },
+  { key: "blue", label: "Blue", dot: "#378add", ring: "#378add" },
+  { key: "black", label: "Black", dot: "#1a1a1a", ring: "#1a1a1a" },
+  { key: "red", label: "Red", dot: "#c8332a", ring: "#c8332a" },
 ] as const;
 
-type Counts = Record<"white" | "green" | "orange" | "blue" | "balls", string>;
+type CountKey = "white" | "green" | "orange" | "blue" | "black" | "red" | "balls";
+type Counts = Record<CountKey, string>;
 
-const ZERO: Counts = { white: "", green: "", orange: "", blue: "", balls: "" };
+const ZERO: Counts = {
+  white: "", green: "", orange: "", blue: "", black: "", red: "", balls: "",
+};
 
 export default function InventoryFormPage() {
   const [name, setName] = useState("");
@@ -144,7 +149,7 @@ export default function InventoryFormPage() {
             Bib sets on hand
           </div>
           <div className="mb-2 text-[11px] text-deep-green/40">
-            1 set = enough for 1 team at your fields
+            1 set = enough to kit 1 team at your fields
           </div>
           <div className="flex flex-col gap-2">
             {BIBS.map((b) => (
@@ -157,7 +162,8 @@ export default function InventoryFormPage() {
                   style={{ background: b.dot, boxShadow: `inset 0 0 0 1px ${b.ring}` }}
                 />
                 <span className="flex-1 text-sm font-bold text-deep-green">
-                  {b.label}
+                  {b.label}{" "}
+                  <span className="font-medium text-deep-green/40">— sets</span>
                 </span>
                 <input
                   inputMode="numeric"
@@ -165,8 +171,11 @@ export default function InventoryFormPage() {
                   onChange={(e) => setCount(b.key, e.target.value)}
                   placeholder="0"
                   aria-label={`${b.label} bib sets`}
-                  className="w-[70px] rounded-lg border border-cream-line bg-white px-2 py-2 text-center text-sm font-extrabold tabular-nums text-deep-green focus:border-mint focus:outline-none focus:ring-4 focus:ring-mint-soft/60"
+                  className="w-[64px] rounded-lg border border-cream-line bg-white px-2 py-2 text-center text-sm font-extrabold tabular-nums text-deep-green focus:border-mint focus:outline-none focus:ring-4 focus:ring-mint-soft/60"
                 />
+                <span className="w-8 text-[11px] font-semibold text-deep-green/35">
+                  sets
+                </span>
               </div>
             ))}
           </div>
@@ -190,7 +199,7 @@ export default function InventoryFormPage() {
               value={needs}
               onChange={(e) => setNeeds(e.target.value.slice(0, 500))}
               rows={3}
-              placeholder="Optional — e.g. more orange bibs, a pump…"
+              placeholder="e.g. 2 more green sets, more balls, a new dirty bib basket…"
               className={`${inputCls} resize-none`}
             />
           </Field>
