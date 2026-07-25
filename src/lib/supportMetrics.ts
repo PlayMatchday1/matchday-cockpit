@@ -134,18 +134,21 @@ export function resolvePeriodBounds(
 
 export type PeriodMetrics = {
   // Tile 1 — median first-response time in BUSINESS minutes, over
-  // conversations opened in the period that received a reply. null when
-  // no conversation qualified.
+  // EPISODES whose first inbound fell in the period and that received a
+  // reply. null when no episode qualified.
   medianFirstResponseMin: number | null;
-  // Tile 2 — share of those same conversations answered within 60
-  // business minutes, as a 0–100 percent. null when none qualified.
+  // Tile 2 — share of those same episodes answered within 60 business
+  // minutes, as a 0–100 percent. Same episode cohort as tile 1, so the
+  // two response tiles describe the same population. null when none
+  // qualified.
   answeredWithin1hPct: number | null;
-  // Denominator behind tiles 1 & 2: opened-in-period conversations that
-  // got a reply. Surfaced so the UI can show "n conversations" and so a
-  // tiny sample can be flagged rather than shown as a hard stat.
+  // Denominator behind tiles 1 & 2: in-period episodes that got a reply.
+  // Surfaced so the UI can show "n conversations" and so a tiny sample
+  // can be flagged rather than shown as a hard stat.
   respondedCount: number;
-  // Opened in period but still awaiting a first reply — excluded from
-  // the median per the spec, tracked for context.
+  // In-period episodes still awaiting a first reply (thread genuinely
+  // open, not closed / dismissed) — excluded from the median, tracked
+  // for context.
   awaitingFirstReplyCount: number;
 
   // Tile 3 — "Handled this period".
@@ -204,6 +207,52 @@ function groupByThread(
   return map;
 }
 
+// Split one thread's messages into EPISODES, delimited by close events.
+// A close ends an episode; the next message (a reopen) begins a fresh
+// one. This is what lets a returning customer generate a NEW first-
+// response measurement instead of being frozen at their first-ever
+// contact: each reopened exchange is its own episode.
+//
+// closeTimestampsMs come from crm_thread_status_log (action='close').
+// With none supplied, the whole thread is a single episode — which is
+// exactly the correct behavior for a first-time contact, and the
+// documented all-time approximation for threads whose closes predate the
+// status log (Jul 3, 2026).
+//
+// A message exactly AT a close instant is placed in the pre-close
+// episode (`>` not `>=`); close and message sharing a millisecond is
+// effectively impossible, but the tie is resolved deterministically.
+export function splitIntoEpisodes(
+  messages: MetricMessage[],
+  closeTimestampsMs: number[],
+): MetricMessage[][] {
+  if (closeTimestampsMs.length === 0) {
+    return messages.length ? [messages.slice()] : [];
+  }
+  const closes = [...closeTimestampsMs].sort((a, b) => a - b);
+  // One bucket per close, plus a trailing bucket for messages after the
+  // last close.
+  const buckets: MetricMessage[][] = closes.map(() => []);
+  buckets.push([]);
+  for (const m of messages) {
+    let i = 0;
+    while (i < closes.length && m.sentAtMs > closes[i]) i++;
+    buckets[i].push(m);
+  }
+  return buckets.filter((b) => b.length > 0);
+}
+
+// The first inbound instant of an episode — the moment the customer
+// (re)opened this exchange. Null when the episode has no inbound (e.g. an
+// outbound-only tail), in which case it is not a response episode.
+function episodeFirstInboundMs(episode: MetricMessage[]): number | null {
+  let min = Infinity;
+  for (const m of episode) {
+    if (m.direction === "inbound" && m.sentAtMs < min) min = m.sentAtMs;
+  }
+  return Number.isFinite(min) ? min : null;
+}
+
 const inPeriod = (ms: number | null, p: Period): boolean =>
   ms != null && ms >= p.startMs && ms < p.endMs;
 
@@ -215,35 +264,53 @@ export function computePeriodMetrics(
   threads: MetricThread[],
   messages: MetricMessage[],
   period: Period,
+  // Per-thread close timestamps (crm_thread_status_log action='close'),
+  // used to split each thread into episodes. Omit (empty map) and every
+  // thread collapses to a single episode — correct for first-time
+  // contacts and the documented pre-Jul-3 all-time approximation.
+  closesByThread: Map<string, number[]> = new Map(),
   cfg: BusinessHoursConfig = DEFAULT_BUSINESS_HOURS,
 ): PeriodMetrics {
   const byThread = groupByThread(messages);
+  const threadById = new Map(threads.map((t) => [t.id, t]));
 
-  // Conversations OPENED in the period drive tiles 1, 2 and the
-  // close-rate denominator.
+  // Conversations OPENED in the period drive the close-rate denominator.
   const openedThreads = threads.filter((t) => inPeriod(t.openedAtMs, period));
 
-  // Response-time metrics (median, answered-within-1h) count ONLY
-  // conversations that received an actual operator outbound — no reply
-  // means there is no response to time, so it never enters these
-  // denominators and can never register as a slow response.
-  // firstResponseBusinessMinutes returns null precisely in that case
-  // (it pairs first inbound → first operator outbound and never falls
-  // back to close-time or no_reply_needed_at as a response timestamp).
+  // Response-time metrics (median, answered-within-1h) are EPISODE-based.
+  // Each thread is split at its close events; an episode enters the
+  // period by the timestamp of ITS FIRST INBOUND (the reopening message),
+  // not thread.created_at — so a returning customer whose earlier
+  // exchange was closed generates a fresh measurement this period. Within
+  // an episode it is still first-inbound → first operator outbound;
+  // follow-up turns in an open, un-closed exchange never restart the
+  // timer (only a close does). Episodes with no operator reply return
+  // null and are excluded from the median and the answered-% denominator,
+  // exactly as before — the response tiles only ever count real replies,
+  // never close-time or no_reply_needed_at.
   const responseMinutes: number[] = [];
   let awaitingFirstReplyCount = 0;
-  for (const t of openedThreads) {
-    const msgs = byThread.get(t.id) ?? [];
-    const rt = firstResponseBusinessMinutes(msgs, cfg);
-    if (rt == null) {
-      // No operator reply. It only "still awaits" if it's genuinely open
-      // and unresolved — a closed / no-reply-needed thread was dealt
-      // with, not left hanging, so it does not count as awaiting.
-      const handledWithoutReply =
-        t.closedAtMs != null || t.noReplyNeededAtMs != null || t.status === "closed";
-      if (!handledWithoutReply) awaitingFirstReplyCount++;
-    } else {
-      responseMinutes.push(rt);
+  for (const [threadId, msgs] of byThread) {
+    const episodes = splitIntoEpisodes(msgs, closesByThread.get(threadId) ?? []);
+    const t = threadById.get(threadId);
+    for (const ep of episodes) {
+      const firstInboundMs = episodeFirstInboundMs(ep);
+      if (firstInboundMs == null) continue; // no inbound → not a response episode
+      if (!inPeriod(firstInboundMs, period)) continue; // episode belongs to another period
+      const rt = firstResponseBusinessMinutes(ep, cfg);
+      if (rt == null) {
+        // No operator reply in this episode. It only "still awaits" if
+        // the thread is genuinely open and unresolved — a closed /
+        // no-reply-needed thread was dealt with, not left hanging.
+        const handledWithoutReply =
+          t != null &&
+          (t.closedAtMs != null ||
+            t.noReplyNeededAtMs != null ||
+            t.status === "closed");
+        if (!handledWithoutReply) awaitingFirstReplyCount++;
+      } else {
+        responseMinutes.push(rt);
+      }
     }
   }
 

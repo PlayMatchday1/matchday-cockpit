@@ -165,11 +165,46 @@ export async function GET(req: Request) {
     isAutoReply: m.is_auto_reply === true,
   }));
 
+  // Close events (crm_thread_status_log, action='close') split each
+  // thread into episodes so a reopened exchange from a returning customer
+  // registers a fresh first-response. The whole log is tiny and closes
+  // can predate lowerBoundMs (they define an in-period episode's start),
+  // so it is fetched unwindowed. The log begins Jul 3 2026 (migration
+  // 0065); closes before then are absent, which is the documented
+  // all-time approximation surfaced in the UI footnote.
+  const logRes = await fetchAll<{ thread_id: string; performed_at: string }>(
+    async (from, to) => {
+      const { data, error } = await supabase
+        .from("crm_thread_status_log")
+        .select("thread_id, performed_at")
+        .eq("action", "close")
+        .order("performed_at", { ascending: true })
+        .range(from, to);
+      return {
+        data: data as { thread_id: string; performed_at: string }[] | null,
+        error,
+      };
+    },
+  );
+  if (logRes.error) {
+    console.error("[crm:metrics] status-log scan error", logRes.error);
+    return Response.json({ error: "DB error" }, { status: 500 });
+  }
+  const closesByThread = new Map<string, number[]>();
+  for (const r of logRes.rows) {
+    const ms = Date.parse(r.performed_at);
+    if (!Number.isFinite(ms)) continue;
+    const arr = closesByThread.get(r.thread_id);
+    if (arr) arr.push(ms);
+    else closesByThread.set(r.thread_id, [ms]);
+  }
+
   // Tiles 1–3, current period.
   const currentMetrics: PeriodMetrics = computePeriodMetrics(
     threads,
     messages,
     current,
+    closesByThread,
   );
 
   // Trend vs previous (week/month only).
@@ -177,7 +212,7 @@ export async function GET(req: Request) {
     previous != null
       ? computeTrend(
           currentMetrics,
-          computePeriodMetrics(threads, messages, previous),
+          computePeriodMetrics(threads, messages, previous, closesByThread),
         )
       : null;
 
@@ -196,12 +231,19 @@ export async function GET(req: Request) {
     .map((t) => ({ lastInboundAtMs: Date.parse(t.last_message_at) }));
   const awaiting = computeAwaitingNow(awaitingThreads, nowMs);
 
+  // Earliest recorded close = the instant from which episode splitting is
+  // exact. Before it, threads collapse to one episode (no close log). The
+  // UI surfaces this as a footnote on the All-time tile so the
+  // approximation is visible, never silent. null if the log is empty.
+  const episodeSplitExactFromIso = logRes.rows[0]?.performed_at ?? null;
+
   const body = {
     period,
     generatedAt: new Date(nowMs).toISOString(),
     metrics: currentMetrics,
     trend,
     awaiting,
+    episodeSplitExactFromIso,
   };
 
   if (period === "all") {
