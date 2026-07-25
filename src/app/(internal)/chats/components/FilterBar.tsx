@@ -94,7 +94,8 @@ function FilterPill({
   onClick: () => void;
   label: string;
   disabled?: boolean;
-  // When provided and > 0, rendered as a "(N)" suffix (capped 99+).
+  // When provided and > 0, rendered as a "(N)" suffix — the TRUE count
+  // (no 99+ cap; the server sends exact count-only totals).
   count?: number;
   // "alert" tints the pill red — used by Awaiting reply so an operator
   // driving the queue to zero can spot it. The count badge stays red
@@ -102,7 +103,7 @@ function FilterPill({
   tone?: "default" | "alert";
 }) {
   const showCount = typeof count === "number" && count > 0;
-  const countLabel = showCount ? (count > 99 ? "99+" : String(count)) : null;
+  const countLabel = showCount ? count.toLocaleString("en-US") : null;
   const alert = tone === "alert";
   const base = alert
     ? active
