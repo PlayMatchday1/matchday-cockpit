@@ -16,7 +16,7 @@ const LENSES: { value: CityLens; label: string }[] = [
   { value: "cancellations", label: "Cancellations" },
   { value: "reviews", label: "Reviews" },
   { value: "master-schedule", label: "Master Schedule" },
-  { value: "fields", label: "Fields" },
+  { value: "fields", label: "Field Ops" },
 ];
 
 // Sticky pill-tab nav. Active tab = mint solid, inactive = white

@@ -58,6 +58,31 @@ export function isValidHttpUrl(value: string): boolean {
   return u.protocol === "http:" || u.protocol === "https:";
 }
 
+// The "Field Contact" value can be a phone number OR an email. Resolve it
+// to a clickable link: emails → mailto:, phones → tel: (sanitized to a
+// dialable string — digits, with a leading + preserved for international).
+// Returns null when the value is empty or has nothing dialable/emailable,
+// so the UI renders it as plain text rather than a dead link.
+export type ContactLink = { href: string; kind: "email" | "phone" };
+
+export function contactLink(
+  value: string | null | undefined,
+): ContactLink | null {
+  if (!value) return null;
+  const v = value.trim();
+  if (!v) return null;
+  if (v.includes("@")) {
+    // Loose email check — must have something either side of the @.
+    const [local, domain] = v.split("@");
+    if (!local || !domain || !domain.includes(".")) return null;
+    return { href: `mailto:${v}`, kind: "email" };
+  }
+  const plus = v.startsWith("+") ? "+" : "";
+  const digits = v.replace(/\D/g, "");
+  if (!digits) return null;
+  return { href: `tel:${plus}${digits}`, kind: "phone" };
+}
+
 // Parse a player-count input to an integer, or null. STRICT: only whole
 // numbers ≥ 0. Rejects floats ("12.5"), non-numeric text, and negatives
 // — min/max players accept ints only. Empty → null (the field is
