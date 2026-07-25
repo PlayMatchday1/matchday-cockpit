@@ -14,6 +14,7 @@ import {
   resolveDeleteAction,
   cityOptions,
   contactLink,
+  formatPhoneDisplay,
   UNASSIGNED_CITY_MANAGER,
   type CityManagerRoster,
   type FieldFormInput,
@@ -206,6 +207,24 @@ test("contactLink: an email → mailto:", () => {
     href: "mailto:marco@soccercentral.com",
     kind: "email",
   });
+});
+
+test("formatPhoneDisplay: any 10-digit US number → XXX-XXX-XXXX", () => {
+  assert.equal(formatPhoneDisplay("7135550110"), "713-555-0110");
+  assert.equal(formatPhoneDisplay("(713) 555-0110"), "713-555-0110");
+  assert.equal(formatPhoneDisplay("713.555.0110"), "713-555-0110");
+  assert.equal(formatPhoneDisplay("713 555 0110"), "713-555-0110");
+});
+
+test("formatPhoneDisplay: 11-digit with country code 1 (and +1) → 1-XXX-XXX-XXXX", () => {
+  assert.equal(formatPhoneDisplay("17135550110"), "1-713-555-0110");
+  assert.equal(formatPhoneDisplay("+1 (713) 555-0110"), "+1-713-555-0110");
+});
+
+test("formatPhoneDisplay: international / partial / odd length is left untouched", () => {
+  assert.equal(formatPhoneDisplay("+44 20 7946 0958"), "+44 20 7946 0958");
+  assert.equal(formatPhoneDisplay("555-0110"), "555-0110"); // 7 digits
+  assert.equal(formatPhoneDisplay("ext 42"), "ext 42");
 });
 
 test("contactLink: empty / non-dialable / malformed email → null (plain text)", () => {

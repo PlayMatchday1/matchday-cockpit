@@ -83,6 +83,26 @@ export function contactLink(
   return { href: `tel:${plus}${digits}`, kind: "phone" };
 }
 
+// Auto-format a phone number for DISPLAY as dashed groups
+// (XXX-XXX-XXXX), regardless of how it was typed. Non-destructive: the
+// stored value is untouched and the tel: link still uses raw digits — this
+// only affects what's shown. Handles a US country code (1 / +1) and leaves
+// anything that isn't a clean 10/11-digit US number as-is rather than
+// mangling an international or partial number.
+export function formatPhoneDisplay(value: string): string {
+  const trimmed = value.trim();
+  const plus = trimmed.startsWith("+");
+  const digits = trimmed.replace(/\D/g, "");
+  const group = (d: string) => `${d.slice(0, 3)}-${d.slice(3, 6)}-${d.slice(6)}`;
+  if (digits.length === 10 && !plus) {
+    return group(digits);
+  }
+  if (digits.length === 11 && digits.startsWith("1")) {
+    return `${plus ? "+" : ""}1-${group(digits.slice(1))}`;
+  }
+  return trimmed; // international / partial / odd length → leave alone
+}
+
 // Parse a player-count input to an integer, or null. STRICT: only whole
 // numbers ≥ 0. Rejects floats ("12.5"), non-numeric text, and negatives
 // — min/max players accept ints only. Empty → null (the field is
