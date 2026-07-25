@@ -10,6 +10,8 @@ import {
   checkRateLimit,
   calcCoverage,
   dedupeLatest,
+  normalizeKeyPart,
+  bibTotals,
   isStale,
   isRequested,
   relativeTime,
@@ -242,6 +244,48 @@ const row = (
   balls: 0,
   needs: null,
   ...extra,
+});
+
+test("dedupeLatest normalizes name+city (trim, collapse spaces, lowercase) → one manager", () => {
+  const rows = [
+    row("1", "Garrett ", "Austin", "2026-07-01T00:00:00Z", { balls: 5 }),
+    row("2", "garrett", "austin", "2026-07-20T00:00:00Z", { balls: 20 }), // newest
+    row("3", "  Garrett  ", "AUSTIN", "2026-07-10T00:00:00Z", { balls: 12 }),
+  ];
+  const latest = dedupeLatest(rows);
+  assert.equal(latest.length, 1, "variants collapse to one card");
+  assert.equal(latest[0].balls, 20, "keeps the newest submission");
+});
+
+test("dedupeLatest collapses internal whitespace so names don't fragment", () => {
+  const rows = [
+    row("1", "Jose  Luis", "Houston", "2026-07-01T00:00:00Z", { balls: 3 }),
+    row("2", "Jose Luis", "Houston", "2026-07-05T00:00:00Z", { balls: 8 }),
+  ];
+  assert.equal(dedupeLatest(rows).length, 1);
+  assert.equal(normalizeKeyPart("  Jose   Luis  "), "jose luis");
+});
+
+test("bibTotals: sums all 6 colors + balls, equals the manager sum, never NaN", () => {
+  const rows = [
+    row("1", "A", "Austin", "2026-07-20T00:00:00Z", { white: 5, green: 4, orange: 3, blue: 2, black: 1, red: 6, balls: 20 }),
+    row("2", "B", "Austin", "2026-07-21T00:00:00Z", { white: 2, green: 2, orange: 2, blue: 2, black: 0, red: 0, balls: 10 }), // 0 black/red
+  ];
+  const t = bibTotals(rows);
+  assert.deepEqual(t, { white: 7, green: 6, orange: 5, blue: 4, black: 1, red: 6, balls: 30 });
+  for (const v of Object.values(t)) assert.ok(!Number.isNaN(v), "no NaN");
+});
+
+test("bibTotals: a missing/null count coerces to 0 — the black/red NaN bug can't recur", () => {
+  const r = row("1", "A", "Austin", "2026-07-20T00:00:00Z", { white: 3, black: 2 });
+  // Simulate the bug: black column absent from the fetched row, red null.
+  delete (r as unknown as Record<string, unknown>).black;
+  (r as unknown as Record<string, unknown>).red = null;
+  const t = bibTotals([r]);
+  assert.equal(t.white, 3);
+  assert.equal(t.black, 0);
+  assert.equal(t.red, 0);
+  for (const v of Object.values(t)) assert.ok(!Number.isNaN(v), "no NaN");
 });
 
 test("dedupeLatest keeps only the newest per lower(name)+lower(city)", () => {
