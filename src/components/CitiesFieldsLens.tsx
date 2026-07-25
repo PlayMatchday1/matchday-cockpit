@@ -30,10 +30,12 @@ import { CITIES } from "@/lib/types";
 import { normalizeCityName } from "@/lib/cityNormalization";
 import {
   cityManagerFor,
+  cityManagerPhoneFor,
   buildFieldPayload,
   resolveDeleteAction,
   contactLink,
   formatPhoneDisplay,
+  formatE164UsPretty,
   UNASSIGNED_CITY_MANAGER,
   type CityManagerRoster,
   type FieldFormInput,
@@ -102,7 +104,9 @@ export default function CitiesFieldsLens() {
           .eq("is_active", true)
           .order("city", { ascending: true })
           .order("venue_name", { ascending: true }),
-        supabase.from("city_managers").select("city, manager_name"),
+        supabase
+          .from("city_managers")
+          .select("city, manager_name, manager_phone"),
       ]);
       if (vRes.error) throw vRes.error;
       if (cmRes.error) throw cmRes.error;
@@ -111,15 +115,16 @@ export default function CitiesFieldsLens() {
       for (const r of (cmRes.data ?? []) as {
         city: string;
         manager_name: string;
+        manager_phone: string | null;
       }[]) {
-        map.set(r.city, r.manager_name);
+        map.set(r.city, { name: r.manager_name, phone: r.manager_phone ?? null });
       }
       setRoster(map);
     } catch (e) {
       setError(
         e instanceof Error
           ? e.message
-          : "Failed to load fields. (Has migration 0074 been applied?)",
+          : "Failed to load fields. (Have migrations 0074 + 0076 been applied?)",
       );
     } finally {
       setLoading(false);
@@ -155,6 +160,7 @@ export default function CitiesFieldsLens() {
       city,
       code: normalizeCityName(city) ?? city,
       manager: cityManagerFor(city, roster),
+      managerPhone: cityManagerPhoneFor(city, roster),
       rows: byCity.get(city)!,
     }));
   }, [filtered, roster]);
@@ -338,6 +344,7 @@ export default function CitiesFieldsLens() {
                       city={g.city}
                       code={g.code}
                       manager={g.manager}
+                      managerPhone={g.managerPhone}
                       rows={g.rows}
                       onAdd={() => openAdd(g.city)}
                       onEdit={openEdit}
@@ -409,6 +416,24 @@ function ContactCell({ value }: { value: string | null }) {
   );
 }
 
+// City-Manager phone — a clickable tel: link (E.164 href from contactLink)
+// with the pretty "+1 (512) 954-1102" display. Renders nothing when the
+// manager has no phone on file.
+function CmPhoneLink({ phone }: { phone: string | null }) {
+  if (!phone) return null;
+  const link = contactLink(phone);
+  if (!link) return null;
+  return (
+    <a
+      href={link.href}
+      className="inline-flex items-center gap-1 tabular-nums text-deep-green/70 underline decoration-cream-line decoration-1 underline-offset-2 transition hover:text-mint-hover hover:decoration-mint"
+    >
+      <Phone aria-hidden size={12} className="shrink-0 text-deep-green/40" />
+      {formatE164UsPretty(phone)}
+    </a>
+  );
+}
+
 // ============================================================
 // One city group: a header row + its field rows
 // ============================================================
@@ -416,6 +441,7 @@ function FieldGroup({
   city,
   code,
   manager,
+  managerPhone,
   rows,
   onAdd,
   onEdit,
@@ -424,6 +450,7 @@ function FieldGroup({
   city: string;
   code: string;
   manager: string;
+  managerPhone: string | null;
   rows: FieldVenue[];
   onAdd: () => void;
   onEdit: (v: FieldVenue) => void;
@@ -458,6 +485,11 @@ function FieldGroup({
                   <span className="text-[12.5px] font-semibold text-deep-green">
                     {manager}
                   </span>
+                  {managerPhone && (
+                    <span className="ml-1 text-[12px]">
+                      <CmPhoneLink phone={managerPhone} />
+                    </span>
+                  )}
                 </>
               )}
             </span>
@@ -555,6 +587,7 @@ function FieldModal({
   const set = (patch: Partial<FieldFormInput>) => onChange({ ...f, ...patch });
   // Derived, read-only — updates the instant City changes.
   const derivedCM = cityManagerFor(f.city, roster);
+  const derivedCMPhone = cityManagerPhoneFor(f.city, roster);
   const cmUnassigned = derivedCM === UNASSIGNED_CITY_MANAGER;
 
   return (
@@ -653,6 +686,11 @@ function FieldModal({
                       {initials(derivedCM)}
                     </span>
                     <span className="font-bold text-deep-green">{derivedCM}</span>
+                    {derivedCMPhone && (
+                      <span className="ml-2 text-[12px]">
+                        <CmPhoneLink phone={derivedCMPhone} />
+                      </span>
+                    )}
                   </>
                 )}
                 <span className="ml-auto text-[11px] font-semibold text-deep-green/35">

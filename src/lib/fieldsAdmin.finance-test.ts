@@ -8,6 +8,7 @@ import { test } from "node:test";
 import assert from "node:assert/strict";
 import {
   cityManagerFor,
+  cityManagerPhoneFor,
   buildFieldPayload,
   isValidHttpUrl,
   parseIntStrict,
@@ -15,18 +16,20 @@ import {
   cityOptions,
   contactLink,
   formatPhoneDisplay,
+  formatE164UsPretty,
   UNASSIGNED_CITY_MANAGER,
   type CityManagerRoster,
   type FieldFormInput,
 } from "./fieldsAdmin";
 
 const roster: CityManagerRoster = new Map([
-  ["Houston", "Yarra"],
-  ["Austin", "Garrett"],
-  ["OKC", "Rodrigo"],
-  ["St. Louis", "Willfried"],
-  ["Dallas", "Chris"],
-  ["San Antonio", "Abraham"],
+  // Corrected spellings + phones, mirroring migration 0076.
+  ["Houston", { name: "Yara", phone: "+13464298057" }],
+  ["Austin", { name: "Garrett", phone: "+15129541102" }],
+  ["OKC", { name: "Rodrigo", phone: "+15723589682" }],
+  ["St. Louis", { name: "Wilfried", phone: "+16368490975" }],
+  ["Dallas", { name: "Chris", phone: "+18178741582" }],
+  ["San Antonio", { name: "Abraham", phone: "+12105716474" }],
 ]);
 
 const form = (over: Partial<FieldFormInput> = {}): FieldFormInput => ({
@@ -43,14 +46,15 @@ const form = (over: Partial<FieldFormInput> = {}): FieldFormInput => ({
 // ---------------------------------------------------------------
 // City Manager is DERIVED from city, and updates when city changes
 // ---------------------------------------------------------------
-test("City Manager derives from the venue's city", () => {
-  assert.equal(cityManagerFor("Houston", roster), "Yarra");
+test("City Manager derives from the venue's city (corrected spellings)", () => {
+  assert.equal(cityManagerFor("Houston", roster), "Yara"); // was "Yarra"
+  assert.equal(cityManagerFor("St. Louis", roster), "Wilfried"); // was "Willfried"
   assert.equal(cityManagerFor("Dallas", roster), "Chris");
 });
 
 test("CM updates when the city changes (same derivation, new input)", () => {
   let city = "Houston";
-  assert.equal(cityManagerFor(city, roster), "Yarra");
+  assert.equal(cityManagerFor(city, roster), "Yara");
   city = "San Antonio"; // user picks a different city in the modal
   assert.equal(cityManagerFor(city, roster), "Abraham");
 });
@@ -60,6 +64,46 @@ test("Atlanta and El Paso show 'Unassigned' (no roster entry)", () => {
   assert.equal(cityManagerFor("El Paso", roster), UNASSIGNED_CITY_MANAGER);
   assert.equal(cityManagerFor(null, roster), UNASSIGNED_CITY_MANAGER);
   assert.equal(cityManagerFor(undefined, roster), UNASSIGNED_CITY_MANAGER);
+});
+
+// ---------------------------------------------------------------
+// City Manager phone — clickable tel:, read through the same roster join
+// ---------------------------------------------------------------
+test("cityManagerPhoneFor reads the phone through the same roster as the name", () => {
+  assert.equal(cityManagerPhoneFor("Austin", roster), "+15129541102");
+  assert.equal(cityManagerPhoneFor("Houston", roster), "+13464298057");
+});
+
+test("a CM phone → a valid tel: link (E.164 href) + pretty display", () => {
+  const phone = cityManagerPhoneFor("Austin", roster);
+  assert.ok(phone);
+  // href reuses the Field Contact helper — raw E.164, dials correctly.
+  assert.deepEqual(contactLink(phone), {
+    href: "tel:+15129541102",
+    kind: "phone",
+  });
+  // display is the pretty parenthesized form.
+  assert.equal(formatE164UsPretty(phone!), "+1 (512) 954-1102");
+});
+
+test("Atlanta / El Paso (no manager) → no phone, no link", () => {
+  assert.equal(cityManagerPhoneFor("Atlanta", roster), null);
+  assert.equal(cityManagerPhoneFor("El Paso", roster), null);
+  assert.equal(cityManagerPhoneFor(null, roster), null);
+  // null phone yields no link.
+  assert.equal(contactLink(cityManagerPhoneFor("Atlanta", roster)), null);
+});
+
+test("formatE164UsPretty: US +1 numbers pretty-print; others untouched", () => {
+  assert.equal(formatE164UsPretty("+15129541102"), "+1 (512) 954-1102");
+  assert.equal(formatE164UsPretty("+18178741582"), "+1 (817) 874-1582");
+  assert.equal(formatE164UsPretty("+442079460958"), "+442079460958"); // non-US
+  assert.equal(formatE164UsPretty("512-954-1102"), "512-954-1102"); // not E.164
+});
+
+test("the two renamed CMs read Yara / Wilfried (not Yarra / Willfried)", () => {
+  assert.equal(cityManagerFor("Houston", roster), "Yara");
+  assert.equal(cityManagerFor("St. Louis", roster), "Wilfried");
 });
 
 // ---------------------------------------------------------------
