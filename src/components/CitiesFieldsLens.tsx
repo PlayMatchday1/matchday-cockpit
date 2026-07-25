@@ -33,6 +33,7 @@ import {
   buildFieldPayload,
   resolveDeleteAction,
   contactLink,
+  formatPhoneDisplay,
   UNASSIGNED_CITY_MANAGER,
   type CityManagerRoster,
   type FieldFormInput,
@@ -387,6 +388,10 @@ function ContactCell({ value }: { value: string | null }) {
   if (!value) return <span className="text-deep-green/25">—</span>;
   const link = contactLink(value);
   if (!link) return <span>{value}</span>;
+  // Phones display as dashed groups (XXX-XXX-XXXX); the tel: href keeps
+  // raw digits so it still dials correctly. Emails show verbatim.
+  const display =
+    link.kind === "phone" ? formatPhoneDisplay(value) : value;
   return (
     <a
       href={link.href}
@@ -398,7 +403,7 @@ function ContactCell({ value }: { value: string | null }) {
         <Phone aria-hidden size={13} className="shrink-0 text-deep-green/40" />
       )}
       <span className={link.kind === "phone" ? "tabular-nums" : ""}>
-        {value}
+        {display}
       </span>
     </a>
   );
