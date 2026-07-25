@@ -244,16 +244,31 @@ export function calcCoverage(c: BibCounts): Coverage {
 export function normalizeKeyPart(s: string): string {
   return s.trim().replace(/\s+/g, " ").toLowerCase();
 }
+export function managerKey(name: string, city: string): string {
+  return `${normalizeKeyPart(name)}|${normalizeKeyPart(city)}`;
+}
 export function dedupeLatest(rows: InventoryRow[]): InventoryRow[] {
   const byKey = new Map<string, InventoryRow>();
   for (const r of rows) {
-    const key = `${normalizeKeyPart(r.name)}|${normalizeKeyPart(r.city)}`;
+    const key = managerKey(r.name, r.city);
     const cur = byKey.get(key);
     if (!cur || Date.parse(r.submitted_at) > Date.parse(cur.submitted_at)) {
       byKey.set(key, r);
     }
   }
   return [...byKey.values()];
+}
+
+// All rows belonging to one manager (same normalized name+city) — the
+// "delete all reports from this manager" set. Pure so the route and the
+// tests share one definition.
+export function rowsForManager<T extends { name: string; city: string }>(
+  rows: T[],
+  name: string,
+  city: string,
+): T[] {
+  const key = managerKey(name, city);
+  return rows.filter((r) => managerKey(r.name, r.city) === key);
 }
 
 // --- Stale -----------------------------------------------------------

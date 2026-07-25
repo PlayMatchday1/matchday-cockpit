@@ -8,8 +8,9 @@
 // summarize) is the exact port in lib/inventory.
 
 import { useCallback, useEffect, useMemo, useState } from "react";
-import { RefreshCw, Link2, Check } from "lucide-react";
+import { RefreshCw, Link2, Check, Pencil, Trash2, X } from "lucide-react";
 import { supabase } from "@/lib/supabase";
+import { useAuth } from "@/lib/useAuth";
 import CityChip from "@/components/CityChip";
 import { CITIES } from "@/lib/types";
 import { normalizeCityName } from "@/lib/cityNormalization";
@@ -22,9 +23,19 @@ import {
   initials,
   summarize,
   bibTotals,
+  validateInventorySubmission,
+  INVENTORY_CITIES,
   type InventoryRow,
   type BibColorKey,
 } from "@/lib/inventory";
+
+// Session bearer for the admin-gated edit/delete routes.
+async function bearerHeaders(): Promise<Record<string, string> | null> {
+  const { data } = await supabase.auth.getSession();
+  const token = data.session?.access_token;
+  if (!token) return null;
+  return { Authorization: `Bearer ${token}`, "Content-Type": "application/json" };
+}
 
 const SELECT_COLS =
   "id, submitted_at, name, city, white, green, orange, blue, black, red, balls, needs";
@@ -126,6 +137,83 @@ export default function InventoryDashboard() {
   const citiesInData = useMemo(
     () => CITIES.filter((c) => latest.some((r) => r.city === c)),
     [latest],
+  );
+
+  // --- admin edit / delete ---
+  const { appUser } = useAuth();
+  const isAdmin = appUser?.is_admin === true;
+  const [editRow, setEditRow] = useState<InventoryRow | null>(null);
+  const [deleteRow, setDeleteRow] = useState<InventoryRow | null>(null);
+  const [busy, setBusy] = useState(false);
+  const [mutError, setMutError] = useState<string | null>(null);
+
+  const saveEdit = useCallback(
+    async (id: string, payload: Record<string, unknown>) => {
+      setBusy(true);
+      setMutError(null);
+      try {
+        const headers = await bearerHeaders();
+        if (!headers) throw new Error("No active session.");
+        const res = await fetch(`/api/inventory/${id}`, {
+          method: "PATCH",
+          headers,
+          body: JSON.stringify(payload),
+        });
+        if (!res.ok) {
+          const j = await res.json().catch(() => ({}));
+          throw new Error(j.error || `HTTP ${res.status}`);
+        }
+        setEditRow(null);
+        await load();
+      } catch (e) {
+        setMutError(e instanceof Error ? e.message : String(e));
+      } finally {
+        setBusy(false);
+      }
+    },
+    [load],
+  );
+
+  const deleteReport = useCallback(
+    async (id: string) => {
+      setBusy(true);
+      try {
+        const headers = await bearerHeaders();
+        if (!headers) throw new Error("No active session.");
+        const res = await fetch(`/api/inventory/${id}`, { method: "DELETE", headers });
+        if (!res.ok) throw new Error(`HTTP ${res.status}`);
+        setDeleteRow(null);
+        await load();
+      } catch (e) {
+        setError(e instanceof Error ? e.message : String(e));
+      } finally {
+        setBusy(false);
+      }
+    },
+    [load],
+  );
+
+  const deleteManager = useCallback(
+    async (name: string, city: string) => {
+      setBusy(true);
+      try {
+        const headers = await bearerHeaders();
+        if (!headers) throw new Error("No active session.");
+        const res = await fetch("/api/inventory/delete-manager", {
+          method: "POST",
+          headers,
+          body: JSON.stringify({ name, city }),
+        });
+        if (!res.ok) throw new Error(`HTTP ${res.status}`);
+        setDeleteRow(null);
+        await load();
+      } catch (e) {
+        setError(e instanceof Error ? e.message : String(e));
+      } finally {
+        setBusy(false);
+      }
+    },
+    [load],
   );
 
   return (
@@ -250,13 +338,42 @@ export default function InventoryDashboard() {
                 </div>
                 <div className="grid gap-3 [grid-template-columns:repeat(auto-fill,minmax(330px,1fr))]">
                   {g.cards.map((r) => (
-                    <ManagerCard key={r.id} row={r} nowMs={nowMs} />
+                    <ManagerCard
+                      key={r.id}
+                      row={r}
+                      nowMs={nowMs}
+                      isAdmin={isAdmin}
+                      onEdit={() => {
+                        setMutError(null);
+                        setEditRow(r);
+                      }}
+                      onDelete={() => setDeleteRow(r)}
+                    />
                   ))}
                 </div>
               </div>
             ))}
           </div>
         </>
+      )}
+
+      {editRow && (
+        <EditModal
+          row={editRow}
+          saving={busy}
+          error={mutError}
+          onClose={() => setEditRow(null)}
+          onSave={(payload) => saveEdit(editRow.id, payload)}
+        />
+      )}
+      {deleteRow && (
+        <DeleteDialog
+          row={deleteRow}
+          busy={busy}
+          onCancel={() => setDeleteRow(null)}
+          onDeleteReport={() => deleteReport(deleteRow.id)}
+          onDeleteManager={() => deleteManager(deleteRow.name, deleteRow.city)}
+        />
       )}
     </section>
   );
@@ -283,7 +400,19 @@ function SummaryCard({
   );
 }
 
-function ManagerCard({ row, nowMs }: { row: InventoryRow; nowMs: number }) {
+function ManagerCard({
+  row,
+  nowMs,
+  isAdmin,
+  onEdit,
+  onDelete,
+}: {
+  row: InventoryRow;
+  nowMs: number;
+  isAdmin: boolean;
+  onEdit: () => void;
+  onDelete: () => void;
+}) {
   const stale = isStale(row.submitted_at, nowMs);
   const requested = isRequested(row.needs);
   const cov = calcCoverage(row);
@@ -295,7 +424,7 @@ function ManagerCard({ row, nowMs }: { row: InventoryRow; nowMs: number }) {
 
   return (
     <div
-      className={`relative rounded-2xl border bg-white px-4 py-4 ${
+      className={`group relative rounded-2xl border bg-white px-4 py-4 ${
         stale ? "border-red-300" : "border-cream-line"
       }`}
     >
@@ -304,6 +433,28 @@ function ManagerCard({ row, nowMs }: { row: InventoryRow; nowMs: number }) {
           aria-hidden
           className="absolute inset-x-0 top-0 h-[3px] rounded-t-2xl bg-coral"
         />
+      )}
+      {isAdmin && (
+        <div className="absolute right-3 top-3 z-10 flex items-center gap-1.5 opacity-0 transition group-hover:opacity-100">
+          <button
+            type="button"
+            onClick={onEdit}
+            aria-label={`Edit ${row.name}`}
+            title="Edit report"
+            className="rounded-lg border border-cream-line bg-white p-1.5 text-deep-green/50 transition hover:border-mint hover:text-deep-green"
+          >
+            <Pencil className="h-3.5 w-3.5" />
+          </button>
+          <button
+            type="button"
+            onClick={onDelete}
+            aria-label={`Delete ${row.name}`}
+            title="Delete report"
+            className="rounded-lg border border-cream-line bg-white p-1.5 text-deep-green/50 transition hover:border-coral/50 hover:bg-coral-soft hover:text-coral-hover"
+          >
+            <Trash2 className="h-3.5 w-3.5" />
+          </button>
+        </div>
       )}
       <div className="mb-3 flex items-center gap-2.5">
         <span className="flex h-9 w-9 shrink-0 items-center justify-center rounded-full bg-mint-soft text-[13px] font-extrabold text-deep-green">
@@ -395,6 +546,268 @@ function ManagerCard({ row, nowMs }: { row: InventoryRow; nowMs: number }) {
           {row.needs}
         </div>
       )}
+    </div>
+  );
+}
+
+// ---- Admin: edit a submission ----------------------------------------
+function EditModal({
+  row,
+  saving,
+  error,
+  onClose,
+  onSave,
+}: {
+  row: InventoryRow;
+  saving: boolean;
+  error: string | null;
+  onClose: () => void;
+  onSave: (payload: Record<string, unknown>) => void;
+}) {
+  const [name, setName] = useState(row.name);
+  const [city, setCity] = useState(row.city);
+  const [counts, setCounts] = useState<Record<BibColorKey, string>>({
+    white: String(row.white),
+    green: String(row.green),
+    orange: String(row.orange),
+    blue: String(row.blue),
+    black: String(row.black),
+    red: String(row.red),
+  });
+  const [balls, setBalls] = useState(String(row.balls));
+  const [needs, setNeeds] = useState(row.needs ?? "");
+  const [localError, setLocalError] = useState<string | null>(null);
+
+  const submit = () => {
+    const payload = {
+      name,
+      city,
+      white: counts.white,
+      green: counts.green,
+      orange: counts.orange,
+      blue: counts.blue,
+      black: counts.black,
+      red: counts.red,
+      balls,
+      needs,
+    };
+    // Same validation as the public form, for instant feedback.
+    const result = validateInventorySubmission(payload);
+    if (!result.ok) {
+      setLocalError(result.error);
+      return;
+    }
+    setLocalError(null);
+    onSave(result.value as unknown as Record<string, unknown>);
+  };
+
+  const countInput = (key: BibColorKey) => (
+    <label key={key} className="flex items-center gap-1.5">
+      <Dot color={key} />
+      <span className="flex-1 text-[12.5px] text-deep-green/70">{BIB[key].label}</span>
+      <input
+        type="number"
+        min={0}
+        max={999}
+        inputMode="numeric"
+        value={counts[key]}
+        onChange={(e) => setCounts((c) => ({ ...c, [key]: e.target.value }))}
+        className="w-16 rounded-md border border-cream-line bg-white px-2 py-1 text-right text-[13.5px] font-extrabold tabular-nums text-deep-green focus:border-mint focus:outline-none"
+      />
+    </label>
+  );
+
+  return (
+    <div className="fixed inset-0 z-50 flex items-start justify-center bg-deep-green/30 px-4 py-12 backdrop-blur-sm">
+      <div className="w-full max-w-xl rounded-2xl border border-cream-line bg-white shadow-xl">
+        <div className="flex items-center justify-between border-b border-cream-line px-5 py-4">
+          <h2 className="text-[16px] font-extrabold text-deep-green">Edit report</h2>
+          <button
+            type="button"
+            onClick={onClose}
+            aria-label="Close"
+            className="rounded-lg p-1 text-deep-green/40 transition hover:bg-cream-soft hover:text-deep-green"
+          >
+            <X className="h-4 w-4" />
+          </button>
+        </div>
+
+        <div className="max-h-[70vh] overflow-y-auto px-5 py-4">
+          <div className="grid gap-3 sm:grid-cols-2">
+            <label className="block">
+              <span className="mb-1 block text-[11px] font-extrabold uppercase tracking-wide text-deep-green/40">
+                Manager name
+              </span>
+              <input
+                type="text"
+                value={name}
+                onChange={(e) => setName(e.target.value)}
+                className="w-full rounded-lg border border-cream-line bg-white px-3 py-2 text-[14px] text-deep-green focus:border-mint focus:outline-none"
+              />
+            </label>
+            <label className="block">
+              <span className="mb-1 block text-[11px] font-extrabold uppercase tracking-wide text-deep-green/40">
+                City
+              </span>
+              <select
+                value={city}
+                onChange={(e) => setCity(e.target.value)}
+                className="w-full rounded-lg border border-cream-line bg-white px-3 py-2 text-[14px] text-deep-green focus:border-mint focus:outline-none"
+              >
+                {!INVENTORY_CITIES.includes(city as (typeof INVENTORY_CITIES)[number]) && (
+                  <option value={city}>{city} (current)</option>
+                )}
+                {INVENTORY_CITIES.map((c) => (
+                  <option key={c} value={c}>
+                    {c}
+                  </option>
+                ))}
+              </select>
+            </label>
+          </div>
+
+          <div className="mt-4 rounded-lg border border-cream-line px-3 py-3">
+            <div className="mb-2 text-[9.5px] font-extrabold uppercase tracking-wide text-deep-green/35">
+              Bib sets on hand
+            </div>
+            <div className="grid grid-cols-2 gap-x-4 gap-y-2.5">
+              {COLOR_KEYS.map(countInput)}
+            </div>
+          </div>
+
+          <label className="mt-4 flex items-center gap-2 rounded-lg bg-cream-soft/70 px-3 py-2">
+            <span className="flex-1 text-[12.5px] font-semibold text-deep-green/70">
+              ⚽ MatchDay balls
+            </span>
+            <input
+              type="number"
+              min={0}
+              max={999}
+              inputMode="numeric"
+              value={balls}
+              onChange={(e) => setBalls(e.target.value)}
+              className="w-16 rounded-md border border-cream-line bg-white px-2 py-1 text-right text-[14px] font-extrabold tabular-nums text-deep-green focus:border-mint focus:outline-none"
+            />
+          </label>
+
+          <label className="mt-4 block">
+            <span className="mb-1 block text-[11px] font-extrabold uppercase tracking-wide text-deep-green/40">
+              Requests / needs
+            </span>
+            <textarea
+              value={needs}
+              onChange={(e) => setNeeds(e.target.value)}
+              rows={2}
+              className="w-full resize-none rounded-lg border border-cream-line bg-white px-3 py-2 text-[14px] text-deep-green focus:border-mint focus:outline-none"
+            />
+          </label>
+
+          {(localError || error) && (
+            <div className="mt-3 rounded-lg border border-red-200 bg-red-50 px-3 py-2 text-[13px] text-red-600">
+              {localError || error}
+            </div>
+          )}
+        </div>
+
+        <div className="flex items-center justify-end gap-2 border-t border-cream-line px-5 py-4">
+          <button
+            type="button"
+            onClick={onClose}
+            disabled={saving}
+            className="rounded-lg border border-cream-line bg-white px-4 py-2 text-[13.5px] font-bold text-deep-green/70 transition hover:bg-cream-soft disabled:opacity-50"
+          >
+            Cancel
+          </button>
+          <button
+            type="button"
+            onClick={submit}
+            disabled={saving}
+            className="rounded-lg bg-deep-green px-4 py-2 text-[13.5px] font-bold text-cream transition hover:bg-deep-green/90 disabled:opacity-50"
+          >
+            {saving ? "Saving…" : "Save changes"}
+          </button>
+        </div>
+      </div>
+    </div>
+  );
+}
+
+// ---- Admin: delete confirm (two options) -----------------------------
+function DeleteDialog({
+  row,
+  busy,
+  onCancel,
+  onDeleteReport,
+  onDeleteManager,
+}: {
+  row: InventoryRow;
+  busy: boolean;
+  onCancel: () => void;
+  onDeleteReport: () => void;
+  onDeleteManager: () => void;
+}) {
+  return (
+    <div className="fixed inset-0 z-50 flex items-start justify-center bg-deep-green/30 px-4 py-12 backdrop-blur-sm">
+      <div className="w-full max-w-md rounded-2xl border border-cream-line bg-white shadow-xl">
+        <div className="flex items-center justify-between border-b border-cream-line px-5 py-4">
+          <h2 className="text-[16px] font-extrabold text-deep-green">Delete report</h2>
+          <button
+            type="button"
+            onClick={onCancel}
+            aria-label="Close"
+            className="rounded-lg p-1 text-deep-green/40 transition hover:bg-cream-soft hover:text-deep-green"
+          >
+            <X className="h-4 w-4" />
+          </button>
+        </div>
+
+        <div className="px-5 py-4">
+          <p className="text-[13.5px] leading-relaxed text-deep-green/70">
+            <span className="font-extrabold text-deep-green">{row.name}</span> ·{" "}
+            {row.city}
+          </p>
+          <p className="mt-2 text-[13px] leading-relaxed text-deep-green/60">
+            Delete just this report, or every report ever submitted by this manager?
+            This can’t be undone.
+          </p>
+
+          <div className="mt-4 flex flex-col gap-2">
+            <button
+              type="button"
+              onClick={onDeleteReport}
+              disabled={busy}
+              className="rounded-lg border border-cream-line bg-white px-4 py-2.5 text-left text-[13.5px] font-bold text-deep-green transition hover:border-coral/50 hover:bg-coral-soft disabled:opacity-50"
+            >
+              Delete this report
+              <span className="mt-0.5 block text-[11.5px] font-medium text-deep-green/45">
+                Falls back to this manager’s prior report, if any.
+              </span>
+            </button>
+            <button
+              type="button"
+              onClick={onDeleteManager}
+              disabled={busy}
+              className="rounded-lg border border-coral/40 bg-coral-soft px-4 py-2.5 text-left text-[13.5px] font-bold text-coral-hover transition hover:bg-coral hover:text-white disabled:opacity-50"
+            >
+              Delete all reports from this manager
+              <span className="mt-0.5 block text-[11.5px] font-medium text-coral-hover/70">
+                Removes every submission for {row.name} · {row.city}.
+              </span>
+            </button>
+          </div>
+        </div>
+
+        <div className="flex items-center justify-end border-t border-cream-line px-5 py-4">
+          <button
+            type="button"
+            onClick={onCancel}
+            disabled={busy}
+            className="rounded-lg border border-cream-line bg-white px-4 py-2 text-[13.5px] font-bold text-deep-green/70 transition hover:bg-cream-soft disabled:opacity-50"
+          >
+            Cancel
+          </button>
+        </div>
+      </div>
     </div>
   );
 }

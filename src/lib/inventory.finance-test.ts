@@ -10,6 +10,8 @@ import {
   checkRateLimit,
   calcCoverage,
   dedupeLatest,
+  rowsForManager,
+  managerKey,
   normalizeKeyPart,
   bibTotals,
   isStale,
@@ -365,3 +367,105 @@ test("summarize aggregates the latest rows", () => {
 // Postgres (migration 0077: RLS on, NO anon policy, authenticated SELECT)
 // and is verified against the live DB after 0077 is applied, since it
 // can't be exercised without a real anon-key vs service-key round-trip.
+
+// ===============================================================
+// Admin edit / delete (Field Ops → Inventory)
+// ===============================================================
+// The routes gate on app_users.is_admin (authenticateAdmin) + service role
+// and hit the DB, so the auth boundary is DB/auth-enforced, not unit-
+// testable here (a non-admin gets 403 before any query — verified live).
+// What IS pure logic: which rows a "delete all" removes, how the dashboard
+// re-buckets after an edit, what a "delete this report" leaves behind, and
+// the shared validation. Those are covered below.
+
+test("managerKey: same normalized name+city → same key; differs otherwise", () => {
+  assert.equal(
+    managerKey("  Ryan  Mancuso ", "AUSTIN"),
+    managerKey("ryan mancuso", "austin"),
+  );
+  assert.notEqual(managerKey("Ryan", "Austin"), managerKey("Ryan", "Houston"));
+  assert.notEqual(managerKey("Ryan", "Austin"), managerKey("Ana", "Austin"));
+});
+
+test("delete-all: rowsForManager selects every row for the normalized manager", () => {
+  const rows = [
+    row("1", "Ryan Mancuso", "Austin", "2026-07-01T00:00:00Z"),
+    row("2", "  ryan   mancuso ", "AUSTIN", "2026-07-10T00:00:00Z"), // variant
+    row("3", "RYAN MANCUSO", "austin", "2026-07-20T00:00:00Z"), // variant
+    row("4", "Ryan Mancuso", "Houston", "2026-07-05T00:00:00Z"), // other city
+    row("5", "Other Person", "Austin", "2026-07-05T00:00:00Z"), // other name
+  ];
+  const matched = rowsForManager(rows, "Ryan Mancuso", "Austin");
+  assert.deepEqual(matched.map((r) => r.id).sort(), ["1", "2", "3"]);
+  // The route deletes exactly these ids; unrelated managers untouched.
+  const remaining = rows.filter((r) => !matched.includes(r));
+  assert.deepEqual(remaining.map((r) => r.id).sort(), ["4", "5"]);
+});
+
+test("delete-all: no matching rows → empty set (route reports removed=0)", () => {
+  const rows = [row("1", "Someone", "Dallas", "2026-07-01T00:00:00Z")];
+  assert.equal(rowsForManager(rows, "Nobody", "Austin").length, 0);
+});
+
+test("edit re-buckets: correcting a typo'd name merges the card under the fixed manager", () => {
+  // Two rows the dashboard shows as two separate managers (name typo).
+  const before = [
+    row("1", "Garret Smith", "Austin", "2026-07-10T00:00:00Z", { balls: 5 }),
+    row("2", "Garrett Smith", "Austin", "2026-07-20T00:00:00Z", { balls: 9 }),
+  ];
+  assert.equal(dedupeLatest(before).length, 2, "typo fragments into two cards");
+
+  // Admin edits row 1's name to the correct spelling (server persists it).
+  const after = before.map((r) =>
+    r.id === "1" ? { ...r, name: "Garrett Smith" } : r,
+  );
+  const latest = dedupeLatest(after);
+  assert.equal(latest.length, 1, "corrected name collapses to one card");
+  assert.equal(latest[0].balls, 9, "newest (row 2) surfaces as the card");
+});
+
+test("edit re-buckets: changing city moves the card to the corrected city", () => {
+  const before = [row("1", "Dana Lee", "Austin", "2026-07-10T00:00:00Z")];
+  assert.equal(dedupeLatest(before)[0].city, "Austin");
+  const after = before.map((r) => ({ ...r, city: "Houston" }));
+  const latest = dedupeLatest(after);
+  assert.equal(latest.length, 1);
+  assert.equal(latest[0].city, "Houston");
+});
+
+test("delete-this-report: removing the latest row falls back to the prior report", () => {
+  const rows = [
+    row("old", "Sam Ray", "Dallas", "2026-07-01T00:00:00Z", { balls: 4 }),
+    row("new", "Sam Ray", "Dallas", "2026-07-20T00:00:00Z", { balls: 11 }),
+  ];
+  assert.equal(dedupeLatest(rows)[0].id, "new", "latest shows first");
+  // Delete the shown (latest) row → refetch → dedupe surfaces the prior one.
+  const afterDelete = rows.filter((r) => r.id !== "new");
+  const latest = dedupeLatest(afterDelete);
+  assert.equal(latest.length, 1);
+  assert.equal(latest[0].id, "old", "falls back to the manager's prior report");
+  assert.equal(latest[0].balls, 4);
+});
+
+test("delete-this-report: removing the only row clears the card", () => {
+  const rows = [row("only", "Pat Kim", "Phoenix", "2026-07-20T00:00:00Z")];
+  const afterDelete = rows.filter((r) => r.id !== "only");
+  assert.equal(dedupeLatest(afterDelete).length, 0, "card disappears");
+});
+
+test("edit validation: counts 0–999, valid city, name required (same as public form)", () => {
+  const base = {
+    name: "Ryan Mancuso",
+    city: "Austin",
+    white: "1", green: "2", orange: "3", blue: "4", black: "5", red: "6",
+    balls: "10", needs: "",
+  };
+  assert.equal(validateInventorySubmission(base).ok, true);
+
+  assert.equal(validateInventorySubmission({ ...base, name: "  " }).ok, false);
+  assert.equal(validateInventorySubmission({ ...base, city: "Gotham" }).ok, false);
+  assert.equal(validateInventorySubmission({ ...base, white: "1000" }).ok, false);
+  assert.equal(validateInventorySubmission({ ...base, green: "-1" }).ok, false);
+  assert.equal(validateInventorySubmission({ ...base, red: "2.5" }).ok, false);
+  assert.equal(validateInventorySubmission({ ...base, balls: "abc" }).ok, false);
+});

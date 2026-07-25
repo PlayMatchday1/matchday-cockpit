@@ -1,0 +1,65 @@
+// Admin-only auth for server routes that mutate locked-down tables via
+// the service_role key. Mirrors crmAuth's session-verification, but gates
+// strictly on app_users.is_admin and returns a SERVICE-ROLE client (RLS
+// bypass) only AFTER the admin check passes.
+//
+// Used by the Equipment Inventory edit/delete routes: inventory_submissions
+// has no authenticated UPDATE/DELETE policy (anon fully locked out, only an
+// authenticated SELECT), so admin mutations must go through a guarded
+// service-role route rather than a broad RLS policy.
+
+import { createClient, type SupabaseClient } from "@supabase/supabase-js";
+
+export type AdminAuthResult =
+  | { ok: true; supabase: SupabaseClient; appUserId: string; email: string }
+  | { ok: false; status: number; error: string };
+
+export async function authenticateAdmin(req: Request): Promise<AdminAuthResult> {
+  const auth = req.headers.get("authorization") ?? "";
+  if (!auth.startsWith("Bearer ")) {
+    return { ok: false, status: 401, error: "Missing Authorization header" };
+  }
+  const token = auth.slice("Bearer ".length).trim();
+  if (!token) return { ok: false, status: 401, error: "Empty bearer token" };
+
+  const url = process.env.NEXT_PUBLIC_SUPABASE_URL;
+  const anonKey = process.env.NEXT_PUBLIC_SUPABASE_PUBLISHABLE_KEY;
+  const serviceKey = process.env.SUPABASE_SERVICE_ROLE_KEY;
+  if (!url || !anonKey || !serviceKey) {
+    return { ok: false, status: 500, error: "Supabase env not configured" };
+  }
+
+  // Verify the session token belongs to a real user.
+  const sessionClient = createClient(url, anonKey, {
+    global: { headers: { Authorization: `Bearer ${token}` } },
+    auth: { persistSession: false, autoRefreshToken: false },
+  });
+  const { data, error } = await sessionClient.auth.getUser(token);
+  if (error || !data?.user?.email) {
+    return { ok: false, status: 401, error: "Invalid session" };
+  }
+  const email = data.user.email.toLowerCase();
+
+  // Look up the cockpit user with the service role, require is_admin.
+  const sb = createClient(url, serviceKey, {
+    auth: { persistSession: false, autoRefreshToken: false },
+  });
+  const appUser = await sb
+    .from("app_users")
+    .select("id, is_admin")
+    .ilike("email", email)
+    .maybeSingle();
+  if (appUser.error || !appUser.data) {
+    return { ok: false, status: 403, error: "Not a cockpit user" };
+  }
+  if (appUser.data.is_admin !== true) {
+    return { ok: false, status: 403, error: "Admin access required" };
+  }
+
+  return {
+    ok: true,
+    supabase: sb, // service-role client — bypasses RLS after the admin gate
+    appUserId: appUser.data.id as string,
+    email,
+  };
+}
