@@ -14,6 +14,7 @@ import {
   computeTrend,
   resolvePeriodBounds,
   parsePeriodKind,
+  splitIntoEpisodes,
   type MetricMessage,
   type MetricThread,
   type Period,
@@ -339,6 +340,114 @@ test("an aging no-reply-yet OPEN thread never inflates response time (and isn't 
   assert.equal(m.answeredWithin1hPct, null);
   assert.equal(m.awaitingFirstReplyCount, 1); // genuinely still awaiting
   assert.equal(m.handled.count, 0); // untouched — not handled
+});
+
+// ---------------------------------------------------------------
+// EPISODE model — response-time cohort splits threads at close events
+// ---------------------------------------------------------------
+
+test("returning customer: prior exchange CLOSED, new message + reply this period → fresh episode counted with this period's response time", () => {
+  // Thread first contacted in June, replied, closed June 25. Returns
+  // July 10 and we answer in 10 min. Old (thread-created) cohort would
+  // ignore it — the thread predates July. Episode cohort counts it.
+  const threads = [thread("ret", "2026-06-20T15:00:00Z")]; // created in June
+  const messages = [
+    // Episode 1 (June): first-inbound outside JULY → skipped.
+    msg("ret", "inbound", "2026-06-20T15:00:00Z"),
+    msg("ret", "outbound", "2026-06-20T15:15:00Z"),
+    // Episode 2 (July return, after the close): 10-min reply.
+    msg("ret", "inbound", "2026-07-10T15:00:00Z"),
+    msg("ret", "outbound", "2026-07-10T15:10:00Z"),
+  ];
+  const closes = new Map([["ret", [iso("2026-06-25T18:00:00Z")]]]);
+  const m = computePeriodMetrics(threads, messages, JULY, closes);
+  assert.equal(m.respondedCount, 1); // only the July episode
+  assert.ok(approx(m.medianFirstResponseMin, 10)); // this period's reply
+  assert.ok(approx(m.answeredWithin1hPct, 100));
+});
+
+test("quick follow-up inside an OPEN (un-closed) thread does NOT start a new episode", () => {
+  // One inbound answered in 20 min, then a follow-up 2h later answered in
+  // 5 min — no close between. The 5-min turn must NOT become a second
+  // measurement; first-response-only holds within an episode.
+  const threads = [thread("t", "2026-07-10T14:00:00Z")];
+  const messages = [
+    msg("t", "inbound", "2026-07-10T15:00:00Z"), // 10:00am
+    msg("t", "outbound", "2026-07-10T15:20:00Z"), // 10:20am → 20 min
+    msg("t", "inbound", "2026-07-10T17:00:00Z"), // 12:00pm follow-up
+    msg("t", "outbound", "2026-07-10T17:05:00Z"), // 12:05pm → would be 5
+  ];
+  const m = computePeriodMetrics(threads, messages, JULY, new Map()); // no closes
+  assert.equal(m.respondedCount, 1); // ONE measurement, not two
+  assert.ok(approx(m.medianFirstResponseMin, 20)); // the first turn, not 5
+});
+
+test("reopen after close but NO reply yet → excluded from median, counted as still-awaiting", () => {
+  // Episode 1 answered + closed; episode 2 (reopen) has no reply and the
+  // thread is currently open.
+  const threads = [thread("t", "2026-07-05T14:00:00Z")]; // open (reopened), closed_at cleared
+  const messages = [
+    msg("t", "inbound", "2026-07-05T15:00:00Z"),
+    msg("t", "outbound", "2026-07-05T15:30:00Z"), // ep1 → 30 min
+    msg("t", "inbound", "2026-07-12T15:00:00Z"), // ep2 reopen, no reply
+  ];
+  const closes = new Map([["t", [iso("2026-07-06T18:00:00Z")]]]);
+  const m = computePeriodMetrics(threads, messages, JULY, closes);
+  assert.equal(m.respondedCount, 1); // only ep1's 30 min
+  assert.ok(approx(m.medianFirstResponseMin, 30));
+  assert.equal(m.awaitingFirstReplyCount, 1); // ep2 still awaits a reply
+});
+
+test("net-new first-time thread → unchanged: exactly one measurement", () => {
+  const threads = [thread("new", "2026-07-14T14:00:00Z")];
+  const messages = [
+    msg("new", "inbound", "2026-07-14T15:00:00Z"),
+    msg("new", "outbound", "2026-07-14T15:25:00Z"), // 25 min
+  ];
+  const m = computePeriodMetrics(threads, messages, JULY, new Map());
+  assert.equal(m.respondedCount, 1);
+  assert.ok(approx(m.medianFirstResponseMin, 25));
+});
+
+test("thread closed & reopened multiple times in a period → EVERY episode measured (faithful multi-cycle)", () => {
+  // Two closes → three episodes, all replied. Mirrors the real 23×2 /
+  // 13×3 multi-cycle threads; with the full close log this is exact.
+  const threads = [thread("multi", "2026-07-02T14:00:00Z")];
+  const messages = [
+    // ep1 → 30 min
+    msg("multi", "inbound", "2026-07-02T15:00:00Z"),
+    msg("multi", "outbound", "2026-07-02T15:30:00Z"),
+    // ep2 → 90 min (over an hour)
+    msg("multi", "inbound", "2026-07-10T15:00:00Z"),
+    msg("multi", "outbound", "2026-07-10T16:30:00Z"),
+    // ep3 → 15 min
+    msg("multi", "inbound", "2026-07-20T15:00:00Z"),
+    msg("multi", "outbound", "2026-07-20T15:15:00Z"),
+  ];
+  const closes = new Map([
+    ["multi", [iso("2026-07-03T18:00:00Z"), iso("2026-07-11T18:00:00Z")]],
+  ]);
+  const m = computePeriodMetrics(threads, messages, JULY, closes);
+  assert.equal(m.respondedCount, 3); // all three episodes
+  assert.ok(approx(m.medianFirstResponseMin, 30)); // median of 15,30,90 → 30
+  // 2 of 3 within an hour (30, 15) → 66.67%
+  assert.ok(approx(m.answeredWithin1hPct, (2 / 3) * 100));
+  // A multi-episode thread is still ONE thread in handled (Set of ids).
+  assert.equal(m.handled.count, 1);
+});
+
+test("splitIntoEpisodes: partitions at closes; empty closes → single episode", () => {
+  const mk = (at: string) => msg("t", "inbound", at);
+  const a = mk("2026-07-02T15:00:00Z");
+  const b = mk("2026-07-10T15:00:00Z");
+  const c = mk("2026-07-20T15:00:00Z");
+  // no closes → one episode
+  assert.equal(splitIntoEpisodes([a, b, c], []).length, 1);
+  // one close between a and b → two episodes
+  const eps = splitIntoEpisodes([a, b, c], [iso("2026-07-05T00:00:00Z")]);
+  assert.equal(eps.length, 2);
+  assert.equal(eps[0].length, 1); // just a
+  assert.equal(eps[1].length, 2); // b, c
 });
 
 test("empty period yields nulls, not NaN or zero-division", () => {

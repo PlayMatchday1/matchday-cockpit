@@ -50,6 +50,10 @@ type MetricsResponse = {
     oldestWaitingHours: number | null;
     pastWindowCount: number;
   };
+  // Instant from which episode splitting is exact (earliest recorded
+  // close). Older threads collapse to one episode — surfaced as an
+  // All-time footnote so the approximation is visible. null if unknown.
+  episodeSplitExactFromIso?: string | null;
 };
 
 const PERIOD_LABELS: Record<PeriodKind, string> = {
@@ -80,6 +84,17 @@ function fmtHours(h: number | null): string {
   if (h == null) return "—";
   if (h < 10) return `${h.toFixed(1)}h`;
   return `${Math.round(h)}h`;
+}
+
+// "Jul 3, 2026" — for the all-time episode-splitting footnote.
+function fmtDay(iso: string): string {
+  const d = new Date(iso);
+  if (Number.isNaN(d.getTime())) return "—";
+  return d.toLocaleDateString("en-US", {
+    month: "short",
+    day: "numeric",
+    year: "numeric",
+  });
 }
 
 export default function ChatsMetricsStrip() {
@@ -281,6 +296,18 @@ export default function ChatsMetricsStrip() {
               {/* Tile 4 — Awaiting now (LIVE) */}
               <AwaitingTile awaiting={awaiting} loading={loading && !awaiting} />
             </div>
+          )}
+
+          {/* All-time approximation footnote: episode splitting is exact
+              only from the first recorded close (status log, Jul 2026).
+              Older threads collapse to a single episode. Week/month sit
+              fully inside the logged window, so no caveat there. */}
+          {!error && period === "all" && data?.episodeSplitExactFromIso && (
+            <p className="mt-2 text-[10px] leading-snug text-deep-green/40">
+              Episode splitting exact from{" "}
+              {fmtDay(data.episodeSplitExactFromIso)}; earlier threads count
+              as a single episode.
+            </p>
           )}
         </div>
       )}
