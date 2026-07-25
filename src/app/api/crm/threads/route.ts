@@ -120,6 +120,84 @@ export async function GET(req: Request) {
     }
   }
 
+  // ---------------- pill counts (fired concurrently) ----------------
+  // Kicked off here — before the list query — so the counts run in
+  // parallel with the list + enrichment and never delay the inbox
+  // render (awaited only at the very end). These are the TRUE counts:
+  //   • open / closed / mine → count-only queries (head:true, no row
+  //     payloads), so nothing is derived from a capped fetch and no pill
+  //     silently caps. (The FilterPill no longer shows "99+".)
+  //   • starred → the viewer's star-set size, already in hand.
+  //   • awaiting → can't be a pure count query (the acknowledgment /
+  //     dismissal rule isn't PostgREST-expressible), so it's a bounded
+  //     scan of the awaiting CANDIDATES only (open + inbound-last, a small
+  //     set) filtered by the shared isAwaitingReply — the single source
+  //     of truth, not double-computed. A failed count degrades to 0
+  //     rather than failing the inbox.
+  const awaitingCountP = (async (): Promise<number> => {
+    const rows: {
+      last_message_preview: string | null;
+      last_message_at: string | null;
+      no_reply_needed_at: string | null;
+    }[] = [];
+    let from = 0;
+    while (from < 20000) {
+      const r = await supabase
+        .from("crm_threads")
+        .select("last_message_preview, last_message_at, no_reply_needed_at")
+        .eq("status", "open")
+        .eq("last_message_direction", "inbound")
+        .range(from, from + INDEX_PAGE - 1);
+      if (r.error) {
+        console.error("[crm:threads.list] awaiting count scan error", r.error);
+        break;
+      }
+      const page = (r.data ?? []) as typeof rows;
+      rows.push(...page);
+      if (page.length < INDEX_PAGE) break;
+      from += INDEX_PAGE;
+    }
+    return rows.filter((r) =>
+      isAwaitingReply({
+        status: "open",
+        last_message_direction: "inbound",
+        last_message_preview: r.last_message_preview,
+        last_message_at: r.last_message_at,
+        no_reply_needed_at: r.no_reply_needed_at,
+      }),
+    ).length;
+  })();
+
+  const countBase = () =>
+    supabase.from("crm_threads").select("id", { count: "exact", head: true });
+  const countsPromise = (async () => {
+    const [openR, closedR, mineR, awaiting] = await Promise.all([
+      countBase().eq("status", "open"),
+      countBase().eq("status", "closed"),
+      viewerId
+        ? countBase().eq("status", "open").eq("assigned_to_user_id", viewerId)
+        : Promise.resolve(null),
+      awaitingCountP,
+    ]);
+    const num = (
+      r: { count: number | null; error: unknown } | null,
+    ): number => {
+      if (!r) return 0;
+      if (r.error) {
+        console.error("[crm:threads.list] count query error", r.error);
+        return 0;
+      }
+      return r.count ?? 0;
+    };
+    return {
+      open: num(openR),
+      closed: num(closedR),
+      mine: num(mineR),
+      starred: starredThreadIds.size,
+      awaiting,
+    };
+  })();
+
   // ---------------- active-view list query ----------------
   let threads: ThreadRow[] = [];
   const emptyView =
@@ -287,68 +365,8 @@ export async function GET(req: Request) {
     is_follow_up: viewerId ? starredThreadIds.has(t.id) : false,
   }));
 
-  // ---------------- global view counts (all threads) ----------------
-  // A lightweight projection of every thread drives the chip counts.
-  // Paginated so it stays correct as closed threads accrue past 1000.
-  // No per-player city lookup: city filtering was removed from the UI,
-  // so the counts are global and derive entirely from columns already
-  // on crm_threads.
-  const indexRows: {
-    id: string;
-    status: string | null;
-    assigned_to_user_id: string | null;
-    last_message_direction: string | null;
-    // Added for the refined awaiting count: the acknowledgment heuristic
-    // reads the preview, the manual-dismissal check reads both timestamps.
-    last_message_preview: string | null;
-    last_message_at: string | null;
-    no_reply_needed_at: string | null;
-  }[] = [];
-  {
-    let from = 0;
-    // Cap total scan at a sane ceiling to bound worst case.
-    while (from < 20000) {
-      const r = await supabase
-        .from("crm_threads")
-        .select(
-          "id, status, assigned_to_user_id, last_message_direction, last_message_preview, last_message_at, no_reply_needed_at",
-        )
-        .order("id", { ascending: true })
-        .range(from, from + INDEX_PAGE - 1);
-      if (r.error) {
-        console.error("[crm:threads.list] count scan error", r.error);
-        break;
-      }
-      const rows = (r.data ?? []) as typeof indexRows;
-      indexRows.push(...rows);
-      if (rows.length < INDEX_PAGE) break;
-      from += INDEX_PAGE;
-    }
-  }
-
-  const isOpen = (r: (typeof indexRows)[number]) =>
-    (r.status ?? "open") === "open";
-  const counts = {
-    open: indexRows.filter(isOpen).length,
-    mine: indexRows.filter(
-      (r) => isOpen(r) && !!viewerId && r.assigned_to_user_id === viewerId,
-    ).length,
-    starred: indexRows.filter((r) => starredThreadIds.has(r.id)).length,
-    closed: indexRows.filter((r) => (r.status ?? "open") === "closed").length,
-    // Awaiting our reply = open + customer spoke last + actually needs a
-    // reply (not an acknowledgment, not operator-dismissed). isAwaitingReply
-    // is the single source of truth shared with the view + the client.
-    awaiting: indexRows.filter((r) =>
-      isAwaitingReply({
-        status: (r.status ?? "open") as "open" | "closed",
-        last_message_direction:
-          (r.last_message_direction as "inbound" | "outbound" | null) ?? null,
-        last_message_preview: r.last_message_preview,
-        last_message_at: r.last_message_at,
-        no_reply_needed_at: r.no_reply_needed_at,
-      }),
-    ).length,
-  };
+  // Counts were fired concurrently at the top; await the true values now.
+  const counts = await countsPromise;
 
   return Response.json({ threads: out, counts }, { status: 200 });
 }
