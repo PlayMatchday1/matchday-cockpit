@@ -21,12 +21,13 @@ import {
   relativeTime,
   initials,
   summarize,
+  bibTotals,
   type InventoryRow,
   type BibColorKey,
 } from "@/lib/inventory";
 
 const SELECT_COLS =
-  "id, submitted_at, name, city, white, green, orange, blue, balls, needs";
+  "id, submitted_at, name, city, white, green, orange, blue, black, red, balls, needs";
 
 // Literal bib colors (six). Counts are SETS.
 const BIB: Record<BibColorKey, { label: string; style: React.CSSProperties }> = {
@@ -108,17 +109,9 @@ export default function InventoryDashboard() {
         .get(city)!
         .slice()
         .sort((a, b) => Date.parse(b.submitted_at) - Date.parse(a.submitted_at));
-      const totals = cards.reduce(
-        (t, r) => {
-          for (const k of COLOR_KEYS) t[k] += r[k];
-          t.balls += r.balls;
-          return t;
-        },
-        { white: 0, green: 0, orange: 0, blue: 0, black: 0, red: 0, balls: 0 } as Record<
-          BibColorKey | "balls",
-          number
-        >,
-      );
+      // Same coercing, all-6-colors totals helper as the summary strip —
+      // no separate reducer to miss black/red or NaN.
+      const totals = bibTotals(cards);
       return { city, code: normalizeCityName(city) ?? city, cards, totals };
     });
   }, [filtered]);

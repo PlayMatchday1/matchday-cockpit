@@ -235,13 +235,19 @@ export function calcCoverage(c: BibCounts): Coverage {
 }
 
 // --- Dedup to latest per manager ------------------------------------
-// The dashboard shows the LATEST report per (lower(name) + lower(city)).
-// Keeps history intact (every submit is a row); this only picks the
-// newest per manager for display.
+// The dashboard shows the LATEST report per manager. The match key
+// normalizes name AND city — trim, collapse internal whitespace to single
+// spaces, lowercase — so "Garrett ", "Garrett", "garrett  " (and
+// "Garrett  Meyer" vs "Garrett Meyer") all collapse to ONE manager rather
+// than fragmenting into separate cards. History stays intact; this only
+// picks the newest per manager for display.
+export function normalizeKeyPart(s: string): string {
+  return s.trim().replace(/\s+/g, " ").toLowerCase();
+}
 export function dedupeLatest(rows: InventoryRow[]): InventoryRow[] {
   const byKey = new Map<string, InventoryRow>();
   for (const r of rows) {
-    const key = `${r.name.trim().toLowerCase()}|${r.city.trim().toLowerCase()}`;
+    const key = `${normalizeKeyPart(r.name)}|${normalizeKeyPart(r.city)}`;
     const cur = byKey.get(key);
     if (!cur || Date.parse(r.submitted_at) > Date.parse(cur.submitted_at)) {
       byKey.set(key, r);
@@ -304,14 +310,25 @@ export type InventorySummary = {
   requested: number;
   stale: number;
 };
+// Sum bib SETS (+ balls) across rows, coercing every read to a number
+// with a 0 default so a null/undefined count can never produce NaN. Used
+// by BOTH the summary strip and the per-city group headers so they can't
+// drift or NaN.
+export type BibTotals = BibCounts & { balls: number };
+export function bibTotals(rows: InventoryRow[]): BibTotals {
+  const t: BibTotals = { white: 0, green: 0, orange: 0, blue: 0, black: 0, red: 0, balls: 0 };
+  for (const r of rows) {
+    for (const k of BIB_COLOR_KEYS) t[k] += Number(r[k]) || 0;
+    t.balls += Number(r.balls) || 0;
+  }
+  return t;
+}
+
 export function summarize(latest: InventoryRow[], nowMs: number): InventorySummary {
-  const bib: BibCounts = { white: 0, green: 0, orange: 0, blue: 0, black: 0, red: 0 };
-  let totalBalls = 0;
+  const { balls: totalBalls, ...bib } = bibTotals(latest);
   let requested = 0;
   let stale = 0;
   for (const r of latest) {
-    for (const k of BIB_COLOR_KEYS) bib[k] += r[k];
-    totalBalls += r.balls;
     if (isRequested(r.needs)) requested++;
     if (isStale(r.submitted_at, nowMs)) stale++;
   }

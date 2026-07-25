@@ -127,6 +127,10 @@ export default function InventoryFormPage() {
               maxLength={120}
               className={inputCls}
             />
+            <span className="text-[11px] leading-snug text-deep-green/40">
+              Enter your name the same way each time so we update your existing
+              report instead of adding a new one.
+            </span>
           </Field>
           <Field label="City" required>
             <select
