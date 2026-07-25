@@ -4,19 +4,21 @@
 // CANONICAL fin_venues record (the same row Finance bills from and
 // scheduling resolves to via fin_venue_fields). Reads/writes fin_venues
 // directly through the session supabase client, mirroring the other
-// Cities admin sub-tabs (Master Schedule); admin gating is the page-level
+// Cities admin sub-tabs; admin gating is the page-level
 // PagePermissionGuard + RLS.
 //
 // City Manager is DERIVED from each venue's city via the city_managers
 // roster — never stored on the venue, so it can't drift. All the
 // validation / payload / delete-safety logic is the pure, tested
-// fieldsAdmin lib.
+// fieldsAdmin lib. One name only: "Field" = venue_name (the retired
+// field_name column is never referenced — see migration 0075).
 
 import { useCallback, useEffect, useMemo, useState } from "react";
 import { Pencil, Trash2, Plus, ExternalLink, Search, X } from "lucide-react";
 import { supabase } from "@/lib/supabase";
 import CityChip from "@/components/CityChip";
 import { CITIES } from "@/lib/types";
+import { normalizeCityName } from "@/lib/cityNormalization";
 import {
   cityManagerFor,
   buildFieldPayload,
@@ -30,7 +32,6 @@ type FieldVenue = {
   id: number;
   venue_name: string;
   city: string;
-  field_name: string | null;
   contact_name: string | null;
   contact_number: string | null;
   min_players: number | null;
@@ -40,12 +41,11 @@ type FieldVenue = {
 };
 
 const VENUE_COLS =
-  "id, venue_name, city, field_name, contact_name, contact_number, min_players, max_players, schedule_url, is_active";
+  "id, venue_name, city, contact_name, contact_number, min_players, max_players, schedule_url, is_active";
 
 const EMPTY_FORM: FieldFormInput = {
   venue_name: "",
   city: CITIES[0],
-  field_name: "",
   contact_name: "",
   contact_number: "",
   min_players: "",
@@ -55,8 +55,16 @@ const EMPTY_FORM: FieldFormInput = {
 
 type ModalState =
   | { mode: "add"; form: FieldFormInput }
-  | { mode: "edit"; id: number; form: FieldFormInput }
+  | { mode: "edit"; id: number; name: string; form: FieldFormInput }
   | null;
+
+// Two-letter initials for the CM avatar ("Priya Nair" → "PN").
+function initials(name: string): string {
+  const parts = name.trim().split(/\s+/).filter(Boolean);
+  if (parts.length === 0) return "?";
+  if (parts.length === 1) return parts[0].slice(0, 2).toUpperCase();
+  return (parts[0][0] + parts[parts.length - 1][0]).toUpperCase();
+}
 
 export default function CitiesFieldsLens() {
   const [venues, setVenues] = useState<FieldVenue[]>([]);
@@ -119,13 +127,12 @@ export default function CitiesFieldsLens() {
       if (!q) return true;
       return (
         v.venue_name.toLowerCase().includes(q) ||
-        (v.field_name ?? "").toLowerCase().includes(q) ||
         (v.contact_name ?? "").toLowerCase().includes(q)
       );
     });
   }, [venues, search, cityFilter]);
 
-  // Group by city, in canonical CITIES order, only cities with rows.
+  // Group by city, canonical CITIES order, only cities with rows.
   const groups = useMemo(() => {
     const byCity = new Map<string, FieldVenue[]>();
     for (const v of filtered) {
@@ -135,17 +142,20 @@ export default function CitiesFieldsLens() {
     }
     return CITIES.filter((c) => byCity.has(c)).map((city) => ({
       city,
+      code: normalizeCityName(city) ?? city,
       manager: cityManagerFor(city, roster),
       rows: byCity.get(city)!,
     }));
   }, [filtered, roster]);
 
+  const totalCities = useMemo(
+    () => new Set(venues.map((v) => v.city)).size,
+    [venues],
+  );
+
   const openAdd = useCallback((city?: string) => {
     setModalError(null);
-    setModal({
-      mode: "add",
-      form: { ...EMPTY_FORM, city: city ?? CITIES[0] },
-    });
+    setModal({ mode: "add", form: { ...EMPTY_FORM, city: city ?? CITIES[0] } });
   }, []);
 
   const openEdit = useCallback((v: FieldVenue) => {
@@ -153,10 +163,10 @@ export default function CitiesFieldsLens() {
     setModal({
       mode: "edit",
       id: v.id,
+      name: v.venue_name,
       form: {
         venue_name: v.venue_name,
         city: v.city,
-        field_name: v.field_name ?? "",
         contact_name: v.contact_name ?? "",
         contact_number: v.contact_number ?? "",
         min_players: v.min_players?.toString() ?? "",
@@ -219,178 +229,120 @@ export default function CitiesFieldsLens() {
 
   return (
     <section>
-      {/* Controls */}
-      <div className="mb-5 flex flex-wrap items-center justify-between gap-3">
-        <div className="flex flex-wrap items-center gap-2">
-          <div className="relative">
-            <Search
-              aria-hidden
-              size={15}
-              className="absolute left-2.5 top-1/2 -translate-y-1/2 text-deep-green/40"
-            />
-            <input
-              value={search}
-              onChange={(e) => setSearch(e.target.value)}
-              placeholder="Search field or contact…"
-              className="w-56 rounded-full border border-cream-line bg-white py-1.5 pl-8 pr-3 text-sm text-deep-green placeholder:text-deep-green/40 focus:border-mint focus:outline-none"
-            />
-          </div>
-          <select
-            value={cityFilter}
-            onChange={(e) => setCityFilter(e.target.value)}
-            className="rounded-full border border-cream-line bg-white px-3 py-1.5 text-sm font-medium text-deep-green focus:border-mint focus:outline-none"
-          >
-            <option value="all">All cities</option>
-            {CITIES.map((c) => (
-              <option key={c} value={c}>
-                {c}
-              </option>
-            ))}
-          </select>
+      {/* Title + controls bar */}
+      <div className="mb-4 flex flex-wrap items-center gap-3">
+        <div className="text-[17px] font-extrabold text-deep-green">
+          Fields
+          <span className="ml-2 text-[13px] font-semibold text-deep-green/45">
+            {venues.length} venue{venues.length === 1 ? "" : "s"} ·{" "}
+            {totalCities} cit{totalCities === 1 ? "y" : "ies"}
+          </span>
         </div>
+        <div className="flex-1" />
+        <div className="relative">
+          <Search
+            aria-hidden
+            size={15}
+            className="absolute left-3 top-1/2 -translate-y-1/2 text-deep-green/35"
+          />
+          <input
+            value={search}
+            onChange={(e) => setSearch(e.target.value)}
+            placeholder="Search field or contact…"
+            className="w-60 rounded-xl border border-cream-line bg-white py-2 pl-9 pr-3 text-sm text-deep-green placeholder:text-deep-green/35 focus:border-mint focus:outline-none focus:ring-4 focus:ring-mint-soft/60"
+          />
+        </div>
+        <select
+          value={cityFilter}
+          onChange={(e) => setCityFilter(e.target.value)}
+          className="rounded-xl border border-cream-line bg-white px-3 py-2 text-sm font-semibold text-deep-green focus:border-mint focus:outline-none"
+        >
+          <option value="all">All cities</option>
+          {CITIES.map((c) => (
+            <option key={c} value={c}>
+              {c}
+            </option>
+          ))}
+        </select>
         <button
           type="button"
           onClick={() => openAdd()}
-          className="inline-flex items-center gap-1.5 rounded-full bg-mint px-4 py-1.5 text-xs font-bold text-deep-green transition hover:bg-mint-hover"
+          className="inline-flex items-center gap-1.5 rounded-xl bg-mint px-4 py-2 text-[13px] font-extrabold text-deep-green transition hover:bg-mint-hover"
         >
-          <Plus aria-hidden size={15} /> Add field
+          <Plus aria-hidden size={15} strokeWidth={2.5} /> Add field
         </button>
       </div>
 
       {loading ? (
-        <div className="py-16 text-center text-sm text-deep-green/50">
+        <div className="rounded-2xl border border-cream-line bg-white py-16 text-center text-sm text-deep-green/50">
           Loading fields…
         </div>
       ) : error ? (
         <div className="rounded-xl border border-coral/30 bg-coral-soft/40 px-4 py-3 text-sm text-coral-hover">
           {error}
         </div>
-      ) : groups.length === 0 ? (
-        <div className="py-16 text-center text-sm text-deep-green/50">
-          {venues.length === 0
-            ? "No fields yet. Add the first one."
-            : "No fields match your search."}
-        </div>
       ) : (
-        <div className="space-y-8">
-          {groups.map((g) => (
-            <div key={g.city}>
-              {/* City group header — badge + derived City Manager + add */}
-              <div className="mb-2 flex items-center justify-between gap-3 border-b border-cream-line pb-2">
-                <div className="flex items-center gap-3">
-                  <CityChip code={g.city} size="sm" />
-                  <span className="text-xs text-deep-green/55">
-                    City Manager:{" "}
-                    <span
-                      className={
-                        g.manager === UNASSIGNED_CITY_MANAGER
-                          ? "font-semibold text-deep-green/35"
-                          : "font-semibold text-deep-green"
-                      }
+        <div className="overflow-hidden rounded-2xl border border-cream-line bg-white">
+          <div className="overflow-x-auto">
+            <table className="w-full min-w-[880px] border-collapse text-sm">
+              <thead>
+                <tr className="bg-cream-soft/70 text-[10.5px] uppercase tracking-wider text-deep-green/45">
+                  <th className="border-b border-cream-line px-4 py-3 text-left font-extrabold">
+                    Field
+                  </th>
+                  <th className="border-b border-cream-line px-4 py-3 text-left font-extrabold">
+                    Field Contact Name
+                  </th>
+                  <th className="border-b border-cream-line px-4 py-3 text-left font-extrabold">
+                    Field Contact Number
+                  </th>
+                  <th className="border-b border-cream-line px-4 py-3 text-center font-extrabold">
+                    Min Players
+                  </th>
+                  <th className="border-b border-cream-line px-4 py-3 text-center font-extrabold">
+                    Max Players
+                  </th>
+                  <th className="border-b border-cream-line px-4 py-3 text-left font-extrabold">
+                    Schedule
+                  </th>
+                  <th className="border-b border-cream-line px-4 py-3" />
+                </tr>
+              </thead>
+              <tbody>
+                {groups.length === 0 ? (
+                  <tr>
+                    <td
+                      colSpan={7}
+                      className="px-4 py-16 text-center text-sm text-deep-green/45"
                     >
-                      {g.manager}
-                    </span>
-                  </span>
-                </div>
-                <button
-                  type="button"
-                  onClick={() => openAdd(g.city)}
-                  className="inline-flex items-center gap-1 rounded-full px-2.5 py-1 text-[11px] font-bold text-deep-green/60 transition hover:bg-cream-soft hover:text-deep-green"
-                >
-                  <Plus aria-hidden size={13} /> Add field
-                </button>
-              </div>
-
-              {/* Rows */}
-              <div className="overflow-x-auto">
-                <table className="w-full min-w-[860px] border-separate border-spacing-0 text-sm">
-                  <thead>
-                    <tr className="text-left text-[11px] uppercase tracking-wide text-deep-green/45">
-                      <th className="px-3 py-1.5 font-semibold">Field</th>
-                      <th className="px-3 py-1.5 font-semibold">Field Name</th>
-                      <th className="px-3 py-1.5 font-semibold">Contact</th>
-                      <th className="px-3 py-1.5 font-semibold">Number</th>
-                      <th className="px-3 py-1.5 text-right font-semibold">Min</th>
-                      <th className="px-3 py-1.5 text-right font-semibold">Max</th>
-                      <th className="px-3 py-1.5 font-semibold">Schedule</th>
-                      <th className="px-3 py-1.5" />
-                    </tr>
-                  </thead>
-                  <tbody>
-                    {g.rows.map((v) => (
-                      <tr
-                        key={v.id}
-                        className="group border-t border-cream-line/60 hover:bg-cream-soft/40"
-                      >
-                        <td className="px-3 py-2.5 font-semibold text-deep-green">
-                          {v.venue_name}
-                        </td>
-                        <td className="px-3 py-2.5 text-deep-green/75">
-                          {v.field_name ?? (
-                            <span className="text-deep-green/30">—</span>
-                          )}
-                        </td>
-                        <td className="px-3 py-2.5 text-deep-green/75">
-                          {v.contact_name ?? (
-                            <span className="text-deep-green/30">—</span>
-                          )}
-                        </td>
-                        <td className="px-3 py-2.5 text-deep-green/75">
-                          {v.contact_number ?? (
-                            <span className="text-deep-green/30">—</span>
-                          )}
-                        </td>
-                        <td className="px-3 py-2.5 text-right tabular-nums text-deep-green/75">
-                          {v.min_players ?? (
-                            <span className="text-deep-green/30">—</span>
-                          )}
-                        </td>
-                        <td className="px-3 py-2.5 text-right tabular-nums text-deep-green/75">
-                          {v.max_players ?? (
-                            <span className="text-deep-green/30">—</span>
-                          )}
-                        </td>
-                        <td className="px-3 py-2.5">
-                          {v.schedule_url ? (
-                            <a
-                              href={v.schedule_url}
-                              target="_blank"
-                              rel="noopener noreferrer"
-                              className="inline-flex items-center gap-1 rounded-md bg-cream-soft px-2 py-0.5 text-xs font-semibold text-deep-green transition hover:bg-mint-soft"
-                            >
-                              Open <ExternalLink aria-hidden size={12} />
-                            </a>
-                          ) : (
-                            <span className="text-deep-green/30">—</span>
-                          )}
-                        </td>
-                        <td className="px-3 py-2.5">
-                          <div className="flex items-center justify-end gap-1 opacity-0 transition group-hover:opacity-100">
-                            <button
-                              type="button"
-                              onClick={() => openEdit(v)}
-                              aria-label={`Edit ${v.venue_name}`}
-                              className="rounded-md p-1.5 text-deep-green/50 transition hover:bg-cream-line/60 hover:text-deep-green"
-                            >
-                              <Pencil aria-hidden size={15} />
-                            </button>
-                            <button
-                              type="button"
-                              onClick={() => setConfirmDelete(v)}
-                              aria-label={`Delete ${v.venue_name}`}
-                              className="rounded-md p-1.5 text-deep-green/50 transition hover:bg-coral-soft hover:text-coral-hover"
-                            >
-                              <Trash2 aria-hidden size={15} />
-                            </button>
-                          </div>
-                        </td>
-                      </tr>
-                    ))}
-                  </tbody>
-                </table>
-              </div>
+                      {venues.length === 0
+                        ? "No fields yet. Add the first one."
+                        : "No fields match your search."}
+                    </td>
+                  </tr>
+                ) : (
+                  groups.map((g) => (
+                    <FieldGroup
+                      key={g.city}
+                      city={g.city}
+                      code={g.code}
+                      manager={g.manager}
+                      rows={g.rows}
+                      onAdd={() => openAdd(g.city)}
+                      onEdit={openEdit}
+                      onDelete={setConfirmDelete}
+                    />
+                  ))
+                )}
+              </tbody>
+            </table>
+          </div>
+          {groups.length > 0 && (
+            <div className="border-t border-cream-line bg-cream-soft/50 px-4 py-3 text-[12.5px] text-deep-green/50">
+              Showing {filtered.length} of {venues.length} venue
+              {venues.length === 1 ? "" : "s"} · grouped by city, then field
             </div>
-          ))}
+          )}
         </div>
       )}
 
@@ -400,9 +352,7 @@ export default function CitiesFieldsLens() {
           roster={roster}
           saving={saving}
           error={modalError}
-          onChange={(form) =>
-            setModal((m) => (m ? { ...m, form } : m))
-          }
+          onChange={(form) => setModal((m) => (m ? { ...m, form } : m))}
           onClose={() => setModal(null)}
           onSave={save}
         />
@@ -417,6 +367,128 @@ export default function CitiesFieldsLens() {
         />
       )}
     </section>
+  );
+}
+
+// ============================================================
+// One city group: a header row + its field rows
+// ============================================================
+function FieldGroup({
+  city,
+  code,
+  manager,
+  rows,
+  onAdd,
+  onEdit,
+  onDelete,
+}: {
+  city: string;
+  code: string;
+  manager: string;
+  rows: FieldVenue[];
+  onAdd: () => void;
+  onEdit: (v: FieldVenue) => void;
+  onDelete: (v: FieldVenue) => void;
+}) {
+  const unassigned = manager === UNASSIGNED_CITY_MANAGER;
+  return (
+    <>
+      <tr>
+        <td
+          colSpan={7}
+          className="border-y border-mint-soft bg-mint-soft/30 px-4 py-2.5"
+        >
+          <div className="flex items-center gap-3">
+            <span className="inline-flex items-center gap-2 text-sm font-extrabold text-deep-green">
+              <CityChip code={code} size="sm" />
+              {city}
+            </span>
+            <span className="inline-flex items-center gap-1.5">
+              <span className="text-[10px] font-extrabold uppercase tracking-wide text-deep-green/35">
+                CM
+              </span>
+              {unassigned ? (
+                <span className="text-[12.5px] font-semibold text-deep-green/35">
+                  Unassigned
+                </span>
+              ) : (
+                <>
+                  <span className="flex h-6 w-6 items-center justify-center rounded-full bg-deep-green text-[10px] font-extrabold text-mint-soft">
+                    {initials(manager)}
+                  </span>
+                  <span className="text-[12.5px] font-semibold text-deep-green">
+                    {manager}
+                  </span>
+                </>
+              )}
+            </span>
+            <span className="text-xs font-semibold text-deep-green/40">
+              · {rows.length} field{rows.length === 1 ? "" : "s"}
+            </span>
+            <button
+              type="button"
+              onClick={onAdd}
+              className="ml-auto inline-flex items-center gap-1 rounded-lg border border-mint-soft bg-white px-2.5 py-1.5 text-[12px] font-extrabold text-deep-green/70 transition hover:border-mint hover:text-deep-green"
+            >
+              <Plus aria-hidden size={13} strokeWidth={2.5} /> Add field
+            </button>
+          </div>
+        </td>
+      </tr>
+      {rows.map((v) => (
+        <tr key={v.id} className="group transition hover:bg-cream-soft/40">
+          <td className="border-b border-cream-line/60 px-4 py-3 font-extrabold text-deep-green">
+            {v.venue_name}
+          </td>
+          <td className="border-b border-cream-line/60 px-4 py-3 font-semibold text-deep-green/80">
+            {v.contact_name ?? <span className="text-deep-green/25">—</span>}
+          </td>
+          <td className="border-b border-cream-line/60 px-4 py-3 tabular-nums font-semibold text-deep-green/70">
+            {v.contact_number ?? <span className="text-deep-green/25">—</span>}
+          </td>
+          <td className="border-b border-cream-line/60 px-4 py-3 text-center tabular-nums font-bold text-deep-green/45">
+            {v.min_players ?? <span className="text-deep-green/25">—</span>}
+          </td>
+          <td className="border-b border-cream-line/60 px-4 py-3 text-center tabular-nums font-extrabold text-deep-green">
+            {v.max_players ?? <span className="text-deep-green/25">—</span>}
+          </td>
+          <td className="border-b border-cream-line/60 px-4 py-3">
+            {v.schedule_url ? (
+              <a
+                href={v.schedule_url}
+                target="_blank"
+                rel="noopener noreferrer"
+                className="inline-flex items-center gap-1.5 rounded-lg border border-mint-soft bg-mint-soft/40 px-2.5 py-1 text-xs font-bold text-deep-green transition hover:bg-mint-soft"
+              >
+                Open <ExternalLink aria-hidden size={12} />
+              </a>
+            ) : (
+              <span className="text-deep-green/25">—</span>
+            )}
+          </td>
+          <td className="border-b border-cream-line/60 px-4 py-3">
+            <div className="flex items-center justify-end gap-1.5 opacity-0 transition group-hover:opacity-100">
+              <button
+                type="button"
+                onClick={() => onEdit(v)}
+                aria-label={`Edit ${v.venue_name}`}
+                className="rounded-lg border border-cream-line bg-white p-1.5 text-deep-green/50 transition hover:border-mint hover:text-deep-green"
+              >
+                <Pencil aria-hidden size={15} />
+              </button>
+              <button
+                type="button"
+                onClick={() => onDelete(v)}
+                aria-label={`Deactivate ${v.venue_name}`}
+                className="rounded-lg border border-cream-line bg-white p-1.5 text-deep-green/50 transition hover:border-coral/50 hover:bg-coral-soft hover:text-coral-hover"
+              >
+                <Trash2 aria-hidden size={15} />
+              </button>
+            </div>
+          </td>
+        </tr>
+      ))}
+    </>
   );
 }
 
@@ -444,30 +516,31 @@ function FieldModal({
   const set = (patch: Partial<FieldFormInput>) => onChange({ ...f, ...patch });
   // Derived, read-only — updates the instant City changes.
   const derivedCM = cityManagerFor(f.city, roster);
+  const cmUnassigned = derivedCM === UNASSIGNED_CITY_MANAGER;
 
   return (
     <div className="fixed inset-0 z-50 flex items-start justify-center bg-deep-green/30 px-4 py-12 backdrop-blur-sm">
       <div
         role="dialog"
         aria-modal="true"
-        className="w-full max-w-xl rounded-2xl border-[1.5px] border-cream-line bg-white p-6 shadow-xl shadow-deep-green/30"
+        className="w-full max-w-xl overflow-hidden rounded-2xl border border-cream-line bg-white shadow-xl shadow-deep-green/25"
       >
-        <div className="flex items-start justify-between">
+        <div className="flex items-center justify-between border-b border-cream-line/70 px-6 py-4">
           <h2 className="font-display text-2xl uppercase leading-none tracking-tight text-deep-green">
-            {state.mode === "add" ? "Add field" : "Edit field"}
+            {state.mode === "add" ? "Add field" : `Edit field · ${state.name}`}
           </h2>
           <button
             type="button"
             onClick={onClose}
             aria-label="Close"
-            className="rounded-full p-1 text-deep-green/50 hover:bg-cream-soft hover:text-deep-green"
+            className="flex h-8 w-8 items-center justify-center rounded-lg border border-cream-line text-deep-green/45 transition hover:bg-cream-soft hover:text-deep-green"
           >
-            <X aria-hidden size={18} />
+            <X aria-hidden size={17} />
           </button>
         </div>
 
-        <div className="mt-5 grid grid-cols-1 gap-4 sm:grid-cols-2">
-          <Labeled label="Field (short name)" required>
+        <div className="grid grid-cols-1 gap-4 px-6 py-5 sm:grid-cols-2">
+          <Labeled label="Field" required hint="Short name you use internally">
             <input
               value={f.venue_name}
               onChange={(e) => set({ venue_name: e.target.value })}
@@ -489,36 +562,14 @@ function FieldModal({
             </select>
           </Labeled>
 
-          <Labeled label="Field Name (full facility)">
-            <input
-              value={f.field_name}
-              onChange={(e) => set({ field_name: e.target.value })}
-              placeholder="Pearland Recreation Center"
-              className={inputCls}
-            />
-          </Labeled>
-          <Labeled label="City Manager (auto)">
-            {/* Read-only derived chip — never an input, never saved. */}
-            <div
-              className={`flex h-[38px] items-center rounded-lg border border-dashed border-cream-line bg-cream-soft/50 px-3 text-sm ${
-                derivedCM === UNASSIGNED_CITY_MANAGER
-                  ? "font-medium text-deep-green/35"
-                  : "font-semibold text-deep-green"
-              }`}
-              title="Derived from the city roster — not editable here."
-            >
-              {derivedCM}
-            </div>
-          </Labeled>
-
-          <Labeled label="Contact Name">
+          <Labeled label="Field Contact Name" hint="Person at the venue">
             <input
               value={f.contact_name}
               onChange={(e) => set({ contact_name: e.target.value })}
               className={inputCls}
             />
           </Labeled>
-          <Labeled label="Contact Number">
+          <Labeled label="Field Contact Number">
             <input
               value={f.contact_number}
               onChange={(e) => set({ contact_number: e.target.value })}
@@ -545,8 +596,37 @@ function FieldModal({
             />
           </Labeled>
 
+          {/* City Manager — read-only derived chip, updates on City change */}
           <div className="sm:col-span-2">
-            <Labeled label="Schedule link (Google Drive URL)">
+            <Labeled label="City Manager" hint="Auto-filled from City">
+              <div
+                className="flex items-center gap-2 rounded-lg border border-dashed border-cream-line bg-cream-soft/50 px-3 py-2.5 text-sm"
+                title="Derived from the city roster — not editable here."
+              >
+                {cmUnassigned ? (
+                  <span className="font-semibold text-deep-green/35">
+                    Unassigned
+                  </span>
+                ) : (
+                  <>
+                    <span className="flex h-[22px] w-[22px] items-center justify-center rounded-full bg-deep-green text-[9.5px] font-extrabold text-mint-soft">
+                      {initials(derivedCM)}
+                    </span>
+                    <span className="font-bold text-deep-green">{derivedCM}</span>
+                  </>
+                )}
+                <span className="ml-auto text-[11px] font-semibold text-deep-green/35">
+                  from {f.city}
+                </span>
+              </div>
+            </Labeled>
+          </div>
+
+          <div className="sm:col-span-2">
+            <Labeled
+              label="Schedule link (Google Drive)"
+              hint="Opens in a new tab from the Schedule column"
+            >
               <input
                 value={f.schedule_url}
                 onChange={(e) => set({ schedule_url: e.target.value })}
@@ -558,16 +638,16 @@ function FieldModal({
         </div>
 
         {error && (
-          <p className="mt-4 rounded-lg bg-coral-soft/50 px-3 py-2 text-xs font-medium text-coral-hover">
+          <p className="mx-6 rounded-lg bg-coral-soft/50 px-3 py-2 text-xs font-medium text-coral-hover">
             {error}
           </p>
         )}
 
-        <div className="mt-6 flex justify-end gap-2">
+        <div className="mt-1 flex justify-end gap-2 border-t border-cream-line/70 bg-cream-soft/40 px-6 py-4">
           <button
             type="button"
             onClick={onClose}
-            className="rounded-full px-4 py-2 text-sm font-semibold text-deep-green/60 transition hover:bg-cream-soft hover:text-deep-green"
+            className="rounded-xl border border-cream-line bg-white px-4 py-2 text-sm font-bold text-deep-green/70 transition hover:bg-cream-soft hover:text-deep-green"
           >
             Cancel
           </button>
@@ -575,9 +655,9 @@ function FieldModal({
             type="button"
             onClick={onSave}
             disabled={saving}
-            className="rounded-full bg-mint px-5 py-2 text-sm font-bold text-deep-green transition hover:bg-mint-hover disabled:opacity-50"
+            className="rounded-xl bg-mint px-5 py-2 text-sm font-extrabold text-deep-green transition hover:bg-mint-hover disabled:opacity-50"
           >
-            {saving ? "Saving…" : "Save"}
+            {saving ? "Saving…" : "Save field"}
           </button>
         </div>
       </div>
@@ -586,24 +666,27 @@ function FieldModal({
 }
 
 const inputCls =
-  "w-full rounded-lg border border-cream-line bg-white px-3 py-2 text-sm text-deep-green placeholder:text-deep-green/35 focus:border-mint focus:outline-none";
+  "w-full rounded-lg border border-cream-line bg-white px-3 py-2.5 text-sm font-semibold text-deep-green placeholder:text-deep-green/30 focus:border-mint focus:outline-none focus:ring-4 focus:ring-mint-soft/60";
 
 function Labeled({
   label,
   required,
+  hint,
   children,
 }: {
   label: string;
   required?: boolean;
+  hint?: string;
   children: React.ReactNode;
 }) {
   return (
-    <label className="block">
-      <span className="mb-1 block text-[11px] font-semibold uppercase tracking-wide text-deep-green/50">
+    <label className="flex flex-col gap-1.5">
+      <span className="text-[11px] font-extrabold uppercase tracking-wide text-deep-green/50">
         {label}
-        {required && <span className="text-coral"> *</span>}
+        {required && <span className="text-mint-hover"> *</span>}
       </span>
       {children}
+      {hint && <span className="text-[11px] text-deep-green/35">{hint}</span>}
     </label>
   );
 }
@@ -627,7 +710,7 @@ function ConfirmDelete({
       <div
         role="dialog"
         aria-modal="true"
-        className="w-full max-w-md rounded-2xl border-[1.5px] border-cream-line bg-white p-6 shadow-xl shadow-deep-green/30"
+        className="w-full max-w-md rounded-2xl border border-cream-line bg-white p-6 shadow-xl shadow-deep-green/25"
       >
         <h2 className="font-display text-xl uppercase tracking-tight text-deep-green">
           Deactivate field
@@ -642,7 +725,7 @@ function ConfirmDelete({
           <button
             type="button"
             onClick={onCancel}
-            className="rounded-full px-4 py-2 text-sm font-semibold text-deep-green/60 transition hover:bg-cream-soft hover:text-deep-green"
+            className="rounded-xl border border-cream-line bg-white px-4 py-2 text-sm font-bold text-deep-green/70 transition hover:bg-cream-soft hover:text-deep-green"
           >
             Cancel
           </button>
@@ -650,7 +733,7 @@ function ConfirmDelete({
             type="button"
             onClick={onConfirm}
             disabled={saving}
-            className="rounded-full bg-coral px-5 py-2 text-sm font-bold text-white transition hover:bg-coral-hover disabled:opacity-50"
+            className="rounded-xl bg-coral px-5 py-2 text-sm font-extrabold text-white transition hover:bg-coral-hover disabled:opacity-50"
           >
             {saving ? "Deactivating…" : "Deactivate"}
           </button>

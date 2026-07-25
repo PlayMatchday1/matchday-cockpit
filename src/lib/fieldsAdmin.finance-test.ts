@@ -30,7 +30,6 @@ const roster: CityManagerRoster = new Map([
 const form = (over: Partial<FieldFormInput> = {}): FieldFormInput => ({
   venue_name: "ATH Pearland",
   city: "Houston",
-  field_name: "Pearland Recreation Center",
   contact_name: "Sam",
   contact_number: "281-555-0100",
   min_players: "10",
@@ -81,17 +80,18 @@ test("the save payload has no City Manager field", () => {
       `payload must not contain "${forbidden}"`,
     );
   }
-  // Exactly the venue columns, nothing manager-shaped.
+  // Exactly the venue columns, nothing manager-shaped, and no retired
+  // field_name.
   assert.deepEqual(keys.sort(), [
     "city",
     "contact_name",
     "contact_number",
-    "field_name",
     "max_players",
     "min_players",
     "schedule_url",
     "venue_name",
   ]);
+  assert.ok(!keys.includes("field_name"), "field_name is retired");
 });
 
 // ---------------------------------------------------------------
