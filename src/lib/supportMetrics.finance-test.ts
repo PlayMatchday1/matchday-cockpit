@@ -133,11 +133,13 @@ const thread = (
   id: string,
   openedAt: string,
   closedAt: string | null = null,
+  noReplyNeededAt: string | null = null,
 ): MetricThread => ({
   id,
   openedAtMs: iso(openedAt),
   closedAtMs: closedAt ? iso(closedAt) : null,
   status: closedAt ? "closed" : "open",
+  noReplyNeededAtMs: noReplyNeededAt ? iso(noReplyNeededAt) : null,
 });
 
 test("median + within-1h over opened-in-period conversations", () => {
@@ -265,6 +267,78 @@ test("auto-replies don't inflate handled, median, or within-1h", () => {
   assert.ok(approx(m.medianFirstResponseMin, 30));
   assert.ok(approx(m.answeredWithin1hPct, 100));
   assert.equal(m.handled.count, 1); // auto-reply is not a "handle"
+});
+
+test("closed WITHOUT a reply: in handled + resolved, absent from median + answered-%", () => {
+  const threads = [
+    // Replied normally — 20 min.
+    thread("replied", "2026-07-10T15:00:00Z"),
+    // Closed the same day with NO operator reply (spam / self-resolved).
+    thread("noreply", "2026-07-11T15:00:00Z", "2026-07-11T16:00:00Z"),
+  ];
+  const messages = [
+    msg("replied", "inbound", "2026-07-10T15:00:00Z"),
+    msg("replied", "outbound", "2026-07-10T15:20:00Z"),
+    msg("noreply", "inbound", "2026-07-11T15:00:00Z"), // customer only
+  ];
+  const m = computePeriodMetrics(threads, messages, JULY);
+  // Response-time metrics see ONLY the replied thread — the no-reply
+  // ticket never registers as a slow response, never in the denominator.
+  assert.equal(m.respondedCount, 1);
+  assert.ok(approx(m.medianFirstResponseMin, 20));
+  assert.ok(approx(m.answeredWithin1hPct, 100));
+  // Volume metrics DO count it — a real ticket we dealt with.
+  assert.equal(m.handled.count, 2); // replied + closed-no-reply
+  assert.equal(m.handled.resolved, 1); // the closed one
+  // ...and it's not mislabeled "still awaiting" (it was handled).
+  assert.equal(m.awaitingFirstReplyCount, 0);
+});
+
+test("closed WITH a reply: counts everywhere, including its real response time", () => {
+  const threads = [
+    thread("t", "2026-07-12T15:00:00Z", "2026-07-12T18:00:00Z"),
+  ];
+  const messages = [
+    msg("t", "inbound", "2026-07-12T15:00:00Z"), // 10:00am
+    msg("t", "outbound", "2026-07-12T15:45:00Z"), // 10:45am → 45 min
+  ];
+  const m = computePeriodMetrics(threads, messages, JULY);
+  assert.equal(m.respondedCount, 1);
+  assert.ok(approx(m.medianFirstResponseMin, 45)); // its real response time
+  assert.ok(approx(m.answeredWithin1hPct, 100)); // 45 ≤ 60
+  assert.equal(m.handled.count, 1);
+  assert.equal(m.handled.resolved, 1);
+});
+
+test("marked no-reply-needed WITHOUT a reply: handled, absent from response time", () => {
+  const threads = [
+    // Still open, dismissed as "no reply needed" in the period.
+    thread("dismissed", "2026-07-13T15:00:00Z", null, "2026-07-13T15:30:00Z"),
+  ];
+  const messages = [
+    msg("dismissed", "inbound", "2026-07-13T15:00:00Z"), // customer only
+  ];
+  const m = computePeriodMetrics(threads, messages, JULY);
+  assert.equal(m.respondedCount, 0); // no reply → not timed
+  assert.equal(m.medianFirstResponseMin, null);
+  assert.equal(m.handled.count, 1); // dismissal is a handling action
+  assert.equal(m.awaitingFirstReplyCount, 0); // dealt with, not awaiting
+  assert.equal(m.handled.resolved, 0); // not closed → not resolved
+});
+
+test("an aging no-reply-yet OPEN thread never inflates response time (and isn't 'handled')", () => {
+  const threads = [
+    thread("aging", "2026-07-05T15:00:00Z"), // open, never replied, never closed
+  ];
+  const messages = [
+    msg("aging", "inbound", "2026-07-05T15:00:00Z"), // days-old, unanswered
+  ];
+  const m = computePeriodMetrics(threads, messages, JULY);
+  assert.equal(m.respondedCount, 0);
+  assert.equal(m.medianFirstResponseMin, null); // never a slow-response entry
+  assert.equal(m.answeredWithin1hPct, null);
+  assert.equal(m.awaitingFirstReplyCount, 1); // genuinely still awaiting
+  assert.equal(m.handled.count, 0); // untouched — not handled
 });
 
 test("empty period yields nulls, not NaN or zero-division", () => {

@@ -125,6 +125,9 @@ export async function GET(req: Request) {
     openedAtMs: Date.parse(t.created_at),
     closedAtMs: t.closed_at ? Date.parse(t.closed_at) : null,
     status: t.status,
+    noReplyNeededAtMs: t.no_reply_needed_at
+      ? Date.parse(t.no_reply_needed_at)
+      : null,
   }));
 
   // Earliest opened-at anchors the all-time period start.
