@@ -11,8 +11,9 @@
 // InventoryDashboard.
 
 import { useCallback, useEffect, useMemo, useState } from "react";
-import { ExternalLink, RefreshCw } from "lucide-react";
+import { ExternalLink, RefreshCw, RotateCw } from "lucide-react";
 import { supabase } from "@/lib/supabase";
+import VeoCodesEditor from "@/components/VeoCodesEditor";
 
 type VeoRow = {
   id: string;
@@ -224,59 +225,8 @@ export default function VeoDashboard() {
         </div>
       )}
 
-      {/* ---------------------- Per-code readiness ---------------------- */}
-      <section>
-        <h2 className="mb-1 text-sm font-bold uppercase tracking-wide text-deep-green/60">
-          Per-code readiness
-        </h2>
-        <p className="mb-3 text-xs text-deep-green/50">
-          Recent auto-posts vs. queued, per field code. A code posting cleanly is
-          the signal it's ready to flip to confirmed.
-        </p>
-        <div className="overflow-x-auto rounded-xl border border-cream-line">
-          <table className="w-full min-w-[560px] text-left text-[13px]">
-            <thead className="bg-cream-soft text-[11px] uppercase tracking-wide text-deep-green/50">
-              <tr>
-                <th className="px-3 py-2 font-semibold">Code</th>
-                <th className="px-3 py-2 font-semibold">Field</th>
-                <th className="px-3 py-2 font-semibold">State</th>
-                <th className="px-3 py-2 text-right font-semibold">Auto-posted</th>
-                <th className="px-3 py-2 text-right font-semibold">Queued</th>
-              </tr>
-            </thead>
-            <tbody className="divide-y divide-cream-line">
-              {codeStats.map((s) => (
-                <tr key={s.code} className="bg-white">
-                  <td className="px-3 py-2">
-                    <span className="font-mono font-bold text-deep-green">{s.code}</span>
-                  </td>
-                  <td className="px-3 py-2 text-deep-green/70">
-                    {s.label}
-                    {s.city ? <span className="text-deep-green/40"> · {s.city}</span> : null}
-                  </td>
-                  <td className="px-3 py-2">
-                    {s.confirmed ? (
-                      <span className="inline-flex items-center rounded-full border border-mint/50 bg-mint-soft px-2 py-0.5 text-[11px] font-semibold text-deep-green">
-                        Confirmed
-                      </span>
-                    ) : (
-                      <span className="inline-flex items-center rounded-full border border-amber-300 bg-amber-50 px-2 py-0.5 text-[11px] font-semibold text-amber-700">
-                        Queue-only
-                      </span>
-                    )}
-                  </td>
-                  <td className="px-3 py-2 text-right font-semibold tabular-nums text-deep-green">
-                    {s.posted}
-                  </td>
-                  <td className="px-3 py-2 text-right tabular-nums text-deep-green/60">
-                    {s.queued}
-                  </td>
-                </tr>
-              ))}
-            </tbody>
-          </table>
-        </div>
-      </section>
+      {/* ------------------- Codes & per-code readiness ------------------- */}
+      <VeoCodesEditor stats={codeStats} onChanged={() => void load()} />
 
       {/* ------------------------- Review queue ------------------------- */}
       <section>
@@ -289,102 +239,148 @@ export default function VeoDashboard() {
           </div>
         ) : (
           <ul className="space-y-3">
-            {queue.map((r) => (
-              <li
-                key={r.id}
-                className="rounded-xl border border-cream-line bg-white p-4"
-              >
-                <div className="flex flex-wrap items-start justify-between gap-3">
-                  <div className="min-w-0">
-                    <div className="flex flex-wrap items-center gap-2">
-                      {reasonPill(r.queue_reason)}
-                      {r.parsed_code && (
-                        <span className="font-mono text-[13px] font-bold text-deep-green">
-                          {r.parsed_code}
+            {queue.map((r) => {
+              // post_failed is NOT a matching decision — the recording matched
+              // a scheduled match, the post to the thread just failed. Render
+              // it distinctly as a one-click retry (coral card + Retry button),
+              // separate from matching-ambiguity items that need an operator
+              // decision. The matched match is candidate_api_ids[0].
+              const isPostFailed = r.queue_reason === "post_failed";
+              const retryTarget =
+                r.candidate_api_ids && r.candidate_api_ids.length > 0
+                  ? r.candidate_api_ids[0]
+                  : null;
+              return (
+                <li
+                  key={r.id}
+                  className={
+                    isPostFailed
+                      ? "rounded-xl border-2 border-coral/50 bg-coral-soft/40 p-4"
+                      : "rounded-xl border border-cream-line bg-white p-4"
+                  }
+                >
+                  <div className="flex flex-wrap items-start justify-between gap-3">
+                    <div className="min-w-0">
+                      <div className="flex flex-wrap items-center gap-2">
+                        {isPostFailed ? (
+                          <span className="inline-flex items-center gap-1 rounded-full border border-coral/60 bg-white px-2 py-0.5 text-[11px] font-bold text-coral-hover">
+                            <RotateCw className="h-3 w-3" />
+                            Matched — post failed
+                          </span>
+                        ) : (
+                          reasonPill(r.queue_reason)
+                        )}
+                        {r.parsed_code && (
+                          <span className="font-mono text-[13px] font-bold text-deep-green">
+                            {r.parsed_code}
+                          </span>
+                        )}
+                        <span className="text-[13px] text-deep-green/70">
+                          {r.parsed_match_date ?? "date ?"}
+                          {r.parsed_time_label ? ` · ${r.parsed_time_label}` : ""}
                         </span>
-                      )}
-                      <span className="text-[13px] text-deep-green/70">
-                        {r.parsed_match_date ?? "date ?"}
-                        {r.parsed_time_label ? ` · ${r.parsed_time_label}` : ""}
-                      </span>
-                    </div>
-                    <div className="mt-1 truncate text-xs text-deep-green/50">
-                      {r.email_subject}
-                    </div>
-                    <a
-                      href={r.video_url}
-                      target="_blank"
-                      rel="noopener noreferrer"
-                      className="mt-1 inline-flex items-center gap-1 text-[13px] font-medium text-mint-hover hover:underline"
-                    >
-                      <ExternalLink className="h-3.5 w-3.5" />
-                      Open Veo link
-                    </a>
-                  </div>
-                  <button
-                    type="button"
-                    disabled={busyId === r.id}
-                    onClick={() => void dismiss(r.id)}
-                    className="rounded-lg border border-cream-line px-2.5 py-1 text-xs font-medium text-deep-green/60 transition hover:border-coral/50 hover:bg-coral-soft hover:text-coral-hover disabled:opacity-50"
-                  >
-                    Dismiss
-                  </button>
-                </div>
-
-                {/* Assign controls */}
-                <div className="mt-3 border-t border-cream-line pt-3">
-                  {r.candidate_api_ids && r.candidate_api_ids.length > 0 ? (
-                    <div className="space-y-1.5">
-                      <div className="text-[11px] font-semibold uppercase tracking-wide text-deep-green/45">
-                        Assign to match
                       </div>
-                      {r.candidate_api_ids.map((apiId) => (
-                        <button
-                          key={apiId}
-                          type="button"
-                          disabled={busyId === r.id}
-                          onClick={() => void assign(r.id, apiId)}
-                          className="flex w-full items-center justify-between gap-2 rounded-lg border border-cream-line bg-cream-soft px-3 py-2 text-left text-[13px] text-deep-green transition hover:border-mint hover:bg-mint-soft disabled:opacity-50"
-                        >
-                          <span className="truncate">
-                            {labels[apiId] ?? `Match ${apiId}`}
-                          </span>
-                          <span className="shrink-0 font-semibold text-mint-hover">
-                            Post →
-                          </span>
-                        </button>
-                      ))}
+                      {isPostFailed && (
+                        <div className="mt-1 text-xs font-medium text-coral-hover">
+                          Matched a scheduled match — posting the film failed. One-click retry;
+                          it won&apos;t double-post.
+                        </div>
+                      )}
+                      <div className="mt-1 truncate text-xs text-deep-green/50">
+                        {r.email_subject}
+                      </div>
+                      <a
+                        href={r.video_url}
+                        target="_blank"
+                        rel="noopener noreferrer"
+                        className="mt-1 inline-flex items-center gap-1 text-[13px] font-medium text-mint-hover hover:underline"
+                      >
+                        <ExternalLink className="h-3.5 w-3.5" />
+                        Open Veo link
+                      </a>
                     </div>
-                  ) : (
-                    <div className="text-[11px] font-semibold uppercase tracking-wide text-deep-green/45">
-                      No candidate — assign by match id
-                    </div>
-                  )}
-                  <div className="mt-2 flex items-center gap-2">
-                    <input
-                      inputMode="numeric"
-                      placeholder="match id (api_id)"
-                      value={manualId[r.id] ?? ""}
-                      onChange={(e) =>
-                        setManualId((m) => ({ ...m, [r.id]: e.target.value }))
-                      }
-                      className="w-44 rounded-lg border border-cream-line bg-white px-2.5 py-1.5 text-[13px] text-deep-green outline-none focus:border-mint"
-                    />
                     <button
                       type="button"
-                      disabled={busyId === r.id || !manualId[r.id]?.trim()}
-                      onClick={() => {
-                        const n = Number(manualId[r.id]);
-                        if (Number.isInteger(n) && n > 0) void assign(r.id, n);
-                      }}
-                      className="rounded-lg bg-deep-green px-3 py-1.5 text-[13px] font-semibold text-white transition hover:bg-deep-green-hover disabled:opacity-50"
+                      disabled={busyId === r.id}
+                      onClick={() => void dismiss(r.id)}
+                      className="rounded-lg border border-cream-line px-2.5 py-1 text-xs font-medium text-deep-green/60 transition hover:border-coral/50 hover:bg-coral-soft hover:text-coral-hover disabled:opacity-50"
                     >
-                      Assign
+                      Dismiss
                     </button>
                   </div>
-                </div>
-              </li>
-            ))}
+
+                  {isPostFailed && retryTarget != null ? (
+                    /* One-click retry — assign to the already-matched match. */
+                    <div className="mt-3 border-t border-coral/20 pt-3">
+                      <button
+                        type="button"
+                        disabled={busyId === r.id}
+                        onClick={() => void assign(r.id, retryTarget)}
+                        className="flex w-full items-center justify-between gap-2 rounded-lg bg-deep-green px-3 py-2.5 text-left text-[13px] font-semibold text-white transition hover:bg-deep-green-hover disabled:opacity-50"
+                      >
+                        <span className="truncate">
+                          Retry post → {labels[retryTarget] ?? `Match ${retryTarget}`}
+                        </span>
+                        <RotateCw className="h-4 w-4 shrink-0" />
+                      </button>
+                    </div>
+                  ) : (
+                    /* Matching decision — pick which match this recording belongs to. */
+                    <div className="mt-3 border-t border-cream-line pt-3">
+                      {r.candidate_api_ids && r.candidate_api_ids.length > 0 ? (
+                        <div className="space-y-1.5">
+                          <div className="text-[11px] font-semibold uppercase tracking-wide text-deep-green/45">
+                            Assign to match
+                          </div>
+                          {r.candidate_api_ids.map((apiId) => (
+                            <button
+                              key={apiId}
+                              type="button"
+                              disabled={busyId === r.id}
+                              onClick={() => void assign(r.id, apiId)}
+                              className="flex w-full items-center justify-between gap-2 rounded-lg border border-cream-line bg-cream-soft px-3 py-2 text-left text-[13px] text-deep-green transition hover:border-mint hover:bg-mint-soft disabled:opacity-50"
+                            >
+                              <span className="truncate">
+                                {labels[apiId] ?? `Match ${apiId}`}
+                              </span>
+                              <span className="shrink-0 font-semibold text-mint-hover">
+                                Post →
+                              </span>
+                            </button>
+                          ))}
+                        </div>
+                      ) : (
+                        <div className="text-[11px] font-semibold uppercase tracking-wide text-deep-green/45">
+                          No candidate — assign by match id
+                        </div>
+                      )}
+                      <div className="mt-2 flex items-center gap-2">
+                        <input
+                          inputMode="numeric"
+                          placeholder="match id (api_id)"
+                          value={manualId[r.id] ?? ""}
+                          onChange={(e) =>
+                            setManualId((m) => ({ ...m, [r.id]: e.target.value }))
+                          }
+                          className="w-44 rounded-lg border border-cream-line bg-white px-2.5 py-1.5 text-[13px] text-deep-green outline-none focus:border-mint"
+                        />
+                        <button
+                          type="button"
+                          disabled={busyId === r.id || !manualId[r.id]?.trim()}
+                          onClick={() => {
+                            const n = Number(manualId[r.id]);
+                            if (Number.isInteger(n) && n > 0) void assign(r.id, n);
+                          }}
+                          className="rounded-lg bg-deep-green px-3 py-1.5 text-[13px] font-semibold text-white transition hover:bg-deep-green-hover disabled:opacity-50"
+                        >
+                          Assign
+                        </button>
+                      </div>
+                    </div>
+                  )}
+                </li>
+              );
+            })}
           </ul>
         )}
       </section>

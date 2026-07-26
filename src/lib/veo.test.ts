@@ -12,8 +12,11 @@ import {
   resolveMatchDate,
   resolveMatchDates,
   selectVeoMatches,
+  validateVeoCodeInput,
+  veoMessageText,
   type VeoCandidateRow,
 } from "./veo.ts";
+import { authenticateAdmin } from "./adminAuth.ts";
 
 // A confirmed-venue subject (SC = Soccer Central, the one confirmed code) and
 // the shareable URL Veo produces for it. The URL's leading date (20260725) is
@@ -31,6 +34,14 @@ const scMatch: VeoCandidateRow = {
   start_date: "2026-07-24T20:00:00+00:00",
   is_cancelled: false,
 };
+
+// ----------------------------- message copy -----------------------------
+
+test("veoMessageText: the copy line posted before the bare URL", () => {
+  // Posted as its OWN message, ahead of the URL-only message, so the players'
+  // app keeps the URL clickable. This is the one place to edit the wording.
+  assert.equal(veoMessageText(), "🎥 Your match film is ready to watch!");
+});
 
 // ----------------------------- email gate -----------------------------
 
@@ -398,6 +409,93 @@ test("classifyVeo: 'ATH P | Jul 24 | 9:15' resolves am/pm via schedule; would au
     assert.equal(d.timeLabel, "9:15 PM"); // resolved to PM via the schedule
     assert.deepEqual(d.candidateApiIds, [4242]);
   }
+});
+
+// -------------------- DB-backed code map (path B) --------------------
+
+test("validateVeoCodeInput: accepts valid input, normalizes code, dedupes field_ids", () => {
+  const r = validateVeoCodeInput({
+    code: " ath  p ",
+    finVenueId: 8,
+    fieldIds: [32, 32],
+    fieldLabel: "ATH Pearland",
+    city: "Houston",
+    confirmed: true,
+  });
+  assert.equal(r.ok, true);
+  if (r.ok) {
+    assert.equal(r.value.code, "ATH P"); // trimmed, single-spaced, uppercased
+    assert.deepEqual(r.value.field_ids, [32]); // deduped
+    assert.equal(r.value.fin_venue_id, 8);
+    assert.equal(r.value.confirmed, true);
+  }
+});
+
+test("validateVeoCodeInput: rejects empty code / no fields / bad venue / bad field / missing label or city", () => {
+  const base = { code: "X", finVenueId: 8, fieldIds: [1], fieldLabel: "L", city: "C" };
+  assert.equal(validateVeoCodeInput({ ...base, code: "   " }).ok, false);
+  assert.equal(validateVeoCodeInput({ ...base, fieldIds: [] }).ok, false);
+  assert.equal(validateVeoCodeInput({ ...base, finVenueId: 0 }).ok, false);
+  assert.equal(validateVeoCodeInput({ ...base, fieldIds: [-3] }).ok, false);
+  assert.equal(validateVeoCodeInput({ ...base, fieldLabel: " " }).ok, false);
+  assert.equal(validateVeoCodeInput({ ...base, city: " " }).ok, false);
+});
+
+test("classifyVeo: resolves against the PROVIDED map (an edit persists → matching uses it)", () => {
+  // A code that exists only in the passed map — matching must use it.
+  const codes = {
+    "NEW CODE": { finVenueId: 42, fieldIds: [777], fieldLabel: "New Field", city: "Austin", confirmed: true },
+  };
+  const match: VeoCandidateRow = { api_id: 8888, field_id: 777, start_date: "2026-07-24T20:00:00+00:00", is_cancelled: false };
+  const d = classifyVeo({
+    subject: "NEW CODE | Jul 24 | 8:00PM is ready to watch!",
+    slug: "20260725-newcode-jul-24-800pm-vnew111",
+    loadCandidates: (finVenueId) => {
+      assert.equal(finVenueId, 42); // uses the mapped venue
+      return [match];
+    },
+    codes,
+  });
+  assert.equal(d.action, "post");
+  if (d.action === "post") assert.equal(d.apiId, 8888);
+});
+
+test("classifyVeo: the confirmed flag in the map flips auto-post ⇄ queue", () => {
+  const base = { finVenueId: 8, fieldIds: [32], fieldLabel: "ATH Pearland", city: "Houston" };
+  const match: VeoCandidateRow = { api_id: 4242, field_id: 32, start_date: "2026-07-24T20:00:00+00:00", is_cancelled: false };
+  const args = {
+    subject: "ATH P | Jul 24 | 8:00PM is ready to watch!",
+    slug: "20260725-ath-p-jul-24-800pm-vp1",
+    loadCandidates: () => [match],
+  };
+  const q = classifyVeo({ ...args, codes: { "ATH P": { ...base, confirmed: false } } });
+  assert.equal(q.action, "queue");
+  if (q.action === "queue") assert.equal(q.reason, "unconfirmed_code");
+
+  const p = classifyVeo({ ...args, codes: { "ATH P": { ...base, confirmed: true } } });
+  assert.equal(p.action, "post");
+  if (p.action === "post") assert.equal(p.apiId, 4242);
+});
+
+test("classifyVeo: a multi-field code matches on EITHER of its fields", () => {
+  const codes = {
+    SC: { finVenueId: 11, fieldIds: [102, 199], fieldLabel: "Soccer Central", city: "San Antonio", confirmed: true },
+  };
+  const on199: VeoCandidateRow = { api_id: 199199, field_id: 199, start_date: "2026-07-24T20:00:00+00:00", is_cancelled: false };
+  const d = classifyVeo({ subject: SUBJECT, slug: SLUG, loadCandidates: () => [on199], codes });
+  assert.equal(d.action, "post"); // field 199 ∈ [102, 199] → field-agreement holds
+  if (d.action === "post") assert.equal(d.apiId, 199199);
+});
+
+test("authenticateAdmin: rejects a request with no / blank bearer (non-admin can't mutate codes)", async () => {
+  const noHeader = await authenticateAdmin(new Request("https://x/api/veo/codes", { method: "POST" }));
+  assert.equal(noHeader.ok, false);
+  if (!noHeader.ok) assert.equal(noHeader.status, 401);
+  const blank = await authenticateAdmin(
+    new Request("https://x/api/veo/codes", { method: "POST", headers: { Authorization: "Bearer " } }),
+  );
+  assert.equal(blank.ok, false);
+  if (!blank.ok) assert.equal(blank.status, 401);
 });
 
 test("classifyVeo: free-form titles with no clean time → queued, not posted", () => {

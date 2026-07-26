@@ -31,7 +31,9 @@ import {
   resolveMatchDates,
   resolveVeoCode,
   type VeoCandidateRow,
+  type VeoFieldCode,
 } from "@/lib/veo";
+import { getVeoCodesMap } from "@/lib/veoCodes";
 import { loadVenueCandidates, postVeoLinkToMatch } from "@/lib/veoPost";
 
 export const runtime = "nodejs";
@@ -87,11 +89,12 @@ async function buildLoader(
   supabase: SupabaseClient,
   subject: string,
   slug: string,
+  codes: Record<string, VeoFieldCode>,
 ): Promise<(finVenueId: number, matchDate: string) => VeoCandidateRow[]> {
   const empty = () => [] as VeoCandidateRow[];
   const parsed = parseVeoSubject(subject);
   if (!parsed.ok) return empty;
-  const venue = resolveVeoCode(parsed.value.code);
+  const venue = resolveVeoCode(parsed.value.code, codes);
   if (!venue) return empty;
   const dates = resolveMatchDates(parsed.value, processingDateFromSlug(slug));
   const byDate = new Map<string, VeoCandidateRow[]>();
@@ -161,7 +164,94 @@ export async function POST(req: Request) {
     receivedAt,
   };
 
-  // ---------- 1. Claim the recording (idempotency) ----------
+  // Parse + match + post/queue, updating the given row. Shared by the fresh
+  // claim path and the dedup self-heal path. The two-message post is an atomic
+  // batch keyed on deterministic doc ids, so re-driving a not-yet-'posted'
+  // recording safely re-attempts it (writes both, or no-ops if already posted).
+  const runDecision = async (rowId: string): Promise<Response> => {
+    const codes = await getVeoCodesMap(supabase); // DB map (cached), constant fallback
+    const loadCandidates = await buildLoader(supabase, subject, ref.slug, codes);
+    const decision = classifyVeo({ subject, slug: ref.slug, loadCandidates, codes });
+
+    const parsedFields = {
+      parsed_code: decision.code,
+      parsed_match_date: decision.matchDate,
+      parsed_time_minutes: decision.timeMinutes,
+      parsed_time_label: decision.timeLabel,
+    };
+    const now = new Date().toISOString();
+
+    if (decision.action === "post") {
+      try {
+        // Atomic batch: the copy line + the bare URL land together or not at
+        // all; we only reach the 'posted' update on a successful commit.
+        const posted = await postVeoLinkToMatch({
+          supabase,
+          recordingId: ref.recordingId,
+          apiId: decision.apiId,
+          videoUrl,
+          sentByUserId: null, // automatic post
+        });
+        await supabase
+          .from("veo_recordings")
+          .update({
+            ...parsedFields,
+            status: "posted",
+            queue_reason: null,
+            matched_api_id: decision.apiId,
+            candidate_api_ids: null,
+            firestore_message_id: posted.urlMessageId,
+            posted_at: now,
+            updated_at: now,
+          })
+          .eq("id", rowId);
+        console.log(
+          `[veo:inbound] posted recording=${ref.recordingId} → match=${decision.apiId}`,
+        );
+        return Response.json(
+          { ok: true, status: "posted", matched_api_id: decision.apiId },
+          { status: 200 },
+        );
+      } catch (err) {
+        // The atomic batch failed → NOTHING was written (no half-posted
+        // state). File it as post_failed carrying the matched candidate, so it
+        // surfaces in the queue as a one-click retry rather than being lost.
+        console.error(`[veo:inbound] post failed recording=${ref.recordingId}`, err);
+        await supabase
+          .from("veo_recordings")
+          .update({
+            ...parsedFields,
+            status: "queued",
+            queue_reason: "post_failed",
+            candidate_api_ids: [decision.apiId],
+            updated_at: now,
+          })
+          .eq("id", rowId);
+        return Response.json(
+          { ok: true, status: "queued", queue_reason: "post_failed" },
+          { status: 200 },
+        );
+      }
+    }
+
+    await supabase
+      .from("veo_recordings")
+      .update({
+        ...parsedFields,
+        status: "queued",
+        queue_reason: decision.reason,
+        candidate_api_ids: decision.candidateApiIds.length ? decision.candidateApiIds : null,
+        updated_at: now,
+      })
+      .eq("id", rowId);
+    console.log(`[veo:inbound] queued recording=${ref.recordingId} reason=${decision.reason}`);
+    return Response.json(
+      { ok: true, status: "queued", queue_reason: decision.reason },
+      { status: 200 },
+    );
+  };
+
+  // ---------- Claim the recording (idempotency) ----------
   const claim = await supabase
     .from("veo_recordings")
     .insert({
@@ -176,92 +266,35 @@ export async function POST(req: Request) {
     })
     .select("id")
     .maybeSingle();
-  if (claim.error) {
-    if (claim.error.code === "23505") {
-      console.log(`[veo:inbound] duplicate recording=${ref.recordingId} — no-op`);
-      return Response.json({ ok: true, deduped: true }, { status: 200 });
-    }
+
+  if (!claim.error) {
+    return runDecision(claim.data!.id as string);
+  }
+  if (claim.error.code !== "23505") {
     console.error("[veo:inbound] claim insert failed", claim.error);
     return Response.json({ error: "DB error" }, { status: 500 });
   }
-  const rowId = claim.data!.id as string;
 
-  // ---------- 2. Parse + match ----------
-  const loadCandidates = await buildLoader(supabase, subject, ref.slug);
-  const decision = classifyVeo({ subject, slug: ref.slug, loadCandidates });
-
-  const parsedFields = {
-    parsed_code: decision.code,
-    parsed_match_date: decision.matchDate,
-    parsed_time_minutes: decision.timeMinutes,
-    parsed_time_label: decision.timeLabel,
-  };
-  const now = new Date().toISOString();
-
-  // ---------- 3. Post or queue ----------
-  if (decision.action === "post") {
-    try {
-      const posted = await postVeoLinkToMatch({
-        supabase,
-        apiId: decision.apiId,
-        videoUrl,
-        sentByUserId: null, // automatic post
-      });
-      await supabase
-        .from("veo_recordings")
-        .update({
-          ...parsedFields,
-          status: "posted",
-          queue_reason: null,
-          matched_api_id: decision.apiId,
-          candidate_api_ids: null,
-          firestore_message_id: posted.messageId,
-          posted_at: now,
-          updated_at: now,
-        })
-        .eq("id", rowId);
-      console.log(
-        `[veo:inbound] posted recording=${ref.recordingId} → match=${decision.apiId} msg=${posted.messageId}`,
-      );
-      return Response.json(
-        { ok: true, status: "posted", matched_api_id: decision.apiId },
-        { status: 200 },
-      );
-    } catch (err) {
-      // Firestore/post failed — never lose the link. File it as post_failed
-      // so it lands in the queue for a manual retry.
-      console.error(`[veo:inbound] post failed recording=${ref.recordingId}`, err);
-      await supabase
-        .from("veo_recordings")
-        .update({
-          ...parsedFields,
-          status: "queued",
-          queue_reason: "post_failed",
-          candidate_api_ids: [decision.apiId],
-          updated_at: now,
-        })
-        .eq("id", rowId);
-      return Response.json(
-        { ok: true, status: "queued", queue_reason: "post_failed" },
-        { status: 200 },
-      );
-    }
-  }
-
-  // Queue.
-  await supabase
+  // Already claimed by a prior email. If it's fully handled ('posted' /
+  // 'dismissed'), no-op. Otherwise re-drive — the idempotent two-message post
+  // completes a mid-pair partial without duplicating the copy line.
+  const existing = await supabase
     .from("veo_recordings")
-    .update({
-      ...parsedFields,
-      status: "queued",
-      queue_reason: decision.reason,
-      candidate_api_ids: decision.candidateApiIds.length ? decision.candidateApiIds : null,
-      updated_at: now,
-    })
-    .eq("id", rowId);
-  console.log(`[veo:inbound] queued recording=${ref.recordingId} reason=${decision.reason}`);
-  return Response.json(
-    { ok: true, status: "queued", queue_reason: decision.reason },
-    { status: 200 },
+    .select("id, status")
+    .eq("recording_id", ref.recordingId)
+    .maybeSingle();
+  if (existing.error || !existing.data) {
+    console.log(`[veo:inbound] duplicate recording=${ref.recordingId} — no-op`);
+    return Response.json({ ok: true, deduped: true }, { status: 200 });
+  }
+  if (existing.data.status === "posted" || existing.data.status === "dismissed") {
+    return Response.json(
+      { ok: true, deduped: true, status: existing.data.status },
+      { status: 200 },
+    );
+  }
+  console.log(
+    `[veo:inbound] recording=${ref.recordingId} re-driving (status=${existing.data.status})`,
   );
+  return runDecision(existing.data.id as string);
 }
