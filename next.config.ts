@@ -33,6 +33,17 @@ const nextConfig: NextConfig = {
         destination: "/chats",
         permanent: true,
       },
+      // Veo review queue + field-code editor moved from /admin/veo to
+      // Cities → Field Ops → Veo on 2026-07-26. Routing-layer redirect (real
+      // 307) so bookmarks land on the tab regardless of the (internal) client
+      // layout — a page-level redirect() there resolves client-side, not as an
+      // HTTP redirect. Temporary (permanent:false) so browsers don't hard-cache
+      // the tab URL. The /admin/veo page.tsx stays as a fallback.
+      {
+        source: "/admin/veo",
+        destination: "/cities?tab=fields&fo=veo",
+        permanent: false,
+      },
     ];
   },
 };
