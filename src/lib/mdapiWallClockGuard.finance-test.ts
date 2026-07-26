@@ -48,6 +48,9 @@ const ALLOWLIST: Record<string, string> = {
   "src/lib/mdapiMatchesRead.ts": WHY_BENIGN + " (opts.fromDate/toDate are YYYY-MM-DD)",
   "src/lib/mdapiMatchesSync.ts": WHY_BENIGN,
   "src/lib/useFinanceData.ts": WHY_BENIGN,
+  "src/lib/veoPost.ts":
+    WHY_BENIGN +
+    "; Veo candidate load bounds start_date to the title's LOCAL calendar day (matchDate T00:00Z..T23:59:59Z) then re-checks the local date + a ±90-min wall-clock window in selectVeoMatches. start_date_utc would shift evening matches to the next UTC day and break matching against the title's local date/time.",
 };
 
 // `new Date(...start_date)` / `Date.parse(...start_date)` — parsing the
