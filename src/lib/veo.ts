@@ -43,136 +43,111 @@ export type VeoFieldCode = {
   finVenueId: number; // fin_venues.id — the candidate net (all its fields)
   fieldIds: number[]; // mdapi_matches.field_id values this code denotes
   fieldLabel: string; // human label for the review UI
-  venueName: string;
   city: string;
   // Safety gate. Only `confirmed: true` codes auto-post; everything else is
-  // routed to the review queue with reason "unconfirmed_code" so a derived-
-  // but-unverified mapping can never post to a real player chat before Ryan
-  // confirms (a) the field has a Veo camera and (b) this is EXACTLY the string
-  // Veo produces. Flip to true per field once confirmed.
+  // routed to the review queue with reason "unconfirmed_code" so an unverified
+  // mapping can never post to a real player chat before it's confirmed.
   confirmed: boolean;
 };
 
-// Codes are the REAL strings observed in live recordings ("ATH P", "ATH K",
-// "PRUMC") plus the Austin fields that share one camera (VC3-79705: Westlake,
-// Onion Creek, Hill Country — since they share a camera, the title CODE is the
-// only field signal, so each gets its own code). SC = Soccer Central is the
-// confirmed seed. Everything stays `confirmed:false` EXCEPT SC until Ryan
-// confirms the exact strings + the camera set per field. St. Louis codes are
-// still TBD — kept as unconfirmed placeholders. Keys are normalized (uppercase,
-// single-spaced); add alias keys pointing at the same field for any variant.
+// Normalize a code the SAME way everywhere — trim, collapse internal
+// whitespace, uppercase — so "ath p", "ATH  P", and "ATH P" are one key. Codes
+// are STORED normalized in veo_codes, so lookups and the UNIQUE constraint agree.
+export function normalizeVeoCode(code: string | null | undefined): string {
+  return (code ?? "").trim().replace(/\s+/g, " ").toUpperCase();
+}
+
+// RUNTIME source of truth for the code→field map is the veo_codes table
+// (loaded + cached in src/lib/veoCodes.ts). This constant is the SEED for
+// migration 0079_veo_codes.sql AND the in-memory FALLBACK used if the DB read
+// fails — keep it in sync with the seed. Field notes:
+//   - SC covers mdapi fields 102 AND 199: regular "SC Field 3/4/4A" matches
+//     land on both (199 is a legacy "Tourney" field_title carrying regular
+//     games). 1123 (World Cup) / 1354 (Premier) are excluded on purpose.
+//   - Austin Westlake / Onion Creek / Hill Country share one camera (VC3-79705)
+//     — the title CODE is the only field signal, so each has its own code.
 export const VEO_FIELD_CODES: Record<string, VeoFieldCode> = {
-  // fin_venue 11 "Soccer Central". Regular "SC Field 3/4/4A" matches land on
-  // BOTH mdapi field 102 ("Soccer Central Complex") AND field 199 ("Tourney at
-  // Soccer Central" — a legacy field_title; it carries the same regular
-  // Field 3/4/4A matches, in fact more of them). SC must cover both, else a
-  // regular recording on 199 would false-positive as field_mismatch. Fields
-  // 1123 (World Cup) and 1354 (Premier Match) are genuinely distinct events —
-  // deliberately excluded, so a recording that only matches one of those is
-  // surfaced for review rather than posted as a normal SC game.
-  SC: {
-    finVenueId: 11,
-    fieldIds: [102, 199],
-    fieldLabel: "Soccer Central (SC Field 3/4/4A)",
-    venueName: "Soccer Central",
-    city: "San Antonio",
-    confirmed: true,
-  },
-
-  // ---- Real observed codes (confirm exact string + camera, then flip) ----
-  // fin_venue 8, field 32 "ATH Pearland" (tourney field 22 excluded).
-  "ATH P": {
-    finVenueId: 8,
-    fieldIds: [32],
-    fieldLabel: "ATH Pearland",
-    venueName: "ATH Pearland",
-    city: "Houston",
-    confirmed: false,
-  },
-  // fin_venue 7, field 892 "ATH Katy".
-  "ATH K": {
-    finVenueId: 7,
-    fieldIds: [892],
-    fieldLabel: "ATH Katy",
-    venueName: "ATH Katy",
-    city: "Houston",
-    confirmed: false,
-  },
-  // fin_venue 16, field 958 "PRUMC".
-  PRUMC: {
-    finVenueId: 16,
-    fieldIds: [958],
-    fieldLabel: "PRUMC",
-    venueName: "PRUMC",
-    city: "Atlanta",
-    confirmed: false,
-  },
-
-  // ---- Austin shared camera VC3-79705 — CODE is the only field signal ----
-  // fin_venue 49, field 1 "Westlake HS Field 3".
-  WESTLAKE: {
-    finVenueId: 49,
-    fieldIds: [1],
-    fieldLabel: "Westlake HS",
-    venueName: "Westlake",
-    city: "Austin",
-    confirmed: false,
-  },
-  // fin_venue 5, field 27 "Onion Creek".
-  "ONION CREEK": {
-    finVenueId: 5,
-    fieldIds: [27],
-    fieldLabel: "Onion Creek",
-    venueName: "Onion Creek",
-    city: "Austin",
-    confirmed: false,
-  },
-  // fin_venue 56, field 1453 "Hill Country Middle School".
-  "HILL COUNTRY": {
-    finVenueId: 56,
-    fieldIds: [1453],
-    fieldLabel: "Hill Country MS",
-    venueName: "Hill Country",
-    city: "Austin",
-    confirmed: false,
-  },
-
-  // ---- St. Louis — codes still TBD, placeholders (unconfirmed) ----
-  // fin_venue 18, field 664 "Lou Fusz Athletic Complex" (Outdoor Field 5/10).
-  LF: {
-    finVenueId: 18,
-    fieldIds: [664],
-    fieldLabel: "Lou Fusz Outdoor (Field 5/10)",
-    venueName: "Lou Fusz Outdoor",
-    city: "St. Louis",
-    confirmed: false,
-  },
-  // fin_venue 19, field 364 "Lou Fusz Athletic Training Center" (Indoor).
-  LFI: {
-    finVenueId: 19,
-    fieldIds: [364],
-    fieldLabel: "Lou Fusz Indoor (Training Center)",
-    venueName: "Lou Fusz Indoor",
-    city: "St. Louis",
-    confirmed: false,
-  },
-  // fin_venue 20, field 760 "Centennial Commons".
-  CC: {
-    finVenueId: 20,
-    fieldIds: [760],
-    fieldLabel: "Centennial Commons",
-    venueName: "Centennial Commons",
-    city: "St. Louis",
-    confirmed: false,
-  },
+  SC: { finVenueId: 11, fieldIds: [102, 199], fieldLabel: "Soccer Central (SC Field 3/4/4A)", city: "San Antonio", confirmed: true },
+  "ATH P": { finVenueId: 8, fieldIds: [32], fieldLabel: "ATH Pearland", city: "Houston", confirmed: false },
+  "ATH K": { finVenueId: 7, fieldIds: [892], fieldLabel: "ATH Katy", city: "Houston", confirmed: false },
+  PRUMC: { finVenueId: 16, fieldIds: [958], fieldLabel: "PRUMC", city: "Atlanta", confirmed: false },
+  WESTLAKE: { finVenueId: 49, fieldIds: [1], fieldLabel: "Westlake HS", city: "Austin", confirmed: false },
+  "ONION CREEK": { finVenueId: 5, fieldIds: [27], fieldLabel: "Onion Creek", city: "Austin", confirmed: false },
+  "HILL COUNTRY": { finVenueId: 56, fieldIds: [1453], fieldLabel: "Hill Country MS", city: "Austin", confirmed: false },
+  LF: { finVenueId: 18, fieldIds: [664], fieldLabel: "Lou Fusz Outdoor (Field 5/10)", city: "St. Louis", confirmed: false },
+  LFI: { finVenueId: 19, fieldIds: [364], fieldLabel: "Lou Fusz Indoor (Training Center)", city: "St. Louis", confirmed: false },
+  CC: { finVenueId: 20, fieldIds: [760], fieldLabel: "Centennial Commons", city: "St. Louis", confirmed: false },
 };
 
-export function resolveVeoCode(code: string | null | undefined): VeoFieldCode | null {
-  if (!code) return null;
-  // Normalize like the parser: trim, collapse internal whitespace, uppercase —
-  // so "ath p", "ATH  P", and "ATH P" all resolve to the same field code.
-  const key = code.trim().replace(/\s+/g, " ").toUpperCase();
-  return VEO_FIELD_CODES[key] ?? null;
+// Resolve a title code against a code map (defaults to the fallback constant;
+// the routes pass the DB-loaded map).
+export function resolveVeoCode(
+  code: string | null | undefined,
+  codes: Record<string, VeoFieldCode> = VEO_FIELD_CODES,
+): VeoFieldCode | null {
+  const key = normalizeVeoCode(code);
+  return key ? (codes[key] ?? null) : null;
+}
+
+// ---------------------------------------------------------------------------
+// veo_codes create/update validation (pure; field-existence is checked in the
+// route against fin_venue_fields)
+// ---------------------------------------------------------------------------
+
+export type VeoCodeInput = {
+  code?: unknown;
+  finVenueId?: unknown;
+  fieldIds?: unknown;
+  fieldLabel?: unknown;
+  city?: unknown;
+  confirmed?: unknown;
+};
+
+export type VeoCodeValue = {
+  code: string;
+  fin_venue_id: number;
+  field_ids: number[];
+  field_label: string;
+  city: string;
+  confirmed: boolean;
+};
+
+export function validateVeoCodeInput(
+  input: VeoCodeInput,
+): { ok: true; value: VeoCodeValue } | { ok: false; error: string } {
+  const code = normalizeVeoCode(typeof input.code === "string" ? input.code : "");
+  if (!code) return { ok: false, error: "Code is required." };
+  if (code.length > 40) return { ok: false, error: "Code is too long (max 40)." };
+
+  const finVenueId = Number(input.finVenueId);
+  if (!Number.isInteger(finVenueId) || finVenueId <= 0) {
+    return { ok: false, error: "A venue is required." };
+  }
+
+  const rawIds = Array.isArray(input.fieldIds) ? input.fieldIds : [];
+  const fieldIds = Array.from(new Set(rawIds.map((n) => Number(n))));
+  if (fieldIds.length === 0) return { ok: false, error: "Select at least one field." };
+  if (fieldIds.some((n) => !Number.isInteger(n) || n <= 0)) {
+    return { ok: false, error: "Field ids must be positive integers." };
+  }
+
+  const fieldLabel = (typeof input.fieldLabel === "string" ? input.fieldLabel : "").trim();
+  if (!fieldLabel) return { ok: false, error: "A field label is required." };
+
+  const city = (typeof input.city === "string" ? input.city : "").trim();
+  if (!city) return { ok: false, error: "A city is required." };
+
+  return {
+    ok: true,
+    value: {
+      code,
+      fin_venue_id: finVenueId,
+      field_ids: fieldIds,
+      field_label: fieldLabel,
+      city,
+      confirmed: input.confirmed === true,
+    },
+  };
 }
 
 // ± window (minutes) around the title start time when hunting for the
@@ -516,8 +491,11 @@ export function classifyVeo(args: {
   // candidate mdapi rows on the resolved date. Kept as an injected function
   // so this stays pure and testable with fixtures.
   loadCandidates: (finVenueId: number, matchDate: string) => VeoCandidateRow[];
+  // Code→field map. Routes pass the DB-loaded map; defaults to the fallback
+  // constant so existing tests and any offline path still resolve codes.
+  codes?: Record<string, VeoFieldCode>;
 }): VeoDecision {
-  const { subject, slug, loadCandidates } = args;
+  const { subject, slug, loadCandidates, codes = VEO_FIELD_CODES } = args;
 
   const parsed = parseVeoSubject(subject);
   if (!parsed.ok) {
@@ -534,7 +512,7 @@ export function classifyVeo(args: {
   }
   const title = parsed.value;
 
-  const venue = resolveVeoCode(title.code);
+  const venue = resolveVeoCode(title.code, codes);
   if (!venue) {
     return {
       action: "queue",

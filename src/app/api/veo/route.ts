@@ -3,7 +3,8 @@
 // (venue · date · time) server-side. Admin-only.
 
 import { authenticateCrm } from "@/lib/crmAuth";
-import { matchLocalStart, VEO_FIELD_CODES } from "@/lib/veo";
+import { matchLocalStart } from "@/lib/veo";
+import { fetchVeoCodeRows } from "@/lib/veoCodes";
 
 export const runtime = "nodejs";
 export const maxDuration = 15;
@@ -120,16 +121,22 @@ export async function GET(req: Request) {
   for (const r of statsRes.data ?? []) {
     if (r.parsed_code) bump(r.parsed_code as string, r.status as string);
   }
-  // Every configured code appears (even with zero recordings) so readiness is
-  // visible before the first recording; plus any seen code not in the map
-  // (e.g. an unknown code someone should add).
-  const configured = new Set(Object.keys(VEO_FIELD_CODES));
+  // Configured codes come from the veo_codes table (fresh — this is an admin
+  // page load). Every configured code appears even with zero recordings, plus
+  // any seen code NOT in the table (an unknown code someone should add).
+  let codeRows: Awaited<ReturnType<typeof fetchVeoCodeRows>> = [];
+  try {
+    codeRows = await fetchVeoCodeRows(supabase);
+  } catch (err) {
+    console.error("[veo:list] veo_codes read failed", err);
+  }
+  const configured = new Set(codeRows.map((r) => r.code.toUpperCase()));
   const codeStats = [
-    ...Object.entries(VEO_FIELD_CODES).map(([code, cfg]) => {
-      const c = counts.get(code) ?? { posted: 0, queued: 0, dismissed: 0 };
+    ...codeRows.map((cfg) => {
+      const c = counts.get(cfg.code.toUpperCase()) ?? { posted: 0, queued: 0, dismissed: 0 };
       return {
-        code,
-        label: cfg.fieldLabel,
+        code: cfg.code,
+        label: cfg.field_label,
         city: cfg.city,
         confirmed: cfg.confirmed,
         posted: c.posted,

@@ -31,7 +31,9 @@ import {
   resolveMatchDates,
   resolveVeoCode,
   type VeoCandidateRow,
+  type VeoFieldCode,
 } from "@/lib/veo";
+import { getVeoCodesMap } from "@/lib/veoCodes";
 import { loadVenueCandidates, postVeoLinkToMatch } from "@/lib/veoPost";
 
 export const runtime = "nodejs";
@@ -87,11 +89,12 @@ async function buildLoader(
   supabase: SupabaseClient,
   subject: string,
   slug: string,
+  codes: Record<string, VeoFieldCode>,
 ): Promise<(finVenueId: number, matchDate: string) => VeoCandidateRow[]> {
   const empty = () => [] as VeoCandidateRow[];
   const parsed = parseVeoSubject(subject);
   if (!parsed.ok) return empty;
-  const venue = resolveVeoCode(parsed.value.code);
+  const venue = resolveVeoCode(parsed.value.code, codes);
   if (!venue) return empty;
   const dates = resolveMatchDates(parsed.value, processingDateFromSlug(slug));
   const byDate = new Map<string, VeoCandidateRow[]>();
@@ -166,8 +169,9 @@ export async function POST(req: Request) {
   // batch keyed on deterministic doc ids, so re-driving a not-yet-'posted'
   // recording safely re-attempts it (writes both, or no-ops if already posted).
   const runDecision = async (rowId: string): Promise<Response> => {
-    const loadCandidates = await buildLoader(supabase, subject, ref.slug);
-    const decision = classifyVeo({ subject, slug: ref.slug, loadCandidates });
+    const codes = await getVeoCodesMap(supabase); // DB map (cached), constant fallback
+    const loadCandidates = await buildLoader(supabase, subject, ref.slug, codes);
+    const decision = classifyVeo({ subject, slug: ref.slug, loadCandidates, codes });
 
     const parsedFields = {
       parsed_code: decision.code,
