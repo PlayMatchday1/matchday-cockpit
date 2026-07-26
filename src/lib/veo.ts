@@ -62,10 +62,17 @@ export type VeoFieldCode = {
 // still TBD — kept as unconfirmed placeholders. Keys are normalized (uppercase,
 // single-spaced); add alias keys pointing at the same field for any variant.
 export const VEO_FIELD_CODES: Record<string, VeoFieldCode> = {
-  // fin_venue 11, field 102 "Soccer Central Complex" (SC Field 3/4/4A).
+  // fin_venue 11 "Soccer Central". Regular "SC Field 3/4/4A" matches land on
+  // BOTH mdapi field 102 ("Soccer Central Complex") AND field 199 ("Tourney at
+  // Soccer Central" — a legacy field_title; it carries the same regular
+  // Field 3/4/4A matches, in fact more of them). SC must cover both, else a
+  // regular recording on 199 would false-positive as field_mismatch. Fields
+  // 1123 (World Cup) and 1354 (Premier Match) are genuinely distinct events —
+  // deliberately excluded, so a recording that only matches one of those is
+  // surfaced for review rather than posted as a normal SC game.
   SC: {
     finVenueId: 11,
-    fieldIds: [102],
+    fieldIds: [102, 199],
     fieldLabel: "Soccer Central (SC Field 3/4/4A)",
     venueName: "Soccer Central",
     city: "San Antonio",

@@ -221,9 +221,10 @@ test("classifyVeo: two matches inside the window → queued (never auto-pick)", 
 });
 
 test("classifyVeo: field-agreement cross-check — single match on a different field of the same venue → queued field_mismatch", () => {
-  // The one SC-venue match at 8 PM is on field 199 (a tournament field), not
-  // field 102 that SC denotes. Never post to the wrong field — queue it.
-  const wrongField: VeoCandidateRow = { api_id: 700, field_id: 199, start_date: "2026-07-24T20:00:00+00:00", is_cancelled: false };
+  // The one SC-venue match at 8 PM is on field 1123 (Soccer Central World Cup
+  // Tournament), which SC does NOT cover (SC = [102, 199], the regular
+  // Field 3/4/4A fields). Never post to the wrong field — queue it.
+  const wrongField: VeoCandidateRow = { api_id: 700, field_id: 1123, start_date: "2026-07-24T20:00:00+00:00", is_cancelled: false };
   const d = classifyVeo({ subject: SUBJECT, slug: SLUG, loadCandidates: () => [wrongField] });
   assert.equal(d.action, "queue");
   if (d.action === "queue") {
