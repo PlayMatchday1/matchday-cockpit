@@ -162,10 +162,9 @@ export async function POST(req: Request) {
   };
 
   // Parse + match + post/queue, updating the given row. Shared by the fresh
-  // claim path and the dedup self-heal path. The two-message post is
-  // idempotent (deterministic Firestore doc ids), so re-driving a not-yet-
-  // 'posted' recording completes a partial pair without re-posting what
-  // already went out.
+  // claim path and the dedup self-heal path. The two-message post is an atomic
+  // batch keyed on deterministic doc ids, so re-driving a not-yet-'posted'
+  // recording safely re-attempts it (writes both, or no-ops if already posted).
   const runDecision = async (rowId: string): Promise<Response> => {
     const loadCandidates = await buildLoader(supabase, subject, ref.slug);
     const decision = classifyVeo({ subject, slug: ref.slug, loadCandidates });
@@ -180,8 +179,8 @@ export async function POST(req: Request) {
 
     if (decision.action === "post") {
       try {
-        // Posts the copy line + the bare URL, in order, exactly once (both
-        // must land before we mark 'posted').
+        // Atomic batch: the copy line + the bare URL land together or not at
+        // all; we only reach the 'posted' update on a successful commit.
         const posted = await postVeoLinkToMatch({
           supabase,
           recordingId: ref.recordingId,
@@ -210,10 +209,9 @@ export async function POST(req: Request) {
           { status: 200 },
         );
       } catch (err) {
-        // A message failed to land — never lose the link. File it as
-        // post_failed (carrying the candidate) so it stays NOT 'posted'; a
-        // retry (operator assign, or a re-sent email) idempotently completes
-        // the pair.
+        // The atomic batch failed → NOTHING was written (no half-posted
+        // state). File it as post_failed carrying the matched candidate, so it
+        // surfaces in the queue as a one-click retry rather than being lost.
         console.error(`[veo:inbound] post failed recording=${ref.recordingId}`, err);
         await supabase
           .from("veo_recordings")

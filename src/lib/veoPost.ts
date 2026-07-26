@@ -21,69 +21,62 @@ const MATCHDAY_AVATAR_URL =
 
 export type PostResult = { copyMessageId: string; urlMessageId: string };
 
-// Firestore ALREADY_EXISTS gRPC status — thrown by DocumentReference.create()
-// when the doc is already there. That's our idempotency signal: the message
-// went out on a prior attempt, so skip it (no duplicate, no duplicate audit).
+// Firestore ALREADY_EXISTS gRPC status — a batched create() fails with this
+// when the target doc is already there. That's our idempotency signal: the
+// pair already committed on a prior attempt, so treat the commit as a no-op.
 function isAlreadyExists(err: unknown): boolean {
   const e = err as { code?: number | string; message?: string };
   return e?.code === 6 || e?.code === "6" || /already exists/i.test(e?.message ?? "");
 }
 
-// Post ONE message at a deterministic doc id via create() (create = "write iff
-// absent"). Returns whether it was newly written. The audit row is inserted
-// only on a fresh write, so retries never duplicate the message OR the audit.
-async function postMessageOnce(args: {
-  supabase: SupabaseClient;
-  messages: admin.firestore.CollectionReference;
-  chatId: string;
-  docId: string;
-  text: string;
-  sentByUserId: string | null;
-}): Promise<{ created: boolean }> {
-  const { supabase, messages, chatId, docId, text, sentByUserId } = args;
-  try {
-    await messages.doc(docId).create({
-      _id: docId,
-      text,
-      messageType: "Text",
-      sentBy: MATCHDAY_SENDER_NAME,
-      sentTo: "Group",
-      user: {
-        _id: MATCHDAY_SENDER_USER_ID,
-        name: MATCHDAY_SENDER_NAME,
-        avatar: MATCHDAY_AVATAR_URL,
-        email: "",
-        phoneNumber: "",
-      },
-      createdAt: admin.firestore.FieldValue.serverTimestamp(),
-    });
-  } catch (err) {
-    if (isAlreadyExists(err)) return { created: false }; // already posted → skip
-    throw err; // real Firestore failure → caller marks post_failed
-  }
+function messageDoc(docId: string, text: string) {
+  return {
+    _id: docId,
+    text,
+    messageType: "Text",
+    sentBy: MATCHDAY_SENDER_NAME,
+    sentTo: "Group",
+    user: {
+      _id: MATCHDAY_SENDER_USER_ID,
+      name: MATCHDAY_SENDER_NAME,
+      avatar: MATCHDAY_AVATAR_URL,
+      email: "",
+      phoneNumber: "",
+    },
+    createdAt: admin.firestore.FieldValue.serverTimestamp(),
+  };
+}
 
-  const auditIns = await supabase.from("match_chat_audit_log").insert({
+async function insertAudit(
+  supabase: SupabaseClient,
+  chatId: string,
+  docId: string,
+  text: string,
+  sentByUserId: string | null,
+): Promise<void> {
+  const ins = await supabase.from("match_chat_audit_log").insert({
     firestore_chat_id: chatId,
     firestore_message_id: docId,
     sent_by_user_id: sentByUserId,
     body: text,
   });
-  if (auditIns.error) {
+  if (ins.error) {
     console.error(
-      `[veo:post] AUDIT GAP message_id=${docId} chat=${chatId} — ${auditIns.error.code} ${auditIns.error.message}`,
+      `[veo:post] AUDIT GAP message_id=${docId} chat=${chatId} — ${ins.error.code} ${ins.error.message}`,
     );
   }
-  return { created: true };
 }
 
-// Post the film into Chats/{chatId}/messages as TWO messages in order:
+// Post the film into Chats/{chatId}/messages as TWO messages:
 //   1. the copy line (veoMessageText(), no URL),
 //   2. the bare video URL alone (kept clickable in the players' app).
-// Both are written as the "MatchDay" system identity. The pair is idempotent:
-// each message has a deterministic doc id keyed on the recording, so a retry
-// after a mid-pair failure re-posts only what's missing and never duplicates
-// what already went out. Throws on a real Firestore failure so the caller
-// leaves the recording NOT 'posted' (queued as post_failed) for a retry.
+// Both are written as the "MatchDay" identity in a single ATOMIC WriteBatch —
+// they commit together or not at all, so the player can never see the copy
+// line without the link. Deterministic doc ids keyed on the recording make it
+// idempotent: on a full replay the batched create()s fail ALREADY_EXISTS,
+// which we treat as "already posted" (no-op). On any OTHER failure the batch
+// wrote NOTHING, so we throw and the caller leaves the recording NOT 'posted'
+// (queued as post_failed) for a one-click retry.
 export async function postVeoLinkToMatch(args: {
   supabase: SupabaseClient;
   recordingId: string;
@@ -93,15 +86,30 @@ export async function postVeoLinkToMatch(args: {
 }): Promise<PostResult> {
   const { supabase, recordingId, apiId, videoUrl, sentByUserId } = args;
   const chatId = String(apiId);
-  const messages = firestore().collection("Chats").doc(chatId).collection("messages");
+  const db = firestore();
+  const messages = db.collection("Chats").doc(chatId).collection("messages");
 
   const copyId = `veo-${recordingId}-copy`;
   const urlId = `veo-${recordingId}-url`;
+  const copyText = veoMessageText();
 
-  // Copy FIRST, then the URL. If the URL write throws, the copy is already in
-  // (deterministic id), so the retry skips the copy and only posts the URL.
-  await postMessageOnce({ supabase, messages, chatId, docId: copyId, text: veoMessageText(), sentByUserId });
-  await postMessageOnce({ supabase, messages, chatId, docId: urlId, text: videoUrl, sentByUserId });
+  const batch = db.batch();
+  batch.create(messages.doc(copyId), messageDoc(copyId, copyText));
+  batch.create(messages.doc(urlId), messageDoc(urlId, videoUrl));
+
+  let freshlyPosted = true;
+  try {
+    await batch.commit();
+  } catch (err) {
+    if (!isAlreadyExists(err)) throw err; // real failure → nothing written → post_failed
+    freshlyPosted = false; // both already committed on a prior attempt → no-op
+  }
+
+  // Audit rows only for a fresh commit (both messages just landed together).
+  if (freshlyPosted) {
+    await insertAudit(supabase, chatId, copyId, copyText, sentByUserId);
+    await insertAudit(supabase, chatId, urlId, videoUrl, sentByUserId);
+  }
 
   return { copyMessageId: copyId, urlMessageId: urlId };
 }
