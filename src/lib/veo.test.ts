@@ -12,6 +12,7 @@ import {
   resolveMatchDate,
   resolveMatchDates,
   selectVeoMatches,
+  veoMessageText,
   type VeoCandidateRow,
 } from "./veo.ts";
 
@@ -31,6 +32,14 @@ const scMatch: VeoCandidateRow = {
   start_date: "2026-07-24T20:00:00+00:00",
   is_cancelled: false,
 };
+
+// ----------------------------- message copy -----------------------------
+
+test("veoMessageText: the copy line posted before the bare URL", () => {
+  // Posted as its OWN message, ahead of the URL-only message, so the players'
+  // app keeps the URL clickable. This is the one place to edit the wording.
+  assert.equal(veoMessageText(), "🎥 Your match film is ready to watch!");
+});
 
 // ----------------------------- email gate -----------------------------
 

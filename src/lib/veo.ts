@@ -181,6 +181,15 @@ export function resolveVeoCode(code: string | null | undefined): VeoFieldCode | 
 // two same-venue matches on the same evening stay distinguishable.
 export const VEO_MATCH_WINDOW_MIN = 90;
 
+// The copy line posted into the match thread immediately BEFORE the bare
+// video URL. Two separate messages are sent — this copy line, then the URL
+// alone — because the players' app only makes a URL clickable when the URL
+// is the ENTIRE message body; any text in the same bubble kills the link.
+// Edit this string to change the wording (it's the one editable place).
+export function veoMessageText(): string {
+  return "🎥 Your match film is ready to watch!";
+}
+
 // ---------------------------------------------------------------------------
 // Status / queue-reason vocab (mirrors the veo_recordings.status column)
 // ---------------------------------------------------------------------------

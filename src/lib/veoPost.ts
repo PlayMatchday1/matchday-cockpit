@@ -5,12 +5,11 @@
 
 import "server-only";
 
-import { randomUUID } from "node:crypto";
 import type { SupabaseClient } from "@supabase/supabase-js";
 import admin from "firebase-admin";
 import { firestore } from "@/lib/firebaseAdmin";
 import { MATCHDAY_SENDER_NAME, MATCHDAY_SENDER_USER_ID } from "@/lib/matchChats";
-import { matchLocalStart, type VeoCandidateRow } from "@/lib/veo";
+import { matchLocalStart, veoMessageText, type VeoCandidateRow } from "@/lib/veo";
 
 // Same branded avatar the /reply route uses so Cockpit-authored messages
 // render with the unified "MatchDay" identity in the consumer app. Hosted
@@ -20,31 +19,32 @@ import { matchLocalStart, type VeoCandidateRow } from "@/lib/veo";
 const MATCHDAY_AVATAR_URL =
   "https://www.playmatchday.com/wp-content/uploads/2023/06/icon2-300x300.jpg";
 
-export type PostResult = { firestoreDocId: string; messageId: string };
+export type PostResult = { copyMessageId: string; urlMessageId: string };
 
-// Post the Veo link as a plain-text message into Chats/{chatId}/messages,
-// written as the "MatchDay" system identity (auto-linkified in the Cockpit
-// UI). Mirrors an audit row into match_chat_audit_log — sentByUserId is the
-// operator who clicked assign, or null for an automatic post. Throws on a
-// Firestore failure so the caller can queue the item as 'post_failed'.
-export async function postVeoLinkToMatch(args: {
+// Firestore ALREADY_EXISTS gRPC status — thrown by DocumentReference.create()
+// when the doc is already there. That's our idempotency signal: the message
+// went out on a prior attempt, so skip it (no duplicate, no duplicate audit).
+function isAlreadyExists(err: unknown): boolean {
+  const e = err as { code?: number | string; message?: string };
+  return e?.code === 6 || e?.code === "6" || /already exists/i.test(e?.message ?? "");
+}
+
+// Post ONE message at a deterministic doc id via create() (create = "write iff
+// absent"). Returns whether it was newly written. The audit row is inserted
+// only on a fresh write, so retries never duplicate the message OR the audit.
+async function postMessageOnce(args: {
   supabase: SupabaseClient;
-  apiId: number;
-  videoUrl: string;
+  messages: admin.firestore.CollectionReference;
+  chatId: string;
+  docId: string;
+  text: string;
   sentByUserId: string | null;
-}): Promise<PostResult> {
-  const { supabase, apiId, videoUrl, sentByUserId } = args;
-  const chatId = String(apiId);
-  const messageId = randomUUID();
-
-  const db = firestore();
-  const ref = await db
-    .collection("Chats")
-    .doc(chatId)
-    .collection("messages")
-    .add({
-      _id: messageId,
-      text: videoUrl,
+}): Promise<{ created: boolean }> {
+  const { supabase, messages, chatId, docId, text, sentByUserId } = args;
+  try {
+    await messages.doc(docId).create({
+      _id: docId,
+      text,
       messageType: "Text",
       sentBy: MATCHDAY_SENDER_NAME,
       sentTo: "Group",
@@ -57,24 +57,53 @@ export async function postVeoLinkToMatch(args: {
       },
       createdAt: admin.firestore.FieldValue.serverTimestamp(),
     });
+  } catch (err) {
+    if (isAlreadyExists(err)) return { created: false }; // already posted → skip
+    throw err; // real Firestore failure → caller marks post_failed
+  }
 
-  // Audit row alongside the Firestore write, same as the reply route. A
-  // failure here is a recoverable audit gap — the message already landed —
-  // so we log loudly rather than throw (which would falsely mark the item
-  // post_failed and risk a double-post on retry).
   const auditIns = await supabase.from("match_chat_audit_log").insert({
     firestore_chat_id: chatId,
-    firestore_message_id: messageId,
+    firestore_message_id: docId,
     sent_by_user_id: sentByUserId,
-    body: videoUrl,
+    body: text,
   });
   if (auditIns.error) {
     console.error(
-      `[veo:post] AUDIT GAP firestore_doc=${ref.id} message_id=${messageId} chat=${chatId} — ${auditIns.error.code} ${auditIns.error.message}`,
+      `[veo:post] AUDIT GAP message_id=${docId} chat=${chatId} — ${auditIns.error.code} ${auditIns.error.message}`,
     );
   }
+  return { created: true };
+}
 
-  return { firestoreDocId: ref.id, messageId };
+// Post the film into Chats/{chatId}/messages as TWO messages in order:
+//   1. the copy line (veoMessageText(), no URL),
+//   2. the bare video URL alone (kept clickable in the players' app).
+// Both are written as the "MatchDay" system identity. The pair is idempotent:
+// each message has a deterministic doc id keyed on the recording, so a retry
+// after a mid-pair failure re-posts only what's missing and never duplicates
+// what already went out. Throws on a real Firestore failure so the caller
+// leaves the recording NOT 'posted' (queued as post_failed) for a retry.
+export async function postVeoLinkToMatch(args: {
+  supabase: SupabaseClient;
+  recordingId: string;
+  apiId: number;
+  videoUrl: string;
+  sentByUserId: string | null;
+}): Promise<PostResult> {
+  const { supabase, recordingId, apiId, videoUrl, sentByUserId } = args;
+  const chatId = String(apiId);
+  const messages = firestore().collection("Chats").doc(chatId).collection("messages");
+
+  const copyId = `veo-${recordingId}-copy`;
+  const urlId = `veo-${recordingId}-url`;
+
+  // Copy FIRST, then the URL. If the URL write throws, the copy is already in
+  // (deterministic id), so the retry skips the copy and only posts the URL.
+  await postMessageOnce({ supabase, messages, chatId, docId: copyId, text: veoMessageText(), sentByUserId });
+  await postMessageOnce({ supabase, messages, chatId, docId: urlId, text: videoUrl, sentByUserId });
+
+  return { copyMessageId: copyId, urlMessageId: urlId };
 }
 
 // Load the candidate mdapi rows for a venue on a local date: resolve the
