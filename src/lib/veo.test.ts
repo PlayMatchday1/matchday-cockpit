@@ -189,6 +189,38 @@ test("classifyVeo: no scheduled match in window → queued no_match", () => {
   if (d.action === "queue") assert.equal(d.reason, "no_match");
 });
 
+test("classifyVeo: title date days before email arrival still matches the historical match (no recency window)", () => {
+  // Recordings are manager-driven and can arrive days late. A "SC | Jul 20"
+  // email that lands Jul 28 must still look up and match the Jul 20 match.
+  // classifyVeo takes only subject + slug + candidate rows — there is NO
+  // receivedAt / now() input, and loadVenueCandidates bounds by the TITLE's
+  // date, not email arrival. The only tolerance is ±window around the title
+  // start time on that specific historical date.
+  const RECEIVED_AT = "2026-07-28T09:00:00Z"; // 8 days after the match — irrelevant to matching
+  void RECEIVED_AT;
+  const historicalMatch: VeoCandidateRow = {
+    api_id: 30001,
+    field_id: 102,
+    start_date: "2026-07-20T20:00:00+00:00", // Jul 20, 8:00 PM local
+    is_cancelled: false,
+  };
+  const d = classifyVeo({
+    subject: "SC | Jul 20 | 8:00PM is ready to watch!",
+    slug: "20260721-sc-jul-20-800pm-vhist777", // processing date = Jul 21 (match + 1 day)
+    loadCandidates: (finVenueId, matchDate) => {
+      // The lookup asks for the TITLE's date, never "recent" or arrival-based.
+      assert.equal(matchDate, "2026-07-20");
+      assert.equal(finVenueId, 11);
+      return [historicalMatch];
+    },
+  });
+  assert.equal(d.action, "post");
+  if (d.action === "post") {
+    assert.equal(d.apiId, 30001);
+    assert.equal(d.matchDate, "2026-07-20"); // title date, not the Jul 21 slug date or Jul 28 arrival
+  }
+});
+
 test("classifyVeo: unknown code → queued unknown_code", () => {
   const d = classifyVeo({
     subject: "ZZ | Jul 24 | 8:00PM is ready to watch!",
