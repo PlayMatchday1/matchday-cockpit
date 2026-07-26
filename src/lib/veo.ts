@@ -20,42 +20,117 @@
 //     the TITLE date/time is the source of truth for matching.
 
 // ---------------------------------------------------------------------------
-// Config: CODE → venue map
+// Config: CODE → FIELD map
 // ---------------------------------------------------------------------------
+//
+// The Veo title code is a FIELD abbreviation — matches in our data go by
+// field, so the code identifies which camera'd field the recording is from.
+// Each code therefore maps to a specific mdapi field (mdapi_matches.field_id)
+// within a fin_venue. Codes were DERIVED from live data, not guessed:
+//   - fin_venue_fields links (fin_venue_id ↔ mdapi_field_id),
+//   - schedule_master.detail / the ops abbreviations in venueAbbreviations.ts,
+//   - and camera-marked match names (mdapi_matches.name contains "🎥"), which
+//     is the strongest signal for which fields actually have a Veo camera.
+//
+// `fieldIds` is the set of mdapi field_ids the code denotes (usually one; a
+// venue's several physical sub-fields — Soccer Central Field 3/4/4A — share a
+// single mdapi field_id, so date + time disambiguate the match). It powers the
+// FIELD-AGREEMENT CROSS-CHECK: after matching by venue + title date/time, the
+// winning match's field_id must be in this set, else the item is queued
+// (reason "field_mismatch") rather than posted to a possibly-wrong field.
 
-export type VeoCodeVenue = {
-  // fin_venues.id — a code maps to a whole venue, which may cover several
-  // mdapi field_ids (Soccer Central = SC Field 3 / 4 / 4A). Date + time
-  // disambiguate the specific match under that venue.
-  finVenueId: number;
+export type VeoFieldCode = {
+  finVenueId: number; // fin_venues.id — the candidate net (all its fields)
+  fieldIds: number[]; // mdapi_matches.field_id values this code denotes
+  fieldLabel: string; // human label for the review UI
   venueName: string;
   city: string;
-  // Safety gate. Only `confirmed: true` codes auto-post; everything else
-  // is routed to the review queue with reason "unconfirmed_code" so a
-  // guessed mapping can never post to a real player chat before Ryan has
-  // signed off on it. Flip to true once confirmed.
+  // Safety gate. Only `confirmed: true` codes auto-post; everything else is
+  // routed to the review queue with reason "unconfirmed_code" so a derived-
+  // but-unverified mapping can never post to a real player chat before Ryan
+  // confirms (a) the field has a Veo camera and (b) this is EXACTLY the string
+  // Veo produces. Flip to true per field once confirmed.
   confirmed: boolean;
 };
 
-// SC = Soccer Central is the one confirmed seed (given). The other six are
-// PROPOSED best-guesses for Ryan to confirm/correct before go-live — kept
-// `confirmed: false` so they queue-only until then. fin_venues ids are from
-// the seeded fin_venue_fields links (migration 0041 and later).
-export const VEO_CODE_VENUES: Record<string, VeoCodeVenue> = {
-  SC: { finVenueId: 11, venueName: "Soccer Central", city: "San Antonio", confirmed: true },
+// SC = Soccer Central is the confirmed seed (given). The rest are DERIVED
+// camera-field candidates (🎥-marked in match names) — kept `confirmed:false`
+// so they queue-only until Ryan confirms the camera + the exact Veo string.
+// Keyed by the ops/field abbreviation; add alias keys (e.g. "SC4") pointing at
+// the same field if Veo emits field-level variants.
+export const VEO_FIELD_CODES: Record<string, VeoFieldCode> = {
+  // fin_venue 11, field 102 "Soccer Central Complex" (SC Field 3/4/4A).
+  SC: {
+    finVenueId: 11,
+    fieldIds: [102],
+    fieldLabel: "Soccer Central (SC Field 3/4/4A)",
+    venueName: "Soccer Central",
+    city: "San Antonio",
+    confirmed: true,
+  },
 
-  // ---- PROPOSED — confirm or correct before flipping `confirmed` ----
-  NEMP: { finVenueId: 2, venueName: "NEMP", city: "Austin", confirmed: false },
-  AK: { finVenueId: 7, venueName: "ATH Katy", city: "Houston", confirmed: false },
-  PR: { finVenueId: 16, venueName: "PRUMC", city: "Atlanta", confirmed: false },
-  BP: { finVenueId: 13, venueName: "Bicentennial Park", city: "Dallas", confirmed: false },
-  LF: { finVenueId: 18, venueName: "Lou Fusz Outdoor", city: "St. Louis", confirmed: false },
-  STP: { finVenueId: 21, venueName: "Scissortail Park", city: "OKC", confirmed: false },
+  // ---- DERIVED camera candidates — confirm camera + exact string ----
+  // fin_venue 3, field 1024 "The Hattrick" — 🎥 on ~156 matches.
+  HT: {
+    finVenueId: 3,
+    fieldIds: [1024],
+    fieldLabel: "The Hattrick (Leander)",
+    venueName: "Hattrick",
+    city: "Austin",
+    confirmed: false,
+  },
+  // fin_venue 16, field 958 "PRUMC" — 🎥 on ~106 matches.
+  PR: {
+    finVenueId: 16,
+    fieldIds: [958],
+    fieldLabel: "PRUMC",
+    venueName: "PRUMC",
+    city: "Atlanta",
+    confirmed: false,
+  },
+  // fin_venue 18, field 664 "Lou Fusz Athletic Complex" (Outdoor Field 5/10)
+  // — 🎥 on ~83 matches.
+  LF: {
+    finVenueId: 18,
+    fieldIds: [664],
+    fieldLabel: "Lou Fusz Outdoor (Field 5/10)",
+    venueName: "Lou Fusz Outdoor",
+    city: "St. Louis",
+    confirmed: false,
+  },
+  // fin_venue 20, field 760 "Centennial Commons" — 🎥 on ~24 matches.
+  CC: {
+    finVenueId: 20,
+    fieldIds: [760],
+    fieldLabel: "Centennial Commons",
+    venueName: "Centennial Commons",
+    city: "St. Louis",
+    confirmed: false,
+  },
+  // fin_venue 17, field 430 "Hammond Park" — 🎥 on ~18 matches.
+  HP: {
+    finVenueId: 17,
+    fieldIds: [430],
+    fieldLabel: "Hammond Park",
+    venueName: "Hammond Park",
+    city: "Atlanta",
+    confirmed: false,
+  },
+  // fin_venue 19, field 364 "Lou Fusz Athletic Training Center" (Indoor) —
+  // 🎥 on ~10 matches.
+  LFI: {
+    finVenueId: 19,
+    fieldIds: [364],
+    fieldLabel: "Lou Fusz Indoor (Training Center)",
+    venueName: "Lou Fusz Indoor",
+    city: "St. Louis",
+    confirmed: false,
+  },
 };
 
-export function resolveVeoCode(code: string | null | undefined): VeoCodeVenue | null {
+export function resolveVeoCode(code: string | null | undefined): VeoFieldCode | null {
   if (!code) return null;
-  return VEO_CODE_VENUES[code.trim().toUpperCase()] ?? null;
+  return VEO_FIELD_CODES[code.trim().toUpperCase()] ?? null;
 }
 
 // ± window (minutes) around the title start time when hunting for the
@@ -72,10 +147,11 @@ export type VeoStatus = "posted" | "queued" | "dismissed";
 
 export type VeoQueueReason =
   | "unparseable_subject" // title didn't match "CODE | Mon DD | H:MMPM"
-  | "unknown_code" // code not in VEO_CODE_VENUES
+  | "unknown_code" // code not in VEO_FIELD_CODES
   | "unconfirmed_code" // code mapped but not yet confirmed for go-live
   | "no_match" // parsed fine, zero scheduled matches in window
   | "multiple_matches" // more than one candidate — never auto-pick
+  | "field_mismatch" // one match, but its field disagrees with the title code
   | "post_failed"; // matched + posted attempt threw (Firestore/DB) — retry via queue
 
 // ---------------------------------------------------------------------------
@@ -246,6 +322,7 @@ export function matchLocalStart(
 
 export type VeoCandidateRow = {
   api_id: number;
+  field_id: number | null; // for the field-agreement cross-check
   start_date: string | null;
   is_cancelled: boolean | null;
 };
@@ -373,14 +450,32 @@ export function classifyVeo(args: {
   }
 
   if (hits.length === 1) {
+    const hit = hits[0];
+    // Field-agreement cross-check: the code IS a field abbreviation, so the
+    // matched match must be on one of that code's fields. A single venue+time
+    // match on a DIFFERENT field of the same venue is a titling mismatch —
+    // queue it (with the candidate) rather than post to the wrong field.
+    const fieldAgrees = hit.field_id != null && venue.fieldIds.includes(hit.field_id);
+    if (fieldAgrees) {
+      return {
+        action: "post",
+        code: title.code,
+        finVenueId: venue.finVenueId,
+        matchDate,
+        timeMinutes: title.timeMinutes,
+        timeLabel: title.timeLabel,
+        apiId: hit.api_id,
+      };
+    }
     return {
-      action: "post",
+      action: "queue",
+      reason: "field_mismatch",
       code: title.code,
       finVenueId: venue.finVenueId,
       matchDate,
       timeMinutes: title.timeMinutes,
       timeLabel: title.timeLabel,
-      apiId: hits[0].api_id,
+      candidateApiIds: [hit.api_id],
     };
   }
 

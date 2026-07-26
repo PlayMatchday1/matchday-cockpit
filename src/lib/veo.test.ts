@@ -23,8 +23,10 @@ const SLUG = "20260725-sc-jul-24-800pm-v8d5b42e";
 
 // One SC match on Jul 24 at 8:00 PM local (start_date is venue-local wall
 // clock at UTC offset, so the UTC parts read as the local date/time).
+// field_id 102 is Soccer Central Complex — the field SC maps to.
 const scMatch: VeoCandidateRow = {
   api_id: 14613,
+  field_id: 102,
   start_date: "2026-07-24T20:00:00+00:00",
   is_cancelled: false,
 };
@@ -131,8 +133,8 @@ test("selectVeoMatches: title date used, URL leading date ignored", () => {
 test("selectVeoMatches: excludes cancelled and out-of-window matches", () => {
   const target = { matchDate: "2026-07-24", timeMinutes: 20 * 60 };
   const cancelled: VeoCandidateRow = { ...scMatch, is_cancelled: true };
-  const wrongDay: VeoCandidateRow = { api_id: 2, start_date: "2026-07-25T20:00:00+00:00", is_cancelled: false };
-  const tooFar: VeoCandidateRow = { api_id: 3, start_date: "2026-07-24T22:00:00+00:00", is_cancelled: false };
+  const wrongDay: VeoCandidateRow = { api_id: 2, field_id: 102, start_date: "2026-07-25T20:00:00+00:00", is_cancelled: false };
+  const tooFar: VeoCandidateRow = { api_id: 3, field_id: 102, start_date: "2026-07-24T22:00:00+00:00", is_cancelled: false };
   assert.equal(selectVeoMatches(target, [cancelled]).length, 0);
   assert.equal(selectVeoMatches(target, [wrongDay]).length, 0);
   assert.equal(selectVeoMatches(target, [tooFar]).length, 0); // 120 min > 90 window
@@ -160,12 +162,24 @@ test("classifyVeo: mis-named / untitled subject → queued, NOT posted", () => {
 });
 
 test("classifyVeo: two matches inside the window → queued (never auto-pick)", () => {
-  const twin: VeoCandidateRow = { api_id: 99, start_date: "2026-07-24T20:30:00+00:00", is_cancelled: false };
+  const twin: VeoCandidateRow = { api_id: 99, field_id: 102, start_date: "2026-07-24T20:30:00+00:00", is_cancelled: false };
   const d = classifyVeo({ subject: SUBJECT, slug: SLUG, loadCandidates: () => [scMatch, twin] });
   assert.equal(d.action, "queue");
   if (d.action === "queue") {
     assert.equal(d.reason, "multiple_matches");
     assert.deepEqual(d.candidateApiIds.sort(), [99, 14613].sort());
+  }
+});
+
+test("classifyVeo: field-agreement cross-check — single match on a different field of the same venue → queued field_mismatch", () => {
+  // The one SC-venue match at 8 PM is on field 199 (a tournament field), not
+  // field 102 that SC denotes. Never post to the wrong field — queue it.
+  const wrongField: VeoCandidateRow = { api_id: 700, field_id: 199, start_date: "2026-07-24T20:00:00+00:00", is_cancelled: false };
+  const d = classifyVeo({ subject: SUBJECT, slug: SLUG, loadCandidates: () => [wrongField] });
+  assert.equal(d.action, "queue");
+  if (d.action === "queue") {
+    assert.equal(d.reason, "field_mismatch");
+    assert.deepEqual(d.candidateApiIds, [700]);
   }
 });
 
@@ -186,14 +200,14 @@ test("classifyVeo: unknown code → queued unknown_code", () => {
 });
 
 test("classifyVeo: mapped-but-unconfirmed code queues even on a clean match", () => {
-  // NEMP is a proposed (confirmed:false) mapping — it must NOT auto-post until
-  // Ryan confirms it, but it carries its best-guess candidate for one-click
-  // assign.
-  const nempMatch: VeoCandidateRow = { api_id: 555, start_date: "2026-07-24T20:00:00+00:00", is_cancelled: false };
+  // HT (The Hattrick, field 1024) is a derived (confirmed:false) mapping — it
+  // must NOT auto-post until Ryan confirms the camera + exact string, but it
+  // carries its best-guess candidate for one-click assign.
+  const htMatch: VeoCandidateRow = { api_id: 555, field_id: 1024, start_date: "2026-07-24T20:00:00+00:00", is_cancelled: false };
   const d = classifyVeo({
-    subject: "NEMP | Jul 24 | 8:00PM is ready to watch!",
-    slug: "20260725-nemp-jul-24-800pm-vbbbb222",
-    loadCandidates: () => [nempMatch],
+    subject: "HT | Jul 24 | 8:00PM is ready to watch!",
+    slug: "20260725-ht-jul-24-800pm-vbbbb222",
+    loadCandidates: () => [htMatch],
   });
   assert.equal(d.action, "queue");
   if (d.action === "queue") {

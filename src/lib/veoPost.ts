@@ -99,7 +99,7 @@ export async function loadVenueCandidates(
   const dayEnd = `${matchDate}T23:59:59Z`;
   const m = await supabase
     .from("mdapi_matches")
-    .select("api_id, start_date, is_cancelled")
+    .select("api_id, field_id, start_date, is_cancelled")
     .in("field_id", fieldIds)
     .is("deleted_at", null)
     .gte("start_date", dayStart)

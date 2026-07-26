@@ -45,6 +45,7 @@ const REASON_META: Record<string, { label: string; tone: "coral" | "amber" | "bl
   unconfirmed_code: { label: "Code not confirmed", tone: "amber" },
   no_match: { label: "No scheduled match", tone: "amber" },
   multiple_matches: { label: "Multiple matches", tone: "amber" },
+  field_mismatch: { label: "Field disagrees with code", tone: "amber" },
   post_failed: { label: "Post failed — retry", tone: "coral" },
 };
 

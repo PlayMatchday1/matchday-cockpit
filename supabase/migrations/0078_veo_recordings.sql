@@ -54,7 +54,7 @@ CREATE TABLE IF NOT EXISTS veo_recordings (
 
   -- Why it's queued (null once posted): 'unparseable_subject',
   -- 'unknown_code', 'unconfirmed_code', 'no_match', 'multiple_matches',
-  -- 'post_failed'.
+  -- 'field_mismatch', 'post_failed'.
   queue_reason       text,
 
   -- mdapi_matches.api_id the link was posted to (== Firestore chat id).
