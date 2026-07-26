@@ -1,17 +1,8 @@
-import AdminGuard from "@/components/AdminGuard";
-import AdminSubNav from "@/components/AdminSubNav";
-import PageHeader from "@/components/PageHeader";
-import VeoDashboard from "@/components/VeoDashboard";
+import { redirect } from "next/navigation";
 
-export default function VeoPage() {
-  return (
-    <AdminGuard>
-      <PageHeader
-        title="Admin · Veo auto-poster"
-        subtitle="Veo recordings matched to scheduled matches and posted into their Cockpit thread. Anything not confidently matched lands in the review queue below — never blind-posted."
-      />
-      <AdminSubNav active="veo" />
-      <VeoDashboard />
-    </AdminGuard>
-  );
+// The Veo review queue + field-code editor moved to Cities → Field Ops → Veo.
+// Kept as a redirect so old bookmarks / saved links to /admin/veo still land in
+// the right place instead of 404-ing.
+export default function VeoAdminRedirect() {
+  redirect("/cities?tab=fields&fo=veo");
 }
