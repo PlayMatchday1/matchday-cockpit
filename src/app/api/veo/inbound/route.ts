@@ -28,7 +28,7 @@ import {
   isFinalReadyEmail,
   parseVeoSubject,
   processingDateFromSlug,
-  resolveMatchDate,
+  resolveMatchDates,
   resolveVeoCode,
   type VeoCandidateRow,
 } from "@/lib/veo";
@@ -78,20 +78,27 @@ function serviceClient(): SupabaseClient | null {
   });
 }
 
-// Only hit the DB for candidate matches when the title actually resolves to a
-// confirmed-or-not venue + a datable slot; otherwise there's nothing to load.
-async function candidatesFor(
+// Build the per-date candidate loader classifyVeo needs. We pre-load the
+// venue's candidate matches for EACH candidate year (the slug year plus the
+// prior-year boundary fallback — at most two small day-scoped queries) into a
+// map, and hand back a synchronous per-date lookup. classifyVeo drives which
+// dates it actually consults; only dates it may ask for are pre-loaded.
+async function buildLoader(
   supabase: SupabaseClient,
   subject: string,
   slug: string,
-): Promise<VeoCandidateRow[]> {
+): Promise<(finVenueId: number, matchDate: string) => VeoCandidateRow[]> {
+  const empty = () => [] as VeoCandidateRow[];
   const parsed = parseVeoSubject(subject);
-  if (!parsed.ok) return [];
+  if (!parsed.ok) return empty;
   const venue = resolveVeoCode(parsed.value.code);
-  if (!venue) return [];
-  const matchDate = resolveMatchDate(parsed.value, processingDateFromSlug(slug));
-  if (!matchDate) return [];
-  return loadVenueCandidates(supabase, venue.finVenueId, matchDate);
+  if (!venue) return empty;
+  const dates = resolveMatchDates(parsed.value, processingDateFromSlug(slug));
+  const byDate = new Map<string, VeoCandidateRow[]>();
+  for (const d of dates) {
+    byDate.set(d, await loadVenueCandidates(supabase, venue.finVenueId, d));
+  }
+  return (_finVenueId, matchDate) => byDate.get(matchDate) ?? [];
 }
 
 export async function POST(req: Request) {
@@ -180,12 +187,8 @@ export async function POST(req: Request) {
   const rowId = claim.data!.id as string;
 
   // ---------- 2. Parse + match ----------
-  const candidates = await candidatesFor(supabase, subject, ref.slug);
-  const decision = classifyVeo({
-    subject,
-    slug: ref.slug,
-    loadCandidates: () => candidates,
-  });
+  const loadCandidates = await buildLoader(supabase, subject, ref.slug);
+  const decision = classifyVeo({ subject, slug: ref.slug, loadCandidates });
 
   const parsedFields = {
     parsed_code: decision.code,

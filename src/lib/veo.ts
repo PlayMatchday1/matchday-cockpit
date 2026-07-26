@@ -53,11 +53,14 @@ export type VeoFieldCode = {
   confirmed: boolean;
 };
 
-// SC = Soccer Central is the confirmed seed (given). The rest are DERIVED
-// camera-field candidates (🎥-marked in match names) — kept `confirmed:false`
-// so they queue-only until Ryan confirms the camera + the exact Veo string.
-// Keyed by the ops/field abbreviation; add alias keys (e.g. "SC4") pointing at
-// the same field if Veo emits field-level variants.
+// Codes are the REAL strings observed in live recordings ("ATH P", "ATH K",
+// "PRUMC") plus the Austin fields that share one camera (VC3-79705: Westlake,
+// Onion Creek, Hill Country — since they share a camera, the title CODE is the
+// only field signal, so each gets its own code). SC = Soccer Central is the
+// confirmed seed. Everything stays `confirmed:false` EXCEPT SC until Ryan
+// confirms the exact strings + the camera set per field. St. Louis codes are
+// still TBD — kept as unconfirmed placeholders. Keys are normalized (uppercase,
+// single-spaced); add alias keys pointing at the same field for any variant.
 export const VEO_FIELD_CODES: Record<string, VeoFieldCode> = {
   // fin_venue 11, field 102 "Soccer Central Complex" (SC Field 3/4/4A).
   SC: {
@@ -69,18 +72,27 @@ export const VEO_FIELD_CODES: Record<string, VeoFieldCode> = {
     confirmed: true,
   },
 
-  // ---- DERIVED camera candidates — confirm camera + exact string ----
-  // fin_venue 3, field 1024 "The Hattrick" — 🎥 on ~156 matches.
-  HT: {
-    finVenueId: 3,
-    fieldIds: [1024],
-    fieldLabel: "The Hattrick (Leander)",
-    venueName: "Hattrick",
-    city: "Austin",
+  // ---- Real observed codes (confirm exact string + camera, then flip) ----
+  // fin_venue 8, field 32 "ATH Pearland" (tourney field 22 excluded).
+  "ATH P": {
+    finVenueId: 8,
+    fieldIds: [32],
+    fieldLabel: "ATH Pearland",
+    venueName: "ATH Pearland",
+    city: "Houston",
     confirmed: false,
   },
-  // fin_venue 16, field 958 "PRUMC" — 🎥 on ~106 matches.
-  PR: {
+  // fin_venue 7, field 892 "ATH Katy".
+  "ATH K": {
+    finVenueId: 7,
+    fieldIds: [892],
+    fieldLabel: "ATH Katy",
+    venueName: "ATH Katy",
+    city: "Houston",
+    confirmed: false,
+  },
+  // fin_venue 16, field 958 "PRUMC".
+  PRUMC: {
     finVenueId: 16,
     fieldIds: [958],
     fieldLabel: "PRUMC",
@@ -88,8 +100,38 @@ export const VEO_FIELD_CODES: Record<string, VeoFieldCode> = {
     city: "Atlanta",
     confirmed: false,
   },
-  // fin_venue 18, field 664 "Lou Fusz Athletic Complex" (Outdoor Field 5/10)
-  // — 🎥 on ~83 matches.
+
+  // ---- Austin shared camera VC3-79705 — CODE is the only field signal ----
+  // fin_venue 49, field 1 "Westlake HS Field 3".
+  WESTLAKE: {
+    finVenueId: 49,
+    fieldIds: [1],
+    fieldLabel: "Westlake HS",
+    venueName: "Westlake",
+    city: "Austin",
+    confirmed: false,
+  },
+  // fin_venue 5, field 27 "Onion Creek".
+  "ONION CREEK": {
+    finVenueId: 5,
+    fieldIds: [27],
+    fieldLabel: "Onion Creek",
+    venueName: "Onion Creek",
+    city: "Austin",
+    confirmed: false,
+  },
+  // fin_venue 56, field 1453 "Hill Country Middle School".
+  "HILL COUNTRY": {
+    finVenueId: 56,
+    fieldIds: [1453],
+    fieldLabel: "Hill Country MS",
+    venueName: "Hill Country",
+    city: "Austin",
+    confirmed: false,
+  },
+
+  // ---- St. Louis — codes still TBD, placeholders (unconfirmed) ----
+  // fin_venue 18, field 664 "Lou Fusz Athletic Complex" (Outdoor Field 5/10).
   LF: {
     finVenueId: 18,
     fieldIds: [664],
@@ -98,26 +140,7 @@ export const VEO_FIELD_CODES: Record<string, VeoFieldCode> = {
     city: "St. Louis",
     confirmed: false,
   },
-  // fin_venue 20, field 760 "Centennial Commons" — 🎥 on ~24 matches.
-  CC: {
-    finVenueId: 20,
-    fieldIds: [760],
-    fieldLabel: "Centennial Commons",
-    venueName: "Centennial Commons",
-    city: "St. Louis",
-    confirmed: false,
-  },
-  // fin_venue 17, field 430 "Hammond Park" — 🎥 on ~18 matches.
-  HP: {
-    finVenueId: 17,
-    fieldIds: [430],
-    fieldLabel: "Hammond Park",
-    venueName: "Hammond Park",
-    city: "Atlanta",
-    confirmed: false,
-  },
-  // fin_venue 19, field 364 "Lou Fusz Athletic Training Center" (Indoor) —
-  // 🎥 on ~10 matches.
+  // fin_venue 19, field 364 "Lou Fusz Athletic Training Center" (Indoor).
   LFI: {
     finVenueId: 19,
     fieldIds: [364],
@@ -126,11 +149,23 @@ export const VEO_FIELD_CODES: Record<string, VeoFieldCode> = {
     city: "St. Louis",
     confirmed: false,
   },
+  // fin_venue 20, field 760 "Centennial Commons".
+  CC: {
+    finVenueId: 20,
+    fieldIds: [760],
+    fieldLabel: "Centennial Commons",
+    venueName: "Centennial Commons",
+    city: "St. Louis",
+    confirmed: false,
+  },
 };
 
 export function resolveVeoCode(code: string | null | undefined): VeoFieldCode | null {
   if (!code) return null;
-  return VEO_FIELD_CODES[code.trim().toUpperCase()] ?? null;
+  // Normalize like the parser: trim, collapse internal whitespace, uppercase —
+  // so "ath p", "ATH  P", and "ATH P" all resolve to the same field code.
+  const key = code.trim().replace(/\s+/g, " ").toUpperCase();
+  return VEO_FIELD_CODES[key] ?? null;
 }
 
 // ± window (minutes) around the title start time when hunting for the
@@ -152,6 +187,7 @@ export type VeoQueueReason =
   | "no_match" // parsed fine, zero scheduled matches in window
   | "multiple_matches" // more than one candidate — never auto-pick
   | "field_mismatch" // one match, but its field disagrees with the title code
+  | "ambiguous_time" // bare time (no am/pm) matched a real game under BOTH meridiems
   | "post_failed"; // matched + posted attempt threw (Firestore/DB) — retry via queue
 
 // ---------------------------------------------------------------------------
@@ -216,12 +252,17 @@ const MONTHS: Record<string, number> = {
   jul: 7, aug: 8, sep: 9, oct: 10, nov: 11, dec: 12,
 };
 
+export type TimeOption = { minutes: number; label: string };
+
 export type VeoTitle = {
   code: string;
   month: number; // 1-12
   day: number; // 1-31
-  timeMinutes: number; // minutes since local midnight (title start time)
-  timeLabel: string; // normalized "8:00 PM"
+  // Candidate start times. One option when the meridiem is explicit (or the
+  // time is unambiguous 24-hour); TWO (PM first, then AM) when the title gives
+  // a bare 12-hour time — the correct one is resolved against the schedule.
+  timeOptions: TimeOption[];
+  ampmKnown: boolean;
 };
 
 export type ParseResult =
@@ -232,41 +273,96 @@ function fail(): ParseResult {
   return { ok: false, reason: "unparseable_subject" };
 }
 
-// Parse "CODE | Mon DD | H:MMPM" out of the subject. The subject usually
-// carries a trailing " is ready to watch!" suffix — stripped first. The
-// title is the source of truth for date + time.
+function fmt12(h24: number, minute: number): string {
+  const ampm = h24 >= 12 ? "PM" : "AM";
+  const h12 = h24 % 12 === 0 ? 12 : h24 % 12;
+  return `${h12}:${String(minute).padStart(2, "0")} ${ampm}`;
+}
+
+// Month name/abbrev + day, anywhere: "Jul 24", "July 24", "July,21", "Sept 3".
+const DATE_RX =
+  /\b(jan|feb|mar|apr|may|jun|jul|aug|sep|oct|nov|dec)[a-z]*[.,\s]+(\d{1,2})\b/i;
+// Time WITH meridiem: "8PM", "8:00PM", "9:15 pm", "9 p.m.".
+const TIME_AMPM_RX = /\b(\d{1,2})(?::(\d{2}))?\s*([ap])\.?m\.?/i;
+// Bare "H:MM" (meridiem to be resolved against the schedule).
+const TIME_HM_RX = /(?<!\d)(\d{1,2}):(\d{2})(?!\d)/;
+
+// Delimiter-AGNOSTIC, pattern-based parse. We do NOT split on "|": the date is
+// found by pattern (month + day) anywhere in the title, the time by pattern
+// (H:MM / H:MMam-pm / H am-pm) anywhere, and the FIELD CODE is the leftover
+// leading text (trimmed, internal whitespace collapsed) — matched against the
+// known code list by the caller. So "ATH P | Jul 24 | 9:15", "ATH P - Jul 24 -
+// 9:15", and "ATH P Jul 24 9:15pm" all parse identically. If there's no
+// recognizable date, or no recognizable time, the subject is queued — we never
+// fuzzy-guess field/time from free-form titles.
 export function parseVeoSubject(subject: string | null | undefined): ParseResult {
   if (!subject) return fail();
   // Strip the trailing "... is ready to watch!" (and anything after).
   const title = subject.replace(/\s+is ready to watch.*$/i, "").trim();
-  const parts = title.split("|").map((s) => s.trim()).filter(Boolean);
-  if (parts.length < 3) return fail();
 
-  const code = parts[0].toUpperCase();
-  if (!code) return fail();
-
-  // Date: "Jul 24" (allow an optional trailing dot: "Jul. 24").
-  const dm = /^([A-Za-z]{3,9})\.?\s+(\d{1,2})$/.exec(parts[1]);
+  // --- DATE (required) ---
+  const dm = DATE_RX.exec(title);
   if (!dm) return fail();
   const month = MONTHS[dm[1].slice(0, 3).toLowerCase()];
   const day = Number(dm[2]);
   if (!month || day < 1 || day > 31) return fail();
+  const dateIdx = dm.index;
 
-  // Time: "8:00PM" / "8PM" / "8:00 pm".
-  const tm = /^(\d{1,2})(?::(\d{2}))?\s*([AaPp][Mm])$/.exec(parts[2]);
-  if (!tm) return fail();
-  let hour = Number(tm[1]);
-  const minute = tm[2] ? Number(tm[2]) : 0;
-  if (hour < 1 || hour > 12 || minute > 59) return fail();
-  const isPm = tm[3].toLowerCase() === "pm";
-  if (isPm && hour < 12) hour += 12;
-  else if (!isPm && hour === 12) hour = 0;
-  const timeMinutes = hour * 60 + minute;
+  // --- TIME (required) — meridiem form first, then bare H:MM ---
+  let hour: number;
+  let minute: number;
+  let meridiem: "a" | "p" | null;
+  let timeIdx: number;
+  const ampmMatch = TIME_AMPM_RX.exec(title);
+  if (ampmMatch) {
+    hour = Number(ampmMatch[1]);
+    minute = ampmMatch[2] ? Number(ampmMatch[2]) : 0;
+    meridiem = ampmMatch[3].toLowerCase() as "a" | "p";
+    timeIdx = ampmMatch.index;
+  } else {
+    const hmMatch = TIME_HM_RX.exec(title);
+    if (!hmMatch) return fail();
+    hour = Number(hmMatch[1]);
+    minute = Number(hmMatch[2]);
+    meridiem = null;
+    timeIdx = hmMatch.index;
+  }
+  if (minute > 59) return fail();
 
-  const h12 = hour % 12 === 0 ? 12 : hour % 12;
-  const timeLabel = `${h12}:${String(minute).padStart(2, "0")} ${isPm ? "PM" : "AM"}`;
+  let timeOptions: TimeOption[];
+  let ampmKnown: boolean;
+  if (meridiem) {
+    if (hour < 1 || hour > 12) return fail();
+    let h24 = hour % 12;
+    if (meridiem === "p") h24 += 12;
+    timeOptions = [{ minutes: h24 * 60 + minute, label: fmt12(h24, minute) }];
+    ampmKnown = true;
+  } else if (hour === 0 || (hour >= 13 && hour <= 23)) {
+    // Unambiguous 24-hour time (00:MM or 13:00–23:59).
+    timeOptions = [{ minutes: hour * 60 + minute, label: fmt12(hour, minute) }];
+    ampmKnown = true;
+  } else if (hour >= 1 && hour <= 12) {
+    // Ambiguous bare 12-hour time — PM first, then AM. The schedule decides.
+    const amH = hour % 12; // 12 → 0
+    const pmH = (hour % 12) + 12; // 12 → 12
+    timeOptions = [
+      { minutes: pmH * 60 + minute, label: fmt12(pmH, minute) },
+      { minutes: amH * 60 + minute, label: fmt12(amH, minute) },
+    ];
+    ampmKnown = false;
+  } else {
+    return fail();
+  }
 
-  return { ok: true, value: { code, month, day, timeMinutes, timeLabel } };
+  // --- CODE = leftover leading text (before the date/time), normalized ---
+  const code = title
+    .slice(0, Math.min(dateIdx, timeIdx))
+    .replace(/[\s|,\-–—:]+$/g, "")
+    .replace(/\s+/g, " ")
+    .trim()
+    .toUpperCase();
+
+  return { ok: true, value: { code, month, day, timeOptions, ampmKnown } };
 }
 
 // ---------------------------------------------------------------------------
@@ -277,26 +373,47 @@ function isoFromParts(year: number, month: number, day: number): string {
   return `${year}-${String(month).padStart(2, "0")}-${String(day).padStart(2, "0")}`;
 }
 
-// The title has no year; the processing date (from the URL slug) does, and
-// the match is ~1 day BEFORE processing. Pick the year so the match date
-// sits at or just before the processing date — handling the Dec→Jan
-// boundary (match Dec 31 → processed Jan 1 of the next year).
+// The title has no year; the processing date (from the URL slug) supplies it.
+// The processing date is ALWAYS >= the match date (Veo processes after the
+// match), so the match year is the slug year or the slug year − 1 — and
+// trying both is complete (no year+1 needed).
+//
+// Returns the candidate match dates to try, in priority order:
+//   - If the slug-year date falls AFTER the processing date, the slug year is
+//     impossible (the match can't be in the future) — the match was late last
+//     year (Dec 31 processed Jan 1). Return ONLY the prior-year date.
+//   - Otherwise the slug year is the match year; return [slugYear, slugYear−1],
+//     the prior year kept as a fallback the caller uses only if the slug year
+//     yields no candidate match. This closes the year boundary empirically
+//     even under residual date skew.
+export function resolveMatchDates(
+  title: Pick<VeoTitle, "month" | "day">,
+  processing: YMD | null,
+): string[] {
+  if (!processing) {
+    // No year context at all. Refuse rather than guess — the caller queues it
+    // (better a review item than a wrong-year match).
+    return [];
+  }
+  const slugYear = processing.year;
+  const candUtc = Date.UTC(slugYear, title.month - 1, title.day);
+  const procUtc = Date.UTC(processing.year, processing.month - 1, processing.day);
+  if (candUtc > procUtc) {
+    return [isoFromParts(slugYear - 1, title.month, title.day)];
+  }
+  return [
+    isoFromParts(slugYear, title.month, title.day),
+    isoFromParts(slugYear - 1, title.month, title.day),
+  ];
+}
+
+// The single most-likely match date (the first candidate), or null when there
+// is no processing date. Kept for callers that only need the primary date.
 export function resolveMatchDate(
   title: Pick<VeoTitle, "month" | "day">,
   processing: YMD | null,
 ): string | null {
-  if (!processing) {
-    // No year context at all. Refuse rather than guess — the caller
-    // queues it (better a review item than a wrong-year match).
-    return null;
-  }
-  const candUtc = Date.UTC(processing.year, title.month - 1, title.day);
-  const procUtc = Date.UTC(processing.year, processing.month - 1, processing.day);
-  const diffDays = (procUtc - candUtc) / 86_400_000;
-  // If the same-year candidate lands more than a few days in the FUTURE of
-  // the processing date, the real match was late last year.
-  const year = diffDays < -3 ? processing.year - 1 : processing.year;
-  return isoFromParts(year, title.month, title.day);
+  return resolveMatchDates(title, processing)[0] ?? null;
 }
 
 // ---------------------------------------------------------------------------
@@ -409,84 +526,127 @@ export function classifyVeo(args: {
       code: title.code,
       finVenueId: null,
       matchDate: null,
-      timeMinutes: title.timeMinutes,
-      timeLabel: title.timeLabel,
+      timeMinutes: title.timeOptions[0].minutes,
+      timeLabel: title.timeOptions[0].label,
       candidateApiIds: [],
     };
   }
 
-  const matchDate = resolveMatchDate(title, processingDateFromSlug(slug));
-  if (!matchDate) {
+  const dates = resolveMatchDates(title, processingDateFromSlug(slug));
+  if (dates.length === 0) {
     return {
       action: "queue",
       reason: "no_match",
       code: title.code,
       finVenueId: venue.finVenueId,
       matchDate: null,
-      timeMinutes: title.timeMinutes,
-      timeLabel: title.timeLabel,
+      timeMinutes: title.timeOptions[0].minutes,
+      timeLabel: title.timeOptions[0].label,
       candidateApiIds: [],
     };
   }
 
-  const hits = selectVeoMatches(
-    { matchDate, timeMinutes: title.timeMinutes },
-    loadCandidates(venue.finVenueId, matchDate),
-  );
+  const fieldAgrees = (h: VeoCandidateRow) =>
+    h.field_id != null && venue.fieldIds.includes(h.field_id);
+
+  type Outcome =
+    | { kind: "post"; matchDate: string; time: TimeOption; apiId: number }
+    | { kind: "queue"; reason: VeoQueueReason; matchDate: string; time: TimeOption; candidateApiIds: number[] };
+
+  // Evaluate one candidate date across the title's time option(s). Returns null
+  // when the date has NO in-window hits for ANY time option (→ caller tries the
+  // next candidate year — the Dec→Jan boundary fallback).
+  const evalDate = (date: string): Outcome | null => {
+    const rows = loadCandidates(venue.finVenueId, date);
+    const evals = title.timeOptions.map((t) => {
+      const inWindow = selectVeoMatches({ matchDate: date, timeMinutes: t.minutes }, rows);
+      return { t, inWindow, agreeing: inWindow.filter(fieldAgrees) };
+    });
+    if (evals.every((e) => e.inWindow.length === 0)) return null;
+
+    // Pick the effective time option. When am/pm is explicit there's one; when
+    // it's a bare time we resolve the meridiem against the schedule: exactly
+    // one interpretation must land on a real field-agreeing game.
+    let chosen: (typeof evals)[number];
+    if (title.ampmKnown) {
+      chosen = evals[0];
+    } else {
+      const viable = evals.filter((e) => e.agreeing.length >= 1);
+      if (viable.length >= 2) {
+        // Both meridiems match a real game — cannot disambiguate → queue.
+        return {
+          kind: "queue",
+          reason: "ambiguous_time",
+          matchDate: date,
+          time: viable[0].t,
+          candidateApiIds: viable.flatMap((e) => e.agreeing.map((h) => h.api_id)),
+        };
+      }
+      // Exactly one viable meridiem → use it. If none is field-agreeing, fall
+      // back to whichever has in-window hits so we still surface
+      // field_mismatch / multiple_matches instead of a silent miss.
+      chosen = viable[0] ?? evals.find((e) => e.inWindow.length > 0)!;
+    }
+
+    const { inWindow, agreeing, t } = chosen;
+    if (inWindow.length === 1) {
+      if (agreeing.length === 1) {
+        return { kind: "post", matchDate: date, time: t, apiId: agreeing[0].api_id };
+      }
+      // Field-agreement cross-check: single match on a DIFFERENT field of the
+      // same venue than the code names → never post, queue for review.
+      return { kind: "queue", reason: "field_mismatch", matchDate: date, time: t, candidateApiIds: [inWindow[0].api_id] };
+    }
+    return { kind: "queue", reason: "multiple_matches", matchDate: date, time: t, candidateApiIds: inWindow.map((h) => h.api_id) };
+  };
+
+  let outcome: Outcome | null = null;
+  for (const date of dates) {
+    outcome = evalDate(date);
+    if (outcome) break;
+  }
+  if (!outcome) {
+    // No candidate date had any in-window match — report against the primary.
+    outcome = { kind: "queue", reason: "no_match", matchDate: dates[0], time: title.timeOptions[0], candidateApiIds: [] };
+  }
+
+  const candidateApiIds = outcome.kind === "post" ? [outcome.apiId] : outcome.candidateApiIds;
 
   // Safety gate: a mapped-but-unconfirmed code queues even on a clean single
-  // match, carrying its best-guess so Ryan can one-click assign after review.
+  // match, carrying its best-guess (resolved date/time + candidate) so Ryan can
+  // one-click assign after review.
   if (!venue.confirmed) {
     return {
       action: "queue",
       reason: "unconfirmed_code",
       code: title.code,
       finVenueId: venue.finVenueId,
-      matchDate,
-      timeMinutes: title.timeMinutes,
-      timeLabel: title.timeLabel,
-      candidateApiIds: hits.map((h) => h.api_id),
+      matchDate: outcome.matchDate,
+      timeMinutes: outcome.time.minutes,
+      timeLabel: outcome.time.label,
+      candidateApiIds,
     };
   }
 
-  if (hits.length === 1) {
-    const hit = hits[0];
-    // Field-agreement cross-check: the code IS a field abbreviation, so the
-    // matched match must be on one of that code's fields. A single venue+time
-    // match on a DIFFERENT field of the same venue is a titling mismatch —
-    // queue it (with the candidate) rather than post to the wrong field.
-    const fieldAgrees = hit.field_id != null && venue.fieldIds.includes(hit.field_id);
-    if (fieldAgrees) {
-      return {
-        action: "post",
-        code: title.code,
-        finVenueId: venue.finVenueId,
-        matchDate,
-        timeMinutes: title.timeMinutes,
-        timeLabel: title.timeLabel,
-        apiId: hit.api_id,
-      };
-    }
+  if (outcome.kind === "post") {
     return {
-      action: "queue",
-      reason: "field_mismatch",
+      action: "post",
       code: title.code,
       finVenueId: venue.finVenueId,
-      matchDate,
-      timeMinutes: title.timeMinutes,
-      timeLabel: title.timeLabel,
-      candidateApiIds: [hit.api_id],
+      matchDate: outcome.matchDate,
+      timeMinutes: outcome.time.minutes,
+      timeLabel: outcome.time.label,
+      apiId: outcome.apiId,
     };
   }
-
   return {
     action: "queue",
-    reason: hits.length === 0 ? "no_match" : "multiple_matches",
+    reason: outcome.reason,
     code: title.code,
     finVenueId: venue.finVenueId,
-    matchDate,
-    timeMinutes: title.timeMinutes,
-    timeLabel: title.timeLabel,
-    candidateApiIds: hits.map((h) => h.api_id),
+    matchDate: outcome.matchDate,
+    timeMinutes: outcome.time.minutes,
+    timeLabel: outcome.time.label,
+    candidateApiIds,
   };
 }

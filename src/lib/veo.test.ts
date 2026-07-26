@@ -10,6 +10,7 @@ import {
   parseVeoSubject,
   processingDateFromSlug,
   resolveMatchDate,
+  resolveMatchDates,
   selectVeoMatches,
   type VeoCandidateRow,
 } from "./veo.ts";
@@ -78,23 +79,56 @@ test("parseVeoSubject: parses 'CODE | Mon DD | H:MMPM'", () => {
     assert.equal(r.value.code, "SC");
     assert.equal(r.value.month, 7);
     assert.equal(r.value.day, 24);
-    assert.equal(r.value.timeMinutes, 20 * 60); // 8:00 PM
-    assert.equal(r.value.timeLabel, "8:00 PM");
+    assert.equal(r.value.ampmKnown, true);
+    assert.equal(r.value.timeOptions.length, 1);
+    assert.equal(r.value.timeOptions[0].minutes, 20 * 60); // 8:00 PM
+    assert.equal(r.value.timeOptions[0].label, "8:00 PM");
   }
 });
 
-test("parseVeoSubject: handles '8PM' and lowercase am/pm and noon/midnight", () => {
-  assert.equal((parseVeoSubject("SC | Jul 24 | 8PM") as any).value.timeMinutes, 20 * 60);
-  assert.equal((parseVeoSubject("SC | Jul 24 | 8:30 pm") as any).value.timeMinutes, 20 * 60 + 30);
-  assert.equal((parseVeoSubject("SC | Jul 24 | 12:00PM") as any).value.timeMinutes, 12 * 60);
-  assert.equal((parseVeoSubject("SC | Jul 24 | 12:00AM") as any).value.timeMinutes, 0);
+test("parseVeoSubject: handles '8PM', lowercase am/pm, noon/midnight, and 24h", () => {
+  const t0 = (s: string) => (parseVeoSubject(s) as any).value.timeOptions[0].minutes;
+  assert.equal(t0("SC | Jul 24 | 8PM"), 20 * 60);
+  assert.equal(t0("SC | Jul 24 | 8:30 pm"), 20 * 60 + 30);
+  assert.equal(t0("SC | Jul 24 | 12:00PM"), 12 * 60);
+  assert.equal(t0("SC | Jul 24 | 12:00AM"), 0);
+  assert.equal(t0("SC | Jul 24 | 20:00"), 20 * 60); // unambiguous 24-hour
 });
 
-test("parseVeoSubject: rejects mis-named / untitled subjects", () => {
-  assert.equal(parseVeoSubject("Untitled recording is ready to watch!").ok, false);
-  assert.equal(parseVeoSubject("SC Jul 24 8PM").ok, false); // no pipes
-  assert.equal(parseVeoSubject("SC | Jul 24").ok, false); // missing time
-  assert.equal(parseVeoSubject("SC | JXl 24 | 8PM").ok, false); // bad month
+test("parseVeoSubject: delimiter-agnostic — pipes, dashes, and spaces parse identically", () => {
+  const pipe = parseVeoSubject("ATH P | Jul 24 | 9:15");
+  const dash = parseVeoSubject("ATH P - Jul 24 - 9:15");
+  const space = parseVeoSubject("ATH P Jul 24 9:15pm");
+  for (const r of [pipe, dash, space]) {
+    assert.equal(r.ok, true);
+    if (r.ok) {
+      assert.equal(r.value.code, "ATH P"); // leftover leading text, internal space kept
+      assert.equal(r.value.month, 7);
+      assert.equal(r.value.day, 24);
+    }
+  }
+  // Bare "9:15" is ambiguous (two options); the explicit "9:15pm" is not.
+  assert.equal((pipe as any).value.ampmKnown, false);
+  assert.equal((dash as any).value.ampmKnown, false);
+  assert.equal((space as any).value.ampmKnown, true);
+  assert.equal((space as any).value.timeOptions[0].minutes, 21 * 60 + 15);
+});
+
+test("parseVeoSubject: bare 12-hour time yields both meridiems (PM first)", () => {
+  const r = parseVeoSubject("SC | Jul 24 | 8:00");
+  assert.equal(r.ok, true);
+  if (r.ok) {
+    assert.equal(r.value.ampmKnown, false);
+    assert.deepEqual(r.value.timeOptions.map((t) => t.minutes), [20 * 60, 8 * 60]);
+  }
+});
+
+test("parseVeoSubject: queues when no date or no time (never fuzzy-guess)", () => {
+  assert.equal(parseVeoSubject("Untitled recording is ready to watch!").ok, false); // no date/time
+  assert.equal(parseVeoSubject("SC | Jul 24").ok, false); // no time
+  assert.equal(parseVeoSubject("SC | JXl 24 | 8PM").ok, false); // bad month → no date
+  assert.equal(parseVeoSubject("Match Jul 20, 2026 WESTLAKE MONDAY 20tg").ok, false); // no clean time
+  assert.equal(parseVeoSubject("PRUMC-TUESDAY GAME JULY,21 2026").ok, false); // no clean time
 });
 
 // ------------------------ match-date resolution ------------------------
@@ -117,6 +151,21 @@ test("resolveMatchDate: Dec→Jan boundary rolls the year back", () => {
 
 test("resolveMatchDate: no processing date → null (queue, don't guess)", () => {
   assert.equal(resolveMatchDate({ month: 7, day: 24 }, null), null);
+});
+
+test("resolveMatchDates: boundary → prior year only; normal → [slugYear, slugYear-1]", () => {
+  // Late-Dec match processed in January: slug-year date is in the future, so
+  // only the prior year is possible.
+  assert.deepEqual(
+    resolveMatchDates({ month: 12, day: 31 }, { year: 2027, month: 1, day: 1 }),
+    ["2026-12-31"],
+  );
+  // Normal: slug year primary, prior year kept as an empirical fallback.
+  assert.deepEqual(
+    resolveMatchDates({ month: 7, day: 24 }, { year: 2026, month: 7, day: 25 }),
+    ["2026-07-24", "2025-07-24"],
+  );
+  assert.deepEqual(resolveMatchDates({ month: 7, day: 24 }, null), []);
 });
 
 // --------------------------- match selection ---------------------------
@@ -232,18 +281,138 @@ test("classifyVeo: unknown code → queued unknown_code", () => {
 });
 
 test("classifyVeo: mapped-but-unconfirmed code queues even on a clean match", () => {
-  // HT (The Hattrick, field 1024) is a derived (confirmed:false) mapping — it
-  // must NOT auto-post until Ryan confirms the camera + exact string, but it
-  // carries its best-guess candidate for one-click assign.
-  const htMatch: VeoCandidateRow = { api_id: 555, field_id: 1024, start_date: "2026-07-24T20:00:00+00:00", is_cancelled: false };
+  // PRUMC (field 958) is a real observed code but confirmed:false — it must NOT
+  // auto-post until Ryan confirms the camera + exact string; it carries its
+  // best-guess candidate for one-click assign.
+  const prumcMatch: VeoCandidateRow = { api_id: 555, field_id: 958, start_date: "2026-07-24T20:00:00+00:00", is_cancelled: false };
   const d = classifyVeo({
-    subject: "HT | Jul 24 | 8:00PM is ready to watch!",
-    slug: "20260725-ht-jul-24-800pm-vbbbb222",
-    loadCandidates: () => [htMatch],
+    subject: "PRUMC | Jul 24 | 8:00PM is ready to watch!",
+    slug: "20260725-prumc-jul-24-800pm-vbbbb222",
+    loadCandidates: () => [prumcMatch],
   });
   assert.equal(d.action, "queue");
   if (d.action === "queue") {
     assert.equal(d.reason, "unconfirmed_code");
     assert.deepEqual(d.candidateApiIds, [555]);
   }
+});
+
+// -------------------- year-boundary + am/pm resolution --------------------
+
+test("classifyVeo: Dec 31 title with a January (next-year) slug matches the prior-year match (not queued)", () => {
+  const dec31: VeoCandidateRow = { api_id: 90001, field_id: 102, start_date: "2026-12-31T20:00:00+00:00", is_cancelled: false };
+  const d = classifyVeo({
+    subject: "SC | Dec 31 | 8:00pm is ready to watch!",
+    slug: "20270101-sc-dec-31-800pm-vyear999", // processed Jan 1 2027 (next year)
+    loadCandidates: (_finVenueId, matchDate) => {
+      assert.equal(matchDate, "2026-12-31"); // resolved to the prior year, not 2027
+      return [dec31];
+    },
+  });
+  assert.equal(d.action, "post");
+  if (d.action === "post") {
+    assert.equal(d.apiId, 90001);
+    assert.equal(d.matchDate, "2026-12-31");
+  }
+});
+
+test("classifyVeo: slug-year date has no match → retries prior year before queuing", () => {
+  const prevYear: VeoCandidateRow = { api_id: 70007, field_id: 102, start_date: "2025-07-24T20:00:00+00:00", is_cancelled: false };
+  const d = classifyVeo({
+    subject: "SC | Jul 24 | 8:00pm is ready to watch!",
+    slug: "20260725-sc-jul-24-800pm-vprev888", // slug year 2026
+    loadCandidates: (_finVenueId, matchDate) => {
+      if (matchDate === "2026-07-24") return []; // slug year: nothing scheduled
+      if (matchDate === "2025-07-24") return [prevYear]; // prior year: the match
+      return [];
+    },
+  });
+  assert.equal(d.action, "post");
+  if (d.action === "post") {
+    assert.equal(d.apiId, 70007);
+    assert.equal(d.matchDate, "2025-07-24");
+  }
+});
+
+test("classifyVeo: bare time resolved to the single real match via schedule (PM)", () => {
+  // "SC | Jul 24 | 8:00" (no am/pm). Only an 8 PM match exists → resolves PM.
+  const d = classifyVeo({
+    subject: "SC | Jul 24 | 8:00 is ready to watch!",
+    slug: SLUG,
+    loadCandidates: () => [scMatch], // 8 PM
+  });
+  assert.equal(d.action, "post");
+  if (d.action === "post") {
+    assert.equal(d.apiId, 14613);
+    assert.equal(d.timeMinutes, 20 * 60);
+    assert.equal(d.timeLabel, "8:00 PM");
+  }
+});
+
+test("classifyVeo: bare time matching BOTH am and pm → queued ambiguous_time", () => {
+  const amMatch: VeoCandidateRow = { api_id: 801, field_id: 102, start_date: "2026-07-24T08:00:00+00:00", is_cancelled: false };
+  const pmMatch: VeoCandidateRow = { api_id: 802, field_id: 102, start_date: "2026-07-24T20:00:00+00:00", is_cancelled: false };
+  const d = classifyVeo({
+    subject: "SC | Jul 24 | 8:00 is ready to watch!",
+    slug: SLUG,
+    loadCandidates: () => [amMatch, pmMatch],
+  });
+  assert.equal(d.action, "queue");
+  if (d.action === "queue") {
+    assert.equal(d.reason, "ambiguous_time");
+    assert.deepEqual(d.candidateApiIds.sort(), [801, 802].sort());
+  }
+});
+
+test("classifyVeo: bare time matching NEITHER meridiem → queued no_match", () => {
+  const noon: VeoCandidateRow = { api_id: 803, field_id: 102, start_date: "2026-07-24T12:00:00+00:00", is_cancelled: false };
+  const d = classifyVeo({
+    subject: "SC | Jul 24 | 8:00 is ready to watch!",
+    slug: SLUG,
+    loadCandidates: () => [noon], // noon is >90 min from both 8 AM and 8 PM
+  });
+  assert.equal(d.action, "queue");
+  if (d.action === "queue") assert.equal(d.reason, "no_match");
+});
+
+test("classifyVeo: 'ATH P | Jul 24 | 9:15' resolves am/pm via schedule; would auto-post once confirmed", () => {
+  // ATH P (ATH Pearland, field 32) is confirmed:false, so it queues as
+  // unconfirmed_code — but it parses (code "ATH P"), resolves 9:15 → PM against
+  // the schedule, and carries the matched candidate: flipping confirmed would
+  // make this an auto-post.
+  const pearland915pm: VeoCandidateRow = { api_id: 4242, field_id: 32, start_date: "2026-07-24T21:15:00+00:00", is_cancelled: false };
+  const d = classifyVeo({
+    subject: "ATH P | Jul 24 | 9:15 is ready to watch!",
+    slug: "20260725-ath-p-jul-24-915-vpppp333",
+    loadCandidates: (finVenueId) => {
+      assert.equal(finVenueId, 8); // ATH Pearland fin_venue
+      return [pearland915pm];
+    },
+  });
+  assert.equal(d.action, "queue");
+  if (d.action === "queue") {
+    assert.equal(d.reason, "unconfirmed_code");
+    assert.equal(d.code, "ATH P");
+    assert.equal(d.matchDate, "2026-07-24");
+    assert.equal(d.timeLabel, "9:15 PM"); // resolved to PM via the schedule
+    assert.deepEqual(d.candidateApiIds, [4242]);
+  }
+});
+
+test("classifyVeo: free-form titles with no clean time → queued, not posted", () => {
+  const d1 = classifyVeo({
+    subject: "Match Jul 20, 2026 WESTLAKE MONDAY 20tg is ready to watch!",
+    slug: "20260721-westlake-jul-20-vqqqq444",
+    loadCandidates: () => [scMatch],
+  });
+  assert.equal(d1.action, "queue");
+  if (d1.action === "queue") assert.equal(d1.reason, "unparseable_subject");
+
+  const d2 = classifyVeo({
+    subject: "PRUMC-TUESDAY GAME JULY,21 2026 is ready to watch!",
+    slug: "20260722-prumc-jul-21-vrrrr555",
+    loadCandidates: () => [scMatch],
+  });
+  assert.equal(d2.action, "queue");
+  if (d2.action === "queue") assert.equal(d2.reason, "unparseable_subject");
 });

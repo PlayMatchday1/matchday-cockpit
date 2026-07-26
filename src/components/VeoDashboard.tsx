@@ -33,10 +33,20 @@ type VeoRow = {
   created_at: string;
 };
 
+type CodeStat = {
+  code: string;
+  label: string;
+  city: string;
+  confirmed: boolean;
+  posted: number;
+  queued: number;
+};
+
 type ListPayload = {
   queue: VeoRow[];
   recent: VeoRow[];
   labels: Record<number, string>;
+  codeStats: CodeStat[];
 };
 
 const REASON_META: Record<string, { label: string; tone: "coral" | "amber" | "blue" }> = {
@@ -46,6 +56,7 @@ const REASON_META: Record<string, { label: string; tone: "coral" | "amber" | "bl
   no_match: { label: "No scheduled match", tone: "amber" },
   multiple_matches: { label: "Multiple matches", tone: "amber" },
   field_mismatch: { label: "Field disagrees with code", tone: "amber" },
+  ambiguous_time: { label: "Ambiguous time (am/pm)", tone: "amber" },
   post_failed: { label: "Post failed — retry", tone: "coral" },
 };
 
@@ -105,7 +116,12 @@ export default function VeoDashboard() {
       if (!res.ok) {
         setError(json.error ?? "Failed to load.");
       } else {
-        setData({ queue: json.queue, recent: json.recent, labels: json.labels });
+        setData({
+          queue: json.queue,
+          recent: json.recent,
+          labels: json.labels,
+          codeStats: json.codeStats ?? [],
+        });
       }
     } catch {
       setError("Network error.");
@@ -177,6 +193,7 @@ export default function VeoDashboard() {
   const labels = data?.labels ?? {};
   const queue = data?.queue ?? [];
   const recent = data?.recent ?? [];
+  const codeStats = data?.codeStats ?? [];
 
   const postedCount = useMemo(
     () => recent.filter((r) => r.status === "posted").length,
@@ -206,6 +223,60 @@ export default function VeoDashboard() {
           {error}
         </div>
       )}
+
+      {/* ---------------------- Per-code readiness ---------------------- */}
+      <section>
+        <h2 className="mb-1 text-sm font-bold uppercase tracking-wide text-deep-green/60">
+          Per-code readiness
+        </h2>
+        <p className="mb-3 text-xs text-deep-green/50">
+          Recent auto-posts vs. queued, per field code. A code posting cleanly is
+          the signal it's ready to flip to confirmed.
+        </p>
+        <div className="overflow-x-auto rounded-xl border border-cream-line">
+          <table className="w-full min-w-[560px] text-left text-[13px]">
+            <thead className="bg-cream-soft text-[11px] uppercase tracking-wide text-deep-green/50">
+              <tr>
+                <th className="px-3 py-2 font-semibold">Code</th>
+                <th className="px-3 py-2 font-semibold">Field</th>
+                <th className="px-3 py-2 font-semibold">State</th>
+                <th className="px-3 py-2 text-right font-semibold">Auto-posted</th>
+                <th className="px-3 py-2 text-right font-semibold">Queued</th>
+              </tr>
+            </thead>
+            <tbody className="divide-y divide-cream-line">
+              {codeStats.map((s) => (
+                <tr key={s.code} className="bg-white">
+                  <td className="px-3 py-2">
+                    <span className="font-mono font-bold text-deep-green">{s.code}</span>
+                  </td>
+                  <td className="px-3 py-2 text-deep-green/70">
+                    {s.label}
+                    {s.city ? <span className="text-deep-green/40"> · {s.city}</span> : null}
+                  </td>
+                  <td className="px-3 py-2">
+                    {s.confirmed ? (
+                      <span className="inline-flex items-center rounded-full border border-mint/50 bg-mint-soft px-2 py-0.5 text-[11px] font-semibold text-deep-green">
+                        Confirmed
+                      </span>
+                    ) : (
+                      <span className="inline-flex items-center rounded-full border border-amber-300 bg-amber-50 px-2 py-0.5 text-[11px] font-semibold text-amber-700">
+                        Queue-only
+                      </span>
+                    )}
+                  </td>
+                  <td className="px-3 py-2 text-right font-semibold tabular-nums text-deep-green">
+                    {s.posted}
+                  </td>
+                  <td className="px-3 py-2 text-right tabular-nums text-deep-green/60">
+                    {s.queued}
+                  </td>
+                </tr>
+              ))}
+            </tbody>
+          </table>
+        </div>
+      </section>
 
       {/* ------------------------- Review queue ------------------------- */}
       <section>

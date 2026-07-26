@@ -3,7 +3,7 @@
 // (venue · date · time) server-side. Admin-only.
 
 import { authenticateCrm } from "@/lib/crmAuth";
-import { matchLocalStart } from "@/lib/veo";
+import { matchLocalStart, VEO_FIELD_CODES } from "@/lib/veo";
 
 export const runtime = "nodejs";
 export const maxDuration = 15;
@@ -98,5 +98,55 @@ export async function GET(req: Request) {
     }
   }
 
-  return Response.json({ queue, recent, labels }, { status: 200 });
+  // --- Per-code readiness: recent auto-posted vs queued, per parsed code ---
+  // The signal for when a field's naming is clean enough to flip confirmed:true.
+  const statsRes = await supabase
+    .from("veo_recordings")
+    .select("parsed_code, status")
+    .order("created_at", { ascending: false })
+    .limit(500);
+  if (statsRes.error) {
+    console.error("[veo:list] code stats query failed", statsRes.error);
+  }
+  const counts = new Map<string, { posted: number; queued: number; dismissed: number }>();
+  const bump = (code: string, status: string) => {
+    const key = code.trim().toUpperCase();
+    if (!counts.has(key)) counts.set(key, { posted: 0, queued: 0, dismissed: 0 });
+    const c = counts.get(key)!;
+    if (status === "posted") c.posted++;
+    else if (status === "dismissed") c.dismissed++;
+    else c.queued++;
+  };
+  for (const r of statsRes.data ?? []) {
+    if (r.parsed_code) bump(r.parsed_code as string, r.status as string);
+  }
+  // Every configured code appears (even with zero recordings) so readiness is
+  // visible before the first recording; plus any seen code not in the map
+  // (e.g. an unknown code someone should add).
+  const configured = new Set(Object.keys(VEO_FIELD_CODES));
+  const codeStats = [
+    ...Object.entries(VEO_FIELD_CODES).map(([code, cfg]) => {
+      const c = counts.get(code) ?? { posted: 0, queued: 0, dismissed: 0 };
+      return {
+        code,
+        label: cfg.fieldLabel,
+        city: cfg.city,
+        confirmed: cfg.confirmed,
+        posted: c.posted,
+        queued: c.queued,
+      };
+    }),
+    ...[...counts.entries()]
+      .filter(([code]) => !configured.has(code))
+      .map(([code, c]) => ({
+        code,
+        label: "(unmapped code)",
+        city: "",
+        confirmed: false,
+        posted: c.posted,
+        queued: c.queued,
+      })),
+  ];
+
+  return Response.json({ queue, recent, labels, codeStats }, { status: 200 });
 }
