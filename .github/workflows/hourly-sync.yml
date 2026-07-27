@@ -79,6 +79,7 @@ jobs:
           echo
 
       - name: Sync mdapi_matches
+        id: matches
         # Runs even if the reviews step failed: the headline count and
         # average come from THIS sync, so it is the one that must not
         # be skipped. The job still reports failure overall.
@@ -90,4 +91,21 @@ jobs:
             --max-time 300 \
             -H "Authorization: Bearer ${{ secrets.CRON_SECRET }}" \
             "$BASE_URL/api/sync/matches"
+          echo
+
+      - name: Reconcile Master Schedule
+        # Auto-adds completed matches missing on the Clubhouse schedule as
+        # one-off entries (idempotent; gated by the schedule_settings kill
+        # switch). Runs AFTER the matches sync so it reconciles against fresh
+        # data. This — NOT a page load — is the only automatic write trigger;
+        # the panel reads state and last_success_at here measures job health.
+        # Same skip philosophy as above: run unless the CRON_SECRET guard
+        # itself failed (a prior sync failing shouldn't block reconcile —
+        # it reads whatever's in the DB and self-heals on the next run).
+        if: success() || steps.reviews.outcome == 'failure' || steps.matches.outcome == 'failure'
+        run: |
+          curl --fail-with-body -sS -X POST \
+            --max-time 120 \
+            -H "Authorization: Bearer ${{ secrets.CRON_SECRET }}" \
+            "$BASE_URL/api/schedule-master/reconcile"
           echo
