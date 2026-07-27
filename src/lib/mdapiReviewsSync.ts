@@ -50,7 +50,8 @@ type ApiPage = {
 
 export type MdapiReviewsSyncResult = {
   fetched: number; // rows returned by API across all pages
-  upserted: number; // rows actually written
+  upserted: number; // rows actually written (after de-dupe)
+  duplicatesDropped: number; // same api_id returned more than once by the API
   pages: number; // page count consumed
   durationMs: number;
 };
