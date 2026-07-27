@@ -6,77 +6,16 @@
 import "server-only";
 
 import type { SupabaseClient } from "@supabase/supabase-js";
-import admin from "firebase-admin";
-import { firestore } from "@/lib/firebaseAdmin";
-import { MATCHDAY_SENDER_NAME, MATCHDAY_SENDER_USER_ID } from "@/lib/matchChats";
 import { matchLocalStart, veoMessageText, type VeoCandidateRow } from "@/lib/veo";
-
-// Same branded avatar the /reply route uses so Cockpit-authored messages
-// render with the unified "MatchDay" identity in the consumer app. Hosted
-// outside the cockpit deployment so cockpit changes can't break historical
-// Firestore messages. (Duplicated intentionally — the reply route keeps its
-// own copy as the load-bearing source; this must stay in sync with it.)
-const MATCHDAY_AVATAR_URL =
-  "https://www.playmatchday.com/wp-content/uploads/2023/06/icon2-300x300.jpg";
+import { postMessagePairBatch } from "@/lib/messagePairPost";
 
 export type PostResult = { copyMessageId: string; urlMessageId: string };
 
-// Firestore ALREADY_EXISTS gRPC status — a batched create() fails with this
-// when the target doc is already there. That's our idempotency signal: the
-// pair already committed on a prior attempt, so treat the commit as a no-op.
-function isAlreadyExists(err: unknown): boolean {
-  const e = err as { code?: number | string; message?: string };
-  return e?.code === 6 || e?.code === "6" || /already exists/i.test(e?.message ?? "");
-}
-
-function messageDoc(docId: string, text: string) {
-  return {
-    _id: docId,
-    text,
-    messageType: "Text",
-    sentBy: MATCHDAY_SENDER_NAME,
-    sentTo: "Group",
-    user: {
-      _id: MATCHDAY_SENDER_USER_ID,
-      name: MATCHDAY_SENDER_NAME,
-      avatar: MATCHDAY_AVATAR_URL,
-      email: "",
-      phoneNumber: "",
-    },
-    createdAt: admin.firestore.FieldValue.serverTimestamp(),
-  };
-}
-
-async function insertAudit(
-  supabase: SupabaseClient,
-  chatId: string,
-  docId: string,
-  text: string,
-  sentByUserId: string | null,
-): Promise<void> {
-  const ins = await supabase.from("match_chat_audit_log").insert({
-    firestore_chat_id: chatId,
-    firestore_message_id: docId,
-    sent_by_user_id: sentByUserId,
-    body: text,
-  });
-  if (ins.error) {
-    console.error(
-      `[veo:post] AUDIT GAP message_id=${docId} chat=${chatId} — ${ins.error.code} ${ins.error.message}`,
-    );
-  }
-}
-
-// Post the film into Chats/{chatId}/messages as TWO messages:
-//   1. the copy line (veoMessageText(), no URL),
-//   2. the bare video URL alone (kept clickable in the players' app).
-// Both are written as the "MatchDay" identity in a single ATOMIC WriteBatch —
-// they commit together or not at all, so the player can never see the copy
-// line without the link. Deterministic doc ids keyed on the recording make it
-// idempotent: on a full replay the batched create()s fail ALREADY_EXISTS,
-// which we treat as "already posted" (no-op). On any OTHER failure the batch
-// wrote NOTHING, so we throw and the caller leaves the recording NOT 'posted'
-// (queued as post_failed) for a one-click retry.
+// Post the film into Chats/{chatId}/messages as TWO messages (copy line, then
+// the bare video URL) via the shared atomic batch writer. Deterministic doc
+// ids keyed on the recording make it idempotent; a full replay is a no-op. On
+// a real Firestore failure the batch wrote NOTHING and this throws, so the
+// caller leaves the recording NOT 'posted' (queued as post_failed) for retry.
 export async function postVeoLinkToMatch(args: {
   supabase: SupabaseClient;
   recordingId: string;
@@ -85,33 +24,17 @@ export async function postVeoLinkToMatch(args: {
   sentByUserId: string | null;
 }): Promise<PostResult> {
   const { supabase, recordingId, apiId, videoUrl, sentByUserId } = args;
-  const chatId = String(apiId);
-  const db = firestore();
-  const messages = db.collection("Chats").doc(chatId).collection("messages");
-
-  const copyId = `veo-${recordingId}-copy`;
-  const urlId = `veo-${recordingId}-url`;
-  const copyText = veoMessageText();
-
-  const batch = db.batch();
-  batch.create(messages.doc(copyId), messageDoc(copyId, copyText));
-  batch.create(messages.doc(urlId), messageDoc(urlId, videoUrl));
-
-  let freshlyPosted = true;
-  try {
-    await batch.commit();
-  } catch (err) {
-    if (!isAlreadyExists(err)) throw err; // real failure → nothing written → post_failed
-    freshlyPosted = false; // both already committed on a prior attempt → no-op
-  }
-
-  // Audit rows only for a fresh commit (both messages just landed together).
-  if (freshlyPosted) {
-    await insertAudit(supabase, chatId, copyId, copyText, sentByUserId);
-    await insertAudit(supabase, chatId, urlId, videoUrl, sentByUserId);
-  }
-
-  return { copyMessageId: copyId, urlMessageId: urlId };
+  const { copyMessageId, urlMessageId } = await postMessagePairBatch({
+    supabase,
+    chatId: String(apiId),
+    copyDocId: `veo-${recordingId}-copy`,
+    urlDocId: `veo-${recordingId}-url`,
+    copyText: veoMessageText(),
+    urlText: videoUrl,
+    sentByUserId,
+    auditTag: "veo:post",
+  });
+  return { copyMessageId, urlMessageId };
 }
 
 // Load the candidate mdapi rows for a venue on a local date: resolve the

@@ -15,9 +15,10 @@ import { useRouter, useSearchParams } from "next/navigation";
 import CitiesFieldsLens from "@/components/CitiesFieldsLens";
 import InventoryDashboard from "@/components/InventoryDashboard";
 import VeoDashboard from "@/components/VeoDashboard";
+import CommunityDashboard from "@/components/CommunityDashboard";
 import { useAuth } from "@/lib/useAuth";
 
-type Inner = "fields" | "inventory" | "veo";
+type Inner = "fields" | "inventory" | "veo" | "community";
 
 const BASE_TABS: { key: Inner; label: string }[] = [
   { key: "fields", label: "Fields" },
@@ -33,7 +34,11 @@ export default function FieldOpsLens() {
   const tabs = useMemo(
     () =>
       isAdmin
-        ? [...BASE_TABS, { key: "veo" as Inner, label: "Veo" }]
+        ? [
+            ...BASE_TABS,
+            { key: "veo" as Inner, label: "Veo" },
+            { key: "community" as Inner, label: "Community" },
+          ]
         : BASE_TABS,
     [isAdmin],
   );
@@ -42,6 +47,7 @@ export default function FieldOpsLens() {
     const raw = searchParams.get("fo");
     if (raw === "inventory") return "inventory";
     if (raw === "veo" && isAdmin) return "veo";
+    if (raw === "community" && isAdmin) return "community";
     return "fields";
   }, [searchParams, isAdmin]);
 
@@ -84,6 +90,7 @@ export default function FieldOpsLens() {
       {inner === "fields" && <CitiesFieldsLens />}
       {inner === "inventory" && <InventoryDashboard />}
       {inner === "veo" && isAdmin && <VeoDashboard />}
+      {inner === "community" && isAdmin && <CommunityDashboard />}
     </div>
   );
 }
