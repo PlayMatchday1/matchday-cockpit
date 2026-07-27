@@ -30,6 +30,11 @@ import {
 export const runtime = "nodejs";
 export const maxDuration = 60;
 
+// Bound a single run's duration: post at most this many per invocation; any
+// remainder is picked up (idempotently) on the next 15-min run. In steady
+// state runs post 0–few, so this only ever bites a large self-heal catch-up.
+const MAX_POSTS_PER_RUN = 25;
+
 function constantTimeMatch(a: string, b: string): boolean {
   const ab = Buffer.from(a, "utf8");
   const bb = Buffer.from(b, "utf8");
@@ -153,10 +158,19 @@ export async function POST(req: Request) {
     }
 
     // ---------- Real run ----------
+    // Oldest-first so a catch-up drains fairly; cap per run (rest self-heals).
+    const ordered = [...eligible].sort((a, b) =>
+      (a.endDateUtc ?? "").localeCompare(b.endDateUtc ?? ""),
+    );
+    const batch = ordered.slice(0, MAX_POSTS_PER_RUN);
+    const deferred = ordered.length - batch.length;
+    if (deferred > 0) {
+      console.log(`[community:post] capped at ${MAX_POSTS_PER_RUN}; ${deferred} deferred to next run`);
+    }
     let posted = 0;
     let alreadyThere = 0;
     let failed = 0;
-    for (const d of eligible) {
+    for (const d of batch) {
       try {
         const res = await postCommunityInvite(supabase, {
           apiId: d.apiId,
@@ -177,7 +191,7 @@ export async function POST(req: Request) {
     );
     await markHeartbeatResult(supabase, true, 200);
     return Response.json(
-      { ok: true, postingEnabled: true, posted, alreadyPosted: alreadyThere, failed, skippedByReason: skipCounts },
+      { ok: true, postingEnabled: true, posted, alreadyPosted: alreadyThere, failed, deferred, skippedByReason: skipCounts },
       { status: 200 },
     );
   } catch (err) {

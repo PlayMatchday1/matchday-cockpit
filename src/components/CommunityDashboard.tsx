@@ -16,6 +16,14 @@ type CityRow = {
   whatsapp_url: string | null;
   active: boolean;
   posts_last_7d: number;
+  matches_last_30d: number;
+  needs_setup: boolean;
+};
+
+type Unconfigured = {
+  city_code: string;
+  display_name: string;
+  matches_last_30d: number;
 };
 
 type Settings = {
@@ -50,6 +58,7 @@ function fmtAgo(min: number | null): string {
 
 export default function CommunityDashboard() {
   const [cities, setCities] = useState<CityRow[]>([]);
+  const [unconfigured, setUnconfigured] = useState<Unconfigured[]>([]);
   const [settings, setSettings] = useState<Settings | null>(null);
   const [loading, setLoading] = useState(true);
   const [error, setError] = useState<string | null>(null);
@@ -66,11 +75,17 @@ export default function CommunityDashboard() {
     }
     try {
       const res = await fetch("/api/community/cities", { headers });
-      const json = (await res.json()) as { cities?: CityRow[]; settings?: Settings; error?: string };
+      const json = (await res.json()) as {
+        cities?: CityRow[];
+        unconfigured?: Unconfigured[];
+        settings?: Settings;
+        error?: string;
+      };
       if (!res.ok) {
         setError(json.error ?? "Failed to load.");
       } else {
         setCities(json.cities ?? []);
+        setUnconfigured(json.unconfigured ?? []);
         setSettings(json.settings ?? null);
         setUrlDraft(
           Object.fromEntries((json.cities ?? []).map((c) => [c.city_code, c.whatsapp_url ?? ""])),
@@ -202,6 +217,37 @@ export default function CommunityDashboard() {
         </button>
       </div>
 
+      {/* Needs-setup: live markets that can't post yet (recent matches but no
+          url, or no city row at all). */}
+      {(unconfigured.length > 0 || cities.some((c) => c.needs_setup)) && (
+        <div className="rounded-xl border border-amber-300 bg-amber-50 p-4">
+          <div className="flex items-center gap-2 text-sm font-bold text-amber-700">
+            <AlertTriangle className="h-4 w-4" />
+            Needs setup — markets with recent matches but no working invite
+          </div>
+          <ul className="mt-2 space-y-1 text-[13px] text-amber-800">
+            {cities
+              .filter((c) => c.needs_setup)
+              .map((c) => (
+                <li key={c.city_code}>
+                  <span className="font-semibold">{c.display_name}</span>{" "}
+                  <span className="font-mono text-amber-700/70">({c.city_code})</span> —{" "}
+                  {c.matches_last_30d} match{c.matches_last_30d === 1 ? "" : "es"} in 30d, no
+                  invite URL. Add one below.
+                </li>
+              ))}
+            {unconfigured.map((u) => (
+              <li key={u.city_code}>
+                <span className="font-semibold">{u.display_name}</span>{" "}
+                <span className="font-mono text-amber-700/70">({u.city_code})</span> —{" "}
+                {u.matches_last_30d} match{u.matches_last_30d === 1 ? "" : "es"} in 30d, no city
+                row yet. Add it to city_community_links.
+              </li>
+            ))}
+          </ul>
+        </div>
+      )}
+
       {/* Per-city editor */}
       <div className="overflow-x-auto rounded-xl border border-cream-line">
         <table className="w-full min-w-[720px] text-left text-[13px]">
@@ -221,8 +267,17 @@ export default function CommunityDashboard() {
               return (
                 <tr key={c.city_code} className="bg-white align-top">
                   <td className="px-3 py-2">
-                    <div className="font-semibold text-deep-green">{c.display_name}</div>
-                    <div className="font-mono text-[11px] text-deep-green/40">{c.city_code}</div>
+                    <div className="flex items-center gap-1.5">
+                      <span className="font-semibold text-deep-green">{c.display_name}</span>
+                      {c.needs_setup && (
+                        <span className="inline-flex items-center rounded-full border border-amber-300 bg-amber-50 px-1.5 py-0.5 text-[10px] font-semibold text-amber-700">
+                          needs URL
+                        </span>
+                      )}
+                    </div>
+                    <div className="font-mono text-[11px] text-deep-green/40">
+                      {c.city_code} · {c.matches_last_30d} matches/30d
+                    </div>
                   </td>
                   <td className="px-3 py-2">
                     <div className="flex items-center gap-2">

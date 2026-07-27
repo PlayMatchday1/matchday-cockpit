@@ -26,7 +26,7 @@ export async function loadCityLinks(
 ): Promise<Map<string, CommunityCityLink>> {
   const res = await supabase
     .from("city_community_links")
-    .select("city_code, display_name, whatsapp_url, active");
+    .select("city_code, display_name, whatsapp_url, active, activated_at");
   if (res.error) throw new Error(`city_community_links query failed: ${res.error.message}`);
   const map = new Map<string, CommunityCityLink>();
   for (const r of res.data ?? []) {
@@ -35,6 +35,7 @@ export async function loadCityLinks(
       display_name: r.display_name as string,
       whatsapp_url: (r.whatsapp_url as string | null) ?? null,
       active: r.active === true,
+      activated_at: (r.activated_at as string | null) ?? null,
     });
   }
   return map;
@@ -172,6 +173,30 @@ export async function markHeartbeatResult(
         : { last_status: status, last_error: error ?? "error", updated_at: now },
     )
     .eq("id", 1);
+}
+
+// Cities that had matches in the last 30 days (by canonical code), with a
+// display name + count. Used to surface new/idle markets on the admin tab:
+// a market with recent matches but no row (or no url) needs setup. Uses
+// start_date_utc (true instant) — a light query (no raw jsonb).
+export async function matchCitiesLast30d(
+  supabase: SupabaseClient,
+): Promise<Map<string, { count: number; displayName: string }>> {
+  const since = new Date(Date.now() - 30 * 24 * 3_600_000).toISOString();
+  const res = await supabase
+    .from("mdapi_matches")
+    .select("city_identifier, city_name")
+    .is("deleted_at", null)
+    .gte("start_date_utc", since);
+  const map = new Map<string, { count: number; displayName: string }>();
+  for (const r of res.data ?? []) {
+    const code = normalizeCityName((r.city_name as string | null) ?? (r.city_identifier as string | null));
+    if (!code) continue;
+    const cur = map.get(code) ?? { count: 0, displayName: (r.city_name as string | null) ?? code };
+    cur.count++;
+    map.set(code, cur);
+  }
+  return map;
 }
 
 // Posts per city_code in the last 7 days, for the admin readout.

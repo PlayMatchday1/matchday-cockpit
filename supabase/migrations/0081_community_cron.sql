@@ -46,7 +46,12 @@ SELECT cron.schedule(
       )
     ),
     body := '{}'::jsonb,
-    timeout_milliseconds := 20000
+    -- 55s: comfortably longer than the worst-case run. Runs are small (the
+    -- per-city activated_at floor + audit dedup mean each run only posts to
+    -- matches that ended since activation, and the endpoint caps posts/run),
+    -- so this only exists so a busy self-heal run isn't recorded as a bogus
+    -- timeout in net._http_response.
+    timeout_milliseconds := 55000
   );
   $job$
 );
@@ -55,6 +60,10 @@ SELECT cron.schedule(
 --   SELECT cron.unschedule('community-invite-post');
 
 -- ── Debugging (pg_net is fire-and-forget — responses land here) ─────────────
+-- NOTE: net._http_response is EPHEMERAL — pg_net's background worker prunes
+-- rows after ~6 hours (Supabase default). It's for near-real-time debugging
+-- only; the DURABLE run signal is the community_settings heartbeat (surfaced
+-- on the Community tab), which we persist ourselves.
 -- Recent HTTP responses (status_code, content) from the cron's POSTs:
 --   SELECT id, status_code, content, created
 --   FROM net._http_response ORDER BY created DESC LIMIT 20;

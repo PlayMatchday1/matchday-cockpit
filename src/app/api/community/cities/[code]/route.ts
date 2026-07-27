@@ -31,15 +31,19 @@ export async function PATCH(req: Request, ctx: Ctx) {
     .select("city_code, whatsapp_url, active")
     .eq("city_code", cityCode)
     .maybeSingle();
+  const now = new Date().toISOString();
   if (cur.error) {
     console.error("[community:cities] load failed", cur.error);
     return Response.json({ error: "DB error" }, { status: 500 });
   }
   if (!cur.data) return Response.json({ error: "Unknown city" }, { status: 404 });
 
-  const update: { whatsapp_url?: string | null; active?: boolean; updated_at: string } = {
-    updated_at: new Date().toISOString(),
-  };
+  const update: {
+    whatsapp_url?: string | null;
+    active?: boolean;
+    activated_at?: string;
+    updated_at: string;
+  } = { updated_at: now };
 
   // URL edit: empty/whitespace clears it; anything else must be a valid invite.
   let effectiveUrl: string | null = (cur.data.whatsapp_url as string | null) ?? null;
@@ -68,6 +72,11 @@ export async function PATCH(req: Request, ctx: Ctx) {
       );
     }
     update.active = body.active;
+    // Stamp activated_at only on an inactive→active transition, so the poster's
+    // per-city floor starts now — reactivating weeks later can't backfill.
+    if (body.active && cur.data.active !== true) {
+      update.activated_at = now;
+    }
   }
 
   const upd = await auth.supabase

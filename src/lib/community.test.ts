@@ -43,9 +43,10 @@ const CUTOFF = Date.parse("2026-07-26T00:00:00Z");
 const CTX = { nowMs: NOW, cutoffMs: CUTOFF, lookbackHours: 24, alreadyPosted: new Set<number>([999]) };
 
 const LINKS = new Map<string, CommunityCityLink>([
-  ["STL", { city_code: "STL", display_name: "St. Louis", whatsapp_url: "https://chat.whatsapp.com/abc123def", active: true }],
-  ["HOU", { city_code: "HOU", display_name: "Houston", whatsapp_url: null, active: false }],
-  ["ATL", { city_code: "ATL", display_name: "Atlanta", whatsapp_url: "https://chat.whatsapp.com/xyz789ghi", active: false }],
+  ["STL", { city_code: "STL", display_name: "St. Louis", whatsapp_url: "https://chat.whatsapp.com/abc123def", active: true, activated_at: "2026-07-26T00:00:00Z" }],
+  ["HOU", { city_code: "HOU", display_name: "Houston", whatsapp_url: null, active: false, activated_at: null }],
+  ["ATL", { city_code: "ATL", display_name: "Atlanta", whatsapp_url: "https://chat.whatsapp.com/xyz789ghi", active: false, activated_at: null }],
+  ["SATX", { city_code: "SATX", display_name: "San Antonio", whatsapp_url: "https://chat.whatsapp.com/satx12345", active: true, activated_at: "2026-07-26T11:00:00Z" }],
 ]);
 
 function m(over: Partial<CommunityMatch>): CommunityMatch {
@@ -89,6 +90,25 @@ test("classify: cancelled and below-minimum matches → skip", () => {
   assert.equal(classifyCommunityMatch(m({ player_count: 3, min_player_count: 6 }), LINKS, CTX).reason, "below_minimum");
   // Null min is not treated as below-minimum.
   assert.equal(classifyCommunityMatch(m({ player_count: 1, min_player_count: null }), LINKS, CTX).reason, "eligible");
+});
+
+test("classify: active city but match ended before its activated_at → skip (no per-city backfill)", () => {
+  // SATX activated at 11:00Z; a match that ended 10:00Z (past the global cutoff
+  // and inside the 24h lookback) must NOT be backfilled by the activation.
+  const before = classifyCommunityMatch(
+    m({ cityCode: "SATX", end_date_utc: "2026-07-26T10:00:00Z" }),
+    LINKS,
+    CTX,
+  );
+  assert.equal(before.reason, "before_activation");
+  assert.equal(before.wouldPost, false);
+  // A match that ended AFTER activation is eligible.
+  const after = classifyCommunityMatch(
+    m({ cityCode: "SATX", end_date_utc: "2026-07-26T11:30:00Z" }),
+    LINKS,
+    CTX,
+  );
+  assert.equal(after.reason, "eligible");
 });
 
 test("classify: city guards — unknown / not configured / no url / inactive", () => {

@@ -52,6 +52,11 @@ export type CommunityCityLink = {
   display_name: string;
   whatsapp_url: string | null;
   active: boolean;
+  // Set to now() on every inactive→active transition. A match is only invited
+  // if it ended at/after this — so activating a city posts only its FUTURE
+  // finished matches, never the trailing 24h of the lookback window. This is
+  // the per-city floor; COMMUNITY_START_POSTING_AFTER is the global floor.
+  activated_at: string | null;
 };
 
 export type CommunityMatch = {
@@ -72,6 +77,7 @@ export type CommunitySkipReason =
   | "city_not_configured" // no city_community_links row
   | "city_no_url" // row exists but whatsapp_url is null/blank
   | "city_inactive" // row exists, url set, but active=false
+  | "before_activation" // ended before this city's activated_at (or it's unset)
   | "already_posted"; // audit row already exists for this api_id
 
 export type CommunityDecision = {
@@ -138,6 +144,11 @@ export function classifyCommunityMatch(
   if (!link) return skip("city_not_configured");
   if (!urlText || !urlText.trim()) return skip("city_no_url");
   if (!link.active) return skip("city_inactive");
+
+  // Per-city floor: never post a match that ended before this city was
+  // activated (fails safe if activated_at is somehow unset on an active city).
+  const activatedMs = link.activated_at ? Date.parse(link.activated_at) : NaN;
+  if (Number.isNaN(activatedMs) || endMs < activatedMs) return skip("before_activation");
 
   return { ...base, wouldPost: true, reason: "eligible" };
 }

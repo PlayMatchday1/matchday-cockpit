@@ -21,6 +21,11 @@ CREATE TABLE IF NOT EXISTS city_community_links (
   display_name  text        NOT NULL,              -- interpolated into the copy
   whatsapp_url  text,                              -- null until a link is set
   active        boolean     NOT NULL DEFAULT false,
+  -- Stamped now() on every inactive→active flip (by the admin route). The job
+  -- never posts to a match that ended before this — so activating a city posts
+  -- only its future finished matches, not the trailing 24h lookback. Left in
+  -- place on deactivate; overwritten on the next activation.
+  activated_at  timestamptz,
   created_at    timestamptz NOT NULL DEFAULT now(),
   updated_at    timestamptz NOT NULL DEFAULT now()
 );
