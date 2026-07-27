@@ -14,6 +14,7 @@ import { useCallback, useEffect, useMemo, useState } from "react";
 import { ExternalLink, RefreshCw, RotateCw } from "lucide-react";
 import { supabase } from "@/lib/supabase";
 import VeoCodesEditor from "@/components/VeoCodesEditor";
+import CopyIdChip from "@/components/CopyIdChip";
 
 type VeoRow = {
   id: string;
@@ -323,6 +324,9 @@ export default function VeoDashboard() {
                         </span>
                         <RotateCw className="h-4 w-4 shrink-0" />
                       </button>
+                      <div className="mt-1.5 pl-0.5">
+                        <CopyIdChip id={retryTarget} className="text-[11px]" />
+                      </div>
                     </div>
                   ) : (
                     /* Matching decision — pick which match this recording belongs to. */
@@ -333,20 +337,29 @@ export default function VeoDashboard() {
                             Assign to match
                           </div>
                           {r.candidate_api_ids.map((apiId) => (
-                            <button
+                            <div
                               key={apiId}
-                              type="button"
-                              disabled={busyId === r.id}
-                              onClick={() => void assign(r.id, apiId)}
-                              className="flex w-full items-center justify-between gap-2 rounded-lg border border-cream-line bg-cream-soft px-3 py-2 text-left text-[13px] text-deep-green transition hover:border-mint hover:bg-mint-soft disabled:opacity-50"
+                              className="rounded-lg border border-cream-line bg-cream-soft transition hover:border-mint hover:bg-mint-soft"
                             >
-                              <span className="truncate">
-                                {labels[apiId] ?? `Match ${apiId}`}
-                              </span>
-                              <span className="shrink-0 font-semibold text-mint-hover">
-                                Post →
-                              </span>
-                            </button>
+                              <button
+                                type="button"
+                                disabled={busyId === r.id}
+                                onClick={() => void assign(r.id, apiId)}
+                                className="flex w-full items-center justify-between gap-2 px-3 pt-2 text-left text-[13px] text-deep-green disabled:opacity-50"
+                              >
+                                <span className="truncate">
+                                  {labels[apiId] ?? `Match ${apiId}`}
+                                </span>
+                                <span className="shrink-0 font-semibold text-mint-hover">
+                                  Post →
+                                </span>
+                              </button>
+                              {/* Secondary line: the raw api_id, copy for the
+                                  manual box or cross-reference in Match Chats. */}
+                              <div className="px-3 pb-2 pt-0.5">
+                                <CopyIdChip id={apiId} className="text-[11px]" />
+                              </div>
+                            </div>
                           ))}
                         </div>
                       ) : (
@@ -357,12 +370,12 @@ export default function VeoDashboard() {
                       <div className="mt-2 flex items-center gap-2">
                         <input
                           inputMode="numeric"
-                          placeholder="match id (api_id)"
+                          placeholder="paste match id (ID above / Match Chats)"
                           value={manualId[r.id] ?? ""}
                           onChange={(e) =>
                             setManualId((m) => ({ ...m, [r.id]: e.target.value }))
                           }
-                          className="w-44 rounded-lg border border-cream-line bg-white px-2.5 py-1.5 text-[13px] text-deep-green outline-none focus:border-mint"
+                          className="w-56 rounded-lg border border-cream-line bg-white px-2.5 py-1.5 text-[13px] text-deep-green outline-none focus:border-mint"
                         />
                         <button
                           type="button"

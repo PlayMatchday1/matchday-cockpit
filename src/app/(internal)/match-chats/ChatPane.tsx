@@ -33,7 +33,8 @@ import {
   type DocumentSnapshot,
   type QuerySnapshot,
 } from "firebase/firestore";
-import { ArrowUp, Check, ChevronLeft, Copy, Megaphone } from "lucide-react";
+import { ArrowUp, ChevronLeft, Megaphone } from "lucide-react";
+import CopyIdChip from "@/components/CopyIdChip";
 import { supabase } from "@/lib/supabase";
 import { useFirebaseSession } from "@/lib/useFirebaseSession";
 import CityChip from "@/components/CityChip";
@@ -231,9 +232,6 @@ function ChatPaneInner({
 }) {
   const validId = isValidChatId(chatId);
   const [notifyOpen, setNotifyOpen] = useState(false);
-  // The chat id IS the match's mdapi api_id — surfaced small in the header so
-  // it's easy to copy when assigning a Veo recording to this match.
-  const [copiedId, setCopiedId] = useState(false);
 
   // Reset transient state when the chatId changes (user clicked a
   // different conversation).
@@ -532,27 +530,7 @@ function ChatPaneInner({
                   · {match.manager_email}
                 </span>
               )}
-              <button
-                type="button"
-                onClick={async () => {
-                  try {
-                    await navigator.clipboard.writeText(chatId);
-                    setCopiedId(true);
-                    setTimeout(() => setCopiedId(false), 1500);
-                  } catch {
-                    /* clipboard unavailable — the id is still shown to read off */
-                  }
-                }}
-                title="Copy match ID — paste it into the Veo queue to assign a recording"
-                className="inline-flex shrink-0 items-center gap-1 font-medium text-deep-green/45 transition hover:text-deep-green/70"
-              >
-                ID {chatId}
-                {copiedId ? (
-                  <Check aria-hidden className="h-3 w-3 text-mint-hover" />
-                ) : (
-                  <Copy aria-hidden className="h-3 w-3" />
-                )}
-              </button>
+              <CopyIdChip id={chatId} />
             </div>
           )}
         </div>
