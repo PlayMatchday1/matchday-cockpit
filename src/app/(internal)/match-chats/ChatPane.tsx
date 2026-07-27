@@ -33,7 +33,7 @@ import {
   type DocumentSnapshot,
   type QuerySnapshot,
 } from "firebase/firestore";
-import { ArrowUp, ChevronLeft, Megaphone } from "lucide-react";
+import { ArrowUp, Check, ChevronLeft, Copy, Megaphone } from "lucide-react";
 import { supabase } from "@/lib/supabase";
 import { useFirebaseSession } from "@/lib/useFirebaseSession";
 import CityChip from "@/components/CityChip";
@@ -231,6 +231,9 @@ function ChatPaneInner({
 }) {
   const validId = isValidChatId(chatId);
   const [notifyOpen, setNotifyOpen] = useState(false);
+  // The chat id IS the match's mdapi api_id — surfaced small in the header so
+  // it's easy to copy when assigning a Veo recording to this match.
+  const [copiedId, setCopiedId] = useState(false);
 
   // Reset transient state when the chatId changes (user clicked a
   // different conversation).
@@ -518,13 +521,38 @@ function ChatPaneInner({
         </button>
         <div className="min-w-0 flex-1">
           {headerNodes}
-          {match?.manager_email && (
-            <div className="mt-0.5 truncate text-[10px] text-deep-green/50">
-              Manager:{" "}
-              <span className="font-medium text-deep-green/70">
-                {match.manager_first_name} {match.manager_last_name}
-              </span>{" "}
-              · {match.manager_email}
+          {validId && (
+            <div className="mt-0.5 flex items-center gap-2 text-[10px] text-deep-green/50">
+              {match?.manager_email && (
+                <span className="min-w-0 truncate">
+                  Manager:{" "}
+                  <span className="font-medium text-deep-green/70">
+                    {match.manager_first_name} {match.manager_last_name}
+                  </span>{" "}
+                  · {match.manager_email}
+                </span>
+              )}
+              <button
+                type="button"
+                onClick={async () => {
+                  try {
+                    await navigator.clipboard.writeText(chatId);
+                    setCopiedId(true);
+                    setTimeout(() => setCopiedId(false), 1500);
+                  } catch {
+                    /* clipboard unavailable — the id is still shown to read off */
+                  }
+                }}
+                title="Copy match ID — paste it into the Veo queue to assign a recording"
+                className="inline-flex shrink-0 items-center gap-1 font-medium text-deep-green/45 transition hover:text-deep-green/70"
+              >
+                ID {chatId}
+                {copiedId ? (
+                  <Check aria-hidden className="h-3 w-3 text-mint-hover" />
+                ) : (
+                  <Copy aria-hidden className="h-3 w-3" />
+                )}
+              </button>
             </div>
           )}
         </div>
