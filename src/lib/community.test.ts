@@ -3,6 +3,7 @@
 import { test } from "node:test";
 import assert from "node:assert/strict";
 import {
+  canonicalWhatsAppInviteUrl,
   classifyCommunityMatch,
   communityMessageText,
   isValidWhatsAppInviteUrl,
@@ -12,28 +13,39 @@ import {
 
 // ----------------------------- copy -----------------------------
 
-test("communityMessageText: exact shared copy with the city interpolated", () => {
+test("communityMessageText: exact shared copy with the city interpolated (single space after 🔥)", () => {
   assert.equal(
     communityMessageText("St. Louis"),
-    "Hey everyone! 👋🏻 Want to stay up to date with games, discounts and community updates? ⚽🔥  Don't miss out! Join our St. Louis WhatsApp Community! 💪👇",
+    "Hey everyone! 👋🏻 Want to stay up to date with games, discounts and community updates? ⚽🔥 Don't miss out! Join our St. Louis WhatsApp Community! 💪👇",
   );
+  assert.equal(communityMessageText("St. Louis").includes("🔥  Don't"), false); // no double space
   // Only the city name varies.
   assert.match(communityMessageText("Houston"), /Join our Houston WhatsApp Community/);
 });
 
-// ------------------------- url validation -------------------------
+// ------------------------- url validation + canonicalization -------------------------
 
-test("isValidWhatsAppInviteUrl: accepts a chat.whatsapp.com invite, rejects others", () => {
+test("canonicalWhatsAppInviteUrl: strips tracking query, keeps the invite code", () => {
   assert.equal(
-    isValidWhatsAppInviteUrl("https://chat.whatsapp.com/JKCdpXGeqziHTMzYLPFh8e?s=cl&p=i&ilr=1&amv=0"),
-    true,
+    canonicalWhatsAppInviteUrl("https://chat.whatsapp.com/JKCdpXGeqziHTMzYLPFh8e?s=cl&p=i&ilr=1&amv=0"),
+    "https://chat.whatsapp.com/JKCdpXGeqziHTMzYLPFh8e",
   );
-  assert.equal(isValidWhatsAppInviteUrl("https://chat.whatsapp.com/AB"), false); // code too short
-  assert.equal(isValidWhatsAppInviteUrl("http://chat.whatsapp.com/JKCdpXGeqziHTMzYL"), false); // not https
-  assert.equal(isValidWhatsAppInviteUrl("https://whatsapp.com/JKCdpXGeqziHTMzYL"), false); // wrong host
-  assert.equal(isValidWhatsAppInviteUrl("https://chat.whatsapp.com.evil.com/JKCdpXGeqziH"), false);
-  assert.equal(isValidWhatsAppInviteUrl("not a url"), false);
-  assert.equal(isValidWhatsAppInviteUrl(null), false);
+  // Already canonical → unchanged; fragment also dropped.
+  assert.equal(
+    canonicalWhatsAppInviteUrl("https://chat.whatsapp.com/JKCdpXGeqziHTMzYLPFh8e#x"),
+    "https://chat.whatsapp.com/JKCdpXGeqziHTMzYLPFh8e",
+  );
+  assert.equal(canonicalWhatsAppInviteUrl("https://chat.whatsapp.com/AB"), null); // too short
+  assert.equal(canonicalWhatsAppInviteUrl("http://chat.whatsapp.com/JKCdpXGeqziHTMzYL"), null); // not https
+  assert.equal(canonicalWhatsAppInviteUrl("https://whatsapp.com/JKCdpXGeqziHTMzYL"), null); // wrong host
+  assert.equal(canonicalWhatsAppInviteUrl("https://chat.whatsapp.com.evil.com/JKCdpXGeqziH"), null);
+  assert.equal(canonicalWhatsAppInviteUrl("not a url"), null);
+  assert.equal(canonicalWhatsAppInviteUrl(null), null);
+});
+
+test("isValidWhatsAppInviteUrl: true iff canonicalizable", () => {
+  assert.equal(isValidWhatsAppInviteUrl("https://chat.whatsapp.com/JKCdpXGeqziHTMzYLPFh8e?s=cl"), true);
+  assert.equal(isValidWhatsAppInviteUrl("https://example.com/abc"), false);
 });
 
 // --------------------------- guards ---------------------------
