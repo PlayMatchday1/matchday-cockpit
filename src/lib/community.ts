@@ -24,23 +24,34 @@ export const COMMUNITY_LOOKBACK_HOURS = 24;
 // all cities — only {CITY} (display name) and the URL vary. Single place to
 // edit the wording (mirrors veoMessageText()).
 export function communityMessageText(cityDisplayName: string): string {
-  return `Hey everyone! 👋🏻 Want to stay up to date with games, discounts and community updates? ⚽🔥  Don't miss out! Join our ${cityDisplayName} WhatsApp Community! 💪👇`;
+  return `Hey everyone! 👋🏻 Want to stay up to date with games, discounts and community updates? ⚽🔥 Don't miss out! Join our ${cityDisplayName} WhatsApp Community! 💪👇`;
 }
 
 // A saved invite must be a chat.whatsapp.com group-invite link with a code.
 export function isValidWhatsAppInviteUrl(url: string | null | undefined): boolean {
-  if (!url) return false;
+  return canonicalWhatsAppInviteUrl(url) != null;
+}
+
+// Canonicalize an invite link to https://chat.whatsapp.com/<code> — dropping
+// WhatsApp's own share-tracking query params (?s=…&p=…) and any fragment. Same
+// destination, shorter, fewer characters for a linkifier to trip on. Returns
+// null if it isn't a valid chat.whatsapp.com invite. We store the canonical
+// form, so every city's URL is normalized on save.
+export function canonicalWhatsAppInviteUrl(url: string | null | undefined): string | null {
+  if (!url) return null;
   let u: URL;
   try {
     u = new URL(url.trim());
   } catch {
-    return false;
+    return null;
   }
-  if (u.protocol !== "https:") return false;
-  if (u.hostname !== "chat.whatsapp.com") return false;
-  // Path must carry an invite code, e.g. /JKCdpXGeqziHTMzYLPFh8e
-  const code = u.pathname.replace(/^\/+/, "");
-  return code.length >= 6;
+  if (u.protocol !== "https:") return null;
+  if (u.hostname !== "chat.whatsapp.com") return null;
+  // Invite code is the first path segment; drop everything else (query, hash,
+  // any trailing path).
+  const code = u.pathname.replace(/^\/+/, "").split("/")[0];
+  if (code.length < 6) return null;
+  return `https://chat.whatsapp.com/${code}`;
 }
 
 // ---------------------------------------------------------------------------

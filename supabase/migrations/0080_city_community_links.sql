@@ -87,7 +87,7 @@ CREATE POLICY community_settings_admin_select
 -- Seed all 8 cities. St. Louis gets the real invite URL but stays active=false
 -- (everything ships OFF); the rest have no url yet. Idempotent.
 INSERT INTO city_community_links (city_code, display_name, whatsapp_url, active) VALUES
-  ('STL',  'St. Louis',   'https://chat.whatsapp.com/JKCdpXGeqziHTMzYLPFh8e?s=cl&p=i&ilr=1&amv=0', false),
+  ('STL',  'St. Louis',   'https://chat.whatsapp.com/JKCdpXGeqziHTMzYLPFh8e', false),
   ('ATX',  'Austin',      NULL, false),
   ('DFW',  'Dallas',      NULL, false),
   ('HOU',  'Houston',     NULL, false),

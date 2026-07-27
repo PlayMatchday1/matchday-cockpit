@@ -3,7 +3,7 @@
 // refuses to activate a city with no URL (never post a broken/empty link).
 
 import { authenticateAdmin } from "@/lib/adminAuth";
-import { isValidWhatsAppInviteUrl } from "@/lib/community";
+import { canonicalWhatsAppInviteUrl } from "@/lib/community";
 
 export const runtime = "nodejs";
 export const maxDuration = 15;
@@ -52,14 +52,18 @@ export async function PATCH(req: Request, ctx: Ctx) {
     if (trimmed === "") {
       update.whatsapp_url = null;
       effectiveUrl = null;
-    } else if (!isValidWhatsAppInviteUrl(trimmed)) {
-      return Response.json(
-        { error: "URL must be a chat.whatsapp.com invite link." },
-        { status: 400 },
-      );
     } else {
-      update.whatsapp_url = trimmed;
-      effectiveUrl = trimmed;
+      // Canonicalize: validates it's a chat.whatsapp.com invite AND strips
+      // WhatsApp's share-tracking query params, storing https://…/<code>.
+      const canonical = canonicalWhatsAppInviteUrl(trimmed);
+      if (!canonical) {
+        return Response.json(
+          { error: "URL must be a chat.whatsapp.com invite link." },
+          { status: 400 },
+        );
+      }
+      update.whatsapp_url = canonical;
+      effectiveUrl = canonical;
     }
   }
 
