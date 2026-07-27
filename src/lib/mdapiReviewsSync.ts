@@ -135,10 +135,22 @@ export async function syncMdapiReviews(
     synced_at: syncedAt,
   }));
 
+  // De-dupe by api_id BEFORE batching. The MatchDay reviews API can return the
+  // same review id twice within a page window; if two land in one 500-row
+  // upsert chunk, Postgres throws "ON CONFLICT DO UPDATE command cannot affect
+  // row a second time" and the whole sync 500s (this failed the hourly job on
+  // 2026-07-24 and 07-25 at offset 14000). onConflict=api_id is last-write-wins
+  // across chunks anyway, so collapsing dupes to the last occurrence here is
+  // the same result, minus the crash.
+  const uniqueRows = Array.from(
+    new Map(dbRows.map((r) => [r.api_id, r])).values(),
+  );
+  const duplicatesDropped = dbRows.length - uniqueRows.length;
+
   // --- Upsert in batches ---
   let upserted = 0;
-  for (let i = 0; i < dbRows.length; i += UPSERT_BATCH) {
-    const chunk = dbRows.slice(i, i + UPSERT_BATCH);
+  for (let i = 0; i < uniqueRows.length; i += UPSERT_BATCH) {
+    const chunk = uniqueRows.slice(i, i + UPSERT_BATCH);
     const { error } = await supabase
       .from("mdapi_reviews")
       .upsert(chunk, { onConflict: "api_id" });
@@ -153,6 +165,7 @@ export async function syncMdapiReviews(
   return {
     fetched: all.length,
     upserted,
+    duplicatesDropped,
     pages,
     durationMs: Date.now() - startedAt,
   };
