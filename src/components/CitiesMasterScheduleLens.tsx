@@ -48,6 +48,9 @@ type MatchOut = {
   time: string;
   max_spots: number;
   mdapi_field_id: number | null;
+  // 'template' = recurring weekly slot; 'manual'/'auto_completed' = one-off.
+  // Drives the dashed (one-off) vs solid (recurring) border in the grid.
+  source: string;
 };
 
 type DayOut = {
@@ -144,6 +147,43 @@ type Discrepancies = {
   }>;
 };
 
+// §1/§4 auto-reconcile extras, served by /api/schedule-master/reconcile.
+type AutoAddedRow = {
+  id: string;
+  match_api_id: number;
+  city: string;
+  venue: string;
+  detail: string;
+  match_date: string;
+  match_time: string;
+};
+type ReconcileHeartbeat = {
+  autoreconcile_enabled: boolean;
+  last_attempted_at: string | null;
+  last_success_at: string | null;
+  last_status: string | null;
+  last_error: string | null;
+};
+type ReconcileExtras = {
+  heartbeat: ReconcileHeartbeat | null;
+  autoAdded: AutoAddedRow[];
+};
+
+// Same "X min ago" phrasing as the Community tab's heartbeat.
+function agoMinutes(iso: string | null): number | null {
+  if (!iso) return null;
+  const t = Date.parse(iso);
+  if (Number.isNaN(t)) return null;
+  return Math.max(0, Math.round((Date.now() - t) / 60000));
+}
+function fmtAgo(min: number | null): string {
+  if (min == null) return "never";
+  if (min < 1) return "just now";
+  if (min < 60) return `${min} min ago`;
+  const h = Math.round(min / 60);
+  return h < 24 ? `${h}h ago` : `${Math.round(h / 24)}d ago`;
+}
+
 type EditorState =
   | { kind: "closed" }
   | { kind: "edit"; row: EditableRow }
@@ -185,6 +225,10 @@ export default function CitiesMasterScheduleLens({
   const [current, setCurrent] = useState<Payload | null>(null);
   const [previous, setPrevious] = useState<Payload | null>(null);
   const [discrepancies, setDiscrepancies] = useState<Discrepancies | null>(null);
+  const [reconcile, setReconcile] = useState<ReconcileExtras | null>(null);
+  const [busyIds, setBusyIds] = useState<Set<number>>(() => new Set());
+  // Per-city change chips are collapsed behind the summary by default (§4).
+  const [showChanges, setShowChanges] = useState(false);
   const [loading, setLoading] = useState(true);
   const [error, setError] = useState<string | null>(null);
   const [editor, setEditor] = useState<EditorState>({ kind: "closed" });
@@ -227,23 +271,42 @@ export default function CitiesMasterScheduleLens({
           return null;
         }
       };
-      const [cur, prev, disc] = await Promise.all([
+      // Auto-reconcile (§1): the all-cities lens RUNS the job (POST — idempotent,
+      // gated by the kill switch); the per-city embed only READS the heartbeat +
+      // auto-added list (GET, no writes). Failure here must not blank the panel.
+      const fetchReconcile = async (): Promise<ReconcileExtras | null> => {
+        try {
+          const res = await fetch("/api/schedule-master/reconcile", {
+            method: city ? "GET" : "POST",
+            headers,
+          });
+          if (!res.ok) return null;
+          const j = (await res.json()) as ReconcileExtras;
+          return { heartbeat: j.heartbeat ?? null, autoAdded: j.autoAdded ?? [] };
+        } catch {
+          return null;
+        }
+      };
+      const [cur, prev, disc, rec] = await Promise.all([
         fetchWeek(ws),
         fetchWeek(prevWs),
         fetchDiscrepancies(ws),
+        fetchReconcile(),
       ]);
       setCurrent(cur);
       setPrevious(prev);
       setDiscrepancies(disc);
+      setReconcile(rec);
     } catch (err) {
       setError(err instanceof Error ? err.message : String(err));
       setCurrent(null);
       setPrevious(null);
       setDiscrepancies(null);
+      setReconcile(null);
     } finally {
       setLoading(false);
     }
-  }, []);
+  }, [city]);
 
   useEffect(() => {
     void load(weekStart);
@@ -293,6 +356,74 @@ export default function CitiesMasterScheduleLens({
   const cancelledRefs = useMemo(
     () => buildCancelledRefs(discrepancies),
     [discrepancies],
+  );
+
+  // §2 one-click add + Undo. Both mutate schedule_master, then reload so the
+  // discrepancy buckets and auto-added list re-derive from the server.
+  const withBusy = useCallback(
+    async (ids: number[], run: (token: string) => Promise<Response>) => {
+      const { data: sess } = await supabase.auth.getSession();
+      const token = sess.session?.access_token;
+      if (!token) {
+        setToastMsg("No active session.");
+        return;
+      }
+      setBusyIds((prev) => new Set([...prev, ...ids]));
+      try {
+        const res = await run(token);
+        const j = await res.json().catch(() => ({}));
+        if (!res.ok) throw new Error(j.error || `HTTP ${res.status}`);
+        return j as Record<string, unknown>;
+      } catch (err) {
+        setToastMsg(err instanceof Error ? err.message : String(err));
+        return null;
+      } finally {
+        setBusyIds((prev) => {
+          const next = new Set(prev);
+          for (const id of ids) next.delete(id);
+          return next;
+        });
+      }
+    },
+    [],
+  );
+
+  const addToClubhouse = useCallback(
+    async (matchIds: number[]) => {
+      if (matchIds.length === 0) return;
+      const j = await withBusy(matchIds, (token) =>
+        fetch("/api/schedule-master/from-match", {
+          method: "POST",
+          headers: { Authorization: `Bearer ${token}`, "Content-Type": "application/json" },
+          body: JSON.stringify({ match_api_ids: matchIds }),
+        }),
+      );
+      if (!j) return;
+      const added = Number(j.added ?? 0);
+      const already = Number(j.alreadyPresent ?? 0);
+      setToastMsg(
+        added > 0
+          ? `Added ${added} to schedule${already ? ` (${already} already present)` : ""}`
+          : "Already on the schedule",
+      );
+      await load(weekStart);
+    },
+    [withBusy, load, weekStart],
+  );
+
+  const undoOneOff = useCallback(
+    async (matchApiId: number) => {
+      const j = await withBusy([matchApiId], (token) =>
+        fetch(`/api/schedule-master/from-match?match_api_id=${matchApiId}`, {
+          method: "DELETE",
+          headers: { Authorization: `Bearer ${token}` },
+        }),
+      );
+      if (!j) return;
+      setToastMsg(Number(j.deleted ?? 0) > 0 ? "Removed from schedule" : "Nothing to remove");
+      await load(weekStart);
+    },
+    [withBusy, load, weekStart],
   );
 
   const shift = (days: number) => {
@@ -345,10 +476,19 @@ export default function CitiesMasterScheduleLens({
             <DiffSummaryBanner
               addedCount={diff.addedCount}
               droppedCount={diff.droppedCount}
+              expanded={showChanges}
+              onToggle={() => setShowChanges((v) => !v)}
             />
           )}
           {discrepancies && (
-            <DiscrepancyBanner data={discrepancies} city={city} />
+            <DiscrepancyBanner
+              data={discrepancies}
+              city={city}
+              reconcile={reconcile}
+              busyIds={busyIds}
+              onAdd={addToClubhouse}
+              onUndo={undoOneOff}
+            />
           )}
           <div className="space-y-5">
             {current.cities
@@ -359,6 +499,7 @@ export default function CitiesMasterScheduleLens({
                   city={c}
                   todayIso={todayIso}
                   diff={diff}
+                  showChanges={showChanges}
                   cancelledKeys={cancelledRefs.keys}
                   onEditMatch={openEdit}
                 />
@@ -441,12 +582,23 @@ function WeekNav({
 function DiffSummaryBanner({
   addedCount,
   droppedCount,
+  expanded,
+  onToggle,
 }: {
   addedCount: number;
   droppedCount: number;
+  // The summary chip is also the toggle: the per-city change chips live in
+  // each city card and stay collapsed until this is expanded (§4 declutter).
+  expanded: boolean;
+  onToggle: () => void;
 }) {
   return (
-    <div className="mb-5 flex flex-wrap items-center gap-2 rounded-2xl border-[1.5px] border-cream-line bg-cream-soft px-4 py-2.5 shadow-md shadow-deep-green/10">
+    <button
+      type="button"
+      onClick={onToggle}
+      aria-pressed={expanded}
+      className="mb-5 flex w-full flex-wrap items-center gap-2 rounded-2xl border-[1.5px] border-cream-line bg-cream-soft px-4 py-2.5 text-left shadow-md shadow-deep-green/10 transition hover:bg-cream-soft/70"
+    >
       <span className="text-[11px] font-bold uppercase tracking-wider text-deep-green/70">
         Changes vs last week
       </span>
@@ -460,7 +612,10 @@ function DiffSummaryBanner({
           {droppedCount} dropped
         </span>
       )}
-    </div>
+      <span className="ml-auto text-[11px] font-semibold text-deep-green/50">
+        {expanded ? "Hide per-city −" : "Show per-city +"}
+      </span>
+    </button>
   );
 }
 
@@ -468,20 +623,23 @@ function CitySection({
   city,
   todayIso,
   diff,
+  showChanges,
   cancelledKeys,
   onEditMatch,
 }: {
   city: CityOut;
   todayIso: string;
   diff: Diff;
+  showChanges: boolean;
   cancelledKeys: Set<string>;
   onEditMatch: (row: EditableRow) => void;
 }) {
   // Week-vs-week diff pills only. Cancellations show as in-grid
   // strikethrough bubbles + the Schedule Sync count pill at the top of
   // the tab; surfacing them again in the per-city row was loud
-  // and crowded out the diff signal.
-  const pills = diff.perCity.get(city.name) ?? [];
+  // and crowded out the diff signal. Collapsed behind the summary chip
+  // by default (§4) — only shown when the user expands changes.
+  const pills = showChanges ? (diff.perCity.get(city.name) ?? []) : [];
   return (
     <div className="rounded-2xl border-[1.5px] border-cream-line bg-white p-5 shadow-md shadow-deep-green/10">
       <div className="mb-3 flex flex-wrap items-center justify-between gap-2">
@@ -602,6 +760,7 @@ function DayAgenda({
                   dim={isPast}
                   added={addedIds.has(m.id)}
                   cancelled={cancelled}
+                  oneOff={m.source !== "template"}
                   onClick={() =>
                     onEditMatch({
                       id: m.id,
@@ -639,6 +798,7 @@ function AgendaMatchRow({
   dim,
   added,
   cancelled,
+  oneOff,
   onClick,
 }: {
   time: string;
@@ -647,14 +807,17 @@ function AgendaMatchRow({
   dim: boolean;
   added: boolean;
   cancelled: boolean;
+  oneOff: boolean;
   onClick: () => void;
 }) {
   const short = compactTime(time);
-  const bgClass = added
-    ? "bg-mint-soft ring-1 ring-mint/60"
-    : dim
-      ? "bg-cream-soft ring-1 ring-cream-line"
-      : "bg-white ring-1 ring-cream-line";
+  const bgClass = added ? "bg-mint-soft" : dim ? "bg-cream-soft" : "bg-white";
+  // Dashed outline = one-off; solid ring = recurring template.
+  const outlineClass = oneOff
+    ? `border border-dashed ${added ? "border-mint" : "border-deep-green/40"}`
+    : added
+      ? "ring-1 ring-mint/60"
+      : "ring-1 ring-cream-line";
   const textClass = cancelled
     ? "text-coral-hover"
     : dim
@@ -664,12 +827,12 @@ function AgendaMatchRow({
     <button
       type="button"
       onClick={onClick}
-      aria-label={`Edit ${time} ${detail}${cancelled ? " (cancelled)" : ""}`}
-      className={`flex w-full items-center gap-2 rounded-md px-2 py-1.5 text-left text-xs transition focus:outline-none focus:ring-2 focus:ring-mint ${bgClass} ${textClass}`}
+      aria-label={`Edit ${time} ${detail}${cancelled ? " (cancelled)" : ""}${oneOff ? " (one-off)" : ""}`}
+      className={`flex w-full items-center gap-2 rounded-md px-2 py-1.5 text-left text-xs transition focus:outline-none focus:ring-2 focus:ring-mint ${bgClass} ${outlineClass} ${textClass}`}
       title={
         cancelled
           ? `Cancelled match · ${time} - ${detail}`
-          : `${time} - ${detail}`
+          : `${oneOff ? "One-off · " : ""}${time} - ${detail}`
       }
     >
       {added && (
@@ -781,6 +944,7 @@ function DayCell({
                   dim={isPast}
                   added={addedIds.has(m.id)}
                   cancelled={cancelled}
+                  oneOff={m.source !== "template"}
                   onClick={() =>
                     onEditMatch({
                       id: m.id,
@@ -818,6 +982,7 @@ function MatchPill({
   dim,
   added,
   cancelled,
+  oneOff,
   onClick,
 }: {
   time: string;
@@ -826,6 +991,10 @@ function MatchPill({
   dim: boolean;
   added: boolean;
   cancelled: boolean;
+  // One-off (manual / auto-reconciled) vs recurring template. Drawn as a
+  // dashed border — orthogonal to the mint "added" treatment, so a slot can
+  // be both a one-off AND newly-added and read as both.
+  oneOff: boolean;
   onClick: () => void;
 }) {
   const short = compactTime(time);
@@ -837,10 +1006,18 @@ function MatchPill({
   // when added, so an "added AND cancelled" slot keeps both
   // signals.
   const bgClass = added
-    ? "bg-mint-soft ring-1 ring-mint/60 hover:ring-2 hover:ring-mint"
+    ? "bg-mint-soft"
     : dim
-      ? "bg-cream-soft hover:ring-2 hover:ring-mint"
-      : "bg-white ring-1 ring-cream-line hover:ring-2 hover:ring-mint";
+      ? "bg-cream-soft"
+      : "bg-white";
+  // Dashed outline = one-off; solid ring = recurring template.
+  const outlineClass = oneOff
+    ? `border border-dashed ${added ? "border-mint" : "border-deep-green/40"}`
+    : added
+      ? "ring-1 ring-mint/60"
+      : dim
+        ? ""
+        : "ring-1 ring-cream-line";
   const textClass = cancelled
     ? "text-coral-hover"
     : dim
@@ -850,9 +1027,13 @@ function MatchPill({
     <button
       type="button"
       onClick={onClick}
-      aria-label={`Edit ${time} ${detail}${cancelled ? " (cancelled)" : ""}`}
-      className={`flex w-full items-center gap-1 rounded px-1.5 py-0.5 text-left text-[11px] leading-tight transition focus:outline-none focus:ring-2 focus:ring-mint ${bgClass} ${textClass}`}
-      title={cancelled ? `Cancelled match · ${time} - ${detail}` : `${time} - ${detail}`}
+      aria-label={`Edit ${time} ${detail}${cancelled ? " (cancelled)" : ""}${oneOff ? " (one-off)" : ""}`}
+      className={`flex w-full items-center gap-1 rounded px-1.5 py-0.5 text-left text-[11px] leading-tight transition hover:ring-2 hover:ring-mint focus:outline-none focus:ring-2 focus:ring-mint ${bgClass} ${outlineClass} ${textClass}`}
+      title={
+        cancelled
+          ? `Cancelled match · ${time} - ${detail}`
+          : `${oneOff ? "One-off · " : ""}${time} - ${detail}`
+      }
     >
       {added && (
         <span
@@ -873,6 +1054,13 @@ function MatchPill({
 // Each count pill is click-to-expand; sections fold to nothing if
 // their count is zero. The banner itself hides when all three
 // counts are zero.
+type BannerSection =
+  | "clubhouse"
+  | "matchday"
+  | "mismatched"
+  | "cancelled"
+  | "autoadded";
+
 function DiscrepancyBanner({
   data,
   // When set (Slate Review embed), scope every count + drilldown
@@ -881,165 +1069,315 @@ function DiscrepancyBanner({
   // extra / mismatched / cancelled, not the network's. Unset →
   // network-wide (standalone /cities lens).
   city,
+  reconcile,
+  busyIds,
+  onAdd,
+  onUndo,
 }: {
   data: Discrepancies;
   city?: string;
+  reconcile: ReconcileExtras | null;
+  busyIds: Set<number>;
+  onAdd: (matchIds: number[]) => void;
+  onUndo: (matchApiId: number) => void;
 }) {
-  const [open, setOpen] = useState<
-    "missing" | "extra" | "mismatched" | "cancelled" | null
-  >(null);
-  const missingRows = city
-    ? data.missing_in_db.filter((r) => r.city === city)
-    : data.missing_in_db;
+  const [open, setOpen] = useState<BannerSection | null>(null);
+  // "Add to Clubhouse" — matches live on MatchDay but absent from Clubhouse.
+  // Auto-reconcile has already claimed the *completed* ones, so what remains
+  // here is future / can't-tell: the one-click-add candidates.
   const extraRows = city
     ? data.extra_in_db.filter((r) => r.city === city)
     : data.extra_in_db;
+  // "Create on MatchDay" — schedule rows with no MatchDay match. Read-only /
+  // informational (§3): we never write to MatchDay.
+  const missingRows = city
+    ? data.missing_in_db.filter((r) => r.city === city)
+    : data.missing_in_db;
   const mismatchedRows = city
     ? data.mismatched.filter((r) => r.city === city)
     : data.mismatched;
   const cancelledRows = city
     ? data.cancelled.filter((r) => r.city === city)
     : data.cancelled;
-  const missing = missingRows.length;
-  const extra = extraRows.length;
+  const autoAddedRows = (reconcile?.autoAdded ?? []).filter(
+    (r) => !city || r.city === city,
+  );
+  const clubhouse = extraRows.length;
+  const matchday = missingRows.length;
   const mism = mismatchedRows.length;
   const canc = cancelledRows.length;
-  if (missing === 0 && extra === 0 && mism === 0 && canc === 0) return null;
+  const autoCount = autoAddedRows.length;
+  // "Need review" is the actionable set only — things you can fix on Clubhouse.
+  // Create-on-MatchDay and cancelled are informational; auto-added is done.
+  const needReview = clubhouse + mism;
+  const heartbeat = reconcile?.heartbeat ?? null;
 
-  function toggle(k: "missing" | "extra" | "mismatched" | "cancelled") {
+  function toggle(k: BannerSection) {
     setOpen((cur) => (cur === k ? null : k));
   }
   const dateLabel = `${fmtShort(data.week_start)} - ${fmtShort(data.week_end)}`;
+  const addAllBusy = extraRows.some((r) => busyIds.has(r.mdapi_match_id));
+
+  const sectionBtn =
+    "flex w-full items-center justify-between rounded-lg px-2 py-1 text-[11px] font-bold transition text-left";
 
   return (
-    <div className="mb-5 rounded-2xl border-[1.5px] border-cream-line bg-cream-soft px-4 py-2.5 shadow-md shadow-deep-green/10">
-      <div className="flex flex-wrap items-center gap-2">
+    <div className="mb-5 rounded-2xl border-[1.5px] border-cream-line bg-cream-soft px-4 py-3 shadow-md shadow-deep-green/10">
+      {/* Header: label + auto-reconcile heartbeat (like the Community tab). */}
+      <div className="flex flex-wrap items-center justify-between gap-2">
         <span className="text-[11px] font-bold uppercase tracking-wider text-deep-green/70">
           Schedule Sync · {dateLabel}
         </span>
-        {missing > 0 && (
-          <button
-            type="button"
-            onClick={() => toggle("missing")}
-            aria-pressed={open === "missing"}
-            className={`rounded-full px-2 py-0.5 text-[11px] font-bold transition ${
-              open === "missing"
-                ? "bg-coral text-white"
-                : "bg-coral-soft text-coral-hover ring-1 ring-coral/40 hover:bg-coral-soft/70"
+        {heartbeat && (
+          <span
+            title={heartbeat.last_error ?? undefined}
+            className={`text-[10px] font-semibold tabular-nums ${
+              !heartbeat.autoreconcile_enabled || heartbeat.last_status === "500"
+                ? "text-coral-hover"
+                : "text-deep-green/45"
             }`}
           >
-            {missing} missing on MatchDay
-          </button>
-        )}
-        {extra > 0 && (
-          <button
-            type="button"
-            onClick={() => toggle("extra")}
-            aria-pressed={open === "extra"}
-            className={`rounded-full px-2 py-0.5 text-[11px] font-bold transition ${
-              open === "extra"
-                ? "bg-yellow-pos text-deep-green"
-                : "bg-yellow-soft text-deep-green ring-1 ring-yellow-pos/60 hover:bg-yellow-soft/70"
-            }`}
-          >
-            {extra} missing on Clubhouse
-          </button>
-        )}
-        {mism > 0 && (
-          <button
-            type="button"
-            onClick={() => toggle("mismatched")}
-            aria-pressed={open === "mismatched"}
-            className={`rounded-full px-2 py-0.5 text-[11px] font-bold transition ${
-              open === "mismatched"
-                ? "bg-coral text-white"
-                : "bg-coral-soft/60 text-coral-hover ring-1 ring-coral/30 hover:bg-coral-soft/40"
-            }`}
-          >
-            {mism} mismatched
-          </button>
-        )}
-        {canc > 0 && (
-          <button
-            type="button"
-            onClick={() => toggle("cancelled")}
-            aria-pressed={open === "cancelled"}
-            className={`rounded-full px-2 py-0.5 text-[11px] font-bold transition ${
-              open === "cancelled"
-                ? "bg-coral-hover text-white"
-                : "bg-coral text-white hover:bg-coral-hover"
-            }`}
-          >
-            {canc} cancelled this week
-          </button>
+            {!heartbeat.autoreconcile_enabled
+              ? "Auto-reconcile off"
+              : heartbeat.last_status === "500"
+                ? "Auto-reconcile · last run failed"
+                : `Auto-reconcile on · ran ${fmtAgo(agoMinutes(heartbeat.last_success_at))}`}
+          </span>
         )}
       </div>
-      {open === "missing" && (
-        <ul className="mt-3 space-y-0.5">
-          {missingRows.map((r) => (
-            <li
-              key={r.id}
-              className="text-[11px] tabular-nums text-deep-green/75"
+
+      {/* Primary: one number, or a one-line all-clear at 0. */}
+      <div className="mt-2">
+        {needReview > 0 ? (
+          <span className="text-sm font-bold text-deep-green">
+            {needReview} need review
+          </span>
+        ) : (
+          <span className="text-[13px] font-semibold text-deep-green/60">
+            ✓ Nothing needs review — schedule matches MatchDay
+          </span>
+        )}
+      </div>
+
+      <div className="mt-2 space-y-1">
+        {/* Add to Clubhouse — actionable one-click add (§2). */}
+        {clubhouse > 0 && (
+          <div>
+            <div className="flex items-center gap-2">
+              <button
+                type="button"
+                onClick={() => toggle("clubhouse")}
+                aria-pressed={open === "clubhouse"}
+                className={`${sectionBtn} flex-1 ${
+                  open === "clubhouse"
+                    ? "bg-yellow-pos text-deep-green"
+                    : "bg-yellow-soft text-deep-green ring-1 ring-yellow-pos/60 hover:bg-yellow-soft/70"
+                }`}
+              >
+                <span>Add to Clubhouse ({clubhouse})</span>
+                <span aria-hidden className="text-deep-green/50">
+                  {open === "clubhouse" ? "−" : "+"}
+                </span>
+              </button>
+              <button
+                type="button"
+                onClick={() => onAdd(extraRows.map((r) => r.mdapi_match_id))}
+                disabled={addAllBusy}
+                className="shrink-0 rounded-full bg-mint px-2.5 py-1 text-[11px] font-bold text-deep-green transition hover:bg-mint-hover disabled:opacity-50"
+              >
+                Add all
+              </button>
+            </div>
+            {open === "clubhouse" && (
+              <ul className="mt-2 space-y-0.5">
+                {extraRows.map((r) => {
+                  const busy = busyIds.has(r.mdapi_match_id);
+                  return (
+                    <li
+                      key={r.mdapi_match_id}
+                      className="flex items-center justify-between gap-2 text-[11px] tabular-nums text-deep-green/75"
+                    >
+                      <span>
+                        <span className="font-bold">{fmtShort(r.match_date)}</span>{" "}
+                        <span className="text-deep-green/55">·</span> {r.city}{" "}
+                        <span className="text-deep-green/55">·</span> {r.venue}{" "}
+                        <span className="text-deep-green/55">·</span> {r.match_time}{" "}
+                        <span className="text-deep-green/55">·</span> match #
+                        {r.mdapi_match_id}
+                      </span>
+                      <button
+                        type="button"
+                        onClick={() => onAdd([r.mdapi_match_id])}
+                        disabled={busy}
+                        className="shrink-0 rounded-full bg-mint px-2 py-0.5 text-[10px] font-bold text-deep-green transition hover:bg-mint-hover disabled:opacity-50"
+                      >
+                        {busy ? "…" : "Add"}
+                      </button>
+                    </li>
+                  );
+                })}
+              </ul>
+            )}
+          </div>
+        )}
+
+        {/* Mismatched — needs a human look. */}
+        {mism > 0 && (
+          <div>
+            <button
+              type="button"
+              onClick={() => toggle("mismatched")}
+              aria-pressed={open === "mismatched"}
+              className={`${sectionBtn} ${
+                open === "mismatched"
+                  ? "bg-coral text-white"
+                  : "bg-coral-soft/60 text-coral-hover ring-1 ring-coral/30 hover:bg-coral-soft/40"
+              }`}
             >
-              <span className="font-bold">{fmtShort(r.match_date)}</span>{" "}
-              <span className="text-deep-green/55">·</span> {r.city}{" "}
-              <span className="text-deep-green/55">·</span> {r.detail}{" "}
-              <span className="text-deep-green/55">·</span> {r.match_time}{" "}
-              <span className="text-deep-green/55">·</span> {r.max_spots} spots
-            </li>
-          ))}
-        </ul>
-      )}
-      {open === "extra" && (
-        <ul className="mt-3 space-y-0.5">
-          {extraRows.map((r) => (
-            <li
-              key={r.mdapi_match_id}
-              className="text-[11px] tabular-nums text-deep-green/75"
+              <span>Mismatched ({mism})</span>
+              <span aria-hidden className="opacity-60">
+                {open === "mismatched" ? "−" : "+"}
+              </span>
+            </button>
+            {open === "mismatched" && (
+              <ul className="mt-2 space-y-0.5">
+                {mismatchedRows.map((r) => (
+                  <li
+                    key={r.schedule_master_id}
+                    className="text-[11px] tabular-nums text-deep-green/75"
+                  >
+                    <span className="font-bold">{fmtShort(r.match_date)}</span>{" "}
+                    <span className="text-deep-green/55">·</span> {r.city}{" "}
+                    <span className="text-deep-green/55">·</span> {r.venue}{" "}
+                    <span className="text-deep-green/55">·</span> {r.match_time}{" "}
+                    <span className="text-deep-green/55">·</span>{" "}
+                    <span className="text-coral-hover">{r.diffs.join(" / ")}</span>
+                  </li>
+                ))}
+              </ul>
+            )}
+          </div>
+        )}
+
+        {/* Create on MatchDay — informational only. No write path to MatchDay (§3). */}
+        {matchday > 0 && (
+          <div>
+            <button
+              type="button"
+              onClick={() => toggle("matchday")}
+              aria-pressed={open === "matchday"}
+              className={`${sectionBtn} ${
+                open === "matchday"
+                  ? "bg-cream-line text-deep-green/80"
+                  : "bg-cream text-deep-green/60 ring-1 ring-cream-line hover:bg-cream-line/60"
+              }`}
             >
-              <span className="font-bold">{fmtShort(r.match_date)}</span>{" "}
-              <span className="text-deep-green/55">·</span> {r.city}{" "}
-              <span className="text-deep-green/55">·</span> {r.venue}{" "}
-              <span className="text-deep-green/55">·</span> {r.match_time}{" "}
-              <span className="text-deep-green/55">·</span> match #
-              {r.mdapi_match_id}
-            </li>
-          ))}
-        </ul>
-      )}
-      {open === "mismatched" && (
-        <ul className="mt-3 space-y-0.5">
-          {mismatchedRows.map((r) => (
-            <li
-              key={r.schedule_master_id}
-              className="text-[11px] tabular-nums text-deep-green/75"
+              <span>Create on MatchDay ({matchday}) · info only</span>
+              <span aria-hidden className="opacity-50">
+                {open === "matchday" ? "−" : "+"}
+              </span>
+            </button>
+            {open === "matchday" && (
+              <ul className="mt-2 space-y-0.5">
+                {missingRows.map((r) => (
+                  <li
+                    key={r.id}
+                    className="text-[11px] tabular-nums text-deep-green/70"
+                  >
+                    <span className="font-bold">{fmtShort(r.match_date)}</span>{" "}
+                    <span className="text-deep-green/55">·</span> {r.city}{" "}
+                    <span className="text-deep-green/55">·</span> {r.detail}{" "}
+                    <span className="text-deep-green/55">·</span> {r.match_time}{" "}
+                    <span className="text-deep-green/55">·</span> {r.max_spots} spots
+                  </li>
+                ))}
+              </ul>
+            )}
+          </div>
+        )}
+
+        {/* Cancelled this week — muted, not alarm-styled. */}
+        {canc > 0 && (
+          <div>
+            <button
+              type="button"
+              onClick={() => toggle("cancelled")}
+              aria-pressed={open === "cancelled"}
+              className={`${sectionBtn} ${
+                open === "cancelled"
+                  ? "bg-cream-line text-deep-green/70"
+                  : "bg-cream text-deep-green/55 ring-1 ring-cream-line hover:bg-cream-line/60"
+              }`}
             >
-              <span className="font-bold">{fmtShort(r.match_date)}</span>{" "}
-              <span className="text-deep-green/55">·</span> {r.city}{" "}
-              <span className="text-deep-green/55">·</span> {r.venue}{" "}
-              <span className="text-deep-green/55">·</span> {r.match_time}{" "}
-              <span className="text-deep-green/55">·</span>{" "}
-              <span className="text-coral-hover">{r.diffs.join(" / ")}</span>
-            </li>
-          ))}
-        </ul>
-      )}
-      {open === "cancelled" && (
-        <ul className="mt-3 space-y-0.5">
-          {cancelledRows.map((r) => (
-            <li
-              key={r.schedule_master_id}
-              className="text-[11px] tabular-nums text-deep-green/75"
-            >
-              <span className="font-bold">{fmtShort(r.match_date)}</span>{" "}
-              <span className="text-deep-green/55">·</span> {r.city}{" "}
-              <span className="text-deep-green/55">·</span> {r.detail}{" "}
-              <span className="text-deep-green/55">·</span> {r.match_time}{" "}
-              <span className="text-deep-green/55">·</span> match #
-              {r.mdapi_match_id}
-            </li>
-          ))}
-        </ul>
+              <span>Cancelled this week ({canc})</span>
+              <span aria-hidden className="opacity-50">
+                {open === "cancelled" ? "−" : "+"}
+              </span>
+            </button>
+            {open === "cancelled" && (
+              <ul className="mt-2 space-y-0.5">
+                {cancelledRows.map((r) => (
+                  <li
+                    key={r.schedule_master_id}
+                    className="text-[11px] tabular-nums text-deep-green/60 line-through decoration-deep-green/30"
+                  >
+                    <span className="font-bold">{fmtShort(r.match_date)}</span>{" "}
+                    <span className="text-deep-green/45">·</span> {r.city}{" "}
+                    <span className="text-deep-green/45">·</span> {r.detail}{" "}
+                    <span className="text-deep-green/45">·</span> {r.match_time}{" "}
+                    <span className="text-deep-green/45">·</span> match #
+                    {r.mdapi_match_id}
+                  </li>
+                ))}
+              </ul>
+            )}
+          </div>
+        )}
+      </div>
+
+      {/* Auto-added from completed matches — quiet line, expandable, per-row Undo. */}
+      {autoCount > 0 && (
+        <div className="mt-2 border-t border-cream-line pt-2">
+          <button
+            type="button"
+            onClick={() => toggle("autoadded")}
+            aria-pressed={open === "autoadded"}
+            className="flex items-center gap-1 text-[11px] font-semibold text-deep-green/55 transition hover:text-deep-green/80"
+          >
+            <span aria-hidden>{open === "autoadded" ? "−" : "+"}</span>
+            {autoCount} auto-added from completed matches
+          </button>
+          {open === "autoadded" && (
+            <ul className="mt-2 space-y-0.5">
+              {autoAddedRows.map((r) => {
+                const busy = busyIds.has(r.match_api_id);
+                return (
+                  <li
+                    key={r.id}
+                    className="flex items-center justify-between gap-2 text-[11px] tabular-nums text-deep-green/70"
+                  >
+                    <span>
+                      <span className="font-bold">{fmtShort(r.match_date)}</span>{" "}
+                      <span className="text-deep-green/55">·</span> {r.city}{" "}
+                      <span className="text-deep-green/55">·</span> {r.venue}{" "}
+                      <span className="text-deep-green/55">·</span> {r.match_time}{" "}
+                      <span className="text-deep-green/55">·</span> match #
+                      {r.match_api_id}
+                    </span>
+                    <button
+                      type="button"
+                      onClick={() => onUndo(r.match_api_id)}
+                      disabled={busy}
+                      className="shrink-0 rounded-full bg-cream px-2 py-0.5 text-[10px] font-bold text-deep-green/70 ring-1 ring-cream-line transition hover:bg-cream-line disabled:opacity-50"
+                    >
+                      {busy ? "…" : "Undo"}
+                    </button>
+                  </li>
+                );
+              })}
+            </ul>
+          )}
+        </div>
       )}
     </div>
   );
