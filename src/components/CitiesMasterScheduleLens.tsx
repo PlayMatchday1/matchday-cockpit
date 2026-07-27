@@ -229,6 +229,7 @@ export default function CitiesMasterScheduleLens({
   const [busyIds, setBusyIds] = useState<Set<number>>(() => new Set());
   // Per-city change chips are collapsed behind the summary by default (§4).
   const [showChanges, setShowChanges] = useState(false);
+  const [reconciling, setReconciling] = useState(false);
   const [loading, setLoading] = useState(true);
   const [error, setError] = useState<string | null>(null);
   const [editor, setEditor] = useState<EditorState>({ kind: "closed" });
@@ -271,13 +272,16 @@ export default function CitiesMasterScheduleLens({
           return null;
         }
       };
-      // Auto-reconcile (§1): the all-cities lens RUNS the job (POST — idempotent,
-      // gated by the kill switch); the per-city embed only READS the heartbeat +
-      // auto-added list (GET, no writes). Failure here must not blank the panel.
+      // Auto-reconcile (§1): the panel only READS state (GET — heartbeat +
+      // auto-added list, never writes). The actual auto-add runs from the hourly
+      // cron so last_success_at measures job health, not when a tab was opened,
+      // and matches never age out of the 14-day window unobserved. An admin can
+      // force an immediate run with the explicit "Reconcile now" button.
+      // Failure here must not blank the panel.
       const fetchReconcile = async (): Promise<ReconcileExtras | null> => {
         try {
           const res = await fetch("/api/schedule-master/reconcile", {
-            method: city ? "GET" : "POST",
+            method: "GET",
             headers,
           });
           if (!res.ok) return null;
@@ -426,6 +430,38 @@ export default function CitiesMasterScheduleLens({
     [withBusy, load, weekStart],
   );
 
+  // Explicit, deliberate immediacy affordance — the only in-app write trigger
+  // for auto-reconcile. Background runs come from the cron; a page load never
+  // writes. Idempotent, so a stray double-click is harmless.
+  const reconcileNow = useCallback(async () => {
+    const { data: sess } = await supabase.auth.getSession();
+    const token = sess.session?.access_token;
+    if (!token) {
+      setToastMsg("No active session.");
+      return;
+    }
+    setReconciling(true);
+    try {
+      const res = await fetch("/api/schedule-master/reconcile", {
+        method: "POST",
+        headers: { Authorization: `Bearer ${token}` },
+      });
+      const j = (await res.json().catch(() => ({}))) as Record<string, unknown>;
+      if (!res.ok) throw new Error((j.error as string) || `HTTP ${res.status}`);
+      if (j.autoreconcileEnabled === false) {
+        setToastMsg("Auto-reconcile is off — nothing added");
+      } else {
+        const n = Number(j.added ?? 0);
+        setToastMsg(n > 0 ? `Reconciled — ${n} added` : "Reconciled — nothing to add");
+      }
+      await load(weekStart);
+    } catch (err) {
+      setToastMsg(err instanceof Error ? err.message : String(err));
+    } finally {
+      setReconciling(false);
+    }
+  }, [load, weekStart]);
+
   const shift = (days: number) => {
     const d = parseIso(weekStart);
     d.setUTCDate(d.getUTCDate() + days);
@@ -452,6 +488,17 @@ export default function CitiesMasterScheduleLens({
             onNext={() => shift(7)}
             onToday={goToday}
           />
+          {!city && (
+            <button
+              type="button"
+              onClick={reconcileNow}
+              disabled={reconciling}
+              title="Auto-add any completed matches missing on Clubhouse now (also runs hourly)"
+              className="inline-flex items-center gap-1 rounded-full border border-cream-line bg-white px-3 py-1 text-xs font-bold text-deep-green/75 transition hover:bg-cream-soft disabled:opacity-50"
+            >
+              {reconciling ? "Reconciling…" : "Reconcile now"}
+            </button>
+          )}
           <button
             type="button"
             onClick={openCreate}
