@@ -52,6 +52,7 @@ type Row = {
   match_time: string;
   max_spots: number;
   mdapi_field_id: number | null;
+  source: string;
 };
 
 type MatchOut = {
@@ -61,6 +62,7 @@ type MatchOut = {
   time: string;
   max_spots: number;
   mdapi_field_id: number | null;
+  source: string;
 };
 
 type DayOut = {
@@ -96,7 +98,7 @@ export async function GET(req: Request) {
   const rowsRes = await supabase
     .from("schedule_master")
     .select(
-      "id, city, venue, detail, match_date, match_time, max_spots, mdapi_field_id",
+      "id, city, venue, detail, match_date, match_time, max_spots, mdapi_field_id, source",
     )
     .gte("match_date", isoDate(weekStart))
     .lte("match_date", isoDate(weekEnd));
@@ -142,6 +144,7 @@ export async function GET(req: Request) {
           time: r.match_time,
           max_spots: r.max_spots,
           mdapi_field_id: r.mdapi_field_id,
+          source: r.source ?? "template",
         })),
       });
     }
@@ -205,7 +208,7 @@ export async function POST(req: Request) {
       mdapi_field_id: payload.mdapi_field_id ?? null,
     })
     .select(
-      "id, city, venue, detail, match_date, match_time, max_spots, mdapi_field_id",
+      "id, city, venue, detail, match_date, match_time, max_spots, mdapi_field_id, source",
     )
     .single();
   if (ins.error || !ins.data) {
