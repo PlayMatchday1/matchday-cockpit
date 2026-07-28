@@ -26,7 +26,7 @@
 // get is_unread=false everywhere and empty mine/starred views.
 
 import { authenticateCrm } from "@/lib/crmAuth";
-import { isAwaitingReply } from "@/lib/awaitingReply";
+import { isAwaitingReply, waitingSinceMs } from "@/lib/awaitingReply";
 
 export const runtime = "nodejs";
 export const maxDuration = 10;
@@ -354,6 +354,85 @@ export async function GET(req: Request) {
     return Date.parse(t.last_message_at) > Date.parse(effective);
   }
 
+  // ---------------- first-response waiting-since (awaiting rows) ----------------
+  // The Chats row cue's SLA clock is anchored on the FIRST inbound of the
+  // current unanswered run — the customer's continuous wait — scoped to the
+  // current episode (latest reopen / auto_reopen, else thread creation). This
+  // is deliberately NOT last_message_at: a customer sending three messages in a
+  // row has waited since the first, and must not be able to reset the SLA by
+  // following up. (The WhatsApp 24h window, computed CLIENT-side from
+  // last_message_at, uses the OPPOSITE anchor on purpose — Meta's window really
+  // does reopen on each inbound. See firstResponseCue.) Computed for awaiting
+  // rows only; the client's crm_messages realtime handler maintains it after
+  // load, so a follow-up inbound never needs a refetch.
+  const awaitingIds = threads.filter((t) => isAwaitingReply(t)).map((t) => t.id);
+  const waitingSinceByThread = new Map<string, string>();
+  if (awaitingIds.length > 0) {
+    // Episode start = latest reopen/auto_reopen per thread, else created_at.
+    const episodeStartMs = new Map<string, number>();
+    const logRes = await supabase
+      .from("crm_thread_status_log")
+      .select("thread_id, performed_at, action")
+      .in("thread_id", awaitingIds)
+      .in("action", ["reopen", "auto_reopen"]);
+    if (logRes.error) {
+      console.error("[crm:threads.list] status-log lookup error", logRes.error);
+    } else {
+      for (const r of (logRes.data ?? []) as {
+        thread_id: string;
+        performed_at: string;
+      }[]) {
+        const ms = Date.parse(r.performed_at);
+        if (!Number.isFinite(ms)) continue;
+        const prev = episodeStartMs.get(r.thread_id);
+        if (prev == null || ms > prev) episodeStartMs.set(r.thread_id, ms);
+      }
+    }
+    // Messages for the awaiting set (paged — a chatty thread can exceed 1000).
+    const msgsByThread = new Map<
+      string,
+      { direction: "inbound" | "outbound"; sentAtMs: number; isAutoReply: boolean }[]
+    >();
+    let mFrom = 0;
+    while (mFrom < 200_000) {
+      const mr = await supabase
+        .from("crm_messages")
+        .select("thread_id, direction, sent_at, is_auto_reply")
+        .in("thread_id", awaitingIds)
+        .order("sent_at", { ascending: true })
+        .range(mFrom, mFrom + INDEX_PAGE - 1);
+      if (mr.error) {
+        console.error("[crm:threads.list] message lookup error", mr.error);
+        break;
+      }
+      const page = (mr.data ?? []) as {
+        thread_id: string;
+        direction: "inbound" | "outbound";
+        sent_at: string;
+        is_auto_reply: boolean | null;
+      }[];
+      for (const m of page) {
+        const arr = msgsByThread.get(m.thread_id) ?? [];
+        arr.push({
+          direction: m.direction,
+          sentAtMs: Date.parse(m.sent_at),
+          isAutoReply: m.is_auto_reply === true,
+        });
+        msgsByThread.set(m.thread_id, arr);
+      }
+      if (page.length < INDEX_PAGE) break;
+      mFrom += INDEX_PAGE;
+    }
+    for (const t of threads) {
+      if (!awaitingIds.includes(t.id)) continue;
+      const epStart = episodeStartMs.get(t.id) ?? Date.parse(t.created_at);
+      const ms = waitingSinceMs(msgsByThread.get(t.id) ?? [], epStart);
+      if (ms != null && Number.isFinite(ms)) {
+        waitingSinceByThread.set(t.id, new Date(ms).toISOString());
+      }
+    }
+  }
+
   const out = threads.map((t) => ({
     ...t,
     player: t.player_id != null ? playersById.get(t.player_id) ?? null : null,
@@ -363,6 +442,8 @@ export async function GET(req: Request) {
         : null,
     is_unread: computeUnread(t),
     is_follow_up: viewerId ? starredThreadIds.has(t.id) : false,
+    // First-response SLA anchor (Decision 2); null for non-awaiting rows.
+    waiting_since: waitingSinceByThread.get(t.id) ?? null,
   }));
 
   // Counts were fired concurrently at the top; await the true values now.

@@ -21,6 +21,15 @@
 import { useCallback, useEffect, useState } from "react";
 import { ChevronDown } from "lucide-react";
 import { supabase } from "@/lib/supabase";
+import { FIRST_RESPONSE_SLA_MINUTES } from "@/lib/businessHours";
+
+// Human label for the SLA target so the card can't drift from the constant:
+// 60 → "1 hour", 30 → "30 min". Change the constant and the words follow.
+const SLA_MIN = FIRST_RESPONSE_SLA_MINUTES;
+const SLA_LABEL =
+  SLA_MIN % 60 === 0
+    ? `${SLA_MIN / 60} hour${SLA_MIN / 60 === 1 ? "" : "s"}`
+    : `${SLA_MIN} min`;
 
 type PeriodKind = "week" | "month" | "all";
 
@@ -258,9 +267,9 @@ export default function ChatsMetricsStrip() {
                 }
               />
 
-              {/* Tile 2 — Answered within 1 hour */}
+              {/* Tile 2 — Answered within the first-response SLA */}
               <Tile
-                label="Answered within 1 hour"
+                label={`Answered within ${SLA_LABEL}`}
                 value={
                   m?.answeredWithin1hPct == null
                     ? "—"
@@ -270,7 +279,7 @@ export default function ChatsMetricsStrip() {
                 loading={loading && !m}
                 sub={
                   m && m.respondedCount > 0
-                    ? `${Math.round((m.answeredWithin1hPct ?? 0) / 100 * m.respondedCount)} of ${m.respondedCount} within 60 min`
+                    ? `${Math.round((m.answeredWithin1hPct ?? 0) / 100 * m.respondedCount)} of ${m.respondedCount} within ${SLA_MIN} min`
                     : undefined
                 }
                 trend={

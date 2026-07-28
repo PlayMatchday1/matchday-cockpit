@@ -70,6 +70,7 @@ import {
   isAwaitingReply,
   isWrappingUp,
   isFreshThreadUpdate,
+  nextWaitingSince,
 } from "@/lib/awaitingReply";
 import AssignDropdown from "./components/AssignDropdown";
 import MessageBubble, {
@@ -114,6 +115,12 @@ type ThreadListRow = {
   // on toggle. (Not a crm_threads column, so realtime crm_threads
   // UPDATEs never carry it — the selective merge preserves it.)
   is_follow_up: boolean;
+  // First-response SLA anchor: sent_at of the first inbound in the current
+  // unanswered run (Decision 2). Null when not awaiting. Also not a
+  // crm_threads column — the crm_messages realtime handler owns it (an
+  // inbound starts/keeps it, a genuine outbound clears it), and the
+  // crm_threads UPDATE merge preserves it via `...x`.
+  waiting_since: string | null;
   player: {
     first_name: string | null;
     last_name: string | null;
@@ -284,6 +291,17 @@ export default function CrmClient() {
   const [threads, setThreads] = useState<ThreadListRow[]>([]);
   const [threadsError, setThreadsError] = useState<string | null>(null);
   const [threadsLoading, setThreadsLoading] = useState(true);
+
+  // One shared clock for the whole list's first-response cues. A single 30s
+  // interval re-renders every row from timestamps already in memory — it does
+  // NOT refetch, hit the network, or touch the realtime channel. (See the
+  // effect below.) Rows read this instead of calling Date.now() themselves so
+  // the cadence is one timer, not one per row.
+  const [nowMs, setNowMs] = useState(() => Date.now());
+  useEffect(() => {
+    const id = window.setInterval(() => setNowMs(Date.now()), 30_000);
+    return () => window.clearInterval(id);
+  }, []);
 
   // Server-computed global per-view counts + a lightweight all-threads
   // index used to recompute counts scoped to the selected cities.
@@ -612,6 +630,16 @@ export default function CrmClient() {
                       last_message_direction: m.direction,
                       last_message_is_template:
                         m.direction === "outbound" && !!m.template_name,
+                      // First-response SLA anchor (Decision 2), owned here for
+                      // the same reason as direction — so it stays correct
+                      // without a refetch. Pure + unit-tested: a follow-up
+                      // inbound keeps the original anchor, a genuine reply
+                      // clears it. (This branch already excludes auto-replies,
+                      // which nextWaitingSince also guards.)
+                      waiting_since: nextWaitingSince(t, {
+                        direction: m.direction,
+                        sentAt: m.sent_at,
+                      }),
                     }
                   : t,
               ),
@@ -667,6 +695,11 @@ export default function CrmClient() {
             return prev.map((x) =>
               x.id === t.id
                 ? {
+                    // `...x` first preserves fields the crm_threads payload
+                    // never carries — is_follow_up AND waiting_since (both
+                    // non-columns). waiting_since is owned by the crm_messages
+                    // handler; a follow-up inbound must NOT move it, so leaving
+                    // it untouched here is exactly right.
                     ...x,
                     last_message_at: t.last_message_at,
                     last_message_preview: t.last_message_preview,
@@ -1348,6 +1381,7 @@ export default function CrmClient() {
                       <InboxRow
                         key={t.id}
                         thread={t as InboxRowThread}
+                        nowMs={nowMs}
                         active={t.id === selectedId}
                         onSelect={() => setSelected(t.id)}
                         onToggleFollowUp={() =>

@@ -2,11 +2,12 @@
 
 import { Star, Check, Undo2 } from "lucide-react";
 import {
-  awaitingReplyState,
+  firstResponseCue,
+  firstResponseCueDescription,
   awaitingAgeLabel,
   isAwaitingReply,
   isWrappingUp,
-  type AwaitingTier,
+  type FirstResponseTier,
 } from "@/lib/awaitingReply";
 
 // Single thread row in the Player Chat inbox. iMessage layout:
@@ -34,6 +35,10 @@ export type InboxRowThread = {
   // heuristic, splits inbound-last threads into Awaiting vs Wrapping up.
   no_reply_needed_at: string | null;
   status: "open" | "closed";
+  // First-response SLA anchor: first inbound of the current unanswered run
+  // (Decision 2). Null when not awaiting. Server-computed, then owned by the
+  // realtime crm_messages handler.
+  waiting_since: string | null;
   player: {
     first_name: string | null;
     last_name: string | null;
@@ -72,22 +77,26 @@ function cityForRow(t: InboxRowThread): string | null {
   return t.player?.preferable_city_normalized ?? null;
 }
 
-// Per-tier visual tokens for the combined awaiting chip + left edge.
-// Green = fresh, amber = free-reply window closing, red = window closed
-// (template required to reply). The closed tier also washes the whole
-// row faintly warm (applied in buttonBg below).
-const TIER_STYLE: Record<AwaitingTier, { edge: string; chip: string }> = {
-  fresh: {
-    edge: "bg-mint",
-    chip: "bg-mint-soft text-deep-green",
+// Per-tier visual tokens for the single first-response ladder (edge + chip).
+// Severity is the max of the SLA axis and the WhatsApp-window axis, so it
+// only ever climbs; the CHIP TEXT (not the color) always carries the meaning.
+//   neutral  — no edge, muted chip (elapsed business time).
+//   warm     — amber edge + tinted amber chip.
+//   breached — red edge + SOLID red chip (SLA over, OR window closing/closed;
+//              the label distinguishes which). Reuses the existing amber-*/
+//              red-* vocabulary — no new tokens.
+const CUE_STYLE: Record<FirstResponseTier, { edge: string; chip: string }> = {
+  neutral: {
+    edge: "",
+    chip: "bg-cream-line/60 text-muted",
   },
-  closing: {
+  warm: {
     edge: "bg-amber-400",
     chip: "bg-amber-50 text-amber-700 border border-amber-200",
   },
-  closed: {
+  breached: {
     edge: "bg-red-500",
-    chip: "bg-red-50 text-red-700 border border-red-200",
+    chip: "bg-red-600 text-white",
   },
 };
 
@@ -110,10 +119,10 @@ function answeredLabel(t: InboxRowThread, nowMs: number): string {
 }
 
 // Compact timestamp: "now", "5m", "3h", "2d", or a M/D date.
-function timeAgoCompact(iso: string): string {
+function timeAgoCompact(iso: string, nowMs: number): string {
   const then = Date.parse(iso);
   if (Number.isNaN(then)) return "";
-  const diff = Math.max(0, Math.floor((Date.now() - then) / 1000));
+  const diff = Math.max(0, Math.floor((nowMs - then) / 1000));
   if (diff < 45) return "now";
   if (diff < 3600) return `${Math.floor(diff / 60)}m`;
   if (diff < 86400) return `${Math.floor(diff / 3600)}h`;
@@ -126,6 +135,7 @@ function timeAgoCompact(iso: string): string {
 
 export default function InboxRow({
   thread,
+  nowMs = Date.now(),
   active,
   onSelect,
   onToggleFollowUp,
@@ -136,6 +146,9 @@ export default function InboxRow({
   onToggleSelect,
 }: {
   thread: InboxRowThread;
+  // Shared list clock (one 30s tick in CrmClient). Defaulted so other
+  // callers / tests need not thread it through.
+  nowMs?: number;
   active: boolean;
   onSelect: () => void;
   onToggleFollowUp: () => void;
@@ -156,7 +169,17 @@ export default function InboxRow({
   const initials = initialsOf(name);
   const city = cityForRow(thread);
   const isMember = thread.player?.is_member === true;
-  const rawPreview = thread.last_message_preview ?? "(no messages)";
+  // Preview slot. An inbound with no text body (WhatsApp location, contact,
+  // reaction, or an unhandled type — the webhook's previewFor returns "" for
+  // these) gets a neutral descriptor instead of "(no messages)", which reads
+  // as broken. These are exactly the rows the cue must still fire on (see
+  // `awaiting` below), so they must not look empty.
+  const hasPreview = !!thread.last_message_preview;
+  const rawPreview = hasPreview
+    ? thread.last_message_preview!
+    : thread.last_message_direction === "inbound"
+      ? "Media message"
+      : "(no messages)";
   const preview =
     thread.last_message_direction === "outbound"
       ? `You: ${rawPreview}`
@@ -167,43 +190,42 @@ export default function InboxRow({
   //   wrappingUp — customer spoke last but it's an acknowledgment or was
   //                marked no-reply-needed → muted, "Reply anyway"
   //   answered   — we spoke last
-  const nowMs = Date.now();
-  const awaiting = isAwaitingReply(thread) && !!thread.last_message_preview;
+  // The cue fires on EXACTLY the isAwaitingReply population — the same
+  // predicate as the "Awaiting now" card and the list grouping, no extra
+  // gate. A text-less inbound (photo/voice/location/sticker) is precisely
+  // when a player is stuck and needs an answer, so it must show the cue.
+  const awaiting = isAwaitingReply(thread);
   const wrappingUp = isWrappingUp(thread);
-  const state = awaiting
-    ? awaitingReplyState(thread.last_message_at, nowMs)
+  // The single first-response ladder: SLA business-minutes (anchored on
+  // waiting_since — the first inbound of the current run) maxed with the
+  // WhatsApp free-reply window (real hours from last_message_at). See
+  // firstResponseCue for why the two anchors differ on purpose.
+  const cue = awaiting
+    ? firstResponseCue(thread.waiting_since, thread.last_message_at, nowMs)
     : null;
-  const tierStyle = state ? TIER_STYLE[state.tier] : null;
-  // Right-slot label: awaiting → colored age chip; answered (we spoke
-  // last) → quiet "replied/template sent"; otherwise plain time.
+  const cueStyle = cue ? CUE_STYLE[cue.tier] : null;
+  // Right-slot label: awaiting → the ladder chip; answered (we spoke last)
+  // → quiet "replied/template sent"; otherwise plain time.
   const answered =
     !awaiting && !wrappingUp && thread.last_message_direction === "outbound";
-  const timeLabel = timeAgoCompact(thread.last_message_at);
+  const timeLabel = timeAgoCompact(thread.last_message_at, nowMs);
   const asg = assigneeLabel(thread.assignee);
 
-  // ONE combined chip, kept to a single line in the narrow list: age +
-  // the SHORT qualifier, e.g. "18h · closing", "5d · template required",
-  // or just "1m" when fresh. The full wording ("window closed — template
-  // required") rides in the chip's title tooltip.
-  const chipText = state
-    ? state.shortNote
-      ? `${state.ageLabel} · ${state.shortNote}`
-      : state.ageLabel
-    : null;
-
+  // Only the window-CLOSED tier washes the row (preserves the strongest,
+  // money-critical Meta signal — a template is required to reply at all).
   const buttonBg = active
     ? "bg-cream-soft"
-    : state?.tier === "closed"
+    : cue?.reason === "window-closed"
       ? "bg-red-50/40 hover:bg-red-50/70"
       : "bg-white hover:bg-cream-soft/60";
 
   return (
     <li className="relative flex items-stretch">
-      {/* Escalation edge — colored only while awaiting our reply. */}
-      {tierStyle && (
+      {/* Escalation edge — only from warm upward; neutral shows no edge. */}
+      {cueStyle?.edge && (
         <span
           aria-hidden
-          className={`absolute left-0 top-0 bottom-0 z-10 w-[3px] ${tierStyle.edge}`}
+          className={`absolute left-0 top-0 bottom-0 z-10 w-[3px] ${cueStyle.edge}`}
         />
       )}
       {selectable && (
@@ -229,6 +251,10 @@ export default function InboxRow({
         type="button"
         onClick={onSelect}
         style={{ touchAction: "manipulation" }}
+        // Awaiting rows carry the wait state in words for screen readers, so
+        // the color is never the only signal. Name is kept so the row is
+        // still identifiable by voice.
+        aria-label={cue ? `${name}. ${firstResponseCueDescription(cue)}` : undefined}
         className={`flex min-w-0 flex-1 items-start gap-3 py-3.5 pr-10 text-left transition ${
           selectable ? "pl-2" : "pl-3.5 sm:pl-4"
         } ${buttonBg}`}
@@ -291,11 +317,12 @@ export default function InboxRow({
             the rest, so the chip can never overflow leftward over the
             name. */}
         <div className="flex shrink-0 flex-col items-end gap-1.5 text-right">
-          {awaiting && state && tierStyle ? (
+          {awaiting && cue && cueStyle ? (
             <span
-              className={`whitespace-nowrap rounded-lg px-2 py-0.5 text-[10.5px] font-bold ${tierStyle.chip}`}
+              title={firstResponseCueDescription(cue)}
+              className={`whitespace-nowrap rounded-lg px-2 py-0.5 text-[10.5px] font-bold ${cueStyle.chip}`}
             >
-              {chipText}
+              {cue.label}
             </span>
           ) : wrappingUp ? (
             <span className="whitespace-nowrap rounded-lg bg-cream-line/60 px-2 py-0.5 text-[10.5px] font-semibold text-deep-green/45">

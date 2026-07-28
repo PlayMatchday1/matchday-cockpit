@@ -42,6 +42,13 @@ export const DEFAULT_BUSINESS_HOURS: BusinessHoursConfig = {
   tz: BUSINESS_TZ,
 };
 
+// First-response SLA target, in BUSINESS minutes. Single source of truth:
+// the "Answered within 1 hour" KPI card (its ≤ threshold AND its label), and
+// the Chats inbox first-response row cue derive its 50% / 100% escalation
+// boundaries from this. Change it here and both move together — a future value
+// of 30 must not leave the card still reading "1 hour".
+export const FIRST_RESPONSE_SLA_MINUTES = 60;
+
 const MINUTE_MS = 60_000;
 const DAY_MS = 24 * 60 * 60 * 1000;
 

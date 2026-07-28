@@ -16,6 +16,7 @@ import {
   type BusinessHoursConfig,
   DEFAULT_BUSINESS_HOURS,
   BUSINESS_TZ,
+  FIRST_RESPONSE_SLA_MINUTES,
 } from "./businessHours";
 
 // Minimal message shape the metrics need. `sentAtMs` is crm_messages
@@ -316,7 +317,9 @@ export function computePeriodMetrics(
 
   const respondedCount = responseMinutes.length;
   const medianFirstResponseMin = median(responseMinutes);
-  const within1h = responseMinutes.filter((m) => m <= 60).length;
+  const within1h = responseMinutes.filter(
+    (m) => m <= FIRST_RESPONSE_SLA_MINUTES,
+  ).length;
   const answeredWithin1hPct =
     respondedCount === 0 ? null : (within1h / respondedCount) * 100;
 
