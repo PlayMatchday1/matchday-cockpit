@@ -27,28 +27,6 @@ export const AWAITING_WINDOW_CLOSED_HOURS = 24;
 
 const HOUR_MS = 60 * 60 * 1000;
 
-export type AwaitingTier = "fresh" | "closing" | "closed";
-
-export type AwaitingState = {
-  tier: AwaitingTier;
-  // Whole-hours since the customer's last message. Handy for tests and
-  // any caller that wants the raw age without re-parsing.
-  ageHours: number;
-  // Compact age for the row chip: "45m", "18h", "2d".
-  ageLabel: string;
-  // Full qualifier — used in tooltips and wider surfaces.
-  //   closing → "window closing"
-  //   closed  → "window closed — template required"
-  //   fresh   → "" (age alone reads fine)
-  note: string;
-  // One-line qualifier for the narrow list chip, so the combined
-  // "age · note" never wraps and crushes the name.
-  //   closing → "closing"
-  //   closed  → "template required"
-  //   fresh   → ""
-  shortNote: string;
-};
-
 // Compact, human age. Minutes under an hour, hours up to two days (so a
 // 27-hour-old thread still reads "27h", matching the mock's intent that
 // the closed-window hours stay legible), then days.
@@ -242,39 +220,6 @@ export function isFreshThreadUpdate(
   const b = Date.parse(incomingLastAt);
   if (Number.isNaN(a) || Number.isNaN(b)) return true;
   return b >= a;
-}
-
-// Escalation tier for an unanswered inbound of the given age. Boundaries
-// are inclusive at the top: exactly 12h is already "closing", exactly
-// 24h is already "closed" — erring toward surfacing urgency sooner.
-export function awaitingReplyState(
-  lastInboundIso: string,
-  nowMs: number,
-): AwaitingState {
-  const then = Date.parse(lastInboundIso);
-  const ageMs = Number.isNaN(then) ? 0 : Math.max(0, nowMs - then);
-  const ageHours = ageMs / HOUR_MS;
-  const ageLabel = awaitingAgeLabel(lastInboundIso, nowMs);
-
-  if (ageHours >= AWAITING_WINDOW_CLOSED_HOURS) {
-    return {
-      tier: "closed",
-      ageHours,
-      ageLabel,
-      note: "window closed — template required",
-      shortNote: "template required",
-    };
-  }
-  if (ageHours >= AWAITING_WINDOW_CLOSING_HOURS) {
-    return {
-      tier: "closing",
-      ageHours,
-      ageLabel,
-      note: "window closing",
-      shortNote: "closing",
-    };
-  }
-  return { tier: "fresh", ageHours, ageLabel, note: "", shortNote: "" };
 }
 
 // ============================================================
