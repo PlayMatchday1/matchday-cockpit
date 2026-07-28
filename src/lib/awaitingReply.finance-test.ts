@@ -15,7 +15,16 @@ import {
   isFreshThreadUpdate,
   AWAITING_WINDOW_CLOSING_HOURS,
   AWAITING_WINDOW_CLOSED_HOURS,
+  waitingSinceMs,
+  firstResponseCue,
+  firstResponseCueDescription,
+  nextWaitingSince,
+  type CueMessage,
 } from "./awaitingReply";
+import {
+  zonedWallClockToUtcMs,
+  FIRST_RESPONSE_SLA_MINUTES,
+} from "./businessHours";
 
 const NOW = Date.parse("2026-07-22T18:00:00Z");
 const hoursAgo = (h: number) => new Date(NOW - h * 3600_000).toISOString();
@@ -277,4 +286,189 @@ test("backward-compat: callers passing only status+direction keep old behavior",
     isAwaitingReply({ status: "open", last_message_direction: "outbound" }),
     false,
   );
+});
+
+// ============================================================
+// First-response cue — the SLA ↔ window ladder (Decision 1)
+// ============================================================
+// Central wall-clock → UTC ms. February = CST (UTC-6), no DST edge in play.
+const ct = (y: number, mo: number, d: number, h: number, mi = 0) =>
+  zonedWallClockToUtcMs(y, mo, d, h, mi);
+const approx = (a: number, b: number, tol = 0.5) => Math.abs(a - b) <= tol;
+
+test("cue: overnight wait counts BUSINESS minutes, not wall-clock hours", () => {
+  // Inbound 8:50pm, evaluated 9:10am next day. Business time = 10m (8:50–9pm)
+  // + 10m (9–9:10am) = ~20m, NOT ~12h. (The 12h20m real gap also puts it past
+  // the window — asserted separately below; here we pin the minute count.)
+  const waiting = ct(2026, 2, 10, 20, 50);
+  const now = ct(2026, 2, 11, 9, 10);
+  const cue = firstResponseCue(waiting, waiting, now)!;
+  assert.ok(approx(cue.elapsedBusinessMinutes, 20), `got ${cue.elapsedBusinessMinutes}`);
+});
+
+test("cue: neutral vs warm vs breached thresholds derive from the SLA constant", () => {
+  const start = ct(2026, 2, 10, 10, 0); // 10:00am, deep inside business hours
+  const at = (mins: number) => firstResponseCue(start, start, start + mins * 60_000)!;
+  assert.equal(at(FIRST_RESPONSE_SLA_MINUTES * 0.5 - 1).tier, "neutral");
+  assert.equal(at(FIRST_RESPONSE_SLA_MINUTES * 0.5).tier, "warm");
+  assert.equal(at(FIRST_RESPONSE_SLA_MINUTES - 1).tier, "warm");
+  assert.equal(at(FIRST_RESPONSE_SLA_MINUTES).tier, "breached");
+  assert.equal(at(4).label, "4m");
+  assert.equal(at(72).label, "1h 12m");
+  assert.equal(at(10).reason, "sla");
+});
+
+test("cue: warm on SLA but past the 12h window resolves red / window-closing", () => {
+  // First inbound 8:20pm, last inbound 8:30pm, evaluated 9:00am next day.
+  // SLA elapsed = 40 business min (warm), but the window is 12.5h → closing.
+  // Severity is the max: red, and the chip text is the window fact.
+  const waiting = ct(2026, 2, 10, 20, 20);
+  const lastInbound = ct(2026, 2, 10, 20, 30);
+  const now = ct(2026, 2, 11, 9, 0);
+  const cue = firstResponseCue(waiting, lastInbound, now)!;
+  assert.ok(approx(cue.elapsedBusinessMinutes, 40), `elapsed ${cue.elapsedBusinessMinutes}`);
+  assert.equal(cue.tier, "breached");
+  assert.equal(cue.reason, "window-closing");
+  assert.match(cue.label, /window$/);
+});
+
+test("cue: past 24h window → template, regardless of SLA", () => {
+  const waiting = ct(2026, 2, 10, 10, 0);
+  const lastInbound = ct(2026, 2, 10, 8, 0); // 25h before now
+  const now = ct(2026, 2, 11, 9, 0);
+  const cue = firstResponseCue(waiting, lastInbound, now)!;
+  assert.equal(cue.tier, "breached");
+  assert.equal(cue.reason, "window-closed");
+  assert.equal(cue.label, "template");
+  assert.match(firstResponseCueDescription(cue), /template is required/);
+});
+
+test("cue: paused outside business hours — elapsed is frozen", () => {
+  // Inbound 8:50pm; evaluated at 9:30pm and again at 11:00pm. Nothing accrues
+  // after the 9pm close, so the two readings are identical (~10 business min).
+  const waiting = ct(2026, 2, 10, 20, 50);
+  const a = firstResponseCue(waiting, waiting, ct(2026, 2, 10, 21, 30))!;
+  const b = firstResponseCue(waiting, waiting, ct(2026, 2, 10, 23, 0))!;
+  assert.equal(a.elapsedBusinessMinutes, b.elapsedBusinessMinutes);
+  assert.ok(approx(a.elapsedBusinessMinutes, 10), `got ${a.elapsedBusinessMinutes}`);
+  assert.equal(a.tier, "neutral"); // window healthy, < 50% SLA
+});
+
+test("cue: null waitingSince → no cue", () => {
+  assert.equal(firstResponseCue(null, "2026-02-10T10:00:00Z", Date.now()), null);
+});
+
+test("waitingSince: anchors on the FIRST inbound of a multi-message run", () => {
+  const ep = ct(2026, 2, 10, 9, 0);
+  const msgs: CueMessage[] = [
+    { direction: "inbound", sentAtMs: ct(2026, 2, 10, 10, 0) },
+    { direction: "inbound", sentAtMs: ct(2026, 2, 10, 10, 15) },
+    { direction: "inbound", sentAtMs: ct(2026, 2, 10, 10, 30) },
+  ];
+  assert.equal(waitingSinceMs(msgs, ep), ct(2026, 2, 10, 10, 0));
+});
+
+test("waitingSince: first inbound AFTER our last genuine reply (auto-reply ignored)", () => {
+  const ep = ct(2026, 2, 10, 9, 0);
+  const msgs: CueMessage[] = [
+    { direction: "inbound", sentAtMs: ct(2026, 2, 10, 9, 30) },
+    { direction: "outbound", sentAtMs: ct(2026, 2, 10, 9, 45), isAutoReply: true }, // greeting: ignored
+    { direction: "outbound", sentAtMs: ct(2026, 2, 10, 10, 0) }, // real reply
+    { direction: "inbound", sentAtMs: ct(2026, 2, 10, 11, 0) }, // new wait starts here
+    { direction: "inbound", sentAtMs: ct(2026, 2, 10, 11, 20) },
+  ];
+  assert.equal(waitingSinceMs(msgs, ep), ct(2026, 2, 10, 11, 0));
+});
+
+test("waitingSince: reopened thread starts at the reopen, not the original inbound", () => {
+  const reopenMs = ct(2026, 2, 11, 11, 0);
+  const msgs: CueMessage[] = [
+    { direction: "inbound", sentAtMs: ct(2026, 2, 10, 10, 0) }, // original contact
+    { direction: "outbound", sentAtMs: ct(2026, 2, 10, 10, 30) }, // answered, then closed
+    { direction: "inbound", sentAtMs: reopenMs }, // reopen inbound
+  ];
+  // Episode scoped to the reopen: pre-reopen messages are excluded.
+  assert.equal(waitingSinceMs(msgs, reopenMs), reopenMs);
+});
+
+// ============================================================
+// nextWaitingSince — realtime maintenance of the SLA anchor (Decision 2).
+// The highest-risk regression: if a new inbound moved the anchor, a customer
+// could reset their own clock and the UI would still look correct.
+// ============================================================
+const T0 = "2026-02-10T16:00:00.000Z"; // first inbound
+const T1 = "2026-02-10T16:20:00.000Z"; // a later message
+
+test("nextWaitingSince: a SECOND inbound on an already-waiting thread does NOT move the anchor", () => {
+  const prev = {
+    status: "open" as const,
+    last_message_direction: "inbound" as const,
+    waiting_since: T0,
+  };
+  const next = nextWaitingSince(prev, { direction: "inbound", sentAt: T1 });
+  assert.equal(next, T0, "follow-up inbound must keep the first unanswered inbound");
+});
+
+test("nextWaitingSince: an operator outbound clears the anchor to null (cue removed)", () => {
+  const prev = {
+    status: "open" as const,
+    last_message_direction: "inbound" as const,
+    waiting_since: T0,
+  };
+  assert.equal(nextWaitingSince(prev, { direction: "outbound", sentAt: T1 }), null);
+});
+
+test("nextWaitingSince: an is_auto_reply outbound does NOT clear the anchor", () => {
+  const prev = {
+    status: "open" as const,
+    last_message_direction: "inbound" as const,
+    waiting_since: T0,
+  };
+  const next = nextWaitingSince(prev, {
+    direction: "outbound",
+    sentAt: T1,
+    isAutoReply: true,
+  });
+  assert.equal(next, T0, "the courtesy greeting must not stop the customer's clock");
+});
+
+test("nextWaitingSince: an inbound on a CLOSED thread (auto_reopen) anchors to that inbound", () => {
+  // A closed thread carries a stale waiting_since from before it was closed;
+  // the reopen inbound must start a fresh wait, not resurrect the old anchor.
+  const prev = {
+    status: "closed" as const,
+    last_message_direction: "inbound" as const,
+    waiting_since: "2026-02-01T10:00:00.000Z", // stale, pre-close
+  };
+  assert.equal(nextWaitingSince(prev, { direction: "inbound", sentAt: T1 }), T1);
+});
+
+test("nextWaitingSince: an inbound on an ANSWERED (outbound-last) thread starts a new wait", () => {
+  const prev = {
+    status: "open" as const,
+    last_message_direction: "outbound" as const,
+    waiting_since: null,
+  };
+  assert.equal(nextWaitingSince(prev, { direction: "inbound", sentAt: T1 }), T1);
+});
+
+test("cue fires for an awaiting thread with an EMPTY preview (no preview gate)", () => {
+  // The row's cue condition is exactly isAwaitingReply(thread) — a text-less
+  // inbound (location/photo/voice) is still awaiting and must render a cue.
+  const thread = {
+    status: "open" as const,
+    last_message_direction: "inbound" as const,
+    last_message_preview: "", // empty — the old gate suppressed this
+    last_message_at: new Date(ct(2026, 2, 10, 10, 40)).toISOString(),
+    no_reply_needed_at: null,
+  };
+  assert.equal(isAwaitingReply(thread), true, "empty preview must not suppress awaiting");
+  const waiting = ct(2026, 2, 10, 10, 0);
+  const cue = firstResponseCue(
+    new Date(waiting).toISOString(),
+    thread.last_message_at,
+    ct(2026, 2, 10, 10, 40), // 40 business min later, window healthy → warm
+  )!;
+  assert.equal(cue.tier, "warm");
+  assert.equal(cue.label, "40m");
 });
