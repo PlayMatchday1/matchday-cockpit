@@ -19,7 +19,7 @@ import {
 } from "@/lib/community";
 import {
   loadAlreadyPosted,
-  loadCityLinks,
+  loadCommunityMaps,
   loadCommunitySettings,
   loadRecentlyFinishedMatches,
   markHeartbeatAttempt,
@@ -85,8 +85,8 @@ export async function POST(req: Request) {
   if (!dry) await markHeartbeatAttempt(supabase);
 
   try {
-    const [links, settings, matches] = await Promise.all([
-      loadCityLinks(supabase),
+    const [maps, settings, matches] = await Promise.all([
+      loadCommunityMaps(supabase),
       loadCommunitySettings(supabase),
       loadRecentlyFinishedMatches(supabase, sinceIso, untilIso),
     ]);
@@ -95,7 +95,7 @@ export async function POST(req: Request) {
       matches.map((m) => m.api_id),
     );
 
-    const decisions = classifyCommunityMatches(matches, links, {
+    const decisions = classifyCommunityMatches(matches, maps, {
       nowMs,
       cutoffMs,
       lookbackHours: COMMUNITY_LOOKBACK_HOURS,
@@ -112,7 +112,9 @@ export async function POST(req: Request) {
       ...new Set(
         decisions
           .filter((d) =>
-            ["city_inactive", "city_no_url", "city_not_configured"].includes(d.reason),
+            ["city_inactive", "city_no_url", "city_not_configured", "field_unassigned"].includes(
+              d.reason,
+            ),
           )
           .map((d) => d.cityCode ?? "?"),
       ),
@@ -135,6 +137,8 @@ export async function POST(req: Request) {
           wouldPost: eligible.map((d) => ({
             apiId: d.apiId,
             city: d.cityCode,
+            communityId: d.communityId,
+            community: d.communityName,
             displayName: d.displayName,
             endDateUtc: d.endDateUtc,
             messages: [d.copyText, d.urlText],
@@ -177,6 +181,7 @@ export async function POST(req: Request) {
           cityCode: d.cityCode!,
           displayName: d.displayName!,
           url: d.urlText!,
+          communityId: d.communityId,
         });
         if (res.freshlyPosted) posted++;
         else alreadyThere++;
