@@ -11,6 +11,16 @@
 import { useRouter, useSearchParams } from "next/navigation";
 import { useCallback, useEffect, useMemo, useState } from "react";
 import { supabase } from "@/lib/supabase";
+import {
+  buildGustoRows,
+  gustoCsvFromRows,
+  findGustoNameConflicts,
+  gustoAliasSummary,
+  type GustoAliasMap,
+  type GustoConflict,
+  type GustoSummary,
+  type GustoRow,
+} from "@/lib/gustoCsv";
 
 // ---------------------------------------------------------------
 // Types — mirror /api/manager-pay/week response.
@@ -123,6 +133,15 @@ type Payload = {
   };
 };
 
+// Save (or clear, when both names blank) one Gusto alias. Resolves to an
+// error string on failure, null on success.
+type OnSaveAlias = (
+  managerEmail: string,
+  firstName: string,
+  lastName: string,
+  note: string | null,
+) => Promise<string | null>;
+
 type ViewMode = "calendar" | "table";
 type CityFilter = "ALL" | string;
 
@@ -199,49 +218,8 @@ function formatMoney(n: number): string {
   });
 }
 
-function csvCell(value: string | number): string {
-  const s = String(value);
-  if (/[",\n]/.test(s)) return `"${s.replace(/"/g, '""')}"`;
-  return s;
-}
-
-function buildGustoCsv(payload: Payload, cityFilter: CityFilter): string {
-  // Column set matches Gusto's contractor CSV import format exactly.
-  // "Fixed amount" header is case-sensitive (lowercase 'a') per
-  // Gusto's docs — uppercase 'Amount' causes their import to
-  // unmatch the column and require manual mapping. Pay Date and
-  // Earnings Type were previously included for operator reference
-  // but Gusto's importer rejects them as unknown columns; the pay
-  // date is selected per-batch inside Gusto itself and the
-  // earnings type defaults to the contractor's configured one.
-  const header = [
-    "First Name",
-    "Last Name",
-    "Email",
-    "Fixed amount",
-    "Memo",
-  ];
-  const lines: string[] = [header.map(csvCell).join(",")];
-  for (const city of payload.cities) {
-    if (cityFilter !== "ALL" && city.cityIdentifier !== cityFilter) continue;
-    for (const m of city.managers) {
-      if (m.total === 0) continue;
-      const [first, ...rest] = m.managerName.split(" ");
-      const last = rest.join(" ");
-      const memo = `${m.matchCount} match${m.matchCount === 1 ? "" : "es"} · ${city.cityIdentifier} · week of ${payload.weekStart}`;
-      lines.push(
-        [
-          csvCell(first ?? ""),
-          csvCell(last ?? ""),
-          csvCell(m.managerEmail ?? ""),
-          csvCell(m.total.toFixed(2)),
-          csvCell(memo),
-        ].join(","),
-      );
-    }
-  }
-  return lines.join("\r\n") + "\r\n";
-}
+// CSV building + the alias-substitution / duplicate-name safety checks now
+// live in the pure, unit-tested @/lib/gustoCsv. The view only orchestrates.
 
 function downloadCsv(filename: string, content: string) {
   const blob = new Blob([content], { type: "text/csv;charset=utf-8" });
@@ -371,11 +349,94 @@ export default function ManagersView() {
     [weekStart],
   );
 
-  const downloadGusto = () => {
+  // ---- Gusto name aliases (admin only) ----
+  const [aliasMap, setAliasMap] = useState<GustoAliasMap>({});
+  useEffect(() => {
+    if (!isAdmin) {
+      setAliasMap({});
+      return;
+    }
+    let cancelled = false;
+    (async () => {
+      const { data: sessionData } = await supabase.auth.getSession();
+      const token = sessionData.session?.access_token;
+      if (!token) return;
+      try {
+        const res = await fetch("/api/manager-pay/aliases", {
+          headers: { Authorization: `Bearer ${token}` },
+          cache: "no-store",
+        });
+        if (!res.ok) return;
+        const json = await res.json();
+        if (!cancelled) setAliasMap((json.aliases ?? {}) as GustoAliasMap);
+      } catch {
+        /* aliases are optional; a failure just means no substitutions */
+      }
+    })();
+    return () => {
+      cancelled = true;
+    };
+  }, [isAdmin, refreshKey]);
+
+  // Save (PUT) or clear (DELETE, when both names blank) one alias. Returns
+  // an error string on failure, null on success — the inline editor renders it.
+  const onSaveAlias = useCallback(
+    async (
+      managerEmail: string,
+      firstName: string,
+      lastName: string,
+      note: string | null,
+    ): Promise<string | null> => {
+      const { data: sessionData } = await supabase.auth.getSession();
+      const token = sessionData.session?.access_token;
+      if (!token) return "No active session.";
+      const clearing = !firstName.trim() && !lastName.trim();
+      const res = await fetch(
+        `/api/manager-pay/aliases${clearing ? `?email=${encodeURIComponent(managerEmail.toLowerCase())}` : ""}`,
+        {
+          method: clearing ? "DELETE" : "PUT",
+          headers: {
+            "Content-Type": "application/json",
+            Authorization: `Bearer ${token}`,
+          },
+          body: clearing
+            ? undefined
+            : JSON.stringify({ managerEmail, firstName, lastName, note }),
+        },
+      );
+      const json = await res.json().catch(() => ({}));
+      if (!res.ok) return (json?.error as string) ?? `HTTP ${res.status}`;
+      setRefreshKey((k) => k + 1);
+      return null;
+    },
+    [],
+  );
+
+  // Gusto download is two-step: a preview (summary + substitutions +
+  // duplicate-name check) is shown BEFORE the file is generated. The
+  // download is blocked while any two rows share a First+Last.
+  const [gustoPreview, setGustoPreview] = useState<{
+    rows: GustoRow[];
+    summary: GustoSummary;
+    conflicts: GustoConflict[];
+  } | null>(null);
+
+  const openGustoPreview = () => {
     if (!payload) return;
-    const csv = buildGustoCsv(payload, cityFilter);
+    const rows = buildGustoRows(payload, cityFilter, aliasMap);
+    setGustoPreview({
+      rows,
+      summary: gustoAliasSummary(rows),
+      conflicts: findGustoNameConflicts(rows),
+    });
+  };
+
+  const confirmGustoDownload = () => {
+    if (!payload || !gustoPreview || gustoPreview.conflicts.length > 0) return;
+    const csv = gustoCsvFromRows(gustoPreview.rows);
     const suffix = cityFilter === "ALL" ? "" : `-${cityFilter}`;
     downloadCsv(`match-manager-pay-${payload.weekStart}${suffix}.csv`, csv);
+    setGustoPreview(null);
   };
 
   // Filtered cities + network totals based on cityFilter.
@@ -516,7 +577,7 @@ export default function ManagersView() {
           {isAdmin && (
             <button
               type="button"
-              onClick={downloadGusto}
+              onClick={openGustoPreview}
               disabled={!payload || visibleTotals.total === 0}
               className="rounded-full bg-mint px-4 py-1.5 text-xs font-bold text-deep-green transition hover:bg-mint-hover disabled:opacity-50"
             >
@@ -568,6 +629,8 @@ export default function ManagersView() {
               weekStart={weekStart}
               isAdmin={isAdmin}
               onSaveAdjustment={onSaveAdjustment}
+              aliasMap={aliasMap}
+              onSaveAlias={onSaveAlias}
             />
           ) : (
             <TableView
@@ -576,11 +639,117 @@ export default function ManagersView() {
               network={visibleTotals}
               isAdmin={isAdmin}
               onSaveAdjustment={onSaveAdjustment}
+              aliasMap={aliasMap}
             />
           )}
         </>
       )}
+
+      {gustoPreview && (
+        <GustoPreviewModal
+          weekStart={payload?.weekStart ?? weekStart}
+          cityFilter={cityFilter}
+          preview={gustoPreview}
+          onCancel={() => setGustoPreview(null)}
+          onConfirm={confirmGustoDownload}
+        />
+      )}
     </>
+  );
+}
+
+// Pre-download summary. Shows the export size, how many rows are aliased, and
+// the full from → to list BEFORE the file exists. If any two rows would carry
+// the same First+Last, the download is blocked and the collision is named.
+function GustoPreviewModal({
+  weekStart,
+  cityFilter,
+  preview,
+  onCancel,
+  onConfirm,
+}: {
+  weekStart: string;
+  cityFilter: CityFilter;
+  preview: { rows: GustoRow[]; summary: GustoSummary; conflicts: GustoConflict[] };
+  onCancel: () => void;
+  onConfirm: () => void;
+}) {
+  const { summary, conflicts } = preview;
+  const blocked = conflicts.length > 0;
+  return (
+    <div
+      className="fixed inset-0 z-50 flex items-center justify-center bg-deep-green/40 p-4"
+      onClick={onCancel}
+    >
+      <div
+        className="max-h-[85vh] w-full max-w-lg overflow-y-auto rounded-2xl border-[1.5px] border-cream-line bg-white p-5 shadow-xl"
+        onClick={(e) => e.stopPropagation()}
+      >
+        <h2 className="text-base font-bold text-deep-green">
+          Gusto CSV — {cityFilter === "ALL" ? "all cities" : cityFilter} · week of {weekStart}
+        </h2>
+        <p className="mt-1 text-sm text-deep-green/70">
+          <span className="font-bold tabular-nums">{summary.total}</span>{" "}
+          manager{summary.total === 1 ? "" : "s"} in this export ·{" "}
+          <span className="font-bold tabular-nums">{summary.aliasedCount}</span> using a Gusto alias.
+        </p>
+
+        {summary.substitutions.length > 0 ? (
+          <div className="mt-3">
+            <div className="text-[10px] font-bold uppercase tracking-[0.12em] text-deep-green/55">
+              Name substitutions (from → to)
+            </div>
+            <ul className="mt-1 space-y-0.5">
+              {summary.substitutions.map((s) => (
+                <li key={s.email} className="text-[13px] text-deep-green/80">
+                  {s.from} <span className="text-deep-green/40">→</span>{" "}
+                  <span className="font-semibold">{s.to}</span>
+                </li>
+              ))}
+            </ul>
+          </div>
+        ) : (
+          <p className="mt-3 text-[13px] text-deep-green/50">
+            No aliases in effect — names come straight from the schedule.
+          </p>
+        )}
+
+        {blocked && (
+          <div className="mt-4 rounded-xl border-[1.5px] border-coral/50 bg-coral/5 p-3">
+            <div className="text-[11px] font-bold uppercase tracking-[0.1em] text-coral">
+              Download blocked — duplicate names
+            </div>
+            {conflicts.map((c) => (
+              <div key={c.name} className="mt-1 text-[13px] text-coral">
+                Two rows would both be{" "}
+                <span className="font-bold">&ldquo;{c.name}&rdquo;</span>:{" "}
+                {c.rows.map((r) => r.email || "(no email)").join(" and ")}. A duplicate
+                name in a payroll import pays one person twice and another not at all.
+              </div>
+            ))}
+          </div>
+        )}
+
+        <div className="mt-5 flex justify-end gap-2">
+          <button
+            type="button"
+            onClick={onCancel}
+            className="rounded-full border border-cream-line px-4 py-1.5 text-xs font-bold text-deep-green/70 transition hover:bg-cream-soft"
+          >
+            Cancel
+          </button>
+          <button
+            type="button"
+            onClick={onConfirm}
+            disabled={blocked}
+            className="rounded-full bg-mint px-4 py-1.5 text-xs font-bold text-deep-green transition hover:bg-mint-hover disabled:opacity-50"
+            title={blocked ? "Resolve the duplicate name first" : undefined}
+          >
+            ↓ Download CSV
+          </button>
+        </div>
+      </div>
+    </div>
   );
 }
 
@@ -642,6 +811,8 @@ function CalendarView({
   weekStart,
   isAdmin,
   onSaveAdjustment,
+  aliasMap,
+  onSaveAlias,
 }: {
   cities: CitySection[];
   weekStart: string;
@@ -652,6 +823,8 @@ function CalendarView({
     amount: number,
     notes: string | null,
   ) => Promise<void>;
+  aliasMap: GustoAliasMap;
+  onSaveAlias: OnSaveAlias;
 }) {
   const weekDays = useMemo(
     () => DAY_LABELS.map((_, i) => addDays(weekStart, i)),
@@ -719,6 +892,8 @@ function CalendarView({
             city={city}
             isAdmin={isAdmin}
             onSaveAdjustment={onSaveAdjustment}
+            aliasMap={aliasMap}
+            onSaveAlias={onSaveAlias}
           />
         </section>
       ))}
@@ -787,6 +962,8 @@ function PayTable({
   city,
   isAdmin,
   onSaveAdjustment,
+  aliasMap,
+  onSaveAlias,
 }: {
   city: CitySection;
   isAdmin: boolean;
@@ -796,6 +973,8 @@ function PayTable({
     amount: number,
     notes: string | null,
   ) => Promise<void>;
+  aliasMap: GustoAliasMap;
+  onSaveAlias: OnSaveAlias;
 }) {
   if (city.managers.length === 0) return null;
   const cityTotals = cityCounts(city.managers);
@@ -822,6 +1001,10 @@ function PayTable({
               isLast={idx === city.managers.length - 1}
               isAdmin={isAdmin}
               onSaveAdjustment={onSaveAdjustment}
+              alias={
+                m.managerEmail ? aliasMap[m.managerEmail.toLowerCase()] : undefined
+              }
+              onSaveAlias={onSaveAlias}
             />
           ))}
           <tr className="border-t-2 border-cream-line bg-cream-soft font-bold text-deep-green">
@@ -855,6 +1038,8 @@ function ManagerRowExpandable({
   isLast,
   isAdmin,
   onSaveAdjustment,
+  alias,
+  onSaveAlias,
 }: {
   manager: ManagerRow;
   isLast: boolean;
@@ -865,6 +1050,8 @@ function ManagerRowExpandable({
     amount: number,
     notes: string | null,
   ) => Promise<void>;
+  alias: { firstName: string; lastName: string; note?: string | null } | undefined;
+  onSaveAlias: OnSaveAlias;
 }) {
   const [open, setOpen] = useState(false);
   const { count20, count30 } = payCounts(manager.matches);
@@ -885,6 +1072,16 @@ function ManagerRowExpandable({
               {open ? "▾" : "▸"}
             </span>
             {manager.managerName}
+            {/* Never silently substitute: show the Gusto name beside the
+                real one wherever an aliased manager is displayed. */}
+            {alias && (
+              <span
+                title={`This manager exports to Gusto as "${alias.firstName} ${alias.lastName}"`}
+                className="ml-2 rounded bg-mint-soft px-1.5 py-0.5 text-[10px] font-semibold text-deep-green/70"
+              >
+                Gusto: {alias.firstName} {alias.lastName}
+              </span>
+            )}
           </div>
           {isAdmin && manager.managerEmail && (
             <div className="text-[11px] text-deep-green/55">
@@ -935,6 +1132,14 @@ function ManagerRowExpandable({
           }`}
         >
           <td colSpan={6} className="px-4 py-3">
+            {isAdmin && manager.managerEmail && (
+              <AliasEditor
+                managerEmail={manager.managerEmail}
+                managerName={manager.managerName}
+                alias={alias}
+                onSaveAlias={onSaveAlias}
+              />
+            )}
             <div className="overflow-x-auto">
               <table className="w-full text-xs">
                 <thead className="text-[10px] font-bold uppercase tracking-[0.12em] text-deep-green/55">
@@ -1079,6 +1284,110 @@ function AdjustmentInput({
   );
 }
 
+// Inline Gusto-alias editor, shown in the expanded manager row. Same
+// admin-gated, inline pattern as AdjustmentInput. Two separate name fields
+// (never one, never re-split); clearing both removes the alias.
+function AliasEditor({
+  managerEmail,
+  managerName,
+  alias,
+  onSaveAlias,
+}: {
+  managerEmail: string;
+  managerName: string;
+  alias: { firstName: string; lastName: string; note?: string | null } | undefined;
+  onSaveAlias: OnSaveAlias;
+}) {
+  const [first, setFirst] = useState(alias?.firstName ?? "");
+  const [last, setLast] = useState(alias?.lastName ?? "");
+  const [note, setNote] = useState(alias?.note ?? "");
+  const [saving, setSaving] = useState(false);
+  const [msg, setMsg] = useState<string | null>(null);
+
+  useEffect(() => {
+    setFirst(alias?.firstName ?? "");
+    setLast(alias?.lastName ?? "");
+    setNote(alias?.note ?? "");
+    setMsg(null);
+  }, [alias?.firstName, alias?.lastName, alias?.note]);
+
+  const clearing = !first.trim() && !last.trim();
+  const dirty =
+    first.trim() !== (alias?.firstName ?? "") ||
+    last.trim() !== (alias?.lastName ?? "") ||
+    (note.trim() || null) !== (alias?.note ?? null);
+  // Require both names unless clearing entirely.
+  const invalid = !clearing && (!first.trim() || !last.trim());
+
+  const save = async () => {
+    if (!dirty || invalid) return;
+    setSaving(true);
+    setMsg(null);
+    const err = await onSaveAlias(
+      managerEmail,
+      first.trim(),
+      last.trim(),
+      note.trim() || null,
+    );
+    setSaving(false);
+    setMsg(err ?? (clearing ? "Alias cleared" : "Saved"));
+  };
+
+  const inputCls =
+    "rounded border border-cream-line bg-white px-2 py-1 text-xs text-deep-green outline-none transition focus:border-mint disabled:opacity-60";
+
+  return (
+    <div className="mb-3 rounded-lg border border-cream-line bg-white/70 p-2.5">
+      <div className="mb-1.5 flex items-center gap-2 text-[10px] font-bold uppercase tracking-[0.12em] text-deep-green/55">
+        Gusto payroll name
+        <span className="font-normal normal-case tracking-normal text-deep-green/40">
+          overrides the CSV First/Last for {managerName} — leave blank to use the schedule name
+        </span>
+      </div>
+      <div className="flex flex-wrap items-center gap-2">
+        <input
+          value={first}
+          disabled={saving}
+          onChange={(e) => setFirst(e.target.value)}
+          placeholder="First name"
+          className={`${inputCls} w-32`}
+          aria-label="Gusto first name"
+        />
+        <input
+          value={last}
+          disabled={saving}
+          onChange={(e) => setLast(e.target.value)}
+          placeholder="Last name"
+          className={`${inputCls} w-32`}
+          aria-label="Gusto last name"
+        />
+        <input
+          value={note}
+          disabled={saving}
+          onChange={(e) => setNote(e.target.value)}
+          placeholder="Note (optional)"
+          className={`${inputCls} w-40`}
+          aria-label="Alias note"
+        />
+        <button
+          type="button"
+          onClick={save}
+          disabled={saving || !dirty || invalid}
+          className="rounded-full bg-mint px-3 py-1 text-xs font-bold text-deep-green transition hover:bg-mint-hover disabled:opacity-40"
+        >
+          {clearing && alias ? "Clear alias" : "Save alias"}
+        </button>
+        {invalid && (
+          <span className="text-[11px] text-coral">Both first and last name required.</span>
+        )}
+        {msg && !invalid && (
+          <span className="text-[11px] text-deep-green/55">{msg}</span>
+        )}
+      </div>
+    </div>
+  );
+}
+
 // ---------------------------------------------------------------
 // Table view — flat network-wide list of managers.
 // ---------------------------------------------------------------
@@ -1098,6 +1407,7 @@ function TableView({
   network,
   isAdmin,
   onSaveAdjustment,
+  aliasMap,
 }: {
   cities: CitySection[];
   cityFilter: CityFilter;
@@ -1115,6 +1425,7 @@ function TableView({
     amount: number,
     notes: string | null,
   ) => Promise<void>;
+  aliasMap: GustoAliasMap;
 }) {
   const [sortKey, setSortKey] = useState<SortKey>("total");
   const [sortDir, setSortDir] = useState<"asc" | "desc">("desc");
@@ -1241,7 +1552,18 @@ function TableView({
               }
             >
               <td className="sticky left-0 z-10 bg-white px-4 py-2 align-top">
-                <div className="font-bold text-deep-green">{m.managerName}</div>
+                <div className="font-bold text-deep-green">
+                  {m.managerName}
+                  {m.managerEmail && aliasMap[m.managerEmail.toLowerCase()] && (
+                    <span
+                      title={`Exports to Gusto as "${aliasMap[m.managerEmail.toLowerCase()].firstName} ${aliasMap[m.managerEmail.toLowerCase()].lastName}"`}
+                      className="ml-2 rounded bg-mint-soft px-1.5 py-0.5 text-[10px] font-semibold text-deep-green/70"
+                    >
+                      Gusto: {aliasMap[m.managerEmail.toLowerCase()].firstName}{" "}
+                      {aliasMap[m.managerEmail.toLowerCase()].lastName}
+                    </span>
+                  )}
+                </div>
                 {isAdmin && m.managerEmail && (
                   <div className="text-[11px] text-deep-green/55">
                     {m.managerEmail}
