@@ -72,6 +72,14 @@ function dayInMonth(dateStr: string | null, year: number, month0: number): numbe
   return d;
 }
 
+// Why a leaf row is not inline-editable, and where to change it instead.
+//   manager-pay → recompute-owned; edit via manager_pay_adjustments on /managers
+//   field-cost  → computed from the venue rate × cadence; edit the venue's rate
+//                 in Field Costs config, or add a whole-month fin_venue_cost_overrides
+export type CalRowLock =
+  | { kind: "manager-pay" }
+  | { kind: "field-cost"; venueId: number; venueName: string; monthKey: string };
+
 // One line item: a labeled series of dated amounts (day → dollars).
 export type CalRow = {
   key: string;
@@ -80,6 +88,11 @@ export type CalRow = {
   cells: Record<number, number>;
   tag?: string;          // e.g. 'monthly' | 'quarterly' | 'per-match'
   quarterly?: boolean;   // amber accent
+  // Set on a 1:1 generic fin_expenses leaf row → inline-editable (amount/date),
+  // subject to the manual_entry lock inside the FinExpense.
+  edit?: { expense: FinExpense };
+  // Set on a non-editable leaf row → renders locked with a why + link(s).
+  lock?: CalRowLock;
 };
 
 export type CalGroup = {
@@ -125,6 +138,7 @@ function cityManagerGroup(
         label: name,
         sublabel: r.city ?? undefined,
         cells: day ? { [day]: r.amount } : {},
+        edit: { expense: r },
       };
     })
     .sort((a, b) => a.label.localeCompare(b.label));
@@ -159,7 +173,7 @@ function matchManagerGroup(
     const city = r.city?.trim() || "Unknown";
     let row = byCity.get(city);
     if (!row) {
-      row = { key: `mm:${city}`, label: city, cells: {} };
+      row = { key: `mm:${city}`, label: city, cells: {}, lock: { kind: "manager-pay" } };
       byCity.set(city, row);
     }
     row.cells[day] = (row.cells[day] ?? 0) + r.amount;
@@ -330,8 +344,26 @@ function fieldCostGroup(
   let undated = 0;
   let subtotal = 0;
 
-  const push = (fc: { key: string; displayName: string; city: string }, cells: Record<number, number>, tag: string, quarterly?: boolean) => {
-    rows.push({ key: fc.key, label: fc.displayName, sublabel: fc.city, cells, tag, quarterly });
+  const push = (
+    fc: { key: string; displayName: string; city: string; primaryVenueId: number },
+    cells: Record<number, number>,
+    tag: string,
+    quarterly?: boolean,
+  ) => {
+    rows.push({
+      key: fc.key,
+      label: fc.displayName,
+      sublabel: fc.city,
+      cells,
+      tag,
+      quarterly,
+      lock: {
+        kind: "field-cost",
+        venueId: fc.primaryVenueId,
+        venueName: fc.displayName,
+        monthKey,
+      },
+    });
   };
 
   for (const fc of buildFieldCostRows(data, monthKey)) {
@@ -466,6 +498,7 @@ function expenseCategoryGroups(
           label: r.vendor?.trim() || r.notes?.trim() || cat,
           sublabel: city || "Company-wide",
           cells: day ? { [day]: r.amount } : {},
+          edit: { expense: r },
         };
       })
       .sort((a, b) => a.label.localeCompare(b.label));

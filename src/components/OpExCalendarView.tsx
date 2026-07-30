@@ -13,11 +13,24 @@
 // Data wiring lives in src/lib/opexSources.ts (buildOpexCalendar). This
 // component is presentation + collapse state + month nav only.
 
-import { useMemo, useState } from "react";
+import { useCallback, useMemo, useState, type KeyboardEvent } from "react";
+import Link from "next/link";
+import { useRouter } from "next/navigation";
 import { daysInMonth } from "@/lib/checkIns";
-import { useFinanceData } from "@/lib/useFinanceData";
+import {
+  refetchFinanceData,
+  useFinanceData,
+  type FinExpense,
+} from "@/lib/useFinanceData";
 import { formatMoney, monthLabel } from "@/lib/opex";
-import { buildOpexCalendar, type CalGroup } from "@/lib/opexSources";
+import {
+  buildOpexCalendar,
+  monthKeyFor,
+  type CalGroup,
+  type CalRow,
+} from "@/lib/opexSources";
+import { updateFinExpense } from "@/lib/finExpenseWrites";
+import { canAccess, useAuth } from "@/lib/useAuth";
 
 const WD = ["S", "M", "T", "W", "T", "F", "S"];
 
@@ -30,11 +43,55 @@ export default function OpExCalendarView({
   onAddExpense?: () => void;
 } = {}) {
   const { data, loading, error } = useFinanceData();
+  const { appUser } = useAuth();
+  const router = useRouter();
+  // Exact same gate as the Finance page / TopNav that host ExpenseAdminView —
+  // the shared canAccess(..,"finance") helper, so the two surfaces can't drift.
+  // Only decides whether edit affordances render; the shared write path
+  // re-checks the manual_entry lock on every save.
+  const canEdit = canAccess(appUser, "finance");
 
   const now = new Date();
   const [year, setYear] = useState(now.getFullYear());
   const [month0, setMonth0] = useState(now.getMonth());
   const [open, setOpen] = useState<Record<string, boolean>>({});
+  // The fin_expenses row id currently in inline edit (one at a time).
+  const [editingId, setEditingId] = useState<number | null>(null);
+
+  // Commit an inline edit through the ONE shared write path, then refetch so
+  // the row, its group subtotal, the daily total, the cumulative line and the
+  // summary bars all recompute from fresh data (they're all derived from
+  // `data` via useMemo — no stale numbers left behind). Throws on failure so
+  // the editor keeps the row open and shows the error; only success clears it.
+  const saveEdit = useCallback(
+    async (expense: FinExpense, amountStr: string, dateStr: string) => {
+      if (!appUser) throw new Error("Not signed in");
+      const amount = Number(amountStr);
+      if (amountStr.trim() === "" || !Number.isFinite(amount)) {
+        throw new Error("Amount must be a number.");
+      }
+      if (!/^\d{4}-\d{2}-\d{2}$/.test(dateStr)) {
+        throw new Error("Date must be YYYY-MM-DD.");
+      }
+      const [y, mo] = dateStr.split("-").map(Number);
+      const month = monthKeyFor(y, mo - 1); // keep month bucket consistent with date
+      await updateFinExpense(expense, { amount, date: dateStr, month }, appUser);
+      await refetchFinanceData();
+      setEditingId(null);
+    },
+    [appUser],
+  );
+
+  // Field-cost rows are computed — send the operator to the Field Costs config
+  // tab (no per-tab URL exists, so hint the finance page's return-tab).
+  const goFieldCosts = useCallback(() => {
+    try {
+      window.sessionStorage.setItem("finance:returnTab", "field-costs");
+    } catch {
+      /* sessionStorage unavailable — the push still lands on Finance */
+    }
+    router.push("/admin/finance");
+  }, [router]);
 
   const days = daysInMonth(year, month0);
   const isThisMonth = year === now.getFullYear() && month0 === now.getMonth();
@@ -201,6 +258,12 @@ export default function OpExCalendarView({
                     dayCols={dayCols}
                     cellCls={cellCls}
                     onToggle={() => toggle(g.key, g.defaultOpen)}
+                    canEdit={canEdit}
+                    editingId={editingId}
+                    onStartEdit={setEditingId}
+                    onCancelEdit={() => setEditingId(null)}
+                    onSaveEdit={saveEdit}
+                    onGoFieldCosts={goFieldCosts}
                   />
                 );
               })}
@@ -269,6 +332,12 @@ function GroupRows({
   dayCols,
   cellCls,
   onToggle,
+  canEdit,
+  editingId,
+  onStartEdit,
+  onCancelEdit,
+  onSaveEdit,
+  onGoFieldCosts,
 }: {
   group: CalGroup;
   opened: boolean;
@@ -276,6 +345,12 @@ function GroupRows({
   dayCols: number[];
   cellCls: (d: number) => string;
   onToggle: () => void;
+  canEdit: boolean;
+  editingId: number | null;
+  onStartEdit: (id: number) => void;
+  onCancelEdit: () => void;
+  onSaveEdit: (expense: FinExpense, amount: string, date: string) => Promise<void>;
+  onGoFieldCosts: () => void;
 }) {
   return (
     <>
@@ -299,26 +374,75 @@ function GroupRows({
       </tr>
 
       {opened &&
-        group.rows.map((r) => (
-          <tr key={r.key} className="ox-child">
-            <td className="lab">
-              <span className="nm">{r.label}</span>
-              {r.sublabel && <span className="city">{r.sublabel}</span>}
-              {r.tag && <span className={`vtag ${r.quarterly ? "q" : ""}`}>{r.tag}</span>}
-            </td>
-            {dayCols.map((d) => (
-              <td key={d} className={cellCls(d)}>
-                {r.cells[d] ? (
-                  <span className={`chip ${r.quarterly ? "q" : ""}`}>
-                    {formatMoney(r.cells[d])}
-                  </span>
-                ) : (
-                  ""
-                )}
+        group.rows.map((r) => {
+          const exp = r.edit?.expense;
+          const editable = canEdit && !!exp && exp.manual_entry;
+          const importedLocked = !!exp && !exp.manual_entry; // generic but imported
+          const isEditing = editable && exp != null && editingId === exp.id;
+
+          if (isEditing && exp) {
+            return (
+              <LeafEditRow
+                key={r.key}
+                row={r}
+                expense={exp}
+                days={days}
+                onSave={onSaveEdit}
+                onCancel={onCancelEdit}
+              />
+            );
+          }
+
+          return (
+            <tr key={r.key} className="ox-child">
+              <td className="lab">
+                <span className="nm">{r.label}</span>
+                {r.sublabel && <span className="city">{r.sublabel}</span>}
+                {r.tag && <span className={`vtag ${r.quarterly ? "q" : ""}`}>{r.tag}</span>}
+                <LeafWhy
+                  row={r}
+                  editable={editable}
+                  imported={importedLocked}
+                  onGoFieldCosts={onGoFieldCosts}
+                />
               </td>
-            ))}
-          </tr>
-        ))}
+              {dayCols.map((d) => (
+                <td key={d} className={cellCls(d)}>
+                  {r.cells[d] ? (
+                    editable && exp ? (
+                      <button
+                        type="button"
+                        className={`chip ${r.quarterly ? "q" : ""}`}
+                        title="Click to edit amount / date"
+                        onClick={() => onStartEdit(exp.id)}
+                        style={{ cursor: "pointer", border: "none", font: "inherit" }}
+                      >
+                        {formatMoney(r.cells[d])}
+                      </button>
+                    ) : (
+                      <span
+                        className={`chip ${r.quarterly ? "q" : ""}`}
+                        title={
+                          r.lock?.kind === "manager-pay"
+                            ? "Recompute-owned — change on the Manager Pay page"
+                            : r.lock?.kind === "field-cost"
+                              ? "Computed from the venue rate — change in Field Costs config"
+                              : importedLocked
+                                ? "Imported — re-upload via Q2 Import"
+                                : undefined
+                        }
+                      >
+                        {formatMoney(r.cells[d])}
+                      </span>
+                    )
+                  ) : (
+                    ""
+                  )}
+                </td>
+              ))}
+            </tr>
+          );
+        })}
 
       {/* Undated field-cost remainder (in subtotal, on no day) */}
       {opened && group.undated > 0 && (
@@ -332,6 +456,159 @@ function GroupRows({
         </tr>
       )}
     </>
+  );
+}
+
+// The "why is this not editable" affordance under a leaf label. Editable rows
+// get no note (their chips are buttons). Locked rows must say WHY and point to
+// where the real change is made — never look merely inert.
+function LeafWhy({
+  row,
+  editable,
+  imported,
+  onGoFieldCosts,
+}: {
+  row: CalRow;
+  editable: boolean;
+  imported: boolean;
+  onGoFieldCosts: () => void;
+}) {
+  if (editable) return null;
+
+  // Match Manager Pay — recompute-owned; the lever is manager_pay_adjustments.
+  if (row.lock?.kind === "manager-pay") {
+    return (
+      <div className="ox-why">
+        <span className="lk">Recompute-owned</span> · change on the{" "}
+        <Link href="/managers" className="ox-lnk">
+          Manager Pay page
+        </Link>
+      </div>
+    );
+  }
+
+  // Field Costs — computed from the venue rate × cadence. Point to the venue
+  // config, and to the venue-month override that actually adjusts a month.
+  if (row.lock?.kind === "field-cost") {
+    return (
+      <div className="ox-why">
+        <span className="lk">Computed · {row.lock.venueName}</span> ·{" "}
+        <button type="button" className="ox-lnk" onClick={onGoFieldCosts}>
+          Field Costs config
+        </button>{" "}
+        ·{" "}
+        <button type="button" className="ox-lnk" onClick={onGoFieldCosts}>
+          add month override
+        </button>
+      </div>
+    );
+  }
+
+  // Generic category row that came in via import (manual_entry=false).
+  if (imported) {
+    return (
+      <div className="ox-why">
+        <span className="lk">Imported</span> · re-upload via Q2 Import to change
+      </div>
+    );
+  }
+
+  return null;
+}
+
+// Inline editor for a single manual leaf row: amount + date only. Explicit
+// commit — Enter or Save writes, Esc or Cancel aborts. NO blur-to-save, so a
+// stray click can never silently write to a booked cost. A failed write keeps
+// the row open with the error and the entered values intact.
+function LeafEditRow({
+  row,
+  expense,
+  days,
+  onSave,
+  onCancel,
+}: {
+  row: CalRow;
+  expense: FinExpense;
+  days: number;
+  onSave: (expense: FinExpense, amount: string, date: string) => Promise<void>;
+  onCancel: () => void;
+}) {
+  const [amount, setAmount] = useState(String(expense.amount));
+  const [date, setDate] = useState(expense.date);
+  const [saving, setSaving] = useState(false);
+  const [err, setErr] = useState<string | null>(null);
+
+  const commit = useCallback(async () => {
+    if (saving) return;
+    setSaving(true);
+    setErr(null);
+    try {
+      await onSave(expense, amount, date);
+      // success unmounts this row (editingId cleared upstream)
+    } catch (e) {
+      setErr(e instanceof Error ? e.message : "Save failed.");
+      setSaving(false);
+    }
+  }, [saving, onSave, expense, amount, date]);
+
+  const onKey = useCallback(
+    (e: KeyboardEvent) => {
+      if (e.key === "Enter") {
+        e.preventDefault();
+        void commit();
+      } else if (e.key === "Escape") {
+        e.preventDefault();
+        onCancel();
+      }
+    },
+    [commit, onCancel],
+  );
+
+  return (
+    <tr className="ox-child ox-editing">
+      <td className="lab">
+        <span className="nm">{row.label}</span>
+        {row.sublabel && <span className="city">{row.sublabel}</span>}
+      </td>
+      <td className="ox-editcell" colSpan={days}>
+        <div className="ox-editform">
+          <label className="ox-fld">
+            <span>Amount</span>
+            <input
+              type="number"
+              step="0.01"
+              value={amount}
+              autoFocus
+              disabled={saving}
+              onChange={(e) => setAmount(e.target.value)}
+              onKeyDown={onKey}
+            />
+          </label>
+          <label className="ox-fld">
+            <span>Date</span>
+            <input
+              type="date"
+              value={date}
+              disabled={saving}
+              onChange={(e) => setDate(e.target.value)}
+              onKeyDown={onKey}
+            />
+          </label>
+          <button
+            type="button"
+            className="ox-save"
+            disabled={saving}
+            onClick={() => void commit()}
+          >
+            {saving ? "Saving…" : "Save"}
+          </button>
+          <button type="button" className="ox-cancel" disabled={saving} onClick={onCancel}>
+            Cancel
+          </button>
+          {err && <span className="ox-editerr">{err}</span>}
+        </div>
+      </td>
+    </tr>
   );
 }
 
@@ -474,4 +751,24 @@ const OPEX_CSS = `
 .opex-cal tr.ox-cum td.spark .cend{position:absolute;top:8px;right:14px;font-size:11px;font-weight:800;color:var(--green-deep);font-variant-numeric:tabular-nums;background:rgba(251,249,243,.9);padding:2px 7px;border-radius:6px;border:1px solid var(--line)}
 .opex-cal .ox-recon{padding:14px 20px;background:#fbf9f3;border-top:1px solid var(--line);font-size:12.5px;color:#5c6b60;line-height:1.5}
 .opex-cal .ox-recon b{color:var(--green-deep);font-variant-numeric:tabular-nums}
+/* Inline edit: leaf chip becomes a click-to-edit button; locked rows explain why. */
+.opex-cal .chip[type=button]{cursor:pointer;transition:background .12s,border-color .12s}
+.opex-cal .chip[type=button]:hover{background:#cfebd9;border-color:var(--green-mid)}
+.opex-cal .ox-why{font-size:10.5px;color:var(--muted);font-weight:500;margin-top:3px;padding-left:0;line-height:1.35;white-space:normal}
+.opex-cal .ox-why .lk{font-weight:700;color:#7a8a7e;text-transform:uppercase;letter-spacing:.3px;font-size:9.5px}
+.opex-cal .ox-lnk{border:0;background:none;padding:0;font:inherit;font-size:10.5px;font-weight:700;color:var(--green-mid);cursor:pointer;text-decoration:underline;text-underline-offset:2px}
+.opex-cal .ox-lnk:hover{color:var(--green-deep)}
+.opex-cal tr.ox-editing td{background:#f4fbf6;border-bottom:1px solid var(--green-tint-2)}
+.opex-cal tr.ox-editing td.lab{background:#f4fbf6}
+.opex-cal td.ox-editcell{text-align:left !important;padding:8px 18px}
+.opex-cal .ox-editform{display:flex;align-items:flex-end;gap:12px;flex-wrap:wrap}
+.opex-cal .ox-fld{display:flex;flex-direction:column;gap:3px}
+.opex-cal .ox-fld span{font-size:9.5px;font-weight:800;letter-spacing:.5px;text-transform:uppercase;color:var(--muted)}
+.opex-cal .ox-fld input{border:1px solid var(--line);border-radius:8px;padding:6px 9px;font-size:13px;font-weight:600;color:var(--ink);background:#fff;font-variant-numeric:tabular-nums}
+.opex-cal .ox-fld input:focus{outline:2px solid var(--green-bright);outline-offset:0;border-color:var(--green-bright)}
+.opex-cal .ox-save{border:0;background:var(--green-bright);color:#06301d;font-weight:800;font-size:12px;padding:8px 16px;border-radius:8px;cursor:pointer}
+.opex-cal .ox-save:disabled{opacity:.6;cursor:default}
+.opex-cal .ox-cancel{border:1px solid var(--line);background:#fff;color:var(--green-deep);font-weight:700;font-size:12px;padding:8px 14px;border-radius:8px;cursor:pointer}
+.opex-cal .ox-cancel:disabled{opacity:.6;cursor:default}
+.opex-cal .ox-editerr{font-size:11.5px;font-weight:700;color:#9a3838;background:#fdecec;border:1px solid #e9a6a6;border-radius:7px;padding:6px 10px;align-self:center}
 `;

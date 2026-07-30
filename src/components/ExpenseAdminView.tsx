@@ -7,10 +7,13 @@ import ConfirmDeleteDialog from "@/components/ConfirmDeleteDialog";
 import ExpenseRowEditor, {
   type ExpenseDraft,
 } from "@/components/ExpenseRowEditor";
-import { logChange } from "@/lib/financeAudit";
+import {
+  insertFinExpense,
+  updateFinExpense,
+  deleteFinExpense,
+} from "@/lib/finExpenseWrites";
 import { type Q2Month } from "@/lib/financeStats";
 import { useFinanceQuarter } from "@/lib/financeQuarter";
-import { supabase } from "@/lib/supabase";
 import { useAuth } from "@/lib/useAuth";
 import { isCityHidden } from "@/lib/types";
 import {
@@ -197,85 +200,29 @@ export default function ExpenseAdminView() {
   }
 
   async function handleSubmit(draft: ExpenseDraft): Promise<void> {
-    const email = appUser?.email;
-    if (!email) throw new Error("Not signed in");
-
+    if (!appUser) throw new Error("Not signed in");
+    const fields = {
+      date: draft.date,
+      month: draft.month,
+      city: draft.city || null,
+      category: draft.category,
+      vendor: draft.vendor || null,
+      amount: draft.amount,
+      notes: draft.notes || null,
+    };
     if (editorMode === "add") {
-      const payload = {
-        date: draft.date,
-        month: draft.month,
-        city: draft.city || null,
-        category: draft.category,
-        vendor: draft.vendor || null,
-        amount: draft.amount,
-        notes: draft.notes || null,
-        manual_entry: true,
-      };
-      const { data: inserted, error } = await supabase
-        .from("fin_expenses")
-        .insert(payload)
-        .select()
-        .single();
-      if (error) throw new Error(error.message);
-      await logChange({
-        tableName: "fin_expenses",
-        rowId: (inserted as { id: number }).id,
-        action: "insert",
-        changedBy: email,
-        after: inserted as Record<string, unknown>,
-      });
+      await insertFinExpense(fields, appUser);
     } else if (editorMode === "edit" && editorRow) {
-      if (!editorRow.manual_entry) throw new Error("Row is locked.");
-      const before = { ...editorRow };
-      const updates = {
-        date: draft.date,
-        month: draft.month,
-        city: draft.city || null,
-        category: draft.category,
-        vendor: draft.vendor || null,
-        amount: draft.amount,
-        notes: draft.notes || null,
-      };
-      const { data: updated, error } = await supabase
-        .from("fin_expenses")
-        .update(updates)
-        .eq("id", editorRow.id)
-        .select()
-        .single();
-      if (error) throw new Error(error.message);
-      await logChange({
-        tableName: "fin_expenses",
-        rowId: editorRow.id,
-        action: "update",
-        changedBy: email,
-        before: before as unknown as Record<string, unknown>,
-        after: updated as Record<string, unknown>,
-      });
+      await updateFinExpense(editorRow, fields, appUser);
     }
-
     await refetchFinanceData();
     setEditorOpen(false);
   }
 
   async function handleDelete(): Promise<void> {
-    const email = appUser?.email;
-    if (!email) throw new Error("Not signed in");
+    if (!appUser) throw new Error("Not signed in");
     if (!deleteRow) return;
-    if (!deleteRow.manual_entry) throw new Error("Row is locked.");
-
-    await logChange({
-      tableName: "fin_expenses",
-      rowId: deleteRow.id,
-      action: "delete",
-      changedBy: email,
-      before: deleteRow as unknown as Record<string, unknown>,
-    });
-    const { error } = await supabase
-      .from("fin_expenses")
-      .delete()
-      .eq("id", deleteRow.id);
-    if (error) throw new Error(error.message);
-
+    await deleteFinExpense(deleteRow, appUser);
     await refetchFinanceData();
     setDeleteRow(null);
   }

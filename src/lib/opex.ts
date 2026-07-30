@@ -18,5 +18,8 @@ export function monthLabel(year: number, month0: number): string {
 
 // "$500" / "$1,500" / "$12.50" — decimals only when present.
 export function formatMoney(n: number): string {
-  return `$${n.toLocaleString("en-US", { maximumFractionDigits: 2 })}`;
+  // Always two decimals: fin_expenses.amount is numeric (decimal dollars), so
+  // a value of 698.2 must render "$698.20", not "$698.2". minimumFractionDigits
+  // matches maximumFractionDigits so cents never drop off.
+  return `$${n.toLocaleString("en-US", { minimumFractionDigits: 2, maximumFractionDigits: 2 })}`;
 }
