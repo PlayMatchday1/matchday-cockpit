@@ -153,6 +153,16 @@ export default function TopNav() {
                   />
                 );
               })}
+            {/* Admin-only staging tab. Hidden for non-admins (the link is
+                gated on is_admin here AND the /admin/test page keeps its own
+                is_admin guard — hiding a link is not a permission check). */}
+            {isAdmin && (
+              <PrimaryLink
+                href="/admin/test"
+                active={pathname?.startsWith("/admin/test") ?? false}
+                label="Test"
+              />
+            )}
           </nav>
           {appUser ? (
             <UserMenu
