@@ -3,6 +3,7 @@
 import { Suspense, useMemo } from "react";
 import Link from "next/link";
 import { useSearchParams } from "next/navigation";
+import HeroMessage from "@/components/HeroMessage";
 import HomeGoalsView from "@/components/HomeGoalsView";
 import PagePermissionGuard from "@/components/PagePermissionGuard";
 import KanbanBoard from "./KanbanBoard";
@@ -40,6 +41,7 @@ function ClubhouseContent() {
 
   return (
     <ClubhouseQuarterProvider quarter={quarter}>
+      <HeroMessage />
       <Tabs active={tab} />
       {tab === "goals" && <HomeGoalsView />}
       {tab === "field-pipeline" && <KanbanBoard boardType="field_pipeline" />}
