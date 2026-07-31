@@ -9,6 +9,7 @@
 // the point). Palette + avatar tint/initials taken verbatim from the mockup.
 
 import type { Goal } from "@/lib/types";
+import { htmlToPlainText } from "@/lib/text";
 import {
   businessDateOf,
   computeGoalPace,
@@ -172,7 +173,10 @@ export default function OrgGoalCard({
       <div className="mt-3 border-t border-dashed pt-3 text-[12.5px] leading-[1.55]" style={{ borderColor: "#e4ddcc" }}>
         {comment ? (
           <div style={{ color: "#3f544b" }}>
-            {comment.body}
+            {/* Stored body is rich-text HTML; render a plain-text preview
+                (no dangerouslySetInnerHTML) clamped to 2 lines. Result goes
+                through normal React escaping. */}
+            <div className="line-clamp-2">{htmlToPlainText(comment.body)}</div>
             <div className="mt-[6px] flex items-center gap-[6px] text-[11px] text-[#9aa5a0]">
               <Avatar name={comment.author || comment.author_email || "Unknown"} />
               <span>{comment.author || comment.author_email || "Unknown"}</span>
