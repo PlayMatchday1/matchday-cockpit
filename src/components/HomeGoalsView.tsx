@@ -60,21 +60,11 @@ export default function HomeGoalsView() {
     }
   }
 
-  // Section titles for the quarterly + monthly buckets adapt to the
-  // active quarter. Org stays "Org goals" — company-wide.
-  const quarterShort = quarter.label.split(" ")[0]; // "Q2", "Q3"
+  // Only company-wide Org goals remain on Home. The quarterly ("Q3 goals",
+  // scope "q2") and Monthly goals sections were removed in the Clubhouse→Home
+  // redesign (step 2). Org goals are quarter-agnostic.
   const sections: { scope: Scope; title: string; subtitle: string }[] = [
     { scope: "org", title: "Org goals", subtitle: "Company-wide objectives" },
-    {
-      scope: "q2",
-      title: `${quarterShort} goals`,
-      subtitle: "What we're shipping this quarter",
-    },
-    {
-      scope: "monthly",
-      title: "Monthly goals",
-      subtitle: "This month's focus",
-    },
   ];
 
   return (

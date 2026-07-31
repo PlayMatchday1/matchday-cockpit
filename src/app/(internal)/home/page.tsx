@@ -1,22 +1,13 @@
 "use client";
 
-import { Suspense, useCallback, useMemo } from "react";
+import { Suspense, useMemo } from "react";
 import Link from "next/link";
-import { useRouter, useSearchParams } from "next/navigation";
-import HeroMessage from "@/components/HeroMessage";
+import { useSearchParams } from "next/navigation";
 import HomeGoalsView from "@/components/HomeGoalsView";
 import PagePermissionGuard from "@/components/PagePermissionGuard";
-import QuarterSelector from "@/components/QuarterSelector";
-import QuickStats from "@/components/QuickStats";
 import KanbanBoard from "./KanbanBoard";
 import { ClubhouseQuarterProvider } from "@/lib/clubhouseQuarter";
-import {
-  getAvailableQuarters,
-  getCurrentQuarter,
-  isPlanningQuarter,
-  resolveQuarterFromUrl,
-  type QuarterInfo,
-} from "@/lib/quarters";
+import { resolveQuarterFromUrl, type QuarterInfo } from "@/lib/quarters";
 
 export default function ClubhousePage() {
   return (
@@ -31,7 +22,6 @@ export default function ClubhousePage() {
 type ClubhouseTab = "goals" | "field-pipeline" | "tech-roadmap";
 
 function ClubhouseContent() {
-  const router = useRouter();
   const sp = useSearchParams();
   const rawTab = sp?.get("tab");
   const tab: ClubhouseTab =
@@ -39,56 +29,19 @@ function ClubhouseContent() {
       ? rawTab
       : "goals"; // unknown/removed tabs (incl. the retired ?tab=topics) → goals
 
-  // Quarter selector + URL state. Same pattern as /admin/finance:
-  // ?q=<key> drives the active quarter; selecting the default
-  // (current calendar) quarter drops the param to keep URLs clean.
-  const availableQuarters = useMemo(() => getAvailableQuarters(), []);
+  // The Home page no longer renders a quarter selector, greeting, or KPI row —
+  // the goals tab shows only the (quarter-agnostic) Org goals. The quarter
+  // still resolves from ?q= and is provided as context so goal editing keeps
+  // working, but there is no UI to change it here.
   const quarter = useMemo<QuarterInfo>(
     () => resolveQuarterFromUrl(sp?.get("q") ?? null, new Date()),
     [sp],
   );
-  const handleQuarterChange = useCallback(
-    (key: string) => {
-      const qs = new URLSearchParams(sp?.toString() ?? "");
-      if (key === getCurrentQuarter().key) qs.delete("q");
-      else qs.set("q", key);
-      const s = qs.toString();
-      router.replace(s ? `?${s}` : "?");
-    },
-    [router, sp],
-  );
-
-  const planning = isPlanningQuarter(quarter, new Date());
 
   return (
     <ClubhouseQuarterProvider quarter={quarter}>
-      <div className="mb-3 flex flex-wrap items-end justify-between gap-x-6 gap-y-3">
-        <HeroMessage />
-        <QuarterSelector
-          available={availableQuarters}
-          value={quarter.key}
-          onChange={handleQuarterChange}
-          now={new Date()}
-        />
-      </div>
-
-      {planning && (
-        <div
-          role="note"
-          className="mb-6 rounded-2xl border-[1.5px] border-cream-line bg-cream-soft/60 px-5 py-3 text-sm text-deep-green/70 shadow-sm shadow-deep-green/5"
-        >
-          <span className="font-bold text-deep-green">{quarter.label}</span> ·
-          Planning quarter — set goals and seed topics now to forecast.
-        </div>
-      )}
-
       <Tabs active={tab} />
-      {tab === "goals" && (
-        <>
-          <QuickStats />
-          <HomeGoalsView />
-        </>
-      )}
+      {tab === "goals" && <HomeGoalsView />}
       {tab === "field-pipeline" && <KanbanBoard boardType="field_pipeline" />}
       {tab === "tech-roadmap" && <KanbanBoard boardType="tech_roadmap" />}
     </ClubhouseQuarterProvider>
