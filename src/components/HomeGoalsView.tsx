@@ -104,8 +104,10 @@ export default function HomeGoalsView() {
       <div className="mx-auto max-w-[1280px] px-[30px] pb-16">
         {/* Goal deck pulled up into the hero band (the overlap is the point). */}
         <div className="relative z-[2] -mt-[58px]">
+          {/* Header sits in the -58px pull zone, i.e. on the dark hero, so it
+              uses the mockup's light on-forest colours. */}
           <div className="flex items-baseline gap-3 px-[3px] pb-3">
-            <h2 className="text-[13px] font-[750] uppercase tracking-[0.1em] text-[#4e6a5e]">
+            <h2 className="text-[13px] font-[750] uppercase tracking-[0.1em] text-[#a8cbbb]">
               Org goals
             </h2>
             <span className="text-[12px] font-medium text-[#7fa693]">
@@ -233,7 +235,8 @@ function HeroBand({
         }}
       />
 
-      <div className="relative mx-auto flex max-w-[1280px] flex-wrap items-center gap-6 px-[30px] py-[38px]">
+      {/* Extra bottom padding leaves dark room for the -58px goal-deck overlap. */}
+      <div className="relative mx-auto flex max-w-[1280px] flex-wrap items-center gap-6 px-[30px] pb-[80px] pt-[38px]">
         <div className="min-w-0 flex-1">
           <span className="inline-block rounded-full border px-[11px] py-[5px] text-[10px] font-extrabold uppercase tracking-[0.15em]" style={{ color: "#8ff0c0", background: "rgba(53,199,127,.13)", borderColor: "rgba(53,199,127,.3)" }}>
             MatchDay mission
@@ -241,9 +244,8 @@ function HeroBand({
           <h1 className="mt-[14px] max-w-[56ch] text-[25px] font-[660] leading-[1.35] tracking-[-0.018em]" style={{ color: "#f2fdf7" }}>
             {mission}
           </h1>
-          <p className="mt-[9px] text-[15px] font-[650] tracking-[-0.005em]" style={{ color: "#2cdb87" }}>
-            7 cities down. The whole map next.
-          </p>
+          {/* The mint sub-line is dropped: the app's mission string already ends
+              with the "7 cities down…" tagline, so a separate line duplicated it. */}
         </div>
         <div
           className="flex flex-none overflow-hidden rounded-[16px] border"
