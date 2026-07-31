@@ -11,6 +11,16 @@ import { logChange } from "@/lib/financeAudit";
 import type { AppUser } from "@/lib/useAuth";
 import type { FinExpense } from "@/lib/useFinanceData";
 
+// Categories a background job owns: the /api/sync/cron Manager Pay recompute
+// (src/lib/managerPayCompute.ts) deletes every fin_expenses row WHERE
+// category='Match Manager Pay' AND date>=cutover and re-inserts from /managers,
+// so any hand edit to such a row is silently overwritten on the next cron.
+// Recon gate 0i found 56 pre-cutover MMP rows carrying manual_entry=true — the
+// manual_entry flag alone would let those through, so the category guard lives
+// here (not just in the UI) as the real lock. Field Costs is computed from
+// fin_venues and is not a fin_expenses category, so MMP is the only member.
+export const RECOMPUTE_OWNED_CATEGORIES = new Set<string>(["Match Manager Pay"]);
+
 // The mutable columns. `month` must stay consistent with `date` (it is the
 // calendar/Cash-Flow bucket key), so callers that change the date also pass the
 // recomputed month.
@@ -55,6 +65,11 @@ export async function updateFinExpense(
   user: AppUser,
 ): Promise<Record<string, unknown>> {
   if (!user.email) throw new Error("Not signed in");
+  if (RECOMPUTE_OWNED_CATEGORIES.has(row.category)) {
+    throw new Error(
+      `${row.category} is recompute-owned — edit it on the Manager Pay page, not here.`,
+    );
+  }
   if (!row.manual_entry) throw new Error("Row is locked.");
   const before = { ...row };
   const { data: updated, error } = await supabase
@@ -79,6 +94,11 @@ export async function updateFinExpense(
 // delete so a failure can't leave an unlogged deletion.
 export async function deleteFinExpense(row: FinExpense, user: AppUser): Promise<void> {
   if (!user.email) throw new Error("Not signed in");
+  if (RECOMPUTE_OWNED_CATEGORIES.has(row.category)) {
+    throw new Error(
+      `${row.category} is recompute-owned — manage it on the Manager Pay page, not here.`,
+    );
+  }
   if (!row.manual_entry) throw new Error("Row is locked.");
   await logChange({
     tableName: "fin_expenses",
