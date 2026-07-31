@@ -9,6 +9,8 @@ import { Suspense, useMemo } from "react";
 import { useSearchParams } from "next/navigation";
 import HeroMessage from "@/components/HeroMessage";
 import HomeGoalsView from "@/components/HomeGoalsView";
+import CalendarPanel from "@/components/CalendarPanel";
+import PdSchedulePanel from "@/components/PdSchedulePanel";
 import PagePermissionGuard from "@/components/PagePermissionGuard";
 import { ClubhouseQuarterProvider } from "@/lib/clubhouseQuarter";
 import { resolveQuarterFromUrl, type QuarterInfo } from "@/lib/quarters";
@@ -35,7 +37,14 @@ function HomeContent() {
   return (
     <ClubhouseQuarterProvider quarter={quarter}>
       <HeroMessage />
-      <HomeGoalsView />
+      {/* Two-column grid (mockup: 1.6fr / 1fr); stacks below 900px. */}
+      <div className="grid grid-cols-1 items-start gap-6 min-[900px]:grid-cols-[1.6fr_1fr]">
+        <HomeGoalsView />
+        <div className="space-y-[18px]">
+          <CalendarPanel />
+          <PdSchedulePanel />
+        </div>
+      </div>
     </ClubhouseQuarterProvider>
   );
 }

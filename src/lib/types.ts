@@ -67,6 +67,9 @@ export type Goal = {
   // migration 0028.
   quarter_key: string;
   sort_order: number | null;
+  // Pace start date (migration 0086). Null on existing rows → pace falls back
+  // to created_at::date (declared in computeGoalPace).
+  start_date: string | null;
   target_date: string | null;
   last_progress_change_at: string | null;
   created_at: string;
