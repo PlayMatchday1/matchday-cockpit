@@ -37,8 +37,9 @@ function HomeContent() {
   return (
     <ClubhouseQuarterProvider quarter={quarter}>
       <HeroMessage />
-      {/* Two-column grid (mockup: 1.6fr / 1fr); stacks below 900px. */}
-      <div className="grid grid-cols-1 items-start gap-6 min-[900px]:grid-cols-[1.6fr_1fr]">
+      {/* Goals column fluid; right rail (calendar + P&D) fixed at 420px so the
+          panels stay readable. Collapses to one column below 1080px. */}
+      <div className="grid grid-cols-1 items-start gap-[26px] min-[1080px]:grid-cols-[minmax(0,1fr)_420px]">
         <HomeGoalsView />
         <div className="space-y-[18px]">
           <CalendarPanel />

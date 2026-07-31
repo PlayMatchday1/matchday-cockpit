@@ -31,6 +31,14 @@ export function businessDateOf(timestamp: string): string {
   return todayBusinessDate(new Date(timestamp));
 }
 
+// Whole weeks from today (BUSINESS_TZ) until a YYYY-MM-DD target, floored, min 0.
+export function weeksLeftUntil(
+  targetYmd: string,
+  today: string = todayBusinessDate(),
+): number {
+  return Math.max(0, Math.floor((epochDays(targetYmd) - epochDays(today)) / 7));
+}
+
 export type GoalStatusKey = "ahead" | "pace" | "behind" | "risk";
 
 export type GoalPace = {

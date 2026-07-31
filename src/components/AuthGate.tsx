@@ -71,14 +71,15 @@ export default function AuthGate({ children }: { children: React.ReactNode }) {
     <>
       <TopNav />
       <main
-        className="mx-auto max-w-6xl px-6"
+        className="mx-auto max-w-[1600px] px-8"
         style={{
           // max() so the top padding clears the iOS status bar on
           // mobile PWA (TopNav hidden, no other chrome above) while
-          // staying at the standard 2rem buffer on desktop and any
-          // viewport where env() resolves to 0.
-          paddingTop: "max(env(safe-area-inset-top), 2rem)",
-          paddingBottom: "calc(2rem + var(--bottom-nav-h))",
+          // staying at the mockup's 26px buffer on desktop and any
+          // viewport where env() resolves to 0. Widened container
+          // (was max-w-6xl / 1152px) so wide monitors aren't half-empty.
+          paddingTop: "max(env(safe-area-inset-top), 26px)",
+          paddingBottom: "calc(60px + var(--bottom-nav-h))",
         }}
       >
         {children}

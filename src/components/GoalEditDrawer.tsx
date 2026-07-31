@@ -11,6 +11,7 @@ import {
 } from "@/lib/types";
 import { partitionDirectory } from "@/lib/org";
 import { getNextSortOrder } from "@/lib/goals";
+import { useAuth } from "@/lib/useAuth";
 import { useClubhouseQuarter } from "@/lib/clubhouseQuarter";
 import { useOrgDirectory } from "@/lib/useOrgDirectory";
 import DirectoryOptions from "./DirectoryOptions";
@@ -106,7 +107,19 @@ function DrawerForm({
   const [deleting, setDeleting] = useState(false);
 
   const quarter = useClubhouseQuarter();
+  const { appUser } = useAuth();
   const dir = useOrgDirectory();
+
+  // Record a progress point whenever goals.progress is written (create or a
+  // progress-changing edit). This is the only write path to goals.progress, so
+  // covering it here covers all of them. Not backfilled, not synthesized.
+  async function recordProgressPoint(goalId: string, prog: number) {
+    await supabase.from("goal_progress_history").insert({
+      goal_id: goalId,
+      progress: prog,
+      recorded_by: appUser?.id ?? null,
+    });
+  }
   const partition = useMemo(
     () => (dir ? partitionDirectory(dir) : null),
     [dir],
@@ -136,30 +149,44 @@ function DrawerForm({
       if (progress !== state.goal.progress) {
         updateData.last_progress_change_at = new Date().toISOString();
       }
+      const progressChanged = progress !== state.goal.progress;
       const { error } = await supabase
         .from("goals")
         .update(updateData)
         .eq("id", state.goal.id);
+      if (error) {
+        setSaving(false);
+        return alert(error.message);
+      }
+      if (progressChanged) await recordProgressPoint(state.goal.id, progress);
       setSaving(false);
-      if (error) return alert(error.message);
     } else {
       const sort_order = await getNextSortOrder(
         state.scope,
         state.city ?? null,
       );
-      const { error } = await supabase.from("goals").insert({
-        title: title.trim(),
-        owner,
-        status,
-        progress,
-        scope: state.scope,
-        city: state.city ?? null,
-        sort_order,
-        target_date,
-        quarter_key: quarter.key,
-      });
+      const { data: created, error } = await supabase
+        .from("goals")
+        .insert({
+          title: title.trim(),
+          owner,
+          status,
+          progress,
+          scope: state.scope,
+          city: state.city ?? null,
+          sort_order,
+          target_date,
+          quarter_key: quarter.key,
+        })
+        .select("id")
+        .single();
+      if (error) {
+        setSaving(false);
+        return alert(error.message);
+      }
+      // Anchor the series at the goal's initial progress (a real point).
+      if (created?.id) await recordProgressPoint(created.id as string, progress);
       setSaving(false);
-      if (error) return alert(error.message);
     }
     onSaved();
   }

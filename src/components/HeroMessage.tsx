@@ -50,31 +50,32 @@ export default function HeroMessage() {
   }
 
   if (value === null) {
-    return <div className="mb-10 h-32 animate-pulse rounded-2xl bg-deep-green/80" />;
+    return <div className="mb-4 h-6 w-2/3 animate-pulse rounded bg-[#e0f2e7]" />;
   }
 
-  return (
-    <section className="group relative mb-10 overflow-hidden rounded-2xl bg-deep-green px-6 py-6 shadow-sm md:px-8 md:py-7">
-      {!editing && (
-        <div
-          aria-hidden
-          className="pointer-events-none absolute inset-y-0 right-6 hidden flex-col justify-center gap-1 md:flex"
+  // Lighter inline mission (mockup's .mission): a MATCHDAY MISSION kicker pill
+  // in mint + the mission sentence on the cream background. Retains the
+  // app_settings-backed inline edit (hover pencil).
+  if (!editing) {
+    return (
+      <div className="group relative mb-4 flex flex-wrap items-baseline gap-3 pb-4 pr-8">
+        <span
+          className="rounded-md px-[9px] py-[4px] text-[10px] font-[750] uppercase tracking-[0.13em]"
+          style={{ color: "#35c77f", background: "#e0f2e7" }}
         >
-          <span className="block h-14 w-1 rounded-full bg-mint/25" />
-          <span className="block h-14 w-1 rounded-full bg-mint/55" />
-          <span className="block h-14 w-1 rounded-full bg-mint" />
-        </div>
-      )}
-
-      {!editing && (
+          MatchDay mission
+        </span>
+        <p className="m-0 text-[14px] font-medium" style={{ color: "#365449" }}>
+          {value}
+        </p>
         <button
           type="button"
           onClick={() => {
             setDraft(value);
             setEditing(true);
           }}
-          className="absolute right-3 top-3 rounded-full p-1.5 text-cream/40 opacity-0 transition hover:bg-cream/10 hover:text-cream group-hover:opacity-100 focus-visible:opacity-100"
           aria-label="Edit message"
+          className="absolute right-0 top-0 rounded-full p-1.5 text-deep-green/30 opacity-0 transition hover:bg-deep-green/10 hover:text-deep-green group-hover:opacity-100 focus-visible:opacity-100"
         >
           <svg
             className="h-3.5 w-3.5"
@@ -88,49 +89,46 @@ export default function HeroMessage() {
             <path d="M17 3a2.85 2.85 0 1 1 4 4L7.5 20.5 2 22l1.5-5.5L17 3z" />
           </svg>
         </button>
-      )}
-
-      <div className="relative max-w-2xl pr-6 md:pr-12">
-        <div className="text-[11px] font-bold uppercase tracking-[0.28em] text-mint">
-          MatchDay Mission
-        </div>
-
-        {editing ? (
-          <>
-            <textarea
-              value={draft}
-              onChange={(e) => setDraft(e.target.value)}
-              rows={3}
-              autoFocus
-              className="mt-3 w-full resize-none rounded-lg border border-cream/20 bg-deep-green-hover px-4 py-3 font-display text-2xl uppercase leading-[1.05] tracking-tight text-cream focus:border-mint focus:outline-none md:text-3xl"
-            />
-            <div className="mt-3 flex justify-end gap-2">
-              <button
-                type="button"
-                onClick={() => {
-                  setEditing(false);
-                  setDraft(value);
-                }}
-                className="rounded-full px-4 py-1.5 text-sm font-medium text-cream/70 hover:text-cream"
-              >
-                Cancel
-              </button>
-              <button
-                type="button"
-                onClick={save}
-                disabled={saving || !draft.trim()}
-                className="rounded-full bg-mint px-5 py-1.5 text-sm font-bold text-deep-green transition hover:bg-mint-hover disabled:opacity-50"
-              >
-                {saving ? "Saving…" : "Save"}
-              </button>
-            </div>
-          </>
-        ) : (
-          <p className="mt-2 font-display text-2xl uppercase leading-[1.05] tracking-tight text-cream md:text-3xl">
-            {value}
-          </p>
-        )}
       </div>
-    </section>
+    );
+  }
+
+  return (
+    <div className="mb-4 pb-4">
+      <span
+        className="mb-2 inline-block rounded-md px-[9px] py-[4px] text-[10px] font-[750] uppercase tracking-[0.13em]"
+        style={{ color: "#35c77f", background: "#e0f2e7" }}
+      >
+        MatchDay mission
+      </span>
+      <textarea
+        value={draft}
+        onChange={(e) => setDraft(e.target.value)}
+        rows={2}
+        autoFocus
+        className="mt-1 w-full resize-none rounded-lg border border-cream-line bg-white px-3 py-2 text-[14px] text-[#365449] focus:border-mint focus:outline-none"
+      />
+      <div className="mt-2 flex justify-end gap-2">
+        <button
+          type="button"
+          onClick={() => {
+            setEditing(false);
+            setDraft(value);
+          }}
+          className="rounded-full px-4 py-1.5 text-sm font-medium text-deep-green/70 hover:text-deep-green"
+        >
+          Cancel
+        </button>
+        <button
+          type="button"
+          onClick={save}
+          disabled={saving || !draft.trim()}
+          className="rounded-full bg-mint px-5 py-1.5 text-sm font-bold text-deep-green transition hover:bg-mint-hover disabled:opacity-50"
+        >
+          {saving ? "Saving…" : "Save"}
+        </button>
+      </div>
+    </div>
   );
+
 }
