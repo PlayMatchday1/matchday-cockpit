@@ -5,6 +5,15 @@ const nextConfig: NextConfig = {
   // Permanent so any bookmarks / external references update.
   async redirects() {
     return [
+      // Clubhouse tab renamed to Home and its route moved /clubhouse → /home
+      // on 2026-07-31. Permanent so bookmarks to the old path don't 404. The
+      // can_access_clubhouse permission key and clubhouseQuarter context keep
+      // their names — only the user-facing route moved.
+      {
+        source: "/clubhouse",
+        destination: "/home",
+        permanent: true,
+      },
       {
         source: "/admin/finance/upload",
         destination: "/data",

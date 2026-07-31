@@ -62,7 +62,7 @@ function LoginContent() {
   // tab that signed them in), bounce them to the next destination.
   useEffect(() => {
     if (!isLoading && user) {
-      router.replace(nextParam ?? "/clubhouse");
+      router.replace(nextParam ?? "/home");
     }
   }, [user, isLoading, router, nextParam]);
 

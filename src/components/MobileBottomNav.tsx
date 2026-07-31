@@ -8,7 +8,7 @@
 //
 // Four slots: Chats / Cities / Finance / More. The More button opens
 // a full-screen sheet listing every route NOT in the bottom nav
-// (Clubhouse, Data, Org, Docs, Admin, Sign out) so operators on
+// (Home, Data, Org, Docs, Admin, Sign out) so operators on
 // phones can still reach the rest of the cockpit.
 //
 // All routes are gated by the same canAccess() / is_admin predicates
@@ -124,10 +124,10 @@ export default function MobileBottomNav({
 
   const sheetItems: SheetItem[] = [
     {
-      href: "/clubhouse",
-      label: "Clubhouse",
+      href: "/home",
+      label: "Home",
       icon: LayoutGrid,
-      visible: canAccess(appUser, "clubhouse"),
+      visible: canAccess(appUser, "clubhouse"), // permission key unchanged
     },
     {
       href: "/data",

@@ -26,7 +26,7 @@ export default function AuthGate({ children }: { children: React.ReactNode }) {
     if (isLoading || isPublic) return;
     if (!user) {
       const next =
-        pathname && pathname !== "/" && pathname !== "/clubhouse"
+        pathname && pathname !== "/" && pathname !== "/home"
           ? `?next=${encodeURIComponent(pathname)}`
           : "";
       router.replace(`/login${next}`);

@@ -1,8 +1,8 @@
 "use client";
 
 import { useEffect, useRef, useState } from "react";
-import Image from "next/image";
 import Link from "next/link";
+import MatchdayClubhouseLogo from "@/components/MatchdayClubhouseLogo";
 import { usePathname } from "next/navigation";
 import {
   canAccess,
@@ -33,10 +33,10 @@ type GatedTab = Tab & {
 // order in the header.
 const PERMISSION_TABS: GatedTab[] = [
   {
-    href: "/clubhouse",
-    label: "Clubhouse",
-    page: "clubhouse",
-    match: (p) => p.startsWith("/clubhouse"),
+    href: "/home",
+    label: "Home",
+    page: "clubhouse", // permission key unchanged — only the label/route moved
+    match: (p) => p.startsWith("/home"),
   },
   {
     href: "/cities",
@@ -103,19 +103,12 @@ export default function TopNav() {
     >
       <div className="mx-auto max-w-6xl px-4 sm:px-6">
         <div className="flex h-16 items-center justify-between gap-2 sm:gap-4">
-          <Link
-            href="/clubhouse"
-            className="flex shrink-0 items-center gap-2"
-            aria-label="MatchDay home"
-          >
-            <Image
-              src="/matchday-logo.png"
-              alt="MatchDay"
-              width={140}
-              height={32}
-              priority
-              className="h-7 w-auto"
-            />
+          <Link href="/home" className="flex shrink-0 items-center gap-2">
+            {/* Inlined SVG (fill=currentColor) tinted with the header's `mint`
+                accent token via text-mint; 22px tall, width auto. The svg
+                carries its own role/aria-label ("MatchDay Clubhouse"), which
+                becomes this link's accessible name. */}
+            <MatchdayClubhouseLogo className="h-[22px] w-auto text-mint" />
           </Link>
           {/* Primary tabs. Hidden on small screens — the user-menu
               dropdown picks up the slack as a hamburger surrogate.
