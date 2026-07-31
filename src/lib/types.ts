@@ -79,7 +79,8 @@ export type Goal = {
 export type GoalComment = {
   id: string;
   goal_id: string;
-  author: string;
+  author: string | null;
+  author_email: string | null;
   body: string;
   created_at: string;
 };

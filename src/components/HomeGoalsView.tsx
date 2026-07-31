@@ -1,21 +1,21 @@
 "use client";
 
-// Org goals column on Home. Org goals only. Each card carries its latest
-// goal_comment (for the note row) and derives status/pace (never stored). The
-// section subtitle is a computed count. Cards are click-to-edit via the
-// existing GoalEditDrawer.
+// Org goals column on Home. Org goals only. Each card derives status/pace and
+// reads its latest comment from the shared useGoalComments store, so posting an
+// update in the comments drawer refreshes the note row without a reload.
 
 import { useCallback, useEffect, useMemo, useState } from "react";
 import { supabase } from "@/lib/supabase";
 import type { Goal } from "@/lib/types";
 import { computeGoalPace } from "@/lib/goalPace";
-import OrgGoalCard, { type GoalComment } from "./OrgGoalCard";
+import OrgGoalCard from "./OrgGoalCard";
 import GoalEditDrawer, { type DrawerState } from "./GoalEditDrawer";
+import GoalCommentsDrawer from "./GoalCommentsDrawer";
 
 export default function HomeGoalsView() {
   const [goals, setGoals] = useState<Goal[]>([]);
-  const [comments, setComments] = useState<Record<string, GoalComment>>({});
   const [drawer, setDrawer] = useState<DrawerState>(null);
+  const [commentsGoal, setCommentsGoal] = useState<Goal | null>(null);
 
   const load = useCallback(async () => {
     const { data } = await supabase
@@ -24,32 +24,16 @@ export default function HomeGoalsView() {
       .eq("scope", "org")
       .order("sort_order", { ascending: true, nullsFirst: false })
       .order("created_at", { ascending: true });
-    const rows = (data ?? []) as Goal[];
-    setGoals(rows);
-
-    // Latest comment per goal for the note row (newest first → first wins).
-    const ids = rows.map((g) => g.id);
-    if (ids.length > 0) {
-      const { data: cRows } = await supabase
-        .from("goal_comments")
-        .select("goal_id,body,author,author_email,created_at")
-        .in("goal_id", ids)
-        .order("created_at", { ascending: false });
-      const latest: Record<string, GoalComment> = {};
-      for (const c of (cRows ?? []) as GoalComment[]) {
-        if (!latest[c.goal_id]) latest[c.goal_id] = c;
-      }
-      setComments(latest);
-    } else {
-      setComments({});
-    }
+    setGoals((data ?? []) as Goal[]);
   }, []);
 
   useEffect(() => {
     load();
   }, [load]);
 
-  // Subtitle: "{N} goals · {M} off pace" (off pace = behind or risk).
+  // Keep the comments drawer's goal reference current if the goal list reloads.
+  const openComments = useCallback((g: Goal) => setCommentsGoal(g), []);
+
   const offPace = useMemo(
     () =>
       goals.filter((g) => {
@@ -81,8 +65,8 @@ export default function HomeGoalsView() {
           <OrgGoalCard
             key={g.id}
             goal={g}
-            comment={comments[g.id] ?? null}
             onEdit={(goal) => setDrawer({ mode: "edit", goal })}
+            onOpenComments={openComments}
           />
         ))}
         <button
@@ -103,6 +87,8 @@ export default function HomeGoalsView() {
           load();
         }}
       />
+
+      <GoalCommentsDrawer goal={commentsGoal} onClose={() => setCommentsGoal(null)} />
     </section>
   );
 }

@@ -1,15 +1,18 @@
 "use client";
 
 // Org goal card — matches public/mockups/home-goals-v3.html. Status is DERIVED
-// from linear pace (never stored): colored left rail + icon+label chip. Percent
-// only, so the number reads "N%" + "complete" with the delta badge inline. A
-// labeled pace tick sits on the track; the "On pace" grey fill/rail is
-// deliberate. No sparkline (no history yet). Every card ends with a .gnote —
-// the latest goal_comment, or the "no update" empty state (the empty state is
-// the point). Palette + avatar tint/initials taken verbatim from the mockup.
+// from linear pace (never stored). Percent only. Labeled pace tick; the "On
+// pace" grey fill/rail is deliberate. No sparkline yet.
+//
+// The card is NOT wholesale clickable (#5). Two explicit controls:
+//   - the title button opens the edit drawer (preserves editing),
+//   - the note row is a button that opens the comment thread.
+// Latest comment + count come from the shared useGoalComments store, so a post
+// in the drawer updates the note row here without a reload.
 
 import type { Goal } from "@/lib/types";
 import { htmlToPlainText } from "@/lib/text";
+import { useGoalComments } from "@/lib/useGoalComments";
 import {
   businessDateOf,
   computeGoalPace,
@@ -17,14 +20,6 @@ import {
   weeksLeftUntil,
   type GoalStatusKey,
 } from "@/lib/goalPace";
-
-export type GoalComment = {
-  goal_id: string;
-  body: string;
-  author: string | null;
-  author_email: string | null;
-  created_at: string;
-};
 
 const SHORT = [
   "Jan", "Feb", "Mar", "Apr", "May", "Jun",
@@ -35,7 +30,6 @@ function fmtHuman(ymd: string): string {
   return `${SHORT[m - 1]} ${d}`;
 }
 
-// Deterministic avatar tint + initials — verbatim from the mockup (av/tintOf).
 const TINTS = ["#dcefe4", "#f1e6d3", "#e3e7f1", "#f3e2dc", "#dfeaf0", "#e9e5f0", "#e7efdc"];
 function tintOf(n: string): string {
   let s = 0;
@@ -43,12 +37,7 @@ function tintOf(n: string): string {
   return TINTS[s % TINTS.length];
 }
 function initials(n: string): string {
-  return n
-    .split(/\s+/)
-    .map((x) => x.charAt(0))
-    .slice(0, 2)
-    .join("")
-    .toUpperCase();
+  return n.split(/\s+/).map((x) => x.charAt(0)).slice(0, 2).join("").toUpperCase();
 }
 
 const C: Record<
@@ -63,13 +52,20 @@ const C: Record<
 
 export default function OrgGoalCard({
   goal,
-  comment,
   onEdit,
+  onOpenComments,
 }: {
   goal: Goal;
-  comment: GoalComment | null;
   onEdit: (g: Goal) => void;
+  onOpenComments: (g: Goal) => void;
 }) {
+  const { comments: all } = useGoalComments();
+  const mine = all
+    .filter((c) => c.goal_id === goal.id)
+    .sort((a, b) => a.created_at.localeCompare(b.created_at));
+  const latest = mine.length ? mine[mine.length - 1] : null;
+  const count = mine.length;
+
   const today = todayBusinessDate();
   const p = computeGoalPace({
     progress: goal.progress,
@@ -82,7 +78,6 @@ export default function OrgGoalCard({
   const railColor = c?.rail ?? "#c3ccc7";
   const fill = c?.fill ?? "linear-gradient(90deg,#c9d2cd,#aeb8b3)";
 
-  // Meta line: owner · target Mon D · N weeks left  (owner alone if no target).
   const metaBits: string[] = [];
   if (goal.owner) metaBits.push(goal.owner);
   if (goal.target_date) {
@@ -92,10 +87,8 @@ export default function OrgGoalCard({
   }
 
   return (
-    <button
-      type="button"
-      onClick={() => onEdit(goal)}
-      className="group relative block w-full overflow-hidden rounded-[14px] border text-left transition"
+    <div
+      className="relative overflow-hidden rounded-[14px] border"
       style={{
         background: "#fffdf7",
         borderColor: "#efe9dc",
@@ -105,16 +98,19 @@ export default function OrgGoalCard({
     >
       <span aria-hidden className="absolute inset-y-0 left-0 w-[3px]" style={{ background: railColor, opacity: 0.9 }} />
 
-      {/* Header: name + meta line, chip on the right */}
+      {/* Header: title (opens edit) + meta, status chip */}
       <div className="mb-3 flex items-start gap-3">
         <div className="min-w-0">
-          <div className="text-[15.5px] font-bold leading-tight tracking-[-0.011em] text-[#12241d]">
+          <button
+            type="button"
+            onClick={() => onEdit(goal)}
+            aria-label={`Edit goal ${goal.title}`}
+            className="rounded text-left text-[15.5px] font-bold leading-tight tracking-[-0.011em] text-[#12241d] hover:underline focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-[#35c77f]"
+          >
             {goal.title}
-          </div>
+          </button>
           {metaBits.length > 0 && (
-            <div className="mt-[3px] text-[11.5px] text-[#6d7b74]">
-              {metaBits.join(" · ")}
-            </div>
+            <div className="mt-[3px] text-[11.5px] text-[#6d7b74]">{metaBits.join(" · ")}</div>
           )}
         </div>
         {p.status && c ? (
@@ -132,17 +128,14 @@ export default function OrgGoalCard({
         )}
       </div>
 
-      {/* Number + inline delta (delta sits inside .num, after the number) */}
+      {/* Number + inline delta */}
       <div className="mb-[15px] flex flex-wrap items-baseline gap-2">
         <span className="text-[38px] font-bold leading-[0.94] tracking-[-0.032em] tabular-nums text-[#12241d]">
           {goal.progress}%
         </span>
         <span className="text-[11.5px] text-[#6d7b74]">complete</span>
         {p.delta && c && (
-          <span
-            className="self-center whitespace-nowrap rounded-md px-2 py-[3px] text-[11px] font-bold"
-            style={{ background: c.chipBg, color: c.chipText }}
-          >
+          <span className="self-center whitespace-nowrap rounded-md px-2 py-[3px] text-[11px] font-bold" style={{ background: c.chipBg, color: c.chipText }}>
             {p.delta}
           </span>
         )}
@@ -163,34 +156,48 @@ export default function OrgGoalCard({
         </div>
       </div>
 
-      {/* Read row: Started Mon D ........ target Mon D */}
+      {/* Read row */}
       <div className="flex justify-between gap-3 pt-[2px] text-[12px] text-[#6d7b74]">
         <span>Started {fmtHuman(p.startUsed)}</span>
         {goal.target_date && <span>{fmtHuman(goal.target_date)}</span>}
       </div>
 
-      {/* Note row — latest comment, or the "no update" empty state */}
-      <div className="mt-3 border-t border-dashed pt-3 text-[12.5px] leading-[1.55]" style={{ borderColor: "#e4ddcc" }}>
-        {comment ? (
-          <div style={{ color: "#3f544b" }}>
-            {/* Stored body is rich-text HTML; render a plain-text preview
-                (no dangerouslySetInnerHTML) clamped to 2 lines. Result goes
-                through normal React escaping. */}
-            <div className="line-clamp-2">{htmlToPlainText(comment.body)}</div>
-            <div className="mt-[6px] flex items-center gap-[6px] text-[11px] text-[#9aa5a0]">
-              <Avatar name={comment.author || comment.author_email || "Unknown"} />
-              <span>{comment.author || comment.author_email || "Unknown"}</span>
-              <span>·</span>
-              <span>{fmtHuman(businessDateOf(comment.created_at))}</span>
+      {/* Note row = the comment entry point (its own button, not the whole card) */}
+      <button
+        type="button"
+        onClick={() => onOpenComments(goal)}
+        aria-label={
+          latest
+            ? `${count} update${count === 1 ? "" : "s"} on ${goal.title}, open thread`
+            : `Add the first update on ${goal.title}`
+        }
+        className="mt-3 block w-full rounded-lg border-t border-dashed pt-3 text-left transition hover:bg-black/[0.015] focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-[#35c77f]"
+        style={{ borderColor: "#e4ddcc" }}
+      >
+        {latest ? (
+          <>
+            <div className="flex items-start justify-between gap-2">
+              <div className="line-clamp-2 text-[12.5px] leading-[1.55]" style={{ color: "#3f544b" }}>
+                {htmlToPlainText(latest.body)}
+              </div>
+              <span className="shrink-0 whitespace-nowrap pt-[1px] text-[11px] font-semibold text-[#6d7b74]">
+                {count} update{count === 1 ? "" : "s"} ›
+              </span>
             </div>
-          </div>
+            <div className="mt-[6px] flex items-center gap-[6px] text-[11px] text-[#9aa5a0]">
+              <Avatar name={latest.author || latest.author_email || "Unknown"} />
+              <span>{latest.author || latest.author_email || "Unknown"}</span>
+              <span>·</span>
+              <span>{fmtHuman(businessDateOf(latest.created_at))}</span>
+            </div>
+          </>
         ) : (
-          <div className="italic" style={{ color: "#9aa5a0" }}>
-            No update since this goal was set
+          <div className="text-[12.5px] italic" style={{ color: "#9aa5a0" }}>
+            Add the first update
           </div>
         )}
-      </div>
-    </button>
+      </button>
+    </div>
   );
 }
 
