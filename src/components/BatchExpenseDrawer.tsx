@@ -36,14 +36,30 @@ function dupeKey(city: string, category: string, vendor: string, ord: number): s
   return `${seriesKeyOf(pseudo)}||${ord}`;
 }
 
-// The day the generated rows land on. "last" resolves per-month (recon 0e:
-// day-of-month isn't stable, so the operator picks it and we honor "last day").
-function resolveDate(ord: number, day: string): string {
+function ymd(ord: number, dd: number): string {
   const year = Math.floor((ord - 1) / 12);
   const m0 = (ord - 1) % 12; // 0-based
-  const dd =
-    day === "last" ? new Date(year, m0 + 1, 0).getDate() : parseInt(day, 10);
   return `${year}-${String(m0 + 1).padStart(2, "0")}-${String(dd).padStart(2, "0")}`;
+}
+function monthLength(ord: number): number {
+  const year = Math.floor((ord - 1) / 12);
+  const m0 = (ord - 1) % 12;
+  return new Date(year, m0 + 1, 0).getDate();
+}
+// The day the generated rows land on. Recon 0e showed real days include 2, 4,
+// 5, 10, 15, 23, 24, 28, 30, 31, so the operator types a free day (1-31) or
+// "last day". If a chosen day exceeds a short month, clamp to that month's last
+// day and flag it (never silently roll into the next month).
+function resolveDate(
+  ord: number,
+  dayNum: number,
+  useLast: boolean,
+): { date: string; clamped: boolean } {
+  const len = monthLength(ord);
+  if (useLast) return { date: ymd(ord, len), clamped: false };
+  const wanted = Number.isFinite(dayNum) ? dayNum : 1;
+  const dd = Math.min(Math.max(1, wanted), len);
+  return { date: ymd(ord, dd), clamped: wanted > len };
 }
 
 export default function BatchExpenseDrawer({
@@ -85,7 +101,12 @@ export default function BatchExpenseDrawer({
   const [vendor, setVendor] = useState("");
   const [amount, setAmount] = useState("");
   const [notes, setNotes] = useState("");
-  const [day, setDay] = useState("1");
+  // Single source of truth for the day the rows land on. In single-month mode a
+  // native date input edits these (its day-of-month → dayNum); in multi-month
+  // mode a number input + "last day" toggle edit them directly. Carrying them
+  // across the mode switch is automatic — 1↔many never loses the typed day.
+  const [dayNum, setDayNum] = useState("1");
+  const [useLast, setUseLast] = useState(false);
   const [picked, setPicked] = useState<Set<number>>(new Set());
   const [saving, setSaving] = useState(false);
   const [err, setErr] = useState<string | null>(null);
@@ -95,6 +116,8 @@ export default function BatchExpenseDrawer({
     if (!open) return;
     setErr(null);
     setSaving(false);
+    setDayNum("1");
+    setUseLast(false);
     if (seed) {
       setCity(seed.city || "Company-wide");
       setCategory(seed.category);
@@ -139,12 +162,15 @@ export default function BatchExpenseDrawer({
 
   const amt = parseFloat(amount || "");
   const chosen = [...picked].sort((a, b) => a - b);
+  const singleOrd = chosen.length === 1 ? chosen[0] : null; // native-date mode
+  const dayInt = parseInt(dayNum || "", 10);
   const rowsToWrite = useMemo(() => {
     return chosen.map((ord) => {
+      const { date, clamped } = resolveDate(ord, dayInt, useLast);
       const dupe = existing.has(dupeKey(city, category, vendor, ord));
-      return { ord, date: resolveDate(ord, day), dupe };
+      return { ord, date, clamped, dupe };
     });
-  }, [chosen, existing, city, category, vendor, day]);
+  }, [chosen, existing, city, category, vendor, dayInt, useLast]);
   const willCreate = rowsToWrite.filter((r) => !r.dupe);
   const dupes = rowsToWrite.length - willCreate.length;
   const total = willCreate.length * (Number.isFinite(amt) ? amt : 0);
@@ -161,6 +187,7 @@ export default function BatchExpenseDrawer({
     const written: number[] = [];
     try {
       for (const r of willCreate) {
+        // r.date is exactly what the preview showed — preview == written row.
         await insertFinExpense(
           {
             date: r.date,
@@ -317,17 +344,56 @@ export default function BatchExpenseDrawer({
                 );
               })}
             </div>
-            <div className="mt-4 max-w-[240px]">
-              <Field label="Day of month">
-                <select value={day} onChange={(e) => setDay(e.target.value)} className={INPUT}>
-                  <option value="1">1st of the month</option>
-                  <option value="10">10th</option>
-                  <option value="15">15th</option>
-                  <option value="24">24th</option>
-                  <option value="last">Last day</option>
-                </select>
-              </Field>
-            </div>
+            {singleOrd !== null ? (
+              // Exactly one month → record the real date. Constrained to that
+              // month; the value written is this date verbatim.
+              <div className="mt-4 max-w-[240px]">
+                <Field label="Date">
+                  <input
+                    type="date"
+                    value={resolveDate(singleOrd, dayInt, useLast).date}
+                    min={ymd(singleOrd, 1)}
+                    max={ymd(singleOrd, monthLength(singleOrd))}
+                    onChange={(e) => {
+                      const d = parseInt((e.target.value.split("-")[2] ?? ""), 10);
+                      if (Number.isFinite(d)) {
+                        setDayNum(String(d));
+                        setUseLast(false);
+                      }
+                    }}
+                    className={INPUT}
+                  />
+                </Field>
+              </div>
+            ) : (
+              // Two or more months → one day-of-month applied to each. Free
+              // 1-31 (recon 0e), or last day; short months clamp (flagged in
+              // the preview).
+              <div className="mt-4 flex flex-wrap items-end gap-4">
+                <div className="max-w-[150px]">
+                  <Field label="Day of month">
+                    <input
+                      type="number"
+                      min={1}
+                      max={31}
+                      value={dayNum}
+                      disabled={useLast}
+                      onChange={(e) => setDayNum(e.target.value)}
+                      className={`${INPUT} ${useLast ? "opacity-50" : ""}`}
+                    />
+                  </Field>
+                </div>
+                <label className="flex items-center gap-2 pb-2.5 text-xs font-bold text-deep-green">
+                  <input
+                    type="checkbox"
+                    checked={useLast}
+                    onChange={(e) => setUseLast(e.target.checked)}
+                    className="h-4 w-4 accent-deep-green"
+                  />
+                  Last day of month
+                </label>
+              </div>
+            )}
             {dupes > 0 && (
               <div className="mt-3 flex gap-2 rounded-xl border border-amber-300 bg-amber-50 px-3 py-2.5 text-[11.5px] leading-relaxed text-amber-800">
                 <span aria-hidden>⚠</span>
@@ -371,6 +437,11 @@ export default function BatchExpenseDrawer({
                       <span className="font-bold tabular-nums text-deep-green">{r.date}</span>
                       <span className="flex-1 text-[11px] text-deep-green/55">
                         {city} · {category} · {vendor || "—"}
+                        {r.clamped && (
+                          <span className="ml-1 font-bold text-amber-700">
+                            · day {dayInt} clamped to month end
+                          </span>
+                        )}
                       </span>
                       {r.dupe ? (
                         <span className="text-[10px] font-bold text-amber-700">

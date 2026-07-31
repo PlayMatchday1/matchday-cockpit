@@ -113,8 +113,13 @@ export default function RecurringExpensesGrid({
           {series.length > 0 && (
             <tfoot>
               <tr className="bg-cream-soft font-black tabular-nums">
-                <td className="sticky left-0 z-[1] bg-cream-soft px-4 py-3 text-left text-[10px] uppercase tracking-wider text-deep-green/70">
-                  Booked total
+                <td className="sticky left-0 z-[1] bg-cream-soft px-4 py-3 text-left text-deep-green/70">
+                  <span className="text-[10px] font-black uppercase tracking-wider">
+                    Booked total
+                  </span>
+                  <span className="ml-1 text-[9px] font-semibold normal-case tracking-normal text-deep-green/45">
+                    excl. Match Manager Pay
+                  </span>
                 </td>
                 {columns.map((c, i) => (
                   <td
