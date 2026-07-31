@@ -83,7 +83,7 @@ const MOBILE_PRIMARY: MobilePrimary[] = [
     icon: MessageCircle,
     badge: true,
     visible: (u) => canAccess(u, "chats") || canAccess(u, "clubhouse"),
-    isActive: (p) => p.startsWith("/match-ops") || p.startsWith("/match-chats"),
+    isActive: (p) => p.startsWith("/match-ops"),
   },
   {
     key: "tech",

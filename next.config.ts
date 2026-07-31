@@ -53,15 +53,54 @@ const nextConfig: NextConfig = {
       // page route.
       {
         source: "/crm",
-        destination: "/match-ops/chats",
+        destination: "/match-ops/match-chats",
         permanent: true,
       },
-      // Chats relocated under Match Ops (/chats → /match-ops/chats) on
-      // 2026-07-31. Permanent so bookmarks/hardcoded links don't 404. The
-      // /api/crm/* routes and crm_* tables keep their names.
+      // Chats split into /match-ops/match-chats + /match-ops/player-chats on
+      // 2026-07-31 (the rail is the toggle now). The old single "chats" entries
+      // default to Match Chats; Player Chats is reached via the rail. /api/crm/*
+      // routes and crm_* tables keep their names.
       {
         source: "/chats",
-        destination: "/match-ops/chats",
+        destination: "/match-ops/match-chats",
+        permanent: true,
+      },
+      {
+        source: "/match-ops/chats",
+        destination: "/match-ops/match-chats",
+        permanent: true,
+      },
+      // Match Chats page moved /match-chats → /match-ops/match-chats.
+      {
+        source: "/match-chats",
+        destination: "/match-ops/match-chats",
+        permanent: true,
+      },
+      {
+        source: "/match-chats/:path*",
+        destination: "/match-ops/match-chats/:path*",
+        permanent: true,
+      },
+      // First-Match Review moved /admin/first-match-review → /match-ops/review
+      // on 2026-07-31 (still AdminGuard-gated). Bookmarks survive.
+      {
+        source: "/admin/first-match-review",
+        destination: "/match-ops/review",
+        permanent: true,
+      },
+      // Master Schedule + Field Ops lenses moved out of the Growth page to
+      // Match Ops. The old ?tab= deep links redirect (unmatched query like
+      // ?fo=veo passes through automatically).
+      {
+        source: "/growth",
+        has: [{ type: "query", key: "tab", value: "master-schedule" }],
+        destination: "/match-ops/master-schedule",
+        permanent: true,
+      },
+      {
+        source: "/growth",
+        has: [{ type: "query", key: "tab", value: "fields" }],
+        destination: "/match-ops/field-ops",
         permanent: true,
       },
       // Veo review queue + field-code editor moved from /admin/veo to
@@ -72,7 +111,7 @@ const nextConfig: NextConfig = {
       // the tab URL. The /admin/veo page.tsx stays as a fallback.
       {
         source: "/admin/veo",
-        destination: "/growth?tab=fields&fo=veo",
+        destination: "/match-ops/field-ops?fo=veo",
         permanent: false,
       },
     ];

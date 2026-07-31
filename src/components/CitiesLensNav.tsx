@@ -1,13 +1,14 @@
 "use client";
 
+// Master Schedule (master-schedule) and Field Ops (fields) moved to Match Ops
+// on 2026-07-31 — one entrance, so they left this nav. Their ?tab= URLs
+// permanently redirect to /match-ops/* (see next.config).
 export type CityLens =
   | "overview"
   | "users"
   | "membership"
   | "cancellations"
-  | "reviews"
-  | "master-schedule"
-  | "fields";
+  | "reviews";
 
 const LENSES: { value: CityLens; label: string }[] = [
   { value: "overview", label: "Overview" },
@@ -15,8 +16,6 @@ const LENSES: { value: CityLens; label: string }[] = [
   { value: "membership", label: "Membership" },
   { value: "cancellations", label: "Cancellations" },
   { value: "reviews", label: "Reviews" },
-  { value: "master-schedule", label: "Master Schedule" },
-  { value: "fields", label: "Field Ops" },
 ];
 
 // Sticky pill-tab nav. Active tab = mint solid, inactive = white

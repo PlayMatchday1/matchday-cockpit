@@ -47,7 +47,6 @@ import {
   Star,
 } from "lucide-react";
 import EnablePushNotificationsButton from "@/components/EnablePushNotificationsButton";
-import PlayersMatchesToggle from "@/components/PlayersMatchesToggle";
 import { supabase } from "@/lib/supabase";
 import { useAuth } from "@/lib/useAuth";
 import { UNKNOWN_CITY } from "@/lib/cityColors";
@@ -271,7 +270,7 @@ export default function CrmClient() {
       if (next.view === "open") params.delete("view");
       else params.set("view", next.view);
       const qs = params.toString();
-      router.replace(qs ? `/match-ops/chats?${qs}` : "/match-ops/chats", {
+      router.replace(qs ? `/match-ops/player-chats?${qs}` : "/match-ops/player-chats", {
         scroll: false,
       });
     },
@@ -284,7 +283,7 @@ export default function CrmClient() {
       if (id == null) params.delete("threadId");
       else params.set("threadId", id);
       const qs = params.toString();
-      router.replace(qs ? `/match-ops/chats?${qs}` : "/match-ops/chats", {
+      router.replace(qs ? `/match-ops/player-chats?${qs}` : "/match-ops/player-chats", {
         scroll: false,
       });
     },
@@ -1686,11 +1685,6 @@ function ChatsHeader({
             />
           )}
         </button>
-      </div>
-
-      {/* Segmented control */}
-      <div className="border-b border-cream-line bg-cream px-3 py-2 sm:px-4">
-        <PlayersMatchesToggle current="players" />
       </div>
 
       {/* Support-performance metrics strip — sits above the filter row

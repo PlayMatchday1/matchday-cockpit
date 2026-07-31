@@ -33,7 +33,6 @@ import {
 import { supabase } from "@/lib/supabase";
 import { useFirebaseSession } from "@/lib/useFirebaseSession";
 import EnablePushNotificationsButton from "@/components/EnablePushNotificationsButton";
-import PlayersMatchesToggle from "@/components/PlayersMatchesToggle";
 import {
   ACTIVE_WINDOW_DAYS,
   isValidChatId,
@@ -200,7 +199,7 @@ export default function MatchChatsClient() {
         else next.set("cities", [...patch.cities].join(","));
       }
       const qs = next.toString();
-      router.replace(qs ? `/match-chats?${qs}` : "/match-chats", {
+      router.replace(qs ? `/match-ops/match-chats?${qs}` : "/match-ops/match-chats", {
         scroll: false,
       });
     },
@@ -314,11 +313,6 @@ function MatchChatsHeader({
       <div aria-hidden className="bg-deep-green" style={{ height: "var(--safe-area-top)" }} />
       <div className="flex min-h-12 items-center justify-between bg-deep-green px-3 sm:px-4">
         <h1 className="text-base font-bold tracking-tight text-cream">Chats</h1>
-      </div>
-
-      {/* Segmented control */}
-      <div className="border-b border-cream-line bg-cream px-3 py-2 sm:px-4">
-        <PlayersMatchesToggle current="matches" />
       </div>
 
       {/* Status line */}

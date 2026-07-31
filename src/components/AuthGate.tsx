@@ -64,8 +64,8 @@ export default function AuthGate({ children }: { children: React.ReactNode }) {
   // layout while letting chat routes opt into the inline pattern.
   const onChatShell =
     !!pathname &&
-    (pathname.startsWith("/match-ops/chats") ||
-      pathname.startsWith("/match-chats"));
+    (pathname.startsWith("/match-ops/match-chats") ||
+      pathname.startsWith("/match-ops/player-chats"));
 
   return (
     <>

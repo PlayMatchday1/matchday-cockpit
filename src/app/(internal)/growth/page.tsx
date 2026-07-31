@@ -7,8 +7,6 @@ import CitiesLegend from "@/components/CitiesLegend";
 import CitiesCancellationsLens from "@/components/CitiesCancellationsLens";
 import CitiesExecHero from "@/components/CitiesExecHero";
 import CitiesLensNav, { type CityLens } from "@/components/CitiesLensNav";
-import FieldOpsLens from "@/components/FieldOpsLens";
-import CitiesMasterScheduleLens from "@/components/CitiesMasterScheduleLens";
 import CitiesMembershipLens from "@/components/CitiesMembershipLens";
 import CitiesReviewsLens from "@/components/CitiesReviewsLens";
 import CitiesUsersLens from "@/components/CitiesUsersLens";
@@ -43,8 +41,6 @@ const VALID_LENSES: CityLens[] = [
   "membership",
   "cancellations",
   "reviews",
-  "master-schedule",
-  "fields",
 ];
 
 function CitiesIndexContent() {
@@ -100,8 +96,6 @@ function CitiesIndexContent() {
       {lens === "membership" && <CitiesMembershipLens />}
       {lens === "cancellations" && <CitiesCancellationsLens />}
       {lens === "reviews" && <CitiesReviewsLens />}
-      {lens === "master-schedule" && <CitiesMasterScheduleLens />}
-      {lens === "fields" && <FieldOpsLens />}
     </>
   );
 }

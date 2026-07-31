@@ -11,7 +11,7 @@
 // refresh. The default (fields) carries no param.
 
 import { useCallback, useMemo } from "react";
-import { useRouter, useSearchParams } from "next/navigation";
+import { usePathname, useRouter, useSearchParams } from "next/navigation";
 import CitiesFieldsLens from "@/components/CitiesFieldsLens";
 import InventoryDashboard from "@/components/InventoryDashboard";
 import VeoDashboard from "@/components/VeoDashboard";
@@ -28,6 +28,9 @@ const BASE_TABS: { key: Inner; label: string }[] = [
 export default function FieldOpsLens() {
   const router = useRouter();
   const searchParams = useSearchParams();
+  // Base path comes from the router, not hardcoded, so the lens works wherever
+  // it is mounted (it was moved from /growth to /match-ops/field-ops).
+  const pathname = usePathname();
   const { appUser } = useAuth();
   const isAdmin = appUser?.is_admin === true;
 
@@ -59,9 +62,9 @@ export default function FieldOpsLens() {
       if (key === "fields") params.delete("fo");
       else params.set("fo", key);
       const qs = params.toString();
-      router.replace(qs ? `/growth?${qs}` : "/growth", { scroll: false });
+      router.replace(qs ? `${pathname}?${qs}` : pathname, { scroll: false });
     },
-    [router, searchParams],
+    [router, searchParams, pathname],
   );
 
   return (

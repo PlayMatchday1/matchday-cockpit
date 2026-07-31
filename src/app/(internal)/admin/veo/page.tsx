@@ -6,5 +6,5 @@ import { redirect } from "next/navigation";
 // never deleted outright — if the config redirect were ever removed, a hard
 // load here still lands on the Veo tab.
 export default function VeoAdminRedirect() {
-  redirect("/growth?tab=fields&fo=veo");
+  redirect("/match-ops/field-ops?fo=veo");
 }

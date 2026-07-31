@@ -30,7 +30,7 @@ export default function PlayerChatPage() {
   return (
     <PagePermissionGuard page="chats">
       <div
-        className="-mx-6 flex h-[100dvh] flex-col md:h-[calc(100dvh-4rem)]"
+        className="flex h-[100dvh] flex-col md:h-[calc(100dvh-4rem)]"
         style={{
           // Cancel AuthGate <main>'s padding so the chat shell occupies
           // the full viewport (top edge of viewport on mobile / under

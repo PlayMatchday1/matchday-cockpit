@@ -74,7 +74,7 @@ const PRIMARY_TABS: PrimaryTab[] = [
     badge: true,
     // reachable if the user can open Chats OR Field Pipeline (clubhouse)
     visible: (u) => canAccess(u, "chats") || canAccess(u, "clubhouse"),
-    match: (p) => p.startsWith("/match-ops") || p.startsWith("/match-chats"),
+    match: (p) => p.startsWith("/match-ops"),
   },
   {
     label: "Tech",
