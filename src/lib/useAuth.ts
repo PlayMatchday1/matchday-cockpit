@@ -132,11 +132,11 @@ export function hasAnyAccess(appUser: AppUser | null): boolean {
 export function firstAllowedPath(appUser: AppUser | null): string {
   if (!appUser) return "/login";
   if (appUser.is_admin || appUser.can_access_clubhouse) return "/home";
-  if (appUser.can_access_cities) return "/cities";
+  if (appUser.can_access_cities) return "/growth";
   if (appUser.can_access_data) return "/data";
   if (appUser.can_access_docs) return "/docs";
   if (appUser.can_access_finance) return "/admin/finance";
-  if (appUser.can_access_chats) return "/chats";
+  if (appUser.can_access_chats) return "/match-ops/chats";
   return "/no-access";
 }
 

@@ -28,52 +28,80 @@ import {
   MessageCircle,
   MoreHorizontal,
   Shield,
+  Users,
+  Wrench,
   X,
   type LucideIcon,
 } from "lucide-react";
-import { canAccess, useAuth, type PageName } from "@/lib/useAuth";
+import { canAccess, useAuth, type AppUser } from "@/lib/useAuth";
 import { useCrmUnreadCount } from "@/lib/useCrmUnreadCount";
 import UnreadCountCircle from "@/components/UnreadCountCircle";
 
-type TabKey = "chats" | "cities" | "finance" | "more";
-
-type RouteTab = {
-  key: Exclude<TabKey, "more">;
+// Mobile mirror of TopNav's primary sections, in the same order. The bottom bar
+// can't hold six, so the user's first three *accessible* sections show in the
+// bar and the rest fall into the More sheet (nothing dropped). Membership is a
+// disabled "Coming soon" row in the sheet, mirroring the disabled desktop tab.
+type MobilePrimary = {
+  key: string;
   href: string;
   label: string;
   icon: LucideIcon;
+  badge?: boolean;
+  visible: (u: AppUser) => boolean;
   isActive: (pathname: string) => boolean;
 };
 
-const ROUTE_TABS: RouteTab[] = [
+const MOBILE_PRIMARY: MobilePrimary[] = [
   {
-    key: "chats",
-    href: "/chats",
-    label: "Chats",
-    icon: MessageCircle,
-    isActive: (p) => p.startsWith("/chats") || p.startsWith("/match-chats"),
-  },
-  {
-    key: "cities",
-    href: "/cities",
-    label: "Cities",
-    icon: MapPin,
-    isActive: (p) => p.startsWith("/cities"),
+    key: "home",
+    href: "/home",
+    label: "Home",
+    icon: LayoutGrid,
+    visible: (u) => canAccess(u, "clubhouse"),
+    isActive: (p) => p.startsWith("/home"),
   },
   {
     key: "finance",
     href: "/admin/finance",
     label: "Finance",
     icon: BarChart3,
+    visible: (u) => canAccess(u, "finance"),
     isActive: (p) => p.startsWith("/admin/finance"),
+  },
+  {
+    key: "growth",
+    href: "/growth",
+    label: "Growth",
+    icon: MapPin,
+    visible: (u) => canAccess(u, "cities"),
+    isActive: (p) => p.startsWith("/growth"),
+  },
+  {
+    key: "match-ops",
+    href: "/match-ops",
+    label: "Match Ops",
+    icon: MessageCircle,
+    badge: true,
+    visible: (u) => canAccess(u, "chats") || canAccess(u, "clubhouse"),
+    isActive: (p) => p.startsWith("/match-ops") || p.startsWith("/match-chats"),
+  },
+  {
+    key: "tech",
+    href: "/tech",
+    label: "Tech",
+    icon: Wrench,
+    visible: (u) => canAccess(u, "clubhouse"),
+    isActive: (p) => p.startsWith("/tech"),
   },
 ];
 
 type SheetItem = {
-  href: string;
+  href?: string;
   label: string;
   icon: LucideIcon;
   visible: boolean;
+  disabled?: boolean;
+  badge?: boolean;
 };
 
 export default function MobileBottomNav({
@@ -115,20 +143,29 @@ export default function MobileBottomNav({
   if (!appUser) return null;
 
   const isAdmin = !!appUser.is_admin;
-  const visibleTabs = ROUTE_TABS.filter((t) => {
-    if (t.key === "chats") return canAccess(appUser, "chats");
-    if (t.key === "cities") return canAccess(appUser, "cities");
-    if (t.key === "finance") return canAccess(appUser, "finance");
-    return true;
-  });
+
+  // Bottom bar holds the user's first three accessible sections by a mobile
+  // priority (Match Ops carries daily-use Chats, so it ranks above Finance);
+  // the rest fall into More. Nothing is dropped.
+  const BAR_ORDER = ["home", "match-ops", "growth", "finance", "tech"];
+  const visiblePrimary = MOBILE_PRIMARY.filter((t) => t.visible(appUser));
+  const prioritised = [...visiblePrimary].sort(
+    (a, b) => BAR_ORDER.indexOf(a.key) - BAR_ORDER.indexOf(b.key),
+  );
+  const barTabs = prioritised.slice(0, 3);
+  const overflowKeys = new Set(prioritised.slice(3).map((t) => t.key));
 
   const sheetItems: SheetItem[] = [
-    {
-      href: "/home",
-      label: "Home",
-      icon: LayoutGrid,
-      visible: canAccess(appUser, "clubhouse"), // permission key unchanged
-    },
+    // Primary sections that didn't fit the bar (kept in nav order).
+    ...MOBILE_PRIMARY.filter((t) => overflowKeys.has(t.key)).map((t) => ({
+      href: t.href,
+      label: t.label,
+      icon: t.icon,
+      visible: true,
+      badge: t.badge,
+    })),
+    // Membership — disabled placeholder, mirroring the desktop tab.
+    { label: "Membership", icon: Users, visible: true, disabled: true },
     {
       href: "/data",
       label: "Data",
@@ -141,18 +178,13 @@ export default function MobileBottomNav({
       icon: FileText,
       visible: canAccess(appUser, "docs"),
     },
-    {
-      href: "/admin",
-      label: "Admin",
-      icon: Shield,
-      visible: isAdmin,
-    },
+    { href: "/admin", label: "Admin", icon: Shield, visible: isAdmin },
   ];
 
   const visibleSheetItems = sheetItems.filter((i) => i.visible);
   const moreActive =
     sheetOpen ||
-    visibleSheetItems.some((i) => pathname.startsWith(i.href));
+    visibleSheetItems.some((i) => !i.disabled && i.href && pathname.startsWith(i.href));
 
   return (
     <>
@@ -160,12 +192,15 @@ export default function MobileBottomNav({
         aria-label="Primary"
         className={
           inline
-            ? "grid grid-cols-4 border-t border-cream-line bg-white md:hidden"
-            : "fixed inset-x-0 bottom-0 z-30 grid grid-cols-4 border-t border-cream-line bg-white md:hidden"
+            ? "grid border-t border-cream-line bg-white md:hidden"
+            : "fixed inset-x-0 bottom-0 z-30 grid border-t border-cream-line bg-white md:hidden"
         }
-        style={{ paddingBottom: "env(safe-area-inset-bottom)" }}
+        style={{
+          gridTemplateColumns: `repeat(${barTabs.length + 1}, minmax(0,1fr))`,
+          paddingBottom: "env(safe-area-inset-bottom)",
+        }}
       >
-        {visibleTabs.map((t) => {
+        {barTabs.map((t) => {
           const active = t.isActive(pathname);
           return (
             <NavTab
@@ -174,7 +209,7 @@ export default function MobileBottomNav({
               label={t.label}
               Icon={t.icon}
               active={active}
-              badgeCount={t.key === "chats" ? crmUnread : 0}
+              badgeCount={t.badge ? crmUnread : 0}
             />
           );
         })}
@@ -297,6 +332,30 @@ function MoreSheet({
       <div className="flex-1 overflow-y-auto overflow-x-hidden bg-white">
         <ul className="divide-y divide-cream-line">
           {items.map((it) => {
+            if (it.disabled || !it.href) {
+              return (
+                <li key={it.label}>
+                  <span
+                    title="Coming soon"
+                    aria-disabled="true"
+                    className="flex min-h-[48px] items-center gap-3 px-4 py-3 text-deep-green/35"
+                  >
+                    <it.icon
+                      aria-hidden
+                      size={20}
+                      strokeWidth={1.75}
+                      className="shrink-0"
+                    />
+                    <span className="flex-1 text-[15px] font-medium">
+                      {it.label}
+                    </span>
+                    <span className="text-[11px] font-semibold uppercase tracking-wide">
+                      Soon
+                    </span>
+                  </span>
+                </li>
+              );
+            }
             const active = pathname.startsWith(it.href);
             return (
               <li key={it.href}>

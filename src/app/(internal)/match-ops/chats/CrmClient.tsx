@@ -271,7 +271,9 @@ export default function CrmClient() {
       if (next.view === "open") params.delete("view");
       else params.set("view", next.view);
       const qs = params.toString();
-      router.replace(qs ? `/chats?${qs}` : "/chats", { scroll: false });
+      router.replace(qs ? `/match-ops/chats?${qs}` : "/match-ops/chats", {
+        scroll: false,
+      });
     },
     [router, searchParams],
   );
@@ -282,7 +284,9 @@ export default function CrmClient() {
       if (id == null) params.delete("threadId");
       else params.set("threadId", id);
       const qs = params.toString();
-      router.replace(qs ? `/chats?${qs}` : "/chats", { scroll: false });
+      router.replace(qs ? `/match-ops/chats?${qs}` : "/match-ops/chats", {
+        scroll: false,
+      });
     },
     [router, searchParams],
   );

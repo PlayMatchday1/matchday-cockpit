@@ -8,6 +8,7 @@ import {
   canAccess,
   displayName,
   useAuth,
+  type AppUser,
   type PageName,
 } from "@/lib/useAuth";
 import { useCrmUnreadCount } from "@/lib/useCrmUnreadCount";
@@ -28,36 +29,59 @@ type GatedTab = Tab & {
   page: PageName;
 };
 
-// Primary tabs gated by per-page permissions. Always rendered when
-// canAccess() returns true. Order matters — left-to-right reading
-// order in the header.
-const PERMISSION_TABS: GatedTab[] = [
+// Primary header tabs, left→right: Home · Finance · Growth · Membership ·
+// Match Ops · Tech (Test is appended separately, admin-only, unchanged).
+// A tab shows when the user can reach at least one thing under it. Chats and
+// Field Pipeline moved under Match Ops; Tech Roadmap under Tech. Membership has
+// no route yet — it renders as a disabled "Coming soon" label for everyone.
+type PrimaryTab = {
+  label: string;
+  href?: string; // undefined → disabled placeholder
+  disabled?: boolean;
+  badge?: boolean; // show the chats-unread badge (Match Ops)
+  visible: (u: AppUser | null) => boolean;
+  match: (p: string) => boolean;
+};
+
+const PRIMARY_TABS: PrimaryTab[] = [
   {
-    href: "/home",
     label: "Home",
-    page: "clubhouse", // permission key unchanged — only the label/route moved
+    href: "/home",
+    visible: (u) => canAccess(u, "clubhouse"),
     match: (p) => p.startsWith("/home"),
   },
   {
-    href: "/cities",
-    label: "Cities",
-    page: "cities",
-    match: (p) => p.startsWith("/cities"),
+    label: "Finance",
+    href: "/admin/finance",
+    visible: (u) => canAccess(u, "finance"),
+    match: (p) => p.startsWith("/admin/finance"),
   },
-];
-
-// Chats primary tab. Single entry covers both /chats (customer
-// inbox) and /match-chats (per-match chat rooms). The active-state
-// predicate matches BOTH routes — clicking Chats lands on /chats
-// by default; the sub-tab strip inside the page handles the final
-// hop to Match Chats. Gated on canAccess(appUser, "chats") so a
-// customer-service person with only can_access_chats = true sees
-// the tab without needing is_admin.
-const CHATS_PRIMARY_TABS: Tab[] = [
   {
-    href: "/chats",
-    label: "Chats",
-    match: (p) => p.startsWith("/chats") || p.startsWith("/match-chats"),
+    label: "Growth",
+    href: "/growth",
+    visible: (u) => canAccess(u, "cities"),
+    match: (p) => p.startsWith("/growth"),
+  },
+  {
+    label: "Membership",
+    disabled: true,
+    visible: () => true,
+    match: () => false,
+  },
+  {
+    label: "Match Ops",
+    href: "/match-ops",
+    badge: true,
+    // reachable if the user can open Chats OR Field Pipeline (clubhouse)
+    visible: (u) => canAccess(u, "chats") || canAccess(u, "clubhouse"),
+    match: (p) => p.startsWith("/match-ops") || p.startsWith("/match-chats"),
+  },
+  {
+    label: "Tech",
+    href: "/tech",
+    // Tech Roadmap carried the clubhouse gate on Home
+    visible: (u) => canAccess(u, "clubhouse"),
+    match: (p) => p.startsWith("/tech"),
   },
 ];
 
@@ -89,11 +113,10 @@ export default function TopNav() {
   // page. Presence only, no number; the title is intentionally left as-is.
   useFaviconUnreadDot(crmUnread);
 
-  const visiblePermission = PERMISSION_TABS.filter((t) =>
-    canAccess(appUser, t.page),
+  const visiblePrimary = PRIMARY_TABS.filter(
+    (t) => t.disabled || t.visible(appUser),
   );
   const isAdmin = !!appUser?.is_admin;
-  const financeActive = pathname?.startsWith("/admin/finance") ?? false;
   const adminActive = pathname === "/admin";
 
   return (
@@ -115,7 +138,10 @@ export default function TopNav() {
               Above lg: full padding; between sm and lg: tighter
               padding so the row doesn't wrap. */}
           <nav className="hidden flex-1 items-center justify-center gap-0.5 md:flex">
-            {visiblePermission.map((tab) => {
+            {visiblePrimary.map((tab) => {
+              if (tab.disabled) {
+                return <PrimaryLink key={tab.label} label={tab.label} disabled />;
+              }
               const active = pathname ? tab.match(pathname) : false;
               return (
                 <PrimaryLink
@@ -123,32 +149,14 @@ export default function TopNav() {
                   href={tab.href}
                   active={active}
                   label={tab.label}
+                  badgeCount={tab.badge ? crmUnread : 0}
                 />
               );
             })}
-            {canAccess(appUser, "finance") && (
-              <PrimaryLink
-                href="/admin/finance"
-                active={financeActive}
-                label="Finance"
-              />
-            )}
-            {canAccess(appUser, "chats") &&
-              CHATS_PRIMARY_TABS.map((tab) => {
-                const active = pathname ? tab.match(pathname) : false;
-                return (
-                  <PrimaryLink
-                    key={tab.href}
-                    href={tab.href}
-                    active={active}
-                    label={tab.label}
-                    badgeCount={crmUnread}
-                  />
-                );
-              })}
-            {/* Admin-only staging tab. Hidden for non-admins (the link is
-                gated on is_admin here AND the /admin/test page keeps its own
-                is_admin guard — hiding a link is not a permission check). */}
+            {/* Admin-only staging tab. Unchanged — hidden for non-admins (the
+                link is gated on is_admin here AND the /admin/test page keeps
+                its own is_admin guard — hiding a link is not a permission
+                check). */}
             {isAdmin && (
               <PrimaryLink
                 href="/admin/test"
@@ -167,19 +175,13 @@ export default function TopNav() {
               onSignOut={signOut}
               // On mobile (md:hidden zone) the dropdown also holds
               // the primary tabs so we don't lose access to them.
-              mobilePrimaryTabs={[
-                ...visiblePermission,
-                ...(canAccess(appUser, "finance")
-                  ? [
-                      {
-                        href: "/admin/finance",
-                        label: "Finance",
-                        match: (p: string) => p.startsWith("/admin/finance"),
-                      },
-                    ]
-                  : []),
-                ...(canAccess(appUser, "chats") ? CHATS_PRIMARY_TABS : []),
-              ]}
+              mobilePrimaryTabs={visiblePrimary
+                .filter((t) => !t.disabled && t.href)
+                .map((t) => ({
+                  href: t.href as string,
+                  label: t.label,
+                  match: t.match,
+                }))}
             />
           ) : (
             <div className="shrink-0" />
@@ -192,19 +194,36 @@ export default function TopNav() {
 
 function PrimaryLink({
   href,
-  active,
+  active = false,
   label,
   badgeCount = 0,
+  disabled = false,
 }: {
-  href: string;
-  active: boolean;
+  href?: string;
+  active?: boolean;
   label: string;
   badgeCount?: number;
+  disabled?: boolean;
 }) {
+  // Padding reduced lg:px-4 → lg:px-3 vs the old 4-tab nav so 7 tabs
+  // (6 primary + Test) fit at 1024px without wrapping. See ship report.
+  const base =
+    "inline-flex items-center gap-1.5 rounded-full px-2.5 py-1.5 text-sm font-medium tracking-tight transition lg:px-3";
+  if (disabled || !href) {
+    return (
+      <span
+        title="Coming soon"
+        aria-disabled="true"
+        className={`${base} cursor-default text-cream/35`}
+      >
+        {label}
+      </span>
+    );
+  }
   return (
     <Link
       href={href}
-      className={`inline-flex items-center gap-1.5 rounded-full px-2.5 py-1.5 text-sm font-medium tracking-tight transition lg:px-4 ${
+      className={`${base} ${
         active
           ? "bg-mint text-deep-green"
           : "text-cream/80 hover:bg-deep-green-soft hover:text-cream"

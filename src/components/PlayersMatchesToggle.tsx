@@ -19,7 +19,7 @@ export default function PlayersMatchesToggle({
 }) {
   return (
     <div className="grid grid-cols-2 gap-1 rounded-full border border-deep-green/15 bg-white p-0.5">
-      <SegmentLink href="/chats" label="Players" active={current === "players"} />
+      <SegmentLink href="/match-ops/chats" label="Players" active={current === "players"} />
       <SegmentLink
         href="/match-chats"
         label="Matches"

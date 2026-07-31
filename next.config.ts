@@ -5,6 +5,20 @@ const nextConfig: NextConfig = {
   // Permanent so any bookmarks / external references update.
   async redirects() {
     return [
+      // Cities section renamed to Growth; route moved /cities → /growth on
+      // 2026-07-31. Permanent so bookmarks/hardcoded links don't 404. The
+      // /api/cities/* endpoints, city/cities data columns, and ?tab= lens
+      // values keep their names — only the user-facing section route moved.
+      {
+        source: "/cities",
+        destination: "/growth",
+        permanent: true,
+      },
+      {
+        source: "/cities/:path*",
+        destination: "/growth/:path*",
+        permanent: true,
+      },
       // Clubhouse tab renamed to Home and its route moved /clubhouse → /home
       // on 2026-07-31. Permanent so bookmarks to the old path don't 404. The
       // can_access_clubhouse permission key and clubhouseQuarter context keep
@@ -39,7 +53,15 @@ const nextConfig: NextConfig = {
       // page route.
       {
         source: "/crm",
-        destination: "/chats",
+        destination: "/match-ops/chats",
+        permanent: true,
+      },
+      // Chats relocated under Match Ops (/chats → /match-ops/chats) on
+      // 2026-07-31. Permanent so bookmarks/hardcoded links don't 404. The
+      // /api/crm/* routes and crm_* tables keep their names.
+      {
+        source: "/chats",
+        destination: "/match-ops/chats",
         permanent: true,
       },
       // Veo review queue + field-code editor moved from /admin/veo to
@@ -50,7 +72,7 @@ const nextConfig: NextConfig = {
       // the tab URL. The /admin/veo page.tsx stays as a fallback.
       {
         source: "/admin/veo",
-        destination: "/cities?tab=fields&fo=veo",
+        destination: "/growth?tab=fields&fo=veo",
         permanent: false,
       },
     ];

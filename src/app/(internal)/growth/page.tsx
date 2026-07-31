@@ -73,7 +73,7 @@ function CitiesIndexContent() {
       const params = new URLSearchParams();
       if (next !== "overview") params.set("tab", next);
       const qs = params.toString();
-      router.replace(qs ? `/cities?${qs}` : "/cities", { scroll: false });
+      router.replace(qs ? `/growth?${qs}` : "/growth", { scroll: false });
     },
     [router],
   );
@@ -82,7 +82,7 @@ function CitiesIndexContent() {
     <>
       <div className="mb-6">
         <h1 className="text-3xl font-extrabold tracking-tight text-deep-green">
-          Cities
+          Growth
         </h1>
         <p className="mt-1 text-sm text-deep-green/70">
           Per-market venues, weekly matches, and goals.

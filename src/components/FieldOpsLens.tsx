@@ -59,7 +59,7 @@ export default function FieldOpsLens() {
       if (key === "fields") params.delete("fo");
       else params.set("fo", key);
       const qs = params.toString();
-      router.replace(qs ? `/cities?${qs}` : "/cities", { scroll: false });
+      router.replace(qs ? `/growth?${qs}` : "/growth", { scroll: false });
     },
     [router, searchParams],
   );
