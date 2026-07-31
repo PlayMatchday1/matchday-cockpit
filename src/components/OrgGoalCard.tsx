@@ -1,14 +1,10 @@
 "use client";
 
-// Org goal card — matches public/mockups/home-goals-v3.html. Status is DERIVED
-// from linear pace (never stored). Percent only. Labeled pace tick; the "On
-// pace" grey fill/rail is deliberate. No sparkline yet.
-//
-// The card is NOT wholesale clickable (#5). Two explicit controls:
-//   - the title button opens the edit drawer (preserves editing),
-//   - the note row is a button that opens the comment thread.
-// Latest comment + count come from the shared useGoalComments store, so a post
-// in the drawer updates the note row here without a reload.
+// Org goal card — home-v5 redesign. One ring carries number + progress + pace
+// (replacing bar + tick + caption + chips). Colour encodes HEALTH not degree:
+// green = ahead/on-pace (on-pace is the GOOD outcome, never grey), amber =
+// behind, red = at risk. Trend renders only from >=4 real history rows — never
+// synthesized. The note is a clickable door into the comment thread.
 
 import type { Goal } from "@/lib/types";
 import { htmlToPlainText } from "@/lib/text";
@@ -18,44 +14,69 @@ import {
   computeGoalPace,
   todayBusinessDate,
   weeksLeftUntil,
-  type GoalStatusKey,
 } from "@/lib/goalPace";
 
-const SHORT = [
-  "Jan", "Feb", "Mar", "Apr", "May", "Jun",
-  "Jul", "Aug", "Sep", "Oct", "Nov", "Dec",
-];
-function fmtHuman(ymd: string): string {
+type StatusKey = "ahead" | "pace" | "behind" | "risk";
+
+const SHORT = ["Jan", "Feb", "Mar", "Apr", "May", "Jun", "Jul", "Aug", "Sep", "Oct", "Nov", "Dec"];
+const fmtHuman = (ymd: string) => {
   const [, m, d] = ymd.split("-").map(Number);
   return `${SHORT[m - 1]} ${d}`;
-}
-
+};
 const TINTS = ["#dcefe4", "#f1e6d3", "#e3e7f1", "#f3e2dc", "#dfeaf0", "#e9e5f0", "#e7efdc"];
-function tintOf(n: string): string {
+const tintOf = (n: string) => {
   let s = 0;
   for (let i = 0; i < n.length; i++) s = (s * 31 + n.charCodeAt(i)) >>> 0;
   return TINTS[s % TINTS.length];
-}
-function initials(n: string): string {
-  return n.split(/\s+/).map((x) => x.charAt(0)).slice(0, 2).join("").toUpperCase();
+};
+const initials = (n: string) =>
+  n.split(/\s+/).map((x) => x.charAt(0)).slice(0, 2).join("").toUpperCase();
+
+// pct - pace → health. Green for ahead AND on pace (no grey path).
+function statusOf(pct: number, pace: number): { k: StatusKey; label: string } {
+  const d = pct - pace;
+  if (d >= 5) return { k: "ahead", label: `+${Math.round(d)} pts ahead` };
+  if (d >= -5) return { k: "pace", label: "On pace" };
+  if (d >= -15) return { k: "behind", label: `${Math.round(-d)} pts behind` };
+  return { k: "risk", label: `At risk · ${Math.round(-d)} pts behind` };
 }
 
-const C: Record<
-  GoalStatusKey,
-  { rail: string; chipBg: string; chipText: string; chipBorder: string; fill: string }
-> = {
-  ahead: { rail: "#35c77f", chipBg: "#e0f2e7", chipText: "#0f6b42", chipBorder: "#bfe6d0", fill: "linear-gradient(90deg,#5fd79a,#35c77f)" },
-  pace: { rail: "#8fa79b", chipBg: "#eef1ef", chipText: "#455a51", chipBorder: "#dde3e0", fill: "linear-gradient(90deg,#a3b3ac,#7f8f88)" },
-  behind: { rail: "#d9a326", chipBg: "#fdf1d0", chipText: "#8a6300", chipBorder: "#e3c369", fill: "linear-gradient(90deg,#e8c163,#d9a326)" },
-  risk: { rail: "#e2502b", chipBg: "#fdeae4", chipText: "#a8351a", chipBorder: "#f2c3b5", fill: "linear-gradient(90deg,#ef8163,#e2502b)" },
+const R = 39;
+const CIRC = 2 * Math.PI * R;
+
+const CARD_CLR: Record<StatusKey, { glow: string }> = {
+  ahead: { glow: "radial-gradient(circle,rgba(53,199,127,.20),transparent 68%)" },
+  pace: { glow: "radial-gradient(circle,rgba(63,182,129,.16),transparent 68%)" },
+  behind: { glow: "radial-gradient(circle,rgba(217,163,38,.17),transparent 68%)" },
+  risk: { glow: "radial-gradient(circle,rgba(226,80,43,.15),transparent 68%)" },
+};
+const GRAD: Record<StatusKey, string> = {
+  ahead: "url(#gAhead)",
+  pace: "url(#gPace)",
+  behind: "url(#gBehind)",
+  risk: "url(#gRisk)",
+};
+const TREND_STROKE: Record<StatusKey, string> = {
+  ahead: "#35c77f",
+  pace: "#3fb681",
+  behind: "#d9a326",
+  risk: "#e2502b",
+};
+const CHIP: Record<StatusKey, { bg: string; fg: string; bd: string }> = {
+  ahead: { bg: "#e0f2e7", fg: "#0f6b42", bd: "#c2e7d3" },
+  pace: { bg: "#e0f2e7", fg: "#12764a", bd: "#c9e8d8" },
+  behind: { bg: "#fdf1d0", fg: "#8a6300", bd: "#e3c369" },
+  risk: { bg: "#fdeae4", fg: "#a8351a", bd: "#f2c3b5" },
 };
 
 export default function OrgGoalCard({
   goal,
+  history,
   onEdit,
   onOpenComments,
 }: {
   goal: Goal;
+  history: number[]; // real goal_progress_history progress values, chronological
   onEdit: (g: Goal) => void;
   onOpenComments: (g: Goal) => void;
 }) {
@@ -74,95 +95,103 @@ export default function OrgGoalCard({
     targetDate: goal.target_date,
     today,
   });
-  const c = p.status ? C[p.status.key] : null;
-  const railColor = c?.rail ?? "#c3ccc7";
-  const fill = c?.fill ?? "linear-gradient(90deg,#c9d2cd,#aeb8b3)";
+  const hasPace = p.pace != null;
+  const pace = p.pace ?? 0;
+  const st = hasPace ? statusOf(goal.progress, pace) : null;
+  const k: StatusKey = st?.k ?? "pace";
 
-  const metaBits: string[] = [];
-  if (goal.owner) metaBits.push(goal.owner);
+  const meta: string[] = [goal.owner].filter(Boolean) as string[];
   if (goal.target_date) {
-    metaBits.push(`target ${fmtHuman(goal.target_date)}`);
     const wl = weeksLeftUntil(goal.target_date, today);
-    metaBits.push(`${wl} week${wl === 1 ? "" : "s"} left`);
+    meta.push(`${fmtHuman(businessDateOf(goal.created_at))} → ${fmtHuman(goal.target_date)}`);
+    meta.push(`${wl} week${wl === 1 ? "" : "s"} left`);
   }
+
+  const dash = (Math.max(0, Math.min(100, goal.progress)) / 100) * CIRC;
+  const ang = (Math.max(0, Math.min(100, pace)) / 100) * 360;
 
   return (
     <div
-      className="relative overflow-hidden rounded-[14px] border"
+      className="relative overflow-hidden rounded-[16px] border p-[22px] transition hover:-translate-y-[2px]"
       style={{
-        background: "#fffdf7",
+        background: "linear-gradient(178deg,#fffefc 0%, #fffdf7 62%)",
         borderColor: "#efe9dc",
-        padding: "18px 20px 16px",
-        boxShadow: "0 1px 2px rgba(7,42,32,.05), 0 12px 30px -20px rgba(7,42,32,.45)",
+        boxShadow: "0 1px 2px rgba(7,42,32,.05), 0 18px 40px -26px rgba(7,42,32,.55)",
       }}
     >
-      <span aria-hidden className="absolute inset-y-0 left-0 w-[3px]" style={{ background: railColor, opacity: 0.9 }} />
+      <span
+        aria-hidden
+        className="pointer-events-none absolute right-[-40px] top-[-40px] h-[160px] w-[160px] rounded-full"
+        style={{ background: st ? CARD_CLR[k].glow : "transparent" }}
+      />
 
-      {/* Header: title (opens edit) + meta, status chip */}
-      <div className="mb-3 flex items-start gap-3">
-        <div className="min-w-0">
+      {/* Top: ring + name/meta/chip */}
+      <div className="relative flex items-center gap-[18px]">
+        <div className="relative h-[86px] w-[86px] flex-none">
+          <svg viewBox="0 0 86 86" width="86" height="86" aria-hidden style={{ transform: "rotate(-90deg)" }}>
+            <circle cx="43" cy="43" r={R} fill="none" stroke="#e8e2d4" strokeWidth="8" />
+            <circle
+              cx="43" cy="43" r={R} fill="none" strokeWidth="8" strokeLinecap="round"
+              stroke={GRAD[k]} strokeDasharray={`${dash.toFixed(1)} ${CIRC.toFixed(1)}`}
+            />
+            {hasPace && (
+              <g transform={`rotate(${ang.toFixed(1)} 43 43)`}>
+                <line x1="43" y1={43 - R - 5.5} x2="43" y2={43 - R + 5.5} stroke="#22423a" strokeWidth="2.4" strokeLinecap="round" />
+              </g>
+            )}
+          </svg>
+          <div className="absolute inset-0 flex flex-col items-center justify-center">
+            <div className="text-[22px] font-[750] leading-none tracking-[-0.035em] text-[#12241d]">
+              {goal.progress}
+              <i className="ml-px text-[13px] font-[650] not-italic text-[#8a978f]">%</i>
+            </div>
+            <div className="text-[8.5px] font-bold uppercase tracking-[0.1em] text-[#a2ada8]">done</div>
+          </div>
+        </div>
+
+        <div className="min-w-0 flex-1">
           <button
             type="button"
             onClick={() => onEdit(goal)}
             aria-label={`Edit goal ${goal.title}`}
-            className="rounded text-left text-[15.5px] font-bold leading-tight tracking-[-0.011em] text-[#12241d] hover:underline focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-[#35c77f]"
+            className="rounded text-left text-[16px] font-[720] leading-[1.28] tracking-[-0.013em] text-[#12241d] hover:underline focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-[#35c77f]"
           >
             {goal.title}
           </button>
-          {metaBits.length > 0 && (
-            <div className="mt-[3px] text-[11.5px] text-[#6d7b74]">{metaBits.join(" · ")}</div>
-          )}
-        </div>
-        {p.status && c ? (
-          <span
-            className="ml-auto inline-flex shrink-0 items-center gap-[5px] whitespace-nowrap rounded-full border px-[10px] py-[5px] text-[11px] font-bold tracking-[0.02em]"
-            style={{ background: c.chipBg, color: c.chipText, borderColor: c.chipBorder }}
-          >
-            <span className="text-[9px] leading-none">{p.status.icon}</span>
-            {p.status.label}
-          </span>
-        ) : (
-          <span className="ml-auto shrink-0 whitespace-nowrap rounded-full border border-[#e4ddcc] bg-[#f7f4ec] px-[10px] py-[5px] text-[11px] font-semibold text-[#9aa5a0]">
-            no target date
-          </span>
-        )}
-      </div>
-
-      {/* Number + inline delta */}
-      <div className="mb-[15px] flex flex-wrap items-baseline gap-2">
-        <span className="text-[38px] font-bold leading-[0.94] tracking-[-0.032em] tabular-nums text-[#12241d]">
-          {goal.progress}%
-        </span>
-        <span className="text-[11.5px] text-[#6d7b74]">complete</span>
-        {p.delta && c && (
-          <span className="self-center whitespace-nowrap rounded-md px-2 py-[3px] text-[11px] font-bold" style={{ background: c.chipBg, color: c.chipText }}>
-            {p.delta}
-          </span>
-        )}
-      </div>
-
-      {/* Track with labeled pace tick */}
-      <div className="relative mb-[11px] pb-[19px]">
-        <div className="relative h-[9px] rounded-full" style={{ background: "#e8e2d4" }}>
-          <div className="absolute left-0 top-0 h-[9px] rounded-full" style={{ width: `${Math.min(100, goal.progress)}%`, background: fill }} />
-          {p.pace != null && (
-            <>
-              <span aria-hidden className="absolute top-[-5px] w-[2px] rounded-[1px]" style={{ left: `${p.pace}%`, height: "19px", background: "#12241d", boxShadow: "0 0 0 2px #fffdf7" }} />
-              <span className="absolute top-[15px] -translate-x-1/2 whitespace-nowrap text-[10px] font-[650] uppercase tracking-[0.05em] text-[#5b6b64]" style={{ left: `${p.pace}%` }}>
-                {Math.round(p.pace)}% expected today
+          <div className="mt-[5px] flex flex-wrap items-center gap-[7px] text-[11.5px] text-[#6d7b74]">
+            {meta.map((m, i) => (
+              <span key={i} className="flex items-center gap-[7px]">
+                {i > 0 && <span className="inline-block h-[3px] w-[3px] flex-none rounded-full bg-[#c9d2cd]" />}
+                {m}
               </span>
-            </>
-          )}
+            ))}
+          </div>
+          <div className="mt-[11px] flex flex-wrap items-center gap-[9px]">
+            {st ? (
+              <span
+                className="inline-flex items-center gap-1 rounded-full border px-[9px] py-[3px] text-[11px] font-bold"
+                style={{ background: CHIP[k].bg, color: CHIP[k].fg, borderColor: CHIP[k].bd }}
+              >
+                {st.label}
+              </span>
+            ) : (
+              <span className="rounded-full border border-[#e4ddcc] bg-[#f7f4ec] px-[9px] py-[3px] text-[11px] font-semibold text-[#9aa5a0]">
+                no target date
+              </span>
+            )}
+            {hasPace && (
+              <span className="text-[11.5px] text-[#8b978f]">
+                <b className="font-[650] text-[#54655d]">{Math.round(pace)}%</b> expected today
+              </span>
+            )}
+          </div>
         </div>
       </div>
 
-      {/* Read row */}
-      <div className="flex justify-between gap-3 pt-[2px] text-[12px] text-[#6d7b74]">
-        <span>Started {fmtHuman(p.startUsed)}</span>
-        {goal.target_date && <span>{fmtHuman(goal.target_date)}</span>}
-      </div>
+      {/* Trend — real history only */}
+      <Trend history={history} k={k} />
 
-      {/* Note row = the comment entry point (its own button, not the whole card) */}
+      {/* Note — the door */}
       <button
         type="button"
         onClick={() => onOpenComments(goal)}
@@ -171,32 +200,61 @@ export default function OrgGoalCard({
             ? `${count} update${count === 1 ? "" : "s"} on ${goal.title}, open thread`
             : `Add the first update on ${goal.title}`
         }
-        className="mt-3 block w-full rounded-lg border-t border-dashed pt-3 text-left transition hover:bg-black/[0.015] focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-[#35c77f]"
-        style={{ borderColor: "#e4ddcc" }}
+        className={`block w-full rounded-[11px] border px-[14px] py-[11px] text-left transition focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-[#35c77f] ${
+          latest ? "border-[#e7dfcc] bg-[#faf6ec] hover:bg-[#f4f0e3]" : "border-dashed border-[#d5cbb4] bg-transparent"
+        }`}
       >
-        {latest ? (
-          <>
-            <div className="flex items-start justify-between gap-2">
-              <div className="line-clamp-2 text-[12.5px] leading-[1.55]" style={{ color: "#3f544b" }}>
-                {htmlToPlainText(latest.body)}
-              </div>
-              <span className="shrink-0 whitespace-nowrap pt-[1px] text-[11px] font-semibold text-[#6d7b74]">
-                {count} update{count === 1 ? "" : "s"} ›
-              </span>
-            </div>
-            <div className="mt-[6px] flex items-center gap-[6px] text-[11px] text-[#9aa5a0]">
-              <Avatar name={latest.author || latest.author_email || "Unknown"} />
-              <span>{latest.author || latest.author_email || "Unknown"}</span>
-              <span>·</span>
-              <span>{fmtHuman(businessDateOf(latest.created_at))}</span>
-            </div>
-          </>
-        ) : (
-          <div className="text-[12.5px] italic" style={{ color: "#9aa5a0" }}>
-            Add the first update
+        <div className="flex items-baseline gap-3">
+          <span
+            className={`min-w-0 flex-1 line-clamp-2 text-[13px] ${latest ? "font-semibold text-[#2f453c]" : "font-medium text-[#9aa5a0]"}`}
+          >
+            {latest ? htmlToPlainText(latest.body) : "Add the first update"}
+          </span>
+          <span className="flex-none text-[11.5px] font-bold text-[#5f7d6f]">
+            {latest ? `${count} update${count === 1 ? "" : "s"} ›` : "›"}
+          </span>
+        </div>
+        {latest && (
+          <div className="mt-[7px] flex items-center gap-[6px] text-[11px] text-[#98a49e]">
+            <Avatar name={latest.author || latest.author_email || "Unknown"} />
+            <span>{latest.author || latest.author_email || "Unknown"}</span>
+            <span>·</span>
+            <span>{fmtHuman(businessDateOf(latest.created_at))}</span>
           </div>
         )}
       </button>
+    </div>
+  );
+}
+
+function Trend({ history, k }: { history: number[]; k: StatusKey }) {
+  if (!history || history.length < 4) {
+    return (
+      <div className="my-[16px] text-[11.5px] italic leading-[1.5] text-[#a8b2ad]">
+        No history yet — a trend line appears once this goal has four or more updates.
+      </div>
+    );
+  }
+  const w = 210, h = 44, pad = 4;
+  const mn = Math.min(...history), mx = Math.max(...history), rng = mx - mn || 1;
+  const pts = history.map((v, i) => [
+    pad + (i * (w - pad * 2)) / (history.length - 1),
+    h - pad - ((v - mn) / rng) * (h - pad * 2),
+  ]);
+  const d = pts.map((pt, i) => `${i ? "L" : "M"}${pt[0].toFixed(1)} ${pt[1].toFixed(1)}`).join(" ");
+  const area = `${d} L${pts[pts.length - 1][0].toFixed(1)} ${h} L${pts[0][0].toFixed(1)} ${h} Z`;
+  const last = pts[pts.length - 1];
+  const c = TREND_STROKE[k];
+  return (
+    <div className="relative my-[18px]">
+      <svg viewBox={`0 0 ${w} ${h}`} width="100%" height="56" style={{ overflow: "visible" }} aria-hidden>
+        <path d={area} fill={c} opacity="0.16" />
+        <path d={d} fill="none" stroke={c} strokeWidth="2" strokeLinecap="round" strokeLinejoin="round" />
+        <circle cx={last[0].toFixed(1)} cy={last[1].toFixed(1)} r="3" fill={c} stroke="#fffdf7" strokeWidth="2" />
+      </svg>
+      <div className="absolute right-0 top-[-13px] text-[9.5px] uppercase tracking-[0.09em] text-[#a2ada8]">
+        last {history.length} updates
+      </div>
     </div>
   );
 }

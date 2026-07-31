@@ -1,0 +1,568 @@
+<!doctype html>
+<html lang="en">
+<head>
+<meta charset="utf-8">
+<title>Clubhouse — Home v5</title>
+<style>
+:root{
+  --cream:#f2ede2; --surface:#fffdf7; --forest:#0d3b2e; --forest-deep:#072a20;
+  --accent:#35c77f; --logo:#2cdb87; --mint:#e0f2e7; --amount:#e2502b;
+  --line:#e4ddcc; --hair:#efe9dc; --ink:#12241d; --muted:#6d7b74;
+  --warn-bg:#fdf1d0; --warn-ink:#8a6300; --warn-line:#e3c369; --track:#e8e2d4;
+  --lift:0 1px 2px rgba(7,42,32,.05), 0 18px 40px -26px rgba(7,42,32,.55);
+  --lift-h:0 2px 4px rgba(7,42,32,.07), 0 30px 56px -28px rgba(7,42,32,.6);
+}
+*{box-sizing:border-box}
+html,body{margin:0;padding:0}
+body{
+  background:var(--cream); color:var(--ink);
+  font:400 14px/1.5 -apple-system,BlinkMacSystemFont,"SF Pro Text","Segoe UI",Inter,Roboto,sans-serif;
+  -webkit-font-smoothing:antialiased; text-rendering:optimizeLegibility;
+  font-feature-settings:"kern" 1; font-variant-numeric:tabular-nums;
+}
+.hide{display:none !important}
+button{font:inherit;cursor:pointer}
+a{color:inherit}
+
+/* ---------- demo strip ---------- */
+.ctrl{background:#04170f;color:#cfe6da;padding:10px 26px;display:flex;gap:24px;align-items:center;flex-wrap:wrap}
+.ctrl .cg{display:flex;gap:7px;align-items:center}
+.ctrl b{font-size:10px;letter-spacing:.11em;text-transform:uppercase;color:#7ea393;font-weight:700}
+.ctrl button{background:rgba(255,255,255,.07);color:#cfe6da;border:1px solid rgba(255,255,255,.16);
+  border-radius:999px;padding:5px 12px;font-size:12px;font-weight:550;transition:.15s}
+.ctrl button:hover{background:rgba(255,255,255,.14)}
+.ctrl button.on{background:var(--logo);color:#062a1e;border-color:var(--logo);font-weight:700}
+
+/* ---------- chrome ---------- */
+.chrome{background:var(--forest-deep);padding:0 30px;display:flex;align-items:center;gap:28px;height:56px;position:relative;z-index:3}
+.chrome .brand{display:flex;align-items:center;color:var(--logo)}
+.chrome .brand img{height:21px;width:auto;display:block}
+.chrome nav{display:flex;gap:2px;margin-left:4px}
+.chrome nav a{color:#a9c8ba;text-decoration:none;font-size:13px;font-weight:550;padding:7px 13px;border-radius:8px;transition:.15s}
+.chrome nav a:hover{background:rgba(255,255,255,.06);color:#e6f4ec}
+.chrome nav a.on{background:rgba(255,255,255,.11);color:#fff}
+.chrome .me{margin-left:auto;display:flex;align-items:center;gap:9px;color:#cfe6da;font-size:13px}
+
+/* ---------- hero band ---------- */
+.hero{
+  position:relative;overflow:hidden;
+  background:
+    radial-gradient(1100px 380px at 6% 150%, rgba(53,199,127,.24), transparent 62%),
+    radial-gradient(760px 320px at 88% -40%, rgba(44,219,135,.14), transparent 66%),
+    linear-gradient(168deg,#0f4234 0%, #0a3227 55%, #072a20 100%);
+  color:#e8f6ef;padding:28px 0 78px}
+/* pitch backdrop: mown stripes + plan-view markings, both barely there */
+.hero .mow{position:absolute;inset:0;pointer-events:none;
+  background:repeating-linear-gradient(90deg,
+    rgba(196,242,219,.020) 0 118px, rgba(196,242,219,0) 118px 236px)}
+.hero .pitch{position:absolute;inset:0;pointer-events:none}
+.hero .pitch svg{width:100%;height:100%;display:block;color:#c8f2dd;opacity:.075}
+.hero .fade{position:absolute;inset:0;pointer-events:none;
+  background:linear-gradient(90deg, rgba(9,44,34,.72) 0%, rgba(9,44,34,.30) 34%, rgba(9,44,34,0) 62%)}
+.heroin{max-width:1560px;margin:0 auto;padding:0 30px;position:relative;
+  display:flex;align-items:flex-start;gap:40px}
+.heroleft{min-width:0;flex:1}
+.kick{
+  display:inline-block;font-size:10px;letter-spacing:.15em;text-transform:uppercase;font-weight:800;
+  color:#8ff0c0;background:rgba(53,199,127,.13);border:1px solid rgba(53,199,127,.3);
+  padding:5px 11px;border-radius:999px}
+.hero h1{
+  margin:14px 0 0;font-size:25px;line-height:1.35;font-weight:660;letter-spacing:-.018em;
+  max-width:56ch;color:#f2fdf7}
+.hero .sub2{margin:9px 0 0;font-size:15px;font-weight:650;color:var(--logo);letter-spacing:-.005em}
+
+/* scoreboard */
+.board{
+  flex:none;display:flex;background:rgba(255,255,255,.055);border:1px solid rgba(255,255,255,.13);
+  border-radius:16px;overflow:hidden;backdrop-filter:blur(2px)}
+.hs{padding:14px 24px;text-align:center;border-left:1px solid rgba(255,255,255,.1)}
+.hs:first-child{border-left:0}
+.hs .v{font-size:25px;font-weight:730;letter-spacing:-.03em;line-height:1;color:#eafff4}
+.hs .k{font-size:9.5px;letter-spacing:.12em;text-transform:uppercase;color:#84bda2;font-weight:750;margin-top:7px}
+
+/* ---------- shell ---------- */
+.wrap{max-width:1560px;margin:0 auto;padding:0 30px 64px;transition:max-width .2s}
+body.w1280 .wrap{max-width:1280px}
+body.w1280 .heroin{max-width:1280px}
+.pull{margin-top:-58px;position:relative;z-index:2}
+
+.sechd{display:flex;align-items:baseline;gap:11px;padding:0 3px 12px}
+.sechd h2{margin:0;font-size:13px;font-weight:750;letter-spacing:.1em;text-transform:uppercase;color:#a8cbbb}
+.sechd .sub{font-size:12px;color:#7fa693;font-weight:550}
+.sechd .r{margin-left:auto;display:flex;align-items:center;gap:8px}
+.ghostlite{
+  background:rgba(255,255,255,.08);border:1px solid rgba(255,255,255,.18);color:#dcf0e6;
+  border-radius:999px;padding:5px 13px;font-size:12px;font-weight:600;transition:.15s}
+.ghostlite:hover{background:rgba(255,255,255,.16)}
+
+/* ---------- goal deck ---------- */
+#goals{display:grid;gap:18px;align-items:start;grid-template-columns:repeat(auto-fill,minmax(430px,1fr))}
+body.one #goals{grid-template-columns:minmax(0,1fr)}
+
+.goal{
+  background:linear-gradient(178deg,#fffefc 0%, var(--surface) 62%);
+  border:1px solid #ece5d6;border-radius:20px;padding:20px 22px 18px;
+  box-shadow:var(--lift);position:relative;overflow:hidden;transition:.2s ease;
+  display:flex;flex-direction:column}
+.goal:hover{box-shadow:var(--lift-h);transform:translateY(-2px)}
+.goal .glow{
+  position:absolute;right:-70px;top:-90px;width:250px;height:250px;border-radius:50%;
+  pointer-events:none;opacity:.5}
+.goal.ahead  .glow{background:radial-gradient(circle,rgba(53,199,127,.20),transparent 68%)}
+.goal.pace   .glow{background:radial-gradient(circle,rgba(63,182,129,.16),transparent 68%)}
+.goal.behind .glow{background:radial-gradient(circle,rgba(217,163,38,.17),transparent 68%)}
+.goal.risk   .glow{background:radial-gradient(circle,rgba(226,80,43,.15),transparent 68%)}
+
+.gtop{display:flex;gap:18px;align-items:center;position:relative}
+
+/* --- the ring --- */
+.ring{position:relative;width:86px;height:86px;flex:none}
+.ring svg{display:block;transform:rotate(-90deg)}
+.ring .tr{fill:none;stroke:var(--track);stroke-width:8}
+.ring .pg{fill:none;stroke-width:8;stroke-linecap:round;transition:stroke-dasharray .5s}
+.ring.ahead  .pg{stroke:url(#gAhead)}
+.ring.pace   .pg{stroke:url(#gPace)}
+.ring.behind .pg{stroke:url(#gBehind)}
+.ring.risk   .pg{stroke:url(#gRisk)}
+.ring .notch{stroke:#22423a;stroke-width:2.4;stroke-linecap:round}
+.ring .lab{
+  position:absolute;inset:0;display:flex;flex-direction:column;align-items:center;justify-content:center;
+  gap:1px}
+.ring .lab .n{font-size:22px;font-weight:750;letter-spacing:-.035em;line-height:1}
+.ring .lab .n i{font-style:normal;font-size:13px;font-weight:650;color:#8a978f;margin-left:1px}
+.ring .lab .c{font-size:8.5px;letter-spacing:.1em;text-transform:uppercase;color:#a2ada8;font-weight:700}
+
+.gmain{min-width:0;flex:1}
+.gname{font-size:16px;font-weight:720;letter-spacing:-.013em;line-height:1.28}
+.gmeta{font-size:11.5px;color:var(--muted);margin-top:5px;display:flex;align-items:center;gap:7px;flex-wrap:wrap}
+.gmeta .dot{width:3px;height:3px;border-radius:50%;background:#c9d2cd;flex:none}
+.chiprow{margin-top:11px;display:flex;align-items:center;gap:9px;flex-wrap:wrap}
+.chip{
+  display:inline-flex;align-items:center;gap:6px;font-size:11.5px;font-weight:700;
+  padding:5px 11px;border-radius:999px;border:1px solid transparent;white-space:nowrap}
+.chip .i{font-size:9px;line-height:1}
+.chip.ahead {background:var(--mint);color:#0f6b42;border-color:#c2e7d3}
+.chip.pace  {background:var(--mint);color:#12764a;border-color:#c9e8d8}
+.chip.behind{background:var(--warn-bg);color:var(--warn-ink);border-color:var(--warn-line)}
+.chip.risk  {background:#fdeae4;color:#a8351a;border-color:#f2c3b5}
+.pacenote{font-size:11.5px;color:#8b978f}
+.pacenote b{color:#54655d;font-weight:650}
+
+/* --- trend --- */
+.trend{margin:18px 0 16px;position:relative}
+.trend svg{display:block;width:100%;height:56px;overflow:visible}
+.trend .a{opacity:.16}
+.trend .l{fill:none;stroke-width:2;stroke-linecap:round;stroke-linejoin:round}
+.trend .p{stroke:var(--surface);stroke-width:2}
+.trend.ahead  .l,.trend.ahead  .p{stroke:var(--accent)} .trend.ahead  .a,.trend.ahead  .p{fill:var(--accent)}
+.trend.pace   .l,.trend.pace   .p{stroke:#3fb681}       .trend.pace   .a,.trend.pace   .p{fill:#3fb681}
+.trend.behind .l,.trend.behind .p{stroke:#d9a326}       .trend.behind .a,.trend.behind .p{fill:#d9a326}
+.trend.risk   .l,.trend.risk   .p{stroke:var(--amount)} .trend.risk   .a,.trend.risk   .p{fill:var(--amount)}
+.trend .cap{position:absolute;right:0;top:-13px;font-size:9.5px;letter-spacing:.09em;
+  text-transform:uppercase;color:#adb6b1;font-weight:750}
+.nohist{margin:16px 0;font-size:11.5px;color:#a8b2ad;font-style:italic;line-height:1.5}
+
+/* --- the note, as an inset card --- */
+.note{
+  margin-top:auto;background:#f7f4ea;border:1px solid #ebe4d4;border-radius:14px;
+  padding:12px 14px;display:block;width:100%;text-align:left;transition:.15s;color:inherit;
+  text-decoration:none}
+.note:hover{background:#f4f0e3;border-color:#ded5c0}
+.note .top{display:flex;align-items:baseline;gap:12px}
+.note .txt{font-size:13px;color:#2f453c;font-weight:600;min-width:0;flex:1;
+  overflow:hidden;text-overflow:ellipsis;white-space:nowrap}
+.note .more{flex:none;font-size:11.5px;color:#5f7d6f;font-weight:700}
+.note .who{margin-top:7px;font-size:11px;color:#98a49e;display:flex;align-items:center;gap:6px}
+.note.empty{border-style:dashed;background:transparent}
+.note.empty .txt{color:#9aa5a0;font-weight:550}
+
+.ghostlite.add{background:rgba(44,219,135,.13);border-color:rgba(44,219,135,.38);color:#a6f2ce;
+  display:flex;align-items:center;gap:6px;padding-left:11px}
+.ghostlite.add svg{width:12px;height:12px}
+.ghostlite.add:hover{background:rgba(44,219,135,.24);border-color:rgba(44,219,135,.6);color:#e6fff2}
+
+/* ---------- avatars ---------- */
+.av{width:22px;height:22px;border-radius:50%;display:inline-flex;align-items:center;justify-content:center;
+  font-size:9.5px;font-weight:750;color:#2c4a3e;flex:none;box-shadow:0 0 0 1.5px #fff}
+.av.sm{width:19px;height:19px;font-size:8px}
+
+/* ---------- lower panels ---------- */
+.lower{display:grid;grid-template-columns:repeat(auto-fit,minmax(400px,1fr));gap:18px;margin-top:34px;
+  align-items:start}
+.sechd.dark h2{color:#4e6a5e}
+.sechd.dark .sub{color:var(--muted)}
+.panel{
+  background:linear-gradient(178deg,#fffefc,var(--surface) 60%);
+  border:1px solid #ece5d6;border-radius:20px;box-shadow:var(--lift);overflow:hidden}
+.ph{display:flex;align-items:center;gap:10px;padding:16px 20px;border-bottom:1px solid var(--hair)}
+.ph h3{margin:0;font-size:14.5px;font-weight:720;letter-spacing:-.008em}
+.ph .lbl{font-size:12.5px;color:var(--muted)}
+.ph .nav-r{margin-left:auto;display:flex;gap:5px;align-items:center}
+.navbtn{width:28px;height:28px;border-radius:999px;border:1px solid var(--line);background:transparent;
+  color:#4b6459;font-size:14px;line-height:1;display:flex;align-items:center;justify-content:center;transition:.15s}
+.navbtn:hover{background:var(--cream);border-color:#d3c9b2}
+
+.empty{padding:30px 24px 26px;text-align:center}
+.empty .icon{width:46px;height:46px;border-radius:999px;
+  background:radial-gradient(circle at 35% 30%,#eafaf1,#d6efe1);color:#17724c;
+  display:flex;align-items:center;justify-content:center;font-size:20px;margin:0 auto 13px;
+  box-shadow:0 0 0 6px rgba(224,242,231,.5)}
+.empty h4{margin:0 0 7px;font-size:14.5px;font-weight:720}
+.empty p{margin:0 auto 15px;font-size:12.5px;color:var(--muted);line-height:1.6;max-width:56ch}
+.empty .fine{font-size:11.5px;color:#5f7d6f;background:#f5f9f6;border:1px solid #e2eee8;border-radius:12px;
+  padding:12px 14px;line-height:1.6;text-align:left}
+.empty .fine b{color:#14563c}
+.empty .cta{margin-top:15px;background:var(--forest);color:#eafaf1;border:0;border-radius:999px;
+  padding:9px 18px;font-size:12.5px;font-weight:680;transition:.15s}
+.empty .cta:hover{background:var(--forest-deep)}
+
+.pdnote{font-size:12px;font-weight:650;padding:10px 20px;border-bottom:1px solid var(--hair);
+  display:flex;align-items:center;gap:7px}
+.pdnote .i{font-size:9px}
+.pdnote.gap{background:var(--warn-bg);color:var(--warn-ink)}
+.pdnote.ok{background:var(--mint);color:#116b42}
+.wk{display:flex;align-items:center;gap:12px;padding:12px 20px;border-bottom:1px solid var(--hair);
+  position:relative;transition:.12s}
+.wk:last-child{border-bottom:0}
+.wk:hover{background:#faf8f2}
+.wk.gap{background:#fefaef}
+.wk.gap::before{content:"";position:absolute;left:0;top:0;bottom:0;width:3px;background:var(--warn-line)}
+.wk.past{opacity:.45}
+.wk .dt{width:100px;flex:none;display:flex;flex-direction:column;gap:2px;line-height:1.25}
+.wk .rng{font-size:12.5px;font-weight:700}
+.wk .tagnow{font-size:9px;font-weight:750;letter-spacing:.07em;text-transform:uppercase;color:#116b42}
+.wk .tagpast{font-size:9px;font-weight:650;letter-spacing:.05em;text-transform:uppercase;color:#a4aeaa}
+.wk .own{flex:1;display:flex;align-items:center;gap:8px;min-width:0}
+.wk .own .nm{font-size:12.5px;font-weight:600;white-space:nowrap;overflow:hidden;text-overflow:ellipsis}
+.wk .own .none{font-size:12.5px;font-weight:650;color:var(--warn-ink)}
+.wk select{
+  flex:none;min-width:140px;height:30px;border:1px solid transparent;border-radius:999px;
+  background:transparent;color:#6d7b74;font-size:12px;font-weight:600;padding:0 10px;
+  cursor:pointer;transition:.15s;opacity:0}
+.wk:hover select,.wk.gap select{opacity:1;border-color:var(--line);background-color:#fffefb}
+.wk.gap select{border-color:var(--warn-line);background-color:#fffdf4;color:var(--warn-ink)}
+.wk select:focus{outline:none;opacity:1;border-color:var(--accent);box-shadow:0 0 0 3px rgba(53,199,127,.14)}
+
+.notes{margin-top:32px;background:var(--warn-bg);border:1px solid var(--warn-line);border-radius:18px;
+  padding:20px 24px;max-width:940px}
+.notes h4{margin:0 0 11px;font-size:10.5px;letter-spacing:.13em;text-transform:uppercase;color:var(--warn-ink);font-weight:800}
+.notes p{margin:0 0 10px;font-size:13px;line-height:1.68;color:#6b5217}
+.notes p:last-child{margin-bottom:0}
+.notes b{color:#4d3a0a}
+
+@media (max-width:900px){ .herostats{display:none} }
+</style>
+</head>
+<body class="w1280">
+
+<div class="ctrl">
+  <div class="cg"><b>Width</b>
+    <button id="w12" class="on" onclick="setW(1280)">1280 &middot; proposed</button>
+    <button id="w16" onclick="setW(1560)">1600 &middot; today</button>
+  </div>
+  <div class="cg"><b>Deck</b>
+    <button id="l2" class="on" onclick="setL('two')">Auto grid</button>
+    <button id="l1" onclick="setL('one')">1 column</button>
+  </div>
+  <div class="cg"><b>Goals</b>
+    <button id="g2" class="on" onclick="setN(2)">2 (live)</button>
+    <button id="g4" onclick="setN(4)">4</button>
+  </div>
+  <div class="cg"><b>History</b>
+    <button id="h1" class="on" onclick="setH(1)">Has data</button>
+    <button id="h0" onclick="setH(0)">None yet</button>
+  </div>
+</div>
+
+<div class="chrome">
+  <span class="brand"><img src="data:image/png;base64,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" alt="MatchDay Clubhouse"></span>
+  <nav>
+    <a href="#" class="on">Home</a><a href="#">Finance</a><a href="#">Growth</a>
+    <a href="#">Membership</a><a href="#">Match Ops</a><a href="#">Tech</a>
+  </nav>
+  <span class="me"><span class="av" style="background:#1d5c48;color:#bff0d7">RM</span>Ryan Mancuso</span>
+</div>
+
+<svg width="0" height="0" style="position:absolute" aria-hidden="true"><defs>
+  <linearGradient id="gAhead" x1="0" y1="0" x2="1" y2="1">
+    <stop offset="0%" stop-color="#6ee7ab"/><stop offset="100%" stop-color="#22a86a"/></linearGradient>
+  <linearGradient id="gPace" x1="0" y1="0" x2="1" y2="1">
+    <stop offset="0%" stop-color="#7fd7b0"/><stop offset="100%" stop-color="#2e9e70"/></linearGradient>
+  <linearGradient id="gBehind" x1="0" y1="0" x2="1" y2="1">
+    <stop offset="0%" stop-color="#f0cf7a"/><stop offset="100%" stop-color="#c9911a"/></linearGradient>
+  <linearGradient id="gRisk" x1="0" y1="0" x2="1" y2="1">
+    <stop offset="0%" stop-color="#f4906f"/><stop offset="100%" stop-color="#cf4222"/></linearGradient>
+</defs></svg>
+
+<div class="hero">
+  <div class="mow"></div>
+  <div class="pitch">
+    <svg viewBox="0 0 1600 500" preserveAspectRatio="xMidYMid slice"
+         fill="none" stroke="currentColor" stroke-width="2.2" aria-hidden="true">
+      <!-- touchlines -->
+      <path d="M14 14h1572v472H14z"/>
+      <!-- halfway line, centre circle, centre spot -->
+      <path d="M800 14v472"/>
+      <circle cx="800" cy="250" r="112"/>
+      <circle cx="800" cy="250" r="5" fill="currentColor" stroke="none"/>
+      <!-- left penalty area, six-yard box, spot, D -->
+      <path d="M14 86h206v328H14"/>
+      <path d="M14 178h74v144H14"/>
+      <circle cx="146" cy="250" r="5" fill="currentColor" stroke="none"/>
+      <path d="M220 182a112 112 0 0 1 0 136"/>
+      <!-- right penalty area, six-yard box, spot, D -->
+      <path d="M1586 86h-206v328h206"/>
+      <path d="M1586 178h-74v144h74"/>
+      <circle cx="1454" cy="250" r="5" fill="currentColor" stroke="none"/>
+      <path d="M1380 182a112 112 0 0 0 0 136"/>
+      <!-- corner arcs -->
+      <path d="M14 44a30 30 0 0 0 30-30"/><path d="M1586 44a30 30 0 0 1-30-30"/>
+      <path d="M14 456a30 30 0 0 1 30 30"/><path d="M1586 456a30 30 0 0 0-30 30"/>
+    </svg>
+  </div>
+  <div class="fade"></div>
+  <div class="heroin">
+    <div class="heroleft">
+      <span class="kick">MatchDay mission</span>
+      <h1>Building the premier pickup soccer experience. We're rewriting how the world plays.</h1>
+      <p class="sub2">7 cities down. The whole map next.</p>
+    </div>
+    <div class="board">
+      <div class="hs"><div class="v">7</div><div class="k">Cities</div></div>
+      <div class="hs"><div class="v">126</div><div class="k">Matches / wk</div></div>
+      <div class="hs"><div class="v" id="hsGoals">2</div><div class="k">Org goals</div></div>
+    </div>
+  </div>
+</div>
+
+<div class="wrap">
+
+  <div class="pull">
+    <div class="sechd">
+      <h2>Org goals</h2>
+      <span class="sub" id="goalSub"></span>
+      <span class="r">
+        <button class="ghostlite add"><svg viewBox="0 0 24 24" fill="none" stroke="currentColor"
+          stroke-width="2.6" stroke-linecap="round"><path d="M12 5v14M5 12h14"/></svg>Add goal</button>
+        <button class="ghostlite">Filter</button>
+      </span>
+    </div>
+    <div id="goals"></div>
+  </div>
+
+  <div class="lower">
+    <div class="panel">
+      <div class="ph"><h3>This week</h3></div>
+      <div class="empty">
+        <div class="icon">◷</div>
+        <h4>Calendar not connected yet</h4>
+        <p>Once a Workspace admin authorizes access, your meetings for the week show up here — with topics and action items shared by everyone on the invite.</p>
+        <div class="fine">
+          Only meetings with <b>2 or more people</b> are ever stored. Anything you mark <b>Private</b> in Google Calendar is skipped entirely. Descriptions and locations are never saved.
+        </div>
+        <button class="cta">Connect Google Calendar</button>
+      </div>
+    </div>
+
+    <div class="panel">
+      <div class="ph">
+        <h3>P&amp;D schedule</h3><span class="lbl" id="pdMonth"></span>
+        <span class="nav-r">
+          <button class="navbtn" onclick="goMonth(-1)" aria-label="Previous month">&lsaquo;</button>
+          <button class="navbtn" onclick="goMonth(1)" aria-label="Next month">&rsaquo;</button>
+        </span>
+      </div>
+      <div id="pdNote"></div>
+      <div id="pdRows"></div>
+    </div>
+  </div>
+
+  <div class="notes">
+    <h4>What changed, and why</h4>
+    <p><b>The page had no anchor.</b> Cream on cream, every element the same weight, so the eye had nowhere to land. The forest band gives the top of the page somewhere to start, and the cards now overlap up into it — that overlap is what stops it reading as a stack of flat boxes.</p>
+    <p><b>Round beats rectangular for a percentage.</b> A ring is a share of a whole, which is exactly what 75% of a goal is, and the notch on the ring is where you should be today. One shape now carries the number, the progress and the pace, replacing a bar, a tick, a floating caption and two chips.</p>
+    <p><b>Grey means disabled everywhere else in software.</b> "Close Seed Round" is <i>on pace</i> — the good outcome — and today it renders in the grey we use for deactivated things. Colour encodes health, not degree: green for ahead and on pace, amber for behind, red for at risk.</p>
+    <p><b>Width is used, not stretched.</b> Goals sit in an auto grid that fits two or three per row instead of one 1150px card with a void in the middle, and This Week and P&amp;D drop to a full-width pair below rather than a tall thin column next to a short one.</p>
+    <p><b>Every card has a door.</b> The note is an inset block you can click, and a goal with no update shows "Add the first update" instead of dead italic text. Toggle <b>History → None yet</b> to confirm nothing fabricates a trend line when there is no history.</p>
+  </div>
+</div>
+
+<script>
+var ALL = [
+  { name:"140 Matches Per Week (100K estimate)", owner:"MatchDay Team",
+    pct:75, pace:39, start:"Apr 25", target:"Dec 31", left:"21 weeks left",
+    hist:[78,80,83,81,86,88,91,89,95,98,101,105,110,118,126],
+    note:"July 13th: 125.6", by:"Ryan Mancuso", when:"Jul 20", updates:3 },
+  { name:"Close Seed Round", owner:"MatchDay Team",
+    pct:50, pace:52, start:"Apr 24", target:"Oct 31", left:"13 weeks left",
+    hist:null,
+    note:"Target September Raise", by:"Ryan Mancuso", when:"Jul 10", updates:2 },
+  { name:"Membership v2 live in every city", owner:"MatchDay Team",
+    pct:63, pace:58, start:"May 2", target:"Dec 31", left:"21 weeks left",
+    hist:[3,3,3,3,4,4,4,4,4,5,5,5],
+    note:"", by:"", when:"", updates:0 },
+  { name:"Weeknight fill rate to 70%", owner:"Deonna Reed",
+    pct:41, pace:60, start:"Mar 14", target:"Sep 30", left:"9 weeks left",
+    hist:[52,54,51,49,50,47,45,44,43,41,42,41],
+    note:"Tuesday slots are the whole gap — weekends already clear target.",
+    by:"Deonna Reed", when:"Jul 28", updates:5 }
+];
+var nGoals = 2, showHist = 1;
+
+var TINTS=["#dcefe4","#f1e6d3","#e3e7f1","#f3e2dc","#dfeaf0","#e9e5f0","#e7efdc"];
+function esc(s){return String(s).replace(/&/g,"&amp;").replace(/</g,"&lt;").replace(/>/g,"&gt;");}
+function initials(n){return n.split(/\s+/).map(function(x){return x.charAt(0);}).slice(0,2).join("").toUpperCase();}
+function tintOf(n){var s=0;for(var i=0;i<n.length;i++)s=(s*31+n.charCodeAt(i))>>>0;return TINTS[s%TINTS.length];}
+function av(n,c){return '<span class="av '+(c||'')+'" style="background:'+tintOf(n)+'" title="'+esc(n)+'">'+esc(initials(n))+'</span>';}
+
+function statusOf(g){
+  var d=g.pct-g.pace;
+  if(d>= 5) return {k:"ahead", ic:"▲", lbl:"+"+Math.round(d)+" pts ahead"};
+  if(d>=-5) return {k:"pace",  ic:"●", lbl:"On pace"};
+  if(d>=-15)return {k:"behind",ic:"▼", lbl:Math.round(-d)+" pts behind"};
+  return           {k:"risk",  ic:"▼", lbl:"At risk · "+Math.round(-d)+" pts behind"};
+}
+
+var R=39, C=2*Math.PI*R;
+function ring(g,s){
+  var dash=(Math.max(0,Math.min(100,g.pct))/100)*C;
+  var ang=(Math.max(0,Math.min(100,g.pace))/100)*360;
+  return '<div class="ring '+s.k+'">'
+    + '<svg viewBox="0 0 86 86" width="86" height="86" aria-hidden="true">'
+    +   '<circle class="tr" cx="43" cy="43" r="'+R+'"/>'
+    +   '<circle class="pg" cx="43" cy="43" r="'+R+'" stroke-dasharray="'+dash.toFixed(1)+' '+C.toFixed(1)+'"/>'
+    +   '<g transform="rotate('+ang.toFixed(1)+' 43 43)">'
+    +     '<line class="notch" x1="43" y1="'+(43-R-5.5)+'" x2="43" y2="'+(43-R+5.5)+'"/></g>'
+    + '</svg>'
+    + '<div class="lab"><div class="n">'+g.pct+'<i>%</i></div><div class="c">done</div></div>'
+    + '</div>';
+}
+
+function trend(vals,k){
+  if(!showHist || !vals || vals.length<4)
+    return '<div class="nohist">No history yet — a trend line appears once this goal has four or more updates.</div>';
+  var w=210,h=44,pad=4;
+  var mn=Math.min.apply(null,vals), mx=Math.max.apply(null,vals), rng=(mx-mn)||1;
+  var pts=vals.map(function(v,i){
+    return [pad+i*(w-pad*2)/(vals.length-1), h-pad-((v-mn)/rng)*(h-pad*2)];});
+  var d=pts.map(function(p,i){return (i?"L":"M")+p[0].toFixed(1)+" "+p[1].toFixed(1);}).join(" ");
+  var area=d+" L"+pts[pts.length-1][0].toFixed(1)+" "+h+" L"+pts[0][0].toFixed(1)+" "+h+" Z";
+  var last=pts[pts.length-1];
+  return '<div class="trend '+k+'">'
+    + '<svg viewBox="0 0 '+w+' '+h+'" width="'+w+'" height="'+h+'" aria-hidden="true">'
+    +   '<path class="a" d="'+area+'"/><path class="l" d="'+d+'"/>'
+    +   '<circle class="p" cx="'+last[0].toFixed(1)+'" cy="'+last[1].toFixed(1)+'" r="3"/>'
+    + '</svg><div class="cap">last '+vals.length+' weeks</div></div>';
+}
+
+function renderGoals(){
+  var gs=ALL.slice(0,nGoals);
+  var off=gs.filter(function(g){var k=statusOf(g).k;return k==="behind"||k==="risk";}).length;
+  document.getElementById("goalSub").textContent = gs.length+" goals · "+(off?off+" off pace":"all on pace");
+  document.getElementById("hsGoals").textContent = gs.length;
+
+  var h="";
+  gs.forEach(function(g){
+    var s=statusOf(g);
+    var note = g.note
+      ? '<a class="note" href="#"><div class="top"><span class="txt">'+esc(g.note)+'</span>'
+        + '<span class="more">'+g.updates+' updates &rsaquo;</span></div>'
+        + '<div class="who">'+av(g.by,'sm')+esc(g.by)+' · '+esc(g.when)+'</div></a>'
+      : '<a class="note empty" href="#"><div class="top"><span class="txt">Add the first update</span>'
+        + '<span class="more">&rsaquo;</span></div></a>';
+
+    h += '<div class="goal '+s.k+'"><span class="glow"></span>'
+      +   '<div class="gtop">'
+      +     ring(g,s)
+      +     '<div class="gmain">'
+      +       '<div class="gname">'+esc(g.name)+'</div>'
+      +       '<div class="gmeta">'+esc(g.owner)+'<span class="dot"></span>'+esc(g.start)+' &rarr; '+esc(g.target)
+      +         '<span class="dot"></span>'+esc(g.left)+'</div>'
+      +       '<div class="chiprow"><span class="chip '+s.k+'"><span class="i">'+s.ic+'</span>'+s.lbl+'</span>'
+      +         '<span class="pacenote"><b>'+g.pace+'%</b> expected today</span></div>'
+      +     '</div>'
+      +   '</div>'
+      +   trend(g.hist,s.k)
+      +   note
+      + '</div>';
+  });
+  document.getElementById("goals").innerHTML=h;
+}
+
+/* ---------- P&D ---------- */
+var TODAY=new Date(2026,6,31);
+var PD={"2026-07-04":"Chris Alvarez","2026-07-11":"Yarra Haddad","2026-07-18":"Willfried Kone",
+        "2026-07-25":"Abraham Reyes","2026-08-01":"Rodrigo Salas","2026-08-08":"Ryan Mancuso",
+        "2026-08-15":"","2026-08-22":"Deonna Reed","2026-08-29":""};
+var ACCESS=["Ryan Mancuso","Troy Moodie","Deonna Reed","Michael Ortiz","Chris Alvarez",
+            "Yarra Haddad","Willfried Kone","Abraham Reyes","Rodrigo Salas"];
+function setPD(k,v){PD[k]=v;renderPD();}
+var pdMonths=[{y:2026,m:6},{y:2026,m:7},{y:2026,m:8},{y:2026,m:9}], pdIdx=1;
+var MONTHS=["Jan","Feb","Mar","Apr","May","Jun","Jul","Aug","Sep","Oct","Nov","Dec"];
+var MONTHS_FULL=["January","February","March","April","May","June","July","August","September","October","November","December"];
+function iso(dt){var m=dt.getMonth()+1,d=dt.getDate();return dt.getFullYear()+"-"+(m<10?"0":"")+m+"-"+(d<10?"0":"")+d;}
+function fmtD(dt){return MONTHS[dt.getMonth()]+" "+dt.getDate();}
+var NEXT_SAT=(function(){var d=new Date(TODAY.getTime());
+  if(d.getDay()===0)d.setDate(d.getDate()-1);else while(d.getDay()!==6)d.setDate(d.getDate()+1);return iso(d);})();
+function weekendsOf(y,m){var out=[],d=new Date(y,m,1);
+  while(d.getMonth()===m){if(d.getDay()===6){var s=new Date(d.getTime());s.setDate(s.getDate()+1);
+    out.push({sat:new Date(d.getTime()),sun:s});}d.setDate(d.getDate()+1);}return out;}
+function goMonth(x){pdIdx=Math.min(pdMonths.length-1,Math.max(0,pdIdx+x));renderPD();}
+function renderPD(){
+  var mo=pdMonths[pdIdx];
+  document.getElementById("pdMonth").textContent=MONTHS_FULL[mo.m]+" "+mo.y;
+  var wes=weekendsOf(mo.y,mo.m),gaps=0,future=0;
+  wes.forEach(function(w){if(w.sun<TODAY)return;future++;if(!PD[iso(w.sat)])gaps++;});
+  var h="";
+  wes.forEach(function(w){
+    var key=iso(w.sat),owner=PD[key]||"",past=w.sun<TODAY,gap=!past&&!owner;
+    var rng=w.sat.getMonth()===w.sun.getMonth()
+      ? MONTHS[w.sat.getMonth()]+" "+w.sat.getDate()+"–"+w.sun.getDate()
+      : fmtD(w.sat)+" – "+fmtD(w.sun);
+    var tag=key===NEXT_SAT?'<span class="tagnow">This weekend</span>'
+          : past?'<span class="tagpast">done</span>':'';
+    var opts='<option value="">'+(owner?"— Unassign —":"— Assign owner —")+'</option>';
+    ACCESS.forEach(function(n){
+      opts+='<option value="'+esc(n)+'"'+(n===owner?' selected':'')+'>'+esc(n)+'</option>';});
+    h+='<div class="wk'+(gap?' gap':'')+(past?' past':'')+'">'
+      +  '<div class="dt"><span class="rng">'+rng+'</span>'+tag+'</div>'
+      +  '<div class="own">'+(owner?av(owner)+'<span class="nm">'+esc(owner)+'</span>'
+                                   :'<span class="none">Not assigned</span>')+'</div>'
+      +  '<select onchange="setPD(\''+key+'\',this.value)" aria-label="P&amp;D owner for '+rng+'">'+opts+'</select>'
+      +'</div>';
+  });
+  document.getElementById("pdRows").innerHTML=h;
+  document.getElementById("pdNote").innerHTML =
+      !future ? '<div class="pdnote ok">This month has already passed</div>'
+    : gaps    ? '<div class="pdnote gap"><span class="i">▲</span>'+gaps+' upcoming weekend'+(gaps>1?"s":"")+' with no P&amp;D owner</div>'
+              : '<div class="pdnote ok"><span class="i">●</span>Every upcoming weekend is covered</div>';
+}
+
+/* ---------- toggles ---------- */
+function setW(w){
+  document.body.classList.toggle("w1280", w===1280);
+  document.getElementById("w16").classList.toggle("on", w!==1280);
+  document.getElementById("w12").classList.toggle("on", w===1280);
+}
+function setL(m){
+  document.body.classList.toggle("one", m==="one");
+  document.getElementById("l2").classList.toggle("on", m==="two");
+  document.getElementById("l1").classList.toggle("on", m==="one");
+}
+function setN(n){
+  nGoals=n;
+  document.getElementById("g2").classList.toggle("on", n===2);
+  document.getElementById("g4").classList.toggle("on", n===4);
+  renderGoals();
+}
+function setH(v){
+  showHist=v;
+  document.getElementById("h1").classList.toggle("on", !!v);
+  document.getElementById("h0").classList.toggle("on", !v);
+  renderGoals();
+}
+
+renderGoals(); renderPD();
+</script>
+</body>
+</html>
