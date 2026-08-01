@@ -17,33 +17,9 @@
 
 import { useEffect, useMemo, useRef, useState } from "react";
 import { usePathname, useRouter } from "next/navigation";
-import { canAccess, useAuth } from "@/lib/useAuth";
+import { useAuth } from "@/lib/useAuth";
 import { useCrmAwaitingCount } from "@/lib/useCrmAwaitingCount";
-
-type Section = {
-  href: string;
-  name: string;
-  desc: string;
-  access: "cities" | "clubhouse" | "chats" | "admin";
-  icon: React.ReactNode;
-};
-
-function I({ children }: { children: React.ReactNode }) {
-  return (
-    <svg viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeLinecap="round" strokeLinejoin="round" aria-hidden>
-      {children}
-    </svg>
-  );
-}
-
-const SECTIONS: Section[] = [
-  { href: "/match-ops/master-schedule", name: "Master Schedule", desc: "Recurring weekly slots, by city", access: "cities", icon: <I><rect x="3" y="5" width="18" height="16" rx="3.2" /><path d="M3 9.6h18M8 3v3.6M16 3v3.6" /></I> },
-  { href: "/match-ops/match-chats", name: "Match Chats", desc: "One WhatsApp group per match", access: "chats", icon: <I><path d="M21 12a8 8 0 0 1-11.6 7.1L4 21l1.9-5.4A8 8 0 1 1 21 12z" /></I> },
-  { href: "/match-ops/player-chats", name: "Player Chats", desc: "1:1 threads with players", access: "chats", icon: <I><circle cx="12" cy="8" r="3.4" /><path d="M4.8 20a7.2 7.2 0 0 1 14.4 0" /></I> },
-  { href: "/match-ops/field-pipeline", name: "Field Pipeline", desc: "Venues we're still chasing", access: "clubhouse", icon: <I><path d="M3.5 5h17l-6.6 7.7V19l-3.8 2v-8.3z" /></I> },
-  { href: "/match-ops/field-ops", name: "Field Ops", desc: "Tonight's fields and staff", access: "cities", icon: <I><path d="M12 21.5s7-6.6 7-11.5a7 7 0 1 0-14 0c0 4.9 7 11.5 7 11.5z" /><circle cx="12" cy="10" r="2.5" /></I> },
-  { href: "/match-ops/review", name: "Review", desc: "Slots waiting on a decision", access: "admin", icon: <I><path d="M5.5 21.5V3.5M5.5 4.5h12l-1.8 3.9 1.8 3.9h-12" /></I> },
-];
+import { visibleSections } from "./sections";
 
 export default function MatchOpsMobileStrip() {
   const { appUser } = useAuth();
@@ -54,17 +30,12 @@ export default function MatchOpsMobileStrip() {
   const scRef = useRef<HTMLDivElement>(null);
   const activeRef = useRef<HTMLButtonElement>(null);
 
-  const items = useMemo(
-    () =>
-      SECTIONS.filter((s) =>
-        s.access === "admin" ? !!appUser?.is_admin : canAccess(appUser, s.access),
-      ),
-    [appUser],
-  );
+  // One canonical section list (./sections), shared with the desktop rail.
+  const items = useMemo(() => visibleSections(appUser), [appUser]);
 
   const isActive = (href: string) => pathname === href || pathname.startsWith(href + "/");
-  const countFor = (href: string) =>
-    href === "/match-ops/player-chats" && awaiting > 0 ? awaiting : null;
+  const countFor = (badge?: "awaiting") =>
+    badge === "awaiting" && awaiting > 0 ? awaiting : null;
 
   // Minimal-scroll: only if the active pill is off-screen, and by the least
   // amount. Never auto-centre (that truncates the first label on first paint).
@@ -98,12 +69,12 @@ export default function MatchOpsMobileStrip() {
           className="flex h-9 w-9 flex-none items-center justify-center rounded-full"
           style={{ color: "#42594e", background: "#eef3f0" }}
         >
-          <I><path d="M4 6h16M4 12h16M4 18h16" /></I>
+          <svg viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeLinecap="round" strokeLinejoin="round" aria-hidden><path d="M4 6h16M4 12h16M4 18h16" /></svg>
         </button>
         <div ref={scRef} className="flex flex-1 gap-[7px] overflow-x-auto [scrollbar-width:none] [&::-webkit-scrollbar]:hidden">
           {items.map((s) => {
             const on = isActive(s.href);
-            const n = countFor(s.href);
+            const n = countFor(s.badge);
             return (
               <button
                 key={s.href}
@@ -113,7 +84,7 @@ export default function MatchOpsMobileStrip() {
                 className="flex h-9 flex-none items-center gap-1.5 rounded-full border px-[13px] text-[13.5px] font-[640] whitespace-nowrap"
                 style={on ? { background: "#0d3b2e", borderColor: "#0d3b2e", color: "#fff", fontWeight: 700 } : { background: "#ffffff", borderColor: "#e2eae5", color: "#42594e" }}
               >
-                {s.name}
+                {s.label}
                 {n != null && (
                   <span className="rounded-full px-1.5 text-[11.5px] font-[750]" style={on ? { background: "rgba(255,255,255,.17)", color: "#bfe9d3" } : { background: "rgba(0,0,0,.05)", color: "#8d9c94" }}>
                     {n}
@@ -142,7 +113,7 @@ export default function MatchOpsMobileStrip() {
             <div className="px-2.5">
               {items.map((s) => {
                 const on = isActive(s.href);
-                const n = countFor(s.href);
+                const n = countFor(s.badge);
                 return (
                   <button
                     key={s.href}
@@ -155,7 +126,7 @@ export default function MatchOpsMobileStrip() {
                       {s.icon}
                     </span>
                     <span className="min-w-0 flex-1">
-                      <span className="block truncate text-[15.5px] font-[650] tracking-[-0.012em]" style={{ color: on ? "#0f3d2e" : "#12241d", fontWeight: on ? 760 : 650 }}>{s.name}</span>
+                      <span className="block truncate text-[15.5px] font-[650] tracking-[-0.012em]" style={{ color: on ? "#0f3d2e" : "#12241d", fontWeight: on ? 760 : 650 }}>{s.label}</span>
                       <span className="block truncate text-[12.5px] font-[540]" style={{ color: "#6d7b74" }}>{s.desc}</span>
                     </span>
                     {n != null && (

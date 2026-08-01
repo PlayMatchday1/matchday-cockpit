@@ -1,21 +1,34 @@
 "use client";
 
-// Match Ops section shell: a grouped left rail beside the content. Rail items
-// are filtered to what the current user can actually open (a bounce is worse
-// than a hidden item), and each route keeps its own gate — the rail is a
-// convenience, not the security boundary.
+// Match Ops section shell. ONE rail component (ChatsRail) renders on EVERY Match
+// Ops route — mounted once here, position:fixed, full-bleed against the viewport
+// left edge and flush under the top nav, running the full remaining viewport
+// height. Mounting it here (not inside each console) is what makes the rail's
+// bounding box byte-identical across the chat 100dvh shells and the centered
+// canvas pages: an inline rail would sit at a different y on each.
 //
-// Groups (mockup match-ops-v1): OPERATIONS (Master Schedule, Field Pipeline,
-// Field Ops, Review[admins]) and CONVERSATIONS (Match Chats, Player Chats).
+// Content is nudged right of the rail by the --mo-rail-w custom property (which
+// also drives the rail's own width), so collapse animates both in lockstep. The
+// centered non-chat canvas and the full-bleed chat consoles are otherwise
+// untouched — only offset.
 //
-// The chat routes render a 100dvh shell; the rail is sticky (SectionSideNav sets
-// position:sticky at >=900px) and lives in a flex row beside the content, so it
-// stays visible while only the message list scrolls internally.
+// Collapse is owned here: React state persists across Match Ops navigation (this
+// layout does not remount between its routes) and localStorage restores it after
+// a reload. One key for every route — collapse a rail on Chats and it stays
+// collapsed on Master Schedule and after F5.
+//
+// Below the rail breakpoint the desktop rail is hidden and MatchOpsMobileStrip
+// carries navigation; the chat consoles render that strip themselves, so we add
+// it here only for the non-chat routes.
 
+import { useEffect, useState } from "react";
 import { usePathname } from "next/navigation";
-import SectionSideNav, { type SectionNavItem } from "@/components/SectionSideNav";
-import { canAccess, useAuth } from "@/lib/useAuth";
-import { useCrmUnreadCount } from "@/lib/useCrmUnreadCount";
+import { useAuth } from "@/lib/useAuth";
+import ChatsRail from "./ChatsRail";
+import MatchOpsMobileStrip from "./MatchOpsMobileStrip";
+import { visibleSections } from "./sections";
+
+const COLLAPSE_KEY = "matchops:rail-collapsed";
 
 export default function MatchOpsLayout({
   children,
@@ -24,51 +37,56 @@ export default function MatchOpsLayout({
 }) {
   const { appUser } = useAuth();
   const pathname = usePathname() ?? "";
-  // Cheap, already-available count: unread player (customer) chats. "A human
-  // needs to act" → alert tone. Only rendered when > 0 (SectionSideNav omits 0).
-  const crmUnread = useCrmUnreadCount();
-
-  // The two chat consoles (Match Chats + Player Chats) own a full-bleed
-  // multi-pane layout with their own icon rail (ChatsRail), so the shared
-  // SectionSideNav is suppressed on THOSE routes only — every other Match Ops
-  // page keeps the shared rail byte-for-byte. The shared SectionSideNav
-  // component itself is untouched. See the chat consoles' page.tsx.
-  if (
+  const isChat =
     pathname.startsWith("/match-ops/match-chats") ||
-    pathname.startsWith("/match-ops/player-chats")
-  ) {
-    return <>{children}</>;
-  }
+    pathname.startsWith("/match-ops/player-chats");
 
-  const canCities = canAccess(appUser, "cities");
-  const canClub = canAccess(appUser, "clubhouse");
-  const canChats = canAccess(appUser, "chats");
-  const isAdmin = !!appUser?.is_admin;
-
-  const items: SectionNavItem[] = [];
-  if (canCities)
-    items.push({ group: "Operations", label: "Master Schedule", href: "/match-ops/master-schedule" });
-  if (canClub)
-    items.push({ group: "Operations", label: "Field Pipeline", href: "/match-ops/field-pipeline" });
-  if (canCities)
-    items.push({ group: "Operations", label: "Field Ops", href: "/match-ops/field-ops" });
-  if (isAdmin)
-    items.push({ group: "Operations", label: "Review", href: "/match-ops/review" });
-  if (canChats) {
-    items.push({ group: "Conversations", label: "Match Chats", href: "/match-ops/match-chats" });
-    items.push({
-      group: "Conversations",
-      label: "Player Chats",
-      href: "/match-ops/player-chats",
-      count: crmUnread,
-      tone: "alert",
+  const [collapsed, setCollapsed] = useState(false);
+  useEffect(() => {
+    try {
+      setCollapsed(window.localStorage.getItem(COLLAPSE_KEY) === "1");
+    } catch {
+      /* private mode */
+    }
+  }, []);
+  const toggle = () =>
+    setCollapsed((prev) => {
+      const next = !prev;
+      try {
+        window.localStorage.setItem(COLLAPSE_KEY, next ? "1" : "0");
+      } catch {
+        /* private mode */
+      }
+      return next;
     });
-  }
+
+  const hasRail = visibleSections(appUser).length > 0;
+  const railW = collapsed ? "60px" : "212px";
 
   return (
-    <div className="min-[900px]:flex min-[900px]:items-start min-[900px]:gap-6">
-      {items.length > 0 && <SectionSideNav items={items} ariaLabel="Match Ops" />}
-      <div className="min-w-0 flex-1">{children}</div>
-    </div>
+    <>
+      {hasRail && (
+        <div
+          className="fixed left-0 z-30 hidden lg:block"
+          style={{
+            top: "calc(env(safe-area-inset-top, 0px) + 4rem)",
+            height: "calc(100dvh - env(safe-area-inset-top, 0px) - 4rem)",
+            width: railW,
+            transition: "width .18s ease-out",
+          }}
+        >
+          <ChatsRail collapsed={collapsed} onToggle={toggle} />
+        </div>
+      )}
+      <div
+        style={{ "--mo-rail-w": railW } as React.CSSProperties}
+        className={isChat ? undefined : "lg:pl-[var(--mo-rail-w)]"}
+      >
+        {/* Non-chat routes get the mobile section strip here; chat consoles
+            render their own inside the inbox. */}
+        {!isChat && hasRail && <MatchOpsMobileStrip />}
+        {children}
+      </div>
+    </>
   );
 }

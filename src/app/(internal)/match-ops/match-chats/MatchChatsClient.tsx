@@ -33,11 +33,8 @@ import {
   type MatchChatInboxRow,
 } from "@/lib/matchChats";
 import { UNKNOWN_CITY } from "@/lib/cityColors";
-import ChatsRail from "../ChatsRail";
 import MatchChatsInbox, { type InboxTab } from "./MatchChatsInbox";
 import ChatPane from "./ChatPane";
-
-const RAIL_COLLAPSE_KEY = "cockpit:match-chats:rail-collapsed";
 
 // ---------------- helpers ----------------
 
@@ -107,15 +104,6 @@ function filterBySearch(
   });
 }
 
-function readCollapse(): boolean {
-  if (typeof window === "undefined") return false;
-  try {
-    return window.localStorage.getItem(RAIL_COLLAPSE_KEY) === "1";
-  } catch {
-    return false;
-  }
-}
-
 // ---------------- main ----------------
 
 export default function MatchChatsClient() {
@@ -131,24 +119,6 @@ export default function MatchChatsClient() {
   const [error, setError] = useState<string | null>(null);
   const [loading, setLoading] = useState(true);
   const [search, setSearch] = useState("");
-
-  // Rail collapse — persisted. Owned here so the grid column width and the rail
-  // render stay in sync.
-  const [railCollapsed, setRailCollapsed] = useState(false);
-  useEffect(() => {
-    setRailCollapsed(readCollapse());
-  }, []);
-  const toggleRail = useCallback(() => {
-    setRailCollapsed((prev) => {
-      const next = !prev;
-      try {
-        window.localStorage.setItem(RAIL_COLLAPSE_KEY, next ? "1" : "0");
-      } catch {
-        // private mode — no-op
-      }
-      return next;
-    });
-  }, []);
 
   const load = useCallback(async () => {
     setError(null);
@@ -255,15 +225,9 @@ export default function MatchChatsClient() {
   );
 
   return (
-    <div className="flex min-h-0 min-w-0 flex-1" style={{ background: "#f8faf9" }}>
-      {/* Rail — desktop only */}
-      <div
-        className="hidden shrink-0 lg:block"
-        style={{ width: railCollapsed ? 60 : 212, transition: "width .18s ease-out" }}
-      >
-        <ChatsRail collapsed={railCollapsed} onToggle={toggleRail} />
-      </div>
-
+    // The rail is owned by the section layout (fixed, full-bleed). We only leave
+    // room for it on desktop via --mo-rail-w, which the layout sets.
+    <div className="flex min-h-0 min-w-0 flex-1 lg:pl-[var(--mo-rail-w)]" style={{ background: "#f8faf9" }}>
       {/* List */}
       <MatchChatsInbox
         rows={visibleRows}

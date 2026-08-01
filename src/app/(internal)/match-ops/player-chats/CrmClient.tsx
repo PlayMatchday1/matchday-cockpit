@@ -70,7 +70,6 @@ import MessageBubble, {
   type ConversationMessage,
 } from "./components/MessageBubble";
 import Composer from "./components/Composer";
-import ChatsRail from "../ChatsRail";
 import MatchOpsMobileStrip from "../MatchOpsMobileStrip";
 import MetricsStrip from "./components/MetricsStrip";
 import ContextPane from "./components/ContextPane";
@@ -316,27 +315,6 @@ export default function CrmClient() {
   };
   const [counts, setCounts] = useState<ViewCounts>(ZERO_COUNTS);
 
-  // --------- redesign UI state (client-side) ---------
-  // Icon-rail collapse, persisted (matches the Match Chats console).
-  const [railCollapsed, setRailCollapsed] = useState(false);
-  useEffect(() => {
-    try {
-      setRailCollapsed(window.localStorage.getItem("crm:rail-collapsed") === "1");
-    } catch {
-      /* private mode */
-    }
-  }, []);
-  const toggleRail = useCallback(() => {
-    setRailCollapsed((prev) => {
-      const next = !prev;
-      try {
-        window.localStorage.setItem("crm:rail-collapsed", next ? "1" : "0");
-      } catch {
-        /* private mode */
-      }
-      return next;
-    });
-  }, []);
 
   // Client-side inbox filters (no refetch): search over player name, a city
   // set, and additive flags. The filter popover carries the cities + flags;
@@ -1294,15 +1272,9 @@ export default function CrmClient() {
   const listEmpty = renderGroups.length === 0;
 
   return (
-    <div className="flex min-h-0 min-w-0 flex-1" style={{ background: "#f8faf9" }}>
-      {/* Rail — desktop only */}
-      <div
-        className="hidden shrink-0 lg:block"
-        style={{ width: railCollapsed ? 60 : 212, transition: "width .18s ease-out" }}
-      >
-        <ChatsRail collapsed={railCollapsed} onToggle={toggleRail} />
-      </div>
-
+    // The rail is owned by the section layout (fixed, full-bleed). We only leave
+    // room for it on desktop via --mo-rail-w, which the layout sets.
+    <div className="flex min-h-0 min-w-0 flex-1 lg:pl-[var(--mo-rail-w)]" style={{ background: "#f8faf9" }}>
       {/* Right column: metrics strip over the three panes */}
       <div className="flex min-h-0 min-w-0 flex-1 flex-col">
         {/* Desktop-only: the mobile console is a clean list; the awaiting
