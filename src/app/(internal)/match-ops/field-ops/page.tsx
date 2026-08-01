@@ -1,21 +1,17 @@
 "use client";
 
-// Field Ops — relocated from the Growth page's ?tab=fields lens to Match Ops.
-// Same component (FieldOpsLens), same queries, same ?fo= sub-state. The only
-// change to the lens itself was making its URL base location-agnostic
-// (usePathname instead of a hardcoded "/growth"). Gate unchanged: was inside
-// Growth's page="cities" guard, stays gated on can_access_cities.
+// Field Ops — the Fields page, no tabs. Inventory moved to /match-ops/inventory
+// and Veo/Community merged into /match-ops/match-chats/automation, so Field Ops
+// renders the venue roster directly (the old ?fo= tab strip is gone; the param
+// is stripped by a redirect in next.config). Gate unchanged: can_access_cities.
 
-import { Suspense } from "react";
 import PagePermissionGuard from "@/components/PagePermissionGuard";
-import FieldOpsLens from "@/components/FieldOpsLens";
+import CitiesFieldsLens from "@/components/CitiesFieldsLens";
 
 export default function FieldOpsPage() {
   return (
     <PagePermissionGuard page="cities">
-      <Suspense fallback={null}>
-        <FieldOpsLens />
-      </Suspense>
+      <CitiesFieldsLens />
     </PagePermissionGuard>
   );
 }

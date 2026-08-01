@@ -105,6 +105,9 @@ const nextConfig: NextConfig = {
         destination: "/match-ops/reviews",
         permanent: true,
       },
+      // Field Ops ?fo= deep links (inventory / veo / community / fields) are
+      // redirected in src/proxy.ts, which can strip the fo param cleanly — a
+      // config redirect here would pass ?fo= through and loop on fo=fields.
       // Veo review queue + field-code editor moved from /admin/veo to
       // Cities → Field Ops → Veo on 2026-07-26. Routing-layer redirect (real
       // 307) so bookmarks land on the tab regardless of the (internal) client

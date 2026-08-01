@@ -14,6 +14,8 @@
 // field supports today. A single flat feed is the honest shape.
 
 import { useCallback, useEffect, useMemo, useRef, useState } from "react";
+import Link from "next/link";
+import { useVeoReviewCount } from "@/lib/useVeoReviewCount";
 import { type MatchChatInboxRow } from "@/lib/matchChats";
 import { formatMatchTitle } from "@/lib/cityTimezones";
 import { KNOWN_CITY_CODES, HIDDEN_CITY_CODES } from "@/lib/cityNormalization";
@@ -173,6 +175,10 @@ export default function MatchChatsInbox({
         ? "Offline"
         : "Connecting";
 
+  // Veo review-queue count for the "Automated messaging" button badge (same
+  // /api/veo query the automation page's Veo section reads).
+  const veoReview = useVeoReviewCount();
+
   const searching = search.trim().length > 0;
 
   return (
@@ -205,12 +211,28 @@ export default function MatchChatsInbox({
             />
             {liveLabel}
           </span>
+          <Link
+            href="/match-ops/match-chats/automation"
+            className="ml-auto flex h-[31px] flex-none items-center gap-1.5 rounded-[10px] border px-2.5 text-[12px] font-[650] transition hover:bg-white"
+            style={{ borderColor: "#e2eae5", background: "#ffffff", color: "#2b3d35" }}
+          >
+            <svg viewBox="0 0 24 24" className="h-3.5 w-3.5" fill="none" stroke="currentColor" strokeWidth={1.8} strokeLinecap="round" strokeLinejoin="round" aria-hidden>
+              <path d="M13 2 4 14h6l-1 8 9-12h-6l1-8z" />
+            </svg>
+            <span className="hidden sm:inline">Automated messaging</span>
+            <span className="sm:hidden">Automated</span>
+            {veoReview > 0 && (
+              <span className="rounded-full px-[7px] py-[1px] text-[11px] font-bold tabular-nums" style={{ background: "rgba(0,0,0,.045)", color: "#8d9c94" }}>
+                {veoReview}
+              </span>
+            )}
+          </Link>
           <button
             type="button"
             onClick={onRefresh}
             title="Refresh"
             aria-label="Refresh"
-            className="ml-auto flex h-11 w-11 items-center justify-center rounded-[10px] transition hover:bg-white/85 min-[900px]:h-[31px] min-[900px]:w-[31px]"
+            className="flex h-11 w-11 items-center justify-center rounded-[10px] transition hover:bg-white/85 min-[900px]:h-[31px] min-[900px]:w-[31px]"
             style={{ color: "#5c7267" }}
           >
             <svg viewBox="0 0 24 24" className="h-4 w-4" fill="none" stroke="currentColor" strokeLinecap="round" strokeLinejoin="round" strokeWidth={1.9} aria-hidden>

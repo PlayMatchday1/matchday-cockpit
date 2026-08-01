@@ -11,7 +11,7 @@
 // Reads GET /api/community/cities; mutates via PATCH /communities/[id],
 // PUT /field-map, PATCH /settings — all admin-gated.
 
-import { useCallback, useEffect, useState } from "react";
+import { useCallback, useEffect, useRef, useState } from "react";
 import { AlertTriangle, Check, RefreshCw } from "lucide-react";
 import { supabase } from "@/lib/supabase";
 import { isValidWhatsAppInviteUrl } from "@/lib/community";
@@ -77,7 +77,19 @@ function fmtAgo(min: number | null): string {
   return h < 24 ? `${h}h ago` : `${Math.round(h / 24)}d ago`;
 }
 
-export default function CommunityDashboard() {
+// Rendered standalone at /match-ops/match-chats/automation (Section A). When
+// `embedded`, its own heartbeat/Refresh header is suppressed — the merged page
+// owns one shared header — and it reports its health up via onHealth and reloads
+// when the shared Refresh bumps `reloadKey`.
+export default function CommunityDashboard({
+  embedded = false,
+  reloadKey,
+  onHealth,
+}: {
+  embedded?: boolean;
+  reloadKey?: number;
+  onHealth?: (h: { successMin: number | null; stale: boolean; cityCount: number }) => void;
+} = {}) {
   const [cities, setCities] = useState<CityRow[]>([]);
   const [unassigned, setUnassigned] = useState<UnassignedField[]>([]);
   const [unconfigured, setUnconfigured] = useState<Unconfigured[]>([]);
@@ -128,6 +140,15 @@ export default function CommunityDashboard() {
   useEffect(() => {
     void load();
   }, [load]);
+
+  // Shared Refresh: reload when the parent bumps reloadKey (skip the mount value,
+  // which the effect above already handled).
+  const firstReload = useRef(true);
+  useEffect(() => {
+    if (reloadKey === undefined) return;
+    if (firstReload.current) { firstReload.current = false; return; }
+    void load();
+  }, [reloadKey, load]);
 
   const patchCommunity = useCallback(
     async (id: number, patch: { whatsapp_url?: string; active?: boolean }) => {
@@ -213,30 +234,40 @@ export default function CommunityDashboard() {
   const stale = successMin == null || successMin > 45;
   const anyNeedsUrl = cities.some((c) => c.communities.some((k) => k.needs_url));
 
+  // Report health up to the merged page header (community last-run line).
+  const cityCount = cities.filter((c) => c.communities.length > 0).length;
+  useEffect(() => {
+    if (loading) return;
+    onHealth?.({ successMin, stale, cityCount });
+  }, [loading, successMin, stale, cityCount, onHealth]);
+
   return (
     <div className="space-y-6">
-      {/* Heartbeat + refresh */}
-      <div className="flex flex-wrap items-center justify-between gap-3">
-        <div
-          className={`inline-flex items-center gap-2 rounded-lg border px-3 py-1.5 text-[13px] font-semibold ${
-            stale
-              ? "border-coral/50 bg-coral-soft text-coral-hover"
-              : "border-mint/50 bg-mint-soft text-deep-green"
-          }`}
-        >
-          {stale ? <AlertTriangle className="h-4 w-4" /> : <Check className="h-4 w-4" />}
-          Last successful run: {fmtAgo(successMin)}
-          {stale && " — check the schedule / endpoint"}
+      {/* Heartbeat + refresh — suppressed when embedded (the merged page's shared
+          header carries the last-run line and one Refresh for both sections). */}
+      {!embedded && (
+        <div className="flex flex-wrap items-center justify-between gap-3">
+          <div
+            className={`inline-flex items-center gap-2 rounded-lg border px-3 py-1.5 text-[13px] font-semibold ${
+              stale
+                ? "border-coral/50 bg-coral-soft text-coral-hover"
+                : "border-mint/50 bg-mint-soft text-deep-green"
+            }`}
+          >
+            {stale ? <AlertTriangle className="h-4 w-4" /> : <Check className="h-4 w-4" />}
+            Last successful run: {fmtAgo(successMin)}
+            {stale && " — check the schedule / endpoint"}
+          </div>
+          <button
+            type="button"
+            onClick={() => void load()}
+            className="inline-flex items-center gap-1.5 rounded-lg border border-cream-line bg-white px-3 py-1.5 text-[13px] font-semibold text-deep-green transition hover:border-mint"
+          >
+            <RefreshCw className="h-3.5 w-3.5" />
+            Refresh
+          </button>
         </div>
-        <button
-          type="button"
-          onClick={() => void load()}
-          className="inline-flex items-center gap-1.5 rounded-lg border border-cream-line bg-white px-3 py-1.5 text-[13px] font-semibold text-deep-green transition hover:border-mint"
-        >
-          <RefreshCw className="h-3.5 w-3.5" />
-          Refresh
-        </button>
-      </div>
+      )}
 
       {settings && settings.last_status && settings.last_status >= 400 ? (
         <div className="rounded-lg border border-coral/40 bg-coral-soft px-3 py-2 text-xs text-coral-hover">
@@ -257,7 +288,9 @@ export default function CommunityDashboard() {
         <div>
           <div className="text-sm font-bold text-deep-green">Global posting</div>
           <div className="text-xs text-deep-green/55">
-            Master switch. When off, nothing posts no matter how communities are set.
+            Master switch for community invite-link posting only. When off, no
+            community links post no matter how the communities below are set. It
+            does not affect the Veo film-link auto-posts in the section below.
           </div>
         </div>
         <button

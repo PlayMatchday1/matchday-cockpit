@@ -37,9 +37,13 @@ export default function MatchOpsLayout({
 }) {
   const { appUser } = useAuth();
   const pathname = usePathname() ?? "";
+  // The full-bleed 100dvh treatment is for the chat CONSOLES only. The
+  // /match-ops/match-chats/automation config page is a normal scrolling page and
+  // must get the rail offset like every other route, so it is excluded here.
   const isChat =
-    pathname.startsWith("/match-ops/match-chats") ||
-    pathname.startsWith("/match-ops/player-chats");
+    (pathname.startsWith("/match-ops/match-chats") ||
+      pathname.startsWith("/match-ops/player-chats")) &&
+    !pathname.startsWith("/match-ops/match-chats/automation");
 
   const [collapsed, setCollapsed] = useState(false);
   useEffect(() => {

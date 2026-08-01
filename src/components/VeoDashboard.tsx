@@ -10,7 +10,7 @@
 // POST/DELETE /api/veo/[id] with the session bearer token — same pattern as
 // InventoryDashboard.
 
-import { useCallback, useEffect, useMemo, useState } from "react";
+import { useCallback, useEffect, useMemo, useRef, useState } from "react";
 import { ExternalLink, RefreshCw, RotateCw } from "lucide-react";
 import { supabase } from "@/lib/supabase";
 import VeoCodesEditor from "@/components/VeoCodesEditor";
@@ -97,7 +97,19 @@ function fmtWhen(iso: string | null): string {
   });
 }
 
-export default function VeoDashboard() {
+// Rendered standalone at /match-ops/match-chats/automation (Section B). When
+// `embedded`, its own header/Refresh is suppressed (the merged page owns one),
+// it reports health up via onHealth, and reloads when the shared Refresh bumps
+// `reloadKey`.
+export default function VeoDashboard({
+  embedded = false,
+  reloadKey,
+  onHealth,
+}: {
+  embedded?: boolean;
+  reloadKey?: number;
+  onHealth?: (h: { queueLen: number; postedCount: number }) => void;
+} = {}) {
   const [data, setData] = useState<ListPayload | null>(null);
   const [loading, setLoading] = useState(true);
   const [error, setError] = useState<string | null>(null);
@@ -135,6 +147,14 @@ export default function VeoDashboard() {
   useEffect(() => {
     void load();
   }, [load]);
+
+  // Shared Refresh: reload on reloadKey bump (skip the mount value).
+  const firstReload = useRef(true);
+  useEffect(() => {
+    if (reloadKey === undefined) return;
+    if (firstReload.current) { firstReload.current = false; return; }
+    void load();
+  }, [reloadKey, load]);
 
   const assign = useCallback(
     async (id: string, apiId: number) => {
@@ -202,23 +222,31 @@ export default function VeoDashboard() {
     [recent],
   );
 
+  // Report health up to the merged page header (Veo "N in review · N auto-posts").
+  useEffect(() => {
+    if (loading) return;
+    onHealth?.({ queueLen: queue.length, postedCount });
+  }, [loading, queue.length, postedCount, onHealth]);
+
   return (
     <div className="space-y-8">
-      <div className="flex items-center justify-between">
-        <div className="text-sm text-deep-green/70">
-          {loading
-            ? "Loading…"
-            : `${queue.length} in review · ${postedCount} recent auto-post${postedCount === 1 ? "" : "s"}`}
+      {!embedded && (
+        <div className="flex items-center justify-between">
+          <div className="text-sm text-deep-green/70">
+            {loading
+              ? "Loading…"
+              : `${queue.length} in review · ${postedCount} recent auto-post${postedCount === 1 ? "" : "s"}`}
+          </div>
+          <button
+            type="button"
+            onClick={() => void load()}
+            className="inline-flex items-center gap-1.5 rounded-lg border border-cream-line bg-white px-3 py-1.5 text-[13px] font-semibold text-deep-green transition hover:border-mint"
+          >
+            <RefreshCw className="h-3.5 w-3.5" />
+            Refresh
+          </button>
         </div>
-        <button
-          type="button"
-          onClick={() => void load()}
-          className="inline-flex items-center gap-1.5 rounded-lg border border-cream-line bg-white px-3 py-1.5 text-[13px] font-semibold text-deep-green transition hover:border-mint"
-        >
-          <RefreshCw className="h-3.5 w-3.5" />
-          Refresh
-        </button>
-      </div>
+      )}
 
       {error && (
         <div className="rounded-lg border border-coral/40 bg-coral-soft px-3 py-2 text-sm text-coral-hover">
