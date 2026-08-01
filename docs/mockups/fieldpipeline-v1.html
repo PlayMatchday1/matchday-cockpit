@@ -1,0 +1,534 @@
+<!doctype html>
+<html lang="en"><head><meta charset="utf-8">
+<meta name="viewport" content="width=device-width,initial-scale=1">
+<title>Field Pipeline — MatchDay Clubhouse</title>
+<style>
+:root{
+  /* brand */
+  --forest:#0d3b2e; --forest-deep:#072a20; --accent:#35c77f; --logo:#2cdb87;
+  --mint:#e0f2e7; --amount:#e2502b; --ink:#12241d; --muted:#6d7b74;
+  /* mist tone (locked default) */
+  --rail-a:#fafbfa; --rail-b:#f6f9f7; --board-bg:#f8faf9; --chip-bg:#eef3f0;
+  --chip-line:#e2eae5; --line:#e6ebe8; --hair:#eff3f1; --surface:#ffffff;
+  /* status — reserved, never used for identity */
+  --warn-bg:#fdf1d0; --warn-ink:#8a6300; --warn-line:#e3c369;
+  --crit-bg:#fdeae4; --crit-ink:#a8391a; --crit-line:#f0bda9;
+  --ok-ink:#12704a;
+}
+*{box-sizing:border-box}
+html,body{height:100%}
+body{margin:0;background:var(--board-bg);color:var(--ink);
+  font-family:"Inter",-apple-system,BlinkMacSystemFont,"Segoe UI",Roboto,sans-serif;
+  font-size:13px;line-height:1.45;-webkit-font-smoothing:antialiased;
+  display:flex;flex-direction:column;overflow:hidden}
+
+/* ---------------- top bar ---------------- */
+.top{flex:none;height:56px;background:var(--forest-deep);display:flex;align-items:center;
+  padding:0 20px;gap:26px;z-index:40}
+.wm{font-weight:800;font-size:17px;letter-spacing:-.4px;color:var(--logo);font-style:italic;white-space:nowrap}
+.wm span{font-style:normal;font-weight:600;color:#cfe9dc;font-size:13px;letter-spacing:0;margin-left:5px}
+.nav{display:flex;gap:2px;margin-left:8px}
+.nav a{color:#bcd7ca;text-decoration:none;font-size:13px;font-weight:500;
+  padding:7px 13px;border-radius:999px;white-space:nowrap}
+.nav a:hover{background:rgba(255,255,255,.07);color:#fff}
+.nav a.on{background:var(--accent);color:#06301f;font-weight:650}
+.nav a.off{color:#5e7a6c}
+.who{margin-left:auto;color:#cfe9dc;font-size:13px}
+
+/* ---------------- shell ---------------- */
+.shell{flex:1;display:flex;min-height:0}
+.side{flex:none;width:212px;background:var(--rail-a);border-right:1px solid var(--line);
+  padding:16px 12px;overflow-y:auto}
+.sgrp{font-size:10.5px;font-weight:700;letter-spacing:.09em;color:#9aa8a1;
+  text-transform:uppercase;padding:0 10px;margin:14px 0 6px}
+.sgrp:first-child{margin-top:0}
+.side a{display:flex;align-items:center;min-height:36px;padding:7px 10px;border-radius:8px;
+  color:#33463e;text-decoration:none;font-size:13px;font-weight:500}
+.side a:hover{background:var(--chip-bg)}
+.side a.on{background:var(--mint);color:#0a5c3c;font-weight:650}
+
+/* ---------------- main ---------------- */
+.main{flex:1;min-width:0;display:flex;flex-direction:column}
+.head{flex:none;padding:16px 22px 0}
+.h1row{display:flex;align-items:flex-start;gap:14px}
+.h1{font-size:20px;font-weight:750;letter-spacing:-.3px;margin:0;
+  border-left:3px solid var(--accent);padding-left:11px;line-height:1.25}
+.h1 i{display:block;font-style:normal;font-size:12.5px;font-weight:450;color:var(--muted);margin-top:2px}
+.hact{margin-left:auto;display:flex;gap:8px;align-items:center}
+.btn{height:34px;padding:0 14px;border-radius:9px;border:1px solid var(--chip-line);
+  background:var(--surface);color:#2b3d35;font:inherit;font-size:12.5px;font-weight:600;
+  cursor:pointer;display:inline-flex;align-items:center;gap:7px}
+.btn:hover{background:var(--chip-bg)}
+.btn:focus-visible{outline:2px solid var(--accent);outline-offset:2px}
+.btn.pri{background:var(--forest);border-color:var(--forest);color:#eafff4}
+.btn.pri:hover{background:var(--forest-deep)}
+.btn.on{background:var(--mint);border-color:#bfe3d1;color:#0a5c3c}
+.btn svg{width:14px;height:14px;stroke-width:2.3;fill:none;stroke:currentColor;
+  stroke-linecap:round;stroke-linejoin:round}
+
+/* ---------------- summary strip: the chips ARE the filters ---------------- */
+.sum{display:flex;align-items:center;gap:7px;flex-wrap:wrap;margin:12px 0 0}
+.ch{height:27px;display:inline-flex;align-items:center;gap:7px;padding:0 11px;border-radius:999px;
+  background:var(--chip-bg);border:1px solid var(--chip-line);font-size:12px;color:#3a4d44;white-space:nowrap}
+.ch b{font-weight:700;color:var(--ink)}
+.ch.sep{background:none;border:none;padding:0 1px;color:#c3cec8}
+button.ch{font-family:inherit;cursor:pointer;-webkit-appearance:none;appearance:none;
+  transition:background .13s,border-color .13s,box-shadow .13s}
+button.ch:focus-visible{outline:2px solid var(--accent);outline-offset:2px}
+.ch.todo{background:var(--mint);border-color:#c9e8d8;color:var(--ok-ink)}
+.ch.todo:hover{background:#d3ecdf}
+.ch.todo.act{background:#bfe4cf;border-color:#8fcbaa;box-shadow:inset 0 1px 2px rgba(6,60,38,.13)}
+.ch.stale{background:var(--warn-bg);border-color:var(--warn-line);color:var(--warn-ink)}
+.ch.stale:hover{background:#fbe9be}
+.ch.stale.act{background:#f3dfa4;border-color:#cfa93c;box-shadow:inset 0 1px 2px rgba(122,92,5,.14)}
+.ch.crit{background:var(--crit-bg);border-color:var(--crit-line);color:var(--crit-ink)}
+.ch.crit:hover{background:#fadbd0}
+.ch.crit.act{background:#f6cbba;border-color:#dd9679;box-shadow:inset 0 1px 2px rgba(120,40,14,.14)}
+.ch.hide{display:none}
+.ch svg{width:12px;height:12px;stroke-width:2.6;fill:none;stroke:currentColor;
+  stroke-linecap:round;stroke-linejoin:round;flex:none}
+
+/* ---------------- filter row ---------------- */
+.filt{display:flex;gap:9px;margin:11px 0 12px;align-items:center}
+.srch{position:relative;flex:1;max-width:520px}
+.srch svg{position:absolute;left:12px;top:50%;transform:translateY(-50%);width:14px;height:14px;
+  stroke:#9aa8a1;stroke-width:2.2;fill:none}
+.srch input{width:100%;height:36px;border-radius:9px;border:1px solid var(--chip-line);
+  background:var(--surface);padding:0 12px 0 34px;font:inherit;font-size:13px;color:var(--ink)}
+.srch input::placeholder{color:#9aa8a1}
+.srch input:focus{outline:2px solid var(--accent);outline-offset:-1px;border-color:var(--accent)}
+select{height:36px;border-radius:9px;border:1px solid var(--chip-line);background:var(--surface);
+  padding:0 30px 0 11px;font:inherit;font-size:12.5px;color:#2b3d35;cursor:pointer;
+  -webkit-appearance:none;appearance:none;
+  background-image:url("data:image/svg+xml;utf8,<svg xmlns='http://www.w3.org/2000/svg' viewBox='0 0 24 24' fill='none' stroke='%236d7b74' stroke-width='2.4' stroke-linecap='round'><path d='M6 9l6 6 6-6'/></svg>");
+  background-repeat:no-repeat;background-position:right 9px center;background-size:14px}
+select:focus{outline:2px solid var(--accent);outline-offset:-1px}
+.fclear{font-size:12px;color:var(--muted);background:none;border:none;cursor:pointer;
+  font-family:inherit;text-decoration:underline;padding:6px}
+.fclear.hide{display:none}
+
+/* ---------------- board ---------------- */
+.boardwrap{flex:1;min-height:0;padding:0 22px 18px;display:flex}
+.board{flex:1;min-width:0;display:flex;gap:12px;overflow-x:auto;overflow-y:hidden;
+  padding-bottom:6px;scrollbar-width:thin}
+.col{flex:1 1 264px;min-width:264px;max-width:352px;display:flex;flex-direction:column;min-height:0;
+  background:var(--rail-b);border:1px solid var(--line);border-radius:12px}
+.col.coll{flex:0 0 46px;min-width:46px;max-width:46px}
+.ch2{flex:none;display:flex;align-items:center;gap:8px;padding:10px 10px 9px;border-bottom:1px solid var(--hair)}
+.col.coll .ch2{border-bottom:none;padding:9px 0;flex-direction:column;height:100%;justify-content:flex-start}
+.stg{width:19px;height:19px;border-radius:6px;background:var(--forest);color:#d8f5e7;flex:none;
+  display:flex;align-items:center;justify-content:center;font-size:11px;font-weight:700}
+.cname{font-size:12.5px;font-weight:700;letter-spacing:-.1px;white-space:nowrap;overflow:hidden;text-overflow:ellipsis}
+.cnt{margin-left:auto;font-size:11.5px;font-weight:650;color:#54655c;background:var(--chip-bg);
+  border:1px solid var(--chip-line);border-radius:999px;padding:1px 8px;flex:none}
+.cnt.filt{background:var(--mint);border-color:#c9e8d8;color:var(--ok-ink)}
+.cx{width:26px;height:26px;border-radius:7px;flex:none;display:flex;align-items:center;justify-content:center;
+  border:1px solid transparent;background:transparent;color:#7d8c84;cursor:pointer;padding:0}
+.cx:hover{background:var(--chip-bg);color:#33463e}
+.cx:focus-visible{outline:2px solid var(--accent);outline-offset:1px}
+.cx svg{width:14px;height:14px;stroke-width:2.4;fill:none;stroke:currentColor;stroke-linecap:round;stroke-linejoin:round}
+.cx .cv{transition:transform .16s}
+.col.coll .cx .cv{transform:rotate(180deg)}
+.csub{font-size:11px;color:#8a9992;padding:0 11px 8px;margin-top:-3px}
+.col.coll .csub{display:none}
+.vname{writing-mode:vertical-rl;font-size:12px;font-weight:700;color:#33463e;white-space:nowrap;
+  margin-top:8px;letter-spacing:-.1px}
+.vcnt{margin-top:8px;font-size:11px;font-weight:700;color:#54655c;background:var(--chip-bg);
+  border:1px solid var(--chip-line);border-radius:999px;padding:2px 6px}
+.vcnt.filt{background:var(--mint);border-color:#c9e8d8;color:var(--ok-ink)}
+.body{flex:1;min-height:0;overflow-y:auto;padding:9px;display:flex;flex-direction:column;gap:8px}
+.col.coll .body{display:none}
+.empty{font-size:11.5px;color:#9aa8a1;text-align:center;padding:16px 8px;
+  border:1px dashed var(--chip-line);border-radius:9px}
+
+/* ---------------- city group ---------------- */
+.grp{display:flex;flex-direction:column;gap:7px}
+.gh{display:flex;align-items:center;gap:7px;padding:3px 2px 1px;cursor:pointer;
+  background:none;border:none;font-family:inherit;width:100%;text-align:left;border-radius:6px;min-height:26px}
+.gh:hover{background:var(--chip-bg)}
+.gh:focus-visible{outline:2px solid var(--accent);outline-offset:1px}
+.dot{width:8px;height:8px;border-radius:50%;flex:none}
+.gname{font-size:12px;font-weight:700;color:#33463e}
+.gcnt{margin-left:auto;font-size:11px;color:#7d8c84;font-weight:600}
+.gh svg{width:12px;height:12px;stroke-width:2.6;fill:none;stroke:#9aa8a1;
+  stroke-linecap:round;stroke-linejoin:round;transition:transform .16s;flex:none}
+.grp.shut .gh svg{transform:rotate(-90deg)}
+.grp.shut .cards{display:none}
+.cards{display:flex;flex-direction:column;gap:7px}
+
+/* ---------------- card ---------------- */
+.card{background:var(--surface);border:1px solid var(--line);border-radius:10px;
+  padding:9px 10px 9px 12px;position:relative;overflow:hidden;cursor:pointer}
+.card:hover{border-color:#cfdad4;box-shadow:0 1px 3px rgba(13,59,46,.07)}
+.card:focus-visible{outline:2px solid var(--accent);outline-offset:1px}
+/* the spine is STATUS, not identity — reserved colours, earned meaning */
+.card::before{content:"";position:absolute;left:0;top:0;bottom:0;width:3px;background:var(--hair)}
+.card.aging::before{background:var(--warn-line)}
+.card.stalled::before{background:#e08a68}
+.crow{display:flex;align-items:flex-start;gap:8px}
+.fname{font-size:13px;font-weight:650;letter-spacing:-.15px;line-height:1.3;color:var(--ink);
+  flex:1;min-width:0;word-break:break-word}
+.own{flex:none;display:flex;flex-direction:column;align-items:flex-end;gap:3px;max-width:116px}
+.onm{display:inline-flex;align-items:center;gap:5px;max-width:116px}
+.av{width:20px;height:20px;border-radius:50%;flex:none;display:flex;align-items:center;justify-content:center;
+  font-size:9.5px;font-weight:700;background:var(--chip-bg);color:#46584f;border:1px solid var(--chip-line)}
+.av.past{border:1px dashed #b9c6bf;background:transparent;color:#8a9992}
+.oname{font-size:11px;color:var(--muted);white-space:nowrap;overflow:hidden;text-overflow:ellipsis}
+.mrow{display:flex;align-items:center;gap:7px;margin-top:6px;flex-wrap:wrap}
+.mrow.none{display:none}
+.city{display:inline-flex;align-items:center;gap:5px;font-size:11px;color:#54655c;
+  background:var(--chip-bg);border:1px solid var(--chip-line);border-radius:999px;padding:1px 8px 1px 6px}
+.age{font-size:11px;color:#9aa8a1;white-space:nowrap;display:inline-flex;align-items:center;gap:4px}
+.mrow .age{margin-left:auto}
+.age.aging{color:var(--warn-ink);font-weight:600}
+.age.stalled{color:var(--crit-ink);font-weight:650}
+.age i{width:5px;height:5px;border-radius:50%;background:currentColor;display:none}
+.age.aging i,.age.stalled i{display:block}
+
+/* to-dos */
+.tds{margin-top:8px;border-top:1px solid var(--hair);padding-top:7px;display:flex;flex-direction:column;gap:5px}
+.tds.hide{display:none}
+.td{display:flex;align-items:flex-start;gap:7px;font-size:11.5px;color:#3a4d44;line-height:1.35}
+.bx{width:13px;height:13px;border-radius:4px;border:1.5px solid #b9c6bf;flex:none;margin-top:1px;
+  display:flex;align-items:center;justify-content:center;background:var(--surface)}
+.bx svg{width:9px;height:9px;stroke:#fff;stroke-width:3.2;fill:none;stroke-linecap:round;stroke-linejoin:round;opacity:0}
+.td.dn .bx{background:var(--accent);border-color:var(--accent)}
+.td.dn .bx svg{opacity:1}
+.tdt{flex:1;min-width:0}
+.tdo{font-size:11px;color:#8a9992;white-space:nowrap;flex:none}
+/* a finished to-do list collapses to one line — done work must not cost a card section */
+.done1{display:flex;align-items:center;gap:6px;font-size:11px;color:var(--ok-ink);margin-top:7px}
+.done1 svg{width:11px;height:11px;stroke-width:3;fill:none;stroke:currentColor;stroke-linecap:round;stroke-linejoin:round}
+.done1.hide{display:none}
+
+/* legend */
+.leg{display:flex;align-items:center;gap:14px;flex-wrap:wrap;margin:9px 0 0;font-size:11px;color:#8a9992}
+.leg span{display:inline-flex;align-items:center;gap:5px}
+.leg .sw{width:14px;height:3px;border-radius:2px;flex:none;box-shadow:0 0 0 1px rgba(13,59,46,.07)}
+.leg .av{width:15px;height:15px;font-size:8px}
+</style></head>
+<body>
+
+<div class="top">
+  <div class="wm">MATCHDAY<span>Clubhouse</span></div>
+  <nav class="nav">
+    <a href="#">Home</a><a href="#">Finance</a><a href="#">Growth</a>
+    <a href="#" class="off">Membership</a><a href="#" class="on">Match Ops</a><a href="#">Tech</a>
+  </nav>
+  <div class="who">Ryan Mancuso ▾</div>
+</div>
+
+<div class="shell">
+  <aside class="side">
+    <div class="sgrp">Operations</div>
+    <a href="#">Master Schedule</a>
+    <a href="#" class="on">Field Pipeline</a>
+    <a href="#">Field Ops</a>
+    <a href="#">Review</a>
+    <div class="sgrp">Conversations</div>
+    <a href="#">Match Chats</a>
+    <a href="#">Player Chats</a>
+  </aside>
+
+  <main class="main">
+    <div class="head">
+      <div class="h1row">
+        <h1 class="h1">Field Pipeline<i>Every field by stage, with the ones that have stopped moving called out.</i></h1>
+        <div class="hact">
+          <button class="btn" id="grpbtn" onclick="tog('group')">
+            <svg viewBox="0 0 24 24"><path d="M4 6h16M4 12h16M4 18h16"/></svg><span id="grptxt">Grouped by city</span></button>
+          <button class="btn" id="tdbtn" onclick="tog('todos')">
+            <svg viewBox="0 0 24 24"><path d="M4 7l2.5 2.5L11 5"/><path d="M4 17l2.5 2.5L11 15"/><path d="M14 7h6M14 17h6"/></svg><span id="tdtxt">To-dos shown</span></button>
+          <button class="btn pri"><svg viewBox="0 0 24 24"><path d="M12 5v14M5 12h14"/></svg>New card</button>
+        </div>
+      </div>
+
+      <!-- the strip carries only facts the board does not already print -->
+      <div class="sum" id="sum">
+        <span class="ch"><b id="nf">0</b> fields</span>
+        <span class="ch sep">·</span>
+        <span class="ch"><b id="nc">0</b> cities</span>
+        <span class="ch sep">·</span>
+        <span class="ch"><b id="no">0</b> owners</span>
+        <button class="ch todo" id="chtodo" onclick="tog('ftodo')" aria-pressed="false">
+          <svg viewBox="0 0 24 24"><path d="M4 7l2.5 2.5L11 5"/><path d="M14 7h6"/><path d="M4 16h16"/></svg>
+          <b id="nt">0</b> open to-dos</button>
+        <button class="ch stale" id="chage" onclick="tog('fage')" aria-pressed="false">
+          <svg viewBox="0 0 24 24"><circle cx="12" cy="12" r="8.5"/><path d="M12 7.5V12l3 1.8"/></svg>
+          <b id="na">0</b> aging &gt; 21d</button>
+        <button class="ch crit" id="chstall" onclick="tog('fstall')" aria-pressed="false">
+          <svg viewBox="0 0 24 24"><path d="M12 4.5l8.5 15h-17z"/><path d="M12 10v4M12 16.6v.1"/></svg>
+          <b id="ns">0</b> stalled &gt; 45d</button>
+      </div>
+
+      <div class="filt">
+        <div class="srch">
+          <svg viewBox="0 0 24 24"><circle cx="11" cy="11" r="6.5"/><path d="M16 16l4.5 4.5"/></svg>
+          <input id="q" placeholder="Search field, city, or owner…" oninput="render()">
+        </div>
+        <select id="own" onchange="render()"><option value="">All owners</option></select>
+        <select id="cty" onchange="render()"><option value="">All cities</option></select>
+        <button class="fclear hide" id="fclr" onclick="clearAll()">Clear filters</button>
+      </div>
+    </div>
+
+    <div class="boardwrap"><div class="board" id="board"></div></div>
+
+    <div class="head" style="padding-top:0;padding-bottom:12px">
+      <div class="leg">
+        <span><i class="sw" style="background:var(--hair)"></i>moving</span>
+        <span><i class="sw" style="background:var(--warn-line)"></i>aging &gt; 21d</span>
+        <span><i class="sw" style="background:#e08a68"></i>stalled &gt; 45d</span>
+        <span><i class="av past">M</i>owner no longer on the team</span>
+        <span>Age is time in the current stage. Confirmed and Archived do not age.</span>
+      </div>
+    </div>
+  </main>
+</div>
+
+<script>
+/* ------------------------------------------------------------------
+   city colour is a SCANNING AID inside an already-labelled group.
+   nine categorical hues cannot clear the normal-vision separation floor
+   (best achievable with status hues reserved: dE 14.1 vs a floor of 15,
+   and 3.6 under deuteranopia) — so the city NAME is always present and
+   colour is never the only signal. red and amber are reserved for state.
+------------------------------------------------------------------ */
+var CITY = {
+  "Austin":"#3f7d23", "Dallas":"#3741ae", "Houston":"#b04583",
+  "San Antonio":"#8c421d", "Philadelphia":"#457ab0", "Atlanta":"#ae7337",
+  "St. Louis":"#37aea4", "Oklahoma City":"#791d8c", "El Paso":"#7d8c2a"
+};
+var STAGES = [
+  {k:"backlog", n:"Backlog",            sub:"Identified, no outreach yet", ages:true},
+  {k:"contact", n:"Contacted",          sub:"Initial outreach made",       ages:true},
+  {k:"negot",   n:"Ongoing Negotiation",sub:"Active discussion",           ages:true},
+  {k:"conf",    n:"Confirmed Fields",   sub:"Confirmed and on the slate",  ages:false},
+  {k:"arch",    n:"Archived Fields",    sub:"Previous field partners",     ages:false}
+];
+
+/* d = days in current stage. todos: [text, done] */
+var F = [
+  // ---- contacted (3)
+  {n:"Austin High",   c:"Austin", o:"Nick",    s:"contact", d:9,  t:[]},
+  {n:"Ann Richards",  c:"Austin", o:"Michael", s:"contact", d:24, t:[]},
+  {n:"Bowie",         c:"Austin", o:"Nick",    s:"contact", d:16,
+     t:[["Initiate request after Austin COI comes through",false]]},
+  // ---- ongoing negotiation (8)
+  {n:"Parmer",        c:"Austin", o:"Nick",    s:"negot", d:12,
+     t:[["Finalize field negotiations",true],["Finalize slate for late summer / fall",true]]},
+  {n:"Friends Select",c:"Philadelphia", o:"George", s:"negot", d:31,
+     t:[["Set up light trial after light delivery",true]]},
+  {n:"Penn Park",     c:"Philadelphia", o:"George", s:"negot", d:38, t:[]},
+  {n:"Ballers",       c:"Philadelphia", o:"George", s:"negot", d:19, t:[]},
+  {n:"Phield House",  c:"Philadelphia", o:"George", s:"negot", d:52,
+     t:[["Chase signed COI — third follow-up",false]]},
+  {n:"Houston Sportsplex", c:"Houston", o:"Yarra", s:"negot", d:27, t:[]},
+  {n:"Lindenwood",    c:"St. Louis", o:"Willfried", s:"negot", d:61,
+     t:[["Confirm whether turf replacement pushes us to spring",false]]},
+  {n:"Del Norte",     c:"El Paso", o:"Michael", s:"negot", d:14, t:[]},
+  // ---- confirmed (23)
+  {n:"PRUMC",                 c:"Atlanta", o:"Michael", s:"conf", d:210, t:[]},
+  {n:"Hat / The Hattrick",    c:"Austin",  o:"Ryan",    s:"conf", d:180, t:[]},
+  {n:"Hill Country",          c:"Austin",  o:"Michael", s:"conf", d:165, t:[]},
+  {n:"LBJ",                   c:"Austin",  o:"Michael", s:"conf", d:150, t:[]},
+  {n:"NEMP",                  c:"Austin",  o:"Michael", s:"conf", d:142, t:[]},
+  {n:"OC / Onion Creek - AMSA",c:"Austin", o:"Nick",    s:"conf", d:138, t:[]},
+  {n:"Burger Center",         c:"Austin",  o:"Nick",    s:"conf", d:120, t:[]},
+  {n:"Zilker",                c:"Austin",  o:"Ryan",    s:"conf", d:96,  t:[]},
+  {n:"Krieg Complex",         c:"Austin",  o:"Nick",    s:"conf", d:74,  t:[]},
+  {n:"Majestic Gardens North",c:"Dallas",  o:"Chris",   s:"conf", d:130, t:[]},
+  {n:"Kiest Park",            c:"Dallas",  o:"Chris",   s:"conf", d:118, t:[]},
+  {n:"Moss Park",             c:"Dallas",  o:"Nick",    s:"conf", d:88,  t:[]},
+  {n:"Bear Creek",            c:"Houston", o:"Yarra",   s:"conf", d:112, t:[]},
+  {n:"Sabine Fields",         c:"Houston", o:"Yarra",   s:"conf", d:70,  t:[]},
+  {n:"Tower Grove",           c:"St. Louis", o:"Willfried", s:"conf", d:101, t:[]},
+  {n:"Carondelet Park",       c:"St. Louis", o:"Willfried", s:"conf", d:64, t:[]},
+  {n:"Blossom Athletic",      c:"San Antonio", o:"Abraham", s:"conf", d:97, t:[]},
+  {n:"Southside Lions",       c:"San Antonio", o:"Abraham", s:"conf", d:59, t:[]},
+  {n:"Will Rogers",           c:"Oklahoma City", o:"Rodrigo", s:"conf", d:83, t:[]},
+  {n:"Earlywine",             c:"Oklahoma City", o:"Rodrigo", s:"conf", d:47, t:[]},
+  {n:"Westside Sportsplex",   c:"El Paso", o:"Michael", s:"conf", d:76, t:[]},
+  {n:"Album Park",            c:"El Paso", o:"Michael", s:"conf", d:41, t:[]},
+  {n:"Belmont Park",          c:"Philadelphia", o:"George", s:"conf", d:35, t:[]},
+  // ---- archived (6)
+  {n:"Hammond Park",  c:"Atlanta", o:"Mike", past:true, s:"arch", d:300, t:[]},
+  {n:"San Juan Diego",c:"Austin",  o:"Michael", s:"arch", d:260, t:[]},
+  {n:"Majestic Gardens", c:"Dallas", o:"Nick", s:"arch", d:240, t:[]},
+  {n:"Southlake Carroll Senior High School", c:"Dallas", o:"Ryan", s:"arch", d:230, t:[]},
+  {n:"Galatzan Park", c:"El Paso", o:"Mike", past:true, s:"arch", d:220, t:[]},
+  {n:"Fairmount",     c:"Philadelphia", o:"George", s:"arch", d:200, t:[]}
+];
+
+var AGE_WARN = 21, AGE_CRIT = 45;
+/* archived defaults collapsed — this is a working surface, not a museum.
+   backlog is empty, and an empty stage must not cost a column. */
+var COLL = {arch:true, backlog:true};
+var SHUT = {};                     /* collapsed city groups */
+var UI = {group:true, todos:true, ftodo:false, fage:false, fstall:false};
+
+function ages(f){ var st = STAGES.find(function(s){return s.k===f.s}); return !!(st && st.ages); }
+function band(f){ if(!ages(f)) return ""; if(f.d > AGE_CRIT) return "stalled"; if(f.d > AGE_WARN) return "aging"; return ""; }
+function openT(f){ return f.t.filter(function(x){return !x[1]}).length; }
+function doneT(f){ return f.t.filter(function(x){return x[1]}).length; }
+
+/* every number on this page is derived — none is typed */
+function totals(){
+  var cities = {}, owners = {};
+  F.forEach(function(f){ cities[f.c]=1; owners[f.o]=1; });
+  return {
+    fields:  F.length,
+    cities:  Object.keys(cities).length,
+    owners:  Object.keys(owners).length,
+    todos:   F.reduce(function(a,f){ return a + openT(f) }, 0),
+    aging:   F.filter(function(f){ return band(f)==="aging" }).length,
+    stalled: F.filter(function(f){ return band(f)==="stalled" }).length
+  };
+}
+
+function esc(s){ return String(s).replace(/[&<>"]/g, function(c){
+  return {"&":"&amp;","<":"&lt;",">":"&gt;",'"':"&quot;"}[c] }); }
+function initials(n){ return n.trim().slice(0,1).toUpperCase(); }
+
+function matches(f){
+  var q = document.getElementById("q").value.trim().toLowerCase();
+  var o = document.getElementById("own").value, c = document.getElementById("cty").value;
+  if(q && (f.n+" "+f.c+" "+f.o).toLowerCase().indexOf(q) === -1) return false;
+  if(o && f.o !== o) return false;
+  if(c && f.c !== c) return false;
+  if(UI.ftodo  && openT(f) === 0) return false;
+  if(UI.fage   && band(f) !== "aging") return false;
+  if(UI.fstall && band(f) !== "stalled") return false;
+  return true;
+}
+function filtering(){
+  return !!(document.getElementById("q").value.trim() || document.getElementById("own").value ||
+            document.getElementById("cty").value || UI.ftodo || UI.fage || UI.fstall);
+}
+
+function cardHTML(f, inGroup){
+  var b = band(f), ot = openT(f), dt = doneT(f);
+  var showT = UI.todos && ot > 0;
+  var showD = UI.todos && ot === 0 && dt > 0;
+  var age = ages(f) ? '<span class="age '+b+'"><i></i>'+f.d+'d in stage</span>' : '';
+  var city = inGroup ? '' :
+    '<span class="city"><i class="dot" style="background:'+(CITY[f.c]||"#9aa8a1")+'"></i>'+esc(f.c)+'</span>';
+  /* the age rides with the owner; a three-character fact does not get its own row */
+  return '<div class="card '+b+'" tabindex="0">'+
+    '<div class="crow"><div class="fname">'+esc(f.n)+'</div>'+
+      '<span class="own"><span class="onm"><span class="av'+(f.past?" past":"")+'">'+initials(f.o)+'</span>'+
+      '<span class="oname">'+esc(f.o)+'</span></span>'+ age +'</span></div>'+
+    '<div class="mrow'+(city?'':' none')+'">'+ city +'</div>'+
+    (showT ? '<div class="tds">'+ f.t.filter(function(x){return !x[1]}).map(function(x){
+        return '<div class="td"><span class="bx"><svg viewBox="0 0 24 24"><path d="M5 12.5l4.5 4.5L19 7.5"/></svg></span>'+
+               '<span class="tdt">'+esc(x[0])+'</span></div>' }).join("") +
+        (dt ? '<div class="td dn"><span class="bx"><svg viewBox="0 0 24 24"><path d="M5 12.5l4.5 4.5L19 7.5"/></svg></span>'+
+              '<span class="tdt" style="color:#8a9992">'+dt+' done</span></div>' : "") +
+      '</div>' : "") +
+    (showD ? '<div class="done1"><svg viewBox="0 0 24 24"><path d="M5 12.5l4.5 4.5L19 7.5"/></svg>'+
+             'all '+dt+' to-do'+(dt>1?"s":"")+' done</div>' : "") +
+    '</div>';
+}
+
+function render(){
+  var t = totals();
+  document.getElementById("nf").textContent = t.fields;
+  document.getElementById("nc").textContent = t.cities;
+  document.getElementById("no").textContent = t.owners;
+  document.getElementById("nt").textContent = t.todos;
+  document.getElementById("na").textContent = t.aging;
+  document.getElementById("ns").textContent = t.stalled;
+  /* a chip may not offer a filter for work that does not exist */
+  document.getElementById("chtodo").classList.toggle("hide", t.todos === 0);
+  document.getElementById("chage").classList.toggle("hide",  t.aging === 0);
+  document.getElementById("chstall").classList.toggle("hide",t.stalled === 0);
+  document.getElementById("chtodo").classList.toggle("act", UI.ftodo);
+  document.getElementById("chage").classList.toggle("act",  UI.fage);
+  document.getElementById("chstall").classList.toggle("act",UI.fstall);
+  document.getElementById("chtodo").setAttribute("aria-pressed", UI.ftodo);
+  document.getElementById("chage").setAttribute("aria-pressed",  UI.fage);
+  document.getElementById("chstall").setAttribute("aria-pressed",UI.fstall);
+  document.getElementById("grpbtn").classList.toggle("on", UI.group);
+  document.getElementById("grptxt").textContent = UI.group ? "Grouped by city" : "Flat list";
+  document.getElementById("tdbtn").classList.toggle("on", UI.todos);
+  document.getElementById("tdtxt").textContent = UI.todos ? "To-dos shown" : "To-dos hidden";
+  document.getElementById("fclr").classList.toggle("hide", !filtering());
+
+  var board = document.getElementById("board");
+  board.innerHTML = STAGES.map(function(st, i){
+    var all  = F.filter(function(f){ return f.s === st.k });
+    var show = all.filter(matches);
+    var coll = !!COLL[st.k];
+    /* a hidden filter is a lie about the list: print both numbers when they differ */
+    var cnt  = (filtering() && show.length !== all.length)
+      ? '<span class="cnt filt">'+show.length+' of '+all.length+'</span>'
+      : '<span class="cnt">'+all.length+'</span>';
+
+    var inner;
+    if(!show.length){
+      inner = '<div class="empty">'+(all.length ? "Nothing matches the filter" : "Nothing here yet")+'</div>';
+    } else if(UI.group){
+      var by = {};
+      show.forEach(function(f){ (by[f.c] = by[f.c] || []).push(f) });
+      inner = Object.keys(by).sort().map(function(c){
+        var key = st.k+"|"+c, shut = !!SHUT[key];
+        return '<div class="grp'+(shut?" shut":"")+'">'+
+          '<button class="gh" onclick="grp(\''+key.replace(/'/g,"\\'")+'\')" aria-expanded="'+(!shut)+'">'+
+            '<svg viewBox="0 0 24 24"><path d="M6 9l6 6 6-6"/></svg>'+
+            '<i class="dot" style="background:'+(CITY[c]||"#9aa8a1")+'"></i>'+
+            '<span class="gname">'+esc(c)+'</span><span class="gcnt">'+by[c].length+'</span></button>'+
+          '<div class="cards">'+ by[c].map(function(f){ return cardHTML(f,true) }).join("") +'</div>'+
+        '</div>';
+      }).join("");
+    } else {
+      inner = show.map(function(f){ return cardHTML(f,false) }).join("");
+    }
+
+    return '<section class="col'+(coll?" coll":"")+'" data-k="'+st.k+'">'+
+      '<div class="ch2">'+
+        (coll
+          ? '<button class="cx" onclick="col(\''+st.k+'\')" aria-expanded="false" title="Expand '+esc(st.n)+'">'+
+              '<svg class="cv" viewBox="0 0 24 24"><path d="M15 6l-6 6 6 6"/></svg></button>'+
+            '<span class="stg">'+(i+1)+'</span>'+
+            /* a collapsed column must not hide the fact that it holds matches */
+            '<span class="vcnt'+(filtering()&&show.length?' filt':'')+'">'+
+              (filtering() ? show.length : all.length)+'</span>'+
+            '<span class="vname">'+esc(st.n)+'</span>'
+          : '<span class="stg">'+(i+1)+'</span>'+
+            '<span class="cname">'+esc(st.n)+'</span>'+ cnt +
+            '<button class="cx" onclick="col(\''+st.k+'\')" aria-expanded="true" title="Collapse '+esc(st.n)+'">'+
+              '<svg class="cv" viewBox="0 0 24 24"><path d="M15 6l-6 6 6 6"/></svg></button>')+
+      '</div>'+
+      (coll ? "" : '<div class="csub">'+esc(st.sub)+'</div><div class="body">'+inner+'</div>')+
+    '</section>';
+  }).join("");
+}
+
+function col(k){ COLL[k] = !COLL[k]; render(); }
+function grp(k){ SHUT[k] = !SHUT[k]; render(); }
+function tog(k){
+  UI[k] = !UI[k];
+  if(k==="ftodo"  && UI.ftodo ){ UI.fage=false; UI.fstall=false; }
+  if(k==="fage"   && UI.fage  ){ UI.ftodo=false; UI.fstall=false; }
+  if(k==="fstall" && UI.fstall){ UI.ftodo=false; UI.fage=false; }
+  render();
+}
+function clearAll(){
+  document.getElementById("q").value=""; document.getElementById("own").value="";
+  document.getElementById("cty").value="";
+  UI.ftodo=UI.fage=UI.fstall=false; render();
+}
+
+/* populate the filters from the data, so they can never offer a value that does not exist */
+(function(){
+  var os = [...new Set(F.map(function(f){return f.o}))].sort();
+  var cs = [...new Set(F.map(function(f){return f.c}))].sort();
+  document.getElementById("own").innerHTML =
+    '<option value="">All owners</option>' + os.map(function(o){return '<option>'+esc(o)+'</option>'}).join("");
+  document.getElementById("cty").innerHTML =
+    '<option value="">All cities</option>' + cs.map(function(c){return '<option>'+esc(c)+'</option>'}).join("");
+})();
+render();
+window.render = render; window.F = F; window.totals = totals; window.UI = UI; window.COLL = COLL;
+</script>
+</body></html>

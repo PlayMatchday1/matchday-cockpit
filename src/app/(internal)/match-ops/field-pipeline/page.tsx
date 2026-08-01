@@ -6,12 +6,12 @@
 // PagePermissionGuard page="clubhouse").
 
 import PagePermissionGuard from "@/components/PagePermissionGuard";
-import KanbanBoard from "@/components/KanbanBoard";
+import FieldPipelineBoard from "@/components/FieldPipelineBoard";
 
 export default function FieldPipelinePage() {
   return (
     <PagePermissionGuard page="clubhouse">
-      <KanbanBoard boardType="field_pipeline" />
+      <FieldPipelineBoard />
     </PagePermissionGuard>
   );
 }
