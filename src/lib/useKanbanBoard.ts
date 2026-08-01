@@ -17,7 +17,7 @@ import {
 } from "@/lib/kanban";
 
 export type CardPatch = Partial<
-  Pick<KanbanCard, "title" | "stage" | "owner_user_id" | "sort_order" | "data">
+  Pick<KanbanCard, "title" | "stage" | "owner_user_id" | "sort_order" | "data" | "stage_entered_at">
 >;
 
 export type NewCardInput = {
@@ -25,6 +25,9 @@ export type NewCardInput = {
   stage: string;
   owner_user_id: string | null;
   data: Record<string, unknown>;
+  // Tech Roadmap only: which board the new card belongs to. Field Pipeline omits
+  // it and the DB default ('app') applies harmlessly (it never reads `board`).
+  board?: "app" | "clubhouse";
 };
 
 export type KanbanApi = {
@@ -130,6 +133,7 @@ export function useKanbanBoard(boardType: BoardType): KanbanApi {
         .from("kanban_cards")
         .insert({
           board_type: boardType,
+          ...(input.board ? { board: input.board } : {}),
           title: input.title,
           stage: input.stage,
           owner_user_id: input.owner_user_id,

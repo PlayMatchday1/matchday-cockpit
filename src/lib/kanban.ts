@@ -10,9 +10,15 @@ import { CITY_COLORS } from "./cityColors";
 
 export type BoardType = "field_pipeline" | "tech_roadmap";
 
+// The Tech Roadmap is split into two boards (App + Clubhouse) via the `board`
+// discriminator (migration 0090); Field Pipeline ignores it. Optional so the
+// type stays valid pre-migration.
+export type RoadmapBoard = "app" | "clubhouse";
+
 export type KanbanCard = {
   id: string;
   board_type: BoardType;
+  board?: RoadmapBoard;
   title: string;
   stage: string;
   owner_user_id: string | null;
