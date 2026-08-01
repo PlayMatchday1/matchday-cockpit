@@ -28,6 +28,14 @@ export default function MatchOpsLayout({
   // needs to act" → alert tone. Only rendered when > 0 (SectionSideNav omits 0).
   const crmUnread = useCrmUnreadCount();
 
+  // Match Chats owns a full-bleed three-pane console with its own icon rail
+  // (MatchChatsRail), so the shared SectionSideNav is suppressed on that route
+  // ONLY — every other Match Ops page keeps the shared rail byte-for-byte. The
+  // shared SectionSideNav component itself is untouched. See match-chats/page.
+  if (pathname.startsWith("/match-ops/match-chats")) {
+    return <>{children}</>;
+  }
+
   const canCities = canAccess(appUser, "cities");
   const canClub = canAccess(appUser, "clubhouse");
   const canChats = canAccess(appUser, "chats");

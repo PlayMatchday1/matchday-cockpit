@@ -1,44 +1,35 @@
 "use client";
 
-// Right pane of the two-pane Match Chats shell. On mobile (< lg) this
-// pane fills the screen when a chat is selected; a back chevron in
-// the header returns to the inbox. On lg+ it sits alongside the inbox
-// pane, and renders an empty state when no chat is selected.
+// Thread pane of the Match Chats console (mockup matchops-chats-v1). Mist tone.
 //
-// Differences from the legacy standalone /match-chats/[chatId] page:
-//   - No page-level chrome. The shell owns layout.
-//   - chatId arrives as a prop, not a route param. State resets on
-//     change via a keyed effect.
-//   - Header uses formatMatchTitle so the city-local time is correct.
-//     Reads mdapi_matches.start_date_utc (the actually-UTC column).
-//   - Realtime listener + Load Older pagination + composer behavior
-//     are unchanged.
+// Match-context header (venue, date/time, real player count, status) with a Veo
+// action that renders ONLY when a Veo link is actually present in the loaded
+// thread, plus Notify players. Messages are bottom-anchored (a short thread
+// sits against the composer). The composer carries the verbatim WhatsApp line
+// with the real participant count.
+//
+// "Open match" is intentionally omitted: there is no internal match-detail
+// route and no shareable match URL stored on mdapi_matches (checked), so any
+// such button would be a fabricated link. See ship report.
+//
+// Realtime listener, Load-older pagination, and reply/compose behaviour are
+// carried over from the previous pane unchanged.
 
-import {
-  useCallback,
-  useEffect,
-  useMemo,
-  useRef,
-  useState,
-} from "react";
+import { useCallback, useEffect, useMemo, useRef, useState } from "react";
 import {
   collection,
   doc,
+  getDocs,
   limit,
   onSnapshot,
   orderBy,
   query,
   startAfter,
-  getDocs,
   type DocumentSnapshot,
   type QuerySnapshot,
 } from "firebase/firestore";
-import { ArrowUp, ChevronLeft, Megaphone } from "lucide-react";
-import CopyIdChip from "@/components/CopyIdChip";
 import { supabase } from "@/lib/supabase";
 import { useFirebaseSession } from "@/lib/useFirebaseSession";
-import CityChip from "@/components/CityChip";
-import SenderBadge, { type SenderRole } from "@/components/SenderBadge";
 import MatchChatMessageMedia from "@/components/MatchChatMessageMedia";
 import {
   classifyMessage,
@@ -48,7 +39,7 @@ import {
   MESSAGE_PAGE_SIZE,
   type FirestoreMessage,
 } from "@/lib/matchChats";
-import { formatMatchTitle, timezoneFor } from "@/lib/cityTimezones";
+import { formatMatchTitle } from "@/lib/cityTimezones";
 import Linkify from "linkify-react";
 import { LINKIFY_OPTIONS } from "@/lib/linkify";
 import NotifyPlayersDrawer from "./components/NotifyPlayersDrawer";
@@ -64,50 +55,36 @@ type MatchContext = {
   manager_first_name: string | null;
   manager_last_name: string | null;
   is_cancelled: boolean | null;
+  player_count: number | null;
+  fake_player_count: number | null;
 };
 
 type WireMessage = FirestoreMessage & { __docId: string };
 
-// ---------------- helpers ----------------
+const VEO_URL_RE = /(https?:\/\/app\.veo\.co\/matches\/[^\s)]+)/i;
+
+// Real registered players = total registered minus synced fakes. Used for the
+// header count and the composer "N real players" line. Null when unavailable
+// → the composer line drops the count rather than inventing one.
+function realPlayerCount(m: MatchContext | null): number | null {
+  if (!m || m.player_count == null) return null;
+  return Math.max(0, m.player_count - (m.fake_player_count ?? 0));
+}
 
 function formatTimestamp(iso: string): string {
   const d = new Date(iso);
   if (Number.isNaN(d.getTime())) return "";
-  return d.toLocaleString(undefined, {
-    month: "short",
-    day: "numeric",
-    hour: "numeric",
-    minute: "2-digit",
-  });
-}
-
-function deriveSenderRole(
-  msg: FirestoreMessage,
-  match: MatchContext | null,
-): SenderRole | null {
-  if (msg.sentBy === MATCHDAY_SENDER_NAME) return "matchday";
-  const email = msg.user?.email?.toLowerCase()?.trim();
-  if (!email) return null;
-  if (email.endsWith("@playmatchday.com")) return "staff";
-  const managerEmail = match?.manager_email?.toLowerCase()?.trim();
-  if (managerEmail && email === managerEmail) return "manager";
-  return null;
+  return d.toLocaleString(undefined, { hour: "numeric", minute: "2-digit" });
 }
 
 async function bearerHeaders(): Promise<Record<string, string> | null> {
   const { data } = await supabase.auth.getSession();
   const token = data.session?.access_token;
   if (!token) return null;
-  return {
-    Authorization: `Bearer ${token}`,
-    "Content-Type": "application/json",
-  };
+  return { Authorization: `Bearer ${token}`, "Content-Type": "application/json" };
 }
 
 // ============================================================
-// main
-// ============================================================
-
 export default function ChatPane({
   chatId,
   showOnMobile,
@@ -117,124 +94,56 @@ export default function ChatPane({
   showOnMobile: boolean;
   onBack: () => void;
 }) {
-  const session = useFirebaseSession();
+  const visibility = `${showOnMobile ? "flex flex-1" : "hidden"} lg:flex lg:flex-1`;
 
-  const [match, setMatch] = useState<MatchContext | null>(null);
-  const [matchError, setMatchError] = useState<string | null>(null);
-
-  const [messages, setMessages] = useState<WireMessage[]>([]);
-  const [oldestCursor, setOldestCursor] = useState<DocumentSnapshot | null>(
-    null,
-  );
-  const [hasMore, setHasMore] = useState(true);
-  const [loadingOlder, setLoadingOlder] = useState(false);
-  const [listenError, setListenError] = useState<string | null>(null);
-
-  // Mobile visibility:
-  //   showOnMobile=true  → flex flex-1, full-screen on mobile
-  //   showOnMobile=false → hidden on mobile, but visible on lg+
-  // On lg+ the pane is always visible.
-  const visibility = `${
-    showOnMobile ? "flex flex-1" : "hidden"
-  } lg:flex lg:flex-1`;
-
-  // Empty state — no selection. On mobile this is never reached
-  // because the parent sets showOnMobile=false here, but the inner
-  // `hidden lg:flex` belt-and-suspenders keeps it from ever showing
-  // at narrow widths even if that contract changes.
   if (!chatId) {
     return (
-      <section
-        className={`min-w-0 flex-col items-center justify-center bg-white ${visibility}`}
-      >
-        <div className="hidden max-w-[32ch] flex-col items-center gap-2 px-6 text-center lg:flex">
-          <div aria-hidden className="text-2xl opacity-70">
-            💬
+      <section className={`min-w-0 flex-col items-center justify-center ${visibility}`} style={{ background: "#ffffff" }}>
+        <div className="hidden max-w-[34ch] flex-col items-center gap-3.5 px-10 text-center lg:flex">
+          <div
+            className="flex h-[52px] w-[52px] items-center justify-center rounded-full"
+            style={{ background: "radial-gradient(circle at 35% 30%,#eafaf1,#d6efe1)", color: "#17724c", boxShadow: "0 0 0 7px rgba(224,242,231,.5)" }}
+          >
+            <svg viewBox="0 0 24 24" className="h-[22px] w-[22px]" fill="none" stroke="currentColor" strokeLinecap="round" strokeLinejoin="round" strokeWidth={1.8} aria-hidden>
+              <path d="M21 11.5a8.4 8.4 0 0 1-9 8.4 8.9 8.9 0 0 1-3.8-.9L3 21l1.9-5.1A8.4 8.4 0 0 1 12 3.1a8.4 8.4 0 0 1 9 8.4z" />
+            </svg>
           </div>
-          <div className="text-sm font-bold text-deep-green">
-            Select a conversation
-          </div>
-          <div className="text-xs text-deep-green/55">
-            Pick a match chat from the inbox to view messages and reply
-            as MatchDay.
-          </div>
+          <h3 className="text-[15px] font-[730]" style={{ color: "#12241d" }}>
+            Nothing selected
+          </h3>
+          <p className="text-[12.5px] leading-[1.6]" style={{ color: "#6d7b74" }}>
+            Pick a chat on the left to read it and reply as MatchDay.
+          </p>
         </div>
       </section>
     );
   }
 
-  return (
-    <ChatPaneInner
-      chatId={chatId}
-      session={session}
-      visibility={visibility}
-      onBack={onBack}
-      match={match}
-      setMatch={setMatch}
-      matchError={matchError}
-      setMatchError={setMatchError}
-      messages={messages}
-      setMessages={setMessages}
-      oldestCursor={oldestCursor}
-      setOldestCursor={setOldestCursor}
-      hasMore={hasMore}
-      setHasMore={setHasMore}
-      loadingOlder={loadingOlder}
-      setLoadingOlder={setLoadingOlder}
-      listenError={listenError}
-      setListenError={setListenError}
-    />
-  );
+  return <ChatPaneInner chatId={chatId} visibility={visibility} onBack={onBack} />;
 }
 
-// Inner component so the outer one can guard on `chatId == null`
-// before any hooks fire. (React's rules-of-hooks won't let us early-
-// return between hook calls, so all state lives on the outer and is
-// passed in.)
 function ChatPaneInner({
   chatId,
-  session,
   visibility,
   onBack,
-  match,
-  setMatch,
-  matchError,
-  setMatchError,
-  messages,
-  setMessages,
-  oldestCursor,
-  setOldestCursor,
-  hasMore,
-  setHasMore,
-  loadingOlder,
-  setLoadingOlder,
-  listenError,
-  setListenError,
 }: {
   chatId: string;
-  session: ReturnType<typeof useFirebaseSession>;
   visibility: string;
   onBack: () => void;
-  match: MatchContext | null;
-  setMatch: (m: MatchContext | null) => void;
-  matchError: string | null;
-  setMatchError: (s: string | null) => void;
-  messages: WireMessage[];
-  setMessages: React.Dispatch<React.SetStateAction<WireMessage[]>>;
-  oldestCursor: DocumentSnapshot | null;
-  setOldestCursor: (d: DocumentSnapshot | null) => void;
-  hasMore: boolean;
-  setHasMore: (b: boolean) => void;
-  loadingOlder: boolean;
-  setLoadingOlder: (b: boolean) => void;
-  listenError: string | null;
-  setListenError: (s: string | null) => void;
 }) {
+  const session = useFirebaseSession();
   const validId = isValidChatId(chatId);
+
+  const [match, setMatch] = useState<MatchContext | null>(null);
+  const [matchError, setMatchError] = useState<string | null>(null);
+  const [messages, setMessages] = useState<WireMessage[]>([]);
+  const [oldestCursor, setOldestCursor] = useState<DocumentSnapshot | null>(null);
+  const [hasMore, setHasMore] = useState(true);
+  const [loadingOlder, setLoadingOlder] = useState(false);
+  const [listenError, setListenError] = useState<string | null>(null);
   const [notifyOpen, setNotifyOpen] = useState(false);
 
-  // Reset transient state when the chatId changes (user clicked a
-  // different conversation).
+  // Reset on chat switch.
   useEffect(() => {
     setMessages([]);
     setOldestCursor(null);
@@ -242,8 +151,6 @@ function ChatPaneInner({
     setListenError(null);
     setMatch(null);
     setMatchError(null);
-    // setters from useState are stable — exhaustive-deps disabled.
-    // eslint-disable-next-line react-hooks/exhaustive-deps
   }, [chatId]);
 
   // Match context.
@@ -261,52 +168,32 @@ function ChatPaneInner({
           const j = (await res.json().catch(() => ({}))) as { error?: string };
           throw new Error(j.error ?? `HTTP ${res.status}`);
         }
-        const j = (await res.json()) as {
-          chat_id: string;
-          match: MatchContext | null;
-        };
+        const j = (await res.json()) as { chat_id: string; match: MatchContext | null };
         if (!cancelled) setMatch(j.match);
       } catch (err) {
-        if (!cancelled)
-          setMatchError(err instanceof Error ? err.message : String(err));
+        if (!cancelled) setMatchError(err instanceof Error ? err.message : String(err));
       }
     })();
     return () => {
       cancelled = true;
     };
-  }, [chatId, setMatch, setMatchError]);
+  }, [chatId]);
 
   // Realtime listener.
   useEffect(() => {
-    if (!validId) return;
-    if (session.status !== "ready") return;
-
-    const messagesRef = collection(
-      doc(session.db, "Chats", chatId),
-      "messages",
-    );
-    const q = query(
-      messagesRef,
-      orderBy("createdAt", "desc"),
-      limit(MESSAGE_PAGE_SIZE),
-    );
+    if (!validId || session.status !== "ready") return;
+    const messagesRef = collection(doc(session.db, "Chats", chatId), "messages");
+    const q = query(messagesRef, orderBy("createdAt", "desc"), limit(MESSAGE_PAGE_SIZE));
     const unsub = onSnapshot(
       q,
       (snap: QuerySnapshot) => {
         setMessages((prev) => {
-          const olderDocIds = new Set(
-            prev.slice(MESSAGE_PAGE_SIZE).map((m) => m.__docId),
+          const olderIds = new Set(prev.slice(MESSAGE_PAGE_SIZE).map((m) => m.__docId));
+          const fresh: WireMessage[] = snap.docs.map((d) => ({ ...(d.data() as FirestoreMessage), __docId: d.id }));
+          const older = prev.filter((m) => olderIds.has(m.__docId));
+          const combined = [...fresh, ...older].sort(
+            (a, b) => (Date.parse(createdAtToIso(a.createdAt) ?? "") || 0) - (Date.parse(createdAtToIso(b.createdAt) ?? "") || 0),
           );
-          const fresh: WireMessage[] = snap.docs.map((d) => ({
-            ...(d.data() as FirestoreMessage),
-            __docId: d.id,
-          }));
-          const older = prev.filter((m) => olderDocIds.has(m.__docId));
-          const combined = [...fresh, ...older].sort((a, b) => {
-            const at = Date.parse(createdAtToIso(a.createdAt) ?? "") || 0;
-            const bt = Date.parse(createdAtToIso(b.createdAt) ?? "") || 0;
-            return at - bt;
-          });
           const seen = new Set<string>();
           const out: WireMessage[] = [];
           for (const m of combined) {
@@ -316,9 +203,7 @@ function ChatPaneInner({
           }
           return out;
         });
-        if (snap.docs.length > 0) {
-          setOldestCursor(snap.docs[snap.docs.length - 1]);
-        }
+        if (snap.docs.length > 0) setOldestCursor(snap.docs[snap.docs.length - 1]);
         if (snap.docs.length < MESSAGE_PAGE_SIZE) setHasMore(false);
       },
       (err) => {
@@ -327,45 +212,23 @@ function ChatPaneInner({
       },
     );
     return () => unsub();
-  }, [
-    chatId,
-    validId,
-    session,
-    setMessages,
-    setOldestCursor,
-    setHasMore,
-    setListenError,
-  ]);
+  }, [chatId, validId, session]);
 
   const loadOlder = useCallback(async () => {
-    if (loadingOlder || !hasMore || !oldestCursor) return;
-    if (session.status !== "ready") return;
+    if (loadingOlder || !hasMore || !oldestCursor || session.status !== "ready") return;
     setLoadingOlder(true);
     try {
-      const messagesRef = collection(
-        doc(session.db, "Chats", chatId),
-        "messages",
-      );
-      const q = query(
-        messagesRef,
-        orderBy("createdAt", "desc"),
-        startAfter(oldestCursor),
-        limit(MESSAGE_PAGE_SIZE),
-      );
+      const messagesRef = collection(doc(session.db, "Chats", chatId), "messages");
+      const q = query(messagesRef, orderBy("createdAt", "desc"), startAfter(oldestCursor), limit(MESSAGE_PAGE_SIZE));
       const snap = await getDocs(q);
       if (snap.empty) {
         setHasMore(false);
       } else {
-        const fresh: WireMessage[] = snap.docs.map((d) => ({
-          ...(d.data() as FirestoreMessage),
-          __docId: d.id,
-        }));
+        const fresh: WireMessage[] = snap.docs.map((d) => ({ ...(d.data() as FirestoreMessage), __docId: d.id }));
         setMessages((prev) => {
-          const all = [...fresh, ...prev].sort((a, b) => {
-            const at = Date.parse(createdAtToIso(a.createdAt) ?? "") || 0;
-            const bt = Date.parse(createdAtToIso(b.createdAt) ?? "") || 0;
-            return at - bt;
-          });
+          const all = [...fresh, ...prev].sort(
+            (a, b) => (Date.parse(createdAtToIso(a.createdAt) ?? "") || 0) - (Date.parse(createdAtToIso(b.createdAt) ?? "") || 0),
+          );
           const seen = new Set<string>();
           const out: WireMessage[] = [];
           for (const m of all) {
@@ -383,19 +246,9 @@ function ChatPaneInner({
     } finally {
       setLoadingOlder(false);
     }
-  }, [
-    chatId,
-    hasMore,
-    loadingOlder,
-    oldestCursor,
-    session,
-    setHasMore,
-    setLoadingOlder,
-    setMessages,
-    setOldestCursor,
-  ]);
+  }, [chatId, hasMore, loadingOlder, oldestCursor, session]);
 
-  // Compose
+  // Compose.
   const [body, setBody] = useState("");
   const [sending, setSending] = useState(false);
   const [sendError, setSendError] = useState<string | null>(null);
@@ -404,19 +257,15 @@ function ChatPaneInner({
     const ta = taRef.current;
     if (!ta) return;
     ta.style.height = "auto";
-    const next = Math.min(240, Math.max(44, ta.scrollHeight));
-    ta.style.height = `${next}px`;
+    ta.style.height = `${Math.min(150, Math.max(44, ta.scrollHeight))}px`;
   }, [body]);
-
-  // Reset compose state on chat switch.
   useEffect(() => {
     setBody("");
     setSendError(null);
   }, [chatId]);
 
   const submit = useCallback(async () => {
-    if (sending) return;
-    if (!body.trim()) return;
+    if (sending || !body.trim()) return;
     setSending(true);
     setSendError(null);
     const headers = await bearerHeaders();
@@ -456,264 +305,268 @@ function ChatPaneInner({
   const scrollRef = useRef<HTMLDivElement>(null);
   useEffect(() => {
     const el = scrollRef.current;
-    if (!el) return;
-    el.scrollTop = el.scrollHeight;
+    if (el) el.scrollTop = el.scrollHeight;
   }, [messages.length, chatId]);
 
-  // ---------------- header content ----------------
-  const headerNodes = useMemo(() => {
-    if (!validId) {
-      return <span className="italic text-deep-green/55">Invalid chat id</span>;
+  const t = useMemo(
+    () =>
+      match
+        ? formatMatchTitle({ cityCode: match.city_identifier, startDateIso: match.start_date_utc, fieldTitle: match.field_title })
+        : null,
+    [match],
+  );
+  const realN = realPlayerCount(match);
+  const veoUrl = useMemo(() => {
+    for (const m of messages) {
+      const hit = m.text ? VEO_URL_RE.exec(m.text) : null;
+      if (hit) return hit[1];
     }
-    if (!match) {
-      return (
-        <span className="italic text-deep-green/55">
-          Match {chatId} · (no match data)
-        </span>
-      );
-    }
-    const t = formatMatchTitle({
-      cityCode: match.city_identifier,
-      startDateIso: match.start_date_utc,
-      fieldTitle: match.field_title,
-    });
-    return (
-      <div className="flex min-w-0 flex-wrap items-baseline gap-1.5">
-        {t.cityCode && <CityChip code={t.cityCode} size="sm" />}
-        <Dot />
-        <span className="font-semibold text-deep-green">{t.date}</span>
-        {t.time && (
-          <>
-            <Dot />
-            <span className="text-deep-green/70">{t.time}</span>
-            {t.isUtcFallback && (
-              <span className="text-[10px] text-deep-green/40">(UTC)</span>
-            )}
-          </>
-        )}
-        <Dot />
-        <span className="truncate font-semibold text-deep-green">
-          {t.venue}
-        </span>
-        {match.is_cancelled === true && (
-          <span className="rounded-full bg-muted-soft px-1.5 py-0.5 text-[10px] font-medium text-muted">
-            Cancelled
-          </span>
-        )}
-      </div>
-    );
-  }, [validId, match, chatId]);
+    return null;
+  }, [messages]);
 
   return (
-    <section className={`min-w-0 flex-col bg-white ${visibility}`}>
-      {/* Header — h-14 sticky, back chevron on mobile only */}
-      <div className="flex h-14 shrink-0 items-center gap-2 border-b border-cream-line bg-white px-2 sm:px-4">
+    <section className={`min-w-0 flex-col ${visibility}`} style={{ background: "#ffffff" }}>
+      {/* Header */}
+      <div className="flex h-[64px] flex-none items-center gap-3 border-b px-3 sm:px-[22px]" style={{ borderColor: "#eff3f1" }}>
         <button
           type="button"
           onClick={onBack}
           aria-label="Back to inbox"
-          style={{ touchAction: "manipulation" }}
-          className="inline-flex h-11 w-11 shrink-0 items-center justify-center rounded-full text-deep-green/70 hover:bg-cream-soft hover:text-deep-green lg:hidden"
+          className="inline-flex h-9 w-9 flex-none items-center justify-center rounded-full lg:hidden"
+          style={{ color: "#5c7267" }}
         >
-          <ChevronLeft aria-hidden className="h-5 w-5" />
+          <svg viewBox="0 0 24 24" className="h-5 w-5" fill="none" stroke="currentColor" strokeLinecap="round" strokeLinejoin="round" strokeWidth={2} aria-hidden>
+            <path d="M14 6l-6 6 6 6" />
+          </svg>
         </button>
+
+        {validId && match && t && (
+          <span
+            className="hidden h-[38px] w-[38px] flex-none items-center justify-center rounded-[12px] text-[10px] font-extrabold sm:flex"
+            style={{ background: "#dceaf5", color: "#2f5d80" }}
+          >
+            {t.cityCode || "??"}
+          </span>
+        )}
+
         <div className="min-w-0 flex-1">
-          {headerNodes}
-          {validId && (
-            <div className="mt-0.5 flex items-center gap-2 text-[10px] text-deep-green/50">
-              {match?.manager_email && (
-                <span className="min-w-0 truncate">
-                  Manager:{" "}
-                  <span className="font-medium text-deep-green/70">
-                    {match.manager_first_name} {match.manager_last_name}
-                  </span>{" "}
-                  · {match.manager_email}
+          {!validId ? (
+            <span className="italic" style={{ color: "#6d7b74" }}>Invalid chat id</span>
+          ) : !match ? (
+            <span className="italic" style={{ color: "#6d7b74" }}>
+              {matchError ? `Match ${chatId}` : `Match ${chatId} · (no match data)`}
+            </span>
+          ) : (
+            <>
+              <h2 className="truncate text-[16.5px] font-[730] tracking-[-0.014em]" style={{ color: "#12241d" }}>
+                {t?.venue || "—"}
+              </h2>
+              <div className="mt-[3px] flex flex-wrap items-center gap-[7px] text-[12px]" style={{ color: "#6d7b74" }}>
+                <b className="font-bold" style={{ color: "#3f544a" }}>
+                  {t?.date}
+                  {t?.time ? ` · ${t.time}` : ""}
+                </b>
+                {realN != null && (
+                  <>
+                    <Dot />
+                    <span>{realN} player{realN === 1 ? "" : "s"}</span>
+                  </>
+                )}
+                <Dot />
+                <span style={{ color: match.is_cancelled ? "#8a6300" : "#12704a", fontWeight: 700 }}>
+                  {match.is_cancelled ? "Cancelled" : "Scheduled"}
                 </span>
-              )}
-              <CopyIdChip id={chatId} />
-            </div>
+              </div>
+            </>
           )}
         </div>
+
         {validId && match && (
-          <button
-            type="button"
-            onClick={() => setNotifyOpen(true)}
-            className="inline-flex shrink-0 items-center gap-1.5 rounded-full border border-cream-line px-3 py-1.5 text-xs font-bold text-deep-green hover:bg-cream-soft"
-          >
-            <Megaphone aria-hidden className="h-3.5 w-3.5" />
-            <span className="hidden sm:inline">Notify players</span>
-          </button>
+          <div className="flex flex-none items-center gap-1.5">
+            {veoUrl && (
+              <a
+                href={veoUrl}
+                target="_blank"
+                rel="noopener noreferrer"
+                className="flex h-8 items-center gap-1.5 rounded-full border px-3 text-[12.5px] font-[650] transition hover:bg-[#eef3f0]"
+                style={{ borderColor: "#e6ebe8", color: "#3f544a" }}
+              >
+                <svg viewBox="0 0 24 24" className="h-3.5 w-3.5" fill="none" stroke="currentColor" strokeLinecap="round" strokeLinejoin="round" strokeWidth={2} aria-hidden>
+                  <path d="M2.5 7.5a2 2 0 0 1 2-2h9a2 2 0 0 1 2 2v9a2 2 0 0 1-2 2h-9a2 2 0 0 1-2-2z" />
+                  <path d="M15.5 10.5l6-3.5v10l-6-3.5" />
+                </svg>
+                Veo
+              </a>
+            )}
+            <button
+              type="button"
+              onClick={() => setNotifyOpen(true)}
+              className="flex h-8 items-center gap-1.5 rounded-full px-3.5 text-[12.5px] font-[650] transition"
+              style={{ background: "#0d3b2e", color: "#eafaf1" }}
+            >
+              <svg viewBox="0 0 24 24" className="h-3.5 w-3.5" fill="none" stroke="currentColor" strokeLinecap="round" strokeLinejoin="round" strokeWidth={2} aria-hidden>
+                <path d="M18 8.5a6 6 0 1 0-12 0c0 6-2.5 7.5-2.5 7.5h17S18 14.5 18 8.5z" />
+                <path d="M10.3 20a2 2 0 0 0 3.4 0" />
+              </svg>
+              <span className="hidden sm:inline">Notify players</span>
+            </button>
+          </div>
         )}
       </div>
 
-      {/* Messages */}
+      {/* Messages — bottom-anchored */}
       <div
         ref={scrollRef}
-        className="min-w-0 flex-1 overflow-y-auto overflow-x-hidden bg-cream-soft px-4 py-3"
+        className="flex min-h-0 flex-1 flex-col overflow-y-auto overflow-x-hidden px-[22px] py-5 [&>*:first-child]:mt-auto"
+        style={{ background: "radial-gradient(560px 260px at 88% -6%, rgba(53,199,127,.05), transparent 66%), #ffffff" }}
       >
         {matchError && (
-          <div className="mb-2 rounded border border-coral/40 bg-coral-soft p-2 text-xs text-coral-hover">
+          <div className="mb-2 rounded-lg border px-3 py-2 text-xs" style={{ borderColor: "#e3c369", background: "#fdf1d0", color: "#8a6300" }}>
             Match context: {matchError}
           </div>
         )}
         {listenError && (
-          <div className="mb-2 rounded border border-coral/40 bg-coral-soft p-2 text-xs text-coral-hover">
+          <div className="mb-2 rounded-lg border px-3 py-2 text-xs" style={{ borderColor: "#e3c369", background: "#fdf1d0", color: "#8a6300" }}>
             Realtime: {listenError}
           </div>
         )}
-
         {hasMore && messages.length > 0 && (
           <div className="mb-3 flex justify-center">
             <button
               type="button"
               onClick={() => void loadOlder()}
               disabled={loadingOlder}
-              className="rounded-full border border-cream-line bg-white px-3 py-0.5 text-[11px] font-medium text-deep-green/70 transition hover:bg-cream-soft disabled:opacity-40"
+              className="rounded-full border bg-white px-3 py-0.5 text-[11px] font-medium transition disabled:opacity-40"
+              style={{ borderColor: "#e6ebe8", color: "#6d7b74" }}
             >
               {loadingOlder ? "Loading older messages…" : "Load older"}
             </button>
           </div>
         )}
-
         {session.status === "loading" && messages.length === 0 && (
-          <div className="text-xs text-deep-green/50">
-            Connecting to Firestore…
-          </div>
+          <div className="text-xs" style={{ color: "#93a49b" }}>Connecting to Firestore…</div>
         )}
         {session.status === "error" && (
-          <div className="rounded border border-coral/40 bg-coral-soft p-2 text-xs text-coral-hover">
+          <div className="rounded-lg border px-3 py-2 text-xs" style={{ borderColor: "#e3c369", background: "#fdf1d0", color: "#8a6300" }}>
             Firestore: {session.error}
           </div>
         )}
         {session.status === "ready" && messages.length === 0 && (
-          <div className="text-xs text-deep-green/50">
-            No messages in this chat yet.
-          </div>
+          <div className="text-xs" style={{ color: "#93a49b" }}>No messages in this chat yet.</div>
         )}
 
-        <ul className="space-y-2">
-          {messages.map((m) => (
-            <MessageRow key={m.__docId} msg={m} match={match} />
-          ))}
-        </ul>
+        {messages.map((m) => (
+          <MessageRow key={m.__docId} msg={m} />
+        ))}
       </div>
 
-      {/* Composer — round mint Send button inline with textarea,
-          safe-area bottom padding so iOS home indicator clears. */}
-      <div className="border-t border-cream-line bg-cream px-3 py-3 pb-[calc(0.75rem+env(safe-area-inset-bottom))] sm:px-4">
-        <div className="flex items-end gap-2">
+      {/* Composer */}
+      <div className="flex-none border-t px-[22px] py-3 pb-[calc(0.85rem+env(safe-area-inset-bottom))]" style={{ borderColor: "#eff3f1", background: "#ffffff" }}>
+        <div
+          className="mb-2.5 flex items-center gap-2 rounded-[9px] border px-[11px] py-1.5 text-[11.5px] font-semibold"
+          style={{ background: "#fdf1d0", borderColor: "#e3c369", color: "#8a6300" }}
+        >
+          <svg viewBox="0 0 24 24" className="h-3.5 w-3.5 flex-none" fill="none" stroke="currentColor" strokeLinecap="round" strokeLinejoin="round" strokeWidth={2.2} aria-hidden>
+            <path d="M12 8.5v5" />
+            <circle cx="12" cy="16.6" r=".9" fill="currentColor" stroke="none" />
+            <path d="M10.3 3.9 2.5 17.4A2 2 0 0 0 4.2 20.5h15.6a2 2 0 0 0 1.7-3.1L13.7 3.9a2 2 0 0 0-3.4 0z" />
+          </svg>
+          <span>
+            Sending as <b className="font-extrabold">MatchDay</b> to the WhatsApp group
+            {realN != null ? (
+              <>
+                {" — "}
+                <b className="font-extrabold">{realN} real player{realN === 1 ? "" : "s"}</b> will get this on their phones.
+              </>
+            ) : (
+              "."
+            )}
+          </span>
+        </div>
+
+        <div
+          className="overflow-hidden rounded-[15px] border transition focus-within:border-[#35c77f] focus-within:shadow-[0_0_0_3px_rgba(53,199,127,.14)]"
+          style={{ background: "#ffffff", borderColor: "#e6ebe8" }}
+        >
           <textarea
             ref={taRef}
             value={body}
             disabled={sending}
             onChange={(e) => setBody(e.target.value)}
             onKeyDown={onKeyDown}
-            placeholder="Reply as MatchDay. Enter to send, Shift+Enter for newline."
-            // text-base (16px) so iOS doesn't auto-zoom on focus, which
-            // strands the fixed bottom nav mid-screen. See Composer.tsx
-            // for the full story.
-            className="block flex-1 resize-none rounded-2xl border border-cream-line bg-white px-3 py-2 text-base text-deep-green placeholder:text-deep-green/40 focus:border-deep-green focus:outline-none disabled:bg-cream-soft disabled:text-deep-green/40"
-            style={{ minHeight: 44, maxHeight: 240 }}
+            rows={1}
+            placeholder={`Reply to ${t?.venue ?? "this group"}…`}
+            className="block w-full resize-none border-0 bg-transparent px-3.5 pb-1 pt-3 text-[13.5px] leading-[1.5] outline-none"
+            style={{ minHeight: 44, maxHeight: 150, color: "#243a31" }}
           />
-          <button
-            type="button"
-            onClick={() => void submit()}
-            disabled={sending || !body.trim()}
-            aria-label={sending ? "Sending message" : "Send message"}
-            style={{ touchAction: "manipulation" }}
-            className="flex h-11 w-11 shrink-0 items-center justify-center rounded-full bg-mint text-deep-green shadow-sm transition hover:bg-mint-hover disabled:opacity-40"
-          >
-            <ArrowUp aria-hidden className="h-5 w-5" strokeWidth={2.5} />
-          </button>
-        </div>
-        <div className="mt-1.5 flex items-center justify-between text-[10px] text-deep-green/55">
-          <div>
-            <span className="font-medium text-deep-green/75">
-              {body.length}
-            </span>{" "}
-            chars · posts as{" "}
-            <span className="rounded-full bg-mint-soft px-1.5 py-0.5 text-[10px] font-bold uppercase tracking-wider text-deep-green">
-              MatchDay
+          <div className="flex items-center gap-1.5 px-2.5 pb-2 pl-2.5 pt-1">
+            <span className="text-[11px]" style={{ color: "#93a49b" }}>
+              {body.length} chars
+              {sendError && <span className="ml-2" style={{ color: "#8a6300" }}>{sendError}</span>}
             </span>
-            {sendError && (
-              <span className="ml-2 text-coral-hover">{sendError}</span>
-            )}
+            <span className="flex-1" />
+            <button
+              type="button"
+              onClick={() => void submit()}
+              disabled={sending || !body.trim()}
+              className="flex h-[33px] items-center gap-1.5 rounded-full px-[15px] text-[13px] font-bold transition disabled:opacity-40"
+              style={{ background: "#0d3b2e", color: "#eafaf1" }}
+            >
+              {sending ? "Sending…" : "Send"}
+              <svg viewBox="0 0 24 24" className="h-3.5 w-3.5" fill="none" stroke="currentColor" strokeLinecap="round" strokeLinejoin="round" strokeWidth={2.2} aria-hidden>
+                <path d="M4 12h15" />
+                <path d="M13 6l6 6-6 6" />
+              </svg>
+            </button>
           </div>
         </div>
       </div>
 
-      <NotifyPlayersDrawer
-        open={notifyOpen}
-        onClose={() => setNotifyOpen(false)}
-        chatId={chatId}
-        match={match}
-      />
+      <NotifyPlayersDrawer open={notifyOpen} onClose={() => setNotifyOpen(false)} chatId={chatId} match={match} />
     </section>
   );
 }
 
-// Helpers — same shape as the old ChatThreadClient versions.
-
 function Dot() {
-  return (
-    <span aria-hidden className="text-deep-green/30">
-      ·
-    </span>
-  );
+  return <span aria-hidden className="inline-block h-[3px] w-[3px] rounded-full" style={{ background: "#c9d2cd" }} />;
 }
 
-function MessageRow({
-  msg,
-  match,
-}: {
-  msg: WireMessage;
-  match: MatchContext | null;
-}) {
+function MessageRow({ msg }: { msg: WireMessage }) {
   const kind = classifyMessage(msg);
   const isMatchDay = msg.sentBy === MATCHDAY_SENDER_NAME;
-  const role = deriveSenderRole(msg, match);
   const iso = createdAtToIso(msg.createdAt) ?? "";
+  const initials = (msg.sentBy || "?").slice(0, 2).toUpperCase();
 
   return (
-    <li
-      className={`flex flex-col ${isMatchDay ? "items-end" : "items-start"}`}
-    >
-      <div className="mb-1 flex items-center gap-1.5">
-        {!isMatchDay && (
-          <span className="text-[11px] font-bold text-deep-green/70">
-            {msg.sentBy || "(unknown)"}
-          </span>
-        )}
-        <SenderBadge role={role} />
-      </div>
-      <div
-        className={`max-w-[80%] rounded-2xl px-3 py-2 text-sm leading-relaxed whitespace-pre-wrap ${
-          isMatchDay
-            ? "bg-mint text-deep-green"
-            : "border border-cream-line bg-white text-deep-green"
-        }`}
+    <div className={`mb-3 flex max-w-[74%] gap-2.5 ${isMatchDay ? "ml-auto flex-row-reverse" : ""}`}>
+      <span
+        className="mt-0.5 flex h-[27px] w-[27px] flex-none items-center justify-center rounded-full text-[10px] font-[750]"
+        style={{ background: isMatchDay ? "#bff0d7" : "#e8eef0", color: "#2c4a3e" }}
       >
-        {kind !== "Text" && <MatchChatMessageMedia msg={msg} />}
-        {kind !== "Text" && msg.text && (
-          <div className="mt-1.5">
-            <Linkify options={LINKIFY_OPTIONS}>{msg.text}</Linkify>
-          </div>
-        )}
-        {kind === "Text" && (
-          <Linkify options={LINKIFY_OPTIONS}>{msg.text ?? ""}</Linkify>
-        )}
+        {initials}
+      </span>
+      <div className="min-w-0">
+        <div className={`mb-[3px] flex items-baseline gap-[7px] text-[11.5px] font-[750] ${isMatchDay ? "flex-row-reverse" : ""}`} style={{ color: isMatchDay ? "#12704a" : "#4a5f55" }}>
+          <span>{msg.sentBy || "(unknown)"}</span>
+          <span className="text-[10.5px] font-semibold" style={{ color: "#a8b4ae" }}>{formatTimestamp(iso)}</span>
+        </div>
+        <div
+          className="whitespace-pre-wrap break-words px-[13px] py-[9px] text-[13.5px] leading-[1.5]"
+          style={
+            isMatchDay
+              ? { background: "linear-gradient(170deg,#e6f7ee,#d9f1e5)", border: "1px solid #bfe6d1", borderRadius: "15px 4px 15px 15px", color: "#12352a" }
+              : { background: "#eef3f0", border: "1px solid #e2eae5", borderRadius: "4px 15px 15px 15px", color: "#243a31" }
+          }
+        >
+          {kind !== "Text" && <MatchChatMessageMedia msg={msg} />}
+          {kind !== "Text" && msg.text && (
+            <div className="mt-1.5">
+              <Linkify options={LINKIFY_OPTIONS}>{msg.text}</Linkify>
+            </div>
+          )}
+          {kind === "Text" && <Linkify options={LINKIFY_OPTIONS}>{msg.text ?? ""}</Linkify>}
+        </div>
       </div>
-      <div className="mt-0.5 px-1 text-[10px] text-deep-green/45">
-        {formatTimestamp(iso)}
-      </div>
-    </li>
+    </div>
   );
-}
-
-// Unused locally but exported so the inbox can share the same
-// timezone source (single source of truth for "this city → this
-// IANA zone").
-// eslint-disable-next-line @typescript-eslint/no-unused-vars
-function _tzReferenceAnchor(x: typeof timezoneFor) {
-  return x;
 }

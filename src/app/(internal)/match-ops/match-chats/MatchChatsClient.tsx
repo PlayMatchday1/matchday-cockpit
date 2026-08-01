@@ -1,26 +1,20 @@
 "use client";
 
-// Two-pane shell for /match-chats. Mirrors the /chats CrmClient
-// pattern: deep-green title bar with the Players/Matches segmented
-// control + live status + refresh, then a flex row of inbox + chat
-// pane. On mobile (< lg) only one pane is visible at a time — the
-// inbox until a chat is selected, the chat pane after, with a back
-// arrow returning to the inbox.
+// Full-bleed three-pane Match Chats console (mockup matchops-chats-v1):
+//   rail (212 / 60px)  ·  list (≈400px)  ·  thread (1fr)
 //
-// Inbox data fetch + Firestore realtime listener live here (not in
-// the inbox component) so the header can surface live/offline state
-// and Refresh without prop-drilling through the inbox.
+// Owns: inbox fetch + Firestore realtime refetch, URL state (?chatId, ?tab,
+// ?cities), rail-collapse (localStorage), and the client-side search box. The
+// list and thread panes are presentational.
 //
-// URL state owned here: ?chatId=… and ?tab=active|upcoming. Selecting
-// a row updates the right pane in place via router.replace (no back-
-// button noise per row click).
+// The "Waiting on a reply" grouping is intentionally NOT shipped: there is no
+// reliable stored field distinguishing an automated MatchDay post from a human
+// message (the org posts under three sender identities, two of which are
+// structurally identical to real players — see ship report / Step 1). The list
+// is a single recency-ordered feed per tab. What we'd need to unblock it is a
+// message-level direction/is_automated flag stamped at ingestion.
 
-import {
-  useCallback,
-  useEffect,
-  useMemo,
-  useState,
-} from "react";
+import { useCallback, useEffect, useMemo, useState } from "react";
 import { useRouter, useSearchParams } from "next/navigation";
 import {
   collectionGroup,
@@ -32,7 +26,6 @@ import {
 } from "firebase/firestore";
 import { supabase } from "@/lib/supabase";
 import { useFirebaseSession } from "@/lib/useFirebaseSession";
-import EnablePushNotificationsButton from "@/components/EnablePushNotificationsButton";
 import {
   ACTIVE_WINDOW_DAYS,
   isValidChatId,
@@ -40,8 +33,11 @@ import {
   type MatchChatInboxRow,
 } from "@/lib/matchChats";
 import { UNKNOWN_CITY } from "@/lib/cityColors";
+import MatchChatsRail from "./MatchChatsRail";
 import MatchChatsInbox, { type InboxTab } from "./MatchChatsInbox";
 import ChatPane from "./ChatPane";
+
+const RAIL_COLLAPSE_KEY = "cockpit:match-chats:rail-collapsed";
 
 // ---------------- helpers ----------------
 
@@ -69,7 +65,6 @@ function readTab(search: URLSearchParams): InboxTab {
 function readChatId(search: URLSearchParams): string | null {
   const raw = search.get("chatId");
   if (!raw) return null;
-  // Numeric-id guard — refuses the 7 phantom non-numeric chats.
   return isValidChatId(raw) ? raw : null;
 }
 
@@ -79,10 +74,6 @@ function readCities(search: URLSearchParams): Set<string> {
   return new Set(raw.split(",").filter((c) => c.length > 0));
 }
 
-// Same city-filter rule the /chats Players inbox uses: empty set
-// means "all cities" (no-op pass-through). Match rows with a null or
-// empty city_identifier fall under UNKNOWN_CITY so the "Unknown" pill
-// can pick them up. Orphan rows (match=null) also bucket as Unknown.
 function filterByCities(
   rows: MatchChatInboxRow[],
   cities: Set<string>,
@@ -95,6 +86,36 @@ function filterByCities(
   });
 }
 
+// Client-side search over what's loaded: venue (field_title), the last
+// message's sender name, and the last message body.
+function filterBySearch(
+  rows: MatchChatInboxRow[],
+  q: string,
+): MatchChatInboxRow[] {
+  const needle = q.trim().toLowerCase();
+  if (!needle) return rows;
+  return rows.filter((r) => {
+    const hay = [
+      r.match?.field_title ?? "",
+      r.last_message?.sent_by ?? "",
+      r.last_message?.body ?? "",
+      r.chat_id,
+    ]
+      .join(" ")
+      .toLowerCase();
+    return hay.includes(needle);
+  });
+}
+
+function readCollapse(): boolean {
+  if (typeof window === "undefined") return false;
+  try {
+    return window.localStorage.getItem(RAIL_COLLAPSE_KEY) === "1";
+  } catch {
+    return false;
+  }
+}
+
 // ---------------- main ----------------
 
 export default function MatchChatsClient() {
@@ -103,17 +124,31 @@ export default function MatchChatsClient() {
   const session = useFirebaseSession();
 
   const tab = useMemo(() => readTab(searchParams), [searchParams]);
-  const selectedChatId = useMemo(
-    () => readChatId(searchParams),
-    [searchParams],
-  );
+  const selectedChatId = useMemo(() => readChatId(searchParams), [searchParams]);
   const cityFilter = useMemo(() => readCities(searchParams), [searchParams]);
 
-  // Inbox data lifted up from MatchChatsInbox so the header can show
-  // live/offline state and Refresh.
   const [data, setData] = useState<MatchChatInboxResponse | null>(null);
   const [error, setError] = useState<string | null>(null);
   const [loading, setLoading] = useState(true);
+  const [search, setSearch] = useState("");
+
+  // Rail collapse — persisted. Owned here so the grid column width and the rail
+  // render stay in sync.
+  const [railCollapsed, setRailCollapsed] = useState(false);
+  useEffect(() => {
+    setRailCollapsed(readCollapse());
+  }, []);
+  const toggleRail = useCallback(() => {
+    setRailCollapsed((prev) => {
+      const next = !prev;
+      try {
+        window.localStorage.setItem(RAIL_COLLAPSE_KEY, next ? "1" : "0");
+      } catch {
+        // private mode — no-op
+      }
+      return next;
+    });
+  }, []);
 
   const load = useCallback(async () => {
     setError(null);
@@ -133,9 +168,7 @@ export default function MatchChatsClient() {
   // Realtime: coarse refetch on any new message in the active window.
   useEffect(() => {
     if (session.status !== "ready") return;
-    const cutoff = new Date(
-      Date.now() - ACTIVE_WINDOW_DAYS * 24 * 60 * 60 * 1000,
-    );
+    const cutoff = new Date(Date.now() - ACTIVE_WINDOW_DAYS * 24 * 60 * 60 * 1000);
     const q = query(
       collectionGroup(session.db, "messages"),
       where("createdAt", ">=", Timestamp.fromDate(cutoff)),
@@ -149,25 +182,16 @@ export default function MatchChatsClient() {
           firstSnapshot = false;
           return;
         }
-        const hasAdditions = snap
-          .docChanges()
-          .some((c) => c.type === "added");
-        if (hasAdditions) void load();
+        if (snap.docChanges().some((c) => c.type === "added")) void load();
       },
       (err) => {
-        console.warn(
-          "[match-chats:inbox] realtime listener failed",
-          err.message,
-        );
+        console.warn("[match-chats:inbox] realtime listener failed", err.message);
       },
     );
     return () => unsub();
   }, [session, load]);
 
-  // Lock document scroll while /match-chats is mounted. iOS Safari
-  // standalone PWA scrolls the document when the keyboard opens and
-  // does not restore scrollTop on dismiss. Same mechanism /chats uses;
-  // see CrmClient for the note on the transient post-keyboard glitch.
+  // Lock document scroll while the console is mounted (same as /chats).
   useEffect(() => {
     document.documentElement.classList.add("app-shell-locked");
     document.body.classList.add("app-shell-locked");
@@ -177,14 +201,8 @@ export default function MatchChatsClient() {
     };
   }, []);
 
-  // Write a single URL update preserving other params. router.replace
-  // keeps us out of browser history.
   const updateParams = useCallback(
-    (patch: {
-      chatId?: string | null;
-      tab?: InboxTab;
-      cities?: Set<string>;
-    }) => {
+    (patch: { chatId?: string | null; tab?: InboxTab; cities?: Set<string> }) => {
       const next = new URLSearchParams(searchParams.toString());
       if ("chatId" in patch) {
         if (patch.chatId == null) next.delete("chatId");
@@ -199,23 +217,19 @@ export default function MatchChatsClient() {
         else next.set("cities", [...patch.cities].join(","));
       }
       const qs = next.toString();
-      router.replace(qs ? `/match-ops/match-chats?${qs}` : "/match-ops/match-chats", {
-        scroll: false,
-      });
+      router.replace(
+        qs ? `/match-ops/match-chats?${qs}` : "/match-ops/match-chats",
+        { scroll: false },
+      );
     },
     [router, searchParams],
   );
 
-  // Mobile flow rules:
-  //   no selectedChatId             → inbox full-screen
-  //   selectedChatId on mobile      → chat pane full-screen + back arrow
-  //   selectedChatId on desktop     → both panes side-by-side
   const showInboxMobile = !selectedChatId;
   const showConversationMobile = !!selectedChatId;
 
-  // Apply city filter once per render. Counts on each tab reflect the
-  // filtered rows (matching /chats's "{visible}" convention), so an
-  // active city filter shrinks the tab counts in lockstep.
+  // City filter first (tab counts reflect it, matching the old convention),
+  // then search narrows the rendered rows within the active tab.
   const filteredActive = useMemo(
     () => filterByCities(data?.active ?? [], cityFilter),
     [data, cityFilter],
@@ -229,114 +243,55 @@ export default function MatchChatsClient() {
     [data, cityFilter],
   );
 
+  const tabRows =
+    tab === "active"
+      ? filteredActive
+      : tab === "upcoming"
+        ? filteredUpcoming
+        : filteredPast;
+  const visibleRows = useMemo(
+    () => filterBySearch(tabRows, search),
+    [tabRows, search],
+  );
+
   return (
-    <div className="flex min-h-0 min-w-0 flex-1 flex-col bg-cream">
-      <MatchChatsHeader
-        session={session}
-        onRefresh={() => void load()}
-        loading={loading}
+    <div className="flex min-h-0 min-w-0 flex-1" style={{ background: "#f8faf9" }}>
+      {/* Rail — desktop only */}
+      <div
+        className="hidden shrink-0 lg:block"
+        style={{ width: railCollapsed ? 60 : 212, transition: "width .18s ease-out" }}
+      >
+        <MatchChatsRail collapsed={railCollapsed} onToggle={toggleRail} />
+      </div>
+
+      {/* List */}
+      <MatchChatsInbox
+        rows={visibleRows}
         activeCount={filteredActive.length}
         upcomingCount={filteredUpcoming.length}
+        pastCount={filteredPast.length}
+        error={error}
+        loading={loading}
+        dataReady={data !== null}
+        selectedChatId={selectedChatId}
+        tab={tab}
+        onSelect={(chatId) => updateParams({ chatId })}
+        onTabChange={(t) => updateParams({ tab: t })}
+        showOnMobile={showInboxMobile}
+        cities={cityFilter}
+        onCitiesChange={(c) => updateParams({ cities: c })}
+        search={search}
+        onSearchChange={setSearch}
+        sessionStatus={session.status}
+        onRefresh={() => void load()}
       />
-      <div className="flex min-h-0 min-w-0 flex-1">
-        <MatchChatsInbox
-          activeRows={filteredActive}
-          upcomingRows={filteredUpcoming}
-          pastRows={filteredPast}
-          error={error}
-          loading={loading}
-          dataReady={data !== null}
-          selectedChatId={selectedChatId}
-          tab={tab}
-          onSelect={(chatId) => updateParams({ chatId })}
-          onTabChange={(t) => updateParams({ tab: t })}
-          showOnMobile={showInboxMobile}
-          cities={cityFilter}
-          onCitiesChange={(c) => updateParams({ cities: c })}
-        />
-        <ChatPane
-          chatId={selectedChatId}
-          showOnMobile={showConversationMobile}
-          onBack={() => updateParams({ chatId: null })}
-        />
-      </div>
+
+      {/* Thread */}
+      <ChatPane
+        chatId={selectedChatId}
+        showOnMobile={showConversationMobile}
+        onBack={() => updateParams({ chatId: null })}
+      />
     </div>
-  );
-}
-
-// ============================================================
-// Header — mirrors /chats ChatsHeader (CrmClient.tsx) so the in-page
-// header chrome reads the same on both routes:
-//   1. Deep-green title bar with "Chats" h1
-//   2. bg-cream segmented-control row (PlayersMatchesToggle)
-//   3. Status line: tab counts + live + refresh
-// /chats has a filter button in row 1 and a FilterBar row between 2
-// and 3. /match-chats omits both (no filters on this surface); the
-// title bar's right side stays empty so the min-h-12 still matches.
-//
-// Title bar is split into a safe-area spacer + content row stacked
-// vertically so iOS Safari doesn't mis-center the content against
-// the padding-top of a single combined div (PR #58 fix preserved).
-// ============================================================
-function MatchChatsHeader({
-  session,
-  onRefresh,
-  loading,
-  activeCount,
-  upcomingCount,
-}: {
-  session: ReturnType<typeof useFirebaseSession>;
-  onRefresh: () => void;
-  loading: boolean;
-  activeCount: number;
-  upcomingCount: number;
-}) {
-  const liveLabel =
-    session.status === "ready"
-      ? "live"
-      : session.status === "error"
-        ? "offline"
-        : "connecting";
-  const liveDot =
-    session.status === "ready"
-      ? "bg-mint"
-      : session.status === "error"
-        ? "bg-coral"
-        : "bg-muted";
-  const countLabel = loading
-    ? "Loading"
-    : `${activeCount} active · ${upcomingCount} upcoming`;
-
-  return (
-    <header className="min-w-0 shrink-0">
-      {/* Title bar — safe-area spacer + content row */}
-      <div aria-hidden className="bg-deep-green" style={{ height: "var(--safe-area-top)" }} />
-      <div className="flex min-h-12 items-center justify-between bg-deep-green px-3 sm:px-4">
-        <h1 className="text-base font-bold tracking-tight text-cream">Chats</h1>
-      </div>
-
-      {/* Status line */}
-      <div className="flex items-center justify-between gap-2 border-b border-cream-line bg-cream px-3 py-1 sm:px-4">
-        <span className="text-[11px] text-deep-green/55">{countLabel}</span>
-        <div className="flex items-center gap-2 text-[11px]">
-          <span className="inline-flex items-center gap-1 text-deep-green/55">
-            <span
-              aria-hidden
-              className={`inline-block h-1.5 w-1.5 rounded-full ${liveDot}`}
-            />
-            {liveLabel}
-          </span>
-          <EnablePushNotificationsButton />
-          <button
-            type="button"
-            onClick={onRefresh}
-            style={{ touchAction: "manipulation" }}
-            className="rounded-full px-2 py-0.5 text-[11px] font-medium text-deep-green/70 transition hover:bg-cream-soft hover:text-deep-green"
-          >
-            Refresh
-          </button>
-        </div>
-      </div>
-    </header>
   );
 }
