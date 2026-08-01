@@ -138,19 +138,27 @@ export default function ManagerPayView() {
     URL.revokeObjectURL(a.href);
   }, [payload, aliasMap, city, weekStart]);
 
-  const saveAlias = useCallback(async (email: string, firstName: string, lastName: string) => {
+  // Save (PUT) or clear (DELETE, when both names blank) one Gusto alias.
+  // Returns an error string on failure, null on success — the inline editor
+  // renders it. Two separate name fields, written to the CSV verbatim (never
+  // re-split from managerName).
+  const saveAlias = useCallback(async (email: string, firstName: string, lastName: string, note: string | null): Promise<string | null> => {
     const { data: sess } = await supabase.auth.getSession();
     const token = sess.session?.access_token;
-    if (!token) return;
-    const res = await fetch("/api/manager-pay/aliases", {
-      method: "PUT",
-      headers: { "Content-Type": "application/json", Authorization: `Bearer ${token}` },
-      body: JSON.stringify({ managerEmail: email, firstName, lastName }),
-    });
+    if (!token) return "No active session.";
+    const clearing = !firstName.trim() && !lastName.trim();
+    const res = await fetch(
+      `/api/manager-pay/aliases${clearing ? `?email=${encodeURIComponent(email.toLowerCase())}` : ""}`,
+      {
+        method: clearing ? "DELETE" : "PUT",
+        headers: { "Content-Type": "application/json", Authorization: `Bearer ${token}` },
+        body: clearing ? undefined : JSON.stringify({ managerEmail: email, firstName, lastName, note }),
+      },
+    );
     const json = await res.json().catch(() => ({}));
-    if (!res.ok) { alert(`Alias save failed: ${json?.error ?? res.status}`); return; }
-    setConflicts(null);
+    if (!res.ok) return (json?.error as string) ?? `HTTP ${res.status}`;
     setRefreshKey((k) => k + 1);
+    return null;
   }, []);
 
   const focusMatch = useCallback((matchId: number) => {
@@ -323,9 +331,11 @@ export default function ManagerPayView() {
                 {rows.map((r) => (
                   <MgrRow key={rowKey(r)} r={r} isAdmin={isAdmin} open={open.has(rowKey(r))}
                     editing={adjEdit === rowKey(r)}
+                    alias={r.managerEmail ? aliasMap[r.managerEmail.toLowerCase()] : undefined}
                     onToggle={() => setOpen((prev) => { const n = new Set(prev); const k = rowKey(r); if (n.has(k)) n.delete(k); else n.add(k); return n; })}
                     onEditAdj={() => setAdjEdit(rowKey(r))} onCancelAdj={() => setAdjEdit(null)}
-                    onSaveAdj={(amt, notes) => saveAdjustment(r, amt, notes)} />
+                    onSaveAdj={(amt, notes) => saveAdjustment(r, amt, notes)}
+                    onSaveAlias={saveAlias} />
                 ))}
                 {un.map((m) => <UnRow key={m.matchId} m={m} />)}
 
@@ -371,7 +381,7 @@ export default function ManagerPayView() {
   );
 }
 
-function ConflictModal({ conflicts, onClose, onSaveAlias }: { conflicts: GustoConflict[]; onClose: () => void; onSaveAlias: (email: string, first: string, last: string) => void }) {
+function ConflictModal({ conflicts, onClose, onSaveAlias }: { conflicts: GustoConflict[]; onClose: () => void; onSaveAlias: SaveAlias }) {
   return (
     <div className="fixed inset-0 z-[80] flex items-center justify-center p-4" role="dialog" aria-modal="true">
       <button type="button" aria-label="Close" onClick={onClose} className="absolute inset-0" style={{ background: "rgba(6,26,18,.42)" }} />
@@ -383,7 +393,7 @@ function ConflictModal({ conflicts, onClose, onSaveAlias }: { conflicts: GustoCo
             <div key={c.name} className="rounded-[11px] border p-3" style={{ borderColor: C.critLine, background: C.critBg }}>
               <div className="text-[12.5px] font-[800]" style={{ color: C.critInk }}>Both map to “{c.name}”</div>
               <div className="mt-2 flex flex-col gap-2">
-                {c.rows.map((r) => <AliasEditRow key={r.email || r.origName} email={r.email} first={r.firstName} last={r.lastName} onSave={onSaveAlias} />)}
+                {c.rows.map((r) => <ConflictAliasRow key={r.email || r.origName} email={r.email} first={r.firstName} last={r.lastName} onSaveAlias={onSaveAlias} onSaved={onClose} />)}
               </div>
             </div>
           ))}
@@ -393,15 +403,25 @@ function ConflictModal({ conflicts, onClose, onSaveAlias }: { conflicts: GustoCo
     </div>
   );
 }
-function AliasEditRow({ email, first, last, onSave }: { email: string; first: string; last: string; onSave: (email: string, first: string, last: string) => void }) {
+function ConflictAliasRow({ email, first, last, onSaveAlias, onSaved }: { email: string; first: string; last: string; onSaveAlias: SaveAlias; onSaved: () => void }) {
   const [f, setF] = useState(first);
   const [l, setL] = useState(last);
+  const [err, setErr] = useState<string | null>(null);
+  const [saving, setSaving] = useState(false);
+  const save = async () => {
+    if (!email || !f.trim() || !l.trim()) return;
+    setSaving(true);
+    const e = await onSaveAlias(email, f.trim(), l.trim(), null);
+    setSaving(false);
+    if (e) setErr(e); else onSaved(); // re-export re-checks conflicts
+  };
   return (
     <div className="flex flex-wrap items-center gap-2">
       <span className="min-w-0 flex-1 overflow-hidden text-ellipsis whitespace-nowrap text-[11.5px]" style={{ color: C.ink }}>{email || "(no email)"}</span>
       <input value={f} onChange={(e) => setF(e.target.value)} placeholder="First" className="h-8 w-[110px] rounded-[7px] border px-2 text-[12px]" style={{ borderColor: C.chipLine }} />
       <input value={l} onChange={(e) => setL(e.target.value)} placeholder="Last" className="h-8 w-[110px] rounded-[7px] border px-2 text-[12px]" style={{ borderColor: C.chipLine }} />
-      <button type="button" disabled={!email || !f.trim() || !l.trim()} onClick={() => onSave(email, f.trim(), l.trim())} className="rounded-[7px] px-2.5 py-1 text-[11px] font-bold disabled:opacity-40" style={{ background: C.accent, color: "#06281d" }}>Save</button>
+      <button type="button" disabled={saving || !email || !f.trim() || !l.trim()} onClick={save} className="rounded-[7px] px-2.5 py-1 text-[11px] font-bold disabled:opacity-40" style={{ background: C.accent, color: "#06281d" }}>Save</button>
+      {err && <span className="w-full text-[11px]" style={{ color: C.critInk }}>{err}</span>}
     </div>
   );
 }
@@ -495,9 +515,9 @@ function MatchCard({ m, onClick }: { m: MatchSummary; onClick: () => void }) {
   );
 }
 
-function MgrRow({ r, isAdmin, open, editing, onToggle, onEditAdj, onCancelAdj, onSaveAdj }: {
-  r: ManagerRow; isAdmin: boolean; open: boolean; editing: boolean;
-  onToggle: () => void; onEditAdj: () => void; onCancelAdj: () => void; onSaveAdj: (amt: number, notes: string | null) => void;
+function MgrRow({ r, isAdmin, open, editing, alias, onToggle, onEditAdj, onCancelAdj, onSaveAdj, onSaveAlias }: {
+  r: ManagerRow; isAdmin: boolean; open: boolean; editing: boolean; alias: Alias | undefined;
+  onToggle: () => void; onEditAdj: () => void; onCancelAdj: () => void; onSaveAdj: (amt: number, notes: string | null) => void; onSaveAlias: SaveAlias;
 }) {
   const flags = managerRowFlags(r, isAdmin);
   const tny = r.matches.filter((m) => m.payAmount === 30).length;
@@ -508,6 +528,8 @@ function MgrRow({ r, isAdmin, open, editing, onToggle, onEditAdj, onCancelAdj, o
         <div style={{ padding: "11px 0", minWidth: 0 }}>
           <div className="flex flex-wrap items-center gap-[7px] text-[13.5px] font-bold" style={{ color: C.forestDeep }}>
             <span>{r.managerName}</span>
+            {/* Never silently substitute: show the Gusto name beside the real one. */}
+            {alias && <span title={`Exports to Gusto as "${alias.firstName} ${alias.lastName}"`} className="rounded-[5px] px-[6px] py-[2px] text-[9.5px] font-[800]" style={{ background: C.mint, color: C.ok }}>Gusto: {alias.firstName} {alias.lastName}</span>}
             {flags.includes("noEmail") && <span className="rounded-full border px-[7px] py-[2px] text-[9.5px] font-[800]" style={{ background: C.critBg, borderColor: C.critLine, color: C.critInk }}>NO PAYROLL EMAIL</span>}
             {flags.includes("bareReason") && <span className="rounded-full border px-[7px] py-[2px] text-[9.5px] font-[800]" style={{ background: C.warnBg, borderColor: C.warnLine, color: C.warnInk }}>NO REASON</span>}
           </div>
@@ -535,8 +557,56 @@ function MgrRow({ r, isAdmin, open, editing, onToggle, onEditAdj, onCancelAdj, o
         <div className="text-right" style={{ padding: "11px 0" }}><span className="text-[13.5px] font-[800] tabular-nums" style={{ color: C.ink }}>{money(r.total)}</span></div>
         <div style={{ padding: "11px 0" }}><span className="inline-flex h-[26px] w-[26px] items-center justify-center rounded-[7px] text-[13px]" style={{ color: C.muted }}>{open ? "▾" : "▸"}</span></div>
       </div>
-      {open && <MgrDetail r={r} />}
+      {open && <MgrDetail r={r} isAdmin={isAdmin} alias={alias} onSaveAlias={onSaveAlias} />}
     </>
+  );
+}
+
+// A Gusto payroll alias for one manager — First/Last written to the CSV
+// verbatim, plus an optional note. saveAlias clears it (DELETE) when both names
+// are blank, and returns an error string (or null on success).
+type Alias = { firstName: string; lastName: string; note?: string | null };
+type SaveAlias = (email: string, firstName: string, lastName: string, note: string | null) => Promise<string | null>;
+
+// Inline Gusto-alias editor, in the expanded manager row. Two separate name
+// fields (never one, never re-split from managerName); clearing both removes
+// the alias so the CSV falls back to the schedule name.
+function AliasEditor({ managerEmail, managerName, alias, onSaveAlias }: { managerEmail: string; managerName: string; alias: Alias | undefined; onSaveAlias: SaveAlias }) {
+  const [first, setFirst] = useState(alias?.firstName ?? "");
+  const [last, setLast] = useState(alias?.lastName ?? "");
+  const [note, setNote] = useState(alias?.note ?? "");
+  const [saving, setSaving] = useState(false);
+  const [msg, setMsg] = useState<string | null>(null);
+  useEffect(() => {
+    setFirst(alias?.firstName ?? ""); setLast(alias?.lastName ?? ""); setNote(alias?.note ?? ""); setMsg(null);
+  }, [alias?.firstName, alias?.lastName, alias?.note]);
+
+  const clearing = !first.trim() && !last.trim();
+  const dirty = first.trim() !== (alias?.firstName ?? "") || last.trim() !== (alias?.lastName ?? "") || (note.trim() || null) !== (alias?.note ?? null);
+  const invalid = !clearing && (!first.trim() || !last.trim());
+  const save = async () => {
+    if (!dirty || invalid) return;
+    setSaving(true); setMsg(null);
+    const err = await onSaveAlias(managerEmail, first.trim(), last.trim(), note.trim() || null);
+    setSaving(false);
+    setMsg(err ?? (clearing ? "Alias cleared" : "Saved"));
+  };
+  const inputCls = "h-8 rounded-[7px] border px-2 text-[12px] outline-none disabled:opacity-60";
+  return (
+    <div className="mb-3 rounded-[10px] border p-2.5" style={{ background: C.surface, borderColor: C.line }}>
+      <div className="mb-1.5 flex flex-wrap items-baseline gap-x-2 gap-y-0.5 text-[10px] font-bold uppercase tracking-[0.1em]" style={{ color: C.muted }}>
+        Gusto payroll name
+        <span className="text-[10.5px] font-normal normal-case tracking-normal" style={{ color: C.muted2 }}>overrides the CSV First/Last for {managerName} — leave blank to use the schedule name</span>
+      </div>
+      <div className="flex flex-wrap items-center gap-2">
+        <input value={first} disabled={saving} onChange={(e) => setFirst(e.target.value)} placeholder="First name" aria-label="Gusto first name" className={`${inputCls} w-32`} style={{ borderColor: C.chipLine }} />
+        <input value={last} disabled={saving} onChange={(e) => setLast(e.target.value)} placeholder="Last name" aria-label="Gusto last name" className={`${inputCls} w-32`} style={{ borderColor: C.chipLine }} />
+        <input value={note} disabled={saving} onChange={(e) => setNote(e.target.value)} placeholder="Note (optional)" aria-label="Alias note" className={`${inputCls} w-40`} style={{ borderColor: C.chipLine }} />
+        <button type="button" onClick={save} disabled={saving || !dirty || invalid} className="rounded-[7px] px-3 py-1 text-[11.5px] font-bold disabled:opacity-40" style={{ background: C.accent, color: "#06281d" }}>{clearing && alias ? "Clear alias" : "Save alias"}</button>
+        {invalid && <span className="text-[11px]" style={{ color: C.critInk }}>Both first and last name required.</span>}
+        {msg && !invalid && <span className="text-[11px]" style={{ color: C.muted }}>{msg}</span>}
+      </div>
+    </div>
   );
 }
 
@@ -555,7 +625,7 @@ function AdjEditor({ r, onCancel, onSave }: { r: ManagerRow; onCancel: () => voi
   );
 }
 
-function MgrDetail({ r }: { r: ManagerRow }) {
+function MgrDetail({ r, isAdmin, alias, onSaveAlias }: { r: ManagerRow; isAdmin: boolean; alias: Alias | undefined; onSaveAlias: SaveAlias }) {
   const rateWhy = (m: ManagerMatch): string => {
     if (m.coManaged) return `co-managed — ${money(20)} each`;
     if ((m.maxPlayerCount ?? 0) >= TOURNAMENT_THRESHOLD && m.payAmount === 30) return `tournament (capacity ${m.maxPlayerCount})`;
@@ -563,6 +633,7 @@ function MgrDetail({ r }: { r: ManagerRow }) {
   };
   return (
     <div className="border-b px-4 py-3" style={{ background: C.board, borderColor: C.line }}>
+      {isAdmin && r.managerEmail && <AliasEditor managerEmail={r.managerEmail} managerName={r.managerName} alias={alias} onSaveAlias={onSaveAlias} />}
       <table className="w-full border-collapse">
         <thead>
           <tr className="text-[10px] font-bold tracking-[0.07em]" style={{ color: C.muted }}>
