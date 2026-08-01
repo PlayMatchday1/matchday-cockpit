@@ -35,7 +35,7 @@
 //   two-pill rendering.
 
 import { useCallback, useEffect, useMemo, useState } from "react";
-import { ChevronLeft, ChevronRight, Plus } from "lucide-react";
+import { ChevronDown, ChevronLeft, ChevronRight, CircleCheck, Plus, X } from "lucide-react";
 import { supabase } from "@/lib/supabase";
 import MasterScheduleEditModal, {
   type EditableRow,
@@ -103,6 +103,113 @@ const EMPTY_DIFF: Diff = {
 };
 
 const DOW_ORDER = ["Mon", "Tue", "Wed", "Thu", "Fri", "Sat", "Sun"] as const;
+
+// ============================================================
+// Duplicate detection (S2/S3) — Master Schedule only.
+// ============================================================
+// A venue cannot run two matches on one field at one time. So for each
+// (city, venue, start_time, day) slot:
+//     extras = max(0, matches_in_slot - fields_mapped_to_that_venue)
+// fields_mapped comes from fin_venue_fields (COUNT of rows for the fin_venue).
+//
+// !! When the eventual DELETE/dedup is written, its key MUST include field_id.
+// NEMP (fin_venue 2) genuinely runs two concurrent field_ids — 10 ("North East
+// Metropolitan Park") and 17 ("NEMP Tournaments") — so a dedup keyed on
+// (venue, start_time) alone would delete real, distinct matches. This ticket
+// only SURFACES duplicates; it never deletes (S4).
+type FieldMap = {
+  fieldToVenue: Map<number, number>; // mdapi_field_id → fin_venue_id
+  venueFieldCount: Map<number, number>; // fin_venue_id → number of fields
+  venueName: Map<number, string>; // fin_venue_id → name
+};
+
+type SlotDup = {
+  n: number;
+  fieldsMapped: number | null; // null = venue not mapped
+  extras: number;
+  state: "clean" | "dup" | "unchecked";
+};
+
+type DupModel = {
+  bySlot: Map<string, SlotDup>; // key: city|date|venue|compactTime — matches the tile key
+  totalDup: number;
+  perVenue: { city: string; venue: string; fields: number; slots: number; extras: number }[];
+  unmapped: { city: string; venue: string; sessions: number }[];
+  unmappedSessions: number;
+};
+
+function computeDupModel(payload: Payload | null, fm: FieldMap | null): DupModel {
+  const bySlot = new Map<string, SlotDup>();
+  const empty: DupModel = { bySlot, totalDup: 0, perVenue: [], unmapped: [], unmappedSessions: 0 };
+  if (!payload || !fm) return empty;
+  const perVenue = new Map<string, { city: string; venue: string; fields: number; slots: number; extras: number }>();
+  const unmapped = new Map<string, { city: string; venue: string; sessions: number }>();
+  let totalDup = 0;
+  let unmappedSessions = 0;
+
+  for (const c of payload.cities) {
+    for (const d of c.days) {
+      // Group the day's matches into (venue, start_time) slots.
+      const groups = new Map<string, MatchOut[]>();
+      for (const m of d.matches) {
+        const k = `${m.venue}|${compactTime(m.time)}`;
+        (groups.get(k) ?? groups.set(k, []).get(k)!).push(m);
+      }
+      for (const [gk, ms] of groups) {
+        const [venue] = gk.split("|");
+        const n = ms.length;
+        // Resolve the fin_venue from any match's field_id.
+        let finVenue: number | null = null;
+        for (const m of ms) {
+          if (m.mdapi_field_id != null && fm.fieldToVenue.has(m.mdapi_field_id)) {
+            finVenue = fm.fieldToVenue.get(m.mdapi_field_id)!;
+            break;
+          }
+        }
+        const slotKey = `${c.name}|${d.date}|${gk}`;
+        if (finVenue == null) {
+          // Outcome (c): unmapped — duplicates can't be checked.
+          bySlot.set(slotKey, { n, fieldsMapped: null, extras: 0, state: "unchecked" });
+          unmappedSessions += n;
+          const uk = `${c.name}|${venue}`;
+          const prev = unmapped.get(uk) ?? { city: c.name, venue, sessions: 0 };
+          prev.sessions += n;
+          unmapped.set(uk, prev);
+          continue;
+        }
+        const fields = fm.venueFieldCount.get(finVenue) ?? 0;
+        const extras = Math.max(0, n - fields);
+        bySlot.set(slotKey, {
+          n,
+          fieldsMapped: fields,
+          extras,
+          state: extras > 0 ? "dup" : "clean",
+        });
+        if (extras > 0) {
+          totalDup += extras;
+          const vk = `${c.name}|${venue}`;
+          const prev = perVenue.get(vk) ?? { city: c.name, venue, fields, slots: 0, extras: 0 };
+          prev.slots += 1;
+          prev.extras += extras;
+          prev.fields = fields;
+          perVenue.set(vk, prev);
+        }
+      }
+    }
+  }
+  return {
+    bySlot,
+    totalDup,
+    perVenue: [...perVenue.values()].sort((a, b) => b.extras - a.extras),
+    unmapped: [...unmapped.values()].sort((a, b) => b.sessions - a.sessions),
+    unmappedSessions,
+  };
+}
+
+// Singular/plural helper — grep-proof against " 1 fields" / " 1 matches".
+function plural(n: number, one: string, many = one + "s"): string {
+  return `${n} ${n === 1 ? one : many}`;
+}
 
 type Discrepancies = {
   week_start: string;
@@ -204,10 +311,16 @@ export default function CitiesMasterScheduleLens({
   city,
   weekStart: controlledWeekStart,
   onWeekStartChange,
+  masterSchedule = false,
 }: {
   city?: string;
   weekStart?: string;
   onWeekStartChange?: (next: string) => void;
+  // S5 scope guard: ALL of S1/S2/S3/S7 (labelled tiles, ×N chips, duplicate
+  // detection, collapsible banners) render only when this is true. Only the
+  // /match-ops/master-schedule page passes it; /growth, /growth/[city] and
+  // /admin/finance leave it false and come out byte-identical.
+  masterSchedule?: boolean;
 } = {}) {
   const [internalWeekStart, setInternalWeekStart] = useState<string>(() =>
     isoDate(mondayOfChicago(new Date())),
@@ -234,6 +347,47 @@ export default function CitiesMasterScheduleLens({
   const [error, setError] = useState<string | null>(null);
   const [editor, setEditor] = useState<EditorState>({ kind: "closed" });
   const [toastMsg, setToastMsg] = useState<string | null>(null);
+
+  // ---- S1–S7 (Master Schedule only) ----
+  // Venue→field mapping for duplicate detection, fetched once when enabled.
+  const [fieldMap, setFieldMap] = useState<FieldMap | null>(null);
+  // Both banners collapse to their summary chip by default (S7.1).
+  const [reviewOpen, setReviewOpen] = useState(false);
+  const [dupOpen, setDupOpen] = useState(false);
+
+  useEffect(() => {
+    if (!masterSchedule) return;
+    let off = false;
+    (async () => {
+      try {
+        const { data: sess } = await supabase.auth.getSession();
+        const token = sess.session?.access_token;
+        if (!token) return;
+        const res = await fetch("/api/schedule-master/field-map", {
+          headers: { Authorization: `Bearer ${token}` },
+        });
+        if (!res.ok) return;
+        const j = (await res.json()) as {
+          fields: { fin_venue_id: number; mdapi_field_id: number }[];
+          venues: { id: number; venue_name: string | null; city: string | null }[];
+        };
+        const fieldToVenue = new Map<number, number>();
+        const venueFieldCount = new Map<number, number>();
+        for (const f of j.fields) {
+          fieldToVenue.set(f.mdapi_field_id, f.fin_venue_id);
+          venueFieldCount.set(f.fin_venue_id, (venueFieldCount.get(f.fin_venue_id) ?? 0) + 1);
+        }
+        const venueName = new Map<number, string>();
+        for (const v of j.venues) venueName.set(v.id, v.venue_name ?? `Venue ${v.id}`);
+        if (!off) setFieldMap({ fieldToVenue, venueFieldCount, venueName });
+      } catch {
+        /* leave null → detector shows "can't be checked" rather than a wrong clean */
+      }
+    })();
+    return () => {
+      off = true;
+    };
+  }, [masterSchedule]);
 
   const load = useCallback(async (ws: string) => {
     setLoading(true);
@@ -361,6 +515,34 @@ export default function CitiesMasterScheduleLens({
     () => buildCancelledRefs(discrepancies),
     [discrepancies],
   );
+
+  // Master-Schedule-only: per-slot duplicate model + the review count. Both are
+  // computed from real rows every render (never typed), and drive the summary
+  // chips, the collapsible cards, and the ×N tile chips.
+  const dupModel = useMemo(
+    () => (masterSchedule ? computeDupModel(current, fieldMap) : null),
+    [masterSchedule, current, fieldMap],
+  );
+  const reviewCount = useMemo(() => {
+    if (!masterSchedule || !discrepancies) return 0;
+    // Match DiscrepancyBanner's own "need review" = actionable set only
+    // (extra-in-db + mismatched); missing/cancelled/auto-added are informational.
+    const scope = (arr: { city?: string }[]) =>
+      city ? arr.filter((r) => r.city === city).length : arr.length;
+    return scope(discrepancies.extra_in_db) + scope(discrepancies.mismatched);
+  }, [masterSchedule, discrepancies, city]);
+  const sessionCount = useMemo(
+    () =>
+      (current?.cities ?? [])
+        .filter((c) => !city || c.name === city)
+        .reduce((sum, c) => sum + c.total, 0),
+    [current, city],
+  );
+  // S7.8: a card can never be open for work that doesn't exist — AND the open
+  // flag with "this category has rows" on every render so clearing the last
+  // item auto-collapses the card.
+  const reviewCardOpen = reviewOpen && reviewCount > 0;
+  const dupOpen2 = dupOpen && (dupModel?.totalDup ?? 0) > 0;
 
   // §2 one-click add + Undo. Both mutate schedule_master, then reload so the
   // discrepancy buckets and auto-added list re-derive from the server.
@@ -517,7 +699,57 @@ export default function CitiesMasterScheduleLens({
         <div className="rounded-2xl border-[1.5px] border-coral/40 bg-coral-soft p-6 text-sm text-coral-hover shadow-md shadow-deep-green/10">
           {error}
         </div>
-      ) : !current ? null : (
+      ) : !current ? null : masterSchedule ? (
+        // ---- Master Schedule: summary chips + collapsible cards (S7) ----
+        <>
+          <SummaryStrip
+            sessionCount={sessionCount}
+            cityCount={current.cities.filter((c) => !city || c.name === city).length}
+            reviewCount={reviewCount}
+            reviewOpen={reviewCardOpen}
+            onToggleReview={() => setReviewOpen((v) => !v)}
+            dupCount={dupModel?.totalDup ?? 0}
+            dupOpen={dupOpen2}
+            onToggleDup={() => setDupOpen((v) => !v)}
+            uncheckedSessions={dupModel?.unmappedSessions ?? 0}
+          />
+          {reviewCardOpen && (
+            <div data-ms-review-card>
+              {/* S7.4: header X collapses it. The count lives on the chip, not
+                  here (S7.3) — passed hideCount. */}
+              <DiscrepancyBanner
+                data={discrepancies!}
+                city={city}
+                reconcile={reconcile}
+                busyIds={busyIds}
+                onAdd={addToClubhouse}
+                onUndo={undoOneOff}
+                hideCount
+                onClose={() => setReviewOpen(false)}
+              />
+            </div>
+          )}
+          {dupOpen2 && dupModel && (
+            <DuplicateCard model={dupModel} onClose={() => setDupOpen(false)} />
+          )}
+          <div className="space-y-5" data-ms-board>
+            {current.cities
+              .filter((c) => !city || c.name === city)
+              .map((c) => (
+                <CitySection
+                  key={c.name}
+                  city={c}
+                  todayIso={todayIso}
+                  diff={diff}
+                  showChanges={showChanges}
+                  cancelledKeys={cancelledRefs.keys}
+                  onEditMatch={openEdit}
+                  dupBySlot={dupModel?.bySlot ?? null}
+                />
+              ))}
+          </div>
+        </>
+      ) : (
         <>
           {diff.hasAny && (
             <DiffSummaryBanner
@@ -673,6 +905,7 @@ function CitySection({
   showChanges,
   cancelledKeys,
   onEditMatch,
+  dupBySlot = null,
 }: {
   city: CityOut;
   todayIso: string;
@@ -680,6 +913,9 @@ function CitySection({
   showChanges: boolean;
   cancelledKeys: Set<string>;
   onEditMatch: (row: EditableRow) => void;
+  // Master Schedule only: when present, day cells render grouped labelled
+  // tiles with ×N duplicate chips instead of one pill per match.
+  dupBySlot?: Map<string, SlotDup> | null;
 }) {
   // Week-vs-week diff pills only. Cancellations show as in-grid
   // strikethrough bubbles + the Schedule Sync count pill at the top of
@@ -715,6 +951,7 @@ function CitySection({
               cancelledKeys={cancelledKeys}
               ghosts={diff.ghostsByCell.get(cellKey) ?? []}
               onEditMatch={onEditMatch}
+              dupBySlot={dupBySlot}
             />
           );
         })}
@@ -947,6 +1184,7 @@ function DayCell({
   cancelledKeys,
   ghosts,
   onEditMatch,
+  dupBySlot = null,
 }: {
   city: string;
   day: DayOut;
@@ -955,9 +1193,23 @@ function DayCell({
   cancelledKeys: Set<string>;
   ghosts: GhostMatch[];
   onEditMatch: (row: EditableRow) => void;
+  dupBySlot?: Map<string, SlotDup> | null;
 }) {
   const isToday = day.date === todayIso;
   const isPast = day.date < todayIso;
+  // Master Schedule: one labelled tile per (venue, time) slot with a ×N chip.
+  const slots = dupBySlot
+    ? (() => {
+        const groups = new Map<string, MatchOut[]>();
+        for (const m of day.matches) {
+          const k = `${m.venue}|${compactTime(m.time)}`;
+          (groups.get(k) ?? groups.set(k, []).get(k)!).push(m);
+        }
+        return [...groups.entries()].sort((a, b) =>
+          compactTime(a[1][0].time).localeCompare(compactTime(b[1][0].time), undefined, { numeric: true }),
+        );
+      })()
+    : null;
   return (
     <div
       className={`flex min-h-[80px] flex-col rounded-md border ${
@@ -977,6 +1229,41 @@ function DayCell({
       <div className="mt-1 flex flex-col gap-1">
         {day.matches.length === 0 && ghosts.length === 0 ? (
           <span className="text-[11px] text-deep-green/30">—</span>
+        ) : slots ? (
+          <>
+            {slots.map(([gk, ms]) => {
+              const m = ms[0];
+              const slotKey = `${city}|${day.date}|${gk}`;
+              const cancelled = cancelledKeys.has(`${city}|${day.date}|${m.venue}|${compactTime(m.time)}`);
+              return (
+                <SlotTile
+                  key={gk}
+                  time={m.time}
+                  venue={m.venue}
+                  n={ms.length}
+                  dup={dupBySlot!.get(slotKey) ?? null}
+                  dim={isPast}
+                  cancelled={cancelled}
+                  oneOff={m.source !== "template"}
+                  onClick={() =>
+                    onEditMatch({
+                      id: m.id,
+                      city,
+                      venue: m.venue,
+                      detail: m.detail,
+                      match_date: day.date,
+                      match_time: m.time,
+                      max_spots: m.max_spots,
+                      mdapi_field_id: m.mdapi_field_id,
+                    })
+                  }
+                />
+              );
+            })}
+            {ghosts.map((g) => (
+              <GhostPill key={g.id} time={g.time} venue={g.venue} detail={g.detail} />
+            ))}
+          </>
         ) : (
           <>
             {day.matches.map((m) => {
@@ -1018,6 +1305,224 @@ function DayCell({
           </>
         )}
       </div>
+    </div>
+  );
+}
+
+// Display time: compactTime strips ":00" but drops the space (it feeds slot
+// keys); for the tile we want "7 PM" / "6:30 PM".
+function displayTime(time: string): string {
+  return compactTime(time).replace(/(AM|PM)$/, " $1");
+}
+
+// S1/S2/S3 — one labelled tile per (venue, time) slot with a ×N duplicate chip.
+function SlotTile({
+  time,
+  venue,
+  n,
+  dup,
+  dim,
+  cancelled,
+  oneOff,
+  onClick,
+}: {
+  time: string;
+  venue: string;
+  n: number;
+  dup: SlotDup | null;
+  dim: boolean;
+  cancelled: boolean;
+  oneOff: boolean;
+  onClick: () => void;
+}) {
+  const state = dup?.state ?? "clean";
+  // ×N chip styling by outcome (S3): amber dup / grey clean / dashed "?" unchecked.
+  const chip =
+    n <= 1
+      ? null
+      : state === "dup"
+        ? { cls: "border border-[#e3c369] bg-warn-bg text-warn-ink", txt: `×${n}` }
+        : state === "unchecked"
+          ? { cls: "border border-dashed border-deep-green/45 text-deep-green/60", txt: `×${n} ?` }
+          : { cls: "bg-cream-soft text-deep-green/60 ring-1 ring-cream-line", txt: `×${n}` };
+  const tip =
+    state === "dup"
+      ? `${displayTime(time)} · ${venue} · ${plural(dup!.extras, "possible duplicate")}`
+      : state === "unchecked"
+        ? `${displayTime(time)} · ${venue} · duplicates can't be checked`
+        : `${displayTime(time)} · ${venue}`;
+  const outline = oneOff
+    ? "border border-dashed border-deep-green/40"
+    : state === "dup"
+      ? "ring-1 ring-[#e3c369]"
+      : "ring-1 ring-cream-line";
+  return (
+    <button
+      type="button"
+      onClick={onClick}
+      title={tip}
+      aria-label={tip}
+      className={`flex w-full flex-col gap-0.5 rounded-md px-1.5 py-1 text-left transition focus:outline-none focus:ring-2 focus:ring-mint ${
+        state === "dup" ? "bg-warn-bg/50" : dim ? "bg-cream-soft" : "bg-white"
+      } ${outline}`}
+    >
+      <span className="flex items-center gap-1">
+        <span
+          aria-hidden
+          className={`inline-flex h-2 w-2 shrink-0 items-center justify-center text-[9px] font-bold leading-none ${
+            cancelled ? "text-coral-hover" : ""
+          }`}
+        >
+          {cancelled ? "✕" : <span className={`h-1.5 w-1.5 rounded-full ${state === "dup" ? "bg-[#d99a12]" : "bg-deep-green/40"}`} />}
+        </span>
+        <span className={`text-[11px] font-bold tabular-nums ${cancelled ? "text-coral-hover line-through" : "text-deep-green"}`}>
+          {displayTime(time)}
+        </span>
+        {chip && (
+          <span className={`ml-auto rounded-full px-1.5 py-px text-[9px] font-extrabold leading-none ${chip.cls}`}>
+            {chip.txt}
+          </span>
+        )}
+      </span>
+      <span className={`min-w-0 truncate text-[11px] ${cancelled ? "text-coral-hover line-through" : dim ? "text-deep-green/45" : "text-deep-green/80"}`}>
+        {venue}
+      </span>
+    </button>
+  );
+}
+
+// S7 — the summary strip. The count lives ONLY here (S7.3); each count chip is
+// the button that opens its card. All-clear is a chip, never a full-width bar.
+function SummaryStrip({
+  sessionCount,
+  cityCount,
+  reviewCount,
+  reviewOpen,
+  onToggleReview,
+  dupCount,
+  dupOpen,
+  onToggleDup,
+  uncheckedSessions,
+}: {
+  sessionCount: number;
+  cityCount: number;
+  reviewCount: number;
+  reviewOpen: boolean;
+  onToggleReview: () => void;
+  dupCount: number;
+  dupOpen: boolean;
+  onToggleDup: () => void;
+  uncheckedSessions: number;
+}) {
+  const allClear = reviewCount === 0 && dupCount === 0 && uncheckedSessions === 0;
+  return (
+    <div className="mb-4 flex flex-wrap items-center gap-2">
+      <span className="text-sm font-bold text-deep-green">
+        {plural(sessionCount, "session")} this week
+      </span>
+      <span className="text-sm text-deep-green/45">·</span>
+      <span className="text-sm text-deep-green/65">{plural(cityCount, "city", "cities")}</span>
+
+      {reviewCount > 0 && (
+        <SummaryChip
+          on={reviewOpen}
+          onClick={onToggleReview}
+          tone="warn"
+          label={`${reviewCount} need review`}
+        />
+      )}
+      {dupCount > 0 && (
+        <SummaryChip
+          on={dupOpen}
+          onClick={onToggleDup}
+          tone="warn"
+          label={plural(dupCount, "possible duplicate")}
+        />
+      )}
+      {allClear && (
+        <span className="inline-flex items-center gap-1.5 rounded-full bg-mint-soft px-3 py-1 text-xs font-bold text-deep-green ring-1 ring-mint/40">
+          <CircleCheck aria-hidden className="h-3.5 w-3.5 text-deep-green/70" />
+          MatchDay agrees on every session
+        </span>
+      )}
+    </div>
+  );
+}
+
+function SummaryChip({
+  on,
+  onClick,
+  label,
+  tone,
+}: {
+  on: boolean;
+  onClick: () => void;
+  label: string;
+  tone: "warn";
+}) {
+  void tone;
+  return (
+    <button
+      type="button"
+      onClick={onClick}
+      aria-expanded={on}
+      className={`inline-flex items-center gap-1.5 rounded-full px-3 py-1 text-xs font-bold transition ${
+        on
+          ? "bg-warn-ink text-warn-bg ring-1 ring-warn-ink"
+          : "bg-warn-bg text-warn-ink ring-1 ring-[#e3c369] hover:brightness-95"
+      }`}
+    >
+      {label}
+      <ChevronDown
+        aria-hidden
+        className={`h-3.5 w-3.5 transition-transform ${on ? "rotate-180" : ""}`}
+      />
+    </button>
+  );
+}
+
+// S3 roll-up card — no total in the header (S7.3, the chip owns the count).
+function DuplicateCard({ model, onClose }: { model: DupModel; onClose: () => void }) {
+  return (
+    <div data-ms-dup-card className="mb-5 rounded-2xl border-[1.5px] border-[#e3c369] bg-warn-bg/60 p-5 shadow-md shadow-deep-green/10">
+      <div className="mb-3 flex items-start justify-between gap-3">
+        <p className="text-sm font-medium text-warn-ink">
+          More matches than the venue has fields. Two matches cannot share one field at one time.
+        </p>
+        <button
+          type="button"
+          onClick={onClose}
+          aria-label="Collapse duplicates"
+          className="shrink-0 rounded-full p-1 text-warn-ink/70 transition hover:bg-warn-ink/10"
+        >
+          <X aria-hidden className="h-4 w-4" />
+        </button>
+      </div>
+      <div className="flex flex-wrap gap-1.5">
+        {model.perVenue.map((v) => (
+          <span
+            key={`${v.city}|${v.venue}`}
+            className="inline-flex items-center gap-1 rounded-full bg-white px-2 py-0.5 text-[11px] font-medium text-deep-green ring-1 ring-[#e3c369]"
+          >
+            <span className="font-bold uppercase">{v.city}</span> {v.venue} · {plural(v.fields, "field")} · {plural(v.slots, "slot")} <span className="font-bold text-warn-ink">+{v.extras}</span>
+          </span>
+        ))}
+      </div>
+      {model.unmappedSessions > 0 && (
+        <p className="mt-3 text-xs text-warn-ink">
+          {plural(model.unmappedSessions, "session")} cannot be checked —{" "}
+          {model.unmapped.map((u, i) => (
+            <span key={`${u.city}|${u.venue}`}>
+              {i > 0 ? ", " : ""}
+              {u.city} · {u.venue}
+            </span>
+          ))}{" "}
+          {model.unmapped.length === 1 ? "is" : "are"} not mapped to any field.{" "}
+          {/* No dedicated field-mapping page exists in the app (fin_venue_fields
+              has no admin UI) — plain text, not a link that bounces. */}
+          <span className="font-bold">Map fields</span>
+        </p>
+      )}
     </div>
   );
 }
@@ -1120,6 +1625,8 @@ function DiscrepancyBanner({
   busyIds,
   onAdd,
   onUndo,
+  hideCount = false,
+  onClose,
 }: {
   data: Discrepancies;
   city?: string;
@@ -1127,6 +1634,10 @@ function DiscrepancyBanner({
   busyIds: Set<number>;
   onAdd: (matchIds: number[]) => void;
   onUndo: (matchApiId: number) => void;
+  // Master Schedule (S7.3/S7.4): the count lives on the summary chip, so the
+  // card header suppresses its own number; onClose renders the header X.
+  hideCount?: boolean;
+  onClose?: () => void;
 }) {
   const [open, setOpen] = useState<BannerSection | null>(null);
   // "Add to Clubhouse" — matches live on MatchDay but absent from Clubhouse.
@@ -1175,27 +1686,45 @@ function DiscrepancyBanner({
         <span className="text-[11px] font-bold uppercase tracking-wider text-deep-green/70">
           Schedule Sync · {dateLabel}
         </span>
-        {heartbeat && (
-          <span
-            title={heartbeat.last_error ?? undefined}
-            className={`text-[10px] font-semibold tabular-nums ${
-              !heartbeat.autoreconcile_enabled || heartbeat.last_status === "500"
-                ? "text-coral-hover"
-                : "text-deep-green/45"
-            }`}
-          >
-            {!heartbeat.autoreconcile_enabled
-              ? "Auto-reconcile off"
-              : heartbeat.last_status === "500"
-                ? "Auto-reconcile · last run failed"
-                : `Auto-reconcile on · ran ${fmtAgo(agoMinutes(heartbeat.last_success_at))}`}
-          </span>
-        )}
+        <div className="flex items-center gap-2">
+          {heartbeat && (
+            <span
+              title={heartbeat.last_error ?? undefined}
+              className={`text-[10px] font-semibold tabular-nums ${
+                !heartbeat.autoreconcile_enabled || heartbeat.last_status === "500"
+                  ? "text-coral-hover"
+                  : "text-deep-green/45"
+              }`}
+            >
+              {!heartbeat.autoreconcile_enabled
+                ? "Auto-reconcile off"
+                : heartbeat.last_status === "500"
+                  ? "Auto-reconcile · last run failed"
+                  : `Auto-reconcile on · ran ${fmtAgo(agoMinutes(heartbeat.last_success_at))}`}
+            </span>
+          )}
+          {onClose && (
+            <button
+              type="button"
+              onClick={onClose}
+              aria-label="Collapse review"
+              className="shrink-0 rounded-full p-1 text-deep-green/60 transition hover:bg-deep-green/10"
+            >
+              <X aria-hidden className="h-4 w-4" />
+            </button>
+          )}
+        </div>
       </div>
 
-      {/* Primary: one number, or a one-line all-clear at 0. */}
+      {/* Primary: one number, or a one-line all-clear at 0. On Master Schedule
+          (hideCount) the count lives on the summary chip (S7.3) — the card
+          shows the reasoning instead. */}
       <div className="mt-2">
-        {needReview > 0 ? (
+        {hideCount ? (
+          <span className="text-[13px] font-medium text-deep-green/70">
+            These sessions differ from MatchDay — review and reconcile below.
+          </span>
+        ) : needReview > 0 ? (
           <span className="text-sm font-bold text-deep-green">
             {needReview} need review
           </span>

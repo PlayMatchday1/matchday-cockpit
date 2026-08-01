@@ -12,7 +12,7 @@ import CitiesMasterScheduleLens from "@/components/CitiesMasterScheduleLens";
 export default function MasterSchedulePage() {
   return (
     <PagePermissionGuard page="cities">
-      <CitiesMasterScheduleLens />
+      <CitiesMasterScheduleLens masterSchedule />
     </PagePermissionGuard>
   );
 }
