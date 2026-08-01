@@ -1,0 +1,689 @@
+<!doctype html>
+<html lang="en">
+<head>
+<meta charset="utf-8">
+<meta name="viewport" content="width=device-width,initial-scale=1">
+<title>Roadmap · MatchDay Clubhouse</title>
+<style>
+:root{
+  --forest:#0d3b2e; --forest-deep:#072a20; --accent:#35c77f; --logo:#2cdb87; --mint:#e0f2e7;
+  --amount:#e2502b; --ink:#12241d; --muted:#6d7b74;
+  --warn-bg:#fdf1d0; --warn-ink:#8a6300; --warn-line:#e3c369;
+  --crit-bg:#fdeae4; --crit-ink:#a8391a; --crit-line:#f0bda9;
+  --ok-ink:#12704a;
+  --rail-a:#fafbfa; --rail-b:#f6f9f7; --board-bg:#f8faf9;
+  --chip-bg:#eef3f0; --chip-line:#e2eae5; --line:#e6ebe8; --hair:#eff3f1;
+  --surface:#ffffff; --canvas:#f4efe4;
+}
+*{box-sizing:border-box}
+html,body{margin:0;padding:0}
+body{background:var(--canvas);color:var(--ink);
+  font:14px/1.45 -apple-system,BlinkMacSystemFont,"Segoe UI",Inter,Roboto,Helvetica,Arial,sans-serif;
+  -webkit-font-smoothing:antialiased}
+a{color:inherit}
+button{font:inherit}
+
+/* ── shell ─────────────────────────────────────────────── */
+.top{background:var(--forest-deep);color:#fff;display:flex;align-items:center;
+  padding:0 22px;height:56px;gap:26px}
+.brand{font-weight:900;font-style:italic;letter-spacing:-.02em;font-size:17px;color:var(--logo)}
+.brand span{color:#fff;font-style:normal;font-weight:700;font-size:13px;margin-left:5px}
+.tnav{display:flex;gap:4px;margin-left:auto;margin-right:auto}
+.tnav a{padding:7px 13px;border-radius:8px;text-decoration:none;font-size:13px;font-weight:700;
+  color:#cfe6da;display:inline-flex;align-items:center;gap:6px}
+.tnav a.on{background:var(--accent);color:#04241a}
+.tnav a.off{color:#5b7a6d}
+.tnav .nb{background:var(--amount);color:#fff;border-radius:9px;font-size:10.5px;
+  font-weight:800;padding:1px 6px}
+.who{font-size:12.5px;color:#cfe6da}
+
+.wrap{display:flex;min-height:calc(100vh - 56px)}
+.rail{width:246px;flex:0 0 246px;background:var(--rail-a);border-right:1px solid var(--line);
+  padding:16px 12px;display:flex;flex-direction:column}
+.rlab{font-size:10.5px;letter-spacing:.09em;font-weight:800;color:var(--muted);
+  padding:0 10px;margin:4px 0 8px}
+.ritem{display:flex;align-items:center;gap:10px;padding:9px 10px;border-radius:9px;
+  font-size:13px;font-weight:700;color:var(--ink);cursor:pointer;border:0;background:none;
+  width:100%;text-align:left;min-height:38px}
+.ritem:hover{background:var(--rail-b)}
+.ritem.on{background:var(--mint);color:var(--forest-deep);box-shadow:inset 3px 0 0 var(--accent)}
+.ritem .rb{margin-left:auto;background:var(--chip-bg);border:1px solid var(--chip-line);
+  border-radius:9px;font-size:10.5px;font-weight:800;color:var(--muted);padding:1px 7px}
+.ritem.on .rb{background:var(--surface);border-color:#bfe0cd;color:var(--forest)}
+.ritem svg{width:16px;height:16px;stroke:currentColor;fill:none;stroke-width:1.9;opacity:.85}
+.main{flex:1;min-width:0;padding:22px 26px 30px}
+
+/* ── page head ─────────────────────────────────────────── */
+.ph{display:flex;align-items:flex-start;gap:14px;margin-bottom:14px}
+.ph h1{margin:0 0 3px;font-size:23px;letter-spacing:-.015em;color:var(--forest-deep)}
+.ph p{margin:0;font-size:12.5px;color:var(--muted)}
+.ph .r{margin-left:auto;display:flex;gap:8px;align-items:center}
+.btn{border:1px solid var(--chip-line);background:var(--surface);border-radius:9px;
+  min-height:34px;padding:7px 13px;font-size:12.5px;font-weight:700;color:var(--forest);
+  cursor:pointer;display:inline-flex;align-items:center;gap:7px;white-space:nowrap}
+.btn:hover{border-color:#c8d8d1}
+.btn.pri{background:var(--forest-deep);border-color:var(--forest-deep);color:#fff}
+.btn.pri:hover{background:#0b3427}
+
+/* ── the state bar (what replaced five zeros) ──────────── */
+.bar{background:var(--surface);border:1px solid var(--line);border-radius:12px;
+  padding:11px 15px;display:flex;align-items:center;gap:0;flex-wrap:wrap;
+  box-shadow:0 1px 2px rgba(13,59,46,.04);margin-bottom:11px}
+.st{display:flex;flex-direction:column;gap:1px;padding:0 17px;border-left:1px solid var(--hair)}
+.st:first-child{padding-left:0;border-left:0}
+.st b{font-size:16px;font-weight:800;letter-spacing:-.01em;color:var(--forest-deep);line-height:1.15}
+.st b.warn{color:var(--warn-ink)}
+.st u{font-size:10.5px;letter-spacing:.06em;font-weight:800;color:var(--muted);
+  text-decoration:none;text-transform:uppercase}
+.st .lk{font-size:11px;font-weight:800;color:var(--forest);cursor:pointer;background:none;
+  border:0;padding:0;text-align:left;text-decoration:underline;text-underline-offset:2px}
+.st .lk:hover{color:var(--accent)}
+.st.est{margin-left:auto;padding-right:0;text-align:right;align-items:flex-end;max-width:330px}
+.st.est u{text-transform:none;letter-spacing:0;font-size:11px;font-weight:600;color:var(--muted);
+  line-height:1.35}
+/* below ~1450 the estimate sentence no longer fits beside the four stats, and
+   margin-left:auto turns that into a ragged wrap: a half-empty first row, a divider
+   stretched down a bar twice as tall as it needs to be. so make the wrap deliberate —
+   the sentence becomes its own row, ruled off, reading left to right like a sentence. */
+@media (max-width:1450px){
+  .st.est{margin-left:0;width:100%;max-width:none;text-align:left;align-items:flex-start;
+    border-left:0;padding:9px 0 0;margin-top:9px;border-top:1px solid var(--hair);
+    flex-direction:row;align-items:baseline;gap:9px}
+}
+
+/* ── filters ───────────────────────────────────────────── */
+.filt{display:flex;gap:8px;align-items:center;margin-bottom:12px;flex-wrap:wrap}
+.filt input,.filt select{border:1px solid var(--chip-line);background:var(--surface);
+  border-radius:9px;min-height:34px;padding:7px 11px;font-size:12.5px;color:var(--ink)}
+.filt input{flex:1;min-width:180px}
+.filt input::placeholder{color:#9aa8a1}
+.tog{border:1px solid var(--chip-line);background:var(--surface);border-radius:9px;
+  min-height:34px;padding:7px 12px;font-size:12.5px;font-weight:700;color:var(--muted);
+  cursor:pointer;display:inline-flex;align-items:center;gap:7px;white-space:nowrap}
+.tog:hover{border-color:#c8d8d1}
+.tog.on{background:var(--warn-bg);border-color:var(--warn-line);color:var(--warn-ink)}
+.tog .n{background:rgba(0,0,0,.06);border-radius:8px;padding:0 6px;font-size:11px}
+.fclear{margin-left:auto}
+.hide{display:none !important}
+
+/* ── the board ─────────────────────────────────────────── */
+.cols{display:grid;grid-template-columns:repeat(4,minmax(0,1fr));gap:12px;align-items:start}
+.col{background:var(--board-bg);border:1px solid var(--line);border-radius:12px;
+  display:flex;flex-direction:column;overflow:hidden;max-height:min(66vh,700px)}
+.chd{display:flex;align-items:center;gap:8px;padding:11px 12px 9px;background:var(--surface);
+  border-bottom:1px solid var(--line);flex:0 0 auto}
+.cnum{width:20px;height:20px;border-radius:50%;background:var(--forest-deep);color:#fff;
+  font-size:11px;font-weight:800;display:flex;align-items:center;justify-content:center;flex:0 0 auto}
+.cnm{font-size:13px;font-weight:800;color:var(--forest-deep);white-space:nowrap;
+  overflow:hidden;text-overflow:ellipsis;min-width:0}
+.ccount{margin-left:auto;background:var(--chip-bg);border:1px solid var(--chip-line);
+  border-radius:9px;font-size:11px;font-weight:800;color:var(--muted);padding:1px 7px;flex:0 0 auto}
+.cmeta{padding:0 12px 9px;background:var(--surface);border-bottom:1px solid var(--line);
+  font-size:10.5px;color:var(--muted);font-weight:600;flex:0 0 auto;line-height:1.4}
+/* this line used to be nowrap+ellipsis, which at 1280 rendered "longest untouched 38
+   days · flagged pa…" — it truncated away the threshold, the one number the line
+   exists to state, and an ellipsis check passes on it happily. it wraps instead. */
+.clist{overflow-y:auto;padding:9px;display:flex;flex-direction:column;gap:8px;flex:1 1 auto}
+.cempty{padding:16px 12px;font-size:12px;color:var(--muted);text-align:center}
+
+/* flex:0 0 auto is the whole ballgame. the list is a bounded flex column, so without
+   it eighteen cards SHRINK to fit instead of scrolling: a two-line title loses its
+   second line and the entire meta row — age, priority word, stale flag — disappears,
+   silently, with no overflow anywhere for a geometry check to catch. a card is sized
+   by what it says. */
+.card{background:var(--surface);border:1px solid var(--line);border-radius:10px;
+  padding:9px 10px 8px 11px;cursor:pointer;position:relative;overflow:hidden;
+  flex:0 0 auto;box-shadow:0 1px 1px rgba(13,59,46,.03)}
+.card:hover{border-color:#bcd6c8;box-shadow:0 1px 3px rgba(13,59,46,.09)}
+.card.sel{border-color:var(--accent);box-shadow:0 0 0 2px rgba(53,199,127,.22)}
+/* priority reads as a stripe so it does not eat a whole line on every card — but the
+   word is printed in the meta line too, because a colour on its own is not a label. */
+.card:before{content:"";position:absolute;left:0;top:0;bottom:0;width:3px;background:var(--chip-line)}
+.card.pHigh:before{background:#d9603c}
+.card.pMedium:before{background:var(--warn-line)}
+.card.pLow:before{background:#b9c7c0}
+.ct{font-size:12.5px;font-weight:800;color:var(--forest-deep);line-height:1.3;
+  display:flex;gap:8px;align-items:flex-start}
+.ct span{flex:1;min-width:0}
+.own{flex:0 0 auto;background:var(--chip-bg);border:1px solid var(--chip-line);border-radius:7px;
+  font-size:10.5px;font-weight:800;color:var(--muted);padding:1px 6px;white-space:nowrap;
+  max-width:78px;overflow:hidden;text-overflow:ellipsis}
+.own.none{background:var(--crit-bg);border-color:var(--crit-line);color:var(--crit-ink)}
+.cmeta2{margin-top:5px;font-size:10.5px;color:var(--muted);font-weight:600;
+  display:flex;flex-wrap:wrap;gap:0 7px;align-items:center}
+.cmeta2 .dot{opacity:.5}
+.flag{border-radius:7px;font-size:10px;font-weight:800;padding:1px 6px;letter-spacing:.02em;
+  border:1px solid;white-space:nowrap}
+.flag.stale{background:var(--warn-bg);border-color:var(--warn-line);color:var(--warn-ink)}
+.flag.noest{background:var(--chip-bg);border-color:var(--chip-line);color:var(--muted)}
+.flag.ship{background:#e7f6ee;border-color:#bfe0cd;color:var(--ok-ink)}
+
+/* ── the drawer ────────────────────────────────────────── */
+.scrim{position:fixed;inset:0;background:rgba(7,42,32,.28);opacity:0;pointer-events:none;
+  transition:opacity .14s}
+.scrim.open{opacity:1;pointer-events:auto}
+.draw{position:fixed;top:0;right:0;bottom:0;width:392px;max-width:94vw;background:var(--surface);
+  border-left:1px solid var(--line);box-shadow:-6px 0 22px rgba(7,42,32,.13);
+  transform:translateX(100%);transition:transform .16s ease-out;display:flex;flex-direction:column;z-index:5}
+.draw.open{transform:none}
+.dh{padding:15px 17px 12px;border-bottom:1px solid var(--line);display:flex;gap:10px;align-items:flex-start}
+.dh h3{margin:0 0 4px;font-size:15.5px;line-height:1.3;color:var(--forest-deep)}
+.dh .x{margin-left:auto;flex:0 0 auto;border:1px solid var(--chip-line);background:var(--surface);
+  border-radius:8px;width:30px;height:30px;display:flex;align-items:center;justify-content:center;
+  cursor:pointer;color:var(--muted);font-size:15px;line-height:1}
+.dh .x:hover{border-color:#c8d8d1;color:var(--forest)}
+.dbody{padding:14px 17px;overflow-y:auto;flex:1}
+.dsec{margin-bottom:15px}
+.dsec h4{margin:0 0 6px;font-size:10.5px;letter-spacing:.08em;font-weight:800;color:var(--muted)}
+.drow{display:flex;gap:10px;padding:5px 0;font-size:12.5px;border-bottom:1px solid var(--hair)}
+.drow:last-child{border-bottom:0}
+.drow b{flex:0 0 108px;color:var(--muted);font-weight:700;font-size:11.5px;padding-top:1px}
+.drow span{flex:1;min-width:0;color:var(--ink);font-weight:600}
+.dnote{font-size:12px;color:var(--muted);line-height:1.5}
+.dnote.warn{color:var(--warn-ink)}
+.dmv{display:flex;gap:6px;flex-wrap:wrap}
+.dmv button{border:1px solid var(--chip-line);background:var(--surface);border-radius:8px;
+  min-height:30px;padding:5px 10px;font-size:11.5px;font-weight:700;color:var(--forest);cursor:pointer}
+.dmv button:hover{border-color:#c8d8d1;background:var(--rail-b)}
+.dmv button[disabled]{background:var(--mint);border-color:#bfe0cd;color:var(--forest-deep);cursor:default}
+
+/* ── the disclosure ────────────────────────────────────── */
+.foot{margin-top:14px;background:var(--surface);border:1px solid var(--line);border-radius:12px;
+  padding:14px 16px;font-size:12px;line-height:1.65;color:var(--muted)}
+</style>
+</head>
+<body>
+
+<div class="top">
+  <div class="brand">MATCHDAY<span>Clubhouse</span></div>
+  <nav class="tnav">
+    <a href="#">Home</a><a href="#">Finance</a><a href="#">Growth</a>
+    <a href="#" class="off">Membership</a>
+    <a href="#">Match Ops <em class="nb" style="font-style:normal">1</em></a>
+    <a href="#" class="on">Tech</a>
+  </nav>
+  <div class="who">Ryan Mancuso ▾</div>
+</div>
+
+<div class="wrap">
+  <aside class="rail">
+    <div class="rlab">ROADMAPS</div>
+    <button class="ritem on" id="rApp" data-b="app">
+      <svg viewBox="0 0 24 24"><rect x="6" y="2" width="12" height="20" rx="2.5"/><path d="M11 18.5h2"/></svg>
+      App Roadmap <em class="rb" id="bApp" style="font-style:normal"></em></button>
+    <button class="ritem" id="rCh" data-b="ch">
+      <svg viewBox="0 0 24 24"><path d="M3 10.5 12 4l9 6.5"/><path d="M5 10v10h14V10"/></svg>
+      Clubhouse Roadmap <em class="rb" id="bCh" style="font-style:normal"></em></button>
+  </aside>
+
+  <main class="main">
+    <div class="ph">
+      <div>
+        <h1 id="ptitle"></h1>
+        <p id="psub"></p>
+      </div>
+      <div class="r">
+        <button class="btn">Export</button>
+        <button class="btn pri">+ New card</button>
+      </div>
+    </div>
+
+    <div class="bar" id="bar"></div>
+
+    <div class="filt">
+      <input id="q" placeholder="Search titles…">
+      <select id="fo"></select>
+      <select id="fp">
+        <option value="">All priorities</option>
+        <option>High</option><option>Medium</option><option>Low</option>
+      </select>
+      <button class="tog" id="tStale"></button>
+      <button class="btn fclear hide" id="fclear">Clear filters</button>
+    </div>
+
+    <div class="cols" id="board"></div>
+    <div class="foot" id="foot"></div>
+  </main>
+</div>
+
+<div class="scrim" id="scrim"></div>
+<aside class="draw" id="draw">
+  <div class="dh">
+    <div style="min-width:0">
+      <h3 id="dt"></h3>
+      <div style="font-size:11.5px;color:var(--muted);font-weight:700" id="dwhere"></div>
+    </div>
+    <button class="x" id="dx">✕</button>
+  </div>
+  <div class="dbody" id="dbody"></div>
+</aside>
+
+<script>
+/* ═══════════════════════════════════════════════════════════════════
+   Roadmap — App and Clubhouse, one component, two boards.
+
+   Everything printed here is derived from the card list below. There is no
+   typed-in total anywhere on the page: the old "EST. HOURS · Total 0h" strip
+   was a sum over cards that mostly carry no estimate, which is how a page ends
+   up publishing a zero as if it were a measurement.
+   ═══════════════════════════════════════════════════════════════════ */
+
+/* ── the clock ──────────────────────────────────────────────────── */
+var DAY = 864e5;
+var TODAY = Date.UTC(2026, 7, 1);                 /* Sat Aug 1, 2026 */
+var MO = ["Jan","Feb","Mar","Apr","May","Jun","Jul","Aug","Sep","Oct","Nov","Dec"];
+function ago(d){ return TODAY - d*DAY }
+function dfull(t){ var x=new Date(t); return MO[x.getUTCMonth()]+" "+x.getUTCDate()+", "+x.getUTCFullYear() }
+
+/* ── the thresholds, stated once and printed in the footer ──────── */
+var STALE_ACTIVE = 30;    /* In plan / In progress: not moved in 30 days */
+var STALE_IDEA   = 120;   /* an idea is allowed to sit for longer than work in flight */
+var FRESH_WINDOW = 7;     /* "changed recently" window */
+
+var COLS = ["Ideas","In plan","In progress","Shipped"];
+
+/* ── deterministic ages ─────────────────────────────────────────────
+   the same card always gets the same age, in this browser and the next one.
+   Math.random would make the mockup argue with itself between screenshots. */
+function h32(s){ var h=2166136261>>>0;
+  for(var i=0;i<s.length;i++){ h^=s.charCodeAt(i); h=Math.imul(h,16777619)>>>0 } return h }
+function pick(s,lo,hi){ return lo + (h32(s)%(hi-lo+1)) }
+
+var EST_STEPS = [2,4,6,8,12,16,24,40];
+
+function mk(t,o,p,col,over){
+  var c = {t:t, o:o, p:p, col:col};
+  var s = t+"|"+col;
+  if(col===0){        c.made = pick(s+"m",  46, 268); c.moved = c.made }
+  else if(col===1){   c.made = pick(s+"m",  62, 210); c.moved = pick(s+"v", 3,  86) }
+  else if(col===2){   c.made = pick(s+"m",  64, 232); c.moved = pick(s+"v", 1,  52) }
+  else {              c.made = pick(s+"m",  96, 320); c.moved = pick(s+"v", 3, 128) }
+  /* a card cannot have moved before it existed — without this guard a hashed pair
+     produces a "moved 84d ago" on a card created 40 days ago, and nobody notices. */
+  if(c.moved > c.made) c.moved = c.made;
+  c.est = (h32(s+"e")%4===0) ? EST_STEPS[h32(s+"h")%EST_STEPS.length] : null;
+  if(over) for(var k in over) c[k] = over[k];
+  return c;
+}
+
+/* ── the two boards ─────────────────────────────────────────────── */
+var BOARDS = {
+  app: {
+    n: "App Roadmap",
+    sub: "What is being built for the player app, from idea to shipped.",
+    cards: [
+      mk("CRM & automated lifecycle marketing","Miguel","High",0),
+      mk("Advanced push notification segmentation","Miguel","High",0),
+      mk("City & field group chats","Miguel","High",0),
+      mk("Personalized home screen","Miguel","High",0),
+      mk("Favorite games","Miguel","High",0),
+      mk("Smart match recommendations","Miguel","High",0),
+      mk("Delayed account cancel","Ryan","Medium",0),
+      mk("Players can switch spots","Ryan","Medium",0),
+      mk("Waitlist auto-promote","Miguel","High",0),
+      mk("Referral credits","Ryan","Medium",0),
+      mk("Post-match player ratings","Miguel","Medium",0),
+      mk("Skill level self-rating","Miguel","Low",0),
+      mk("Apple Pay support","Ryan","High",0),
+      mk("SMS fallback for match reminders","Ryan","Medium",0),
+      mk("Guest checkout","Miguel","Low",0),
+      mk("Season passes","Ryan","Medium",0),
+      mk("Field photos on the match page","Miguel","Low",0),
+      mk("In-app chat mentions","Miguel","Medium",0,{o:null}),
+
+      mk("New user flow","Ryan","High",1,{d:"First-run experience from install to first match booked."}),
+      mk("Location tracking services","Ryan","High",1,{d:"Background location so the app can surface the nearest field."}),
+
+      mk("Fix Google Pay","Ryan","High",2,{moved:23, est:8,
+        d:"Google Pay checkout fails on a subset of Android devices at the confirm step."}),
+      mk("Auto-update field partners on cancels","Ryan","High",2,{moved:4, est:12,
+        d:"When a match cancels, notify the field partner automatically instead of by hand."}),
+
+      mk("Adjust P&D removal for cancelled matches","Miguel","High",3,{moved:24, est:6,
+        d:"Cancelled matches were still being charged pick-and-deliver. Shipped Jul 8."})
+    ]
+  },
+  ch: {
+    n: "Clubhouse Roadmap",
+    sub: "What is being built for Clubhouse itself — the internal tools MatchDay Ops runs on.",
+    cards: [
+      mk("Retool sunset","Ryan","High",0),
+      mk("QuickBooks sync","Ryan","High",0),
+      mk("Members & retention dashboard","Ryan","Medium",0),
+      mk("Uncovered-weekend nudge","Ryan","Medium",0),
+      mk("Repeated-failure alert (N=3)","Miguel","Medium",0),
+      mk("Promotion to recurring matches","Ryan","Medium",0),
+      mk("Veo naming cheat-sheet","Ryan","Low",0),
+      mk("Operating Snapshot fix","Ryan","High",0),
+      mk("Single source for field cost","Ryan","High",0),
+      mk("Goal status has two sources of truth","Ryan","Medium",0,{o:null}),
+      mk("Kanban: one implementation, not two","Miguel","Medium",0),
+
+      mk("Google Calendar integration (Phase A)","Michael","High",1,{moved:9,
+        d:"Read-only, events-only service account. Blocked on the service account handoff."}),
+      mk("Player Chats","Miguel","High",1,{est:24,
+        d:"The player-side counterpart to Match Chats, with an awaiting-reply queue."}),
+      mk("Nav restructure: Inventory + automation","Ryan","Medium",1,{moved:6,
+        d:"Inventory becomes its own rail item; Veo and Community move behind one automation button."}),
+
+      mk("Manager Pay redesign","Ryan","High",2,{moved:1, est:16,
+        d:"Calendar and payout run on one screen, moving out of Finance into Match Ops."}),
+      mk("Fields attendance correction","Ryan","High",2,{moved:12, est:4,
+        d:"The page labels sign-ups as attendance. is_absent is 0% populated — there is no attendance signal."}),
+
+      mk("Master Schedule mobile fix","Ryan","High",3,{moved:7,  est:6, d:"Shipped as a481a48."}),
+      mk("Reviews page","Ryan","Medium",3,{moved:19, est:12, d:"First-match review queue."}),
+      mk("Field Pipeline kanban","Miguel","Medium",3,{moved:46, est:16, d:"Drag-ordered field acquisition board."})
+    ]
+  }
+};
+
+/* ── derived facts about one card ───────────────────────────────── */
+function limitFor(col){ return col===0 ? STALE_IDEA : (col===3 ? null : STALE_ACTIVE) }
+function isStale(c){ var L = limitFor(c.col); return L !== null && c.moved > L }
+function isFresh(c){ return c.moved <= FRESH_WINDOW }
+/* an estimate is only worth chasing once the card is committed to — nobody should be
+   pricing eighteen ideas. so a missing estimate is flagged in In plan and In progress
+   and nowhere else. */
+function wantsEst(c){ return (c.col===1 || c.col===2) && c.est === null }
+
+/* ── state ──────────────────────────────────────────────────────── */
+var BK = "app", Q = "", OWN = "", PRI = "", STALE_ONLY = false, SEL = null;
+
+function B(){ return BOARDS[BK] }
+function esc(s){ return String(s).replace(/[&<>"]/g, function(m){
+  return {"&":"&amp;","<":"&lt;",">":"&gt;",'"':"&quot;"}[m] }) }
+
+function pass(c){
+  if(Q && c.t.toLowerCase().indexOf(Q.toLowerCase()) < 0) return false;
+  if(OWN === "__none") { if(c.o) return false }
+  else if(OWN && c.o !== OWN) return false;
+  if(PRI && c.p !== PRI) return false;
+  if(STALE_ONLY && !isStale(c)) return false;
+  return true;
+}
+function shown(){ return B().cards.filter(pass) }
+
+/* ── the state bar ──────────────────────────────────────────────────
+   the row this replaces read "Ideas 0h · In Plan 0h · In Progress 0h ·
+   Shipped 0h · Total 0h". Five zeros is not a measurement, it is a field
+   nobody fills in. What a roadmap is actually asked every week is: what is
+   moving, what is stuck, and how much of this is even sized. */
+function renderBar(){
+  var all = B().cards;
+  var wip   = all.filter(function(c){ return c.col===2 }).length;
+  var fresh = all.filter(isFresh).length;
+  var stale = all.filter(isStale).length;
+  var withE = all.filter(function(c){ return c.est !== null });
+  var hrs   = withE.reduce(function(s,c){ return s+c.est }, 0);
+  var noE   = all.length - withE.length;
+
+  document.getElementById("bar").innerHTML =
+    '<div class="st"><b>'+all.length+'</b><u>cards on this board</u></div>'+
+    '<div class="st"><b>'+wip+'</b><u>in progress</u></div>'+
+    '<div class="st"><b>'+fresh+'</b><u>changed in '+FRESH_WINDOW+' days</u></div>'+
+    '<div class="st"><b class="'+(stale?"warn":"")+'">'+stale+'</b>'+
+      /* the link is only offered when it would do something. with the stuck filter
+         already on it would be a control that changes nothing, sitting under the
+         number it supposedly acts on. */
+      ((stale && !STALE_ONLY)
+        ? '<button class="lk" id="jstale">sitting too long — show only these</button>'
+        : '<u>sitting too long'+(STALE_ONLY&&stale?" — showing these":"")+'</u>')+'</div>'+
+    /* the honest version of the old total: the figure, what it covers, and what it
+       does not. a total of 0h across 23 cards told you nothing; a total across the
+       six that carry one, said out loud, tells you to go size the other seventeen. */
+    '<div class="st est"><b>'+hrs+'h</b>'+
+      '<u>estimated across the '+withE.length+' card'+(withE.length===1?"":"s")+
+      ' that carry an estimate · '+noE+' carry none, so this is not the board’s total</u></div>';
+
+  var j = document.getElementById("jstale");
+  if(j) j.onclick = function(){ STALE_ONLY = true; render() };
+}
+
+/* ── a card ─────────────────────────────────────────────────────── */
+function cardHTML(c, i){
+  var st = isStale(c), L = limitFor(c.col);
+  var bits = [];
+  bits.push(esc(c.p));
+  /* an idea card carries no age at all. eighteen ages down one column is eighteen
+     numbers nobody acts on — the age of an idea only matters in aggregate, which the
+     column line above states once ("oldest has sat 261 days"), and per-card when you
+     actually open one, which the drawer states in full. */
+  if(c.col === 3) bits.push("shipped "+dfull(ago(c.moved)));
+  else if(c.col !== 0) bits.push("moved "+(c.moved===0?"today":c.moved+"d ago"));
+  if(c.est !== null) bits.push(c.est+"h");
+
+  return '<div class="card p'+c.p+(SEL===c.k?" sel":"")+'" data-k="'+c.k+'">'+
+    '<div class="ct"><span>'+esc(c.t)+'</span>'+
+      '<em class="own'+(c.o?"":" none")+'" style="font-style:normal">'+
+        (c.o ? esc(c.o) : "No owner")+'</em></div>'+
+    '<div class="cmeta2">'+
+      bits.map(function(b,ix){ return (ix?'<i class="dot" style="font-style:normal">·</i>':'')+
+        '<i style="font-style:normal">'+b+'</i>' }).join("")+
+      /* no flag on an idea. the chip used to read "246d in ideas" on a card whose
+         meta line already read "idea · 246d old" — the same number, twice, on one
+         line — and it lit up 13 of 18 cards, which is a column of warning colour
+         that tells you nothing you can act on. an idea sitting is what an idea does.
+         the count still stands in the bar, the stuck filter still finds them, and
+         the drawer still says why. the chip is only where the delay is a problem —
+         and it carries no number of its own either: "moved 38d ago · stuck 38d" was
+         the same duplication in a different column. it says what is wrong; the meta
+         beside it already says how long, and the drawer says against what limit. */
+      (st && c.col !== 0
+        ? '<em class="flag stale" style="font-style:normal">stuck</em>' : '')+
+      (wantsEst(c) ? '<em class="flag noest" style="font-style:normal">no estimate</em>' : '')+
+    '</div></div>';
+}
+
+/* ── the board ──────────────────────────────────────────────────── */
+function renderBoard(){
+  var vis = shown(), all = B().cards, h = "";
+  COLS.forEach(function(name, ci){
+    var cs  = vis.filter(function(c){ return c.col===ci });
+    var tot = all.filter(function(c){ return c.col===ci });
+    /* column meta says the one thing that column is asked about. an empty column
+       has nothing to say, so it says nothing rather than "0 days". */
+    var meta = "";
+    if(tot.length){
+      if(ci === 0){
+        var old = Math.max.apply(null, tot.map(function(c){ return c.made }));
+        meta = "oldest has sat "+old+" days · flagged past "+STALE_IDEA;
+      } else if(ci === 3){
+        var last = Math.min.apply(null, tot.map(function(c){ return c.moved }));
+        meta = "most recent shipped "+dfull(ago(last));
+      } else {
+        var slow = Math.max.apply(null, tot.map(function(c){ return c.moved }));
+        meta = "longest untouched "+slow+" days · flagged past "+STALE_ACTIVE;
+      }
+    }
+    h += '<div class="col" data-c="'+ci+'">'+
+      '<div class="chd"><div class="cnum">'+(ci+1)+'</div>'+
+        '<div class="cnm">'+name+'</div>'+
+        '<div class="ccount">'+cs.length+(cs.length!==tot.length ? " of "+tot.length : "")+'</div></div>'+
+      (meta ? '<div class="cmeta">'+meta+'</div>' : '')+
+      '<div class="clist">'+
+        (cs.length ? cs.map(cardHTML).join("")
+                   : '<div class="cempty">'+(tot.length
+                       ? "No card here matches the filters."
+                       : "Nothing in "+name.toLowerCase()+".")+'</div>')+
+      '</div></div>';
+  });
+  document.getElementById("board").innerHTML = h;
+  document.querySelectorAll("#board .card").forEach(function(el){
+    el.onclick = function(){ openCard(el.dataset.k) };
+  });
+}
+
+/* ── the drawer ─────────────────────────────────────────────────────
+   the old card showed a title, an owner and a priority, so the only way to
+   learn anything else about a card was to ask the person who wrote it. */
+function openCard(k){
+  var c = B().cards.filter(function(x){ return x.k === k })[0];
+  if(!c) return;
+  SEL = k;
+  document.getElementById("dt").textContent = c.t;
+  document.getElementById("dwhere").textContent = B().n + " · " + COLS[c.col];
+
+  var st = isStale(c), L = limitFor(c.col);
+  var rows =
+    '<div class="drow"><b>Owner</b><span>'+(c.o ? esc(c.o) :
+      '<span style="color:var(--crit-ink)">Nobody — this card cannot be worked</span>')+'</span></div>'+
+    '<div class="drow"><b>Priority</b><span>'+esc(c.p)+'</span></div>'+
+    '<div class="drow"><b>Estimate</b><span>'+(c.est !== null ? c.est+" hours"
+      : '<span style="color:var(--muted)">None typed in'+
+        (wantsEst(c) ? " — a card in "+COLS[c.col].toLowerCase()+" should carry one" : "")+'</span>')+'</span></div>'+
+    '<div class="drow"><b>Created</b><span>'+dfull(ago(c.made))+' · '+c.made+' days ago</span></div>'+
+    '<div class="drow"><b>'+(c.col===3?"Shipped":"Last moved")+'</b><span>'+
+      dfull(ago(c.moved))+' · '+(c.moved===0?"today":c.moved+" days ago")+'</span></div>';
+
+  var note = c.col === 3
+    ? "Shipped cards are never flagged — there is nothing left to chase."
+    : (st ? "Flagged: nothing has happened to this card in "+c.moved+
+            " days, and a card in "+COLS[c.col].toLowerCase()+" is flagged past "+L+"."
+          : "Not flagged: a card in "+COLS[c.col].toLowerCase()+" is flagged once it goes "+
+            L+" days without moving, and this one is at "+c.moved+".");
+
+  document.getElementById("dbody").innerHTML =
+    '<div class="dsec"><h4>WHAT THIS IS</h4><div class="dnote">'+
+      (c.d ? esc(c.d) : "No description written. "+
+        "Every card in this column that nobody wrote a line for has to be explained out loud in standup instead.")+
+    '</div></div>'+
+    '<div class="dsec"><h4>THE CARD</h4>'+rows+'</div>'+
+    '<div class="dsec"><h4>WHY IT IS '+(st?"FLAGGED":"NOT FLAGGED")+'</h4>'+
+      '<div class="dnote'+(st?" warn":"")+'">'+note+'</div></div>'+
+    '<div class="dsec"><h4>MOVE IT</h4><div class="dmv">'+
+      COLS.map(function(n,i){ return '<button data-mv="'+i+'"'+(i===c.col?" disabled":"")+'>'+
+        (i===c.col ? "Here now" : n)+'</button>' }).join("")+
+      '</div><div class="dnote" style="margin-top:7px">Moving a card resets its stale clock. '+
+      'Dragging it between columns does the same thing.</div></div>';
+
+  document.querySelectorAll("#dbody [data-mv]").forEach(function(b){
+    b.onclick = function(){
+      var to = +b.dataset.mv;
+      c.col = to; c.moved = 0;
+      if(to === 0) c.made = Math.max(c.made, 0);
+      render(); openCard(k);
+    };
+  });
+
+  document.getElementById("draw").classList.add("open");
+  document.getElementById("scrim").classList.add("open");
+  renderBoard();
+}
+function closeCard(){
+  SEL = null;
+  document.getElementById("draw").classList.remove("open");
+  document.getElementById("scrim").classList.remove("open");
+  renderBoard();
+}
+
+/* ── the disclosure ─────────────────────────────────────────────────
+   every threshold, every window and every thing this page is not counting,
+   written as a number next to the numbers it produced. */
+function renderFoot(){
+  var all = B().cards;
+  var withE = all.filter(function(c){ return c.est !== null });
+  var noE   = all.length - withE.length;
+  var hrs   = withE.reduce(function(s,c){ return s+c.est }, 0);
+  var byP   = {}; all.forEach(function(c){ byP[c.p] = (byP[c.p]||0)+1 });
+  var topP  = Object.keys(byP).sort(function(a,b){ return byP[b]-byP[a] })[0];
+  var noOwn = all.filter(function(c){ return !c.o }).length;
+  var noDesc= all.filter(function(c){ return !c.d }).length;
+  var stale = all.filter(isStale).length;
+  var staleI= all.filter(function(c){ return isStale(c) && c.col===0 }).length;
+
+  document.getElementById("foot").textContent =
+    "This board holds "+all.length+" cards; each column header counts the cards in it, and shows "+
+    "\"N of M\" when a filter is hiding some. A card is flagged when it has not moved for longer "+
+    "than its column allows: "+STALE_ACTIVE+" days for In plan and In progress, "+STALE_IDEA+
+    " days for Ideas, and never for Shipped — "+stale+" cards are flagged right now, of which "+
+    staleI+" are ideas. An idea card prints no age and no flag: eighteen ages down one column "+
+    "is eighteen numbers nobody acts on. The age of the oldest idea is on the column line above, "+
+    "any single idea's age is in its drawer, and \"only what is stuck\" still finds them. Changed in "+
+    FRESH_WINDOW+" days means the card was created or moved to another column inside that window; "+
+    "ideas do not change column, so for an idea it means it was written down that recently. "+
+    "Estimates are typed by hand and most cards do not carry one: "+withE.length+" of "+all.length+
+    " do, totalling "+hrs+" hours, and the other "+noE+" have none — which is why this page does not "+
+    "print a total for the board, because a total across "+withE.length+" of "+all.length+
+    " cards is not the board's total. Priority is typed by hand too, and "+byP[topP]+" of the "+
+    all.length+" cards are marked "+topP+", so priority is not currently separating one card from "+
+    "another. "+noOwn+" card"+(noOwn===1?" has":"s have")+" no owner and "+noDesc+" have no "+
+    "description written, so those cannot be picked up without asking somebody. Ages are counted in "+
+    "whole days from today, "+dfull(TODAY)+". Nothing on this page writes anywhere except moving a "+
+    "card between columns, which resets that card's clock.";
+}
+
+/* ── chrome ─────────────────────────────────────────────────────── */
+function renderOwners(){
+  var os = {}; B().cards.forEach(function(c){ if(c.o) os[c.o] = 1 });
+  var names = Object.keys(os).sort();
+  var anyNone = B().cards.some(function(c){ return !c.o });
+  var sel = document.getElementById("fo");
+  sel.innerHTML = '<option value="">All owners</option>'+
+    names.map(function(n){ return '<option'+(OWN===n?" selected":"")+'>'+esc(n)+'</option>' }).join("")+
+    (anyNone ? '<option value="__none"'+(OWN==="__none"?" selected":"")+'>No owner</option>' : "");
+}
+
+function render(){
+  var b = B();
+  document.getElementById("ptitle").textContent = b.n;
+  document.getElementById("psub").textContent  = b.sub;
+  /* this badge used to hold the in-progress count, which was unreadable: a bare "2"
+     beside a board of 23 cards is read by everyone as "this board has 2 things in it".
+     a number in a nav list means how many are in there, so that is what it now is —
+     and in-progress keeps its one home, the state bar, instead of appearing twice
+     wearing two meanings. */
+  document.getElementById("bApp").textContent = BOARDS.app.cards.length;
+  document.getElementById("bCh").textContent  = BOARDS.ch.cards.length;
+  document.getElementById("rApp").classList.toggle("on", BK==="app");
+  document.getElementById("rCh").classList.toggle("on", BK==="ch");
+
+  renderBar();
+  var nStale = b.cards.filter(isStale).length;
+  var t = document.getElementById("tStale");
+  t.classList.toggle("on", STALE_ONLY);
+  t.innerHTML = (STALE_ONLY ? "Showing only what is stuck" : "Only what is stuck")+
+    '<em class="n" style="font-style:normal">'+nStale+'</em>';
+  document.getElementById("fclear").classList.toggle("hide", !(Q || OWN || PRI || STALE_ONLY));
+  renderBoard();
+  renderFoot();
+}
+
+/* keys so a card can be addressed by the harness and the drawer */
+Object.keys(BOARDS).forEach(function(bk){
+  BOARDS[bk].cards.forEach(function(c,i){ c.k = bk+"-"+i });
+});
+
+document.getElementById("rApp").onclick = function(){ BK="app"; SEL=null; closeCard(); renderOwners(); render() };
+document.getElementById("rCh").onclick  = function(){ BK="ch";  SEL=null; closeCard(); renderOwners(); render() };
+document.getElementById("q").oninput    = function(e){ Q = e.target.value; render() };
+document.getElementById("fo").onchange  = function(e){ OWN = e.target.value; render() };
+document.getElementById("fp").onchange  = function(e){ PRI = e.target.value; render() };
+document.getElementById("tStale").onclick= function(){ STALE_ONLY = !STALE_ONLY; render() };
+document.getElementById("fclear").onclick= function(){
+  Q=""; OWN=""; PRI=""; STALE_ONLY=false;
+  document.getElementById("q").value=""; renderOwners();
+  document.getElementById("fp").value=""; render();
+};
+document.getElementById("dx").onclick    = closeCard;
+document.getElementById("scrim").onclick  = closeCard;
+
+/* harness hooks */
+window.setBoard = function(k){ BK=k; SEL=null; closeCard(); renderOwners(); render() };
+window.setStale = function(b){ STALE_ONLY=b; render() };
+window.setQ     = function(s){ Q=s; document.getElementById("q").value=s; render() };
+window.setOwner = function(o){ OWN=o; renderOwners(); render() };
+window.setPri   = function(p){ PRI=p; document.getElementById("fp").value=p; render() };
+window.openCard = openCard;
+window.closeCard= closeCard;
+window.BOARDS   = BOARDS;
+window.COLS     = COLS;
+window.isStale  = isStale;
+window.limitFor = limitFor;
+window.B        = B;
+
+renderOwners();
+render();
+</script>
+</body>
+</html>
