@@ -8,7 +8,6 @@ import CitiesCancellationsLens from "@/components/CitiesCancellationsLens";
 import CitiesExecHero from "@/components/CitiesExecHero";
 import CitiesLensNav, { type CityLens } from "@/components/CitiesLensNav";
 import CitiesMembershipLens from "@/components/CitiesMembershipLens";
-import CitiesReviewsLens from "@/components/CitiesReviewsLens";
 import CitiesUsersLens from "@/components/CitiesUsersLens";
 import { CityHealthPill } from "@/components/StatusPill";
 import MiniBarSparkline from "@/components/MiniBarSparkline";
@@ -40,7 +39,6 @@ const VALID_LENSES: CityLens[] = [
   "users",
   "membership",
   "cancellations",
-  "reviews",
 ];
 
 function CitiesIndexContent() {
@@ -59,7 +57,7 @@ function CitiesIndexContent() {
   const setLens = useCallback(
     (next: CityLens) => {
       // Build a fresh URLSearchParams instead of inheriting the
-      // current one. Sub-lenses (Users, Reviews, Cancellations)
+      // current one. Sub-lenses (Users, Cancellations)
       // write their own params (sub, window, from, to,
       // growth_metric, field_period, ...) and those don't belong
       // on a different top-level tab. Preserving them caused two
@@ -95,7 +93,6 @@ function CitiesIndexContent() {
       {lens === "users" && <CitiesUsersLens />}
       {lens === "membership" && <CitiesMembershipLens />}
       {lens === "cancellations" && <CitiesCancellationsLens />}
-      {lens === "reviews" && <CitiesReviewsLens />}
     </>
   );
 }

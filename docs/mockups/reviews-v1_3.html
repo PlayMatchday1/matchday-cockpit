@@ -1,0 +1,1136 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+<meta charset="utf-8">
+<meta name="viewport" content="width=device-width,initial-scale=1">
+<title>Reviews — Match Ops — MatchDay Clubhouse</title>
+<style>
+:root{
+  --forest:#0d3b2e; --forest-deep:#072a20; --accent:#35c77f; --logo:#2cdb87;
+  --mint:#e0f2e7; --amount:#e2502b; --ink:#12241d; --muted:#6d7b74;
+  --warn-bg:#fdf1d0; --warn-ink:#8a6300; --warn-line:#e3c369;
+  --crit-bg:#fdeae4; --crit-ink:#a8391a; --crit-line:#f0bda9;
+  --ok-ink:#12704a;
+  --rail-a:#fafbfa; --rail-b:#f6f9f7; --board-bg:#f8faf9;
+  --chip-bg:#eef3f0; --chip-line:#e2eae5;
+  --line:#e6ebe8; --hair:#eff3f1; --surface:#ffffff;
+  --canvas:#f4efe4;
+}
+*{box-sizing:border-box}
+html,body{margin:0;padding:0;height:100%}
+body{font:14px/1.45 -apple-system,BlinkMacSystemFont,"Segoe UI",Inter,Helvetica,Arial,sans-serif;
+  color:var(--ink);background:var(--canvas);
+  background-image:radial-gradient(circle at 1px 1px, rgba(13,59,46,.055) 1px, transparent 0);
+  background-size:22px 22px;-webkit-font-smoothing:antialiased}
+
+/* ── top nav ─────────────────────────────────────────── */
+.top{height:56px;background:var(--forest);display:flex;align-items:center;
+  padding:0 22px;gap:26px;position:sticky;top:0;z-index:40}
+.brand{font-weight:800;letter-spacing:.3px;color:var(--logo);font-size:17px;font-style:italic}
+.brand span{color:#fff;font-weight:600;font-size:14px;font-style:italic;margin-left:5px}
+.tnav{display:flex;gap:4px;margin-left:auto;margin-right:auto;align-items:center}
+.tnav a{color:#dfeee7;text-decoration:none;font-size:13.5px;font-weight:600;
+  padding:7px 13px;border-radius:999px}
+.tnav a.dim{color:#628a7b}
+.tnav a.on{background:var(--accent);color:#06281d}
+.who{color:#cfe6db;font-size:13px}
+
+/* ── ops rail (Chats model: flush, full height, icons) ── */
+.shell{display:flex;min-height:calc(100vh - 56px)}
+.rail{flex:0 0 232px;background:var(--rail-a);border-right:1px solid var(--line);
+  display:flex;flex-direction:column;padding:16px 0 0}
+.rail.min{flex-basis:62px}
+.rlab{font-size:10.5px;letter-spacing:.09em;color:var(--muted);font-weight:700;
+  padding:10px 20px 6px}
+.rail.min .rlab{visibility:hidden;height:20px;padding:0}
+.ri{display:flex;align-items:center;gap:11px;padding:0 12px;margin:1px 8px;height:44px;
+  border-radius:9px;color:var(--forest);font-weight:600;font-size:14px;cursor:pointer;
+  position:relative;text-decoration:none}
+.ri:hover{background:var(--chip-bg)}
+.ri.on{background:var(--mint);color:var(--forest-deep)}
+.ri.on::before{content:"";position:absolute;left:-8px;top:8px;bottom:8px;width:3px;
+  border-radius:0 3px 3px 0;background:var(--accent)}
+.ri svg{flex:0 0 17px;width:17px;height:17px;stroke:currentColor;fill:none;stroke-width:1.7}
+.rail.min .ri span.t{display:none}
+.rail.min .ri{justify-content:center;padding:0}
+.rbadge{margin-left:auto;background:var(--chip-bg);border:1px solid var(--chip-line);
+  color:var(--muted);font-size:11px;font-weight:700;border-radius:999px;padding:1px 7px}
+.rail.min .rbadge{display:none}
+.rfoot{margin-top:auto;border-top:1px solid var(--line);padding:8px}
+.rcol{display:flex;align-items:center;gap:9px;height:40px;padding:0 12px;border-radius:9px;
+  color:var(--muted);font-size:13px;font-weight:600;cursor:pointer;background:none;border:0;width:100%}
+.rcol:hover{background:var(--chip-bg)}
+.rail.min .rcol span{display:none}
+.rail.min .rcol{justify-content:center;padding:0}
+
+/* ── page ────────────────────────────────────────────── */
+.main{flex:1;min-width:0;padding:26px 30px 60px}
+.phead{display:flex;align-items:flex-start;gap:16px;margin-bottom:16px}
+h1{font-size:30px;margin:0 0 3px;letter-spacing:-.4px;color:var(--forest-deep)}
+.sub{color:var(--muted);font-size:14px;margin:0}
+.pright{margin-left:auto;display:flex;align-items:center;gap:9px;flex-wrap:wrap;justify-content:flex-end}
+.fresh{background:var(--surface);border:1px solid var(--line);border-radius:999px;
+  padding:5px 11px;font-size:11px;color:var(--muted);font-weight:600;letter-spacing:.02em}
+.btn{border:1px solid var(--line);background:var(--surface);border-radius:9px;
+  height:36px;padding:0 14px;font-size:13px;font-weight:700;color:var(--forest);cursor:pointer;
+  display:inline-flex;align-items:center;gap:7px}
+.btn:hover{background:var(--chip-bg)}
+.btn.pri{background:var(--accent);border-color:var(--accent);color:#06281d}
+.btn.pri:hover{background:#2fb974}
+.btn svg{width:15px;height:15px;stroke:currentColor;fill:none;stroke-width:1.8}
+
+/* ── filters ─────────────────────────────────────────── */
+.filters{background:var(--surface);border:1px solid var(--line);border-radius:12px;
+  padding:12px 14px;display:flex;gap:10px;align-items:flex-end;flex-wrap:wrap;margin-bottom:14px}
+.fg{display:flex;flex-direction:column;gap:5px}
+.fg label{font-size:10.5px;letter-spacing:.08em;color:var(--muted);font-weight:700}
+.fg select{height:36px;border:1px solid var(--line);border-radius:9px;background:var(--rail-b);
+  padding:0 30px 0 11px;font:600 13.5px/1 inherit;color:var(--ink);cursor:pointer;
+  appearance:none;
+  background-image:url("data:image/svg+xml;utf8,<svg xmlns='http://www.w3.org/2000/svg' width='12' height='12' viewBox='0 0 12 12'><path d='M3 4.5 6 7.5 9 4.5' fill='none' stroke='%236d7b74' stroke-width='1.6' stroke-linecap='round'/></svg>");
+  background-repeat:no-repeat;background-position:right 10px center}
+.fg select#venue{min-width:200px}
+.scope{margin-left:auto;font-size:12px;color:var(--muted);align-self:center}
+.scope b{color:var(--forest);font-weight:700}
+.clearf{display:none}
+.clearf.on{display:inline-flex}
+
+/* ── stat tiles ──────────────────────────────────────── */
+.tiles{display:grid;grid-template-columns:repeat(4,1fr);gap:12px;margin-bottom:12px}
+.tile{background:var(--surface);border:1px solid var(--line);border-radius:12px;padding:14px 16px}
+.tile .tl{font-size:10.5px;letter-spacing:.08em;color:var(--muted);font-weight:700;
+  display:flex;align-items:center;gap:6px}
+.tile .tv{font-size:30px;font-weight:800;letter-spacing:-1px;margin:6px 0 2px;line-height:1}
+.tile .tv.good{color:var(--ok-ink)}
+.tile .tv.bad{color:var(--crit-ink)}
+.tile .tn{font-size:11.5px;color:var(--muted)}
+.tile.click{cursor:pointer}
+.tile.click:hover{border-color:var(--chip-line);background:var(--rail-b)}
+.tile.sel{border-color:var(--accent);box-shadow:0 0 0 2px rgba(53,199,127,.18)}
+
+/* ── trailing strip ──────────────────────────────────── */
+.strip{background:var(--surface);border:1px solid var(--line);border-radius:12px;
+  padding:12px 16px;margin-bottom:16px;display:flex;gap:22px;align-items:center;flex-wrap:wrap}
+.strip .sl{min-width:186px}
+.strip .sk{font-size:10.5px;letter-spacing:.08em;color:var(--muted);font-weight:700}
+.strip .sv{font-size:21px;font-weight:800;letter-spacing:-.5px;margin-top:3px}
+.strip .sv small{font-size:12px;font-weight:600;color:var(--muted);letter-spacing:0;margin-left:6px}
+.strip .sn{font-size:11.5px;color:var(--muted);margin-top:2px}
+.spark{display:flex;flex-direction:column;gap:3px}
+.spark .sh{font-size:10.5px;letter-spacing:.06em;color:var(--muted);font-weight:700;
+  display:flex;justify-content:space-between;gap:14px}
+.spark .sh em{font-style:normal;color:#9aa8a1;font-weight:600;letter-spacing:0}
+.spark svg{display:block}
+.sfoot{font-size:11px;color:var(--muted);flex-basis:100%;border-top:1px dashed var(--hair);
+  padding-top:8px;margin-top:2px}
+.tip{position:fixed;pointer-events:none;background:#0f2c22;color:#fff;font-size:11.5px;
+  padding:5px 8px;border-radius:6px;opacity:0;transition:opacity .1s;z-index:60;white-space:nowrap}
+.tip.on{opacity:1}
+
+/* ── panels ──────────────────────────────────────────── */
+.grid2{display:grid;grid-template-columns:1.35fr 1fr;gap:14px;align-items:start}
+.panel{background:var(--surface);border:1px solid var(--line);border-radius:12px;overflow:hidden}
+.ph{padding:12px 16px;border-bottom:1px solid var(--hair);display:flex;align-items:center;gap:9px}
+.ph h2{font-size:12px;letter-spacing:.07em;margin:0;color:var(--muted);font-weight:700}
+.ph .n{background:var(--chip-bg);border:1px solid var(--chip-line);border-radius:999px;
+  font-size:11px;font-weight:700;padding:1px 8px;color:var(--forest)}
+.ph .hint{margin-left:auto;font-size:11px;color:#9aa8a1}
+
+/* manager table */
+table{width:100%;border-collapse:collapse}
+th{font-size:10.5px;letter-spacing:.07em;color:var(--muted);font-weight:700;text-align:left;
+  padding:9px 16px;border-bottom:1px solid var(--hair);background:var(--rail-b)}
+th.r,td.r{text-align:right}
+td{padding:10px 16px;border-bottom:1px solid var(--hair);font-size:13.5px}
+tr:last-child td{border-bottom:0}
+tbody tr:hover{background:var(--rail-b)}
+.rk{color:var(--muted);font-weight:700;font-size:12px;width:26px}
+.mname{font-weight:700;color:var(--forest-deep)}
+.mcity{display:inline-flex;align-items:center;gap:6px;color:var(--muted);font-size:12px}
+.dot{width:8px;height:8px;border-radius:50%;flex:0 0 8px}
+.star{font-weight:800;letter-spacing:-.2px}
+.star.hi{color:var(--ok-ink)}
+.star.lo{color:var(--crit-ink)}
+.bar{height:6px;border-radius:3px;background:var(--hair);position:relative;min-width:64px}
+.bar i{position:absolute;left:0;top:0;bottom:0;border-radius:3px;background:var(--accent)}
+.bar i.lo{background:#e08a68}
+.subrow td{background:var(--rail-b);font-size:11.5px;color:var(--muted);
+  letter-spacing:.06em;font-weight:700;padding:7px 16px}
+.unrank td{color:var(--muted)}
+.unrank .mname{color:var(--muted);font-weight:600}
+.why{font-size:11.5px;color:var(--muted)}
+.attrib{font-style:italic}
+
+/* lists */
+.li{padding:11px 16px;border-bottom:1px solid var(--hair);display:flex;gap:12px;align-items:flex-start}
+.li:last-child{border-bottom:0}
+.li .lname{font-weight:700;font-size:13.5px;color:var(--forest-deep)}
+.li .lmeta{font-size:11.5px;color:var(--muted);margin-top:2px}
+.li .lright{margin-left:auto;text-align:right;white-space:nowrap}
+.li .lr{font-weight:800;font-size:13.5px}
+.li .lr.hi{color:var(--ok-ink)}
+.li .lr.lo{color:var(--crit-ink)}
+.li .lc{font-size:11px;color:var(--muted)}
+.empty{padding:12px 16px;font-size:13px;color:var(--muted);display:flex;align-items:center;gap:8px}
+.empty svg{width:15px;height:15px;stroke:var(--accent);fill:none;stroke-width:2}
+.panel.attn{border-color:var(--crit-line)}
+.panel.attn .ph{background:var(--crit-bg)}
+.panel.attn .ph h2{color:var(--crit-ink)}
+.panel.attn .ph .n{background:#fff;border-color:var(--crit-line);color:var(--crit-ink)}
+.panel.attn.clean{border-color:var(--line)}
+.panel.attn.clean .ph{background:transparent}
+.panel.attn.clean .ph h2{color:var(--muted)}
+.panel.attn.clean .ph .n{display:none}
+.stack{display:flex;flex-direction:column;gap:14px}
+th .bnd{font-style:normal;font-weight:600;color:var(--muted);opacity:.75;font-size:9.5px;display:block;letter-spacing:.02em}
+#panelMgr.novenue thead{display:none}
+
+/* ── comments ────────────────────────────────────────── */
+.cpanel{margin-top:14px}
+.cph{padding:12px 16px;border-bottom:1px solid var(--hair);display:flex;align-items:center;
+  gap:10px;flex-wrap:wrap}
+.cph h2{font-size:12px;letter-spacing:.07em;margin:0;color:var(--muted);font-weight:700}
+.cph .n{background:var(--chip-bg);border:1px solid var(--chip-line);border-radius:999px;
+  font-size:11px;font-weight:700;padding:1px 8px;color:var(--forest)}
+.chint{font-size:11px;color:#9aa8a1}
+.cown{font-size:10.5px;font-weight:700;letter-spacing:.04em;color:var(--warn-ink);
+  background:var(--warn-bg);border:1px solid var(--warn-line);border-radius:999px;padding:3px 9px}
+.cwin{margin-left:auto;display:flex;align-items:center;gap:8px;flex-wrap:wrap}
+.seg{display:inline-flex;background:var(--chip-bg);border:1px solid var(--chip-line);
+  border-radius:9px;padding:2px}
+.seg button{border:0;background:none;font:700 12px/1 inherit;color:var(--muted);cursor:pointer;
+  padding:0 11px;height:32px;border-radius:7px;white-space:nowrap}
+.seg button.on{background:var(--surface);color:var(--forest-deep);box-shadow:0 1px 2px rgba(7,42,32,.10)}
+.crange{font-size:11.5px;color:var(--muted)}
+.crange b{color:var(--forest);font-weight:700}
+.cdecomp{padding:9px 16px;background:var(--rail-b);border-bottom:1px solid var(--hair);
+  font-size:11.5px;color:var(--muted);display:flex;align-items:center;gap:12px;flex-wrap:wrap}
+.cdecomp b{color:var(--forest);font-weight:700}
+.seg.sev{margin-left:auto;background:var(--surface);border-color:var(--line)}
+.seg.sev button{height:32px;font-size:11.5px;padding:0 10px}
+.seg.sev button.on{background:var(--forest);color:#fff;box-shadow:none}
+.seg.sev em{font-style:normal;font-weight:800;margin-left:5px;opacity:.65}
+/* the reply mark. a control you aim at, so ≥32px tall; the state is carried by
+   the WORD on the button, never by colour alone — "Reply due" / "Mark replied"
+   / "Replied" are three different strings, not three different greens. */
+.rstat{font-size:11.5px;font-weight:600;border-radius:999px;padding:3px 10px;
+  border:1px solid var(--chip-line);background:var(--chip-bg);color:var(--muted)}
+.rstat b{font-weight:800}
+.rstat.due{background:var(--warn-bg);border-color:var(--warn-line);color:var(--warn-ink)}
+.rstat.clear{background:var(--mint);border-color:#bfe4cf;color:var(--ok-ink)}
+.rbtn{display:inline-flex;align-items:center;gap:7px;height:32px;padding:0 10px;border-radius:8px;
+  border:1px solid var(--line);background:var(--surface);cursor:pointer;
+  font:700 11.5px/1 inherit;color:var(--muted);white-space:nowrap}
+.rbtn:hover{border-color:#c8d8d1;color:var(--forest)}
+.rbtn .box{box-sizing:border-box;width:14px;height:14px;flex:0 0 14px;position:relative;
+  border:1.5px solid #c3d2cb;border-radius:4px;background:var(--surface)}
+.rbtn.due{background:var(--warn-bg);border-color:var(--warn-line);color:var(--warn-ink)}
+.rbtn.due .box{border-color:#d3b25f;background:#fff}
+.rbtn.done{background:var(--mint);border-color:#bfe4cf;color:var(--ok-ink)}
+.rbtn.done .box{background:var(--ok-ink);border-color:var(--ok-ink)}
+.rbtn.done .box::after{content:"";position:absolute;left:4px;top:.5px;width:4px;height:8px;
+  border:solid #fff;border-width:0 2px 2px 0;transform:rotate(42deg)}
+.rwho{font-size:10.5px;color:var(--muted);margin-top:5px;line-height:1.35}
+.rwho.lv{color:var(--warn-ink)}
+.ctab{table-layout:fixed}
+/* column widths live here, not in inline th styles — an inline width outranks
+   every media query, which is exactly how a narrow-layout rule dies silently */
+.ctab th:nth-child(1){width:92px}  .ctab th:nth-child(2){width:58px}
+.ctab th:nth-child(4){width:172px} .ctab th:nth-child(5){width:190px}
+.ctab th:nth-child(6){width:118px} .ctab th:nth-child(7){width:150px}
+.ctab td{vertical-align:top;font-size:13px;padding:11px 16px}
+.ctab td:first-child,.ctab th:first-child{padding-right:6px}
+.cname{font-weight:700;color:var(--forest-deep);font-size:12.5px}
+.cmatch{font-weight:600;color:var(--ink);font-size:12.5px;line-height:1.35}
+.cmgr{font-weight:700;color:var(--forest-deep);font-size:12.5px}
+.cmgr.none{font-weight:600;font-style:italic;color:var(--muted)}
+.csub{font-size:11.5px;color:var(--muted);margin-top:2px}
+.ctime{font-family:ui-monospace,SFMono-Regular,Menlo,monospace;font-size:11.5px;color:var(--muted);
+  white-space:nowrap}
+.stars{font-weight:800;white-space:nowrap;font-size:13px}
+.stars i{font-style:normal;letter-spacing:-1px;margin-right:5px}
+.stars.s1,.stars.s2{color:var(--crit-ink)}
+.stars.s3{color:var(--warn-ink)}
+.stars.s4,.stars.s5{color:var(--ok-ink)}
+.ctext{max-width:560px;line-height:1.5}
+.ctext .none{color:#9aa8a1;font-style:italic}
+.tags{margin-top:6px;display:flex;gap:5px;flex-wrap:wrap}
+.tag{font-size:10px;font-weight:700;letter-spacing:.04em;border-radius:999px;padding:2px 8px;
+  border:1px solid var(--chip-line);background:var(--chip-bg);color:var(--muted)}
+.tag.pos{background:var(--mint);border-color:#bfe4cf;color:var(--ok-ink)}
+.tag.neg{background:var(--crit-bg);border-color:var(--crit-line);color:var(--crit-ink)}
+.tag.warn{background:var(--warn-bg);border-color:var(--warn-line);color:var(--warn-ink)}
+.tag.more{background:transparent;border-style:dashed;cursor:default}
+#panelC.noRows thead{display:none}
+@media(max-width:1400px){
+  /* the reply column costs width, so the narrow layout gives it back out of the
+     fixed columns rather than out of COMMENT — the comment is the thing you came
+     to read, and a squeezed comment cell is what stacks tags into a tower.      */
+  .ctab th:nth-child(1){width:84px}.ctab th:nth-child(2){width:52px}
+  .ctab th:nth-child(4){width:126px}.ctab th:nth-child(5){width:146px}
+  .ctab th:nth-child(6){width:110px}.ctab th:nth-child(7){width:130px}
+  .ctab td,.ctab th{padding-left:12px;padding-right:12px}
+  .tag{font-size:9.5px;padding:2px 6px}
+  .rbtn{font-size:11px;padding:0 8px;gap:5px}
+}
+/* a long address is clipped with an ellipsis rather than broken mid-word — the
+   full string is in the title and in the href, so nothing is lost silently */
+.mail{color:var(--ok-ink);text-decoration:none;font-size:11.5px;
+  display:block;max-width:100%;overflow:hidden;text-overflow:ellipsis;white-space:nowrap;
+  padding:3px 0;line-height:1.4}
+.mail:hover{text-decoration:underline}
+.cfoot{padding:10px 16px;font-size:11.5px;color:var(--muted);border-top:1px solid var(--hair)}
+
+/* modal */
+.scrim{position:fixed;inset:0;background:rgba(7,42,32,.42);display:none;
+  align-items:center;justify-content:center;z-index:80;padding:24px}
+.scrim.on{display:flex}
+.modal{background:var(--surface);border-radius:14px;width:min(560px,100%);
+  max-height:88vh;overflow:auto;box-shadow:0 22px 60px rgba(7,42,32,.28)}
+.mh{padding:16px 20px;border-bottom:1px solid var(--hair);display:flex;align-items:center;gap:10px}
+.mh h3{margin:0;font-size:16px;color:var(--forest-deep)}
+.mh .x{margin-left:auto;border:0;background:none;font-size:20px;color:var(--muted);cursor:pointer;
+  width:32px;height:32px;border-radius:8px;line-height:1}
+.mh .x:hover{background:var(--chip-bg)}
+.mb{padding:16px 20px}
+.card{border:1px solid var(--line);border-radius:12px;overflow:hidden}
+.card .ct{background:var(--forest);color:#fff;padding:13px 16px}
+.card .ct b{display:block;font-size:15px;letter-spacing:-.2px}
+.card .ct span{font-size:11.5px;color:#a9cfc0}
+.lb{display:flex;align-items:center;gap:11px;padding:10px 16px;border-bottom:1px solid var(--hair)}
+.lb:last-child{border-bottom:0}
+.lb .pos{width:22px;font-weight:800;color:var(--muted);font-size:13px}
+.lb .pos.p1{color:#b8860b}
+.lb .nm{font-weight:700}
+.lb .ct2{font-size:11.5px;color:var(--muted)}
+.lb .rt{margin-left:auto;font-weight:800;color:var(--ok-ink)}
+.lb .rc{font-size:11px;color:var(--muted);width:74px;text-align:right}
+.copybox{margin-top:14px}
+.copybox label{font-size:10.5px;letter-spacing:.08em;color:var(--muted);font-weight:700;
+  display:flex;align-items:center;gap:8px;margin-bottom:6px}
+textarea{width:100%;height:158px;border:1px solid var(--line);border-radius:10px;
+  padding:11px;font:12.5px/1.55 ui-monospace,SFMono-Regular,Menlo,monospace;
+  background:var(--rail-b);color:var(--ink);resize:vertical}
+.mf{padding:12px 20px 18px;display:flex;gap:9px;align-items:center}
+.mf .note{font-size:11.5px;color:var(--muted);margin-left:auto;text-align:right}
+.hide{display:none !important}
+@media(max-width:1180px){.tiles{grid-template-columns:repeat(2,1fr)}.grid2{grid-template-columns:1fr}}
+</style>
+</head>
+<body>
+
+<div class="top">
+  <div class="brand">MATCHDAY<span>Clubhouse</span></div>
+  <nav class="tnav">
+    <a href="#">Home</a><a href="#">Finance</a><a href="#">Growth</a>
+    <a href="#" class="dim">Membership</a><a href="#" class="on">Match Ops</a><a href="#">Tech</a>
+  </nav>
+  <div class="who">Ryan Mancuso ▾</div>
+</div>
+
+<div class="shell">
+  <aside class="rail" id="rail">
+    <div class="rlab">OPERATIONS</div>
+    <a class="ri" href="#"><svg viewBox="0 0 24 24"><rect x="3" y="5" width="18" height="16" rx="2"/><path d="M8 3v4M16 3v4M3 11h18"/></svg><span class="t">Master Schedule</span></a>
+    <a class="ri" href="#"><svg viewBox="0 0 24 24"><path d="M3 5h18l-7 8v6l-4 2v-8z"/></svg><span class="t">Field Pipeline</span></a>
+    <a class="ri" href="#"><svg viewBox="0 0 24 24"><rect x="3" y="6" width="18" height="13" rx="2"/><circle cx="12" cy="12.5" r="2.6"/></svg><span class="t">Field Ops</span></a>
+    <a class="ri on" href="#"><svg viewBox="0 0 24 24"><path d="m12 4 2.4 4.9 5.4.8-3.9 3.8.9 5.4-4.8-2.6-4.8 2.6.9-5.4L4.2 9.7l5.4-.8z"/></svg><span class="t">Reviews</span></a>
+    <div class="rlab">CONVERSATIONS</div>
+    <a class="ri" href="#"><svg viewBox="0 0 24 24"><path d="M21 12a8 8 0 0 1-8 8H4l2-3a8 8 0 1 1 15-5z"/></svg><span class="t">Match Chats</span></a>
+    <a class="ri" href="#"><svg viewBox="0 0 24 24"><circle cx="9" cy="8" r="3.2"/><path d="M3 20c0-3.3 2.7-5.5 6-5.5s6 2.2 6 5.5M17 11.5a2.8 2.8 0 1 0 0-5.6M18 20c0-2.4-.9-4.1-2.4-5.1"/></svg><span class="t">Player Chats</span><span class="rbadge">2</span></a>
+    <div class="rfoot">
+      <button class="rcol" onclick="document.getElementById('rail').classList.toggle('min')">
+        <svg viewBox="0 0 24 24" width="15" height="15" fill="none" stroke="currentColor" stroke-width="2"><path d="M14 6l-6 6 6 6"/></svg><span>Collapse</span>
+      </button>
+    </div>
+  </aside>
+
+  <main class="main">
+    <div class="phead">
+      <div>
+        <h1>Reviews</h1>
+        <p class="sub">Per-match review performance — ratings, managers, and the matches that need a look.</p>
+      </div>
+      <div class="pright">
+        <span class="fresh" id="fresh"></span>
+        <button class="btn pri" onclick="openShare()">
+          <svg viewBox="0 0 24 24"><path d="M12 3v13M12 3 8 7M12 3l4 4"/><path d="M4 15v4a2 2 0 0 0 2 2h12a2 2 0 0 0 2-2v-4"/></svg>
+          Share leaderboard
+        </button>
+      </div>
+    </div>
+
+    <div class="filters">
+      <div class="fg"><label>MONTH</label>
+        <select id="month" onchange="render()">
+          <option value="2026-07">Jul 2026</option>
+          <option value="2026-08">Aug 2026</option>
+        </select></div>
+      <div class="fg"><label>CITY</label><select id="city" onchange="render()"></select></div>
+      <div class="fg"><label>VENUE</label><select id="venue" onchange="render()"></select></div>
+      <div class="fg"><label>MANAGER</label><select id="mgr" onchange="render()"></select></div>
+      <button class="btn clearf" id="clearf" onclick="clearFilters()">Clear filters</button>
+      <div class="scope" id="scope"></div>
+    </div>
+
+    <div class="tiles">
+      <div class="tile"><div class="tl">AVG RATING</div>
+        <div class="tv" id="t1">–</div><div class="tn" id="t1n"></div></div>
+      <div class="tile"><div class="tl">REVIEW VOLUME</div>
+        <div class="tv" id="t2">–</div><div class="tn" id="t2n"></div></div>
+      <div class="tile click" id="tileA" onclick="toggleFocus('attn')"><div class="tl">NEEDS ATTENTION</div>
+        <div class="tv" id="t3">–</div><div class="tn" id="t3n"></div></div>
+      <div class="tile click" id="tileS" onclick="toggleFocus('stand')"><div class="tl">STANDOUTS</div>
+        <div class="tv" id="t4">–</div><div class="tn" id="t4n"></div></div>
+    </div>
+
+    <div class="strip">
+      <div class="sl">
+        <div class="sk">TRAILING 8 WEEKS</div>
+        <div class="sv" id="s1">–</div>
+        <div class="sn" id="s1n"></div>
+      </div>
+      <div class="spark">
+        <div class="sh"><span>RATING</span><em id="rband"></em></div>
+        <svg id="sparkR" width="330" height="34"></svg>
+      </div>
+      <div class="spark">
+        <div class="sh"><span>VOLUME</span><em id="vband"></em></div>
+        <svg id="sparkV" width="330" height="34"></svg>
+      </div>
+      <div class="sfoot" id="sfoot"></div>
+    </div>
+
+    <div class="grid2">
+      <div class="panel" id="panelMgr">
+        <div class="ph"><h2>MANAGERS</h2><span class="n" id="mgrN"></span>
+          <span class="hint" id="mgrHint"></span></div>
+        <table>
+          <thead><tr>
+            <th style="width:26px"></th><th>MANAGER</th><th class="r">AVG</th>
+            <th style="width:118px">SPREAD <em class="bnd">4.00–5.00</em></th><th class="r">REVIEWS</th><th class="r">MATCHES</th>
+          </tr></thead>
+          <tbody id="mgrBody"></tbody>
+        </table>
+      </div>
+
+      <div class="stack">
+        <div class="panel attn" id="panelAttn">
+          <div class="ph"><h2>NEEDS ATTENTION</h2><span class="n" id="attnN"></span>
+            <span class="hint" id="attnHint"></span></div>
+          <div id="attnBody"></div>
+        </div>
+        <div class="panel" id="panelStand">
+          <div class="ph"><h2>STANDOUTS</h2><span class="n" id="standN"></span>
+            <span class="hint" id="standHint"></span></div>
+          <div id="standBody"></div>
+        </div>
+      </div>
+    </div>
+
+    <div class="panel cpanel" id="panelC">
+      <div class="cph">
+        <h2>COMMENTS</h2><span class="n" id="cN"></span>
+        <span class="chint">player feedback for response</span>
+        <div class="cwin">
+          <span class="cown">own window — not the month filter</span>
+          <div class="seg" id="cseg">
+            <button data-w="week"  onclick="setCWin('week')">This week</button>
+            <button data-w="month" onclick="setCWin('month')">This month</button>
+            <button data-w="d30"   onclick="setCWin('d30')">Last 30 days</button>
+          </div>
+        </div>
+      </div>
+
+      <div class="cdecomp">
+        <div id="cdecomp"></div>
+        <div class="rstat" id="creply"></div>
+        <div class="seg sev" id="csev">
+          <button data-s="all"    onclick="setCSev('all')">All <em id="sevAllN"></em></button>
+          <button data-s="needs"  onclick="setCSev('needs')">Needs a reply <em id="sevNeedN"></em></button>
+          <button data-s="open"   onclick="setCSev('open')">Unanswered <em id="sevOpenN"></em></button>
+          <button data-s="praise" onclick="setCSev('praise')">Praise <em id="sevPraiseN"></em></button>
+        </div>
+      </div>
+
+      <table class="ctab">
+        <thead><tr>
+          <th>SUBMITTED</th><th>RATING</th><th>COMMENT</th>
+          <th>PLAYER</th><th>MATCH</th><th>MANAGER</th><th>REPLIED?</th>
+        </tr></thead>
+        <tbody id="cBody"></tbody>
+      </table>
+      <div class="cfoot" id="cfoot"></div>
+    </div>
+  </main>
+</div>
+
+<div class="scrim" id="scrim" onclick="if(event.target===this)closeShare()">
+  <div class="modal">
+    <div class="mh"><h3>Leaderboard — <span id="lbMonth"></span></h3>
+      <button class="x" onclick="closeShare()">&times;</button></div>
+    <div class="mb">
+      <div class="card">
+        <div class="ct"><b>MatchDay · Manager Reviews</b><span id="lbSub"></span></div>
+        <div id="lbBody"></div>
+      </div>
+      <div class="copybox">
+        <label>PLAIN TEXT — PASTE INTO WHATSAPP</label>
+        <textarea id="lbText" readonly onclick="this.select()"></textarea>
+      </div>
+    </div>
+    <div class="mf">
+      <button class="btn pri" onclick="copyLb(this)">Copy text</button>
+      <button class="btn" onclick="closeShare()">Close</button>
+      <div class="note" id="lbNote"></div>
+    </div>
+  </div>
+</div>
+
+<div class="tip" id="tip"></div>
+
+<script>
+/* ══════════════════════════════════════════════════════════════
+   THRESHOLDS — every rule lives here once, named, and is printed
+   in the UI wherever it changes what a person sees.
+   ══════════════════════════════════════════════════════════════ */
+var MIN_RANK_REVIEWS = 10;   /* a manager below this is not ranked at all */
+var ATTN_MAX_AVG     = 3.5;  /* match-level: needs a look */
+var ATTN_MIN_REVIEWS = 3;    /* ...but only once enough people have rated it */
+var STAND_MIN_AVG    = 4.8;
+var STAND_MIN_REVIEWS= 3;
+
+/* nine categorical hues cannot clear the perceptual separation floor, so the
+   city NAME is always text and the dot is a scanning aid only. red and amber
+   stay reserved for state. same finding as the field pipeline board. */
+var CITY = {
+  "Austin":"#3f7d23","Dallas":"#3741ae","Houston":"#b04583","San Antonio":"#8c421d",
+  "Philadelphia":"#457ab0","Atlanta":"#ae7337","St. Louis":"#37aea4",
+  "Oklahoma City":"#791d8c","El Paso":"#7d8c2a"
+};
+
+/* ── data ─────────────────────────────────────────────────────
+   Jul 2026 is a full month. Aug 2026 is one day in — kept on purpose
+   so the sparse / below-floor state is visible rather than theoretical.
+   MOCKUP DATA. Aug figures and the 8-week series are the real ones read
+   off the current page; July is illustrative.                            */
+var MGRS = {
+"2026-07":[
+ {n:"Abraham Ruiz",  c:"San Antonio",   a:4.72, r:288, m:38},
+ {n:"Rudy Castro",   c:"Austin",        a:4.67, r:312, m:41},
+ {n:"Yarra Nasser",  c:"Houston",       a:4.66, r:231, m:30},
+ {n:"Joba Adeyemi",  c:"Houston",       a:4.64, r:341, m:44},
+ {n:"Chris Delgado", c:"Dallas",        a:4.58, r:264, m:35},
+ {n:"Willfried Bony",c:"St. Louis",     a:4.55, r:198, m:27},
+ {n:"Rodrigo Vela",  c:"Oklahoma City", a:4.49, r:176, m:24},
+ {n:"Adam Reyes",    c:"Austin",        a:4.41, r:143, m:19},
+ {n:"Moncho Perez",  c:"Austin",        a:3.92, r:8,   m:2},
+ {n:"Deonna Price",  c:"Atlanta",       a:4.80, r:6,   m:1},
+ {n:null,            c:null,            a:4.58, r:272, m:36}   /* unattributed */
+],
+"2026-08":[
+ {n:"Rudy Castro",   c:"Austin",        a:4.67, r:12, m:3},
+ {n:"Moncho Perez",  c:"Austin",        a:1.00, r:1,  m:1},
+ {n:null,            c:null,            a:5.00, r:4,  m:1}
+]};
+
+var MATCHES = {
+"2026-07":[
+ {v:"Hill Country Middle School", c:"Austin",        mg:"Adam Reyes",   d:"Jul 29 · 8:00 PM", a:2.60, r:5},
+ {v:"OKC Sports Complex",         c:"Oklahoma City", mg:"Rodrigo Vela", d:"Jul 27 · 7:00 PM", a:3.00, r:4},
+ {v:"Lindenwood Turf 2",          c:"St. Louis",     mg:"Willfried Bony",d:"Jul 24 · 9:00 PM",a:3.25, r:4},
+ {v:"Phield House",               c:"Philadelphia",  mg:null,           d:"Jul 22 · 8:30 PM", a:3.33, r:3},
+ {v:"Westlake HS Field 3",        c:"Austin",        mg:"Rudy Castro",  d:"Jul 31 · 8:00 PM", a:5.00, r:3},
+ {v:"Soccer Central Complex",     c:"San Antonio",   mg:"Abraham Ruiz", d:"Jul 31 · 9:00 PM", a:4.86, r:7},
+ {v:"Tourney ATH Pearland",       c:"Houston",       mg:"Joba Adeyemi", d:"Jul 31 · 9:15 PM", a:5.00, r:4},
+ {v:"Tourney at Soccer Central",  c:"San Antonio",   mg:"Abraham Ruiz", d:"Jul 31 · 8:00 PM", a:4.80, r:5},
+ {v:"Onion Creek",                c:"Austin",        mg:"Rudy Castro",  d:"Jul 30 · 7:00 PM", a:4.89, r:9},
+ {v:"NEMP Field 4",               c:"Austin",        mg:"Rudy Castro",  d:"Jul 28 · 6:30 PM", a:4.83, r:6},
+ {v:"Tourney ATH Pearland",       c:"Houston",       mg:"Yarra Nasser", d:"Jul 26 · 8:15 PM", a:4.88, r:8},
+ {v:"Round Rock",                 c:"Austin",        mg:"Adam Reyes",   d:"Jul 25 · 7:00 PM", a:4.80, r:5}
+],
+"2026-08":[
+ {v:"Onion Creek",                c:"Austin",        mg:null,           d:"Aug 1 · 9:00 AM",  a:5.00, r:4},
+ {v:"Tourney ATH Pearland",       c:"Houston",       mg:"Joba Adeyemi", d:"Aug 1 · 8:15 PM",  a:5.00, r:3},
+ {v:"NEMP Field 2",               c:"Austin",        mg:"Rudy Castro",  d:"Aug 1 · 6:30 PM",  a:4.83, r:6},
+ {v:"LBJ Early College HS",       c:"Austin",        mg:"Moncho Perez", d:"Aug 1 · 7:00 PM",  a:1.00, r:1}
+]};
+
+/* the real trailing-8-week series read off the current page.
+   volumes sum to 3,859 and the weighted rating is 4.61 — both verified. */
+var WEEKS = [
+ {w:"Jun 8", a:4.58, n:388},{w:"Jun 15",a:4.68,n:399},
+ {w:"Jun 22",a:4.68, n:489},{w:"Jun 29",a:4.55,n:344},
+ {w:"Jul 6", a:4.63, n:571},{w:"Jul 13",a:4.58,n:642},
+ {w:"Jul 20",a:4.63, n:590},{w:"Jul 27",a:4.56,n:436,partial:true}
+];
+
+var FRESH = {ratings:"Aug 1, 12:05 PM", comments:"Aug 1, 12:04 PM"};
+var FOCUS = null;
+
+/* ── comments ──────────────────────────────────────────────────
+   every row here is a review that a human should be able to read:
+   it either carries written feedback, or it is a 1★ rating left
+   without words. that inclusion rule is stated on the page and the
+   two halves are counted separately — the page never asserts a
+   total it cannot decompose.
+   NOW is fixed so the week / month / 30-day windows are deterministic
+   in a mockup. tags carry a polarity prefix: + praise, − problem,
+   ~ mixed.                                                        */
+var NOW = "2026-08-01";
+var COMMENTS = [
+ {s:"2026-08-01",tm:"4:47 PM",a:1,x:"Cancelled last minute. Didn't get refund",g:[],
+  p:"Dan.",e:"dabdulaapp@gmail.com",v:"LBJ Early College HS",c:"Austin",mg:"Moncho Perez",md:"Aug 1"},
+ {s:"2026-08-01",tm:"11:20 AM",a:5,x:"Great vibes, everyone was welcoming.",g:["+GREAT ATMOSPHERE"],
+  p:"Priya Raman",e:"priya.raman@gmail.com",v:"Onion Creek",c:"Austin",mg:null,md:"Aug 1"},
+ {s:"2026-08-01",tm:"9:32 AM",a:5,x:"Excellent",
+  g:["+QUALITY FIELD","+GREAT ATMOSPHERE","+GREAT MATCH MANAGER","+COMPETITIVE MATCH","+ON-TIME START AND FINISH","+GOOD EQUIPMENT"],
+  p:"yeah bro",e:"abdiqanidoolle8@gmail.com",v:"Tourney at Soccer Central",c:"San Antonio",mg:"Abraham Ruiz",md:"Jul 31"},
+ {s:"2026-08-01",tm:"1:14 AM",a:1,x:null,g:["-UNORGANIZED"],
+  p:"Saim Khan",e:"saim2006k@gmail.com",v:"NEMP Field 4",c:"Austin",mg:"Rudy Castro",md:"Jul 28"},
+ {s:"2026-07-31",tm:"9:43 PM",a:3,x:"There was no lights when it got dark beside that it was good",g:[],
+  p:"john",e:"john.mena@gmail.com",v:"Hill Country Middle School",c:"Austin",mg:"Adam Reyes",md:"Jul 29"},
+ {s:"2026-07-31",tm:"7:45 PM",a:1,x:null,g:[],
+  p:"Sumanyu Nandwani",e:"s.nandwani@gmail.com",v:"Phield House",c:"Philadelphia",mg:null,md:"Jul 22"},
+ {s:"2026-07-31",tm:"6:31 PM",a:5,x:"Joba ran this one properly — teams were even, subs were called on time, and he actually kept score. Best match I've played in months.",
+  g:["+GREAT MATCH MANAGER"],
+  p:"Razta",e:"razta.k@gmail.com",v:"Tourney ATH Pearland",c:"Houston",mg:"Joba Adeyemi",md:"Jul 31"},
+ {s:"2026-07-31",tm:"5:49 PM",a:3,x:"There needs to be a better way to organize games based on skill level and competitiveness.",
+  g:["~SOMEWHAT DISORGANIZED","~SLIGHTLY IMBALANCED"],
+  p:"Yerra Suertr",e:"yerra.s@gmail.com",v:"Tourney at Soccer Central",c:"San Antonio",mg:"Abraham Ruiz",md:"Jul 31"},
+ {s:"2026-07-31",tm:"4:44 AM",a:5,x:"Me divertí mucho, las personas fueron muy agradables, claro que volveré a ir",
+  g:["+GREAT ATMOSPHERE","+QUALITY FIELD","+GREAT MATCH MANAGER"],
+  p:"Abdiel Martinez",e:"abdiel.mtz@gmail.com",v:"Soccer Central Complex",c:"San Antonio",mg:"Abraham Ruiz",md:"Jul 31"},
+ {s:"2026-07-30",tm:"10:12 PM",a:2,x:"Field was double booked, we started 25 minutes late.",g:["-LATE START"],
+  p:"Marcus Webb",e:"mwebb84@gmail.com",v:"Onion Creek",c:"Austin",mg:"Rudy Castro",md:"Jul 30"},
+ {s:"2026-07-30",tm:"8:02 PM",a:5,x:"Rudy is the reason I keep coming back.",g:["+GREAT MATCH MANAGER"],
+  p:"Ana Ruiz",e:"ana.ruiz@gmail.com",v:"Onion Creek",c:"Austin",mg:"Rudy Castro",md:"Jul 30"},
+ {s:"2026-07-29",tm:"11:58 PM",a:4,x:"Good match, could use better goals.",g:["~POOR EQUIPMENT"],
+  p:"Tomás Ferrer",e:"tferrer@gmail.com",v:"Hill Country Middle School",c:"Austin",mg:"Adam Reyes",md:"Jul 29"},
+ {s:"2026-07-28",tm:"9:15 PM",a:2,x:"Nobody was managing the subs, it was chaos by the second half.",g:["-UNORGANIZED"],
+  p:"Kevin Osei",e:"kosei.atx@gmail.com",v:"NEMP Field 4",c:"Austin",mg:"Rudy Castro",md:"Jul 28"},
+
+ {s:"2026-07-26",tm:"10:40 PM",a:5,x:"Yarra kept it moving, no waiting around.",
+  g:["+GREAT MATCH MANAGER","+ON-TIME START AND FINISH"],
+  p:"Diego Salas",e:"dsalas@gmail.com",v:"Tourney ATH Pearland",c:"Houston",mg:"Yarra Nasser",md:"Jul 26"},
+ {s:"2026-07-26",tm:"9:05 PM",a:1,x:null,g:[],
+  p:"Hassan Ali",e:"hassan.ali@gmail.com",v:"Tourney ATH Pearland",c:"Houston",mg:"Yarra Nasser",md:"Jul 26"},
+ {s:"2026-07-25",tm:"11:22 PM",a:3,x:"Turf was slick after the rain — no fault of the manager.",g:[],
+  p:"Brianna Cole",e:"bcole@gmail.com",v:"Round Rock",c:"Austin",mg:"Adam Reyes",md:"Jul 25"},
+ {s:"2026-07-24",tm:"11:47 PM",a:2,x:"Half the field lights were out.",g:["-POOR FIELD"],
+  p:"Nate Dorsey",e:"ndorsey@gmail.com",v:"Lindenwood Turf 2",c:"St. Louis",mg:"Willfried Bony",md:"Jul 24"},
+ {s:"2026-07-23",tm:"8:30 PM",a:5,x:"Best run match in St. Louis.",g:["+GREAT MATCH MANAGER","+COMPETITIVE MATCH"],
+  p:"Ellie Park",e:"ellie.park@gmail.com",v:"Lindenwood Turf 2",c:"St. Louis",mg:"Willfried Bony",md:"Jul 22"},
+ {s:"2026-07-22",tm:"10:55 PM",a:3,x:"No one checked people in, randoms kept subbing on.",g:["~SOMEWHAT DISORGANIZED"],
+  p:"Chris Vo",e:"chrisvo@gmail.com",v:"Phield House",c:"Philadelphia",mg:null,md:"Jul 22"},
+ {s:"2026-07-22",tm:"9:41 PM",a:1,x:null,g:[],
+  p:"Omar Haddad",e:"o.haddad@gmail.com",v:"Phield House",c:"Philadelphia",mg:null,md:"Jul 22"},
+ {s:"2026-07-19",tm:"7:12 PM",a:5,x:"Great atmosphere, will be back.",g:["+GREAT ATMOSPHERE"],
+  p:"Sofia Marino",e:"s.marino@gmail.com",v:"Round Rock",c:"Austin",mg:"Adam Reyes",md:"Jul 18"},
+ {s:"2026-07-17",tm:"10:02 PM",a:2,x:"Manager never showed. We organized ourselves.",g:["-NO MATCH MANAGER"],
+  p:"Tim Fowler",e:"tfowler@gmail.com",v:"OKC Sports Complex",c:"Oklahoma City",mg:"Rodrigo Vela",md:"Jul 16"},
+ {s:"2026-07-14",tm:"9:33 PM",a:4,x:"Solid, just wish it started on time.",g:["~LATE START"],
+  p:"Grace Lin",e:"grace.lin@gmail.com",v:"Soccer Central Complex",c:"San Antonio",mg:"Abraham Ruiz",md:"Jul 13"},
+ {s:"2026-07-11",tm:"8:48 PM",a:5,x:"Perfect pitch, perfect crowd.",g:["+QUALITY FIELD","+GREAT ATMOSPHERE"],
+  p:"Luis Peña",e:"lpena@gmail.com",v:"Tourney ATH Pearland",c:"Houston",mg:"Joba Adeyemi",md:"Jul 10"},
+ {s:"2026-07-08",tm:"11:15 PM",a:1,x:"Got charged twice and support never replied.",g:[],
+  p:"Renee Adkins",e:"radkins@gmail.com",v:"NEMP Field 4",c:"Austin",mg:"Rudy Castro",md:"Jul 7"},
+ {s:"2026-07-05",tm:"9:27 PM",a:3,x:"Fine, but the teams were lopsided all night.",g:["~SLIGHTLY IMBALANCED"],
+  p:"Devin Wallace",e:"dwallace@gmail.com",v:"Westlake HS Field 3",c:"Austin",mg:"Rudy Castro",md:"Jul 4"},
+ {s:"2026-07-03",tm:"8:05 PM",a:5,x:"Willfried organizes these really well.",g:["+GREAT MATCH MANAGER"],
+  p:"Nadia Cruz",e:"ncruz@gmail.com",v:"Lindenwood Turf 2",c:"St. Louis",mg:"Willfried Bony",md:"Jul 2"},
+ {s:"2026-06-28",tm:"9:00 PM",a:1,x:"Nobody told us the match had moved fields.",g:[],
+  p:"Peter Muñoz",e:"pmunoz@gmail.com",v:"Onion Creek",c:"Austin",mg:"Rudy Castro",md:"Jun 27"}
+];
+var CWIN = "week", CSEV = "all";
+
+/* ── reply marks ───────────────────────────────────────────────
+   who has already been answered. in the real page this is a row in
+   the database stamped with the admin who ticked it; here it is
+   seeded so the counts are not uniformly zero on load.
+   the seed is matched BY CONTENT (date + time), never by array
+   position, and a seed that matches nothing is counted and surfaced
+   rather than silently ignored — a mark on a review that is not
+   there would quietly under-state the outstanding work.            */
+var RSEED = [
+  {s:"2026-07-31",tm:"9:43 PM", by:"Ryan M.",   on:"2026-08-01"},
+  {s:"2026-07-31",tm:"5:49 PM", by:"Ryan M.",   on:"2026-07-31"},
+  {s:"2026-07-30",tm:"10:12 PM",by:"Deonna P.", on:"2026-07-31"},
+  {s:"2026-07-23",tm:"8:30 PM", by:"Ryan M.",   on:"2026-07-24"},  /* a 5★ — you can thank someone too */
+  {s:"2026-07-22",tm:"10:55 PM",by:"Ryan M.",   on:"2026-07-23"},
+  {s:"2026-07-17",tm:"10:02 PM",by:"Deonna P.", on:"2026-07-18"},
+  {s:"2026-07-08",tm:"11:15 PM",by:"Ryan M.",   on:"2026-07-09"}
+];
+var RESP = {}, RSEED_MISS = 0;
+COMMENTS.forEach(function(x,i){ x.i = i; });
+RSEED.forEach(function(r){
+  var hit = COMMENTS.filter(function(x){return x.s===r.s && x.tm===r.tm});
+  if(hit.length!==1){ RSEED_MISS++; return; }
+  RESP[hit[0].i] = {by:r.by, on:r.on};
+});
+/* rows touched since the view last changed. a row you tick while the
+   Unanswered filter is on must not vanish out from under the cursor —
+   it stays, dimmed, and says it is leaving. cleared on any view change. */
+var STICK = {};
+
+/* ── helpers ───────────────────────────────────────────────── */
+function esc(s){return String(s==null?"":s).replace(/[&<>"]/g,function(c){
+  return {"&":"&amp;","<":"&lt;",">":"&gt;",'"':"&quot;"}[c]})}
+function mlabel(k){return {"2026-07":"Jul 2026","2026-08":"Aug 2026"}[k]}
+function rows(){return MGRS[document.getElementById("month").value]||[]}
+function matches(){return MATCHES[document.getElementById("month").value]||[]}
+function sel(id){var e=document.getElementById(id);return e?e.value:"all"}
+
+/* one filter predicate, used by every panel on the page */
+function keepM(m){
+  if(sel("city")!=="all" && m.c!==sel("city")) return false;
+  if(sel("mgr")!=="all"  && (m.n||"Unattributed")!==sel("mgr")) return false;
+  if(sel("venue")!=="all") return false;   /* venue narrows matches, not managers */
+  return true;
+}
+function keepMatch(x){
+  if(sel("city")!=="all"  && x.c!==sel("city")) return false;
+  if(sel("venue")!=="all" && x.v!==sel("venue")) return false;
+  if(sel("mgr")!=="all"   && (x.mg||"Unattributed")!==sel("mgr")) return false;
+  return true;
+}
+function filtering(){return sel("city")!=="all"||sel("venue")!=="all"||sel("mgr")!=="all"}
+
+/* every displayed number comes from here — none is typed twice */
+function derive(){
+  var mg = rows().filter(keepM);
+  var mm  = matches().filter(keepMatch);
+
+  /* a venue narrows matches, not the manager aggregate — so in venue mode the
+     headline figures come from the match rows themselves. the page never shows
+     a number that answers a different question than the one the filter asked. */
+  var venueMode = sel("venue")!=="all";
+  var src = venueMode ? mm : mg;
+  var rev = src.reduce(function(s,x){return s+x.r},0);
+  var wsum= src.reduce(function(s,x){return s+x.a*x.r},0);
+
+  return {
+    mgrs: mg,
+    venueMode: venueMode,
+    reviews: rev,
+    matches: venueMode ? mm.length : mg.reduce(function(s,x){return s+x.m},0),
+    avg: rev ? wsum/rev : null,
+    ranked:   mg.filter(function(x){return x.n && x.r>=MIN_RANK_REVIEWS})
+                .sort(function(a,b){return b.a-a.a}),
+    unranked: mg.filter(function(x){return x.n && x.r<MIN_RANK_REVIEWS})
+                .sort(function(a,b){return b.r-a.r}),
+    unattr:   mg.filter(function(x){return !x.n}),
+    attn:  mm.filter(function(x){return x.a<ATTN_MAX_AVG && x.r>=ATTN_MIN_REVIEWS})
+             .sort(function(a,b){return a.a-b.a}),
+    stand: mm.filter(function(x){return x.a>=STAND_MIN_AVG && x.r>=STAND_MIN_REVIEWS})
+             .sort(function(a,b){return b.a-a.a || b.r-a.r})
+  };
+}
+
+/* ── sparklines ────────────────────────────────────────────────
+   two small multiples, never a dual axis. the rating band is zoomed
+   because the spread is 0.13 of 5 — but the band bounds are PRINTED,
+   because a zoomed axis without its bounds on screen is a lie.       */
+function drawSparks(){
+  var W=330,H=34,n=WEEKS.length,gap=4,bw=(W-gap*(n-1))/n;
+  var lo=4.50, hi=4.75;
+  document.getElementById("rband").textContent = lo.toFixed(2)+"–"+hi.toFixed(2)+" scale";
+  var maxN = Math.max.apply(null,WEEKS.map(function(w){return w.n}));
+  document.getElementById("vband").textContent = "0–"+maxN+" scale";
+
+  var pts = WEEKS.map(function(w,i){
+    var x = i*(bw+gap)+bw/2;
+    var y = H-3 - ((w.a-lo)/(hi-lo))*(H-8);
+    return [x, Math.max(3,Math.min(H-3,y))];
+  });
+  var path = pts.map(function(p,i){return (i?"L":"M")+p[0].toFixed(1)+" "+p[1].toFixed(1)}).join(" ");
+  var sR = '<path d="'+path+'" fill="none" stroke="#35c77f" stroke-width="2" '+
+           'stroke-linecap="round" stroke-linejoin="round"/>';
+  pts.forEach(function(p,i){
+    sR += '<circle cx="'+p[0].toFixed(1)+'" cy="'+p[1].toFixed(1)+'" r="'+(WEEKS[i].partial?2.6:3)+'" '+
+          'fill="'+(WEEKS[i].partial?"#fff":"#0d3b2e")+'" stroke="#0d3b2e" stroke-width="1.4"/>';
+  });
+  sR += WEEKS.map(function(w,i){
+    return '<rect class="hit" data-i="'+i+'" x="'+(i*(bw+gap))+'" y="0" width="'+bw+'" height="'+H+'" fill="transparent"/>';
+  }).join("");
+  document.getElementById("sparkR").innerHTML = sR;
+
+  var sV = WEEKS.map(function(w,i){
+    var h = Math.max(2,(w.n/maxN)*(H-6));
+    return '<rect x="'+(i*(bw+gap))+'" y="'+(H-h)+'" width="'+bw+'" height="'+h+'" rx="2.5" '+
+           'fill="'+(w.partial?"#b7e7cd":"#35c77f")+'"/>';
+  }).join("") + WEEKS.map(function(w,i){
+    return '<rect class="hit" data-i="'+i+'" x="'+(i*(bw+gap))+'" y="0" width="'+bw+'" height="'+H+'" fill="transparent"/>';
+  }).join("");
+  document.getElementById("sparkV").innerHTML = sV;
+
+  var tip=document.getElementById("tip");
+  document.querySelectorAll(".hit").forEach(function(el){
+    el.addEventListener("mousemove",function(e){
+      var w=WEEKS[+el.dataset.i];
+      tip.textContent = w.w+": "+w.a.toFixed(2)+"★ · "+w.n+" reviews"+(w.partial?" (partial week)":"");
+      tip.style.left=(e.clientX+12)+"px"; tip.style.top=(e.clientY-30)+"px"; tip.classList.add("on");
+    });
+    el.addEventListener("mouseleave",function(){tip.classList.remove("on")});
+  });
+}
+
+/* ── render ────────────────────────────────────────────────── */
+function buildFilters(){
+  var mk=function(id,vals,lbl){
+    var e=document.getElementById(id), cur=e.value;
+    e.innerHTML='<option value="all">'+lbl+'</option>'+
+      vals.map(function(v){return '<option>'+esc(v)+'</option>'}).join("");
+    if(cur && [].some.call(e.options,function(o){return o.value===cur})) e.value=cur;
+  };
+  var mo=document.getElementById("month").value;
+  var cs={},vs={},ms={};
+  (MATCHES[mo]||[]).forEach(function(x){cs[x.c]=1;vs[x.v]=1});
+  (MGRS[mo]||[]).forEach(function(x){ if(x.c)cs[x.c]=1; ms[x.n||"Unattributed"]=1});
+  mk("city",Object.keys(cs).sort(),"All cities");
+  mk("venue",Object.keys(vs).sort(),"All venues");
+  mk("mgr",Object.keys(ms).sort(),"All managers");
+}
+
+function render(){
+  buildFilters();
+  var d=derive(), mo=document.getElementById("month").value;
+
+  document.getElementById("fresh").textContent =
+    "RATINGS "+FRESH.ratings.toUpperCase()+" · COMMENTS "+FRESH.comments.toUpperCase();
+
+  /* one window governs the whole page — printed once, here */
+  var bits=[mlabel(mo)];
+  if(sel("city")!=="all") bits.push(sel("city"));
+  if(sel("venue")!=="all")bits.push(sel("venue"));
+  if(sel("mgr")!=="all")  bits.push(sel("mgr"));
+  document.getElementById("scope").innerHTML="Showing <b>"+bits.map(esc).join(" · ")+"</b>";
+  document.getElementById("clearf").classList.toggle("on",filtering());
+
+  /* tiles */
+  document.getElementById("t1").textContent = d.avg==null?"—":d.avg.toFixed(2);
+  document.getElementById("t1n").textContent= d.matches.toLocaleString()+
+    (d.matches===1?" match · ":" matches · ")+d.reviews.toLocaleString()+" reviews";
+  document.getElementById("t2").textContent = d.reviews.toLocaleString();
+  document.getElementById("t2n").textContent= d.reviews?
+    (d.reviews/Math.max(1,d.matches)).toFixed(1)+" per match":"nothing in this selection";
+
+  var a=document.getElementById("t3"); a.textContent=d.attn.length;
+  a.className="tv"+(d.attn.length?" bad":"");
+  document.getElementById("t3n").textContent="avg < "+ATTN_MAX_AVG+", "+ATTN_MIN_REVIEWS+"+ reviews";
+  var s=document.getElementById("t4"); s.textContent=d.stand.length;
+  s.className="tv"+(d.stand.length?" good":"");
+  document.getElementById("t4n").textContent="avg ≥ "+STAND_MIN_AVG+", "+STAND_MIN_REVIEWS+"+ reviews";
+  document.getElementById("tileA").classList.toggle("sel",FOCUS==="attn");
+  document.getElementById("tileS").classList.toggle("sel",FOCUS==="stand");
+
+  /* trailing strip */
+  var vol=WEEKS.reduce(function(t,w){return t+w.n},0);
+  var wav=WEEKS.reduce(function(t,w){return t+w.a*w.n},0)/vol;
+  var los=Math.min.apply(null,WEEKS.map(function(w){return w.a}));
+  var his=Math.max.apply(null,WEEKS.map(function(w){return w.a}));
+  document.getElementById("s1").innerHTML=wav.toFixed(2)+"<small>avg rating</small>";
+  document.getElementById("s1n").textContent=vol.toLocaleString()+" reviews · ~"+
+    Math.round(vol/WEEKS.length)+" per week";
+  document.getElementById("sfoot").textContent=
+    "Rating has moved between "+los.toFixed(2)+" and "+his.toFixed(2)+" across these 8 weeks — a spread of "+
+    (his-los).toFixed(2)+" on a 5-point scale. Volume moved from "+
+    Math.min.apply(null,WEEKS.map(function(w){return w.n}))+" to "+
+    Math.max.apply(null,WEEKS.map(function(w){return w.n}))+
+    ". The last point is a partial week (hollow / pale) and is not comparable on volume. "+
+    "This strip is a trailing window and does not follow the month filter.";
+  drawSparks();
+
+  /* managers */
+  var body=document.getElementById("mgrBody"), h="";
+  var maxR=Math.max.apply(null,d.mgrs.map(function(x){return x.r}).concat([1]));
+  d.ranked.forEach(function(m,i){
+    var lo=m.a<4.4;
+    h+='<tr><td class="rk">'+(i+1)+'</td>'+
+       '<td><div class="mname">'+esc(m.n)+'</div>'+
+       '<span class="mcity"><i class="dot" style="background:'+(CITY[m.c]||"#9aa8a1")+'"></i>'+esc(m.c)+'</span></td>'+
+       '<td class="r"><span class="star '+(m.a>=4.7?"hi":(lo?"lo":""))+'">'+m.a.toFixed(2)+'★</span></td>'+
+       '<td><div class="bar"><i class="'+(lo?"lo":"")+'" style="width:'+((m.a-4.0)/1.0*100).toFixed(1)+'%"></i></div></td>'+
+       '<td class="r">'+m.r+'</td><td class="r">'+m.m+'</td></tr>';
+  });
+  if(d.venueMode){
+    h='<tr><td colspan="6" class="why" style="padding:14px 16px">'+
+      'Manager standings are counted per month and city, so they do not narrow to a single venue. '+
+      'Clear the venue filter to rank managers. The figures above and the lists to the right are '+
+      'scoped to <b>'+esc(sel("venue"))+'</b>.</td></tr>';
+  } else if(!d.ranked.length){
+    h+='<tr><td colspan="6" class="why" style="padding:14px 16px">No manager has reached '+
+       MIN_RANK_REVIEWS+' reviews in this selection, so none can be ranked yet.</td></tr>';
+  }
+  if(d.unranked.length){
+    h+='<tr class="subrow"><td colspan="6">NOT ENOUGH REVIEWS TO RANK · UNDER '+MIN_RANK_REVIEWS+'</td></tr>';
+    d.unranked.forEach(function(m){
+      h+='<tr class="unrank"><td class="rk">—</td>'+
+         '<td><div class="mname">'+esc(m.n)+'</div>'+
+         '<span class="mcity"><i class="dot" style="background:'+(CITY[m.c]||"#9aa8a1")+'"></i>'+esc(m.c)+'</span></td>'+
+         '<td class="r"><span class="why">'+m.a.toFixed(2)+'★</span></td>'+
+         '<td><span class="why">not rated</span></td>'+
+         '<td class="r">'+m.r+'</td><td class="r">'+m.m+'</td></tr>';
+    });
+  }
+  d.unattr.forEach(function(m){
+    h+='<tr class="subrow"><td colspan="6">NOT ATTRIBUTED TO A MANAGER</td></tr>'+
+       '<tr class="unrank"><td class="rk">—</td>'+
+       '<td><div class="mname attrib">No manager on the match</div>'+
+       '<span class="mcity">these reviews count toward the averages above, but belong to nobody</span></td>'+
+       '<td class="r"><span class="why">'+m.a.toFixed(2)+'★</span></td>'+
+       '<td><span class="why">not rated</span></td>'+
+       '<td class="r">'+m.r+'</td><td class="r">'+m.m+'</td></tr>';
+  });
+  body.innerHTML=h;
+  document.getElementById("panelMgr").classList.toggle("novenue",d.venueMode);
+  document.getElementById("mgrN").textContent=d.venueMode?"—":d.ranked.length+" ranked";
+  document.getElementById("mgrHint").textContent=d.venueMode
+    ? "not narrowed by venue" : "ranked at "+MIN_RANK_REVIEWS+"+ reviews";
+
+  /* needs attention */
+  var pa=document.getElementById("panelAttn");
+  pa.classList.toggle("clean",d.attn.length===0);
+  document.getElementById("attnN").textContent=d.attn.length;
+  document.getElementById("attnHint").textContent=d.attn.length?"lowest first":"";
+  document.getElementById("attnBody").innerHTML = d.attn.length
+    ? d.attn.map(function(x){return liHTML(x,"lo")}).join("")
+    : '<div class="empty"><svg viewBox="0 0 24 24"><path d="m5 13 4 4 10-10"/></svg>'+
+      'No match in this selection fell below '+ATTN_MAX_AVG+'★.</div>';
+
+  /* standouts */
+  document.getElementById("standN").textContent=d.stand.length;
+  document.getElementById("standHint").textContent=d.stand.length?"highest first":"";
+  document.getElementById("standBody").innerHTML = d.stand.length
+    ? d.stand.map(function(x){return liHTML(x,"hi")}).join("")
+    : '<div class="empty" style="color:var(--muted)">No match reached '+STAND_MIN_AVG+
+      '★ with '+STAND_MIN_REVIEWS+'+ reviews in this selection.</div>';
+
+  /* focus tiles filter the two lists visually */
+  document.getElementById("panelAttn").classList.toggle("hide",FOCUS==="stand");
+  document.getElementById("panelStand").classList.toggle("hide",FOCUS==="attn");
+
+  STICK={};          /* any page-level filter change is a view change */
+  renderComments();
+}
+
+function liHTML(x,k){
+  return '<div class="li"><div><div class="lname">'+esc(x.v)+'</div>'+
+    '<div class="lmeta">'+esc(x.d)+' · '+esc(x.c)+' · '+
+    (x.mg?esc(x.mg):'<i>no manager attributed</i>')+'</div></div>'+
+    '<div class="lright"><div class="lr '+k+'">'+x.a.toFixed(2)+'★</div>'+
+    '<div class="lc">'+x.r+' reviews</div></div></div>';
+}
+
+/* ── comments ──────────────────────────────────────────────── */
+var MO=["Jan","Feb","Mar","Apr","May","Jun","Jul","Aug","Sep","Oct","Nov","Dec"];
+function dt(s){var p=s.split("-");return new Date(+p[0],+p[1]-1,+p[2])}
+function iso(d){var m=d.getMonth()+1,y=d.getDate();
+  return d.getFullYear()+"-"+(m<10?"0":"")+m+"-"+(y<10?"0":"")+y}
+function dshort(s){var d=dt(s);return MO[d.getMonth()]+" "+d.getDate()}
+function addDays(d,n){var x=new Date(d.getTime());x.setDate(x.getDate()+n);return x}
+function tmin(t){var m=/^(\d+):(\d+) (AM|PM)$/.exec(t); if(!m)return 0;
+  return ((+m[1]%12)+(m[3]==="PM"?12:0))*60 + (+m[2])}
+
+/* the bounds the panel filters on and the range it prints come out of the same
+   object — a window can never be described as one thing and applied as another */
+function cwindow(k){
+  var now=dt(NOW),a,b,note;
+  if(k==="week"){ var dow=(now.getDay()+6)%7;      /* monday = 0 */
+    a=addDays(now,-dow); b=addDays(a,6); note="this week"; }
+  else if(k==="month"){
+    a=new Date(now.getFullYear(),now.getMonth(),1);
+    b=new Date(now.getFullYear(),now.getMonth()+1,0); note="this month"; }
+  else { a=addDays(now,-29); b=now; note="last 30 days"; }
+  var lbl=MO[a.getMonth()]+" "+a.getDate()+" – "+MO[b.getMonth()]+" "+b.getDate()+", "+b.getFullYear();
+  if(iso(b)>NOW) note+=", through "+MO[now.getMonth()]+" "+now.getDate();
+  return {a:iso(a), b:iso(b), label:lbl, note:note};
+}
+function keepC(x){
+  if(sel("city")!=="all"  && x.c!==sel("city"))  return false;
+  if(sel("venue")!=="all" && x.v!==sel("venue")) return false;
+  if(sel("mgr")!=="all"   && (x.mg||"Unattributed")!==sel("mgr")) return false;
+  return true;
+}
+/* a reply is OWED at 3★ and below. every row can still be ticked — thanking a
+   5★ is legitimate — but only owed rows are counted as outstanding, and the
+   footer says so, so the number always means one thing. */
+function needsReply(x){return x.a<=3}
+function deriveComments(){
+  var w=cwindow(CWIN);
+  var inWin=COMMENTS.filter(function(x){return x.s>=w.a && x.s<=w.b})
+    .filter(keepC)
+    .sort(function(p,q){return p.s===q.s ? tmin(q.tm)-tmin(p.tm) : (p.s<q.s?1:-1)});
+  var sev={all:inWin,
+    needs: inWin.filter(needsReply),
+    open:  inWin.filter(function(x){return needsReply(x) && !RESP[x.i]}),
+    praise:inWin.filter(function(x){return x.a===5})};
+  var rows=sev[CSEV]||inWin;
+  /* a row ticked while a filter is on stays put until the view changes, so the
+     list never re-shuffles under the pointer. it is kept in date order, not
+     appended, and it is labelled as leaving. */
+  if(CSEV==="open"){
+    var held=inWin.filter(function(x){return STICK[x.i] && rows.indexOf(x)<0});
+    if(held.length) rows=inWin.filter(function(x){return rows.indexOf(x)>=0 || STICK[x.i]});
+  }
+  return {win:w, all:inWin, sev:sev, rows:rows,
+    withText:inWin.filter(function(x){return !!x.x}).length,
+    silent1: inWin.filter(function(x){return !x.x && x.a===1}).length,
+    needsN:  sev.needs.length, openN: sev.open.length};
+}
+var TAG_CAP = 3;   /* a row shows at most this many tags — the rest are counted, never dropped silently */
+function tagHTML(t){
+  var k=t.charAt(0), cls=k==="+"?"pos":(k==="-"?"neg":"warn");
+  return '<span class="tag '+cls+'">'+esc(t.slice(1))+'</span>';
+}
+function tagsHTML(g){
+  if(!g.length) return "";
+  var shown=g.slice(0,TAG_CAP), rest=g.slice(TAG_CAP);
+  return '<div class="tags">'+shown.map(tagHTML).join("")+
+    (rest.length?'<span class="tag more" data-n="'+rest.length+'" title="'+
+      esc(rest.map(function(t){return t.slice(1)}).join(", "))+'">+'+rest.length+' more</span>':'')+
+    '</div>';
+}
+function cRow(x){
+  return '<tr>'+
+   '<td><div class="ctime">'+dshort(x.s)+'</div><div class="ctime">'+esc(x.tm)+'</div></td>'+
+   '<td><span class="stars s'+x.a+'">'+x.a+'★</span></td>'+
+   '<td><div class="ctext">'+(x.x?esc(x.x):'<span class="none">no comment left</span>')+'</div>'+
+     tagsHTML(x.g)+'</td>'+
+   '<td><div class="cname">'+esc(x.p)+'</div>'+
+     '<a class="mail" href="mailto:'+esc(x.e)+'" title="'+esc(x.e)+'">'+esc(x.e)+'</a></td>'+
+   '<td><div class="cmatch">'+esc(x.v)+'</div>'+
+     '<div class="csub">'+esc(x.md)+' · '+esc(x.c)+'</div></td>'+
+   '<td>'+(x.mg?'<div class="cmgr">'+esc(x.mg)+'</div>'
+               :'<div class="cmgr none">no manager</div>')+'</td>'+
+   '<td>'+replyHTML(x)+'</td></tr>';
+}
+function replyHTML(x){
+  var r=RESP[x.i], owed=needsReply(x),
+      cls=r?"done":(owed?"due":""), word=r?"Replied":(owed?"Reply due":"Mark replied"),
+      leaving = CSEV==="open" && !!r && !!STICK[x.i];
+  return '<button class="rbtn '+cls+'" onclick="toggleReply('+x.i+')" aria-pressed="'+(r?"true":"false")+
+    '" title="'+(r?"Ticked by "+esc(r.by)+" on "+dshort(r.on)+" — click to undo"
+                  :"Tick when you have answered this player")+'">'+
+    '<span class="box"></span>'+word+'</button>'+
+    (r?'<div class="rwho">'+esc(r.by)+' · '+dshort(r.on)+'</div>':'')+
+    (leaving?'<div class="rwho lv">no longer unanswered</div>':'');
+}
+function toggleReply(i){
+  if(RESP[i]) delete RESP[i]; else RESP[i]={by:"You", on:NOW};
+  STICK[i]=1; renderComments();
+}
+function renderComments(){
+  var d=deriveComments(), w=d.win;
+  [].forEach.call(document.querySelectorAll("#cseg button"),function(b){
+    b.classList.toggle("on",b.getAttribute("data-w")===CWIN)});
+  [].forEach.call(document.querySelectorAll("#csev button"),function(b){
+    b.classList.toggle("on",b.getAttribute("data-s")===CSEV)});
+  document.getElementById("sevAllN").textContent=d.sev.all.length;
+  document.getElementById("sevNeedN").textContent=d.sev.needs.length;
+  document.getElementById("sevOpenN").textContent=d.sev.open.length;
+  document.getElementById("sevPraiseN").textContent=d.sev.praise.length;
+  document.getElementById("cN").textContent=d.rows.length;
+
+  /* the outstanding count is stated as a fraction of the owed set, never as a
+     bare number — "4" alone would not say four out of what. */
+  var rs=document.getElementById("creply");
+  rs.className="rstat "+(d.needsN===0?"":(d.openN?"due":"clear"));
+  rs.innerHTML = d.needsN===0
+    ? "nothing here is owed a reply"
+    : (d.openN===0
+        ? "all <b>"+d.needsN+"</b> owed a reply have one"
+        : "<b>"+d.openN+"</b> of <b>"+d.needsN+"</b> owed a reply "+
+          (d.openN===1?"is":"are")+" still unanswered");
+
+  var scope=[]; ["city","venue","mgr"].forEach(function(i){
+    if(sel(i)!=="all") scope.push(sel(i))});
+  var sc = scope.length? " · "+scope.map(esc).join(" · ") : " · all cities";
+
+  /* the total is never asserted — it is printed as its two parts */
+  document.getElementById("cdecomp").innerHTML = (d.all.length
+    ? "<b>"+d.all.length+"</b> review"+(d.all.length===1?"":"s")+" to read = <b>"+
+      d.withText+"</b> with a comment + <b>"+d.silent1+"</b> rated 1★ with no words"
+    : "<b>0</b> reviews to read — nobody left a comment or a wordless 1★")+
+    " · <b>"+esc(w.label)+"</b> ("+esc(w.note)+")"+sc;
+
+  document.getElementById("panelC").classList.toggle("noRows",!d.rows.length);
+  document.getElementById("cBody").innerHTML = d.rows.length
+    ? d.rows.map(cRow).join("")
+    : '<tr><td colspan="7" class="why" style="padding:14px 16px">Nothing to read in '+
+      esc(w.label)+' for this selection'+
+      (CSEV!=="all"?' under the “'+SEVLBL[CSEV]+'” filter':'')+
+      '. Widen the window or clear a filter.</td></tr>';
+
+  document.getElementById("cfoot").textContent =
+    "Shown: every review carrying a written comment, plus 1★ ratings left without words — newest first. "+
+    "A reply is owed at 3★ and below; praise is 5★. Tick Replied once you have answered the player — the "+
+    "tick is stamped with your name and the date, and clicking it again undoes it. You can tick a happy "+
+    "review too; only the owed ones are counted as outstanding. The city, venue and manager filters at the "+
+    "top of the page apply here; the month filter does not — this panel keeps its own window, set above.";
+}
+var SEVLBL={all:"All",needs:"Needs a reply",open:"Unanswered",praise:"Praise"};
+function setCWin(k){CWIN=k; STICK={}; renderComments()}
+function setCSev(k){CSEV=k; STICK={}; renderComments()}
+
+function toggleFocus(k){FOCUS = FOCUS===k?null:k; render()}
+function clearFilters(){["city","venue","mgr"].forEach(function(i){document.getElementById(i).value="all"});render()}
+
+/* ── share ─────────────────────────────────────────────────── */
+function openShare(){
+  /* the leaderboard is a month/city standing — a venue filter cannot narrow it,
+     so it is ignored here and the modal says so rather than showing nothing. */
+  var vs=document.getElementById("venue"), keep=vs.value; vs.value="all";
+  var d=derive(); vs.value=keep;
+  var mo=document.getElementById("month").value;
+  document.getElementById("lbMonth").textContent=mlabel(mo);
+  document.getElementById("lbSub").textContent=
+    mlabel(mo)+" · ranked among managers with "+MIN_RANK_REVIEWS+"+ reviews"+
+    (keep!=="all"?" · venue filter not applied":"");
+  document.getElementById("lbBody").innerHTML = d.ranked.length
+    ? d.ranked.map(function(m,i){
+        return '<div class="lb"><div class="pos'+(i===0?" p1":"")+'">'+(i+1)+'</div>'+
+          '<div><div class="nm">'+esc(m.n)+'</div><div class="ct2">'+esc(m.c)+'</div></div>'+
+          '<div class="rt">'+m.a.toFixed(2)+'★</div>'+
+          '<div class="rc">'+m.r+' reviews</div></div>'}).join("")
+    : '<div class="empty" style="padding:16px">Nobody has reached '+MIN_RANK_REVIEWS+
+      ' reviews in '+mlabel(mo)+' yet, so there is nothing to share.</div>';
+
+  var lines=["MatchDay · Manager Reviews · "+mlabel(mo),""];
+  if(d.ranked.length){
+    d.ranked.forEach(function(m,i){
+      lines.push((i+1)+". "+m.n+" — "+m.a.toFixed(2)+"* ("+m.r+" reviews, "+m.c+")");
+    });
+    lines.push("");
+    lines.push("Ranked among managers with "+MIN_RANK_REVIEWS+"+ reviews.");
+    if(d.unranked.length) lines.push(d.unranked.length+
+      " manager(s) had too few reviews to rank this month.");
+    if(d.unattr.length)   lines.push(d.unattr[0].r+
+      " reviews were on matches with no manager attributed.");
+  } else {
+    lines.push("Nobody reached "+MIN_RANK_REVIEWS+" reviews this month.");
+  }
+  document.getElementById("lbText").value=lines.join("\n");
+  document.getElementById("lbNote").textContent =
+    d.ranked.length ? d.ranked.length+" ranked · "+d.unranked.length+" below the floor" : "";
+  document.getElementById("scrim").classList.add("on");
+}
+function closeShare(){document.getElementById("scrim").classList.remove("on")}
+function copyLb(btn){
+  var t=document.getElementById("lbText"); t.select();
+  try{document.execCommand("copy")}catch(e){}
+  var o=btn.textContent; btn.textContent="Copied"; setTimeout(function(){btn.textContent=o},1200);
+}
+document.addEventListener("keydown",function(e){if(e.key==="Escape")closeShare()});
+
+render();
+window.D=derive; window.WEEKS=WEEKS; window.MGRS=MGRS; window.MATCHES=MATCHES;
+window.C=deriveComments; window.COMMENTS=COMMENTS; window.NOW=NOW;
+window.cstate=function(){return {win:CWIN,sev:CSEV}};
+window.RESPONSES=function(){return RESP}; window.RSEED_MISS=RSEED_MISS;
+window.toggleReply=toggleReply;
+window.K={MIN_RANK_REVIEWS:MIN_RANK_REVIEWS,ATTN_MAX_AVG:ATTN_MAX_AVG,
+  ATTN_MIN_REVIEWS:ATTN_MIN_REVIEWS,STAND_MIN_AVG:STAND_MIN_AVG,STAND_MIN_REVIEWS:STAND_MIN_REVIEWS};
+</script>
+</body>
+</html>

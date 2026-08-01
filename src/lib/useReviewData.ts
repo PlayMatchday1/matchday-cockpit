@@ -9,10 +9,9 @@
 // table) but its writes are no longer read by the dashboard. The
 // CSV uploader is deprecated for removal in Phase 4.
 //
-// What this hook returns is unchanged: a `ReviewRow[]` and a
-// `ReviewMeta`. Consumers (CitiesReviewsLens, ManagerPodium,
-// CityManagerTable, CityDetailView, Reviews8WeekCard,
-// ReviewsCommentsTable) are untouched.
+// What this hook returns is a `ReviewRow[]` and a `ReviewMeta`. Consumers:
+// the Match Ops Reviews page (via reviewsData.useCleanReviews), CityDetailView,
+// CityManagerTable, ReviewsCommentsTable, MonthlyReportGenerator.
 //
 // Two field renames between the old and new sources:
 //   reviews.city            → mdapi_reviews.city_name (raw, needs normalize)
@@ -30,6 +29,9 @@ import { normalizeCity } from "./cityMap";
 import { useRevalidateWhenStale } from "./cacheFreshness";
 
 export type ReviewRow = {
+  // mdapi_reviews.api_id — the review's natural key, used to key the
+  // review_replies mark. Additive; existing consumers ignore it.
+  apiId: number;
   city: string;
   fieldTitle: string;
   managerFirstName: string | null;
@@ -167,6 +169,7 @@ async function load(silent = false): Promise<void> {
     if (!city) continue;
 
     all.push({
+      apiId: r.api_id,
       city,
       fieldTitle: r.field_title ?? "",
       managerFirstName: r.manager_first_name,

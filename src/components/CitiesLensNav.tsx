@@ -7,15 +7,13 @@ export type CityLens =
   | "overview"
   | "users"
   | "membership"
-  | "cancellations"
-  | "reviews";
+  | "cancellations";
 
 const LENSES: { value: CityLens; label: string }[] = [
   { value: "overview", label: "Overview" },
   { value: "users", label: "Users" },
   { value: "membership", label: "Membership" },
   { value: "cancellations", label: "Cancellations" },
-  { value: "reviews", label: "Reviews" },
 ];
 
 // Sticky pill-tab nav. Active tab = mint solid, inactive = white

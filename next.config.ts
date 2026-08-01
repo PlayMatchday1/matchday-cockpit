@@ -103,6 +103,15 @@ const nextConfig: NextConfig = {
         destination: "/match-ops/field-ops",
         permanent: true,
       },
+      // Reviews consolidated out of Growth → Cities into Match Ops on
+      // 2026-08-01 (was split across Match Review / Performance / Leaderboard
+      // sub-tabs). Old deep link redirects so bookmarks survive.
+      {
+        source: "/growth",
+        has: [{ type: "query", key: "tab", value: "reviews" }],
+        destination: "/match-ops/reviews",
+        permanent: true,
+      },
       // Veo review queue + field-code editor moved from /admin/veo to
       // Cities → Field Ops → Veo on 2026-07-26. Routing-layer redirect (real
       // 307) so bookmarks land on the tab regardless of the (internal) client
