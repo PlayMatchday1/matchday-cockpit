@@ -8,9 +8,9 @@
 
 import { useCallback, useEffect, useMemo, useState } from "react";
 import { supabase } from "@/lib/supabase";
-import { VISIBLE_CITIES, type Goal } from "@/lib/types";
+import { type Goal } from "@/lib/types";
 import { computeGoalPace } from "@/lib/goalPace";
-import { fetchMatchesPerWeek } from "@/lib/homeStats";
+import { fetchSnapshot, type Snapshot } from "@/lib/homeStats";
 import OrgGoalCard from "./OrgGoalCard";
 import GoalEditDrawer, { type DrawerState } from "./GoalEditDrawer";
 import GoalCommentsDrawer from "./GoalCommentsDrawer";
@@ -24,7 +24,7 @@ export default function HomeGoalsView() {
   const [goals, setGoals] = useState<Goal[]>([]);
   const [history, setHistory] = useState<Record<string, number[]>>({});
   const [mission, setMission] = useState<string>(HERO_FALLBACK);
-  const [matchesPerWeek, setMatchesPerWeek] = useState<number | null>(null);
+  const [snap, setSnap] = useState<Snapshot | null>(null);
   const [drawer, setDrawer] = useState<DrawerState>(null);
   const [commentsGoal, setCommentsGoal] = useState<Goal | null>(null);
 
@@ -69,8 +69,8 @@ export default function HomeGoalsView() {
         .maybeSingle();
       if (!off && data?.value) setMission(data.value as string);
     })();
-    fetchMatchesPerWeek().then((n) => {
-      if (!off) setMatchesPerWeek(n);
+    fetchSnapshot().then((s) => {
+      if (!off) setSnap(s);
     });
     return () => {
       off = true;
@@ -94,12 +94,7 @@ export default function HomeGoalsView() {
   return (
     <>
       <GradientDefs />
-      <HeroBand
-        mission={mission}
-        cities={VISIBLE_CITIES.length}
-        orgGoals={goals.length}
-        matchesPerWeek={matchesPerWeek}
-      />
+      <HeroBand mission={mission} snapshot={snap} />
 
       <div className="mx-auto max-w-[1280px] px-[30px] pb-16">
         {/* Goal deck pulled up into the hero band (the overlap is the point). */}
@@ -169,14 +164,10 @@ export default function HomeGoalsView() {
 
 function HeroBand({
   mission,
-  cities,
-  orgGoals,
-  matchesPerWeek,
+  snapshot,
 }: {
   mission: string;
-  cities: number;
-  orgGoals: number;
-  matchesPerWeek: number | null;
+  snapshot: Snapshot | null;
 }) {
   return (
     <div
@@ -235,39 +226,88 @@ function HeroBand({
         }}
       />
 
-      {/* Extra bottom padding leaves dark room for the -58px goal-deck overlap. */}
-      <div className="relative mx-auto flex max-w-[1280px] flex-wrap items-center gap-6 px-[30px] pb-[80px] pt-[38px]">
-        <div className="min-w-0 flex-1">
-          <span className="inline-block rounded-full border px-[11px] py-[5px] text-[10px] font-extrabold uppercase tracking-[0.15em]" style={{ color: "#8ff0c0", background: "rgba(53,199,127,.13)", borderColor: "rgba(53,199,127,.3)" }}>
-            MatchDay mission
-          </span>
-          <h1 className="mt-[14px] max-w-[56ch] text-[25px] font-[660] leading-[1.35] tracking-[-0.018em]" style={{ color: "#f2fdf7" }}>
-            {mission}
-          </h1>
-          {/* The mint sub-line is dropped: the app's mission string already ends
-              with the "7 cities down…" tagline, so a separate line duplicated it. */}
-        </div>
-        <div
-          className="flex flex-none overflow-hidden rounded-[16px] border"
-          style={{ background: "rgba(255,255,255,.055)", borderColor: "rgba(255,255,255,.13)", backdropFilter: "blur(2px)" }}
-        >
-          <ScoreTile v={cities} k="Cities" first />
-          {matchesPerWeek != null && <ScoreTile v={matchesPerWeek} k="Matches / wk" />}
-          <ScoreTile v={orgGoals} k="Org goals" />
-        </div>
+      {/* Mission full-width, then the snapshot strip. Bottom padding leaves
+          dark room for the -58px goal-deck overlap. */}
+      <div className="relative mx-auto max-w-[1280px] px-[30px] pb-[60px] pt-[38px]">
+        <span className="inline-block rounded-full border px-[11px] py-[5px] text-[10px] font-extrabold uppercase tracking-[0.15em]" style={{ color: "#8ff0c0", background: "rgba(53,199,127,.13)", borderColor: "rgba(53,199,127,.3)" }}>
+          MatchDay mission
+        </span>
+        <h1 className="mt-[14px] max-w-[56ch] text-[25px] font-[660] leading-[1.35] tracking-[-0.018em]" style={{ color: "#f2fdf7" }}>
+          {mission}
+        </h1>
+        <SnapshotStrip snapshot={snapshot} />
       </div>
     </div>
   );
 }
 
-function ScoreTile({ v, k, first }: { v: number; k: string; first?: boolean }) {
+function SnapshotStrip({ snapshot }: { snapshot: Snapshot | null }) {
+  // Reserve the strip's height while the queries resolve so the goal deck
+  // doesn't jump.
+  if (!snapshot) return <div aria-hidden className="mt-[26px] h-[112px]" />;
+  const mo = snapshot.monthLabel;
+  const cells: { k: string; v: string; u: string; title: string }[] = [];
+  if (snapshot.revenueNet != null)
+    cells.push({
+      k: "Revenue",
+      v: `$${Math.round(snapshot.revenueNet / 1000)}K`,
+      u: "all 7 cities",
+      title: `Net revenue (gross − processing fees): SUM(fin_revenue.net) for ${mo}. Basis: payment date (Stripe charge date), month-to-date. Not the match-date basis.`,
+    });
+  if (snapshot.monthlyPlayers != null)
+    cells.push({
+      k: "Monthly players",
+      v: snapshot.monthlyPlayers.toLocaleString("en-US"),
+      u: "unique players",
+      title: `Distinct real players (user_is_fake_player = false) in non-cancelled matches with start_date in ${mo}, month-to-date.`,
+    });
+  if (snapshot.activeMembers != null)
+    cells.push({
+      k: "Active members",
+      v: snapshot.activeMembers.toLocaleString("en-US"),
+      u: "paid memberships",
+      title: "mdapi_subscriptions with status = ACTIVE and price > 0, as of now.",
+    });
+  if (snapshot.activeFields != null)
+    cells.push({
+      k: "Active fields",
+      v: snapshot.activeFields.toLocaleString("en-US"),
+      u: "used in the last 30 days",
+      title: "Distinct mdapi_matches.field_id with a non-cancelled match in the last 30 days.",
+    });
+  if (cells.length === 0) return null;
   return (
-    <div className={`px-6 py-[14px] text-center ${first ? "" : "border-l"}`} style={{ borderColor: "rgba(255,255,255,.1)" }}>
-      <div className="text-[25px] font-[730] leading-none tracking-[-0.03em]" style={{ color: "#eafff4" }}>
-        {v}
+    <div className="mt-[26px]">
+      <div className="flex items-baseline gap-[10px] px-[3px] pb-[9px]">
+        <span className="text-[11px] font-[780] uppercase tracking-[0.13em]" style={{ color: "#8fc4ac" }}>
+          Operating snapshot
+        </span>
+        <span className="text-[12px] font-semibold" style={{ color: "#6ea78e" }}>
+          {mo} · month to date
+        </span>
       </div>
-      <div className="mt-[7px] text-[9.5px] font-[750] uppercase tracking-[0.12em]" style={{ color: "#84bda2" }}>
-        {k}
+      <div
+        className="grid overflow-hidden rounded-[16px] border"
+        style={{
+          gridTemplateColumns: `repeat(${cells.length},minmax(0,1fr))`,
+          background: "rgba(255,255,255,.055)",
+          borderColor: "rgba(255,255,255,.13)",
+          backdropFilter: "blur(2px)",
+        }}
+      >
+        {cells.map((c, i) => (
+          <div key={c.k} title={c.title} className={`px-[22px] py-[16px] ${i ? "border-l" : ""}`} style={{ borderColor: "rgba(255,255,255,.1)" }}>
+            <div className="text-[9.5px] font-[750] uppercase tracking-[0.12em]" style={{ color: "#84bda2" }}>
+              {c.k}
+            </div>
+            <div className="mt-[9px] text-[31px] font-[730] leading-none tracking-[-0.032em]" style={{ color: "#eafff4" }}>
+              {c.v}
+            </div>
+            <div className="mt-[7px] text-[11.5px] font-semibold" style={{ color: "#6ea78e" }}>
+              {c.u}
+            </div>
+          </div>
+        ))}
       </div>
     </div>
   );
