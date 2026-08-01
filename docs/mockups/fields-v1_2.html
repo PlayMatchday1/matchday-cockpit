@@ -1,0 +1,769 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+<meta charset="utf-8">
+<meta name="viewport" content="width=device-width,initial-scale=1">
+<title>Fields — Match Ops — MatchDay Clubhouse</title>
+<style>
+:root{
+  --forest:#0d3b2e; --forest-deep:#072a20; --accent:#35c77f; --logo:#2cdb87;
+  --mint:#e0f2e7; --amount:#e2502b; --ink:#12241d; --muted:#6d7b74;
+  --warn-bg:#fdf1d0; --warn-ink:#8a6300; --warn-line:#e3c369;
+  --crit-bg:#fdeae4; --crit-ink:#a8391a; --crit-line:#f0bda9;
+  --ok-ink:#12704a;
+  --rail-a:#fafbfa; --rail-b:#f6f9f7; --board-bg:#f8faf9;
+  --chip-bg:#eef3f0; --chip-line:#e2eae5;
+  --line:#e6ebe8; --hair:#eff3f1; --surface:#ffffff;
+  --canvas:#f4efe4;
+}
+*{box-sizing:border-box}
+html,body{margin:0;padding:0;height:100%}
+body{font:14px/1.45 -apple-system,BlinkMacSystemFont,"Segoe UI",Inter,Helvetica,Arial,sans-serif;
+  color:var(--ink);background:var(--canvas);
+  background-image:radial-gradient(circle at 1px 1px, rgba(13,59,46,.055) 1px, transparent 0);
+  background-size:22px 22px;-webkit-font-smoothing:antialiased}
+
+/* ── top nav ─────────────────────────────────────────── */
+.top{height:56px;background:var(--forest);display:flex;align-items:center;
+  padding:0 22px;gap:26px;position:sticky;top:0;z-index:40}
+.brand{font-weight:800;letter-spacing:.3px;color:var(--logo);font-size:17px;font-style:italic}
+.brand span{color:#fff;font-weight:600;font-size:14px;font-style:italic;margin-left:5px}
+.tnav{display:flex;gap:4px;margin-left:auto;margin-right:auto;align-items:center}
+.tnav a{color:#dfeee7;text-decoration:none;font-size:13.5px;font-weight:600;
+  padding:7px 13px;border-radius:999px}
+.tnav a.dim{color:#628a7b}
+.tnav a.on{background:var(--accent);color:#06281d}
+.who{color:#cfe6db;font-size:13px}
+
+/* ── ops rail ────────────────────────────────────────── */
+.shell{display:flex;min-height:calc(100vh - 56px)}
+.rail{flex:0 0 232px;background:var(--rail-a);border-right:1px solid var(--line);
+  display:flex;flex-direction:column;padding:16px 0 0}
+.rail.min{flex-basis:62px}
+.rlab{font-size:10.5px;letter-spacing:.09em;color:var(--muted);font-weight:700;
+  padding:10px 20px 6px}
+.rail.min .rlab{visibility:hidden;height:20px;padding:0}
+.ri{display:flex;align-items:center;gap:11px;padding:0 12px;margin:1px 8px;height:44px;
+  border-radius:9px;color:var(--forest);font-weight:600;font-size:14px;cursor:pointer;
+  position:relative;text-decoration:none}
+.ri:hover{background:var(--chip-bg)}
+.ri.on{background:var(--mint);color:var(--forest-deep)}
+.ri.on::before{content:"";position:absolute;left:-8px;top:8px;bottom:8px;width:3px;
+  border-radius:0 3px 3px 0;background:var(--accent)}
+.ri svg{flex:0 0 17px;width:17px;height:17px;stroke:currentColor;fill:none;stroke-width:1.7}
+.rail.min .ri span.t{display:none}
+.rail.min .ri{justify-content:center;padding:0}
+.rbadge{margin-left:auto;background:var(--chip-bg);border:1px solid var(--chip-line);
+  color:var(--muted);font-size:11px;font-weight:700;border-radius:999px;padding:1px 7px}
+.rail.min .rbadge{display:none}
+.rfoot{margin-top:auto;border-top:1px solid var(--line);padding:8px}
+.rcol{display:flex;align-items:center;gap:9px;height:40px;padding:0 12px;border-radius:9px;
+  color:var(--muted);font-size:13px;font-weight:600;cursor:pointer;background:none;border:0;width:100%}
+.rcol:hover{background:var(--chip-bg)}
+.rail.min .rcol span{display:none}
+.rail.min .rcol{justify-content:center;padding:0}
+
+/* ── page ────────────────────────────────────────────── */
+.main{flex:1;min-width:0;padding:26px 30px 60px}
+.phead{display:flex;align-items:flex-start;gap:16px;margin-bottom:16px}
+h1{font-size:30px;margin:0 0 3px;letter-spacing:-.4px;color:var(--forest-deep)}
+.sub{color:var(--muted);font-size:14px;margin:0}
+.pright{margin-left:auto;display:flex;align-items:center;gap:9px;flex-wrap:wrap;justify-content:flex-end}
+.fresh{background:var(--surface);border:1px solid var(--line);border-radius:999px;
+  padding:5px 11px;font-size:11px;color:var(--muted);font-weight:600;letter-spacing:.02em}
+.btn{border:1px solid var(--line);background:var(--surface);border-radius:9px;
+  height:36px;padding:0 14px;font-size:13px;font-weight:700;color:var(--forest);cursor:pointer;
+  display:inline-flex;align-items:center;gap:7px;white-space:nowrap}
+.btn:hover{background:var(--chip-bg)}
+.btn.pri{background:var(--accent);border-color:var(--accent);color:#06281d}
+.btn.pri:hover{background:#2fb974}
+.btn.sm{height:30px;padding:0 10px;font-size:12px;border-radius:8px}
+.btn svg{width:15px;height:15px;stroke:currentColor;fill:none;stroke-width:1.8}
+
+/* ── filters ─────────────────────────────────────────── */
+.filters{background:var(--surface);border:1px solid var(--line);border-radius:12px;
+  padding:12px 14px;display:flex;gap:10px;align-items:flex-end;flex-wrap:wrap;margin-bottom:14px}
+.fg{display:flex;flex-direction:column;gap:5px}
+.fg label{font-size:10.5px;letter-spacing:.08em;color:var(--muted);font-weight:700}
+.fg select,.fg input{height:36px;border:1px solid var(--line);border-radius:9px;background:var(--rail-b);
+  padding:0 11px;font:600 13.5px/1 inherit;color:var(--ink)}
+.fg select{cursor:pointer;padding-right:30px;appearance:none;
+  background-image:url("data:image/svg+xml;utf8,<svg xmlns='http://www.w3.org/2000/svg' width='12' height='12' viewBox='0 0 12 12'><path d='M3 4.5 6 7.5 9 4.5' fill='none' stroke='%236d7b74' stroke-width='1.6' stroke-linecap='round'/></svg>");
+  background-repeat:no-repeat;background-position:right 10px center}
+.fg input{width:250px;font-weight:600}
+.fg input::placeholder{color:#9aa8a1;font-weight:600}
+.scope{margin-left:auto;font-size:12px;color:var(--muted);align-self:center;text-align:right}
+.scope b{color:var(--forest);font-weight:700}
+.clearf{display:none}
+.clearf.on{display:inline-flex}
+
+/* the view segment. every option carries its own count, so you can see what a
+   filter would hold before you press it — and a zero option says zero, it does
+   not disappear. */
+.seg{display:inline-flex;background:var(--chip-bg);border:1px solid var(--chip-line);
+  border-radius:9px;padding:2px;gap:2px}
+.seg button{border:0;background:none;border-radius:7px;height:30px;padding:0 11px;cursor:pointer;
+  font:700 12px/1 inherit;color:var(--muted);display:inline-flex;align-items:center;gap:6px}
+.seg button:hover{color:var(--forest)}
+.seg button.on{background:var(--surface);color:var(--forest-deep);box-shadow:0 1px 2px rgba(9,40,30,.08)}
+.seg em{font-style:normal;font-weight:800;font-size:10.5px;color:#9aa8a1}
+.seg button.on em{color:var(--accent)}
+
+/* ── stat tiles ──────────────────────────────────────── */
+.tiles{display:grid;grid-template-columns:repeat(3,1fr);gap:12px;margin-bottom:12px}
+.tile{background:var(--surface);border:1px solid var(--line);border-radius:12px;padding:14px 16px}
+.tile .tl{font-size:10.5px;letter-spacing:.08em;color:var(--muted);font-weight:700}
+.tile .tv{font-size:30px;font-weight:800;letter-spacing:-1px;margin:6px 0 2px;line-height:1}
+.tile .tv small{font-size:15px;font-weight:700;color:var(--muted);letter-spacing:-.2px}
+.tile .tv.good{color:var(--ok-ink)}
+.tile .tv.warn{color:var(--warn-ink)}
+.tile .tn{font-size:11.5px;color:var(--muted)}
+
+/* ── panels ──────────────────────────────────────────── */
+.panel{background:var(--surface);border:1px solid var(--line);border-radius:12px;margin-bottom:14px}
+.ph{display:flex;align-items:center;gap:10px;padding:13px 16px;border-bottom:1px solid var(--hair)}
+.ph h2{font-size:14.5px;margin:0;letter-spacing:-.2px;color:var(--forest-deep)}
+.ph .pn{font-size:11.5px;color:var(--muted)}
+.ph .pr{margin-left:auto;display:flex;align-items:center;gap:8px}
+.pfoot{font-size:11px;color:var(--muted);padding:10px 16px 12px;border-top:1px dashed var(--hair);
+  line-height:1.5}
+
+/* the tile's own control. it is aimed at, so it clears the 30px height rule on
+   its own padding rather than sitting at an 11px line box. */
+.tlink{display:inline-block;margin-top:7px;padding:6px 10px;border-radius:8px;
+  border:1px solid var(--line);background:var(--rail-a);color:var(--ok-ink);
+  font:inherit;font-size:11.5px;font-weight:800;cursor:pointer;line-height:1.4}
+.tlink:hover{background:var(--chip-bg)}
+.flag{font-size:10.5px;font-weight:800;letter-spacing:.03em;border-radius:999px;padding:3px 9px;
+  border:1px solid var(--chip-line);background:var(--chip-bg);color:var(--muted);white-space:nowrap;
+  flex:0 0 auto}
+.flag.w{background:var(--warn-bg);border-color:var(--warn-line);color:var(--warn-ink)}
+.flag.c{background:var(--crit-bg);border-color:var(--crit-line);color:var(--crit-ink)}
+.flag.g{background:var(--mint);border-color:#bfe4cf;color:var(--ok-ink)}
+
+/* ── the directory ───────────────────────────────────── */
+/* column widths are declared once, here, and shared by the header row and every
+   field row — an inline width on a cell would outrank the narrow-layout rules
+   below and kill them silently, which is a trap I have already fallen into. */
+.dgrid{display:grid;align-items:center;
+  grid-template-columns:minmax(212px,1fr) 150px 170px 160px 138px 128px 68px;
+  gap:0 14px;padding:0 16px}
+.dhead{position:sticky;top:56px;z-index:12;background:var(--rail-b);
+  border-bottom:1px solid var(--line);height:34px;
+  font-size:10px;letter-spacing:.08em;font-weight:800;color:var(--muted)}
+.cband{display:flex;align-items:center;gap:10px;padding:9px 16px;background:var(--board-bg);
+  border-top:1px solid var(--line);border-bottom:1px solid var(--hair)}
+.cband .cc{font-size:10.5px;font-weight:800;letter-spacing:.06em;background:var(--forest);
+  color:#dff3e9;border-radius:6px;padding:3px 7px}
+.cband .cn{font-weight:800;font-size:13.5px;color:var(--forest-deep)}
+.cband .cs{font-size:11.5px;color:var(--muted)}
+.cband .cm{margin-left:auto;display:flex;align-items:center;gap:8px;font-size:11.5px;color:var(--muted)}
+.cband .cm .av{width:22px;height:22px;border-radius:50%;background:var(--mint);color:var(--forest-deep);
+  font-size:10.5px;font-weight:800;display:flex;align-items:center;justify-content:center;
+  border:1px solid #bfe4cf}
+.cband .cm b{color:var(--forest);font-weight:700}
+.cband .cm a{color:var(--ok-ink);text-decoration:none;font-weight:700;font-size:11.5px}
+
+.frow{border-bottom:1px solid var(--hair);min-height:64px;position:relative}
+.frow:hover{background:var(--rail-b)}
+.frow .fn{font-weight:700;font-size:13.5px;display:flex;align-items:center;gap:7px;min-width:0}
+.frow .fn .nm{overflow:hidden;text-overflow:ellipsis;white-space:nowrap}
+.code{font-size:9.5px;font-weight:800;letter-spacing:.05em;color:var(--muted);
+  background:var(--chip-bg);border:1px solid var(--chip-line);border-radius:5px;padding:2px 5px;
+  flex:0 0 auto}
+.fmeta{font-size:11px;color:var(--muted);margin-top:3px;display:flex;gap:6px;align-items:center;
+  overflow:hidden;text-overflow:ellipsis;white-space:nowrap}
+.fmeta .dot{color:#c3d2cb;flex:0 0 auto}
+/* the address is the only part of the meta line that may be cut, and it has to be
+   cut with an ellipsis — a flex child clips flush unless it is told otherwise. */
+.fmeta .ad{overflow:hidden;text-overflow:ellipsis;white-space:nowrap;min-width:0}
+.fmeta .sf{flex:0 0 auto}
+/* an inline text link is not a button, but it is still aimed at — so it carries
+   its own vertical padding rather than sitting at a 14px line box. */
+.tel{color:var(--ok-ink);text-decoration:none;font-weight:700;font-size:12px;
+  display:inline-block;padding:3px 0;line-height:1.5;min-width:44px}
+.tel:hover{text-decoration:underline}
+.cname{font-size:12.5px;font-weight:700;overflow:hidden;text-overflow:ellipsis;white-space:nowrap}
+
+/* capacity: one range, one bar. the shaded band is the min–max the field is set
+   to run; the tick is what actually turns up. two numbers in two columns could
+   never show you that the tick sits outside the band. */
+.cap{font-size:12px;font-weight:700}
+.cap small{color:var(--muted);font-weight:600}
+.capbar{position:relative;height:8px;border-radius:5px;background:var(--chip-bg);margin-top:6px;
+  border:1px solid var(--chip-line)}
+.capbar .zone{position:absolute;top:-1px;bottom:-1px;background:var(--mint);border:1px solid #bfe4cf;
+  border-radius:5px}
+.capbar .tick{position:absolute;top:-4px;width:3px;height:14px;border-radius:2px;background:var(--forest)}
+.capbar .tick.low{background:var(--warn-ink)}
+.capnote{font-size:10.5px;color:var(--muted);margin-top:5px}
+.capnote.low{color:var(--warn-ink);font-weight:700}
+
+.spark{display:flex;align-items:flex-end;gap:2px;height:26px}
+.spark i{display:block;width:6px;background:var(--accent);border-radius:2px 2px 0 0;opacity:.85}
+.spark i.z{background:var(--chip-line);height:2px !important;border-radius:2px}
+.usnote{font-size:10.5px;color:var(--muted);margin-top:5px}
+
+.nx{font-size:12px;font-weight:700}
+.nx .when{display:block}
+.nx .reg{font-size:10.5px;font-weight:700;color:var(--muted);margin-top:3px}
+.nx .reg.short{color:var(--warn-ink)}
+.none{font-size:11.5px;color:var(--muted);font-style:normal}
+
+/* cost used to be its own right-hand column. it is now a third line under the
+   field's own name, because the last column is the schedule again — but it is
+   still the same two numbers, and the over-the-line one is still red. */
+.fcost{font-size:11px;color:var(--muted);font-weight:700;margin-top:3px}
+.fcost b{color:var(--ink);font-weight:800}
+
+.sched{display:inline-flex;align-items:center;gap:5px;font-size:11.5px;font-weight:800;
+  color:var(--ok-ink);text-decoration:none;border:1px solid var(--chip-line);background:var(--rail-a);
+  border-radius:8px;padding:7px 10px;line-height:1.3;white-space:nowrap}
+.sched:hover{background:var(--chip-bg);border-color:#c8d8d1}
+.sched.add{color:var(--muted)}
+.sched svg{width:12px;height:12px;stroke:currentColor;fill:none;stroke-width:2}
+
+.rowbtn{width:30px;height:30px;border-radius:8px;border:1px solid transparent;background:none;
+  cursor:pointer;display:flex;align-items:center;justify-content:center;color:var(--muted)}
+.frow:hover .rowbtn{border-color:var(--line);background:var(--surface)}
+.rowbtn:hover{color:var(--forest);border-color:#c8d8d1 !important}
+.rowbtn svg{width:15px;height:15px;stroke:currentColor;fill:none;stroke-width:1.8}
+
+.empty{padding:34px 16px;text-align:center;color:var(--muted);font-size:13px}
+.empty b{color:var(--forest)}
+
+
+@media(max-width:1400px){
+  /* the columns give width back in order of how little you lose: the schedule
+     column and the actions first, then contact — never the field name, which is
+     the thing you are scanning for. */
+  .dgrid{grid-template-columns:minmax(184px,1fr) 130px 144px 140px 118px 112px 66px;gap:0 10px;
+    padding:0 12px}
+  .cband,.ph,.pfoot{padding-left:12px;padding-right:12px}
+  .fg input{width:190px}
+  /* the schedule link loses its second word here rather than wrapping mid-phrase. */
+  .sched .w{display:none}
+}
+</style>
+</head>
+<body>
+
+<div class="top">
+  <div class="brand">MATCHDAY<span>Clubhouse</span></div>
+  <nav class="tnav">
+    <a href="#">Home</a><a href="#">Finance</a><a href="#">Growth</a>
+    <a href="#" class="dim">Membership</a><a href="#" class="on">Match Ops</a><a href="#">Tech</a>
+  </nav>
+  <div class="who">Ryan Mancuso ▾</div>
+</div>
+
+<div class="shell">
+  <aside class="rail" id="rail">
+    <div class="rlab">OPERATIONS</div>
+    <a class="ri" href="#"><svg viewBox="0 0 24 24"><rect x="3" y="5" width="18" height="16" rx="2"/><path d="M8 3v4M16 3v4M3 11h18"/></svg><span class="t">Master Schedule</span></a>
+    <a class="ri" href="#"><svg viewBox="0 0 24 24"><path d="M3 5h18l-7 8v6l-4 2v-8z"/></svg><span class="t">Field Pipeline</span></a>
+    <a class="ri on" href="#"><svg viewBox="0 0 24 24"><rect x="3" y="6" width="18" height="13" rx="2"/><circle cx="12" cy="12.5" r="2.6"/></svg><span class="t">Field Ops</span></a>
+    <a class="ri" href="#"><svg viewBox="0 0 24 24"><path d="m12 4 2.4 4.9 5.4.8-3.9 3.8.9 5.4-4.8-2.6-4.8 2.6.9-5.4L4.2 9.7l5.4-.8z"/></svg><span class="t">Reviews</span></a>
+    <div class="rlab">CONVERSATIONS</div>
+    <a class="ri" href="#"><svg viewBox="0 0 24 24"><path d="M21 12a8 8 0 0 1-8 8H4l2-3a8 8 0 1 1 15-5z"/></svg><span class="t">Match Chats</span></a>
+    <a class="ri" href="#"><svg viewBox="0 0 24 24"><circle cx="9" cy="8" r="3.2"/><path d="M3 20c0-3.3 2.7-5.5 6-5.5s6 2.2 6 5.5M17 11.5a2.8 2.8 0 1 0 0-5.6M18 20c0-2.4-.9-4.1-2.4-5.1"/></svg><span class="t">Player Chats</span><span class="rbadge">2</span></a>
+    <div class="rfoot">
+      <button class="rcol" onclick="document.getElementById('rail').classList.toggle('min')">
+        <svg viewBox="0 0 24 24" width="15" height="15" fill="none" stroke="currentColor" stroke-width="2"><path d="M14 6l-6 6 6 6"/></svg><span>Collapse</span>
+      </button>
+    </div>
+  </aside>
+
+  <main class="main">
+    <div class="phead">
+      <div>
+        <h1>Fields</h1>
+        <p class="sub" id="psub">–</p>
+      </div>
+      <div class="pright">
+        <span class="fresh" id="fresh"></span>
+        <button class="btn"><svg viewBox="0 0 24 24"><path d="M12 3v13M12 16l-4-4M12 16l4-4"/><path d="M4 17v2a2 2 0 0 0 2 2h12a2 2 0 0 0 2-2v-2"/></svg>Export</button>
+        <button class="btn pri"><svg viewBox="0 0 24 24"><path d="M12 5v14M5 12h14"/></svg>Add field</button>
+      </div>
+    </div>
+
+    <div class="filters">
+      <div class="fg"><label>SEARCH</label>
+        <input id="q" type="search" placeholder="Field, code, contact or address…" oninput="render()"></div>
+      <div class="fg"><label>CITY</label><select id="city" onchange="render()"></select></div>
+      <div class="fg"><label>SHOW</label><div class="seg" id="seg"></div></div>
+      <button class="btn clearf" id="clearf" onclick="clearF()">Clear filters</button>
+      <div class="scope" id="scope"></div>
+    </div>
+
+    <div class="tiles">
+      <div class="tile"><div class="tl">PLAYING THIS WEEK</div>
+        <div class="tv" id="t1">–</div><div class="tn" id="t1n"></div></div>
+      <div class="tile"><div class="tl">MATCHES, NEXT 7 DAYS</div>
+        <div class="tv" id="t2">–</div><div class="tn" id="t2n"></div></div>
+      <div class="tile"><div class="tl">NEEDS A LOOK</div>
+        <div class="tv" id="t3">–</div><div class="tn" id="t3n"></div>
+        <!-- the panel that used to list these is gone, so this tile is now the only
+             way in to them. it is a control, so it says which state it is in and
+             what pressing it does — the word carries the state, not a colour. -->
+        <button class="tlink" id="attnJump" onclick="setView(VIEW==='attn'?'all':'attn')"></button></div>
+    </div>
+
+    <div class="panel">
+      <div class="ph">
+        <h2>All fields</h2><span class="pn" id="listN"></span>
+      </div>
+      <div class="dgrid dhead">
+        <div>FIELD</div><div>CAPACITY &amp; TYPICAL FILL</div><div>FIELD CONTACT</div>
+        <div>LAST 8 WEEKS</div><div>NEXT MATCH</div><div>SCHEDULE</div><div></div>
+      </div>
+      <div id="list"></div>
+      <div class="pfoot" id="listFoot"></div>
+    </div>
+  </main>
+</div>
+
+
+<script>
+/* ═══════════════════════════════════════════════════════════════════
+   FIELDS — Match Ops
+   Every number on this page is derived from MATCHES, which is itself
+   generated once from each field's recurring slots. Nothing is typed
+   twice: the sparkline, the fill average, the cost per player, the
+   idle count and the tiles all read the same array.
+   ═══════════════════════════════════════════════════════════════════ */
+
+var NOW = "2026-08-01";                 /* Saturday */
+var DAY = 864e5;
+function D(s){return Date.UTC(+s.slice(0,4), +s.slice(5,7)-1, +s.slice(8,10))}
+function ds(t){return new Date(t).toISOString().slice(0,10)}
+function esc(s){return String(s).replace(/[&<>"]/g,function(c){
+  return {"&":"&amp;","<":"&lt;",">":"&gt;",'"':"&quot;"}[c]})}
+var MON=["Jan","Feb","Mar","Apr","May","Jun","Jul","Aug","Sep","Oct","Nov","Dec"];
+var WD=["Sun","Mon","Tue","Wed","Thu","Fri","Sat"];
+function dshort(s){var t=D(s);return MON[new Date(t).getUTCMonth()]+" "+new Date(t).getUTCDate()}
+function dlong(s){var t=D(s);return WD[new Date(t).getUTCDay()]+" "+dshort(s)}
+
+/* the thresholds this page judges a field by, named once and printed in the
+   panel footer, so a flag can always be traced back to a rule. */
+var IDLE_DAYS      = 45;   /* no match in this many days and none booked → idle  */
+var FILL_MIN_MATCH = 3;    /* below this many matches we will not state a "typical" fill */
+var TRAIL_WEEKS    = 8;
+var UPCOMING_DAYS  = 7;
+
+/* ── cities ──────────────────────────────────────────── */
+var CITIES = [
+  {c:"ATX", n:"Austin",            cm:"Deonna Price",   ph:"(512) 555-0140"},
+  {c:"DFW", n:"Dallas–Fort Worth", cm:"Marcus Tavares", ph:"(214) 555-0161"},
+  {c:"HOU", n:"Houston",           cm:"Ana Reyes",      ph:"(713) 555-0129"},
+  {c:"SATX",n:"San Antonio",       cm:"Luis Gallardo",  ph:"(210) 555-0173"},
+  {c:"ELP", n:"El Paso",           cm:"Priya Nandi",    ph:"(915) 555-0107"},
+  {c:"ATL", n:"Atlanta",           cm:"Jamal Whitfield",ph:"(404) 555-0192"},
+  {c:"NSH", n:"Nashville",         cm:"Erin Kealoha",   ph:"(615) 555-0118"}
+];
+
+/* ── fields ──────────────────────────────────────────────────────────
+   slots  = the recurring bookings (weekday 0=Sun, kickoff, format)
+   from/to= the window the booking is live; a null `to` means still running
+   fb     = the fill this field typically draws, before the week-to-week wobble
+   cn/cp  = the contact. NULL means there is nobody to call, and that is a
+            fact the page reports, not a blank it paints over with a dash.   */
+var FIELDS = [
+ {id:1, c:"ATX", n:"Zilker Park Field 4", k:"ZILK", sf:"Grass", lt:1, ad:"2100 Barton Springs Rd, Austin, TX 78704",
+  mn:12, mx:22, cost:120, cn:"Marcy Alvarez", cp:"(512) 555-0182", su:"https://zilkerrec.example/booking",
+  from:"2026-05-01", to:null, fb:19, slots:[{w:6,t:"9:00 AM",f:"7v7"},{w:3,t:"7:30 PM",f:"7v7"}]},
+
+ {id:2, c:"ATX", n:"Austin Sports Center — Indoor 2", k:"ASC2", sf:"Indoor turf", lt:1, ad:"425 Woodward St, Austin, TX 78704",
+  mn:10, mx:18, cost:165, cn:null, cp:null, su:"https://austinsportscenter.example/schedule",
+  from:"2026-05-01", to:null, fb:16, slots:[{w:2,t:"8:00 PM",f:"5v5"}]},
+
+ {id:3, c:"ATX", n:"Northeast Metro Park", k:"NEMP", sf:"Grass", lt:0, ad:"15500 Sun Light Near Way, Pflugerville, TX 78660",
+  mn:14, mx:24, cost:95, cn:"Ruben Diaz", cp:"(512) 555-0119", su:null,
+  from:"2026-05-01", to:null, fb:18, slots:[{w:0,t:"6:00 PM",f:"9v9"}]},
+
+ {id:4, c:"ATX", n:"Onion Creek Sportsplex", k:"ONCK", sf:"Turf", lt:1, ad:"5600 Onion Creek Dr, Austin, TX 78744",
+  mn:12, mx:20, cost:140, cn:null, cp:null, su:null,
+  from:"2026-05-01", to:"2026-06-12", fb:12, slots:[{w:5,t:"8:30 PM",f:"7v7"}]},
+
+ {id:5, c:"DFW", n:"Grand Prairie Sports Complex", k:"GPSC", sf:"Turf", lt:1, ad:"1002 Lone Star Pkwy, Grand Prairie, TX 75050",
+  mn:12, mx:22, cost:150, cn:"Terrance Boyd", cp:"(214) 555-0177", su:"https://gpsports.example/fields",
+  from:"2026-05-01", to:null, fb:20, slots:[{w:6,t:"8:00 AM",f:"7v7"},{w:4,t:"8:00 PM",f:"7v7"}]},
+
+ {id:6, c:"DFW", n:"Fort Worth Futsal", k:"FWF", sf:"Indoor court", lt:1, ad:"3400 W Vickery Blvd, Fort Worth, TX 76107",
+  mn:8, mx:14, cost:110, cn:"Ellie Nguyen", cp:"(817) 555-0143", su:null,
+  from:"2026-05-01", to:null, fb:12, slots:[{w:1,t:"7:00 PM",f:"5v5"}]},
+
+ {id:7, c:"DFW", n:"Craig Ranch Regional Park", k:"CRAG", sf:"Grass", lt:0, ad:"6151 Alma Rd, McKinney, TX 75070",
+  mn:14, mx:24, cost:85, cn:null, cp:null, su:null,
+  from:"2026-05-01", to:null, fb:11, slots:[{w:0,t:"5:30 PM",f:"9v9"}]},
+
+ {id:8, c:"DFW", n:"Kiest Park", k:"KIST", sf:"Grass", lt:1, ad:"3080 S Hampton Rd, Dallas, TX 75224",
+  mn:12, mx:20, cost:75, cn:"Sandra Ruiz", cp:"(214) 555-0198", su:null,
+  from:"2026-05-01", to:null, fb:18, slots:[{w:2,t:"7:30 PM",f:"7v7"}]},
+
+ {id:9, c:"HOU", n:"Katy International Soccer Complex", k:"KISC", sf:"Turf", lt:1, ad:"1830 Katy Fort Bend Rd, Katy, TX 77493",
+  mn:12, mx:22, cost:175, cn:"Nadia Ahmed", cp:"(281) 555-0166", su:"https://katyintl.example/book",
+  from:"2026-05-01", to:null, fb:20, slots:[{w:6,t:"7:00 PM",f:"7v7"},{w:0,t:"8:00 AM",f:"7v7"}]},
+
+ {id:10,c:"HOU", n:"Memorial Park Fields", k:"MEM", sf:"Grass", lt:0, ad:"6501 Memorial Dr, Houston, TX 77007",
+  mn:14, mx:24, cost:90, cn:null, cp:null, su:null,
+  from:"2026-05-01", to:null, fb:17, slots:[{w:4,t:"6:30 PM",f:"9v9"}]},
+
+ {id:11,c:"HOU", n:"The Hattrick", k:"HTRK", sf:"Indoor turf", lt:1, ad:"9950 Bissonnet St, Houston, TX 77036",
+  mn:10, mx:16, cost:130, cn:"Devon Pryor", cp:"(713) 555-0104", su:null,
+  from:"2026-05-01", to:null, fb:13, slots:[{w:3,t:"9:00 PM",f:"5v5"}]},
+
+ {id:12,c:"SATX",n:"Soccer Central", k:"SCTL", sf:"Indoor turf", lt:1, ad:"1200 NE Loop 410, San Antonio, TX 78209",
+  mn:10, mx:18, cost:145, cn:"Marisol Cruz", cp:"(210) 555-0111", su:"https://soccercentral.example/times",
+  from:"2026-05-01", to:null, fb:15, slots:[{w:2,t:"8:30 PM",f:"5v5"}]},
+
+ {id:13,c:"SATX",n:"Mainland Sports Complex", k:"MAIN", sf:"Turf", lt:1, ad:"8400 Rockhill Dr, San Antonio, TX 78209",
+  mn:12, mx:20, cost:135, cn:null, cp:null, su:null,
+  from:"2026-05-01", to:null, fb:14, slots:[{w:5,t:"7:00 PM",f:"7v7"}]},
+
+ {id:14,c:"SATX",n:"Southside Lions Park", k:"SLIO", sf:"Grass", lt:0, ad:"3100 Hiawatha St, San Antonio, TX 78223",
+  mn:14, mx:22, cost:80, cn:"Hector Vela", cp:"(210) 555-0155", su:null,
+  from:"2026-05-01", to:null, fb:15, slots:[{w:0,t:"7:30 AM",f:"9v9"}]},
+
+ {id:15,c:"ELP", n:"Galatzan Park", k:"GALZ", sf:"Grass", lt:0, ad:"650 Wallenberg Dr, El Paso, TX 79912",
+  mn:12, mx:20, cost:70, cn:null, cp:null, su:null,
+  from:"2026-05-01", to:null, fb:13, slots:[{w:6,t:"6:30 PM",f:"7v7"}]},
+
+ {id:16,c:"ELP", n:"Westside Sports Complex", k:"WSSC", sf:"Turf", lt:1, ad:"600 Westwind Dr, El Paso, TX 79912",
+  mn:12, mx:20, cost:125, cn:"Adriana Soto", cp:"(915) 555-0188", su:"https://westsideelp.example/schedule",
+  from:"2026-05-01", to:null, fb:16, slots:[{w:4,t:"8:00 PM",f:"7v7"}]},
+
+ {id:17,c:"ATL", n:"Hammond Park", k:"HMND", sf:"Grass", lt:1, ad:"705 Hammond Dr, Sandy Springs, GA 30328",
+  mn:14, mx:24, cost:95, cn:"Kofi Mensah", cp:"(404) 555-0122", su:null,
+  from:"2026-05-01", to:null, fb:18, slots:[{w:0,t:"6:00 PM",f:"9v9"}]},
+
+ {id:18,c:"ATL", n:"Silverbacks Park", k:"SLVR", sf:"Turf", lt:1, ad:"3200 Atlanta Silverbacks Way, Atlanta, GA 30340",
+  mn:12, mx:22, cost:160, cn:null, cp:null, su:null,
+  from:"2026-05-01", to:"2026-06-17", fb:15, slots:[{w:3,t:"8:00 PM",f:"7v7"}]},
+
+ {id:19,c:"NSH", n:"Nashville Fairgrounds", k:"NFAI", sf:"Grass", lt:1, ad:"500 Wingrove St, Nashville, TN 37203",
+  mn:12, mx:20, cost:105, cn:"Bryce Tolliver", cp:"(615) 555-0130", su:null,
+  from:"2026-05-01", to:null, fb:16, slots:[{w:5,t:"7:30 PM",f:"7v7"}]}
+];
+
+/* ── generate the match ledger ───────────────────────────────────────
+   one deterministic pass, from the slots. every match carries the number
+   of players who actually turned up (past) or are signed up so far
+   (upcoming) — so "typical fill" and "is Saturday going to fire" both
+   come from the same row rather than from two hand-typed numbers.      */
+function hsh(s){var h=2166136261;for(var i=0;i<s.length;i++){h^=s.charCodeAt(i);h=Math.imul(h,16777619)}return h>>>0}
+var W0 = D(NOW) - (TRAIL_WEEKS-1)*7*DAY - new Date(D(NOW)).getUTCDay()*DAY; /* Sunday, 8 weeks back */
+var MATCHES = [];
+FIELDS.forEach(function(f){
+  var a = D(f.from), b = f.to ? D(f.to) : D(NOW)+UPCOMING_DAYS*DAY;
+  for(var t=Math.max(a, W0); t<=Math.min(b, D(NOW)+UPCOMING_DAYS*DAY); t+=DAY){
+    var wd = new Date(t).getUTCDay();
+    f.slots.forEach(function(s){
+      if(s.w!==wd) return;
+      var d = ds(t), up = t >= D(NOW), r = hsh(f.k+d+s.t);
+      var wob = (r % 7) - 3;
+      var n = Math.max(0, Math.min(f.mx, f.fb + wob));
+      /* sign-ups so far run below final attendance — and the parentheses here
+         matter: % binds tighter than >>>, so (r>>>8 % 100) is r>>>8. */
+      if(up) n = Math.max(0, Math.min(f.mx, Math.round(n * (0.55 + ((r>>>8) % 100)/260))));
+      MATCHES.push({fid:f.id, d:d, t:s.t, f:s.f, n:n, up:up});
+    });
+  }
+});
+
+/* ── weekly buckets ──────────────────────────────────── */
+var WEEKS = [];
+for(var w=0; w<TRAIL_WEEKS; w++){
+  var a = W0 + w*7*DAY;
+  WEEKS.push({a:a, b:a+6*DAY, la:ds(a), lb:ds(a+6*DAY)});
+}
+function weekOf(d){var i=Math.floor((D(d)-W0)/(7*DAY)); return (i>=0&&i<TRAIL_WEEKS)?i:-1}
+
+/* ── per-field derivation ────────────────────────────── */
+function derive(f){
+  var mine = MATCHES.filter(function(m){return m.fid===f.id});
+  var past = mine.filter(function(m){return !m.up}).sort(function(p,q){return p.d<q.d?1:-1});
+  var next = mine.filter(function(m){return m.up}).sort(function(p,q){return p.d<q.d?-1:1});
+  var wk = WEEKS.map(function(){return {m:0,p:0}});
+  past.forEach(function(m){var i=weekOf(m.d); if(i<0) return; wk[i].m++; wk[i].p+=m.n});
+  var mN = wk.reduce(function(s,x){return s+x.m},0),
+      pN = wk.reduce(function(s,x){return s+x.p},0);
+  var last = past.length ? past[0].d : null;
+  var idleDays = last ? Math.round((D(NOW)-D(last))/DAY) : null;
+  var thisWeek = wk[TRAIL_WEEKS-1].m + next.filter(function(m){return weekOf(m.d)===TRAIL_WEEKS-1}).length;
+  return {
+    f:f, wk:wk, matches:mN, players:pN,
+    /* a "typical fill" from one or two matches is noise, so below the floor we
+       decline to state one rather than printing a number nobody should trust. */
+    fill: mN>=FILL_MIN_MATCH ? pN/mN : null,
+    last:last, idleDays:idleDays, next: next[0]||null, nextAll:next,
+    playingThisWeek: thisWeek>0, past:past
+  };
+}
+var ROWS = FIELDS.map(derive);
+var BYID = {}; ROWS.forEach(function(r){BYID[r.f.id]=r});
+
+/* ── the flags ───────────────────────────────────────────────────────
+   four rules, each of which names the thing you would actually do about
+   it. a field can carry more than one; the first is what the row shows
+   and all of them are listed in the drawer.                           */
+/* a field can trip several rules at once. this is the order of urgency, and the
+   flag a row leads with is its most urgent one — not whichever rule below
+   happened to fire first. a contactless field with a match already on the books
+   outranks the same field with nothing booked. */
+var RANK={contact_now:0, idle:1, never:1, fill:2, contact:3};
+function rk(r,x){return RANK[(x.k==="contact"&&r.next)?"contact_now":x.k]}
+function lead(r){return r.flags.slice().sort(function(a,b){return rk(r,a)-rk(r,b)})[0]}
+
+function flags(r){
+  var out=[];
+  if(!r.f.cp) out.push({k:"contact", lv: r.next?"c":"w",
+    lbl:"No contact",
+    why: r.next ? "Nobody to call, and a match is booked <b>"+dlong(r.next.d)+"</b>"
+                : "Nobody to call if something goes wrong on the day",
+    act:"Add contact"});
+  if(r.idleDays!==null && r.idleDays>=IDLE_DAYS && !r.next) out.push({k:"idle", lv:"w",
+    lbl:"Idle "+r.idleDays+"d",
+    why:"Last match <b>"+dshort(r.last)+"</b> — <b>"+r.idleDays+" days</b> ago, nothing booked since",
+    act:"Review booking"});
+  if(r.matches===0) out.push({k:"never", lv:"w", lbl:"Never used",
+    why:"No match here in the last "+TRAIL_WEEKS+" weeks", act:"Review booking"});
+  if(r.fill!==null && r.fill < r.f.mn) out.push({k:"fill", lv:"w",
+    lbl:"Under minimum",
+    why:"Typically <b>"+r.fill.toFixed(1)+" players</b> against a <b>"+r.f.mn+"</b> minimum",
+    act:"Adjust minimum"});
+  return out;
+}
+ROWS.forEach(function(r){r.flags=flags(r)});
+
+/* ── page state ──────────────────────────────────────── */
+var VIEW="all", CITY="all", Q="";
+var VIEWS=[
+  {k:"all",   lbl:"All"},
+  {k:"week",  lbl:"Playing this week"},
+  {k:"attn",  lbl:"Needs a look"},
+  {k:"idle",  lbl:"Idle"}
+];
+function inView(r,v){
+  if(v==="week") return r.playingThisWeek;
+  if(v==="attn") return r.flags.length>0;
+  if(v==="idle") return r.flags.some(function(x){return x.k==="idle"||x.k==="never"});
+  return true;
+}
+function inCity(r){return CITY==="all" || r.f.c===CITY}
+function inQ(r){
+  if(!Q) return true;
+  var s=(r.f.n+" "+r.f.k+" "+r.f.ad+" "+(r.f.cn||"")+" "+(r.f.cp||"")).toLowerCase();
+  return s.indexOf(Q)>=0;
+}
+function visible(){return ROWS.filter(function(r){return inCity(r)&&inQ(r)&&inView(r,VIEW)})}
+/* the segment counts are computed against city+search but NOT against the
+   segment itself — otherwise every option but the active one would read zero. */
+function base(){return ROWS.filter(function(r){return inCity(r)&&inQ(r)})}
+
+/* ── bits ────────────────────────────────────────────── */
+function money(n){return "$"+n.toLocaleString("en-US",{maximumFractionDigits:0})}
+function sparkHTML(r){
+  var mx = Math.max.apply(null, r.wk.map(function(x){return x.m}));
+  if(!r.matches) return '<div class="none">No matches in 8 weeks</div>';
+  return '<div class="spark" title="'+r.wk.map(function(x,i){
+      return WEEKS[i].la+": "+x.m+(x.m===1?" match":" matches")}).join(" · ")+'">'+
+    r.wk.map(function(x){
+      var h = x.m ? Math.max(4, Math.round(x.m/mx*26)) : 2;
+      return '<i class="'+(x.m?"":"z")+'" style="height:'+h+'px"></i>'}).join("")+
+    '</div><div class="usnote"><b>'+r.matches+'</b> match'+(r.matches===1?"":"es")+
+    ' · peak <b>'+mx+'</b> a week</div>';
+}
+function capHTML(r){
+  var f=r.f, span=f.mx||1;
+  var zl = f.mn/span*100, zw = (f.mx-f.mn)/span*100;
+  var bar='<div class="capbar"><div class="zone" style="left:'+zl.toFixed(1)+'%;width:'+zw.toFixed(1)+'%"></div>'+
+    (r.fill!==null ? '<div class="tick'+(r.fill<f.mn?" low":"")+'" style="left:calc('+
+        Math.min(100,r.fill/span*100).toFixed(1)+'% - 1.5px)"></div>' : '')+'</div>';
+  var note = r.fill===null
+    ? '<div class="capnote">'+(r.matches?'only '+r.matches+' match'+(r.matches===1?"":"es")+' — too few to call a typical fill'
+                                        :'no matches to average')+'</div>'
+    : '<div class="capnote'+(r.fill<f.mn?" low":"")+'">typically '+r.fill.toFixed(1)+
+      (r.fill<f.mn?' — under the minimum':'')+'</div>';
+  return '<div class="cap">'+f.mn+'–'+f.mx+' <small>players</small></div>'+bar+note;
+}
+function contactHTML(r){
+  if(!r.f.cp) return '<button class="btn sm" '+
+    'style="background:var(--warn-bg);border-color:var(--warn-line);color:var(--warn-ink)">'+
+    '<svg viewBox="0 0 24 24"><path d="M12 5v14M5 12h14"/></svg>Add contact</button>';
+  return '<div class="cname" title="'+esc(r.f.cn)+'">'+esc(r.f.cn)+'</div>'+
+    '<a class="tel" href="tel:'+r.f.cp.replace(/[^0-9]/g,"")+'">'+esc(r.f.cp)+'</a>';
+}
+function nextHTML(r){
+  if(!r.next) return '<div class="none">Nothing booked</div>';
+  var short = r.next.n < r.f.mn;
+  return '<div class="nx"><span class="when">'+dlong(r.next.d)+' · '+r.next.t+'</span>'+
+    '<span class="reg'+(short?" short":"")+'">'+r.next.n+' of '+r.f.mx+' in'+
+    (short?' · needs '+(r.f.mn-r.next.n)+' more':'')+'</span></div>';
+}
+/* what the field charges a match, sitting under its own name. this is the rate on
+   the agreement and nothing derived from it. */
+function costHTML(r){
+  return '<div class="fcost"><b>'+money(r.f.cost)+'</b> a match</div>';
+}
+/* the schedule column from the old page, kept as a link out — but a field with no
+   link on file gets an action rather than a dash, same rule as the contact cell. */
+function schedHTML(r){
+  var out = '<svg viewBox="0 0 24 24"><path d="M7 17L17 7M9 7h8v8"/></svg>';
+  return r.f.su
+    /* the word "schedule" drops out below 1400px, where the column is too narrow to
+       hold it on one line — under a SCHEDULE header "Open" alone still says it, and
+       a label that wraps mid-phrase reads worse than a shorter one. */
+    ? '<a class="sched" href="'+r.f.su+'" target="_blank" rel="noopener"><span class="lbl">Open<span class="w"> schedule</span></span>'+out+'</a>'
+    : '<button class="sched add"><svg viewBox="0 0 24 24"><path d="M12 5v14M5 12h14"/></svg>Add link</button>';
+}
+
+/* ── render ──────────────────────────────────────────── */
+function render(){
+  Q = document.getElementById("q").value.trim().toLowerCase();
+  CITY = document.getElementById("city").value;
+
+  var all = ROWS, vis = visible(), bs = base();
+
+  /* header + freshness */
+  document.getElementById("psub").textContent =
+    all.length+" fields across "+CITIES.length+" cities · usage, fill and cover for the last "+TRAIL_WEEKS+" weeks";
+  document.getElementById("fresh").textContent = "Synced 11 min ago · " + dlong(NOW);
+
+  /* ── tiles. every tile is stated against the set it is out of, and every
+     one of them can be decomposed by the note underneath. ─────────────── */
+  var week = all.filter(function(r){return r.playingThisWeek});
+  document.getElementById("t1").innerHTML = week.length+' <small>of '+all.length+'</small>';
+  document.getElementById("t1n").innerHTML = (all.length-week.length)+
+    " have nothing on the calendar this week <span style=\"white-space:nowrap\">("+
+    dshort(WEEKS[TRAIL_WEEKS-1].la)+" – "+dshort(WEEKS[TRAIL_WEEKS-1].lb)+")</span>";
+
+  var up = MATCHES.filter(function(m){return m.up});
+  var upFields = {}; up.forEach(function(m){upFields[m.fid]=1});
+  document.getElementById("t2").textContent = up.length;
+  document.getElementById("t2n").innerHTML = "at "+Object.keys(upFields).length+" fields · "+
+    "<span style=\"white-space:nowrap\">"+dshort(NOW)+" – "+dshort(ds(D(NOW)+UPCOMING_DAYS*DAY-DAY))+"</span> · "+
+    "<span style=\"white-space:nowrap\">"+up.reduce(function(s,m){return s+m.n},0)+" players signed up so far</span>";
+
+  var att = all.filter(function(r){return r.flags.length});
+  /* a field can trip more than one rule, so counting every flag would total more
+     than the fields it describes. each field is counted once, under its most
+     urgent flag — the same one its row leads with — and the list footer says so. */
+  var byKind = {}; att.forEach(function(r){var k=lead(r).k; byKind[k]=(byKind[k]||0)+1});
+  var KN={contact:"with no contact",idle:"sitting idle",never:"never used",
+          fill:"under their minimum"};
+  var t3=document.getElementById("t3");
+  t3.innerHTML = att.length+' <small>of '+all.length+'</small>';
+  t3.className = "tv "+(att.length?"warn":"good");
+  document.getElementById("t3n").textContent = att.length
+    ? Object.keys(byKind).sort(function(a,b){return RANK[a]-RANK[b]})
+        .map(function(k){return byKind[k]+" "+KN[k]}).join(", ")
+    : "no field is missing a contact, idle or under its minimum";
+  var jump = document.getElementById("attnJump");
+  jump.style.display = att.length ? "" : "none";
+  jump.textContent = VIEW==="attn" ? "Showing only these — show all "+all.length
+                                   : "Show only these "+att.length;
+
+
+  /* ── segment counts ───────────────────────────────── */
+  document.getElementById("seg").innerHTML = VIEWS.map(function(v){
+    return '<button class="'+(VIEW===v.k?"on":"")+'" onclick="setView(\''+v.k+'\')">'+v.lbl+
+      ' <em>'+bs.filter(function(r){return inView(r,v.k)}).length+'</em></button>'}).join("");
+
+  /* ── scope + clear ────────────────────────────────── */
+  var filtered = CITY!=="all" || Q || VIEW!=="all";
+  document.getElementById("clearf").className = "btn clearf"+(filtered?" on":"");
+  document.getElementById("scope").innerHTML = "Showing <b>"+vis.length+"</b> of <b>"+all.length+
+    "</b> fields" + (filtered? " · filtered" : "");
+
+  /* ── the list, grouped by city ────────────────────── */
+  var host=document.getElementById("list");
+  if(!vis.length){
+    host.innerHTML = '<div class="empty">No field matches '+
+      (Q?'“'+esc(Q)+'”':'this selection')+
+      (CITY!=="all"?' in '+esc(cityOf(CITY).n):'')+
+      (VIEW!=="all"?' under <b>'+VIEWS.filter(function(v){return v.k===VIEW})[0].lbl+'</b>':'')+
+      '. Clear a filter to widen it.</div>';
+  } else {
+    host.innerHTML = CITIES.map(function(ct){
+      var rs = vis.filter(function(r){return r.f.c===ct.c});
+      if(!rs.length) return "";
+      var wkN = rs.filter(function(r){return r.playingThisWeek}).length;
+      return '<div class="cband"><span class="cc">'+ct.c+'</span><span class="cn">'+esc(ct.n)+'</span>'+
+        '<span class="cs">'+rs.length+' field'+(rs.length===1?"":"s")+' · '+wkN+' playing this week</span>'+
+        '<span class="cm"><span class="av">'+ct.cm.charAt(0)+'</span>City manager <b>'+esc(ct.cm)+'</b>'+
+        '<a class="tel" href="tel:'+ct.ph.replace(/[^0-9]/g,"")+'">'+esc(ct.ph)+'</a></span></div>'+
+      rs.map(rowHTML).join("");
+    }).join("");
+  }
+  document.getElementById("listN").textContent = vis.length+" shown, grouped by city";
+  /* the panel that used to carry these rules is gone, so they live here now —
+     beside the rows that are actually judged by them. a rule you cannot see is
+     a rule you cannot argue with. */
+  document.getElementById("listFoot").textContent =
+    "A field needs a look when any of three things is true: it has no contact on file, which shows as "+
+    "an Add contact button; its last match was "+IDLE_DAYS+"+ days ago with nothing booked, which shows as an "+
+    "Idle chip beside the name; or its typical fill sits under its own minimum, which shows as an amber tick "+
+    "and note (measured only where there are at least "+FILL_MIN_MATCH+" matches to average). The Needs a look "+
+    "tile counts each field once, under its most urgent flag, so those numbers add up to the fields and not to the flags. "+
+    "On each capacity bar the shaded band is that field's own minimum-to-maximum and the tick is the "+
+    "average number of players who actually turn up; a tick left of the band is a field running under "+
+    "its own minimum. Usage and fill cover the "+TRAIL_WEEKS+" weeks from "+dshort(WEEKS[0].la)+" to "+dshort(NOW)+
+    "; the last bar is this week to date. Next match looks "+UPCOMING_DAYS+" days ahead and counts sign-ups so far, "+
+    "not final attendance. The rate under each field name is what that field charges a match.";
+}
+function rowHTML(r){
+  return '<div class="dgrid frow" data-k="'+r.f.k+'">'+
+    /* only the flags that have no other home in the row are chipped here: an
+       absent contact is already the Add-contact button and a low fill is already
+       the amber tick. sitting idle is the one thing a row would otherwise show
+       only as an absence. */
+    '<div style="padding:11px 0"><div class="fn"><span class="nm">'+esc(r.f.n)+'</span><span class="code">'+r.f.k+'</span>'+
+      r.flags.filter(function(x){return x.k==="idle"||x.k==="never"})
+        .map(function(x){return '<span class="flag '+x.lv+'" style="font-size:9.5px;padding:2px 7px">'+esc(x.lbl)+'</span>'}).join("")+
+    '</div>'+
+      '<div class="fmeta" title="'+esc(r.f.ad)+'"><span class="sf">'+esc(r.f.sf)+'</span><span class="dot">·</span>'+
+      '<span class="sf">'+(r.f.lt?"Lights":"No lights")+'</span><span class="dot">·</span>'+
+      '<span class="ad">'+esc(r.f.ad.split(",")[0])+'</span></div>'+
+      costHTML(r)+'</div>'+
+    '<div style="padding:11px 0">'+capHTML(r)+'</div>'+
+    '<div style="padding:11px 0">'+contactHTML(r)+'</div>'+
+    '<div style="padding:11px 0">'+sparkHTML(r)+'</div>'+
+    '<div style="padding:11px 0">'+nextHTML(r)+'</div>'+
+    '<div style="padding:11px 0">'+schedHTML(r)+'</div>'+
+    /* the edit and remove controls the old page had on hover, kept — they are the
+       only two things the row itself cannot already do. */
+    '<div style="padding:11px 0;display:flex;gap:4px">'+
+      '<button class="rowbtn" aria-label="Edit '+esc(r.f.n)+'">'+
+        '<svg viewBox="0 0 24 24"><path d="M4 20h4L19 9a2.1 2.1 0 0 0-3-3L5 17v3z"/></svg></button>'+
+      '<button class="rowbtn" aria-label="Remove '+esc(r.f.n)+'">'+
+        '<svg viewBox="0 0 24 24"><path d="M4 7h16M9 7V5h6v2M6 7l1 13h10l1-13"/></svg></button></div>'+
+  '</div>';
+}
+function cityOf(c){return CITIES.filter(function(x){return x.c===c})[0]}
+
+
+function setView(k){VIEW=k; render()}
+function clearF(){
+  document.getElementById("q").value=""; document.getElementById("city").value="all";
+  VIEW="all"; render();
+}
+
+/* ── boot ────────────────────────────────────────────── */
+(function(){
+  var sel=document.getElementById("city");
+  sel.innerHTML='<option value="all">All cities</option>'+
+    CITIES.map(function(c){return '<option value="'+c.c+'">'+c.n+' ('+
+      ROWS.filter(function(r){return r.f.c===c.c}).length+')</option>'}).join("");
+  render();
+})();
+
+/* exports for the harness */
+window.FIELDS=FIELDS; window.MATCHES=MATCHES; window.ROWS=ROWS; window.WEEKS=WEEKS;
+window.fstate=function(){return {view:VIEW,city:CITY,q:Q}};
+window.setView=setView;
+window.THRESH={IDLE_DAYS:IDLE_DAYS,FILL_MIN_MATCH:FILL_MIN_MATCH,
+  TRAIL_WEEKS:TRAIL_WEEKS,UPCOMING_DAYS:UPCOMING_DAYS};
+</script>
+</body>
+</html>
