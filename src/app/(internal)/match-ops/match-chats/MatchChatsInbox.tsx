@@ -18,6 +18,7 @@ import { type MatchChatInboxRow } from "@/lib/matchChats";
 import { formatMatchTitle } from "@/lib/cityTimezones";
 import { KNOWN_CITY_CODES, HIDDEN_CITY_CODES } from "@/lib/cityNormalization";
 import { UNKNOWN_CITY } from "@/lib/cityColors";
+import MatchOpsMobileStrip from "../MatchOpsMobileStrip";
 
 export type InboxTab = "active" | "upcoming" | "past";
 
@@ -44,6 +45,9 @@ function badgeFor(code: string | null | undefined) {
 }
 
 const VEO_RE = /app\.veo\.co\/matches\//i;
+// A group-invite auto-post is a FACT, not a URL to read (S9). Never render the
+// raw chat.whatsapp.com link in a preview.
+const WA_INVITE_RE = /chat\.whatsapp\.com/i;
 
 function timeAgo(iso: string): string {
   const then = Date.parse(iso);
@@ -178,6 +182,10 @@ export default function MatchChatsInbox({
       }`}
       style={{ background: "#f8faf9", borderColor: "#e6ebe8" }}
     >
+      {/* Mobile-only section nav — the desktop rail is hidden below 900px, so
+          this is how you reach the rest of Match Ops on a phone. */}
+      <MatchOpsMobileStrip />
+
       {/* Header */}
       <div className="flex-none px-4 pt-3.5">
         <div className="flex items-center gap-2.5">
@@ -202,7 +210,7 @@ export default function MatchChatsInbox({
             onClick={onRefresh}
             title="Refresh"
             aria-label="Refresh"
-            className="ml-auto flex h-[31px] w-[31px] items-center justify-center rounded-[10px] transition hover:bg-white/85"
+            className="ml-auto flex h-11 w-11 items-center justify-center rounded-[10px] transition hover:bg-white/85 min-[900px]:h-[31px] min-[900px]:w-[31px]"
             style={{ color: "#5c7267" }}
           >
             <svg viewBox="0 0 24 24" className="h-4 w-4" fill="none" stroke="currentColor" strokeLinecap="round" strokeLinejoin="round" strokeWidth={1.9} aria-hidden>
@@ -228,8 +236,9 @@ export default function MatchChatsInbox({
             className="h-9 w-full rounded-[11px] border pl-[33px] pr-[34px] text-[13px] outline-none transition focus:border-[#35c77f] focus:shadow-[0_0_0_3px_rgba(53,199,127,.15)]"
             style={{ background: "#ffffff", borderColor: "#e6ebe8", color: "#12241d" }}
           />
+          {/* The "/" shortcut hint is meaningless on touch — desktop only. */}
           <kbd
-            className="pointer-events-none absolute right-[9px] top-1/2 -translate-y-1/2 rounded-[5px] border px-[5px] py-px text-[10.5px] font-bold"
+            className="pointer-events-none absolute right-[9px] top-1/2 hidden -translate-y-1/2 rounded-[5px] border px-[5px] py-px text-[10.5px] font-bold min-[900px]:block"
             style={{ color: "#a4b0aa", background: "#eef3f0", borderColor: "#e2eae5" }}
           >
             /
@@ -269,7 +278,7 @@ export default function MatchChatsInbox({
                     key={code}
                     type="button"
                     onClick={() => toggleCity(code)}
-                    className="flex h-[27px] items-center gap-[5px] rounded-full border px-[10px] text-[11.5px] font-bold tracking-[0.02em] transition"
+                    className="flex h-9 min-[900px]:h-[27px] items-center gap-[5px] rounded-full border px-[10px] text-[11.5px] font-bold tracking-[0.02em] transition"
                     style={
                       on
                         ? { background: "#0d3b2e", borderColor: "#0d3b2e", color: "#eafaf1" }
@@ -324,9 +333,10 @@ export default function MatchChatsInbox({
         ))}
       </div>
 
-      {/* Footer keyboard hints */}
+      {/* Footer keyboard hints — desktop only; a keyboard shortcut bar is a
+          lie on a touch device (no arrow keys, no Enter, no "/"). */}
       <div
-        className="flex flex-none items-center gap-2.5 border-t px-4 py-2 text-[11px] font-semibold"
+        className="hidden flex-none items-center gap-2.5 border-t px-4 py-2 text-[11px] font-semibold min-[900px]:flex"
         style={{ borderColor: "#e6ebe8", background: "#eef3f0", color: "#93a49b" }}
       >
         <Kbd>↑↓</Kbd> move <Kbd>↵</Kbd> open <Kbd>/</Kbd> search
@@ -344,7 +354,7 @@ function Tab({ label, n, on, onClick }: { label: string; n: number; on: boolean;
     <button
       type="button"
       onClick={onClick}
-      className="flex h-[30px] flex-1 items-center justify-center gap-1.5 rounded-[8px] text-[12.5px] font-[650] transition"
+      className="flex h-11 flex-1 items-center justify-center gap-1.5 rounded-[8px] text-[12.5px] font-[650] transition min-[900px]:h-[30px]"
       style={
         on
           ? { background: "#ffffff", color: "#0f3d2e", fontWeight: 730, boxShadow: "0 1px 2px rgba(7,42,32,.09)" }
@@ -450,14 +460,18 @@ function Row({
           style={{ color: "#63736b", display: "-webkit-box", WebkitLineClamp: 2, WebkitBoxOrient: "vertical" }}
         >
           {row.last_message ? (
-            <>
-              {row.last_message.sent_by && (
-                <span className="font-[650]" style={{ color: "#4a5f55" }}>
-                  {row.last_message.sent_by}:{" "}
-                </span>
-              )}
-              {row.last_message.body ? row.last_message.body : <span className="italic" style={{ color: "#8d9c94" }}>(media)</span>}
-            </>
+            row.last_message.body && WA_INVITE_RE.test(row.last_message.body) ? (
+              <span className="italic" style={{ color: "#8d9c94" }}>Invite link posted by MatchDay</span>
+            ) : (
+              <>
+                {row.last_message.sent_by && (
+                  <span className="font-[650]" style={{ color: "#4a5f55" }}>
+                    {row.last_message.sent_by}:{" "}
+                  </span>
+                )}
+                {row.last_message.body ? row.last_message.body : <span className="italic" style={{ color: "#8d9c94" }}>(media)</span>}
+              </>
+            )
           ) : (
             <span className="italic" style={{ color: "#8d9c94" }}>No messages yet</span>
           )}

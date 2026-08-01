@@ -62,6 +62,9 @@ type MatchContext = {
 type WireMessage = FirestoreMessage & { __docId: string };
 
 const VEO_URL_RE = /(https?:\/\/app\.veo\.co\/matches\/[^\s)]+)/i;
+// A group-invite auto-post renders as a fact, never a raw chat.whatsapp.com
+// link (S9). Matches the whole-message invite the bot posts on group create.
+const WA_INVITE_RE = /chat\.whatsapp\.com/i;
 
 // Real registered players = total registered minus synced fakes. Used for the
 // header count and the composer "N real players" line. Null when unavailable
@@ -388,7 +391,7 @@ function ChatPaneInner({
                 href={veoUrl}
                 target="_blank"
                 rel="noopener noreferrer"
-                className="flex h-8 items-center gap-1.5 rounded-full border px-3 text-[12.5px] font-[650] transition hover:bg-[#eef3f0]"
+                className="flex h-9 min-[900px]:h-8 items-center gap-1.5 rounded-full border px-3 text-[12.5px] font-[650] transition hover:bg-[#eef3f0]"
                 style={{ borderColor: "#e6ebe8", color: "#3f544a" }}
               >
                 <svg viewBox="0 0 24 24" className="h-3.5 w-3.5" fill="none" stroke="currentColor" strokeLinecap="round" strokeLinejoin="round" strokeWidth={2} aria-hidden>
@@ -401,7 +404,7 @@ function ChatPaneInner({
             <button
               type="button"
               onClick={() => setNotifyOpen(true)}
-              className="flex h-8 items-center gap-1.5 rounded-full px-3.5 text-[12.5px] font-[650] transition"
+              className="flex h-9 min-[900px]:h-8 items-center gap-1.5 rounded-full px-3.5 text-[12.5px] font-[650] transition"
               style={{ background: "#0d3b2e", color: "#eafaf1" }}
             >
               <svg viewBox="0 0 24 24" className="h-3.5 w-3.5" fill="none" stroke="currentColor" strokeLinecap="round" strokeLinejoin="round" strokeWidth={2} aria-hidden>
@@ -509,7 +512,7 @@ function ChatPaneInner({
               type="button"
               onClick={() => void submit()}
               disabled={sending || !body.trim()}
-              className="flex h-[33px] items-center gap-1.5 rounded-full px-[15px] text-[13px] font-bold transition disabled:opacity-40"
+              className="flex h-9 min-[900px]:h-[33px] items-center gap-1.5 rounded-full px-[15px] text-[13px] font-bold transition disabled:opacity-40"
               style={{ background: "#0d3b2e", color: "#eafaf1" }}
             >
               {sending ? "Sending…" : "Send"}
@@ -559,12 +562,18 @@ function MessageRow({ msg }: { msg: WireMessage }) {
           }
         >
           {kind !== "Text" && <MatchChatMessageMedia msg={msg} />}
-          {kind !== "Text" && msg.text && (
-            <div className="mt-1.5">
-              <Linkify options={LINKIFY_OPTIONS}>{msg.text}</Linkify>
-            </div>
+          {msg.text && WA_INVITE_RE.test(msg.text) ? (
+            <span className="italic" style={{ color: "#5c7267" }}>Invite link posted by MatchDay</span>
+          ) : (
+            <>
+              {kind !== "Text" && msg.text && (
+                <div className="mt-1.5">
+                  <Linkify options={LINKIFY_OPTIONS}>{msg.text}</Linkify>
+                </div>
+              )}
+              {kind === "Text" && <Linkify options={LINKIFY_OPTIONS}>{msg.text ?? ""}</Linkify>}
+            </>
           )}
-          {kind === "Text" && <Linkify options={LINKIFY_OPTIONS}>{msg.text ?? ""}</Linkify>}
         </div>
       </div>
     </div>

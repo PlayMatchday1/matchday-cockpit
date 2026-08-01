@@ -71,6 +71,7 @@ import MessageBubble, {
 } from "./components/MessageBubble";
 import Composer from "./components/Composer";
 import ChatsRail from "../ChatsRail";
+import MatchOpsMobileStrip from "../MatchOpsMobileStrip";
 import MetricsStrip from "./components/MetricsStrip";
 import ContextPane from "./components/ContextPane";
 import { colorForCity } from "@/lib/cityColors";
@@ -1304,7 +1305,11 @@ export default function CrmClient() {
 
       {/* Right column: metrics strip over the three panes */}
       <div className="flex min-h-0 min-w-0 flex-1 flex-col">
-        <MetricsStrip />
+        {/* Desktop-only: the mobile console is a clean list; the awaiting
+            signal on a phone rides the section strip badge + per-row tag. */}
+        <div className="hidden min-[900px]:block">
+          <MetricsStrip />
+        </div>
 
         <div className="flex min-h-0 min-w-0 flex-1">
           {/* ---- INBOX ---- */}
@@ -1314,6 +1319,9 @@ export default function CrmClient() {
             }`}
             style={{ background: "#f8faf9", borderColor: "#e6ebe8" }}
           >
+            {/* Mobile-only section nav — desktop rail is hidden below 900px. */}
+            <MatchOpsMobileStrip />
+
             {/* header */}
             <div className="flex flex-none items-center gap-2.5 px-4 pt-3.5">
               <h1 className="text-[19px] font-[760] tracking-[-0.02em]" style={{ color: "#12241d" }}>
@@ -1332,7 +1340,7 @@ export default function CrmClient() {
                   onClick={() => void loadThreads()}
                   title="Refresh"
                   aria-label="Refresh"
-                  className="flex h-[31px] w-[31px] items-center justify-center rounded-[10px] transition hover:bg-white/85"
+                  className="flex h-11 w-11 items-center justify-center rounded-[10px] transition hover:bg-white/85 min-[900px]:h-[31px] min-[900px]:w-[31px]"
                   style={{ color: "#5c7267" }}
                 >
                   <RotateCcw aria-hidden size={16} strokeWidth={1.9} />
@@ -1382,7 +1390,7 @@ export default function CrmClient() {
                     key={s.key}
                     type="button"
                     onClick={() => setFilters({ view: s.key })}
-                    className="flex h-[30px] flex-1 items-center justify-center gap-1.5 rounded-[8px] text-[12.5px] font-[650] transition"
+                    className="flex h-11 min-[900px]:h-[30px] flex-1 items-center justify-center gap-1.5 rounded-[8px] text-[12.5px] font-[650] transition"
                     style={on ? { background: "#ffffff", color: "#0f3d2e", fontWeight: 730, boxShadow: "0 1px 2px rgba(7,42,32,.09)" } : { color: "#5c7267" }}
                   >
                     {s.label}
@@ -1401,14 +1409,18 @@ export default function CrmClient() {
               onPointerLeave={thawGroups}
             >
               {bulkSelectable && renderGroups.length > 0 && (
-                <BulkSelectBar
-                  selectedCount={selectedIds.size}
-                  allSelected={allVisibleSelected}
-                  someSelected={someVisibleSelected}
-                  onToggleAll={toggleSelectAllVisible}
-                  onClear={clearSelection}
-                  onCloseSelected={() => void onBulkClose()}
-                />
+                // Bulk close is a desktop power-tool (tiny checkboxes); hidden
+                // on touch where 20px targets fail the 44px minimum.
+                <div className="hidden min-[900px]:block">
+                  <BulkSelectBar
+                    selectedCount={selectedIds.size}
+                    allSelected={allVisibleSelected}
+                    someSelected={someVisibleSelected}
+                    onToggleAll={toggleSelectAllVisible}
+                    onClear={clearSelection}
+                    onCloseSelected={() => void onBulkClose()}
+                  />
+                </div>
               )}
               {threadsError && (
                 <div className="m-2 rounded-lg border px-3 py-2 text-xs" style={{ borderColor: "#e3c369", background: "#fdf1d0", color: "#8a6300" }}>
@@ -1476,8 +1488,8 @@ export default function CrmClient() {
                 ))}
             </div>
 
-            {/* footer hints */}
-            <div className="flex flex-none items-center gap-2.5 border-t px-4 py-2 text-[11px] font-semibold" style={{ borderColor: "#e6ebe8", background: "#eef3f0", color: "#93a49b" }}>
+            {/* footer hints — desktop only (small push affordance) */}
+            <div className="hidden flex-none items-center gap-2.5 border-t px-4 py-2 text-[11px] font-semibold min-[900px]:flex" style={{ borderColor: "#e6ebe8", background: "#eef3f0", color: "#93a49b" }}>
               <EnablePushNotificationsButton />
             </div>
           </aside>
@@ -1722,7 +1734,7 @@ function SearchAndFilter({
           className="h-9 w-full rounded-[11px] border pl-[33px] pr-[34px] text-[13px] outline-none transition focus:border-[#35c77f] focus:shadow-[0_0_0_3px_rgba(53,199,127,.15)]"
           style={{ background: "#ffffff", borderColor: "#e6ebe8", color: "#12241d" }}
         />
-        <kbd className="pointer-events-none absolute right-[9px] top-1/2 -translate-y-1/2 rounded-[5px] border px-[5px] py-px text-[10.5px] font-bold" style={{ color: "#a4b0aa", background: "#eef3f0", borderColor: "#e2eae5" }}>/</kbd>
+        <kbd className="pointer-events-none absolute right-[9px] top-1/2 hidden -translate-y-1/2 rounded-[5px] border px-[5px] py-px text-[10.5px] font-bold min-[900px]:block" style={{ color: "#a4b0aa", background: "#eef3f0", borderColor: "#e2eae5" }}>/</kbd>
       </div>
       <button
         type="button"
@@ -1753,7 +1765,7 @@ function SearchAndFilter({
               const on = cityFilter.has(code);
               return (
                 <button key={code} type="button" onClick={() => onToggleCity(code)}
-                  className="flex h-[27px] items-center gap-[5px] rounded-full border px-[10px] text-[11.5px] font-bold tracking-[0.02em] transition"
+                  className="flex h-9 min-[900px]:h-[27px] items-center gap-[5px] rounded-full border px-[10px] text-[11.5px] font-bold tracking-[0.02em] transition"
                   style={on ? { background: "#0d3b2e", borderColor: "#0d3b2e", color: "#eafaf1" } : { background: "#ffffff", borderColor: "#e6ebe8", color: "#5c7267" }}>
                   {code}{on && <span className="-mr-0.5 text-[13px] leading-none opacity-75">×</span>}
                 </button>
@@ -1764,7 +1776,7 @@ function SearchAndFilter({
           <div className="flex flex-wrap gap-[5px]">
             {flagRow.map((f) => (
               <button key={f.key} type="button" onClick={() => onToggleFlag(f.key)}
-                className="flex h-[27px] items-center gap-[5px] rounded-full border px-[10px] text-[11.5px] font-bold tracking-[0.02em] transition"
+                className="flex h-9 min-[900px]:h-[27px] items-center gap-[5px] rounded-full border px-[10px] text-[11.5px] font-bold tracking-[0.02em] transition"
                 style={f.on ? { background: "#0d3b2e", borderColor: "#0d3b2e", color: "#eafaf1" } : { background: "#ffffff", borderColor: "#e6ebe8", color: "#5c7267" }}>
                 {f.label}{f.on && <span className="-mr-0.5 text-[13px] leading-none opacity-75">×</span>}
               </button>
@@ -1836,7 +1848,7 @@ function MistInboxRow({
             type="button"
             onClick={(e) => { e.stopPropagation(); onToggleFollowUp(); }}
             aria-label={thread.is_follow_up ? "Unstar" : "Star"}
-            className="flex-none"
+            className="hidden flex-none min-[900px]:block"
             style={{ color: thread.is_follow_up ? "#e0a500" : "#c9d2cd" }}
           >
             <Star aria-hidden size={12} fill={thread.is_follow_up ? "currentColor" : "none"} />
