@@ -5,11 +5,14 @@
 // used by /tech/tech-roadmap) is untouched — tech-roadmap renders byte-
 // identical. Reuses the useKanbanBoard data layer + KanbanCardModal for CRUD.
 //
-// AGING IS OMITTED. kanban_cards has no per-stage entry timestamp (only
-// created_at + a general updated_at), so an age would be a false number. Per the
-// spec's R3(b): no age text, no card spine banding, no aging/stalled chips. A
-// migration adding stage_entered_at is in the ship report. When that column
-// lands, re-introduce AGE_WARN/AGE_CRIT + the spine here.
+// AGE is shown as a proven LOWER BOUND on time-in-stage ("≥ Nd in stage") for
+// the pre-commitment stages (Backlog / Contacted / Negotiation). kanban_cards
+// has no per-stage entry timestamp yet, but updated_at is DB-trigger-maintained
+// (migration 0066), so it moved when stage last changed and only later — making
+// (now - updated_at) a bound that can under-report but never over-report. A card
+// past a threshold is therefore certainly past it. Once the stage_entered_at
+// migration lands, stageAge() returns the EXACT value and the "≥" is dropped —
+// no change needed here (the board reads one helper). See src/lib/kanban.ts.
 
 import { useCallback, useEffect, useMemo, useRef, useState } from "react";
 import { useKanbanBoard } from "@/lib/useKanbanBoard";
@@ -20,6 +23,8 @@ import {
   cityLabel,
   cardOwnerLabel,
   ownerName,
+  stageAge,
+  ageBand,
   type KanbanCard,
   type ChecklistItem,
   type KanbanOwner,
@@ -463,6 +468,13 @@ function Card({
 }) {
   const showT = showTodos && open > 0;
   const showD = showTodos && open === 0 && done > 0;
+  // Age as a proven lower bound (or exact once stage_entered_at exists). Only
+  // banded cards (>= 21d) surface it; the spine and the text always agree, so
+  // colour is never the only signal.
+  const age = stageAge(card);
+  const band = age ? ageBand(age.days) : null;
+  const spineColor = band === "crit" ? "#d0512a" : band === "warn" ? "#e3c369" : "#eff3f1";
+  const ageText = age && band ? `${age.exact ? "" : "≥ "}${age.days}d in stage` : null;
   return (
     // role=button + keyboard handler keep the card openable without a mouse;
     // draggable makes stage moves a pointer gesture. The card has no nested
@@ -486,8 +498,8 @@ function Card({
       className="relative w-full cursor-grab overflow-hidden rounded-[10px] border px-2.5 py-[9px] pl-3 text-left transition hover:border-[#cfdad4] focus:outline-none focus-visible:border-[#35c77f] active:cursor-grabbing"
       style={{ background: "#ffffff", borderColor: "#e6ebe8" }}
     >
-      {/* status spine reserved but neutral — no aging without a real timestamp */}
-      <span aria-hidden className="absolute inset-y-0 left-0 w-[3px]" style={{ background: "#eff3f1" }} />
+      {/* status spine — neutral, or amber/red once the card crosses a threshold */}
+      <span aria-hidden className="absolute inset-y-0 left-0 w-[3px]" style={{ background: spineColor }} />
       <div className="flex items-start gap-2">
         <div className="min-w-0 flex-1 break-words text-[13px] font-[650] leading-[1.3] tracking-[-0.15px]">{card.title}</div>
         {owner && (
@@ -505,6 +517,17 @@ function Card({
           </span>
         )}
       </div>
+      {ageText && (
+        <div className="mt-1.5">
+          <span
+            className="inline-flex items-center rounded-full border px-2 py-px text-[10.5px] font-bold"
+            title={age?.exact ? "Time in current stage" : "At least this long in stage (lower bound from last update)"}
+            style={band === "crit" ? { background: "#fdeae4", borderColor: "#f0bda9", color: "#a8391a" } : { background: "#fdf1d0", borderColor: "#e3c369", color: "#8a6300" }}
+          >
+            {ageText}
+          </span>
+        </div>
+      )}
       {!inGroup && (
         <div className="mt-1.5 flex flex-wrap items-center gap-[7px]">
           <span className="inline-flex items-center gap-[5px] rounded-full border px-2 py-px pl-1.5 text-[11px]" style={{ background: "#eef3f0", borderColor: "#e2eae5", color: "#54655c" }}>

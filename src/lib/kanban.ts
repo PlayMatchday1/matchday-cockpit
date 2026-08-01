@@ -20,6 +20,11 @@ export type KanbanCard = {
   data: Record<string, unknown>;
   created_at: string;
   updated_at: string;
+  // Present only after the stage_entered_at migration is applied. Until then the
+  // column doesn't exist and this is undefined; the age helper falls back to an
+  // updated_at lower bound. useKanbanBoard selects "*", so it appears
+  // automatically once the migration lands — no client change needed.
+  stage_entered_at?: string | null;
 };
 
 export type ChecklistItem = {
@@ -72,6 +77,43 @@ export const TECH_ROADMAP_STAGES: StageDef[] = [
   { id: "in_progress", title: "In Progress" },
   { id: "shipped", title: "Shipped" },
 ];
+
+// ---------------- stage age (Field Pipeline) ----------------
+//
+// Thresholds from the mockup. Aging applies ONLY to the pre-commitment stages;
+// a Confirmed or Archived field is a settled state, not something going stale.
+export const AGE_WARN_DAYS = 21;
+export const AGE_CRIT_DAYS = 45;
+const STAGES_THAT_AGE = new Set(["backlog", "contacted", "negotiation"]);
+
+// One source of truth for "how long has this card sat in its stage", returning
+// {days, exact}. EXACT when the row records when it entered the stage
+// (stage_entered_at, once the migration lands). Otherwise a TRUE LOWER BOUND
+// from updated_at: that column is maintained by a BEFORE UPDATE trigger
+// (migration 0066), so it moved when stage last changed and only ever moved
+// later — (now - updated_at) can under-report time in stage but never
+// over-report it. The UI shows "≥ Nd" for the bound and "Nd" for the exact
+// value, and reads only this function — never branch on the source elsewhere.
+export function stageAge(
+  card: Pick<KanbanCard, "stage" | "updated_at" | "stage_entered_at">,
+  nowMs: number = Date.now(),
+): { days: number; exact: boolean } | null {
+  if (!STAGES_THAT_AGE.has(card.stage)) return null;
+  const src = card.stage_entered_at ?? null;
+  if (src) {
+    const days = Math.floor((nowMs - new Date(src).getTime()) / 86_400_000);
+    return { days: Math.max(0, days), exact: true };
+  }
+  if (!card.updated_at) return null;
+  const days = Math.floor((nowMs - new Date(card.updated_at).getTime()) / 86_400_000);
+  return { days: Math.max(0, days), exact: false };
+}
+
+export function ageBand(days: number): "warn" | "crit" | null {
+  if (days >= AGE_CRIT_DAYS) return "crit";
+  if (days >= AGE_WARN_DAYS) return "warn";
+  return null;
+}
 
 export const BOARD_CONFIG: Record<BoardType, BoardConfig> = {
   field_pipeline: {
