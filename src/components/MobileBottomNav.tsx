@@ -34,7 +34,7 @@ import {
   type LucideIcon,
 } from "lucide-react";
 import { canAccess, useAuth, type AppUser } from "@/lib/useAuth";
-import { useCrmUnreadCount } from "@/lib/useCrmUnreadCount";
+import { useCrmAwaitingCount } from "@/lib/useCrmAwaitingCount";
 import UnreadCountCircle from "@/components/UnreadCountCircle";
 
 // Mobile mirror of TopNav's primary sections, in the same order. The bottom bar
@@ -118,9 +118,9 @@ export default function MobileBottomNav({
   const pathname = usePathname() ?? "";
   const { appUser, signOut } = useAuth();
   const [sheetOpen, setSheetOpen] = useState(false);
-  // Customer-chat unread count for the Chats tab badge. Polling-based
-  // (no realtime); 0 for non-admins.
-  const crmUnread = useCrmUnreadCount();
+  // Match Ops badge = player-chat threads awaiting a human reply — the same
+  // shared count the top-nav pill and the rail show, so they can't disagree.
+  const awaiting = useCrmAwaitingCount();
 
   // Close the sheet on route change. Tapping a sheet row navigates
   // via <Link>, so we want the sheet gone by the time the next page
@@ -211,7 +211,7 @@ export default function MobileBottomNav({
               label={t.label}
               Icon={t.icon}
               active={active}
-              badgeCount={t.badge ? crmUnread : 0}
+              badgeCount={t.badge ? awaiting : 0}
             />
           );
         })}
@@ -271,7 +271,7 @@ function NavTab({
       href={href}
       aria-label={
         badgeCount > 0
-          ? `${label}, ${badgeCount} unread customer ${badgeCount === 1 ? "chat" : "chats"}`
+          ? `${label}, ${badgeCount} player ${badgeCount === 1 ? "chat" : "chats"} waiting on a reply`
           : label
       }
       aria-current={active ? "page" : undefined}

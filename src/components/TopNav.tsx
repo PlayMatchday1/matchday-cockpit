@@ -12,6 +12,7 @@ import {
   type PageName,
 } from "@/lib/useAuth";
 import { useCrmUnreadCount } from "@/lib/useCrmUnreadCount";
+import { useCrmAwaitingCount } from "@/lib/useCrmAwaitingCount";
 import { useFaviconUnreadDot } from "@/lib/useFaviconUnreadDot";
 import UnreadCountCircle from "@/components/UnreadCountCircle";
 
@@ -104,13 +105,13 @@ const SECONDARY_TABS: GatedTab[] = [
 export default function TopNav() {
   const pathname = usePathname();
   const { appUser, signOut } = useAuth();
-  // Customer-chat unread count for the "Chats" tab badge. Polling-based
-  // (no realtime); returns 0 for non-admins, so the circle never renders
-  // for them even though the prop is threaded in unconditionally.
+  // The Match Ops pill badge = player-chat threads AWAITING a human reply — the
+  // one actionable Match Ops count, shared with the rail badge and the Player
+  // Chats metrics pill via the same query, so all three can never disagree.
+  const awaiting = useCrmAwaitingCount();
+  // The favicon dot is a DIFFERENT, per-viewer signal: "you have unread chats"
+  // (Trello-style presence dot, no number). Deliberately not the awaiting count.
   const crmUnread = useCrmUnreadCount();
-  // Trello-style red dot on the browser-tab favicon while chats are unread.
-  // TopNav mounts site-wide (via AuthGate), so the dot is visible from any
-  // page. Presence only, no number; the title is intentionally left as-is.
   useFaviconUnreadDot(crmUnread);
 
   const visiblePrimary = PRIMARY_TABS.filter(
@@ -149,7 +150,7 @@ export default function TopNav() {
                   href={tab.href}
                   active={active}
                   label={tab.label}
-                  badgeCount={tab.badge ? crmUnread : 0}
+                  badgeCount={tab.badge ? awaiting : 0}
                 />
               );
             })}
