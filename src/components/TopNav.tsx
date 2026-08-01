@@ -153,17 +153,10 @@ export default function TopNav() {
                 />
               );
             })}
-            {/* Admin-only staging tab. Unchanged — hidden for non-admins (the
-                link is gated on is_admin here AND the /admin/test page keeps
-                its own is_admin guard — hiding a link is not a permission
-                check). */}
-            {isAdmin && (
-              <PrimaryLink
-                href="/admin/test"
-                active={pathname?.startsWith("/admin/test") ?? false}
-                label="Test"
-              />
-            )}
+            {/* The Test tab is removed from the primary nav: /admin/test framed
+                mockups from public/mockups/, which is served without auth. The
+                mockups now live in docs/mockups/ and the public copies are
+                deleted. */}
           </nav>
           {appUser ? (
             <UserMenu
