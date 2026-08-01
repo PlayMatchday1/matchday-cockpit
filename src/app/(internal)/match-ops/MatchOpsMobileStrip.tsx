@@ -19,6 +19,7 @@ import { useEffect, useMemo, useRef, useState } from "react";
 import { usePathname, useRouter } from "next/navigation";
 import { useAuth } from "@/lib/useAuth";
 import { useCrmAwaitingCount } from "@/lib/useCrmAwaitingCount";
+import { useManagerPayAttnCount } from "@/lib/useManagerPayAttnCount";
 import { visibleSections } from "./sections";
 
 export default function MatchOpsMobileStrip() {
@@ -26,6 +27,7 @@ export default function MatchOpsMobileStrip() {
   const pathname = usePathname() ?? "";
   const router = useRouter();
   const awaiting = useCrmAwaitingCount();
+  const managerPayAttn = useManagerPayAttnCount();
   const [sheetOpen, setSheetOpen] = useState(false);
   const scRef = useRef<HTMLDivElement>(null);
   const activeRef = useRef<HTMLButtonElement>(null);
@@ -34,8 +36,10 @@ export default function MatchOpsMobileStrip() {
   const items = useMemo(() => visibleSections(appUser), [appUser]);
 
   const isActive = (href: string) => pathname === href || pathname.startsWith(href + "/");
-  const countFor = (badge?: "awaiting") =>
-    badge === "awaiting" && awaiting > 0 ? awaiting : null;
+  const countFor = (badge?: "awaiting" | "manager-pay") => {
+    const n = badge === "awaiting" ? awaiting : badge === "manager-pay" ? managerPayAttn : 0;
+    return n > 0 ? n : null;
+  };
 
   // Minimal-scroll: only if the active pill is off-screen, and by the least
   // amount. Never auto-centre (that truncates the first label on first paint).

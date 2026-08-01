@@ -19,7 +19,6 @@ export const FINANCE_TAB_IDS = [
   // Configure secondary nav item is active)
   "revenue",
   "expenses",
-  "manager-pay",
   "field-costs",
   "change-log",
   // Standalone secondary-nav items

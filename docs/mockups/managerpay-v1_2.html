@@ -1,0 +1,948 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+<meta charset="utf-8">
+<meta name="viewport" content="width=device-width,initial-scale=1">
+<title>Manager Pay — Match Ops — MatchDay Clubhouse</title>
+<style>
+:root{
+  --forest:#0d3b2e; --forest-deep:#072a20; --accent:#35c77f; --logo:#2cdb87;
+  --mint:#e0f2e7; --amount:#e2502b; --ink:#12241d; --muted:#6d7b74;
+  --warn-bg:#fdf1d0; --warn-ink:#8a6300; --warn-line:#e3c369;
+  --crit-bg:#fdeae4; --crit-ink:#a8391a; --crit-line:#f0bda9;
+  --ok-ink:#12704a;
+  --rail-a:#fafbfa; --rail-b:#f6f9f7; --board-bg:#f8faf9;
+  --chip-bg:#eef3f0; --chip-line:#e2eae5;
+  --line:#e6ebe8; --hair:#eff3f1; --surface:#ffffff;
+  --canvas:#f4efe4;
+}
+*{box-sizing:border-box}
+html,body{margin:0;padding:0;height:100%}
+body{font:14px/1.45 -apple-system,BlinkMacSystemFont,"Segoe UI",Inter,Helvetica,Arial,sans-serif;
+  color:var(--ink);background:var(--canvas);
+  background-image:radial-gradient(circle at 1px 1px, rgba(13,59,46,.055) 1px, transparent 0);
+  background-size:22px 22px;-webkit-font-smoothing:antialiased}
+
+/* ── top nav ─────────────────────────────────────────── */
+.top{height:56px;background:var(--forest);display:flex;align-items:center;
+  padding:0 22px;gap:26px;position:sticky;top:0;z-index:40}
+.brand{font-weight:800;letter-spacing:.3px;color:var(--logo);font-size:17px;font-style:italic}
+.brand span{color:#fff;font-weight:600;font-size:14px;font-style:italic;margin-left:5px}
+.tnav{display:flex;gap:4px;margin-left:auto;margin-right:auto;align-items:center}
+.tnav a{color:#dfeee7;text-decoration:none;font-size:13.5px;font-weight:600;
+  padding:7px 13px;border-radius:999px}
+.tnav a.dim{color:#628a7b}
+.tnav a.on{background:var(--accent);color:#06281d}
+.who{color:#cfe6db;font-size:13px}
+
+/* ── ops rail ────────────────────────────────────────── */
+.shell{display:flex;min-height:calc(100vh - 56px)}
+.rail{flex:0 0 232px;background:var(--rail-a);border-right:1px solid var(--line);
+  display:flex;flex-direction:column;padding:16px 0 0}
+.rlab{font-size:10.5px;letter-spacing:.09em;color:var(--muted);font-weight:700;
+  padding:10px 20px 6px}
+.ri{display:flex;align-items:center;gap:11px;padding:0 12px;margin:1px 8px;height:44px;
+  border-radius:9px;color:var(--forest);font-weight:600;font-size:14px;cursor:pointer;
+  position:relative;text-decoration:none}
+.ri:hover{background:var(--chip-bg)}
+.ri.on{background:var(--mint);color:var(--forest-deep)}
+.ri.on::before{content:"";position:absolute;left:-8px;top:8px;bottom:8px;width:3px;
+  border-radius:0 3px 3px 0;background:var(--accent)}
+.ri svg{flex:0 0 17px;width:17px;height:17px;stroke:currentColor;fill:none;stroke-width:1.7}
+.rbadge{margin-left:auto;background:var(--chip-bg);border:1px solid var(--chip-line);
+  color:var(--muted);font-size:11px;font-weight:700;border-radius:999px;padding:1px 7px}
+.rfoot{margin-top:auto;border-top:1px solid var(--line);padding:8px}
+.rcol{display:flex;align-items:center;gap:9px;height:40px;padding:0 12px;border-radius:9px;
+  color:var(--muted);font-size:13px;font-weight:600;cursor:pointer}
+.rcol:hover{background:var(--chip-bg)}
+.rcol svg{width:15px;height:15px;stroke:currentColor;fill:none;stroke-width:2}
+
+.main{flex:1;min-width:0;padding:20px 22px 60px}
+
+/* ── page head ───────────────────────────────────────── */
+.ph{display:flex;align-items:flex-start;gap:14px;margin-bottom:14px}
+.ph h1{margin:0;font-size:23px;letter-spacing:-.3px;color:var(--forest-deep)}
+.ph .sub{font-size:12.5px;color:var(--muted);margin-top:4px}
+.ph .right{margin-left:auto;display:flex;align-items:center;gap:8px}
+.btn{border:1px solid var(--chip-line);background:var(--surface);border-radius:9px;
+  padding:8px 13px;font-size:12.5px;font-weight:700;color:var(--forest);cursor:pointer;
+  display:inline-flex;align-items:center;gap:6px;white-space:nowrap}
+.btn:hover{background:var(--chip-bg);border-color:#c8d8d1}
+.btn.pri{background:var(--accent);border-color:var(--accent);color:#06281d}
+.btn.pri:hover{background:#2bb872;border-color:#2bb872}
+.btn svg{width:13px;height:13px;stroke:currentColor;fill:none;stroke-width:2.2}
+.btn.sm{padding:6px 10px;font-size:11.5px;border-radius:7px;min-height:28px}
+
+/* ── the week bar ────────────────────────────────────────
+   the single most important control on the page: which week am i paying,
+   what state is it in, and when does the money move. */
+.wbar{background:var(--surface);border:1px solid var(--line);border-radius:12px;
+  padding:11px 14px;display:flex;align-items:center;gap:12px;margin-bottom:12px;
+  box-shadow:0 1px 2px rgba(13,59,46,.04)}
+.wnav{display:flex;align-items:center;gap:8px}
+.warrow{width:30px;height:30px;border-radius:8px;border:1px solid var(--chip-line);
+  background:var(--rail-a);cursor:pointer;display:flex;align-items:center;justify-content:center;
+  color:var(--forest)}
+.warrow:hover{background:var(--chip-bg);border-color:#c8d8d1}
+.warrow svg{width:13px;height:13px;stroke:currentColor;fill:none;stroke-width:2.4}
+.wrange{font-size:14.5px;font-weight:800;color:var(--forest-deep);white-space:nowrap}
+.wstate{font-size:10.5px;font-weight:800;letter-spacing:.05em;border-radius:999px;
+  padding:3px 9px;border:1px solid var(--chip-line);background:var(--chip-bg);color:var(--muted);
+  white-space:nowrap}
+.wstate.done{background:var(--mint);border-color:#bfe2cf;color:var(--ok-ink)}
+.wpay{margin-left:auto;font-size:12px;color:var(--muted);white-space:nowrap}
+.wpay b{color:var(--ink);font-weight:800}
+.seg{display:inline-flex;border:1px solid var(--chip-line);border-radius:9px;overflow:hidden;
+  background:var(--rail-a)}
+.seg button{border:0;background:none;padding:7px 13px;font-size:12.5px;font-weight:700;
+  color:var(--muted);cursor:pointer;white-space:nowrap}
+.seg button.on{background:var(--accent);color:#06281d}
+.expnote{font-size:11px;color:var(--muted);white-space:nowrap}
+.expnote b{color:var(--warn-ink)}
+
+/* ── city chips ──────────────────────────────────────── */
+.chips{display:flex;gap:6px;flex-wrap:wrap;margin-bottom:12px}
+.chip{border:1px solid var(--chip-line);background:var(--surface);border-radius:999px;
+  padding:6px 13px;font-size:12px;font-weight:700;color:var(--muted);cursor:pointer;
+  display:inline-flex;align-items:center;gap:6px}
+.chip:hover{border-color:#c8d8d1;color:var(--forest)}
+.chip.on{background:var(--forest);border-color:var(--forest);color:#fff}
+.chip i{font-style:normal;font-size:11px;font-weight:700;opacity:.7}
+
+/* ── tiles ───────────────────────────────────────────── */
+.tiles{display:grid;grid-template-columns:repeat(4,1fr);gap:12px;margin-bottom:12px}
+.tile{background:var(--surface);border:1px solid var(--line);border-radius:12px;padding:13px 15px;
+  box-shadow:0 1px 2px rgba(13,59,46,.04);display:flex;flex-direction:column;min-width:0}
+.tile.hero{background:linear-gradient(180deg,#effaf3,#ffffff);border-color:#bfe2cf}
+.tlab{font-size:10.5px;letter-spacing:.08em;font-weight:700;color:var(--muted)}
+.tval{font-size:27px;font-weight:800;letter-spacing:-.6px;color:var(--forest-deep);
+  margin-top:4px;line-height:1.05}
+.tile.hero .tval{color:var(--amount)}
+.tval small{font-size:14px;font-weight:700;color:var(--muted);letter-spacing:0;margin-left:5px}
+.tsub{font-size:11px;color:var(--muted);margin-top:6px;line-height:1.4}
+.tsub b{color:var(--ink);font-weight:800}
+.tjump{margin-top:8px;align-self:flex-start;font-size:11px;font-weight:800;color:var(--ok-ink);
+  background:var(--rail-a);border:1px solid var(--chip-line);border-radius:8px;padding:5px 9px;
+  cursor:pointer;min-height:26px}
+.tjump:hover{background:var(--chip-bg);border-color:#c8d8d1}
+
+/* ── the payout board ────────────────────────────────── */
+.panel{background:var(--surface);border:1px solid var(--line);border-radius:13px;overflow:hidden;
+  box-shadow:0 1px 2px rgba(13,59,46,.04)}
+.pht{display:flex;align-items:center;gap:10px;padding:12px 16px;border-bottom:1px solid var(--line)}
+.pht h2{margin:0;font-size:14px;color:var(--forest-deep)}
+.pht .c{font-size:11.5px;color:var(--muted);font-weight:700}
+.pht .r{margin-left:auto;display:flex;gap:6px;align-items:center}
+
+.pgrid{display:grid;align-items:center;
+  grid-template-columns:minmax(260px,1fr) 170px 120px 260px 120px 40px;
+  gap:0 14px;padding:0 16px}
+/* the column header lives inside each city band, directly above that city's
+   managers. with a week strip sitting between the band header and the rows, a
+   single header at the top of the page would name columns you can no longer see. */
+.chead{background:var(--board-bg);border-bottom:1px solid var(--line);
+  font-size:10.5px;letter-spacing:.07em;font-weight:700;color:var(--muted);
+  padding-top:8px;padding-bottom:8px}
+.num{text-align:right}
+
+.cband{background:var(--rail-b);border-top:1px solid var(--line);border-bottom:1px solid var(--hair);
+  padding:8px 16px;display:flex;align-items:baseline;gap:10px}
+.cband .ck{font-size:11px;font-weight:800;letter-spacing:.05em;color:#fff;background:var(--forest);
+  border-radius:5px;padding:2px 7px}
+.cband .cn{font-size:13px;font-weight:800;color:var(--forest-deep)}
+.cband .cm{font-size:11.5px;color:var(--muted);font-weight:600}
+.cband .ct{margin-left:auto;font-size:12.5px;font-weight:800;color:var(--ink)}
+
+.mrow{border-bottom:1px solid var(--hair);cursor:pointer}
+.mrow:hover{background:#fcfdfc}
+.mrow.open{background:#fbfdfc}
+.mn{font-size:13.5px;font-weight:700;color:var(--forest-deep);display:flex;align-items:center;
+  gap:7px;flex-wrap:wrap}
+.mem{font-size:11px;color:var(--muted);margin-top:2px;overflow:hidden;text-overflow:ellipsis;
+  white-space:nowrap}
+.mcount{font-size:13px;font-weight:800}
+.msplit{font-size:10.5px;color:var(--muted);font-weight:700;margin-top:2px}
+.money{font-size:13.5px;font-weight:800;color:var(--ink);font-variant-numeric:tabular-nums}
+.money.z{color:#b3c2ba;font-weight:700}
+.chev{width:26px;height:26px;border-radius:7px;border:1px solid transparent;background:none;
+  display:flex;align-items:center;justify-content:center;color:var(--muted);cursor:pointer;
+  margin-left:auto}
+.mrow:hover .chev{border-color:var(--line);background:var(--surface)}
+.chev svg{width:12px;height:12px;stroke:currentColor;fill:none;stroke-width:2.4;
+  transition:transform .12s}
+.mrow.open .chev svg{transform:rotate(90deg)}
+
+/* the adjustment cell. an adjustment is the only number on this page that is typed
+   rather than derived, so it is the only one that has to say who typed it. */
+.adj{display:flex;flex-direction:column;gap:2px;min-width:0}
+.adjv{font-size:13px;font-weight:800;color:var(--ink);font-variant-numeric:tabular-nums}
+.adjw{font-size:10.5px;color:var(--muted);overflow:hidden;text-overflow:ellipsis;
+  white-space:nowrap;max-width:100%}
+.adjw b{color:var(--ink);font-weight:700}
+.adjnone{font-size:11.5px;font-weight:700;color:var(--muted);border:1px dashed var(--chip-line);
+  background:var(--rail-a);border-radius:7px;padding:5px 9px;cursor:pointer;align-self:flex-start;
+  min-height:26px}
+.adjnone:hover{border-style:solid;border-color:#c8d8d1;color:var(--forest)}
+
+.flag{display:inline-flex;align-items:center;font-size:9.5px;font-weight:800;letter-spacing:.03em;
+  border-radius:999px;padding:2px 7px;border:1px solid;white-space:nowrap}
+.flag.warn{background:var(--warn-bg);border-color:var(--warn-line);color:var(--warn-ink)}
+.flag.crit{background:var(--crit-bg);border-color:var(--crit-line);color:var(--crit-ink)}
+.adjw.bare{color:var(--warn-ink);font-weight:700}
+
+/* an unassigned match has no manager row to live in, so it gets its own row inside
+   the city it belongs to — not a separate panel somewhere else on the page. */
+.urow{background:#fefaf8;border-bottom:1px solid var(--hair);padding-top:9px;padding-bottom:9px}
+.uwho{font-size:12.5px;font-weight:800;color:var(--crit-ink);display:flex;align-items:center;gap:7px}
+.uwhen{font-size:11px;color:var(--muted);margin-top:2px;overflow:hidden;text-overflow:ellipsis;
+  white-space:nowrap}
+
+.ctot{background:var(--rail-b);border-bottom:1px solid var(--line);padding-top:9px;padding-bottom:9px;
+  font-size:12px;font-weight:800;color:var(--muted)}
+.gtot{background:linear-gradient(180deg,#effaf3,#ffffff);border-top:1px solid #bfe2cf;
+  padding-top:14px;padding-bottom:14px;font-size:13px;font-weight:800;color:var(--forest-deep)}
+.gtot .money{font-size:17px;color:var(--amount)}
+.gtot.part{background:var(--rail-b);border-top-color:var(--line);color:var(--muted)}
+.gtot.part .money{color:var(--ink)}
+
+/* ── the per-manager detail ──────────────────────────── */
+.det{background:var(--board-bg);border-bottom:1px solid var(--line);padding:10px 16px 12px 16px}
+.dt{width:100%;border-collapse:collapse}
+.dt th{font-size:10px;letter-spacing:.07em;color:var(--muted);font-weight:700;text-align:left;
+  padding:4px 10px 6px 0;border-bottom:1px solid var(--hair);white-space:nowrap}
+.dt th.r{text-align:right;padding-right:0}
+.dt td{font-size:11.5px;color:var(--ink);padding:6px 10px 6px 0;border-bottom:1px solid var(--hair);
+  vertical-align:top}
+.dt tr:last-child td{border-bottom:0}
+.dt td.r{text-align:right;padding-right:0;font-weight:800;font-variant-numeric:tabular-nums}
+.dt .wh{color:var(--muted);font-size:10.5px}
+.dt .fld{font-weight:700}
+.tro{font-size:10px;font-weight:800;color:var(--warn-ink);background:var(--warn-bg);
+  border:1px solid var(--warn-line);border-radius:5px;padding:1px 5px;margin-left:5px}
+
+/* ── the calendar view ───────────────────────────────── */
+.cal{display:grid;grid-template-columns:repeat(7,minmax(0,1fr));gap:8px;padding:12px 16px 14px}
+.dcol{min-width:0}
+.dh{font-size:10px;letter-spacing:.07em;font-weight:700;color:var(--muted);padding-bottom:5px}
+.dh b{display:block;font-size:12px;color:var(--forest-deep);letter-spacing:0;margin-top:2px}
+.mcard{border:1px solid var(--line);border-radius:9px;background:var(--surface);padding:7px 8px;
+  margin-bottom:6px}
+.mcard .mt{font-size:11px;font-weight:800;color:var(--forest-deep)}
+.mcard .mf{font-size:10.5px;color:var(--ink);margin-top:2px;line-height:1.3}
+.mcard .mg{font-size:10.5px;color:var(--muted);font-weight:700;margin-top:3px}
+.mcard .mp{font-size:10px;color:var(--muted);margin-top:3px;display:flex;align-items:center;gap:5px;
+  flex-wrap:wrap}
+.mcard .rate{font-weight:800;color:var(--ok-ink)}
+.mcard .short{font-weight:700;color:var(--warn-ink)}
+.mcard.canc{background:#fdf7f5;border-color:var(--crit-line)}
+.mcard.canc .mt,.mcard.canc .mf,.mcard.canc .mg{color:var(--crit-ink);text-decoration:line-through}
+.mcard.canc .mp{color:var(--crit-ink)}
+.mcard.un{background:#fefaf8;border-color:var(--crit-line)}
+.mcard.un .mg{color:var(--crit-ink)}
+.mcard.tny{border-color:var(--warn-line);background:#fffdf6}
+.dnone{font-size:11px;color:#c3d2cb;padding:6px 2px}
+
+/* the week strip sits on its own ground so the eye reads it as the calendar above
+   this city's rows, not as one more row in the table. */
+.calwrap{background:var(--rail-a);border-bottom:1px solid var(--line)}
+.cfold{margin-left:10px;align-self:center;border:1px solid var(--chip-line);background:var(--surface);
+  border-radius:7px;min-height:26px;padding:4px 9px;font-size:11px;font-weight:800;color:var(--muted);
+  cursor:pointer;display:inline-flex;align-items:center;gap:5px;white-space:nowrap}
+.cfold:hover{border-color:#c8d8d1;color:var(--forest)}
+.cfold svg{width:11px;height:11px;stroke:currentColor;fill:none;stroke-width:2.6;
+  transition:transform .12s}
+.cfold.shut svg{transform:rotate(-90deg)}
+/* clicking a match in the week strip opens the managers who worked it, in the rows
+   directly below — the whole point of putting the two on one screen. */
+.mcard.click{cursor:pointer}
+.mcard.click:hover{border-color:#bcd6c8;box-shadow:0 1px 2px rgba(13,59,46,.09)}
+@keyframes flashrow{0%{background:#dcf3e5}70%{background:#eefaf2}100%{background:transparent}}
+.mrow.flash,.urow.flash{animation:flashrow 1.5s ease-out 1}
+
+.pfoot{border-top:1px solid var(--line);background:var(--rail-b);padding:12px 16px;
+  font-size:11.5px;line-height:1.65;color:var(--muted)}
+.hide{display:none !important}
+
+@media(max-width:1400px){
+  /* width comes back from the columns you lose least by shrinking: the adjustment
+     note truncates, the counts tighten — never the manager's name. */
+  .pgrid{grid-template-columns:minmax(200px,1fr) 140px 104px 210px 106px 36px;gap:0 10px;
+    padding:0 12px}
+  .cband,.pht,.pfoot,.det,.cal{padding-left:12px;padding-right:12px}
+  .tiles{gap:10px}
+  .cal{gap:6px}
+}
+</style>
+</head>
+<body>
+
+<div class="top">
+  <div class="brand">MATCHDAY<span>Clubhouse</span></div>
+  <nav class="tnav">
+    <a href="#">Home</a><a href="#">Finance</a><a href="#">Growth</a>
+    <a href="#" class="dim">Membership</a><a href="#" class="on">Match Ops</a><a href="#">Tech</a>
+  </nav>
+  <div class="who">Ryan Mancuso ▾</div>
+</div>
+
+<div class="shell">
+  <aside class="rail">
+    <div class="rlab">OPERATIONS</div>
+    <a class="ri" href="#"><svg viewBox="0 0 24 24"><rect x="3" y="5" width="18" height="16" rx="2"/><path d="M3 10h18M8 3v4M16 3v4"/></svg><span class="t">Master Schedule</span></a>
+    <a class="ri" href="#"><svg viewBox="0 0 24 24"><path d="M3 5h18l-7 8v6l-4 2v-8z"/></svg><span class="t">Field Pipeline</span></a>
+    <a class="ri" href="#"><svg viewBox="0 0 24 24"><rect x="3" y="6" width="18" height="12" rx="2"/><circle cx="12" cy="12" r="2.5"/></svg><span class="t">Field Ops</span></a>
+    <a class="ri" href="#"><svg viewBox="0 0 24 24"><path d="M3 7l9-4 9 4-9 4-9-4z"/><path d="M3 12l9 4 9-4M3 17l9 4 9-4"/></svg><span class="t">Inventory</span></a>
+    <a class="ri on" href="#"><svg viewBox="0 0 24 24"><rect x="2.5" y="6" width="19" height="12" rx="2"/><circle cx="12" cy="12" r="2.6"/><path d="M6 12h.01M18 12h.01"/></svg><span class="t">Manager Pay</span><span class="rbadge" id="railb">4</span></a>
+    <a class="ri" href="#"><svg viewBox="0 0 24 24"><path d="M12 3l2.7 5.6 6.1.9-4.4 4.3 1 6.1-5.4-2.9-5.4 2.9 1-6.1L3.2 9.5l6.1-.9z"/></svg><span class="t">Reviews</span></a>
+    <div class="rlab">CONVERSATIONS</div>
+    <a class="ri" href="#"><svg viewBox="0 0 24 24"><path d="M21 12a8 8 0 0 1-8 8H4l2-3a8 8 0 1 1 15-5z"/></svg><span class="t">Match Chats</span></a>
+    <a class="ri" href="#"><svg viewBox="0 0 24 24"><circle cx="9" cy="8" r="3.2"/><path d="M3 20c0-3.3 2.7-6 6-6s6 2.7 6 6M17 11a3 3 0 1 0 0-6"/></svg><span class="t">Player Chats</span></a>
+    <div class="rfoot"><div class="rcol"><svg viewBox="0 0 24 24"><path d="M15 6l-6 6 6 6"/></svg>Collapse</div></div>
+  </aside>
+
+  <main class="main">
+    <div class="ph">
+      <div>
+        <h1>Manager Pay</h1>
+        <div class="sub" id="psub"></div>
+      </div>
+      <div class="right">
+        <button class="btn"><svg viewBox="0 0 24 24"><path d="M4 4v6h6M20 20v-6h-6"/><path d="M20 9A8 8 0 0 0 6 6M4 15a8 8 0 0 0 14 3"/></svg>Refresh</button>
+        <button class="btn pri" id="expBtn"><svg viewBox="0 0 24 24"><path d="M12 4v11M7 11l5 5 5-5M5 20h14"/></svg>Gusto CSV</button>
+      </div>
+    </div>
+
+    <div class="wbar">
+      <div class="wnav">
+        <button class="warrow" aria-label="Previous week"><svg viewBox="0 0 24 24"><path d="M15 6l-6 6 6 6"/></svg></button>
+        <span class="wrange" id="wrange"></span>
+        <button class="warrow" aria-label="Next week"><svg viewBox="0 0 24 24"><path d="M9 6l6 6-6 6"/></svg></button>
+      </div>
+      <span class="wstate done">LAST COMPLETED</span>
+      <span class="expnote" id="expnote"></span>
+      <div class="wpay" id="wpay"></div>
+      <div class="seg">
+        <button id="vBoth" class="on">Week + pay</button>
+        <button id="vPay">Pay only</button>
+      </div>
+    </div>
+
+    <div class="chips" id="chips"></div>
+
+    <div class="tiles">
+      <div class="tile hero"><div class="tlab">TOTAL PAYOUT</div>
+        <div class="tval" id="t1"></div><div class="tsub" id="t1n"></div></div>
+      <div class="tile"><div class="tlab">MANAGERS PAID</div>
+        <div class="tval" id="t2"></div><div class="tsub" id="t2n"></div></div>
+      <div class="tile"><div class="tlab">MATCHES PAID</div>
+        <div class="tval" id="t3"></div><div class="tsub" id="t3n"></div></div>
+      <div class="tile"><div class="tlab">NEEDS A LOOK</div>
+        <div class="tval" id="t4"></div><div class="tsub" id="t4n"></div>
+        <button class="tjump" id="attnJump">Show only these</button></div>
+    </div>
+
+    <section class="panel">
+      <div class="pht">
+        <h2 id="ptitle">Payout run</h2>
+        <span class="c" id="pcount"></span>
+        <div class="r"><button class="btn sm" id="clearf">Clear filters</button></div>
+      </div>
+      <div id="list"></div>
+      <div class="pfoot" id="listFoot"></div>
+    </section>
+  </main>
+</div>
+
+<script>
+/* ═══════════════════════════════════════════════════════════════════
+   MANAGER PAY — Match Ops
+   Every figure on this page is derived from MATCHES, which is generated
+   once from each city's weekly slot pattern. Nothing is typed twice:
+   the tiles, the city bands, the manager rows, the grand total and the
+   calendar all read the same array. The ONLY numbers on this page that
+   are not derived are the adjustments — which is exactly why each one
+   has to carry a reason, a person and a date.
+   ═══════════════════════════════════════════════════════════════════ */
+
+/* ── the pay rules, in one place ──────────────────────────────────── */
+var RATE_SOLO    = 20;   /* one manager, ordinary match                */
+var RATE_TOURNEY = 30;   /* one manager, tournament, at least TOURNEY_MIN signed up */
+var TOURNEY_MIN  = 25;   /* the sign-up count that turns $20 into $30  */
+var PAY_LAG_DAYS = 2;    /* the week ends Sunday and pays Tuesday      */
+
+var WK_START = "2026-07-20";           /* Monday */
+var DAY = 864e5;
+function D(s){return Date.UTC(+s.slice(0,4), +s.slice(5,7)-1, +s.slice(8,10))}
+function ds(t){return new Date(t).toISOString().slice(0,10)}
+var WK_END  = ds(D(WK_START) + 6*DAY);
+var PAY_DAY = ds(D(WK_END) + PAY_LAG_DAYS*DAY);
+
+var MON=["Jan","Feb","Mar","Apr","May","Jun","Jul","Aug","Sep","Oct","Nov","Dec"];
+var DOW=["Mon","Tue","Wed","Thu","Fri","Sat","Sun"];
+function dshort(s){return MON[+s.slice(5,7)-1]+" "+(+s.slice(8,10))}
+function dfull(s){return MON[+s.slice(5,7)-1]+" "+(+s.slice(8,10))+", "+s.slice(0,4)}
+function money(n){return "$"+n.toLocaleString("en-US",{maximumFractionDigits:0})}
+function esc(s){return String(s).replace(/[&<>"]/g,function(c){
+  return {"&":"&amp;","<":"&lt;",">":"&gt;",'"':"&quot;"}[c]})}
+
+/* determinism: a hash, never Math.random, so the same page renders the same
+   numbers every time it is opened and the harness can assert on them. */
+function h32(s){var h=2166136261>>>0;
+  for(var i=0;i<s.length;i++){h^=s.charCodeAt(i);h=Math.imul(h,16777619)>>>0}
+  return h>>>0}
+function pick(seed,n){return (h32(seed)%n)}
+
+/* ── cities, fields, managers ─────────────────────────────────────── */
+var CITIES=[
+  {k:"ATL", n:"Atlanta",       dm:[1,1,0,1,1,0,1]},
+  {k:"ATX", n:"Austin",        dm:[6,6,5,6,6,6,5]},
+  {k:"DFW", n:"Dallas",        dm:[2,2,1,2,2,2,1]},
+  {k:"ELP", n:"El Paso",       dm:[1,0,1,0,1,0,1]},
+  {k:"HOU", n:"Houston",       dm:[2,2,2,2,2,2,2]},
+  {k:"OKC", n:"Oklahoma City", dm:[1,1,0,1,1,0,1]},
+  {k:"SATX",n:"San Antonio",   dm:[1,1,1,1,2,1,1]},
+  {k:"STL", n:"St. Louis",     dm:[1,2,1,1,2,1,1]}
+];
+
+var FLD={
+  ATL:["PRUMC"],
+  ATX:["North East Metropolitan Park","Onion Creek","The Hattrick L.","Westlake HS Field 3",
+       "Stadium Field at Round Rock M.C.","LBJ Early College High School","Hill Country Middle School"],
+  DFW:["Grand Prairie Sports Complex","Kiest Park","Crawford Memorial Park"],
+  ELP:["Galatzan Park","Westside ELP"],
+  HOU:["ATH Katy","ATH Pearland","Mainland Sports Complex","Katy Intl Sports Complex"],
+  OKC:["Scissortail Park","Wheeler Park"],
+  SATX:["Soccer Central","San Antonio Sports Complex","STAR Soccer Complex"],
+  STL:["Centennial Commons","Lou Fusz Outdoor","Lou Fusz Indoor"]
+};
+var TIMES=["6:30 PM","7:00 PM","8:00 PM","9:00 PM","6:00 PM","9:00 AM","10:00 AM"];
+var CAPS=[18,20,22,24];
+
+/* one manager has no payroll email on file. that is not cosmetic: the Gusto row
+   is matched on the email, so this person's line would bounce on import. */
+var MGR=[
+  {id:1,  c:"ATL", n:"Troy Moodie",     em:"troymoodie@yahoo.com"},
+  {id:2,  c:"ATX", n:"Drea Salinas",    em:"drea.salinas@gmail.com"},
+  {id:3,  c:"ATX", n:"Moncho Perez",    em:"moncho.perez@gmail.com"},
+  {id:4,  c:"ATX", n:"Adam Reyes",      em:"adam.reyes@gmail.com"},
+  {id:5,  c:"ATX", n:"Jose Orozco",     em:"jorozco@outlook.com"},
+  {id:6,  c:"ATX", n:"Ale Contreras",   em:null},
+  {id:7,  c:"ATX", n:"Elnur Ismayilov", em:"elnur.i@gmail.com"},
+  {id:8,  c:"ATX", n:"Priya Raman",     em:"priya.raman@gmail.com"},
+  {id:9,  c:"ATX", n:"Marcus Webb",     em:"m.webb@gmail.com"},
+  {id:10, c:"ATX", n:"Sofia Delgado",   em:"sofia.delgado@gmail.com"},
+  {id:11, c:"ATX", n:"Ben Okafor",      em:"ben.okafor@gmail.com"},
+  {id:12, c:"ATX", n:"Nina Petrova",    em:"nina.petrova@gmail.com"},
+  {id:13, c:"ATX", n:"Carlos Vega",     em:"carlos.vega@gmail.com"},
+  {id:14, c:"DFW", n:"Terrance Boyd",   em:"tboyd@gmail.com"},
+  {id:15, c:"DFW", n:"Ellie Nguyen",    em:"ellie.nguyen@gmail.com"},
+  {id:16, c:"DFW", n:"Sandra Ruiz",     em:"sandra.ruiz@gmail.com"},
+  {id:17, c:"DFW", n:"Dev Patel",       em:"dev.patel@gmail.com"},
+  {id:18, c:"DFW", n:"Mara Lindqvist",  em:"mara.l@gmail.com"},
+  {id:19, c:"ELP", n:"Adriana Soto",    em:"adriana.soto@gmail.com"},
+  {id:20, c:"ELP", n:"Hector Vela",     em:"hector.vela@gmail.com"},
+  {id:21, c:"HOU", n:"Nadia Ahmed",     em:"nadia.ahmed@gmail.com"},
+  {id:22, c:"HOU", n:"Devon Pryor",     em:"devon.pryor@gmail.com"},
+  {id:23, c:"HOU", n:"Kofi Mensah",     em:"kofi.mensah@gmail.com"},
+  {id:24, c:"HOU", n:"Rosa Iglesias",   em:"rosa.iglesias@gmail.com"},
+  {id:25, c:"HOU", n:"Tim Yeboah",      em:"tim.yeboah@gmail.com"},
+  {id:26, c:"HOU", n:"Lena Brandt",     em:"lena.brandt@gmail.com"},
+  {id:27, c:"OKC", n:"Bryce Tolliver",  em:"bryce.t@gmail.com"},
+  {id:28, c:"OKC", n:"Jamie Cardenas",  em:"jamie.cardenas@gmail.com"},
+  {id:29, c:"SATX",n:"Marisol Cruz",    em:"marisol.cruz@gmail.com"},
+  {id:30, c:"SATX",n:"Omar Haddad",     em:"omar.haddad@gmail.com"},
+  {id:31, c:"SATX",n:"Kate Sullivan",   em:"kate.sullivan@gmail.com"},
+  {id:32, c:"STL", n:"Ruben Diaz",      em:"ruben.diaz@gmail.com"},
+  {id:33, c:"STL", n:"Anya Sokolova",   em:"anya.sokolova@gmail.com"},
+  {id:34, c:"STL", n:"Grant Whitfield", em:"grant.w@gmail.com"},
+  {id:35, c:"STL", n:"Ify Nwosu",       em:"ify.nwosu@gmail.com"}
+];
+var MBY={}; MGR.forEach(function(m){MBY[m.id]=m});
+var ROSTER={}; CITIES.forEach(function(c){
+  ROSTER[c.k]=MGR.filter(function(m){return m.c===c.k}).map(function(m){return m.id})});
+
+/* ── the exceptions, placed by hand so every rule is exercised ─────
+   keyed on the match's index within its city. tournaments carry their own
+   sign-up count because that count is what decides $20 vs $30 — including
+   one tournament that fell short of TOURNEY_MIN and therefore pays $20. */
+var OV={
+  ATL: {},
+  ATX: {4:{tny:true,sign:28}, 9:{co:true}, 13:{canc:true}, 18:{tny:true,sign:22},
+        22:{un:true}, 27:{co:true}, 33:{canc:true}},
+  DFW: {3:{co:true}, 7:{un:true}},
+  ELP: {},
+  HOU: {5:{tny:true,co:true,sign:26}, 11:{canc:true}},
+  OKC: {2:{canc:true}},
+  SATX:{4:{tny:true,sign:25}, 6:{co:true}},
+  STL: {2:{un:true}, 5:{canc:true}, 8:{co:true}}
+};
+
+/* ── generate the week ────────────────────────────────────────────── */
+var MATCHES=[];
+CITIES.forEach(function(c){
+  var mi=0;
+  for(var d=0; d<7; d++){
+    for(var j=0; j<c.dm[d]; j++){
+      var seed = c.k+"|"+d+"|"+j;
+      var ov = OV[c.k][mi] || {};
+      var flds = FLD[c.k];
+      var cap = ov.tny ? 30 : CAPS[pick(seed+"|cap",CAPS.length)];
+      var sign = ov.sign!=null ? ov.sign
+               : Math.max(6, cap - pick(seed+"|sg", 9));
+      var roster = ROSTER[c.k];
+      var mgrs = [];
+      if(!ov.un){
+        var a = roster[pick(seed+"|m1", roster.length)];
+        mgrs.push(a);
+        if(ov.co && roster.length>1){
+          var b = roster[pick(seed+"|m2", roster.length)];
+          if(b===a) b = roster[(roster.indexOf(a)+1) % roster.length];
+          mgrs.push(b);
+        }
+      }
+      MATCHES.push({
+        id: c.k+"-"+mi, city:c.k, dow:d, date: ds(D(WK_START)+d*DAY),
+        t: TIMES[pick(seed+"|t",TIMES.length)],
+        fld: flds[pick(seed+"|f",flds.length)],
+        cap: cap, sign: sign,
+        tny: !!ov.tny, canc: !!ov.canc, mgrs: mgrs
+      });
+      mi++;
+    }
+  }
+});
+
+/* ── the pay rule, applied in exactly one place ───────────────────── */
+function rateFor(m){
+  if(m.canc || !m.mgrs.length) return 0;
+  if(m.mgrs.length===1 && m.tny && m.sign>=TOURNEY_MIN) return RATE_TOURNEY;
+  return RATE_SOLO;
+}
+/* every match line says what it paid AND why, so a tournament that paid the
+   ordinary rate is explicable without opening the rulebook. */
+function rateWhy(m){
+  if(m.canc) return "cancelled — does not pay";
+  if(!m.mgrs.length) return "nobody assigned";
+  if(m.mgrs.length>1) return "co-managed — "+money(RATE_SOLO)+" each";
+  if(m.tny && m.sign>=TOURNEY_MIN) return "tournament, "+m.sign+" signed up";
+  if(m.tny) return "tournament but only "+m.sign+" signed up, under "+TOURNEY_MIN;
+  return "ran on their own";
+}
+
+/* ── the adjustments — the only typed numbers on the page ─────────── */
+var ADJ={
+  1:  {amt:50, why:"Covered the Sunday PRUMC match after a late drop-out", by:"Vitaly K.", on:"2026-07-27"},
+  5:  {amt:25, why:null,                                                   by:"Ryan Mancuso", on:"2026-07-27"},
+  21: {amt:20, why:"Mileage to Katy, agreed in advance",                   by:"Vitaly K.", on:"2026-07-27"},
+  29: {amt:30, why:"Ran two pitches solo on Friday",                       by:"Vitaly K.", on:"2026-07-27"}
+};
+
+/* ── derive every manager's line ──────────────────────────────────── */
+function build(){
+  var rows = MGR.map(function(m){
+    var mine = MATCHES.filter(function(x){
+      return !x.canc && x.mgrs.indexOf(m.id)>=0});
+    var base = mine.reduce(function(s,x){return s+rateFor(x)},0);
+    var tny  = mine.filter(function(x){return rateFor(x)===RATE_TOURNEY}).length;
+    var a = ADJ[m.id] || null;
+    var flags=[];
+    if(!m.em)             flags.push({k:"noemail", lv:"crit", lbl:"NO PAYROLL EMAIL"});
+    if(a && !a.why)       flags.push({k:"bare",    lv:"warn", lbl:"NO REASON"});
+    return {m:m, matches:mine, base:base, tny:tny, adj:a,
+            total: base + (a?a.amt:0), flags:flags};
+  }).filter(function(r){return r.matches.length || r.adj});
+  return rows;
+}
+var ROWS = build();
+var UNASSIGNED = MATCHES.filter(function(m){return !m.canc && !m.mgrs.length});
+var CANCELLED  = MATCHES.filter(function(m){return m.canc});
+var PAID       = MATCHES.filter(function(m){return !m.canc});
+
+/* a thing that needs a look is counted once, under its most urgent kind —
+   so the tile's breakdown adds up to the things and not to the reasons. */
+var RANK={unassigned:0, noemail:1, bare:2};
+var ATTN=[];
+UNASSIGNED.forEach(function(m){ATTN.push({k:"unassigned", city:m.city})});
+ROWS.forEach(function(r){ if(r.flags.length) ATTN.push({k:r.flags[0].k, city:r.m.c}) });
+
+/* ── state ────────────────────────────────────────────────────────── */
+/* VIEW "both" = each city's week sits above that city's managers, which is how you
+   read a calendar and fix the pay in the same motion. "pay" folds every strip away
+   for a straight scan down the payout run. SHUT holds per-city folds. */
+var CITY="", ONLY_ATTN=false, VIEW="both", OPEN={}, SHUT={};
+
+function rowAttn(r){return r.flags.length>0}
+function inCity(k){return !CITY || CITY===k}
+function visRows(){return ROWS.filter(function(r){
+  return inCity(r.m.c) && (!ONLY_ATTN || rowAttn(r))})}
+function visUn(){return UNASSIGNED.filter(function(m){return inCity(m.city)})}
+
+/* ── render: the header, the week bar, the tiles ──────────────────── */
+function renderTop(){
+  document.getElementById("psub").textContent =
+    "What each manager is owed for the week of "+dshort(WK_START)+" – "+dfull(WK_END)+
+    ", and the file that pays them.";
+  document.getElementById("wrange").textContent =
+    dshort(WK_START)+" – "+dfull(WK_END);
+  document.getElementById("wpay").innerHTML =
+    "Pays <b>"+dfull(PAY_DAY)+"</b>";
+
+  /* the tiles read the same scope the board below them reads. a city chip is a
+     scope, so filtering to Austin must not leave a $2,325 headline above a
+     $1,000 list. the attention filter is a reading aid inside the board and
+     deliberately does NOT rescope the tiles — it would make the payout total
+     collapse to the exceptions. */
+  var cityName = CITY ? CITIES.filter(function(c){return c.k===CITY})[0].n : null;
+  var scope = cityName ? " · "+cityName+" only" : "";
+  var sRows = ROWS.filter(function(r){return inCity(r.m.c)});
+  var sMat  = MATCHES.filter(function(m){return inCity(m.city)});
+  var sCanc = CANCELLED.filter(function(m){return inCity(m.city)});
+  var sUn   = UNASSIGNED.filter(function(m){return inCity(m.city)});
+  var sAttn = ATTN.filter(function(a){return inCity(a.city)});
+  var sMgr  = MGR.filter(function(m){return inCity(m.c)});
+
+  var base = sRows.reduce(function(s,r){return s+r.base},0);
+  var adjs = sRows.filter(function(r){return r.adj});
+  var adjT = adjs.reduce(function(s,r){return s+r.adj.amt},0);
+  var total= base+adjT;
+
+  document.getElementById("t1").textContent = money(total);
+  document.getElementById("t1n").innerHTML =
+    "<b>"+money(base)+"</b> in match pay + <b>"+money(adjT)+"</b> across "+adjs.length+
+    " adjustment"+(adjs.length===1?"":"s")+", typed by hand"+esc(scope);
+
+  var paidMgrs = sRows.filter(function(r){return r.total>0});
+  var cityCount = {}; paidMgrs.forEach(function(r){cityCount[r.m.c]=1});
+  document.getElementById("t2").textContent = paidMgrs.length;
+  document.getElementById("t2n").innerHTML = (CITY
+    ? "of <b>"+sMgr.length+"</b> managers on the "+esc(cityName)+" roster"
+    : "in <b>"+Object.keys(cityCount).length+"</b> cities · of "+MGR.length+" managers on the roster")+
+    " · pays "+DOW[(D(PAY_DAY)/DAY%7+3)%7]+" "+dshort(PAY_DAY);
+
+  var paidM = sMat.filter(function(m){return !m.canc && m.mgrs.length}).length;
+  document.getElementById("t3").textContent = paidM;
+  document.getElementById("t3n").innerHTML =
+    "of <b>"+sMat.length+"</b> on the calendar"+esc(scope)+" · "+sCanc.length+
+    " cancelled and "+sUn.length+" with nobody assigned, neither of which pays";
+
+  var byKind={}; sAttn.forEach(function(a){byKind[a.k]=(byKind[a.k]||0)+1});
+  var KN={unassigned:"match"+(byKind.unassigned===1?"":"es")+" with no manager",
+          noemail:"with no payroll email", bare:"adjustment"+(byKind.bare===1?"":"s")+" with no reason"};
+  document.getElementById("t4").textContent = sAttn.length;
+  document.getElementById("t4n").textContent = sAttn.length
+    ? Object.keys(byKind).sort(function(a,b){return RANK[a]-RANK[b]})
+        .map(function(k){return byKind[k]+" "+KN[k]}).join(", ")
+    : "every match has a manager and every adjustment has a reason"+scope;
+  document.getElementById("railb").textContent = ATTN.length;
+
+  document.getElementById("expnote").innerHTML = ATTN.length
+    ? "Not exported · <b>"+ATTN.length+" to settle first</b>"
+    : "Not exported yet";
+}
+
+function renderChips(){
+  var el=document.getElementById("chips"); var h="";
+  h += '<button class="chip'+(CITY===""?" on":"")+'" data-c="">All cities <i>'+ROWS.length+'</i></button>';
+  CITIES.forEach(function(c){
+    var n = ROWS.filter(function(r){return r.m.c===c.k}).length;
+    h += '<button class="chip'+(CITY===c.k?" on":"")+'" data-c="'+c.k+'">'+c.k+' <i>'+n+'</i></button>';
+  });
+  el.innerHTML=h;
+  el.querySelectorAll(".chip").forEach(function(b){
+    b.onclick=function(){CITY=b.dataset.c; render()}});
+}
+
+/* ── render: a manager's row ──────────────────────────────────────── */
+function mgrRow(r){
+  var a=r.adj;
+  var adjCell = a
+    ? '<div class="adj"><div class="adjv">'+money(a.amt)+'</div>'+
+      '<div class="adjw'+(a.why?"":" bare")+'" title="'+esc(a.why||"No reason written down")+'">'+
+      (a.why ? esc(a.why) : "No reason written down")+' · <b>'+esc(a.by)+'</b>, '+dshort(a.on)+
+      '</div></div>'
+    : '<button class="adjnone">+ Add adjustment</button>';
+  return '<div class="pgrid mrow'+(OPEN[r.m.id]?" open":"")+'" data-m="'+r.m.id+'">'+
+    '<div style="padding:11px 0;min-width:0">'+
+      '<div class="mn"><span>'+esc(r.m.n)+'</span>'+
+        r.flags.map(function(f){return '<span class="flag '+f.lv+'">'+f.lbl+'</span>'}).join("")+
+      '</div>'+
+      '<div class="mem">'+(r.m.em ? esc(r.m.em)
+        : '<button class="btn sm" style="margin-top:2px">+ Add email</button>')+'</div>'+
+    '</div>'+
+    '<div style="padding:11px 0"><div class="mcount">'+r.matches.length+'</div>'+
+      '<div class="msplit">'+(r.tny
+        ? (r.matches.length-r.tny)+" at "+money(RATE_SOLO)+" · "+r.tny+" at "+money(RATE_TOURNEY)
+        : "all at "+money(RATE_SOLO))+'</div></div>'+
+    '<div style="padding:11px 0" class="num"><span class="money'+(r.base?"":" z")+'">'+money(r.base)+'</span></div>'+
+    '<div style="padding:11px 0;min-width:0">'+adjCell+'</div>'+
+    '<div style="padding:11px 0" class="num"><span class="money">'+money(r.total)+'</span></div>'+
+    '<div style="padding:11px 0"><button class="chev" aria-label="Show '+esc(r.m.n)+'’s matches">'+
+      '<svg viewBox="0 0 24 24"><path d="M9 6l6 6-6 6"/></svg></button></div>'+
+  '</div>'+ (OPEN[r.m.id] ? detail(r) : "");
+}
+
+function detail(r){
+  var rows = r.matches.slice().sort(function(a,b){return a.dow-b.dow}).map(function(m){
+    return '<tr><td class="wh">'+DOW[m.dow]+' '+dshort(m.date)+' · '+m.t+'</td>'+
+      '<td class="fld">'+esc(m.fld)+(m.tny?'<span class="tro">TOURNAMENT</span>':'')+'</td>'+
+      '<td class="wh">'+m.sign+' of '+m.cap+' signed up</td>'+
+      '<td class="wh">'+rateWhy(m)+'</td>'+
+      '<td class="r">'+money(rateFor(m))+'</td></tr>';
+  }).join("");
+  var a=r.adj;
+  if(a) rows += '<tr><td class="wh">'+dshort(a.on)+'</td><td class="fld">Adjustment</td>'+
+    '<td class="wh">entered by '+esc(a.by)+'</td>'+
+    '<td class="wh">'+(a.why?esc(a.why):'<b style="color:var(--warn-ink)">no reason written down</b>')+'</td>'+
+    '<td class="r">'+money(a.amt)+'</td></tr>';
+  return '<div class="det"><table class="dt"><thead><tr>'+
+    '<th>WHEN</th><th>FIELD</th><th>SIGN-UPS</th><th>RATE APPLIED, AND WHY</th><th class="r">PAY</th>'+
+    '</tr></thead><tbody>'+rows+'</tbody></table></div>';
+}
+
+function unRow(m){
+  return '<div class="pgrid urow" data-u="'+m.id+'">'+
+    '<div style="min-width:0"><div class="uwho">No manager assigned'+
+      '<span class="flag crit">DOES NOT PAY</span></div>'+
+      '<div class="uwhen">'+DOW[m.dow]+' '+dshort(m.date)+' · '+m.t+' · '+esc(m.fld)+
+      (m.tny?' · tournament':'')+'</div></div>'+
+    '<div><div class="mcount" style="color:#b3c2ba">—</div>'+
+      '<div class="msplit">'+m.sign+' of '+m.cap+' signed up</div></div>'+
+    '<div class="num"><span class="money z">'+money(0)+'</span></div>'+
+    '<div><button class="btn sm">Assign a manager</button></div>'+
+    '<div class="num"><span class="money z">'+money(0)+'</span></div><div></div>'+
+  '</div>';
+}
+
+/* ── render: one city's week ──────────────────────────────────────────
+   the same seven columns as before, but now folded into the city band it
+   describes, immediately above that city's manager rows. a card that pays
+   somebody is clickable: it opens the rows of the managers who worked it. */
+function calStrip(c){
+  /* the whole week, unfiltered. the attention filter narrows which ROWS you read;
+     narrowing the calendar too would leave six em-dashes and one card and imply
+     the city barely played. when that filter is on the strip is dropped instead. */
+  var ms = MATCHES.filter(function(m){return m.city===c.k});
+  if(!ms.length) return "";
+  var h = '<div class="calwrap"><div class="cal">';
+  for(var d=0; d<7; d++){
+    var day = ms.filter(function(m){return m.dow===d});
+    h += '<div class="dcol"><div class="dh">'+DOW[d].toUpperCase()+
+      '<b>'+dshort(ds(D(WK_START)+d*DAY))+'</b></div>';
+    if(!day.length) h += '<div class="dnone">—</div>';
+    day.forEach(function(m){
+      var cls = m.canc ? " canc" : (!m.mgrs.length ? " un" : (m.tny ? " tny" : ""));
+      /* a cancelled match has no row underneath it to jump to, so it is not a link. */
+      if(!m.canc) cls += " click";
+      h += '<div class="mcard'+cls+'" data-mid="'+m.id+'"'+
+        (m.canc?"":' title="Show the pay row for this match"')+'>'+
+        '<div class="mt">'+(m.tny?"\u{1F3C6} ":"")+m.t+'</div>'+
+        '<div class="mf">'+esc(m.fld)+'</div>'+
+        '<div class="mg">'+(m.mgrs.length
+          ? m.mgrs.map(function(id){return esc(MBY[id].n)}).join(" + ")
+          : "No manager assigned")+'</div>'+
+        '<div class="mp"><span>'+m.sign+'/'+m.cap+' signed up</span>'+
+        (m.canc ? '<span>cancelled</span>'
+                : (m.mgrs.length
+                   ? '<span class="rate">'+money(rateFor(m))+(m.mgrs.length>1?" each":"")+'</span>'+
+                     /* two trophy cards paying different rates need the reason on the card,
+                        not only in the drill-down three clicks away. */
+                     (m.tny && rateFor(m)===RATE_SOLO
+                        ? '<span class="short">'+(m.mgrs.length>1
+                            ? 'co-managed' : 'under '+TOURNEY_MIN)+'</span>' : '')
+                   : '<span>'+money(0)+'</span>'))+
+        '</div></div>';
+    });
+    h += '</div>';
+  }
+  return h+'</div></div>';
+}
+
+/* clicking a match card opens the managers who worked it and marks them, so the
+   adjustment you came to make is one scroll away from the thing that prompted it. */
+function focusMatch(id){
+  var m = MATCHES.filter(function(x){return x.id===id})[0];
+  if(!m || m.canc) return;
+  var sel = m.mgrs.length
+    ? m.mgrs.map(function(g){OPEN[g]=true; return '.mrow[data-m="'+g+'"]'})
+    : ['.urow[data-u="'+id+'"]'];
+  renderList();
+  var els = sel.map(function(s){return document.getElementById("list").querySelector(s)})
+               .filter(Boolean);
+  if(!els.length) return;
+  els.forEach(function(e){e.classList.remove("flash"); void e.offsetWidth; e.classList.add("flash")});
+  els[0].scrollIntoView({block:"center", behavior:"smooth"});
+}
+
+/* ── render: the payout board ─────────────────────────────────────── */
+function renderList(){
+  var rows=visRows(), un=visUn(), h="";
+  /* when only one city is on screen its footing row and the grand-total row would
+     be the same sentence twice, one above the other. the grand total keeps the
+     job; the per-city footing stands down. */
+  var nBands = CITIES.filter(function(c){
+    return rows.some(function(r){return r.m.c===c.k}) || un.some(function(m){return m.city===c.k})
+  }).length;
+  /* the week strip answers "what happened", the rows answer "what it pays". the
+     attention filter is a reading aid over the rows only — under it a strip would
+     be six em-dashes and one card per city, a screen of blank grid that also reads
+     as though the city hardly played. so no strips while it is on. */
+  var canStrip = VIEW==="both" && !ONLY_ATTN;
+  CITIES.forEach(function(c){
+    var cr = rows.filter(function(r){return r.m.c===c.k});
+    var cu = un.filter(function(m){return m.city===c.k});
+    if(!cr.length && !cu.length) return;
+    var cb = cr.reduce(function(s,r){return s+r.base},0);
+    var ca = cr.reduce(function(s,r){return s+(r.adj?r.adj.amt:0)},0);
+    /* two numbers, not one: a co-managed match is worked twice and paid twice, so
+       the column adds to more shifts than there are matches. the total row shows
+       the figure it is the total OF, and names the other one underneath. */
+    var cm = cr.reduce(function(s,r){return s+r.matches.length},0);
+    var cd = {}; cr.forEach(function(r){r.matches.forEach(function(x){cd[x.id]=1})});
+    var cdn = Object.keys(cd).length;
+    h += '<div class="cband"><span class="ck">'+c.k+'</span><span class="cn">'+c.n+'</span>'+
+      '<span class="cm">'+cdn+' paid match'+(cdn===1?"":"es")+' · '+cr.length+' manager'+
+      (cr.length===1?"":"s")+(cm!==cdn?' · '+(cm-cdn)+' co-managed':'')+
+      (cu.length?' · '+cu.length+' unassigned':'')+'</span>'+
+      '<span class="ct">'+money(cb+ca)+'</span>'+
+      (canStrip
+        ? '<button class="cfold'+(SHUT[c.k]?" shut":"")+'" data-f="'+c.k+'">'+
+          '<svg viewBox="0 0 24 24"><path d="M6 9l6 6 6-6"/></svg>'+
+          (SHUT[c.k]?"Show week":"Hide week")+'</button>'
+        : '')+
+      '</div>';
+    if(canStrip && !SHUT[c.k]) h += calStrip(c);
+    /* the column header repeats once per city because the week strip above it means
+       a single header at the top of the page would be scrolled away by the time you
+       reach the numbers it names. a city showing nothing but an unassigned match has
+       no manager row to head, so it gets no header. */
+    if(cr.length)
+      h += '<div class="pgrid chead"><div>MANAGER</div><div>MATCHES WORKED</div>'+
+        '<div class="num">MATCH PAY</div><div>ADJUSTMENT</div><div class="num">TOTAL</div><div></div></div>';
+    cr.forEach(function(r){h += mgrRow(r)});
+    cu.forEach(function(m){h += unRow(m)});
+    /* a city that is only showing an unassigned match has nothing to foot: the band
+       header already said $0. */
+    if(nBands>1 && cr.length)
+      h += '<div class="pgrid ctot"><div>'+c.k+' total</div>'+
+        '<div>'+cm+(cm!==cdn?'<div class="msplit">across '+cdn+' matches</div>':'')+'</div>'+
+        '<div class="num">'+money(cb)+'</div><div>'+money(ca)+'</div>'+
+        '<div class="num">'+money(cb+ca)+'</div><div></div></div>';
+  });
+
+  if(!h) h = '<div style="padding:34px 16px;text-align:center;color:var(--muted);font-size:12.5px">'+
+    'Nothing matches these filters.</div>';
+  else {
+    var gb = rows.reduce(function(s,r){return s+r.base},0);
+    var ga = rows.reduce(function(s,r){return s+(r.adj?r.adj.amt:0)},0);
+    var gm = rows.reduce(function(s,r){return s+r.matches.length},0);
+    var gd = {}; rows.forEach(function(r){r.matches.forEach(function(x){gd[x.id]=1})});
+    var gdn = Object.keys(gd).length;
+    /* a filtered subtotal must never wear the payroll total's clothes. when the
+       attention filter is on this row states what it is a subtotal OF, and drops
+       the hero styling so nobody reads $145 as the week's payroll. */
+    var cn = CITY ? CITIES.filter(function(c){return c.k===CITY})[0].n : null;
+    var fullTot = ROWS.filter(function(r){return inCity(r.m.c)})
+                      .reduce(function(s,r){return s+r.total},0);
+    var gname = ONLY_ATTN
+      ? 'Rows that need a look<div class="msplit">of '+money(fullTot)+' owed'+
+        (cn?" in "+esc(cn):" this week")+'</div>'
+      : (cn ? esc(cn)+" total" : "Total payout");
+    h += '<div class="pgrid gtot'+(ONLY_ATTN?" part":"")+'"><div>'+gname+'</div>'+
+      '<div>'+gm+(gm!==gdn?'<div class="msplit">across '+gdn+' matches</div>':'')+'</div>'+
+      '<div class="num">'+money(gb)+'</div><div>'+money(ga)+' in adjustments</div>'+
+      '<div class="num"><span class="money">'+money(gb+ga)+'</span></div><div></div></div>';
+  }
+  document.getElementById("list").innerHTML=h;
+
+  var L = document.getElementById("list");
+  L.querySelectorAll(".mrow").forEach(function(el){
+    el.onclick=function(){var id=+el.dataset.m; OPEN[id]=!OPEN[id]; renderList()}});
+  L.querySelectorAll(".btn,.adjnone").forEach(function(b){
+    b.onclick=function(e){e.stopPropagation()}});
+  L.querySelectorAll(".mcard.click").forEach(function(el){
+    /* a match id is a string like "ATX-9" — coercing it to a number loses the match. */
+    el.onclick=function(){focusMatch(el.dataset.mid)}});
+  L.querySelectorAll(".cfold").forEach(function(b){
+    b.onclick=function(){SHUT[b.dataset.f]=!SHUT[b.dataset.f]; renderList()}});
+
+  var nCal = MATCHES.filter(function(m){return inCity(m.city)}).length;
+  /* a hover state is not discovery. the one thing that makes this layout worth the
+     height — a card opens the pay row underneath it — has to be said in words once,
+     and the one case where the weeks are deliberately gone has to be said too. */
+  document.getElementById("pcount").textContent =
+    rows.length+" manager"+(rows.length===1?"":"s")+
+    (un.length? " · "+un.length+" unassigned match"+(un.length===1?"":"es") : "")+
+    (canStrip ? " · "+nCal+" matches on the week — click a match to open its pay row"
+              : (VIEW==="both" ? " · weeks hidden while you are filtered to these" : ""));
+}
+
+/* ── the disclosure ───────────────────────────────────────────────
+   every rule, every threshold and every thing this page cannot know,
+   written out next to the numbers they produce. */
+function renderFoot(){
+  document.getElementById("listFoot").textContent =
+    "A manager is paid "+money(RATE_SOLO)+" for a match they run on their own, "+money(RATE_TOURNEY)+
+    " if that match is a tournament with at least "+TOURNEY_MIN+" players signed up, and "+money(RATE_SOLO)+
+    " each when two run it together — so a co-managed tournament costs "+money(RATE_SOLO*2)+
+    " and a solo one costs "+money(RATE_TOURNEY)+". A tournament that fell short of "+TOURNEY_MIN+
+    " sign-ups pays the ordinary rate; open a manager's row to see the rate each of their matches "+
+    "paid and why. A co-managed match is worked twice and paid twice, so the Matches worked column "+
+    "adds up to more than the number of matches — every total row names both figures. "+
+    "Cancelled matches pay nothing, and neither does a match nobody was assigned to: "+
+    "of the "+MATCHES.length+" matches on this week's calendar, "+CANCELLED.length+" were cancelled and "+
+    UNASSIGNED.length+" have no manager, which is why "+PAID.filter(function(m){return m.mgrs.length}).length+
+    " were paid. Player counts are sign-ups as of the match, not attendance — MatchDay does not record "+
+    "who actually turned up. Adjustments are the only figures here that are typed rather than derived; "+
+    "each shows who entered it and when, and one with no reason written down is flagged amber. "+
+    "A row needs a look when any of three things is true: a match in that city has nobody assigned, "+
+    "which shows as a red row under that city's managers; a manager has no payroll email on file, which "+
+    "shows as a red chip beside their name and would bounce their row on the Gusto import; or an "+
+    "adjustment was entered with no reason. The Needs a look tile counts each of those once, under its "+
+    "most urgent kind, so the numbers add up to the things and not to the reasons. "+
+    "Each city shows its week directly above its own managers: click a match to open the rows of the "+
+    "managers who worked it, Hide week to fold one city's strip away, or Pay only to fold them all and "+
+    "scan straight down the payout run. The week runs Monday "+
+    "to Sunday and pays "+PAY_LAG_DAYS+" days after it ends: "+dfull(WK_START)+" – "+dfull(WK_END)+
+    " pays "+dfull(PAY_DAY)+".";
+}
+
+function render(){
+  renderTop(); renderChips();
+  /* the title names what is actually on screen. under the attention filter the weeks
+     are suppressed, so a title that still promises a week would be a false sentence. */
+  document.getElementById("ptitle").textContent =
+    (VIEW==="both" && !ONLY_ATTN) ? "The week, and what it pays" : "Payout run";
+  renderList();
+  document.getElementById("vBoth").classList.toggle("on", VIEW==="both");
+  document.getElementById("vPay").classList.toggle("on", VIEW==="pay");
+  document.getElementById("attnJump").textContent = ONLY_ATTN ? "Showing only these — show all" : "Show only these";
+  document.getElementById("clearf").classList.toggle("hide", !CITY && !ONLY_ATTN);
+  renderFoot();
+}
+
+document.getElementById("vBoth").onclick=function(){VIEW="both"; render()};
+document.getElementById("vPay").onclick=function(){VIEW="pay"; render()};
+document.getElementById("attnJump").onclick=function(){ONLY_ATTN=!ONLY_ATTN; render()};
+document.getElementById("clearf").onclick=function(){CITY=""; ONLY_ATTN=false; render()};
+document.getElementById("expBtn").onclick=function(e){e.preventDefault()};
+
+/* one row starts open so the rate-and-why detail is visible without a click. */
+OPEN[1]=true;
+render();
+
+/* ── exports for the harness ──────────────────────────────────────── */
+window.MATCHES=MATCHES; window.ROWS=ROWS; window.MGR=MGR; window.ADJ=ADJ;
+window.UNASSIGNED=UNASSIGNED; window.CANCELLED=CANCELLED; window.ATTN=ATTN;
+window.rateFor=rateFor;
+window.pstate=function(){return {view:VIEW, city:CITY, attn:ONLY_ATTN}};
+window.setCity=function(c){CITY=c; render()};
+window.setView=function(v){VIEW=v; render()};
+window.focusMatch=focusMatch;
+window.setShut=function(k,b){SHUT[k]=b; renderList()};
+window.setAttn=function(b){ONLY_ATTN=b; render()};
+window.RULES={RATE_SOLO:RATE_SOLO, RATE_TOURNEY:RATE_TOURNEY,
+  TOURNEY_MIN:TOURNEY_MIN, PAY_LAG_DAYS:PAY_LAG_DAYS,
+  WK_START:WK_START, WK_END:WK_END, PAY_DAY:PAY_DAY};
+</script>
+</body>
+</html>
