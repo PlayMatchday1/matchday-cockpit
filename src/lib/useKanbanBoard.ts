@@ -35,7 +35,10 @@ export type KanbanApi = {
   error: string | null;
   reload: () => Promise<void>;
   createCard: (input: NewCardInput) => Promise<string | null>;
-  updateCard: (id: string, patch: CardPatch) => Promise<void>;
+  // Resolves true when the write reached the DB, false when it failed (the
+  // optimistic change is rolled back via reload). Callers that don't care can
+  // ignore it (`void api.updateCard(...)`).
+  updateCard: (id: string, patch: CardPatch) => Promise<boolean>;
   deleteCard: (id: string) => Promise<void>;
   setOwner: (id: string, ownerId: string | null) => Promise<void>;
   addChecklistItem: (
@@ -147,15 +150,19 @@ export function useKanbanBoard(boardType: BoardType): KanbanApi {
   );
 
   const updateCard = useCallback(
-    async (id: string, patch: CardPatch): Promise<void> => {
+    async (id: string, patch: CardPatch): Promise<boolean> => {
       setCards((prev) =>
         prev.map((c) => (c.id === id ? { ...c, ...patch } : c)),
       );
       const upd = await supabase.from("kanban_cards").update(patch).eq("id", id);
       if (upd.error) {
         setError(upd.error.message);
+        // Roll the optimistic move back to the server's truth so a failed
+        // drop visibly snaps the card home instead of lying in place.
         void reload();
+        return false;
       }
+      return true;
     },
     [reload],
   );

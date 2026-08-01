@@ -11,7 +11,7 @@
 // migration adding stage_entered_at is in the ship report. When that column
 // lands, re-introduce AGE_WARN/AGE_CRIT + the spine here.
 
-import { useCallback, useEffect, useMemo, useState } from "react";
+import { useCallback, useEffect, useMemo, useRef, useState } from "react";
 import { useKanbanBoard } from "@/lib/useKanbanBoard";
 import KanbanCardModal, { type ModalState } from "./KanbanCardModal";
 import {
@@ -80,6 +80,19 @@ export default function FieldPipelineBoard() {
     setCollapsedStored(readLS(COLLAPSE_KEY));
     setShutGroups(readLS(GROUPS_KEY));
   }, []);
+
+  // Drag-and-drop (native HTML5, same interaction model as the shared
+  // KanbanBoard — no drag library). A drop changes ONLY the card's stage; city,
+  // owner, and order are untouched, so a card always lands in its own city group
+  // in the destination column.
+  const draggingId = useRef<string | null>(null);
+  const [dragOverStage, setDragOverStage] = useState<string | null>(null);
+  const [toast, setToast] = useState<string | null>(null);
+  useEffect(() => {
+    if (!toast) return;
+    const t = window.setTimeout(() => setToast(null), 4000);
+    return () => window.clearTimeout(t);
+  }, [toast]);
 
   const ownersById = useMemo(() => new Map(owners.map((o: KanbanOwner) => [o.id, o])), [owners]);
 
@@ -153,6 +166,36 @@ export default function FieldPipelineBoard() {
     writeLS(GROUPS_KEY, next);
   };
 
+  // Move a card to a new stage (via drag OR the modal's stage selector). Only
+  // `stage` changes. If the destination column is collapsed, open it first so
+  // the card never disappears into a 46px rail. On server failure updateCard
+  // rolls the optimistic move back; we surface that with a toast.
+  const moveCardToStage = useCallback(
+    async (cardId: string, stageId: string) => {
+      const moving = cards.find((c) => c.id === cardId);
+      if (!moving || moving.stage === stageId) return;
+      setCollapsedStored((prev) => {
+        const rawCount = cards.filter((c) => c.stage === stageId).length;
+        const wasColl =
+          stageId in prev ? prev[stageId] : stageId === "archived" || rawCount === 0;
+        if (!wasColl) return prev;
+        const next = { ...prev, [stageId]: false };
+        writeLS(COLLAPSE_KEY, next);
+        return next;
+      });
+      const ok = await api.updateCard(cardId, { stage: stageId });
+      if (!ok) setToast("Couldn't move that field — it's back where it was.");
+    },
+    [cards, api],
+  );
+
+  const onColumnDrop = (stageId: string) => {
+    const id = draggingId.current;
+    draggingId.current = null;
+    setDragOverStage(null);
+    if (id) void moveCardToStage(id, stageId);
+  };
+
   const ownerOptions = useMemo(
     () => [...new Set(cards.map((c) => ownerInfo(c)?.name).filter(Boolean) as string[])].sort(),
     [cards, ownerInfo],
@@ -173,12 +216,12 @@ export default function FieldPipelineBoard() {
   if (loading && cards.length === 0) {
     return <div className="p-8 text-sm" style={{ color: "#6d7b74" }}>Loading pipeline…</div>;
   }
-  if (error) {
-    return <div className="m-4 rounded-xl border p-4 text-sm" style={{ borderColor: "#f0bda9", background: "#fdeae4", color: "#a8391a" }}>{error}</div>;
-  }
 
   return (
     <div className="flex min-h-0 min-w-0 flex-1 flex-col" style={{ color: "#12241d" }}>
+      {error && (
+        <div className="mx-1 mt-1 rounded-xl border p-3 text-[12.5px]" style={{ borderColor: "#f0bda9", background: "#fdeae4", color: "#a8391a" }}>{error}</div>
+      )}
       {/* head */}
       <div className="flex-none px-1 pt-1">
         <div className="flex items-start gap-3.5">
@@ -269,9 +312,19 @@ export default function FieldPipelineBoard() {
             // A collapsed rail prints its FILTERED count during a filter, never raw.
             const railCount = filtering ? show.length : all.length;
 
+            const dragOver = dragOverStage === st.id;
+
             if (coll) {
               return (
-                <section key={st.id} className="flex flex-none flex-col rounded-[12px] border" style={{ width: 46, background: "#f6f9f7", borderColor: "#e6ebe8" }}>
+                <section
+                  key={st.id}
+                  onDragOver={(e) => { e.preventDefault(); if (dragOverStage !== st.id) setDragOverStage(st.id); }}
+                  onDragLeave={(e) => { if (e.currentTarget === e.target) setDragOverStage((s) => (s === st.id ? null : s)); }}
+                  onDrop={(e) => { e.preventDefault(); onColumnDrop(st.id); }}
+                  className="flex flex-none flex-col rounded-[12px] border transition"
+                  style={{ width: 46, background: dragOver ? "#e0f2e7" : "#f6f9f7", borderColor: dragOver ? "#35c77f" : "#e6ebe8" }}
+                >
+                  {dragOver && <div aria-hidden className="mx-1 mt-1 rounded-[6px] py-1 text-center text-[9px] font-bold" style={{ background: "#bfe4cf", color: "#12704a" }}>Drop</div>}
                   <div className="flex h-full flex-col items-center gap-2 py-2.5">
                     <button type="button" onClick={() => toggleCol(st.id, all.length)} aria-expanded={false} title={`Expand ${st.title}`} className="flex h-[26px] w-[26px] items-center justify-center rounded-[7px]" style={{ color: "#7d8c84" }}>
                       <svg viewBox="0 0 24 24" className="h-3.5 w-3.5 rotate-180" fill="none" stroke="currentColor" strokeWidth={2.4} strokeLinecap="round" strokeLinejoin="round"><path d="M15 6l-6 6 6 6" /></svg>
@@ -285,7 +338,14 @@ export default function FieldPipelineBoard() {
             }
 
             return (
-              <section key={st.id} className="flex flex-col rounded-[12px] border" style={{ flex: "1 1 264px", minWidth: 264, maxWidth: 352, background: "#f6f9f7", borderColor: "#e6ebe8" }}>
+              <section
+                key={st.id}
+                onDragOver={(e) => { e.preventDefault(); if (dragOverStage !== st.id) setDragOverStage(st.id); }}
+                onDragLeave={(e) => { if (e.currentTarget === e.target) setDragOverStage((s) => (s === st.id ? null : s)); }}
+                onDrop={(e) => { e.preventDefault(); onColumnDrop(st.id); }}
+                className="flex flex-col rounded-[12px] border transition"
+                style={{ flex: "1 1 264px", minWidth: 264, maxWidth: 352, background: "#f6f9f7", borderColor: dragOver ? "#35c77f" : "#e6ebe8", boxShadow: dragOver ? "inset 0 0 0 1px #35c77f" : undefined }}
+              >
                 <div className="flex flex-none items-center gap-2 border-b px-2.5 pb-[9px] pt-2.5" style={{ borderColor: "#eff3f1" }}>
                   <span className="flex h-[19px] w-[19px] flex-none items-center justify-center rounded-[6px] text-[11px] font-bold" style={{ background: "#0d3b2e", color: "#d8f5e7" }}>{i + 1}</span>
                   <span className="overflow-hidden text-ellipsis whitespace-nowrap text-[12.5px] font-bold tracking-[-0.1px]">{st.title}</span>
@@ -315,14 +375,14 @@ export default function FieldPipelineBoard() {
                           </button>
                           {!shut && (
                             <div className="flex flex-col gap-[7px]">
-                              {list.map((c) => <Card key={c.id} card={c} inGroup owner={ownerInfo(c)} cityDisplay={cityLabel(cardCity(c))} open={openTodos(c)} done={doneTodos(c)} showTodos={showTodos} checklist={checklists[c.id] ?? []} onClick={() => setModal({ mode: "edit", card: c })} />)}
+                              {list.map((c) => <Card key={c.id} card={c} inGroup owner={ownerInfo(c)} cityDisplay={cityLabel(cardCity(c))} open={openTodos(c)} done={doneTodos(c)} showTodos={showTodos} checklist={checklists[c.id] ?? []} onDragStart={() => { draggingId.current = c.id; }} onClick={() => setModal({ mode: "edit", card: c })} />)}
                             </div>
                           )}
                         </div>
                       );
                     })
                   ) : (
-                    show.map((c) => <Card key={c.id} card={c} inGroup={false} owner={ownerInfo(c)} cityDisplay={cityLabel(cardCity(c))} open={openTodos(c)} done={doneTodos(c)} showTodos={showTodos} checklist={checklists[c.id] ?? []} onClick={() => setModal({ mode: "edit", card: c })} />)
+                    show.map((c) => <Card key={c.id} card={c} inGroup={false} owner={ownerInfo(c)} cityDisplay={cityLabel(cardCity(c))} open={openTodos(c)} done={doneTodos(c)} showTodos={showTodos} checklist={checklists[c.id] ?? []} onDragStart={() => { draggingId.current = c.id; }} onClick={() => setModal({ mode: "edit", card: c })} />)
                   )}
                 </div>
               </section>
@@ -339,6 +399,12 @@ export default function FieldPipelineBoard() {
 
       {modal && (
         <KanbanCardModal boardType="field_pipeline" state={modal} api={api} existingMarkets={existingMarkets} onClose={() => setModal(null)} />
+      )}
+
+      {toast && (
+        <div role="alert" className="fixed bottom-4 left-1/2 z-[60] -translate-x-1/2 rounded-lg border px-4 py-2 text-[13px] font-semibold shadow-lg" style={{ background: "#fdeae4", borderColor: "#f0bda9", color: "#a8391a" }}>
+          {toast}
+        </div>
       )}
     </div>
   );
@@ -381,6 +447,7 @@ function Card({
   done,
   showTodos,
   checklist,
+  onDragStart,
   onClick,
 }: {
   card: KanbanCard;
@@ -391,15 +458,32 @@ function Card({
   done: number;
   showTodos: boolean;
   checklist: ChecklistItem[];
+  onDragStart: () => void;
   onClick: () => void;
 }) {
   const showT = showTodos && open > 0;
   const showD = showTodos && open === 0 && done > 0;
   return (
-    <button
-      type="button"
+    // role=button + keyboard handler keep the card openable without a mouse;
+    // draggable makes stage moves a pointer gesture. The card has no nested
+    // interactive controls, so dragging it never conflicts with a child.
+    <div
+      role="button"
+      tabIndex={0}
+      draggable
+      onDragStart={(e) => {
+        e.dataTransfer.setData("text/plain", card.id);
+        e.dataTransfer.effectAllowed = "move";
+        onDragStart();
+      }}
       onClick={onClick}
-      className="relative w-full overflow-hidden rounded-[10px] border px-2.5 py-[9px] pl-3 text-left transition hover:border-[#cfdad4]"
+      onKeyDown={(e) => {
+        if (e.key === "Enter" || e.key === " ") {
+          e.preventDefault();
+          onClick();
+        }
+      }}
+      className="relative w-full cursor-grab overflow-hidden rounded-[10px] border px-2.5 py-[9px] pl-3 text-left transition hover:border-[#cfdad4] focus:outline-none focus-visible:border-[#35c77f] active:cursor-grabbing"
       style={{ background: "#ffffff", borderColor: "#e6ebe8" }}
     >
       {/* status spine reserved but neutral — no aging without a real timestamp */}
@@ -446,6 +530,6 @@ function Card({
           all {done} to-{done > 1 ? "dos" : "do"} done
         </div>
       )}
-    </button>
+    </div>
   );
 }
