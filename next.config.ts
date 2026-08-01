@@ -81,13 +81,6 @@ const nextConfig: NextConfig = {
         destination: "/match-ops/match-chats/:path*",
         permanent: true,
       },
-      // First-Match Review moved /admin/first-match-review → /match-ops/review
-      // on 2026-07-31 (still AdminGuard-gated). Bookmarks survive.
-      {
-        source: "/admin/first-match-review",
-        destination: "/match-ops/review",
-        permanent: true,
-      },
       // Master Schedule + Field Ops lenses moved out of the Growth page to
       // Match Ops. The old ?tab= deep links redirect (unmatched query like
       // ?fo=veo passes through automatically).
