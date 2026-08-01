@@ -33,7 +33,7 @@ import {
   type MatchChatInboxRow,
 } from "@/lib/matchChats";
 import { UNKNOWN_CITY } from "@/lib/cityColors";
-import MatchChatsRail from "./MatchChatsRail";
+import ChatsRail from "../ChatsRail";
 import MatchChatsInbox, { type InboxTab } from "./MatchChatsInbox";
 import ChatPane from "./ChatPane";
 
@@ -261,7 +261,7 @@ export default function MatchChatsClient() {
         className="hidden shrink-0 lg:block"
         style={{ width: railCollapsed ? 60 : 212, transition: "width .18s ease-out" }}
       >
-        <MatchChatsRail collapsed={railCollapsed} onToggle={toggleRail} />
+        <ChatsRail collapsed={railCollapsed} onToggle={toggleRail} />
       </div>
 
       {/* List */}

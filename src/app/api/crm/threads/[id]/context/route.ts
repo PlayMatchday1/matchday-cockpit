@@ -85,7 +85,19 @@ export async function GET(req: Request, ctx: RouteCtx) {
         supabase,
         thread.player_id as number,
       );
-      player = { ...playerRes.data, played_in_2026 } as PlayerContext;
+      // Lifetime played + no-show totals (past matches only). Both filter
+      // user_is_fake_player = false per the analytics ground rule. null on
+      // query error → the panel omits the field rather than showing a zero.
+      const lifetime = await loadLifetimeCounts(
+        supabase,
+        thread.player_id as number,
+      );
+      player = {
+        ...playerRes.data,
+        played_in_2026,
+        played_lifetime: lifetime.played,
+        no_show_count: lifetime.noShow,
+      } as PlayerContext;
     }
   }
 
@@ -451,6 +463,53 @@ async function loadUpcomingMatches(
 const YEAR = 2026;
 const YEAR_START_ISO = `${YEAR}-01-01T00:00:00Z`;
 const YEAR_END_ISO = `${YEAR + 1}-01-01T00:00:00Z`;
+
+// Lifetime played + no-show totals for a player, past matches only. Played =
+// registrations not cancelled, not absent, on a match that has already
+// started. No-show = registrations flagged absent on a past, non-cancelled
+// match. Both exclude fake players (ground rule). Returns { played: null,
+// noShow: null } on error so the caller/UI omits the field rather than
+// rendering a misleading zero.
+async function loadLifetimeCounts(
+  supabase: SupabaseClient,
+  playerId: number,
+): Promise<{ played: number | null; noShow: number | null }> {
+  const regs = await supabase
+    .from("mdapi_match_players")
+    .select("match_api_id, is_absent")
+    .eq("user_id", playerId)
+    .eq("user_is_fake_player", false)
+    .not("is_cancelled", "is", true);
+  if (regs.error) return { played: null, noShow: null };
+  const rows = (regs.data ?? []) as { match_api_id: number | null; is_absent: boolean | null }[];
+  const matchIds = rows
+    .map((r) => r.match_api_id)
+    .filter((x): x is number => typeof x === "number");
+  if (matchIds.length === 0) return { played: 0, noShow: 0 };
+
+  // Which of those matches are in the past (started) and not cancelled.
+  const nowIso = new Date().toISOString();
+  const pastIds = new Set<number>();
+  for (let i = 0; i < matchIds.length; i += 1000) {
+    const chunk = matchIds.slice(i, i + 1000);
+    const c = await supabase
+      .from("mdapi_matches")
+      .select("api_id")
+      .in("api_id", chunk)
+      .lt("start_date_utc", nowIso)
+      .not("is_cancelled", "is", true);
+    if (c.error) return { played: null, noShow: null };
+    for (const m of (c.data ?? []) as { api_id: number }[]) pastIds.add(m.api_id);
+  }
+  let played = 0;
+  let noShow = 0;
+  for (const r of rows) {
+    if (r.match_api_id == null || !pastIds.has(r.match_api_id)) continue;
+    if (r.is_absent === true) noShow++;
+    else played++;
+  }
+  return { played, noShow };
+}
 
 async function loadPlayed2026Count(
   supabase: SupabaseClient,

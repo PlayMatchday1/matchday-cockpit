@@ -46,6 +46,7 @@ let allTimeCache: { at: number; body: unknown } | null = null;
 
 type ThreadScanRow = {
   id: string;
+  player_id: number | null;
   created_at: string;
   closed_at: string | null;
   status: "open" | "closed";
@@ -108,7 +109,7 @@ export async function GET(req: Request) {
     const { data, error } = await supabase
       .from("crm_threads")
       .select(
-        "id, created_at, closed_at, status, last_message_at, last_message_direction, last_message_preview, no_reply_needed_at",
+        "id, player_id, created_at, closed_at, status, last_message_at, last_message_direction, last_message_preview, no_reply_needed_at",
       )
       .order("created_at", { ascending: true })
       .range(from, to);
@@ -118,7 +119,36 @@ export async function GET(req: Request) {
     console.error("[crm:metrics] thread scan error", threadRes.error);
     return Response.json({ error: "DB error" }, { status: 500 });
   }
-  const threadRows = threadRes.rows;
+
+  // Ground rule: analytics exclude fake players. A CRM thread is fake iff its
+  // linked mdapi_users row has is_fake_player = true; drop those threads (and,
+  // below, their messages) before any metric math. In practice this is a tiny
+  // set, but the filter is non-negotiable.
+  const scanPlayerIds = Array.from(
+    new Set(
+      threadRes.rows
+        .map((t) => t.player_id)
+        .filter((x): x is number => typeof x === "number"),
+    ),
+  );
+  const fakePlayerIds = new Set<number>();
+  for (let i = 0; i < scanPlayerIds.length; i += PAGE) {
+    const chunk = scanPlayerIds.slice(i, i + PAGE);
+    const { data, error } = await supabase
+      .from("mdapi_users")
+      .select("id")
+      .eq("is_fake_player", true)
+      .in("id", chunk);
+    if (error) {
+      console.error("[crm:metrics] fake-player lookup error", error);
+      return Response.json({ error: "DB error" }, { status: 500 });
+    }
+    for (const r of (data ?? []) as { id: number }[]) fakePlayerIds.add(r.id);
+  }
+  const isFakeThread = (playerId: number | null) =>
+    playerId != null && fakePlayerIds.has(playerId);
+  const threadRows = threadRes.rows.filter((t) => !isFakeThread(t.player_id));
+  const nonFakeThreadIds = new Set(threadRows.map((t) => t.id));
 
   const threads: MetricThread[] = threadRows.map((t) => ({
     id: t.id,
@@ -158,12 +188,14 @@ export async function GET(req: Request) {
     console.error("[crm:metrics] message scan error", msgRes.error);
     return Response.json({ error: "DB error" }, { status: 500 });
   }
-  const messages: MetricMessage[] = msgRes.rows.map((m) => ({
-    threadId: m.thread_id,
-    direction: m.direction,
-    sentAtMs: Date.parse(m.sent_at),
-    isAutoReply: m.is_auto_reply === true,
-  }));
+  const messages: MetricMessage[] = msgRes.rows
+    .filter((m) => nonFakeThreadIds.has(m.thread_id))
+    .map((m) => ({
+      threadId: m.thread_id,
+      direction: m.direction,
+      sentAtMs: Date.parse(m.sent_at),
+      isAutoReply: m.is_auto_reply === true,
+    }));
 
   // Close events (crm_thread_status_log, action='close') split each
   // thread into episodes so a reopened exchange from a returning customer

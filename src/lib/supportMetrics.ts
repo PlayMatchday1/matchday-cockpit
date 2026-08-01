@@ -163,6 +163,32 @@ export type PeriodMetrics = {
     // resolved / opened as a 0–100 percent. null when nothing opened.
     closeRatePct: number | null;
   };
+
+  // Single-cohort view for the redesigned 52px metrics strip. ONE
+  // denominator — N = conversations OPENED in the period — with median,
+  // answered-within-1h, and resolved all measured against that same N. This
+  // is the honest reconciliation of the old strip's four competing
+  // denominators (episodes-replied vs threads-handled vs closed-in-range vs
+  // live-open): every number here is a straight thread count over the same
+  // cohort. See the metrics route + ship report for the root-cause writeup.
+  cohort: {
+    // N — threads created in the period (fakes already excluded upstream).
+    conversations: number;
+    // Of N, how many received a genuine first operator reply (auto-reply
+    // excluded), and the median business-minutes to that reply.
+    repliedCount: number;
+    medianFirstResponseMin: number | null;
+    // Of N, how many were first-answered within the SLA (60 business min).
+    // Pct is over N (true SLA — an unanswered opened thread counts against
+    // it), not over repliedCount.
+    answeredWithin1h: number;
+    answeredWithin1hPct: number | null;
+    // Of N, how many are resolved. Uses CURRENT status='closed' (a stable
+    // cohort resolution rate) rather than closed_at ∈ period, which a
+    // reopen nulls — avoiding the old "handled − resolved = phantom 1".
+    resolved: number;
+    resolvedPct: number | null;
+  };
 };
 
 // First-response business minutes for one conversation: first inbound →
@@ -351,6 +377,34 @@ export function computePeriodMetrics(
   const resolved = threads.filter((t) => inPeriod(t.closedAtMs, period)).length;
   const closeRatePct = opened === 0 ? null : (resolved / opened) * 100;
 
+  // --- Single-cohort strip metrics (N = threads opened in period) ---
+  // First reply per opened thread: its first replied episode whose first
+  // inbound falls in the period. Reuses the same episode + business-minute
+  // machinery so it can't drift from the tile math above.
+  const cohortReplyMinutes: number[] = [];
+  for (const t of openedThreads) {
+    const msgs = byThread.get(t.id) ?? [];
+    const episodes = splitIntoEpisodes(msgs, closesByThread.get(t.id) ?? []);
+    let rt: number | null = null;
+    for (const ep of episodes) {
+      const fi = episodeFirstInboundMs(ep);
+      if (fi == null || !inPeriod(fi, period)) continue;
+      const r = firstResponseBusinessMinutes(ep, cfg);
+      if (r != null) {
+        rt = r;
+        break;
+      }
+    }
+    if (rt != null) cohortReplyMinutes.push(rt);
+  }
+  const cohortConversations = opened;
+  const cohortReplied = cohortReplyMinutes.length;
+  const cohortAnswered1h = cohortReplyMinutes.filter(
+    (m) => m <= FIRST_RESPONSE_SLA_MINUTES,
+  ).length;
+  // Resolved = opened-in-period threads that are CURRENTLY closed (stable).
+  const cohortResolved = openedThreads.filter((t) => t.status === "closed").length;
+
   return {
     medianFirstResponseMin,
     answeredWithin1hPct,
@@ -361,6 +415,21 @@ export function computePeriodMetrics(
       opened,
       resolved,
       closeRatePct,
+    },
+    cohort: {
+      conversations: cohortConversations,
+      repliedCount: cohortReplied,
+      medianFirstResponseMin: median(cohortReplyMinutes),
+      answeredWithin1h: cohortAnswered1h,
+      answeredWithin1hPct:
+        cohortConversations === 0
+          ? null
+          : (cohortAnswered1h / cohortConversations) * 100,
+      resolved: cohortResolved,
+      resolvedPct:
+        cohortConversations === 0
+          ? null
+          : (cohortResolved / cohortConversations) * 100,
     },
   };
 }
@@ -427,6 +496,10 @@ export type MetricTrend = {
   // current − previous, in percentage points. null when either side has
   // no data.
   within1hDeltaPct: number | null;
+  // Single-cohort median delta (current − previous), business minutes, for
+  // the redesigned strip. Negative = faster this period. null when either
+  // side has no replied conversations.
+  cohortMedianDeltaMin: number | null;
 };
 
 export function computeTrend(
@@ -442,5 +515,10 @@ export function computeTrend(
     current.answeredWithin1hPct != null && previous.answeredWithin1hPct != null
       ? current.answeredWithin1hPct - previous.answeredWithin1hPct
       : null;
-  return { medianDeltaMin, within1hDeltaPct };
+  const cohortMedianDeltaMin =
+    current.cohort.medianFirstResponseMin != null &&
+    previous.cohort.medianFirstResponseMin != null
+      ? current.cohort.medianFirstResponseMin - previous.cohort.medianFirstResponseMin
+      : null;
+  return { medianDeltaMin, within1hDeltaPct, cohortMedianDeltaMin };
 }

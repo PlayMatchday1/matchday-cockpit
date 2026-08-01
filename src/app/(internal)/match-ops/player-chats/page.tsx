@@ -30,18 +30,16 @@ export default function PlayerChatPage() {
   return (
     <PagePermissionGuard page="chats">
       <div
-        className="flex h-[100dvh] flex-col md:h-[calc(100dvh-4rem)]"
+        className="relative left-1/2 flex h-[100dvh] w-screen -translate-x-1/2 flex-col md:h-[calc(100dvh-4rem)]"
         style={{
-          // Cancel AuthGate <main>'s padding so the chat shell occupies
-          // the full viewport (top edge of viewport on mobile / under
-          // TopNav on md+, down to the bottom edge including the inline
-          // nav's safe-area padding). Top: -2rem or safe-area-top
-          // (whichever main used). Bottom: -(2rem + var(--bottom-nav-h))
-          // — AuthGate still reserves space for the fixed nav in its
-          // padding even though the fixed nav is suppressed on chat
-          // routes, so the negative margin has to cancel both pieces.
-          marginTop: "calc(-1 * max(env(safe-area-inset-top), 2rem))",
-          marginBottom: "calc(-1 * (2rem + var(--bottom-nav-h)))",
+          // Full-bleed escape from AuthGate <main> (mx-auto max-w-[1600px]
+          // px-8 + vertical padding). Horizontal: left-1/2 w-screen
+          // -translate-x-1/2 breaks out of the centered max-width without
+          // touching <main>'s defaults (every other route is byte-identical).
+          // Vertical: cancel main's paddingTop max(env,26px) and paddingBottom
+          // calc(60px + var(--bottom-nav-h)). Same mechanism as Match Chats.
+          marginTop: "calc(-1 * max(env(safe-area-inset-top), 26px))",
+          marginBottom: "calc(-1 * (60px + var(--bottom-nav-h)))",
         }}
       >
         {/* Suspense boundary required by Next 16 for any client tree

@@ -79,6 +79,7 @@ type PlayerRow = {
   first_name: string | null;
   last_name: string | null;
   preferable_city_normalized: string | null;
+  is_member: boolean | null;
 };
 
 type AssigneeRow = {
@@ -269,7 +270,7 @@ export async function GET(req: Request) {
   if (playerIds.length > 0) {
     const playersRes = await supabase
       .from("mdapi_users")
-      .select("id, first_name, last_name, preferable_city_normalized")
+      .select("id, first_name, last_name, preferable_city_normalized, is_member")
       .in("id", playerIds);
     if (playersRes.error) {
       console.error("[crm:threads.list] player lookup error", playersRes.error);

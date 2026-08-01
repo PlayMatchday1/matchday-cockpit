@@ -495,25 +495,40 @@ test("awaiting-now: nothing waiting → zeros and null age", () => {
 // ---------------------------------------------------------------
 // computeTrend — signed deltas
 // ---------------------------------------------------------------
-const metricsWith = (medianMin: number | null, within1h: number | null) =>
+const metricsWith = (
+  medianMin: number | null,
+  within1h: number | null,
+  cohortMedian: number | null = medianMin,
+) =>
   ({
     medianFirstResponseMin: medianMin,
     answeredWithin1hPct: within1h,
     respondedCount: 0,
     awaitingFirstReplyCount: 0,
     handled: { count: 0, opened: 0, resolved: 0, closeRatePct: null },
+    cohort: {
+      conversations: 0,
+      repliedCount: 0,
+      medianFirstResponseMin: cohortMedian,
+      answeredWithin1h: 0,
+      answeredWithin1hPct: null,
+      resolved: 0,
+      resolvedPct: null,
+    },
   }) as const;
 
 test("trend returns current − previous for both metrics", () => {
-  const t = computeTrend(metricsWith(20, 80), metricsWith(30, 70));
+  const t = computeTrend(metricsWith(20, 80, 22), metricsWith(30, 70, 40));
   assert.equal(t.medianDeltaMin, -10); // 10 min faster (good)
   assert.equal(t.within1hDeltaPct, 10); // 10 points higher (good)
+  assert.equal(t.cohortMedianDeltaMin, -18); // 18 min faster this period
 });
 
 test("trend is null when either side lacks data", () => {
-  const t = computeTrend(metricsWith(20, null), metricsWith(null, 70));
+  const t = computeTrend(metricsWith(20, null, null), metricsWith(null, 70, 5));
   assert.equal(t.medianDeltaMin, null);
   assert.equal(t.within1hDeltaPct, null);
+  assert.equal(t.cohortMedianDeltaMin, null);
 });
 
 // ---------------------------------------------------------------

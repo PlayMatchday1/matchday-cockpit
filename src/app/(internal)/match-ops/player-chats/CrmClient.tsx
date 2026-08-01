@@ -43,7 +43,6 @@ import {
   CircleCheck,
   Info,
   RotateCcw,
-  SlidersHorizontal,
   Star,
 } from "lucide-react";
 import EnablePushNotificationsButton from "@/components/EnablePushNotificationsButton";
@@ -59,24 +58,23 @@ import ChannelChip, {
 import PlayerAvatar from "@/components/PlayerAvatar";
 import type { DeliveryStatus } from "@/components/DeliveryStatusLabel";
 import type { MatchStatus } from "@/components/MatchStatusPill";
-import ChatsMetricsStrip from "./components/ChatsMetricsStrip";
-import FilterBar, {
-  type StatusFilter,
-  type ViewCounts,
-} from "./components/FilterBar";
-import InboxRow, { type InboxRowThread } from "./components/InboxRow";
+import { type StatusFilter, type ViewCounts } from "./components/FilterBar";
 import {
   isAwaitingReply,
-  isWrappingUp,
   isFreshThreadUpdate,
   nextWaitingSince,
+  awaitingAgeLabel,
 } from "@/lib/awaitingReply";
 import AssignDropdown from "./components/AssignDropdown";
 import MessageBubble, {
   type ConversationMessage,
 } from "./components/MessageBubble";
 import Composer from "./components/Composer";
-import ContextPanel from "./components/ContextPanel";
+import ChatsRail from "../ChatsRail";
+import MetricsStrip from "./components/MetricsStrip";
+import ContextPane from "./components/ContextPane";
+import { colorForCity } from "@/lib/cityColors";
+import { KNOWN_CITY_CODES, HIDDEN_CITY_CODES } from "@/lib/cityNormalization";
 
 // ---------------- shared types ----------------
 
@@ -317,6 +315,38 @@ export default function CrmClient() {
   };
   const [counts, setCounts] = useState<ViewCounts>(ZERO_COUNTS);
 
+  // --------- redesign UI state (client-side) ---------
+  // Icon-rail collapse, persisted (matches the Match Chats console).
+  const [railCollapsed, setRailCollapsed] = useState(false);
+  useEffect(() => {
+    try {
+      setRailCollapsed(window.localStorage.getItem("crm:rail-collapsed") === "1");
+    } catch {
+      /* private mode */
+    }
+  }, []);
+  const toggleRail = useCallback(() => {
+    setRailCollapsed((prev) => {
+      const next = !prev;
+      try {
+        window.localStorage.setItem("crm:rail-collapsed", next ? "1" : "0");
+      } catch {
+        /* private mode */
+      }
+      return next;
+    });
+  }, []);
+
+  // Client-side inbox filters (no refetch): search over player name, a city
+  // set, and additive flags. The filter popover carries the cities + flags;
+  // the active count shows on the filter button.
+  const [search, setSearch] = useState("");
+  const [cityFilter, setCityFilter] = useState<Set<string>>(new Set());
+  const [flagStarred, setFlagStarred] = useState(false);
+  const [flagAssigned, setFlagAssigned] = useState(false);
+  const [flagMembers, setFlagMembers] = useState(false);
+  const [contextHidden, setContextHidden] = useState(false);
+
   // The active view lives in the URL. loadThreads reads it through a
   // ref so its identity stays stable — the realtime subscription
   // depends on loadThreads and must not resubscribe on every view
@@ -337,35 +367,9 @@ export default function CrmClient() {
   const [detailError, setDetailError] = useState<string | null>(null);
 
   const [realtimeOk, setRealtimeOk] = useState<boolean | null>(null);
-
-  // Mobile context-panel sheet open/close. Desktop uses the
-  // separate `contextOpen` state below.
-  const [contextSheetOpen, setContextSheetOpen] = useState(false);
-
-  // Desktop (lg+) right-column toggle. Persisted per-browser via
-  // localStorage so the operator's preference survives reloads.
-  // Default: closed — keeps the chat pane wider on first visit, and
-  // anyone who wants the column back is one click away (Info button
-  // in the conversation header).
-  const [contextOpen, setContextOpen] = useState<boolean>(() => {
-    if (typeof window === "undefined") return false;
-    try {
-      const raw = window.localStorage.getItem("crm:contextOpen:v1");
-      return raw === "true";
-    } catch {
-      return false;
-    }
-  });
-  useEffect(() => {
-    try {
-      window.localStorage.setItem(
-        "crm:contextOpen:v1",
-        contextOpen ? "true" : "false",
-      );
-    } catch {
-      // Silent — Safari private-mode storage quota, etc.
-    }
-  }, [contextOpen]);
+  // The player-context pane (ContextPane) is shown by default beside a
+  // selected thread; contextHidden (declared with the other redesign UI state
+  // above) toggles it off. It is always hidden below 1260px via CSS.
 
   // Lock document scroll while /chats is mounted. iOS Safari standalone
   // PWA scrolls the document when the keyboard opens (to keep the focused
@@ -556,7 +560,6 @@ export default function CrmClient() {
   useEffect(() => {
     if (!selectedId) {
       setDetail(null);
-      setContextSheetOpen(false);
       return;
     }
     void loadDetail(selectedId);
@@ -818,84 +821,63 @@ export default function CrmClient() {
     });
   }, [threads, view]);
 
-  const isAwaiting = (t: ThreadListRow) => isAwaitingReply(t);
-  const isWrapping = (t: ThreadListRow) => isWrappingUp(t);
+  const appUserId = appUser?.id ?? null;
 
-  // Render groups. In the Open / Mine views threads split three ways:
-  // "Awaiting reply" (customer spoke last AND needs a reply, oldest first
-  // = longest waiting on top), "Answered" (we spoke last), and "Wrapping
-  // up" (customer spoke last but it's a closing acknowledgment or an
-  // operator marked it no-reply-needed). Wrapping-up sinks to the bottom,
-  // muted — visible so nothing's lost, but out of the actionable queue.
-  // The Awaiting view is a single awaiting group; every other view is one
-  // ungrouped list in its existing order.
+  // Client-side filters over the server-scoped view (no refetch): city set,
+  // additive flags, and a name/preview search. `filtersActive` distinguishes
+  // "you filtered to nothing" (→ filter-empty message) from "there's genuinely
+  // nothing" (→ all-caught-up card).
+  const filtersActive =
+    cityFilter.size > 0 ||
+    flagStarred ||
+    flagAssigned ||
+    flagMembers ||
+    search.trim().length > 0;
+
+  const filteredThreads = useMemo(() => {
+    const needle = search.trim().toLowerCase();
+    return visibleThreads.filter((t) => {
+      if (cityFilter.size > 0 && !cityFilter.has(cityCodeForThread(t))) return false;
+      if (flagStarred && !t.is_follow_up) return false;
+      if (flagAssigned && t.assigned_to_user_id !== appUserId) return false;
+      if (flagMembers && t.player?.is_member !== true) return false;
+      if (needle) {
+        const hay = [fullNameOf(t), t.phone_number, t.last_message_preview ?? ""]
+          .join(" ")
+          .toLowerCase();
+        if (!hay.includes(needle)) return false;
+      }
+      return true;
+    });
+  }, [visibleThreads, cityFilter, flagStarred, flagAssigned, flagMembers, search, appUserId]);
+
+  const isAwaiting = (t: ThreadListRow) => isAwaitingReply(t);
+
+  // Two groups (mockup playerchats-v1): "Waiting on a reply" (amber — the
+  // customer spoke last and needs an answer, oldest on top) and "Answered —
+  // nothing owed" (everything else, including closing acknowledgments — all
+  // genuinely nothing-owed). Closed / other views render one ungrouped list.
   const threadGroups = useMemo<
-    {
-      key: string;
-      label: string | null;
-      hint?: string;
-      tone: "await" | "quiet" | "wrapping";
-      rows: ThreadListRow[];
-    }[]
+    { key: string; label: string | null; tone: "await" | "quiet"; rows: ThreadListRow[] }[]
   >(() => {
     const byOldest = (a: ThreadListRow, b: ThreadListRow) =>
       Date.parse(a.last_message_at) - Date.parse(b.last_message_at);
     const byNewest = (a: ThreadListRow, b: ThreadListRow) =>
       Date.parse(b.last_message_at) - Date.parse(a.last_message_at);
-
     if (view === "open" || view === "mine") {
-      const awaiting = visibleThreads.filter(isAwaiting).sort(byOldest);
-      const wrapping = visibleThreads.filter(isWrapping).sort(byNewest);
-      // Answered = everything that's neither awaiting nor wrapping-up
-      // (i.e. we spoke last).
-      const answered = visibleThreads.filter(
-        (t) => !isAwaiting(t) && !isWrapping(t),
-      );
-      const groups: {
-        key: string;
-        label: string | null;
-        hint?: string;
-        tone: "await" | "quiet" | "wrapping";
-        rows: ThreadListRow[];
-      }[] = [];
-      if (awaiting.length > 0)
-        groups.push({
-          key: "awaiting",
-          label: `Awaiting reply · ${awaiting.length}`,
-          hint: "The customer sent the last message and it needs a reply — oldest waiting on top.",
-          tone: "await",
-          rows: awaiting,
-        });
+      const waiting = filteredThreads.filter(isAwaiting).sort(byOldest);
+      const answered = filteredThreads.filter((t) => !isAwaiting(t)).sort(byNewest);
+      const groups: { key: string; label: string | null; tone: "await" | "quiet"; rows: ThreadListRow[] }[] = [];
+      if (waiting.length > 0)
+        groups.push({ key: "waiting", label: `Waiting on a reply · ${waiting.length}`, tone: "await", rows: waiting });
       if (answered.length > 0)
-        groups.push({
-          key: "answered",
-          label: "Answered",
-          hint: "We sent the last message — nothing owed.",
-          tone: "quiet",
-          rows: answered,
-        });
-      if (wrapping.length > 0)
-        groups.push({
-          key: "wrapping",
-          label: `Wrapping up · ${wrapping.length}`,
-          hint: "Customer's last message was a thanks / acknowledgment, or marked no reply needed. Tap “Reply anyway” to re-open it.",
-          tone: "wrapping",
-          rows: wrapping,
-        });
+        groups.push({ key: "answered", label: "Answered — nothing owed", tone: "quiet", rows: answered });
       return groups;
     }
-
-    if (view === "awaiting") {
-      const rows = [...visibleThreads].sort(byOldest);
-      return rows.length > 0
-        ? [{ key: "awaiting", label: null, tone: "await", rows }]
-        : [];
-    }
-
-    return visibleThreads.length > 0
-      ? [{ key: view, label: null, tone: "quiet", rows: visibleThreads }]
+    return filteredThreads.length > 0
+      ? [{ key: view, label: null, tone: "quiet", rows: [...filteredThreads].sort(byNewest) }]
       : [];
-  }, [visibleThreads, view]);
+  }, [filteredThreads, view]);
 
   // Stability guard for clicks. Rows move between the Awaiting and
   // Answered groups as realtime events land; if a row relocates in the
@@ -1295,201 +1277,253 @@ export default function CrmClient() {
   const showInboxMobile = !selectedId;
   const showConversationMobile = !!selectedId;
 
+  const liveLabel =
+    realtimeOk == null ? "Connecting" : realtimeOk ? "Live" : "Offline";
+  const segments: { key: StatusFilter; label: string; n: number }[] = [
+    { key: "open", label: "Open", n: counts.open },
+    { key: "mine", label: "Mine", n: counts.mine },
+    { key: "closed", label: "Closed", n: counts.closed },
+  ];
+  // All-caught-up: default view, no user filter, and genuinely zero open
+  // threads (counts.open is the true server count, not a capped list). Distinct
+  // from a filter that matched nothing (filtersActive) — those get their own
+  // message so the best outcome never reads as a broken filter.
+  const showCaughtUp =
+    view === "open" && !filtersActive && counts.open === 0 && !threadsLoading;
+  const listEmpty = renderGroups.length === 0;
+
   return (
-    // Wrapper escape and viewport-height math live in /chats/page.tsx
-    // so this client owns one full-bleed area flush under the top
-    // nav. min-h-0 + flex-1 lets this column expand to fill whatever
-    // height the page wrapper grants.
-    <div className="flex min-h-0 min-w-0 flex-1 flex-col bg-cream">
-      <ChatsHeader
-        threadsLoading={threadsLoading}
-        totalThreads={threads.length}
-        visibleThreads={visibleThreads.length}
-        realtimeOk={realtimeOk}
-        onRefresh={() => void loadThreads()}
-        view={view}
-        counts={counts}
-        onFilterChange={setFilters}
-        canFilterMine={!!appUser?.id}
-      />
-
-      <div className="flex min-h-0 min-w-0 flex-1">
-        {/* --- LEFT PANE: inbox (filter row lives in ChatsHeader) --- */}
-        <aside
-          className={`flex-col border-r border-cream-line bg-white min-w-0 lg:flex lg:w-[280px] lg:shrink-0 ${
-            showInboxMobile ? "flex flex-1" : "hidden lg:flex"
-          }`}
-        >
-          <div
-            className="flex flex-1 flex-col overflow-y-auto overflow-x-hidden"
-            onPointerDown={freezeGroups}
-            onPointerUp={thawGroups}
-            onPointerCancel={thawGroups}
-            onPointerLeave={thawGroups}
-          >
-            {bulkSelectable && visibleThreads.length > 0 && (
-              <BulkSelectBar
-                selectedCount={selectedIds.size}
-                allSelected={allVisibleSelected}
-                someSelected={someVisibleSelected}
-                onToggleAll={toggleSelectAllVisible}
-                onClear={clearSelection}
-                onCloseSelected={() => void onBulkClose()}
-              />
-            )}
-            {threadsError && (
-              <div className="m-2 rounded border border-coral/40 bg-coral-soft p-2 text-xs text-coral-hover">
-                {threadsError}
-              </div>
-            )}
-            {threadsLoading && visibleThreads.length === 0 && (
-              <InboxSkeleton />
-            )}
-            {!threadsLoading &&
-              visibleThreads.length === 0 &&
-              !threadsError && (
-                <div className="flex flex-1 items-center justify-center px-6 text-center text-xs text-deep-green/45">
-                  No conversations match the current filters.
-                </div>
-              )}
-            {visibleThreads.length > 0 &&
-              renderGroups.map((g) => (
-                <div key={g.key}>
-                  {g.label && (
-                    <div
-                      className={`group relative flex items-center gap-1 px-4 py-1 text-[10px] font-semibold uppercase tracking-[0.08em] ${
-                        g.tone === "await"
-                          ? "bg-red-50/50 text-red-700/90"
-                          : g.tone === "wrapping"
-                            ? "bg-cream-soft/40 text-deep-green/30"
-                            : "bg-cream-soft/50 text-deep-green/40"
-                      }`}
-                    >
-                      <span>{g.label}</span>
-                      {g.hint && (
-                        // Anchored above the header text, pointer-events
-                        // none — it can neither overlay the rows below nor
-                        // intercept a click on them.
-                        <span
-                          role="tooltip"
-                          className="pointer-events-none absolute bottom-full left-4 z-30 mb-1 hidden whitespace-nowrap rounded-md bg-deep-green px-2 py-1 text-[10px] font-medium normal-case tracking-normal text-cream shadow-md group-hover:block"
-                        >
-                          {g.hint}
-                        </span>
-                      )}
-                    </div>
-                  )}
-                  <ul className="divide-y divide-cream-line">
-                    {g.rows.map((t) => (
-                      <InboxRow
-                        key={t.id}
-                        thread={t as InboxRowThread}
-                        nowMs={nowMs}
-                        active={t.id === selectedId}
-                        onSelect={() => setSelected(t.id)}
-                        onToggleFollowUp={() =>
-                          onToggleFollowUp(t.id, !t.is_follow_up)
-                        }
-                        onMarkNoReply={() => onSetNoReply(t.id, "dismiss")}
-                        onReactivate={() => {
-                          onSetNoReply(t.id, "reactivate");
-                          setSelected(t.id);
-                        }}
-                        selectable={bulkSelectable}
-                        selected={selectedIds.has(t.id)}
-                        onToggleSelect={() => toggleSelect(t.id)}
-                      />
-                    ))}
-                  </ul>
-                </div>
-              ))}
-          </div>
-        </aside>
-
-        {/* --- CENTER PANE: conversation --- */}
-        <section
-          className={`flex-col bg-cream lg:flex lg:flex-1 ${
-            showConversationMobile ? "flex flex-1" : "hidden lg:flex"
-          }`}
-        >
-          {!selectedId ? (
-            <EmptyConversation />
-          ) : !selectedThread && !detail ? (
-            <div className="flex flex-1 items-center justify-center text-xs text-deep-green/45">
-              Loading conversation…
-            </div>
-          ) : (
-            <Conversation
-              selectedId={selectedId}
-              detail={detail}
-              error={detailError}
-              loading={detailLoading}
-              appUserId={appUser?.id ?? null}
-              operators={operators}
-              onAssign={(userId) => onAssign(selectedId, userId)}
-              onSent={onSent}
-              onBack={() => setSelected(null)}
-              onOpenContext={() => setContextSheetOpen(true)}
-              onToggleContext={() => setContextOpen((o) => !o)}
-              contextOpen={contextOpen}
-              isMember={selectedThread?.player?.is_member === true}
-              isFollowUp={selectedThread?.is_follow_up ?? false}
-              onToggleFollowUp={() =>
-                onToggleFollowUp(
-                  selectedId,
-                  !(selectedThread?.is_follow_up ?? false),
-                )
-              }
-              threadStatus={detail?.thread.status ?? selectedThread?.status ?? "open"}
-              canManageStatus={canManageStatus}
-              onSetStatus={(action) => onSetThreadStatus(selectedId, action)}
-              whatsappWindowExpired={whatsappExpired}
-            />
-          )}
-        </section>
-
-        {/* --- RIGHT PANE: context (desktop column) ---
-            Gated on both a selected thread AND the user's persisted
-            contextOpen preference. When closed, the column unmounts
-            entirely so the center pane expands to fill the freed
-            240px. The Info button in the conversation header toggles
-            it back. ContextPanel itself fetches player + matches
-            lazily via /api/crm/threads/{id}/context, so mounting
-            the column doesn't fire a fetch until it's actually
-            visible. */}
-        {selectedThread && contextOpen && (
-          <ContextPanel
-            mode="column"
-            open={false}
-            visible
-            thread={{
-              id: selectedThread.id,
-              phone_number: selectedThread.phone_number,
-              match_ambiguous: selectedThread.match_ambiguous,
-            }}
-          />
-        )}
+    <div className="flex min-h-0 min-w-0 flex-1" style={{ background: "#f8faf9" }}>
+      {/* Rail — desktop only */}
+      <div
+        className="hidden shrink-0 lg:block"
+        style={{ width: railCollapsed ? 60 : 212, transition: "width .18s ease-out" }}
+      >
+        <ChatsRail collapsed={railCollapsed} onToggle={toggleRail} />
       </div>
 
-      {/* Mobile context sheet — unmounted when closed (sheet branch
-          of ContextPanel returns null on !open), which avoids the
-          md-viewport click-block bug where role=dialog markup hung
-          around behind a CSS-hidden parent. */}
-      <ContextPanel
-        mode="sheet"
-        open={contextSheetOpen}
-        visible={contextSheetOpen}
-        onClose={() => setContextSheetOpen(false)}
-        thread={
-          selectedThread
-            ? {
-                id: selectedThread.id,
-                phone_number: selectedThread.phone_number,
-                match_ambiguous: selectedThread.match_ambiguous,
+      {/* Right column: metrics strip over the three panes */}
+      <div className="flex min-h-0 min-w-0 flex-1 flex-col">
+        <MetricsStrip />
+
+        <div className="flex min-h-0 min-w-0 flex-1">
+          {/* ---- INBOX ---- */}
+          <aside
+            className={`min-w-0 flex-col border-r lg:flex lg:w-[400px] lg:shrink-0 ${
+              showInboxMobile ? "flex flex-1" : "hidden lg:flex"
+            }`}
+            style={{ background: "#f8faf9", borderColor: "#e6ebe8" }}
+          >
+            {/* header */}
+            <div className="flex flex-none items-center gap-2.5 px-4 pt-3.5">
+              <h1 className="text-[19px] font-[760] tracking-[-0.02em]" style={{ color: "#12241d" }}>
+                Player Chats
+              </h1>
+              <span
+                className="inline-flex items-center gap-1.5 rounded-full border px-2 py-[3px] pl-[7px] text-[11px] font-bold"
+                style={{ color: "#12704a", background: "#e0f2e7", borderColor: "#c9e8d8" }}
+              >
+                <i className="h-1.5 w-1.5 rounded-full" style={{ background: realtimeOk === false ? "#e2502b" : "#35c77f" }} />
+                {liveLabel}
+              </span>
+              <span className="ml-auto flex items-center gap-0.5">
+                <button
+                  type="button"
+                  onClick={() => void loadThreads()}
+                  title="Refresh"
+                  aria-label="Refresh"
+                  className="flex h-[31px] w-[31px] items-center justify-center rounded-[10px] transition hover:bg-white/85"
+                  style={{ color: "#5c7267" }}
+                >
+                  <RotateCcw aria-hidden size={16} strokeWidth={1.9} />
+                </button>
+                <button
+                  type="button"
+                  onClick={() => setContextHidden((h) => !h)}
+                  title={contextHidden ? "Show player details" : "Hide player details"}
+                  aria-label={contextHidden ? "Show player details" : "Hide player details"}
+                  className="hidden h-[31px] w-[31px] items-center justify-center rounded-[10px] transition hover:bg-white/85 min-[1260px]:flex"
+                  style={{ color: contextHidden ? "#93a49b" : "#12704a" }}
+                >
+                  <Info aria-hidden size={16} strokeWidth={1.9} />
+                </button>
+              </span>
+            </div>
+
+            {/* search + filter popover */}
+            <SearchAndFilter
+              search={search}
+              onSearch={setSearch}
+              cityFilter={cityFilter}
+              onToggleCity={(c) =>
+                setCityFilter((prev) => {
+                  const next = new Set(prev);
+                  if (next.has(c)) next.delete(c);
+                  else next.add(c);
+                  return next;
+                })
               }
-            : null
-        }
-      />
+              flagStarred={flagStarred}
+              flagAssigned={flagAssigned}
+              flagMembers={flagMembers}
+              onToggleFlag={(f) => {
+                if (f === "starred") setFlagStarred((v) => !v);
+                if (f === "assigned") setFlagAssigned((v) => !v);
+                if (f === "members") setFlagMembers((v) => !v);
+              }}
+            />
+
+            {/* segmented control */}
+            <div className="mx-4 mb-3 mt-2.5 flex flex-none gap-0.5 rounded-[11px] p-[3px]" style={{ background: "rgba(0,0,0,.045)" }}>
+              {segments.map((s) => {
+                const on = view === s.key;
+                return (
+                  <button
+                    key={s.key}
+                    type="button"
+                    onClick={() => setFilters({ view: s.key })}
+                    className="flex h-[30px] flex-1 items-center justify-center gap-1.5 rounded-[8px] text-[12.5px] font-[650] transition"
+                    style={on ? { background: "#ffffff", color: "#0f3d2e", fontWeight: 730, boxShadow: "0 1px 2px rgba(7,42,32,.09)" } : { color: "#5c7267" }}
+                  >
+                    {s.label}
+                    <span className="text-[11px] font-bold tabular-nums" style={{ color: on ? "#3d9b73" : "#93a49b" }}>{s.n}</span>
+                  </button>
+                );
+              })}
+            </div>
+
+            {/* list / states */}
+            <div
+              className="flex min-h-0 flex-1 flex-col overflow-y-auto overflow-x-hidden px-2 pb-3.5"
+              onPointerDown={freezeGroups}
+              onPointerUp={thawGroups}
+              onPointerCancel={thawGroups}
+              onPointerLeave={thawGroups}
+            >
+              {bulkSelectable && renderGroups.length > 0 && (
+                <BulkSelectBar
+                  selectedCount={selectedIds.size}
+                  allSelected={allVisibleSelected}
+                  someSelected={someVisibleSelected}
+                  onToggleAll={toggleSelectAllVisible}
+                  onClear={clearSelection}
+                  onCloseSelected={() => void onBulkClose()}
+                />
+              )}
+              {threadsError && (
+                <div className="m-2 rounded-lg border px-3 py-2 text-xs" style={{ borderColor: "#e3c369", background: "#fdf1d0", color: "#8a6300" }}>
+                  {threadsError}
+                </div>
+              )}
+              {threadsLoading && listEmpty && <InboxSkeleton />}
+              {showCaughtUp && (
+                <AllCaughtUpCard
+                  onReviewClosed={() => setFilters({ view: "closed" })}
+                  closedCount={counts.closed}
+                />
+              )}
+              {!threadsLoading && !showCaughtUp && listEmpty && !threadsError && (
+                <div className="px-4 py-9 text-center text-[12.5px]" style={{ color: "#93a49b" }}>
+                  {filtersActive ? (
+                    <>
+                      No conversations match those filters.
+                      <br />
+                      <button
+                        type="button"
+                        onClick={() => {
+                          setCityFilter(new Set());
+                          setFlagStarred(false);
+                          setFlagAssigned(false);
+                          setFlagMembers(false);
+                          setSearch("");
+                        }}
+                        className="mt-3 rounded-full border px-3 py-1 text-[12px] font-[650]"
+                        style={{ borderColor: "#e6ebe8", background: "#ffffff", color: "#3f544a" }}
+                      >
+                        Clear filters
+                      </button>
+                    </>
+                  ) : view === "closed" ? (
+                    "No closed conversations."
+                  ) : (
+                    "Nothing here."
+                  )}
+                </div>
+              )}
+              {!showCaughtUp &&
+                renderGroups.map((g) => (
+                  <div key={g.key} className="mb-1">
+                    {g.label && (
+                      <div className="flex items-center gap-2 px-2 pb-[7px] pt-3">
+                        <span className="text-[10px] font-extrabold uppercase tracking-[0.12em]" style={{ color: g.tone === "await" ? "#8a6300" : "#93a49b" }}>
+                          {g.label}
+                        </span>
+                        <span className="h-px flex-1" style={{ background: "#e6ebe8" }} />
+                      </div>
+                    )}
+                    {g.rows.map((t) => (
+                      <MistInboxRow
+                        key={t.id}
+                        thread={t}
+                        nowMs={nowMs}
+                        active={t.id === selectedId}
+                        mine={t.assigned_to_user_id === appUserId}
+                        onSelect={() => setSelected(t.id)}
+                        onToggleFollowUp={() => onToggleFollowUp(t.id, !t.is_follow_up)}
+                      />
+                    ))}
+                  </div>
+                ))}
+            </div>
+
+            {/* footer hints */}
+            <div className="flex flex-none items-center gap-2.5 border-t px-4 py-2 text-[11px] font-semibold" style={{ borderColor: "#e6ebe8", background: "#eef3f0", color: "#93a49b" }}>
+              <EnablePushNotificationsButton />
+            </div>
+          </aside>
+
+          {/* ---- THREAD ---- */}
+          <section
+            className={`min-w-0 flex-col lg:flex lg:flex-1 ${showConversationMobile ? "flex flex-1" : "hidden lg:flex"}`}
+            style={{ background: "#ffffff" }}
+          >
+            {!selectedId ? (
+              <EmptyConversation />
+            ) : !selectedThread && !detail ? (
+              <div className="flex flex-1 items-center justify-center text-xs" style={{ color: "#93a49b" }}>
+                Loading conversation…
+              </div>
+            ) : (
+              <Conversation
+                selectedId={selectedId}
+                detail={detail}
+                error={detailError}
+                loading={detailLoading}
+                appUserId={appUserId}
+                operators={operators}
+                onAssign={(userId) => onAssign(selectedId, userId)}
+                onSent={onSent}
+                onBack={() => setSelected(null)}
+                onOpenContext={() => setContextHidden(false)}
+                onToggleContext={() => setContextHidden((h) => !h)}
+                contextOpen={!contextHidden}
+                isMember={selectedThread?.player?.is_member === true}
+                isFollowUp={selectedThread?.is_follow_up ?? false}
+                onToggleFollowUp={() =>
+                  onToggleFollowUp(selectedId, !(selectedThread?.is_follow_up ?? false))
+                }
+                threadStatus={detail?.thread.status ?? selectedThread?.status ?? "open"}
+                canManageStatus={canManageStatus}
+                onSetStatus={(action) => onSetThreadStatus(selectedId, action)}
+                whatsappWindowExpired={whatsappExpired}
+              />
+            )}
+          </section>
+
+          {/* ---- PLAYER CONTEXT (292px, hidden < 1260px + toggle) ---- */}
+          {selectedThread && !contextHidden && <ContextPane threadId={selectedThread.id} />}
+        </div>
+      </div>
 
       {closeToast && (
         <CloseUndoToast
@@ -1605,126 +1639,255 @@ function CloseUndoToast({
   );
 }
 
-// ============================================================
-// Chats header — brand-aligned title bar + Players/Matches
-// segmented control + merged filter row + tiny status line.
-// Replaces the old PageStatusBar combo.
-// ============================================================
-function ChatsHeader({
-  threadsLoading,
-  totalThreads,
-  visibleThreads,
-  realtimeOk,
-  onRefresh,
-  view,
-  counts,
-  onFilterChange,
-  canFilterMine,
-}: {
-  threadsLoading: boolean;
-  totalThreads: number;
-  visibleThreads: number;
-  realtimeOk: boolean | null;
-  onRefresh: () => void;
-  view: StatusFilter;
-  counts: ViewCounts;
-  onFilterChange: (next: { view: StatusFilter }) => void;
-  canFilterMine: boolean;
-}) {
-  // Filter row defaults to visible. The icon collapses it when the
-  // operator wants the bare inbox; a small mint dot on the icon
-  // signals "filters are active" so a collapsed state never hides a
-  // surprising filtered view. "Open" with no city is the default view,
-  // so it does not count as an active filter.
-  const [filtersOpen, setFiltersOpen] = useState(true);
-  const filtersActive = view !== "open";
 
-  const liveLabel =
-    realtimeOk == null
-      ? "connecting"
-      : realtimeOk
-        ? "live"
-        : "offline";
-  const liveDot =
-    realtimeOk == null
-      ? "bg-muted"
-      : realtimeOk
-        ? "bg-mint"
-        : "bg-coral";
-  const filtered = visibleThreads !== totalThreads;
-  const countLabel = threadsLoading
-    ? "Loading"
-    : filtered
-      ? `${visibleThreads} of ${totalThreads}`
-      : `${totalThreads} conversation${totalThreads === 1 ? "" : "s"}`;
+// ============================================================
+// Search box + filter popover (cities + additive flags)
+// ============================================================
+const ALL_CITY_CODES: readonly string[] = [
+  ...KNOWN_CITY_CODES.filter((c) => !HIDDEN_CITY_CODES.has(c)),
+  UNKNOWN_CITY,
+];
+
+function SearchAndFilter({
+  search,
+  onSearch,
+  cityFilter,
+  onToggleCity,
+  flagStarred,
+  flagAssigned,
+  flagMembers,
+  onToggleFlag,
+}: {
+  search: string;
+  onSearch: (s: string) => void;
+  cityFilter: Set<string>;
+  onToggleCity: (c: string) => void;
+  flagStarred: boolean;
+  flagAssigned: boolean;
+  flagMembers: boolean;
+  onToggleFlag: (f: "starred" | "assigned" | "members") => void;
+}) {
+  const searchRef = useRef<HTMLInputElement>(null);
+  const wrapRef = useRef<HTMLDivElement>(null);
+  const [open, setOpen] = useState(false);
+
+  useEffect(() => {
+    function onKey(e: KeyboardEvent) {
+      if (e.key !== "/") return;
+      const t = e.target as HTMLElement | null;
+      if (t && (t.tagName === "INPUT" || t.tagName === "TEXTAREA" || t.isContentEditable)) return;
+      e.preventDefault();
+      searchRef.current?.focus();
+    }
+    window.addEventListener("keydown", onKey);
+    return () => window.removeEventListener("keydown", onKey);
+  }, []);
+
+  useEffect(() => {
+    if (!open) return;
+    function onDown(e: MouseEvent) {
+      if (wrapRef.current && !wrapRef.current.contains(e.target as Node)) setOpen(false);
+    }
+    document.addEventListener("mousedown", onDown);
+    return () => document.removeEventListener("mousedown", onDown);
+  }, [open]);
+
+  const flagsOn = [flagStarred, flagAssigned, flagMembers].filter(Boolean).length;
+  const filterCount = cityFilter.size + flagsOn;
+  const label =
+    filterCount === 0
+      ? "Filter"
+      : cityFilter.size === 1 && filterCount === 1
+        ? [...cityFilter][0]
+        : `${filterCount} filters`;
+
+  const flagRow: { key: "starred" | "assigned" | "members"; label: string; on: boolean }[] = [
+    { key: "starred", label: "Starred", on: flagStarred },
+    { key: "assigned", label: "Assigned to me", on: flagAssigned },
+    { key: "members", label: "Members only", on: flagMembers },
+  ];
 
   return (
-    <header className="min-w-0 shrink-0">
-      {/* Title bar — safe-area spacer + content row stacked. Splitting
-          the two means status-bar clearance does not depend on the
-          items-center + min-height + padding-top interaction, which
-          mis-centered the toggle on iOS Safari (PR #57 regression on
-          /match-chats). Same pattern applied here so /chats stays
-          robust to the same iOS quirk. */}
-      <div aria-hidden className="bg-deep-green" style={{ height: "var(--safe-area-top)" }} />
-      <div className="flex min-h-12 items-center justify-between bg-deep-green px-3 sm:px-4">
-        <h1 className="text-base font-bold tracking-tight text-cream">Chats</h1>
-        <button
-          type="button"
-          onClick={() => setFiltersOpen((o) => !o)}
-          aria-label={filtersOpen ? "Hide filters" : "Show filters"}
-          aria-expanded={filtersOpen}
-          style={{ touchAction: "manipulation" }}
-          className="relative flex h-11 w-11 items-center justify-center rounded-full text-cream/85 transition hover:bg-deep-green-soft hover:text-cream"
-        >
-          <SlidersHorizontal aria-hidden size={18} strokeWidth={1.75} />
-          {filtersActive && (
-            <span
-              aria-hidden
-              className="absolute right-2 top-2 h-2 w-2 rounded-full bg-mint"
-            />
-          )}
-        </button>
-      </div>
-
-      {/* Support-performance metrics strip — sits above the filter row
-          per docs/chats-metrics-header-mock.html. Self-contained (owns
-          its period toggle, collapse state, and refresh). */}
-      <ChatsMetricsStrip />
-
-      {/* Filter row */}
-      {filtersOpen && (
-        <FilterBar
-          view={view}
-          counts={counts}
-          onChange={onFilterChange}
-          canFilterMine={canFilterMine}
+    <div className="relative mt-2.5 flex flex-none items-center gap-2 px-4" ref={wrapRef}>
+      <div className="relative flex-1">
+        <svg viewBox="0 0 24 24" className="pointer-events-none absolute left-[11px] top-1/2 h-[15px] w-[15px] -translate-y-1/2" fill="none" stroke="#9aa8a1" strokeLinecap="round" strokeWidth={2} aria-hidden>
+          <circle cx="11" cy="11" r="6.5" />
+          <path d="M16 16l4.5 4.5" />
+        </svg>
+        <input
+          ref={searchRef}
+          value={search}
+          onChange={(e) => onSearch(e.target.value)}
+          placeholder="Search players…"
+          className="h-9 w-full rounded-[11px] border pl-[33px] pr-[34px] text-[13px] outline-none transition focus:border-[#35c77f] focus:shadow-[0_0_0_3px_rgba(53,199,127,.15)]"
+          style={{ background: "#ffffff", borderColor: "#e6ebe8", color: "#12241d" }}
         />
-      )}
+        <kbd className="pointer-events-none absolute right-[9px] top-1/2 -translate-y-1/2 rounded-[5px] border px-[5px] py-px text-[10.5px] font-bold" style={{ color: "#a4b0aa", background: "#eef3f0", borderColor: "#e2eae5" }}>/</kbd>
+      </div>
+      <button
+        type="button"
+        onClick={() => setOpen((v) => !v)}
+        className="flex h-9 flex-none items-center gap-1.5 rounded-[11px] border px-[11px] text-[12.5px] font-[650] transition"
+        style={filterCount > 0 ? { borderColor: "#0d3b2e", background: "#0d3b2e", color: "#eafaf1" } : { borderColor: "#e6ebe8", background: "#ffffff", color: "#3f544a" }}
+      >
+        <svg viewBox="0 0 24 24" className="h-3.5 w-3.5" fill="none" stroke="currentColor" strokeLinecap="round" strokeLinejoin="round" strokeWidth={2} aria-hidden>
+          <path d="M3 5h18" /><path d="M6.5 12h11" /><path d="M10 19h4" />
+        </svg>
+        {label}
+        {filterCount > 0 && (
+          <span className="rounded-full px-[5px] text-[10.5px] font-extrabold" style={{ background: "#35c77f", color: "#062a1e" }}>{filterCount}</span>
+        )}
+      </button>
 
-      {/* Status line */}
-      <div className="flex items-center justify-between gap-2 border-b border-cream-line bg-cream px-3 py-1 sm:px-4">
-        <span className="text-[11px] text-deep-green/55">{countLabel}</span>
-        <div className="flex items-center gap-2 text-[11px]">
-          <span className="inline-flex items-center gap-1 text-deep-green/55">
-            <span
-              aria-hidden
-              className={`inline-block h-1.5 w-1.5 rounded-full ${liveDot}`}
-            />
-            {liveLabel}
-          </span>
-          <EnablePushNotificationsButton />
+      {open && (
+        // stopPropagation so a click inside the popover never reaches the
+        // document mousedown listener that closes it (item 7).
+        <div
+          onMouseDown={(e) => e.stopPropagation()}
+          className="absolute right-4 top-[42px] z-20 w-[274px] rounded-[14px] border p-[11px] shadow-[0_2px_5px_rgba(7,42,32,.07),0_22px_44px_-24px_rgba(7,42,32,.55)]"
+          style={{ background: "#ffffff", borderColor: "#e6ebe8" }}
+        >
+          <div className="mb-2 px-0.5 text-[9.5px] font-extrabold uppercase tracking-[0.13em]" style={{ color: "#93a49b" }}>City</div>
+          <div className="flex flex-wrap gap-[5px]">
+            {ALL_CITY_CODES.map((code) => {
+              const on = cityFilter.has(code);
+              return (
+                <button key={code} type="button" onClick={() => onToggleCity(code)}
+                  className="flex h-[27px] items-center gap-[5px] rounded-full border px-[10px] text-[11.5px] font-bold tracking-[0.02em] transition"
+                  style={on ? { background: "#0d3b2e", borderColor: "#0d3b2e", color: "#eafaf1" } : { background: "#ffffff", borderColor: "#e6ebe8", color: "#5c7267" }}>
+                  {code}{on && <span className="-mr-0.5 text-[13px] leading-none opacity-75">×</span>}
+                </button>
+              );
+            })}
+          </div>
+          <div className="mb-2 mt-3 px-0.5 text-[9.5px] font-extrabold uppercase tracking-[0.13em]" style={{ color: "#93a49b" }}>Only show</div>
+          <div className="flex flex-wrap gap-[5px]">
+            {flagRow.map((f) => (
+              <button key={f.key} type="button" onClick={() => onToggleFlag(f.key)}
+                className="flex h-[27px] items-center gap-[5px] rounded-full border px-[10px] text-[11.5px] font-bold tracking-[0.02em] transition"
+                style={f.on ? { background: "#0d3b2e", borderColor: "#0d3b2e", color: "#eafaf1" } : { background: "#ffffff", borderColor: "#e6ebe8", color: "#5c7267" }}>
+                {f.label}{f.on && <span className="-mr-0.5 text-[13px] leading-none opacity-75">×</span>}
+              </button>
+            ))}
+          </div>
+        </div>
+      )}
+    </div>
+  );
+}
+
+// ============================================================
+// Inbox row (Mist) — mockup playerchats-v1
+// ============================================================
+function MistInboxRow({
+  thread,
+  nowMs,
+  active,
+  mine,
+  onSelect,
+  onToggleFollowUp,
+}: {
+  thread: ThreadListRow;
+  nowMs: number;
+  active: boolean;
+  mine: boolean;
+  onSelect: () => void;
+  onToggleFollowUp: () => void;
+}) {
+  const name = fullNameOf(thread);
+  const cc = cityCodeForThread(thread);
+  const col = colorForCity(cc);
+  const initials =
+    (name.trim()[0] ?? "?").toUpperCase() +
+    (name.trim().split(/\s+/)[1]?.[0]?.toUpperCase() ?? "");
+  const waiting = isAwaitingReply(thread);
+  const ago = awaitingAgeLabel(thread.last_message_at, nowMs);
+  const inbound = thread.last_message_direction === "inbound";
+  const preview = thread.last_message_preview ?? "";
+  const speaker = inbound ? name.split(/\s+/)[0] || "Player" : "MatchDay";
+
+  return (
+    <button
+      type="button"
+      onClick={onSelect}
+      style={{
+        touchAction: "manipulation",
+        ...(active
+          ? { background: "#ffffff", borderColor: "#e2eae5", boxShadow: "0 1px 2px rgba(7,42,32,.05), 0 14px 30px -22px rgba(7,42,32,.5)" }
+          : waiting
+            ? { background: "rgba(253,241,208,.5)", borderColor: "transparent" }
+            : { borderColor: "transparent" }),
+      }}
+      className={`relative mt-px flex w-full items-start gap-2.5 rounded-[13px] border p-[10px_11px] text-left transition ${active ? "" : "hover:bg-white/80"}`}
+    >
+      {(active || waiting) && (
+        <span aria-hidden className="absolute left-0 top-[11px] bottom-[11px] w-[3px] rounded-r-[3px]" style={{ background: active ? "#35c77f" : "#e3c369" }} />
+      )}
+      <span className="relative mt-px flex h-[34px] w-[34px] flex-none items-center justify-center rounded-[11px] text-[9.5px] font-extrabold" style={{ background: `${col}22`, color: col }}>
+        {initials || "?"}
+        {thread.is_unread && (
+          <span className="absolute -right-0.5 -top-0.5 h-[9px] w-[9px] rounded-full" style={{ background: "#35c77f", boxShadow: "0 0 0 2px #f8faf9" }} />
+        )}
+      </span>
+      <span className="min-w-0 flex-1">
+        <span className="flex items-baseline gap-1.5">
+          <span className={`min-w-0 flex-1 truncate text-[13.5px] tracking-[-0.008em] ${thread.is_unread ? "font-[760]" : "font-[660]"}`} style={{ color: "#12241d" }}>{name}</span>
           <button
             type="button"
-            onClick={onRefresh}
-            style={{ touchAction: "manipulation" }}
-            className="rounded-full px-2 py-0.5 text-[11px] font-medium text-deep-green/70 transition hover:bg-cream-soft hover:text-deep-green"
+            onClick={(e) => { e.stopPropagation(); onToggleFollowUp(); }}
+            aria-label={thread.is_follow_up ? "Unstar" : "Star"}
+            className="flex-none"
+            style={{ color: thread.is_follow_up ? "#e0a500" : "#c9d2cd" }}
           >
-            Refresh
+            <Star aria-hidden size={12} fill={thread.is_follow_up ? "currentColor" : "none"} />
           </button>
-        </div>
+          <span className="flex-none text-[11px] font-[650]" style={{ color: waiting ? "#8a6300" : "#9aa8a1" }}>{ago}</span>
+        </span>
+        <span className="mt-0.5 flex items-center gap-1.5 text-[11.5px] font-[550]" style={{ color: "#6d7b74" }}>
+          <span>{cc}</span>
+          <span aria-hidden className="inline-block h-[3px] w-[3px] rounded-full" style={{ background: "#c9d2cd" }} />
+          <span>{thread.player?.is_member ? "Member" : "Casual"}</span>
+          {mine && (
+            <>
+              <span aria-hidden className="inline-block h-[3px] w-[3px] rounded-full" style={{ background: "#c9d2cd" }} />
+              <span className="font-[700]" style={{ color: "#3f544a" }}>You</span>
+            </>
+          )}
+        </span>
+        <span className="mt-[5px] block overflow-hidden text-[12.5px] leading-[1.42]" style={{ color: "#63736b", display: "-webkit-box", WebkitLineClamp: 2, WebkitBoxOrient: "vertical" }}>
+          <span className={inbound ? "font-[700]" : "font-[700] italic"} style={{ color: inbound ? "#4a5f55" : "#8a978f" }}>{speaker}: </span>
+          {preview || <span className="italic" style={{ color: "#8d9c94" }}>(no preview)</span>}
+        </span>
+        {waiting && (
+          <span className="mt-1.5 inline-flex rounded-[6px] border px-[7px] py-0.5 text-[10px] font-[750]" style={{ background: "#fdf1d0", borderColor: "#e3c369", color: "#8a6300" }}>
+            Waiting {awaitingAgeLabel(thread.waiting_since ?? thread.last_message_at, nowMs)}
+          </span>
+        )}
+      </span>
+    </button>
+  );
+}
+
+// ============================================================
+// All-caught-up card — the empty Open inbox is a WIN, not a broken filter.
+// Shown only when the default view has a true open count of 0.
+// ============================================================
+function AllCaughtUpCard({ onReviewClosed, closedCount }: { onReviewClosed: () => void; closedCount: number }) {
+  return (
+    <div className="m-3 rounded-[16px] border p-[26px_22px] text-center" style={{ background: "#ffffff", borderColor: "#e2eae5", boxShadow: "0 1px 2px rgba(7,42,32,.05), 0 14px 30px -22px rgba(7,42,32,.5)" }}>
+      <div className="mx-auto mb-[13px] flex h-[46px] w-[46px] items-center justify-center rounded-full" style={{ color: "#17724c", background: "radial-gradient(circle at 35% 30%,#eafaf1,#d6efe1)", boxShadow: "0 0 0 7px rgba(224,242,231,.5)" }}>
+        <svg viewBox="0 0 24 24" className="h-[21px] w-[21px]" fill="none" stroke="currentColor" strokeLinecap="round" strokeLinejoin="round" strokeWidth={2.2} aria-hidden>
+          <path d="M4.5 12.5l5 5 10-11" />
+        </svg>
       </div>
-    </header>
+      <h3 className="mb-1.5 text-[15px] font-[760] tracking-[-0.015em]" style={{ color: "#12241d" }}>All caught up</h3>
+      <p className="mx-auto mb-3.5 max-w-[31ch] text-[12.5px] leading-[1.6]" style={{ color: "#6d7b74" }}>
+        No player is waiting on a reply right now. New messages land here the moment they arrive.
+      </p>
+      <button type="button" onClick={onReviewClosed} className="mx-auto rounded-full border px-[13px] py-[7px] text-[12.5px] font-[650]" style={{ borderColor: "#e6ebe8", background: "#ffffff", color: "#3f544a" }}>
+        Review closed ({closedCount})
+      </button>
+    </div>
   );
 }
 
@@ -1847,7 +2010,7 @@ function Conversation({
       />
       <div
         ref={scrollRef}
-        className="flex-1 overflow-y-auto overflow-x-hidden bg-cream px-3 py-3 sm:px-4"
+        className="flex-1 overflow-y-auto overflow-x-hidden bg-white px-3 py-3 sm:px-4"
       >
         {error && (
           <div className="mb-3 rounded border border-coral/40 bg-coral-soft p-2 text-xs text-coral-hover">
