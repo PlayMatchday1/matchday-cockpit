@@ -27,7 +27,6 @@ import FinanceTabNav, {
   FINANCE_TAB_IDS,
   type FinanceTabId,
 } from "@/components/FinanceTabNav";
-import ManagerPayGrid from "@/components/ManagerPayGrid";
 import CancelHeatmap from "@/components/CancelHeatmap";
 import CancelPatterns from "@/components/CancelPatterns";
 import CitiesMasterScheduleLens from "@/components/CitiesMasterScheduleLens";
@@ -282,9 +281,6 @@ function FinanceLandingContent() {
       </TabPanel>
       <TabPanel id="expenses" active={activeTab} visited={visited}>
         <ExpenseAdminView />
-      </TabPanel>
-      <TabPanel id="manager-pay" active={activeTab} visited={visited}>
-        <ManagerPayGrid />
       </TabPanel>
       <TabPanel id="cash-flow" active={activeTab} visited={visited}>
         <CashFlowTabContent />

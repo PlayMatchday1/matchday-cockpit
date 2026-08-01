@@ -46,6 +46,16 @@ const nextConfig: NextConfig = {
         destination: "/managers",
         permanent: true,
       },
+      // Manager Pay moved out of the public /managers page (and the Finance
+      // Configure tab) into Match Ops on 2026-08-01 — same data, same pay math,
+      // new home. 308 (permanent) so bookmarks to /managers survive. The old
+      // /finance/match-managers + /admin/finance/match-managers redirects above
+      // still point at /managers, so they chain here — kept intentionally.
+      {
+        source: "/managers",
+        destination: "/match-ops/manager-pay",
+        permanent: true,
+      },
       // Player Chat page moved from /crm → /chats on 2026-05-16
       // (UI label was already "Chats"; the URL was the last
       // mismatch). The /api/crm/* API routes and the underlying

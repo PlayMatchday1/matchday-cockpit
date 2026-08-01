@@ -81,6 +81,7 @@ export type ManagerRow = {
   baseTotal: number;
   adjustment: number;
   adjustmentNotes: string | null;
+  adjustmentAt: string | null; // when the adjustment was entered (created_at)
   total: number;
 };
 
@@ -92,6 +93,18 @@ export type CitySection = {
   baseTotal: number;
   adjustment: number;
   total: number;
+};
+
+// "Needs a look" — computed here ONCE, server side (with real emails, before
+// they're stripped for public callers), so the Manager Pay tile and the Match
+// Ops rail badge read the same number. Each thing is counted once under its most
+// urgent kind: no manager assigned > no payroll email > adjustment with no reason.
+export type ManagerPayAttention = {
+  count: number;
+  unassigned: number; // matches (not cancelled) with nobody assigned
+  noEmail: number; // manager rows with no payroll email (structurally rare: pay
+  //                   is attributed by email, so a no-email manager gets no row)
+  bareAdjustment: number; // manager rows whose adjustment has no reason written
 };
 
 export type ManagerPayWeekPayload = {
@@ -108,6 +121,7 @@ export type ManagerPayWeekPayload = {
     adjustment: number;
     total: number;
   };
+  attention: ManagerPayAttention;
 };
 
 // ============================================================
@@ -231,6 +245,7 @@ type AdjustmentRow = {
   manager_email: string;
   amount: number | string;
   notes: string | null;
+  created_at: string | null;
 };
 
 // Orphan: a past-start match with zero REAL attendance. mdapi
@@ -333,17 +348,17 @@ export async function computeManagerPayForWeek(
 
   const { data: adjData, error: adjErr } = await supabase
     .from("manager_pay_adjustments")
-    .select("manager_email, amount, notes")
+    .select("manager_email, amount, notes, created_at")
     .eq("week_start", weekStart);
   if (adjErr) {
     throw new Error(`manager_pay_adjustments read failed: ${adjErr.message}`);
   }
-  const adjByEmail = new Map<string, { amount: number; notes: string | null }>();
+  const adjByEmail = new Map<string, { amount: number; notes: string | null; at: string | null }>();
   for (const row of (adjData ?? []) as AdjustmentRow[]) {
     const key = row.manager_email.toLowerCase();
     const amt =
       typeof row.amount === "number" ? row.amount : Number(row.amount) || 0;
-    adjByEmail.set(key, { amount: amt, notes: row.notes });
+    adjByEmail.set(key, { amount: amt, notes: row.notes, at: row.created_at });
   }
 
   function resolveSecond(m: MatchRow): { email: string | null; name: string | null } {
@@ -518,6 +533,7 @@ export async function computeManagerPayForWeek(
       baseTotal,
       adjustment: adj?.amount ?? 0,
       adjustmentNotes: adj?.notes ?? null,
+      adjustmentAt: adj?.at ?? null,
       total: baseTotal + (adj?.amount ?? 0),
     });
   }
@@ -557,6 +573,27 @@ export async function computeManagerPayForWeek(
     total: cities.reduce((s, c) => s + c.total, 0),
   };
 
+  // needs-a-look, computed from the real (unstripped) data. Each manager row is
+  // counted once under its most urgent flag; unassigned is a match-level thing.
+  const unassignedAttn = matchSummaries.filter(
+    (m) => !m.isCancelled && !m.primaryManagerName && !m.secondManagerName,
+  ).length;
+  let noEmailAttn = 0;
+  let bareAdjAttn = 0;
+  for (const acc of accByEmail.values()) {
+    const hasEmail = !!acc.managerEmail;
+    const adj = adjByEmail.get(acc.managerEmail.toLowerCase());
+    const bare = !!adj && adj.amount !== 0 && !adj.notes;
+    if (!hasEmail) noEmailAttn++;
+    else if (bare) bareAdjAttn++;
+  }
+  const attention: ManagerPayAttention = {
+    unassigned: unassignedAttn,
+    noEmail: noEmailAttn,
+    bareAdjustment: bareAdjAttn,
+    count: unassignedAttn + noEmailAttn + bareAdjAttn,
+  };
+
   return {
     weekStart,
     weekEnd,
@@ -565,6 +602,7 @@ export async function computeManagerPayForWeek(
     isAdmin,
     cities,
     network,
+    attention,
   };
 }
 
