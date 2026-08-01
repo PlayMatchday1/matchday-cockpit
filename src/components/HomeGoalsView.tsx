@@ -247,12 +247,12 @@ function SnapshotStrip({ snapshot }: { snapshot: Snapshot | null }) {
   if (!snapshot) return <div aria-hidden className="mt-[26px] h-[112px]" />;
   const mo = snapshot.monthLabel;
   const cells: { k: string; v: string; u: string; title: string }[] = [];
-  if (snapshot.revenueNet != null)
+  if (snapshot.revenueGross != null)
     cells.push({
       k: "Revenue",
-      v: `$${Math.round(snapshot.revenueNet / 1000)}K`,
+      v: `$${Math.round(snapshot.revenueGross / 1000)}K`,
       u: "all 7 cities",
-      title: `Net revenue (gross − processing fees): SUM(fin_revenue.net) for ${mo}. Basis: payment date (Stripe charge date), month-to-date. Not the match-date basis.`,
+      title: `Gross revenue (before processing fees): SUM(fin_revenue.gross) for ${mo}. Basis: payment date (Stripe charge date), month-to-date. Not the match-date basis.`,
     });
   if (snapshot.monthlyPlayers != null)
     cells.push({

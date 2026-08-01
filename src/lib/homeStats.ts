@@ -27,7 +27,7 @@ function monthStartISO(now = new Date()): string {
 }
 
 export type Snapshot = {
-  revenueNet: number | null;
+  revenueGross: number | null;
   monthlyPlayers: number | null;
   activeMembers: number | null;
   activeFields: number | null;
@@ -45,17 +45,17 @@ async function pageAll<T>(build: (from: number, to: number) => PromiseLike<{ dat
   return out;
 }
 
-// Revenue — SUM(fin_revenue.net) for the current month bucket. Basis = PAYMENT
+// Revenue — SUM(fin_revenue.gross) for the current month bucket. Basis = PAYMENT
 // DATE (fin_revenue is the Stripe-charge ledger; .month is the charge month), so
-// it is month-to-date as charges land. Net of processing fees. Not the match-
-// date basis.
-async function fetchRevenueNet(): Promise<number | null> {
+// it is month-to-date as charges land. Gross (before processing fees). Not the
+// match-date basis.
+async function fetchRevenueGross(): Promise<number | null> {
   const { data, error } = await supabase
     .from("fin_revenue")
-    .select("net")
+    .select("gross")
     .eq("month", currentMonthLabel());
   if (error) return null;
-  return (data ?? []).reduce((s, r) => s + Number((r as { net: number }).net || 0), 0);
+  return (data ?? []).reduce((s, r) => s + Number((r as { gross: number }).gross || 0), 0);
 }
 
 // Active members — COUNT(mdapi_subscriptions WHERE status='ACTIVE' AND price>0).
@@ -122,11 +122,11 @@ async function fetchMonthlyPlayers(): Promise<number | null> {
 }
 
 export async function fetchSnapshot(): Promise<Snapshot> {
-  const [revenueNet, monthlyPlayers, activeMembers, activeFields] = await Promise.all([
-    fetchRevenueNet(),
+  const [revenueGross, monthlyPlayers, activeMembers, activeFields] = await Promise.all([
+    fetchRevenueGross(),
     fetchMonthlyPlayers(),
     fetchActiveMembers(),
     fetchActiveFields(),
   ]);
-  return { revenueNet, monthlyPlayers, activeMembers, activeFields, monthLabel: currentMonthLabel() };
+  return { revenueGross, monthlyPlayers, activeMembers, activeFields, monthLabel: currentMonthLabel() };
 }
