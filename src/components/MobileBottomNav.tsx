@@ -197,7 +197,9 @@ export default function MobileBottomNav({
         }
         style={{
           gridTemplateColumns: `repeat(${barTabs.length + 1}, minmax(0,1fr))`,
-          paddingBottom: "env(safe-area-inset-bottom)",
+          // var(--sab), not raw env(), so the home-indicator inset is
+          // overridable and therefore testable in the notch harness.
+          paddingBottom: "var(--sab)",
         }}
       >
         {barTabs.map((t) => {

@@ -444,7 +444,7 @@ export default function Composer({
   // ---------------- render ----------------
   return (
     <div
-      className="relative border-t border-cream-line bg-cream px-3 py-3 pb-[calc(0.75rem+env(safe-area-inset-bottom))] sm:px-4"
+      className="relative border-t border-cream-line bg-cream px-3 py-3 pb-[calc(0.75rem+var(--sab))] sm:px-4"
       onDragEnter={onDragEnter}
       onDragOver={onDragOver}
       onDragLeave={onDragLeave}

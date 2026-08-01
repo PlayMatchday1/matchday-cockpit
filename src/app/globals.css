@@ -82,6 +82,14 @@ html.app-shell-locked body {
      SafeAreaInsetWatcher writes to this from a visualViewport
      resize listener. */
   --safe-area-top: env(safe-area-inset-top);
+
+  /* Canonical safe-area insets, routed through variables so every
+     edge-touching element pays its own inset via var(--sat)/var(--sab)
+     — and so a test harness can force a notch (setProperty('--sat',
+     '59px')) and prove the layout survives one. A raw env() cannot be
+     overridden, so it cannot be tested; these can. */
+  --sat: env(safe-area-inset-top, 0px);
+  --sab: env(safe-area-inset-bottom, 0px);
 }
 
 @media (max-width: 767.98px) {

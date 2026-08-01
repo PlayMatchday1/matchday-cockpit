@@ -85,8 +85,12 @@ export default function MatchOpsMobileStrip() {
 
   return (
     <div className="min-[900px]:hidden">
-      {/* sticky pill strip */}
-      <div className="sticky top-0 z-[12] flex items-center gap-2 border-b px-3 py-2" style={{ background: "#f8faf9", borderColor: "#e6ebe8" }}>
+      {/* sticky pill strip — pays var(--sat) so the pills sit BELOW the iOS
+          status band, where taps actually reach the page (M4). */}
+      <div
+        className="sticky top-0 z-[12] flex items-center gap-2 border-b px-3 pb-2"
+        style={{ background: "#f8faf9", borderColor: "#e6ebe8", paddingTop: "calc(8px + var(--sat))" }}
+      >
         <button
           type="button"
           onClick={() => setSheetOpen(true)}
@@ -124,8 +128,10 @@ export default function MatchOpsMobileStrip() {
       {/* section sheet */}
       {sheetOpen && (
         <div className="fixed inset-0 z-[60] flex flex-col justify-end" role="dialog" aria-modal="true" aria-label="Match Ops sections">
-          <button type="button" aria-label="Close" onClick={() => setSheetOpen(false)} className="absolute inset-0" style={{ background: "rgba(6,26,18,.42)" }} />
-          <div className="relative max-h-[86%] overflow-y-auto rounded-t-[22px] pb-[calc(14px+env(safe-area-inset-bottom))]" style={{ background: "#ffffff", boxShadow: "0 -2px 8px rgba(7,42,32,.06), 0 -26px 60px -20px rgba(7,42,32,.42)" }}>
+          {/* Scrim starts below the status band so no tappable dismiss layer
+              sits under the OS-owned strip (M4 / hit-test rule). */}
+          <button type="button" aria-label="Close" onClick={() => setSheetOpen(false)} className="absolute inset-x-0 bottom-0" style={{ top: "var(--sat)", background: "rgba(6,26,18,.42)" }} />
+          <div className="relative max-h-[86%] overflow-y-auto rounded-t-[22px]" style={{ background: "#ffffff", boxShadow: "0 -2px 8px rgba(7,42,32,.06), 0 -26px 60px -20px rgba(7,42,32,.42)", paddingBottom: "calc(14px + var(--sab))" }}>
             <div className="flex justify-center pb-1 pt-2"><span className="h-[5px] w-[38px] rounded-full" style={{ background: "#dbe3df" }} /></div>
             <div className="flex items-center gap-2.5 px-[18px] pb-2.5 pt-1.5">
               <h2 className="text-[17px] font-[760] tracking-[-0.02em]" style={{ color: "#12241d" }}>Match Ops</h2>

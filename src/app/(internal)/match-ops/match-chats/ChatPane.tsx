@@ -97,7 +97,10 @@ export default function ChatPane({
   showOnMobile: boolean;
   onBack: () => void;
 }) {
-  const visibility = `${showOnMobile ? "flex flex-1" : "hidden"} lg:flex lg:flex-1`;
+  // On mobile the open thread is a full-screen push that COVERS the bottom tab
+  // bar (fixed inset-0), so the composer — not the tab bar — is the bottom
+  // element and can own var(--sab). On desktop it stays an in-flow pane.
+  const visibility = `${showOnMobile ? "fixed inset-0 z-40 flex" : "hidden"} lg:static lg:z-auto lg:flex lg:flex-1`;
 
   if (!chatId) {
     return (
@@ -330,7 +333,7 @@ function ChatPaneInner({
   return (
     <section className={`min-w-0 flex-col ${visibility}`} style={{ background: "#ffffff" }}>
       {/* Header */}
-      <div className="flex h-[64px] flex-none items-center gap-3 border-b px-3 sm:px-[22px]" style={{ borderColor: "#eff3f1" }}>
+      <div className="flex min-h-[64px] flex-none items-center gap-3 border-b px-3 sm:px-[22px]" style={{ borderColor: "#eff3f1", paddingTop: "var(--sat)" }}>
         <button
           type="button"
           onClick={onBack}
@@ -464,7 +467,7 @@ function ChatPaneInner({
       </div>
 
       {/* Composer */}
-      <div className="flex-none border-t px-[22px] py-3 pb-[calc(0.85rem+env(safe-area-inset-bottom))]" style={{ borderColor: "#eff3f1", background: "#ffffff" }}>
+      <div className="flex-none border-t px-[22px] py-3 pb-[calc(0.85rem+var(--sab))]" style={{ borderColor: "#eff3f1", background: "#ffffff" }}>
         <div
           className="mb-2.5 flex items-center gap-2 rounded-[9px] border px-[11px] py-1.5 text-[11.5px] font-semibold"
           style={{ background: "#fdf1d0", borderColor: "#e3c369", color: "#8a6300" }}

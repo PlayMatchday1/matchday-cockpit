@@ -215,6 +215,7 @@ export default function NotifyPlayersDrawer({
         aria-modal="true"
         aria-label="Notify players"
         className="flex h-full w-full max-w-md flex-col border-l border-cream-line bg-white shadow-2xl"
+        style={{ paddingTop: "var(--sat)", paddingBottom: "var(--sab)" }}
       >
         {/* Header */}
         <div className="flex h-14 shrink-0 items-center justify-between border-b border-cream-line px-4">

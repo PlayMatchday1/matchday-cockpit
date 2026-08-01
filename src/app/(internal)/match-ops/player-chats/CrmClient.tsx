@@ -1496,7 +1496,7 @@ export default function CrmClient() {
 
           {/* ---- THREAD ---- */}
           <section
-            className={`min-w-0 flex-col lg:flex lg:flex-1 ${showConversationMobile ? "flex flex-1" : "hidden lg:flex"}`}
+            className={`min-w-0 flex-col lg:static lg:z-auto lg:flex lg:flex-1 ${showConversationMobile ? "fixed inset-0 z-40 flex" : "hidden lg:flex"}`}
             style={{ background: "#ffffff" }}
           >
             {!selectedId ? (
@@ -2233,7 +2233,7 @@ function ConversationHeader({
 
   if (!detail) {
     return (
-      <div className="flex h-14 shrink-0 items-center gap-2 border-b border-cream-line bg-white px-2 sm:px-4">
+      <div className="flex min-h-14 shrink-0 items-center gap-2 border-b border-cream-line bg-white px-2 pt-[var(--sat)] sm:px-4">
         <button
           type="button"
           onClick={handleBack}
@@ -2250,7 +2250,7 @@ function ConversationHeader({
   const cityCode = cityCodeForThread(detail.thread);
   const channel = detail.thread.channel ?? "sms";
   return (
-    <div className="flex h-14 shrink-0 items-center gap-2 border-b border-cream-line bg-white px-1 sm:px-3">
+    <div className="flex min-h-14 shrink-0 items-center gap-2 border-b border-cream-line bg-white px-1 pt-[var(--sat)] sm:px-3">
       <button
         type="button"
         onClick={handleBack}
