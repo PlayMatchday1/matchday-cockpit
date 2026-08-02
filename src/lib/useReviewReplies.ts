@@ -36,6 +36,9 @@ export function useReviewReplies() {
     enabled: true,
     loading: true,
   });
+  // A rejected write (RLS denial, lost connection) must never look like a
+  // successful click: we revert the optimistic tick AND surface this message.
+  const [writeError, setWriteError] = useState<string | null>(null);
 
   const load = useCallback(async () => {
     const { data, error } = await supabase
@@ -91,6 +94,7 @@ export function useReviewReplies() {
         });
       }
       setState((s) => ({ ...s, replies: optimistic }));
+      setWriteError(null);
 
       const res = had
         ? await supabase.from("review_replies").delete().eq("review_id", reviewId)
@@ -98,12 +102,18 @@ export function useReviewReplies() {
             .from("review_replies")
             .insert({ review_id: reviewId, replied_by: appUser.id });
       if (res.error) {
-        // roll back to server truth
+        // Denied or failed: revert the optimistic state to server truth and tell
+        // the user. A permission denial must not read as a successful click.
+        setWriteError(
+          had
+            ? "Couldn’t remove that reply mark — the change was undone. You may not have permission."
+            : "Couldn’t save that reply mark — the tick was undone. You may not have permission.",
+        );
         void load();
       }
     },
     [appUser, state.replies, load],
   );
 
-  return { ...state, toggle, reload: load };
+  return { ...state, toggle, reload: load, error: writeError, clearError: () => setWriteError(null) };
 }

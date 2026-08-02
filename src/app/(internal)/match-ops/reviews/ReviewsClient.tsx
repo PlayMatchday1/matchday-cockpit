@@ -59,9 +59,13 @@ const plural = (n: number, s: string) => {
 
 export default function ReviewsClient() {
   const { appUser } = useAuth();
-  const isAdmin = !!appUser?.is_admin;
+  // Marking a review replied is city-manager ops work, not a finance/admin
+  // mutation — any signed-in app_user may do it (the page is already gated to
+  // "cities"). NOT is_admin. The server side is enforced by RLS on
+  // review_replies (migration 0090), which is the only server gate on this path.
+  const canReply = !!appUser;
   const { rows, rawCount, fakeExcluded, meta, loading, error } = useCleanReviews();
-  const { replies, enabled: replyEnabled, toggle } = useReviewReplies();
+  const { replies, enabled: replyEnabled, toggle, error: replyError, clearError } = useReviewReplies();
 
   const NOW = useMemo(() => new Date(), []);
   const months = useMemo(() => monthsPresent(rows), [rows]);
@@ -143,7 +147,7 @@ export default function ReviewsClient() {
   if (mgr !== "all") scopeBits.push(mgr);
 
   const onToggleTick = (r: ReviewRow) => {
-    if (!replyEnabled || !isAdmin) return;
+    if (!replyEnabled || !canReply) return;
     if (csev === "open") setStick((s) => new Set(s).add(r.apiId));
     void toggle(r.apiId);
   };
@@ -224,29 +228,8 @@ export default function ReviewsClient() {
           selected={focus === "stand"} onClick={() => setFocus((f) => (f === "stand" ? null : "stand"))} />
       </div>
 
-      {/* trailing-8-week strip */}
-      <div className="mb-4 flex flex-wrap items-center gap-6 rounded-[12px] border p-3.5" style={{ background: C.surface, borderColor: C.line }}>
-        <div className="min-w-[186px]">
-          <div className="text-[10.5px] font-bold tracking-[0.08em]" style={{ color: C.muted }}>TRAILING 8 WEEKS</div>
-          <div className="mt-0.5 text-[21px] font-[800] tracking-[-0.5px]">
-            <span data-rv="wavg">{wk.weightedAvg.toFixed(2)}</span><small className="ml-1.5 text-[12px] font-semibold" style={{ color: C.muted }}>avg rating</small>
-          </div>
-          <div className="mt-0.5 text-[11.5px]" style={{ color: C.muted }}>
-            <span data-rv="totvol">{nf(wk.totalVolume)}</span> reviews · ~{nf(Math.round(wk.totalVolume / wk.weeks.length))} per week
-          </div>
-        </div>
-        <Spark title="RATING" band={`${wk.ratingLo.toFixed(2)}–${wk.ratingHi.toFixed(2)} scale`}>
-          <RatingSpark wk={wk} />
-        </Spark>
-        <Spark title="VOLUME" band={`0–${nf(wk.volHi)} scale`}>
-          <VolumeSpark wk={wk} />
-        </Spark>
-        <div className="basis-full border-t border-dashed pt-2 text-[11px]" style={{ borderColor: C.hair, color: C.muted }}>
-          Rating has moved between {wk.ratingLoActual.toFixed(2)} and {wk.ratingHiActual.toFixed(2)} across these 8 weeks — a spread of {wk.ratingSpread.toFixed(2)} on a 5-point scale.
-          Volume moved from {nf(wk.volLo)} to {nf(wk.volHi)}. The last point is a partial week (hollow / pale) and is not comparable on volume.
-          This strip is a trailing window and does not follow the month filter.
-        </div>
-      </div>
+      {/* trailing-8-week card — one shared, linked readout drives both charts */}
+      <TrailingWeeks wk={wk} />
 
       {/* managers + attention/standouts */}
       <div className="grid grid-cols-1 items-start gap-3.5 xl:grid-cols-[1.35fr_1fr]">
@@ -395,6 +378,13 @@ export default function ReviewsClient() {
             Reply tracking not enabled yet — run migration 0089_review_replies.sql. The tick column is read-only until then.
           </div>
         )}
+        {replyError && (
+          <div role="alert" className="flex items-center gap-2 border-b px-4 py-2 text-[11.5px]" style={{ borderColor: C.hair, background: C.critBg, color: C.critInk }}>
+            <svg viewBox="0 0 24 24" className="h-[14px] w-[14px] shrink-0" fill="none" stroke="currentColor" strokeWidth={2}><circle cx="12" cy="12" r="9" /><path d="M12 8v5M12 16h.01" /></svg>
+            <span>{replyError}</span>
+            <button type="button" onClick={clearError} className="ml-auto font-bold underline">Dismiss</button>
+          </div>
+        )}
 
         <div className="overflow-x-auto">
           <table className="rv-ctab w-full border-collapse">
@@ -406,7 +396,7 @@ export default function ReviewsClient() {
             <tbody>
               {shownComments.length ? shownComments.map((r) => (
                 <CommentRow key={r.apiId} r={r} mark={replies.get(r.apiId)} owed={needsReply(r)}
-                  enabled={replyEnabled} canTick={isAdmin} leaving={csev === "open" && replies.has(r.apiId) && stick.has(r.apiId)}
+                  enabled={replyEnabled} canTick={canReply} leaving={csev === "open" && replies.has(r.apiId) && stick.has(r.apiId)}
                   onToggle={() => onToggleTick(r)} />
               )) : (
                 <tr><Td colSpan={7} className="p-4 text-[11.5px]" style={{ color: C.muted }}>
@@ -464,7 +454,110 @@ function Tile({ label, value, note, tone, selected, onClick, rv }: { label: stri
     </div>
   );
 }
-function Spark({ title, band, children }: { title: string; band: string; children: React.ReactNode }) {
+// ── Trailing-8-week card ──────────────────────────────────────────────────
+// Two charts (rating dots + volume bars) plot the SAME eight weeks and are
+// driven by ONE shared, linked readout — not two floating tooltips. A value is
+// always readable with no interaction: the default state shows the most recent
+// COMPLETE week (there is no hover on a phone or in a screenshot). Hover either
+// chart to preview a week, click/tap to pin, Escape or click-again to unpin;
+// ←/→/Home/End work on the focused group. The card height is fixed across all
+// states — the readout reserves both of its lines permanently.
+const MO_LBL = ["Jan", "Feb", "Mar", "Apr", "May", "Jun", "Jul", "Aug", "Sep", "Oct", "Nov", "Dec"];
+function weekRangeLabel(start: Date): string {
+  const end = new Date(start.getFullYear(), start.getMonth(), start.getDate() + 6);
+  return `${MO_LBL[start.getMonth()]} ${start.getDate()} – ${MO_LBL[end.getMonth()]} ${end.getDate()}`;
+}
+function weekAria(w: { start: Date; count: number; avg: number; partial: boolean }): string {
+  return `Week of ${weekRangeLabel(w.start)}${w.partial ? ", partial week" : ""}: ${w.count ? `${w.avg.toFixed(2)} average rating` : "no reviews"}, ${w.count} review${w.count === 1 ? "" : "s"}.`;
+}
+const GEO = { W: 330, H: 34, gap: 4 };
+
+function TrailingWeeks({ wk }: { wk: ReturnType<typeof deriveWeeks> }) {
+  const weeks = wk.weeks;
+  const n = weeks.length;
+  const lastComplete = (() => { for (let i = n - 1; i >= 0; i--) if (!weeks[i].partial) return i; return n - 1; })();
+  const [hover, setHover] = useState<number | null>(null);
+  const [pin, setPin] = useState<number | null>(null);
+  // Hover previews; a pinned week is the resting state; default is the most
+  // recent complete week. Never null → the readout is never blank.
+  const active = hover ?? pin ?? lastComplete;
+
+  const clamp = (i: number) => Math.max(0, Math.min(n - 1, i));
+  const pinToggle = (i: number) => setPin((p) => (p === i ? null : i));
+  const onKey = (e: React.KeyboardEvent) => {
+    if (e.key === "ArrowLeft") { e.preventDefault(); setPin((p) => clamp((p ?? active) - 1)); }
+    else if (e.key === "ArrowRight") { e.preventDefault(); setPin((p) => clamp((p ?? active) + 1)); }
+    else if (e.key === "Home") { e.preventDefault(); setPin(0); }
+    else if (e.key === "End") { e.preventDefault(); setPin(n - 1); }
+    else if (e.key === "Escape") { e.preventDefault(); setPin(null); }
+  };
+
+  const w = weeks[active];
+  const ratingTxt = w.count ? w.avg.toFixed(2) : "—";
+  const readout = `WEEK OF ${weekRangeLabel(w.start).toUpperCase()}  ·  ${ratingTxt} AVG  ·  ${nf(w.count)} ${w.count === 1 ? "REVIEW" : "REVIEWS"}`;
+
+  return (
+    <div data-rv="trailing" className="mb-4 rounded-[12px] border p-3.5" style={{ background: C.surface, borderColor: C.line }}>
+      {/* header block */}
+      <div className="text-[10.5px] font-bold tracking-[0.08em]" style={{ color: C.muted }}>TRAILING 8 WEEKS</div>
+      <div className="mt-0.5 text-[21px] font-[800] tracking-[-0.5px]">
+        <span data-rv="wavg">{wk.weightedAvg.toFixed(2)}</span><small className="ml-1.5 text-[12px] font-semibold" style={{ color: C.muted }}>avg rating</small>
+      </div>
+      <div className="mt-0.5 text-[11.5px]" style={{ color: C.muted }}>
+        <span data-rv="totvol">{nf(wk.totalVolume)}</span> reviews · ~{nf(Math.round(wk.totalVolume / n))} per week
+      </div>
+
+      {/* shared linked readout — governs both charts. Fixed height (two reserved
+          lines) so the card never changes height between states. */}
+      <div data-rv="readout" aria-live="polite" className="mt-2.5 flex flex-col justify-center rounded-[8px] px-2.5" style={{ height: 46, background: C.railB, border: `1px solid ${C.hair}` }}>
+        <div className="overflow-hidden text-ellipsis whitespace-nowrap text-[12px] font-bold tracking-[0.03em]" style={{ color: C.forestDeep }}>{readout}</div>
+        {/* always present so the row keeps its height whether or not it applies */}
+        <div className="text-[10.5px] font-bold tracking-[0.03em]" style={{ color: C.warnInk, visibility: w.partial ? "visible" : "hidden" }}>· PARTIAL WEEK — VOLUME NOT COMPARABLE</div>
+      </div>
+
+      {/* charts — one focusable group; hover/click/keyboard all drive `active` */}
+      <div
+        role="group"
+        tabIndex={0}
+        aria-label={`Trailing eight weeks of average rating and review volume, ${n} weeks. Left and right arrows move between weeks; Home and End jump to first and last; Enter or click pins a week; Escape clears it. Showing week of ${weekRangeLabel(w.start)}.`}
+        onKeyDown={onKey}
+        onPointerLeave={() => setHover(null)}
+        className="mt-3 flex flex-wrap gap-x-8 gap-y-3 rounded-[8px] p-1 outline-none focus-visible:ring-2 focus-visible:ring-[#35c77f]"
+      >
+        <ChartCol title="RATING" band={`${wk.ratingLo.toFixed(2)}–${wk.ratingHi.toFixed(2)} scale`}>
+          <RatingChart wk={wk} active={active} setHover={setHover} pinToggle={pinToggle} />
+        </ChartCol>
+        <ChartCol title="VOLUME" band={`0–${nf(wk.volHi)} scale`}>
+          <VolumeChart wk={wk} active={active} setHover={setHover} pinToggle={pinToggle} />
+        </ChartCol>
+      </div>
+
+      {/* numbers reachable without colour or pointer */}
+      <table className="sr-only">
+        <caption>Trailing eight weeks — average rating and review volume by week</caption>
+        <thead><tr><th>Week of</th><th>Average rating</th><th>Reviews</th></tr></thead>
+        <tbody>
+          {weeks.map((wa, i) => (
+            <tr key={i}>
+              <td>{weekRangeLabel(wa.start)}{wa.partial ? " (partial week)" : ""}</td>
+              <td>{wa.count ? wa.avg.toFixed(2) : "no reviews"}</td>
+              <td>{wa.count}</td>
+            </tr>
+          ))}
+        </tbody>
+      </table>
+
+      {/* caption */}
+      <div className="mt-3 border-t border-dashed pt-2 text-[11px]" style={{ borderColor: C.hair, color: C.muted }}>
+        Rating has moved between {wk.ratingLoActual.toFixed(2)} and {wk.ratingHiActual.toFixed(2)} across these 8 weeks — a spread of {wk.ratingSpread.toFixed(2)} on a 5-point scale.
+        Volume moved from {nf(wk.volLo)} to {nf(wk.volHi)}. The last point is a partial week (hollow / pale) and is not comparable on volume.
+        This strip is a trailing window and does not follow the month filter.
+      </div>
+    </div>
+  );
+}
+
+function ChartCol({ title, band, children }: { title: string; band: string; children: React.ReactNode }) {
   return (
     <div className="flex flex-col gap-[3px]">
       <div className="flex justify-between gap-3.5 text-[10.5px] font-bold tracking-[0.06em]" style={{ color: C.muted }}>
@@ -474,8 +567,27 @@ function Spark({ title, band, children }: { title: string; band: string; childre
     </div>
   );
 }
-function RatingSpark({ wk }: { wk: ReturnType<typeof deriveWeeks> }) {
-  const W = 330, H = 34, n = wk.weeks.length, gap = 4, bw = (W - gap * (n - 1)) / n;
+
+// Invisible full-height hit target per week — one per column, ≥24px wide (330/8 ≈
+// 41px), spanning the whole column so the 8px dot / thin bar is never the target.
+function HitCols({ wk, setHover, pinToggle }: { wk: ReturnType<typeof deriveWeeks>; setHover: (i: number | null) => void; pinToggle: (i: number) => void }) {
+  const { W, H, gap } = GEO, n = wk.weeks.length, bw = (W - gap * (n - 1)) / n;
+  return (
+    <>
+      {wk.weeks.map((wkk, i) => {
+        const x = Math.max(0, i * (bw + gap) - gap / 2);
+        return (
+          <rect key={i} x={x} y={0} width={bw + gap} height={H} fill="transparent"
+            role="img" aria-label={weekAria(wkk)} style={{ cursor: "pointer" }}
+            onPointerEnter={() => setHover(i)} onPointerMove={() => setHover(i)} onClick={() => pinToggle(i)} />
+        );
+      })}
+    </>
+  );
+}
+
+function RatingChart({ wk, active, setHover, pinToggle }: { wk: ReturnType<typeof deriveWeeks>; active: number; setHover: (i: number | null) => void; pinToggle: (i: number) => void }) {
+  const { W, H, gap } = GEO, n = wk.weeks.length, bw = (W - gap * (n - 1)) / n;
   const lo = wk.ratingLo, hi = wk.ratingHi;
   const pts = wk.weeks.map((w, i) => {
     const x = i * (bw + gap) + bw / 2;
@@ -483,23 +595,40 @@ function RatingSpark({ wk }: { wk: ReturnType<typeof deriveWeeks> }) {
     return [x, Math.max(3, Math.min(H - 3, y))] as const;
   });
   const path = pts.filter((_, i) => wk.weeks[i].count > 0).map((p, i) => `${i ? "L" : "M"}${p[0].toFixed(1)} ${p[1].toFixed(1)}`).join(" ");
+  const aw = wk.weeks[active], ap = pts[active];
   return (
-    <svg width={W} height={H} className="block">
+    <svg width={W} height={H} className="block overflow-visible">
       <path d={path} fill="none" stroke={C.accent} strokeWidth={2} strokeLinecap="round" strokeLinejoin="round" />
       {pts.map((p, i) => wk.weeks[i].count > 0 && (
         <circle key={i} cx={p[0]} cy={p[1]} r={wk.weeks[i].partial ? 2.6 : 3} fill={wk.weeks[i].partial ? "#fff" : C.forest} stroke={C.forest} strokeWidth={1.4} />
       ))}
+      {/* selected: grow + a 2px surface-coloured ring; partial stays hollow.
+          The other seven are left as-is (no dimming). */}
+      {aw.count > 0 && (
+        <g>
+          <circle cx={ap[0]} cy={ap[1]} r={6} fill={C.surface} />
+          <circle cx={ap[0]} cy={ap[1]} r={aw.partial ? 3.6 : 4.2} fill={aw.partial ? "#fff" : C.forest} stroke={C.forest} strokeWidth={aw.partial ? 1.6 : 1.4} />
+        </g>
+      )}
+      <HitCols wk={wk} setHover={setHover} pinToggle={pinToggle} />
     </svg>
   );
 }
-function VolumeSpark({ wk }: { wk: ReturnType<typeof deriveWeeks> }) {
-  const W = 330, H = 34, n = wk.weeks.length, gap = 4, bw = (W - gap * (n - 1)) / n;
+
+function VolumeChart({ wk, active, setHover, pinToggle }: { wk: ReturnType<typeof deriveWeeks>; active: number; setHover: (i: number | null) => void; pinToggle: (i: number) => void }) {
+  const { W, H, gap } = GEO, n = wk.weeks.length, bw = (W - gap * (n - 1)) / n;
+  const barH = (c: number) => Math.max(2, (c / wk.maxVolume) * (H - 6));
+  const aw = wk.weeks[active], ax = active * (bw + gap), ah = barH(aw.count);
   return (
-    <svg width={W} height={H} className="block">
-      {wk.weeks.map((w, i) => {
-        const h = Math.max(2, (w.count / wk.maxVolume) * (H - 6));
-        return <rect key={i} x={i * (bw + gap)} y={H - h} width={bw} height={h} rx={2.5} fill={w.partial ? "#b7e7cd" : C.accent} />;
-      })}
+    <svg width={W} height={H} className="block overflow-visible">
+      {wk.weeks.map((w, i) => (
+        <rect key={i} x={i * (bw + gap)} y={H - barH(w.count)} width={bw} height={barH(w.count)} rx={2.5} fill={w.partial ? "#b7e7cd" : C.accent} />
+      ))}
+      {/* selected: next darker step of the same hue + a 2px surface gap; partial
+          stays pale so selection never makes it look complete. */}
+      <rect x={ax} y={H - ah} width={bw} height={ah} rx={2.5}
+        fill={aw.partial ? "#8fd9b0" : "#1f9d63"} stroke={C.surface} strokeWidth={2} paintOrder="stroke" />
+      <HitCols wk={wk} setHover={setHover} pinToggle={pinToggle} />
     </svg>
   );
 }
