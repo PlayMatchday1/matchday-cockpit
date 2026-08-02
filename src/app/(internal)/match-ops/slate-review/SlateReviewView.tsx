@@ -17,7 +17,7 @@ import { getCancelHeatmap, type SlotRow } from "@/lib/cityStats";
 import { useWeeklyDemand, type DemandWeek } from "@/lib/slateDemand";
 import { fieldCodeMap } from "@/lib/slateFieldCodes";
 import { VISIBLE_CITIES } from "@/lib/types";
-import CitiesMasterScheduleLens from "@/components/CitiesMasterScheduleLens";
+import SlateWeekSchedule from "@/components/SlateWeekSchedule";
 import { fetchLegacyMatchRegistrations } from "@/lib/mdapiMatchesRead";
 import { useFinanceData } from "@/lib/useFinanceData";
 import { detectDppPriceShifts, type DppPriceChange, type DppRegistration } from "@/lib/dppPriceHistory";
@@ -110,18 +110,19 @@ export default function SlateReviewView() {
       {/* games per week strip */}
       <Card>
         <SHead title="GAMES PER WEEK · LAST 8 WEEKS" />
-        <p className="m-0 mb-3.5 text-[12.5px]" style={{ color: C.muted }}>Total spots booked ÷ 18</p>
+        <p className="m-0 mb-3.5 text-[12.5px]" style={{ color: C.muted }}>Total spots booked ÷ 18 · excludes waitlist</p>
         <GamesStrip weekly={weekly} />
       </Card>
 
-      {/* master schedule (reused) + quick capture */}
+      {/* quick capture (in-memory, in-meeting) — separate tool, kept */}
       <Card>
         <SHead title={`MASTER SCHEDULE · ${city}`} />
         <CaptureBar city={city} fields={fields} weekStart={weekStart} />
-        <div className="mt-2">
-          <CitiesMasterScheduleLens city={city} weekStart={weekStart} onWeekStartChange={setWeekStart} />
-        </div>
       </Card>
+
+      {/* week schedule grid — Slate-Review-only rebuild (mockup). Master Schedule
+          page keeps CitiesMasterScheduleLens with its Sync/Changes/Add features. */}
+      <SlateWeekSchedule city={city} weekStart={weekStart} onWeekStartChange={setWeekStart} />
 
       {/* cancel patterns */}
       <CancelCard rows={rows} city={city} fields={fields} />

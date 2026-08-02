@@ -1,0 +1,538 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+<meta charset="utf-8">
+<title>Slate Review — Week Schedule (Austin) · mockup v1</title>
+<style>
+:root{
+  --forest:#0d3b2e; --forest-deep:#072a20; --accent:#35c77f; --logo:#2cdb87;
+  --mint:#e0f2e7; --ink:#12241d; --muted:#626f68; --ok-ink:#12704a;
+  --line:#e6ebe8; --hair:#eff3f1; --chip-bg:#eef3f0; --chip-line:#e2eae5;
+  --surface:#ffffff; --canvas:#f4efe4;
+  --col-bg:#fdfbf5; --col-line:#e8e0cf; --col-dash:#d8d0bd; --slot-bg:#f8f3e7;
+  --slot-line:#eae1cd; --gold-line:#e3c369; --gold-ink:#8a6300; --gold-dot:#d9a521;
+  --dot:#98a29b; --ns-ink:#6f6858; --red:#c8401f;
+  --cx-ink:#8f2d15; --cx-bg:#fbe9e3;
+}
+*{box-sizing:border-box}
+html,body{margin:0;padding:0}
+body{
+  background:var(--canvas); color:var(--ink);
+  font-family:-apple-system,BlinkMacSystemFont,"Segoe UI",Inter,Roboto,Helvetica,Arial,sans-serif;
+  -webkit-font-smoothing:antialiased; padding:28px 24px 56px;
+}
+.ms-wrap{max-width:1720px;margin:0 auto}
+
+/* ---------- provenance note (mockup only, not part of the design) ---------- */
+.ms-note{
+  border:1px dashed var(--col-dash); background:var(--col-bg); color:var(--ns-ink);
+  border-radius:10px; padding:11px 14px; font-size:12.5px; line-height:1.55; margin-bottom:20px;
+}
+.ms-note b{color:var(--ink)}
+
+/* ---------- card ---------- */
+.ms-card{
+  background:var(--surface); border:1px solid var(--line); border-radius:16px;
+  padding:22px 22px 18px; margin-bottom:18px;
+}
+.ms-head{display:flex;align-items:flex-start;justify-content:space-between;gap:24px;margin-bottom:4px}
+.ms-eyebrow{
+  font-size:11.5px;font-weight:700;letter-spacing:.09em;text-transform:uppercase;
+  color:var(--muted);margin:0 0 6px;
+}
+.ms-city{font-size:26px;font-weight:800;letter-spacing:-.015em;color:var(--forest);margin:0;line-height:1.1}
+.ms-sub{font-size:13px;color:var(--muted);margin:8px 0 0;line-height:1.5;max-width:62ch}
+
+/* week nav */
+.ms-navrow{display:flex;align-items:center;gap:8px;margin:16px 0 6px}
+.ms-nav{
+  width:30px;height:30px;border-radius:999px;border:1px solid var(--chip-line);
+  background:var(--surface);color:var(--ns-ink);font-size:14px;line-height:1;
+  display:inline-flex;align-items:center;justify-content:center;cursor:pointer;
+}
+.ms-week{
+  border:1px solid var(--chip-line);background:var(--chip-bg);color:var(--ink);
+  border-radius:999px;padding:6px 15px;font-size:13px;font-weight:700;
+  font-variant-numeric:tabular-nums;
+}
+.ms-today-btn{
+  border:1px solid var(--forest);background:var(--forest);color:#fff;
+  border-radius:999px;padding:6px 15px;font-size:12.5px;font-weight:700;cursor:pointer;
+}
+
+/* counts */
+.ms-counts{display:flex;gap:0;align-items:stretch;flex-wrap:nowrap}
+.ms-count{padding:0 16px;border-left:1px solid var(--hair);text-align:right}
+.ms-count:first-child{border-left:0}
+.ms-count-n{font-size:19px;font-weight:800;color:var(--ink);line-height:1.15;font-variant-numeric:tabular-nums}
+.ms-count-n.is-cx{color:var(--cx-ink)}
+.ms-count-l{font-size:11px;font-weight:600;letter-spacing:.05em;text-transform:uppercase;color:var(--muted);margin-top:3px;white-space:nowrap}
+
+/* toggle */
+.ms-toolbar{display:flex;align-items:center;justify-content:flex-end;margin:2px 0 12px}
+.ms-toggle{display:inline-flex;align-items:center;gap:9px;cursor:pointer;font-size:12.5px;color:var(--ns-ink);font-weight:600}
+.ms-toggle input{position:absolute;opacity:0;width:0;height:0}
+.ms-track{
+  width:36px;height:20px;border-radius:999px;background:var(--chip-bg);
+  border:1px solid var(--chip-line);position:relative;transition:background .12s,border-color .12s;flex:0 0 auto;
+}
+.ms-knob{position:absolute;top:2px;left:2px;width:14px;height:14px;border-radius:999px;background:var(--surface);border:1px solid var(--chip-line);transition:left .12s}
+.ms-toggle input:checked + .ms-track{background:var(--accent);border-color:var(--accent)}
+.ms-toggle input:checked + .ms-track .ms-knob{left:18px;border-color:var(--accent)}
+.ms-toggle input:focus-visible + .ms-track{outline:2px solid var(--forest);outline-offset:2px}
+
+/* ---------- the grid ---------- */
+.ms-grid{display:grid;grid-template-columns:repeat(7,minmax(0,1fr));gap:10px;align-items:start}
+.ms-col{
+  background:var(--col-bg);border:1px solid var(--col-line);border-radius:12px;
+  padding:8px 8px 10px;min-width:0;
+}
+.ms-col.is-today{border-color:var(--accent);box-shadow:inset 3px 0 0 var(--accent)}
+.ms-colhead{display:flex;align-items:baseline;justify-content:space-between;gap:6px;padding:4px 4px 9px;margin-bottom:2px;border-bottom:1px solid var(--col-line)}
+.ms-dow{font-size:11px;font-weight:700;letter-spacing:.08em;text-transform:uppercase;color:var(--muted)}
+.ms-col.is-today .ms-dow{color:var(--ok-ink)}
+.ms-dnum{font-size:14px;font-weight:800;color:var(--ns-ink);font-variant-numeric:tabular-nums}
+.ms-col.is-today .ms-dnum{color:var(--ok-ink)}
+.ms-todaychip{
+  display:inline-block;font-size:9px;font-weight:800;letter-spacing:.08em;
+  text-transform:uppercase;color:var(--ok-ink);background:var(--mint);
+  border-radius:999px;padding:2px 6px;margin-left:6px;vertical-align:1px;
+}
+.ms-stack{display:flex;flex-direction:column;gap:7px;padding-top:9px}
+
+/* ---------- the cell: exactly three rows ---------- */
+.ms-cell{
+  background:var(--slot-bg);border:1px solid var(--slot-line);border-radius:9px;
+  padding:9px 10px 10px;min-width:0;
+}
+.ms-cell-time{
+  font-size:13px;font-weight:800;color:var(--ink);line-height:1.25;
+  font-variant-numeric:tabular-nums;letter-spacing:-.005em;
+}
+.ms-cell-field{
+  font-size:12.5px;font-weight:500;color:var(--ns-ink);line-height:1.32;margin-top:3px;
+  overflow-wrap:break-word;min-height:33px;   /* two lines: keeps every cell the same height */
+}
+.ms-cell-players{
+  display:flex;align-items:center;gap:8px;margin-top:7px;
+}
+.ms-pnum{
+  font-size:12px;font-weight:700;color:var(--ink);font-variant-numeric:tabular-nums;
+  white-space:nowrap;flex:0 0 auto;
+}
+.ms-pnum.is-full{color:var(--ok-ink)}
+.ms-pnum.is-over{color:var(--gold-ink)}
+.ms-meter{
+  height:4px;border-radius:2px;background:var(--mint);overflow:hidden;
+  width:100%;min-width:0;
+}
+.ms-meterfill{height:100%;border-radius:2px;background:var(--accent);display:block}
+.ms-meterfill.is-over{background:var(--gold-dot)}
+.ms-pnote{font-size:12px;font-weight:700;color:var(--muted);font-variant-numeric:tabular-nums;flex:0 0 auto}
+.ms-meter.is-empty{background:transparent;border:1px dashed var(--col-dash);height:5px;border-radius:3px}
+
+/* planned */
+.ms-cell.is-planned{background:var(--surface);border-style:dashed;border-color:var(--col-dash)}
+/* not yet on MatchDay */
+.ms-cell.is-flag{background:var(--surface);border-style:solid;border-color:var(--gold-line)}
+.ms-flagchip{
+  display:inline-block;margin-top:7px;font-size:10px;font-weight:800;letter-spacing:.05em;
+  text-transform:uppercase;color:var(--gold-ink);background:#fbf2dd;border:1px solid var(--gold-line);
+  border-radius:999px;padding:2px 7px;
+}
+/* cancelled, only when toggled on */
+.ms-cell.is-cx{background:var(--cx-bg);border-color:#f0cec2}
+.ms-cell.is-cx .ms-cell-time,.ms-cell.is-cx .ms-cell-field{color:var(--cx-ink);text-decoration:line-through}
+.ms-pnum.is-cx{color:var(--cx-ink)}
+.ms-cell.is-cx .ms-pnote{color:var(--cx-ink)}
+.ms-cell.is-cx .ms-meter.is-empty{border-color:#e0b3a4}
+.ms-meter.is-cx{background:#f2cdc0}
+.ms-meterfill.is-cx{background:var(--cx-ink)}
+
+/* ---------- legend ---------- */
+.ms-legend{display:flex;flex-wrap:wrap;gap:10px 22px;margin-top:16px;padding-top:14px;border-top:1px solid var(--hair)}
+.ms-leg{display:inline-flex;align-items:center;gap:8px;font-size:12px;color:var(--ns-ink);font-weight:600}
+.ms-swatch{width:22px;height:14px;border-radius:4px;border:1px solid var(--slot-line);background:var(--slot-bg);flex:0 0 auto}
+.ms-swatch.sw-planned{background:var(--surface);border-style:dashed;border-color:var(--col-dash)}
+.ms-swatch.sw-flag{background:var(--surface);border-color:var(--gold-line)}
+.ms-swatch.sw-cx{background:var(--cx-bg);border-color:#f0cec2}
+.ms-swatch.sw-today{background:var(--surface);border-color:var(--accent);box-shadow:inset 3px 0 0 var(--accent)}
+
+/* ---------- changes section ---------- */
+.ms-chg-head{display:flex;align-items:baseline;justify-content:space-between;gap:16px;margin-bottom:4px}
+.ms-chg-title{font-size:15px;font-weight:800;color:var(--forest);margin:0;letter-spacing:-.01em}
+.ms-chg-sub{font-size:12.5px;color:var(--muted);margin:6px 0 18px;line-height:1.5;max-width:78ch}
+.ms-grp{margin-bottom:26px}
+.ms-grp:last-child{margin-bottom:0}
+.ms-rows.is-split{display:grid;grid-auto-flow:column;grid-template-rows:repeat(7,auto);grid-template-columns:repeat(2,minmax(0,1fr));column-gap:34px}
+@media (max-width:1100px){ .ms-rows.is-split{display:block} }
+.ms-grp-head{display:flex;align-items:center;gap:9px;margin-bottom:3px}
+.ms-grp-name{font-size:11.5px;font-weight:800;letter-spacing:.07em;text-transform:uppercase;color:var(--ns-ink)}
+.ms-grp-n{
+  font-size:11px;font-weight:800;color:var(--ink);background:var(--chip-bg);
+  border:1px solid var(--chip-line);border-radius:999px;padding:1px 8px;font-variant-numeric:tabular-nums;
+}
+.ms-grp-n.is-cx{color:var(--cx-ink);background:var(--cx-bg);border-color:#f0cec2}
+.ms-grp-note{font-size:12px;color:var(--muted);margin:2px 0 10px;line-height:1.45}
+.ms-rows{border-top:1px solid var(--hair)}
+.ms-row{display:flex;align-items:baseline;gap:12px;padding:9px 2px;border-bottom:1px solid var(--hair)}
+.ms-row-day{
+  font-size:10.5px;font-weight:800;letter-spacing:.07em;text-transform:uppercase;color:var(--muted);
+  flex:0 0 62px;font-variant-numeric:tabular-nums;
+}
+.ms-row-time{font-size:12.5px;font-weight:700;color:var(--ink);flex:0 0 74px;font-variant-numeric:tabular-nums}
+.ms-row-field{font-size:12.5px;font-weight:500;color:var(--ns-ink);min-width:0;line-height:1.35}
+.ms-row.is-drop .ms-row-time{color:var(--cx-ink)}
+.ms-row-tag{
+  margin-left:auto;flex:0 0 auto;font-size:10px;font-weight:800;letter-spacing:.05em;text-transform:uppercase;
+  color:var(--cx-ink);background:var(--cx-bg);border-radius:999px;padding:2px 8px;
+}
+</style>
+</head>
+<body data-palette="#35c77f,#d9a521,#8f2d15">
+<div class="ms-wrap">
+
+  <div class="ms-note" id="msNote">
+    <b>Mockup data note.</b> Every match, time, field and player count below is transcribed from the
+    Jul&nbsp;27&nbsp;–&nbsp;Aug&nbsp;2 Austin screenshot — 59&nbsp;slots, 39&nbsp;ran, 13&nbsp;cancelled,
+    7&nbsp;upcoming, 1&nbsp;dropped. Two things are <b>not</b> from the screenshot: upcoming Sunday slots
+    showed no booking numbers there, so their third row shows a dash; and the <b>not&nbsp;on&nbsp;MatchDay</b> state
+    appears in the legend only, since no Sunday slot was flagged. Cancelled slots keep their booked
+    figure, but only <b>5 of 13</b> have a real one on any screenshot I have (Tue&nbsp;HT&nbsp;6,
+    Fri&nbsp;HT&nbsp;7, Fri&nbsp;RR&nbsp;8, Fri&nbsp;LBJ&nbsp;8, Sat&nbsp;WEST&nbsp;11) &mdash; the other
+    8 show a dash. The live build fills all 13. Also unresolved: an older Cancel&nbsp;Patterns view
+    lists <b>Sun 7:00&nbsp;PM Round Rock as cancelled with 1 booked</b>, while the schedule shows it
+    <b>dropped</b> &mdash; same slot, two answers.
+    The live page header claimed <b>82&nbsp;matches</b> where 59 cells render, and the sync card said
+    <b>12&nbsp;cancelled</b> where 13 cells were struck — both unresolved, flagged separately.
+  </div>
+
+  <!-- ================= WEEK GRID ================= -->
+  <div class="ms-card">
+    <div class="ms-head">
+      <div>
+        <p class="ms-eyebrow">Week schedule</p>
+        <h1 class="ms-city">Austin</h1>
+        <p class="ms-sub">Completed days show what actually ran on MatchDay. Upcoming days show the plan.</p>
+        <div class="ms-navrow">
+          <button class="ms-nav" aria-label="Previous week">&#8249;</button>
+          <span class="ms-week">Jul 27 – Aug 2</span>
+          <button class="ms-nav" aria-label="Next week">&#8250;</button>
+          <button class="ms-today-btn">Today</button>
+        </div>
+      </div>
+      <div class="ms-counts" id="msCounts"></div>
+    </div>
+
+    <div class="ms-toolbar">
+      <label class="ms-toggle">
+        <input type="checkbox" id="msCxToggle">
+        <span class="ms-track"><span class="ms-knob"></span></span>
+        <span>Show cancelled in grid</span>
+      </label>
+    </div>
+
+    <div class="ms-grid" id="msGrid"></div>
+
+    <div class="ms-legend">
+      <span class="ms-leg"><span class="ms-swatch"></span>Ran</span>
+      <span class="ms-leg"><span class="ms-swatch sw-planned"></span>Upcoming</span>
+      <span class="ms-leg"><span class="ms-swatch sw-flag"></span>Not yet on MatchDay</span>
+      <span class="ms-leg"><span class="ms-swatch sw-cx"></span>Cancelled</span>
+      <span class="ms-leg"><span class="ms-swatch sw-today"></span>Today</span>
+    </div>
+  </div>
+
+  <!-- ================= CHANGES FROM LAST WEEK ================= -->
+  <div class="ms-card">
+    <div class="ms-chg-head">
+      <h2 class="ms-chg-title">Changes from last week</h2>
+    </div>
+    <p class="ms-chg-sub">
+      Everything that is on the schedule but did not play as planned. Kept out of the grid above so the grid
+      only ever answers one question: what ran, and what is coming.
+    </p>
+
+    <div class="ms-grp">
+      <div class="ms-grp-head">
+        <span class="ms-grp-name">Dropped</span>
+        <span class="ms-grp-n" id="msDropN">0</span>
+      </div>
+      <p class="ms-grp-note">Ran last week, never made it onto this week&rsquo;s schedule.</p>
+      <div class="ms-rows" id="msDropRows"></div>
+    </div>
+
+    <div class="ms-grp">
+      <div class="ms-grp-head">
+        <span class="ms-grp-name">Cancelled this week</span>
+        <span class="ms-grp-n is-cx" id="msCxN">0</span>
+      </div>
+      <p class="ms-grp-note">Made it onto this week&rsquo;s schedule, then cancelled.</p>
+      <div class="ms-rows is-split" id="msCxRows"></div>
+    </div>
+  </div>
+
+</div>
+
+<script>
+/* ============================================================
+   DATA — transcribed from the Jul 27 – Aug 2 Austin screenshot.
+   state: "ran" | "cx" (cancelled) | "planned" | "flag" (planned, not on MatchDay)
+   ============================================================ */
+const NEMP  = "North East Metropolitan Park";
+const NEMPT = "NEMP Tournaments";
+const OC    = "Onion Creek";
+const LBJ   = "LBJ Early College High School";
+const WEST  = "Westlake HS Field 3";
+const HT    = "The Hattrick L.";
+const HCMS  = "Hill Country Middle School";
+const RR    = "Stadium Field at Round Rock M.C.";
+
+const DAYS = [
+  { dow:"Mon", num:"27", today:false, slots:[
+    {t:"6:30 PM", f:NEMP,  s:"ran", b:22, c:22},
+    {t:"7:00 PM", f:OC,    s:"ran", b:22, c:22},
+    {t:"7:00 PM", f:OC,    s:"ran", b:22, c:22},
+    {t:"7:30 PM", f:NEMP,  s:"ran", b:41, c:40},
+    {t:"7:45 PM", f:LBJ,   s:"ran", b:16, c:18},
+    {t:"7:45 PM", f:LBJ,   s:"ran", b:16, c:18},
+    {t:"8:00 PM", f:WEST,  s:"ran", b:18, c:18},
+    {t:"8:00 PM", f:WEST,  s:"ran", b:16, c:18},
+    {t:"8:30 PM", f:NEMP,  s:"ran", b:40, c:40},
+  ]},
+  { dow:"Tue", num:"28", today:false, slots:[
+    {t:"6:30 PM", f:NEMP,  s:"ran", b:14, c:18},
+    {t:"7:00 PM", f:OC,    s:"ran", b:22, c:22},
+    {t:"7:00 PM", f:OC,    s:"ran", b:22, c:22},
+    {t:"7:00 PM", f:HT,    s:"cx", b:6,  c:18},
+    {t:"7:30 PM", f:NEMPT, s:"ran", b:40, c:40},
+    {t:"7:45 PM", f:LBJ,   s:"cx"},
+    {t:"7:45 PM", f:LBJ,   s:"ran", b:19, c:20},
+    {t:"8:00 PM", f:HT,    s:"ran", b:14, c:16},
+    {t:"8:00 PM", f:HCMS,  s:"cx"},
+    {t:"8:00 PM", f:HCMS,  s:"ran", b:20, c:20},
+    {t:"8:30 PM", f:NEMPT, s:"ran", b:40, c:40},
+  ]},
+  { dow:"Wed", num:"29", today:false, slots:[
+    {t:"7:00 PM", f:OC,    s:"ran", b:22, c:22},
+    {t:"7:00 PM", f:HT,    s:"ran", b:16, c:18},
+    {t:"7:00 PM", f:RR,    s:"ran", b:30, c:32},
+    {t:"8:00 PM", f:WEST,  s:"ran", b:18, c:18},
+    {t:"8:00 PM", f:HT,    s:"ran", b:16, c:18},
+    {t:"8:00 PM", f:WEST,  s:"ran", b:14, c:18},
+  ]},
+  { dow:"Thu", num:"30", today:false, slots:[
+    {t:"6:30 PM", f:NEMP,  s:"ran", b:18, c:20},
+    {t:"7:00 PM", f:OC,    s:"ran", b:22, c:22},
+    {t:"7:00 PM", f:OC,    s:"cx"},
+    {t:"7:30 PM", f:NEMPT, s:"ran", b:40, c:40},
+    {t:"8:00 PM", f:WEST,  s:"ran", b:17, c:18},
+    {t:"8:00 PM", f:WEST,  s:"ran", b:18, c:18},
+    {t:"8:30 PM", f:NEMPT, s:"ran", b:40, c:40},
+  ]},
+  { dow:"Fri", num:"31", today:false, slots:[
+    {t:"6:30 PM", f:NEMP,  s:"ran", b:20, c:22},
+    {t:"7:00 PM", f:HT,    s:"cx", b:7,  c:18},
+    {t:"7:00 PM", f:RR,    s:"cx", b:8,  c:32},
+    {t:"7:00 PM", f:OC,    s:"cx"},
+    {t:"7:00 PM", f:OC,    s:"ran", b:22, c:22},
+    {t:"7:30 PM", f:NEMP,  s:"ran", b:22, c:22},
+    {t:"7:30 PM", f:LBJ,   s:"cx", b:8,  c:18},
+    {t:"7:30 PM", f:LBJ,   s:"cx"},
+    {t:"8:00 PM", f:HT,    s:"ran", b:17, c:18},
+    {t:"8:00 PM", f:WEST,  s:"ran", b:18, c:18},
+    {t:"8:30 PM", f:NEMP,  s:"ran", b:40, c:40},
+  ]},
+  { dow:"Sat", num:"01", today:false, slots:[
+    {t:"9:00 AM", f:OC,    s:"cx"},
+    {t:"9:30 AM", f:LBJ,   s:"cx"},
+    {t:"9:30 AM", f:LBJ,   s:"cx"},
+    {t:"9:30 AM", f:LBJ,   s:"ran", b:16, c:18},
+    {t:"6:30 PM", f:NEMP,  s:"ran", b:21, c:22},
+    {t:"7:00 PM", f:HT,    s:"ran", b:16, c:18},
+    {t:"7:30 PM", f:NEMP,  s:"ran", b:30, c:32},
+    {t:"8:00 PM", f:WEST,  s:"cx", b:11, c:18},
+  ]},
+  { dow:"Sun", num:"02", today:true, slots:[
+    {t:"6:30 PM", f:NEMPT, s:"planned"},
+    {t:"7:00 PM", f:HT,    s:"planned"},
+    {t:"7:30 PM", f:NEMPT, s:"planned"},
+    {t:"7:30 PM", f:LBJ,   s:"planned"},
+    {t:"8:00 PM", f:WEST,  s:"planned"},
+    {t:"8:00 PM", f:WEST,  s:"planned"},
+    {t:"8:00 PM", f:HT,    s:"planned"},
+  ]},
+];
+
+/* Slots that ran last week but are not on this week's schedule.
+   Held OUT of DAYS on purpose — they are not part of this week's grid. */
+const DROPPED = [
+  { dow:"Sun", num:"02", t:"7:00 PM", f:RR },
+];
+
+const plural = (n, one, many) => (n === 1 ? one : many);
+
+function render(){
+  const showCx = document.getElementById("msCxToggle").checked;
+  const neg = window.__neg || {};
+  const grid = document.getElementById("msGrid");
+  grid.innerHTML = "";
+
+  DAYS.forEach(day => {
+    const col = document.createElement("div");
+    col.className = "ms-col" + (day.today ? " is-today" : "");
+    col.setAttribute("data-dow", day.dow.toLowerCase());
+
+    const head = document.createElement("div");
+    head.className = "ms-colhead";
+    head.innerHTML = '<span class="ms-dow">' + day.dow +
+      (day.today ? '<span class="ms-todaychip">Today</span>' : '') +
+      '</span><span class="ms-dnum">' + day.num + '</span>';
+    col.appendChild(head);
+
+    const stack = document.createElement("div");
+    stack.className = "ms-stack";
+
+    day.slots.forEach(sl => {
+      if (sl.s === "cx" && !showCx) return;
+      stack.appendChild(buildCell(sl, neg));
+    });
+
+    // NEG B: leak the dropped slot back into the grid it should never appear in.
+    if (neg.leakDropped){
+      DROPPED.filter(d => d.dow.toLowerCase() === day.dow.toLowerCase()).forEach(d => {
+        stack.appendChild(buildCell({t:d.t, f:d.f, s:"planned"}, neg));
+      });
+    }
+
+    col.appendChild(stack);
+    grid.appendChild(col);
+  });
+
+  renderCounts();
+  renderChanges();
+}
+
+function buildCell(sl, neg){
+  const cell = document.createElement("div");
+  const stateClass = { ran:"", cx:" is-cx", planned:" is-planned", flag:" is-flag" }[sl.s] || "";
+  cell.className = "ms-cell" + stateClass;
+  cell.setAttribute("data-state", sl.s);
+
+  // ROW 1 — time
+  const r1 = document.createElement("div");
+  r1.className = "ms-cell-time";
+  r1.textContent = sl.t;
+  cell.appendChild(r1);
+
+  // ROW 2 — field
+  const r2 = document.createElement("div");
+  r2.className = "ms-cell-field";
+  r2.textContent = sl.f;
+  cell.appendChild(r2);
+
+  // ROW 3 — players
+  const r3 = document.createElement("div");
+  r3.className = "ms-cell-players";
+
+  if ((sl.s === "ran" || sl.s === "cx") && sl.b !== undefined){
+    const isCx = sl.s === "cx";
+    const over = sl.b > sl.c;
+    const full = sl.b >= sl.c;
+    const num = document.createElement("span");
+    num.className = "ms-pnum" + (isCx ? " is-cx" : (over ? " is-over" : (full ? " is-full" : "")));
+    num.textContent = sl.b + " / " + sl.c;
+    num.setAttribute("data-booked", sl.b);
+    num.setAttribute("data-cap", sl.c);
+    r3.appendChild(num);
+
+    const track = document.createElement("div");
+    track.className = "ms-meter" + (isCx ? " is-cx" : "");
+    const fill = document.createElement("span");
+    fill.className = "ms-meterfill" + (isCx ? " is-cx" : (over ? " is-over" : ""));
+    // NEG A: flatten every meter to half width regardless of the data.
+    const pct = neg.flatMeters ? 50 : Math.min(100, (sl.b / sl.c) * 100);
+    fill.style.width = pct + "%";
+    fill.setAttribute("data-pct", pct.toFixed(2));
+    track.appendChild(fill);
+    r3.appendChild(track);
+  } else if (sl.s === "flag"){
+    const chip = document.createElement("span");
+    chip.className = "ms-flagchip";
+    chip.textContent = "Not on MatchDay";
+    r3.appendChild(chip);
+  } else {
+    const note = document.createElement("span");
+    note.className = "ms-pnote";
+    note.textContent = "\u2014";
+    note.title = "Not booked yet";
+    r3.appendChild(note);
+    const track = document.createElement("div");
+    track.className = "ms-meter is-empty";
+    r3.appendChild(track);
+  }
+
+  cell.appendChild(r3);
+  return cell;
+}
+
+function tally(){
+  let ran = 0, cx = 0, upcoming = 0;
+  DAYS.forEach(d => d.slots.forEach(s => {
+    if (s.s === "ran") ran++;
+    else if (s.s === "cx") cx++;
+    else upcoming++;
+  }));
+  return { ran, cx, upcoming, slots: ran + cx + upcoming, dropped: DROPPED.length };
+}
+
+function renderCounts(){
+  const t = tally();
+  const items = [
+    { n:t.slots,    l:plural(t.slots,"slot","slots"),        cx:false },
+    { n:t.ran,      l:"ran",                                  cx:false },
+    { n:t.upcoming, l:"upcoming",                             cx:false },
+    { n:t.cx,       l:"cancelled",                            cx:true  },
+    { n:t.dropped,  l:plural(t.dropped,"dropped","dropped"),  cx:true  },
+  ];
+  document.getElementById("msCounts").innerHTML = items.map(i =>
+    '<div class="ms-count"><div class="ms-count-n' + (i.cx ? " is-cx" : "") + '">' + i.n +
+    '</div><div class="ms-count-l">' + i.l + '</div></div>'
+  ).join("");
+}
+
+function renderChanges(){
+  const t = tally();
+
+  document.getElementById("msDropN").textContent = t.dropped;
+  document.getElementById("msDropRows").innerHTML = DROPPED.map(d =>
+    '<div class="ms-row is-drop" data-kind="dropped">' +
+      '<span class="ms-row-day">' + d.dow + ' ' + d.num + '</span>' +
+      '<span class="ms-row-time">' + d.t + '</span>' +
+      '<span class="ms-row-field">' + d.f + '</span>' +
+      '<span class="ms-row-tag">Dropped</span>' +
+    '</div>'
+  ).join("");
+
+  const cxRows = [];
+  DAYS.forEach(d => d.slots.forEach(s => {
+    if (s.s === "cx") cxRows.push({ dow:d.dow, num:d.num, t:s.t, f:s.f });
+  }));
+  document.getElementById("msCxN").textContent = t.cx;
+  document.getElementById("msCxRows").style.gridTemplateRows =
+    "repeat(" + Math.ceil(cxRows.length / 2) + ", auto)";
+  document.getElementById("msCxRows").innerHTML = cxRows.map(r =>
+    '<div class="ms-row" data-kind="cancelled">' +
+      '<span class="ms-row-day">' + r.dow + ' ' + r.num + '</span>' +
+      '<span class="ms-row-time">' + r.t + '</span>' +
+      '<span class="ms-row-field">' + r.f + '</span>' +
+    '</div>'
+  ).join("");
+}
+
+document.getElementById("msCxToggle").addEventListener("change", render);
+window.__render = render;
+render();
+</script>
+</body>
+</html>
