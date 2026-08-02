@@ -51,6 +51,11 @@ const ALLOWED_PAYMENT_TYPES = new Set([
   "DAILY PAID",
   "MEMBER",
   "FREE_NON_MEMBER",
+  // PROMOCODE (paid_status='PAID' + promocode_id) is now included so the Slate
+  // Review card can show promo as its own revenue component instead of dropping
+  // it. Its revenue is tracked separately in promoRevenue — grossRevenue stays
+  // DAILY-PAID-only, so existing consumers of grossRevenue/net are unaffected.
+  "PROMOCODE",
 ]);
 
 export type MatchPnLStatus =
@@ -88,6 +93,12 @@ export type MatchPnLRow = {
   // DPP gate revenue: sum of match_price_paid for DAILY PAID rows
   // only. Promo and free spots contribute $0.
   grossRevenue: number;
+  // Promo revenue: sum of match_price_paid for PROMOCODE rows (paid_status=PAID
+  // + promocode_id). Almost always ~$0 (comped), but the spots are real. Split
+  // out on the Slate card so a $0 promo line (real, computed) is never confused
+  // with an unknown one. NOT included in grossRevenue.
+  promoRevenue: number;
+  promoSpots: number;
   // Member play valued at the benchmark rate:
   //   memberSpots × (cityBenchMembershipRev / cityBenchMemberSpots),
   // where the benchmark month is the most recent completed calendar
@@ -370,6 +381,8 @@ export async function fetchWeekMatchPnL(
     memberSpots: number;
     freeNonMemberSpots: number;
     grossRevenue: number;
+    promoRevenue: number;
+    promoSpots: number;
     credit: number;
     // Day-aware cost captured at row time so the bucket records the
     // resolved rate (incl. the sibling-cost-null fallback to base
@@ -423,6 +436,8 @@ export async function fetchWeekMatchPnL(
         memberSpots: 0,
         freeNonMemberSpots: 0,
         grossRevenue: 0,
+        promoRevenue: 0,
+        promoSpots: 0,
         credit: 0,
         cost,
         isTournament,
@@ -457,6 +472,11 @@ export async function fetchWeekMatchPnL(
       b.grossRevenue += amount;
       b.credit += Number(r.credit_paid ?? 0) || 0;
       if (amount > 0) b.paidSpots += 1;
+    } else if (pt === "PROMOCODE") {
+      // Promo booking (paid_status=PAID + promocode_id). Revenue is usually $0
+      // (comped) but the spot is real. Tracked separately from grossRevenue.
+      b.promoRevenue += Number(r.match_price_paid ?? 0) || 0;
+      b.promoSpots += 1;
     }
     // pt === "MEMBER" (FREE + active sub) is already counted in
     // memberSpots above; no other increment needed. PROMOCODE rows
@@ -507,6 +527,8 @@ export async function fetchWeekMatchPnL(
       memberSpots: b.memberSpots,
       freeNonMemberSpots: b.freeNonMemberSpots,
       grossRevenue: b.grossRevenue,
+      promoRevenue: b.promoRevenue,
+      promoSpots: b.promoSpots,
       allocatedMemberRev,
       credit: b.credit,
       fieldCost: cost,
@@ -564,6 +586,8 @@ export async function fetchWeekMatchPnL(
       memberSpots: 0,
       freeNonMemberSpots: 0,
       grossRevenue: 0,
+      promoRevenue: 0,
+      promoSpots: 0,
       // Canceled match → no members attended → zero allocation. The
       // upload-time fin_member_spots aggregate already excludes
       // canceled matches' rows, so we stay reconciled with the
