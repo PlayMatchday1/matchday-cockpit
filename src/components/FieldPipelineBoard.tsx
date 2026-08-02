@@ -101,17 +101,60 @@ export default function FieldPipelineBoard() {
 
   const ownersById = useMemo(() => new Map(owners.map((o: KanbanOwner) => [o.id, o])), [owners]);
 
+  // Every person shown on the board — card owners AND to-do assignees — so we
+  // can decide one initials strategy for all avatars.
+  const allPersonNames = useMemo(() => {
+    const s = new Set<string>();
+    for (const c of cards) {
+      if (c.owner_user_id && ownersById.has(c.owner_user_id)) s.add(ownerName(ownersById.get(c.owner_user_id)));
+      else { const l = cardOwnerLabel(c); if (l) s.add(l); }
+    }
+    for (const arr of Object.values(checklists)) for (const it of arr as ChecklistItem[]) {
+      if (it.owner_user_id && ownersById.has(it.owner_user_id)) s.add(ownerName(ownersById.get(it.owner_user_id)));
+    }
+    return s;
+  }, [cards, checklists, ownersById]);
+  // Two-letter initials for everyone iff two distinct people share a first
+  // letter (e.g. Michael/Miguel/Mike all "M") — a single letter would be an
+  // ambiguous badge. Otherwise one letter.
+  const twoLetter = useMemo(() => {
+    const seen = new Map<string, string>();
+    for (const n of allPersonNames) {
+      const f = (n.trim()[0] ?? "").toUpperCase();
+      if (seen.has(f) && seen.get(f) !== n) return true;
+      seen.set(f, n);
+    }
+    return false;
+  }, [allPersonNames]);
+  const initialsFor = useCallback((name: string): string => {
+    const parts = name.trim().split(/\s+/).filter(Boolean);
+    if (!twoLetter) return (parts[0]?.[0] ?? "?").toUpperCase();
+    if (parts.length >= 2) return (parts[0][0] + parts[parts.length - 1][0]).toUpperCase();
+    return (name.trim().slice(0, 2) || "?").toUpperCase();
+  }, [twoLetter]);
+
   const ownerInfo = useCallback(
     (card: KanbanCard): OwnerInfo => {
       if (card.owner_user_id && ownersById.has(card.owner_user_id)) {
         const nm = ownerName(ownersById.get(card.owner_user_id));
-        return { name: nm, initials: (nm.trim()[0] ?? "?").toUpperCase(), unlinked: false };
+        return { name: nm, initials: initialsFor(nm), unlinked: false };
       }
       const label = cardOwnerLabel(card);
-      if (label) return { name: label, initials: (label.trim()[0] ?? "?").toUpperCase(), unlinked: true };
+      if (label) return { name: label, initials: initialsFor(label), unlinked: true };
       return null;
     },
-    [ownersById],
+    [ownersById, initialsFor],
+  );
+  // A to-do's assignee (separate from the card owner). null → render "Unassigned".
+  const assigneeInfo = useCallback(
+    (item: ChecklistItem): { name: string; initials: string } | null => {
+      if (item.owner_user_id && ownersById.has(item.owner_user_id)) {
+        const nm = ownerName(ownersById.get(item.owner_user_id));
+        return { name: nm, initials: initialsFor(nm) };
+      }
+      return null;
+    },
+    [ownersById, initialsFor],
   );
   const cityOf = (card: KanbanCard) => cityLabel(cardCity(card));
   const openTodos = (card: KanbanCard) => (checklists[card.id] ?? []).filter((i: ChecklistItem) => !i.done).length;
@@ -380,14 +423,14 @@ export default function FieldPipelineBoard() {
                           </button>
                           {!shut && (
                             <div className="flex flex-col gap-[7px]">
-                              {list.map((c) => <Card key={c.id} card={c} inGroup owner={ownerInfo(c)} cityDisplay={cityLabel(cardCity(c))} open={openTodos(c)} done={doneTodos(c)} showTodos={showTodos} checklist={checklists[c.id] ?? []} onDragStart={() => { draggingId.current = c.id; }} onClick={() => setModal({ mode: "edit", card: c })} />)}
+                              {list.map((c) => <Card key={c.id} card={c} inGroup owner={ownerInfo(c)} cityDisplay={cityLabel(cardCity(c))} open={openTodos(c)} done={doneTodos(c)} showTodos={showTodos} checklist={checklists[c.id] ?? []} assigneeFor={assigneeInfo} onDragStart={() => { draggingId.current = c.id; }} onClick={() => setModal({ mode: "edit", card: c })} />)}
                             </div>
                           )}
                         </div>
                       );
                     })
                   ) : (
-                    show.map((c) => <Card key={c.id} card={c} inGroup={false} owner={ownerInfo(c)} cityDisplay={cityLabel(cardCity(c))} open={openTodos(c)} done={doneTodos(c)} showTodos={showTodos} checklist={checklists[c.id] ?? []} onDragStart={() => { draggingId.current = c.id; }} onClick={() => setModal({ mode: "edit", card: c })} />)
+                    show.map((c) => <Card key={c.id} card={c} inGroup={false} owner={ownerInfo(c)} cityDisplay={cityLabel(cardCity(c))} open={openTodos(c)} done={doneTodos(c)} showTodos={showTodos} checklist={checklists[c.id] ?? []} assigneeFor={assigneeInfo} onDragStart={() => { draggingId.current = c.id; }} onClick={() => setModal({ mode: "edit", card: c })} />)
                   )}
                 </div>
               </section>
@@ -452,6 +495,7 @@ function Card({
   done,
   showTodos,
   checklist,
+  assigneeFor,
   onDragStart,
   onClick,
 }: {
@@ -463,6 +507,7 @@ function Card({
   done: number;
   showTodos: boolean;
   checklist: ChecklistItem[];
+  assigneeFor: (item: ChecklistItem) => { name: string; initials: string } | null;
   onDragStart: () => void;
   onClick: () => void;
 }) {
@@ -538,12 +583,27 @@ function Card({
       )}
       {showT && (
         <div className="mt-2 flex flex-col gap-[5px] border-t pt-[7px]" style={{ borderColor: "#eff3f1" }}>
-          {checklist.filter((i) => !i.done).map((i) => (
-            <div key={i.id} className="flex items-start gap-[7px] text-[11.5px] leading-[1.35]" style={{ color: "#3a4d44" }}>
-              <span className="mt-px h-[13px] w-[13px] flex-none rounded border-[1.5px]" style={{ borderColor: "#b9c6bf", background: "#fff" }} />
-              <span className="min-w-0 flex-1">{i.text}</span>
-            </div>
-          ))}
+          {checklist.filter((i) => !i.done).map((i) => {
+            // Assignee sits to the right of the to-do text: same avatar-initial +
+            // name treatment as the card owner, one step smaller and quieter so
+            // the owner still reads as the card's primary person. The to-do TEXT
+            // truncates (with a title) when tight; the assignee name never does.
+            const a = assigneeFor(i);
+            return (
+              <div key={i.id} className="flex items-center gap-[7px] text-[11.5px] leading-[1.35]" style={{ color: "#3a4d44" }}>
+                <span className="h-[13px] w-[13px] flex-none rounded border-[1.5px]" style={{ borderColor: "#b9c6bf", background: "#fff" }} />
+                <span className="min-w-0 flex-1 overflow-hidden text-ellipsis whitespace-nowrap" title={i.text}>{i.text}</span>
+                {a ? (
+                  <span className="flex flex-none items-center gap-[4px]" title={a.name}>
+                    <span className="flex h-[15px] w-[15px] flex-none items-center justify-center rounded-full border text-[8px] font-bold" style={{ background: "#eef3f0", borderColor: "#e2eae5", color: "#46584f" }}>{a.initials}</span>
+                    <span className="whitespace-nowrap text-[10.5px]" style={{ color: "#626f68" }}>{a.name}</span>
+                  </span>
+                ) : (
+                  <span className="flex-none text-[10.5px] italic" style={{ color: "#626f68" }}>Unassigned</span>
+                )}
+              </div>
+            );
+          })}
           {done > 0 && <div className="text-[11px]" style={{ color: "#8a9992" }}>{done} done</div>}
         </div>
       )}
