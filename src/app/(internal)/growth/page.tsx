@@ -7,7 +7,6 @@ import CitiesLegend from "@/components/CitiesLegend";
 import CitiesCancellationsLens from "@/components/CitiesCancellationsLens";
 import CitiesExecHero from "@/components/CitiesExecHero";
 import CitiesLensNav, { type CityLens } from "@/components/CitiesLensNav";
-import CitiesMembershipLens from "@/components/CitiesMembershipLens";
 import CitiesUsersLens from "@/components/CitiesUsersLens";
 import { CityHealthPill } from "@/components/StatusPill";
 import MiniBarSparkline from "@/components/MiniBarSparkline";
@@ -37,7 +36,6 @@ type WeekScope = "current" | "last";
 const VALID_LENSES: CityLens[] = [
   "overview",
   "users",
-  "membership",
   "cancellations",
 ];
 
@@ -91,7 +89,6 @@ function CitiesIndexContent() {
 
       {lens === "overview" && <OverviewLens />}
       {lens === "users" && <CitiesUsersLens />}
-      {lens === "membership" && <CitiesMembershipLens />}
       {lens === "cancellations" && <CitiesCancellationsLens />}
     </>
   );

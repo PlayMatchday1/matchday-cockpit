@@ -130,6 +130,14 @@ const nextConfig: NextConfig = {
         destination: "/match-ops/reviews",
         permanent: true,
       },
+      // Membership moved out of the Growth lens to its own top-level tab on
+      // 2026-08-02. Old ?tab=membership deep links (incl. ?month=) redirect.
+      {
+        source: "/growth",
+        has: [{ type: "query", key: "tab", value: "membership" }],
+        destination: "/membership",
+        permanent: true,
+      },
       // Field Ops ?fo= deep links (inventory / veo / community / fields) are
       // redirected in src/proxy.ts, which can strip the fo param cleanly — a
       // config redirect here would pass ?fo= through and loop on fo=fields.

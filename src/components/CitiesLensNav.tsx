@@ -3,16 +3,16 @@
 // Master Schedule (master-schedule) and Field Ops (fields) moved to Match Ops
 // on 2026-07-31 — one entrance, so they left this nav. Their ?tab= URLs
 // permanently redirect to /match-ops/* (see next.config).
+// Membership moved to its own top-level tab (/membership) on 2026-08-02;
+// ?tab=membership permanently redirects there (see next.config).
 export type CityLens =
   | "overview"
   | "users"
-  | "membership"
   | "cancellations";
 
 const LENSES: { value: CityLens; label: string }[] = [
   { value: "overview", label: "Overview" },
   { value: "users", label: "Users" },
-  { value: "membership", label: "Membership" },
   { value: "cancellations", label: "Cancellations" },
 ];
 
