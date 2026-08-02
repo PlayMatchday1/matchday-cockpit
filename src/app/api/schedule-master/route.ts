@@ -113,13 +113,23 @@ export async function GET(req: Request) {
   }
   const weekEnd = addDays(weekStart, 6);
 
-  const rowsRes = await supabase
+  // Exclude soft-deleted plan rows (migration 0091). Forward-compatible: if the
+  // deleted_at column doesn't exist yet, retry without the filter so this route
+  // (and every consumer, incl. Slate Review) keeps working pre-migration.
+  const SM_COLS = "id, city, venue, detail, match_date, match_time, max_spots, mdapi_field_id, source";
+  let rowsRes = await supabase
     .from("schedule_master")
-    .select(
-      "id, city, venue, detail, match_date, match_time, max_spots, mdapi_field_id, source",
-    )
+    .select(SM_COLS)
+    .is("deleted_at", null)
     .gte("match_date", isoDate(weekStart))
     .lte("match_date", isoDate(weekEnd));
+  if (rowsRes.error && /deleted_at|column|42703/i.test(rowsRes.error.message || "")) {
+    rowsRes = await supabase
+      .from("schedule_master")
+      .select(SM_COLS)
+      .gte("match_date", isoDate(weekStart))
+      .lte("match_date", isoDate(weekEnd));
+  }
   if (rowsRes.error) {
     console.error("[schedule-master] db error", rowsRes.error);
     return Response.json({ error: "DB error" }, { status: 500 });
