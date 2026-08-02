@@ -17,7 +17,7 @@ const MAX_ROWS = 500;
 export default function ChurnPanel({ data }: { data: GrowthData }) {
   const cities = ["All cities", ...data.cities];
   const [city, setCity] = useState("All cities");
-  const [threshold, setThreshold] = useState<number>(30);
+  const [threshold, setThreshold] = useState<number>(90); // matches the design default
 
   const fields = useMemo(() => {
     const set = new Set<string>();

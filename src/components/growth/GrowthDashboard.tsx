@@ -99,7 +99,9 @@ function Header() {
   return (
     <div className={styles.header}>
       <h1 className={styles.title}>Growth</h1>
-      <p className={styles.subtitle}>Downloads, registrations, play, revenue and retention across the network.</p>
+      <p className={styles.subtitle}>
+        Follow the player journey from app download to repeat play, then measure retention and identify churn risk.
+      </p>
     </div>
   );
 }

@@ -144,6 +144,19 @@ export default function CohortPanel({ data }: { data: GrowthData }) {
               </tr>
             ))}
           </tbody>
+          <tfoot>
+            <tr>
+              <td className={`${styles.cohortCell} ${styles.cohortRowHead}`}>
+                Average
+                <div className={styles.cohortSize}>observed cohorts</div>
+              </td>
+              {offsets.map((o) => (
+                <td key={o} className={`${styles.cohortCell} ${styles.divMid}`} style={{ fontWeight: 800 }}>
+                  {o === 0 ? "100%" : fmtPct(colMean[o] ?? 0, 0)}
+                </td>
+              ))}
+            </tr>
+          </tfoot>
         </table>
       </div>
 

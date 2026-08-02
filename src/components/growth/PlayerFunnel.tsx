@@ -65,8 +65,8 @@ export default function PlayerFunnel({ data }: { data: GrowthData }) {
     <div className={styles.card}>
       <div className={styles.cardHead}>
         <div>
-          <div className={styles.cardTitle}>Player funnel</div>
-          <div className={styles.cardSub}>{label}</div>
+          <div className={styles.cardTitle}>Player funnel comparison</div>
+          <div className={styles.cardSub}>{label} · counts and step-to-step conversion rates</div>
         </div>
         <div className={styles.segmented} role="tablist" aria-label="Funnel period">
           {(
