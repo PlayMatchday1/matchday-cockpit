@@ -1,0 +1,512 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+<meta charset="utf-8">
+<title>Master Schedule — Clubhouse ↔ MatchDay reconciliation · mockup v1</title>
+<style>
+:root{
+  --forest:#0d3b2e; --accent:#35c77f; --mint:#e0f2e7; --ink:#12241d; --muted:#626f68;
+  --ok-ink:#12704a; --line:#e6ebe8; --hair:#eff3f1; --chip-bg:#eef3f0; --chip-line:#e2eae5;
+  --surface:#ffffff; --canvas:#f4efe4; --col-bg:#fdfbf5; --col-line:#e8e0cf; --col-dash:#d8d0bd;
+  --slot-bg:#f8f3e7; --slot-line:#eae1cd; --gold-line:#e3c369; --gold-ink:#8a6300;
+  --gold-dot:#d9a521; --gold-bg:#fbf2dd; --ns-ink:#6f6858;
+  --cx-ink:#8f2d15; --cx-bg:#fbe9e3;
+}
+*{box-sizing:border-box}
+html,body{margin:0;padding:0}
+body{
+  background:var(--canvas);color:var(--ink);
+  font-family:-apple-system,BlinkMacSystemFont,"Segoe UI",Inter,Roboto,Helvetica,Arial,sans-serif;
+  -webkit-font-smoothing:antialiased;padding:28px 24px 60px;
+}
+.mx-wrap{max-width:1760px;margin:0 auto}
+
+.mx-note{
+  border:1px dashed var(--col-dash);background:var(--col-bg);color:var(--ns-ink);
+  border-radius:10px;padding:11px 14px;font-size:12.5px;line-height:1.55;margin-bottom:20px;
+}
+.mx-note b{color:var(--ink)}
+
+.mx-card{background:var(--surface);border:1px solid var(--line);border-radius:16px;padding:22px;margin-bottom:18px}
+.mx-h1{font-size:26px;font-weight:800;letter-spacing:-.015em;color:var(--forest);margin:0;line-height:1.1}
+.mx-sub{font-size:13px;color:var(--muted);margin:8px 0 0;line-height:1.5;max-width:82ch}
+.mx-navrow{display:flex;align-items:center;gap:8px;margin:16px 0 0;flex-wrap:wrap}
+.mx-nav{width:30px;height:30px;border-radius:999px;border:1px solid var(--chip-line);background:var(--surface);
+  color:var(--ns-ink);font-size:14px;line-height:1;display:inline-flex;align-items:center;justify-content:center;cursor:pointer}
+.mx-week{border:1px solid var(--chip-line);background:var(--chip-bg);color:var(--ink);border-radius:999px;
+  padding:6px 15px;font-size:13px;font-weight:700;font-variant-numeric:tabular-nums}
+.mx-btn{border:1px solid var(--chip-line);background:var(--surface);color:var(--ink);border-radius:999px;
+  padding:6px 15px;font-size:12.5px;font-weight:700;cursor:pointer}
+.mx-btn.is-dark{border-color:var(--forest);background:var(--forest);color:#fff}
+.mx-btn.is-go{border-color:var(--ok-ink);background:var(--ok-ink);color:#fff}
+
+/* reconciliation summary */
+.mx-recon{display:flex;flex-wrap:wrap;gap:0;margin-top:18px;border-top:1px solid var(--hair);padding-top:16px}
+.mx-rc{padding:0 20px;border-left:1px solid var(--hair)}
+.mx-rc:first-child{border-left:0;padding-left:0}
+.mx-rc-n{font-size:20px;font-weight:800;line-height:1.15;font-variant-numeric:tabular-nums;color:var(--ink)}
+.mx-rc-n.is-ch{color:var(--gold-ink)} .mx-rc-n.is-md{color:var(--ok-ink)} .mx-rc-n.is-dup{color:var(--forest)}
+.mx-rc-l{font-size:11px;font-weight:600;letter-spacing:.05em;text-transform:uppercase;color:var(--muted);margin-top:3px;white-space:nowrap}
+
+/* filter bar */
+.mx-filter{display:flex;align-items:center;gap:14px;flex-wrap:wrap;margin-top:16px;padding-top:15px;border-top:1px solid var(--hair)}
+.mx-flabel{font-size:11px;font-weight:700;letter-spacing:.08em;text-transform:uppercase;color:var(--muted)}
+.mx-chips{display:flex;gap:6px;flex-wrap:wrap}
+.mx-chip{font-size:12.5px;font-weight:700;border-radius:999px;padding:5px 14px;cursor:pointer;
+  border:1px solid var(--chip-line);background:var(--surface);color:var(--ns-ink)}
+.mx-chip.is-on{background:var(--forest);border-color:var(--forest);color:#ffffff}
+.mx-toggle{display:inline-flex;align-items:center;gap:9px;cursor:pointer;font-size:12.5px;color:var(--ns-ink);
+  font-weight:600;margin-left:auto}
+.mx-toggle input{position:absolute;opacity:0;width:0;height:0}
+.mx-track{width:36px;height:20px;border-radius:999px;background:var(--chip-bg);border:1px solid var(--chip-line);
+  position:relative;flex:0 0 auto;transition:background .12s,border-color .12s}
+.mx-knob{position:absolute;top:2px;left:2px;width:14px;height:14px;border-radius:999px;background:var(--surface);
+  border:1px solid var(--chip-line);transition:left .12s}
+.mx-toggle input:checked + .mx-track{background:var(--gold-dot);border-color:var(--gold-dot)}
+.mx-toggle input:checked + .mx-track .mx-knob{left:18px;border-color:var(--gold-dot)}
+.mx-toggle input:focus-visible + .mx-track{outline:2px solid var(--forest);outline-offset:2px}
+
+/* state reference */
+.mx-ref{display:grid;grid-template-columns:repeat(4,minmax(0,1fr));gap:12px;margin-top:4px}
+@media (max-width:1200px){.mx-ref{grid-template-columns:repeat(2,minmax(0,1fr))}}
+.mx-ref-item .mx-ref-cap{font-size:11.5px;color:var(--muted);line-height:1.45;margin-top:7px;font-weight:500}
+.mx-ref-item .mx-ref-cap b{color:var(--ink);font-weight:700;display:block;margin-bottom:2px}
+
+/* city card */
+.mx-city-head{display:flex;align-items:center;justify-content:space-between;gap:16px;margin-bottom:14px}
+.mx-city{font-size:19px;font-weight:800;color:var(--forest);margin:0;letter-spacing:-.01em}
+.mx-tags{display:flex;gap:7px;flex-wrap:wrap}
+.mx-tag{font-size:11px;font-weight:800;letter-spacing:.03em;border-radius:999px;padding:3px 10px;
+  background:var(--chip-bg);border:1px solid var(--chip-line);color:var(--ink);font-variant-numeric:tabular-nums}
+.mx-tag.is-ch{background:var(--gold-bg);border-color:var(--gold-line);color:var(--gold-ink)}
+.mx-tag.is-md{background:var(--mint);border-color:#b9dfc9;color:var(--ok-ink)}
+.mx-tag.is-dup{background:var(--forest);border-color:var(--forest);color:#ffffff}
+
+/* grid */
+.mx-grid{display:grid;grid-template-columns:repeat(7,minmax(0,1fr));gap:10px;align-items:start}
+.mx-col{background:var(--col-bg);border:1px solid var(--col-line);border-radius:12px;padding:8px 8px 10px;min-width:0}
+.mx-col.is-today{border-color:var(--accent);box-shadow:inset 3px 0 0 var(--accent)}
+.mx-colhead{display:flex;align-items:baseline;justify-content:space-between;gap:6px;
+  padding:4px 4px 9px;border-bottom:1px solid var(--col-line)}
+.mx-dow{font-size:11px;font-weight:700;letter-spacing:.08em;text-transform:uppercase;color:var(--muted)}
+.mx-col.is-today .mx-dow{color:var(--ok-ink)}
+.mx-dnum{font-size:14px;font-weight:800;color:var(--ns-ink);font-variant-numeric:tabular-nums}
+.mx-todaychip{display:inline-block;font-size:9px;font-weight:800;letter-spacing:.08em;text-transform:uppercase;
+  color:var(--ok-ink);background:var(--mint);border-radius:999px;padding:2px 6px;margin-left:6px;vertical-align:1px}
+.mx-stack{display:flex;flex-direction:column;gap:7px;padding-top:9px}
+.mx-empty{font-size:12px;color:var(--muted);padding:14px 4px;font-weight:600}
+
+/* the cell — always exactly three rows */
+.mx-cell{background:var(--slot-bg);border:1px solid var(--slot-line);border-radius:9px;padding:9px 10px 10px;min-width:0}
+.mx-cell-time{font-size:13px;font-weight:800;color:var(--ink);line-height:1.25;font-variant-numeric:tabular-nums;
+  display:flex;align-items:baseline;gap:6px;justify-content:space-between}
+.mx-cell-field{font-size:12.5px;font-weight:500;color:var(--ns-ink);line-height:1.32;margin-top:3px;
+  overflow-wrap:break-word;min-height:33px}
+.mx-cell-r3{display:flex;align-items:center;gap:7px;margin-top:7px;min-height:17px}
+
+/* row 3 — completed days: players + meter */
+.mx-pnum{font-size:12px;font-weight:700;color:var(--ink);font-variant-numeric:tabular-nums;white-space:nowrap;flex:0 0 auto}
+.mx-pnum.is-full{color:var(--ok-ink)}
+.mx-pnum.is-over{color:var(--gold-ink)}
+.mx-pnum.is-cx{color:var(--cx-ink)}
+.mx-meter{height:4px;border-radius:2px;background:var(--mint);overflow:hidden;width:100%;min-width:0}
+.mx-meterfill{height:100%;border-radius:2px;background:var(--accent);display:block}
+.mx-meterfill.is-over{background:var(--gold-dot)}
+.mx-meter.is-empty{background:transparent;border:1px dashed var(--col-dash);height:5px;border-radius:3px}
+.mx-meter.is-cx{background:#f2cdc0}
+.mx-meterfill.is-cx{background:var(--cx-ink)}
+
+/* row 3 — future days: source state */
+.mx-src{font-size:10px;font-weight:800;letter-spacing:.04em;text-transform:uppercase;border-radius:999px;
+  padding:2px 8px;white-space:nowrap}
+.mx-src.is-both{color:var(--muted);background:var(--chip-bg);border:1px solid var(--chip-line)}
+.mx-src.is-ch{color:var(--gold-ink);background:var(--gold-bg);border:1px solid var(--gold-line)}
+.mx-src.is-md{color:var(--ok-ink);background:var(--mint);border:1px solid #b9dfc9}
+
+/* cell state chrome */
+.mx-cell.st-ch{border:2px solid var(--gold-dot);background:var(--surface);padding:8px 9px 9px}
+.mx-cell.st-md{border:2px solid var(--ok-ink);background:var(--surface);padding:8px 9px 9px}
+.mx-cell.st-cx{background:var(--cx-bg);border-color:#f0cec2}
+.mx-cell.st-cx .mx-cell-time .mx-t,.mx-cell.st-cx .mx-cell-field{color:var(--cx-ink);text-decoration:line-through}
+
+/* markers on the time row */
+.mx-mk{display:inline-flex;gap:5px;flex:0 0 auto}
+.mx-x{font-size:10px;font-weight:800;color:var(--ns-ink);background:var(--chip-bg);border:1px solid var(--chip-line);
+  border-radius:999px;padding:1px 6px;font-variant-numeric:tabular-nums}
+.mx-dup{font-size:10px;font-weight:800;color:#ffffff;background:var(--forest);border:1px solid var(--forest);
+  border-radius:999px;padding:1px 6px;letter-spacing:.03em}
+
+/* per-cell action */
+.mx-act{margin-top:7px;display:flex;gap:5px;flex-wrap:wrap}
+.mx-abtn{font-size:10px;font-weight:700;border-radius:6px;padding:3px 8px;cursor:pointer;line-height:1.25;
+  border:1px solid var(--chip-line);background:var(--surface);color:var(--ink);white-space:nowrap}
+.mx-abtn.is-gold{border-color:var(--gold-line);background:var(--gold-bg);color:var(--gold-ink)}
+.mx-abtn.is-green{border-color:#b9dfc9;background:var(--mint);color:var(--ok-ink)}
+
+/* legend */
+.mx-legend{display:flex;flex-wrap:wrap;gap:10px 22px;margin-top:16px;padding-top:14px;border-top:1px solid var(--hair)}
+.mx-leg{display:inline-flex;align-items:center;gap:8px;font-size:12px;color:var(--ns-ink);font-weight:600}
+.mx-legn{font-size:11px;font-weight:800;font-variant-numeric:tabular-nums;color:var(--ink);
+  background:var(--chip-bg);border:1px solid var(--chip-line);border-radius:999px;padding:1px 7px;margin-left:2px}
+.mx-legn.is-zero{color:var(--muted)}
+.mx-sw{width:22px;height:14px;border-radius:4px;border:1px solid var(--slot-line);background:var(--slot-bg);flex:0 0 auto}
+.mx-sw.sw-ch{background:var(--surface);border:2px solid var(--gold-dot)}
+.mx-sw.sw-md{background:var(--surface);border:2px solid var(--ok-ink)}
+.mx-sw.sw-cx{background:var(--cx-bg);border-color:#f0cec2}
+.mx-sw.sw-today{background:var(--surface);border-color:var(--accent);box-shadow:inset 3px 0 0 var(--accent)}
+
+.mx-sect{font-size:11.5px;font-weight:800;letter-spacing:.09em;text-transform:uppercase;color:var(--muted);margin:0 0 10px}
+</style>
+</head>
+<body>
+<div class="mx-wrap">
+
+  <div class="mx-note" id="mxNote">
+    <b>Mockup data note.</b> The Aug&nbsp;3&ndash;9 grid is transcribed from the live Master Schedule screenshot:
+    Atlanta 5 slots, Austin 62 slots of which <b>49 are on MatchDay</b> and <b>13 are in Clubhouse only</b>
+    (62&nbsp;&minus;&nbsp;13&nbsp;=&nbsp;49, the count the live header prints). Every session is its own cell
+    here &mdash; the live page collapses two sessions at one slot into a single &times;2 row, which hides the
+    fact that the two can have different sources. Times are re-sorted chronologically; the live page puts
+    9&nbsp;AM after 8&nbsp;PM on Saturday.<br>
+    Not from the screenshot: booking counts for future slots (the live build appends booked/capacity once a
+    MatchDay match exists), and the <b>MatchDay only</b> state, which has no example in current data because
+    the page has no such state yet &mdash; it renders as a 2px green <code>#12704a</code> border, a
+    <b>MatchDay only</b> chip, and an <b>Add to Clubhouse</b> button. That is the only action anywhere on this
+    page, because MatchDay cannot be written to from Clubhouse; Clubhouse-only slots are flagged and nothing
+    more. Completed days render exactly as in the Slate&nbsp;Review mockup, so they are not repeated here.
+    The city filter lists the two cities legible in the screenshot; the live page has seven.
+  </div>
+
+  <!-- ============ PAGE HEADER ============ -->
+  <div class="mx-card">
+    <h1 class="mx-h1">Master Schedule</h1>
+    <p class="mx-sub">Completed days mirror MatchDay exactly. Upcoming days show every slot in either system, so you can
+      pull what MatchDay has into Clubhouse and clear what Clubhouse has that MatchDay does not.</p>
+    <div class="mx-navrow">
+      <button class="mx-nav" aria-label="Previous week">&#8249;</button>
+      <span class="mx-week">Aug 3 – Aug 9</span>
+      <button class="mx-nav" aria-label="Next week">&#8250;</button>
+      <button class="mx-btn is-dark">Today</button>
+      <button class="mx-btn">Copy last week</button>
+      <button class="mx-btn is-go">Reconcile now</button>
+      <button class="mx-btn">+ Add session</button>
+    </div>
+    <div class="mx-recon" id="mxRecon"></div>
+    <div class="mx-filter">
+      <span class="mx-flabel">City</span>
+      <div class="mx-chips" id="mxCityChips"></div>
+      <label class="mx-toggle">
+        <input type="checkbox" id="mxExcOnly">
+        <span class="mx-track"><span class="mx-knob"></span></span>
+        <span>Only slots needing a decision</span>
+      </label>
+    </div>
+  </div>
+
+  <!-- ============ CITY GRIDS ============ -->
+  <div id="mxCities"></div>
+
+</div>
+
+<script>
+/* ---------------- fields ---------------- */
+const NEMP="NEMP", OC="Onion Creek", LBJ="LBJ Early College High School",
+      WEST="Westlake HS Field 3", HT="Hattrick", HCMS="Hill Country Middle School",
+      RR="Round Rock", PRUMC="PRUMC";
+
+/* ---------------- Aug 3-9, transcribed then chronologically sorted ----------------
+   src: "both" = in Clubhouse and on MatchDay | "ch" = Clubhouse only | "md" = MatchDay only
+   n:   sessions at this slot (the live page's x2 chip)
+   dup: flagged as a possible duplicate (the live page's gold dot)                      */
+const WEEK = { label:"Aug 3 – Aug 9", days:[
+  {dow:"Mon",num:"03"},{dow:"Tue",num:"04"},{dow:"Wed",num:"05"},{dow:"Thu",num:"06"},
+  {dow:"Fri",num:"07"},{dow:"Sat",num:"08"},{dow:"Sun",num:"09"}
+]};
+
+const CITIES = [
+  { name:"Atlanta", slots:[
+    [ {t:"7:00 PM",f:PRUMC,src:"both"} ],
+    [ {t:"7:00 PM",f:PRUMC,src:"both"} ],
+    [],
+    [ {t:"7:00 PM",f:PRUMC,src:"both"} ],
+    [ {t:"7:00 PM",f:PRUMC,src:"both"} ],
+    [],
+    [ {t:"6:00 PM",f:PRUMC,src:"both"} ],
+  ]},
+  { name:"Austin", slots:[
+    /* Mon 03 */ [
+      {t:"6:30 PM",f:NEMP,src:"both"},
+      {t:"7:00 PM",f:OC,  src:"both",n:2},
+      {t:"7:30 PM",f:NEMP,src:"both"},
+      {t:"7:45 PM",f:LBJ, src:"both",n:2,dup:true},
+      {t:"8:00 PM",f:WEST,src:"ch"},
+      {t:"8:00 PM",f:WEST,src:"ch"},
+      {t:"8:00 PM",f:WEST,src:"ch"},
+      {t:"8:30 PM",f:NEMP,src:"both"},
+    ],
+    /* Tue 04 */ [
+      {t:"6:30 PM",f:NEMP,src:"both"},
+      {t:"7:00 PM",f:OC,  src:"both",n:2},
+      {t:"7:00 PM",f:HT,  src:"both"},
+      {t:"7:30 PM",f:NEMP,src:"both"},
+      {t:"7:45 PM",f:LBJ, src:"both",n:2,dup:true},
+      {t:"8:00 PM",f:HT,  src:"both"},
+      {t:"8:00 PM",f:HCMS,src:"ch"},
+      {t:"8:00 PM",f:HCMS,src:"ch"},
+      {t:"8:30 PM",f:NEMP,src:"both"},
+    ],
+    /* Wed 05 */ [
+      {t:"7:00 PM",f:HT,  src:"both"},
+      {t:"7:00 PM",f:RR,  src:"both"},
+      {t:"7:00 PM",f:OC,  src:"both"},
+      {t:"8:00 PM",f:HT,  src:"both"},
+      {t:"8:00 PM",f:WEST,src:"ch"},
+      {t:"8:00 PM",f:WEST,src:"ch"},
+      {t:"8:00 PM",f:WEST,src:"ch"},
+    ],
+    /* Thu 06 */ [
+      {t:"6:30 PM",f:NEMP,src:"both"},
+      {t:"7:00 PM",f:OC,  src:"both",n:2},
+      {t:"7:30 PM",f:NEMP,src:"both"},
+      {t:"8:00 PM",f:WEST,src:"ch"},
+      {t:"8:00 PM",f:WEST,src:"ch"},
+      {t:"8:00 PM",f:WEST,src:"ch"},
+      {t:"8:30 PM",f:NEMP,src:"both"},
+    ],
+    /* Fri 07 */ [
+      {t:"6:30 PM",f:NEMP,src:"both"},
+      {t:"7:00 PM",f:OC,  src:"both",n:2},
+      {t:"7:00 PM",f:HT,  src:"both"},
+      {t:"7:00 PM",f:RR,  src:"both"},
+      {t:"7:30 PM",f:LBJ, src:"both",n:2,dup:true},
+      {t:"7:30 PM",f:NEMP,src:"both"},
+      {t:"8:00 PM",f:HT,  src:"both"},
+      {t:"8:00 PM",f:WEST,src:"ch"},
+      {t:"8:00 PM",f:WEST,src:"ch"},
+      {t:"8:30 PM",f:NEMP,src:"both"},
+    ],
+    /* Sat 08 */ [
+      {t:"9:00 AM", f:OC,  src:"both"},
+      {t:"9:30 AM", f:LBJ, src:"both"},
+      {t:"6:30 PM", f:NEMP,src:"both"},
+      {t:"7:00 PM", f:HT,  src:"both"},
+      {t:"7:30 PM", f:NEMP,src:"both"},
+      {t:"8:00 PM", f:WEST,src:"both"},
+    ],
+    /* Sun 09 */ [
+      {t:"6:30 PM",f:NEMP,src:"both"},
+      {t:"7:00 PM",f:HT,  src:"both"},
+      {t:"7:00 PM",f:RR,  src:"both"},
+      {t:"7:30 PM",f:LBJ, src:"both"},
+      {t:"7:30 PM",f:NEMP,src:"both"},
+      {t:"8:00 PM",f:HT,  src:"both"},
+      {t:"8:00 PM",f:WEST,src:"both",n:2,dup:true},
+    ],
+  ]},
+];
+
+/* completed-day sample, from the verified Jul 27-28 Austin data */
+const PAST = [
+  { dow:"Mon", num:"27", slots:[
+    {t:"6:30 PM",f:"North East Metropolitan Park",st:"ran",b:22,c:22},
+    {t:"7:00 PM",f:OC,st:"ran",b:22,c:22},
+    {t:"7:30 PM",f:"North East Metropolitan Park",st:"ran",b:41,c:40},
+    {t:"7:45 PM",f:LBJ,st:"ran",b:16,c:18},
+    {t:"8:00 PM",f:WEST,st:"ran",b:18,c:18},
+  ]},
+  { dow:"Tue", num:"28", slots:[
+    {t:"6:30 PM",f:"North East Metropolitan Park",st:"ran",b:14,c:18},
+    {t:"7:00 PM",f:"The Hattrick L.",st:"cx",b:6,c:18},
+    {t:"7:45 PM",f:LBJ,st:"ran",b:19,c:20},
+    {t:"8:00 PM",f:"The Hattrick L.",st:"ran",b:14,c:16},
+    {t:"8:00 PM",f:HCMS,st:"cx"},
+  ]},
+];
+
+/* ---------------- tally ---------------- */
+function tally(){
+  let both=0, ch=0, md=0, sessions=0;
+  CITIES.forEach(city => city.slots.forEach(day => day.forEach(s => {
+    const n = s.n || 1;
+    sessions += n;
+    if (s.src === "both") both += n;
+    else if (s.src === "ch") ch += n;
+    else if (s.src === "md") md += n;
+  })));
+  return { both, ch, md, sessions, onMatchDay: both + md };
+}
+function cityTally(city){
+  let both=0, ch=0, md=0;
+  city.slots.forEach(day => day.forEach(s => {
+    const n = s.n || 1;
+    if (s.src === "both") both += n; else if (s.src === "ch") ch += n; else if (s.src === "md") md += n;
+  }));
+  return { both, ch, md, total: both + ch + md, onMatchDay: both + md };
+}
+const plural = (n, one, many) => (n === 1 ? one : many);
+
+/* ---------------- cell ---------------- */
+function futureCell(s){
+  const cell = document.createElement("div");
+  cell.className = "mx-cell" + (s.src === "ch" ? " st-ch" : s.src === "md" ? " st-md" : "");
+  cell.setAttribute("data-src", s.src);
+
+  const r1 = document.createElement("div");
+  r1.className = "mx-cell-time";
+  const t = document.createElement("span"); t.className = "mx-t"; t.textContent = s.t;
+  r1.appendChild(t);
+  cell.appendChild(r1);
+
+  const r2 = document.createElement("div"); r2.className = "mx-cell-field"; r2.textContent = s.f;
+  cell.appendChild(r2);
+
+  const r3 = document.createElement("div"); r3.className = "mx-cell-r3";
+  if (s.src === "both"){
+    // the default state says nothing -- only exceptions get a chip
+    const dash = document.createElement("span");
+    dash.className = "mx-pnum"; dash.textContent = "\u2014";
+    dash.title = "Bookings appear here once the match is live";
+    r3.appendChild(dash);
+    const track = document.createElement("div"); track.className = "mx-meter is-empty";
+    r3.appendChild(track);
+  } else {
+    const src = document.createElement("span");
+    src.className = "mx-src is-" + s.src;
+    src.textContent = s.src === "ch" ? "Clubhouse only" : "MatchDay only";
+    r3.appendChild(src);
+  }
+  cell.appendChild(r3);
+
+  // Only MatchDay-only slots are actionable: pulling a match into Clubhouse is a Clubhouse
+  // write. Clubhouse-only slots cannot be pushed to MatchDay from here, so they are flagged
+  // and nothing more.
+  if (s.src === "md"){
+    const act = document.createElement("div"); act.className = "mx-act";
+    act.innerHTML = '<button class="mx-abtn is-green">Add to Clubhouse</button>';
+    cell.appendChild(act);
+  }
+  return cell;
+}
+
+function pastCell(s){
+  const cell = document.createElement("div");
+  cell.className = "mx-cell" + (s.st === "cx" ? " st-cx" : "");
+  cell.setAttribute("data-src", s.st);
+
+  const r1 = document.createElement("div"); r1.className = "mx-cell-time";
+  const t = document.createElement("span"); t.className = "mx-t"; t.textContent = s.t;
+  r1.appendChild(t); cell.appendChild(r1);
+
+  const r2 = document.createElement("div"); r2.className = "mx-cell-field"; r2.textContent = s.f;
+  cell.appendChild(r2);
+
+  const r3 = document.createElement("div"); r3.className = "mx-cell-r3";
+  if (s.b !== undefined){
+    const isCx = s.st === "cx", over = s.b > s.c, full = s.b >= s.c;
+    const num = document.createElement("span");
+    num.className = "mx-pnum" + (isCx ? " is-cx" : over ? " is-over" : full ? " is-full" : "");
+    num.textContent = s.b + " / " + s.c;
+    r3.appendChild(num);
+    const track = document.createElement("div"); track.className = "mx-meter" + (isCx ? " is-cx" : "");
+    const fill = document.createElement("span");
+    fill.className = "mx-meterfill" + (isCx ? " is-cx" : over ? " is-over" : "");
+    fill.style.width = Math.min(100, (s.b / s.c) * 100) + "%";
+    track.appendChild(fill); r3.appendChild(track);
+  } else {
+    const dash = document.createElement("span");
+    dash.className = "mx-pnum" + (s.st === "cx" ? " is-cx" : "");
+    dash.textContent = "—"; dash.title = "No booked figure on record";
+    r3.appendChild(dash);
+  }
+  cell.appendChild(r3);
+  return cell;
+}
+
+/* ---------------- render ---------------- */
+const state = { city:"all", excOnly:false };
+
+function visibleCities(){
+  return CITIES.filter(c => state.city === "all" || c.name === state.city);
+}
+function visibleSlots(daySlots){
+  return state.excOnly ? daySlots.filter(s => s.src !== "both") : daySlots;
+}
+
+function render(){
+  const t = tally();
+  document.getElementById("mxRecon").innerHTML = [
+    { n:t.sessions,   l:plural(t.sessions,"session","sessions"), c:"" },
+    { n:t.onMatchDay, l:"on matchday",                            c:"" },
+    { n:t.ch,         l:"clubhouse only",                         c:"is-ch" },
+    { n:t.md,         l:"matchday only",                          c:"is-md" },
+  ].map(i => '<div class="mx-rc"><div class="mx-rc-n ' + i.c + '">' + i.n +
+             '</div><div class="mx-rc-l">' + i.l + '</div></div>').join("");
+
+  // city chips
+  const chips = document.getElementById("mxCityChips");
+  chips.innerHTML = [{k:"all",l:"All"}].concat(CITIES.map(c=>({k:c.name,l:c.name})))
+    .map(o => '<button class="mx-chip' + (state.city===o.k?' is-on':'') +
+              '" data-city-chip="' + o.k + '">' + o.l + '</button>').join("");
+  chips.querySelectorAll("[data-city-chip]").forEach(b =>
+    b.addEventListener("click", () => { state.city = b.dataset.cityChip; render(); }));
+
+  // city grids
+  const host = document.getElementById("mxCities"); host.innerHTML = "";
+  visibleCities().forEach(city => {
+    const ct = cityTally(city);
+    if (state.excOnly && ct.ch === 0 && ct.md === 0) return;
+    const card = document.createElement("div"); card.className = "mx-card";
+    card.setAttribute("data-city", city.name);
+
+    const head = document.createElement("div"); head.className = "mx-city-head";
+    const tags = [ '<span class="mx-tag">' + ct.onMatchDay + ' on MatchDay</span>' ];
+    if (ct.ch)  tags.push('<span class="mx-tag is-ch">' + ct.ch + ' Clubhouse only</span>');
+    if (ct.md)  tags.push('<span class="mx-tag is-md">' + ct.md + ' MatchDay only</span>');
+    head.innerHTML = '<h2 class="mx-city">' + city.name + '</h2><div class="mx-tags">' + tags.join("") + '</div>';
+    card.appendChild(head);
+
+    const grid = document.createElement("div"); grid.className = "mx-grid";
+    WEEK.days.forEach((d, i) => {
+      const col = document.createElement("div"); col.className = "mx-col";
+      col.setAttribute("data-dow", d.dow.toLowerCase());
+      const ch = document.createElement("div"); ch.className = "mx-colhead";
+      ch.innerHTML = '<span class="mx-dow">' + d.dow + '</span><span class="mx-dnum">' + d.num + '</span>';
+      col.appendChild(ch);
+      const stack = document.createElement("div"); stack.className = "mx-stack";
+      const slots = visibleSlots(city.slots[i] || []);
+      if (!slots.length){
+        const e = document.createElement("div"); e.className = "mx-empty";
+        e.textContent = state.excOnly ? "Nothing to decide" : "No sessions";
+        stack.appendChild(e);
+      } else slots.forEach(s => {
+        for (let k = 0; k < (s.n || 1); k++) stack.appendChild(futureCell(s));
+      });
+      col.appendChild(stack); grid.appendChild(col);
+    });
+    card.appendChild(grid);
+
+    // All three states always render, each with its count. A MatchDay-only slot on a future
+    // date means MatchDay itself is wrong, so the state has to stay visible at zero -- "0"
+    // reads as checked-and-clear, where omitting the row reads as nothing-to-check.
+    const leg = document.createElement("div"); leg.className = "mx-legend";
+    leg.innerHTML = [
+      { sw:"",       l:"Both",           n:ct.both },
+      { sw:" sw-ch", l:"Clubhouse only", n:ct.ch   },
+      { sw:" sw-md", l:"MatchDay only",  n:ct.md   },
+    ].map(o => '<span class="mx-leg" data-leg="' + o.l + '"><span class="mx-sw' + o.sw + '"></span>' +
+               o.l + '<span class="mx-legn' + (o.n === 0 ? ' is-zero' : '') + '">' + o.n + '</span></span>'
+    ).join("");
+    card.appendChild(leg);
+    host.appendChild(card);
+  });
+
+}
+
+document.getElementById("mxExcOnly").addEventListener("change", e => {
+  state.excOnly = e.target.checked; render();
+});
+window.__render = render;
+render();
+</script>
+</body>
+</html>
