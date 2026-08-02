@@ -14,7 +14,7 @@ import type { AppUser } from "@/lib/useAuth";
 import { canAccess } from "@/lib/useAuth";
 
 export type MatchOpsGroup = "Operations" | "Conversations";
-export type MatchOpsAccess = "cities" | "clubhouse" | "chats" | "admin";
+export type MatchOpsAccess = "cities" | "clubhouse" | "chats" | "admin" | "finance";
 
 export type MatchOpsSection = {
   key: string;
@@ -37,6 +37,7 @@ function I({ children }: { children: React.ReactNode }) {
 
 export const MATCH_OPS_SECTIONS: MatchOpsSection[] = [
   { key: "master", group: "Operations", label: "Master Schedule", href: "/match-ops/master-schedule", desc: "Recurring weekly slots, by city", access: "cities", icon: <I><rect x="3" y="4" width="18" height="17" rx="2.5" /><path d="M3 9h18M8 2v4M16 2v4" /></I> },
+  { key: "slate-review", group: "Operations", label: "Slate Review", href: "/match-ops/slate-review", desc: "Weekly per-city decision snapshot", access: "finance", icon: <I><path d="M4 5h16v14H4z" /><path d="M8 9h8M8 13h8M8 17h5" /></I> },
   { key: "pipeline", group: "Operations", label: "Field Pipeline", href: "/match-ops/field-pipeline", desc: "Venues we're still chasing", access: "clubhouse", icon: <I><path d="M3 5h18l-7 8v6l-4 2v-8z" /></I> },
   { key: "ops", group: "Operations", label: "Field Ops", href: "/match-ops/field-ops", desc: "Tonight's fields and staff", access: "cities", icon: <I><rect x="2.5" y="5.5" width="19" height="13" rx="2" /><path d="M12 5.5v13" /><circle cx="12" cy="12" r="3" /></I> },
   { key: "inventory", group: "Operations", label: "Inventory", href: "/match-ops/inventory", desc: "Balls, bibs and manager reports", access: "cities", icon: <I><path d="M21 8l-9-5-9 5 9 5 9-5z" /><path d="M3 8v8l9 5 9-5V8" /><path d="M12 13v8" /></I> },

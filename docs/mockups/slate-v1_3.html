@@ -1,0 +1,1254 @@
+<!doctype html>
+<html lang="en">
+<head>
+<meta charset="utf-8">
+<title>Slate Review · Dallas — mockup</title>
+<style>
+:root{
+  --forest:#0d3b2e; --forest-deep:#072a20; --accent:#35c77f; --logo:#2cdb87;
+  --mint:#e0f2e7; --ink:#12241d; --muted:#626f68; --ok-ink:#12704a;
+  --line:#e6ebe8; --hair:#eff3f1; --surface:#ffffff; --canvas:#f4efe4;
+  --chip-bg:#eef3f0; --chip-line:#e2eae5;
+  /* master-schedule column language */
+  --col-bg:#fdfbf5; --col-line:#e8e0cf; --col-dash:#d8d0bd;
+  --slot-bg:#f8f3e7; --slot-line:#eae1cd;
+  --gold-line:#e3c369; --gold-ink:#8a6300; --gold-dot:#d9a521;
+  --dot:#98a29b;
+  /* the three cell states */
+  --cx-bg:#c8401f; --cx-ink:#ffffff;      /* cancelled  */
+  --ran-bg:#e0f2e7; --ran-ink:#12704a;    /* ran        */
+  --ns-ink:#6f6858;                       /* not sched. — no fill: absence
+                                             should look like absence */
+  --red:#c8401f;
+}
+*{box-sizing:border-box}
+html,body{margin:0;padding:0}
+body{background:var(--canvas);color:var(--ink);
+  font:14px/1.45 -apple-system,BlinkMacSystemFont,"Segoe UI",Inter,Roboto,Helvetica,Arial,sans-serif;
+  -webkit-font-smoothing:antialiased}
+.wrap{max-width:1180px;margin:0 auto;padding:22px 20px 64px}
+
+/* ---------- city selector : kept, unbulked ---------- */
+.cities{display:flex;flex-wrap:wrap;gap:8px;margin-bottom:20px}
+.city{border:1px solid var(--col-line);background:#fbf8f1;color:var(--forest);
+  border-radius:999px;padding:6px 14px;font-size:13px;font-weight:600;cursor:pointer;
+  min-height:30px}
+.city.on{background:var(--forest-deep);border-color:var(--forest-deep);color:#fff}
+
+/* ---------- page head ---------- */
+.phead{display:flex;align-items:baseline;justify-content:space-between;gap:16px;margin-bottom:6px}
+h1{font-size:19px;margin:0;letter-spacing:-.2px;color:var(--forest-deep)}
+.range{font-size:12px;color:var(--muted)}
+.lede{margin:0 0 22px;font-size:14px;color:#3c4b44;max-width:78ch}
+.lede b{color:var(--forest-deep)}
+.lede .hot{color:var(--red);font-weight:700}
+
+/* ---------- section shell ---------- */
+.card{background:var(--surface);border:1px solid var(--line);border-radius:16px;
+  padding:18px 18px 16px;margin-bottom:18px}
+.shead{display:flex;align-items:baseline;justify-content:space-between;gap:14px;
+  flex-wrap:wrap;margin-bottom:4px}
+h2{font-size:12px;letter-spacing:.9px;text-transform:uppercase;color:var(--forest-deep);
+  margin:0;font-weight:700}
+.sdesc{margin:4px 0 14px;font-size:12.5px;color:var(--muted);max-width:88ch}
+.pill{border:1px solid var(--chip-line);background:var(--chip-bg);color:var(--forest);
+  border-radius:999px;padding:3px 10px;font-size:10.5px;font-weight:700;letter-spacing:.7px;
+  text-transform:uppercase;white-space:nowrap}
+
+/* ---------- controls ---------- */
+.ctl{display:flex;gap:6px;align-items:center;flex-wrap:wrap}
+.ctl button{border:1px solid var(--col-line);background:#fbf8f1;color:var(--forest);
+  border-radius:999px;padding:5px 12px;font-size:11px;font-weight:700;letter-spacing:.5px;
+  text-transform:uppercase;cursor:pointer;min-height:28px}
+.ctl button.on{background:var(--forest-deep);border-color:var(--forest-deep);color:#fff}
+.ctl .lbl{font-size:10.5px;letter-spacing:.7px;text-transform:uppercase;color:var(--muted);
+  font-weight:700;margin-right:2px}
+.ctlrow{display:flex;gap:18px;align-items:center;flex-wrap:wrap}
+
+/* ---------- matches per week : compact strip ---------- */
+.vol{display:grid;grid-template-columns:repeat(var(--nw),1fr);gap:9px}
+.vcol{display:flex;flex-direction:column;gap:5px}
+.vval{font-size:12.5px;font-weight:700;color:var(--forest-deep);text-align:center;line-height:1.1}
+.vtrack{display:flex;align-items:flex-end;border-bottom:1px solid var(--line)}
+.vbar{width:100%;background:var(--accent);border-radius:4px 4px 0 0}
+/* the week still in progress is hatched, exactly as your live chart hatches it */
+.vbar.now{background:repeating-linear-gradient(135deg,
+  var(--accent) 0 5px,#a6e6c6 5px 10px)}
+.vlab{font-size:11px;color:var(--muted);text-align:center;line-height:1.2}
+.vlab b{display:block;font-weight:600;color:var(--muted)}
+.vnote{font-size:10.5px;color:var(--muted);text-align:center;font-weight:600}
+
+/* ---------- master schedule ---------- */
+.days{display:grid;grid-template-columns:repeat(7,1fr);gap:8px}
+.day{border:1px solid var(--col-line);background:var(--col-bg);border-radius:12px;
+  overflow:hidden;display:flex;flex-direction:column}
+.dhead{display:flex;align-items:baseline;justify-content:space-between;
+  padding:7px 9px;border-bottom:1px solid var(--col-line)}
+.dhead .ab{font-size:10px;font-weight:700;letter-spacing:.9px;text-transform:uppercase;
+  color:var(--forest-deep)}
+.dhead .dn{font-size:12px;font-weight:700;color:var(--muted)}
+.dbody{padding:7px;flex:1}
+.chip{display:flex;align-items:flex-start;gap:6px;background:var(--slot-bg);
+  border:1px solid var(--slot-line);border-radius:8px;padding:6px 7px;margin-bottom:6px}
+.chip:last-child{margin-bottom:0}
+.chip .dot{width:6px;height:6px;border-radius:50%;background:var(--dot);flex:none;margin-top:4px}
+.chip .txt{min-width:0;flex:1}
+.chip .tt{display:block;font-size:11.5px;font-weight:700;color:var(--forest-deep);line-height:1.25}
+/* wrap, don't ellipsize: "Lowell H. Strike ..." wastes a column that is mostly
+   empty vertically anyway */
+.chip .vn{display:block;font-size:10.5px;font-weight:500;color:var(--muted);
+  line-height:1.25;overflow-wrap:anywhere}
+.chip .cnt{font-size:10.5px;font-weight:700;color:var(--muted);flex:none;margin-top:1px}
+.chip.cxc{background:#fcefeb;border-color:#edc6b8}
+.chip.cxc .dot{background:var(--red)}
+.chip.cxc .tt{color:#a83217;text-decoration:line-through}
+.chip.cxc .cnt{color:#a83217}
+.dempty{font-size:11px;color:var(--ns-ink);padding:3px 2px;font-weight:600}
+
+/* ---------- meeting capture ---------- *
+   a proposal is DASHED and unfilled: dashed already means tentative in this
+   visual language, and an unfilled chip can never be mistaken for a booked one
+   at a glance. no dashed chip has appeared on this page before, so the badge
+   spells it out too. */
+.chip.prop{background:transparent;border:1px dashed var(--gold-line)}
+.chip.prop .dot{background:transparent;border:1.5px solid var(--gold-dot);
+  width:7px;height:7px;margin-top:3px}
+.chip.prop .tt{color:var(--gold-ink)}
+.chip.prop .vn{color:#77673c}
+.chip.prop .cnt{font-size:9px;letter-spacing:.6px;color:var(--gold-ink);
+  background:#fdf3d9;border:1px solid var(--gold-line);border-radius:4px;padding:1px 4px}
+.capbar{display:flex;gap:8px;align-items:stretch;margin:0 0 6px}
+.capin{flex:1;min-width:0;font:inherit;font-size:13px;color:var(--ink);height:34px;
+  background:var(--surface);border:1px solid var(--col-line);border-radius:10px;padding:8px 11px}
+.capin::placeholder{color:var(--muted)}
+.capin:focus{outline:none;border-color:var(--accent);box-shadow:0 0 0 3px rgba(53,199,127,.2)}
+.capbtn{font:inherit;font-size:12px;font-weight:700;letter-spacing:.3px;color:#fff;height:34px;
+  background:var(--forest);border:1px solid var(--forest);border-radius:10px;padding:0 16px;cursor:pointer}
+.capbtn:hover{background:var(--forest-deep)}
+/* the readout swaps between the grammar, an interpretation and a warning as he
+   types. its height is RESERVED so the grid underneath never jumps mid-sentence. */
+.caprd{min-height:32px;font-size:11.5px;line-height:1.35;color:var(--muted);
+  margin:0 0 10px;padding:0 2px}
+.caprd b{color:var(--forest-deep);font-weight:700}
+.caprd .warn{color:var(--gold-ink);font-weight:700}
+.caplist{margin-top:12px;border-top:1px solid var(--line);padding-top:10px}
+.caphead{display:flex;align-items:center;justify-content:space-between;margin-bottom:4px}
+.capttl{font-size:10px;font-weight:700;letter-spacing:.8px;text-transform:uppercase;color:var(--muted)}
+.capcopy{font:inherit;font-size:11px;font-weight:700;color:var(--forest-deep);height:28px;
+  background:var(--chip-bg);border:1px solid var(--chip-line);border-radius:8px;padding:0 12px;cursor:pointer}
+.capcopy:hover{background:#e3ebe6}
+.capok{font-size:11px;font-weight:700;color:var(--ok-ink);margin-right:8px}
+.capitem{display:flex;align-items:flex-start;gap:9px;padding:7px 0}
+.capitem+.capitem{border-top:1px solid var(--hair)}
+.capbadge{font-size:9px;font-weight:700;letter-spacing:.7px;border-radius:4px;
+  padding:2px 5px;flex:none;margin-top:2px}
+/* NOT .slot / .note: this page already has a global .note (the honesty box) and a
+   .slot cell, and a bare modifier name loses to them on equal specificity later in
+   the sheet. the badge carries its own namespace. */
+.capbadge.bslot{color:var(--gold-ink);background:#fdf3d9;border:1px solid var(--gold-line)}
+.capbadge.bnote{color:var(--muted);background:var(--chip-bg);border:1px solid var(--chip-line)}
+.capbody{flex:1;min-width:0}
+.capint{display:block;font-size:12.5px;font-weight:600;color:var(--ink);line-height:1.3}
+/* his own words, verbatim, under every interpretation: the parser is a guess and
+   he has to be able to see what he actually said in the meeting. */
+.capraw{display:block;font-size:11px;color:var(--muted);line-height:1.3;
+  margin-top:1px;overflow-wrap:anywhere}
+.capx{font:inherit;font-size:12px;color:var(--muted);background:transparent;line-height:1;
+  border:1px solid var(--chip-line);border-radius:8px;width:28px;height:28px;flex:none;cursor:pointer}
+.capx:hover{color:var(--red);border-color:#e8c8bc}
+.capfb{width:100%;margin-top:8px;font:inherit;font-size:11.5px;color:var(--ink);height:104px;
+  border:1px solid var(--col-line);border-radius:8px;padding:8px;resize:vertical}
+
+/* ---------- cancel patterns : your week-by-week card ---------- */
+.pwk{margin-bottom:12px}
+.pwk:last-child{margin-bottom:0}
+.pwkh{display:flex;align-items:baseline;gap:9px;margin:0 0 5px;font-size:11px;
+  font-weight:700;letter-spacing:.6px;text-transform:uppercase;color:var(--muted)}
+/* NOT the green: on a card that is entirely about cancellations, green next to a
+   week label reads as a verdict on the week rather than a position in the list */
+.pwkh em{font-style:normal;font-size:9.5px;font-weight:700;color:var(--forest-deep)}
+.pdays{display:grid;grid-template-columns:repeat(7,1fr);gap:6px}
+.pday{border:1px solid var(--col-line);background:var(--col-bg);border-radius:10px;
+  padding:6px;min-height:56px}
+.pdh{font-size:9.5px;font-weight:700;letter-spacing:.9px;text-transform:uppercase;
+  color:var(--muted);margin-bottom:4px}
+.pchip{display:flex;align-items:baseline;gap:6px;border-radius:6px;padding:4px 6px;
+  margin-bottom:4px;font-size:10.5px;line-height:1.35}
+.pchip:last-child{margin-bottom:0}
+.pchip .pv{flex:1;min-width:0;font-weight:600;overflow-wrap:anywhere}
+.pchip .pv b{font-weight:800;letter-spacing:.3px}
+/* the weeks-count is PRINTED on every chip: the colour ramp says the same thing
+   faster, but a ramp read alone is an encoding the reader has to decode. */
+.pchip .pw{flex:none;font-size:9.5px;font-weight:700}
+.pchip.s1{background:#fbe9e3;color:#8f2d15}
+.pchip.s2{background:#f3c3b4;color:#8f2d15}
+.pchip.s3{background:#c8401f;color:#ffffff}
+.pchip.s4{background:#8f2d15;color:#ffffff}
+.pkey{display:flex;flex-wrap:wrap;gap:5px 14px;margin-top:11px;font-size:11px;color:var(--muted)}
+.psw{display:inline-flex;align-items:center;gap:5px;white-space:nowrap}
+/* the palest step is a hair off white, so the swatch gets a hairline or the
+   reader cannot see the thing the key is pointing at */
+.psw i{width:11px;height:11px;border-radius:3px;display:inline-block;flex:none;
+  box-shadow:inset 0 0 0 1px rgba(18,36,29,.14)}
+.pcode{margin-top:6px;font-size:11px;color:var(--muted)}
+.pcode b{color:var(--forest-deep);font-weight:700}
+
+/* ---------- shared table chrome (scoped so the P&L drill-down opts out) ---- */
+table.g{border-collapse:collapse;width:100%;table-layout:fixed}
+col.c-slot{width:23%} col.c-wk{width:6.75%} col.c-pl{width:10%} col.c-rate{width:13%}
+/* every rule below uses the child combinator: a DESCENDANT selector here also
+   matches the nested drill-down table's cells, and `table.g tbody tr:first-child td`
+   (0,2,4) out-specifies `.subtbl tbody tr:first-child td` (0,2,3), so the outer
+   chrome silently wins inside the drill-down. */
+table.g > thead th{font-size:10px;letter-spacing:.7px;text-transform:uppercase;color:var(--muted);
+  font-weight:700;text-align:left;padding:0 6px 9px;vertical-align:bottom}
+table.g > thead th.wk,table.g > thead th.n{text-align:center}
+table.g > thead th.n{text-align:right}
+table.g > thead th em{display:block;font-style:normal;font-weight:600;font-size:9.5px;
+  letter-spacing:.2px;color:var(--muted);text-transform:none;margin-top:2px}
+table.g > tbody > tr > td{padding:4px 6px;border-top:1px solid var(--hair)}
+table.g > tbody > tr:first-child > td{border-top:1px solid var(--line)}
+td.slot{font-size:13px}
+td.slot .fn{font-weight:600;color:var(--forest-deep);display:block;
+  overflow:hidden;text-overflow:ellipsis;white-space:nowrap}
+td.slot .dt{font-size:11.5px;color:var(--muted)}
+td.cell{text-align:center}
+.cx,.ran,.ns,.dotc{display:block;border-radius:7px;padding:5px 2px;font-size:11.5px;
+  font-weight:700;letter-spacing:.2px;white-space:nowrap}
+.cx{background:var(--cx-bg);color:var(--cx-ink)}
+.ran{background:var(--ran-bg);color:var(--ran-ink)}
+.ns{background:transparent;color:var(--ns-ink);font-weight:600}
+/* cancellations-only view: a slot that ran still has to be distinguishable from
+   a slot that was never on the schedule, or a 100% row looks like an empty one */
+.dotc{background:transparent;color:var(--ok-ink);font-size:15px;line-height:.8;padding:8px 2px}
+td.n{text-align:right;white-space:nowrap}
+td.n .big{font-size:14px;font-weight:700;color:var(--forest-deep)}
+td.n .sub{display:block;font-size:10.5px;color:var(--muted);font-weight:600;margin-top:1px}
+table.g > tfoot td{border-top:1px solid var(--line);padding:8px 6px;font-size:12px}
+table.g > tfoot tr.b td{border-top:1px solid var(--hair)}
+table.g > tfoot td.lab{font-size:10.5px;letter-spacing:.7px;text-transform:uppercase;
+  color:var(--muted);font-weight:700}
+table.g > tfoot td.tc{text-align:center;font-weight:700;color:var(--forest-deep)}
+table.g > tfoot td.tc.z{color:var(--muted);font-weight:600}
+table.g > tfoot td.tn{text-align:right;font-weight:700;color:var(--forest-deep)}
+table.g > tfoot td.tn .sub{display:block;font-size:10.5px;color:var(--muted);font-weight:600;
+  margin-top:1px}
+
+/* ---------- p&l ---------- */
+col.p-f{width:25%} col.p-m{width:10.5%} col.p-s{width:11%}
+col.p-r{width:12.5%} col.p-c{width:12.5%} col.p-n{width:14.5%} col.p-a{width:14%}
+td.pf{padding:5px 6px}
+button.disc{display:flex;align-items:center;gap:8px;width:100%;min-height:32px;
+  background:none;border:0;padding:4px 0;margin:0;cursor:pointer;text-align:left;
+  font:inherit;color:inherit}
+button.disc .car{flex:none;width:10px;font-size:9px;color:var(--muted)}
+button.disc .nm{font-size:13px;font-weight:600;color:var(--forest-deep);display:block}
+button.disc .sub{display:block;font-size:11px;color:var(--muted);font-weight:500;margin-top:1px}
+td.pn{text-align:right;padding:9px 6px;font-size:13.5px;font-weight:700;
+  color:var(--forest-deep);white-space:nowrap}
+td.pn.loss{color:var(--red)}
+td.pn.gain{color:var(--ok-ink)}
+#pnl table.g > tfoot td{font-size:13px}
+tr.exp>td{padding:0 6px 14px;border-top:0}
+
+/* the drill-down: the rows the field row was computed from */
+.subtbl{width:100%;border-collapse:collapse;table-layout:auto;
+  background:#fbfcfb;border:1px solid var(--line);border-radius:10px}
+.subtbl caption{caption-side:top;text-align:left;font-size:11px;color:var(--muted);
+  padding:0 0 6px}
+.subtbl th{font-size:9.5px;letter-spacing:.5px;text-transform:uppercase;color:var(--muted);
+  font-weight:700;padding:8px 9px;text-align:right;border-bottom:1px solid var(--line);
+  white-space:nowrap}
+.subtbl th.l{text-align:left}
+.subtbl td{font-size:12px;padding:6px 9px;text-align:right;border-top:1px solid var(--hair);
+  color:var(--forest-deep);white-space:nowrap}
+.subtbl tbody tr:first-child td{border-top:0}
+.subtbl td.l{text-align:left}
+.subtbl td.neg{color:var(--red);font-weight:700}
+.subtbl td.pos{color:var(--ok-ink);font-weight:700}
+.subtbl tfoot td{border-top:1px solid var(--line);font-weight:700;background:#f6f9f7}
+.tag{display:inline-block;font-size:9px;font-weight:700;letter-spacing:.5px;
+  text-transform:uppercase;border-radius:999px;padding:2px 7px}
+.tag.real{background:var(--ran-bg);color:var(--ok-ink)}
+.tag.mod{background:#f1efe6;color:var(--ns-ink)}
+.subfoot{font-size:11.5px;color:var(--muted);margin:7px 0 0}
+
+/* ---------- notes ---------- */
+.note{background:#fbf8f1;border:1px solid var(--col-line);border-radius:12px;
+  padding:13px 15px;font-size:12.5px;color:#4a5a52;line-height:1.55}
+.note h3{margin:0 0 7px;font-size:10.5px;letter-spacing:.8px;text-transform:uppercase;
+  color:var(--forest-deep)}
+.note p{margin:0 0 8px}
+.note p:last-child{margin-bottom:0}
+.note .chg{color:var(--forest-deep);font-weight:600}
+.warnbox{background:#fdf6e4;border-color:var(--gold-line)}
+.warnbox h3{color:var(--gold-ink)}
+</style>
+</head>
+<body>
+<div class="wrap">
+  <div class="cities" id="cities"></div>
+  <div class="phead"><h1 id="ttl"></h1><span class="range" id="rng"></span></div>
+  <p class="lede" id="lede"></p>
+
+  <section class="card" id="volume"></section>
+  <section class="card" id="sched"></section>
+  <section class="card" id="cancels"></section>
+  <section class="card" id="pnl"></section>
+  <div class="note" id="prices" style="margin-bottom:18px"></div>
+  <div class="note warnbox" id="honesty"></div>
+</div>
+
+<script>
+"use strict";
+/* ==================================================================
+ * SOURCE DATA — every number below is transcribed from Ryan's own
+ * screenshots of the live Slate Review page (Dallas). Nothing on this
+ * page is typed twice: every figure you see is computed from here.
+ * ================================================================== */
+
+var CITIES = ["Austin","Dallas","Houston","San Antonio","Atlanta","St. Louis","OKC"];
+var CITY   = "Dallas";
+
+/* the eight week-starting Mondays shown on the live page, with the value your
+   own "Last 8 weeks" chart prints above each bar. the last week is the one in
+   progress — your chart hatches it, so this one does too.
+   `v` is transcribed verbatim, decimals and all. see the honesty note. */
+var WEEKS = [
+  { k:"JUN 8",  start:"2026-06-08", v:43.1 },
+  { k:"JUN 15", start:"2026-06-15", v:46.6 },
+  { k:"JUN 22", start:"2026-06-22", v:52.2 },
+  { k:"JUN 29", start:"2026-06-29", v:36   },
+  { k:"JUL 6",  start:"2026-07-06", v:49.8 },
+  { k:"JUL 13", start:"2026-07-13", v:52.4 },
+  { k:"JUL 20", start:"2026-07-20", v:47.1 },
+  { k:"JUL 27", start:"2026-07-27", v:49.6, partial:true }
+];
+
+/* the cancellations grid, cell for cell. "c12" = cancelled with 12 booked,
+   "r12" = ran with 12 played, "-" = not scheduled that week.
+   IMPORTANT: this grid holds only the slots that cancelled at least once. it is
+   not the whole slate — the strip above is. nothing here is divided by anything
+   there. */
+var SLOTS = [
+  { f:"Lowell H. Strike Middle School", s:"Lowell H. Strike M.S.", d:"Mon", t:"8 PM",
+    c:["-","-","-","c2","c6","-","-","r22"] },
+  { f:"Lowell H. Strike Middle School", s:"Lowell H. Strike M.S.", d:"Mon", t:"9 PM",
+    c:["-","-","r19","-","-","r22","c23","-"] },
+  { f:"Bicentennial Park", s:"Bicentennial Park", d:"Tue", t:"7 PM",
+    c:["r14","c4","c7","c4","r13","c7","r10","c11"] },
+  { f:"Bicentennial Park", s:"Bicentennial Park", d:"Tue", t:"8 PM",
+    c:["c7","c4","-","-","-","-","-","-"] },
+  { f:"Crossbar Rowlett", s:"Crossbar Rowlett", d:"Tue", t:"8 PM",
+    c:["r18","c7","c9","c3","r18","r20","r20","r20"] },
+  { f:"Lowell H. Strike Middle School", s:"Lowell H. Strike M.S.", d:"Tue", t:"8 PM",
+    c:["-","-","-","c5","c1","c6","r17","c12"] },
+  { f:"Majestic Gardens", s:"Majestic Gardens", d:"Tue", t:"9 PM",
+    c:["c3","-","-","-","-","-","-","-"] },
+  { f:"Crossbar Rowlett", s:"Crossbar Rowlett", d:"Thu", t:"8 PM",
+    c:["r18","c8","r16","r16","r19","r16","r20","r18"] },
+  { f:"Lowell H. Strike Middle School", s:"Lowell H. Strike M.S.", d:"Thu", t:"9 PM",
+    c:["-","-","c4","r14","r18","r20","r22","-"] },
+  { f:"Majestic Gardens", s:"Majestic Gardens", d:"Thu", t:"9 PM",
+    c:["c1","-","-","-","-","-","-","-"] },
+  { f:"Crossbar Rowlett", s:"Crossbar Rowlett", d:"Sat", t:"8 PM",
+    c:["-","-","-","-","-","-","-","c11"] },
+  { f:"Bicentennial Park", s:"Bicentennial Park", d:"Sun", t:"7 PM",
+    c:["c5","c9","r18","c6","r18","r16","r11","-"] },
+  { f:"Crossbar Rowlett", s:"Crossbar Rowlett", d:"Sun", t:"8 PM",
+    c:["c6","c2","r11","c4","r12","c9","c5","r1"] }
+];
+
+/* the five rows of the live Match P&L card, week of Jul 20 – Jul 26,
+   verbatim. these are the ONLY real money figures on this page. */
+var REAL_WK = 6;
+var REAL = [
+  { f:"Bicentennial Park",              d:"Tue", t:"7 PM", booked:8,  paid:5,  dpp:45,  ms:2, mrev:22, total:67,  cost:90 },
+  { f:"Lowell H. Strike Middle School", d:"Tue", t:"8 PM", booked:15, paid:11, dpp:99,  ms:5, mrev:54, total:153, cost:114 },
+  { f:"Lowell H. Strike Middle School", d:"Thu", t:"9 PM", booked:17, paid:13, dpp:144, ms:4, mrev:43, total:187, cost:114 },
+  { f:"Crossbar Rowlett",               d:"Tue", t:"8 PM", booked:15, paid:13, dpp:117, ms:2, mrev:22, total:139, cost:0 },
+  { f:"Crossbar Rowlett",               d:"Thu", t:"8 PM", booked:15, paid:12, dpp:117, ms:3, mrev:32, total:149, cost:0 }
+];
+
+/* the price-change list, with the window boundary left to the code so the
+   "inside / outside this window" split can never drift from the weeks above. */
+var PRICES = [
+  { f:"Crossbar Rowlett",  from:"$5",   to:"$9",   on:"Jul 13", w:5 },
+  { f:"Bicentennial Park", from:"$9.90",to:"$9",   on:"Jun 8",  w:0 },
+  { f:"Crossbar Rowlett",  from:"$1",   to:"$5",   on:"Jun 8",  w:0 },
+  { f:"Majestic Gardens",  from:"$5",   to:"$9",   on:"May 11", w:-1 },
+  { f:"Bicentennial Park", from:"$9",   to:"$9.90",on:"Apr 27", w:-1 },
+  { f:"Majestic Gardens",  from:"$1",   to:"$5",   on:"Apr 27", w:-1 },
+  { f:"Carroll Senior HS", from:"$9",   to:"$9.90",on:"Apr 27", w:-1 },
+  { f:"Bicentennial Park", from:"$9.90",to:"$9",   on:"Apr 13", w:-1 }
+];
+var MEMBERSHIP = { since:"May 28, 2026", changes:0, price:"$30", active:28 };
+
+/* ================================================================== */
+function esc(s){ return String(s).replace(/[&<>"]/g,function(c){
+  return {"&":"&amp;","<":"&lt;",">":"&gt;",'"':"&quot;"}[c]; }); }
+function plural(n,w){
+  if(n===1) return w;
+  return w==="match" ? "matches" : w+"s";
+}
+function money(n){ return (n<0?"-$":"$")+Math.abs(Math.round(n)).toLocaleString("en-US"); }
+/* week keys are stored upper-case for column headers; in running prose they need
+   to be title case. one helper, used everywhere a key appears in a sentence. */
+function tc(k){ return k.replace(/(\w+)/,function(m,a){ return a[0]+a.slice(1).toLowerCase(); }); }
+function n1(x){ return (Math.round(x*10)/10).toString(); }
+
+var MON = ["Jan","Feb","Mar","Apr","May","Jun","Jul","Aug","Sep","Oct","Nov","Dec"];
+function dayOf(startISO, offset){
+  var p = startISO.split("-").map(Number);
+  var d = new Date(Date.UTC(p[0], p[1]-1, p[2] + offset));
+  return { mon:MON[d.getUTCMonth()], num:d.getUTCDate() };
+}
+
+/* ---- parse the grid once ---------------------------------------- */
+function parseCell(raw){
+  if(raw==="-") return { st:"-", n:null };
+  return { st:raw[0], n:parseInt(raw.slice(1),10) };
+}
+SLOTS.forEach(function(s){
+  s.cells   = s.c.map(parseCell);
+  s.sched   = s.cells.filter(function(c){ return c.st!=="-"; }).length;
+  s.cx      = s.cells.filter(function(c){ return c.st==="c"; }).length;
+  s.ran     = s.cells.filter(function(c){ return c.st==="r"; }).length;
+  s.players = s.cells.reduce(function(a,c){ return a + (c.st==="c"?c.n:0); },0);
+  s.rate    = s.cx / s.sched;
+});
+var FIELDS = [];
+SLOTS.forEach(function(s){ if(FIELDS.indexOf(s.f)<0) FIELDS.push(s.f); });
+
+/* ---- per-week rollups ------------------------------------------- */
+var BYWEEK = WEEKS.map(function(w,i){
+  var ran=0, cx=0, pl=0;
+  SLOTS.forEach(function(s){
+    var c=s.cells[i];
+    if(c.st==="r") ran++;
+    if(c.st==="c"){ cx++; pl+=c.n; }
+  });
+  return { i:i, ran:ran, cx:cx, players:pl, sched:ran+cx };
+});
+var T_RAN   = BYWEEK.reduce(function(a,w){ return a+w.ran; },0);
+var T_CX    = BYWEEK.reduce(function(a,w){ return a+w.cx; },0);
+var T_PL    = BYWEEK.reduce(function(a,w){ return a+w.players; },0);
+var T_SCHED = T_RAN + T_CX;
+
+/* the strip's own scale — zero-based, against the tallest week */
+var V_MAX = Math.max.apply(null, WEEKS.map(function(w){ return w.v; }));
+var V_MIN = Math.min.apply(null, WEEKS.map(function(w){ return w.v; }));
+var V_AVG = WEEKS.reduce(function(a,w){ return a+w.v; },0) / WEEKS.length;
+
+/* ==================================================================
+ * the revenue model.
+ *
+ * the only real money on this page is the five-row Jul 20 P&L above.
+ * to average over 2 and 4 weeks something has to stand in for the other
+ * weeks, so the five real rows are used to derive four ratios and those
+ * ratios are applied to the player counts in the cancellations grid.
+ * every constant below is COMPUTED from REAL — none of them is typed,
+ * so if a real row is corrected the whole model moves with it.
+ * every modelled figure is rounded to whole dollars at the MATCH level,
+ * so the drill-down rows always add up to the field row exactly.
+ * ================================================================== */
+function playedFor(f,d,t,wi){
+  for(var i=0;i<SLOTS.length;i++){
+    var s=SLOTS[i];
+    if(s.f===f && s.d===d && s.t===t){
+      var c=s.cells[wi];
+      return c.st==="r" ? c.n : null;
+    }
+  }
+  return null;
+}
+var R_BOOK = REAL.reduce(function(a,r){ return a+r.booked; },0);
+var R_PLAY = REAL.reduce(function(a,r){ return a+(playedFor(r.f,r.d,r.t,REAL_WK)||0); },0);
+var BOOK_RATE  = R_BOOK / R_PLAY;                                        /* booked ÷ played  */
+var PAID_SHARE = REAL.reduce(function(a,r){ return a+r.paid; },0) / R_BOOK;
+var DPP_RATE   = REAL.reduce(function(a,r){ return a+r.dpp;  },0) /
+                 REAL.reduce(function(a,r){ return a+r.paid; },0);
+var MEM_RATE   = REAL.reduce(function(a,r){ return a+r.mrev; },0) /
+                 REAL.reduce(function(a,r){ return a+r.ms;   },0);
+var FIELD_COST = (function(){
+  var m={}; REAL.forEach(function(r){ m[r.f]=r.cost; }); return m;
+})();
+/* your five real rows do not all reconcile: spots booked should equal paid spots
+   plus member spots. computed, not asserted by hand. */
+var UNBALANCED = REAL.filter(function(r){ return r.booked !== r.paid + r.ms; });
+
+var SHORT = (function(){
+  var m={}; SLOTS.forEach(function(s){ m[s.f]=s.s; }); return m;
+})();
+
+/* every match that ran, week by week, with the full line the P&L card shows.
+   week 6 uses the real rows and only the real rows — see the honesty note
+   about the sixth Jul 20 match. */
+var MATCHES = (function(){
+  var out=[];
+  WEEKS.forEach(function(w,wi){
+    if(wi===REAL_WK){
+      REAL.forEach(function(r){
+        out.push({ wi:wi, f:r.f, s:SHORT[r.f]||r.f, d:r.d, t:r.t,
+                   booked:r.booked, paid:r.paid, ms:r.ms, dpp:r.dpp, mrev:r.mrev,
+                   total:r.total, cost:r.cost, net:r.total-r.cost, real:true });
+      });
+      return;
+    }
+    SLOTS.forEach(function(s){
+      var c=s.cells[wi];
+      if(c.st!=="r") return;
+      var booked = Math.round(c.n * BOOK_RATE);
+      var paid   = Math.round(booked * PAID_SHARE);
+      var ms     = booked - paid;
+      var dpp    = Math.round(paid * DPP_RATE);
+      var mrev   = Math.round(ms * MEM_RATE);
+      var cost   = FIELD_COST[s.f];
+      cost = (cost==null ? 0 : cost);
+      out.push({ wi:wi, f:s.f, s:s.s, d:s.d, t:s.t,
+                 booked:booked, paid:paid, ms:ms, dpp:dpp, mrev:mrev,
+                 total:dpp+mrev, cost:cost, net:dpp+mrev-cost, real:false });
+    });
+  });
+  return out;
+})();
+
+/* the P&L window always ends on the last COMPLETED week. */
+var LAST_DONE = (function(){
+  for(var i=WEEKS.length-1;i>=0;i--) if(!WEEKS[i].partial) return i;
+  return WEEKS.length-1;
+})();
+
+function pnlRows(win){
+  var from = LAST_DONE - win + 1;
+  var by = {};
+  MATCHES.forEach(function(m){
+    if(m.wi<from || m.wi>LAST_DONE) return;
+    var b = by[m.f] || (by[m.f] = { f:m.f, n:0, booked:0, rev:0, cost:0, net:0,
+                                    real:0, cx:0, cxPl:0, ms:[] });
+    b.n++; b.booked+=m.booked; b.rev+=m.total; b.cost+=m.cost; b.net+=m.net;
+    if(m.real) b.real++;
+    b.ms.push(m);
+  });
+  SLOTS.forEach(function(s){
+    for(var i=from;i<=LAST_DONE;i++){
+      if(s.cells[i].st==="c"){
+        var b = by[s.f];
+        if(b){ b.cx++; b.cxPl+=s.cells[i].n; }
+      }
+    }
+  });
+  var rows = Object.keys(by).map(function(k){
+    var b=by[k];
+    b.avgNet = b.net/b.n; b.avgSpots = b.booked/b.n; b.avgRev = b.rev/b.n;
+    b.short = SHORT[k] || k;
+    /* chronological, not alphabetical: localeCompare puts Sun before Tue inside the
+       same week, and would put "10 PM" before "7 PM". */
+    b.ms.sort(function(x,y){ return x.wi-y.wi || DAYS.indexOf(x.d)-DAYS.indexOf(y.d) || tmin(x.t)-tmin(y.t); });
+    return b;
+  });
+  rows.sort(function(a,b){ return a.avgNet - b.avgNet || a.f.localeCompare(b.f); });
+  return { from:from, rows:rows };
+}
+
+/* minutes past midnight, so "10 PM" sorts after "7 PM" */
+var DAYS  = ["Mon","Tue","Wed","Thu","Fri","Sat","Sun"];
+function tmin(t){
+  var m = /^(\d+)(?::(\d+))?\s*(AM|PM)$/i.exec(String(t).trim());
+  if(!m) return 0;
+  var h = +m[1]%12; if(/pm/i.test(m[3])) h += 12;
+  return h*60 + (+m[2]||0);
+}
+
+/* ================================================================== *
+ * RENDER
+ * ================================================================== */
+document.getElementById("cities").innerHTML = CITIES.map(function(c){
+  return '<button class="city'+(c===CITY?" on":"")+'" type="button">'+esc(c)+'</button>';
+}).join("");
+
+document.getElementById("ttl").textContent = "Slate Review · " + CITY;
+document.getElementById("rng").textContent = tc(WEEKS[0].k) + " – Aug 2, 2026 · 8 weeks";
+
+/* the lede. the two halves of this page count different things, so it says so
+   rather than dividing one by the other. */
+document.getElementById("lede").innerHTML =
+  'Your weekly chart averages <b>'+n1(V_AVG)+' matches</b> a week across these eight weeks, '+
+  'low of '+n1(V_MIN)+', high of '+n1(V_MAX)+'. Separately, <span class="hot">'+T_CX+
+  ' matches</span> were cancelled in the same period, out of just <b>'+SLOTS.length+' '+
+  plural(SLOTS.length,"slot")+'</b>. I have deliberately not turned that into a cancellation '+
+  'rate — the chart and the cancel grid do not share a denominator. See the note at the foot.';
+
+/* ---------------- matches per week : compact ---------------------- */
+(function(){
+  var TRACK = 58;   /* the one place the track height is stated */
+  var cols = WEEKS.map(function(w){
+    /* fractional px, not rounded: at this track a whole-pixel height collides 52.2
+       with 52.4 and two different weeks draw the same bar. */
+    var h = (w.v / V_MAX * TRACK).toFixed(2);
+    return '<div class="vcol">'+
+      '<div class="vval">'+n1(w.v)+'</div>'+
+      '<div class="vtrack" style="height:'+TRACK+'px">'+
+        '<div class="vbar'+(w.partial?" now":"")+'" style="height:'+h+'px"></div></div>'+
+      '<div class="vlab">'+esc(tc(w.k))+
+        (w.partial?'<b>in progress</b>':'')+'</div>'+
+    '</div>';
+  }).join("");
+
+  document.getElementById("volume").innerHTML =
+    '<div class="shead"><h2>Matches per week · last 8 weeks</h2>'+
+      '<span class="pill">'+n1(V_AVG)+' a week on average</span></div>'+
+    '<p class="sdesc">Oldest left. Bars start at zero, scaled to the busiest '+
+      'week ('+n1(V_MAX)+').</p>'+
+    '<div class="vol" style="--nw:'+WEEKS.length+'">'+cols+'</div>';
+})();
+
+/* ---------------- master schedule --------------------------------- */
+var SCHED_WK = WEEKS.length - 1;          /* the week in progress */
+
+/* ---- meeting capture -------------------------------------------- *
+   he is on a call talking through the week. he says "add 8PM thurs SJD" and it
+   has to land on the grid before the sentence is finished. the parser is
+   deliberately small and its whole grammar is printed on the page, because a
+   parse he cannot predict is worse than no parser. NOTHING is ever dropped: if a
+   line is not a slot it is kept, word for word, as a note. */
+var CAPS = [];              /* in-memory only; no storage in a mockup */
+var COPY = "";              /* "" | "ok" | "manual" */
+
+var DAYFULL = ["Monday","Tuesday","Wednesday","Thursday","Friday","Saturday","Sunday"];
+function parseDay(tok){
+  var t = String(tok).toLowerCase().replace(/[^a-z]/g,"");
+  if(t.length<3) return null;
+  /* "tues" and "thurs" are already prefixes of the full names; "weds" is not */
+  if(t==="weds"||t==="wedn") return "Wed";
+  for(var i=0;i<7;i++) if(DAYFULL[i].toLowerCase().indexOf(t)===0) return DAYS[i];
+  return null;
+}
+function parseTime(tok){
+  var m = /^(\d{1,2})(?::(\d{2}))?(am|pm|a|p)?$/i.exec(String(tok));
+  if(!m) return null;
+  var h = +m[1], mm = m[2]?+m[2]:0, suf = m[3]?m[3][0].toLowerCase():null;
+  if(mm>59) return null;
+  var assumed = false;
+  if(suf){
+    if(h<1||h>12) return null;
+    h = h%12; if(suf==="p") h += 12;
+  } else {
+    if(h>23) return null;
+    /* every MatchDay slot is an evening slot, so a bare hour means PM. that is an
+       assumption, so the readout SAYS it rather than quietly applying it. */
+    if(h>=1 && h<=11){ h += 12; assumed = true; }
+    else if(h===0 && !m[2]) return null;
+  }
+  return { min:h*60+mm, assumed:assumed };
+}
+function fmtTime(min){
+  var h = Math.floor(min/60), mm = min%60, ap = h>=12?"PM":"AM", hh = h%12;
+  if(hh===0) hh = 12;
+  return hh + (mm ? ":"+(mm<10?"0":"")+mm : "") + " " + ap;
+}
+/* field aliases are DERIVED from the field list, never typed: the full name, the
+   short name, every word longer than three letters, the full initials and the
+   initials of the first three words. an alias two fields would both answer to is
+   dropped rather than guessed. */
+var ALIAS = (function(){
+  var m = {};
+  function key(x){ return String(x).toLowerCase().replace(/[^a-z0-9]/g,""); }
+  function add(x,f){
+    var k = key(x); if(!k) return;
+    if(!(k in m)) m[k] = f; else if(m[k]!==f) m[k] = null;
+  }
+  FIELDS.forEach(function(f){
+    add(f,f); add(SHORT[f]||f,f);
+    var ws = f.split(/\s+/);
+    ws.forEach(function(w){ if(key(w).length>3) add(w,f); });
+    add(ws.map(function(w){ return w[0]; }).join(""), f);
+    add(ws.slice(0,3).map(function(w){ return w[0]; }).join(""), f);
+  });
+  return m;
+})();
+function matchField(txt){
+  var k = String(txt).toLowerCase().replace(/[^a-z0-9]/g,"");
+  if(ALIAS[k]) return ALIAS[k];
+  var parts = String(txt).split(/\s+/);
+  for(var i=0;i<parts.length;i++){
+    var pk = parts[i].toLowerCase().replace(/[^a-z0-9]/g,"");
+    if(ALIAS[pk]) return ALIAS[pk];
+  }
+  return null;
+}
+function parseCap(raw){
+  var txt = String(raw==null?"":raw).trim();
+  if(!txt) return null;
+  var body = txt.replace(/^(?:\+|add|new)\s+/i,"").trim();
+  /* "8 PM" has to tokenize as one token, so collapse the space before the suffix */
+  var norm = body.replace(/\s*:\s*/g,":").replace(/(\d)\s+(am|pm|a|p)\b/ig,"$1$2");
+  var toks = norm.split(/[\s,]+/).filter(Boolean);
+  var min=null, hourTxt=null, assumed=false, day=null, rest=[];
+  toks.forEach(function(tk){
+    if(min===null){ var t = parseTime(tk); if(t){ min=t.min; assumed=t.assumed; hourTxt=tk; return; } }
+    if(day===null){ var d = parseDay(tk); if(d){ day=d; return; } }
+    if(/^(?:at|on|@)$/i.test(tk)) return;
+    rest.push(tk);
+  });
+  var fieldTxt = rest.join(" ").trim();
+  /* a slot needs all three. one missing and it is a note — kept, not dropped. */
+  if(min===null || day===null || !fieldTxt)
+    return { kind:"note", raw:txt };
+  var field = matchField(fieldTxt);
+  return { kind:"slot", raw:txt, day:day, min:min, time:fmtTime(min),
+    hourTxt:hourTxt, assumed:assumed, field:field,
+    fieldTxt:(field ? (SHORT[field]||field) : fieldTxt), unknown:!field,
+    dup: SLOTS.some(function(s){
+      return s.d===day && tmin(s.t)===min && s.f===field && s.cells[SCHED_WK].st!=="-"; }) };
+}
+
+var CAP_IDLE = 'Type a time, a day and a field &mdash; <b>Add 8PM thurs Crossbar</b> &mdash; '+
+  'and it lands on the grid below as a proposal. Anything else is kept as a note, word for word.';
+function capSay(p){
+  if(!p) return CAP_IDLE;
+  if(p.kind==="note")
+    return 'No time and day in that, so <b>Enter</b> keeps it as a note, word for word.';
+  var out = '<b>'+esc(p.day)+' '+esc(p.time)+' &middot; '+esc(p.fieldTxt)+'</b> &mdash; '+
+    '<b>Enter</b> adds it to '+esc(p.day)+'.';
+  if(p.assumed) out += ' Read '+esc(p.hourTxt)+' as '+esc(p.time)+', because every slot here is an evening slot.';
+  if(p.unknown) out += ' <span class="warn">'+esc(p.fieldTxt)+'</span> is not a field I know, so it goes on exactly as typed.';
+  if(p.dup)     out += ' <span class="warn">That slot is already on the schedule this week.</span>';
+  return out;
+}
+function capText(){
+  var W = WEEKS[SCHED_WK];
+  var sl = CAPS.filter(function(c){ return c.kind==="slot"; });
+  var nt = CAPS.filter(function(c){ return c.kind!=="slot"; });
+  var L = [CITY+" · week of "+tc(W.k)+" · slate review"];
+  if(sl.length){ L.push(""); L.push("Proposed slots");
+    sl.forEach(function(c){ L.push("- "+c.day+" "+c.time+" · "+c.fieldTxt+'   (typed: "'+c.raw+'")'); }); }
+  if(nt.length){ L.push(""); L.push("Notes");
+    nt.forEach(function(c){ L.push("- "+c.raw); }); }
+  return L.join("\n");
+}
+
+function renderSched(setVal){
+  var live = document.getElementById("capin");
+  var iv = (setVal!==undefined) ? setVal : (live ? live.value : "");
+  var W = WEEKS[SCHED_WK];
+  var props = CAPS.filter(function(c){ return c.kind==="slot"; });
+
+  var cols = DAYS.map(function(ab,di){
+    var dt   = dayOf(W.start, di);
+    var prev = di ? dayOf(W.start, di-1) : null;
+    /* a bare "1" after "31" is unreadable — name the month on the first column and
+       again wherever the week crosses into a new one. */
+    var dlab = (di===0 || dt.mon!==prev.mon) ? dt.mon+" "+dt.num : String(dt.num);
+    var here = SLOTS.filter(function(s){ return s.d===ab && s.cells[SCHED_WK].st!=="-"; })
+      .map(function(s){
+        var c = s.cells[SCHED_WK], isCx = c.st==="c";
+        return { min:tmin(s.t), sk:s.s, cls:(isCx?" cxc":""),
+          tt:(isCx?"&#10005; ":"")+esc(s.t), vn:esc(s.s), cnt:String(c.n) };
+      });
+    /* a proposal sorts into the column by time like any other slot — it is a
+       claim about the schedule, so it has to sit where it would actually sit. */
+    props.filter(function(p){ return p.day===ab; }).forEach(function(p){
+      here.push({ min:p.min, sk:p.fieldTxt, cls:" prop",
+        tt:esc(p.time), vn:esc(p.fieldTxt), cnt:"NEW" });
+    });
+    here.sort(function(a,b){ return a.min-b.min || a.sk.localeCompare(b.sk); });
+    var chips = here.map(function(h){
+      return '<div class="chip'+h.cls+'"><span class="dot"></span>'+
+        '<span class="txt"><span class="tt">'+h.tt+'</span>'+
+          '<span class="vn">'+h.vn+'</span></span>'+
+        '<span class="cnt">'+h.cnt+'</span></div>';
+    }).join("");
+    return '<div class="day"><div class="dhead"><span class="ab">'+ab+'</span>'+
+      '<span class="dn">'+dlab+'</span></div>'+
+      '<div class="dbody">'+(chips || '<div class="dempty">&ndash;</div>')+'</div></div>';
+  }).join("");
+
+  /* nothing captured yet renders NOTHING — absence should look like absence,
+     not like an empty container waiting to be filled. */
+  var list = "";
+  if(CAPS.length){
+    list = '<div class="caplist"><div class="caphead">'+
+      '<span class="capttl">Captured in this meeting &middot; '+CAPS.length+'</span>'+
+      '<span>'+(COPY==="ok"?'<span class="capok">Copied.</span>':'')+
+        '<button class="capcopy" onclick="capCopy()">Copy all</button></span></div>'+
+      CAPS.map(function(c,i){
+        var isSlot = c.kind==="slot";
+        /* a note IS its raw text, so it prints once. a slot is an interpretation,
+           so the words he actually said print underneath it. */
+        var body = isSlot
+          ? '<span class="capint">'+esc(c.day)+' '+esc(c.time)+' &middot; '+esc(c.fieldTxt)+'</span>'+
+            '<span class="capraw">typed: &ldquo;'+esc(c.raw)+'&rdquo;</span>'
+          : '<span class="capint">'+esc(c.raw)+'</span>';
+        return '<div class="capitem"><span class="capbadge '+(isSlot?"bslot":"bnote")+'">'+
+          (isSlot?"SLOT":"NOTE")+'</span><span class="capbody">'+body+'</span>'+
+          '<button class="capx" onclick="capDrop('+i+')" aria-label="Remove this item" '+
+          'title="Remove">&#10005;</button></div>';
+      }).join("")+
+      (COPY==="manual"
+        ? '<textarea class="capfb" readonly onclick="this.select()">'+esc(capText())+'</textarea>'
+        : '')+
+      '</div>';
+  }
+
+  var wkCx = BYWEEK[SCHED_WK].cx;
+  document.getElementById("sched").innerHTML =
+    '<div class="shead"><h2>Master schedule &middot; week of '+esc(tc(W.k))+'</h2>'+
+      '<span class="pill">'+BYWEEK[SCHED_WK].sched+' scheduled &middot; '+wkCx+' cancelled'+
+      (props.length ? ' &middot; '+props.length+' proposed' : '')+'</span></div>'+
+    '<p class="sdesc">Your existing Master Schedule component, filtered to '+esc(CITY)+'. '+
+      'Number on the right of a chip is spots booked; a struck-through red chip cancelled. '+
+      'This mock only holds the '+SLOTS.length+' slots in the grid below, so it is not the '+
+      'full week. The box below is for talking through the week live: what you type either '+
+      'becomes a dashed proposal on the grid or is kept as a note, and nothing you type is '+
+      'thrown away.</p>'+
+    '<div class="capbar"><input id="capin" class="capin" type="text" autocomplete="off" '+
+      'spellcheck="false" aria-label="Add a slot or a note" '+
+      'placeholder="Add 8PM thurs Crossbar &mdash; or just type a note" '+
+      'oninput="capIn(this.value)" onkeydown="capKey(event)">'+
+      '<button class="capbtn" onclick="capCommit()">Add</button></div>'+
+    '<div class="caprd" id="caprd"></div>'+
+    '<div class="days">'+cols+'</div>'+ list;
+
+  document.getElementById("capin").value = iv;
+  document.getElementById("caprd").innerHTML = capSay(parseCap(iv));
+}
+/* typing must NOT re-render the section — that would destroy the focused input
+   mid-sentence. only the readout text changes. */
+function capIn(v){ document.getElementById("caprd").innerHTML = capSay(parseCap(v)); }
+function capKey(e){
+  if(e.key==="Enter"){ e.preventDefault(); capCommit(); }
+  else if(e.key==="Escape"){ e.preventDefault(); capIn(""); e.target.value=""; }
+}
+function capCommit(){
+  var el = document.getElementById("capin");
+  var p  = parseCap(el.value);
+  if(!p) return;
+  CAPS.push(p); COPY="";
+  renderSched("");
+  document.getElementById("capin").focus();
+}
+function capDrop(i){ CAPS.splice(i,1); COPY=""; renderSched(); }
+function capCopy(){
+  var t = capText();
+  /* a copy that silently fails is worse than no copy button: on any failure the
+     text is put on screen where he can select it himself. */
+  if(navigator.clipboard && navigator.clipboard.writeText){
+    navigator.clipboard.writeText(t).then(
+      function(){ COPY="ok";     renderSched(); },
+      function(){ COPY="manual"; renderSched(); });
+  } else { COPY="manual"; renderSched(); }
+}
+renderSched();
+
+/* ---------------- cancel patterns --------------------------------- */
+var SORT = "day";
+var VIEW = "cx";        /* "cx" = cancellations only · "all" = every match */
+var TAB  = "pat";       /* "pat" = your existing card · "num" = the numbers grid */
+
+/* your card reads the last four FULLY COMPLETED weeks — the week in progress
+   cannot be compared with a finished one. most recent first, like yours. */
+var PWIN = 4;
+var PWKS = (function(){
+  var out=[]; for(var i=LAST_DONE; i>LAST_DONE-PWIN && i>=0; i--) out.push(i); return out;
+})();
+SLOTS.forEach(function(s){
+  s.chronic = PWKS.reduce(function(a,wi){ return a + (s.cells[wi].st==="c"?1:0); },0);
+});
+var P_CX = SLOTS.reduce(function(a,s){ return a+s.chronic; },0);
+
+/* short codes are DERIVED from the field names — initials of the first three
+   words, falling back to all initials and then the short name if two fields
+   would collide. never a hand-kept list that can drift from the data. */
+var CODE = (function(){
+  var m={}, used={};
+  FIELDS.forEach(function(f){
+    var ws = f.split(/\s+/).filter(function(w){ return /[a-z0-9]/i.test(w); });
+    var cands = [ ws.slice(0,3).map(function(w){ return w[0]; }).join(""),
+                  ws.map(function(w){ return w[0]; }).join(""), (SHORT[f]||f) ];
+    for(var i=0;i<cands.length;i++){
+      var c = cands[i].toUpperCase();
+      if(!used[c]){ used[c]=1; m[f]=c; return; }
+    }
+    m[f] = (SHORT[f]||f).toUpperCase();
+  });
+  return m;
+})();
+
+function patternsHTML(){
+  var blocks = PWKS.map(function(wi,bi){
+    var W = WEEKS[wi], a = dayOf(W.start,0), b = dayOf(W.start,6);
+    var cols = DAYS.map(function(ab){
+      var here = SLOTS.filter(function(s){ return s.d===ab && s.cells[wi].st==="c"; })
+        .sort(function(x,y){ return tmin(x.t)-tmin(y.t) || x.s.localeCompare(y.s); });
+      var chips = here.map(function(s){
+        return '<div class="pchip s'+s.chronic+'">'+
+          '<span class="pv"><b>'+esc(CODE[s.f])+'</b> '+esc(s.t)+' &middot; '+
+            s.cells[wi].n+'</span>'+
+          '<span class="pw">'+s.chronic+'/'+PWKS.length+'</span></div>';
+      }).join("");
+      return '<div class="pday"><div class="pdh">'+ab+'</div>'+chips+'</div>';
+    }).join("");
+    return '<div class="pwk"><div class="pwkh">'+
+      '<span>'+a.mon+' '+a.num+' &ndash; '+b.mon+' '+b.num+'</span>'+
+      (bi===0 ? '<em>most recent</em>' : '')+'</div>'+
+      '<div class="pdays">'+cols+'</div></div>';
+  }).join("");
+
+  var steps = [4,3,2,1].filter(function(n){
+    return SLOTS.some(function(s){ return s.chronic===n; });
+  });
+  var key = steps.map(function(n){
+    return '<span class="psw"><i class="s'+n+'" style="background:'+
+      ({4:"#8f2d15",3:"#c8401f",2:"#f3c3b4",1:"#fbe9e3"}[n])+'"></i>'+
+      n+' of '+PWKS.length+' '+plural(PWKS.length,"week")+'</span>';
+  }).join("");
+
+  /* only the codes that actually appear above: a key entry for an absent field is
+     an instruction to go looking for something that is not on the card. */
+  var codes = FIELDS.filter(function(f){
+    return SLOTS.some(function(s){ return s.f===f && s.chronic>0; });
+  }).map(function(f){
+    return '<b>'+esc(CODE[f])+'</b> '+esc(SHORT[f]||f);
+  }).join(" &middot; ");
+
+  var first = WEEKS[PWKS[PWKS.length-1]], last = WEEKS[PWKS[0]];
+  var fa = dayOf(first.start,0), lb = dayOf(last.start,6);
+
+  return '<p class="sdesc">Every cancelled match in '+esc(CITY)+', week by week, over the '+
+      'last '+PWKS.length+' fully completed weeks &mdash; '+fa.mon+' '+fa.num+' to '+
+      lb.mon+' '+lb.num+', '+P_CX+' '+plural(P_CX,"cancellation")+'. Darker means the same '+
+      'slot cancelled in more of those weeks; the count is printed on every chip as well, so '+
+      'the colour is never the only thing carrying it. Only cancellations are plotted here, '+
+      'so a blank day had none. Each chip reads field, time, and spots already booked.</p>'+
+    blocks+
+    '<div class="pkey">'+key+'</div>'+
+    '<p class="pcode">'+codes+'</p>';
+}
+
+function cellHTML(c){
+  if(c.st==="-") return '<span class="ns">&ndash;</span>';
+  if(c.st==="c") return '<span class="cx">&#10005; '+c.n+'</span>';
+  if(VIEW==="cx") return '<span class="dotc">&middot;</span>';
+  return '<span class="ran">'+c.n+'</span>';
+}
+
+function numbersHTML(){
+  var list = SLOTS.slice();
+  if(SORT==="day") list.sort(function(a,b){
+    return DAYS.indexOf(a.d)-DAYS.indexOf(b.d) || a.f.localeCompare(b.f) || a.t.localeCompare(b.t);
+  });
+  /* "worst first" now sorts on the two numbers this table still PRINTS. it used
+     to sort on a players-across-8-weeks total, and sorting by a number the reader
+     cannot see is an encoding they cannot check. */
+  else list.sort(function(a,b){ return b.cx-a.cx || b.rate-a.rate || a.f.localeCompare(b.f); });
+
+  var cols='<colgroup><col class="c-slot">'+
+    WEEKS.map(function(){ return '<col class="c-wk">'; }).join("")+
+    '<col class="c-rate"></colgroup>';
+
+  var head='<thead><tr><th>Slot</th>'+
+    WEEKS.map(function(w){ return '<th class="wk">'+esc(w.k)+'</th>'; }).join("")+
+    '<th class="n">Cancelled<em>of the weeks it was scheduled</em></th></tr></thead>';
+
+  var body=list.map(function(s){
+    return '<tr>'+
+      '<td class="slot"><span class="fn">'+esc(s.s)+'</span>'+
+        '<span class="dt">'+esc(s.d)+' &middot; '+esc(s.t)+'</span></td>'+
+      s.cells.map(function(c){ return '<td class="cell">'+cellHTML(c)+'</td>'; }).join("")+
+      '<td class="n"><span class="big">'+Math.round(s.rate*100)+'%</span>'+
+        '<span class="sub">'+s.cx+' of '+s.sched+'</span></td>'+
+    '</tr>';
+  }).join("");
+
+  /* players stay WEEK BY WEEK and are never totalled: a players number summed
+     across eight weeks is one number you cannot act on. */
+  var foot='<tfoot>'+
+    '<tr><td class="lab">Cancelled that week</td>'+
+      BYWEEK.map(function(w){ return '<td class="tc'+(w.cx?"":" z")+'">'+w.cx+'</td>'; }).join("")+
+      '<td class="tn">'+T_CX+'<span class="sub">in '+SLOTS.length+' slots</span></td></tr>'+
+    '<tr class="b"><td class="lab">Players on those cancellations</td>'+
+      BYWEEK.map(function(w){ return '<td class="tc'+(w.players?"":" z")+'">'+w.players+'</td>'; }).join("")+
+      '<td class="tn">&nbsp;</td></tr>'+
+  '</tfoot>';
+
+  /* semicolons, not middots, between the legend items: in the cancellations view
+     the "ran" GLYPH is itself a middot, so a middot separator prints "booked · · =
+     ran" and the reader cannot tell the separator from the symbol. */
+  var legend = VIEW==="cx"
+    ? '<span style="color:var(--red);font-weight:600">&#10005; N</span> = cancelled with N already booked; '+
+      '<span style="color:var(--ok-ink);font-weight:600">&middot;</span> = ran; '+
+      '<span style="color:var(--ns-ink);font-weight:600">&ndash;</span> = not scheduled. '
+    : '<span style="color:var(--red);font-weight:600">&#10005; N</span> = cancelled with N already booked; '+
+      '<span style="color:var(--ok-ink);font-weight:600">N</span> = ran, N played; '+
+      '<span style="color:var(--ns-ink);font-weight:600">&ndash;</span> = not scheduled. ';
+
+  return '<p class="sdesc">Every slot that cancelled at least once &mdash; '+SLOTS.length+' of them, '+
+      'all eight weeks. '+legend+
+      'The rate is out of the weeks the slot was actually on the schedule, and the '+
+      'denominator is printed next to it — three of these rows are 100% off a single match. '+
+      'Players are shown week by week at the foot and deliberately not totalled.</p>'+
+    '<table class="g">'+cols+head+'<tbody>'+body+'</tbody>'+foot+'</table>';
+}
+
+function renderCancels(){
+  document.getElementById("cancels").innerHTML =
+    '<div class="shead"><h2>Cancel patterns</h2>'+
+      '<div class="ctlrow">'+
+        '<div class="ctl"><span class="lbl">View</span>'+
+          '<button type="button" class="'+(TAB==="pat"?"on":"")+'" '+
+            'onclick="window.setTab(\'pat\')">Patterns</button>'+
+          '<button type="button" class="'+(TAB==="num"?"on":"")+'" '+
+            'onclick="window.setTab(\'num\')">Numbers</button></div>'+
+        (TAB==="num"
+          ? '<div class="ctl"><span class="lbl">Show</span>'+
+              '<button type="button" class="'+(VIEW==="cx"?"on":"")+'" '+
+                'onclick="window.setView(\'cx\')">Cancellations</button>'+
+              '<button type="button" class="'+(VIEW==="all"?"on":"")+'" '+
+                'onclick="window.setView(\'all\')">Every match</button></div>'+
+            '<div class="ctl"><span class="lbl">Sort</span>'+
+              '<button type="button" class="'+(SORT==="day"?"on":"")+'" '+
+                'onclick="window.setSort(\'day\')">By day</button>'+
+              '<button type="button" class="'+(SORT==="bad"?"on":"")+'" '+
+                'onclick="window.setSort(\'bad\')">Worst first</button></div>'
+          : '')+
+      '</div></div>'+
+    (TAB==="pat" ? patternsHTML() : numbersHTML());
+}
+window.setSort = function(v){ SORT=v; renderCancels(); };
+window.setView = function(v){ VIEW=v; renderCancels(); };
+window.setTab  = function(v){ TAB=v;  renderCancels(); };
+
+/* ---------------- p&l by field ------------------------------------ */
+var WIN  = 4;
+var OPEN = {};           /* field index -> expanded, kept across window changes */
+
+function drillHTML(b){
+  var rows = b.ms.map(function(m){
+    return '<tr>'+
+      '<td class="l">'+esc(tc(WEEKS[m.wi].k))+'</td>'+
+      '<td class="l">'+esc(m.d)+' · '+esc(m.t)+'</td>'+
+      '<td>'+m.booked+'</td>'+
+      '<td>'+m.paid+'</td>'+
+      '<td>'+money(m.dpp)+'</td>'+
+      '<td>'+m.ms+'</td>'+
+      '<td>'+money(m.mrev)+'</td>'+
+      '<td>'+money(m.total)+'</td>'+
+      '<td>'+money(m.cost)+'</td>'+
+      '<td class="'+(m.net<0?"neg":"pos")+'">'+(m.net>=0?"+":"")+money(m.net)+'</td>'+
+      '<td class="l"><span class="tag '+(m.real?"real":"mod")+'">'+
+        (m.real?"real":"modelled")+'</span></td>'+
+    '</tr>';
+  }).join("");
+  var sum = b.ms.reduce(function(a,m){
+    a.booked+=m.booked; a.paid+=m.paid; a.dpp+=m.dpp; a.ms+=m.ms; a.mrev+=m.mrev;
+    a.total+=m.total; a.cost+=m.cost; a.net+=m.net; return a;
+  },{booked:0,paid:0,dpp:0,ms:0,mrev:0,total:0,cost:0,net:0});
+
+  return '<table class="subtbl">'+
+    '<caption>The '+b.n+' '+plural(b.n,"match")+' behind the row above.</caption>'+
+    '<thead><tr>'+
+      '<th class="l">Week</th><th class="l">Slot</th>'+
+      '<th>Spots booked</th><th>Paid spots</th><th>DPP rev</th>'+
+      '<th>Member spots</th><th>Member rev</th><th>Total</th>'+
+      '<th>Field cost</th><th>Net</th><th class="l">Source</th>'+
+    '</tr></thead><tbody>'+rows+'</tbody>'+
+    '<tfoot><tr>'+
+      '<td class="l">'+b.n+' '+plural(b.n,"match")+'</td><td></td>'+
+      '<td>'+sum.booked+'</td><td>'+sum.paid+'</td><td>'+money(sum.dpp)+'</td>'+
+      '<td>'+sum.ms+'</td><td>'+money(sum.mrev)+'</td><td>'+money(sum.total)+'</td>'+
+      '<td>'+money(sum.cost)+'</td>'+
+      '<td class="'+(sum.net<0?"neg":"pos")+'">'+(sum.net>=0?"+":"")+money(sum.net)+'</td>'+
+      '<td></td>'+
+    '</tr></tfoot></table>'+
+    '<p class="subfoot">'+
+      /* the counts are already under the field name — one fact in one place */
+      (b.cx
+        ? 'A cancelled match earns nothing and is charged nothing here, so the cancellations '+
+          'counted under the field name are not in these rows.'
+        : 'Nothing cancelled at this field in this window.')+
+    '</p>';
+}
+
+function renderPnl(){
+  var r = pnlRows(WIN);
+  var rows = r.rows;
+  var tot = rows.reduce(function(a,b){
+    a.n+=b.n; a.cx+=b.cx; a.booked+=b.booked; a.rev+=b.rev; a.cost+=b.cost; a.net+=b.net;
+    a.real+=b.real; return a;
+  },{n:0,cx:0,booked:0,rev:0,cost:0,net:0,real:0});
+
+  var cols='<colgroup><col class="p-f"><col class="p-m"><col class="p-s"><col class="p-r">'+
+    '<col class="p-c"><col class="p-n"><col class="p-a"></colgroup>';
+  var head='<thead><tr><th>Field<em>tap a row for the matches behind it</em></th>'+
+    '<th class="n">Matches<em>ran in this window</em></th>'+
+    '<th class="n">Avg spots<em>booked per match</em></th>'+
+    '<th class="n">Avg revenue<em>per match</em></th>'+
+    '<th class="n">Field cost<em>per match</em></th>'+
+    '<th class="n">Net<em>whole window</em></th>'+
+    '<th class="n">Avg net<em>per match</em></th></tr></thead>';
+
+  var body=rows.map(function(b){
+    var cls  = b.avgNet<0 ? " loss" : " gain";
+    var fi   = FIELDS.indexOf(b.f);
+    var open = !!OPEN[fi];
+    return '<tr class="pl">'+
+      '<td class="pf"><button type="button" class="disc" aria-expanded="'+open+'" '+
+        'onclick="window.toggleField('+fi+')">'+
+        '<span class="car">'+(open?"&#9662;":"&#9656;")+'</span>'+
+        '<span><span class="nm">'+esc(b.short)+'</span>'+
+          '<span class="sub">'+b.cx+' '+plural(b.cx,"cancellation")+
+            (b.cxPl?' · '+b.cxPl+' '+plural(b.cxPl,"player")+' affected':'')+
+          '</span></span></button></td>'+
+      '<td class="pn">'+b.n+'</td>'+
+      '<td class="pn">'+(b.avgSpots).toFixed(1)+'</td>'+
+      '<td class="pn">'+money(b.avgRev)+'</td>'+
+      '<td class="pn">'+money(b.cost/b.n)+'</td>'+
+      '<td class="pn'+cls+'">'+(b.net>=0?"+":"")+money(b.net)+'</td>'+
+      '<td class="pn'+cls+'">'+(b.avgNet>=0?"+":"")+money(b.avgNet)+'</td>'+
+    '</tr>'+
+    (open ? '<tr class="exp"><td colspan="7">'+drillHTML(b)+'</td></tr>' : '');
+  }).join("");
+
+  var foot='<tfoot><tr>'+
+    '<td class="lab">'+rows.length+' '+plural(rows.length,"field")+'</td>'+
+    '<td class="tn">'+tot.n+'</td>'+
+    '<td class="tn">'+(tot.booked/tot.n).toFixed(1)+'</td>'+
+    '<td class="tn">'+money(tot.rev/tot.n)+'</td>'+
+    '<td class="tn">'+money(tot.cost/tot.n)+'</td>'+
+    '<td class="tn" style="color:'+(tot.net<0?"var(--red)":"var(--ok-ink)")+'">'+
+      (tot.net>=0?"+":"")+money(tot.net)+'</td>'+
+    '<td class="tn" style="color:'+(tot.net<0?"var(--red)":"var(--ok-ink)")+'">'+
+      (tot.net>=0?"+":"")+money(tot.net/tot.n)+'</td></tr></tfoot>';
+
+  var modelled = tot.n - tot.real;
+  /* a field with no cost on file wins this ranking by default, so say so. */
+  var free = rows.filter(function(b){ return b.cost===0; });
+  var freeNote = free.length
+    ? ' <b>'+free.map(function(b){ return esc(b.short); }).join(" and ")+'</b> '+
+      (free.length===1?'carries':'carry')+' $0 field cost, which is what your Jul&nbsp;20 card '+
+      'says. If that is a missing rate rather than a free pitch, it is the one correction that '+
+      'would most change this ranking.'
+    : '';
+  document.getElementById("pnl").innerHTML =
+    '<div class="shead"><h2>Match P&amp;L by field</h2>'+
+      '<div class="ctl"><span class="lbl">Average over</span>'+
+        [1,2,4].map(function(w){
+          return '<button type="button" class="'+(WIN===w?"on":"")+'" '+
+            'onclick="window.setWin('+w+')">'+w+' '+plural(w,"wk")+'</button>';
+        }).join("")+'</div></div>'+
+    '<p class="sdesc">One row per field, worst average net per match first, over the last '+
+      WIN+' completed '+plural(WIN,"week")+' ('+tc(WEEKS[r.from].k)+' – Jul 26). '+
+      'Open a field to see every match the row was computed from, and where each figure '+
+      'came from.'+
+      (modelled
+        ? ' <b>'+modelled+' of these '+tot.n+' matches are modelled, not measured</b> — '+
+          'they are tagged as such inside.'
+        : ' Every match in this window is a real P&amp;L row.')+
+      freeNote+
+    '</p>'+
+    '<table class="g">'+cols+head+'<tbody>'+body+'</tbody>'+foot+'</table>';
+}
+window.setWin = function(w){ WIN=w; renderPnl(); };
+window.toggleField = function(i){ OPEN[i] = !OPEN[i]; renderPnl(); };
+
+/* ---------------- price changes as a note ------------------------- */
+(function(){
+  var inWin  = PRICES.filter(function(p){ return p.w>=0; });
+  var outWin = PRICES.length - inWin.length;
+  document.getElementById("prices").innerHTML =
+    '<h3>Price changes</h3>'+
+    '<p>DPP price moved '+inWin.length+' '+plural(inWin.length,"time")+' inside this window: '+
+      inWin.map(function(p){
+        return '<span class="chg">'+esc(p.f)+' '+esc(p.from)+'&nbsp;&rarr;&nbsp;'+esc(p.to)+
+          '</span> on '+esc(p.on);
+      /* "A further N" — a sentence should not open on a bare numeral, and the
+         count is still computed, never typed */
+      }).join("; ")+'. A further '+outWin+' earlier '+plural(outWin,"change")+' fall outside these eight '+
+      'weeks. A change is recorded only when the new modal price holds for two or more '+
+      'matches, so one-off discounts never appear here.</p>'+
+    '<p>Membership price has not changed since '+esc(MEMBERSHIP.since)+'. MAX is '+
+      esc(MEMBERSHIP.price)+' and '+MEMBERSHIP.active+' members are active on it.</p>';
+})();
+
+/* ---------------- honesty ----------------------------------------- */
+(function(){
+  var sixth = SLOTS.filter(function(s){
+    return s.cells[REAL_WK].st==="r" &&
+      !REAL.some(function(r){ return r.f===s.f && r.d===s.d && r.t===s.t; });
+  });
+  var decimals = WEEKS.filter(function(w){ return w.v % 1 !== 0; });
+  document.getElementById("honesty").innerHTML =
+    '<h3>What is real here and what is not</h3>'+
+    '<p><b>Real, transcribed from your screenshots:</b> the eight weekly values on the strip, '+
+      'every cell of the cancel-patterns grid ('+SLOTS.length+' slots &times; '+WEEKS.length+
+      ' weeks), and the five rows of the Jul 20 P&amp;L card. Players affected, cancellation '+
+      'rates and all the totals are counted off that grid, not typed in.</p>'+
+    '<p><b>The two halves of this page count different things.</b> The strip is every match in '+
+      esc(CITY)+' — around '+Math.round(V_AVG)+' a week. The grid below it is only the '+
+      SLOTS.length+' slots that cancelled at least once, which is why it holds '+T_SCHED+
+      ' matches and not several hundred. Dividing '+T_CX+' cancellations by anything in the '+
+      'grid gives you a rate for those '+SLOTS.length+' slots, not for '+esc(CITY)+'. If you '+
+      'want a real cancellation rate on this page, the strip has to expose the cancelled '+
+      'count per week from the same source it already counts matches from.</p>'+
+    '<p><b>Modelled:</b> money for any week other than Jul 20, tagged <span class="tag mod">'+
+      'modelled</span> inside every drill-down. Four ratios are derived from your five real '+
+      'rows — booked&nbsp;&divide;&nbsp;played '+BOOK_RATE.toFixed(3)+', paid share '+
+      PAID_SHARE.toFixed(3)+', '+money(DPP_RATE)+'/paid spot, '+money(MEM_RATE)+
+      '/member spot — plus per-match field cost, and applied to the player counts in the grid. '+
+      'Treat the 2- and 4-week columns as shape, not as figures to quote.</p>'+
+    '<p><b>Four things to check in the real data.</b> '+
+      '(1) Your matches-per-week chart shows fractional counts — '+
+      decimals.slice(0,3).map(function(w){ return w.v; }).join(", ")+', and '+
+      /* "that is N of the M weeks" — a sentence should not open on a bare
+         numeral, and the counts stay computed */
+      (decimals.length-3)+' more; that is '+decimals.length+' of the '+WEEKS.length+
+      ' weeks. A count of matches cannot be fractional, so either that chart is averaging '+
+      'something or it is a bug. '+
+      '(2) Your P&amp;L lists '+REAL.length+' matches for Jul 20 – 26, but the cancellations '+
+      'grid shows '+BYWEEK[REAL_WK].ran+' that ran that week' +
+      (sixth.length ? ' — '+sixth.map(function(s){ return esc(s.s)+' '+esc(s.d)+' '+esc(s.t)+
+        ' ('+s.cells[REAL_WK].n+' played)'; }).join(", ")+' is missing from the P&amp;L' : '')+
+      /* "Of your N rows, M do not balance" — avoids printing "(3) 2" */
+      '. (3) Of your '+REAL.length+' Jul 20 rows, '+UNBALANCED.length+' do not balance: spots '+
+      'booked should equal paid spots plus member spots, and '+
+      UNBALANCED.map(function(r){
+        return esc(SHORT[r.f]||r.f)+' '+esc(r.d)+' '+esc(r.t)+' reads '+r.booked+
+          ' booked against '+r.paid+'&nbsp;+&nbsp;'+r.ms+'&nbsp;=&nbsp;'+(r.paid+r.ms);
+      }).join(", and ")+'. In aggregate the card balances ('+R_BOOK+' booked = '+
+      REAL.reduce(function(a,r){ return a+r.paid; },0)+' paid + '+
+      REAL.reduce(function(a,r){ return a+r.ms; },0)+' member), so this looks like a credit '+
+      'spot counted in one column and not the other. '+
+      '(4) The RATE column on the live page does not match an 8-week denominator — '+
+      'Bicentennial Tue 7 PM reads 47% there and is 5 of 8 here. Whatever window it uses '+
+      'should be stated on the page.</p>'+
+    '<p><b>Three judgement calls of mine.</b> Field cost is charged only to matches that ran; '+
+      'if you pay for the pitch when a match cancels, cancellations belong in this P&amp;L as '+
+      'losses and every net figure here is too kind. I darkened two of your colours to '+
+      'clear the 4.5:1 contrast floor: the cancelled red from your coral to #c8401f so the '+
+      'white number on it is legible, and the muted grey to #626f68 so the small print under '+
+      'every column header is. Same colour language, one shade down. And on the Patterns '+
+      'card I replaced your four-colour scale &mdash; grey, orange, dark red, bright red &mdash; '+
+      'with one red ramp that only gets darker, because those four colours are three '+
+      'different hues carrying a single measure and a reader has to memorise the order to '+
+      'read them. Light to dark needs no key. The weeks count is printed on every chip too, '+
+      'so the colour never carries it alone.</p>';
+})();
+
+renderCancels();
+renderPnl();
+
+/* harness hooks */
+window.SR = { WEEKS:WEEKS, SLOTS:SLOTS, BYWEEK:BYWEEK, REAL:REAL, REAL_WK:REAL_WK,
+  MATCHES:MATCHES, PRICES:PRICES, FIELDS:FIELDS, SCHED_WK:SCHED_WK, DAYS:DAYS,
+  T_RAN:T_RAN, T_CX:T_CX, T_PL:T_PL, T_SCHED:T_SCHED,
+  V_AVG:V_AVG, V_MAX:V_MAX, V_MIN:V_MIN,
+  LAST_DONE:LAST_DONE, pnlRows:pnlRows,
+  parseCap:parseCap, ALIAS:ALIAS, capText:capText,
+  get CAPS(){ return CAPS; }, get COPY(){ return COPY; },
+  get WIN(){ return WIN; }, get SORT(){ return SORT; },
+  PWKS:PWKS, CODE:CODE, P_CX:P_CX, PWIN:PWIN,
+  get VIEW(){ return VIEW; }, get OPEN(){ return OPEN; }, get TAB(){ return TAB; } };
+</script>
+</body>
+</html>

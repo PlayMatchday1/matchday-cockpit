@@ -27,20 +27,8 @@ import FinanceTabNav, {
   FINANCE_TAB_IDS,
   type FinanceTabId,
 } from "@/components/FinanceTabNav";
-import CancelHeatmap from "@/components/CancelHeatmap";
-import CancelPatterns from "@/components/CancelPatterns";
-import CitiesMasterScheduleLens from "@/components/CitiesMasterScheduleLens";
-import FieldRankingTable from "@/components/FieldRankingTable";
-import CollapsibleSection from "@/components/CollapsibleSection";
-import MatchPnL from "@/components/MatchPnL";
-import SlateDppPriceHistory from "@/components/SlateDppPriceHistory";
-import SlateMatchPnLSection from "@/components/SlateMatchPnLSection";
-import SlateMembershipPriceHistory from "@/components/SlateMembershipPriceHistory";
 import RevenueAdminView from "@/components/RevenueAdminView";
-import TotalsBarChart from "@/components/TotalsBarChart";
-import { VISIBLE_CITIES, isCityHidden, type City } from "@/lib/types";
-import { useMatchWindowData } from "@/lib/useMatchData";
-import { getWeeklySpots, getMonday } from "@/lib/cityStats";
+import { isCityHidden } from "@/lib/types";
 import { CITY_DISPLAY_ORDER } from "@/lib/financeStats";
 import { FinanceQuarterProvider } from "@/lib/financeQuarter";
 import {
@@ -62,8 +50,6 @@ const PRIMARY_TAB_IDS: ReadonlySet<FinanceTabId> = new Set<FinanceTabId>([
   "cities",
   "cash-flow",
   "field-ranking",
-  "match-pnl",
-  "slate-review",
 ]);
 
 // Derive which secondary nav slot is "active" given the current tab.
@@ -120,7 +106,6 @@ function FinanceLandingContent() {
   );
   // Slate Review's selected city, lifted to page level. weekStart
   // stays local to SlateReviewTabContent; only city is cross-cutting.
-  const [slateCity, setSlateCity] = useState<City>("Austin");
 
   function selectTab(t: FinanceTabId) {
     setActiveTab(t);
@@ -286,17 +271,8 @@ function FinanceLandingContent() {
       <TabPanel id="opex-calendar" active={activeTab} visited={visited}>
         <OpExCalendarView onAddExpense={() => selectTab("expenses")} />
       </TabPanel>
-      <TabPanel id="match-pnl" active={activeTab} visited={visited}>
-        <MatchPnL />
-      </TabPanel>
       <TabPanel id="field-ranking" active={activeTab} visited={visited}>
         <FieldRankingTabContent />
-      </TabPanel>
-      <TabPanel id="slate-review" active={activeTab} visited={visited}>
-        <SlateReviewTabContent
-          selectedCity={slateCity}
-          onSelectedCityChange={setSlateCity}
-        />
       </TabPanel>
       <TabPanel id="check-ins" active={activeTab} visited={visited}>
         <CheckInsView />
@@ -418,179 +394,5 @@ function CitiesTabContent() {
         ))}
       </div>
     </div>
-  );
-}
-
-// Slate Review — per-city decision snapshot. Sections from existing
-// components, scoped to one selected city + selected week via state
-// owned at this level:
-//   1. City selector   (single-select pill row, this file)
-//   2. Last 8 weeks    (TotalsBarChart fed by useMatchWindowData + getWeeklySpots)
-//   3. Field Ranking   (FieldRankingTable city-filtered + costScope=realized)
-//   4. Master schedule (CitiesMasterScheduleLens controlled via weekStart)
-//   5. Cancel patterns (CancelPatterns city-scoped)
-//   6. Cancellations   (CancelHeatmap with full-slate + recent-cancel row markers)
-//   7. Match P&L       (SlateMatchPnLSection scoped to selected city)
-// Defaults to Austin + current Monday. Local state; no URL persistence.
-function SlateReviewTabContent({
-  selectedCity,
-  onSelectedCityChange,
-}: {
-  selectedCity: City;
-  onSelectedCityChange: (city: City) => void;
-}) {
-  const [weekStart, setWeekStart] = useState<string>(() => {
-    const mon = getMonday(new Date());
-    const y = mon.getFullYear();
-    const m = String(mon.getMonth() + 1).padStart(2, "0");
-    const d = String(mon.getDate()).padStart(2, "0");
-    return `${y}-${m}-${d}`;
-  });
-  return (
-    <div className="space-y-4">
-      <SlateReviewCityPills value={selectedCity} onChange={onSelectedCityChange} />
-      <CollapsibleSection title="Last 8 weeks">
-        <SlateReviewEightWeekChart city={selectedCity} />
-      </CollapsibleSection>
-      <CollapsibleSection title="Field Ranking">
-        <FieldRankingTable city={selectedCity} costScope="realized" />
-      </CollapsibleSection>
-      <CollapsibleSection title="Master Schedule">
-        <CitiesMasterScheduleLens
-          city={selectedCity}
-          weekStart={weekStart}
-          onWeekStartChange={setWeekStart}
-        />
-      </CollapsibleSection>
-      <CollapsibleSection title="Cancel patterns">
-        <CancelPatterns city={selectedCity} />
-      </CollapsibleSection>
-      <CollapsibleSection title="Cancellations">
-        <SlateReviewCancelSection city={selectedCity} />
-      </CollapsibleSection>
-      <CollapsibleSection title="Match P&L">
-        <SlateMatchPnLSection city={selectedCity} />
-      </CollapsibleSection>
-      <CollapsibleSection title="DPP price changes" defaultOpen={false}>
-        <SlateDppPriceHistory city={selectedCity} />
-      </CollapsibleSection>
-      <CollapsibleSection title="Membership price changes" defaultOpen={false}>
-        <SlateMembershipPriceHistory city={selectedCity} />
-      </CollapsibleSection>
-    </div>
-  );
-}
-
-function SlateReviewCityPills({
-  value,
-  onChange,
-}: {
-  value: City;
-  onChange: (next: City) => void;
-}) {
-  return (
-    <section
-      className="sticky top-14 z-20 -mx-4 border-y border-cream-line bg-cream-soft/95 px-4 py-3 backdrop-blur supports-[backdrop-filter]:bg-cream-soft/80 sm:-mx-6 sm:px-6"
-      aria-label="City selector"
-    >
-      <div
-        role="radiogroup"
-        aria-label="Selected city"
-        className="scrollbar-hide flex flex-nowrap items-center gap-1.5 overflow-x-auto"
-      >
-        {VISIBLE_CITIES.map((c) => {
-          const active = c === value;
-          return (
-            <button
-              key={c}
-              type="button"
-              role="radio"
-              aria-checked={active}
-              onClick={() => onChange(c)}
-              className={`shrink-0 rounded-full px-3 py-1 text-xs font-medium transition ${
-                active
-                  ? "bg-deep-green text-cream"
-                  : "border border-deep-green/20 bg-transparent text-deep-green/70 hover:bg-cream-soft"
-              }`}
-            >
-              {c}
-            </button>
-          );
-        })}
-      </div>
-    </section>
-  );
-}
-
-// Wraps CancelHeatmap with a Slate-Review-only mode toggle.
-// "Cancelled only" (default) is the original CancelHeatmap behavior:
-// only slots with at least one cancellation in the window. "All
-// matches" expands to every recurring slot with cancellations
-// rendered inline alongside played matches. highlightRecentCancels
-// stays on in both modes so the row marker keeps surfacing recently-
-// cancelled slots regardless of filter. The CancelHeatmap usages on
-// /cities/[city] and /cities?tab=cancellations don't get this toggle —
-// it's a Slate Review affordance only.
-function SlateReviewCancelSection({ city }: { city: City }) {
-  const [showAllSlots, setShowAllSlots] = useState(false);
-  return (
-    <div>
-      <div className="mb-3 flex justify-end">
-        <div
-          className="inline-flex rounded-full border border-cream-line bg-cream-soft p-0.5 text-xs font-bold"
-          role="radiogroup"
-          aria-label="Cancellation view"
-        >
-          {(["all", "cancelled"] as const).map((opt) => {
-            const active =
-              (opt === "all" && showAllSlots) ||
-              (opt === "cancelled" && !showAllSlots);
-            return (
-              <button
-                key={opt}
-                type="button"
-                onClick={() => setShowAllSlots(opt === "all")}
-                aria-pressed={active}
-                className={`rounded-full px-3 py-1.5 transition ${
-                  active
-                    ? "bg-mint text-deep-green"
-                    : "text-deep-green/65 hover:text-deep-green"
-                }`}
-              >
-                {opt === "all" ? "All matches" : "Cancelled only"}
-              </button>
-            );
-          })}
-        </div>
-      </div>
-      <CancelHeatmap
-        city={city}
-        showAllSlots={showAllSlots}
-        highlightRecentCancels
-      />
-    </div>
-  );
-}
-
-function SlateReviewEightWeekChart({ city }: { city: City }) {
-  // Same call pattern as CityDetailView (12-week pull, last 8 rendered).
-  // Cache shared with /cities/[city] so this hook is effectively free
-  // after the user visits either surface.
-  const { rows, scheduledMatches, loading } = useMatchWindowData(12, city);
-  const weekly = useMemo(
-    () => getWeeklySpots(rows, scheduledMatches, city, 8),
-    [rows, scheduledMatches, city],
-  );
-  return (
-    <section className="rounded-2xl border-[1.5px] border-cream-line bg-white p-6 shadow-md shadow-deep-green/10">
-      <h2 className="mb-4 text-2xl font-bold tracking-tight text-deep-green">
-        Last 8 weeks
-      </h2>
-      {loading && weekly.length === 0 ? (
-        <div className="text-sm text-deep-green/60">Loading…</div>
-      ) : (
-        <TotalsBarChart weeks={weekly} />
-      )}
-    </section>
   );
 }
