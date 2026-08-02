@@ -138,6 +138,21 @@ const nextConfig: NextConfig = {
         destination: "/membership",
         permanent: true,
       },
+      // Slate Review moved out of Finance into Match Ops on 2026-08-02, and the
+      // standalone Match P&L tab was absorbed into it. Both old Finance deep
+      // links redirect to the new page.
+      {
+        source: "/admin/finance",
+        has: [{ type: "query", key: "tab", value: "slate-review" }],
+        destination: "/match-ops/slate-review",
+        permanent: true,
+      },
+      {
+        source: "/admin/finance",
+        has: [{ type: "query", key: "tab", value: "match-pnl" }],
+        destination: "/match-ops/slate-review",
+        permanent: true,
+      },
       // Field Ops ?fo= deep links (inventory / veo / community / fields) are
       // redirected in src/proxy.ts, which can strip the fo param cleanly — a
       // config redirect here would pass ?fo= through and loop on fo=fields.

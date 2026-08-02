@@ -13,8 +13,6 @@ export const FINANCE_TAB_IDS = [
   "cash-flow",
   "opex-calendar",
   "field-ranking",
-  "match-pnl",
-  "slate-review",
   // Configure group (rendered via FinanceConfigureSubNav when the
   // Configure secondary nav item is active)
   "revenue",
@@ -32,8 +30,6 @@ const PRIMARY: { id: FinanceTabId; label: string }[] = [
   { id: "cash-flow", label: "Cash Flow" },
   { id: "opex-calendar", label: "OpEx Calendar" },
   { id: "field-ranking", label: "Field Ranking" },
-  { id: "match-pnl", label: "Match P&L" },
-  { id: "slate-review", label: "Slate Review" },
 ];
 
 export default function FinanceTabNav({
