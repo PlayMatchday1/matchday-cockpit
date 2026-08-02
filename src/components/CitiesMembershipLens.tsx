@@ -1,7 +1,7 @@
 "use client";
 
 import { useCallback, useMemo } from "react";
-import { useRouter, useSearchParams } from "next/navigation";
+import { usePathname, useRouter, useSearchParams } from "next/navigation";
 import MembershipActiveChart from "./MembershipActiveChart";
 import MembershipByCityTable from "./MembershipByCityTable";
 import MembershipHealthTable from "./MembershipHealthTable";
@@ -28,6 +28,7 @@ import {
 // are already multi-month timelines and ignore the selector.
 export default function CitiesMembershipLens() {
   const router = useRouter();
+  const pathname = usePathname();
   const searchParams = useSearchParams();
   const { rows, loading } = useMembershipSnapshots();
 
@@ -56,14 +57,14 @@ export default function CitiesMembershipLens() {
 
   const setMonth = useCallback(
     (iso: string) => {
-      // Preserve the membership tab; only carry ?month= for a prior
-      // month so the current-month view keeps a clean URL.
+      // Stay on the current route (now /membership); only carry ?month= for a
+      // prior month so the current-month view keeps a clean URL.
       const params = new URLSearchParams();
-      params.set("tab", "membership");
       if (iso !== currentIso) params.set("month", isoToMonthParam(iso));
-      router.replace(`/cities?${params.toString()}`, { scroll: false });
+      const qs = params.toString();
+      router.replace(qs ? `${pathname}?${qs}` : pathname, { scroll: false });
     },
-    [router, currentIso],
+    [router, pathname, currentIso],
   );
 
   const view: MembershipMonthView = {

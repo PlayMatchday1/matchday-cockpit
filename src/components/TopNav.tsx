@@ -65,9 +65,9 @@ const PRIMARY_TABS: PrimaryTab[] = [
   },
   {
     label: "Membership",
-    disabled: true,
-    visible: () => true,
-    match: () => false,
+    href: "/membership",
+    visible: (u) => canAccess(u, "cities"),
+    match: (p) => p.startsWith("/membership"),
   },
   {
     label: "Match Ops",
