@@ -63,11 +63,18 @@ async function openBoard(width, boardKey) {
   const ctx = await browser.newContext({ viewport: { width, height: 1000 } });
   await ctx.addInitScript(([k, v]) => { try { localStorage.setItem(k, v); } catch (e) {} }, [`sb-${ref}-auth-token`, JSON.stringify(s.session)]);
   const pg = await ctx.newPage();
-  await pg.goto(`${BASE}/tech/tech-roadmap`, { waitUntil: "networkidle" });
+  // The board is a real URL now (one rail = the Tech section sidebar).
+  await pg.goto(`${BASE}/tech/tech-roadmap/${boardKey}`, { waitUntil: "networkidle" });
   await pg.waitForSelector('[data-testid="statebar"]', { timeout: 15000 });
-  if (boardKey === "clubhouse") { await pg.click('[data-testid="rail-clubhouse"]'); await pg.waitForTimeout(300); }
   return { ctx, pg };
 }
+// The badge lives in the section sidebar link now.
+const railBadge = (pg, boardKey) => pg.evaluate((bk) => {
+  const a = document.querySelector(`nav[aria-label="Tech"] a[href$="/tech-roadmap/${bk}"]`);
+  if (!a) return null;
+  const m = (a.textContent || "").match(/(\d+)\s*$/);
+  return m ? Number(m[1]) : null;
+}, boardKey);
 const readBar = (pg) => pg.evaluate(() => {
   const g = (k) => { const el = document.querySelector(`[data-stat="${k}"]`); return el ? (el.textContent || "").trim() : null; };
   return { total: g("total"), inprogress: g("inprogress"), fresh: g("fresh"), stale: g("stale"), esthours: g("esthours") };
@@ -87,9 +94,11 @@ async function runBoard(width, boardKey) {
   const { ctx, pg } = await openBoard(width, boardKey);
   const indCount = allCards.filter((c) => boardOf(c) === boardKey).length;
 
-  // 1) rail badge == board card count
-  const badge = Number((await pg.textContent(`[data-testid="rail-badge-${boardKey}"]`)).trim());
-  ok(`${label} rail badge equals card count (${badge} vs ${indCount})`, badge === indCount, `badge=${badge} db=${indCount}`);
+  // 1) sidebar badge == board card count; active board has the active state
+  const badge = await railBadge(pg, boardKey);
+  ok(`${label} sidebar badge equals card count (${badge} vs ${indCount})`, badge === indCount, `badge=${badge} db=${indCount}`);
+  const activeHref = await pg.getAttribute(`nav[aria-label="Tech"] a[aria-current="page"]`, "href").catch(() => null);
+  ok(`${label} active sidebar item is this board`, activeHref === `/tech/tech-roadmap/${boardKey}`, `active=${activeHref}`);
 
   if (indCount === 0) {
     // empty board (clubhouse pre-migration): assert empty-state, skip card checks
@@ -159,12 +168,17 @@ async function runBoard(width, boardKey) {
     const metaRect = meta ? meta.getBoundingClientRect() : null;
     const chips = [...el.querySelectorAll('[data-testid="chip-stuck"],[data-testid="chip-noest"]')].map((c) => c.textContent || "");
     const stuckChip = !!el.querySelector('[data-testid="chip-stuck"]');
+    const det = el.querySelector('[data-testid="card-details"]');
+    const detRect = det ? det.getBoundingClientRect() : null;
     return {
       idea: el.getAttribute("data-idea") === "1",
       stage: el.getAttribute("data-stage"),
       metaText: meta ? (meta.textContent || "").replace(/\s+/g, " ").trim() : "",
       scrollH: el.scrollHeight, clientH: el.clientHeight,
       metaInside: metaRect ? (metaRect.bottom <= cardRect.bottom + 1 && metaRect.top >= cardRect.top - 1) : true,
+      // details marker present AND actually painted (a box with size), with the
+      // mouse nowhere near — Playwright does not hover during $$eval.
+      detailsVisible: !!det && !!detRect && detRect.width > 0 && detRect.height > 0,
       chips, stuckChip,
     };
   }));
@@ -183,6 +197,15 @@ async function runBoard(width, boardKey) {
   const metaOutside = cardData.filter((c) => !c.metaInside);
   ok(`${label} no card squashed shorter than its content`, squashed.length === 0, `${squashed.length} squashed`);
   ok(`${label} every card's meta row is inside its card box`, metaOutside.length === 0, `${metaOutside.length} outside`);
+  // fix 3: a visible "Details" marker on EVERY card (mouse nowhere near it),
+  // not a hover tooltip.
+  const noDetails = cardData.filter((c) => !c.detailsVisible);
+  ok(`${label} every card shows a visible Details marker`, cardData.length > 0 && noDetails.length === 0, `${noDetails.length} missing of ${cardData.length}`);
+
+  // fix 4: all four columns share one outer height (no ragged bottom), unfiltered
+  const colH = (p) => p.evaluate(() => [...document.querySelectorAll("[data-col]")].map((el) => Math.round(el.getBoundingClientRect().height)));
+  const heights = await colH(pg);
+  ok(`${label} all 4 columns share one height, unfiltered (${heights.join(",")})`, heights.length === 4 && new Set(heights).size === 1, heights.join(","));
 
   // 8) column-header line keeps its threshold number (not truncated away)
   const meta = await pg.evaluate(() => {
@@ -197,6 +220,28 @@ async function runBoard(width, boardKey) {
   ok(`${label} state bar under 130px (${Math.round(barH)})`, barH <= 130, `${Math.round(barH)}px`);
   const estPresent = await pg.evaluate(() => !!document.querySelector('[data-stat="esthours"]'));
   ok(`${label} estimate sentence present`, estPresent);
+  // fix 5: the estimate row, when it wraps, has no line under three words (no
+  // orphaned "show" alone on the last line). Group words into visual lines by
+  // the top of a Range around each word.
+  const estWordsPerLine = await pg.evaluate(() => {
+    const el = document.querySelector('[data-testid="estrow"]');
+    if (!el) return null;
+    const walker = document.createTreeWalker(el, NodeFilter.SHOW_TEXT);
+    const lines = new Map();
+    let node;
+    while ((node = walker.nextNode())) {
+      const re = /\S+/g; let m;
+      while ((m = re.exec(node.textContent))) {
+        const r = document.createRange();
+        r.setStart(node, m.index); r.setEnd(node, m.index + m[0].length);
+        const top = Math.round(r.getBoundingClientRect().top);
+        lines.set(top, (lines.get(top) || 0) + 1);
+      }
+    }
+    return [...lines.entries()].sort((a, b) => a[0] - b[0]).map(([, n]) => n);
+  });
+  const wrapped = estWordsPerLine && estWordsPerLine.length > 1;
+  ok(`${label} estimate sentence has no line under 3 words when wrapped (${estWordsPerLine})`, !wrapped || estWordsPerLine.every((n) => n >= 3), `${estWordsPerLine}`);
 
   // 10) sum of column counts == board count (unfiltered) and == visible (filtered)
   const cc = await colCounts(pg);
@@ -207,6 +252,9 @@ async function runBoard(width, boardKey) {
   const sumVisF = ["ideas", "in_plan", "in_progress", "shipped"].reduce((a, k) => a + visN(ccF[k]), 0);
   const domVisF = await pg.$$eval('[data-testid="card"]', (els) => els.length);
   ok(`${label} column counts sum to visible cards, filtered (${sumVisF} vs ${domVisF})`, sumVisF === domVisF, `sum=${sumVisF} dom=${domVisF}`);
+  // fix 4: columns stay equal height while a filter empties some of them
+  const heightsF = await colH(pg);
+  ok(`${label} all 4 columns share one height, filtered (${heightsF.join(",")})`, heightsF.length === 4 && new Set(heightsF).size === 1, heightsF.join(","));
   await pg.fill('[data-testid="search"]', ""); await pg.waitForTimeout(120);
 
   // 11) opening a card populates the drawer; closing restores the board
@@ -218,9 +266,20 @@ async function runBoard(width, boardKey) {
   const drawerText = (await pg.textContent('[data-testid="drawer"]')) || "";
   const dbl = drawerText.toLowerCase().match(/\b(\w+)\s+\1\b/);
   ok(`${label} drawer prose has no doubled word`, !dbl, dbl ? `"${dbl[0]}"` : "");
+  // fix 2: no "1 <noun>" anywhere ("1 days"), in ANY state — drawer open, and
+  // every filter state below. Scan the whole rendered page.
+  const scanSingular = async () => (await pg.evaluate(() => document.body.innerText)).match(/\b1 (days|cards|hours|ideas)\b/);
+  let singHit = await scanSingular(); // drawer open (has "N days ago", estimate, etc.)
   await pg.click('[data-testid="scrim"]'); await pg.waitForTimeout(150);
   const drawerGone = await pg.$('[data-testid="drawer"]');
   ok(`${label} closing the drawer restores the board`, drawerGone === null);
+  if (!singHit) singHit = await scanSingular(); // unfiltered
+  await pg.fill('[data-testid="search"]', "e"); await pg.waitForTimeout(120); if (!singHit) singHit = await scanSingular();
+  await pg.fill('[data-testid="search"]', ""); await pg.selectOption('[data-testid="priority-filter"]', "High"); await pg.waitForTimeout(120); if (!singHit) singHit = await scanSingular();
+  await pg.selectOption('[data-testid="priority-filter"]', ""); await pg.click('[data-testid="stuck-toggle"]'); await pg.waitForTimeout(120); if (!singHit) singHit = await scanSingular();
+  if ((await pg.textContent('[data-testid="stuck-toggle"]')).includes("Showing")) await pg.click('[data-testid="stuck-toggle"]');
+  await pg.waitForTimeout(80);
+  ok(`${label} no "1 <noun>" string in any state`, !singHit, singHit ? `"${singHit[0]}"` : "");
 
   // screenshot for the eye pass
   await pg.screenshot({ path: `${OUT}/roadmap-${boardKey}-${width}.png`, fullPage: true });
@@ -254,12 +313,30 @@ async function failureProof() {
   await ctx.close();
 }
 
+// ── failure proof #2: revert fix 4 (equal column height) at runtime ──
+async function failureProofHeights() {
+  console.log(`\n=== FAILURE PROOF #2 (equal column heights, App @ 1600) ===`);
+  const { ctx, pg } = await openBoard(1600, "app");
+  const colH = () => pg.evaluate(() => [...document.querySelectorAll("[data-col]")].map((el) => Math.round(el.getBoundingClientRect().height)));
+  const before = await colH();
+  // revert the fix: content-height columns instead of one fixed height
+  await pg.addStyleTag({ content: `[data-col]{height:auto !important}` });
+  await pg.waitForTimeout(200);
+  const after = await colH();
+  console.log(`  before(fixed height): [${before.join(",")}] equal=${new Set(before).size === 1}`);
+  console.log(`  after (height:auto):  [${after.join(",")}] equal=${new Set(after).size === 1}`);
+  ok(`FAILURE PROOF: equal-height assertion GREEN with the rule`, new Set(before).size === 1);
+  ok(`FAILURE PROOF: equal-height assertion RED without the rule`, new Set(after).size > 1, `after=[${after.join(",")}]`);
+  await ctx.close();
+}
+
 try {
   for (const w of [1600, 1280]) {
     await runBoard(w, "app");
     await runBoard(w, "clubhouse");
   }
   await failureProof();
+  await failureProofHeights();
 } finally {
   await browser.close();
   await sb.from("kanban_cards").delete().eq("id", fixtureId);

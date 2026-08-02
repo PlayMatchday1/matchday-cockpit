@@ -18,7 +18,7 @@ import {
 import {
   ROADMAP_COLS, STALE_ACTIVE_DAYS, STALE_IDEA_DAYS, FRESH_WINDOW_DAYS,
   daysInColumn, movedAtMs, createdAtMs, daysSince, dfull, staleLimitFor,
-  isStale, isFresh, wantsEstimate, columnMetaLine, deriveStateBar,
+  isStale, isFresh, wantsEstimate, columnMetaLine, deriveStateBar, plural,
 } from "@/lib/roadmap";
 
 const C = {
@@ -38,13 +38,14 @@ const BOARDS: Record<RoadmapBoard, { name: string; sub: string }> = {
 
 const boardOf = (c: KanbanCard): RoadmapBoard => (c.board === "clubhouse" ? "clubhouse" : "app");
 
-export default function RoadmapView() {
+// `board` comes from the URL (/tech/tech-roadmap/app|clubhouse) — the section
+// sidebar is the single roadmap picker now; this component has no rail.
+export default function RoadmapView({ board }: { board: RoadmapBoard }) {
   const { appUser } = useAuth();
   const isAdmin = !!appUser?.is_admin;
   const api = useKanbanBoard("tech_roadmap");
   const { cards, owners, loading, error } = api;
 
-  const [board, setBoard] = useState<RoadmapBoard>("app");
   const [q, setQ] = useState("");
   const [ownerF, setOwnerF] = useState(""); // "" | "__none" | ownerId
   const [priF, setPriF] = useState("");
@@ -59,8 +60,6 @@ export default function RoadmapView() {
   const ownersById = useMemo(() => new Map(owners.map((o) => [o.id, o])), [owners]);
 
   const boardCards = useMemo(() => cards.filter((c) => boardOf(c) === board), [cards, board]);
-  const appCount = useMemo(() => cards.filter((c) => boardOf(c) === "app").length, [cards]);
-  const chCount = useMemo(() => cards.filter((c) => boardOf(c) === "clubhouse").length, [cards]);
 
   // The state bar is a fact about the BOARD, not the filter — derived from all
   // board cards, never the filtered subset.
@@ -120,28 +119,9 @@ export default function RoadmapView() {
 
       {error && <div className="mb-3 rounded-xl border px-3 py-2 text-sm" style={{ borderColor: C.critLine, background: C.critBg, color: C.critInk }}>Write failed: {error}</div>}
 
-      <div className="flex min-w-0 gap-0">
-        {/* rail */}
-        <aside className="flex w-[220px] flex-none flex-col gap-[3px] rounded-l-[12px] border p-3" style={{ background: C.railA, borderColor: C.line }}>
-          <div className="px-2.5 pb-1.5 text-[10.5px] font-[800] tracking-[0.09em]" style={{ color: C.muted }}>ROADMAPS</div>
-          {(["app", "clubhouse"] as RoadmapBoard[]).map((k) => {
-            const on = board === k;
-            const count = k === "app" ? appCount : chCount;
-            return (
-              <button key={k} type="button" data-testid={`rail-${k}`} onClick={() => { setBoard(k); setSelId(null); clearFilters(); }}
-                className="flex min-h-[38px] items-center gap-2.5 rounded-[9px] px-2.5 py-2 text-left text-[13px] font-bold"
-                style={on ? { background: C.mint, color: C.forestDeep, boxShadow: `inset 3px 0 0 ${C.accent}` } : { color: C.ink }}>
-                <span>{BOARDS[k].name}</span>
-                <em data-testid={`rail-badge-${k}`} className="ml-auto rounded-[9px] border px-[7px] py-px text-[10.5px] font-[800] not-italic"
-                  style={on ? { background: C.surface, borderColor: "#bfe0cd", color: C.forest } : { background: C.chipBg, borderColor: C.chipLine, color: C.muted }}>{count}</em>
-              </button>
-            );
-          })}
-        </aside>
-
-        {/* main */}
-        <main className="min-w-0 flex-1 rounded-r-[12px] border border-l-0 p-[18px_20px]" style={{ borderColor: C.line, background: C.surface }}>
-          <div className="mb-3.5 flex items-start gap-3.5">
+      {/* One rail only: the Tech section sidebar picks the board (see
+          tech/layout.tsx). The board takes the full width here. */}
+      <div className="mb-3.5 flex items-start gap-3.5">
             <div>
               <h1 className="m-0 mb-0.5 text-[23px] font-[800] tracking-[-0.015em]" style={{ color: C.forestDeep }}>{b.name}</h1>
               <p className="m-0 text-[12.5px]" style={{ color: C.muted }}>{b.sub}</p>
@@ -183,11 +163,14 @@ export default function RoadmapView() {
               const total = boardCards.filter((c) => c.stage === col.id);
               const vis = total.filter(passes);
               const meta = columnMetaLine(col.id, total, nowMs);
+              // FIXED height (h-, not max-h): all four columns run to the same
+              // bottom edge and each scrolls independently, so a 2-card column
+              // shows empty space, not a short box — no ragged bottom.
               return (
                 <div key={col.id} data-col={col.id} onDragOver={(e) => { if (isAdmin && dragId.current) { e.preventDefault(); setDragOver(col.id); } }}
                   onDragLeave={() => setDragOver((d) => (d === col.id ? null : d))}
                   onDrop={(e) => { e.preventDefault(); const id = dragId.current; dragId.current = null; setDragOver(null); if (id) void moveCard(id, col.id); }}
-                  className="flex max-h-[min(66vh,700px)] flex-col overflow-hidden rounded-[12px] border" style={{ background: C.board, borderColor: dragOver === col.id ? C.accent : C.line }}>
+                  className="flex h-[min(66vh,700px)] flex-col overflow-hidden rounded-[12px] border" style={{ background: C.board, borderColor: dragOver === col.id ? C.accent : C.line }}>
                   <div className="flex flex-none items-center gap-2 border-b px-3 pb-2.5 pt-2.5" style={{ background: C.surface, borderColor: C.line }}>
                     <span className="flex h-5 w-5 flex-none items-center justify-center rounded-full text-[11px] font-[800] text-white" style={{ background: C.forestDeep }}>{ROADMAP_COLS.indexOf(col) + 1}</span>
                     <span className="min-w-0 truncate text-[13px] font-[800]" style={{ color: C.forestDeep }}>{col.title}</span>
@@ -208,9 +191,7 @@ export default function RoadmapView() {
             })}
           </div>
 
-          <Footer cards={boardCards} nowMs={nowMs} boardName={b.name} />
-        </main>
-      </div>
+      <Footer cards={boardCards} nowMs={nowMs} boardName={b.name} />
 
       {sel && <Drawer card={sel} nowMs={nowMs} boardName={BOARDS[boardOf(sel)].name} owner={sel.owner_user_id ? ownerName(ownersById.get(sel.owner_user_id)) : cardOwnerLabel(sel)}
         isAdmin={isAdmin} owners={owners}
@@ -228,24 +209,26 @@ export default function RoadmapView() {
 // ── state bar ──────────────────────────────────────────────────────────────
 function StateBar({ bar, staleOnly, onShowStuck }: { bar: ReturnType<typeof deriveStateBar>; staleOnly: boolean; onShowStuck: () => void }) {
   return (
-    <div data-testid="statebar" className="mb-3 flex max-h-[130px] flex-wrap items-center gap-0 rounded-[12px] border p-[11px_15px]" style={{ background: C.surface, borderColor: C.line }}>
-      <Stat><b data-stat="total">{bar.total}</b><u>cards on this board</u></Stat>
-      <Stat><b data-stat="inprogress">{bar.inProgress}</b><u>in progress</u></Stat>
-      <Stat><b data-stat="fresh">{bar.fresh}</b><u>changed in {FRESH_WINDOW_DAYS} days</u></Stat>
-      <Stat>
-        <b data-stat="stale" className="" style={{ color: bar.stale ? C.warnInk : C.forestDeep }}>{bar.stale}</b>
-        {bar.stale && !staleOnly
-          ? <button data-testid="stuck-affordance" data-kind="button" onClick={onShowStuck} className="border-0 bg-transparent p-0 text-left text-[11px] font-[800] underline underline-offset-2" style={{ color: C.forest }}>sitting too long — show only these</button>
-          : <u data-testid="stuck-affordance" data-kind="text">sitting too long{staleOnly && bar.stale ? " — showing these" : ""}</u>}
-      </Stat>
-      <div className="est ml-auto flex max-w-[340px] flex-col items-end pr-0 text-right max-[1450px]:ml-0 max-[1450px]:mt-[9px] max-[1450px]:w-full max-[1450px]:max-w-none max-[1450px]:flex-row max-[1450px]:items-baseline max-[1450px]:gap-[9px] max-[1450px]:border-t max-[1450px]:border-t-[#eff3f1] max-[1450px]:pt-[9px] max-[1450px]:text-left">
+    <div data-testid="statebar" className="mb-3 flex max-h-[130px] flex-col gap-[9px] rounded-[12px] border p-[11px_15px]" style={{ background: C.surface, borderColor: C.line }}>
+      <div className="flex flex-wrap items-center gap-0">
+        <Stat><b data-stat="total">{bar.total}</b><u>{plural(bar.total, "card")} on this board</u></Stat>
+        <Stat><b data-stat="inprogress">{bar.inProgress}</b><u>in progress</u></Stat>
+        <Stat><b data-stat="fresh">{bar.fresh}</b><u>changed in {FRESH_WINDOW_DAYS} days</u></Stat>
+        <Stat>
+          <b data-stat="stale" style={{ color: bar.stale ? C.warnInk : C.forestDeep }}>{bar.stale}</b>
+          {bar.stale && !staleOnly
+            ? <button data-testid="stuck-affordance" data-kind="button" onClick={onShowStuck} className="border-0 bg-transparent p-0 text-left text-[11px] font-[800] underline underline-offset-2" style={{ color: C.forest }}>sitting too long — show only these</button>
+            : <u data-testid="stuck-affordance" data-kind="text">sitting too long{staleOnly && bar.stale ? " — showing these" : ""}</u>}
+        </Stat>
+      </div>
+      {/* fix 5: the estimate sentence is its own full-width, LEFT-aligned row —
+          not right-aligned beside the stats, where it wrapped with "show" alone
+          on the last line. text-wrap:pretty forbids that orphaned last line. */}
+      <div data-testid="estrow" className="w-full border-t pt-[9px] text-left text-[11px] font-semibold leading-[1.4] no-underline" style={{ borderColor: C.hair, color: C.muted, textWrap: "pretty" }}>
         {bar.withEstimate > 0 ? (
-          <>
-            <b data-stat="esthours" className="text-[16px] font-[800] leading-[1.15]" style={{ color: C.forestDeep }}>{bar.estimatedHours}h</b>
-            <u className="text-[11px] font-semibold not-italic leading-[1.35] no-underline" style={{ color: C.muted }}>estimated across the {bar.withEstimate} card{bar.withEstimate === 1 ? "" : "s"} that carry an estimate · {bar.noEstimate} carry none, so this is not the board&rsquo;s total</u>
-          </>
+          <><b data-stat="esthours" style={{ color: C.forestDeep }}>{bar.estimatedHours}h</b> estimated across the {plural(bar.withEstimate, "card")} that carr{bar.withEstimate === 1 ? "ies" : "y"} an estimate · {bar.noEstimate} carr{bar.noEstimate === 1 ? "ies" : "y"} none, so this is not the board&rsquo;s total</>
         ) : (
-          <u data-stat="esthours" data-none="1" className="text-[11px] font-semibold not-italic leading-[1.35] no-underline" style={{ color: C.muted }}>no card carries an estimate yet, so there is no board total to show</u>
+          <span data-stat="esthours" data-none="1">no card carries an estimate yet, so there is no board total to show</span>
         )}
       </div>
     </div>
@@ -273,9 +256,14 @@ function Card({ c, nowMs, owner, selected, draggable, onOpen, onDragStart, onDra
   if (est !== null) bits.push(`${est}h`);
 
   return (
+    // Discovery is on the card, not in a tooltip: a hover title tells you
+    // nothing until you've already guessed the card is clickable (and it drew on
+    // top of the neighbour's meta row, hiding it). A muted "Details ›" marker
+    // sits in the corner of EVERY card, visible whether or not the pointer is
+    // near — aria-hidden because the whole card is already a labelled button.
     <div data-testid="card" data-card-id={c.id} data-stage={c.stage} data-idea={isIdea ? "1" : "0"}
       draggable={draggable} onDragStart={onDragStart} onDragEnd={onDragEnd}
-      onClick={onOpen} title="Open this card" role="button" tabIndex={0}
+      onClick={onOpen} role="button" tabIndex={0} aria-label={`Open ${c.title}`}
       onKeyDown={(e) => { if (e.key === "Enter" || e.key === " ") { e.preventDefault(); onOpen(); } }}
       className="relative flex-none cursor-pointer overflow-hidden rounded-[10px] border pl-[11px] pr-[10px] pt-[9px] pb-2"
       style={{ background: C.surface, borderColor: selected ? C.accent : C.line, boxShadow: selected ? `0 0 0 2px rgba(53,199,127,.22)` : "0 1px 1px rgba(13,59,46,.03)" }}>
@@ -284,6 +272,7 @@ function Card({ c, nowMs, owner, selected, draggable, onOpen, onDragStart, onDra
         <span className="min-w-0 flex-1">{c.title}</span>
         <em data-testid="card-owner" className="max-w-[86px] flex-none truncate rounded-[7px] border px-[6px] py-px text-[10.5px] font-[800] not-italic"
           style={owner ? { background: C.chipBg, borderColor: C.chipLine, color: C.muted } : { background: C.critBg, borderColor: C.critLine, color: C.critInk }}>{owner || "No owner"}</em>
+        <span data-testid="card-details" aria-hidden className="flex-none whitespace-nowrap pt-px text-[10px] font-[800] not-italic" style={{ color: C.muted2 }}>Details ›</span>
       </div>
       <div data-testid="card-meta" className="mt-[5px] flex flex-wrap items-center gap-x-[7px] gap-y-1 text-[10.5px] font-semibold" style={{ color: C.muted }}>
         {bits.map((bt, i) => <span key={i} className="flex items-center gap-[7px]">{i > 0 && <i className="not-italic opacity-50">·</i>}<i className="not-italic">{bt}</i></span>)}
@@ -312,7 +301,7 @@ function Drawer({ card, nowMs, boardName, owner, isAdmin, owners, onClose, onMov
   const note = card.stage === "shipped"
     ? "Shipped cards are never flagged — there is nothing left to chase."
     : stale
-      ? `Flagged: nothing has happened to this card in ${movedDays} days, and a card in the ${colTitle} column is flagged past ${limit}.`
+      ? `Flagged: nothing has happened to this card in ${plural(movedDays, "day")}, and a card in the ${colTitle} column is flagged past ${limit}.`
       : `Not flagged: a card in the ${colTitle} column is flagged once it goes ${limit} days without moving, and this one is at ${movedDays}.`;
 
   return (
@@ -335,9 +324,9 @@ function Drawer({ card, nowMs, boardName, owner, isAdmin, owners, onClose, onMov
           <Sec title="THE CARD">
             <Row label="Owner">{owner ? owner : <span style={{ color: C.critInk }}>Nobody — this card cannot be worked</span>}</Row>
             <Row label="Priority">{cardPriority(card) ?? "—"}</Row>
-            <Row label="Estimate">{est !== null ? `${est} hours` : <span style={{ color: C.muted }}>None typed in{wantsEstimate(card) ? ` — a card in the ${colTitle} column should carry one` : ""}</span>}</Row>
-            <Row label="Created">{dfull(createdAtMs(card))} · {createdDays} days ago</Row>
-            <Row label={card.stage === "shipped" ? "Shipped" : "Last moved"}>{dfull(movedAtMs(card))} · {movedDays === 0 ? "today" : `${movedDays} days ago`}</Row>
+            <Row label="Estimate">{est !== null ? plural(est, "hour") : <span style={{ color: C.muted }}>None typed in{wantsEstimate(card) ? ` — a card in the ${colTitle} column should carry one` : ""}</span>}</Row>
+            <Row label="Created">{dfull(createdAtMs(card))} · {plural(createdDays, "day")} ago</Row>
+            <Row label={card.stage === "shipped" ? "Shipped" : "Last moved"}>{dfull(movedAtMs(card))} · {movedDays === 0 ? "today" : `${plural(movedDays, "day")} ago`}</Row>
           </Sec>
           <Sec title={`WHY IT IS ${stale ? "FLAGGED" : "NOT FLAGGED"}`}>
             <div data-testid="drawer-flag" className="text-[12px] leading-[1.5]" style={{ color: stale ? C.warnInk : C.muted }}>{note}</div>
@@ -457,13 +446,13 @@ function Footer({ cards, nowMs, boardName }: { cards: KanbanCard[]; nowMs: numbe
 
   const text = cards.length === 0
     ? `This board has no cards yet. Ages are counted in whole days from today, ${dfull(nowMs)}. Nothing on this page writes anywhere except moving a card between columns, which resets that card's clock.`
-    : `This board holds ${cards.length} cards; each column header counts the cards in it, and shows "N of M" when a filter is hiding some. ` +
+    : `This board holds ${plural(cards.length, "card")}; each column header counts the cards in it, and shows "N of M" when a filter is hiding some. ` +
       `A card is flagged when it has not moved for longer than its column allows: ${STALE_ACTIVE_DAYS} days for In plan and In progress, ${STALE_IDEA_DAYS} days for Ideas, and never for Shipped — ` +
       `${stale.length} card${stale.length === 1 ? " is" : "s are"} flagged right now, of which ${staleIdeas} ${staleIdeas === 1 ? "is an idea" : "are ideas"}. ` +
       `An idea card prints no age and no flag: a column of ages nobody acts on is noise. The age of the oldest idea is on the column line above, any single idea's age is in its drawer, and "only what is stuck" still finds them. ` +
       `Changed in ${FRESH_WINDOW_DAYS} days means the card was created or moved to another column inside that window; ideas do not change column, so for an idea it means it was written down that recently. ` +
-      `Estimates are typed by hand and most cards do not carry one: ${withEst.length} of ${cards.length} do, totalling ${hrs} hours, and the other ${noEst} have none — which is why this page prints no board total, because a total across ${withEst.length} of ${cards.length} cards is not the board's total. ` +
-      `Priority is typed by hand too, and ${byP[topP]} of the ${cards.length} cards are marked ${topP}${byP[topP] > cards.length / 2 ? ", so priority is not currently separating one card from another" : ""}. ` +
+      `Estimates are typed by hand and most cards do not carry one: ${withEst.length} of ${cards.length} do, totalling ${plural(hrs, "hour")}, and the other ${noEst} have none — which is why this page prints no board total, because a total across ${withEst.length} of ${plural(cards.length, "card")} is not the board's total. ` +
+      `Priority is typed by hand too, and ${byP[topP]} of the ${plural(cards.length, "card")} ${cards.length === 1 ? "is" : "are"} marked ${topP}${byP[topP] > cards.length / 2 ? ", so priority is not currently separating one card from another" : ""}. ` +
       `${noOwn} card${noOwn === 1 ? " has" : "s have"} no owner and ${noDesc} ${noDesc === 1 ? "has" : "have"} no description written, so those cannot be picked up without asking somebody. ` +
       `Ages are counted in whole days from today, ${dfull(nowMs)}. Nothing on this page writes anywhere except moving a card between columns, which resets that card's clock.`;
 

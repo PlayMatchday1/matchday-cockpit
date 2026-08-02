@@ -75,20 +75,27 @@ export function dfull(ms: number): string {
   return `${MO[x.getUTCMonth()]} ${x.getUTCDate()}, ${x.getUTCFullYear()}`;
 }
 
+// Count + noun, singularised: "1 day" / "3 days", "1 card" / "0 cards". Used
+// everywhere the page prints a number followed by a noun so "1 days" can never
+// render — the whole class of defect, not the one instance the mockup showed.
+export function plural(n: number, noun: string): string {
+  return `${n} ${noun}${n === 1 ? "" : "s"}`;
+}
+
 // The one line a column header carries — the single thing that column is asked.
 // An empty column says nothing (no "0 days").
 export function columnMetaLine(stage: string, cards: KanbanCard[], nowMs: number): string | null {
   if (cards.length === 0) return null;
   if (stage === "ideas") {
     const oldest = Math.max(...cards.map((c) => daysInColumn(c, nowMs)));
-    return `oldest has sat ${oldest} days · flagged past ${STALE_IDEA_DAYS}`;
+    return `oldest has sat ${plural(oldest, "day")} · flagged past ${STALE_IDEA_DAYS}`;
   }
   if (stage === "shipped") {
     const mostRecent = Math.max(...cards.map((c) => movedAtMs(c)));
     return `most recent shipped ${dfull(mostRecent)}`;
   }
   const longest = Math.max(...cards.map((c) => daysInColumn(c, nowMs)));
-  return `longest untouched ${longest} days · flagged past ${STALE_ACTIVE_DAYS}`;
+  return `longest untouched ${plural(longest, "day")} · flagged past ${STALE_ACTIVE_DAYS}`;
 }
 
 // ── board-level aggregates for the state bar (all derived, never typed) ──

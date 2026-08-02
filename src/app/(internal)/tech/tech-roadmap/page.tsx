@@ -1,16 +1,9 @@
-"use client";
+// The board is addressable by URL (/tech/tech-roadmap/app|clubhouse) so each
+// sidebar item is a real link, the back button works, and a board can be pasted
+// into Slack. The bare route redirects to the App board.
 
-// Tech Roadmap — App + Clubhouse boards (mockup docs/mockups/roadmap-v1_3.html).
-// Viewing keeps the clubhouse gate it carried on Home; mutations inside are
-// gated on app_users.is_admin (a non-admin gets a read-only board).
+import { redirect } from "next/navigation";
 
-import PagePermissionGuard from "@/components/PagePermissionGuard";
-import RoadmapView from "./RoadmapView";
-
-export default function TechRoadmapPage() {
-  return (
-    <PagePermissionGuard page="clubhouse">
-      <RoadmapView />
-    </PagePermissionGuard>
-  );
+export default function TechRoadmapIndex() {
+  redirect("/tech/tech-roadmap/app");
 }
