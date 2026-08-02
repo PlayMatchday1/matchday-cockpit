@@ -21,6 +21,7 @@ import {
   writeScheduleMasterAudit,
   type ScheduleMasterRow,
 } from "@/lib/scheduleMaster";
+import { CITY_CODE_TO_DISPLAY, matchLocalDateTime } from "@/lib/scheduleReconcile";
 
 export const runtime = "nodejs";
 export const maxDuration = 10;
@@ -63,12 +64,29 @@ type MatchOut = {
   max_spots: number;
   mdapi_field_id: number | null;
   source: string;
+  // Future planning flag: is this planned slot already on MatchDay (present in
+  // mdapi_matches)? false → the grid flags it "not on MatchDay yet".
+  in_matchday: boolean;
+};
+
+// What actually happened, straight from mdapi_matches — rendered for COMPLETED
+// (past) days, just like Manager Pay reads the synced actuals for closed weeks.
+type ActualOut = {
+  api_id: number;
+  venue: string;
+  detail: string;
+  time: string;
+  max_spots: number | null;
+  player_count: number | null;
+  is_cancelled: boolean;
 };
 
 type DayOut = {
   date: string; // YYYY-MM-DD
   day_of_week: (typeof DAY_LABELS)[number];
-  matches: MatchOut[];
+  is_past: boolean; // date < today (America/Chicago)
+  matches: MatchOut[]; // the plan (schedule_master)
+  actual_matches: ActualOut[]; // what mdapi recorded for this day
 };
 
 type CityOut = {
@@ -108,6 +126,64 @@ export async function GET(req: Request) {
   }
   const rows = (rowsRes.data ?? []) as Row[];
 
+  // ── The actuals: what mdapi_matches recorded this week ──────────────────
+  // start_date is venue-local wall clock stamped at +00:00, so a plain string
+  // range on the calendar window is the right (benign) comparison — matching the
+  // discrepancies route's convention. Cancelled matches are kept (a cancelled
+  // match still HAPPENED-as-cancelled and is still "on MatchDay").
+  const startTs = `${isoDate(weekStart)}T00:00:00+00:00`;
+  const endTs = `${isoDate(weekEnd)}T23:59:59+00:00`;
+  const mdRes = await supabase
+    .from("mdapi_matches")
+    .select("api_id, city_identifier, city_name, field_id, field_title, start_date, is_cancelled, max_player_count, player_count")
+    .is("deleted_at", null)
+    .gte("start_date", startTs)
+    .lte("start_date", endTs);
+  const mdRows = (mdRes.data ?? []) as Array<{
+    api_id: number; city_identifier: string | null; city_name: string | null;
+    field_id: number | null; field_title: string | null; start_date: string | null;
+    is_cancelled: boolean | null; max_player_count: number | null; player_count: number | null;
+  }>;
+
+  // actuals[displayCity][date] = [ActualOut]; plus key sets for the in_matchday
+  // flag. A planned slot is "on MatchDay" when a match exists at the same
+  // field+date+time (or, for legacy field-less rows, same city+date+time).
+  const actualsByCityDate = new Map<string, Map<string, ActualOut[]>>();
+  const mdFieldKeys = new Set<string>(); // `${field_id}|${date}|${hhmm}`
+  const mdCityKeys = new Set<string>(); // `${displayCity}|${date}|${hhmm}`
+  for (const m of mdRows) {
+    const ldt = matchLocalDateTime(m.start_date);
+    if (!ldt) continue;
+    const d = new Date(Date.parse(m.start_date!));
+    const hhmm = `${String(d.getUTCHours()).padStart(2, "0")}:${String(d.getUTCMinutes()).padStart(2, "0")}`;
+    const displayCity =
+      (m.city_identifier && CITY_CODE_TO_DISPLAY[m.city_identifier]) ??
+      m.city_name ?? m.city_identifier ?? "Unknown";
+    if (m.field_id != null) mdFieldKeys.add(`${m.field_id}|${ldt.date}|${hhmm}`);
+    mdCityKeys.add(`${displayCity}|${ldt.date}|${hhmm}`);
+    let byDate = actualsByCityDate.get(displayCity);
+    if (!byDate) { byDate = new Map(); actualsByCityDate.set(displayCity, byDate); }
+    if (!byDate.has(ldt.date)) byDate.set(ldt.date, []);
+    byDate.get(ldt.date)!.push({
+      api_id: m.api_id,
+      venue: m.field_title ?? "—",
+      detail: m.field_title ?? "",
+      time: ldt.timeLabel,
+      max_spots: m.max_player_count,
+      player_count: m.player_count,
+      is_cancelled: m.is_cancelled === true,
+    });
+  }
+  const inMatchday = (fieldId: number | null, city: string, date: string, timeStr: string): boolean => {
+    const min = startMinutes(timeStr);
+    if (min === Number.MAX_SAFE_INTEGER) return false;
+    const hhmm = `${String(Math.floor(min / 60)).padStart(2, "0")}:${String(min % 60).padStart(2, "0")}`;
+    if (fieldId != null && mdFieldKeys.has(`${fieldId}|${date}|${hhmm}`)) return true;
+    return mdCityKeys.has(`${city}|${date}|${hhmm}`);
+  };
+
+  const todayIso = new Date().toLocaleDateString("en-CA", { timeZone: "America/Chicago" });
+
   // Bucket by city, then by date.
   const byCity = new Map<string, Map<string, Row[]>>();
   for (const r of rows) {
@@ -134,9 +210,12 @@ export async function GET(req: Request) {
       const dayRows = byDate.get(key) ?? [];
       dayRows.sort((a, b) => startMinutes(a.match_time) - startMinutes(b.match_time));
       total += dayRows.length;
+      const actual_matches = actualsByCityDate.get(name)?.get(key) ?? [];
+      actual_matches.sort((a, b) => startMinutes(a.time) - startMinutes(b.time));
       days.push({
         date: key,
         day_of_week: DAY_LABELS[i],
+        is_past: key < todayIso,
         matches: dayRows.map((r) => ({
           id: r.id,
           venue: r.venue,
@@ -145,7 +224,9 @@ export async function GET(req: Request) {
           max_spots: r.max_spots,
           mdapi_field_id: r.mdapi_field_id,
           source: r.source ?? "template",
+          in_matchday: inMatchday(r.mdapi_field_id, name, key, r.match_time),
         })),
+        actual_matches,
       });
     }
     cities.push({ name, total, days });
@@ -158,6 +239,7 @@ export async function GET(req: Request) {
     {
       week_start: isoDate(weekStart),
       week_end: isoDate(weekEnd),
+      today: todayIso,
       cities,
     },
     { status: 200 },
