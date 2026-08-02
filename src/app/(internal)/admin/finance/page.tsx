@@ -36,7 +36,6 @@ import MatchPnL from "@/components/MatchPnL";
 import SlateDppPriceHistory from "@/components/SlateDppPriceHistory";
 import SlateMatchPnLSection from "@/components/SlateMatchPnLSection";
 import SlateMembershipPriceHistory from "@/components/SlateMembershipPriceHistory";
-import PartnerDashboardsAdmin from "@/components/PartnerDashboardsAdmin";
 import RevenueAdminView from "@/components/RevenueAdminView";
 import TotalsBarChart from "@/components/TotalsBarChart";
 import { VISIBLE_CITIES, isCityHidden, type City } from "@/lib/types";
@@ -72,7 +71,6 @@ const PRIMARY_TAB_IDS: ReadonlySet<FinanceTabId> = new Set<FinanceTabId>([
 function deriveSecondary(tab: FinanceTabId): SecondaryId | null {
   if (isConfigureSubTab(tab)) return "configure";
   if (tab === "check-ins") return "check-ins";
-  if (tab === "partner-dashboards") return "partner-dashboards";
   return null;
 }
 
@@ -302,9 +300,6 @@ function FinanceLandingContent() {
       </TabPanel>
       <TabPanel id="check-ins" active={activeTab} visited={visited}>
         <CheckInsView />
-      </TabPanel>
-      <TabPanel id="partner-dashboards" active={activeTab} visited={visited}>
-        <PartnerDashboardsAdmin inline />
       </TabPanel>
       <TabPanel id="field-costs" active={activeTab} visited={visited}>
         <FieldCostsView />

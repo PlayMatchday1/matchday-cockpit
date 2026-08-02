@@ -19,6 +19,7 @@ import { usePathname } from "next/navigation";
 import { useAuth } from "@/lib/useAuth";
 import { useCrmAwaitingCount } from "@/lib/useCrmAwaitingCount";
 import { useManagerPayAttnCount } from "@/lib/useManagerPayAttnCount";
+import { usePartnerDashboardsCount } from "@/lib/usePartnerDashboardsCount";
 import { visibleSections } from "./sections";
 
 export default function ChatsRail({
@@ -32,10 +33,11 @@ export default function ChatsRail({
   const pathname = usePathname() ?? "";
   const awaiting = useCrmAwaitingCount();
   const managerPayAttn = useManagerPayAttnCount();
+  const partnerCount = usePartnerDashboardsCount();
 
   const items = visibleSections(appUser);
-  const badgeCount = (kind?: "awaiting" | "manager-pay") =>
-    kind === "awaiting" ? awaiting : kind === "manager-pay" ? managerPayAttn : undefined;
+  const badgeCount = (kind?: "awaiting" | "manager-pay" | "partner-dashboards") =>
+    kind === "awaiting" ? awaiting : kind === "manager-pay" ? managerPayAttn : kind === "partner-dashboards" ? partnerCount : undefined;
 
   let lastGroup: string | undefined;
 
