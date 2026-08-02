@@ -73,9 +73,9 @@ const PRIMARY_TABS: PrimaryTab[] = [
     label: "Match Ops",
     href: "/match-ops",
     badge: true,
-    // reachable if the user can open Chats OR Field Pipeline (clubhouse) OR Slate
-    // Review (finance — it moved here from the Finance nav)
-    visible: (u) => canAccess(u, "chats") || canAccess(u, "clubhouse") || canAccess(u, "finance"),
+    // reachable if the user can open Chats OR Field Pipeline (clubhouse) OR any
+    // of the cities-gated items (Master Schedule, Slate Review, Reviews, …)
+    visible: (u) => canAccess(u, "chats") || canAccess(u, "clubhouse") || canAccess(u, "cities"),
     match: (p) => p.startsWith("/match-ops"),
   },
   {
