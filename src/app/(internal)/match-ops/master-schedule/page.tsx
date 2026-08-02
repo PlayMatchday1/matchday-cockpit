@@ -1,18 +1,19 @@
 "use client";
 
-// Master Schedule — relocated from the Growth page's ?tab=master-schedule lens
-// to Match Ops. Same component (CitiesMasterScheduleLens, all-cities view, no
-// city prop), same query, same data. Gate is unchanged: it was inside Growth's
-// PagePermissionGuard page="cities", so it stays gated on can_access_cities —
-// the move does not widen access.
+// Master Schedule — rebuilt (2026-08) as a Clubhouse ↔ MatchDay reconciliation
+// view: the union of schedule_master (Clubhouse plan) and mdapi_matches
+// (MatchDay), paired by count per slot. Replaces the old CitiesMasterScheduleLens
+// presentation (Schedule Sync card + Changes-vs-last-week banner) with a
+// reconciliation summary and per-slot source states. Copy last week / Reconcile
+// now / Add session are kept (all Clubhouse-side). Gate unchanged: page="cities".
 
 import PagePermissionGuard from "@/components/PagePermissionGuard";
-import CitiesMasterScheduleLens from "@/components/CitiesMasterScheduleLens";
+import MasterScheduleReconcile from "@/components/MasterScheduleReconcile";
 
 export default function MasterSchedulePage() {
   return (
     <PagePermissionGuard page="cities">
-      <CitiesMasterScheduleLens masterSchedule />
+      <MasterScheduleReconcile />
     </PagePermissionGuard>
   );
 }
