@@ -58,6 +58,7 @@ type Cell = {
   key: string; time: string; minutes: number; field: string;
   past: boolean;
   src?: Src; apiId?: number; booked?: number | null; cap?: number | null;   // future
+  smId?: string;                                                             // schedule_master id (ch cells) — for removal
   ran?: boolean; cancelled?: boolean;                                        // past
 };
 type DayCol = { dow: string; num: string; iso: string; today: boolean; past: boolean; cells: Cell[] };
@@ -71,13 +72,15 @@ type ReconState = {
 
 type MatchRow = { api_id: number; city_identifier: string | null; field_title: string | null; field_id: number | null; start_date: string; is_cancelled: boolean | null; max_player_count: number | null };
 type PlayerRow = { match_api_id: number; user_is_fake_player: boolean | null; canceled_at: string | null; paid_status: string | null };
-type Planned = { venue: string; time24: string; source: string };
+type Planned = { id: string; venue: string; time24: string; source: string };
 
 export default function MasterScheduleReconcile() {
   const [weekStart, setWeekStart] = useState<string>(() => isoOf(mondayOf(new Date())));
   const [state, setState] = useState<ReconState>({ cities: [], tally: { both: 0, ch: 0, md: 0 }, mismatches: [], rawRows: { matches: 0, players: 0 }, loading: true });
   const [cityFilter, setCityFilter] = useState<string>("all");
   const [excOnly, setExcOnly] = useState(false);
+  const [showCancelled, setShowCancelled] = useState(false); // default OFF, like Slate Review
+  const [bulkCity, setBulkCity] = useState<CityData | null>(null);
   const [editing, setEditing] = useState(false);
   const [busy, setBusy] = useState<string>("");
   const [toast, setToast] = useState<string>("");
@@ -98,7 +101,7 @@ export default function MasterScheduleReconcile() {
         cityNames.push(c.name);
         for (const day of c.days ?? []) {
           pastByCityDate.set(`${c.name}|${day.date}`, !!day.is_past);
-          const arr: Planned[] = (day.matches ?? []).map((m: { venue: string; time: string; source: string }) => ({ venue: m.venue, time24: smStart(m.time), source: m.source }));
+          const arr: Planned[] = (day.matches ?? []).map((m: { id: string; venue: string; time: string; source: string }) => ({ id: m.id, venue: m.venue, time24: smStart(m.time), source: m.source }));
           plannedByCityDate.set(`${c.name}|${day.date}`, arr);
         }
       }
@@ -183,7 +186,7 @@ export default function MasterScheduleReconcile() {
               const pairCount = Math.min(chL.length, mdL.length);
               const t24 = k.split("|")[1];
               for (let i = 0; i < pairCount; i++) { const m = mdL[i]; cells.push({ key: `b${m.api_id}`, time: fmt12(t24), minutes: minutesOf(t24), field: chL[i].venue, past: false, src: "both", apiId: m.api_id, booked: booked.get(m.api_id) ?? null, cap: m.max_player_count }); cBoth++; }
-              for (let i = pairCount; i < chL.length; i++) { cells.push({ key: `c${name}${iso}${k}${i}`, time: fmt12(t24), minutes: minutesOf(t24), field: chL[i].venue, past: false, src: "ch" }); cCh++; }
+              for (let i = pairCount; i < chL.length; i++) { cells.push({ key: `c${chL[i].id}`, time: fmt12(t24), minutes: minutesOf(t24), field: chL[i].venue, past: false, src: "ch", smId: chL[i].id }); cCh++; }
               for (let i = pairCount; i < mdL.length; i++) { const m = mdL[i]; cells.push({ key: `m${m.api_id}`, time: fmt12(t24), minutes: minutesOf(t24), field: m.field_title ?? "—", past: false, src: "md", apiId: m.api_id, booked: booked.get(m.api_id) ?? 0, cap: m.max_player_count }); cMd++; }
             }
           }
@@ -216,14 +219,28 @@ export default function MasterScheduleReconcile() {
     const { data: sess } = await supabase.auth.getSession();
     const token = sess.session?.access_token;
     if (!token) { setToast("No active session."); return null; }
-    const res = await fetch(url, { method: "POST", headers: { Authorization: `Bearer ${token}`, ...(body ? { "Content-Type": "application/json" } : {}) }, body: body ? JSON.stringify(body) : undefined });
-    const j = (await res.json().catch(() => ({}))) as Record<string, unknown>;
-    if (!res.ok) { setToast((j.error as string) || `HTTP ${res.status}`); return null; }
-    return j;
+    try {
+      const res = await fetch(url, { method: "POST", headers: { Authorization: `Bearer ${token}`, ...(body ? { "Content-Type": "application/json" } : {}) }, body: body ? JSON.stringify(body) : undefined });
+      const j = (await res.json().catch(() => ({}))) as Record<string, unknown>;
+      if (!res.ok) { setToast((j.error as string) || `HTTP ${res.status}`); return null; }
+      return j;
+    } catch { setToast("Network error — nothing changed."); return null; }
   }
   const reconcileNow = async () => { setBusy("reconcile"); const j = await post("/api/schedule-master/reconcile"); if (j) setToast(j.autoreconcileEnabled === false ? "Auto-reconcile is off — nothing added" : `Reconciled — ${Number(j.added ?? 0)} added`); await load(weekStart); setBusy(""); };
   const copyLastWeek = async () => { if (!confirm("Copy last week's recurring plan into this week? Existing slots are left untouched.")) return; setBusy("copy"); const j = await post("/api/schedule-master/copy-week", { week_start: weekStart }); if (j) setToast(`Copied ${Number(j.added ?? 0)} from last week`); await load(weekStart); setBusy(""); };
   const addToClubhouse = async (apiId: number) => { setBusy(`md${apiId}`); const j = await post("/api/schedule-master/from-match", { match_api_ids: [apiId] }); if (j) setToast(Number(j.added ?? 0) > 0 ? "Added to Clubhouse" : "Already on the schedule"); await load(weekStart); setBusy(""); };
+  // Remove Clubhouse-only rows (schedule_master ids). Clubhouse write only.
+  // A refusal (non-admin, RLS, network) shows a visible error toast — never a
+  // silent no-op. On success reload so the removed slots disappear.
+  const removeIds = async (ids: string[], label: string) => {
+    if (ids.length === 0) return;
+    setBusy(label);
+    const j = await post("/api/schedule-master/remove", { ids });
+    if (j) setToast(`Removed ${Number(j.removed ?? 0)} from Clubhouse`); // else: post() already showed the specific error
+    await load(weekStart);
+    setBusy("");
+  };
+  const removeOne = async (smId: string) => { if (!confirm("Remove this Clubhouse-only slot? It is not on MatchDay.")) return; await removeIds([smId], `rm${smId}`); };
 
   const t = state.tally;
   const sessions = t.both + t.ch + t.md;
@@ -264,11 +281,18 @@ export default function MasterScheduleReconcile() {
             <button type="button" className={"mx-chip" + (cityFilter === "all" ? " is-on" : "")} onClick={() => setCityFilter("all")}>All</button>
             {cityKeys.map((c) => <button key={c} type="button" className={"mx-chip" + (cityFilter === c ? " is-on" : "")} onClick={() => setCityFilter(c)}>{c}</button>)}
           </div>
-          <label className="mx-toggle">
-            <input type="checkbox" checked={excOnly} onChange={(e) => setExcOnly(e.target.checked)} />
-            <span className="mx-track"><span className="mx-knob" /></span>
-            <span>Only slots needing a decision</span>
-          </label>
+          <div className="mx-toggles">
+            <label className="mx-toggle is-cxtoggle">
+              <input type="checkbox" checked={showCancelled} onChange={(e) => setShowCancelled(e.target.checked)} />
+              <span className="mx-track"><span className="mx-knob" /></span>
+              <span>Show cancelled</span>
+            </label>
+            <label className="mx-toggle">
+              <input type="checkbox" checked={excOnly} onChange={(e) => setExcOnly(e.target.checked)} />
+              <span className="mx-track"><span className="mx-knob" /></span>
+              <span>Only slots needing a decision</span>
+            </label>
+          </div>
         </div>
       </div>
 
@@ -276,7 +300,7 @@ export default function MasterScheduleReconcile() {
         <div className="mx-card"><div className="mx-empty">Loading schedule…</div></div>
       ) : visibleCities.length === 0 ? (
         <div className="mx-card"><div className="mx-empty">{excOnly ? "Nothing to decide in this week." : "No sessions this week."}</div></div>
-      ) : visibleCities.map((city) => <CityCard key={city.name} city={city} excOnly={excOnly} busy={busy} onAdd={addToClubhouse} />)}
+      ) : visibleCities.map((city) => <CityCard key={city.name} city={city} excOnly={excOnly} showCancelled={showCancelled} busy={busy} onAdd={addToClubhouse} onRemoveOne={removeOne} onBulk={() => setBulkCity(city)} />)}
 
       {editing && (
         <MasterScheduleEditModal
@@ -285,6 +309,7 @@ export default function MasterScheduleReconcile() {
           onSaved={() => { setEditing(false); setToast("Session added"); void load(weekStart); }}
         />
       )}
+      {bulkCity && <BulkRemoveModal city={bulkCity} busy={busy} onClose={() => setBulkCity(null)} onConfirm={async (ids) => { setBulkCity(null); await removeIds(ids, `bulk${bulkCity.name}`); }} />}
       {toast && <div className="mx-toasttip" role="status" onAnimationEnd={() => setToast("")}>{toast}</div>}
     </>
   );
@@ -294,8 +319,9 @@ function Rc({ n, l, cls }: { n: number; l: string; cls?: string }) {
   return <div className="mx-rc"><div className={"mx-rc-n " + (cls ?? "")}>{n}</div><div className="mx-rc-l">{l}</div></div>;
 }
 
-function CityCard({ city, excOnly, busy, onAdd }: { city: CityData; excOnly: boolean; busy: string; onAdd: (id: number) => void }) {
+function CityCard({ city, excOnly, showCancelled, busy, onAdd, onRemoveOne, onBulk }: { city: CityData; excOnly: boolean; showCancelled: boolean; busy: string; onAdd: (id: number) => void; onRemoveOne: (smId: string) => void; onBulk: () => void }) {
   const onMd = city.both + city.md;
+  const bulkBusy = busy === `bulk${city.name}`;
   return (
     <div className="mx-card">
       <div className="mx-city-head">
@@ -304,11 +330,16 @@ function CityCard({ city, excOnly, busy, onAdd }: { city: CityData; excOnly: boo
           <span className="mx-tag">{onMd} on MatchDay</span>
           {city.ch > 0 && <span className="mx-tag is-ch">{city.ch} Clubhouse only</span>}
           {city.md > 0 && <span className="mx-tag is-md">{city.md} MatchDay only</span>}
+          {city.ch > 0 && <button type="button" className="mx-tag mx-bulkbtn" disabled={bulkBusy} onClick={onBulk}>Remove {city.ch} Clubhouse-only {plural(city.ch, "slot", "slots")}</button>}
         </div>
       </div>
       <div className="mx-grid">
         {city.days.map((d) => {
-          const cells = excOnly ? d.cells.filter((c) => c.src === "ch" || c.src === "md") : d.cells;
+          // "Show cancelled" off → drop cancelled cells from the grid entirely
+          // (not hidden/greyed). Exceptions-only → keep only ch/md.
+          const cells = d.cells
+            .filter((c) => showCancelled || !c.cancelled)
+            .filter((c) => !excOnly || c.src === "ch" || c.src === "md");
           return (
             <div key={d.iso} className={"mx-col" + (d.today ? " is-today" : "")}>
               <div className="mx-colhead">
@@ -317,7 +348,7 @@ function CityCard({ city, excOnly, busy, onAdd }: { city: CityData; excOnly: boo
               </div>
               <div className="mx-stack">
                 {cells.length === 0 ? <div className="mx-empty">{excOnly ? "Nothing to decide" : d.past ? "—" : "No sessions"}</div>
-                  : cells.map((c) => <ReconCell key={c.key} c={c} busy={busy} onAdd={onAdd} />)}
+                  : cells.map((c) => <ReconCell key={c.key} c={c} busy={busy} onAdd={onAdd} onRemoveOne={onRemoveOne} />)}
               </div>
             </div>
           );
@@ -340,49 +371,74 @@ function Leg({ cls, label, n }: { cls: string; label: string; n: number }) {
   return <span className="mx-leg"><span className={"mx-sw" + cls} />{label}<span className={"mx-legn" + (n === 0 ? " is-zero" : "")}>{n}</span></span>;
 }
 
-function ReconCell({ c, busy, onAdd }: { c: Cell; busy: string; onAdd: (id: number) => void }) {
+function BookedRow({ booked, cap, isCx }: { booked: number; cap: number | null; isCx?: boolean }) {
+  const over = cap != null && booked > cap;
+  const full = cap != null && booked >= cap;
+  const pct = cap != null ? Math.min(100, (booked / Math.max(1, cap)) * 100) : 0;
+  return (
+    <div className="mx-cell-r3">
+      <span className={"mx-pnum" + (isCx ? " is-cx" : over ? " is-over" : full ? " is-full" : "")}>{booked} / {cap ?? "—"}</span>
+      <div className={"mx-meter" + (isCx ? " is-cx" : "")}><span className={"mx-meterfill" + (isCx ? " is-cx" : over ? " is-over" : "")} style={{ width: `${pct}%` }} /></div>
+    </div>
+  );
+}
+
+function ReconCell({ c, busy, onAdd, onRemoveOne }: { c: Cell; busy: string; onAdd: (id: number) => void; onRemoveOne: (smId: string) => void }) {
   const stateCls = c.past ? (c.cancelled ? " st-cx" : "") : c.src === "ch" ? " st-ch" : c.src === "md" ? " st-md" : "";
-  const hasFig = (c.booked != null && c.cap != null) && (c.past || c.src === "both" || c.src === "md");
-  const over = hasFig && c.booked! > c.cap!;
-  const full = hasFig && c.booked! >= c.cap!;
-  const pct = hasFig ? Math.min(100, (c.booked! / Math.max(1, c.cap!)) * 100) : 0;
+  const hasFig = c.booked != null && c.cap != null;
   const isCx = !!c.cancelled;
   return (
     <div className={"mx-cell" + stateCls}>
       <div className="mx-cell-time"><span className="mx-t">{c.time}</span></div>
       <div className="mx-cell-field" title={c.field}>{c.field}</div>
-      <div className="mx-cell-r3">
-        {c.past ? (
-          hasFig ? (
-            <>
-              <span className={"mx-pnum" + (isCx ? " is-cx" : over ? " is-over" : full ? " is-full" : "")}>{c.booked} / {c.cap}</span>
-              <div className={"mx-meter" + (isCx ? " is-cx" : "")}><span className={"mx-meterfill" + (isCx ? " is-cx" : over ? " is-over" : "")} style={{ width: `${pct}%` }} /></div>
-            </>
-          ) : <span className={"mx-pnum" + (isCx ? " is-cx" : "")} title="No booked figure on record">—</span>
-        ) : c.src === "both" ? (
-          hasFig ? (
-            <>
-              <span className={"mx-pnum" + (over ? " is-over" : full ? " is-full" : "")}>{c.booked} / {c.cap}</span>
-              <div className="mx-meter"><span className={"mx-meterfill" + (over ? " is-over" : "")} style={{ width: `${pct}%` }} /></div>
-            </>
-          ) : (
-            <>
-              <span className="mx-pnum" title="Bookings appear here once the match is live">—</span>
-              <div className="mx-meter is-empty" />
-            </>
-          )
-        ) : c.src === "ch" ? (
-          <span className="mx-src is-ch">Clubhouse only</span>
-        ) : (
-          <>
-            <span className="mx-src is-md">MatchDay only</span>
-            {c.booked != null && c.cap != null && <span className="mx-pnum">{c.booked} / {c.cap}</span>}
-          </>
-        )}
-      </div>
+
+      {/* Row 3 is EITHER a state chip OR a booked figure — never a chip and a
+          number on the same row (that clipped past the cell edge). MatchDay-only
+          puts its booked figure on its own row below the chip. */}
+      {c.past ? (
+        hasFig ? <BookedRow booked={c.booked!} cap={c.cap!} isCx={isCx} />
+          : <div className="mx-cell-r3"><span className={"mx-pnum" + (isCx ? " is-cx" : "")} title="No booked figure on record">—</span></div>
+      ) : c.src === "both" ? (
+        hasFig ? <BookedRow booked={c.booked!} cap={c.cap!} />
+          : <div className="mx-cell-r3"><span className="mx-pnum" title="Bookings appear here once the match is live">—</span><div className="mx-meter is-empty" /></div>
+      ) : c.src === "ch" ? (
+        <div className="mx-cell-r3"><span className="mx-src is-ch">Clubhouse only</span></div>
+      ) : (
+        <>
+          <div className="mx-cell-r3"><span className="mx-src is-md">MatchDay only</span></div>
+          {c.booked != null && <BookedRow booked={c.booked} cap={c.cap ?? null} />}
+        </>
+      )}
+
       {c.src === "md" && c.apiId != null && (
         <div className="mx-act"><button type="button" className="mx-abtn is-green" disabled={busy === `md${c.apiId}`} onClick={() => onAdd(c.apiId!)}>Add to Clubhouse</button></div>
       )}
+      {c.src === "ch" && c.smId && (
+        <div className="mx-act"><button type="button" className="mx-abtn is-gold" disabled={busy === `rm${c.smId}`} onClick={() => onRemoveOne(c.smId!)}>Remove from Clubhouse</button></div>
+      )}
+    </div>
+  );
+}
+
+function BulkRemoveModal({ city, busy, onClose, onConfirm }: { city: CityData; busy: string; onClose: () => void; onConfirm: (ids: string[]) => void }) {
+  // GUARD: only Clubhouse-only cells (src === "ch") of THIS city's currently
+  // displayed week — never a paired ("both") slot, never md, never another
+  // week/city. `city` is the displayed week's data; we take only its ch cells.
+  const chCells = city.days.flatMap((d) => d.cells.filter((c) => c.src === "ch" && c.smId).map((c) => ({ dow: d.dow, num: d.num, time: c.time, field: c.field, id: c.smId! })));
+  const busyNow = busy === `bulk${city.name}`;
+  return (
+    <div className="mx-modal-wrap" onClick={(e) => { if (e.target === e.currentTarget) onClose(); }}>
+      <div className="mx-modal" role="dialog" aria-modal="true" aria-label={`Remove Clubhouse-only slots for ${city.name}`}>
+        <h3 className="mx-modal-h">Remove {chCells.length} Clubhouse-only {plural(chCells.length, "slot", "slots")} — {city.name}</h3>
+        <p className="mx-modal-sub">These are on the Clubhouse plan for this week but never became MatchDay matches. Removing them writes to Clubhouse only; MatchDay is not touched.</p>
+        <div className="mx-modal-list">
+          {chCells.map((s) => <div key={s.id} className="mx-modal-row"><span className="mx-modal-day">{s.dow} {s.num}</span><span className="mx-modal-time">{s.time}</span><span className="mx-modal-field">{s.field}</span></div>)}
+        </div>
+        <div className="mx-modal-act">
+          <button type="button" className="mx-btn" onClick={onClose}>Cancel</button>
+          <button type="button" className="mx-btn is-gold-solid" disabled={busyNow || chCells.length === 0} onClick={() => onConfirm(chCells.map((s) => s.id))}>Remove {chCells.length} {plural(chCells.length, "slot", "slots")}</button>
+        </div>
+      </div>
     </div>
   );
 }
@@ -440,7 +496,10 @@ const CSS = `
 /* Fixed height (not min) so a chip row and a meter row are the same height —
    keeps both/ch/past cells identical. MatchDay-only cells add the Add-to-
    Clubhouse action below and are intentionally taller (as in the mockup). */
-.mx-cell-r3{display:flex;align-items:center;gap:7px;margin-top:7px;height:18px}
+/* min-height (not fixed): a booked/meter row and a short chip both sit at 18px,
+   so both/past cells stay a uniform 98px; a chip that must wrap in a narrow
+   column lets its own (action) cell grow rather than overflow the edge. */
+.mx-cell-r3{display:flex;align-items:center;gap:7px;margin-top:7px;min-height:18px}
 .mx-pnum{font-size:12px;font-weight:700;color:#12241d;font-variant-numeric:tabular-nums;white-space:nowrap;flex:0 0 auto}
 .mx-pnum.is-full{color:#12704a}.mx-pnum.is-over{color:#8a6300}.mx-pnum.is-cx{color:#8f2d15}
 .mx-meter{height:4px;border-radius:2px;background:#e0f2e7;overflow:hidden;width:100%;min-width:0}
@@ -448,7 +507,7 @@ const CSS = `
 .mx-meterfill.is-over{background:#d9a521}
 .mx-meter.is-empty{background:transparent;border:1px dashed #d8d0bd;height:5px;border-radius:3px}
 .mx-meter.is-cx{background:#f2cdc0}.mx-meterfill.is-cx{background:#8f2d15}
-.mx-src{font-size:10px;font-weight:800;letter-spacing:.04em;text-transform:uppercase;border-radius:999px;padding:2px 8px;white-space:nowrap}
+.mx-src{font-size:10px;font-weight:800;letter-spacing:.04em;text-transform:uppercase;border-radius:999px;padding:2px 8px;white-space:normal;display:inline-block;max-width:100%;text-align:center}
 .mx-src.is-ch{color:#8a6300;background:#fbf2dd;border:1px solid #e3c369}
 .mx-src.is-md{color:#12704a;background:#e0f2e7;border:1px solid #b9dfc9}
 .mx-cell.st-ch{border:2px solid #d9a521;background:#fff;padding:8px 9px 9px}
@@ -456,9 +515,32 @@ const CSS = `
 .mx-cell.st-cx{background:#fbe9e3;border-color:#f0cec2}
 .mx-cell.st-cx .mx-cell-time .mx-t,.mx-cell.st-cx .mx-cell-field{color:#8f2d15;text-decoration:line-through}
 .mx-act{margin-top:7px;display:flex;gap:5px;flex-wrap:wrap}
-.mx-abtn{font-size:10px;font-weight:700;border-radius:6px;padding:3px 8px;cursor:pointer;line-height:1.25;border:1px solid #e2eae5;background:#fff;color:#12241d;white-space:nowrap}
+/* Full width + wrap: "Remove from Clubhouse" won't fit one line in a ~150px
+   column, and nowrap made it overflow the cell edge. */
+.mx-abtn{font-size:10px;font-weight:700;border-radius:6px;padding:3px 8px;cursor:pointer;line-height:1.25;border:1px solid #e2eae5;background:#fff;color:#12241d;white-space:normal;width:100%;box-sizing:border-box;text-align:center;overflow-wrap:break-word}
+.mx-act{width:100%}
 .mx-abtn.is-green{border-color:#b9dfc9;background:#e0f2e7;color:#12704a}
+.mx-abtn.is-gold{border-color:#e3c369;background:#fbf2dd;color:#8a6300}
 .mx-abtn:disabled{opacity:.55;cursor:default}
+.mx-toggles{display:flex;align-items:center;gap:18px;margin-left:auto;flex-wrap:wrap}
+.mx-toggle{margin-left:0}
+/* "Show cancelled" matches Slate Review's toggle — accent green when on. */
+.mx-toggle.is-cxtoggle input:checked + .mx-track{background:#35c77f;border-color:#35c77f}
+.mx-toggle.is-cxtoggle input:checked + .mx-track .mx-knob{border-color:#35c77f}
+.mx-bulkbtn{cursor:pointer;background:#fbf2dd;border-color:#e3c369;color:#8a6300}
+.mx-bulkbtn:disabled{opacity:.55;cursor:default}
+.mx-modal-wrap{position:fixed;inset:0;background:rgba(7,42,32,.42);z-index:90;display:flex;align-items:center;justify-content:center;padding:24px}
+.mx-modal{background:#fff;border-radius:14px;max-width:520px;width:100%;max-height:82vh;display:flex;flex-direction:column;box-shadow:0 22px 60px rgba(7,42,32,.28);padding:20px}
+.mx-modal-h{margin:0;font-size:16px;font-weight:800;color:#0d3b2e}
+.mx-modal-sub{margin:8px 0 12px;font-size:12.5px;color:#626f68;line-height:1.5}
+.mx-modal-list{overflow-y:auto;border:1px solid #e6ebe8;border-radius:10px}
+.mx-modal-row{display:flex;gap:12px;align-items:baseline;padding:7px 12px;border-bottom:1px solid #eff3f1;font-size:12.5px}
+.mx-modal-row:last-child{border-bottom:0}
+.mx-modal-day{flex:0 0 62px;font-weight:800;font-size:10.5px;letter-spacing:.07em;text-transform:uppercase;color:#626f68;font-variant-numeric:tabular-nums}
+.mx-modal-time{flex:0 0 74px;font-weight:700;color:#12241d;font-variant-numeric:tabular-nums}
+.mx-modal-field{min-width:0;color:#6f6858}
+.mx-modal-act{display:flex;justify-content:flex-end;gap:10px;margin-top:14px}
+.mx-btn.is-gold-solid{border-color:#8a6300;background:#8a6300;color:#fff}
 .mx-legend{display:flex;flex-wrap:wrap;gap:10px 22px;margin-top:16px;padding-top:14px;border-top:1px solid #eff3f1}
 .mx-leg{display:inline-flex;align-items:center;gap:8px;font-size:12px;color:#6f6858;font-weight:600}
 .mx-legn{font-size:11px;font-weight:800;font-variant-numeric:tabular-nums;color:#12241d;background:#eef3f0;border:1px solid #e2eae5;border-radius:999px;padding:1px 7px;margin-left:2px}
