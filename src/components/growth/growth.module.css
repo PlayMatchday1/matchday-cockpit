@@ -1,0 +1,653 @@
+/* Growth dashboard — scoped visual system. Every class here is a CSS-module
+ * local (hashed at build), so a bare `.cell` or `.row` can never collide with or
+ * lose to global CSS of equal specificity (PART 9). The mandated palette lives
+ * on .dash so it cascades to every child; nothing invents a colour outside it.
+ * --accent is fill-only: it fails 4.5:1 as text, so values are always printed
+ * in an AA-passing ink alongside any accent fill. */
+
+.dash {
+  --forest: #0d3b2e;
+  --accent: #35c77f;
+  --mint: #e0f2e7;
+  --ink: #12241d;
+  --muted: #626f68;
+  --ok-ink: #12704a;
+  --line: #e6ebe8;
+  --hair: #eff3f1;
+  --chip-bg: #eef3f0;
+  --chip-line: #e2eae5;
+  --surface: #ffffff;
+  --canvas: #f4efe4;
+  --gold-dot: #d9a521;
+  --gold-ink: #8a6300;
+  --ns-ink: #6f6858;
+  --negative: #8f2d15;
+  /* cohort diverging tints — two hues + neutral midpoint (never a rainbow) */
+  --div-above-2: #bfe8d2;
+  --div-above-1: #dcf0e5;
+  --div-mid: #eef3f0;
+  --div-below-1: #f6ddd5;
+  --div-below-2: #eec3b7;
+
+  color: var(--ink);
+  font-variant-numeric: tabular-nums;
+}
+
+.header {
+  margin-bottom: 20px;
+}
+.title {
+  font-size: 1.9rem;
+  font-weight: 800;
+  letter-spacing: -0.01em;
+  color: var(--forest);
+  text-wrap: balance;
+}
+.subtitle {
+  margin-top: 4px;
+  font-size: 0.85rem;
+  color: var(--muted);
+}
+
+.card {
+  background: var(--surface);
+  border: 1px solid var(--line);
+  border-radius: 14px;
+  padding: 18px;
+  margin-bottom: 16px;
+}
+.cardHead {
+  display: flex;
+  flex-wrap: wrap;
+  align-items: flex-start;
+  justify-content: space-between;
+  gap: 12px;
+  margin-bottom: 14px;
+}
+.cardTitle {
+  font-size: 1.05rem;
+  font-weight: 700;
+  color: var(--forest);
+}
+.cardSub {
+  margin-top: 2px;
+  font-size: 0.8rem;
+  color: var(--muted);
+  max-width: 60ch;
+}
+
+/* ── KPI row — explicit 4 → 2 → 1 columns, never auto-fit ────────────────── */
+.kpiRow {
+  display: grid;
+  grid-template-columns: repeat(4, minmax(0, 1fr));
+  gap: 12px;
+  margin-bottom: 16px;
+}
+@media (max-width: 900px) {
+  .kpiRow {
+    grid-template-columns: repeat(2, minmax(0, 1fr));
+  }
+}
+@media (max-width: 560px) {
+  .kpiRow {
+    grid-template-columns: minmax(0, 1fr);
+  }
+}
+.kpi {
+  background: var(--surface);
+  border: 1px solid var(--line);
+  border-radius: 14px;
+  padding: 16px;
+}
+.kpiAccent {
+  border-top: 3px solid var(--accent);
+}
+.kpiLabel {
+  font-size: 0.72rem;
+  font-weight: 700;
+  text-transform: uppercase;
+  letter-spacing: 0.04em;
+  color: var(--muted);
+}
+.kpiValue {
+  margin-top: 6px;
+  font-size: 1.9rem;
+  font-weight: 800;
+  color: var(--forest);
+  line-height: 1.1;
+}
+.kpiValueMuted {
+  color: var(--ns-ink);
+  font-size: 1.4rem;
+}
+.kpiFoot {
+  margin-top: 6px;
+  font-size: 0.78rem;
+  color: var(--muted);
+}
+.kpiSecondary {
+  margin-top: 8px;
+  padding-top: 8px;
+  border-top: 1px dashed var(--chip-line);
+  font-size: 0.75rem;
+  color: var(--muted);
+}
+.notConnected {
+  display: inline-flex;
+  align-items: center;
+  gap: 6px;
+  font-size: 0.75rem;
+  font-weight: 600;
+  color: var(--gold-ink);
+}
+.notConnectedDot {
+  width: 8px;
+  height: 8px;
+  border-radius: 50%;
+  background: var(--gold-dot);
+}
+
+/* ── segmented toggle ────────────────────────────────────────────────────── */
+.segmented {
+  display: inline-flex;
+  flex-wrap: wrap;
+  gap: 4px;
+  background: var(--chip-bg);
+  border: 1px solid var(--chip-line);
+  border-radius: 999px;
+  padding: 3px;
+}
+.segBtn {
+  border: none;
+  background: transparent;
+  border-radius: 999px;
+  padding: 6px 12px;
+  font-size: 0.76rem;
+  font-weight: 700;
+  color: var(--muted);
+  cursor: pointer;
+}
+.segBtnActive {
+  background: var(--forest);
+  color: var(--surface);
+}
+.segBtn:focus-visible,
+.control:focus-visible,
+.btn:focus-visible {
+  outline: 2px solid var(--forest);
+  outline-offset: 2px;
+}
+
+/* ── generic controls ────────────────────────────────────────────────────── */
+.controlsRow {
+  display: flex;
+  flex-wrap: wrap;
+  gap: 12px;
+  align-items: flex-end;
+}
+.field {
+  display: flex;
+  flex-direction: column;
+  gap: 4px;
+}
+.fieldLabel {
+  font-size: 0.7rem;
+  font-weight: 700;
+  text-transform: uppercase;
+  letter-spacing: 0.03em;
+  color: var(--muted);
+}
+.control {
+  border: 1px solid var(--line);
+  border-radius: 8px;
+  padding: 7px 10px;
+  font-size: 0.82rem;
+  color: var(--ink);
+  background: var(--surface);
+  min-width: 130px;
+}
+.btn {
+  border: 1px solid var(--forest);
+  background: var(--forest);
+  color: var(--surface);
+  border-radius: 8px;
+  padding: 8px 14px;
+  font-size: 0.8rem;
+  font-weight: 700;
+  cursor: pointer;
+}
+.btnGhost {
+  background: var(--surface);
+  color: var(--forest);
+}
+
+/* ── funnel ──────────────────────────────────────────────────────────────── */
+.funnel {
+  display: flex;
+  flex-direction: column;
+  gap: 8px;
+  max-width: 640px;
+  margin: 0 auto;
+}
+.funnelStep {
+  border-radius: 10px;
+  padding: 12px 16px;
+  color: var(--surface);
+  display: flex;
+  align-items: baseline;
+  justify-content: space-between;
+  gap: 12px;
+}
+.funnelStepLabel {
+  font-weight: 700;
+  font-size: 0.85rem;
+}
+.funnelStepValue {
+  font-size: 1.3rem;
+  font-weight: 800;
+}
+.funnelConv {
+  text-align: center;
+  font-size: 0.74rem;
+  color: var(--muted);
+  padding: 1px 0;
+}
+.funnelConvAggregate {
+  color: var(--gold-ink);
+  font-weight: 700;
+}
+.funnelNote {
+  margin-top: 12px;
+  font-size: 0.74rem;
+  color: var(--muted);
+  border-top: 1px dashed var(--chip-line);
+  padding-top: 10px;
+}
+.customDates {
+  display: flex;
+  flex-wrap: wrap;
+  gap: 10px;
+  align-items: flex-end;
+  margin: 8px 0 16px;
+  padding: 12px;
+  background: var(--canvas);
+  border-radius: 10px;
+}
+
+/* ── charts ──────────────────────────────────────────────────────────────── */
+.chartScroll {
+  overflow-x: auto;
+}
+.chartSvg {
+  display: block;
+}
+.legend {
+  display: flex;
+  flex-wrap: wrap;
+  gap: 14px;
+  margin-top: 10px;
+  font-size: 0.78rem;
+  color: var(--ink);
+}
+.legendItem {
+  display: inline-flex;
+  align-items: center;
+  gap: 6px;
+}
+.legendDot {
+  width: 11px;
+  height: 11px;
+  border-radius: 3px;
+  flex: none;
+}
+.seriesStartFlag {
+  font-size: 0.72rem;
+  color: var(--gold-ink);
+  font-weight: 600;
+}
+
+/* values table under a chart (guarantees printed values) */
+.tableWrap {
+  overflow-x: auto;
+}
+.dataTable {
+  width: 100%;
+  border-collapse: collapse;
+  font-size: 0.8rem;
+}
+.dataTable th,
+.dataTable td {
+  text-align: right;
+  padding: 7px 10px;
+  border-bottom: 1px solid var(--hair);
+  white-space: nowrap;
+}
+.dataTable th:first-child,
+.dataTable td:first-child {
+  text-align: left;
+  position: sticky;
+  left: 0;
+  background: var(--surface);
+}
+.dataTable thead th {
+  color: var(--muted);
+  font-weight: 700;
+  text-transform: uppercase;
+  font-size: 0.68rem;
+  letter-spacing: 0.03em;
+}
+.tableGap {
+  color: var(--muted);
+}
+
+/* ── ARPP ────────────────────────────────────────────────────────────────── */
+.arppCompare {
+  display: grid;
+  grid-template-columns: 1fr auto 1fr;
+  align-items: center;
+  gap: 12px;
+  margin: 8px 0 16px;
+}
+@media (max-width: 560px) {
+  .arppCompare {
+    grid-template-columns: minmax(0, 1fr);
+  }
+}
+.arppBox {
+  background: var(--canvas);
+  border-radius: 12px;
+  padding: 14px 16px;
+  text-align: center;
+}
+.arppBoxLabel {
+  font-size: 0.74rem;
+  color: var(--muted);
+  font-weight: 600;
+}
+.arppBoxValue {
+  font-size: 1.8rem;
+  font-weight: 800;
+  color: var(--forest);
+  margin: 4px 0;
+}
+.arppVs {
+  font-size: 0.78rem;
+  font-weight: 700;
+  color: var(--muted);
+  text-align: center;
+}
+.statusPos {
+  color: var(--ok-ink);
+  font-weight: 700;
+  font-size: 0.78rem;
+}
+.statusNeg {
+  color: var(--negative);
+  font-weight: 700;
+  font-size: 0.78rem;
+}
+.arppSplit {
+  display: grid;
+  grid-template-columns: repeat(3, minmax(0, 1fr));
+  gap: 8px;
+  margin-top: 4px;
+}
+.splitCell {
+  background: var(--chip-bg);
+  border: 1px solid var(--chip-line);
+  border-radius: 10px;
+  padding: 10px;
+  text-align: center;
+}
+.splitLabel {
+  font-size: 0.68rem;
+  color: var(--muted);
+  font-weight: 700;
+  text-transform: uppercase;
+  letter-spacing: 0.02em;
+}
+.splitValue {
+  font-size: 1.15rem;
+  font-weight: 800;
+  color: var(--forest);
+  margin-top: 3px;
+}
+
+/* ── churn grid ──────────────────────────────────────────────────────────── */
+.churnGrid {
+  display: grid;
+  grid-template-columns: repeat(4, minmax(0, 1fr));
+  gap: 10px;
+  margin-bottom: 14px;
+}
+@media (max-width: 560px) {
+  .churnGrid {
+    grid-template-columns: repeat(2, minmax(0, 1fr));
+  }
+}
+.churnCell {
+  border: 1px solid var(--chip-line);
+  background: var(--chip-bg);
+  border-radius: 12px;
+  padding: 12px 14px;
+  cursor: pointer;
+  text-align: left;
+}
+.churnCellActive {
+  border-color: var(--forest);
+  box-shadow: inset 0 0 0 1px var(--forest);
+}
+.churnCellLabel {
+  font-size: 0.74rem;
+  color: var(--muted);
+  font-weight: 600;
+}
+.churnCellValue {
+  font-size: 1.5rem;
+  font-weight: 800;
+  color: var(--forest);
+  margin-top: 3px;
+}
+.churnCellWarn .churnCellValue {
+  color: var(--gold-ink);
+}
+.churnCellCrit .churnCellValue {
+  color: var(--negative);
+}
+
+/* ── cohort table ────────────────────────────────────────────────────────── */
+.cohortWrap {
+  overflow-x: auto;
+}
+.cohortTable {
+  border-collapse: separate;
+  border-spacing: 3px;
+  font-size: 0.78rem;
+}
+.cohortTable th {
+  color: var(--muted);
+  font-weight: 700;
+  font-size: 0.68rem;
+  text-transform: uppercase;
+  letter-spacing: 0.02em;
+  padding: 4px 6px;
+  white-space: nowrap;
+}
+.cohortRowHead {
+  text-align: left !important;
+  position: sticky;
+  left: 0;
+  background: var(--surface);
+  color: var(--ink) !important;
+  font-size: 0.76rem !important;
+}
+.cohortCell {
+  text-align: center;
+  padding: 8px 6px;
+  border-radius: 8px;
+  min-width: 52px;
+  color: var(--ink);
+  font-weight: 600;
+}
+.cohortSize {
+  font-size: 0.72rem;
+  color: var(--muted);
+  font-weight: 600;
+}
+.divAbove2 {
+  background: var(--div-above-2);
+}
+.divAbove1 {
+  background: var(--div-above-1);
+}
+.divMid {
+  background: var(--div-mid);
+}
+.divBelow1 {
+  background: var(--div-below-1);
+}
+.divBelow2 {
+  background: var(--div-below-2);
+}
+.cohortBase {
+  background: var(--forest);
+  color: var(--surface);
+}
+.cohortFuture {
+  background: repeating-linear-gradient(
+    45deg,
+    var(--hair),
+    var(--hair) 5px,
+    var(--surface) 5px,
+    var(--surface) 10px
+  );
+  color: var(--muted);
+  font-weight: 500;
+}
+.cohortPartial::after {
+  content: "°";
+  color: var(--gold-ink);
+  font-weight: 800;
+}
+.divergingLegend {
+  display: flex;
+  flex-wrap: wrap;
+  align-items: center;
+  gap: 10px;
+  margin-top: 12px;
+  font-size: 0.74rem;
+  color: var(--muted);
+}
+.divergingSwatch {
+  display: inline-block;
+  width: 16px;
+  height: 12px;
+  border-radius: 3px;
+  vertical-align: middle;
+  margin-right: 4px;
+}
+
+/* ── generic data / churn table ──────────────────────────────────────────── */
+.recordTable {
+  width: 100%;
+  border-collapse: collapse;
+  font-size: 0.8rem;
+}
+.recordTable th,
+.recordTable td {
+  padding: 8px 10px;
+  border-bottom: 1px solid var(--hair);
+  text-align: left;
+  white-space: nowrap;
+}
+.recordTable td.num,
+.recordTable th.num {
+  text-align: right;
+}
+.recordTable thead th {
+  color: var(--muted);
+  font-weight: 700;
+  text-transform: uppercase;
+  font-size: 0.68rem;
+  letter-spacing: 0.03em;
+  position: sticky;
+  top: 0;
+  background: var(--surface);
+}
+.scrollBody {
+  max-height: 460px;
+  overflow: auto;
+}
+.pill {
+  display: inline-block;
+  border-radius: 999px;
+  padding: 2px 10px;
+  font-size: 0.72rem;
+  font-weight: 700;
+  background: var(--chip-bg);
+  border: 1px solid var(--chip-line);
+  color: var(--ink);
+}
+.pillRed {
+  background: var(--div-below-1);
+  color: var(--negative);
+  border-color: var(--div-below-2);
+}
+.pillAmber {
+  background: #fbf1d8;
+  color: var(--gold-ink);
+  border-color: #f0e2bd;
+}
+.pillGreen {
+  background: var(--div-above-1);
+  color: var(--ok-ink);
+  border-color: var(--div-above-2);
+}
+
+/* ── grids / layout ──────────────────────────────────────────────────────── */
+.grid2 {
+  display: grid;
+  grid-template-columns: repeat(2, minmax(0, 1fr));
+  gap: 16px;
+}
+@media (max-width: 900px) {
+  .grid2 {
+    grid-template-columns: minmax(0, 1fr);
+  }
+}
+
+.calloutBanner {
+  background: var(--mint);
+  border: 1px solid var(--div-above-2);
+  border-radius: 12px;
+  padding: 12px 16px;
+  font-size: 0.82rem;
+  color: var(--ink);
+  margin-bottom: 16px;
+}
+.calloutBanner b {
+  color: var(--forest);
+}
+
+.stateMsg {
+  padding: 40px;
+  text-align: center;
+  color: var(--muted);
+  font-size: 0.9rem;
+}
+.errorMsg {
+  color: var(--negative);
+  font-weight: 600;
+}
+
+.footnote {
+  font-size: 0.72rem;
+  color: var(--muted);
+  margin-top: 8px;
+  line-height: 1.5;
+}
+.summaryLine {
+  font-size: 0.78rem;
+  color: var(--muted);
+  margin: 8px 0;
+}
