@@ -13,8 +13,9 @@
 import { useCallback, useEffect, useMemo, useRef, useState } from "react";
 import { supabase } from "@/lib/supabase";
 import { useMatchWindowData } from "@/lib/useMatchData";
-import { getWeeklyCancellationStats, getCancelHeatmap, type SlotRow } from "@/lib/cityStats";
+import { getCancelHeatmap, type SlotRow } from "@/lib/cityStats";
 import { useWeeklyDemand, type DemandWeek } from "@/lib/slateDemand";
+import { fieldCodeMap } from "@/lib/slateFieldCodes";
 import { VISIBLE_CITIES } from "@/lib/types";
 import CitiesMasterScheduleLens from "@/components/CitiesMasterScheduleLens";
 import { fetchLegacyMatchRegistrations } from "@/lib/mdapiMatchesRead";
@@ -32,14 +33,27 @@ const C = {
   slotBg: "#f8f3e7", slotLine: "#eae1cd", gold: "#e3c369", goldInk: "#8a6300",
   nsInk: "#6f6858",
 };
-// red ramp, 1..4 of the four-week window (light → dark)
-const RAMP: Record<number, { bg: string; fg: string }> = {
-  1: { bg: "#fbe9e3", fg: "#8f2d15" }, 2: { bg: "#f3c3b4", fg: "#8f2d15" },
-  3: { bg: "#c8401f", fg: "#ffffff" }, 4: { bg: "#8f2d15", fg: "#ffffff" },
+// Cancel Patterns chronic scale — four distinct, eyedropped colours for
+// n-of-4-weeks cancelled. Contrast (text on bg): 1=13.7:1, 2=7.4:1, 3=8.5:1,
+// 4=5.2:1 — all well above 4.5:1. Change any hex and recompute.
+//
+// DELIBERATELY NON-MONOTONIC IN LIGHTNESS: 3-of-4 (#8b2c17) is darker than
+// 4-of-4 (#d62015). This is approved and safe ONLY because the exact n/4 count
+// is printed on every chip, so colour reinforces the count and is never the sole
+// encoding. Do not "correct" this into a sequential light→dark ramp.
+//
+// The 1-of-4 step needs its border: #f0ece3 sits too close to the day-cell
+// background (--slot-bg #f8f3e7) and the chip would lose its shape without it.
+const RAMP: Record<number, { bg: string; fg: string; border?: string }> = {
+  1: { bg: "#f0ece3", fg: "#12241d", border: "#e2ddd0" },
+  2: { bg: "#eda01e", fg: "#12241d" },
+  3: { bg: "#8b2c17", fg: "#ffffff" },
+  4: { bg: "#d62015", fg: "#ffffff" },
 };
 const DAYS: Day[] = ["Mon", "Tue", "Wed", "Thu", "Fri", "Sat", "Sun"];
 const MON = ["Jan", "Feb", "Mar", "Apr", "May", "Jun", "Jul", "Aug", "Sep", "Oct", "Nov", "Dec"];
-const n1 = (x: number) => (Math.round(x * 10) / 10).toString();
+// One decimal for every non-zero value (40.9, 4.0, 3.9); a plain "0" for zero.
+const barFmt = (x: number) => (x === 0 ? "0" : x.toFixed(1));
 const fmtWk = (d: Date) => `${MON[d.getMonth()]} ${d.getDate()}`;
 
 type CapItem = Capture & { id: number };
@@ -54,7 +68,6 @@ export default function SlateReviewView() {
   const { rows, scheduledMatches, loading } = useMatchWindowData(12, city);
   const { weekly } = useWeeklyDemand(city, 8); // booked spots ÷ 18, absents INCLUDED, fakes out
 
-  const wkCancel = useMemo(() => getWeeklyCancellationStats(scheduledMatches, city, 8), [scheduledMatches, city]);
   const fields = useMemo(() => {
     const set = new Set<string>();
     for (const m of scheduledMatches) if (m.city === city && m.field) set.add(m.field);
@@ -65,12 +78,12 @@ export default function SlateReviewView() {
     return <div className="mx-auto max-w-[1180px] px-5 py-8 text-sm" style={{ color: C.muted }}>Loading slate…</div>;
   }
 
-  const totalCancels = wkCancel.reduce((s, w) => s + w.canceled, 0);
-  const gph = weekly.map((w) => w.ratio);
-  const avg = gph.length ? gph.reduce((s, v) => s + v, 0) / gph.length : 0;
-  const low = gph.length ? Math.min(...gph) : 0;
-  const high = gph.length ? Math.max(...gph) : 0;
-  const rangeLabel = weekly.length ? `${fmtWk(weekly[0].weekStart)} – ${fmtWk(weekly[weekly.length - 1].weekStart)}` : "";
+  // Window range = first day of the first week … last day of the last week.
+  // (The last bar's weekStart is the START of the final bucket, not the window
+  // end — printing it as the end was wrong: it read "Jun 8 – Jul 27".)
+  const rangeLabel = weekly.length
+    ? `${fmtWk(weekly[0].weekStart)} – ${fmtWk(addDays(weekly[weekly.length - 1].weekStart, 6))}`
+    : "";
 
   return (
     <div className="mx-auto max-w-[1180px] px-5 pb-16" style={{ color: C.ink }}>
@@ -88,19 +101,16 @@ export default function SlateReviewView() {
         })}
       </div>
 
-      {/* head + lede */}
-      <div className="mb-1.5 flex items-baseline justify-between gap-4">
+      {/* head — title + window range only (lede removed) */}
+      <div className="mb-4 flex items-baseline justify-between gap-4">
         <h1 className="m-0 text-[19px] font-bold tracking-[-0.2px]" style={{ color: C.forestDeep }}>Slate Review · {city}</h1>
         <span className="text-[12px]" style={{ color: C.muted }}>{rangeLabel}</span>
       </div>
-      <p className="mb-6 max-w-[78ch] text-[14px]" style={{ color: "#3c4b44" }}>
-        Over the last 8 weeks, {city} averaged <b style={{ color: C.forestDeep }}>{n1(avg)} games’ worth of demand</b> a week — booked spots ÷ 18, a full match — from a low of <b style={{ color: C.forestDeep }}>{n1(low)}</b> to a high of <b style={{ color: C.forestDeep }}>{n1(high)}</b>. <b style={{ color: C.red }}>{totalCancels}</b> {totalCancels === 1 ? "match was" : "matches were"} cancelled in that window. That count stands on its own, not as a rate: it and the games-per-week figure come from different denominators, and dividing one by the other would answer no real question.
-      </p>
 
       {/* games per week strip */}
       <Card>
         <SHead title="GAMES PER WEEK · LAST 8 WEEKS" />
-        <p className="m-0 mb-3.5 text-[12.5px]" style={{ color: C.muted }}>Total spots booked that week ÷ 18, a full match. Bars from zero, scaled to the busiest week.</p>
+        <p className="m-0 mb-3.5 text-[12.5px]" style={{ color: C.muted }}>Total spots booked ÷ 18</p>
         <GamesStrip weekly={weekly} />
       </Card>
 
@@ -145,19 +155,32 @@ function SHead({ title, right }: { title: string; right?: React.ReactNode }) {
 
 // ── games-per-week strip ─────────────────────────────────────────────────────
 function GamesStrip({ weekly }: { weekly: DemandWeek[] }) {
-  const max = Math.max(1, ...weekly.map((w) => w.ratio));
+  // Scale to the busiest week that HAS data (a no-data week has no bar).
+  const max = Math.max(1, ...weekly.filter((w) => w.hasData).map((w) => w.ratio));
   return (
     <div className="grid gap-[9px]" style={{ gridTemplateColumns: `repeat(${Math.max(1, weekly.length)}, 1fr)` }}>
       {weekly.map((w) => {
+        // Three states: no-data (hatched grey, "no data", excluded from scaling);
+        // true 0 (a visible baseline tick labelled "0"); a real value.
+        const noData = !w.hasData;
         const h = Math.max(2, Math.round((w.ratio / max) * 96));
         return (
           <div key={w.weekStart.toISOString()} className="flex flex-col gap-[5px]">
-            <div className="text-center text-[12.5px] font-bold leading-none" style={{ color: C.forestDeep }}>{n1(w.ratio)}</div>
+            <div className="text-center text-[12.5px] font-bold leading-none" style={{ color: noData ? C.muted : C.forestDeep }}>{noData ? "–" : barFmt(w.ratio)}</div>
             <div className="flex items-end border-b" style={{ borderColor: C.line, height: 100 }}>
-              <div className="w-full rounded-t-[4px]" style={{ height: h, background: w.isCurrent ? "repeating-linear-gradient(135deg,#35c77f 0 5px,#a6e6c6 5px 10px)" : C.accent }} />
+              {noData ? (
+                <div className="w-full rounded-t-[4px]" title="no source rows this week"
+                  style={{ height: 96, opacity: 0.55, background: "repeating-linear-gradient(135deg,#d8d2c4 0 5px,#efe9dc 5px 10px)" }} />
+              ) : (
+                <div className="w-full rounded-t-[4px]" style={{ height: h, background: w.isCurrent ? "repeating-linear-gradient(135deg,#35c77f 0 5px,#a6e6c6 5px 10px)" : C.accent }} />
+              )}
             </div>
             <div className="text-center text-[11px] leading-[1.2]" style={{ color: C.muted }}>{fmtWk(w.weekStart)}</div>
-            {w.isCurrent && <div className="text-center text-[10.5px] font-semibold" style={{ color: C.muted }}>in progress</div>}
+            {noData ? (
+              <div className="text-center text-[10.5px] font-semibold" style={{ color: C.muted }}>no data</div>
+            ) : w.isCurrent ? (
+              <div className="text-center text-[10.5px] font-semibold" style={{ color: C.muted }}>in progress</div>
+            ) : null}
           </div>
         );
       })}
@@ -281,7 +304,9 @@ function CancelCard({ rows, city, fields }: { rows: Parameters<typeof getCancelH
   const [tab, setTab] = useState<"pat" | "num">("pat");
   const [show, setShow] = useState<"cx" | "all">("cx");
   const [sort, setSort] = useState<"day" | "bad">("day");
-  const codes = useMemo(() => deriveFieldCodes(fields), [fields]);
+  // Single source of chip labels — the curated hand-chosen shorthand, shared by
+  // the Patterns view, the Numbers view, and the footer key. NOT title initials.
+  const codes = useMemo(() => fieldCodeMap(fields), [fields]);
   // Numbers grid needs every slot (all 8 weeks); include all slots when "Every match".
   const hm = useMemo(() => getCancelHeatmap(rows, city, 8, new Date(), { includeAllSlots: show === "all" }), [rows, city, show]);
   // Patterns needs only cancelled slots, so build off a cancelled-only heatmap.
@@ -361,7 +386,7 @@ function Patterns({ hm, codes }: { hm: { weeks: string[]; slots: SlotRow[] }; co
                     {here.map((s) => {
                       const cc = cxCount(s); const ramp = RAMP[cc] ?? RAMP[1];
                       return (
-                        <div key={s.field + s.time} className="mb-1 flex items-baseline gap-1.5 rounded-[6px] p-[4px_6px] text-[10.5px] leading-[1.35]" style={{ background: ramp.bg, color: ramp.fg }}>
+                        <div key={s.field + s.time} className="mb-1 flex items-baseline gap-1.5 rounded-[6px] p-[4px_6px] text-[10.5px] leading-[1.35]" style={{ background: ramp.bg, color: ramp.fg, border: ramp.border ? `1px solid ${ramp.border}` : undefined }}>
                           <span className="min-w-0 flex-1 font-semibold" style={{ overflowWrap: "anywhere" }}><b className="font-extrabold tracking-[0.3px]">{codes[s.field] ?? s.field}</b> {s.time} · {s.weeks[wk]?.spots ?? 0}</span>
                           <span className="flex-none text-[9.5px] font-bold">{cc}/{wks.length}</span>
                         </div>
@@ -374,19 +399,20 @@ function Patterns({ hm, codes }: { hm: { weeks: string[]; slots: SlotRow[] }; co
           </div>
         );
       })}
-      {/* step legend — only steps that occur */}
+      {/* step legend — only steps that occur, most-chronic first. All four steps
+          are defined in RAMP even though today only three render. */}
       <div className="mt-3 flex flex-wrap gap-[5px_14px] text-[11px]" style={{ color: C.muted }}>
         {stepsPresent.map((n) => (
           <span key={n} className="inline-flex items-center gap-1.5 whitespace-nowrap">
-            <i className="inline-block h-[11px] w-[11px] flex-none rounded-[3px]" style={{ background: RAMP[n].bg, boxShadow: "inset 0 0 0 1px rgba(18,36,29,.14)" }} />
+            <i className="inline-block h-[11px] w-[11px] flex-none rounded-[3px]" style={{ background: RAMP[n].bg, border: RAMP[n].border ? `1px solid ${RAMP[n].border}` : undefined }} />
             {n} of {wks.length} {wks.length === 1 ? "week" : "weeks"}
           </span>
         ))}
       </div>
-      {/* field-code key — only fields that have a chip */}
+      {/* field-code key — only fields that have a chip, ordered alphabetically by code */}
       {fieldsWithChip.size > 0 && (
         <p className="mt-1.5 text-[11px]" style={{ color: C.muted }}>
-          {[...fieldsWithChip].sort().map((f, i) => <span key={f}>{i > 0 ? " · " : ""}<b style={{ color: C.forestDeep }}>{codes[f] ?? f}</b> {f}</span>)}
+          {[...fieldsWithChip].sort((a, b) => (codes[a] ?? a).localeCompare(codes[b] ?? b)).map((f, i) => <span key={f}>{i > 0 ? " · " : ""}<b style={{ color: C.forestDeep }}>{codes[f] ?? f}</b> {f}</span>)}
         </p>
       )}
     </>
