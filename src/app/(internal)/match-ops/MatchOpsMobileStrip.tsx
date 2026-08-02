@@ -20,6 +20,7 @@ import { usePathname, useRouter } from "next/navigation";
 import { useAuth } from "@/lib/useAuth";
 import { useCrmAwaitingCount } from "@/lib/useCrmAwaitingCount";
 import { useManagerPayAttnCount } from "@/lib/useManagerPayAttnCount";
+import { usePartnerDashboardsCount } from "@/lib/usePartnerDashboardsCount";
 import { visibleSections } from "./sections";
 
 export default function MatchOpsMobileStrip() {
@@ -28,6 +29,7 @@ export default function MatchOpsMobileStrip() {
   const router = useRouter();
   const awaiting = useCrmAwaitingCount();
   const managerPayAttn = useManagerPayAttnCount();
+  const partnerCount = usePartnerDashboardsCount();
   const [sheetOpen, setSheetOpen] = useState(false);
   const scRef = useRef<HTMLDivElement>(null);
   const activeRef = useRef<HTMLButtonElement>(null);
@@ -36,8 +38,8 @@ export default function MatchOpsMobileStrip() {
   const items = useMemo(() => visibleSections(appUser), [appUser]);
 
   const isActive = (href: string) => pathname === href || pathname.startsWith(href + "/");
-  const countFor = (badge?: "awaiting" | "manager-pay") => {
-    const n = badge === "awaiting" ? awaiting : badge === "manager-pay" ? managerPayAttn : 0;
+  const countFor = (badge?: "awaiting" | "manager-pay" | "partner-dashboards") => {
+    const n = badge === "awaiting" ? awaiting : badge === "manager-pay" ? managerPayAttn : badge === "partner-dashboards" ? partnerCount : 0;
     return n > 0 ? n : null;
   };
 

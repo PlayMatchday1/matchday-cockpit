@@ -24,7 +24,7 @@ export type MatchOpsSection = {
   desc: string; // one-line, used by the mobile sheet
   access: MatchOpsAccess;
   icon: React.ReactNode;
-  badge?: "awaiting" | "manager-pay"; // which shared count feeds this item's badge
+  badge?: "awaiting" | "manager-pay" | "partner-dashboards"; // which shared count feeds this item's badge
 };
 
 function I({ children }: { children: React.ReactNode }) {
@@ -41,6 +41,7 @@ export const MATCH_OPS_SECTIONS: MatchOpsSection[] = [
   { key: "ops", group: "Operations", label: "Field Ops", href: "/match-ops/field-ops", desc: "Tonight's fields and staff", access: "cities", icon: <I><rect x="2.5" y="5.5" width="19" height="13" rx="2" /><path d="M12 5.5v13" /><circle cx="12" cy="12" r="3" /></I> },
   { key: "inventory", group: "Operations", label: "Inventory", href: "/match-ops/inventory", desc: "Balls, bibs and manager reports", access: "cities", icon: <I><path d="M21 8l-9-5-9 5 9 5 9-5z" /><path d="M3 8v8l9 5 9-5V8" /><path d="M12 13v8" /></I> },
   { key: "manager-pay", group: "Operations", label: "Manager Pay", href: "/match-ops/manager-pay", desc: "What each manager is owed, and the Gusto file", access: "cities", icon: <I><rect x="2.5" y="6" width="19" height="12" rx="2.5" /><circle cx="12" cy="12" r="2.6" /><path d="M6 9.5v5M18 9.5v5" /></I>, badge: "manager-pay" },
+  { key: "partner-dashboards", group: "Operations", label: "Partner Dashboards", href: "/match-ops/partner-dashboards", desc: "Per-venue revenue pages partners see at their link", access: "clubhouse", icon: <I><rect x="3" y="4" width="18" height="14" rx="2" /><path d="M7 20h10M7 9h5M7 13h9" /></I>, badge: "partner-dashboards" },
   { key: "reviews", group: "Operations", label: "Reviews", href: "/match-ops/reviews", desc: "Per-match ratings and manager standings", access: "cities", icon: <I><path d="m12 4 2.4 4.9 5.4.8-3.9 3.8.9 5.4-4.8-2.6-4.8 2.6.9-5.4L4.2 9.7l5.4-.8z" /></I> },
   { key: "match-chats", group: "Conversations", label: "Match Chats", href: "/match-ops/match-chats", desc: "One WhatsApp group per match", access: "chats", icon: <I><path d="M21 11.5a8.4 8.4 0 0 1-9 8.4 8.9 8.9 0 0 1-3.8-.9L3 21l1.9-5.1A8.4 8.4 0 0 1 12 3.1a8.4 8.4 0 0 1 9 8.4z" /></I> },
   { key: "player-chats", group: "Conversations", label: "Player Chats", href: "/match-ops/player-chats", desc: "1:1 threads with players", access: "chats", icon: <I><circle cx="9" cy="8" r="3.4" /><path d="M2.5 20a6.5 6.5 0 0 1 13 0" /><path d="M17 7.5a3 3 0 0 1 0 6M18.5 20a6 6 0 0 0-3-5.2" /></I>, badge: "awaiting" },

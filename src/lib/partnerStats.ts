@@ -804,6 +804,12 @@ export type PartnerWeeklyPayment = {
   weekEndDate: string; // YYYY-MM-DD (Saturday for normal rows, same as weekStartDate for pre-system)
   qualifyingRevenue: number; // 0 for pre-system rows (UI renders "—")
   owedAmount: number; // qualifyingRevenue × pct/100 for normal rows; calculated_amount for pre-system
+  // Additive presentation breakdown (see periodOwed). matches = distinct matches
+  // in the period; managerPay = the manager-pay deducted (per_match model only;
+  // 0 for flat_percentage and pre-system rows). Do NOT use these to recompute
+  // owedAmount — that is already correct; they are for the table's columns.
+  matches: number;
+  managerPay: number;
   status: "pending" | "paid" | "disputed";
   // When a partner_weekly_payments row exists for this week, these
   // mirror the persisted row. When no row exists, status='pending'
@@ -930,13 +936,19 @@ type PeriodCalcConfig = {
 //   whole underwater month (like a low-turnout May) from going negative.
 //   Private Rental does NOT participate (it has no match/capacity, so
 //   the manager-pay subtraction is undefined for it). Crossbar has none.
+// Additive breakdown the one-table partner dashboard renders. matches and
+// managerPay are computed inside the owed calc anyway; surfacing them (without
+// changing owedAmount/qualifyingRevenue) lets the table show the per-period
+// match count and the manager-pay deduction — which is NOT recoverable as
+// qualifying − owed once the $0 floor fires. managerPay is 0 for flat_percentage
+// partners (that model has no manager-pay subtraction).
 function periodOwed(
   matchActive: PartnerRegRow[],
   finRevRows: PartnerExtraRevRow[],
   periodStart: string,
   periodEnd: string,
   cfg: PeriodCalcConfig,
-): { qualifyingRevenue: number; owedAmount: number } {
+): { qualifyingRevenue: number; owedAmount: number; matches: number; managerPay: number } {
   if (cfg.revenueModel === "per_match_minus_manager") {
     const base = cfg.managerPayBase ?? 0;
     const high = cfg.managerPayHigh ?? base;
@@ -980,16 +992,20 @@ function periodOwed(
     return {
       qualifyingRevenue,
       owedAmount: Math.round(owed * 100) / 100,
+      matches: byMatch.size,
+      managerPay: totalManagerPay,
     };
   }
 
   // flat_percentage (default)
   let dpRev = 0;
+  const flatMatches = new Set<string>();
   for (const r of matchActive) {
     if (r.payment_type !== "DAILY PAID") continue;
     const matchYmd = r.match_start.slice(0, 10);
     if (matchYmd < periodStart || matchYmd > periodEnd) continue;
     dpRev += Number(r.match_price_paid ?? 0) || 0;
+    flatMatches.add(r.match_api_id != null ? `id:${r.match_api_id}` : `ts:${r.match_start}`);
   }
   let prRev = 0;
   for (const e of finRevRows) {
@@ -1001,6 +1017,8 @@ function periodOwed(
   return {
     qualifyingRevenue,
     owedAmount: Math.round(qualifyingRevenue * cfg.revenueSharePct) / 100,
+    matches: flatMatches.size,
+    managerPay: 0, // flat_percentage has no manager-pay subtraction
   };
 }
 
@@ -1062,6 +1080,8 @@ export function computeWeeklyPayments(
       weekEndDate: r.week_start_date,
       qualifyingRevenue: 0,
       owedAmount: r.calculated_amount,
+      matches: 0,
+      managerPay: 0,
       status: r.status,
       recordId: r.id,
       calculatedAmount: r.calculated_amount,
@@ -1102,7 +1122,7 @@ export function computeWeeklyPayments(
     let cursor = firstQualifyingPeriod;
     while (cursor <= today) {
       const monthEnd = lastDayOfMonth(cursor);
-      const { qualifyingRevenue, owedAmount } = periodOwed(
+      const { qualifyingRevenue, owedAmount, matches, managerPay } = periodOwed(
         matchActive,
         finRevRows,
         cursor,
@@ -1115,6 +1135,8 @@ export function computeWeeklyPayments(
         weekEndDate: monthEnd,
         qualifyingRevenue,
         owedAmount,
+        matches,
+        managerPay,
         status: rec?.status ?? "pending",
         recordId: rec?.id ?? null,
         calculatedAmount: rec?.calculated_amount ?? null,
@@ -1131,7 +1153,7 @@ export function computeWeeklyPayments(
     let cursor = firstQualifyingPeriod;
     while (cursor <= today) {
       const weekEnd = addDays(cursor, 6);
-      const { qualifyingRevenue, owedAmount } = periodOwed(
+      const { qualifyingRevenue, owedAmount, matches, managerPay } = periodOwed(
         matchActive,
         finRevRows,
         cursor,
@@ -1144,6 +1166,8 @@ export function computeWeeklyPayments(
         weekEndDate: weekEnd,
         qualifyingRevenue,
         owedAmount,
+        matches,
+        managerPay,
         status: rec?.status ?? "pending",
         recordId: rec?.id ?? null,
         calculatedAmount: rec?.calculated_amount ?? null,

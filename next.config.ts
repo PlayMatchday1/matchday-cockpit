@@ -56,6 +56,21 @@ const nextConfig: NextConfig = {
         destination: "/match-ops/manager-pay",
         permanent: true,
       },
+      // Partner Dashboards moved out of Finance into Match Ops on 2026-08-02.
+      // The old Finance secondary-nav tab (?tab=partner-dashboards) and the
+      // per-partner detail route both land on the new unified index. 308 so
+      // bookmarks survive.
+      {
+        source: "/admin/finance/partners/:id*",
+        destination: "/match-ops/partner-dashboards",
+        permanent: true,
+      },
+      {
+        source: "/admin/finance",
+        has: [{ type: "query", key: "tab", value: "partner-dashboards" }],
+        destination: "/match-ops/partner-dashboards",
+        permanent: true,
+      },
       // Player Chat page moved from /crm → /chats on 2026-05-16
       // (UI label was already "Chats"; the URL was the last
       // mismatch). The /api/crm/* API routes and the underlying

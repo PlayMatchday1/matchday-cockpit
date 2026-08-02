@@ -23,7 +23,6 @@ export const FINANCE_TAB_IDS = [
   "change-log",
   // Standalone secondary-nav items
   "check-ins",
-  "partner-dashboards",
 ] as const;
 
 export type FinanceTabId = (typeof FINANCE_TAB_IDS)[number];

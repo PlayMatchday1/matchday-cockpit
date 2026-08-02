@@ -17,14 +17,14 @@ import { Fragment } from "react";
 export type SecondaryId =
   | "configure"
   | "check-ins"
-  | "managers"
-  | "partner-dashboards";
+  | "managers";
 
+// Partner Dashboards moved to Match Ops (2026-08); Managers is a convenience
+// jump to its Match Ops home.
 const ITEMS: { id: SecondaryId; label: string }[] = [
   { id: "configure", label: "Configure" },
   { id: "check-ins", label: "City Manager Check-Ins" },
   { id: "managers", label: "Managers" },
-  { id: "partner-dashboards", label: "Partner Dashboards" },
 ];
 
 export default function FinanceSecondaryNav({

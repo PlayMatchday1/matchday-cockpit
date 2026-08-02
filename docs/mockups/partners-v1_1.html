@@ -1,0 +1,638 @@
+<!doctype html>
+<html lang="en">
+<head>
+<meta charset="utf-8">
+<title>Partner Dashboards — MatchDay Clubhouse</title>
+<style>
+:root{
+  --forest:#0d3b2e; --forest-deep:#072a20; --accent:#35c77f; --logo:#2cdb87; --mint:#e0f2e7;
+  --amount:#e2502b; --ink:#12241d; --muted:#6d7b74;
+  --warn-bg:#fdf1d0; --warn-ink:#8a6300; --warn-line:#e3c369;
+  --crit-bg:#fdeae4; --crit-ink:#a8391a; --crit-line:#f0bda9;
+  --ok-ink:#12704a;
+  --rail-a:#fafbfa; --rail-b:#f6f9f7; --board-bg:#f8faf9;
+  --chip-bg:#eef3f0; --chip-line:#e2eae5; --line:#e6ebe8; --hair:#eff3f1;
+  --surface:#ffffff; --canvas:#f4efe4;
+}
+*{box-sizing:border-box}
+body{margin:0;background:var(--canvas);color:var(--ink);
+  font:14px/1.45 -apple-system,BlinkMacSystemFont,"Segoe UI",Inter,Roboto,Helvetica,Arial,sans-serif;
+  -webkit-font-smoothing:antialiased}
+.mono{font-family:ui-monospace,SFMono-Regular,Menlo,Consolas,monospace}
+
+/* ── app chrome ─────────────────────────────────────────────── */
+.top{background:var(--forest);color:#fff;display:flex;align-items:center;gap:26px;padding:0 26px;height:58px}
+.brand{font-weight:900;letter-spacing:.4px;font-size:16px;font-style:italic;color:var(--logo)}
+.brand em{font-style:normal;color:#fff;font-weight:700;font-size:12.5px;letter-spacing:1.2px;margin-left:5px}
+.nav{display:flex;align-items:center;gap:5px;margin:0 auto}
+.nav a{color:#dbeade;text-decoration:none;font-weight:700;font-size:13.5px;padding:6px 13px;border-radius:999px}
+.nav a.on{background:var(--accent);color:#04281d}
+.nav a.off{color:#5f8073}
+.nav .nb{background:var(--amount);color:#fff;border-radius:999px;font-size:10.5px;font-weight:800;
+  padding:1px 6px;margin-left:6px}
+.who{color:#cfe3d5;font-size:13px;font-weight:600}
+
+.wrap{display:flex;align-items:flex-start;gap:0;padding:18px 22px 40px}
+.rail{width:206px;flex:0 0 206px;background:var(--surface);border:1px solid var(--line);
+  border-radius:12px;padding:9px;margin-right:16px;position:sticky;top:18px}
+.rlab{font-size:9.5px;letter-spacing:1.3px;font-weight:800;color:var(--muted);padding:6px 8px 8px}
+.ritem{display:flex;align-items:center;gap:8px;width:100%;text-align:left;background:none;border:0;
+  font:inherit;font-weight:700;font-size:13px;color:var(--ink);padding:8px 9px;border-radius:8px;
+  cursor:pointer;min-height:32px}
+.ritem:hover{background:var(--rail-b)}
+.ritem.on{background:var(--mint);color:var(--forest-deep);box-shadow:inset 2px 0 0 var(--accent)}
+.ritem svg{width:15px;height:15px;flex:0 0 15px;stroke:currentColor;fill:none;stroke-width:1.9}
+.rb{margin-left:auto;background:var(--chip-bg);border:1px solid var(--chip-line);border-radius:999px;
+  font-size:10.5px;font-weight:800;color:var(--muted);padding:1px 7px}
+
+.main{flex:1 1 auto;min-width:0}
+.ph{display:flex;align-items:flex-end;justify-content:space-between;gap:16px;margin:2px 0 14px}
+.ph h1{font-size:27px;letter-spacing:-.4px;margin:0;font-weight:900;color:var(--forest-deep)}
+.ph p{margin:5px 0 0;color:var(--muted);font-size:13px;font-weight:600;max-width:760px}
+
+/* ── the admin layer ────────────────────────────────────────── */
+.admin{background:var(--forest-deep);border-radius:13px;padding:13px 14px 12px;color:#dceade;
+  margin-bottom:14px}
+.ahd{display:flex;align-items:center;gap:10px;margin-bottom:11px}
+.atag{background:var(--accent);color:#04281d;font-size:9.5px;font-weight:900;letter-spacing:1.1px;
+  padding:3px 8px;border-radius:5px}
+.ahd .anote{font-size:11.5px;font-weight:700;color:#9fbfae}
+.ahd .sp{margin-left:auto}
+.btnq{background:rgba(255,255,255,.09);color:#eaf5ec;border:1px solid rgba(255,255,255,.19);
+  border-radius:8px;font:inherit;font-weight:700;font-size:12.5px;padding:7px 12px;cursor:pointer;min-height:30px}
+.btnq:hover{background:rgba(255,255,255,.16)}
+.btnq.warn{border-color:rgba(240,189,169,.5);color:#ffd9cb}
+
+.sw{display:grid;grid-template-columns:repeat(3,1fr);gap:9px}
+.pt{background:rgba(255,255,255,.055);border:1px solid rgba(255,255,255,.14);border-radius:10px;
+  padding:9px 11px 10px;cursor:pointer;text-align:left;font:inherit;color:#eaf5ec;min-height:74px}
+.pt:hover{background:rgba(255,255,255,.1)}
+.pt.on{background:var(--surface);border-color:var(--surface);color:var(--ink)}
+.pt .pn{font-weight:800;font-size:14px;display:flex;align-items:center;gap:7px}
+.pt .pv{font-size:11.5px;font-weight:600;color:#9fbfae;margin-top:2px}
+.pt.on .pv{color:var(--muted)}
+.pt .ps{font-size:11.5px;font-weight:800;margin-top:7px}
+.pt .ps.owed{color:#ffc79a}
+.pt.on .ps.owed{color:var(--amount)}
+.pt .ps.clear{color:#8fd9b4}
+.pt.on .ps.clear{color:var(--ok-ink)}
+.dotx{width:7px;height:7px;border-radius:50%;background:var(--accent);flex:0 0 7px}
+.dotx.off{background:#7f8f88}
+
+.actl{display:flex;align-items:center;gap:8px;flex-wrap:wrap;margin-top:11px;padding-top:11px;
+  border-top:1px solid rgba(255,255,255,.13)}
+.url{background:rgba(0,0,0,.28);border:1px solid rgba(255,255,255,.14);border-radius:8px;
+  padding:6px 10px;font-size:12px;color:#bfe0cd;overflow:hidden;text-overflow:ellipsis;
+  white-space:nowrap;min-width:0;flex:1 1 260px}
+.aexp{font-size:11.5px;color:#9fbfae;font-weight:600;margin-top:9px;line-height:1.5}
+
+/* the seam between what the admin sees and what the partner sees */
+.seam{display:flex;align-items:center;gap:11px;margin:0 0 12px}
+.seam .ln{flex:1 1 auto;height:1px;background:var(--line)}
+.seam .tx{font-size:10.5px;font-weight:800;letter-spacing:1.1px;color:var(--muted)}
+
+.asbar{background:var(--mint);border:1px solid #bfe0cd;border-radius:10px;padding:9px 12px;
+  display:flex;align-items:center;gap:11px;margin-bottom:14px;font-size:12.5px;font-weight:700;
+  color:var(--forest-deep)}
+.asbar .sp{margin-left:auto}
+.btnm{background:var(--forest);color:#fff;border:0;border-radius:8px;font:inherit;font-weight:700;
+  font-size:12.5px;padding:7px 12px;cursor:pointer;min-height:30px}
+
+/* ── the partner-facing dashboard ───────────────────────────── */
+.dash{background:var(--surface);border:1px solid var(--line);border-radius:13px;padding:22px 24px 20px}
+.dash.pub{background:var(--canvas);border-color:transparent;padding:26px 4px 20px}
+.dh1{font-size:26px;font-weight:900;letter-spacing:-.3px;color:var(--forest-deep);margin:0}
+.dh1 em{font-style:normal;color:#9aa8a1}
+.dsub{color:var(--muted);font-size:12.5px;font-weight:600;margin:6px 0 0}
+/* the partner reaches this page from a bookmarked link, with no Clubhouse
+   chrome around it. without this the page never says who sent it. */
+.dmark{font-size:10.5px;letter-spacing:2.2px;font-weight:900;color:var(--forest-deep);margin-bottom:10px}
+.dash:not(.pub) .dmark{display:none}
+
+.sec{margin-top:22px}
+.slab{font-size:9.5px;letter-spacing:1.3px;font-weight:800;color:var(--muted);margin-bottom:9px}
+.tiles{display:grid;grid-template-columns:repeat(5,1fr);gap:10px}
+.tile{background:var(--surface);border:1px solid var(--line);border-radius:11px;padding:12px 13px 11px}
+.tile b{display:block;font-size:26px;font-weight:900;letter-spacing:-.5px;line-height:1.1;color:var(--forest-deep)}
+.tile u{display:block;text-decoration:none;font-size:10px;letter-spacing:.8px;font-weight:800;
+  color:var(--muted);margin-bottom:6px}
+.tile i{display:block;font-style:normal;font-size:11px;color:var(--muted);font-weight:600;
+  margin-top:5px;line-height:1.4}
+
+table{width:100%;border-collapse:collapse;background:var(--surface);border:1px solid var(--line);
+  border-radius:11px;overflow:hidden}
+th{font-size:9.5px;letter-spacing:1.1px;font-weight:800;color:var(--muted);text-align:left;
+  padding:9px 13px;background:var(--rail-a);border-bottom:1px solid var(--line)}
+td{padding:11px 13px;border-bottom:1px solid var(--hair);font-size:13px;font-weight:600}
+tr:last-child td{border-bottom:0}
+td.n,th.n{text-align:right;font-variant-numeric:tabular-nums}
+tr.tot td{background:var(--rail-a);font-weight:800;border-top:1px solid var(--line)}
+/* the two halves of the row answer two different questions — what players paid,
+   and what that turns into for the partner. the tier and the rule say so. */
+th.grp{text-align:center;font-size:9px;letter-spacing:1.4px;color:var(--forest-deep);
+  background:var(--rail-b);padding-bottom:7px;border-bottom:1px solid var(--hair)}
+th.gl,td.gl{border-left:1px solid var(--line)}
+td.wn2{font-size:12px;color:var(--ink)}
+/* one control for the whole table, outside it, so it does not read as a row. */
+.tact{margin-top:9px}
+.pill{display:inline-block;font-size:10.5px;font-weight:800;padding:2px 8px;border-radius:999px;
+  border:1px solid;white-space:nowrap}
+.pill.paid{background:#e7f6ee;color:var(--ok-ink);border-color:#bfe0cd}
+.pill.due{background:var(--warn-bg);color:var(--warn-ink);border-color:var(--warn-line)}
+.pill.late{background:var(--crit-bg);color:var(--crit-ink);border-color:var(--crit-line)}
+.pill.none{background:var(--chip-bg);color:var(--muted);border-color:var(--chip-line)}
+.pill.prog{background:#eaf1fb;color:#2a4f86;border-color:#c6d8ef}
+/* an aimed control, so it gets an aimed control's height. 17px of underlined
+   text is a link you hit on the third try. */
+.lk{background:none;border:0;font:inherit;font-size:11.5px;font-weight:700;color:var(--forest);
+  text-decoration:underline;text-underline-offset:2px;cursor:pointer;padding:6px 8px;
+  min-height:28px;margin:-6px -8px;white-space:nowrap}
+.lk:hover{background:var(--chip-bg);border-radius:7px;margin:-6px -8px}
+.sub{display:block;font-size:11px;color:var(--muted);font-weight:600;margin-top:3px}
+
+/* wrap rather than scroll: at 1280 the 8th card was cut off at the right edge
+   with nothing on screen to say there was more. a grid rather than a wrapping
+   flex row, because flex-grow stretched a lone trailing card to the full width
+   of the page and made one week look like a different kind of thing. */
+.wk{display:grid;grid-template-columns:repeat(auto-fill,minmax(124px,1fr));gap:9px;padding-bottom:5px}
+.wc{background:var(--surface);border:1px solid var(--line);border-radius:11px;padding:11px 12px}
+.wc .wl{font-size:10px;letter-spacing:.7px;font-weight:800;color:var(--muted)}
+.wc .wd{font-size:11px;color:var(--muted);font-weight:600;margin-top:1px}
+.wc .wn{font-size:23px;font-weight:900;color:var(--forest-deep);margin-top:7px;letter-spacing:-.4px}
+.wc .wm{font-size:11px;color:var(--muted);font-weight:600;margin-top:2px}
+
+.foot{margin-top:20px;font-size:11.5px;line-height:1.65;color:var(--muted);font-weight:600;
+  border-top:1px solid var(--line);padding-top:13px;max-width:1180px}
+
+@media (max-width:1420px){ .tiles{grid-template-columns:repeat(3,1fr)} }
+@media (max-width:1180px){ .sw{grid-template-columns:1fr} }
+</style>
+</head>
+<body>
+
+<div class="top">
+  <div class="brand">MATCHDAY<em>Clubhouse</em></div>
+  <nav class="nav">
+    <a href="#">Home</a><a href="#">Finance</a><a href="#">Growth</a>
+    <a href="#" class="off">Membership</a>
+    <a href="#" class="on">Match Ops</a>
+    <a href="#">Tech</a>
+  </nav>
+  <div class="who">Ryan Mancuso ▾</div>
+</div>
+
+<div class="wrap" id="wrap">
+  <aside class="rail" id="rail">
+    <div class="rlab">MATCH OPS</div>
+    <button class="ritem"><svg viewBox="0 0 24 24"><circle cx="12" cy="12" r="9"/><path d="M12 3v18M3 12h18"/></svg>Matches</button>
+    <button class="ritem"><svg viewBox="0 0 24 24"><rect x="3" y="5" width="18" height="16" rx="2"/><path d="M3 10h18M8 3v4M16 3v4"/></svg>Master Schedule</button>
+    <button class="ritem"><svg viewBox="0 0 24 24"><path d="M4 5h16v11H9l-5 4z"/></svg>Match Chats<em class="rb" style="font-style:normal">1</em></button>
+    <button class="ritem"><svg viewBox="0 0 24 24"><rect x="3" y="6" width="18" height="12" rx="2"/><path d="M12 6v12M3 10h3M18 10h3"/></svg>Fields</button>
+    <button class="ritem"><svg viewBox="0 0 24 24"><path d="M4 8l8-4 8 4-8 4z"/><path d="M4 12l8 4 8-4M4 16l8 4 8-4"/></svg>Inventory</button>
+    <button class="ritem"><svg viewBox="0 0 24 24"><circle cx="9" cy="8" r="3.2"/><path d="M3 20c0-3.3 2.7-5.5 6-5.5s6 2.2 6 5.5"/><path d="M17 11h4M19 9v4"/></svg>Managers</button>
+    <button class="ritem on" id="rPart"><svg viewBox="0 0 24 24"><rect x="3" y="4" width="18" height="14" rx="2"/><path d="M7 20h10M7 9h5M7 13h9"/></svg>Partner Dashboards<em class="rb" id="rbPart" style="font-style:normal"></em></button>
+  </aside>
+
+  <main class="main">
+    <div class="ph" id="ph">
+      <div>
+        <h1>Partner Dashboards</h1>
+        <p id="psub"></p>
+      </div>
+      <div><button class="btnm" id="addP">+ Add partner</button></div>
+    </div>
+
+    <!-- the admin layer: everything above the seam is invisible to the partner -->
+    <div class="admin" id="admin"></div>
+
+    <!-- shown only while previewing as the partner -->
+    <div class="asbar" id="asbar" style="display:none">
+      <span id="asTx"></span>
+      <span class="sp"></span>
+      <button class="btnm" id="asExit">Back to admin view</button>
+    </div>
+
+    <div class="seam" id="seam"><div class="tx" id="seamTx"></div><div class="ln"></div></div>
+
+    <div class="dash" id="dash"></div>
+  </main>
+</div>
+
+<script>
+/* ═══════════════════════════════════════════════════════════════════
+   Partner Dashboards — one page, two audiences.
+
+   The shipped version made you open a partner's dashboard in a new tab to
+   learn anything about them, and the admin list disagreed with the dashboard
+   it linked to (every partner read "Pending 0" while Crossbar's own page
+   showed two pending periods). So: the admin sees the real dashboard with the
+   controls stacked on top of it, and the partner sees the same dashboard with
+   nothing above it. One rendering, one set of numbers, two audiences.
+
+   Every figure below is computed from the match list generated at the top.
+   Nothing is typed in.
+   ═══════════════════════════════════════════════════════════════════ */
+
+var TODAY = Date.UTC(2026,7,2);          /* Aug 2, 2026 */
+var DAY   = 864e5;
+
+/* deterministic, so the page does not argue with itself between screenshots */
+function h32(s){ var h=2166136261>>>0;
+  for(var i=0;i<s.length;i++){ h^=s.charCodeAt(i); h=Math.imul(h,16777619)>>>0 } return h }
+
+var MON = ["January","February","March","April","May","June","July","August",
+           "September","October","November","December"];
+var MONS= ["Jan","Feb","Mar","Apr","May","Jun","Jul","Aug","Sep","Oct","Nov","Dec"];
+function dshort(ts){ var d=new Date(ts); return MONS[d.getUTCMonth()]+" "+d.getUTCDate() }
+function dfull(ts){ var d=new Date(ts); return MONS[d.getUTCMonth()]+" "+d.getUTCDate()+", "+d.getUTCFullYear() }
+/* one money format on the whole page. the shipped dashboard printed $1,208 and
+   $1000.00 within four inches of each other. the negative branch is here rather
+   than at the call sites because a caller that forgets it prints "$-58", and
+   the formatter is the only place that can guarantee no caller ever does. */
+function money(n){
+  var v = Math.round(n);
+  return (v<0 ? "−$" : "$") + Math.abs(v).toLocaleString("en-US");
+}
+function plural(n,one,many){ return n+" "+(Math.abs(n)===1?one:(many||one+"s")) }
+
+/* ── the partners ───────────────────────────────────────────────── */
+var PARTNERS = [
+  { k:"crossbar", name:"Crossbar Rowlett", city:"Dallas",  venue:"Crossbar Rowlett",
+    slug:"crossbar-rowlett-xhr8y3t3", cadence:"monthly", enabled:true,
+    created:Date.UTC(2026,4,31), launch:Date.UTC(2026,4,12), dens:3 },
+  { k:"hattrick", name:"Hattrick", city:"Austin", venue:"Hattrick",
+    slug:"hattrick-yx4sur4t", cadence:"monthly", enabled:true,
+    created:Date.UTC(2026,4,2), launch:Date.UTC(2026,3,6), dens:4 },
+  { k:"pac", name:"PAC Global", city:"Houston", venue:"PAC Global",
+    slug:"pac-global-7vdybfv4", cadence:"weekly", enabled:true,
+    created:Date.UTC(2026,4,1), launch:Date.UTC(2026,3,1), dens:6 }
+];
+
+/* ── the match list every number is derived from ────────────────── */
+var PRICES = [0,9,11,12,14];
+function buildMatches(p){
+  var ms=[], d=p.launch, pool = 46 + h32(p.k)%70;
+  while(d <= TODAY){
+    var s = p.k+"|"+d;
+    if(h32(s)%10 < p.dens){
+      var spots  = 6 + h32(s+"s")%17;                  /* 6..22 spots held */
+      var guests = h32(s+"g")%(1+Math.round(spots*0.28));
+      var canc   = h32(s+"c")%3;                        /* cancelled inside 24h, non-refundable */
+      var price  = PRICES[h32(s+"p")%PRICES.length];
+      var refund = (h32(s+"r")%9===0) ? 1 : 0;          /* a spot refunded after the fact */
+      var mgr    = 40 + (h32(s+"m")%4)*10;              /* what the match manager was paid */
+      var who    = [];
+      for(var i=0;i<spots;i++) who.push(h32(s+"u"+i)%pool);
+      ms.push({ d:d, spots:spots, guests:guests, regs:spots-guests, canc:canc,
+                price:price, gross:spots*price, refund:refund*price, mgr:mgr, who:who });
+    }
+    d += DAY;
+  }
+  return ms;
+}
+PARTNERS.forEach(function(p){ p.m = buildMatches(p) });
+
+/* ── periods: months for a monthly partner, weeks for a weekly one ─ */
+function weekStart(ts){ var d=new Date(ts); return ts - ((d.getUTCDay()+6)%7)*DAY }
+function periodOf(p, ts){
+  if(p.cadence === "weekly") return weekStart(ts);
+  var d=new Date(ts); return Date.UTC(d.getUTCFullYear(), d.getUTCMonth(), 1);
+}
+function periodEnd(p, st){
+  if(p.cadence === "weekly") return st + 6*DAY;
+  var d=new Date(st); return Date.UTC(d.getUTCFullYear(), d.getUTCMonth()+1, 0);
+}
+function periodLabel(p, st){
+  if(p.cadence === "weekly") return "Week of "+dshort(st);
+  var d=new Date(st); return MON[d.getUTCMonth()]+" "+d.getUTCFullYear();
+}
+/* monthly partners are paid on the 5th of the following month; weekly partners on
+   the Friday after the week closes. both are stated on the page, not assumed. */
+function payDue(p, st){
+  if(p.cadence === "weekly") return periodEnd(p, st) + 5*DAY;
+  var d=new Date(st); return Date.UTC(d.getUTCFullYear(), d.getUTCMonth()+1, 5);
+}
+
+function periods(p){
+  var by = {};
+  p.m.forEach(function(m){
+    var st = periodOf(p, m.d);
+    (by[st] = by[st] || []).push(m);
+  });
+  return Object.keys(by).map(Number).sort(function(a,b){ return a-b }).map(function(st){
+    var ms = by[st], end = periodEnd(p, st);
+    var gross = ms.reduce(function(s,m){ return s+m.gross }, 0);
+    var refs  = ms.reduce(function(s,m){ return s+m.refund }, 0);
+    var nrefs = ms.filter(function(m){ return m.refund>0 }).length;
+    var qual  = gross - refs;
+    var mgr   = ms.reduce(function(s,m){ return s+m.mgr }, 0);
+    /* the floor. a period where manager pay exceeds qualifying revenue owes nothing,
+       and the shortfall does NOT carry into the next period — which is a real rule
+       with a real number attached, so the page states it rather than silently
+       rendering $0.00 and letting the partner assume it netted out. */
+    var raw   = qual - mgr;
+    var owed  = Math.max(0, raw);
+    var open  = end >= TODAY;
+    var due   = payDue(p, st);
+    var st_;
+    if(open)            st_ = "prog";
+    else if(owed === 0) st_ = "none";
+    else if(due <= TODAY) st_ = "paid";
+    else                st_ = "due";
+    var paidOn = st_==="paid" ? due + (h32(p.k+"pd"+st)%4)*DAY : null;
+    /* if that lands in the future the payment has not actually happened yet */
+    if(paidOn && paidOn > TODAY){ st_ = "late"; paidOn = null }
+    return { st:st, end:end, label:periodLabel(p,st), ms:ms.length, gross:gross,
+             refs:refs, nrefs:nrefs, qual:qual, mgr:mgr, raw:raw, owed:owed,
+             due:due, state:st_, paidOn:paidOn, open:open };
+  });
+}
+
+function totals(p){
+  var spots = p.m.reduce(function(s,m){ return s+m.spots }, 0);
+  var regs  = p.m.reduce(function(s,m){ return s+m.regs }, 0);
+  var gsts  = p.m.reduce(function(s,m){ return s+m.guests }, 0);
+  var canc  = p.m.reduce(function(s,m){ return s+m.canc }, 0);
+  var set   = {}; p.m.forEach(function(m){ m.who.forEach(function(u){ set[u]=1 }) });
+  var uniq  = Object.keys(set).length;
+  var gross = p.m.reduce(function(s,m){ return s+m.gross }, 0);
+  var refs  = p.m.reduce(function(s,m){ return s+m.refund }, 0);
+  var free  = p.m.filter(function(m){ return m.price===0 }).length;
+  return { spots:spots, regs:regs, gsts:gsts, canc:canc, uniq:uniq,
+           gross:gross, refs:refs, free:free, matches:p.m.length };
+}
+
+PARTNERS.forEach(function(p){
+  p.per = periods(p);
+  p.tot = totals(p);
+  p.owed = p.per.filter(function(x){ return x.state==="due" || x.state==="late" });
+  p.owedAmt = p.owed.reduce(function(s,x){ return s+x.owed }, 0);
+  p.late = p.per.filter(function(x){ return x.state==="late" }).length;
+});
+
+/* ── state ──────────────────────────────────────────────────────── */
+var SEL = "crossbar", AS_PARTNER = false;
+function P(){ return PARTNERS.filter(function(x){ return x.k===SEL })[0] }
+function esc(s){ return String(s).replace(/[&<>"]/g, function(m){
+  return {"&":"&amp;","<":"&lt;",">":"&gt;",'"':"&quot;"}[m] }) }
+
+/* ── the admin layer ────────────────────────────────────────────── */
+function renderAdmin(){
+  var p = P();
+  var sw = PARTNERS.map(function(x){
+    /* the whole reason this row exists: the state of all three partners is on
+       screen at once, so "who still needs paying" never requires opening
+       anything. the shipped list showed "Pending 0" for every partner while
+       one of them had two unpaid periods. */
+    var s = x.owedAmt > 0
+      ? '<div class="ps owed">'+money(x.owedAmt)+' owed across '+plural(x.owed.length,"period")+
+        (x.late ? ' · '+plural(x.late,"payment")+' past due' : '')+'</div>'
+      : '<div class="ps clear">Nothing owed — every closed period is settled</div>';
+    return '<button class="pt'+(x.k===SEL?" on":"")+'" data-p="'+x.k+'">'+
+      '<div class="pn"><span class="dotx'+(x.enabled?"":" off")+'"></span>'+esc(x.name)+'</div>'+
+      '<div class="pv">'+esc(x.city)+' · '+esc(x.venue)+' · paid '+x.cadence+'</div>'+
+      s+'</button>';
+  }).join("");
+
+  document.getElementById("admin").innerHTML =
+    '<div class="ahd"><span class="atag">ADMIN</span>'+
+      '<span class="anote">Everything in this panel is stripped out of the partner’s page. '+
+      'They see only what is below the line.</span>'+
+      '<span class="sp"></span>'+
+      '<button class="btnq" id="viewAs">View as '+esc(p.name)+' sees it</button></div>'+
+    '<div class="sw">'+sw+'</div>'+
+    '<div class="actl">'+
+      '<span class="url mono">matchday-clubhouse.vercel.app/partners/'+esc(p.slug)+'</span>'+
+      '<button class="btnq" id="cpy">Copy link</button>'+
+      '<button class="btnq">Open ↗</button>'+
+      '<button class="btnq">Payment cadence: '+p.cadence+' ▾</button>'+
+      '<button class="btnq warn">Regenerate link</button>'+
+      '<button class="btnq warn">'+(p.enabled?"Disable":"Enable")+'</button>'+
+      '<button class="btnq warn">Delete</button>'+
+    '</div>'+
+    '<div class="aexp">Anyone holding the link can open this page — it is the only key, there is no '+
+      'login on it, and it shows this venue and no other. Disabling returns 404 immediately and '+
+      'regenerating does the same to the old link, so both break whatever the partner has bookmarked. '+
+      'The link has been live since '+dfull(p.created)+'.</div>';
+
+  document.querySelectorAll("#admin [data-p]").forEach(function(b){
+    b.onclick = function(){ SEL = b.dataset.p; render() };
+  });
+  document.getElementById("viewAs").onclick = function(){ AS_PARTNER = true; render() };
+}
+
+/* ── the partner-facing dashboard ───────────────────────────────── */
+function renderDash(){
+  var p = P(), t = p.tot, per = p.per;
+  var open = per.filter(function(x){ return x.open })[0];
+  var closed = per.filter(function(x){ return !x.open });
+
+  /* all-time tiles. every label says what the number IS, not what we wish it were:
+     MatchDay records no check-in anywhere, so nothing on this page may claim
+     attendance. these are spots paid for and held. */
+  var tiles =
+    tile(t.spots, "SPOTS FILLED", "Spots paid for and held. MatchDay does not record check-in, so this is not attendance.")+
+    tile(t.regs,  "BOOKED BY REGISTERED PLAYERS", "Held by someone with a MatchDay account.")+
+    tile(t.gsts,  "GUEST SPOTS", "Bought by a registered player for someone without an account.")+
+    tile(t.canc,  "CANCELLED INSIDE 24 HOURS", "Non-refundable, so the revenue below still counts them.")+
+    tile(t.uniq,  "DISTINCT PEOPLE", "Held at least one spot. Averages "+
+         (t.spots/t.uniq).toFixed(1)+" spots each over "+plural(t.matches,"match","matches")+".");
+
+  /* ── one row per period, one table ───────────────────────────────
+     the first draft had two tables: matches/charged/refunded/qualifying in one,
+     qualifying/manager-pay/payment in the other. that printed QUALIFYING REVENUE
+     twice for every period — 18 duplicated figures for a weekly partner — and
+     invited exactly the question "why don't these two tables agree" the moment
+     one of them was ever computed differently. one row, left to right: what
+     players paid, then what that turns into for the partner. */
+  var UNIT = p.cadence==="weekly" ? "week" : "month";
+  var rows = per.map(function(x){
+    var state =
+      x.open   ? '<span class="pill prog">In progress</span>' :
+      x.state==="none" ? '<span class="pill none">Nothing owed</span>' :
+      x.state==="paid" ? '<span class="pill paid">Paid</span>' :
+      x.state==="late" ? '<span class="pill late">Past due</span>' :
+                         '<span class="pill due">Scheduled</span>';
+    var when =
+      x.open   ? '<span style="color:var(--muted)">Closes '+dfull(x.end)+'</span>' :
+      /* stated as a shortfall with a positive number. "is −$58" reads like a
+         debt the partner now carries, which is the opposite of the rule. */
+      x.state==="none" ? '<span style="color:var(--muted)">Fell '+money(x.mgr-x.qual)+
+                          ' short of match manager pay — not carried forward</span>' :
+      x.state==="paid" ? dfull(x.paidOn) :
+      x.state==="late" ? '<span style="color:var(--crit-ink)">Was due '+dfull(x.due)+'</span>' :
+                         'Due '+dfull(x.due);
+    return '<tr><td>'+esc(x.label)+(x.open
+        ? '<span class="sub">Partial — through '+dfull(TODAY)+', not a full '+UNIT+'</span>' : '')+'</td>'+
+      '<td class="n">'+x.ms+'</td>'+
+      '<td class="n">'+money(x.gross)+'</td>'+
+      '<td class="n">'+(x.refs ? "−"+money(x.refs) : "—")+
+        (x.refs ? '<span class="sub">'+plural(x.nrefs,"spot")+' refunded</span>' : '')+'</td>'+
+      '<td class="n">'+money(x.qual)+'</td>'+
+      '<td class="n gl">−'+money(x.mgr)+'</td>'+
+      /* the footer tells the partner no payment is calculated until the period
+         closes. printing a running figure here would make one of the two a lie,
+         and the figure would be the one they remember. */
+      '<td class="n">'+(x.open
+        ? '<span style="color:var(--muted)">—<span class="sub">Not yet calculated</span></span>'
+        : '<b>'+money(x.owed)+'</b>')+'</td>'+
+      '<td>'+state+'</td>'+
+      '<td class="wn2">'+when+'</td></tr>';
+  }).join("");
+  var sum = function(f){ return per.reduce(function(s,x){ return s+f(x) }, 0) };
+  var payT = closed.reduce(function(s,x){ return s+x.owed }, 0);
+
+  /* recent weeks — plain counts, no chart, because the question a partner asks of
+     this strip is "was last week bigger than the one before", which a number answers.
+     omitted entirely for a weekly partner: the table above IS their week-by-week
+     view, and repeating it in cards would be the third printing of the same figures. */
+  var wks = {};
+  p.m.forEach(function(m){ var w=weekStart(m.d); wks[w]=wks[w]||{n:0,s:0,g:0};
+    wks[w].n++; wks[w].s+=m.spots; wks[w].g+=m.gross });
+  var wkeys = p.cadence==="weekly" ? []
+    : Object.keys(wks).map(Number).sort(function(a,b){ return b-a }).slice(0,8).reverse();
+  var wcards = wkeys.map(function(w){
+    var x = wks[w];
+    return '<div class="wc"><div class="wl">WEEK OF</div>'+
+      '<div class="wd">'+dshort(w)+' – '+dshort(w+6*DAY)+'</div>'+
+      '<div class="wn">'+x.s+'</div>'+
+      '<div class="wm">spots held</div>'+
+      '<div class="wm">'+plural(x.n,"match","matches")+' · '+money(x.g)+'</div></div>';
+  }).join("");
+
+  document.getElementById("dash").className = "dash"+(AS_PARTNER?" pub":"");
+  document.getElementById("dash").innerHTML =
+    /* the partner opens this from a bookmark, with no login and no Clubhouse
+       chrome around it, so the page has to say who sent it. */
+    '<div class="dmark">MATCHDAY</div>'+
+
+    '<h1 class="dh1">'+esc(p.name).toUpperCase()+' <em>— PARTNER DASHBOARD</em></h1>'+
+    '<p class="dsub">'+esc(p.venue)+' · '+esc(p.city)+' · '+dfull(p.launch)+' through '+dfull(TODAY)+
+      ' · MatchDay staff spots excluded · revenue is the match price players actually paid</p>'+
+
+    '<div class="sec"><div class="slab">SINCE LAUNCH</div><div class="tiles">'+tiles+'</div></div>'+
+
+    /* one table, one row per period. the two-table draft printed QUALIFYING
+       REVENUE twice for every period and invited "why don't these agree". */
+    '<div class="sec"><div class="slab">EVERY '+UNIT.toUpperCase()+'</div>'+
+      '<table><thead>'+
+      '<tr><th rowspan="2">PERIOD</th><th class="grp n" colspan="4">WHAT PLAYERS PAID</th>'+
+        '<th class="grp gl" colspan="4">WHAT THAT MEANS FOR YOU</th></tr>'+
+      '<tr><th class="n">MATCHES</th><th class="n">CHARGED</th><th class="n">REFUNDED</th>'+
+        '<th class="n">QUALIFYING REVENUE</th><th class="n gl">MATCH MANAGER PAY</th>'+
+        '<th class="n">PAYMENT</th><th>STATUS</th><th>WHEN</th></tr></thead><tbody>'+
+      rows+
+      '<tr class="tot"><td>All '+plural(per.length,UNIT)+'</td>'+
+      '<td class="n">'+sum(function(x){return x.ms})+'</td>'+
+      '<td class="n">'+money(sum(function(x){return x.gross}))+'</td>'+
+      '<td class="n">'+(sum(function(x){return x.refs})
+        ? "−"+money(sum(function(x){return x.refs})) : "—")+'</td>'+
+      '<td class="n">'+money(sum(function(x){return x.qual}))+'</td>'+
+      '<td class="n gl">−'+money(sum(function(x){return x.mgr}))+'</td>'+
+      '<td class="n">'+money(payT)+'<span class="sub">closed '+UNIT+'s only</span></td>'+
+      '<td colspan="2"></td></tr>'+
+      '</tbody></table>'+
+      /* one control, not one per paid row. fifteen identical links down the right
+         edge of a table is noise, and the partner naming the period themselves is
+         more useful than us guessing it from which link they clicked. */
+      '<div class="tact"><button class="lk">A payment here is missing or wrong →</button></div>'+
+      '</div>'+
+
+    /* not "the last 8 weeks" — weeks with no match are skipped, so a partner
+       counting back from today would land on a different card than the label
+       promises. the label says what the strip actually contains. omitted for a
+       weekly partner, whose table above already is the week-by-week view. */
+    (wkeys.length
+      ? '<div class="sec"><div class="slab">THE LAST '+wkeys.length+' WEEKS WITH A MATCH</div>'+
+        '<div class="wk">'+wcards+'</div></div>'
+      : '')+
+
+    '<div class="foot" id="dfoot"></div>';
+
+  document.getElementById("dfoot").textContent = footText(p);
+}
+function tile(n, lab, note){
+  return '<div class="tile"><u>'+lab+'</u><b>'+n.toLocaleString("en-US")+'</b><i>'+note+'</i></div>';
+}
+
+/* ── the disclosure ─────────────────────────────────────────────────
+   a partner-facing page is read by somebody who did not build it and cannot
+   ask a follow-up question in standup. every rule that moves a number on this
+   page is written out, with its number. */
+function footText(p){
+  var t = p.tot, per = p.per;
+  var none = per.filter(function(x){ return x.state==="none" && !x.open });
+  var shortfall = none.reduce(function(s,x){ return s+(x.mgr-x.qual) }, 0);
+  var owedAll = per.filter(function(x){ return x.state==="due"||x.state==="late" })
+                   .reduce(function(s,x){ return s+x.owed }, 0);
+  var open = per.filter(function(x){ return x.open })[0];
+  return "Everything here covers "+p.venue+" only, from "+dfull(p.launch)+" — the first match "+
+    "MatchDay ran at this venue — through "+dfull(TODAY)+", and counts "+
+    plural(t.matches,"match","matches")+". Spots filled means a spot was paid for and held; "+
+    "MatchDay does not record who physically arrived, so no number on this page is attendance, "+
+    "including the "+t.uniq+" distinct people. "+t.canc+" spots were cancelled inside 24 hours: "+
+    "those are non-refundable, so they are still counted as charged. Separately, "+money(t.refs)+
+    " has been refunded across the whole period and is removed from qualifying revenue. "+
+    (t.free ? plural(t.free,"match","matches")+" ran at no charge and brought $0, which is why "+
+      "matches and revenue do not move together. " : "")+
+    "Qualifying revenue is what players were charged, less refunds. Your payment is qualifying "+
+    "revenue less what MatchDay paid the match managers who ran those matches. When that "+
+    "subtraction is negative the payment is $0 and the shortfall is NOT carried into the next "+
+    "period — "+(none.length
+      ? "that has happened in "+plural(none.length,"period")+" so far, for a combined "+
+        money(shortfall)+" MatchDay absorbed"
+      /* stating "0 periods, $0 absorbed" makes a rule that has never fired look
+         like a running tally. say it has not happened. */
+      : "that has not happened in any period so far")+". Payments run "+p.cadence+", "+
+    (p.cadence==="weekly" ? "on the Friday after each week closes" : "on the 5th of the following month")+
+    "; "+(owedAll>0 ? money(owedAll)+" is currently scheduled or outstanding" : "nothing is currently outstanding")+
+    ". "+(open ? open.label+" is still open — it closes "+dfull(open.end)+", so its figures are "+
+      "partial and no payment is calculated for it yet. " : "")+
+    "Figures update when the match data syncs, roughly hourly. If a number here does not match "+
+    "your own records, use the link under the table and MatchDay will reconcile it.";
+}
+
+/* ── chrome ─────────────────────────────────────────────────────── */
+function render(){
+  var p = P();
+  document.getElementById("rbPart").textContent = PARTNERS.length;
+  var owedTotal = PARTNERS.reduce(function(s,x){ return s+x.owedAmt }, 0);
+  var owedN = PARTNERS.filter(function(x){ return x.owedAmt>0 }).length;
+  document.getElementById("psub").textContent =
+    PARTNERS.length+" venue partners have a live dashboard. "+
+    (owedTotal>0
+      ? money(owedTotal)+" is owed across "+plural(owedN,"partner")+" — the amounts are on each "+
+        "partner below, so nothing needs opening."
+      : "Every closed period is settled across all "+plural(PARTNERS.length,"partner")+".");
+
+  document.getElementById("admin").style.display = AS_PARTNER ? "none" : "";
+  document.getElementById("asbar").style.display = AS_PARTNER ? "" : "none";
+  document.getElementById("ph").style.display    = AS_PARTNER ? "none" : "";
+  document.getElementById("rail").style.display  = AS_PARTNER ? "none" : "";
+  /* the preview bar says "no MatchDay navigation". it was saying that with the
+     Clubhouse nav rendered two inches above it. the claim has to be true. */
+  document.querySelector(".top").style.display   = AS_PARTNER ? "none" : "";
+  document.getElementById("seam").style.display  = AS_PARTNER ? "none" : "";
+  document.getElementById("seamTx").textContent  =
+    "BELOW THIS LINE IS EXACTLY WHAT "+p.name.toUpperCase()+" SEES AT THEIR LINK";
+  document.getElementById("asTx").textContent =
+    "This is "+p.name+"’s page as they see it — no admin panel, no other partner, no MatchDay "+
+    "navigation. Their link opens straight to this.";
+
+  if(!AS_PARTNER) renderAdmin();
+  renderDash();
+}
+document.getElementById("asExit").onclick = function(){ AS_PARTNER = false; render() };
+
+/* harness hooks */
+window.setPartner = function(k){ SEL=k; render() };
+window.setViewAs  = function(b){ AS_PARTNER=b; render() };
+window.PARTNERS   = PARTNERS;
+window.P          = P;
+window.money      = money;
+window.TODAY      = TODAY;
+
+render();
+</script>
+</body>
+</html>

@@ -7,7 +7,7 @@ import {
   fetchPartnerWeeklyPayments,
 } from "@/lib/partnerStats";
 import { makeServerClient } from "@/lib/supabaseServer";
-import PartnerDashboard from "./PartnerDashboard";
+import PartnerDashboardView from "./PartnerDashboardView";
 
 // Server component. Slug → venue_id resolution and stats fetch run
 // server-side against a service-role Supabase client. venue_id is
@@ -64,8 +64,16 @@ export default async function PartnerPage({
   const partner = await fetchPartnerBySlug(supabase, slug);
   if (!partner) notFound(); // 404 — generic, no leak about why
 
-  const { rows, extra } = await fetchPartnerRows(supabase, partner.venueId);
+  const { rows, extra, venueName } = await fetchPartnerRows(supabase, partner.venueId);
   const records = await fetchPartnerWeeklyPayments(supabase, partner.id);
+
+  // City + launch date for the header (fin_venues, service-role — aggregated
+  // here, never sent raw). Both are display-only.
+  const { data: venueRow } = await supabase
+    .from("fin_venues")
+    .select("city, launch_date")
+    .eq("id", partner.venueId)
+    .maybeSingle();
 
   const baseline = PARTNER_DATA_BASELINE[slug] ?? null;
   const statsRows = baseline
@@ -109,12 +117,14 @@ export default async function PartnerPage({
   );
 
   return (
-    <PartnerDashboard
-      partnerDashboardId={partner.id}
+    <PartnerDashboardView
       partnerName={partner.partnerName}
+      venue={venueName}
+      city={(venueRow?.city as string | null) ?? null}
+      launchDate={(venueRow?.launch_date as string | null) ?? null}
       stats={stats}
       payment={payment}
-      dataBaseline={baseline}
+      isPublic
     />
   );
 }
