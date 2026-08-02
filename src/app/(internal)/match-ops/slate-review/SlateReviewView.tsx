@@ -15,7 +15,9 @@ import { supabase } from "@/lib/supabase";
 import { useMatchWindowData } from "@/lib/useMatchData";
 import { getCancelHeatmap, type SlotRow } from "@/lib/cityStats";
 import { useWeeklyDemand, type DemandWeek } from "@/lib/slateDemand";
-import { fieldCodeMap } from "@/lib/slateFieldCodes";
+import { fieldCodeMap, fieldCode } from "@/lib/slateFieldCodes";
+import { normField } from "@/lib/normField";
+import SlateFieldPnL from "@/components/SlateFieldPnL";
 import { VISIBLE_CITIES } from "@/lib/types";
 import SlateWeekSchedule from "@/components/SlateWeekSchedule";
 import { fetchLegacyMatchRegistrations } from "@/lib/mdapiMatchesRead";
@@ -127,6 +129,9 @@ export default function SlateReviewView() {
       {/* cancel patterns */}
       <CancelCard rows={rows} city={city} fields={fields} />
 
+      {/* match P&L by field */}
+      <SlateFieldPnL city={city} />
+
       {/* prices */}
       <PricesCard city={city} />
 
@@ -134,7 +139,7 @@ export default function SlateReviewView() {
       <Card>
         <SHead title="HOW THESE NUMBERS ARE BUILT" />
         <p className="m-0 text-[12.5px] leading-[1.6]" style={{ color: C.muted }}>
-          Field cost is charged only to matches that actually ran; if we pay for a pitch when a match cancels, that sunk cost isn’t on any net figure here, so a field with real cancellations looks a little kinder than it was. The cancellation figures on this page use the last four completed weeks for the patterns view and the completed weeks of the eight-week window for the slot-by-slot grid — the current, partial week is left out of both, since a part-week can’t be compared with a finished one. Player and spot counts exclude fake accounts.
+          Field cost is charged only to matches that actually ran; if we pay for a pitch when a match cancels, that sunk cost isn’t on any net figure here, so a field with real cancellations looks a little kinder than it was. The demand strip covers the last eight weeks including the current, in-progress week; Cancel Patterns and the Match P&L both use the last four completed weeks and leave the partial week out, since a part-week can’t be compared with a finished one. Player, spot and revenue counts exclude fake accounts and waitlist holds.
         </p>
       </Card>
     </div>
@@ -300,54 +305,21 @@ function CaptureBar({ city, fields, weekStart }: { city: string; fields: string[
   );
 }
 
-// ── cancel patterns (Patterns + Numbers tabs), both from getCancelHeatmap ─────
+// ── cancel patterns (Patterns view only; Numbers view removed) ────────────────
 function CancelCard({ rows, city, fields }: { rows: Parameters<typeof getCancelHeatmap>[0]; city: string; fields: string[] }) {
-  const [tab, setTab] = useState<"pat" | "num">("pat");
-  const [show, setShow] = useState<"cx" | "all">("cx");
-  const [sort, setSort] = useState<"day" | "bad">("day");
   // Single source of chip labels — the curated hand-chosen shorthand, shared by
-  // the Patterns view, the Numbers view, and the footer key. NOT title initials.
+  // the Patterns view and the footer key. NOT title initials.
   const codes = useMemo(() => fieldCodeMap(fields), [fields]);
-  // Numbers grid needs every slot (all 8 weeks); include all slots when "Every match".
-  const hm = useMemo(() => getCancelHeatmap(rows, city, 8, new Date(), { includeAllSlots: show === "all" }), [rows, city, show]);
-  // Patterns needs only cancelled slots, so build off a cancelled-only heatmap.
+  // Cancelled-only heatmap over the last 4 completed weeks (Patterns' window).
   const hmCx = useMemo(() => getCancelHeatmap(rows, city, 8, new Date(), { includeAllSlots: false }), [rows, city]);
-
-  const btn = (on: boolean): React.CSSProperties => on
-    ? { background: C.forestDeep, borderColor: C.forestDeep, color: "#fff" }
-    : { background: "#fbf8f1", borderColor: C.colLine, color: C.forest };
 
   return (
     <Card>
-      <SHead title="CANCEL PATTERNS" right={
-        <div className="flex flex-wrap items-center gap-4">
-          <div className="flex items-center gap-1.5"><span className="text-[10.5px] font-bold uppercase tracking-[0.7px]" style={{ color: C.muted }}>View</span>
-            <TabBtn on={tab === "pat"} onClick={() => setTab("pat")}>Patterns</TabBtn>
-            <TabBtn on={tab === "num"} onClick={() => setTab("num")}>Numbers</TabBtn>
-          </div>
-          {tab === "num" && (
-            <>
-              <div className="flex items-center gap-1.5"><span className="text-[10.5px] font-bold uppercase tracking-[0.7px]" style={{ color: C.muted }}>Show</span>
-                <TabBtn on={show === "cx"} onClick={() => setShow("cx")}>Cancellations</TabBtn>
-                <TabBtn on={show === "all"} onClick={() => setShow("all")}>Every match</TabBtn>
-              </div>
-              <div className="flex items-center gap-1.5"><span className="text-[10.5px] font-bold uppercase tracking-[0.7px]" style={{ color: C.muted }}>Sort</span>
-                <TabBtn on={sort === "day"} onClick={() => setSort("day")}>By day</TabBtn>
-                <TabBtn on={sort === "bad"} onClick={() => setSort("bad")}>Worst first</TabBtn>
-              </div>
-            </>
-          )}
-        </div>
-      } />
-      {tab === "pat" ? <Patterns hm={hmCx} codes={codes} /> : <Numbers hm={hm} codes={codes} show={show} sort={sort} />}
+      <SHead title="CANCEL PATTERNS" />
+      <Patterns hm={hmCx} codes={codes} />
     </Card>
   );
 }
-function TabBtn({ on, onClick, children }: { on: boolean; onClick: () => void; children: React.ReactNode }) {
-  return <button type="button" onClick={onClick} className="min-h-[28px] rounded-full border px-3 py-[5px] text-[11px] font-bold uppercase tracking-[0.5px]"
-    style={on ? { background: C.forestDeep, borderColor: C.forestDeep, color: "#fff" } : { background: "#fbf8f1", borderColor: C.colLine, color: C.forest }}>{children}</button>;
-}
-
 // last 4 fully-completed weeks (drop the current partial = last week key)
 function completedWeeks(weeks: string[]): string[] {
   const done = weeks.slice(0, weeks.length - 1); // drop current
@@ -420,76 +392,6 @@ function Patterns({ hm, codes }: { hm: { weeks: string[]; slots: SlotRow[] }; co
   );
 }
 
-function Numbers({ hm, codes, show, sort }: { hm: { weeks: string[]; slots: SlotRow[] }; codes: Record<string, string>; show: "cx" | "all"; sort: "day" | "bad" }) {
-  // Drop the current, partial week (always the last entry) so every rate
-  // denominator is a finished week — matches the strip's in-progress flag and
-  // the patterns view, and keeps the honesty note true.
-  const weeks = hm.weeks.slice(0, -1);
-  // rate per slot = weeks-cancelled / weeks-scheduled (both COUNTS of weeks) — bug #3 fix.
-  const stat = (s: SlotRow) => {
-    let cx = 0, sched = 0;
-    for (const w of weeks) { const d = s.weeks[w]; if (!d) continue; sched++; if (d.cancelled) cx++; }
-    return { cx, sched, rate: sched ? (cx / sched) * 100 : 0 };
-  };
-  // Only slots that were on the schedule in at least one completed week — a slot
-  // that existed solely in the dropped current week would otherwise show all
-  // dashes with a "0 of 0" rate.
-  const list = hm.slots.filter((s) => stat(s).sched > 0);
-  if (sort === "day") list.sort((a, b) => a.dowIdx - b.dowIdx || timeMinutes(a.time) - timeMinutes(b.time) || a.field.localeCompare(b.field));
-  else list.sort((a, b) => { const sa = stat(a), sb = stat(b); return sb.cx - sa.cx || sb.rate - sa.rate; }); // cancellations then rate — both printed
-  // per-week players footer
-  const wkPlayers = weeks.map((w) => hm.slots.reduce((a, s) => a + (s.weeks[w] && !s.weeks[w].cancelled ? s.weeks[w].players : 0), 0));
-
-  const th: React.CSSProperties = { padding: "8px 8px", fontSize: 9.5, letterSpacing: "0.6px", textTransform: "uppercase", color: C.muted, fontWeight: 700, borderBottom: `1px solid ${C.line}`, textAlign: "center" };
-  const td: React.CSSProperties = { padding: "7px 8px", fontSize: 12, borderBottom: `1px solid ${C.hair}`, textAlign: "center" };
-
-  return (
-    <>
-      <p className="m-0 mb-3.5 text-[12.5px]" style={{ color: C.muted }}>
-        Every slot that cancelled at least once, over the {weeks.length} completed weeks in this window. <span style={{ color: C.red, fontWeight: 600 }}>✕ N</span> = cancelled with N already booked; {show === "cx" ? <span style={{ color: C.ok, fontWeight: 600 }}>·</span> : <span style={{ color: C.ok, fontWeight: 600 }}>N</span>} = ran{show === "all" ? ", N played" : ""}; <span style={{ color: C.nsInk, fontWeight: 600 }}>–</span> = not scheduled. The rate is out of the weeks the slot was on the schedule, with the denominator printed. Players are shown week by week at the foot and deliberately not totalled.
-      </p>
-      <div className="overflow-x-auto">
-        <table className="w-full border-collapse" style={{ tableLayout: "fixed" }}>
-          <thead>
-            <tr>
-              <th style={{ ...th, textAlign: "left", width: "23%" }}>Slot</th>
-              {weeks.map((w) => <th key={w} style={{ ...th, width: "6.75%" }}>{wkShort(w)}</th>)}
-              <th style={{ ...th, width: "13%" }}>Rate</th>
-            </tr>
-          </thead>
-          <tbody>
-            {list.map((s) => {
-              const st = stat(s);
-              return (
-                <tr key={s.field + s.dowIdx + s.time}>
-                  <td style={{ ...td, textAlign: "left" }}>
-                    <span className="block font-semibold" style={{ color: C.ink }}>{codes[s.field] ?? s.field}</span>
-                    <span className="block text-[10.5px]" style={{ color: C.muted }}>{s.dow} · {s.time}</span>
-                  </td>
-                  {weeks.map((w) => {
-                    const d = s.weeks[w];
-                    if (!d) return <td key={w} style={td}><span style={{ color: C.nsInk }}>–</span></td>;
-                    if (d.cancelled) return <td key={w} style={{ ...td, background: "#fcefeb" }}><span style={{ color: C.red, fontWeight: 700 }}>✕ {d.spots}</span></td>;
-                    return <td key={w} style={td}>{show === "cx" ? <span style={{ color: C.ok }}>·</span> : <span style={{ color: C.ok }}>{d.players}</span>}</td>;
-                  })}
-                  <td style={td}><span className="block font-bold" style={{ color: C.ink }}>{Math.round(st.rate)}%</span><span className="block text-[10px]" style={{ color: C.muted }}>{st.cx} of {st.sched}</span></td>
-                </tr>
-              );
-            })}
-          </tbody>
-          <tfoot>
-            <tr>
-              <td style={{ ...td, textAlign: "left", fontWeight: 700, color: C.muted }}>Players on ran matches</td>
-              {wkPlayers.map((p, i) => <td key={i} style={{ ...td, fontWeight: 700, color: p ? C.ink : C.nsInk }}>{p || "–"}</td>)}
-              <td style={{ ...td, color: C.muted }}>—<span className="block text-[10px]">not totalled</span></td>
-            </tr>
-          </tfoot>
-        </table>
-      </div>
-    </>
-  );
-}
-
 // ── prices (prose) ───────────────────────────────────────────────────────────
 function PricesCard({ city }: { city: string }) {
   const { data } = useFinanceData();
@@ -518,7 +420,10 @@ function PricesCard({ city }: { city: string }) {
           if (!v || v.city !== city) continue;
           const ms = parseLocalDate(r.match_start);
           if (!ms) continue;
-          dppRegs.push({ matchStart: ms, venueId: vid, venueName: v.venue_name, city: v.city, amountDollars: Number(r.match_price_paid ?? 0) });
+          // Label from the SAME shared source as Cancel Patterns + the footer
+          // key: normField(field_title) → fieldCode. Shows codes (HT, RR, OC…),
+          // so this card matches the chips instead of mixing raw venue names.
+          dppRegs.push({ matchStart: ms, venueId: vid, venueName: fieldCode(normField(r.field)), city: v.city, amountDollars: Number(r.match_price_paid ?? 0) });
         }
         const shifts = detectDppPriceShifts(dppRegs, { now: new Date() });
         if (!cancelled) setDpp(shifts);
@@ -536,6 +441,19 @@ function PricesCard({ city }: { city: string }) {
   const inWin = (dpp ?? []).filter((c) => c.weeksAgo <= 8);
   const outWin = (dpp ?? []).length - inWin.length;
 
+  // Group consecutive changes for the same field so a reversal is legible: a
+  // field that moves and moves back nets to zero across the window. Chronological
+  // within each field.
+  const groups = useMemo(() => {
+    const m = new Map<string, DppPriceChange[]>();
+    for (const c of inWin) { const a = m.get(c.venueName) ?? []; a.push(c); m.set(c.venueName, a); }
+    return [...m.entries()].map(([code, arr]) => {
+      const sorted = arr.slice().sort((a, b) => a.changeWeekStart.getTime() - b.changeWeekStart.getTime());
+      const netZero = sorted.length > 1 && sorted[0].prevPriceDollars === sorted[sorted.length - 1].newPriceDollars;
+      return { code, sorted, netZero };
+    }).sort((a, b) => a.code.localeCompare(b.code));
+  }, [inWin]);
+
   return (
     <Card>
       <SHead title="PRICE CHANGES" />
@@ -546,8 +464,13 @@ function PricesCard({ city }: { city: string }) {
           <p className="m-0 mb-2 text-[13px] leading-[1.6]" style={{ color: C.ink }}>
             {inWin.length === 0
               ? "DPP price did not change in this 8-week window."
-              : <>DPP price moved {inWin.length} {inWin.length === 1 ? "time" : "times"} inside this window: {inWin.map((c, i) => <span key={i}>{i > 0 ? "; " : ""}<b>{c.venueName} ${c.prevPriceDollars} → ${c.newPriceDollars}</b> around {fmtWk(c.changeWeekStart)}</span>)}.</>}
-            {outWin > 0 && <> A further {outWin} earlier {outWin === 1 ? "change falls" : "changes fall"} outside these eight weeks.</>}
+              : <>DPP price moved {inWin.length} {inWin.length === 1 ? "time" : "times"} inside this window: {groups.map((g, gi) => (
+                  <span key={g.code}>{gi > 0 ? "; " : ""}<b>{g.code}</b>{" "}
+                    {g.sorted.map((c, i) => <span key={i}>{i === 0 ? <>${c.prevPriceDollars} → ${c.newPriceDollars}</> : <>, then → ${c.newPriceDollars}</>} around {fmtWk(c.changeWeekStart)}</span>)}
+                    {g.netZero && <span style={{ color: C.muted }}> (net zero across the window — ended where it started)</span>}
+                  </span>
+                ))}.</>}
+            {outWin > 0 && <> {outWin === 1 ? "One earlier change falls" : `A further ${outWin} earlier changes fall`} outside these eight weeks.</>}
             {" "}A change is recorded only when the new price holds for two or more matches, so one-off discounts never appear here.
           </p>
           <p className="m-0 text-[13px] leading-[1.6]" style={{ color: C.ink }}>
@@ -568,7 +491,6 @@ function wkKeyToDate(key: string): Date | null {
   if (!m) return null;
   return new Date(Number(m[1]), Number(m[2]) - 1, Number(m[3]));
 }
-function wkShort(key: string): string { const d = wkKeyToDate(key); return d ? `${MON[d.getMonth()]} ${d.getDate()}` : key; }
 function addDays(d: Date, n: number): Date { return new Date(d.getFullYear(), d.getMonth(), d.getDate() + n); }
 // mdapi match_start is venue-local wall clock with a fake offset — read its parts as local.
 function parseLocalDate(s: string): Date | null {
