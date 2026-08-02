@@ -51,12 +51,28 @@ type MatchOut = {
   // 'template' = recurring weekly slot; 'manual'/'auto_completed' = one-off.
   // Drives the dashed (one-off) vs solid (recurring) border in the grid.
   source: string;
+  // Future planning: is this planned slot already on MatchDay? When false the
+  // grid flags it so ops knows to create it in the app.
+  in_matchday?: boolean;
+};
+
+// What mdapi_matches actually recorded — rendered for completed (past) days.
+type ActualOut = {
+  api_id: number;
+  venue: string;
+  detail: string;
+  time: string;
+  max_spots: number | null;
+  player_count: number | null;
+  is_cancelled: boolean;
 };
 
 type DayOut = {
   date: string;
   day_of_week: "Mon" | "Tue" | "Wed" | "Thu" | "Fri" | "Sat" | "Sun";
+  is_past?: boolean;
   matches: MatchOut[];
+  actual_matches?: ActualOut[];
 };
 
 type CityOut = { name: string; total: number; days: DayOut[] };
@@ -64,6 +80,7 @@ type CityOut = { name: string; total: number; days: DayOut[] };
 type Payload = {
   week_start: string;
   week_end: string;
+  today?: string;
   cities: CityOut[];
 };
 
@@ -343,6 +360,7 @@ export default function CitiesMasterScheduleLens({
   // Per-city change chips are collapsed behind the summary by default (§4).
   const [showChanges, setShowChanges] = useState(false);
   const [reconciling, setReconciling] = useState(false);
+  const [copying, setCopying] = useState(false);
   const [loading, setLoading] = useState(true);
   const [error, setError] = useState<string | null>(null);
   const [editor, setEditor] = useState<EditorState>({ kind: "closed" });
@@ -644,6 +662,35 @@ export default function CitiesMasterScheduleLens({
     }
   }, [load, weekStart]);
 
+  // Build this week's plan from last week's recurring template — the "copy to
+  // create in master schedule" for planning ahead. Server skips slots that
+  // already exist; the newly-created future slots then show the "off MD" flag
+  // until they're added on MatchDay.
+  const copyLastWeek = useCallback(async () => {
+    if (!confirm("Copy last week's recurring plan into this week? Existing slots are left untouched.")) return;
+    const { data: sess } = await supabase.auth.getSession();
+    const token = sess.session?.access_token;
+    if (!token) { setToastMsg("No active session."); return; }
+    setCopying(true);
+    try {
+      const res = await fetch("/api/schedule-master/copy-week", {
+        method: "POST",
+        headers: { Authorization: `Bearer ${token}`, "Content-Type": "application/json" },
+        body: JSON.stringify({ week_start: weekStart }),
+      });
+      const j = (await res.json().catch(() => ({}))) as Record<string, unknown>;
+      if (!res.ok) throw new Error((j.error as string) || `HTTP ${res.status}`);
+      const added = Number(j.added ?? 0);
+      const skipped = Number(j.skipped ?? 0);
+      setToastMsg(added > 0 ? `Copied ${added} from last week${skipped ? ` · ${skipped} already there` : ""}` : "Nothing to copy — this week already matches last week");
+      await load(weekStart);
+    } catch (err) {
+      setToastMsg(err instanceof Error ? err.message : String(err));
+    } finally {
+      setCopying(false);
+    }
+  }, [load, weekStart]);
+
   const shift = (days: number) => {
     const d = parseIso(weekStart);
     d.setUTCDate(d.getUTCDate() + days);
@@ -659,7 +706,7 @@ export default function CitiesMasterScheduleLens({
             Master Schedule
           </h2>
           <p className="mt-1 text-sm text-deep-green/65">
-            Recurring weekly match slots, by city.
+            Completed days show what actually ran on MatchDay; upcoming days show the plan, with a flag on any slot not yet on MatchDay.
           </p>
         </div>
         <div className="inline-flex items-center gap-2">
@@ -670,6 +717,17 @@ export default function CitiesMasterScheduleLens({
             onNext={() => shift(7)}
             onToday={goToday}
           />
+          {!city && (
+            <button
+              type="button"
+              onClick={copyLastWeek}
+              disabled={copying}
+              title="Create this week's plan from last week's recurring template. Existing slots are left as-is; new ones show a flag until they're added on MatchDay."
+              className="inline-flex items-center gap-1 rounded-full border border-cream-line bg-white px-3 py-1 text-xs font-bold text-deep-green/75 transition hover:bg-cream-soft disabled:opacity-50"
+            >
+              {copying ? "Copying…" : "Copy last week"}
+            </button>
+          )}
           {!city && (
             <button
               type="button"
@@ -1028,7 +1086,27 @@ function DayAgenda({
         )}
       </div>
       <div className="mt-1 space-y-1 pl-1">
-        {!hasContent ? (
+        {isPast ? (
+          // Completed day → actuals from MatchDay (read-only).
+          (day.actual_matches ?? []).length === 0 ? (
+            <div className="px-2 py-0.5 text-[11px] text-deep-green/30">—</div>
+          ) : (
+            (day.actual_matches ?? []).map((a) => (
+              <div
+                key={a.api_id}
+                className="flex items-center gap-2 rounded-md px-2 py-1 text-[12px]"
+                title={`${a.is_cancelled ? "Cancelled · " : ""}${a.time} · ${a.venue} · from MatchDay`}
+              >
+                <span className={a.is_cancelled ? "text-coral-hover line-through" : "text-deep-green/75"}>
+                  <span className="font-bold tabular-nums">{compactTime(a.time)}</span> {a.venue}
+                  {!a.is_cancelled && a.player_count != null && (
+                    <span className="text-deep-green/45"> · {a.player_count}{a.max_spots ? `/${a.max_spots}` : ""}</span>
+                  )}
+                </span>
+              </div>
+            ))
+          )
+        ) : !hasContent ? (
           <div className="px-2 py-0.5 text-[11px] text-deep-green/30">—</div>
         ) : (
           <>
@@ -1045,6 +1123,7 @@ function DayAgenda({
                   added={addedIds.has(m.id)}
                   cancelled={cancelled}
                   oneOff={m.source !== "template"}
+                  notInMatchday={m.in_matchday === false}
                   onClick={() =>
                     onEditMatch({
                       id: m.id,
@@ -1083,6 +1162,7 @@ function AgendaMatchRow({
   added,
   cancelled,
   oneOff,
+  notInMatchday = false,
   onClick,
 }: {
   time: string;
@@ -1092,16 +1172,19 @@ function AgendaMatchRow({
   added: boolean;
   cancelled: boolean;
   oneOff: boolean;
+  notInMatchday?: boolean;
   onClick: () => void;
 }) {
   const short = compactTime(time);
-  const bgClass = added ? "bg-mint-soft" : dim ? "bg-cream-soft" : "bg-white";
-  // Dashed outline = one-off; solid ring = recurring template.
-  const outlineClass = oneOff
-    ? `border border-dashed ${added ? "border-mint" : "border-deep-green/40"}`
-    : added
-      ? "ring-1 ring-mint/60"
-      : "ring-1 ring-cream-line";
+  const bgClass = notInMatchday ? "bg-warn-bg/60" : added ? "bg-mint-soft" : dim ? "bg-cream-soft" : "bg-white";
+  // Dashed outline = one-off; solid ring = recurring template; amber = off MatchDay.
+  const outlineClass = notInMatchday
+    ? "ring-1 ring-[#e3c369]"
+    : oneOff
+      ? `border border-dashed ${added ? "border-mint" : "border-deep-green/40"}`
+      : added
+        ? "ring-1 ring-mint/60"
+        : "ring-1 ring-cream-line";
   const textClass = cancelled
     ? "text-coral-hover"
     : dim
@@ -1111,20 +1194,19 @@ function AgendaMatchRow({
     <button
       type="button"
       onClick={onClick}
-      aria-label={`Edit ${time} ${detail}${cancelled ? " (cancelled)" : ""}${oneOff ? " (one-off)" : ""}`}
+      aria-label={`Edit ${time} ${detail}${cancelled ? " (cancelled)" : ""}${oneOff ? " (one-off)" : ""}${notInMatchday ? " (not on MatchDay yet)" : ""}`}
       className={`flex w-full items-center gap-2 rounded-md px-2 py-1.5 text-left text-xs transition focus:outline-none focus:ring-2 focus:ring-mint ${bgClass} ${outlineClass} ${textClass}`}
       title={
         cancelled
           ? `Cancelled match · ${time} - ${detail}`
-          : `${oneOff ? "One-off · " : ""}${time} - ${detail}`
+          : `${notInMatchday ? "Not on MatchDay yet — add it in the app · " : ""}${oneOff ? "One-off · " : ""}${time} - ${detail}`
       }
     >
-      {added && (
-        <span
-          aria-hidden
-          className="inline-block h-1.5 w-1.5 shrink-0 rounded-full bg-mint"
-        />
-      )}
+      {notInMatchday ? (
+        <span aria-hidden title="Not on MatchDay yet" className="shrink-0 text-[11px] font-extrabold leading-none text-warn-ink">▲</span>
+      ) : added ? (
+        <span aria-hidden className="inline-block h-1.5 w-1.5 shrink-0 rounded-full bg-mint" />
+      ) : null}
       <span
         className={`min-w-[3rem] font-bold tabular-nums ${cancelled ? "line-through" : ""}`}
       >
@@ -1227,7 +1309,24 @@ function DayCell({
         <span className="tabular-nums">{day.date.slice(8)}</span>
       </div>
       <div className="mt-1 flex flex-col gap-1">
-        {day.matches.length === 0 && ghosts.length === 0 ? (
+        {isPast ? (
+          // Completed day → mirror mdapi exactly. This is what actually
+          // happened; it is read-only, like Manager Pay's closed weeks.
+          (day.actual_matches ?? []).length === 0 ? (
+            <span className="text-[11px] text-deep-green/30">—</span>
+          ) : (
+            (day.actual_matches ?? []).map((a) => (
+              <ActualPill
+                key={a.api_id}
+                time={a.time}
+                venue={a.venue}
+                cancelled={a.is_cancelled}
+                players={a.player_count}
+                maxSpots={a.max_spots}
+              />
+            ))
+          )
+        ) : day.matches.length === 0 && ghosts.length === 0 ? (
           <span className="text-[11px] text-deep-green/30">—</span>
         ) : slots ? (
           <>
@@ -1245,6 +1344,7 @@ function DayCell({
                   dim={isPast}
                   cancelled={cancelled}
                   oneOff={m.source !== "template"}
+                  notInMatchday={ms.some((x) => x.in_matchday === false)}
                   onClick={() =>
                     onEditMatch({
                       id: m.id,
@@ -1279,6 +1379,7 @@ function DayCell({
                   added={addedIds.has(m.id)}
                   cancelled={cancelled}
                   oneOff={m.source !== "template"}
+                  notInMatchday={m.in_matchday === false}
                   onClick={() =>
                     onEditMatch({
                       id: m.id,
@@ -1324,6 +1425,7 @@ function SlotTile({
   dim,
   cancelled,
   oneOff,
+  notInMatchday = false,
   onClick,
 }: {
   time: string;
@@ -1333,6 +1435,7 @@ function SlotTile({
   dim: boolean;
   cancelled: boolean;
   oneOff: boolean;
+  notInMatchday?: boolean;
   onClick: () => void;
 }) {
   const state = dup?.state ?? "clean";
@@ -1351,19 +1454,24 @@ function SlotTile({
       : state === "unchecked"
         ? `${displayTime(time)} · ${venue} · duplicates can't be checked`
         : `${displayTime(time)} · ${venue}`;
-  const outline = oneOff
-    ? "border border-dashed border-deep-green/40"
-    : state === "dup"
-      ? "ring-1 ring-[#e3c369]"
-      : "ring-1 ring-cream-line";
+  // A planned future slot not yet on MatchDay is the loud case: amber ring +
+  // tint + an "off MatchDay" chip, so ops knows to create it in the app.
+  const outline = notInMatchday
+    ? "ring-1 ring-[#e3c369]"
+    : oneOff
+      ? "border border-dashed border-deep-green/40"
+      : state === "dup"
+        ? "ring-1 ring-[#e3c369]"
+        : "ring-1 ring-cream-line";
+  const tip2 = notInMatchday ? `${tip} · not on MatchDay yet — add it in the app` : tip;
   return (
     <button
       type="button"
       onClick={onClick}
-      title={tip}
-      aria-label={tip}
+      title={tip2}
+      aria-label={tip2}
       className={`flex w-full flex-col gap-0.5 rounded-md px-1.5 py-1 text-left transition focus:outline-none focus:ring-2 focus:ring-mint ${
-        state === "dup" ? "bg-warn-bg/50" : dim ? "bg-cream-soft" : "bg-white"
+        notInMatchday ? "bg-warn-bg/60" : state === "dup" ? "bg-warn-bg/50" : dim ? "bg-cream-soft" : "bg-white"
       } ${outline}`}
     >
       <span className="flex items-center gap-1">
@@ -1378,9 +1486,14 @@ function SlotTile({
         <span className={`text-[11px] font-bold tabular-nums ${cancelled ? "text-coral-hover line-through" : "text-deep-green"}`}>
           {displayTime(time)}
         </span>
-        {chip && (
-          <span className={`ml-auto rounded-full px-1.5 py-px text-[9px] font-extrabold leading-none ${chip.cls}`}>
-            {chip.txt}
+        {(chip || notInMatchday) && (
+          <span className="ml-auto flex items-center gap-1">
+            {notInMatchday && (
+              <span className="rounded-full border border-[#e3c369] bg-warn-bg px-1.5 py-px text-[9px] font-extrabold leading-none text-warn-ink">off MD</span>
+            )}
+            {chip && (
+              <span className={`rounded-full px-1.5 py-px text-[9px] font-extrabold leading-none ${chip.cls}`}>{chip.txt}</span>
+            )}
           </span>
         )}
       </span>
@@ -1535,6 +1648,7 @@ function MatchPill({
   added,
   cancelled,
   oneOff,
+  notInMatchday = false,
   onClick,
 }: {
   time: string;
@@ -1547,6 +1661,8 @@ function MatchPill({
   // dashed border — orthogonal to the mint "added" treatment, so a slot can
   // be both a one-off AND newly-added and read as both.
   oneOff: boolean;
+  // Future planned slot not yet on MatchDay — amber flag so ops adds it.
+  notInMatchday?: boolean;
   onClick: () => void;
 }) {
   const short = compactTime(time);
@@ -1557,19 +1673,24 @@ function MatchPill({
   // where cancellations grab attention. Mint dot still renders
   // when added, so an "added AND cancelled" slot keeps both
   // signals.
-  const bgClass = added
-    ? "bg-mint-soft"
-    : dim
-      ? "bg-cream-soft"
-      : "bg-white";
-  // Dashed outline = one-off; solid ring = recurring template.
-  const outlineClass = oneOff
-    ? `border border-dashed ${added ? "border-mint" : "border-deep-green/40"}`
+  const bgClass = notInMatchday
+    ? "bg-warn-bg/60"
     : added
-      ? "ring-1 ring-mint/60"
+      ? "bg-mint-soft"
       : dim
-        ? ""
-        : "ring-1 ring-cream-line";
+        ? "bg-cream-soft"
+        : "bg-white";
+  // Dashed outline = one-off; solid ring = recurring template; amber ring wins
+  // for a slot not yet on MatchDay.
+  const outlineClass = notInMatchday
+    ? "ring-1 ring-[#e3c369]"
+    : oneOff
+      ? `border border-dashed ${added ? "border-mint" : "border-deep-green/40"}`
+      : added
+        ? "ring-1 ring-mint/60"
+        : dim
+          ? ""
+          : "ring-1 ring-cream-line";
   const textClass = cancelled
     ? "text-coral-hover"
     : dim
@@ -1579,25 +1700,57 @@ function MatchPill({
     <button
       type="button"
       onClick={onClick}
-      aria-label={`Edit ${time} ${detail}${cancelled ? " (cancelled)" : ""}${oneOff ? " (one-off)" : ""}`}
+      aria-label={`Edit ${time} ${detail}${cancelled ? " (cancelled)" : ""}${oneOff ? " (one-off)" : ""}${notInMatchday ? " (not on MatchDay yet)" : ""}`}
       className={`flex w-full items-center gap-1 rounded px-1.5 py-0.5 text-left text-[11px] leading-tight transition hover:ring-2 hover:ring-mint focus:outline-none focus:ring-2 focus:ring-mint ${bgClass} ${outlineClass} ${textClass}`}
       title={
         cancelled
           ? `Cancelled match · ${time} - ${detail}`
-          : `${oneOff ? "One-off · " : ""}${time} - ${detail}`
+          : `${notInMatchday ? "Not on MatchDay yet — add it in the app · " : ""}${oneOff ? "One-off · " : ""}${time} - ${detail}`
       }
     >
-      {added && (
-        <span
-          aria-hidden
-          className="inline-block h-1.5 w-1.5 shrink-0 rounded-full bg-mint"
-        />
-      )}
+      {notInMatchday ? (
+        <span aria-hidden title="Not on MatchDay yet" className="shrink-0 text-[10px] font-extrabold leading-none text-warn-ink">▲</span>
+      ) : added ? (
+        <span aria-hidden className="inline-block h-1.5 w-1.5 shrink-0 rounded-full bg-mint" />
+      ) : null}
       <span className={`min-w-0 break-words ${cancelled ? "line-through" : ""}`}>
         <span className="font-bold tabular-nums">{short}</span>{" "}
         <span>{venue}</span>
       </span>
     </button>
+  );
+}
+
+// ActualPill — a completed-day cell sourced straight from mdapi_matches. This is
+// what actually happened; read-only (you can't edit history). Cancelled shows
+// struck-through; a non-cancelled match shows its signed-up count.
+function ActualPill({
+  time,
+  venue,
+  cancelled,
+  players,
+  maxSpots,
+}: {
+  time: string;
+  venue: string;
+  cancelled: boolean;
+  players: number | null;
+  maxSpots: number | null;
+}) {
+  const short = compactTime(time);
+  return (
+    <div
+      title={`${cancelled ? "Cancelled · " : ""}${time} · ${venue}${cancelled ? "" : ` · ${players ?? 0}${maxSpots ? `/${maxSpots}` : ""} signed up`} · from MatchDay`}
+      className={`flex w-full items-center gap-1 rounded px-1.5 py-0.5 text-left text-[11px] leading-tight ${cancelled ? "bg-cream-soft" : "bg-white ring-1 ring-cream-line"}`}
+    >
+      <span className={`min-w-0 break-words ${cancelled ? "text-coral-hover line-through" : "text-deep-green/75"}`}>
+        <span className="font-bold tabular-nums">{short}</span>{" "}
+        <span>{venue}</span>
+        {!cancelled && players != null && (
+          <span className="text-deep-green/45"> · {players}{maxSpots ? `/${maxSpots}` : ""}</span>
+        )}
+      </span>
+    </div>
   );
 }
 
