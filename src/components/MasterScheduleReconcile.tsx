@@ -72,7 +72,7 @@ type ReconState = {
 
 type MatchRow = { api_id: number; city_identifier: string | null; field_title: string | null; field_id: number | null; start_date: string; is_cancelled: boolean | null; max_player_count: number | null };
 type PlayerRow = { match_api_id: number; user_is_fake_player: boolean | null; canceled_at: string | null; paid_status: string | null };
-type Planned = { id: string; venue: string; time24: string; source: string };
+type Planned = { id: string; venue: string; time24: string; source: string; fieldId: number | null };
 
 export default function MasterScheduleReconcile() {
   const [weekStart, setWeekStart] = useState<string>(() => isoOf(mondayOf(new Date())));
@@ -101,7 +101,7 @@ export default function MasterScheduleReconcile() {
         cityNames.push(c.name);
         for (const day of c.days ?? []) {
           pastByCityDate.set(`${c.name}|${day.date}`, !!day.is_past);
-          const arr: Planned[] = (day.matches ?? []).map((m: { id: string; venue: string; time: string; source: string }) => ({ id: m.id, venue: m.venue, time24: smStart(m.time), source: m.source }));
+          const arr: Planned[] = (day.matches ?? []).map((m: { id: string; venue: string; time: string; source: string; mdapi_field_id: number | null }) => ({ id: m.id, venue: m.venue, time24: smStart(m.time), source: m.source, fieldId: m.mdapi_field_id ?? null }));
           plannedByCityDate.set(`${c.name}|${day.date}`, arr);
         }
       }
@@ -149,6 +149,20 @@ export default function MasterScheduleReconcile() {
       const mismatches: Mismatch[] = [];
       let gBoth = 0, gCh = 0, gMd = 0;
 
+      // Pair on CANONICAL FIELD IDENTITY (mdapi field id) — schedule_master.
+      // mdapi_field_id on the Clubhouse side, mdapi_matches.field_id on the
+      // MatchDay side — NOT the free-text name. Names drift ("Westlake" vs
+      // "Westlake HS Field 3" are both field_id 1) and normField can't reconcile
+      // them, which split one slot into a phantom ch + phantom md. A row with no
+      // field id can't be paired by identity; it keeps a name-based fallback key
+      // and is counted as unresolved (a data gap, surfaced — not a phantom).
+      let unresolvedCh = 0, unresolvedMd = 0;
+      const keyOf = (fieldId: number | null | undefined, name: string, t: string, side: "ch" | "md") => {
+        if (fieldId != null) return `f${fieldId}|${t}`;
+        if (side === "ch") unresolvedCh++; else unresolvedMd++;
+        return `n:${normField(name)}|${t}`;
+      };
+
       for (const name of allCities) {
         let cBoth = 0, cCh = 0, cMd = 0;
         const cols: DayCol[] = days7.map((dayDate) => {
@@ -164,22 +178,21 @@ export default function MasterScheduleReconcile() {
               const d = local(m.start_date);
               cells.push({ key: `md${m.api_id}`, time: fmtTime(d), minutes: d.getHours() * 60 + d.getMinutes(), field: m.field_title ?? "—", past: true, ran: !m.is_cancelled, cancelled: !!m.is_cancelled, booked: booked.get(m.api_id) ?? 0, cap: m.max_player_count });
             }
-            // mismatch detection by count per key
-            const key = (f: string, t: string) => `${normField(f)}|${t}`;
+            // mismatch detection by count per canonical-field key.
             // A cancelled match still EXISTS on MatchDay, so count all matches
             // here (cancelled or not) — the plan and MatchDay agree that the slot
             // is on MatchDay; whether it ran is a separate fact shown in the cell.
             const chCount = new Map<string, number>(), mdCount = new Map<string, number>();
-            for (const p of planned) chCount.set(key(p.venue, p.time24), (chCount.get(key(p.venue, p.time24)) ?? 0) + 1);
-            for (const m of md) { const t = hhmm(local(m.start_date)); mdCount.set(key(m.field_title ?? "", t), (mdCount.get(key(m.field_title ?? "", t)) ?? 0) + 1); }
-            for (const [k, n] of chCount) { const extra = n - (mdCount.get(k) ?? 0); for (let i = 0; i < extra; i++) mismatches.push({ city: name, date: iso, field: k.split("|")[0], time: fmt12(k.split("|")[1]), side: "clubhouse-not-matchday" }); }
-            for (const [k, n] of mdCount) { const extra = n - (chCount.get(k) ?? 0); for (let i = 0; i < extra; i++) mismatches.push({ city: name, date: iso, field: k.split("|")[0], time: fmt12(k.split("|")[1]), side: "matchday-not-clubhouse" }); }
+            const keyName = new Map<string, string>();
+            for (const p of planned) { const k = keyOf(p.fieldId, p.venue, p.time24, "ch"); chCount.set(k, (chCount.get(k) ?? 0) + 1); if (!keyName.has(k)) keyName.set(k, p.venue); }
+            for (const m of md) { const t = hhmm(local(m.start_date)); const k = keyOf(m.field_id, m.field_title ?? "", t, "md"); mdCount.set(k, (mdCount.get(k) ?? 0) + 1); if (!keyName.has(k)) keyName.set(k, m.field_title ?? "—"); }
+            for (const [k, n] of chCount) { const extra = n - (mdCount.get(k) ?? 0); for (let i = 0; i < extra; i++) mismatches.push({ city: name, date: iso, field: keyName.get(k) ?? k, time: fmt12(k.split("|")[1]), side: "clubhouse-not-matchday" }); }
+            for (const [k, n] of mdCount) { const extra = n - (chCount.get(k) ?? 0); for (let i = 0; i < extra; i++) mismatches.push({ city: name, date: iso, field: keyName.get(k) ?? k, time: fmt12(k.split("|")[1]), side: "matchday-not-clubhouse" }); }
           } else {
-            // Upcoming: union with count-based pairing.
-            const key = (f: string, t: string) => `${normField(f)}|${t}`;
+            // Upcoming: union with count-based pairing, keyed on canonical field id.
             const chByKey = new Map<string, Planned[]>(), mdByKey = new Map<string, MatchRow[]>();
-            for (const p of planned) (chByKey.get(key(p.venue, p.time24)) ?? chByKey.set(key(p.venue, p.time24), []).get(key(p.venue, p.time24))!).push(p);
-            for (const m of md.filter((x) => !x.is_cancelled)) { const t = hhmm(local(m.start_date)); (mdByKey.get(key(m.field_title ?? "", t)) ?? mdByKey.set(key(m.field_title ?? "", t), []).get(key(m.field_title ?? "", t))!).push(m); }
+            for (const p of planned) { const k = keyOf(p.fieldId, p.venue, p.time24, "ch"); (chByKey.get(k) ?? chByKey.set(k, []).get(k)!).push(p); }
+            for (const m of md.filter((x) => !x.is_cancelled)) { const t = hhmm(local(m.start_date)); const k = keyOf(m.field_id, m.field_title ?? "", t, "md"); (mdByKey.get(k) ?? mdByKey.set(k, []).get(k)!).push(m); }
             const keys = new Set([...chByKey.keys(), ...mdByKey.keys()]);
             for (const k of keys) {
               const chL = chByKey.get(k) ?? [], mdL = mdByKey.get(k) ?? [];
@@ -197,6 +210,10 @@ export default function MasterScheduleReconcile() {
         if (cols.some((d) => d.cells.length > 0)) { cities.push({ name, days: cols, both: cBoth, ch: cCh, md: cMd }); gBoth += cBoth; gCh += cCh; gMd += cMd; }
       }
       cities.sort((a, b) => a.name.localeCompare(b.name));
+
+      // Unresolved = rows with no field id (can't pair by identity — a data gap,
+      // not a phantom exception). Zero in current data; surfaced if it ever isn't.
+      if (unresolvedCh || unresolvedMd) console.warn(`[reconcile] unresolved fields — clubhouse ${unresolvedCh}, matchday ${unresolvedMd} (no mdapi field id)`);
 
       // Assertion (Part 5): sessions must equal both + ch + md.
       const sessions = gBoth + gCh + gMd;
@@ -228,7 +245,18 @@ export default function MasterScheduleReconcile() {
   }
   const reconcileNow = async () => { setBusy("reconcile"); const j = await post("/api/schedule-master/reconcile"); if (j) setToast(j.autoreconcileEnabled === false ? "Auto-reconcile is off — nothing added" : `Reconciled — ${Number(j.added ?? 0)} added`); await load(weekStart); setBusy(""); };
   const copyLastWeek = async () => { if (!confirm("Copy last week's recurring plan into this week? Existing slots are left untouched.")) return; setBusy("copy"); const j = await post("/api/schedule-master/copy-week", { week_start: weekStart }); if (j) setToast(`Copied ${Number(j.added ?? 0)} from last week`); await load(weekStart); setBusy(""); };
-  const addToClubhouse = async (apiId: number) => { setBusy(`md${apiId}`); const j = await post("/api/schedule-master/from-match", { match_api_ids: [apiId] }); if (j) setToast(Number(j.added ?? 0) > 0 ? "Added to Clubhouse" : "Already on the schedule"); await load(weekStart); setBusy(""); };
+  const addToClubhouse = async (apiId: number) => {
+    setBusy(`md${apiId}`);
+    const j = await post("/api/schedule-master/from-match", { match_api_ids: [apiId] });
+    if (j) {
+      const refused = Array.isArray(j.refused) ? (j.refused as number[]).length : 0;
+      if (Number(j.added ?? 0) > 0) setToast("Added to Clubhouse");
+      else if (refused > 0) setToast("Already planned for this field and time — not added (would duplicate).");
+      else setToast("Already on the schedule");
+    }
+    await load(weekStart);
+    setBusy("");
+  };
   // Remove Clubhouse-only rows (schedule_master ids). Clubhouse write only.
   // A refusal (non-admin, RLS, network) shows a visible error toast — never a
   // silent no-op. On success reload so the removed slots disappear.

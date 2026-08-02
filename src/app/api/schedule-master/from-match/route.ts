@@ -11,6 +11,41 @@
 
 import { authenticateCrm } from "@/lib/crmAuth";
 import { buildOneOffRow, loadVenueMaps, type OneOffMatch } from "@/lib/scheduleReconcileServer";
+import { matchLocalDateTime } from "@/lib/scheduleReconcile";
+
+// True if the slot's canonical key (city, date, mdapi field id, local time) is
+// already fully planned — i.e. there are at least as many live schedule_master
+// rows as MatchDay matches at that key. Adding another would be a duplicate.
+// Count-aware so a genuine second concurrent session can still be added.
+async function alreadyFullyPlanned(
+  supabase: { from: (t: string) => any }, // eslint-disable-line @typescript-eslint/no-explicit-any
+  row: { city: string; match_date: string; match_time: string; mdapi_field_id: number | null },
+  fieldId: number,
+): Promise<boolean> {
+  // Live plan rows at the key (deleted_at IS NULL; fall back pre-migration).
+  let planRes = await supabase.from("schedule_master").select("id")
+    .eq("city", row.city).eq("match_date", row.match_date)
+    .eq("mdapi_field_id", fieldId).eq("match_time", row.match_time).is("deleted_at", null);
+  if (planRes.error && /deleted_at|column|42703/i.test(planRes.error.message || "")) {
+    planRes = await supabase.from("schedule_master").select("id")
+      .eq("city", row.city).eq("match_date", row.match_date)
+      .eq("mdapi_field_id", fieldId).eq("match_time", row.match_time);
+  }
+  const planCount = (planRes.data ?? []).length;
+  // MatchDay matches at the same field on that local date + time.
+  const y = row.match_date;
+  const prev = new Date(Date.parse(`${y}T00:00:00Z`) - 86400000).toISOString().slice(0, 10);
+  const next = new Date(Date.parse(`${y}T00:00:00Z`) + 86400000).toISOString().slice(0, 10);
+  const mdRes = await supabase.from("mdapi_matches").select("start_date")
+    .eq("field_id", fieldId).is("deleted_at", null)
+    .gte("start_date", `${prev}T00:00:00`).lte("start_date", `${next}T23:59:59`);
+  let mdCount = 0;
+  for (const x of (mdRes.data ?? []) as { start_date: string }[]) {
+    const ldt = matchLocalDateTime(x.start_date);
+    if (ldt && ldt.date === row.match_date && ldt.timeLabel === row.match_time) mdCount++;
+  }
+  return planCount >= mdCount;
+}
 
 export const runtime = "nodejs";
 
@@ -50,11 +85,19 @@ export async function POST(req: Request) {
   let added = 0;
   let already = 0;
   const skipped: number[] = [];
+  const refused: number[] = [];
   const addedRows: Array<{ id: string; match_api_id: number }> = [];
   for (const m of matches) {
     const row = buildOneOffRow(m, maps, "manual");
     if (!row) {
       skipped.push(m.api_id);
+      continue;
+    }
+    // Duplicate guard (canonical key): refuse if this slot is already fully
+    // planned. Makes it impossible to create a duplicate by pressing twice or
+    // from a stale grid. Rows with no field id skip the guard (can't key).
+    if (row.mdapi_field_id != null && (await alreadyFullyPlanned(supabase, row, row.mdapi_field_id))) {
+      refused.push(m.api_id);
       continue;
     }
     const ins = await supabase.from("schedule_master").insert(row).select("id").maybeSingle();
@@ -67,7 +110,7 @@ export async function POST(req: Request) {
     }
   }
 
-  return Response.json({ ok: true, added, alreadyPresent: already, skipped, rows: addedRows }, { status: 200 });
+  return Response.json({ ok: true, added, alreadyPresent: already, skipped, refused, rows: addedRows }, { status: 200 });
 }
 
 export async function DELETE(req: Request) {
