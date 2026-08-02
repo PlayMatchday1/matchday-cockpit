@@ -1,0 +1,306 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+<meta charset="utf-8">
+<title>Match P&amp;L by field — per-match economics · mockup v1</title>
+<style>
+:root{
+  --forest:#0d3b2e; --accent:#35c77f; --mint:#e0f2e7; --ink:#12241d; --muted:#626f68;
+  --ok-ink:#12704a; --line:#e6ebe8; --hair:#eff3f1; --chip-bg:#eef3f0; --chip-line:#e2eae5;
+  --surface:#ffffff; --canvas:#f4efe4; --col-bg:#fdfbf5; --col-line:#e8e0cf; --col-dash:#d8d0bd;
+  --slot-bg:#f8f3e7; --gold-line:#e3c369; --gold-ink:#8a6300; --gold-dot:#d9a521; --gold-bg:#fbf2dd;
+  --ns-ink:#6f6858; --loss:#8f2d15; --loss-bg:#fbe9e3;
+}
+*{box-sizing:border-box} html,body{margin:0;padding:0}
+body{background:var(--canvas);color:var(--ink);
+  font-family:-apple-system,BlinkMacSystemFont,"Segoe UI",Inter,Roboto,Helvetica,Arial,sans-serif;
+  -webkit-font-smoothing:antialiased;padding:28px 24px 60px}
+.pl-wrap{max-width:1280px;margin:0 auto}
+.pl-note{border:1px dashed var(--col-dash);background:var(--col-bg);color:var(--ns-ink);border-radius:10px;
+  padding:11px 14px;font-size:12.5px;line-height:1.55;margin-bottom:20px}
+.pl-note b{color:var(--ink)}
+.pl-card{background:var(--surface);border:1px solid var(--line);border-radius:16px;padding:22px}
+
+.pl-head{display:flex;align-items:flex-start;justify-content:space-between;gap:20px;flex-wrap:wrap}
+.pl-eyebrow{font-size:11.5px;font-weight:700;letter-spacing:.09em;text-transform:uppercase;color:var(--muted);margin:0 0 6px}
+.pl-title{font-size:20px;font-weight:800;color:var(--forest);margin:0;letter-spacing:-.01em}
+.pl-sub{font-size:12.5px;color:var(--muted);margin:9px 0 0;line-height:1.55;max-width:80ch}
+.pl-win{display:flex;align-items:center;gap:8px}
+.pl-wlab{font-size:11px;font-weight:700;letter-spacing:.08em;text-transform:uppercase;color:var(--muted)}
+.pl-chip{font-size:12.5px;font-weight:700;border-radius:999px;padding:5px 14px;cursor:pointer;
+  border:1px solid var(--chip-line);background:var(--surface);color:var(--ns-ink);font-variant-numeric:tabular-nums}
+.pl-chip.is-on{background:var(--forest);border-color:var(--forest);color:#fff}
+.pl-range{font-size:12px;color:var(--muted);margin-top:8px;text-align:right;font-variant-numeric:tabular-nums}
+.pl-flag{margin-top:12px;font-size:12px;color:var(--gold-ink);background:var(--gold-bg);
+  border:1px solid var(--gold-line);border-radius:8px;padding:8px 12px;line-height:1.5}
+
+/* table */
+.pl-tbl{width:100%;border-collapse:collapse;margin-top:18px;font-variant-numeric:tabular-nums}
+.pl-tbl th{font-size:11px;font-weight:700;letter-spacing:.06em;text-transform:uppercase;color:var(--muted);
+  text-align:right;padding:0 0 9px;border-bottom:1px solid var(--line);vertical-align:bottom}
+.pl-tbl th.l{text-align:left}
+.pl-tbl th small{display:block;font-size:10px;letter-spacing:.03em;text-transform:none;font-weight:600;color:var(--muted);margin-top:2px}
+.pl-grp td{font-size:11px;font-weight:800;letter-spacing:.07em;text-transform:uppercase;color:var(--ns-ink);
+  background:var(--hair);padding:7px 10px}
+.pl-grp td span{font-weight:600;letter-spacing:0;text-transform:none;color:var(--muted);margin-left:8px}
+.pl-row{border-bottom:1px solid var(--hair);cursor:pointer}
+.pl-row:hover{background:var(--col-bg)}
+.pl-row td{padding:12px 0;text-align:right;font-size:14px;font-weight:700;color:var(--ink)}
+.pl-row td.l{text-align:left;padding-left:10px}
+.pl-row td.net{font-size:15px;font-weight:800;color:var(--ok-ink);padding-right:10px}
+.pl-row td.net.is-loss{color:var(--loss)}
+.pl-row td.mut{color:var(--ns-ink);font-weight:600}
+.pl-rank{display:inline-flex;align-items:center;justify-content:center;width:20px;height:20px;border-radius:999px;
+  background:var(--chip-bg);border:1px solid var(--chip-line);font-size:11px;font-weight:800;color:var(--ns-ink);margin-right:9px}
+.pl-fname{font-size:14px;font-weight:800;color:var(--ink)}
+.pl-caret{color:var(--muted);font-size:10px;margin-left:8px}
+.pl-nodata td{color:var(--muted);font-weight:600}
+
+/* drill-down */
+.pl-drill td{background:var(--col-bg);padding:0;border-bottom:1px solid var(--line)}
+.pl-din{padding:16px 14px 18px}
+.pl-dh{font-size:11px;font-weight:800;letter-spacing:.07em;text-transform:uppercase;color:var(--muted);margin:0 0 12px}
+.pl-bars{display:flex;flex-direction:column;gap:9px;max-width:760px}
+.pl-bar{display:grid;grid-template-columns:150px 1fr 96px 74px;align-items:center;gap:12px}
+.pl-blab{font-size:12.5px;font-weight:700;color:var(--ink)}
+.pl-btrack{height:12px;border-radius:3px;background:var(--hair);overflow:hidden}
+.pl-bfill{height:100%;display:block;border-radius:3px}
+.pl-bval{font-size:13px;font-weight:800;text-align:right;color:var(--ink);font-variant-numeric:tabular-nums}
+.pl-bpct{font-size:12px;font-weight:600;text-align:right;color:var(--muted);font-variant-numeric:tabular-nums}
+.pl-barhead .pl-bpct{font-size:10px;font-weight:700;letter-spacing:.05em;text-transform:uppercase}
+.pl-costsep{border-top:1px solid var(--line);margin:4px 0 1px}
+.pl-foot{margin-top:14px;padding-top:12px;border-top:1px solid var(--line);display:flex;flex-wrap:wrap;
+  gap:10px 26px;align-items:center;font-size:12.5px;color:var(--ns-ink);font-variant-numeric:tabular-nums}
+.pl-foot b{color:var(--ink)}
+.pl-ok{color:var(--ok-ink);font-weight:800}
+.pl-tot{font-size:12px;color:var(--muted);margin-top:10px;font-variant-numeric:tabular-nums}
+.pl-legendnote{font-size:12px;color:var(--muted);margin-top:14px;line-height:1.5}
+</style>
+</head>
+<body>
+<div class="pl-wrap">
+
+  <div class="pl-note" id="plNote">
+    <b>Mockup data note.</b> <b>NEMP is entirely real</b>, taken from the live card: 54 ran matches over
+    Jul&nbsp;6&nbsp;&ndash;&nbsp;Aug&nbsp;2, $15,409 gross, $4,158 field cost, $11,251 net, split
+    $10,835 paid&nbsp;(DPP) + $4,574 allocated member. Every per-match figure here is that data divided by 54.
+    <b>Every other field row is blank on purpose</b> &mdash; the screenshot only exposed NEMP, and inventing
+    plausible rows for a profitability ranking is exactly the wrong thing to fake. <b>Promo</b> is shown as its
+    own revenue line but has no value, because paid revenue was not split by spot type in the source; the live
+    build separates DPP / membership / promo. The 1&nbsp;and 2&nbsp;week windows re-render the same figures
+    for the same reason.
+  </div>
+
+  <div class="pl-card">
+    <div class="pl-head">
+      <div>
+        <p class="pl-eyebrow">Match P&amp;L by field</p>
+        <h1 class="pl-title">Austin</h1>
+        <p class="pl-sub">Average economics of one match at each field, so a field that ran 54 matches compares
+          directly with one that ran 6. Ran matches only &mdash; cancelled are excluded entirely. Revenue is
+          gross, before Stripe fees.</p>
+      </div>
+      <div>
+        <div class="pl-win">
+          <span class="pl-wlab">Average over</span>
+          <div id="plChips"></div>
+        </div>
+        <div class="pl-range" id="plRange"></div>
+      </div>
+    </div>
+
+    <div class="pl-flag" id="plFlag" hidden></div>
+
+    <table class="pl-tbl">
+      <thead>
+        <tr>
+          <th class="l">Field</th>
+          <th>Matches</th>
+          <th>Revenue / match<small>gross, before Stripe fees</small></th>
+          <th>Field cost / match</th>
+          <th>Net / match</th>
+        </tr>
+      </thead>
+      <tbody id="plBody"></tbody>
+    </table>
+
+    <p class="pl-legendnote" id="plLegendNote"></p>
+  </div>
+</div>
+
+<script>
+/* ---------------- the one real field ---------------- */
+const NEMP = {
+  name:"NEMP", full:"North East Metropolitan Park", bucket:"flat",
+  matches:54, gross:15409, fieldCost:4158,
+  spots:[  // revenue by spot type, dollars over the window
+    { k:"dpp",    label:"DPP spots",           amount:10835 },
+    { k:"member", label:"Membership allocated", amount:4574 },
+    { k:"promo",  label:"Promo spots",          amount:null }, // not separable in the source
+  ]
+};
+const BLANK = n => ({ name:n, bucket:"flat", matches:null, gross:null, fieldCost:null, spots:null });
+
+const FIELDS = [
+  NEMP,
+  BLANK("Onion Creek"), BLANK("Hattrick"), BLANK("Westlake HS Field 3"),
+  BLANK("LBJ Early College High School"), BLANK("Round Rock"), BLANK("Hill Country Middle School"),
+];
+const PROFIT_SHARE = [ { name:"Crossbar Rowlett", bucket:"share" } ];
+const UNMAPPED = { count:12, note:"field 1552 plus 11 fin_venue_fields links pointing at deactivated venues" };
+
+const WINDOWS = [
+  { k:1, label:"1 week",  range:"Jul 27 – Aug 2" },
+  { k:2, label:"2 weeks", range:"Jul 20 – Aug 2" },
+  { k:4, label:"4 weeks", range:"Jul 6 – Aug 2" },
+];
+const state = { win:4, open:null };
+
+const money  = v => "$" + v.toLocaleString("en-US", { minimumFractionDigits:2, maximumFractionDigits:2 });
+const money0 = v => "$" + Math.round(v).toLocaleString("en-US");
+const per = (total, matches) => Math.round((total / matches) * 100) / 100;
+
+function metrics(f){
+  if (f.matches === null) return null;
+  const revPM  = per(f.gross, f.matches);
+  const costPM = per(f.fieldCost, f.matches);
+  return { revPM, costPM, netPM: Math.round((revPM - costPM) * 100) / 100 };
+}
+
+function render(){
+  const w = WINDOWS.find(x => x.k === state.win);
+
+  document.getElementById("plChips").innerHTML = WINDOWS.map(x =>
+    '<button class="pl-chip' + (x.k === state.win ? ' is-on' : '') + '" data-win="' + x.k + '">' +
+    x.label + '</button>').join(" ");
+  document.querySelectorAll("[data-win]").forEach(b =>
+    b.addEventListener("click", () => { state.win = +b.dataset.win; render(); }));
+
+  document.getElementById("plRange").textContent = w.range + " · completed weeks only";
+
+  const flag = document.getElementById("plFlag");
+  if (state.win === 4){ flag.hidden = true; }
+  else {
+    flag.hidden = false;
+    flag.textContent = "Mockup only: the source extract covers Jul 6 – Aug 2, so the " + w.label +
+      " view repeats the 4-week figures. In the live build each window recomputes from its own matches.";
+  }
+
+  const body = document.getElementById("plBody");
+  body.innerHTML = "";
+
+  // ---- flat per-match rate, ranked by net per match ----
+  const flat = FIELDS.filter(f => f.bucket === "flat");
+  const withData = flat.filter(f => f.matches !== null)
+                       .sort((a,b) => metrics(b).netPM - metrics(a).netPM);
+  const noData = flat.filter(f => f.matches === null);
+
+  body.appendChild(groupRow("Flat per-match rate", "ranked by net per match"));
+  withData.forEach((f, i) => { body.appendChild(fieldRow(f, i + 1)); if (state.open === f.name) body.appendChild(drillRow(f)); });
+  noData.forEach(f => body.appendChild(blankRow(f)));
+
+  // ---- profit share ----
+  body.appendChild(groupRow("Profit share", "billing is a share of revenue, not a fixed per-match number, so these cannot be ranked against flat-rate fields"));
+  PROFIT_SHARE.forEach(f => body.appendChild(shareRow(f)));
+
+  // ---- unmapped ----
+  body.appendChild(groupRow("Unmapped", UNMAPPED.note));
+  const tr = document.createElement("tr"); tr.className = "pl-row pl-nodata";
+  tr.innerHTML = '<td class="l">' + UNMAPPED.count + ' fields with no venue mapping</td>' +
+                 '<td class="mut">—</td><td class="mut">—</td><td class="mut">—</td><td class="mut" style="padding-right:10px">—</td>';
+  body.appendChild(tr);
+
+  document.getElementById("plLegendNote").textContent =
+    "A field cost is never shown as $0. An unknown cost shows a dash and its bucket, so a genuinely free pitch " +
+    "and an unmapped one never look the same.";
+}
+
+function groupRow(title, note){
+  const tr = document.createElement("tr"); tr.className = "pl-grp";
+  tr.innerHTML = '<td colspan="5">' + title + '<span>' + note + '</span></td>';
+  return tr;
+}
+
+function fieldRow(f, rank){
+  const m = metrics(f);
+  const tr = document.createElement("tr");
+  tr.className = "pl-row"; tr.setAttribute("data-field", f.name);
+  tr.innerHTML =
+    '<td class="l"><span class="pl-rank">' + rank + '</span><span class="pl-fname">' + f.name + '</span>' +
+      '<span class="pl-caret">' + (state.open === f.name ? "▾" : "▸") + '</span></td>' +
+    '<td class="mut">' + f.matches + '</td>' +
+    '<td>' + money(m.revPM) + '</td>' +
+    '<td>' + money(m.costPM) + '</td>' +
+    '<td class="net' + (m.netPM < 0 ? " is-loss" : "") + '">' + money(m.netPM) + '</td>';
+  tr.addEventListener("click", () => { state.open = state.open === f.name ? null : f.name; render(); });
+  return tr;
+}
+
+function blankRow(f){
+  const tr = document.createElement("tr"); tr.className = "pl-row pl-nodata";
+  tr.innerHTML = '<td class="l" style="padding-left:39px">' + f.name + '</td>' +
+    '<td>—</td><td>—</td><td>—</td><td style="padding-right:10px">—</td>';
+  return tr;
+}
+
+function shareRow(f){
+  const tr = document.createElement("tr"); tr.className = "pl-row pl-nodata";
+  tr.innerHTML = '<td class="l" style="padding-left:10px">' + f.name + '</td>' +
+    '<td>—</td><td>—</td><td>Profit share</td><td style="padding-right:10px">Not ranked</td>';
+  return tr;
+}
+
+function drillRow(f){
+  const m = metrics(f);
+  const known = f.spots.filter(s => s.amount !== null);
+  const maxPM = Math.max(...known.map(s => per(s.amount, f.matches)), m.costPM);
+
+  const bar = (label, valPM, hue, pctOfRev, missing) => {
+    const w = missing ? 0 : (valPM / maxPM) * 100;
+    return '<div class="pl-bar" data-bar="' + label + '">' +
+      '<span class="pl-blab">' + label + '</span>' +
+      '<span class="pl-btrack"><span class="pl-bfill" style="width:' + w + '%;background:' + hue + '"></span></span>' +
+      '<span class="pl-bval">' + (missing ? "—" : money(valPM)) + '</span>' +
+      '<span class="pl-bpct">' + (missing ? "no split" : pctOfRev.toFixed(1) + "%") + '</span>' +
+    '</div>';
+  };
+
+  const rows = f.spots.map(s => {
+    if (s.amount === null) return bar(s.label, 0, "var(--muted)", 0, true);
+    const pm = per(s.amount, f.matches);
+    const pct = Math.round((s.amount / f.gross) * 1000) / 10;
+    const hue = s.k === "dpp" ? "var(--accent)" : s.k === "member" ? "var(--forest)" : "var(--gold-dot)";
+    return bar(s.label, pm, hue, pct, false);
+  }).join("");
+
+  const costBar = '<div class="pl-costsep"></div>' +
+    bar("Field cost", m.costPM, "var(--loss)", Math.round((f.fieldCost / f.gross) * 1000) / 10, false);
+
+  const sumPM = Math.round(known.reduce((a, s) => a + per(s.amount, f.matches), 0) * 100) / 100;
+  const foots = Math.abs(sumPM - m.revPM) < 0.005;
+
+  const tr = document.createElement("tr"); tr.className = "pl-drill"; tr.setAttribute("data-drill", f.name);
+  tr.innerHTML = '<td colspan="5"><div class="pl-din">' +
+    '<p class="pl-dh">Where one match at ' + f.name + ' earns and spends</p>' +
+    '<div class="pl-bars">' +
+      '<div class="pl-bar pl-barhead"><span></span><span></span>' +
+      '<span class="pl-bpct">per match</span><span class="pl-bpct">of revenue</span></div>' +
+      rows + costBar + '</div>' +
+    '<div class="pl-foot">' +
+      '<span id="plFoots">' + money(per(f.spots[0].amount, f.matches)) + ' + ' +
+        money(per(f.spots[1].amount, f.matches)) + ' = <b>' + money(sumPM) + '</b> revenue per match ' +
+        (foots ? '<span class="pl-ok">✓ foots</span>' : '<span style="color:var(--loss);font-weight:800">✗ does not foot</span>') +
+      '</span>' +
+      '<span>less <b>' + money(m.costPM) + '</b> field cost = <b class="pl-ok">' + money(m.netPM) + '</b> net per match</span>' +
+    '</div>' +
+    '<p class="pl-tot">Window totals: ' + f.matches + ' ran matches · ' + money0(f.gross) +
+      ' gross · ' + money0(f.fieldCost) + ' field cost · ' + money0(f.gross - f.fieldCost) + ' net</p>' +
+  '</div></td>';
+  return tr;
+}
+
+window.__render = render;
+render();
+</script>
+</body>
+</html>
