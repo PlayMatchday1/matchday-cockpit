@@ -34,6 +34,9 @@ export default function PdSchedulePanel() {
   const [month0, setMonth0] = useState(curM0);
   const [assignments, setAssignments] = useState<Record<string, string | null>>({});
   const [owners, setOwners] = useState<AppUser[]>([]);
+  // Which weekend's owner box is open for editing. Resting state shows a clean
+  // owner box + a pencil; the dropdown only appears once you choose to change it.
+  const [editing, setEditing] = useState<string | null>(null);
 
   const weekends = useMemo(() => weekendsOf(year, month0), [year, month0]);
   const classified = useMemo(
@@ -199,18 +202,23 @@ export default function PdSchedulePanel() {
 
               <div className="min-w-0 flex-1">
                 {state === "past" ? (
-                  <span className="text-[12.5px] text-[#6d7b74]">
+                  <span className="inline-flex items-center gap-[7px] text-[12.5px] text-[#6d7b74]">
+                    {ownerId ? <Avatar name={ownerName(ownerId)} muted /> : null}
                     {ownerName(ownerId) ?? "—"}
                   </span>
-                ) : (
+                ) : editing === weekend.satYmd ? (
+                  // Editing: the dropdown, auto-focused; picking a name saves and
+                  // closes; clicking away (blur) closes without a change.
                   <select
+                    autoFocus
                     value={ownerId ?? ""}
-                    onChange={(e) => setOwner(weekend.satYmd, e.target.value)}
-                    className="w-full max-w-[220px] rounded-lg border bg-white px-2 py-[6px] text-[12.5px] text-[#12241d]"
-                    style={{
-                      borderColor: uncoveredFuture ? "#e3c369" : "#e4ddcc",
-                      color: ownerId ? "#12241d" : "#8a6300",
+                    onChange={(e) => {
+                      setOwner(weekend.satYmd, e.target.value);
+                      setEditing(null);
                     }}
+                    onBlur={() => setEditing(null)}
+                    className="w-full max-w-[240px] rounded-lg border bg-white px-2 py-[7px] text-[12.5px] text-[#12241d] outline-none"
+                    style={{ borderColor: "#35c77f", boxShadow: "0 0 0 3px rgba(53,199,127,.16)", color: ownerId ? "#12241d" : "#8a6300" }}
                   >
                     <option value="">— Unassigned —</option>
                     {owners.map((o) => (
@@ -219,6 +227,29 @@ export default function PdSchedulePanel() {
                       </option>
                     ))}
                   </select>
+                ) : (
+                  // Resting: an always-visible owner box with an edit pencil.
+                  <button
+                    type="button"
+                    aria-label={`Change P&D owner for ${weekend.label}`}
+                    onClick={() => setEditing(weekend.satYmd)}
+                    className="group flex w-full max-w-[240px] items-center gap-[8px] rounded-lg border px-[10px] py-[6px] text-left text-[12.5px] transition hover:shadow-sm"
+                    style={
+                      ownerId
+                        ? { borderColor: "#e4ddcc", background: "#fff", color: "#12241d" }
+                        : { borderStyle: "dashed", borderColor: "#e3c369", background: "#fefaef", color: "#8a6300" }
+                    }
+                  >
+                    {ownerId ? (
+                      <>
+                        <Avatar name={ownerName(ownerId)} />
+                        <span className="min-w-0 flex-1 truncate font-[650]">{ownerName(ownerId)}</span>
+                      </>
+                    ) : (
+                      <span className="min-w-0 flex-1 truncate font-[650]">Assign someone</span>
+                    )}
+                    <Pencil />
+                  </button>
                 )}
               </div>
             </div>
@@ -231,6 +262,48 @@ export default function PdSchedulePanel() {
         )}
       </div>
     </div>
+  );
+}
+
+// Initials from a display name ("Ryan Mancuso" → "RM", "cesar@x.com" → "C").
+function initialsOf(name: string | null): string {
+  if (!name) return "?";
+  const parts = name.trim().replace(/@.*$/, "").split(/[\s._-]+/).filter(Boolean);
+  if (parts.length === 0) return "?";
+  const first = parts[0][0] ?? "";
+  const last = parts.length > 1 ? parts[parts.length - 1][0] ?? "" : "";
+  return (first + last).toUpperCase();
+}
+
+// Small initials circle, so an assigned weekend reads as a person at a glance.
+function Avatar({ name, muted = false }: { name: string | null; muted?: boolean }) {
+  return (
+    <span
+      aria-hidden
+      className="flex h-[22px] w-[22px] shrink-0 items-center justify-center rounded-full text-[10px] font-[750]"
+      style={muted ? { background: "#eef1ec", color: "#8a9791" } : { background: "#e0f2e7", color: "#116b42" }}
+    >
+      {initialsOf(name)}
+    </span>
+  );
+}
+
+// The edit affordance — quiet until the row is hovered, so the boxes stay calm.
+function Pencil() {
+  return (
+    <svg
+      viewBox="0 0 24 24"
+      className="ml-auto h-[14px] w-[14px] shrink-0 opacity-45 transition group-hover:opacity-90"
+      fill="none"
+      stroke="currentColor"
+      strokeWidth={2}
+      strokeLinecap="round"
+      strokeLinejoin="round"
+      aria-hidden
+    >
+      <path d="M12 20h9" />
+      <path d="M16.5 3.5a2.12 2.12 0 0 1 3 3L7 19l-4 1 1-4z" />
+    </svg>
   );
 }
 
