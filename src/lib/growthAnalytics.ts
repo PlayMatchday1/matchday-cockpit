@@ -272,6 +272,13 @@ export type GrowthData = {
   fieldIndex: { label: string; city: string }[];
   arppOverall: ArppPoint[];
   arppByCity: Record<string, ArppPoint[]>;
+  // ARPP numerator diagnostics: deleted-account revenue (overstates ARPP — its
+  // players can't be in the denominator) and unattributed membership revenue.
+  arppDiagnostics: {
+    byMonth: { m: string; totalNet: number; deletedNet: number; unattributedMembership: number }[];
+    deletedTotal: number;
+    unattributedMembershipTotal: number;
+  };
   cohorts: CohortRow[];
   retentionCurveOverall: { offset: number; pct: number; observable: boolean }[];
   retentionCurveByCity: Record<string, { offset: number; pct: number; observable: boolean }[]>;
@@ -628,6 +635,26 @@ export function computeGrowth(input: RawInput): GrowthData {
     upsert2num(netByMonthCity, normalizeRevenueCity(r.city), k, Number(r.net ?? 0));
   }
 
+  // ARPP diagnostics (PART 7 + city-breakdown 5c):
+  // - deletedAccount: fin_revenue tagged to the "Deleted Account Revenue" bucket
+  //   is money from hard-deleted players whose rows no longer exist — it is in the
+  //   numerator but structurally cannot be in the denominator, so it overstates
+  //   ARPP. Quantified per month so the panel can show ARPP with and without it.
+  // - unattributedMembership: Membership revenue whose city doesn't map to a real
+  //   market. Never dropped, never spread — surfaced as its own "Unattributed" row.
+  const deletedByMonth = new Map<string, number>();
+  const unattribMembByMonth = new Map<string, number>();
+  for (const r of revenue) {
+    if (!r.month) continue;
+    const k = revMonthToKey(r.month);
+    if (!k) continue;
+    const cityRaw = (r.city ?? "").trim();
+    const net = Number(r.net ?? 0);
+    if (cityRaw === "Deleted Account Revenue") deletedByMonth.set(k, (deletedByMonth.get(k) ?? 0) + net);
+    else if (r.type === "Membership" && normalizeRevenueCity(r.city) === UNKNOWN_CITY)
+      unattribMembByMonth.set(k, (unattribMembByMonth.get(k) ?? 0) + net);
+  }
+
   // members active per month (overall + by subscription city).
   const membersByMonth = new Map<string, Set<number>>();
   const membersByCity = new Map<string, Map<string, Set<number>>>();
@@ -687,6 +714,17 @@ export function computeGrowth(input: RawInput): GrowthData {
       (m) => membersByCity.get(c)?.get(m),
     );
   }
+
+  const arppDiagnostics = {
+    byMonth: arppMonths.map((m) => ({
+      m,
+      totalNet: netByMonth.get(m) ?? 0,
+      deletedNet: deletedByMonth.get(m) ?? 0,
+      unattributedMembership: unattribMembByMonth.get(m) ?? 0,
+    })),
+    deletedTotal: [...deletedByMonth.values()].reduce((a, v) => a + v, 0),
+    unattributedMembershipTotal: [...unattribMembByMonth.values()].reduce((a, v) => a + v, 0),
+  };
 
   // ── cohorts + retention ────────────────────────────────────────────────────
   // cohort = first-play month. cell offset o = active in calendar month first+o.
@@ -835,6 +873,7 @@ export function computeGrowth(input: RawInput): GrowthData {
     fieldIndex,
     arppOverall,
     arppByCity,
+    arppDiagnostics,
     cohorts,
     retentionCurveOverall,
     retentionCurveByCity,

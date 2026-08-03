@@ -1,0 +1,324 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+<meta charset="utf-8">
+<title>Average revenue per player — Growth tab · mockup v1</title>
+<style>
+:root{
+  --forest:#0d3b2e; --accent:#35c77f; --ink:#12241d; --muted:#5b6a63;
+  --line:#e4ebe7; --hair:#edf2ef; --chip-bg:#eef3f0; --chip-line:#dfe8e3; --surface:#ffffff;
+  --canvas:#eef2ef; --col-bg:#f9fbfa; --col-line:#e0e8e3; --col-dash:#cfd9d3;
+  --slot-bg:#f3f7f4; --ns-ink:#566661;
+  --gold-line:#e3c369; --gold-ink:#8a6300; --gold-bg:#fbf2dd;
+  --loss:#8f2d15; --loss-bg:#fbe9e3;
+  --s3:#93dcb9; --s4:#5ecb97; --s5:#2fa774; --s6:#186b4c;
+}
+*{box-sizing:border-box} html,body{margin:0;padding:0}
+body{background:var(--canvas);color:var(--ink);
+  font-family:-apple-system,BlinkMacSystemFont,"Segoe UI",Inter,Roboto,Helvetica,Arial,sans-serif;
+  -webkit-font-smoothing:antialiased;padding:26px 24px 60px}
+.wrap{max-width:1500px;margin:0 auto}
+.note{border:1px dashed var(--col-dash);background:var(--col-bg);color:var(--ns-ink);border-radius:10px;
+  padding:11px 14px;font-size:12.5px;line-height:1.55;margin-bottom:18px}
+.note b{color:var(--ink)}
+
+.card{background:var(--surface);border:1px solid var(--line);border-radius:16px;overflow:hidden}
+.hd{display:flex;align-items:flex-start;justify-content:space-between;gap:20px;padding:20px 22px 16px}
+.h1{font-size:17px;font-weight:800;letter-spacing:-.015em;color:var(--forest);margin:0}
+.sub{font-size:12.5px;color:var(--muted);margin:6px 0 0;line-height:1.5;max-width:80ch}
+.viewsel{display:flex;flex-direction:column;gap:5px;align-items:flex-end}
+.viewsel label{font-size:9.5px;font-weight:900;letter-spacing:.09em;text-transform:uppercase;color:var(--muted)}
+.viewsel select{border:1px solid var(--chip-line);background:var(--surface);color:var(--ink);border-radius:9px;
+  padding:6px 11px;font:inherit;font-size:12.5px;font-weight:700;cursor:pointer}
+
+/* headline */
+.head{padding:0 22px 18px}
+.hrow{display:grid;grid-template-columns:minmax(180px,1.1fr) 120px repeat(3,minmax(108px,1fr)) 96px;
+  gap:0;align-items:end;border-bottom:1px solid var(--hair);padding-bottom:9px}
+.hrow .hl{font-size:9.5px;font-weight:900;letter-spacing:.09em;text-transform:uppercase;color:var(--muted);
+  text-align:right}
+.hrow .hl.l{text-align:left}
+.vrow{display:grid;grid-template-columns:minmax(180px,1.1fr) 120px repeat(3,minmax(108px,1fr)) 96px;
+  align-items:center;padding:14px 0 2px}
+.vname{font-size:14px;font-weight:800;color:var(--ink);letter-spacing:-.01em}
+.vbig{font-size:26px;font-weight:800;letter-spacing:-.03em;color:var(--forest);text-align:right;
+  font-variant-numeric:tabular-nums;line-height:1}
+.vnum{font-size:16px;font-weight:700;color:var(--ink);text-align:right;font-variant-numeric:tabular-nums}
+.vdash{font-size:16px;font-weight:700;color:var(--muted);text-align:right}
+.delta{text-align:right;font-size:13px;font-weight:800;font-variant-numeric:tabular-nums}
+.delta.up{color:var(--s6)} .delta.dn{color:var(--loss)}
+.sparkcell{display:flex;justify-content:flex-end;padding-right:14px}
+.wip{display:inline-block;border:1px solid var(--gold-line);background:var(--gold-bg);color:var(--gold-ink);
+  border-radius:999px;padding:1px 8px;font-size:9.5px;font-weight:800;margin-left:8px;vertical-align:2px}
+
+/* monthly detail */
+.mo{padding:6px 22px 20px}
+.motitle{font-size:9.5px;font-weight:900;letter-spacing:.09em;text-transform:uppercase;color:var(--muted);
+  margin:10px 0 10px}
+table{border-collapse:collapse;width:100%}
+th,td{font-variant-numeric:tabular-nums}
+.mt th{font-size:9.5px;font-weight:900;letter-spacing:.09em;text-transform:uppercase;color:var(--muted);
+  padding:0 0 9px;text-align:right;white-space:nowrap}
+.mt th.l{text-align:left}
+.mt td{padding:9px 0;border-top:1px solid var(--hair);text-align:right;font-size:13.5px;font-weight:600;color:var(--ink)}
+.mt td.l{text-align:left;font-weight:800;font-size:13px}
+.mt td.arpp{font-weight:800;color:var(--forest);font-size:14px}
+.mt td.dim{color:var(--muted);font-weight:600}
+.mt tr.prog td{background:var(--gold-bg)}
+.mt tr.prog td.l{color:var(--gold-ink)}
+.mt tr.tot td{border-top:2px solid var(--line);font-weight:800;color:var(--forest);padding-top:12px}
+.mt tr.tot td.l{text-transform:uppercase;font-size:12px;letter-spacing:.02em;color:var(--ns-ink);font-weight:900}
+
+/* breakdown */
+.bd{padding:18px 22px 22px;border-top:1px solid var(--hair)}
+.bdtop{display:flex;align-items:center;gap:12px;flex-wrap:wrap;margin-bottom:12px}
+.eyebrow{font-size:9.5px;font-weight:900;letter-spacing:.09em;text-transform:uppercase;color:var(--muted)}
+.seg{display:inline-flex;background:var(--chip-bg);border:1px solid var(--chip-line);border-radius:999px;padding:2px}
+.seg button{border:0;background:transparent;color:var(--ns-ink);font:inherit;font-size:12.5px;font-weight:700;
+  padding:5px 15px;border-radius:999px;cursor:pointer}
+.seg button.on{background:var(--forest);color:#fff}
+.scope{font-size:12px;color:var(--muted);font-weight:600}
+.ph{border:1px dashed var(--gold-line);background:var(--gold-bg);color:var(--gold-ink);border-radius:9px;
+  padding:8px 12px;font-size:11.5px;font-weight:700;line-height:1.5;margin:0 0 12px}
+.bt th{font-size:9.5px;font-weight:900;letter-spacing:.09em;text-transform:uppercase;color:var(--muted);
+  padding:0 0 9px;text-align:right;white-space:nowrap}
+.bt th.l{text-align:left}
+.bt td{padding:10px 0;border-top:1px solid var(--hair);text-align:right;font-size:14px;font-weight:600;color:var(--ink)}
+.bt td.l{text-align:left}
+.rk{display:inline-flex;align-items:center;justify-content:center;width:19px;height:19px;border-radius:999px;
+  background:var(--chip-bg);color:var(--ns-ink);font-size:10.5px;font-weight:800;margin-right:10px;vertical-align:1px}
+.mk{font-size:13.5px;font-weight:800;color:var(--ink);letter-spacing:-.01em}
+.cur{font-weight:800;color:var(--forest)}
+.dash{color:var(--muted);font-weight:700}
+.foot{font-size:11.5px;color:var(--ns-ink);line-height:1.65;margin:14px 0 0;padding-top:12px;
+  border-top:1px solid var(--hair)}
+.foot b{color:var(--ink)}
+#tip{position:fixed;pointer-events:none;opacity:0;transition:opacity .09s;background:var(--forest);color:#fff;
+  border-radius:8px;padding:6px 10px;font-size:11.5px;font-weight:700;white-space:nowrap;z-index:50;
+  font-variant-numeric:tabular-nums}
+</style>
+</head>
+<body>
+<div class="wrap">
+
+<div class="note">
+  <b>Mockup data note.</b> The headline and the monthly table are live from the deployed tab and every row foots —
+  played-only + subscribed-only + both equals the denominator in all eight months, and net revenue ÷ denominator
+  reproduces the printed ARPP to the cent. The <b>city rows are the design file's placeholder values</b>, marked as
+  such: Clubhouse does not compute per-city ARPP yet. The design's previous-year column is not reproduced as
+  <b>$0.00</b> — there is no 2025 revenue, so it is dashed.
+</div>
+
+<div class="card">
+  <div class="hd">
+    <div>
+      <p class="h1">Average revenue per player</p>
+      <p class="sub">Monthly. Numerator is net revenue that month; denominator is players who played that month
+        plus members active that month. The selected month against the one before it.</p>
+    </div>
+    <span class="viewsel">
+      <label for="vsel">View</label>
+      <select id="vsel"><option>General (Matchday)</option><option>Members only</option><option>Pay-per-play only</option></select>
+    </span>
+  </div>
+
+  <div class="head">
+    <div class="hrow">
+      <span class="hl l">View</span><span class="hl">Trend</span>
+      <span class="hl">Aug 2026</span><span class="hl">Jul 2026</span><span class="hl">Aug 2025</span>
+      <span class="hl">MoM</span>
+    </div>
+    <div class="vrow" id="vrow"></div>
+  </div>
+
+  <div class="mo">
+    <p class="motitle">Month by month</p>
+    <table class="mt" id="moTable"></table>
+  </div>
+
+  <div class="bd">
+    <div class="bdtop">
+      <span class="eyebrow">Breakdown</span>
+      <span class="seg"><button id="bCity" class="on">City View</button><button id="bField">Field View</button></span>
+      <span class="scope" id="scope"></span>
+    </div>
+    <p class="ph" id="ph"></p>
+    <table class="bt" id="bdTable"></table>
+    <p class="foot" id="foot"></p>
+  </div>
+</div>
+
+</div>
+<div id="tip"></div>
+
+<script>
+/* live, from the deployed tab */
+const MONTHS = [
+  { m:"Jan 2026", net:52705, den:2162, play:1464, sub:333, both:365 },
+  { m:"Feb 2026", net:60138, den:2141, play:1449, sub:348, both:344 },
+  { m:"Mar 2026", net:60086, den:2292, play:1576, sub:369, both:347 },
+  { m:"Apr 2026", net:61987, den:2634, play:1851, sub:391, both:392 },
+  { m:"May 2026", net:67537, den:2608, play:1804, sub:438, both:366 },
+  { m:"Jun 2026", net:70447, den:2744, play:1910, sub:444, both:390 },
+  { m:"Jul 2026", net:92112, den:3390, play:2462, sub:494, both:434 },
+  { m:"Aug 2026", net:19097, den:1119, play:323,  sub:699, both:97, prog:true }
+];
+MONTHS.forEach(r => r.arpp = r.net / r.den);
+
+/* design-file placeholder values -- Clubhouse does not compute per-city ARPP */
+const CITIES = [
+  { n:"San Antonio", cur:20.03, prev:20.73 },
+  { n:"Atlanta",     cur:19.98, prev:19.83 },
+  { n:"St. Louis",   cur:19.66, prev:19.67 },
+  { n:"Austin",      cur:19.63, prev:19.72 },
+  { n:"Dallas",      cur:19.17, prev:19.47 },
+  { n:"Houston",     cur:18.86, prev:18.65 },
+  { n:"OKC",         cur:18.49, prev:17.60 }
+];
+const FIELDS = [
+  { n:"San Juan Diego",               city:"Austin",      cur:null, prev:null },
+  { n:"North East Metropolitan Park", city:"Austin",      cur:null, prev:null },
+  { n:"SA",                           city:"San Antonio", cur:null, prev:null },
+  { n:"Tourney ATH Pearland",         city:"Houston",     cur:null, prev:null },
+  { n:"PRUMC",                        city:"Atlanta",     cur:null, prev:null }
+];
+
+const usd  = v => "$" + v.toLocaleString("en-US", {minimumFractionDigits:2, maximumFractionDigits:2});
+const usd0 = v => "$" + Math.round(v).toLocaleString("en-US");
+const nInt = v => v.toLocaleString("en-US");
+const pct  = v => (v >= 0 ? "+" : "−") + Math.abs(v).toFixed(1) + "%";
+
+/* ---- headline ---- */
+function sparkline(rows){
+  const w = 104, h = 30, pad = 3;
+  const vals = rows.map(r => r.arpp);
+  const lo = Math.min(...vals), hi = Math.max(...vals), span = (hi - lo) || 1;
+  const pts = vals.map((v,i) => [
+    pad + i * (w - pad*2) / (vals.length - 1),
+    h - pad - ((v - lo) / span) * (h - pad*2)
+  ]);
+  const solid = pts.slice(0, -1).map(p => p[0].toFixed(1) + "," + p[1].toFixed(1)).join(" ");
+  const tail  = pts.slice(-2).map(p => p[0].toFixed(1) + "," + p[1].toFixed(1)).join(" ");
+  const last  = pts[pts.length - 1];
+  let hits = "";
+  pts.forEach((p,i) => hits += '<circle class="sp-hit" cx="' + p[0].toFixed(1) + '" cy="' + p[1].toFixed(1) +
+    '" r="8" fill="transparent" data-i="' + i + '"></circle>');
+  return '<svg class="spark" width="' + w + '" height="' + h + '" viewBox="0 0 ' + w + ' ' + h + '" id="arppSpark">' +
+    '<polyline points="' + solid + '" fill="none" stroke="var(--s5)" stroke-width="2" ' +
+      'stroke-linecap="round" stroke-linejoin="round"></polyline>' +
+    '<polyline id="progSeg" points="' + tail + '" fill="none" stroke="var(--gold-dot,#d9a521)" stroke-width="2" ' +
+      'stroke-dasharray="3 3" stroke-linecap="round"></polyline>' +
+    '<circle id="progDot" cx="' + last[0].toFixed(1) + '" cy="' + last[1].toFixed(1) + '" r="3" ' +
+      'fill="var(--surface)" stroke="#b8860b" stroke-width="2"></circle>' + hits + '</svg>';
+}
+
+function renderHead(){
+  const cur = MONTHS[MONTHS.length - 1], prev = MONTHS[MONTHS.length - 2];
+  const mom = (cur.arpp - prev.arpp) / prev.arpp * 100;
+  document.getElementById("vrow").innerHTML =
+    '<span class="vname">General <span class="wip">Aug in progress</span></span>' +
+    '<span class="sparkcell">' + sparkline(MONTHS) + '</span>' +
+    '<span class="vbig" id="curArpp">' + usd(cur.arpp) + '</span>' +
+    '<span class="vnum" id="prevArpp">' + usd(prev.arpp) + '</span>' +
+    '<span class="vdash" id="yoy">—</span>' +
+    '<span class="delta ' + (mom >= 0 ? "up" : "dn") + '" id="mom" data-mom="' + mom.toFixed(1) + '">' +
+      pct(mom) + '</span>';
+}
+
+/* ---- monthly ---- */
+function renderMonths(){
+  let html = '<thead><tr><th class="l">Month</th><th>Net revenue</th><th>Denominator</th>' +
+    '<th>Played only</th><th>Subscribed only</th><th>Both</th><th>ARPP</th></tr></thead><tbody>';
+  MONTHS.forEach(r => {
+    html += '<tr' + (r.prog ? ' class="prog"' : '') + ' data-month="' + r.m + '">' +
+      '<td class="l">' + r.m + (r.prog ? ' <span class="wip">in progress</span>' : '') + '</td>' +
+      '<td>' + usd0(r.net) + '</td>' +
+      '<td data-den="' + r.den + '">' + nInt(r.den) + '</td>' +
+      '<td class="dim">' + nInt(r.play) + '</td>' +
+      '<td class="dim">' + nInt(r.sub) + '</td>' +
+      '<td class="dim">' + nInt(r.both) + '</td>' +
+      '<td class="arpp" data-arpp="' + r.arpp.toFixed(2) + '">' + usd(r.arpp) + '</td></tr>';
+  });
+  const tNet = MONTHS.reduce((a,r) => a + r.net, 0);
+  html += '<tr class="tot"><td class="l">Year to date</td><td data-tot-net="' + tNet + '">' + usd0(tNet) + '</td>' +
+    '<td class="dash">—</td><td class="dash">—</td><td class="dash">—</td><td class="dash">—</td>' +
+    '<td class="dash">—</td></tr></tbody>';
+  document.getElementById("moTable").innerHTML = html;
+}
+
+/* ---- breakdown ---- */
+let view = "city";
+function renderBreakdown(){
+  const rows = view === "city" ? CITIES : FIELDS;
+  const label = view === "city" ? "City" : "Pitch";
+  let html = '<thead><tr><th class="l">' + label + '</th><th>Aug 2026</th><th>Jul 2026</th>' +
+    '<th>Aug 2025</th><th>MoM</th></tr></thead><tbody>';
+  rows.forEach((r,i) => {
+    const mom = (r.cur !== null && r.prev) ? (r.cur - r.prev) / r.prev * 100 : null;
+    html += '<tr data-row="' + r.n + '"><td class="l"><span class="rk">' + (i+1) + '</span>' +
+      '<span class="mk">' + r.n + '</span>' +
+      (r.city ? '<span style="font-size:11px;color:var(--muted);font-weight:600"> &middot; ' + r.city + '</span>' : '') +
+      '</td>' +
+      '<td>' + (r.cur === null ? '<span class="dash">—</span>' : '<span class="cur">' + usd(r.cur) + '</span>') + '</td>' +
+      '<td>' + (r.prev === null ? '<span class="dash">—</span>' : usd(r.prev)) + '</td>' +
+      '<td><span class="dash">—</span></td>' +
+      '<td>' + (mom === null ? '<span class="dash">—</span>'
+        : '<span class="delta ' + (mom >= 0 ? "up" : "dn") + '" data-mom="' + mom.toFixed(1) + '">' + pct(mom) + '</span>') +
+      '</td></tr>';
+  });
+  html += '</tbody>';
+  document.getElementById("bdTable").innerHTML = html;
+
+  document.getElementById("scope").textContent = view === "city"
+    ? rows.length + " cities · ranked by current-month ARPP"
+    : rows.length + " pitches";
+
+  document.getElementById("ph").innerHTML = view === "city"
+    ? 'Layout preview. These seven values come from the design file, not from Clubhouse — <b>per-city ARPP is not ' +
+      'computed on the live tab</b>. They are here to show the shape, and must be replaced by a real query before ' +
+      'this ships.'
+    : 'Per-pitch ARPP is <b>not defined</b>. Membership revenue attaches to a city and never to a pitch, so the ' +
+      'numerator cannot be split this far down. Field View should either be removed from this panel or restricted ' +
+      'to pay-per-play revenue only.';
+
+  document.getElementById("foot").innerHTML =
+    'The <b>Aug 2025 column is dashed, not $0.00</b>. There is no 2025 revenue, so year-on-year cannot be computed ' +
+    'for any 2026 month; the column becomes live in Jan 2027. The design file prints $0.00 and +0.0% for the four ' +
+    'cities without prior-year data, which reads as "flat" when it means "no data". ' +
+    'August is a partial month: its denominator already contains every active member while play is only two days ' +
+    'in, so its ARPP is understated and will settle upward — that is why the sparkline\'s last segment is dashed ' +
+    'rather than solid. ' +
+    (view === "city"
+      ? 'City denominators will not sum to the network denominator, because a player who played in two cities is ' +
+        'counted in both — the same double count that makes total players 6,953 against a 7,520 network headcount.'
+      : '');
+}
+
+document.getElementById("bCity").addEventListener("click", () => {
+  view = "city"; document.getElementById("bCity").classList.add("on");
+  document.getElementById("bField").classList.remove("on"); renderBreakdown();
+});
+document.getElementById("bField").addEventListener("click", () => {
+  view = "field"; document.getElementById("bField").classList.add("on");
+  document.getElementById("bCity").classList.remove("on"); renderBreakdown();
+});
+
+/* hover */
+const tip = document.getElementById("tip");
+document.addEventListener("mouseover", e => {
+  const hit = e.target.closest(".sp-hit");
+  if (hit){
+    const r = MONTHS[+hit.getAttribute("data-i")];
+    tip.textContent = r.m + " · " + usd(r.arpp) + (r.prog ? " (partial)" : "");
+    tip.style.opacity = 1;
+    tip.style.left = (e.clientX + 14) + "px"; tip.style.top = (e.clientY - 30) + "px";
+  } else tip.style.opacity = 0;
+});
+document.addEventListener("mousemove", e => {
+  if (tip.style.opacity == 1){ tip.style.left = (e.clientX + 14) + "px"; tip.style.top = (e.clientY - 30) + "px"; }
+});
+
+renderHead(); renderMonths(); renderBreakdown();
+</script>
+</body>
+</html>
