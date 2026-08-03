@@ -55,3 +55,7 @@ firebase-service-account.json
 # the PWA Phase 1 PR; this pattern prevents fresh ones from
 # polluting `git status` going forward.
 public/* [0-9].*
+
+# E2E harness artifacts (never commit)
+.auth/
+.e2e-out/
