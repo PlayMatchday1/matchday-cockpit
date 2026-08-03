@@ -1,23 +1,39 @@
 "use client";
 
-// Reply marks for the Reviews page — "we answered this player", stored in
-// review_replies (migration 0089), keyed by the review's api_id. Optimistic
-// insert/delete; RLS gates writes to admins.
+// Resolution marks for the Reviews page — two ways a review can be "handled":
+//   kind='replied'          → we answered the player (green "Replied").
+//   kind='no_reply_needed'  → deliberately nothing to answer (neutral chip),
+//                             optional short note for the reason.
+//   (no row)                → still open; the only state counted as owed.
 //
-// DEGRADE: until the migration is applied the table does not exist. The first
-// read returns a "relation does not exist / schema cache" error; we set
-// enabled=false so the page can render the tick column disabled with a one-line
-// note instead of throwing. No other failure flips enabled.
+// Stored in review_replies (migration 0089), keyed by the review's api_id (PK →
+// one mark per review, so a double-click can't duplicate). `kind`/`note` land in
+// migration 0093. Optimistic writes; RLS (0090) gates them to any authenticated
+// app_user. replied_at is a server default — never a browser timestamp.
+//
+// DEGRADE, two levels:
+//   - table missing (pre-0089) → enabled=false, the column renders read-only.
+//   - kind column missing (0089/0090 applied, 0093 not) → noReplyNeededEnabled=
+//     false: replied marks work as before, the "No reply needed" action is hidden
+//     until 0093 is applied. Neither ever throws.
 
 import { useCallback, useEffect, useState } from "react";
 import { supabase } from "./supabase";
 import { useAuth } from "./useAuth";
 
-export type ReplyMark = { byId: string; by: string; on: string };
+export type MarkKind = "replied" | "no_reply_needed";
+export type ReplyMark = {
+  byId: string;
+  by: string;
+  on: string;
+  kind: MarkKind;
+  note: string | null;
+};
 
 export type ReviewRepliesState = {
   replies: Map<number, ReplyMark>;
-  enabled: boolean; // false → migration not applied yet
+  enabled: boolean; // false → review_replies table missing (pre-0089)
+  noReplyNeededEnabled: boolean; // false → kind column missing (pre-0093)
   loading: boolean;
 };
 
@@ -28,31 +44,46 @@ function isMissingTable(msg: string | undefined): boolean {
     /(does not exist|schema cache|relation|could not find)/i.test(msg)
   );
 }
+function isMissingKindColumn(msg: string | undefined): boolean {
+  if (!msg) return false;
+  return /\b(kind|note)\b/i.test(msg) && /(does not exist|schema cache|could not find)/i.test(msg);
+}
 
 export function useReviewReplies() {
   const { appUser } = useAuth();
   const [state, setState] = useState<ReviewRepliesState>({
     replies: new Map(),
     enabled: true,
+    noReplyNeededEnabled: true,
     loading: true,
   });
-  // A rejected write (RLS denial, lost connection) must never look like a
-  // successful click: we revert the optimistic tick AND surface this message.
   const [writeError, setWriteError] = useState<string | null>(null);
 
   const load = useCallback(async () => {
-    const { data, error } = await supabase
+    // Try the full shape first; fall back to the pre-0093 columns so the page
+    // still works (replied-only) before the kind/note migration is applied.
+    let rows: Record<string, unknown>[] | null = null;
+    let kindEnabled = true;
+    const full = await supabase
       .from("review_replies")
-      .select("review_id, replied_at, replied_by");
-    if (error) {
-      setState({
-        replies: new Map(),
-        enabled: !isMissingTable(error.message),
-        loading: false,
-      });
+      .select("review_id, replied_at, replied_by, kind, note");
+    if (full.error && isMissingKindColumn(full.error.message)) {
+      kindEnabled = false;
+      const legacy = await supabase
+        .from("review_replies")
+        .select("review_id, replied_at, replied_by");
+      if (legacy.error) {
+        setState({ replies: new Map(), enabled: !isMissingTable(legacy.error.message), noReplyNeededEnabled: false, loading: false });
+        return;
+      }
+      rows = legacy.data ?? [];
+    } else if (full.error) {
+      setState({ replies: new Map(), enabled: !isMissingTable(full.error.message), noReplyNeededEnabled: false, loading: false });
       return;
+    } else {
+      rows = full.data ?? [];
     }
-    const rows = data ?? [];
+
     const ids = [...new Set(rows.map((r) => r.replied_by as string))];
     const names = new Map<string, string>();
     if (ids.length) {
@@ -69,51 +100,67 @@ export function useReviewReplies() {
         byId: r.replied_by as string,
         by: names.get(r.replied_by as string) || "Admin",
         on: String(r.replied_at).slice(0, 10),
+        kind: (r.kind as MarkKind) ?? "replied",
+        note: (r.note as string | null) ?? null,
       });
     }
-    setState({ replies: m, enabled: true, loading: false });
+    setState({ replies: m, enabled: true, noReplyNeededEnabled: kindEnabled, loading: false });
   }, []);
 
   useEffect(() => {
     void load();
   }, [load]);
 
-  // Toggle the mark for one review. Optimistic; reverts + reloads on error.
-  const toggle = useCallback(
-    async (reviewId: number) => {
+  // Set one review to a resolved state. Optimistic; reverts + reloads on error.
+  // Insert-from-open only (the UI shows the two actions only when there is no
+  // mark), so an upsert with ignoreDuplicates makes a double-click a no-op rather
+  // than a PK-conflict error. replied_at is the server default — never sent.
+  const setMark = useCallback(
+    async (reviewId: number, kind: MarkKind, note?: string) => {
       if (!appUser?.id) return;
-      const had = state.replies.has(reviewId);
       const optimistic = new Map(state.replies);
-      if (had) {
-        optimistic.delete(reviewId);
-      } else {
-        optimistic.set(reviewId, {
-          byId: appUser.id,
-          by: appUser.full_name || appUser.email,
-          on: new Date().toISOString().slice(0, 10),
-        });
-      }
+      optimistic.set(reviewId, {
+        byId: appUser.id,
+        by: appUser.full_name || appUser.email,
+        on: new Date().toISOString().slice(0, 10), // optimistic display only; server stamps the row
+        kind,
+        note: note?.trim() ? note.trim() : null,
+      });
       setState((s) => ({ ...s, replies: optimistic }));
       setWriteError(null);
 
-      const res = had
-        ? await supabase.from("review_replies").delete().eq("review_id", reviewId)
-        : await supabase
-            .from("review_replies")
-            .insert({ review_id: reviewId, replied_by: appUser.id });
+      const payload: Record<string, unknown> = { review_id: reviewId, replied_by: appUser.id };
+      if (state.noReplyNeededEnabled) {
+        payload.kind = kind;
+        payload.note = note?.trim() ? note.trim() : null;
+      }
+      const res = await supabase
+        .from("review_replies")
+        .upsert(payload, { onConflict: "review_id", ignoreDuplicates: true });
       if (res.error) {
-        // Denied or failed: revert the optimistic state to server truth and tell
-        // the user. A permission denial must not read as a successful click.
-        setWriteError(
-          had
-            ? "Couldn’t remove that reply mark — the change was undone. You may not have permission."
-            : "Couldn’t save that reply mark — the tick was undone. You may not have permission.",
-        );
+        setWriteError("Couldn’t save that mark — it was undone. You may not have permission.");
+        void load();
+      }
+    },
+    [appUser, state.replies, state.noReplyNeededEnabled, load],
+  );
+
+  // Undo any mark → back to open. Attribution of the undo is the delete itself.
+  const clear = useCallback(
+    async (reviewId: number) => {
+      if (!appUser?.id) return;
+      const optimistic = new Map(state.replies);
+      optimistic.delete(reviewId);
+      setState((s) => ({ ...s, replies: optimistic }));
+      setWriteError(null);
+      const res = await supabase.from("review_replies").delete().eq("review_id", reviewId);
+      if (res.error) {
+        setWriteError("Couldn’t undo that mark — it was restored. You may not have permission.");
         void load();
       }
     },
     [appUser, state.replies, load],
   );
 
-  return { ...state, toggle, reload: load, error: writeError, clearError: () => setWriteError(null) };
+  return { ...state, setMark, clear, reload: load, error: writeError, clearError: () => setWriteError(null) };
 }
