@@ -21,6 +21,7 @@ import {
 } from "./financeImport";
 import { selectAll } from "./supabasePagination";
 import { normalizeMatchName } from "./venueNormalization";
+import { venueCategory, type VenueCategory } from "./venueResolver";
 import { cityFromAbbr } from "./cityMap";
 
 export type StripeSyncOptions = {
@@ -43,6 +44,12 @@ export type StripeSyncResult = {
   strikePayments: number;
   unmatchedEmails: string[];
   unmatchedCityCodes: string[];
+  // DIAGNOSTIC ONLY — the category-split net per (month × venue × type ×
+  // category), derived from metadata.matchName BEFORE normalizeMatchName
+  // collapses it. Consumed by the dry-run diff on the sync route to run the
+  // restatement gate; NOT part of `rows`, so the committed rollups and the
+  // cron write path are byte-identical to before this field existed.
+  categoryNet: { month: string; venue: string; type: string; category: VenueCategory; net: number }[];
 };
 
 // Extract the email the CSV path would write into customer_email.
@@ -207,6 +214,10 @@ export async function syncStripeCharges(
   const unmatchedEmailSet = new Set<string>();
   const unmatchedCityCodeSet = new Set<string>();
   const perTxn: StripeAllocatedRow[] = [];
+  // Category-split net accumulator (diagnostic; see StripeSyncResult.categoryNet).
+  // Keyed on the SAME (month, committed-venue, type) as the write path, plus the
+  // event/regular category read from matchName. Never feeds `rows`.
+  const catAgg = new Map<string, { month: string; venue: string; type: string; category: VenueCategory; net: number }>();
   let earliestDate: string | null = null;
   let latestDate: string | null = null;
 
@@ -307,9 +318,10 @@ export async function syncStripeCharges(
       }
     }
 
+    const month = monthLabelFromIsoDate(date) ?? "";
     perTxn.push({
       date,
-      month: monthLabelFromIsoDate(date) ?? "",
+      month,
       city: allocatedCity,
       venue: resolvedVenue,
       type,
@@ -318,6 +330,17 @@ export async function syncStripeCharges(
       source: "Stripe",
       notes: description,
     });
+
+    // Category from the event's OWN identity (matchName), never the pitch.
+    // Only DPP can be an event (tournament/combine entries); membership &
+    // strike are always regular. Uses the same fields the venue derivation
+    // reads, before normalizeMatchName flattens the tournament name away.
+    const category: VenueCategory =
+      type === "DPP" ? venueCategory(matchName ?? explicitVenue ?? description) : "regular";
+    const ck = `${month}|${resolvedVenue ?? ""}|${type}|${category}`;
+    const prev = catAgg.get(ck);
+    if (prev) prev.net += gross - fees;
+    else catAgg.set(ck, { month, venue: resolvedVenue ?? "", type, category, net: gross - fees });
   }
 
   const aggregated = aggregateStripeRows(perTxn);
@@ -335,5 +358,6 @@ export async function syncStripeCharges(
     strikePayments,
     unmatchedEmails: [...unmatchedEmailSet].sort(),
     unmatchedCityCodes: [...unmatchedCityCodeSet].sort(),
+    categoryNet: [...catAgg.values()],
   };
 }

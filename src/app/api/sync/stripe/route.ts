@@ -31,6 +31,12 @@ export const runtime = "nodejs";
 type RequestBody = {
   since?: string;
   until?: string;
+  // Read-only gate. When true, compute the restated rollups and RETURN the diff
+  // (total net + net per venue×type×category) WITHOUT deleting or inserting
+  // anything. Defaults false — so the nightly cron (which sends no body) and
+  // every existing caller take the exact same commit path as before. The flag
+  // is read once, below, and guards ONLY the commitStripe call.
+  dryRun?: boolean;
 };
 type TriggeredBy = "manual" | "cron";
 
@@ -192,9 +198,62 @@ export async function POST(req: Request) {
     );
   }
 
+  // Read the dry-run flag ONCE. Body flag or ?dryRun=1. Defaults false, so the
+  // cron path (no body, no query) is byte-identical to before this existed.
+  const dryRun =
+    body.dryRun === true ||
+    new URL(req.url).searchParams.get("dryRun") === "1";
+
   // --- Sync + commit ---
   try {
     const sync = await syncStripeCharges(supabase, { since, until }, serviceClient);
+
+    // DRY RUN — compute the diff against what's stored and return it. No DELETE,
+    // no insert. This is the ONLY place dryRun changes behaviour.
+    if (dryRun) {
+      const sinceYmd = since.toISOString().slice(0, 10);
+      const untilYmd = until.toISOString().slice(0, 10);
+      const { data: stored } = await supabase
+        .from("fin_revenue")
+        .select("venue, type, net, date")
+        .eq("source", "Stripe")
+        .gte("date", sinceYmd)
+        .lte("date", untilYmd);
+      const storedNet = (stored ?? []).reduce((s, r) => s + Number(r.net ?? 0), 0);
+      const restatedNet = sync.rows.reduce((s, r) => s + (Number(r.gross ?? 0) - Number(r.fees ?? 0)), 0);
+      // per venue×type: stored vs restated (category summed out, since stored has none)
+      const vt = new Map<string, { stored: number; restated: number }>();
+      for (const r of stored ?? []) {
+        const k = `${r.venue ?? ""}|${r.type}`;
+        (vt.get(k) ?? vt.set(k, { stored: 0, restated: 0 }).get(k)!).stored += Number(r.net ?? 0);
+      }
+      for (const r of sync.categoryNet) {
+        const k = `${r.venue}|${r.type}`;
+        (vt.get(k) ?? vt.set(k, { stored: 0, restated: 0 }).get(k)!).restated += r.net;
+      }
+      const perVenueType = [...vt.entries()]
+        .map(([k, v]) => ({ key: k, stored: +v.stored.toFixed(2), restated: +v.restated.toFixed(2), delta: +(v.restated - v.stored).toFixed(2) }))
+        .filter((d) => Math.abs(d.delta) > 0.005)
+        .sort((a, b) => Math.abs(b.delta) - Math.abs(a.delta));
+      await finalizeLog({ rows_imported: 0, error_message: "dry-run (no write)" });
+      return Response.json({
+        dryRun: true,
+        since: since.toISOString(),
+        until: until.toISOString(),
+        storedNet: +storedNet.toFixed(2),
+        restatedNet: +restatedNet.toFixed(2),
+        deltaNet: +(restatedNet - storedNet).toFixed(2),
+        pct: storedNet ? +(((restatedNet - storedNet) / storedNet) * 100).toFixed(4) : 0,
+        restatedRows: sync.rows.length,
+        totalCharges: sync.totalCharges,
+        categoryNet: sync.categoryNet
+          .map((r) => ({ ...r, net: +r.net.toFixed(2) }))
+          .sort((a, b) => Math.abs(b.net) - Math.abs(a.net)),
+        perVenueType,
+        durationMs: Date.now() - startedAt,
+      });
+    }
+
     let rowsReplaced = 0;
     let commitNote: string | undefined;
 
