@@ -18,7 +18,7 @@
 import { useCallback, useEffect, useMemo, useState } from "react";
 import { supabase } from "@/lib/supabase";
 import { selectAll } from "@/lib/supabasePagination";
-import { normField } from "@/lib/normField";
+import { canonicalVenueName } from "@/lib/venueResolver";
 import { CITY_CODE_TO_DISPLAY } from "@/lib/scheduleReconcile";
 
 const CODE_BY_DISPLAY: Record<string, string> = Object.fromEntries(
@@ -184,7 +184,7 @@ function useSlateWeek(city: string, weekStart: string): WeekData {
       // (any state) at that key this week. Same 3-part key Cancel Patterns uses.
       const keyOf = (m: MatchRow) => {
         const d = local(m.start_date);
-        return `${DOW[d.getDay()]}|${normField(m.field_title ?? "")}|${d.getHours()}:${String(d.getMinutes()).padStart(2, "0")}`;
+        return `${DOW[d.getDay()]}|${canonicalVenueName(m.field_title ?? "")}|${d.getHours()}:${String(d.getMinutes()).padStart(2, "0")}`;
       };
       const thisKeys = new Set(thisWeek.map(keyOf));
       const lastWeek = matches.filter((m) => { const d = local(m.start_date); return d >= prevMon && d < thisMon; });

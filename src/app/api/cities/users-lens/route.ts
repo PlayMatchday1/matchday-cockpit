@@ -24,7 +24,7 @@ import { createClient, type SupabaseClient } from "@supabase/supabase-js";
 import { isInternalUser } from "@/lib/users";
 import { KNOWN_CITY_CODES } from "@/lib/cityNormalization";
 import { selectAll } from "@/lib/supabasePagination";
-import { normField } from "@/lib/normField";
+import { canonicalVenueName } from "@/lib/venueResolver";
 import { matchStartMs } from "@/lib/matchTime";
 
 export const runtime = "nodejs";
@@ -371,7 +371,7 @@ export function aggregate(
     if (m.is_cancelled) continue;
     // normField returns "" when input is empty/whitespace; coerce to
     // null so downstream can distinguish "no field" from a real name.
-    const normalized = m.field_title ? normField(m.field_title) : "";
+    const normalized = m.field_title ? canonicalVenueName(m.field_title) : "";
     matchInfo.set(m.api_id, {
       city: m.city_identifier,
       startDate: m.start_date ? new Date(m.start_date) : null,

@@ -24,7 +24,7 @@
 import { useCallback, useEffect, useMemo, useState } from "react";
 import { supabase } from "@/lib/supabase";
 import { selectAll } from "@/lib/supabasePagination";
-import { normField } from "@/lib/normField";
+import { canonicalVenueName } from "@/lib/venueResolver";
 import { CITY_CODE_TO_DISPLAY } from "@/lib/scheduleReconcile";
 import MasterScheduleEditModal from "@/components/MasterScheduleEditModal";
 
@@ -160,7 +160,7 @@ export default function MasterScheduleReconcile() {
       const keyOf = (fieldId: number | null | undefined, name: string, t: string, side: "ch" | "md") => {
         if (fieldId != null) return `f${fieldId}|${t}`;
         if (side === "ch") unresolvedCh++; else unresolvedMd++;
-        return `n:${normField(name)}|${t}`;
+        return `n:${canonicalVenueName(name)}|${t}`;
       };
 
       for (const name of allCities) {

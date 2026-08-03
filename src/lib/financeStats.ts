@@ -16,6 +16,7 @@ import {
   canonicalVenueCost,
   fieldCostsFor,
   findOverride,
+  isEventSchedule,
   perMatchMinusManagerOwed,
   perMatchTotalFor,
   type VenueCostInfo,
@@ -1322,6 +1323,7 @@ function fieldCostsActualFor(
     if (v.billing_type === "per_match") {
       const rate = v.per_match_rate ?? 0;
       for (const s of data.masterSchedule) {
+        if (isEventSchedule(s)) continue;
         if (s.venue_id !== v.id) continue;
         if (s.month !== month) continue;
         if (s.match_date > today) continue;
@@ -1331,6 +1333,7 @@ function fieldCostsActualFor(
       // not counted (not realized yet) — same filter as alive.
       if (v.charge_on_cancel) {
         for (const s of data.cancelledSchedule) {
+          if (isEventSchedule(s)) continue;
           if (s.venue_id !== v.id) continue;
           if (s.month !== month) continue;
           if (s.match_date > today) continue;
@@ -1398,6 +1401,7 @@ export function venueRealizedCostFor(
   const rate = venue.per_match_rate ?? 0;
   let total = 0;
   for (const s of data.masterSchedule) {
+    if (isEventSchedule(s)) continue;
     if (s.venue_id !== venueId) continue;
     if (s.month !== month) continue;
     if (s.match_date > today) continue;
@@ -1405,6 +1409,7 @@ export function venueRealizedCostFor(
   }
   if (venue.charge_on_cancel) {
     for (const s of data.cancelledSchedule) {
+      if (isEventSchedule(s)) continue;
       if (s.venue_id !== venueId) continue;
       if (s.month !== month) continue;
       if (s.match_date > today) continue;
@@ -1605,6 +1610,7 @@ export function venueMatchCountFor(
   // venueChargedMatchCountFor below.
   let n = 0;
   for (const s of data.masterSchedule) {
+    if (isEventSchedule(s)) continue;
     if (s.venue_id === venueId && s.month === month) n += 1;
   }
   return n;
@@ -1632,6 +1638,7 @@ export function venueRealizedMatchCountFor(
   const today = isoDateLocal(now);
   let n = 0;
   for (const s of data.masterSchedule) {
+    if (isEventSchedule(s)) continue;
     if (s.venue_id !== venueId) continue;
     if (s.month !== month) continue;
     if (s.match_date > today) continue;
@@ -1654,6 +1661,7 @@ export function venueChargedCancelCountFor(
   if (!venue || !venue.charge_on_cancel) return 0;
   let n = 0;
   for (const s of data.cancelledSchedule) {
+    if (isEventSchedule(s)) continue;
     if (s.venue_id === venueId && s.month === month) n += 1;
   }
   return n;
@@ -1678,6 +1686,7 @@ export function venueRealizedChargedCancelCountFor(
   const today = isoDateLocal(now);
   let n = 0;
   for (const s of data.cancelledSchedule) {
+    if (isEventSchedule(s)) continue;
     if (s.venue_id !== venueId) continue;
     if (s.month !== month) continue;
     if (s.match_date > today) continue;
@@ -1797,6 +1806,7 @@ export function groupPerMatchCostRealizedFor(
     const cpm = legPerMatchUnitCost(leg, primary);
     let count = 0;
     for (const s of data.masterSchedule) {
+      if (isEventSchedule(s)) continue;
       if (s.venue_id !== leg.id) continue;
       if (s.month !== month) continue;
       if (s.match_date > today) continue;
@@ -1805,6 +1815,7 @@ export function groupPerMatchCostRealizedFor(
     const venue = data.venues.find((v) => v.id === leg.id);
     if (venue?.charge_on_cancel) {
       for (const s of data.cancelledSchedule) {
+        if (isEventSchedule(s)) continue;
         if (s.venue_id !== leg.id) continue;
         if (s.month !== month) continue;
         if (s.match_date > today) continue;
@@ -1930,6 +1941,7 @@ export function activeVenuesForCity(
   // schedule_master/fin_venues string drift that would otherwise surface
   // as two near-identical entries in the active-venues list.
   for (const s of data.masterSchedule) {
+    if (isEventSchedule(s)) continue;
     if (s.month !== month) continue;
     if (s.venue_id == null) continue;
     const v = data.venues.find((x) => x.id === s.venue_id);

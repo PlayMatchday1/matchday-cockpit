@@ -41,6 +41,7 @@ import {
   loadMembershipWindowsByUserId,
 } from "./mdapiMatchesRead";
 import { buildFieldIdToVenueIdMap, resolveVenueForMatch } from "./venueNormalization";
+import { venueCategory } from "./venueResolver";
 import { selectAll } from "./supabasePagination";
 
 // Allow-list of real-attendee payment types. Spots Booked counts every
@@ -126,6 +127,11 @@ export type MatchPnLRow = {
   // venueId / fieldCost on this row. False for non-SC venues and
   // for SC matches at ≤22 capacity.
   isTournament: boolean;
+  // Special event (tournament/combine) per the canonical resolver — the frozen
+  // non-cancelled event set. Distinct from isTournament (SC capacity heuristic).
+  // The Field P&L per-match view excludes these so a tournament can't dilute a
+  // pitch's per-match average.
+  isEvent: boolean;
 };
 
 export type MatchPnLSummary = {
@@ -300,14 +306,16 @@ export async function fetchWeekMatchPnL(
     field_id: number | null;
     start_date: string | null;
     max_player_count: number | null;
+    field_title: string | null;
   }>(() =>
     supabase
       .from("mdapi_matches")
-      .select("field_id, start_date, max_player_count")
+      .select("field_id, start_date, max_player_count, field_title")
       .gte("start_date", `${ymd(weekStart)}T00:00:00Z`)
       .lte("start_date", `${ymd(weekEnd)}T23:59:59Z`),
   );
   const matchMaxPlayer = new Map<string, number | null>();
+  const matchIsEvent = new Map<string, boolean>();
   for (const m of matchMetaRows) {
     if (m.field_id == null || !m.start_date) continue;
     const k = `${m.field_id}|${m.start_date.slice(0, 16)}`;
@@ -315,6 +323,7 @@ export async function fetchWeekMatchPnL(
       k,
       m.max_player_count == null ? null : Number(m.max_player_count),
     );
+    matchIsEvent.set(k, venueCategory(m.field_title) === "event");
   }
 
   // Look up + re-resolve a registration's venue against the Soccer
@@ -389,6 +398,7 @@ export async function fetchWeekMatchPnL(
     // venue's rate). See resolveVenueForMatch.
     cost: number | null;
     isTournament: boolean;
+    isEvent: boolean;
   };
   const buckets = new Map<string, Bucket>();
   for (const r of activeEligible) {
@@ -405,6 +415,7 @@ export async function fetchWeekMatchPnL(
     let venueId = resolved?.venueId ?? null;
     let cost: number | null = resolved?.cost ?? null;
     let isTournament = false;
+    const isEvent = matchIsEvent.get(`${r.field_id}|${r.match_start.slice(0, 16)}`) ?? false;
     // Soccer Central second pass: route to the $120 Tournament leg
     // when max_player_count > 22, drop entirely on null/0 capacity
     // (World Cup bracket special events). No-op for non-SC venues.
@@ -441,6 +452,7 @@ export async function fetchWeekMatchPnL(
         credit: 0,
         cost,
         isTournament,
+        isEvent,
       };
       buckets.set(key, b);
     }
@@ -535,6 +547,7 @@ export async function fetchWeekMatchPnL(
       net,
       status: statusFor(net),
       isTournament: b.isTournament,
+      isEvent: b.isEvent,
     });
   }
 
@@ -556,6 +569,7 @@ export async function fetchWeekMatchPnL(
     let venueId = resolved?.venueId ?? null;
     let cost: number | null = resolved?.cost ?? null;
     let isTournament = false;
+    const isEvent = matchIsEvent.get(`${r.field_id}|${r.match_start.slice(0, 16)}`) ?? false;
     if (venueId !== null) {
       const sc = resolveSoccerCentral(
         venueId,
@@ -598,6 +612,7 @@ export async function fetchWeekMatchPnL(
       net: cost === null ? null : -cost,
       status: "canceled",
       isTournament,
+      isEvent,
     });
   }
 

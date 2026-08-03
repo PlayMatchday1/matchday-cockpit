@@ -16,7 +16,7 @@ import { useMatchWindowData } from "@/lib/useMatchData";
 import { getCancelHeatmap, type SlotRow } from "@/lib/cityStats";
 import { useWeeklyDemand, type DemandWeek } from "@/lib/slateDemand";
 import { fieldCodeMap, fieldCode } from "@/lib/slateFieldCodes";
-import { normField } from "@/lib/normField";
+import { canonicalVenueName } from "@/lib/venueResolver";
 import SlateFieldPnL from "@/components/SlateFieldPnL";
 import { VISIBLE_CITIES } from "@/lib/types";
 import SlateWeekSchedule from "@/components/SlateWeekSchedule";
@@ -423,7 +423,7 @@ function PricesCard({ city }: { city: string }) {
           // Label from the SAME shared source as Cancel Patterns + the footer
           // key: normField(field_title) → fieldCode. Shows codes (HT, RR, OC…),
           // so this card matches the chips instead of mixing raw venue names.
-          dppRegs.push({ matchStart: ms, venueId: vid, venueName: fieldCode(normField(r.field)), city: v.city, amountDollars: Number(r.match_price_paid ?? 0) });
+          dppRegs.push({ matchStart: ms, venueId: vid, venueName: fieldCode(canonicalVenueName(r.field)), city: v.city, amountDollars: Number(r.match_price_paid ?? 0) });
         }
         const shifts = detectDppPriceShifts(dppRegs, { now: new Date() });
         if (!cancelled) setDpp(shifts);

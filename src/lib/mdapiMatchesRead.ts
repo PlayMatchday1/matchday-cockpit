@@ -29,7 +29,7 @@
 import type { SupabaseClient } from "@supabase/supabase-js";
 import { selectAll } from "./supabasePagination";
 import { cityFromAbbr } from "./cityMap";
-import { normField } from "./normField";
+import { canonicalVenueName } from "./venueResolver";
 import { isFakePlayerRow } from "./mdapiFakePlayer";
 
 const MATCHES_COLS =
@@ -441,7 +441,7 @@ function mapJoinedRow(
 
   return {
     city,
-    field: normField(match.field_title ?? ""),
+    field: canonicalVenueName(match.field_title ?? ""),
     matchStart,
     matchStartUtcIso,
     matchCanceled: !!match.is_cancelled,
@@ -678,7 +678,7 @@ export async function fetchJoinedMatchPlayers(
     if (!city) continue;
     const matchStart = parseLocal(m.start_date);
     if (!matchStart) continue;
-    const field = normField(m.field_title ?? "");
+    const field = canonicalVenueName(m.field_title ?? "");
     if (!field) continue;
     const key = `${matchStart.getTime()}|${field}`;
     const prior = scheduledByKey.get(key);
