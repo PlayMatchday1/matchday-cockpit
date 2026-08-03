@@ -5,6 +5,7 @@ import { supabase } from "@/lib/supabase";
 import type { GrowthData } from "@/lib/growthAnalytics";
 import styles from "./growth.module.css";
 import { fmtInt, fmtPct, monthLabel } from "./format";
+import GlobalPeriod, { type Period } from "./GlobalPeriod";
 import KpiRow from "./KpiRow";
 import PlayerFunnel from "./PlayerFunnel";
 import BehaviorPanel from "./BehaviorPanel";
@@ -20,6 +21,7 @@ import DataRoomPanel from "./DataRoomPanel";
 export default function GrowthDashboard() {
   const [data, setData] = useState<GrowthData | null>(null);
   const [error, setError] = useState<string | null>(null);
+  const [period, setPeriod] = useState<Period | null>(null);
 
   useEffect(() => {
     let alive = true;
@@ -34,7 +36,11 @@ export default function GrowthDashboard() {
           throw new Error(body?.error ?? `Request failed (${res.status})`);
         }
         const json = (await res.json()) as GrowthData;
-        if (alive) setData(json);
+        if (alive) {
+          setData(json);
+          const ms = json.behaviorOverall.map((p) => p.m);
+          if (ms.length) setPeriod({ start: ms[0], end: ms[ms.length - 1] });
+        }
       } catch (e) {
         if (alive) setError(e instanceof Error ? e.message : "Failed to load");
       }
@@ -62,9 +68,13 @@ export default function GrowthDashboard() {
   }
 
   const rc = data.rowCounts;
+  const months = data.behaviorOverall.map((p) => p.m);
+  const activePeriod: Period = period ?? { start: months[0], end: months[months.length - 1] };
   return (
     <div className={styles.dash}>
       <Header />
+
+      <GlobalPeriod months={months} period={activePeriod} setPeriod={setPeriod} />
 
       <div className={styles.calloutBanner}>
         This data has <b>three start dates</b>, not one. Registrations reach back to{" "}
@@ -74,9 +84,9 @@ export default function GrowthDashboard() {
         start mean &ldquo;no data yet&rdquo;, never zero.
       </div>
 
-      <KpiRow data={data} />
-      <PlayerFunnel data={data} />
-      <BehaviorPanel data={data} />
+      <KpiRow data={data} period={activePeriod} />
+      <PlayerFunnel data={data} period={activePeriod} />
+      <BehaviorPanel data={data} period={activePeriod} />
       <ArppPanel data={data} />
       <CohortPanel data={data} />
       <div className={styles.grid2}>

@@ -2,102 +2,91 @@
 
 import { useMemo, useState } from "react";
 import type { GrowthData } from "@/lib/growthAnalytics";
+import type { Period } from "./GlobalPeriod";
 import styles from "./growth.module.css";
-import { fmtInt, fmtPct, monthLabel } from "./format";
+import { fmtInt, monthLabel } from "./format";
 
-type Period = "current" | "previous" | "year" | "custom";
+// PART 1 + 2: a nested COHORT funnel rendered as a matrix — six stages left to
+// right (Downloads · Registrations · 1 · 3 · 5 · 10 matches), four period rows at
+// once (current month, previous month, year-to-date, custom range). Each play
+// stage counts, of the users who completed sign-up in that window, how many went
+// on to play ≥N non-cancelled non-fake matches EVER (lifetime). Every stage is a
+// strict subset of the prior, so no conversion can exceed 100% — asserted below.
+// Downloads is the one non-nested step (no per-person link).
 
-// Funnel: Downloads → Registrations → Played ≥1 → Played ≥5, over a chosen
-// window. The funnel mixes two clocks (PART 2): registrations count users
-// CREATED in the window; play steps count players who PLAYED in the window. That
-// is stated on the card. Downloads→Registrations is an aggregate ratio of two
-// unlinked totals (store accounts can't be joined to a person) — and it can't
-// even be computed because downloads have no source. The Played1→Played5 step is
-// a genuine per-person conversion (played5 ⊆ played1, same window).
-export default function PlayerFunnel({ data }: { data: GrowthData }) {
-  const months = data.playMonths;
-  const [period, setPeriod] = useState<Period>("current");
-  const [customStart, setCustomStart] = useState(months[0] ?? "2026-01");
-  const [customEnd, setCustomEnd] = useState(months[months.length - 1] ?? "2026-08");
+const STAGES = ["Downloads", "Registrations", "1 match", "3 matches", "5 matches", "10 matches"];
 
-  const window = useMemo(() => {
-    if (period === "current") return [months[months.length - 1]];
-    if (period === "previous") return months.length >= 2 ? [months[months.length - 2]] : [months[months.length - 1]];
-    if (period === "year") {
-      const yr = (months[months.length - 1] ?? "2026").slice(0, 4);
-      return months.filter((m) => m.startsWith(yr));
-    }
+type Cohort = { registrations: number; played1: number; played3: number; played5: number; played10: number };
+
+function sumCohort(rows: GrowthData["funnelByMonth"], monthSet: Set<string>): Cohort {
+  const acc: Cohort = { registrations: 0, played1: 0, played3: 0, played5: 0, played10: 0 };
+  for (const r of rows) {
+    if (!monthSet.has(r.m)) continue;
+    acc.registrations += r.registrations;
+    acc.played1 += r.played1;
+    acc.played3 += r.played3;
+    acc.played5 += r.played5;
+    acc.played10 += r.played10;
+  }
+  return acc;
+}
+
+export default function PlayerFunnel({ data, period }: { data: GrowthData; period: Period }) {
+  const months = data.behaviorOverall.map((p) => p.m);
+  const [customStart, setCustomStart] = useState(period.start);
+  const [customEnd, setCustomEnd] = useState(period.end);
+
+  const rows = useMemo(() => {
+    const end = period.end;
+    const endIdx = months.indexOf(end);
+    const prev = endIdx > 0 ? months[endIdx - 1] : end;
+    const year = end.slice(0, 4);
+    const ytd = months.filter((m) => m.startsWith(year) && m <= end);
     const lo = customStart <= customEnd ? customStart : customEnd;
     const hi = customStart <= customEnd ? customEnd : customStart;
-    return months.filter((m) => m >= lo && m <= hi);
-  }, [period, months, customStart, customEnd]);
-
-  const windowSet = useMemo(() => new Set(window), [window]);
-  const windowIdx = useMemo(
-    () => new Set(window.map((m) => months.indexOf(m))),
-    [window, months],
-  );
-
-  const registrations = data.registrationsByMonth
-    .filter((r) => windowSet.has(r.m))
-    .reduce((a, r) => a + r.count, 0);
-
-  const { played1, played5 } = useMemo(() => {
-    let p1 = 0;
-    let p5 = 0;
-    for (const pl of data.players) {
-      let inWin = 0;
-      for (const idx of pl.plays) if (windowIdx.has(idx)) inWin++;
-      if (inWin >= 1) p1++;
-      if (inWin >= 5) p5++;
-    }
-    return { played1: p1, played5: p5 };
-  }, [data.players, windowIdx]);
-
-  const label =
-    period === "custom" && window.length
-      ? `${monthLabel(window[0])} – ${monthLabel(window[window.length - 1])}`
-      : period === "year"
-        ? `${(months[months.length - 1] ?? "2026").slice(0, 4)} year to date`
-        : monthLabel(window[0] ?? months[months.length - 1]);
+    const custom = months.filter((m) => m >= lo && m <= hi);
+    return [
+      { key: "current", cls: styles.rowCurrent, label: monthLabel(end), months: [end] },
+      { key: "previous", cls: styles.rowPrevious, label: monthLabel(prev), months: [prev] },
+      { key: "year", cls: styles.rowYear, label: `${year} YTD`, months: ytd },
+      {
+        key: "custom",
+        cls: styles.rowCustom,
+        label: custom.length ? `${monthLabel(custom[0])} – ${monthLabel(custom[custom.length - 1])}` : "—",
+        months: custom,
+      },
+    ].map((r) => {
+      const c = sumCohort(data.funnelByMonth, new Set(r.months));
+      // Assert nested — a violation is a bug, not a number to render.
+      const vals = [null, c.registrations, c.played1, c.played3, c.played5, c.played10] as (number | null)[];
+      for (let i = 2; i < vals.length; i++) {
+        if ((vals[i] as number) > (vals[i - 1] as number)) {
+          // eslint-disable-next-line no-console
+          console.error(`Funnel not nested in ${r.key} row at stage ${i}`, vals);
+        }
+      }
+      return { ...r, vals };
+    });
+  }, [data.funnelByMonth, period.end, customStart, customEnd, months]);
 
   return (
     <div className={styles.card}>
       <div className={styles.cardHead}>
         <div>
           <div className={styles.cardTitle}>Player funnel comparison</div>
-          <div className={styles.cardSub}>{label} · counts and step-to-step conversion rates</div>
+          <div className={styles.cardSub}>
+            Counts and step-to-step conversion, shown left to right. Each play stage is the share of that period&rsquo;s
+            sign-up cohort who went on to play that many non-cancelled matches <b>ever</b> — so every stage is a subset of
+            the one before it.
+          </div>
         </div>
-        <div className={styles.segmented} role="tablist" aria-label="Funnel period">
-          {(
-            [
-              ["current", "Current month"],
-              ["previous", "Previous month"],
-              ["year", "Current year"],
-              ["custom", "Custom period"],
-            ] as [Period, string][]
-          ).map(([p, txt]) => (
-            <button
-              key={p}
-              type="button"
-              className={`${styles.segBtn} ${period === p ? styles.segBtnActive : ""}`}
-              aria-pressed={period === p}
-              onClick={() => setPeriod(p)}
-            >
-              {txt}
-            </button>
-          ))}
-        </div>
-      </div>
-
-      {period === "custom" && (
-        <div className={styles.customDates}>
+        <div className={styles.controlsRow}>
           <div className={styles.field}>
-            <label className={styles.fieldLabel} htmlFor="funnelStart">
-              Start month
+            <label className={styles.fieldLabel} htmlFor="funnelCustomStart">
+              Custom start
             </label>
             <input
-              id="funnelStart"
+              id="funnelCustomStart"
               className={styles.control}
               type="month"
               min={months[0]}
@@ -107,11 +96,11 @@ export default function PlayerFunnel({ data }: { data: GrowthData }) {
             />
           </div>
           <div className={styles.field}>
-            <label className={styles.fieldLabel} htmlFor="funnelEnd">
-              End month
+            <label className={styles.fieldLabel} htmlFor="funnelCustomEnd">
+              Custom end
             </label>
             <input
-              id="funnelEnd"
+              id="funnelCustomEnd"
               className={styles.control}
               type="month"
               min={months[0]}
@@ -121,50 +110,91 @@ export default function PlayerFunnel({ data }: { data: GrowthData }) {
             />
           </div>
         </div>
-      )}
+      </div>
 
-      <div className={styles.funnel}>
-        <FunnelStep bg="var(--gold-dot)" ink="var(--ink)" label="App downloads" value={null} />
-        <div className={`${styles.funnelConv} ${styles.funnelConvAggregate}`}>
-          Downloads → Registrations: aggregate ratio, not per-user conversion (store sync not connected)
+      <div className={styles.funnelScroll}>
+        <div className={styles.funnelMatrix}>
+          {/* header row */}
+          <div className={`${styles.funnelRow} ${styles.funnelHeader}`}>
+            <div className={styles.funnelPeriod}>Period</div>
+            {STAGES.map((s, i) => (
+              <FragmentCell key={s} stage={s} isLast={i === STAGES.length - 1} header />
+            ))}
+          </div>
+          {/* period rows */}
+          {rows.map((r) => (
+            <div key={r.key} className={`${styles.funnelRow} ${r.cls}`}>
+              <div className={styles.funnelPeriod}>{r.label}</div>
+              {r.vals.map((v, i) => (
+                <FragmentCell
+                  key={i}
+                  stage={STAGES[i]}
+                  value={v}
+                  prev={i > 0 ? r.vals[i - 1] : null}
+                  isLast={i === r.vals.length - 1}
+                  firstArrow={i === 0}
+                />
+              ))}
+            </div>
+          ))}
         </div>
-        <FunnelStep bg="var(--forest)" ink="var(--surface)" label="Registrations (created in window)" value={registrations} />
-        <div className={styles.funnelConv}>
-          Registrations → Played ≥1: {fmtPct(registrations ? played1 / registrations : 0)} — two clocks (created vs played)
-        </div>
-        <FunnelStep bg="#1f6d4e" ink="var(--surface)" label="Played ≥1 match" value={played1} />
-        <div className={styles.funnelConv}>
-          Played ≥1 → Played ≥5: {fmtPct(played1 ? played5 / played1 : 0)} — per-person conversion
-        </div>
-        <FunnelStep bg="var(--accent)" ink="var(--ink)" label="Played ≥5 matches" value={played5} />
       </div>
 
       <div className={styles.funnelNote}>
-        Registrations count users <b>created</b> in the window; the two play steps count players who <b>played</b> in
-        it — the funnel deliberately mixes those two clocks. The first step (downloads → registrations) is an aggregate
-        ratio of two totals that cannot be linked to a person; every later step is a real per-person conversion.
+        &ldquo;Went on to play&rdquo; means <b>ever</b> (lifetime matches), counted for the users who completed sign-up in
+        each period. Downloads has no per-person source, so its column is an em-dash and the Downloads → Registrations
+        step is an <b>aggregate ratio, not a per-user conversion</b>; every later step is a real per-person conversion.
       </div>
     </div>
   );
 }
 
-function FunnelStep({
-  bg,
-  ink,
-  label,
+// One stage cell plus (unless last) the conversion cell that follows it.
+function FragmentCell({
+  stage,
   value,
+  prev,
+  isLast,
+  header,
+  firstArrow,
 }: {
-  bg: string;
-  ink: string;
-  label: string;
-  value: number | null;
+  stage: string;
+  value?: number | null;
+  prev?: number | null;
+  isLast: boolean;
+  header?: boolean;
+  firstArrow?: boolean;
 }) {
-  return (
-    <div className={styles.funnelStep} style={{ background: bg, color: ink }}>
-      <span className={styles.funnelStepLabel}>{label}</span>
-      <span className={styles.funnelStepValue}>
-        {value == null ? "—" : fmtInt(value)}
-      </span>
+  const stageEl = header ? (
+    <div className={`${styles.funnelStage} ${styles.funnelStageHeader}`}>
+      <span>{stage}</span>
     </div>
+  ) : (
+    <div className={styles.funnelStage}>
+      <b>{value == null ? "—" : fmtInt(value)}</b>
+      <span>{stage}</span>
+    </div>
+  );
+
+  if (isLast) return stageEl;
+
+  let convEl;
+  if (header) {
+    convEl = <div className={styles.funnelConvHeader}>→</div>;
+  } else if (firstArrow) {
+    convEl = <div className={styles.funnelAggNote}>aggregate ratio (no per-user link)</div>;
+  } else {
+    const pct = prev ? ((value as number) / (prev as number)) * 100 : 0;
+    convEl = (
+      <div className={styles.funnelConversion}>
+        {Math.min(pct, 100).toFixed(1)}%<small>conversion</small>
+      </div>
+    );
+  }
+  return (
+    <>
+      {stageEl}
+      {convEl}
+    </>
   );
 }

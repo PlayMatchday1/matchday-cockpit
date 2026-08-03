@@ -236,7 +236,10 @@ export type GrowthData = {
     played1: number;
     played5: number;
   };
-  registrationsByMonth: { m: string; count: number }[]; // completed, non-fake, by created month, 2023+
+  registrationsByMonth: { m: string; count: number }[]; // completed, non-fake, by signup month, 2023+
+  // Nested cohort funnel by signup month (additive across months). downloads is
+  // not here — it has no per-person source.
+  funnelByMonth: { m: string; registrations: number; played1: number; played3: number; played5: number; played10: number }[];
   players: PlayerRow[]; // one row per played player (7,517); powers funnel, churn, data room
   behaviorOverall: BehaviorPoint[];
   behaviorByCity: Record<string, BehaviorPoint[]>;
@@ -289,10 +292,12 @@ export function computeGrowth(input: RawInput): GrowthData {
     rawDeclaredByUser.set(u.id, u.preferable_city_name?.trim() || null);
   }
 
+  // Registrations are bucketed by completed_sign_up_at — the moment a user
+  // actually became a registered player — matching the cohort funnel below.
   const regByMonth = new Map<string, number>();
   for (const u of completedUsers) {
-    if (!u.created_at) continue;
-    const k = monthKey(u.created_at);
+    if (!u.completed_sign_up_at) continue;
+    const k = monthKey(u.completed_sign_up_at);
     regByMonth.set(k, (regByMonth.get(k) ?? 0) + 1);
   }
 
@@ -412,6 +417,39 @@ export function computeGrowth(input: RawInput): GrowthData {
   const played1 = playerRows.length;
   const played5 = playerRows.filter((p) => p.matches >= 5).length;
 
+  // ── nested cohort funnel ────────────────────────────────────────────────────
+  // PART 1: a COHORT funnel, not two independent counts. For the cohort of users
+  // whose completed_sign_up_at falls in a month, count how many of THOSE SAME
+  // users went on to play ≥1/≥3/≥5/≥10 non-cancelled non-fake matches EVER
+  // (lifetime). Each stage is a strict subset of the prior, so summing months
+  // (each user belongs to exactly one signup month) can never make a conversion
+  // exceed 100%. Downloads has no per-person link and is omitted here (the client
+  // renders it as the one non-nested "aggregate ratio" step).
+  const lifetimeMatches = new Map<number, number>();
+  for (const [u, a] of agg) lifetimeMatches.set(u, a.count);
+  const funnelAgg = new Map<string, { registrations: number; played1: number; played3: number; played5: number; played10: number }>();
+  for (const u of completedUsers) {
+    if (!u.completed_sign_up_at) continue;
+    const m = monthKey(u.completed_sign_up_at);
+    let row = funnelAgg.get(m);
+    if (!row) funnelAgg.set(m, (row = { registrations: 0, played1: 0, played3: 0, played5: 0, played10: 0 }));
+    row.registrations++;
+    const lm = lifetimeMatches.get(u.id) ?? 0;
+    if (lm >= 1) row.played1++;
+    if (lm >= 3) row.played3++;
+    if (lm >= 5) row.played5++;
+    if (lm >= 10) row.played10++;
+  }
+  const funnelByMonth = [...funnelAgg.entries()]
+    .sort()
+    .map(([m, r]) => ({ m, ...r }));
+  // Invariant (asserted again on the client before render): nested subsets.
+  for (const r of funnelByMonth) {
+    if (!(r.registrations >= r.played1 && r.played1 >= r.played3 && r.played3 >= r.played5 && r.played5 >= r.played10)) {
+      throw new Error(`funnel cohort not nested for ${r.m}: ${JSON.stringify(r)}`);
+    }
+  }
+
   // Cities that actually appear in play data (canonical, ordered).
   const playCitySet = new Set<string>();
   for (const p of playerRows) playCitySet.add(p.city);
@@ -456,10 +494,10 @@ export function computeGrowth(input: RawInput): GrowthData {
   // registrations by city (declared). Additive. No field dimension.
   const regByMonthCity = new Map<string, Map<string, number>>();
   for (const u of completedUsers) {
-    if (!u.created_at) continue;
+    if (!u.completed_sign_up_at) continue;
     const city = normalizeDeclared(u.preferable_city_name);
     if (!city) continue;
-    upsert2(regByMonthCity, city, monthKey(u.created_at));
+    upsert2(regByMonthCity, city, monthKey(u.completed_sign_up_at));
   }
 
   const behaviorOverall = behaviorAxis.map<BehaviorPoint>((m) => ({
@@ -683,6 +721,7 @@ export function computeGrowth(input: RawInput): GrowthData {
       played5,
     },
     registrationsByMonth: [...regByMonth.entries()].sort().map(([m, count]) => ({ m, count })),
+    funnelByMonth,
     players: playerRows,
     behaviorOverall,
     behaviorByCity,

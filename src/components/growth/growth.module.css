@@ -22,6 +22,11 @@
   --gold-ink: #8a6300;
   --ns-ink: #6f6858;
   --negative: #8f2d15;
+  /* funnel period-row tints — the design's four coloured rows mapped onto house
+   * neutrals (no imported hues): current=--mint, previous=--chip-bg,
+   * year=--slot-bg, custom=--col-bg. */
+  --slot-bg: #f1f5f2;
+  --col-bg: #eef1f5;
   /* cohort diverging tints — two hues + neutral midpoint (never a rainbow) */
   --div-above-2: #bfe8d2;
   --div-above-1: #dcf0e5;
@@ -650,4 +655,144 @@
   font-size: 0.78rem;
   color: var(--muted);
   margin: 8px 0;
+}
+
+/* ── global period control (design's period-overview) ─────────────────────── */
+.periodCard {
+  background: var(--surface);
+  border: 1px solid var(--line);
+  border-radius: 14px;
+  padding: 14px 16px;
+  margin-bottom: 16px;
+}
+.periodTop {
+  display: flex;
+  align-items: baseline;
+  justify-content: space-between;
+  gap: 16px;
+  margin-bottom: 10px;
+}
+.periodTitle {
+  font-size: 0.7rem;
+  text-transform: uppercase;
+  letter-spacing: 0.08em;
+  font-weight: 800;
+  color: var(--muted);
+}
+.periodValue {
+  font-size: 0.9rem;
+  font-weight: 800;
+  color: var(--forest);
+}
+.dateGrid {
+  display: grid;
+  grid-template-columns: repeat(4, minmax(120px, 1fr));
+  gap: 10px;
+}
+@media (max-width: 640px) {
+  .dateGrid {
+    grid-template-columns: repeat(2, minmax(0, 1fr));
+  }
+}
+
+/* ── funnel matrix (design geometry, house palette) ───────────────────────── */
+.funnelScroll {
+  overflow-x: auto;
+  padding-bottom: 4px;
+}
+.funnelMatrix {
+  min-width: 1080px;
+  display: grid;
+  gap: 7px;
+}
+.funnelRow {
+  display: grid;
+  grid-template-columns: 120px repeat(5, minmax(105px, 1fr) 48px) minmax(105px, 1fr);
+  align-items: center;
+}
+.funnelHeader {
+  color: var(--muted);
+  font-size: 0.6rem;
+  font-weight: 800;
+  text-transform: uppercase;
+  letter-spacing: 0.06em;
+}
+.funnelPeriod {
+  font-weight: 800;
+  font-size: 0.78rem;
+  padding: 0 10px;
+  color: var(--ink);
+}
+.funnelStage {
+  background: var(--slot-bg);
+  border: 1px solid var(--line);
+  border-radius: 11px;
+  padding: 12px 10px;
+  min-height: 70px;
+  display: flex;
+  flex-direction: column;
+  justify-content: center;
+}
+.funnelStage b {
+  font-size: 1.15rem;
+  font-weight: 800;
+  color: var(--forest);
+}
+.funnelStage span {
+  font-size: 0.68rem;
+  color: var(--muted);
+  margin-top: 2px;
+}
+.funnelStageHeader {
+  background: transparent;
+  border: 0;
+  min-height: auto;
+  padding: 2px 10px;
+}
+.funnelStageHeader span {
+  font-weight: 800;
+  color: var(--ink);
+  font-size: 0.68rem;
+  text-transform: uppercase;
+  letter-spacing: 0.04em;
+}
+.funnelConversion {
+  text-align: center;
+  color: var(--ok-ink);
+  font-size: 0.66rem;
+  font-weight: 800;
+  display: flex;
+  flex-direction: column;
+  align-items: center;
+}
+.funnelConversion small {
+  color: var(--muted);
+  font-weight: 700;
+  font-size: 0.55rem;
+}
+.funnelConvHeader {
+  text-align: center;
+  color: var(--muted);
+  font-weight: 800;
+}
+.funnelAggNote {
+  text-align: center;
+  color: var(--gold-ink);
+  font-size: 0.58rem;
+  font-weight: 700;
+  line-height: 1.2;
+  padding: 0 2px;
+}
+.rowCurrent .funnelStage {
+  background: var(--mint);
+  border-color: var(--div-above-2);
+}
+.rowPrevious .funnelStage {
+  background: var(--chip-bg);
+}
+.rowYear .funnelStage {
+  background: var(--slot-bg);
+}
+.rowCustom .funnelStage {
+  background: var(--col-bg);
 }

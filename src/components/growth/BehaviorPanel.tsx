@@ -2,200 +2,165 @@
 
 import { useMemo, useState } from "react";
 import type { BehaviorPoint, GrowthData } from "@/lib/growthAnalytics";
+import type { Period } from "./GlobalPeriod";
 import styles from "./growth.module.css";
-import { LineChart, type Series } from "./charts";
-import { fmtInt, monthLabel, monthShort } from "./format";
+import { downloadCsv, fmtInt, monthLabel } from "./format";
 
-type Metric = "general" | "registrations" | "newPlayers" | "totalPlayers" | "spots";
-type Scope = "network" | "city" | "field";
-
-const SERIES_META: { key: Exclude<Metric, "general">; label: string; color: string }[] = [
-  { key: "registrations", label: "Registrations", color: "var(--forest)" },
-  { key: "newPlayers", label: "New players", color: "var(--accent)" },
-  { key: "totalPlayers", label: "Total players", color: "var(--gold-dot)" },
-  { key: "spots", label: "Spots booked", color: "var(--ns-ink)" },
+// PART 4: Player behavior is a TABLE (the design's growthSummary), not a chart —
+// metrics as rows, months as columns, with Export and a City/Field breakdown.
+// Registrations run from 2023; play-derived metrics only from 2026, shown as an
+// em-dash before they exist (never zero). Total players is a distinct headcount
+// (non-additive), so the breakdown shows it at the end of the range, not summed.
+const METRICS: { key: keyof Omit<BehaviorPoint, "m">; label: string }[] = [
+  { key: "registrations", label: "Registrations" },
+  { key: "newPlayers", label: "New players" },
+  { key: "totalPlayers", label: "Total players" },
+  { key: "spots", label: "Spots booked" },
 ];
 
-// PART 3: registrations / new / total / spots over time, with a Network / City /
-// Field scope. Registrations run from 2023-03; every play-derived series starts
-// 2026-01 and is simply NOT DRAWN before then (never plotted at zero) with a gold
-// "play data starts" marker — so nobody reads the empty region as "we had no
-// players" (PART 1). Total players is a distinct count (non-additive), so it is
-// read from the server's per-scope precompute, never summed.
-export default function BehaviorPanel({ data }: { data: GrowthData }) {
-  const [metric, setMetric] = useState<Metric>("general");
-  const [scope, setScope] = useState<Scope>("network");
-  const cityOptions = data.cities;
-  const fieldEntries = Object.entries(data.behaviorByField).sort((a, b) => a[1].label.localeCompare(b[1].label));
-  const [city, setCity] = useState(cityOptions[0] ?? "");
-  const [field, setField] = useState(fieldEntries[0]?.[0] ?? "");
+export default function BehaviorPanel({ data, period }: { data: GrowthData; period: Period }) {
+  const [view, setView] = useState<"city" | "field">("city");
+  const months = data.behaviorOverall.map((p) => p.m).filter((m) => m >= period.start && m <= period.end);
+  const byMonth = useMemo(() => new Map(data.behaviorOverall.map((p) => [p.m, p])), [data.behaviorOverall]);
 
-  const points: BehaviorPoint[] =
-    scope === "network"
-      ? data.behaviorOverall
-      : scope === "city"
-        ? data.behaviorByCity[city] ?? []
-        : data.behaviorByField[field]?.points ?? [];
+  const cell = (m: string, key: keyof Omit<BehaviorPoint, "m">) => {
+    const p = byMonth.get(m);
+    const v = p ? p[key] : null;
+    return v == null ? <span className={styles.tableGap}>—</span> : fmtInt(v);
+  };
 
-  const axis = points.map((p) => p.m);
-  const playFloorIdx = axis.indexOf(data.floors.play);
-  const regDisabled = scope === "field"; // fields carry no registrations
+  // detail: entities × metrics over the window (additive summed; total = end-of-range).
+  const endMonth = months[months.length - 1] ?? period.end;
+  const detail = useMemo(() => {
+    const sumOver = (pts: BehaviorPoint[], key: keyof Omit<BehaviorPoint, "m">) =>
+      pts.filter((p) => p.m >= period.start && p.m <= period.end).reduce((a, p) => a + (p[key] ?? 0), 0);
+    const endVal = (pts: BehaviorPoint[], key: keyof Omit<BehaviorPoint, "m">) =>
+      pts.find((p) => p.m === endMonth)?.[key] ?? 0;
+    if (view === "city") {
+      return data.cities.map((c) => {
+        const pts = data.behaviorByCity[c] ?? [];
+        return {
+          name: c,
+          registrations: sumOver(pts, "registrations"),
+          newPlayers: sumOver(pts, "newPlayers"),
+          totalPlayers: endVal(pts, "totalPlayers"),
+          spots: sumOver(pts, "spots"),
+        };
+      });
+    }
+    return Object.entries(data.behaviorByField)
+      .sort((a, b) => a[1].label.localeCompare(b[1].label))
+      .map(([, v]) => ({
+        name: `${v.label} · ${v.city}`,
+        registrations: null as number | null,
+        newPlayers: sumOver(v.points, "newPlayers"),
+        totalPlayers: endVal(v.points, "totalPlayers"),
+        spots: sumOver(v.points, "spots"),
+      }));
+  }, [view, data, period, endMonth]);
 
-  const visible = useMemo(() => {
-    const keys: Exclude<Metric, "general">[] =
-      metric === "general"
-        ? SERIES_META.filter((s) => !(regDisabled && s.key === "registrations")).map((s) => s.key)
-        : [metric];
-    return SERIES_META.filter((s) => keys.includes(s.key));
-  }, [metric, regDisabled]);
-
-  const series: Series[] = visible.map((s) => ({
-    label: s.label,
-    color: s.color,
-    values: points.map((p) => p[s.key]),
-  }));
-
-  const startMarkers =
-    playFloorIdx > 0 && visible.some((s) => s.key !== "registrations")
-      ? [{ index: playFloorIdx, label: "play data starts" }]
-      : [];
-
-  // values table: months as rows; blanks before a series exists (not zero).
-  const tableMonths = axis.filter((_, i) => points[i] && series.some((s) => s.values[i] != null));
+  function exportCsv() {
+    const header = ["Metric", ...months.map((m) => monthLabel(m))];
+    const body = METRICS.map((mt) => [
+      mt.label,
+      ...months.map((m) => {
+        const p = byMonth.get(m);
+        const v = p ? p[mt.key] : null;
+        return v == null ? "" : v;
+      }),
+    ]);
+    downloadCsv(`player-behavior-${period.start}_${period.end}.csv`, [header, ...body]);
+  }
 
   return (
     <div className={styles.card}>
       <div className={styles.cardHead}>
         <div>
-          <div className={styles.cardTitle}>Player behavior evolution</div>
+          <div className={styles.cardTitle}>Player behavior</div>
           <div className={styles.cardSub}>
-            Registrations, new players, active players and spots booked over time
+            Registrations, new players, total players and spots booked · oldest to newest, over the selected period.
           </div>
         </div>
-        <div className={styles.segmented} aria-label="Metric">
-          {(
-            [
-              ["general", "General"],
-              ["registrations", "Registrations"],
-              ["newPlayers", "New players"],
-              ["totalPlayers", "Total players"],
-              ["spots", "Spots"],
-            ] as [Metric, string][]
-          ).map(([m, txt]) => (
-            <button
-              key={m}
-              type="button"
-              disabled={regDisabled && m === "registrations"}
-              className={`${styles.segBtn} ${metric === m ? styles.segBtnActive : ""}`}
-              aria-pressed={metric === m}
-              onClick={() => setMetric(m)}
-              style={regDisabled && m === "registrations" ? { opacity: 0.4, cursor: "not-allowed" } : undefined}
-            >
-              {txt}
-            </button>
-          ))}
-        </div>
+        <button type="button" className={`${styles.btn} ${styles.btnGhost}`} onClick={exportCsv}>
+          Export
+        </button>
       </div>
 
-      <div className={styles.controlsRow} style={{ marginBottom: 12 }}>
+      <div className={styles.tableWrap}>
+        <table className={styles.dataTable}>
+          <thead>
+            <tr>
+              <th>Metric</th>
+              {months.map((m) => (
+                <th key={m}>{monthLabel(m)}</th>
+              ))}
+            </tr>
+          </thead>
+          <tbody>
+            {METRICS.map((mt) => (
+              <tr key={mt.key}>
+                <td>{mt.label}</td>
+                {months.map((m) => (
+                  <td key={m}>{cell(m, mt.key)}</td>
+                ))}
+              </tr>
+            ))}
+          </tbody>
+        </table>
+      </div>
+
+      <div className={styles.controlsRow} style={{ margin: "16px 0 10px" }}>
         <div className={styles.field}>
-          <span className={styles.fieldLabel}>View</span>
+          <span className={styles.fieldLabel}>Breakdown</span>
           <div className={styles.segmented}>
             {(
               [
-                ["network", "Network"],
-                ["city", "By city"],
-                ["field", "By field"],
-              ] as [Scope, string][]
-            ).map(([s, txt]) => (
+                ["city", "City View"],
+                ["field", "Field View"],
+              ] as ["city" | "field", string][]
+            ).map(([v, txt]) => (
               <button
-                key={s}
+                key={v}
                 type="button"
-                className={`${styles.segBtn} ${scope === s ? styles.segBtnActive : ""}`}
-                aria-pressed={scope === s}
-                onClick={() => setScope(s)}
+                className={`${styles.segBtn} ${view === v ? styles.segBtnActive : ""}`}
+                aria-pressed={view === v}
+                onClick={() => setView(v)}
               >
                 {txt}
               </button>
             ))}
           </div>
         </div>
-        {scope === "city" && (
-          <div className={styles.field}>
-            <label className={styles.fieldLabel} htmlFor="behaviorCity">
-              City
-            </label>
-            <select id="behaviorCity" className={styles.control} value={city} onChange={(e) => setCity(e.target.value)}>
-              {cityOptions.map((c) => (
-                <option key={c} value={c}>
-                  {c}
-                </option>
-              ))}
-            </select>
-          </div>
-        )}
-        {scope === "field" && (
-          <div className={styles.field}>
-            <label className={styles.fieldLabel} htmlFor="behaviorField">
-              Field
-            </label>
-            <select id="behaviorField" className={styles.control} value={field} onChange={(e) => setField(e.target.value)}>
-              {fieldEntries.map(([k, v]) => (
-                <option key={k} value={k}>
-                  {v.label} · {v.city}
-                </option>
-              ))}
-            </select>
-          </div>
-        )}
+        <span className={styles.summaryLine}>
+          {view === "city" ? "By city" : "By field"} · additive metrics summed over the range; total players at{" "}
+          {monthLabel(endMonth)}
+        </span>
       </div>
 
-      <LineChart axis={axis} series={series} startMarkers={startMarkers} formatAxis={monthShort} formatValue={fmtInt} />
-
-      <div className={styles.legend}>
-        {series.map((s) => (
-          <span key={s.label} className={styles.legendItem}>
-            <i className={styles.legendDot} style={{ background: s.color }} />
-            {s.label}
-          </span>
-        ))}
-        {startMarkers.length > 0 && (
-          <span className={styles.seriesStartFlag}>▎play-derived series begin {monthLabel(data.floors.play)}</span>
-        )}
-      </div>
-
-      <details style={{ marginTop: 12 }}>
-        <summary className={styles.fieldLabel} style={{ cursor: "pointer" }}>
-          Show values
-        </summary>
-        <div className={styles.tableWrap} style={{ marginTop: 8, maxHeight: 320, overflowY: "auto" }}>
-          <table className={styles.dataTable}>
-            <thead>
-              <tr>
-                <th>Month</th>
-                {series.map((s) => (
-                  <th key={s.label}>{s.label}</th>
-                ))}
+      <div className={`${styles.tableWrap} ${styles.scrollBody}`}>
+        <table className={styles.recordTable}>
+          <thead>
+            <tr>
+              <th>{view === "city" ? "City" : "Field"}</th>
+              <th className="num">Registrations</th>
+              <th className="num">New players</th>
+              <th className="num">Total players</th>
+              <th className="num">Spots booked</th>
+            </tr>
+          </thead>
+          <tbody>
+            {detail.map((r) => (
+              <tr key={r.name}>
+                <td>{r.name}</td>
+                <td className="num">{r.registrations == null ? <span className={styles.tableGap}>—</span> : fmtInt(r.registrations)}</td>
+                <td className="num">{fmtInt(r.newPlayers)}</td>
+                <td className="num">{fmtInt(r.totalPlayers)}</td>
+                <td className="num">{fmtInt(r.spots)}</td>
               </tr>
-            </thead>
-            <tbody>
-              {tableMonths.map((m) => {
-                const i = axis.indexOf(m);
-                return (
-                  <tr key={m}>
-                    <td>{monthLabel(m)}</td>
-                    {series.map((s) => (
-                      <td key={s.label}>
-                        {s.values[i] == null ? <span className={styles.tableGap}>—</span> : fmtInt(s.values[i]!)}
-                      </td>
-                    ))}
-                  </tr>
-                );
-              })}
-            </tbody>
-          </table>
-        </div>
-      </details>
+            ))}
+          </tbody>
+        </table>
+      </div>
     </div>
   );
 }

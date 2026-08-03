@@ -1,18 +1,16 @@
 "use client";
 
-import { useMemo, useState } from "react";
+import { useState } from "react";
 import type { ArppPoint, GrowthData } from "@/lib/growthAnalytics";
 import styles from "./growth.module.css";
-import { LineChart } from "./charts";
-import { fmtInt, fmtMoney, fmtPct, monthLabel, monthShort } from "./format";
+import { fmtInt, fmtMoney, fmtPct, monthLabel } from "./format";
 
-// PART 4 + DECISION 2. Monthly ARPP only (a whole-period ARPP has a cumulative
-// denominator and is meaningless — never rendered). numerator = fin_revenue net
-// that month; denominator = players who PLAYED that month ∪ members ACTIVE that
-// month, because members are billed on the 1st whether or not they play — so the
-// denominator must cover them or ARPP spikes in months members sit out. YoY and
-// per-year cells are GONE: no 2025 revenue exists, so there is nothing to compare
-// to and no element is rendered where one would have been.
+// PART 4 + PART 5 form fix: ARPP is a TABLE (the design's arppSummary + detail),
+// not a chart. Monthly only (DECISION 2): numerator = fin_revenue net that month;
+// denominator = players who PLAYED that month ∪ members ACTIVE that month —
+// members are billed on the 1st regardless of play. No YoY / per-year cells: no
+// 2025 revenue exists. Field-level ARPP is not offered — the revenue ledger is
+// not keyed to fields, only cities.
 export default function ArppPanel({ data }: { data: GrowthData }) {
   const cityKeys = Object.keys(data.arppByCity)
     .filter((c) => data.arppByCity[c].some((p) => p.net > 0 || p.denom > 0))
@@ -25,9 +23,7 @@ export default function ArppPanel({ data }: { data: GrowthData }) {
   const cur = withData[withData.length - 1];
   const prev = withData[withData.length - 2];
   const mom = cur && prev && prev.arpp ? (cur.arpp - prev.arpp) / prev.arpp : null;
-  const curPartial = cur?.m === currentMonth;
-
-  const periodNet = useMemo(() => withData.reduce((a, p) => a + p.net, 0), [withData]);
+  const periodNet = withData.reduce((a, p) => a + p.net, 0);
 
   return (
     <div className={styles.card}>
@@ -36,7 +32,7 @@ export default function ArppPanel({ data }: { data: GrowthData }) {
           <div className={styles.cardTitle}>Average revenue per player</div>
           <div className={styles.cardSub}>
             Monthly. Numerator = net revenue that month; denominator = players who played that month plus members active
-            that month.
+            that month. Selected month compared with the previous month.
           </div>
         </div>
         <div className={styles.field}>
@@ -44,7 +40,7 @@ export default function ArppPanel({ data }: { data: GrowthData }) {
             View
           </label>
           <select id="arppView" className={styles.control} value={view} onChange={(e) => setView(e.target.value)}>
-            <option value="General">General (network)</option>
+            <option value="General">General (Matchday)</option>
             {cityKeys.map((c) => (
               <option key={c} value={c}>
                 {c}
@@ -54,47 +50,41 @@ export default function ArppPanel({ data }: { data: GrowthData }) {
         </div>
       </div>
 
-      {cur && prev ? (
-        <div className={styles.arppCompare}>
-          <div className={styles.arppBox}>
-            <div className={styles.arppBoxLabel}>
-              {monthLabel(cur.m)}
-              {curPartial ? " — month in progress" : ""}
-            </div>
-            <div className={styles.arppBoxValue}>{fmtMoney(cur.arpp, 2)}</div>
-            {mom != null && (
-              <span className={mom >= 0 ? styles.statusPos : styles.statusNeg}>
-                {mom >= 0 ? "▲" : "▼"} {fmtPct(Math.abs(mom))} MoM
-              </span>
-            )}
-          </div>
-          <div className={styles.arppVs}>VS</div>
-          <div className={styles.arppBox}>
-            <div className={styles.arppBoxLabel}>{monthLabel(prev.m)}</div>
-            <div className={styles.arppBoxValue}>{fmtMoney(prev.arpp, 2)}</div>
-            <span className={styles.arppBoxLabel}>Previous month</span>
-          </div>
-        </div>
-      ) : (
-        <div className={styles.stateMsg}>No revenue for this view yet.</div>
-      )}
+      {/* summary table: current vs previous month + MoM */}
+      <div className={styles.tableWrap}>
+        <table className={styles.dataTable}>
+          <thead>
+            <tr>
+              <th>View</th>
+              <th>{cur ? monthLabel(cur.m) : "Current"}</th>
+              <th>{prev ? monthLabel(prev.m) : "Previous"}</th>
+              <th>MoM</th>
+            </tr>
+          </thead>
+          <tbody>
+            <tr>
+              <td>{view}</td>
+              <td>
+                {cur ? fmtMoney(cur.arpp, 2) : "—"}
+                {cur?.m === currentMonth ? " °" : ""}
+              </td>
+              <td>{prev ? fmtMoney(prev.arpp, 2) : "—"}</td>
+              <td>
+                {mom == null ? (
+                  "—"
+                ) : (
+                  <span className={mom >= 0 ? styles.statusPos : styles.statusNeg}>
+                    {mom >= 0 ? "▲" : "▼"} {fmtPct(Math.abs(mom))}
+                  </span>
+                )}
+              </td>
+            </tr>
+          </tbody>
+        </table>
+      </div>
 
-      {curPartial && (
-        <div className={styles.footnote}>
-          The current month is still running, so its denominator already includes every active member (billed on the 1st)
-          while play is only part-way through — the MoM figure will settle upward as the month completes.
-        </div>
-      )}
-
-      <LineChart
-        axis={withData.map((p) => p.m)}
-        series={[{ label: "ARPP", color: "var(--accent)", values: withData.map((p) => p.arpp) }]}
-        height={200}
-        formatAxis={monthShort}
-        formatValue={(v) => fmtMoney(v, 2)}
-      />
-
-      <div className={styles.tableWrap} style={{ marginTop: 12 }}>
+      {/* monthly detail: numerator, denominator and its split */}
+      <div className={styles.tableWrap} style={{ marginTop: 14 }}>
         <table className={styles.dataTable}>
           <thead>
             <tr>
@@ -126,8 +116,9 @@ export default function ArppPanel({ data }: { data: GrowthData }) {
         </table>
       </div>
       <div className={styles.footnote}>
-        ° current month in progress. Net revenue for this view totals {fmtMoney(periodNet)} across the shown months.
-        Same-month-last-year is not shown: no 2025 revenue exists.
+        ° current month in progress — its denominator already includes every active member while play is only part-way
+        through, so ARPP will settle upward. Net revenue for this view totals {fmtMoney(periodNet)} across the shown
+        months. Same-month-last-year is not shown: no 2025 revenue exists.
       </div>
     </div>
   );
