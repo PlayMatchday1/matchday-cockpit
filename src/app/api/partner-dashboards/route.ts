@@ -7,7 +7,11 @@
 //
 // Admin-gated on app_users.is_admin (authenticateAdmin → service-role client).
 // Player emails are aggregated into stats/payment server-side; raw rows never
-// leave. Read-only: this route performs no writes and touches no mdapi_* table.
+// leave. GET is read-only. POST marks a single payment period paid/unpaid by
+// writing partner_weekly_payments — the ONLY write here, and it touches no
+// mdapi_* table. The paid amount is snapshotted from a server-side recompute of
+// the period (never trusted from the client) so a later data sync can't silently
+// change what was recorded as paid.
 
 import { authenticateAdmin } from "@/lib/adminAuth";
 import {
@@ -100,4 +104,95 @@ export async function GET(req: Request) {
   }
 
   return Response.json({ partners: out });
+}
+
+// Mark ONE payment period paid (or undo it). Body:
+//   { partnerId: string, weekStartDate: "YYYY-MM-DD", action: "paid" | "unpaid", paidAt?: "YYYY-MM-DD" }
+// The amount is NOT taken from the client: we recompute the partner's periods
+// server-side and snapshot the target period's owedAmount, so what gets recorded
+// as paid is the authoritative figure at mark time. partner_weekly_payments has
+// at most one row per (partner_dashboard_id, week_start_date); we select-then-
+// update/insert rather than rely on an ON CONFLICT constraint.
+export async function POST(req: Request) {
+  const auth = await authenticateAdmin(req);
+  if (!auth.ok) return Response.json({ error: auth.error }, { status: auth.status });
+  const supabase = auth.supabase;
+
+  const body = (await req.json().catch(() => null)) as
+    | { partnerId?: unknown; weekStartDate?: unknown; action?: unknown; paidAt?: unknown }
+    | null;
+  const partnerId = typeof body?.partnerId === "string" ? body.partnerId : "";
+  const weekStartDate = typeof body?.weekStartDate === "string" ? body.weekStartDate.slice(0, 10) : "";
+  const action = body?.action === "paid" || body?.action === "unpaid" ? body.action : "";
+  if (!partnerId || !/^\d{4}-\d{2}-\d{2}$/.test(weekStartDate) || !action) {
+    return Response.json({ error: "partnerId, weekStartDate (YYYY-MM-DD) and action (paid|unpaid) are required" }, { status: 400 });
+  }
+  const paidAt = typeof body?.paidAt === "string" && /^\d{4}-\d{2}-\d{2}$/.test(body.paidAt)
+    ? body.paidAt
+    : new Date().toISOString().slice(0, 10);
+
+  const partner = (await fetchAllPartners(supabase)).find((p) => p.id === partnerId);
+  if (!partner) return Response.json({ error: "Partner not found" }, { status: 404 });
+
+  // Recompute this partner's periods to get the authoritative row for the target
+  // week (owedAmount snapshot + open-period guard).
+  const { rows, extra } = await fetchPartnerRows(supabase, partner.venueId);
+  const records = await fetchPartnerWeeklyPayments(supabase, partner.id);
+  const payment = computeWeeklyPayments(
+    rows,
+    extra,
+    {
+      revenueSharePct: partner.revenueSharePct,
+      paymentStartDate: partner.paymentStartDate,
+      paymentDayOfWeek: partner.paymentDayOfWeek,
+      paymentCadence: partner.paymentCadence,
+      revenueModel: partner.revenueModel,
+      managerPayBase: partner.managerPayBase,
+      managerPayHigh: partner.managerPayHigh,
+      managerPayThreshold: partner.managerPayThreshold,
+    },
+    records,
+  );
+  const period = payment.weeklyPayments.find((w) => w.weekStartDate === weekStartDate);
+  if (!period) return Response.json({ error: "No payment period for that date" }, { status: 400 });
+  if (period.isPreSystem) return Response.json({ error: "Historical settlements can't be changed here" }, { status: 400 });
+
+  const existing = records.find((r) => r.week_start_date === weekStartDate) ?? null;
+
+  if (action === "paid") {
+    // Guard: only a CLOSED period can be paid (an open, in-progress period has no
+    // final figure yet). Matches the client, but enforced here regardless.
+    const today = new Date().toISOString().slice(0, 10);
+    const isOpen = period.weekEndDate >= today && period.status !== "paid";
+    if (isOpen) return Response.json({ error: "This period is still open — it can't be marked paid yet" }, { status: 400 });
+
+    if (existing) {
+      const { error } = await supabase
+        .from("partner_weekly_payments")
+        .update({ status: "paid", paid_at: paidAt, calculated_amount: period.owedAmount })
+        .eq("id", existing.id);
+      if (error) return Response.json({ error: error.message }, { status: 500 });
+    } else {
+      const { error } = await supabase.from("partner_weekly_payments").insert({
+        partner_dashboard_id: partner.id,
+        week_start_date: weekStartDate,
+        calculated_amount: period.owedAmount,
+        status: "paid",
+        paid_at: paidAt,
+        is_pre_system_settlement: false,
+      });
+      if (error) return Response.json({ error: error.message }, { status: 500 });
+    }
+  } else {
+    // Undo: revert to pending. Nothing to do if no row exists (already pending).
+    if (existing) {
+      const { error } = await supabase
+        .from("partner_weekly_payments")
+        .update({ status: "pending", paid_at: null })
+        .eq("id", existing.id);
+      if (error) return Response.json({ error: error.message }, { status: 500 });
+    }
+  }
+
+  return Response.json({ ok: true });
 }
