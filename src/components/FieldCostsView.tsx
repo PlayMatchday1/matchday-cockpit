@@ -20,6 +20,7 @@ import { logChange } from "@/lib/financeAudit";
 import {
   buildFieldCostRows,
   fieldCostsFor,
+  isEventSchedule,
   overrideOnlyTotalFor,
   perMatchTotalFor,
   totalOverrideAmountFor,
@@ -1798,6 +1799,7 @@ function buildMatchLineItems(
   for (const leg of row.legs) {
     const label = leg.rawVenueName || leg.venueName;
     for (const s of data.masterSchedule) {
+      if (isEventSchedule(s)) continue;
       if (s.venue_id === leg.venueId && s.month === month) {
         items.push({ date: s.match_date, venue: label, rate: leg.rate, cancelled: false });
       }
@@ -1805,6 +1807,7 @@ function buildMatchLineItems(
     const venue = data.venues.find((v) => v.id === leg.venueId);
     if (venue?.charge_on_cancel) {
       for (const s of data.cancelledSchedule) {
+        if (isEventSchedule(s)) continue;
         if (s.venue_id === leg.venueId && s.month === month) {
           items.push({ date: s.match_date, venue: label, rate: leg.rate, cancelled: true });
         }

@@ -13,6 +13,15 @@ import { getLegLabel, groupVenues, type VenueGroup } from "./venueGroups";
 import { isCityHidden } from "./types";
 import { partnerPaymentOwedForMonth } from "./partnerStats";
 
+// A schedule row that is a special EVENT (tournament/combine) carries NO venue
+// cost — Ryan's decision. Every cost-count site consults this flag, so cost is
+// excluded because the match is an event, never by making the match venue-less
+// (the row keeps its venue_id for every non-cost consumer). Feeds both
+// masterSchedule and cancelledSchedule, so it is the including-cancelled removal.
+export function isEventSchedule(s: { category: string }): boolean {
+  return s.category === "event";
+}
+
 export type VenueCostKind =
   | "override"
   | "per_match"
@@ -79,10 +88,12 @@ function venueMatchCount(
   // split-rate routing included.
   let n = 0;
   for (const s of data.masterSchedule) {
+    if (isEventSchedule(s)) continue;
     if (s.venue_id === venue.id && s.month === month) n += 1;
   }
   if (venue.charge_on_cancel) {
     for (const s of data.cancelledSchedule) {
+      if (isEventSchedule(s)) continue;
       if (s.venue_id === venue.id && s.month === month) n += 1;
     }
   }

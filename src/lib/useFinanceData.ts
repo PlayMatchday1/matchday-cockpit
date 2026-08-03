@@ -408,16 +408,11 @@ function mapMdapiRowToSchedule(
     );
     if (resolvedVenueId == null && beforeSplit != null) counters.specialEvent += 1;
   }
-  // Special events (tournaments/combines) carry NO venue cost. Drop them from
-  // the cost calc by nulling venue_id — the same mechanism the capacity-0
-  // Soccer Central rows already use — but keyed on the resolver's category, so
-  // ALL event matches come out (incl cancelled: this mapper feeds
-  // cancelledSchedule too, giving the including-cancelled cost removal).
+  // Category from the event's own identity. Events KEEP their venue_id so the
+  // venue link stays intact for every consumer; cost is excluded downstream by
+  // consulting this flag (see financeCosts.isEventSchedule), never by making
+  // the match venue-less.
   const category = venueCategory(cleanText(r.field_title));
-  if (category === "event" && resolvedVenueId != null) {
-    resolvedVenueId = null;
-    counters.specialEvent += 1;
-  }
   if (resolvedVenueId == null && initialVenueId == null) counters.unresolved += 1;
   const v =
     resolvedVenueId != null
@@ -835,17 +830,6 @@ async function load(quarter: QuarterInfo): Promise<void> {
     console.info(
       `[useFinanceData] ${cmsCounters.specialEvent} cancelled mdapi_matches row(s) excluded as Soccer Central special events (max_player_count null/0).`,
     );
-  }
-
-  // ASSERT the cost-side invariant, throw rather than render: no event match
-  // may carry a venue_id, so no tournament can contribute field cost anywhere
-  // downstream (venueMatchCount counts by venue_id).
-  for (const s of [...masterSchedule, ...cancelledSchedule]) {
-    if (s.category === "event" && s.venue_id != null) {
-      throw new Error(
-        `[useFinanceData] event match ${s.id} carries venue_id ${s.venue_id} — events must contribute zero field cost`,
-      );
-    }
   }
 
   const memberSpots: FinMemberSpotsRow[] = msRows.map((r) => ({
