@@ -235,7 +235,9 @@ export async function POST(req: Request) {
         .map(([k, v]) => ({ key: k, stored: +v.stored.toFixed(2), restated: +v.restated.toFixed(2), delta: +(v.restated - v.stored).toFixed(2) }))
         .filter((d) => Math.abs(d.delta) > 0.005)
         .sort((a, b) => Math.abs(b.delta) - Math.abs(a.delta));
-      await finalizeLog({ rows_imported: 0, error_message: "dry-run (no write)" });
+      // Advisory prefix so a dry-run shows as advisory, not a FAILED sync, on the
+      // SyncCard (isSyncAdvisory matches a leading "ADVISORY").
+      await finalizeLog({ rows_imported: 0, error_message: "ADVISORY (dry-run) — no write, gate check only" });
       return Response.json({
         dryRun: true,
         since: since.toISOString(),

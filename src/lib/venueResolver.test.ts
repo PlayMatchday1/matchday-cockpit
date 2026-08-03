@@ -46,7 +46,7 @@ test("the four WestLake spellings unify to one Austin identity", () => {
   }
 });
 
-test("resolver is idempotent — f(f(x)) === f(x), so a second sync run can't shift a venue", () => {
+test("VENUE fold is idempotent — canonicalVenueName(f(x)) === f(x), so a second sync run can't shift a venue", () => {
   // Representative inputs across all rule branches + the collapse cases.
   const inputs = [
     "WestLake - Field 3 - Match 1", "Westlake HS Field 3", "Westlake",
@@ -64,7 +64,36 @@ test("resolver is idempotent — f(f(x)) === f(x), so a second sync run can't sh
   for (const x of inputs) {
     const c1 = canonicalVenueName(x);
     const c2 = canonicalVenueName(c1);
-    assert.equal(c2, c1, `not idempotent: "${x}" -> "${c1}" -> "${c2}"`);
+    assert.equal(c2, c1, `venue not idempotent: "${x}" -> "${c1}" -> "${c2}"`);
+  }
+});
+
+test("the (venue, category) TUPLE is NOT idempotent — category is single-derivation, so it MUST be stored", () => {
+  // Derived from the RAW string, once. Re-running resolveVenue on the folded
+  // canonical (whose event marker has been stripped by design) flips the
+  // category event→regular. That is exactly why fin_revenue must persist a
+  // `category` column at write time and no read path may re-derive it from
+  // fin_revenue.venue.
+  const raw = resolveVenue("Soccer Central Tournament");
+  assert.deepEqual([raw.canonicalVenue, raw.category], ["Soccer Central", "event"]);
+  const refold = resolveVenue(raw.canonicalVenue);
+  assert.deepEqual([refold.canonicalVenue, refold.category], ["Soccer Central", "regular"]);
+  assert.notEqual(raw.category, refold.category); // f(f(x)) !== f(x) on the tuple — the finding
+});
+
+test("category is computed from the RAW input BEFORE the venue fold (order of operations)", () => {
+  // Every raw event string → event. If the fold ran first and the marker rule
+  // read the folded name, these would all silently become regular.
+  const rawEvents = [
+    "Tourney at Soccer Central", "Soccer Central World Cup Tournament", "Tourney ATH Pearland",
+    "NEMP Tournaments", "Tourney ATH Katy", "Round Rock Tournaments",
+    "MD Combine at Lou Fusz Athletic Complex", "Onion Creek - St Patty's Showdown",
+  ];
+  for (const e of rawEvents) assert.equal(resolveVenue(e).category, "event", `raw event must be event: ${e}`);
+  // Their canonical venue names carry no marker → regular. Correct behaviour;
+  // the pipeline only ever calls resolveVenue on the raw string, once.
+  for (const c of ["Soccer Central", "ATH Pearland", "NEMP", "ATH Katy", "Round Rock", "Lou Fusz Outdoor", "Onion Creek"]) {
+    assert.equal(resolveVenue(c).category, "regular", `canonical must be regular: ${c}`);
   }
 });
 
