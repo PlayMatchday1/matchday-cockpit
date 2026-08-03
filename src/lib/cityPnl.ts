@@ -68,18 +68,34 @@ export type CityPnl = {
   citySpots: number | null;
 };
 
-function groupKind(data: FinanceData, legIds: number[], months: Q2Month[]): VenueCostKind {
-  // Representative kind: prefer a mapped kind over unmapped, and share over flat,
-  // scanning every (leg, month) in the period.
-  let best: VenueCostKind = "unknown";
-  for (const id of legIds) {
+// Classify a venue group's cost basis. A field is MAPPED only when it has a real
+// cost basis. The trap: autoCost returns kind "per_match" with amount 0 for a
+// per-match venue whose rate is null (rate = per_match_rate ?? 0) — that is an
+// UNMAPPED field wearing a mapped-looking kind, and counting its $0 is exactly
+// the bug this table fixes. So a "per_match" kind only counts as mapped when the
+// leg actually carries a rate (per_match_rate or cost_per_match). per_match_minus_
+// manager (Crossbar) keeps its own kind and stays mapped.
+function classifyGroup(
+  data: FinanceData,
+  legs: { id: number; per_match_rate: number | null; cost_per_match: number | null }[],
+  months: Q2Month[],
+): { mapped: boolean; isShare: boolean } {
+  let mapped = false;
+  let isShare = false;
+  for (const leg of legs) {
     for (const m of months) {
-      const k = canonicalVenueCost(data, id, m).kind;
-      if (SHARE_KINDS.has(k)) return k; // share dominates
-      if (!UNMAPPED_KINDS.has(k)) best = k; // any mapped kind
+      const k = canonicalVenueCost(data, leg.id, m).kind;
+      if (SHARE_KINDS.has(k)) {
+        isShare = true;
+        mapped = true;
+        continue;
+      }
+      if (UNMAPPED_KINDS.has(k)) continue;
+      if (k === "per_match" && leg.per_match_rate == null && leg.cost_per_match == null) continue; // null-rate → unmapped
+      mapped = true;
     }
   }
-  return best;
+  return { mapped, isShare };
 }
 
 export function computeCityPnl(
@@ -99,9 +115,7 @@ export function computeCityPnl(
     .map((g): PnlField => {
       const legIds = g.legs.map((l) => l.id);
       const legIdSet = new Set(legIds);
-      const kind = groupKind(data, legIds, months);
-      const isShare = SHARE_KINDS.has(kind);
-      const mapped = !UNMAPPED_KINDS.has(kind);
+      const { mapped, isShare } = classifyGroup(data, g.legs, months);
 
       let dppRev = 0;
       let cost = 0;
