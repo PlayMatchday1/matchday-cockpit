@@ -1,436 +1,309 @@
 "use client";
 
+// Player behavior — metric-driven drill-down. Pick a metric; the chart AND both
+// breakdowns follow it (network trend → the market that moved it → the pitch).
+// Ported from docs/mockups/player-behavior-v2.html (authoritative). All grid /
+// series values come from the ONE shared computation (growthMetricGrid), also
+// used by the Player Data Room, so the two panels can never disagree.
+
 import { useMemo, useState } from "react";
-import type { BehaviorPoint, GrowthData } from "@/lib/growthAnalytics";
+import type { GrowthData } from "@/lib/growthAnalytics";
 import type { Period } from "./GlobalPeriod";
-import styles from "./growth.module.css";
-import { downloadCsv, fmtInt, monthLabel, plural } from "./format";
+import {
+  GRID_METRICS,
+  METRIC_LABEL,
+  buildMetricGrid,
+  networkSeries,
+  isRatio,
+  hasFieldDimension,
+  type GridMetric,
+} from "@/lib/growthMetricGrid";
+import { downloadCsv } from "./format";
+import styles from "./playerBehavior.module.css";
 
-// PART 1+2: Player behavior as a table. New players / Total players / Spots are
-// play-LOCATION based; registrations are declared-city (City View only). Total
-// players is range-distinct — computed from each player's event set, so it is a
-// real "played here at any point in the range", never a last-month snapshot.
-// Invariant asserted per row: Total players ≥ New players (new is a subset).
-// Tiny inline sparkline for the summary "Trend" column.
-function Sparkline({ values }: { values: number[] }) {
-  const w = 92, h = 22, pad = 3;
-  if (values.length < 2) return <span style={{ color: "var(--muted)" }}>—</span>;
-  const lo = Math.min(...values);
-  const hi = Math.max(...values);
-  const span = hi - lo || 1;
-  const pts = values.map((v, i) => {
-    // last point lands on x = w (the SVG's right edge) so, right-aligned in its
-    // cell, it sits under the right edge of the TREND header.
-    const x = pad + (i * (w - pad)) / (values.length - 1);
-    const y = h - pad - ((v - lo) / span) * (h - pad * 2);
-    return `${x.toFixed(1)},${y.toFixed(1)}`;
-  });
-  const [lx, ly] = pts[pts.length - 1].split(",");
-  return (
-    <svg width={w} height={h} viewBox={`0 0 ${w} ${h}`} style={{ display: "block" }} aria-hidden>
-      <polyline points={pts.join(" ")} fill="none" stroke="var(--accent)" strokeWidth={2} strokeLinecap="round" strokeLinejoin="round" />
-      <circle cx={lx} cy={ly} r={2.4} fill="var(--forest)" />
-    </svg>
-  );
-}
-// First→last % change over the period's non-null values.
-function pctDelta(values: number[]): { txt: string; pos: boolean } | null {
-  if (values.length < 2 || !values[0]) return null;
-  const chg = ((values[values.length - 1] - values[0]) / values[0]) * 100;
-  return { txt: (chg >= 0 ? "+" : "−") + Math.abs(chg).toFixed(0) + "%", pos: chg >= 0 };
-}
-
-const METRICS: { key: keyof Omit<BehaviorPoint, "m">; label: string }[] = [
-  { key: "registrations", label: "Registrations" },
-  { key: "newPlayers", label: "New players" },
-  { key: "totalPlayers", label: "Total players" },
-  { key: "spots", label: "Spots booked" },
-];
-
-type Row = {
-  name: string;
-  registrations: number | null;
-  newPlayers: number;
-  totalPlayers: number;
-  spots: number;
-  spp: number | null;
-  noMatches: boolean;
+const HUE: Record<GridMetric, string> = {
+  registrations: "var(--c1)",
+  newPlayers: "var(--c2)",
+  totalPlayers: "var(--c3)",
+  spots: "var(--c4)",
+  spotsPerPlayer: "var(--c1)",
 };
+const INDEXED_METRICS: GridMetric[] = ["registrations", "newPlayers", "totalPlayers", "spots"];
+const HEAT = ["var(--h1)", "var(--h2)", "var(--h3)", "var(--h4)", "var(--h5)", "var(--h6)"];
+const MON_ABBR = ["Jan", "Feb", "Mar", "Apr", "May", "Jun", "Jul", "Aug", "Sep", "Oct", "Nov", "Dec"];
+const shortMonth = (m: string) => MON_ABBR[Number(m.slice(5, 7)) - 1] ?? m;
+const fullMonth = (m: string) => `${shortMonth(m)} ${m.slice(0, 4)}`;
+const n0 = (v: number) => Math.round(v).toLocaleString("en-US");
+const fmtV = (v: number, ratio: boolean) => (ratio ? v.toFixed(2) : n0(v));
+
+// heat step index for a value against its OWN row's [lo,hi] (per-row scale).
+function heatIndex(v: number, lo: number, hi: number): number {
+  if (v <= 0) return -1; // transparent
+  if (hi <= lo) return 1; // single distinct value → mid step
+  return Math.min(5, Math.floor(((v - lo) / (hi - lo)) * 6));
+}
 
 export default function BehaviorPanel({ data, period }: { data: GrowthData; period: Period }) {
+  const [metric, setMetric] = useState<GridMetric>("spots");
   const [view, setView] = useState<"city" | "field">("city");
-  const months = data.behaviorOverall.map((p) => p.m).filter((m) => m >= period.start && m <= period.end);
-  const byMonth = useMemo(() => new Map(data.behaviorOverall.map((p) => [p.m, p])), [data.behaviorOverall]);
+  const [indexed, setIndexed] = useState(false);
 
-  // play-month indexes inside the selected range (empty ⇒ no play era in range).
-  const playIdxSet = useMemo(() => {
-    const s = new Set<number>();
-    data.playMonths.forEach((m, i) => {
-      if (m >= period.start && m <= period.end) s.add(i);
+  const months = useMemo(
+    () => data.behaviorOverall.map((p) => p.m).filter((m) => m >= period.start && m <= period.end),
+    [data.behaviorOverall, period],
+  );
+  const ratio = isRatio(metric);
+  const fieldOk = hasFieldDimension(metric);
+  const effView: "city" | "field" = view === "field" && !fieldOk ? "city" : view;
+
+  // ---- chart ----
+  const chart = useMemo(() => {
+    if (months.length < 2) return null;
+    const W = 1000, H = 190, L = 52, R = 74, T = 14, B = 26;
+    type S = { key: string; label: string; hue: string; v: (number | null)[] };
+    const series: S[] = indexed
+      ? INDEXED_METRICS.map((m) => {
+          const raw = networkSeries(data, m, months);
+          const base = raw.find((x) => x != null) ?? null;
+          return { key: m, label: METRIC_LABEL[m], hue: HUE[m], v: raw.map((x) => (x != null && base ? (x / base) * 100 : null)) };
+        })
+      : [{ key: metric, label: METRIC_LABEL[metric], hue: HUE[metric], v: networkSeries(data, metric, months) }];
+
+    const all = series.flatMap((s) => s.v).filter((x): x is number => x != null);
+    if (!all.length) return null;
+    const lo = Math.min(...all), hi = Math.max(...all);
+    const pad = (hi - lo) * 0.18 || 1;
+    const rawLo = indexed ? Math.min(90, lo - pad) : Math.max(0, lo - pad);
+    const rawHi = hi + pad;
+    const rough = (rawHi - rawLo) / (indexed ? 5 : 3);
+    const mag = Math.pow(10, Math.floor(Math.log10(rough || 1)));
+    const step = [1, 2, 2.5, 5, 10].map((f) => f * mag).find((f) => f >= rough) || 10 * mag;
+    const y0 = indexed ? Math.max(0, Math.floor((lo - pad) / step) * step) : Math.floor(rawLo / step) * step;
+    const y1 = Math.ceil(rawHi / step) * step;
+    const ticks = Math.max(2, Math.round((y1 - y0) / step));
+    const px = (i: number) => L + (i * (W - L - R)) / (months.length - 1);
+    const py = (v: number) => T + (1 - (v - y0) / (y1 - y0)) * (H - T - B);
+
+    const gridlines = Array.from({ length: ticks + 1 }, (_, g) => {
+      const yy = T + (g * (H - T - B)) / ticks;
+      const val = y1 - (g * (y1 - y0)) / ticks;
+      return { yy, label: indexed ? String(Math.round(val)) : ratio ? val.toFixed(1) : n0(val) };
     });
-    return s;
-  }, [data.playMonths, period]);
-  const hasPlayEra = playIdxSet.size > 0;
+    // right-edge direct labels, pushed apart so they never overlap
+    const labs = series
+      .map((s) => {
+        const lastIdx = [...s.v].map((v, i) => (v != null ? i : -1)).filter((i) => i >= 0).pop() ?? 0;
+        return { y: py(s.v[lastIdx] as number), label: s.label, hue: s.hue };
+      })
+      .sort((a, b) => a.y - b.y);
+    const GAP = 14;
+    for (let i = 1; i < labs.length; i++) if (labs[i].y - labs[i - 1].y < GAP) labs[i].y = labs[i - 1].y + GAP;
 
-  const sumOver = (pts: BehaviorPoint[] | undefined, key: keyof Omit<BehaviorPoint, "m">) =>
-    (pts ?? []).filter((p) => p.m >= period.start && p.m <= period.end).reduce((a, p) => a + (p[key] ?? 0), 0);
+    const polys = series.map((s) => ({
+      key: s.key,
+      hue: s.hue,
+      pts: s.v.map((v, i) => (v != null ? { x: px(i), y: py(v) } : null)).filter((p): p is { x: number; y: number } => !!p),
+    }));
 
-  const rows: Row[] = useMemo(() => {
-    // range-distinct total + new per entity, from player event sets.
-    const totalCity = new Map<number, Set<number>>();
-    const newCity = new Map<number, number>();
-    const totalField = new Map<number, Set<number>>();
-    const newField = new Map<number, number>();
-    for (const p of data.players) {
-      if (playIdxSet.has(p.firstMonthIdx)) {
-        newCity.set(p.firstCityIdx, (newCity.get(p.firstCityIdx) ?? 0) + 1);
-        newField.set(p.firstFieldIdx, (newField.get(p.firstFieldIdx) ?? 0) + 1);
-      }
-      for (let i = 0; i < p.ev.length; i += 3) {
-        const m = p.ev[i];
-        if (!playIdxSet.has(m)) continue;
-        const c = p.ev[i + 1];
-        const f = p.ev[i + 2];
-        if (!totalCity.has(c)) totalCity.set(c, new Set());
-        totalCity.get(c)!.add(p.u);
-        if (!totalField.has(f)) totalField.set(f, new Set());
-        totalField.get(f)!.add(p.u);
-      }
-    }
+    const m0 = networkSeries(data, metric, months).filter((x): x is number => x != null);
+    const chg = m0.length >= 2 && m0[0] ? ((m0[m0.length - 1] - m0[0]) / m0[0]) * 100 : null;
+    return { W, H, L, R, gridlines, px, py, polys, labs, chg };
+  }, [data, months, metric, indexed, ratio]);
 
-    let out: Row[];
-    if (view === "city") {
-      out = data.cityIndex.map((c, ci) => {
-        const total = totalCity.get(ci)?.size ?? 0;
-        const nw = newCity.get(ci) ?? 0;
-        const spots = sumOver(data.behaviorByCity[c], "spots");
-        return {
-          name: c,
-          registrations: sumOver(data.behaviorByCity[c], "registrations"),
-          newPlayers: nw,
-          totalPlayers: total,
-          spots,
-          spp: total > 0 ? spots / total : null,
-          noMatches: !data.cityHasMatches[ci],
-        };
-      });
-    } else {
-      out = data.fieldIndex.map((f, fi) => {
-        const total = totalField.get(fi)?.size ?? 0;
-        const nw = newField.get(fi) ?? 0;
-        const spots = sumOver(data.behaviorByField[f.label]?.points, "spots");
-        return {
-          name: `${f.label} · ${f.city}`,
-          registrations: null,
-          newPlayers: nw,
-          totalPlayers: total,
-          spots,
-          spp: total > 0 ? spots / total : null,
-          noMatches: false,
-        };
-      });
-    }
-    // PART 1 assertion — new ⊆ total, always. Throw rather than render a lie.
-    for (const r of out) {
-      if (r.totalPlayers < r.newPlayers) {
-        throw new Error(`behavior invariant violated (${view}): ${r.name} total ${r.totalPlayers} < new ${r.newPlayers}`);
-      }
-    }
-    return out.sort((a, b) => b.spots - a.spots);
-  }, [view, data, playIdxSet]);
+  // ---- grid (shared computation; throws on footing mismatch) ----
+  const grid = useMemo(() => buildMetricGrid(data, metric, effView, months), [data, metric, effView, months]);
 
-  function exportCsv() {
-    const header = ["Metric", ...months.map((m) => monthLabel(m))];
-    const body = METRICS.map((mt) => [
-      mt.label,
-      ...months.map((m) => {
-        const p = byMonth.get(m);
-        const v = p ? p[mt.key] : null;
-        return v == null ? "" : v;
-      }),
+  // Assert per-row heat monotonicity (a bigger month is never lighter). Throw
+  // rather than render a scale that lies.
+  const heated = useMemo(() => {
+    return grid.rows.map((r) => {
+      const live = r.cells.filter((c): c is number => c != null && c > 0);
+      const lo = live.length ? Math.min(...live) : 0;
+      const hi = live.length ? Math.max(...live) : 0;
+      const idx = r.cells.map((c) => (c != null ? heatIndex(c, lo, hi) : -1));
+      // monotonicity: for any two positive cells, larger value ⇒ index not lower.
+      for (let i = 0; i < r.cells.length; i++)
+        for (let j = 0; j < r.cells.length; j++) {
+          const a = r.cells[i], b = r.cells[j];
+          if (a != null && b != null && a > 0 && b > 0 && a > b && idx[i] < idx[j])
+            throw new Error(`BehaviorPanel heat non-monotonic in ${r.label}: ${a}→${idx[i]} lighter than ${b}→${idx[j]}`);
+        }
+      return { ...r, idx };
+    });
+  }, [grid]);
+
+  const exportCsv = () => {
+    const header = [effView === "city" ? "Market" : "Pitch", ...months.map(fullMonth), "Period"];
+    const body = heated.map((r) => [
+      r.city ? `${r.label} · ${r.city}` : r.label,
+      ...r.cells.map((c) => (c == null ? "" : ratio ? c.toFixed(2) : String(Math.round(c)))),
+      r.period == null ? "" : String(Math.round(r.period)),
     ]);
-    downloadCsv(`player-behavior-${period.start}_${period.end}.csv`, [header, ...body]);
-  }
+    downloadCsv(`player-behavior-${metric}-${effView}.csv`, [header, ...body]);
+  };
 
-  const cityCount = data.cityIndex.length;
-  // Spots share-bar denominator: rows with matches. Field spots sum to the same
-  // total as market spots (every spot is at exactly one pitch in one market), so
-  // the bar is valid in both views.
-  const totSpots = rows.filter((r) => !r.noMatches).reduce((a, r) => a + r.spots, 0);
-
-  // City-View totals row + integrity check: the market breakdown must tie to the
-  // monthly rows above for registrations / new players / spots (total players is a
-  // distinct count and legitimately does not sum). Throw on a mismatch — that is a
-  // real bug, not a number to render.
-  const cityTot =
-    view === "city"
-      ? rows.reduce(
-          (a, r) => ({
-            reg: a.reg + (r.registrations ?? 0),
-            newp: a.newp + r.newPlayers,
-            totp: a.totp + r.totalPlayers,
-            spots: a.spots + r.spots,
-          }),
-          { reg: 0, newp: 0, totp: 0, spots: 0 },
-        )
-      : null;
-  if (cityTot) {
-    const monthly = months.reduce(
-      (a, m) => {
-        const p = byMonth.get(m);
-        return { reg: a.reg + (p?.registrations ?? 0), newp: a.newp + (p?.newPlayers ?? 0), spots: a.spots + (p?.spots ?? 0) };
-      },
-      { reg: 0, newp: 0, spots: 0 },
-    );
-    for (const [label, a, b] of [
-      ["registrations", cityTot.reg, monthly.reg],
-      ["new players", cityTot.newp, monthly.newp],
-      ["spots booked", cityTot.spots, monthly.spots],
-    ] as [string, number, number][]) {
-      if (Math.round(a) !== Math.round(b)) {
-        throw new Error(`Player behavior: market ${label} total ${a} ≠ monthly total ${b}`);
-      }
-    }
-  }
+  const known = grid.hasData;
 
   return (
-    <div className={styles.card}>
-      <div className={styles.cardHead}>
+    <div className={styles.root}>
+      <div className={styles.hd}>
         <div>
-          <div className={styles.cardTitle}>Player behavior</div>
-          <div className={styles.cardSub}>
-            Registrations, new players, total players and spots booked · oldest to newest, over the selected period.
-          </div>
+          <p className={styles.title}>Player behavior</p>
+          <p className={styles.sub}>
+            Pick a metric. The chart and both breakdowns below follow it, so you can read the network trend, find the
+            market that moved it, then find the pitch.
+          </p>
         </div>
-        <button type="button" className={`${styles.btn} ${styles.btnGhost}`} onClick={exportCsv}>
-          Export
-        </button>
+        <button type="button" className={styles.exp} onClick={exportCsv}>Export</button>
       </div>
 
-      {/* summary: metrics × months */}
-      <div className={styles.tableWrap}>
-        <table className={styles.dataTable}>
-          <thead>
-            <tr>
-              <th>Metric</th>
-              {months.map((m) => (
-                <th key={m}>{monthLabel(m)}</th>
-              ))}
-              <th>Trend</th>
-              <th>
-                {months.length ? `${monthLabel(months[0]).split(" ")[0]} → ${monthLabel(months[months.length - 1]).split(" ")[0]}` : "Δ"}
-              </th>
-            </tr>
-          </thead>
-          <tbody>
-            {METRICS.map((mt) => {
-              const vals = months
-                .map((m) => {
-                  const p = byMonth.get(m);
-                  return p ? p[mt.key] : null;
-                })
-                .filter((v): v is number => v != null);
-              const d = pctDelta(vals);
-              return (
-                <tr key={mt.key}>
-                  <td>{mt.label}</td>
-                  {months.map((m) => {
-                    const p = byMonth.get(m);
-                    const v = p ? p[mt.key] : null;
-                    return <td key={m}>{v == null ? <span className={styles.tableGap}>—</span> : fmtInt(v)}</td>;
-                  })}
-                  <td style={{ paddingTop: 4, paddingBottom: 4 }}>
-                    <div style={{ display: "flex", justifyContent: "flex-end" }}>
-                      <Sparkline values={vals} />
-                    </div>
-                  </td>
-                  <td style={{ color: d ? (d.pos ? "var(--ok-ink)" : "var(--negative)") : "var(--muted)", fontWeight: 800 }}>
-                    {d ? d.txt : "—"}
-                  </td>
-                </tr>
-              );
-            })}
-          </tbody>
-        </table>
+      {/* metric toggle */}
+      <div className={styles.mrow}>
+        <span className={styles.eyebrow}>Metric</span>
+        <span className={styles.mseg}>
+          {GRID_METRICS.map((m) => (
+            <button key={m} className={m === metric ? styles.on : undefined}
+              onClick={() => { setMetric(m); if (!hasFieldDimension(m) && view === "field") setView("city"); }}>
+              {METRIC_LABEL[m]}
+            </button>
+          ))}
+        </span>
+        <label className={styles.idxwrap}>
+          <input type="checkbox" checked={indexed} onChange={(e) => setIndexed(e.target.checked)} />
+          Compare all four, indexed to 100
+        </label>
+      </div>
+
+      {/* chart */}
+      <div className={styles.chartbox}>
+        <div className={styles.chead}>
+          <span className={styles.ctitle}>
+            {indexed ? "All four metrics, indexed to 100 at the first month" : `${METRIC_LABEL[metric]} · ${months.length ? `${shortMonth(months[0])} – ${fullMonth(months[months.length - 1])}` : ""}`}
+          </span>
+          {!indexed && chart?.chg != null && (
+            <span className={styles.cdelta}>
+              {chart.chg >= 0 ? "+" : "−"}{Math.abs(chart.chg).toFixed(0)}% {shortMonth(months[0])} → {shortMonth(months[months.length - 1])}
+            </span>
+          )}
+        </div>
+        {chart ? (
+          <svg className={styles.chart} viewBox={`0 0 ${chart.W} ${chart.H}`} preserveAspectRatio="none">
+            {chart.gridlines.map((g, i) => (
+              <g key={i}>
+                <line className={styles.gridline} x1={chart.L} y1={g.yy.toFixed(1)} x2={chart.W - chart.R} y2={g.yy.toFixed(1)} />
+                <text className={styles.axlab} x={chart.L - 8} y={(g.yy + 3.5).toFixed(1)} textAnchor="end">{g.label}</text>
+              </g>
+            ))}
+            {months.map((m, i) => (
+              <text key={m} className={styles.axlab} x={chart.px(i).toFixed(1)} y={chart.H - 6} textAnchor="middle">{shortMonth(m)}</text>
+            ))}
+            {chart.polys.map((p) => (
+              <g key={p.key}>
+                <polyline points={p.pts.map((pt) => `${pt.x.toFixed(1)},${pt.y.toFixed(1)}`).join(" ")} fill="none" stroke={p.hue} strokeWidth={2} strokeLinecap="round" strokeLinejoin="round" />
+                {p.pts.map((pt, i) => (
+                  <circle key={i} cx={pt.x.toFixed(1)} cy={pt.y.toFixed(1)} r={3.2} fill={p.hue} stroke="var(--surface)" strokeWidth={2} />
+                ))}
+              </g>
+            ))}
+            {chart.labs.map((l, i) => (
+              <text key={i} className={styles.serieslab} x={chart.W - chart.R + 8} y={(l.y + 4).toFixed(1)} fill={l.hue}>{l.label}</text>
+            ))}
+          </svg>
+        ) : (
+          <div className={styles.sub}>Not enough months in the selected range to chart.</div>
+        )}
+      </div>
+      {indexed && (
+        <div className={styles.legend}>
+          {INDEXED_METRICS.map((m) => (
+            <span key={m} className="k"><i style={{ background: HUE[m] }} />{METRIC_LABEL[m]}</span>
+          ))}
+        </div>
+      )}
+      <div className={styles.chartbox} style={{ paddingTop: 8 }}>
+        <p className={styles.axisnote}>
+          {indexed ? (
+            <>Every series starts at 100 in the first month, so all four share one axis and can be compared directly. A
+              raw-value chart hides this because <b>spots booked is about five times the size of everything else</b> —
+              which is exactly why there is no second axis.</>
+          ) : (
+            <>One metric, one axis. Spots booked runs about five times the other three, so a second axis would make the
+              two scales line up wherever they were drawn to line up — a relationship the chart invented. Use{" "}
+              <b>indexed to 100</b> above to compare all four honestly.</>
+          )}
+        </p>
       </div>
 
       {/* breakdown */}
-      <div className={styles.controlsRow} style={{ margin: "16px 0 10px" }}>
-        <div className={styles.field}>
-          <span className={styles.fieldLabel}>Breakdown</span>
-          <div className={styles.segmented}>
-            {(
-              [
-                ["city", "City View"],
-                ["field", "Field View"],
-              ] as ["city" | "field", string][]
-            ).map(([v, txt]) => (
-              <button
-                key={v}
-                type="button"
-                className={`${styles.segBtn} ${view === v ? styles.segBtnActive : ""}`}
-                aria-pressed={view === v}
-                onClick={() => setView(v)}
-              >
-                {txt}
-              </button>
-            ))}
-          </div>
+      <div className={styles.bd}>
+        <div className={styles.bdtop}>
+          <span className={styles.eyebrow}>Breakdown</span>
+          <span className={styles.seg}>
+            <button className={effView === "city" ? styles.on : undefined} onClick={() => setView("city")}>City View</button>
+            <button className={effView === "field" ? styles.on : undefined} disabled={!fieldOk}
+              title={fieldOk ? "" : "A registration attaches to a market, never to a pitch"}
+              onClick={() => fieldOk && setView("field")}>Field View</button>
+          </span>
+          <span className={styles.scope}>
+            {grid.rows.length} {effView === "city" ? (grid.rows.length === 1 ? "market" : "markets") : (grid.rows.length === 1 ? "pitch" : "pitches")} · {METRIC_LABEL[metric].toLowerCase()} by month
+          </span>
         </div>
-        <span className={styles.summaryLine}>
-          {view === "city" ? `${cityCount} ${plural(cityCount, "market")}` : `${rows.length} ${plural(rows.length, "field")}`} ·
-          ranked by spots
-          {view === "field"
-            ? " · Registrations attach to a market, never a pitch, so they dash here — a dash is not a zero. spots/player = spots ÷ distinct players at this pitch, not comparable to the city figure (~32% of players use more than one pitch)"
-            : ""}
-        </span>
-      </div>
 
-      {!hasPlayEra && (
-        <div className={styles.footnote}>
-          The selected period predates any matches (play data starts {monthLabel(data.floors.play)}), so new / total /
-          spots are shown as dashes — unknown, not zero.
-        </div>
-      )}
+        {effView === "field" && (
+          <p className={styles.blocked}>Real pitch names — the third step of the drill-down: network trend, then the market that moved it, then the pitch. Registrations attach to a market, never a pitch, so they are unavailable here.</p>
+        )}
 
-      <div className={`${styles.tableWrap} ${styles.scrollBody}`}>
-        <table className={styles.recordTable}>
-          <thead>
-            <tr>
-              <th>{view === "city" ? "Market" : "Field"}</th>
-              <th className="num">Registrations</th>
-              <th className="num">New players</th>
-              <th className="num">Total players</th>
-              <th className="num">Spots booked</th>
-              <th className="num">Spots / player</th>
-            </tr>
-          </thead>
-          <tbody>
-            {rows.map((r, i) => {
-              const share = totSpots ? (r.spots / totSpots) * 100 : 0;
-              return (
-                <tr key={r.name}>
-                  <td>
-                    <span
-                      style={{
-                        display: "inline-flex",
-                        alignItems: "center",
-                        justifyContent: "center",
-                        width: 19,
-                        height: 19,
-                        borderRadius: 999,
-                        background: "var(--chip-bg)",
-                        border: "1px solid var(--chip-line)",
-                        color: "var(--ns-ink)",
-                        fontSize: "10.5px",
-                        fontWeight: 800,
-                        marginRight: 10,
-                        verticalAlign: "middle",
-                      }}
-                    >
-                      {i + 1}
-                    </span>
-                    {r.name}
-                    {r.noMatches && (
-                      <span className={styles.pillAmber} style={{ marginLeft: 8 }}>
-                        no matches
-                      </span>
-                    )}
-                  </td>
-                  {/* A registration attaches to a MARKET, never to a pitch — so Field
-                      View dashes it rather than dropping the column. */}
-                  <td className="num">
-                    {view === "field" ? (
-                      <span className={styles.tableGap}>—</span>
-                    ) : r.registrations == null ? (
-                      <span className={styles.tableGap}>—</span>
-                    ) : (
-                      fmtInt(r.registrations)
-                    )}
-                  </td>
-                  <td className="num">{hasPlayEra ? fmtInt(r.newPlayers) : <span className={styles.tableGap}>—</span>}</td>
-                  <td className="num">{hasPlayEra ? fmtInt(r.totalPlayers) : <span className={styles.tableGap}>—</span>}</td>
-                  <td className="num">
-                    {!hasPlayEra ? (
-                      <span className={styles.tableGap}>—</span>
-                    ) : !r.noMatches ? (
-                      <span style={{ display: "inline-flex", alignItems: "center", gap: 8, justifyContent: "flex-end" }}>
-                        {fmtInt(r.spots)}
-                        <span style={{ width: 52, height: 6, borderRadius: 3, background: "var(--hair)", overflow: "hidden", flex: "0 0 auto" }}>
-                          <span style={{ display: "block", height: "100%", width: `${share}%`, background: "var(--accent)" }} />
-                        </span>
-                        <span style={{ color: "var(--muted)", fontSize: "0.7rem", minWidth: 36, textAlign: "right" }}>{share.toFixed(1)}%</span>
-                      </span>
-                    ) : (
-                      fmtInt(r.spots)
-                    )}
-                  </td>
-                  <td className="num">
-                    {hasPlayEra && r.spp != null ? r.spp.toFixed(2) : <span className={styles.tableGap}>—</span>}
-                  </td>
-                </tr>
-              );
-            })}
-            {cityTot && (
-              <tr>
-                {(
-                  [
-                    ["All markets", "l"],
-                    [fmtInt(cityTot.reg), "num"],
-                    [fmtInt(cityTot.newp), "num"],
-                    [fmtInt(cityTot.totp), "num"],
-                    [fmtInt(cityTot.spots), "num"],
-                    ["—", "num"],
-                  ] as [string, string][]
-                ).map(([val, cls], j) => (
-                  <td key={j} className={cls === "num" ? "num" : undefined} style={{ borderTop: "2px solid var(--line)", fontWeight: 800 }}>
-                    {val === "—" ? <span className={styles.tableGap}>—</span> : val}
-                  </td>
-                ))}
-              </tr>
-            )}
-          </tbody>
-        </table>
-      </div>
-
-      {view === "field" && data.eventFields.length > 0 && (
-        <div className={`${styles.tableWrap}`} style={{ marginTop: 14 }}>
-          <div className={styles.footnote} style={{ marginBottom: 6, fontWeight: 700 }}>
-            Special events — tournaments &amp; combines — kept out of the pitch ranking above. Real spots booked in a real
-            market, but not regular per-pitch play, so they do not inflate a field&rsquo;s spots or spots/player.
-          </div>
-          <table className={styles.recordTable}>
+        <div className={styles.scroll}>
+          <table className={styles.gt}>
             <thead>
               <tr>
-                <th>Event pitch</th>
-                <th className="num">Spots booked</th>
-                <th className="num">Distinct players</th>
+                <th className="l">{effView === "city" ? "Market" : "Pitch"}</th>
+                {months.map((m) => <th key={m}>{fullMonth(m)}</th>)}
+                <th>Period</th>
               </tr>
             </thead>
             <tbody>
-              {data.eventFields.map((e) => (
-                <tr key={e.label}>
-                  <td>
-                    {e.label}{" "}
-                    <span style={{ color: "var(--muted)", fontSize: "0.72rem" }}>· {e.city}</span>
+              {heated.map((r, i) => (
+                <tr key={r.label}>
+                  <td className="l">
+                    <span className={styles.rk}>{i + 1}</span>
+                    <span className={styles.mk}>{r.label}</span>
+                    {r.city && <span className={styles.sub2}> · {r.city}</span>}
                   </td>
-                  <td className="num">{fmtInt(e.spots)}</td>
-                  <td className="num">{fmtInt(e.players)}</td>
+                  {r.cells.map((c, j) => (
+                    <td key={j} className="v">
+                      <span className={styles.cell} style={{ background: r.idx[j] >= 0 ? HEAT[r.idx[j]] : "transparent" }}>
+                        {c == null ? <span className={styles.dash}>—</span> : fmtV(c, ratio)}
+                      </span>
+                    </td>
+                  ))}
+                  <td className="tot">{r.period == null ? <span className={styles.dash}>—</span> : n0(r.period)}</td>
                 </tr>
               ))}
+              {grid.netByMonth && (
+                <tr className={styles.netrow}>
+                  <td className="l">All markets</td>
+                  {grid.netByMonth.map((v, j) => <td key={j}>{v == null ? <span className={styles.dash}>—</span> : n0(v)}</td>)}
+                  <td className="tot">{grid.netPeriod == null ? <span className={styles.dash}>—</span> : n0(grid.netPeriod)}</td>
+                </tr>
+              )}
             </tbody>
           </table>
         </div>
-      )}
 
-      {view === "city" && (
-        <div className={styles.footnote}>
-          Registrations, new players and spots booked add up across markets and match the monthly rows above.{" "}
-          <b>Total players does not</b> — it counts each market&rsquo;s distinct players, so anyone who played in two
-          markets is counted in both. El Paso and New York City have registrations but have never run a match, so their
-          zeros are real zeros, not missing data.
-        </div>
-      )}
+        <p className={styles.foot}>
+          {known && grid.additive && (
+            <><b>Shading compares each market against its own months, not against other markets</b> — globally scaled, Austin is dark and everything else blank, which is what you already know. Per row, a market fading month to month is the kind of thing this is for. One hue, light to dark. </>
+          )}
+          {!grid.additive && (
+            <><b>{METRIC_LABEL[metric]} is a {ratio ? "ratio" : "distinct count"}, so it is read per month and never summed</b> — a period column would double-count anyone active in two months, so it shows a dash. </>
+          )}
+          {!fieldOk && (
+            <><b>Field View is unavailable for registrations</b> — a registration attaches to a market and never to a pitch. </>
+          )}
+          Markets with registrations but no matches show real zeros; a dash means the figure is unknown for that month, never a fabricated zero.
+        </p>
+      </div>
     </div>
   );
 }

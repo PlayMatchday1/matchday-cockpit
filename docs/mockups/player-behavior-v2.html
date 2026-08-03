@@ -1,0 +1,437 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+<meta charset="utf-8">
+<title>Player behavior v2 — metric-driven drill-down · mockup</title>
+<style>
+:root{
+  --forest:#0d3b2e; --ink:#12241d; --muted:#5b6a63; --line:#e4ebe7; --hair:#edf2ef;
+  --chip-bg:#eef3f0; --chip-line:#dfe8e3; --surface:#ffffff;
+  --canvas:#eef2ef; --col-bg:#f9fbfa; --col-dash:#cfd9d3; --ns-ink:#566661;
+  --gold-line:#e3c369; --gold-ink:#8a6300; --gold-bg:#fbf2dd;
+  /* sequential, one hue light -> dark, for the per-row heat */
+  --h1:#f2faf6; --h2:#dcf1e7; --h3:#bde5d3; --h4:#93dcb9; --h5:#5ecb97; --h6:#2fa774;
+  /* categorical, validated: lightness band / chroma floor / CVD / contrast all pass */
+  --c1:#12805c; --c2:#2f6fd0; --c3:#b8611a; --c4:#7d4a9e;
+}
+*{box-sizing:border-box} html,body{margin:0;padding:0}
+body{background:var(--canvas);color:var(--ink);
+  font-family:-apple-system,BlinkMacSystemFont,"Segoe UI",Inter,Roboto,Helvetica,Arial,sans-serif;
+  -webkit-font-smoothing:antialiased;padding:26px 24px 60px}
+.wrap{max-width:1520px;margin:0 auto}
+.note{border:1px dashed var(--col-dash);background:var(--col-bg);color:var(--ns-ink);border-radius:10px;
+  padding:11px 14px;font-size:12.5px;line-height:1.55;margin-bottom:18px}
+.note b{color:var(--ink)}
+
+.card{background:var(--surface);border:1px solid var(--line);border-radius:16px;overflow:hidden}
+.hd{display:flex;align-items:flex-start;justify-content:space-between;gap:20px;padding:20px 22px 0}
+.h1{font-size:17px;font-weight:800;letter-spacing:-.015em;color:var(--forest);margin:0}
+.sub{font-size:12.5px;color:var(--muted);margin:6px 0 0;line-height:1.5;max-width:76ch}
+.exp{border:1px solid var(--chip-line);background:var(--surface);color:var(--ink);border-radius:9px;
+  padding:7px 15px;font-size:12.5px;font-weight:700;cursor:pointer;white-space:nowrap}
+
+/* metric toggle */
+.mrow{display:flex;align-items:center;gap:10px;flex-wrap:wrap;padding:16px 22px 0}
+.eyebrow{font-size:9.5px;font-weight:900;letter-spacing:.09em;text-transform:uppercase;color:var(--muted)}
+.mseg{display:inline-flex;background:var(--chip-bg);border:1px solid var(--chip-line);border-radius:999px;padding:2px;
+  flex-wrap:wrap}
+.mseg button{border:0;background:transparent;color:var(--ns-ink);font:inherit;font-size:12.5px;font-weight:700;
+  padding:6px 14px;border-radius:999px;cursor:pointer;white-space:nowrap}
+.mseg button.on{background:var(--forest);color:#fff}
+.idxwrap{display:inline-flex;align-items:center;gap:7px;margin-left:auto;font-size:12px;font-weight:700;
+  color:var(--ns-ink);cursor:pointer}
+.idxwrap input{width:15px;height:15px;accent-color:var(--forest);cursor:pointer}
+
+/* chart */
+.chartbox{padding:14px 22px 4px}
+.chead{display:flex;align-items:baseline;justify-content:space-between;gap:16px;margin-bottom:6px}
+.ctitle{font-size:14px;font-weight:800;color:var(--ink);letter-spacing:-.01em}
+.cdelta{font-size:12.5px;font-weight:800;color:#186b4c;font-variant-numeric:tabular-nums}
+svg.chart{display:block;width:100%;height:190px;overflow:visible}
+.gridline{stroke:var(--hair);stroke-width:1}
+.axlab{font-size:10px;font-weight:700;fill:var(--muted);font-variant-numeric:tabular-nums}
+.serieslab{font-size:11px;font-weight:800;font-variant-numeric:tabular-nums}
+.legend{display:flex;gap:16px;flex-wrap:wrap;padding:6px 22px 0;font-size:11.5px;font-weight:700;color:var(--ns-ink)}
+.legend span.k{display:inline-flex;align-items:center;gap:6px}
+.legend i{width:11px;height:11px;border-radius:3px;display:inline-block}
+
+/* breakdown */
+.bd{padding:16px 22px 22px;margin-top:14px;border-top:1px solid var(--hair)}
+.bdtop{display:flex;align-items:center;gap:12px;flex-wrap:wrap;margin-bottom:12px}
+.seg{display:inline-flex;background:var(--chip-bg);border:1px solid var(--chip-line);border-radius:999px;padding:2px}
+.seg button{border:0;background:transparent;color:var(--ns-ink);font:inherit;font-size:12.5px;font-weight:700;
+  padding:5px 15px;border-radius:999px;cursor:pointer}
+.seg button.on{background:var(--forest);color:#fff}
+.seg button:disabled{opacity:.45;cursor:not-allowed}
+.scope{font-size:12px;color:var(--muted);font-weight:600}
+.blocked{border:1px dashed var(--gold-line);background:var(--gold-bg);color:var(--gold-ink);border-radius:9px;
+  padding:8px 12px;font-size:11.5px;font-weight:700;line-height:1.5;margin:0 0 12px}
+
+table{border-collapse:separate;border-spacing:0;width:100%}
+th,td{font-variant-numeric:tabular-nums}
+.gt th{font-size:9.5px;font-weight:900;letter-spacing:.09em;text-transform:uppercase;color:var(--muted);
+  padding:0 0 9px;text-align:right;white-space:nowrap}
+.gt th.l{text-align:left}
+.gt td{padding:0;text-align:right;font-size:13px;font-weight:700;color:var(--ink);border-bottom:1px solid var(--hair)}
+.gt td.l{text-align:left;padding:9px 12px 9px 0}
+.gt td.v{padding:0}
+.cell{display:block;padding:9px 8px;border-radius:6px;margin:2px 1px}
+.gt td.tot{padding:9px 0 9px 14px;font-weight:800;color:var(--forest);border-left:1px solid var(--hair)}
+.rk{display:inline-flex;align-items:center;justify-content:center;width:19px;height:19px;border-radius:999px;
+  background:var(--chip-bg);color:var(--ns-ink);font-size:10.5px;font-weight:800;margin-right:10px;vertical-align:1px}
+.mk{font-size:13px;font-weight:800;color:var(--ink);letter-spacing:-.01em}
+.sub2{font-size:10.5px;color:var(--muted);font-weight:600}
+.dash{color:var(--muted);font-weight:700}
+tr.netrow td{border-top:2px solid var(--line);border-bottom:0;padding-top:11px;font-weight:800;color:var(--forest)}
+tr.netrow td.l{text-transform:uppercase;font-size:11.5px;letter-spacing:.03em;color:var(--ns-ink);font-weight:900}
+.foot{font-size:11.5px;color:var(--ns-ink);line-height:1.65;margin:14px 0 0;padding-top:12px;
+  border-top:1px solid var(--hair)}
+.foot b{color:var(--ink)}
+#tip{position:fixed;pointer-events:none;opacity:0;transition:opacity .09s;background:var(--forest);color:#fff;
+  border-radius:8px;padding:6px 10px;font-size:11.5px;font-weight:700;white-space:nowrap;z-index:50;
+  font-variant-numeric:tabular-nums}
+</style>
+</head>
+<body>
+<div class="wrap">
+
+<div class="note">
+  <b>Mockup data note.</b> The four monthly network rows and the whole <b>Spots booked</b> city grid are live —
+  every city column sums to the network month exactly (Feb 6,407 · Mar 6,573 · Apr 7,528 · May 7,270 · Jun 7,667 ·
+  Jul 9,711) and every city row sums to its period total (Austin 20,357 · Houston 9,839 · San Antonio 9,701).
+  Per-city monthly figures for the other three metrics were not in the source, so those grids are dashed rather
+  than invented. Field grids show real pitch names with dashed values for the same reason.
+  <b>Spots booked is not on a second axis</b> — see the note under the chart.
+</div>
+
+<div class="card">
+  <div class="hd">
+    <div>
+      <p class="h1">Player behavior</p>
+      <p class="sub">Pick a metric. The chart and both breakdowns below follow it, so you can read the network
+        trend, find the market that moved it, then find the pitch.</p>
+    </div>
+    <button class="exp">Export</button>
+  </div>
+
+  <div class="mrow">
+    <span class="eyebrow">Metric</span>
+    <span class="mseg" id="mseg"></span>
+    <label class="idxwrap"><input type="checkbox" id="idxToggle"> Compare all four, indexed to 100</label>
+  </div>
+
+  <div class="chartbox">
+    <div class="chead">
+      <span class="ctitle" id="ctitle"></span>
+      <span class="cdelta" id="cdelta"></span>
+    </div>
+    <svg class="chart" id="chart" viewBox="0 0 1000 190" preserveAspectRatio="none"></svg>
+  </div>
+  <div class="legend" id="legend"></div>
+  <div class="chartbox" style="padding-top:8px">
+    <p class="foot" style="border:0;padding:0;margin:0" id="axisnote"></p>
+  </div>
+
+  <div class="bd">
+    <div class="bdtop">
+      <span class="eyebrow">Breakdown</span>
+      <span class="seg">
+        <button id="bCity" class="on">City View</button>
+        <button id="bField">Field View</button>
+      </span>
+      <span class="scope" id="scope"></span>
+    </div>
+    <p class="blocked" id="blocked" hidden></p>
+    <table class="gt" id="grid"></table>
+    <p class="foot" id="foot"></p>
+  </div>
+</div>
+
+</div>
+<div id="tip"></div>
+
+<script>
+const MONTHS = ["Feb","Mar","Apr","May","Jun","Jul"];
+
+/* ---- live network monthly ---- */
+const METRICS = [
+  { k:"reg",   label:"Registrations", short:"Registrations", net:[934,1188,1261,1308,1495,2222],
+    hue:"var(--c1)", field:false },
+  { k:"newp",  label:"New players",   short:"New players",   net:[869,825,927,817,891,1275],
+    hue:"var(--c2)", field:true },
+  { k:"totp",  label:"Total players", short:"Total players", net:[1793,1923,2243,2170,2300,2896],
+    hue:"var(--c3)", field:true },
+  { k:"spots", label:"Spots booked",  short:"Spots booked",  net:[6407,6573,7528,7270,7667,9711],
+    hue:"var(--c4)", field:true },
+  { k:"spp",   label:"Spots / player", short:"Spots per player",
+    net:[6407/1793,6573/1923,7528/2243,7270/2170,7667/2300,9711/2896], hue:"var(--c1)", field:true, dec:2 }
+];
+
+/* ---- live: spots booked by city by month, Feb-Jul ---- */
+const CITY_SPOTS = [
+  { n:"Austin",        v:[3111,3079,3364,3298,3610,3895] },
+  { n:"Houston",       v:[1105,1332,1597,1511,1707,2587] },
+  { n:"San Antonio",   v:[1363,1279,1422,1702,1782,2153] },
+  { n:"Dallas",        v:[280,244,382,310,198,400] },
+  { n:"Atlanta",       v:[233,177,262,183,186,283] },
+  { n:"St. Louis",     v:[315,322,296,103,49,169] },
+  { n:"OKC",           v:[0,140,205,163,135,224] },
+  { n:"El Paso",       v:[0,0,0,0,0,0], none:true },
+  { n:"New York City", v:[0,0,0,0,0,0], none:true }
+];
+
+const CITIES = CITY_SPOTS.map(c => c.n);
+const FIELDS = [
+  { n:"San Juan Diego",               city:"Austin" },
+  { n:"North East Metropolitan Park", city:"Austin" },
+  { n:"Soccer Central",               city:"San Antonio" },
+  { n:"ATH Pearland",                 city:"Houston" },
+  { n:"ATH Katy",                     city:"Houston" },
+  { n:"Onion Creek",                  city:"Austin" },
+  { n:"Hattrick",                     city:"Austin" },
+  { n:"Lou Fusz",                     city:"St. Louis" },
+  { n:"Bicentennial Park",            city:"Dallas" },
+  { n:"PRUMC",                        city:"Atlanta" }
+];
+
+let metricKey = "spots";
+let view = "city";
+let indexed = false;
+
+const M = () => METRICS.find(m => m.k === metricKey);
+const n0 = v => Math.round(v).toLocaleString("en-US");
+const fmt = (v, m) => m.dec ? v.toFixed(m.dec) : n0(v);
+
+/* ---------------- metric toggle ---------------- */
+document.getElementById("mseg").innerHTML = METRICS.map(m =>
+  '<button data-m="' + m.k + '"' + (m.k === metricKey ? ' class="on"' : '') + '>' + m.label + '</button>').join("");
+document.getElementById("mseg").addEventListener("click", e => {
+  const b = e.target.closest("button"); if (!b) return;
+  metricKey = b.getAttribute("data-m");
+  [...document.querySelectorAll("#mseg button")].forEach(x => x.classList.toggle("on", x === b));
+  if (!M().field && view === "field") view = "city";
+  renderAll();
+});
+document.getElementById("idxToggle").addEventListener("change", e => {
+  indexed = e.target.checked; renderAll();
+});
+
+/* ---------------- chart ---------------- */
+function renderChart(){
+  const W = 1000, H = 190, L = 52, R = 74, T = 14, B = 26;
+  const series = indexed
+    ? METRICS.filter(m => m.k !== "spp").map(m => ({
+        label:m.short, hue:m.hue, k:m.k, v:m.net.map(x => x / m.net[0] * 100) }))
+    : [{ label:M().short, hue:M().hue, k:M().k, v:M().net.slice() }];
+
+  const all = series.flatMap(s => s.v);
+  const lo = Math.min(...all), hi = Math.max(...all);
+  const pad = (hi - lo) * 0.18 || 1;
+  const rawLo = indexed ? Math.min(90, lo - pad) : Math.max(0, lo - pad);
+  const rawHi = hi + pad;
+  // snap to a 1/2/5 x 10^n step so the axis reads in round numbers
+  const rough = (rawHi - rawLo) / (indexed ? 5 : 3);
+  const mag = Math.pow(10, Math.floor(Math.log10(rough)));
+  const step = [1,2,2.5,5,10].map(f => f * mag).find(f => f >= rough) || 10 * mag;
+  // indexed lines all start at 100, so a zero baseline would waste half the plot
+  const y0 = indexed ? Math.max(0, Math.floor((lo - pad) / step) * step)
+                     : Math.floor(rawLo / step) * step;
+  const y1 = Math.ceil(rawHi / step) * step;
+  const ticks = Math.max(2, Math.round((y1 - y0) / step));
+  const px = i => L + i * (W - L - R) / (MONTHS.length - 1);
+  const py = v => T + (1 - (v - y0) / (y1 - y0)) * (H - T - B);
+
+  let svg = "";
+  for (let g = 0; g <= ticks; g++){
+    const yy = T + g * (H - T - B) / ticks;
+    const val = y1 - g * (y1 - y0) / ticks;
+    svg += '<line class="gridline" x1="' + L + '" y1="' + yy.toFixed(1) + '" x2="' + (W - R) +
+           '" y2="' + yy.toFixed(1) + '"></line>' +
+           '<text class="axlab" x="' + (L - 8) + '" y="' + (yy + 3.5).toFixed(1) + '" text-anchor="end">' +
+           (indexed ? Math.round(val) : (M().dec && !indexed ? val.toFixed(1) : n0(val))) + '</text>';
+  }
+  MONTHS.forEach((m,i) => {
+    svg += '<text class="axlab" x="' + px(i).toFixed(1) + '" y="' + (H - 6) + '" text-anchor="middle">' + m + '</text>';
+  });
+
+  series.forEach(s => {
+    const d = s.v.map((v,i) => px(i).toFixed(1) + "," + py(v).toFixed(1)).join(" ");
+    svg += '<polyline data-series="' + s.k + '" points="' + d + '" fill="none" stroke="' + s.hue +
+           '" stroke-width="2" stroke-linecap="round" stroke-linejoin="round"></polyline>';
+    s.v.forEach((v,i) => {
+      svg += '<circle cx="' + px(i).toFixed(1) + '" cy="' + py(v).toFixed(1) + '" r="3.2" fill="' + s.hue + '"' +
+             ' stroke="var(--surface)" stroke-width="2"></circle>' +
+             '<circle class="hit" cx="' + px(i).toFixed(1) + '" cy="' + py(v).toFixed(1) +
+             '" r="11" fill="transparent" data-k="' + s.k + '" data-i="' + i + '"></circle>';
+    });
+  });
+  // direct labels at the right edge, pushed apart so they never overlap
+  const labs = series.map(s => ({ y: py(s.v[s.v.length - 1]), label: s.label, hue: s.hue }))
+                     .sort((a,b) => a.y - b.y);
+  const GAP = 14;
+  for (let i = 1; i < labs.length; i++)
+    if (labs[i].y - labs[i-1].y < GAP) labs[i].y = labs[i-1].y + GAP;
+  labs.forEach(l => {
+    svg += '<text class="serieslab" data-lab="' + l.label + '" x="' + (W - R + 8) + '" y="' +
+           (l.y + 4).toFixed(1) + '" fill="' + l.hue + '">' + l.label + '</text>';
+  });
+  document.getElementById("chart").innerHTML = svg;
+
+  const m = M(), first = m.net[0], lastv = m.net[m.net.length - 1];
+  const chg = (lastv - first) / first * 100;
+  document.getElementById("ctitle").textContent = indexed
+    ? "All four metrics, indexed to 100 at Feb 2026"
+    : m.short + " · Feb – Jul 2026";
+  document.getElementById("cdelta").innerHTML = indexed ? "" :
+    '<span data-chg="' + chg.toFixed(1) + '">' + (chg >= 0 ? "+" : "−") + Math.abs(chg).toFixed(0) +
+    '% Feb → Jul</span>';
+
+  document.getElementById("legend").innerHTML = indexed
+    ? series.map(s => '<span class="k"><i style="background:' + s.hue + '"></i>' + s.label + '</span>').join("")
+    : "";
+
+  document.getElementById("axisnote").innerHTML = indexed
+    ? 'Every series starts at 100 in February, so all four share one axis and the lines can be compared directly. '
+    + '<b>Registrations is pulling away from new players</b> — +138% against +47% — which a raw-value chart hides '
+    + 'because spots booked is five times the size of everything else.'
+    : 'One metric, one axis. Spots booked runs about five times the other three, so putting it on a second axis '
+    + 'would make the two scales line up wherever they were drawn to line up — an apparent relationship the chart '
+    + 'invented. Use <b>indexed to 100</b> above to compare all four honestly.';
+}
+
+/* ---------------- breakdown grid ---------------- */
+function rowsFor(){
+  if (view === "field") return FIELDS.map(f => ({ n:f.n, city:f.city, v:null }));
+  if (metricKey === "spots") return CITY_SPOTS.map(c => ({ n:c.n, v:c.v.slice(), none:c.none }));
+  return CITIES.map(c => ({ n:c, v:null }));
+}
+
+function heat(v, lo, hi){
+  if (hi <= lo) return "var(--h2)";
+  const t = (v - lo) / (hi - lo);
+  const steps = ["var(--h1)","var(--h2)","var(--h3)","var(--h4)","var(--h5)","var(--h6)"];
+  return steps[Math.min(steps.length - 1, Math.floor(t * steps.length))];
+}
+
+function renderGrid(){
+  const m = M();
+  const rows = rowsFor();
+  const known = rows.some(r => r.v);
+
+  let html = '<thead><tr><th class="l">' + (view === "city" ? "Market" : "Pitch") + '</th>';
+  MONTHS.forEach(mo => html += '<th>' + mo + ' 2026</th>');
+  html += '<th>Period</th></tr></thead><tbody>';
+
+  rows.forEach((r,i) => {
+    const tot = r.v ? r.v.reduce((a,b) => a + b, 0) : null;
+    let cells = "";
+    if (r.v){
+      const live = r.v.filter(x => x > 0);
+      const lo = live.length ? Math.min(...live) : 0, hi = live.length ? Math.max(...live) : 0;
+      cells = r.v.map(x => '<td class="v"><span class="cell" data-val="' + x + '" style="background:' +
+        (x > 0 ? heat(x, lo, hi) : "transparent") + '">' + n0(x) + '</span></td>').join("");
+    } else {
+      cells = MONTHS.map(() => '<td class="v"><span class="cell"><span class="dash">—</span></span></td>').join("");
+    }
+    html += '<tr data-row="' + r.n + '"><td class="l"><span class="rk">' + (i + 1) + '</span>' +
+      '<span class="mk">' + r.n + '</span>' +
+      (r.city ? '<span class="sub2"> · ' + r.city + '</span>' : '') + '</td>' + cells +
+      '<td class="tot">' + (tot === null ? '<span class="dash">—</span>' : n0(tot)) + '</td></tr>';
+  });
+
+  if (known && view === "city"){
+    const net = MONTHS.map((_,i) => rows.reduce((a,r) => a + (r.v ? r.v[i] : 0), 0));
+    html += '<tr class="netrow"><td class="l">All markets</td>' +
+      net.map((x,i) => '<td data-net="' + i + '">' + n0(x) + '</td>').join("") +
+      '<td class="tot">' + n0(net.reduce((a,b) => a + b, 0)) + '</td></tr>';
+  }
+  html += '</tbody>';
+  document.getElementById("grid").innerHTML = html;
+
+  document.getElementById("scope").textContent = view === "city"
+    ? rows.length + " markets · " + m.short.toLowerCase() + " by month"
+    : rows.length + " pitches · " + m.short.toLowerCase() + " by month";
+
+  const blocked = document.getElementById("blocked");
+  if (view === "city" && !known){
+    blocked.hidden = false;
+    blocked.innerHTML = 'Per-city monthly ' + m.short.toLowerCase() + ' was not in the source screenshots, so ' +
+      'these cells are <b>dashed rather than invented</b>. The live build has this data — the layout is what is ' +
+      'being shown here. Switch to <b>Spots booked</b> to see the grid populated with real figures.';
+  } else if (view === "field"){
+    blocked.hidden = false;
+    blocked.innerHTML = 'Real pitch names, dashed values — per-pitch monthly figures were not in the source. ' +
+      'This is the third step of the drill-down: network trend, then the market that moved it, then the pitch.';
+  } else {
+    blocked.hidden = true;
+  }
+
+  document.getElementById("bField").disabled = !m.field;
+  document.getElementById("bField").title = m.field ? "" :
+    "A registration attaches to a market, never to a pitch";
+
+  document.getElementById("foot").innerHTML =
+    (known ? '<b>Shading compares each market against its own months, not against other markets</b> — otherwise ' +
+      'Austin would be dark and everything else blank, which is what you already know. St. Louis fading from 322 ' +
+      'in March to 49 in June is the kind of thing this is for. ' : '') +
+    (m.field ? '' : '<b>Field View is unavailable for registrations</b> — a registration attaches to a market and ' +
+      'never to a pitch, so there is no field-level figure to show. ') +
+    'El Paso and New York City have registrations but have never run a match, so their zeros are real zeros.';
+}
+
+document.getElementById("bCity").addEventListener("click", () => {
+  view = "city";
+  document.getElementById("bCity").classList.add("on");
+  document.getElementById("bField").classList.remove("on");
+  renderGrid();
+});
+document.getElementById("bField").addEventListener("click", () => {
+  if (!M().field) return;
+  view = "field";
+  document.getElementById("bField").classList.add("on");
+  document.getElementById("bCity").classList.remove("on");
+  renderGrid();
+});
+
+function renderAll(){
+  renderChart();
+  if (!M().field && view === "field"){
+    view = "city";
+    document.getElementById("bCity").classList.add("on");
+    document.getElementById("bField").classList.remove("on");
+  }
+  renderGrid();
+}
+
+/* hover */
+const tip = document.getElementById("tip");
+document.addEventListener("mouseover", e => {
+  const hit = e.target.closest(".hit");
+  if (hit){
+    const k = hit.getAttribute("data-k"), i = +hit.getAttribute("data-i");
+    const m = METRICS.find(x => x.k === k);
+    const raw = m.net[i];
+    tip.textContent = MONTHS[i] + " 2026 · " + m.short + " " + fmt(raw, m) +
+      (indexed ? " (index " + (raw / m.net[0] * 100).toFixed(1) + ")" : "");
+    tip.style.opacity = 1; tip.style.left = (e.clientX + 14) + "px"; tip.style.top = (e.clientY - 30) + "px";
+    return;
+  }
+  const cell = e.target.closest(".cell[data-val]");
+  if (cell){
+    const tr = cell.closest("[data-row]");
+    const idx = [...tr.querySelectorAll(".cell[data-val]")].indexOf(cell);
+    tip.textContent = tr.getAttribute("data-row") + " · " + MONTHS[idx] + " 2026 · " +
+      n0(+cell.getAttribute("data-val"));
+    tip.style.opacity = 1; tip.style.left = (e.clientX + 14) + "px"; tip.style.top = (e.clientY - 30) + "px";
+    return;
+  }
+  tip.style.opacity = 0;
+});
+document.addEventListener("mousemove", e => {
+  if (tip.style.opacity == 1){ tip.style.left = (e.clientX + 14) + "px"; tip.style.top = (e.clientY - 30) + "px"; }
+});
+
+renderAll();
+</script>
+</body>
+</html>

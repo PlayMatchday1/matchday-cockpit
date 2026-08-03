@@ -2,6 +2,7 @@
 
 import { useMemo, useState } from "react";
 import type { BehaviorPoint, GrowthData } from "@/lib/growthAnalytics";
+import { metricValue, type GridMetric } from "@/lib/growthMetricGrid";
 import styles from "./growth.module.css";
 import { downloadCsv, fmtInt, monthLabel } from "./format";
 
@@ -41,9 +42,11 @@ export default function DataRoomPanel({ data }: { data: GrowthData }) {
   const effectiveGroup: Group = metric === "registrations" && group === "field" ? "city" : group;
 
   const columns = useMemo(() => {
+    // Shared with the Player behavior panel: the ONE metric-value computation,
+    // so the two can't derive a metric differently (growthMetricGrid.metricValue).
     const pick = (pts: BehaviorPoint[], m: string) => {
       const p = pts.find((x) => x.m === m);
-      return p ? p[metric] : null;
+      return metricValue(p, metric as GridMetric);
     };
     if (effectiveGroup === "matchday") {
       const pts = geo === "All" ? data.behaviorOverall : data.behaviorByCity[geo] ?? [];
