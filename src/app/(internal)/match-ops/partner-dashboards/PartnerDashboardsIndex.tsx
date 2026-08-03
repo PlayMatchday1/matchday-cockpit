@@ -16,7 +16,7 @@ import { createPortal } from "react-dom";
 import { supabase } from "@/lib/supabase";
 import { generateSlug } from "@/lib/partnerSlug";
 import type { PartnerStats, PartnerPaymentInfo, PartnerPaymentCadence, PartnerRevenueModel } from "@/lib/partnerStats";
-import { deriveOwed, derivePeriodRows, stateLine, headerLine, todayYmd, type PartnerOwed } from "@/lib/partnerDashboardView";
+import { deriveOwed, derivePeriodRows, stateLine, headerLine, todayYmd, money, type PartnerOwed, type PeriodRow } from "@/lib/partnerDashboardView";
 import PartnerDashboardView from "@/app/partners/[slug]/PartnerDashboardView";
 
 type AdminPartner = {
@@ -76,6 +76,12 @@ export default function PartnerDashboardsIndex() {
   if (partners.length === 0) return <div className="p-8 text-sm" style={{ color: C.muted }}>No partner dashboards yet.</div>;
 
   const selected = partners.find((p) => p.slug === sel) ?? partners[0];
+  // Closed periods an admin can settle: unpaid (scheduled / past-due / disputed)
+  // get "Mark paid"; already-paid get "Undo". Open, $0 ("nothing") and pre-system
+  // historical rows carry no action.
+  const settleRows: PeriodRow[] = derivePeriodRows(selected.payment, today).filter(
+    (r) => r.state === "scheduled" || r.state === "past_due" || r.state === "paid" || r.state === "disputed",
+  );
 
   const refresh = async () => { setBusy(true); await load(); setBusy(false); };
   const doUpdate = async (id: string, patch: Record<string, unknown>) => {
@@ -98,6 +104,23 @@ export default function PartnerDashboardsIndex() {
     setBusy(true);
     const { error: e } = await supabase.from("partner_dashboards").insert({ slug: generateSlug(name.trim()), venue_id: venueId, partner_name: name.trim(), enabled: true, payment_cadence: "monthly" });
     if (e) { alert(`Add failed: ${e.message}`); setBusy(false); return; }
+    await load(); setBusy(false);
+  };
+  // Mark ONE period paid / undo. The API snapshots the amount server-side; we just
+  // send which period and which direction, then reload so the seam view + switcher
+  // owed total update from the same recompute.
+  const doMarkPaid = async (partnerId: string, weekStartDate: string, action: "paid" | "unpaid") => {
+    setBusy(true);
+    const { data: sess } = await supabase.auth.getSession();
+    const token = sess.session?.access_token;
+    if (!token) { alert("Session expired — sign in again."); setBusy(false); return; }
+    const res = await fetch("/api/partner-dashboards", {
+      method: "POST",
+      headers: { Authorization: `Bearer ${token}`, "Content-Type": "application/json" },
+      body: JSON.stringify({ partnerId, weekStartDate, action }),
+    });
+    const json = await res.json().catch(() => ({}));
+    if (!res.ok) { alert(`Failed: ${json?.error ?? `HTTP ${res.status}`}`); setBusy(false); return; }
     await load(); setBusy(false);
   };
 
@@ -171,6 +194,35 @@ export default function PartnerDashboardsIndex() {
           <button type="button" style={btnWarn} disabled={busy} onClick={() => doUpdate(selected.id, { enabled: !selected.enabled })}>{selected.enabled ? "Disable" : "Enable"}</button>
           <button type="button" style={btnWarn} disabled={busy} onClick={() => doDelete(selected)}>Delete</button>
         </div>
+        {/* payments — mark a period paid / undo (admin-only; never on the partner's page) */}
+        <div className="mt-2.5 border-t pt-2.5" style={{ borderTopColor: "rgba(255,255,255,.13)" }} data-testid="settle-panel">
+          <div className="mb-2 text-[10.5px] font-[800] tracking-[1.1px]" style={{ color: "#9fbfae" }}>PAYMENTS · MARK A PERIOD PAID</div>
+          {settleRows.length === 0 ? (
+            <div className="text-[11.5px] font-semibold" style={{ color: "#9fbfae" }}>No closed periods to settle yet — nothing is owed or every period is still open.</div>
+          ) : (
+            <div className="flex flex-col gap-1.5">
+              {settleRows.map((r) => {
+                const paid = r.state === "paid";
+                const tag = paid ? (r.paidOn ? `paid ${r.paidOn}` : "paid") : r.state === "past_due" ? "past due" : r.state === "disputed" ? "disputed" : "scheduled";
+                const tagColor = paid ? "#8fd9b4" : r.state === "scheduled" ? "#9fbfae" : "#ffc79a";
+                return (
+                  <div key={r.pw.weekStartDate} className="flex flex-wrap items-center gap-x-2.5 gap-y-1 rounded-[8px] px-2.5 py-1.5" style={{ background: "rgba(255,255,255,.055)" }} data-testid="settle-row" data-week={r.pw.weekStartDate}>
+                    <span className="text-[12px] font-[700]" style={{ color: "#eaf5ec" }}>{r.label}</span>
+                    <span className="text-[12px] font-[800] tabular-nums" style={{ color: paid ? "#8fd9b4" : "#ffd9cb" }}>{money(r.payment ?? 0)}</span>
+                    <span className="text-[11px] font-[700]" style={{ color: tagColor }}>{tag}</span>
+                    <span className="ml-auto" />
+                    {paid ? (
+                      <button type="button" style={btnQuiet} disabled={busy} onClick={() => doMarkPaid(selected.id, r.pw.weekStartDate, "unpaid")}>Undo</button>
+                    ) : (
+                      <button type="button" style={btnDark} disabled={busy} onClick={() => doMarkPaid(selected.id, r.pw.weekStartDate, "paid")}>Mark paid</button>
+                    )}
+                  </div>
+                );
+              })}
+            </div>
+          )}
+        </div>
+
         <div className="mt-2.5 text-[11.5px] font-semibold leading-[1.5]" style={{ color: "#9fbfae" }}>
           Anyone holding the link can open this page — it is the only key, there is no login on it, and it shows this venue and no other. Disabling returns 404 immediately and regenerating does the same to the old link, so both break whatever the partner has bookmarked. The link has been live since {new Date(selected.createdAt).toLocaleDateString("en-US", { year: "numeric", month: "short", day: "numeric" })}.
         </div>
