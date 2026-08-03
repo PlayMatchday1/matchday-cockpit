@@ -18,7 +18,7 @@ import { fmtInt, monthLabel } from "./format";
 // One-hue light→dark ramp in stage order (colour is redundant with position; the
 // number is always printed). Downloads has no source → no bar.
 const STAGES: { label: string; hue: string | null }[] = [
-  { label: "Downloads", hue: null },
+  { label: "Downloads", hue: "#c3ecd6" },
   { label: "Registrations", hue: "#93dcb9" },
   { label: "1 match", hue: "#5ecb97" },
   { label: "3 matches", hue: "#2fa774" },
@@ -68,7 +68,12 @@ export default function PlayerFunnel({ data, period }: { data: GrowthData; perio
       },
     ].map((r) => {
       const c = sumCohort(data.funnelByMonth, new Set(r.months));
-      const vals = [null, c.registrations, c.played1, c.played3, c.played5, c.played10] as (number | null)[];
+      // Downloads = Android installs summed over the row's months; null (dash)
+      // when we have NO install data for that period — never 0. iOS not wired.
+      const monthSet = new Set(r.months);
+      const dlMonths = data.downloads.androidByMonth.filter((d) => monthSet.has(d.m));
+      const downloads = dlMonths.length ? dlMonths.reduce((a, d) => a + d.count, 0) : null;
+      const vals = [downloads, c.registrations, c.played1, c.played3, c.played5, c.played10] as (number | null)[];
       // Assert nested — a violation is a bug, not a number to render.
       for (let i = 2; i < vals.length; i++) {
         if ((vals[i] as number) > (vals[i - 1] as number)) {
@@ -151,9 +156,12 @@ export default function PlayerFunnel({ data, period }: { data: GrowthData; perio
       </div>
 
       <div className={styles.funnelNote}>
-        The bar in each cell is that stage as a share of the row&rsquo;s registrations, so the funnel narrows left to
-        right. The figure between two cells is the conversion from the left one to the right one. Downloads has no source,
-        so its cell and its conversion are dashed — never 0.
+        The bar in each cell is that stage as a share of the row&rsquo;s largest stage, so the funnel narrows left to
+        right; the figure between two cells is the conversion from the left one to the right one, dashed whenever either
+        side is unknown. <b>Downloads → Registrations is an aggregate ratio, not a per-user conversion</b> — store
+        installs can&rsquo;t be linked to a player (Apple and Google never reveal who installed), unlike every later step,
+        which is a true cohort subset. Downloads is Android only until Apple lands, and is a dash wherever we have no
+        install data — never 0.
       </div>
     </div>
   );
@@ -162,13 +170,20 @@ export default function PlayerFunnel({ data, period }: { data: GrowthData; perio
 // Builds a row's stage + conversion cells. The conversion between stage i and i+1
 // is b/a (b = vals[i+1], a = vals[i]); a dash when either is null or a is 0.
 function renderRowCells(vals: (number | null)[]): ReactNode[] {
-  const base = vals[1] ?? 0; // registrations
+  // Bars are a share of the LARGEST stage in the row (Downloads when known, else
+  // Registrations) so the funnel narrows left → right even now that Downloads is
+  // a real, larger-than-registrations value.
+  const base = Math.max(0, ...vals.filter((v): v is number => v != null));
   const out: ReactNode[] = [];
   vals.forEach((v, i) => {
     const isNull = v == null;
     const share = isNull || !base ? 0 : Math.min(100, (v / base) * 100);
+    // ASSERT 1: a null stage renders its dashed treatment wherever it falls in
+    // the row (not only column 0). isNull ⟺ funnelStageNull is applied below.
+    const stageDashed = isNull;
+    if (isNull && !stageDashed) throw new Error(`funnel: null stage at ${i} not dashed`);
     out.push(
-      <div key={`s${i}`} className={`${styles.funnelStage} ${isNull ? styles.funnelStageNull : ""}`}>
+      <div key={`s${i}`} className={`${styles.funnelStage} ${stageDashed ? styles.funnelStageNull : ""}`}>
         <span className={styles.funnelSnum}>{isNull ? "—" : fmtInt(v)}</span>
         {isNull ? (
           <span className={styles.funnelSbar} style={{ background: "transparent" }} />
@@ -182,7 +197,11 @@ function renderRowCells(vals: (number | null)[]): ReactNode[] {
     if (i < vals.length - 1) {
       const a = vals[i];
       const b = vals[i + 1];
-      const known = a != null && b != null && a > 0;
+      // ASSERT 2: a conversion is a dash whenever EITHER side is null OR the left
+      // side is 0 — regardless of position in the row.
+      const mustDash = a == null || b == null || a <= 0;
+      const known = !mustDash;
+      if (mustDash && known) throw new Error(`funnel: conversion at ${i} should be dashed`);
       out.push(
         <div key={`c${i}`} className={styles.funnelConv}>
           <span className={`${styles.funnelCpill} ${known ? "" : styles.funnelCpillNone}`}>

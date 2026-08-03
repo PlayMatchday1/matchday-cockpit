@@ -50,6 +50,7 @@ import { refreshMembershipSnapshots } from "@/lib/membershipSnapshots";
 import { refreshMembershipPriceSnapshots } from "@/lib/membershipPriceSnapshots";
 import { recomputeManagerPayIntoFinExpenses } from "@/lib/managerPayCompute";
 import { ingestTelnyxSms } from "@/lib/telnyxSmsIngest";
+import { ingestCurrentMonth, PlayGrantPendingError } from "@/lib/playInstallsSync";
 import { runWithLog, type TriggeredBy } from "@/lib/syncLogging";
 
 // Stripe ~60s + mdapi_reviews ~10s + mdapi_subscriptions ~60s +
@@ -380,6 +381,27 @@ export async function POST(req: Request) {
         : { rows_imported: r.rowsUpserted },
   );
 
+  // Google Play installs — re-download the CURRENT month in full and upsert every
+  // daily row (never append; late restatements of earlier days overwrite). This
+  // is a NEW integration and is deliberately isolated: a throw here — including
+  // the PlayGrantPendingError that is expected for up to 24h while the Play
+  // bucket grant propagates — must never abort the daily sync. It is caught at
+  // the boundary, logged, and kept OUT of `anyFailed` so a transient 403 does not
+  // flip the whole cron to a failure. The SA key never reaches this log.
+  let playInstallsResult: { ok: boolean; ym?: string; rows?: number; note?: string };
+  try {
+    if (triggeredBy !== "cron") {
+      playInstallsResult = { ok: true, rows: 0, note: "manual mode: skipped (needs service role + runtime SA key)" };
+    } else {
+      const r = await ingestCurrentMonth(supabase, new Date());
+      playInstallsResult = { ok: true, ym: r.ym, rows: r.rows };
+    }
+  } catch (e) {
+    const note = e instanceof PlayGrantPendingError ? "Play grant still propagating (403) — expected, non-fatal" : e instanceof Error ? e.message : "failed";
+    console.error("[cron] play-installs step failed (isolated, non-fatal):", note);
+    playInstallsResult = { ok: false, note };
+  }
+
   const anyFailed =
     !stripeResult.ok ||
     !reviewsResult.ok ||
@@ -411,6 +433,9 @@ export async function POST(req: Request) {
         membership_prices: membershipPricesResult,
         membership_snapshots: snapshotResult,
         telnyx_sms: telnyxSmsResult,
+        // Informational only — intentionally excluded from `anyFailed` so a
+        // propagating Play grant (403) cannot fail the daily cron.
+        play_installs: playInstallsResult,
       },
     },
     { status: anyFailed ? 500 : 200 },

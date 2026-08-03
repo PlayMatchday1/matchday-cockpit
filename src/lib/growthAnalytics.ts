@@ -155,12 +155,17 @@ export type RawRevenue = {
   net: number | null;
 };
 
+export type RawAndroidInstall = { period_date: string; count: number };
+
 export type RawInput = {
   matches: RawMatch[];
   players: RawPlayer[];
   users: RawUser[];
   subscriptions: RawSubscription[];
   revenue: RawRevenue[];
+  // Android daily user-installs from app_downloads (empty until the Play ingest
+  // runs; absent entirely if the table doesn't exist yet). iOS is not wired.
+  androidDaily?: RawAndroidInstall[];
   // ISO instant the read ran (server "now"); churn "days inactive" is measured
   // from this. Passed in (never Date.now() inside the pure fn) so the engine
   // stays deterministic and testable.
@@ -243,6 +248,13 @@ export type GrowthData = {
     onboardingGap: number;
     played1: number;
     played5: number;
+  };
+  // App-store installs. android reaches back further (2023) than play-derived
+  // data (2026); ios is null until Apple lands (rendered as a dash, never 0).
+  downloads: {
+    androidByMonth: { m: string; count: number }[];
+    android: { earliest: string; latest: string; total: number } | null;
+    ios: null;
   };
   registrationsByMonth: { m: string; count: number }[]; // completed, non-fake, by signup month, 2023+
   // Nested cohort funnel by signup month (additive across months). downloads is
@@ -774,9 +786,29 @@ export function computeGrowth(input: RawInput): GrowthData {
     if (declaredNorm && freq && declaredNorm !== freq) disagreeNormalized++;
   }
 
+  // ── downloads (android installs) ────────────────────────────────────────────
+  const androidDaily = input.androidDaily ?? [];
+  const androidMonthMap = new Map<string, number>();
+  let androidEarliest = "";
+  let androidLatest = "";
+  let androidTotal = 0;
+  for (const d of androidDaily) {
+    const m = monthKey(d.period_date);
+    androidMonthMap.set(m, (androidMonthMap.get(m) ?? 0) + d.count);
+    androidTotal += d.count;
+    if (!androidEarliest || d.period_date < androidEarliest) androidEarliest = d.period_date;
+    if (!androidLatest || d.period_date > androidLatest) androidLatest = d.period_date;
+  }
+  const downloads: GrowthData["downloads"] = {
+    androidByMonth: [...androidMonthMap.entries()].sort().map(([m, count]) => ({ m, count })),
+    android: androidDaily.length ? { earliest: androidEarliest, latest: androidLatest, total: androidTotal } : null,
+    ios: null,
+  };
+
   return {
     generatedAt: now,
     rowCounts: input.rowCounts,
+    downloads,
     floors: {
       registrations: "2023-03",
       memberships: "2024-02",

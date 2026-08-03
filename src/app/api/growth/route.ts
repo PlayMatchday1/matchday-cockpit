@@ -62,6 +62,23 @@ export async function GET(req: Request) {
       ),
     ]);
 
+    // Android installs from app_downloads. Tolerant: the table may not exist yet
+    // (migration unapplied) or be empty (Play ingest not run) — either way the
+    // downloads column renders a dash, never 0. Never throws the whole route.
+    let androidDaily: { period_date: string; count: number }[] = [];
+    try {
+      androidDaily = await selectAll<{ period_date: string; count: number }>(() =>
+        sb
+          .from("app_downloads")
+          .select("period_date, count")
+          .eq("platform", "android")
+          .eq("period_grain", "day")
+          .order("period_date"),
+      );
+    } catch {
+      androidDaily = [];
+    }
+
     // Raw counts for the verification report (Part 10 #12).
     const playersLive = players.filter((p) => !p.deleted_at).length;
     const usersNonFake = users.filter((u) => !u.is_fake_player);
@@ -92,6 +109,7 @@ export async function GET(req: Request) {
       users,
       subscriptions,
       revenue,
+      androidDaily,
       now: new Date().toISOString(),
       rowCounts,
     });

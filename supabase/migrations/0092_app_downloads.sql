@@ -9,9 +9,17 @@
 --   * Android — Play Console "statistics" CSV export that Google drops into a
 --            GCS bucket, read with a service account. Column = new user installs.
 -- This table is the local landing spot for both so the dashboard reads ONE
--- place. It is NOT part of the mdapi_* mirror and the audit never writes it — a
--- future, separate ingest job (out of scope here) upserts rows; the growth
--- reader only SELECTs.
+-- place. It is NOT part of the mdapi_* mirror. The Play ingest job
+-- (lib/playInstallsSync.ts, run daily for the current month + a manual backfill
+-- route for history) upserts android rows; the growth reader only SELECTs. The
+-- iOS side is not built yet — no rows land until the Apple key exists, and no
+-- schema change is needed when it does.
+--
+-- GRAIN: one row per (platform, package, calendar day, metric). platform is
+-- 'ios' | 'android' and rows are NEVER pre-summed across platforms — Android is
+-- a small minority of players and a combined total would hide that. package is
+-- carried explicitly (com.matchday_app today) so a second app can never be
+-- silently summed in.
 --
 -- THE JOIN CAVEAT (documented so nobody wires it wrong later): these are device
 -- / store-account counts. They cannot be joined to a mdapi_users.id — there is
@@ -27,7 +35,11 @@
 create table if not exists app_downloads (
   id            bigint generated always as identity primary key,
   platform      text        not null check (platform in ('ios','android')),
-  -- App Store Connect metric name / Play Console column this count came from.
+  -- App / package identifier this count belongs to (e.g. 'com.matchday_app').
+  package       text        not null,
+  -- App Store Connect metric name / Play Console column this count came from
+  -- (android today: 'daily_user_installs' — the user-based first-install column,
+  -- the closest counterpart to Apple's App Units).
   metric        text        not null default 'app_units',
   -- Calendar day the count is FOR (America/Chicago), or the 1st of the month
   -- when period_grain = 'month'. Store-provided period, not ingest time.
@@ -39,10 +51,11 @@ create table if not exists app_downloads (
   -- Original API/CSV row, kept for audit + reprocessing.
   raw           jsonb,
   ingested_at   timestamptz not null default now(),
-  -- One row per platform+metric+grain+day, so re-runs UPSERT instead of dupe.
-  unique (platform, metric, period_grain, period_date)
+  -- One row per platform+package+grain+day+metric, so a re-download of the
+  -- current month (or a late restatement of an earlier day) UPSERTs, never dupes.
+  unique (platform, package, metric, period_grain, period_date)
 );
 
--- Growth reads are date-ranged and per-platform.
+-- Growth reads are per-platform, date-ranged.
 create index if not exists app_downloads_period_idx
-  on app_downloads (period_grain, period_date);
+  on app_downloads (platform, period_grain, period_date);

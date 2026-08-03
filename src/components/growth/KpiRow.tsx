@@ -24,6 +24,15 @@ export default function KpiRow({ data, period }: { data: GrowthData; period: Per
     return { registrations, played1, played5 };
   }, [data.funnelByMonth, period]);
 
+  // Android installs summed over the period; iOS is not wired (dash, never 0).
+  const android = useMemo(() => {
+    const months = data.downloads.androidByMonth.filter((d) => d.m >= period.start && d.m <= period.end);
+    return { has: data.downloads.android != null && months.length > 0, total: months.reduce((a, d) => a + d.count, 0) };
+  }, [data.downloads, period]);
+  const androidRange = data.downloads.android
+    ? `${monthLabel(data.downloads.android.earliest.slice(0, 7))} – ${monthLabel(data.downloads.android.latest.slice(0, 7))}`
+    : null;
+
   const k = data.kpis;
   const regOfPlayed1 = scoped.registrations ? scoped.played1 / scoped.registrations : 0;
   const played1OfPlayed5 = scoped.played1 ? scoped.played5 / scoped.played1 : 0;
@@ -33,12 +42,21 @@ export default function KpiRow({ data, period }: { data: GrowthData; period: Per
   return (
     <div className={styles.kpiRow}>
       <div className={`${styles.kpi} ${styles.kpiAccent}`}>
-        <div className={styles.kpiLabel}>App downloads</div>
-        <div className={`${styles.kpiValue} ${styles.kpiValueMuted}`}>—</div>
+        <div className={styles.kpiLabel}>App downloads · Android</div>
+        <div className={`${styles.kpiValue} ${android.has ? "" : styles.kpiValueMuted}`}>
+          {android.has ? fmtInt(android.total) : "—"}
+        </div>
         <div className={styles.kpiFoot}>
-          <span className={styles.notConnected}>
-            <span className={styles.notConnectedDot} /> store sync not connected
-          </span>
+          {androidRange ? (
+            `Play installs · ${androidRange}`
+          ) : (
+            <span className={styles.notConnected}>
+              <span className={styles.notConnectedDot} /> awaiting Play sync
+            </span>
+          )}
+        </div>
+        <div className={styles.kpiSecondary}>
+          iOS — · Apple not connected (App Store Connect key pending)
         </div>
       </div>
 
