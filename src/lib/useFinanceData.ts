@@ -4,6 +4,7 @@ import { useEffect, useState } from "react";
 import { supabase } from "./supabase";
 import { selectAll } from "./supabasePagination";
 import { cityFromAbbr } from "./cityMap";
+import { canonicalVenueName, venueCategory, type VenueCategory } from "./venueResolver";
 import {
   buildMdapiMemberSpotIndex,
   emptyMdapiMemberSpotIndex,
@@ -109,6 +110,10 @@ export type FinMasterSchedule = {
   mdapi_field_id: number | null;
   venue_id: number | null;
   duration_hours: number;
+  // Special-event matches (tournaments/combines) carry NO venue cost — Ryan's
+  // decision. They are dropped from the cost calc (venue_id forced null) and
+  // this flag lets an assertion prove no event ever contributes cost.
+  category: VenueCategory;
 };
 
 export type FinVenue = {
@@ -403,6 +408,16 @@ function mapMdapiRowToSchedule(
     );
     if (resolvedVenueId == null && beforeSplit != null) counters.specialEvent += 1;
   }
+  // Special events (tournaments/combines) carry NO venue cost. Drop them from
+  // the cost calc by nulling venue_id — the same mechanism the capacity-0
+  // Soccer Central rows already use — but keyed on the resolver's category, so
+  // ALL event matches come out (incl cancelled: this mapper feeds
+  // cancelledSchedule too, giving the including-cancelled cost removal).
+  const category = venueCategory(cleanText(r.field_title));
+  if (category === "event" && resolvedVenueId != null) {
+    resolvedVenueId = null;
+    counters.specialEvent += 1;
+  }
   if (resolvedVenueId == null && initialVenueId == null) counters.unresolved += 1;
   const v =
     resolvedVenueId != null
@@ -433,6 +448,7 @@ function mapMdapiRowToSchedule(
     mdapi_field_id: mdapiFieldId,
     venue_id: resolvedVenueId,
     duration_hours: 1,
+    category,
   };
 }
 
@@ -654,14 +670,15 @@ async function load(quarter: QuarterInfo): Promise<void> {
       venueFields.set(fieldId, venueId);
     }
   }
+  // The single canonical resolver replaces the fin_venue_aliases (canonVenue)
+  // path. Read-time only — fin_revenue.venue is unchanged on disk.
   function canonVenue(v: unknown): string {
-    const c = cleanText(v);
-    return venueAliases.get(c) ?? c;
+    return canonicalVenueName(cleanText(v));
   }
   function canonVenueNullable(v: unknown): string | null {
     const c = cleanTextNullable(v);
     if (c === null) return null;
-    return venueAliases.get(c) ?? c;
+    return canonicalVenueName(c);
   }
 
   const revenue: FinRevenue[] = revenueRows.map((r) => ({
@@ -818,6 +835,17 @@ async function load(quarter: QuarterInfo): Promise<void> {
     console.info(
       `[useFinanceData] ${cmsCounters.specialEvent} cancelled mdapi_matches row(s) excluded as Soccer Central special events (max_player_count null/0).`,
     );
+  }
+
+  // ASSERT the cost-side invariant, throw rather than render: no event match
+  // may carry a venue_id, so no tournament can contribute field cost anywhere
+  // downstream (venueMatchCount counts by venue_id).
+  for (const s of [...masterSchedule, ...cancelledSchedule]) {
+    if (s.category === "event" && s.venue_id != null) {
+      throw new Error(
+        `[useFinanceData] event match ${s.id} carries venue_id ${s.venue_id} — events must contribute zero field cost`,
+      );
+    }
   }
 
   const memberSpots: FinMemberSpotsRow[] = msRows.map((r) => ({

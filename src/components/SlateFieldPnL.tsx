@@ -22,7 +22,7 @@ import { supabase } from "@/lib/supabase";
 import { useFinanceData } from "@/lib/useFinanceData";
 import { fetchWeekMatchPnL, type MatchPnLRow } from "@/lib/matchPnL";
 import { fieldCode } from "@/lib/slateFieldCodes";
-import { normField } from "@/lib/normField";
+import { canonicalVenueName } from "@/lib/venueResolver";
 
 const C = {
   forest: "#0d3b2e", forestDeep: "#072a20", accent: "#35c77f", mint: "#e0f2e7",
@@ -104,7 +104,7 @@ export default function SlateFieldPnL({ city }: { city: string }) {
       const key = bucket === "unmapped" ? `unmapped:${r.venueId ?? r.venueRawName}` : `v:${r.venueId}`;
       let g = groups.get(key);
       if (!g) {
-        g = { key, label: fieldCode(normField(v?.venue_name ?? r.venueRawName)), fullName: v?.venue_name ?? r.venueRawName,
+        g = { key, label: fieldCode(canonicalVenueName(v?.venue_name ?? r.venueRawName)), fullName: v?.venue_name ?? r.venueRawName,
           bucket, costLabel, matches: 0, dpp: 0, member: 0, promo: 0, promoSpots: 0, cost: bucket === "flat" ? 0 : null, unmappedNames: [] };
         groups.set(key, g);
       }
