@@ -1,0 +1,356 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+<meta charset="utf-8">
+<title>City P&amp;L · mockup v2</title>
+<style>
+:root{
+  --forest:#0d3b2e; --accent:#35c77f; --mint:#e0f2e7; --ink:#12241d; --muted:#626f68;
+  --ok-ink:#12704a; --line:#e6ebe8; --hair:#eff3f1; --chip-bg:#eef3f0; --chip-line:#e2eae5;
+  --surface:#ffffff; --canvas:#f4efe4; --col-bg:#fdfbf5; --col-dash:#d8d0bd;
+  --gold-line:#e3c369; --gold-ink:#8a6300; --gold-dot:#d9a521; --gold-bg:#fbf2dd;
+  --ns-ink:#6f6858; --loss:#8f2d15; --loss-bg:#fbe9e3;
+}
+*{box-sizing:border-box} html,body{margin:0;padding:0}
+body{background:var(--canvas);color:var(--ink);
+  font-family:-apple-system,BlinkMacSystemFont,"Segoe UI",Inter,Roboto,Helvetica,Arial,sans-serif;
+  -webkit-font-smoothing:antialiased;padding:26px 24px 60px}
+.cp-wrap{max-width:1180px;margin:0 auto}
+.cp-note{border:1px dashed var(--col-dash);background:var(--col-bg);color:var(--ns-ink);border-radius:10px;
+  padding:11px 14px;font-size:12.5px;line-height:1.55;margin-bottom:18px}
+.cp-note b{color:var(--ink)}
+.cp-card{background:var(--surface);border:1px solid var(--line);border-radius:16px;padding:22px}
+
+.cp-head{display:flex;align-items:flex-start;justify-content:space-between;gap:24px;flex-wrap:wrap;margin-bottom:20px}
+.cp-eyebrow{font-size:11.5px;font-weight:700;letter-spacing:.09em;text-transform:uppercase;color:var(--muted);margin:0 0 6px}
+.cp-title{font-size:23px;font-weight:800;color:var(--forest);margin:0;letter-spacing:-.015em}
+.cp-sub{font-size:12.5px;color:var(--muted);margin:8px 0 0;line-height:1.55;max-width:70ch}
+.cp-ctrls{display:flex;flex-direction:column;gap:9px;align-items:flex-end}
+.cp-seg{display:inline-flex;background:var(--chip-bg);border:1px solid var(--chip-line);border-radius:999px;padding:3px}
+.cp-seg button{border:0;background:transparent;color:var(--ns-ink);font-size:12.5px;font-weight:700;
+  padding:5px 13px;border-radius:999px;cursor:pointer;font-variant-numeric:tabular-nums}
+.cp-seg button.on{background:var(--forest);color:#fff}
+.cp-seg.is-off{opacity:.45} .cp-seg.is-off button{cursor:not-allowed}
+.cp-segwrap{display:flex;align-items:center;gap:9px}
+.cp-seglab{font-size:10.5px;font-weight:700;letter-spacing:.07em;text-transform:uppercase;color:var(--muted)}
+.cp-gearwrap{position:relative}
+.cp-gear{display:inline-flex;align-items:center;gap:9px;border:1px solid var(--chip-line);background:var(--surface);
+  color:var(--ns-ink);border-radius:999px;padding:6px 14px 6px 11px;cursor:pointer;font-size:12.5px;font-weight:700}
+.cp-gear:hover{background:var(--chip-bg)}
+.cp-gear[aria-expanded="true"]{border-color:var(--forest);background:var(--chip-bg)}
+.cp-gearico{font-size:14px;line-height:1;color:var(--muted)}
+.cp-gearnow{font-variant-numeric:tabular-nums;color:var(--ink)}
+.cp-panel{position:absolute;right:0;top:calc(100% + 8px);z-index:20;background:var(--surface);
+  border:1px solid var(--line);border-radius:12px;padding:14px;box-shadow:0 10px 28px rgba(13,59,46,.13);
+  display:flex;flex-direction:column;gap:10px;align-items:flex-end}
+.cp-panel[hidden]{display:none}
+.cp-why{font-size:11.5px;color:var(--gold-ink);background:var(--gold-bg);border:1px solid var(--gold-line);
+  border-radius:7px;padding:4px 10px;max-width:44ch;line-height:1.45}
+
+/* main table */
+.cp-tbl{width:100%;border-collapse:collapse;font-variant-numeric:tabular-nums}
+.cp-tbl th{font-size:10.5px;font-weight:700;letter-spacing:.06em;text-transform:uppercase;color:var(--muted);
+  text-align:right;padding:0 12px 10px;border-bottom:1px solid var(--line);white-space:nowrap}
+.cp-tbl th.l{text-align:left;padding-left:12px}
+.cp-row{border-bottom:1px solid var(--hair);cursor:pointer}
+.cp-row:hover{background:var(--col-bg)}
+.cp-row td{padding:13px 12px;text-align:right;font-size:14px;font-weight:700;color:var(--ink);white-space:nowrap}
+.cp-row td.l{text-align:left;padding-left:12px}
+.cp-city{font-size:15px;font-weight:800;letter-spacing:-.01em}
+.cp-caret{color:var(--muted);font-size:10px;margin-left:8px}
+.cp-rank{display:inline-flex;align-items:center;justify-content:center;width:19px;height:19px;border-radius:999px;
+  background:var(--chip-bg);border:1px solid var(--chip-line);font-size:10.5px;font-weight:800;color:var(--ns-ink);margin-right:10px}
+.cp-pos{color:var(--ok-ink)} .cp-neg{color:var(--loss)} .cp-mut{color:var(--ns-ink);font-weight:600}
+.cp-net{font-size:16px;font-weight:800}
+.cp-marg{display:inline-block;font-size:11px;font-weight:800;border-radius:999px;padding:2px 9px;
+  background:var(--mint);color:var(--ok-ink);border:1px solid #b9dfc9}
+.cp-marg.neg{background:var(--loss-bg);color:var(--loss);border-color:#f0cec2}
+.cp-flag{display:inline-block;font-size:9.5px;font-weight:800;letter-spacing:.04em;text-transform:uppercase;
+  color:var(--gold-ink);background:var(--gold-bg);border:1px solid var(--gold-line);border-radius:999px;
+  padding:1px 7px;margin-left:8px;vertical-align:1px}
+.cp-blank td{color:var(--muted);font-weight:600}
+.cp-total td{border-top:2px solid var(--line);border-bottom:0;padding-top:15px;font-weight:800;font-size:15px}
+.cp-total td.l{font-size:12px;letter-spacing:.06em;text-transform:uppercase;color:var(--muted);font-weight:800}
+
+/* drill */
+.cp-drill td{background:var(--col-bg);padding:0;border-bottom:1px solid var(--line)}
+.cp-din{padding:16px 14px 18px}
+.cp-dh{font-size:10.5px;font-weight:800;letter-spacing:.07em;text-transform:uppercase;color:var(--muted);margin:0 0 10px}
+.cp-ftbl{width:100%;border-collapse:collapse;font-variant-numeric:tabular-nums;max-width:900px}
+.cp-ftbl th{font-size:10px;font-weight:700;letter-spacing:.05em;text-transform:uppercase;color:var(--muted);
+  text-align:right;padding:0 12px 7px;border-bottom:1px solid var(--line);white-space:nowrap}
+.cp-ftbl th.l{text-align:left;padding-left:0}
+.cp-ftbl td{padding:9px 12px;text-align:right;font-size:13px;font-weight:700;border-bottom:1px solid var(--hair)}
+.cp-ftbl td.l{text-align:left;padding-left:0}
+.cp-ftot td{background:var(--surface);font-weight:800;border-top:2px solid var(--line);border-bottom:0}
+.cp-bucket{display:inline-block;font-size:9.5px;font-weight:800;letter-spacing:.04em;text-transform:uppercase;
+  border-radius:999px;padding:1px 7px;margin-left:9px;vertical-align:1px}
+.cp-bucket.share{color:var(--gold-ink);background:var(--gold-bg);border:1px solid var(--gold-line)}
+.cp-bucket.unmapped{color:var(--loss);background:var(--loss-bg);border:1px solid #f0cec2}
+.cp-rate{font-size:11.5px;color:var(--muted);font-weight:600;display:block;margin-top:2px}
+.cp-dnote{font-size:12px;color:var(--muted);margin-top:11px;line-height:1.5;max-width:88ch}
+.cp-dnote b{color:var(--loss)}
+.cp-dnote.info b{color:var(--ns-ink)}
+
+/* overhead makeup — overhead only, no field cost */
+.cp-mk{margin-top:16px;padding-top:13px;border-top:1px solid var(--line);max-width:900px}
+.cp-mk-h{font-size:10.5px;font-weight:800;letter-spacing:.07em;text-transform:uppercase;color:var(--muted);margin:0 0 9px}
+.cp-mk-bar{display:flex;height:15px;border-radius:4px;overflow:hidden;background:var(--hair)}
+.cp-mk-seg{height:100%}
+.cp-mk-rows{display:flex;flex-wrap:wrap;gap:7px 20px;margin-top:10px}
+.cp-mk-row{display:inline-flex;align-items:center;gap:8px;font-size:12.5px;color:var(--ns-ink);font-weight:600}
+.cp-mk-dot{width:11px;height:11px;border-radius:3px;flex:0 0 auto}
+.cp-mk-v{font-weight:800;color:var(--ink);font-variant-numeric:tabular-nums}
+.cp-mk-p{color:var(--muted);font-variant-numeric:tabular-nums}
+</style>
+</head>
+<body>
+<div class="cp-wrap">
+
+  <div class="cp-note">
+    <b>Mockup data note.</b> Atlanta, Austin and Dallas are real, from the live Aug &middot; Per-Match &middot;
+    Realized cards. The other four cities were below the fold, so their rows are blank rather than invented.
+    <b>Two figures differ from the live page on purpose.</b> Onion Creek ($224 DPP) and Lowell&nbsp;H.&nbsp;Strike
+    ($45) have no cost on file; the live page counts that missing cost as $0 and reports Austin $4,895 and Dallas
+    &minus;$348. Here they are held out of net, giving <b>$4,671</b> and <b>&minus;$393</b>.
+    <b>Spots per field are not in the screenshot</b>, so the member-revenue allocation to each pitch shows as a
+    dash &mdash; the formula is on the card and the live build has the spot counts.
+  </div>
+
+  <div class="cp-card">
+    <div class="cp-head">
+      <div>
+        <p class="cp-eyebrow">Finance &middot; Cities</p>
+        <h1 class="cp-title">City P&amp;L</h1>
+        <p class="cp-sub">Every city on one line, ranked by net. Click a city for its pitches and its overhead.</p>
+      </div>
+      <div class="cp-ctrls">
+        <div class="cp-segwrap">
+          <span class="cp-seglab">City</span>
+          <div class="cp-seg" id="cpScope"></div>
+        </div>
+        <div class="cp-gearwrap">
+          <button class="cp-gear" id="cpGear" aria-expanded="false" aria-controls="cpPanel">
+            <span class="cp-gearico" aria-hidden="true">&#9881;</span>
+            <span class="cp-gearnow" id="cpGearNow"></span>
+          </button>
+          <div class="cp-panel" id="cpPanel" hidden>
+            <div class="cp-segwrap"><span class="cp-seglab">Period</span><div class="cp-seg" id="cpPeriod"></div></div>
+            <div class="cp-segwrap"><span class="cp-seglab">Field cost</span><div class="cp-seg" id="cpBasis"></div></div>
+            <div class="cp-segwrap"><span class="cp-seglab">Window</span><div class="cp-seg" id="cpWindow"></div></div>
+            <div class="cp-why" id="cpWhy" hidden></div>
+          </div>
+        </div>
+      </div>
+    </div>
+
+    <table class="cp-tbl">
+      <thead>
+        <tr>
+          <th class="l">City</th>
+          <th>DPP rev</th>
+          <th>Member rev</th>
+          <th>Field net</th>
+          <th>Overhead</th>
+          <th>Net P&amp;L</th>
+          <th>Margin</th>
+        </tr>
+      </thead>
+      <tbody id="cpBody"></tbody>
+    </table>
+  </div>
+</div>
+
+<script>
+const CITIES = [
+  { name:"Austin", membership:6248, overhead:[["Match Manager Pay",1010],["City Manager",1000]],
+    fields:[
+      { n:"NEMP",                          b:"flat", m:4, rate:77,  dpp:756, cost:308 },
+      { n:"Westlake",                      b:"flat", m:3, rate:114, dpp:312, cost:342 },
+      { n:"Hattrick",                      b:"flat", m:3, rate:32,  dpp:304, cost:96  },
+      { n:"LBJ Early College High School", b:"flat", m:4, rate:80,  dpp:204, cost:320 },
+      { n:"Round Rock",                    b:"flat", m:1, rate:77,  dpp:0,   cost:77  },
+      { n:"Onion Creek",                   b:"unmapped",            dpp:224, cost:null },
+    ]},
+  { name:"Atlanta", membership:564, overhead:[["Match Manager Pay",150]],
+    fields:[ { n:"PRUMC", b:"flat", m:1, rate:120, dpp:48, cost:120 } ]},
+  { name:"Dallas", membership:469, overhead:[["Match Manager Pay",120],["City Manager",800]],
+    fields:[
+      { n:"Bicentennial Park",     b:"flat",  m:1, rate:90, dpp:81, cost:90 },
+      { n:"Crossbar Rowlett",      b:"share",              dpp:72, cost:5  },
+      { n:"Lowell H. Strike M.S.", b:"unmapped",           dpp:45, cost:null },
+    ]},
+  { name:"Houston", blank:true }, { name:"OKC", blank:true },
+  { name:"San Antonio", blank:true }, { name:"St. Louis", blank:true },
+];
+
+const PERIODS=["Q3","Jul","Aug","Sep"], BASES=["As Billed","Per-Match"], WINDOWS=["Realized","Full Month"];
+const state={ period:"Aug", basis:"Per-Match", window:"Realized", open:null, scope:"All cities" };
+const OH_HUES=["var(--gold-dot)","var(--forest)","var(--accent)","var(--muted)"];
+
+const usd = v => (v<0?"−$":"$") + Math.abs(Math.round(v)).toLocaleString("en-US");
+
+function calc(c){
+  if (c.blank) return null;
+  const mapped   = c.fields.filter(f => f.cost !== null);
+  const unmapped = c.fields.filter(f => f.cost === null);
+  const dpp      = mapped.reduce((a,f)=>a+f.dpp,0);
+  const fieldCost= mapped.reduce((a,f)=>a+f.cost,0);
+  const fieldNet = dpp - fieldCost;
+  const untracked= unmapped.reduce((a,f)=>a+f.dpp,0);
+  const overhead = c.overhead.reduce((a,o)=>a+o[1],0);
+  const gross    = dpp + c.membership;
+  const net      = fieldNet + c.membership - overhead;
+  return { mapped, unmapped, dpp, fieldCost, fieldNet, untracked, overhead, gross, net,
+           margin: gross ? net/gross : 0, matches: mapped.reduce((a,f)=>a+(f.m||0),0) };
+}
+
+function render(){
+  const seg=(host,opts,cur,key,disabled)=>{
+    const el=document.getElementById(host);
+    el.className="cp-seg"+(disabled?" is-off":"");
+    el.innerHTML=opts.map(o=>'<button data-k="'+key+'" data-v="'+o+'"'+(disabled?" disabled":"")+
+      ' class="'+(o===cur?"on":"")+'">'+o+'</button>').join("");
+  };
+  const billed = state.basis === "As Billed";
+  seg("cpScope", ["All cities"].concat(CITIES.filter(c=>!c.blank).map(c=>c.name)), state.scope, "scope", false);
+  seg("cpPeriod", PERIODS, state.period, "period", false);
+  seg("cpBasis",  BASES,   state.basis,  "basis",  false);
+  seg("cpWindow", WINDOWS, billed?"Full Month":state.window, "window", billed);
+
+  document.querySelectorAll("[data-k]").forEach(b=>b.addEventListener("click",ev=>{
+    if(b.disabled) return;
+    ev.stopPropagation();
+    const wasOpen=!document.getElementById("cpPanel").hidden;
+    state[b.dataset.k]=b.dataset.v;
+    render();
+    if(wasOpen && b.dataset.k!=="scope"){
+      document.getElementById("cpPanel").hidden=false;
+      document.getElementById("cpGear").setAttribute("aria-expanded","true");
+    }
+  }));
+
+  document.getElementById("cpGearNow").textContent =
+    [state.period, state.basis, billed?"Full Month":state.window].join(" · ");
+  const why=document.getElementById("cpWhy");
+  why.hidden=!billed;
+  why.textContent="An invoice is a whole-month object — it does not partially realise, so this is inert under As Billed.";
+
+  const single = state.scope !== "All cities";
+  if (single) state.open = state.scope;
+  const rows = CITIES.map(c=>({c,k:calc(c)}));
+  const all  = rows.filter(r=>r.k).sort((a,b)=>b.k.net-a.k.net);
+  const live = single ? all.filter(r=>r.c.name===state.scope) : all;
+  const blank= single ? [] : rows.filter(r=>!r.k);
+
+  const body=document.getElementById("cpBody");
+  body.innerHTML="";
+  live.forEach((r,i)=>{ body.appendChild(cityRow(r,i+1)); if(state.open===r.c.name) body.appendChild(drill(r)); });
+  blank.forEach(r=>{
+    const tr=document.createElement("tr"); tr.className="cp-row cp-blank";
+    tr.innerHTML='<td class="l" style="padding-left:41px">'+r.c.name+'</td>'+
+      '<td>—</td><td>—</td><td>—</td><td>—</td><td>—</td><td>—</td>';
+    body.appendChild(tr);
+  });
+
+  // network / scope total
+  const T=live.reduce((a,r)=>({dpp:a.dpp+r.k.dpp, memb:a.memb+r.c.membership, fieldNet:a.fieldNet+r.k.fieldNet,
+    over:a.over+r.k.overhead, net:a.net+r.k.net, gross:a.gross+r.k.gross}),
+    {dpp:0,memb:0,fieldNet:0,over:0,net:0,gross:0});
+  const tr=document.createElement("tr"); tr.className="cp-total"; tr.id="cpTotal";
+  tr.innerHTML='<td class="l">'+(single?state.scope:"All cities")+'</td>'+
+    '<td>'+usd(T.dpp)+'</td><td class="cp-pos">'+usd(T.memb)+'</td>'+
+    '<td class="'+(T.fieldNet>=0?"cp-pos":"cp-neg")+'">'+usd(T.fieldNet)+'</td>'+
+    '<td class="cp-neg">'+usd(-T.over)+'</td>'+
+    '<td class="cp-net '+(T.net>=0?"cp-pos":"cp-neg")+'">'+usd(T.net)+'</td>'+
+    '<td><span class="cp-marg'+(T.net>=0?"":" neg")+'">'+Math.round(T.net/T.gross*100)+'%</span></td>';
+  body.appendChild(tr);
+}
+
+function cityRow(r,rank){
+  const k=r.k, tr=document.createElement("tr");
+  tr.className="cp-row"; tr.setAttribute("data-city",r.c.name);
+  tr.innerHTML=
+    '<td class="l"><span class="cp-rank">'+rank+'</span><span class="cp-city">'+r.c.name+'</span>'+
+      '<span class="cp-caret">'+(state.open===r.c.name?"▾":"▸")+'</span>'+
+      (k.untracked?'<span class="cp-flag">cost gap</span>':'')+'</td>'+
+    '<td>'+usd(k.dpp)+'</td>'+
+    '<td class="cp-pos">'+usd(r.c.membership)+'</td>'+
+    '<td class="'+(k.fieldNet>=0?"cp-pos":"cp-neg")+'">'+usd(k.fieldNet)+'</td>'+
+    '<td class="cp-neg">'+usd(-k.overhead)+'</td>'+
+    '<td class="cp-net '+(k.net>=0?"cp-pos":"cp-neg")+'">'+usd(k.net)+'</td>'+
+    '<td><span class="cp-marg'+(k.net>=0?"":" neg")+'">'+Math.round(k.margin*100)+'%</span></td>';
+  tr.addEventListener("click",()=>{ state.open = state.open===r.c.name?null:r.c.name; render(); });
+  return tr;
+}
+
+function drill(r){
+  const k=r.k, c=r.c;
+  const frow=f=>{
+    const net = f.cost===null ? null : f.dpp-f.cost;
+    const badge = f.b==="share" ? '<span class="cp-bucket share">Profit share</span>'
+                : f.b==="unmapped" ? '<span class="cp-bucket unmapped">No cost on file</span>' : '';
+    const sub = f.b==="flat" ? f.m+' × '+usd(f.rate)+' per match'
+              : f.b==="share" ? 'billed as a share of revenue'
+              : 'held out of net until a rate is mapped';
+    return '<tr data-field="'+f.n+'"><td class="l">'+f.n+badge+'<span class="cp-rate">'+sub+'</span></td>'+
+      '<td class="cp-mut">—</td>'+
+      '<td>'+usd(f.dpp)+'</td>'+
+      '<td class="cp-mut">—</td>'+
+      '<td class="'+(f.cost===null?"cp-mut":"cp-neg")+'">'+(f.cost===null?"—":usd(-f.cost))+'</td>'+
+      '<td class="'+(net===null?"cp-mut":net>=0?"cp-pos":"cp-neg")+'">'+(net===null?"—":usd(net))+'</td></tr>';
+  };
+
+  const oh = c.overhead.map((o,i)=>({label:o[0], v:o[1], hue:OH_HUES[i%OH_HUES.length]}));
+  const ohTot = oh.reduce((a,p)=>a+p.v,0);
+  const pct = v => Math.round(v/ohTot*1000)/10;
+
+  const tr=document.createElement("tr"); tr.className="cp-drill"; tr.setAttribute("data-drill",c.name);
+  tr.innerHTML='<td colspan="7"><div class="cp-din">'+
+
+    '<p class="cp-dh">'+c.name+' · by pitch</p>'+
+    '<table class="cp-ftbl"><thead><tr><th class="l">Venue</th><th>Spots</th><th>DPP rev</th>'+
+      '<th>Member rev</th><th>Field cost</th><th>Field net</th></tr></thead><tbody>'+
+      c.fields.map(frow).join("")+
+      '<tr class="cp-ftot"><td class="l">Measured</td><td class="cp-mut">—</td><td>'+usd(k.dpp)+'</td>'+
+      '<td class="cp-mut">—</td><td class="cp-neg">'+usd(-k.fieldCost)+'</td>'+
+      '<td class="'+(k.fieldNet>=0?"cp-pos":"cp-neg")+'">'+usd(k.fieldNet)+'</td></tr>'+
+    '</tbody></table>'+
+
+    '<p class="cp-dnote info"><b>Member rev per pitch</b> = city member revenue ÷ city spots × that pitch\'s spots. '+
+      'For '+c.name+' that is '+usd(c.membership)+' ÷ city spots. Spots per pitch are not in the source '+
+      'screenshot, so the two columns show a dash here; the live build has them.</p>'+
+
+    (k.untracked
+      ? '<p class="cp-dnote"><b>'+usd(k.untracked)+' of DPP revenue is held out of net</b> because '+
+        k.unmapped.length+' '+(k.unmapped.length===1?"pitch has":"pitches have")+' no cost on file. '+
+        'The live page treats that missing cost as $0, so net there reads '+usd(k.net+k.untracked)+
+        ' instead of '+usd(k.net)+'.</p>' : '')+
+
+    '<div class="cp-mk"><p class="cp-mk-h">'+c.name+' overhead · '+usd(ohTot)+'</p>'+
+      '<div class="cp-mk-bar" data-makeup="'+c.name+'">'+
+        oh.map(p=>'<span class="cp-mk-seg" data-part="'+p.label+'" style="width:'+pct(p.v)+
+          '%;background:'+p.hue+'"></span>').join("")+
+      '</div><div class="cp-mk-rows">'+
+        oh.map(p=>'<span class="cp-mk-row"><span class="cp-mk-dot" style="background:'+p.hue+'"></span>'+
+          p.label+' <span class="cp-mk-v">'+usd(p.v)+'</span> <span class="cp-mk-p">'+
+          pct(p.v).toFixed(1)+'%</span></span>').join("")+
+      '</div></div>'+
+  '</div></td>';
+  return tr;
+}
+
+const gear=document.getElementById("cpGear"), panel=document.getElementById("cpPanel");
+gear.addEventListener("click",e=>{ e.stopPropagation();
+  const open=panel.hidden; panel.hidden=!open; gear.setAttribute("aria-expanded",String(open)); });
+document.addEventListener("click",e=>{
+  if(!panel.hidden && !panel.contains(e.target) && !gear.contains(e.target)){
+    panel.hidden=true; gear.setAttribute("aria-expanded","false"); }});
+document.addEventListener("keydown",e=>{
+  if(e.key==="Escape" && !panel.hidden){ panel.hidden=true; gear.setAttribute("aria-expanded","false"); gear.focus(); }});
+
+window.__render=render;
+render();
+</script>
+</body>
+</html>

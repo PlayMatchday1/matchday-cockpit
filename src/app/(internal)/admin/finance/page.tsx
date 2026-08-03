@@ -7,10 +7,7 @@ import QuarterSelector from "@/components/QuarterSelector";
 import CashFlowTabContent from "@/components/CashFlowTabContent";
 import ChangeLogView from "@/components/ChangeLogView";
 import CheckInsView from "@/components/CheckInsView";
-import CityPLCard, {
-  type CityCostMode,
-  type CityCostScope,
-} from "@/components/CityPLCard";
+import CityPnlTable from "@/components/CityPnlTable";
 import ExpenseAdminView from "@/components/ExpenseAdminView";
 import FieldCostsView from "@/components/FieldCostsView";
 import FieldRankingTabContent from "@/components/FieldRankingTabContent";
@@ -28,8 +25,6 @@ import FinanceTabNav, {
   type FinanceTabId,
 } from "@/components/FinanceTabNav";
 import RevenueAdminView from "@/components/RevenueAdminView";
-import { isCityHidden } from "@/lib/types";
-import { CITY_DISPLAY_ORDER } from "@/lib/financeStats";
 import { FinanceQuarterProvider } from "@/lib/financeQuarter";
 import {
   getAvailableQuarters,
@@ -38,7 +33,6 @@ import {
   resolveQuarterFromUrl,
   type QuarterInfo,
 } from "@/lib/quarters";
-import { useFinanceData } from "@/lib/useFinanceData";
 
 const RETURN_TAB_KEY = "finance:returnTab";
 // Persists which Configure sub-tab was last viewed, so re-opening
@@ -314,85 +308,8 @@ function TabPanel({
 }
 
 function CitiesTabContent() {
-  const { data, loading } = useFinanceData();
-  // Page-level cost view, applied to every CityPLCard at once. Defaults
-  // to per_match so the page opens with billing-timing lumps already
-  // smoothed (NEMP's Q2 permit, Bicentennial's prepay, etc.). Field
-  // Ranking defaults to as_billed instead — different default per
-  // surface, but both pages share groupPerMatchCostFor under the hood
-  // so the numbers reconcile when an operator flips either toggle.
-  const [costMode, setCostMode] = useState<CityCostMode>("per_match");
-  // Realized = field cost through today only (current month filters by
-  // match_date <= today; past months auto-collapse to full canonical;
-  // future months return 0). Full Month = full month projected cost
-  // (current behavior). Revenue is actual in both modes; overhead stays
-  // full-month in both modes (committed monthly, not match-by-match).
-  // Default Realized so the card opens on the point-in-time read.
-  const [costScope, setCostScope] = useState<CityCostScope>("realized");
-  if (loading) {
-    return (
-      <div className="rounded-2xl border-[1.5px] border-cream-line bg-white p-8 text-sm text-deep-green/60 shadow-md shadow-deep-green/10">
-        Loading…
-      </div>
-    );
-  }
-  if (!data) return null;
-  return (
-    <div>
-      <div className="mb-4 flex flex-wrap justify-end gap-2">
-        <div
-          className="inline-flex rounded-full border border-cream-line bg-cream-soft p-0.5 text-xs font-bold"
-          role="radiogroup"
-          aria-label="Cost view"
-        >
-          {(["as_billed", "per_match"] as const).map((opt) => (
-            <button
-              key={opt}
-              type="button"
-              onClick={() => setCostMode(opt)}
-              className={`rounded-full px-3 py-1.5 transition ${
-                costMode === opt
-                  ? "bg-mint text-deep-green"
-                  : "text-deep-green/65 hover:text-deep-green"
-              }`}
-              aria-pressed={costMode === opt}
-            >
-              {opt === "as_billed" ? "As Billed" : "Per-Match"}
-            </button>
-          ))}
-        </div>
-        <div
-          className="inline-flex rounded-full border border-cream-line bg-cream-soft p-0.5 text-xs font-bold"
-          role="radiogroup"
-          aria-label="Cost timing"
-        >
-          {(["realized", "fullMonth"] as const).map((opt) => (
-            <button
-              key={opt}
-              type="button"
-              onClick={() => setCostScope(opt)}
-              className={`rounded-full px-3 py-1.5 transition ${
-                costScope === opt
-                  ? "bg-mint text-deep-green"
-                  : "text-deep-green/65 hover:text-deep-green"
-              }`}
-              aria-pressed={costScope === opt}
-            >
-              {opt === "realized" ? "Realized" : "Full Month"}
-            </button>
-          ))}
-        </div>
-      </div>
-      <div className="grid grid-cols-1 gap-4 md:grid-cols-2 xl:grid-cols-3">
-        {CITY_DISPLAY_ORDER.filter((c) => !isCityHidden(c)).map((c) => (
-          <CityPLCard
-            key={c}
-            city={c}
-            costMode={costMode}
-            costScope={costScope}
-          />
-        ))}
-      </div>
-    </div>
-  );
+  // The old stacked per-city cards (and their page-level cost toggles) are gone —
+  // replaced by one ranked P&L table. Basis controls now live in the table's gear
+  // popover; the city filter stays visible inside it.
+  return <CityPnlTable />;
 }
