@@ -52,6 +52,9 @@ export type StripeSyncResult = {
   // DPP venue strings that resolved to NO city — the "loud" exception list so an
   // onboarded-but-unmapped venue surfaces instead of leaking cityless revenue.
   unresolvedVenues: { venue: string; net: number; count: number }[];
+  // Metadata coverage over paid charges (see counters above).
+  matchNamePresent: number;
+  cityIdentifierPresent: number;
 };
 
 // Extract the email the CSV path would write into customer_email.
@@ -207,6 +210,10 @@ export async function syncStripeCharges(
   let membershipPayments = 0;
   let matchPayments = 0;
   let strikePayments = 0;
+  // Metadata coverage — how many paid charges carry the fields the venue/city
+  // resolution depends on. Surfaced so a backfill can be judged before it runs.
+  let matchNamePresent = 0;
+  let cityIdentifierPresent = 0;
   const unmatchedEmailSet = new Set<string>();
   const unmatchedCityCodeSet = new Set<string>();
   const perTxn: StripeAllocatedRow[] = [];
@@ -266,6 +273,8 @@ export async function syncStripeCharges(
         : null;
 
     paidRows++;
+    if (matchName) matchNamePresent++;
+    if (cityIdentifier) cityIdentifierPresent++;
     if (!earliestDate || date < earliestDate) earliestDate = date;
     if (!latestDate || date > latestDate) latestDate = date;
 
@@ -361,5 +370,7 @@ export async function syncStripeCharges(
     unmatchedCityCodes: [...unmatchedCityCodeSet].sort(),
     categoryNet: [...catAgg.values()],
     unresolvedVenues: [...unresolvedVenues.values()].sort((a, b) => b.net - a.net),
+    matchNamePresent,
+    cityIdentifierPresent,
   };
 }

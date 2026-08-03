@@ -248,6 +248,11 @@ export async function POST(req: Request) {
         pct: storedNet ? +(((restatedNet - storedNet) / storedNet) * 100).toFixed(4) : 0,
         restatedRows: sync.rows.length,
         totalCharges: sync.totalCharges,
+        paidRows: sync.paidRows,
+        earliestCharge: sync.earliestDate,
+        latestCharge: sync.latestDate,
+        matchNamePresent: sync.matchNamePresent,
+        cityIdentifierPresent: sync.cityIdentifierPresent,
         categoryNet: sync.categoryNet
           .map((r) => ({ ...r, net: +r.net.toFixed(2) }))
           .sort((a, b) => Math.abs(b.net) - Math.abs(a.net)),
@@ -314,6 +319,10 @@ export async function POST(req: Request) {
       membershipPayments: sync.membershipPayments,
       matchPayments: sync.matchPayments,
       strikePayments: sync.strikePayments,
+      matchNamePresent: sync.matchNamePresent,
+      cityIdentifierPresent: sync.cityIdentifierPresent,
+      unresolvedVenues: sync.unresolvedVenues,
+      advisory: advisory ?? null,
       unmatchedEmails: sync.unmatchedEmails,
       unmatchedCityCodes: sync.unmatchedCityCodes,
       durationMs: Date.now() - startedAt,
