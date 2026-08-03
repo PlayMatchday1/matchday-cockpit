@@ -393,6 +393,36 @@ export default function BehaviorPanel({ data, period }: { data: GrowthData; peri
         </table>
       </div>
 
+      {view === "field" && data.eventFields.length > 0 && (
+        <div className={`${styles.tableWrap}`} style={{ marginTop: 14 }}>
+          <div className={styles.footnote} style={{ marginBottom: 6, fontWeight: 700 }}>
+            Special events — tournaments &amp; combines — kept out of the pitch ranking above. Real spots booked in a real
+            market, but not regular per-pitch play, so they do not inflate a field&rsquo;s spots or spots/player.
+          </div>
+          <table className={styles.recordTable}>
+            <thead>
+              <tr>
+                <th>Event pitch</th>
+                <th className="num">Spots booked</th>
+                <th className="num">Distinct players</th>
+              </tr>
+            </thead>
+            <tbody>
+              {data.eventFields.map((e) => (
+                <tr key={e.label}>
+                  <td>
+                    {e.label}{" "}
+                    <span style={{ color: "var(--muted)", fontSize: "0.72rem" }}>· {e.city}</span>
+                  </td>
+                  <td className="num">{fmtInt(e.spots)}</td>
+                  <td className="num">{fmtInt(e.players)}</td>
+                </tr>
+              ))}
+            </tbody>
+          </table>
+        </div>
+      )}
+
       {view === "city" && (
         <div className={styles.footnote}>
           Registrations, new players and spots booked add up across markets and match the monthly rows above.{" "}

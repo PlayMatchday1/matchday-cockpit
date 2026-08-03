@@ -16,6 +16,7 @@
 // (played≥1 = 7,517, played≥5 = 2,327, and the eight cohort sizes).
 
 import { CITY_CODE_TO_DISPLAY } from "./scheduleReconcile";
+import { canonicalVenueName, venueCategory } from "./venueResolver";
 
 // ── City attribution ────────────────────────────────────────────────────────
 // DECISION 3: a played player's city is their self-declared preferable_city_name
@@ -264,6 +265,9 @@ export type GrowthData = {
   behaviorOverall: BehaviorPoint[];
   behaviorByCity: Record<string, BehaviorPoint[]>;
   behaviorByField: Record<string, { label: string; city: string; points: BehaviorPoint[] }>;
+  // Special-event pitches, ranked by spots — rendered as their own section on
+  // the Growth field view, never interleaved with the regular pitch ranking.
+  eventFields: { label: string; city: string; spots: number; players: number }[];
   // Index spaces the per-player `ev` triples reference. cityIndex is the full
   // market universe (play + declared-only); cityHasMatches[i] marks whether that
   // market has ever run a match.
@@ -335,7 +339,7 @@ export function computeGrowth(input: RawInput): GrowthData {
   }
 
   // ── played spots ──────────────────────────────────────────────────────────
-  type Play = { u: number; month: string; date: string; city: string; field: string; amount: number };
+  type Play = { u: number; month: string; date: string; city: string; field: string; isEvent: boolean; amount: number };
   const plays: Play[] = [];
   let fakeLiveRows = 0;
   let waitingLiveNonFake = 0;
@@ -360,7 +364,11 @@ export function computeGrowth(input: RawInput): GrowthData {
       month: monthKey(m.start_date),
       date: m.start_date.slice(0, 10),
       city: normalizeMatchCity(m.city_identifier),
-      field: m.field_title ?? (m.field_id != null ? `Field ${m.field_id}` : "Unknown field"),
+      // Canonical field identity (retires the raw field_title matcher). Event
+      // matches keep their canonical pitch but are flagged so the field ranking
+      // can separate them — a tournament at NEMP is an event, NEMP is not.
+      field: canonicalVenueName(m.field_title ?? "") || (m.field_id != null ? `Field ${m.field_id}` : "Unknown field"),
+      isEvent: venueCategory(m.field_title) === "event",
       amount: Number(p.total_amount ?? 0) / 100, // stored in cents
     });
   }
@@ -564,16 +572,39 @@ export function computeGrowth(input: RawInput): GrowthData {
   const activeByMonth = new Map<string, Set<number>>();
   const activeByCity = new Map<string, Map<string, Set<number>>>();
   const activeByField = new Map<string, Map<string, Set<number>>>();
+  // Field ranking splits events out: regular spots/players feed the pitch
+  // ranking; event spots/players get their own section (a tournament at ATH
+  // Pearland must not inflate ATH Pearland's regular ranking). City/month
+  // totals stay INCLUSIVE — an event entrant booked a real spot in a real market.
+  const eventSpotsByField = new Map<string, Map<string, number>>();
+  const eventActiveByField = new Map<string, Map<string, Set<number>>>();
   const fieldCity = new Map<string, string>();
   for (const p of plays) {
     spotsByMonth.set(p.month, (spotsByMonth.get(p.month) ?? 0) + 1);
     inc2(spotsByCity, p.city, p.month);
-    inc2(spotsByField, p.field, p.month);
     addSet(activeByMonth, p.month, p.u);
     addSet2(activeByCity, p.city, p.month, p.u);
-    addSet2(activeByField, p.field, p.month, p.u);
+    if (p.isEvent) {
+      inc2(eventSpotsByField, p.field, p.month);
+      addSet2(eventActiveByField, p.field, p.month, p.u);
+    } else {
+      inc2(spotsByField, p.field, p.month);
+      addSet2(activeByField, p.field, p.month, p.u);
+    }
     if (!fieldCity.has(p.field)) fieldCity.set(p.field, p.city);
   }
+  // Events section: one row per canonical pitch that hosted any event, total
+  // spots + distinct players, ranked by spots. Kept out of the regular ranking.
+  const eventFields = [...eventSpotsByField.keys()]
+    .map((f) => {
+      let spots = 0;
+      for (const v of eventSpotsByField.get(f)?.values() ?? []) spots += v;
+      const players = new Set<number>();
+      for (const s of eventActiveByField.get(f)?.values() ?? []) for (const u of s) players.add(u);
+      return { label: f, city: fieldCity.get(f) ?? UNKNOWN_CITY, spots, players: players.size };
+    })
+    .filter((e) => e.spots > 0)
+    .sort((a, b) => b.spots - a.spots);
 
   // registrations by city (declared). Additive. No field dimension.
   const regByMonthCity = new Map<string, Map<string, number>>();
@@ -868,6 +899,7 @@ export function computeGrowth(input: RawInput): GrowthData {
     behaviorOverall,
     behaviorByCity,
     behaviorByField,
+    eventFields,
     cityIndex,
     cityHasMatches,
     fieldIndex,

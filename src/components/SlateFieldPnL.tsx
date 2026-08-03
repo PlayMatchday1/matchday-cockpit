@@ -96,6 +96,9 @@ export default function SlateFieldPnL({ city }: { city: string }) {
     type Raw = Omit<FieldAgg, "revenue" | "dppPM" | "memberPM" | "promoPM" | "revPM" | "costPM" | "netPM">;
     const groups = new Map<string, Raw>();
     for (const r of rows) {
+      // Special events carry no venue cost and must not dilute a pitch's
+      // per-match average — excluded from the frozen non-cancelled denominator.
+      if (r.isEvent) continue;
       const v = r.venueId != null ? venueById.get(r.venueId) : undefined;
       let bucket: Bucket; let costLabel = "";
       if (r.venueId == null || !v || v.is_active === false) bucket = "unmapped";
