@@ -19,7 +19,9 @@ function Sparkline({ values }: { values: number[] }) {
   const hi = Math.max(...values);
   const span = hi - lo || 1;
   const pts = values.map((v, i) => {
-    const x = pad + (i * (w - pad * 2)) / (values.length - 1);
+    // last point lands on x = w (the SVG's right edge) so, right-aligned in its
+    // cell, it sits under the right edge of the TREND header.
+    const x = pad + (i * (w - pad)) / (values.length - 1);
     const y = h - pad - ((v - lo) / span) * (h - pad * 2);
     return `${x.toFixed(1)},${y.toFixed(1)}`;
   });
@@ -151,8 +153,45 @@ export default function BehaviorPanel({ data, period }: { data: GrowthData; peri
   }
 
   const cityCount = data.cityIndex.length;
-  // Spots share bar (City View only): denominator is the markets with matches.
-  const totSpots = view === "city" ? rows.filter((r) => !r.noMatches).reduce((a, r) => a + r.spots, 0) : 0;
+  // Spots share-bar denominator: rows with matches. Field spots sum to the same
+  // total as market spots (every spot is at exactly one pitch in one market), so
+  // the bar is valid in both views.
+  const totSpots = rows.filter((r) => !r.noMatches).reduce((a, r) => a + r.spots, 0);
+
+  // City-View totals row + integrity check: the market breakdown must tie to the
+  // monthly rows above for registrations / new players / spots (total players is a
+  // distinct count and legitimately does not sum). Throw on a mismatch — that is a
+  // real bug, not a number to render.
+  const cityTot =
+    view === "city"
+      ? rows.reduce(
+          (a, r) => ({
+            reg: a.reg + (r.registrations ?? 0),
+            newp: a.newp + r.newPlayers,
+            totp: a.totp + r.totalPlayers,
+            spots: a.spots + r.spots,
+          }),
+          { reg: 0, newp: 0, totp: 0, spots: 0 },
+        )
+      : null;
+  if (cityTot) {
+    const monthly = months.reduce(
+      (a, m) => {
+        const p = byMonth.get(m);
+        return { reg: a.reg + (p?.registrations ?? 0), newp: a.newp + (p?.newPlayers ?? 0), spots: a.spots + (p?.spots ?? 0) };
+      },
+      { reg: 0, newp: 0, spots: 0 },
+    );
+    for (const [label, a, b] of [
+      ["registrations", cityTot.reg, monthly.reg],
+      ["new players", cityTot.newp, monthly.newp],
+      ["spots booked", cityTot.spots, monthly.spots],
+    ] as [string, number, number][]) {
+      if (Math.round(a) !== Math.round(b)) {
+        throw new Error(`Player behavior: market ${label} total ${a} ≠ monthly total ${b}`);
+      }
+    }
+  }
 
   return (
     <div className={styles.card}>
@@ -200,8 +239,10 @@ export default function BehaviorPanel({ data, period }: { data: GrowthData; peri
                     const v = p ? p[mt.key] : null;
                     return <td key={m}>{v == null ? <span className={styles.tableGap}>—</span> : fmtInt(v)}</td>;
                   })}
-                  <td style={{ padding: "4px 10px" }}>
-                    <Sparkline values={vals} />
+                  <td style={{ paddingTop: 4, paddingBottom: 4 }}>
+                    <div style={{ display: "flex", justifyContent: "flex-end" }}>
+                      <Sparkline values={vals} />
+                    </div>
                   </td>
                   <td style={{ color: d ? (d.pos ? "var(--ok-ink)" : "var(--negative)") : "var(--muted)", fontWeight: 800 }}>
                     {d ? d.txt : "—"}
@@ -265,11 +306,30 @@ export default function BehaviorPanel({ data, period }: { data: GrowthData; peri
             </tr>
           </thead>
           <tbody>
-            {rows.map((r) => {
+            {rows.map((r, i) => {
               const share = totSpots ? (r.spots / totSpots) * 100 : 0;
               return (
                 <tr key={r.name}>
                   <td>
+                    <span
+                      style={{
+                        display: "inline-flex",
+                        alignItems: "center",
+                        justifyContent: "center",
+                        width: 19,
+                        height: 19,
+                        borderRadius: 999,
+                        background: "var(--chip-bg)",
+                        border: "1px solid var(--chip-line)",
+                        color: "var(--ns-ink)",
+                        fontSize: "10.5px",
+                        fontWeight: 800,
+                        marginRight: 10,
+                        verticalAlign: "middle",
+                      }}
+                    >
+                      {i + 1}
+                    </span>
                     {r.name}
                     {r.noMatches && (
                       <span className={styles.pillAmber} style={{ marginLeft: 8 }}>
@@ -293,7 +353,7 @@ export default function BehaviorPanel({ data, period }: { data: GrowthData; peri
                   <td className="num">
                     {!hasPlayEra ? (
                       <span className={styles.tableGap}>—</span>
-                    ) : view === "city" && !r.noMatches ? (
+                    ) : !r.noMatches ? (
                       <span style={{ display: "inline-flex", alignItems: "center", gap: 8, justifyContent: "flex-end" }}>
                         {fmtInt(r.spots)}
                         <span style={{ width: 52, height: 6, borderRadius: 3, background: "var(--hair)", overflow: "hidden", flex: "0 0 auto" }}>
@@ -311,9 +371,36 @@ export default function BehaviorPanel({ data, period }: { data: GrowthData; peri
                 </tr>
               );
             })}
+            {cityTot && (
+              <tr>
+                {(
+                  [
+                    ["All markets", "l"],
+                    [fmtInt(cityTot.reg), "num"],
+                    [fmtInt(cityTot.newp), "num"],
+                    [fmtInt(cityTot.totp), "num"],
+                    [fmtInt(cityTot.spots), "num"],
+                    ["—", "num"],
+                  ] as [string, string][]
+                ).map(([val, cls], j) => (
+                  <td key={j} className={cls === "num" ? "num" : undefined} style={{ borderTop: "2px solid var(--line)", fontWeight: 800 }}>
+                    {val === "—" ? <span className={styles.tableGap}>—</span> : val}
+                  </td>
+                ))}
+              </tr>
+            )}
           </tbody>
         </table>
       </div>
+
+      {view === "city" && (
+        <div className={styles.footnote}>
+          Registrations, new players and spots booked add up across markets and match the monthly rows above.{" "}
+          <b>Total players does not</b> — it counts each market&rsquo;s distinct players, so anyone who played in two
+          markets is counted in both. El Paso and New York City have registrations but have never run a match, so their
+          zeros are real zeros, not missing data.
+        </div>
+      )}
     </div>
   );
 }
