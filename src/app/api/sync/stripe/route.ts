@@ -250,6 +250,7 @@ export async function POST(req: Request) {
           .map((r) => ({ ...r, net: +r.net.toFixed(2) }))
           .sort((a, b) => Math.abs(b.net) - Math.abs(a.net)),
         perVenueType,
+        unresolvedVenues: sync.unresolvedVenues.map((u) => ({ ...u, net: +u.net.toFixed(2) })),
         durationMs: Date.now() - startedAt,
       });
     }
@@ -274,12 +275,25 @@ export async function POST(req: Request) {
     }
 
     const chargesSkipped = sync.skippedNonPaid + sync.skippedNonUsd;
+    // Loud unresolved-venue surface: a non-fatal advisory (sync still OK) so an
+    // onboarded-but-unmapped venue shows on the SyncCard instead of leaking
+    // cityless revenue silently. Shape mirrors the Master Schedule exception list.
+    let advisory: string | undefined;
+    if (sync.unresolvedVenues.length > 0) {
+      const totNet = sync.unresolvedVenues.reduce((s, u) => s + u.net, 0);
+      const top = sync.unresolvedVenues
+        .slice(0, 5)
+        .map((u) => `${u.venue} ($${u.net.toFixed(2)})`)
+        .join(", ");
+      advisory = `ADVISORY (sync OK) — ${sync.unresolvedVenues.length} unrecognised venue${sync.unresolvedVenues.length === 1 ? "" : "s"}, $${totNet.toFixed(2)} unattributed: ${top}`;
+    }
     await finalizeLog({
       rows_imported: sync.rows.length,
       rows_replaced: rowsReplaced,
       charges_fetched: sync.totalCharges,
       charges_succeeded: sync.paidRows,
       charges_skipped: chargesSkipped,
+      ...(advisory ? { error_message: advisory } : {}),
     });
 
     return Response.json({

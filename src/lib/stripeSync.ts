@@ -20,8 +20,7 @@ import {
   type StripeAllocatedRow,
 } from "./financeImport";
 import { selectAll } from "./supabasePagination";
-import { normalizeMatchName } from "./venueNormalization";
-import { venueCategory, type VenueCategory } from "./venueResolver";
+import { resolveVenue, venueCategory, type VenueCategory } from "./venueResolver";
 import { cityFromAbbr } from "./cityMap";
 
 export type StripeSyncOptions = {
@@ -50,6 +49,9 @@ export type StripeSyncResult = {
   // restatement gate; NOT part of `rows`, so the committed rollups and the
   // cron write path are byte-identical to before this field existed.
   categoryNet: { month: string; venue: string; type: string; category: VenueCategory; net: number }[];
+  // DPP venue strings that resolved to NO city — the "loud" exception list so an
+  // onboarded-but-unmapped venue surfaces instead of leaking cityless revenue.
+  unresolvedVenues: { venue: string; net: number; count: number }[];
 };
 
 // Extract the email the CSV path would write into customer_email.
@@ -190,19 +192,13 @@ export async function syncStripeCharges(
   console.log(
     `[stripe-sync] Membership email→city map built: ${primaryCount} from subscriptions, ${fallbackCount} from users fallback (total ${emailToCity.size})`,
   );
-  const { data: aliasRows, error: alErr } = await supabase
-    .from("fin_venue_aliases")
-    .select("alias, canonical_venue");
-  if (alErr) throw new Error(`Alias lookup failed: ${alErr.message}`);
-  const aliasMap = new Map<string, string>();
-  for (const a of (aliasRows ?? []) as {
-    alias: string | null;
-    canonical_venue: string | null;
-  }[]) {
-    if (a.alias && a.canonical_venue) {
-      aliasMap.set(a.alias.trim(), a.canonical_venue.trim());
-    }
-  }
+  // Venue derivation now goes through the single canonical resolver
+  // (resolveVenue) — retiring the fin_venue_aliases lookup and normalizeMatchName.
+  // Unrecognised venues: DPP rows whose canonical resolves to NO city (a field
+  // with no resolver rule). Recorded loudly (count + net) so an onboarded venue
+  // can't silently produce cityless revenue for months again (see the WestLake /
+  // LBJ / Hill Country / Parmer leak that ran Jun–Jul unremarked).
+  const unresolvedVenues = new Map<string, { venue: string; net: number; count: number }>();
 
   let totalCharges = 0;
   let paidRows = 0;
@@ -304,17 +300,22 @@ export async function syncStripeCharges(
 
     let resolvedVenue: string | null = null;
     if (type === "DPP") {
-      // Prefer metadata.venue / metadata.venueName when present
-      // (intent: operator-set explicit override), but always run
-      // through the same normalizer the matchName path uses so
-      // metadata-supplied names can't bypass CROSS_VENUE_ALIASES,
-      // DB aliases, or the field-suffix / weekday strips. Without
-      // this, raw strings like "Lou Fusz - Outdoor Field" survived
-      // into fin_revenue.venue as stale duplicates.
+      // Prefer metadata.venue / metadata.venueName (operator override) else
+      // matchName, then the single canonical resolver — a substring/rule matcher,
+      // so a new field spelling like "WestLake - Field 3 - Match 1" collapses to
+      // "Westlake" without a hand-added alias per string. If it resolves to no
+      // city, it's an unrecognised venue — record it loudly rather than write a
+      // stale display name that no downstream view can attribute.
       const rawVenue = explicitVenue ?? matchName;
       if (rawVenue) {
-        const res = normalizeMatchName(rawVenue, aliasMap);
-        resolvedVenue = res.canonical;
+        const res = resolveVenue(rawVenue);
+        resolvedVenue = res.canonicalVenue;
+        if (!res.city) {
+          const u = unresolvedVenues.get(resolvedVenue) ?? { venue: resolvedVenue, net: 0, count: 0 };
+          u.net += gross - fees;
+          u.count += 1;
+          unresolvedVenues.set(resolvedVenue, u);
+        }
       }
     }
 
@@ -359,5 +360,6 @@ export async function syncStripeCharges(
     unmatchedEmails: [...unmatchedEmailSet].sort(),
     unmatchedCityCodes: [...unmatchedCityCodeSet].sort(),
     categoryNet: [...catAgg.values()],
+    unresolvedVenues: [...unresolvedVenues.values()].sort((a, b) => b.net - a.net),
   };
 }

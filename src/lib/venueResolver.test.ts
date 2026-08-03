@@ -46,6 +46,28 @@ test("the four WestLake spellings unify to one Austin identity", () => {
   }
 });
 
+test("resolver is idempotent — f(f(x)) === f(x), so a second sync run can't shift a venue", () => {
+  // Representative inputs across all rule branches + the collapse cases.
+  const inputs = [
+    "WestLake - Field 3 - Match 1", "Westlake HS Field 3", "Westlake",
+    "Tourney at Soccer Central", "Soccer Central Complex", "Soccer Central", "Soccer Central Tournament",
+    "Tourney ATH Pearland", "ATH Pearland", "Tourney ATH Katy", "ATH Katy", "ATH Katy Sunday",
+    "NEMP Tournaments", "North East Metropolitan Park", "NEMP",
+    "The Hattrick", "The Hattrick L.", "The Hattrick T.", "Hattrick Tomball", "Hattrick", "Hattrick T.",
+    "Lou Fusz - Indoor Field", "Lou Fusz TC Indoor Field", "MatchDay Combine at Lou Fusz",
+    "Lou Fusz Indoor", "Lou Fusz Outdoor",
+    "LBJ Early College High School - Match 2", "LBJ Early College High School",
+    "Hill Country", "Hill Country Middle School", "Parmer Stadium - Premier", "Parmer",
+    "Round Rock Tournaments", "Stadium Field at Round Rock M.C.", "Round Rock",
+    "KISC (Katy Intl)", "Katy International Sports Complex", "STAR", "N/A", "Some Brand New Venue",
+  ];
+  for (const x of inputs) {
+    const c1 = canonicalVenueName(x);
+    const c2 = canonicalVenueName(c1);
+    assert.equal(c2, c1, `not idempotent: "${x}" -> "${c1}" -> "${c2}"`);
+  }
+});
+
 test("the four Lou Fusz spellings + combine resolve to St. Louis", () => {
   for (const s of ["Lou Fusz - Indoor Field", "Lou Fusz - Outdoor Field", "Lou Fusz TC Indoor Field", "MatchDay Combine at Lou Fusz"]) {
     assert.equal(resolveVenue(s).city, "St. Louis", `${s}`);
