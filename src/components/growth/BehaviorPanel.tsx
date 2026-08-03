@@ -11,6 +11,33 @@ import { downloadCsv, fmtInt, monthLabel, plural } from "./format";
 // players is range-distinct — computed from each player's event set, so it is a
 // real "played here at any point in the range", never a last-month snapshot.
 // Invariant asserted per row: Total players ≥ New players (new is a subset).
+// Tiny inline sparkline for the summary "Trend" column.
+function Sparkline({ values }: { values: number[] }) {
+  const w = 92, h = 22, pad = 3;
+  if (values.length < 2) return <span style={{ color: "var(--muted)" }}>—</span>;
+  const lo = Math.min(...values);
+  const hi = Math.max(...values);
+  const span = hi - lo || 1;
+  const pts = values.map((v, i) => {
+    const x = pad + (i * (w - pad * 2)) / (values.length - 1);
+    const y = h - pad - ((v - lo) / span) * (h - pad * 2);
+    return `${x.toFixed(1)},${y.toFixed(1)}`;
+  });
+  const [lx, ly] = pts[pts.length - 1].split(",");
+  return (
+    <svg width={w} height={h} viewBox={`0 0 ${w} ${h}`} style={{ display: "block" }} aria-hidden>
+      <polyline points={pts.join(" ")} fill="none" stroke="var(--accent)" strokeWidth={2} strokeLinecap="round" strokeLinejoin="round" />
+      <circle cx={lx} cy={ly} r={2.4} fill="var(--forest)" />
+    </svg>
+  );
+}
+// First→last % change over the period's non-null values.
+function pctDelta(values: number[]): { txt: string; pos: boolean } | null {
+  if (values.length < 2 || !values[0]) return null;
+  const chg = ((values[values.length - 1] - values[0]) / values[0]) * 100;
+  return { txt: (chg >= 0 ? "+" : "−") + Math.abs(chg).toFixed(0) + "%", pos: chg >= 0 };
+}
+
 const METRICS: { key: keyof Omit<BehaviorPoint, "m">; label: string }[] = [
   { key: "registrations", label: "Registrations" },
   { key: "newPlayers", label: "New players" },
@@ -124,6 +151,8 @@ export default function BehaviorPanel({ data, period }: { data: GrowthData; peri
   }
 
   const cityCount = data.cityIndex.length;
+  // Spots share bar (City View only): denominator is the markets with matches.
+  const totSpots = view === "city" ? rows.filter((r) => !r.noMatches).reduce((a, r) => a + r.spots, 0) : 0;
 
   return (
     <div className={styles.card}>
@@ -148,19 +177,38 @@ export default function BehaviorPanel({ data, period }: { data: GrowthData; peri
               {months.map((m) => (
                 <th key={m}>{monthLabel(m)}</th>
               ))}
+              <th>Trend</th>
+              <th>
+                {months.length ? `${monthLabel(months[0]).split(" ")[0]} → ${monthLabel(months[months.length - 1]).split(" ")[0]}` : "Δ"}
+              </th>
             </tr>
           </thead>
           <tbody>
-            {METRICS.map((mt) => (
-              <tr key={mt.key}>
-                <td>{mt.label}</td>
-                {months.map((m) => {
+            {METRICS.map((mt) => {
+              const vals = months
+                .map((m) => {
                   const p = byMonth.get(m);
-                  const v = p ? p[mt.key] : null;
-                  return <td key={m}>{v == null ? <span className={styles.tableGap}>—</span> : fmtInt(v)}</td>;
-                })}
-              </tr>
-            ))}
+                  return p ? p[mt.key] : null;
+                })
+                .filter((v): v is number => v != null);
+              const d = pctDelta(vals);
+              return (
+                <tr key={mt.key}>
+                  <td>{mt.label}</td>
+                  {months.map((m) => {
+                    const p = byMonth.get(m);
+                    const v = p ? p[mt.key] : null;
+                    return <td key={m}>{v == null ? <span className={styles.tableGap}>—</span> : fmtInt(v)}</td>;
+                  })}
+                  <td style={{ padding: "4px 10px" }}>
+                    <Sparkline values={vals} />
+                  </td>
+                  <td style={{ color: d ? (d.pos ? "var(--ok-ink)" : "var(--negative)") : "var(--muted)", fontWeight: 800 }}>
+                    {d ? d.txt : "—"}
+                  </td>
+                </tr>
+              );
+            })}
           </tbody>
         </table>
       </div>
@@ -192,7 +240,7 @@ export default function BehaviorPanel({ data, period }: { data: GrowthData; peri
           {view === "city" ? `${cityCount} ${plural(cityCount, "market")}` : `${rows.length} ${plural(rows.length, "field")}`} ·
           ranked by spots
           {view === "field"
-            ? " · spots/player = spots ÷ distinct players at this pitch — not comparable to the city figure (~32% of players use more than one pitch)"
+            ? " · Registrations attach to a market, never a pitch, so they dash here — a dash is not a zero. spots/player = spots ÷ distinct players at this pitch, not comparable to the city figure (~32% of players use more than one pitch)"
             : ""}
         </span>
       </div>
@@ -209,7 +257,7 @@ export default function BehaviorPanel({ data, period }: { data: GrowthData; peri
           <thead>
             <tr>
               <th>{view === "city" ? "Market" : "Field"}</th>
-              {view === "city" && <th className="num">Registrations</th>}
+              <th className="num">Registrations</th>
               <th className="num">New players</th>
               <th className="num">Total players</th>
               <th className="num">Spots booked</th>
@@ -217,29 +265,52 @@ export default function BehaviorPanel({ data, period }: { data: GrowthData; peri
             </tr>
           </thead>
           <tbody>
-            {rows.map((r) => (
-              <tr key={r.name}>
-                <td>
-                  {r.name}
-                  {r.noMatches && (
-                    <span className={styles.pillAmber} style={{ marginLeft: 8 }}>
-                      no matches
-                    </span>
-                  )}
-                </td>
-                {view === "city" && (
-                  <td className="num">
-                    {r.registrations == null ? <span className={styles.tableGap}>—</span> : fmtInt(r.registrations)}
+            {rows.map((r) => {
+              const share = totSpots ? (r.spots / totSpots) * 100 : 0;
+              return (
+                <tr key={r.name}>
+                  <td>
+                    {r.name}
+                    {r.noMatches && (
+                      <span className={styles.pillAmber} style={{ marginLeft: 8 }}>
+                        no matches
+                      </span>
+                    )}
                   </td>
-                )}
-                <td className="num">{hasPlayEra ? fmtInt(r.newPlayers) : <span className={styles.tableGap}>—</span>}</td>
-                <td className="num">{hasPlayEra ? fmtInt(r.totalPlayers) : <span className={styles.tableGap}>—</span>}</td>
-                <td className="num">{hasPlayEra ? fmtInt(r.spots) : <span className={styles.tableGap}>—</span>}</td>
-                <td className="num">
-                  {hasPlayEra && r.spp != null ? r.spp.toFixed(2) : <span className={styles.tableGap}>—</span>}
-                </td>
-              </tr>
-            ))}
+                  {/* A registration attaches to a MARKET, never to a pitch — so Field
+                      View dashes it rather than dropping the column. */}
+                  <td className="num">
+                    {view === "field" ? (
+                      <span className={styles.tableGap}>—</span>
+                    ) : r.registrations == null ? (
+                      <span className={styles.tableGap}>—</span>
+                    ) : (
+                      fmtInt(r.registrations)
+                    )}
+                  </td>
+                  <td className="num">{hasPlayEra ? fmtInt(r.newPlayers) : <span className={styles.tableGap}>—</span>}</td>
+                  <td className="num">{hasPlayEra ? fmtInt(r.totalPlayers) : <span className={styles.tableGap}>—</span>}</td>
+                  <td className="num">
+                    {!hasPlayEra ? (
+                      <span className={styles.tableGap}>—</span>
+                    ) : view === "city" && !r.noMatches ? (
+                      <span style={{ display: "inline-flex", alignItems: "center", gap: 8, justifyContent: "flex-end" }}>
+                        {fmtInt(r.spots)}
+                        <span style={{ width: 52, height: 6, borderRadius: 3, background: "var(--hair)", overflow: "hidden", flex: "0 0 auto" }}>
+                          <span style={{ display: "block", height: "100%", width: `${share}%`, background: "var(--accent)" }} />
+                        </span>
+                        <span style={{ color: "var(--muted)", fontSize: "0.7rem", minWidth: 36, textAlign: "right" }}>{share.toFixed(1)}%</span>
+                      </span>
+                    ) : (
+                      fmtInt(r.spots)
+                    )}
+                  </td>
+                  <td className="num">
+                    {hasPlayEra && r.spp != null ? r.spp.toFixed(2) : <span className={styles.tableGap}>—</span>}
+                  </td>
+                </tr>
+              );
+            })}
           </tbody>
         </table>
       </div>

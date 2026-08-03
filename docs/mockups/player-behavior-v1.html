@@ -1,0 +1,332 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+<meta charset="utf-8">
+<title>Player behavior — Growth tab · mockup v1</title>
+<style>
+:root{
+  --forest:#0d3b2e; --accent:#35c77f; --ink:#12241d; --muted:#5b6a63;
+  --line:#e4ebe7; --hair:#edf2ef; --chip-bg:#eef3f0; --chip-line:#dfe8e3;
+  --surface:#ffffff;
+  /* sage neutral family */
+  --canvas:#eef2ef; --col-bg:#f9fbfa; --col-line:#e0e8e3; --col-dash:#cfd9d3;
+  --slot-bg:#f3f7f4; --slot-line:#e2ebe6; --ns-ink:#566661;
+  --gold-line:#e3c369; --gold-ink:#8a6300; --gold-bg:#fbf2dd;
+  /* one-hue ramp, light -> dark */
+  --s1:#e8f7ef; --s3:#93dcb9; --s4:#5ecb97; --s5:#2fa774; --s6:#186b4c;
+}
+*{box-sizing:border-box} html,body{margin:0;padding:0}
+body{background:var(--canvas);color:var(--ink);
+  font-family:-apple-system,BlinkMacSystemFont,"Segoe UI",Inter,Roboto,Helvetica,Arial,sans-serif;
+  -webkit-font-smoothing:antialiased;padding:26px 24px 60px}
+.wrap{max-width:1500px;margin:0 auto}
+
+.note{border:1px dashed var(--col-dash);background:var(--col-bg);color:var(--ns-ink);
+  border-radius:10px;padding:11px 14px;font-size:12.5px;line-height:1.55;margin-bottom:18px}
+.note b{color:var(--ink)}
+
+.card{background:var(--surface);border:1px solid var(--line);border-radius:16px;overflow:hidden}
+.hd{display:flex;align-items:flex-start;justify-content:space-between;gap:20px;padding:20px 22px 0}
+.h1{font-size:17px;font-weight:800;letter-spacing:-.015em;color:var(--forest);margin:0}
+.sub{font-size:12.5px;color:var(--muted);margin:6px 0 0;line-height:1.5;max-width:74ch}
+.exp{border:1px solid var(--chip-line);background:var(--surface);color:var(--ink);border-radius:9px;
+  padding:7px 15px;font-size:12.5px;font-weight:700;cursor:pointer;white-space:nowrap}
+
+/* ---------- block 1: network over time ---------- */
+.net{padding:16px 22px 4px}
+table{border-collapse:collapse;width:100%}
+th,td{font-variant-numeric:tabular-nums}
+.nt th{font-size:9.5px;font-weight:900;letter-spacing:.09em;text-transform:uppercase;color:var(--muted);
+  padding:0 0 9px;text-align:right;white-space:nowrap}
+.nt th.l{text-align:left}
+.nt td{padding:9px 0;border-top:1px solid var(--hair);text-align:right;font-size:14px;font-weight:600;
+  color:var(--ink)}
+.nt td.l{text-align:left;font-size:13px;font-weight:800;color:var(--ink);letter-spacing:-.01em}
+.nt td.last{font-weight:800;color:var(--forest)}
+.nt td.spark{width:112px;padding-right:0}
+.nt td.chg{width:82px;font-size:12.5px;font-weight:800;color:var(--s6)}
+.sparkwrap{display:flex;justify-content:flex-end}
+svg.spark{display:block}
+
+/* ---------- block 2: breakdown ---------- */
+.bd{padding:18px 22px 22px;margin-top:12px;border-top:1px solid var(--hair)}
+.bdtop{display:flex;align-items:center;gap:12px;flex-wrap:wrap;margin-bottom:14px}
+.eyebrow{font-size:9.5px;font-weight:900;letter-spacing:.09em;text-transform:uppercase;color:var(--muted)}
+.seg{display:inline-flex;background:var(--chip-bg);border:1px solid var(--chip-line);border-radius:999px;padding:2px}
+.seg button{border:0;background:transparent;color:var(--ns-ink);font:inherit;font-size:12.5px;font-weight:700;
+  padding:5px 15px;border-radius:999px;cursor:pointer}
+.seg button.on{background:var(--forest);color:#fff}
+.scope{font-size:12px;color:var(--muted);font-weight:600}
+
+.bt th{font-size:9.5px;font-weight:900;letter-spacing:.09em;text-transform:uppercase;color:var(--muted);
+  padding:0 0 9px;text-align:right;white-space:nowrap}
+.bt th.l{text-align:left}
+.bt td{padding:10px 0;border-top:1px solid var(--hair);text-align:right;font-size:14px;font-weight:600;color:var(--ink)}
+.bt td.l{text-align:left}
+.rk{display:inline-flex;align-items:center;justify-content:center;width:19px;height:19px;border-radius:999px;
+  background:var(--chip-bg);color:var(--ns-ink);font-size:10.5px;font-weight:800;margin-right:10px;
+  vertical-align:1px}
+.mk{font-size:13.5px;font-weight:800;color:var(--ink);letter-spacing:-.01em}
+.sub2{font-size:11px;color:var(--muted);font-weight:600}
+.spotcell{width:210px}
+.spotnum{display:block}
+.barwrap{display:flex;align-items:center;justify-content:flex-end;gap:8px;margin-top:5px}
+.bar{width:120px;height:6px;border-radius:3px;background:rgba(13,59,46,.07);overflow:hidden;position:relative}
+.fill{display:block;height:100%;border-radius:3px;background:var(--s5)}
+.pct{font-size:10.5px;font-weight:700;color:var(--muted);width:38px;text-align:right}
+.spp{font-weight:800;color:var(--forest)}
+.dash{color:var(--muted);font-weight:700}
+.pill{display:inline-block;border:1px solid var(--gold-line);background:var(--gold-bg);color:var(--gold-ink);
+  border-radius:999px;padding:1px 8px;font-size:10px;font-weight:800;margin-left:8px;vertical-align:1px}
+tr.quiet td{background:var(--col-bg)}
+tr.quiet .mk{color:var(--ns-ink)}
+tr.tot td{border-top:2px solid var(--line);font-weight:800;color:var(--forest);padding-top:12px}
+tr.tot td.l{font-size:12.5px;letter-spacing:.02em;text-transform:uppercase;color:var(--ns-ink);font-weight:900}
+.foot{font-size:11.5px;color:var(--ns-ink);line-height:1.6;margin:14px 0 0;padding-top:12px;
+  border-top:1px solid var(--hair)}
+.foot b{color:var(--ink)}
+
+#tip{position:fixed;pointer-events:none;opacity:0;transition:opacity .09s;background:var(--forest);color:#fff;
+  border-radius:8px;padding:6px 10px;font-size:11.5px;font-weight:700;white-space:nowrap;z-index:50;
+  font-variant-numeric:tabular-nums}
+</style>
+</head>
+<body>
+<div class="wrap">
+
+<div class="note">
+  <b>Mockup data note.</b> Every figure is live from the deployed Growth tab, Feb–Jul 2026. The city rows tie to
+  the monthly rows exactly: registrations 8,408, new players 5,604, spots booked 45,155. Field View shows real
+  field names and spots but on the <b>full-range</b> basis from an earlier report, not this period — those cells
+  are dashed rather than filled with a figure on the wrong basis.
+</div>
+
+<div class="card">
+  <div class="hd">
+    <div>
+      <p class="h1">Player behavior</p>
+      <p class="sub">Registrations, new players, total players and spots booked over the selected period, then the
+        same four broken out by market or by pitch.</p>
+    </div>
+    <button class="exp">Export</button>
+  </div>
+
+  <div class="net">
+    <table class="nt" id="netTable"></table>
+  </div>
+
+  <div class="bd">
+    <div class="bdtop">
+      <span class="eyebrow">Breakdown</span>
+      <span class="seg">
+        <button id="bCity" class="on">City View</button>
+        <button id="bField">Field View</button>
+      </span>
+      <span class="scope" id="scope"></span>
+    </div>
+    <table class="bt" id="bdTable"></table>
+    <p class="foot" id="foot"></p>
+  </div>
+</div>
+
+</div>
+<div id="tip"></div>
+
+<script>
+const MONTHS = ["Feb 2026","Mar 2026","Apr 2026","May 2026","Jun 2026","Jul 2026"];
+
+const METRICS = [
+  { k:"reg",   label:"Registrations", v:[934,1188,1261,1308,1495,2222] },
+  { k:"newp",  label:"New players",   v:[869,825,927,817,891,1275] },
+  { k:"totp",  label:"Total players", v:[1793,1923,2243,2170,2300,2896] },
+  { k:"spots", label:"Spots booked",  v:[6407,6573,7528,7270,7667,9710] }
+];
+
+// live city figures for Feb-Jul 2026, ranked by spots booked
+const CITIES = [
+  { n:"Austin",        reg:2328, newp:1969, totp:2578, spots:20357 },
+  { n:"Houston",       reg:2258, newp:1630, totp:1904, spots:9838  },
+  { n:"San Antonio",   reg:1460, newp:1018, totp:1323, spots:9701  },
+  { n:"Dallas",        reg:949,  newp:397,  totp:447,  spots:1814  },
+  { n:"Atlanta",       reg:544,  newp:241,  totp:292,  spots:1324  },
+  { n:"St. Louis",     reg:271,  newp:168,  totp:224,  spots:1254  },
+  { n:"OKC",           reg:416,  newp:181,  totp:185,  spots:867   },
+  { n:"El Paso",       reg:80,   newp:0,    totp:0,    spots:0, none:true },
+  { n:"New York City", reg:102,  newp:0,    totp:0,    spots:0, none:true }
+];
+
+// field names + spots are real but on the FULL-RANGE basis; the rest is unknown for this period
+const FIELDS = [
+  { n:"SA",                              city:"San Antonio", reg:null, newp:null, totp:null, spots:8394 },
+  { n:"Tourney ATH Pearland",            city:"Houston",     reg:null, newp:null, totp:null, spots:8000 },
+  { n:"San Juan Diego",                  city:"Austin",      reg:null, newp:null, totp:null, spots:7603 },
+  { n:"North East Metropolitan Park",    city:"Austin",      reg:null, newp:null, totp:null, spots:4588 },
+  { n:"NEMP Tournaments",                city:"Austin",      reg:null, newp:null, totp:null, spots:4159 }
+];
+
+const n  = x => x === null ? "—" : x.toLocaleString("en-US");
+const f2 = x => x.toFixed(2);
+
+/* ---------------- block 1 ---------------- */
+function sparkline(vals){
+  const w = 100, h = 26, pad = 3;
+  const lo = Math.min(...vals), hi = Math.max(...vals);
+  const span = (hi - lo) || 1;
+  const pts = vals.map((v,i) => {
+    const x = pad + i * (w - pad*2) / (vals.length - 1);
+    const y = h - pad - ((v - lo) / span) * (h - pad*2);
+    return [x, y];
+  });
+  const d = pts.map(p => p[0].toFixed(1) + "," + p[1].toFixed(1)).join(" ");
+  const last = pts[pts.length - 1];
+  let dots = "";
+  pts.forEach((p,i) => {
+    dots += '<circle class="sp-hit" cx="' + p[0].toFixed(1) + '" cy="' + p[1].toFixed(1) +
+            '" r="7" fill="transparent" data-i="' + i + '"></circle>';
+  });
+  return '<svg class="spark" width="' + w + '" height="' + h + '" viewBox="0 0 ' + w + ' ' + h + '">' +
+    '<polyline points="' + d + '" fill="none" stroke="var(--s5)" stroke-width="2" ' +
+      'stroke-linecap="round" stroke-linejoin="round"></polyline>' +
+    '<circle cx="' + last[0].toFixed(1) + '" cy="' + last[1].toFixed(1) + '" r="2.6" fill="var(--s6)"></circle>' +
+    dots + '</svg>';
+}
+
+function renderNet(){
+  let html = '<thead><tr class="nt"><th class="l">Metric</th>';
+  MONTHS.forEach(m => html += '<th>' + m + '</th>');
+  html += '<th>Trend</th><th>' + MONTHS[0].split(" ")[0] + ' &rarr; ' +
+          MONTHS[MONTHS.length-1].split(" ")[0] + '</th></tr></thead><tbody>';
+
+  METRICS.forEach(m => {
+    html += '<tr data-metric="' + m.k + '"><td class="l">' + m.label + '</td>';
+    m.v.forEach((v,i) => {
+      html += '<td' + (i === m.v.length - 1 ? ' class="last"' : '') +
+              ' data-month="' + i + '">' + n(v) + '</td>';
+    });
+    const first = m.v[0], last = m.v[m.v.length - 1];
+    const chg = (last - first) / first * 100;
+    html += '<td class="spark" data-spark="' + m.k + '"><span class="sparkwrap">' + sparkline(m.v) + '</span></td>';
+    html += '<td class="chg" data-chg="' + chg.toFixed(1) + '">' +
+            (chg >= 0 ? "+" : "−") + Math.abs(chg).toFixed(0) + '%</td></tr>';
+  });
+  html += '</tbody>';
+  document.getElementById("netTable").innerHTML = html;
+}
+
+/* ---------------- block 2 ---------------- */
+let view = "city";
+
+function renderBreakdown(){
+  const rows = view === "city" ? CITIES : FIELDS;
+  const live = rows.filter(r => !r.none);
+  const totSpots = live.reduce((a,r) => a + r.spots, 0);
+
+  const label = view === "city" ? "Market" : "Pitch";
+  let html = '<thead><tr><th class="l">' + label + '</th><th>Registrations</th><th>New players</th>' +
+             '<th>Total players</th><th>Spots booked</th><th>Spots / player</th></tr></thead><tbody>';
+
+  rows.forEach((r,i) => {
+    const share = totSpots ? r.spots / totSpots * 100 : 0;
+    const spp   = (r.totp && r.spots) ? r.spots / r.totp : null;
+    html += '<tr' + (r.none ? ' class="quiet"' : '') + ' data-row="' + r.n + '">' +
+      '<td class="l"><span class="rk">' + (i + 1) + '</span>' +
+        '<span class="mk">' + r.n + '</span>' +
+        (r.city ? '<span class="sub2"> &middot; ' + r.city + '</span>' : '') +
+        (r.none ? '<span class="pill">no matches</span>' : '') + '</td>' +
+      '<td>' + n(r.reg) + '</td>' +
+      '<td>' + n(r.newp) + '</td>' +
+      '<td>' + n(r.totp) + '</td>' +
+      '<td class="spotcell"><span class="spotnum">' + n(r.spots) + '</span>' +
+        (r.none || view !== "city" ? '' :
+          '<span class="barwrap"><span class="bar"><span class="fill" data-share="' + share.toFixed(2) +
+          '" style="width:' + share.toFixed(2) + '%"></span></span>' +
+          '<span class="pct">' + share.toFixed(1) + '%</span></span>') +
+      '</td>' +
+      '<td>' + (spp === null ? '<span class="dash">—</span>' : '<span class="spp">' + f2(spp) + '</span>') +
+      '</td></tr>';
+  });
+
+  if (view === "city"){
+    const T = rows.reduce((a,r) => ({
+      reg:a.reg + r.reg, newp:a.newp + r.newp, totp:a.totp + r.totp, spots:a.spots + r.spots
+    }), {reg:0,newp:0,totp:0,spots:0});
+    html += '<tr class="tot"><td class="l">All markets</td>' +
+      '<td data-tot="reg">'   + n(T.reg)   + '</td>' +
+      '<td data-tot="newp">'  + n(T.newp)  + '</td>' +
+      '<td data-tot="totp">'  + n(T.totp)  + '</td>' +
+      '<td data-tot="spots">' + n(T.spots) + '</td>' +
+      '<td><span class="dash">—</span></td></tr>';
+  }
+  html += '</tbody>';
+  document.getElementById("bdTable").innerHTML = html;
+
+  document.getElementById("scope").textContent = view === "city"
+    ? rows.length + " markets · ranked by spots booked"
+    : rows.length + " pitches · ranked by spots booked · full-range basis";
+
+  document.getElementById("foot").innerHTML = view === "city"
+    ? 'Registrations, new players and spots booked add up across markets and match the monthly rows above. ' +
+      '<b>Total players does not</b> — it counts each market\'s distinct players, so anyone who played in two ' +
+      'markets is counted in both. El Paso and New York City have registrations but have never run a match, so ' +
+      'their zeros are real zeros, not missing data.'
+    : 'Field names and spots are real but come from the full-range figures, not this period. The other three ' +
+      'columns are <b>dashed rather than filled</b>, because a registration attaches to a market and never to a ' +
+      'pitch, and per-pitch player counts on this period were not in the source. A dash is not a zero. ' +
+      'There are no share bars here either: these are the top five of thirty-eight pitches, so a percentage ' +
+      'would imply a whole that is not on screen.';
+}
+
+document.getElementById("bCity").addEventListener("click", () => {
+  view = "city";
+  document.getElementById("bCity").classList.add("on");
+  document.getElementById("bField").classList.remove("on");
+  renderBreakdown();
+});
+document.getElementById("bField").addEventListener("click", () => {
+  view = "field";
+  document.getElementById("bField").classList.add("on");
+  document.getElementById("bCity").classList.remove("on");
+  renderBreakdown();
+});
+
+/* ---------------- hover layer ---------------- */
+const tip = document.getElementById("tip");
+function showTip(e, text){
+  tip.textContent = text;
+  tip.style.opacity = 1;
+  tip.style.left = (e.clientX + 14) + "px";
+  tip.style.top  = (e.clientY - 30) + "px";
+}
+function hideTip(){ tip.style.opacity = 0; }
+
+document.addEventListener("mouseover", e => {
+  const hit = e.target.closest(".sp-hit");
+  if (hit){
+    const k = hit.closest("[data-spark]").getAttribute("data-spark");
+    const m = METRICS.find(x => x.k === k);
+    const i = +hit.getAttribute("data-i");
+    showTip(e, MONTHS[i] + " · " + n(m.v[i]));
+    return;
+  }
+  const bar = e.target.closest(".bar");
+  if (bar){
+    const row = bar.closest("[data-row]");
+    const sh = bar.querySelector(".fill").getAttribute("data-share");
+    showTip(e, row.getAttribute("data-row") + " · " + sh + "% of spots booked");
+    return;
+  }
+  hideTip();
+});
+document.addEventListener("mousemove", e => {
+  if (tip.style.opacity == 1){
+    tip.style.left = (e.clientX + 14) + "px";
+    tip.style.top  = (e.clientY - 30) + "px";
+  }
+});
+document.addEventListener("mouseleave", hideTip);
+
+renderNet();
+renderBreakdown();
+</script>
+</body>
+</html>
