@@ -1,20 +1,30 @@
 "use client";
 
-import { useMemo, useState } from "react";
+import { useMemo, useState, type ReactNode } from "react";
 import type { GrowthData } from "@/lib/growthAnalytics";
 import type { Period } from "./GlobalPeriod";
 import styles from "./growth.module.css";
 import { fmtInt, monthLabel } from "./format";
 
-// PART 1 + 2: a nested COHORT funnel rendered as a matrix — six stages left to
-// right (Downloads · Registrations · 1 · 3 · 5 · 10 matches), four period rows at
-// once (current month, previous month, year-to-date, custom range). Each play
-// stage counts, of the users who completed sign-up in that window, how many went
-// on to play ≥N non-cancelled non-fake matches EVER (lifetime). Every stage is a
-// strict subset of the prior, so no conversion can exceed 100% — asserted below.
-// Downloads is the one non-nested step (no per-person link).
+// PART 1 (c0d3853, unchanged): a nested COHORT funnel. For the users who completed
+// sign-up in a window, how many went on to play ≥1/≥3/≥5/≥10 non-cancelled
+// matches EVER. Each stage a strict subset → no conversion > 100%.
+//
+// v1_2 restyle (presentation only): bars carry the funnel shape (each stage as a
+// share of the row's registrations); numbers carry the values. No per-cell colour
+// tiers, no repeated stage/"conversion" labels, no per-row arrows. The conversion
+// between two cells is still b/a — placement unchanged from c0d3853.
 
-const STAGES = ["Downloads", "Registrations", "1 match", "3 matches", "5 matches", "10 matches"];
+// One-hue light→dark ramp in stage order (colour is redundant with position; the
+// number is always printed). Downloads has no source → no bar.
+const STAGES: { label: string; hue: string | null }[] = [
+  { label: "Downloads", hue: null },
+  { label: "Registrations", hue: "#93dcb9" },
+  { label: "1 match", hue: "#5ecb97" },
+  { label: "3 matches", hue: "#2fa774" },
+  { label: "5 matches", hue: "#186b4c" },
+  { label: "10 matches", hue: "var(--forest)" },
+];
 
 type Cohort = { registrations: number; played1: number; played3: number; played5: number; played10: number };
 
@@ -37,8 +47,8 @@ export default function PlayerFunnel({ data, period }: { data: GrowthData; perio
   const [customEnd, setCustomEnd] = useState(period.end);
 
   const rows = useMemo(() => {
-    // "Current" is always the latest data month (independent of the global period,
-    // which may end earlier). Custom is driven by the Custom start/end inputs.
+    // "Current" is the latest data month (independent of the global period);
+    // "Custom" is driven by the Custom start/end inputs.
     const end = months[months.length - 1];
     const endIdx = months.indexOf(end);
     const prev = endIdx > 0 ? months[endIdx - 1] : end;
@@ -48,23 +58,22 @@ export default function PlayerFunnel({ data, period }: { data: GrowthData; perio
     const hi = customStart <= customEnd ? customEnd : customStart;
     const custom = months.filter((m) => m >= lo && m <= hi);
     return [
-      { key: "current", cls: styles.rowCurrent, label: monthLabel(end), months: [end] },
-      { key: "previous", cls: styles.rowPrevious, label: monthLabel(prev), months: [prev] },
-      { key: "year", cls: styles.rowYear, label: `${year} YTD`, months: ytd },
+      { name: monthLabel(end), meta: "current month", months: [end] },
+      { name: monthLabel(prev), meta: "previous month", months: [prev] },
+      { name: `${year} YTD`, meta: "year to date", months: ytd },
       {
-        key: "custom",
-        cls: styles.rowCustom,
-        label: custom.length ? `${monthLabel(custom[0])} – ${monthLabel(custom[custom.length - 1])}` : "—",
+        name: custom.length ? `${monthLabel(custom[0])} – ${monthLabel(custom[custom.length - 1])}` : "—",
+        meta: "custom range",
         months: custom,
       },
     ].map((r) => {
       const c = sumCohort(data.funnelByMonth, new Set(r.months));
-      // Assert nested — a violation is a bug, not a number to render.
       const vals = [null, c.registrations, c.played1, c.played3, c.played5, c.played10] as (number | null)[];
+      // Assert nested — a violation is a bug, not a number to render.
       for (let i = 2; i < vals.length; i++) {
         if ((vals[i] as number) > (vals[i - 1] as number)) {
           // eslint-disable-next-line no-console
-          console.error(`Funnel not nested in ${r.key} row at stage ${i}`, vals);
+          console.error(`Funnel not nested in "${r.name}" at stage ${i}`, vals);
         }
       }
       return { ...r, vals };
@@ -77,9 +86,8 @@ export default function PlayerFunnel({ data, period }: { data: GrowthData; perio
         <div>
           <div className={styles.cardTitle}>Player funnel comparison</div>
           <div className={styles.cardSub}>
-            Counts and step-to-step conversion, shown left to right. Each play stage is the share of that period&rsquo;s
-            sign-up cohort who went on to play that many non-cancelled matches <b>ever</b> — so every stage is a subset of
-            the one before it.
+            Of each period&rsquo;s sign-up cohort, how many went on to play that many non-cancelled matches <b>ever</b> —
+            so every stage is a subset of the one before it.
           </div>
         </div>
         <div className={styles.controlsRow}>
@@ -116,87 +124,73 @@ export default function PlayerFunnel({ data, period }: { data: GrowthData; perio
 
       <div className={styles.funnelScroll}>
         <div className={styles.funnelMatrix}>
-          {/* header row */}
-          <div className={`${styles.funnelRow} ${styles.funnelHeader}`}>
-            <div className={styles.funnelPeriod}>Period</div>
-            {STAGES.map((s, i) => (
-              <FragmentCell key={s} stage={s} isLast={i === STAGES.length - 1} header />
-            ))}
+          {/* header: the only place a stage is named + one arrow per gap */}
+          <div className={`${styles.funnelRow} ${styles.funnelHeaderRow}`}>
+            <div />
+            {STAGES.flatMap((s, i) => {
+              const cells: ReactNode[] = [
+                <div key={`h${i}`} className={styles.funnelHstage}>
+                  {s.label}
+                </div>,
+              ];
+              if (i < STAGES.length - 1) cells.push(<div key={`ha${i}`} className={styles.funnelHarrow}>→</div>);
+              return cells;
+            })}
           </div>
-          {/* period rows */}
+
           {rows.map((r) => (
-            <div key={r.key} className={`${styles.funnelRow} ${r.cls}`}>
-              <div className={styles.funnelPeriod}>{r.label}</div>
-              {r.vals.map((v, i) => (
-                <FragmentCell
-                  key={i}
-                  stage={STAGES[i]}
-                  value={v}
-                  prev={i > 0 ? r.vals[i - 1] : null}
-                  isLast={i === r.vals.length - 1}
-                  firstArrow={i === 0}
-                />
-              ))}
+            <div key={r.meta} className={styles.funnelRow}>
+              <div className={styles.funnelPeriod}>
+                <span className={styles.funnelPeriodName}>{r.name}</span>
+                <span className={styles.funnelPeriodMeta}>{r.meta}</span>
+              </div>
+              {renderRowCells(r.vals)}
             </div>
           ))}
         </div>
       </div>
 
       <div className={styles.funnelNote}>
-        &ldquo;Went on to play&rdquo; means <b>ever</b> (lifetime matches), counted for the users who completed sign-up in
-        each period. Downloads has no per-person source, so its column is an em-dash and the Downloads → Registrations
-        step is an <b>aggregate ratio, not a per-user conversion</b>; every later step is a real per-person conversion.
+        The bar in each cell is that stage as a share of the row&rsquo;s registrations, so the funnel narrows left to
+        right. The figure between two cells is the conversion from the left one to the right one. Downloads has no source,
+        so its cell and its conversion are dashed — never 0.
       </div>
     </div>
   );
 }
 
-// One stage cell plus (unless last) the conversion cell that follows it.
-function FragmentCell({
-  stage,
-  value,
-  prev,
-  isLast,
-  header,
-  firstArrow,
-}: {
-  stage: string;
-  value?: number | null;
-  prev?: number | null;
-  isLast: boolean;
-  header?: boolean;
-  firstArrow?: boolean;
-}) {
-  const stageEl = header ? (
-    <div className={`${styles.funnelStage} ${styles.funnelStageHeader}`}>
-      <span>{stage}</span>
-    </div>
-  ) : (
-    <div className={styles.funnelStage}>
-      <b>{value == null ? "—" : fmtInt(value)}</b>
-      <span>{stage}</span>
-    </div>
-  );
-
-  if (isLast) return stageEl;
-
-  let convEl;
-  if (header) {
-    convEl = <div className={styles.funnelConvHeader}>→</div>;
-  } else if (firstArrow) {
-    convEl = <div className={styles.funnelAggNote}>aggregate ratio (no per-user link)</div>;
-  } else {
-    const pct = prev ? ((value as number) / (prev as number)) * 100 : 0;
-    convEl = (
-      <div className={styles.funnelConversion}>
-        {Math.min(pct, 100).toFixed(1)}%<small>conversion</small>
-      </div>
+// Builds a row's stage + conversion cells. The conversion between stage i and i+1
+// is b/a (b = vals[i+1], a = vals[i]); a dash when either is null or a is 0.
+function renderRowCells(vals: (number | null)[]): ReactNode[] {
+  const base = vals[1] ?? 0; // registrations
+  const out: ReactNode[] = [];
+  vals.forEach((v, i) => {
+    const isNull = v == null;
+    const share = isNull || !base ? 0 : Math.min(100, (v / base) * 100);
+    out.push(
+      <div key={`s${i}`} className={`${styles.funnelStage} ${isNull ? styles.funnelStageNull : ""}`}>
+        <span className={styles.funnelSnum}>{isNull ? "—" : fmtInt(v)}</span>
+        {isNull ? (
+          <span className={styles.funnelSbar} style={{ background: "transparent" }} />
+        ) : (
+          <span className={styles.funnelSbar}>
+            <span className={styles.funnelSfill} style={{ width: `${share}%`, background: STAGES[i].hue ?? "var(--forest)" }} />
+          </span>
+        )}
+      </div>,
     );
-  }
-  return (
-    <>
-      {stageEl}
-      {convEl}
-    </>
-  );
+    if (i < vals.length - 1) {
+      const a = vals[i];
+      const b = vals[i + 1];
+      const known = a != null && b != null && a > 0;
+      out.push(
+        <div key={`c${i}`} className={styles.funnelConv}>
+          <span className={`${styles.funnelCpill} ${known ? "" : styles.funnelCpillNone}`}>
+            {known ? `${((b! / a!) * 100).toFixed(1)}%` : "—"}
+          </span>
+        </div>,
+      );
+    }
+  });
+  return out;
 }
