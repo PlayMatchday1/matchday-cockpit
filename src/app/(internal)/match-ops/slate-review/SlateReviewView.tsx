@@ -30,10 +30,10 @@ import {
 const C = {
   forestDeep: "#072a20", forest: "#0d3b2e", accent: "#35c77f", mint: "#e0f2e7",
   ink: "#12241d", muted: "#626f68", ok: "#12704a", red: "#c8401f",
-  line: "#e6ebe8", hair: "#eff3f1", surface: "#ffffff", canvas: "#f4efe4",
-  chipBg: "#eef3f0", chipLine: "#e2eae5", colBg: "#fdfbf5", colLine: "#e8e0cf",
-  slotBg: "#f8f3e7", slotLine: "#eae1cd", gold: "#e3c369", goldInk: "#8a6300",
-  nsInk: "#6f6858",
+  line: "#e6ebe8", hair: "#eff3f1", surface: "#ffffff", canvas: "#eef2ef",
+  chipBg: "#eef3f0", chipLine: "#e2eae5", colBg: "#f9fbfa", colLine: "#e0e8e3",
+  slotBg: "#f3f7f4", slotLine: "#e2ebe6", gold: "#e3c369", goldInk: "#8a6300",
+  nsInk: "#566661",
 };
 // Cancel Patterns chronic scale — four distinct, eyedropped colours for
 // n-of-4-weeks cancelled. Contrast (text on bg): 1=13.7:1, 2=7.4:1, 3=8.5:1,
@@ -44,10 +44,10 @@ const C = {
 // is printed on every chip, so colour reinforces the count and is never the sole
 // encoding. Do not "correct" this into a sequential light→dark ramp.
 //
-// The 1-of-4 step needs its border: #f0ece3 sits too close to the day-cell
-// background (--slot-bg #f8f3e7) and the chip would lose its shape without it.
+// The 1-of-4 step needs its border: #e7ecea sits too close to the day-cell
+// background (--slot-bg #f3f7f4) and the chip would lose its shape without it.
 const RAMP: Record<number, { bg: string; fg: string; border?: string }> = {
-  1: { bg: "#f0ece3", fg: "#12241d", border: "#e2ddd0" },
+  1: { bg: "#e7ecea", fg: "#12241d", border: "#d4ded9" },
   2: { bg: "#eda01e", fg: "#12241d" },
   3: { bg: "#8b2c17", fg: "#ffffff" },
   4: { bg: "#d62015", fg: "#ffffff" },
@@ -96,7 +96,7 @@ export default function SlateReviewView() {
           return (
             <button key={c} type="button" onClick={() => setCity(c)}
               className="min-h-[30px] rounded-full border px-[14px] py-1.5 text-[13px] font-semibold"
-              style={on ? { background: C.forestDeep, borderColor: C.forestDeep, color: "#fff" } : { background: "#fbf8f1", borderColor: C.colLine, color: C.forest }}>
+              style={on ? { background: C.forestDeep, borderColor: C.forestDeep, color: "#fff" } : { background: "#f5f7f6", borderColor: C.colLine, color: C.forest }}>
               {c}
             </button>
           );
@@ -176,7 +176,7 @@ function GamesStrip({ weekly }: { weekly: DemandWeek[] }) {
             <div className="flex items-end border-b" style={{ borderColor: C.line, height: 100 }}>
               {noData ? (
                 <div className="w-full rounded-t-[4px]" title="no source rows this week"
-                  style={{ height: 96, opacity: 0.55, background: "repeating-linear-gradient(135deg,#d8d2c4 0 5px,#efe9dc 5px 10px)" }} />
+                  style={{ height: 96, opacity: 0.55, background: "repeating-linear-gradient(135deg,#c8d4ce 0 5px,#e2e9e6 5px 10px)" }} />
               ) : (
                 <div className="w-full rounded-t-[4px]" style={{ height: h, background: w.isCurrent ? "repeating-linear-gradient(135deg,#35c77f 0 5px,#a6e6c6 5px 10px)" : C.accent }} />
               )}

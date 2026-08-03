@@ -11,14 +11,14 @@ export default function CalendarPanel() {
     <div
       className="overflow-hidden rounded-[14px] border"
       style={{
-        background: "#fffdf7",
-        borderColor: "#efe9dc",
+        background: "#f2f4f3",
+        borderColor: "#e2e9e6",
         boxShadow: "0 1px 2px rgba(7,42,32,.05), 0 12px 30px -20px rgba(7,42,32,.45)",
       }}
     >
       <div
         className="flex items-center gap-[10px] border-b px-[18px] py-[15px]"
-        style={{ borderColor: "#efe9dc" }}
+        style={{ borderColor: "#e2e9e6" }}
       >
         <h3 className="text-[14.5px] font-bold tracking-[-0.008em] text-[#12241d]">
           This week

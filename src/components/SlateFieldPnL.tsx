@@ -28,8 +28,8 @@ const C = {
   forest: "#0d3b2e", forestDeep: "#072a20", accent: "#35c77f", mint: "#e0f2e7",
   ink: "#12241d", muted: "#626f68", ok: "#12704a", line: "#e6ebe8", hair: "#eff3f1",
   chipBg: "#eef3f0", chipLine: "#e2eae5", surface: "#ffffff", railB: "#f6f9f7",
-  colBg: "#fdfbf5", gold: "#e3c369", goldInk: "#8a6300", goldDot: "#d9a521",
-  loss: "#8f2d15", nsInk: "#6f6858",
+  colBg: "#f9fbfa", gold: "#e3c369", goldInk: "#8a6300", goldDot: "#d9a521",
+  loss: "#8f2d15", nsInk: "#566661",
 };
 const MO = ["Jan", "Feb", "Mar", "Apr", "May", "Jun", "Jul", "Aug", "Sep", "Oct", "Nov", "Dec"];
 const money = (v: number) => `$${v.toLocaleString("en-US", { minimumFractionDigits: 2, maximumFractionDigits: 2 })}`;
@@ -217,7 +217,7 @@ function FieldRows({ g, rank, open, onToggle }: { g: FieldAgg; rank?: number; op
     : g.bucket === "share" ? <span style={{ color: C.nsInk }}>Not ranked</span> : <span style={{ color: C.nsInk }}>—</span>;
   return (
     <>
-      <tr onClick={onToggle} className="hover:bg-[#fdfbf5]">
+      <tr onClick={onToggle} className="hover:bg-[#f9fbfa]">
         <td style={{ ...td, textAlign: "left", paddingLeft: 10, cursor: "pointer" }}>
           {rank != null && <span className="mr-[9px] inline-flex h-5 w-5 items-center justify-center rounded-full text-[11px] font-extrabold" style={{ background: C.chipBg, border: `1px solid ${C.chipLine}`, color: C.nsInk }}>{rank}</span>}
           <span className="text-[14px] font-extrabold" style={{ color: C.ink }}>{g.label}</span>

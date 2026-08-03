@@ -12,7 +12,7 @@
 
 import { chromium } from "playwright";
 import { mkdirSync, existsSync } from "node:fs";
-import { contrast, overflow } from "./checks.mjs";
+import { contrast, overflow, warmBg } from "./checks.mjs";
 
 try { process.loadEnvFile(".env.local"); } catch { /* ok */ }
 
@@ -69,6 +69,7 @@ for (const route of routes) {
     res.pageLeak = o.pageLeak;
     res.scrollers = o.offenders.length;
     res._offenders = o.offenders;
+    res._warmBg = await warmBg(page);
     res.status = "ok";
   } catch (e) {
     res.status = "ERR: " + (e.message || "").slice(0, 60);
@@ -90,6 +91,16 @@ for (const r of results) {
     (r.owner || r.status).slice(0, 80),
   );
 }
+// distinct warm backgrounds across all routes (should be only meaningful ones)
+const warm = new Map();
+for (const r of results) for (const w of r._warmBg || []) if (!warm.has(w.rgb)) warm.set(w.rgb, w.cls);
+console.log("\n=== distinct warm computed backgrounds (expect only gold/city/error) ===");
+for (const [rgb, cls] of warm) {
+  const [r, g, b] = rgb.split(",").map(Number);
+  const hex = "#" + [r, g, b].map((x) => x.toString(16).padStart(2, "0")).join("");
+  console.log(`  rgb(${rgb}) ${hex}  ${cls}`);
+}
+
 // print detailed failures for /growth if present
 const g = results.find((r) => r.route === "/growth");
 if (g?._failures?.length) {

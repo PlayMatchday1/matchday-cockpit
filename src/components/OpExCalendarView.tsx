@@ -658,7 +658,7 @@ function isWeekend(year: number, month0: number, d: number): boolean {
 const OPEX_CSS = `
 .opex-cal{--card:#fff;--ink:#17241d;--green-deep:#123d2c;--green-bright:#2fbf6c;--green-mid:#3aa86a;
   --green-tint:#e6f4ec;--green-tint-2:#d5eddd;--today:#d7f0e0;--today-head:#33c46f;--muted:#8b8f85;
-  --muted-2:#a7a99d;--amber-bg:#fbeede;--amber-line:#e9a86a;--line:#e9e1d1;--line-soft:#f0e9db;--cream-2:#efe7d6;
+  --muted-2:#a7a99d;--amber-bg:#fbeede;--amber-line:#e9a86a;--line:#d9e1dd;--line-soft:#e2e9e5;--cream-2:#dfe6e3;
   color:var(--ink)}
 .opex-cal h1{font-size:38px;letter-spacing:.5px;color:var(--green-deep);line-height:.95;text-transform:uppercase}
 .opex-cal .ox-sub{color:var(--muted);font-size:14px;margin-top:6px;font-weight:500}
@@ -683,12 +683,12 @@ const OPEX_CSS = `
 .opex-cal .ox-bar{display:grid;grid-template-columns:168px 1fr 88px 44px;align-items:center;gap:12px;padding:7px 0}
 .opex-cal .ox-bar+.ox-bar{border-top:1px solid var(--line-soft)}
 .opex-cal .ox-bar .bl .nm{font-weight:700;font-size:12.5px;color:var(--ink)}
-.opex-cal .ox-bar .track{height:18px;background:#f1ead9;border-radius:5px;overflow:hidden}
+.opex-cal .ox-bar .track{height:18px;background:#e2e8e5;border-radius:5px;overflow:hidden}
 .opex-cal .ox-bar .fill{height:100%;background:linear-gradient(90deg,var(--green-mid),var(--green-bright));border-radius:5px;min-width:2px}
 .opex-cal .ox-bar .amt{text-align:right;font-weight:800;font-size:13px;color:var(--green-deep);font-variant-numeric:tabular-nums}
 .opex-cal .ox-bar .pct{text-align:right;font-size:11.5px;color:var(--muted);font-weight:600;font-variant-numeric:tabular-nums}
 .opex-cal .ox-bar.zero .nm,.opex-cal .ox-bar.zero .amt{color:var(--muted-2)}
-.opex-cal .ox-bar.zero .track{background:#f6f1e6}
+.opex-cal .ox-bar.zero .track{background:#ecf0ee}
 .opex-cal .ox-caltitle{display:flex;align-items:baseline;justify-content:space-between;padding:16px 20px 12px;gap:12px;flex-wrap:wrap}
 .opex-cal .ox-caltitle .t{font-weight:800;font-size:12.5px;letter-spacing:.7px;text-transform:uppercase;color:var(--green-deep)}
 .opex-cal .ox-caltitle .s{font-size:12px;color:var(--muted);font-weight:600}
@@ -708,7 +708,7 @@ const OPEX_CSS = `
 .opex-cal tbody td{border-bottom:1px solid var(--line-soft);height:40px;text-align:center;font-size:12px}
 .opex-cal tbody td.lab{position:sticky;left:0;z-index:2;background:var(--card);text-align:left;padding:0 18px;min-width:250px;width:250px;border-right:1px solid var(--line)}
 .opex-cal td.today-c{background:var(--today)}
-.opex-cal td.wknd-c{background:#faf7ef}
+.opex-cal td.wknd-c{background:#f3f6f4}
 .opex-cal td.today-c.wknd-c{background:var(--today)}
 .opex-cal tr.ox-cat{cursor:pointer}
 .opex-cal tr.ox-cat td{background:var(--green-tint);border-bottom:1px solid var(--green-tint-2);height:44px}
@@ -743,13 +743,13 @@ const OPEX_CSS = `
 .opex-cal tr.ox-dtot td.lab{background:var(--cream-2);font-weight:800;font-size:11.5px;letter-spacing:.5px;text-transform:uppercase;color:var(--green-deep)}
 .opex-cal tr.ox-dtot td .n{font-weight:800;font-size:11.5px;color:var(--green-deep);font-variant-numeric:tabular-nums}
 .opex-cal tr.ox-dtot td .n.dash{color:#c3bca9}
-.opex-cal tr.ox-dtot td.today-c{background:#e6ddc9}
-.opex-cal tr.ox-cum td{background:#fbf9f3}
-.opex-cal tr.ox-cum td.lab{background:#fbf9f3;font-weight:700;font-size:10.5px;letter-spacing:.5px;text-transform:uppercase;color:var(--muted)}
+.opex-cal tr.ox-dtot td.today-c{background:#d3dcd8}
+.opex-cal tr.ox-cum td{background:#f6f8f7}
+.opex-cal tr.ox-cum td.lab{background:#f6f8f7;font-weight:700;font-size:10.5px;letter-spacing:.5px;text-transform:uppercase;color:var(--muted)}
 .opex-cal tr.ox-cum td.spark{position:relative;height:54px;padding:0}
 .opex-cal tr.ox-cum td.spark .sv{display:block;width:100%;height:54px}
 .opex-cal tr.ox-cum td.spark .cend{position:absolute;top:8px;right:14px;font-size:11px;font-weight:800;color:var(--green-deep);font-variant-numeric:tabular-nums;background:rgba(251,249,243,.9);padding:2px 7px;border-radius:6px;border:1px solid var(--line)}
-.opex-cal .ox-recon{padding:14px 20px;background:#fbf9f3;border-top:1px solid var(--line);font-size:12.5px;color:#5c6b60;line-height:1.5}
+.opex-cal .ox-recon{padding:14px 20px;background:#f6f8f7;border-top:1px solid var(--line);font-size:12.5px;color:#5c6b60;line-height:1.5}
 .opex-cal .ox-recon b{color:var(--green-deep);font-variant-numeric:tabular-nums}
 /* Inline edit: leaf chip becomes a click-to-edit button; locked rows explain why. */
 .opex-cal .chip[type=button]{cursor:pointer;transition:background .12s,border-color .12s}

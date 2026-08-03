@@ -476,7 +476,7 @@ const CSS = `
 .mx-h1{font-size:22px;font-weight:800;letter-spacing:-.015em;color:#0d3b2e;margin:0;line-height:1.1}
 .mx-sub{font-size:13px;color:#626f68;margin:8px 0 0;line-height:1.5;max-width:82ch}
 .mx-navrow{display:flex;align-items:center;gap:8px;margin:16px 0 0;flex-wrap:wrap}
-.mx-nav{width:30px;height:30px;border-radius:999px;border:1px solid #e2eae5;background:#fff;color:#6f6858;font-size:14px;display:inline-flex;align-items:center;justify-content:center;cursor:pointer}
+.mx-nav{width:30px;height:30px;border-radius:999px;border:1px solid #e2eae5;background:#fff;color:#566661;font-size:14px;display:inline-flex;align-items:center;justify-content:center;cursor:pointer}
 .mx-week{border:1px solid #e2eae5;background:#eef3f0;color:#12241d;border-radius:999px;padding:6px 15px;font-size:13px;font-weight:700;font-variant-numeric:tabular-nums}
 .mx-btn{border:1px solid #e2eae5;background:#fff;color:#12241d;border-radius:999px;padding:6px 15px;font-size:12.5px;font-weight:700;cursor:pointer}
 .mx-btn:disabled{opacity:.55;cursor:default}
@@ -492,9 +492,9 @@ const CSS = `
 .mx-filter{display:flex;align-items:center;gap:14px;flex-wrap:wrap;margin-top:16px;padding-top:15px;border-top:1px solid #eff3f1}
 .mx-flabel{font-size:11px;font-weight:700;letter-spacing:.08em;text-transform:uppercase;color:#626f68}
 .mx-chips{display:flex;gap:6px;flex-wrap:wrap}
-.mx-chip{font-size:12.5px;font-weight:700;border-radius:999px;padding:5px 14px;cursor:pointer;border:1px solid #e2eae5;background:#fff;color:#6f6858}
+.mx-chip{font-size:12.5px;font-weight:700;border-radius:999px;padding:5px 14px;cursor:pointer;border:1px solid #e2eae5;background:#fff;color:#566661}
 .mx-chip.is-on{background:#0d3b2e;border-color:#0d3b2e;color:#fff}
-.mx-toggle{display:inline-flex;align-items:center;gap:9px;cursor:pointer;font-size:12.5px;color:#6f6858;font-weight:600;margin-left:auto}
+.mx-toggle{display:inline-flex;align-items:center;gap:9px;cursor:pointer;font-size:12.5px;color:#566661;font-weight:600;margin-left:auto}
 .mx-toggle input{position:absolute;opacity:0;width:0;height:0}
 .mx-track{width:36px;height:20px;border-radius:999px;background:#eef3f0;border:1px solid #e2eae5;position:relative;flex:0 0 auto;transition:background .12s,border-color .12s}
 .mx-knob{position:absolute;top:2px;left:2px;width:14px;height:14px;border-radius:999px;background:#fff;border:1px solid #e2eae5;transition:left .12s}
@@ -508,19 +508,19 @@ const CSS = `
 .mx-tag.is-ch{background:#fbf2dd;border-color:#e3c369;color:#8a6300}
 .mx-tag.is-md{background:#e0f2e7;border-color:#b9dfc9;color:#12704a}
 .mx-grid{display:grid;grid-template-columns:repeat(7,minmax(0,1fr));gap:10px;align-items:start}
-.mx-col{background:#fdfbf5;border:1px solid #e8e0cf;border-radius:12px;padding:8px 8px 10px;min-width:0}
+.mx-col{background:#f9fbfa;border:1px solid #e0e8e3;border-radius:12px;padding:8px 8px 10px;min-width:0}
 .mx-col.is-today{border-color:#35c77f;box-shadow:inset 3px 0 0 #35c77f}
-.mx-colhead{display:flex;align-items:baseline;justify-content:space-between;gap:6px;padding:4px 4px 9px;border-bottom:1px solid #e8e0cf}
+.mx-colhead{display:flex;align-items:baseline;justify-content:space-between;gap:6px;padding:4px 4px 9px;border-bottom:1px solid #e0e8e3}
 .mx-dow{font-size:11px;font-weight:700;letter-spacing:.08em;text-transform:uppercase;color:#626f68}
 .mx-col.is-today .mx-dow{color:#12704a}
-.mx-dnum{font-size:14px;font-weight:800;color:#6f6858;font-variant-numeric:tabular-nums}
+.mx-dnum{font-size:14px;font-weight:800;color:#566661;font-variant-numeric:tabular-nums}
 .mx-col.is-today .mx-dnum{color:#12704a}
 .mx-todaychip{display:inline-block;font-size:9px;font-weight:800;letter-spacing:.08em;text-transform:uppercase;color:#12704a;background:#e0f2e7;border-radius:999px;padding:2px 6px;margin-left:6px;vertical-align:1px}
 .mx-stack{display:flex;flex-direction:column;gap:7px;padding-top:9px}
 .mx-empty{font-size:12px;color:#626f68;padding:14px 4px;font-weight:600}
-.mx-cell{background:#f8f3e7;border:1px solid #eae1cd;border-radius:9px;padding:9px 10px 10px;min-width:0}
+.mx-cell{background:#f3f7f4;border:1px solid #e2ebe6;border-radius:9px;padding:9px 10px 10px;min-width:0}
 .mx-cell-time{font-size:13px;font-weight:800;color:#12241d;line-height:1.25;font-variant-numeric:tabular-nums;display:flex;align-items:baseline;gap:6px;justify-content:space-between}
-.mx-cell-field{font-size:12.5px;font-weight:500;color:#6f6858;line-height:1.32;margin-top:3px;overflow-wrap:break-word;min-height:33px;height:33px;overflow:hidden;display:-webkit-box;-webkit-line-clamp:2;-webkit-box-orient:vertical}
+.mx-cell-field{font-size:12.5px;font-weight:500;color:#566661;line-height:1.32;margin-top:3px;overflow-wrap:break-word;min-height:33px;height:33px;overflow:hidden;display:-webkit-box;-webkit-line-clamp:2;-webkit-box-orient:vertical}
 /* Fixed height (not min) so a chip row and a meter row are the same height —
    keeps both/ch/past cells identical. MatchDay-only cells add the Add-to-
    Clubhouse action below and are intentionally taller (as in the mockup). */
@@ -533,7 +533,7 @@ const CSS = `
 .mx-meter{height:4px;border-radius:2px;background:#e0f2e7;overflow:hidden;width:100%;min-width:0}
 .mx-meterfill{height:100%;border-radius:2px;background:#35c77f;display:block}
 .mx-meterfill.is-over{background:#d9a521}
-.mx-meter.is-empty{background:transparent;border:1px dashed #d8d0bd;height:5px;border-radius:3px}
+.mx-meter.is-empty{background:transparent;border:1px dashed #cfd9d3;height:5px;border-radius:3px}
 .mx-meter.is-cx{background:#f2cdc0}.mx-meterfill.is-cx{background:#8f2d15}
 .mx-src{font-size:10px;font-weight:800;letter-spacing:.04em;text-transform:uppercase;border-radius:999px;padding:2px 8px;white-space:normal;display:inline-block;max-width:100%;text-align:center}
 .mx-src.is-ch{color:#8a6300;background:#fbf2dd;border:1px solid #e3c369}
@@ -566,14 +566,14 @@ const CSS = `
 .mx-modal-row:last-child{border-bottom:0}
 .mx-modal-day{flex:0 0 62px;font-weight:800;font-size:10.5px;letter-spacing:.07em;text-transform:uppercase;color:#626f68;font-variant-numeric:tabular-nums}
 .mx-modal-time{flex:0 0 74px;font-weight:700;color:#12241d;font-variant-numeric:tabular-nums}
-.mx-modal-field{min-width:0;color:#6f6858}
+.mx-modal-field{min-width:0;color:#566661}
 .mx-modal-act{display:flex;justify-content:flex-end;gap:10px;margin-top:14px}
 .mx-btn.is-gold-solid{border-color:#8a6300;background:#8a6300;color:#fff}
 .mx-legend{display:flex;flex-wrap:wrap;gap:10px 22px;margin-top:16px;padding-top:14px;border-top:1px solid #eff3f1}
-.mx-leg{display:inline-flex;align-items:center;gap:8px;font-size:12px;color:#6f6858;font-weight:600}
+.mx-leg{display:inline-flex;align-items:center;gap:8px;font-size:12px;color:#566661;font-weight:600}
 .mx-legn{font-size:11px;font-weight:800;font-variant-numeric:tabular-nums;color:#12241d;background:#eef3f0;border:1px solid #e2eae5;border-radius:999px;padding:1px 7px;margin-left:2px}
 .mx-legn.is-zero{color:#626f68}
-.mx-sw{width:22px;height:14px;border-radius:4px;border:1px solid #eae1cd;background:#f8f3e7;flex:0 0 auto}
+.mx-sw{width:22px;height:14px;border-radius:4px;border:1px solid #e2ebe6;background:#f3f7f4;flex:0 0 auto}
 .mx-sw.sw-ch{background:#fff;border:2px solid #d9a521}
 .mx-sw.sw-md{background:#fff;border:2px solid #12704a}
 .mx-toasttip{position:fixed;left:50%;bottom:26px;transform:translateX(-50%);background:#0d3b2e;color:#fff;font-size:12.5px;font-weight:600;padding:9px 16px;border-radius:999px;z-index:80;animation:mxfade 3.2s forwards}

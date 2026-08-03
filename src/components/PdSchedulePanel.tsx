@@ -119,14 +119,14 @@ export default function PdSchedulePanel() {
     <div
       className="overflow-hidden rounded-[14px] border"
       style={{
-        background: "#fffdf7",
-        borderColor: "#efe9dc",
+        background: "#f2f4f3",
+        borderColor: "#e2e9e6",
         boxShadow: "0 1px 2px rgba(7,42,32,.05), 0 12px 30px -20px rgba(7,42,32,.45)",
       }}
     >
       <div
         className="flex items-center gap-[10px] border-b px-[18px] py-[15px]"
-        style={{ borderColor: "#efe9dc" }}
+        style={{ borderColor: "#e2e9e6" }}
       >
         <h3 className="text-[14.5px] font-bold tracking-[-0.008em] text-[#12241d]">
           P&amp;D schedule
@@ -149,10 +149,10 @@ export default function PdSchedulePanel() {
         className="flex items-center gap-[7px] border-b px-[18px] py-[9px] text-[12px] font-[650]"
         style={
           monthEntirelyPast
-            ? { background: "#f7f4ec", color: "#6d7b74", borderColor: "#efe9dc" }
+            ? { background: "#f0f3f2", color: "#6d7b74", borderColor: "#e2e9e6" }
             : uncoveredUpcoming > 0
-              ? { background: "#fdf1d0", color: "#8a6300", borderColor: "#efe9dc" }
-              : { background: "#e0f2e7", color: "#116b42", borderColor: "#efe9dc" }
+              ? { background: "#fdf1d0", color: "#8a6300", borderColor: "#e2e9e6" }
+              : { background: "#e0f2e7", color: "#116b42", borderColor: "#e2e9e6" }
         }
       >
         {monthEntirelyPast
@@ -172,7 +172,7 @@ export default function PdSchedulePanel() {
               key={weekend.satYmd}
               className="relative flex items-center gap-[11px] border-b px-[18px] py-[11px]"
               style={{
-                borderColor: "#efe9dc",
+                borderColor: "#e2e9e6",
                 ...(uncoveredFuture ? { background: "#fefaef" } : {}),
                 ...(state === "past" ? { opacity: 0.48 } : {}),
               }}
@@ -236,7 +236,7 @@ export default function PdSchedulePanel() {
                     className="group flex w-full max-w-[240px] items-center gap-[8px] rounded-lg border px-[10px] py-[6px] text-left text-[12.5px] transition hover:shadow-sm"
                     style={
                       ownerId
-                        ? { borderColor: "#e4ddcc", background: "#fff", color: "#12241d" }
+                        ? { borderColor: "#d3ddd8", background: "#fff", color: "#12241d" }
                         : { borderStyle: "dashed", borderColor: "#e3c369", background: "#fefaef", color: "#8a6300" }
                     }
                   >
@@ -321,8 +321,8 @@ function NavBtn({
       type="button"
       aria-label={label}
       onClick={onClick}
-      className="flex h-[27px] w-[27px] items-center justify-center rounded-lg border text-[14px] leading-none transition hover:bg-[#f2ede2]"
-      style={{ borderColor: "#e4ddcc", color: "#4b6459" }}
+      className="flex h-[27px] w-[27px] items-center justify-center rounded-lg border text-[14px] leading-none transition hover:bg-[#e7edea]"
+      style={{ borderColor: "#d3ddd8", color: "#4b6459" }}
     >
       {children}
     </button>

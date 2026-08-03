@@ -75,7 +75,7 @@ export default function FinanceTrendChart() {
             data={chartData}
             margin={{ top: 8, right: 16, bottom: 0, left: 8 }}
           >
-            <CartesianGrid stroke="#E6DEC9" strokeDasharray="3 3" vertical={false} />
+            <CartesianGrid stroke="#d3dcd8" strokeDasharray="3 3" vertical={false} />
             <XAxis
               dataKey="month"
               tick={{ fill: "#003326", fontSize: 12, fontWeight: 600 }}
@@ -92,7 +92,7 @@ export default function FinanceTrendChart() {
             <Tooltip
               contentStyle={{
                 backgroundColor: "#FFFFFF",
-                border: "1.5px solid #E6DEC9",
+                border: "1.5px solid #d3dcd8",
                 borderRadius: 12,
                 fontFamily: "var(--font-geist-sans)",
                 fontSize: 12,

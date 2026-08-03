@@ -61,6 +61,28 @@ export async function contrast(page) {
   });
 }
 
+// warmBg(page): every element whose COMPUTED background resolves to a light warm
+// colour (red − blue ≥ 8, all channels > 200, alpha > 0). After a sage re-theme
+// the only survivors should be meaningful (gold / city / error) — this lists them
+// so each can be confirmed as intentional, not a missed neutral.
+export async function warmBg(page) {
+  return page.evaluate(() => {
+    const out = new Map();
+    for (const el of document.querySelectorAll("body *")) {
+      const bg = getComputedStyle(el).backgroundColor;
+      const m = bg.match(/rgba?\(([^)]+)\)/);
+      if (!m) continue;
+      const p = m[1].split(",").map((x) => parseFloat(x.trim()));
+      const [r, g, b, a = 1] = p;
+      if (a > 0 && r - b >= 8 && r > 200 && g > 200 && b > 200) {
+        const key = `${r},${g},${b}`;
+        if (!out.has(key)) out.set(key, { rgb: key, cls: (el.getAttribute("class") || "").slice(0, 50) });
+      }
+    }
+    return [...out.values()];
+  });
+}
+
 // overflow(page): at the caller's viewport (set to 1600 before calling), assert
 // documentElement.scrollWidth === clientWidth, and list elements that overflow
 // their own box (intentional internal scrollers vs a page-level leak).

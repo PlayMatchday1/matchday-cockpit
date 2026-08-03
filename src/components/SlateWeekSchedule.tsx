@@ -413,7 +413,7 @@ const CSS = `
 .ms-city{font-size:22px;font-weight:800;letter-spacing:-.015em;color:#0d3b2e;margin:0;line-height:1.1}
 .ms-sub{font-size:13px;color:#626f68;margin:8px 0 0;line-height:1.5;max-width:62ch}
 .ms-navrow{display:flex;align-items:center;gap:8px;margin:16px 0 6px}
-.ms-nav{width:30px;height:30px;border-radius:999px;border:1px solid #e2eae5;background:#fff;color:#6f6858;font-size:14px;line-height:1;display:inline-flex;align-items:center;justify-content:center;cursor:pointer}
+.ms-nav{width:30px;height:30px;border-radius:999px;border:1px solid #e2eae5;background:#fff;color:#566661;font-size:14px;line-height:1;display:inline-flex;align-items:center;justify-content:center;cursor:pointer}
 .ms-week{border:1px solid #e2eae5;background:#eef3f0;color:#12241d;border-radius:999px;padding:6px 15px;font-size:13px;font-weight:700;font-variant-numeric:tabular-nums}
 .ms-today-btn{border:1px solid #0d3b2e;background:#0d3b2e;color:#fff;border-radius:999px;padding:6px 15px;font-size:12.5px;font-weight:700;cursor:pointer}
 .ms-counts{display:flex;gap:0;align-items:stretch;flex-wrap:nowrap}
@@ -423,7 +423,7 @@ const CSS = `
 .ms-count-n.is-cx{color:#8f2d15}
 .ms-count-l{font-size:11px;font-weight:600;letter-spacing:.05em;text-transform:uppercase;color:#626f68;margin-top:3px;white-space:nowrap}
 .ms-toolbar{display:flex;align-items:center;justify-content:flex-end;margin:2px 0 12px}
-.ms-toggle{display:inline-flex;align-items:center;gap:9px;cursor:pointer;font-size:12.5px;color:#6f6858;font-weight:600}
+.ms-toggle{display:inline-flex;align-items:center;gap:9px;cursor:pointer;font-size:12.5px;color:#566661;font-weight:600}
 .ms-toggle input{position:absolute;opacity:0;width:0;height:0}
 .ms-track{width:36px;height:20px;border-radius:999px;background:#eef3f0;border:1px solid #e2eae5;position:relative;transition:background .12s,border-color .12s;flex:0 0 auto}
 .ms-knob{position:absolute;top:2px;left:2px;width:14px;height:14px;border-radius:999px;background:#fff;border:1px solid #e2eae5;transition:left .12s}
@@ -432,22 +432,22 @@ const CSS = `
 .ms-toggle input:focus-visible + .ms-track{outline:2px solid #0d3b2e;outline-offset:2px}
 .ms-empty{padding:28px 8px;color:#626f68;font-size:13px}
 .ms-grid{display:grid;grid-template-columns:repeat(7,minmax(0,1fr));gap:10px;align-items:start}
-.ms-col{background:#fdfbf5;border:1px solid #e8e0cf;border-radius:12px;padding:8px 8px 10px;min-width:0}
+.ms-col{background:#f9fbfa;border:1px solid #e0e8e3;border-radius:12px;padding:8px 8px 10px;min-width:0}
 .ms-col.is-today{border-color:#35c77f;box-shadow:inset 3px 0 0 #35c77f}
-.ms-colhead{display:flex;align-items:baseline;justify-content:space-between;gap:6px;padding:4px 4px 9px;margin-bottom:2px;border-bottom:1px solid #e8e0cf}
+.ms-colhead{display:flex;align-items:baseline;justify-content:space-between;gap:6px;padding:4px 4px 9px;margin-bottom:2px;border-bottom:1px solid #e0e8e3}
 .ms-dow{font-size:11px;font-weight:700;letter-spacing:.08em;text-transform:uppercase;color:#626f68}
 .ms-col.is-today .ms-dow{color:#12704a}
-.ms-dnum{font-size:14px;font-weight:800;color:#6f6858;font-variant-numeric:tabular-nums}
+.ms-dnum{font-size:14px;font-weight:800;color:#566661;font-variant-numeric:tabular-nums}
 .ms-col.is-today .ms-dnum{color:#12704a}
 .ms-todaychip{display:inline-block;font-size:9px;font-weight:800;letter-spacing:.08em;text-transform:uppercase;color:#12704a;background:#e0f2e7;border-radius:999px;padding:2px 6px;margin-left:6px;vertical-align:1px}
 .ms-stack{display:flex;flex-direction:column;gap:7px;padding-top:9px}
-.ms-cell{background:#f8f3e7;border:1px solid #eae1cd;border-radius:9px;padding:9px 10px 10px;min-width:0}
+.ms-cell{background:#f3f7f4;border:1px solid #e2ebe6;border-radius:9px;padding:9px 10px 10px;min-width:0}
 .ms-cell-time{font-size:13px;font-weight:800;color:#12241d;line-height:1.25;font-variant-numeric:tabular-nums;letter-spacing:-.005em}
 /* Exactly two lines: min-height is a floor, but a long field name wraps to a
    third line at narrow column widths and breaks cross-column alignment. Clamp to
    two lines (fixed 33px) so every cell is identical height at 1280 and 1600; the
    full name stays available via the title tooltip. */
-.ms-cell-field{font-size:12.5px;font-weight:500;color:#6f6858;line-height:1.32;margin-top:3px;overflow-wrap:break-word;min-height:33px;height:33px;overflow:hidden;display:-webkit-box;-webkit-line-clamp:2;-webkit-box-orient:vertical}
+.ms-cell-field{font-size:12.5px;font-weight:500;color:#566661;line-height:1.32;margin-top:3px;overflow-wrap:break-word;min-height:33px;height:33px;overflow:hidden;display:-webkit-box;-webkit-line-clamp:2;-webkit-box-orient:vertical}
 .ms-cell-players{display:flex;align-items:center;gap:8px;margin-top:7px}
 .ms-pnum{font-size:12px;font-weight:700;color:#12241d;font-variant-numeric:tabular-nums;white-space:nowrap;flex:0 0 auto}
 .ms-pnum.is-full{color:#12704a}
@@ -455,9 +455,9 @@ const CSS = `
 .ms-meter{height:4px;border-radius:2px;background:#e0f2e7;overflow:hidden;width:100%;min-width:0}
 .ms-meterfill{height:100%;border-radius:2px;background:#35c77f;display:block}
 .ms-meterfill.is-over{background:#d9a521}
-.ms-pnote{font-size:12px;font-weight:700;color:#6f6858;font-variant-numeric:tabular-nums;flex:0 0 auto}
-.ms-meter.is-empty{background:transparent;border:1px dashed #d8d0bd;height:5px;border-radius:3px}
-.ms-cell.is-planned{background:#fff;border-style:dashed;border-color:#d8d0bd}
+.ms-pnote{font-size:12px;font-weight:700;color:#566661;font-variant-numeric:tabular-nums;flex:0 0 auto}
+.ms-meter.is-empty{background:transparent;border:1px dashed #cfd9d3;height:5px;border-radius:3px}
+.ms-cell.is-planned{background:#fff;border-style:dashed;border-color:#cfd9d3}
 .ms-cell.is-flag{background:#fff;border-style:solid;border-color:#e3c369}
 .ms-flagchip{display:inline-block;font-size:10px;font-weight:800;letter-spacing:.05em;text-transform:uppercase;color:#8a6300;background:#fbf2dd;border:1px solid #e3c369;border-radius:999px;padding:2px 7px}
 .ms-cell.is-cx{background:#fbe9e3;border-color:#f0cec2}
@@ -468,9 +468,9 @@ const CSS = `
 .ms-meter.is-cx{background:#f2cdc0}
 .ms-meterfill.is-cx{background:#8f2d15}
 .ms-legend{display:flex;flex-wrap:wrap;gap:10px 22px;margin-top:16px;padding-top:14px;border-top:1px solid #eff3f1}
-.ms-leg{display:inline-flex;align-items:center;gap:8px;font-size:12px;color:#6f6858;font-weight:600}
-.ms-swatch{width:22px;height:14px;border-radius:4px;border:1px solid #eae1cd;background:#f8f3e7;flex:0 0 auto}
-.ms-swatch.sw-planned{background:#fff;border-style:dashed;border-color:#d8d0bd}
+.ms-leg{display:inline-flex;align-items:center;gap:8px;font-size:12px;color:#566661;font-weight:600}
+.ms-swatch{width:22px;height:14px;border-radius:4px;border:1px solid #e2ebe6;background:#f3f7f4;flex:0 0 auto}
+.ms-swatch.sw-planned{background:#fff;border-style:dashed;border-color:#cfd9d3}
 .ms-swatch.sw-flag{background:#fff;border-color:#e3c369}
 .ms-swatch.sw-cx{background:#fbe9e3;border-color:#f0cec2}
 .ms-swatch.sw-today{background:#fff;border-color:#35c77f;box-shadow:inset 3px 0 0 #35c77f}
@@ -478,7 +478,7 @@ const CSS = `
 .ms-chg-sub{font-size:12.5px;color:#626f68;margin:6px 0 18px;line-height:1.5;max-width:78ch}
 .ms-grp{margin-bottom:26px}
 .ms-grp-head{display:flex;align-items:center;gap:9px;margin-bottom:3px}
-.ms-grp-name{font-size:11.5px;font-weight:800;letter-spacing:.07em;text-transform:uppercase;color:#6f6858}
+.ms-grp-name{font-size:11.5px;font-weight:800;letter-spacing:.07em;text-transform:uppercase;color:#566661}
 .ms-grp-n{font-size:11px;font-weight:800;color:#12241d;background:#eef3f0;border:1px solid #e2eae5;border-radius:999px;padding:1px 8px;font-variant-numeric:tabular-nums}
 .ms-grp-n.is-cx{color:#8f2d15;background:#fbe9e3;border-color:#f0cec2}
 .ms-grp-note{font-size:12px;color:#626f68;margin:2px 0 10px;line-height:1.45}
@@ -489,7 +489,7 @@ const CSS = `
 .ms-row{display:flex;align-items:baseline;gap:12px;padding:9px 2px;border-bottom:1px solid #eff3f1}
 .ms-row-day{font-size:10.5px;font-weight:800;letter-spacing:.07em;text-transform:uppercase;color:#626f68;flex:0 0 62px;font-variant-numeric:tabular-nums}
 .ms-row-time{font-size:12.5px;font-weight:700;color:#12241d;flex:0 0 74px;font-variant-numeric:tabular-nums}
-.ms-row-field{font-size:12.5px;font-weight:500;color:#6f6858;min-width:0;line-height:1.35}
+.ms-row-field{font-size:12.5px;font-weight:500;color:#566661;min-width:0;line-height:1.35}
 .ms-row.is-drop .ms-row-time{color:#8f2d15}
 .ms-row-tag{margin-left:auto;flex:0 0 auto;font-size:10px;font-weight:800;letter-spacing:.05em;text-transform:uppercase;color:#8f2d15;background:#fbe9e3;border-radius:999px;padding:2px 8px}
 `;

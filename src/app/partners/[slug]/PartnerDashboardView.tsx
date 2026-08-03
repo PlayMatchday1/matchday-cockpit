@@ -22,7 +22,7 @@ const C = {
   warnBg: "#fdf1d0", warnInk: "#8a6300", warnLine: "#e3c369",
   critBg: "#fdeae4", critInk: "#a8391a", critLine: "#f0bda9", ok: "#12704a",
   railA: "#fafbfa", railB: "#f6f9f7", chipBg: "#eef3f0", chipLine: "#e2eae5",
-  line: "#e6ebe8", hair: "#eff3f1", surface: "#ffffff", canvas: "#f4efe4",
+  line: "#e6ebe8", hair: "#eff3f1", surface: "#ffffff", canvas: "#eef2ef",
 };
 
 export type PartnerDashboardViewProps = {

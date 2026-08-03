@@ -17,10 +17,10 @@
   --chip-bg: #eef3f0;
   --chip-line: #e2eae5;
   --surface: #ffffff;
-  --canvas: #f4efe4;
+  --canvas: #eef2ef;
   --gold-dot: #d9a521;
   --gold-ink: #8a6300;
-  --ns-ink: #6f6858;
+  --ns-ink: #566661;
   --negative: #8f2d15;
   /* funnel period-row tints — the design's four coloured rows mapped onto house
    * neutrals (no imported hues): current=--mint, previous=--chip-bg,

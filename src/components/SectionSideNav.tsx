@@ -37,7 +37,7 @@ export default function SectionSideNav({
   return (
     <nav
       aria-label={ariaLabel}
-      className="flex shrink-0 gap-1 overflow-x-auto border-b border-[#e4ddcc] bg-[#fffdf7] p-3 min-[900px]:sticky min-[900px]:top-6 min-[900px]:w-[216px] min-[900px]:flex-col min-[900px]:self-start min-[900px]:overflow-visible min-[900px]:border-b-0 min-[900px]:border-r"
+      className="flex shrink-0 gap-1 overflow-x-auto border-b border-[#d3ddd8] bg-[#f2f4f3] p-3 min-[900px]:sticky min-[900px]:top-6 min-[900px]:w-[216px] min-[900px]:flex-col min-[900px]:self-start min-[900px]:overflow-visible min-[900px]:border-b-0 min-[900px]:border-r"
     >
       {items.map((it) => {
         const header =
@@ -57,7 +57,7 @@ export default function SectionSideNav({
               className={`ml-auto rounded-full px-[7px] py-[1px] text-[11px] font-bold tabular-nums ${
                 it.tone === "alert"
                   ? "bg-[#fdeae4] text-[#a8351a]"
-                  : "bg-[#eae4d6] text-[#6b7a73]"
+                  : "bg-[#dce4e0] text-[#6b7a73]"
               }`}
             >
               {it.count}

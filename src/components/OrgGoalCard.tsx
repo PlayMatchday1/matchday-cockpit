@@ -114,8 +114,8 @@ export default function OrgGoalCard({
     <div
       className="relative overflow-hidden rounded-[16px] border p-[22px] transition hover:-translate-y-[2px]"
       style={{
-        background: "linear-gradient(178deg,#fffefc 0%, #fffdf7 62%)",
-        borderColor: "#efe9dc",
+        background: "linear-gradient(178deg,#fffefc 0%, #f2f4f3 62%)",
+        borderColor: "#e2e9e6",
         boxShadow: "0 1px 2px rgba(7,42,32,.05), 0 18px 40px -26px rgba(7,42,32,.55)",
       }}
     >
@@ -129,7 +129,7 @@ export default function OrgGoalCard({
       <div className="relative flex items-center gap-[18px]">
         <div className="relative h-[86px] w-[86px] flex-none">
           <svg viewBox="0 0 86 86" width="86" height="86" aria-hidden style={{ transform: "rotate(-90deg)" }}>
-            <circle cx="43" cy="43" r={R} fill="none" stroke="#e8e2d4" strokeWidth="8" />
+            <circle cx="43" cy="43" r={R} fill="none" stroke="#dae2de" strokeWidth="8" />
             <circle
               cx="43" cy="43" r={R} fill="none" strokeWidth="8" strokeLinecap="round"
               stroke={GRAD[k]} strokeDasharray={`${dash.toFixed(1)} ${CIRC.toFixed(1)}`}
@@ -175,7 +175,7 @@ export default function OrgGoalCard({
                 {st.label}
               </span>
             ) : (
-              <span className="rounded-full border border-[#e4ddcc] bg-[#f7f4ec] px-[9px] py-[3px] text-[11px] font-semibold text-[#9aa5a0]">
+              <span className="rounded-full border border-[#d3ddd8] bg-[#f0f3f2] px-[9px] py-[3px] text-[11px] font-semibold text-[#9aa5a0]">
                 no target date
               </span>
             )}
@@ -201,7 +201,7 @@ export default function OrgGoalCard({
             : `Add the first update on ${goal.title}`
         }
         className={`block w-full rounded-[11px] border px-[14px] py-[11px] text-left transition focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-[#35c77f] ${
-          latest ? "border-[#e7dfcc] bg-[#faf6ec] hover:bg-[#f4f0e3]" : "border-dashed border-[#d5cbb4] bg-transparent"
+          latest ? "border-[#d5deda] bg-[#f2f4f3] hover:bg-[#e9eeec]" : "border-dashed border-[#bdccc5] bg-transparent"
         }`}
       >
         <div className="flex items-baseline gap-3">
@@ -250,7 +250,7 @@ function Trend({ history, k }: { history: number[]; k: StatusKey }) {
       <svg viewBox={`0 0 ${w} ${h}`} width="100%" height="56" style={{ overflow: "visible" }} aria-hidden>
         <path d={area} fill={c} opacity="0.16" />
         <path d={d} fill="none" stroke={c} strokeWidth="2" strokeLinecap="round" strokeLinejoin="round" />
-        <circle cx={last[0].toFixed(1)} cy={last[1].toFixed(1)} r="3" fill={c} stroke="#fffdf7" strokeWidth="2" />
+        <circle cx={last[0].toFixed(1)} cy={last[1].toFixed(1)} r="3" fill={c} stroke="#f2f4f3" strokeWidth="2" />
       </svg>
       <div className="absolute right-0 top-[-13px] text-[9.5px] uppercase tracking-[0.09em] text-[#a2ada8]">
         last {history.length} updates
@@ -263,7 +263,7 @@ function Avatar({ name }: { name: string }) {
   return (
     <span
       className="inline-flex h-[20px] w-[20px] items-center justify-center rounded-full text-[8px] font-[750]"
-      style={{ background: tintOf(name), color: "#2c4a3e", boxShadow: "0 0 0 1.5px #fffdf7" }}
+      style={{ background: tintOf(name), color: "#2c4a3e", boxShadow: "0 0 0 1.5px #f2f4f3" }}
       title={name}
     >
       {initials(name)}

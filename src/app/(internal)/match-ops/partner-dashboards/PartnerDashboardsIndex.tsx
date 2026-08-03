@@ -28,7 +28,7 @@ type AdminPartner = {
 const C = {
   forestDeep: "#072a20", forest: "#0d3b2e", accent: "#35c77f", mint: "#e0f2e7", amount: "#e2502b",
   ink: "#12241d", muted: "#6d7b74", ok: "#12704a", chipBg: "#eef3f0", chipLine: "#e2eae5",
-  line: "#e6ebe8", surface: "#ffffff", railB: "#f6f9f7", canvas: "#f4efe4",
+  line: "#e6ebe8", surface: "#ffffff", railB: "#f6f9f7", canvas: "#eef2ef",
 };
 const PARTNER_BASE = "matchday-clubhouse.vercel.app/partners/";
 
