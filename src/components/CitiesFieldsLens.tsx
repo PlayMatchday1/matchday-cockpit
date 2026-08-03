@@ -18,6 +18,7 @@
 // mutation endpoints, no new permissions.
 
 import { useCallback, useEffect, useMemo, useState } from "react";
+import { useScheduleMarks, type ScheduleMark } from "@/lib/useScheduleMarks";
 import { Pencil, Trash2, Plus, X } from "lucide-react";
 import { supabase } from "@/lib/supabase";
 import { CITIES } from "@/lib/types";
@@ -118,6 +119,7 @@ export default function CitiesFieldsLens() {
   const [saving, setSaving] = useState(false);
   const [modalError, setModalError] = useState<string | null>(null);
   const [confirmDelete, setConfirmDelete] = useState<RawVenue | null>(null);
+  const { marks: scheduleMarks, enabled: marksEnabled, setNoDocument, clear: clearScheduleMark } = useScheduleMarks();
 
   const load = useCallback(async () => {
     setLoading(true);
@@ -447,9 +449,12 @@ export default function CitiesFieldsLens() {
                 </div>
                 {rs.map((r) => (
                   <Row key={r.venue.id} r={r} nowMs={nowMs}
+                    mark={scheduleMarks.get(r.venue.id)} marksEnabled={marksEnabled}
                     onEdit={() => { const raw = rawById.get(r.venue.id); if (raw) openEdit(raw); }}
                     onAddContact={() => { const raw = rawById.get(r.venue.id); if (raw) openEdit(raw, "contact"); }}
                     onAddLink={() => { const raw = rawById.get(r.venue.id); if (raw) openEdit(raw, "schedule"); }}
+                    onNoDocument={() => setNoDocument(r.venue.id)}
+                    onUndoMark={() => clearScheduleMark(r.venue.id)}
                     onRemove={() => { const raw = rawById.get(r.venue.id); if (raw) setConfirmDelete(raw); }} />
                 ))}
               </div>
@@ -481,8 +486,8 @@ export default function CitiesFieldsLens() {
 }
 
 // ── row ──
-function Row({ r, nowMs, onEdit, onAddContact, onAddLink, onRemove }: {
-  r: FieldRow; nowMs: number; onEdit: () => void; onAddContact: () => void; onAddLink: () => void; onRemove: () => void;
+function Row({ r, nowMs, mark, marksEnabled, onEdit, onAddContact, onAddLink, onNoDocument, onUndoMark, onRemove }: {
+  r: FieldRow; nowMs: number; mark: ScheduleMark | undefined; marksEnabled: boolean; onEdit: () => void; onAddContact: () => void; onAddLink: () => void; onNoDocument: () => void; onUndoMark: () => void; onRemove: () => void;
 }) {
   const f = r.venue;
   const nameFlags = r.flags.filter((x) => x.k === "idle" || x.k === "never");
@@ -551,10 +556,28 @@ function Row({ r, nowMs, onEdit, onAddContact, onAddLink, onRemove }: {
             <span>Open<span className="w"> schedule</span></span>
             <svg viewBox="0 0 24 24" className="h-3 w-3" fill="none" stroke="currentColor" strokeWidth={2}><path d="M7 17L17 7M9 7h8v8" /></svg>
           </a>
+        ) : mark ? (
+          <div className="flex flex-col gap-1">
+            <button type="button" onClick={onUndoMark} title={`No document — marked by ${mark.by} on ${mark.on}. Click to undo.`}
+              className="inline-flex items-center gap-[5px] whitespace-nowrap rounded-[8px] border px-2.5 py-[7px] text-[11.5px] font-[800]" style={{ background: "#eef3f0", borderColor: "#dfe6e1", color: "#3f4a44" }}>
+              <span className="box-border flex h-3 w-3 items-center justify-center rounded-[3px]" style={{ border: "1.5px solid #8a978f" }}><span className="block h-[1.5px] w-[7px] rounded-full" style={{ background: "#3f4a44" }} /></span>
+              No document
+            </button>
+            <span className="text-[10px]" style={{ color: "#45544c" }}>{mark.by} · {mark.on}</span>
+          </div>
         ) : (
-          <button type="button" onClick={onAddLink} className="inline-flex items-center gap-[5px] rounded-[8px] border px-2.5 py-[7px] text-[11.5px] font-[800]" style={{ background: C.railA, borderColor: C.chipLine, color: C.muted }}>
-            <svg viewBox="0 0 24 24" className="h-3 w-3" fill="none" stroke="currentColor" strokeWidth={2}><path d="M12 5v14M5 12h14" /></svg>Add link
-          </button>
+          <div className="flex flex-wrap items-center gap-1.5">
+            <button type="button" onClick={onAddLink} className="inline-flex items-center gap-[5px] rounded-[8px] border px-2.5 py-[7px] text-[11.5px] font-[800]" style={{ background: C.railA, borderColor: C.chipLine, color: "#45544c" }}>
+              <svg viewBox="0 0 24 24" className="h-3 w-3" fill="none" stroke="currentColor" strokeWidth={2}><path d="M12 5v14M5 12h14" /></svg>Add link
+            </button>
+            {marksEnabled && (
+              <button type="button" onClick={onNoDocument} title="This field deliberately has no schedule document"
+                className="inline-flex items-center gap-[5px] rounded-[8px] border px-2.5 py-[7px] text-[11.5px] font-[800]" style={{ background: "#eef3f0", borderColor: "#dfe6e1", color: "#3f4a44" }}>
+                <span className="box-border flex h-3 w-3 items-center justify-center rounded-[3px]" style={{ border: "1.5px solid #8a978f" }}><span className="block h-[1.5px] w-[7px] rounded-full" style={{ background: "#3f4a44" }} /></span>
+                No document
+              </button>
+            )}
+          </div>
         )}
       </div>
 

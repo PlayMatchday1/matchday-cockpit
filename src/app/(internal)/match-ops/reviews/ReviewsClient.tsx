@@ -12,7 +12,7 @@
 import { useEffect, useMemo, useState } from "react";
 import { useAuth } from "@/lib/useAuth";
 import { useCleanReviews } from "@/lib/reviewsData";
-import { useReviewReplies } from "@/lib/useReviewReplies";
+import { useReviewReplies, type ReplyMark } from "@/lib/useReviewReplies";
 import type { ReviewRow } from "@/lib/useReviewData";
 import {
   MIN_RANK_REVIEWS,
@@ -65,7 +65,7 @@ export default function ReviewsClient() {
   // review_replies (migration 0090), which is the only server gate on this path.
   const canReply = !!appUser;
   const { rows, rawCount, fakeExcluded, meta, loading, error } = useCleanReviews();
-  const { replies, enabled: replyEnabled, toggle, error: replyError, clearError } = useReviewReplies();
+  const { replies, enabled: replyEnabled, noReplyNeededEnabled, setMark, clear, error: replyError, clearError } = useReviewReplies();
 
   const NOW = useMemo(() => new Date(), []);
   const months = useMemo(() => monthsPresent(rows), [rows]);
@@ -146,10 +146,21 @@ export default function ReviewsClient() {
   if (venue !== "all") scopeBits.push(venue);
   if (mgr !== "all") scopeBits.push(mgr);
 
-  const onToggleTick = (r: ReviewRow) => {
+  // Both resolved states leave the open queue, so both stick briefly under the
+  // "open" filter (shows "no longer unanswered" before the row drops out).
+  const onReplied = (r: ReviewRow) => {
     if (!replyEnabled || !canReply) return;
     if (csev === "open") setStick((s) => new Set(s).add(r.apiId));
-    void toggle(r.apiId);
+    void setMark(r.apiId, "replied");
+  };
+  const onNoReplyNeeded = (r: ReviewRow, note: string) => {
+    if (!replyEnabled || !canReply) return;
+    if (csev === "open") setStick((s) => new Set(s).add(r.apiId));
+    void setMark(r.apiId, "no_reply_needed", note);
+  };
+  const onUndoMark = (r: ReviewRow) => {
+    if (!replyEnabled || !canReply) return;
+    void clear(r.apiId);
   };
 
   return (
@@ -396,8 +407,9 @@ export default function ReviewsClient() {
             <tbody>
               {shownComments.length ? shownComments.map((r) => (
                 <CommentRow key={r.apiId} r={r} mark={replies.get(r.apiId)} owed={needsReply(r)}
-                  enabled={replyEnabled} canTick={canReply} leaving={csev === "open" && replies.has(r.apiId) && stick.has(r.apiId)}
-                  onToggle={() => onToggleTick(r)} />
+                  enabled={replyEnabled} canTick={canReply} noReplyNeededEnabled={noReplyNeededEnabled}
+                  leaving={csev === "open" && replies.has(r.apiId) && stick.has(r.apiId)}
+                  onReplied={() => onReplied(r)} onNoReplyNeeded={(note) => onNoReplyNeeded(r, note)} onUndo={() => onUndoMark(r)} />
               )) : (
                 <tr><Td colSpan={7} className="p-4 text-[11.5px]" style={{ color: C.muted }}>
                   Nothing to read in {cm.window.label} for this selection{csev !== "all" ? ` under the “${SEV_LABEL[csev]}” filter` : ""}. Widen the window or clear a filter.
@@ -408,8 +420,8 @@ export default function ReviewsClient() {
         </div>
         <div className="border-t px-4 py-2.5 text-[11.5px]" style={{ borderColor: C.hair, color: C.muted }}>
           Shown: every review carrying a written comment, plus 1★ ratings left without words — newest first. A reply is owed at 3★ and below; praise is 5★.
-          Tick Replied once you have answered the player — the tick is stamped with your name and the date, and clicking it again undoes it. You can tick a happy review too;
-          only the owed ones are counted as outstanding. The city, venue and manager filters at the top of the page apply here; the month filter does not — this panel keeps its own window, set above.
+          Mark <b>Replied</b> once you have answered the player, or <b>No reply needed</b> (with an optional reason — spam, no comment, handled elsewhere) when there is nothing to answer. Both are stamped with your name and the date, both undo on click, and <b>both take the review out of the outstanding count</b>; only rows with no mark stay owed.
+          The city, venue and manager filters at the top of the page apply here; the month filter does not — this panel keeps its own window, set above.
         </div>
       </div>
 
@@ -686,15 +698,15 @@ function Td({ children, right, colSpan, className, style }: { children: React.Re
   return <td colSpan={colSpan} className={`border-b px-4 py-2.5 align-top text-[13.5px] ${right ? "text-right" : ""} ${className ?? ""}`} style={{ borderColor: C.hair, ...style }}>{children}</td>;
 }
 
-function CommentRow({ r, mark, owed, enabled, canTick, leaving, onToggle }: {
-  r: ReviewRow; mark: { by: string; on: string } | undefined; owed: boolean; enabled: boolean; canTick: boolean; leaving: boolean; onToggle: () => void;
+function CommentRow({ r, mark, owed, enabled, canTick, noReplyNeededEnabled, leaving, onReplied, onNoReplyNeeded, onUndo }: {
+  r: ReviewRow; mark: ReplyMark | undefined; owed: boolean; enabled: boolean; canTick: boolean; noReplyNeededEnabled: boolean; leaving: boolean; onReplied: () => void; onNoReplyNeeded: (note: string) => void; onUndo: () => void;
 }) {
-  const replied = !!mark;
-  const word = replied ? "Replied" : owed ? "Reply due" : "Mark replied";
+  const [noting, setNoting] = useState(false);
+  const [noteText, setNoteText] = useState("");
+  const disabled = !enabled || !canTick;
   const starCls = r.starRating <= 2 ? C.critInk : r.starRating === 3 ? C.warnInk : C.ok;
   const tags = r.tags ?? [];
   const shown = tags.slice(0, 3), rest = tags.slice(3);
-  const disabled = !enabled || !canTick;
   return (
     <tr>
       <Td><div className="font-mono text-[11.5px]" style={{ color: C.muted }}>{shortDate(r.startDate)}</div><div className="font-mono text-[11.5px]" style={{ color: C.muted }}>{shortTime(r.startDate)}</div></Td>
@@ -715,16 +727,69 @@ function CommentRow({ r, mark, owed, enabled, canTick, leaving, onToggle }: {
       <Td><div className="text-[12.5px] font-semibold">{r.fieldTitle}</div><div className="mt-0.5 text-[11.5px]" style={{ color: C.muted }}>{shortDate(r.startDate)} · {r.city}</div></Td>
       <Td>{r.managerFirstName || r.managerLastName ? <div className="text-[12.5px] font-bold" style={{ color: C.forestDeep }}>{reviewManagerName(r)}</div> : <div className="text-[12.5px] font-semibold italic" style={{ color: C.muted }}>no manager</div>}</Td>
       <Td>
-        <button type="button" onClick={onToggle} disabled={disabled} aria-pressed={replied}
-          title={replied ? `Ticked by ${mark!.by} on ${mark!.on} — click to undo` : disabled ? "Reply tracking not enabled" : "Tick when you have answered this player"}
-          className="inline-flex h-8 items-center gap-1.5 rounded-lg border px-2.5 text-[11.5px] font-bold disabled:opacity-55"
-          style={replied ? { background: C.mint, borderColor: "#bfe4cf", color: C.ok } : owed ? { background: C.warnBg, borderColor: C.warnLine, color: C.warnInk } : { background: C.surface, borderColor: C.line, color: C.muted }}>
-          <span className="relative box-border h-3.5 w-3.5 rounded" style={{ border: `1.5px solid ${replied ? C.ok : owed ? "#d3b25f" : "#c3d2cb"}`, background: replied ? C.ok : "#fff" }}>
-            {replied && <span className="absolute left-[4px] top-[0.5px] h-2 w-1 rotate-[42deg] border-b-2 border-r-2 border-white" />}
-          </span>
-          {word}
-        </button>
-        {replied && <div className="mt-1.5 text-[10.5px]" style={{ color: C.muted }}>{mark!.by} · {mark!.on}</div>}
+        {mark?.kind === "replied" ? (
+          <>
+            <button type="button" onClick={onUndo} disabled={disabled}
+              title={`Replied by ${mark.by} on ${mark.on} — click to undo`}
+              className="inline-flex h-8 items-center gap-1.5 rounded-lg border px-2.5 text-[11.5px] font-bold disabled:opacity-55"
+              style={{ background: C.mint, borderColor: "#bfe4cf", color: C.ok }}>
+              <span className="relative box-border h-3.5 w-3.5 rounded" style={{ border: `1.5px solid ${C.ok}`, background: C.ok }}>
+                <span className="absolute left-[4px] top-[0.5px] h-2 w-1 rotate-[42deg] border-b-2 border-r-2 border-white" />
+              </span>
+              Replied
+            </button>
+            <div className="mt-1.5 text-[10.5px]" style={{ color: "#45544c" }}>{mark.by} · {mark.on}</div>
+          </>
+        ) : mark?.kind === "no_reply_needed" ? (
+          <>
+            <button type="button" onClick={onUndo} disabled={disabled}
+              title={`Marked “No reply needed” by ${mark.by} on ${mark.on} — click to undo`}
+              className="inline-flex h-8 items-center gap-1.5 rounded-lg border px-2.5 text-[11.5px] font-bold disabled:opacity-55"
+              style={{ background: "#eef3f0", borderColor: "#dfe6e1", color: "#3f4a44" }}>
+              <span className="box-border flex h-3.5 w-3.5 items-center justify-center rounded" style={{ border: "1.5px solid #8a978f" }}>
+                <span className="block h-[1.5px] w-2 rounded-full" style={{ background: "#3f4a44" }} />
+              </span>
+              No reply needed
+            </button>
+            <div className="mt-1.5 text-[10.5px]" style={{ color: "#45544c" }}>{mark.by} · {mark.on}</div>
+            {mark.note && <div className="mt-0.5 max-w-[220px] text-[10.5px] italic" style={{ color: "#45544c" }}>“{mark.note}”</div>}
+          </>
+        ) : noting ? (
+          <div className="flex max-w-[220px] flex-col gap-1.5">
+            <input autoFocus value={noteText} maxLength={140}
+              onChange={(e) => setNoteText(e.target.value)}
+              onKeyDown={(e) => { if (e.key === "Enter") { onNoReplyNeeded(noteText); setNoting(false); } else if (e.key === "Escape") { setNoting(false); setNoteText(""); } }}
+              placeholder="Reason (optional) — spam, no comment…"
+              className="rounded-md border px-2 py-1 text-[11.5px]" style={{ borderColor: C.line, color: C.ink }} />
+            <div className="flex gap-1.5">
+              <button type="button" onClick={() => { onNoReplyNeeded(noteText); setNoting(false); }}
+                className="rounded-md border px-2.5 py-1 text-[11px] font-bold" style={{ background: "#eef3f0", borderColor: "#dfe6e1", color: "#3f4a44" }}>Save</button>
+              <button type="button" onClick={() => { setNoting(false); setNoteText(""); }}
+                className="rounded-md border px-2.5 py-1 text-[11px] font-bold" style={{ background: C.surface, borderColor: C.line, color: "#45544c" }}>Cancel</button>
+            </div>
+          </div>
+        ) : (
+          <div className="flex flex-wrap items-center gap-1.5">
+            <button type="button" onClick={onReplied} disabled={disabled}
+              title={disabled ? "Reply tracking not enabled" : "Mark once you have answered this player"}
+              className="inline-flex h-8 items-center gap-1.5 rounded-lg border px-2.5 text-[11.5px] font-bold disabled:opacity-55"
+              style={owed ? { background: C.warnBg, borderColor: C.warnLine, color: C.warnInk } : { background: C.surface, borderColor: C.line, color: "#45544c" }}>
+              <span className="box-border h-3.5 w-3.5 rounded" style={{ border: `1.5px solid ${owed ? "#d3b25f" : "#c3d2cb"}`, background: "#fff" }} />
+              {owed ? "Reply due" : "Mark replied"}
+            </button>
+            {noReplyNeededEnabled && (
+              <button type="button" onClick={() => !disabled && setNoting(true)} disabled={disabled}
+                title="Deliberately needs no reply"
+                className="inline-flex h-8 items-center gap-1.5 rounded-lg border px-2.5 text-[11.5px] font-bold disabled:opacity-55"
+                style={{ background: "#eef3f0", borderColor: "#dfe6e1", color: "#3f4a44" }}>
+                <span className="box-border flex h-3.5 w-3.5 items-center justify-center rounded" style={{ border: "1.5px solid #8a978f" }}>
+                  <span className="block h-[1.5px] w-2 rounded-full" style={{ background: "#3f4a44" }} />
+                </span>
+                No reply needed
+              </button>
+            )}
+          </div>
+        )}
         {leaving && <div className="mt-1 text-[10.5px]" style={{ color: C.warnInk }}>no longer unanswered</div>}
       </Td>
     </tr>
