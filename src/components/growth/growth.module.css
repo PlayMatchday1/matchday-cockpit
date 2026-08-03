@@ -740,7 +740,7 @@
 }
 .funnelStage span {
   font-size: 0.68rem;
-  color: var(--muted);
+  color: var(--ns-ink);
   margin-top: 2px;
 }
 .funnelStageHeader {
@@ -766,7 +766,7 @@
   align-items: center;
 }
 .funnelConversion small {
-  color: var(--muted);
+  color: var(--ns-ink);
   font-weight: 700;
   font-size: 0.55rem;
 }

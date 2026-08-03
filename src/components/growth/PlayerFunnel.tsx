@@ -37,7 +37,9 @@ export default function PlayerFunnel({ data, period }: { data: GrowthData; perio
   const [customEnd, setCustomEnd] = useState(period.end);
 
   const rows = useMemo(() => {
-    const end = period.end;
+    // "Current" is always the latest data month (independent of the global period,
+    // which may end earlier). Custom is driven by the Custom start/end inputs.
+    const end = months[months.length - 1];
     const endIdx = months.indexOf(end);
     const prev = endIdx > 0 ? months[endIdx - 1] : end;
     const year = end.slice(0, 4);
@@ -67,7 +69,7 @@ export default function PlayerFunnel({ data, period }: { data: GrowthData; perio
       }
       return { ...r, vals };
     });
-  }, [data.funnelByMonth, period.end, customStart, customEnd, months]);
+  }, [data.funnelByMonth, customStart, customEnd, months]);
 
   return (
     <div className={styles.card}>

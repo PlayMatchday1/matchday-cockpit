@@ -39,7 +39,7 @@ export default function GrowthDashboard() {
         if (alive) {
           setData(json);
           const ms = json.behaviorOverall.map((p) => p.m);
-          if (ms.length) setPeriod({ start: ms[0], end: ms[ms.length - 1] });
+          if (ms.length) setPeriod(defaultPeriod(ms, json.generatedAt.slice(0, 7)));
         }
       } catch (e) {
         if (alive) setError(e instanceof Error ? e.message : "Failed to load");
@@ -69,7 +69,7 @@ export default function GrowthDashboard() {
 
   const rc = data.rowCounts;
   const months = data.behaviorOverall.map((p) => p.m);
-  const activePeriod: Period = period ?? { start: months[0], end: months[months.length - 1] };
+  const activePeriod: Period = period ?? defaultPeriod(months, data.generatedAt.slice(0, 7));
   return (
     <div className={styles.dash}>
       <Header />
@@ -103,6 +103,15 @@ export default function GrowthDashboard() {
       </div>
     </div>
   );
+}
+
+// PART 2a: open on the last 6 COMPLETED months (excludes the current partial
+// month) so the panel doesn't default to a 34-column wall of correct-but-empty
+// pre-2026 dashes. The user can still widen it.
+function defaultPeriod(months: string[], nowMonth: string): Period {
+  const completed = months.filter((m) => m < nowMonth);
+  const last6 = completed.slice(-6);
+  return { start: last6[0] ?? months[0], end: last6[last6.length - 1] ?? months[months.length - 1] };
 }
 
 function Header() {

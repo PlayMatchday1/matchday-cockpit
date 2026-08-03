@@ -179,12 +179,20 @@ export type BehaviorPoint = {
 };
 export type PlayerRow = {
   u: number;
-  city: string; // attributed (rule + fallback)
+  city: string; // attributed (rule + fallback) — used by churn
   declaredCity: string | null;
   freqCity: string | null;
-  field: string; // most-recent-play field label
+  field: string; // most-recent-play field label — used by churn
   first: string; // first-play month key
-  plays: number[]; // play-month indexes into playMonths (repeats; length = matches)
+  firstCity: string; // city of the earliest-dated play (play-location)
+  firstField: string; // field of the earliest-dated play
+  firstMonthIdx: number; // index into playMonths of first play
+  firstCityIdx: number; // index into cityIndex
+  firstFieldIdx: number; // index into fieldIndex
+  // Distinct (monthIdx, cityIdx, fieldIdx) the player was active, flattened in
+  // triples. Lets the client compute range-distinct Total players per entity
+  // (Total = distinct players with ≥1 match in the range at that entity).
+  ev: number[];
   matches: number;
   last: string; // last-play date (YYYY-MM-DD)
   days: number; // days inactive as of now
@@ -244,6 +252,12 @@ export type GrowthData = {
   behaviorOverall: BehaviorPoint[];
   behaviorByCity: Record<string, BehaviorPoint[]>;
   behaviorByField: Record<string, { label: string; city: string; points: BehaviorPoint[] }>;
+  // Index spaces the per-player `ev` triples reference. cityIndex is the full
+  // market universe (play + declared-only); cityHasMatches[i] marks whether that
+  // market has ever run a match.
+  cityIndex: string[];
+  cityHasMatches: boolean[];
+  fieldIndex: { label: string; city: string }[];
   arppOverall: ArppPoint[];
   arppByCity: Record<string, ArppPoint[]>;
   cohorts: CohortRow[];
@@ -344,9 +358,14 @@ export function computeGrowth(input: RawInput): GrowthData {
     lastDate: Date;
     lastField: string;
     count: number;
-    monthsIdx: number[];
     cityCount: Map<string, number>;
     lastCity: string;
+    firstDate: Date;
+    firstCity: string; // city of the earliest-dated play
+    firstField: string; // field of the earliest-dated play
+    // distinct (monthIdx|city|field) the player was active — powers range-distinct
+    // Total players and per-entity attribution client-side.
+    ev: Set<string>;
   };
   const agg = new Map<number, Agg>();
   for (const p of plays) {
@@ -358,15 +377,18 @@ export function computeGrowth(input: RawInput): GrowthData {
         lastDate: new Date(p.date),
         lastField: p.field,
         count: 0,
-        monthsIdx: [],
         cityCount: new Map(),
         lastCity: p.city,
+        firstDate: new Date(p.date),
+        firstCity: p.city,
+        firstField: p.field,
+        ev: new Set<string>(),
       };
       agg.set(p.u, a);
     }
     a.count++;
-    a.monthsIdx.push(playMonthIdx.get(p.month)!);
     a.cityCount.set(p.city, (a.cityCount.get(p.city) ?? 0) + 1);
+    a.ev.add(`${playMonthIdx.get(p.month)!}${p.city}${p.field}`);
     if (p.month < a.first) a.first = p.month;
     const d = new Date(p.date);
     if (d >= a.lastDate) {
@@ -374,6 +396,11 @@ export function computeGrowth(input: RawInput): GrowthData {
       a.last = p.date;
       a.lastField = p.field;
       a.lastCity = p.city;
+    }
+    if (d < a.firstDate) {
+      a.firstDate = d;
+      a.firstCity = p.city;
+      a.firstField = p.field;
     }
   }
 
@@ -395,10 +422,41 @@ export function computeGrowth(input: RawInput): GrowthData {
     return freq;
   }
 
-  // ── players[] (funnel / churn / data-room source) ─────────────────────────
+  // ── city + field index universe (play-location + declared markets) ─────────
+  // Behaviour breakdowns are play-LOCATION based (a new player / total player /
+  // spot belongs to the city & field where the match happened). Registrations are
+  // by DECLARED city. The city universe is the union, so markets with sign-ups
+  // but no matches yet (El Paso, New York City) still appear (PART 3).
+  const declaredCitySet = new Set<string>();
+  for (const u of completedUsers) {
+    const c = normalizeDeclared(u.preferable_city_name);
+    if (c) declaredCitySet.add(c);
+  }
+  const playLocCitySet = new Set<string>();
+  const fieldCityMap = new Map<string, string>();
+  for (const p of plays) {
+    playLocCitySet.add(p.city);
+    if (!fieldCityMap.has(p.field)) fieldCityMap.set(p.field, p.city);
+  }
+  const cityIndex = (CANONICAL_CITIES as readonly string[]).filter(
+    (c) => playLocCitySet.has(c) || declaredCitySet.has(c),
+  );
+  for (const c of [...playLocCitySet, ...declaredCitySet]) if (!cityIndex.includes(c)) cityIndex.push(c);
+  const cityIdxOf = new Map(cityIndex.map((c, i) => [c, i]));
+  const cityHasMatches = cityIndex.map((c) => playLocCitySet.has(c));
+  const fieldList = [...fieldCityMap.keys()];
+  const fieldIdxOf = new Map(fieldList.map((f, i) => [f, i]));
+  const fieldIndex = fieldList.map((f) => ({ label: f, city: fieldCityMap.get(f)! }));
+
+  // ── players[] (churn source + client-side range-distinct behaviour) ────────
   const playerRows: PlayerRow[] = [];
   for (const [uid, a] of agg) {
     const days = Math.floor((nowDate.getTime() - a.lastDate.getTime()) / DAY_MS);
+    const ev: number[] = [];
+    for (const key of a.ev) {
+      const [mi, c, f] = key.split("");
+      ev.push(Number(mi), cityIdxOf.get(c)!, fieldIdxOf.get(f)!);
+    }
     playerRows.push({
       u: uid,
       city: attributedCity(uid, a),
@@ -406,7 +464,12 @@ export function computeGrowth(input: RawInput): GrowthData {
       freqCity: mostFrequentCity(a),
       field: a.lastField,
       first: a.first,
-      plays: a.monthsIdx,
+      firstCity: a.firstCity,
+      firstField: a.firstField,
+      firstMonthIdx: playMonthIdx.get(a.first) ?? 0,
+      firstCityIdx: cityIdxOf.get(a.firstCity)!,
+      firstFieldIdx: fieldIdxOf.get(a.firstField)!,
+      ev,
       matches: a.count,
       last: a.last,
       days,
@@ -470,8 +533,10 @@ export function computeGrowth(input: RawInput): GrowthData {
   const newByField = new Map<string, Map<string, number>>();
   for (const p of playerRows) {
     newByMonth.set(p.first, (newByMonth.get(p.first) ?? 0) + 1);
-    upsert2(newByCity, p.city, p.first);
-    upsert2(newByField, p.field, p.first);
+    // New player belongs to the city & field of their FIRST-EVER match (play
+    // location), not their attributed home city or most-recent field.
+    upsert2(newByCity, p.firstCity, p.first);
+    upsert2(newByField, p.firstField, p.first);
   }
   // spots + total(distinct) by month/city/field.
   const spotsByMonth = new Map<string, number>();
@@ -508,11 +573,15 @@ export function computeGrowth(input: RawInput): GrowthData {
     spots: m < playFloor ? null : spotsByMonth.get(m) ?? 0,
   }));
 
+  // behaviorByCity spans the whole city universe (play + declared-only markets).
+  const regFloorMonth = [...regByMonth.keys()].sort()[0] ?? "2023-03";
   const behaviorByCity: Record<string, BehaviorPoint[]> = {};
-  for (const c of cities) {
+  for (const c of cityIndex) {
     behaviorByCity[c] = behaviorAxis.map<BehaviorPoint>((m) => ({
       m,
-      registrations: regByMonthCity.get(c)?.get(m) ?? (m < ("2023-03") ? null : 0),
+      registrations: regByMonthCity.get(c)?.get(m) ?? (m < regFloorMonth ? null : 0),
+      // A market with no matches has a MEASURED zero play (matches exist globally
+      // from playFloor, just not here) — 0, not a dash. Pre-play-floor is unknown.
       newPlayers: m < playFloor ? null : newByCity.get(c)?.get(m) ?? 0,
       totalPlayers: m < playFloor ? null : activeByCity.get(c)?.get(m)?.size ?? 0,
       spots: m < playFloor ? null : spotsByCity.get(c)?.get(m) ?? 0,
@@ -594,7 +663,10 @@ export function computeGrowth(input: RawInput): GrowthData {
     // played players attributed to city c per month.
     const playedCity = (m: string): Set<number> => {
       const set = new Set<number>();
-      for (const p of playerRows) if (p.city === c) for (const idx of p.plays) if (playMonths[idx] === m) { set.add(p.u); break; }
+      for (const p of playerRows) {
+        if (p.city !== c) continue;
+        for (let i = 0; i < p.ev.length; i += 3) if (playMonths[p.ev[i]] === m) { set.add(p.u); break; }
+      }
       return set;
     };
     arppByCity[c] = arppSeries(
@@ -726,6 +798,9 @@ export function computeGrowth(input: RawInput): GrowthData {
     behaviorOverall,
     behaviorByCity,
     behaviorByField,
+    cityIndex,
+    cityHasMatches,
+    fieldIndex,
     arppOverall,
     arppByCity,
     cohorts,
