@@ -50,7 +50,7 @@ export type ResolvedVenue = {
 // NEMP is not. Matched against the raw string (field_title or metadata.matchName)
 // before canonicalization, word-boundaried so "camp" ≠ "Scamp".
 const EVENT_MARKERS =
-  /\b(tourney|tournament|tournaments|combine|world\s*cup|showcase|showdown|clinic|camp|invitational)\b/i;
+  /\b(tourney|tournament|tournaments|combine|world\s*cup|showcase|showdown|clinic|camp|invitational|special\s*events?)\b/i;
 
 export function venueCategory(raw: string | null | undefined): VenueCategory {
   return raw && EVENT_MARKERS.test(raw) ? "event" : "regular";
@@ -68,6 +68,11 @@ const RULES: Rule[] = [
   { re: /ath pearland/i, canonical: "ATH Pearland" },
   { re: /nemp|north east metropolitan/i, canonical: "NEMP" },
   { re: /round rock/i, canonical: "Round Rock" },
+  // Round Rock abbreviations from the pre-canonical era (e.g. "Special Events at
+  // RR", "RRMC F8", "RR F8"). Word-boundaried so "RR"/"RRMC" only match as their
+  // own token. After the full-spelling /round rock/ rule, so it only catches the
+  // abbreviated forms.
+  { re: /\brrmc\b|\brr\b/i, canonical: "Round Rock" },
   // Lou Fusz Indoor: the Training Center / TC / Indoor variants.
   { re: /lou fusz.*(indoor|training center|\btc\b)/i, canonical: "Lou Fusz Indoor" },
   { re: /lou fusz/i, canonical: "Lou Fusz Outdoor" },

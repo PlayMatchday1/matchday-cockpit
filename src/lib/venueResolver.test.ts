@@ -58,7 +58,7 @@ test("VENUE fold is idempotent — canonicalVenueName(f(x)) === f(x), so a secon
     "Lou Fusz Indoor", "Lou Fusz Outdoor",
     "LBJ Early College High School - Match 2", "LBJ Early College High School",
     "Hill Country", "Hill Country Middle School", "Parmer Stadium - Premier", "Parmer",
-    "Round Rock Tournaments", "Stadium Field at Round Rock M.C.", "Round Rock",
+    "Round Rock Tournaments", "Stadium Field at Round Rock M.C.", "Round Rock", "Special Events at RR", "RRMC F8", "RR F8",
     "KISC (Katy Intl)", "Katy International Sports Complex", "STAR", "N/A", "Some Brand New Venue",
   ];
   for (const x of inputs) {
@@ -95,6 +95,20 @@ test("category is computed from the RAW input BEFORE the venue fold (order of op
   for (const c of ["Soccer Central", "ATH Pearland", "NEMP", "ATH Katy", "Round Rock", "Lou Fusz Outdoor", "Onion Creek"]) {
     assert.equal(resolveVenue(c).category, "regular", `canonical must be regular: ${c}`);
   }
+});
+
+test("Round Rock abbreviations (RR / RRMC) resolve to Round Rock; 'Special Events' is an event marker", () => {
+  assert.equal(canonicalVenueName("Special Events at RR"), "Round Rock");
+  assert.equal(canonicalVenueName("RRMC F8"), "Round Rock");
+  assert.equal(canonicalVenueName("RR F8"), "Round Rock");
+  // full spelling still resolves via the /round rock/ rule
+  assert.equal(canonicalVenueName("Round Rock Multipurpose Complex"), "Round Rock");
+  // 'Special Events' is now an event marker (was previously missed)
+  assert.equal(venueCategory("Special Events at RR"), "event");
+  const r = resolveVenue("Special Events at RR");
+  assert.deepEqual([r.canonicalVenue, r.city, r.category], ["Round Rock", "Austin", "event"]);
+  // a standalone "rr" inside a normal word must NOT trigger (word-boundaried)
+  assert.equal(canonicalVenueName("Barrington Park"), "Barrington Park");
 });
 
 test("the four Lou Fusz spellings + combine resolve to St. Louis", () => {
