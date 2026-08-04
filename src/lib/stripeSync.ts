@@ -444,6 +444,14 @@ export type ClassifierProbeResult = {
   }[];
   matchNamePresent: number;
   cityIdentifierPresent: number;
+  // Positive-membership design: characterise the matchId-absent, non-strike
+  // population so "membership" can be a positive test, not a catch-all default.
+  noMatchIdNonStrike: number;
+  membershipPositive: number; // explicit subscription/membership signal (type or description)
+  rentalPositive: number;     // explicit rental/private signal
+  flagged: number;            // matches nothing → must be surfaced, not typed membership
+  flaggedSamples: { date: string; amount: number; description: string | null; stripeType: string | null; metaKeys: string }[];
+  noMatchIdMetaKeySets: { keys: string; count: number }[];
   // Distinct matchName on historical-DPP charges (for the local matchName→match
   // →field→city join). Bounded to the top ~600 by count.
   dppMatchNames: { name: string; count: number }[];
@@ -484,6 +492,11 @@ export async function stripeClassifierProbe(opts: {
   const disagreementsMatchId: ClassifierProbeResult["disagreementsMatchId"] = [];
   const dppMatchNameCounts = new Map<string, number>();
   const dppMatchIdCounts = new Map<string, number>();
+  let noMatchIdNonStrike = 0, membershipPositive = 0, rentalPositive = 0, flagged = 0;
+  const flaggedSamples: ClassifierProbeResult["flaggedSamples"] = [];
+  const noMatchIdMetaKeySets = new Map<string, number>();
+  const membSig = (t: string | null, d: string | null) => (!!t && /subscription|membership|plan|renew/i.test(t)) || (!!d && /subscription|membership|renew|plan/i.test(d));
+  const rentSig = (t: string | null, d: string | null) => (!!t && /rental|private/i.test(t)) || (!!d && /rental|private\s*rent/i.test(d));
 
   for await (const charge of stripe.charges.list({ created: { gte: sinceSec, lte: untilSec }, limit: 100 })) {
     fetched++;
@@ -519,6 +532,21 @@ export async function stripeClassifierProbe(opts: {
     else {
       disagreeMatchId++;
       if (disagreementsMatchId.length < 100) disagreementsMatchId.push({ date: utcDateFromUnix(charge.created), amount: charge.amount / 100, description, current: cur, histMatchId: hMid, hasMatchId, stripeType });
+    }
+
+    // Characterise the matchId-absent, non-strike population for the positive
+    // membership test — this is where "default to membership" hides rentals and
+    // one-offs. Strike and matchId-DPP are already positively identified above.
+    if (!isStrikeCharge(stripeType) && !hasMatchId) {
+      noMatchIdNonStrike++;
+      const keys = Object.keys(meta).sort().join(",") || "(none)";
+      noMatchIdMetaKeySets.set(keys, (noMatchIdMetaKeySets.get(keys) ?? 0) + 1);
+      if (membSig(stripeType, description)) membershipPositive++;
+      else if (rentSig(stripeType, description)) rentalPositive++;
+      else {
+        flagged++;
+        if (flaggedSamples.length < 60) flaggedSamples.push({ date: utcDateFromUnix(charge.created), amount: charge.amount / 100, description, stripeType, metaKeys: keys });
+      }
     }
   }
 
@@ -559,6 +587,8 @@ export async function stripeClassifierProbe(opts: {
     agreeMatchIdPct: agreeMatchId + disagreeMatchId ? +((100 * agreeMatchId) / (agreeMatchId + disagreeMatchId)).toFixed(3) : 0,
     disagreementsMatchId,
     disagreements, matchNamePresent, cityIdentifierPresent,
+    noMatchIdNonStrike, membershipPositive, rentalPositive, flagged, flaggedSamples,
+    noMatchIdMetaKeySets: [...noMatchIdMetaKeySets.entries()].sort((a, b) => b[1] - a[1]).slice(0, 30).map(([keys, count]) => ({ keys, count })),
     dppMatchNames: [...dppMatchNameCounts.entries()].sort((a, b) => b[1] - a[1]).slice(0, 600).map(([name, count]) => ({ name, count })),
     dppMatchIds: [...dppMatchIdCounts.entries()].sort((a, b) => b[1] - a[1]).slice(0, 1500).map(([matchId, count]) => ({ matchId, count })),
     samples,
