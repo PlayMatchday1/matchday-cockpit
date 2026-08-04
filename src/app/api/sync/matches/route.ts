@@ -93,23 +93,44 @@ export async function POST(req: Request) {
   // cron/normal path never sets it, so its behaviour is byte-identical.
   const body = (await req.json().catch(() => ({}))) as {
     dryRun?: boolean;
+    matchesOnly?: boolean;
     fromDate?: string;
     toDate?: string;
+    cityLaunch?: Record<string, string>;
   };
   const dryRun = body?.dryRun === true || new URL(req.url).searchParams.get("dryRun") === "1";
   if (dryRun) {
-    const opts: { dryRun: true; fromDate?: string; toDate?: string } = { dryRun: true };
+    const opts: {
+      dryRun: true;
+      matchesOnly?: boolean;
+      fromDate?: string;
+      toDate?: string;
+    } = { dryRun: true };
+    if (body?.matchesOnly === true) opts.matchesOnly = true;
     if (body?.fromDate) opts.fromDate = body.fromDate;
     if (body?.toDate) opts.toDate = body.toDate;
     const r = await syncMdapiMatches(supabase, opts);
     return Response.json({ triggeredBy, ...r, dryRun: true, durationMs: Date.now() - startedAt }, { status: 200 });
   }
 
+  // Manual backfill: a bounded [fromDate,toDate] window (both required) writes
+  // just that slice, optionally guarded by a per-city launch map. Cron always
+  // uses the incremental window, so its path is byte-identical. The bounded
+  // window keeps the tombstone pass scoped to the same slice (see the sync).
+  const window =
+    triggeredBy === "manual" && body?.fromDate && body?.toDate
+      ? {
+          fromDate: body.fromDate,
+          toDate: body.toDate,
+          ...(body?.cityLaunch ? { cityLaunch: body.cityLaunch } : {}),
+        }
+      : defaultIncrementalWindow();
+
   const result = await runWithLog(
     "mdapi-matches",
     triggeredBy,
     supabase,
-    (sb) => syncMdapiMatches(sb, defaultIncrementalWindow()),
+    (sb) => syncMdapiMatches(sb, window),
     (r) => ({
       rows_imported: r.matchesUpserted + r.playersUpserted,
       rows_soft_deleted: r.rowsSoftDeleted,

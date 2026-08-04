@@ -253,6 +253,7 @@ export async function POST(req: Request) {
         latestCharge: sync.latestDate,
         matchNamePresent: sync.matchNamePresent,
         cityIdentifierPresent: sync.cityIdentifierPresent,
+        matchNameAbsentByType: sync.matchNameAbsentByType,
         earliestDppDate: sync.earliestDppDate,
         earliestCityIdentifierDate: sync.earliestCityIdentifierDate,
         matchNameByMonth: sync.matchNameByMonth,

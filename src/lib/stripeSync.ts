@@ -55,6 +55,11 @@ export type StripeSyncResult = {
   // Metadata coverage over paid charges (see counters above).
   matchNamePresent: number;
   cityIdentifierPresent: number;
+  // Of the charges with NO metadata.matchName, how many fall in each resolved
+  // type. Membership rows have no match to name (expected, harmless); DPP rows
+  // without a matchName are per-match revenue that metadata cannot venue-resolve
+  // — only the roster's fieldId bridge can place them.
+  matchNameAbsentByType: Record<string, number>;
   // Backfill boundary diagnostics.
   earliestDppDate: string | null;
   earliestCityIdentifierDate: string | null;
@@ -218,6 +223,7 @@ export async function syncStripeCharges(
   // resolution depends on. Surfaced so a backfill can be judged before it runs.
   let matchNamePresent = 0;
   let cityIdentifierPresent = 0;
+  const matchNameAbsentByType: Record<string, number> = {};
   // Backfill boundary diagnostics: when paid DPP + city metadata first appear.
   let earliestDppDate: string | null = null;
   let earliestCityIdentifierDate: string | null = null;
@@ -315,6 +321,7 @@ export async function syncStripeCharges(
       }
     }
 
+    if (!matchName) matchNameAbsentByType[type] = (matchNameAbsentByType[type] ?? 0) + 1;
     if (type === "DPP" && (!earliestDppDate || date < earliestDppDate)) earliestDppDate = date;
     if (cityIdentifier && (!earliestCityIdentifierDate || date < earliestCityIdentifierDate)) earliestCityIdentifierDate = date;
     const mk = date.slice(0, 7);
@@ -388,6 +395,7 @@ export async function syncStripeCharges(
     unresolvedVenues: [...unresolvedVenues.values()].sort((a, b) => b.net - a.net),
     matchNamePresent,
     cityIdentifierPresent,
+    matchNameAbsentByType,
     earliestDppDate,
     earliestCityIdentifierDate,
     matchNameByMonth: [...matchNameByMonth.entries()].map(([month, v]) => ({ month, ...v })).sort((a, b) => a.month.localeCompare(b.month)),

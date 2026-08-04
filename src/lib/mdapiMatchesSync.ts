@@ -240,6 +240,16 @@ export type MdapiMatchesSyncOptions = {
   // so their behaviour is byte-identical. Used to judge a historical backfill
   // (do 2024 rosters carry user_id, were matches free or paid) before running it.
   dryRun?: boolean;
+  // Skip the per-match /players fetch (dry-run only). Turns the N+1 roster
+  // crawl off so a wide window returns just the match list fast — used to build
+  // the per-city first-match timeline (firstMatchByCity) over 2+ years cheaply.
+  matchesOnly?: boolean;
+  // Assertion guard for the historical backfill: abbr → earliest valid month
+  // ("YYYY-MM"), derived from the first-non-cancelled-match timeline. A
+  // non-cancelled match whose city launched later than its own start month is a
+  // city-misattribution bug; the sync THROWS (writing nothing for that chunk)
+  // rather than persist it. Cancelled rows are exempt (they can predate launch).
+  cityLaunch?: Record<string, string>;
 };
 
 // Default window for daily incremental refresh: now - 14 days through
@@ -287,6 +297,10 @@ export type MdapiMatchesSyncResult = {
   fakeFlagPresent?: number; // roster rows where user.isFakePlayer is set
   paidStatusCounts?: Record<string, number>;
   sampleMatches?: { id: number; startDate: string | null; fieldId: number | null; fieldTitle: string | null; registrationPrice: number; maxPlayerCount: number | null }[];
+  // Per-city launch timeline: earliest NON-CANCELLED match per city_identifier,
+  // sorted by date. Drives the launch-date assertions and the staggered-origin
+  // cohort work. count = non-cancelled matches seen for that city in the window.
+  firstMatchByCity?: { abbr: string | null; cityName: string | null; firstDate: string; count: number }[];
 };
 
 export async function syncMdapiMatches(
@@ -306,6 +320,10 @@ export async function syncMdapiMatches(
   let fakeFlagPresent = 0;
   const paidStatusCounts: Record<string, number> = {};
   const sampleMatches: MdapiMatchesSyncResult["sampleMatches"] = [];
+  const firstMatchByCity = new Map<
+    string,
+    { abbr: string | null; cityName: string | null; firstDate: string; count: number }
+  >();
 
   // === 1. Paginate /admin/matches ===
   const matches: ApiMatch[] = [];
@@ -352,8 +370,11 @@ export async function syncMdapiMatches(
   const syncedAt = new Date().toISOString();
   const matchRows: MatchDbRow[] = [];
   for (const m of matches) {
+    const sd = m.startDate ?? null;
+    const notCancelled = m.isCancelled !== true;
+    const abbr = m.field?.city?.abbr ?? null;
+
     if (opts.dryRun) {
-      const sd = m.startDate ?? null;
       if (sd && (!earliestMatchDate || sd < earliestMatchDate)) earliestMatchDate = sd;
       const price = Number(m.registrationPrice ?? 0);
       if (price > 0) paidMatches++;
@@ -362,6 +383,32 @@ export async function syncMdapiMatches(
         sampleMatches!.push({ id: m.id, startDate: sd, fieldId: m.fieldId ?? null, fieldTitle: m.field?.title ?? null, registrationPrice: price, maxPlayerCount: m.maxPlayerCount ?? null });
       }
     }
+
+    // Per-city launch timeline: earliest non-cancelled match per city. Keyed on
+    // abbr (falls back to city name when the API omits abbr) so a market with no
+    // code still lands in the timeline rather than silently merging into null.
+    if (sd && notCancelled && (abbr || m.field?.city?.name)) {
+      const key = abbr ?? m.field!.city!.name!;
+      const cur = firstMatchByCity.get(key);
+      if (!cur) {
+        firstMatchByCity.set(key, { abbr, cityName: m.field?.city?.name ?? null, firstDate: sd, count: 1 });
+      } else {
+        cur.count++;
+        if (sd < cur.firstDate) cur.firstDate = sd;
+      }
+    }
+
+    // Launch-date assertion (backfill guard): a non-cancelled match dated before
+    // its own city's launch month is a misattribution — throw, write nothing.
+    if (opts.cityLaunch && sd && notCancelled && abbr) {
+      const launch = opts.cityLaunch[abbr];
+      if (launch && sd.slice(0, 7) < launch) {
+        throw new Error(
+          `mdapi_matches launch-guard: match #${m.id} in ${abbr} at ${sd.slice(0, 10)} precedes ${abbr} launch ${launch} — refusing to write`,
+        );
+      }
+    }
+
     if (typeof m.id !== "number" || typeof m.fieldId !== "number") continue;
     matchRows.push(mapMatchToRow(m, syncedAt));
   }
@@ -387,7 +434,7 @@ export async function syncMdapiMatches(
   const perMatchErrors: Record<string, string> = {};
   let playersFetched = 0;
 
-  for (let i = 0; i < matches.length; i++) {
+  for (let i = 0; opts.matchesOnly ? false : i < matches.length; i++) {
     const match = matches[i];
     if (typeof match.id !== "number") continue;
 
@@ -498,6 +545,9 @@ export async function syncMdapiMatches(
           fakeFlagPresent,
           paidStatusCounts,
           sampleMatches,
+          firstMatchByCity: [...firstMatchByCity.values()].sort((a, b) =>
+            a.firstDate < b.firstDate ? -1 : a.firstDate > b.firstDate ? 1 : 0,
+          ),
         }
       : {}),
   };
