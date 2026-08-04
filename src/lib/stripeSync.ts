@@ -447,6 +447,9 @@ export type ClassifierProbeResult = {
   // Distinct matchName on historical-DPP charges (for the local matchName→match
   // →field→city join). Bounded to the top ~600 by count.
   dppMatchNames: { name: string; count: number }[];
+  // Distinct metadata.matchId on matchId-rule-DPP charges (for the DIRECT
+  // matchId→mdapi api_id→city join — works in eras with no matchName). Top ~1500.
+  dppMatchIds: { matchId: string; count: number }[];
   samples?: {
     date: string; amount: number; description: string | null;
     invoice: string | null; priceId: string | null; productId: string | null;
@@ -480,6 +483,7 @@ export async function stripeClassifierProbe(opts: {
   const disagreements: ClassifierProbeResult["disagreements"] = [];
   const disagreementsMatchId: ClassifierProbeResult["disagreementsMatchId"] = [];
   const dppMatchNameCounts = new Map<string, number>();
+  const dppMatchIdCounts = new Map<string, number>();
 
   for await (const charge of stripe.charges.list({ created: { gte: sinceSec, lte: untilSec }, limit: 100 })) {
     fetched++;
@@ -505,6 +509,7 @@ export async function stripeClassifierProbe(opts: {
     current[cur]++; historical[hist]++; histMatchId[hMid]++;
     invoiceByCurrentType[cur][hasInvoice ? "withInvoice" : "without"]++;
     if (hMid === "DPP" && matchName) dppMatchNameCounts.set(matchName, (dppMatchNameCounts.get(matchName) ?? 0) + 1);
+    if (hMid === "DPP") { const mid = (typeof meta.matchId === "string" && meta.matchId.trim()) || (typeof meta.userMatchId === "string" && meta.userMatchId.trim()) || null; if (mid) dppMatchIdCounts.set(mid, (dppMatchIdCounts.get(mid) ?? 0) + 1); }
     if (cur === hist) agree++;
     else {
       disagree++;
@@ -555,6 +560,7 @@ export async function stripeClassifierProbe(opts: {
     disagreementsMatchId,
     disagreements, matchNamePresent, cityIdentifierPresent,
     dppMatchNames: [...dppMatchNameCounts.entries()].sort((a, b) => b[1] - a[1]).slice(0, 600).map(([name, count]) => ({ name, count })),
+    dppMatchIds: [...dppMatchIdCounts.entries()].sort((a, b) => b[1] - a[1]).slice(0, 1500).map(([matchId, count]) => ({ matchId, count })),
     samples,
   };
 }
