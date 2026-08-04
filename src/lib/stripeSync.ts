@@ -452,6 +452,17 @@ export type ClassifierProbeResult = {
   flagged: number;            // matches nothing → must be surfaced, not typed membership
   flaggedSamples: { date: string; amount: number; description: string | null; stripeType: string | null; metaKeys: string }[];
   noMatchIdMetaKeySets: { keys: string; count: number }[];
+  // Full shipped-rule outcome (Strike → matchId-DPP → PrivateRental → Membership
+  // → Unclassified) and the per-charge move vs the current rule — for the
+  // amended byte-identical gate and the Oct-2024 before/after.
+  newRule: Record<"DPP" | "Membership" | "Strike" | "PrivateRental" | "Unclassified", number>;
+  moves: { from: string; to: string; count: number; gross: number }[];
+  flaggedByType: { stripeType: string; count: number; gross: number }[];
+  // metadata.type values on matchId-present (DPP) charges — is type a structured
+  // event marker on per-match charges too? (check #1)
+  dppTypeValues: { type: string; count: number }[];
+  // captain_division (league) charges: distinct division, size, cities, period (check #2)
+  captainDivisions: { id: string; count: number; gross: number; cityIds: string[]; firstDate: string; lastDate: string }[];
   // Distinct matchName on historical-DPP charges (for the local matchName→match
   // →field→city join). Bounded to the top ~600 by count.
   dppMatchNames: { name: string; count: number }[];
@@ -497,6 +508,11 @@ export async function stripeClassifierProbe(opts: {
   const noMatchIdMetaKeySets = new Map<string, number>();
   const membSig = (t: string | null, d: string | null) => (!!t && /subscription|membership|plan|renew/i.test(t)) || (!!d && /subscription|membership|renew|plan/i.test(d));
   const rentSig = (t: string | null, d: string | null) => (!!t && /rental|private/i.test(t)) || (!!d && /rental|private\s*rent/i.test(d));
+  const newRule: Record<string, number> = { DPP: 0, Membership: 0, Strike: 0, PrivateRental: 0, Unclassified: 0 };
+  const movesMap = new Map<string, { count: number; gross: number }>();
+  const flaggedByTypeMap = new Map<string, { count: number; gross: number }>();
+  const dppTypeValuesMap = new Map<string, number>();
+  const capDivMap = new Map<string, { count: number; gross: number; cityIds: Set<string>; firstDate: string; lastDate: string }>();
 
   for await (const charge of stripe.charges.list({ created: { gte: sinceSec, lte: untilSec }, limit: 100 })) {
     fetched++;
@@ -548,6 +564,21 @@ export async function stripeClassifierProbe(opts: {
         if (flaggedSamples.length < 60) flaggedSamples.push({ date: utcDateFromUnix(charge.created), amount: charge.amount / 100, description, stripeType, metaKeys: keys });
       }
     }
+
+    // ── Full shipped-rule outcome + move vs current, plus the check-#1/#2 data ──
+    const amt = charge.amount / 100;
+    const nt = isStrikeCharge(stripeType) ? "Strike" : hasMatchId ? "DPP" : rentSig(stripeType, description) ? "PrivateRental" : membSig(stripeType, description) ? "Membership" : "Unclassified";
+    newRule[nt]++;
+    if (cur !== nt) { const k = `${cur}→${nt}`; const g = movesMap.get(k) ?? { count: 0, gross: 0 }; g.count++; g.gross += amt; movesMap.set(k, g); }
+    if (nt === "Unclassified") { const st = stripeType ?? "(none)"; const g = flaggedByTypeMap.get(st) ?? { count: 0, gross: 0 }; g.count++; g.gross += amt; flaggedByTypeMap.set(st, g); }
+    if (hasMatchId) dppTypeValuesMap.set(stripeType ?? "(none)", (dppTypeValuesMap.get(stripeType ?? "(none)") ?? 0) + 1);
+    if (stripeType === "captain_division") {
+      const id = (typeof meta.captainDivisionId === "string" && meta.captainDivisionId) || "(none)";
+      const d = utcDateFromUnix(charge.created);
+      const g = capDivMap.get(id) ?? { count: 0, gross: 0, cityIds: new Set<string>(), firstDate: d, lastDate: d };
+      g.count++; g.gross += amt; if (cityIdentifier) g.cityIds.add(cityIdentifier); if (d < g.firstDate) g.firstDate = d; if (d > g.lastDate) g.lastDate = d;
+      capDivMap.set(id, g);
+    }
   }
 
   let samples: ClassifierProbeResult["samples"];
@@ -589,6 +620,11 @@ export async function stripeClassifierProbe(opts: {
     disagreements, matchNamePresent, cityIdentifierPresent,
     noMatchIdNonStrike, membershipPositive, rentalPositive, flagged, flaggedSamples,
     noMatchIdMetaKeySets: [...noMatchIdMetaKeySets.entries()].sort((a, b) => b[1] - a[1]).slice(0, 30).map(([keys, count]) => ({ keys, count })),
+    newRule: newRule as ClassifierProbeResult["newRule"],
+    moves: [...movesMap.entries()].map(([k, v]) => ({ from: k.split("→")[0], to: k.split("→")[1], count: v.count, gross: +v.gross.toFixed(2) })).sort((a, b) => b.count - a.count),
+    flaggedByType: [...flaggedByTypeMap.entries()].map(([stripeType, v]) => ({ stripeType, count: v.count, gross: +v.gross.toFixed(2) })).sort((a, b) => b.gross - a.gross),
+    dppTypeValues: [...dppTypeValuesMap.entries()].map(([type, count]) => ({ type, count })).sort((a, b) => b.count - a.count),
+    captainDivisions: [...capDivMap.entries()].map(([id, v]) => ({ id, count: v.count, gross: +v.gross.toFixed(2), cityIds: [...v.cityIds], firstDate: v.firstDate, lastDate: v.lastDate })).sort((a, b) => b.gross - a.gross),
     dppMatchNames: [...dppMatchNameCounts.entries()].sort((a, b) => b[1] - a[1]).slice(0, 600).map(([name, count]) => ({ name, count })),
     dppMatchIds: [...dppMatchIdCounts.entries()].sort((a, b) => b[1] - a[1]).slice(0, 1500).map(([matchId, count]) => ({ matchId, count })),
     samples,
