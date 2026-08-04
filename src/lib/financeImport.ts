@@ -743,25 +743,54 @@ export async function commitStripe(
     return { count: 0, note: "No paid Stripe rows to commit." };
   }
 
-  // Date-range replace: drop existing Stripe rows in the covered window, then insert.
-  // .select("id") makes PostgREST return the deleted row IDs so we can
-  // surface rowsReplaced in the sync log.
+  // Date-range replace: drop existing Stripe rows in the covered window, then
+  // insert. The PostgREST client cannot wrap delete+insert in one transaction,
+  // so the delete commits on its own — a failed insert would otherwise EMPTY the
+  // window (this is exactly how the Unclassified/CHECK-constraint failure wiped
+  // Dec 2025). Guard: capture the FULL deleted rows and, on ANY insert failure,
+  // restore them — a compensating undo so no month is ever left empty.
+  // .select("*") returns the deleted rows so we can both surface rowsReplaced and
+  // restore on failure.
   const { data: deleted, error: delErr } = await client
     .from("fin_revenue")
     .delete()
     .eq("source", "Stripe")
     .gte("date", input.earliestDate)
     .lte("date", input.latestDate)
-    .select("id");
+    .select("*");
   if (delErr) throw new Error(`Delete failed: ${delErr.message}`);
   const rowsReplaced = deleted?.length ?? 0;
 
   const BATCH = 500;
-  for (let i = 0; i < input.rows.length; i += BATCH) {
-    const chunk = input.rows.slice(i, i + BATCH);
-    const { error } = await client.from("fin_revenue").insert(chunk);
-    if (error) throw new Error(`Insert failed: ${error.message}`);
+  try {
+    for (let i = 0; i < input.rows.length; i += BATCH) {
+      const chunk = input.rows.slice(i, i + BATCH);
+      const { error } = await client.from("fin_revenue").insert(chunk);
+      if (error) throw new Error(`Insert failed: ${error.message}`);
+    }
+  } catch (e) {
+    // Restore the just-deleted rows. Strip DB-managed columns (id = identity,
+    // net = generated from gross-fees, created_at = default) so the re-insert
+    // regenerates them; the restored rows were valid before, so this can't hit
+    // the constraint that failed the new insert.
+    if (deleted && deleted.length) {
+      const restore = (deleted as Record<string, unknown>[]).map((r) => {
+        const { id: _id, net: _net, created_at: _createdAt, ...rest } = r;
+        void _id; void _net; void _createdAt;
+        return rest;
+      });
+      for (let i = 0; i < restore.length; i += BATCH) {
+        const { error: rErr } = await client.from("fin_revenue").insert(restore.slice(i, i + BATCH));
+        if (rErr) {
+          throw new Error(
+            `Insert failed AND restore failed — ${restore.length} rows for ${input.earliestDate}→${input.latestDate} may be lost: ${rErr.message}. Original insert error: ${(e as Error).message}`,
+          );
+        }
+      }
+    }
+    throw new Error(`${(e as Error).message} — deleted rows restored (${rowsReplaced}); window left intact.`);
   }
+
   return {
     count: input.rows.length,
     rowsReplaced,
