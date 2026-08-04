@@ -60,6 +60,9 @@ test("VENUE fold is idempotent — canonicalVenueName(f(x)) === f(x), so a secon
     "Hill Country", "Hill Country Middle School", "Parmer Stadium - Premier", "Parmer",
     "Round Rock Tournaments", "Stadium Field at Round Rock M.C.", "Round Rock", "Special Events at RR", "RRMC F8", "RR F8",
     "KISC (Katy Intl)", "Katy International Sports Complex", "STAR", "N/A", "Some Brand New Venue",
+    "Open Play at SJD", "San Juan Diego", "Mud Creek Soccer C.", "Mud Creek Soccer Complex",
+    "NYCSC at East River Park Grand Street Field", "NYCSC East River", "NYCSC at Pier 40", "NYCSC Pier 40",
+    "Tourney Houston Sports Park", "Houston Sports Park", "SEU Practice Field", "Sporti Soccer Complex",
   ];
   for (const x of inputs) {
     const c1 = canonicalVenueName(x);
@@ -109,6 +112,47 @@ test("Round Rock abbreviations (RR / RRMC) resolve to Round Rock; 'Special Event
   assert.deepEqual([r.canonicalVenue, r.city, r.category], ["Round Rock", "Austin", "event"]);
   // a standalone "rr" inside a normal word must NOT trigger (word-boundaried)
   assert.equal(canonicalVenueName("Barrington Park"), "Barrington Park");
+});
+
+test("SJD abbreviation collapses to San Juan Diego (Austin); Mud Creek spellings unify (Atlanta)", () => {
+  for (const s of ["Open Play at SJD", "Special Events at SJD", "EPL Kickoff Tournamanet at SJD - Bracket"]) {
+    assert.equal(canonicalVenueName(s), "San Juan Diego", s);
+    assert.equal(resolveVenue(s).city, "Austin");
+  }
+  assert.equal(canonicalVenueName("Mud Creek Soccer Complex"), "Mud Creek Soccer Complex");
+  assert.equal(canonicalVenueName("Mud Creek Soccer C."), "Mud Creek Soccer Complex"); // 2nd spelling folds
+  assert.equal(resolveVenue("Mud Creek Soccer C.").city, "Atlanta");
+});
+
+test("NYCSC is FOUR distinct pitches, not one — all in New York City", () => {
+  const four = {
+    "NYCSC at Pier 40": "NYCSC Pier 40",
+    "NYCSC at Nike Field": "NYCSC Nike Field",
+    "NYCSC at East River Park Grand Street Field": "NYCSC East River",
+    "NYCSC at DeWitt Clinton Park": "NYCSC DeWitt Clinton",
+  };
+  const canons = new Set<string>();
+  for (const [raw, canon] of Object.entries(four)) {
+    const r = resolveVenue(raw);
+    assert.equal(r.canonicalVenue, canon, raw);
+    assert.equal(r.city, "New York City", raw);
+    canons.add(r.canonicalVenue);
+  }
+  assert.equal(canons.size, 4, "the four NYCSC pitches must NOT collapse");
+});
+
+test("misfiled events reclassify via the vocabulary fix (cup / tournamanet)", () => {
+  assert.equal(venueCategory("Brasileirão Cup"), "event");
+  assert.equal(venueCategory("EPL Kickoff Tournamanet at SJD - Group Stage"), "event");
+  // 'tournamanet' is tolerated as a specific typo, not general fuzziness:
+  assert.equal(venueCategory("Tournamant"), "regular"); // a DIFFERENT typo does not match
+});
+
+test("new fallback-only venues resolve to their API city with no rule", () => {
+  assert.equal(resolveVenue("SEU Practice Field").city, "Austin");
+  assert.equal(resolveVenue("Community Fieldhouse").city, "Houston");
+  assert.equal(resolveVenue("Mainland Sports Complex").city, "San Antonio");
+  assert.equal(canonicalVenueName("SEU Practice Field"), "SEU Practice Field"); // passes through as itself
 });
 
 test("the four Lou Fusz spellings + combine resolve to St. Louis", () => {
