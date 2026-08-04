@@ -433,6 +433,9 @@ export type ClassifierProbeResult = {
   }[];
   matchNamePresent: number;
   cityIdentifierPresent: number;
+  // Distinct matchName on historical-DPP charges (for the local matchName→match
+  // →field→city join). Bounded to the top ~600 by count.
+  dppMatchNames: { name: string; count: number }[];
   samples?: {
     date: string; amount: number; description: string | null;
     invoice: string | null; priceId: string | null; productId: string | null;
@@ -462,6 +465,7 @@ export async function stripeClassifierProbe(opts: {
     Strike: { withInvoice: 0, without: 0 },
   };
   const disagreements: ClassifierProbeResult["disagreements"] = [];
+  const dppMatchNameCounts = new Map<string, number>();
 
   for await (const charge of stripe.charges.list({ created: { gte: sinceSec, lte: untilSec }, limit: 100 })) {
     fetched++;
@@ -482,6 +486,7 @@ export async function stripeClassifierProbe(opts: {
     const hist = isStrikeCharge(stripeType) ? "Strike" : hasInvoice ? "Membership" : "DPP";
     current[cur]++; historical[hist]++;
     invoiceByCurrentType[cur][hasInvoice ? "withInvoice" : "without"]++;
+    if (hist === "DPP" && matchName) dppMatchNameCounts.set(matchName, (dppMatchNameCounts.get(matchName) ?? 0) + 1);
     if (cur === hist) agree++;
     else {
       disagree++;
@@ -520,6 +525,8 @@ export async function stripeClassifierProbe(opts: {
     historical: historical as ClassifierProbeResult["historical"],
     invoicePresent, invoiceByCurrentType, agree, disagree,
     agreementPct: agree + disagree ? +((100 * agree) / (agree + disagree)).toFixed(3) : 0,
-    disagreements, matchNamePresent, cityIdentifierPresent, samples,
+    disagreements, matchNamePresent, cityIdentifierPresent,
+    dppMatchNames: [...dppMatchNameCounts.entries()].sort((a, b) => b[1] - a[1]).slice(0, 600).map(([name, count]) => ({ name, count })),
+    samples,
   };
 }
