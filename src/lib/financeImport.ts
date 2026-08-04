@@ -287,7 +287,7 @@ export type StripeAllocatedRow = {
   month: string;
   city: string;
   venue: string | null;
-  type: "DPP" | "Membership" | "Strike";
+  type: FinRevType;
   gross: number;
   fees: number;
   source: "Stripe";
@@ -357,6 +357,45 @@ export function looksLikeMembership(
   return false;
 }
 
+// The four fin_revenue product types plus a sentinel for charges that match none
+// of them. "Unclassified" is written to fin_revenue so those charges are visible
+// and reviewable, but no typed rollup (DPP / Membership / Strike / Private Rental)
+// includes it — the same "held out until resolved" treatment as unmapped cost.
+export type FinRevType = "DPP" | "Membership" | "Strike" | "Private Rental" | "Unclassified";
+
+// POSITIVE membership test — a subscription/membership charge names itself in its
+// type or description. This replaces the old default ("no cityIdentifier ⇒
+// membership"), which forced every pre-metadata per-match charge into Membership.
+export function isMembershipCharge(stripeType: string | null, description: string | null): boolean {
+  const t = (stripeType ?? "").toLowerCase();
+  const d = (description ?? "").toLowerCase();
+  return /subscription|membership|plan|renew/.test(t) || /subscription|membership|renew|plan/.test(d);
+}
+
+// POSITIVE private-rental test (rentals would otherwise fall through to membership).
+export function isPrivateRentalCharge(stripeType: string | null, description: string | null): boolean {
+  const t = (stripeType ?? "").toLowerCase();
+  const d = (description ?? "").toLowerCase();
+  return /rental|private/.test(t) || /rental|private\s*rent/.test(d);
+}
+
+// The single classifier the API sync and the (legacy) CSV preview both call, so
+// the two paths cannot drift. Precedence is all POSITIVE identification: Strike,
+// then per-match (matchId = the mdapi match api_id, present from the first paid
+// charge in May 2023), then Private Rental, then Membership. A charge matching
+// NONE is flagged Unclassified — surfaced, never silently typed membership.
+export function classifyCharge(args: {
+  stripeType: string | null;
+  description: string | null;
+  hasMatchId: boolean;
+}): FinRevType {
+  if (isStrikeCharge(args.stripeType)) return "Strike";
+  if (args.hasMatchId) return "DPP";
+  if (isPrivateRentalCharge(args.stripeType, args.description)) return "Private Rental";
+  if (isMembershipCharge(args.stripeType, args.description)) return "Membership";
+  return "Unclassified";
+}
+
 export function cityFromIdentifier(code: string | null): string {
   if (!code) return DELETED_ACCOUNT_CITY;
   const upper = code.toUpperCase().trim();
@@ -377,7 +416,7 @@ export function aggregateStripeRows(
     month: string;
     city: string;
     venue: string | null;
-    type: "DPP" | "Membership" | "Strike";
+    type: FinRevType;
     gross: number;
     fees: number;
     txnCount: number;
@@ -574,20 +613,23 @@ export async function previewStripe(
     if (monthLabel) monthSet.add(monthLabel);
 
     let allocatedCity: string;
-    let type: "DPP" | "Membership" | "Strike";
+    // Legacy CSV export has no matchId column, so per-match is approximated from
+    // the CSV's own signals (match_name present, or a match|dpp stripe_type). The
+    // live API sync uses the real metadata.matchId — same classifyCharge either way.
+    const type = classifyCharge({
+      stripeType,
+      description,
+      hasMatchId: !!matchName || /match|dpp/i.test(stripeType ?? ""),
+    });
 
-    if (isStrikeType) {
+    if (type === "Strike") {
       // Strikes are city-attributed but have no venue concept.
-      type = "Strike";
       strikePayments++;
       allocatedCity = cityFromIdentifier(cityIdentifier);
       if (allocatedCity === DELETED_ACCOUNT_CITY && cityIdentifier) {
         matchUnmatchedCityCodes.add(cityIdentifier);
       }
-    } else if (
-      looksLikeMembership(stripeType, description, cityIdentifier)
-    ) {
-      type = "Membership";
+    } else if (type === "Membership") {
       membershipPayments++;
       const lookup = email ? emailToCity.get(email) : undefined;
       if (lookup && lookup !== DELETED_ACCOUNT_CITY) {
@@ -598,8 +640,9 @@ export async function previewStripe(
         if (email) unmatchedEmailSet.add(email);
       }
     } else {
-      type = "DPP";
-      matchPayments++;
+      // DPP / Private Rental / Unclassified: city-attributed by cityIdentifier
+      // (the CSV path has no matchId→city join). matchPayments counts DPP only.
+      if (type === "DPP") matchPayments++;
       allocatedCity = cityFromIdentifier(cityIdentifier);
       if (allocatedCity === DELETED_ACCOUNT_CITY && cityIdentifier) {
         matchUnmatchedCityCodes.add(cityIdentifier);

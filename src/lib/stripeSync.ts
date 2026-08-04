@@ -14,6 +14,7 @@ import {
   DELETED_ACCOUNT_CITY,
   aggregateStripeRows,
   cityFromIdentifier,
+  classifyCharge,
   isStrikeCharge,
   looksLikeMembership,
   monthLabelFromIsoDate,
@@ -41,6 +42,9 @@ export type StripeSyncResult = {
   membershipPayments: number;
   matchPayments: number;
   strikePayments: number;
+  privateRentalPayments: number;
+  unclassifiedPayments: number;
+  dppCityFromMatchId: number;
   unmatchedEmails: string[];
   unmatchedCityCodes: string[];
   // DIAGNOSTIC ONLY — the category-split net per (month × venue × type ×
@@ -204,6 +208,23 @@ export async function syncStripeCharges(
   console.log(
     `[stripe-sync] Membership email→city map built: ${primaryCount} from subscriptions, ${fallbackCount} from users fallback (total ${emailToCity.size})`,
   );
+
+  // matchId → city map from the (now-complete) match history. A per-match charge
+  // carries metadata.matchId = the mdapi match api_id; before cityIdentifier
+  // existed (~Apr 2025) this is the ONLY way to attribute DPP revenue to a city.
+  // Read via the service client (mdapi_matches RLS blocks the authenticated role,
+  // same as mdapi_users above). Cheap: api_id + city only.
+  const apiIdToCity = new Map<string, string>();
+  const matchCityRows = await selectAll<{ api_id: number | null; city_identifier: string | null }>(() =>
+    usersClient.from("mdapi_matches").select("api_id, city_identifier").order("api_id"),
+  );
+  for (const m of matchCityRows) {
+    if (m.api_id == null) continue;
+    const c = cityFromAbbr(m.city_identifier);
+    if (c) apiIdToCity.set(String(m.api_id), c);
+  }
+  console.log(`[stripe-sync] matchId→city map built: ${apiIdToCity.size} matches`);
+
   // Venue derivation now goes through the single canonical resolver
   // (resolveVenue) — retiring the fin_venue_aliases lookup and normalizeMatchName.
   // Unrecognised venues: DPP rows whose canonical resolves to NO city (a field
@@ -219,6 +240,9 @@ export async function syncStripeCharges(
   let membershipPayments = 0;
   let matchPayments = 0;
   let strikePayments = 0;
+  let privateRentalPayments = 0;
+  let unclassifiedPayments = 0;
+  let dppCityFromMatchId = 0; // DPP rows attributed via matchId→city (no cityIdentifier)
   // Metadata coverage — how many paid charges carry the fields the venue/city
   // resolution depends on. Surfaced so a backfill can be judged before it runs.
   let matchNamePresent = 0;
@@ -285,6 +309,14 @@ export async function syncStripeCharges(
       typeof meta.matchName === "string" && meta.matchName.trim()
         ? meta.matchName.trim()
         : null;
+    // metadata.matchId (= the mdapi match api_id) is the validated per-match
+    // discriminator: present on per-match charges from the first paid charge
+    // (May 2023), absent on memberships. userMatchId is the same value on some
+    // charges. Drives BOTH typing (DPP) and the pre-cityIdentifier city join.
+    const matchId =
+      (typeof meta.matchId === "string" && meta.matchId.trim()) ||
+      (typeof meta.userMatchId === "string" && meta.userMatchId.trim()) ||
+      null;
 
     paidRows++;
     if (matchName) matchNamePresent++;
@@ -293,17 +325,18 @@ export async function syncStripeCharges(
     if (!latestDate || date > latestDate) latestDate = date;
 
     let allocatedCity: string;
-    let type: "DPP" | "Membership" | "Strike";
+    // Single classifier (shared with the CSV path): Strike → matchId-DPP →
+    // Private Rental → positive Membership → Unclassified. No "default to
+    // membership" — the pre-metadata mis-typing this fixes.
+    const type = classifyCharge({ stripeType, description, hasMatchId: matchId != null });
 
-    if (isStrikeCharge(stripeType)) {
-      type = "Strike";
+    if (type === "Strike") {
       strikePayments++;
       allocatedCity = cityFromIdentifier(cityIdentifier);
       if (allocatedCity === DELETED_ACCOUNT_CITY && cityIdentifier) {
         unmatchedCityCodeSet.add(cityIdentifier);
       }
-    } else if (looksLikeMembership(stripeType, description, cityIdentifier)) {
-      type = "Membership";
+    } else if (type === "Membership") {
       membershipPayments++;
       const lookup = email ? emailToCity.get(email) : undefined;
       if (lookup && lookup !== DELETED_ACCOUNT_CITY) {
@@ -312,12 +345,35 @@ export async function syncStripeCharges(
         allocatedCity = DELETED_ACCOUNT_CITY;
         if (email) unmatchedEmailSet.add(email);
       }
-    } else {
-      type = "DPP";
+    } else if (type === "DPP") {
       matchPayments++;
+      // City: cityIdentifier when present (unchanged for the metadata era, so the
+      // good era is byte-identical); else the direct matchId→city join, which is
+      // what attributes pre-cityIdentifier DPP revenue instead of dropping it into
+      // Deleted Account. Deleted Account only if NEITHER resolves.
+      if (cityIdentifier) {
+        allocatedCity = cityFromIdentifier(cityIdentifier);
+        if (allocatedCity === DELETED_ACCOUNT_CITY) unmatchedCityCodeSet.add(cityIdentifier);
+      } else {
+        const viaMatch = matchId ? apiIdToCity.get(matchId) : undefined;
+        if (viaMatch) {
+          allocatedCity = viaMatch;
+          dppCityFromMatchId++;
+        } else {
+          allocatedCity = DELETED_ACCOUNT_CITY;
+        }
+      }
+    } else {
+      // Private Rental / Unclassified — both held out of typed rollups. Attribute
+      // a city best-effort (cityIdentifier, else matchId) so a future review has
+      // the market; neither feeds DPP/Membership/Strike/Private-Rental totals.
+      if (type === "Private Rental") privateRentalPayments++;
+      else unclassifiedPayments++;
       allocatedCity = cityFromIdentifier(cityIdentifier);
-      if (allocatedCity === DELETED_ACCOUNT_CITY && cityIdentifier) {
-        unmatchedCityCodeSet.add(cityIdentifier);
+      if (allocatedCity === DELETED_ACCOUNT_CITY) {
+        const viaMatch = matchId ? apiIdToCity.get(matchId) : undefined;
+        if (viaMatch) allocatedCity = viaMatch;
+        else if (cityIdentifier) unmatchedCityCodeSet.add(cityIdentifier);
       }
     }
 
@@ -389,6 +445,9 @@ export async function syncStripeCharges(
     membershipPayments,
     matchPayments,
     strikePayments,
+    privateRentalPayments,
+    unclassifiedPayments,
+    dppCityFromMatchId,
     unmatchedEmails: [...unmatchedEmailSet].sort(),
     unmatchedCityCodes: [...unmatchedCityCodeSet].sort(),
     categoryNet: [...catAgg.values()],
