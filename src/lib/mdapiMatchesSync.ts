@@ -459,10 +459,14 @@ export async function syncMdapiMatches(
 
     if (opts.dryRun && players.some((p) => p.paidStatus === "PAID")) matchesWithPaidPlayer++;
     for (const p of players) {
+      // Roster-coverage counters run on EVERY path (not just dry-run): the
+      // backfill's per-chunk guard needs the fetched user_id fill rate, which
+      // is only observable here (the write drops non-numeric-userId rows, so a
+      // post-hoc DB read would always read 100%).
+      playersSeen++;
+      if (typeof p.userId === "number") userIdPresent++;
+      if (p.user?.isFakePlayer != null) fakeFlagPresent++;
       if (opts.dryRun) {
-        playersSeen++;
-        if (typeof p.userId === "number") userIdPresent++;
-        if (p.user?.isFakePlayer != null) fakeFlagPresent++;
         const ps = p.paidStatus ?? "null";
         paidStatusCounts[ps] = (paidStatusCounts[ps] ?? 0) + 1;
       }
@@ -532,6 +536,11 @@ export async function syncMdapiMatches(
     apiCalls,
     perMatchErrors,
     rowsSoftDeleted,
+    // Roster-coverage counters (every path): let a backfill chunk report its
+    // fetched user_id fill rate without a second N+1 dry-run pass.
+    playersSeen,
+    userIdPresent,
+    fakeFlagPresent,
     durationMs: Date.now() - startedAt,
     ...(opts.dryRun
       ? {
@@ -540,9 +549,6 @@ export async function syncMdapiMatches(
           freeMatches,
           paidMatches,
           matchesWithPaidPlayer,
-          playersSeen,
-          userIdPresent,
-          fakeFlagPresent,
           paidStatusCounts,
           sampleMatches,
           firstMatchByCity: [...firstMatchByCity.values()].sort((a, b) =>
