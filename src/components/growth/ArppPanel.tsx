@@ -62,7 +62,21 @@ const wipPill = (
 
 export default function ArppPanel({ data }: { data: GrowthData }) {
   const [view, setView] = useState<"city" | "field">("city");
-  const series = data.arppOverall.filter((p) => p.denom > 0 || p.net > 0);
+  // ARPP is a revenue metric: a month only belongs in the series once it has
+  // any net revenue. Before matches were backfilled, play months and revenue
+  // months coincided (both 2026-only), so `denom > 0 || net > 0` was harmless.
+  // A matches-only backfill adds ~21 pre-revenue play months whose net is 0;
+  // without this gate each renders as $0.00 ARPP — a false zero — instead of
+  // simply not existing yet. Data-derived, no hardcoded date: the floor is the
+  // earliest month with revenue, so it moves back on its own once Stripe
+  // revenue is backfilled for those months.
+  const revenueFloor = data.arppOverall.reduce<string | null>(
+    (f, p) => (p.net > 0 && (f == null || p.m < f) ? p.m : f),
+    null,
+  );
+  const series = data.arppOverall.filter(
+    (p) => (revenueFloor == null || p.m >= revenueFloor) && (p.denom > 0 || p.net > 0),
+  );
   const nowMonth = data.generatedAt.slice(0, 7);
 
   // Assertions (throw, never render a lie).
