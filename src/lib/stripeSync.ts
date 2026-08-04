@@ -456,6 +456,8 @@ export type ClassifierProbeResult = {
   // → Unclassified) and the per-charge move vs the current rule — for the
   // amended byte-identical gate and the Oct-2024 before/after.
   newRule: Record<"DPP" | "Membership" | "Strike" | "PrivateRental" | "Unclassified", number>;
+  grossByCurrentType: Record<string, number>;
+  grossByNewType: Record<string, number>;
   moves: { from: string; to: string; count: number; gross: number }[];
   flaggedByType: { stripeType: string; count: number; gross: number }[];
   // metadata.type values on matchId-present (DPP) charges — is type a structured
@@ -509,6 +511,8 @@ export async function stripeClassifierProbe(opts: {
   const membSig = (t: string | null, d: string | null) => (!!t && /subscription|membership|plan|renew/i.test(t)) || (!!d && /subscription|membership|renew|plan/i.test(d));
   const rentSig = (t: string | null, d: string | null) => (!!t && /rental|private/i.test(t)) || (!!d && /rental|private\s*rent/i.test(d));
   const newRule: Record<string, number> = { DPP: 0, Membership: 0, Strike: 0, PrivateRental: 0, Unclassified: 0 };
+  const grossCur: Record<string, number> = { DPP: 0, Membership: 0, Strike: 0 };
+  const grossNew: Record<string, number> = { DPP: 0, Membership: 0, Strike: 0, PrivateRental: 0, Unclassified: 0 };
   const movesMap = new Map<string, { count: number; gross: number }>();
   const flaggedByTypeMap = new Map<string, { count: number; gross: number }>();
   const dppTypeValuesMap = new Map<string, number>();
@@ -569,6 +573,7 @@ export async function stripeClassifierProbe(opts: {
     const amt = charge.amount / 100;
     const nt = isStrikeCharge(stripeType) ? "Strike" : hasMatchId ? "DPP" : rentSig(stripeType, description) ? "PrivateRental" : membSig(stripeType, description) ? "Membership" : "Unclassified";
     newRule[nt]++;
+    grossCur[cur] += amt; grossNew[nt] += amt;
     if (cur !== nt) { const k = `${cur}→${nt}`; const g = movesMap.get(k) ?? { count: 0, gross: 0 }; g.count++; g.gross += amt; movesMap.set(k, g); }
     if (nt === "Unclassified") { const st = stripeType ?? "(none)"; const g = flaggedByTypeMap.get(st) ?? { count: 0, gross: 0 }; g.count++; g.gross += amt; flaggedByTypeMap.set(st, g); }
     if (hasMatchId) dppTypeValuesMap.set(stripeType ?? "(none)", (dppTypeValuesMap.get(stripeType ?? "(none)") ?? 0) + 1);
@@ -621,6 +626,8 @@ export async function stripeClassifierProbe(opts: {
     noMatchIdNonStrike, membershipPositive, rentalPositive, flagged, flaggedSamples,
     noMatchIdMetaKeySets: [...noMatchIdMetaKeySets.entries()].sort((a, b) => b[1] - a[1]).slice(0, 30).map(([keys, count]) => ({ keys, count })),
     newRule: newRule as ClassifierProbeResult["newRule"],
+    grossByCurrentType: Object.fromEntries(Object.entries(grossCur).map(([k, v]) => [k, +v.toFixed(2)])),
+    grossByNewType: Object.fromEntries(Object.entries(grossNew).map(([k, v]) => [k, +v.toFixed(2)])),
     moves: [...movesMap.entries()].map(([k, v]) => ({ from: k.split("→")[0], to: k.split("→")[1], count: v.count, gross: +v.gross.toFixed(2) })).sort((a, b) => b.count - a.count),
     flaggedByType: [...flaggedByTypeMap.entries()].map(([stripeType, v]) => ({ stripeType, count: v.count, gross: +v.gross.toFixed(2) })).sort((a, b) => b.gross - a.gross),
     dppTypeValues: [...dppTypeValuesMap.entries()].map(([type, count]) => ({ type, count })).sort((a, b) => b.count - a.count),
