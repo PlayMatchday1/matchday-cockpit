@@ -235,6 +235,11 @@ export type MdapiMatchesSyncOptions = {
   fromDate?: string;
   // YYYY-MM-DD. Optional upper bound. Daily incremental passes both.
   toDate?: string;
+  // Read-only diagnostic: fetch matches + rosters from the API and return
+  // coverage stats WITHOUT any DB write. The cron/manual path never sets this,
+  // so their behaviour is byte-identical. Used to judge a historical backfill
+  // (do 2024 rosters carry user_id, were matches free or paid) before running it.
+  dryRun?: boolean;
 };
 
 // Default window for daily incremental refresh: now - 14 days through
@@ -271,6 +276,17 @@ export type MdapiMatchesSyncResult = {
   // window ran and the sanity guards passed.
   rowsSoftDeleted: number;
   durationMs: number;
+  // Dry-run diagnostics (only meaningful when opts.dryRun) — nothing written.
+  dryRun?: boolean;
+  earliestMatchDate?: string | null;
+  freeMatches?: number; // registrationPrice == 0
+  paidMatches?: number; // registrationPrice > 0
+  matchesWithPaidPlayer?: number; // ≥1 roster row with paidStatus === "PAID"
+  playersSeen?: number;
+  userIdPresent?: number; // roster rows carrying a numeric userId
+  fakeFlagPresent?: number; // roster rows where user.isFakePlayer is set
+  paidStatusCounts?: Record<string, number>;
+  sampleMatches?: { id: number; startDate: string | null; fieldId: number | null; fieldTitle: string | null; registrationPrice: number; maxPlayerCount: number | null }[];
 };
 
 export async function syncMdapiMatches(
@@ -279,6 +295,17 @@ export async function syncMdapiMatches(
 ): Promise<MdapiMatchesSyncResult> {
   const startedAt = Date.now();
   const client = getMatchdayApiClient();
+
+  // Dry-run diagnostic accumulators (populated only when opts.dryRun).
+  let earliestMatchDate: string | null = null;
+  let freeMatches = 0;
+  let paidMatches = 0;
+  let matchesWithPaidPlayer = 0;
+  let playersSeen = 0;
+  let userIdPresent = 0;
+  let fakeFlagPresent = 0;
+  const paidStatusCounts: Record<string, number> = {};
+  const sampleMatches: MdapiMatchesSyncResult["sampleMatches"] = [];
 
   // === 1. Paginate /admin/matches ===
   const matches: ApiMatch[] = [];
@@ -325,22 +352,34 @@ export async function syncMdapiMatches(
   const syncedAt = new Date().toISOString();
   const matchRows: MatchDbRow[] = [];
   for (const m of matches) {
+    if (opts.dryRun) {
+      const sd = m.startDate ?? null;
+      if (sd && (!earliestMatchDate || sd < earliestMatchDate)) earliestMatchDate = sd;
+      const price = Number(m.registrationPrice ?? 0);
+      if (price > 0) paidMatches++;
+      else freeMatches++;
+      if ((sampleMatches?.length ?? 0) < 6) {
+        sampleMatches!.push({ id: m.id, startDate: sd, fieldId: m.fieldId ?? null, fieldTitle: m.field?.title ?? null, registrationPrice: price, maxPlayerCount: m.maxPlayerCount ?? null });
+      }
+    }
     if (typeof m.id !== "number" || typeof m.fieldId !== "number") continue;
     matchRows.push(mapMatchToRow(m, syncedAt));
   }
 
   let matchesUpserted = 0;
-  for (let i = 0; i < matchRows.length; i += UPSERT_BATCH) {
-    const chunk = matchRows.slice(i, i + UPSERT_BATCH);
-    const { error } = await supabase
-      .from("mdapi_matches")
-      .upsert(chunk, { onConflict: "api_id" });
-    if (error) {
-      throw new Error(
-        `mdapi_matches upsert failed at offset ${i}: ${error.message}`,
-      );
+  if (!opts.dryRun) {
+    for (let i = 0; i < matchRows.length; i += UPSERT_BATCH) {
+      const chunk = matchRows.slice(i, i + UPSERT_BATCH);
+      const { error } = await supabase
+        .from("mdapi_matches")
+        .upsert(chunk, { onConflict: "api_id" });
+      if (error) {
+        throw new Error(
+          `mdapi_matches upsert failed at offset ${i}: ${error.message}`,
+        );
+      }
+      matchesUpserted += chunk.length;
     }
-    matchesUpserted += chunk.length;
   }
 
   // === 3. Per-match: fetch /players and accumulate ===
@@ -371,7 +410,15 @@ export async function syncMdapiMatches(
     if (!Array.isArray(players)) continue;
     playersFetched += players.length;
 
+    if (opts.dryRun && players.some((p) => p.paidStatus === "PAID")) matchesWithPaidPlayer++;
     for (const p of players) {
+      if (opts.dryRun) {
+        playersSeen++;
+        if (typeof p.userId === "number") userIdPresent++;
+        if (p.user?.isFakePlayer != null) fakeFlagPresent++;
+        const ps = p.paidStatus ?? "null";
+        paidStatusCounts[ps] = (paidStatusCounts[ps] ?? 0) + 1;
+      }
       if (typeof p.id !== "number" || typeof p.userId !== "number") continue;
       allPlayerRows.push(mapPlayerToRow(p, match.id, syncedAt));
     }
@@ -387,17 +434,19 @@ export async function syncMdapiMatches(
 
   // === 4. Upsert player rows ===
   let playersUpserted = 0;
-  for (let i = 0; i < allPlayerRows.length; i += UPSERT_BATCH) {
-    const chunk = allPlayerRows.slice(i, i + UPSERT_BATCH);
-    const { error } = await supabase
-      .from("mdapi_match_players")
-      .upsert(chunk, { onConflict: "api_id" });
-    if (error) {
-      throw new Error(
-        `mdapi_match_players upsert failed at offset ${i}: ${error.message}`,
-      );
+  if (!opts.dryRun) {
+    for (let i = 0; i < allPlayerRows.length; i += UPSERT_BATCH) {
+      const chunk = allPlayerRows.slice(i, i + UPSERT_BATCH);
+      const { error } = await supabase
+        .from("mdapi_match_players")
+        .upsert(chunk, { onConflict: "api_id" });
+      if (error) {
+        throw new Error(
+          `mdapi_match_players upsert failed at offset ${i}: ${error.message}`,
+        );
+      }
+      playersUpserted += chunk.length;
     }
-    playersUpserted += chunk.length;
   }
 
   // === 5. Tombstone pass: soft-delete phantoms (deleted upstream) ===
@@ -406,7 +455,7 @@ export async function syncMdapiMatches(
   // could wrongly delete future matches the run didn't page deep enough
   // to reach.
   let rowsSoftDeleted = 0;
-  if (opts.fromDate && opts.toDate) {
+  if (opts.fromDate && opts.toDate && !opts.dryRun) {
     rowsSoftDeleted = await tombstoneMissing(supabase, {
       fromDate: opts.fromDate,
       toDate: opts.toDate,
@@ -437,6 +486,20 @@ export async function syncMdapiMatches(
     perMatchErrors,
     rowsSoftDeleted,
     durationMs: Date.now() - startedAt,
+    ...(opts.dryRun
+      ? {
+          dryRun: true,
+          earliestMatchDate,
+          freeMatches,
+          paidMatches,
+          matchesWithPaidPlayer,
+          playersSeen,
+          userIdPresent,
+          fakeFlagPresent,
+          paidStatusCounts,
+          sampleMatches,
+        }
+      : {}),
   };
 }
 

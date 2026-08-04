@@ -55,6 +55,10 @@ export type StripeSyncResult = {
   // Metadata coverage over paid charges (see counters above).
   matchNamePresent: number;
   cityIdentifierPresent: number;
+  // Backfill boundary diagnostics.
+  earliestDppDate: string | null;
+  earliestCityIdentifierDate: string | null;
+  matchNameByMonth: { month: string; present: number; total: number }[];
 };
 
 // Extract the email the CSV path would write into customer_email.
@@ -214,6 +218,10 @@ export async function syncStripeCharges(
   // resolution depends on. Surfaced so a backfill can be judged before it runs.
   let matchNamePresent = 0;
   let cityIdentifierPresent = 0;
+  // Backfill boundary diagnostics: when paid DPP + city metadata first appear.
+  let earliestDppDate: string | null = null;
+  let earliestCityIdentifierDate: string | null = null;
+  const matchNameByMonth = new Map<string, { present: number; total: number }>();
   const unmatchedEmailSet = new Set<string>();
   const unmatchedCityCodeSet = new Set<string>();
   const perTxn: StripeAllocatedRow[] = [];
@@ -307,6 +315,14 @@ export async function syncStripeCharges(
       }
     }
 
+    if (type === "DPP" && (!earliestDppDate || date < earliestDppDate)) earliestDppDate = date;
+    if (cityIdentifier && (!earliestCityIdentifierDate || date < earliestCityIdentifierDate)) earliestCityIdentifierDate = date;
+    const mk = date.slice(0, 7);
+    const mm = matchNameByMonth.get(mk) ?? { present: 0, total: 0 };
+    mm.total++;
+    if (matchName) mm.present++;
+    matchNameByMonth.set(mk, mm);
+
     let resolvedVenue: string | null = null;
     if (type === "DPP") {
       // Prefer metadata.venue / metadata.venueName (operator override) else
@@ -372,5 +388,8 @@ export async function syncStripeCharges(
     unresolvedVenues: [...unresolvedVenues.values()].sort((a, b) => b.net - a.net),
     matchNamePresent,
     cityIdentifierPresent,
+    earliestDppDate,
+    earliestCityIdentifierDate,
+    matchNameByMonth: [...matchNameByMonth.entries()].map(([month, v]) => ({ month, ...v })).sort((a, b) => a.month.localeCompare(b.month)),
   };
 }

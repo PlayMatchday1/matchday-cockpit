@@ -88,6 +88,23 @@ export async function POST(req: Request) {
     }
   }
 
+  // Read-only dry-run: fetch matches + rosters and return coverage diagnostics
+  // with NO DB write (no fin_sync_log row either). Body flag or ?dryRun=1; the
+  // cron/normal path never sets it, so its behaviour is byte-identical.
+  const body = (await req.json().catch(() => ({}))) as {
+    dryRun?: boolean;
+    fromDate?: string;
+    toDate?: string;
+  };
+  const dryRun = body?.dryRun === true || new URL(req.url).searchParams.get("dryRun") === "1";
+  if (dryRun) {
+    const opts: { dryRun: true; fromDate?: string; toDate?: string } = { dryRun: true };
+    if (body?.fromDate) opts.fromDate = body.fromDate;
+    if (body?.toDate) opts.toDate = body.toDate;
+    const r = await syncMdapiMatches(supabase, opts);
+    return Response.json({ triggeredBy, dryRun: true, durationMs: Date.now() - startedAt, ...r }, { status: 200 });
+  }
+
   const result = await runWithLog(
     "mdapi-matches",
     triggeredBy,
