@@ -401,3 +401,125 @@ export async function syncStripeCharges(
     matchNameByMonth: [...matchNameByMonth.entries()].map(([month, v]) => ({ month, ...v })).sort((a, b) => a.month.localeCompare(b.month)),
   };
 }
+
+// ── Read-only classifier probe ───────────────────────────────────────────────
+// Independent of the write path (never touches fin_revenue or fin_sync_log). It
+// classifies each succeeded USD charge two ways and compares:
+//   current    = the shipped rule (isStrikeCharge → looksLikeMembership → DPP),
+//                which mis-types pre-metadata charges as Membership because
+//                looksLikeMembership returns true when cityIdentifier is absent.
+//   historical = subscription-invoice discriminator: a charge carries
+//                charge.invoice IFF it was billed from a subscription invoice
+//                (membership); a one-off per-match PaymentIntent has none. Strike
+//                still keyed off metadata.type (one-offs, no invoice) — flagged.
+// Present across all history, so it can classify eras with no type/city metadata.
+export type ClassifierProbeResult = {
+  since: string;
+  until: string;
+  fetched: number;
+  succeeded: number;
+  skippedNonPaid: number;
+  skippedNonUsd: number;
+  current: Record<"DPP" | "Membership" | "Strike", number>;
+  historical: Record<"DPP" | "Membership" | "Strike", number>;
+  invoicePresent: number;
+  invoiceByCurrentType: Record<string, { withInvoice: number; without: number }>;
+  agree: number;
+  disagree: number;
+  agreementPct: number;
+  disagreements: {
+    date: string; amount: number; description: string | null;
+    current: string; historical: string; hasInvoice: boolean; stripeType: string | null;
+  }[];
+  matchNamePresent: number;
+  cityIdentifierPresent: number;
+  samples?: {
+    date: string; amount: number; description: string | null;
+    invoice: string | null; priceId: string | null; productId: string | null;
+    paymentMethod: string | null; metadata: Record<string, string>;
+    current: string; historical: string;
+  }[];
+};
+
+export async function stripeClassifierProbe(opts: {
+  since: Date;
+  until: Date;
+  sample?: number;
+}): Promise<ClassifierProbeResult> {
+  const apiKey = process.env.STRIPE_SECRET_KEY;
+  if (!apiKey) throw new Error("STRIPE_SECRET_KEY is not set");
+  const stripe = new Stripe(apiKey);
+  const sinceSec = Math.floor(opts.since.getTime() / 1000);
+  const untilSec = Math.floor(opts.until.getTime() / 1000);
+
+  let fetched = 0, succeeded = 0, skippedNonPaid = 0, skippedNonUsd = 0;
+  let invoicePresent = 0, agree = 0, disagree = 0, matchNamePresent = 0, cityIdentifierPresent = 0;
+  const current: Record<string, number> = { DPP: 0, Membership: 0, Strike: 0 };
+  const historical: Record<string, number> = { DPP: 0, Membership: 0, Strike: 0 };
+  const invoiceByCurrentType: Record<string, { withInvoice: number; without: number }> = {
+    DPP: { withInvoice: 0, without: 0 },
+    Membership: { withInvoice: 0, without: 0 },
+    Strike: { withInvoice: 0, without: 0 },
+  };
+  const disagreements: ClassifierProbeResult["disagreements"] = [];
+
+  for await (const charge of stripe.charges.list({ created: { gte: sinceSec, lte: untilSec }, limit: 100 })) {
+    fetched++;
+    if (charge.status !== "succeeded") { skippedNonPaid++; continue; }
+    if (charge.currency?.toLowerCase() !== "usd") { skippedNonUsd++; continue; }
+    succeeded++;
+    const meta = charge.metadata ?? {};
+    const stripeType = typeof meta.type === "string" && meta.type.trim() ? meta.type.trim() : null;
+    const cityIdentifier = typeof meta.cityIdentifier === "string" && meta.cityIdentifier.trim() ? meta.cityIdentifier.trim() : null;
+    const description = charge.description?.trim() || null;
+    const matchName = typeof meta.matchName === "string" && meta.matchName.trim() ? meta.matchName.trim() : null;
+    const hasInvoice = (charge as unknown as { invoice?: string | Stripe.Invoice | null }).invoice != null;
+    if (hasInvoice) invoicePresent++;
+    if (matchName) matchNamePresent++;
+    if (cityIdentifier) cityIdentifierPresent++;
+
+    const cur = isStrikeCharge(stripeType) ? "Strike" : looksLikeMembership(stripeType, description, cityIdentifier) ? "Membership" : "DPP";
+    const hist = isStrikeCharge(stripeType) ? "Strike" : hasInvoice ? "Membership" : "DPP";
+    current[cur]++; historical[hist]++;
+    invoiceByCurrentType[cur][hasInvoice ? "withInvoice" : "without"]++;
+    if (cur === hist) agree++;
+    else {
+      disagree++;
+      if (disagreements.length < 100) disagreements.push({ date: utcDateFromUnix(charge.created), amount: charge.amount / 100, description, current: cur, historical: hist, hasInvoice, stripeType });
+    }
+  }
+
+  let samples: ClassifierProbeResult["samples"];
+  if (opts.sample && opts.sample > 0) {
+    samples = [];
+    for await (const charge of stripe.charges.list({ created: { gte: sinceSec, lte: untilSec }, limit: 100, expand: ["data.invoice"] })) {
+      if (charge.status !== "succeeded" || charge.currency?.toLowerCase() !== "usd") continue;
+      if (samples.length >= opts.sample) break;
+      const meta = charge.metadata ?? {};
+      const inv = (charge as unknown as { invoice?: string | Stripe.Invoice | null }).invoice ?? null;
+      const invId = typeof inv === "string" ? inv : inv?.id ?? null;
+      let priceId: string | null = null, productId: string | null = null;
+      if (inv && typeof inv === "object") {
+        const line = inv.lines?.data?.[0] as unknown as { price?: { id?: string; product?: string }; plan?: { id?: string; product?: string } } | undefined;
+        priceId = line?.price?.id ?? line?.plan?.id ?? null;
+        productId = (typeof line?.price?.product === "string" ? line.price.product : null) ?? (typeof line?.plan?.product === "string" ? line.plan.product : null);
+      }
+      const stripeType = typeof meta.type === "string" ? meta.type : null;
+      const cityIdentifier = typeof meta.cityIdentifier === "string" ? meta.cityIdentifier : null;
+      const description = charge.description?.trim() || null;
+      const cur = isStrikeCharge(stripeType) ? "Strike" : looksLikeMembership(stripeType, description, cityIdentifier) ? "Membership" : "DPP";
+      const hist = isStrikeCharge(stripeType) ? "Strike" : invId ? "Membership" : "DPP";
+      samples.push({ date: utcDateFromUnix(charge.created), amount: charge.amount / 100, description, invoice: invId, priceId, productId, paymentMethod: charge.payment_method_details?.type ?? null, metadata: { ...meta }, current: cur, historical: hist });
+    }
+  }
+
+  return {
+    since: opts.since.toISOString(), until: opts.until.toISOString(),
+    fetched, succeeded, skippedNonPaid, skippedNonUsd,
+    current: current as ClassifierProbeResult["current"],
+    historical: historical as ClassifierProbeResult["historical"],
+    invoicePresent, invoiceByCurrentType, agree, disagree,
+    agreementPct: agree + disagree ? +((100 * agree) / (agree + disagree)).toFixed(3) : 0,
+    disagreements, matchNamePresent, cityIdentifierPresent, samples,
+  };
+}

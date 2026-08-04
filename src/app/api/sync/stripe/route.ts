@@ -17,7 +17,7 @@
 import { timingSafeEqual } from "node:crypto";
 import { createClient, type SupabaseClient } from "@supabase/supabase-js";
 import { commitStripe } from "@/lib/financeImport";
-import { syncStripeCharges } from "@/lib/stripeSync";
+import { syncStripeCharges, stripeClassifierProbe } from "@/lib/stripeSync";
 
 // Bumped from 60s to 300s on 2026-05-14 after a Jan 1-7 backfill
 // click via the new date-range UI hit Vercel's function-timeout
@@ -37,6 +37,11 @@ type RequestBody = {
   // every existing caller take the exact same commit path as before. The flag
   // is read once, below, and guards ONLY the commitStripe call.
   dryRun?: boolean;
+  // Read-only classifier probe (see below). Never writes — no fin_sync_log row,
+  // no fin_revenue change. Compares the shipped classifier against the
+  // subscription-invoice rule across a window.
+  classifierProbe?: boolean;
+  sample?: number;
 };
 type TriggeredBy = "manual" | "cron";
 
@@ -149,6 +154,21 @@ export async function POST(req: Request) {
     serviceClient = createClient(supabaseUrl, serviceKey, {
       auth: { persistSession: false, autoRefreshToken: false },
     });
+  }
+
+  // --- Read-only classifier probe: branch BEFORE any write (no fin_sync_log
+  // row, no Stripe commit). Query-param or body flag; window from body/query. ---
+  {
+    const url = new URL(req.url);
+    let pb: RequestBody = {};
+    try { pb = (await req.clone().json()) as RequestBody; } catch { /* empty body ok */ }
+    if (pb.classifierProbe === true || url.searchParams.get("classifierProbe") === "1") {
+      const pSince = parseDateParam(pb.since) ?? parseDateParam(url.searchParams.get("since") ?? undefined) ?? new Date("2023-01-01T00:00:00Z");
+      const pUntil = parseDateParam(pb.until) ?? parseDateParam(url.searchParams.get("until") ?? undefined) ?? new Date();
+      const sample = Number(pb.sample ?? url.searchParams.get("sample") ?? 0) || 0;
+      const probe = await stripeClassifierProbe({ since: pSince, until: pUntil, sample });
+      return Response.json({ classifierProbe: true, triggeredBy, ...probe, durationMs: Date.now() - startedAt });
+    }
   }
 
   // --- Insert fin_sync_log row at the start so a crash leaves a trace ---
