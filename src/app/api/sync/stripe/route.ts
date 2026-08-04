@@ -253,6 +253,9 @@ export async function POST(req: Request) {
         latestCharge: sync.latestDate,
         matchNamePresent: sync.matchNamePresent,
         cityIdentifierPresent: sync.cityIdentifierPresent,
+        earliestDppDate: sync.earliestDppDate,
+        earliestCityIdentifierDate: sync.earliestCityIdentifierDate,
+        matchNameByMonth: sync.matchNameByMonth,
         categoryNet: sync.categoryNet
           .map((r) => ({ ...r, net: +r.net.toFixed(2) }))
           .sort((a, b) => Math.abs(b.net) - Math.abs(a.net)),
