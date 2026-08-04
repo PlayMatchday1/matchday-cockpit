@@ -102,7 +102,7 @@ export async function POST(req: Request) {
     if (body?.fromDate) opts.fromDate = body.fromDate;
     if (body?.toDate) opts.toDate = body.toDate;
     const r = await syncMdapiMatches(supabase, opts);
-    return Response.json({ triggeredBy, dryRun: true, durationMs: Date.now() - startedAt, ...r }, { status: 200 });
+    return Response.json({ triggeredBy, ...r, dryRun: true, durationMs: Date.now() - startedAt }, { status: 200 });
   }
 
   const result = await runWithLog(
