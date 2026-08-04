@@ -427,6 +427,17 @@ export type ClassifierProbeResult = {
   agree: number;
   disagree: number;
   agreementPct: number;
+  // Candidate discriminator #2: metadata.matchId / userMatchId presence.
+  matchIdPresent: number;
+  userMatchIdPresent: number;
+  histMatchId: Record<"DPP" | "Membership" | "Strike", number>;
+  agreeMatchId: number;
+  disagreeMatchId: number;
+  agreeMatchIdPct: number;
+  disagreementsMatchId: {
+    date: string; amount: number; description: string | null;
+    current: string; histMatchId: string; hasMatchId: boolean; stripeType: string | null;
+  }[];
   disagreements: {
     date: string; amount: number; description: string | null;
     current: string; historical: string; hasInvoice: boolean; stripeType: string | null;
@@ -457,14 +468,17 @@ export async function stripeClassifierProbe(opts: {
 
   let fetched = 0, succeeded = 0, skippedNonPaid = 0, skippedNonUsd = 0;
   let invoicePresent = 0, agree = 0, disagree = 0, matchNamePresent = 0, cityIdentifierPresent = 0;
+  let matchIdPresent = 0, userMatchIdPresent = 0, agreeMatchId = 0, disagreeMatchId = 0;
   const current: Record<string, number> = { DPP: 0, Membership: 0, Strike: 0 };
   const historical: Record<string, number> = { DPP: 0, Membership: 0, Strike: 0 };
+  const histMatchId: Record<string, number> = { DPP: 0, Membership: 0, Strike: 0 };
   const invoiceByCurrentType: Record<string, { withInvoice: number; without: number }> = {
     DPP: { withInvoice: 0, without: 0 },
     Membership: { withInvoice: 0, without: 0 },
     Strike: { withInvoice: 0, without: 0 },
   };
   const disagreements: ClassifierProbeResult["disagreements"] = [];
+  const disagreementsMatchId: ClassifierProbeResult["disagreementsMatchId"] = [];
   const dppMatchNameCounts = new Map<string, number>();
 
   for await (const charge of stripe.charges.list({ created: { gte: sinceSec, lte: untilSec }, limit: 100 })) {
@@ -478,19 +492,28 @@ export async function stripeClassifierProbe(opts: {
     const description = charge.description?.trim() || null;
     const matchName = typeof meta.matchName === "string" && meta.matchName.trim() ? meta.matchName.trim() : null;
     const hasInvoice = (charge as unknown as { invoice?: string | Stripe.Invoice | null }).invoice != null;
+    const hasMatchId = (typeof meta.matchId === "string" && meta.matchId.trim() !== "") || (typeof meta.userMatchId === "string" && meta.userMatchId.trim() !== "");
     if (hasInvoice) invoicePresent++;
+    if (typeof meta.matchId === "string" && meta.matchId.trim() !== "") matchIdPresent++;
+    if (typeof meta.userMatchId === "string" && meta.userMatchId.trim() !== "") userMatchIdPresent++;
     if (matchName) matchNamePresent++;
     if (cityIdentifier) cityIdentifierPresent++;
 
     const cur = isStrikeCharge(stripeType) ? "Strike" : looksLikeMembership(stripeType, description, cityIdentifier) ? "Membership" : "DPP";
     const hist = isStrikeCharge(stripeType) ? "Strike" : hasInvoice ? "Membership" : "DPP";
-    current[cur]++; historical[hist]++;
+    const hMid = isStrikeCharge(stripeType) ? "Strike" : hasMatchId ? "DPP" : "Membership";
+    current[cur]++; historical[hist]++; histMatchId[hMid]++;
     invoiceByCurrentType[cur][hasInvoice ? "withInvoice" : "without"]++;
-    if (hist === "DPP" && matchName) dppMatchNameCounts.set(matchName, (dppMatchNameCounts.get(matchName) ?? 0) + 1);
+    if (hMid === "DPP" && matchName) dppMatchNameCounts.set(matchName, (dppMatchNameCounts.get(matchName) ?? 0) + 1);
     if (cur === hist) agree++;
     else {
       disagree++;
       if (disagreements.length < 100) disagreements.push({ date: utcDateFromUnix(charge.created), amount: charge.amount / 100, description, current: cur, historical: hist, hasInvoice, stripeType });
+    }
+    if (cur === hMid) agreeMatchId++;
+    else {
+      disagreeMatchId++;
+      if (disagreementsMatchId.length < 100) disagreementsMatchId.push({ date: utcDateFromUnix(charge.created), amount: charge.amount / 100, description, current: cur, histMatchId: hMid, hasMatchId, stripeType });
     }
   }
 
@@ -525,6 +548,11 @@ export async function stripeClassifierProbe(opts: {
     historical: historical as ClassifierProbeResult["historical"],
     invoicePresent, invoiceByCurrentType, agree, disagree,
     agreementPct: agree + disagree ? +((100 * agree) / (agree + disagree)).toFixed(3) : 0,
+    matchIdPresent, userMatchIdPresent,
+    histMatchId: histMatchId as ClassifierProbeResult["histMatchId"],
+    agreeMatchId, disagreeMatchId,
+    agreeMatchIdPct: agreeMatchId + disagreeMatchId ? +((100 * agreeMatchId) / (agreeMatchId + disagreeMatchId)).toFixed(3) : 0,
+    disagreementsMatchId,
     disagreements, matchNamePresent, cityIdentifierPresent,
     dppMatchNames: [...dppMatchNameCounts.entries()].sort((a, b) => b[1] - a[1]).slice(0, 600).map(([name, count]) => ({ name, count })),
     samples,
