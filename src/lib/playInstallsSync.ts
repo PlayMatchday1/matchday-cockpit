@@ -88,6 +88,46 @@ async function listObjects(token: string): Promise<string[]> {
   return names;
 }
 
+// Diagnostic list: the RAW GCS list call with the verbatim HTTP status and error
+// body preserved (unlike gcs(), which collapses 403 into a canned message). Used
+// by the on-demand trigger route to report 403-grant-missing vs 404-bad-path vs
+// success with the actual object names/dates. Never returns key material.
+export async function listInstalls(): Promise<{
+  ok: boolean;
+  status: number;
+  statusText: string;
+  error?: string;
+  objects?: { name: string; updated: string; size: string }[];
+}> {
+  let token: string;
+  try {
+    token = await accessToken();
+  } catch (e) {
+    // Auth failure (bad/empty key, JWT signing) — surface sanitized, no key bytes.
+    return { ok: false, status: 0, statusText: "auth", error: e instanceof Error ? e.message : String(e) };
+  }
+  const objects: { name: string; updated: string; size: string }[] = [];
+  let pageToken = "";
+  do {
+    const q = new URLSearchParams({ prefix: PLAY_PREFIX, maxResults: "1000" });
+    if (pageToken) q.set("pageToken", pageToken);
+    const res = await fetch(`https://storage.googleapis.com/storage/v1/b/${PLAY_BUCKET}/o?${q.toString()}`, {
+      headers: { Authorization: `Bearer ${token}` },
+    });
+    if (!res.ok) {
+      const body = await res.text().catch(() => "");
+      return { ok: false, status: res.status, statusText: res.statusText, error: body.slice(0, 2000) };
+    }
+    const parsed = (await res.json()) as {
+      items?: { name: string; updated: string; size: string }[];
+      nextPageToken?: string;
+    };
+    for (const it of parsed.items ?? []) objects.push({ name: it.name, updated: it.updated, size: it.size });
+    pageToken = parsed.nextPageToken ?? "";
+  } while (pageToken);
+  return { ok: true, status: 200, statusText: "OK", objects };
+}
+
 async function downloadBytes(objectName: string, token: string): Promise<Buffer> {
   const res = await gcs(`o/${encodeURIComponent(objectName)}?alt=media`, token);
   if (!res.ok) throw new Error(`GCS download failed for ${objectName}: ${res.status}`);
