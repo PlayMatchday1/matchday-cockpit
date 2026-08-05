@@ -18,7 +18,7 @@ const POLL_MS = 60_000;
 
 export function useManagerPayAttnCount(): number {
   const { appUser } = useAuth();
-  const enabled = !!appUser?.is_admin || canAccess(appUser ?? null, "cities");
+  const enabled = !!appUser?.is_admin || canAccess(appUser ?? null, "matchops");
   const [count, setCount] = useState(0);
 
   const refetch = useCallback(async () => {

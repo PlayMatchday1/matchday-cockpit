@@ -1,5 +1,5 @@
 // Read-only auth for the Growth analytics API. Same session-bearer pattern as
-// crmAuth, but gates on can_access_cities (the Growth tab's permission) instead
+// crmAuth, but gates on can_access_growth (the Growth tab's permission) instead
 // of chats. Admins pass. Returns a service-role client so the route can read the
 // mdapi_* mirror (SELECT is granted only TO authenticated; player emails would
 // otherwise leak, so the aggregation happens server-side and only compact stats
@@ -44,13 +44,13 @@ export async function authenticateCities(
   });
   const appUser = await sb
     .from("app_users")
-    .select("is_admin, can_access_cities")
+    .select("is_admin, can_access_growth")
     .ilike("email", email)
     .maybeSingle();
   if (appUser.error || !appUser.data) {
     return { ok: false, status: 403, error: "Not a cockpit user" };
   }
-  if (appUser.data.is_admin !== true && appUser.data.can_access_cities !== true) {
+  if (appUser.data.is_admin !== true && appUser.data.can_access_growth !== true) {
     return { ok: false, status: 403, error: "Growth access required" };
   }
   return { ok: true, email, supabase: sb };

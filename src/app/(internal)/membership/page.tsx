@@ -1,8 +1,8 @@
 "use client";
 
 // Membership — its own top-level tab. Moved out of the Growth page's
-// ?tab=membership lens on 2026-08-02 (same component, same data, same gate:
-// can_access_cities, so the move does not widen access). /growth?tab=membership
+// ?tab=membership lens on 2026-08-02 (same component, same data; now gated on
+// the Membership permission, split out of the old Cities gate). /growth?tab=membership
 // permanently redirects here.
 
 import PagePermissionGuard from "@/components/PagePermissionGuard";
@@ -10,7 +10,7 @@ import CitiesMembershipLens from "@/components/CitiesMembershipLens";
 
 export default function MembershipPage() {
   return (
-    <PagePermissionGuard page="cities">
+    <PagePermissionGuard page="membership">
       <div className="mb-6">
         <h1 className="text-3xl font-extrabold tracking-tight text-deep-green">
           Membership

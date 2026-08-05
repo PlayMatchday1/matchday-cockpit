@@ -48,7 +48,7 @@ const PRIMARY_TABS: PrimaryTab[] = [
   {
     label: "Home",
     href: "/home",
-    visible: (u) => canAccess(u, "clubhouse"),
+    visible: (u) => canAccess(u, "home"),
     match: (p) => p.startsWith("/home"),
   },
   {
@@ -60,29 +60,28 @@ const PRIMARY_TABS: PrimaryTab[] = [
   {
     label: "Growth",
     href: "/growth",
-    visible: (u) => canAccess(u, "cities"),
+    visible: (u) => canAccess(u, "growth"),
     match: (p) => p.startsWith("/growth"),
   },
   {
     label: "Membership",
     href: "/membership",
-    visible: (u) => canAccess(u, "cities"),
+    visible: (u) => canAccess(u, "membership"),
     match: (p) => p.startsWith("/membership"),
   },
   {
     label: "Match Ops",
     href: "/match-ops",
     badge: true,
-    // reachable if the user can open Chats OR Field Pipeline (clubhouse) OR any
-    // of the cities-gated items (Master Schedule, Slate Review, Reviews, …)
-    visible: (u) => canAccess(u, "chats") || canAccess(u, "clubhouse") || canAccess(u, "cities"),
+    // reachable if the user can open the Match Ops pages (Master Schedule,
+    // Slate Review, Reviews, Field Ops, …) OR the Chats sub-permission.
+    visible: (u) => canAccess(u, "matchops") || canAccess(u, "chats"),
     match: (p) => p.startsWith("/match-ops"),
   },
   {
     label: "Tech",
     href: "/tech",
-    // Tech Roadmap carried the clubhouse gate on Home
-    visible: (u) => canAccess(u, "clubhouse"),
+    visible: (u) => canAccess(u, "tech"),
     match: (p) => p.startsWith("/tech"),
   },
 ];
@@ -92,13 +91,13 @@ const SECONDARY_TABS: GatedTab[] = [
   {
     href: "/data",
     label: "Data",
-    page: "data",
+    page: "tech",
     match: (p) => p.startsWith("/data"),
   },
   {
     href: "/docs",
     label: "Docs",
-    page: "docs",
+    page: "tech",
     match: (p) => p.startsWith("/docs"),
   },
 ];

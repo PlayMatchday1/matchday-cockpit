@@ -9,23 +9,25 @@ export type AppUser = {
   email: string;
   full_name: string | null;
   is_admin: boolean;
-  can_access_chats: boolean;
-  can_access_clubhouse: boolean;
-  can_access_cities: boolean;
-  can_access_data: boolean;
-  can_access_docs: boolean;
+  can_access_home: boolean;
   can_access_finance: boolean;
+  can_access_growth: boolean;
+  can_access_membership: boolean;
+  can_access_matchops: boolean;
+  can_access_chats: boolean;
+  can_access_tech: boolean;
   created_at: string;
   last_login_at: string | null;
 };
 
 export type PageName =
+  | "home"
+  | "finance"
+  | "growth"
+  | "membership"
+  | "matchops"
   | "chats"
-  | "clubhouse"
-  | "cities"
-  | "data"
-  | "docs"
-  | "finance";
+  | "tech";
 
 export type AuthState = {
   user: SupabaseUser | null;
@@ -101,18 +103,20 @@ export function canAccess(
   if (!appUser) return false;
   if (appUser.is_admin) return true;
   switch (page) {
-    case "chats":
-      return appUser.can_access_chats;
-    case "clubhouse":
-      return appUser.can_access_clubhouse;
-    case "cities":
-      return appUser.can_access_cities;
-    case "data":
-      return appUser.can_access_data;
-    case "docs":
-      return appUser.can_access_docs;
+    case "home":
+      return appUser.can_access_home;
     case "finance":
       return appUser.can_access_finance;
+    case "growth":
+      return appUser.can_access_growth;
+    case "membership":
+      return appUser.can_access_membership;
+    case "matchops":
+      return appUser.can_access_matchops;
+    case "chats":
+      return appUser.can_access_chats;
+    case "tech":
+      return appUser.can_access_tech;
   }
 }
 
@@ -120,23 +124,25 @@ export function hasAnyAccess(appUser: AppUser | null): boolean {
   if (!appUser) return false;
   return (
     appUser.is_admin ||
+    appUser.can_access_home ||
+    appUser.can_access_growth ||
+    appUser.can_access_membership ||
+    appUser.can_access_matchops ||
+    appUser.can_access_tech ||
     appUser.can_access_chats ||
-    appUser.can_access_clubhouse ||
-    appUser.can_access_cities ||
-    appUser.can_access_data ||
-    appUser.can_access_docs ||
     appUser.can_access_finance
   );
 }
 
 export function firstAllowedPath(appUser: AppUser | null): string {
   if (!appUser) return "/login";
-  if (appUser.is_admin || appUser.can_access_clubhouse) return "/home";
-  if (appUser.can_access_cities) return "/growth";
-  if (appUser.can_access_data) return "/data";
-  if (appUser.can_access_docs) return "/docs";
+  if (appUser.is_admin || appUser.can_access_home) return "/home";
+  if (appUser.can_access_growth) return "/growth";
+  if (appUser.can_access_membership) return "/membership";
+  if (appUser.can_access_matchops) return "/match-ops";
   if (appUser.can_access_finance) return "/admin/finance";
-  if (appUser.can_access_chats) return "/match-ops/chats";
+  if (appUser.can_access_tech) return "/tech";
+  if (appUser.can_access_chats) return "/match-ops/player-chats";
   return "/no-access";
 }
 

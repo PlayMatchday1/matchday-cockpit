@@ -15,7 +15,7 @@ export default function DataPage() {
   const showFinanceSections = canAccess(appUser, "finance");
 
   return (
-    <PagePermissionGuard page="data">
+    <PagePermissionGuard page="tech">
       <PageHeader
         title="Data"
         subtitle="Upload CSVs and run on-demand syncs."

@@ -12,7 +12,7 @@ export const metadata: Metadata = { title: "Reviews" };
 
 export default function ReviewsPage() {
   return (
-    <PagePermissionGuard page="cities">
+    <PagePermissionGuard page="matchops">
       <ReviewsClient />
     </PagePermissionGuard>
   );

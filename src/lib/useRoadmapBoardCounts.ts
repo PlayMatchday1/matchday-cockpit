@@ -14,7 +14,7 @@ export type RoadmapBoardCounts = { app: number; clubhouse: number };
 
 export function useRoadmapBoardCounts(): RoadmapBoardCounts {
   const { appUser } = useAuth();
-  const enabled = canAccess(appUser ?? null, "clubhouse");
+  const enabled = canAccess(appUser ?? null, "tech");
   const [counts, setCounts] = useState<RoadmapBoardCounts>({ app: 0, clubhouse: 0 });
 
   const refetch = useCallback(async () => {

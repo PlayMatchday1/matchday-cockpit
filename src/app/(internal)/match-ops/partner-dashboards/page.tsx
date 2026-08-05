@@ -12,7 +12,7 @@ export const dynamic = "force-dynamic";
 
 export default function PartnerDashboardsPage() {
   return (
-    <PagePermissionGuard page="clubhouse">
+    <PagePermissionGuard page="tech">
       <PartnerDashboardsIndex />
     </PagePermissionGuard>
   );

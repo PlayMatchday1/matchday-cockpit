@@ -11,7 +11,7 @@ import { canAccess, useAuth } from "@/lib/useAuth";
 
 export function usePartnerDashboardsCount(): number {
   const { appUser } = useAuth();
-  const enabled = canAccess(appUser ?? null, "clubhouse");
+  const enabled = canAccess(appUser ?? null, "tech");
   const [count, setCount] = useState(0);
 
   const refetch = useCallback(async () => {

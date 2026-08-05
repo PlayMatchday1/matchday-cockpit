@@ -10,7 +10,7 @@ import GrowthDashboard from "@/components/growth/GrowthDashboard";
 // /api/growth call. Access is still gated on the "cities" permission.
 export default function GrowthPage() {
   return (
-    <PagePermissionGuard page="cities">
+    <PagePermissionGuard page="growth">
       <GrowthDashboard />
     </PagePermissionGuard>
   );

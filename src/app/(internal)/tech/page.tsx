@@ -13,7 +13,7 @@ export default function TechIndex() {
 
   useEffect(() => {
     if (isLoading || !appUser) return;
-    if (canAccess(appUser, "clubhouse")) router.replace("/tech/tech-roadmap");
+    if (canAccess(appUser, "tech")) router.replace("/tech/tech-roadmap");
     else router.replace(firstAllowedPath(appUser));
   }, [appUser, isLoading, router]);
 

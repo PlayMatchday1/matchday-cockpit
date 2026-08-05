@@ -52,7 +52,7 @@ export default function PdSchedulePanel() {
       const { data } = await supabase.from("app_users").select("*");
       if (cancelled) return;
       const list = ((data ?? []) as AppUser[])
-        .filter((u) => canAccess(u, "clubhouse"))
+        .filter((u) => canAccess(u, "home"))
         .sort((a, b) =>
           (a.full_name ?? a.email).localeCompare(b.full_name ?? b.email),
         );

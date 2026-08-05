@@ -9,21 +9,27 @@ import InlineEdit from "./InlineEdit";
 
 type PermissionKey =
   | "is_admin"
+  | "can_access_home"
+  | "can_access_finance"
+  | "can_access_growth"
+  | "can_access_membership"
+  | "can_access_matchops"
   | "can_access_chats"
-  | "can_access_clubhouse"
-  | "can_access_cities"
-  | "can_access_data"
-  | "can_access_docs"
-  | "can_access_finance";
+  | "can_access_tech";
 
-const PERMISSION_COLUMNS: { key: PermissionKey; label: string }[] = [
+const PERMISSION_COLUMNS: { key: PermissionKey; label: string; hint?: string }[] = [
   { key: "is_admin", label: "Admin" },
-  { key: "can_access_chats", label: "Chats" },
-  { key: "can_access_clubhouse", label: "Clubhouse" },
-  { key: "can_access_cities", label: "Cities" },
-  { key: "can_access_data", label: "Data" },
-  { key: "can_access_docs", label: "Docs" },
+  { key: "can_access_home", label: "Home" },
   { key: "can_access_finance", label: "Finance" },
+  { key: "can_access_growth", label: "Growth" },
+  { key: "can_access_membership", label: "Membership" },
+  { key: "can_access_matchops", label: "Match Ops" },
+  {
+    key: "can_access_chats",
+    label: "Chats",
+    hint: "Customer conversations · within Match Ops",
+  },
+  { key: "can_access_tech", label: "Tech" },
 ];
 
 function lastLoginText(iso: string | null): string {
@@ -174,7 +180,11 @@ export default function AdminUsersView() {
                 <th className="px-4 py-3 text-left">Name</th>
                 <th className="px-3 py-3 text-left">Email</th>
                 {PERMISSION_COLUMNS.map((c) => (
-                  <th key={c.key} className="px-2 py-3 text-center">
+                  <th
+                    key={c.key}
+                    className="px-2 py-3 text-center"
+                    title={c.hint}
+                  >
                     {c.label}
                   </th>
                 ))}

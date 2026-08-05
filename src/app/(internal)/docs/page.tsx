@@ -4,7 +4,7 @@ import PagePermissionGuard from "@/components/PagePermissionGuard";
 
 export default function DocsPage() {
   return (
-    <PagePermissionGuard page="docs">
+    <PagePermissionGuard page="tech">
       <PageHeader
         title="Docs"
         subtitle="Quick links to Google Drive resources."

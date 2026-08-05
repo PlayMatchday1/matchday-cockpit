@@ -4,7 +4,7 @@
 //   "cell"    { config, r, c }      → the distinct players inside one cell
 //   "tableCsv"{ config }            → the pivot table as CSV
 //   "cellCsv" { config, r, c }      → the cell's players as CSV
-// Gated on can_access_cities. Reads only; the fact table is derived from the views.
+// Gated on can_access_growth. Reads only; the fact table is derived from the views.
 import { authenticateCities } from "@/lib/growthAuth";
 import { getFacts, pivot, cellPlayers, measure, type PivotConfig } from "@/lib/dataRoom";
 

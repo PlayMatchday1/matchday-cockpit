@@ -61,12 +61,13 @@ async function isProvisioningOwner(req: Request): Promise<boolean> {
 
 type PermissionFlags = {
   is_admin?: boolean;
-  can_access_chats?: boolean;
-  can_access_clubhouse?: boolean;
-  can_access_cities?: boolean;
-  can_access_data?: boolean;
-  can_access_docs?: boolean;
+  can_access_home?: boolean;
   can_access_finance?: boolean;
+  can_access_growth?: boolean;
+  can_access_membership?: boolean;
+  can_access_matchops?: boolean;
+  can_access_chats?: boolean;
+  can_access_tech?: boolean;
 };
 
 // Whitelist of accepted permission keys. Any other key in
@@ -74,12 +75,13 @@ type PermissionFlags = {
 // the modal ever drifts or a request is hand-crafted.
 const PERMISSION_KEYS: (keyof PermissionFlags)[] = [
   "is_admin",
-  "can_access_chats",
-  "can_access_clubhouse",
-  "can_access_cities",
-  "can_access_data",
-  "can_access_docs",
+  "can_access_home",
   "can_access_finance",
+  "can_access_growth",
+  "can_access_membership",
+  "can_access_matchops",
+  "can_access_chats",
+  "can_access_tech",
 ];
 
 function pickPermissions(input: unknown): PermissionFlags {

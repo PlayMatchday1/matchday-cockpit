@@ -67,13 +67,14 @@ const row = {
   email: EMAIL,
   full_name: "Clubhouse E2E (read-only)",
   is_admin: false,
-  can_access_clubhouse: true,
-  can_access_cities: true,
-  can_access_org: true,
-  can_access_data: true,
-  can_access_docs: true,
+  can_access_home: true,
   can_access_finance: true,
+  can_access_growth: true,
+  can_access_membership: true,
+  can_access_matchops: true,
   can_access_chats: true,
+  can_access_tech: true,
+  can_access_org: true,
 };
 const up = await sb.from("app_users").upsert(row, { onConflict: "email" }).select("id").maybeSingle();
 if (up.error) throw up.error;

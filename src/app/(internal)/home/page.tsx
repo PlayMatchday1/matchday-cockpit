@@ -14,7 +14,7 @@ import { resolveQuarterFromUrl, type QuarterInfo } from "@/lib/quarters";
 
 export default function HomePage() {
   return (
-    <PagePermissionGuard page="clubhouse">
+    <PagePermissionGuard page="home">
       <Suspense fallback={null}>
         <HomeContent />
       </Suspense>

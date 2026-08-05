@@ -57,7 +57,7 @@ const MOBILE_PRIMARY: MobilePrimary[] = [
     href: "/home",
     label: "Home",
     icon: LayoutGrid,
-    visible: (u) => canAccess(u, "clubhouse"),
+    visible: (u) => canAccess(u, "home"),
     isActive: (p) => p.startsWith("/home"),
   },
   {
@@ -73,7 +73,7 @@ const MOBILE_PRIMARY: MobilePrimary[] = [
     href: "/growth",
     label: "Growth",
     icon: MapPin,
-    visible: (u) => canAccess(u, "cities"),
+    visible: (u) => canAccess(u, "growth"),
     isActive: (p) => p.startsWith("/growth"),
   },
   {
@@ -82,7 +82,7 @@ const MOBILE_PRIMARY: MobilePrimary[] = [
     label: "Match Ops",
     icon: MessageCircle,
     badge: true,
-    visible: (u) => canAccess(u, "chats") || canAccess(u, "clubhouse"),
+    visible: (u) => canAccess(u, "matchops") || canAccess(u, "chats"),
     isActive: (p) => p.startsWith("/match-ops"),
   },
   {
@@ -90,7 +90,7 @@ const MOBILE_PRIMARY: MobilePrimary[] = [
     href: "/tech",
     label: "Tech",
     icon: Wrench,
-    visible: (u) => canAccess(u, "clubhouse"),
+    visible: (u) => canAccess(u, "tech"),
     isActive: (p) => p.startsWith("/tech"),
   },
 ];
@@ -170,13 +170,13 @@ export default function MobileBottomNav({
       href: "/data",
       label: "Data",
       icon: Database,
-      visible: canAccess(appUser, "data"),
+      visible: canAccess(appUser, "tech"),
     },
     {
       href: "/docs",
       label: "Docs",
       icon: FileText,
-      visible: canAccess(appUser, "docs"),
+      visible: canAccess(appUser, "tech"),
     },
     { href: "/admin", label: "Admin", icon: Shield, visible: isAdmin },
   ];

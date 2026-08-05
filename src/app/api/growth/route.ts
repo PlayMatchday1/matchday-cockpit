@@ -7,7 +7,7 @@
 // The churn card reads /api/growth/churn (paginated); the retention curve + cohort
 // table read /api/growth/retention (the cohort matrix). players[] is empty here.
 //
-// Gated on can_access_cities via authenticateCities.
+// Gated on can_access_growth via authenticateCities.
 
 import { authenticateCities } from "@/lib/growthAuth";
 import { readGrowthFromViews } from "@/lib/growthFromViews";

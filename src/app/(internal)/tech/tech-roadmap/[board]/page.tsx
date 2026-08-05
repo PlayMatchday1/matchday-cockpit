@@ -16,7 +16,7 @@ export default async function TechRoadmapBoardPage({
   if (board !== "app" && board !== "clubhouse") redirect("/tech/tech-roadmap/app");
 
   return (
-    <PagePermissionGuard page="clubhouse">
+    <PagePermissionGuard page="tech">
       <RoadmapView board={board as RoadmapBoard} />
     </PagePermissionGuard>
   );

@@ -12,7 +12,7 @@ export default async function CityDetailPage({
   const city = cityFromSlug(slug);
   if (!city) notFound();
   return (
-    <PagePermissionGuard page="cities">
+    <PagePermissionGuard page="growth">
       <CityDetailView city={city} />
     </PagePermissionGuard>
   );

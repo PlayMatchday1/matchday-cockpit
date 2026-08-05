@@ -5,32 +5,35 @@ import { supabase } from "@/lib/supabase";
 
 type PermissionFlags = {
   is_admin: boolean;
-  can_access_chats: boolean;
-  can_access_clubhouse: boolean;
-  can_access_cities: boolean;
-  can_access_data: boolean;
-  can_access_docs: boolean;
+  can_access_home: boolean;
   can_access_finance: boolean;
+  can_access_growth: boolean;
+  can_access_membership: boolean;
+  can_access_matchops: boolean;
+  can_access_chats: boolean;
+  can_access_tech: boolean;
 };
 
 const INITIAL_PERMISSIONS: PermissionFlags = {
   is_admin: false,
-  can_access_chats: false,
-  can_access_clubhouse: true,
-  can_access_cities: false,
-  can_access_data: false,
-  can_access_docs: false,
+  can_access_home: true,
   can_access_finance: false,
+  can_access_growth: false,
+  can_access_membership: false,
+  can_access_matchops: false,
+  can_access_chats: false,
+  can_access_tech: false,
 };
 
 const PERMISSION_LABELS: { key: keyof PermissionFlags; label: string }[] = [
   { key: "is_admin", label: "Admin (full access + manage users)" },
-  { key: "can_access_chats", label: "Chats" },
-  { key: "can_access_clubhouse", label: "Clubhouse" },
-  { key: "can_access_cities", label: "Cities" },
-  { key: "can_access_data", label: "Data" },
-  { key: "can_access_docs", label: "Docs" },
+  { key: "can_access_home", label: "Home" },
   { key: "can_access_finance", label: "Finance" },
+  { key: "can_access_growth", label: "Growth" },
+  { key: "can_access_membership", label: "Membership" },
+  { key: "can_access_matchops", label: "Match Ops" },
+  { key: "can_access_chats", label: "Chats (customer conversations · within Match Ops)" },
+  { key: "can_access_tech", label: "Tech" },
 ];
 
 export default function AddUserModal({
