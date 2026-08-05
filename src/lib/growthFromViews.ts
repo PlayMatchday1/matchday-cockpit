@@ -76,11 +76,13 @@ export type ViewInput = {
   subscriptions: RawSubscription[];
   revenue: RawRevenue[];
   downloadsMonth: DownloadMonthRow[];
+  iosDownloadsMonth?: DownloadMonthRow[];
   now: string;
   rowCounts: GrowthData["rowCounts"];
-  // Play-ingest health, computed by the async loader (env + fin_sync_log) and
-  // passed through. Optional so pure callers/tests can omit it (→ not_configured).
+  // Per-platform ingest health, computed by the async loader (env + fin_sync_log)
+  // and passed through. Optional so pure callers/tests can omit (→ not_configured).
   playSync?: GrowthData["playSync"];
+  appleSync?: GrowthData["appleSync"];
 };
 
 const fieldOf = (title: string | null, id: number | null): string =>
@@ -421,28 +423,36 @@ export function computeGrowthFromViews(input: ViewInput): GrowthData {
   // ── downloads (android monthly rollup) ──────────────────────────────────────
   const androidByMonth = [...downloadsMonth].sort((a, b) => (a.month < b.month ? -1 : 1)).map((d) => ({ m: d.month, count: Number(d.count) }));
   const androidTotal = androidByMonth.reduce((s, d) => s + d.count, 0);
+  const iosByMonth = [...(input.iosDownloadsMonth ?? [])].sort((a, b) => (a.month < b.month ? -1 : 1)).map((d) => ({ m: d.month, count: Number(d.count) }));
+  const iosTotal = iosByMonth.reduce((s, d) => s + d.count, 0);
   const downloads: GrowthData["downloads"] = {
     androidByMonth,
     // earliest/latest are month keys here (the daily grain isn't fetched); null
-    // until the Play ingest lands rows, exactly like computeGrowth with no daily.
+    // until the ingest lands rows, exactly like computeGrowth with no daily.
     android: androidByMonth.length ? { earliest: androidByMonth[0].m, latest: androidByMonth[androidByMonth.length - 1].m, total: androidTotal } : null,
-    ios: null,
+    iosByMonth,
+    ios: iosByMonth.length ? { earliest: iosByMonth[0].m, latest: iosByMonth[iosByMonth.length - 1].m, total: iosTotal } : null,
   };
 
-  // Finalize Play-ingest health: any download rows = healthy ("synced"); otherwise
-  // keep the loader-supplied no-data state (not_configured / never_run / failed /
-  // no_data). Mirrors computeGrowth's resolution so both paths agree.
+  // Finalize per-platform ingest health: any rows for a platform = "synced";
+  // otherwise keep the loader-supplied no-data state. Mirrors computeGrowth.
   const playSyncBase: GrowthData["playSync"] =
     input.playSync ?? { state: "not_configured", lastRunAt: null, error: null, lastSyncedDate: null };
   const playSync: GrowthData["playSync"] = androidByMonth.length
     ? { ...playSyncBase, state: "synced", lastSyncedDate: androidByMonth[androidByMonth.length - 1].m }
     : { ...playSyncBase, lastSyncedDate: null };
+  const appleSyncBase: GrowthData["appleSync"] =
+    input.appleSync ?? { state: "not_configured", lastRunAt: null, error: null, lastSyncedDate: null };
+  const appleSync: GrowthData["appleSync"] = iosByMonth.length
+    ? { ...appleSyncBase, state: "synced", lastSyncedDate: iosByMonth[iosByMonth.length - 1].m }
+    : { ...appleSyncBase, lastSyncedDate: null };
 
   return {
     generatedAt: now,
     rowCounts: input.rowCounts,
     downloads,
     playSync,
+    appleSync,
     floors: { registrations: "2023-03", memberships: "2024-02", play: playFloor, revenue: revMonths[0] ?? "2026-01" },
     playMonths,
     kpis: {
@@ -754,10 +764,19 @@ export async function readGrowthFromViews(
     selectAll<DownloadMonthRow>(sb, "growth_downloads_month", "month, count", "month"),
     readRowCounts(sb),
   ]);
-  const playSync = await readPlaySyncStatus(sb);
+  // iOS view (0105) — defensive: if it doesn't exist yet (pre-migration) the read
+  // errors and we treat iOS as having no rows, so nothing breaks.
+  let iosDownloadsMonth: DownloadMonthRow[] = [];
+  try {
+    const { data } = await sb.from("growth_downloads_month_ios").select("month, count").order("month");
+    iosDownloadsMonth = (data ?? []) as DownloadMonthRow[];
+  } catch {
+    iosDownloadsMonth = [];
+  }
+  const [playSync, appleSync] = await Promise.all([readPlaySyncStatus(sb), readAppleSyncStatus(sb)]);
   if (timing) timing.fetchMs = Date.now() - tFetch;
   const tCompute = Date.now();
-  const out = computeGrowthFromViews({ profiles, playDims, registrations, subscriptions, revenue, downloadsMonth, playSync, now, rowCounts });
+  const out = computeGrowthFromViews({ profiles, playDims, registrations, subscriptions, revenue, downloadsMonth, iosDownloadsMonth, playSync, appleSync, now, rowCounts });
   out.arppCard = computeArppCard(profiles, subscriptions, revenue, now);
   if (timing) timing.computeMs = Date.now() - tCompute;
   return out;
@@ -778,6 +797,30 @@ async function readPlaySyncStatus(sb: SupabaseClient): Promise<GrowthData["playS
     .from("fin_sync_log")
     .select("started_at, error_message")
     .eq("source", "play-installs")
+    .order("started_at", { ascending: false })
+    .limit(1);
+  const run = data?.[0] as { started_at: string; error_message: string | null } | undefined;
+  if (!run) return { state: "never_run", lastRunAt: null, error: null, lastSyncedDate: null };
+  if (run.error_message) return { state: "failed", lastRunAt: run.started_at, error: run.error_message, lastSyncedDate: null };
+  return { state: "no_data", lastRunAt: run.started_at, error: null, lastSyncedDate: null };
+}
+
+// Apple ingest health — same states as Play, keyed on the four APP_STORE_CONNECT_*
+// vars (all must be present) + the latest 'app-store-installs' fin_sync_log row.
+// None of the credential VALUES are read here beyond a presence/blank check.
+async function readAppleSyncStatus(sb: SupabaseClient): Promise<GrowthData["appleSync"]> {
+  const need = [
+    process.env.APP_STORE_CONNECT_ISSUER_ID,
+    process.env.APP_STORE_CONNECT_KEY_ID,
+    process.env.APP_STORE_CONNECT_P8_B64,
+    process.env.APP_STORE_CONNECT_VENDOR_NUMBER,
+  ];
+  const configured = need.every((v) => !!(v && v.trim().length > 0));
+  if (!configured) return { state: "not_configured", lastRunAt: null, error: null, lastSyncedDate: null };
+  const { data } = await sb
+    .from("fin_sync_log")
+    .select("started_at, error_message")
+    .eq("source", "app-store-installs")
     .order("started_at", { ascending: false })
     .limit(1);
   const run = data?.[0] as { started_at: string; error_message: string | null } | undefined;

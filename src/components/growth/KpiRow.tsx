@@ -41,14 +41,34 @@ export default function KpiRow({ data, period }: { data: GrowthData; period: Per
   const ps = data.playSync;
   const fmtInstant = (iso: string) =>
     new Date(iso).toLocaleString("en-US", { month: "short", day: "numeric", year: "numeric", hour: "numeric", minute: "2-digit" });
-  const playStatus =
-    ps.state === "not_configured"
-      ? "Play sync not configured — Play key missing"
-      : ps.state === "never_run"
-        ? "Play sync configured · not yet run"
-        : ps.state === "failed"
-          ? `Last ran ${ps.lastRunAt ? fmtInstant(ps.lastRunAt) : "?"} · failed: ${ps.error ?? "unknown error"}`
-          : `Last ran ${ps.lastRunAt ? fmtInstant(ps.lastRunAt) : "?"} · returned no data`;
+  const statusLabel = (s: typeof ps, store: string) =>
+    s.state === "not_configured"
+      ? `${store} not configured — credentials missing`
+      : s.state === "never_run"
+        ? `${store} configured · not yet run`
+        : s.state === "failed"
+          ? `Last ran ${s.lastRunAt ? fmtInstant(s.lastRunAt) : "?"} · failed: ${s.error ?? "unknown error"}`
+          : `Last ran ${s.lastRunAt ? fmtInstant(s.lastRunAt) : "?"} · returned no data`;
+  const playStatus = statusLabel(ps, "Play sync");
+
+  // iOS App Units summed over the period — a SEPARATE metric from Android, never
+  // folded into one series. (Apple "App Units" = new downloads; Google "Daily User
+  // Installs" = user-deduped installs. The combined figure below is shown only as a
+  // convenience and the card says the two are counted differently.)
+  const as = data.appleSync;
+  const appleStatus = statusLabel(as, "App Store sync");
+  const ios = useMemo(() => {
+    const months = data.downloads.iosByMonth.filter((d) => d.m >= period.start && d.m <= period.end);
+    return { has: data.downloads.ios != null && months.length > 0, total: months.reduce((a, d) => a + d.count, 0) };
+  }, [data.downloads, period]);
+  const iosRange = data.downloads.ios
+    ? `${monthLabel(data.downloads.ios.earliest.slice(0, 7))} – ${monthLabel(data.downloads.ios.latest.slice(0, 7))}`
+    : null;
+  // Combined total across whichever platforms have data — explicitly labelled as a
+  // mixed-definition sum, never presented as a single clean install count.
+  const combinedHas = android.has || ios.has;
+  const combinedTotal = (android.has ? android.total : 0) + (ios.has ? ios.total : 0);
+  const bothHave = android.has && ios.has;
 
   const k = data.kpis;
   const regOfPlayed1 = scoped.registrations ? scoped.played1 / scoped.registrations : 0;
@@ -59,21 +79,42 @@ export default function KpiRow({ data, period }: { data: GrowthData; period: Per
   return (
     <div className={styles.kpiRow}>
       <div className={`${styles.kpi} ${styles.kpiAccent}`}>
-        <div className={styles.kpiLabel}>App downloads · Android</div>
-        <div className={`${styles.kpiValue} ${android.has ? "" : styles.kpiValueMuted}`}>
-          {android.has ? fmtInt(android.total) : "—"}
+        <div className={styles.kpiLabel}>App downloads · iOS + Android</div>
+        <div className={`${styles.kpiValue} ${combinedHas ? "" : styles.kpiValueMuted}`}>
+          {combinedHas ? fmtInt(combinedTotal) : "—"}
         </div>
         <div className={styles.kpiFoot}>
-          {androidRange ? (
-            `Play installs · ${androidRange}`
-          ) : (
-            <span className={styles.notConnected} title={ps.error ?? undefined}>
-              <span className={styles.notConnectedDot} /> {playStatus}
-            </span>
-          )}
+          {/* State exactly what the total includes. The two stores count differently
+              (Apple App Units vs Google user-installs), so the sum is approximate. */}
+          {bothHave
+            ? `iOS App Units + Android user-installs · ${rangeLabel} — counted differently, not like-for-like`
+            : android.has
+              ? `Android only · ${rangeLabel} — iOS pending`
+              : ios.has
+                ? `iOS only · ${rangeLabel} — Android pending`
+                : "iOS + Android — no store data yet"}
         </div>
         <div className={styles.kpiSecondary}>
-          iOS — · Apple not connected (App Store Connect key pending)
+          <div>
+            <b>iOS</b> {ios.has ? fmtInt(ios.total) : "—"}
+            {ios.has ? ` · App Store Units${iosRange ? ` · ${iosRange}` : ""}` : ""}
+            {!ios.has && (
+              <span className={styles.notConnected} title={as.error ?? undefined}>
+                {" "}
+                <span className={styles.notConnectedDot} /> {appleStatus}
+              </span>
+            )}
+          </div>
+          <div>
+            <b>Android</b> {android.has ? fmtInt(android.total) : "—"}
+            {android.has ? ` · Play user-installs${androidRange ? ` · ${androidRange}` : ""}` : ""}
+            {!android.has && (
+              <span className={styles.notConnected} title={ps.error ?? undefined}>
+                {" "}
+                <span className={styles.notConnectedDot} /> {playStatus}
+              </span>
+            )}
+          </div>
         </div>
       </div>
 

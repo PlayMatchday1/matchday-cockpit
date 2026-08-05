@@ -22,6 +22,7 @@ type Source =
   | "mdapi-users-lens-snapshot"
   | "membership-snapshots"
   | "play-installs"
+  | "app-store-installs"
   | "firstmatch-ledger"
   | "manager-pay-recompute"
   | "membership-prices"

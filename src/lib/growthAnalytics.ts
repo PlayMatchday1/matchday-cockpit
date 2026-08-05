@@ -171,6 +171,12 @@ export type PlaySyncStatus = {
   lastSyncedDate: string | null; // freshest app_downloads period_date (YYYY-MM-DD)
 };
 
+// Apple App Store ingest health — same shape/semantics as PlaySyncStatus, derived
+// from the runtime APP_STORE_CONNECT_* presence + latest 'app-store-installs'
+// fin_sync_log row + freshest ios app_downloads date.
+export type AppleSyncStatus = PlaySyncStatus;
+export type RawIosInstall = { period_date: string; count: number };
+
 export type RawInput = {
   matches: RawMatch[];
   players: RawPlayer[];
@@ -180,10 +186,15 @@ export type RawInput = {
   // Android daily user-installs from app_downloads (empty until the Play ingest
   // runs; absent entirely if the table doesn't exist yet). iOS is not wired.
   androidDaily?: RawAndroidInstall[];
+  // iOS daily App Store units (empty until the Apple ingest runs). Kept separate
+  // from android — the two metrics are defined differently and are never summed
+  // into one series.
+  iosDaily?: RawIosInstall[];
   // Play-ingest health, computed server-side (impure: reads env + fin_sync_log)
   // and passed through to the output unchanged. Optional so pure-fn tests can omit
   // it; absent → treated as not_configured with no run history.
   playSync?: PlaySyncStatus;
+  appleSync?: AppleSyncStatus;
   // ISO instant the read ran (server "now"); churn "days inactive" is measured
   // from this. Passed in (never Date.now() inside the pure fn) so the engine
   // stays deterministic and testable.
@@ -297,18 +308,20 @@ export type GrowthData = {
     played1: number;
     played5: number;
   };
-  // App-store installs. android reaches back further (2023) than play-derived
-  // data (2026); ios is null until Apple lands (rendered as a dash, never 0).
+  // App-store installs, per platform and NEVER summed into one series (Apple
+  // "App Units" and Google "Daily User Installs" are defined differently). Each
+  // platform is null until its ingest lands rows (rendered as a dash, never 0).
   downloads: {
     androidByMonth: { m: string; count: number }[];
     android: { earliest: string; latest: string; total: number } | null;
-    ios: null;
+    iosByMonth: { m: string; count: number }[];
+    ios: { earliest: string; latest: string; total: number } | null;
   };
-  // Android Play-ingest health, so the KPI can distinguish "never configured"
-  // from "ran and failed" from "ran, no data" from "synced <date>" instead of a
-  // single static "awaiting Play sync". Computed server-side (env + fin_sync_log)
-  // and passed through — see PlaySyncStatus.
+  // Per-platform ingest health, so the KPI can distinguish "never configured"
+  // from "ran and failed" from "ran, no data" from "synced <date>" for each store.
+  // Computed server-side (env + fin_sync_log) and passed through.
   playSync: PlaySyncStatus;
+  appleSync: AppleSyncStatus;
   registrationsByMonth: { m: string; count: number }[]; // completed, non-fake, by signup month, 2023+
   // Nested cohort funnel by signup month (additive across months). downloads is
   // not here — it has no per-person source.
@@ -924,27 +937,46 @@ export function computeGrowth(input: RawInput): GrowthData {
     if (!androidEarliest || d.period_date < androidEarliest) androidEarliest = d.period_date;
     if (!androidLatest || d.period_date > androidLatest) androidLatest = d.period_date;
   }
+  // ── downloads (iOS app units) — same reduction, separate series ─────────────
+  const iosDaily = input.iosDaily ?? [];
+  const iosMonthMap = new Map<string, number>();
+  let iosEarliest = "";
+  let iosLatest = "";
+  let iosTotal = 0;
+  for (const d of iosDaily) {
+    const m = monthKey(d.period_date);
+    iosMonthMap.set(m, (iosMonthMap.get(m) ?? 0) + d.count);
+    iosTotal += d.count;
+    if (!iosEarliest || d.period_date < iosEarliest) iosEarliest = d.period_date;
+    if (!iosLatest || d.period_date > iosLatest) iosLatest = d.period_date;
+  }
   const downloads: GrowthData["downloads"] = {
     androidByMonth: [...androidMonthMap.entries()].sort().map(([m, count]) => ({ m, count })),
     android: androidDaily.length ? { earliest: androidEarliest, latest: androidLatest, total: androidTotal } : null,
-    ios: null,
+    iosByMonth: [...iosMonthMap.entries()].sort().map(([m, count]) => ({ m, count })),
+    ios: iosDaily.length ? { earliest: iosEarliest, latest: iosLatest, total: iosTotal } : null,
   };
 
-  // Finalize Play-ingest health. The server (growthCache) determines the no-data
-  // states — not_configured / never_run / failed / no_data — from env + the latest
-  // fin_sync_log row. Presence of any app_downloads rows is the ground truth for a
-  // healthy sync, so it wins here regardless of what the last run row said.
+  // Finalize per-platform ingest health. The server determines the no-data states
+  // (not_configured / never_run / failed / no_data) from env + the latest
+  // fin_sync_log row; presence of rows is the ground truth for "synced".
   const playSyncBase: PlaySyncStatus =
     input.playSync ?? { state: "not_configured", lastRunAt: null, error: null, lastSyncedDate: null };
   const playSync: PlaySyncStatus = androidDaily.length
     ? { ...playSyncBase, state: "synced", lastSyncedDate: androidLatest }
     : { ...playSyncBase, lastSyncedDate: null };
+  const appleSyncBase: AppleSyncStatus =
+    input.appleSync ?? { state: "not_configured", lastRunAt: null, error: null, lastSyncedDate: null };
+  const appleSync: AppleSyncStatus = iosDaily.length
+    ? { ...appleSyncBase, state: "synced", lastSyncedDate: iosLatest }
+    : { ...appleSyncBase, lastSyncedDate: null };
 
   return {
     generatedAt: now,
     rowCounts: input.rowCounts,
     downloads,
     playSync,
+    appleSync,
     floors: {
       registrations: "2023-03",
       memberships: "2024-02",

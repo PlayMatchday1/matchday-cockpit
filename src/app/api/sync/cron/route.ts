@@ -51,6 +51,7 @@ import { refreshMembershipPriceSnapshots } from "@/lib/membershipPriceSnapshots"
 import { recomputeManagerPayIntoFinExpenses } from "@/lib/managerPayCompute";
 import { ingestTelnyxSms } from "@/lib/telnyxSmsIngest";
 import { listInstalls, ingestAllMonths, PlayGrantPendingError } from "@/lib/playInstallsSync";
+import { ingestAppStore, AppleAuthError } from "@/lib/appStoreInstallsSync";
 import { runWithLog, type TriggeredBy } from "@/lib/syncLogging";
 import { refreshGrowthViews } from "@/lib/growthViews";
 
@@ -424,6 +425,37 @@ export async function POST(req: Request) {
     if (!run.ok) console.error("[cron] play-installs step failed (isolated, non-fatal):", run.error);
   }
 
+  // App Store installs (iOS) — the Apple mirror of the Play step above. Backfills
+  // every available Sales report day and re-fetches the trailing window in full so
+  // late restatements overwrite. This is a NEW integration and, like play-installs,
+  // is deliberately isolated: a transient App Store Connect error (auth/JWT
+  // propagation, Apple 5xx) must never abort the daily sync, so it is kept OUT of
+  // `anyFailed`. It runs through runWithLog so every run leaves a fin_sync_log row
+  // (started_at + rows_imported on success, error_message on failure) — the KPI's
+  // status label reads that row. The .p8 key never reaches the log: the ingest
+  // throws sanitized messages only and AppleAuthError is normalized here.
+  let appStoreInstallsResult: { ok: boolean; rows?: number; note?: string };
+  if (triggeredBy !== "cron") {
+    appStoreInstallsResult = { ok: true, rows: 0, note: "manual mode: skipped (needs service role + runtime SA key)" };
+  } else {
+    const run = await runWithLog("app-store-installs", triggeredBy, supabase, async () => {
+      try {
+        const summary = await ingestAppStore(supabase, new Date());
+        return { rows: summary.rowsWritten };
+      } catch (e) {
+        // Normalize the Apple auth/credential failure to a clear, stable message
+        // that the status label can surface verbatim; re-throw so runWithLog
+        // records it as this run's error_message.
+        if (e instanceof AppleAuthError) {
+          throw new Error(`App Store Connect auth failed: ${e.message}`);
+        }
+        throw e;
+      }
+    }, (r) => ({ rows_imported: r.rows }));
+    appStoreInstallsResult = run.ok ? { ok: true, rows: run.result.rows } : { ok: false, note: run.error };
+    if (!run.ok) console.error("[cron] app-store-installs step failed (isolated, non-fatal):", run.error);
+  }
+
   const anyFailed =
     !stripeResult.ok ||
     !reviewsResult.ok ||
@@ -461,6 +493,9 @@ export async function POST(req: Request) {
         // Informational only — intentionally excluded from `anyFailed` so a
         // propagating Play grant (403) cannot fail the daily cron.
         play_installs: playInstallsResult,
+        // Informational only — intentionally excluded from `anyFailed` so a
+        // transient App Store Connect error cannot fail the daily cron.
+        app_store_installs: appStoreInstallsResult,
       },
     },
     { status: anyFailed ? 500 : 200 },

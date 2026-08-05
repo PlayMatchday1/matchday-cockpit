@@ -208,7 +208,7 @@ export default function DataPage() {
       </section>
 
       {/* 9. Google Play installs (growth — ungated) */}
-      <section>
+      <section className="mb-12">
         <SectionHeader
           title="Google Play installs"
           subtitle="Android install counts feeding the App downloads KPI on the Growth tab."
@@ -219,6 +219,21 @@ export default function DataPage() {
           source="play-installs"
           endpoint="/api/sync/play-installs"
           estimatedDuration="~10 seconds"
+        />
+      </section>
+
+      {/* 10. App Store installs (growth — ungated) */}
+      <section>
+        <SectionHeader
+          title="App Store installs"
+          subtitle="iOS install counts feeding the App downloads KPI on the Growth tab."
+        />
+        <SyncCard
+          title="App Store installs (iOS)"
+          description="Ingests iOS App Units from App Store Connect Sales reports into app_downloads (the App downloads KPI). Backfills every available day; first run can take a minute."
+          source="app-store-installs"
+          endpoint="/api/sync/app-store-installs"
+          estimatedDuration="~30–60 seconds"
         />
       </section>
     </PagePermissionGuard>
