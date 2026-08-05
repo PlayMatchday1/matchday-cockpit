@@ -7,8 +7,10 @@ import { countLabel, downloadCsv, monthLabel } from "./format";
 import {
   cohortMatrix,
   columnAverages,
+  matureColumnAverages,
   heatClass,
   churnedAt,
+  cohortMembers,
   cohortCityDetail,
   MAX_AGE,
   type CohortCell,
@@ -49,9 +51,13 @@ function Cell({ cell, mean, onClick }: { cell: CohortCell; mean: number | null; 
   return (
     <td
       className={`${styles.cohortCell} ${heatStyle[cls]}`}
-      onClick={cell.age >= 1 ? onClick : undefined}
-      style={cell.age >= 1 && onClick ? { cursor: "pointer" } : undefined}
-      title={`${cell.count} of the cohort active at Month ${cell.age}`}
+      onClick={onClick}
+      style={onClick ? { cursor: "pointer" } : undefined}
+      title={
+        cell.age === 0
+          ? `${cell.count} players in the starting cohort`
+          : `${cell.count} of the cohort active at Month ${cell.age}`
+      }
     >
       <div className={styles.cohortPct}>{cell.pct.toFixed(0)}%</div>
       <div className={styles.cohortCount}>{cell.count.toLocaleString("en-US")}</div>
@@ -80,6 +86,7 @@ export default function CohortPanel({ agg }: { agg: RetentionAggregate }) {
     [rows, year, month],
   );
   const means = useMemo(() => columnAverages(visible), [visible]);
+  const matureMeans = useMemo(() => matureColumnAverages(visible), [visible]);
 
   function exportCsv() {
     const header = ["Cohort", "Cohort size", ...AGES.map((a) => `Month ${a}`)];
@@ -88,8 +95,9 @@ export default function CohortPanel({ agg }: { agg: RetentionAggregate }) {
       r.size,
       ...r.cells.map((c) => (c.observable ? `${c.pct.toFixed(0)}% (${c.count})` : "")),
     ]);
-    const footer = ["Average retention (excl. free launch)", "", ...means.map((m) => (m == null ? "—" : `${m.toFixed(1)}%`))];
-    downloadCsv("player-retention-cohorts.csv", [header, ...body, footer]);
+    const footAll = ["All visible cohorts (excl. free launch)", "", ...means.map((m) => (m == null ? "—" : `${m.toFixed(1)}%`))];
+    const footMature = ["Mature cohorts only (12+ months observed)", "", ...matureMeans.map((m) => (m == null ? "—" : `${m.toFixed(1)}%`))];
+    downloadCsv("player-retention-cohorts.csv", [header, ...body, footAll, footMature]);
   }
 
   const detailRows = detail ? cohortCityDetail(agg, detail) : null;
@@ -102,7 +110,12 @@ export default function CohortPanel({ agg }: { agg: RetentionAggregate }) {
     }
   }
 
-  const churnPlayers = churn ? churnedAt(agg, churn.cohortKey, churn.age, { cityIdx }) : [];
+  // Age 0 lists the whole starting cohort; age >= 1 lists the set-subtraction churn.
+  const panelPlayers = churn
+    ? churn.age === 0
+      ? cohortMembers(agg, churn.cohortKey, { cityIdx })
+      : churnedAt(agg, churn.cohortKey, churn.age, { cityIdx })
+    : [];
 
   return (
     <div className={styles.card}>
@@ -183,10 +196,19 @@ export default function CohortPanel({ agg }: { agg: RetentionAggregate }) {
           <tfoot>
             <tr>
               <td className={`${styles.cohortCell} ${styles.cohortRowHead}`}>
-                Average retention
+                All visible cohorts
                 <div className={styles.cohortSize}>excl. free launch</div>
               </td>
               {means.map((m, i) => (
+                <td key={i} className={styles.cohortCell}>{m == null ? "—" : `${m.toFixed(1)}%`}</td>
+              ))}
+            </tr>
+            <tr>
+              <td className={`${styles.cohortCell} ${styles.cohortRowHead}`}>
+                Mature cohorts only
+                <div className={styles.cohortSize}>12+ months observed</div>
+              </td>
+              {matureMeans.map((m, i) => (
                 <td key={i} className={styles.cohortCell}>{m == null ? "—" : `${m.toFixed(1)}%`}</td>
               ))}
             </tr>
@@ -195,7 +217,10 @@ export default function CohortPanel({ agg }: { agg: RetentionAggregate }) {
       </div>
 
       <div className={styles.footnote}>
-        Apr and May 2023 matches were free. Those cohorts are shown but excluded from the average. {CHURN_DEF}
+        Apr and May 2023 matches were free. Those cohorts are shown but excluded from both averages. The{" "}
+        <b>all visible cohorts</b> row mixes a different number of cohorts at each age — its tail is drawn only from the
+        older cohorts — so it isn&rsquo;t a like-for-like curve; the <b>mature cohorts only</b> row is a fixed set (every
+        cohort observed a full 12 months) and is the comparable curve. {CHURN_DEF}
       </div>
 
       {detailRows && detail && (
@@ -206,7 +231,7 @@ export default function CohortPanel({ agg }: { agg: RetentionAggregate }) {
         <ChurnPanel
           cohortKey={churn.cohortKey}
           age={churn.age}
-          players={churnPlayers.map((p) => ({
+          players={panelPlayers.map((p) => ({
             u: p.u,
             city: agg.cities[p.ct],
             field: agg.fields[p.f],
@@ -290,9 +315,13 @@ function ChurnPanel({
       <div className={styles.detailHead}>
         <div>
           <div className={styles.cardTitle}>
-            {players.length.toLocaleString("en-US")} players churned at Month {age} — {monthLabel(cohortKey)} cohort
+            {age === 0
+              ? `Players in the starting cohort — ${monthLabel(cohortKey)} · ${players.length.toLocaleString("en-US")} players`
+              : `${players.length.toLocaleString("en-US")} players churned at Month ${age} — ${monthLabel(cohortKey)} cohort`}
           </div>
-          <div className={styles.cardSub}>{CHURN_DEF}</div>
+          <div className={styles.cardSub}>
+            {age === 0 ? "Every player whose first match was in this cohort month." : CHURN_DEF}
+          </div>
         </div>
         <div className={styles.controlsRow}>
           <button

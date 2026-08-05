@@ -120,6 +120,29 @@ export function churnedAt(
   return out;
 }
 
+// Every player in a cohort (age-0 click target), sorted by last match date desc.
+export function cohortMembers(agg: RetentionAggregate, cohortKey: string, filter: Filter = {}): RetentionPlayer[] {
+  const cIdx = agg.cohortMonths.indexOf(cohortKey);
+  if (cIdx < 0) return [];
+  const out = agg.players.filter((p) => p.c === cIdx && inFilter(p, filter));
+  out.sort((a, b) => (a.l < b.l ? 1 : a.l > b.l ? -1 : 0));
+  return out;
+}
+
+// "Mature cohorts only" footer: at every age, the unweighted mean over the
+// non-free-launch cohorts that have been observable for a FULL 12 months (their
+// age-12 cell has an observation). A fixed cohort set → the comparable curve.
+export function matureColumnAverages(rows: CohortRow[]): (number | null)[] {
+  const mature = rows.filter((r) => !r.free && r.cells[MAX_AGE].observable);
+  const out: (number | null)[] = [];
+  for (let n = 0; n <= MAX_AGE; n++) {
+    // mature cohorts are observable at every age 0..12 by definition.
+    const vals = mature.map((r) => r.cells[n].pct);
+    out.push(vals.length ? vals.reduce((a, b) => a + b, 0) / vals.length : null);
+  }
+  return out;
+}
+
 // One cohort split by first-match city: one row per city + a total row. The
 // city Month-0 counts MUST sum to the cohort size — the caller asserts this.
 export type CityDetailRow = { city: string; size: number; cells: CohortCell[]; total: boolean };

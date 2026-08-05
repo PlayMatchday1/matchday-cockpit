@@ -12,7 +12,6 @@
 //    set-subtraction churn) is derived on the client from these masks — one
 //    aggregate, no second query.
 
-import type { SupabaseClient } from "@supabase/supabase-js";
 import { UNKNOWN_CITY } from "./growthAnalytics";
 import { CITY_CODE_TO_DISPLAY } from "./scheduleReconcile";
 import { canonicalVenueName } from "./venueResolver";
@@ -182,68 +181,4 @@ export function buildRetention(
     buildMs: Date.now() - t0,
     generatedAt: nowIso,
   };
-}
-
-// In-process cache keyed on the max match date. A warm instance rebuilds only
-// when a backfill lands a newer match; cold starts rebuild once. Never paginates
-// the 232k participation rows per request.
-let cache: { key: string; agg: RetentionAggregate } | null = null;
-
-// Keyset pagination on api_id: each page is `where api_id > last order by api_id
-// limit 1000` — an index seek, so no page (even the 232nd) does a deep offset scan.
-async function keysetAll<T extends { api_id: number }>(
-  sb: SupabaseClient,
-  table: string,
-  cols: string,
-): Promise<T[]> {
-  const out: T[] = [];
-  const PAGE = 1000;
-  let last = -1;
-  for (;;) {
-    const { data, error } = await sb
-      .from(table)
-      .select(cols)
-      .gt("api_id", last)
-      .order("api_id", { ascending: true })
-      .limit(PAGE);
-    if (error) throw new Error(`${table} fetch failed: ${error.message}`);
-    const rows = (data ?? []) as unknown as T[];
-    out.push(...rows);
-    if (rows.length < PAGE) break;
-    last = rows[rows.length - 1].api_id;
-  }
-  return out;
-}
-
-export async function getRetentionAggregate(
-  sb: SupabaseClient,
-): Promise<RetentionAggregate & { cached: boolean; fetchMs: number }> {
-  const t0 = Date.now();
-  // Cheap key probe (1 row): the latest live match date.
-  const { data: maxRow } = await sb
-    .from("mdapi_matches")
-    .select("start_date")
-    .is("deleted_at", null)
-    .not("start_date", "is", null)
-    .order("start_date", { ascending: false })
-    .limit(1)
-    .maybeSingle();
-  const key = (maxRow?.start_date ?? "").slice(0, 10);
-  if (cache && cache.key === key) return { ...cache.agg, cached: true, fetchMs: Date.now() - t0 };
-
-  // KEYSET pagination (seek on api_id), not offset — mdapi_match_players is 232k
-  // rows and a deep OFFSET scan hits the Postgres statement timeout. Keyset is an
-  // index seek per page, so the first (uncached) build stays well under budget.
-  const [matches, players] = await Promise.all([
-    keysetAll<RawMatch>(sb, "mdapi_matches", "api_id, start_date, city_identifier, field_id, field_title, is_cancelled, deleted_at"),
-    keysetAll<RawPlayer & { api_id: number }>(
-      sb,
-      "mdapi_match_players",
-      "api_id, user_id, match_api_id, paid_status, canceled_at, user_is_fake_player, deleted_at",
-    ),
-  ]);
-  const fetchMs = Date.now() - t0;
-  const agg = buildRetention(matches, players, new Date().toISOString());
-  cache = { key, agg };
-  return { ...agg, cached: false, fetchMs };
 }

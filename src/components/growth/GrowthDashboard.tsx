@@ -16,15 +16,13 @@ import RetentionCurvePanel from "./RetentionCurvePanel";
 import ChurnPanel from "./ChurnPanel";
 import DataRoomPanel from "./DataRoomPanel";
 
-// The Growth tab. One fetch to /api/growth (server-computed, service-role,
-// read-only), then every panel renders from that single payload. The old
-// Overview / Users / Cancellations lenses were removed on request.
+// The Growth tab. Two concurrent reads of one cached server aggregate
+// (getGrowthCache): /api/growth backs funnel/behavior/ARPP/churn,
+// /api/growth/retention backs the curve + cohort table. Read-only, service-role.
 export default function GrowthDashboard() {
   const [data, setData] = useState<GrowthData | null>(null);
   const [retention, setRetention] = useState<RetentionAggregate | null>(null);
-  const [error, setError] = useState<string | null>(null); // total failure (auth/network)
-  const [dataError, setDataError] = useState<string | null>(null); // /api/growth only
-  const [retError, setRetError] = useState<string | null>(null); // /api/growth/retention only
+  const [error, setError] = useState<string | null>(null);
   const [period, setPeriod] = useState<Period | null>(null);
 
   useEffect(() => {
@@ -35,34 +33,21 @@ export default function GrowthDashboard() {
         const token = sess.session?.access_token;
         if (!token) throw new Error("Not signed in");
         const headers = { Authorization: `Bearer ${token}` };
-        // The retention curve + cohort table read one cached aggregate
-        // (/api/growth/retention); everything else reads /api/growth. Both
-        // concurrent, read-only.
         const [res, retRes] = await Promise.all([
           fetch("/api/growth", { headers }),
           fetch("/api/growth/retention", { headers }),
         ]);
-        // The two endpoints are independent: /api/growth backs the other cards,
-        // /api/growth/retention backs these two. One failing must not blank the
-        // other (the full path is heavy — see the cached retention route).
-        if (res.ok) {
-          const json = (await res.json()) as GrowthData;
-          if (alive) {
-            setData(json);
-            const ms = json.behaviorOverall.map((p) => p.m);
-            if (ms.length) setPeriod(defaultPeriod(ms, json.generatedAt.slice(0, 7)));
-          }
-        } else if (alive) {
+        if (!res.ok) {
           const body = (await res.json().catch(() => null)) as { error?: string } | null;
-          setDataError(body?.error ?? `Request failed (${res.status})`);
+          throw new Error(body?.error ?? `Request failed (${res.status})`);
         }
+        const json = (await res.json()) as GrowthData;
         if (alive) {
-          if (retRes.ok) setRetention((await retRes.json()) as RetentionAggregate);
-          else {
-            const body = (await retRes.json().catch(() => null)) as { error?: string } | null;
-            setRetError(body?.error ?? `Request failed (${retRes.status})`);
-          }
+          setData(json);
+          const ms = json.behaviorOverall.map((p) => p.m);
+          if (ms.length) setPeriod(defaultPeriod(ms, json.generatedAt.slice(0, 7)));
         }
+        if (retRes.ok && alive) setRetention((await retRes.json()) as RetentionAggregate);
       } catch (e) {
         if (alive) setError(e instanceof Error ? e.message : "Failed to load");
       }
@@ -72,7 +57,7 @@ export default function GrowthDashboard() {
     };
   }, []);
 
-  if (error && !data && !retention) {
+  if (error) {
     return (
       <div className={styles.dash}>
         <Header />
@@ -80,57 +65,53 @@ export default function GrowthDashboard() {
       </div>
     );
   }
+  if (!data) {
+    return (
+      <div className={styles.dash}>
+        <Header />
+        <div className={styles.stateMsg}>Loading growth analytics…</div>
+      </div>
+    );
+  }
 
-  const months = data ? data.behaviorOverall.map((p) => p.m) : [];
-  const activePeriod: Period | null = data ? period ?? defaultPeriod(months, data.generatedAt.slice(0, 7)) : null;
-  const retMsg = (
-    <div className={`${styles.stateMsg} ${retError ? styles.errorMsg : ""}`}>
-      {retError ? `Retention unavailable: ${retError}` : "Loading retention…"}
-    </div>
-  );
+  const months = data.behaviorOverall.map((p) => p.m);
+  const activePeriod: Period = period ?? defaultPeriod(months, data.generatedAt.slice(0, 7));
   return (
     <div className={styles.dash}>
       <Header />
 
-      {data && activePeriod ? (
-        <>
-          <GlobalPeriod months={months} period={activePeriod} setPeriod={setPeriod} />
-          <div className={styles.calloutBanner}>
-            This data has <b>three start dates</b>, not one. Registrations reach back to{" "}
-            <b>{monthLabel(data.floors.registrations)}</b> and memberships to{" "}
-            <b>{monthLabel(data.floors.memberships)}</b>, but every play-derived number — matches, spots, revenue,
-            cohorts, retention, ARPP — begins <b>{monthLabel(data.floors.play)}</b>, the first month any matches exist.
-            Empty regions before a series&rsquo; start mean &ldquo;no data yet&rdquo;, never zero.
-          </div>
-          <KpiRow data={data} period={activePeriod} />
-          <PlayerFunnel data={data} period={activePeriod} />
-          <BehaviorPanel data={data} period={activePeriod} />
-          <ArppPanel data={data} />
-        </>
-      ) : (
-        <div className={`${styles.stateMsg} ${dataError ? styles.errorMsg : ""}`}>
-          {dataError
-            ? `Funnel, player behavior, ARPP & churn are unavailable: ${dataError}`
-            : "Loading funnel, behavior, ARPP & churn…"}
-        </div>
-      )}
+      <GlobalPeriod months={months} period={activePeriod} setPeriod={setPeriod} />
 
-      {retention ? <CohortPanel agg={retention} /> : retMsg}
-      <div className={styles.grid2}>
-        {retention ? <RetentionCurvePanel agg={retention} /> : retMsg}
-        {data && activePeriod && <ChurnPanel data={data} />}
+      <div className={styles.calloutBanner}>
+        This data has <b>three start dates</b>, not one. Registrations reach back to{" "}
+        <b>{monthLabel(data.floors.registrations)}</b> and memberships to <b>{monthLabel(data.floors.memberships)}</b>,
+        but every play-derived number — matches, spots, revenue, cohorts, retention, ARPP — begins{" "}
+        <b>{monthLabel(data.floors.play)}</b>, the first month any matches exist. Empty regions before a series&rsquo;
+        start mean &ldquo;no data yet&rdquo;, never zero.
       </div>
-      {data && <DataRoomPanel data={data} />}
 
-      {data && (
-        <div className={styles.footnote}>
-          Source: live mdapi_* mirror + fin_revenue, read-only. {fmtInt(data.rowCounts.matchesLive)} live matches,{" "}
-          {fmtInt(data.rowCounts.playersLive)} live participation rows. Every figure excludes fake players —{" "}
-          {fmtInt(data.rowCounts.usersFake)} fake users and {fmtInt(data.rowCounts.fakeLiveRows)} live fake rows (
-          {fmtPct(data.rowCounts.fakeLivePct)} of live rows) are removed everywhere. Computed{" "}
-          {new Date(data.generatedAt).toLocaleString("en-US")}.
-        </div>
-      )}
+      <KpiRow data={data} period={activePeriod} />
+      <PlayerFunnel data={data} period={activePeriod} />
+      <BehaviorPanel data={data} period={activePeriod} />
+      <ArppPanel data={data} />
+      {retention ? <CohortPanel agg={retention} /> : <div className={styles.stateMsg}>Loading retention cohorts…</div>}
+      <div className={styles.grid2}>
+        {retention ? (
+          <RetentionCurvePanel agg={retention} />
+        ) : (
+          <div className={styles.stateMsg}>Loading retention curve…</div>
+        )}
+        <ChurnPanel data={data} />
+      </div>
+      <DataRoomPanel data={data} />
+
+      <div className={styles.footnote}>
+        Source: live mdapi_* mirror + fin_revenue, read-only. {fmtInt(data.rowCounts.matchesLive)} live matches,{" "}
+        {fmtInt(data.rowCounts.playersLive)} live participation rows. Every figure excludes fake players —{" "}
+        {fmtInt(data.rowCounts.usersFake)} fake users and {fmtInt(data.rowCounts.fakeLiveRows)} live fake rows (
+        {fmtPct(data.rowCounts.fakeLivePct)} of live rows) are removed everywhere. Computed{" "}
+        {new Date(data.generatedAt).toLocaleString("en-US")}.
+      </div>
     </div>
   );
 }

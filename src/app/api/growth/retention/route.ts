@@ -1,10 +1,9 @@
-// GET /api/growth/retention — the single cohort/retention aggregate for the
-// retention-curve and cohort-table cards. Read-only, service-role, cached
-// in-process keyed on the max match date (see retentionEngine). Returns timing
-// headers so the before/after can be measured against the old cohort path.
+// GET /api/growth/retention — the cohort/retention slice of the one cached
+// growth aggregate (getGrowthCache). Same cache /api/growth reads, so the 232k
+// participation rows are fetched once and both endpoints serve from it.
 
 import { authenticateCities } from "@/lib/growthAuth";
-import { getRetentionAggregate } from "@/lib/retentionEngine";
+import { getGrowthCache } from "@/lib/growthCache";
 
 export const runtime = "nodejs";
 export const maxDuration = 60;
@@ -14,16 +13,15 @@ export async function GET(req: Request) {
   if (!auth.ok) return Response.json({ error: auth.error }, { status: auth.status });
   try {
     const t0 = Date.now();
-    const agg = await getRetentionAggregate(auth.supabase);
+    const c = await getGrowthCache(auth.supabase);
     const totalMs = Date.now() - t0;
-    const { cached, fetchMs, ...payload } = agg;
     return Response.json(
-      { ...payload, timing: { cached, fetchMs, buildMs: payload.buildMs, totalMs } },
+      { ...c.retention, timing: { cached: c.cached, fetchMs: c.timing.fetchMs, computeMs: c.timing.computeMs, totalMs } },
       {
         status: 200,
         headers: {
           "Cache-Control": "private, max-age=60, stale-while-revalidate=300",
-          "Server-Timing": `retention;dur=${totalMs};desc="${cached ? "cache" : "fresh"}"`,
+          "Server-Timing": `retention;dur=${totalMs};desc="${c.cached ? "cache" : "fresh"}"`,
         },
       },
     );
