@@ -160,6 +160,17 @@ export type RawRevenue = {
 
 export type RawAndroidInstall = { period_date: string; count: number };
 
+// Play-ingest health for the App downloads KPI. `state` drives the label; the
+// other fields fill in the specifics ("last ran <at>", "failed with <error>",
+// "last synced <date>"). Derived from the runtime SA-key presence + the latest
+// fin_sync_log 'play-installs' row + the freshest app_downloads date.
+export type PlaySyncStatus = {
+  state: "not_configured" | "never_run" | "failed" | "no_data" | "synced";
+  lastRunAt: string | null; // ISO instant of the latest play-installs run
+  error: string | null; // verbatim error_message of the latest run, if it failed
+  lastSyncedDate: string | null; // freshest app_downloads period_date (YYYY-MM-DD)
+};
+
 export type RawInput = {
   matches: RawMatch[];
   players: RawPlayer[];
@@ -169,6 +180,10 @@ export type RawInput = {
   // Android daily user-installs from app_downloads (empty until the Play ingest
   // runs; absent entirely if the table doesn't exist yet). iOS is not wired.
   androidDaily?: RawAndroidInstall[];
+  // Play-ingest health, computed server-side (impure: reads env + fin_sync_log)
+  // and passed through to the output unchanged. Optional so pure-fn tests can omit
+  // it; absent → treated as not_configured with no run history.
+  playSync?: PlaySyncStatus;
   // ISO instant the read ran (server "now"); churn "days inactive" is measured
   // from this. Passed in (never Date.now() inside the pure fn) so the engine
   // stays deterministic and testable.
@@ -289,6 +304,11 @@ export type GrowthData = {
     android: { earliest: string; latest: string; total: number } | null;
     ios: null;
   };
+  // Android Play-ingest health, so the KPI can distinguish "never configured"
+  // from "ran and failed" from "ran, no data" from "synced <date>" instead of a
+  // single static "awaiting Play sync". Computed server-side (env + fin_sync_log)
+  // and passed through — see PlaySyncStatus.
+  playSync: PlaySyncStatus;
   registrationsByMonth: { m: string; count: number }[]; // completed, non-fake, by signup month, 2023+
   // Nested cohort funnel by signup month (additive across months). downloads is
   // not here — it has no per-person source.
@@ -910,10 +930,21 @@ export function computeGrowth(input: RawInput): GrowthData {
     ios: null,
   };
 
+  // Finalize Play-ingest health. The server (growthCache) determines the no-data
+  // states — not_configured / never_run / failed / no_data — from env + the latest
+  // fin_sync_log row. Presence of any app_downloads rows is the ground truth for a
+  // healthy sync, so it wins here regardless of what the last run row said.
+  const playSyncBase: PlaySyncStatus =
+    input.playSync ?? { state: "not_configured", lastRunAt: null, error: null, lastSyncedDate: null };
+  const playSync: PlaySyncStatus = androidDaily.length
+    ? { ...playSyncBase, state: "synced", lastSyncedDate: androidLatest }
+    : { ...playSyncBase, lastSyncedDate: null };
+
   return {
     generatedAt: now,
     rowCounts: input.rowCounts,
     downloads,
+    playSync,
     floors: {
       registrations: "2023-03",
       memberships: "2024-02",

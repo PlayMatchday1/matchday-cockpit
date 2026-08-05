@@ -33,6 +33,23 @@ export default function KpiRow({ data, period }: { data: GrowthData; period: Per
     ? `${monthLabel(data.downloads.android.earliest.slice(0, 7))} – ${monthLabel(data.downloads.android.latest.slice(0, 7))}`
     : null;
 
+  // Play-ingest status label. Replaces the static "awaiting Play sync" — which
+  // could not fail and so could not be debugged — with one line per real state:
+  // not configured / configured-never-run / last ran <t> and failed with <err> /
+  // last ran <t> and returned no data. The synced case shows the install range
+  // above instead. Sync health comes from the server (env + fin_sync_log).
+  const ps = data.playSync;
+  const fmtInstant = (iso: string) =>
+    new Date(iso).toLocaleString("en-US", { month: "short", day: "numeric", year: "numeric", hour: "numeric", minute: "2-digit" });
+  const playStatus =
+    ps.state === "not_configured"
+      ? "Play sync not configured — Play key missing"
+      : ps.state === "never_run"
+        ? "Play sync configured · not yet run"
+        : ps.state === "failed"
+          ? `Last ran ${ps.lastRunAt ? fmtInstant(ps.lastRunAt) : "?"} · failed: ${ps.error ?? "unknown error"}`
+          : `Last ran ${ps.lastRunAt ? fmtInstant(ps.lastRunAt) : "?"} · returned no data`;
+
   const k = data.kpis;
   const regOfPlayed1 = scoped.registrations ? scoped.played1 / scoped.registrations : 0;
   const played1OfPlayed5 = scoped.played1 ? scoped.played5 / scoped.played1 : 0;
@@ -50,8 +67,8 @@ export default function KpiRow({ data, period }: { data: GrowthData; period: Per
           {androidRange ? (
             `Play installs · ${androidRange}`
           ) : (
-            <span className={styles.notConnected}>
-              <span className={styles.notConnectedDot} /> awaiting Play sync
+            <span className={styles.notConnected} title={ps.error ?? undefined}>
+              <span className={styles.notConnectedDot} /> {playStatus}
             </span>
           )}
         </div>

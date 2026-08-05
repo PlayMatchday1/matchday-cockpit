@@ -96,6 +96,34 @@ async function build(sb: SupabaseClient, key: string): Promise<GrowthCache> {
   } catch {
     androidDaily = [];
   }
+
+  // Play-ingest health for the App downloads KPI. Determine the no-data states
+  // here (the pure engine upgrades to "synced" if any android rows exist):
+  //   not_configured — the runtime SA key is absent/empty (its current state)
+  //   never_run      — key present, but no play-installs run has ever been logged
+  //   failed         — the latest logged run recorded an error_message
+  //   no_data        — the latest logged run completed but returned nothing
+  // The SA key value is never read here beyond a presence/blank check.
+  const rawKey = process.env.GOOGLE_PLAY_SA_KEY_B64;
+  const keyConfigured = !!(rawKey && rawKey.trim().length > 0);
+  let playRun: { started_at: string; completed_at: string | null; rows_imported: number | null; error_message: string | null } | null = null;
+  try {
+    const { data } = await sb
+      .from("fin_sync_log")
+      .select("started_at, completed_at, rows_imported, error_message")
+      .eq("source", "play-installs")
+      .order("started_at", { ascending: false })
+      .limit(1);
+    playRun = data?.[0] ?? null;
+  } catch {
+    playRun = null;
+  }
+  const playSync: GrowthData["playSync"] = (() => {
+    if (!keyConfigured) return { state: "not_configured", lastRunAt: null, error: null, lastSyncedDate: null };
+    if (!playRun) return { state: "never_run", lastRunAt: null, error: null, lastSyncedDate: null };
+    if (playRun.error_message) return { state: "failed", lastRunAt: playRun.started_at, error: playRun.error_message, lastSyncedDate: null };
+    return { state: "no_data", lastRunAt: playRun.started_at, error: null, lastSyncedDate: null };
+  })();
   const fetchMs = Date.now() - t0;
 
   const t1 = Date.now();
@@ -118,7 +146,7 @@ async function build(sb: SupabaseClient, key: string): Promise<GrowthCache> {
     finRevenue: revenue.length,
   };
   const now = new Date().toISOString();
-  const growth = computeGrowth({ matches, players, users, subscriptions, revenue, androidDaily, now, rowCounts });
+  const growth = computeGrowth({ matches, players, users, subscriptions, revenue, androidDaily, playSync, now, rowCounts });
   const retention = buildRetention(matches, players, now); // SAME matches + players — no refetch
   const computeMs = Date.now() - t1;
   return { key, growth, retention, builtAt: now, timing: { fetchMs, computeMs } };

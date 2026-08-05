@@ -78,6 +78,9 @@ export type ViewInput = {
   downloadsMonth: DownloadMonthRow[];
   now: string;
   rowCounts: GrowthData["rowCounts"];
+  // Play-ingest health, computed by the async loader (env + fin_sync_log) and
+  // passed through. Optional so pure callers/tests can omit it (→ not_configured).
+  playSync?: GrowthData["playSync"];
 };
 
 const fieldOf = (title: string | null, id: number | null): string =>
@@ -426,10 +429,20 @@ export function computeGrowthFromViews(input: ViewInput): GrowthData {
     ios: null,
   };
 
+  // Finalize Play-ingest health: any download rows = healthy ("synced"); otherwise
+  // keep the loader-supplied no-data state (not_configured / never_run / failed /
+  // no_data). Mirrors computeGrowth's resolution so both paths agree.
+  const playSyncBase: GrowthData["playSync"] =
+    input.playSync ?? { state: "not_configured", lastRunAt: null, error: null, lastSyncedDate: null };
+  const playSync: GrowthData["playSync"] = androidByMonth.length
+    ? { ...playSyncBase, state: "synced", lastSyncedDate: androidByMonth[androidByMonth.length - 1].m }
+    : { ...playSyncBase, lastSyncedDate: null };
+
   return {
     generatedAt: now,
     rowCounts: input.rowCounts,
     downloads,
+    playSync,
     floors: { registrations: "2023-03", memberships: "2024-02", play: playFloor, revenue: revMonths[0] ?? "2026-01" },
     playMonths,
     kpis: {
@@ -741,12 +754,36 @@ export async function readGrowthFromViews(
     selectAll<DownloadMonthRow>(sb, "growth_downloads_month", "month, count", "month"),
     readRowCounts(sb),
   ]);
+  const playSync = await readPlaySyncStatus(sb);
   if (timing) timing.fetchMs = Date.now() - tFetch;
   const tCompute = Date.now();
-  const out = computeGrowthFromViews({ profiles, playDims, registrations, subscriptions, revenue, downloadsMonth, now, rowCounts });
+  const out = computeGrowthFromViews({ profiles, playDims, registrations, subscriptions, revenue, downloadsMonth, playSync, now, rowCounts });
   out.arppCard = computeArppCard(profiles, subscriptions, revenue, now);
   if (timing) timing.computeMs = Date.now() - tCompute;
   return out;
+}
+
+// Play-ingest health for the App downloads KPI. Determines the no-data states —
+// the pure engine upgrades to "synced" when the downloads matview has rows:
+//   not_configured — the runtime SA key (GOOGLE_PLAY_SA_KEY_B64) is absent/empty
+//   never_run      — key present, but no play-installs run has ever been logged
+//   failed         — the latest logged run recorded an error_message (shown verbatim)
+//   no_data        — the latest logged run completed but wrote nothing
+// The SA key value is never read here beyond a presence/blank check.
+async function readPlaySyncStatus(sb: SupabaseClient): Promise<GrowthData["playSync"]> {
+  const rawKey = process.env.GOOGLE_PLAY_SA_KEY_B64;
+  const keyConfigured = !!(rawKey && rawKey.trim().length > 0);
+  if (!keyConfigured) return { state: "not_configured", lastRunAt: null, error: null, lastSyncedDate: null };
+  const { data } = await sb
+    .from("fin_sync_log")
+    .select("started_at, error_message")
+    .eq("source", "play-installs")
+    .order("started_at", { ascending: false })
+    .limit(1);
+  const run = data?.[0] as { started_at: string; error_message: string | null } | undefined;
+  if (!run) return { state: "never_run", lastRunAt: null, error: null, lastSyncedDate: null };
+  if (run.error_message) return { state: "failed", lastRunAt: run.started_at, error: run.error_message, lastSyncedDate: null };
+  return { state: "no_data", lastRunAt: run.started_at, error: null, lastSyncedDate: null };
 }
 
 // rowCounts from the growth_row_counts materialized view (migration 0099): a

@@ -384,23 +384,36 @@ export async function POST(req: Request) {
 
   // Google Play installs — re-download the CURRENT month in full and upsert every
   // daily row (never append; late restatements of earlier days overwrite). This
-  // is a NEW integration and is deliberately isolated: a throw here — including
-  // the PlayGrantPendingError that is expected for up to 24h while the Play
-  // bucket grant propagates — must never abort the daily sync. It is caught at
-  // the boundary, logged, and kept OUT of `anyFailed` so a transient 403 does not
-  // flip the whole cron to a failure. The SA key never reaches this log.
+  // is a NEW integration and is deliberately isolated: a failure here — including
+  // the PlayGrantPendingError that is expected for up to 24h while the Play bucket
+  // grant propagates — must never abort the daily sync, so it is kept OUT of
+  // `anyFailed`. But it now runs through runWithLog like every other source, so
+  // every run leaves a fin_sync_log row (started_at + rows_imported on success,
+  // error_message on failure) — the KPI's status label reads that row to tell
+  // "never run" from "ran and failed with X" from "ran, no data". The SA key never
+  // reaches the log: ingestCurrentMonth throws sanitized messages only.
   let playInstallsResult: { ok: boolean; ym?: string; rows?: number; note?: string };
-  try {
-    if (triggeredBy !== "cron") {
-      playInstallsResult = { ok: true, rows: 0, note: "manual mode: skipped (needs service role + runtime SA key)" };
-    } else {
-      const r = await ingestCurrentMonth(supabase, new Date());
-      playInstallsResult = { ok: true, ym: r.ym, rows: r.rows };
-    }
-  } catch (e) {
-    const note = e instanceof PlayGrantPendingError ? "Play grant still propagating (403) — expected, non-fatal" : e instanceof Error ? e.message : "failed";
-    console.error("[cron] play-installs step failed (isolated, non-fatal):", note);
-    playInstallsResult = { ok: false, note };
+  if (triggeredBy !== "cron") {
+    playInstallsResult = { ok: true, rows: 0, note: "manual mode: skipped (needs service role + runtime SA key)" };
+  } else {
+    const run = await runWithLog("play-installs", triggeredBy, supabase, async () => {
+      try {
+        const r = await ingestCurrentMonth(supabase, new Date());
+        return { ym: r.ym, rows: r.rows };
+      } catch (e) {
+        // Normalize the expected grant-propagation 403 to a clear, stable message
+        // that the status label can surface verbatim; re-throw so runWithLog
+        // records it as this run's error_message.
+        if (e instanceof PlayGrantPendingError) {
+          throw new Error("Play grant still propagating (403) — expected for up to 24h after granting, non-fatal");
+        }
+        throw e;
+      }
+    }, (r) => ({ rows_imported: r.rows }));
+    playInstallsResult = run.ok
+      ? { ok: true, ym: run.result.ym, rows: run.result.rows }
+      : { ok: false, note: run.error };
+    if (!run.ok) console.error("[cron] play-installs step failed (isolated, non-fatal):", run.error);
   }
 
   const anyFailed =
