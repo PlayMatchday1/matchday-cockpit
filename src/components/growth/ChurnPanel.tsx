@@ -1,55 +1,88 @@
 "use client";
 
-import { useMemo, useState } from "react";
-import type { GrowthData } from "@/lib/growthAnalytics";
+import { useEffect, useState } from "react";
 import styles from "./growth.module.css";
-import { countLabel, downloadCsv, fmtInt } from "./format";
+import { countLabel, fmtInt } from "./format";
 
-// PART 6: potential churn. Filters by city, field and an inactivity threshold
-// (30/60/90/120 days). Table: Player ID, City, Field, Days inactive, Matches
-// played, Last played, plus CSV. The buckets are captioned: with data starting
-// Jan 2026, "120 days" means "no play since ~April", and a player whose only
-// match was in January reads as churned by construction — so 90/120 must not be
-// over-read.
+// PART 6: potential churn. Reads /api/growth/churn (growth_player_profile — one
+// row per PLAYED player), filtered by city + an inactivity threshold (30/60/90/
+// 120 days), server-paginated 100/page. The four bucket counts arrive together
+// in one response; the CSV is streamed by the endpoint (never assembled here).
+// The buckets are captioned: with data starting Jan 2026, "120 days" means "no
+// play since ~April", and a player whose only match was in January reads as
+// churned by construction — so 90/120 must not be over-read.
 const BUCKETS = [30, 60, 90, 120] as const;
-const MAX_ROWS = 500;
+const PAGE_SIZE = 100;
 
-export default function ChurnPanel({ data }: { data: GrowthData }) {
-  const cities = ["All cities", ...data.cities];
+type ChurnRow = { u: number; city: string; field: string; days: number; matches: number; last: string };
+type ChurnResponse = {
+  days: number;
+  page: number;
+  pageSize: number;
+  total: number;
+  counts: Record<string, number>;
+  rows: ChurnRow[];
+};
+
+export default function ChurnPanel({
+  cities,
+  authHeaders,
+}: {
+  cities: string[];
+  authHeaders: Record<string, string>;
+}) {
+  const cityOptions = ["All cities", ...cities];
   const [city, setCity] = useState("All cities");
   const [threshold, setThreshold] = useState<number>(90); // matches the design default
+  const [page, setPage] = useState(0);
+  const [resp, setResp] = useState<ChurnResponse | null>(null);
+  const [loading, setLoading] = useState(true);
+  const [error, setError] = useState<string | null>(null);
 
-  const fields = useMemo(() => {
-    const set = new Set<string>();
-    for (const p of data.players) if (city === "All cities" || p.city === city) set.add(p.field);
-    return ["All fields", ...[...set].sort()];
-  }, [data.players, city]);
-  const [field, setField] = useState("All fields");
+  const cityParam = city === "All cities" ? "all" : city;
 
-  const scoped = useMemo(
-    () =>
-      data.players.filter(
-        (p) => (city === "All cities" || p.city === city) && (field === "All fields" || p.field === field),
-      ),
-    [data.players, city, field],
-  );
+  useEffect(() => {
+    let alive = true;
+    setLoading(true);
+    setError(null);
+    fetch(`/api/growth/churn?days=${threshold}&city=${encodeURIComponent(cityParam)}&page=${page}`, { headers: authHeaders })
+      .then(async (r) => {
+        if (!r.ok) throw new Error(`Request failed (${r.status})`);
+        return (await r.json()) as ChurnResponse;
+      })
+      .then((json) => {
+        if (alive) setResp(json);
+      })
+      .catch((e) => {
+        if (alive) setError(e instanceof Error ? e.message : "Failed to load");
+      })
+      .finally(() => {
+        if (alive) setLoading(false);
+      });
+    return () => {
+      alive = false;
+    };
+  }, [threshold, cityParam, page, authHeaders]);
 
-  const bucketCounts = useMemo(() => {
-    const m: Record<number, number> = {};
-    for (const b of BUCKETS) m[b] = scoped.filter((p) => p.days >= b).length;
-    return m;
-  }, [scoped]);
-
-  const filtered = useMemo(
-    () => scoped.filter((p) => p.days >= threshold).sort((a, b) => b.days - a.days),
-    [scoped, threshold],
-  );
-
-  function exportCsv() {
-    const header = ["Player ID", "City", "Field", "Days inactive", "Matches played", "Last played"];
-    const body = filtered.map((p) => [p.u, p.city, p.field, p.days, p.matches, p.last]);
-    downloadCsv(`potential-churn-${threshold}d.csv`, [header, ...body]);
+  async function downloadCsv() {
+    const url = `/api/growth/churn?days=${threshold}&city=${encodeURIComponent(cityParam)}&format=csv`;
+    const res = await fetch(url, { headers: authHeaders });
+    const blob = await res.blob();
+    const objUrl = URL.createObjectURL(blob);
+    const a = document.createElement("a");
+    a.href = objUrl;
+    a.download = `potential-churn-${threshold}d.csv`;
+    document.body.appendChild(a);
+    a.click();
+    document.body.removeChild(a);
+    URL.revokeObjectURL(objUrl);
   }
+
+  const rows = resp?.rows ?? [];
+  const total = resp?.total ?? 0;
+  const pageCount = Math.max(1, Math.ceil(total / PAGE_SIZE));
+  const from = total === 0 ? 0 : page * PAGE_SIZE + 1;
+  const to = Math.min(total, page * PAGE_SIZE + rows.length);
 
   return (
     <div className={styles.card}>
@@ -58,7 +91,7 @@ export default function ChurnPanel({ data }: { data: GrowthData }) {
           <div className={styles.cardTitle}>Potential churn players</div>
           <div className={styles.cardSub}>Players who previously held a spot but have not returned.</div>
         </div>
-        <button type="button" className={`${styles.btn} ${styles.btnGhost}`} onClick={exportCsv}>
+        <button type="button" className={`${styles.btn} ${styles.btnGhost}`} onClick={downloadCsv}>
           Download CSV
         </button>
       </div>
@@ -74,24 +107,12 @@ export default function ChurnPanel({ data }: { data: GrowthData }) {
             value={city}
             onChange={(e) => {
               setCity(e.target.value);
-              setField("All fields");
+              setPage(0);
             }}
           >
-            {cities.map((c) => (
+            {cityOptions.map((c) => (
               <option key={c} value={c}>
                 {c}
-              </option>
-            ))}
-          </select>
-        </div>
-        <div className={styles.field}>
-          <label className={styles.fieldLabel} htmlFor="churnField">
-            Field
-          </label>
-          <select id="churnField" className={styles.control} value={field} onChange={(e) => setField(e.target.value)}>
-            {fields.map((f) => (
-              <option key={f} value={f}>
-                {f}
               </option>
             ))}
           </select>
@@ -107,17 +128,28 @@ export default function ChurnPanel({ data }: { data: GrowthData }) {
               i === 2 ? styles.churnCellWarn : i === 3 ? styles.churnCellCrit : ""
             }`}
             aria-pressed={threshold === b}
-            onClick={() => setThreshold(b)}
+            onClick={() => {
+              setThreshold(b);
+              setPage(0);
+            }}
           >
             <div className={styles.churnCellLabel}>Inactive ≥ {b} days</div>
-            <div className={styles.churnCellValue}>{fmtInt(bucketCounts[b])}</div>
+            <div className={styles.churnCellValue}>{resp ? fmtInt(resp.counts[String(b)]) : "—"}</div>
           </button>
         ))}
       </div>
 
       <div className={styles.summaryLine}>
-        {countLabel(filtered.length, "player")} inactive ≥ {threshold} days
-        {filtered.length > MAX_ROWS ? ` — showing the ${MAX_ROWS} most inactive; CSV has all` : ""}.
+        {error ? (
+          <span className={styles.errorMsg}>Could not load churn list: {error}</span>
+        ) : loading ? (
+          "Loading…"
+        ) : (
+          <>
+            {countLabel(total, "player")} inactive ≥ {threshold} days
+            {total > 0 ? ` — showing ${fmtInt(from)}–${fmtInt(to)} (page ${page + 1} of ${pageCount})` : ""}. CSV has all.
+          </>
+        )}
       </div>
 
       <div className={`${styles.tableWrap} ${styles.scrollBody}`}>
@@ -133,7 +165,7 @@ export default function ChurnPanel({ data }: { data: GrowthData }) {
             </tr>
           </thead>
           <tbody>
-            {filtered.slice(0, MAX_ROWS).map((p) => (
+            {rows.map((p) => (
               <tr key={p.u}>
                 <td>{p.u}</td>
                 <td>{p.city}</td>
@@ -147,9 +179,33 @@ export default function ChurnPanel({ data }: { data: GrowthData }) {
         </table>
       </div>
 
+      <div className={styles.controlsRow} style={{ marginTop: 12, justifyContent: "flex-end" }}>
+        <button
+          type="button"
+          className={`${styles.btn} ${styles.btnGhost}`}
+          onClick={() => setPage((p) => Math.max(0, p - 1))}
+          disabled={loading || page === 0}
+        >
+          Prev
+        </button>
+        <span className={styles.pill}>
+          Page {page + 1} of {pageCount}
+        </span>
+        <button
+          type="button"
+          className={`${styles.btn} ${styles.btnGhost}`}
+          onClick={() => setPage((p) => Math.min(pageCount - 1, p + 1))}
+          disabled={loading || page >= pageCount - 1}
+        >
+          Next
+        </button>
+      </div>
+
       <div className={styles.footnote}>
-        Play data starts January 2026, so &ldquo;inactive 120 days&rdquo; means no play since about April, and a player
-        whose only match was in January necessarily reads as churned. Read the 90- and 120-day buckets with that in mind.
+        This is the count of <b>distinct played players</b> inactive ≥ {threshold} days (one row per played player in
+        growth_player_profile), not participation rows. Play data starts January 2026, so &ldquo;inactive 120
+        days&rdquo; means no play since about April, and a player whose only match was in January necessarily reads as
+        churned. Read the 90- and 120-day buckets with that in mind.
       </div>
     </div>
   );

@@ -3,7 +3,7 @@
 import { useEffect, useState } from "react";
 import { supabase } from "@/lib/supabase";
 import type { GrowthData } from "@/lib/growthAnalytics";
-import type { RetentionAggregate } from "@/lib/retentionEngine";
+import type { CohortMatrixPayload } from "./retentionModel";
 import styles from "./growth.module.css";
 import { fmtInt, fmtPct, monthLabel } from "./format";
 import GlobalPeriod, { type Period } from "./GlobalPeriod";
@@ -21,7 +21,8 @@ import DataRoomPanel from "./DataRoomPanel";
 // /api/growth/retention backs the curve + cohort table. Read-only, service-role.
 export default function GrowthDashboard() {
   const [data, setData] = useState<GrowthData | null>(null);
-  const [retention, setRetention] = useState<RetentionAggregate | null>(null);
+  const [retention, setRetention] = useState<CohortMatrixPayload | null>(null);
+  const [authHeaders, setAuthHeaders] = useState<Record<string, string> | null>(null);
   const [error, setError] = useState<string | null>(null);
   const [period, setPeriod] = useState<Period | null>(null);
 
@@ -33,6 +34,7 @@ export default function GrowthDashboard() {
         const token = sess.session?.access_token;
         if (!token) throw new Error("Not signed in");
         const headers = { Authorization: `Bearer ${token}` };
+        if (alive) setAuthHeaders(headers); // children (churn, drill-downs) fetch with these
         const [res, retRes] = await Promise.all([
           fetch("/api/growth", { headers }),
           fetch("/api/growth/retention", { headers }),
@@ -47,7 +49,7 @@ export default function GrowthDashboard() {
           const ms = json.behaviorOverall.map((p) => p.m);
           if (ms.length) setPeriod(defaultPeriod(ms, json.generatedAt.slice(0, 7)));
         }
-        if (retRes.ok && alive) setRetention((await retRes.json()) as RetentionAggregate);
+        if (retRes.ok && alive) setRetention((await retRes.json()) as CohortMatrixPayload);
       } catch (e) {
         if (alive) setError(e instanceof Error ? e.message : "Failed to load");
       }
@@ -94,14 +96,18 @@ export default function GrowthDashboard() {
       <PlayerFunnel data={data} period={activePeriod} />
       <BehaviorPanel data={data} period={activePeriod} />
       <ArppPanel data={data} />
-      {retention ? <CohortPanel agg={retention} /> : <div className={styles.stateMsg}>Loading retention cohorts…</div>}
+      {retention ? (
+        <CohortPanel payload={retention} authHeaders={authHeaders ?? {}} />
+      ) : (
+        <div className={styles.stateMsg}>Loading retention cohorts…</div>
+      )}
       <div className={styles.grid2}>
         {retention ? (
-          <RetentionCurvePanel agg={retention} />
+          <RetentionCurvePanel payload={retention} authHeaders={authHeaders ?? {}} />
         ) : (
           <div className={styles.stateMsg}>Loading retention curve…</div>
         )}
-        <ChurnPanel data={data} />
+        <ChurnPanel cities={data.cities} authHeaders={authHeaders ?? {}} />
       </div>
       <DataRoomPanel data={data} />
 

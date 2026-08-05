@@ -1,14 +1,16 @@
-// GET /api/growth — the Growth tab's data endpoint for the funnel, player
-// behavior, ARPP and churn cards. Reads the one cached growth aggregate
-// (getGrowthCache): a single keyset-paginated fetch of the mdapi_* mirror +
-// fin_revenue, computeGrowth run once, cached in-process keyed on the max match
-// date. The retention curve + cohort table read the SAME cache via
-// /api/growth/retention — the participation rows are fetched once, not twice.
+// GET /api/growth — the Growth tab's funnel / behavior / ARPP / KPI payload.
+// Reads the pre-aggregated growth_* materialized views (growth_player_profile,
+// growth_play_dims, growth_registration, growth_downloads_month) plus the small
+// mdapi_subscriptions + fin_revenue tables — NO 232k-row matches+players fetch.
+// Postgres does the grouping; readGrowthFromViews reshapes into the exact same
+// GrowthData computeGrowth used to produce (validated deep-equal, 23/23 fields).
+// The churn card reads /api/growth/churn (paginated); the retention curve + cohort
+// table read /api/growth/retention (the cohort matrix). players[] is empty here.
 //
 // Gated on can_access_cities via authenticateCities.
 
 import { authenticateCities } from "@/lib/growthAuth";
-import { getGrowthCache } from "@/lib/growthCache";
+import { readGrowthFromViews } from "@/lib/growthFromViews";
 
 export const runtime = "nodejs";
 export const maxDuration = 60;
@@ -19,13 +21,13 @@ export async function GET(req: Request) {
 
   try {
     const t0 = Date.now();
-    const c = await getGrowthCache(auth.supabase);
+    const growth = await readGrowthFromViews(auth.supabase, new Date().toISOString());
     const totalMs = Date.now() - t0;
-    return Response.json(c.growth, {
+    return Response.json(growth, {
       status: 200,
       headers: {
         "Cache-Control": "private, max-age=60, stale-while-revalidate=300",
-        "Server-Timing": `growth;dur=${totalMs};desc="${c.cached ? "cache" : "fresh"}"`,
+        "Server-Timing": `growth;dur=${totalMs}`,
       },
     });
   } catch (e) {

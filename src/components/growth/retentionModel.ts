@@ -1,9 +1,22 @@
-// Client-side derivations over the one RetentionAggregate. Both the retention
-// curve and the cohort table read these — no second data source. All the exact
-// definitions (cohort = first-match month, active = >=1 match in month, age =
-// months since cohort, churn = set subtraction active(N-1)\active(N)) live here.
+// Client-side derivations over one CohortMatrixPayload (the pre-aggregated
+// growth_cohort_matrix, fetched from /api/growth/retention). Both the retention
+// curve and the cohort table read these — no second data source, no masks. The
+// definitions still hold verbatim (cohort = first-match month, active = >=1
+// match in month, age = months since cohort); the set-subtraction churn and the
+// per-city split now come from their own endpoints, so they live in the panels.
 
-import type { RetentionAggregate, RetentionPlayer } from "@/lib/retentionEngine";
+// The cohort matrix payload as returned by GET /api/growth/retention. Ages run
+// 0..12; ONLY non-zero (month, age) groups are present — a MISSING cell means 0
+// active. `cities` are display names for the city filter; `city` is which city
+// this payload is for ("all" or a display name).
+export type CohortMatrixPayload = {
+  cohortMonths: string[];
+  nowMonth: string;
+  cities: string[];
+  city: string;
+  cells: { month: string; age: number; players: number }[];
+  generatedAt: string;
+};
 
 export const MAX_AGE = 12;
 export const FREE_LAUNCH = new Set(["2023-04", "2023-05"]);
@@ -17,35 +30,33 @@ export const isFreeLaunch = (cohortKey: string): boolean => FREE_LAUNCH.has(coho
 export type CohortCell = { age: number; count: number; pct: number; observable: boolean };
 export type CohortRow = { cohortKey: string; cohortIdx: number; size: number; free: boolean; cells: CohortCell[] };
 
-export type Filter = { cityIdx?: number };
-
-function inFilter(p: RetentionPlayer, f: Filter): boolean {
-  return f.cityIdx == null || p.ct === f.cityIdx;
-}
-
-// One cohort → age matrix. Cells beyond the cohort's observable age are marked
-// observable=false and must render empty (never 0%).
-export function cohortMatrix(agg: RetentionAggregate, filter: Filter = {}): CohortRow[] {
-  const nowIdx = idxOf(agg.nowMonth);
-  const byCohort = new Map<number, RetentionPlayer[]>();
-  for (const p of agg.players) {
-    if (!inFilter(p, filter)) continue;
-    (byCohort.get(p.c) ?? byCohort.set(p.c, []).get(p.c)!).push(p);
+// One CohortRow per distinct cohort month that has cells. size = the age-0 cell
+// (every cohort has one). count = the (month, age) cell's players, or 0 when the
+// cell is ABSENT (a real 0 within the observable window). Cells beyond the
+// cohort's observable age render empty (never 0%). Newest cohort first.
+export function cohortMatrix(payload: CohortMatrixPayload): CohortRow[] {
+  const nowIdx = idxOf(payload.nowMonth);
+  // month -> age -> players, so an absent (month, age) reads back as 0.
+  const byMonth = new Map<string, Map<number, number>>();
+  for (const cell of payload.cells) {
+    let ages = byMonth.get(cell.month);
+    if (!ages) byMonth.set(cell.month, (ages = new Map()));
+    ages.set(cell.age, cell.players);
   }
   const rows: CohortRow[] = [];
-  for (const [cIdx, members] of byCohort) {
-    const cohortKey = agg.cohortMonths[cIdx];
+  payload.cohortMonths.forEach((cohortKey, cohortIdx) => {
+    const ages = byMonth.get(cohortKey);
+    if (!ages) return; // a cohort month with no cells at all contributes no row
+    const size = ages.get(0) ?? 0;
     const maxObsAge = nowIdx - idxOf(cohortKey);
-    const size = members.length;
     const cells: CohortCell[] = [];
     for (let n = 0; n <= MAX_AGE; n++) {
       const observable = n <= maxObsAge;
-      let count = 0;
-      if (observable) for (const p of members) if (p.k & (1 << n)) count++;
+      const count = ages.get(n) ?? 0;
       cells.push({ age: n, count, pct: size ? (100 * count) / size : 0, observable });
     }
-    rows.push({ cohortKey, cohortIdx: cIdx, size, free: isFreeLaunch(cohortKey), cells });
-  }
+    rows.push({ cohortKey, cohortIdx, size, free: isFreeLaunch(cohortKey), cells });
+  });
   rows.sort((a, b) => b.cohortIdx - a.cohortIdx); // newest first
   return rows;
 }
@@ -79,12 +90,12 @@ export function heatClass(cell: CohortCell, colMean: number | null): "above" | "
 // Retention curve = unweighted mean of per-cohort retentions at each age, over
 // the cohorts old enough to be observed at that age. Break (null) where zero.
 export type CurvePoint = { age: number; pct: number | null; cohorts: number };
-export function retentionCurve(agg: RetentionAggregate, filter: Filter = {}): {
+export function retentionCurve(payload: CohortMatrixPayload): {
   points: CurvePoint[];
   cohortCount: number;
   span: [string, string] | null;
 } {
-  const rows = cohortMatrix(agg, filter);
+  const rows = cohortMatrix(payload);
   const points: CurvePoint[] = [];
   for (let n = 0; n <= MAX_AGE; n++) {
     const vals: number[] = [];
@@ -99,36 +110,6 @@ export function retentionCurve(agg: RetentionAggregate, filter: Filter = {}): {
   };
 }
 
-// Churn at age N (N>=1) for one cohort = players active at N-1 and NOT at N.
-// SET subtraction on the masks — never a difference of counts.
-export function churnedAt(
-  agg: RetentionAggregate,
-  cohortKey: string,
-  age: number,
-  filter: Filter = {},
-): RetentionPlayer[] {
-  const cIdx = agg.cohortMonths.indexOf(cohortKey);
-  if (cIdx < 0 || age < 1) return [];
-  const prev = 1 << (age - 1);
-  const cur = 1 << age;
-  const out: RetentionPlayer[] = [];
-  for (const p of agg.players) {
-    if (p.c !== cIdx || !inFilter(p, filter)) continue;
-    if (p.k & prev && !(p.k & cur)) out.push(p);
-  }
-  out.sort((a, b) => (a.l < b.l ? 1 : a.l > b.l ? -1 : 0)); // last match date desc
-  return out;
-}
-
-// Every player in a cohort (age-0 click target), sorted by last match date desc.
-export function cohortMembers(agg: RetentionAggregate, cohortKey: string, filter: Filter = {}): RetentionPlayer[] {
-  const cIdx = agg.cohortMonths.indexOf(cohortKey);
-  if (cIdx < 0) return [];
-  const out = agg.players.filter((p) => p.c === cIdx && inFilter(p, filter));
-  out.sort((a, b) => (a.l < b.l ? 1 : a.l > b.l ? -1 : 0));
-  return out;
-}
-
 // "Mature cohorts only" footer: at every age, the unweighted mean over the
 // non-free-launch cohorts that have been observable for a FULL 12 months (their
 // age-12 cell has an observation). A fixed cohort set → the comparable curve.
@@ -141,32 +122,4 @@ export function matureColumnAverages(rows: CohortRow[]): (number | null)[] {
     out.push(vals.length ? vals.reduce((a, b) => a + b, 0) / vals.length : null);
   }
   return out;
-}
-
-// One cohort split by first-match city: one row per city + a total row. The
-// city Month-0 counts MUST sum to the cohort size — the caller asserts this.
-export type CityDetailRow = { city: string; size: number; cells: CohortCell[]; total: boolean };
-export function cohortCityDetail(agg: RetentionAggregate, cohortKey: string): CityDetailRow[] {
-  const cIdx = agg.cohortMonths.indexOf(cohortKey);
-  const nowIdx = idxOf(agg.nowMonth);
-  const maxObsAge = nowIdx - idxOf(cohortKey);
-  const members = agg.players.filter((p) => p.c === cIdx);
-  const byCity = new Map<number, RetentionPlayer[]>();
-  for (const p of members) (byCity.get(p.ct) ?? byCity.set(p.ct, []).get(p.ct)!).push(p);
-  const mkCells = (ps: RetentionPlayer[]): CohortCell[] => {
-    const size = ps.length;
-    const cells: CohortCell[] = [];
-    for (let n = 0; n <= MAX_AGE; n++) {
-      const observable = n <= maxObsAge;
-      let count = 0;
-      if (observable) for (const p of ps) if (p.k & (1 << n)) count++;
-      cells.push({ age: n, count, pct: size ? (100 * count) / size : 0, observable });
-    }
-    return cells;
-  };
-  const rows: CityDetailRow[] = [...byCity.entries()]
-    .map(([ct, ps]) => ({ city: agg.cities[ct], size: ps.length, cells: mkCells(ps), total: false }))
-    .sort((a, b) => b.size - a.size);
-  rows.push({ city: "All cities", size: members.length, cells: mkCells(members), total: true });
-  return rows;
 }

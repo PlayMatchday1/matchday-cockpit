@@ -1,36 +1,77 @@
 "use client";
 
-import { useMemo, useState } from "react";
-import type { RetentionAggregate } from "@/lib/retentionEngine";
+import { useEffect, useMemo, useState } from "react";
 import styles from "./growth.module.css";
 import { LineChart, type Series } from "./charts";
 import { monthLabel } from "./format";
-import { retentionCurve, MAX_AGE } from "./retentionModel";
+import { retentionCurve, MAX_AGE, type CohortMatrixPayload } from "./retentionModel";
 
 // Retention curve — the unweighted average of each first-match cohort's
 // retention by month since first match. A cohort contributes to age N only when
 // it is old enough to have been observed at N; ages with zero observations break
 // the line (never plotted as 0%). Computed from match participation, never Stripe.
+// The all-cities rollup is the incoming payload; a city selection refetches
+// /api/growth/retention?city=<display>.
 const NETWORK = "Network (all cities)";
 
-export default function RetentionCurvePanel({ agg }: { agg: RetentionAggregate }) {
-  const cityNames = useMemo(() => [...agg.cities].sort((a, b) => a.localeCompare(b)), [agg.cities]);
+export default function RetentionCurvePanel({
+  payload,
+  authHeaders,
+}: {
+  payload: CohortMatrixPayload;
+  authHeaders: Record<string, string>;
+}) {
+  const cityNames = payload.cities; // display names, already sorted server-side
   const [primary, setPrimary] = useState(NETWORK);
   const [compareOn, setCompareOn] = useState(false);
   const [secondary, setSecondary] = useState(cityNames[0] ?? NETWORK);
+  // Per-city payloads fetched on demand (the all-cities rollup is the prop).
+  const [cityPayloads, setCityPayloads] = useState<Record<string, CohortMatrixPayload>>({});
+  const [loading, setLoading] = useState(false);
 
-  const cityIdxOf = (name: string) => (name === NETWORK ? undefined : agg.cities.indexOf(name));
-  const primaryCurve = useMemo(() => retentionCurve(agg, { cityIdx: cityIdxOf(primary) }), [agg, primary]);
+  useEffect(() => {
+    const wanted = [primary, compareOn ? secondary : null].filter(
+      (n): n is string => !!n && n !== NETWORK && !(n in cityPayloads),
+    );
+    if (!wanted.length) return;
+    let alive = true;
+    setLoading(true);
+    (async () => {
+      try {
+        const fetched = await Promise.all(
+          wanted.map(async (name) => {
+            const res = await fetch(`/api/growth/retention?city=${encodeURIComponent(name)}`, { headers: authHeaders });
+            return [name, (await res.json()) as CohortMatrixPayload] as const;
+          }),
+        );
+        if (alive) setCityPayloads((prev) => ({ ...prev, ...Object.fromEntries(fetched) }));
+      } finally {
+        if (alive) setLoading(false);
+      }
+    })();
+    return () => {
+      alive = false;
+    };
+  }, [primary, secondary, compareOn, authHeaders, cityPayloads]);
+
+  const payloadFor = (name: string): CohortMatrixPayload | null =>
+    name === NETWORK ? payload : cityPayloads[name] ?? null;
+
+  const primaryPayload = payloadFor(primary);
+  const secondaryPayload = compareOn && secondary !== primary ? payloadFor(secondary) : null;
+  const primaryCurve = useMemo(
+    () => (primaryPayload ? retentionCurve(primaryPayload) : null),
+    [primaryPayload],
+  );
   const secondaryCurve = useMemo(
-    () => (compareOn && secondary !== primary ? retentionCurve(agg, { cityIdx: cityIdxOf(secondary) }) : null),
-    [agg, compareOn, secondary, primary],
+    () => (secondaryPayload ? retentionCurve(secondaryPayload) : null),
+    [secondaryPayload],
   );
 
   const axis = Array.from({ length: MAX_AGE + 1 }, (_, i) => `M${i}`);
-  const series: Series[] = [{ label: primary, color: "var(--forest)", values: primaryCurve.points.map((p) => p.pct) }];
-  if (secondaryCurve) {
-    series.push({ label: secondary, color: "var(--gold-dot)", values: secondaryCurve.points.map((p) => p.pct) });
-  }
+  const series: Series[] = [];
+  if (primaryCurve) series.push({ label: primary, color: "var(--forest)", values: primaryCurve.points.map((p) => p.pct) });
+  if (secondaryCurve) series.push({ label: secondary, color: "var(--gold-dot)", values: secondaryCurve.points.map((p) => p.pct) });
 
   const endLabel = (c: ReturnType<typeof retentionCurve>) => {
     for (let n = MAX_AGE; n >= 0; n--) if (c.points[n].pct != null) return `${c.points[n].pct!.toFixed(0)}% at M${n}`;
@@ -97,14 +138,15 @@ export default function RetentionCurvePanel({ agg }: { agg: RetentionAggregate }
             <i className={styles.legendDot} style={{ background: s.color }} />
             <b>{s.label}</b>
             <span style={{ color: "var(--muted)", marginLeft: 4 }}>
-              — {endLabel(s.label === primary ? primaryCurve : secondaryCurve ?? primaryCurve)}
+              — {endLabel(s.label === primary ? primaryCurve! : secondaryCurve ?? primaryCurve!)}
             </span>
           </span>
         ))}
       </div>
 
       <div className={styles.footnote}>
-        {primary}: {spanText(primaryCurve)}
+        {loading && <>Loading city curve… · </>}
+        {primaryCurve ? `${primary}: ${spanText(primaryCurve)}` : `${primary}: loading…`}
         {secondaryCurve ? ` · ${secondary}: ${spanText(secondaryCurve)}` : ""}.
       </div>
     </div>

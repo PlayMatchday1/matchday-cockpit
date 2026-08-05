@@ -71,17 +71,17 @@ const REVENUE_CITY_TO_CANONICAL: Record<string, string> = {
   "El Paso": "El Paso",
 };
 
-function normalizeDeclared(raw: string | null | undefined): string | null {
+export function normalizeDeclared(raw: string | null | undefined): string | null {
   if (!raw) return null;
   const t = raw.trim();
   if (!t) return null;
   return DECLARED_TO_CANONICAL[t] ?? t;
 }
-function normalizeMatchCity(code: string | null | undefined): string {
+export function normalizeMatchCity(code: string | null | undefined): string {
   if (!code) return UNKNOWN_CITY;
   return CITY_CODE_TO_DISPLAY[code] ?? code;
 }
-function normalizeRevenueCity(raw: string | null | undefined): string {
+export function normalizeRevenueCity(raw: string | null | undefined): string {
   if (!raw) return UNKNOWN_CITY;
   return REVENUE_CITY_TO_CANONICAL[raw.trim()] ?? UNKNOWN_CITY;
 }
@@ -95,23 +95,23 @@ export function monthKey(iso: string): string {
 }
 const MON = ["Jan", "Feb", "Mar", "Apr", "May", "Jun", "Jul", "Aug", "Sep", "Oct", "Nov", "Dec"];
 // fin_revenue.month is a label like "Jul 2026".
-function revMonthToKey(label: string): string | null {
+export function revMonthToKey(label: string): string | null {
   const [mm, yy] = label.split(" ");
   const i = MON.indexOf(mm);
   if (i < 0 || !yy) return null;
   return `${yy}-${String(i + 1).padStart(2, "0")}`;
 }
-function addMonthsToKey(key: string, n: number): string {
+export function addMonthsToKey(key: string, n: number): string {
   const [y, m] = key.split("-").map(Number);
   const total = y * 12 + (m - 1) + n;
   return `${Math.floor(total / 12)}-${String((total % 12) + 1).padStart(2, "0")}`;
 }
-function monthDiff(from: string, to: string): number {
+export function monthDiff(from: string, to: string): number {
   const [fy, fm] = from.split("-").map(Number);
   const [ty, tm] = to.split("-").map(Number);
   return ty * 12 + (tm - 1) - (fy * 12 + (fm - 1));
 }
-function monthRange(start: string, end: string): string[] {
+export function monthRange(start: string, end: string): string[] {
   const out: string[] = [];
   for (let k = start; monthDiff(k, end) >= 0; k = addMonthsToKey(k, 1)) out.push(k);
   return out;

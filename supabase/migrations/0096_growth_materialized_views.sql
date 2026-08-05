@@ -262,10 +262,19 @@ $$;
 -- REFRESH (not CONCURRENTLY): REFRESH ... CONCURRENTLY cannot run inside a
 -- transaction, and every PostgREST/rpc call runs in one. The views are small
 -- so a plain refresh is sub-second; the brief lock is negligible. Order matters:
--- player_profile first (player_month, cohort_matrix, registration read it). For a
--- zero-lock nightly refresh, schedule the CONCURRENTLY form via pg_cron (every
--- mat view below has the unique index CONCURRENTLY requires):
---   REFRESH MATERIALIZED VIEW CONCURRENTLY public.growth_player_profile;  (etc.)
+-- player_profile first (player_month, cohort_matrix, registration read it).
+--
+-- CONCURRENTLY caveat: REFRESH MATERIALIZED VIEW CONCURRENTLY requires a UNIQUE
+-- index on plain columns; an index whose key is an EXPRESSION does not qualify.
+-- Only growth_player_profile (user_id) and growth_registration (user_id) have a
+-- plain-column unique index today. growth_player_month, growth_cohort_matrix and
+-- growth_play_dims use COALESCE(...) in their unique index, so CONCURRENTLY would
+-- ERROR on them as written — a follow-up migration must add a plain-column unique
+-- index (e.g. a surrogate key, or NOT NULL columns with a sentinel value stored
+-- literally, not via COALESCE) before any pg_cron CONCURRENTLY refresh of those
+-- three. This function uses plain REFRESH, which needs no unique index at all, so
+-- its behaviour is correct as-is; the caveat only concerns a future CONCURRENTLY
+-- path. Do not switch these to CONCURRENTLY until that follow-up index exists.
 CREATE OR REPLACE FUNCTION public.refresh_growth_views() RETURNS void LANGUAGE plpgsql AS $$
 BEGIN
   REFRESH MATERIALIZED VIEW public.growth_player_profile;
