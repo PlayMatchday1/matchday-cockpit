@@ -584,25 +584,26 @@ export async function readGrowthFromViews(sb: SupabaseClient, now: string): Prom
   return computeGrowthFromViews({ profiles, playDims, registrations, subscriptions, revenue, downloadsMonth, now, rowCounts });
 }
 
-// rowCounts in one round-trip via growth_row_counts() (migration 0097): each of
-// mdapi_match_players / mdapi_users is scanned ONCE with count(*) FILTER, instead
-// of one full scan per metric. Falls back to per-metric head counts if the RPC is
-// absent (pre-0097) so the endpoint still works — just slower.
+// rowCounts from the growth_row_counts materialized view (migration 0099): a
+// single pre-computed row, so the request never scans the 232k mdapi_match_players
+// (a ~2s seq scan that mdapi_*'s read-only rule forbids indexing away). The counts
+// are footnote diagnostics refreshed with the other growth_* views. Falls back to
+// per-metric head counts if the matview is absent (pre-0099) so nothing breaks.
 async function readRowCounts(sb: SupabaseClient): Promise<GrowthData["rowCounts"]> {
-  const { data, error } = await sb.rpc("growth_row_counts");
+  const { data, error } = await sb.from("growth_row_counts").select("*").maybeSingle();
   if (!error && data) {
     const d = data as Record<string, number>;
     return {
-      matchesTotal: d.matchesTotal, matchesLive: d.matchesLive,
-      playersTotal: d.playersTotal, playersLive: d.playersLive,
-      fakeLiveRows: d.fakeLiveRows, fakeLivePct: d.playersLive > 0 ? d.fakeLiveRows / d.playersLive : 0,
-      waitingLiveNonFake: d.waitingLiveNonFake,
-      usersTotal: d.usersTotal, usersNonFake: d.usersNonFake, usersFake: d.usersTotal - d.usersNonFake,
-      usersCompletedNonFake: d.usersCompletedNonFake,
-      subscriptions: d.subscriptions, finRevenue: d.finRevenue,
+      matchesTotal: d.matches_total, matchesLive: d.matches_live,
+      playersTotal: d.players_total, playersLive: d.players_live,
+      fakeLiveRows: d.fake_live_rows, fakeLivePct: d.players_live > 0 ? d.fake_live_rows / d.players_live : 0,
+      waitingLiveNonFake: d.waiting_live_nonfake,
+      usersTotal: d.users_total, usersNonFake: d.users_nonfake, usersFake: d.users_total - d.users_nonfake,
+      usersCompletedNonFake: d.users_completed_nonfake,
+      subscriptions: d.subscriptions, finRevenue: d.fin_revenue,
     };
   }
-  console.warn("[growth] growth_row_counts rpc unavailable, falling back to head counts:", error?.message);
+  console.warn("[growth] growth_row_counts matview unavailable, falling back to head counts:", error?.message);
   const headCount = async (table: string, apply?: (q: any) => any): Promise<number> => {
     let q = sb.from(table).select("*", { count: "exact", head: true });
     if (apply) q = apply(q);
