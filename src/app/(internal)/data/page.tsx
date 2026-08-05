@@ -100,6 +100,40 @@ export default function DataPage() {
         />
       </section>
 
+      {/* 5b. First-match abuse ledger (finance-domain) */}
+      {showFinanceSections && (
+        <section className="mb-12">
+          <SectionHeader
+            title="First-match ledger"
+            subtitle="One-way phone/email hashes for is_first_match claims, so delete-and-remake repeat abuse stays detectable for review."
+          />
+          <SyncCard
+            title="Sync first-match ledger"
+            description="Scans every is_first_match=true row in mdapi_match_players and inserts new hashed claims into firstmatch_ledger (insert-only — a captured hash is never overwritten). Run this after a Matches sync to pick up the newest claims."
+            source="firstmatch-ledger"
+            endpoint="/api/sync/firstmatch-ledger"
+            estimatedDuration="~30 seconds"
+          />
+        </section>
+      )}
+
+      {/* 5c. Manager Pay recompute (finance-domain) */}
+      {showFinanceSections && (
+        <section className="mb-12">
+          <SectionHeader
+            title="Manager Pay"
+            subtitle="Per-(city, pay date) manager payroll rolled into the Finance Manager Pay grid."
+          />
+          <SyncCard
+            title="Recompute Manager Pay"
+            description="Recomputes per-(city, payDate) manager-pay totals from mdapi_matches (manager assignments + player counts) and writes them into fin_expenses. Pre-cutover pay dates are left untouched. Run after a Matches sync to reflect fresh assignments."
+            source="manager-pay-recompute"
+            endpoint="/api/sync/manager-pay-recompute"
+            estimatedDuration="~5 seconds"
+          />
+        </section>
+      )}
+
       {/* 6. Registered users (full re-sync) */}
       <section className="mb-12">
         <SectionHeader
@@ -124,9 +158,26 @@ export default function DataPage() {
         </div>
       </section>
 
-      {/* 7. Membership snapshots (NEW Phase 5c) */}
+      {/* 7a. Membership prices (finance-domain) */}
       {showFinanceSections && (
-        <section>
+        <section className="mb-12">
+          <SectionHeader
+            title="Membership prices"
+            subtitle="Per-city max active membership price, captured as a change log."
+          />
+          <SyncCard
+            title="Refresh price snapshots"
+            description="Computes MAX(active price) per city from mdapi_subscriptions and inserts a new membership_price_snapshots row only when a city's max price changes (first observation writes the baseline). Run after a Members sync."
+            source="membership-prices"
+            endpoint="/api/sync/membership-prices"
+            estimatedDuration="~2 seconds"
+          />
+        </section>
+      )}
+
+      {/* 7b. Membership snapshots (NEW Phase 5c) */}
+      {showFinanceSections && (
+        <section className="mb-12">
           <SectionHeader
             title="Membership snapshots"
             subtitle="Per-month rollup driving the All-Time chart and historical KPIs."
@@ -140,6 +191,36 @@ export default function DataPage() {
           />
         </section>
       )}
+
+      {/* 8. Telnyx SMS log (ops — ungated) */}
+      <section className="mb-12">
+        <SectionHeader
+          title="Telnyx SMS"
+          subtitle="Durable 90-day store of outbound SMS bodies (Telnyx only retains ~10 days)."
+        />
+        <SyncCard
+          title="Ingest recent SMS"
+          description="Lists outbound Telnyx message records for the last 2 days, fetches each body, classifies the source (match notify / other), denormalizes recipient name + city, and upserts into telnyx_sms_log (idempotent on message id). Backs the /sms-log dashboard."
+          source="telnyx-sms"
+          endpoint="/api/sync/telnyx-sms"
+          estimatedDuration="~15 seconds"
+        />
+      </section>
+
+      {/* 9. Google Play installs (growth — ungated) */}
+      <section>
+        <SectionHeader
+          title="Google Play installs"
+          subtitle="Android install counts feeding the App downloads KPI on the Growth tab."
+        />
+        <SyncCard
+          title="Google Play installs"
+          description="Ingests Android install counts from the Google Play Console export bucket into app_downloads (the App downloads KPI on the Growth tab). Re-downloads the current month in full and upserts each day, so late restatements overwrite cleanly."
+          source="play-installs"
+          endpoint="/api/sync/play-installs"
+          estimatedDuration="~10 seconds"
+        />
+      </section>
     </PagePermissionGuard>
   );
 }

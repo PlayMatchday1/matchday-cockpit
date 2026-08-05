@@ -1,16 +1,23 @@
 // POST /api/sync/play-installs — on-demand trigger for ONLY the Google Play
 // install ingest, so it can be run without firing the whole nightly cron.
-// Guarded by CRON_SECRET (Bearer, constant-time), same as the cron's cron-mode.
-// Uses the service role and runs the ingest through runWithLog("play-installs")
-// exactly as the cron does, so the fin_sync_log row + KPI status stay consistent.
 //
-// Reports the raw GCS list result (verbatim 403/404), the objects the parser
-// recognizes, rows written, and the resulting fin_sync_log row. The service
-// account key is never read here, never logged, never returned.
+// Auth is DUAL-MODE (same shape as /api/sync/reviews):
+//   Manual: Bearer <user-session-token> from the browser "Run now" button. The
+//           session is validated (getUser) and REJECTED if invalid — but because
+//           the ingest reads the privileged SA key and writes app_downloads, the
+//           actual work runs with the SERVICE ROLE, not the caller's RLS client.
+//   Cron:   Bearer ${CRON_SECRET} (constant-time). Service-role client.
+// Either way the ingest runs through runWithLog("play-installs") so the
+// fin_sync_log row + KPI status stay consistent with the cron path.
+//
+// The response is SyncCard-compatible ({ ok, error, durationMs, result:{upserted} })
+// AND carries the full diagnostic (verbatim GCS 403/404, object inventory, the
+// files the parser consumed, the fin_sync_log row). The service account key is
+// never read here beyond auth, never logged, never returned.
 
 import { timingSafeEqual } from "node:crypto";
 import { createClient } from "@supabase/supabase-js";
-import { runWithLog } from "@/lib/syncLogging";
+import { runWithLog, type TriggeredBy } from "@/lib/syncLogging";
 import {
   listInstalls,
   parseInstallFiles,
@@ -35,18 +42,37 @@ function constantTimeMatch(a: string, b: string): boolean {
 export async function POST(req: Request) {
   const auth = req.headers.get("authorization") ?? "";
   if (!auth.startsWith("Bearer ")) {
-    return Response.json({ error: "Missing Authorization header" }, { status: 401 });
+    return Response.json({ ok: false, error: "Missing Authorization header" }, { status: 401 });
   }
   const token = auth.slice("Bearer ".length).trim();
-  const cronSecret = process.env.CRON_SECRET;
-  if (!cronSecret || !constantTimeMatch(token, cronSecret)) {
-    return Response.json({ error: "Unauthorized" }, { status: 401 });
+  if (!token) {
+    return Response.json({ ok: false, error: "Empty bearer token" }, { status: 401 });
   }
 
   const supabaseUrl = process.env.NEXT_PUBLIC_SUPABASE_URL;
   const serviceKey = process.env.SUPABASE_SERVICE_ROLE_KEY;
-  if (!supabaseUrl || !serviceKey) {
-    return Response.json({ error: "Supabase service credentials not set" }, { status: 500 });
+  const publishableKey = process.env.NEXT_PUBLIC_SUPABASE_PUBLISHABLE_KEY;
+  if (!supabaseUrl || !serviceKey || !publishableKey) {
+    return Response.json({ ok: false, error: "Supabase env not configured" }, { status: 500 });
+  }
+
+  // Authorize: CRON_SECRET → cron; otherwise a valid user session → manual. An
+  // absent/invalid session is rejected. Privileged work uses the service role in
+  // both modes (SA key + app_downloads write), so the session is an AUTHZ gate only.
+  const cronSecret = process.env.CRON_SECRET;
+  let triggeredBy: TriggeredBy;
+  if (cronSecret && constantTimeMatch(token, cronSecret)) {
+    triggeredBy = "cron";
+  } else {
+    const sessionClient = createClient(supabaseUrl, publishableKey, {
+      global: { headers: { Authorization: `Bearer ${token}` } },
+      auth: { persistSession: false, autoRefreshToken: false },
+    });
+    const { data: userData, error: userErr } = await sessionClient.auth.getUser(token);
+    if (userErr || !userData?.user) {
+      return Response.json({ ok: false, error: "Invalid session" }, { status: 401 });
+    }
+    triggeredBy = "manual";
   }
   const supabase = createClient(supabaseUrl, serviceKey, { auth: { persistSession: false } });
 
@@ -66,7 +92,7 @@ export async function POST(req: Request) {
   if (list.ok) {
     const run = await runWithLog(
       "play-installs",
-      "cron",
+      triggeredBy,
       supabase,
       async () => {
         try {
@@ -113,9 +139,23 @@ export async function POST(req: Request) {
     .limit(1);
   const { data: viewRows } = await supabase.from("growth_downloads_month").select("month, count").order("month");
 
+  // Top-level SyncCard contract: ok + one verbatim error string + result.upserted.
+  // A GCS list failure (403/404) is the error the operator most needs to see, so it
+  // takes precedence; otherwise an ingest failure; otherwise success with the count.
+  const ok = list.ok && ingest.ok === true;
+  const error = !list.ok
+    ? `GCS list ${list.status === 403 ? "403 (grant missing/insufficient)" : list.status === 404 ? "404 (bad bucket path)" : list.status || "error"}: ${list.error ?? list.statusText}`
+    : ingest.ok === false
+      ? ingest.error ?? "ingest failed"
+      : null;
+
   return Response.json(
     {
+      ok,
+      error,
+      triggeredBy,
       durationMs: Date.now() - startedAt,
+      result: { upserted: ingest.ok ? (ingest.rows ?? 0) : undefined },
       package: PLAY_PACKAGE,
       gcsList: {
         bucketPath,

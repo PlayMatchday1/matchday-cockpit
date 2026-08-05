@@ -20,7 +20,12 @@ type Source =
   | "mdapi-matches"
   | "mdapi-users"
   | "mdapi-users-lens-snapshot"
-  | "membership-snapshots";
+  | "membership-snapshots"
+  | "play-installs"
+  | "firstmatch-ledger"
+  | "manager-pay-recompute"
+  | "membership-prices"
+  | "telnyx-sms";
 
 type LastSyncRow = {
   completed_at: string;
