@@ -21,13 +21,19 @@ export async function GET(req: Request) {
 
   try {
     const t0 = Date.now();
-    const growth = await readGrowthFromViews(auth.supabase, new Date().toISOString());
+    const timing: { fetchMs?: number; computeMs?: number } = {};
+    const growth = await readGrowthFromViews(auth.supabase, new Date().toISOString(), timing);
     const totalMs = Date.now() - t0;
     return Response.json(growth, {
       status: 200,
       headers: {
         "Cache-Control": "private, max-age=60, stale-while-revalidate=300",
         "Server-Timing": `growth;dur=${totalMs}`,
+        // Custom headers survive Vercel (Server-Timing is stripped) — lets us read
+        // the true lambda-internal cold time without the caller's WAN latency.
+        "X-Growth-Total-Ms": String(totalMs),
+        "X-Growth-Fetch-Ms": String(timing.fetchMs ?? -1),
+        "X-Growth-Compute-Ms": String(timing.computeMs ?? -1),
       },
     });
   } catch (e) {

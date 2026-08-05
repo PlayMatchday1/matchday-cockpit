@@ -406,81 +406,14 @@ export function computeGrowthFromViews(input: ViewInput): GrowthData {
     unattributedMembershipTotal: [...unattribMembByMonth.values()].reduce((a, v) => a + v, 0),
   };
 
-  // ── cohorts + retention curve (from activeMonths) ───────────────────────────
-  const cohortMembers = new Map<string, number[]>();
-  const activeMonthsByUser = new Map<number, Set<string>>();
-  for (const a of aggs) {
-    (cohortMembers.get(a.first) ?? cohortMembers.set(a.first, []).get(a.first)!).push(a.u);
-    activeMonthsByUser.set(a.u, a.activeMonths);
-  }
-  const MAX_OFFSET = 12;
-  const cohorts = [...cohortMembers.keys()].sort().map((ck) => {
-    const members = cohortMembers.get(ck)!;
-    const cells = [];
-    for (let o = 0; o <= MAX_OFFSET; o++) {
-      const calMonth = addMonthsToKey(ck, o);
-      const observable = monthDiff(calMonth, nowMonth) >= 0;
-      const partial = calMonth === nowMonth;
-      let active = 0;
-      if (observable) for (const u of members) if (activeMonthsByUser.get(u)?.has(calMonth)) active++;
-      cells.push({ offset: o, active, pct: members.length ? active / members.length : 0, observable, partial });
-    }
-    return { cohort: ck, size: members.length, cells };
-  });
-  const aggByCity = (filter: (a: Agg) => boolean) => {
-    const byCohort = new Map<string, number[]>();
-    for (const a of aggs) if (filter(a)) (byCohort.get(a.first) ?? byCohort.set(a.first, []).get(a.first)!).push(a.u);
-    const curve: { offset: number; pct: number; observable: boolean }[] = [];
-    for (let o = 0; o <= MAX_OFFSET; o++) {
-      let active = 0, elig = 0, anyObs = false;
-      for (const [ck, members] of byCohort) {
-        const calMonth = addMonthsToKey(ck, o);
-        if (monthDiff(calMonth, nowMonth) < 0) continue;
-        anyObs = true;
-        elig += members.length;
-        for (const u of members) if (activeMonthsByUser.get(u)?.has(calMonth)) active++;
-      }
-      curve.push({ offset: o, pct: elig ? active / elig : 0, observable: anyObs && elig > 0 });
-    }
-    return curve;
-  };
-  const retentionCurveOverall = aggByCity(() => true);
-  const retentionCurveByCity: Record<string, typeof retentionCurveOverall> = {};
-  for (const c of cities) retentionCurveByCity[c] = aggByCity((a) => attributedCity(a) === c);
-
-  // ── reconciliation (DPP net vs strict booking) ──────────────────────────────
-  const dppByMonth = new Map<string, number>();
-  let deletedAccountRevenue = 0;
-  for (const r of revenue) {
-    if (r.type === "DPP" && r.month) { const k = revMonthToKey(r.month); if (k) dppByMonth.set(k, (dppByMonth.get(k) ?? 0) + Number(r.net ?? 0)); }
-    if ((r.city ?? "").trim() === "Deleted Account Revenue") deletedAccountRevenue += Number(r.net ?? 0);
-  }
-  const strictBookingByMonth = new Map<string, number>();
-  for (const d of playDims) strictBookingByMonth.set(d.match_month, (strictBookingByMonth.get(d.match_month) ?? 0) + Number(d.amount));
-  const recMonths = [...new Set([...dppByMonth.keys(), ...strictBookingByMonth.keys()])].sort();
-  let dppTotal = 0, strictTotal = 0;
-  const recRows = recMonths.map((m) => {
-    const dppNet = dppByMonth.get(m) ?? 0;
-    const strictBooking = strictBookingByMonth.get(m) ?? 0;
-    dppTotal += dppNet;
-    strictTotal += strictBooking;
-    return { m, dppNet, strictBooking, gap: dppNet - strictBooking };
-  });
-
-  // ── attribution comparison ──────────────────────────────────────────────────
-  const declaredDist = new Map<string, number>();
-  const freqDist = new Map<string, number>();
-  let disagreeRaw = 0, disagreeNormalized = 0, fallbackUsed = 0;
-  for (const a of aggs) {
-    const rawDeclared = rawDeclaredByUser.get(a.u) ?? null;
-    const declaredNorm = declaredByUser.get(a.u) ?? null;
-    const freq = mostFrequentCity(a);
-    declaredDist.set(declaredNorm ?? "(unset)", (declaredDist.get(declaredNorm ?? "(unset)") ?? 0) + 1);
-    freqDist.set(freq, (freqDist.get(freq) ?? 0) + 1);
-    if (!declaredNorm) fallbackUsed++;
-    if (rawDeclared && freq && rawDeclared !== freq) disagreeRaw++;
-    if (declaredNorm && freq && declaredNorm !== freq) disagreeNormalized++;
-  }
+  // cohorts, retentionCurveOverall/ByCity, reconciliation and attribution are part
+  // of the GrowthData type but NOTHING on the client reads them (the retention
+  // curve + cohort table now come from /api/growth/retention). Their derivations
+  // looped over all ~14k players × cohorts × cities — pure lambda CPU for a payload
+  // nobody consumes — so they're intentionally omitted (empty in the return below).
+  // If a future card needs them, prefer a dedicated view/endpoint over recomputing
+  // here. rawDeclaredByUser is likewise now unused; kept in scope harmlessly.
+  void rawDeclaredByUser;
 
   // ── downloads (android monthly rollup) ──────────────────────────────────────
   const androidByMonth = [...downloadsMonth].sort((a, b) => (a.month < b.month ? -1 : 1)).map((d) => ({ m: d.month, count: Number(d.count) }));
@@ -507,31 +440,25 @@ export function computeGrowthFromViews(input: ViewInput): GrowthData {
       played1,
       played5,
     },
-    registrationsByMonth: [...regByMonth.entries()].sort().map(([m, count]) => ({ m, count })),
+    registrationsByMonth: [], // unused by the client
     funnelByMonth,
     players: [], // dropped from the payload — churn card reads /api/growth/churn
     behaviorOverall,
     behaviorByCity,
     behaviorByField,
-    eventFields,
-    cityIndex,
-    cityHasMatches,
-    fieldIndex,
+    eventFields: [], // unused by the client
+    cityIndex: [], // internal only (drives behaviorByCity); not consumed downstream
+    cityHasMatches: [], // unused by the client
+    fieldIndex: [], // unused by the client
     arppOverall,
     arppByCity,
     arppDiagnostics,
-    cohorts,
-    retentionCurveOverall,
-    retentionCurveByCity,
+    cohorts: [], // see note above — not consumed; /api/growth/retention serves cohorts
+    retentionCurveOverall: [], // not consumed
+    retentionCurveByCity: {}, // not consumed
     cities,
-    reconciliation: { rows: recRows, dppTotal, strictTotal, gapTotal: dppTotal - strictTotal, deletedAccountRevenue },
-    attribution: {
-      declared: [...declaredDist.entries()].sort((a, b) => b[1] - a[1]).map(([city, count]) => ({ city, count })),
-      mostFrequent: [...freqDist.entries()].sort((a, b) => b[1] - a[1]).map(([city, count]) => ({ city, count })),
-      disagreeRaw,
-      disagreeNormalized,
-      fallbackUsed,
-    },
+    reconciliation: { rows: [], dppTotal: 0, strictTotal: 0, gapTotal: 0, deletedAccountRevenue: 0 }, // not consumed
+    attribution: { declared: [], mostFrequent: [], disagreeRaw: 0, disagreeNormalized: 0, fallbackUsed: 0 }, // not consumed
   };
 }
 
@@ -566,7 +493,12 @@ async function selectAll<T>(sb: SupabaseClient, table: string, cols: string, ord
   return out.filter((r) => r !== undefined);
 }
 
-export async function readGrowthFromViews(sb: SupabaseClient, now: string): Promise<GrowthData> {
+export async function readGrowthFromViews(
+  sb: SupabaseClient,
+  now: string,
+  timing?: { fetchMs?: number; computeMs?: number },
+): Promise<GrowthData> {
+  const tFetch = Date.now();
   const [profiles, playDims, registrations, subscriptions, revenue, downloadsMonth, rowCounts] = await Promise.all([
     selectAll<ProfileRow>(
       sb,
@@ -581,7 +513,11 @@ export async function readGrowthFromViews(sb: SupabaseClient, now: string): Prom
     selectAll<DownloadMonthRow>(sb, "growth_downloads_month", "month, count", "month"),
     readRowCounts(sb),
   ]);
-  return computeGrowthFromViews({ profiles, playDims, registrations, subscriptions, revenue, downloadsMonth, now, rowCounts });
+  if (timing) timing.fetchMs = Date.now() - tFetch;
+  const tCompute = Date.now();
+  const out = computeGrowthFromViews({ profiles, playDims, registrations, subscriptions, revenue, downloadsMonth, now, rowCounts });
+  if (timing) timing.computeMs = Date.now() - tCompute;
+  return out;
 }
 
 // rowCounts from the growth_row_counts materialized view (migration 0099): a

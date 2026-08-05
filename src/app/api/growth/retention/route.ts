@@ -15,11 +15,13 @@ export async function GET(req: Request) {
     const abbr = !city || city === "all" ? null : cityAbbrFromDisplay(city);
     const t0 = Date.now();
     const payload = await fetchCohortMatrix(auth.supabase, abbr);
+    const totalMs = Date.now() - t0;
     return Response.json(payload, {
       status: 200,
       headers: {
         "Cache-Control": "private, max-age=60, stale-while-revalidate=300",
-        "Server-Timing": `retention;dur=${Date.now() - t0}`,
+        "Server-Timing": `retention;dur=${totalMs}`,
+        "X-Retention-Total-Ms": String(totalMs),
       },
     });
   } catch (e) {
