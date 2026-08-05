@@ -11,7 +11,13 @@ export async function GET(req: Request) {
   const auth = await authenticateCrm(req);
   if (!auth.ok) return Response.json({ error: auth.error }, { status: auth.status });
   try {
-    const week = await fetchVeoWeek(auth.supabase, new Date());
+    // Optional ?week=YYYY-MM-DD selects the week to show (any date within it).
+    // Parsed into a LOCAL date (not UTC) so it lands in the intended week
+    // regardless of server timezone; invalid/absent → the current week.
+    const raw = new URL(req.url).searchParams.get("week");
+    const m = raw?.match(/^(\d{4})-(\d{2})-(\d{2})$/);
+    const weekRef = m ? new Date(Number(m[1]), Number(m[2]) - 1, Number(m[3])) : new Date();
+    const week = await fetchVeoWeek(auth.supabase, new Date(), weekRef);
     return Response.json(week, { status: 200, headers: { "Cache-Control": "no-store" } });
   } catch (e) {
     console.error("[api/veo] failed", e);

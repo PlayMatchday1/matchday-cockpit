@@ -52,8 +52,11 @@ export type VeoWeek = {
   generatedAt: string;
 };
 
-export async function fetchVeoWeek(sb: SupabaseClient, now: Date): Promise<VeoWeek> {
-  const mon = weekMonday(now);
+// `now` is the real clock (drives the per-day "today" flag + generatedAt);
+// `weekRef` selects WHICH week to assemble (any date within it). They are separate
+// so navigating to another week never marks one of its days as "today".
+export async function fetchVeoWeek(sb: SupabaseClient, now: Date, weekRef: Date = now): Promise<VeoWeek> {
+  const mon = weekMonday(weekRef);
   const sun = new Date(mon.getFullYear(), mon.getMonth(), mon.getDate() + 6);
   const todayIso = ymd(now);
   const days = DOW.map((dow, i) => {

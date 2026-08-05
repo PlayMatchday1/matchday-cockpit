@@ -88,18 +88,50 @@ function computeStats(w: VeoWeek): Stats {
 const sortMatches = (a: VeoMatch, b: VeoMatch) =>
   a.dayIdx - b.dayIdx || a.city.localeCompare(b.city) || a.minutes - b.minutes;
 
+const MON_ABBR = ["Jan", "Feb", "Mar", "Apr", "May", "Jun", "Jul", "Aug", "Sep", "Oct", "Nov", "Dec"];
+const pad2 = (n: number) => String(n).padStart(2, "0");
+
+// Shift a Monday (YYYY-MM-DD) by whole weeks, returning the new Monday. Parsed as
+// a LOCAL date so month/year boundaries roll over correctly.
+function shiftWeek(mondayIso: string, deltaWeeks: number): string {
+  const [y, m, d] = mondayIso.split("-").map(Number);
+  const dt = new Date(y, m - 1, d + deltaWeeks * 7);
+  return `${dt.getFullYear()}-${pad2(dt.getMonth() + 1)}-${pad2(dt.getDate())}`;
+}
+
+// "Mon 3 – Sun 9 Aug 2026", collapsing the shared month/year; spans months/years
+// when the week straddles a boundary ("Mon 30 Jun – Sun 6 Jul 2026").
+function weekRangeLabel(days: VeoDay[]): string {
+  if (days.length < 7) return "";
+  const a = days[0], b = days[6];
+  const [ay, am] = a.iso.split("-").map(Number);
+  const [by, bm] = b.iso.split("-").map(Number);
+  const start =
+    ay !== by ? `${a.dow} ${a.date} ${MON_ABBR[am - 1]} ${ay}`
+    : am !== bm ? `${a.dow} ${a.date} ${MON_ABBR[am - 1]}`
+    : `${a.dow} ${a.date}`;
+  const end = `${b.dow} ${b.date} ${MON_ABBR[bm - 1]} ${by}`;
+  return `${start} – ${end}`;
+}
+
 export default function VeoMasterSchedule() {
   const [week, setWeek] = useState<VeoWeek | null>(null);
   const [loading, setLoading] = useState(true);
   const [error, setError] = useState<string>("");
   const [view, setView] = useState<View>("schedule");
   const [busy, setBusy] = useState(false);
+  // "" = current week; otherwise a date (YYYY-MM-DD) within the selected week.
+  const [weekRef, setWeekRef] = useState<string>("");
+  const [navBusy, setNavBusy] = useState(false);
 
-  async function load() {
+  // ref selects the week; "" asks the server for the current week. Keeps the old
+  // week on screen until the new one arrives (no blanking on navigation).
+  async function load(ref: string) {
     try {
       const { data: sess } = await supabase.auth.getSession();
       const token = sess.session?.access_token;
-      const res = await fetch("/api/veo", { cache: "no-store", headers: token ? { Authorization: `Bearer ${token}` } : {} });
+      const url = ref ? `/api/veo?week=${encodeURIComponent(ref)}` : "/api/veo";
+      const res = await fetch(url, { cache: "no-store", headers: token ? { Authorization: `Bearer ${token}` } : {} });
       if (!res.ok) throw new Error(`HTTP ${res.status}`);
       const json = (await res.json()) as VeoWeek;
       setWeek(json);
@@ -111,7 +143,20 @@ export default function VeoMasterSchedule() {
     }
   }
 
-  useEffect(() => { void load(); }, []);
+  useEffect(() => { void load(""); }, []);
+
+  // Week navigation: shift from the displayed Monday (always a Monday), or jump
+  // back to the current week. Shared by both views (it lives in the card header).
+  async function navigate(ref: string) {
+    if (navBusy) return;
+    setNavBusy(true);
+    setWeekRef(ref);
+    await load(ref);
+    setNavBusy(false);
+  }
+  const goPrev = () => { if (week) void navigate(shiftWeek(week.weekStart, -1)); };
+  const goNext = () => { if (week) void navigate(shiftWeek(week.weekStart, 1)); };
+  const goToday = () => void navigate("");
 
   async function post(url: string, body: unknown): Promise<boolean> {
     const { data: sess } = await supabase.auth.getSession();
@@ -131,7 +176,7 @@ export default function VeoMasterSchedule() {
     setWeek({ ...week, matches: week.matches.map((m) => (m.apiId === apiId ? { ...m, veo: enabled } : m)) });
     setBusy(true);
     const ok = await post("/api/veo/intent", { matchApiId: apiId, enabled });
-    if (ok) await load(); else setWeek(snapshot);
+    if (ok) await load(weekRef); else setWeek(snapshot); // refetch the DISPLAYED week, not "now"
     setBusy(false);
   }
   async function setCameras(city: string, cameras: number) {
@@ -140,11 +185,14 @@ export default function VeoMasterSchedule() {
     setWeek({ ...week, cities: week.cities.map((c) => (c.city === city ? { ...c, cameras } : c)) });
     setBusy(true);
     const ok = await post("/api/veo/cameras", { city, cameras });
-    if (ok) await load(); else setWeek(snapshot);
+    if (ok) await load(weekRef); else setWeek(snapshot);
     setBusy(false);
   }
 
   const stats = useMemo<Stats | null>(() => (week ? computeStats(week) : null), [week]);
+  // The displayed week contains the real "today" only when the server flagged one
+  // of its days — the definitive "are we on the current week?" signal.
+  const isCurrentWeek = week ? week.days.some((d) => d.today) : false;
 
   // Worklist diff — two DISJOINT sections.
   const { needEmoji, needClubhouse } = useMemo(() => {
@@ -177,6 +225,17 @@ export default function VeoMasterSchedule() {
             <div className="vms-h-sub">Mark the matches a Veo camera will cover, then switch to Veo coverage to see the week as one grid — which nights are covered, which are open, and where a camera is idle or short.</div>
           </div>
           <div className="vms-h-right">
+            {week && (
+              <div className="vms-wknav" aria-busy={navBusy}>
+                <button type="button" className="vms-navbtn" onClick={goPrev} disabled={navBusy} aria-label="Previous week" title="Previous week">‹</button>
+                <div className={"vms-wklabel" + (isCurrentWeek ? "" : " vms-wklabel-away")}>
+                  <span className="vms-wkrange">{weekRangeLabel(week.days)}</span>
+                  <span className={"vms-wktag" + (isCurrentWeek ? " vms-wktag-now" : "")}>{isCurrentWeek ? "This week" : "Not current week"}</span>
+                </div>
+                <button type="button" className="vms-navbtn" onClick={goNext} disabled={navBusy} aria-label="Next week" title="Next week">›</button>
+                <button type="button" className={"vms-btn vms-todaybtn" + (isCurrentWeek ? "" : " vms-todaybtn-hot")} onClick={goToday} disabled={navBusy || isCurrentWeek} title="Jump to the current week">Today</button>
+              </div>
+            )}
             <span className="vms-control-label">View</span>
             <div className="vms-segmented" role="tablist" aria-label="View">
               <button type="button" role="tab" aria-selected={view === "schedule"} className={"vms-seg-btn" + (view === "schedule" ? " vms-active" : "")} onClick={() => setView("schedule")}>Schedule</button>
@@ -199,7 +258,7 @@ export default function VeoMasterSchedule() {
       {loading && !week ? (
         <div className="vms-card"><div className="vms-state">Loading Veo coverage…</div></div>
       ) : error && !week ? (
-        <div className="vms-card"><div className="vms-state">{error} <button type="button" className="vms-btn" onClick={() => { setLoading(true); void load(); }}>Retry</button></div></div>
+        <div className="vms-card"><div className="vms-state">{error} <button type="button" className="vms-btn" onClick={() => { setLoading(true); void load(weekRef); }}>Retry</button></div></div>
       ) : !week ? null : view === "schedule" ? (
         <ScheduleView week={week} busy={busy} onToggle={toggleIntent} />
       ) : (
@@ -454,6 +513,22 @@ const CSS = `
 .vms-btn:hover{background:var(--slot)}
 .vms-btn:disabled{opacity:.55;cursor:default}
 .vms-linkbtn{border:0;background:transparent;color:var(--forest);font-weight:800;font-size:11px;cursor:pointer;font-family:inherit;text-decoration:underline;padding:0}
+
+/* week navigation — lives in the card header next to View, drives both views */
+.vms-wknav{display:inline-flex;align-items:center;gap:8px}
+.vms-wknav[aria-busy="true"]{opacity:.6}
+.vms-navbtn{border:1px solid var(--line);background:#fff;color:var(--forest);font-size:15px;font-weight:900;
+  line-height:1;width:30px;height:30px;border-radius:9px;cursor:pointer;font-family:inherit;display:inline-flex;align-items:center;justify-content:center}
+.vms-navbtn:hover:not(:disabled){background:var(--slot)}
+.vms-navbtn:disabled{opacity:.5;cursor:default}
+.vms-wklabel{display:flex;flex-direction:column;align-items:center;min-width:172px;line-height:1.15}
+.vms-wkrange{font-size:12.5px;font-weight:900;color:var(--forest);white-space:nowrap;font-variant-numeric:tabular-nums}
+.vms-wktag{font-size:8.5px;font-weight:900;letter-spacing:.7px;text-transform:uppercase;color:var(--muted)}
+.vms-wktag-now{color:#046B45}
+.vms-wklabel-away .vms-wkrange{color:var(--coralInk)}
+.vms-wklabel-away .vms-wktag{color:var(--coralInk)}
+.vms-todaybtn-hot{border-color:var(--forest);background:var(--forest);color:#fff}
+.vms-todaybtn-hot:hover{background:var(--forest)}
 
 .vms-stats{display:flex;gap:0;border-bottom:1px solid var(--line);flex-wrap:wrap}
 .vms-stat{flex:1;min-width:150px;padding:14px 20px;border-right:1px solid var(--line)}
