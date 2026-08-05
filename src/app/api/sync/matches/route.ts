@@ -20,6 +20,7 @@ import {
   defaultIncrementalWindow,
 } from "@/lib/mdapiMatchesSync";
 import { runWithLog, type TriggeredBy } from "@/lib/syncLogging";
+import { refreshGrowthViews } from "@/lib/growthViews";
 
 // Incremental sync runs ~15-20s typical, measured off fin_sync_log
 // (the older ~150s note predated the window narrowing). 300s is far
@@ -136,6 +137,10 @@ export async function POST(req: Request) {
       rows_soft_deleted: r.rowsSoftDeleted,
     }),
   );
+
+  // Refresh the growth_* materialized views so the Growth tab reflects the new
+  // matches. Best-effort; a refresh failure never fails the sync.
+  if (result.ok) await refreshGrowthViews(supabase);
 
   return Response.json(
     {

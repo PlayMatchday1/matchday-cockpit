@@ -1,32 +1,29 @@
-// GET /api/growth/retention — the cohort/retention slice of the one cached
-// growth aggregate (getGrowthCache). Same cache /api/growth reads, so the 232k
-// participation rows are fetched once and both endpoints serve from it.
-
+// GET /api/growth/retention?city=all|<display> — the cohort matrix (all-cities
+// rollup by default) from growth_cohort_matrix. No participation fetch; the view
+// is pre-aggregated. The cards derive matrix/curve/heat/footers client-side.
 import { authenticateCities } from "@/lib/growthAuth";
-import { getGrowthCache } from "@/lib/growthCache";
+import { fetchCohortMatrix, cityAbbrFromDisplay } from "@/lib/growthViews";
 
 export const runtime = "nodejs";
-export const maxDuration = 60;
+export const maxDuration = 30;
 
 export async function GET(req: Request) {
   const auth = await authenticateCities(req);
   if (!auth.ok) return Response.json({ error: auth.error }, { status: auth.status });
   try {
+    const city = new URL(req.url).searchParams.get("city");
+    const abbr = !city || city === "all" ? null : cityAbbrFromDisplay(city);
     const t0 = Date.now();
-    const c = await getGrowthCache(auth.supabase);
-    const totalMs = Date.now() - t0;
-    return Response.json(
-      { ...c.retention, timing: { cached: c.cached, fetchMs: c.timing.fetchMs, computeMs: c.timing.computeMs, totalMs } },
-      {
-        status: 200,
-        headers: {
-          "Cache-Control": "private, max-age=60, stale-while-revalidate=300",
-          "Server-Timing": `retention;dur=${totalMs};desc="${c.cached ? "cache" : "fresh"}"`,
-        },
+    const payload = await fetchCohortMatrix(auth.supabase, abbr);
+    return Response.json(payload, {
+      status: 200,
+      headers: {
+        "Cache-Control": "private, max-age=60, stale-while-revalidate=300",
+        "Server-Timing": `retention;dur=${Date.now() - t0}`,
       },
-    );
+    });
   } catch (e) {
     console.error("[api/growth/retention] failed", e);
-    return Response.json({ error: "Failed to compute retention" }, { status: 500 });
+    return Response.json({ error: "Failed to load retention" }, { status: 500 });
   }
 }

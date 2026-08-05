@@ -52,6 +52,7 @@ import { recomputeManagerPayIntoFinExpenses } from "@/lib/managerPayCompute";
 import { ingestTelnyxSms } from "@/lib/telnyxSmsIngest";
 import { ingestCurrentMonth, PlayGrantPendingError } from "@/lib/playInstallsSync";
 import { runWithLog, type TriggeredBy } from "@/lib/syncLogging";
+import { refreshGrowthViews } from "@/lib/growthViews";
 
 // Stripe ~60s + mdapi_reviews ~10s + mdapi_subscriptions ~60s +
 // snapshot refresh ~2s. 300s gives ~2× headroom; if we ever hit
@@ -415,6 +416,9 @@ export async function POST(req: Request) {
     !membershipPricesResult.ok ||
     !snapshotResult.ok ||
     !telnyxSmsResult.ok;
+
+  // Refresh the growth_* materialized views nightly after the mirror syncs.
+  await refreshGrowthViews(supabase);
 
   return Response.json(
     {

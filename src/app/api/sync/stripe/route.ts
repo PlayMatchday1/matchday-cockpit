@@ -18,6 +18,7 @@ import { timingSafeEqual } from "node:crypto";
 import { createClient, type SupabaseClient } from "@supabase/supabase-js";
 import { commitStripe } from "@/lib/financeImport";
 import { syncStripeCharges, stripeClassifierProbe } from "@/lib/stripeSync";
+import { refreshGrowthViews } from "@/lib/growthViews";
 
 // Bumped from 60s to 300s on 2026-05-14 after a Jan 1-7 backfill
 // click via the new date-range UI hit Vercel's function-timeout
@@ -309,6 +310,7 @@ export async function POST(req: Request) {
       );
       rowsReplaced = result.rowsReplaced ?? 0;
       commitNote = result.note;
+      await refreshGrowthViews(supabase);
     }
 
     const chargesSkipped = sync.skippedNonPaid + sync.skippedNonUsd;
