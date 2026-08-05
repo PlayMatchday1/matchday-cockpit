@@ -1,14 +1,15 @@
--- Per-match Veo camera intent, Clubhouse-side. The 🎥 emoji in mdapi_matches.name
--- is a MANUAL admin edit in the MatchDay app; this table is Clubhouse's own record
--- of which matches should be filmed, so an admin can toggle the camera chip without
--- writing back to the MatchDay API. It is SEEDED once from the emoji so the Veo view
--- opens on the real current state instead of blank — but the emoji is NOT treated as
--- authoritative afterwards (the audit shows whole cities running nightly coverage
--- with zero emoji, so a nearly-empty seed is the honest starting point, not a bug).
+-- Two Clubhouse-side Veo tables. Neither touches the MatchDay API or any existing
+-- object (the one reference to an existing table is a READ-ONLY seed source; see
+-- below). Both are service-role-only, like schedule_master.
 --
--- Column note: the requested name was `on`, but `on` is a SQL reserved word — using
--- `enabled` avoids quoting it in every query. match_api_id is the mdapi_matches
--- api_id (no FK: mdapi_* is a read-only mirror we don't constrain against).
+-- 1) veo_intent — per-match camera intent. The 🎥 emoji in mdapi_matches.name is a
+--    MANUAL admin edit in the MatchDay app; this is Clubhouse's own record of which
+--    matches should be filmed, so the camera chip can be toggled without writing
+--    back to MatchDay. SEEDED once from the emoji so the Veo view opens on the real
+--    current state — but the emoji is NOT authoritative afterwards (whole cities run
+--    nightly coverage with zero emoji, so a sparse seed is the honest start).
+--    Column note: requested `on` -> `enabled` (SQL reserved word). No FK: mdapi_* is
+--    a read-only mirror we don't constrain against.
 CREATE TABLE IF NOT EXISTS public.veo_intent (
   match_api_id bigint PRIMARY KEY,
   enabled      boolean     NOT NULL DEFAULT true,
@@ -16,9 +17,10 @@ CREATE TABLE IF NOT EXISTS public.veo_intent (
   set_at       timestamptz NOT NULL DEFAULT now()
 );
 
--- Seed from the camera emoji (🎥 U+1F3A5) currently in the match name. Only 🎥 is
--- present in the data today; the app-side detector also covers the rest of the
--- camera family for future variants. ON CONFLICT keeps this migration idempotent.
+-- Seed from the camera emoji (🎥 U+1F3A5) in the match name. This SELECT is the
+-- ONLY reference to an existing object anywhere in this migration and it is
+-- strictly read-only — it inserts into the NEW veo_intent table, never modifies
+-- mdapi_matches. Only 🎥 is present in the data today. Idempotent via ON CONFLICT.
 INSERT INTO public.veo_intent (match_api_id, enabled, set_by, set_at)
 SELECT api_id, true, 'seed:emoji', now()
 FROM public.mdapi_matches
@@ -26,9 +28,31 @@ WHERE deleted_at IS NULL
   AND name LIKE '%' || U&'\+01F3A5' || '%'
 ON CONFLICT (match_api_id) DO NOTHING;
 
--- Clubhouse-only: written/read exclusively through service-role API routes (same as
--- schedule_master). RLS on with no policies denies anon/authenticated entirely;
--- service_role bypasses RLS. Belt-and-suspenders REVOKE of the default grants too.
-ALTER TABLE public.veo_intent ENABLE ROW LEVEL SECURITY;
 REVOKE ALL ON public.veo_intent FROM anon, authenticated;
 GRANT ALL ON public.veo_intent TO service_role;
+
+-- 2) veo_camera_count — editable per-city camera inventory (the fleet changes, so
+--    this persists). The Veo view's +/- edits THIS, never veo_codes. veo_codes stays
+--    a read-only reference the recordings pipeline uses; this grid reads inventory,
+--    so the two can drift and the grid surfaces where. Seeded with the current fleet:
+--    Austin 2, Houston 2, San Antonio 1, Dallas 1, Atlanta 1, OKC 1, St. Louis 1
+--    = 9 cameras, 63 camera-nights of weekly capacity (9 × 7).
+CREATE TABLE IF NOT EXISTS public.veo_camera_count (
+  city       text PRIMARY KEY,
+  cameras    integer     NOT NULL DEFAULT 1 CHECK (cameras >= 0),
+  updated_by text,
+  updated_at timestamptz NOT NULL DEFAULT now()
+);
+
+INSERT INTO public.veo_camera_count (city, cameras) VALUES
+  ('Austin', 2),
+  ('Houston', 2),
+  ('San Antonio', 1),
+  ('Dallas', 1),
+  ('Atlanta', 1),
+  ('OKC', 1),
+  ('St. Louis', 1)
+ON CONFLICT (city) DO NOTHING;
+
+REVOKE ALL ON public.veo_camera_count FROM anon, authenticated;
+GRANT ALL ON public.veo_camera_count TO service_role;
