@@ -22,7 +22,9 @@ import DataRoomPanel from "./DataRoomPanel";
 export default function GrowthDashboard() {
   const [data, setData] = useState<GrowthData | null>(null);
   const [retention, setRetention] = useState<RetentionAggregate | null>(null);
-  const [error, setError] = useState<string | null>(null);
+  const [error, setError] = useState<string | null>(null); // total failure (auth/network)
+  const [dataError, setDataError] = useState<string | null>(null); // /api/growth only
+  const [retError, setRetError] = useState<string | null>(null); // /api/growth/retention only
   const [period, setPeriod] = useState<Period | null>(null);
 
   useEffect(() => {
@@ -40,17 +42,27 @@ export default function GrowthDashboard() {
           fetch("/api/growth", { headers }),
           fetch("/api/growth/retention", { headers }),
         ]);
-        if (!res.ok) {
+        // The two endpoints are independent: /api/growth backs the other cards,
+        // /api/growth/retention backs these two. One failing must not blank the
+        // other (the full path is heavy — see the cached retention route).
+        if (res.ok) {
+          const json = (await res.json()) as GrowthData;
+          if (alive) {
+            setData(json);
+            const ms = json.behaviorOverall.map((p) => p.m);
+            if (ms.length) setPeriod(defaultPeriod(ms, json.generatedAt.slice(0, 7)));
+          }
+        } else if (alive) {
           const body = (await res.json().catch(() => null)) as { error?: string } | null;
-          throw new Error(body?.error ?? `Request failed (${res.status})`);
+          setDataError(body?.error ?? `Request failed (${res.status})`);
         }
-        const json = (await res.json()) as GrowthData;
         if (alive) {
-          setData(json);
-          const ms = json.behaviorOverall.map((p) => p.m);
-          if (ms.length) setPeriod(defaultPeriod(ms, json.generatedAt.slice(0, 7)));
+          if (retRes.ok) setRetention((await retRes.json()) as RetentionAggregate);
+          else {
+            const body = (await retRes.json().catch(() => null)) as { error?: string } | null;
+            setRetError(body?.error ?? `Request failed (${retRes.status})`);
+          }
         }
-        if (retRes.ok && alive) setRetention((await retRes.json()) as RetentionAggregate);
       } catch (e) {
         if (alive) setError(e instanceof Error ? e.message : "Failed to load");
       }
@@ -60,7 +72,7 @@ export default function GrowthDashboard() {
     };
   }, []);
 
-  if (error) {
+  if (error && !data && !retention) {
     return (
       <div className={styles.dash}>
         <Header />
@@ -68,57 +80,57 @@ export default function GrowthDashboard() {
       </div>
     );
   }
-  if (!data) {
-    return (
-      <div className={styles.dash}>
-        <Header />
-        <div className={styles.stateMsg}>Loading growth analytics…</div>
-      </div>
-    );
-  }
 
-  const rc = data.rowCounts;
-  const months = data.behaviorOverall.map((p) => p.m);
-  const activePeriod: Period = period ?? defaultPeriod(months, data.generatedAt.slice(0, 7));
+  const months = data ? data.behaviorOverall.map((p) => p.m) : [];
+  const activePeriod: Period | null = data ? period ?? defaultPeriod(months, data.generatedAt.slice(0, 7)) : null;
+  const retMsg = (
+    <div className={`${styles.stateMsg} ${retError ? styles.errorMsg : ""}`}>
+      {retError ? `Retention unavailable: ${retError}` : "Loading retention…"}
+    </div>
+  );
   return (
     <div className={styles.dash}>
       <Header />
 
-      <GlobalPeriod months={months} period={activePeriod} setPeriod={setPeriod} />
-
-      <div className={styles.calloutBanner}>
-        This data has <b>three start dates</b>, not one. Registrations reach back to{" "}
-        <b>{monthLabel(data.floors.registrations)}</b> and memberships to <b>{monthLabel(data.floors.memberships)}</b>,
-        but every play-derived number — matches, spots, revenue, cohorts, retention, ARPP — begins{" "}
-        <b>{monthLabel(data.floors.play)}</b>, the first month any matches exist. Empty regions before a series&rsquo;
-        start mean &ldquo;no data yet&rdquo;, never zero.
-      </div>
-
-      <KpiRow data={data} period={activePeriod} />
-      <PlayerFunnel data={data} period={activePeriod} />
-      <BehaviorPanel data={data} period={activePeriod} />
-      <ArppPanel data={data} />
-      {retention ? (
-        <CohortPanel agg={retention} />
+      {data && activePeriod ? (
+        <>
+          <GlobalPeriod months={months} period={activePeriod} setPeriod={setPeriod} />
+          <div className={styles.calloutBanner}>
+            This data has <b>three start dates</b>, not one. Registrations reach back to{" "}
+            <b>{monthLabel(data.floors.registrations)}</b> and memberships to{" "}
+            <b>{monthLabel(data.floors.memberships)}</b>, but every play-derived number — matches, spots, revenue,
+            cohorts, retention, ARPP — begins <b>{monthLabel(data.floors.play)}</b>, the first month any matches exist.
+            Empty regions before a series&rsquo; start mean &ldquo;no data yet&rdquo;, never zero.
+          </div>
+          <KpiRow data={data} period={activePeriod} />
+          <PlayerFunnel data={data} period={activePeriod} />
+          <BehaviorPanel data={data} period={activePeriod} />
+          <ArppPanel data={data} />
+        </>
       ) : (
-        <div className={styles.stateMsg}>Loading retention cohorts…</div>
+        <div className={`${styles.stateMsg} ${dataError ? styles.errorMsg : ""}`}>
+          {dataError
+            ? `Funnel, player behavior, ARPP & churn are unavailable: ${dataError}`
+            : "Loading funnel, behavior, ARPP & churn…"}
+        </div>
       )}
-      <div className={styles.grid2}>
-        {retention ? (
-          <RetentionCurvePanel agg={retention} />
-        ) : (
-          <div className={styles.stateMsg}>Loading retention curve…</div>
-        )}
-        <ChurnPanel data={data} />
-      </div>
-      <DataRoomPanel data={data} />
 
-      <div className={styles.footnote}>
-        Source: live mdapi_* mirror + fin_revenue, read-only. {fmtInt(rc.matchesLive)} live matches,{" "}
-        {fmtInt(rc.playersLive)} live participation rows. Every figure excludes fake players —{" "}
-        {fmtInt(rc.usersFake)} fake users and {fmtInt(rc.fakeLiveRows)} live fake rows ({fmtPct(rc.fakeLivePct)} of live
-        rows) are removed everywhere. Computed {new Date(data.generatedAt).toLocaleString("en-US")}.
+      {retention ? <CohortPanel agg={retention} /> : retMsg}
+      <div className={styles.grid2}>
+        {retention ? <RetentionCurvePanel agg={retention} /> : retMsg}
+        {data && activePeriod && <ChurnPanel data={data} />}
       </div>
+      {data && <DataRoomPanel data={data} />}
+
+      {data && (
+        <div className={styles.footnote}>
+          Source: live mdapi_* mirror + fin_revenue, read-only. {fmtInt(data.rowCounts.matchesLive)} live matches,{" "}
+          {fmtInt(data.rowCounts.playersLive)} live participation rows. Every figure excludes fake players —{" "}
+          {fmtInt(data.rowCounts.usersFake)} fake users and {fmtInt(data.rowCounts.fakeLiveRows)} live fake rows (
+          {fmtPct(data.rowCounts.fakeLivePct)} of live rows) are removed everywhere. Computed{" "}
+          {new Date(data.generatedAt).toLocaleString("en-US")}.
+        </div>
+      )}
     </div>
   );
 }
