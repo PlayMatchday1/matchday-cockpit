@@ -108,7 +108,7 @@ export default function GrowthDashboard() {
         <div className={styles.stateMsg}>Loading retention cohorts…</div>
       )}
       <ChurnPanel cities={data.cities} authHeaders={authHeaders ?? {}} />
-      <DataRoomPanel data={data} />
+      <DataRoomPanel authHeaders={authHeaders ?? {}} />
 
       <div className={styles.footnote}>
         Source: live mdapi_* mirror + fin_revenue, read-only. {fmtInt(data.rowCounts.matchesLive)} live matches,{" "}
