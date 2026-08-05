@@ -1,0 +1,428 @@
+<!doctype html>
+<html lang="en"><head><meta charset="utf-8"/>
+<title>Master Schedule — Veo coverage</title>
+<style>
+:root{
+  /* MatchDay brand palette.
+     Main      cream #F4EEE1 · forest #003326 · mint #2CDB87
+     Secondary yellow #FFFF3E · coral #FF6955 · blue #2E79FF · purple #A671F4
+     Coral and mint are brand values used as fills; where either has to carry
+     TEXT it is darkened to clear 4.5:1, since #FF6955 reads 2.84:1 on white. */
+  --forest:#003326;--ink:#0d1f18;--muted:#5C6B62;--cream:#F4EEE1;--paper:#fff;
+  --line:#dfe4da;--slot:#EFF4EF;--mint:#2CDB87;--mintSoft:#dcf7e9;
+  --yellow:#FFFF3E;--coral:#FF6955;--coralInk:#A83120;--coralBg:#FFE0DA;
+  --blue:#2E79FF;--purple:#A671F4;
+  --amber:#A83120;--amberBg:#FFE0DA;--red:#A83120;--redBg:#FFE0DA;
+}
+*{box-sizing:border-box}
+body{margin:0;padding:26px;background:var(--cream);
+  font-family:-apple-system,BlinkMacSystemFont,"Segoe UI",Inter,Helvetica,Arial,sans-serif;
+  color:var(--ink);-webkit-font-smoothing:antialiased}
+.wrap{max-width:1360px;margin:0 auto}
+.card{background:var(--paper);border:1px solid var(--line);border-radius:16px;
+  box-shadow:0 9px 26px rgba(0,43,34,.075);overflow:hidden;margin-bottom:18px}
+
+.head{display:flex;justify-content:space-between;align-items:flex-start;gap:16px;
+  padding:18px 20px;border-bottom:1px solid var(--line)}
+.h-title{font-size:16px;font-weight:900;letter-spacing:-.2px;color:var(--forest)}
+.h-sub{font-size:12px;color:var(--muted);margin-top:5px;max-width:720px;line-height:1.45}
+.h-right{display:flex;align-items:center;gap:11px}
+.control-label{font-size:9px;font-weight:900;letter-spacing:.8px;text-transform:uppercase;color:var(--muted)}
+.segmented{display:inline-flex;background:var(--slot);border:1px solid var(--line);border-radius:10px;padding:3px}
+.seg-btn{border:0;background:transparent;font-size:11.5px;font-weight:800;color:var(--muted);
+  padding:7px 14px;border-radius:8px;cursor:pointer;font-family:inherit}
+.seg-btn.active{background:#fff;color:var(--forest);box-shadow:0 1px 3px rgba(0,43,34,.13)}
+.btn{border:1px solid var(--line);background:#fff;color:var(--forest);font-size:12px;font-weight:800;
+  padding:8px 15px;border-radius:10px;cursor:pointer;font-family:inherit}
+.btn:hover{background:var(--slot)}
+
+/* ── counters ── */
+.stats{display:flex;gap:0;border-bottom:1px solid var(--line)}
+.stat{flex:1;padding:14px 20px;border-right:1px solid var(--line)}
+.stat:last-child{border-right:0}
+.stat-l{font-size:9px;font-weight:900;letter-spacing:.8px;text-transform:uppercase;color:var(--muted)}
+.stat-v{font-size:21px;font-weight:900;color:var(--forest);margin-top:5px;line-height:1;
+  font-variant-numeric:tabular-nums}
+.stat-f{font-size:11px;color:var(--muted);margin-top:5px;font-weight:650}
+
+/* ── schedule view ── */
+.city-block{padding:16px 20px 18px;border-bottom:1px solid var(--line)}
+.city-block:last-child{border-bottom:0}
+.city-head{display:flex;justify-content:space-between;align-items:center;margin-bottom:12px}
+.city-name{font-size:14px;font-weight:900;color:var(--forest)}
+.city-tag{font-size:10px;font-weight:850;color:var(--muted);background:var(--slot);
+  border:1px solid var(--line);border-radius:99px;padding:4px 10px}
+.days{display:grid;grid-template-columns:repeat(7,1fr);gap:9px}
+.day{border:1px solid var(--line);border-radius:11px;padding:9px;min-height:96px;background:#fff}
+.day.today{border-color:var(--mint);box-shadow:0 0 0 2px var(--mintSoft)}
+.day.today .dow,.day.today .dnum{color:#046B45}
+.day-h{display:flex;justify-content:space-between;align-items:center;margin-bottom:8px}
+.dow{font-size:9px;font-weight:900;letter-spacing:.6px;text-transform:uppercase;color:var(--muted)}
+.dnum{font-size:11px;font-weight:900;color:var(--ink)}
+.slot{border:1px solid var(--line);border-radius:8px;padding:7px 8px;margin-bottom:6px;background:#fff}
+.slot:last-child{margin-bottom:0}
+/* A Veo match is the thing you are scanning for, so it inverts: dark card,
+   lime chip. The mint outline on .day stays "today" — the two signals are
+   different shapes, so a covered match on today reads as both. A solid
+   background-color sits under the gradient so contrast measures honestly. */
+.slot.veo{
+  border-color:#003326;
+  background-color:#073E2E;
+  background-image:linear-gradient(135deg,#003326 0%,#0a5741 100%);
+  box-shadow:0 3px 12px rgba(0,51,38,.28);
+  position:relative;overflow:hidden}
+.slot.veo::after{
+  content:"";position:absolute;right:-14px;top:-14px;width:52px;height:52px;
+  border-radius:50%;background:rgba(255,255,62,.10);pointer-events:none}
+.slot.veo .slot-t{color:#fff;position:relative}
+.slot.veo .slot-v{color:#AEE6CB;position:relative}
+.slot.veo .cam.on{
+  background:var(--yellow);border-color:var(--yellow);color:var(--forest);
+  position:relative;box-shadow:0 1px 4px rgba(0,0,0,.22)}
+.slot-t{font-size:11px;font-weight:900;color:var(--ink);letter-spacing:-.1px}
+.slot-v{font-size:10px;color:var(--muted);font-weight:700;margin-top:2px;line-height:1.3}
+.cam{margin-top:6px;display:inline-flex;align-items:center;gap:5px;border:1px solid var(--line);
+  background:#fff;border-radius:7px;padding:3px 7px;cursor:pointer;font-family:inherit;
+  font-size:9px;font-weight:900;letter-spacing:.4px;text-transform:uppercase;color:var(--muted)}
+.cam:hover{background:var(--slot)}
+.cam.on{background:var(--mintSoft);border-color:#8fd9b6;color:#046B45}
+.slot.veo .cam{border-color:rgba(255,255,255,.30);background:rgba(255,255,255,.07);color:#CBEBDA}
+.cam svg{width:11px;height:11px;display:block}
+.none{font-size:10.5px;color:var(--muted);font-weight:700;padding:6px 2px}
+
+/* ── veo grid ── */
+.grid-wrap{overflow-x:auto}
+table{width:100%;border-collapse:collapse;min-width:1080px}
+th,td{border:1px solid var(--line);padding:6px;vertical-align:top;text-align:left}
+th{padding:10px 11px}
+th{font-size:10px;font-weight:900;letter-spacing:.7px;text-transform:uppercase;color:var(--muted);
+  background:var(--slot);white-space:nowrap}
+th.corner{width:92px}
+td.unit{font-size:12px;font-weight:900;color:var(--forest);background:var(--slot);
+  white-space:nowrap;width:92px;padding:14px 11px}
+/* The grid exists to spot gaps, and 31 of 49 cells are covered — covered is the
+   NORM and must stay quiet. Darkening the majority buries the exception.
+   Three states, loudest last:
+     covered  faint mint wash + mint edge   "fine, move on"
+     idle     plain, hairline dash          "spare capacity"
+     open     coral cell                    "this is the one to fix"
+   The dark inversion stays on the match cards in Schedule view, where a Veo
+   match IS the exception among many. */
+.cell{border-radius:8px;padding:9px 10px;min-height:48px}
+.cell.on{background:#F1FBF6;box-shadow:inset 3px 0 0 var(--mint)}
+.cell.gapcell{background:#FFD3C9;box-shadow:inset 3px 0 0 var(--coral);display:flex;align-items:center;justify-content:center}
+.cell.off{display:flex;align-items:center;justify-content:center;min-height:48px}
+.cell-v{font-size:11.5px;font-weight:800;color:var(--forest);line-height:1.35}
+.cell-t{font-size:10.5px;color:var(--muted);font-weight:700;margin-top:3px}
+.gap{font-size:10px;font-weight:900;letter-spacing:.7px;text-transform:uppercase;
+  color:var(--coralInk)}
+.unit-x{font-size:8.5px;font-weight:850;letter-spacing:.4px;text-transform:uppercase;
+  color:var(--red);margin-top:3px}
+.empty{font-size:11px;color:#69756E;font-weight:700}
+.cell.on.over{background:var(--coralBg);box-shadow:inset 3px 0 0 var(--coral)}
+.warn{display:inline-block;margin-top:6px;font-size:9px;font-weight:900;
+  letter-spacing:.4px;text-transform:uppercase;background:var(--coral);color:var(--forest);
+  border-radius:5px;padding:2px 7px}
+.foot{padding:14px 20px 18px;font-size:11px;color:var(--muted);line-height:1.6;max-width:1020px}
+.foot b{color:var(--ink);font-weight:800}
+.foot + .foot{padding-top:0}
+.hidden{display:none}
+
+/* ── worklist ── */
+.wl-head{padding:14px 20px;background:var(--slot);border-top:1px solid var(--line);
+  border-bottom:1px solid var(--line);display:flex;justify-content:space-between;align-items:center}
+.wl-head strong{font-size:12.5px;font-weight:900;color:var(--forest)}
+.wl-head span{font-size:11px;color:var(--muted);font-weight:700}
+table.wl{min-width:0}
+table.wl th,table.wl td{border:0;border-bottom:1px solid var(--line);font-size:12px;
+  font-variant-numeric:tabular-nums;padding:10px 20px}
+table.wl th{background:#fff}
+table.wl td.nm{font-weight:800}
+</style></head>
+<body><div class="wrap">
+
+<div class="card">
+  <div class="head">
+    <div>
+      <div class="h-title">Master Schedule</div>
+      <div class="h-sub" id="hSub">Mark the matches a Veo camera will cover, then switch to Veo coverage to see the week as one grid — which nights are covered, which are open, and where a camera is idle or short.</div>
+    </div>
+    <div class="h-right">
+      <span class="control-label">View</span>
+      <div class="segmented" id="viewSeg">
+        <button class="seg-btn active" data-value="schedule">Schedule</button>
+        <button class="seg-btn" data-value="veo">Veo coverage</button>
+      </div>
+      <button class="btn" id="exportBtn">Export worklist</button>
+    </div>
+  </div>
+
+  <div class="stats" id="stats"></div>
+</div>
+
+<!-- ══ schedule view ══ -->
+<div id="scheduleView">
+  <div class="card"><div id="cityBlocks"></div></div>
+</div>
+
+<!-- ══ veo view ══ -->
+<div id="veoView" class="hidden">
+  <div class="card">
+    <div class="grid-wrap"><table id="veoGrid"></table></div>
+    <div class="foot" id="gridFoot"></div>
+    <div class="foot" id="gridFoot2"></div>
+  </div>
+
+  <div class="card">
+    <div class="wl-head">
+      <strong>Camera icon worklist</strong>
+      <span id="wlCount"></span>
+    </div>
+    <table class="wl"><thead id="wlHead"></thead><tbody id="wlBody"></tbody></table>
+  </div>
+</div>
+
+</div>
+
+<script>
+/* ── week ─────────────────────────────────────────────────────────────────── */
+const DOW = ["Mon","Tue","Wed","Thu","Fri","Sat","Sun"];
+const DATES = [3,4,5,6,7,8,9];
+const TODAY = 1; // Tue
+
+/* Every match in the week. veo=true means a camera is assigned to it.
+   Seeded from the operating spreadsheet.                                     */
+const M = (city,d,time,venue,veo) => ({city,d,time,venue,veo});
+const MATCHES = [
+  // Austin — one covered night, six open
+  M("Austin",0,"6:30 PM","North East Metropolitan Park",false),
+  M("Austin",0,"7:00 PM","Onion Creek",false),
+  M("Austin",1,"6:30 PM","North East Metropolitan Park",false),
+  M("Austin",1,"7:00 PM","Hattrick",false),
+  M("Austin",1,"7:45 PM","LBJ Early College High School",true),
+  M("Austin",2,"7:00 PM","Hattrick",false),
+  M("Austin",2,"7:00 PM","Onion Creek",false),
+  M("Austin",3,"6:30 PM","North East Metropolitan Park",false),
+  M("Austin",3,"7:00 PM","Onion Creek",false),
+  M("Austin",4,"6:30 PM","North East Metropolitan Park",false),
+  M("Austin",4,"7:00 PM","Onion Creek",false),
+  M("Austin",5,"9:00 AM","Onion Creek",false),
+  M("Austin",5,"9:30 AM","LBJ Early College High School",false),
+  M("Austin",6,"6:30 PM","North East Metropolitan Park",false),
+  M("Austin",6,"7:00 PM","Hattrick",false),
+
+  // Houston — Pearland covered every night, twice
+  ...DATES.map((_,d)=>[M("Houston",d,"8:15 PM","Pearland",true), M("Houston",d,"9:15 PM","Pearland",true)]).flat(),
+  M("Houston",2,"8:00 PM","Sivells Bend",false),
+  M("Houston",5,"8:00 PM","Rush Soccer Houston",false),
+
+  // Atlanta
+  M("Atlanta",0,"7:00 PM","PRUMC",true),
+  M("Atlanta",1,"7:00 PM","PRUMC",true),
+  M("Atlanta",3,"7:00 PM","PRUMC",true),
+  M("Atlanta",4,"7:00 PM","PRUMC",true),
+  M("Atlanta",6,"6:00 PM","PRUMC",true),
+
+  // San Antonio
+  ...[0,1,2,3].map(d=>[M("San Antonio",d,"8:00 PM","Soccer Central",true),
+                       M("San Antonio",d,"9:00 PM","Soccer Central",true)]).flat(),
+  M("San Antonio",4,"7:00 PM","Soccer Central",true),
+  M("San Antonio",4,"8:00 PM","Soccer Central",true),
+  M("San Antonio",4,"9:00 PM","Soccer Central",true),
+  ...[5,6].map(d=>[M("San Antonio",d,"9:30 AM","Soccer Central",true),
+                   M("San Antonio",d,"7:00 PM","Soccer Central",true),
+                   M("San Antonio",d,"8:00 PM","Soccer Central",true)]).flat(),
+
+  // Dallas
+  M("Dallas",1,"8:00 PM","Crossbar Rowlett",true),
+  M("Dallas",3,"8:00 PM","Crossbar Rowlett",true),
+  M("Dallas",5,"8:00 PM","Crossbar Rowlett",true),
+  M("Dallas",6,"8:00 PM","Crossbar Rowlett",true),
+  M("Dallas",0,"8:00 PM","Marcus Park",false),
+
+  // OKC
+  M("OKC",1,"8:00 PM","Scissortail Park",true),
+  M("OKC",2,"8:00 PM","Scissortail Park",true),
+  M("OKC",3,"8:00 PM","Scissortail Park",true),
+  M("OKC",6,"8:00 PM","Scissortail Park",true),
+
+  // St. Louis — Friday is a second venue, so Thursday+Friday are different sites
+  M("St. Louis",0,"8:15 PM","Lou Fusz",true),
+  M("St. Louis",3,"8:15 PM","Lou Fusz",true),
+  M("St. Louis",4,"7:00 PM","Centennial Commons",true),
+  M("St. Louis",2,"8:00 PM","Lou Fusz",false)
+];
+
+const CITIES = ["Austin","Houston","Atlanta","San Antonio","Dallas","OKC","St. Louis"];
+
+/* Camera inventory. A city with two cameras always shows two rows, even when the
+   second sits idle all week — that is HTX2 on the operating sheet. If a night has
+   more distinct venues marked than the city owns cameras, an extra row appears
+   and is flagged as over capacity. */
+const CAMERAS = { "Austin":1, "Houston":2, "Atlanta":1, "San Antonio":1,
+                  "Dallas":1, "OKC":1, "St. Louis":1 };
+const $ = id => document.getElementById(id);
+const state = { view:"schedule" };
+const CAM_SVG = `<svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2.4"
+  stroke-linecap="round" stroke-linejoin="round"><path d="M23 7l-7 5 7 5V7z"/>
+  <rect x="1" y="5" width="15" height="14" rx="2"/></svg>`;
+
+/* ── derived ──────────────────────────────────────────────────────────────── */
+const veoOf = c => MATCHES.filter(m => m.city === c && m.veo);
+
+/* A city-day needs one camera per DISTINCT VENUE. Two matches at one venue are
+   back-to-back on the same camera; two venues the same night are two cameras,
+   which is what HTX1/HTX2 means on the sheet — so the row splits. */
+function unitsFor(city){
+  const byDay = DATES.map((_,d) => {
+    const ms = veoOf(city).filter(m => m.d === d);
+    const venues = [...new Set(ms.map(m => m.venue))];
+    return venues.map(v => ({venue:v, times: ms.filter(m => m.venue === v).map(m => m.time)}));
+  });
+  /* One row per camera the city owns, always — an idle second camera is still a
+     row. More venues on a night than cameras adds rows and flags over capacity. */
+  const owned = CAMERAS[city] || 1;
+  const width = Math.max(owned, ...byDay.map(x => x.length));
+  return Array.from({length:width}, (_,i) => byDay.map(day => day[i] || null));
+}
+const ownedFor = city => CAMERAS[city] || 1;
+const overCapacityDays = city => {
+  const rows = unitsFor(city), owned = ownedFor(city);
+  return DATES.map((_,d) => rows.filter(r => r[d]).length).filter(n => n > owned).length;
+};
+
+function stats(){
+  const covered = MATCHES.filter(m => m.veo).length;
+  const owned = CITIES.reduce((a,c) => a + ownedFor(c), 0);
+  let used = 0, gaps = 0, over = 0;
+  CITIES.forEach(c => {
+    const rows = unitsFor(c);
+    DATES.forEach((_,d) => {
+      const filled = rows.filter(r => r[d]).length;
+      if(filled === 0) gaps++; else used += filled;
+      if(filled > ownedFor(c)) over++;
+    });
+  });
+  return {covered, owned, used, capacity: owned * 7, gaps, over, total: MATCHES.length};
+}
+
+function renderStats(){
+  const s = stats();
+  const pct = Math.round(s.used / s.capacity * 100);
+  $("stats").innerHTML = [
+    ["Matches with Veo", s.covered, `of ${s.total} this week`],
+    ["Camera nights used", s.used, `of ${s.capacity} available · ${pct}%`],
+    ["Open nights", s.gaps, "city-days with matches, no camera"],
+    ["Over capacity", s.over, s.over ? "more venues than cameras owned" : "none"]
+  ].map(([l,v,f]) =>
+    `<div class="stat"><div class="stat-l">${l}</div><div class="stat-v">${v}</div><div class="stat-f">${f}</div></div>`
+  ).join("");
+}
+
+/* ── schedule view ────────────────────────────────────────────────────────── */
+function renderSchedule(){
+  $("cityBlocks").innerHTML = CITIES.map(city => {
+    const n = veoOf(city).length;
+    const cams = ownedFor(city);
+    const days = DATES.map((date,d) => {
+      const ms = MATCHES.filter(m => m.city === city && m.d === d)
+                        .sort((a,b) => a.time.localeCompare(b.time));
+      const body = ms.length ? ms.map(m => {
+        const i = MATCHES.indexOf(m);
+        return `<div class="slot ${m.veo?"veo":""}">
+          <div class="slot-t">${m.time}</div>
+          <div class="slot-v">${m.venue}</div>
+          <button class="cam ${m.veo?"on":""}" data-i="${i}"
+            aria-pressed="${m.veo}" title="${m.veo?"Remove Veo":"Assign Veo"}">${CAM_SVG}Veo</button>
+        </div>`;
+      }).join("") : `<div class="none">No sessions</div>`;
+      return `<div class="day ${d===TODAY?"today":""}">
+        <div class="day-h"><span class="dow">${DOW[d]}</span><span class="dnum">${String(date).padStart(2,"0")}</span></div>
+        ${body}</div>`;
+    }).join("");
+    return `<div class="city-block">
+      <div class="city-head"><span class="city-name">${city}</span>
+      <span class="city-tag">${cams} camera${cams===1?"":"s"} · ${n} with Veo</span></div>
+      <div class="days">${days}</div></div>`;
+  }).join("");
+
+  $("cityBlocks").querySelectorAll(".cam").forEach(b =>
+    b.addEventListener("click", () => {
+      MATCHES[Number(b.dataset.i)].veo = !MATCHES[Number(b.dataset.i)].veo;
+      renderAll();
+    }));
+}
+
+/* ── veo grid ─────────────────────────────────────────────────────────────── */
+function renderGrid(){
+  let head = `<thead><tr><th class="corner">Veo</th>`
+    + DOW.map((d,i) => `<th>${d} ${String(DATES[i]).padStart(2,"0")}</th>`).join("") + `</tr></thead>`;
+  let body = "<tbody>";
+  CITIES.forEach(city => {
+    const rows = unitsFor(city);
+    const code = city.replace(/[^A-Za-z]/g,"").slice(0,4).toUpperCase();
+    rows.forEach((row,ri) => {
+      const label = rows.length > 1 ? `${code}${ri+1}` : code;
+      const spare = ri >= ownedFor(city);
+      body += `<tr><td class="unit" title="${city}${spare?" — beyond the cameras this city owns":""}">`
+        + `${label}${spare?`<div class="unit-x">unowned</div>`:""}</td>`;
+      row.forEach((cell,d) => {
+        if(!cell){
+          const anyThisDay = rows.some(r => r[d]);
+          body += ri === 0 && !anyThisDay
+            ? `<td><div class="cell gapcell"><span class="gap">Open</span></div></td>`
+            : `<td><div class="cell off"><span class="empty">—</span></div></td>`;
+          return;
+        }
+        const over = ri >= ownedFor(city);
+        body += `<td><div class="cell on${over?" over":""}"><div class="cell-v">${cell.venue}</div>`
+          + `<div class="cell-t">${cell.times.join(" + ")}</div>`
+          + (over ? `<span class="warn">no camera</span>` : "")
+          + `</div></td>`;
+      });
+      body += `</tr>`;
+    });
+  });
+  $("veoGrid").innerHTML = head + body + "</tbody>";
+
+  const s = stats();
+  $("gridFoot").innerHTML =
+    `<b>One row per camera the city owns.</b> Houston has two, so HOUS2 is a row all week even when it `
+    + `is idle — that is HTX2 on the operating sheet. <b>A coral cell</b> is an open night: the city `
+    + `has matches but no camera on any of them — the coral cells are this week's to-do list. `
+    + `<b>An em-dash</b> means that camera is free that night, not that the night is uncovered.`;
+  $("gridFoot2").innerHTML = s.over
+    ? `<b>${s.over} night${s.over===1?"":"s"} over capacity.</b> More venues are marked than the city owns `
+      + `cameras, so the extra rows are flagged <em>no camera</em>. Either drop one venue or move a camera `
+      + `in from a nearby city.`
+    : `<b>No night is over capacity.</b> Every marked venue has a camera that can reach it.`;
+}
+
+/* ── worklist ─────────────────────────────────────────────────────────────── */
+function renderWorklist(){
+  const rows = MATCHES.map((m,i) => ({...m,i})).filter(m => m.veo)
+    .sort((a,b) => a.d - b.d || a.city.localeCompare(b.city) || a.time.localeCompare(b.time));
+  $("wlCount").textContent = `${rows.length} matches to flag in the app`;
+  $("wlHead").innerHTML = `<tr><th>Day</th><th>City</th><th>Venue</th><th>Time</th></tr>`;
+  $("wlBody").innerHTML = rows.map(r =>
+    `<tr><td class="nm">${DOW[r.d]} ${String(DATES[r.d]).padStart(2,"0")}</td>`
+    + `<td>${r.city}</td><td>${r.venue}</td><td>${r.time}</td></tr>`).join("");
+}
+
+function renderAll(){
+  renderStats();
+  if(state.view === "schedule"){ renderSchedule(); }
+  else { renderGrid(); renderWorklist(); }
+  $("scheduleView").classList.toggle("hidden", state.view !== "schedule");
+  $("veoView").classList.toggle("hidden", state.view === "schedule");
+}
+
+$("viewSeg").addEventListener("click", e => {
+  const b = e.target.closest(".seg-btn"); if(!b) return;
+  state.view = b.dataset.value;
+  [...$("viewSeg").children].forEach(x => x.classList.toggle("active", x === b));
+  renderAll();
+});
+renderSchedule(); renderGrid(); renderWorklist(); renderAll();
+</script>
+</body></html>

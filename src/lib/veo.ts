@@ -644,3 +644,30 @@ export function classifyVeo(args: {
     candidateApiIds,
   };
 }
+
+// ---------------------------------------------------------------------------
+// Camera-emoji detection over match NAMES (the manual admin marker).
+// ---------------------------------------------------------------------------
+// The camera indicator is not a DB field — admins type a camera emoji into the
+// match name in the MatchDay app. An audit of all 9,394 live matches found exactly
+// ONE glyph in use — 🎥 U+1F3A5, in 924 names — but this matches the whole camera
+// FAMILY so a future variant (📹/📷/📸/🎬/🎦/📽️/🎞️) can't silently render an empty
+// grid. Team-colour circles (🔴/🔵/⚪️) are deliberately NOT cameras. The glyph
+// appears at the start or middle of the name, glued to other emoji or to letters
+// with inconsistent spacing, so both helpers handle it anywhere and re-normalise.
+const CAMERA_EMOJI = /[\u{1F3A5}\u{1F4F9}\u{1F4F7}\u{1F4F8}\u{1F3A6}\u{1F3AC}\u{1F4FD}\u{1F39E}]️?/gu;
+
+/** True if the match name carries any camera-family emoji. */
+export function hasCameraEmoji(name: string | null | undefined): boolean {
+  if (!name) return false;
+  CAMERA_EMOJI.lastIndex = 0;
+  return CAMERA_EMOJI.test(name);
+}
+
+/** The match name with every camera emoji removed and whitespace re-normalised —
+ * the camera chip carries that information now, so no Clubhouse surface should
+ * render the raw glyph. Other emoji in the name are left untouched. */
+export function stripCameraEmoji(name: string | null | undefined): string {
+  if (!name) return "";
+  return name.replace(CAMERA_EMOJI, "").replace(/\s{2,}/g, " ").trim();
+}
