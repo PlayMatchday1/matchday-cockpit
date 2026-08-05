@@ -1,0 +1,457 @@
+<!doctype html>
+<html lang="en"><head><meta charset="utf-8"/>
+<title>Player Data Room — pivot</title>
+<style>
+:root{
+  --forest:#003326;--ink:#0d1f18;--muted:#5C6B62;--cream:#F4EEE1;--paper:#fff;
+  --line:#dfe4da;--slot:#F7F9F6;--mint:#2CDB87;--mintSoft:#E4F9EF;--yellow:#FFFF3E;
+  --hlBg:#FFFAC9;--hlLine:#F2E9A0;--hlInk:#6B5A00;
+}
+*{box-sizing:border-box}
+body{margin:0;padding:24px;background:var(--cream);
+  font-family:-apple-system,BlinkMacSystemFont,"Segoe UI",Inter,Helvetica,Arial,sans-serif;
+  color:var(--ink);-webkit-font-smoothing:antialiased}
+.wrap{max-width:1760px;margin:0 auto}
+.card{background:var(--paper);border:1px solid var(--line);border-radius:16px;
+  box-shadow:0 9px 26px rgba(0,51,38,.075);overflow:hidden}
+
+.head{display:flex;justify-content:space-between;align-items:flex-start;gap:24px;
+  padding:18px 22px;border-bottom:1px solid var(--line)}
+.title{font-size:16px;font-weight:900;letter-spacing:-.2px;color:var(--forest)}
+.sub{font-size:12px;color:var(--muted);margin-top:5px;line-height:1.45;max-width:900px}
+.pill{display:inline-flex;align-items:center;gap:7px;font-size:11px;font-weight:900;
+  border-radius:99px;padding:7px 13px;background:var(--slot);border:1px solid var(--line);
+  color:var(--muted);white-space:nowrap}
+.pill.on{background:var(--mintSoft);border-color:#A8E7C9;color:#046B45}
+.pill i{width:7px;height:7px;border-radius:50%;background:currentColor}
+
+.presets{display:flex;flex-wrap:wrap;gap:8px;align-items:center;padding:13px 22px;
+  background:var(--slot);border-bottom:1px solid var(--line)}
+.presets-l{font-size:9px;font-weight:900;letter-spacing:.8px;text-transform:uppercase;
+  color:var(--muted);margin-right:6px}
+.pre{border:1px solid var(--line);background:#fff;color:var(--forest);font-size:11.5px;
+  font-weight:850;border-radius:99px;padding:7px 14px;cursor:pointer;font-family:inherit}
+.pre:hover{border-color:#bcc9c0}
+.pre.on{background:var(--forest);border-color:var(--forest);color:#fff}
+
+.wells{display:grid;grid-template-columns:1fr 1fr 1.25fr;gap:14px;padding:16px 22px}
+.well{border:1px solid var(--line);border-radius:12px;padding:13px 14px;background:var(--slot);
+  min-height:132px;display:flex;flex-direction:column}
+.well-h{display:flex;justify-content:space-between;align-items:baseline;margin-bottom:10px}
+.well-h b{font-size:10px;font-weight:900;letter-spacing:.8px;text-transform:uppercase;color:var(--forest)}
+.well-h span{font-size:10px;color:var(--muted);font-weight:700}
+.chips{display:flex;flex-wrap:wrap;gap:7px;flex:1;align-content:flex-start;margin-bottom:10px}
+.chip{display:inline-flex;align-items:center;gap:8px;background:#fff;border:1px solid var(--line);
+  border-radius:9px;padding:6px 8px 6px 11px;font-size:11.5px;font-weight:850;color:var(--ink)}
+.chip select{border:1px solid var(--line);border-radius:7px;padding:3px 6px;font-size:10.5px;
+  font-weight:800;font-family:inherit;color:var(--ink);background:#fff}
+.chip button{border:0;background:transparent;color:var(--muted);cursor:pointer;font-size:14px;
+  line-height:1;padding:0 2px;font-family:inherit}
+.chip button:hover{color:#A83120}
+.addrow{display:flex;gap:8px}
+.addrow select{flex:1;min-width:0}
+select{font-family:inherit;font-size:12.5px;font-weight:700;color:var(--ink);background:#fff;
+  border:1px solid var(--line);border-radius:9px;padding:9px 11px;cursor:pointer}
+.add{border:1px solid var(--line);background:#fff;color:var(--forest);font-size:11.5px;font-weight:900;
+  border-radius:9px;padding:9px 14px;cursor:pointer;font-family:inherit;white-space:nowrap}
+.add:hover{background:#fff;border-color:#bcc9c0}
+
+.filters{display:grid;grid-template-columns:repeat(4,1fr);gap:14px;align-items:end;
+  padding:4px 22px 18px}
+.fld label{display:block;font-size:9px;font-weight:900;letter-spacing:.8px;text-transform:uppercase;
+  color:var(--muted);margin-bottom:6px}
+.fld select{width:100%}
+.fld select:disabled{background:var(--slot);color:#8b978f;cursor:default}
+
+.rhead{display:flex;justify-content:space-between;align-items:center;gap:16px;padding:14px 22px;
+  border-top:1px solid var(--line);background:var(--slot)}
+.rhead strong{font-size:13.5px;font-weight:900;color:var(--forest)}
+.rmeta{font-size:11.5px;color:var(--muted);font-weight:700;margin-top:3px}
+.csv{border:0;background:var(--yellow);color:var(--forest);font-size:12.5px;font-weight:900;
+  padding:11px 20px;border-radius:10px;cursor:pointer;font-family:inherit;white-space:nowrap}
+.csv:hover{filter:brightness(.95)}
+
+.twrap{overflow:auto;max-height:420px}
+table{width:100%;border-collapse:collapse}
+th,td{padding:10px 14px;font-size:12.5px;text-align:right;border-bottom:1px solid var(--line);
+  font-variant-numeric:tabular-nums;white-space:nowrap}
+th{font-size:9px;font-weight:900;letter-spacing:.7px;text-transform:uppercase;color:var(--muted);
+  background:#fff;position:sticky;top:0;z-index:2}
+th.dim,td.dim{text-align:left;font-weight:850;color:var(--ink);background:#fff;position:sticky;left:0;z-index:1}
+th.dim{z-index:3}
+td.val{cursor:pointer}
+td.val:hover{background:var(--mintSoft);box-shadow:inset 0 0 0 1px #A8E7C9}
+td.val.sel{background:var(--mintSoft);box-shadow:inset 0 0 0 2px var(--mint)}
+tfoot td{background:var(--forest);color:#fff;font-weight:900;border:0;position:sticky;bottom:0}
+tfoot td.dim{background:var(--forest);color:#fff}
+
+.drawer{border-top:1px solid var(--line);background:var(--slot)}
+.drawer-h{display:flex;justify-content:space-between;align-items:flex-start;gap:16px;padding:15px 22px}
+.drawer-h strong{font-size:13.5px;font-weight:900;color:var(--forest)}
+.drawer-h .dm{font-size:11.5px;color:var(--muted);font-weight:700;margin-top:3px}
+.dactions{display:flex;gap:9px;align-items:center}
+.ghost{border:1px solid var(--line);background:#fff;color:var(--ink);font-size:11.5px;font-weight:850;
+  border-radius:9px;padding:9px 15px;cursor:pointer;font-family:inherit}
+.plist{max-height:280px;overflow:auto;background:#fff;border-top:1px solid var(--line)}
+.plist table{min-width:0}
+.plist th{background:var(--slot)}
+.hint{padding:13px 22px;font-size:11.5px;color:var(--muted);font-weight:700;background:var(--slot);
+  border-top:1px solid var(--line)}
+.foot{padding:14px 22px 18px;font-size:11px;color:var(--muted);line-height:1.6;max-width:1140px}
+.foot b{color:var(--ink);font-weight:800}
+</style></head>
+<body><div class="wrap"><div class="card">
+
+  <div class="head">
+    <div>
+      <div class="title">Player Data Room</div>
+      <div class="sub">Build the table you want, then click any number to see the players behind it and export them.</div>
+    </div>
+  </div>
+
+  <div class="presets">
+    <span class="presets-l">Start from</span>
+    <span id="preRow"></span>
+  </div>
+
+  <div class="wells">
+    <div class="well">
+      <div class="well-h"><b>Rows</b><span>one or more dimensions</span></div>
+      <div class="chips" id="rowChips"></div>
+      <div class="addrow"><select id="rowAdd"></select><button class="add" id="rowAddBtn">+ Add</button></div>
+    </div>
+    <div class="well">
+      <div class="well-h"><b>Columns</b><span>optional</span></div>
+      <div class="chips" id="colChips"></div>
+      <div class="addrow"><select id="colAdd"></select><button class="add" id="colAddBtn">+ Add</button></div>
+    </div>
+    <div class="well">
+      <div class="well-h"><b>Values</b><span>count, sum or average</span></div>
+      <div class="chips" id="valChips"></div>
+      <div class="addrow"><select id="valAdd"></select><select id="aggAdd"></select>
+        <button class="add" id="valAddBtn">+ Add</button></div>
+    </div>
+  </div>
+
+  <div class="filters">
+    <div class="fld"><label>From</label><select id="fFrom"></select></div>
+    <div class="fld"><label>To</label><select id="fTo"></select></div>
+    <div class="fld"><label>City</label><select id="fCity"></select></div>
+    <div class="fld"><label>Field</label><select id="fField"></select></div>
+  </div>
+
+  <div class="rhead">
+    <div><strong id="rTitle">—</strong><div class="rmeta" id="rMeta"></div></div>
+    <button class="csv" id="tableCsv">Download table</button>
+  </div>
+
+  <div class="twrap">
+    <table id="pivot"><thead id="pHead"></thead><tbody id="pBody"></tbody><tfoot id="pFoot"></tfoot></table>
+  </div>
+
+  <div id="drawerHost"><div class="hint" id="hint">Click any number above to see the players behind it.</div></div>
+
+  <div class="foot" id="note"></div>
+
+</div></div>
+
+<script>
+/* ── source ──────────────────────────────────────────────────────────────── */
+const CITY_FIELDS = {
+  "Austin":["NEMP","Onion Creek","Westlake","Round Rock","Hattrick"],
+  "Houston":["ATH Katy","ATH Pearland","Sivells Bend"],
+  "San Antonio":["Soccer Central","Blossom Athletic","SJD"],
+  "Dallas":["Crossbar Rowlett","Marcus Park"],
+  "Atlanta":["PRUMC"],
+  "OKC":["Scissortail Park"],
+  "St. Louis":["Lou Fusz","Centennial Commons"]
+};
+const CITIES = Object.keys(CITY_FIELDS);
+const CODE = {"Austin":"03","Houston":"02","San Antonio":"01","Dallas":"07",
+              "Atlanta":"10","OKC":"11","St. Louis":"09"};
+const MN = ["Jan","Feb","Mar","Apr","May","Jun","Jul","Aug","Sep","Oct","Nov","Dec"];
+const MONTHS = ["2026-02","2026-03","2026-04","2026-05","2026-06","2026-07"];
+const mLab = k => `${MN[Number(k.slice(5))-1]} ${k.slice(0,4)}`;
+const cLab = i => `${MN[i%12]} ${Math.floor(i/12)}`;
+const C0 = 2023*12+3, C1 = 2026*12+7;
+
+/* One fact per player-month they were active. Every figure on the page is an
+   aggregation of this table, so the harness can recompute any cell. */
+const FACTS = (() => {
+  const out = [];
+  CITIES.forEach((city, ci) => {
+    const fields = CITY_FIELDS[city];
+    const n = [150,78,70,28,22,15,23][ci];
+    for(let k=0;k<n;k++){
+      const field = fields[(k*3+ci) % fields.length];
+      const cohort = C0 + ((k*17 + ci*7) % (C1-C0+1));
+      const id = `MD-${CODE[city]}-${String(k+1).padStart(4,"0")}`;
+      MONTHS.forEach((m, mi) => {
+        if(((k*5 + ci*3 + mi*13) % 7) >= 3) return;
+        const spots = 1 + ((k + ci + mi) % 4);
+        out.push({ id, city, field, month:m, cohort,
+          spots, matches:spots, revenue: Math.round(spots*(16+((k*3+ci)%9))*100)/100,
+          isNew: cohort === (Number(m.slice(0,4))*12 + Number(m.slice(5))-1) });
+      });
+    }
+  });
+  return out;
+})();
+
+const DIMS = {
+  "City":        f => f.city,
+  "Field":       f => f.field,
+  "Month":       f => mLab(f.month),
+  "Year":        f => f.month.slice(0,4),
+  "Cohort year": f => String(Math.floor(f.cohort/12)),
+  "Cohort month":f => cLab(f.cohort)
+};
+const DIM_ORDER = {
+  "Month": v => MONTHS.map(mLab).indexOf(v),
+  "Cohort month": v => { const [m,y]=v.split(" "); return Number(y)*12 + MN.indexOf(m); }
+};
+const VALS = {
+  "Players":       { aggs:["Count"],                  field:null },
+  "New players":   { aggs:["Count"],                  field:null },
+  "Spots booked":  { aggs:["Sum","Average"],          field:"spots" },
+  "Revenue":       { aggs:["Sum","Average"],          field:"revenue", money:true },
+  "Matches":       { aggs:["Sum","Average"],          field:"matches" }
+};
+
+const $ = id => document.getElementById(id);
+const fmt = n => n.toLocaleString("en-US");
+const money = n => "$" + n.toLocaleString("en-US",{minimumFractionDigits:2,maximumFractionDigits:2});
+
+const PRESETS = [
+  { n:"Players by city by month", rows:["City"], cols:["Month"], vals:[["Players","Count"]] },
+  { n:"Spots per player by field", rows:["Field"], cols:[], vals:[["Spots booked","Sum"],["Players","Count"]] },
+  { n:"Revenue by cohort year", rows:["Cohort year"], cols:[], vals:[["Revenue","Sum"],["Players","Count"]] },
+  { n:"New players by city", rows:["City"], cols:["Month"], vals:[["New players","Count"]] },
+  { n:"Field by month", rows:["City","Field"], cols:["Month"], vals:[["Spots booked","Sum"]] }
+];
+
+const state = { rows:["City"], cols:["Month"], vals:[["Players","Count"]],
+                from:0, to:MONTHS.length-1, city:"all", field:"all", preset:0, cell:null };
+
+const scoped = () => FACTS
+  .filter(f => MONTHS.indexOf(f.month) >= state.from && MONTHS.indexOf(f.month) <= state.to)
+  .filter(f => state.city === "all" || f.city === state.city)
+  .filter(f => state.field === "all" || f.field === state.field)
+  ;
+
+const keyOf = (f, dims) => dims.map(d => DIMS[d](f)).join(" · ");
+const sortKeys = (keys, dims) => {
+  const d = dims[dims.length-1];
+  return keys.slice().sort((a,b) => {
+    if(DIM_ORDER[d]){
+      const pa = a.split(" · ").pop(), pb = b.split(" · ").pop();
+      const oa = DIM_ORDER[d](pa), ob = DIM_ORDER[d](pb);
+      if(oa !== ob) return oa - ob;
+    }
+    return a.localeCompare(b);
+  });
+};
+
+function measure(facts, [name, agg]){
+  const v = VALS[name];
+  if(name === "Players") return new Set(facts.map(f=>f.id)).size;
+  if(name === "New players") return new Set(facts.filter(f=>f.isNew).map(f=>f.id)).size;
+  const nums = facts.map(f => f[v.field]);
+  const sum = nums.reduce((a,b)=>a+b,0);
+  if(agg === "Sum") return v.money ? Math.round(sum*100)/100 : sum;
+  const players = new Set(facts.map(f=>f.id)).size || 1;
+  const avg = sum / players;                       // average is always per player
+  return v.money ? Math.round(avg*100)/100 : Math.round(avg*100)/100;
+}
+const show = (val, [name]) => VALS[name].money ? money(val) : fmt(val);
+
+/* ── render ──────────────────────────────────────────────────────────────── */
+function render(){
+  $("preRow").innerHTML = PRESETS.map((p,i) =>
+    `<button class="pre ${state.preset===i?"on":""}" data-p="${i}">${p.n}</button>`).join("");
+  $("preRow").querySelectorAll(".pre").forEach(b => b.addEventListener("click", () => {
+    const p = PRESETS[Number(b.dataset.p)];
+    state.rows=[...p.rows]; state.cols=[...p.cols];
+    state.vals=p.vals.map(v=>[...v]); state.preset=Number(b.dataset.p); state.cell=null;
+    render();
+  }));
+
+  const chip = (label, extra, onX) =>
+    `<span class="chip">${label}${extra||""}<button data-x="${onX}">×</button></span>`;
+  $("rowChips").innerHTML = state.rows.map((d,i)=>chip(d,"",`r${i}`)).join("")
+    || `<span class="chip" style="opacity:.55">none</span>`;
+  $("colChips").innerHTML = state.cols.map((d,i)=>chip(d,"",`c${i}`)).join("")
+    || `<span class="chip" style="opacity:.55">none</span>`;
+  $("valChips").innerHTML = state.vals.map(([n,a],i)=>
+    chip(n, ` <select data-agg="${i}">${VALS[n].aggs.map(x=>
+      `<option${x===a?" selected":""}>${x}</option>`).join("")}</select>`, `v${i}`)).join("");
+
+  document.querySelectorAll(".chip button[data-x]").forEach(b =>
+    b.addEventListener("click", () => {
+      const t = b.dataset.x[0], i = Number(b.dataset.x.slice(1));
+      if(t==="r" && state.rows.length>1) state.rows.splice(i,1);
+      else if(t==="c") state.cols.splice(i,1);
+      else if(t==="v" && state.vals.length>1) state.vals.splice(i,1);
+      state.preset=-1; state.cell=null; render();
+    }));
+  document.querySelectorAll("select[data-agg]").forEach(s =>
+    s.addEventListener("change", e => {
+      state.vals[Number(s.dataset.agg)][1] = e.target.value; state.preset=-1; render();
+    }));
+
+  const free = d => !state.rows.includes(d) && !state.cols.includes(d);
+  $("rowAdd").innerHTML = Object.keys(DIMS).filter(free).map(d=>`<option>${d}</option>`).join("")
+    || `<option value="">all used</option>`;
+  $("colAdd").innerHTML = Object.keys(DIMS).filter(free).map(d=>`<option>${d}</option>`).join("")
+    || `<option value="">all used</option>`;
+  $("valAdd").innerHTML = Object.keys(VALS).map(v=>`<option>${v}</option>`).join("");
+  const vSel = $("valAdd").value || Object.keys(VALS)[0];
+  $("aggAdd").innerHTML = VALS[vSel].aggs.map(a=>`<option>${a}</option>`).join("");
+
+  const facts = scoped();
+  const rowKeys = sortKeys([...new Set(facts.map(f=>keyOf(f,state.rows)))], state.rows);
+  const colKeys = state.cols.length
+    ? sortKeys([...new Set(facts.map(f=>keyOf(f,state.cols)))], state.cols) : [""];
+
+  const bucket = new Map();
+  facts.forEach(f => {
+    const k = keyOf(f,state.rows) + "||" + (state.cols.length ? keyOf(f,state.cols) : "");
+    if(!bucket.has(k)) bucket.set(k, []);
+    bucket.get(k).push(f);
+  });
+  const at = (r,c) => bucket.get(r + "||" + c) || [];
+
+  const nv = state.vals.length;
+  let head = `<tr><th class="dim" rowspan="${state.cols.length?2:1}">${state.rows.join(" · ")}</th>`;
+  if(state.cols.length){
+    head += colKeys.map(c=>`<th colspan="${nv}">${c}</th>`).join("")
+          + `<th colspan="${nv}">Total</th></tr><tr>`
+          + colKeys.concat(["Total"]).map(()=>state.vals.map(v=>
+              `<th>${v[1]} of ${v[0]}</th>`).join("")).join("");
+  } else {
+    head += state.vals.map(v=>`<th>${v[1]} of ${v[0]}</th>`).join("");
+  }
+  head += `</tr>`;
+  $("pHead").innerHTML = head;
+
+  $("pBody").innerHTML = rowKeys.map(r => {
+    const cells = colKeys.map(c => state.vals.map((v,vi) => {
+      const fs = at(r,c);
+      const on = state.cell && state.cell.r===r && state.cell.c===c && state.cell.v===vi;
+      return `<td class="val ${on?"sel":""}"
+                data-r="${encodeURIComponent(r)}" data-c="${encodeURIComponent(c)}" data-v="${vi}"
+              >${fs.length?show(measure(fs,v),v):"—"}</td>`;
+    }).join("")).join("");
+    const rowFacts = facts.filter(f => keyOf(f,state.rows) === r);
+    const tot = state.vals.map((v,vi) =>
+      `<td class="val" data-r="${encodeURIComponent(r)}" data-c="__all__" data-v="${vi}"
+        >${show(measure(rowFacts,v),v)}</td>`).join("");
+    return `<tr><td class="dim">${r}</td>${cells}${state.cols.length?tot:""}</tr>`;
+  }).join("");
+
+  const gtot = colKeys.map(c => state.vals.map(v => {
+    const fs = facts.filter(f => !state.cols.length || keyOf(f,state.cols) === c);
+    return `<td>${fs.length?show(measure(fs,v),v):"—"}</td>`;
+  }).join("")).join("");
+  $("pFoot").innerHTML = `<tr><td class="dim">Grand total</td>${gtot}`
+    + (state.cols.length ? state.vals.map(v=>`<td>${show(measure(facts,v),v)}</td>`).join("") : "")
+    + `</tr>`;
+
+  $("rTitle").textContent = state.vals.map(v=>`${v[1]} of ${v[0]}`).join(", ")
+    + ` by ${state.rows.join(" and ")}` + (state.cols.length?` across ${state.cols.join(" and ")}`:"");
+  $("rMeta").textContent =
+    `${fmt(new Set(facts.map(f=>f.id)).size)} players · ${mLab(MONTHS[state.from])} – ${mLab(MONTHS[state.to])}`
+    + (state.city!=="all"?` · ${state.city}`:"") + (state.field!=="all"?` · ${state.field}`:"")
+    + ` · ${rowKeys.length} row${rowKeys.length===1?"":"s"}`;
+
+  $("pBody").querySelectorAll("td.val").forEach(td => td.addEventListener("click", () => {
+    /* Decode before comparing — the stored key is decoded, so comparing it to
+       the raw encoded attribute never matches and the cell cannot toggle off. */
+    const r = decodeURIComponent(td.dataset.r);
+    const c = td.dataset.c === "__all__" ? "__all__" : decodeURIComponent(td.dataset.c);
+    const vi = Number(td.dataset.v);
+    state.cell = (state.cell && state.cell.r===r && state.cell.c===c && state.cell.v===vi)
+      ? null : { r, c, v: vi };
+    render();
+  }));
+
+  drawer(facts);
+
+  $("note").innerHTML =
+    `<b>Every number is clickable.</b> The table answers the question; clicking a cell gives you the
+     players inside it, with their city, field and volume, ready to export and contact.
+     <b>Average</b> is always per player, never per row of data.`;
+}
+
+function drawer(facts){
+  if(!state.cell){
+    $("drawerHost").innerHTML =
+      `<div class="hint">Click any number above to see the players behind it.</div>`;
+    return;
+  }
+  const { r, c, v } = state.cell;
+  const inCell = facts.filter(f =>
+    keyOf(f,state.rows) === r && (c === "__all__" || !state.cols.length || keyOf(f,state.cols) === c));
+  const byId = new Map();
+  inCell.forEach(f => {
+    if(!byId.has(f.id)) byId.set(f.id, { id:f.id, city:f.city, field:f.field,
+      cohort:f.cohort, months:0, spots:0, revenue:0 });
+    const p = byId.get(f.id);
+    p.months++; p.spots += f.spots; p.revenue = Math.round((p.revenue + f.revenue)*100)/100;
+  });
+  const list = [...byId.values()].sort((a,b) => b.spots-a.spots || a.id.localeCompare(b.id));
+  const label = `${state.rows.join(" · ")} ${r}`
+    + (c && c !== "__all__" && state.cols.length ? ` · ${state.cols.join(" · ")} ${c}` : ", all columns");
+
+  $("drawerHost").innerHTML =
+    `<div class="drawer">
+      <div class="drawer-h">
+        <div><strong>${fmt(list.length)} players</strong>
+          <div class="dm">${label} · ${state.vals[v][1]} of ${state.vals[v][0]} = ${show(measure(inCell,state.vals[v]),state.vals[v])}</div></div>
+        <div class="dactions">
+          <button class="csv" id="listCsv">Download ${fmt(list.length)} players</button>
+          <button class="ghost" id="closeDrawer">Close</button>
+        </div>
+      </div>
+      <div class="plist"><table>
+        <thead><tr><th>Player ID</th><th>City</th><th>Field</th><th>Cohort</th>
+          <th>Months active</th><th>Spots</th><th>Revenue</th></tr></thead>
+        <tbody>${list.map(p=>`<tr><td class="dim">${p.id}</td><td>${p.city}</td><td>${p.field}</td>
+          <td>${cLab(p.cohort)}</td><td>${p.months}</td><td>${fmt(p.spots)}</td>
+          <td>${money(p.revenue)}</td></tr>`).join("")}</tbody>
+      </table></div>
+    </div>`;
+
+  $("closeDrawer").addEventListener("click", () => { state.cell = null; render(); });
+}
+
+/* filters */
+function syncFields(){
+  const fs = state.city === "all" ? [...new Set(Object.values(CITY_FIELDS).flat())].sort()
+                                  : CITY_FIELDS[state.city];
+  $("fField").innerHTML = `<option value="all">All fields</option>`
+    + fs.map(f=>`<option${f===state.field?" selected":""}>${f}</option>`).join("");
+  if(!fs.includes(state.field)) state.field = "all";
+}
+$("fCity").innerHTML = `<option value="all">All cities</option>` + CITIES.map(c=>`<option>${c}</option>`).join("");
+["fFrom","fTo"].forEach((id,w) => $(id).innerHTML = MONTHS.map((m,i)=>
+  `<option value="${i}"${i===(w?MONTHS.length-1:0)?" selected":""}>${mLab(m)}</option>`).join(""));
+syncFields();
+
+$("fCity").addEventListener("change", e => { state.city=e.target.value; state.field="all"; syncFields(); state.cell=null; render(); });
+$("fField").addEventListener("change", e => { state.field=e.target.value; state.cell=null; render(); });
+$("fFrom").addEventListener("change", e => { state.from=Number(e.target.value);
+  if(state.from>state.to){ state.to=state.from; $("fTo").value=String(state.to); } state.cell=null; render(); });
+$("fTo").addEventListener("change", e => { state.to=Number(e.target.value);
+  if(state.to<state.from){ state.from=state.to; $("fFrom").value=String(state.from); } state.cell=null; render(); });
+$("rowAddBtn").addEventListener("click", () => { const v=$("rowAdd").value;
+  if(v){ state.rows.push(v); state.preset=-1; state.cell=null; render(); } });
+$("colAddBtn").addEventListener("click", () => { const v=$("colAdd").value;
+  if(v){ state.cols.push(v); state.preset=-1; state.cell=null; render(); } });
+$("valAddBtn").addEventListener("click", () => {
+  state.vals.push([$("valAdd").value, $("aggAdd").value]); state.preset=-1; render(); });
+$("valAdd").addEventListener("change", () => {
+  $("aggAdd").innerHTML = VALS[$("valAdd").value].aggs.map(a=>`<option>${a}</option>`).join(""); });
+render();
+</script>
+</body></html>
