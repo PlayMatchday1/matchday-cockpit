@@ -1,0 +1,274 @@
+<!doctype html>
+<html lang="en"><head><meta charset="utf-8"/>
+<title>Potential churn players — vGrowth</title>
+<style>
+:root{
+  --forest:#003326;--ink:#0d1f18;--muted:#5C6B62;--cream:#F4EEE1;--paper:#fff;
+  --line:#dfe4da;--slot:#F7F9F6;--mint:#2CDB87;--yellow:#FFFF3E;
+  --hlBg:#FFFAC9;--hlLine:#F2E9A0;--hlInk:#6B5A00;
+}
+*{box-sizing:border-box}
+body{margin:0;padding:24px;background:var(--cream);
+  font-family:-apple-system,BlinkMacSystemFont,"Segoe UI",Inter,Helvetica,Arial,sans-serif;
+  color:var(--ink);-webkit-font-smoothing:antialiased}
+.wrap{max-width:1700px;margin:0 auto}
+.card{background:var(--paper);border:1px solid var(--line);border-radius:16px;
+  box-shadow:0 9px 26px rgba(0,51,38,.075);overflow:hidden}
+
+.head{display:flex;justify-content:space-between;align-items:flex-start;gap:24px;
+  padding:18px 22px;border-bottom:1px solid var(--line)}
+.title{font-size:16px;font-weight:900;letter-spacing:-.2px;color:var(--forest)}
+.sub{font-size:12px;color:var(--muted);margin-top:5px;line-height:1.45}
+.csv{border:0;background:var(--yellow);color:var(--forest);font-size:12.5px;font-weight:900;
+  padding:11px 20px;border-radius:10px;cursor:pointer;font-family:inherit;white-space:nowrap}
+.csv:hover{filter:brightness(.95)}
+
+.filters{display:grid;grid-template-columns:1fr 1.4fr .9fr 1fr auto;gap:14px;align-items:end;
+  padding:16px 22px;border-bottom:1px solid var(--line)}
+.fld label{display:block;font-size:9px;font-weight:900;letter-spacing:.8px;text-transform:uppercase;
+  color:var(--muted);margin-bottom:6px}
+select,input[type=date]{width:100%;font-family:inherit;font-size:13px;font-weight:700;color:var(--ink);
+  background:#fff;border:1px solid var(--line);border-radius:10px;padding:11px 13px;cursor:pointer}
+.warn{margin:0 22px 14px;padding:11px 14px;border-radius:10px;background:#FFE0DA;
+  border:1px solid #F5C6BC;color:#A83120;font-size:11.5px;font-weight:800}
+.apply{border:0;background:var(--forest);color:#fff;font-size:12.5px;font-weight:900;
+  padding:12px 24px;border-radius:10px;cursor:pointer;font-family:inherit;white-space:nowrap}
+.apply:hover{background:#00281e}
+
+.tiles{display:grid;grid-template-columns:repeat(3,1fr);gap:16px;padding:16px 22px;
+  border-bottom:1px solid var(--line)}
+.tile{border:1px solid var(--line);border-radius:12px;padding:14px 16px;background:var(--slot);
+  text-align:left;font-family:inherit;cursor:default}
+.tile-l{font-size:9.5px;font-weight:900;letter-spacing:.8px;text-transform:uppercase;color:var(--muted)}
+.tile-v{font-size:26px;font-weight:900;color:var(--forest);margin-top:7px;line-height:1;
+  font-variant-numeric:tabular-nums}
+.tile-f{font-size:10.5px;color:var(--muted);font-weight:650;margin-top:6px}
+.tile.hl{background:var(--hlBg);border-color:var(--hlLine);cursor:pointer}
+.tile.hl .tile-l{color:var(--hlInk)}
+.tile.hl:hover{filter:brightness(.985)}
+.tile.hl.on{box-shadow:inset 0 0 0 2px var(--forest)}
+
+.count{padding:12px 22px;font-size:11.5px;color:var(--muted);font-weight:700;
+  border-bottom:1px solid var(--line)}
+.count b{color:var(--ink);font-weight:850}
+
+table{width:100%;border-collapse:collapse}
+th,td{padding:12px 16px;font-size:12.5px;text-align:right;border-bottom:1px solid var(--line);
+  font-variant-numeric:tabular-nums;white-space:nowrap}
+th{font-size:9px;font-weight:900;letter-spacing:.8px;text-transform:uppercase;color:var(--muted);
+  background:var(--slot)}
+th:first-child,td:first-child,th:nth-child(2),td:nth-child(2),th:nth-child(3),td:nth-child(3){text-align:left}
+td.pid{font-weight:900;color:var(--forest)}
+tbody tr:hover{background:#fbfcfa}
+tr.heavy td.mp{color:var(--hlInk);font-weight:900}
+tr.heavy td.pid::after{content:"heavy";display:inline-block;margin-left:9px;font-size:8.5px;
+  font-weight:900;letter-spacing:.4px;text-transform:uppercase;background:var(--hlBg);
+  border:1px solid var(--hlLine);color:var(--hlInk);border-radius:5px;padding:1px 6px;vertical-align:1px}
+
+.pager{display:flex;justify-content:space-between;align-items:center;gap:14px;padding:14px 22px}
+.pbtn{border:1px solid var(--line);background:#fff;color:var(--ink);font-size:12px;font-weight:850;
+  border-radius:9px;padding:8px 16px;cursor:pointer;font-family:inherit}
+.pbtn[disabled]{opacity:.4;cursor:default}
+.pinfo{font-size:11.5px;font-weight:800;color:var(--muted)}
+.foot{padding:0 22px 18px;font-size:11px;color:var(--muted);line-height:1.6;max-width:1100px}
+.foot b{color:var(--ink);font-weight:800}
+</style></head>
+<body><div class="wrap"><div class="card">
+
+  <div class="head">
+    <div>
+      <div class="title">Potential churn players</div>
+      <div class="sub">Filter inactive players by geography and time since last match, then export the resulting list.</div>
+    </div>
+    <button class="csv" id="churnExport">Download CSV</button>
+  </div>
+
+  <div class="filters">
+    <div class="fld"><label>City</label><select id="growthChurnCity"></select></div>
+    <div class="fld"><label>Field</label><select id="growthChurnField"></select></div>
+    <div class="fld"><label>Inactive for</label>
+      <select id="growthChurnDays">
+        <option value="30">30 days</option>
+        <option value="60">60 days</option>
+        <option value="90" selected>90 days</option>
+        <option value="120">120 days</option>
+      </select></div>
+    <div class="fld"><label>Last played after</label>
+      <input type="date" id="churnSince" min="2023-04-01" max="2026-08-05" /></div>
+    <button class="apply" id="churnApply">Apply filters</button>
+  </div>
+
+  <div id="warnHost"></div>
+  <div class="tiles" id="tiles"></div>
+  <div class="count" id="countLine"></div>
+
+  <table>
+    <thead><tr>
+      <th>Player ID</th><th>City</th><th>Field</th>
+      <th>Days inactive</th><th>Matches played</th><th>Last played</th>
+    </tr></thead>
+    <tbody id="churnBody"></tbody>
+  </table>
+
+  <div class="pager">
+    <span class="pinfo" id="pageInfo"></span>
+    <div><button class="pbtn" id="prev">Prev</button> <button class="pbtn" id="next">Next</button></div>
+  </div>
+
+  <div class="foot" id="churnNote"></div>
+
+</div></div>
+
+<script>
+/* ── data ────────────────────────────────────────────────────────────────── */
+const CITY_FIELDS = {
+  "Austin":["NEMP","Onion Creek","Westlake","Round Rock","Hattrick"],
+  "Houston":["ATH Katy","ATH Pearland","Sivells Bend"],
+  "San Antonio":["Soccer Central","Blossom Athletic","SJD"],
+  "Dallas":["Crossbar Rowlett","Marcus Park"],
+  "Atlanta":["PRUMC"],
+  "OKC":["Scissortail Park"],
+  "St. Louis":["Lou Fusz","Centennial Commons"]
+};
+const CITIES = Object.keys(CITY_FIELDS);
+const CITY_CODE = {"Austin":"03","Houston":"02","San Antonio":"01","Dallas":"07",
+                   "Atlanta":"10","OKC":"11","St. Louis":"09"};
+const MN = ["Jan","Feb","Mar","Apr","May","Jun","Jul","Aug","Sep","Oct","Nov","Dec"];
+const TODAY = new Date(Date.UTC(2026,7,5));
+
+/* Deterministic population — no randomness, so every figure can be recomputed. */
+const PLAYERS = (() => {
+  const out = [];
+  let n = 0;
+  CITIES.forEach((city, ci) => {
+    const fields = CITY_FIELDS[city];
+    const per = [72,46,38,17,13,9,11][ci];
+    for(let k=0;k<per;k++){
+      n++;
+      const field = fields[(k*3 + ci) % fields.length];
+      /* matches played: a long tail of one-and-done plus a real block of
+         high-involvement players — the ones worth calling */
+      const m = 1 + ((k*7 + ci*11) % 20);
+      const days = 30 + ((k*13 + ci*29) % 400);
+      const last = new Date(TODAY.getTime() - days*86400000);
+      out.push({
+        id: `MD-${CITY_CODE[city]}-${String(k+1).padStart(4,"0")}`,
+        city, field, days, matches: m, last
+      });
+    }
+  });
+  return out;
+})();
+
+const fmtDate = d => `${MN[d.getUTCMonth()]} ${d.getUTCDate()}, ${d.getUTCFullYear()}`;
+const $ = id => document.getElementById(id);
+const PAGE = 12;
+/* Two bounds, not one. "Inactive for" is the floor — stale enough to count as
+   churn. "Last played after" is the ceiling — recent enough to be worth a call.
+   Without the second, the list reaches back to the first match ever. */
+const state = { city:"all", field:"all", days:90, since:null, heavyOnly:false, page:0 };
+const HEAVY = 10;
+
+const filtered = () => PLAYERS
+  .filter(p => state.city === "all" || p.city === state.city)
+  .filter(p => state.field === "all" || p.field === state.field)
+  .filter(p => p.days >= state.days)
+  .filter(p => state.since === null || p.last >= state.since)
+  .filter(p => !state.heavyOnly || p.matches >= HEAVY)
+  /* Matches played descending is the point of this card: the people worth a
+     call are the ones who played a lot and stopped, not the ones who tried it
+     once. Days inactive only breaks ties. */
+  .sort((a,b) => b.matches - a.matches || b.days - a.days || a.id.localeCompare(b.id));
+
+function render(){
+  /* The window is empty when the cutoff is more recent than the staleness
+     floor. Say so, rather than rendering an empty table that looks like a bug. */
+  const floor = new Date(TODAY.getTime() - state.days*86400000);
+  const impossible = state.since !== null && state.since > floor;
+  $("warnHost").innerHTML = impossible
+    ? `<div class="warn">No player can match: "last played after ${fmtDate(state.since)}" and
+       "inactive ${state.days}+ days" leave no window, because ${state.days} days ago was
+       ${fmtDate(floor)}. Move the date earlier or lower the inactive threshold.</div>`
+    : "";
+
+  const rows = filtered();
+  const heavy = rows.filter(p => p.matches >= HEAVY).length;
+  const fields = new Set(rows.map(p => p.field)).size;
+
+  $("tiles").innerHTML =
+    `<div class="tile"><div class="tile-l">Filtered players</div>
+       <div class="tile-v">${rows.length.toLocaleString()}</div>
+       <div class="tile-f">inactive ${state.days}+ days</div></div>`
+  + `<button class="tile hl ${state.heavyOnly?"on":""}" id="heavyTile">
+       <div class="tile-l">${HEAVY}+ prior matches</div>
+       <div class="tile-v">${heavy.toLocaleString()}</div>
+       <div class="tile-f">${state.heavyOnly?"showing these only · click to clear":"click to show only these"}</div></button>`
+  + `<div class="tile"><div class="tile-l">Fields represented</div>
+       <div class="tile-v">${fields}</div>
+       <div class="tile-f">across ${new Set(rows.map(p=>p.city)).size} cities</div></div>`;
+
+  const pages = Math.max(1, Math.ceil(rows.length / PAGE));
+  if(state.page >= pages) state.page = pages - 1;
+  const start = state.page * PAGE;
+  const slice = rows.slice(start, start + PAGE);
+
+  const window = state.since === null
+    ? `last played on or before ${fmtDate(floor)}`
+    : `last played between ${fmtDate(state.since)} and ${fmtDate(floor)}`;
+  $("countLine").innerHTML = rows.length
+    ? `<b>${rows.length.toLocaleString()}</b> players, ${window}, ranked by matches played — `
+      + `showing ${start+1}–${start+slice.length}. The CSV has all of them.`
+    : `No players match these filters.`;
+
+  $("churnBody").innerHTML = slice.map(p =>
+    `<tr class="${p.matches>=HEAVY?"heavy":""}">`
+    + `<td class="pid">${p.id}</td><td>${p.city}</td><td>${p.field}</td>`
+    + `<td>${p.days.toLocaleString()}</td><td class="mp">${p.matches}</td>`
+    + `<td>${fmtDate(p.last)}</td></tr>`).join("");
+
+  $("pageInfo").textContent = `Page ${state.page+1} of ${pages}`;
+  $("prev").disabled = state.page === 0;
+  $("next").disabled = state.page >= pages - 1;
+
+  const topM = slice.length ? slice[0].matches : 0;
+  $("churnNote").innerHTML =
+    `<b>Sorted by matches played, not by how long they have been gone.</b> A player who came 20 times `
+    + `and stopped is worth a call; one who tried a single match two years ago is not, and sorting by `
+    + `days inactive puts that second group on page one. `
+    + `<b>${heavy.toLocaleString()} of these ${rows.length.toLocaleString()}</b> played ${HEAVY} or more `
+    + `matches before going quiet — that tile filters to them. `
+    + `<b>Last played after</b> is the other end of the window: without it the list reaches back to the `
+    + `first match ever, and someone who played once in 2023 is not a win-back.`;
+
+  const ht = $("heavyTile");
+  if(ht) ht.addEventListener("click", () => {
+    state.heavyOnly = !state.heavyOnly; state.page = 0; render();
+  });
+}
+
+function syncFields(){
+  const fs = state.city === "all"
+    ? [...new Set(Object.values(CITY_FIELDS).flat())].sort()
+    : CITY_FIELDS[state.city];
+  $("growthChurnField").innerHTML = `<option value="all">All fields</option>`
+    + fs.map(f => `<option${f===state.field?" selected":""}>${f}</option>`).join("");
+  if(!fs.includes(state.field)) state.field = "all";
+}
+$("growthChurnCity").innerHTML = `<option value="all">All cities</option>`
+  + CITIES.map(c => `<option>${c}</option>`).join("");
+syncFields();
+
+$("growthChurnCity").addEventListener("change", e => {
+  state.city = e.target.value; state.field = "all"; syncFields();
+});
+$("growthChurnField").addEventListener("change", e => { state.field = e.target.value; });
+$("growthChurnDays").addEventListener("change", e => { state.days = Number(e.target.value); });
+$("churnSince").addEventListener("change", e => {
+  state.since = e.target.value ? new Date(e.target.value + "T00:00:00Z") : null;
+});
+$("churnApply").addEventListener("click", () => { state.page = 0; render(); });
+$("prev").addEventListener("click", () => { if(state.page>0){ state.page--; render(); } });
+$("next").addEventListener("click", () => { state.page++; render(); });
+render();
+</script>
+</body></html>
