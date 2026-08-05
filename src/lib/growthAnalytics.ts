@@ -148,12 +148,14 @@ export type RawSubscription = {
   city_identifier: string | null;
   activation_date: string | null;
   canceled_at: string | null;
+  price?: number | null; // monthly membership fee (for the ARPP field-level allocation)
 };
 export type RawRevenue = {
   month: string | null;
   city: string | null;
   type: string | null;
   net: number | null;
+  venue?: string | null; // raw venue string (for ARPP field-level revenue; canonicalised in Node)
 };
 
 export type RawAndroidInstall = { period_date: string; count: number };
@@ -212,6 +214,36 @@ export type ArppPoint = {
   both: number;
   arpp: number;
 };
+// ── ARPP card (v2) ────────────────────────────────────────────────────────────
+// Selected-month (cur/prev/same-month-last-year) and annual (yr/yr-1/yr-2) ARPP
+// per entity, with deleted-account revenue excluded from the numerator and a
+// null (→ em-dash) wherever an entity had no denominator that period. Field-level
+// numerator = fin_revenue by canonical venue + membership fees split across each
+// member's played fields; members who played nothing that month are held in the
+// city-level unallocated bucket (surfaced in the footnote).
+export type ArppTriple = { cur: number | null; prev: number | null; py: number | null };
+export type ArppEntity = { name: string; city: string | null; cur: number | null; prev: number | null; py: number | null };
+export type ArppCard = {
+  curMonth: string;
+  prevMonth: string;
+  pyMonth: string;
+  curYear: number;
+  prevYear: number;
+  pyYear: number;
+  monthly: { matchday: ArppTriple; cities: ArppEntity[]; fields: ArppEntity[] };
+  annual: { matchday: ArppTriple; cities: ArppEntity[]; fields: ArppEntity[] };
+  // current-month membership allocation (subscription fees), for the Field-View footnote.
+  membership: { total: number; allocated: number; unallocated: number; zeroMatchMembers: number };
+  // current-month denominators, for the "cannot be averaged back" footnote.
+  denom: { network: number; citySum: number };
+  // verification diagnostics (last 6 revenue months): deleted revenue removed +
+  // matchday ARPP before/after; membership totals; not rendered.
+  diag: {
+    deleted: { m: string; deletedNet: number; arppWith: number | null; arppWithout: number | null }[];
+    membership: { m: string; total: number; allocated: number; unallocated: number; zeroMatchMembers: number }[];
+  };
+};
+
 export type CohortRow = {
   cohort: string; // "2026-01"
   size: number;
@@ -283,6 +315,10 @@ export type GrowthData = {
     deletedTotal: number;
     unattributedMembershipTotal: number;
   };
+  // v2 ARPP card (cur/prev/py + annual, deleted-excluded, field-level). Optional
+  // because computeGrowth (the validation baseline) does not compute it — only the
+  // view path (computeGrowthFromViews) does.
+  arppCard?: ArppCard;
   cohorts: CohortRow[];
   retentionCurveOverall: { offset: number; pct: number; observable: boolean }[];
   retentionCurveByCity: Record<string, { offset: number; pct: number; observable: boolean }[]>;

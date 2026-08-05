@@ -1,0 +1,231 @@
+<!doctype html>
+<html lang="en"><head><meta charset="utf-8"/>
+<title>Average revenue per player — vGrowth</title>
+<style>
+:root{
+  --forest:#003b2f;--ink:#10201a;--muted:#65716b;--cream:#f4f5ec;--paper:#fff;
+  --line:#dce3dc;--slot:#f4f7f3;
+}
+*{box-sizing:border-box}
+body{margin:0;padding:26px;background:var(--cream);
+  font-family:-apple-system,BlinkMacSystemFont,"Segoe UI",Inter,Helvetica,Arial,sans-serif;
+  color:var(--ink);-webkit-font-smoothing:antialiased}
+.wrap{max-width:1300px;margin:0 auto}
+.card{background:var(--paper);border:1px solid var(--line);border-radius:16px;
+  box-shadow:0 9px 26px rgba(0,43,34,.075);overflow:hidden}
+
+.table-head{display:flex;justify-content:space-between;align-items:flex-start;gap:16px;
+  padding:18px 20px;border-bottom:1px solid var(--line)}
+.table-title{font-size:16px;font-weight:900;letter-spacing:-.2px;color:var(--forest)}
+.card-sub{font-size:12px;color:var(--muted);margin-top:5px;max-width:760px;line-height:1.45}
+.arpp-mode{display:flex;align-items:center;gap:11px}
+.control-label{font-size:9px;font-weight:900;letter-spacing:.8px;text-transform:uppercase;color:var(--muted)}
+.segmented{display:inline-flex;background:var(--slot);border:1px solid var(--line);border-radius:10px;padding:3px}
+.seg-btn{border:0;background:transparent;font-size:11.5px;font-weight:800;color:var(--muted);
+  padding:7px 14px;border-radius:8px;cursor:pointer;font-family:inherit}
+.seg-btn.active{background:#fff;color:var(--forest);box-shadow:0 1px 3px rgba(0,43,34,.13)}
+
+.table-toolbar{display:flex;align-items:center;gap:14px;padding:14px 20px;
+  background:var(--slot);border-top:1px solid var(--line);border-bottom:1px solid var(--line)}
+.toolbar-label{font-size:9px;font-weight:900;letter-spacing:.8px;text-transform:uppercase;color:var(--muted)}
+.entity-count{font-size:11px;font-weight:750;color:var(--muted)}
+
+table{width:100%;border-collapse:collapse}
+th,td{padding:11px 16px;font-size:12px;text-align:right;border-bottom:1px solid var(--line);
+  font-variant-numeric:tabular-nums;white-space:nowrap}
+th{font-size:9px;font-weight:900;letter-spacing:.8px;text-transform:uppercase;color:var(--muted);background:#fff}
+th:first-child,td:first-child{text-align:left}
+td.name-cell{font-weight:800;color:var(--ink)}
+tbody tr:hover{background:#fbfcfa}
+.summary-wrap tbody td{background:#fcfdfb;font-weight:800}
+.rank{display:inline-grid;place-items:center;width:20px;height:20px;border-radius:6px;
+  background:#edf2ed;color:var(--forest);font-size:9px;font-weight:900;margin-right:9px}
+.status{display:inline-flex;align-items:center;gap:5px;border-radius:999px;padding:4px 9px;
+  font-weight:900;font-size:9px}
+.status.green{background:#def7eb;color:#0b7950}
+.status.red{background:#fde6e4;color:#a12f26}
+.nd{color:var(--muted);font-weight:650}
+.foot{padding:13px 20px 17px;font-size:11px;color:var(--muted);line-height:1.6;max-width:1000px}
+.foot b{color:var(--ink);font-weight:800}
+.foot + .foot{padding-top:0}
+</style></head>
+<body><div class="wrap"><div class="card">
+
+  <div class="table-head">
+    <div>
+      <div class="table-title">Average revenue per player</div>
+      <div class="card-sub" id="arppSub">Selected month compared with the previous month and the same month one year earlier</div>
+    </div>
+    <div class="arpp-mode">
+      <span class="control-label">View</span>
+      <div class="segmented" id="arppMode">
+        <button class="seg-btn active" data-value="monthly">Monthly</button>
+        <button class="seg-btn" data-value="annual">Annual sum</button>
+      </div>
+    </div>
+  </div>
+
+  <div class="summary-wrap">
+    <table><thead id="arppSummaryHead"></thead><tbody id="arppSummaryBody"></tbody></table>
+  </div>
+
+  <div class="table-toolbar">
+    <span class="toolbar-label">Breakdown</span>
+    <div class="segmented" id="arppView">
+      <button class="seg-btn active" data-value="city">City View</button>
+      <button class="seg-btn" data-value="field">Field View</button>
+    </div>
+    <span class="entity-count" id="arppCount"></span>
+  </div>
+
+  <div class="table-wrap">
+    <table><thead id="arppDetailHead"></thead><tbody id="arppDetailBody"></tbody></table>
+  </div>
+
+  <div class="foot" id="arppFoot"></div>
+  <div class="foot" id="arppFoot2"></div>
+
+</div></div>
+
+<script>
+/* ── data ───────────────────────────────────────────────────────────────────
+   ARPP after excluding deleted accounts from BOTH numerator and denominator.
+   cur / prev / prevYear are dollars; null means the entity did not exist in
+   that period — rendered as an em-dash, never $0.00.                        */
+const MATCHDAY_M = { cur:20.46, prev:20.62, py:12.92 };
+const CITIES_M = [
+  { n:"San Antonio", cur:20.03, prev:20.73, py:18.04 },
+  { n:"Atlanta",     cur:19.98, prev:19.83, py:null  },
+  { n:"St. Louis",   cur:19.66, prev:19.67, py:null  },
+  { n:"Austin",      cur:19.63, prev:19.72, py:10.52 },
+  { n:"Dallas",      cur:19.17, prev:19.47, py:null  },
+  { n:"Houston",     cur:18.86, prev:18.65, py:13.74 },
+  { n:"OKC",         cur:18.49, prev:17.60, py:null  }
+];
+const FIELDS_M = [
+  { n:"Onion Creek",        city:"Austin",      cur:21.44, prev:21.02, py:11.18 },
+  { n:"Northeast Metro",    city:"Austin",      cur:20.88, prev:21.31, py:10.04 },
+  { n:"SJD Sports Complex", city:"San Antonio", cur:20.61, prev:21.17, py:18.62 },
+  { n:"Bee Cave",           city:"Austin",      cur:20.12, prev:19.44, py:null  },
+  { n:"Lou Fusz Athletic",  city:"St. Louis",   cur:19.66, prev:19.67, py:null  },
+  { n:"Westlake",           city:"Austin",      cur:19.31, prev:19.55, py:10.09 },
+  { n:"Rush Soccer Houston",city:"Houston",     cur:19.20, prev:18.88, py:13.91 },
+  { n:"Blossom Athletic",   city:"San Antonio", cur:19.02, prev:19.86, py:17.32 },
+  { n:"Marcus Park",        city:"Dallas",      cur:19.17, prev:19.47, py:null  },
+  { n:"Sivells Bend",       city:"Houston",     cur:18.31, prev:18.29, py:13.44 },
+  { n:"Silverhorn",         city:"OKC",         cur:18.49, prev:17.60, py:null  },
+  { n:"Riverside East",     city:"Atlanta",     cur:19.98, prev:19.83, py:null  }
+];
+
+/* Annual sum: total player revenue per year over that year's distinct players. */
+const MATCHDAY_A = { cur:20.11, prev:15.42, py:11.24 };
+const CITIES_A = [
+  { n:"San Antonio", cur:19.84, prev:16.90, py:13.02 },
+  { n:"Austin",      cur:19.55, prev:15.71, py:10.88 },
+  { n:"Houston",     cur:18.72, prev:14.03, py:null  },
+  { n:"St. Louis",   cur:19.40, prev:15.02, py:11.60 },
+  { n:"Dallas",      cur:18.96, prev:13.88, py:null  },
+  { n:"Atlanta",     cur:19.61, prev:14.44, py:null  },
+  { n:"OKC",         cur:18.02, prev:null,  py:null  }
+];
+const FIELDS_A = FIELDS_M.map(f => ({
+  n:f.n, city:f.city,
+  cur: f.cur - 0.35, prev: f.py === null ? null : f.prev - 4.9, py: f.py === null ? null : f.py - 1.2
+}));
+
+/* membership revenue that could not be attributed to a field: the member paid
+   but played no matches that month, so there is no field to allocate to. */
+const MEMBERSHIP = { total:41820.55, allocated:39112.30, unallocated:2708.25, zeroMatchMembers:187 };
+
+/* denominators, current month — the network counts a player once, each city
+   counts its own, so the two do not agree and the Matchday row sits higher. */
+const DENOM = { network:2896, citySum:3025 };
+
+const $ = id => document.getElementById(id);
+const money = v => v === null ? null : "$" + v.toFixed(2);
+const pct = (a,b) => (b === null || a === null || b === 0) ? null : (a-b)/b*100;
+
+function cellMoney(v){ return v === null ? `<td class="nd">—</td>` : `<td>${money(v)}</td>`; }
+function cellPct(a,b){
+  const d = pct(a,b);
+  if(d === null) return `<td class="nd">—</td>`;
+  return `<td><span class="status ${d>=0?"green":"red"}">${d>=0?"+":""}${d.toFixed(1)}%</span></td>`;
+}
+
+const state = { mode:"monthly", view:"city" };
+
+function render(){
+  const annual = state.mode === "annual";
+  const md = annual ? MATCHDAY_A : MATCHDAY_M;
+  const rows = annual
+    ? (state.view === "city" ? CITIES_A : FIELDS_A)
+    : (state.view === "city" ? CITIES_M : FIELDS_M);
+
+  $("arppSub").textContent = annual
+    ? "Each year's player revenue compared with the two years before it"
+    : "Selected month compared with the previous month and the same month one year earlier";
+
+  const c1 = annual ? "2026 YTD" : "Current month";
+  const c2 = annual ? "2025"     : "Previous month";
+  const c3 = annual ? "2024"     : "Previous year";
+  const d1 = annual ? "YoY"      : "MoM";
+  const d2 = annual ? "2-yr"     : "YoY";
+
+  $("arppSummaryHead").innerHTML =
+    `<tr><th>Matchday</th><th>${c1}</th><th>${c2}</th><th>${c3}</th><th>${d1}</th><th>${d2}</th></tr>`;
+  $("arppSummaryBody").innerHTML =
+    `<tr><td class="name-cell">Matchday</td>`
+    + cellMoney(md.cur) + cellMoney(md.prev) + cellMoney(md.py)
+    + cellPct(md.cur, md.prev) + cellPct(md.cur, md.py) + `</tr>`;
+
+  const label = state.view === "city" ? "City" : "Field";
+  $("arppCount").textContent = `${rows.length} ${state.view === "city" ? "cities" : "fields"}`;
+  $("arppDetailHead").innerHTML =
+    `<tr><th>${label}</th><th>${c1}</th><th>${c2}</th><th>${c3}</th><th>${d1}</th><th>${d2}</th></tr>`;
+
+  const sorted = rows.slice().sort((a,b) => (b.cur ?? -1) - (a.cur ?? -1));
+  $("arppDetailBody").innerHTML = sorted.map((r,i) =>
+    `<tr><td class="name-cell"><span class="rank">${i+1}</span>${r.n}`
+    + (r.city ? ` <span class="nd" style="font-weight:650">· ${r.city}</span>` : "")
+    + `</td>` + cellMoney(r.cur) + cellMoney(r.prev) + cellMoney(r.py)
+    + cellPct(r.cur, r.prev) + cellPct(r.cur, r.py) + `</tr>`).join("");
+
+  /* The denominator note must describe what is actually on screen. Matchday sits
+     above every city because the network counts a player once while each city
+     counts its own — but a single field can beat it, since a field is a slice
+     with its own mix. Assert the direction rather than assuming it. */
+  const top = Math.max(...sorted.map(r => r.cur));
+  const above = md.cur > top;
+  const ent = state.view === "city" ? "city" : "field";
+  $("arppFoot").innerHTML =
+    `<b>Matchday is not the average of the rows below it.</b> `
+    + (above
+        ? `${money(md.cur)} sits above every ${ent}, the top being ${money(top)}. `
+        : `${money(md.cur)} sits below the top ${ent} at ${money(top)}. `)
+    + `The network counts a player once (${DENOM.network.toLocaleString()} this month) while each ${ent} counts `
+    + `its own (${DENOM.citySum.toLocaleString()} added together), so the same revenue divides by a different `
+    + `number and the rows cannot be averaged back to the top line. `
+    + `<b>An em-dash</b> means the ${ent} did not exist in that period — never $0.00, which would read as a real figure.`;
+
+  $("arppFoot2").innerHTML = state.view === "field"
+    ? `<b>Membership at field level.</b> Each member's monthly fee is split across the matches they played that `
+      + `month and attributed to those fields. ${MEMBERSHIP.zeroMatchMembers} members paid but played no matches this `
+      + `month, so $${MEMBERSHIP.unallocated.toLocaleString("en-US",{minimumFractionDigits:2})} has no field to land on `
+      + `and is held at city level. Allocated $${MEMBERSHIP.allocated.toLocaleString("en-US",{minimumFractionDigits:2})} `
+      + `plus unallocated equals total membership revenue of `
+      + `$${MEMBERSHIP.total.toLocaleString("en-US",{minimumFractionDigits:2})}.`
+    : `<b>Deleted accounts are excluded from both sides.</b> A player who deleted their account contributes neither `
+      + `revenue nor a headcount — counting their spend without counting them overstates every figure on this card.`;
+}
+
+document.querySelectorAll("#arppMode, #arppView").forEach(seg => {
+  seg.addEventListener("click", e => {
+    const b = e.target.closest(".seg-btn"); if(!b) return;
+    if(seg.id === "arppMode") state.mode = b.dataset.value; else state.view = b.dataset.value;
+    [...seg.children].forEach(x => x.classList.toggle("active", x === b));
+    render();
+  });
+});
+render();
+</script>
+</body></html>

@@ -462,6 +462,234 @@ export function computeGrowthFromViews(input: ViewInput): GrowthData {
   };
 }
 
+// ── ARPP card (v2): selected-month + annual ARPP per entity ──────────────────
+// Deleted-account revenue is dropped from BOTH sides (its rows are gone from the
+// denominator; here we drop its revenue from the numerator too). A period with no
+// denominator yields null → the card renders an em-dash, never $0.00. Field-level
+// membership = each member's subs.price split evenly across the distinct fields
+// they played that month; zero-match members go to a city-level unallocated bucket.
+import type { ArppCard, ArppEntity, ArppTriple } from "./growthAnalytics";
+
+const DELETED_CITY = "Deleted Account Revenue";
+const yearOf = (m: string) => m.slice(0, 4);
+
+export function computeArppCard(
+  profiles: ProfileRow[],
+  subscriptions: (RawSubscription & { price?: number | null })[],
+  revenue: (RawRevenue & { venue?: string | null })[],
+  now: string,
+): ArppCard {
+  // ── per-user play activity from ev (month → distinct cities / fields) ────────
+  const evByUser = new Map<number, { month: string; city: string; field: string }[]>();
+  for (const p of profiles) {
+    const list: { month: string; city: string; field: string }[] = [];
+    for (const raw of p.ev ?? []) {
+      const [month, code, title, idStr] = raw.split("|");
+      list.push({
+        month,
+        city: normalizeMatchCity(code === "" ? null : code),
+        field: fieldOf(title === "" ? null : title, idStr === "" ? null : Number(idStr)),
+      });
+    }
+    evByUser.set(p.user_id, list);
+  }
+  // played distinct-user sets, indexed by month and by year, at network/city/field grain.
+  const playedM = new Map<string, Set<number>>();
+  const playedMCity = new Map<string, Map<string, Set<number>>>();
+  const playedMField = new Map<string, Map<string, Set<number>>>();
+  const playedY = new Map<string, Set<number>>();
+  const playedYCity = new Map<string, Map<string, Set<number>>>();
+  const playedYField = new Map<string, Map<string, Set<number>>>();
+  const add = (m: Map<string, Set<number>>, k: string, u: number) => (m.get(k) ?? m.set(k, new Set()).get(k)!).add(u);
+  const add2 = (m: Map<string, Map<string, Set<number>>>, k1: string, k2: string, u: number) => {
+    let inner = m.get(k1);
+    if (!inner) m.set(k1, (inner = new Map()));
+    (inner.get(k2) ?? inner.set(k2, new Set()).get(k2)!).add(u);
+  };
+  for (const [u, list] of evByUser) {
+    for (const e of list) {
+      const y = yearOf(e.month);
+      add(playedM, e.month, u); add(playedY, y, u);
+      add2(playedMCity, e.city, e.month, u); add2(playedYCity, e.city, y, u);
+      add2(playedMField, e.field, e.month, u); add2(playedYField, e.field, y, u);
+    }
+  }
+
+  // ── revenue: clean (deleted excluded) net by month / city / field ────────────
+  const netCleanM = new Map<string, number>();
+  const deletedM = new Map<string, number>();
+  const netMCity = new Map<string, Map<string, number>>();
+  const netMFieldNonMember = new Map<string, Map<string, number>>(); // non-membership venue revenue by field
+  const inc = (m: Map<string, number>, k: string, v: number) => m.set(k, (m.get(k) ?? 0) + v);
+  const inc2 = (m: Map<string, Map<string, number>>, k1: string, k2: string, v: number) => {
+    let inner = m.get(k1);
+    if (!inner) m.set(k1, (inner = new Map()));
+    inner.set(k2, (inner.get(k2) ?? 0) + v);
+  };
+  for (const r of revenue) {
+    if (!r.month) continue;
+    const k = revMonthToKey(r.month);
+    if (!k) continue;
+    const net = Number(r.net ?? 0);
+    if ((r.city ?? "").trim() === DELETED_CITY) { inc(deletedM, k, net); continue; } // both sides
+    inc(netCleanM, k, net);
+    inc2(netMCity, normalizeRevenueCity(r.city), k, net);
+    if (r.venue && r.type !== "Membership") inc2(netMFieldNonMember, canonicalVenueName(r.venue) || r.venue, k, net);
+  }
+
+  // ── members active by month (subs.price), + membership field allocation ──────
+  const memberActive = (s: RawSubscription, month: string): boolean => {
+    if (!s.activation_date) return false;
+    const act = monthKey(s.activation_date);
+    if (month < act) return false;
+    if (s.canceled_at && month > monthKey(s.canceled_at)) return false;
+    return true;
+  };
+  const membersM = new Map<string, Set<number>>();
+  const membersMCity = new Map<string, Map<string, Set<number>>>();
+  const membersY = new Map<string, Set<number>>();
+  const membersYCity = new Map<string, Map<string, Set<number>>>();
+  // membership fee allocated to (field, month); + unallocated + zero-match per month.
+  const memFieldAllocM = new Map<string, Map<string, number>>();
+  const memAllocatedM = new Map<string, number>();
+  const memUnallocatedM = new Map<string, number>();
+  const memZeroMatchM = new Map<string, number>();
+  const memTotalM = new Map<string, number>();
+
+  // which months do we need members for? every revenue-clean month + a full year
+  // on either side so annual/py are covered. Cheap to just span the union.
+  const revMonths = [...netCleanM.keys()].filter((m) => (netCleanM.get(m) ?? 0) !== 0 || true);
+  const monthUniverse = new Set<string>([...netCleanM.keys(), ...playedM.keys()]);
+  // extend one year back from the earliest so py lookups resolve
+  const allMonths = [...monthUniverse].sort();
+  for (const s of subscriptions) {
+    if (s.user_id == null) continue;
+    const price = Number(s.price ?? 0);
+    for (const month of allMonths) {
+      if (!memberActive(s, month)) continue;
+      const y = yearOf(month);
+      add(membersM, month, s.user_id); add(membersY, y, s.user_id);
+      const city = normalizeMatchCity(s.city_identifier);
+      add2(membersMCity, city, month, s.user_id); add2(membersYCity, city, y, s.user_id);
+      // field allocation of this member's fee for this month
+      inc(memTotalM, month, price);
+      const fields = [...new Set((evByUser.get(s.user_id) ?? []).filter((e) => e.month === month).map((e) => e.field))];
+      if (fields.length === 0) {
+        inc(memUnallocatedM, month, price);
+        memZeroMatchM.set(month, (memZeroMatchM.get(month) ?? 0) + 1);
+      } else {
+        inc(memAllocatedM, month, price);
+        for (const f of fields) inc2(memFieldAllocM, f, month, price / fields.length);
+      }
+    }
+  }
+
+  // ── ARPP resolvers ──────────────────────────────────────────────────────────
+  const unionSize = (a: Set<number> | undefined, b: Set<number> | undefined): number => {
+    if (!a && !b) return 0;
+    const s = new Set<number>(a ?? []);
+    if (b) for (const u of b) s.add(u);
+    return s.size;
+  };
+  // null (→ em-dash) when the entity had no denominator that period (didn't exist)
+  // OR no revenue to divide (a $0.00 would read as a real figure — forbidden).
+  const arppNetwork = (m: string): number | null => {
+    const den = unionSize(playedM.get(m), membersM.get(m));
+    const net = netCleanM.get(m) ?? 0;
+    return den > 0 && net > 0 ? net / den : null;
+  };
+  const arppCity = (c: string, m: string): number | null => {
+    const den = unionSize(playedMCity.get(c)?.get(m), membersMCity.get(c)?.get(m));
+    const net = netMCity.get(c)?.get(m) ?? 0;
+    return den > 0 && net > 0 ? net / den : null;
+  };
+  const arppField = (f: string, m: string): number | null => {
+    const den = playedMField.get(f)?.get(m)?.size ?? 0; // non-playing members have no field
+    const num = (netMFieldNonMember.get(f)?.get(m) ?? 0) + (memFieldAllocM.get(f)?.get(m) ?? 0);
+    return den > 0 && num > 0 ? num / den : null;
+  };
+  // annual: revenue over the year / distinct players active that year
+  const yearMonths = (y: string) => allMonths.filter((m) => yearOf(m) === y);
+  const arppNetworkY = (y: string): number | null => {
+    const den = unionSize(playedY.get(y), membersY.get(y));
+    const rev = yearMonths(y).reduce((a, m) => a + (netCleanM.get(m) ?? 0), 0);
+    return den > 0 && rev > 0 ? rev / den : null;
+  };
+  const arppCityY = (c: string, y: string): number | null => {
+    const den = unionSize(playedYCity.get(c)?.get(y), membersYCity.get(c)?.get(y));
+    const rev = yearMonths(y).reduce((a, m) => a + (netMCity.get(c)?.get(m) ?? 0), 0);
+    return den > 0 && rev > 0 ? rev / den : null;
+  };
+  const arppFieldY = (f: string, y: string): number | null => {
+    const den = playedYField.get(f)?.get(y)?.size ?? 0;
+    const rev = yearMonths(y).reduce((a, m) => a + (netMFieldNonMember.get(f)?.get(m) ?? 0) + (memFieldAllocM.get(f)?.get(m) ?? 0), 0);
+    return den > 0 && rev > 0 ? rev / den : null;
+  };
+
+  // ── periods: current month = latest COMPLETE month with clean revenue ────────
+  // Exclude the running month (members are billed on the 1st but play is only days
+  // in, so its ARPP is understated) — the card compares settled months.
+  const nowM = monthKey(now);
+  const revenueMonths = [...netCleanM.keys()].filter((m) => (netCleanM.get(m) ?? 0) > 0).sort();
+  const completedRev = revenueMonths.filter((m) => m < nowM);
+  const curMonth = completedRev[completedRev.length - 1] ?? revenueMonths[revenueMonths.length - 1] ?? nowM;
+  const prevMonth = addMonthsToKey(curMonth, -1);
+  const pyMonth = addMonthsToKey(curMonth, -12);
+  const curYear = yearOf(curMonth);
+  const prevYear = String(Number(curYear) - 1);
+  const pyYear = String(Number(curYear) - 2);
+
+  // entity lists: the ACTIVE markets/fields — those with play in the current month.
+  // Scoping to curMonth play (not all-time) drops declared-only markets (El Paso),
+  // one-off historical markets (a single NYC match in 2025-10), and retired pitches,
+  // matching the behavior card's live-market scope and the mockup's seven cities.
+  const cityNames = [...playedMCity.keys()].filter((c) => c !== UNKNOWN_CITY && (playedMCity.get(c)?.has(curMonth) ?? false));
+  const fieldNames = [...playedMField.keys()].filter((f) => playedMField.get(f)?.has(curMonth) ?? false);
+  const fieldCity = new Map<string, string>();
+  for (const [u, list] of evByUser) { void u; for (const e of list) if (!fieldCity.has(e.field)) fieldCity.set(e.field, e.city); }
+
+  const cityRowsM: ArppEntity[] = cityNames.map((c) => ({ name: c, city: null, cur: arppCity(c, curMonth), prev: arppCity(c, prevMonth), py: arppCity(c, pyMonth) }))
+    .filter((r) => r.cur != null || r.prev != null || r.py != null);
+  const fieldRowsM: ArppEntity[] = fieldNames.map((f) => ({ name: f, city: fieldCity.get(f) ?? null, cur: arppField(f, curMonth), prev: arppField(f, prevMonth), py: arppField(f, pyMonth) }))
+    .filter((r) => r.cur != null || r.prev != null || r.py != null);
+  const cityRowsA: ArppEntity[] = cityNames.map((c) => ({ name: c, city: null, cur: arppCityY(c, curYear), prev: arppCityY(c, prevYear), py: arppCityY(c, pyYear) }))
+    .filter((r) => r.cur != null || r.prev != null || r.py != null);
+  const fieldRowsA: ArppEntity[] = fieldNames.map((f) => ({ name: f, city: fieldCity.get(f) ?? null, cur: arppFieldY(f, curYear), prev: arppFieldY(f, prevYear), py: arppFieldY(f, pyYear) }))
+    .filter((r) => r.cur != null || r.prev != null || r.py != null);
+
+  const mdM: ArppTriple = { cur: arppNetwork(curMonth), prev: arppNetwork(prevMonth), py: arppNetwork(pyMonth) };
+  const mdA: ArppTriple = { cur: arppNetworkY(curYear), prev: arppNetworkY(prevYear), py: arppNetworkY(pyYear) };
+
+  const citySum = cityNames.reduce((a, c) => a + unionSize(playedMCity.get(c)?.get(curMonth), membersMCity.get(c)?.get(curMonth)), 0);
+
+  const last6 = revenueMonths.slice(-6);
+  const diag = {
+    deleted: last6.map((m) => {
+      const den = unionSize(playedM.get(m), membersM.get(m));
+      const withDel = den > 0 ? ((netCleanM.get(m) ?? 0) + (deletedM.get(m) ?? 0)) / den : null;
+      const without = den > 0 ? (netCleanM.get(m) ?? 0) / den : null;
+      return { m, deletedNet: deletedM.get(m) ?? 0, arppWith: withDel, arppWithout: without };
+    }),
+    membership: last6.map((m) => ({
+      m, total: memTotalM.get(m) ?? 0, allocated: memAllocatedM.get(m) ?? 0,
+      unallocated: memUnallocatedM.get(m) ?? 0, zeroMatchMembers: memZeroMatchM.get(m) ?? 0,
+    })),
+  };
+
+  void revMonths;
+  return {
+    curMonth, prevMonth, pyMonth, curYear: Number(curYear), prevYear: Number(prevYear), pyYear: Number(pyYear),
+    monthly: { matchday: mdM, cities: cityRowsM, fields: fieldRowsM },
+    annual: { matchday: mdA, cities: cityRowsA, fields: fieldRowsA },
+    membership: {
+      total: memTotalM.get(curMonth) ?? 0, allocated: memAllocatedM.get(curMonth) ?? 0,
+      unallocated: memUnallocatedM.get(curMonth) ?? 0, zeroMatchMembers: memZeroMatchM.get(curMonth) ?? 0,
+    },
+    denom: { network: unionSize(playedM.get(curMonth), membersM.get(curMonth)), citySum },
+    diag,
+  };
+}
+
 // ── the view reader ──────────────────────────────────────────────────────────
 // Parallel paginator: count once, then fetch every 1000-row page concurrently
 // (capped). PostgREST caps a response at 1000 rows, but the pages are independent
@@ -508,14 +736,15 @@ export async function readGrowthFromViews(
     ),
     selectAll<PlayDimRow>(sb, "growth_play_dims", "match_month, city_identifier, field_title, field_id, spots, amount", "match_month"),
     selectAll<RegistrationRow>(sb, "growth_registration", "user_id, completed, signup_month, declared_city_raw, lifetime_matches", "user_id"),
-    selectAll<RawSubscription>(sb, "mdapi_subscriptions", "user_id, city_identifier, activation_date, canceled_at", "membership_id"),
-    selectAll<RawRevenue>(sb, "fin_revenue", "month, city, type, net", "id"),
+    selectAll<RawSubscription>(sb, "mdapi_subscriptions", "user_id, city_identifier, activation_date, canceled_at, price", "membership_id"),
+    selectAll<RawRevenue>(sb, "fin_revenue", "month, city, type, net, venue", "id"),
     selectAll<DownloadMonthRow>(sb, "growth_downloads_month", "month, count", "month"),
     readRowCounts(sb),
   ]);
   if (timing) timing.fetchMs = Date.now() - tFetch;
   const tCompute = Date.now();
   const out = computeGrowthFromViews({ profiles, playDims, registrations, subscriptions, revenue, downloadsMonth, now, rowCounts });
+  out.arppCard = computeArppCard(profiles, subscriptions, revenue, now);
   if (timing) timing.computeMs = Date.now() - tCompute;
   return out;
 }

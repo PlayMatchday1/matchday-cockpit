@@ -881,3 +881,58 @@
   color: var(--muted);
   white-space: nowrap;
 }
+
+/* ── ARPP card (vGrowth): summary + detail tables, status pills, rank badges ── */
+.arppToolbar {
+  display: flex;
+  align-items: center;
+  gap: 14px;
+  flex-wrap: wrap;
+  margin: 16px 0 10px;
+}
+.entityCount {
+  font-size: 0.72rem;
+  font-weight: 700;
+  color: var(--muted);
+}
+.nameCell {
+  font-weight: 800;
+  color: var(--ink);
+}
+.summaryRow td {
+  font-weight: 800;
+  background: var(--hair);
+}
+.rank {
+  display: inline-grid;
+  place-items: center;
+  width: 20px;
+  height: 20px;
+  border-radius: 6px;
+  background: var(--chip-bg);
+  color: var(--forest);
+  font-size: 0.62rem;
+  font-weight: 800;
+  margin-right: 9px;
+}
+.status {
+  display: inline-flex;
+  align-items: center;
+  gap: 5px;
+  border-radius: 999px;
+  padding: 3px 9px;
+  font-weight: 800;
+  font-size: 0.68rem;
+}
+.statusGreen {
+  background: var(--div-above-1);
+  color: var(--ok-ink);
+}
+.statusRed {
+  background: var(--div-below-1);
+  color: var(--negative);
+}
+.nd {
+  color: var(--muted);
+  font-weight: 600;
+}
