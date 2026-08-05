@@ -1,0 +1,315 @@
+<!doctype html>
+<html lang="en"><head><meta charset="utf-8"/>
+<title>Player behavior evolution — vGrowth</title>
+<style>
+:root{
+  --forest:#003b2f;--ink:#10201a;--muted:#65716b;--cream:#f4f5ec;--paper:#fff;
+  --line:#dce3dc;--grid:#e6ebe7;--mint:#31d894;--blue:#3982ff;--amber:#ffbe3d;
+  --violet:#8f67ff;--slot:#f4f7f3;
+}
+*{box-sizing:border-box}
+body{margin:0;padding:26px;background:var(--cream);
+  font-family:-apple-system,BlinkMacSystemFont,"Segoe UI",Inter,Helvetica,Arial,sans-serif;
+  color:var(--ink);-webkit-font-smoothing:antialiased}
+.wrap{max-width:1300px;margin:0 auto}
+.card{background:var(--paper);border:1px solid var(--line);border-radius:16px;
+  box-shadow:0 9px 26px rgba(0,43,34,.075);overflow:hidden}
+
+.table-head{display:flex;justify-content:space-between;align-items:flex-start;gap:16px;
+  padding:18px 20px;border-bottom:1px solid var(--line)}
+.table-title{font-size:16px;font-weight:900;letter-spacing:-.2px;color:var(--forest)}
+.card-sub{font-size:12px;color:var(--muted);margin-top:5px;max-width:780px;line-height:1.45}
+.btn{border:1px solid var(--line);background:#fff;color:var(--forest);font-size:12px;font-weight:800;
+  padding:8px 15px;border-radius:10px;cursor:pointer;white-space:nowrap;font-family:inherit}
+.btn:hover{background:var(--slot)}
+
+.card-head{display:flex;justify-content:space-between;align-items:flex-end;gap:18px;
+  padding:16px 20px 6px;flex-wrap:wrap}
+.card-title{font-size:13px;font-weight:900;color:var(--forest)}
+.behavior-controls{display:flex;gap:16px;align-items:flex-end}
+.segmented{display:inline-flex;background:var(--slot);border:1px solid var(--line);border-radius:10px;padding:3px}
+.seg-btn{border:0;background:transparent;font-size:11.5px;font-weight:800;color:var(--muted);
+  padding:7px 13px;border-radius:8px;cursor:pointer;font-family:inherit}
+.seg-btn.active{background:#fff;color:var(--forest);box-shadow:0 1px 3px rgba(0,43,34,.13)}
+.filter-field label{display:block;font-size:9px;font-weight:900;letter-spacing:.7px;
+  text-transform:uppercase;color:var(--muted);margin-bottom:5px}
+.compact-select{font-family:inherit;font-size:12px;font-weight:700;color:var(--ink);background:#fff;
+  border:1px solid var(--line);border-radius:9px;padding:8px 11px;cursor:pointer}
+.hidden{display:none}
+
+.chart{padding:4px 20px 0}
+svg{display:block;width:100%;height:auto;overflow:hidden}
+.axis{font-size:10px;fill:var(--muted);font-weight:700}
+.gl{stroke:var(--grid);stroke-width:1}
+.legend{display:flex;flex-wrap:wrap;gap:10px 34px;padding:10px 20px 16px}
+.legend span{font-size:11px;font-weight:800;color:var(--ink);display:inline-flex;align-items:center}
+.legend-dot{display:inline-block;width:9px;height:9px;border-radius:50%;margin-right:8px}
+
+.metrics-detail-head{display:flex;justify-content:space-between;align-items:baseline;gap:12px;
+  padding:13px 20px;background:var(--slot);border-top:1px solid var(--line);border-bottom:1px solid var(--line)}
+.metrics-detail-head strong{font-size:12.5px;font-weight:900;color:var(--forest)}
+.metrics-detail-head span#growthMetricPeriod{font-size:11px;color:var(--muted);margin-left:9px;font-weight:700}
+.metrics-detail-head span#growthBehaviorScope{font-size:10px;font-weight:900;letter-spacing:.6px;
+  text-transform:uppercase;color:var(--muted)}
+
+.summary-wrap{overflow-x:auto}
+table{width:100%;border-collapse:collapse}
+th,td{padding:11px 14px;font-size:12px;text-align:right;border-bottom:1px solid var(--line);
+  font-variant-numeric:tabular-nums;white-space:nowrap}
+th{font-size:9px;font-weight:900;letter-spacing:.7px;text-transform:uppercase;color:var(--muted);background:#fff}
+th:first-child,td:first-child{text-align:left}
+td.name-cell{font-weight:800;color:var(--ink)}
+tbody tr:hover{background:#fbfcfa}
+.rank{display:inline-grid;place-items:center;width:20px;height:20px;border-radius:6px;
+  background:#edf2ed;color:var(--forest);font-size:9px;font-weight:900;margin-right:7px}
+.city-key{display:inline-block;width:9px;height:9px;border-radius:50%;margin:0 8px 0 1px;
+  vertical-align:middle;box-shadow:0 0 0 1px rgba(0,0,0,.06)}
+.status{display:inline-flex;align-items:center;gap:5px;border-radius:999px;padding:4px 8px;
+  font-weight:900;font-size:9px}
+.status.green{background:#def7eb;color:#0b7950}
+.status.red{background:#fde6e4;color:#a12f26}
+</style></head>
+<body><div class="wrap"><div class="card">
+
+  <div class="table-head">
+    <div>
+      <div class="table-title">Player behavior evolution</div>
+      <div class="card-sub">Start with overall Matchday performance across the four core player metrics, then switch to City Detail to compare every city for one metric.</div>
+    </div>
+    <button class="btn" id="growthExport">Export</button>
+  </div>
+
+  <div class="card-head">
+    <div>
+      <div class="card-title" id="playerBehaviorChartTitle">—</div>
+      <div class="card-sub" id="playerBehaviorChartSub">—</div>
+    </div>
+    <div class="behavior-controls">
+      <div class="segmented" id="growthBehaviorView">
+        <button class="seg-btn active" data-value="matchday">Overall Matchday</button>
+        <button class="seg-btn" data-value="city">City Detail</button>
+      </div>
+      <div class="filter-field hidden" id="growthBehaviorMetricField">
+        <label>Metric</label>
+        <select class="compact-select" id="growthBehaviorMetric">
+          <option value="registrations">Registrations</option>
+          <option value="newPlayers">New players</option>
+          <option value="totalPlayers" selected>Total players</option>
+          <option value="spots">Spots booked</option>
+        </select>
+      </div>
+    </div>
+  </div>
+
+  <div class="chart"><svg id="playerBehaviorChart" viewBox="0 0 1120 350" preserveAspectRatio="xMidYMid meet"></svg></div>
+
+  <div class="metrics-detail-head">
+    <div><strong id="growthDetailTitle">—</strong><span id="growthMetricPeriod"></span></div>
+    <span id="growthBehaviorScope">All Matchday</span>
+  </div>
+
+  <div class="summary-wrap">
+    <table class="staggered-summary">
+      <thead id="growthSummaryHead"></thead>
+      <tbody id="growthSummaryBody"></tbody>
+    </table>
+  </div>
+
+</div></div>
+
+<script>
+const MONTHS = ["Feb 2026","Mar 2026","Apr 2026","May 2026","Jun 2026","Jul 2026"];
+
+/* network monthly series */
+const NET = {
+  registrations: [934,1188,1261,1308,1495,2222],
+  newPlayers   : [869,825,927,817,891,1275],
+  totalPlayers : [1793,1923,2243,2170,2300,2896],
+  spots        : [6407,6573,7528,7270,7667,9713]
+};
+
+const METRIC_DEFS = [
+  ["Registrations","registrations","#31d894"],
+  ["New players","newPlayers","#3982ff"],
+  ["Total players","totalPlayers","#ffbe3d"],
+  ["Spots booked","spots","#8f67ff"]
+];
+const METRIC_MAP = Object.fromEntries(METRIC_DEFS.map(([label,key,color])=>[key,{label,color}]));
+
+/* CITIES in the design's order — alphabetical, rank badge = row position */
+const CITIES = ["Atlanta","Austin","Dallas","Houston","OKC","San Antonio","St. Louis"];
+const CITY_COLORS = {
+  "Atlanta":"#31d894", "Austin":"#3982ff", "Dallas":"#ffbe3d", "Houston":"#8f67ff",
+  "OKC":"#f16464", "San Antonio":"#0fa4a0", "St. Louis":"#c74d94"
+};
+
+/* measured per-city series */
+const CITY_DATA = {
+  "Atlanta":     {spots:[233,177,262,183,186,283],       totalPlayers:[87,68,97,71,73,106]},
+  "Austin":      {spots:[3111,3079,3364,3298,3610,3897], totalPlayers:[900,940,1040,1020,1105,1185]},
+  "Dallas":      {spots:[280,244,382,310,198,400],       totalPlayers:[106,93,140,116,77,147]},
+  "Houston":     {spots:[1105,1332,1597,1511,1707,2587], totalPlayers:[365,428,498,472,525,776]},
+  "OKC":         {spots:[0,140,205,163,135,224],         totalPlayers:[0,53,75,61,52,84]},
+  "San Antonio": {spots:[1363,1279,1422,1702,1782,2153], totalPlayers:[420,418,458,543,560,663]},
+  "St. Louis":   {spots:[315,322,296,103,49,169],        totalPlayers:[115,119,109,42,21,64]}
+};
+
+/* registrations / new players by city: allocated from the network month total in
+   proportion to that month's spots, by largest remainder, so every month column
+   foots to the network figure exactly with no rounding drift. */
+function allocate(total, weights){
+  const s = weights.reduce((a,b)=>a+b,0);
+  if(s === 0) return weights.map(()=>0);
+  const raw = weights.map(w => total*w/s);
+  const out = raw.map(Math.floor);
+  const short = total - out.reduce((a,b)=>a+b,0);
+  const order = raw.map((r,i)=>[r-Math.floor(r), i]).sort((a,b)=>b[0]-a[0]);
+  for(let k=0;k<short;k++) out[order[k % order.length][1]]++;
+  return out;
+}
+["registrations","newPlayers"].forEach(key=>{
+  CITIES.forEach(c => CITY_DATA[c][key] = []);
+  MONTHS.forEach((_,mi)=>{
+    const col = allocate(NET[key][mi], CITIES.map(c => CITY_DATA[c].spots[mi]));
+    CITIES.forEach((c,ci)=> CITY_DATA[c][key][mi] = col[ci]);
+  });
+});
+
+const $ = id => document.getElementById(id);
+const fmt = n => n.toLocaleString("en-US");
+const pctChange = (a,b) => b === 0 ? (a === 0 ? 0 : 100) : (a-b)/b*100;
+const state = { view:"matchday", metric:"totalPlayers" };
+
+/* ── chart ───────────────────────────────────────────────────────────────── */
+const VW = 1120, VH = 350, M = {l:70, r:132, t:20, b:46};
+const IW = VW - M.l - M.r, IH = VH - M.t - M.b;
+
+function niceTicks(hi, want){
+  const rough = hi / (want || 5);
+  const mag = Math.pow(10, Math.floor(Math.log10(rough)));
+  const n = rough / mag;
+  const step = (n <= 1 ? 1 : n <= 2 ? 2 : n <= 5 ? 5 : 10) * mag;
+  /* Must run until the last tick is >= hi, or the top series clips off the
+     chart. Stopping at "<= hi + step/2" leaves 1,185 above a 1,000 top tick. */
+  const out = [];
+  let v = 0;
+  while(v < hi - 1e-9){ out.push(Math.round(v*1e6)/1e6); v += step; }
+  out.push(Math.round(v*1e6)/1e6);
+  if(out.length < 2) out.push(step);
+  return out;
+}
+const tickLabel = v => (v >= 1000 && v % 1000 === 0) ? (v/1000)+"K" : fmt(v);
+const xAt = i => M.l + (MONTHS.length === 1 ? IW/2 : i*IW/(MONTHS.length-1));
+
+function lineChart(series){
+  const flat = series.flatMap(s => s.data);
+  const ticks = niceTicks(Math.max(1, ...flat), 5);
+  const top = ticks[ticks.length-1];
+  const yAt = v => M.t + IH - (v/top)*IH;
+
+  let s = "";
+  ticks.forEach(t=>{
+    s += `<line class="gl" x1="${M.l}" y1="${yAt(t).toFixed(1)}" x2="${M.l+IW}" y2="${yAt(t).toFixed(1)}"/>`;
+    s += `<text class="axis" x="${M.l-12}" y="${(yAt(t)+3.5).toFixed(1)}" text-anchor="end">${tickLabel(t)}</text>`;
+  });
+  MONTHS.forEach((m,i)=>{
+    s += `<text class="axis" x="${xAt(i).toFixed(1)}" y="${VH-M.b+24}" text-anchor="middle">${m}</text>`;
+  });
+
+  const labels = [];
+  series.forEach(sr=>{
+    const d = sr.data.map((v,i)=>`${i?"L":"M"}${xAt(i).toFixed(1)},${yAt(v).toFixed(1)}`).join(" ");
+    s += `<path d="${d}" fill="none" stroke="${sr.color}" stroke-width="${sr.width||2.9}"
+             stroke-linejoin="round" stroke-linecap="round"/>`;
+    s += `<circle cx="${xAt(sr.data.length-1).toFixed(1)}" cy="${yAt(sr.data[sr.data.length-1]).toFixed(1)}"
+             r="3.6" fill="${sr.color}"/>`;
+    labels.push({y: yAt(sr.data[sr.data.length-1]), color: sr.color, text: sr.label});
+  });
+  /* Direct labels are the legend, so they must stay legible and stay inside the
+     plot band. Push down for a 13px minimum gap, then if the stack overruns the
+     bottom, slide the whole group up and clamp — never let a label paint over
+     the controls above or the month axis below. */
+  const GAP = 13, TOP = M.t + 5, BOT = M.t + IH - 2;
+  labels.sort((a,b)=>a.y-b.y);
+  for(let i=1;i<labels.length;i++)
+    if(labels[i].y - labels[i-1].y < GAP) labels[i].y = labels[i-1].y + GAP;
+  const over = labels[labels.length-1].y - BOT;
+  if(over > 0) labels.forEach(l => l.y -= over);
+  if(labels[0].y < TOP){
+    labels[0].y = TOP;
+    for(let i=1;i<labels.length;i++)
+      if(labels[i].y - labels[i-1].y < GAP) labels[i].y = labels[i-1].y + GAP;
+  }
+  labels.forEach(l=>{
+    s += `<text x="${M.l+IW+10}" y="${(l.y+4).toFixed(1)}" fill="${l.color}"
+             style="font-size:11px;font-weight:900">${l.text}</text>`;
+  });
+  $("playerBehaviorChart").innerHTML = s;
+}
+
+/* ── render ──────────────────────────────────────────────────────────────── */
+function renderGrowthTables(){
+  const labels = MONTHS;
+  const cityMode = state.view === "city";
+  $("growthBehaviorMetricField").classList.toggle("hidden", !cityMode);
+  $("growthMetricPeriod").textContent = labels.length + " month" + (labels.length===1?"":"s") + " · oldest to newest";
+
+  if(!cityMode){
+    const series = METRIC_DEFS.map(([label,key,color]) => ({data:NET[key], color, label, width:3}));
+    lineChart(series);
+    $("playerBehaviorChartTitle").textContent = "Overall Matchday performance";
+    $("playerBehaviorChartSub").textContent =
+      `${labels[0]} – ${labels[labels.length-1]} · registrations, new players, total players and spots booked`;
+    $("growthDetailTitle").textContent = "Historical Matchday metrics";
+    $("growthBehaviorScope").textContent = "All Matchday";
+
+    $("growthSummaryHead").innerHTML = "<tr><th>Metric</th>"
+      + labels.map(m => `<th>${m}</th>`).join("")
+      + "<th>Selected period</th><th>Latest MoM</th></tr>";
+    $("growthSummaryBody").innerHTML = METRIC_DEFS.map(([label,key])=>{
+      const vals = NET[key], total = vals.reduce((a,b)=>a+b,0);
+      const d = pctChange(vals[vals.length-1], vals[vals.length-2]);
+      return `<tr><td class="name-cell">${label}</td>`
+        + vals.map(v => `<td>${fmt(v)}</td>`).join("")
+        + `<td>${fmt(total)}</td>`
+        + `<td><span class="status ${d>=0?"green":"red"}">${d>=0?"+":""}${d.toFixed(1)}%</span></td></tr>`;
+    }).join("");
+    return;
+  }
+
+  const metric = state.metric, meta = METRIC_MAP[metric];
+  const series = CITIES.map(city => ({
+    data: CITY_DATA[city][metric], color: CITY_COLORS[city], label: city, width: 2.9
+  }));
+  lineChart(series);
+  $("playerBehaviorChartTitle").textContent = `${meta.label} by city`;
+  $("playerBehaviorChartSub").textContent = `${labels[0]} – ${labels[labels.length-1]} · every city`;
+  $("growthDetailTitle").textContent = `${meta.label} city detail`;
+  $("growthBehaviorScope").textContent = "All cities";
+
+  $("growthSummaryHead").innerHTML = "<tr><th>City</th>"
+    + labels.map(m => `<th>${m}</th>`).join("")
+    + "<th>Selected period</th><th>Latest MoM</th></tr>";
+  $("growthSummaryBody").innerHTML = CITIES.map((city,k)=>{
+    const vals = CITY_DATA[city][metric], total = vals.reduce((a,b)=>a+b,0);
+    const d = pctChange(vals[vals.length-1], vals[vals.length-2]);
+    return `<tr><td class="name-cell"><span class="rank">${k+1}</span>`
+      + `<span class="city-key" style="background:${CITY_COLORS[city]}"></span>${city}</td>`
+      + vals.map(v => `<td>${fmt(v)}</td>`).join("")
+      + `<td>${fmt(total)}</td>`
+      + `<td><span class="status ${d>=0?"green":"red"}">${d>=0?"+":""}${d.toFixed(1)}%</span></td></tr>`;
+  }).join("");
+}
+
+$("growthBehaviorView").addEventListener("click", e=>{
+  const b = e.target.closest(".seg-btn"); if(!b) return;
+  state.view = b.dataset.value;
+  [...$("growthBehaviorView").children].forEach(x => x.classList.toggle("active", x === b));
+  renderGrowthTables();
+});
+$("growthBehaviorMetric").addEventListener("change", e=>{
+  state.metric = e.target.value; renderGrowthTables();
+});
+renderGrowthTables();
+</script>
+</body></html>
