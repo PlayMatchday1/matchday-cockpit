@@ -6,7 +6,9 @@ import type { GrowthData } from "@/lib/growthAnalytics";
 import type { CohortMatrixPayload } from "./retentionModel";
 import styles from "./growth.module.css";
 import { fmtInt, fmtPct, monthLabel } from "./format";
-import GlobalPeriod, { type Period } from "./GlobalPeriod";
+import { type Period } from "./GlobalPeriod";
+import { axisMaxAge } from "./retentionModel";
+import PeriodBar from "./PeriodBar";
 import KpiRow from "./KpiRow";
 import PlayerFunnel from "./PlayerFunnel";
 import BehaviorPanel from "./BehaviorPanel";
@@ -78,11 +80,60 @@ export default function GrowthDashboard() {
 
   const months = data.behaviorOverall.map((p) => p.m);
   const activePeriod: Period = period ?? defaultPeriod(months, data.generatedAt.slice(0, 7));
+
+  // DEFECT 2: one scope map drives both the per-card chips and the bar's "N of 7"
+  // count — change a card's scope here and the count moves with it. GREEN chips
+  // print the literal range (they follow the period); BLUE/GREY are period-free.
+  const rangeText = `${monthLabel(activePeriod.start)} – ${monthLabel(activePeriod.end)}`;
+  const followsChip = (
+    <span className={`${styles.scope} ${styles.scopeFollows}`}>
+      <i />
+      {rangeText}
+    </span>
+  );
+  const ownChip = (note: string) => (
+    <span className={`${styles.scope} ${styles.scopeOwn}`}>
+      <i />
+      Own filters · {note}
+    </span>
+  );
+  const maxAge = retention ? axisMaxAge(retention) : 40;
+  const alltimeChip = (
+    <span className={`${styles.scope} ${styles.scopeAlltime}`}>
+      <i />
+      All time · Months 0–{maxAge}, every cohort
+    </span>
+  );
+  const cardScopes = ["follows", "follows", "follows", "alltime", "own", "own", "follows"] as const;
+  const followN = cardScopes.filter((s) => s === "follows").length;
+
   return (
     <div className={styles.dash}>
       <Header />
 
-      <GlobalPeriod months={months} period={activePeriod} setPeriod={setPeriod} />
+      <PeriodBar
+        months={months}
+        period={activePeriod}
+        setPeriod={setPeriod}
+        generatedAt={data.generatedAt}
+        followCount={followN}
+        cardCount={cardScopes.length}
+      />
+
+      <div className={styles.scopeLegend}>
+        <span>
+          <i style={{ background: "#2CDB87" }} />
+          Follows the time period above
+        </span>
+        <span>
+          <i style={{ background: "#2E79FF" }} />
+          Has its own filters
+        </span>
+        <span>
+          <i style={{ background: "#9AA79F" }} />
+          All time, ignores the period
+        </span>
+      </div>
 
       <div className={styles.calloutBanner}>
         This data has <b>three start dates</b>, not one. Registrations reach back to{" "}
@@ -93,22 +144,30 @@ export default function GrowthDashboard() {
       </div>
 
       <KpiRow data={data} period={activePeriod} />
-      <PlayerFunnel data={data} period={activePeriod} />
-      <BehaviorPanel data={data} period={activePeriod} />
-      <ArppPanel data={data} />
+      <PlayerFunnel data={data} period={activePeriod} scopeChip={followsChip} />
+      <BehaviorPanel data={data} period={activePeriod} scopeChip={followsChip} />
+      <ArppPanel data={data} scopeChip={followsChip} />
       {/* Retention curve sits directly below ARPP and before the cohort table, full-width. */}
       {retention ? (
-        <RetentionCurvePanel payload={retention} authHeaders={authHeaders ?? {}} />
+        <RetentionCurvePanel payload={retention} authHeaders={authHeaders ?? {}} scopeChip={alltimeChip} />
       ) : (
         <div className={styles.stateMsg}>Loading retention curve…</div>
       )}
       {retention ? (
-        <CohortPanel payload={retention} authHeaders={authHeaders ?? {}} />
+        <CohortPanel
+          payload={retention}
+          authHeaders={authHeaders ?? {}}
+          scopeChip={ownChip("Cohort year · Cohort month · City")}
+        />
       ) : (
         <div className={styles.stateMsg}>Loading retention cohorts…</div>
       )}
-      <ChurnPanel cities={data.cities} authHeaders={authHeaders ?? {}} />
-      <DataRoomPanel authHeaders={authHeaders ?? {}} />
+      <ChurnPanel
+        cities={data.cities}
+        authHeaders={authHeaders ?? {}}
+        scopeChip={ownChip("Inactive for · Last played after")}
+      />
+      <DataRoomPanel authHeaders={authHeaders ?? {}} scopeChip={followsChip} />
 
       <div className={styles.footnote}>
         Source: live mdapi_* mirror + fin_revenue, read-only. {fmtInt(data.rowCounts.matchesLive)} live matches,{" "}

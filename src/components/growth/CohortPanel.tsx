@@ -1,6 +1,6 @@
 "use client";
 
-import { Fragment, useEffect, useMemo, useRef, useState } from "react";
+import { Fragment, useEffect, useMemo, useRef, useState, type ReactNode } from "react";
 import styles from "./growth.module.css";
 import { downloadCsv, monthLabel } from "./format";
 import {
@@ -137,9 +137,11 @@ function buildCityDetail(res: CohortCitiesResponse, cohortRow: CohortRow): CityD
 export default function CohortPanel({
   payload,
   authHeaders,
+  scopeChip,
 }: {
   payload: CohortMatrixPayload;
   authHeaders: Record<string, string>;
+  scopeChip?: ReactNode;
 }) {
   const [year, setYear] = useState("all");
   const [month, setMonth] = useState("all");
@@ -229,6 +231,8 @@ export default function CohortPanel({
             see the Player IDs that churned from the prior month.
           </div>
         </div>
+        <div style={{ display: "flex", alignItems: "flex-start", gap: 12, flexWrap: "wrap" }}>
+          {scopeChip}
         <div className="controls">
           <div className="fld">
             <label htmlFor="cohortYear">Cohort year</label>
@@ -266,6 +270,7 @@ export default function CohortPanel({
           <button type="button" className="btn" id="cohortExport" onClick={exportCsv} disabled={!ready}>
             Export
           </button>
+        </div>
         </div>
       </div>
 
@@ -629,7 +634,6 @@ const CSS = `
   --below:#fde4e1;--belowInk:#A02F22;
   background:var(--paper);border:1px solid var(--line);border-radius:16px;
   box-shadow:0 9px 26px rgba(0,51,38,.075);overflow:hidden;color:var(--ink);
-  margin-bottom:16px;
   font-family:-apple-system,BlinkMacSystemFont,"Segoe UI",Inter,Helvetica,Arial,sans-serif;
 }
 .${ROOT} *{box-sizing:border-box}

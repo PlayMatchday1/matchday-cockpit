@@ -1,6 +1,6 @@
 "use client";
 
-import { useState } from "react";
+import { useState, type ReactNode } from "react";
 import type { ArppCard, ArppEntity, ArppTriple, GrowthData } from "@/lib/growthAnalytics";
 import styles from "./growth.module.css";
 
@@ -34,7 +34,7 @@ function PctCell({ a, b }: { a: number | null; b: number | null }) {
   );
 }
 
-export default function ArppPanel({ data }: { data: GrowthData }) {
+export default function ArppPanel({ data, scopeChip }: { data: GrowthData; scopeChip?: ReactNode }) {
   const [mode, setMode] = useState<Mode>("monthly");
   const [view, setView] = useState<View>("city");
 
@@ -89,11 +89,14 @@ export default function ArppPanel({ data }: { data: GrowthData }) {
             {sub}
           </div>
         </div>
-        <div className={styles.field}>
-          <span className={styles.fieldLabel}>View</span>
-          <div className={styles.segmented} id="arppMode">
-            {seg(mode === "monthly", "Monthly", () => setMode("monthly"))}
-            {seg(mode === "annual", "Annual sum", () => setMode("annual"))}
+        <div style={{ display: "flex", alignItems: "flex-start", gap: 12, flexWrap: "wrap" }}>
+          {scopeChip}
+          <div className={styles.field}>
+            <span className={styles.fieldLabel}>View</span>
+            <div className={styles.segmented} id="arppMode">
+              {seg(mode === "monthly", "Monthly", () => setMode("monthly"))}
+              {seg(mode === "annual", "Annual sum", () => setMode("annual"))}
+            </div>
           </div>
         </div>
       </div>

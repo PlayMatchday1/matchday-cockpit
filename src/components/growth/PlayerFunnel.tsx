@@ -41,7 +41,15 @@ function sumCohort(rows: GrowthData["funnelByMonth"], monthSet: Set<string>): Co
   return acc;
 }
 
-export default function PlayerFunnel({ data, period }: { data: GrowthData; period: Period }) {
+export default function PlayerFunnel({
+  data,
+  period,
+  scopeChip,
+}: {
+  data: GrowthData;
+  period: Period;
+  scopeChip?: ReactNode;
+}) {
   const months = data.behaviorOverall.map((p) => p.m);
   const [customStart, setCustomStart] = useState(period.start);
   const [customEnd, setCustomEnd] = useState(period.end);
@@ -95,7 +103,9 @@ export default function PlayerFunnel({ data, period }: { data: GrowthData; perio
             so every stage is a subset of the one before it.
           </div>
         </div>
-        <div className={styles.controlsRow}>
+        <div style={{ display: "flex", alignItems: "flex-start", gap: 12, flexWrap: "wrap" }}>
+          {scopeChip}
+          <div className={styles.controlsRow}>
           <div className={styles.field}>
             <label className={styles.fieldLabel} htmlFor="funnelCustomStart">
               Custom start
@@ -123,6 +133,7 @@ export default function PlayerFunnel({ data, period }: { data: GrowthData; perio
               value={customEnd}
               onChange={(e) => setCustomEnd(e.target.value)}
             />
+          </div>
           </div>
         </div>
       </div>

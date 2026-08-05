@@ -1,6 +1,6 @@
 "use client";
 
-import { useEffect, useMemo, useState } from "react";
+import { useEffect, useMemo, useState, type ReactNode } from "react";
 import type { Agg, Dim, DrilledPlayer, Metric, PivotConfig, PivotTable, ValueSpec } from "@/lib/dataRoom";
 import { monthLabel } from "./format";
 
@@ -53,7 +53,13 @@ const num = (n: number) => n.toLocaleString("en-US");
 const money = (n: number) => "$" + n.toLocaleString("en-US", { minimumFractionDigits: 2, maximumFractionDigits: 2 });
 const showVal = (v: number | null, metric: Metric) => (v == null ? "—" : metric === "Revenue" ? money(v) : num(v));
 
-export default function DataRoomPanel({ authHeaders }: { authHeaders: Record<string, string> }) {
+export default function DataRoomPanel({
+  authHeaders,
+  scopeChip,
+}: {
+  authHeaders: Record<string, string>;
+  scopeChip?: ReactNode;
+}) {
   // The whole config lives in state; the card OPENS on the first preset.
   const [rows, setRows] = useState<Dim[]>([...PRESETS[0].rows]);
   const [cols, setCols] = useState<Dim[]>([...PRESETS[0].cols]);
@@ -298,6 +304,7 @@ export default function DataRoomPanel({ authHeaders }: { authHeaders: Record<str
               Build the table you want, then click any number to see the players behind it and export them.
             </div>
           </div>
+          {scopeChip}
         </div>
 
         {/* presets */}

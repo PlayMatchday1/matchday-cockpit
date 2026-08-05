@@ -1,0 +1,215 @@
+<!doctype html>
+<html lang="en"><head><meta charset="utf-8"/>
+<title>Growth — page shell</title>
+<style>
+:root{
+  --forest:#003326;--ink:#0d1f18;--muted:#5C6B62;--cream:#F4EEE1;--paper:#fff;
+  --line:#dfe4da;--slot:#F7F9F6;--mint:#2CDB87;--mintSoft:#E4F9EF;--yellow:#FFFF3E;
+  --gap:18px;
+}
+*{box-sizing:border-box}
+body{margin:0;background:var(--cream);
+  font-family:-apple-system,BlinkMacSystemFont,"Segoe UI",Inter,Helvetica,Arial,sans-serif;
+  color:var(--ink);-webkit-font-smoothing:antialiased}
+.page{max-width:1500px;margin:0 auto;padding:0 24px 60px}
+
+/* ── page head ── */
+.phead{padding:26px 0 18px}
+.phead h1{margin:0;font-size:27px;font-weight:900;letter-spacing:-.6px;color:var(--forest)}
+.phead p{margin:6px 0 0;font-size:13px;color:var(--muted);line-height:1.5}
+
+/* ── the period bar: expanded at rest, slim and sticky once you scroll ── */
+.periodbar{position:sticky;top:0;z-index:50;margin-bottom:var(--gap)}
+.pb-inner{background:var(--paper);border:1px solid var(--line);border-radius:14px;
+  box-shadow:0 9px 26px rgba(0,51,38,.075);transition:padding .16s ease, box-shadow .16s ease}
+.periodbar.stuck .pb-inner{border-radius:0 0 14px 14px;box-shadow:0 6px 20px rgba(0,51,38,.13)}
+.pb-top{display:flex;align-items:center;justify-content:space-between;gap:18px;padding:14px 20px}
+.pb-left{display:flex;align-items:center;gap:14px;min-width:0}
+.pb-l{font-size:9px;font-weight:900;letter-spacing:.9px;text-transform:uppercase;color:var(--muted)}
+.pb-val{font-size:15px;font-weight:900;color:var(--forest);white-space:nowrap}
+.pb-scope{font-size:11px;font-weight:750;color:var(--muted)}
+.pb-actions{display:flex;align-items:center;gap:9px}
+.qbtn{border:1px solid var(--line);background:#fff;color:var(--ink);font-size:11.5px;font-weight:850;
+  border-radius:99px;padding:7px 14px;cursor:pointer;font-family:inherit;white-space:nowrap}
+.qbtn:hover{border-color:#bcc9c0}
+.qbtn.on{background:var(--forest);border-color:var(--forest);color:#fff}
+.pb-toggle{border:1px solid var(--line);background:#fff;color:var(--forest);font-size:11.5px;
+  font-weight:900;border-radius:9px;padding:8px 15px;cursor:pointer;font-family:inherit}
+.pb-body{display:grid;grid-template-columns:repeat(4,1fr);gap:14px;padding:0 20px 16px}
+.periodbar.collapsed .pb-body{display:none}
+.fld label{display:block;font-size:9px;font-weight:900;letter-spacing:.8px;text-transform:uppercase;
+  color:var(--muted);margin-bottom:6px}
+select{width:100%;font-family:inherit;font-size:13px;font-weight:700;color:var(--ink);background:#fff;
+  border:1px solid var(--line);border-radius:10px;padding:10px 12px;cursor:pointer}
+
+/* ── cards: one gap rule, nothing else ── */
+.card{background:var(--paper);border:1px solid var(--line);border-radius:16px;
+  box-shadow:0 9px 26px rgba(0,51,38,.075);overflow:hidden;margin-bottom:var(--gap)}
+.card:last-child{margin-bottom:0}
+.chead{display:flex;justify-content:space-between;align-items:flex-start;gap:20px;padding:18px 22px}
+.chead + .cbody{border-top:1px solid var(--line)}
+.ctitle{font-size:15.5px;font-weight:900;letter-spacing:-.2px;color:var(--forest)}
+.csub{font-size:12px;color:var(--muted);margin-top:5px;line-height:1.45;max-width:760px}
+.cbody{padding:18px 22px}
+
+/* ── the scope chip: what period THIS card is on ── */
+.scope{display:inline-flex;align-items:center;gap:7px;font-size:10.5px;font-weight:850;
+  border-radius:99px;padding:6px 12px;white-space:nowrap;border:1px solid var(--line);
+  background:var(--slot);color:var(--muted)}
+.scope i{width:6px;height:6px;border-radius:50%;background:currentColor;flex:none}
+.scope.follows{background:var(--mintSoft);border-color:#A8E7C9;color:#046B45}
+.scope.own{background:#EFF3FF;border-color:#CBD9FF;color:#1B4FCB}
+.scope.alltime{background:var(--slot);border-color:var(--line);color:var(--muted)}
+
+.stub{height:120px;border:1px dashed var(--line);border-radius:11px;background:var(--slot);
+  display:flex;align-items:center;justify-content:center;font-size:11.5px;font-weight:750;
+  color:var(--muted)}
+.stub.tall{height:230px}
+
+.legend{display:flex;flex-wrap:wrap;gap:18px;padding:13px 20px;background:var(--paper);
+  border:1px solid var(--line);border-radius:14px;margin-bottom:var(--gap);
+  box-shadow:0 9px 26px rgba(0,51,38,.075)}
+.legend span{display:inline-flex;align-items:center;gap:8px;font-size:11px;font-weight:750;color:var(--muted)}
+.legend i{width:9px;height:9px;border-radius:50%;flex:none}
+</style></head>
+<body>
+<div class="page">
+
+  <div class="phead">
+    <h1>Growth</h1>
+    <p>Follow the player journey from app download to repeat play, then measure retention and identify churn risk.</p>
+  </div>
+
+  <div class="periodbar" id="periodbar">
+    <div class="pb-inner">
+      <div class="pb-top">
+        <div class="pb-left">
+          <span class="pb-l">Time period</span>
+          <span class="pb-val" id="pbVal">Feb 2026 – Jul 2026</span>
+          <span class="pb-scope" id="pbScope">applies to 4 of 7 cards</span>
+        </div>
+        <div class="pb-actions">
+          <button class="qbtn" data-q="3">Last 3 months</button>
+          <button class="qbtn on" data-q="6">Last 6 months</button>
+          <button class="qbtn" data-q="12">Last 12 months</button>
+          <button class="qbtn" data-q="ytd">YTD</button>
+          <button class="pb-toggle" id="pbToggle">Change</button>
+        </div>
+      </div>
+      <div class="pb-body" id="pbBody">
+        <div class="fld"><label>Start month</label><select id="sM"></select></div>
+        <div class="fld"><label>Start year</label><select id="sY"></select></div>
+        <div class="fld"><label>End month</label><select id="eM"></select></div>
+        <div class="fld"><label>End year</label><select id="eY"></select></div>
+      </div>
+    </div>
+  </div>
+
+  <div class="legend">
+    <span><i style="background:#2CDB87"></i>Follows the time period above</span>
+    <span><i style="background:#2E79FF"></i>Has its own filters</span>
+    <span><i style="background:#9AA79F"></i>All time, ignores the period</span>
+  </div>
+
+  <div id="cards"></div>
+
+</div>
+
+<script>
+const MN=["Jan","Feb","Mar","Apr","May","Jun","Jul","Aug","Sep","Oct","Nov","Dec"];
+const NOW={y:2026,m:7};                                  // Aug 2026, 0-indexed month
+const $=id=>document.getElementById(id);
+
+const CARDS=[
+  { t:"Player funnel comparison",
+    s:"Counts and step-to-step conversion, from sign-up cohort through to ten matches.",
+    scope:"follows", h:"tall" },
+  { t:"Player behavior evolution",
+    s:"Overall Matchday performance across the four core metrics, then City Detail per metric.",
+    scope:"follows", h:"tall" },
+  { t:"Average revenue per player",
+    s:"Selected month compared with the previous month and the same month one year earlier.",
+    scope:"follows" },
+  { t:"Retention curve",
+    s:"Share of each first-match cohort still playing, by month since first match.",
+    scope:"alltime", note:"Months 0–38, every cohort", h:"tall" },
+  { t:"Player retention cohorts",
+    s:"Filter by year, month and city. Click a cohort for city detail.",
+    scope:"own", note:"Cohort year · Cohort month · City", h:"tall" },
+  { t:"Potential churn players",
+    s:"Inactive players by geography and time since last match.",
+    scope:"own", note:"Inactive for · Last played after" },
+  { t:"Player Data Room",
+    s:"Build the table you want, then click any number to see the players behind it.",
+    scope:"follows", h:"tall" }
+];
+
+const state={ sM:1, sY:2026, eM:6, eY:2026, open:false, quick:"6" };
+
+const label=()=>`${MN[state.sM]} ${state.sY} – ${MN[state.eM]} ${state.eY}`;
+
+function scopeChip(c){
+  if(c.scope==="follows")
+    return `<span class="scope follows"><i></i>${label()}</span>`;
+  if(c.scope==="own")
+    return `<span class="scope own"><i></i>Own filters · ${c.note}</span>`;
+  return `<span class="scope alltime"><i></i>All time · ${c.note}</span>`;
+}
+
+function render(){
+  $("pbVal").textContent=label();
+  const n=CARDS.filter(c=>c.scope==="follows").length;
+  $("pbScope").textContent=`applies to ${n} of ${CARDS.length} cards`;
+  $("periodbar").classList.toggle("collapsed",!state.open);
+  $("pbToggle").textContent=state.open?"Done":"Change";
+  document.querySelectorAll(".qbtn").forEach(b=>
+    b.classList.toggle("on",b.dataset.q===state.quick));
+
+  $("cards").innerHTML=CARDS.map(c=>`
+    <div class="card" data-scope="${c.scope}">
+      <div class="chead">
+        <div><div class="ctitle">${c.t}</div><div class="csub">${c.s}</div></div>
+        ${scopeChip(c)}
+      </div>
+      <div class="cbody"><div class="stub ${c.h||""}">${c.t}</div></div>
+    </div>`).join("");
+}
+
+/* quick ranges set the four selects rather than living beside them */
+function setQuick(q){
+  state.quick=q;
+  const end={y:NOW.y,m:NOW.m-1};                     // last complete month
+  if(q==="ytd"){ state.sM=0; state.sY=end.y; }
+  else{
+    const back=Number(q)-1;
+    let m=end.m-back, y=end.y;
+    while(m<0){ m+=12; y--; }
+    state.sM=m; state.sY=y;
+  }
+  state.eM=end.m; state.eY=end.y;
+  syncSelects(); render();
+}
+function syncSelects(){
+  $("sM").value=String(state.sM); $("eM").value=String(state.eM);
+  $("sY").value=String(state.sY); $("eY").value=String(state.eY);
+}
+["sM","eM"].forEach(id=>$(id).innerHTML=MN.map((m,i)=>`<option value="${i}">${m}</option>`).join(""));
+["sY","eY"].forEach(id=>$(id).innerHTML=[2023,2024,2025,2026].map(y=>`<option value="${y}">${y}</option>`).join(""));
+syncSelects();
+
+document.querySelectorAll(".qbtn").forEach(b=>b.addEventListener("click",()=>setQuick(b.dataset.q)));
+$("pbToggle").addEventListener("click",()=>{ state.open=!state.open; render(); });
+["sM","sY","eM","eY"].forEach(id=>$(id).addEventListener("change",e=>{
+  state[id]=Number(e.target.value); state.quick=""; render();
+}));
+
+/* stuck state — only for the shadow, the bar is sticky either way */
+const sentinel=document.createElement("div");
+$("periodbar").before(sentinel);
+new IntersectionObserver(([e])=>{
+  $("periodbar").classList.toggle("stuck",!e.isIntersecting);
+},{threshold:1}).observe(sentinel);
+
+render();
+</script>
+</body></html>

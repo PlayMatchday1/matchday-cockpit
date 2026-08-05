@@ -7,7 +7,7 @@
 // metric. All series/values come from the shared computation (growthMetricGrid /
 // GrowthData) so this card can never disagree with the Player Data Room.
 
-import { useMemo, useState } from "react";
+import { useMemo, useState, type ReactNode } from "react";
 import type { GrowthData, BehaviorPoint } from "@/lib/growthAnalytics";
 import type { Period } from "./GlobalPeriod";
 import { METRIC_LABEL, networkSeries, metricValue, type GridMetric } from "@/lib/growthMetricGrid";
@@ -108,7 +108,15 @@ function buildChart(series: Series[], months: string[]) {
 
 type Row = { name: string; cells: number[]; total: number; mom: number; rank?: number; dot?: string };
 
-export default function BehaviorPanel({ data, period }: { data: GrowthData; period: Period }) {
+export default function BehaviorPanel({
+  data,
+  period,
+  scopeChip,
+}: {
+  data: GrowthData;
+  period: Period;
+  scopeChip?: ReactNode;
+}) {
   const [view, setView] = useState<"matchday" | "city">("matchday");
   const [metric, setMetric] = useState<BehaviorMetric>("totalPlayers");
 
@@ -210,9 +218,12 @@ export default function BehaviorPanel({ data, period }: { data: GrowthData; peri
             compare every city for one metric.
           </div>
         </div>
-        <button type="button" className={styles.btn} id="growthExport" onClick={exportCsv}>
-          Export
-        </button>
+        <div style={{ display: "flex", alignItems: "flex-start", gap: 12, flexWrap: "wrap" }}>
+          {scopeChip}
+          <button type="button" className={styles.btn} id="growthExport" onClick={exportCsv}>
+            Export
+          </button>
+        </div>
       </div>
 
       {/* controls row */}

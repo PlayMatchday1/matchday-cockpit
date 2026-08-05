@@ -1,6 +1,6 @@
 "use client";
 
-import { useEffect, useMemo, useState } from "react";
+import { useEffect, useMemo, useState, type ReactNode } from "react";
 import {
   axisMaxAge,
   curveFull,
@@ -42,9 +42,11 @@ type Descriptor = { name: string; color: string; isNet: boolean };
 export default function RetentionCurvePanel({
   payload,
   authHeaders,
+  scopeChip,
 }: {
   payload: CohortMatrixPayload;
   authHeaders: Record<string, string>;
+  scopeChip?: ReactNode;
 }) {
   // City options: payload.cities minus the non-market entries, "All Matchday" first.
   const cityNames = useMemo(
@@ -175,6 +177,8 @@ export default function RetentionCurvePanel({
               {sub}
             </div>
           </div>
+          <div style={{ display: "flex", alignItems: "flex-start", gap: 12, flexWrap: "wrap" }}>
+          {scopeChip}
           <div className="rcvControls">
             <div className="rcvField">
               <label htmlFor="retentionCityA">Primary city</label>
@@ -218,6 +222,7 @@ export default function RetentionCurvePanel({
                 ))}
               </select>
             </div>
+          </div>
           </div>
         </div>
 

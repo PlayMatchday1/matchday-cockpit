@@ -1,6 +1,6 @@
 "use client";
 
-import { useCallback, useEffect, useState } from "react";
+import { useCallback, useEffect, useState, type ReactNode } from "react";
 import { fmtInt } from "./format";
 
 // PART 6: potential churn. Reads /api/growth/churn (growth_player_profile — one
@@ -63,9 +63,11 @@ function buildQuery(a: Applied): string {
 export default function ChurnPanel({
   cities,
   authHeaders,
+  scopeChip,
 }: {
   cities: string[];
   authHeaders: Record<string, string>;
+  scopeChip?: ReactNode;
 }) {
   const cityOptions = [{ label: "All Matchday", value: "all" }, ...cities.map((c) => ({ label: c, value: c }))];
   const maxDate = todayYmd();
@@ -177,9 +179,12 @@ export default function ChurnPanel({
               Filter inactive players by geography and time since last match, then export the resulting list.
             </div>
           </div>
-          <button type="button" className="csv" id="churnExport" onClick={downloadCsv}>
-            Download CSV
-          </button>
+          <div style={{ display: "flex", alignItems: "flex-start", gap: 12, flexWrap: "wrap" }}>
+            {scopeChip}
+            <button type="button" className="csv" id="churnExport" onClick={downloadCsv}>
+              Download CSV
+            </button>
+          </div>
         </div>
 
         <div className="filters">
@@ -370,7 +375,7 @@ const CHURN_CSS = `
 }
 .mcChurn *{box-sizing:border-box}
 .mcChurn .card{background:var(--paper);border:1px solid var(--line);border-radius:14px;
-  overflow:hidden;margin-bottom:16px;padding:0}
+  overflow:hidden;padding:0}
 .mcChurn .head{display:flex;justify-content:space-between;align-items:flex-start;gap:24px;
   padding:18px 22px;border-bottom:1px solid var(--line);flex-wrap:wrap}
 .mcChurn .title{font-size:1.05rem;font-weight:800;letter-spacing:-.2px;color:var(--forest)}
