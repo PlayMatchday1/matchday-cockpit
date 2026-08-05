@@ -20,8 +20,8 @@ import { createClient } from "@supabase/supabase-js";
 import { runWithLog, type TriggeredBy } from "@/lib/syncLogging";
 import {
   listInstalls,
-  parseInstallFiles,
-  ingestCurrentMonth,
+  ingestAllMonths,
+  type IngestSummary,
   PlayGrantPendingError,
   PLAY_BUCKET,
   PLAY_PREFIX,
@@ -79,16 +79,22 @@ export async function POST(req: Request) {
   const startedAt = Date.now();
 
   // 1) Raw GCS list — verbatim status/body so a 403 (grant) vs 404 (path) is
-  //    unambiguous, plus the object inventory and which files the parser picks up.
+  //    unambiguous, plus the FULL object inventory (names/sizes/dates).
   const list = await listInstalls();
   const bucketPath = `gs://${PLAY_BUCKET}/${PLAY_PREFIX}`;
-  const recognized = list.ok ? parseInstallFiles((list.objects ?? []).map((o) => o.name)) : [];
-  const now = new Date();
-  const currentYm = `${now.getUTCFullYear()}${String(now.getUTCMonth() + 1).padStart(2, "0")}`;
 
-  // 2) Ingest the current month IFF the list succeeded — through runWithLog so the
-  //    run is persisted identically to the cron path (KPI reads that row).
-  let ingest: { ran: boolean; ok?: boolean; ym?: string; rows?: number; error?: string } = { ran: false };
+  // Echo the full listing to the function log (names/sizes/dates only — no secrets)
+  // so the real bucket naming is retrievable from runtime logs, not just the HTTP
+  // response. This is what replaced constructing filenames.
+  if (list.ok) {
+    console.log("[play-installs] bucket listing", JSON.stringify({ count: list.objects?.length ?? 0, objects: list.objects }));
+  }
+
+  // 2) Ingest EVERY available month IFF the list succeeded — driven by the real
+  //    filenames (derives the actual package, re-downloads every month in full so
+  //    late restatements overwrite). Runs through runWithLog so the run is persisted
+  //    identically to the cron path (KPI reads that row).
+  let ingest: { ran: boolean; ok?: boolean; error?: string; summary?: IngestSummary } = { ran: false };
   if (list.ok) {
     const run = await runWithLog(
       "play-installs",
@@ -96,7 +102,7 @@ export async function POST(req: Request) {
       supabase,
       async () => {
         try {
-          return await ingestCurrentMonth(supabase, new Date());
+          return await ingestAllMonths(supabase, list.objects ?? [], new Date());
         } catch (e) {
           if (e instanceof PlayGrantPendingError) {
             throw new Error("Play grant still propagating (403) — expected for up to 24h after granting, non-fatal");
@@ -104,17 +110,16 @@ export async function POST(req: Request) {
           throw e;
         }
       },
-      (r) => ({ rows_imported: r.rows }),
+      (r) => ({ rows_imported: r.rowsWritten }),
     );
-    ingest = run.ok
-      ? { ran: true, ok: true, ym: run.result.ym, rows: run.result.rows }
-      : { ran: true, ok: false, error: run.error };
+    ingest = run.ok ? { ran: true, ok: true, summary: run.result } : { ran: true, ok: false, error: run.error };
   }
+  const rowsWritten = ingest.summary?.rowsWritten ?? 0;
 
   // 3) growth_downloads_month is a plain VIEW over app_downloads (live) — no
   //    refresh needed for the KPI. Refresh the other growth_* matviews anyway so
   //    any download-derived series stay coherent; best-effort, never fatal.
-  if (ingest.ok && (ingest.rows ?? 0) > 0) await refreshGrowthViews(supabase);
+  if (ingest.ok && rowsWritten > 0) await refreshGrowthViews(supabase);
 
   // 4) Read back the truth: app_downloads summary + the freshest fin_sync_log row.
   const { count: adCount } = await supabase
@@ -149,14 +154,21 @@ export async function POST(req: Request) {
       ? ingest.error ?? "ingest failed"
       : null;
 
+  const s = ingest.summary;
   return Response.json(
     {
       ok,
       error,
       triggeredBy,
       durationMs: Date.now() - startedAt,
-      result: { upserted: ingest.ok ? (ingest.rows ?? 0) : undefined },
-      package: PLAY_PACKAGE,
+      result: { upserted: ingest.ok ? rowsWritten : undefined },
+      // Package DERIVED from the real filenames (not the hardcoded default).
+      configuredPackageDefault: PLAY_PACKAGE,
+      derivedPackage: s?.chosenPackage ?? null,
+      otherPackages: s?.otherPackages ?? [],
+      monthsAvailable: s?.availableMonths ?? [],
+      monthsIngested: s?.ingestedMonths ?? [],
+      perMonth: s?.perMonth ?? [],
       gcsList: {
         bucketPath,
         ok: list.ok,
@@ -166,10 +178,7 @@ export async function POST(req: Request) {
         error: list.error ?? null,
         objectCount: list.objects?.length ?? 0,
         objects: (list.objects ?? []).map((o) => ({ name: o.name, updated: o.updated, bytes: o.size })),
-        parserRecognizedFiles: recognized.map((f) => ({ name: f.name, ym: f.ym, pkg: f.pkg })),
-        currentMonthTargeted: currentYm,
       },
-      ingest,
       appDownloads: {
         androidRowCount: adCount ?? 0,
         minPeriodDate: adMin?.[0]?.period_date ?? null,

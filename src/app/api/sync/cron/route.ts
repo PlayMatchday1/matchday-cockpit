@@ -50,7 +50,7 @@ import { refreshMembershipSnapshots } from "@/lib/membershipSnapshots";
 import { refreshMembershipPriceSnapshots } from "@/lib/membershipPriceSnapshots";
 import { recomputeManagerPayIntoFinExpenses } from "@/lib/managerPayCompute";
 import { ingestTelnyxSms } from "@/lib/telnyxSmsIngest";
-import { ingestCurrentMonth, PlayGrantPendingError } from "@/lib/playInstallsSync";
+import { listInstalls, ingestAllMonths, PlayGrantPendingError } from "@/lib/playInstallsSync";
 import { runWithLog, type TriggeredBy } from "@/lib/syncLogging";
 import { refreshGrowthViews } from "@/lib/growthViews";
 
@@ -391,15 +391,25 @@ export async function POST(req: Request) {
   // every run leaves a fin_sync_log row (started_at + rows_imported on success,
   // error_message on failure) — the KPI's status label reads that row to tell
   // "never run" from "ran and failed with X" from "ran, no data". The SA key never
-  // reaches the log: ingestCurrentMonth throws sanitized messages only.
-  let playInstallsResult: { ok: boolean; ym?: string; rows?: number; note?: string };
+  // reaches the log: the ingest throws sanitized messages only.
+  //
+  // Listing-driven: list the bucket, then ingest EVERY available month by its real
+  // filename (never a constructed one), re-downloading each month in full so late
+  // restatements overwrite. Same path the manual /api/sync/play-installs run uses.
+  let playInstallsResult: { ok: boolean; rows?: number; note?: string };
   if (triggeredBy !== "cron") {
     playInstallsResult = { ok: true, rows: 0, note: "manual mode: skipped (needs service role + runtime SA key)" };
   } else {
     const run = await runWithLog("play-installs", triggeredBy, supabase, async () => {
       try {
-        const r = await ingestCurrentMonth(supabase, new Date());
-        return { ym: r.ym, rows: r.rows };
+        const list = await listInstalls();
+        if (!list.ok) {
+          throw new Error(
+            `GCS list ${list.status === 403 ? "403 (grant missing/insufficient)" : list.status === 404 ? "404 (bad bucket path)" : list.status || "error"}: ${list.error ?? list.statusText}`,
+          );
+        }
+        const summary = await ingestAllMonths(supabase, list.objects ?? [], new Date());
+        return { rows: summary.rowsWritten };
       } catch (e) {
         // Normalize the expected grant-propagation 403 to a clear, stable message
         // that the status label can surface verbatim; re-throw so runWithLog
@@ -410,9 +420,7 @@ export async function POST(req: Request) {
         throw e;
       }
     }, (r) => ({ rows_imported: r.rows }));
-    playInstallsResult = run.ok
-      ? { ok: true, ym: run.result.ym, rows: run.result.rows }
-      : { ok: false, note: run.error };
+    playInstallsResult = run.ok ? { ok: true, rows: run.result.rows } : { ok: false, note: run.error };
     if (!run.ok) console.error("[cron] play-installs step failed (isolated, non-fatal):", run.error);
   }
 

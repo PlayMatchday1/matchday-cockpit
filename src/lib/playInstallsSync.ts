@@ -196,9 +196,15 @@ function findCol(header: string[], name: string): number {
   return header.map((h) => h.trim().toLowerCase()).indexOf(name.toLowerCase());
 }
 
-// Parse one overview file into android daily rows for our package.
+// Parse one overview file into android daily rows for the given package. The
+// expected package is passed in (derived from the real filenames) rather than
+// assumed — if it were hardcoded and the store's package differed, every row
+// would be filtered out and we'd silently write zero.
 export type DailyRow = { period_date: string; count: number; raw: Record<string, string> };
-export function parseOverview(buf: Buffer): { header: string[]; rows: DailyRow[]; packages: Set<string> } {
+export function parseOverview(
+  buf: Buffer,
+  expectedPkg: string = PLAY_PACKAGE,
+): { header: string[]; rows: DailyRow[]; packages: Set<string> } {
   const table = parseCsv(decodeCsv(buf));
   if (!table.length) return { header: [], rows: [], packages: new Set() };
   const header = table[0];
@@ -209,9 +215,9 @@ export function parseOverview(buf: Buffer): { header: string[]; rows: DailyRow[]
   const packages = new Set<string>();
   const rows: DailyRow[] = [];
   for (const r of table.slice(1)) {
-    const pkg = (pkgI >= 0 ? r[pkgI] : PLAY_PACKAGE)?.trim();
+    const pkg = (pkgI >= 0 ? r[pkgI] : expectedPkg)?.trim();
     if (pkg) packages.add(pkg);
-    if (pkg && pkg !== PLAY_PACKAGE) continue; // never sum a second package
+    if (pkg && pkg !== expectedPkg) continue; // never sum a second package
     const date = (r[dateI] ?? "").trim();
     if (!/^\d{4}-\d{2}-\d{2}$/.test(date)) continue;
     const rawVal = (r[valI] ?? "").trim();
@@ -272,18 +278,26 @@ export async function inspectBucket(): Promise<{
   };
 }
 
-async function upsertRows(supabase: SupabaseClient, rows: DailyRow[]): Promise<number> {
+async function upsertRows(
+  supabase: SupabaseClient,
+  rows: DailyRow[],
+  pkg: string,
+  sourceFile: string,
+): Promise<number> {
   if (!rows.length) return 0;
+  const at = new Date().toISOString();
   const payload = rows.map((r) => ({
     platform: "android",
-    package: PLAY_PACKAGE,
+    package: pkg,
     metric: PLAY_METRIC,
     period_grain: "day",
     period_date: r.period_date,
     count: r.count,
     source: "play_console_gcs",
-    raw: r.raw,
-    ingested_at: new Date().toISOString(),
+    // Keep the source filename in raw so the ingested rows are self-describing
+    // (which overview file each day came from) without a separate listing table.
+    raw: { ...r.raw, _source_file: sourceFile },
+    ingested_at: at,
   }));
   const { error } = await supabase
     .from("app_downloads")
@@ -292,31 +306,59 @@ async function upsertRows(supabase: SupabaseClient, rows: DailyRow[]): Promise<n
   return payload.length;
 }
 
-// Ingest one YYYYMM overview file (full re-download + upsert).
-export async function ingestMonth(
-  supabase: SupabaseClient,
-  ym: string,
-): Promise<{ ym: string; rows: number; days: string[]; secondPackages: string[] }> {
-  const token = await accessToken();
-  const name = `${PLAY_PREFIX}installs_${PLAY_PACKAGE}_${ym}_overview.csv`;
-  const buf = await downloadBytes(name, token);
-  const { rows, packages } = parseOverview(buf);
-  const secondPackages = [...packages].filter((p) => p !== PLAY_PACKAGE);
-  const written = await upsertRows(supabase, rows);
-  return { ym, rows: written, days: rows.map((r) => r.period_date).sort(), secondPackages };
+// From the REAL overview filenames, decide which package we ingest — never assume
+// "com.matchday_app". Prefer the package whose name contains "matchday"; if there
+// is exactly one, use it. null when there are no overview files at all.
+export function deriveInstallPackage(files: InstallFile[]): string | null {
+  const pkgs = [...new Set(files.map((f) => f.pkg))];
+  if (!pkgs.length) return null;
+  if (pkgs.length === 1) return pkgs[0];
+  return pkgs.find((p) => /matchday/i.test(p)) ?? pkgs[0];
 }
 
-// Daily job: re-download the CURRENT month in full and upsert every row (late
-// restatements of earlier days must overwrite — hence full re-download, never
-// append). now is passed in so the caller controls the clock.
-export async function ingestCurrentMonth(
+export type IngestSummary = {
+  objects: { name: string; updated: string; size: string }[];
+  packages: string[]; // every distinct package seen in the overview filenames
+  chosenPackage: string | null;
+  otherPackages: string[]; // packages present but NOT ingested (never summed in)
+  availableMonths: string[]; // YYYYMM overview months for the chosen package
+  ingestedMonths: string[];
+  rowsWritten: number;
+  perMonth: { ym: string; file: string; rows: number }[];
+};
+
+// List-driven ingest: given the ACTUAL objects in the bucket, derive the real
+// package + available months from the filenames and ingest EVERY overview month
+// by its real name — no constructed filenames. The current month is re-downloaded
+// in full like every other month (idempotent upsert on the day key), so late
+// restatements of earlier days overwrite cleanly. `now` is unused but kept in the
+// signature so the caller still owns the clock if month-scoping is added later.
+export async function ingestAllMonths(
   supabase: SupabaseClient,
-  now: Date,
-): Promise<{ ym: string; rows: number }> {
-  const ym = `${now.getUTCFullYear()}${String(now.getUTCMonth() + 1).padStart(2, "0")}`;
-  const r = await ingestMonth(supabase, ym);
-  if (r.secondPackages.length) {
-    throw new Error(`Unexpected second package(s) in Play file: ${r.secondPackages.join(", ")} — refusing to sum.`);
+  objects: { name: string; updated: string; size: string }[],
+  _now: Date,
+): Promise<IngestSummary> {
+  const files = parseInstallFiles(objects.map((o) => o.name));
+  const allPkgs = [...new Set(files.map((f) => f.pkg))];
+  const chosen = deriveInstallPackage(files);
+  const mine = chosen ? files.filter((f) => f.pkg === chosen) : [];
+  const token = await accessToken();
+  const perMonth: { ym: string; file: string; rows: number }[] = [];
+  let rowsWritten = 0;
+  for (const f of mine) {
+    const buf = await downloadBytes(f.name, token);
+    const { rows } = parseOverview(buf, chosen!);
+    rowsWritten += await upsertRows(supabase, rows, chosen!, f.name.slice(PLAY_PREFIX.length));
+    perMonth.push({ ym: f.ym, file: f.name, rows: rows.length });
   }
-  return { ym, rows: r.rows };
+  return {
+    objects,
+    packages: allPkgs,
+    chosenPackage: chosen,
+    otherPackages: allPkgs.filter((p) => p !== chosen),
+    availableMonths: mine.map((f) => f.ym).sort(),
+    ingestedMonths: perMonth.map((p) => p.ym).sort(),
+    rowsWritten,
+    perMonth,
+  };
 }
