@@ -110,6 +110,64 @@ export function retentionCurve(payload: CohortMatrixPayload): {
   };
 }
 
+// ── retention CURVE over the FULL age range (0..months-since-first-match) ─────
+// The curve card runs far past age 12. The x-axis maximum is the network span —
+// months from the FIRST Matchday match ever to now — derived from the all-cities
+// payload every render (never hardcoded). Each city's line, though, stops at ITS
+// own oldest cohort's age: a padded line would read "retention held steady" when
+// it means "that city did not exist yet".
+//
+// Free-launch promo cohorts (Apr/May 2023) are excluded from the plotted average
+// exactly as the cohort-table footers exclude them — that reproduces the measured
+// network figures (M1 36.1 · M3 21.2 · M6 17.7 · M12 13.5). Because those two are
+// the OLDEST cohorts, the network line ends at month 38 while the axis runs to 40;
+// the panel footnotes that gap. The tile cohort COUNT includes every cohort old
+// enough to be observed (the mockup's "40 cohorts at month 1"), free-launch too.
+
+/** Axis maximum = months from the earliest cohort (first match ever, incl
+ *  free-launch) to nowMonth. Computed, never a literal. */
+export function axisMaxAge(networkPayload: CohortMatrixPayload): number {
+  if (!networkPayload.cohortMonths.length) return MAX_AGE;
+  const earliest = Math.min(...networkPayload.cohortMonths.map(idxOf));
+  return idxOf(networkPayload.nowMonth) - earliest;
+}
+
+/** All cohorts old enough to be observed at age n (incl free-launch) — the tile
+ *  "N cohorts observed" count. */
+export function cohortsObservedAt(payload: CohortMatrixPayload, n: number): number {
+  const now = idxOf(payload.nowMonth);
+  return payload.cohortMonths.filter((m) => now - idxOf(m) >= n).length;
+}
+
+export type FullCurvePoint = { age: number; pct: number; cohorts: number };
+/** One point per month from 0 to this payload's own oldest-cohort age. pct is the
+ *  unweighted mean of non-free-launch cohorts' retention at that age (month 0 =
+ *  100% by construction); cohorts is the count of ALL cohorts observable there. */
+export function curveFull(payload: CohortMatrixPayload): FullCurvePoint[] {
+  const now = idxOf(payload.nowMonth);
+  const byMonth = new Map<string, Map<number, number>>();
+  for (const c of payload.cells) {
+    let ages = byMonth.get(c.month);
+    if (!ages) byMonth.set(c.month, (ages = new Map()));
+    ages.set(c.age, c.players);
+  }
+  const cohorts = payload.cohortMonths
+    .map((m) => ({ m, obs: now - idxOf(m), size: byMonth.get(m)?.get(0) ?? 0, ages: byMonth.get(m) ?? new Map<number, number>(), free: isFreeLaunch(m) }))
+    .filter((c) => c.size > 0);
+  if (!cohorts.length) return [];
+  // the line runs to the oldest NON-free cohort's age (free-launch is excluded
+  // from the plotted value, so it must not extend the line either).
+  const lineMax = Math.max(...cohorts.filter((c) => !c.free).map((c) => c.obs), 0);
+  const points: FullCurvePoint[] = [];
+  for (let n = 0; n <= lineMax; n++) {
+    const nonFree = cohorts.filter((c) => !c.free && c.obs >= n);
+    if (!nonFree.length) break;
+    const pcts = nonFree.map((c) => (100 * (c.ages.get(n) ?? 0)) / c.size);
+    points.push({ age: n, pct: pcts.reduce((a, b) => a + b, 0) / pcts.length, cohorts: cohorts.filter((c) => c.obs >= n).length });
+  }
+  return points;
+}
+
 // "Mature cohorts only" footer: at every age, the unweighted mean over the
 // non-free-launch cohorts that have been observable for a FULL 12 months (their
 // age-12 cell has an observation). A fixed cohort set → the comparable curve.

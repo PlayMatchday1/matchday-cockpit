@@ -49,11 +49,12 @@ export type CohortMatrixPayload = {
 export async function fetchCohortMatrix(sb: SupabaseClient, cityAbbr: string | null): Promise<CohortMatrixPayload> {
   const nowMonth = new Date().toISOString().slice(0, 7);
   // The all-cities rollup is stored as city IS NULL; a specific city as city = abbr.
+  // ALL ages (not capped at 12): the retention CURVE runs 0..(months since first
+  // match), well past 12. The cohort TABLE still caps at 12 client-side.
   const base = () =>
     sb
       .from("growth_cohort_matrix")
       .select("first_match_month, age, players")
-      .lte("age", 12)
       .order("first_match_month", { ascending: true });
   const rows = await selectAllRange<{ first_match_month: string; age: number; players: number }>((from, to) => {
     let q = base().range(from, to);

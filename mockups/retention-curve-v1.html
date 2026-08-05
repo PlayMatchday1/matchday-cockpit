@@ -1,0 +1,193 @@
+<!doctype html>
+<html lang="en"><head><meta charset="utf-8"/>
+<title>Retention curve — vGrowth</title>
+<style>
+:root{
+  --forest:#003326;--ink:#0d1f18;--muted:#5C6B62;--cream:#F4EEE1;--paper:#fff;
+  --line:#dfe4da;--slot:#EFF4EF;--mint:#2CDB87;--blue:#2E79FF;
+  --mintInk:#046B45;--blueInk:#1B5FD9;--coral:#FF6955;--coralInk:#A83120;
+}
+*{box-sizing:border-box}
+body{margin:0;padding:26px;background:var(--cream);
+  font-family:-apple-system,BlinkMacSystemFont,"Segoe UI",Inter,Helvetica,Arial,sans-serif;
+  color:var(--ink);-webkit-font-smoothing:antialiased}
+.wrap{max-width:1360px;margin:0 auto}
+.card{background:var(--paper);border:1px solid var(--line);border-radius:16px;
+  box-shadow:0 9px 26px rgba(0,51,38,.075);overflow:hidden}
+
+.card-head{display:flex;justify-content:space-between;align-items:flex-end;gap:20px;
+  padding:18px 22px 12px;flex-wrap:wrap}
+.card-title{font-size:16px;font-weight:900;letter-spacing:-.2px;color:var(--forest)}
+.card-sub{font-size:12px;color:var(--muted);margin-top:5px;line-height:1.45}
+.retention-controls{display:flex;align-items:flex-end;gap:12px}
+.filter-field label{display:block;font-size:9px;font-weight:900;letter-spacing:.8px;
+  text-transform:uppercase;color:var(--muted);margin-bottom:5px}
+.compact-select{font-family:inherit;font-size:12px;font-weight:750;color:var(--ink);background:#fff;
+  border:1px solid var(--line);border-radius:10px;padding:9px 12px;cursor:pointer;min-width:150px}
+.btn-toggle{border:1px solid var(--line);background:#fff;color:var(--forest);font-size:12px;
+  font-weight:850;padding:9px 18px;border-radius:10px;cursor:pointer;font-family:inherit}
+.btn-toggle:hover{background:var(--slot)}
+.btn-toggle.active{background:var(--forest);border-color:var(--forest);color:#fff}
+.hidden{display:none}
+
+.chart{padding:2px 22px 0}
+svg{display:block;width:100%;height:auto;overflow:hidden}
+.axis{font-size:10.5px;fill:var(--muted);font-weight:700}
+.gl{stroke:var(--line);stroke-width:1}
+.thin{stroke:#eef1ec;stroke-width:1}
+
+.legend{display:flex;gap:26px;padding:12px 22px 4px}
+.legend span{font-size:11.5px;font-weight:850;color:var(--ink);display:inline-flex;align-items:center}
+.legend-dot{display:inline-block;width:10px;height:10px;border-radius:50%;margin-right:8px}
+
+.miles{display:flex;border-top:1px solid var(--line);margin-top:12px}
+.mile{flex:1;padding:13px 22px;border-right:1px solid var(--line)}
+.mile:last-child{border-right:0}
+.mile-l{font-size:9px;font-weight:900;letter-spacing:.8px;text-transform:uppercase;color:var(--muted)}
+.mile-row{display:flex;align-items:baseline;gap:9px;margin-top:6px}
+.mile-v{font-size:18px;font-weight:900;color:var(--forest);line-height:1;font-variant-numeric:tabular-nums}
+.mile-b{font-size:12px;font-weight:850;color:var(--blueInk);font-variant-numeric:tabular-nums}
+.mile-f{font-size:10.5px;color:var(--muted);margin-top:5px;font-weight:650}
+
+.foot{padding:14px 22px 18px;font-size:11px;color:var(--muted);line-height:1.6;max-width:1060px}
+.foot b{color:var(--ink);font-weight:800}
+</style></head>
+<body><div class="wrap"><div class="card">
+
+  <div class="card-head">
+    <div>
+      <div class="card-title">Retention curve</div>
+      <div class="card-sub" id="retentionSub">—</div>
+    </div>
+    <div class="retention-controls">
+      <div class="filter-field">
+        <label>Primary city</label>
+        <select class="compact-select" id="retentionCityA"></select>
+      </div>
+      <button class="btn-toggle" id="retentionCompare">Compare</button>
+      <div class="filter-field hidden" id="retentionCompareField">
+        <label>Comparison city</label>
+        <select class="compact-select" id="retentionCityB"></select>
+      </div>
+    </div>
+  </div>
+
+  <div class="chart"><svg id="retentionChart" viewBox="0 0 1300 420" preserveAspectRatio="xMidYMid meet"></svg></div>
+  <div class="legend" id="retentionLegend"></div>
+  <div class="miles" id="miles"></div>
+  <div class="foot" id="retFoot"></div>
+
+</div></div>
+
+<script>
+const MAXAGE = 34;
+
+/* Retention by month since first match. Age 0 is 100% by definition.
+   Network figures are the measured ones: M1 36.1, M3 21.2, M6 17.7, M12 13.5. */
+const SERIES = {
+  "All Matchday":[100,36.1,26.5,21.2,19.6,18.5,17.7,16.9,16.3,15.8,15.2,14.5,13.5,13.4,13.6,13.2,12.9,13.1,12.8,12.6,12.9,13.4,13.7,13.2,13.9,13.4,13.1,12.8,13.0,12.7,12.4,12.9,13.1,13.4,13.6],
+  "Austin":      [100,37.4,27.1,21.8,19.1,17.8,16.4,15.2,14.6,14.1,13.8,13.4,12.9,12.6,13.8,14.0,13.4,12.2,11.6,11.3,11.9,12.6,13.8,14.2,14.6,13.9,12.7,12.1,11.6,11.4,12.0,12.7,13.3,13.9,14.2],
+  "Houston":     [100,34.2,24.8,19.6,18.2,17.1,16.6,15.9,15.4,14.8,14.2,13.6,12.8,12.4,12.6,12.1,11.8,12.0,11.7,11.4,11.8,12.2,12.6,12.1,12.8,12.3,12.0,11.7,11.9,11.6,11.3,11.8,12.0,12.3,12.5],
+  "San Antonio": [100,38.9,28.4,23.1,21.4,20.2,19.3,18.4,17.7,17.1,16.5,15.7,14.6,14.5,14.7,14.3,13.9,14.2,13.8,13.6,13.9,14.5,14.8,14.3,15.0,14.5,14.1,13.8,14.0,13.7,13.4,13.9,14.2,14.5,14.7],
+  "Dallas":      [100,31.6,22.4,17.8,16.4,15.3,14.6,13.9,13.3,12.8,12.3,11.7,10.9,10.7,10.9,10.5,10.2,10.4,10.1,9.9,10.2,10.6,10.9,10.5,11.1,10.7],
+  "Atlanta":     [100,33.1,23.7,18.9,17.4,16.3,15.5,14.8,14.2,13.7,13.1,12.5,11.6,11.4,11.6,11.2,10.9,11.1,10.8,10.6,10.9,11.3],
+  "OKC":         [100,29.8,20.9,16.4,15.1,14.1,13.4,12.8,12.2,11.8,11.3,10.8,10.0,9.8],
+  "St. Louis":   [100,35.4,25.6,20.4,18.8,17.7,16.9,16.1,15.5,15.0,14.4,13.7,12.7,12.6,12.8,12.4,12.1,12.3,12.0,11.8,12.1,12.6,12.9,12.4,13.1,12.6,12.3,12.0,12.2,11.9]
+};
+const CITIES = Object.keys(SERIES).filter(k => k !== "All Matchday");
+
+/* How many cohorts can even be observed at a given age. 41 cohorts exist
+   (2023-04 to 2026-08); a cohort contributes at age n only if it is that old. */
+const cohortsAtAge = n => Math.max(0, 41 - n);
+const THIN = 12;                                    // fewer than this = thin sample
+const THIN_FROM = (() => { for(let n=0;n<=MAXAGE;n++) if(cohortsAtAge(n) < THIN) return n; return MAXAGE+1; })();
+
+const $ = id => document.getElementById(id);
+const state = { a:"All Matchday", b:"Austin", compare:true };
+
+const VW=1300, VH=420, M={l:64,r:26,t:20,b:52};
+const IW=VW-M.l-M.r, IH=VH-M.t-M.b;
+const xAt = n => M.l + IW * (n/MAXAGE);
+const yAt = v => M.t + IH * (1 - v/100);
+
+function draw(){
+  const list = [{name:state.a, color:"#2CDB87", ink:"var(--mintInk)"}];
+  if(state.compare && state.b !== state.a) list.push({name:state.b, color:"#2E79FF", ink:"var(--blueInk)"});
+
+  let s = "";
+  // thin-sample region
+  if(THIN_FROM <= MAXAGE){
+    s += `<rect x="${xAt(THIN_FROM).toFixed(1)}" y="${M.t}" width="${(xAt(MAXAGE)-xAt(THIN_FROM)).toFixed(1)}"
+             height="${IH}" fill="#F4EEE1" opacity=".55"/>`;
+    s += `<line class="thin" x1="${xAt(THIN_FROM).toFixed(1)}" y1="${M.t}"
+             x2="${xAt(THIN_FROM).toFixed(1)}" y2="${M.t+IH}" stroke-dasharray="3 3"/>`;
+    s += `<text class="axis" x="${(xAt(THIN_FROM)+7).toFixed(1)}" y="${M.t+14}"
+             style="font-size:9.5px">fewer than ${THIN} cohorts</text>`;
+  }
+  [0,25,50,75,100].forEach(t=>{
+    s += `<line class="gl" x1="${M.l}" y1="${yAt(t).toFixed(1)}" x2="${M.l+IW}" y2="${yAt(t).toFixed(1)}"/>`;
+    s += `<text class="axis" x="${M.l-12}" y="${(yAt(t)+3.6).toFixed(1)}" text-anchor="end">${t}%</text>`;
+  });
+  const xt = [0,5,10,15,20,25,30,MAXAGE];
+  xt.forEach(n=>{
+    s += `<text class="axis" x="${xAt(n).toFixed(1)}" y="${VH-M.b+26}" text-anchor="middle">${n}</text>`;
+  });
+  s += `<text class="axis" x="${(M.l+IW/2).toFixed(1)}" y="${VH-6}" text-anchor="middle"
+           style="font-size:10px">Months since first match</text>`;
+
+  list.forEach(sr=>{
+    const d = SERIES[sr.name];
+    const path = d.map((v,i)=>`${i?"L":"M"}${xAt(i).toFixed(1)},${yAt(v).toFixed(1)}`).join(" ");
+    s += `<path d="${path}" fill="none" stroke="${sr.color}" stroke-width="2.6"
+             stroke-linejoin="round" stroke-linecap="round"/>`;
+    s += `<circle cx="${xAt(0)}" cy="${yAt(100)}" r="3.6" fill="${sr.color}"/>`;
+    s += `<circle cx="${xAt(d.length-1).toFixed(1)}" cy="${yAt(d[d.length-1]).toFixed(1)}"
+             r="3.6" fill="${sr.color}"/>`;
+  });
+  $("retentionChart").innerHTML = s;
+
+  $("retentionLegend").innerHTML = list.map(sr =>
+    `<span><i class="legend-dot" style="background:${sr.color}"></i>${sr.name}</span>`).join("");
+
+  $("retentionSub").textContent = (list.length > 1)
+    ? `${state.a} compared with ${state.b} · retention by month since first match`
+    : `${state.a} · retention by month since first match`;
+
+  // milestones — the four numbers anyone actually reads off this chart
+  $("miles").innerHTML = [1,3,6,12].map(n => {
+    const a = SERIES[state.a][n], b = list.length>1 ? SERIES[state.b][n] : null;
+    return `<div class="mile"><div class="mile-l">Month ${n}</div>
+      <div class="mile-row"><span class="mile-v">${a.toFixed(1)}%</span>`
+      + (b!=null ? `<span class="mile-b">${state.b} ${b.toFixed(1)}%</span>` : "")
+      + `</div><div class="mile-f">${cohortsAtAge(n)} cohorts observed</div></div>`;
+  }).join("");
+
+  const short = list.map(sr=>[sr.name, SERIES[sr.name].length-1]).filter(([,l])=>l<MAXAGE);
+  $("retFoot").innerHTML =
+    `<b>Each point is the share of a first-match cohort still playing that many months later</b>, averaged `
+    + `across every cohort old enough to be observed at that age — so month 1 draws on 40 cohorts and `
+    + `month ${MAXAGE} on ${cohortsAtAge(MAXAGE)}. `
+    + `<b>The shaded tail</b> past month ${THIN_FROM} rests on fewer than ${THIN} cohorts and moves on small numbers; `
+    + `read the trend there, not the wiggles.`
+    + (short.length ? ` <b>${short.map(([n,l])=>`${n} stops at month ${l}`).join(", ")}</b> — that city has no cohort old enough to go further.` : "");
+}
+
+function fill(){
+  const all = ["All Matchday", ...CITIES];
+  $("retentionCityA").innerHTML = all.map(c=>`<option${c===state.a?" selected":""}>${c}</option>`).join("");
+  $("retentionCityB").innerHTML = all.map(c=>`<option${c===state.b?" selected":""}>${c}</option>`).join("");
+}
+$("retentionCityA").addEventListener("change", e=>{ state.a=e.target.value; draw(); });
+$("retentionCityB").addEventListener("change", e=>{ state.b=e.target.value; draw(); });
+$("retentionCompare").addEventListener("click", ()=>{
+  state.compare = !state.compare;
+  $("retentionCompare").classList.toggle("active", state.compare);
+  $("retentionCompareField").classList.toggle("hidden", !state.compare);
+  draw();
+});
+fill();
+$("retentionCompare").classList.toggle("active", state.compare);
+$("retentionCompareField").classList.toggle("hidden", !state.compare);
+draw();
+</script>
+</body></html>

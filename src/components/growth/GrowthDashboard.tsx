@@ -96,19 +96,18 @@ export default function GrowthDashboard() {
       <PlayerFunnel data={data} period={activePeriod} />
       <BehaviorPanel data={data} period={activePeriod} />
       <ArppPanel data={data} />
+      {/* Retention curve sits directly below ARPP and before the cohort table, full-width. */}
+      {retention ? (
+        <RetentionCurvePanel payload={retention} authHeaders={authHeaders ?? {}} />
+      ) : (
+        <div className={styles.stateMsg}>Loading retention curve…</div>
+      )}
       {retention ? (
         <CohortPanel payload={retention} authHeaders={authHeaders ?? {}} />
       ) : (
         <div className={styles.stateMsg}>Loading retention cohorts…</div>
       )}
-      <div className={styles.grid2}>
-        {retention ? (
-          <RetentionCurvePanel payload={retention} authHeaders={authHeaders ?? {}} />
-        ) : (
-          <div className={styles.stateMsg}>Loading retention curve…</div>
-        )}
-        <ChurnPanel cities={data.cities} authHeaders={authHeaders ?? {}} />
-      </div>
+      <ChurnPanel cities={data.cities} authHeaders={authHeaders ?? {}} />
       <DataRoomPanel data={data} />
 
       <div className={styles.footnote}>
