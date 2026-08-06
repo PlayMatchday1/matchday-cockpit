@@ -4,7 +4,6 @@ import PageHeader from "@/components/PageHeader";
 import PagePermissionGuard from "@/components/PagePermissionGuard";
 import StripeUploader from "@/components/StripeUploader";
 import SyncCard from "@/components/SyncCard";
-import CalendarDiag from "@/components/CalendarDiag"; // TEMPORARY — remove with /api/diag/calendar
 import { canAccess, useAuth } from "@/lib/useAuth";
 
 export default function DataPage() {
@@ -21,9 +20,6 @@ export default function DataPage() {
         title="Data"
         subtitle="Upload CSVs and run on-demand syncs."
       />
-
-      {/* TEMPORARY diagnostic — remove with /api/diag/calendar */}
-      <CalendarDiag />
 
       {/* Section order matches the cron orchestrator's daily run:
           stripe → reviews → subscriptions → promocodes → matches →
@@ -227,7 +223,7 @@ export default function DataPage() {
       </section>
 
       {/* 10. App Store installs (growth — ungated) */}
-      <section>
+      <section className="mb-12">
         <SectionHeader
           title="App Store installs"
           subtitle="iOS install counts feeding the App downloads KPI on the Growth tab."
@@ -238,6 +234,21 @@ export default function DataPage() {
           source="app-store-installs"
           endpoint="/api/sync/app-store-installs"
           estimatedDuration="~30–60 seconds"
+        />
+      </section>
+
+      {/* 11. Google Calendar (home "This week" — ungated) */}
+      <section>
+        <SectionHeader
+          title="Google Calendar"
+          subtitle="This week's meetings for the home page, via Workspace domain-wide delegation."
+        />
+        <SyncCard
+          title="Google Calendar"
+          description="Syncs this week's meetings (2+ people, non-private) for the seeded team accounts via domain-wide delegation. Titles + attendees only — never descriptions or locations."
+          source="google-calendar"
+          endpoint="/api/sync/google-calendar"
+          estimatedDuration="~10–30 seconds"
         />
       </section>
     </PagePermissionGuard>

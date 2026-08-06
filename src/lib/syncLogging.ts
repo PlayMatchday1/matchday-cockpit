@@ -29,7 +29,8 @@ export type SourceName =
   | "firstmatch-ledger"
   | "telnyx-sms"
   | "play-installs"
-  | "app-store-installs";
+  | "app-store-installs"
+  | "google-calendar";
 
 // fin_sync_log columns the orchestrator/manual routes write on
 // success. Stripe-specific columns (charges_*) stay null for mdapi

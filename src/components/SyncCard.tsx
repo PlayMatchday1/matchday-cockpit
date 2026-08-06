@@ -23,6 +23,7 @@ type Source =
   | "membership-snapshots"
   | "play-installs"
   | "app-store-installs"
+  | "google-calendar"
   | "firstmatch-ledger"
   | "manager-pay-recompute"
   | "membership-prices"

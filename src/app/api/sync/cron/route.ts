@@ -52,6 +52,7 @@ import { recomputeManagerPayIntoFinExpenses } from "@/lib/managerPayCompute";
 import { ingestTelnyxSms } from "@/lib/telnyxSmsIngest";
 import { listInstalls, ingestAllMonths, PlayGrantPendingError } from "@/lib/playInstallsSync";
 import { ingestAppStore, AppleAuthError } from "@/lib/appStoreInstallsSync";
+import { syncAllCalendars, CalendarConfigError } from "@/lib/calendarSync";
 import { runWithLog, type TriggeredBy } from "@/lib/syncLogging";
 import { refreshGrowthViews } from "@/lib/growthViews";
 
@@ -456,6 +457,34 @@ export async function POST(req: Request) {
     if (!run.ok) console.error("[cron] app-store-installs step failed (isolated, non-fatal):", run.error);
   }
 
+  // Google Calendar — this week's meetings (2+ people, non-private) for the seeded
+  // team accounts via domain-wide delegation. Like the two install steps above, it
+  // is a NEW integration and deliberately isolated: a transient delegation/Google
+  // error (or a not-yet-propagated Workspace grant) must never abort the daily
+  // sync, so it is kept OUT of `anyFailed`. It runs through runWithLog so every run
+  // leaves a fin_sync_log row (started_at + rows_imported on success, error_message
+  // on failure) — the KPI's status label reads that row. The SA key never reaches
+  // the log: the lib throws sanitized messages only and CalendarConfigError is
+  // normalized here.
+  let googleCalendarResult: { ok: boolean; rows?: number; note?: string };
+  if (triggeredBy !== "cron") {
+    googleCalendarResult = { ok: true, rows: 0, note: "manual mode: skipped (needs service role + runtime SA key)" };
+  } else {
+    const run = await runWithLog("google-calendar", triggeredBy, supabase, async () => {
+      try {
+        const summary = await syncAllCalendars(supabase, new Date());
+        return { rows: summary.eventsStored };
+      } catch (e) {
+        if (e instanceof CalendarConfigError) {
+          throw new Error(`Calendar sync config: ${e.message}`);
+        }
+        throw e;
+      }
+    }, (r) => ({ rows_imported: r.rows }));
+    googleCalendarResult = run.ok ? { ok: true, rows: run.result.rows } : { ok: false, note: run.error };
+    if (!run.ok) console.error("[cron] google-calendar step failed (isolated, non-fatal):", run.error);
+  }
+
   const anyFailed =
     !stripeResult.ok ||
     !reviewsResult.ok ||
@@ -496,6 +525,9 @@ export async function POST(req: Request) {
         // Informational only — intentionally excluded from `anyFailed` so a
         // transient App Store Connect error cannot fail the daily cron.
         app_store_installs: appStoreInstallsResult,
+        // Informational only — intentionally excluded from `anyFailed` so a
+        // transient Google delegation error cannot fail the daily cron.
+        google_calendar: googleCalendarResult,
       },
     },
     { status: anyFailed ? 500 : 200 },
