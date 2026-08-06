@@ -169,13 +169,15 @@ export async function GET(req: Request) {
   const grantConfigured = !!process.env.GOOGLE_SERVICE_ACCOUNT_JSON?.trim();
 
   // syncHasRun: at least one COMPLETED, error-free google-calendar log row exists.
-  const { data: syncRow } = await supabase
+  // A query ERROR must NOT masquerade as "sync hasn't run" — surface it (500).
+  const { data: syncRow, error: syncErr } = await supabase
     .from("fin_sync_log")
     .select("id")
     .eq("source", "google-calendar")
     .not("completed_at", "is", null)
     .is("error_message", null)
     .limit(1);
+  if (syncErr) return Response.json({ error: `calendar read failed: ${syncErr.message}` }, { status: 500 });
   const syncHasRun = (syncRow?.length ?? 0) > 0;
 
   const { startMs, endMs } = chicagoWeekBounds(new Date());
@@ -186,12 +188,15 @@ export async function GET(req: Request) {
   // The caller's OWN occurrences this week. Attendees carry start_utc, so we window
   // and match per (ical_uid, start_utc) — not just ical_uid — so a recurring series
   // shows the right instances and only the ones the caller is actually on.
-  const { data: myPairs } = await supabase
+  const { data: myPairs, error: pairsErr } = await supabase
     .from("calendar_meeting_attendees")
     .select("ical_uid, start_utc")
     .eq("email", callerEmail)
     .gte("start_utc", startIso)
     .lt("start_utc", endIso);
+  // A DB error here is NOT "no meetings" — surface it so the card shows an error,
+  // not a false-empty (the recurring hazard).
+  if (pairsErr) return Response.json({ error: `calendar read failed: ${pairsErr.message}` }, { status: 500 });
   const pairs = (myPairs ?? []) as { ical_uid: string; start_utc: string }[];
   if (pairs.length === 0) {
     // Empty state — the caller has no meetings this week, not an error.
@@ -200,13 +205,14 @@ export async function GET(req: Request) {
   const wanted = new Set(pairs.map((p) => pairKey(p.ical_uid, p.start_utc)));
   const uids = [...new Set(pairs.map((p) => p.ical_uid))];
 
-  const { data: meetingRows } = await supabase
+  const { data: meetingRows, error: meErr } = await supabase
     .from("calendar_meetings")
     .select("ical_uid, start_utc, summary, end_utc, start_tz, all_day, meet_url")
     .in("ical_uid", uids)
     .gte("start_utc", startIso)
     .lt("start_utc", endIso)
     .order("start_utc", { ascending: true });
+  if (meErr) return Response.json({ error: `calendar read failed: ${meErr.message}` }, { status: 500 });
   const meetings = (meetingRows ?? []).filter((m) => wanted.has(pairKey(m.ical_uid as string, m.start_utc as string)));
 
   // Attendees for exactly those occurrences, grouped by (ical_uid, start_utc).

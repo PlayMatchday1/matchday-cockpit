@@ -111,11 +111,13 @@ type GEvent = {
 };
 
 // Store ONLY the video entry-point URI (or hangoutLink fallback). Phone/SIP/more —
-// which carry dial-in numbers + PINs — are discarded entirely.
-function extractMeetUrl(ev: GEvent): string | null {
+// which carry dial-in numbers + PINs — are discarded entirely. Returns the source
+// so a run can report video vs hangoutLink-fallback vs neither.
+function extractMeetUrl(ev: GEvent): { url: string | null; source: "conference-video" | "hangout" | "none" } {
   const video = (ev.conferenceData?.entryPoints ?? []).find((e) => e.entryPointType === "video");
-  if (video?.uri) return video.uri;
-  return ev.hangoutLink ?? null;
+  if (video?.uri) return { url: video.uri, source: "conference-video" };
+  if (ev.hangoutLink) return { url: ev.hangoutLink, source: "hangout" };
+  return { url: null, source: "none" };
 }
 
 function parseInstant(s?: GTime): { iso: string | null; tz: string | null; allDay: boolean } {
@@ -154,6 +156,9 @@ export type CalendarCounters = {
   eventsSkippedCancelled: number;
   eventsDeleted: number; // occurrences present before this run, absent after (from the diff)
   attendeeDisagreements: number; // (iCalUID,start_utc) where accounts reported different human counts
+  meetVideo: number; // stored meetings whose link came from a conferenceData video entry point
+  meetHangout: number; // ... from the hangoutLink fallback
+  meetNone: number; // ... with no video link (in-person / phone-only / Zoom / Teams)
   chicagoWeekHardcoded: true;
   sa: { clientEmailLocalPart: string; projectId: string | null };
 };
@@ -200,7 +205,7 @@ export async function syncAllCalendars(sb: SupabaseClient, now: Date): Promise<C
     accountsRequested: 0, accountsSucceeded: 0, accountErrors: [],
     eventsSeen: 0, distinctOccurrences: 0, eventsStored: 0,
     eventsSkippedPrivate: 0, eventsSkippedTooFewPeople: 0, eventsSkippedCancelled: 0,
-    eventsDeleted: 0, attendeeDisagreements: 0, chicagoWeekHardcoded: true,
+    eventsDeleted: 0, attendeeDisagreements: 0, meetVideo: 0, meetHangout: 0, meetNone: 0, chicagoWeekHardcoded: true,
     sa: { clientEmailLocalPart: sa.client_email.split("@")[0], projectId: sa.project_id ?? null },
   };
 
@@ -262,6 +267,10 @@ export async function syncAllCalendars(sb: SupabaseClient, now: Date): Promise<C
     if (!omitted && r.humans < 2) { c.eventsSkippedTooFewPeople++; continue; }
     const e = parseInstant(r.ev.end);
     const orig = parseInstant(r.ev.originalStartTime);
+    const mu = extractMeetUrl(r.ev); // video uri or hangoutLink; never phone/PINs
+    if (mu.source === "conference-video") c.meetVideo++;
+    else if (mu.source === "hangout") c.meetHangout++;
+    else c.meetNone++;
     meetingsJson.push({
       ical_uid: r.ical_uid,
       start_utc: r.start_utc,
@@ -274,7 +283,7 @@ export async function syncAllCalendars(sb: SupabaseClient, now: Date): Promise<C
       human_attendee_count: r.humans,
       recurring_event_id: r.ev.recurringEventId ?? null,
       original_start_utc: orig.iso,
-      meet_url: extractMeetUrl(r.ev), // video uri or hangoutLink; never phone/PINs
+      meet_url: mu.url,
       source_account: null, // not identity-bearing; we don't need which mailbox won the resolve
     });
     for (const a of r.attendees) {

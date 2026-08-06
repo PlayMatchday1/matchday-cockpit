@@ -142,18 +142,6 @@ function MeetingList({ meetings, phaseOf }: { meetings: Meeting[]; phaseOf: (m: 
         const phase = phaseOf(m);
         const ended = phase === "ended";
         const live = phase === "inprogress";
-        // Order: organizer → signed-in user → everyone else alphabetically (item 5).
-        const ordered = m.attendees.slice().sort((a, b) => {
-          if (a.organizer !== b.organizer) return a.organizer ? -1 : 1;
-          if (a.self !== b.self) return a.self ? -1 : 1;
-          return a.name.localeCompare(b.name);
-        });
-        const CUTOFF = 4; // show the first 4, then "+N more" (full list on hover)
-        const label = (a: Attendee) => a.name + (a.organizer ? " (organizer)" : "");
-        const shown = ordered.slice(0, CUTOFF).map(label).join(", ");
-        const more = ordered.length - CUTOFF;
-        const namesShort = more > 0 ? `${shown}, +${more} more` : shown;
-        const namesFull = ordered.map(label).join(", ");
         return (
           <li key={`${m.ical_uid} ${m.start_utc}`} className={"px-[18px] py-[12px]" + (ended ? " opacity-45" : "")} style={live ? { background: "#eafaf1" } : undefined}>
             <div className="flex items-baseline justify-between gap-3">
@@ -165,8 +153,8 @@ function MeetingList({ meetings, phaseOf }: { meetings: Meeting[]; phaseOf: (m: 
               </div>
               <span className="shrink-0 text-[11.5px] font-semibold text-[#6d7b74]">{live ? "Now" : fmt(m.start_utc, m.all_day)}</span>
             </div>
-            <div className="mt-1 flex items-center justify-between gap-3">
-              <span className="truncate text-[11.5px] leading-[1.5] text-[#6d7b74]" title={namesFull}>{namesShort}</span>
+            <div className="mt-1 flex items-start justify-between gap-3">
+              <AttendeeLine attendees={m.attendees} />
               {m.meet_url && !ended && (
                 <a
                   href={m.meet_url}
@@ -186,6 +174,46 @@ function MeetingList({ meetings, phaseOf }: { meetings: Meeting[]; phaseOf: (m: 
         );
       })}
     </ul>
+  );
+}
+
+// Attendee list. Order: organizer → signed-in user → alphabetical (item 5).
+// Truncation (item 2): show up to CUTOFF names; only collapse when 2+ would be
+// hidden (never hide exactly one — "+1 more" costs the same space). The reveal is
+// CLICK to expand in place (works on touch), click again to collapse — no hover,
+// no modal.
+function AttendeeLine({ attendees }: { attendees: Attendee[] }) {
+  const [expanded, setExpanded] = useState(false);
+  const CUTOFF = 4;
+  const ordered = attendees.slice().sort((a, b) => {
+    if (a.organizer !== b.organizer) return a.organizer ? -1 : 1;
+    if (a.self !== b.self) return a.self ? -1 : 1;
+    return a.name.localeCompare(b.name);
+  });
+  const label = (a: Attendee) => a.name + (a.organizer ? " (organizer)" : "");
+  const hidden = ordered.length - CUTOFF;
+  const collapse = !expanded && hidden >= 2; // only truncate at 2+ hidden
+
+  if (!collapse) {
+    // Everything shown (either few enough, an exact +1, or user expanded).
+    return (
+      <span className="min-w-0 text-[11.5px] leading-[1.5] text-[#6d7b74]">
+        {ordered.map(label).join(", ")}
+        {expanded && hidden >= 2 && (
+          <button type="button" onClick={() => setExpanded(false)} className="ml-1 font-semibold text-[#14563c] underline">
+            show less
+          </button>
+        )}
+      </span>
+    );
+  }
+  return (
+    <span className="min-w-0 truncate text-[11.5px] leading-[1.5] text-[#6d7b74]">
+      {ordered.slice(0, CUTOFF).map(label).join(", ")}
+      <button type="button" onClick={() => setExpanded(true)} className="ml-1 font-semibold text-[#14563c] underline">
+        +{hidden} more
+      </button>
+    </span>
   );
 }
 
