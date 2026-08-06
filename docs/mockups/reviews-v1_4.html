@@ -1,0 +1,162 @@
+<!doctype html>
+<html lang="en"><head><meta charset="utf-8"/>
+<title>Reviews — replied column</title>
+<style>
+:root{
+  --forest:#003326;--ink:#0d1f18;--muted:#5C6B62;--faint:#67746C;--cream:#F4EEE1;--paper:#fff;
+  --line:#E3E8E0;--slot:#F7F9F6;--mint:#2CDB87;--mintSoft:#E9FAF1;--mintEdge:#A8E7C9;
+  --mintInk:#046B45;--amber:#FFF6D6;--amberEdge:#F0DC9B;--amberInk:#7A5200;
+  --coralInk:#A83120;
+}
+*{box-sizing:border-box}
+body{margin:0;background:var(--cream);padding:28px 22px;
+  font-family:-apple-system,BlinkMacSystemFont,"Segoe UI",Inter,Helvetica,Arial,sans-serif;
+  color:var(--ink);-webkit-font-smoothing:antialiased}
+.card{max-width:1520px;margin:0 auto;background:var(--paper);border:1px solid var(--line);
+  border-radius:16px;box-shadow:0 9px 26px rgba(0,51,38,.075);overflow:hidden}
+.chead{display:flex;justify-content:space-between;align-items:center;gap:20px;padding:15px 22px;
+  border-bottom:1px solid var(--line);flex-wrap:wrap}
+.ctitle{font-size:15.5px;font-weight:900;color:var(--forest)}
+.csub{font-size:11.5px;color:var(--muted);margin-top:3px}
+.key{display:flex;gap:15px;align-items:center;flex-wrap:wrap}
+.key span{display:inline-flex;align-items:center;gap:7px;font-size:10.5px;font-weight:800;color:var(--muted)}
+.key i{width:10px;height:10px;border-radius:3px;flex:none;border:1px solid rgba(0,51,38,.14)}
+
+table{width:100%;border-collapse:separate;border-spacing:0}
+thead th{background:var(--slot);text-align:left;font-size:9px;font-weight:900;letter-spacing:.85px;
+  text-transform:uppercase;color:var(--muted);padding:11px 16px;border-bottom:1px solid var(--line);
+  white-space:nowrap}
+td{padding:14px 16px;border-bottom:1px solid #EDF1EC;vertical-align:top}
+.when{font-size:11px;font-weight:850;color:var(--muted);white-space:nowrap;line-height:1.5}
+.rate{font-size:12.5px;font-weight:900;white-space:nowrap}
+.rate.hi{color:var(--mintInk)}
+.rate.lo{color:var(--coralInk)}
+.rate.mid{color:var(--amberInk)}
+.cmt{font-size:12.5px;color:var(--ink);line-height:1.5;max-width:520px}
+.cmt.none{color:var(--faint);font-style:italic}
+.tags{display:flex;flex-wrap:wrap;gap:6px;margin-top:8px}
+.tg{font-size:9px;font-weight:900;letter-spacing:.5px;text-transform:uppercase;color:var(--amberInk);
+  background:var(--amber);border:1px solid var(--amberEdge);border-radius:99px;padding:3px 8px}
+.pn{font-size:12.5px;font-weight:900;color:var(--forest)}
+.pe{font-size:11.5px;font-weight:800;color:var(--mintInk);margin-top:3px}
+.mt{font-size:12.5px;font-weight:850;color:var(--ink);line-height:1.35}
+.mm{font-size:11px;color:var(--muted);margin-top:3px}
+.mgr{font-size:12.5px;font-weight:850;color:var(--ink)}
+
+/* ── REPLIED — one slot, four states, position never moves ── */
+.rep{width:214px}
+.rc{border:1px solid var(--line);border-radius:11px;padding:9px 11px;min-height:86px;
+  display:flex;flex-direction:column;gap:6px;background:#fff}
+.rl{font-size:8.5px;font-weight:900;letter-spacing:.9px;text-transform:uppercase;
+  display:flex;align-items:center;gap:6px;color:var(--muted)}
+.rl i{width:7px;height:7px;border-radius:50%;background:currentColor;flex:none}
+.rw{font-size:10.5px;color:var(--muted);line-height:1.4}
+.rx{font-size:11px;font-weight:850;color:var(--mintInk);background:none;border:0;padding:0;
+  font-family:inherit;cursor:pointer;text-decoration:underline;text-underline-offset:2px;
+  align-self:flex-start;margin-top:auto;text-align:left}
+.pri{display:inline-flex;align-items:center;justify-content:center;gap:6px;width:100%;
+  font-family:inherit;font-size:12px;font-weight:900;border-radius:8px;padding:7px 11px;cursor:pointer;
+  background:var(--forest);border:1px solid var(--forest);color:#fff}
+.pri:hover{background:#014C39}
+
+.rc.due{background:var(--amber);border-color:var(--amberEdge)}
+.rc.due .rl{color:var(--amberInk)}
+.rc.done{background:var(--mintSoft);border-color:var(--mintEdge)}
+.rc.done .rl{color:var(--mintInk)}
+.rc.closed{background:var(--slot);border-color:var(--line)}
+.rc.notreq{background:#fff;border-color:var(--line)}
+.rc.notreq .rw{color:var(--faint)}
+.done-v{font-size:12px;font-weight:900;color:var(--forest)}
+</style></head>
+<body>
+<div class="card">
+  <div class="chead">
+    <div><div class="ctitle">Comments</div>
+      <div class="csub">17 reviews · Aug 3 – Aug 9, 2026 · all cities</div></div>
+    <div class="key">
+      <span><i style="background:#FFF6D6;border-color:#F0DC9B"></i>Reply due</span>
+      <span><i style="background:#E9FAF1;border-color:#A8E7C9"></i>Replied</span>
+      <span><i style="background:#F7F9F6"></i>Closed, no reply</span>
+      <span><i style="background:#fff"></i>No reply owed</span>
+    </div>
+  </div>
+  <table>
+    <thead><tr><th>Submitted</th><th>Rating</th><th>Comment</th><th>Player</th>
+      <th>Match</th><th>Manager</th><th class="rep">Replied?</th></tr></thead>
+    <tbody id="tb"></tbody>
+  </table>
+</div>
+<script>
+const R = [
+  { d:"Aug 5", t:"9:15 PM", r:5, c:"Manager is honestly a great guy keeps the match fair and competitive",
+    tags:["Great atmosphere","Great match manager","Good equipment"], more:2,
+    pn:"nathaniel stead", pe:"kifov79378@bora4d.com", m:"Tourney ATH Katy", mm:"Aug 5 · Houston",
+    mg:"Reda m", s:{ k:"notreq" } },
+  { d:"Aug 5", t:"9:00 PM", r:1, c:null, tags:[], more:0,
+    pn:"Mache", pe:"jorgemarcelinohi@gmail.c…", m:"Tourney at Soccer Central", mm:"Aug 5 · San Antonio",
+    mg:"pedro hernandez", s:{ k:"due" } },
+  { d:"Aug 5", t:"8:00 PM", r:5, c:"Tops all the games I've had on Matchday.",
+    tags:["Quality field","Great atmosphere","Competitive match"], more:3,
+    pn:"David Sanchez", pe:"dsifuentes750@gmail.com", m:"PARMER Stadium", mm:"Aug 5 · Austin",
+    mg:"Nick MD", s:{ k:"done", by:"Ryan Mancuso", on:"Aug 6" } },
+  { d:"Aug 5", t:"8:00 PM", r:5, c:"Keep this field for everyday of the week ❤️!!!!", tags:[], more:0,
+    pn:"Wilmer M", pe:"qhbtck9csr@privaterelay.a…", m:"PARMER Stadium", mm:"Aug 5 · Austin",
+    mg:"Nick MD", s:{ k:"notreq" } },
+  { d:"Aug 4", t:"8:00 PM", r:4,
+    c:"Not sure if he was registered or not but the past two matches we've played against a full time goalie on the other team and it makes a big difference on the competitiveness of the match. I know nobody wants to really play keeper but when our team is rotating and the other team isn't it can put us at a disadvantage. The only reason I wasn't sure if he was registered is because he wasn't wearing a target with a number. Not trying to gripe but just wanted to mention it.",
+    tags:["Good atmosphere","Good match manager","Competitive match"], more:1,
+    pn:"Gabe Campis", pe:"gdcampis@gmail.com", m:"Scissortail Park", mm:"Aug 4 · OKC",
+    mg:"Rodrigo Silva", s:{ k:"closed", by:"Miguel Avendano", on:"Aug 5" } },
+  { d:"Aug 4", t:"7:45 PM", r:1, c:"good manager again no lights", tags:[], more:0,
+    pn:"Kevin Ma", pe:"gfdvvb47hr@privaterelay.a…", m:"LBJ Early College High School", mm:"Aug 4 · Austin",
+    mg:"garrett", s:{ k:"due" } }
+];
+
+/* Four states, one skeleton: label, body, secondary link. Marking "no reply"
+   takes ONE click and asks for nothing — a reason field on a non-event is friction
+   nobody fills in honestly. */
+function repCell(x, i){
+  const s = x.s;
+  if(s.k === "due") return `<div class="rc due" data-s="due">
+      <div class="rl"><i></i>Reply due</div>
+      <button class="pri" data-a="mark" data-i="${i}">Mark replied</button>
+      <button class="rx" data-a="close" data-i="${i}">No reply needed</button></div>`;
+  if(s.k === "done") return `<div class="rc done" data-s="done">
+      <div class="rl"><i></i>Replied</div>
+      <div class="done-v">Done</div>
+      <div class="rw">${s.by} · ${s.on}</div>
+      <button class="rx" data-a="undo" data-i="${i}">Undo</button></div>`;
+  if(s.k === "closed") return `<div class="rc closed" data-s="closed">
+      <div class="rl"><i></i>Closed, no reply</div>
+      <div class="rw">${s.by} · ${s.on}</div>
+      <button class="rx" data-a="mark" data-i="${i}">Mark replied instead</button></div>`;
+  return `<div class="rc notreq" data-s="notreq">
+      <div class="rl"><i></i>No reply owed</div>
+      <div class="rw">Praise &mdash; nothing to action</div>
+      <button class="rx" data-a="mark" data-i="${i}">Mark replied anyway</button></div>`;
+}
+
+function draw(){
+  document.getElementById("tb").innerHTML = R.map((x, i) => `<tr>
+    <td><div class="when">${x.d}<br/>${x.t}</div></td>
+    <td><div class="rate ${x.r >= 5 ? "hi" : x.r <= 2 ? "lo" : "mid"}">${x.r}&#9733;</div></td>
+    <td><div class="cmt ${x.c ? "" : "none"}">${x.c || "no comment left"}</div>
+      ${x.tags.length ? `<div class="tags">${x.tags.map(t => `<span class="tg">${t}</span>`).join("")}
+        ${x.more ? `<span class="tg" style="background:#fff">+${x.more} more</span>` : ""}</div>` : ""}</td>
+    <td><div class="pn">${x.pn}</div><div class="pe">${x.pe}</div></td>
+    <td><div class="mt">${x.m}</div><div class="mm">${x.mm}</div></td>
+    <td><div class="mgr">${x.mg}</div></td>
+    <td class="rep">${repCell(x, i)}</td></tr>`).join("");
+}
+draw();
+
+document.addEventListener("click", e => {
+  const b = e.target.closest("[data-a]"); if(!b) return;
+  const x = R[+b.dataset.i], me = "Ryan Mancuso", now = "Aug 6";
+  if(b.dataset.a === "mark")  x.s = { k:"done",   by:me, on:now };
+  if(b.dataset.a === "close") x.s = { k:"closed", by:me, on:now };   // no reason asked for
+  if(b.dataset.a === "undo")  x.s = { k:"due" };
+  draw();
+});
+</script>
+</body></html>

@@ -153,10 +153,12 @@ export default function ReviewsClient() {
     if (csev === "open") setStick((s) => new Set(s).add(r.apiId));
     void setMark(r.apiId, "replied");
   };
-  const onNoReplyNeeded = (r: ReviewRow, note: string) => {
+  // ONE click — no note is ever collected (a reason field on a non-event is
+  // friction nobody fills in honestly; who + when is the audit trail).
+  const onNoReplyNeeded = (r: ReviewRow) => {
     if (!replyEnabled || !canReply) return;
     if (csev === "open") setStick((s) => new Set(s).add(r.apiId));
-    void setMark(r.apiId, "no_reply_needed", note);
+    void setMark(r.apiId, "no_reply_needed");
   };
   const onUndoMark = (r: ReviewRow) => {
     if (!replyEnabled || !canReply) return;
@@ -169,12 +171,48 @@ export default function ReviewsClient() {
         .rv-ctab{table-layout:fixed}
         .rv-ctab th:nth-child(1){width:96px}.rv-ctab th:nth-child(2){width:58px}
         .rv-ctab th:nth-child(4){width:180px}.rv-ctab th:nth-child(5){width:196px}
-        .rv-ctab th:nth-child(6){width:124px}.rv-ctab th:nth-child(7){width:158px}
+        .rv-ctab th:nth-child(6){width:124px}.rv-ctab th:nth-child(7){width:222px}
         @media(max-width:1400px){
           .rv-ctab th:nth-child(1){width:86px}.rv-ctab th:nth-child(2){width:52px}
           .rv-ctab th:nth-child(4){width:130px}.rv-ctab th:nth-child(5){width:150px}
-          .rv-ctab th:nth-child(6){width:112px}.rv-ctab th:nth-child(7){width:134px}
+          .rv-ctab th:nth-child(6){width:112px}.rv-ctab th:nth-child(7){width:206px}
         }
+        /* REPLIED? — one fixed 86px slot, four states; state changes colour + words,
+           never position/order/height. A long comment must not stretch it: the box is
+           min-height only and the cell is top-aligned, so it stays 86px on tall rows. */
+        /* min-height 100 (not the mockup's 86): the Replied state stacks four lines
+           and lands at ~100, so a lower floor would let heights vary >8px — every
+           box is floored to the same 100, and the who·when line is kept to one line
+           so a long name can't push it past the floor. */
+        .rv-rc{border:1px solid #E3E8E0;border-radius:11px;padding:9px 11px;min-height:100px;
+          display:flex;flex-direction:column;gap:6px;background:#fff}
+        .rv-rl{font-size:8.5px;font-weight:900;letter-spacing:.9px;text-transform:uppercase;
+          display:flex;align-items:center;gap:6px;color:#5C6B62}
+        .rv-rl i{width:7px;height:7px;border-radius:50%;background:currentColor;flex:none}
+        .rv-rw{font-size:10.5px;color:#5C6B62;line-height:1.4;white-space:nowrap;overflow:hidden;text-overflow:ellipsis}
+        .rv-done-v{font-size:12px;font-weight:900;color:#003326}
+        .rv-rx{font-size:11px;font-weight:850;color:#046B45;background:none;border:0;padding:0;
+          font-family:inherit;cursor:pointer;text-decoration:underline;text-underline-offset:2px;
+          align-self:flex-start;margin-top:auto;text-align:left}
+        .rv-rx:disabled{opacity:.5;cursor:default}
+        .rv-pri{display:inline-flex;align-items:center;justify-content:center;gap:6px;width:100%;
+          font-family:inherit;font-size:12px;font-weight:900;border-radius:8px;padding:7px 11px;
+          cursor:pointer;background:#003326;border:1px solid #003326;color:#fff}
+        .rv-pri:hover{background:#014C39}
+        .rv-pri:disabled{opacity:.5;cursor:default}
+        .rv-rc.due{background:#FFF6D6;border-color:#F0DC9B}
+        .rv-rc.due .rv-rl{color:#7A5200}
+        .rv-rc.done{background:#E9FAF1;border-color:#A8E7C9}
+        .rv-rc.done .rv-rl{color:#046B45}
+        .rv-rc.closed{background:#F7F9F6;border-color:#E3E8E0}
+        /* notreq border is lighter than closed's --line so all FOUR states have a
+           distinct border (the mockup shares --line for both; distinguishing the two
+           quietest states is the spec's four-distinct-borders requirement). */
+        .rv-rc.notreq{background:#fff;border-color:#EDF1EC}
+        .rv-rc.notreq .rv-rw{color:#67746C}
+        .rv-legend{display:flex;gap:14px;align-items:center;flex-wrap:wrap}
+        .rv-legend span{display:inline-flex;align-items:center;gap:6px;font-size:10px;font-weight:800;color:#5C6B62;white-space:nowrap}
+        .rv-legend i{width:10px;height:10px;border-radius:3px;flex:none;border:1px solid rgba(0,51,38,.14)}
       `}</style>
 
       {/* header */}
@@ -355,6 +393,12 @@ export default function ReviewsClient() {
           <h2 className="m-0 text-[12px] font-bold tracking-[0.07em]" style={{ color: C.muted }}>COMMENTS</h2>
           <span className="rounded-full border px-2 py-px text-[11px] font-bold" style={{ background: C.chipBg, borderColor: C.chipLine, color: C.forest }}>{nf(shownComments.length)}</span>
           <span className="text-[11px]" style={{ color: C.muted2 }}>player feedback for response</span>
+          <div className="rv-legend" data-rv="legend">
+            <span><i data-swatch="due" style={{ background: "#FFF6D6", borderColor: "#F0DC9B" }} />Reply due</span>
+            <span><i data-swatch="done" style={{ background: "#E9FAF1", borderColor: "#A8E7C9" }} />Replied</span>
+            <span><i data-swatch="closed" style={{ background: "#F7F9F6", borderColor: "#E3E8E0" }} />Closed, no reply</span>
+            <span><i data-swatch="notreq" style={{ background: "#fff", borderColor: "#EDF1EC" }} />No reply owed</span>
+          </div>
           <div className="ml-auto flex flex-wrap items-center gap-2">
             <span className="rounded-full border px-[9px] py-[3px] text-[10.5px] font-bold tracking-[0.04em]" style={{ color: C.warnInk, background: C.warnBg, borderColor: C.warnLine }}>own window — not the month filter</span>
             <Seg value={cwin} onChange={(v) => setCwin(v as CommentWindow)} options={[["week", "This week"], ["month", "This month"], ["d30", "Last 30 days"]]} />
@@ -409,7 +453,7 @@ export default function ReviewsClient() {
                 <CommentRow key={r.apiId} r={r} mark={replies.get(r.apiId)} owed={needsReply(r)}
                   enabled={replyEnabled} canTick={canReply} noReplyNeededEnabled={noReplyNeededEnabled}
                   leaving={csev === "open" && replies.has(r.apiId) && stick.has(r.apiId)}
-                  onReplied={() => onReplied(r)} onNoReplyNeeded={(note) => onNoReplyNeeded(r, note)} onUndo={() => onUndoMark(r)} />
+                  onReplied={() => onReplied(r)} onNoReplyNeeded={() => onNoReplyNeeded(r)} onUndo={() => onUndoMark(r)} />
               )) : (
                 <tr><Td colSpan={7} className="p-4 text-[11.5px]" style={{ color: C.muted }}>
                   Nothing to read in {cm.window.label} for this selection{csev !== "all" ? ` under the “${SEV_LABEL[csev]}” filter` : ""}. Widen the window or clear a filter.
@@ -419,8 +463,8 @@ export default function ReviewsClient() {
           </table>
         </div>
         <div className="border-t px-4 py-2.5 text-[11.5px]" style={{ borderColor: C.hair, color: C.muted }}>
-          Shown: every review carrying a written comment, plus 1★ ratings left without words — newest first. A reply is owed at 3★ and below; praise is 5★.
-          Mark <b>Replied</b> once you have answered the player, or <b>No reply needed</b> (with an optional reason — spam, no comment, handled elsewhere) when there is nothing to answer. Both are stamped with your name and the date, both undo on click, and <b>both take the review out of the outstanding count</b>; only rows with no mark stay owed.
+          Shown: every review carrying a written comment, plus 1★ ratings left without words — newest first. A reply is owed at 3★ and below; praise is 5★, which shows as <b>No reply owed</b> and is never counted as outstanding.
+          Mark <b>Replied</b> once you have answered the player, or <b>No reply needed</b> — one click, no reason asked — when there is nothing to answer. Both are stamped with your name and the date, both undo on click, and <b>both take the review out of the outstanding count</b>; only rows in <b>Reply due</b> stay owed.
           The city, venue and manager filters at the top of the page apply here; the month filter does not — this panel keeps its own window, set above.
         </div>
       </div>
@@ -698,15 +742,21 @@ function Td({ children, right, colSpan, className, style }: { children: React.Re
   return <td colSpan={colSpan} className={`border-b px-4 py-2.5 align-top text-[13.5px] ${right ? "text-right" : ""} ${className ?? ""}`} style={{ borderColor: C.hair, ...style }}>{children}</td>;
 }
 
+// The REPLIED? column — ONE fixed slot, FOUR states, position/order/height never
+// move. State changes colour + words only. Derivation:
+//   replied mark      → done (mint)
+//   no_reply_needed   → closed (grey)
+//   owed (≤3★), open  → due (amber) — the ONLY filled button in the column
+//   not owed, open    → notreq (white) — praise, nothing to action
+// "No reply needed" resolves in ONE click: no prompt, no note, no dialog.
 function CommentRow({ r, mark, owed, enabled, canTick, noReplyNeededEnabled, leaving, onReplied, onNoReplyNeeded, onUndo }: {
-  r: ReviewRow; mark: ReplyMark | undefined; owed: boolean; enabled: boolean; canTick: boolean; noReplyNeededEnabled: boolean; leaving: boolean; onReplied: () => void; onNoReplyNeeded: (note: string) => void; onUndo: () => void;
+  r: ReviewRow; mark: ReplyMark | undefined; owed: boolean; enabled: boolean; canTick: boolean; noReplyNeededEnabled: boolean; leaving: boolean; onReplied: () => void; onNoReplyNeeded: () => void; onUndo: () => void;
 }) {
-  const [noting, setNoting] = useState(false);
-  const [noteText, setNoteText] = useState("");
   const disabled = !enabled || !canTick;
   const starCls = r.starRating <= 2 ? C.critInk : r.starRating === 3 ? C.warnInk : C.ok;
   const tags = r.tags ?? [];
   const shown = tags.slice(0, 3), rest = tags.slice(3);
+  const state = mark?.kind === "replied" ? "done" : mark?.kind === "no_reply_needed" ? "closed" : owed ? "due" : "notreq";
   return (
     <tr>
       <Td><div className="font-mono text-[11.5px]" style={{ color: C.muted }}>{shortDate(r.startDate)}</div><div className="font-mono text-[11.5px]" style={{ color: C.muted }}>{shortTime(r.startDate)}</div></Td>
@@ -727,67 +777,30 @@ function CommentRow({ r, mark, owed, enabled, canTick, noReplyNeededEnabled, lea
       <Td><div className="text-[12.5px] font-semibold">{r.fieldTitle}</div><div className="mt-0.5 text-[11.5px]" style={{ color: C.muted }}>{shortDate(r.startDate)} · {r.city}</div></Td>
       <Td>{r.managerFirstName || r.managerLastName ? <div className="text-[12.5px] font-bold" style={{ color: C.forestDeep }}>{reviewManagerName(r)}</div> : <div className="text-[12.5px] font-semibold italic" style={{ color: C.muted }}>no manager</div>}</Td>
       <Td>
-        {mark?.kind === "replied" ? (
-          <>
-            <button type="button" onClick={onUndo} disabled={disabled}
-              title={`Replied by ${mark.by} on ${mark.on} — click to undo`}
-              className="inline-flex h-8 items-center gap-1.5 rounded-lg border px-2.5 text-[11.5px] font-bold disabled:opacity-55"
-              style={{ background: C.mint, borderColor: "#bfe4cf", color: C.ok }}>
-              <span className="relative box-border h-3.5 w-3.5 rounded" style={{ border: `1.5px solid ${C.ok}`, background: C.ok }}>
-                <span className="absolute left-[4px] top-[0.5px] h-2 w-1 rotate-[42deg] border-b-2 border-r-2 border-white" />
-              </span>
-              Replied
-            </button>
-            <div className="mt-1.5 text-[10.5px]" style={{ color: "#45544c" }}>{mark.by} · {mark.on}</div>
-          </>
-        ) : mark?.kind === "no_reply_needed" ? (
-          <>
-            <button type="button" onClick={onUndo} disabled={disabled}
-              title={`Marked “No reply needed” by ${mark.by} on ${mark.on} — click to undo`}
-              className="inline-flex h-8 items-center gap-1.5 rounded-lg border px-2.5 text-[11.5px] font-bold disabled:opacity-55"
-              style={{ background: "#eef3f0", borderColor: "#dfe6e1", color: "#3f4a44" }}>
-              <span className="box-border flex h-3.5 w-3.5 items-center justify-center rounded" style={{ border: "1.5px solid #8a978f" }}>
-                <span className="block h-[1.5px] w-2 rounded-full" style={{ background: "#3f4a44" }} />
-              </span>
-              No reply needed
-            </button>
-            <div className="mt-1.5 text-[10.5px]" style={{ color: "#45544c" }}>{mark.by} · {mark.on}</div>
-            {mark.note && <div className="mt-0.5 max-w-[220px] text-[10.5px] italic" style={{ color: "#45544c" }}>“{mark.note}”</div>}
-          </>
-        ) : noting ? (
-          <div className="flex max-w-[220px] flex-col gap-1.5">
-            <input autoFocus value={noteText} maxLength={140}
-              onChange={(e) => setNoteText(e.target.value)}
-              onKeyDown={(e) => { if (e.key === "Enter") { onNoReplyNeeded(noteText); setNoting(false); } else if (e.key === "Escape") { setNoting(false); setNoteText(""); } }}
-              placeholder="Reason (optional) — spam, no comment…"
-              className="rounded-md border px-2 py-1 text-[11.5px]" style={{ borderColor: C.line, color: C.ink }} />
-            <div className="flex gap-1.5">
-              <button type="button" onClick={() => { onNoReplyNeeded(noteText); setNoting(false); }}
-                className="rounded-md border px-2.5 py-1 text-[11px] font-bold" style={{ background: "#eef3f0", borderColor: "#dfe6e1", color: "#3f4a44" }}>Save</button>
-              <button type="button" onClick={() => { setNoting(false); setNoteText(""); }}
-                className="rounded-md border px-2.5 py-1 text-[11px] font-bold" style={{ background: C.surface, borderColor: C.line, color: "#45544c" }}>Cancel</button>
-            </div>
+        {state === "due" ? (
+          <div className="rv-rc due" data-s="due">
+            <div className="rv-rl"><i />Reply due</div>
+            <button type="button" className="rv-pri" onClick={onReplied} disabled={disabled} title={disabled ? "Reply tracking not enabled" : "Mark once you have answered this player"}>Mark replied</button>
+            <button type="button" className="rv-rx" onClick={onNoReplyNeeded} disabled={disabled || !noReplyNeededEnabled} title="Deliberately needs no reply — one click, no reason asked">No reply needed</button>
+          </div>
+        ) : state === "done" ? (
+          <div className="rv-rc done" data-s="done">
+            <div className="rv-rl"><i />Replied</div>
+            <div className="rv-done-v">Done</div>
+            <div className="rv-rw">{mark!.by} · {mark!.on}</div>
+            <button type="button" className="rv-rx" onClick={onUndo} disabled={disabled} title={`Replied by ${mark!.by} on ${mark!.on} — click to undo`}>Undo</button>
+          </div>
+        ) : state === "closed" ? (
+          <div className="rv-rc closed" data-s="closed">
+            <div className="rv-rl"><i />Closed, no reply</div>
+            <div className="rv-rw">{mark!.by} · {mark!.on}</div>
+            <button type="button" className="rv-rx" onClick={onReplied} disabled={disabled} title="Mark this replied instead">Mark replied instead</button>
           </div>
         ) : (
-          <div className="flex flex-wrap items-center gap-1.5">
-            <button type="button" onClick={onReplied} disabled={disabled}
-              title={disabled ? "Reply tracking not enabled" : "Mark once you have answered this player"}
-              className="inline-flex h-8 items-center gap-1.5 rounded-lg border px-2.5 text-[11.5px] font-bold disabled:opacity-55"
-              style={owed ? { background: C.warnBg, borderColor: C.warnLine, color: C.warnInk } : { background: C.surface, borderColor: C.line, color: "#45544c" }}>
-              <span className="box-border h-3.5 w-3.5 rounded" style={{ border: `1.5px solid ${owed ? "#d3b25f" : "#c3d2cb"}`, background: "#fff" }} />
-              {owed ? "Reply due" : "Mark replied"}
-            </button>
-            {noReplyNeededEnabled && (
-              <button type="button" onClick={() => !disabled && setNoting(true)} disabled={disabled}
-                title="Deliberately needs no reply"
-                className="inline-flex h-8 items-center gap-1.5 rounded-lg border px-2.5 text-[11.5px] font-bold disabled:opacity-55"
-                style={{ background: "#eef3f0", borderColor: "#dfe6e1", color: "#3f4a44" }}>
-                <span className="box-border flex h-3.5 w-3.5 items-center justify-center rounded" style={{ border: "1.5px solid #8a978f" }}>
-                  <span className="block h-[1.5px] w-2 rounded-full" style={{ background: "#3f4a44" }} />
-                </span>
-                No reply needed
-              </button>
-            )}
+          <div className="rv-rc notreq" data-s="notreq">
+            <div className="rv-rl"><i />No reply owed</div>
+            <div className="rv-rw">Praise &mdash; nothing to action</div>
+            <button type="button" className="rv-rx" onClick={onReplied} disabled={disabled} title="Record a reply anyway">Mark replied anyway</button>
           </div>
         )}
         {leaving && <div className="mt-1 text-[10.5px]" style={{ color: C.warnInk }}>no longer unanswered</div>}
