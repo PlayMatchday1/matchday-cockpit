@@ -257,8 +257,13 @@ export function parseSalesTsv(tsv: string): DaySales {
 // ── one day fetch ────────────────────────────────────────────────────────────
 type DayResult =
   | { kind: "data"; sales: DaySales }
-  | { kind: "no-sales" } // Apple has no report for this day (0 installs) — still within retention
-  | { kind: "beyond-retention" }
+  // Apple 404 for this date: no report available. That covers a genuine 0-sales
+  // day, a not-yet-published recent day (Apple lags ~1-2 days), AND a beyond-
+  // retention old day — we do NOT try to distinguish them from the body text
+  // (that string classification is exactly what broke the backfill). We record 0
+  // and keep going; the trailing-window re-fetch upgrades a day once it publishes,
+  // and the loop is bounded by APPLE_RETENTION_DAYS so old days just end the range.
+  | { kind: "no-report" }
   | { kind: "auth-error"; status: number; error: string };
 
 async function fetchSalesDay(token: string, vendor: string, dateISO: string): Promise<DayResult> {
@@ -278,11 +283,10 @@ async function fetchSalesDay(token: string, vendor: string, dateISO: string): Pr
     return { kind: "auth-error", status: res.status, error: body.slice(0, 1200) };
   }
   if (res.status === 404) {
-    // Apple returns 404 both for "no sales that day" and "date outside the report
-    // window". The JSON error body distinguishes them.
-    const body = await res.text().catch(() => "");
-    if (/available|not available|older than|last 365|report is not/i.test(body)) return { kind: "beyond-retention" };
-    return { kind: "no-sales" };
+    // Any 404 = no report for this date. Do NOT branch on the body text and do NOT
+    // stop the backfill — a recent not-yet-published day 404s exactly like a real
+    // 0-sales day, and mis-reading it as "beyond retention" is what broke the run.
+    return { kind: "no-report" };
   }
   if (!res.ok) {
     const body = await res.text().catch(() => "");
@@ -352,7 +356,9 @@ export async function ingestAppStore(sb: SupabaseClient, now: Date): Promise<App
     retentionEdge: string | null = null;
   const productTypeTotals: Record<string, number> = {};
 
-  for (let back = 1; back <= APPLE_RETENTION_DAYS + 2 && daysFetched < MAX_FETCHES; back++) {
+  // Walk every day in the retention window from yesterday back. NO early break —
+  // a 404 (not published / no sales / too old) records a 0 and we keep going.
+  for (let back = 1; back <= APPLE_RETENTION_DAYS && daysFetched < MAX_FETCHES; back++) {
     const d = new Date(today);
     d.setUTCDate(d.getUTCDate() - back);
     const dateISO = ymd(d);
@@ -362,14 +368,11 @@ export async function ingestAppStore(sb: SupabaseClient, now: Date): Promise<App
     const r = await fetchSalesDay(token, vendor, dateISO);
     daysFetched++;
     if (r.kind === "auth-error") {
+      // 401/403 is the only thing that aborts — token/role, not a data question.
       throw new AppleAuthError(`App Store Connect ${r.status}: ${r.error || "request failed"}`);
     }
-    if (r.kind === "beyond-retention") {
-      retentionEdge = dateISO;
-      break;
-    }
-    if (r.kind === "no-sales") {
-      await upsertDay(sb, dateISO, vendor, null); // continuous 0-install day
+    if (r.kind === "no-report") {
+      await upsertDay(sb, dateISO, vendor, null); // record a continuous 0-install day
       rowsWritten++;
       earliest = dateISO;
       if (!latest) latest = dateISO;
@@ -383,6 +386,18 @@ export async function ingestAppStore(sb: SupabaseClient, now: Date): Promise<App
     for (const [t, n] of Object.entries(r.sales.byType)) productTypeTotals[t] = (productTypeTotals[t] ?? 0) + n;
     earliest = dateISO;
     if (!latest) latest = dateISO;
+  }
+  void retentionEdge; // deprecated (loop is bounded by APPLE_RETENTION_DAYS); kept null for shape compat
+
+  // Never let a no-data run look green. If we fetched days but not ONE had install
+  // data, that is a failure (broken window, or a genuinely dead app) — throw so it
+  // is red on the card, carries an error_message in fin_sync_log, and flips the KPI
+  // status to "failed", instead of a silent "Synced 0 rows".
+  if (daysWithData === 0) {
+    throw new Error(
+      `App Store sync fetched ${daysFetched} day(s) but found install data on 0 of them — nothing meaningful ingested ` +
+        `(recent days may be unpublished, or the report window is wrong). Not reporting this as success.`,
+    );
   }
 
   return {
