@@ -57,6 +57,8 @@ export default function ManagerPayView() {
   const [aliasMap, setAliasMap] = useState<GustoAliasMap>({});
   const [adjEdit, setAdjEdit] = useState<string | null>(null);
   const [conflicts, setConflicts] = useState<GustoConflict[] | null>(null);
+  const [arrivalEdit, setArrivalEdit] = useState(false);
+  const [shareOpen, setShareOpen] = useState(false);
   const listRef = useRef<HTMLDivElement>(null);
 
   const setWeek = (w: string) => {
@@ -120,6 +122,33 @@ export default function ManagerPayView() {
     if (!res.ok) { alert(`Save failed: ${json?.error ?? res.status}`); return; }
     setAdjEdit(null);
     setRefreshKey((k) => k + 1);
+  }, [weekStart]);
+
+  // Admin: set / reset the estimated-arrival override for this week.
+  const saveArrival = useCallback(async (arrivalDate: string, reason: string): Promise<string | null> => {
+    const { data: sess } = await supabase.auth.getSession();
+    const token = sess.session?.access_token;
+    if (!token) return "No active session.";
+    const res = await fetch("/api/manager-pay/pay-arrival", {
+      method: "PUT",
+      headers: { "Content-Type": "application/json", Authorization: `Bearer ${token}` },
+      body: JSON.stringify({ weekStart, arrivalDate, reason }),
+    });
+    const json = await res.json().catch(() => ({}));
+    if (!res.ok) return (json?.error as string) ?? `HTTP ${res.status}`;
+    setArrivalEdit(false);
+    setRefreshKey((k) => k + 1);
+    return null;
+  }, [weekStart]);
+  const resetArrival = useCallback(async () => {
+    const { data: sess } = await supabase.auth.getSession();
+    const token = sess.session?.access_token;
+    if (!token) return;
+    const res = await fetch(`/api/manager-pay/pay-arrival?week=${encodeURIComponent(weekStart)}`, {
+      method: "DELETE",
+      headers: { Authorization: `Bearer ${token}` },
+    });
+    if (res.ok) { setArrivalEdit(false); setRefreshKey((k) => k + 1); }
   }, [weekStart]);
 
   const downloadGusto = useCallback(() => {
@@ -224,6 +253,9 @@ export default function ManagerPayView() {
         <div className="ml-auto flex items-center gap-2">
           <button type="button" onClick={() => setRefreshKey((k) => k + 1)} className="inline-flex items-center gap-1.5 rounded-[9px] border px-3 py-2 text-[12.5px] font-bold" style={{ background: C.surface, borderColor: C.chipLine, color: C.forest }}>Refresh</button>
           {isAdmin && (
+            <button type="button" onClick={() => setShareOpen(true)} className="inline-flex items-center gap-1.5 rounded-[9px] border px-3 py-2 text-[12.5px] font-bold" style={{ background: C.surface, borderColor: C.chipLine, color: C.forest }}>Share link</button>
+          )}
+          {isAdmin && (
             <button type="button" onClick={downloadGusto} className="inline-flex items-center gap-1.5 rounded-[9px] border px-3 py-2 text-[12.5px] font-bold" style={{ background: C.accent, borderColor: C.accent, color: "#06281d" }}>Gusto CSV</button>
           )}
         </div>
@@ -239,7 +271,21 @@ export default function ManagerPayView() {
         <span className="rounded-full border px-[9px] py-[3px] text-[10.5px] font-[800] tracking-[0.05em]" style={{ background: C.chipBg, borderColor: C.chipLine, color: C.muted }}>
           {weekStart === defaultWeekStart() ? "LAST COMPLETED" : weekStart > defaultWeekStart() ? "IN PROGRESS" : "PAST WEEK"}
         </span>
-        <div className="ml-auto text-[12px]" style={{ color: C.muted }}>Pays <b style={{ color: C.ink }}>{dfull(payload.payDate)}</b></div>
+        <div className="ml-auto flex flex-wrap items-center gap-x-4 gap-y-1 text-[12px]" style={{ color: C.muted }}>
+          <span>Pay run <b style={{ color: C.ink }}>{dfull(payload.payRun ?? payload.payDate)}</b></span>
+          <span className="inline-flex items-center gap-1.5">
+            Est. arrival <b style={{ color: C.ink }}>{payload.effectiveArrival ? dfull(payload.effectiveArrival) : (payload.arrivalError ? "unavailable" : "—")}</b>
+            {payload.arrivalOverride && (
+              <span title={`Adjusted by ${payload.arrivalOverride.by ?? "an admin"} on ${payload.arrivalOverride.at} — ${payload.arrivalOverride.reason}`} className="rounded-full border px-[7px] py-[2px] text-[9.5px] font-[800]" style={{ background: C.warnBg, borderColor: C.warnLine, color: C.warnInk }}>ADJUSTED</span>
+            )}
+            {isAdmin && <button type="button" onClick={() => setArrivalEdit((v) => !v)} className="text-[10.5px] font-bold underline" style={{ color: C.ok }}>{arrivalEdit ? "Close" : "Change"}</button>}
+          </span>
+        </div>
+        {arrivalEdit && isAdmin && (
+          <div className="w-full">
+            <ArrivalEditor computed={payload.estimatedArrival} override={payload.arrivalOverride} onSave={saveArrival} onReset={resetArrival} />
+          </div>
+        )}
         <div className="inline-flex overflow-hidden rounded-[9px] border" style={{ borderColor: C.chipLine, background: C.railA }}>
           <button type="button" onClick={() => setView("both")} className="px-[13px] py-[7px] text-[12.5px] font-bold" style={view === "both" ? { background: C.accent, color: "#06281d" } : { background: "transparent", color: C.muted }}>Week + pay</button>
           <button type="button" onClick={() => setView("pay")} className="px-[13px] py-[7px] text-[12.5px] font-bold" style={view === "pay" ? { background: C.accent, color: "#06281d" } : { background: "transparent", color: C.muted }}>Pay only</button>
@@ -377,6 +423,106 @@ export default function ManagerPayView() {
       </section>
 
       {conflicts && <ConflictModal conflicts={conflicts} onClose={() => setConflicts(null)} onSaveAlias={saveAlias} />}
+      {shareOpen && <ShareLinkModal onClose={() => setShareOpen(false)} />}
+    </div>
+  );
+}
+
+// Inline editor for the estimated-arrival override (admin). A real date input +
+// required reason; Save writes the override, Reset returns to the computed value.
+function ArrivalEditor({ computed, override, onSave, onReset }: {
+  computed: string | null | undefined; override: { date: string; reason: string } | null | undefined;
+  onSave: (date: string, reason: string) => Promise<string | null>; onReset: () => void;
+}) {
+  const [date, setDate] = useState(override?.date ?? computed ?? "");
+  const [reason, setReason] = useState(override?.reason ?? "");
+  const [msg, setMsg] = useState<string | null>(null);
+  const [saving, setSaving] = useState(false);
+  const save = async () => {
+    if (!date || !reason.trim()) { setMsg("A date and a reason are required."); return; }
+    setSaving(true); setMsg(null);
+    const err = await onSave(date, reason.trim());
+    setSaving(false);
+    if (err) setMsg(err);
+  };
+  return (
+    <div className="mt-2 flex flex-wrap items-center gap-2 rounded-[10px] border p-2.5" style={{ background: C.railA, borderColor: C.chipLine }}>
+      <span className="text-[10.5px] font-bold uppercase tracking-[0.08em]" style={{ color: C.muted }}>Override arrival</span>
+      <input type="date" value={date} onChange={(e) => setDate(e.target.value)} className="h-8 rounded-[7px] border px-2 text-[12px]" style={{ borderColor: C.chipLine }} />
+      <input value={reason} onChange={(e) => setReason(e.target.value)} placeholder="Reason (required)" className="h-8 w-[240px] rounded-[7px] border px-2 text-[12px]" style={{ borderColor: C.chipLine }} />
+      <button type="button" disabled={saving} onClick={save} className="rounded-[7px] px-3 py-1.5 text-[11.5px] font-bold disabled:opacity-40" style={{ background: C.accent, color: "#06281d" }}>Save</button>
+      {override && <button type="button" onClick={onReset} className="rounded-[7px] border px-3 py-1.5 text-[11.5px] font-bold" style={{ borderColor: C.chipLine, color: C.muted }}>Reset to computed</button>}
+      {computed && <span className="text-[11px]" style={{ color: C.muted }}>computed: {dfull(computed)}</span>}
+      {msg && <span className="text-[11px]" style={{ color: C.critInk }}>{msg}</span>}
+    </div>
+  );
+}
+
+// Shareable read-only link management (admin). The token is stored hashed, so the
+// plaintext link is shown only right after a rotation; otherwise the modal shows
+// when it was last rotated and offers a fresh rotation (which invalidates the old
+// link). The link points at the public /pay/<token> surface.
+function ShareLinkModal({ onClose }: { onClose: () => void }) {
+  const [rotatedAt, setRotatedAt] = useState<string | null>(null);
+  const [hasToken, setHasToken] = useState(false);
+  const [link, setLink] = useState<string | null>(null); // shown once, post-rotate
+  const [busy, setBusy] = useState(false);
+  const [copied, setCopied] = useState(false);
+  const [err, setErr] = useState<string | null>(null);
+
+  useEffect(() => {
+    (async () => {
+      const { data: sess } = await supabase.auth.getSession();
+      const token = sess.session?.access_token;
+      if (!token) return;
+      const res = await fetch("/api/manager-pay/share-token", { headers: { Authorization: `Bearer ${token}` }, cache: "no-store" });
+      if (res.ok) { const j = await res.json(); setHasToken(!!j.hasToken); setRotatedAt(j.rotatedAt ?? null); }
+    })();
+  }, []);
+
+  const rotate = async () => {
+    setBusy(true); setErr(null);
+    const { data: sess } = await supabase.auth.getSession();
+    const token = sess.session?.access_token;
+    if (!token) { setErr("No active session."); setBusy(false); return; }
+    const res = await fetch("/api/manager-pay/share-token", { method: "POST", headers: { Authorization: `Bearer ${token}` } });
+    const j = await res.json().catch(() => ({}));
+    setBusy(false);
+    if (!res.ok) { setErr((j?.error as string) ?? `HTTP ${res.status}`); return; }
+    setLink(`${window.location.origin}/pay/${j.token}`);
+    setHasToken(true); setRotatedAt(j.rotatedAt ?? null); setCopied(false);
+  };
+  const copy = async () => { if (link) { await navigator.clipboard.writeText(link); setCopied(true); } };
+
+  return (
+    <div className="fixed inset-0 z-[80] flex items-center justify-center p-4" role="dialog" aria-modal="true">
+      <button type="button" aria-label="Close" onClick={onClose} className="absolute inset-0" style={{ background: "rgba(6,26,18,.42)" }} />
+      <div className="relative w-full max-w-[540px] rounded-[16px] border p-5" style={{ background: C.surface, borderColor: C.line }}>
+        <h2 className="m-0 text-[16px] font-[800]" style={{ color: C.forestDeep }}>Shareable read-only link</h2>
+        <p className="mt-1.5 text-[12.5px]" style={{ color: C.muted }}>
+          One link, no login. Anyone with it sees this page read-only — no exports, no edits. Rotating makes a new link and
+          instantly kills the old one; do that when a manager leaves.
+        </p>
+        <div className="mt-3 rounded-[11px] border p-3" style={{ borderColor: C.line, background: C.railB }}>
+          <div className="text-[10.5px] font-bold uppercase tracking-[0.08em]" style={{ color: C.muted }}>Current link</div>
+          {link ? (
+            <div className="mt-1.5 flex flex-wrap items-center gap-2">
+              <input readOnly value={link} className="h-9 min-w-0 flex-1 rounded-[8px] border px-2 text-[12px]" style={{ borderColor: C.chipLine, color: C.ink }} onFocus={(e) => e.currentTarget.select()} />
+              <button type="button" onClick={copy} className="rounded-[8px] px-3 py-2 text-[12px] font-bold" style={{ background: C.accent, color: "#06281d" }}>{copied ? "Copied" : "Copy"}</button>
+            </div>
+          ) : (
+            <div className="mt-1 text-[12.5px]" style={{ color: C.ink }}>
+              {hasToken ? "A link exists. It’s stored hashed, so it can’t be shown again — rotate to generate a fresh link to copy." : "No link yet — generate one below."}
+            </div>
+          )}
+          <div className="mt-2 text-[11px]" style={{ color: C.muted }}>{rotatedAt ? `Last rotated ${dfull(rotatedAt.slice(0, 10))}` : "Never rotated"}</div>
+        </div>
+        {err && <div className="mt-2 text-[11.5px]" style={{ color: C.critInk }}>{err}</div>}
+        <div className="mt-4 flex justify-end gap-2">
+          <button type="button" onClick={onClose} className="rounded-[8px] border px-3 py-1.5 text-[12.5px] font-bold" style={{ borderColor: C.chipLine, color: C.muted }}>Close</button>
+          <button type="button" disabled={busy} onClick={rotate} className="rounded-[8px] px-4 py-1.5 text-[12.5px] font-bold disabled:opacity-40" style={{ background: C.forest, color: "#fff" }}>{busy ? "Rotating…" : hasToken ? "Rotate link" : "Generate link"}</button>
+        </div>
+      </div>
     </div>
   );
 }

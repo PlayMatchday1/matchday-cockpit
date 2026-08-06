@@ -122,6 +122,14 @@ export type ManagerPayWeekPayload = {
     total: number;
   };
   attention: ManagerPayAttention;
+  // Arrival estimate + admin override — populated by GET /api/manager-pay/week
+  // only (NOT the cron recompute path, which never needs them and must not throw
+  // on a far-future, uncovered holiday year). See src/lib/managerPayArrival.ts.
+  payRun?: string | null;
+  estimatedArrival?: string | null;
+  effectiveArrival?: string | null;
+  arrivalError?: string | null;
+  arrivalOverride?: { date: string; reason: string; by: string | null; at: string } | null;
 };
 
 // ============================================================
