@@ -179,6 +179,47 @@ export function buildTokenDiagnostic(): { diag: Record<string, unknown>; token: 
 const ymd = (d: Date) =>
   `${d.getUTCFullYear()}-${String(d.getUTCMonth() + 1).padStart(2, "0")}-${String(d.getUTCDate()).padStart(2, "0")}`;
 
+// TEMPORARY diagnostic — probe salesReports for specific dates and return the RAW
+// status + verbatim body (Apple's 404 text distinguishes "no sales" from a bad
+// vendor/filter) + decompressed row count. Vendor + token never returned.
+export async function probeSalesDays(
+  dates: string[],
+): Promise<{ date: string; status: number; contentType: string | null; rowCount: number | null; body: string }[]> {
+  const { token, vendor } = mintToken();
+  const out: { date: string; status: number; contentType: string | null; rowCount: number | null; body: string }[] = [];
+  for (const date of dates) {
+    const q = new URLSearchParams({
+      "filter[frequency]": "DAILY",
+      "filter[reportType]": "SALES",
+      "filter[reportSubType]": "SUMMARY",
+      "filter[vendorNumber]": vendor,
+      "filter[reportDate]": date,
+      "filter[version]": "1_1",
+    });
+    const res = await fetch(`https://api.appstoreconnect.apple.com/v1/salesReports?${q.toString()}`, {
+      headers: { Authorization: `Bearer ${token}`, Accept: "application/a-gzip" },
+    });
+    const contentType = res.headers.get("content-type");
+    let body = "";
+    let rowCount: number | null = null;
+    if (res.ok) {
+      const gz = Buffer.from(await res.arrayBuffer());
+      let tsv: string;
+      try {
+        tsv = gunzipSync(gz).toString("utf8");
+      } catch {
+        tsv = gz.toString("utf8");
+      }
+      rowCount = tsv.split("\n").filter((l) => l.length > 0).length - 1; // minus header
+      body = tsv.slice(0, 300);
+    } else {
+      body = (await res.text().catch(() => "")).slice(0, 300); // Apple's JSON error, verbatim
+    }
+    out.push({ date, status: res.status, contentType, rowCount, body });
+  }
+  return out;
+}
+
 // ── Sales report parse ───────────────────────────────────────────────────────
 export type DaySales = {
   units: number; // summed first-download Units

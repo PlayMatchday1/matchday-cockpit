@@ -8,7 +8,10 @@
 
 import { timingSafeEqual } from "node:crypto";
 import { createClient } from "@supabase/supabase-js";
-import { buildTokenDiagnostic } from "@/lib/appStoreInstallsSync";
+import { buildTokenDiagnostic, probeSalesDays } from "@/lib/appStoreInstallsSync";
+
+const ymdUTC = (d: Date) =>
+  `${d.getUTCFullYear()}-${String(d.getUTCMonth() + 1).padStart(2, "0")}-${String(d.getUTCDate()).padStart(2, "0")}`;
 
 export const runtime = "nodejs";
 export const maxDuration = 30;
@@ -67,6 +70,24 @@ export async function GET(req: Request) {
     appleBody = `fetch error: ${e instanceof Error ? e.message : String(e)}`;
   }
 
-  // apiToken is deliberately NOT returned.
-  return Response.json({ ...diag, appleStatus, appleBody, appleHeaders }, { status: 200 });
+  // STEP 2 — probe salesReports for 3 specific dates to capture Apple's verbatim
+  // 404 body (which distinguishes "no sales" from a bad vendor/filter). STEP 3 —
+  // report the vendor number's SHAPE only (length + all-digits), never its value.
+  const now = new Date();
+  const dayBack = (n: number) => {
+    const d = new Date(Date.UTC(now.getUTCFullYear(), now.getUTCMonth(), now.getUTCDate()));
+    d.setUTCDate(d.getUTCDate() - n);
+    return ymdUTC(d);
+  };
+  let salesProbe: unknown = null;
+  try {
+    salesProbe = await probeSalesDays([dayBack(2), dayBack(7), dayBack(30)]);
+  } catch (e) {
+    salesProbe = { error: e instanceof Error ? e.message : String(e) };
+  }
+  const rawVendor = process.env.APP_STORE_CONNECT_VENDOR_NUMBER?.trim() ?? "";
+  const vendorShape = { len: rawVendor.length, allDigits: /^\d+$/.test(rawVendor) };
+
+  // apiToken + vendor value are deliberately NOT returned.
+  return Response.json({ ...diag, appleStatus, appleBody, appleHeaders, vendorShape, salesProbe }, { status: 200 });
 }
