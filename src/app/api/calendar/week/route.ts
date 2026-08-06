@@ -12,9 +12,13 @@
 // local compare).
 
 import { createClient } from "@supabase/supabase-js";
+import { normalizeEmail } from "@/lib/calendarSync";
 
 export const runtime = "nodejs";
 export const maxDuration = 30;
+// Never statically cache — "this week" + the caller's identity must be evaluated
+// per request (item 4a: a cached response would pin state to build time).
+export const dynamic = "force-dynamic";
 
 // Offset (localWallClock - utc) in ms for a zone at a given instant.
 function zoneOffsetMs(timeZone: string, at: Date): number {
@@ -133,9 +137,34 @@ export async function GET(req: Request) {
   if (userErr || !userData?.user?.email) {
     return Response.json({ error: "Invalid session" }, { status: 401 });
   }
-  const callerEmail = userData.user.email.toLowerCase();
+  // Normalize the SAME way stored attendee emails are (dot/plus for google domains),
+  // so an alias variant of the caller still matches their meetings (item 2).
+  const callerEmail = normalizeEmail(userData.user.email);
 
   const supabase = createClient(supabaseUrl, serviceKey, { auth: { persistSession: false } });
+
+  // Name-resolution ladder (item 5). app_users keyed by NORMALIZED email is rung 1.
+  const { data: appUsers } = await supabase.from("app_users").select("email, full_name");
+  const nameByEmail = new Map<string, string>();
+  for (const u of (appUsers ?? []) as { email: string; full_name: string | null }[]) {
+    const n = (u.full_name ?? "").trim();
+    if (n) nameByEmail.set(normalizeEmail(u.email), n);
+  }
+  // rung 3: prettify a @playmatchday.com local part (first-initial + surname → "R. Mancuso").
+  function prettifyPlaymatchday(local: string): string {
+    if (local.length < 2) return local.charAt(0).toUpperCase() + local.slice(1);
+    return `${local[0].toUpperCase()}. ${local[1].toUpperCase()}${local.slice(2)}`;
+  }
+  // Returns { name, rung } — stop at first hit. NEVER derive names for external addresses.
+  function resolveName(email: string, googleName: string | null): { name: string; rung: 1 | 2 | 3 | 4 } {
+    const u = nameByEmail.get(email);
+    if (u) return { name: u, rung: 1 };
+    const g = (googleName ?? "").trim();
+    if (g) return { name: g, rung: 2 };
+    const at = email.lastIndexOf("@");
+    if (at > 0 && email.slice(at + 1) === "playmatchday.com") return { name: prettifyPlaymatchday(email.slice(0, at)), rung: 3 };
+    return { name: email, rung: 4 };
+  }
 
   const grantConfigured = !!process.env.GOOGLE_SERVICE_ACCOUNT_JSON?.trim();
 
@@ -173,7 +202,7 @@ export async function GET(req: Request) {
 
   const { data: meetingRows } = await supabase
     .from("calendar_meetings")
-    .select("ical_uid, start_utc, summary, end_utc, start_tz, all_day")
+    .select("ical_uid, start_utc, summary, end_utc, start_tz, all_day, meet_url")
     .in("ical_uid", uids)
     .gte("start_utc", startIso)
     .lt("start_utc", endIso)
@@ -210,7 +239,13 @@ export async function GET(req: Request) {
         end_utc: m.end_utc,
         start_tz: m.start_tz,
         all_day: m.all_day,
-        attendees: attByKey.get(pairKey(m.ical_uid as string, m.start_utc as string)) ?? [],
+        meet_url: (m as { meet_url?: string | null }).meet_url ?? null,
+        attendees: (attByKey.get(pairKey(m.ical_uid as string, m.start_utc as string)) ?? []).map((a) => ({
+          email: a.email,
+          name: resolveName(a.email, a.display_name).name,
+          organizer: a.organizer,
+          self: a.email === callerEmail,
+        })),
       })),
     },
     { status: 200 },
