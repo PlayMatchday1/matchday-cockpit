@@ -1,0 +1,301 @@
+<!doctype html>
+<html lang="en"><head><meta charset="utf-8"/>
+<title>Field Ops — schedule column</title>
+<style>
+:root{
+  --forest:#003326;--ink:#0d1f18;--muted:#5C6B62;--faint:#67746C;--cream:#F4EEE1;--paper:#fff;
+  --line:#E3E8E0;--slot:#F7F9F6;--mint:#2CDB87;--mintSoft:#E9FAF1;--mintEdge:#A8E7C9;
+  --mintInk:#046B45;--amber:#FFF6D6;--amberEdge:#F0DC9B;--amberInk:#7A5200;
+  --coralInk:#A83120;
+}
+*{box-sizing:border-box}
+body{margin:0;background:var(--cream);padding:30px 22px;
+  font-family:-apple-system,BlinkMacSystemFont,"Segoe UI",Inter,Helvetica,Arial,sans-serif;
+  color:var(--ink);-webkit-font-smoothing:antialiased}
+
+.card{max-width:1560px;margin:0 auto;background:var(--paper);border:1px solid var(--line);
+  border-radius:16px;box-shadow:0 9px 26px rgba(0,51,38,.075);overflow:hidden}
+.chead{display:flex;justify-content:space-between;align-items:center;gap:20px;padding:16px 22px;
+  border-bottom:1px solid var(--line)}
+.ctitle{font-size:15.5px;font-weight:900;letter-spacing:-.2px;color:var(--forest)}
+.csub{font-size:11.5px;color:var(--muted);margin-top:3px}
+
+/* the legend that makes the column self-explaining */
+.key{display:flex;gap:16px;align-items:center;flex-wrap:wrap}
+.key span{display:inline-flex;align-items:center;gap:7px;font-size:10.5px;font-weight:800;color:var(--muted)}
+.key i{width:10px;height:10px;border-radius:3px;flex:none;border:1px solid rgba(0,51,38,.14)}
+
+table{width:100%;border-collapse:separate;border-spacing:0}
+thead th{background:var(--slot);text-align:left;font-size:9px;font-weight:900;letter-spacing:.85px;
+  text-transform:uppercase;color:var(--muted);padding:11px 16px;border-bottom:1px solid var(--line);
+  white-space:nowrap}
+td{padding:13px 16px;border-bottom:1px solid #EDF1EC;vertical-align:top}
+tr.city td{background:var(--slot);padding:10px 16px}
+.cityrow{display:flex;align-items:center;gap:11px}
+.tag{font-size:9.5px;font-weight:900;letter-spacing:.6px;background:var(--forest);color:#fff;
+  border-radius:6px;padding:3px 7px}
+.cityname{font-size:13px;font-weight:900;color:var(--forest)}
+.citymeta{font-size:11.5px;font-weight:750;color:var(--muted)}
+.cm{margin-left:auto;font-size:11.5px;font-weight:750;color:var(--muted)}
+.cm b{color:var(--forest);font-weight:850}
+
+.fname{font-size:13px;font-weight:900;color:var(--forest);display:flex;align-items:center;gap:8px}
+.code{font-size:9px;font-weight:900;letter-spacing:.5px;color:var(--muted);background:var(--slot);
+  border:1px solid var(--line);border-radius:5px;padding:2px 6px}
+.faddr{font-size:11.5px;color:var(--muted);margin-top:4px}
+
+.cap{font-size:11.5px;font-weight:850;color:var(--ink);white-space:nowrap}
+.cap b{font-weight:900}
+.cap em{font-style:normal;font-weight:700;color:var(--muted)}
+.bar{width:150px;height:7px;border-radius:99px;background:var(--slot);border:1px solid var(--line);
+  margin:7px 0 5px;position:relative}
+.bar i{position:absolute;left:0;top:0;bottom:0;background:var(--mintSoft);border-radius:99px}
+.bar u{position:absolute;top:-2px;bottom:-2px;width:2px;background:var(--forest)}
+.typ{font-size:10.5px;color:var(--muted)}
+
+.contact{font-size:12.5px;font-weight:850;color:var(--ink)}
+.phone{font-size:12px;font-weight:850;color:var(--mintInk);margin-top:3px}
+
+.spark{display:flex;align-items:flex-end;gap:2px;height:26px}
+.spark i{width:6px;background:var(--mint);border-radius:2px 2px 0 0;display:block}
+.sparkm{font-size:10.5px;color:var(--muted);margin-top:5px;white-space:nowrap}
+
+/* ── SCHEDULE ENDS — same one-slot discipline as the column beside it ── */
+.ends{width:206px}
+.ec{border:1px solid var(--line);border-radius:11px;padding:9px 11px;min-height:88px;
+  display:flex;flex-direction:column;gap:6px;cursor:pointer;background:#fff;text-align:left;
+  font-family:inherit;width:100%}
+.ec:hover{border-color:#BCC9C0}
+.el{font-size:8.5px;font-weight:900;letter-spacing:.9px;text-transform:uppercase;
+  display:flex;align-items:center;gap:6px;color:var(--muted)}
+.el i{width:7px;height:7px;border-radius:50%;background:currentColor;flex:none}
+.ev{font-size:13px;font-weight:900;color:var(--forest);white-space:nowrap}
+.er{font-size:11px;font-weight:850;color:var(--muted);white-space:nowrap}
+.eedit{font-size:10.5px;font-weight:850;color:var(--mintInk);text-decoration:underline;
+  text-underline-offset:2px;margin-top:auto}
+
+.ec.soon{background:var(--amber);border-color:var(--amberEdge)}
+.ec.soon .el,.ec.soon .er{color:var(--amberInk)}
+.ec.over{background:#FDE9E5;border-color:#F3C4BB}
+.ec.over .el,.ec.over .er{color:var(--coralInk)}
+.ec.over .ev{color:var(--coralInk)}
+.ec.forever{background:var(--mintSoft);border-color:var(--mintEdge)}
+.ec.forever .el{color:var(--mintInk)}
+.ec.unset{background:#fff;border-style:dashed;border-color:#C8D2CA}
+.ec.unset .ev{color:var(--muted);font-weight:800}
+
+.edit{border:1px solid var(--forest);border-radius:11px;padding:9px 11px;min-height:88px;
+  display:flex;flex-direction:column;gap:6px;background:#fff}
+.edit input[type=date]{font-family:inherit;font-size:12px;font-weight:800;color:var(--ink);
+  border:1px solid var(--line);border-radius:7px;padding:5px 7px;width:100%}
+.erow{display:flex;gap:6px}
+.eb{flex:1;font-family:inherit;font-size:10.5px;font-weight:900;border-radius:7px;padding:5px 8px;
+  cursor:pointer;border:1px solid var(--line);background:#fff;color:var(--muted)}
+.eb.pri{background:var(--forest);border-color:var(--forest);color:#fff}
+.eb.inf{border-color:var(--mintEdge);background:var(--mintSoft);color:var(--mintInk)}
+
+/* ── THE SCHEDULE CELL — one slot, three states, position never moves ── */
+.sched{width:236px}
+.sc{border:1px solid var(--line);border-radius:11px;padding:9px 11px;min-height:88px;
+  display:flex;flex-direction:column;gap:7px}
+.sl{font-size:8.5px;font-weight:900;letter-spacing:.9px;text-transform:uppercase;
+  display:flex;align-items:center;gap:6px}
+.sl i{width:7px;height:7px;border-radius:50%;background:currentColor;flex:none}
+
+/* linked — calm mint, the done state */
+.sc.linked{background:var(--mintSoft);border-color:var(--mintEdge)}
+.sc.linked .sl{color:var(--mintInk)}
+.open{display:inline-flex;align-items:center;justify-content:space-between;gap:8px;
+  background:var(--mintSoft);border:1px solid var(--mintEdge);color:var(--forest);
+  font-family:inherit;font-size:12px;font-weight:900;border-radius:8px;padding:7px 11px;
+  cursor:pointer;text-decoration:none;width:100%}
+.open:hover{background:#DCF6E8;border-color:#8DDCB6}
+.sc.linked .open{background:#fff}
+
+/* missing — amber, the only loud state, because it is the only one that is work */
+.sc.missing{background:var(--amber);border-color:var(--amberEdge)}
+.sc.missing .sl{color:var(--amberInk)}
+.addlink{display:inline-flex;align-items:center;justify-content:center;gap:6px;
+  background:var(--forest);border:1px solid var(--forest);color:#fff;font-family:inherit;
+  font-size:12px;font-weight:900;border-radius:8px;padding:7px 11px;cursor:pointer;width:100%}
+.addlink:hover{background:#014C39}
+
+/* marked as none — quiet grey, a resolved answer, not an outstanding task */
+.sc.none{background:var(--slot);border-color:var(--line)}
+.sc.none .sl{color:var(--muted)}
+.who{font-size:10.5px;color:var(--muted);line-height:1.4}
+.link{background:none;border:0;padding:0;font:inherit;font-size:11px;font-weight:850;
+  color:var(--mintInk);cursor:pointer;text-decoration:underline;text-underline-offset:2px;
+  align-self:flex-start}
+
+.acts{display:flex;gap:7px;white-space:nowrap}
+.ic{width:29px;height:29px;border:1px solid var(--line);border-radius:8px;background:#fff;
+  cursor:pointer;font-size:12px;color:var(--muted);display:inline-flex;align-items:center;
+  justify-content:center}
+.ic:hover{border-color:#BCC9C0;color:var(--forest)}
+</style></head>
+<body>
+
+<div class="card">
+  <div class="chead">
+    <div>
+      <div class="ctitle">All fields</div>
+      <div class="csub">19 shown, grouped by city</div>
+    </div>
+    <div class="key">
+      <span><i style="background:#E9FAF1;border-color:#A8E7C9"></i>Schedule linked</span>
+      <span><i style="background:#FFF6D6;border-color:#F0DC9B"></i>Needs a link</span>
+      <span><i style="background:#F7F9F6"></i>Marked: no document</span>
+      <span><i style="background:#FDE9E5;border-color:#F3C4BB"></i>Reservation expired</span>
+    </div>
+  </div>
+  <table>
+    <thead><tr>
+      <th>Field</th><th>Capacity &amp; typical fill</th><th>Field contact</th>
+      <th>Last 8 weeks</th><th class="ends">Schedule ends</th><th class="sched">Schedule</th><th></th>
+    </tr></thead>
+    <tbody id="tb"></tbody>
+  </table>
+</div>
+
+<script>
+const CITIES = [
+  { tag:"ATX", name:"Austin", meta:"6 fields · 5 playing this week", mgr:"Garrett",
+    phone:"+1 (512) 954-1102", fields:[
+    { n:"NEMP", c:"NEMP", a:"15500 Sun Light Near Way", lo:11, hi:40, typ:25.3,
+      who:"Juan", ph:"512-400-1913", m:104, peak:16, ends:{ t:"forever" }, sched:{ s:"linked", url:"#" } },
+    { n:"Onion Creek", c:"OCNI", a:"5600 E William Cannon Dr", lo:16, hi:22, typ:21.7,
+      who:"Jesus", ph:"512-762-9753", m:37, peak:8, ends:{ t:"date", on:"2026-08-24" }, sched:{ s:"none", by:"Ryan Mancuso", on:"Aug 5" } },
+    { n:"Round Rock", c:"RROU", a:"2001 North Kenney Fort Blvd", lo:13, hi:40, typ:28.9,
+      who:"Hannah", ph:"737-419-2699", m:15, peak:3, ends:{ t:"unset" }, sched:{ s:"missing" } },
+    { n:"LBJ Early College High School", c:"LECH", a:"7309 Lazy Creek Dr", lo:11, hi:36, typ:19.6,
+      who:"Randy", ph:"773-294-7366", m:20, peak:4, ends:{ t:"date", on:"2026-07-30" }, sched:{ s:"none", by:"Ryan Mancuso", on:"Aug 3" } },
+    { n:"Hattrick", c:"HATT", a:"1280 S Bagdad Rd", lo:7, hi:18, typ:13.3,
+      who:"Karina", ph:"701-540-1529", m:46, peak:7, ends:{ t:"date", on:"2026-12-20" }, sched:{ s:"missing" } }
+  ]},
+  { tag:"HOU", name:"Houston", meta:"3 fields · 3 playing this week", mgr:"Miguel",
+    phone:"+1 (713) 220-8841", fields:[
+    { n:"PAC Global", c:"PACG", a:"5225 Katy Fwy", lo:14, hi:30, typ:22.4,
+      who:"Deonna", ph:"832-114-8890", m:29, peak:5, ends:{ t:"forever" }, sched:{ s:"linked", url:"#" } },
+    { n:"Memorial Park", c:"MEMP", a:"6501 Memorial Dr", lo:9, hi:24, typ:17.1,
+      who:"Andre", ph:"281-455-0192", m:12, peak:3, ends:{ t:"date", on:"2026-09-15" }, sched:{ s:"missing" } }
+  ]}
+];
+
+const bars = (m, peak) => {
+  const out = [];
+  for(let i = 0; i < 8; i++){
+    const h = Math.max(3, Math.round((3 + ((m * (i + 3)) % (peak + 1))) / (peak + 3) * 24));
+    out.push(`<i style="height:${h}px"></i>`);
+  }
+  return out.join("");
+};
+
+/* One renderer, one wrapper, one min-height. The state changes COLOUR and WORDS,
+   never the position of the cell or the order of what is inside it. */
+function schedCell(f){
+  const s = f.sched;
+  if(s.s === "linked") return `
+    <div class="sc linked" data-s="linked">
+      <div class="sl"><i></i>Schedule linked</div>
+      <a class="open" href="${s.url}">Open schedule <span>&#8599;</span></a>
+      <button class="link" data-act="replace">Replace link</button>
+    </div>`;
+  if(s.s === "missing") return `
+    <div class="sc missing" data-s="missing">
+      <div class="sl"><i></i>Needs a link</div>
+      <button class="addlink">+ Add link</button>
+      <button class="link" data-act="mark">Mark as no document</button>
+    </div>`;
+  return `
+    <div class="sc none" data-s="none">
+      <div class="sl"><i></i>No document</div>
+      <div class="who">Marked by ${s.by} · ${s.on}</div>
+      <button class="link" data-act="add">Add a link instead</button>
+    </div>`;
+}
+
+/* Today is 6 Aug 2026. Days remaining is computed from the date, never stored,
+   so a row cannot sit at "18 days left" three weeks after it expired. */
+const TODAY = new Date("2026-08-06T12:00:00Z");
+const SOON  = 30;
+const fmtD  = iso => new Intl.DateTimeFormat("en-US",
+  { timeZone:"UTC", month:"short", day:"numeric", year:"numeric" }).format(new Date(iso + "T12:00:00Z"));
+const daysTo = iso => Math.round((new Date(iso + "T12:00:00Z") - TODAY) / 864e5);
+
+function endsCell(f){
+  const e = f.ends, id = f.c;
+  if(state.editing === id){
+    return `<div class="edit" data-e="editing">
+      <div class="el"><i></i>When does it run out?</div>
+      <input type="date" value="${e.t === "date" ? e.on : ""}"/>
+      <div class="erow"><button class="eb inf" data-set="forever">Indefinite</button>
+        <button class="eb pri" data-set="save">Save</button></div>
+      <button class="eb" data-set="cancel">Cancel</button></div>`;
+  }
+  if(e.t === "forever") return `<button class="ec forever" data-e="forever" data-id="${id}">
+      <div class="el"><i></i>Standing reservation</div>
+      <div class="ev">Indefinite</div>
+      <div class="er">Runs until cancelled</div>
+      <span class="eedit">Change</span></button>`;
+  if(e.t === "unset") return `<button class="ec unset" data-e="unset" data-id="${id}">
+      <div class="el"><i></i>Not set</div>
+      <div class="ev">&mdash;</div>
+      <div class="er">No end date recorded</div>
+      <span class="eedit">Set end date</span></button>`;
+  const d = daysTo(e.on);
+  const cls = d < 0 ? "over" : d <= SOON ? "soon" : "ok";
+  const lab = d < 0 ? "Reservation expired" : d <= SOON ? "Ends soon" : "Reserved through";
+  const rel = d < 0 ? `${Math.abs(d)} days ago` : d === 0 ? "today" : `in ${d} days`;
+  return `<button class="ec ${cls}" data-e="${cls}" data-id="${id}" data-days="${d}">
+      <div class="el"><i></i>${lab}</div>
+      <div class="ev">${fmtD(e.on)}</div>
+      <div class="er">${rel}</div>
+      <span class="eedit">Change</span></button>`;
+}
+
+const state = { editing:null };
+function draw(){
+document.getElementById("tb").innerHTML = CITIES.map(c => `
+  <tr class="city"><td colspan="7"><div class="cityrow">
+    <span class="tag">${c.tag}</span><span class="cityname">${c.name}</span>
+    <span class="citymeta">${c.meta}</span>
+    <span class="cm">City manager <b>${c.mgr}</b> &nbsp;<b>${c.phone}</b></span>
+  </div></td></tr>
+  ${c.fields.map(f => `
+  <tr>
+    <td><div class="fname">${f.n}<span class="code">${f.c}</span></div>
+        <div class="faddr">${f.a}</div></td>
+    <td><div class="cap"><b>${f.lo}&ndash;${f.hi}</b> <em>players</em></div>
+        <div class="bar"><i style="width:${f.typ / f.hi * 100}%"></i>
+          <u style="left:${f.typ / f.hi * 100}%"></u></div>
+        <div class="typ">typically ${f.typ}</div></td>
+    <td><div class="contact">${f.who}</div><div class="phone">${f.ph}</div></td>
+    <td><div class="spark">${bars(f.m, f.peak)}</div>
+        <div class="sparkm">${f.m} matches · peak ${f.peak} a week</div></td>
+    <td class="ends">${endsCell(f)}</td>
+    <td class="sched">${schedCell(f)}</td>
+    <td><div class="acts"><button class="ic" title="Edit">&#9998;</button>
+        <button class="ic" title="Delete">&#128465;</button></div></td>
+  </tr>`).join("")}`).join("");
+
+}
+draw();
+
+document.addEventListener("click", e => {
+  const a = e.target.closest(".open"); if(a){ e.preventDefault(); return; }
+  const open = e.target.closest(".ec");
+  if(open){ state.editing = open.dataset.id; draw(); return; }
+  const act = e.target.closest("[data-set]");
+  if(act){
+    const f = CITIES.flatMap(c => c.fields).find(x => x.c === state.editing);
+    if(act.dataset.set === "forever") f.ends = { t:"forever" };
+    if(act.dataset.set === "save"){
+      const v = document.querySelector(".edit input").value;
+      f.ends = v ? { t:"date", on:v } : { t:"unset" };
+    }
+    state.editing = null; draw();
+  }
+});
+</script>
+</body></html>

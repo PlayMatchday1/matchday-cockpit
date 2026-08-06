@@ -19,6 +19,7 @@
 
 import { useCallback, useEffect, useMemo, useState } from "react";
 import { useScheduleMarks, type ScheduleMark } from "@/lib/useScheduleMarks";
+import { useScheduleEnds, type ScheduleEnd } from "@/lib/useScheduleEnds";
 import { Pencil, Trash2, Plus, X } from "lucide-react";
 import { supabase } from "@/lib/supabase";
 import { CITIES } from "@/lib/types";
@@ -62,10 +63,42 @@ const C = {
   line: "#e6ebe8", hair: "#eff3f1", surface: "#ffffff",
 };
 
+// Exact cell fills for the Schedule + Schedule-ends columns, ported from
+// mockups/fieldsched-v1_1.html. Defined ONCE so the header legend swatches are
+// literally the same values as the cells they explain (asserted in verify).
+const SE = {
+  linkedBg: "#E9FAF1", linkedBd: "#A8E7C9", linkedInk: "#046B45",
+  amberBg: "#FFF6D6", amberBd: "#F0DC9B", amberInk: "#7A5200",
+  greyBg: "#F7F9F6", greyBd: "#E3E8E0", greyInk: "#5C6B62",
+  coralBg: "#FDE9E5", coralBd: "#F3C4BB", coralInk: "#A83120",
+  forest: "#003326", line: "#E3E8E0", dash: "#C8D2CA", muted: "#5C6B62",
+} as const;
+
+const SOON_DAYS = 30;
+const EMDASH = "—";
+// "Schedule ends" is derived from the stored date/flag against today AT RENDER,
+// never stored. NEVER prints a negative day count; ALWAYS prints the absolute date.
+type EndsView =
+  | { kind: "forever"; label: "Standing reservation"; value: "Indefinite"; rel: "Runs until cancelled"; cls: "forever"; edit: "Change"; days: null }
+  | { kind: "unset"; label: "Not set"; value: string; rel: "No end date recorded"; cls: "unset"; edit: "Set end date"; days: null }
+  | { kind: "dated"; label: string; value: string; rel: string; cls: "over" | "soon" | "ok"; edit: "Change"; days: number };
+function endsView(end: ScheduleEnd | undefined, nowMs: number): EndsView {
+  if (end?.indefinite) return { kind: "forever", label: "Standing reservation", value: "Indefinite", rel: "Runs until cancelled", cls: "forever", edit: "Change", days: null };
+  if (!end?.endDate) return { kind: "unset", label: "Not set", value: EMDASH, rel: "No end date recorded", cls: "unset", edit: "Set end date", days: null };
+  // days remaining computed every render from the date; midday anchor avoids DST edges.
+  const at = Date.parse(`${end.endDate}T12:00:00Z`);
+  const todayUTC = Date.UTC(new Date(nowMs).getUTCFullYear(), new Date(nowMs).getUTCMonth(), new Date(nowMs).getUTCDate(), 12);
+  const d = Math.round((at - todayUTC) / DAY_MS);
+  const cls = d < 0 ? "over" : d <= SOON_DAYS ? "soon" : "ok";
+  const label = d < 0 ? "Reservation expired" : d <= SOON_DAYS ? "Ends soon" : "Reserved through";
+  const rel = d < 0 ? `${Math.abs(d)} days ago` : d === 0 ? "today" : `in ${d} days`; // never a negative count
+  const [y, m, dd] = end.endDate.split("-").map(Number);
+  const value = `${MON[m - 1]} ${dd}, ${y}`; // absolute date, always
+  return { kind: "dated", label, value, rel, cls, edit: "Change", days: d };
+}
+
 const MON = ["Jan", "Feb", "Mar", "Apr", "May", "Jun", "Jul", "Aug", "Sep", "Oct", "Nov", "Dec"];
-const WD = ["Sun", "Mon", "Tue", "Wed", "Thu", "Fri", "Sat"];
 const dshort = (ms: number) => `${MON[new Date(ms).getUTCMonth()]} ${new Date(ms).getUTCDate()}`;
-const dlong = (ms: number) => `${WD[new Date(ms).getUTCDay()]} ${dshort(ms)}`;
 
 // display code derived from the venue name (fin_venues has no code column).
 function fieldCode(name: string): string {
@@ -119,7 +152,9 @@ export default function CitiesFieldsLens() {
   const [saving, setSaving] = useState(false);
   const [modalError, setModalError] = useState<string | null>(null);
   const [confirmDelete, setConfirmDelete] = useState<RawVenue | null>(null);
-  const { marks: scheduleMarks, enabled: marksEnabled, setNoDocument, clear: clearScheduleMark } = useScheduleMarks();
+  const { marks: scheduleMarks, enabled: marksEnabled, setNoDocument } = useScheduleMarks();
+  const { ends: scheduleEnds, enabled: endsEnabled, setEnds } = useScheduleEnds();
+  const [editingEnds, setEditingEnds] = useState<number | null>(null); // only one row edits at a time
 
   const load = useCallback(async () => {
     setLoading(true);
@@ -312,12 +347,52 @@ export default function CitiesFieldsLens() {
   return (
     <div className="min-w-0" style={{ color: C.ink }}>
       <style>{`
-        .fo-grid{display:grid;align-items:center;grid-template-columns:minmax(212px,1fr) 150px 170px 160px 138px 128px 68px;gap:0 14px;padding:0 16px}
-        @media(max-width:1400px){
-          .fo-grid{grid-template-columns:minmax(184px,1fr) 130px 144px 140px 118px 112px 66px;gap:0 10px;padding:0 12px}
-          .fo-sched .w{display:none}
-          .fo-wd{display:none}
+        .fo-grid{display:grid;align-items:center;grid-template-columns:minmax(200px,1fr) 148px 164px 150px 206px 236px 66px;gap:0 14px;padding:0 16px}
+        @media(max-width:1480px){
+          .fo-grid{grid-template-columns:minmax(176px,1fr) 128px 144px 126px 192px 216px 64px;gap:0 10px;padding:0 12px}
         }
+        /* ── Schedule + Schedule-ends cells: one fixed 88px slot each. State
+           changes COLOUR and WORDS, never position, order, or height. ── */
+        .se-sc,.se-ec,.se-edit{border:1px solid ${SE.line};border-radius:11px;padding:9px 11px;min-height:88px;display:flex;flex-direction:column;background:#fff}
+        .se-sc{gap:7px}
+        .se-ec,.se-edit{gap:6px}
+        .se-sl,.se-el{font-size:8.5px;font-weight:900;letter-spacing:.9px;text-transform:uppercase;display:flex;align-items:center;gap:6px;color:${SE.muted}}
+        .se-sl i,.se-el i{width:7px;height:7px;border-radius:50%;background:currentColor;flex:none}
+        .se-sc.linked{background:${SE.linkedBg};border-color:${SE.linkedBd}}
+        .se-sc.linked .se-sl{color:${SE.linkedInk}}
+        .se-open{display:inline-flex;align-items:center;justify-content:space-between;gap:8px;background:${SE.linkedBg};border:1px solid ${SE.linkedBd};color:${SE.forest};font-family:inherit;font-size:12px;font-weight:900;border-radius:8px;padding:7px 11px;cursor:pointer;text-decoration:none;width:100%}
+        .se-open:hover{background:#DCF6E8;border-color:#8DDCB6}
+        .se-sc.linked .se-open{background:#fff}
+        .se-sc.missing{background:${SE.amberBg};border-color:${SE.amberBd}}
+        .se-sc.missing .se-sl{color:${SE.amberInk}}
+        .se-addlink{display:inline-flex;align-items:center;justify-content:center;gap:6px;background:${SE.forest};border:1px solid ${SE.forest};color:#fff;font-family:inherit;font-size:12px;font-weight:900;border-radius:8px;padding:7px 11px;cursor:pointer;width:100%}
+        .se-addlink:hover{background:#014C39}
+        .se-sc.nodoc{background:${SE.greyBg};border-color:${SE.greyBd}}
+        .se-sc.nodoc .se-sl{color:${SE.greyInk}}
+        .se-who{font-size:10.5px;color:${SE.muted};line-height:1.4}
+        .se-link{background:none;border:0;padding:0;font-family:inherit;font-size:11px;font-weight:850;color:${SE.linkedInk};cursor:pointer;text-decoration:underline;text-underline-offset:2px;align-self:flex-start;text-align:left}
+        .se-ec{cursor:pointer;text-align:left;font-family:inherit;width:100%}
+        .se-ec:hover{border-color:#BCC9C0}
+        .se-ev{font-size:13px;font-weight:900;color:${SE.forest};white-space:nowrap}
+        .se-er{font-size:11px;font-weight:850;color:${SE.muted};white-space:nowrap}
+        .se-eedit{font-size:10.5px;font-weight:850;color:${SE.linkedInk};text-decoration:underline;text-underline-offset:2px;margin-top:auto}
+        .se-ec.soon{background:${SE.amberBg};border-color:${SE.amberBd}}
+        .se-ec.soon .se-el,.se-ec.soon .se-er{color:${SE.amberInk}}
+        .se-ec.over{background:${SE.coralBg};border-color:${SE.coralBd}}
+        .se-ec.over .se-el,.se-ec.over .se-er,.se-ec.over .se-ev{color:${SE.coralInk}}
+        .se-ec.forever{background:${SE.linkedBg};border-color:${SE.linkedBd}}
+        .se-ec.forever .se-el{color:${SE.linkedInk}}
+        .se-ec.unset{background:#fff;border-style:dashed;border-color:${SE.dash}}
+        .se-ec.unset .se-ev{color:${SE.muted};font-weight:800}
+        .se-edit{border-color:${SE.forest}}
+        .se-edit input[type=date]{font-family:inherit;font-size:12px;font-weight:800;color:#0d1f18;border:1px solid ${SE.line};border-radius:7px;padding:5px 7px;width:100%}
+        .se-erow{display:flex;gap:6px}
+        .se-eb{flex:1;font-family:inherit;font-size:10.5px;font-weight:900;border-radius:7px;padding:5px 8px;cursor:pointer;border:1px solid ${SE.line};background:#fff;color:${SE.muted}}
+        .se-eb.pri{background:${SE.forest};border-color:${SE.forest};color:#fff}
+        .se-eb.inf{border-color:${SE.linkedBd};background:${SE.linkedBg};color:${SE.linkedInk}}
+        .se-legend{display:flex;gap:14px;align-items:center;flex-wrap:wrap}
+        .se-legend span{display:inline-flex;align-items:center;gap:6px;font-size:10px;font-weight:800;color:${SE.muted};white-space:nowrap}
+        .se-legend i{width:10px;height:10px;border-radius:3px;flex:none;border:1px solid rgba(0,51,38,.14)}
       `}</style>
 
       {/* header */}
@@ -410,14 +485,21 @@ export default function CitiesFieldsLens() {
 
       {/* directory */}
       <div className="rounded-[12px] border" style={{ background: C.surface, borderColor: C.line }}>
-        <div className="flex items-center gap-2.5 border-b px-4 py-3" style={{ borderColor: C.hair }}>
+        <div className="flex flex-wrap items-center gap-x-3 gap-y-2 border-b px-4 py-3" style={{ borderColor: C.hair }}>
           <h2 className="m-0 text-[14.5px] font-[800] tracking-[-0.2px]" style={{ color: C.forestDeep }}>All fields</h2>
           <span className="text-[11.5px]" style={{ color: C.muted }}>{visible.length} shown, grouped by city</span>
+          {/* legend for the Schedule ends + Schedule columns — swatches are the SE fills verbatim */}
+          <div className="se-legend ml-auto" data-fo="legend">
+            <span><i data-swatch="linked" style={{ background: SE.linkedBg, borderColor: SE.linkedBd }} />Schedule linked</span>
+            <span><i data-swatch="amber" style={{ background: SE.amberBg, borderColor: SE.amberBd }} />Needs a link · ends soon</span>
+            <span><i data-swatch="grey" style={{ background: SE.greyBg, borderColor: SE.greyBd }} />Marked: no document</span>
+            <span><i data-swatch="coral" style={{ background: SE.coralBg, borderColor: SE.coralBd }} />Reservation expired</span>
+          </div>
         </div>
 
         <div className="fo-grid sticky top-16 z-[12] h-[34px] border-b text-[10px] font-[800] tracking-[0.08em]" style={{ background: C.railB, borderColor: C.line, color: C.muted }}>
           <div>FIELD</div><div>CAPACITY &amp; TYPICAL FILL</div><div>FIELD CONTACT</div>
-          <div>LAST 8 WEEKS</div><div>NEXT MATCH</div><div>SCHEDULE</div><div />
+          <div>LAST 8 WEEKS</div><div>SCHEDULE ENDS</div><div>SCHEDULE</div><div />
         </div>
 
         {visible.length === 0 ? (
@@ -450,11 +532,15 @@ export default function CitiesFieldsLens() {
                 {rs.map((r) => (
                   <Row key={r.venue.id} r={r} nowMs={nowMs}
                     mark={scheduleMarks.get(r.venue.id)} marksEnabled={marksEnabled}
+                    end={scheduleEnds.get(r.venue.id)} endsEnabled={endsEnabled}
+                    editingEnds={editingEnds === r.venue.id}
+                    onEditEnds={() => setEditingEnds(r.venue.id)}
+                    onCancelEnds={() => setEditingEnds(null)}
+                    onSaveEnds={(date, indefinite) => { setEditingEnds(null); void setEnds(r.venue.id, { date, indefinite }); }}
                     onEdit={() => { const raw = rawById.get(r.venue.id); if (raw) openEdit(raw); }}
                     onAddContact={() => { const raw = rawById.get(r.venue.id); if (raw) openEdit(raw, "contact"); }}
                     onAddLink={() => { const raw = rawById.get(r.venue.id); if (raw) openEdit(raw, "schedule"); }}
                     onNoDocument={() => setNoDocument(r.venue.id)}
-                    onUndoMark={() => clearScheduleMark(r.venue.id)}
                     onRemove={() => { const raw = rawById.get(r.venue.id); if (raw) setConfirmDelete(raw); }} />
                 ))}
               </div>
@@ -469,8 +555,9 @@ export default function CitiesFieldsLens() {
           to average). The Needs a look tile counts each field once, under its most urgent flag, so those numbers add up to the fields and
           not to the flags. On each capacity bar the shaded band is that field&apos;s own minimum-to-maximum and the tick is the average number
           of players who actually turn up; a tick left of the band is a field running under its own minimum. Usage and fill cover the {TRAIL_WEEKS} weeks
-          from {dshort(weeks[0].aMs)} to {dshort(nowMs)}; the last bar is this week to date. Next match looks {UPCOMING_DAYS} days ahead and counts
-          sign-ups so far, not final attendance.
+          from {dshort(weeks[0].aMs)} to {dshort(nowMs)}; the last bar is this week to date. Schedule ends shows when each field&apos;s reservation runs
+          out; the days-remaining figure is computed from the stored date on every load, so an expired reservation reads “N days ago”, never a stale
+          countdown. Click a cell to set a date or mark it a standing reservation.
         </div>
       </div>
 
@@ -486,14 +573,17 @@ export default function CitiesFieldsLens() {
 }
 
 // ── row ──
-function Row({ r, nowMs, mark, marksEnabled, onEdit, onAddContact, onAddLink, onNoDocument, onUndoMark, onRemove }: {
-  r: FieldRow; nowMs: number; mark: ScheduleMark | undefined; marksEnabled: boolean; onEdit: () => void; onAddContact: () => void; onAddLink: () => void; onNoDocument: () => void; onUndoMark: () => void; onRemove: () => void;
+function Row({ r, nowMs, mark, marksEnabled, end, endsEnabled, editingEnds, onEditEnds, onCancelEnds, onSaveEnds, onEdit, onAddContact, onAddLink, onNoDocument, onRemove }: {
+  r: FieldRow; nowMs: number; mark: ScheduleMark | undefined; marksEnabled: boolean;
+  end: ScheduleEnd | undefined; endsEnabled: boolean; editingEnds: boolean;
+  onEditEnds: () => void; onCancelEnds: () => void; onSaveEnds: (date: string | null, indefinite: boolean) => void;
+  onEdit: () => void; onAddContact: () => void; onAddLink: () => void; onNoDocument: () => void; onRemove: () => void;
 }) {
   const f = r.venue;
   const nameFlags = r.flags.filter((x) => x.k === "idle" || x.k === "never");
   const street = f.address ? f.address.split(",")[0] : null;
   return (
-    <div className="fo-grid border-b" style={{ borderColor: C.hair, minHeight: 64 }}>
+    <div className="fo-grid border-b" style={{ borderColor: C.hair, minHeight: 88 }}>
       {/* FIELD — two lines: name(+code+chip) and meta(street). No third line. */}
       <div className="py-[11px]">
         <div className="flex min-w-0 items-center gap-[7px] text-[13.5px] font-bold">
@@ -530,56 +620,11 @@ function Row({ r, nowMs, mark, marksEnabled, onEdit, onAddContact, onAddLink, on
       {/* LAST 8 WEEKS */}
       <div className="py-[11px]"><Spark r={r} /></div>
 
-      {/* NEXT MATCH */}
-      <div className="py-[11px]">
-        {r.next ? (
-          <div className="text-[12px] font-bold">
-            <span className="block whitespace-nowrap"><span className="fo-wd">{WD[new Date(r.next.startMs).getUTCDay()]} </span>{dshort(r.next.startMs)} · {r.next.time}</span>
-            {(() => {
-              const short = f.minPlayers != null && r.next!.count < f.minPlayers;
-              return (
-                <span className="mt-[3px] block text-[10.5px] font-bold" style={{ color: short ? C.warnInk : C.muted }}>
-                  {r.next!.count} of {f.maxPlayers ?? "?"} in{short ? ` · needs ${f.minPlayers! - r.next!.count} more` : ""}
-                </span>
-              );
-            })()}
-          </div>
-        ) : (
-          <div className="text-[11.5px]" style={{ color: C.muted }}>Nothing booked</div>
-        )}
-      </div>
+      {/* SCHEDULE ENDS — one fixed 88px slot; five states derived at render. */}
+      <div><EndsCell f={f} end={end} endsEnabled={endsEnabled} nowMs={nowMs} editing={editingEnds} onEdit={onEditEnds} onCancel={onCancelEnds} onSave={onSaveEnds} /></div>
 
-      {/* SCHEDULE */}
-      <div className="py-[11px]">
-        {f.scheduleUrl ? (
-          <a className="fo-sched inline-flex items-center gap-[5px] whitespace-nowrap rounded-[8px] border px-2.5 py-[7px] text-[11.5px] font-[800]" href={f.scheduleUrl} target="_blank" rel="noopener noreferrer" style={{ background: C.railA, borderColor: C.chipLine, color: C.ok }}>
-            <span>Open<span className="w"> schedule</span></span>
-            <svg viewBox="0 0 24 24" className="h-3 w-3" fill="none" stroke="currentColor" strokeWidth={2}><path d="M7 17L17 7M9 7h8v8" /></svg>
-          </a>
-        ) : mark ? (
-          <div className="flex flex-col gap-1">
-            <button type="button" onClick={onUndoMark} title={`No document — marked by ${mark.by} on ${mark.on}. Click to undo.`}
-              className="inline-flex items-center gap-[5px] whitespace-nowrap rounded-[8px] border px-2.5 py-[7px] text-[11.5px] font-[800]" style={{ background: "#eef3f0", borderColor: "#dfe6e1", color: "#3f4a44" }}>
-              <span className="box-border flex h-3 w-3 items-center justify-center rounded-[3px]" style={{ border: "1.5px solid #8a978f" }}><span className="block h-[1.5px] w-[7px] rounded-full" style={{ background: "#3f4a44" }} /></span>
-              No document
-            </button>
-            <span className="text-[10px]" style={{ color: "#45544c" }}>{mark.by} · {mark.on}</span>
-          </div>
-        ) : (
-          <div className="flex flex-wrap items-center gap-1.5">
-            <button type="button" onClick={onAddLink} className="inline-flex items-center gap-[5px] rounded-[8px] border px-2.5 py-[7px] text-[11.5px] font-[800]" style={{ background: C.railA, borderColor: C.chipLine, color: "#45544c" }}>
-              <svg viewBox="0 0 24 24" className="h-3 w-3" fill="none" stroke="currentColor" strokeWidth={2}><path d="M12 5v14M5 12h14" /></svg>Add link
-            </button>
-            {marksEnabled && (
-              <button type="button" onClick={onNoDocument} title="This field deliberately has no schedule document"
-                className="inline-flex items-center gap-[5px] rounded-[8px] border px-2.5 py-[7px] text-[11.5px] font-[800]" style={{ background: "#eef3f0", borderColor: "#dfe6e1", color: "#3f4a44" }}>
-                <span className="box-border flex h-3 w-3 items-center justify-center rounded-[3px]" style={{ border: "1.5px solid #8a978f" }}><span className="block h-[1.5px] w-[7px] rounded-full" style={{ background: "#3f4a44" }} /></span>
-                No document
-              </button>
-            )}
-          </div>
-        )}
-      </div>
+      {/* SCHEDULE — one fixed 88px slot; three states, same order, same footprint. */}
+      <div><SchedCell f={f} mark={mark} marksEnabled={marksEnabled} onAddLink={onAddLink} onNoDocument={onNoDocument} /></div>
 
       {/* actions */}
       <div className="flex gap-1 py-[11px]">
@@ -590,6 +635,86 @@ function Row({ r, nowMs, mark, marksEnabled, onEdit, onAddContact, onAddLink, on
           <Trash2 aria-hidden size={15} />
         </button>
       </div>
+    </div>
+  );
+}
+
+// ── SCHEDULE cell — one fixed slot, three states, same three things in the same
+// order (status label, primary control, secondary link). State changes only
+// colour + words. Precedence: a link wins → linked; else a mark → no document;
+// else → needs a link (the one amber, loud state, because it is the only work). ──
+function SchedCell({ f, mark, marksEnabled, onAddLink, onNoDocument }: {
+  f: Venue; mark: ScheduleMark | undefined; marksEnabled: boolean; onAddLink: () => void; onNoDocument: () => void;
+}) {
+  if (f.scheduleUrl) {
+    return (
+      <div className="se-sc linked" data-sched="linked">
+        <div className="se-sl"><i />Schedule linked</div>
+        <a className="se-open" href={f.scheduleUrl} target="_blank" rel="noopener noreferrer" data-primary="open">Open schedule <span aria-hidden>↗</span></a>
+        <button type="button" className="se-link" onClick={onAddLink}>Replace link</button>
+      </div>
+    );
+  }
+  if (mark) {
+    return (
+      <div className="se-sc nodoc" data-sched="nodoc">
+        <div className="se-sl"><i />No document</div>
+        <div className="se-who">Marked by {mark.by} · {mark.on}</div>
+        <button type="button" className="se-link" onClick={onAddLink}>Add a link instead</button>
+      </div>
+    );
+  }
+  return (
+    <div className="se-sc missing" data-sched="missing">
+      <div className="se-sl"><i />Needs a link</div>
+      <button type="button" className="se-addlink" onClick={onAddLink} data-primary="addlink">+ Add link</button>
+      {marksEnabled
+        ? <button type="button" className="se-link" onClick={onNoDocument}>Mark as no document</button>
+        : <span className="se-who" style={{ visibility: "hidden" }}>{EMDASH}</span>}
+    </div>
+  );
+}
+
+// ── SCHEDULE ENDS cell — same one-slot discipline. Five states derived at render
+// (never stored): standing / reserved-through / ends-soon / expired / not-set.
+// Clicking opens the inline editor in the same slot. Attribution rides on the
+// cell's title (who last set it + when), so the fixed footprint is preserved. ──
+function EndsCell({ f, end, endsEnabled, nowMs, editing, onEdit, onCancel, onSave }: {
+  f: Venue; end: ScheduleEnd | undefined; endsEnabled: boolean; nowMs: number;
+  editing: boolean; onEdit: () => void; onCancel: () => void; onSave: (date: string | null, indefinite: boolean) => void;
+}) {
+  if (editing) return <EndsEditor end={end} onCancel={onCancel} onSave={onSave} />;
+  const v = endsView(end, nowMs);
+  const attribution = end?.by ? `Set by ${end.by}${end.on ? ` · ${end.on}` : ""}` : undefined;
+  return (
+    <button type="button" className={`se-ec ${v.cls}`} data-ends={v.cls} data-days={v.days ?? ""} data-venue={f.id}
+      onClick={endsEnabled ? onEdit : undefined} disabled={!endsEnabled} title={attribution}
+      style={endsEnabled ? undefined : { cursor: "default" }}>
+      <div className="se-el"><i />{v.label}</div>
+      <div className="se-ev">{v.value}</div>
+      <div className="se-er">{v.rel}</div>
+      <span className="se-eedit">{endsEnabled ? v.edit : ""}</span>
+    </button>
+  );
+}
+
+// Inline reservation-end editor — a real date input, plus Indefinite as a
+// first-class choice beside Save (a standing reservation is one click, not a
+// tucked-away checkbox). Saving an empty date returns the row to Not set.
+// indefinite XOR dated is guaranteed by the three exits below (never both).
+function EndsEditor({ end, onCancel, onSave }: {
+  end: ScheduleEnd | undefined; onCancel: () => void; onSave: (date: string | null, indefinite: boolean) => void;
+}) {
+  const [date, setDate] = useState<string>(end?.indefinite ? "" : end?.endDate ?? "");
+  return (
+    <div className="se-edit" data-ends="editing">
+      <div className="se-el"><i />When does it run out?</div>
+      <input type="date" value={date} onChange={(e) => setDate(e.target.value)} aria-label="Reservation end date" />
+      <div className="se-erow">
+        <button type="button" className="se-eb inf" onClick={() => onSave(null, true)}>Indefinite</button>
+        <button type="button" className="se-eb pri" onClick={() => onSave(date || null, false)}>Save</button>
+      </div>
+      <button type="button" className="se-eb" onClick={onCancel}>Cancel</button>
     </div>
   );
 }
