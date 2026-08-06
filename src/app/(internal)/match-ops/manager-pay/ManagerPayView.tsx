@@ -8,6 +8,7 @@
 // below it; proximity is the point. All derivation is in src/lib/managerPayView.ts.
 
 import { useCallback, useEffect, useMemo, useRef, useState } from "react";
+import Link from "next/link";
 import { usePathname, useRouter, useSearchParams } from "next/navigation";
 import { supabase } from "@/lib/supabase";
 import {
@@ -250,7 +251,10 @@ export default function ManagerPayView() {
             What each manager is owed for the week of {dshort(payload.weekStart)} – {dfull(payload.weekEnd)}, and the file that pays them.
           </div>
         </div>
-        <div className="ml-auto flex items-center gap-2">
+        <div className="ml-auto flex items-center gap-2.5">
+          {isAdmin && (
+            <Link href="/match-ops/manager-pay/history" className="text-[12.5px] font-bold underline underline-offset-2" style={{ color: C.muted }}>Manager history</Link>
+          )}
           <button type="button" onClick={() => setRefreshKey((k) => k + 1)} className="inline-flex items-center gap-1.5 rounded-[9px] border px-3 py-2 text-[12.5px] font-bold" style={{ background: C.surface, borderColor: C.chipLine, color: C.forest }}>Refresh</button>
           {isAdmin && (
             <button type="button" onClick={() => setShareOpen(true)} className="inline-flex items-center gap-1.5 rounded-[9px] border px-3 py-2 text-[12.5px] font-bold" style={{ background: C.surface, borderColor: C.chipLine, color: C.forest }}>Share link</button>

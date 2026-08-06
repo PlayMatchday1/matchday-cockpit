@@ -1,0 +1,311 @@
+<!doctype html>
+<html lang="en"><head><meta charset="utf-8"/>
+<title>Manager history — year report</title>
+<style>
+:root{
+  --forest:#003326;--ink:#0d1f18;--muted:#5C6B62;--faint:#67746C;--cream:#F4EEE1;--paper:#fff;
+  --line:#E3E8E0;--slot:#F7F9F6;--mint:#2CDB87;--mintSoft:#E9FAF1;--mintEdge:#A8E7C9;
+  --mintInk:#046B45;--amber:#FFF6D6;--amberEdge:#F0DC9B;--amberInk:#7A5200;--coralInk:#A83120;
+}
+*{box-sizing:border-box}
+body{margin:0;background:var(--cream);padding:26px 22px 60px;
+  font-family:-apple-system,BlinkMacSystemFont,"Segoe UI",Inter,Helvetica,Arial,sans-serif;
+  color:var(--ink);-webkit-font-smoothing:antialiased}
+.wrap{max-width:1080px;margin:0 auto}
+
+/* ── the quiet entry point, shown in context ── */
+.hostbar{display:flex;align-items:center;gap:14px;background:var(--paper);border:1px solid var(--line);
+  border-radius:14px;padding:12px 18px;margin-bottom:18px;box-shadow:0 9px 26px rgba(0,51,38,.075)}
+.hostbar .ht{font-size:14px;font-weight:900;color:var(--forest);margin-right:auto}
+.quiet{background:none;border:0;padding:0;font-family:inherit;font-size:12px;font-weight:850;
+  color:var(--muted);text-decoration:underline;text-underline-offset:3px;cursor:pointer}
+.quiet:hover{color:var(--forest)}
+.btn{font-family:inherit;font-size:12px;font-weight:900;border-radius:9px;padding:8px 14px;
+  cursor:pointer;border:1px solid var(--line);background:#fff;color:var(--forest)}
+.btn.go{background:var(--mint);border-color:#16C275;color:#00291E}
+
+.card{background:var(--paper);border:1px solid var(--line);border-radius:16px;
+  box-shadow:0 9px 26px rgba(0,51,38,.075);overflow:hidden;margin-bottom:18px}
+.chead{display:flex;justify-content:space-between;align-items:flex-end;gap:18px;padding:18px 22px;
+  border-bottom:1px solid var(--line);flex-wrap:wrap}
+.ctitle{font-size:19px;font-weight:900;letter-spacing:-.4px;color:var(--forest)}
+.csub{font-size:11.5px;color:var(--muted);margin-top:5px;line-height:1.5}
+.picks{display:flex;gap:9px;align-items:center}
+select{font-family:inherit;font-size:12.5px;font-weight:800;color:var(--ink);background:#fff;
+  border:1px solid var(--line);border-radius:9px;padding:8px 11px;cursor:pointer}
+
+.tiles{display:grid;grid-template-columns:repeat(4,1fr);gap:12px;padding:18px 22px}
+.tile{background:var(--slot);border:1px solid var(--line);border-radius:13px;padding:13px 15px}
+.tile.pay{background:var(--mintSoft);border-color:var(--mintEdge)}
+.tl{font-size:9px;font-weight:900;letter-spacing:.9px;text-transform:uppercase;color:var(--muted)}
+.tv{font-size:27px;font-weight:900;letter-spacing:-1.1px;color:var(--forest);margin-top:6px;
+  line-height:1;font-variant-numeric:tabular-nums}
+.tn{font-size:10.5px;font-weight:750;color:var(--muted);margin-top:7px;line-height:1.45}
+
+.sec{padding:4px 22px 18px}
+.sech{font-size:9.5px;font-weight:900;letter-spacing:1px;text-transform:uppercase;color:var(--muted);
+  padding:14px 0 9px}
+table{width:100%;border-collapse:separate;border-spacing:0;font-variant-numeric:tabular-nums}
+th{text-align:right;font-size:9px;font-weight:900;letter-spacing:.85px;text-transform:uppercase;
+  color:var(--muted);padding:8px 12px;border-bottom:1px solid var(--line);white-space:nowrap}
+th:first-child{text-align:left}
+td{padding:9px 12px;text-align:right;font-size:12.5px;font-weight:800;border-bottom:1px solid #EDF1EC;
+  white-space:nowrap}
+td:first-child{text-align:left;font-weight:850;color:var(--forest)}
+tfoot td{border-bottom:0;border-top:2px solid var(--forest);font-weight:900;color:var(--forest)}
+.city{font-size:11px;font-weight:750;color:var(--muted)}
+
+/* ── week blocks ── */
+.wk{border:1px solid var(--line);border-radius:13px;margin-bottom:11px;overflow:hidden}
+.wkh{display:flex;align-items:center;gap:14px;padding:11px 15px;background:var(--slot);
+  border-bottom:1px solid var(--line);flex-wrap:wrap}
+.wkr{font-size:12.5px;font-weight:900;color:var(--forest)}
+.wkd{font-size:10.5px;font-weight:750;color:var(--muted)}
+.wkt{margin-left:auto;font-size:13px;font-weight:900;color:var(--forest);font-variant-numeric:tabular-nums}
+.mr{display:grid;grid-template-columns:152px 1fr 104px 82px;gap:12px;align-items:center;
+  padding:9px 15px;border-top:1px solid #EDF1EC;font-size:12.5px}
+.mr:first-child{border-top:0}
+.md{font-weight:850;color:var(--ink);font-variant-numeric:tabular-nums}
+.mf{font-weight:850;color:var(--forest)}
+.mc{font-size:11px;font-weight:750;color:var(--muted)}
+.mp{text-align:right;font-weight:900;font-variant-numeric:tabular-nums}
+.pillx{font-size:8.5px;font-weight:900;letter-spacing:.6px;text-transform:uppercase;border-radius:99px;
+  padding:3px 8px;white-space:nowrap;justify-self:start}
+.pillx.two{background:var(--mintSoft);color:var(--mintInk);border:1px solid var(--mintEdge)}
+.pillx.canc{background:#FDE9E5;color:var(--coralInk);border:1px solid #F3C4BB}
+.pillx.adj{background:var(--amber);color:var(--amberInk);border:1px solid var(--amberEdge)}
+.mr.cancelled .md,.mr.cancelled .mf,.mr.cancelled .mp{color:var(--faint)}
+.mr.cancelled .mf{text-decoration:line-through}
+.mr.adjust{background:#FFFDF4}
+.foot{padding:12px 22px 18px;font-size:11px;color:var(--muted);line-height:1.6}
+.recon{margin:0 22px 18px;padding:11px 14px;border-radius:11px;background:var(--mintSoft);
+  border:1px solid var(--mintEdge);font-size:11px;font-weight:800;color:var(--mintInk);line-height:1.6}
+
+@media print{
+  body{background:#fff;padding:0}
+  .hostbar,.picks,.noprint{display:none!important}
+  .card{box-shadow:none;border:0;margin:0}
+  .wk{break-inside:avoid}
+}
+</style></head>
+<body>
+<div class="wrap">
+
+  <div class="hostbar noprint">
+    <span class="ht">Manager Pay</span>
+    <button class="quiet" id="entry">Manager history</button>
+    <button class="btn">Refresh</button>
+    <button class="btn go">Gusto CSV</button>
+  </div>
+
+  <div class="card">
+    <div class="chead">
+      <div>
+        <div class="ctitle" id="who">Elnur Ismayilov</div>
+        <div class="csub" id="sub"></div>
+      </div>
+      <div class="picks noprint">
+        <select id="mgr"></select>
+        <select id="yr"><option>2026</option><option>2025</option></select>
+        <button class="btn" id="csv">Download CSV</button>
+        <button class="btn" id="prt">Print</button>
+      </div>
+    </div>
+    <div class="tiles" id="tiles"></div>
+  </div>
+
+  <div class="card">
+    <div class="sec">
+      <div class="sech">Where they worked</div>
+      <table id="loc"></table>
+    </div>
+    <div class="foot" id="locfoot"></div>
+  </div>
+
+  <div class="card">
+    <div class="sec">
+      <div class="sech">Week by week &mdash; newest first</div>
+      <div id="weeks"></div>
+    </div>
+    <div class="recon" id="recon"></div>
+  </div>
+
+</div>
+
+<script>
+/* Matches are the only source of truth. Every tile, every breakdown and every
+   week total is derived from this list, so the report cannot disagree with itself. */
+const FIELDS = {
+  NEMP:{ n:"NEMP", c:"Austin" }, OCNI:{ n:"Onion Creek", c:"Austin" },
+  HATT:{ n:"The Hattrick", c:"Austin" }, RROU:{ n:"Round Rock", c:"Austin" },
+  PACG:{ n:"PAC Global", c:"Houston" }
+};
+/* [date, time, field, payForTHISmanager, twoManager, cancelled] */
+const M = [
+  ["2026-01-06","19:00","NEMP",20,0,0], ["2026-01-08","19:00","NEMP",20,0,0],
+  ["2026-01-20","19:00","NEMP",20,0,0], ["2026-01-22","19:00","OCNI",20,0,0],
+  ["2026-02-03","19:00","NEMP",20,0,0], ["2026-02-05","18:30","NEMP",30,0,0],
+  ["2026-02-07","10:00","HATT",20,0,0],
+  ["2026-02-17","19:00","NEMP",20,0,0], ["2026-02-19","19:00","OCNI",20,0,1],
+  ["2026-03-03","19:00","NEMP",20,0,0], ["2026-03-05","19:00","NEMP",20,0,0],
+  ["2026-03-07","10:00","HATT",20,1,0],
+  ["2026-03-17","19:00","NEMP",20,0,0], ["2026-03-19","19:00","OCNI",20,0,0],
+  ["2026-04-07","18:30","NEMP",30,0,0], ["2026-04-09","19:00","NEMP",20,0,0],
+  ["2026-04-11","10:00","RROU",20,0,0],
+  ["2026-04-21","19:00","NEMP",20,0,0], ["2026-04-23","19:00","OCNI",20,0,1],
+  ["2026-05-05","19:00","NEMP",20,0,0], ["2026-05-07","19:00","NEMP",20,0,0],
+  ["2026-05-09","10:00","HATT",20,0,0],
+  ["2026-05-19","19:00","NEMP",20,0,0], ["2026-05-21","19:00","OCNI",20,0,0],
+  ["2026-05-23","20:00","PACG",30,1,0],
+  ["2026-06-02","19:00","NEMP",20,0,0], ["2026-06-04","18:30","NEMP",30,0,0],
+  ["2026-06-16","19:00","NEMP",20,0,0], ["2026-06-18","19:00","OCNI",20,0,0],
+  ["2026-06-20","10:00","HATT",20,0,0],
+  ["2026-07-07","19:00","NEMP",20,0,0], ["2026-07-09","19:00","NEMP",20,0,0],
+  ["2026-07-11","10:00","RROU",20,0,0],
+  ["2026-07-21","19:00","NEMP",20,0,0], ["2026-07-23","19:00","OCNI",20,0,1],
+  ["2026-07-27","19:00","NEMP",20,0,0], ["2026-07-29","19:00","NEMP",20,0,0],
+  ["2026-08-01","10:00","HATT",30,0,0],
+  ["2026-08-04","19:00","NEMP",20,0,0], ["2026-08-06","20:00","PACG",20,0,0]
+];
+/* Adjustments carry no field — they are money, not a shift. */
+const ADJ = [
+  ["2026-04-06", 25, "Covered a late cancellation at Round Rock"],
+  ["2026-06-15",-20, "Duplicate payment correction"]
+];
+
+const TODAY = new Date("2026-08-06T12:00:00Z");
+const d0 = iso => new Date(iso + "T12:00:00Z");
+const monday = iso => { const d = d0(iso); const w = (d.getUTCDay() + 6) % 7;
+  d.setUTCDate(d.getUTCDate() - w); return d.toISOString().slice(0,10); };
+const fmt = (iso, o) => new Intl.DateTimeFormat("en-US",
+  Object.assign({ timeZone:"UTC" }, o)).format(d0(iso));
+const money = n => (n < 0 ? "−$" : "$") + Math.abs(n).toLocaleString("en-US");
+const t12 = t => { const [h,m] = t.split(":").map(Number);
+  return `${((h+11)%12)+1}:${String(m).padStart(2,"0")} ${h<12?"AM":"PM"}`; };
+
+/* Fed-holiday-aware banking days, same rule as the pay page */
+const HOL_2026 = ["2026-01-01","2026-01-19","2026-02-16","2026-05-25","2026-06-19",
+  "2026-07-03","2026-09-07","2026-10-12","2026-11-11","2026-11-26","2026-12-25"];
+const isBank = d => { const s = d.toISOString().slice(0,10);
+  return d.getUTCDay() !== 0 && d.getUTCDay() !== 6 && !HOL_2026.includes(s); };
+function payRun(weekStart){                       // Tuesday after that week's Sunday
+  const d = d0(weekStart); d.setUTCDate(d.getUTCDate() + 8);
+  while(!isBank(d)) d.setUTCDate(d.getUTCDate() + 1);
+  return d.toISOString().slice(0,10);
+}
+function arrival(weekStart){
+  const d = d0(payRun(weekStart));
+  let n = 0; while(n < 4){ d.setUTCDate(d.getUTCDate() + 1); if(isBank(d)) n++; }
+  return d.toISOString().slice(0,10);
+}
+
+/* ── derive everything ── */
+const worked   = M.filter(m => !m[5]);
+const cancelled= M.filter(m =>  m[5]);
+const matchPay = worked.reduce((a,m) => a + m[3], 0);
+const adjTotal = ADJ.reduce((a,x) => a + x[1], 0);
+const grand    = matchPay + adjTotal;
+
+const weeks = new Map();
+M.forEach(m => { const k = monday(m[0]);
+  if(!weeks.has(k)) weeks.set(k, { m:[], a:[] }); weeks.get(k).m.push(m); });
+ADJ.forEach(x => { const k = monday(x[0]);
+  if(!weeks.has(k)) weeks.set(k, { m:[], a:[] }); weeks.get(k).a.push(x); });
+const weekKeys = [...weeks.keys()].sort();
+const weeksElapsed = Math.floor((TODAY - d0("2026-01-05")) / 6048e5) + 1;
+
+const byField = {};
+worked.forEach(m => { const f = m[2];
+  byField[f] = byField[f] || { matches:0, pay:0 };
+  byField[f].matches++; byField[f].pay += m[3]; });
+const locRows = Object.entries(byField)
+  .map(([k,v]) => ({ k, n:FIELDS[k].n, c:FIELDS[k].c, ...v }))
+  .sort((a,b) => b.matches - a.matches || b.pay - a.pay);
+const byCity = {};
+locRows.forEach(r => { byCity[r.c] = byCity[r.c] || { matches:0, pay:0 };
+  byCity[r.c].matches += r.matches; byCity[r.c].pay += r.pay; });
+
+/* ── render ── */
+document.getElementById("mgr").innerHTML =
+  ["Elnur Ismayilov","Moncho Perez","Sergio Luna","James Santiago","Nick MD","garrett"]
+  .map(n => `<option${n === "Elnur Ismayilov" ? " selected" : ""}>${n}</option>`).join("");
+
+document.getElementById("sub").innerHTML =
+  `2026 &middot; organised by <b>when matches were worked</b>, not when they were paid &middot; ` +
+  `generated Aug 6, 2026 &middot; times shown in Central`;
+
+document.getElementById("tiles").innerHTML = `
+  <div class="tile"><div class="tl">Matches worked</div>
+    <div class="tv" data-k="worked">${worked.length}</div>
+    <div class="tn">across ${locRows.length} fields in ${Object.keys(byCity).length} cities</div></div>
+  <div class="tile"><div class="tl">Cancelled</div>
+    <div class="tv" data-k="cancelled">${cancelled.length}</div>
+    <div class="tn">listed below, paid nothing</div></div>
+  <div class="tile"><div class="tl">Weeks worked</div>
+    <div class="tv" data-k="weeks">${weekKeys.length}</div>
+    <div class="tn">of ${weeksElapsed} weeks elapsed in 2026</div></div>
+  <div class="tile pay"><div class="tl">Total paid</div>
+    <div class="tv" data-k="total">${money(grand)}</div>
+    <div class="tn">${money(matchPay)} match pay ${adjTotal < 0 ? "−" : "+"}
+      ${money(Math.abs(adjTotal))} adjustments</div></div>`;
+
+document.getElementById("loc").innerHTML =
+  `<thead><tr><th>Field</th><th>City</th><th>Matches</th><th>Match pay</th></tr></thead>
+   <tbody>${locRows.map(r => `<tr data-f="${r.k}">
+     <td>${r.n}</td><td class="city" style="text-align:right">${r.c}</td>
+     <td>${r.matches}</td><td>${money(r.pay)}</td></tr>`).join("")}
+   ${Object.entries(byCity).map(([c,v]) => `<tr data-city="${c}">
+     <td style="color:#5C6B62;font-weight:800">${c} &mdash; all fields</td><td></td>
+     <td style="color:#5C6B62">${v.matches}</td>
+     <td style="color:#5C6B62">${money(v.pay)}</td></tr>`).join("")}</tbody>
+   <tfoot><tr><td>All fields</td><td></td>
+     <td data-k="locmatches">${locRows.reduce((a,r)=>a+r.matches,0)}</td>
+     <td data-k="locpay">${money(locRows.reduce((a,r)=>a+r.pay,0))}</td></tr></tfoot>`;
+
+document.getElementById("locfoot").textContent =
+  `Match pay only. Adjustments (${money(adjTotal)}) are not attached to a field, so this ` +
+  `column sums to match pay, not to Total paid. Cancelled matches are excluded from both columns.`;
+
+document.getElementById("weeks").innerHTML = weekKeys.slice().reverse().map(k => {
+  const w = weeks.get(k);
+  const end = new Date(+d0(k) + 6 * 864e5).toISOString().slice(0,10);
+  const tot = w.m.filter(m => !m[5]).reduce((a,m) => a + m[3], 0) +
+              w.a.reduce((a,x) => a + x[1], 0);
+  const rows = w.m.map(m => `
+    <div class="mr ${m[5] ? "cancelled" : ""}" data-w="${k}">
+      <div class="md">${fmt(m[0],{weekday:"short",month:"short",day:"numeric"})} &middot; ${t12(m[1])}</div>
+      <div><div class="mf">${FIELDS[m[2]].n}</div><div class="mc">${FIELDS[m[2]].c}</div></div>
+      <div>${m[5] ? `<span class="pillx canc">Cancelled</span>`
+                  : m[4] ? `<span class="pillx two">Two managers</span>` : ""}</div>
+      <div class="mp">${m[5] ? "—" : money(m[3])}</div>
+    </div>`).join("") +
+    w.a.map(x => `
+    <div class="mr adjust" data-w="${k}" data-adj="1">
+      <div class="md">${fmt(x[0],{month:"short",day:"numeric"})}</div>
+      <div><div class="mf">${x[2]}</div><div class="mc">Adjustment</div></div>
+      <div><span class="pillx adj">Adjustment</span></div>
+      <div class="mp">${money(x[1])}</div>
+    </div>`).join("");
+  return `<div class="wk" data-week="${k}">
+    <div class="wkh">
+      <span class="wkr">${fmt(k,{month:"short",day:"numeric"})} &ndash;
+        ${fmt(end,{month:"short",day:"numeric",year:"numeric"})}</span>
+      <span class="wkd">Pay run ${fmt(payRun(k),{month:"short",day:"numeric"})}
+        &middot; arrives ${fmt(arrival(k),{month:"short",day:"numeric"})}</span>
+      <span class="wkt" data-wt="${tot}">${money(tot)}</span>
+    </div>${rows}</div>`;
+}).join("");
+
+const weekSum = weekKeys.reduce((a,k) => {
+  const w = weeks.get(k);
+  return a + w.m.filter(m => !m[5]).reduce((s,m) => s + m[3], 0) +
+             w.a.reduce((s,x) => s + x[1], 0); }, 0);
+document.getElementById("recon").innerHTML =
+  `Reconciles: ${worked.length} matches + ${ADJ.length} adjustments = ${money(grand)}. ` +
+  `Week totals sum to ${money(weekSum)}. ` +
+  `Field breakdown sums to ${locRows.reduce((a,r)=>a+r.matches,0)} matches and ` +
+  `${money(locRows.reduce((a,r)=>a+r.pay,0))} match pay.`;
+
+document.getElementById("prt").addEventListener("click", () => window.print());
+</script>
+</body></html>
