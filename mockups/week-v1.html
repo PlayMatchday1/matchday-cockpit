@@ -1,0 +1,264 @@
+<!doctype html>
+<html lang="en"><head><meta charset="utf-8"/>
+<title>This week — meetings card</title>
+<style>
+:root{
+  --forest:#003326;--ink:#0d1f18;--muted:#5C6B62;--faint:#67746C;--cream:#F4EEE1;--paper:#fff;
+  --line:#E3E8E0;--slot:#F7F9F6;--mint:#2CDB87;--mintSoft:#E9FAF1;--mintEdge:#B6E9CE;
+  --mintInk:#046B45;
+}
+*{box-sizing:border-box}
+body{margin:0;background:var(--cream);padding:34px 24px;
+  font-family:-apple-system,BlinkMacSystemFont,"Segoe UI",Inter,Helvetica,Arial,sans-serif;
+  color:var(--ink);-webkit-font-smoothing:antialiased}
+
+.card{max-width:620px;margin:0 auto;background:var(--paper);border:1px solid var(--line);
+  border-radius:16px;box-shadow:0 9px 26px rgba(0,51,38,.075);overflow:hidden}
+.chead{display:flex;justify-content:space-between;align-items:center;gap:16px;padding:16px 20px;
+  border-bottom:1px solid var(--line)}
+.ctitle{font-size:15.5px;font-weight:900;letter-spacing:-.2px;color:var(--forest)}
+
+.seg{display:inline-flex;background:var(--slot);border:1px solid var(--line);border-radius:99px;padding:3px}
+.seg button{border:0;background:transparent;color:var(--muted);font-family:inherit;font-size:11.5px;
+  font-weight:850;padding:6px 15px;border-radius:99px;cursor:pointer;white-space:nowrap}
+.seg button.on{background:var(--forest);color:#fff}
+
+/* ── day heading: gives the week a shape the flat list never had ── */
+.day{display:flex;align-items:center;gap:10px;padding:13px 20px 9px;background:var(--paper)}
+.day + .rows{margin-top:0}
+.dlabel{font-size:10px;font-weight:900;letter-spacing:1px;text-transform:uppercase;color:var(--muted)}
+.dchip{font-size:9px;font-weight:900;letter-spacing:.7px;text-transform:uppercase;color:var(--mintInk);
+  background:var(--mintSoft);border:1px solid var(--mintEdge);border-radius:99px;padding:2px 8px}
+.day hr{flex:1;border:0;border-top:1px solid var(--line);margin:0}
+
+/* collapsed past day — one line, still says what is inside */
+.folded{display:flex;align-items:center;gap:9px;width:100%;text-align:left;cursor:pointer;
+  font-family:inherit;background:var(--slot);border:0;border-top:1px solid var(--line);
+  padding:12px 20px}
+.folded:hover{background:#EFF3EE}
+.folded .fv{color:var(--mintInk);font-size:10px;font-weight:900;flex:none}
+.folded .fl{font-size:10px;font-weight:900;letter-spacing:1px;text-transform:uppercase;color:var(--muted)}
+.folded .fc{font-size:11.5px;font-weight:850;color:var(--mintInk);margin-left:1px}
+.folded .fx{margin-left:auto;font-size:11px;font-weight:900;color:var(--mintInk);
+  border:1px solid var(--mintEdge);background:#fff;border-radius:99px;padding:4px 12px}
+
+/* ── a meeting row: time column left so the eye scans one edge ── */
+.row{display:grid;grid-template-columns:78px 1fr auto;gap:14px;align-items:start;
+  padding:11px 20px;border-top:1px solid var(--line)}
+.row:first-child{border-top:0}
+.time{font-size:12px;font-weight:850;color:var(--ink);text-align:right;padding-top:2px;
+  font-variant-numeric:tabular-nums;white-space:nowrap}
+.title{font-size:13.5px;font-weight:850;color:var(--forest);line-height:1.3}
+.who{font-size:11.5px;color:var(--muted);line-height:1.45;margin-top:3px}
+.who b{font-weight:800;color:var(--muted)}
+.more{background:none;border:0;padding:0;font:inherit;font-size:11.5px;font-weight:850;
+  color:var(--mintInk);cursor:pointer;text-decoration:underline;text-underline-offset:2px}
+
+/* one Join style everywhere. Emphasis comes from the ROW, never a second button. */
+.join{display:inline-flex;align-items:center;justify-content:center;background:var(--mint);
+  border:1px solid #16C275;color:#00291E;font-family:inherit;font-size:11.5px;font-weight:900;
+  border-radius:99px;padding:6px 15px;cursor:pointer;text-decoration:none;white-space:nowrap}
+.join:hover{background:#25CE7E}
+.joinpad{width:63px}
+
+.row.ended .time,.row.ended .title,.row.ended .who{color:var(--faint)}
+.row.ended .title{font-weight:800}
+
+/* the one row that matters, promoted in place — no second card repeating it */
+.row.live{background:var(--mintSoft);box-shadow:inset 3px 0 0 var(--mint)}
+.row.live .title{font-size:14.5px}
+.badge{display:inline-block;margin-left:8px;font-size:9px;font-weight:900;letter-spacing:.8px;
+  text-transform:uppercase;color:#fff;background:var(--mintInk);border-radius:99px;padding:3px 9px;
+  vertical-align:2px;white-space:nowrap}
+.allday{display:inline-block;margin-left:7px;font-size:9px;font-weight:900;letter-spacing:.6px;
+  text-transform:uppercase;color:#7A5200;background:#FFF6D6;border-radius:99px;padding:2px 7px;
+  vertical-align:1.5px}
+
+.empty{padding:26px 20px;text-align:center;font-size:12.5px;color:var(--muted);line-height:1.6}
+.empty b{display:block;font-size:13.5px;font-weight:900;color:var(--forest);margin-bottom:4px}
+.note{margin:14px 20px 18px;padding:11px 14px;background:var(--slot);border:1px solid var(--line);
+  border-radius:11px;font-size:11px;color:var(--muted);line-height:1.55}
+.note b{color:var(--forest);font-weight:850}
+</style></head>
+<body>
+
+<div class="card">
+  <div class="chead">
+    <div class="ctitle">This week</div>
+    <div class="seg" id="seg">
+      <button data-v="today" class="on">Today</button>
+      <button data-v="week">This week</button>
+    </div>
+  </div>
+  <div id="body"></div>
+  <div class="note">
+    Only meetings with <b>2 or more people</b> are ever stored. Anything you mark <b>Private</b>
+    in Google Calendar is skipped entirely. Descriptions and locations are never saved.
+  </div>
+</div>
+
+<script>
+/* Thursday 6 Aug 2026, 10:33 Chicago. One clock; every phase derives from it. */
+const NOW = new Date("2026-08-06T15:33:00Z");
+const TZ  = "America/Chicago";
+
+const M = (d, t, title, who, meet = true, mins = 60) => ({
+  start: new Date(`2026-08-0${d}T${t}:00Z`), title, who, meet, mins
+});
+/* times are UTC; Chicago is UTC-5 in August, so 15:00Z = 10:00 AM */
+const MEETINGS = [
+  M(3,"15:00","New User Flow / Geolocation",
+    ["Ryan Mancuso","splashinside@gmail.com","v.ushakov@scrumlaunch.com","vitalii.avdieiev@scrumlaunch.com"]),
+  M(3,"16:30","Biweekly 1 on 1: Mike and Ryan",["Ryan Mancuso","Michael Hollman"]),
+  M(3,"17:00","CM monthly goals prep call",["George Pazos","Ryan Mancuso","Michael Hollman"]),
+  M(3,"18:30","MatchDay Austin — Meeting",
+    ["Ryan Mancuso","garrettsuits@gmail.com","Michael Hollman","Miguel Avendano"]),
+  M(3,"19:00","MD Ops Weekly Session",["Ryan Mancuso","Deonna Garcia","Miguel Avendano"]),
+  M(3,"20:00","Clubhouse feedback discussion",["George Pazos","Ryan Mancuso","Miguel Avendano"]),
+  M(3,"21:00","MD Houston",
+    ["Ryan Mancuso","George Pazos","guillosalgado4@gmail.com","Michael Hollman",
+     "Miguel Avendano","Nick Zelfine","w.nyamsi@gmail.com","yusheta@gmail.com"]),
+
+  M(4,"16:00","MD Raise Preparation",
+    ["George Pazos","Ryan Mancuso","J. Mccord","Michael Hollman","Miguel Avendano"]),
+  M(4,"19:00","Ryan x George bi-weekly connect (Tuesday series)",["George Pazos","Ryan Mancuso"]),
+  M(4,"20:30","MD DFW",
+    ["Ryan Mancuso","Cristian Padilla","George Pazos","Miguel Avendano","Michael Hollman","Nick Zelfine"]),
+  M(4,"21:30","MD OKC",["Ryan Mancuso","George Pazos","Michael Hollman"]),
+
+  M(5,"19:00","MD Slate Review",["Nick Zelfine","Miguel Avendano","Michael Hollman","Ryan Mancuso"]),
+  M(5,"20:00","MD San Antonio",
+    ["Ryan Mancuso","Deonna Garcia","deotrevino@icloud.com","George Pazos","kidsmiles.ag@gmail.com"]),
+
+  M(6,"16:00","MD Tech Call",
+    ["Ryan Mancuso","George Pazos","Michael Hollman","Miguel Avendano","Nick Zelfine"]),
+  M(6,"19:00","Ryan x George bi-weekly connect (Thursday series)",["George Pazos","Ryan Mancuso"]),
+
+  M(7,"19:00","MD Review Session",
+    ["George Pazos","Ryan Mancuso","Michael Hollman","Miguel Avendano","Nick Zelfine"])
+];
+MEETINGS.forEach((m,i) => { m.id = "m" + i; m.end = new Date(+m.start + m.mins * 60000); });
+
+const $ = id => document.getElementById(id);
+const fmtTime = d => new Intl.DateTimeFormat("en-US",
+  { timeZone: TZ, hour: "numeric", minute: "2-digit" }).format(d);
+const dayKey  = d => new Intl.DateTimeFormat("en-CA",
+  { timeZone: TZ, year: "numeric", month: "2-digit", day: "2-digit" }).format(d);
+const dayName = d => new Intl.DateTimeFormat("en-US",
+  { timeZone: TZ, weekday: "long", month: "short", day: "numeric" }).format(d);
+
+/* phase from instants, never from formatted strings */
+function phase(m){
+  if(+NOW >= +m.start && +NOW < +m.end) return "live";
+  if(+m.end <= +NOW) return "ended";
+  return "upcoming";
+}
+const NEXT = MEETINGS.find(m => phase(m) === "upcoming");
+const LIVE = MEETINGS.find(m => phase(m) === "live");
+const HERO = LIVE || NEXT;                       // exactly one promoted row, or none
+
+function countdown(m){
+  if(phase(m) === "live"){
+    const mins = Math.round((+m.end - +NOW) / 60000);
+    return `ends in ${mins} min`;
+  }
+  const mins = Math.round((+m.start - +NOW) / 60000);
+  if(mins < 60) return `in ${mins} min`;
+  if(dayKey(m.start) === dayKey(NOW)) return `in ${Math.round(mins/60)} hours`;
+  const tomorrow = new Date(+NOW + 864e5);
+  if(dayKey(m.start) === dayKey(tomorrow)) return `tomorrow ${fmtTime(m.start)}`;
+  return `${new Intl.DateTimeFormat("en-US",{timeZone:TZ,weekday:"long"}).format(m.start)} ` +
+         `${fmtTime(m.start)}`;
+}
+
+const state = { view:"today", open:new Set(), expandWho:new Set() };
+
+/* never hide a single name — "+1 more" costs the space the name would have used */
+function whoLine(m){
+  const CAP = 4;
+  const full = state.expandWho.has(m.id);
+  const hidden = m.who.length - CAP;
+  const shown = (full || hidden <= 1) ? m.who : m.who.slice(0, CAP);
+  const html = shown.map((n,i) =>
+    i === 0 ? `${n} <b>(organizer)</b>` : n).join(", ");
+  if(full || hidden <= 1) return html;
+  return `${html} <button class="more" data-who="${m.id}">+${hidden} more</button>`;
+}
+
+function rowHtml(m){
+  const p = phase(m);
+  const isHero = HERO && m.id === HERO.id;
+  return `<div class="row ${p === "ended" ? "ended" : ""} ${isHero ? "live" : ""}" data-id="${m.id}">
+    <div class="time">${fmtTime(m.start)}</div>
+    <div><div class="title">${m.title}${isHero
+        ? `<span class="badge">${p === "live" ? "Now" : "Next up"} &middot; ${countdown(m)}</span>`
+        : ""}</div>
+      <div class="who">${whoLine(m)}</div></div>
+    ${m.meet && p !== "ended"
+      ? `<a class="join" href="#" data-join="${m.id}">Join</a>`
+      : `<span class="joinpad"></span>`}
+  </div>`;
+}
+
+function dayBlock(key, list, foldable){
+  const d = list[0].start;
+  const isToday = key === dayKey(NOW);
+  const folded  = foldable && !state.open.has(key);
+  if(folded)
+    return `<button class="folded" data-day="${key}">
+      <span class="fv">&#9654;</span>
+      <span class="fl">${dayName(d)}</span>
+      <span class="fc">${list.length} meeting${list.length > 1 ? "s" : ""} hidden</span>
+      <span class="fx">Show</span></button>`;
+  return `<div class="day"><span class="dlabel">${dayName(d)}</span>
+      ${isToday ? `<span class="dchip">Today</span>` : ""}<hr/></div>
+    <div class="rows">${list.map(rowHtml).join("")}</div>`;
+}
+
+function render(){
+  document.querySelectorAll("#seg button").forEach(b =>
+    b.classList.toggle("on", b.dataset.v === state.view));
+
+  const days = new Map();
+  MEETINGS.forEach(m => {
+    const k = dayKey(m.start);
+    if(state.view === "today" && k !== dayKey(NOW)) return;
+    if(!days.has(k)) days.set(k, []);
+    days.get(k).push(m);
+  });
+
+  if(!days.size){
+    $("body").innerHTML = `<div class="empty"><b>Nothing on the calendar today</b>
+      ${NEXT ? `Next up is ${NEXT.title}, ${countdown(NEXT)}.` : "Nothing left this week either."}
+      </div>`;
+    return;
+  }
+
+  const todayKey = dayKey(NOW);
+  const out = [];
+  [...days.keys()].sort().forEach(k => {
+    /* only ELAPSED days fold. Today and everything ahead of it always stay open,
+       so switching to This week can never hide the part of the week you still have. */
+    out.push(dayBlock(k, days.get(k), state.view === "week" && k < todayKey));
+  });
+
+  const allEnded = MEETINGS.every(m => phase(m) === "ended");
+  if(allEnded) out.push(`<div class="empty"><b>All done for the week</b>
+    Nothing left on the calendar.</div>`);
+  $("body").innerHTML = out.join("");
+}
+
+document.addEventListener("click", e => {
+  const seg = e.target.closest("#seg button");
+  if(seg){ state.view = seg.dataset.v; render(); return; }
+  const fold = e.target.closest("[data-day]");
+  if(fold){ state.open.add(fold.dataset.day); render(); return; }
+  const who = e.target.closest("[data-who]");
+  if(who){ state.expandWho.add(who.dataset.who); render(); return; }
+  const join = e.target.closest("[data-join]");
+  if(join) e.preventDefault();
+});
+
+render();
+</script>
+</body></html>

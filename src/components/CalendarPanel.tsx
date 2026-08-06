@@ -1,17 +1,11 @@
 "use client";
 
-// "This week" calendar panel. Reads the signed-in user's own meetings ONCE from
-// /api/calendar/week (server route, service role, filtered to the caller) — never
-// the REVOKE'd tables with the user's JWT.
-//
-// Structure: a pinned block (Now / Next up / All done) above a Today | This week
-// toggle. ALL of it reads from ONE 30-second clock (`now`) — the pinned block, the
-// list phases, and the relative-time strings recompute on that single tick, so
-// nothing can disagree at a boundary (trap a), the countdown is never frozen
-// (trap b), the day rolls over at midnight on the tick (trap d), and the toggle is
-// a pure client-side FILTER over already-loaded data — never a refetch (trap c).
-// Times render from start_utc in a fixed zone (America/Chicago); start_tz is
-// provenance and never drives display.
+// "This week" meetings card — structure/wording/rules ported verbatim from
+// mockups/week-v1.html. Real data from /api/calendar/week (server route, service
+// role, filtered to the caller). One 30s clock; every phase + countdown derives
+// from it. The next meeting is promoted IN PLACE inside the list (mint wash + mint
+// left rule + larger title) exactly once — no separate pinned block. Times render
+// from start_utc in America/Chicago; start_tz never drives display.
 
 import { useEffect, useState } from "react";
 import { supabase } from "@/lib/supabase";
@@ -30,50 +24,39 @@ type Meeting = {
 type WeekResponse = { grantConfigured: boolean; syncHasRun: boolean; userEmail: string; meetings: Meeting[] };
 
 const TZ = "America/Chicago";
-const shell = {
-  background: "#f2f4f3",
-  borderColor: "#e2e9e6",
-  boxShadow: "0 1px 2px rgba(7,42,32,.05), 0 12px 30px -20px rgba(7,42,32,.45)",
-} as const;
+const key = (m: Meeting) => `${m.ical_uid} ${m.start_utc}`;
+const fmtTime = (ms: number) => new Intl.DateTimeFormat("en-US", { timeZone: TZ, hour: "numeric", minute: "2-digit" }).format(new Date(ms));
+const dayKey = (ms: number) => new Intl.DateTimeFormat("en-CA", { timeZone: TZ, year: "numeric", month: "2-digit", day: "2-digit" }).format(new Date(ms));
+const dayName = (ms: number) => new Intl.DateTimeFormat("en-US", { timeZone: TZ, weekday: "long", month: "short", day: "numeric" }).format(new Date(ms));
+const weekdayLong = (ms: number) => new Intl.DateTimeFormat("en-US", { timeZone: TZ, weekday: "long" }).format(new Date(ms));
 
-// ── Chicago-fixed formatting/keys (single day definition, shared with the week
-//    bounds the server uses) ──────────────────────────────────────────────────
-const dayKey = (ms: number) => new Intl.DateTimeFormat("en-CA", { timeZone: TZ, year: "numeric", month: "2-digit", day: "2-digit" }).format(new Date(ms)); // YYYY-MM-DD
-const wdShort = (ms: number) => new Date(ms).toLocaleDateString("en-US", { weekday: "short", timeZone: TZ });
-const wdLong = (ms: number) => new Date(ms).toLocaleDateString("en-US", { weekday: "long", timeZone: TZ });
-const clock = (ms: number) => new Date(ms).toLocaleTimeString("en-US", { hour: "numeric", minute: "2-digit", timeZone: TZ });
-const dayLabel = (ms: number) => new Date(ms).toLocaleDateString("en-US", { weekday: "short", month: "short", day: "numeric", timeZone: TZ });
-const fmtStart = (m: Meeting) => (m.all_day ? dayLabel(Date.parse(m.start_utc)) : `${wdShort(Date.parse(m.start_utc))} ${clock(Date.parse(m.start_utc))}`);
-
-// Relative time, recomputed on the tick.
-function relTime(startMs: number, now: number): string {
-  const min = Math.round((startMs - now) / 60000);
-  if (min < 60) return `in ${Math.max(min, 0)} min`;
-  if (dayKey(startMs) === dayKey(now)) return `in ${Math.round(min / 60)} hours`;
-  const t = clock(startMs);
-  if (dayKey(startMs) === dayKey(now + 86400_000)) return `Tomorrow ${t}`;
-  return `${wdLong(startMs)} ${t}`;
-}
-function endsIn(endMs: number, now: number): string {
-  const min = Math.max(0, Math.round((endMs - now) / 60000));
-  return min < 60 ? `ends in ${min} min` : `ends in ${Math.round(min / 60)} h`;
-}
-
-type Phase = "ended" | "inprogress" | "upcoming" | "allday";
+type Phase = "live" | "ended" | "upcoming" | "allday";
 function phaseOf(m: Meeting, now: number): Phase {
-  if (m.all_day) return "allday";
+  const start = Date.parse(m.start_utc);
+  if (m.all_day) return dayKey(start) < dayKey(now) ? "ended" : "allday";
+  const end = m.end_utc ? Date.parse(m.end_utc) : start + 3600_000;
+  if (now >= start && now < end) return "live";
+  if (end <= now) return "ended";
+  return "upcoming";
+}
+function countdown(m: Meeting, now: number): string {
   const start = Date.parse(m.start_utc);
   const end = m.end_utc ? Date.parse(m.end_utc) : start + 3600_000;
-  if (end <= now) return "ended";
-  if (start <= now) return "inprogress";
-  return "upcoming";
+  if (phaseOf(m, now) === "live") return `ends in ${Math.max(0, Math.round((end - now) / 60000))} min`;
+  const mins = Math.round((start - now) / 60000);
+  if (mins < 60) return `in ${Math.max(0, mins)} min`;
+  if (dayKey(start) === dayKey(now)) return `in ${Math.round(mins / 60)} hours`;
+  if (dayKey(start) === dayKey(now + 86400_000)) return `tomorrow ${fmtTime(start)}`;
+  return `${weekdayLong(start)} ${fmtTime(start)}`;
 }
 
 export default function CalendarPanel() {
   const [data, setData] = useState<WeekResponse | null>(null);
   const [ui, setUi] = useState<"loading" | "error" | "ready">("loading");
   const [now, setNow] = useState(() => Date.now());
-  const [view, setView] = useState<"today" | "week">("today"); // DEFAULT: Today
+  const [view, setView] = useState<"today" | "week">("today");
+  const [open, setOpen] = useState<Set<string>>(new Set()); // expanded fold day-keys
+  const [expandWho, setExpandWho] = useState<Set<string>>(new Set());
 
   useEffect(() => {
     let alive = true;
@@ -84,9 +67,8 @@ export default function CalendarPanel() {
         if (!token) throw new Error("no session");
         const res = await fetch("/api/calendar/week", { headers: { Authorization: `Bearer ${token}` }, cache: "no-store" });
         if (!res.ok) throw new Error(`HTTP ${res.status}`);
-        const json = (await res.json()) as WeekResponse;
         if (alive) {
-          setData(json);
+          setData((await res.json()) as WeekResponse);
           setUi("ready");
         }
       } catch {
@@ -97,244 +79,206 @@ export default function CalendarPanel() {
       alive = false;
     };
   }, []);
-
-  // THE one clock. Everything below derives from `now`.
   useEffect(() => {
     const t = setInterval(() => setNow(Date.now()), 30_000);
     return () => clearInterval(t);
   }, []);
 
-  const all = (data?.meetings ?? []).slice().sort((a, b) => Date.parse(a.start_utc) - Date.parse(b.start_utc));
-  // Pinned block target: the in-progress meeting if any, else the next non-all-day.
-  const inProgress = all.find((m) => phaseOf(m, now) === "inprogress");
-  const nextUp = all.find((m) => !m.all_day && Date.parse(m.start_utc) > now);
-  const pinned = inProgress ?? nextUp ?? null;
-  const pinnedKey = pinned ? `${pinned.ical_uid} ${pinned.start_utc}` : null;
-  // A list row shows the "Next up" chip only when it's the next-up meeting AND the
-  // pinned block is showing something else (an in-progress meeting) — never a second
-  // highlight of the same meeting.
-  const listNextUpKey = nextUp && pinnedKey !== `${nextUp.ical_uid} ${nextUp.start_utc}` ? `${nextUp.ical_uid} ${nextUp.start_utc}` : null;
+  const meetings = (data?.meetings ?? []).slice().sort((a, b) => Date.parse(a.start_utc) - Date.parse(b.start_utc));
+  const live = meetings.find((m) => phaseOf(m, now) === "live");
+  const next = meetings.find((m) => phaseOf(m, now) === "upcoming"); // non-all-day upcoming
+  const hero = live ?? next ?? null; // exactly one promoted row, or none
+  const heroKey = hero ? key(hero) : null;
+  const allEnded = meetings.length > 0 && meetings.every((m) => phaseOf(m, now) === "ended");
 
-  const header = (
-    <div className="flex items-center justify-between gap-2 border-b px-[18px] py-[13px]" style={{ borderColor: "#e2e9e6" }}>
-      <h3 className="text-[14.5px] font-bold tracking-[-0.008em] text-[#12241d]">This week</h3>
-      {ui === "ready" && data?.grantConfigured && data?.syncHasRun && (
-        <div className="flex rounded-[9px] p-[2px]" style={{ background: "#e7ece9" }}>
-          {(["today", "week"] as const).map((v) => (
-            <button
-              key={v}
-              type="button"
-              onClick={() => setView(v)}
-              className={"rounded-[7px] px-[11px] py-[3px] text-[11px] font-bold transition " + (view === v ? "bg-white text-[#12241d] shadow-sm" : "text-[#6d7b74]")}
-            >
-              {v === "today" ? "Today" : "This week"}
-            </button>
-          ))}
-        </div>
-      )}
-    </div>
-  );
+  const toggleWho = (k: string) => setExpandWho((s) => new Set(s).add(k));
+  // Round-trips: Show adds, Hide removes — the day collapses back to the fold bar
+  // with its count intact (nothing about the underlying list changed).
+  const toggleDay = (dk: string) =>
+    setOpen((s) => {
+      const n = new Set(s);
+      if (n.has(dk)) n.delete(dk);
+      else n.add(dk);
+      return n;
+    });
 
-  return (
-    <div className="overflow-hidden rounded-[14px] border" style={shell}>
-      {header}
-
-      {ui === "loading" && <Centered icon="◷" title="Loading your week…" body="" />}
-      {ui === "error" && <Centered icon="◷" title="Couldn’t load your calendar" body="Refresh to try again." />}
-
-      {ui === "ready" && data && (
-        !data.grantConfigured ? (
-          <Centered icon="◷" title="Calendar not connected" body="A Workspace admin needs to authorize Calendar access before meetings can appear here." />
-        ) : !data.syncHasRun ? (
-          <Centered icon="◷" title="Connected · sync hasn’t run yet" body="Your meetings will appear here after the first sync runs." />
-        ) : (
-          <>
-            <PinnedBlock pinned={pinned} inProgress={!!inProgress} now={now} />
-            {view === "today" ? (
-              <TodayView all={all} now={now} listNextUpKey={listNextUpKey} />
-            ) : (
-              <WeekView all={all} now={now} listNextUpKey={listNextUpKey} />
-            )}
-          </>
-        )
-      )}
-
-      <div className="mx-[18px] mb-[16px] mt-[14px] rounded-[10px] border px-[13px] py-[11px] text-[11.5px] leading-[1.6]" style={{ background: "#f5f9f6", borderColor: "#e2eee8", color: "#5f7d6f" }}>
-        Only meetings with <b style={{ color: "#14563c" }}>2 or more people</b> are ever stored. Anything you mark{" "}
-        <b style={{ color: "#14563c" }}>Private</b> in Google Calendar is skipped entirely. Descriptions and locations are never saved.
-      </div>
-    </div>
-  );
-}
-
-function PinnedBlock({ pinned, inProgress, now }: { pinned: Meeting | null; inProgress: boolean; now: number }) {
-  if (!pinned) {
-    return (
-      <div className="border-b px-[18px] py-[16px] text-center" style={{ borderColor: "#e9efeb", background: "#f6faf7" }}>
-        <span className="text-[13px] font-bold text-[#14563c]">✓ All done for the week</span>
-      </div>
-    );
+  // Group visible meetings by Chicago day.
+  const days = new Map<string, Meeting[]>();
+  for (const m of meetings) {
+    const dk = dayKey(Date.parse(m.start_utc));
+    if (view === "today" && dk !== dayKey(now)) continue;
+    (days.get(dk) ?? days.set(dk, []).get(dk)!).push(m);
   }
-  const startMs = Date.parse(pinned.start_utc);
-  const endMs = pinned.end_utc ? Date.parse(pinned.end_utc) : startMs + 3600_000;
-  const rel = inProgress ? endsIn(endMs, now) : relTime(startMs, now);
-  return (
-    <div className="border-b px-[18px] py-[14px]" style={{ borderColor: "#e9efeb", background: inProgress ? "#eafaf1" : "#f3f8ff" }}>
-      <div className="mb-[6px] flex items-center gap-2">
-        {inProgress && <span className="inline-block h-[7px] w-[7px] animate-pulse rounded-full" style={{ background: "#12b06b" }} aria-hidden />}
-        <span className="text-[9.5px] font-black uppercase tracking-wide" style={{ color: inProgress ? "#0d6b41" : "#1b4fcb" }}>
-          {inProgress ? "Now" : "Next up"}
-        </span>
-        <span className="text-[10.5px] font-semibold text-[#6d7b74]">· {rel}</span>
-      </div>
-      <div className="flex items-start justify-between gap-3">
-        <div className="min-w-0">
-          <div className="truncate text-[14px] font-bold text-[#12241d]">{pinned.summary || "(no title)"}</div>
-          <div className="mt-[2px] text-[11.5px] text-[#6d7b74]">
-            {inProgress ? `ends ${clock(endMs)}` : fmtStart(pinned)}
-          </div>
-          <div className="mt-1"><AttendeeLine attendees={pinned.attendees} /></div>
-        </div>
-        {pinned.meet_url && (
-          <a href={pinned.meet_url} target="_blank" rel="noopener noreferrer" className="shrink-0 rounded-[8px] px-[13px] py-[6px] text-[12px] font-bold text-white" style={{ background: inProgress ? "#12b06b" : "#14563c" }}>
-            Join
-          </a>
-        )}
-      </div>
-    </div>
-  );
-}
-
-function TodayView({ all, now, listNextUpKey }: { all: Meeting[]; now: number; listNextUpKey: string | null }) {
-  const todays = all.filter((m) => dayKey(Date.parse(m.start_utc)) === dayKey(now));
-  const remaining = todays.filter((m) => phaseOf(m, now) !== "ended");
-  if (todays.length === 0) {
-    return <Line text="Nothing on your calendar today." />;
-  }
-  return (
-    <>
-      <MeetingList meetings={todays} now={now} listNextUpKey={listNextUpKey} />
-      {remaining.length === 0 && <Line text="That’s everything for today." />}
-    </>
-  );
-}
-
-function WeekView({ all, now, listNextUpKey }: { all: Meeting[]; now: number; listNextUpKey: string | null }) {
   const todayK = dayKey(now);
-  const elapsed = all.filter((m) => dayKey(Date.parse(m.start_utc)) < todayK);
-  const rest = all.filter((m) => dayKey(Date.parse(m.start_utc)) >= todayK);
-  return (
-    <>
-      {elapsed.length > 0 && <ElapsedRow meetings={elapsed} now={now} listNextUpKey={listNextUpKey} />}
-      {rest.length > 0 ? <MeetingList meetings={rest} now={now} listNextUpKey={listNextUpKey} /> : elapsed.length > 0 ? <Line text="Nothing left this week." /> : null}
-    </>
-  );
-}
+  const dayKeys = [...days.keys()].sort();
 
-// Elapsed days (before today) collapse into ONE expandable row — history reachable
-// without pushing today down. Today + future always render expanded.
-function ElapsedRow({ meetings, now, listNextUpKey }: { meetings: Meeting[]; now: number; listNextUpKey: string | null }) {
-  const [open, setOpen] = useState(false);
-  const first = Date.parse(meetings[0].start_utc);
-  const last = Date.parse(meetings[meetings.length - 1].start_utc);
-  const range = wdShort(first) === wdShort(last) ? wdShort(first) : `${wdShort(first)}–${wdShort(last)}`;
   return (
-    <>
-      <button type="button" onClick={() => setOpen((v) => !v)} className="flex w-full items-center justify-between px-[18px] py-[11px] text-left" style={{ background: "#f1f4f2", borderBottom: "1px solid #e9efeb" }}>
-        <span className="text-[11.5px] font-bold text-[#5f7d6f]">
-          {range} · {meetings.length} {meetings.length === 1 ? "meeting" : "meetings"}
-        </span>
-        <span className="text-[11px] font-semibold text-[#6d7b74]">{open ? "Hide" : "Show"}</span>
-      </button>
-      {open && <MeetingList meetings={meetings} now={now} listNextUpKey={listNextUpKey} />}
-    </>
-  );
-}
+    <div className="twc">
+      <style>{CSS}</style>
+      <div className="card">
+        <div className="chead">
+          <div className="ctitle">This week</div>
+          {ui === "ready" && data?.grantConfigured && data?.syncHasRun && (
+            <div className="seg">
+              <button type="button" className={view === "today" ? "on" : ""} onClick={() => setView("today")}>Today</button>
+              <button type="button" className={view === "week" ? "on" : ""} onClick={() => setView("week")}>This week</button>
+            </div>
+          )}
+        </div>
 
-function MeetingList({ meetings, now, listNextUpKey }: { meetings: Meeting[]; now: number; listNextUpKey: string | null }) {
-  return (
-    <ul className="divide-y" style={{ borderColor: "#e9efeb" }}>
-      {meetings.map((m) => {
-        const phase = phaseOf(m, now);
-        const ended = phase === "ended";
-        const live = phase === "inprogress";
-        const key = `${m.ical_uid} ${m.start_utc}`;
-        return (
-          <li key={key} className={"px-[18px] py-[12px]" + (ended ? " opacity-45" : "")} style={live ? { background: "#eafaf1" } : undefined}>
-            <div className="flex items-baseline justify-between gap-3">
-              <div className="flex min-w-0 items-center gap-2">
-                {live && <span className="inline-block h-[7px] w-[7px] shrink-0 animate-pulse rounded-full" style={{ background: "#12b06b" }} aria-label="in progress" />}
-                <span className="truncate text-[13.5px] font-bold text-[#12241d]">{m.summary || "(no title)"}</span>
-                {key === listNextUpKey && <Badge text="Next up" bg="#dcefff" fg="#1b4fcb" />}
-                {phase === "allday" && <Badge text="All day" bg="#eef1ef" fg="#5f7d6f" />}
+        <div>
+          {ui === "loading" && <div className="empty"><b>Loading your week…</b></div>}
+          {ui === "error" && <div className="empty"><b>Couldn’t load your calendar</b>Refresh to try again.</div>}
+          {ui === "ready" && data && (
+            !data.grantConfigured ? (
+              <div className="empty"><b>Calendar not connected</b>A Workspace admin needs to authorize Calendar access.</div>
+            ) : !data.syncHasRun ? (
+              <div className="empty"><b>Connected · sync hasn’t run yet</b>Meetings appear after the first sync.</div>
+            ) : days.size === 0 ? (
+              <div className="empty">
+                <b>Nothing on the calendar today</b>
+                {next ? `Next up is ${next.summary || "(no title)"}, ${countdown(next, now)}.` : "Nothing left this week either."}
               </div>
-              <span className="shrink-0 text-[11.5px] font-semibold text-[#6d7b74]">{live ? "Now" : fmtStart(m)}</span>
-            </div>
-            <div className="mt-1 flex items-start justify-between gap-3">
-              <AttendeeLine attendees={m.attendees} />
-              {m.meet_url && !ended && (
-                <a href={m.meet_url} target="_blank" rel="noopener noreferrer" className={"shrink-0 rounded-[8px] px-[11px] py-[5px] text-[11px] font-bold transition " + (live ? "text-white" : "border")} style={live ? { background: "#12b06b" } : { color: "#14563c", borderColor: "#bfe3cf", background: "#f5f9f6" }}>
-                  Join
-                </a>
-              )}
-            </div>
-          </li>
-        );
-      })}
-    </ul>
+            ) : (
+              <>
+                {dayKeys.map((dk) => {
+                  const list = days.get(dk)!;
+                  const foldable = view === "week" && dk < todayK;
+                  const folded = foldable && !open.has(dk);
+                  if (folded) {
+                    return (
+                      <button key={dk} type="button" className="folded" onClick={() => toggleDay(dk)}>
+                        <span className="fv">▶</span>
+                        <span className="fl">{dayName(Date.parse(list[0].start_utc))}</span>
+                        <span className="fc">{list.length} {list.length === 1 ? "meeting" : "meetings"} hidden</span>
+                        <span className="fx">Show</span>
+                      </button>
+                    );
+                  }
+                  return (
+                    <div key={dk}>
+                      <div className="day">
+                        <span className="dlabel">{dayName(Date.parse(list[0].start_utc))}</span>
+                        {dk === todayK && <span className="dchip">Today</span>}
+                        <hr />
+                        {/* Only an expanded ELAPSED day is foldable → gets a Hide. Today/future never do. */}
+                        {foldable && <button type="button" className="dhide" onClick={() => toggleDay(dk)}>Hide</button>}
+                      </div>
+                      <div className="rows">
+                        {list.map((m) => (
+                          <Row key={key(m)} m={m} now={now} isHero={key(m) === heroKey} expandWho={expandWho.has(key(m))} onWho={() => toggleWho(key(m))} />
+                        ))}
+                      </div>
+                    </div>
+                  );
+                })}
+                {allEnded && <div className="empty"><b>All done for the week</b>Nothing left on the calendar.</div>}
+              </>
+            )
+          )}
+        </div>
+
+        <div className="note">
+          Only meetings with <b>2 or more people</b> are ever stored. Anything you mark <b>Private</b> in Google Calendar is skipped
+          entirely. Descriptions and locations are never saved.
+        </div>
+      </div>
+    </div>
   );
 }
 
-function AttendeeLine({ attendees }: { attendees: Attendee[] }) {
-  const [expanded, setExpanded] = useState(false);
-  const CUTOFF = 4;
+function Row({ m, now, isHero, expandWho, onWho }: { m: Meeting; now: number; isHero: boolean; expandWho: boolean; onWho: () => void }) {
+  const p = phaseOf(m, now);
+  const ended = p === "ended";
+  return (
+    <div className={`row${ended ? " ended" : ""}${isHero ? " live" : ""}`} data-id={key(m)}>
+      <div className="time">{m.all_day ? "All day" : fmtTime(Date.parse(m.start_utc))}</div>
+      <div>
+        <div className="title">
+          {m.summary || "(no title)"}
+          {isHero && <span className="badge">{p === "live" ? "Now" : "Next up"} · {countdown(m, now)}</span>}
+          {p === "allday" && <span className="allday">All day</span>}
+        </div>
+        <div className="who"><Who attendees={m.attendees} expanded={expandWho} onExpand={onWho} /></div>
+      </div>
+      {m.meet_url && !ended ? (
+        <a className="join" href={m.meet_url} target="_blank" rel="noopener noreferrer">Join</a>
+      ) : (
+        <span className="joinpad" />
+      )}
+    </div>
+  );
+}
+
+function Who({ attendees, expanded, onExpand }: { attendees: Attendee[]; expanded: boolean; onExpand: () => void }) {
+  const CAP = 4;
   const ordered = attendees.slice().sort((a, b) => {
     if (a.organizer !== b.organizer) return a.organizer ? -1 : 1;
     if (a.self !== b.self) return a.self ? -1 : 1;
     return a.name.localeCompare(b.name);
   });
-  const label = (a: Attendee) => a.name + (a.organizer ? " (organizer)" : "");
-  const hidden = ordered.length - CUTOFF;
-  const collapse = !expanded && hidden >= 2; // only truncate when 2+ hidden
-
-  if (!collapse) {
-    return (
-      <span className="min-w-0 text-[11.5px] leading-[1.5] text-[#6d7b74]">
-        {ordered.map(label).join(", ")}
-        {expanded && hidden >= 2 && (
-          <button type="button" onClick={() => setExpanded(false)} className="ml-1 font-semibold text-[#14563c] underline">show less</button>
-        )}
-      </span>
-    );
-  }
+  const hidden = ordered.length - CAP;
+  const showAll = expanded || hidden <= 1; // never hide exactly one
+  const shown = showAll ? ordered : ordered.slice(0, CAP);
   return (
-    <span className="min-w-0 truncate text-[11.5px] leading-[1.5] text-[#6d7b74]">
-      {ordered.slice(0, CUTOFF).map(label).join(", ")}
-      <button type="button" onClick={() => setExpanded(true)} className="ml-1 font-semibold text-[#14563c] underline">+{hidden} more</button>
-    </span>
+    <>
+      {shown.map((a, i) => (
+        <span key={a.email}>
+          {i > 0 && ", "}
+          {a.name}
+          {a.organizer && <> <b>(organizer)</b></>}
+        </span>
+      ))}
+      {!showAll && (
+        <>
+          {" "}
+          <button type="button" className="more" onClick={onExpand}>+{hidden} more</button>
+        </>
+      )}
+    </>
   );
 }
 
-function Badge({ text, bg, fg }: { text: string; bg: string; fg: string }) {
-  return (
-    <span className="shrink-0 rounded-full px-[7px] py-[1px] text-[9.5px] font-black uppercase tracking-wide" style={{ background: bg, color: fg }}>
-      {text}
-    </span>
-  );
-}
-
-function Line({ text }: { text: string }) {
-  return <div className="px-[18px] py-[13px] text-[12px] font-semibold text-[#6d7b74]">{text}</div>;
-}
-
-function Centered({ icon, title, body }: { icon: string; title: string; body: string }) {
-  return (
-    <div className="px-[22px] pb-2 pt-[30px] text-center">
-      <div className="mx-auto mb-3 flex h-[42px] w-[42px] items-center justify-center rounded-[12px] text-[19px]" style={{ background: "#e0f2e7", color: "#1a7a52" }}>
-        {icon}
-      </div>
-      <h4 className="mb-[7px] text-[14px] font-bold text-[#12241d]">{title}</h4>
-      {body && <p className="mx-auto max-w-[38ch] text-[12.5px] leading-[1.6] text-[#6d7b74]">{body}</p>}
-    </div>
-  );
-}
+const CSS = `
+.twc{--forest:#003326;--ink:#0d1f18;--muted:#5C6B62;--faint:#67746C;--paper:#fff;
+  --line:#E3E8E0;--slot:#F7F9F6;--mint:#2CDB87;--mintSoft:#E9FAF1;--mintEdge:#B6E9CE;--mintInk:#046B45;
+  font-family:-apple-system,BlinkMacSystemFont,"Segoe UI",Inter,Helvetica,Arial,sans-serif;color:var(--ink)}
+.twc *{box-sizing:border-box}
+.twc .card{background:var(--paper);border:1px solid var(--line);border-radius:16px;box-shadow:0 9px 26px rgba(0,51,38,.075);overflow:hidden}
+.twc .chead{display:flex;justify-content:space-between;align-items:center;gap:16px;padding:16px 20px;border-bottom:1px solid var(--line)}
+.twc .ctitle{font-size:15.5px;font-weight:900;letter-spacing:-.2px;color:var(--forest)}
+.twc .seg{display:inline-flex;background:var(--slot);border:1px solid var(--line);border-radius:99px;padding:3px}
+.twc .seg button{border:0;background:transparent;color:var(--muted);font-family:inherit;font-size:11.5px;font-weight:850;padding:6px 15px;border-radius:99px;cursor:pointer;white-space:nowrap}
+.twc .seg button.on{background:var(--forest);color:#fff}
+.twc .day{display:flex;align-items:center;gap:10px;padding:13px 20px 9px;background:var(--paper)}
+.twc .dlabel{font-size:10px;font-weight:900;letter-spacing:1px;text-transform:uppercase;color:var(--muted)}
+.twc .dchip{font-size:9px;font-weight:900;letter-spacing:.7px;text-transform:uppercase;color:var(--mintInk);background:var(--mintSoft);border:1px solid var(--mintEdge);border-radius:99px;padding:2px 8px}
+.twc .day hr{flex:1;border:0;border-top:1px solid var(--line);margin:0}
+.twc .dhide{flex:none;background:none;border:0;padding:0;font-family:inherit;font-size:10px;font-weight:900;letter-spacing:.5px;text-transform:uppercase;color:var(--mintInk);cursor:pointer;text-decoration:underline;text-underline-offset:2px}
+.twc .folded{display:flex;align-items:center;gap:9px;width:100%;text-align:left;cursor:pointer;font-family:inherit;background:var(--slot);border:0;border-top:1px solid var(--line);padding:12px 20px}
+.twc .folded:hover{background:#EFF3EE}
+.twc .folded .fv{color:var(--mintInk);font-size:10px;font-weight:900;flex:none}
+.twc .folded .fl{font-size:10px;font-weight:900;letter-spacing:1px;text-transform:uppercase;color:var(--muted)}
+.twc .folded .fc{font-size:11.5px;font-weight:850;color:var(--mintInk);margin-left:1px}
+.twc .folded .fx{margin-left:auto;font-size:11px;font-weight:900;color:var(--mintInk);border:1px solid var(--mintEdge);background:#fff;border-radius:99px;padding:4px 12px}
+.twc .row{display:grid;grid-template-columns:78px 1fr auto;gap:14px;align-items:start;padding:11px 20px;border-top:1px solid var(--line)}
+.twc .row:first-child{border-top:0}
+.twc .time{font-size:12px;font-weight:850;color:var(--ink);text-align:right;padding-top:2px;font-variant-numeric:tabular-nums;white-space:nowrap}
+.twc .title{font-size:13.5px;font-weight:850;color:var(--forest);line-height:1.3}
+.twc .who{font-size:11.5px;color:var(--muted);line-height:1.45;margin-top:3px}
+.twc .who b{font-weight:800;color:var(--muted)}
+.twc .more{background:none;border:0;padding:0;font:inherit;font-size:11.5px;font-weight:850;color:var(--mintInk);cursor:pointer;text-decoration:underline;text-underline-offset:2px}
+.twc .join{display:inline-flex;align-items:center;justify-content:center;background:var(--mint);border:1px solid #16C275;color:#00291E;font-family:inherit;font-size:11.5px;font-weight:900;border-radius:99px;padding:6px 15px;cursor:pointer;text-decoration:none;white-space:nowrap}
+.twc .join:hover{background:#25CE7E}
+.twc .joinpad{width:63px}
+.twc .row.ended .time,.twc .row.ended .title,.twc .row.ended .who{color:var(--faint)}
+.twc .row.ended .title{font-weight:800}
+.twc .row.live{background:var(--mintSoft);box-shadow:inset 3px 0 0 var(--mint)}
+.twc .row.live .title{font-size:14.5px}
+.twc .badge{display:inline-block;margin-left:8px;font-size:9px;font-weight:900;letter-spacing:.8px;text-transform:uppercase;color:#fff;background:var(--mintInk);border-radius:99px;padding:3px 9px;vertical-align:2px;white-space:nowrap}
+.twc .allday{display:inline-block;margin-left:7px;font-size:9px;font-weight:900;letter-spacing:.6px;text-transform:uppercase;color:#7A5200;background:#FFF6D6;border-radius:99px;padding:2px 7px;vertical-align:1.5px}
+.twc .empty{padding:26px 20px;text-align:center;font-size:12.5px;color:var(--muted);line-height:1.6}
+.twc .empty b{display:block;font-size:13.5px;font-weight:900;color:var(--forest);margin-bottom:4px}
+.twc .note{margin:14px 20px 18px;padding:11px 14px;background:var(--slot);border:1px solid var(--line);border-radius:11px;font-size:11px;color:var(--muted);line-height:1.55}
+.twc .note b{color:var(--forest);font-weight:850}
+`;
