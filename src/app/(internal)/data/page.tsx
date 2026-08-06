@@ -4,6 +4,7 @@ import PageHeader from "@/components/PageHeader";
 import PagePermissionGuard from "@/components/PagePermissionGuard";
 import StripeUploader from "@/components/StripeUploader";
 import SyncCard from "@/components/SyncCard";
+import AppStoreTokenDiag from "@/components/AppStoreTokenDiag"; // TEMPORARY — remove with /api/diag/appstore-token
 import { canAccess, useAuth } from "@/lib/useAuth";
 
 export default function DataPage() {
@@ -20,6 +21,9 @@ export default function DataPage() {
         title="Data"
         subtitle="Upload CSVs and run on-demand syncs."
       />
+
+      {/* TEMPORARY diagnostic — remove with /api/diag/appstore-token */}
+      <AppStoreTokenDiag />
 
       {/* Section order matches the cron orchestrator's daily run:
           stripe → reviews → subscriptions → promocodes → matches →
