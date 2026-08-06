@@ -209,7 +209,7 @@ export async function ingestTelnyxSms(
   supabase: SupabaseClient,
   opts: { sinceISO: string },
 ): Promise<SmsIngestResult> {
-  const apiKey = process.env.TELNYX_API_KEY;
+  const apiKey = process.env.TELNYX_API_KEY?.trim();
   if (!apiKey) {
     throw new Error("telnyx-sms: TELNYX_API_KEY not set");
   }

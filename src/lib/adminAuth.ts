@@ -22,9 +22,9 @@ export async function authenticateAdmin(req: Request): Promise<AdminAuthResult> 
   const token = auth.slice("Bearer ".length).trim();
   if (!token) return { ok: false, status: 401, error: "Empty bearer token" };
 
-  const url = process.env.NEXT_PUBLIC_SUPABASE_URL;
-  const anonKey = process.env.NEXT_PUBLIC_SUPABASE_PUBLISHABLE_KEY;
-  const serviceKey = process.env.SUPABASE_SERVICE_ROLE_KEY;
+  const url = process.env.NEXT_PUBLIC_SUPABASE_URL?.trim();
+  const anonKey = process.env.NEXT_PUBLIC_SUPABASE_PUBLISHABLE_KEY?.trim();
+  const serviceKey = process.env.SUPABASE_SERVICE_ROLE_KEY?.trim();
   if (!url || !anonKey || !serviceKey) {
     return { ok: false, status: 500, error: "Supabase env not configured" };
   }

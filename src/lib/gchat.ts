@@ -32,7 +32,7 @@ export type NewWhatsAppThreadNotification = {
 export async function notifyNewWhatsAppThread(
   payload: NewWhatsAppThreadNotification,
 ): Promise<void> {
-  const webhook = process.env.GCHAT_WEBHOOK_URL;
+  const webhook = process.env.GCHAT_WEBHOOK_URL?.trim();
   if (!webhook) {
     console.warn(
       "[whatsapp:gchat] GCHAT_WEBHOOK_URL not configured; skipping notification",

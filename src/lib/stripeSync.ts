@@ -131,7 +131,7 @@ export async function syncStripeCharges(
   serviceClient?: SupabaseClient,
 ): Promise<StripeSyncResult> {
   const usersClient = serviceClient ?? supabase;
-  const apiKey = process.env.STRIPE_SECRET_KEY;
+  const apiKey = process.env.STRIPE_SECRET_KEY?.trim();
   if (!apiKey) {
     throw new Error("STRIPE_SECRET_KEY is not set");
   }
@@ -543,7 +543,7 @@ export async function stripeClassifierProbe(opts: {
   until: Date;
   sample?: number;
 }): Promise<ClassifierProbeResult> {
-  const apiKey = process.env.STRIPE_SECRET_KEY;
+  const apiKey = process.env.STRIPE_SECRET_KEY?.trim();
   if (!apiKey) throw new Error("STRIPE_SECRET_KEY is not set");
   const stripe = new Stripe(apiKey);
   const sinceSec = Math.floor(opts.since.getTime() / 1000);

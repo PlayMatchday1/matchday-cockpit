@@ -57,8 +57,8 @@ let vapidConfigured = false;
 function ensureVapidConfigured(): void {
   if (vapidConfigured) return;
   const subject = process.env.VAPID_SUBJECT;
-  const publicKey = process.env.VAPID_PUBLIC_KEY;
-  const privateKey = process.env.VAPID_PRIVATE_KEY;
+  const publicKey = process.env.VAPID_PUBLIC_KEY?.trim();
+  const privateKey = process.env.VAPID_PRIVATE_KEY?.trim();
   if (!subject || !publicKey || !privateKey) {
     throw new Error(
       "web-push: missing VAPID_SUBJECT / VAPID_PUBLIC_KEY / VAPID_PRIVATE_KEY env",
@@ -69,8 +69,8 @@ function ensureVapidConfigured(): void {
 }
 
 function getServiceRoleClient(): SupabaseClient {
-  const url = process.env.NEXT_PUBLIC_SUPABASE_URL;
-  const serviceKey = process.env.SUPABASE_SERVICE_ROLE_KEY;
+  const url = process.env.NEXT_PUBLIC_SUPABASE_URL?.trim();
+  const serviceKey = process.env.SUPABASE_SERVICE_ROLE_KEY?.trim();
   if (!url || !serviceKey) {
     throw new Error(
       "webPush: missing NEXT_PUBLIC_SUPABASE_URL or SUPABASE_SERVICE_ROLE_KEY",

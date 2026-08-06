@@ -47,8 +47,8 @@ export async function POST(req: Request) {
   }
   const token = auth.slice("Bearer ".length).trim();
   const cronSecret = process.env.CRON_SECRET;
-  const supabaseUrl = process.env.NEXT_PUBLIC_SUPABASE_URL;
-  const supabaseKey = process.env.NEXT_PUBLIC_SUPABASE_PUBLISHABLE_KEY;
+  const supabaseUrl = process.env.NEXT_PUBLIC_SUPABASE_URL?.trim();
+  const supabaseKey = process.env.NEXT_PUBLIC_SUPABASE_PUBLISHABLE_KEY?.trim();
   if (!supabaseUrl || !supabaseKey) {
     return Response.json({ error: "Supabase env not configured" }, { status: 500 });
   }
@@ -63,7 +63,7 @@ export async function POST(req: Request) {
     }
   }
 
-  const stripeKey = process.env.STRIPE_SECRET_KEY;
+  const stripeKey = process.env.STRIPE_SECRET_KEY?.trim();
   if (!stripeKey) {
     return Response.json({ error: "STRIPE_SECRET_KEY not set" }, { status: 500 });
   }

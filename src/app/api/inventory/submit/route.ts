@@ -75,8 +75,8 @@ export async function POST(req: Request) {
     return Response.json({ error: result.error }, { status: 400 });
   }
 
-  const supabaseUrl = process.env.NEXT_PUBLIC_SUPABASE_URL;
-  const serviceKey = process.env.SUPABASE_SERVICE_ROLE_KEY;
+  const supabaseUrl = process.env.NEXT_PUBLIC_SUPABASE_URL?.trim();
+  const serviceKey = process.env.SUPABASE_SERVICE_ROLE_KEY?.trim();
   if (!supabaseUrl || !serviceKey) {
     console.error("[inventory:submit] Supabase env not configured");
     return Response.json({ error: "Server not configured." }, { status: 500 });

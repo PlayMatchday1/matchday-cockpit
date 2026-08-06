@@ -27,15 +27,15 @@ export const PLAY_METRIC = "daily_user_installs";
 export class PlayGrantPendingError extends Error {}
 
 function saKey(): { client_email: string; private_key: string } {
-  const b64 = process.env.GOOGLE_PLAY_SA_KEY_B64;
-  if (!b64 || !b64.trim()) {
+  const b64 = process.env.GOOGLE_PLAY_SA_KEY_B64?.trim();
+  if (!b64) {
     throw new Error(
       "GOOGLE_PLAY_SA_KEY_B64 is not set (or empty) — cannot authenticate to Play. Refusing to fall back.",
     );
   }
   let json: unknown;
   try {
-    json = JSON.parse(Buffer.from(b64.trim(), "base64").toString("utf8"));
+    json = JSON.parse(Buffer.from(b64, "base64").toString("utf8"));
   } catch {
     // Deliberately does NOT include the decoded value.
     throw new Error("GOOGLE_PLAY_SA_KEY_B64 did not base64-decode to valid JSON.");

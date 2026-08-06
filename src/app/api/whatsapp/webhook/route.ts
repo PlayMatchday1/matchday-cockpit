@@ -210,8 +210,8 @@ export async function POST(req: Request) {
 
   // 4) Supabase service-role client (bypasses RLS — same pattern as
   //    the Telnyx webhook).
-  const url = process.env.NEXT_PUBLIC_SUPABASE_URL;
-  const serviceKey = process.env.SUPABASE_SERVICE_ROLE_KEY;
+  const url = process.env.NEXT_PUBLIC_SUPABASE_URL?.trim();
+  const serviceKey = process.env.SUPABASE_SERVICE_ROLE_KEY?.trim();
   if (!url || !serviceKey) {
     console.error("[whatsapp:webhook] Supabase env not configured");
     return Response.json({ error: "Server not configured" }, { status: 500 });

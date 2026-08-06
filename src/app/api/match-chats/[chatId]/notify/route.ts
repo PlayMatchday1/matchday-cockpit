@@ -133,8 +133,8 @@ export async function POST(req: Request, ctx: RouteCtx) {
     );
   }
 
-  const apiKey = process.env.TELNYX_API_KEY;
-  const fromNumber = process.env.TELNYX_FROM_NUMBER;
+  const apiKey = process.env.TELNYX_API_KEY?.trim();
+  const fromNumber = process.env.TELNYX_FROM_NUMBER?.trim();
   if (!apiKey || !fromNumber) {
     return Response.json(
       { error: "Telnyx is not configured" },

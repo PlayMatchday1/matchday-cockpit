@@ -56,9 +56,9 @@ export async function authenticateCrm(req: Request): Promise<CrmAuthResult> {
   const token = auth.slice("Bearer ".length).trim();
   if (!token) return { ok: false, status: 401, error: "Empty bearer token" };
 
-  const supabaseUrl = process.env.NEXT_PUBLIC_SUPABASE_URL;
-  const supabaseKey = process.env.NEXT_PUBLIC_SUPABASE_PUBLISHABLE_KEY;
-  const serviceKey = process.env.SUPABASE_SERVICE_ROLE_KEY;
+  const supabaseUrl = process.env.NEXT_PUBLIC_SUPABASE_URL?.trim();
+  const supabaseKey = process.env.NEXT_PUBLIC_SUPABASE_PUBLISHABLE_KEY?.trim();
+  const serviceKey = process.env.SUPABASE_SERVICE_ROLE_KEY?.trim();
   if (!supabaseUrl || !supabaseKey || !serviceKey) {
     return { ok: false, status: 500, error: "Supabase env not configured" };
   }

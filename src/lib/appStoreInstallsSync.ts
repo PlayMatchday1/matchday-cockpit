@@ -54,26 +54,42 @@ const APP_UNIT_PRODUCT_TYPES = new Set([
 
 export class AppleAuthError extends Error {}
 
+// UUID (issuer id) and 10-char alphanumeric (key id) shapes, per Apple.
+const ISSUER_RE = /^[0-9a-f]{8}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{12}$/i;
+const KEY_ID_RE = /^[A-Z0-9]{10}$/i;
+
 function creds(): { issuerId: string; keyId: string; p8: string; vendor: string } {
-  const issuerId = process.env.APP_STORE_CONNECT_ISSUER_ID;
-  const keyId = process.env.APP_STORE_CONNECT_KEY_ID;
-  const p8b64 = process.env.APP_STORE_CONNECT_P8_B64;
-  const vendor = process.env.APP_STORE_CONNECT_VENDOR_NUMBER;
-  if (!issuerId || !keyId || !p8b64 || !p8b64.trim() || !vendor) {
+  // Trim AT THE READ SITE so nothing downstream can pick up the raw value. A
+  // trailing newline/space on APP_STORE_CONNECT_ISSUER_ID made the `iss` claim 37
+  // chars → Apple 401 even though the token was correctly signed. Trim ends only —
+  // a genuinely malformed value must still fail the shape assertions below.
+  const issuerId = process.env.APP_STORE_CONNECT_ISSUER_ID?.trim();
+  const keyId = process.env.APP_STORE_CONNECT_KEY_ID?.trim();
+  const p8b64 = process.env.APP_STORE_CONNECT_P8_B64?.trim();
+  const vendor = process.env.APP_STORE_CONNECT_VENDOR_NUMBER?.trim();
+  if (!issuerId || !keyId || !p8b64 || !vendor) {
     throw new AppleAuthError(
       "App Store Connect credentials are not fully set (need ISSUER_ID, KEY_ID, P8_B64, VENDOR_NUMBER).",
     );
   }
+  // Shape assertions — fail LOUDLY before any HTTP call, naming the bad var and its
+  // length (never its value), so a malformed credential can't become an opaque 401.
+  if (!ISSUER_RE.test(issuerId)) {
+    throw new AppleAuthError(`APP_STORE_CONNECT_ISSUER_ID is malformed (expected a 36-char UUID; got length ${issuerId.length}).`);
+  }
+  if (!KEY_ID_RE.test(keyId)) {
+    throw new AppleAuthError(`APP_STORE_CONNECT_KEY_ID is malformed (expected 10 alphanumerics; got length ${keyId.length}).`);
+  }
   let p8: string;
   try {
-    p8 = Buffer.from(p8b64.trim(), "base64").toString("utf8");
+    p8 = Buffer.from(p8b64, "base64").toString("utf8");
   } catch {
     throw new AppleAuthError("APP_STORE_CONNECT_P8_B64 did not base64-decode."); // no key bytes in message
   }
   if (!p8.includes("BEGIN PRIVATE KEY")) {
     throw new AppleAuthError("Decoded APP_STORE_CONNECT_P8_B64 is not a PEM private key.");
   }
-  return { issuerId, keyId, p8, vendor: vendor.trim() };
+  return { issuerId, keyId, p8, vendor };
 }
 
 const b64url = (o: unknown) => Buffer.from(JSON.stringify(o)).toString("base64url");

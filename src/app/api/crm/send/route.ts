@@ -133,8 +133,8 @@ async function handleSmsSend({
   supabase,
   startedAt,
 }: SendArgs) {
-  const apiKey = process.env.TELNYX_API_KEY;
-  const fromNumber = process.env.TELNYX_FROM_NUMBER;
+  const apiKey = process.env.TELNYX_API_KEY?.trim();
+  const fromNumber = process.env.TELNYX_FROM_NUMBER?.trim();
   if (!apiKey || !fromNumber) {
     return Response.json(
       { error: "Telnyx env not configured" },

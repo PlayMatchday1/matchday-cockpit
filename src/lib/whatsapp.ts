@@ -46,8 +46,8 @@ export async function sendWhatsAppText(
   toPhone: string,
   body: string,
 ): Promise<SendWhatsAppTextResult> {
-  const token = process.env.META_ACCESS_TOKEN;
-  const phoneNumberId = process.env.META_PHONE_NUMBER_ID;
+  const token = process.env.META_ACCESS_TOKEN?.trim();
+  const phoneNumberId = process.env.META_PHONE_NUMBER_ID?.trim();
   if (!token || !phoneNumberId) {
     throw new WhatsAppApiError(
       500,
@@ -124,8 +124,8 @@ export async function sendWhatsAppTemplate(args: {
   bodyParams: { name: string; text: string }[];
 }): Promise<SendWhatsAppTextResult> {
   const { toPhone, templateName, languageCode, bodyParams } = args;
-  const token = process.env.META_ACCESS_TOKEN;
-  const phoneNumberId = process.env.META_PHONE_NUMBER_ID;
+  const token = process.env.META_ACCESS_TOKEN?.trim();
+  const phoneNumberId = process.env.META_PHONE_NUMBER_ID?.trim();
   if (!token || !phoneNumberId) {
     throw new WhatsAppApiError(
       500,
@@ -239,7 +239,7 @@ export type DownloadedMedia = {
 export async function downloadWhatsAppMedia(
   mediaId: string,
 ): Promise<DownloadedMedia> {
-  const token = process.env.META_ACCESS_TOKEN;
+  const token = process.env.META_ACCESS_TOKEN?.trim();
   if (!token) {
     throw new WhatsAppApiError(500, "Missing META_ACCESS_TOKEN");
   }
@@ -367,8 +367,8 @@ export async function uploadWhatsAppMedia({
   mimeType,
   filename,
 }: UploadWhatsAppMediaArgs): Promise<{ mediaId: string }> {
-  const token = process.env.META_ACCESS_TOKEN;
-  const phoneNumberId = process.env.META_PHONE_NUMBER_ID;
+  const token = process.env.META_ACCESS_TOKEN?.trim();
+  const phoneNumberId = process.env.META_PHONE_NUMBER_ID?.trim();
   if (!token || !phoneNumberId) {
     throw new WhatsAppApiError(
       500,
@@ -440,8 +440,8 @@ export async function sendWhatsAppImage({
   mediaId,
   caption,
 }: SendWhatsAppImageArgs): Promise<SendWhatsAppTextResult> {
-  const token = process.env.META_ACCESS_TOKEN;
-  const phoneNumberId = process.env.META_PHONE_NUMBER_ID;
+  const token = process.env.META_ACCESS_TOKEN?.trim();
+  const phoneNumberId = process.env.META_PHONE_NUMBER_ID?.trim();
   if (!token || !phoneNumberId) {
     throw new WhatsAppApiError(
       500,
@@ -522,8 +522,8 @@ async function postWhatsAppMessage(
   toPhone: string,
   payload: Record<string, unknown>,
 ): Promise<SendWhatsAppTextResult> {
-  const token = process.env.META_ACCESS_TOKEN;
-  const phoneNumberId = process.env.META_PHONE_NUMBER_ID;
+  const token = process.env.META_ACCESS_TOKEN?.trim();
+  const phoneNumberId = process.env.META_PHONE_NUMBER_ID?.trim();
   if (!token || !phoneNumberId) {
     throw new WhatsAppApiError(
       500,

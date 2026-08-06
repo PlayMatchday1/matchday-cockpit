@@ -36,8 +36,8 @@ async function checkAdmin(req: Request): Promise<boolean> {
   const token = auth.slice("Bearer ".length).trim();
   if (!token) return false;
 
-  const supabaseUrl = process.env.NEXT_PUBLIC_SUPABASE_URL;
-  const supabaseKey = process.env.NEXT_PUBLIC_SUPABASE_PUBLISHABLE_KEY;
+  const supabaseUrl = process.env.NEXT_PUBLIC_SUPABASE_URL?.trim();
+  const supabaseKey = process.env.NEXT_PUBLIC_SUPABASE_PUBLISHABLE_KEY?.trim();
   if (!supabaseUrl || !supabaseKey) return false;
 
   const cronSecret = process.env.CRON_SECRET;
@@ -52,8 +52,8 @@ async function checkAdmin(req: Request): Promise<boolean> {
 }
 
 export async function GET(req: Request) {
-  const supabaseUrl = process.env.NEXT_PUBLIC_SUPABASE_URL;
-  const serviceKey = process.env.SUPABASE_SERVICE_ROLE_KEY;
+  const supabaseUrl = process.env.NEXT_PUBLIC_SUPABASE_URL?.trim();
+  const serviceKey = process.env.SUPABASE_SERVICE_ROLE_KEY?.trim();
   if (!supabaseUrl || !serviceKey) {
     return Response.json(
       { error: "Supabase env not configured" },

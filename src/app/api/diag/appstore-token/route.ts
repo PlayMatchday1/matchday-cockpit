@@ -26,8 +26,8 @@ export async function GET(req: Request) {
   const token = auth.slice("Bearer ".length).trim();
   if (!token) return Response.json({ error: "Empty bearer token" }, { status: 401 });
 
-  const supabaseUrl = process.env.NEXT_PUBLIC_SUPABASE_URL;
-  const publishableKey = process.env.NEXT_PUBLIC_SUPABASE_PUBLISHABLE_KEY;
+  const supabaseUrl = process.env.NEXT_PUBLIC_SUPABASE_URL?.trim();
+  const publishableKey = process.env.NEXT_PUBLIC_SUPABASE_PUBLISHABLE_KEY?.trim();
   const cronSecret = process.env.CRON_SECRET;
   if (!supabaseUrl || !publishableKey) return Response.json({ error: "Supabase env not configured" }, { status: 500 });
 
