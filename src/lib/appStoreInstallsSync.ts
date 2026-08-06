@@ -26,13 +26,7 @@
 // equivalent.
 
 import "server-only";
-import {
-  sign as cryptoSign,
-  verify as cryptoVerify,
-  createPrivateKey,
-  createPublicKey,
-  createHash,
-} from "node:crypto";
+import { sign as cryptoSign } from "node:crypto";
 import { gunzipSync } from "node:zlib";
 import type { SupabaseClient } from "@supabase/supabase-js";
 
@@ -109,116 +103,8 @@ export function mintToken(): { token: string; vendor: string } {
   return { token: `${signingInput}.${sig.toString("base64url")}`, vendor };
 }
 
-// TEMPORARY diagnostic (removed once the 401 is resolved). Builds a real token
-// and reports its SHAPE — never the .p8 bytes or any base64 of it. The private key
-// is only used to sign + derive the (safe) public key; it is never returned.
-export function buildTokenDiagnostic(): { diag: Record<string, unknown>; token: string } {
-  const { issuerId, keyId, p8 } = creds();
-  const rawKeyId = process.env.APP_STORE_CONNECT_KEY_ID ?? "";
-  const now = Math.floor(Date.now() / 1000);
-  const signingInput = `${b64url({ alg: "ES256", kid: keyId, typ: "JWT" })}.${b64url({
-    iss: issuerId,
-    iat: now,
-    exp: now + 15 * 60,
-    aud: "appstoreconnect-v1",
-  })}`;
-  const sig = cryptoSign("sha256", Buffer.from(signingInput), { key: p8, dsaEncoding: "ieee-p1363" });
-  const token = `${signingInput}.${sig.toString("base64url")}`;
-
-  const parts = token.split(".");
-  const header = JSON.parse(Buffer.from(parts[0], "base64url").toString("utf8"));
-  const payload = JSON.parse(Buffer.from(parts[1], "base64url").toString("utf8"));
-
-  // iss SHAPE (not the value)
-  const iss = String(payload.iss ?? "");
-  const positionsOfHyphens: number[] = [];
-  for (let i = 0; i < iss.length; i++) if (iss[i] === "-") positionsOfHyphens.push(i);
-  const issShape = {
-    len: iss.length,
-    hyphenCount: positionsOfHyphens.length,
-    positionsOfHyphens,
-    matchesUuidV4Regex: /^[0-9a-fA-F]{8}-[0-9a-fA-F]{4}-[0-9a-fA-F]{4}-[0-9a-fA-F]{4}-[0-9a-fA-F]{12}$/.test(iss),
-    upperCaseCount: (iss.match(/[A-Z]/g) ?? []).length,
-  };
-
-  const kid = String(header.kid ?? "");
-  const keyIdShape = {
-    len: kid.length,
-    hasWhitespace: /\s/.test(kid),
-    hasNewline: /[\r\n]/.test(kid),
-    isAlnum10: /^[A-Za-z0-9]{10}$/.test(kid),
-  };
-
-  const priv = createPrivateKey({ key: p8, format: "pem" });
-  const details = priv.asymmetricKeyDetails as { namedCurve?: string } | undefined;
-  const pub = createPublicKey(priv);
-  const spkiDer = pub.export({ type: "spki", format: "der" }) as Buffer;
-
-  const diag: Record<string, unknown> = {
-    header,
-    claims: { ...payload, iss: issShape },
-    kidMatchesEnv: kid === rawKeyId.trim(),
-    keyIdShape,
-    expMinusIat: (payload.exp as number) - (payload.iat as number),
-    segmentCount: parts.length,
-    sigByteLength: sig.length,
-    p8: {
-      decodedLength: p8.length,
-      startsWithPkcs8Header: p8.startsWith("-----BEGIN PRIVATE KEY-----"),
-      endsWithPkcs8Footer: p8.trimEnd().endsWith("-----END PRIVATE KEY-----"),
-      hasCrLf: /\r\n/.test(p8),
-      keyType: priv.asymmetricKeyType, // "ec"
-      namedCurve: details?.namedCurve, // "prime256v1"
-      publicKeySha256: createHash("sha256").update(spkiDer).digest("hex"), // PUBLIC key only
-    },
-    selfVerify: cryptoVerify("sha256", Buffer.from(signingInput), { key: pub, dsaEncoding: "ieee-p1363" }, sig),
-  };
-  return { diag, token };
-}
-
 const ymd = (d: Date) =>
   `${d.getUTCFullYear()}-${String(d.getUTCMonth() + 1).padStart(2, "0")}-${String(d.getUTCDate()).padStart(2, "0")}`;
-
-// TEMPORARY diagnostic — probe salesReports for specific dates and return the RAW
-// status + verbatim body (Apple's 404 text distinguishes "no sales" from a bad
-// vendor/filter) + decompressed row count. Vendor + token never returned.
-export async function probeSalesDays(
-  dates: string[],
-): Promise<{ date: string; status: number; contentType: string | null; rowCount: number | null; body: string }[]> {
-  const { token, vendor } = mintToken();
-  const out: { date: string; status: number; contentType: string | null; rowCount: number | null; body: string }[] = [];
-  for (const date of dates) {
-    const q = new URLSearchParams({
-      "filter[frequency]": "DAILY",
-      "filter[reportType]": "SALES",
-      "filter[reportSubType]": "SUMMARY",
-      "filter[vendorNumber]": vendor,
-      "filter[reportDate]": date,
-      "filter[version]": "1_1",
-    });
-    const res = await fetch(`https://api.appstoreconnect.apple.com/v1/salesReports?${q.toString()}`, {
-      headers: { Authorization: `Bearer ${token}`, Accept: "application/a-gzip" },
-    });
-    const contentType = res.headers.get("content-type");
-    let body = "";
-    let rowCount: number | null = null;
-    if (res.ok) {
-      const gz = Buffer.from(await res.arrayBuffer());
-      let tsv: string;
-      try {
-        tsv = gunzipSync(gz).toString("utf8");
-      } catch {
-        tsv = gz.toString("utf8");
-      }
-      rowCount = tsv.split("\n").filter((l) => l.length > 0).length - 1; // minus header
-      body = tsv.slice(0, 300);
-    } else {
-      body = (await res.text().catch(() => "")).slice(0, 300); // Apple's JSON error, verbatim
-    }
-    out.push({ date, status: res.status, contentType, rowCount, body });
-  }
-  return out;
-}
 
 // ── Sales report parse ───────────────────────────────────────────────────────
 export type DaySales = {
