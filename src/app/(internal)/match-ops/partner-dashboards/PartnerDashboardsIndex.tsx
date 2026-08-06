@@ -3,8 +3,11 @@
 // Match Ops → Partner Dashboards. The index IS the dashboard: a switcher strip
 // of every partner + the selected partner's full dashboard underneath, no click
 // into a detail view. Admin controls sit ABOVE a labelled seam; below the seam
-// is the identical PartnerDashboardView the public route renders (one component,
-// two callers). "View as … sees it" zero-heights ALL Clubhouse chrome (not
+// the preview renders the SAME component the public /partners/<slug> page renders
+// (PartnerDashboardV14 / PartnerMonthlyView) from the SAME server derivation
+// (buildPartnerDashboardData, via the admin /preview endpoint) — so the panel can
+// never show a different page than the partner's real one. "View as … sees it"
+// zero-heights ALL Clubhouse chrome (not
 // visibility:hidden) by portalling the preview to <body> and hiding every other
 // body child — so the "no MatchDay navigation" promise is literally true.
 //
@@ -17,7 +20,9 @@ import { supabase } from "@/lib/supabase";
 import { generateSlug } from "@/lib/partnerSlug";
 import type { PartnerStats, PartnerPaymentInfo, PartnerPaymentCadence, PartnerRevenueModel } from "@/lib/partnerStats";
 import { deriveOwed, derivePeriodRows, stateLine, headerLine, todayYmd, money, type PartnerOwed, type PeriodRow } from "@/lib/partnerDashboardView";
-import PartnerDashboardView from "@/app/partners/[slug]/PartnerDashboardView";
+import type { PartnerDashboardData } from "@/lib/partnerDashboardData";
+import PartnerDashboardV14 from "@/app/partners/[slug]/PartnerDashboardV14";
+import PartnerMonthlyView from "@/app/partners/[slug]/PartnerMonthlyView";
 
 type AdminPartner = {
   id: string; slug: string; partnerName: string; venue: string; city: string | null;
@@ -59,6 +64,28 @@ export default function PartnerDashboardsIndex() {
     for (const p of partners ?? []) m[p.slug] = deriveOwed(derivePeriodRows(p.payment, today));
     return m;
   }, [partners, today]);
+
+  // The preview renders the SAME component + data path as the public page
+  // (buildPartnerDashboardData via /preview), so "view as the partner" is exactly
+  // what the partner sees — never a similar-looking older component.
+  const selectedSlug = (partners?.find((p) => p.slug === sel) ?? partners?.[0])?.slug ?? null;
+  const [previewData, setPreviewData] = useState<PartnerDashboardData | null>(null);
+  const [previewErr, setPreviewErr] = useState<string | null>(null);
+  useEffect(() => {
+    if (!selectedSlug) return;
+    let alive = true;
+    setPreviewData(null); setPreviewErr(null);
+    (async () => {
+      const { data: sess } = await supabase.auth.getSession();
+      const token = sess.session?.access_token;
+      if (!token) { setPreviewErr("Sign in to preview."); return; }
+      const res = await fetch(`/api/partner-dashboards/preview?slug=${encodeURIComponent(selectedSlug)}`, { headers: { Authorization: `Bearer ${token}` }, cache: "no-store" });
+      if (!alive) return;
+      if (!res.ok) { setPreviewErr(`Preview failed: HTTP ${res.status}`); return; }
+      setPreviewData((await res.json()) as PartnerDashboardData);
+    })();
+    return () => { alive = false; };
+  }, [selectedSlug, partners]); // refetch on partner switch AND after any settle/refresh (partners ref changes)
 
   // View-as: hide every OTHER <body> child so only the portalled preview has
   // height. Enumerated by walking the DOM, not a hardcoded id list — the nav bar
@@ -132,7 +159,7 @@ export default function PartnerDashboardsIndex() {
         <button type="button" onClick={() => setViewAs(false)} style={btnDark}>Back to admin view</button>
       </div>
       <div style={{ maxWidth: 1220, margin: "0 auto", padding: "18px 22px 40px" }}>
-        <PartnerDashboardView partnerName={selected.partnerName} venue={selected.venue} city={selected.city} launchDate={selected.launchDate} stats={selected.stats} payment={selected.payment} isPublic />
+        <PreviewDashboard data={previewData} err={previewErr} />
       </div>
     </div>
   );
@@ -236,7 +263,7 @@ export default function PartnerDashboardsIndex() {
 
       {/* the identical partner-facing component */}
       <div data-testid="dashboard-below-seam">
-        <PartnerDashboardView partnerName={selected.partnerName} venue={selected.venue} city={selected.city} launchDate={selected.launchDate} stats={selected.stats} payment={selected.payment} isPublic={false} />
+        <PreviewDashboard data={previewData} err={previewErr} />
       </div>
 
       {viewAs && mounted && createPortal(preview, document.body)}
@@ -251,3 +278,11 @@ function plural(n: number, one: string, many?: string): string {
 const btnDark: React.CSSProperties = { background: C.forest, color: "#fff", border: 0, borderRadius: 8, fontWeight: 700, fontSize: 12.5, padding: "7px 12px", cursor: "pointer", minHeight: 30 };
 const btnQuiet: React.CSSProperties = { background: "rgba(255,255,255,.09)", color: "#eaf5ec", border: "1px solid rgba(255,255,255,.19)", borderRadius: 8, fontWeight: 700, fontSize: 12.5, padding: "7px 12px", cursor: "pointer", minHeight: 30 };
 const btnWarn: React.CSSProperties = { ...btnQuiet, borderColor: "rgba(240,189,169,.5)", color: "#ffd9cb" };
+
+// Renders the EXACT public component from the /preview data path. No fallback to a
+// different component: the preview is the partner's page or it is a loading/error state.
+function PreviewDashboard({ data, err }: { data: PartnerDashboardData | null; err: string | null }) {
+  if (err) return <div style={{ padding: 24, fontSize: 13, color: "#a8391a" }}>{err}</div>;
+  if (!data) return <div style={{ padding: 24, fontSize: 13, color: "#6d7b74" }}>Loading the partner’s page…</div>;
+  return data.kind === "monthly" ? <PartnerMonthlyView {...data.monthly} /> : <PartnerDashboardV14 {...data.weekly} />;
+}
