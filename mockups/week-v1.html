@@ -30,6 +30,9 @@ body{margin:0;background:var(--cream);padding:34px 24px;
 .dchip{font-size:9px;font-weight:900;letter-spacing:.7px;text-transform:uppercase;color:var(--mintInk);
   background:var(--mintSoft);border:1px solid var(--mintEdge);border-radius:99px;padding:2px 8px}
 .day hr{flex:1;border:0;border-top:1px solid var(--line);margin:0}
+.hide{background:#fff;border:1px solid var(--line);border-radius:99px;padding:4px 12px;
+  font-family:inherit;font-size:11px;font-weight:900;color:var(--muted);cursor:pointer;flex:none}
+.hide:hover{border-color:#BCC9C0;color:var(--forest)}
 
 /* collapsed past day — one line, still says what is inside */
 .folded{display:flex;align-items:center;gap:9px;width:100%;text-align:left;cursor:pointer;
@@ -211,7 +214,8 @@ function dayBlock(key, list, foldable){
       <span class="fc">${list.length} meeting${list.length > 1 ? "s" : ""} hidden</span>
       <span class="fx">Show</span></button>`;
   return `<div class="day"><span class="dlabel">${dayName(d)}</span>
-      ${isToday ? `<span class="dchip">Today</span>` : ""}<hr/></div>
+      ${isToday ? `<span class="dchip">Today</span>` : ""}<hr/>
+      ${foldable ? `<button class="hide" data-hide="${key}">Hide</button>` : ""}</div>
     <div class="rows">${list.map(rowHtml).join("")}</div>`;
 }
 
@@ -253,6 +257,8 @@ document.addEventListener("click", e => {
   if(seg){ state.view = seg.dataset.v; render(); return; }
   const fold = e.target.closest("[data-day]");
   if(fold){ state.open.add(fold.dataset.day); render(); return; }
+  const hide = e.target.closest("[data-hide]");
+  if(hide){ state.open.delete(hide.dataset.hide); render(); return; }
   const who = e.target.closest("[data-who]");
   if(who){ state.expandWho.add(who.dataset.who); render(); return; }
   const join = e.target.closest("[data-join]");

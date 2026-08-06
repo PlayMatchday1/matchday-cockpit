@@ -254,7 +254,8 @@ const CSS = `
 .twc .dlabel{font-size:10px;font-weight:900;letter-spacing:1px;text-transform:uppercase;color:var(--muted)}
 .twc .dchip{font-size:9px;font-weight:900;letter-spacing:.7px;text-transform:uppercase;color:var(--mintInk);background:var(--mintSoft);border:1px solid var(--mintEdge);border-radius:99px;padding:2px 8px}
 .twc .day hr{flex:1;border:0;border-top:1px solid var(--line);margin:0}
-.twc .dhide{flex:none;background:none;border:0;padding:0;font-family:inherit;font-size:10px;font-weight:900;letter-spacing:.5px;text-transform:uppercase;color:var(--mintInk);cursor:pointer;text-decoration:underline;text-underline-offset:2px}
+.twc .dhide{flex:none;background:#fff;border:1px solid var(--line);border-radius:99px;padding:4px 12px;font-family:inherit;font-size:11px;font-weight:900;color:var(--muted);cursor:pointer}
+.twc .dhide:hover{border-color:#BCC9C0;color:var(--forest)}
 .twc .folded{display:flex;align-items:center;gap:9px;width:100%;text-align:left;cursor:pointer;font-family:inherit;background:var(--slot);border:0;border-top:1px solid var(--line);padding:12px 20px}
 .twc .folded:hover{background:#EFF3EE}
 .twc .folded .fv{color:var(--mintInk);font-size:10px;font-weight:900;flex:none}
