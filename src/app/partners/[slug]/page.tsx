@@ -8,8 +8,9 @@ import {
 } from "@/lib/partnerStats";
 import { makeServerClient } from "@/lib/supabaseServer";
 import { derivePartnerGrains } from "@/lib/partnerGrain";
-import { dfull, todayYmd } from "@/lib/partnerDashboardView";
+import { dfull, dshort, todayYmd } from "@/lib/partnerDashboardView";
 import PartnerDashboardV14 from "./PartnerDashboardV14";
+import PartnerMonthlyView from "./PartnerMonthlyView";
 
 // Server component. Slug → venue_id resolution and stats fetch run
 // server-side against a service-role Supabase client. venue_id is
@@ -128,16 +129,44 @@ export default async function PartnerPage({
   const city = (venueRow?.city as string | null) ?? null;
   const launch = (venueRow?.launch_date as string | null) ?? stats.earliestMatchDate;
   const today = todayYmd();
-  const sub =
+  const baseSub =
     `${partner.partnerName}${city ? ` · ${city}` : ""}${launch ? ` · ${dfull(launch)} through ${dfull(today)}` : ""}` +
     ` · MatchDay staff spots excluded · revenue is the match price players actually paid`;
+
+  if (partner.paymentCadence === "monthly") {
+    const since = { spots: stats.totals.spots, registered: stats.totals.md, guests: stats.totals.guests, cancels: stats.totals.cancels, people: stats.totals.uniquePlayers, matches: totalMatches };
+    const last8 = stats.weeks
+      .filter((w): w is Extract<typeof w, { voided: false }> => !w.voided && w.matches > 0)
+      .slice(-8)
+      .map((w) => {
+        const sun = new Date(`${w.wkMonday}T00:00:00Z`); sun.setUTCDate(sun.getUTCDate() + 6);
+        return { label: `${dshort(w.wkMonday)} – ${dshort(sun.toISOString().slice(0, 10))}`, spots: w.totalPlayers, matches: w.matches, revenue: w.totalRev };
+      });
+    const running = grains.monthRows.find((m) => m.isOpen);
+    const footnote =
+      `Everything here covers ${venueName} only${launch ? `, from ${dfull(launch)} — the first match MatchDay ran at this venue —` : ""} through ${dfull(today)}, and counts ${totalMatches} matches. ` +
+      `Spots filled is every seat paid for and held; MatchDay does not record check-in, so it is not attendance. Daily players and Guests are shown; the remainder of Spots filled is made up of other seat types. ` +
+      `A private rental is a booking with no MatchDay match behind it — no players and no spots — so it adds to qualifying revenue but not to the match or spot counts. Rentals are listed separately inside the revenue column so you can see what you are being paid for. ` +
+      `The opening period is a single settled payment with no match-level detail behind it, so it adds to the payment total but not to the counts.` +
+      (running ? ` ${running.label} is still running and is not paid until the month closes, so it adds to the counts but not to the payment total.` : "");
+    return (
+      <PartnerMonthlyView
+        partnerName={partner.partnerName}
+        sub={`${baseSub} · paid monthly at ${partner.revenueSharePct}% of qualifying revenue`}
+        since={since}
+        months={grains.monthRows}
+        last8={last8}
+        footnote={footnote}
+      />
+    );
+  }
 
   return (
     <PartnerDashboardV14
       partnerName={partner.partnerName}
       venue={venueName}
       city={city}
-      sub={sub}
+      sub={baseSub}
       grains={grains}
       sinceLaunch={{ matches: totalMatches, spots: stats.totals.spots, people: stats.totals.uniquePlayers, paid }}
     />

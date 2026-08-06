@@ -1,0 +1,224 @@
+<!doctype html>
+<html lang="en"><head><meta charset="utf-8"/>
+<title>Partner dashboard — Hattrick (monthly)</title>
+<style>
+:root{
+  --forest:#003326;--ink:#0d1f18;--muted:#5C6B62;--faint:#67746C;--cream:#F4EEE1;--paper:#fff;
+  --line:#E3E8E0;--slot:#F7F9F6;--mint:#2CDB87;--mintSoft:#E9FAF1;--mintEdge:#A8E7C9;
+  --mintInk:#046B45;--amber:#FFF6D6;--amberEdge:#F0DC9B;--amberInk:#7A5200;
+  --coral:#FDE9E5;--coralEdge:#F3C4BB;--coralInk:#A83120;--blue:#EFF3FF;--blueEdge:#CBD9FF;
+  --blueInk:#1B4FCB;--gap:18px;
+}
+*{box-sizing:border-box}
+body{margin:0;background:var(--cream);
+  font-family:-apple-system,BlinkMacSystemFont,"Segoe UI",Inter,Helvetica,Arial,sans-serif;
+  color:var(--ink);-webkit-font-smoothing:antialiased}
+.page{max-width:1420px;margin:0 auto;padding:0 24px 60px}
+.phead{padding:26px 0 18px}
+.phead h1{margin:0;font-size:30px;font-weight:900;letter-spacing:-.8px;color:var(--forest)}
+.phead h1 em{font-style:normal;color:#93A099}
+.phead p{margin:8px 0 0;font-size:12.5px;color:var(--muted);line-height:1.55}
+.sech{font-size:9.5px;font-weight:900;letter-spacing:1px;text-transform:uppercase;color:var(--muted);
+  margin:22px 0 10px}
+
+/* ── since launch ── */
+.tiles{display:grid;grid-template-columns:repeat(5,1fr);gap:12px}
+.tile{background:var(--paper);border:1px solid var(--line);border-radius:14px;padding:15px 17px;
+  box-shadow:0 9px 26px rgba(0,51,38,.06)}
+.tl{font-size:9px;font-weight:900;letter-spacing:.9px;text-transform:uppercase;color:var(--muted)}
+.tv{font-size:31px;font-weight:900;letter-spacing:-1.3px;color:var(--forest);margin-top:7px;
+  line-height:1;font-variant-numeric:tabular-nums}
+.tn{font-size:11px;color:var(--muted);margin-top:8px;line-height:1.45}
+
+/* ── table ── */
+.card{background:var(--paper);border:1px solid var(--line);border-radius:16px;
+  box-shadow:0 9px 26px rgba(0,51,38,.06);overflow:hidden}
+.csub{padding:14px 20px;border-bottom:1px solid var(--line);font-size:11.5px;color:var(--muted)}
+table{width:100%;border-collapse:separate;border-spacing:0;font-variant-numeric:tabular-nums}
+thead th{background:var(--slot);text-align:right;font-size:9px;font-weight:900;letter-spacing:.85px;
+  text-transform:uppercase;color:var(--muted);padding:11px 14px;border-bottom:1px solid var(--line);
+  white-space:nowrap}
+thead th:first-child{text-align:left}
+tbody td{padding:13px 14px;text-align:right;font-size:13px;font-weight:800;color:var(--ink);
+  border-bottom:1px solid #EDF1EC;white-space:nowrap}
+tbody td:first-child{text-align:left;font-weight:850;color:var(--forest)}
+tbody tr.opening td{background:#FBFAF6}
+tbody tr.running td{background:#FAFBFF}
+tfoot td{background:var(--forest);color:#fff;padding:14px;text-align:right;font-size:13px;
+  font-weight:900;white-space:nowrap}
+tfoot td:first-child{text-align:left;font-size:10px;letter-spacing:.9px;text-transform:uppercase}
+.sub{display:block;font-size:10px;font-weight:750;color:var(--muted);margin-top:3px}
+.sub.rent{color:var(--blueInk)}
+tfoot .sub{color:#A8C4B7}
+tfoot .sub.rent{color:#9BD9F5}
+.pill{display:inline-flex;align-items:center;gap:6px;font-size:10.5px;font-weight:900;
+  border-radius:99px;padding:4px 11px;white-space:nowrap}
+.pill.paid{background:var(--mintSoft);color:var(--mintInk);border:1px solid var(--mintEdge)}
+.pill.late{background:var(--coral);color:var(--coralInk);border:1px solid var(--coralEdge)}
+.pill.prog{background:var(--blue);color:var(--blueInk);border:1px solid var(--blueEdge)}
+.pill.none{background:var(--slot);color:var(--muted);border:1px solid var(--line)}
+.tag{display:inline-block;margin-left:9px;font-size:9px;font-weight:900;letter-spacing:.6px;
+  text-transform:uppercase;color:var(--amberInk);background:var(--amber);border:1px solid var(--amberEdge);
+  border-radius:99px;padding:3px 8px;vertical-align:1px}
+.when{font-size:11px;font-weight:800;color:var(--muted)}
+.when.late{color:var(--coralInk)}
+.dispute{display:inline-block;margin:15px 0 0;font-size:12px;font-weight:900;color:var(--forest);
+  text-decoration:underline;text-underline-offset:3px}
+
+/* ── last 8 weeks ── */
+.wks{display:grid;grid-template-columns:repeat(8,1fr);gap:10px}
+.wc{background:var(--paper);border:1px solid var(--line);border-radius:13px;padding:12px 13px}
+.wl{font-size:8.5px;font-weight:900;letter-spacing:.8px;text-transform:uppercase;color:var(--muted)}
+.wd{font-size:10.5px;font-weight:800;color:var(--muted);margin-top:2px}
+.wv{font-size:24px;font-weight:900;color:var(--forest);margin-top:8px;line-height:1;
+  letter-spacing:-.9px;font-variant-numeric:tabular-nums}
+.wn{font-size:10.5px;color:var(--muted);margin-top:6px;line-height:1.4}
+.foot{margin-top:16px;font-size:11px;color:var(--muted);line-height:1.65}
+</style></head>
+<body>
+<div class="page">
+
+  <div class="phead">
+    <h1>Hattrick <em>— partner dashboard</em></h1>
+    <p>Hattrick · Austin · Feb 3, 2026 through Aug 6, 2026 · MatchDay staff spots excluded ·
+       revenue is the match price players actually paid · paid monthly at 50% of qualifying revenue</p>
+  </div>
+
+  <div class="sech">Since launch</div>
+  <div class="tiles" id="tiles"></div>
+
+  <div class="sech">Every month</div>
+  <div class="card">
+    <div class="csub" id="csub"></div>
+    <table><thead id="thead"></thead><tbody id="tbody"></tbody><tfoot id="tfoot"></tfoot></table>
+  </div>
+  <a class="dispute" href="#">A payment here is missing or wrong →</a>
+
+  <div class="sech">The last 8 weeks with a match</div>
+  <div class="wks" id="wks"></div>
+
+  <div class="foot" id="foot"></div>
+</div>
+
+<script>
+const SHARE = 0.5;
+/* Every month is a row of counts. Spots is never stored — it is the sum of the four
+   seat types, so the columns cannot disagree with the total. Members and promo are
+   real in the data and never printed: a partner has no business seeing our
+   membership mix. */
+const MONTHS = [
+  { k:"open", label:"Through Mar 31, 2026", opening:true,
+    matches:null, daily:null, members:null, promo:null, guests:null, revenue:null,
+    payment:1485, status:"paid", when:"May 2, 2026" },
+  { k:"2026-04", label:"April 2026",
+    matches:21, daily:205, members:22, promo:8,  guests:75,  revenue:1910,
+    status:"paid", when:"May 8, 2026" },
+  { k:"2026-05", label:"May 2026",
+    matches:22, daily:215, members:24, promo:6,  guests:80,  revenue:2150,
+    status:"paid", when:"Jun 5, 2026" },
+  { k:"2026-06", label:"June 2026",
+    matches:23, daily:225, members:25, promo:5,  guests:85,  revenue:2175,
+    status:"paid", when:"Jul 7, 2026" },
+  { k:"2026-07", label:"July 2026",
+    matches:25, daily:245, members:28, promo:7,  guests:100, revenue:2856,
+    rental:400, rentalName:"Morning Match",
+    status:"late", when:"Was due Aug 5, 2026" },
+  { k:"2026-08", label:"August 2026", running:true,
+    matches:7,  daily:82,  members:10, promo:2,  guests:40,  revenue:728,
+    rental:100, rentalName:"Morning Match",
+    status:"prog", when:"Closes Aug 31, 2026", note:"Partial — through Aug 6, 2026" }
+];
+const WEEKS = [
+  ["Jun 15 – Jun 21", 65, 4, 440], ["Jun 22 – Jun 28", 97, 7, 563],
+  ["Jun 29 – Jul 5",  39, 3, 333], ["Jul 6 – Jul 12", 108, 7, 776],
+  ["Jul 13 – Jul 19", 97, 7, 736], ["Jul 20 – Jul 26", 99, 6, 860],
+  ["Jul 27 – Aug 2",  90, 7, 648], ["Aug 3 – Aug 9",  68, 6, 416]
+];
+/* since-launch figures cover the opening period too, which has no row-level detail */
+const LAUNCH = { spots:2089, registered:1559, guests:530, cancelled:194, people:408, matches:141 };
+
+const spots = m => m.matches === null ? null : m.daily + m.members + m.promo + m.guests;
+const pay   = m => m.payment !== undefined ? m.payment
+              : m.running ? null : Math.round(m.revenue * SHARE);
+const num   = n => n === null ? "—" : n.toLocaleString("en-US");
+const money = n => n === null ? "—" : "$" + n.toLocaleString("en-US");
+const $ = id => document.getElementById(id);
+
+$("tiles").innerHTML = [
+  [num(LAUNCH.spots), "Spots filled",
+   "Spots paid for and held. MatchDay does not record check-in, so this is not attendance."],
+  [num(LAUNCH.registered), "Booked by registered players", "Held by someone with a MatchDay account."],
+  [num(LAUNCH.guests), "Guest spots", "Bought by a registered player for someone without an account."],
+  [num(LAUNCH.cancelled), "Cancelled inside 24 hours",
+   "Non-refundable, so the revenue below still counts them."],
+  [num(LAUNCH.people), "Distinct people",
+   `Held at least one spot. Averages ${(LAUNCH.spots/LAUNCH.people).toFixed(1)} spots each over ${LAUNCH.matches} matches.`]
+].map(([v,l,n]) => `<div class="tile"><div class="tl">${l}</div>
+  <div class="tv" data-t="${l}">${v}</div><div class="tn">${n}</div></div>`).join("");
+
+$("csub").innerHTML =
+  `Newest last. Your share is <b>50%</b> of qualifying revenue on every line. ` +
+  `A month is paid once it closes.`;
+
+const COLS = ["Period","Matches","Spots filled","Daily players","Guests",
+              "Qualifying revenue","Your payment","Status","When"];
+$("thead").innerHTML = `<tr>${COLS.map(c => `<th>${c}</th>`).join("")}</tr>`;
+
+const PILL = {
+  paid:['pill paid','Paid'], late:['pill late','Past due'],
+  prog:['pill prog','In progress'], none:['pill none','Nothing owed']
+};
+
+$("tbody").innerHTML = MONTHS.map(m => {
+  const p = pay(m);
+  return `<tr class="${m.opening?"opening":""} ${m.running?"running":""}" data-k="${m.k}">
+    <td>${m.label}${m.opening?`<span class="tag">opening period</span>`:""}
+      ${m.note?`<span class="sub">${m.note}</span>`:""}</td>
+    <td>${num(m.matches)}</td><td>${num(spots(m))}</td>
+    <td>${num(m.daily)}</td><td>${num(m.guests)}</td>
+    <td>${money(m.revenue)}${m.rental
+      ? `<span class="sub rent">${money(m.revenue - m.rental)} matches + ${money(m.rental)} ${m.rentalName}</span>`
+      : ""}</td>
+    <td>${money(p)}${p === null?`<span class="sub">Not yet calculated</span>`:""}</td>
+    <td><span class="${PILL[m.status][0]}">${PILL[m.status][1]}</span></td>
+    <td><span class="when ${m.status==="late"?"late":""}">${m.when}</span></td></tr>`;
+}).join("");
+
+/* Totals cover only rows that HAVE the number. The opening period pays but carries no
+   counts, and the running month has counts but no payment yet — so the two totals
+   deliberately cover different sets of rows, and each says which. */
+const detailed = MONTHS.filter(m => m.matches !== null);
+const closed   = MONTHS.filter(m => pay(m) !== null);
+const sum = (a, f) => a.reduce((s, m) => s + f(m), 0);
+$("tfoot").innerHTML = `<tr>
+  <td>All time<span class="sub">${MONTHS.length} periods</span></td>
+  <td>${num(sum(detailed, m => m.matches))}</td>
+  <td>${num(sum(detailed, m => spots(m)))}</td>
+  <td>${num(sum(detailed, m => m.daily))}</td>
+  <td>${num(sum(detailed, m => m.guests))}</td>
+  <td>${money(sum(detailed, m => m.revenue))}<span class="sub rent">${
+      money(sum(detailed, m => m.revenue) - sum(detailed, m => m.rental || 0))} matches + ${
+      money(sum(detailed, m => m.rental || 0))} rentals</span>
+    <span class="sub">${detailed.length} months with detail</span></td>
+  <td>${money(sum(closed, m => pay(m)))}<span class="sub">closed months only</span></td>
+  <td></td><td></td></tr>`;
+
+$("wks").innerHTML = WEEKS.map(([r, s, mt, d]) => `<div class="wc" data-w="${r}">
+  <div class="wl">Week of</div><div class="wd">${r}</div>
+  <div class="wv">${num(s)}</div>
+  <div class="wn">spots held<br/>${mt} matches · ${money(d)}</div></div>`).join("");
+
+$("foot").innerHTML =
+  `Everything here covers Hattrick only, from Feb 3, 2026 — the first match MatchDay ran at this ` +
+  `venue — through Aug 6, 2026, and counts ${LAUNCH.matches} matches. ` +
+  `Spots filled is every seat paid for and held; MatchDay does not record check-in, so it is not ` +
+  `attendance. Daily players and Guests are shown; the remainder of Spots filled is made up of ` +
+  `other seat types. ` +
+  `A private rental is a booking with no MatchDay match behind it — no players and no spots — so it ` +
+  `adds to qualifying revenue but not to the match or spot counts. Rentals are listed separately ` +
+  `inside the revenue column so you can see what you are being paid for. ` +
+  `The opening period is a single settled payment with no match-level detail behind it, so it adds ` +
+  `to the payment total but not to the counts. August is still running and is not paid until the ` +
+  `month closes, so it adds to the counts but not to the payment total.`;
+</script>
+</body></html>

@@ -32,7 +32,7 @@ export type GrainRow = {
   matches: number | null; spots: number | null; daily: number | null; guests: number | null;
   revenue: number | null; rentals: RentalLine[];
   payment: number | null; paymentUnavailable: boolean;
-  state: PeriodState; paidOn: string | null;
+  state: PeriodState; paidOn: string | null; dueDate: string; periodEnd: string;
   diverged: boolean; frozenPaid: number | null; livePayment: number | null;
   weeksPaid?: number; weeksEarning?: number;
 };
@@ -78,7 +78,7 @@ function rowFromPeriod(pw: PartnerWeeklyPayment, pr: PeriodRow, rows: PartnerReg
     revenue: pw.isPreSystem ? null : pr.qualifying,
     rentals: pw.isPreSystem ? [] : rentalsIn(extra, start, end),
     payment: pr.payment, paymentUnavailable: false,
-    state: pr.state, paidOn: pr.paidOn,
+    state: pr.state, paidOn: pr.paidOn, dueDate: pr.dueDate, periodEnd: end,
     diverged, frozenPaid: diverged ? pw.calculatedAmount : null, livePayment: diverged ? pw.owedAmount : null,
   };
 }
@@ -105,7 +105,7 @@ function rollMonth(monthKey: string, weeks: { pw: PartnerWeeklyPayment; pr: Peri
     matches: seats.matches, spots: seats.spots, daily: seats.daily, guests: seats.guests,
     revenue, rentals: rentalsIn(extra, start, end),
     payment: open ? null : payment, paymentUnavailable: false,
-    state, paidOn, diverged, frozenPaid: null, livePayment: null,
+    state, paidOn, dueDate: "", periodEnd: end, diverged, frozenPaid: null, livePayment: null,
     weeksPaid: paid.length, weeksEarning: earning.length,
   };
 }
@@ -153,7 +153,7 @@ export function derivePartnerGrains(
           key: cur, label: `Week of ${MON[+cur.slice(5, 7) - 1]} ${+cur.slice(8, 10)}`, isOpening: false, isOpen: end >= today,
           matches: seats.matches, spots: seats.spots, daily: seats.daily, guests: seats.guests,
           revenue: null, rentals: rentalsIn(extra, cur, end),
-          payment: null, paymentUnavailable: true, state: "nothing", paidOn: null,
+          payment: null, paymentUnavailable: true, state: "nothing", paidOn: null, dueDate: "", periodEnd: end,
           diverged: false, frozenPaid: null, livePayment: null,
         });
       }
