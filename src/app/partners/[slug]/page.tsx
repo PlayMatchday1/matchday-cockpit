@@ -7,7 +7,9 @@ import {
   fetchPartnerWeeklyPayments,
 } from "@/lib/partnerStats";
 import { makeServerClient } from "@/lib/supabaseServer";
-import PartnerDashboardView from "./PartnerDashboardView";
+import { derivePartnerGrains } from "@/lib/partnerGrain";
+import { dfull, todayYmd } from "@/lib/partnerDashboardView";
+import PartnerDashboardV14 from "./PartnerDashboardV14";
 
 // Server component. Slug → venue_id resolution and stats fetch run
 // server-side against a service-role Supabase client. venue_id is
@@ -116,15 +118,28 @@ export default async function PartnerPage({
     records,
   );
 
+  // v1_4 grains + since-launch, derived server-side from the same baseline-filtered
+  // rows the stats use (raw rows carry emails and never leave the server).
+  const grains = derivePartnerGrains(statsRows, statsExtra, payment, new Date());
+  const totalMatches = stats.weeks.reduce((s, w) => s + (w.voided ? 0 : w.matches), 0);
+  const paid = payment.weeklyPayments
+    .filter((w) => w.status === "paid")
+    .reduce((s, w) => s + Math.round(w.calculatedAmount ?? w.owedAmount), 0);
+  const city = (venueRow?.city as string | null) ?? null;
+  const launch = (venueRow?.launch_date as string | null) ?? stats.earliestMatchDate;
+  const today = todayYmd();
+  const sub =
+    `${partner.partnerName}${city ? ` · ${city}` : ""}${launch ? ` · ${dfull(launch)} through ${dfull(today)}` : ""}` +
+    ` · MatchDay staff spots excluded · revenue is the match price players actually paid`;
+
   return (
-    <PartnerDashboardView
+    <PartnerDashboardV14
       partnerName={partner.partnerName}
       venue={venueName}
-      city={(venueRow?.city as string | null) ?? null}
-      launchDate={(venueRow?.launch_date as string | null) ?? null}
-      stats={stats}
-      payment={payment}
-      isPublic
+      city={city}
+      sub={sub}
+      grains={grains}
+      sinceLaunch={{ matches: totalMatches, spots: stats.totals.spots, people: stats.totals.uniquePlayers, paid }}
     />
   );
 }

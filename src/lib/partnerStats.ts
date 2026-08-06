@@ -942,7 +942,7 @@ type PeriodCalcConfig = {
 // match count and the manager-pay deduction — which is NOT recoverable as
 // qualifying − owed once the $0 floor fires. managerPay is 0 for flat_percentage
 // partners (that model has no manager-pay subtraction).
-function periodOwed(
+export function periodOwed(
   matchActive: PartnerRegRow[],
   finRevRows: PartnerExtraRevRow[],
   periodStart: string,

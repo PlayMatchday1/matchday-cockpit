@@ -1,0 +1,373 @@
+<!doctype html>
+<html lang="en"><head><meta charset="utf-8"/>
+<title>Partner dashboard — PAC Global</title>
+<style>
+:root{
+  --forest:#003326;--ink:#0d1f18;--muted:#5C6B62;--cream:#F4EEE1;--paper:#fff;
+  --line:#dfe4da;--slot:#F7F9F6;--mint:#2CDB87;--mintSoft:#E4F9EF;--mintInk:#046B45;
+  --coralInk:#A83120;--coralSoft:#FDE9E5;--blue:#2E79FF;--yellow:#FFFF3E;
+  --gap:18px;
+}
+*{box-sizing:border-box}
+body{margin:0;background:var(--cream);
+  font-family:-apple-system,BlinkMacSystemFont,"Segoe UI",Inter,Helvetica,Arial,sans-serif;
+  color:var(--ink);-webkit-font-smoothing:antialiased}
+.page{max-width:1360px;margin:0 auto;padding:0 24px 60px}
+
+/* ── page head ── */
+.phead{padding:26px 0 18px}
+.eyebrow{font-size:9.5px;font-weight:900;letter-spacing:1.4px;text-transform:uppercase;color:var(--muted)}
+.phead h1{margin:7px 0 0;font-size:30px;font-weight:900;letter-spacing:-.8px;color:var(--forest)}
+.phead h1 em{font-style:normal;color:#93A099;font-weight:900}
+.phead p{margin:8px 0 0;font-size:12.5px;color:var(--muted);line-height:1.55}
+
+.card{background:var(--paper);border:1px solid var(--line);border-radius:16px;
+  box-shadow:0 9px 26px rgba(0,51,38,.075);overflow:hidden;margin-bottom:var(--gap)}
+.chead{display:flex;justify-content:space-between;align-items:flex-start;gap:20px;padding:17px 22px}
+.chead + .cbody{border-top:1px solid var(--line)}
+.ctitle{font-size:15.5px;font-weight:900;letter-spacing:-.2px;color:var(--forest)}
+.csub{font-size:11.5px;color:var(--muted);margin-top:4px;line-height:1.45}
+.cbody{padding:18px 22px}
+
+/* ── week / month toggle ── */
+.seg{display:inline-flex;background:var(--slot);border:1px solid var(--line);border-radius:99px;padding:3px;flex:none}
+.seg button{border:0;background:transparent;color:var(--muted);font-family:inherit;font-size:11.5px;
+  font-weight:850;padding:7px 18px;border-radius:99px;cursor:pointer;white-space:nowrap}
+.seg button.on{background:var(--forest);color:#fff}
+
+/* ── snapshot ── */
+.snapname{display:flex;align-items:baseline;gap:11px;flex-wrap:wrap}
+.snapname b{font-size:21px;font-weight:900;letter-spacing:-.5px;color:var(--forest)}
+.snapname span{font-size:11.5px;font-weight:750;color:var(--muted)}
+
+.tiles{display:grid;grid-template-columns:repeat(5,1fr);gap:12px}
+.tile{background:var(--slot);border:1px solid var(--line);border-radius:13px;padding:14px 15px 13px}
+.tile.pay{background:#F1FBF6;border-color:#BFEBD5}
+.tl{font-size:9px;font-weight:900;letter-spacing:.9px;text-transform:uppercase;color:var(--muted)}
+.tv{font-size:29px;font-weight:900;letter-spacing:-1.2px;color:var(--forest);margin-top:7px;
+  line-height:1;font-variant-numeric:tabular-nums}
+.trow{display:flex;align-items:center;gap:7px;margin-top:9px;flex-wrap:wrap}
+.delta{display:inline-flex;align-items:center;gap:4px;font-size:10.5px;font-weight:900;
+  border-radius:99px;padding:3px 9px;font-variant-numeric:tabular-nums}
+.delta.up{background:var(--mintSoft);color:var(--mintInk)}
+.delta.down{background:var(--coralSoft);color:var(--coralInk)}
+.delta.flat{background:var(--slot);color:var(--muted);border:1px solid var(--line)}
+.tprev{font-size:10.5px;font-weight:700;color:var(--muted);font-variant-numeric:tabular-nums}
+
+/* ── composition bar ── */
+.comp{margin-top:17px}
+.compbar{display:flex;height:13px;border-radius:99px;overflow:hidden;border:1px solid var(--line)}
+.compbar i{display:block;height:100%}
+.complg{display:flex;flex-wrap:wrap;gap:16px;margin-top:10px}
+.complg span{display:inline-flex;align-items:center;gap:7px;font-size:11px;font-weight:750;color:var(--muted);
+  font-variant-numeric:tabular-nums}
+.complg i{width:9px;height:9px;border-radius:3px;flex:none;border:1px solid rgba(0,51,38,.16)}
+
+/* ── since launch strip ── */
+.launch{display:flex;flex-wrap:wrap;align-items:center;gap:0;background:var(--paper);
+  border:1px solid var(--line);border-radius:14px;margin-bottom:var(--gap);padding:4px 6px;
+  box-shadow:0 9px 26px rgba(0,51,38,.075)}
+.lk{padding:10px 18px;display:flex;flex-direction:column;gap:3px}
+.lk + .lk{border-left:1px solid var(--line)}
+.lhead{padding:10px 8px 10px 16px;font-size:9px;font-weight:900;letter-spacing:1px;
+  text-transform:uppercase;color:var(--muted);align-self:center}
+.complg span.nil i{opacity:.3}
+.lk b{font-size:16px;font-weight:900;color:var(--forest);letter-spacing:-.4px;font-variant-numeric:tabular-nums}
+.lk span{font-size:9px;font-weight:900;letter-spacing:.8px;text-transform:uppercase;color:var(--muted)}
+
+/* ── table ── */
+.scroller{max-height:min(58vh,520px);overflow:auto}
+table{width:100%;border-collapse:separate;border-spacing:0;font-variant-numeric:tabular-nums}
+thead th{position:sticky;top:0;z-index:3;background:var(--slot);text-align:right;
+  font-size:9px;font-weight:900;letter-spacing:.85px;text-transform:uppercase;color:var(--muted);
+  padding:11px 14px;border-bottom:1px solid var(--line);white-space:nowrap}
+thead th:first-child{text-align:left}
+tbody td{padding:12px 14px;text-align:right;font-size:13px;font-weight:800;color:var(--ink);
+  border-bottom:1px solid #EDF1EC;white-space:nowrap}
+tbody td:first-child{text-align:left;font-weight:850;color:var(--forest)}
+tbody tr.zero td{color:var(--muted);font-weight:700}
+tbody tr.zero td:first-child{color:var(--muted)}
+tbody tr:hover td{background:#FAFCFA}
+tfoot td{position:sticky;bottom:0;z-index:3;background:var(--forest);color:#fff;padding:13px 14px;
+  text-align:right;font-size:13px;font-weight:900;white-space:nowrap}
+tfoot td:first-child{text-align:left;font-size:10px;letter-spacing:.9px;text-transform:uppercase}
+.pill{display:inline-flex;align-items:center;gap:6px;font-size:10.5px;font-weight:900;
+  border-radius:99px;padding:4px 11px;white-space:nowrap}
+.pill.paid{background:var(--mintSoft);color:var(--mintInk)}
+.pill.due{background:#FFF6D6;color:#7A5200}
+.pill.part{background:#EFF3FF;color:#1B4FCB}
+.pill.none{background:var(--slot);color:var(--muted);border:1px solid var(--line)}
+.opening td{background:#FBFAF6}
+.tag{display:inline-block;margin-left:9px;font-size:9px;font-weight:900;letter-spacing:.6px;
+  text-transform:uppercase;color:#7A5200;background:#FFF6D6;border-radius:99px;padding:3px 8px;
+  vertical-align:1px}
+.foot{padding:13px 22px;border-top:1px solid var(--line);background:var(--slot);
+  font-size:11px;color:var(--muted);line-height:1.6}
+</style></head>
+<body>
+<div class="page">
+
+  <div class="phead">
+    <div class="eyebrow">MatchDay</div>
+    <h1>PAC Global <em>— partner dashboard</em></h1>
+    <p id="sub"></p>
+  </div>
+
+  <div class="card">
+    <div class="chead">
+      <div>
+        <div class="ctitle">Current snapshot</div>
+        <div class="csub" id="snapsub"></div>
+      </div>
+      <div class="seg" id="seg">
+        <button data-g="week">Week</button>
+        <button data-g="month" class="on">Month</button>
+      </div>
+    </div>
+    <div class="cbody">
+      <div class="snapname" id="snapname"></div>
+      <div class="tiles" id="tiles" style="margin-top:15px"></div>
+    </div>
+  </div>
+
+  <div class="launch" id="launch"></div>
+
+  <div class="card">
+    <div class="chead">
+      <div>
+        <div class="ctitle" id="everyTitle">Every month</div>
+        <div class="csub" id="everySub"></div>
+      </div>
+    </div>
+    <div class="scroller" id="scroller"><table id="tbl">
+      <thead id="thead"></thead><tbody id="tbody"></tbody><tfoot id="tfoot"></tfoot>
+    </table></div>
+    <div class="foot" id="tfootnote"></div>
+  </div>
+
+</div>
+
+<script>
+/* ────────────────────────────────────────────────────────────────
+   Source rows. One entry per week. Months are derived by summing
+   weeks, never stored twice — a stored month total can drift from
+   its weeks and nobody notices for a quarter.
+   ──────────────────────────────────────────────────────────────── */
+const TODAY = "2026-08-06";
+
+const OPENING = {
+  key:"opening", label:"Through Apr 30, 2026", month:"2026-04",
+  matches:13, daily:88, members:9, promo:3, guests:47,
+  revenue:340, paidOn:"May 1, 2026", opening:true
+};
+
+const WEEKS = [
+  { key:"2026-05-03", label:"Week of May 3",  month:"2026-05", matches:1, daily:9,  members:1, promo:0, guests:4,  revenue:50,  paidOn:"Jul 3, 2026" },
+  { key:"2026-05-10", label:"Week of May 10", month:"2026-05", matches:0, daily:0,  members:0, promo:0, guests:0,  revenue:0,   paidOn:null },
+  { key:"2026-05-17", label:"Week of May 17", month:"2026-05", matches:1, daily:8,  members:1, promo:0, guests:4,  revenue:50,  paidOn:"Jul 3, 2026" },
+  { key:"2026-05-24", label:"Week of May 24", month:"2026-05", matches:1, daily:10, members:1, promo:0, guests:4,  revenue:60,  paidOn:"Jul 3, 2026" },
+  { key:"2026-05-31", label:"Week of May 31", month:"2026-05", matches:1, daily:11, members:1, promo:0, guests:4,  revenue:70,  paidOn:"Jul 3, 2026" },
+  { key:"2026-06-07", label:"Week of Jun 7",  month:"2026-06", matches:1, daily:10, members:1, promo:1, guests:5,  revenue:76,  paidOn:"Jul 3, 2026" },
+  { key:"2026-06-14", label:"Week of Jun 14", month:"2026-06", matches:1, daily:7,  members:1, promo:0, guests:4,  revenue:40,  paidOn:"Jul 3, 2026" },
+  { key:"2026-06-21", label:"Week of Jun 21", month:"2026-06", matches:0, daily:0,  members:0, promo:0, guests:0,  revenue:0,   paidOn:null },
+  { key:"2026-06-28", label:"Week of Jun 28", month:"2026-06", matches:1, daily:9,  members:1, promo:0, guests:4,  revenue:56,  paidOn:"Jul 3, 2026" },
+  { key:"2026-07-05", label:"Week of Jul 5",  month:"2026-07", matches:2, daily:16, members:2, promo:0, guests:8,  revenue:116, paidOn:"Aug 3, 2026" },
+  { key:"2026-07-12", label:"Week of Jul 12", month:"2026-07", matches:2, daily:19, members:2, promo:1, guests:9,  revenue:184, paidOn:"Aug 3, 2026" },
+  { key:"2026-07-19", label:"Week of Jul 19", month:"2026-07", matches:2, daily:16, members:2, promo:0, guests:10, revenue:161, paidOn:"Aug 3, 2026" },
+  { key:"2026-07-26", label:"Week of Jul 26", month:"2026-07", matches:2, daily:13, members:2, promo:0, guests:9,  revenue:147, paidOn:null, due:true },
+  { key:"2026-08-02", label:"Week of Aug 2",  month:"2026-08", matches:1, daily:7,  members:1, promo:0, guests:4,  revenue:70,  paidOn:null, due:true }
+];
+
+const MONTHNAME = {"2026-04":"Through Apr 2026","2026-05":"May 2026","2026-06":"June 2026",
+                   "2026-07":"July 2026","2026-08":"August 2026"};
+
+/* spots is never stored — it is always the sum of the four seat types,
+   so the columns cannot disagree with the total by construction */
+const spots = r => r.daily + r.members + r.promo + r.guests;
+
+/* Payments are cut WEEKLY. Each week's payment is rounded on its own,
+   so a month is the SUM OF ITS WEEKS' PAYMENTS — never half the month's
+   revenue. Those two differ by a dollar whenever an odd week price lands
+   in the month, and the sum is the one that matches money that moved. */
+const SHARE_PCT = 50;
+const weekPay = r => Math.round(r.revenue * SHARE_PCT / 100);
+
+OPENING.payment = weekPay(OPENING);
+WEEKS.forEach(w => { w.payment = weekPay(w); });
+
+function rollMonths(){
+  const out = [];
+  const push = (key,label,src,opening) => {
+    const t = { key, label, month:key, opening:!!opening,
+      matches:0, daily:0, members:0, promo:0, guests:0, revenue:0, payment:0 };
+    src.forEach(r => { t.matches+=r.matches; t.daily+=r.daily; t.members+=r.members;
+                       t.promo+=r.promo; t.guests+=r.guests; t.revenue+=r.revenue;
+                       t.payment+=r.payment; });
+    const earning = src.filter(r => r.matches > 0);
+    const paid    = earning.filter(r => r.paidOn);
+    t.weeksEarning = earning.length;
+    t.weeksPaid    = paid.length;
+    t.paidOn = paid.length ? paid[paid.length-1].paidOn : null;
+    t.due    = earning.length > paid.length;
+    out.push(t);
+  };
+  push("2026-04", OPENING.label, [OPENING], true);
+  ["2026-05","2026-06","2026-07","2026-08"].forEach(m =>
+    push(m, MONTHNAME[m], WEEKS.filter(w => w.month === m)));
+  return out;
+}
+
+const SERIES = { week:[OPENING, ...WEEKS], month: rollMonths() };
+
+/* the latest COMPLETE period — August is still running, so the snapshot
+   must not headline a partial month against a full one */
+function latestComplete(g){
+  const rows = SERIES[g];
+  return g === "month"
+    ? rows[rows.length - 2]                       // July, not August
+    : rows[rows.length - 2];                      // week of Jul 26, not Aug 2
+}
+function priorTo(g, row){
+  const rows = SERIES[g];
+  return rows[rows.indexOf(row) - 1] || null;
+}
+
+const money = n => "$" + n.toLocaleString("en-US");
+const num   = n => n.toLocaleString("en-US");
+
+const state = { g:"month" };
+const $ = id => document.getElementById(id);
+
+function deltaChip(cur, prev, isMoney){
+  if(prev === null || prev === undefined)
+    return `<span class="delta flat">no prior period</span>`;
+  const d = cur - prev;
+  if(d === 0) return `<span class="delta flat">no change</span>`;
+  const cls  = d > 0 ? "up" : "down";
+  const sign = d > 0 ? "+" : "−";
+  const mag  = Math.abs(d);
+  const body = isMoney ? sign + money(mag) : sign + num(mag);
+  const pct  = prev === 0 ? "" : ` (${sign}${Math.round(Math.abs(d)/prev*100)}%)`;
+  return `<span class="delta ${cls}">${body}${pct}</span>`;
+}
+
+const TILES = [
+  { k:"matches", l:"Matches",       get:r=>r.matches,  money:false },
+  { k:"spots",   l:"Spots filled",  get:r=>spots(r),   money:false },
+  { k:"daily",   l:"Daily players", get:r=>r.daily,    money:false },
+  { k:"guests",  l:"Guests",        get:r=>r.guests,   money:false },
+  { k:"pay",     l:"Your payment",  get:r=>r.payment,  money:true  }
+];
+
+function renderSnapshot(){
+  const cur  = latestComplete(state.g);
+  const prev = priorTo(state.g, cur);
+
+  $("snapsub").textContent = state.g === "month"
+    ? "The latest complete month, measured against the month before it."
+    : "The latest complete week, measured against the week before it.";
+
+  $("snapname").innerHTML =
+    `<b>${cur.label}</b><span>${state.g === "month" ? "latest complete month" : "latest complete week"}` +
+    `${prev ? " · compared with " + prev.label : ""}</span>`;
+
+  $("tiles").innerHTML = TILES.map(t => `
+    <div class="tile ${t.k === "pay" ? "pay" : ""}" data-t="${t.k}">
+      <div class="tl">${t.l}</div>
+      <div class="tv" data-v="${t.get(cur)}">${t.money ? money(t.get(cur)) : num(t.get(cur))}</div>
+      <div class="trow">
+        ${deltaChip(t.get(cur), prev ? t.get(prev) : null, t.money)}
+        ${prev ? `<span class="tprev">was ${t.money ? money(t.get(prev)) : num(t.get(prev))}</span>` : ""}
+      </div>
+    </div>`).join("");
+
+}
+
+function totals(){
+  const all = SERIES.month;
+  const t = { matches:0, daily:0, members:0, promo:0, guests:0, revenue:0, payment:0 };
+  all.forEach(r => Object.keys(t).forEach(k => t[k] += r[k]));
+  return t;
+}
+
+function renderLaunch(){
+  const t = totals();
+  const people = 132;
+  const items = [
+    [num(t.matches), "Matches played"],
+    [num(spots(t)), "Spots filled"],
+    [num(people), "Distinct people"],
+    [money(t.payment), "Paid to you"]
+  ];
+  $("launch").innerHTML = `<div class="lhead">Since<br/>launch</div>` +
+    items.map(([b,s]) => `<div class="lk"><b>${b}</b><span>${s}</span></div>`).join("");
+}
+
+const COLS = [
+  { l:"Period",        f:r=>r.label + (r.opening ? `<span class="tag">opening period</span>` : "") },
+  { l:"Matches",       f:r=>num(r.matches) },
+  { l:"Spots filled",  f:r=>num(spots(r)) },
+  { l:"Daily players", f:r=>num(r.daily) },
+  { l:"Guests",        f:r=>num(r.guests) },
+  { l:"Revenue",       f:r=>r.revenue ? money(r.revenue) : "—" },
+  { l:"Your payment",  f:r=>r.revenue ? money(r.payment) : "—" },
+  { l:"Status",        f:r=>{
+      if(r.matches === 0)  return `<span class="pill none">Nothing owed</span>`;
+      if(r.weeksEarning && r.weeksPaid && r.due)
+        return `<span class="pill part">${r.weeksPaid} of ${r.weeksEarning} weeks paid</span>`;
+      if(r.paidOn && !r.due)
+        return `<span class="pill paid">Paid ${r.paidOn.replace(", 2026","")}</span>`;
+      return `<span class="pill due">Due next cycle</span>`;
+    } }
+];
+
+function renderTable(){
+  $("everyTitle").textContent = state.g === "month" ? "Every month" : "Every week";
+  $("thead").innerHTML = `<tr>${COLS.map(c=>`<th>${c.l}</th>`).join("")}</tr>`;
+
+  const rows = SERIES[state.g].slice().reverse();          // newest first
+  $("tbody").innerHTML = rows.map(r =>
+    `<tr class="${r.matches===0?"zero":""} ${r.opening?"opening":""}" data-k="${r.key}">` +
+    COLS.map(c=>`<td>${c.f(r)}</td>`).join("") + `</tr>`).join("");
+
+  const t = totals();
+  $("tfoot").innerHTML = `<tr>` +
+    `<td>All time</td><td>${num(t.matches)}</td><td>${num(spots(t))}</td>` +
+    `<td>${num(t.daily)}</td><td>${num(t.guests)}</td>` +
+    `<td>${money(t.revenue)}</td><td>${money(t.payment)}</td><td></td></tr>`;
+
+  $("everySub").textContent = state.g === "month"
+    ? `Newest first. Payments are cut weekly at ${SHARE_PCT}% of qualifying revenue — a month row is the sum of its weeks.`
+    : `Newest first. Payments are cut weekly at ${SHARE_PCT}% of qualifying revenue.`;
+
+  const halfRev = Math.round(t.revenue * SHARE_PCT / 100);
+  const drift   = t.payment - halfRev;
+
+  $("tfootnote").innerHTML =
+    `Spots filled is every seat paid for and held. MatchDay does not record check-in, ` +
+    `so it is not attendance. Daily players and Guests are shown; the remainder of Spots filled ` +
+    `is made up of other seat types.` +
+    (drift !== 0
+      ? ` Each week is rounded to the nearest dollar on its own, so all-time payments come to ` +
+        `${money(t.payment)} rather than the ${money(halfRev)} you get from rounding once at the end — ` +
+        `a ${money(Math.abs(drift))} difference. ${money(t.payment)} is what was actually paid.`
+      : "");
+}
+
+function render(){
+  document.querySelectorAll("#seg button").forEach(b =>
+    b.classList.toggle("on", b.dataset.g === state.g));
+  renderSnapshot(); renderTable();
+}
+
+$("sub").textContent =
+  "PAC Global · Houston · Mar 12, 2026 through Aug 6, 2026 · MatchDay staff spots excluded · " +
+  "revenue is the match price players actually paid";
+
+document.querySelectorAll("#seg button").forEach(b =>
+  b.addEventListener("click", () => { state.g = b.dataset.g; render(); }));
+
+renderLaunch();
+render();
+</script>
+</body></html>
