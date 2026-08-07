@@ -1,14 +1,12 @@
 // Admin, STAGING-only match read + rename. GET returns a match's identity + name;
 // PUT renames it. The write goes through the guarded staging client
-// (matchdayStageApi) so it physically cannot reach production, and the client may
-// change ONLY the name: the server re-reads the match, projects it down to the
-// writable field allowlist, and applies the new name itself — the browser never
-// supplies the rest of the body.
+// (matchdayStageApi) so it physically cannot reach production.
 //
-// Why the projection: PUT /admin/matches/{id} is whitelist-validated
-// (forbidNonWhitelisted) — echoing the full GET back 400s on ~22 read-only /
-// relational fields (id, field, players, goals, updatedAt, …). We send exactly
-// the fields the DTO accepts, with their current values, so nothing else moves.
+// The write sends ONLY { name }. PUT /admin/matches/{id} was proven on staging to
+// be a PARTIAL update (it whitelist-validates what you send but leaves omitted
+// fields untouched — verified: a { name }-only PUT preserved a marker set in
+// description). So we never echo startDate/teams/scores/etc.: past matches stay
+// editable and no wrongly-sourced field can overwrite anything unintended.
 
 import { authenticateAdmin } from "@/lib/adminAuth";
 import { stageGet, stageWrite, AmbiguousWriteError, WriteFailedError, StageHostGuardError, StageConfigError } from "@/lib/matchdayStageApi";
@@ -16,24 +14,6 @@ import { stageGet, stageWrite, AmbiguousWriteError, WriteFailedError, StageHostG
 export const runtime = "nodejs";
 export const dynamic = "force-dynamic";
 export const maxDuration = 30;
-
-// The UpdateMatchDto whitelist — every field the PUT accepts, learned from the
-// live 400. The server sends these (current values) + the new name; nothing else.
-const WRITABLE_MATCH_FIELDS = [
-  "name", "description", "teamHomeId", "teamAwayId", "teamHomeScore", "teamAwayScore",
-  "type", "startDate", "endDate", "fieldId", "category", "minPlayerCount", "maxPlayerCount",
-  "isFreeMember", "registrationPrice", "hasOrganizer", "managerIntro", "managerId",
-  "secondManagerId", "guestCount", "autoCanceled", "autoCanceledMinutes", "maxTeamSize2Team",
-  "maxTeamSize4Team", "isAutoBump", "additionalSpotPrice",
-  "fakeSpotLeft36h", "fakeSpotLeft24h", "fakeSpotLeft12h", "fakeSpotLeft6h", "fakeSpotLeft3h",
-  "teams",
-] as const;
-
-function projectWritable(match: Record<string, unknown>): Record<string, unknown> {
-  const out: Record<string, unknown> = {};
-  for (const k of WRITABLE_MATCH_FIELDS) if (k in match) out[k] = match[k];
-  return out;
-}
 
 // The read-only identity we show the admin — enough to be sure it's the right match.
 function identity(m: Record<string, unknown>) {
@@ -71,10 +51,8 @@ export async function PUT(req: Request, ctx: { params: Promise<{ id: string }> }
   if (name.length > 200) return Response.json({ error: "name too long" }, { status: 400 });
 
   try {
-    // Read-modify-write: re-read, project to the writable allowlist, set only name.
-    const current = await stageGet<Record<string, unknown>>(`/admin/matches/${id}`);
-    const payload = { ...projectWritable(current), name };
-    await stageWrite("PUT", `/admin/matches/${id}`, payload);
+    // Partial update — send ONLY the changed field. Omitted fields are left alone.
+    await stageWrite("PUT", `/admin/matches/${id}`, { name });
     const after = await stageGet<Record<string, unknown>>(`/admin/matches/${id}`);
     return Response.json({ ok: true, match: identity(after) });
   } catch (e) {
