@@ -100,7 +100,7 @@ export default function MatchEditor({ id }: { id: string }) {
 
   const changedKeys = useMemo(() => {
     if (!state || !loaded) return [];
-    return EDITABLE_KEYS.filter((k) => fieldChanged(loaded[k], state[k]));
+    return EDITABLE_KEYS.filter((k) => fieldChanged(k, loaded[k], state[k]));
   }, [state, loaded]);
 
   // THE PAYLOAD — the same key set the diff shows.
@@ -122,9 +122,13 @@ export default function MatchEditor({ id }: { id: string }) {
   const ladderVals = LADDER.map((k) => Number(state[k]));
   const descending = ladderVals.every((v, i) => i === 0 || v <= ladderVals[i - 1]);
 
+  // Blank/NaN numeric → empty box. A cleared numeric input stays "" in state, which
+  // fieldChanged treats as no change, so it never reaches the diff or the body.
+  const blank = (v: unknown) => v === "" || v == null || (typeof v === "number" && Number.isNaN(v));
+
   const renderField = (f: Spec) => {
     if (f.cond && !f.cond(state)) return null;
-    const dirty = fieldChanged(loaded[f.key], state[f.key]);
+    const dirty = fieldChanged(f.key, loaded[f.key], state[f.key]);
     const cls = `f${dirty ? " dirty" : ""}${f.wide ? " wide" : ""}`;
     const lbl = <label>{f.label}{f.hint ? <span className="hint">{f.hint}</span> : null}</label>;
     let ctl: React.ReactNode;
@@ -135,19 +139,19 @@ export default function MatchEditor({ id }: { id: string }) {
     );
     else if (f.kind === "money") ctl = (
       <div className="money"><span>$</span>
-        <input type="number" step="0.01" data-testid={`in-${f.key}`} value={(Number(state[f.key] ?? 0) / 100).toFixed(2)}
-          onChange={(e) => set(f.key, Math.round((parseFloat(e.target.value) || 0) * 100))} /></div>
+        <input type="number" step="0.01" data-testid={`in-${f.key}`} value={blank(state[f.key]) ? "" : (Number(state[f.key]) / 100).toFixed(2)}
+          onChange={(e) => set(f.key, e.target.value === "" ? "" : Math.round(parseFloat(e.target.value) * 100))} /></div>
     );
     else if (f.kind === "number") ctl = (
-      <input type="number" data-testid={`in-${f.key}`} value={state[f.key] === null || state[f.key] === undefined ? "" : String(state[f.key])}
-        onChange={(e) => set(f.key, e.target.value === "" ? (NULLABLE_NUM.has(f.key) ? null : 0) : Number(e.target.value))} />
+      <input type="number" data-testid={`in-${f.key}`} value={blank(state[f.key]) ? "" : String(state[f.key])}
+        onChange={(e) => set(f.key, e.target.value === "" ? (NULLABLE_NUM.has(f.key) ? null : "") : Number(e.target.value))} />
     );
     else if (f.kind === "textarea") ctl = <textarea data-testid={`in-${f.key}`} value={String(state[f.key] ?? "")} onChange={(e) => set(f.key, e.target.value)} />;
     else ctl = <input type="text" data-testid={`in-${f.key}`} value={String(state[f.key] ?? "")} onChange={(e) => set(f.key, e.target.value)} />;
     return <div className={cls} key={f.key} data-f={f.key}>{lbl}{ctl}</div>;
   };
   const renderToggle = (f: Spec) => {
-    const dirty = fieldChanged(loaded[f.key], state[f.key]);
+    const dirty = fieldChanged(f.key, loaded[f.key], state[f.key]);
     return (
       <div className={`tg${dirty ? " dirty" : ""}`} key={f.key} data-f={f.key}>
         <button type="button" data-testid={`in-${f.key}`} aria-pressed={!!state[f.key]} onClick={() => set(f.key, !state[f.key])}><i /></button>
