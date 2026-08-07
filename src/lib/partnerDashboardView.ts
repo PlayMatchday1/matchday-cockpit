@@ -15,6 +15,18 @@ export function money(n: number): string {
   const v = Math.round(n);
   return (v < 0 ? "−$" : "$") + Math.abs(v).toLocaleString("en-US");
 }
+// Cents-aware variant — used only where BOTH exact figures must be named (the
+// divergence tooltip). The whole-dollar money() is still what every row cell
+// shows; a recompute of $27.50 must not read as "$28" when we're quoting it
+// against the $13 that was paid.
+export function moneyExact(n: number): string {
+  const neg = n < 0;
+  const v = Math.abs(n);
+  const s = Number.isInteger(v)
+    ? v.toLocaleString("en-US")
+    : v.toLocaleString("en-US", { minimumFractionDigits: 2, maximumFractionDigits: 2 });
+  return (neg ? "−$" : "$") + s;
+}
 export function plural(n: number, one: string, many?: string): string {
   return `${n} ${Math.abs(n) === 1 ? one : many ?? one + "s"}`;
 }
@@ -156,4 +168,57 @@ export function headerLine(owedByPartner: PartnerOwed[], partnerCount: number): 
 // Totals-row payment: closed periods only (the open period has no figure yet).
 export function closedPaymentTotal(rows: PeriodRow[]): number {
   return rows.filter((r) => !r.isOpen).reduce((s, r) => s + Math.round(r.payment ?? 0), 0);
+}
+
+// ── divergence + the admin "needs a look" count ──────────────────────────────
+// A settled period whose live recompute (owedAmount) has moved away from the
+// snapshot that was actually paid (calculatedAmount). > $1 so sub-dollar rounding
+// noise never flags. The row still displays WHAT WAS PAID; this only decides
+// whether to surface the coral pill / feed the badge.
+export const DIVERGENCE_THRESHOLD = 1;
+export function isDiverged(r: PeriodRow): boolean {
+  return (
+    (r.state === "paid" || r.state === "presystem") &&
+    r.pw.calculatedAmount != null &&
+    Math.abs(r.pw.owedAmount - r.pw.calculatedAmount) > DIVERGENCE_THRESHOLD
+  );
+}
+// Names BOTH figures, exact — what was paid vs what recomputing today gives.
+export function divergenceTooltip(r: PeriodRow): string {
+  const paid = r.pw.calculatedAmount ?? 0;
+  return `Paid ${moneyExact(paid)}. Recomputing today gives ${moneyExact(r.pw.owedAmount)} — the figures behind this period changed after it was paid.`;
+}
+
+// The sidebar badge counts ACTIONABLE items only, across all partners combined:
+// unpaid-and-owed (awaiting), disputed, and paid-but-diverged. Disjoint buckets
+// so the total never double-counts. When the total is zero the badge renders
+// nothing at all (a badge that is always lit teaches the eye to ignore it).
+export type ActionableCounts = { awaiting: number; disputed: number; diverged: number; total: number };
+export function actionableCounts(rows: PeriodRow[]): ActionableCounts {
+  const awaiting = rows.filter((r) => r.state === "scheduled" || r.state === "past_due").length;
+  const disputed = rows.filter((r) => r.state === "disputed").length;
+  const diverged = rows.filter(isDiverged).length;
+  return { awaiting, disputed, diverged, total: awaiting + disputed + diverged };
+}
+
+// The panel's three buckets, all from the same rows: awaiting (every not-yet-paid
+// closed period, incl. disputed), the settled payments newest-first (a paid or
+// pre-system row — pre-system, being oldest, sorts last so it is the opening
+// settlement at the bottom of the fold), split into the single latest + the rest.
+export function partitionPayments(rows: PeriodRow[]): {
+  awaiting: PeriodRow[];
+  settled: PeriodRow[];
+  latest: PeriodRow | null;
+  older: PeriodRow[];
+  foldTotal: number;
+  flaggedInFold: number;
+} {
+  const sorted = [...rows].sort((a, b) => b.pw.weekStartDate.localeCompare(a.pw.weekStartDate));
+  const awaiting = sorted.filter((r) => r.state === "scheduled" || r.state === "past_due" || r.state === "disputed");
+  const settled = sorted.filter((r) => r.state === "paid" || r.state === "presystem");
+  const latest = settled[0] ?? null;
+  const older = settled.slice(1);
+  const foldTotal = older.reduce((s, r) => s + Math.round(r.payment ?? 0), 0);
+  const flaggedInFold = older.filter(isDiverged).length;
+  return { awaiting, settled, latest, older, foldTotal, flaggedInFold };
 }

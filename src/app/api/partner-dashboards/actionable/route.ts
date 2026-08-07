@@ -1,0 +1,54 @@
+// GET /api/partner-dashboards/actionable — ADMIN ONLY.
+//
+// The sidebar "Partner Dashboards" badge counts things that NEED ACTION, across
+// every partner combined: periods awaiting payment, disputed periods, and paid
+// periods whose figures diverged after payment. NOT how many partners exist (a
+// badge that is always lit teaches the eye to ignore it). Derived from the SAME
+// computeWeeklyPayments + derivePeriodRows the panel uses, so the badge and the
+// panel can never disagree. Returns the breakdown too, so the count is auditable.
+
+import { authenticateAdmin } from "@/lib/adminAuth";
+import { computeWeeklyPayments, fetchPartnerRows, fetchPartnerWeeklyPayments, type PartnerConfig } from "@/lib/partnerStats";
+import { actionableCounts, derivePeriodRows, todayYmd } from "@/lib/partnerDashboardView";
+
+export const runtime = "nodejs";
+export const maxDuration = 30;
+export const dynamic = "force-dynamic";
+
+export async function GET(req: Request) {
+  const auth = await authenticateAdmin(req);
+  if (!auth.ok) return Response.json({ error: auth.error }, { status: auth.status });
+  const supabase = auth.supabase;
+
+  const { data, error } = await supabase
+    .from("partner_dashboards")
+    .select("id, partner_name, venue_id, revenue_share_pct, payment_start_date, payment_day_of_week, payment_cadence, revenue_model, manager_pay_base, manager_pay_high, manager_pay_threshold");
+  if (error) return Response.json({ error: error.message }, { status: 500 });
+
+  const today = todayYmd();
+  let awaiting = 0, disputed = 0, diverged = 0;
+  const byPartner: { partner: string; awaiting: number; disputed: number; diverged: number }[] = [];
+
+  for (const p of data ?? []) {
+    const cfg: PartnerConfig = {
+      id: p.id, venueId: p.venue_id, partnerName: p.partner_name,
+      revenueSharePct: (p.revenue_share_pct as number) ?? 50,
+      paymentStartDate: (p.payment_start_date as string | null) ?? null,
+      paymentDayOfWeek: (p.payment_day_of_week as number) ?? 0,
+      paymentCadence: ((p.payment_cadence as string) ?? "weekly") as PartnerConfig["paymentCadence"],
+      revenueModel: ((p.revenue_model as string) ?? "flat_percentage") as PartnerConfig["revenueModel"],
+      managerPayBase: (p.manager_pay_base as number | null) ?? null,
+      managerPayHigh: (p.manager_pay_high as number | null) ?? null,
+      managerPayThreshold: (p.manager_pay_threshold as number | null) ?? null,
+    };
+    const { rows, extra } = await fetchPartnerRows(supabase, p.venue_id);
+    const records = await fetchPartnerWeeklyPayments(supabase, p.id);
+    const payment = computeWeeklyPayments(rows, extra, cfg, records);
+    const c = actionableCounts(derivePeriodRows(payment, today));
+    awaiting += c.awaiting; disputed += c.disputed; diverged += c.diverged;
+    if (c.total > 0) byPartner.push({ partner: p.partner_name, awaiting: c.awaiting, disputed: c.disputed, diverged: c.diverged });
+  }
+
+  const total = awaiting + disputed + diverged;
+  return Response.json({ count: total, awaiting, disputed, diverged, byPartner });
+}

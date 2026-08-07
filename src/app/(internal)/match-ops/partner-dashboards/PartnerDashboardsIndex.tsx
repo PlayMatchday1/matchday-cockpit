@@ -19,7 +19,7 @@ import { createPortal } from "react-dom";
 import { supabase } from "@/lib/supabase";
 import { generateSlug } from "@/lib/partnerSlug";
 import type { PartnerStats, PartnerPaymentInfo, PartnerPaymentCadence, PartnerRevenueModel } from "@/lib/partnerStats";
-import { deriveOwed, derivePeriodRows, stateLine, headerLine, todayYmd, money, type PartnerOwed, type PeriodRow } from "@/lib/partnerDashboardView";
+import { deriveOwed, derivePeriodRows, stateLine, headerLine, todayYmd, money, dfull, partitionPayments, isDiverged, divergenceTooltip, type PartnerOwed, type PeriodRow } from "@/lib/partnerDashboardView";
 import type { PartnerDashboardData } from "@/lib/partnerDashboardData";
 import PartnerDashboardV14 from "@/app/partners/[slug]/PartnerDashboardV14";
 import PartnerMonthlyView from "@/app/partners/[slug]/PartnerMonthlyView";
@@ -103,12 +103,6 @@ export default function PartnerDashboardsIndex() {
   if (partners.length === 0) return <div className="p-8 text-sm" style={{ color: C.muted }}>No partner dashboards yet.</div>;
 
   const selected = partners.find((p) => p.slug === sel) ?? partners[0];
-  // Closed periods an admin can settle: unpaid (scheduled / past-due / disputed)
-  // get "Mark paid"; already-paid get "Undo". Open, $0 ("nothing") and pre-system
-  // historical rows carry no action.
-  const settleRows: PeriodRow[] = derivePeriodRows(selected.payment, today).filter(
-    (r) => r.state === "scheduled" || r.state === "past_due" || r.state === "paid" || r.state === "disputed",
-  );
 
   const refresh = async () => { setBusy(true); await load(); setBusy(false); };
   const doUpdate = async (id: string, patch: Record<string, unknown>) => {
@@ -176,11 +170,11 @@ export default function PartnerDashboardsIndex() {
             {plural(partners.length, "venue partner")} {partners.length === 1 ? "has" : "have"} a live dashboard. {headerLine(Object.values(owedByPartner), partners.length)}
           </p>
         </div>
-        <button type="button" onClick={addPartner} disabled={busy} style={btnDark}>+ Add partner</button>
+        <button type="button" onClick={addPartner} disabled={busy} style={btnAddLight}>+ Add partner</button>
       </div>
 
       {/* ── admin layer (stripped from the partner's page) ── */}
-      <div className="mb-3.5 rounded-[13px] p-[13px_14px_12px]" style={{ background: C.forestDeep, color: "#dceade" }}>
+      <div className="mb-3.5 rounded-[13px] p-[13px_14px_12px]" data-testid="admin-panel" style={{ background: C.forestDeep, color: "#dceade" }}>
         <div className="mb-2.5 flex items-center gap-2.5">
           <span className="rounded-[5px] px-2 py-[3px] text-[9.5px] font-[900] tracking-[1.1px]" style={{ background: C.accent, color: "#04281d" }}>ADMIN</span>
           <span className="text-[11.5px] font-bold" style={{ color: "#9fbfae" }}>Everything in this panel is stripped out of the partner&rsquo;s page. They see only what is below the line.</span>
@@ -201,7 +195,7 @@ export default function PartnerDashboardsIndex() {
                   <span className="h-[7px] w-[7px] flex-none rounded-full" style={{ background: p.enabled ? C.accent : "#7f8f88" }} />
                   {p.partnerName}
                 </div>
-                <div className="mt-0.5 text-[11.5px] font-semibold" style={{ color: on ? C.muted : "#9fbfae" }}>{p.city ? `${p.city} · ` : ""}{p.venue} · paid {p.cadence}</div>
+                <div className="mt-0.5 text-[11.5px] font-semibold" style={{ color: on ? "#566a60" : "#9fbfae" }}>{p.city ? `${p.city} · ` : ""}{p.venue} · paid {p.cadence}</div>
                 <div data-testid="switcher-state" className="mt-[7px] text-[11.5px] font-[800]" style={{ color: o.owed > 0 ? (on ? C.amount : "#ffc79a") : (on ? C.ok : "#8fd9b4") }}>{stateLine(o)}</div>
               </button>
             );
@@ -221,38 +215,11 @@ export default function PartnerDashboardsIndex() {
           <button type="button" style={btnWarn} disabled={busy} onClick={() => doUpdate(selected.id, { enabled: !selected.enabled })}>{selected.enabled ? "Disable" : "Enable"}</button>
           <button type="button" style={btnWarn} disabled={busy} onClick={() => doDelete(selected)}>Delete</button>
         </div>
-        {/* payments — mark a period paid / undo (admin-only; never on the partner's page) */}
-        <div className="mt-2.5 border-t pt-2.5" style={{ borderTopColor: "rgba(255,255,255,.13)" }} data-testid="settle-panel">
-          <div className="mb-2 text-[10.5px] font-[800] tracking-[1.1px]" style={{ color: "#9fbfae" }}>PAYMENTS · MARK A PERIOD PAID</div>
-          {settleRows.length === 0 ? (
-            <div className="text-[11.5px] font-semibold" style={{ color: "#9fbfae" }}>No closed periods to settle yet — nothing is owed or every period is still open.</div>
-          ) : (
-            <div className="flex flex-col gap-1.5">
-              {settleRows.map((r) => {
-                const paid = r.state === "paid";
-                const tag = paid ? (r.paidOn ? `paid ${r.paidOn}` : "paid") : r.state === "past_due" ? "past due" : r.state === "disputed" ? "disputed" : "scheduled";
-                const tagColor = paid ? "#8fd9b4" : r.state === "scheduled" ? "#9fbfae" : "#ffc79a";
-                return (
-                  <div key={r.pw.weekStartDate} className="flex flex-wrap items-center gap-x-2.5 gap-y-1 rounded-[8px] px-2.5 py-1.5" style={{ background: "rgba(255,255,255,.055)" }} data-testid="settle-row" data-week={r.pw.weekStartDate}>
-                    <span className="text-[12px] font-[700]" style={{ color: "#eaf5ec" }}>{r.label}</span>
-                    <span className="text-[12px] font-[800] tabular-nums" style={{ color: paid ? "#8fd9b4" : "#ffd9cb" }}>{money(r.payment ?? 0)}</span>
-                    <span className="text-[11px] font-[700]" style={{ color: tagColor }}>{tag}</span>
-                    <span className="ml-auto" />
-                    {paid ? (
-                      <button type="button" style={btnQuiet} disabled={busy} onClick={() => doMarkPaid(selected.id, r.pw.weekStartDate, "unpaid")}>Undo</button>
-                    ) : (
-                      <button type="button" style={btnDark} disabled={busy} onClick={() => doMarkPaid(selected.id, r.pw.weekStartDate, "paid")}>Mark paid</button>
-                    )}
-                  </div>
-                );
-              })}
-            </div>
-          )}
-        </div>
-
-        <div className="mt-2.5 text-[11.5px] font-semibold leading-[1.5]" style={{ color: "#9fbfae" }}>
-          Anyone holding the link can open this page — it is the only key, there is no login on it, and it shows this venue and no other. Disabling returns 404 immediately and regenerating does the same to the old link, so both break whatever the partner has bookmarked. The link has been live since {new Date(selected.createdAt).toLocaleDateString("en-US", { year: "numeric", month: "short", day: "numeric" })}.
-        </div>
+        {/* payments — on WHITE (the rows are unreadable on the dark panel). What
+            needs action is visible; everything settled folds away, and the fold
+            says what is inside it. Admin-only; never on the partner's page.
+            key=slug so the fold resets when you switch partners. */}
+        <PaymentsCard key={selected.slug} partner={selected} today={today} busy={busy} onMark={doMarkPaid} />
       </div>
 
       {/* seam */}
@@ -278,6 +245,117 @@ function plural(n: number, one: string, many?: string): string {
 const btnDark: React.CSSProperties = { background: C.forest, color: "#fff", border: 0, borderRadius: 8, fontWeight: 700, fontSize: 12.5, padding: "7px 12px", cursor: "pointer", minHeight: 30 };
 const btnQuiet: React.CSSProperties = { background: "rgba(255,255,255,.09)", color: "#eaf5ec", border: "1px solid rgba(255,255,255,.19)", borderRadius: 8, fontWeight: 700, fontSize: 12.5, padding: "7px 12px", cursor: "pointer", minHeight: 30 };
 const btnWarn: React.CSSProperties = { ...btnQuiet, borderColor: "rgba(240,189,169,.5)", color: "#ffd9cb" };
+// "+ Add partner" sits on the light page header. Outline, NOT solid forest — the
+// only filled-dark button in the whole view is "Mark paid" (the one thing to do).
+const btnAddLight: React.CSSProperties = { background: "#fff", color: C.forest, border: `1px solid ${C.line}`, borderRadius: 8, fontWeight: 700, fontSize: 12.5, padding: "7px 12px", cursor: "pointer", minHeight: 30 };
+
+// ── the payments card ────────────────────────────────────────────────────────
+// Three sections on WHITE, inside the dark admin panel: (1) AWAITING PAYMENT —
+// every not-yet-paid closed period, amber, with the ONLY filled-dark "Mark paid"
+// button (or a quiet "Nothing owed" line); (2) THE LATEST SETTLED PAYMENT — one
+// plain row; (3) EVERYTHING OLDER — a fold that STATES its count, its total, and
+// how many inside need a look, so it is never a mystery you must open to check.
+// A paid period whose figures moved after payment carries a coral pill naming
+// both numbers, and if it is hidden the fold bar says how many are flagged.
+const PAY = {
+  paper: "#ffffff", line: "#E3E8E0", slot: "#F7F9F6", forest: "#003326", muted: "#5C6B62",
+  amber: "#FFF6D6", amberEdge: "#F0DC9B", amberInk: "#7A5200",
+  coral: "#FDE9E5", coralEdge: "#F3C4BB", coralInk: "#A83120",
+  mintInk: "#046B45", mintEdge: "#A8E7C9",
+};
+
+function PaymentsCard({ partner, today, busy, onMark }: {
+  partner: AdminPartner; today: string; busy: boolean;
+  onMark: (partnerId: string, weekStartDate: string, action: "paid" | "unpaid") => void;
+}) {
+  const [open, setOpen] = useState(false);
+  const { awaiting, settled, latest, older, foldTotal, flaggedInFold } = partitionPayments(derivePeriodRows(partner.payment, today));
+  const summary = `${settled.length} settled · ${awaiting.length ? `${awaiting.length} awaiting` : "nothing awaiting"}`;
+
+  const rowBase: React.CSSProperties = { display: "flex", alignItems: "center", gap: 13, padding: "12px 17px", borderTop: `1px solid #EDF1EC` };
+  const rp: React.CSSProperties = { fontSize: 13, fontWeight: 900, minWidth: 132 };
+  const ra: React.CSSProperties = { fontSize: 13, fontWeight: 900, fontVariantNumeric: "tabular-nums", minWidth: 62 };
+  const pill: React.CSSProperties = { fontSize: 9, fontWeight: 900, letterSpacing: ".7px", textTransform: "uppercase", borderRadius: 99, padding: "3px 8px", whiteSpace: "nowrap" };
+  const btn: React.CSSProperties = { fontSize: 11.5, fontWeight: 900, borderRadius: 8, padding: "7px 13px", cursor: "pointer", border: `1px solid ${PAY.line}`, background: "#fff", color: PAY.muted };
+  const btnGo: React.CSSProperties = { ...btn, background: PAY.forest, borderColor: PAY.forest, color: "#fff" };
+  const coralPill: React.CSSProperties = { ...pill, background: PAY.coral, color: PAY.coralInk, border: `1px solid ${PAY.coralEdge}` };
+
+  const awaitingRow = (r: PeriodRow) => {
+    const disputed = r.state === "disputed";
+    return (
+      <div key={r.pw.weekStartDate} data-testid="pay-awaiting-row" data-week={r.pw.weekStartDate} data-disputed={disputed ? "1" : "0"} style={{ ...rowBase, background: PAY.amber, borderTopColor: PAY.amberEdge }}>
+        <span style={{ ...rp, color: PAY.amberInk }}>{r.label}</span>
+        <span style={{ ...ra, color: PAY.amberInk }}>{money(r.payment ?? 0)}</span>
+        {disputed
+          ? <span style={coralPill}>Disputed</span>
+          : <span style={{ ...pill, background: "#fff", color: PAY.amberInk, border: `1px solid ${PAY.amberEdge}` }}>Not paid yet</span>}
+        <span style={{ marginLeft: "auto", display: "flex", gap: 8 }}>
+          {/* A disputed period needs resolving, not a one-click pay — it is
+              surfaced (amber + coral pill) but carries no loud primary button, so
+              "Mark paid" stays the one thing to do on the page. */}
+          {disputed
+            ? <span style={{ fontSize: 11, fontWeight: 800, color: PAY.coralInk }}>needs resolving</span>
+            : <button type="button" data-testid="mark-paid-btn" style={btnGo} disabled={busy} onClick={() => onMark(partner.id, r.pw.weekStartDate, "paid")}>Mark paid</button>}
+        </span>
+      </div>
+    );
+  };
+
+  const settledRow = (r: PeriodRow, testid: string) => {
+    const diverged = isDiverged(r);
+    return (
+      <div key={r.pw.weekStartDate} data-testid={testid} data-week={r.pw.weekStartDate} data-diverged={diverged ? "1" : "0"} style={rowBase}>
+        <span style={{ ...rp, color: PAY.forest }}>{r.label}</span>
+        <span style={{ ...ra, color: PAY.forest }}>{money(r.payment ?? 0)}</span>
+        <span style={{ fontSize: 11.5, fontWeight: 800, color: PAY.muted }}>{r.paidOn ? `paid ${dfull(r.paidOn)}` : "settled"}</span>
+        {diverged && <span data-testid="pay-flag-pill" title={divergenceTooltip(r)} style={{ ...coralPill, cursor: "help" }}>Figures changed after payment</span>}
+        <span style={{ marginLeft: "auto", display: "flex", gap: 8 }}>
+          {/* A pre-system opening settlement predates the payment system; the API
+              rejects marking/unmarking it, so it carries a label, not a dead button. */}
+          {r.state === "presystem"
+            ? <span style={{ fontSize: 11, fontWeight: 800, color: PAY.muted }}>opening settlement</span>
+            : <button type="button" style={btn} disabled={busy} onClick={() => onMark(partner.id, r.pw.weekStartDate, "unpaid")}>Undo</button>}
+        </span>
+      </div>
+    );
+  };
+
+  const foldBar = (isOpen: boolean) => (
+    <button type="button" data-testid="pay-fold" data-open={isOpen ? "1" : "0"} data-count={older.length} data-total={foldTotal} data-flagged={flaggedInFold}
+      onClick={() => setOpen(!isOpen)}
+      style={{ display: "flex", alignItems: "center", gap: 10, width: "100%", textAlign: "left", background: PAY.slot, border: 0, borderTop: `1px solid ${PAY.line}`, padding: "12px 17px", cursor: "pointer" }}>
+      <span aria-hidden style={{ color: PAY.mintInk, fontSize: 10, fontWeight: 900 }}>{isOpen ? "▼" : "▶"}</span>
+      <span data-testid="pay-fold-count" style={{ fontSize: 11.5, fontWeight: 850, color: PAY.muted }}>{older.length} earlier payments{isOpen ? "" : " hidden"}</span>
+      <span data-testid="pay-fold-total" style={{ fontSize: 11.5, fontWeight: 850, color: PAY.mintInk }}>{money(foldTotal)}</span>
+      {!isOpen && flaggedInFold > 0 && <span data-testid="pay-fold-flagged" style={coralPill}>{flaggedInFold} need a look</span>}
+      <span style={{ marginLeft: "auto", fontSize: 11, fontWeight: 900, color: PAY.mintInk, background: "#fff", border: `1px solid ${PAY.mintEdge}`, borderRadius: 99, padding: "4px 12px" }}>{isOpen ? "Hide" : "Show"}</span>
+    </button>
+  );
+
+  return (
+    <div data-testid="payments-card" style={{ background: PAY.paper, borderRadius: 14, marginTop: 14, overflow: "hidden" }}>
+      <div style={{ display: "flex", alignItems: "center", gap: 11, padding: "13px 17px", borderBottom: `1px solid ${PAY.line}` }}>
+        <b style={{ fontSize: 9.5, fontWeight: 900, letterSpacing: "1px", textTransform: "uppercase", color: PAY.muted }}>Payments</b>
+        <span data-testid="pay-summary" style={{ marginLeft: "auto", fontSize: 11.5, fontWeight: 800, color: PAY.muted }}>{summary}</span>
+      </div>
+
+      {/* 1 · AWAITING PAYMENT */}
+      {awaiting.length
+        ? awaiting.map(awaitingRow)
+        : <div data-testid="pay-none" style={{ padding: "15px 17px", fontSize: 12, color: PAY.muted }}><b style={{ color: PAY.mintInk, fontWeight: 900 }}>Nothing owed.</b> Every closed period has been settled.</div>}
+
+      {/* 2 · THE LATEST SETTLED PAYMENT */}
+      {latest && settledRow(latest, "pay-latest-row")}
+
+      {/* 3 · EVERYTHING OLDER — folded, count + total + flag stated on the bar */}
+      {older.length > 0 && (open ? <>{older.map((r) => settledRow(r, "pay-older-row"))}{foldBar(true)}</> : foldBar(false))}
+
+      <div style={{ padding: "13px 17px", borderTop: `1px solid ${PAY.line}`, background: PAY.slot, fontSize: 11, color: PAY.muted, lineHeight: 1.6 }}>
+        Anyone holding the link can open this page — it is the only key, there is no login on it, and it shows this venue and no other. Disabling returns 404 immediately and regenerating does the same to the old link, so both break whatever the partner has bookmarked. The link has been live since {new Date(partner.createdAt).toLocaleDateString("en-US", { year: "numeric", month: "short", day: "numeric" })}.
+      </div>
+    </div>
+  );
+}
 
 // Renders the EXACT public component from the /preview data path. No fallback to a
 // different component: the preview is the partner's page or it is a loading/error state.
