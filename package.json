@@ -40,6 +40,7 @@
     "@types/react-dom": "^19",
     "@types/web-push": "^3.6.4",
     "playwright": "^1.62.1",
+    "server-only": "^0.0.1",
     "tailwindcss": "^4",
     "typescript": "^5"
   }
