@@ -1,0 +1,143 @@
+{
+  "match": {
+    "name": null,
+    "fieldId": null,
+    "category": null,
+    "type": null,
+    "managerId": null,
+    "secondManagerId": null,
+    "description": null,
+    "managerIntro": null,
+    "registrationPrice": null,
+    "additionalSpotPrice": null,
+    "guestCount": null,
+    "fakeSpotLeft36h": null,
+    "fakeSpotLeft24h": null,
+    "fakeSpotLeft12h": null,
+    "fakeSpotLeft6h": null,
+    "fakeSpotLeft3h": null,
+    "autoCanceled": null,
+    "autoCanceledMinutes": null,
+    "minPlayerCount": null,
+    "isFreeMember": null,
+    "isAutoBump": null,
+    "maxTeamSize2Team": null,
+    "maxTeamSize4Team": null,
+    "id": 2470,
+    "startDate": "2026-08-07T20:04:29.753Z",
+    "endDate": "2026-08-08T20:04:29.767Z",
+    "isCancelled": false,
+    "teams": [
+      {
+        "id": 3122,
+        "matchId": 2470,
+        "teamNumber": 1,
+        "name": "White Tee",
+        "locked": false,
+        "price": null,
+        "createdAt": "2026-07-29T15:30:05.998Z",
+        "updatedAt": "2026-07-29T15:30:05.998Z"
+      },
+      {
+        "id": 3123,
+        "matchId": 2470,
+        "teamNumber": 2,
+        "name": "Dark Tee",
+        "locked": false,
+        "price": null,
+        "createdAt": "2026-07-29T15:30:05.998Z",
+        "updatedAt": "2026-07-29T15:30:05.998Z"
+      }
+    ],
+    "fieldTitle": "Bermondsey Field - Austin",
+    "cityName": "Austin"
+  },
+  "fields": [
+    {
+      "id": 1,
+      "title": "Bermondsey Field - Austin",
+      "city": "Austin"
+    },
+    {
+      "id": 2,
+      "title": "Bermondsey Field - Los Angeles",
+      "city": "Los Angeles"
+    },
+    {
+      "id": 3,
+      "title": "Old Boys and Girls High School - Austin",
+      "city": "Austin"
+    },
+    {
+      "id": 4,
+      "title": "Old Boys and Girls High School - Houston",
+      "city": "Houston"
+    },
+    {
+      "id": 5,
+      "title": "New Field - Houston",
+      "city": "Houston"
+    },
+    {
+      "id": 6,
+      "title": "gfdsg - Houston",
+      "city": "Houston"
+    },
+    {
+      "id": 7,
+      "title": "- Houston",
+      "city": "Houston"
+    },
+    {
+      "id": 8,
+      "title": "A very long field name for testing - Los Angeles",
+      "city": "Los Angeles"
+    },
+    {
+      "id": 9,
+      "title": "Test Field for Austin",
+      "city": "Austin"
+    },
+    {
+      "id": 10,
+      "title": "Field - Austin",
+      "city": "Austin"
+    },
+    {
+      "id": 11,
+      "title": "Field - Houston",
+      "city": "Houston"
+    },
+    {
+      "id": 12,
+      "title": "Field 2 - Austin",
+      "city": "Austin"
+    },
+    {
+      "id": 14,
+      "title": "Ryan's LA Field 2",
+      "city": "Los Angeles"
+    },
+    {
+      "id": 15,
+      "title": "NY park",
+      "city": "New York"
+    },
+    {
+      "id": 16,
+      "title": "New Field New York",
+      "city": "New York"
+    },
+    {
+      "id": 18,
+      "title": "Special Events at Onion Creek",
+      "city": "Austin"
+    },
+    {
+      "id": 51,
+      "title": "ABBR",
+      "city": "Austin"
+    }
+  ],
+  "players": []
+}

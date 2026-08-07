@@ -12,20 +12,14 @@
 
 import { authenticateAdmin } from "@/lib/adminAuth";
 import { stageGet, stageWrite, AmbiguousWriteError, WriteFailedError, StageHostGuardError, StageConfigError } from "@/lib/matchdayStageApi";
+import { EDITABLE_KEYS } from "@/lib/matchEditModel";
 
 export const runtime = "nodejs";
 export const dynamic = "force-dynamic";
 export const maxDuration = 30;
 
-// The fields this editor may change via the match PUT. NOT startDate/endDate
-// (own action), NOT scores/teamHomeId/teamAwayId (results), NOT teams (separate
-// PUT /admin/teams/{id}), NOT id/updatedAt/relations.
-export const EDITABLE = new Set<string>([
-  "name", "description", "category", "type", "fieldId", "managerId", "secondManagerId", "managerIntro",
-  "registrationPrice", "additionalSpotPrice", "guestCount", "minPlayerCount",
-  "isFreeMember", "isAutoBump", "autoCanceled", "autoCanceledMinutes", "maxTeamSize2Team", "maxTeamSize4Team",
-  "fakeSpotLeft36h", "fakeSpotLeft24h", "fakeSpotLeft12h", "fakeSpotLeft6h", "fakeSpotLeft3h",
-]);
+// Same allowlist the editor + tests use — one source (matchEditModel).
+const EDITABLE = new Set<string>(EDITABLE_KEYS);
 // Read-only values the editor also needs (identity + roster shape).
 const READONLY = ["id", "startDate", "endDate", "isCancelled", "teams"];
 

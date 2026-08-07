@@ -17,6 +17,7 @@
 
 import { useCallback, useEffect, useMemo, useState } from "react";
 import { supabase } from "@/lib/supabase";
+import { EDITABLE_KEYS, MONEY_KEYS as MONEY, TOGGLE_KEYS as TOGGLE, NULLABLE_NUM, fieldChanged } from "@/lib/matchEditModel";
 
 type FieldRow = { id: number; title: string; city: string | null };
 type Data = Record<string, unknown>;
@@ -26,22 +27,9 @@ type Spec = {
   label: string; hint?: string; opts?: [string | number, string][]; wide?: boolean; cond?: (s: Data) => boolean;
 };
 
-// Static — the editable keys never depend on the fields list (that only supplies
-// the Field select's options). Keeping this module-level makes ingest/load stable
-// so the load effect can't loop and reset edits.
-const EDITABLE_KEYS = [
-  "name", "fieldId", "category", "type", "managerId", "secondManagerId", "description", "managerIntro",
-  "registrationPrice", "additionalSpotPrice", "guestCount", "fakeSpotLeft36h", "fakeSpotLeft24h",
-  "fakeSpotLeft12h", "fakeSpotLeft6h", "fakeSpotLeft3h", "autoCanceled", "autoCanceledMinutes",
-  "minPlayerCount", "isFreeMember", "isAutoBump", "maxTeamSize2Team", "maxTeamSize4Team",
-];
-const MONEY = new Set(["registrationPrice", "additionalSpotPrice"]);
-const TOGGLE = new Set(["autoCanceled", "isFreeMember", "isAutoBump"]);
-const NULLABLE_NUM = new Set(["managerId", "secondManagerId"]);
 const LADDER = ["fakeSpotLeft36h", "fakeSpotLeft24h", "fakeSpotLeft12h", "fakeSpotLeft6h", "fakeSpotLeft3h"];
 const CATS: [string, string][] = [["OPEN", "Open — Open to all"], ["PREMIER", "Premier — four stars and up"], ["LEGENDS", "Legends"], ["ACADEMY", "Academy"], ["CO_ED", "Co-ed"], ["FEMINE", "Women’s"], ["TOURNAMENT", "Tournament"]];
 const TYPES: [string, string][] = [["REGULAR", "Regular"], ["EVENT", "Special event"], ["BRACKET", "Bracket"], ["GROUP", "Group"]];
-const GROUP_TITLE: Record<Spec["group"], string> = { match: "Match", price: "Pricing", ladder: "Spots released before kick-off", auto: "Automation" };
 
 function specs(fields: FieldRow[]): Spec[] {
   const fieldOpts: [number, string][] = fields.map((f) => [f.id, `${f.city ? f.city + " — " : ""}${f.title}`]);
@@ -112,7 +100,7 @@ export default function MatchEditor({ id }: { id: string }) {
 
   const changedKeys = useMemo(() => {
     if (!state || !loaded) return [];
-    return EDITABLE_KEYS.filter((k) => JSON.stringify(state[k]) !== JSON.stringify(loaded[k]));
+    return EDITABLE_KEYS.filter((k) => fieldChanged(loaded[k], state[k]));
   }, [state, loaded]);
 
   // THE PAYLOAD — the same key set the diff shows.
@@ -136,7 +124,7 @@ export default function MatchEditor({ id }: { id: string }) {
 
   const renderField = (f: Spec) => {
     if (f.cond && !f.cond(state)) return null;
-    const dirty = JSON.stringify(state[f.key]) !== JSON.stringify(loaded[f.key]);
+    const dirty = fieldChanged(loaded[f.key], state[f.key]);
     const cls = `f${dirty ? " dirty" : ""}${f.wide ? " wide" : ""}`;
     const lbl = <label>{f.label}{f.hint ? <span className="hint">{f.hint}</span> : null}</label>;
     let ctl: React.ReactNode;
@@ -159,7 +147,7 @@ export default function MatchEditor({ id }: { id: string }) {
     return <div className={cls} key={f.key} data-f={f.key}>{lbl}{ctl}</div>;
   };
   const renderToggle = (f: Spec) => {
-    const dirty = state[f.key] !== loaded[f.key];
+    const dirty = fieldChanged(loaded[f.key], state[f.key]);
     return (
       <div className={`tg${dirty ? " dirty" : ""}`} key={f.key} data-f={f.key}>
         <button type="button" data-testid={`in-${f.key}`} aria-pressed={!!state[f.key]} onClick={() => set(f.key, !state[f.key])}><i /></button>
@@ -282,7 +270,7 @@ export default function MatchEditor({ id }: { id: string }) {
           <div className="diff"><div className="diffin">
             <h3>About to change — this list is the request body</h3>
             <div className="dl" data-testid="diff-list">{changedKeys.map((k) => (
-              <span className="di" data-testid="diff-item" data-key={k} key={k}>{FIELDS.find((f) => f.key === k)?.label} <s>{fmt(k, loaded[k])}</s> → <b>{fmt(k, state[k])}</b></span>
+              <span className="di" data-testid="diff-item" data-key={k} data-from={JSON.stringify(loaded[k] ?? null)} data-to={JSON.stringify(state[k] ?? null)} key={k}>{FIELDS.find((f) => f.key === k)?.label} <s>{fmt(k, loaded[k])}</s> → <b>{fmt(k, state[k])}</b></span>
             ))}</div>
             <div className="diffnote">Partial update: only these {changedKeys.length} field{changedKeys.length === 1 ? "" : "s"} are sent. Everything you did not touch is left exactly as it was.</div>
           </div></div>
