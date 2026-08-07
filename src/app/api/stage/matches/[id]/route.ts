@@ -1,12 +1,14 @@
-// Admin, STAGING-only match read + rename. GET returns a match's identity + name;
-// PUT renames it. The write goes through the guarded staging client
-// (matchdayStageApi) so it physically cannot reach production.
+// Admin, STAGING-only match editor data + partial write. GET returns the match's
+// editable field values, the identity, the fields list (for the Field select) and
+// the roster (read-only this phase). PUT takes a PARTIAL { changes } body and
+// forwards ONLY those keys through the host-guarded staging client.
 //
-// The write sends ONLY { name }. PUT /admin/matches/{id} was proven on staging to
-// be a PARTIAL update (it whitelist-validates what you send but leaves omitted
-// fields untouched — verified: a { name }-only PUT preserved a marker set in
-// description). So we never echo startDate/teams/scores/etc.: past matches stay
-// editable and no wrongly-sourced field can overwrite anything unintended.
+// PUT /admin/matches/{id} is a proven PARTIAL update: it leaves omitted fields
+// untouched. So the client sends exactly the fields the user changed — nothing
+// it did not touch is sent, nothing it did not touch can be overwritten. The
+// server independently allowlists the keys (EDITABLE) so a bad client can't push
+// a non-editable field (startDate, scores, id, teams — team edits are a separate
+// endpoint) even if it tried.
 
 import { authenticateAdmin } from "@/lib/adminAuth";
 import { stageGet, stageWrite, AmbiguousWriteError, WriteFailedError, StageHostGuardError, StageConfigError } from "@/lib/matchdayStageApi";
@@ -15,15 +17,27 @@ export const runtime = "nodejs";
 export const dynamic = "force-dynamic";
 export const maxDuration = 30;
 
-// The read-only identity we show the admin — enough to be sure it's the right match.
-function identity(m: Record<string, unknown>) {
+// The fields this editor may change via the match PUT. NOT startDate/endDate
+// (own action), NOT scores/teamHomeId/teamAwayId (results), NOT teams (separate
+// PUT /admin/teams/{id}), NOT id/updatedAt/relations.
+export const EDITABLE = new Set<string>([
+  "name", "description", "category", "type", "fieldId", "managerId", "secondManagerId", "managerIntro",
+  "registrationPrice", "additionalSpotPrice", "guestCount", "minPlayerCount",
+  "isFreeMember", "isAutoBump", "autoCanceled", "autoCanceledMinutes", "maxTeamSize2Team", "maxTeamSize4Team",
+  "fakeSpotLeft36h", "fakeSpotLeft24h", "fakeSpotLeft12h", "fakeSpotLeft6h", "fakeSpotLeft3h",
+]);
+// Read-only values the editor also needs (identity + roster shape).
+const READONLY = ["id", "startDate", "endDate", "isCancelled", "teams"];
+
+function pickMatch(m: Record<string, unknown>) {
+  const out: Record<string, unknown> = {};
+  for (const k of EDITABLE) out[k] = m[k] ?? null;
+  for (const k of READONLY) out[k] = m[k] ?? null;
   const field = (m.field ?? {}) as Record<string, unknown>;
   const city = (field.city ?? {}) as Record<string, unknown>;
-  return {
-    id: m.id, name: m.name, startDate: m.startDate, type: m.type, category: m.category,
-    isCancelled: m.isCancelled, fieldTitle: (field.title as string | undefined)?.trim() ?? null,
-    cityName: (city.name as string | undefined) ?? null,
-  };
+  out.fieldTitle = (field.title as string | undefined)?.trim() ?? null;
+  out.cityName = (city.name as string | undefined) ?? null;
+  return out;
 }
 
 export async function GET(req: Request, ctx: { params: Promise<{ id: string }> }) {
@@ -32,8 +46,16 @@ export async function GET(req: Request, ctx: { params: Promise<{ id: string }> }
   const { id } = await ctx.params;
   if (!/^\d+$/.test(id)) return Response.json({ error: "Match id must be numeric" }, { status: 400 });
   try {
-    const match = await stageGet<Record<string, unknown>>(`/admin/matches/${id}`);
-    return Response.json({ match: identity(match) });
+    const [match, fields, players] = await Promise.all([
+      stageGet<Record<string, unknown>>(`/admin/matches/${id}`),
+      stageGet<unknown[]>(`/admin/fields`).catch(() => []),
+      stageGet<unknown[]>(`/admin/matches/${id}/players`).catch(() => []),
+    ]);
+    const fieldList = (fields as Record<string, unknown>[]).map((f) => ({
+      id: f.id as number, title: (f.title as string | undefined)?.trim() ?? `Field ${f.id}`,
+      city: ((f.city as Record<string, unknown> | undefined)?.name as string | undefined) ?? null,
+    }));
+    return Response.json({ match: pickMatch(match), fields: fieldList, players: players ?? [] });
   } catch (e) {
     return errToResponse(e);
   }
@@ -45,23 +67,27 @@ export async function PUT(req: Request, ctx: { params: Promise<{ id: string }> }
   const { id } = await ctx.params;
   if (!/^\d+$/.test(id)) return Response.json({ error: "Match id must be numeric" }, { status: 400 });
 
-  const body = (await req.json().catch(() => null)) as { name?: unknown } | null;
-  const name = typeof body?.name === "string" ? body.name.trim() : "";
-  if (!name) return Response.json({ error: "name is required" }, { status: 400 });
-  if (name.length > 200) return Response.json({ error: "name too long" }, { status: 400 });
+  const body = (await req.json().catch(() => null)) as { changes?: Record<string, unknown> } | null;
+  const changes = body?.changes;
+  if (!changes || typeof changes !== "object" || Array.isArray(changes)) {
+    return Response.json({ error: "changes object required" }, { status: 400 });
+  }
+  const keys = Object.keys(changes);
+  if (keys.length === 0) return Response.json({ error: "no changes to apply" }, { status: 400 });
+  const illegal = keys.filter((k) => !EDITABLE.has(k));
+  if (illegal.length) return Response.json({ error: `not editable: ${illegal.join(", ")}` }, { status: 400 });
 
   try {
-    // Partial update — send ONLY the changed field. Omitted fields are left alone.
-    await stageWrite("PUT", `/admin/matches/${id}`, { name });
+    // Partial write — send ONLY the changed keys. Omitted fields are untouched.
+    await stageWrite("PUT", `/admin/matches/${id}`, changes);
     const after = await stageGet<Record<string, unknown>>(`/admin/matches/${id}`);
-    return Response.json({ ok: true, match: identity(after) });
+    return Response.json({ ok: true, match: pickMatch(after) });
   } catch (e) {
     return errToResponse(e);
   }
 }
 
 function errToResponse(e: unknown): Response {
-  // Surface the guard / ambiguity distinctly so the operator knows the risk.
   if (e instanceof StageHostGuardError) return Response.json({ error: `Host guard blocked the write: ${e.message}` }, { status: 500 });
   if (e instanceof AmbiguousWriteError) return Response.json({ error: `AMBIGUOUS: ${e.message}`, ambiguous: true }, { status: 502 });
   if (e instanceof WriteFailedError) return Response.json({ error: e.message }, { status: e.status >= 400 && e.status < 600 ? e.status : 400 });
