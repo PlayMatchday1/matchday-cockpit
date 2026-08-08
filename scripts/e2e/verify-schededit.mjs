@@ -64,7 +64,7 @@ function DETAIL(id) {
     2480: { name: "Cap Conflict", fieldId: 1, isAutoBump: true, maxTeamSize2Team: 10, maxTeamSize4Team: 20, maxPlayerCount: 10, teams: [{}, {}] },
     2481: { name: "Cap OK", fieldId: 1, isAutoBump: true, maxTeamSize2Team: 10, maxTeamSize4Team: 20, maxPlayerCount: 40, teams: [{}, {}] },
   };
-  return { match: { ...base, ...(per[id] || {}) }, fields: FIELDS, players: [] };
+  return { match: { ...base, ...(per[id] || {}) }, fields: FIELDS, players: [], managers: [{ id: 101, name: "Marcus Webb" }, { id: 104, name: "Sam Okafor" }] };
 }
 
 // ── contrast (WCAG) ───────────────────────────────────────────────────────────
@@ -88,7 +88,7 @@ async function main() {
     if (url.includes("/veo/intent") || url.includes("/veo/cameras")) return route.fulfill({ status: 200, contentType: "application/json", body: JSON.stringify({ ok: true }) });
     return route.fulfill({ status: 200, contentType: "application/json", body: JSON.stringify(veoWeek(url.includes("week="))) });
   });
-  await context.route("**/api/stage/matches/**", (route) => {
+  await context.route("**/api/matchday/production/matches/**", (route) => {
     const req = route.request();
     const id = Number(req.url().split("/").pop().split("?")[0]);
     if (req.method() === "PUT") {
@@ -312,25 +312,8 @@ async function main() {
   await page.waitForTimeout(200);
   is("Today enabled after navigating away", await T("today").isDisabled(), false);
 
-  console.log(`\n== full editor: maxPlayerCount silent-cap warning ==`);
-  await page.goto(`${BASE}/match-ops/matches/2480`, { waitUntil: "domcontentloaded" });
-  await T("save").waitFor({ timeout: 30000 });
-  await page.waitForTimeout(150);
-  is("cap conflict warning shown (cap 10 < 2x10)", await T("cap-warn").isVisible(), true);
-  await T("in-maxPlayerCount").fill("20");
-  await page.waitForTimeout(80);
-  is("warning clears once cap covers the layout", await T("cap-warn").count(), 0);
-  // NEGATIVE CONTROL: a non-conflicting match shows no warning at all
-  await page.goto(`${BASE}/match-ops/matches/2481`, { waitUntil: "domcontentloaded" });
-  await T("save").waitFor({ timeout: 30000 });
-  await page.waitForTimeout(150);
-  is("[neg] no conflict -> no warning (cap 40)", await T("cap-warn").count(), 0);
-  // maxPlayerCount reaches the body as a change (and blank->null, 0 stays 0 handled by model)
-  await T("in-maxPlayerCount").fill("30");
-  await page.waitForTimeout(60);
-  await T("save").click();
-  await page.waitForTimeout(200);
-  is("editor: maxPlayerCount sent", lastPut && lastPut.maxPlayerCount, 30);
+  // (full-editor capacity model moved to the new perTeam/teamNumbers model — see
+  //  scripts/e2e/verify-p10.mjs for the capacity + inconsistency assertions.)
 
   console.log(`\n== WCAG AA contrast (sampled solid pairs) ==`);
   await gotoSchedule();

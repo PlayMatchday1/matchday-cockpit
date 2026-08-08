@@ -56,17 +56,19 @@ async function main() {
   noThrow("DELETE /admin/matches/{id}/players/{pid} allowed (remove player)", () => assertAllowedEndpoint("DELETE", `${H.production}/admin/matches/17256/players/5`));
   noThrow("PATCH /admin/matches/{id}/user-matches/{um}/absent allowed", () => assertAllowedEndpoint("PATCH", `${H.production}/admin/matches/17256/user-matches/9/absent`));
 
-  console.log("write preflight — the production bolt:");
-  throws("production write refused (bolted)", ProductionWriteBoltedError, () => preflightWrite("production", "PUT", PROD, { name: "x" }));
+  console.log("write preflight — production is UNBOLTED (Phase 10) but still guarded:");
+  noThrow("production field write passes preflight (bolt off)", () => preflightWrite("production", "PUT", PROD, { name: "x" }));
   noThrow("staging write still allowed (passes all gates)", () => preflightWrite("staging", "PUT", STAGE, { name: "x" }));
+  // ProductionWriteBoltedError type still exists (the bolt can be re-engaged).
+  void ProductionWriteBoltedError;
 
-  console.log("apiWrite('production', ...) is bolted BEFORE any network call:");
+  console.log("apiWrite to a DENIED ENDPOINT on production is refused BEFORE any network:");
   try {
-    await apiWrite("production", "PUT", "/admin/matches/1", { name: "x" });
-    bad("apiWrite production did NOT throw");
+    await apiWrite("production", "DELETE", "/admin/matches/1", undefined);
+    bad("apiWrite production DELETE did NOT throw");
   } catch (e) {
-    e instanceof ProductionWriteBoltedError ? ok("apiWrite production -> ProductionWriteBoltedError (no request sent)")
-      : bad("apiWrite production wrong error", `${(e as Error).name}`);
+    e instanceof DeniedEndpointError ? ok("apiWrite production DELETE /admin/matches/{id} -> DeniedEndpointError (no request sent)")
+      : bad("apiWrite production DELETE wrong error", `${(e as Error).name}`);
   }
 
   console.log(`\n${pass} passed, ${fail} failed`);
