@@ -74,13 +74,22 @@ export class DeniedFieldError extends Error {
 // Fields no screen may write without a deliberate design decision:
 //  - teams / teamHomeId / teamAwayId / teamHomeScore / teamAwayScore are the
 //    match RESULT + the teams array (teams is edited via PUT /admin/teams/{id}).
-//  - startDate / endDate move the day-of notification, the fake-spot reveal
-//    schedule and the auto-cancel timing, and the server derives *Utc from them;
-//    editing a date is its own action, not a field in a general edit.
+//    Blind writes here corrupt outcomes; they stay denied.
+// PHASE 7 - startDate AND endDate are now WRITABLE (both removed from this list),
+//    a deliberate decision, not a bug fix. Proven on staging: shifting startDate
+//    +1h moved startDate, the server re-derived startDateUtc by the field's
+//    offset (5h, preserved), endDate/endDateUtc stayed put, nothing else moved;
+//    shifting the PAIR +1h moved both and both *Utc, duration preserved, nothing
+//    else moved. Because nothing validates the pair server-side (staging match
+//    2473 has endDate BEFORE startDate — a negative duration is reachable) the
+//    editor that writes them OWNS the pair: a time edit sends startDate AND
+//    endDate together preserving the loaded duration, and a match that loads
+//    already inverted is flagged, never silently edited. See
+//    docs/matchday-api-facts.md ("Phase 7 date decision").
 // NOTE: maxPlayerCount and hasOrganizer are deliberately NOT here — they are
 // plausible future controls; they stay unmodeled, just not blocked.
 export const DENY_WRITE_FIELDS = new Set<string>([
-  "teams", "teamHomeId", "teamAwayId", "teamHomeScore", "teamAwayScore", "startDate", "endDate",
+  "teams", "teamHomeId", "teamAwayId", "teamHomeScore", "teamAwayScore",
 ]);
 
 // Throws BEFORE any network call if a write body names a denied field.

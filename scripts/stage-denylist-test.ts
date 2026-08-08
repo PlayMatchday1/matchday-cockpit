@@ -1,8 +1,10 @@
 import "server-only"; // no-op under --conditions=react-server
 import { assertNoDeniedFields, stageWrite, DeniedFieldError } from "../src/lib/matchdayStageApi";
 try { process.loadEnvFile(".env.local"); } catch {}
-const DENIED = ["teams", "teamHomeId", "teamAwayId", "teamHomeScore", "teamAwayScore", "startDate", "endDate"];
-const ALLOWED = ["maxPlayerCount", "hasOrganizer"];
+// PHASE 7: startDate + endDate came OFF the deny-list (a time edit owns the pair,
+// proven on staging). The 5 result/teams fields stay denied.
+const DENIED = ["teams", "teamHomeId", "teamAwayId", "teamHomeScore", "teamAwayScore"];
+const ALLOWED = ["maxPlayerCount", "hasOrganizer", "startDate", "endDate"];
 async function main() {
   let pass = 0, fail = 0;
   console.log("DENIED keys must throw before any network:");
@@ -16,9 +18,9 @@ async function main() {
     catch (e) { console.log(`  XX ${k} should not throw: ${(e as Error).message.slice(0, 60)}`); fail++; }
   }
   console.log("stageWrite blocks a denied body BEFORE the network call:");
-  try { await stageWrite("PUT", "/admin/matches/2470", { startDate: "2026-01-01T00:00:00Z" }); console.log("  XX stageWrite did not throw"); fail++; }
+  try { await stageWrite("PUT", "/admin/matches/2470", { teamHomeScore: 3 }); console.log("  XX stageWrite did not throw"); fail++; }
   catch (e) { if (e instanceof DeniedFieldError) { console.log("  ok stageWrite threw DeniedFieldError (no request sent)"); pass++; } else { console.log(`  XX wrong: ${(e as Error).name}: ${(e as Error).message.slice(0, 60)}`); fail++; } }
-  console.log(`\n${pass} passed, ${fail} failed (7 denied + 2 allowed + 1 wired)`);
+  console.log(`\n${pass} passed, ${fail} failed (5 denied + 4 allowed + 1 wired)`);
   process.exit(fail ? 1 : 0);
 }
 main().catch((e) => { console.error(e); process.exit(2); });

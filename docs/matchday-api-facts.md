@@ -61,33 +61,66 @@ fields. The 9 unmodeled writable fields are:
     teams, teamHomeId, teamAwayId, teamHomeScore, teamAwayScore,
     startDate, endDate, maxPlayerCount, hasOrganizer
 
-## The deny-list: 7 of those 9 are blocked in the write client
+## The deny-list: 5 fields blocked in the write client (was 7 - see Phase 7)
 
-`DENY_WRITE_FIELDS` in `matchdayStageApi.ts` refuses these **7** before any
+`DENY_WRITE_FIELDS` in `matchdayStageApi.ts` refuses these **5** before any
 network call (throws `DeniedFieldError`):
 
-    teams, teamHomeId, teamAwayId, teamHomeScore, teamAwayScore,
-    startDate, endDate
+    teams, teamHomeId, teamAwayId, teamHomeScore, teamAwayScore
 
-Why each is denied:
-
-- `teams`, `teamHomeId`, `teamAwayId`, `teamHomeScore`, `teamAwayScore` are the
-  match **result** and the teams array. Teams are edited through their own
-  endpoint (`PUT /admin/teams/{id}`); scores are a result-entry action, not a
-  field in a general match edit. Blind writes here corrupt outcomes.
-- `startDate` / `endDate` move the day-of notification, the fake-spot reveal
-  schedule, and the auto-cancel timing, and the server derives the `*Utc`
-  companions from them (see next section). Editing a date is its own deliberate
-  action with its own staging test, not a field in a bulk edit.
+Why denied: these are the match **result** and the teams array. Teams are edited
+through their own endpoint (`PUT /admin/teams/{id}`); scores are a result-entry
+action, not a field in a general match edit. Blind writes here corrupt outcomes.
 
 The deny-list lives in the **write client**, not in any one screen - so every
 screen built on the client inherits it. A field is dangerous because of the
 API, not because a given component happens to lack a control for it.
 
-The remaining **2** of the 9 unmodeled writable fields - `maxPlayerCount` and
-`hasOrganizer` - are deliberately **NOT** denied. They are plausible future
-controls; they are simply not surfaced yet. (But see the maxPlayerCount landmine
-below before you surface a team-size control.)
+`maxPlayerCount` and `hasOrganizer` were never denied - plausible future
+controls, just unmodeled. `maxPlayerCount` is now surfaced in the full editor
+(Phase 7 Part E). `startDate` and `endDate` were denied through Phase 6 and
+came **off** the list in Phase 7; see the next section.
+
+## Phase 7 date decision - startDate/endDate writable, editor owns the pair
+
+Phase 7 lifted `startDate` and `endDate` off the deny-list. This was a
+deliberate design decision, recorded here, not a bug fix.
+
+**Evidence (staging match 2470, single writes, restored):**
+
+- PUT `{ startDate }` shifted +1h -> startDate moved; the server re-derived
+  `startDateUtc` by exactly +1h with the field offset preserved (5h, CDT);
+  `endDate`/`endDateUtc` did **not** move; nothing else moved. Duration silently
+  went 24.00h -> 23.00h.
+- PUT `{ startDate, endDate }` both +1h -> both moved, both `*Utc` followed +1h,
+  **duration preserved** at 24.00h, nothing else moved.
+
+**The problem this created:** a start-only write silently changes a match's
+duration, and because nothing validates the pair server-side (staging match 2473
+has `endDate` BEFORE `startDate` - a negative duration is a reachable state), a
+start-only shift can push a match past its own end.
+
+**The decision - option (a): a time edit sends startDate AND endDate together,**
+**preserving the loaded duration.** Chosen over option (b) (send startDate alone,
+block any edit that would reach endDate) because:
+
+- A "change the start time" edit that silently shortens or lengthens the match
+  is a worse surprise than writing one extra, structurally identical field.
+- Option (b) cannot repair a match that is *already* inverted; option (a)'s pair
+  write can.
+- The pair write is proven (above) and moves nothing unexpected.
+
+**The rules any date/time control must follow:**
+
+- Compute the delta from the loaded `startDate`, apply the SAME delta to the
+  loaded `endDate`, send both. Preserve the original duration.
+- The value is the wall-clock string verbatim: `date + "T" + time +
+  ":00.000Z"`. **Never** call `new Date()` on it, never convert, never
+  round-trip through a Date object (that reads the Z as UTC - see the landmine
+  above). String surgery only.
+- Never write the `*Utc` fields; the server derives them.
+- A match that **loads already inverted** (`endDate` <= `startDate`) is shown as
+  a warning and its date/time edit is held back - it is not silently rewritten.
 
 ## Dates: startDate/endDate are LOCAL WALL-CLOCK wearing a Z
 
