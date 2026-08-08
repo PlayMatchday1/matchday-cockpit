@@ -334,6 +334,36 @@ Full inventory: docs/retool-prod-inventory.md. Key points that touch this file:
   single-fire CLIENT guard (disable-on-submit / one-shot), and undoing one requires
   N `DELETE /admin/matches/{id}` calls — an endpoint that is now on the deny-list.
 
+## The first PRODUCTION write, measured (Phase 9)
+
+Proven by an APPLIED write, not inferred. Target: production match 17256 (finished
+2026-08-04, nothing in flight). Body: exactly `{"name": "ATH Pearland [p9]"}` —
+one key, single-shot, no retry.
+
+- PRODUCTION PUT **PATCHES, it does not replace.** Sending one key changed exactly
+  that key. Diffing ALL 54 readable fields BEFORE vs AFTER: only `name` and
+  `updatedAt` moved; the other 52 were byte-for-byte identical. A full-object
+  replace would have nulled the ~51 omitted fields — it did not. This matches
+  staging and matches Retool's prediction (attachCityManagerToMatch has PUT a lone
+  `{managerId}` to production for years).
+- Server-recomputed on write: `updatedAt` (only, here). `startDateUtc`/`endDateUtc`
+  are recomputed from `startDate`/`endDate` when those change (not exercised this
+  phase; from staging evidence). `_count`/`starRating*` are server-owned.
+- Restore: PUT `{"name":"ATH Pearland"}` put it back; a third GET matched BEFORE on
+  all 54 fields except `updatedAt`. The match is exactly as found.
+- Retool prediction match: YES — production applies partial writes; omitted keys
+  are untouched.
+
+BOUNDARY of what this proves / does NOT prove:
+- PROVEN: a SINGLE-KEY write to a FINISHED match patches, and the 54 READABLE
+  fields are otherwise untouched.
+- NOT tested: multi-key writes; the startDate/endDate pair; live/upcoming matches;
+  and WRITE-ONLY fields. `teamNumbers` is write-only (accepted on write, absent
+  from GET) — a read-back cannot verify a write-only field was undisturbed, so this
+  says nothing about write-only fields.
+
+The bolt (`PRODUCTION_WRITES_ENABLED`) is back to `false` after this write.
+
 ## Running scripts against this client
 
 Scripts that import the server-only write module run with:
