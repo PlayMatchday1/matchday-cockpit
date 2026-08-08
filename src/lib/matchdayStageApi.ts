@@ -311,7 +311,10 @@ export async function apiWrite<T = unknown>(env: MatchdayEnv, method: "POST" | "
   try {
     res = await fetch(url, {
       method,
-      headers: { Authorization: `Bearer ${token}`, "Content-Type": "application/json" },
+      // Only declare a JSON content-type when there IS a body — the API rejects an
+      // empty body sent with Content-Type: application/json (400). Bodyless writes
+      // (DELETE a player, PATCH .../absent, PATCH .../fake-player) need no header.
+      headers: { Authorization: `Bearer ${token}`, ...(body === undefined ? {} : { "Content-Type": "application/json" }) },
       body: body === undefined ? undefined : JSON.stringify(body),
       signal: AbortSignal.timeout(WRITE_TIMEOUT_MS),
     });
