@@ -83,6 +83,11 @@ async function main() {
   throws("field deny-list RUNS on a team body (denied field rejected)", DeniedFieldError, () => preflightWrite("staging", "PUT", TEAM_S, { teamHomeScore: 3 }));
   noThrow("endpoint deny-list does NOT block PUT /admin/teams/{id}", () => assertAllowedEndpoint("PUT", TEAM_P));
   noThrow("endpoint deny-list does not spuriously match /admin/teams/{id}/cancel", () => assertAllowedEndpoint("PATCH", TEAM_P + "/cancel"));
+  // Phase 13: the remove path is DELETE /admin/matches/user-matches/{umId} — one
+  // segment longer than the deny-listed DELETE /admin/matches/{id}. Prove the
+  // matcher discriminates rather than happening to.
+  noThrow("remove path DELETE /admin/matches/user-matches/{umId} is ALLOWED", () => assertAllowedEndpoint("DELETE", H.production + "/admin/matches/user-matches/291788"));
+  throws("match-delete DELETE /admin/matches/{id} is REFUSED", DeniedEndpointError, () => assertAllowedEndpoint("DELETE", H.production + "/admin/matches/17371"));
   noThrow("teams write passes full preflight on staging (env named per call)", () => preflightWrite("staging", "PUT", TEAM_S, { name: "x" }));
   // env named per call: an unlabelled env is refused for a teams URL too
   // @ts-expect-error unlabelled environment

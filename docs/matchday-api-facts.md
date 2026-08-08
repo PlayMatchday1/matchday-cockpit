@@ -500,12 +500,34 @@ CONFLICTS with the mockup / Phase-6 inventory (API wins):
     remove keys on userMatchId, NOT playerId.
   - MARK-ABSENT: the documented PATCH /admin/matches/{id}/user-matches/{umId}/absent
     (and 3 variants) all 404 "Cannot PATCH" on staging — the route is not
-    registered. Absent is UNAVAILABLE and was omitted from the roster build.
+    registered. Retool's export DOES call this path, so it is either unregistered
+    on staging or the path is stale. UNRESOLVED — ask the backend dev. Do not guess
+    at alternatives. Omitted from the roster build.
   - add-fake to a FINISHED / over-capacity match returns 2xx with an id but does NOT
     persist a roster row (and that id is not a user-match) — only add to an active
     match with an open slot.
   - bodyless writes (DELETE, PATCH .../fake-player) must NOT send Content-Type:
     application/json with an empty body (400) — the client now omits it.
+
+A 2xx DOES NOT MEAN THE WRITE LANDED (Phase 13 — API property, not one endpoint's
+quirk; we have only tested a few). add-fake to a finished match returned 2xx and
+persisted nothing. So a write has FOUR outcomes, and a row may only be called
+LANDED after a READ-BACK confirms it — never on HTTP status alone:
+  - LANDED      request ok AND the change shows up on re-read.
+  - FAILED      request rejected (clean 4xx) — definitely did not happen; retry safe.
+  - NOT APPLIED request returned 2xx but the re-read does NOT show it — the server
+                accepted it and did nothing. Retry like a failure, but SAY this
+                distinctly: it is a different fact from a rejection.
+  - UNKNOWN     timeout / ambiguous (network, 401, 5xx) — may or may not have
+                happened. STOP the run, leave the rest unsent, reload before acting.
+The roster save state machine uses these four; only UNKNOWN stops the run.
+
+## The remove path vs the match-delete near-miss (Phase 13)
+
+DELETE /admin/matches/user-matches/{userMatchId} (remove a player) is ALLOWED;
+DELETE /admin/matches/{id} (destroy the match) is on the endpoint deny-list — same
+verb, one segment shorter. The matcher discriminates on the parsed segment list, not
+a prefix, and this is asserted in prod-guard-test.
 
 OPEN QUESTION — removing a player who PAID (Phase 13 Part 4, do not guess):
   Removal is NOT a refund. refund-and-cancel is a SEPARATE endpoint and is on the
