@@ -1,6 +1,11 @@
 "use client";
 
-// Roster editor (Phase 13) — built from roster-v1_1.html, wired to the guarded
+// Roster editor (Phase 13 + Phase 14) — built from the roster mockups, wired to
+// the guarded PRODUCTION route and the shared rosterModel diff. Phase 14 added the
+// pick-up-and-place two-tap move (touch has no HTML5 drag; drag stays the desktop
+// primary) and the phone layout (stacked columns, teamjump strip, bottom-sheet row
+// menu). The diff, the four-state read-back save, the endpoints and the guards are
+// unchanged. Mark-absent is still omitted — its endpoint 404s on staging.
 // PRODUCTION route and the shared rosterModel diff. Rules held exactly:
 //  - reads LIVE from the API on open (never the synced table)
 //  - team count comes from the data
@@ -49,6 +54,8 @@ export default function RosterEditor({ matchId }: { matchId: number }) {
   const [busy, setBusy] = useState(false);
   const [toast, setToast] = useState<{ text: string; bad?: boolean } | null>(null);
   const [run, setRun] = useState<RunRow[] | null>(null); // null = idle
+  const [placing, setPlacing] = useState<string | null>(null); // key of the carried player (Phase 14)
+  const [menuFor, setMenuFor] = useState<string | null>(null); // key of the row whose menu/sheet is open
   const nextTmp = useRef(-1);
   const badge = envBadge(ENV);
 
@@ -104,6 +111,53 @@ export default function RosterEditor({ matchId }: { matchId: number }) {
       });
     });
   };
+
+  // ── pick-up-and-place (Phase 14): a two-tap move for touch, where HTML5 drag
+  //    never fires, and for choosing a specific slot / swapping two specific
+  //    players — which "move to the first open slot" cannot do. Same place(). ──
+  const isPhone = () => typeof window !== "undefined" && window.matchMedia("(max-width: 820px)").matches;
+  const startPlacing = (key: string) => { if (run) return; setMenuFor(null); setPlacing(key); };
+  const stopPlacing = () => setPlacing(null);
+  // No `if (placing) return` guard here on purpose: during place mode the CAPTURE
+  // tap handler stops the event before it reaches a slot's onClick, so the menu
+  // never opens. That capture step is the sole suppressor — not a second guard.
+  const openMenu = (key: string) => setMenuFor((m) => (m === key ? null : key));
+  const closeMenu = () => setMenuFor(null);
+
+  // The tap that lands a carried player is handled in the CAPTURE phase. If it ran
+  // in bubble, a tap on an occupied slot would ALSO open that row's menu underneath
+  // (the swap target's sheet). Capturing + stopPropagation preempts that. A test
+  // flag flips the phase to prove the assertion has teeth.
+  const stateRef = useRef<{ placing: string | null; players: UIPlayer[]; teams: Team[]; place: typeof place; stopPlacing: () => void; say: typeof say }>(null as never);
+  stateRef.current = { placing, players, teams, place, stopPlacing, say };
+  useEffect(() => {
+    const onTap = (e: MouseEvent) => {
+      const st = stateRef.current; if (!st.placing) return;
+      const el = e.target as HTMLElement;
+      if (el.closest(".placebar")) return;
+      const slot = el.closest("[data-slot]") as HTMLElement | null; if (!slot) return;
+      e.preventDefault(); e.stopPropagation();
+      const [t, n] = slot.dataset.slot!.split(":").map(Number);
+      const carried = st.players.find((x) => x.key === st.placing);
+      if (!carried) { st.stopPlacing(); return; }
+      if (carried.team === t && carried.num === n) { st.stopPlacing(); return; } // tap self = put back down
+      if (st.teams[t]?.locked) { st.say(`${st.teams[t].name} is locked. Unlock it first.`, true); return; } // stay armed
+      const target = st.players.find((x) => x.team === t && x.num === n && x.key !== st.placing);
+      st.place(st.placing, t, n);
+      st.say(target ? `Swapped ${carried.name} with ${target.name}` : `${carried.name} moved to ${st.teams[t].name} #${n}`);
+      st.stopPlacing();
+    };
+    const capture = !(typeof window !== "undefined" && (window as unknown as { __ROSTER_PLACE_BUBBLE__?: boolean }).__ROSTER_PLACE_BUBBLE__);
+    document.addEventListener("click", onTap, capture);
+    return () => document.removeEventListener("click", onTap, capture);
+  }, []);
+  useEffect(() => {
+    const onKey = (e: KeyboardEvent) => { if (e.key === "Escape") { setPlacing(null); setMenuFor(null); } };
+    document.addEventListener("keydown", onKey);
+    return () => document.removeEventListener("keydown", onKey);
+  }, []);
+
+  const isMoved = (p: UIPlayer) => { if (p.added) return true; const L = p.playerId != null ? loaded[p.playerId] : undefined; return !!L && (L.team !== p.team || L.num !== p.num || L.fake !== p.fake); };
 
   // ── shape: refuse a shrink that would strand anyone; name them ───────────────
   const stranded = (perTeam: number, teamN: number) => players.filter((p) => p.team !== null && (p.team >= teamN || (p.num ?? 0) > perTeam));
@@ -204,8 +258,14 @@ export default function RosterEditor({ matchId }: { matchId: number }) {
   const dirty = plan.length;
 
   return (
-    <div className="rse" data-testid="roster" data-env={ENV}>
+    <div className={"rse" + (placing ? " placing" : "")} data-testid="roster" data-env={ENV}>
       <style>{CSS}</style>
+      {placing && (
+        <div className="placebar" data-testid="placebar">
+          <span className="pb-txt"><b>Moving {players.find((x) => x.key === placing)?.name}</b><span> — tap a slot to place them, or tap an occupied slot to swap</span></span>
+          <button className="pb-x" data-testid="place-cancel" onClick={stopPlacing}>Cancel</button>
+        </div>
+      )}
       <div className="idbar">
         <div className="r1"><h1>{name || `Match ${matchId}`}</h1><span className="pill id">ID {matchId}</span>
           <span className={"pill " + (badge.tone === "prod" ? "live" : "stg")} data-testid="roster-env">{badge.tone === "prod" ? <><i />PRODUCTION — LIVE EDITS</> : badge.label}</span></div>
@@ -233,7 +293,16 @@ export default function RosterEditor({ matchId }: { matchId: number }) {
           </div>
         </div>
 
-        <div className="teams" style={{ gridTemplateColumns: `repeat(${shape.teamN}, minmax(0,1fr))` }} data-testid="teams">
+        <div className="teamjump" data-testid="teamjump">
+          {teams.slice(0, shape.teamN).map((t, ti) => (
+            <button key={t.id} className={"tj" + (onTeam(ti).length >= shape.perTeam ? " full" : "") + (t.locked ? " locked" : "")} data-testid={`jump-${ti}`}
+              onClick={() => document.querySelector(`[data-team="${ti}"]`)?.scrollIntoView({ behavior: "smooth", block: "start" })}>
+              <span className="dot" />{t.name} <b>{onTeam(ti).length}/{shape.perTeam}</b>
+            </button>
+          ))}
+        </div>
+
+        <div className="teams" style={{ ["--tn" as string]: shape.teamN }} data-testid="teams">
           {teams.slice(0, shape.teamN).map((t, ti) => (
             <section className={"team" + (t.locked ? " locked" : "")} data-testid="team" data-team={ti} key={t.id}
               onDragOver={(e) => e.preventDefault()}>
@@ -246,22 +315,34 @@ export default function RosterEditor({ matchId }: { matchId: number }) {
                 {Array.from({ length: shape.perTeam }, (_, i) => i + 1).map((n) => {
                   const p = at(ti, n);
                   return (
-                    <div key={n} className={"slot" + (p ? "" : " open")} data-testid="slot" data-slot={`${ti}:${n}`}
+                    <div key={n} className={"slot" + (p ? (isMoved(p) ? " moved" : "") : " open") + (p && placing === p.key ? " src" : "")}
+                      data-testid="slot" data-slot={`${ti}:${n}`} data-key={p?.key ?? ""}
+                      draggable={!!p && !run && !placing}
+                      onDragStart={p ? (e) => e.dataTransfer.setData("text/plain", p.key) : undefined}
                       onDragOver={(e) => e.preventDefault()}
-                      onDrop={(e) => { e.preventDefault(); const k = e.dataTransfer.getData("text/plain"); if (k) place(k, ti, n); }}>
+                      onDrop={(e) => { e.preventDefault(); const k = e.dataTransfer.getData("text/plain"); if (k) place(k, ti, n); }}
+                      onClick={() => { if (p && isPhone()) openMenu(p.key); }}>
                       <span className="n">{n}</span>
                       {p ? <>
-                        <span className="who" data-testid="player" data-pid={p.playerId ?? ""} data-key={p.key} draggable onDragStart={(e) => e.dataTransfer.setData("text/plain", p.key)}>
-                          {p.name}{p.fake && <span className="tag">FAKE</span>}{p.added && <span className="tag new">NEW</span>}</span>
-                        <span className="rowbtns">
-                          <select data-testid="move-menu" value="" onChange={(e) => { const v = e.target.value; if (v === "rm") removePlayer(p.key); else if (v === "fake") toggleFake(p.key); else if (v !== "") { const [tt, nn] = v.split(":").map(Number); place(p.key, tt, nn); } e.currentTarget.value = ""; }}>
-                            <option value="">⋮</option>
-                            {teams.slice(0, shape.teamN).map((tt, tj) => { const open = firstOpen(tj); return <option key={tt.id} value={`${tj}:${open ?? 1}`} disabled={tj === ti || tt.locked || open === null}>Move to {tt.name}{tt.locked ? " (locked)" : open === null ? " (full)" : ` #${open}`}</option>; })}
-                            <option value="fake">{p.fake ? "Unset fake" : "Set fake"}</option>
-                            <option value="rm">Remove…</option>
-                          </select>
-                          <button className="rmv" data-testid="remove" aria-label={`Remove ${p.name}`} onClick={() => removePlayer(p.key)}>✕</button>
-                        </span>
+                        <span className="grip" aria-hidden="true">⋮⋮</span>
+                        <span className="who" data-testid="player" data-pid={p.playerId ?? ""} data-key={p.key}>
+                          <span className="nm">{p.name}{p.fake && <span className="tag fake">FAKE</span>}{p.added && <span className="tag new">NEW</span>}</span></span>
+                        <button className="rmv" data-testid="remove" aria-label={`Remove ${p.name}`} title="Remove from the match" onClick={(e) => { e.stopPropagation(); removePlayer(p.key); }}>✕</button>
+                        <button className="kebab" data-testid="menu" aria-label={`Actions for ${p.name}`} aria-haspopup="true" onClick={(e) => { e.stopPropagation(); openMenu(p.key); }}>⋮</button>
+                        {menuFor === p.key && <>
+                          <div className="menuscrim" data-testid="menuscrim" onClick={(e) => { e.stopPropagation(); closeMenu(); }} />
+                          {/* stop clicks bubbling to the slot's onClick, which would re-open this menu */}
+                          <div className="menu" data-testid="menu-pop" role="menu" onClick={(e) => e.stopPropagation()}>
+                            <h6>MOVE OR SWAP</h6>
+                            <button className="primary" data-testid="menu-pickup" onClick={() => { const k = p.key; closeMenu(); startPlacing(k); }}>Pick up &amp; choose a slot…</button>
+                            <h6>OR SEND STRAIGHT TO</h6>
+                            {teams.slice(0, shape.teamN).map((tt, tj) => { const open = firstOpen(tj); const same = p.team === tj; const dis = same || tt.locked || open === null; return <button key={tt.id} data-testid={`menu-to-${tj}`} disabled={dis} onClick={() => { place(p.key, tj, open ?? 1); closeMenu(); }}>{tt.name}{same ? " (current)" : tt.locked ? " (locked)" : open === null ? " (full)" : ` #${open}`}</button>; })}
+                            <div className="sep" /><h6>FLAGS</h6>
+                            <button data-testid="menu-fake" onClick={() => { toggleFake(p.key); closeMenu(); }}>{p.fake ? "Unset fake player" : "Set as fake player"}</button>
+                            <div className="sep" />
+                            <button className="danger" data-testid="menu-remove" onClick={() => { const k = p.key; closeMenu(); removePlayer(k); }}>Remove from the match…</button>
+                          </div>
+                        </>}
                       </> : <span className="openlab">Open</span>}
                     </div>
                   );
@@ -326,20 +407,52 @@ const CSS = `
 .rse .shape .lb{font-size:11px;letter-spacing:.08em;font-weight:700;color:#67746C}.rse .shape .note{font-size:12px;color:#5C6B62;margin-left:auto}
 .rse .step{display:inline-flex;border:1px solid #DCE5E0;border-radius:8px;overflow:hidden}.rse .step button{border:0;background:#fff;padding:6px 11px;font-weight:700}
 .rse .step span{padding:6px 10px;min-width:30px;text-align:center;border-left:1px solid #DCE5E0;border-right:1px solid #DCE5E0;font-variant-numeric:tabular-nums}
-.rse .teams{display:grid;gap:12px}
+/* grid driven by a custom property, NOT an inline grid-template-columns — an inline
+   style would beat the phone media query and never let the columns stack. */
+.rse .teams{display:grid;gap:12px;grid-template-columns:repeat(var(--tn,2),minmax(0,1fr))}
 .rse .team{background:#fff;border:1px solid #DCE5E0;border-radius:12px;padding:12px}.rse .team.locked{background:#FAFBFA}
-.rse .th{display:flex;align-items:center;gap:8px;margin-bottom:10px}.rse .tname{font-size:14px;font-weight:700;border:1px solid transparent;background:transparent;border-radius:6px;padding:2px 5px;width:90px}
+/* min-width:0 — an <input> has an intrinsic min width that otherwise pushes the
+   whole section past a phone viewport. */
+.rse .th{display:flex;align-items:center;gap:8px;margin-bottom:10px}.rse .tname{font-size:14px;font-weight:700;border:1px solid transparent;background:transparent;border-radius:6px;padding:2px 5px;width:90px;min-width:0}
+.rse .teamjump{display:none}
+.rse .dot{width:12px;height:12px;border-radius:50%;border:1px solid #B9C6BF;flex:0 0 12px;background:#fff}
 .rse .tname:hover{border-color:#DCE5E0}.rse .cap{margin-left:auto;font-size:12px;color:#5C6B62;font-variant-numeric:tabular-nums}
 .rse .lockb{border:1px solid #DCE5E0;background:#fff;border-radius:6px;padding:2px 7px;font-size:10.5px;font-weight:700;color:#5C6B62}.rse .lockb.on{background:#FBF0DC;border-color:#E3C88A;color:#7A5200}
 .rse .slots{display:flex;flex-direction:column;gap:5px}
-.rse .slot{display:flex;align-items:center;gap:8px;border:1px solid #DCE5E0;border-radius:8px;padding:6px 8px;background:#fff;min-height:38px}
+.rse .slot{display:flex;align-items:center;gap:8px;border:1px solid #DCE5E0;border-radius:8px;padding:6px 8px;background:#fff;min-height:38px;position:relative}
 .rse .slot.open{border-style:dashed;background:#FBFDFC}
-.rse .n{width:19px;height:19px;border-radius:5px;background:#EEF3F0;color:#3A5348;font-size:10.5px;font-weight:800;display:flex;align-items:center;justify-content:center}
-.rse .who{flex:1;min-width:0;font-size:13.5px;cursor:grab;white-space:nowrap;overflow:hidden;text-overflow:ellipsis}
-.rse .tag{font-size:10px;font-weight:800;border-radius:4px;padding:1px 5px;margin-left:5px;background:#F2E31D;color:#231F00}.rse .tag.new{background:#E6F7EE;color:#046B45}
-.rse .openlab{font-size:12.5px;color:#5C6B62}.rse .rowbtns{display:flex;gap:4px;align-items:center}
-.rse .rowbtns select{border:1px solid transparent;background:transparent;border-radius:6px;padding:2px 4px;color:#4E5A54}
-.rse .rmv{border:1px solid transparent;background:transparent;border-radius:6px;padding:2px 6px;color:#67746C}.rse .rmv:hover{color:#A83120;background:#FDEEEB}
+.rse .slot.moved{background:#F2F7FE;border-color:#C9DBF3}
+.rse .n{width:19px;height:19px;border-radius:5px;background:#EEF3F0;color:#3A5348;font-size:10.5px;font-weight:800;display:flex;align-items:center;justify-content:center;flex:0 0 19px}
+.rse .grip{cursor:grab;color:#5C6B62;font-size:13px;line-height:1;padding:2px 3px;flex:0 0 auto}
+.rse .who{flex:1;min-width:0}.rse .who .nm{font-size:13.5px;white-space:nowrap;overflow:hidden;text-overflow:ellipsis}
+.rse .tag{font-size:10px;font-weight:800;border-radius:4px;padding:1px 5px;margin-left:5px}
+.rse .tag.fake{background:#F2E31D;color:#231F00}.rse .tag.new{background:#E6F7EE;color:#046B45}
+.rse .openlab{font-size:12.5px;color:#5C6B62}
+.rse .kebab{border:1px solid transparent;background:transparent;border-radius:6px;padding:2px 6px;color:#4E5A54;line-height:1;flex:0 0 auto}
+.rse .kebab:hover{border-color:#DCE5E0;background:#F2F7F4}
+.rse .rmv{border:1px solid transparent;background:transparent;border-radius:6px;padding:2px 6px;color:#67746C;line-height:1;font-size:12px;flex:0 0 auto}.rse .rmv:hover{color:#A83120;background:#FDEEEB}
+/* row menu — popover on desktop, bottom sheet on phone */
+.rse .menu{position:absolute;right:6px;top:34px;z-index:60;background:#fff;border:1px solid #DCE5E0;border-radius:10px;box-shadow:0 10px 28px rgba(0,32,21,.16);min-width:214px;overflow:hidden}
+.rse .menu h6{margin:0;padding:8px 12px 5px;font-size:10px;letter-spacing:.11em;color:#67746C;font-weight:700}
+.rse .menu button{display:block;width:100%;text-align:left;border:0;background:#fff;padding:9px 12px;font-size:13.5px;color:#0B1F17}
+.rse .menu button:hover{background:#F2F7F4}.rse .menu button:disabled{color:#A7B3AD;background:#fff}
+.rse .menu .sep{height:1px;background:#E9EFEB;margin:4px 0}
+.rse .menu button.primary{font-weight:700;color:#046B45}.rse .menu button.primary:hover{background:#EAF9F1}
+.rse .menu button.danger{color:#A83120}.rse .menu button.danger:hover{background:#FDEEEB}
+.rse .menuscrim{position:fixed;inset:0;z-index:55;background:transparent}
+/* place mode — pick up, then tap a destination */
+.rse .placebar{position:fixed;left:0;right:0;top:0;z-index:70;display:flex;align-items:center;gap:12px;background:#003326;color:#fff;padding:12px 18px;box-shadow:0 4px 18px rgba(0,32,21,.3)}
+.rse .placebar .pb-txt{flex:1;min-width:0;font-size:14px}.rse .placebar .pb-txt b{font-weight:700}.rse .placebar .pb-txt span{color:#A9D7C3}
+.rse .placebar .pb-x{border:1px solid #2A5644;background:transparent;color:#CFE7DC;border-radius:8px;padding:8px 15px}.rse .placebar .pb-x:hover{background:#14432F;color:#fff}
+.rse.placing{padding-top:52px}
+.rse.placing .slot{cursor:pointer}
+.rse.placing .slot.open{border-color:#046B45;border-style:dashed;background:#EAF9F1}
+.rse.placing .slot:not(.open):not(.src){box-shadow:inset 0 0 0 1px #9FC4B2}
+.rse.placing .slot:not(.open):not(.src)::after{content:"SWAP";position:absolute;right:9px;top:50%;transform:translateY(-50%);font-size:9.5px;font-weight:800;letter-spacing:.07em;color:#046B45;background:#E4F8EE;border:1px solid #A9E3C6;border-radius:4px;padding:2px 6px;pointer-events:none}
+.rse.placing .slot.src{box-shadow:0 0 0 2px #2CDB87;background:#E9F8F0}
+.rse.placing .slot.src::after{content:"MOVING";position:absolute;right:9px;top:50%;transform:translateY(-50%);font-size:9.5px;font-weight:800;letter-spacing:.07em;color:#046B45;background:#fff;border:1px solid #2CDB87;border-radius:4px;padding:2px 6px}
+.rse.placing .team.locked{opacity:.5}.rse.placing .team.locked .slot{cursor:not-allowed}
+.rse.placing .kebab,.rse.placing .rmv,.rse.placing .grip{visibility:hidden}
 .rse .bar{position:fixed;left:0;right:0;bottom:0;background:#fff;border-top:1px solid #DCE5E0;box-shadow:0 -6px 22px rgba(0,32,21,.09);z-index:50}
 .rse .plan{background:#F2F7FE;border-bottom:1px solid #C9DBF3;padding:12px 24px;max-height:200px;overflow-y:auto}
 .rse .plan .pt{font-size:10.5px;letter-spacing:.1em;font-weight:700;color:#1B4F9C;margin-bottom:9px}
@@ -355,4 +468,39 @@ const CSS = `
 .rse .go{border:0;background:#003326;color:#fff;border-radius:9px;padding:9px 20px;font-weight:600}.rse .go:disabled{background:#DCE3DF;color:#4E5A54}.rse .go.retry{background:#A83120}
 .rse .toast{position:fixed;left:50%;top:16px;transform:translateX(-50%);background:#003326;color:#fff;padding:10px 18px;border-radius:10px;font-size:14px;z-index:80;box-shadow:0 6px 20px rgba(0,32,21,.28)}
 .rse .toast.bad{background:#A83120}
+/* teamjump chips — the overview once the columns are gone (phone only) */
+.rse .tj{flex:0 0 auto;display:flex;align-items:center;gap:7px;border:1px solid #DCE5E0;background:#fff;border-radius:20px;padding:8px 13px;font-size:13.5px;color:#1B3227}
+.rse .tj .dot{width:10px;height:10px;flex:0 0 10px}.rse .tj b{font-variant-numeric:tabular-nums}.rse .tj.full b{color:#7A5200}.rse .tj.locked{background:#FBF0DC;border-color:#E3C88A}
+
+/* ── Phone. Four columns do not fit, and HTML5 drag never fires on touch — so the
+   row menu becomes the interaction (a bottom sheet), the whole row is the target,
+   the columns stack, and every control is at least 32px tall. ── */
+@media (max-width: 820px){
+  .rse{padding-bottom:230px}
+  .rse .wrap{padding:12px 12px 0}
+  .rse .tools{padding:11px}
+  .rse .srch{flex:1 1 100%}
+  .rse .btn{flex:1 1 auto;min-height:40px}
+  .rse .step button{padding:10px 14px}.rse .step span{padding:10px 12px}
+  .rse .teamjump{display:flex;gap:7px;overflow-x:auto;margin-bottom:12px;scrollbar-width:none}
+  .rse .teamjump::-webkit-scrollbar{display:none}
+  .rse .teams{grid-template-columns:minmax(0,1fr);gap:10px}
+  .rse .team{scroll-margin-top:60px}
+  .rse .tname{width:auto;flex:1;font-size:15.5px;padding:8px 7px}
+  .rse .lockb{padding:8px 12px;font-size:11px;min-height:34px}
+  .rse .grip{display:none}
+  .rse .slot{min-height:46px;padding:8px 9px}.rse .slot .who{cursor:pointer}.rse .who .nm{font-size:14.5px}
+  .rse .kebab{padding:9px 11px;font-size:16px}.rse .rmv{padding:9px 11px;font-size:15px}
+  /* the row menu becomes a full-width bottom sheet with a dimming scrim */
+  .rse .menu{position:fixed;left:0;right:0;bottom:0;top:auto;min-width:0;border-radius:16px 16px 0 0;box-shadow:0 -12px 34px rgba(0,32,21,.26);max-height:76vh;overflow-y:auto;padding-bottom:env(safe-area-inset-bottom)}
+  .rse .menu::before{content:"";display:block;width:36px;height:4px;border-radius:3px;background:#C6D2CC;margin:10px auto 2px}
+  .rse .menu button{padding:14px 16px;font-size:15px}
+  .rse .menuscrim{background:rgba(6,26,18,.34)}
+  /* the plan reflows so every row still shows the endpoint it will call */
+  .rse .plan{padding:11px 13px;max-height:34vh}
+  .rse .mv{flex-wrap:wrap;gap:7px}.rse .mv .txt{flex:1 1 100%;order:2}.rse .mv .st{order:1}.rse .mv em{flex:1 1 100%;order:3}
+  .rse .acts{padding:11px 13px;flex-wrap:wrap;gap:8px}.rse .cnt{flex:1 1 100%}.rse .sp{width:100%;margin-left:0}.rse .gh{flex:1;min-height:40px}.rse .go{flex:2;min-height:40px}
+  .rse .adding button{flex:1 1 auto;min-height:40px}
+  .rse .toast{left:12px;right:12px;transform:none}
+}
 `;

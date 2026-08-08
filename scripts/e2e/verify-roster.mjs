@@ -1,12 +1,16 @@
-// Phase 13 PART 5 — the roster editor, driven in a real browser, hermetic.
-// GET/search/POST to /api/matchday/** are all route-fulfilled, so nothing touches
-// a real MatchDay backend. Proves: live read + data-driven team count, the diff
-// plan (there-and-back nets zero, changed-fields-only), swap-not-overwrite via the
-// real drop handler, add-where, the remove confirm wording (NOT a refund), lock
+// Phase 13 PART 5 + Phase 14 PART C — the roster editor, driven in a real browser,
+// hermetic. GET/search/POST to /api/matchday/** are all route-fulfilled, so nothing
+// touches a real MatchDay backend. Proves: live read + data-driven team count, the
+// diff plan (there-and-back nets zero, changed-fields-only), swap-not-overwrite via
+// the real drop handler, add-where, the remove confirm wording (NOT a refund), lock
 // refusal, shape-shrink refusal that NAMES the stranded player, and — the heart —
 // the FOUR read-back save states (LANDED / FAILED / NOT APPLIED / UNKNOWN) with
 // UNKNOWN visually AND verbally distinct and the ONLY state that stops the run.
-// Plus a full contrast sweep across every painted state, and an overflow check.
+// Phase 14 adds a PHONE context (390×844, isMobile+hasTouch): stacked columns, the
+// bottom-sheet row menu, and pick-up-and-place (tapped slot used, swap trades both,
+// locked refuses + stays armed, capture-phase tap does NOT also open the menu) — plus
+// a mutation flipping that tap to the bubble phase to prove the capture assertion has
+// teeth. Full contrast sweep across every painted state (incl. phone-armed).
 //   node scripts/e2e/auth.mjs   (optional; this script mints its own session)
 //   node scripts/e2e/verify-roster.mjs
 import { chromium } from "playwright";
@@ -89,7 +93,7 @@ async function main() {
   // ── the programmable mock: STATE for GET, MODE + posts[] for POST ──
   let STATE = FRESH();
   let MODE = "landed"; let posts = []; let umSeq = 8000;
-  await context.route("**/api/matchday/**", (route) => {
+  const routeHandler = (route) => {
     const req = route.request(); const m = req.method(); const url = req.url();
     const J = (o, status = 200) => route.fulfill({ status, contentType: "application/json", body: JSON.stringify(o) });
     if (m === "GET") {
@@ -104,7 +108,8 @@ async function main() {
     if (MODE === "notapplied") return i === 0 ? J({ ok: true, result: {} }) /* 2xx, NOT applied */ : landRow();
     if (MODE === "unknown") return i === 0 ? J({ error: "gateway timeout", ambiguous: true }, 502) : landRow();
     return landRow();
-  });
+  };
+  await context.route("**/api/matchday/**", routeHandler);
   const page = await context.newPage();
   const dialogs = []; page.on("dialog", (d) => { dialogs.push(d.message()); d.accept(); });
 
@@ -129,10 +134,18 @@ async function main() {
   await page.fill('[data-testid="tname-0"]', "Team 1"); // rename back
   eq("there-and-back nets zero (diff, not a journal)", (await planCodes()).length, 0);
 
-  // ═══ MOVE (plain) — keyed userMatchId, POST /admin/user-matches ═══
-  await page.selectOption('[data-testid="slot"]:has([data-key="p101"]) [data-testid="move-menu"]', "1:2"); // Alex -> team2 #2 (open)
-  { const p = await planCodes(); eq("plain move -> 1 row, POST /admin/user-matches", { n: p.length, kind: p[0]?.code }, { n: 1, kind: "POST /admin/user-matches" }); }
-  await page.selectOption('[data-testid="slot"]:has([data-key="p101"]) [data-testid="move-menu"]', "0:1"); // move Alex back
+  // ═══ ROW MENU — leads with pick-up, no mark-absent (endpoint unconfirmed) ═══
+  await page.click('[data-key="p101"] [data-testid="menu"]');
+  { const first = await page.$eval('[data-testid="menu-pop"] button', (b) => b.textContent); const absent = await page.$('[data-testid="menu-pop"] button:has-text("absent")');
+    eq("row menu leads with 'Pick up & choose a slot', no mark-absent", { pickup: /Pick up/.test(first || ""), absent: !!absent }, { pickup: true, absent: false }); }
+  await page.keyboard.press("Escape");
+
+  // ═══ MOVE (plain, via the row menu) — keyed userMatchId, POST /admin/user-matches ═══
+  await page.click('[data-key="p101"] [data-testid="menu"]');
+  await page.click('[data-testid="menu-to-1"]'); // Alex -> Team 2, its first open slot
+  { const p = await planCodes(); eq("plain move via row menu -> 1 row, POST /admin/user-matches", { n: p.length, kind: p[0]?.code }, { n: 1, kind: "POST /admin/user-matches" }); }
+  await page.click('[data-key="p101"] [data-testid="menu"]');
+  await page.click('[data-testid="menu-to-0"]'); // move Alex back to Team 1 (its first open = his old slot)
   eq("move there-and-back nets zero", (await planCodes()).length, 0);
 
   // ═══ SWAP — drop onto an occupied slot swaps, never overwrites, never drops ═══
@@ -222,6 +235,99 @@ async function main() {
   const unkBorder = await page.$eval('[data-testid="plan-row"][data-state="unknown"]', (e) => getComputedStyle(e).borderTopWidth);
   (parseFloat(unkBorder) >= 2 && unkBorder !== naBorder) ? ok(`UNKNOWN is visually distinct (border ${unkBorder} vs NOT-APPLIED ${naBorder})`) : bad("UNKNOWN visual distinctness", `unknown=${unkBorder} notapplied=${naBorder}`);
   contrasts.push(["unknown", await contrastIn(page, ".rse")]);
+
+  // ═══════════════════════ PHONE (Phase 14 PART C) ═══════════════════════
+  // A real touch context: 390×844, isMobile + hasTouch. Drag does not exist here,
+  // so the row menu (a bottom sheet) and pick-up-and-place are the interaction.
+  const phoneCtx = await browser.newContext({ viewport: { width: 390, height: 844 }, isMobile: true, hasTouch: true, deviceScaleFactor: 2, storageState: { cookies: [], origins: [{ origin: BASE, localStorage: [{ name: `sb-${ref}-auth-token`, value: JSON.stringify(vv.data.session) }] }] } });
+  await phoneCtx.route("**/api/matchday/**", routeHandler);
+  const ph = await phoneCtx.newPage();
+  phoneCtx.on("page", () => {}); ph.on("dialog", (d) => d.accept());
+  const phLoad = async () => { STATE = FRESH(); MODE = "landed"; posts = []; await ph.goto(PAGE_URL, { waitUntil: "domcontentloaded" }); await ph.waitForSelector('[data-testid="roster"]'); await ph.waitForTimeout(200); };
+  const phPlan = () => ph.$$eval('[data-testid="plan-row"]', (els) => els.map((e) => ({ code: (e.querySelector("code") || {}).textContent || "" })));
+  const slotOf = (pkey) => ph.$eval(`[data-testid="slot"][data-key="${pkey}"]`, (e) => e.getAttribute("data-slot"));
+  // in place mode the fixed placebar covers the top ~52px; centre the target first
+  // (a real user scrolls) so the tap lands on the slot, not the bar.
+  const tapSlot = async (pg, sel) => { await pg.$eval(sel, (e) => e.scrollIntoView({ block: "center" })); await pg.waitForTimeout(40); await pg.click(sel); };
+
+  await phLoad();
+  // no horizontal scroll + nothing past the right edge
+  { const o = await overflow(ph); const past = await ph.evaluate(() => { const w = innerWidth; return [...document.querySelectorAll(".rse *")].filter((e) => { const r = e.getBoundingClientRect(); const s = getComputedStyle(e); return s.display !== "none" && r.width > 0 && r.right > w + 1; }).map((e) => (e.className || "").toString().slice(0, 30)); });
+    (!o.pageLeak && past.length === 0) ? ok("phone: no horizontal scroll, nothing past the right edge") : bad("phone overflow", `leak=${o.pageLeak} past=${JSON.stringify(past.slice(0, 4))}`); }
+  // columns actually stack
+  { const cols = await ph.$eval('[data-testid="teams"]', (e) => getComputedStyle(e).gridTemplateColumns); (cols.split(" ").length === 1) ? ok(`phone: columns stack (grid-template-columns = ${cols})`) : bad("phone stack", cols); }
+  // teamjump strip visible
+  { const d = await ph.$eval('[data-testid="teamjump"]', (e) => getComputedStyle(e).display); d === "flex" ? ok("phone: teamjump overview strip is shown") : bad("phone teamjump", d); }
+  // tapping a row opens the sheet — full width + bottom anchored + scrim
+  await ph.click('[data-testid="slot"][data-key="p101"] .who');
+  await ph.waitForSelector('[data-testid="menu-pop"]');
+  { const m = await ph.$eval('[data-testid="menu-pop"]', (e) => { const r = e.getBoundingClientRect(); const s = getComputedStyle(e); return { w: Math.round(r.width), left: Math.round(r.left), bottomGap: Math.round(innerHeight - r.bottom), pos: s.position }; }); const scrim = await ph.$('[data-testid="menuscrim"]');
+    (m.pos === "fixed" && m.left === 0 && m.w === 390 && m.bottomGap <= 1 && !!scrim) ? ok("phone: row tap opens a full-width, bottom-anchored sheet with a scrim") : bad("phone sheet", JSON.stringify(m)); }
+  await ph.click('[data-testid="menuscrim"]');
+
+  // pick-up-and-place: a SWAP trades both players and plans two requests
+  await phLoad();
+  await ph.click('[data-testid="slot"][data-key="p103"] .who'); // Jo (team2 #1)
+  await ph.click('[data-testid="menu-pickup"]');
+  await ph.waitForSelector('[data-testid="placebar"]');
+  await tapSlot(ph, '[data-testid="slot"][data-key="p101"]'); // tap Alex (team1 #1) => swap
+  await ph.waitForTimeout(80);
+  { const p = await phPlan(); const moves = p.filter((r) => r.code === "POST /admin/user-matches"); const dels = p.filter((r) => r.code.startsWith("DELETE"));
+    eq("phone place: swap trades both players, plans 2 moves, no removal", { moves: moves.length, dels: dels.length, size: await ph.$$eval('[data-testid="player"]', (e) => e.length) }, { moves: 2, dels: 0, size: 3 }); }
+
+  // the slot TAPPED is used — not the team's first open slot (they must differ)
+  await phLoad();
+  // Team 1 (idx0): Alex #1, Blair #7 => firstOpen = 2; tap #5 which is NOT #2
+  await ph.click('[data-testid="slot"][data-key="p103"] .who'); // pick up Jo
+  await ph.click('[data-testid="menu-pickup"]');
+  await tapSlot(ph, '[data-testid="slot"][data-slot="0:5"]'); // tap the specific open slot #5
+  await ph.waitForTimeout(80);
+  { const where = await slotOf("p103"); eq("phone place: the TAPPED slot is used, not the first open (#5, not #2)", where, "0:5"); }
+
+  // a locked team refuses AND place mode stays open
+  await phLoad();
+  await ph.click('[data-testid="lock-1"]'); // lock Team 2
+  await ph.click('[data-testid="slot"][data-key="p101"] .who'); // pick up Alex
+  await ph.click('[data-testid="menu-pickup"]');
+  await tapSlot(ph, '[data-testid="slot"][data-slot="1:3"]'); // tap a slot on the locked team
+  await ph.waitForTimeout(80);
+  { const stillPlacing = await ph.$('[data-testid="placebar"]'); const t = await ph.$eval('[data-testid="toast"]', (e) => e.textContent).catch(() => ""); const where = await slotOf("p101");
+    (!!stillPlacing && /lock/i.test(t) && where === "0:1") ? ok("phone place: locked team refuses, names why, and place mode stays open") : bad("phone locked", `placing=${!!stillPlacing} toast=${JSON.stringify(t)} where=${where}`); }
+  await ph.click('[data-testid="place-cancel"]');
+
+  // placing onto an occupied slot must NOT also open its menu (capture phase)
+  await phLoad();
+  await ph.click('[data-testid="slot"][data-key="p101"] .who');
+  await ph.click('[data-testid="menu-pickup"]');
+  await tapSlot(ph, '[data-testid="slot"][data-key="p103"]'); // occupied => swap
+  await ph.waitForTimeout(80);
+  { const menu = await ph.$('[data-testid="menu-pop"]'); (!menu) ? ok("phone place: placing onto an occupied slot does NOT open its menu (capture)") : bad("phone place capture", "a menu opened under the swap"); }
+
+  // every control at least 32px tall
+  { const small = await ph.evaluate(() => { const out = []; for (const el of document.querySelectorAll('.rse button, .rse input, .rse .step .v, .rse .lockb, .rse .tj')) { const r = el.getBoundingClientRect(); const s = getComputedStyle(el); if (s.display === "none" || s.visibility === "hidden" || r.width === 0) continue; if (r.height < 32) out.push({ c: (el.className || "").toString().slice(0, 24), h: Math.round(r.height * 10) / 10, t: (el.textContent || "").trim().slice(0, 14) }); } return out; });
+    (small.length === 0) ? ok("phone: every control >= 32px tall") : bad(`phone: ${small.length} control(s) under 32px`, JSON.stringify(small.slice(0, 6))); }
+
+  // contrast at phone width, including the ARMED (place) state
+  await phLoad();
+  await ph.click('[data-testid="slot"][data-key="p101"] .who');
+  await ph.click('[data-testid="menu-pickup"]'); // arm place mode
+  await ph.waitForSelector('[data-testid="placebar"]');
+  contrasts.push(["phone-armed", await contrastIn(ph, ".rse")]);
+
+  // ── MUTATION: handle the place tap in the BUBBLE phase instead of capture, and
+  //    confirm the "does not open the menu" assertion goes red. ──
+  const mCtx = await browser.newContext({ viewport: { width: 390, height: 844 }, isMobile: true, hasTouch: true, storageState: { cookies: [], origins: [{ origin: BASE, localStorage: [{ name: `sb-${ref}-auth-token`, value: JSON.stringify(vv.data.session) }] }] } });
+  await mCtx.route("**/api/matchday/**", routeHandler);
+  await mCtx.addInitScript(() => { window.__ROSTER_PLACE_BUBBLE__ = true; });
+  const mp = await mCtx.newPage(); mp.on("dialog", (d) => d.accept());
+  STATE = FRESH(); MODE = "landed"; posts = [];
+  await mp.goto(PAGE_URL, { waitUntil: "domcontentloaded" }); await mp.waitForSelector('[data-testid="roster"]'); await mp.waitForTimeout(200);
+  await mp.click('[data-testid="slot"][data-key="p101"] .who');
+  await mp.click('[data-testid="menu-pickup"]');
+  await tapSlot(mp, '[data-testid="slot"][data-key="p103"]'); // occupied => in bubble phase this ALSO opens the menu
+  await mp.waitForTimeout(80);
+  { const leaked = await mp.$('[data-testid="menu-pop"]'); (!!leaked) ? ok("MUTATION has teeth: bubble-phase place opens the swap target's menu (assertion would go RED)") : bad("MUTATION toothless", "bubble-phase place did NOT open the menu — the capture assertion proves nothing"); }
+  await mCtx.close(); await phoneCtx.close();
 
   // ═══ CONTRAST SWEEP across every painted state (roster screen) ═══
   let gmin = Infinity, worst = null, allFails = [];

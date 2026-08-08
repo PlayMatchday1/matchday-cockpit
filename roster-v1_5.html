@@ -1,0 +1,1033 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+<meta charset="utf-8">
+<meta name="viewport" content="width=device-width, initial-scale=1">
+<title>Roster — drag to move, review, then save</title>
+<style>
+:root{
+  --forest:#003326; --deep:#04291D; --mint:#2CDB87; --mintInk:#046B45;
+  --ink:#0B1F17; --bg:#EDF2EF; --line:#DCE5E0; --line2:#E9EFEB;
+  --muted:#5C6B62; --faint:#67746C;
+  --coral:#A83120; --coralBg:#FDEEEB; --amberInk:#7A5200; --amberBg:#FBF0DC;
+  --blueInk:#1B4F9C; --blueBg:#F2F7FE; --blueLine:#C9DBF3;
+  --veo:#F2E31D;
+}
+*{box-sizing:border-box}
+html,body{margin:0}
+body{font:15px/1.45 -apple-system,BlinkMacSystemFont,"Segoe UI",Inter,Helvetica,Arial,sans-serif;
+     background:var(--bg);color:var(--ink);-webkit-font-smoothing:antialiased;padding-bottom:190px}
+button{font:inherit;cursor:pointer}
+input,select{font:inherit;color:inherit}
+
+/* ---------- identity ---------- */
+.idbar{background:var(--deep);color:#fff;padding:16px 26px 17px}
+.idbar .r1{display:flex;align-items:center;gap:10px}
+.idbar h1{margin:0;font-size:21px;letter-spacing:-.2px}
+.pill{font-size:10.5px;font-weight:800;letter-spacing:.08em;border-radius:20px;padding:4px 10px}
+.pill.id{background:#14432F;color:#B7DECB}
+.pill.live{background:var(--coral);color:#fff;display:inline-flex;align-items:center;gap:6px}
+.pill.live i{width:7px;height:7px;border-radius:50%;background:#fff;display:inline-block}
+.counts{display:flex;gap:26px;margin-top:13px}
+.counts div{font-size:12px;color:#9FC9B6;letter-spacing:.02em}
+.counts b{display:block;font-size:22px;color:#fff;font-weight:700;letter-spacing:-.4px;margin-bottom:1px}
+
+/* ---------- toolbar ---------- */
+.wrap{padding:18px 26px 0}
+.panel{background:#fff;border:1px solid var(--line);border-radius:14px}
+.tools{padding:14px 16px;margin-bottom:14px;display:flex;gap:9px;align-items:center;flex-wrap:wrap}
+.srch{position:relative;flex:0 0 300px}
+.srch input{width:100%;padding:9px 11px;border:1px solid #CBD7D1;border-radius:8px}
+.srch input:focus{outline:2px solid var(--mintInk);outline-offset:-1px}
+.res{position:absolute;top:44px;left:0;right:0;background:#fff;border:1px solid var(--line);
+     border-radius:10px;box-shadow:0 8px 24px rgba(0,32,21,.14);z-index:30;overflow:hidden}
+.res button{display:block;width:100%;text-align:left;border:0;background:#fff;padding:9px 12px;
+     border-bottom:1px solid var(--line2)}
+.res button:last-child{border-bottom:0}
+.res button:hover{background:#F2F7F4}
+.res .em{font-size:12px;color:var(--muted)}
+.btn{border:1px solid var(--line);background:#fff;border-radius:9px;padding:8px 15px;color:#1B3227}
+.btn:hover{background:#F2F7F4}
+.btn:disabled{opacity:.45;cursor:default}
+.tools .sp{margin-left:auto;font-size:12.5px;color:var(--muted)}
+.adding[hidden]{display:none}   /* display:flex beats the UA rule for [hidden] */
+.adding{display:flex;align-items:center;gap:7px;flex-wrap:wrap;background:#EFF6FF;
+        border:1px solid var(--blueLine);border-radius:10px;padding:8px 10px;width:100%}
+.adding .lab{font-size:13.5px;color:var(--blueInk);font-weight:600;margin-right:2px}
+.adding button{border:1px solid #BFD3EE;background:#fff;border-radius:8px;padding:6px 12px;
+        font-size:13px;color:#17406F}
+.adding button:hover:not(:disabled){background:#E4EFFC}
+.adding button:disabled{opacity:.45;cursor:default}
+.adding .x{margin-left:auto;border:0;background:transparent;color:var(--blueInk);font-size:13px}
+
+/* ---------- teams ---------- */
+.teams{display:grid;grid-template-columns:repeat(var(--tn,4),minmax(0,1fr));gap:12px;margin-bottom:14px}
+.team{padding:12px 12px 13px}
+.team.locked{background:#FAFBFA}
+.th{display:flex;align-items:center;gap:8px;margin-bottom:10px}
+.dot{width:12px;height:12px;border-radius:50%;border:1px solid #B9C6BF;flex:0 0 12px}
+.th b{font-size:14.5px}
+.cap{margin-left:auto;font-size:12px;color:var(--muted);font-variant-numeric:tabular-nums}
+.cap.full{color:var(--amberInk);font-weight:700}
+.lockb{border:1px solid var(--line);background:#fff;border-radius:6px;padding:2px 7px;font-size:10.5px;
+       font-weight:700;letter-spacing:.05em;color:var(--muted)}
+.lockb.on{background:var(--amberBg);border-color:#E3C88A;color:var(--amberInk)}
+.slots{display:flex;flex-direction:column;gap:5px}
+.tname{font-size:14.5px;font-weight:700;border:1px solid transparent;background:transparent;
+       border-radius:6px;padding:2px 5px;width:88px;min-width:0}
+.tname:hover{border-color:var(--line);background:#F7FAF8}
+.tname:focus{outline:2px solid var(--mintInk);outline-offset:-1px;background:#fff;border-color:var(--mintInk)}
+.tname.dirty{background:var(--blueBg);border-color:var(--blueLine)}
+.step{display:inline-flex;align-items:center;gap:0;border:1px solid var(--line);border-radius:8px;overflow:hidden}
+.step button{border:0;background:#fff;padding:6px 11px;color:#1B3227;font-weight:700;line-height:1}
+.step button:hover:not(:disabled){background:#F2F7F4}
+.step button:disabled{color:#67746C;background:#F4F7F5;cursor:default}
+.step .v{padding:6px 10px;min-width:34px;text-align:center;font-variant-numeric:tabular-nums;
+         border-left:1px solid var(--line);border-right:1px solid var(--line);background:#FBFDFC}
+.step.dirty .v{background:var(--blueBg);color:var(--blueInk);font-weight:700}
+.shape{display:flex;align-items:center;gap:9px;flex-wrap:wrap;width:100%;
+       border-top:1px solid var(--line2);padding-top:12px;margin-top:2px}
+.shape .lb{font-size:11px;letter-spacing:.09em;font-weight:700;color:var(--faint)}
+.shape .warn{font-size:12.5px;color:var(--coral);flex:1 1 100%}
+
+.slot{display:flex;align-items:center;gap:8px;border:1px solid var(--line);border-radius:8px;
+      padding:6px 8px;background:#fff;min-height:38px;position:relative}
+.slot.open{border-style:dashed;background:#FBFDFC}
+.slot.over{border-color:var(--mintInk);background:#E9F8F0;box-shadow:0 0 0 2px rgba(4,107,69,.18)}
+.slot.blocked{border-color:var(--coral);background:var(--coralBg)}
+.n{width:19px;height:19px;border-radius:5px;background:#EEF3F0;color:#3A5348;font-size:10.5px;
+   font-weight:800;display:flex;align-items:center;justify-content:center;flex:0 0 19px}
+.slot.open .n{background:#F3F6F4;color:#5C6B62}
+.who{flex:1;min-width:0}
+.who .nm{font-size:13.5px;white-space:nowrap;overflow:hidden;text-overflow:ellipsis}
+.who .tag{font-size:10px;font-weight:800;letter-spacing:.06em;border-radius:4px;padding:1px 5px;margin-left:5px}
+.tag.fake{background:var(--veo);color:#231F00}
+.tag.abs{background:var(--coralBg);color:var(--coral)}
+.tag.new{background:#E6F7EE;color:var(--mintInk)}
+.openlab{font-size:12.5px;color:#5C6B62}
+.grip{cursor:grab;color:#5C6B62;font-size:13px;line-height:1;padding:2px 3px;flex:0 0 auto}
+.slot.moved{background:var(--blueBg);border-color:var(--blueLine)}
+.slot.dragging{opacity:.4}
+.kebab{border:1px solid transparent;background:transparent;border-radius:6px;padding:2px 6px;
+       color:#4E5A54;line-height:1;flex:0 0 auto}
+.kebab:hover{border-color:var(--line);background:#F2F7F4}
+.kebab:focus-visible{outline:2px solid var(--mintInk);outline-offset:1px}
+.rmv{border:1px solid transparent;background:transparent;border-radius:6px;padding:2px 6px;
+     color:#67746C;line-height:1;font-size:12px;flex:0 0 auto}
+.slot:hover .rmv,.rmv:focus-visible{color:var(--coral)}
+.rmv:hover{background:var(--coralBg);border-color:#E9B6AC}
+.rmv:focus-visible{outline:2px solid var(--coral);outline-offset:1px}
+
+.menu{position:absolute;right:6px;top:34px;z-index:40;background:#fff;border:1px solid var(--line);
+      border-radius:10px;box-shadow:0 10px 28px rgba(0,32,21,.16);min-width:210px;overflow:hidden}
+.menu h6{margin:0;padding:8px 12px 5px;font-size:10px;letter-spacing:.11em;color:var(--faint);font-weight:700}
+.menu button{display:block;width:100%;text-align:left;border:0;background:#fff;padding:8px 12px;font-size:13.5px}
+.menu button:hover{background:#F2F7F4}
+.menu button:disabled{color:#A7B3AD;background:#fff;cursor:default}
+.menu .sep{height:1px;background:var(--line2);margin:4px 0}
+.menu button.primary{font-weight:700;color:var(--mintInk)}
+.menu button.primary:hover{background:#EAF9F1}
+.menu button.danger{color:var(--coral)}
+.menu button.danger:hover{background:var(--coralBg)}
+
+.bench{padding:12px 14px 14px;margin-bottom:14px}
+.bench .th{margin-bottom:9px}
+.benchrow{display:flex;gap:7px;flex-wrap:wrap;min-height:44px;border:1px dashed var(--line);
+          border-radius:10px;padding:8px;background:#FBFDFC}
+.benchrow.over{border-color:var(--mintInk);background:#E9F8F0}
+.bp{display:flex;align-items:center;gap:7px;border:1px solid var(--line);border-radius:8px;
+    padding:5px 9px;background:#fff;font-size:13.5px;position:relative}
+.bp.moved{background:var(--blueBg);border-color:var(--blueLine)}
+.bp.dragging{opacity:.4}
+.benchempty{font-size:13px;color:var(--faint);padding:6px 3px}
+
+/* ---------- place mode: pick up, then tap a destination ----------
+   Drag does not exist on touch, and "move to the first open slot" cannot swap two
+   players or choose a slot - which is most of what balancing teams actually is. */
+.placebar[hidden]{display:none}
+.placebar{position:fixed;left:0;right:0;top:0;z-index:70;display:flex;align-items:center;gap:12px;
+  background:var(--forest);color:#fff;padding:12px 18px;box-shadow:0 4px 18px rgba(0,32,21,.3)}
+.pb-txt{flex:1;min-width:0;font-size:14px}
+.pb-txt b{font-weight:700}
+.pb-txt span{color:#A9D7C3}
+.pb-x{border:1px solid #2A5644;background:transparent;color:#CFE7DC;border-radius:8px;padding:8px 15px}
+.pb-x:hover{background:#14432F;color:#fff}
+body.placing{padding-top:52px}
+body.placing .slot{cursor:pointer}
+body.placing .slot.open{border-color:var(--mintInk);border-style:dashed;background:#EAF9F1}
+body.placing .slot:not(.open):not(.src){box-shadow:inset 0 0 0 1px #9FC4B2}
+body.placing .slot:not(.open):not(.src)::after{content:"SWAP";position:absolute;right:9px;top:50%;
+  transform:translateY(-50%);font-size:9.5px;font-weight:800;letter-spacing:.07em;color:var(--mintInk);
+  background:#E4F8EE;border:1px solid #A9E3C6;border-radius:4px;padding:2px 6px;pointer-events:none}
+body.placing .slot.src{box-shadow:0 0 0 2px var(--mint);background:#E9F8F0}
+body.placing .slot.src::after{content:"MOVING";position:absolute;right:9px;top:50%;
+  transform:translateY(-50%);font-size:9.5px;font-weight:800;letter-spacing:.07em;color:var(--mintInk);
+  background:#fff;border:1px solid var(--mint);border-radius:4px;padding:2px 6px}
+body.placing .team.locked{opacity:.5}
+body.placing .team.locked .slot{cursor:not-allowed}
+body.placing .kebab,body.placing .rmv{visibility:hidden}
+@media (max-width: 820px){
+  .placebar{padding:12px 14px calc(12px)}
+  .pb-txt{font-size:13.5px}
+  .pb-txt span{display:none}
+  .pb-x{padding:10px 14px}
+  body.placing{padding-top:56px}
+}
+
+/* ---------- save bar ---------- */
+.bar{position:fixed;left:0;right:0;bottom:0;background:#fff;border-top:1px solid var(--line);
+     box-shadow:0 -6px 22px rgba(0,32,21,.09);z-index:50}
+.plan{background:var(--blueBg);border-bottom:1px solid var(--blueLine);padding:12px 26px;
+      max-height:190px;overflow-y:auto}
+.plan .pt{font-size:10.5px;letter-spacing:.12em;font-weight:700;color:var(--blueInk);margin-bottom:9px;
+          display:flex;align-items:center}
+.plan .pt .rt{margin-left:auto;letter-spacing:0;font-size:11.5px;font-weight:600;text-transform:none}
+.mv{display:flex;align-items:center;gap:9px;background:#fff;border:1px solid var(--blueLine);
+    border-radius:8px;padding:7px 10px;margin-bottom:5px;font-size:13px}
+.mv:last-child{margin-bottom:0}
+.mv .st{width:17px;height:17px;border-radius:50%;flex:0 0 17px;border:1.5px solid #B9C6BF;
+        display:flex;align-items:center;justify-content:center;font-size:10px;font-weight:800;color:#fff}
+.mv .st.run{border-color:var(--blueInk);border-right-color:transparent;animation:sp .7s linear infinite}
+@keyframes sp{to{transform:rotate(360deg)}}
+.mv .st.ok{background:var(--mintInk);border-color:var(--mintInk)}
+.mv .st.bad{background:var(--coral);border-color:var(--coral)}
+.mv .st.unk{background:var(--amberInk);border-color:var(--amberInk)}
+.mv .txt{flex:1;min-width:0}
+.mv .ep{font-size:11px;color:var(--muted);font-family:ui-monospace,SFMono-Regular,Menlo,monospace;
+        white-space:nowrap;overflow:hidden;text-overflow:ellipsis}
+.mv.ok{border-color:#B6E3CC;background:#F4FBF7}
+.mv.bad{border-color:#E9B6AC;background:var(--coralBg)}
+.mv.unk{border-color:#E3C88A;background:var(--amberBg)}
+.mv .rr{font-size:11.5px;font-weight:700}
+.mv.bad .rr{color:var(--coral)}
+.mv.unk .rr{color:var(--amberInk)}
+.fine{font-size:11.5px;color:#264F8C;line-height:1.5;margin-top:8px}
+.fine.warn{color:var(--amberInk)}
+.acts{display:flex;align-items:center;gap:10px;padding:13px 26px}
+.acts .cnt{font-size:13.5px;color:var(--muted)}
+.acts .sp{margin-left:auto;display:flex;gap:9px;align-items:center}
+.demo{font-size:11.5px;color:var(--faint);display:flex;align-items:center;gap:6px;margin-right:6px}
+.gh{border:1px solid var(--line);background:#fff;border-radius:9px;padding:9px 17px;color:#1B3227}
+.gh:disabled{opacity:.42;cursor:default}
+.go{border:0;background:var(--forest);color:#fff;border-radius:9px;padding:9px 21px;font-weight:600}
+.go:disabled{background:#DCE3DF;color:#4E5A54;cursor:default}
+.go.retry{background:var(--coral)}
+
+.note{font-size:12.5px;color:var(--muted);padding:0 26px 16px}
+/* top, not bottom — a toast over the plan panel hides the row you need to read */
+.toast{position:fixed;left:50%;top:18px;transform:translateX(-50%) translateY(-14px);
+  background:var(--forest);color:#fff;padding:11px 20px;border-radius:10px;font-size:14px;
+  opacity:0;pointer-events:none;transition:.15s;z-index:80}
+.toast.up{opacity:1;transform:translateX(-50%) translateY(0)}
+.toast{box-shadow:0 6px 20px rgba(0,32,21,.28)}
+.toast.bad{background:var(--coral)}
+
+/* ---------------------------------------------------------------
+   Phone. Two things drive this: four columns do not fit, and HTML5
+   drag does not fire on touch at all - so the row menu stops being
+   the fallback and becomes the interaction. The whole row is the
+   target, and the menu opens as a sheet rather than a popover.
+   --------------------------------------------------------------- */
+.teamjump{display:none}
+@media (max-width: 820px){
+  body{padding-bottom:210px}
+  .idbar{padding:13px 14px 14px}
+  .idbar h1{font-size:18px}
+  .idbar .r1{flex-wrap:wrap;gap:7px}
+  .counts{gap:0;justify-content:space-between;margin-top:11px}
+  .counts b{font-size:19px}
+  .counts div{font-size:11px}
+  .wrap{padding:12px 12px 0}
+
+  .tools{padding:11px 11px;gap:7px}
+  .srch{flex:1 1 100%}
+  .tools .btn{flex:1 1 auto;padding:10px 12px}
+  .tools .sp{flex:1 1 100%;margin-left:0;text-align:left}
+  .shape{gap:8px}
+  .step button{padding:10px 14px}
+  .step .v{padding:10px 12px}
+
+  /* all four teams as a strip you can tap to jump to */
+  .teamjump{display:flex;gap:7px;overflow-x:auto;-webkit-overflow-scrolling:touch;
+            margin-bottom:12px;scrollbar-width:none}
+  .teamjump::-webkit-scrollbar{display:none}
+  .tj{flex:0 0 auto;display:flex;align-items:center;gap:7px;border:1px solid var(--line);
+      background:#fff;border-radius:20px;padding:8px 13px;font-size:13.5px;color:#1B3227}
+  .tj .dot{width:10px;height:10px;flex:0 0 10px}
+  .tj b{font-variant-numeric:tabular-nums}
+  .tj.full b{color:var(--amberInk)}
+  .tj.locked{background:var(--amberBg);border-color:var(--amberLine)}
+
+  .teams{grid-template-columns:minmax(0,1fr);gap:10px}
+  .team{scroll-margin-top:10px}
+  .th{position:sticky;top:0;background:inherit;z-index:5;padding:2px 0 8px;margin-bottom:2px}
+  .tname{width:auto;flex:1;min-width:0;font-size:15.5px;padding:6px 7px}
+  .lockb{padding:8px 12px;font-size:11px}
+
+  /* no drag on touch: the row itself is the button */
+  .grip{display:none}
+  .slot{min-height:46px;padding:8px 9px}
+  .slot .who{cursor:pointer}
+  .who .nm{font-size:14.5px}
+  .kebab{padding:8px 10px;font-size:15px}
+  .rmv{padding:8px 10px;font-size:14px}
+
+  /* the row menu becomes a sheet */
+  .menu{position:fixed;left:0;right:0;bottom:0;top:auto;min-width:0;border-radius:16px 16px 0 0;
+        box-shadow:0 -12px 34px rgba(0,32,21,.26);max-height:76vh;overflow-y:auto;
+        padding-bottom:env(safe-area-inset-bottom)}
+  .menu::before{content:"";display:block;width:36px;height:4px;border-radius:3px;
+                background:#C6D2CC;margin:10px auto 2px}
+  .menu button{padding:13px 16px;font-size:15px}
+  .menu h6{padding:10px 16px 5px}
+  .menuscrim{position:fixed;inset:0;background:rgba(6,26,18,.34);z-index:35}
+
+  .adding{padding:10px}
+  .adding button{padding:10px 13px;flex:1 1 auto}
+  .adding .x{flex:1 1 100%;margin-left:0;text-align:center;border:1px solid #BFD3EE;border-radius:8px}
+
+  .plan{padding:11px 13px;max-height:34vh}
+  .mv{flex-wrap:wrap;gap:7px}
+  .mv .txt{flex:1 1 100%;order:2}
+  .mv .st{order:1}
+  .mv .rr{order:3;flex:1 1 100%;text-align:right}
+  .acts{padding:11px 13px calc(11px + env(safe-area-inset-bottom));flex-wrap:wrap;gap:8px}
+  .acts .cnt{flex:1 1 100%;order:1}
+  .acts .sp{order:2;width:100%;margin-left:0}
+  .acts .sp .gh{flex:1}
+  .acts .sp .go{flex:2}
+  .demo{margin-right:0}
+  .toast{left:12px;right:12px;transform:translateX(0) translateY(-12px);bottom:auto;top:14px}
+  .toast.up{transform:translateX(0) translateY(0)}
+}
+</style>
+</head>
+<body>
+
+<div class="idbar">
+  <div class="r1">
+    <h1>PRUMC — Monday</h1>
+    <span class="pill id">ID 17307</span>
+    <span class="pill live"><i></i>PRODUCTION — LIVE EDITS</span>
+  </div>
+  <div class="counts">
+    <div><b id="c-filled">0</b>filled</div>
+    <div><b id="c-open">0</b>open</div>
+    <div><b id="c-fake">0</b>fake</div>
+    <div><b id="c-abs">0</b>absent</div>
+  </div>
+</div>
+
+<div class="wrap">
+  <div class="panel tools">
+    <div class="srch">
+      <input type="text" id="q" placeholder="Add a player — search name or email" autocomplete="off">
+      <div class="res" id="res" hidden></div>
+    </div>
+    <div class="adding" id="adding" hidden></div>
+    <button class="btn" id="addfake">Add fake player</button>
+    <button class="btn" id="bulkfake">Add fake players in bulk</button>
+    <span class="sp" id="capnote"></span>
+    <div class="shape">
+      <span class="lb">SPOTS PER TEAM</span>
+      <div class="step" id="st-spots">
+        <button data-spots="-1" aria-label="One fewer spot per team">&minus;</button>
+        <span class="v" id="v-spots"></span>
+        <button data-spots="1" aria-label="One more spot per team">+</button>
+      </div>
+      <span class="lb" style="margin-left:12px">TEAMS</span>
+      <div class="step" id="st-teams">
+        <button data-teams="-1" aria-label="One fewer team">&minus;</button>
+        <span class="v" id="v-teams"></span>
+        <button data-teams="1" aria-label="One more team">+</button>
+      </div>
+      <span class="sp" id="shapenote"></span>
+      <span class="warn" id="shapewarn" hidden></span>
+    </div>
+  </div>
+
+  <div class="teamjump" id="teamjump"></div>
+  <div class="teams" id="teams"></div>
+
+  <p class="note">
+    Drag a player to move them, or use the <b>&#8942;</b> menu on any row &mdash; both do the same thing,
+    and the menu is the one that works from a keyboard. Dropping onto an occupied slot swaps the two players.
+    Every player is on a team, so the only way off one is onto another or out of the match entirely.
+    Nothing is sent until you save.
+  </p>
+</div>
+
+<div class="bar">
+  <div class="plan" id="plan" hidden>
+    <div class="pt">ABOUT TO SEND <span class="rt" id="planrt"></span></div>
+    <div id="mvlist"></div>
+    <div class="fine" id="planfine">
+      Each row is one request. There is no bulk endpoint, so these go one at a time &mdash;
+      you will see each land before the next is sent.
+    </div>
+  </div>
+  <div class="acts">
+    <span class="cnt" id="cnt">No changes</span>
+    <div class="sp">
+      <label class="demo">demo:
+        <select id="demofail">
+          <option value="">all succeed</option>
+          <option value="bad">one rejected</option>
+          <option value="unk">one gets no answer</option>
+        </select></label>
+      <button class="gh" id="revert" disabled>Revert</button>
+      <button class="go" id="save" disabled>Save</button>
+    </div>
+  </div>
+</div>
+
+<div class="placebar" id="placebar" hidden>
+  <span class="pb-txt"><b id="pb-who"></b><span id="pb-hint"> &mdash; tap a slot to place them, or tap an occupied slot to swap</span></span>
+  <button class="pb-x" id="pb-cancel">Cancel</button>
+</div>
+
+<div class="toast" id="toast"></div>
+
+<script>
+/* =====================================================================
+   Roster editing.
+
+   The move list is a DIFF, not a journal. Move a player twice and it is
+   one request; move them and move them back and it is none. Same rule the
+   match editor uses, extended to a set of calls instead of one body.
+
+   There is no bulk endpoint - Phase 6 found one call per player - so a
+   save is N non-retryable requests in a row. That is the whole reason the
+   plan is shown as a list with per-row status: if row 3 of 7 fails you
+   have to be able to see which three landed.
+   ===================================================================== */
+
+const MATCH = 17307;
+const TEAMS = [
+  {i:0, name:"White", color:"#FFFFFF", locked:false},
+  {i:1, name:"Dark",  color:"#123A2B", locked:false},
+  {i:2, name:"Green", color:"#2CDB87", locked:false},
+  {i:3, name:"Red",   color:"#E4573D", locked:true }
+];
+let PER_TEAM = 10;                 /* spots on each team */
+let TEAM_N   = 4;                  /* how many teams are in play */
+const LOADED_SHAPE = {perTeam:10, teamN:4};
+const LOADED_NAMES = {};           /* filled after TEAMS is built */
+const LOADED_LOCKS = {};
+
+/* userMatchId is what the move and absent endpoints key on; playerId is what
+   remove keys on. They are different ids and the plan shows which is used. */
+let nextTmp = 9000;
+function P(id, umId, name, team, num, opts){
+  return Object.assign({id, umId, name, team, num, fake:false, absent:false, added:false}, opts||{});
+}
+const NAMES = [
+ "Jose Antonio Hernandez","David Angulo","Alexxis Sanchez","Brando Thomas","Chuky Chavarria",
+ "Dany Solis","David Kim","Jibril Rahman","Luis Ramirez","Marco Ortega",
+ "Kevin Nguyen","Arjun Patel","Tomas Silva","Andre Moreau","Diego Castro",
+ "Sam Webb","Omar Farah","Yusuf Demir","Nico Rossi","Rafa Vieira",
+ "Kwame Mensah","Ivan Petrov","Leo Costa","Pablo Ruiz","Hugo Marin",
+ "Tariq Aziz","Gabe Miller","Sean O'Neill","Rui Santos","Emre Yilmaz",
+ "Felix Braun","Owen Doyle","Mateo Vargas","Ken Watanabe"
+];
+const PLAYERS = [];
+let idc = 100, umc = 500, k = 0;
+/* White 10, Dark 9 (slot 7 open), Green 9 (slot 4 open), Red 4, bench 2 */
+const LAYOUT = [
+  {t:0, nums:[1,2,3,4,5,6,7,8,9,10]},
+  {t:1, nums:[1,2,3,4,5,6,8,9,10]},
+  {t:2, nums:[1,2,3,5,6,7,8,9,10]},
+  {t:3, nums:[1,2,3,4]}
+];
+LAYOUT.forEach(L => L.nums.forEach(n => {
+  PLAYERS.push(P(idc++, umc++, NAMES[k++], L.t, n));
+}));
+PLAYERS[9].fake = true;     /* Marco Ortega */
+PLAYERS[17].fake = true;    /* Yusuf Demir */
+PLAYERS[4].absent = true;   /* Chuky Chavarria */
+
+const DIRECTORY = [
+  {id:900, name:"Priya Raman",   email:"priya.r@example.com"},
+  {id:901, name:"Tom Fletcher",  email:"tomf@example.com"},
+  {id:902, name:"Aisha Bello",   email:"aisha.bello@example.com"},
+  {id:903, name:"Marcus Webb",   email:"m.webb@example.com"}
+];
+
+/* LOADED positions - everything is diffed against this */
+const LOADED = {};
+PLAYERS.forEach(p => LOADED[p.id] = {team:p.team, num:p.num, fake:p.fake, absent:p.absent, present:true});
+TEAMS.forEach(t => { LOADED_NAMES[t.i] = t.name; LOADED_LOCKS[t.i] = t.locked; });
+
+const byId = id => PLAYERS.find(p => p.id === Number(id));
+const at = (t, n) => PLAYERS.find(p => p.team === t && p.num === n);
+const onTeam = t => PLAYERS.filter(p => p.team === t).sort((a,b)=>a.num-b.num);
+const removed = new Set();
+
+/* ---------- the diff ---------- */
+function plan(){
+  const out = [];
+  /* The match PUT and the teams PUT are different endpoints. The plan says which is
+     which rather than pretending a save is one request. */
+  if (PER_TEAM !== LOADED_SHAPE.perTeam || TEAM_N !== LOADED_SHAPE.teamN){
+    const capField = TEAM_N === 2 ? "maxTeamSize2Team"
+                   : TEAM_N === 4 ? "maxTeamSize4Team" : null;
+    const bits = [`teamNumbers ${TEAM_N}`, `maxPlayerCount ${TEAM_N*PER_TEAM}`];
+    if (capField) bits.push(`${capField} ${TEAM_N*PER_TEAM}`);
+    out.push({kind:"shape", p:null,
+      label:`Set the match to ${TEAM_N} teams of ${PER_TEAM} — ${TEAM_N*PER_TEAM} spots`,
+      ep:`PUT /admin/matches/${MATCH}  {${bits.join(", ")}}`});
+  }
+  TEAMS.slice(0, TEAM_N).forEach(t => {
+    const bits = [];
+    if (t.name !== LOADED_NAMES[t.i]) bits.push("name");
+    if (t.locked !== LOADED_LOCKS[t.i]) bits.push("locked");
+    if (!bits.length) return;
+    const what = bits.includes("name")
+      ? `Rename team ${t.i+1} — “${LOADED_NAMES[t.i]}” → “${t.name}”`
+        + (bits.length>1 ? ` and ${t.locked?"lock":"unlock"} it` : "")
+      : `${t.locked?"Lock":"Unlock"} ${t.name}`;
+    out.push({kind:"tname", p:null, team:t, label:what,
+      ep:`PUT /admin/teams/{team ${t.i+1} id}  {${bits.join(", ")}}`});
+  });
+  PLAYERS.forEach(p => {
+    const L = LOADED[p.id];
+    if (removed.has(p.id)){
+      if (L) out.push({kind:"remove", p,
+        label:`Remove ${p.name} from the match`,
+        ep:`DELETE /admin/matches/${MATCH}/players/${p.id}`});
+      return;
+    }
+    if (!L){
+      out.push({kind:"add", p,
+        label:`Add ${p.name} to ${TEAMS[p.team].name} #${p.num}`,
+        ep:`POST /admin/matches/${MATCH}/players/${p.id}  {team ${p.team+1}, #${p.num}}`});
+      return;
+    }
+    if (L.team !== p.team || L.num !== p.num){
+      const from = `${TEAMS[L.team].name} #${L.num}`;
+      const to   = `${TEAMS[p.team].name} #${p.num}`;
+      out.push({kind:"move", p, label:`Move ${p.name} — ${from} → ${to}`,
+        ep:`POST /admin/user-matches  (um ${p.umId})`});
+    }
+    if (L.absent !== p.absent){
+      out.push({kind:"absent", p,
+        label:`Mark ${p.name} ${p.absent?"absent":"present"}`,
+        ep:`PATCH /admin/matches/${MATCH}/user-matches/${p.umId}/absent`});
+    }
+    if (L.fake !== p.fake){
+      out.push({kind:"fake", p,
+        label:`${p.fake?"Set":"Unset"} ${p.name} as a fake player`,
+        ep:`PATCH /admin/players/${p.id}/fake-player`});
+    }
+  });
+  return out;
+}
+
+/* ---------- render ---------- */
+function render(){
+  document.getElementById("teams").innerHTML = TEAMS.slice(0, TEAM_N).map(t => {
+    const mine = onTeam(t.i);
+    const full = mine.length >= PER_TEAM;
+    let rows = "";
+    for (let n = 1; n <= PER_TEAM; n++){
+      const p = at(t.i, n);
+      rows += p ? slotHTML(p, t.i, n) : openHTML(t.i, n);
+    }
+    return `<section class="panel team${t.locked?" locked":""}" data-team="${t.i}">
+      <div class="th">
+        <span class="dot" style="background:${t.color}"></span>
+        <input class="tname${t.name!==LOADED_NAMES[t.i]?" dirty":""}" data-tname="${t.i}"
+               value="${t.name}" aria-label="Team ${t.i+1} name">
+        <span class="cap${full?" full":""}">${mine.length}/${PER_TEAM}</span>
+        <button class="lockb${t.locked?" on":""}" data-lock="${t.i}">${t.locked?"LOCKED":"OPEN"}</button>
+      </div>
+      <div class="slots">${rows}</div>
+    </section>`;
+  }).join("");
+  document.getElementById("teams").style.setProperty("--tn", TEAM_N);
+  document.getElementById("teamjump").innerHTML = TEAMS.slice(0, TEAM_N).map(t => {
+    const n = onTeam(t.i).length;
+    return `<button class="tj${n>=PER_TEAM?" full":""}${t.locked?" locked":""}" data-jump="${t.i}">
+      <span class="dot" style="background:${t.color}"></span>${t.name} <b>${n}/${PER_TEAM}</b></button>`;
+  }).join("");
+
+  const filled = PLAYERS.filter(p => p.team !== null && !removed.has(p.id)).length;
+  const slots  = TEAM_N * PER_TEAM;
+  document.getElementById("c-filled").textContent = filled;
+  document.getElementById("c-open").textContent   = slots - filled;
+  document.getElementById("c-fake").textContent   = PLAYERS.filter(p=>p.fake && !removed.has(p.id)).length;
+  document.getElementById("c-abs").textContent    = PLAYERS.filter(p=>p.absent && !removed.has(p.id)).length;
+  document.getElementById("capnote").textContent = `${filled} of ${slots} slots filled`;
+  paintShape(filled, slots);
+
+  paintPlan();
+}
+function dirty(p){
+  const L = LOADED[p.id];
+  if (!L) return true;
+  return L.team !== p.team || L.num !== p.num || L.fake !== p.fake || L.absent !== p.absent;
+}
+function tags(p){
+  let s = "";
+  if (!LOADED[p.id]) s += `<span class="tag new">NEW</span>`;
+  if (p.fake)   s += `<span class="tag fake">FAKE</span>`;
+  if (p.absent) s += `<span class="tag abs">ABSENT</span>`;
+  return s;
+}
+function slotHTML(p, t, n){
+  return `<div class="slot${dirty(p)?" moved":""}" data-slot="${t}:${n}" data-pid="${p.id}" draggable="true">
+    <span class="n">${n}</span>
+    <span class="grip" aria-hidden="true">&#8942;&#8942;</span>
+    <span class="who"><span class="nm">${p.name}${tags(p)}</span></span>
+    <button class="rmv" data-remove="${p.id}" aria-label="Remove ${p.name} from the match" title="Remove from the match">&#10005;</button>
+    <button class="kebab" data-menu="${p.id}" aria-label="Actions for ${p.name}" aria-haspopup="true">&#8942;</button>
+  </div>`;
+}
+function openHTML(t, n){
+  return `<div class="slot open" data-slot="${t}:${n}">
+    <span class="n">${n}</span><span class="openlab">Open</span>
+  </div>`;
+}
+
+/* ---------- the plan panel ---------- */
+let RUN = null;                       /* null when idle, else the executing plan */
+function paintPlan(){
+  const list = RUN || plan();
+  const el = document.getElementById("plan");
+  const cnt = document.getElementById("cnt");
+  if (!list.length){
+    el.hidden = true;
+    cnt.textContent = "No changes";
+    document.getElementById("save").disabled = true;
+    document.getElementById("revert").disabled = true;
+    return;
+  }
+  el.hidden = false;
+  document.getElementById("mvlist").innerHTML = list.map((m,i) => {
+    const s = m.status || "";
+    const mark = s==="ok" ? "&#10003;" : s==="bad" ? "!" : s==="unk" ? "?" : "";
+    const res = s==="bad" ? `<span class="rr">FAILED — did not happen</span>`
+             : s==="unk" ? `<span class="rr">NO ANSWER — may have happened</span>` : "";
+    return `<div class="mv ${s}" data-mv="${i}">
+      <span class="st ${s==='run'?'run':s}">${mark}</span>
+      <span class="txt">${m.label}<div class="ep">${m.ep}</div></span>${res}
+    </div>`;
+  }).join("");
+
+  const ok = list.filter(m=>m.status==="ok").length;
+  const bad = list.filter(m=>m.status==="bad").length;
+  const unk = list.filter(m=>m.status==="unk").length;
+  document.getElementById("planrt").textContent =
+    RUN ? `${ok} sent · ${bad} failed · ${unk} unknown · ${list.length-ok-bad-unk} waiting` : "";
+
+  const fine = document.getElementById("planfine");
+  if (unk){
+    fine.className = "fine warn";
+    fine.innerHTML = "One request got no answer, so it may or may not have landed. "
+      + "It is <b>not</b> retried automatically and you should not retry it either — reload the "
+      + "roster and look before doing anything else.";
+  } else if (bad){
+    fine.className = "fine";
+    fine.innerHTML = "The failed rows were rejected by the server, so they definitely did not happen. "
+      + "Retrying only those is safe.";
+  } else {
+    fine.className = "fine";
+    fine.innerHTML = "Each row is one request. There is no bulk endpoint, so these go one at a time — "
+      + "you will see each land before the next is sent.";
+  }
+
+  cnt.textContent = RUN
+    ? `${ok} of ${list.length} sent`
+    : list.length + (list.length===1 ? " change not saved" : " changes not saved");
+  const save = document.getElementById("save");
+  save.disabled = !!RUN && !bad;
+  save.textContent = (RUN && bad) ? `Retry ${bad} failed` : "Save";
+  save.classList.toggle("retry", !!(RUN && bad));
+  document.getElementById("revert").disabled = !!RUN;
+}
+
+/* ---------- moving ---------- */
+/* Every player in a match is on a team - there is no unassigned state in the product.
+   So a move is always team-to-team, and the only way off a team is onto another one or
+   out of the match. */
+function place(pid, team, num){
+  const p = byId(pid);
+  if (p.team === team && p.num === num) return;
+  const t = TEAMS[team];
+  if (t.locked){ toast(`${t.name} is locked. Unlock it first.`, true); return; }
+  const sitting = at(team, num);
+  if (sitting && sitting.id !== p.id){            /* swap, never overwrite */
+    sitting.team = p.team; sitting.num = p.num;
+  }
+  p.team = team; p.num = num;
+  render();
+}
+function firstOpen(team){
+  if (team >= TEAM_N) return null;
+  for (let n = 1; n <= PER_TEAM; n++) if (!at(team, n)) return n;
+  return null;
+}
+/* Who would be left without a slot if the match were this shape? Nobody is ever moved
+   or dropped automatically - the change is simply refused and the people are named. */
+function stranded(perTeam, teamN){
+  return PLAYERS.filter(p => !removed.has(p.id) && p.team !== null &&
+                             (p.team >= teamN || p.num > perTeam));
+}
+function paintShape(filled, slots){
+  document.getElementById("v-spots").textContent = PER_TEAM;
+  document.getElementById("v-teams").textContent = TEAM_N;
+  document.getElementById("st-spots").classList.toggle("dirty", PER_TEAM !== LOADED_SHAPE.perTeam);
+  document.getElementById("st-teams").classList.toggle("dirty", TEAM_N !== LOADED_SHAPE.teamN);
+  document.querySelector('[data-spots="-1"]').disabled = PER_TEAM <= 1 || stranded(PER_TEAM-1, TEAM_N).length > 0;
+  document.querySelector('[data-spots="1"]').disabled  = PER_TEAM >= 20;
+  document.querySelector('[data-teams="-1"]').disabled = TEAM_N <= 1 || stranded(PER_TEAM, TEAM_N-1).length > 0;
+  document.querySelector('[data-teams="1"]').disabled  = TEAM_N >= TEAMS.length;
+  const note = document.getElementById("shapenote");
+  note.textContent = `${TEAM_N} × ${PER_TEAM} = ${slots} spots`;
+  const w = document.getElementById("shapewarn");
+  const blockS = PER_TEAM > 1 ? stranded(PER_TEAM-1, TEAM_N) : [];
+  const blockT = TEAM_N > 1 ? stranded(PER_TEAM, TEAM_N-1) : [];
+  if (blockS.length || blockT.length){
+    const who = (blockS.length ? blockS : blockT);
+    w.hidden = false;
+    w.textContent = `Cannot shrink any further — ${who.length} player`
+      + `${who.length===1?"":"s"} would have no slot (`
+      + who.slice(0,3).map(p=>p.name).join(", ")
+      + (who.length>3 ? `, +${who.length-3} more` : "") + `). Move or remove them first.`;
+  } else w.hidden = true;
+}
+
+/* drag */
+let dragId = null;
+document.addEventListener("dragstart", e => {
+  const el = e.target.closest("[data-pid]");
+  if (!el || RUN) { e.preventDefault(); return; }
+  dragId = Number(el.dataset.pid);
+  el.classList.add("dragging");
+  e.dataTransfer.effectAllowed = "move";
+  e.dataTransfer.setData("text/plain", String(dragId));
+});
+document.addEventListener("dragend", () => {
+  dragId = null;
+  document.querySelectorAll(".dragging").forEach(e=>e.classList.remove("dragging"));
+  document.querySelectorAll(".over,.blocked").forEach(e=>e.classList.remove("over","blocked"));
+});
+document.addEventListener("dragover", e => {
+  const slot = e.target.closest("[data-slot]");
+  if (!slot) return;
+  e.preventDefault();
+  document.querySelectorAll(".over,.blocked").forEach(x=>x.classList.remove("over","blocked"));
+  const t = Number(slot.dataset.slot.split(":")[0]);
+  slot.classList.add(TEAMS[t].locked ? "blocked" : "over");
+});
+document.addEventListener("drop", e => {
+  const slot = e.target.closest("[data-slot]");
+  if (!slot) return;
+  e.preventDefault();
+  const pid = Number(e.dataTransfer.getData("text/plain") || dragId);
+  if (!pid) return;
+  const [t,n] = slot.dataset.slot.split(":").map(Number);
+  place(pid, t, n);
+  document.querySelectorAll(".over,.blocked").forEach(x=>x.classList.remove("over","blocked"));
+});
+
+/* ---------- the row menu: the same operations, from a keyboard ---------- */
+let openMenu = null;
+function closeMenu(){
+  if (openMenu){ openMenu.remove(); openMenu = null; }
+  document.querySelectorAll(".menuscrim").forEach(e => e.remove());
+}
+const isPhone = () => window.matchMedia("(max-width: 820px)").matches;
+document.addEventListener("click", e => {
+  if (e.target.closest(".menuscrim")){ closeMenu(); return; }
+  /* on a phone the row itself is the target - HTML5 drag does not fire on touch */
+  let k = e.target.closest("[data-menu]");
+  if (!k && isPhone()){
+    const row = e.target.closest(".slot[data-pid]");
+    if (row && !e.target.closest("[data-remove]")) k = row.querySelector("[data-menu]");
+  }
+  if (!k){ if (!e.target.closest(".menu")) closeMenu(); return; }
+  const pid = Number(k.dataset.menu);
+  if (openMenu && openMenu.dataset.for === String(pid)){ closeMenu(); return; }
+  closeMenu();
+  const p = byId(pid);
+  const m = document.createElement("div");
+  m.className = "menu"; m.dataset.for = String(pid);
+  const opts = TEAMS.map(t => {
+    const open = firstOpen(t.i);
+    const same = p.team === t.i;
+    const dis = same || t.locked || open === null;
+    const why = same ? " (current)" : t.locked ? " (locked)" : open === null ? " (full)" : ` #${open}`;
+    return `<button data-mv-to="${t.i}" ${dis?"disabled":""}>${t.name}${why}</button>`;
+  }).join("");
+  m.innerHTML = `<h6>MOVE OR SWAP</h6>
+    <button data-place="1" class="primary">Pick up &amp; choose a slot&hellip;</button>
+    <h6>OR SEND STRAIGHT TO</h6>${opts}
+    <div class="sep"></div><h6>FLAGS</h6>
+    <button data-flag="absent">${p.absent?"Mark present":"Mark absent"}</button>
+    <button data-flag="fake">${p.fake?"Unset fake player":"Set as fake player"}</button>
+    <div class="sep"></div>
+    <button class="danger" data-remove="1">Remove from the match…</button>`;
+  if (isPhone()){
+    const sc = document.createElement("div");
+    sc.className = "menuscrim"; document.body.appendChild(sc);
+    document.body.appendChild(m);
+  } else k.parentElement.appendChild(m);
+  openMenu = m;
+  m.querySelector("button:not([disabled])").focus();
+});
+document.addEventListener("click", e => {
+  const b = e.target.closest(".menu button"); if (!b) return;
+  const pid = Number(openMenu.dataset.for), p = byId(pid);
+  if (b.dataset.place){ const id = pid; closeMenu(); startPlacing(id); return; }
+  if (b.dataset.mvTo !== undefined){
+    const t = Number(b.dataset.mvTo); place(pid, t, firstOpen(t));
+  } else if (b.dataset.flag === "absent"){ p.absent = !p.absent; render(); }
+  else if (b.dataset.flag === "fake"){ p.fake = !p.fake; render(); }
+  else if (b.dataset.remove){ askRemove(pid); }
+  closeMenu();
+});
+
+/* Removal is destructive and its money behaviour is UNCONFIRMED, so it is never a drag
+   target and never one click - but it IS on the row, because burying it in a menu made
+   it undiscoverable. */
+function askRemove(pid){
+  const p = byId(pid);
+  const okd = window.confirm(
+    `Remove ${p.name} from this match?\n\n`
+    + `This takes them off the roster. It is NOT a refund — there is a separate `
+    + `refund-and-cancel endpoint for that, and it is deliberately blocked in Clubhouse.\n\n`
+    + `If ${p.name} paid, the charge stays in place. Check before you do this.`);
+  if (okd){ removed.add(pid); p.team = null; p.num = null; render(); }
+}
+document.addEventListener("click", e => {
+  const b = e.target.closest(".rmv[data-remove]"); if (!b) return;
+  askRemove(Number(b.dataset.remove));
+});
+document.addEventListener("keydown", e => { if (e.key === "Escape") closeMenu(); });
+
+document.getElementById("teamjump").addEventListener("click", e => {
+  const b = e.target.closest("[data-jump]"); if (!b) return;
+  document.querySelector(`.team[data-team="${b.dataset.jump}"]`)
+    .scrollIntoView({behavior:"smooth", block:"start"});
+});
+
+/* ---------- shape and names ---------- */
+document.getElementById("st-spots").addEventListener("click", e => {
+  const b = e.target.closest("[data-spots]"); if (!b || b.disabled) return;
+  const next = PER_TEAM + Number(b.dataset.spots);
+  const s = stranded(next, TEAM_N);
+  if (s.length){ toast(`${s.length} player${s.length===1?"":"s"} would have no slot.`, true); return; }
+  PER_TEAM = next; render();
+});
+document.getElementById("st-teams").addEventListener("click", e => {
+  const b = e.target.closest("[data-teams]"); if (!b || b.disabled) return;
+  const next = TEAM_N + Number(b.dataset.teams);
+  const s = stranded(PER_TEAM, next);
+  if (s.length){ toast(`${s.length} player${s.length===1?"":"s"} would have no team.`, true); return; }
+  TEAM_N = next; render();
+});
+document.addEventListener("input", e => {
+  const i = e.target.closest("[data-tname]"); if (!i) return;
+  TEAMS[Number(i.dataset.tname)].name = i.value;
+  i.classList.toggle("dirty", i.value !== LOADED_NAMES[Number(i.dataset.tname)]);
+  paintPlan();
+});
+
+/* ---------- place mode ---------- */
+let placing = null;
+function startPlacing(pid){
+  if (RUN) return;
+  placing = pid;
+  const p = byId(pid);
+  document.body.classList.add("placing");
+  document.getElementById("placebar").hidden = false;
+  document.getElementById("pb-who").textContent = "Moving " + p.name;
+  render();
+  document.querySelector(`.slot[data-pid="${pid}"]`)?.classList.add("src");
+}
+function stopPlacing(){
+  placing = null;
+  document.body.classList.remove("placing");
+  document.getElementById("placebar").hidden = true;
+  render();
+}
+document.getElementById("pb-cancel").addEventListener("click", stopPlacing);
+document.addEventListener("keydown", e => { if (e.key === "Escape" && placing) stopPlacing(); });
+/* capture phase, so a tap in place mode never falls through to the row menu */
+document.addEventListener("click", e => {
+  if (!placing) return;
+  const slot = e.target.closest("[data-slot]");
+  if (e.target.closest(".placebar")) return;
+  if (!slot){ return; }
+  e.preventDefault(); e.stopPropagation();
+  const [t,n] = slot.dataset.slot.split(":").map(Number);
+  if (slot.dataset.pid && Number(slot.dataset.pid) === placing){ stopPlacing(); return; }
+  if (TEAMS[t].locked){ toast(`${TEAMS[t].name} is locked. Unlock it first.`, true); return; }
+  const target = at(t, n);
+  const moved = byId(placing);
+  place(placing, t, n);
+  toast(target && target.id !== placing
+    ? `Swapped ${moved.name} with ${target.name}`
+    : `${moved.name} moved to ${TEAMS[t].name} #${n}`);
+  stopPlacing();
+}, true);
+
+/* ---------- lock ---------- */
+document.addEventListener("click", e => {
+  const b = e.target.closest("[data-lock]"); if (!b) return;
+  const t = TEAMS[Number(b.dataset.lock)];
+  t.locked = !t.locked;
+  render();
+});
+
+/* ---------- add ---------- */
+const q = document.getElementById("q"), res = document.getElementById("res");
+q.addEventListener("input", () => {
+  const v = q.value.trim().toLowerCase();
+  if (!v){ res.hidden = true; return; }
+  const hits = DIRECTORY.filter(d =>
+    d.name.toLowerCase().includes(v) || d.email.toLowerCase().includes(v));
+  res.hidden = !hits.length;
+  res.innerHTML = hits.map(d =>
+    `<button data-add="${d.id}">${d.name}<div class="em">${d.email}</div></button>`).join("");
+});
+/* The add endpoint takes a team and a slot number, so adding has to ask where.
+   There is no unassigned state to park someone in. */
+let pending = null;
+function askWhere(person){
+  pending = person;
+  const el = document.getElementById("adding");
+  el.hidden = false;
+  el.innerHTML = `<span class="lab">Add ${person.name} to</span>` +
+    TEAMS.map(t => {
+      const open = firstOpen(t.i);
+      const why = t.locked ? "locked" : open === null ? "full" : `#${open}`;
+      return `<button data-dest="${t.i}" ${(t.locked||open===null)?"disabled":""}>${t.name} ${why}</button>`;
+    }).join("") +
+    `<button class="x" data-dest="cancel">Cancel</button>`;
+  if (!TEAMS.some(t => !t.locked && firstOpen(t.i) !== null)){
+    el.innerHTML = `<span class="lab">No room for ${person.name}</span>` +
+      `<span style="font-size:13px;color:#17406F">Every team is full or locked. `
+      + `Remove someone or unlock a team first.</span>` +
+      `<button class="x" data-dest="cancel">Cancel</button>`;
+  }
+}
+document.getElementById("adding").addEventListener("click", e => {
+  const b = e.target.closest("[data-dest]"); if (!b) return;
+  const el = document.getElementById("adding");
+  if (b.dataset.dest === "cancel"){ pending = null; el.hidden = true; return; }
+  const t = Number(b.dataset.dest), n = firstOpen(t);
+  PLAYERS.push(P(pending.id ?? nextTmp++, nextTmp++, pending.name, t, n,
+                 {added:true, fake:!!pending.fake}));
+  toast(`${pending.name} staged for ${TEAMS[t].name} #${n} — nothing sent until you save`);
+  pending = null; el.hidden = true; render();
+});
+
+res.addEventListener("click", e => {
+  const b = e.target.closest("[data-add]"); if (!b) return;
+  const d = DIRECTORY.find(x => x.id === Number(b.dataset.add));
+  q.value = ""; res.hidden = true;
+  askWhere(d);
+});
+document.getElementById("addfake").addEventListener("click", () => {
+  askWhere({id:null, name:"Fake player", fake:true});
+});
+document.getElementById("bulkfake").addEventListener("click", () => {
+  const n = Number(window.prompt("How many fake players?", "4"));
+  if (!n || n < 1) return;
+  let placed = 0;
+  for (let i=0;i<n;i++){
+    const t = TEAMS.find(x => !x.locked && firstOpen(x.i) !== null);
+    if (!t) break;
+    PLAYERS.push(P(nextTmp++, nextTmp++, "Fake player", t.i, firstOpen(t.i), {fake:true, added:true}));
+    placed++;
+  }
+  toast(placed < n
+    ? `Only ${placed} of ${n} fit — the rest need an open slot`
+    : `${n} fake players staged`);
+  render();
+});
+
+/* ---------- revert ---------- */
+document.getElementById("revert").addEventListener("click", () => {
+  for (let i = PLAYERS.length - 1; i >= 0; i--){
+    const p = PLAYERS[i], L = LOADED[p.id];
+    if (!L){ PLAYERS.splice(i,1); continue; }
+    p.team = L.team; p.num = L.num; p.fake = L.fake; p.absent = L.absent;
+  }
+  removed.clear();
+  PER_TEAM = LOADED_SHAPE.perTeam; TEAM_N = LOADED_SHAPE.teamN;
+  TEAMS.forEach(t => { t.name = LOADED_NAMES[t.i]; t.locked = LOADED_LOCKS[t.i]; });
+  RUN = null; render();
+});
+
+/* ---------- save: one request at a time, status visible ---------- */
+document.getElementById("save").addEventListener("click", async () => {
+  const retrying = RUN && RUN.some(m => m.status === "bad");
+  const list = retrying ? RUN : plan().map(m => Object.assign({}, m, {status:""}));
+  RUN = list;
+  const targets = retrying
+    ? list.filter(m => m.status === "bad")
+    : list;
+  targets.forEach(m => m.status = "");
+  paintPlan();
+
+  const mode = document.getElementById("demofail").value;
+  const failIx = mode ? Math.min(2, targets.length - 1) : -1;
+
+  for (let i = 0; i < targets.length; i++){
+    const m = targets[i];
+    m.status = "run"; paintPlan();
+    await new Promise(r => setTimeout(r, 260));
+    if (i === failIx && !retrying){
+      m.status = mode;
+      paintPlan();
+      if (m.status === "unk" && window.__STOP_ON_UNKNOWN__ !== false){
+        toast("Stopped — one request got no answer. Reload before doing anything else.", true);
+        return;                      /* never keep firing after an ambiguous result */
+      }
+      if (m.status === "unk") continue;
+      continue;                      /* a clean rejection is safe to skip past */
+    }
+    m.status = "ok";
+    commit(m);
+    paintPlan();
+  }
+  const bad = list.filter(m => m.status === "bad").length;
+  if (!bad){
+    RUN = null;
+    toast(`${list.length} change${list.length===1?"":"s"} saved`);
+    render();
+  } else {
+    toast(`${bad} failed. They were rejected, so they did not happen — retry is safe.`, true);
+  }
+});
+function commit(m){
+  if (m.kind === "shape"){ LOADED_SHAPE.perTeam = PER_TEAM; LOADED_SHAPE.teamN = TEAM_N; return; }
+  if (m.kind === "tname"){ LOADED_NAMES[m.team.i] = m.team.name;
+                           LOADED_LOCKS[m.team.i] = m.team.locked; return; }
+  const p = m.p;
+  if (m.kind === "remove"){
+    const i = PLAYERS.indexOf(p); if (i>=0) PLAYERS.splice(i,1);
+    delete LOADED[p.id]; removed.delete(p.id); return;
+  }
+  LOADED[p.id] = {team:p.team, num:p.num, fake:p.fake, absent:p.absent, present:true};
+}
+
+let tt;
+function toast(msg, bad){
+  const t = document.getElementById("toast");
+  t.textContent = msg;
+  t.className = "toast up" + (bad ? " bad" : "");
+  clearTimeout(tt); tt = setTimeout(()=> t.className = "toast" + (bad?" bad":""), 3000);
+}
+
+render();
+window.__r = {PLAYERS, LOADED, TEAMS, plan, place, byId, at, onTeam, removed, askWhere, askRemove, isPhone,
+              startPlacing, stopPlacing, get placing(){return placing},
+              stranded, LOADED_SHAPE, LOADED_NAMES, LOADED_LOCKS, render, get TEAM_N(){return TEAM_N}, get PER(){return PER_TEAM},
+              get RUN(){return RUN}};
+</script>
+</body>
+</html>
