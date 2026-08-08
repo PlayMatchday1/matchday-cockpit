@@ -197,6 +197,84 @@ NULLABLE, not a NUMERIC "blank = no change" field: null and 0 are both meaningfu
 (special event), so a blank box becomes null, 0 stays 0, and clearing it is a
 real change. See `maxPlayerCount` in matchEditModel's EDITABLE_KEYS + NULLABLE_NUM.
 
+## PRODUCTION verification (Phase 8) — reads + one rejected echo, NO write
+
+Until Phase 8 every fact above was derived on STAGING. Phase 8 checked them
+against PRODUCTION (playmatchday.herokuapp.com) with reads plus ONE full-object
+echo PUT that was rejected 400 (wrote nothing, re-GET byte-for-byte identical).
+No production write has ever been performed.
+
+### Holds identically on both (production == staging)
+- Field set: 54 fields, EXACTLY the same names on both — 0 production-only, 0
+  staging-only.
+- Read-only set: 22 fields, IDENTICAL names on both (from the forbidNonWhitelisted
+  400 on a full-object echo, run on each). The 22:
+  `_count, bracketRound, createdAt, divisionId, endDateUtc, field, fieldNumber,
+  goals, groupNumber, id, isCancelled, manager, players, secondManager,
+  starRating, starRatingCount, startDateUtc, teamAway, teamAwayCustomName,
+  teamHome, teamHomeCustomName, updatedAt`.
+- Writable set: 32 fields, identical (54 − 22). Same PATCH/partial-update
+  validation — the echo 400'd on production exactly as on staging.
+- Prices are integer cents (registrationPrice / additionalSpotPrice integers).
+- startDate/endDate carry a `Z` but are local wall-clock; `startDateUtc −
+  startDate = +5h` (whole hour, August / CDT) — the same DST-aware derivation.
+- maxPlayerCount is populated and VARIES on real data (saw 18 and 40).
+- managerId is number|null, secondManagerId number|null — same shape.
+
+### Differs — data quality only, not schema
+- Durations: the finished production matches pulled were ALL exactly 1.00h, none
+  negative. Staging ranged 0.25h .. 30.93h including a NEGATIVE (match 2473). So
+  the messy/negative staging durations were TEST JUNK, not a real pattern.
+  endDate is a real per-match field either way.
+- Note: the production LIST endpoint (`GET /admin/matches`) returns only upcoming
+  matches; finished matches are reached by id through the DETAIL endpoint (ids are
+  chronological).
+
+### Production-only fields (Phase 8 check)
+- NONE. The field sets are identical, so there is no never-before-seen production
+  field to test. Had the echo shown a production-only field that was WRITABLE, it
+  would go straight on the deny-list until understood — the way startDate/endDate
+  were — but there is none.
+
+### Still UNVERIFIED on production (staging-only evidence)
+Every WRITE-APPLY behaviour. Phase 8 verified production's REJECTION (the
+read-only set) and its reads, and confirmed the echoed match was unchanged. It
+performed NO production write. So these remain proven on STAGING ONLY, strongly
+implied by identical validation but not proven by an applied production write:
+- that a production partial write APPLIES only the sent keys (omitted untouched);
+- that cents are stored verbatim on write;
+- that the startDate/endDate pair moves the derived *Utc by the field offset;
+- that maxPlayerCount / team sizes / the rest of the 32 are writable in practice.
+That is the next rung — behind the bolt.
+
+## CREDENTIALS — the exact, non-loose version (Phase 8)
+
+Two credential sets point at production from two places. The loose summary
+("prod creds are local-only") is WRONG; the precise version:
+
+- **MATCHDAY_API_*** (`MATCHDAY_API_BASE_URL` / `_EMAIL` / `_PASSWORD`) — the
+  production READ/sync path (matchdayApi.ts, envHygiene.ts, ~22 sync/probe
+  scripts). Wired to Vercel. These credentials are **admin-capable** — the
+  `/admin` endpoints require admin and the sync uses them. Therefore the
+  **deployed Clubhouse DOES hold production credentials capable of writing.**
+- What prevents production writes is NOT a lack of capability — it is that **no
+  deployed code path performs one**, now ENFORCED by the write client's two-host
+  allowlist + explicit per-call environment argument + the
+  `PRODUCTION_WRITES_ENABLED` bolt. Capability without a code path.
+- **MATCHDAY_PROD_API_*** (`MATCHDAY_PROD_API_EMAIL` / `_PASSWORD` /
+  `MATCHDAY_PROD_BASE_URL`) — the write client's production credentials.
+  LOCAL-ONLY (.env.local), NEVER in Vercel; used only by hand-run Phase 8 probes.
+  `MATCHDAY_PROD_BASE_URL` has no default — unset throws.
+- Two naming schemes now name the same environment. A future rename of the
+  Vercel-wired `MATCHDAY_API_*` set to `MATCHDAY_PROD_*` MUST keep these in
+  LOCKSTEP or the sync breaks on the next auto-deploy (git-integration deploys on
+  push):
+    1. the ~24 code call sites (matchdayApi.ts, envHygiene.ts DETECT_ONLY list,
+       the sync/probe scripts);
+    2. the Vercel environment variables, renamed at the same time the code deploys;
+    3. do NOT collapse the two sets into one name — the write set must stay
+       local-only, so it needs a name distinct from the Vercel-wired read set.
+
 ## Running scripts against this client
 
 Scripts that import the server-only write module run with:
