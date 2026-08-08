@@ -10,6 +10,7 @@ import { buildStartDate, shiftedEndDate } from "../src/lib/matchWallClock";
 import { assertAllowedEndpoint, DeniedEndpointError } from "../src/lib/matchdayStageApi";
 import { centsToDollars, dollarsToCents } from "../src/lib/matchMoney";
 import { envBadge } from "../src/lib/matchEnvBadge";
+import { planRoster, type LoadedPlayer, type StatePlayer, type Shape } from "../src/lib/rosterModel";
 
 let pass = 0, fail = 0;
 const ok = (n: string) => { pass++; console.log(`  ok  ${n}`); };
@@ -95,6 +96,58 @@ function mutation<T>(name: string, real: T, broken: T, assertion: (impl: T) => b
   const brokenBadge = (() => ({ label: "STAGING · GUARDED", tone: "stage" as const })) as typeof envBadge;
   const assertion = (fn: typeof envBadge) => fn("production").tone === "prod" && /PRODUCTION|LIVE/.test(fn("production").label) && fn("staging").tone === "stage";
   mutation("env-badge (derived, production distinct)", envBadge, brokenBadge, assertion);
+}
+
+// ── roster plan: a DIFF, right ids, swaps, N=N ────────────────────────────────
+{
+  const M = 2470;
+  const loaded: Record<number, LoadedPlayer> = {
+    100: { umId: 500, playerId: 100, team: 0, num: 1, fake: false },
+    101: { umId: 501, playerId: 101, team: 1, num: 1, fake: false },
+  };
+  const teams = [{ id: 10, teamNumber: 1, name: "White", locked: false }, { id: 11, teamNumber: 2, name: "Dark", locked: false }];
+  const loadedTeams = { 10: { name: "White", locked: false }, 11: { name: "Dark", locked: false } };
+  const shape: Shape = { perTeam: 1, teamN: 2 };
+  const tn = (i: number) => teams[i].name;
+  const mk = (o: Partial<StatePlayer> & { key: string }): StatePlayer => ({ umId: null, playerId: null, team: 0, num: 1, fake: false, added: false, ...o });
+  const run = (state: StatePlayer[]) => planRoster(M, loaded, state, loadedTeams, teams, shape, shape, tn);
+
+  // there-and-back: final position == loaded -> 0 requests
+  const back = run([mk({ key: "a", umId: 500, playerId: 100, team: 0, num: 1 }), mk({ key: "b", umId: 501, playerId: 101, team: 1, num: 1 })]);
+  ok(`roster diff: move-and-back is 0 requests (got ${back.length})`.replace("(got 0)", "(0)"));
+  if (back.length !== 0) bad("roster there-and-back should be 0", `got ${back.length}`);
+
+  // one net move -> exactly 1 request; and it keys on userMatchId
+  const moved = run([mk({ key: "a", umId: 500, playerId: 100, team: 1, num: 2 }), mk({ key: "b", umId: 501, playerId: 101, team: 1, num: 1 })]);
+  const one = moved.length === 1 && moved[0].kind === "move" && moved[0].idField === "userMatchId" && moved[0].path === "/admin/user-matches";
+  one ? ok("roster diff: one net move = 1 request, keys on userMatchId") : bad("roster one-move", JSON.stringify(moved));
+
+  // swap -> 2 requests, roster size (non-removed) unchanged
+  const swap = run([mk({ key: "a", umId: 500, playerId: 100, team: 1, num: 1 }), mk({ key: "b", umId: 501, playerId: 101, team: 0, num: 1 })]);
+  const sizeUnchanged = swap.filter((r) => r.kind === "remove").length === 0;
+  swap.length === 2 && sizeUnchanged ? ok("roster swap = 2 requests, no removals (size unchanged)") : bad("roster swap", JSON.stringify(swap.map((r) => r.kind)));
+
+  // remove keys on userMatchId via /matches/user-matches; add keys on playerId
+  const rm = run([mk({ key: "a", umId: 500, playerId: 100, team: null, num: null }), mk({ key: "b", umId: 501, playerId: 101, team: 1, num: 1 })]);
+  rm.length === 1 && rm[0].kind === "remove" && rm[0].idField === "userMatchId" && rm[0].path === "/admin/matches/user-matches/500"
+    ? ok("roster remove keys on userMatchId (/matches/user-matches/{umId})") : bad("roster remove id", JSON.stringify(rm));
+  const add = run([mk({ key: "a", umId: 500, playerId: 100, team: 0, num: 1 }), mk({ key: "b", umId: 501, playerId: 101, team: 1, num: 1 }), mk({ key: "c", added: true, playerId: 900, team: 1, num: 2 })]);
+  add.length === 1 && add[0].kind === "add" && add[0].idField === "playerId" && add[0].path === "/admin/matches/2470/players/900"
+    ? ok("roster add keys on playerId (/matches/{id}/players/{playerId})") : bad("roster add id", JSON.stringify(add));
+
+  // N distinct changes -> N requests
+  // 3 single changes: p100 moves, p101 fake-only (position unchanged), one add.
+  const nreq = run([mk({ key: "a", umId: 500, playerId: 100, team: 1, num: 2 }), mk({ key: "b", umId: 501, playerId: 101, team: 1, num: 1, fake: true }), mk({ key: "c", added: true, playerId: 900, team: 1, num: 3 })]);
+  nreq.length === 3 ? ok(`roster N single changes -> N requests (= ${nreq.length})`) : bad("roster N=N", `got ${nreq.length}: ${nreq.map((r) => r.kind)}`);
+
+  // MUTATION: a journal-style planner (emits a move even when position is unchanged)
+  const brokenPlan = ((...a: Parameters<typeof planRoster>) => planRoster(...a).concat([{ kind: "move", method: "POST", path: "/admin/user-matches", label: "phantom", idField: "userMatchId" }])) as typeof planRoster;
+  const assertBack0 = (fn: typeof planRoster) => fn(M, loaded, [mk({ key: "a", umId: 500, playerId: 100, team: 0, num: 1 }), mk({ key: "b", umId: 501, playerId: 101, team: 1, num: 1 })], loadedTeams, teams, shape, shape, tn).length === 0;
+  mutation("roster diff (no phantom requests)", planRoster, brokenPlan, assertBack0);
+  // MUTATION: a planner that keys move on playerId instead of userMatchId
+  const brokenId = ((...a: Parameters<typeof planRoster>) => planRoster(...a).map((r) => r.kind === "move" ? { ...r, idField: "playerId" as const } : r)) as typeof planRoster;
+  const assertMoveUm = (fn: typeof planRoster) => { const p = fn(M, loaded, [mk({ key: "a", umId: 500, playerId: 100, team: 1, num: 2 }), mk({ key: "b", umId: 501, playerId: 101, team: 1, num: 1 })], loadedTeams, teams, shape, shape, tn); return p[0]?.idField === "userMatchId"; };
+  mutation("roster move keys on userMatchId", planRoster, brokenId, assertMoveUm);
 }
 
 console.log(`\n${pass} passed, ${fail} failed`);
