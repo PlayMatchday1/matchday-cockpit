@@ -304,6 +304,36 @@ Full inventory: docs/retool-prod-inventory.md. Key points that touch this file:
 - Direct SQL (a Postgres resource, not the API) is read-only reporting/export
   only; NO write or roster op is SQL-only.
 
+## Notifications & the endpoint deny-list (Phase 9)
+
+- The ONLY player-facing notification is match CANCELLATION. Editing a match's
+  fields notifies nobody. And `isCancelled` is one of the 22 READ-ONLY fields, so a
+  match PUT cannot flip it — cancellation is a separate endpoint
+  (`PATCH /admin/matches/{id}/cancel`). The notification risk is therefore isolated
+  to specific endpoints, not spread across fields. Confirmed by Ryan.
+
+- The write client now has an ENDPOINT deny-list (`assertAllowedEndpoint`, matched
+  on the parsed path SHAPE — method + exact segment list, `{id}` = one wildcard —
+  never a substring; trailing slash and query string are stripped). Refused on BOTH
+  environments before any network call (throws `DeniedEndpointError`):
+    - `PATCH  /admin/matches/{id}/cancel` — cancels the match and notifies every
+      signed-up player (the only player-facing notification).
+    - `DELETE /admin/matches/{id}` — permanently destroys the match.
+    - `PATCH  /admin/matches/{id}/players/{playerId}/refund-and-cancel` — moves
+      money (refund) and cancels the player.
+  A near-miss like `/admin/matches/{id}/cancel-something-else` is deliberately NOT
+  caught, and normal ops (`PUT /admin/matches/{id}`, `DELETE .../players/{pid}`,
+  `.../user-matches/{um}/absent`) pass.
+
+- COPY ENDPOINTS — NOT BUILT, warning for whoever builds them. The three copy
+  endpoints have NO idempotency key and fan out server-side:
+    - `POST /admin/matches/{id}/copy`
+    - `POST /admin/matches/clone-by-week`
+    - `POST /admin/matches/copy-by-week`
+  A double-fire duplicates a week of the schedule. When these are built they need a
+  single-fire CLIENT guard (disable-on-submit / one-shot), and undoing one requires
+  N `DELETE /admin/matches/{id}` calls — an endpoint that is now on the deny-list.
+
 ## Running scripts against this client
 
 Scripts that import the server-only write module run with:

@@ -5,14 +5,15 @@ import "server-only"; // no-op under --conditions=react-server
 //   NODE_OPTIONS=--conditions=react-server npx tsx scripts/prod-guard-test.ts
 
 import {
-  assertAllowedHost, preflightWrite, apiWrite,
-  StageHostGuardError, DeniedFieldError, ProductionWriteBoltedError,
+  assertAllowedHost, preflightWrite, apiWrite, assertAllowedEndpoint,
+  StageHostGuardError, DeniedFieldError, ProductionWriteBoltedError, DeniedEndpointError,
 } from "../src/lib/matchdayStageApi";
 try { process.loadEnvFile(".env.local"); } catch {}
 
 const STAGE = "https://matchday-stage.herokuapp.com/admin/matches/1";
 const PROD = "https://playmatchday.herokuapp.com/admin/matches/1";
 const SPOOF = "https://matchday-stage.herokuapp.com.evil.com/admin/matches/1";
+const H = { staging: "https://matchday-stage.herokuapp.com", production: "https://playmatchday.herokuapp.com" };
 
 let pass = 0, fail = 0;
 const ok = (n: string) => { pass++; console.log(`  ok  ${n}`); };
@@ -36,13 +37,28 @@ async function main() {
   // @ts-expect-error unlabelled / unknown environment must be refused
   throws("unlabelled environment refused", StageHostGuardError, () => assertAllowedHost("prod", PROD));
 
-  console.log("write preflight — deny-list applies to BOTH environments:");
-  throws("denied field on staging", DeniedFieldError, () => preflightWrite("staging", STAGE, { teamHomeScore: 3 }));
-  throws("denied field on production", DeniedFieldError, () => preflightWrite("production", PROD, { teams: [] }));
+  console.log("write preflight — field deny-list applies to BOTH environments:");
+  throws("denied field on staging", DeniedFieldError, () => preflightWrite("staging", "PUT", STAGE, { teamHomeScore: 3 }));
+  throws("denied field on production", DeniedFieldError, () => preflightWrite("production", "PUT", PROD, { teams: [] }));
+
+  console.log("ENDPOINT deny-list — refused on BOTH environments, before any network:");
+  for (const [env, base] of Object.entries(H)) {
+    throws(`[${env}] PATCH /admin/matches/{id}/cancel refused`, DeniedEndpointError, () => preflightWrite(env as "staging" | "production", "PATCH", `${base}/admin/matches/17256/cancel`, {}));
+    throws(`[${env}] DELETE /admin/matches/{id} refused`, DeniedEndpointError, () => preflightWrite(env as "staging" | "production", "DELETE", `${base}/admin/matches/17256`, undefined));
+    throws(`[${env}] PATCH /admin/matches/{id}/players/{pid}/refund-and-cancel refused`, DeniedEndpointError, () => preflightWrite(env as "staging" | "production", "PATCH", `${base}/admin/matches/17256/players/5/refund-and-cancel`, {}));
+  }
+  console.log("endpoint deny — robust to trailing slash + query string:");
+  throws("cancel with trailing slash refused", DeniedEndpointError, () => assertAllowedEndpoint("PATCH", `${H.production}/admin/matches/17256/cancel/`));
+  throws("cancel with query string refused", DeniedEndpointError, () => assertAllowedEndpoint("PATCH", `${H.production}/admin/matches/17256/cancel?foo=1`));
+  console.log("endpoint deny — NEAR-MISS discrimination (must NOT be caught):");
+  noThrow("PATCH /admin/matches/{id}/cancel-something-else allowed", () => assertAllowedEndpoint("PATCH", `${H.production}/admin/matches/17256/cancel-something-else`));
+  noThrow("PUT /admin/matches/{id} allowed (the name write)", () => assertAllowedEndpoint("PUT", `${H.production}/admin/matches/17256`));
+  noThrow("DELETE /admin/matches/{id}/players/{pid} allowed (remove player)", () => assertAllowedEndpoint("DELETE", `${H.production}/admin/matches/17256/players/5`));
+  noThrow("PATCH /admin/matches/{id}/user-matches/{um}/absent allowed", () => assertAllowedEndpoint("PATCH", `${H.production}/admin/matches/17256/user-matches/9/absent`));
 
   console.log("write preflight — the production bolt:");
-  throws("production write refused (bolted)", ProductionWriteBoltedError, () => preflightWrite("production", PROD, { name: "x" }));
-  noThrow("staging write still allowed (passes all gates)", () => preflightWrite("staging", STAGE, { name: "x" }));
+  throws("production write refused (bolted)", ProductionWriteBoltedError, () => preflightWrite("production", "PUT", PROD, { name: "x" }));
+  noThrow("staging write still allowed (passes all gates)", () => preflightWrite("staging", "PUT", STAGE, { name: "x" }));
 
   console.log("apiWrite('production', ...) is bolted BEFORE any network call:");
   try {

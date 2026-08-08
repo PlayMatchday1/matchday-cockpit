@@ -103,6 +103,11 @@ export class DeniedFieldError extends Error {
 export class ProductionWriteBoltedError extends Error {
   constructor(message: string) { super(message); this.name = "ProductionWriteBoltedError"; }
 }
+// A call to an ENDPOINT that must never be fired blindly (side effects a field
+// write does not have: notifies players, destroys a match, moves money).
+export class DeniedEndpointError extends Error {
+  constructor(message: string) { super(message); this.name = "DeniedEndpointError"; }
+}
 
 // Fields no screen may write without a deliberate design decision. Result + teams
 // array only (teams edited via PUT /admin/teams/{id}); scores are result entry.
@@ -111,6 +116,42 @@ export class ProductionWriteBoltedError extends Error {
 export const DENY_WRITE_FIELDS = new Set<string>([
   "teams", "teamHomeId", "teamAwayId", "teamHomeScore", "teamAwayScore",
 ]);
+
+// Endpoints no screen may fire blindly. These have side effects a field write
+// does NOT: cancel NOTIFIES every signed-up player, delete DESTROYS the match,
+// refund-and-cancel MOVES MONEY. Matched on the PARSED path SHAPE (method + exact
+// segment list, {id} = one wildcard segment), never a substring — so
+// /admin/matches/17256/cancel-something-else is NOT caught and a trailing slash or
+// ?query does not let /.../cancel slip through. Applies to BOTH environments.
+const DENY_WRITE_ENDPOINTS: { method: string; segs: (string | null)[]; why: string }[] = [
+  { method: "PATCH", segs: ["admin", "matches", null, "cancel"], why: "cancels the match and NOTIFIES every signed-up player (the only player-facing notification)" },
+  { method: "DELETE", segs: ["admin", "matches", null], why: "permanently destroys the match" },
+  { method: "PATCH", segs: ["admin", "matches", null, "players", null, "refund-and-cancel"], why: "refunds money and cancels the player (moves money)" },
+];
+// Parse a URL to its clean path segments: drop the query, ignore a trailing slash,
+// split on "/", drop empties. Returns null if unparseable (host guard handles that).
+function pathSegments(url: string): string[] | null {
+  let pathname: string;
+  try { pathname = new URL(url).pathname; } catch { return null; }
+  return pathname.replace(/\/+$/, "").split("/").filter(Boolean);
+}
+// Throws BEFORE any network call if (method, path) matches a denied endpoint.
+export function assertAllowedEndpoint(method: string, url: string): void {
+  const segs = pathSegments(url);
+  if (!segs) return;
+  const m = method.toUpperCase();
+  for (const d of DENY_WRITE_ENDPOINTS) {
+    if (d.method !== m) continue;
+    if (segs.length !== d.segs.length) continue;
+    if (!d.segs.every((want, i) => want === null || want === segs[i])) continue;
+    const shape = "/" + d.segs.map((s) => s === null ? "{id}" : s).join("/");
+    throw new DeniedEndpointError(
+      `Refusing ${m} ${shape}: this endpoint ${d.why}. It is on the write client's ` +
+      `endpoint deny-list and needs a deliberate decision, not a bug fix — a field ` +
+      `write never reaches it.`,
+    );
+  }
+}
 
 // Throws BEFORE any network call if a write body names a denied field.
 export function assertNoDeniedFields(body: unknown): void {
@@ -160,11 +201,12 @@ export function assertAllowedHost(env: MatchdayEnv, url: string): void {
 export function assertStagingHost(url: string): void { assertAllowedHost("staging", url); }
 
 // The exact write preflight apiWrite runs, exported so it can be asserted offline.
-// Order: host allowlist -> deny-list (both envs) -> production bolt. All before
-// any network call.
-export function preflightWrite(env: MatchdayEnv, url: string, body: unknown): void {
+// Order: host allowlist -> field deny-list (both envs) -> endpoint deny-list (both
+// envs) -> production bolt. All before any network call.
+export function preflightWrite(env: MatchdayEnv, method: string, url: string, body: unknown): void {
   assertAllowedHost(env, url);
   assertNoDeniedFields(body);
+  assertAllowedEndpoint(method, url);
   if (env === "production" && !PRODUCTION_WRITES_ENABLED) {
     throw new ProductionWriteBoltedError(
       `Refusing PRODUCTION write to ${url}: production writes are bolted (PRODUCTION_WRITES_ENABLED=false). ` +
@@ -260,7 +302,7 @@ export async function apiWrite<T = unknown>(env: MatchdayEnv, method: "POST" | "
   }
   const { baseUrl } = getCreds(env);
   const url = buildUrl(baseUrl, path);
-  preflightWrite(env, url, body); // host allowlist -> deny-list -> (prod bolt, already checked), all pre-network
+  preflightWrite(env, method, url, body); // host -> field deny -> endpoint deny -> (prod bolt, already checked), all pre-network
   const token = await freshToken(env);
 
   let res: Response;
