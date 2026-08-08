@@ -275,6 +275,35 @@ Two credential sets point at production from two places. The loose summary
     3. do NOT collapse the two sets into one name — the write set must stay
        local-only, so it needs a name distinct from the Vercel-wired read set.
 
+## Retool production export (Phase 6) — corrections & corroborations
+
+Full inventory: docs/retool-prod-inventory.md. Key points that touch this file:
+
+- CORRECTION — there IS a list-managers endpoint. Retool populates its manager
+  dropdown from `GET /city-managers/users?cityId=...&email=...` (and
+  `GET /city-managers?cityId=...`), on the `/city-managers` route family (no
+  `/admin` prefix). The Phase 7 drawer's numeric-id fallback ("no list-managers
+  endpoint") can be replaced by a city-scoped dropdown.
+- CORROBORATION — the production PUT is a PARTIAL apply. Retool has relied on it
+  for years: `updateMatch` omits startDate/endDate/fieldId/registrationPrice (JS
+  `undefined`) when unchanged, and `attachCityManagerToMatch` PUTs a single
+  `{managerId}`. (Still unproven by an APPLIED write from us — that is Phase 9.)
+- DISAGREEMENT — Retool sends startDate and endDate INDEPENDENTLY (each guarded on
+  its own), NOT as a duration-preserving pair, so it can invert a match. This is
+  almost certainly how staging 2473 got a negative duration. Our Phase 7 client
+  pairs them on purpose; keep it.
+- `teams` is writable via the match PUT — Retool sends the full teams array on
+  every update. We deny it in our client by choice, not because the API refuses.
+- NEW field — `teamNumbers` is WRITE-ONLY: accepted on the match write but absent
+  from the 54 GET fields (so invisible to the Phase 8 echo). `hasOrganizer:true`
+  is hardcoded on every Retool write; maxPlayerCount / maxTeamSize{2,4}Team are
+  computed as recommend * teamNumbers on write.
+- Copy/schedule ops are single SERVER-side POSTs (`/copy`, `/clone-by-week`,
+  `/copy-by-week`) with no idempotency key — running a week-copy twice duplicates
+  the week. All date math for copies is server-side.
+- Direct SQL (a Postgres resource, not the API) is read-only reporting/export
+  only; NO write or roster op is SQL-only.
+
 ## Running scripts against this client
 
 Scripts that import the server-only write module run with:
