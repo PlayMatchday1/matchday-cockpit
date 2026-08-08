@@ -364,7 +364,29 @@ BOUNDARY of what this proves / does NOT prove:
 
 The bolt (`PRODUCTION_WRITES_ENABLED`) is back to `false` after this write.
 
-## Capacity model + live fields (Phase 10)
+## Capacity model — CORRECTED in Phase 10.1 (revert the single-perTeam model)
+
+Phase 10's single "players per team" model was WRONG and was reverted (commit
+5a717d7 reverted for MatchEditor; teamNumbers stays on the route allowlist). The
+three caps are NOT three views of one number — they are a capacity plus a growth
+path, set INDEPENDENTLY:
+- maxPlayerCount   = total spots the match holds NOW
+- maxTeamSize2Team = total spots if it becomes a 2-team match
+- maxTeamSize4Team = total spots if it becomes a 4-team match
+- isAutoBump       = whether it grows on its own
+- 0 in a format field = that format is NOT available at all (not "0 spots").
+All three are TOTALS for that format, not players per side — the old field names
+misled. Production 17256 reads 40/0/40 (forty now in four teams, never a two-team
+match); staging 2470 reads 10/10/20.
+The full editor now has three independent inputs with corrected labels ("Capacity
+now", "Total spots as 2 teams", "Total spots as 4 teams") and shows the implied
+per-side number beside each ("40 total, 10 a side"; "not available as a 2-team
+match" for 0). It does NOT flag the three caps as mutually inconsistent (81% of
+production would trip that — noise). It flags ONLY genuine contradictions with the
+current config: an N-team match whose N-team total is 0, or a capacity-now above
+every available format total.
+
+## (superseded) single-perTeam note (Phase 10, reverted in 10.1)
 
 - The three caps are TOTALS, not per-side. maxTeamSize2Team = total when played as
   2 teams, maxTeamSize4Team = total when played as 4 teams, maxPlayerCount = total

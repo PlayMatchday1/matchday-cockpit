@@ -39,9 +39,17 @@ function prodDetail(id) {
 }
 // full editor (staging route) capacity fixture: consistent caps (perTeam 10, 2 teams)
 const EMPTY_EDIT = { category: null, type: null, description: null, managerIntro: null, fakeSpotLeft36h: null, fakeSpotLeft24h: null, fakeSpotLeft12h: null, fakeSpotLeft6h: null, fakeSpotLeft3h: null, autoCanceled: false, autoCanceledMinutes: null, minPlayerCount: null, isFreeMember: false, isAutoBump: false, managerId: null, secondManagerId: null, additionalSpotPrice: null, guestCount: null, registrationPrice: 1000 };
+// 2480 = clean 2-team (no contradiction). 2481 = 4-team match whose 4-team total
+// is 0 (genuine contradiction). 2482 = 17256-style independent caps (40/0/40, four
+// teams) — valid, must NOT be flagged (that is the 81% anti-noise case).
 function stageDetail(id) {
-  const cap = id === 2481 ? { maxTeamSize2Team: 0, maxTeamSize4Team: 40, maxPlayerCount: 40 } : { maxTeamSize2Team: 20, maxTeamSize4Team: 40, maxPlayerCount: 20 };
-  return { match: { id, ...EMPTY_EDIT, ...cap, name: "Cap Test", fieldId: 1, startDate: "2026-08-07T18:30:00.000Z", endDate: "2026-08-07T20:30:00.000Z", isCancelled: false, teams: [{}, {}], manager: null, secondManager: null, fieldTitle: "NEMP", cityName: "Austin" }, fields: FIELDS, players: [] };
+  const per = {
+    2480: { teams: [{}, {}], maxTeamSize2Team: 20, maxTeamSize4Team: 40, maxPlayerCount: 20 },
+    2481: { teams: [{}, {}, {}, {}], maxTeamSize2Team: 20, maxTeamSize4Team: 0, maxPlayerCount: 40 },
+    2482: { teams: [{}, {}, {}, {}], isAutoBump: true, maxTeamSize2Team: 0, maxTeamSize4Team: 40, maxPlayerCount: 40 },
+  };
+  const p = per[id] || per[2480];
+  return { match: { id, ...EMPTY_EDIT, ...p, name: "Cap Test", fieldId: 1, startDate: "2026-08-07T18:30:00.000Z", endDate: "2026-08-07T20:30:00.000Z", isCancelled: false, manager: null, secondManager: null, fieldTitle: "NEMP", cityName: "Austin" }, fields: FIELDS, players: [] };
 }
 
 // full painted-background contrast sweep over every element with a direct text node
@@ -179,21 +187,29 @@ async function main() {
   await page.keyboard.press("Escape"); await page.waitForTimeout(150);
   is("clean: Escape closes (two-sided control)", await T("drawer").count(), 0);
 
-  console.log("\n== full editor capacity model ==");
+  console.log("\n== full editor capacity model (Phase 10.1 revert: 3 independent totals) ==");
   await page.goto(`${BASE}/match-ops/matches/2480`, { waitUntil: "domcontentloaded" });
   await T("savebar").waitFor({ timeout: 30000 }); await page.waitForTimeout(200);
   await contrastSweep(page, "full editor", ".me");
-  is("consistent caps: no inconsistency flag", await T("cap-inconsistent").count(), 0);
-  await T("in-perTeam").fill("12");
+  is("labels: 'Capacity now' present", (await page.locator(".me").innerText()).toLowerCase().includes("capacity now"), true);
+  is("per-side hint on capacity-now (20 total, 10 a side)", (await T("perside-maxPlayerCount").textContent())?.trim(), "20 total, 10 a side");
+  is("clean 2-team match: no contradiction flag", await T("cap-contradiction").count(), 0);
+  // three caps are INDEPENDENT: editing capacity-now sends only that key
+  await T("in-maxPlayerCount").fill("18");
   await page.waitForTimeout(80);
-  is("editing perTeam enables save", await T("save").isDisabled(), false);
   await T("save").click(); await page.waitForTimeout(300);
-  is("capacity save writes all four (teamNumbers + 3 caps)", lastPut ? Object.keys(lastPut).sort() : [], ["maxPlayerCount", "maxTeamSize2Team", "maxTeamSize4Team", "teamNumbers"]);
-  is("  maxPlayerCount = 12 x 2 teams = 24", lastPut && lastPut.maxPlayerCount, 24);
-  is("  maxTeamSize4Team = 12 x 4 = 48", lastPut && lastPut.maxTeamSize4Team, 48);
+  is("editing capacity-now sends only maxPlayerCount (independent)", lastPut ? Object.keys(lastPut).sort() : [], ["maxPlayerCount"]);
+  is("  maxPlayerCount = 18 (verbatim, not derived)", lastPut && lastPut.maxPlayerCount, 18);
+  // genuine contradiction: 4-team match whose 4-team total is 0
   await page.goto(`${BASE}/match-ops/matches/2481`, { waitUntil: "domcontentloaded" });
   await T("savebar").waitFor({ timeout: 30000 }); await page.waitForTimeout(200);
-  is("inconsistent caps (0 & 40): flag shown", await T("cap-inconsistent").isVisible(), true);
+  is("4-team match with 4-team total 0: contradiction flag shown", await T("cap-contradiction").isVisible(), true);
+  // 17256-style independent caps (40/0/40, four teams) must NOT be flagged (anti-noise)
+  await page.goto(`${BASE}/match-ops/matches/2482`, { waitUntil: "domcontentloaded" });
+  await T("savebar").waitFor({ timeout: 30000 }); await page.waitForTimeout(200);
+  is("[anti-noise] 17256-style 40/0/40 four-team: NO contradiction flag", await T("cap-contradiction").count(), 0);
+  is("  2-team total 0 shows 'not available as a 2-team match'", (await T("perside-maxTeamSize2Team").textContent())?.trim(), "not available as a 2-team match");
+  is("  4-team total 40 shows '40 total, 10 a side'", (await T("perside-maxTeamSize4Team").textContent())?.trim(), "40 total, 10 a side");
 
   console.log(`\n================ RESULT ================\n${PASS} passed, ${FAIL} failed`);
   if (fails.length) fails.forEach((f) => console.log("   FAILED: " + f));

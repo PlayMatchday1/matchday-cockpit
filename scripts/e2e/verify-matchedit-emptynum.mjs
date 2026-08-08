@@ -12,12 +12,8 @@ let PASS = 0, FAIL = 0; const fails = [];
 const ok = (n) => { PASS++; console.log(`  ok  ${n}`); };
 const bad = (n, d) => { FAIL++; fails.push(`${n} - ${d}`); console.log(`  XX  ${n} - ${d}`); };
 const FIX = JSON.parse(readFileSync("scripts/e2e/fixtures/match-2470.json", "utf8"));
-// Phase 10: maxTeamSize2Team/4Team are no longer free inputs (derived from the
-// perTeam/teamNumbers capacity model, which is NULLABLE — blank is a meaningful
-// change there, tested in verify-p10.mjs). This suite covers the "blank numeric is
-// NOT a change" fields only.
 const NUMERIC = ["registrationPrice", "additionalSpotPrice", "guestCount", "minPlayerCount",
-  "autoCanceledMinutes",
+  "autoCanceledMinutes", "maxTeamSize2Team", "maxTeamSize4Team",
   "fakeSpotLeft36h", "fakeSpotLeft24h", "fakeSpotLeft12h", "fakeSpotLeft6h", "fakeSpotLeft3h"];
 const hasBadNumber = (body) => Object.entries(body || {}).filter(([k, v]) =>
   NUMERIC.includes(k) && (v === "" || v === null || (typeof v === "number" && Number.isNaN(v)) || (typeof v === "string" && !Number.isFinite(Number(v)))));
@@ -41,6 +37,9 @@ async function main() {
   // capture: clear a field (optionally after a real name change), try to save, return {body, saveDisabled}
   const clearAndSave = async (key, alsoName) => {
     await load();
+    if (await page.$('[data-testid="in-isAutoBump"]') && key.startsWith("maxTeamSize")) {
+      if (!(await page.$('[data-testid="in-maxTeamSize2Team"]'))) await page.click('[data-testid="in-isAutoBump"]');
+    }
     if (alsoName) await page.fill('[data-testid="in-name"]', "changed name");
     await page.fill(`[data-testid="in-${key}"]`, "");
     await page.waitForTimeout(50);
