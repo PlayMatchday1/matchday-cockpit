@@ -1,10 +1,13 @@
 "use client";
 
-// Master Schedule edit drawer (Phase 7 Part B). Opens on a match card, PUSHES the
-// grid (never covers it), edits nine fields, and writes a partial update through
-// the guarded STAGING route (/api/stage/matches/{id}) — the same route and the
-// same shared diff (fieldChanged / diffKeys / pick from matchEditModel) the full
-// editor uses, so the two screens can never disagree about what a change is.
+// Master Schedule edit drawer (Phase 7 Part B; Phase 10: PRODUCTION). Opens on a
+// match card, PUSHES the grid (never covers it), edits nine fields, and writes a
+// partial update through the guarded PRODUCTION route
+// (/api/matchday/production/matches/{id}) — env named explicitly per call. Uses the
+// same shared diff (fieldChanged / diffKeys / pick from matchEditModel) as the full
+// editor, so the two screens can never disagree about what a change is. Production
+// PUT is a proven partial apply (Phase 9). The manager control is a real dropdown
+// scoped to the match's city (GET /city-managers/users).
 //
 // The date + time inputs collapse into the startDate/endDate PAIR: a time move
 // shifts endDate by the same amount so the duration is preserved and the pair
@@ -36,6 +39,7 @@ type Detail = {
   };
   fields: FieldRow[];
   players: unknown[];
+  managers: { id: number; name: string }[];
 };
 
 // The nine editable fields. date/time are UI-only and collapse to startDate/endDate.
@@ -89,7 +93,7 @@ export default function MatchDrawer({
     let alive = true;
     setDetail(null); setLoaded(null); setState(null); setLoadErr(null); setMsg(null);
     (async () => {
-      const res = await authFetch(`/api/stage/matches/${apiId}`);
+      const res = await authFetch(`/api/matchday/production/matches/${apiId}`);
       const json = await res.json().catch(() => ({}));
       if (!alive) return;
       if (!res.ok) { setLoadErr(json?.error ?? `HTTP ${res.status}`); return; }
@@ -174,7 +178,7 @@ export default function MatchDrawer({
     const keys = Object.keys(body);
     if (!keys.length) return;
     setSaving(true); setMsg(null);
-    const res = await authFetch(`/api/stage/matches/${apiId}`, { method: "PUT", body: JSON.stringify({ changes: body }) });
+    const res = await authFetch(`/api/matchday/production/matches/${apiId}`, { method: "PUT", body: JSON.stringify({ changes: body }) });
     const json = await res.json().catch(() => ({}));
     setSaving(false);
     if (!res.ok) { setMsg({ kind: json?.ambiguous ? "warn" : "err", text: json?.error ?? `HTTP ${res.status}` }); return; }
@@ -208,6 +212,26 @@ export default function MatchDrawer({
     if (mgrDeleted(m.manager, Number(loaded?.managerId ?? m.managerId) || null)) delManagers.push("Manager");
     if (mgrDeleted(m.secondManager, Number(loaded?.secondManagerId ?? m.secondManagerId) || null)) delManagers.push("Second manager");
   }
+
+  // Manager dropdown scoped to the match's city (GET /city-managers/users). A
+  // currently-selected managerId that is NOT in the returned list stays selected
+  // and labelled — it is never blanked (blanking would report a change the admin
+  // did not make and then save it).
+  const managers = detail?.managers ?? [];
+  const managerSelect = (key: "managerId" | "secondManagerId", mgrObj: Mgr) => {
+    const cur = state?.[key] as number | null | undefined;
+    const curId = cur == null || cur === ("" as unknown) ? null : Number(cur);
+    const inList = curId == null || managers.some((x) => x.id === curId);
+    const outLabel = mgrName(mgrObj) ?? `id ${curId}`;
+    return (
+      <select data-testid={`in-${key}`} value={curId == null ? "" : String(curId)}
+        onChange={(e) => set(key, e.target.value === "" ? null : Number(e.target.value))}>
+        <option value="">— none —</option>
+        {!inList && curId != null && <option value={String(curId)}>{outLabel} (not in {cityName ?? "city"} list)</option>}
+        {managers.map((x) => <option key={x.id} value={String(x.id)}>{x.name}</option>)}
+      </select>
+    );
+  };
 
   const showVal = (k: string, v: unknown) => {
     if (v === null || v === "" || v === undefined) return "none";
@@ -323,13 +347,11 @@ export default function MatchDrawer({
           <div className="mdw-sec">
             <h5>WHO {grpTag(["managerId", "secondManagerId"])}</h5>
             <div className="mdw-two">
-              <div className={dirtyCls("managerId")}><label htmlFor="i-mgr1">MANAGER (ID)</label>
-                <input id="i-mgr1" data-testid="in-managerId" type="number" value={blank(state.managerId) ? "" : String(state.managerId)}
-                  onChange={(e) => set("managerId", e.target.value === "" ? null : Number(e.target.value))} />
+              <div className={dirtyCls("managerId")}><label htmlFor="i-mgr1">MANAGER</label>
+                {managerSelect("managerId", m.manager)}
                 {mgrName(m.manager) ? <div className="mdw-sub">{mgrName(m.manager)}</div> : null}</div>
-              <div className={dirtyCls("secondManagerId")}><label htmlFor="i-mgr2">SECOND MANAGER (ID)</label>
-                <input id="i-mgr2" data-testid="in-secondManagerId" type="number" value={blank(state.secondManagerId) ? "" : String(state.secondManagerId)}
-                  onChange={(e) => set("secondManagerId", e.target.value === "" ? null : Number(e.target.value))} />
+              <div className={dirtyCls("secondManagerId")}><label htmlFor="i-mgr2">SECOND MANAGER</label>
+                {managerSelect("secondManagerId", m.secondManager)}
                 {mgrName(m.secondManager) ? <div className="mdw-sub">{mgrName(m.secondManager)}</div> : null}</div>
             </div>
             {delManagers.length > 0 && (
