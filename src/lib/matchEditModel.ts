@@ -7,6 +7,12 @@
 // Fields editable through the match PUT (a proven partial update). NOT
 // startDate/endDate (own action), scores/teamHomeId/teamAwayId (results), teams
 // (separate endpoint), or id/updatedAt/relations.
+//
+// UNIT CORRECTION - autoCanceledMinutes is in MINUTES, not hours. The OpenAPI
+// spec labels it "hours"; the spec is WRONG. Confirmed by Ryan, who operates the
+// product. This is the authority order in action: observed behaviour and the
+// operator's word beat the spec. Any control for this field is a minutes input;
+// do not divide or multiply by 60. See docs/matchday-api-facts.md.
 export const EDITABLE_KEYS = [
   "name", "fieldId", "category", "type", "managerId", "secondManagerId", "description", "managerIntro",
   "registrationPrice", "additionalSpotPrice", "guestCount", "fakeSpotLeft36h", "fakeSpotLeft24h",

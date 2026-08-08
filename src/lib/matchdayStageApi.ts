@@ -64,6 +64,37 @@ export class AmbiguousWriteError extends Error {
     super(message); this.name = "AmbiguousWriteError"; this.status = status;
   }
 }
+// A write body naming a field that must not be written blindly. Client-level, so
+// EVERY screen built on this write client inherits it — a field is dangerous
+// because of the API, not because one component happens to lack a control.
+export class DeniedFieldError extends Error {
+  constructor(message: string) { super(message); this.name = "DeniedFieldError"; }
+}
+
+// Fields no screen may write without a deliberate design decision:
+//  - teams / teamHomeId / teamAwayId / teamHomeScore / teamAwayScore are the
+//    match RESULT + the teams array (teams is edited via PUT /admin/teams/{id}).
+//  - startDate / endDate move the day-of notification, the fake-spot reveal
+//    schedule and the auto-cancel timing, and the server derives *Utc from them;
+//    editing a date is its own action, not a field in a general edit.
+// NOTE: maxPlayerCount and hasOrganizer are deliberately NOT here — they are
+// plausible future controls; they stay unmodeled, just not blocked.
+export const DENY_WRITE_FIELDS = new Set<string>([
+  "teams", "teamHomeId", "teamAwayId", "teamHomeScore", "teamAwayScore", "startDate", "endDate",
+]);
+
+// Throws BEFORE any network call if a write body names a denied field.
+export function assertNoDeniedFields(body: unknown): void {
+  if (!body || typeof body !== "object" || Array.isArray(body)) return;
+  for (const k of Object.keys(body as Record<string, unknown>)) {
+    if (DENY_WRITE_FIELDS.has(k)) {
+      throw new DeniedFieldError(
+        `Refusing to write "${k}": it is on the write client's deny-list and needs a deliberate ` +
+        `design decision, not a bug fix. (Denied set: ${[...DENY_WRITE_FIELDS].join(", ")}.)`,
+      );
+    }
+  }
+}
 
 type Creds = { email: string; password: string; baseUrl: string };
 function getCreds(): Creds {
@@ -174,6 +205,7 @@ export async function stageWrite<T = unknown>(
   const { baseUrl } = getCreds();
   const url = buildUrl(baseUrl, path);
   assertStagingHost(url); // GUARD FIRST — before token, before network.
+  assertNoDeniedFields(body); // then the field deny-list — still before any network.
   const token = await freshToken(); // refresh-before to avoid a mid-write 401.
 
   let res: Response;
