@@ -1,6 +1,6 @@
 "use client";
 
-// Phase 2 — the match field editor. STAGING only, guarded partial write.
+// The match field editor (Phase 2; Phase 11: PRODUCTION). Guarded partial write.
 //
 // THE INVARIANT: the diff IS the payload. `state` is keyed by real API field
 // names; `changedKeys` are the keys that differ from `loaded`; the diff chips and
@@ -18,6 +18,8 @@
 import { useCallback, useEffect, useMemo, useState } from "react";
 import { supabase } from "@/lib/supabase";
 import { EDITABLE_KEYS, MONEY_KEYS as MONEY, TOGGLE_KEYS as TOGGLE, NULLABLE_NUM, fieldChanged, diffKeys, pick } from "@/lib/matchEditModel";
+import { envBadge } from "@/lib/matchEnvBadge";
+import { FULL_EDITOR_ENV } from "@/lib/matchEnv";
 
 type FieldRow = { id: number; title: string; city: string | null };
 type Data = Record<string, unknown>;
@@ -119,7 +121,7 @@ export default function MatchEditor({ id }: { id: string }) {
 
   const load = useCallback(async () => {
     setLoadErr(null); setMsg(null);
-    const res = await authFetch(`/api/stage/matches/${id}`);
+    const res = await authFetch(`/api/matchday/${FULL_EDITOR_ENV}/matches/${id}`);
     const json = await res.json().catch(() => ({}));
     if (!res.ok) { setLoadErr(json?.error ?? `HTTP ${res.status}`); return; }
     setFields(json.fields ?? []); setPlayers(json.players ?? []); ingest(json.match);
@@ -151,6 +153,7 @@ export default function MatchEditor({ id }: { id: string }) {
   const descending = ladderVals.every((v, i) => i === 0 || v <= ladderVals[i - 1]);
   const teamCount = Array.isArray(meta.teams) && (meta.teams as unknown[]).length >= 4 ? 4 : 2;
   const capContradiction = capacityContradiction(state, teamCount);
+  const badge = envBadge(FULL_EDITOR_ENV); // derived from the env that routes the request
 
   // Blank/NaN numeric → empty box. A cleared numeric input stays "" in state, which
   // fieldChanged treats as no change, so it never reaches the diff or the body.
@@ -212,7 +215,7 @@ export default function MatchEditor({ id }: { id: string }) {
   const save = async () => {
     if (!changedKeys.length) return;
     setSaving(true); setMsg(null);
-    const res = await authFetch(`/api/stage/matches/${id}`, { method: "PUT", body: JSON.stringify({ changes: payload }) });
+    const res = await authFetch(`/api/matchday/${FULL_EDITOR_ENV}/matches/${id}`, { method: "PUT", body: JSON.stringify({ changes: payload }) });
     const json = await res.json().catch(() => ({}));
     setSaving(false);
     if (!res.ok) { setMsg({ kind: json?.ambiguous ? "warn" : "err", text: json?.error ?? `HTTP ${res.status}` }); return; }
@@ -235,7 +238,7 @@ export default function MatchEditor({ id }: { id: string }) {
             <span className="chip id">ID {String(meta.id)}</span>
             <span className={`chip ${meta.isCancelled ? "warn" : "live"}`}>{meta.isCancelled ? "Cancelled" : "Live"}</span>
             <span>{meta.startDate ? new Date(String(meta.startDate)).toLocaleString() : "—"} · {String(meta.fieldTitle ?? "—")}{meta.cityName ? ` · ${String(meta.cityName)}` : ""}</span>
-            <span className="chip warn">STAGING · guarded</span>
+            <span className={"chip " + (badge.tone === "prod" ? "prod" : "warn")} data-testid="ed-envbadge">{badge.tone === "prod" ? "● " : ""}{badge.label}</span>
           </div>
         </div>
       </div>
@@ -364,6 +367,8 @@ const CSS = `
 .me .chip.live{background:var(--mintSoft);color:var(--mintInk);border:1px solid var(--mintEdge)}
 .me .chip.id{background:var(--slot);color:var(--muted);border:1px solid var(--line);font-variant-numeric:tabular-nums}
 .me .chip.warn{background:var(--amber);color:var(--amberInk);border:1px solid var(--amberEdge)}
+/* PRODUCTION: unmistakable red pill (the editor writes live matches). */
+.me .chip.prod{background:#E5121B;color:#fff;border:1px solid #E5121B;box-shadow:0 0 0 2px rgba(229,18,27,.30)}
 .me .cols{display:grid;grid-template-columns:1fr 400px;gap:18px;align-items:start;padding:0 24px}
 @media(max-width:1100px){.me .cols{grid-template-columns:1fr}}
 .me .card{background:var(--paper);border:1px solid var(--line);border-radius:16px;box-shadow:0 9px 26px rgba(0,51,38,.06);margin-bottom:16px;overflow:hidden}

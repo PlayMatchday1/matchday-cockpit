@@ -2,8 +2,8 @@
 
 // Master Schedule edit drawer (Phase 7 Part B; Phase 10: PRODUCTION). Opens on a
 // match card, PUSHES the grid (never covers it), edits nine fields, and writes a
-// partial update through the guarded PRODUCTION route
-// (/api/matchday/production/matches/{id}) — env named explicitly per call. Uses the
+// partial update through the guarded route /api/matchday/{DRAWER_ENV}/matches/{id}
+// (DRAWER_ENV from matchEnv.ts; currently production) — env named per call. Uses the
 // same shared diff (fieldChanged / diffKeys / pick from matchEditModel) as the full
 // editor, so the two screens can never disagree about what a change is. Production
 // PUT is a proven partial apply (Phase 9). The manager control is a real dropdown
@@ -21,15 +21,17 @@ import { supabase } from "@/lib/supabase";
 import { diffKeys, pick, MONEY_KEYS } from "@/lib/matchEditModel";
 import { buildStartDate, shiftedEndDate, isInvertedPair, wallDate, wallTime } from "@/lib/matchWallClock";
 import { tzLabelOfCity, tzShift } from "@/lib/matchTimezone";
-import { envBadge, type BadgeEnv } from "@/lib/matchEnvBadge";
+import { envBadge } from "@/lib/matchEnvBadge";
 import { centsToDollars, dollarsToCents } from "@/lib/matchMoney";
+import { DRAWER_ENV, FULL_EDITOR_ENV } from "@/lib/matchEnv";
 
 export const DRAWER_W = 480;
 
-// THE environment this drawer targets. This single value builds the request URL
-// AND the badge, so the two can never disagree (Phase 10.2). Change it here and
-// both move together.
-const DRAWER_ENV: BadgeEnv = "production";
+// The drawer targets DRAWER_ENV (matchEnv.ts): one value builds the request URL AND
+// the badge, so the two can't disagree. The "open full editor" link only renders
+// when the full editor targets the SAME environment (FULL_EDITOR_ENV) — otherwise
+// it would send the operator from a production match to a different-env editor.
+const SAME_ENV_AS_EDITOR = DRAWER_ENV === FULL_EDITOR_ENV;
 
 export type DrawerPatch = { name: string; startDate: string; fieldId: number; venue: string | null; city: string | null };
 export type DrawerMatch = { apiId: number; veo: boolean; siblings: number[] };
@@ -288,7 +290,7 @@ export default function MatchDrawer({
           <span className="mdw-chip id">ID {apiId}</span>
           <span className="mdw-chip tz" data-testid="dr-tzchip">{tzLabel.toUpperCase()}</span>
           <span className={"mdw-chip " + (badge.tone === "prod" ? "prod" : "stg")} data-testid="dr-envbadge">{badge.tone === "prod" ? "● " : ""}{badge.label}</span>
-          <a className="mdw-full" href={`/match-ops/matches/${apiId}`}>Open full editor →</a>
+          {SAME_ENV_AS_EDITOR ? <a className="mdw-full" data-testid="dr-fulleditor" href={`/match-ops/matches/${apiId}`}>Open full editor →</a> : null}
         </div>
       </div>
 
@@ -387,7 +389,7 @@ export default function MatchDrawer({
               <div className="mdw-rr"><span>Roster</span><b>{detail.players.length} of {m.maxPlayerCount ?? "—"} filled</b></div>
               <div className="mdw-rr"><span>Teams &amp; tee prices</span><b>{Array.isArray(m.teams) ? m.teams.length : 0} teams</b></div>
               <div className="mdw-rr"><span>Capacity &amp; automation</span><b>cap {m.maxPlayerCount ?? "none"}</b></div>
-              <div className="mdw-note">These need other endpoints or the room to lay them out. <a href={`/match-ops/matches/${apiId}`}>Open the full editor</a> for every field.</div>
+              <div className="mdw-note">These need other endpoints or the room to lay them out.{SAME_ENV_AS_EDITOR ? <> <a href={`/match-ops/matches/${apiId}`}>Open the full editor</a> for every field.</> : " Use the full editor for every field."}</div>
             </div>
           </div>
         </div>

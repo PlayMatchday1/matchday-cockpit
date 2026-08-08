@@ -28,7 +28,7 @@ async function main() {
   const browser = await chromium.launch({ headless: true });
   const context = await browser.newContext({ viewport: { width: 1440, height: 1100 }, storageState: { cookies: [], origins: [{ origin: BASE, localStorage: [{ name: `sb-${ref}-auth-token`, value: JSON.stringify(vv.data.session) }] }] } });
   let lastBody = null;
-  await context.route("**/api/stage/matches/**", (route) => route.request().method() === "PUT"
+  await context.route("**/api/matchday/production/matches/**", (route) => route.request().method() === "PUT"
     ? (lastBody = JSON.parse(route.request().postData() || "{}").changes, route.fulfill({ status: 200, contentType: "application/json", body: JSON.stringify({ ok: true, match: { ...FIX.match, ...lastBody } }) }))
     : route.fulfill({ status: 200, contentType: "application/json", body: JSON.stringify(FIX) }));
   const page = await context.newPage();

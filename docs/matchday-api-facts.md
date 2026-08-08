@@ -434,6 +434,32 @@ every available format total.
   today (that editor is staging-only) but not derived; it should use envBadge if
   the editor is ever repointed.
 
+## Phase 11 — the full editor writes production
+
+- The full match editor now reads and writes PRODUCTION through
+  /api/matchday/{FULL_EDITOR_ENV}/matches/{id} (matchEnv.ts), env named per call,
+  exactly like the drawer. diff-is-the-body, shared fieldChanged/pick, both
+  deny-lists, and single-shot no-retry are unchanged. The three independent
+  capacity totals (Phase 10.1) are unchanged.
+- Both env badges are now DERIVED from matchEnv.ts (via envBadge) — the drawer's
+  and the editor's. The editor's old hardcoded "STAGING · guarded" chip is gone;
+  it shows the red PRODUCTION treatment. The drawer's "open full editor" link
+  renders ONLY when DRAWER_ENV === FULL_EDITOR_ENV, so it can't send an operator
+  from a production match to a different-env editor.
+- PROVEN by one-at-a-time production writes on finished match 17256 (restored):
+  all 17 editor-only fields round-trip — category, type, description, managerIntro,
+  minPlayerCount, isFreeMember, isAutoBump, autoCanceled, autoCanceledMinutes, the
+  five fakeSpotLeft marks, maxTeamSize2Team, maxTeamSize4Team, maxPlayerCount. Each
+  write moved ONLY itself + updatedAt; NONE cascaded (type REGULAR->EVENT did not
+  trigger any side effect), and the once-"dormant" fakeSpot/autoCanceledMinutes/cap
+  fields all write cleanly.
+- `npm run verify` (added) = tsc + mutation-tests + prod-guard-test +
+  stage-denylist-test (offline, green). NOTE: the repo's separate `npm test` has
+  PRE-EXISTING failures unrelated to this work — `.test.ts` files run under plain
+  `node --test` which can't resolve bare `.ts` imports (venueResolver,
+  growthMetricGrid), and mdapiWallClockGuard flags start_date usages in files this
+  phase never touched. Those belong to their owners, not Phase 11.
+
 ## Running scripts against this client
 
 Scripts that import the server-only write module run with:

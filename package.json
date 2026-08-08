@@ -6,7 +6,8 @@
     "dev": "next dev",
     "build": "next build",
     "start": "next start",
-    "test": "node --test 'src/**/*.test.ts' && npx --yes tsx --test 'src/**/*.finance-test.ts'"
+    "test": "node --test 'src/**/*.test.ts' && npx --yes tsx --test 'src/**/*.finance-test.ts'",
+    "verify": "tsc --noEmit && NODE_OPTIONS=--conditions=react-server npx tsx scripts/mutation-tests.ts && NODE_OPTIONS=--conditions=react-server npx tsx scripts/prod-guard-test.ts && NODE_OPTIONS=--conditions=react-server npx tsx scripts/stage-denylist-test.ts"
   },
   "dependencies": {
     "@supabase/supabase-js": "^2.104.1",

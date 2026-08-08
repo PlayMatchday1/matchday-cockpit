@@ -96,15 +96,14 @@ async function main() {
     if (u.includes("/veo/intent") || u.includes("/veo/cameras")) return route.fulfill({ status: 200, contentType: "application/json", body: JSON.stringify({ ok: true }) });
     return route.fulfill({ status: 200, contentType: "application/json", body: JSON.stringify(veoWeek()) });
   });
+  // Both the drawer AND the full editor (Phase 11) hit /api/matchday/production.
+  // The capacity fixture ids (248x) get the editor-shaped stageDetail; drawer ids
+  // get prodDetail.
+  const detailFor = (id) => ([2480, 2481, 2482].includes(id) ? stageDetail(id) : prodDetail(id));
   await context.route("**/api/matchday/production/matches/**", (route) => {
     const req = route.request(); const id = Number(req.url().split("/").pop().split("?")[0]);
-    if (req.method() === "PUT") { lastPut = JSON.parse(req.postData() || "{}").changes; return route.fulfill({ status: 200, contentType: "application/json", body: JSON.stringify({ ok: true, match: { ...prodDetail(id).match, ...lastPut } }) }); }
-    return route.fulfill({ status: 200, contentType: "application/json", body: JSON.stringify(prodDetail(id)) });
-  });
-  await context.route("**/api/stage/matches/**", (route) => {
-    const req = route.request(); const id = Number(req.url().split("/").pop().split("?")[0]);
-    if (req.method() === "PUT") { lastPut = JSON.parse(req.postData() || "{}").changes; return route.fulfill({ status: 200, contentType: "application/json", body: JSON.stringify({ ok: true, match: { ...stageDetail(id).match, ...lastPut } }) }); }
-    return route.fulfill({ status: 200, contentType: "application/json", body: JSON.stringify(stageDetail(id)) });
+    if (req.method() === "PUT") { lastPut = JSON.parse(req.postData() || "{}").changes; return route.fulfill({ status: 200, contentType: "application/json", body: JSON.stringify({ ok: true, match: { ...detailFor(id).match, ...lastPut } }) }); }
+    return route.fulfill({ status: 200, contentType: "application/json", body: JSON.stringify(detailFor(id)) });
   });
 
   const page = await context.newPage();
@@ -206,6 +205,24 @@ async function main() {
   await T("dr-revert").click(); await page.waitForTimeout(60);
   await page.keyboard.press("Escape"); await page.waitForTimeout(150);
   is("clean: Escape closes (two-sided control)", await T("drawer").count(), 0);
+
+  console.log("\n== full editor: PRODUCTION (Phase 11) ==");
+  await page.goto(`${BASE}/match-ops/matches/2480`, { waitUntil: "domcontentloaded" });
+  await T("savebar").waitFor({ timeout: 30000 }); await page.waitForTimeout(200);
+  // Defect-2-class: the editor badge is derived + production, no STAGING text
+  is("editor badge says PRODUCTION (derived)", /PRODUCTION/.test(await T("ed-envbadge").textContent()), true);
+  is("editor badge does NOT say STAGING", /STAGING/.test(await page.locator(".me .hmeta").innerText()), false);
+  is("editor badge has prod tone class", await T("ed-envbadge").evaluate((e) => e.classList.contains("prod")), true);
+  // clean load: empty diff + disabled Save
+  is("clean load: Save disabled", await T("save").isDisabled(), true);
+  is("clean load: no diff-list", await T("diff-list").count(), 0);
+  // N fields changed -> exactly N keys (1,2,3), written to the PRODUCTION route
+  await T("in-name").fill("P11 A"); await page.waitForTimeout(50); await T("save").click(); await page.waitForFunction(() => document.querySelector('[data-testid="sb-msg"]'));
+  is("editor 1 field -> 1 key", lastPut ? Object.keys(lastPut).sort() : [], ["name"]);
+  await T("in-name").fill("P11 B"); await T("in-minPlayerCount").fill("7"); await page.waitForTimeout(50); await T("save").click(); await page.waitForFunction(() => document.querySelector('[data-testid="sb-msg"]'));
+  is("editor 2 fields -> 2 keys", lastPut ? Object.keys(lastPut).sort() : [], ["minPlayerCount", "name"]);
+  await T("in-name").fill("P11 C"); await T("in-minPlayerCount").fill("8"); await T("in-description").fill("desc p11"); await page.waitForTimeout(50); await T("save").click(); await page.waitForFunction(() => document.querySelector('[data-testid="sb-msg"]'));
+  is("editor 3 fields -> 3 keys", lastPut ? Object.keys(lastPut).sort() : [], ["description", "minPlayerCount", "name"]);
 
   console.log("\n== full editor capacity model (Phase 10.1 revert: 3 independent totals) ==");
   await page.goto(`${BASE}/match-ops/matches/2480`, { waitUntil: "domcontentloaded" });
