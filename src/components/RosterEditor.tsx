@@ -216,7 +216,7 @@ export default function RosterEditor({ matchId }: { matchId: number }) {
         <div className="tools">
           <div className="srch">
             <input data-testid="add-search" value={q} onChange={(e) => setQ(e.target.value)} placeholder="Add a player — search name or email" />
-            {results.length > 0 && <div className="res">{results.map((r) => <button key={r.id} data-testid="add-result" onClick={() => setPending({ id: r.id, name: r.name, fake: false })}>{r.name}</button>)}</div>}
+            {results.length > 0 && <div className="res">{results.map((r) => <button key={r.id} data-testid="add-result" onClick={() => { setPending({ id: r.id, name: r.name, fake: false }); setQ(""); setResults([]); }}>{r.name}</button>)}</div>}
           </div>
           <button className="btn" data-testid="add-fake" onClick={() => setPending({ id: null, name: "Fake player", fake: true })}>Add fake player</button>
           {pending && (
