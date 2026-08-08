@@ -10,7 +10,7 @@ import { buildStartDate, shiftedEndDate } from "../src/lib/matchWallClock";
 import { assertAllowedEndpoint, DeniedEndpointError } from "../src/lib/matchdayStageApi";
 import { centsToDollars, dollarsToCents } from "../src/lib/matchMoney";
 import { envBadge } from "../src/lib/matchEnvBadge";
-import { planRoster, type LoadedPlayer, type StatePlayer, type Shape } from "../src/lib/rosterModel";
+import { planRoster, classifyWrite, stopsRun, type WriteOutcome, type LoadedPlayer, type StatePlayer, type Shape } from "../src/lib/rosterModel";
 
 let pass = 0, fail = 0;
 const ok = (n: string) => { pass++; console.log(`  ok  ${n}`); };
@@ -148,6 +148,38 @@ function mutation<T>(name: string, real: T, broken: T, assertion: (impl: T) => b
   const brokenId = ((...a: Parameters<typeof planRoster>) => planRoster(...a).map((r) => r.kind === "move" ? { ...r, idField: "playerId" as const } : r)) as typeof planRoster;
   const assertMoveUm = (fn: typeof planRoster) => { const p = fn(M, loaded, [mk({ key: "a", umId: 500, playerId: 100, team: 1, num: 2 }), mk({ key: "b", umId: 501, playerId: 101, team: 1, num: 1 })], loadedTeams, teams, shape, shape, tn); return p[0]?.idField === "userMatchId"; };
   mutation("roster move keys on userMatchId", planRoster, brokenId, assertMoveUm);
+}
+
+// ── four-state save: a 2xx is NOT proof; read-back is ────────────────────────
+// The core Phase-13 correction. `classifyWrite` maps a write outcome to one of
+// LANDED / FAILED / NOT APPLIED / UNKNOWN. The broken impl trusts HTTP status
+// alone (2xx -> landed). The assertion is the exact near-miss that bit us: the
+// server returned 2xx but the read-back showed the change was NEVER applied.
+{
+  // marks a row landed on HTTP status alone — the bug we are guarding against
+  const brokenStatusAlone = ((o: WriteOutcome) => (o.httpOk ? "landed" : "failed")) as typeof classifyWrite;
+  const twoxxButNotApplied: WriteOutcome = { httpOk: true, appliedReadback: false };
+  // real impl must call this NOT APPLIED (never landed); broken calls it landed
+  mutation("four-state: 2xx + read-back-absent is NOT APPLIED, not landed",
+    classifyWrite, brokenStatusAlone,
+    (fn) => fn(twoxxButNotApplied) === "notapplied");
+
+  // and the full truth table is exact (belt-and-suspenders, single assertion)
+  const truthTable = (fn: typeof classifyWrite) =>
+    fn({ httpOk: true, appliedReadback: true }) === "landed" &&
+    fn({ httpOk: false, appliedReadback: false }) === "failed" &&
+    fn({ httpOk: true, appliedReadback: false }) === "notapplied" &&
+    fn({ httpOk: true, appliedReadback: true, ambiguous: true }) === "unknown" &&
+    fn({ httpOk: false, appliedReadback: false, networkError: true }) === "unknown";
+  // broken: collapses NOT APPLIED and UNKNOWN into landed/failed
+  mutation("four-state: full truth table (landed/failed/notapplied/unknown)",
+    classifyWrite, brokenStatusAlone, truthTable);
+
+  // only UNKNOWN stops the run — a NOT APPLIED row is retryable, not a full stop
+  const brokenStops = ((s: Parameters<typeof stopsRun>[0]) => s === "notapplied" || s === "unknown") as typeof stopsRun;
+  mutation("four-state: only UNKNOWN stops the run (NOT APPLIED is retryable)",
+    stopsRun, brokenStops,
+    (fn) => fn("unknown") === true && fn("notapplied") === false && fn("failed") === false && fn("landed") === false);
 }
 
 console.log(`\n${pass} passed, ${fail} failed`);

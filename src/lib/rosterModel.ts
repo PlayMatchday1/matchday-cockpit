@@ -17,6 +17,18 @@
 // The two ids are different and getting them wrong targets the wrong record:
 //   move + remove key on userMatchId ; add + fake key on playerId.
 
+// The four write outcomes (Phase 13). A row is LANDED only after a READ-BACK
+// confirms it — never on HTTP status alone. Only UNKNOWN stops the run.
+export type WriteOutcome = { networkError?: boolean; ambiguous?: boolean; httpOk: boolean; appliedReadback: boolean };
+export type WriteStatus = "landed" | "failed" | "notapplied" | "unknown";
+export function classifyWrite(o: WriteOutcome): WriteStatus {
+  if (o.networkError || o.ambiguous) return "unknown"; // may or may not have landed
+  if (!o.httpOk) return "failed";                        // clean rejection, did not happen
+  return o.appliedReadback ? "landed" : "notapplied";    // 2xx: confirm by read-back
+}
+export const stopsRun = (s: WriteStatus) => s === "unknown";
+export const isRetryable = (s: WriteStatus) => s === "failed" || s === "notapplied";
+
 export type LoadedPlayer = { umId: number; playerId: number; team: number; num: number; fake: boolean };
 export type StatePlayer = {
   key: string;            // stable UI key
