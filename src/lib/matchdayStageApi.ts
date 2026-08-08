@@ -111,10 +111,12 @@ export class DeniedEndpointError extends Error {
 
 // Fields no screen may write without a deliberate design decision. Result + teams
 // array only (teams edited via PUT /admin/teams/{id}); scores are result entry.
-// PHASE 7 removed startDate/endDate (the drawer owns the date pair). Applies to
-// BOTH environments.
+// PHASE 7 removed startDate/endDate (the drawer owns the date pair). PHASE 13 added
+// `password`: it is WRITE-ONLY on teams (Retool sends it, the GET never returns it),
+// so an accidental write is undetectable AND unrestorable — a stronger reason to
+// deny than the others. Applies to BOTH environments.
 export const DENY_WRITE_FIELDS = new Set<string>([
-  "teams", "teamHomeId", "teamAwayId", "teamHomeScore", "teamAwayScore",
+  "teams", "teamHomeId", "teamAwayId", "teamHomeScore", "teamAwayScore", "password",
 ]);
 
 // Endpoints no screen may fire blindly. These have side effects a field write
