@@ -460,6 +460,26 @@ every available format total.
   growthMetricGrid), and mdapiWallClockGuard flags start_date usages in files this
   phase never touched. Those belong to their owners, not Phase 11.
 
+## Teams endpoint — PUT /admin/teams/{id} PATCHES (Phase 12)
+
+- A team (from a match GET's `teams[]`) holds 8 fields, IDENTICAL on production and
+  staging: `createdAt, id, locked, matchId, name, price, teamNumber, updatedAt`.
+  `password` is NOT in the GET — it is WRITE-ONLY (Retool's updateTeam sends it,
+  but the entity never returns it), like `teamNumbers` on matches. So a replace
+  here would null an UNREADABLE password.
+- PUT /admin/teams/{id} PATCHES (proven on staging team 3122, one field per write,
+  restored): `{price}`, `{name}`, and `{locked}` each moved ONLY that field +
+  updatedAt. So a changed-fields-only team write (name-only, locked-only) does NOT
+  null the password — the roster screen's per-field team writes are safe. writable
+  fields: name, locked, price, password (never send password from Clubhouse).
+- The write client's guards GENERALIZE to this non-match endpoint with no change:
+  host allowlist, env-named-per-call, the field deny-list (runs on the team body),
+  the endpoint deny-list (does not block PUT /admin/teams/{id} and does not
+  spuriously match a teams path against the matches cancel/delete/refund patterns),
+  and single-shot no-retry all applied unchanged. Nothing was match-specific.
+  Recommendation for the roster phase: consider adding `password` to
+  DENY_WRITE_FIELDS as belt-and-suspenders (we never write it).
+
 ## Running scripts against this client
 
 Scripts that import the server-only write module run with:

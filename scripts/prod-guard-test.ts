@@ -71,6 +71,23 @@ async function main() {
       : bad("apiWrite production DELETE wrong error", `${(e as Error).name}`);
   }
 
+  // Phase 12: the same machinery must cover a NON-match endpoint (PUT /admin/teams/{id}),
+  // not have been shaped around /admin/matches/{id}.
+  console.log("guards GENERALIZE to /admin/teams/{id} (a non-match endpoint):");
+  const TEAM_S = "https://matchday-stage.herokuapp.com/admin/teams/3122";
+  const TEAM_P = "https://playmatchday.herokuapp.com/admin/teams/3122";
+  noThrow("host allowlist: staging teams URL accepted as staging", () => assertAllowedHost("staging", TEAM_S));
+  throws("host allowlist: staging teams URL rejected as production", StageHostGuardError, () => assertAllowedHost("production", TEAM_S));
+  throws("host allowlist: spoof teams host rejected", StageHostGuardError, () => assertAllowedHost("staging", "https://matchday-stage.herokuapp.com.evil.com/admin/teams/1"));
+  noThrow("field deny-list RUNS on a team body (allowed field passes)", () => preflightWrite("staging", "PUT", TEAM_S, { name: "x", locked: true, price: 100 }));
+  throws("field deny-list RUNS on a team body (denied field rejected)", DeniedFieldError, () => preflightWrite("staging", "PUT", TEAM_S, { teamHomeScore: 3 }));
+  noThrow("endpoint deny-list does NOT block PUT /admin/teams/{id}", () => assertAllowedEndpoint("PUT", TEAM_P));
+  noThrow("endpoint deny-list does not spuriously match /admin/teams/{id}/cancel", () => assertAllowedEndpoint("PATCH", TEAM_P + "/cancel"));
+  noThrow("teams write passes full preflight on staging (env named per call)", () => preflightWrite("staging", "PUT", TEAM_S, { name: "x" }));
+  // env named per call: an unlabelled env is refused for a teams URL too
+  // @ts-expect-error unlabelled environment
+  throws("unlabelled env refused for teams URL", StageHostGuardError, () => assertAllowedHost("prod", TEAM_P));
+
   console.log(`\n${pass} passed, ${fail} failed`);
   process.exit(fail ? 1 : 0);
 }
