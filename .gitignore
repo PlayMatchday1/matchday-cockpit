@@ -59,3 +59,8 @@ public/* [0-9].*
 # E2E harness artifacts (never commit)
 .auth/
 .e2e-out/
+
+# Retool exports — contain resource connection strings / API credentials.
+# Local-only reference for the MatchDay API migration (Phase 6/8). Never commit.
+retool-export-prod.json
+retool-export-stage.json

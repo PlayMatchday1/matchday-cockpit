@@ -1,41 +1,66 @@
 import "server-only";
 
-// STAGING-ONLY MatchDay write client. Physically cannot write to production.
+// MatchDay WRITE client. Two environments, an allowlist — NOT a switch.
 //
-// This is a SEPARATE module from the production read client (matchdayApi.ts)
-// with SEPARATE credentials (MATCHDAY_STAGE_API_*). The two are never crossed:
-// prod stays read-only through matchdayApi.ts; every write goes through here and
-// here only. Server-only — the `import "server-only"` above makes an accidental
-// client import a build error, and MATCHDAY_STAGE_API_PASSWORD is a non-public
-// env var that Next.js would never ship to the browser regardless.
+// This is a SEPARATE module from the production READ client (matchdayApi.ts).
+// Reads of production go through that one; every WRITE goes through here. Server-
+// only: the `import "server-only"` makes an accidental client import a build
+// error, and the credentials are non-public env vars Next.js never ships anyway.
 //
-// THREE guarantees, in priority order:
+// FOUR guarantees, in priority order:
 //
-//   1. HOST GUARD (assertStagingHost). Every non-GET resolves the ACTUAL request
-//      URL and refuses unless its host === matchday-stage.herokuapp.com. It
-//      compares the real host, not a boolean flag or env toggle — a flag gets
-//      flipped by accident; a host string that isn't the staging host cannot be
-//      "accidentally staging". If the base URL is production, the write throws
-//      before any network call.
+//   1. HOST ALLOWLIST (assertAllowedHost). Two hosts, each keyed to a named
+//      environment. Every call resolves the ACTUAL request URL and refuses
+//      unless its PARSED host EXACTLY equals the host for the named environment.
+//      Exact parsed-host match, never a substring: matchday-stage.herokuapp.com
+//      .evil.com is rejected. It is an allowlist of two, not a flag that flips a
+//      single constant between hosts.
 //
-//   2. WRITES DO NOT RETRY. Reads may be retried safely; a write must not. This
-//      API has NO Idempotency-Key, so a POST/PUT/PATCH/DELETE that lands
-//      server-side but returns 401 or times out must never be resent — a retry
-//      would double-apply. So: refresh the token BEFORE the call when it is near
-//      expiry (to avoid a mid-write 401), then fire exactly once. On an
-//      ambiguous outcome (network error, timeout, 401, or 5xx — the cases where
-//      the server may already have applied the change) throw AmbiguousWriteError,
-//      which says in words that the write MAY OR MAY NOT have landed and needs a
-//      human to check. A clean 4xx (400/403/404/409/422) is a definitive
-//      rejection: WriteFailedError, the write did not land.
+//   2. EXPLICIT ENVIRONMENT, NO DEFAULT. Every read/write names its target
+//      environment as its first argument ("staging" | "production"). There is no
+//      default. `stageGet`/`stageWrite` are thin aliases that hard-say "staging"
+//      and can never reach production. Code that does not say "production" cannot
+//      reach production.
 //
-//   3. FRESH TOKEN. The access token's `exp` is read from the JWT and the token
-//      is re-minted before it lapses, so writes don't fail on a stale token.
+//   3. THE DENY-LIST applies to BOTH environments identically (assertNoDeniedFields
+//      runs inside the shared preflight). A field dangerous on staging is
+//      dangerous on production.
+//
+//   4. THE PRODUCTION BOLT. Production WRITES are refused outright:
+//      PRODUCTION_WRITES_ENABLED is a single source constant, deliberately NOT
+//      env-driven (a flag gets flipped by accident; a constant is a reviewed code
+//      change). The plumbing exists — apiWrite("production", ...) resolves the
+//      prod host, checks the deny-list — but the door is bolted until a later
+//      phase flips this one constant. Production READS are allowed.
+//
+// WRITES DO NOT RETRY. This API has no Idempotency-Key, so a POST/PUT/PATCH/DELETE
+// that lands server-side but returns 401/timeout must never be resent. Refresh the
+// token BEFORE the call, fire exactly once; on an ambiguous outcome throw
+// AmbiguousWriteError (MAY OR MAY NOT have landed). A clean 4xx is WriteFailedError
+// (did not land).
 
-const STAGING_HOST = "matchday-stage.herokuapp.com";
-const PROD_HOST = "playmatchday.herokuapp.com";
-// Re-mint the token if it is within this window of expiring, so a write never
-// races the expiry. Also the floor we treat "no exp claim" as (always re-mint).
+export type MatchdayEnv = "staging" | "production";
+
+// THE ALLOWLIST. Two hosts, each bound to a named environment. Compared on the
+// parsed URL host, exact-equality only.
+const HOSTS: Record<MatchdayEnv, string> = {
+  staging: "matchday-stage.herokuapp.com",
+  production: "playmatchday.herokuapp.com",
+};
+
+// THE BOLT. Flip this ONE constant (in a reviewed change, next phase) to unbolt
+// production writes. Not read from env — an env flag is exactly the kind of thing
+// that gets flipped by accident in a dashboard.
+const PRODUCTION_WRITES_ENABLED = false;
+
+// Env var names per environment. Staging and production credentials are wholly
+// separate; the two are never crossed and production vars are never repointed.
+const CRED_VARS: Record<MatchdayEnv, { base: string; email: string; password: string }> = {
+  staging: { base: "MATCHDAY_STAGE_API_BASE_URL", email: "MATCHDAY_STAGE_API_EMAIL", password: "MATCHDAY_STAGE_API_PASSWORD" },
+  production: { base: "MATCHDAY_API_BASE_URL", email: "MATCHDAY_API_EMAIL", password: "MATCHDAY_API_PASSWORD" },
+};
+const PROD_DEFAULT_BASE = "https://playmatchday.herokuapp.com";
+
 const REFRESH_SKEW_MS = 120_000;
 const WRITE_TIMEOUT_MS = 30_000;
 
@@ -56,8 +81,7 @@ export class WriteFailedError extends Error {
     super(message); this.name = "WriteFailedError"; this.status = status; this.bodySnippet = bodySnippet;
   }
 }
-// A non-GET whose outcome is UNKNOWN — the change may or may not have landed.
-// Never retried. Must be reconciled by hand.
+// A non-GET whose outcome is UNKNOWN — may or may not have landed. Never retried.
 export class AmbiguousWriteError extends Error {
   status: number | null;
   constructor(message: string, status: number | null = null) {
@@ -65,29 +89,20 @@ export class AmbiguousWriteError extends Error {
   }
 }
 // A write body naming a field that must not be written blindly. Client-level, so
-// EVERY screen built on this write client inherits it — a field is dangerous
-// because of the API, not because one component happens to lack a control.
+// EVERY screen and BOTH environments inherit it.
 export class DeniedFieldError extends Error {
   constructor(message: string) { super(message); this.name = "DeniedFieldError"; }
 }
+// A production write attempt while the bolt is engaged. The plumbing worked; the
+// door is bolted.
+export class ProductionWriteBoltedError extends Error {
+  constructor(message: string) { super(message); this.name = "ProductionWriteBoltedError"; }
+}
 
-// Fields no screen may write without a deliberate design decision:
-//  - teams / teamHomeId / teamAwayId / teamHomeScore / teamAwayScore are the
-//    match RESULT + the teams array (teams is edited via PUT /admin/teams/{id}).
-//    Blind writes here corrupt outcomes; they stay denied.
-// PHASE 7 - startDate AND endDate are now WRITABLE (both removed from this list),
-//    a deliberate decision, not a bug fix. Proven on staging: shifting startDate
-//    +1h moved startDate, the server re-derived startDateUtc by the field's
-//    offset (5h, preserved), endDate/endDateUtc stayed put, nothing else moved;
-//    shifting the PAIR +1h moved both and both *Utc, duration preserved, nothing
-//    else moved. Because nothing validates the pair server-side (staging match
-//    2473 has endDate BEFORE startDate — a negative duration is reachable) the
-//    editor that writes them OWNS the pair: a time edit sends startDate AND
-//    endDate together preserving the loaded duration, and a match that loads
-//    already inverted is flagged, never silently edited. See
-//    docs/matchday-api-facts.md ("Phase 7 date decision").
-// NOTE: maxPlayerCount and hasOrganizer are deliberately NOT here — they are
-// plausible future controls; they stay unmodeled, just not blocked.
+// Fields no screen may write without a deliberate design decision. Result + teams
+// array only (teams edited via PUT /admin/teams/{id}); scores are result entry.
+// PHASE 7 removed startDate/endDate (the drawer owns the date pair). Applies to
+// BOTH environments.
 export const DENY_WRITE_FIELDS = new Set<string>([
   "teams", "teamHomeId", "teamAwayId", "teamHomeScore", "teamAwayScore",
 ]);
@@ -106,26 +121,49 @@ export function assertNoDeniedFields(body: unknown): void {
 }
 
 type Creds = { email: string; password: string; baseUrl: string };
-function getCreds(): Creds {
-  const email = process.env.MATCHDAY_STAGE_API_EMAIL;
-  const password = process.env.MATCHDAY_STAGE_API_PASSWORD;
-  const baseUrl = process.env.MATCHDAY_STAGE_API_BASE_URL;
-  if (!baseUrl) throw new StageConfigError("Missing MATCHDAY_STAGE_API_BASE_URL");
-  if (!email) throw new StageConfigError("Missing MATCHDAY_STAGE_API_EMAIL");
-  if (!password) throw new StageConfigError("Missing MATCHDAY_STAGE_API_PASSWORD");
+function getCreds(env: MatchdayEnv): Creds {
+  const vars = CRED_VARS[env];
+  if (!vars) throw new StageConfigError(`Unknown environment ${JSON.stringify(env)}`);
+  const baseUrl = process.env[vars.base] ?? (env === "production" ? PROD_DEFAULT_BASE : undefined);
+  const email = process.env[vars.email];
+  const password = process.env[vars.password];
+  if (!baseUrl) throw new StageConfigError(`Missing ${vars.base}`);
+  if (!email) throw new StageConfigError(`Missing ${vars.email}`);
+  if (!password) throw new StageConfigError(`Missing ${vars.password}`);
   return { email, password, baseUrl };
 }
 
 // THE GUARD. Resolves the real host of the URL about to be fetched and refuses
-// anything that is not the staging host. Called before every non-GET.
-export function assertStagingHost(url: string): void {
+// anything that is not the allowlisted host for the NAMED environment. Exact
+// parsed-host equality — a spoof host that merely CONTAINS the real one is
+// rejected. An unknown/unlabelled environment is refused.
+export function assertAllowedHost(env: MatchdayEnv, url: string): void {
+  const expected = HOSTS[env];
+  if (!expected) throw new StageHostGuardError(`Refusing: unknown environment ${JSON.stringify(env)} — no host is allowlisted for it.`);
   let host: string;
-  try { host = new URL(url).host; } catch { throw new StageHostGuardError(`Refusing write: un-parseable URL ${JSON.stringify(url)}`); }
-  if (host !== STAGING_HOST) {
-    const prod = host === PROD_HOST ? " That is PRODUCTION." : "";
+  try { host = new URL(url).host; } catch { throw new StageHostGuardError(`Refusing: un-parseable URL ${JSON.stringify(url)}`); }
+  if (host !== expected) {
+    const otherEnv = (Object.keys(HOSTS) as MatchdayEnv[]).find((e) => HOSTS[e] === host);
+    const note = otherEnv ? ` (that host is the ${otherEnv} host)` : "";
     throw new StageHostGuardError(
-      `Refusing to send a write to host ${JSON.stringify(host)} — writes are staging-only ` +
-      `(${STAGING_HOST}).${prod} No env flag can override this; it compares the resolved host.`,
+      `Refusing to reach host ${JSON.stringify(host)} as environment ${JSON.stringify(env)}${note}. ` +
+      `Only ${expected} is allowlisted for ${env}; comparison is exact parsed-host, no substrings.`,
+    );
+  }
+}
+// Back-compat: staging-only host guard used by existing scripts.
+export function assertStagingHost(url: string): void { assertAllowedHost("staging", url); }
+
+// The exact write preflight apiWrite runs, exported so it can be asserted offline.
+// Order: host allowlist -> deny-list (both envs) -> production bolt. All before
+// any network call.
+export function preflightWrite(env: MatchdayEnv, url: string, body: unknown): void {
+  assertAllowedHost(env, url);
+  assertNoDeniedFields(body);
+  if (env === "production" && !PRODUCTION_WRITES_ENABLED) {
+    throw new ProductionWriteBoltedError(
+      `Refusing PRODUCTION write to ${url}: production writes are bolted (PRODUCTION_WRITES_ENABLED=false). ` +
+      `The host allowlist and deny-list passed — only the bolt stands. A later phase flips one constant to unbolt.`,
     );
   }
 }
@@ -136,8 +174,7 @@ function buildUrl(baseUrl: string, path: string, query?: Record<string, string |
   return url.toString();
 }
 
-// Read `exp` (seconds since epoch) from a JWT WITHOUT verifying the signature —
-// we only need it to schedule re-mint, never to trust the token's contents.
+// Read `exp` (seconds since epoch) from a JWT WITHOUT verifying the signature.
 function jwtExpMs(token: string): number | null {
   const parts = token.split(".");
   if (parts.length !== 3) return null;
@@ -147,14 +184,13 @@ function jwtExpMs(token: string): number | null {
   } catch { return null; }
 }
 
-let cached: { token: string; expMs: number } | null = null;
+// One token cache per environment — staging and production never share a token.
+const cached: Partial<Record<MatchdayEnv, { token: string; expMs: number }>> = {};
 
-// Sign in to STAGING. Host-guarded too: a misconfigured base URL cannot even
-// authenticate against production. Returns the token + its parsed expiry.
-async function signIn(): Promise<{ token: string; expMs: number }> {
-  const { email, password, baseUrl } = getCreds();
+async function signIn(env: MatchdayEnv): Promise<{ token: string; expMs: number }> {
+  const { email, password, baseUrl } = getCreds(env);
   const url = buildUrl(baseUrl, "/auth/signin");
-  assertStagingHost(url);
+  assertAllowedHost(env, url); // a misconfigured base can't even authenticate off-host
   let res: Response;
   try {
     res = await fetch(url, {
@@ -164,58 +200,63 @@ async function signIn(): Promise<{ token: string; expMs: number }> {
       signal: AbortSignal.timeout(WRITE_TIMEOUT_MS),
     });
   } catch (e) {
-    throw new StageAuthError(`Staging sign-in network error: ${e instanceof Error ? e.message : String(e)}`);
+    throw new StageAuthError(`${env} sign-in network error: ${e instanceof Error ? e.message : String(e)}`);
   }
   const text = await res.text();
-  if (!res.ok) {
-    throw new StageAuthError(`Staging sign-in failed: HTTP ${res.status}. Body: ${JSON.stringify(text.slice(0, 200))}`);
-  }
+  if (!res.ok) throw new StageAuthError(`${env} sign-in failed: HTTP ${res.status}. Body: ${JSON.stringify(text.slice(0, 200))}`);
   let json: Record<string, unknown>;
-  try { json = JSON.parse(text); } catch { throw new StageAuthError(`Staging sign-in returned non-JSON: ${JSON.stringify(text.slice(0, 200))}`); }
+  try { json = JSON.parse(text); } catch { throw new StageAuthError(`${env} sign-in returned non-JSON: ${JSON.stringify(text.slice(0, 200))}`); }
   const token = (typeof json.accessToken === "string" && json.accessToken) ||
     (typeof json.access_token === "string" && json.access_token) || null;
-  if (!token) throw new StageAuthError(`Staging sign-in returned no accessToken. Keys: ${Object.keys(json).join(", ")}`);
-  const expMs = jwtExpMs(token) ?? 0; // 0 → treat as immediately-stale (always re-mint)
+  if (!token) throw new StageAuthError(`${env} sign-in returned no accessToken. Keys: ${Object.keys(json).join(", ")}`);
+  const expMs = jwtExpMs(token) ?? 0;
   return { token, expMs };
 }
 
-async function freshToken(): Promise<string> {
-  if (cached && cached.expMs - Date.now() > REFRESH_SKEW_MS) return cached.token;
-  cached = await signIn();
-  return cached.token;
+async function freshToken(env: MatchdayEnv): Promise<string> {
+  const c = cached[env];
+  if (c && c.expMs - Date.now() > REFRESH_SKEW_MS) return c.token;
+  const t = await signIn(env);
+  cached[env] = t;
+  return t.token;
 }
 
-// Expose the token's expiry so a script can prove the credential + report the
-// exp / minutes-to-expiry without duplicating the sign-in logic.
-export async function stageSignInProbe(): Promise<{ token: string; expMs: number | null; minutesToExpiry: number | null }> {
-  const t = await signIn();
-  cached = t;
+// Prove the credential + report exp / minutes-to-expiry. Defaults to staging for
+// existing callers; pass an env to probe production.
+export async function stageSignInProbe(env: MatchdayEnv = "staging"): Promise<{ token: string; expMs: number | null; minutesToExpiry: number | null }> {
+  const t = await signIn(env);
+  cached[env] = t;
   const expMs = t.expMs || null;
   return { token: t.token, expMs, minutesToExpiry: expMs ? (expMs - Date.now()) / 60000 : null };
 }
 
-// READS — staging GET. Reads are safe; single attempt kept simple.
-export async function stageGet<T = unknown>(path: string, query?: Record<string, string | number | boolean>): Promise<T> {
-  const { baseUrl } = getCreds();
+// READS — env-explicit GET. Reads are safe; production reads are allowed.
+export async function apiGet<T = unknown>(env: MatchdayEnv, path: string, query?: Record<string, string | number | boolean>): Promise<T> {
+  const { baseUrl } = getCreds(env);
   const url = buildUrl(baseUrl, path, query);
-  const token = await freshToken();
+  assertAllowedHost(env, url);
+  const token = await freshToken(env);
   const res = await fetch(url, { headers: { Authorization: `Bearer ${token}` }, signal: AbortSignal.timeout(WRITE_TIMEOUT_MS) });
   const text = await res.text();
   if (!res.ok) throw new WriteFailedError(res.status, `GET ${url}: HTTP ${res.status}. Body: ${JSON.stringify(text.slice(0, 200))}`, text.slice(0, 200));
   return JSON.parse(text) as T;
 }
 
-// WRITES — single-shot, host-guarded, never retried.
-export async function stageWrite<T = unknown>(
-  method: "POST" | "PUT" | "PATCH" | "DELETE",
-  path: string,
-  body?: unknown,
-): Promise<T> {
-  const { baseUrl } = getCreds();
+// WRITES — env-explicit, single-shot, host-allowlisted, deny-listed, prod-bolted.
+export async function apiWrite<T = unknown>(env: MatchdayEnv, method: "POST" | "PUT" | "PATCH" | "DELETE", path: string, body?: unknown): Promise<T> {
+  // The bolt fires FIRST, before creds are even loaded — production is refused
+  // regardless of whether prod credentials happen to be configured. Nothing about
+  // a production write can proceed while the bolt is engaged.
+  if (env === "production" && !PRODUCTION_WRITES_ENABLED) {
+    throw new ProductionWriteBoltedError(
+      `Refusing PRODUCTION write ${method} ${path}: production writes are bolted (PRODUCTION_WRITES_ENABLED=false). ` +
+      `A later phase flips one constant to unbolt.`,
+    );
+  }
+  const { baseUrl } = getCreds(env);
   const url = buildUrl(baseUrl, path);
-  assertStagingHost(url); // GUARD FIRST — before token, before network.
-  assertNoDeniedFields(body); // then the field deny-list — still before any network.
-  const token = await freshToken(); // refresh-before to avoid a mid-write 401.
+  preflightWrite(env, url, body); // host allowlist -> deny-list -> (prod bolt, already checked), all pre-network
+  const token = await freshToken(env);
 
   let res: Response;
   try {
@@ -226,8 +267,6 @@ export async function stageWrite<T = unknown>(
       signal: AbortSignal.timeout(WRITE_TIMEOUT_MS),
     });
   } catch (e) {
-    // Network error or timeout: the request may have reached the server and
-    // applied. NOT retried — surface the ambiguity.
     throw new AmbiguousWriteError(
       `${method} ${url}: network error/timeout — the write MAY OR MAY NOT have landed. ` +
       `Do NOT resend; verify by hand. (${e instanceof Error ? e.message : String(e)})`,
@@ -239,8 +278,6 @@ export async function stageWrite<T = unknown>(
     try { return (text ? JSON.parse(text) : (undefined as T)); }
     catch { return text as unknown as T; }
   }
-  // 401 or 5xx: the server received the request; it may have applied before the
-  // error. Ambiguous — never retried.
   if (res.status === 401 || res.status >= 500) {
     throw new AmbiguousWriteError(
       `${method} ${url}: HTTP ${res.status} — the server received this write and it MAY OR MAY NOT have landed. ` +
@@ -248,8 +285,16 @@ export async function stageWrite<T = unknown>(
       res.status,
     );
   }
-  // Other 4xx: cleanly rejected before applying. Did not land.
   throw new WriteFailedError(res.status, `${method} ${url}: HTTP ${res.status} — rejected, write did not land. Body: ${JSON.stringify(text.slice(0, 200))}`, text.slice(0, 200));
 }
 
-export const STAGE = { STAGING_HOST, PROD_HOST, REFRESH_SKEW_MS };
+// STAGING ALIASES — hard-say "staging"; cannot reach production. Existing callers
+// (the stage route + scripts) use these unchanged.
+export function stageGet<T = unknown>(path: string, query?: Record<string, string | number | boolean>): Promise<T> {
+  return apiGet<T>("staging", path, query);
+}
+export function stageWrite<T = unknown>(method: "POST" | "PUT" | "PATCH" | "DELETE", path: string, body?: unknown): Promise<T> {
+  return apiWrite<T>("staging", method, path, body);
+}
+
+export const STAGE = { STAGING_HOST: HOSTS.staging, PROD_HOST: HOSTS.production, REFRESH_SKEW_MS, HOSTS, PRODUCTION_WRITES_ENABLED };
