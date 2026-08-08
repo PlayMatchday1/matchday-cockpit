@@ -37,7 +37,24 @@ export type RosterRequest = {
   body?: Record<string, unknown>;
   label: string;
   idField?: "userMatchId" | "playerId"; // which id this request keys on (asserted)
+  op: Record<string, unknown>;          // the payload the roster route POST expects
 };
+
+// Derive the route POST op from a request (paths are fixed here, so this is
+// deterministic). The route rebuilds the path server-side from {kind}+ids.
+function toOp(r: Omit<RosterRequest, "op">): Record<string, unknown> {
+  const seg = r.path.split("/").filter(Boolean);
+  const b = r.body ?? {};
+  switch (r.kind) {
+    case "add": return { kind: "add", playerId: Number(seg[seg.length - 1]), team: b.team, playerNumber: b.playerNumber };
+    case "add-fake": return { kind: "add-fake", team: b.team, playerNumber: b.playerNumber };
+    case "move": return { kind: "move", userMatchId: b.userMatchId, team: b.team, playerNumber: b.playerNumber };
+    case "remove": return { kind: "remove", userMatchId: Number(seg[seg.length - 1]) };
+    case "fake": return { kind: "fake", playerId: Number(seg[seg.indexOf("players") + 1]) };
+    case "teams": return { kind: "teams", teamId: Number(seg[seg.length - 1]), fields: b };
+    case "shape": return { kind: "shape", fields: b };
+  }
+}
 
 const norm = (v: unknown) => (v === null || v === undefined || v === "" ? null : v);
 
@@ -51,7 +68,7 @@ export function planRoster(
   shape: Shape,
   teamName: (i: number) => string,
 ): RosterRequest[] {
-  const out: RosterRequest[] = [];
+  const out: Omit<RosterRequest, "op">[] = [];
 
   // 1. shape (match endpoint) — teamNumbers + maxPlayerCount + the cap for the
   //    format actually in play; the OTHER format's cap is left alone.
@@ -114,7 +131,7 @@ export function planRoster(
         idField: "playerId", label: `${p.fake ? "Set" : "Unset"} as a fake player` });
     }
   }
-  return out;
+  return out.map((r) => ({ ...r, op: toOp(r) }));
 }
 
 // team array index -> the API teamNumber (1-indexed on the match).
