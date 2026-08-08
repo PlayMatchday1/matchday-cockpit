@@ -364,6 +364,32 @@ BOUNDARY of what this proves / does NOT prove:
 
 The bolt (`PRODUCTION_WRITES_ENABLED`) is back to `false` after this write.
 
+## Capacity model + live fields (Phase 10)
+
+- The three caps are TOTALS, not per-side. maxTeamSize2Team = total when played as
+  2 teams, maxTeamSize4Team = total when played as 4 teams, maxPlayerCount = total
+  for the match's own team count. Production 17256: maxTeamSize4Team=40, four teams,
+  ten a side. The full editor now takes players-per-team + number-of-teams and
+  DERIVES the three caps (maxPlayerCount = perTeam*teamNumbers, maxTeamSize2Team =
+  perTeam*2, maxTeamSize4Team = perTeam*4), writing all four (incl write-only
+  teamNumbers) as one group — matching Retool so the two tools can't disagree.
+- FINDING (disagrees with the single-perTeam premise): in the CURRENT WEEK, 89 of
+  110 production matches (81%) have caps that do NOT reduce to any single per-team
+  number — e.g. 17313 has 2-team total 22 (=>11/side), 4-team total 40 (=>10/side),
+  capacity 18 over 2 teams (=>9/side). This is because Retool actually uses THREE
+  independent "recommend" inputs (Phase 6: updateRecomendPlayerCount2 for capacity,
+  updateRecomendPlayerCount2Teams for the 2-team total, updateRecomendPlayerCount4Teams
+  for the 4-team total), so the three caps are set independently. The single-perTeam
+  editor therefore flags most real matches as inconsistent and, on a capacity edit,
+  would overwrite the independent values with derived ones — so it warns and never
+  writes capacity unless the admin edits it. The full editor is STAGING-ONLY, so no
+  production caps are at risk; but a future revision should consider three
+  independent recommend inputs to match production reality. maxTeamSize2Team=0 with
+  maxTeamSize4Team=40 (17256) is one such inconsistency, flagged on load.
+- fakeSpotLeft{36,24,12,6,3}h are LIVE on production (17256 reads 32/24/10/6/4),
+  NOT dormant. autoCanceledMinutes is LIVE too (17256 = 75, autoCanceled true).
+  Staging reading zero for all of them was TEST DATA, not evidence.
+
 ## Running scripts against this client
 
 Scripts that import the server-only write module run with:

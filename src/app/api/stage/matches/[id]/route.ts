@@ -25,7 +25,10 @@ const EDITABLE = new Set<string>(EDITABLE_KEYS);
 // it, always as a start+end pair (duration preserved). Allowed here in addition
 // to EDITABLE so the full editor's field set stays unchanged.
 const DATE_PAIR = new Set<string>(["startDate", "endDate"]);
-const WRITABLE = new Set<string>([...EDITABLE, ...DATE_PAIR]);
+// teamNumbers is WRITE-ONLY (accepted on write, absent from GET) — the capacity
+// group sends it alongside the three derived caps. Allow it on write.
+const WRITE_ONLY = new Set<string>(["teamNumbers"]);
+const WRITABLE = new Set<string>([...EDITABLE, ...DATE_PAIR, ...WRITE_ONLY]);
 // Read-only values the editor also needs (identity + roster shape).
 const READONLY = ["id", "startDate", "endDate", "isCancelled", "teams"];
 
