@@ -17,7 +17,7 @@
 
 import { useCallback, useEffect, useMemo, useState } from "react";
 import { supabase } from "@/lib/supabase";
-import { EDITABLE_KEYS, MONEY_KEYS as MONEY, TOGGLE_KEYS as TOGGLE, NULLABLE_NUM, fieldChanged } from "@/lib/matchEditModel";
+import { EDITABLE_KEYS, MONEY_KEYS as MONEY, TOGGLE_KEYS as TOGGLE, NULLABLE_NUM, fieldChanged, diffKeys, pick } from "@/lib/matchEditModel";
 
 type FieldRow = { id: number; title: string; city: string | null };
 type Data = Record<string, unknown>;
@@ -53,7 +53,24 @@ function specs(fields: FieldRow[]): Spec[] {
     { key: "isAutoBump", group: "auto", kind: "toggle", label: "Auto bump to tourney", hint: "Grow the match to a tournament if it fills" },
     { key: "maxTeamSize2Team", group: "auto", kind: "number", label: "Bump size, 2 teams", cond: (s) => !!s.isAutoBump },
     { key: "maxTeamSize4Team", group: "auto", kind: "number", label: "Bump size, 4 teams", cond: (s) => !!s.isAutoBump },
+    { key: "maxPlayerCount", group: "auto", kind: "number", label: "Match capacity", hint: "Total players the match holds. Blank or 0 = special event (no cap)." },
   ];
+}
+
+// The silent-cap check (Phase 7 Part E). maxPlayerCount is the TOTAL capacity;
+// maxTeamSize{2,4}Team are PER-TEAM. They are independent, so a team config can
+// seat more players than the cap allows and signups quietly stop at the cap. We
+// surface the conflict; we do NOT auto-correct it (raising a capacity silently
+// is its own surprise). null/0 cap = special event, never a conflict.
+function capacityConflict(state: Data, teamCount: number): { implied: number; perTeam: number; cap: number } | null {
+  const perTeam = teamCount >= 4 ? Number(state.maxTeamSize4Team) : Number(state.maxTeamSize2Team);
+  if (!Number.isFinite(perTeam) || perTeam <= 0) return null;
+  const implied = teamCount * perTeam;
+  const raw = state.maxPlayerCount;
+  if (raw === null || raw === undefined || raw === "") return null; // special event
+  const cap = Number(raw);
+  if (!Number.isFinite(cap) || cap <= 0) return null; // 0 = special event
+  return implied > cap ? { implied, perTeam, cap } : null;
 }
 
 async function authFetch(path: string, init?: RequestInit): Promise<Response> {
@@ -100,11 +117,11 @@ export default function MatchEditor({ id }: { id: string }) {
 
   const changedKeys = useMemo(() => {
     if (!state || !loaded) return [];
-    return EDITABLE_KEYS.filter((k) => fieldChanged(k, loaded[k], state[k]));
+    return diffKeys(EDITABLE_KEYS, loaded, state);
   }, [state, loaded]);
 
-  // THE PAYLOAD — the same key set the diff shows.
-  const payload = useMemo(() => Object.fromEntries(changedKeys.map((k) => [k, state![k]])), [changedKeys, state]);
+  // THE PAYLOAD — the same key set the diff shows. Shared pick() with the drawer.
+  const payload = useMemo(() => pick(state ?? {}, changedKeys), [changedKeys, state]);
 
   const fmt = (k: string, v: unknown) => TOGGLE.has(k) ? (v ? "on" : "off")
     : MONEY.has(k) ? money(v)
@@ -121,6 +138,8 @@ export default function MatchEditor({ id }: { id: string }) {
   const groupCount = (g: Spec["group"]) => changedKeys.filter((k) => FIELDS.find((f) => f.key === k)?.group === g).length;
   const ladderVals = LADDER.map((k) => Number(state[k]));
   const descending = ladderVals.every((v, i) => i === 0 || v <= ladderVals[i - 1]);
+  const teamCount = Array.isArray(meta.teams) && (meta.teams as unknown[]).length >= 4 ? 4 : 2;
+  const capConflict = capacityConflict(state, teamCount);
 
   // Blank/NaN numeric → empty box. A cleared numeric input stays "" in state, which
   // fieldChanged treats as no change, so it never reaches the diff or the body.
@@ -228,6 +247,12 @@ export default function MatchEditor({ id }: { id: string }) {
               {renderToggle(inGroup("auto").find((f) => f.key === "isFreeMember")!)}
               {renderToggle(inGroup("auto").find((f) => f.key === "isAutoBump")!)}
               {state.isAutoBump ? <div className="grid" data-testid="bumps">{["maxTeamSize2Team", "maxTeamSize4Team"].map((k) => renderField(inGroup("auto").find((f) => f.key === k)!))}</div> : null}
+              <div className="grid" data-testid="capacity">{renderField(inGroup("auto").find((f) => f.key === "maxPlayerCount")!)}</div>
+              {capConflict ? (
+                <div className="ladderNote" data-testid="cap-warn" style={{ marginTop: 4 }}>
+                  <b>Capacity is below the team layout.</b> {teamCount} teams × {capConflict.perTeam} a side seats {capConflict.implied} players, but the capacity cap is {capConflict.cap}. Signups will stop at {capConflict.cap} — the other {capConflict.implied - capConflict.cap} never fill. Raise the cap or lower the team size. Nothing is changed for you.
+                </div>
+              ) : null}
             </div></section>
 
           {/* Cancel — its own red card, never in the save bar */}

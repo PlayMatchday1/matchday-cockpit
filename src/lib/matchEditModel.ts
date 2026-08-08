@@ -13,16 +13,23 @@
 // product. This is the authority order in action: observed behaviour and the
 // operator's word beat the spec. Any control for this field is a minutes input;
 // do not divide or multiply by 60. See docs/matchday-api-facts.md.
+// PHASE 7: maxPlayerCount joins the modeled set. It is the total match-capacity
+// cap and was surfaced to close the silent-cap bug (raising team size while the
+// cap stays low silently limits signups — see docs/matchday-api-facts.md). It is
+// NULLABLE, not a NUMERIC_KEY: for this field null and 0 are BOTH meaningful (the
+// Soccer Central rule reads null/0 as "special event"), so a blank box must
+// become null (not 0) and 0 must stay 0 — clearing it is a real change, unlike a
+// blank price which is just a half-typed number.
 export const EDITABLE_KEYS = [
   "name", "fieldId", "category", "type", "managerId", "secondManagerId", "description", "managerIntro",
   "registrationPrice", "additionalSpotPrice", "guestCount", "fakeSpotLeft36h", "fakeSpotLeft24h",
   "fakeSpotLeft12h", "fakeSpotLeft6h", "fakeSpotLeft3h", "autoCanceled", "autoCanceledMinutes",
-  "minPlayerCount", "isFreeMember", "isAutoBump", "maxTeamSize2Team", "maxTeamSize4Team",
+  "minPlayerCount", "isFreeMember", "isAutoBump", "maxTeamSize2Team", "maxTeamSize4Team", "maxPlayerCount",
 ] as const;
 
 export const MONEY_KEYS = new Set<string>(["registrationPrice", "additionalSpotPrice"]);
 export const TOGGLE_KEYS = new Set<string>(["autoCanceled", "isFreeMember", "isAutoBump"]);
-export const NULLABLE_NUM = new Set<string>(["managerId", "secondManagerId"]);
+export const NULLABLE_NUM = new Set<string>(["managerId", "secondManagerId", "maxPlayerCount"]);
 // Non-nullable numeric fields. Empty ("") or non-numeric input for one of these is
 // NOT a value the user is committing — it must never enter the diff or the body.
 export const NUMERIC_KEYS = new Set<string>([
@@ -56,4 +63,17 @@ export function normValue(v: unknown): unknown {
 export function fieldChanged(key: string, loadedVal: unknown, stateVal: unknown): boolean {
   if (NUMERIC_KEYS.has(key) && isBlankNumber(stateVal)) return false;
   return JSON.stringify(normValue(loadedVal)) !== JSON.stringify(normValue(stateVal));
+}
+
+// THE two builders every editor shares. `diffKeys` is the changed-key list;
+// `pick` turns that list into the request body. Because the diff panel and the
+// body are both built from these, they cannot disagree about what is sent — the
+// bug this whole model exists to prevent. Import them; never re-implement.
+export function diffKeys(keys: readonly string[], loaded: Record<string, unknown>, state: Record<string, unknown>): string[] {
+  return keys.filter((k) => fieldChanged(k, loaded[k], state[k]));
+}
+export function pick(source: Record<string, unknown>, keys: readonly string[]): Record<string, unknown> {
+  const out: Record<string, unknown> = {};
+  for (const k of keys) out[k] = source[k];
+  return out;
 }

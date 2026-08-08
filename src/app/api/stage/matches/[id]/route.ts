@@ -20,6 +20,12 @@ export const maxDuration = 30;
 
 // Same allowlist the editor + tests use — one source (matchEditModel).
 const EDITABLE = new Set<string>(EDITABLE_KEYS);
+// PHASE 7: the date PAIR is writable but is NOT a general editable field (the
+// full editor has no control for it). Only the drawer's date/time control sends
+// it, always as a start+end pair (duration preserved). Allowed here in addition
+// to EDITABLE so the full editor's field set stays unchanged.
+const DATE_PAIR = new Set<string>(["startDate", "endDate"]);
+const WRITABLE = new Set<string>([...EDITABLE, ...DATE_PAIR]);
 // Read-only values the editor also needs (identity + roster shape).
 const READONLY = ["id", "startDate", "endDate", "isCancelled", "teams"];
 
@@ -31,6 +37,10 @@ function pickMatch(m: Record<string, unknown>) {
   const city = (field.city ?? {}) as Record<string, unknown>;
   out.fieldTitle = (field.title as string | undefined)?.trim() ?? null;
   out.cityName = (city.name as string | undefined) ?? null;
+  // Manager relation objects, passed through so the drawer can show a name and
+  // flag a deleted/unresolved account WITHOUT ever blanking the stored id.
+  out.manager = m.manager ?? null;
+  out.secondManager = m.secondManager ?? null;
   return out;
 }
 
@@ -68,8 +78,13 @@ export async function PUT(req: Request, ctx: { params: Promise<{ id: string }> }
   }
   const keys = Object.keys(changes);
   if (keys.length === 0) return Response.json({ error: "no changes to apply" }, { status: 400 });
-  const illegal = keys.filter((k) => !EDITABLE.has(k));
+  const illegal = keys.filter((k) => !WRITABLE.has(k));
   if (illegal.length) return Response.json({ error: `not editable: ${illegal.join(", ")}` }, { status: 400 });
+  // The date pair is all-or-nothing: a lone startDate can silently invert a match
+  // against its untouched endDate. The drawer always sends both; enforce it here
+  // too so no client can send half a move.
+  const dateKeys = keys.filter((k) => DATE_PAIR.has(k));
+  if (dateKeys.length === 1) return Response.json({ error: "startDate and endDate must be sent together (the pair preserves duration)" }, { status: 400 });
 
   try {
     // Partial write — send ONLY the changed keys. Omitted fields are untouched.

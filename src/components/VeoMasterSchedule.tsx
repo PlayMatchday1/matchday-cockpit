@@ -21,9 +21,10 @@
 // city-day is a loud coral cell (the to-do). The dark inversion lives only on the
 // Schedule cards, where a Veo match is the exception among many.
 
-import { useEffect, useMemo, useState } from "react";
+import { useCallback, useEffect, useMemo, useRef, useState } from "react";
 import { supabase } from "@/lib/supabase";
 import { downloadCsv, plural } from "@/components/growth/format";
+import MatchDrawer, { DRAWER_W, type DrawerMatch } from "@/components/MatchDrawer";
 
 type VeoDay = { dow: string; date: number; iso: string; today: boolean };
 type VeoCity = { city: string; cameras: number };
@@ -114,6 +115,26 @@ function weekRangeLabel(days: VeoDay[]): string {
   return `${start} – ${end}`;
 }
 
+// A view of the week narrowed to the selected cities (empty set = all cities).
+// Both the stat tiles AND the coverage grid read from this, so the filter moves
+// every number together — nothing is computed from the unfiltered week.
+function filterWeek(week: VeoWeek, cities: Set<string>): VeoWeek {
+  if (cities.size === 0) return week;
+  return {
+    ...week,
+    cities: week.cities.filter((c) => cities.has(c.city)),
+    matches: week.matches.filter((m) => cities.has(m.city)),
+  };
+}
+// Match ids in the same city + day as `apiId`, ordered by time — the set the
+// drawer's up/down arrows step through.
+function siblingsOf(week: VeoWeek, apiId: number): number[] {
+  const m = week.matches.find((x) => x.apiId === apiId);
+  if (!m) return [apiId];
+  return week.matches.filter((x) => x.city === m.city && x.dayIdx === m.dayIdx)
+    .sort((a, b) => a.minutes - b.minutes).map((x) => x.apiId);
+}
+
 export default function VeoMasterSchedule() {
   const [week, setWeek] = useState<VeoWeek | null>(null);
   const [loading, setLoading] = useState(true);
@@ -123,6 +144,18 @@ export default function VeoMasterSchedule() {
   // "" = current week; otherwise a date (YYYY-MM-DD) within the selected week.
   const [weekRef, setWeekRef] = useState<string>("");
   const [navBusy, setNavBusy] = useState(false);
+  // City filter (empty = all). Drawer state. drawerDirty is reported UP by the
+  // drawer so week-nav / card-switch / filter can be blocked while edits pend.
+  const [cityFilter, setCityFilter] = useState<Set<string>>(new Set());
+  const [drawerId, setDrawerId] = useState<number | null>(null);
+  const [drawerDirty, setDrawerDirty] = useState(false);
+  const [toastMsg, setToastMsg] = useState<{ text: string; warn: boolean } | null>(null);
+  const toastTimer = useRef<ReturnType<typeof setTimeout> | null>(null);
+  const showToast = useCallback((text: string, warn = false) => {
+    setToastMsg({ text, warn });
+    if (toastTimer.current) clearTimeout(toastTimer.current);
+    toastTimer.current = setTimeout(() => setToastMsg(null), 2600);
+  }, []);
 
   // ref selects the week; "" asks the server for the current week. Keeps the old
   // week on screen until the new one arrives (no blanking on navigation).
@@ -149,8 +182,10 @@ export default function VeoMasterSchedule() {
   // back to the current week. Shared by both views (it lives in the card header).
   async function navigate(ref: string) {
     if (navBusy) return;
+    if (drawerDirty) { showToast("Save or revert the open match before changing weeks.", true); return; }
     setNavBusy(true);
     setWeekRef(ref);
+    setDrawerId(null); // a new week's matches are different rows; close the drawer
     await load(ref);
     setNavBusy(false);
   }
@@ -189,10 +224,57 @@ export default function VeoMasterSchedule() {
     setBusy(false);
   }
 
-  const stats = useMemo<Stats | null>(() => (week ? computeStats(week) : null), [week]);
+  // The week narrowed to the selected cities — stats AND coverage both read it.
+  const fweek = useMemo<VeoWeek | null>(() => (week ? filterWeek(week, cityFilter) : null), [week, cityFilter]);
+  const stats = useMemo<Stats | null>(() => (fweek ? computeStats(fweek) : null), [fweek]);
   // The displayed week contains the real "today" only when the server flagged one
   // of its days — the definitive "are we on the current week?" signal.
   const isCurrentWeek = week ? week.days.some((d) => d.today) : false;
+
+  // ── drawer + filter handlers ──────────────────────────────────────────────
+  const drawerCity = useMemo(() => (drawerId != null && week ? week.matches.find((m) => m.apiId === drawerId)?.city ?? null : null), [drawerId, week]);
+  const drawerVeo = useMemo(() => (drawerId != null && week ? !!week.matches.find((m) => m.apiId === drawerId)?.veo : false), [drawerId, week]);
+  const drawerSiblings = useMemo(() => (drawerId != null && week ? siblingsOf(week, drawerId) : []), [drawerId, week]);
+
+  const openCard = useCallback((id: number) => {
+    if (drawerId != null && drawerId !== id && drawerDirty) { showToast("Save or revert the open match first.", true); return; }
+    setDrawerId(id);
+  }, [drawerId, drawerDirty, showToast]);
+
+  const closeDrawer = useCallback(() => { setDrawerId(null); setDrawerDirty(false); }, []);
+
+  // Patch the ONE card after a save — never refetch the whole week.
+  const patchCard = useCallback((id: number, patch: { name: string; startDate: string; venue: string | null; city: string | null }) => {
+    setWeek((w) => {
+      if (!w) return w;
+      return {
+        ...w,
+        matches: w.matches.map((m) => {
+          if (m.apiId !== id) return m;
+          const time = patch.startDate ? patch.startDate.slice(11, 16) : m.time;
+          const [H, M] = time.split(":").map(Number);
+          const h12 = `${(H % 12) || 12}:${String(M).padStart(2, "0")} ${H >= 12 ? "PM" : "AM"}`;
+          return { ...m, name: patch.name || m.name, time: h12, minutes: H * 60 + M, venue: patch.venue || m.venue, city: patch.city || m.city };
+        }),
+      };
+    });
+  }, []);
+
+  // City filter toggle. Selecting/deselecting a chip; empty set = all. If the open
+  // drawer's city drops out of view, the drawer closes.
+  const toggleCity = useCallback((city: string | null) => {
+    setCityFilter((prev) => {
+      let next: Set<string>;
+      if (city === null) next = new Set(); // "All cities"
+      else { next = new Set(prev); if (next.has(city)) next.delete(city); else next.add(city); }
+      const visible = next.size === 0 || (drawerCity != null && next.has(drawerCity));
+      if (drawerId != null && drawerCity != null && !visible) {
+        if (drawerDirty) showToast(`Discarded unsaved changes to match ${drawerId}.`, true);
+        setDrawerId(null); setDrawerDirty(false);
+      }
+      return next;
+    });
+  }, [drawerCity, drawerId, drawerDirty, showToast]);
 
   // Worklist diff — two DISJOINT sections.
   const { needEmoji, needClubhouse } = useMemo(() => {
@@ -214,15 +296,17 @@ export default function VeoMasterSchedule() {
     downloadCsv(`veo-worklist-${week.weekStart}.csv`, rows);
   }
 
+  const drawerOpen = drawerId != null;
+
   return (
-    <div className="vms">
+    <div className="vms" style={drawerOpen ? { maxWidth: "none", marginLeft: 0, marginRight: DRAWER_W } : undefined}>
       <style>{CSS}</style>
 
       <div className="vms-card">
         <div className="vms-head">
           <div>
             <div className="vms-h-title">Master Schedule</div>
-            <div className="vms-h-sub">Mark the matches a Veo camera will cover, then switch to Veo coverage to see the week as one grid — which nights are covered, which are open, and where a camera is idle or short.</div>
+            <div className="vms-h-sub">Mark the matches a Veo camera will cover, then switch to Veo coverage to see the week as one grid — which nights are covered, which are open, and where a camera is idle or short. Click a match to edit it.</div>
           </div>
           <div className="vms-h-right">
             {week && (
@@ -233,7 +317,7 @@ export default function VeoMasterSchedule() {
                   <span className={"vms-wktag" + (isCurrentWeek ? " vms-wktag-now" : "")}>{isCurrentWeek ? "This week" : "Not current week"}</span>
                 </div>
                 <button type="button" className="vms-navbtn" onClick={goNext} disabled={navBusy} aria-label="Next week" title="Next week">›</button>
-                <button type="button" className={"vms-btn vms-todaybtn" + (isCurrentWeek ? "" : " vms-todaybtn-hot")} onClick={goToday} disabled={navBusy || isCurrentWeek} title="Jump to the current week">Today</button>
+                <button type="button" data-testid="today" className={"vms-btn vms-todaybtn" + (isCurrentWeek ? "" : " vms-todaybtn-hot")} onClick={goToday} disabled={navBusy || isCurrentWeek} title="Jump to the current week">Today</button>
               </div>
             )}
             <span className="vms-control-label">View</span>
@@ -245,8 +329,22 @@ export default function VeoMasterSchedule() {
           </div>
         </div>
 
-        {stats && (
-          <div className="vms-stats">
+        {week && week.cities.length > 0 && (
+          <div className="vms-filter" data-testid="city-filter" role="group" aria-label="Filter cities">
+            <span className="vms-control-label">Cities</span>
+            <button type="button" data-testid="city-chip-all" aria-pressed={cityFilter.size === 0}
+              className={"vms-chip" + (cityFilter.size === 0 ? " vms-chip-on" : "")} onClick={() => toggleCity(null)}>All cities</button>
+            {week.cities.map(({ city }) => (
+              <button type="button" key={city} data-testid={`city-chip-${city}`} aria-pressed={cityFilter.has(city)}
+                className={"vms-chip" + (cityFilter.has(city) ? " vms-chip-on" : "")} onClick={() => toggleCity(city)}>{city}</button>
+            ))}
+          </div>
+        )}
+
+        {/* Stats live BEHIND the Veo coverage view only. On Schedule they are not
+            rendered at all — the schedule is for editing, not the coverage read-out. */}
+        {view === "veo" && stats && (
+          <div className="vms-stats" data-testid="stats">
             <Stat l="Matches with Veo" v={stats.covered} f={`of ${stats.total} this week`} />
             <Stat l="Camera nights used" v={stats.used} f={`of ${stats.capacity} available · ${stats.capacity ? Math.round((stats.used / stats.capacity) * 100) : 0}%`} />
             <Stat l="Open nights" v={stats.gaps} f="city-days with matches, no camera" />
@@ -259,13 +357,29 @@ export default function VeoMasterSchedule() {
         <div className="vms-card"><div className="vms-state">Loading Veo coverage…</div></div>
       ) : error && !week ? (
         <div className="vms-card"><div className="vms-state">{error} <button type="button" className="vms-btn" onClick={() => { setLoading(true); void load(weekRef); }}>Retry</button></div></div>
-      ) : !week ? null : view === "schedule" ? (
-        <ScheduleView week={week} busy={busy} onToggle={toggleIntent} />
+      ) : !week || !fweek ? null : view === "schedule" ? (
+        <ScheduleView week={fweek} busy={busy} onToggle={toggleIntent} onOpen={openCard} selectedId={drawerId} />
       ) : (
-        <VeoView week={week} stats={stats!} busy={busy} onCameras={setCameras} needEmoji={needEmoji} needClubhouse={needClubhouse} onExport={exportWorklist} />
+        <VeoView week={fweek} stats={stats!} busy={busy} onCameras={setCameras} needEmoji={needEmoji} needClubhouse={needClubhouse} onExport={exportWorklist} />
       )}
 
-      {error && week && <div className="vms-toast" role="status">{error}</div>}
+      {drawerOpen && drawerId != null && (
+        <MatchDrawer
+          key={drawerId}
+          apiId={drawerId}
+          cardVeo={drawerVeo}
+          siblings={drawerSiblings}
+          onClose={closeDrawer}
+          onDirtyChange={setDrawerDirty}
+          onSaved={(id, patch) => patchCard(id, patch)}
+          onToggleVeo={(id, en) => void toggleIntent(id, en)}
+          onStep={(id) => setDrawerId(id)}
+          onToast={showToast}
+        />
+      )}
+
+      {toastMsg ? <div className={"vms-toast" + (toastMsg.warn ? " vms-toast-warn" : "")} role="status">{toastMsg.text}</div>
+        : error && week ? <div className="vms-toast" role="status">{error}</div> : null}
     </div>
   );
 }
@@ -281,7 +395,18 @@ const CamIcon = () => (
 );
 
 // ── schedule view ───────────────────────────────────────────────────────────
-function ScheduleView({ week, busy, onToggle }: { week: VeoWeek; busy: boolean; onToggle: (id: number, en: boolean) => void }) {
+// Each match card is a real <button>: keyboard-focusable, Enter opens the drawer.
+// The VEO badge inside it is a role="switch" span (NOT a nested button — invalid
+// HTML) that stops propagation so toggling coverage never opens the drawer. The
+// open card is marked by a ring; nothing else is dimmed — the week stays legible
+// beside the pushed-open drawer.
+function ScheduleView({ week, busy, onToggle, onOpen, selectedId }: {
+  week: VeoWeek; busy: boolean; onToggle: (id: number, en: boolean) => void;
+  onOpen: (id: number) => void; selectedId: number | null;
+}) {
+  const veoKey = (e: React.KeyboardEvent, id: number, en: boolean) => {
+    if (e.key === "Enter" || e.key === " ") { e.preventDefault(); e.stopPropagation(); onToggle(id, en); }
+  };
   return (
     <div className="vms-card">
       {week.cities.map(({ city, cameras }) => {
@@ -299,13 +424,21 @@ function ScheduleView({ week, busy, onToggle }: { week: VeoWeek; busy: boolean; 
                   <div className={"vms-day" + (day.today ? " vms-today" : "")} key={day.iso}>
                     <div className="vms-day-h"><span className="vms-dow">{day.dow}</span><span className="vms-dnum">{String(day.date).padStart(2, "0")}</span></div>
                     {ms.length ? ms.map((m) => (
-                      <div className={"vms-slot" + (m.veo ? " vms-veo" : "")} key={m.apiId}>
+                      <button type="button" key={m.apiId} data-testid="card" data-id={m.apiId}
+                        className={"vms-slot vms-cardbtn" + (m.veo ? " vms-veo" : "") + (selectedId === m.apiId ? " vms-sel" : "")}
+                        aria-label={`${m.time} ${m.venue} — edit match ${m.apiId}`} onClick={() => onOpen(m.apiId)}>
                         <div className="vms-slot-t">{m.time}</div>
                         <div className="vms-slot-v">{m.venue}</div>
-                        <button type="button" className={"vms-cam" + (m.veo ? " vms-on" : "")} disabled={busy} aria-pressed={m.veo} title={m.veo ? "Remove Veo" : "Assign Veo"} onClick={() => onToggle(m.apiId, !m.veo)}>
+                        <span role="switch" data-testid="veo-badge" data-veo={m.apiId} tabIndex={0}
+                          className={"vms-cam" + (m.veo ? " vms-on" : "")} aria-checked={m.veo}
+                          aria-label={`Veo camera for match ${m.apiId}`}
+                          title={m.veo ? "Remove Veo" : "Assign Veo"}
+                          onClick={(e) => { e.stopPropagation(); if (!busy) onToggle(m.apiId, !m.veo); }}
+                          onKeyDown={(e) => !busy && veoKey(e, m.apiId, !m.veo)}>
                           <CamIcon />Veo
-                        </button>
-                      </div>
+                        </span>
+                        <span className="vms-edithint">EDIT</span>
+                      </button>
                     )) : <div className="vms-none">No sessions</div>}
                   </div>
                 );
@@ -575,6 +708,27 @@ const CSS = `
 .vms-slot.vms-veo .vms-cam{border-color:rgba(255,255,255,.30);background:rgba(255,255,255,.07);color:#CBEBDA}
 .vms-cam svg{width:11px;height:11px;display:block}
 .vms-none{font-size:10.5px;color:var(--muted);font-weight:700;padding:6px 2px}
+
+/* card-as-button + selection ring (drawer edit) */
+.vms{transition:margin-right .17s ease-out}
+.vms-cardbtn{display:block;width:100%;text-align:left;cursor:pointer;font-family:inherit;position:relative}
+.vms-cardbtn:hover{border-color:#9FC4B2;box-shadow:0 2px 7px rgba(0,42,28,.09)}
+.vms-cardbtn:focus-visible{outline:2px solid var(--mintInk);outline-offset:2px}
+.vms-cardbtn.vms-sel{box-shadow:0 0 0 3px var(--mint),0 6px 18px rgba(0,42,28,.20)}
+.vms-cardbtn.vms-veo.vms-sel{box-shadow:0 0 0 3px var(--mint),0 6px 18px rgba(0,42,28,.30)}
+.vms-edithint{position:absolute;right:8px;bottom:7px;font-size:9px;font-weight:900;letter-spacing:.5px;color:var(--mintInk);opacity:0}
+.vms-slot.vms-veo .vms-edithint{color:var(--mint)}
+.vms-cardbtn:hover .vms-edithint,.vms-cardbtn:focus-visible .vms-edithint{opacity:1}
+span.vms-cam{cursor:pointer}
+span.vms-cam:focus-visible{outline:2px solid var(--mintInk);outline-offset:2px}
+
+/* city filter chips */
+.vms-filter{display:flex;align-items:center;gap:8px;flex-wrap:wrap;padding:12px 20px;border-bottom:1px solid var(--line)}
+.vms-chip{border:1px solid var(--line);background:#fff;color:var(--forest);font-family:inherit;font-size:11.5px;font-weight:800;
+  padding:6px 13px;border-radius:99px;cursor:pointer}
+.vms-chip:hover{background:var(--slot)}
+.vms-chip-on{background:var(--forest);border-color:var(--forest);color:#fff}
+.vms-toast-warn{background:var(--coralInk)}
 
 /* veo grid */
 .vms-grid-wrap{overflow-x:auto}

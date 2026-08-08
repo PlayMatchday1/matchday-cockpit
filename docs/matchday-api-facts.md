@@ -189,6 +189,14 @@ team configuration (e.g. a 2-team match with per-team size 10 wants 20 players,
 but `maxPlayerCount = 10` caps it at 10). Any screen that edits team sizes must
 either surface `maxPlayerCount` too or explicitly account for it.
 
+FIXED in Phase 7 Part E: the full match editor now surfaces `maxPlayerCount` as
+an editable field beside the team-size controls and shows an inline warning when
+the team layout seats more players than the cap allows. It does NOT auto-correct
+(silently raising a capacity is its own surprise). The field is modeled as
+NULLABLE, not a NUMERIC "blank = no change" field: null and 0 are both meaningful
+(special event), so a blank box becomes null, 0 stays 0, and clearing it is a
+real change. See `maxPlayerCount` in matchEditModel's EDITABLE_KEYS + NULLABLE_NUM.
+
 ## Running scripts against this client
 
 Scripts that import the server-only write module run with:
