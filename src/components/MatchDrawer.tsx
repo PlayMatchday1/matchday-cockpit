@@ -21,8 +21,15 @@ import { supabase } from "@/lib/supabase";
 import { diffKeys, pick, MONEY_KEYS } from "@/lib/matchEditModel";
 import { buildStartDate, shiftedEndDate, isInvertedPair, wallDate, wallTime } from "@/lib/matchWallClock";
 import { tzLabelOfCity, tzShift } from "@/lib/matchTimezone";
+import { envBadge, type BadgeEnv } from "@/lib/matchEnvBadge";
+import { centsToDollars, dollarsToCents } from "@/lib/matchMoney";
 
 export const DRAWER_W = 480;
+
+// THE environment this drawer targets. This single value builds the request URL
+// AND the badge, so the two can never disagree (Phase 10.2). Change it here and
+// both move together.
+const DRAWER_ENV: BadgeEnv = "production";
 
 export type DrawerPatch = { name: string; startDate: string; fieldId: number; venue: string | null; city: string | null };
 export type DrawerMatch = { apiId: number; veo: boolean; siblings: number[] };
@@ -57,9 +64,9 @@ async function authFetch(path: string, init?: RequestInit): Promise<Response> {
   const token = data.session?.access_token;
   return fetch(path, { ...init, headers: { ...(init?.headers ?? {}), ...(token ? { Authorization: `Bearer ${token}` } : {}), "Content-Type": "application/json" }, cache: "no-store" });
 }
-const money = (c: unknown) => "$" + (Number(c ?? 0) / 100).toFixed(2);
-const dollars = (c: unknown) => (Number(c ?? 0) / 100).toFixed(2);
-const centsOf = (d: string) => Math.round(parseFloat(d) * 100);
+const money = (c: unknown) => "$" + centsToDollars(c);
+const dollars = centsToDollars;
+const centsOf = dollarsToCents;
 const hhmm12 = (t: string) => {
   const [H, M] = t.split(":").map(Number);
   const ap = H >= 12 ? "PM" : "AM";
@@ -93,7 +100,7 @@ export default function MatchDrawer({
     let alive = true;
     setDetail(null); setLoaded(null); setState(null); setLoadErr(null); setMsg(null);
     (async () => {
-      const res = await authFetch(`/api/matchday/production/matches/${apiId}`);
+      const res = await authFetch(`/api/matchday/${DRAWER_ENV}/matches/${apiId}`);
       const json = await res.json().catch(() => ({}));
       if (!alive) return;
       if (!res.ok) { setLoadErr(json?.error ?? `HTTP ${res.status}`); return; }
@@ -178,7 +185,7 @@ export default function MatchDrawer({
     const keys = Object.keys(body);
     if (!keys.length) return;
     setSaving(true); setMsg(null);
-    const res = await authFetch(`/api/matchday/production/matches/${apiId}`, { method: "PUT", body: JSON.stringify({ changes: body }) });
+    const res = await authFetch(`/api/matchday/${DRAWER_ENV}/matches/${apiId}`, { method: "PUT", body: JSON.stringify({ changes: body }) });
     const json = await res.json().catch(() => ({}));
     setSaving(false);
     if (!res.ok) { setMsg({ kind: json?.ambiguous ? "warn" : "err", text: json?.error ?? `HTTP ${res.status}` }); return; }
@@ -253,15 +260,17 @@ export default function MatchDrawer({
   const grpTag = (keys: string[]) => { const n = grp(keys); return n ? <span className="mdw-n">{n} changed</span> : null; };
   const dirtyCls = (k: string) => "mdw-f" + (uiChanged.includes(k) ? " mdw-dirty" : "");
 
+  const badge = envBadge(DRAWER_ENV); // derived from the env that routes the request
   return (
     <aside
       ref={panelRef}
-      className="mdw"
+      className={"mdw" + (badge.tone === "prod" ? " mdw-prod" : "")}
       role="dialog"
       aria-modal="false"
-      aria-label={m ? `Edit match ${apiId}` : `Match ${apiId}`}
+      aria-label={`${m ? "Edit" : ""} ${badge.tone === "prod" ? "PRODUCTION " : "staging "}match ${apiId}`.trim()}
       tabIndex={-1}
       data-testid="drawer"
+      data-env={DRAWER_ENV}
       style={{ width: DRAWER_W }}
     >
       <style>{CSS}</style>
@@ -278,7 +287,7 @@ export default function MatchDrawer({
         <div className="mdw-chips">
           <span className="mdw-chip id">ID {apiId}</span>
           <span className="mdw-chip tz" data-testid="dr-tzchip">{tzLabel.toUpperCase()}</span>
-          <span className="mdw-chip stg">STAGING · GUARDED</span>
+          <span className={"mdw-chip " + (badge.tone === "prod" ? "prod" : "stg")} data-testid="dr-envbadge">{badge.tone === "prod" ? "● " : ""}{badge.label}</span>
           <a className="mdw-full" href={`/match-ops/matches/${apiId}`}>Open full editor →</a>
         </div>
       </div>
@@ -434,6 +443,12 @@ const CSS = `
 .mdw-chip.id{background:#14432F;color:#B7DECB}
 .mdw-chip.tz{background:#14432F;color:#B7DECB}
 .mdw-chip.stg{background:#F2E31D;color:#231F00}
+/* PRODUCTION is unmistakable: solid red pill with a live dot + distinct label,
+   AND a red header ground + red left rail on the whole drawer — not a colour swap
+   on the same chip. */
+.mdw-chip.prod{background:#E5121B;color:#fff;font-weight:800;letter-spacing:.09em;box-shadow:0 0 0 2px rgba(229,18,27,.35)}
+.mdw.mdw-prod{border-left:5px solid #E5121B}
+.mdw.mdw-prod .mdw-head{background:#5A0B0F}
 .mdw-full{margin-left:auto;color:#2CDB87;font-size:12.5px;text-decoration:none;font-weight:600;white-space:nowrap}
 .mdw-full:hover{text-decoration:underline}
 .mdw-body{flex:1 1 auto;overflow-y:auto;padding:4px 18px 18px}
@@ -456,8 +471,10 @@ const CSS = `
 .mdw input:disabled{background:#F1F4F1;color:#67746C;cursor:not-allowed}
 .mdw-f.mdw-dirty input,.mdw-f.mdw-dirty select{border-color:#9CB6DD;background:#F4F8FE}
 .mdw-money{position:relative}
-.mdw-money input{padding-left:24px}
-.mdw-money span{position:absolute;left:11px;top:9px;color:#5C6B62}
+/* [type=number] to out-specify the general ".mdw input[type=number]" rule, else
+   padding-left is 11px and the "$" overlay covers the leading digit ($12 -> $2). */
+.mdw-money input[type=number]{padding-left:24px}
+.mdw-money span{position:absolute;left:11px;top:9px;color:#5C6B62;pointer-events:none}
 .mdw-hint{font-size:12px;color:#5C6B62;margin-top:6px;line-height:1.45}
 .mdw-hint.warn{color:#7A5200}
 .mdw-sub{font-size:11.5px;color:#5C6B62;margin-top:4px;font-weight:650}

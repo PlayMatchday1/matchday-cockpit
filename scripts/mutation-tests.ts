@@ -8,6 +8,8 @@ import "server-only"; // no-op under --conditions=react-server
 import { diffKeys, pick, fieldChanged, normValue } from "../src/lib/matchEditModel";
 import { buildStartDate, shiftedEndDate } from "../src/lib/matchWallClock";
 import { assertAllowedEndpoint, DeniedEndpointError } from "../src/lib/matchdayStageApi";
+import { centsToDollars, dollarsToCents } from "../src/lib/matchMoney";
+import { envBadge } from "../src/lib/matchEnvBadge";
 
 let pass = 0, fail = 0;
 const ok = (n: string) => { pass++; console.log(`  ok  ${n}`); };
@@ -72,6 +74,27 @@ function mutation<T>(name: string, real: T, broken: T, assertion: (impl: T) => b
     try { fn("PATCH", url); return false; } catch (e) { return e instanceof DeniedEndpointError; }
   };
   mutation("endpoint-deny (assertAllowedEndpoint)", assertAllowedEndpoint, brokenAssert, assertion);
+}
+
+// ── money round-trip: cents in -> correct dollars -> same cents out (Phase 10.2) ─
+{
+  const cases: [number | null, string][] = [[0, "0.00"], [200, "2.00"], [1200, "12.00"], [9950, "99.50"], [12000, "120.00"]];
+  let allOk = true;
+  for (const [cents, disp] of cases) {
+    const shown = centsToDollars(cents);
+    const back = dollarsToCents(shown);
+    if (shown !== disp || back !== cents) { allOk = false; bad(`money round-trip ${cents}`, `shown ${JSON.stringify(shown)} (want ${disp}), back ${back}`); }
+  }
+  if (allOk) ok("money round-trip: 0/200/1200/9950/12000 -> correct dollars -> same cents (incl leading-1 and >$100)");
+  // null: displays blank in the editors (blank check), registers no change
+  ok(`money null: fieldChanged(registrationPrice, null, "") === ${fieldChanged("registrationPrice", null, "")} (no change)`);
+}
+
+// ── env badge: derived, production is distinct; hardcoding it is caught ────────
+{
+  const brokenBadge = (() => ({ label: "STAGING · GUARDED", tone: "stage" as const })) as typeof envBadge;
+  const assertion = (fn: typeof envBadge) => fn("production").tone === "prod" && /PRODUCTION|LIVE/.test(fn("production").label) && fn("staging").tone === "stage";
+  mutation("env-badge (derived, production distinct)", envBadge, brokenBadge, assertion);
 }
 
 console.log(`\n${pass} passed, ${fail} failed`);

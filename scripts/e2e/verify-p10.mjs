@@ -163,6 +163,26 @@ async function main() {
   is("deleted 2nd manager labelled 'not in ... list'", sm.some((t) => /not in .* list/.test(t)), true);
   is("deleted manager note shown", await T("dr-delnote").isVisible(), true);
 
+  console.log("\n== Defect 1: price display — '$' must not overlap the leading digit ==");
+  await openCard(2415); // fresh id -> refetch; prodDetail registrationPrice 12000 -> "120.00" (over $100, leading 1)
+  is("price input.value = 120.00 (correct)", await T("in-registrationPrice").inputValue(), "120.00");
+  const priceGeo = await T("in-registrationPrice").evaluate((inp) => {
+    const money = inp.closest(".mdw-money"); const span = money.querySelector("span");
+    const ir = inp.getBoundingClientRect(), sr = span.getBoundingClientRect();
+    const pad = parseFloat(getComputedStyle(inp).paddingLeft);
+    return { textStart: ir.left + pad, dollarRight: sr.right, pad };
+  });
+  is(`price padding-left applied (24px, was 11px)`, priceGeo.pad >= 20, true);
+  is(`'$' right edge (${Math.round(priceGeo.dollarRight)}) <= input text start (${Math.round(priceGeo.textStart)}) — digit visible`, priceGeo.dollarRight <= priceGeo.textStart + 0.5, true);
+
+  console.log("\n== Defect 2: environment badge derived + production distinct ==");
+  is("badge text says PRODUCTION (derived)", /PRODUCTION/.test(await T("dr-envbadge").textContent()), true);
+  is("badge does NOT say STAGING on a production drawer", /STAGING/.test(await T("dr-envbadge").textContent()), false);
+  is("drawer data-env = production (same value that routes the request)", await T("drawer").getAttribute("data-env"), "production");
+  is("badge has the prod tone class (distinct treatment)", await T("dr-envbadge").evaluate((e) => e.classList.contains("prod")), true);
+  is("production drawer carries the red rail (mdw-prod)", await T("drawer").evaluate((e) => e.classList.contains("mdw-prod")), true);
+  is("no 'STAGING' text anywhere in the production drawer", (await page.locator(".mdw").innerText()).includes("STAGING"), false);
+
   console.log("\n== MUTATION (DOM): push-grid clearance ==");
   await openCard(2470);
   const dbox = await T("drawer").boundingBox();

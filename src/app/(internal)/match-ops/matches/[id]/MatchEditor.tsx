@@ -383,8 +383,10 @@ const CSS = `
 .me input:focus,.me select:focus,.me textarea:focus{outline:2px solid var(--mint);outline-offset:-1px;border-color:var(--mint)}
 .me input:disabled,.me select:disabled{background:var(--slot);color:var(--faint);cursor:not-allowed}
 .me .money{position:relative}
-.me .money span{position:absolute;left:11px;top:50%;transform:translateY(-50%);font-size:13px;font-weight:850;color:var(--muted)}
-.me .money input{padding-left:24px}
+.me .money span{position:absolute;left:11px;top:50%;transform:translateY(-50%);font-size:13px;font-weight:850;color:var(--muted);pointer-events:none}
+/* [type=number] to out-specify ".me input[type=number]" — otherwise padding-left
+   is 11px and the "$" overlay covers the leading digit ($12 -> $2). */
+.me .money input[type=number]{padding-left:24px}
 .me .f.dirty input,.me .f.dirty select,.me .f.dirty textarea{border-color:var(--blueEdge);background:var(--blue)}
 .me .f.dirty label{color:var(--blueInk)}
 .me .tg{display:flex;align-items:center;gap:11px;padding:9px 0}

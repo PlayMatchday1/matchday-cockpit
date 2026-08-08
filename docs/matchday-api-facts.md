@@ -412,6 +412,28 @@ every available format total.
   NOT dormant. autoCanceledMinutes is LIVE too (17256 = 75, autoCanceled true).
   Staging reading zero for all of them was TEST DATA, not evidence.
 
+## Phase 10.2 — two drawer defects fixed
+
+- Price "$2.00 for a $12.00 match" was DISPLAY-ONLY (a CSS specificity collision:
+  `.mdw-money input` padding-left:24px was overridden to 11px by the general
+  `.mdw input[type=number]` rule, so the "$" overlay covered the leading digit).
+  The value and diff were always correct — on a clean load the diff is EMPTY, so
+  no production match could ever have been written a wrong price. Fixed by making
+  the money padding rule `[type=number]`-specific (same fix in the full editor).
+  Cents<->dollars centralised in src/lib/matchMoney.ts; round-trip proven for
+  0/200/1200/9950/12000 (+ null shows blank, no change).
+- The environment badge is now DERIVED (src/lib/matchEnvBadge.ts) from the single
+  DRAWER_ENV constant that also builds the request URL, so badge and target can't
+  disagree. Production is unmistakable: a solid red "● PRODUCTION — LIVE EDITS"
+  pill plus a red header ground and left rail on the whole drawer (not a colour
+  swap on the same chip). Mutation-tested (hardcoding the badge fails the assertion).
+- HARDCODED-LABEL AUDIT (reported, not fixed): (1) the drawer's "Open full editor →"
+  links to `/match-ops/matches/{id}`, which is the STAGING full editor — a
+  production drawer points at a staging editor for the same id (env mismatch).
+  (2) the full editor's "STAGING · guarded" chip is a hardcoded constant — accurate
+  today (that editor is staging-only) but not derived; it should use envBadge if
+  the editor is ever repointed.
+
 ## Running scripts against this client
 
 Scripts that import the server-only write module run with:
