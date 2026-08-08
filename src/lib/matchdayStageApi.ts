@@ -55,11 +55,16 @@ const PRODUCTION_WRITES_ENABLED = false;
 
 // Env var names per environment. Staging and production credentials are wholly
 // separate; the two are never crossed and production vars are never repointed.
+// EVERY name encodes its environment (STAGE / PROD) so staging code can never be
+// pointed at production by a generic name six months from now. There is NO
+// default base URL for either environment: an unset base throws with the missing
+// variable named, loudly — a silent fallback is the same failure mode as the env
+// flag STEP 1 deliberately refused. The PROD write credentials live ONLY in
+// .env.local (never Vercel); the deployed Clubhouse must not gain write creds.
 const CRED_VARS: Record<MatchdayEnv, { base: string; email: string; password: string }> = {
   staging: { base: "MATCHDAY_STAGE_API_BASE_URL", email: "MATCHDAY_STAGE_API_EMAIL", password: "MATCHDAY_STAGE_API_PASSWORD" },
-  production: { base: "MATCHDAY_API_BASE_URL", email: "MATCHDAY_API_EMAIL", password: "MATCHDAY_API_PASSWORD" },
+  production: { base: "MATCHDAY_PROD_BASE_URL", email: "MATCHDAY_PROD_API_EMAIL", password: "MATCHDAY_PROD_API_PASSWORD" },
 };
-const PROD_DEFAULT_BASE = "https://playmatchday.herokuapp.com";
 
 const REFRESH_SKEW_MS = 120_000;
 const WRITE_TIMEOUT_MS = 30_000;
@@ -124,7 +129,7 @@ type Creds = { email: string; password: string; baseUrl: string };
 function getCreds(env: MatchdayEnv): Creds {
   const vars = CRED_VARS[env];
   if (!vars) throw new StageConfigError(`Unknown environment ${JSON.stringify(env)}`);
-  const baseUrl = process.env[vars.base] ?? (env === "production" ? PROD_DEFAULT_BASE : undefined);
+  const baseUrl = process.env[vars.base]; // NO default — an unset base must throw, not fall back
   const email = process.env[vars.email];
   const password = process.env[vars.password];
   if (!baseUrl) throw new StageConfigError(`Missing ${vars.base}`);
