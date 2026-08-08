@@ -36,6 +36,7 @@ function I({ children }: { children: React.ReactNode }) {
 }
 
 export const MATCH_OPS_SECTIONS: MatchOpsSection[] = [
+  { key: "gameday", group: "Operations", label: "Gameday Ops", href: "/match-ops/gameday", desc: "Today's matches, soonest first — what's about to go wrong", access: "matchops", icon: <I><circle cx="12" cy="12" r="9" /><path d="M12 7v5l3 2" /></I> },
   { key: "master", group: "Operations", label: "Master Schedule", href: "/match-ops/master-schedule", desc: "Recurring weekly slots, by city", access: "matchops", icon: <I><rect x="3" y="4" width="18" height="17" rx="2.5" /><path d="M3 9h18M8 2v4M16 2v4" /></I> },
   { key: "slate-review", group: "Operations", label: "Slate Review", href: "/match-ops/slate-review", desc: "Weekly per-city decision snapshot", access: "matchops", icon: <I><path d="M4 5h16v14H4z" /><path d="M8 9h8M8 13h8M8 17h5" /></I> },
   { key: "pipeline", group: "Operations", label: "Field Pipeline", href: "/match-ops/field-pipeline", desc: "Venues we're still chasing", access: "tech", icon: <I><path d="M3 5h18l-7 8v6l-4 2v-8z" /></I> },

@@ -545,3 +545,54 @@ Scripts that import the server-only write module run with:
 (`server-only` is installed as a devDep and resolves to a no-op under that
 condition; without the flag it throws - which is the proof it can't reach a
 client bundle.)
+
+## Gameday Ops — the live day board (Phase 15)
+
+Probed on staging `GET /admin/matches`. The board reads matches LIVE (never the
+synced mirror). Where the mockup (today-v1_6.html) and the API disagreed, the API won:
+
+- LIST endpoint: `GET /admin/matches?fromDate&toDate&page&limit&sortColumn&sortDirection`.
+  `fromDate`/`toDate` are `YYYY-MM-DD` and bound the WALL-CLOCK `startDate` date —
+  exactly the operator's "day", so a day fetch is `fromDate=toDate=<day>`. There is
+  NO other date filter (startDate/dateFrom/etc. → 400 "property should not exist").
+  `cityId` IS accepted but we DON'T use it — the board needs every city for the chips
+  and their counts, so city filtering is client-side. Response:
+  `{ page, limit, totalItems, data: Match[] }`; each list item is FULLY populated
+  (incl. `_count`, `field.city.timeZone`, `manager`, `teams`, the ladder).
+- ORDER is by the REAL instant. Each match carries `startDate` (wall-clock, for the
+  local time + `field.city.timeZone.abbr` label) AND `startDateUtc` (the true instant).
+  Sort by `startDateUtc` — Atlanta 6:00 PM ET kicks off before Austin 6:30 PM CT even
+  though its clock reads later. NO per-city offset maths exist in the board (the
+  mockup invented them because it had no real timestamps), so the mockup's "day
+  offset" auto-cancel bug cannot occur.
+- CURRENT FAKES ARE OBSERVED, not derived. `_count = { players, fakePlayers }`:
+  `players` = registered real players, `fakePlayers` = actual fakes on the match NOW.
+  The mockup DERIVED the current fake count from the ladder; the API reports it, so
+  the board uses `_count.fakePlayers`. real + fake + open === capacity, exactly (open
+  is the remainder). **This resolves the Part-B question**: the current fake count is
+  whatever the backend reports; the `fakeSpotLeft{36,24,12,6,3}h` ladder drives ONLY
+  the next-release forecast (at the soonest upcoming mark, fakes drop to that rung,
+  clamped by room). Below the 3h mark there is no further mark, so "no more releases"
+  — but the displayed fake NUMBER is observed, not assumed, so the last-hours worry in
+  the spec does not apply.
+- CANCELLED = `isCancelled` (the derived did-it-happen, READONLY). NOT `autoCanceled`,
+  which is a policy flag — see the auto_canceled memory. The cancelled band keys on
+  `isCancelled`.
+- `autoCanceledMinutes` is MINUTES before kickoff (spec says hours; spec is wrong —
+  already recorded above). Colour is by distance to the DEADLINE (kickoff −
+  autoCanceledMinutes), thresholds CRIT_HOURS=3 / WARN_HOURS=6, and only when SHORT
+  (`_count.players < minPlayerCount`), upcoming, capped, not cancelled. A match meeting
+  its minimum is never coloured.
+- `maxPlayerCount` null/0 = special event (no cap): the board shows "no cap" and
+  draws no fill bar or minimum marker.
+- CONFLICT — the drawer field set. Part F listed teams/category/type/capacity/ladder/
+  auto-bump as in-drawer edits, but `teamNumbers` is WRITE-ONLY (can't be read back or
+  diffed — team count/shape is the roster editor's job) and the shipped Master
+  Schedule drawer (MatchDrawer, the "same pattern" Part F names) edits name / field /
+  manager / price / spot price / guest / date-time. Gameday reuses MatchDrawer as-is
+  (same guarded production route, same fieldChanged/pick); the fuller field set is one
+  click away via its "Open full editor →". The "lower a rung → fake count moves" live
+  recompute does not apply on real data, because the current fake count is OBSERVED,
+  not ladder-derived — editing a rung changes the forecast, which the board shows.
+- Veo is Clubhouse-only (`GET /api/veo`, `POST /api/veo/intent`), NOT a MatchDay field;
+  it saves instantly and stays out of the match diff.
