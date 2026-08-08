@@ -480,6 +480,40 @@ every available format total.
   Recommendation for the roster phase: consider adding `password` to
   DENY_WRITE_FIELDS as belt-and-suspenders (we never write it).
 
+## Roster endpoints (Phase 13) — corrected against the live API
+
+All proven to round-trip on staging (match 2470, cleaned up), and the two ids
+matter (getting them wrong targets the wrong record):
+  add player   POST   /admin/matches/{id}/players/{playerId}   {team, playerNumber}
+  add fake     POST   /admin/matches/{id}/fake-players          {team, playerNumber}
+  add fakes    POST   /admin/matches/{id}/batch/fake-players    {totalFakes}
+  move         POST   /admin/user-matches                       {userMatchId, team, playerNumber}
+  set/unset fake PATCH /admin/players/{playerId}/fake-player     (playerId = userId)
+  remove       DELETE /admin/matches/user-matches/{userMatchId}
+  read roster  GET    /admin/matches/{id}/players
+  search       GET    /admin/players?email|id&limit&page&sort
+In the roster row: `id` = userMatchId (move, remove), `userId` = playerId (add, fake).
+
+CONFLICTS with the mockup / Phase-6 inventory (API wins):
+  - REMOVE is DELETE /admin/matches/user-matches/{userMatchId}. The inventory's
+    DELETE /admin/matches/{id}/players/{playerId} returns 403 USER_NOT_JOINED — so
+    remove keys on userMatchId, NOT playerId.
+  - MARK-ABSENT: the documented PATCH /admin/matches/{id}/user-matches/{umId}/absent
+    (and 3 variants) all 404 "Cannot PATCH" on staging — the route is not
+    registered. Absent is UNAVAILABLE and was omitted from the roster build.
+  - add-fake to a FINISHED / over-capacity match returns 2xx with an id but does NOT
+    persist a roster row (and that id is not a user-match) — only add to an active
+    match with an open slot.
+  - bodyless writes (DELETE, PATCH .../fake-player) must NOT send Content-Type:
+    application/json with an empty body (400) — the client now omits it.
+
+OPEN QUESTION — removing a player who PAID (Phase 13 Part 4, do not guess):
+  Removal is NOT a refund. refund-and-cancel is a SEPARATE endpoint and is on the
+  ENDPOINT deny-list (blocked in Clubhouse). What happens to an existing charge when
+  a paid player is removed — stays / voided / something else — is UNCONFIRMED. The
+  removal confirm states this and says to check before removing a paid player. This
+  must be verified before it becomes folklore.
+
 ## Running scripts against this client
 
 Scripts that import the server-only write module run with:
