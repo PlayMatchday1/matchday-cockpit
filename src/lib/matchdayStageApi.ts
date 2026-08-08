@@ -51,7 +51,7 @@ const HOSTS: Record<MatchdayEnv, string> = {
 // THE BOLT. Flip this ONE constant (in a reviewed change, next phase) to unbolt
 // production writes. Not read from env — an env flag is exactly the kind of thing
 // that gets flipped by accident in a dashboard.
-const PRODUCTION_WRITES_ENABLED = false;
+const PRODUCTION_WRITES_ENABLED = true;
 
 // Env var names per environment. Staging and production credentials are wholly
 // separate; the two are never crossed and production vars are never repointed.
