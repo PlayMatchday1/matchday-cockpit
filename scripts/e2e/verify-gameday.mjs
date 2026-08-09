@@ -108,6 +108,7 @@ async function main() {
   const ctx = await browser.newContext({ viewport: { width: 1440, height: 1200 }, storageState });
   await routes(ctx);
   const page = await ctx.newPage();
+  await page.addInitScript(() => localStorage.setItem("gameday-view", "detail")); // existing assertions target the card view
   const load = async () => { await page.goto(PAGE, { waitUntil: "domcontentloaded" }); await page.waitForSelector('[data-testid="bands"]', { timeout: 30000 }); await page.waitForTimeout(150); };
   const tilesIn = (band) => page.$$eval(`[data-testid="band-${band}"] [data-testid="tile"]`, (els) => els.map((e) => Number(e.getAttribute("data-id"))));
   const tile = (id) => `[data-testid="tile"][data-id="${id}"]`;
@@ -202,6 +203,7 @@ async function main() {
   const pctx = await browser.newContext({ viewport: { width: 390, height: 844 }, isMobile: true, hasTouch: true, storageState });
   await routes(pctx);
   const ph = await pctx.newPage();
+  await ph.addInitScript(() => localStorage.setItem("gameday-view", "detail"));
   await ph.goto(PAGE, { waitUntil: "domcontentloaded" }); await ph.waitForSelector('[data-testid="band-soon"]'); await ph.waitForTimeout(200);
   { const o = await overflow(ph); const past = await ph.evaluate(() => { const w = innerWidth;
       const inScroller = (el) => { let n = el.parentElement; while (n) { const s = getComputedStyle(n); if (s.overflowX === "auto" || s.overflowX === "scroll") return true; n = n.parentElement; } return false; };

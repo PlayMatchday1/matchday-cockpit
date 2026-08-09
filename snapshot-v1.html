@@ -1,0 +1,542 @@
+<!doctype html>
+<html lang="en">
+<head>
+<meta charset="utf-8">
+<meta name="viewport" content="width=device-width,initial-scale=1">
+<title>Gameday Ops — Snapshot</title>
+<style>
+*{box-sizing:border-box}
+:root{
+  --ink:#0e1a13; --ink2:#3d5349; --ink3:#5c7168;
+  --line:#dde6e1; --bg:#f2f6f4; --card:#fff;
+  --grn:#146c43; --grnbg:#e6f4ec; --grnln:#9fd3b6;
+  --amb:#8a5600; --ambbg:#fdf2e0; --ambln:#e8c383;
+  --red:#b3241f; --redbg:#fdecea; --redln:#f0a9a4;
+  --grey:#ccd7d1;
+  --focus:#0b6bcb;
+}
+html,body{margin:0;padding:0}
+body{
+  font:14px/1.45 ui-sans-serif,-apple-system,"Segoe UI",Roboto,Helvetica,Arial,sans-serif;
+  color:var(--ink); background:var(--bg);
+  -webkit-font-smoothing:antialiased;
+}
+.wrap{max-width:1220px;margin:0 auto;padding:16px 16px 64px}
+
+/* ---------- header ---------- */
+.head{background:var(--card);border:1px solid var(--line);border-radius:14px;padding:16px 18px;margin-bottom:14px}
+.headtop{display:flex;align-items:flex-start;gap:14px;flex-wrap:wrap}
+.h1{font-size:23px;font-weight:700;letter-spacing:-.02em;margin:0}
+.hsub{color:var(--ink2);font-size:14px;margin:0 0 0 2px}
+.livetag{
+  margin-left:auto;display:inline-flex;align-items:center;gap:7px;
+  background:#c0201b;color:#fff;font-size:11px;font-weight:700;letter-spacing:.08em;
+  padding:6px 11px;border-radius:999px;white-space:nowrap;
+}
+.livedot{width:7px;height:7px;border-radius:50%;background:#fff;display:block}
+.blurb{color:var(--ink2);margin:10px 0 0;max-width:74ch}
+
+.rowctl{display:flex;align-items:center;gap:10px;flex-wrap:wrap;margin-top:14px}
+.daynav{display:flex;align-items:center;gap:8px}
+.daylab{font-weight:700;font-size:15px;display:flex;flex-direction:column;line-height:1.15}
+.daylab small{font-weight:700;font-size:10px;letter-spacing:.1em;color:var(--ink3)}
+.dl-short{display:none}
+.iconbtn{
+  width:34px;height:34px;border:1px solid var(--line);background:var(--card);
+  border-radius:9px;cursor:pointer;color:var(--ink2);font-size:15px;line-height:1;
+}
+.iconbtn:hover{background:#f6faf8}
+.chip{
+  border:1px solid var(--line);background:var(--card);color:var(--ink2);
+  border-radius:999px;padding:7px 14px;font-size:13px;font-weight:600;cursor:pointer;
+  display:inline-flex;align-items:center;gap:7px;white-space:nowrap;
+}
+.chip:hover{background:#f6faf8}
+.chip[aria-pressed="true"]{background:#12301f;border-color:#12301f;color:#fff}
+.chip .n{font-variant-numeric:tabular-nums;opacity:.85}
+.chip.warn{color:var(--red);border-color:var(--redln)}
+.chip.warn[aria-pressed="true"]{background:var(--red);border-color:var(--red);color:#fff}
+.chip:disabled{opacity:.45;cursor:default}
+.spacer{flex:1 1 auto;min-width:0}
+.filters{display:flex;align-items:center;gap:10px;min-width:0}
+
+/* view toggle */
+.seg{display:inline-flex;background:#e7eeea;border-radius:10px;padding:3px;gap:3px}
+.seg button{
+  border:0;background:transparent;border-radius:8px;padding:7px 15px;min-height:34px;
+  font-size:13px;font-weight:700;color:var(--ink2);cursor:pointer;white-space:nowrap;
+}
+.seg button[aria-pressed="true"]{background:var(--card);color:var(--ink);box-shadow:0 1px 2px rgba(0,0,0,.10)}
+
+.cities{display:flex;align-items:center;gap:8px;flex-wrap:wrap;margin-top:12px;padding-top:12px;border-top:1px solid var(--line)}
+.cities .lab{font-size:10.5px;font-weight:800;letter-spacing:.12em;color:var(--ink3);margin-right:2px}
+
+/* ---------- legend ---------- */
+.legend{display:flex;gap:16px;flex-wrap:wrap;align-items:center;margin:0 2px 10px;color:var(--ink2);font-size:12px}
+.lg{display:inline-flex;align-items:center;gap:6px}
+.sw{width:11px;height:11px;border-radius:3px;display:block}
+.sw--red{background:var(--red)} .sw--amb{background:#d99400} .sw--grn{background:var(--grn)}
+
+/* ---------- snapshot table ---------- */
+.sheet{background:var(--card);border:1px solid var(--line);border-radius:14px;overflow:hidden}
+.colhead{
+  display:grid;align-items:center;gap:12px;
+  grid-template-columns:5px 92px minmax(150px,1.5fr) minmax(150px,1.25fr) 112px 104px 96px 58px;
+  padding:9px 14px 9px 0;border-bottom:1px solid var(--line);background:#fafcfb;
+  font-size:10px;font-weight:800;letter-spacing:.11em;color:var(--ink3);
+}
+.colhead > span{display:block}
+.rowlist{display:block}
+
+.r{
+  display:grid;align-items:center;gap:12px;
+  grid-template-columns:5px 92px minmax(150px,1.5fr) minmax(150px,1.25fr) 112px 104px 96px 58px;
+  padding:0 14px 0 0;border-bottom:1px solid var(--line);
+  background:var(--card);width:100%;text-align:left;border-left:0;border-right:0;border-top:0;
+  font:inherit;color:inherit;cursor:pointer;
+}
+.r:last-child{border-bottom:0}
+.r:hover{background:#f7fbf9}
+.r:focus-visible{outline:2px solid var(--focus);outline-offset:-2px}
+.rail{align-self:stretch;display:block;background:var(--grey)}
+.r.risk-red .rail{background:var(--red)}
+.r.risk-amber .rail{background:#d99400}
+.r.risk-green .rail{background:var(--grn)}
+.r.risk-red{background:var(--redbg)}
+.r.risk-red:hover{background:#fbe2df}
+
+.cell{display:block;padding:9px 0;min-width:0}
+
+/* time */
+.t1{display:block;font-weight:700;font-variant-numeric:tabular-nums;letter-spacing:-.01em}
+.t1 em{font-style:normal;font-size:10px;font-weight:800;color:var(--ink3);letter-spacing:.06em;margin-left:4px}
+.t2{display:block;font-size:12px;color:var(--ink3);font-variant-numeric:tabular-nums}
+
+/* match */
+.m1{display:block;font-weight:700;white-space:nowrap;overflow:hidden;text-overflow:ellipsis}
+.m2{display:block;font-size:12px;color:var(--ink3);white-space:nowrap;overflow:hidden;text-overflow:ellipsis}
+.flag{
+  display:inline-block;margin-left:6px;vertical-align:1px;
+  background:var(--ambbg);color:var(--amb);border:1px solid var(--ambln);
+  font-size:9.5px;font-weight:800;letter-spacing:.05em;padding:1px 5px;border-radius:4px;white-space:nowrap;
+}
+
+/* spots */
+.bar{display:block;position:relative;height:7px;border-radius:4px;background:#eef3f0;overflow:hidden}
+.seg1,.seg2{position:absolute;top:0;bottom:0;display:block}
+.seg1{left:0;background:var(--grn)}
+.seg2{background:repeating-linear-gradient(135deg,#e5a83a 0 4px,#f3cd8e 4px 8px)}
+.tick{position:absolute;top:-3px;bottom:-3px;width:2px;background:#12301f;display:block;border-radius:1px}
+.spotln{display:block;margin-top:5px;font-size:12px;color:var(--ink2);font-variant-numeric:tabular-nums;white-space:nowrap;overflow:hidden;text-overflow:ellipsis}
+.spotln b{color:var(--ink)}
+.spotln .fk{color:var(--amb)}
+
+/* min / short */
+.c-short{display:flex;align-items:baseline;gap:7px}
+.short{display:inline-flex;align-items:center;justify-content:center;min-width:50px;padding:3px 8px;border-radius:7px;font-weight:800;font-variant-numeric:tabular-nums;font-size:13px;flex:0 0 auto}
+.short.bad{background:var(--redbg);color:var(--red);border:1px solid var(--redln)}
+.short.warn{background:var(--ambbg);color:var(--amb);border:1px solid var(--ambln)}
+.short.ok{background:var(--grnbg);color:var(--grn);border:1px solid var(--grnln)}
+.minln{display:block;font-size:11.5px;color:var(--ink3);font-variant-numeric:tabular-nums;white-space:nowrap}
+
+/* cancel */
+.c1{display:block;font-weight:700;font-variant-numeric:tabular-nums}
+.c1.hot{color:var(--red)}
+.c2{display:block;font-size:11.5px;color:var(--ink3)}
+
+.mgr{display:block;font-size:13px;color:var(--ink2);white-space:nowrap;overflow:hidden;text-overflow:ellipsis}
+.price{display:block;text-align:right;font-weight:700;font-variant-numeric:tabular-nums}
+
+.empty{padding:34px 16px;text-align:center;color:var(--ink3)}
+
+/* ---------- detail (existing card view, abbreviated) ---------- */
+.cards{display:block}
+.card{background:var(--card);border:1px solid var(--line);border-left:5px solid var(--grey);border-radius:12px;padding:14px 16px;margin-bottom:12px}
+.card.risk-red{border-left-color:var(--red);background:var(--redbg)}
+.card.risk-amber{border-left-color:#d99400}
+.card.risk-green{border-left-color:var(--grn)}
+.ctop{display:flex;align-items:baseline;gap:12px;flex-wrap:wrap}
+.ctop .price{margin-left:auto;text-align:right}
+.cgrid{display:grid;grid-template-columns:repeat(4,minmax(0,1fr));gap:14px;margin-top:12px;padding-top:12px;border-top:1px solid var(--line)}
+.kv{display:block;min-width:0}
+.k{display:block;font-size:10px;font-weight:800;letter-spacing:.11em;color:var(--ink3);margin-bottom:3px}
+.v{display:block;font-size:13.5px;white-space:nowrap;overflow:hidden;text-overflow:ellipsis}
+
+.hidden{display:none !important}
+
+.foot{margin-top:14px;color:var(--ink3);font-size:12px;padding:0 2px}
+
+/* ---------- mobile ---------- */
+@media (max-width:820px){
+  .wrap{padding:8px 10px 56px}
+  .head{margin-bottom:10px;padding:14px 14px}
+  .legend{margin-bottom:8px}
+  .cities{margin-top:10px;padding-top:10px}
+  .colhead{display:none}
+  .r{
+    grid-template-columns:5px 1fr auto;
+    grid-template-areas:
+      "rail time  short"
+      "rail match short"
+      "rail spots spots"
+      "rail cxl   cxl";
+    gap:0 11px;padding:0 12px 0 0;
+  }
+  .rail{grid-area:rail}
+  .c-time{grid-area:time;padding:8px 0 0}
+  .c-match{grid-area:match;padding:0}
+  .c-spots{grid-area:spots;padding:7px 0 0}
+  .c-short{grid-area:short;padding:8px 0 0;align-self:start}
+  .c-cxl{grid-area:cxl;padding:4px 0 9px}
+  .m1{font-size:13.5px}
+  .m2{font-size:11.5px}
+  .spotln{margin-top:4px;font-size:11.5px}
+  .cxlmob{font-size:11.5px}
+  .c-mgr,.c-price{display:none}
+  .c-short{display:block}
+  .minln{margin-top:2px}
+  .t1{display:inline}
+  .t2{display:inline;margin-left:8px}
+  .c-cxl .c1,.c-cxl .c2{display:none}
+  .cxlmob{display:block;font-size:12px;color:var(--ink3);white-space:nowrap;overflow:hidden;text-overflow:ellipsis}
+  .cxlmob b{font-weight:700;color:var(--ink2)}
+  .r.risk-red .cxlmob b{color:var(--red)}
+  .cgrid{grid-template-columns:repeat(2,minmax(0,1fr))}
+  .h1{font-size:20px}
+  /* the blurb is read once; on a phone at a field it is 60px of nothing */
+  .blurb{display:none}
+  /* the date is already in the day nav one line below */
+  .hsub{display:none}
+  .livetag{font-size:10px;padding:5px 9px}
+  #f-today{display:none}
+  /* line 1: day nav + view toggle. line 2: the filter chips, scrolling sideways. */
+  .rowctl{gap:8px}
+  .daynav{order:1;gap:5px}
+  .iconbtn{width:30px;height:30px;font-size:14px}
+  .dl-long{display:none}
+  .dl-short{display:inline}
+  .daylab{flex-direction:row;align-items:baseline;gap:5px;font-size:13px}
+  .daylab small{font-size:9px}
+  .seg{padding:2px;gap:2px}
+  .seg button{padding:6px 10px;min-height:30px;font-size:12.5px}
+  .seg{order:2;margin-left:auto}
+  .spacer{order:3;flex:0 0 100%;min-width:100%;height:0}
+  .filters{order:4;flex:0 0 100%;overflow-x:auto;scrollbar-width:none;padding-bottom:2px}
+  .filters::-webkit-scrollbar{display:none}
+  .filters .chip{flex:0 0 auto}
+  /* colour is self-evident next to a −N chip; the key is desk-only */
+  .legend .key{display:none}
+  /* cities scroll sideways rather than eating three lines of header */
+  .cities{flex-wrap:nowrap;overflow-x:auto;-webkit-overflow-scrolling:touch;scrollbar-width:none;padding-bottom:2px}
+  .cities::-webkit-scrollbar{display:none}
+  .cities .chip{flex:0 0 auto}
+  .legend .lg{font-size:11.5px}
+}
+@media (min-width:821px){
+  .cxlmob{display:none}
+}
+</style>
+</head>
+<body>
+<div class="wrap">
+
+  <div class="head">
+    <div class="headtop">
+      <div>
+        <h1 class="h1">Gameday Ops</h1>
+        <p class="hsub" id="dstr">Sunday, August 9, 2026</p>
+      </div>
+      <span class="livetag"><span class="livedot"></span>PRODUCTION — LIVE EDITS</span>
+    </div>
+    <p class="blurb" id="blurb">One line per match, whole day on one screen. Red is heading for a cancel inside the next two hours — that is where your eyes should go first.</p>
+
+    <div class="rowctl">
+      <div class="daynav">
+        <button class="iconbtn" id="prev" aria-label="Previous day">‹</button>
+        <span class="daylab"><span class="dl-long">Sunday, August 9, 2026</span><span class="dl-short">Sun, Aug 9</span><small>TODAY</small></span>
+        <button class="iconbtn" id="next" aria-label="Next day">›</button>
+      </div>
+      <button class="chip" id="f-today" disabled>Today</button>
+      <span class="filters">
+        <button class="chip" id="f-all" data-filter="all" aria-pressed="true">All <span class="n" id="n-all">17</span></button>
+        <button class="chip warn" id="f-att" data-filter="att" aria-pressed="false">Needs attention <span class="n" id="n-att">11</span></button>
+        <button class="chip" id="f-still" data-filter="still" aria-pressed="false">Still to come <span class="n" id="n-still">17</span></button>
+      </span>
+      <span class="spacer"></span>
+      <span class="seg" role="group" aria-label="View">
+        <button id="v-snap" aria-pressed="true">Snapshot</button>
+        <button id="v-detail" aria-pressed="false">Detail</button>
+      </span>
+    </div>
+
+    <div class="cities" id="cities">
+      <span class="lab">CITIES</span>
+    </div>
+  </div>
+
+  <div class="legend" id="legend">
+    <span class="lg key"><span class="sw sw--red"></span>Short &amp; cancel call within 2h</span>
+    <span class="lg key"><span class="sw sw--amb"></span>Short, call later today</span>
+    <span class="lg key"><span class="sw sw--grn"></span>Minimum met</span>
+    <span class="spacer"></span>
+    <span class="lg">Sort
+      <button class="chip" id="s-time" aria-pressed="true">Time</button>
+      <button class="chip" id="s-risk" aria-pressed="false">Risk</button>
+    </span>
+  </div>
+
+  <div class="sheet" id="snapview">
+    <div class="colhead">
+      <span></span>
+      <span>KICKOFF</span>
+      <span>MATCH · FIELD</span>
+      <span>SPOTS</span>
+      <span>SHORT</span>
+      <span>AUTO-CANCEL</span>
+      <span>MANAGER</span>
+      <span style="text-align:right">PRICE</span>
+    </div>
+    <div class="rowlist" id="rows"></div>
+  </div>
+
+  <div class="cards hidden" id="detailview"></div>
+
+  <p class="foot" id="foot"></p>
+</div>
+
+<script>
+/* ------------------------------------------------------------------
+   Gameday Ops — Snapshot
+   One row per match. The whole slate on one screen, phone included.
+
+   The number that decides everything is REAL players short of the
+   minimum. Fakes fill spots but a fake cannot show up, so the shortfall
+   is computed on real only. (Whether MatchDay's auto-cancel agrees is
+   UNCONFIRMED — see the note in the footer.)
+------------------------------------------------------------------- */
+
+const NOW = 7*60 + 26;                 /* 7:26 AM, in minutes, CST frame */
+const HOT = 120;                       /* red when the cancel call is this close */
+
+/* mins = minutes from NOW until kickoff. acMin = auto-cancel lead, in MINUTES. */
+const M = [
+  {id:17325,t:"9:30 AM", tz:"CST", mins:124, name:"ATH Katy",             field:"ATH Katy",             city:"Houston",           cap:18, real:10, fake:6,  min:12, acMin:75, mgr:"Reda m",  price:1200},
+  {id:17331,t:"10:00 AM",tz:"CST", mins:154, name:"Soccer Central Field 4",field:"Soccer Central Complex",city:"San Antonio",      cap:16, real:0,  fake:12, min:8,  acMin:75, mgr:"Ricki",   price:1200},
+  {id:17340,t:"10:30 AM",tz:"CST", mins:184, name:"Zilker Park A",        field:"Zilker Metro Park",    city:"Austin",            cap:20, real:14, fake:2,  min:12, acMin:75, mgr:"Cami",    price:1200},
+  {id:17341,t:"11:00 AM",tz:"CST", mins:214, name:"Zilker Park B",        field:"Zilker Metro Park",    city:"Austin",            cap:18, real:7,  fake:4,  min:12, acMin:75, mgr:"Cami",    price:1200},
+  {id:17352,t:"12:00 PM",tz:"CST", mins:274, name:"Kickers Field 2",      field:"Kickers Soccer Park",  city:"Dallas / Fort Worth",cap:16, real:16, fake:0,  min:10, acMin:75, mgr:"Devon",   price:1400},
+  {id:17358,t:"1:00 PM", tz:"CST", mins:334, name:"Austin Sports Center 1",field:"Austin Sports Center",city:"Austin",            cap:18, real:5,  fake:8,  min:12, acMin:75, mgr:"Tobi",    price:1200},
+  {id:17359,t:"2:00 PM", tz:"CST", mins:394, name:"Austin Sports Center 2",field:"Austin Sports Center",city:"Austin",            cap:18, real:11, fake:3,  min:12, acMin:75, mgr:"Tobi",    price:1200},
+  {id:17364,t:"3:00 PM", tz:"CST", mins:454, name:"Norman Complex",       field:"Norman Soccer Complex",city:"Oklahoma City",     cap:14, real:3,  fake:2,  min:10, acMin:90, mgr:"Kayla",   price:1000},
+  {id:17370,t:"4:00 PM", tz:"CST", mins:514, name:"Soccer Central Field 1",field:"Soccer Central Complex",city:"San Antonio",     cap:16, real:12, fake:0,  min:8,  acMin:75, mgr:"Ricki",   price:1200},
+  {id:17377,t:"5:00 PM", tz:"CST", mins:574, name:"Kickers Field 5",      field:"Kickers Soccer Park",  city:"Dallas / Fort Worth",cap:20, real:9,  fake:5,  min:12, acMin:75, mgr:"Devon",   price:1400},
+  {id:17381,t:"6:00 PM", tz:"ET",  mins:574, name:"PRUMC - Sunday",       field:"PRUMC Field",          city:"Atlanta",           cap:24, real:18, fake:0,  min:14, acMin:75, mgr:"Marcus",  price:1200},
+  {id:17388,t:"6:00 PM", tz:"CST", mins:634, name:"Havana Fields",        field:"Havana Sports Complex",city:"Houston",           cap:18, real:6,  fake:6,  min:12, acMin:75, mgr:"Reda m",  price:1200},
+  {id:17390,t:"6:30 PM", tz:"CST", mins:664, name:"Zilker Park C",        field:"Zilker Metro Park",    city:"Austin",            cap:18, real:13, fake:0,  min:12, acMin:75, mgr:"Cami",    price:1200},
+  {id:17394,t:"7:00 PM", tz:"CST", mins:694, name:"Austin Sports Center 3",field:"Austin Sports Center",city:"Austin",            cap:20, real:8,  fake:4,  min:12, acMin:75, mgr:"Tobi",    price:1200},
+  {id:17399,t:"8:00 PM", tz:"CST", mins:754, name:"Austin Sports Center 4",field:"Austin Sports Center",city:"Austin",            cap:18, real:4,  fake:9,  min:12, acMin:75, mgr:"Tobi",    price:1200},
+  {id:17402,t:"8:30 PM", tz:"CST", mins:784, name:"Soccer Central Field 6",field:"Soccer Central Complex",city:"San Antonio",     cap:16, real:2,  fake:6,  min:8,  acMin:75, mgr:"Ricki",   price:1200},
+  {id:17406,t:"9:00 PM", tz:"CST", mins:814, name:"Zilker Park D",        field:"Zilker Metro Park",    city:"Austin",            cap:20, real:15, fake:0,  min:12, acMin:75, mgr:"Cami",    price:1200},
+];
+
+/* ---- derived, all in one place so nothing recomputes it differently ---- */
+const open  = m => Math.max(0, m.cap - m.real - m.fake);
+const short = m => Math.max(0, m.min - m.real);          /* REAL only */
+const acIn  = m => m.mins - m.acMin;                     /* minutes until the cancel call */
+const fakeHeavy = m => m.fake > m.real;
+function risk(m){
+  if (short(m) === 0) return "green";
+  return acIn(m) <= HOT ? "red" : "amber";
+}
+
+function fmt(mins){
+  if (mins <= 0) return "now";
+  const h = Math.floor(mins/60), mm = mins%60;
+  return h ? (mm ? h+"h "+mm+"m" : h+"h") : mm+"m";
+}
+const money = c => "$" + (c/100).toFixed(2);
+
+/* ---- state ---- */
+let filter = "all";
+let citySel = "all";
+let sort = "time";
+let view = "snap";
+
+const CITIES = (() => {
+  const o = {};
+  M.forEach(m => o[m.city] = (o[m.city]||0)+1);
+  return Object.keys(o).sort().map(c => ({city:c, n:o[c]}));
+})();
+
+function visible(){
+  let list = M.filter(m => citySel === "all" || m.city === citySel);
+  if (filter === "att")   list = list.filter(m => short(m) > 0);
+  if (filter === "still") list = list.filter(m => m.mins > 0);
+  const rank = {red:0, amber:1, green:2};
+  list = list.slice().sort((a,b) =>
+    sort === "risk"
+      ? (rank[risk(a)] - rank[risk(b)]) || (acIn(a) - acIn(b)) || (a.mins - b.mins)
+      : (a.mins - b.mins) || (a.id - b.id)
+  );
+  return list;
+}
+
+/* ---- render: cities ---- */
+function cityBar(){
+  const host = document.getElementById("cities");
+  host.querySelectorAll("button").forEach(b => b.remove());
+  const mk = (label, key, n) => {
+    const b = document.createElement("button");
+    b.className = "chip";
+    b.dataset.city = key;
+    b.setAttribute("aria-pressed", String(citySel === key));
+    b.innerHTML = label + (n == null ? "" : ' <span class="n">'+n+'</span>');
+    b.addEventListener("click", () => { citySel = key; render(); });
+    host.appendChild(b);
+  };
+  mk("All cities", "all", null);
+  CITIES.forEach(c => mk(c.city, c.city, c.n));
+}
+
+/* ---- render: one snapshot row ---- */
+function rowEl(m){
+  const s = short(m), o = open(m), rk = risk(m), ac = acIn(m);
+  const b = document.createElement("button");
+  b.type = "button";
+  b.className = "r risk-" + rk;
+  b.dataset.id = m.id;
+  b.dataset.risk = rk;
+  b.dataset.short = String(s);
+  b.dataset.open = String(o);
+  b.dataset.acin = String(ac);
+
+  const pctReal = (m.real / m.cap) * 100;
+  const pctFake = (m.fake / m.cap) * 100;
+  const pctMin  = (m.min  / m.cap) * 100;
+
+  const shortCls = s === 0 ? "ok" : (rk === "red" ? "bad" : "warn");
+  const shortTxt = s === 0 ? "OK" : "−" + s;
+
+  b.innerHTML = `
+    <span class="rail"></span>
+
+    <span class="cell c-time">
+      <span class="t1">${m.t}<em>${m.tz}</em></span>
+      <span class="t2">in ${fmt(m.mins)}</span>
+    </span>
+
+    <span class="cell c-match">
+      <span class="m1">${m.name}${fakeHeavy(m) ? '<span class="flag" data-flag="fake">MORE FAKE</span>' : ""}</span>
+      <span class="m2">${m.field} · ${m.city}</span>
+    </span>
+
+    <span class="cell c-spots">
+      <span class="bar">
+        <span class="seg1" style="width:${pctReal}%"></span>
+        <span class="seg2" style="left:${pctReal}%;width:${pctFake}%"></span>
+        <span class="tick" style="left:calc(${pctMin}% - 1px)"></span>
+      </span>
+      <span class="spotln"><b>${m.real}</b> real · <span class="fk">${m.fake} fake</span> · ${o} open of ${m.cap}</span>
+    </span>
+
+    <span class="cell c-short">
+      <span class="short ${shortCls}">${shortTxt}</span>
+      <span class="minln">${m.real} of ${m.min}</span>
+    </span>
+
+    <span class="cell c-cxl">
+      <span class="c1 ${rk === "red" ? "hot" : ""}">${ac <= 0 ? "passed" : "in " + fmt(ac)}</span>
+      <span class="c2">cancels ${m.acMin}m before</span>
+      <span class="cxlmob">cancel <b>${ac <= 0 ? "passed" : "in " + fmt(ac)}</b> · ${m.acMin}m before · ${m.mgr} · ${money(m.price)}</span>
+    </span>
+
+    <span class="cell c-mgr"><span class="mgr">${m.mgr}</span></span>
+    <span class="cell c-price"><span class="price">${money(m.price)}</span></span>
+  `;
+  return b;
+}
+
+/* ---- render: detail card (the existing view, abbreviated) ---- */
+function cardEl(m){
+  const s = short(m), o = open(m), rk = risk(m), ac = acIn(m);
+  const d = document.createElement("div");
+  d.className = "card risk-" + rk;
+  d.dataset.id = m.id;
+  d.innerHTML = `
+    <div class="ctop">
+      <span class="t1">${m.t}<em>${m.tz}</em></span>
+      <span class="t2">in ${fmt(m.mins)}</span>
+      <span class="m1">${m.name}</span>
+      <span class="price">${money(m.price)}</span>
+    </div>
+    <div class="cgrid">
+      <span class="kv"><span class="k">FIELD</span><span class="v">${m.field}</span></span>
+      <span class="kv"><span class="k">CITY</span><span class="v">${m.city}</span></span>
+      <span class="kv"><span class="k">SPOTS</span><span class="v">${m.real} real · ${m.fake} fake · ${o} open of ${m.cap}</span></span>
+      <span class="kv"><span class="k">MANAGER</span><span class="v">${m.mgr}</span></span>
+      <span class="kv"><span class="k">MINIMUM</span><span class="v">${m.real} of ${m.min} — ${s === 0 ? "met" : s + " short"}</span></span>
+      <span class="kv"><span class="k">AUTO-CANCEL</span><span class="v">cancels ${m.acMin}m before · ${ac <= 0 ? "passed" : "in " + fmt(ac)}</span></span>
+    </div>
+  `;
+  return d;
+}
+
+/* ---- render ---- */
+function render(){
+  const list = visible();
+
+  const rows = document.getElementById("rows");
+  rows.textContent = "";
+  const cards = document.getElementById("detailview");
+  cards.textContent = "";
+
+  if (!list.length){
+    const e = document.createElement("p");
+    e.className = "empty";
+    e.textContent = "No matches match these filters.";
+    rows.appendChild(e);
+  } else {
+    list.forEach(m => { rows.appendChild(rowEl(m)); cards.appendChild(cardEl(m)); });
+  }
+
+  /* counts always reflect the CITY selection, never the risk filter —
+     otherwise clicking "Needs attention" makes its own badge read 11 of 11. */
+  const inCity = M.filter(m => citySel === "all" || m.city === citySel);
+  document.getElementById("n-all").textContent   = inCity.length;
+  document.getElementById("n-att").textContent   = inCity.filter(m => short(m) > 0).length;
+  document.getElementById("n-still").textContent = inCity.filter(m => m.mins > 0).length;
+
+  document.querySelectorAll("[data-filter]").forEach(b =>
+    b.setAttribute("aria-pressed", String(b.dataset.filter === filter)));
+  document.querySelectorAll("[data-city]").forEach(b =>
+    b.setAttribute("aria-pressed", String(b.dataset.city === citySel)));
+  document.getElementById("s-time").setAttribute("aria-pressed", String(sort === "time"));
+  document.getElementById("s-risk").setAttribute("aria-pressed", String(sort === "risk"));
+
+  document.getElementById("v-snap").setAttribute("aria-pressed", String(view === "snap"));
+  document.getElementById("v-detail").setAttribute("aria-pressed", String(view === "detail"));
+  document.getElementById("snapview").classList.toggle("hidden", view !== "snap");
+  document.getElementById("detailview").classList.toggle("hidden", view !== "detail");
+  document.getElementById("legend").classList.toggle("hidden", view !== "snap");
+
+  const red = list.filter(m => risk(m) === "red").length;
+  const amb = list.filter(m => risk(m) === "amber").length;
+  document.getElementById("foot").textContent =
+    list.length + " shown · " + red + " need a decision within 2h · " + amb +
+    " short but later · shortfall counts REAL players only (fakes cannot show up) — " +
+    "whether MatchDay's auto-cancel agrees is UNCONFIRMED.";
+}
+
+/* ---- wiring ---- */
+document.querySelectorAll("[data-filter]").forEach(b =>
+  b.addEventListener("click", () => { filter = b.dataset.filter; render(); }));
+document.getElementById("s-time").addEventListener("click", () => { sort = "time"; render(); });
+document.getElementById("s-risk").addEventListener("click", () => { sort = "risk"; render(); });
+document.getElementById("v-snap").addEventListener("click", () => { view = "snap"; render(); });
+document.getElementById("v-detail").addEventListener("click", () => { view = "detail"; render(); });
+
+cityBar();
+render();
+</script>
+</body>
+</html>

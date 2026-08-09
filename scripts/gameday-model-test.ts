@@ -7,7 +7,7 @@ import "server-only"; // no-op under --conditions=react-server
 import {
   byKickoff, bandOf, minsUntil, capacity, openSpots, realCount, fakeCount, filledCount, clampFakes,
   nextRelease, acLevel, minsToDeadline, short, shortBy, fill, attention, inCities, passesFilter,
-  localClock, localDate, CRIT_HOURS, WARN_HOURS, type ApiMatch,
+  localClock, localDate, CRIT_HOURS, WARN_HOURS, riskTier, CANCEL_SOON_MINUTES, type ApiMatch,
 } from "../src/lib/gamedayModel";
 
 let pass = 0, fail = 0;
@@ -133,6 +133,23 @@ eq("short match: marker not hit", f1.hit, false);
 const madeMatch = mk({ startDateUtc: new Date(NOW + 2 * H).toISOString(), minPlayerCount: 11, maxPlayerCount: 20, _count: { players: 14, fakePlayers: 0 } });
 const f2 = fill(madeMatch)!;
 eq("made-it: marker hit, no shortfall band", { hit: f2.hit, gap: f2.gapPct }, { hit: true, gap: 0 });
+
+// ── risk tiers (Snapshot): three states from short() + minsToDeadline() ───────
+{
+  eq("CANCEL_SOON_MINUTES is 120 (named, not magic)", CANCEL_SOON_MINUTES, 120);
+  // full-but-imminent: minimum MET and the deadline is inside 2h -> still GREEN, not red.
+  const fullImminent = mk({ startDateUtc: new Date(NOW + 1 * H).toISOString(), autoCanceledMinutes: 0, _count: { players: 15, fakePlayers: 0 }, minPlayerCount: 11, maxPlayerCount: 20 });
+  eq("full match near its deadline stays GREEN (red needs BOTH short and <=2h)", riskTier(fullImminent, NOW), "green");
+  // short + cancel call within 2h -> red
+  const redCase = mk({ startDateUtc: new Date(NOW + 2 * H).toISOString(), autoCanceledMinutes: 30, _count: { players: 6, fakePlayers: 0 }, minPlayerCount: 11, maxPlayerCount: 20 }); // deadline 90m
+  eq("short + deadline within 2h -> red", riskTier(redCase, NOW), "red");
+  // short but deadline > 2h away -> amber
+  const amberCase = mk({ startDateUtc: new Date(NOW + 5 * H).toISOString(), autoCanceledMinutes: 30, _count: { players: 6, fakePlayers: 0 }, minPlayerCount: 11, maxPlayerCount: 20 }); // deadline 270m
+  eq("short + deadline beyond 2h -> amber", riskTier(amberCase, NOW), "amber");
+  // and the boundary is inclusive at 120
+  const boundary = mk({ startDateUtc: new Date(NOW + 120 * 60000).toISOString(), autoCanceledMinutes: 0, _count: { players: 6, fakePlayers: 0 }, minPlayerCount: 11, maxPlayerCount: 20 }); // deadline exactly 120m
+  eq("deadline exactly at 120m is red (<=)", riskTier(boundary, NOW), "red");
+}
 
 // ── bands, cancelled sinks with no countdown/releases ─────────────────────────
 eq("band live (kicked off, within 90m)", bandOf(mk({ startDateUtc: new Date(NOW - 30 * 60000).toISOString() }), NOW), "live");

@@ -21,9 +21,9 @@ import { centsToDollars } from "@/lib/matchMoney";
 import MatchDrawer, { DRAWER_W } from "@/components/MatchDrawer";
 import LogHealthBanner from "@/components/LogHealthBanner";
 import {
-  type ApiMatch, type BoardFilter, BANDS, byKickoff, bandOf, minsUntil, fmtDur, localClock, tzAbbr,
+  type ApiMatch, type BoardFilter, type RiskTier, BANDS, byKickoff, bandOf, minsUntil, fmtDur, localClock, tzAbbr,
   realCount, fakeCount, capacity, openSpots, teamCount, short, shortBy, fill, flags, attention,
-  acLevel, minsToDeadline, nextRelease, nextMark, inCities, passesFilter, MARKS,
+  acLevel, minsToDeadline, nextRelease, nextMark, inCities, passesFilter, riskTier, MARKS,
 } from "@/lib/gamedayModel";
 
 const ENV = DRAWER_ENV; // the board reads and edits the same environment as the drawer
@@ -53,6 +53,14 @@ export default function GamedayBoard() {
   const [drawerId, setDrawerId] = useState<number | null>(null);
   const [drawerDirty, setDrawerDirty] = useState(false);
   const [toast, setToast] = useState<{ t: string; bad?: boolean } | null>(null);
+  // Snapshot (one line per match) vs Detail (the card view). Persisted per-user so a
+  // field reload keeps the choice. Snapshot is the default — the whole day on one screen.
+  const [view, setView] = useState<"snapshot" | "detail">("snapshot");
+  const [sort, setSort] = useState<"time" | "risk">("time");
+  useEffect(() => {
+    try { const v = localStorage.getItem("gameday-view"); if (v === "detail" || v === "snapshot") setView(v); } catch { /* no storage */ }
+  }, []);
+  const chooseView = (v: "snapshot" | "detail") => { setView(v); try { localStorage.setItem("gameday-view", v); } catch { /* no storage */ } };
   const badge = envBadge(ENV);
 
   const say = (t: string, bad = false) => { setToast({ t, bad }); setTimeout(() => setToast(null), 2800); };
@@ -114,6 +122,15 @@ export default function GamedayBoard() {
 
   const banded = useMemo(() => BANDS.map((B) => ({ B, rows: visible.filter((m) => bandOf(m, now) === B.k) })).filter((x) => x.rows.length), [visible, now]);
 
+  // Snapshot: the same filtered/city-scoped `visible` list, flat, sorted by time or by
+  // risk (red, then amber, then green; within a tier, soonest cancel call first).
+  const RISK_RANK: Record<RiskTier, number> = { red: 0, amber: 1, green: 2 };
+  const snapList = useMemo(() => {
+    const l = visible.slice();
+    if (sort === "risk") l.sort((a, b) => (RISK_RANK[riskTier(a, now)] - RISK_RANK[riskTier(b, now)]) || (minsToDeadline(a, now) - minsToDeadline(b, now)) || byKickoff(a, b));
+    return l; // `visible` is already byKickoff for "time"
+  }, [visible, sort, now]);
+
   return (
     <div className="gdo" data-testid="gameday" data-env={ENV} style={{ ["--drawer-w" as string]: `${DRAWER_W}px` }}>
       <style>{CSS}</style>
@@ -138,6 +155,10 @@ export default function GamedayBoard() {
               <button className={"chip att" + (filter === "att" ? " on" : "")} data-testid="filter-att" onClick={() => setFilter("att")}>Needs attention<span className="b">{counts.att}</span></button>
               <button className={"chip" + (filter === "upc" ? " on" : "")} data-testid="filter-upc" onClick={() => setFilter("upc")}>Still to come<span className="b">{counts.upc}</span></button>
             </span>
+            <span className="seg" role="group" aria-label="View">
+              <button className={view === "snapshot" ? "on" : ""} data-testid="view-snapshot" aria-pressed={view === "snapshot"} onClick={() => chooseView("snapshot")}>Snapshot</button>
+              <button className={view === "detail" ? "on" : ""} data-testid="view-detail" aria-pressed={view === "detail"} onClick={() => chooseView("detail")}>Detail</button>
+            </span>
           </div>
           <div className="row2"><span className="lb">CITIES</span>
             <span className="cityf" data-testid="cityf">
@@ -148,17 +169,35 @@ export default function GamedayBoard() {
           <span className={"pill " + (badge.tone === "prod" ? "live" : "stg")} data-testid="gameday-env">{badge.tone === "prod" ? <><i />PRODUCTION — LIVE EDITS</> : badge.label}</span>
         </div>
 
+        {view === "snapshot" && !loading && !err && (
+          <div className="legend" data-testid="legend">
+            <span className="lg"><span className="sw red" />Short · cancel call within 2h</span>
+            <span className="lg"><span className="sw amb" />Short, call later today</span>
+            <span className="lg"><span className="sw grn" />Minimum met</span>
+            <span className="sortbar">Sort
+              <button className={"chip sm" + (sort === "time" ? " on" : "")} data-testid="sort-time" onClick={() => setSort("time")}>Time</button>
+              <button className={"chip sm" + (sort === "risk" ? " on" : "")} data-testid="sort-risk" onClick={() => setSort("risk")}>Risk</button>
+            </span>
+          </div>
+        )}
+
         {loading ? <div className="empty" data-testid="loading">Loading {dayLabel(date)}…</div>
           : err ? <div className="empty err" data-testid="board-err">Couldn’t load the board: {err}</div>
-          : banded.length === 0 ? <div className="empty" data-testid="empty">Nothing to show for {dayLabel(date)} with these filters.</div>
-          : <div className="bands" data-testid="bands">
-            {banded.map(({ B, rows }) => (
-              <section className="band" data-testid={`band-${B.k}`} key={B.k}>
-                <h2>{B.t}<span className="n">{rows.length}</span></h2>
-                <div className="rows">{rows.map((m) => <Tile key={m.id} m={m} now={now} veo={!!veo[m.id]} selected={drawerId === m.id} onOpen={openDrawer} onRoster={goRoster} onVeo={toggleVeo} money={money} />)}</div>
-              </section>
-            ))}
-          </div>}
+          : view === "snapshot"
+            ? (snapList.length === 0 ? <div className="empty" data-testid="empty">Nothing to show for {dayLabel(date)} with these filters.</div>
+              : <div className="sheet" data-testid="snapshot">
+                  <div className="colhead"><span /><span>KICKOFF</span><span>MATCH · FIELD</span><span>SPOTS</span><span>SHORT</span><span>AUTO-CANCEL</span><span>MANAGER</span><span className="ra">PRICE</span></div>
+                  <div className="rowlist">{snapList.map((m) => <SnapRow key={m.id} m={m} now={now} selected={drawerId === m.id} onOpen={openDrawer} money={money} />)}</div>
+                </div>)
+            : banded.length === 0 ? <div className="empty" data-testid="empty">Nothing to show for {dayLabel(date)} with these filters.</div>
+            : <div className="bands" data-testid="bands">
+              {banded.map(({ B, rows }) => (
+                <section className="band" data-testid={`band-${B.k}`} key={B.k}>
+                  <h2>{B.t}<span className="n">{rows.length}</span></h2>
+                  <div className="rows">{rows.map((m) => <Tile key={m.id} m={m} now={now} veo={!!veo[m.id]} selected={drawerId === m.id} onOpen={openDrawer} onRoster={goRoster} onVeo={toggleVeo} money={money} />)}</div>
+                </section>
+              ))}
+            </div>}
       </div>
 
       {drawerId != null && (
@@ -244,6 +283,52 @@ function Tile({ m, now, veo, selected, onOpen, onRoster, onVeo, money }: {
         </span>
       </span>
       {fl.length > 0 && <span className="flags" data-testid="tile-flags">{fl.map((x, i) => <span key={i} className={"fl " + x.k}>{x.t}</span>)}</span>}
+    </button>
+  );
+}
+
+// One snapshot line. Every number comes from the SAME gamedayModel functions the card
+// Tile uses — realCount/fakeCount/openSpots/shortBy/fill/riskTier — so the two views can
+// never disagree. Clicking the row opens the same drawer a card opens.
+function SnapRow({ m, now, selected, onOpen, money }: {
+  m: ApiMatch; now: number; selected: boolean; onOpen: (id: number) => void; money: (c: number | null | undefined) => string;
+}) {
+  const cap = capacity(m), real = realCount(m), fk = fakeCount(m), open = openSpots(m);
+  const s = shortBy(m), rk = riskTier(m, now), ac = minsToDeadline(m, now), t = minsUntil(m, now);
+  const f = fill(m);
+  const moreFake = fk > real;
+  const mgr = m.manager ? [m.manager.firstName, m.manager.lastName].filter(Boolean).join(" ").trim() || "—" : "none";
+  const price = money(m.registrationPrice);
+  const cd = m.isCancelled ? "cancelled" : t <= -90 ? `finished ${fmtDur(t)} ago` : t <= 0 ? "in play" : `in ${fmtDur(t)}`;
+  const acTxt = ac <= 0 ? "passed" : `in ${fmtDur(ac)}`;
+  const shortCls = cap == null ? "ok" : s === 0 ? "ok" : rk === "red" ? "bad" : "warn";
+  const shortTxt = cap == null ? "—" : s === 0 ? "OK" : `−${s}`;
+  return (
+    <button className={"r risk-" + rk + (selected ? " sel" : "")} data-testid="snap-row" data-id={m.id} data-risk={rk} data-short={s} data-open={open ?? ""} data-real={real}
+      onClick={() => onOpen(m.id)} aria-label={`${m.name} at ${m.field?.title ?? ""}, ${localClock(m)} ${tzAbbr(m)}`}>
+      <span className="rail" />
+      <span className="cell c-time"><span className="t1">{localClock(m)}<em>{tzAbbr(m)}</em></span><span className="t2">{cd}</span></span>
+      <span className="cell c-match">
+        <span className="m1">{m.name}{moreFake && <span className="flag" data-testid="more-fake">MORE FAKE</span>}</span>
+        <span className="m2">{(m.field?.title ?? "—")} · {m.field?.city?.name ?? "—"}</span>
+      </span>
+      <span className="cell c-spots">
+        {cap == null ? <span className="spotln" data-testid="snap-spots">special event · no cap</span> : <>
+          <span className="bar"><span className="seg1" style={{ width: `${f!.realPct}%` }} /><span className="seg2" style={{ left: `${f!.realPct}%`, width: `${f!.fakePct}%` }} /><span className="tick" data-testid="snap-tick" style={{ left: `calc(${f!.minPct}% - 1px)` }} /></span>
+          <span className="spotln" data-testid="snap-spots"><b>{real}</b> real · <span className="fk">{fk} fake</span> · {open} open of {cap}</span>
+        </>}
+      </span>
+      <span className="cell c-short">
+        <span className={"short " + shortCls} data-testid="snap-short">{shortTxt}</span>
+        <span className="minln">{real} of {m.minPlayerCount ?? 0}</span>
+      </span>
+      <span className="cell c-cxl">
+        <span className={"c1" + (rk === "red" ? " hot" : "")}>{m.isCancelled ? "—" : acTxt}</span>
+        <span className="c2">cancels {m.autoCanceledMinutes ?? 0}m before</span>
+        <span className="cxlmob" data-testid="snap-cxlmob">cancel {m.isCancelled ? "—" : acTxt} · {m.autoCanceledMinutes ?? 0}m before · {mgr} · {price}</span>
+      </span>
+      <span className="cell c-mgr"><span className="mgr">{mgr}</span></span>
+      <span className="cell c-price"><span className="price">{price}</span></span>
     </button>
   );
 }
@@ -342,13 +427,64 @@ const CSS = `
 .gdo .toast{position:fixed;left:50%;top:16px;transform:translateX(-50%);background:#003326;color:#fff;padding:10px 19px;border-radius:10px;font-size:14px;z-index:90;box-shadow:0 6px 20px rgba(0,32,21,.28)}
 .gdo .toast.bad{background:#A83120}
 
+/* ── Snapshot view: one line per match, whole day on one screen ── */
+.gdo .seg{display:inline-flex;background:#E4EAE7;border-radius:10px;padding:3px;gap:3px;margin-left:auto}
+.gdo .seg button{border:0;background:transparent;border-radius:8px;padding:7px 15px;min-height:34px;font-size:13px;font-weight:700;color:#5C6B62;cursor:pointer;white-space:nowrap}
+.gdo .seg button.on{background:#fff;color:#0B1F17;box-shadow:0 1px 2px rgba(0,0,0,.10)}
+.gdo .legend{display:flex;gap:16px;flex-wrap:wrap;align-items:center;margin:0 2px 10px;color:#5C6B62;font-size:12px}
+.gdo .legend .lg{display:inline-flex;align-items:center;gap:6px}
+.gdo .legend .sw{width:11px;height:11px;border-radius:3px;display:inline-block;flex:0 0 11px}
+.gdo .legend .sw.red{background:#A83120}.gdo .legend .sw.amb{background:#B8860B}.gdo .legend .sw.grn{background:#046B45}
+.gdo .legend .sortbar{margin-left:auto;display:inline-flex;align-items:center;gap:7px}
+.gdo .chip.sm{padding:5px 11px;font-size:12px;min-height:30px}.gdo .chip.sm.on{background:#003326;border-color:#003326;color:#fff}
+.gdo .sheet{background:#fff;border:1px solid #DCE5E0;border-radius:14px;overflow:hidden}
+.gdo .colhead,.gdo .sheet .r{display:grid;align-items:center;gap:12px;grid-template-columns:5px 96px minmax(150px,1.5fr) minmax(150px,1.25fr) 108px 112px 92px 62px}
+.gdo .colhead{padding:9px 14px 9px 0;border-bottom:1px solid #DCE5E0;background:#FAFCFB;font-size:10px;font-weight:800;letter-spacing:.11em;color:#67746C}
+.gdo .colhead .ra{text-align:right}
+.gdo .sheet .r{padding:0 14px 0 0;border:0;border-bottom:1px solid #DCE5E0;background:#fff;width:100%;text-align:left;font:inherit;color:inherit;cursor:pointer;min-height:56px}
+.gdo .sheet .r:last-child{border-bottom:0}.gdo .sheet .r:hover{background:#F7FBF9}
+.gdo .sheet .r:focus-visible{outline:2px solid #046B45;outline-offset:-2px}
+.gdo .sheet .r.sel{background:#EAF9F1}
+.gdo .sheet .rail{align-self:stretch;display:block;background:#CCD7D1}
+.gdo .sheet .r.risk-red .rail{background:#A83120}.gdo .sheet .r.risk-amber .rail{background:#B8860B}.gdo .sheet .r.risk-green .rail{background:#046B45}
+.gdo .sheet .r.risk-red{background:#FDEEEB}.gdo .sheet .r.risk-red:hover{background:#FBE2DF}
+.gdo .sheet .cell{display:block;padding:9px 0;min-width:0}
+.gdo .sheet .t1{display:block;font-weight:700;font-variant-numeric:tabular-nums}.gdo .sheet .t1 em{font-style:normal;font-size:10px;font-weight:800;color:#67746C;letter-spacing:.06em;margin-left:4px}
+.gdo .sheet .t2{display:block;font-size:12px;color:#67746C;font-variant-numeric:tabular-nums}
+.gdo .sheet .m1{display:block;font-weight:700;white-space:nowrap;overflow:hidden;text-overflow:ellipsis}
+.gdo .sheet .m2{display:block;font-size:12px;color:#67746C;white-space:nowrap;overflow:hidden;text-overflow:ellipsis}
+.gdo .sheet .flag{display:inline-block;margin-left:6px;vertical-align:1px;background:#FBF0DC;color:#7A5200;border:1px solid #E3C88A;font-size:9.5px;font-weight:800;letter-spacing:.05em;padding:1px 5px;border-radius:4px;white-space:nowrap}
+.gdo .sheet .bar{display:block;position:relative;height:7px;border-radius:4px;background:#EEF3F0;overflow:hidden}
+.gdo .sheet .seg1,.gdo .sheet .seg2{position:absolute;top:0;bottom:0;display:block}
+.gdo .sheet .seg1{left:0;background:#046B45}
+.gdo .sheet .seg2{background:repeating-linear-gradient(135deg,#E5A83A 0 4px,#F3CD8E 4px 8px)}
+.gdo .sheet .tick{position:absolute;top:0;bottom:0;width:2px;background:#0B1F17;display:block;border-radius:1px;z-index:2}
+.gdo .sheet .spotln{display:block;margin-top:5px;font-size:12px;color:#3D5349;font-variant-numeric:tabular-nums;white-space:nowrap;overflow:hidden;text-overflow:ellipsis}
+.gdo .sheet .spotln b{color:#0B1F17}.gdo .sheet .spotln .fk{color:#7A5200}
+.gdo .sheet .c-short{display:flex;align-items:baseline;gap:7px}
+.gdo .sheet .short{display:inline-flex;align-items:center;justify-content:center;min-width:50px;padding:3px 8px;border-radius:7px;font-weight:800;font-variant-numeric:tabular-nums;font-size:13px;flex:0 0 auto}
+.gdo .sheet .short.bad{background:#FDEEEB;color:#A83120;border:1px solid #F0A9A4}
+.gdo .sheet .short.warn{background:#FBF0DC;color:#7A5200;border:1px solid #E3C88A}
+.gdo .sheet .short.ok{background:#E6F4EC;color:#046B45;border:1px solid #9FD3B6}
+.gdo .sheet .minln{display:block;font-size:11.5px;color:#67746C;font-variant-numeric:tabular-nums;white-space:nowrap}
+.gdo .sheet .c1{display:block;font-weight:700;font-variant-numeric:tabular-nums}.gdo .sheet .c1.hot{color:#A83120}
+.gdo .sheet .c2{display:block;font-size:11.5px;color:#67746C}
+.gdo .sheet .mgr{display:block;font-size:13px;color:#3D5349;white-space:nowrap;overflow:hidden;text-overflow:ellipsis}
+.gdo .sheet .price{display:block;text-align:right;font-weight:700;font-variant-numeric:tabular-nums}
+.gdo .sheet .cxlmob{display:none}
+
 /* ── Phone: this is used one-handed at a field. Tiles reflow, cities scroll. ── */
 @media (max-width: 820px){
   .gdo .gmain{padding:12px 12px 90px;margin-right:0 !important}
-  .gdo .head{padding:14px 14px 13px}
+  .gdo .head{padding:11px 12px}
   .gdo .lede{display:none}
+  .gdo .dt{display:none}            /* the date is already in the day nav */
+  .gdo h1{font-size:18px}
+  .gdo .r1{gap:8px}
   .gdo .clock{font-size:12px}
-  .gdo .pill{position:static;display:inline-flex;margin-top:10px}
+  .gdo .chips{gap:7px;margin-top:10px}
+  .gdo .row2{margin-top:8px;padding-top:8px}
+  .gdo .pill{position:static;display:inline-flex;margin-top:8px}
   .gdo .daynav{width:100%;justify-content:space-between;margin-right:0}
   .gdo .daylab{min-width:0;flex:1}
   .gdo .arw{width:40px;height:40px}
@@ -371,5 +507,27 @@ const CSS = `
   .gdo .rosterlink{min-height:32px;padding:6px 10px}
   .gdo .bar{height:14px}
   .gdo .toast{left:12px;right:12px;transform:none;text-align:center}
+  /* header stays compact: day nav + view toggle on line 1, filters scroll on their own */
+  .gdo [data-testid="day-today"]{display:none}
+  .gdo .daynav{order:1;width:auto;flex:1 1 auto}
+  .gdo .seg{order:2;margin-left:auto}
+  .gdo .filters{order:4;flex:0 0 100%;margin-top:6px}
+  /* snapshot rows reflow to a four-line stack */
+  .gdo .colhead{display:none}
+  .gdo .sheet .r{grid-template-columns:5px 1fr auto;grid-template-areas:"rail time short" "rail match short" "rail spots spots" "rail cxl cxl";gap:0 11px;padding:0 12px 0 0;min-height:0}
+  .gdo .sheet .rail{grid-area:rail}
+  .gdo .sheet .c-time{grid-area:time;padding:8px 0 0}
+  .gdo .sheet .c-match{grid-area:match;padding:0}
+  .gdo .sheet .c-spots{grid-area:spots;padding:7px 0 0}
+  .gdo .sheet .c-short{grid-area:short;padding:8px 0 0;align-self:start;display:block}
+  .gdo .sheet .c-cxl{grid-area:cxl;padding:4px 0 9px}
+  .gdo .sheet .c-mgr,.gdo .sheet .c-price{display:none}
+  .gdo .sheet .c-cxl .c1,.gdo .sheet .c-cxl .c2{display:none}
+  .gdo .sheet .cxlmob{display:block;font-size:12px;color:#67746C;white-space:nowrap;overflow:hidden;text-overflow:ellipsis}
+  .gdo .sheet .t1{display:inline}.gdo .sheet .t2{display:inline;margin-left:8px}
+  .gdo .sheet .bar{height:9px}
+  .gdo .legend .lg{display:none}            /* colour is self-evident next to a −N chip */
+  .gdo .legend{margin-bottom:8px}
+  .gdo .legend .sortbar{margin-left:auto}
 }
 `;

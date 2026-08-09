@@ -169,6 +169,20 @@ export function acLevel(m: ApiMatch, now: number): AcLevel {
   return "";
 }
 
+// ── risk tier (Snapshot view) ────────────────────────────────────────────────
+// Three states from ONE function, on the SAME short()/minsToDeadline() the rest of the
+// board uses. Distinct from acLevel (the card's 3h/6h crit/warn tint): the snapshot's
+// red is a single 2-hour "cancel call is imminent" threshold.
+export const CANCEL_SOON_MINUTES = 120;
+export type RiskTier = "green" | "amber" | "red";
+export function riskTier(m: ApiMatch, now: number): RiskTier {
+  // GREEN when the minimum is met — OR the match carries no live cancel risk (cancelled,
+  // finished, or uncapped). RED needs BOTH short AND the cancel call within 2h; a full
+  // match close to its deadline stays green.
+  if (m.isCancelled || minsUntil(m, now) <= 0 || capacity(m) == null || !short(m)) return "green";
+  return minsToDeadline(m, now) <= CANCEL_SOON_MINUTES ? "red" : "amber";
+}
+
 // ── the minimum, marked on the bar ───────────────────────────────────────────
 // All as percentages of capacity, so the marker sits at its own number and the
 // hatched band's width IS the shortfall.
