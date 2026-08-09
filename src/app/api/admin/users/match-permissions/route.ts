@@ -53,8 +53,17 @@ export async function POST(req: Request) {
     .from("app_users")
     .update({ can_access_matchops: nextMatchops, can_edit_matches: nextEdit })
     .eq("id", body.userId)
-    .select("id, can_access_matchops, can_edit_matches")
+    .select("id, can_access_matchops, can_edit_matches, is_service_account")
     .maybeSingle();
-  if (upd.error) return Response.json({ error: upd.error.message }, { status: 400 });
-  return Response.json({ ok: true, user: upd.data });
+  // The DB trigger (0114) raises P0001 on a service account or an edit-without-matchops
+  // attempt — surface its message verbatim, do not swallow it.
+  if (upd.error) return Response.json({ error: upd.error.message, code: upd.error.code }, { status: 400 });
+  // Re-read the row after the write so the client renders ACTUAL DB state (the trigger
+  // may have cascaded, e.g. matchops off => edit off), never the optimistic guess.
+  const fresh = await auth.supabase
+    .from("app_users")
+    .select("id, can_access_matchops, can_edit_matches, is_service_account")
+    .eq("id", body.userId)
+    .maybeSingle();
+  return Response.json({ ok: true, user: fresh.data ?? upd.data });
 }

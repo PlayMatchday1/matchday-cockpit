@@ -59,6 +59,7 @@ export default function AdminUsersView() {
   const [error, setError] = useState<string | null>(null);
   const [showAddModal, setShowAddModal] = useState(false);
   const [flashedId, setFlashedId] = useState<string | null>(null);
+  const [permErr, setPermErr] = useState<{ id: string; msg: string } | null>(null);
 
   const load = useCallback(async () => {
     setLoading(true);
@@ -87,20 +88,28 @@ export default function AdminUsersView() {
   }
 
   // MATCH OPS + EDIT MATCHES go through the guarded route so the hard rules apply
-  // (edit requires matchops, revoke cascades, E2E can't edit, self-demotion guard).
+  // (edit requires matchops, revoke cascades, E2E can't edit, self-demotion guard). We do
+  // NOT trust the optimistic value: on success we render the row the server re-read from
+  // the DB (post-trigger truth); on failure we revert and surface the error INLINE — the
+  // Clubhouse E2E row raises P0001 from the DB trigger and that message must be shown.
   async function saveMatchPermission(user: AppUser, patch: { canAccessMatchops?: boolean; canEditMatches?: boolean }) {
+    setPermErr((e) => (e?.id === user.id ? null : e));
     const original = users;
-    // optimistic; the route returns the reconciled truth (cascade may clear edit)
     setUsers((prev) => prev.map((u) => (u.id === user.id ? { ...u, ...(patch.canAccessMatchops !== undefined ? { can_access_matchops: patch.canAccessMatchops, can_edit_matches: patch.canAccessMatchops ? u.can_edit_matches : false } : {}), ...(patch.canEditMatches !== undefined ? { can_edit_matches: patch.canEditMatches } : {}) } : u)));
     const { data: sess } = await supabase.auth.getSession();
-    const res = await fetch("/api/admin/users/match-permissions", {
-      method: "POST",
-      headers: { "Content-Type": "application/json", ...(sess.session ? { Authorization: `Bearer ${sess.session.access_token}` } : {}) },
-      body: JSON.stringify({ userId: user.id, ...patch }),
-    });
-    const json = await res.json().catch(() => ({}));
-    if (!res.ok) { setUsers(original); alert(json?.error ?? `HTTP ${res.status}`); return; }
-    setUsers((prev) => prev.map((u) => (u.id === user.id ? { ...u, can_access_matchops: json.user.can_access_matchops, can_edit_matches: json.user.can_edit_matches } : u)));
+    let json: { user?: { can_access_matchops: boolean; can_edit_matches: boolean; is_service_account?: boolean }; error?: string } = {};
+    try {
+      const res = await fetch("/api/admin/users/match-permissions", {
+        method: "POST",
+        headers: { "Content-Type": "application/json", ...(sess.session ? { Authorization: `Bearer ${sess.session.access_token}` } : {}) },
+        body: JSON.stringify({ userId: user.id, ...patch }),
+      });
+      json = await res.json().catch(() => ({}));
+      if (!res.ok) { setUsers(original); setPermErr({ id: user.id, msg: json?.error ?? `HTTP ${res.status}` }); return; }
+    } catch (e) { setUsers(original); setPermErr({ id: user.id, msg: e instanceof Error ? e.message : String(e) }); return; }
+    // Render ACTUAL DB state returned by the server's re-read, never the optimistic value.
+    const row = json.user;
+    if (row) setUsers((prev) => prev.map((u) => (u.id === user.id ? { ...u, can_access_matchops: row.can_access_matchops, can_edit_matches: row.can_edit_matches, ...(row.is_service_account !== undefined ? { is_service_account: row.is_service_account } : {}) } : u)));
     flash(user.id);
   }
 
@@ -268,6 +277,9 @@ export default function AdminUsersView() {
                                   <span className="text-[8px] leading-none text-deep-green/40">↳ edit</span>
                                   <ToggleBox on={!!u.can_edit_matches} disabled={!matchops || !!u.is_service_account} onClick={() => saveMatchPermission(u, { canEditMatches: !u.can_edit_matches })} label={`EDIT MATCHES (write) for ${u.email}`} />
                                 </div>
+                                {permErr?.id === u.id && (
+                                  <span className="mt-1 max-w-[160px] text-[10px] leading-tight text-coral" data-testid="perm-error">{permErr.msg}</span>
+                                )}
                               </div>
                             </td>
                           );
