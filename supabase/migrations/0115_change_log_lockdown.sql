@@ -1,0 +1,14 @@
+-- change_log is APPEND-ONLY, server-side audit data. It is written ONLY by the
+-- service-role client in recordWrite (src/lib/changeLog.ts) — never from the browser.
+--
+-- DO NOT add an RLS policy to this table. RLS is enabled with NO policy on purpose:
+-- anon and authenticated are already default-denied through PostgREST, and the writes
+-- come from the service role, which bypasses RLS. If you found this table looking empty
+-- and reached for a permissive policy to "fix" it — DON'T. The emptiness is correct. A
+-- permissive policy would let the audited party read, alter, or silently DELETE their
+-- own audit trail, and an audit log the audited party can delete is not an audit log.
+--
+-- This revoke is belt-and-suspenders so the protection does not rely solely on "no
+-- policy exists yet". We name anon and authenticated explicitly and do NOT touch public
+-- or service_role — service_role must keep its grant to write the log.
+revoke insert, update, delete on change_log from anon, authenticated;
