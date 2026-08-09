@@ -25,15 +25,26 @@ const grantEdit = (ctx) => ctx.route("**/rest/v1/app_users*", async (route) => {
 });
 
 // id, city, mins-to-kickoff, real, fake, min, cap, acMin, mgr, price, tz
-const RAW = [
+const MAIN = [
   [601, "Houston", 120, 3, 3, 12, 18, 30, "Reda", 1200, "CST"],       // red   (short9, acIn90)
   [602, "Austin", 300, 5, 3, 12, 20, 30, "Tobi", 1200, "CST"],        // amber (short7, acIn270)
   [603, "Austin", 60, 14, 2, 12, 20, 0, "Cami", 1200, "CST"],         // GREEN — met AND imminent (acIn60)
   [604, "Dallas", 400, 4, 9, 12, 18, 30, "Devon", 1400, "CST"],       // amber + MORE FAKE (short8)
   [605, "San Antonio", 135, 0, 12, 8, 16, 30, "Ricki", 1200, "CST"],  // red + MORE FAKE, EMPTY (0 real); acIn 105 < 120
 ];
-function fixture(base, ymd) {
-  return RAW.map(([id, city, mins, real, fake, min, cap, acMin, mgr, price, tz]) => ({
+// Adversarial set — the two views must agree here too, not just on a happy fixture.
+// One fixture agreeing proves a shared bug as well as a shared truth.
+const ADV = [
+  [701, "Austin", 300, 4, 9, 12, 18, 30, "A", 1200, "CST"],   // fake > real
+  [702, "Austin", 300, 0, 12, 8, 16, 30, "B", 1200, "CST"],   // zero real, many fakes
+  [703, "Dallas", 300, 12, 6, 12, 18, 30, "C", 1200, "CST"],  // completely FULL (open 0)
+  [704, "Houston", 300, 5, 0, 14, 10, 30, "D", 1200, "CST"],  // minimum EXCEEDS capacity (14 > 10)
+  [705, "Houston", 20, 6, 0, 12, 18, 30, "E", 1200, "CST"],   // auto-cancel deadline ALREADY passed (acIn -10)
+  [706, "Austin", 300, 10, 0, 12, 20, 30, "F", 1200, "CST"],  // zero fakes
+];
+let activeRaw = MAIN; // route serves this; flipped mid-run to exercise ADV
+function build(raw, base, ymd) {
+  return raw.map(([id, city, mins, real, fake, min, cap, acMin, mgr, price, tz]) => ({
     id, name: `Match ${id}`, startDate: `${ymd}T12:00:00.000`, startDateUtc: new Date(base + mins * 60000).toISOString(),
     isCancelled: false, autoCanceledMinutes: acMin, minPlayerCount: min, maxPlayerCount: cap,
     registrationPrice: price, additionalSpotPrice: 400, fakeSpotLeft36h: 0, fakeSpotLeft24h: 0, fakeSpotLeft12h: 0, fakeSpotLeft6h: 0, fakeSpotLeft3h: 0,
@@ -56,7 +67,7 @@ async function main() {
   const ymd = (() => { const d = new Date(); return `${d.getFullYear()}-${String(d.getMonth() + 1).padStart(2, "0")}-${String(d.getDate()).padStart(2, "0")}`; })();
 
   const routes = async (ctx) => {
-    await ctx.route("**/api/matchday/**/gameday**", (route) => route.fulfill({ status: 200, contentType: "application/json", body: JSON.stringify({ date: ymd, env: "production", matches: fixture(Date.now(), ymd) }) }));
+    await ctx.route("**/api/matchday/**/gameday**", (route) => route.fulfill({ status: 200, contentType: "application/json", body: JSON.stringify({ date: ymd, env: "production", matches: build(activeRaw, Date.now(), ymd) }) }));
     await ctx.route("**/api/veo**", (route) => route.fulfill({ status: 200, contentType: "application/json", body: JSON.stringify({ matches: [] }) }));
     await grantEdit(ctx);
   };
@@ -103,7 +114,11 @@ async function main() {
     return page.$$eval(rowSel, (els, spotsSel) => els.map((e) => {
       const id = Number(e.getAttribute("data-id"));
       const spots = (e.querySelector(spotsSel)?.textContent || "");
-      const m = /(\d+)\s*real.*?(\d+)\s*fake.*?(\d+)\s*open/s.exec(spots);
+      // The card omits "· 0 fake" when there are none; the snapshot always shows it.
+      // Parse each field independently and treat a missing fake as 0 — the NUMBERS still
+      // have to agree; only the display of a zero differs.
+      const rr = /(\d+)\s*real/.exec(spots), ff = /(\d+)\s*fake/.exec(spots), oo = /(\d+)\s*open/.exec(spots);
+      const m = rr && oo ? [null, rr[1], ff ? ff[1] : "0", oo[1]] : null;
       // shortfall: snapshot carries data-short; the card shows it inside the minlab
       // element ("N TO GO"; else MADE IT = 0). Read the minlab specifically so we don't
       // catch "of 18" + "9 TO GO" = "189" from the concatenated tile text.
@@ -140,6 +155,31 @@ async function main() {
   await page.click('[data-testid="snap-row"][data-id="601"]'); await page.waitForTimeout(400);
   eq("clicking a snapshot row opens the edit drawer (same as a card)", !!(await page.$('.mdw, [role="dialog"], [data-testid="gameday"] aside')), true);
   await page.keyboard.press("Escape"); await page.waitForTimeout(150);
+
+  // ── the two views AGREE across an ADVERSARIAL fixture SET ──
+  // fake>real, zero real, completely full, minimum>capacity, deadline already passed,
+  // zero fakes. And the VALUES are pinned — agreement alone would pass a shared bug.
+  activeRaw = ADV;
+  await page.goto(PAGE, { waitUntil: "domcontentloaded" });
+  await page.waitForSelector('[data-testid="snapshot"]'); await page.waitForTimeout(200);
+  const snapA = Object.fromEntries(await readView('[data-testid="snap-row"]', '[data-testid="snap-spots"]'));
+  await page.click('[data-testid="view-detail"]'); await page.waitForSelector('[data-testid="tile"]'); await page.waitForTimeout(150);
+  const detailA = Object.fromEntries(await readView('[data-testid="tile"]', '[data-testid="fill-nums"]'));
+  eq("adversarial: both views cover the same six hard cases", Object.keys(snapA).sort(), ["701", "702", "703", "704", "705", "706"]);
+  { const dis = Object.keys(snapA).filter((id) => JSON.stringify(snapA[id]) !== JSON.stringify(detailA[id]));
+    dis.length === 0 ? ok("Snapshot & Detail agree on real/fake/open/short across ALL adversarial cases") : bad("adversarial views disagree", dis.map((id) => `${id}: snap ${JSON.stringify(snapA[id])} vs detail ${JSON.stringify(detailA[id])}`).join(" | ")); }
+  eq("adversarial VALUES are the intended truth, not a shared wrong number", snapA, {
+    "701": { real: 4, fake: 9, open: 5, short: 8 },    // fake > real
+    "702": { real: 0, fake: 12, open: 4, short: 8 },   // zero real, many fakes
+    "703": { real: 12, fake: 6, open: 0, short: 0 },   // completely full
+    "704": { real: 5, fake: 0, open: 5, short: 9 },    // minimum (14) exceeds capacity (10)
+    "705": { real: 6, fake: 0, open: 12, short: 6 },   // deadline already passed
+    "706": { real: 10, fake: 0, open: 10, short: 2 },  // zero fakes
+  });
+  { const rf = ["701", "702", "703"].filter((id) => snapA[id].fake > 0 && snapA[id].real === snapA[id].real + snapA[id].fake);
+    rf.length === 0 ? ok("real != filled on every fake-bearing adversarial row (701/702/703)") : bad("real==filled", rf.join(",")); }
+  await page.click('[data-testid="view-snapshot"]'); await page.waitForTimeout(100);
+  activeRaw = MAIN; // restore for the phone section
 
   // ══════════════ PHONE ══════════════
   const pctx = await browser.newContext({ viewport: { width: 390, height: 844 }, isMobile: true, hasTouch: true, storageState });
