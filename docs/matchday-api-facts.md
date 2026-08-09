@@ -643,15 +643,31 @@ database. `can_edit_matches` is read FRESH from app_users on EVERY request
 force-dynamic), and the guarded write path refuses the write before any network call
 when it is false. So:
 
-  -- KILL ALL production/staging match writes, effective on the NEXT request (instant):
-  update app_users set can_edit_matches = false;
+  -- KILL ALL production/staging match writes, effective on the NEXT request (instant).
+  -- The WHERE is REQUIRED: this Supabase project runs pg_safeupdate, which REJECTS an
+  -- UPDATE with no WHERE clause — an unqualified `set can_edit_matches = false` errors
+  -- and fires nothing, exactly when you need it. `where can_edit_matches = true` both
+  -- satisfies pg_safeupdate and touches only the rows that matter. Do NOT "clean up"
+  -- the WHERE.  [UNTESTED — never executed against this DB; see note below.]
+  update app_users set can_edit_matches = false where can_edit_matches = true;
 
-  -- kill one user:
+  -- kill one user (the WHERE id = ... also satisfies pg_safeupdate):
+  --   [UNTESTED — never executed against this DB.]
   update app_users set can_edit_matches = false where id = '<uuid>';
 
 There is no lag on the SERVER side — the next write 403s at authenticateAdmin. The only
 thing that lags is the browser's greyed-button UI (useAuth caches AppUser per tab until
 reload), and that is cosmetic: an attempted write still hits the server and is refused.
+
+UNTESTED — both UPDATEs above have NOT been run against this database. They cannot be
+verified without either (a) migration 0114 applied so the column exists, and (b) an
+accepted mutation of the production app_users table. The SYNTAX is correct for
+pg_safeupdate (both carry a WHERE), and with no current EDIT MATCHES holders the global
+form matches zero rows (a safe no-op) — but "argues correct" is not "has been run".
+Promote to TESTED by executing the global form once after 0114 is applied (it is a
+no-op while nobody holds the grant) and confirming it returns without a pg_safeupdate
+error. What HAS been run against the live DB: a service-role INSERT into change_log
+(the recordWrite path) — see the 0115 verification.
 
 The safety rungs that are ACTUALLY live, in order (apiWrite / the routes):
   1. authenticated (route: authenticateAdmin)
