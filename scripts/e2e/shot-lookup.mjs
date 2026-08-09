@@ -42,12 +42,20 @@ async function main() {
   const ref = new URL(process.env.NEXT_PUBLIC_SUPABASE_URL).host.split(".")[0];
   const storageState = { cookies: [], origins: [{ origin: BASE, localStorage: [{ name: `sb-${ref}-auth-token`, value: JSON.stringify(vv.data.session) }] }] };
 
+  const PAY = { ok: true, customerMatched: true, foundVia: ["email"], email: "m.reyes@gmail.com", rows: [
+    { id: "ch_1", description: "Soccer Central Field 6", created: "2026-08-09T19:00:00.000Z", card: "visa ••4242", status: "pending", amount: 1200, matchId: "17402", isMembership: false },
+    { id: "ch_2", description: "Soccer Central Field 4", created: "2026-08-05T18:00:00.000Z", card: "visa ••4242", status: "succeeded", amount: 1200, matchId: "17244", isMembership: false },
+    { id: "ch_3", description: "Unlimited Monthly", created: "2026-08-02T11:00:00.000Z", card: "amex ••1007", status: "succeeded", amount: 2900, matchId: null, isMembership: true },
+    { id: "ch_4", description: "Soccer Central Field 1", created: "2026-08-02T08:00:00.000Z", card: "visa ••4242", status: "refunded", amount: 1200, matchId: "17190", isMembership: false },
+    { id: "ch_5", description: "Havana Fields", created: "2026-07-05T16:00:00.000Z", card: "mc ••5588", status: "disputed", amount: 1200, matchId: "16880", isMembership: false },
+  ] };
   const routes = async (ctx) => {
     await ctx.route("**/api/lookup/**", (route) => {
       const id = new URL(route.request().url()).searchParams.get("id");
       if (id) return route.fulfill({ status: 200, contentType: "application/json", body: JSON.stringify(MARISOL) });
       return route.fulfill({ status: 200, contentType: "application/json", body: JSON.stringify({ kind: "name", results: [{ id: 79214, name: "Marisol Reyes", email: "m.reyes@gmail.com", phone: "+12105557781", city: "San Antonio", status: "ok", hasMembership: true }] }) });
     });
+    await ctx.route("**/api/lookup/**/payments**", (route) => route.fulfill({ status: 200, contentType: "application/json", body: JSON.stringify(PAY) }));
     await grantEdit(ctx);
   };
 

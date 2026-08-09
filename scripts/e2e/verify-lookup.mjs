@@ -71,6 +71,21 @@ const OVER = {
   strikes: { activeCount: 5, limit: 4, isSuspended: true, suspendedTo: "2026-09-01T00:00:00.000Z", expiredAt: "2026-11-01T00:00:00.000Z", firstStrikeAt: "2026-06-01T00:00:00.000Z", logs: [] },
   accountHistory: [],
 };
+// a player whose Stripe read ERRORS — the panel must say so, never show an empty list
+const ERRP = {
+  env: "production",
+  player: { id: 77777, name: "Err Or", email: "err@example.com", phone: "+15125559999", phoneVerified: true, city: "Austin", level: 4, registered: "2026-01-01T00:00:00.000Z", goals: 0, cityManager: false, credits: 0, status: "ok", banReason: null, bannedAt: null, banExpiredAt: null, matchesPlayed: 0, upcoming: 0 },
+  membership: null, matches: [], strikes: { activeCount: 0, limit: 4, isSuspended: false, suspendedTo: null, expiredAt: null, firstStrikeAt: null, logs: [] }, accountHistory: [],
+};
+// live payments fixtures — MARISOL covers all FIVE states + a membership + a match join
+const PAY_MARISOL = { ok: true, customerMatched: true, foundVia: ["email"], email: "m.reyes@gmail.com", rows: [
+  { id: "ch_1", description: "Soccer Central Field 6", created: "2026-08-09T19:00:00.000Z", card: "visa ••4242", status: "pending", amount: 1200, matchId: "17402", isMembership: false },
+  { id: "ch_2", description: "Soccer Central Field 4", created: "2026-08-05T18:00:00.000Z", card: "visa ••4242", status: "succeeded", amount: 1200, matchId: "17244", isMembership: false },
+  { id: "ch_3", description: "Unlimited Monthly", created: "2026-08-02T11:00:00.000Z", card: "amex ••1007", status: "succeeded", amount: 2900, matchId: null, isMembership: true },
+  { id: "ch_4", description: "Soccer Central Field 1", created: "2026-08-02T08:00:00.000Z", card: "visa ••4242", status: "refunded", amount: 1200, matchId: "17190", isMembership: false },
+  { id: "ch_5", description: "Havana Fields", created: "2026-07-05T16:00:00.000Z", card: "mc ••5588", status: "disputed", amount: 1200, matchId: "16880", isMembership: false },
+  { id: "ch_6", description: "Old Match", created: "2026-06-01T10:00:00.000Z", card: "visa ••4242", status: "failed", amount: 1200, matchId: "16000", isMembership: false },
+] };
 const SEARCH_HITS = [
   { id: 79214, name: "Marisol Reyes", email: "m.reyes@gmail.com", phone: "+12105557781", city: "San Antonio", status: "ok", hasMembership: true },
 ];
@@ -124,20 +139,28 @@ async function main() {
       const url = new URL(route.request().url());
       const id = url.searchParams.get("id");
       const q = url.searchParams.get("q");
-      if (id) { const P = id === "60180" ? DANNY : id === "88888" ? OVER : MARISOL; return route.fulfill({ status: 200, contentType: "application/json", body: JSON.stringify(P) }); }
+      if (id) { const P = id === "60180" ? DANNY : id === "88888" ? OVER : id === "77777" ? ERRP : MARISOL; return route.fulfill({ status: 200, contentType: "application/json", body: JSON.stringify(P) }); }
       // mimic detectKind for the kind field (component reads it for the hint too, but hint is local)
       const kind = !q ? "empty" : q.includes("@") ? "email" : /^\d{1,6}$/.test(q.trim()) ? "id" : q.replace(/\D/g, "").length >= 7 ? "phone" : "name";
       const results = q && /mari|reyes|79214|2105557781|m\.reyes/i.test(q) ? SEARCH_HITS
         : q && /danny|60180/i.test(q) ? [{ id: 60180, name: "Danny Vo", email: "danny@example.com", phone: "+18329015669", city: "Houston", status: "suspended", hasMembership: false }]
         : q && /over|88888/i.test(q) ? [{ id: 88888, name: "Over Struck", email: "over@example.com", phone: "+15125550000", city: "Austin", status: "ok", hasMembership: true }]
+        : q && /err|77777/i.test(q) ? [{ id: 77777, name: "Err Or", email: "err@example.com", phone: "+15125559999", city: "Austin", status: "ok", hasMembership: false }]
         : [];
       return route.fulfill({ status: 200, contentType: "application/json", body: JSON.stringify({ kind, results }) });
     });
-    // /ban registered LAST so it takes precedence over the general lookup handler above.
+    // /ban and /payments registered LAST so they win over the general lookup handler.
     await ctx.route("**/api/lookup/**/ban", (route) => {
       lastBan = { url: route.request().url(), body: JSON.parse(route.request().postData() || "{}") };
       if (!manage) return route.fulfill({ status: 403, contentType: "application/json", body: JSON.stringify({ error: "no MANAGE PLAYERS" }) });
       return route.fulfill({ status: 200, contentType: "application/json", body: JSON.stringify({ ok: true, outcome: "LANDED", logRecorded: true }) });
+    });
+    await ctx.route("**/api/lookup/**/payments**", (route) => {
+      const id = new URL(route.request().url()).searchParams.get("id");
+      if (id === "60180") return route.fulfill({ status: 200, contentType: "application/json", body: JSON.stringify({ ok: true, rows: [], customerMatched: false, foundVia: [], email: "danny@example.com" }) });
+      if (id === "88888") return route.fulfill({ status: 200, contentType: "application/json", body: JSON.stringify({ ok: true, rows: [{ id: "ch_o", description: "Unlimited Monthly", created: "2026-08-01T10:00:00.000Z", card: "visa ••0000", status: "succeeded", amount: 2900, matchId: null, isMembership: true }], customerMatched: false, foundVia: ["userId"], email: "over@example.com" }) });
+      if (id === "77777") return route.fulfill({ status: 502, contentType: "application/json", body: JSON.stringify({ ok: false, kind: "unreachable", error: "connection reset by peer" }) });
+      return route.fulfill({ status: 200, contentType: "application/json", body: JSON.stringify(PAY_MARISOL) });
     });
     await ctx.route("**/api/matchday/**/gameday**", (route) => {
       const date = new URL(route.request().url()).searchParams.get("date");
@@ -210,10 +233,32 @@ async function main() {
   eq("expired strike marked EXPIRED not ACTIVE", await page.$$eval('[data-testid="strikes"] .srow', (els) => { const last = els[els.length - 1]; return { active: !!last.querySelector(".st.sactive"), expired: !!last.querySelector(".st.expired") }; }), { active: false, expired: true });
   eq("strikes panel is display-only (no write buttons)", await page.$$eval('[data-testid="strikes"] button', (e) => e.length), 0);
 
-  // ── not-built footer: only Payments remains (Strikes + Account history now built) ──
-  { const foot = await page.$eval('[data-testid="notbuilt"]', (e) => e.textContent);
-    eq("footer names ONLY Payments now", { pay: foot.includes("Payments"), strike: /\bStrikes\b/.test(foot), acct: /Account history/.test(foot) }, { pay: true, strike: false, acct: false }); }
-  eq("panels are MEMBERSHIP, STRIKES, MATCH HISTORY, ACCOUNT HISTORY (no Payments panel)", await page.$$eval(".ptitle h3", (els) => els.map((e) => e.textContent)), ["MEMBERSHIP", "STRIKES", "MATCH HISTORY", "ACCOUNT HISTORY"]);
+  // ── all five panels now present, in order ──
+  eq("panels: MEMBERSHIP, STRIKES, MATCH HISTORY, PAYMENTS · STRIPE, ACCOUNT HISTORY", await page.$$eval(".ptitle h3", (els) => els.map((e) => e.textContent)), ["MEMBERSHIP", "STRIKES", "MATCH HISTORY", "PAYMENTS · STRIPE", "ACCOUNT HISTORY"]);
+
+  // ── PAYMENTS: live panel, all five states legible AND distinct from each other ──
+  await page.waitForSelector('[data-testid="payments"] .prow', { timeout: 5000 });
+  eq("payments shows 6 charges (10-most cap not hit)", await page.$$eval('[data-testid="payments"] .prow', (e) => e.length), 6);
+  eq("all five statuses render", await page.$$eval('[data-testid="payments"] .st[data-status]', (els) => [...new Set(els.map((e) => e.getAttribute("data-status")))].sort()), ["disputed", "failed", "pending", "refunded", "succeeded"]);
+  eq("membership charge (no matchId) tagged Membership; match charge joined to its name", {
+    mem: await page.$$eval('[data-testid="payments"] .prow', (els) => els.some((r) => /Membership/.test(r.querySelector(".l2")?.textContent || ""))),
+    match: await page.$$eval('[data-testid="payments"] .prow', (els) => els.some((r) => /Soccer Central Field 6/.test(r.querySelector(".l2")?.textContent || ""))),
+  }, { mem: true, match: true });
+  // the five status chips: each text/bg >= 4.5 AND all five backgrounds distinct
+  { const chips = await page.$$eval('[data-testid="payments"] .st[data-status]', (els) => {
+      const seen = {}; const out = [];
+      const pc = (s) => { const m = s.match(/rgba?\(([^)]+)\)/); const p = m[1].split(",").map(Number); return { r: p[0], g: p[1], b: p[2] }; };
+      const lin = (c) => { c /= 255; return c <= 0.03928 ? c / 12.92 : Math.pow((c + 0.055) / 1.055, 2.4); };
+      const L = (c) => 0.2126 * lin(c.r) + 0.7152 * lin(c.g) + 0.0722 * lin(c.b);
+      const ratio = (a, b) => { const x = L(a), y = L(b), hi = Math.max(x, y), lo = Math.min(x, y); return (hi + 0.05) / (lo + 0.05); };
+      for (const e of els) { const st = e.getAttribute("data-status"); if (seen[st]) continue; seen[st] = 1; const cs = getComputedStyle(e); const bg = pc(cs.backgroundColor), fg = pc(cs.color); out.push({ st, bg: cs.backgroundColor, textContrast: Math.round(ratio(fg, bg) * 100) / 100 }); }
+      return out;
+    });
+    const minText = Math.min(...chips.map((c) => c.textContrast));
+    const distinctBgs = new Set(chips.map((c) => c.bg)).size;
+    eq("5 status chips, all backgrounds distinct", distinctBgs, 5);
+    (minText >= 4.5) ? ok(`every status chip text/bg contrast >= 4.5 (min ${minText})`) : bad("status chip contrast", `min ${minText}: ${JSON.stringify(chips)}`); }
+  eq("payments note counts pending + failed/disputed", await page.$eval('[data-testid="payments"] .ptitle .note', (e) => e.textContent).then((t) => /pending/.test(t) && /failed\/disputed/.test(t)), true);
 
   // ── account history: clean member offers Suspend + Expel (MANAGE PLAYERS held) ──
   eq("clean record shows Suspend + Expel, not Lift", { suspend: !!(await page.$('[data-testid="act-suspend"]')), expel: !!(await page.$('[data-testid="act-expel"]')), lift: !!(await page.$('[data-testid="act-lift"]')) }, { suspend: true, expel: true, lift: false });
@@ -243,11 +288,23 @@ async function main() {
   eq("over-threshold shows '5 of 4 points'", (await page.$eval('[data-testid="strike-count"]', (e) => e.textContent)).trim(), "5 of 4 points");
   eq("overflow badge '+1' is shown (not silently clamped to 4 pips)", await page.$eval('[data-testid="pip-over"]', (e) => e.textContent).catch(() => ""), "+1");
   eq("strike-suspended banner present at/over threshold", !!(await page.$('[data-testid="strike-suspended"]')), true);
+  // payments FOUND via metadata.userId (email mismatch rescued) — must SAY which route
+  await page.waitForSelector('[data-testid="payments"] .prow, [data-testid="pay-via-userid"]', { timeout: 5000 });
+  eq("payments via metadata.userId surfaces the mismatch note", !!(await page.$('[data-testid="pay-via-userid"]')), true);
+
+  // ── PAYMENTS failure mode 2: Stripe errors -> panel says so, never an empty list ──
+  await type("Err"); await page.waitForSelector('.res[data-pid="77777"]', { timeout: 5000 }); await page.click('.res[data-pid="77777"]');
+  await page.waitForSelector('.idcard[data-pid="77777"]', { timeout: 5000 });
+  await page.waitForSelector('[data-testid="pay-error"]', { timeout: 5000 });
+  eq("Stripe error shows an explicit error, not an empty list", { err: /could not be read/i.test(await page.$eval('[data-testid="pay-error"]', (e) => e.textContent)), rows: await page.$$eval('[data-testid="payments"] .prow', (e) => e.length) }, { err: true, rows: 0 });
 
   // ── LIFT flow: a suspended player offers Lift, account history shows who/when/until ──
   await type("Danny"); await page.waitForSelector('.res[data-pid="60180"]', { timeout: 5000 }); await page.click('.res[data-pid="60180"]');
   await page.waitForSelector('.idcard[data-pid="60180"]', { timeout: 5000 });
   eq("suspended player offers Lift (not Suspend)", { lift: !!(await page.$('[data-testid="act-lift"]')), suspend: !!(await page.$('[data-testid="act-suspend"]')) }, { lift: true, suspend: false });
+  // PAYMENTS failure mode 1: no Stripe customer -> explicit message, NOT an empty list
+  await page.waitForSelector('[data-testid="pay-nomatch"]', { timeout: 5000 });
+  eq("no-customer says 'No Stripe customer found', never an empty list", { msg: /No Stripe customer found/i.test(await page.$eval('[data-testid="pay-nomatch"]', (e) => e.textContent)), rows: await page.$$eval('[data-testid="payments"] .prow', (e) => e.length) }, { msg: true, rows: 0 });
   { const row = (await page.$eval('[data-testid="account-history"] .hrow', (e) => e.textContent)).replace(/\s+/g, " ");
     eq("account-history row shows action, reason, until, and WHO", { act: /SUSPENDED/.test(row), reason: /late cancellations/i.test(row), by: /Nick Zelfine/.test(row), until: /Aug 31/.test(row) }, { act: true, reason: true, by: true, until: true }); }
   await page.click('[data-testid="act-lift"]'); await page.waitForSelector(".modal", { timeout: 5000 });

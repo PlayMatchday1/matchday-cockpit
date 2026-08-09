@@ -267,8 +267,8 @@ export default function PlayerLookup() {
             onExpel={() => setModal({ type: "expel" })}
             onLift={() => setModal({ type: "lift" })}
           />
-          <p className="foot" data-testid="notbuilt">
-            Not built yet: <b>Payments</b>. Its absence here does not mean zero — check Stripe directly until that panel ships.
+          <p className="foot" data-testid="builtnote">
+            Account, membership, strikes, matches and live Stripe payments are all shown above. Account history reflects the current ban only, not a full audit trail.
           </p>
         </div>
       )}
@@ -374,8 +374,107 @@ function ProfileView({ p, fields, canEdit, canManage, onOpenMatch, onAdd, onRemo
         <p className="pfoot">From MatchDay, live. Click a match to open its roster. Removing a player writes to production and appears in the Change Log with your name on it.</p>
       </div>
 
+      <PaymentsPanel playerId={pl.id} email={pl.email} matches={p.matches} />
+
       <AccountHistoryPanel p={p} canManage={canManage} onSuspend={onSuspend} onExpel={onExpel} onLift={onLift} />
     </>
+  );
+}
+
+// ---------- payments (LIVE Stripe, never cached) ----------
+type PayStatus = "succeeded" | "pending" | "refunded" | "failed" | "disputed";
+type PaymentRow = { id: string; description: string; created: string; card: string | null; status: PayStatus; amount: number; matchId: string | null; isMembership: boolean };
+type PaymentsResp = { ok: boolean; rows?: PaymentRow[]; foundVia?: ("email" | "userId")[]; customerMatched?: boolean; email?: string | null; error?: string; kind?: string };
+
+function PaymentsPanel({ playerId, email, matches }: { playerId: number; email: string | null; matches: MatchRow[] }) {
+  const [state, setState] = useState<{ phase: "loading" | "ok" | "error"; data?: PaymentsResp }>({ phase: "loading" });
+  const matchName = useMemo(() => new Map(matches.map((m) => [String(m.matchId), m.name])), [matches]);
+
+  useEffect(() => {
+    let live = true;
+    setState({ phase: "loading" });
+    if (!email) { setState({ phase: "ok", data: { ok: true, rows: [], customerMatched: false, email: null } }); return; }
+    (async () => {
+      try {
+        // live, per profile view — the route sets no-store; add a cache-buster too
+        const res = await authFetch(`/api/lookup/${ENV}/payments?id=${playerId}&email=${encodeURIComponent(email)}`);
+        const j = (await res.json().catch(() => ({}))) as PaymentsResp;
+        if (!live) return;
+        if (!res.ok || j.ok === false) setState({ phase: "error", data: j });
+        else setState({ phase: "ok", data: j });
+      } catch (e) { if (live) setState({ phase: "error", data: { ok: false, error: e instanceof Error ? e.message : String(e), kind: "unreachable" } }); }
+    })();
+    return () => { live = false; };
+  }, [playerId, email]);
+
+  const head = (note: React.ReactNode) => (
+    <div className="ptitle"><h3>PAYMENTS · STRIPE</h3><span className="note">{note}</span></div>
+  );
+
+  if (state.phase === "loading") {
+    return <div className="panel" data-testid="payments"><div className="ptitle"><h3>PAYMENTS · STRIPE</h3><span className="note">reading Stripe…</span></div><p className="empty small">Reading live charges from Stripe…</p></div>;
+  }
+
+  // FAILURE MODE 2 — Stripe unreachable/erroring. Never degrade to an empty list.
+  if (state.phase === "error") {
+    return (
+      <div className="panel" data-testid="payments">
+        {head(<span className="tag expel">STRIPE ERROR</span>)}
+        <div className="warn hard" data-testid="pay-error" style={{ margin: 16 }}><b>Stripe could not be read right now.</b>
+          {state.data?.error ?? "Unknown error."} This does <b>NOT</b> mean the player has no payments — retry, or check Stripe directly.</div>
+      </div>
+    );
+  }
+
+  const d = state.data!;
+  const rows = d.rows ?? [];
+
+  if (rows.length === 0) {
+    // FAILURE MODE 1 — email mismatch / no customer. NEVER an empty list that reads as "never paid".
+    return (
+      <div className="panel" data-testid="payments">
+        {head("")}
+        {!email
+          ? <div className="warn" data-testid="pay-nomatch" style={{ margin: 16 }}><b>No email on file for this player.</b>Stripe is looked up by email — without one, charges can&apos;t be found here. Check Stripe directly.</div>
+          : d.customerMatched
+            ? <div className="nomem"><b>No charges on record</b>A Stripe customer matched this email, but has no charges.</div>
+            : <div className="warn" data-testid="pay-nomatch" style={{ margin: 16 }}><b>No Stripe customer found for this email ({email}).</b>
+                This does NOT mean they never paid — their Stripe email may differ from MatchDay&apos;s (a known mismatch). Also tried metadata.userId and found nothing. Check Stripe directly by name or card.</div>}
+        <p className="pfoot">Live from Stripe, read-only, not cached.</p>
+      </div>
+    );
+  }
+
+  const pending = rows.filter((r) => r.status === "pending").length;
+  const bad = rows.filter((r) => r.status === "failed" || r.status === "disputed").length;
+  const notes = [];
+  if (pending) notes.push(`${pending} pending`);
+  if (bad) notes.push(`${bad} failed/disputed`);
+  const via = d.foundVia ?? [];
+  const onlyUserId = via.length === 1 && via[0] === "userId";
+
+  return (
+    <div className="panel" data-testid="payments">
+      {head(notes.join(" · ") || "all settled")}
+      {onlyUserId && (
+        <div className="warn" data-testid="pay-via-userid" style={{ margin: "12px 16px 0" }}><b>Matched by metadata.userId, not email.</b>
+          This player&apos;s Stripe email differs from their MatchDay email — worth flagging.</div>
+      )}
+      <div className="rows">
+        {rows.map((r) => {
+          const tag = r.isMembership ? "Membership" : (matchName.get(String(r.matchId)) ?? `Match ${r.matchId}`);
+          return (
+            <div className="row prow" key={r.id} data-charge={r.id}>
+              <span className="ptitle2"><span className="l1">{r.description}</span>
+                <span className="l2">{fmtWhen(r.created)}{r.card ? ` · ${r.card}` : ""} · {tag}</span></span>
+              <span className={`st ${r.status}`} data-status={r.status}>{r.status.toUpperCase()}</span>
+              <span className="num">{money(r.amount)}</span>
+            </div>
+          );
+        })}
+      </div>
+      <p className="pfoot">Ten most recent, <b>live from Stripe, read-only, not cached</b>. <b>Pending</b> means Stripe has the charge but hasn&apos;t settled it — the player has paid as far as they know. Joined to matches on <code>metadata.matchId</code>; no matchId = a membership charge.</p>
+    </div>
   );
 }
 
@@ -685,7 +784,8 @@ function RemoveModal({ p, m, canEdit, onClose, onDone }: { p: Profile; m: MatchR
         {p.player.name} · {m.name} · {fmtWhen(m.startDate)}{m.team != null ? ` · team ${m.team}` : ""}{m.num != null ? `, spot ${m.num}` : ""}</div>
       {m.price > 0 && (
         <div className="warn"><b>They paid {money(m.price)} for this spot (MatchDay).</b>
-          Whether removing them refunds it is UNCONFIRMED — the question is open with the backend. Assume it does not, and check Stripe afterwards.</div>
+          Whether removing them refunds it is UNCONFIRMED — the question is open with the backend. Assume it does not.
+          <br /><b>After removing, re-check this player&apos;s Payments panel</b> (live Stripe) to see if a refund appears — this dialog can&apos;t tell you whether it does.</div>
       )}
       <p className="plain">Removing does not notify the player. Only cancelling the whole match does that.</p>
       {!canEdit && <div className="warn hard"><b>Read-only access.</b>The server will refuse this — EDIT MATCHES is required.</div>}
@@ -893,6 +993,14 @@ const CSS = `
 .pl .st.expel{background:var(--redbg);color:var(--red);border-color:var(--redln)}
 .pl .hrow{grid-template-columns:104px minmax(0,1fr) 118px 128px}
 .pl .htitle{display:block;min-width:0}
+/* payments — FIVE distinct status colours (each text/bg >=4.5, all five different hues) */
+.pl .prow{grid-template-columns:minmax(0,1fr) 104px 92px}
+.pl .ptitle2{display:block;min-width:0}
+.pl .st.succeeded{background:var(--grnbg);color:#0f5132;border-color:var(--grnln)}
+.pl .st.pending{background:var(--ambbg);color:#7a4a00;border-color:var(--ambln)}
+.pl .st.refunded{background:var(--blubg);color:#123f74;border-color:var(--bluln)}
+.pl .st.failed{background:var(--redbg);color:#8a1a16;border-color:var(--redln)}
+.pl .st.disputed{background:#efe3fb;color:#5b1897;border-color:#d3b8f2}
 .pl .pfoot{padding:10px 16px;border-top:1px solid var(--line);background:#fafcfb;font-size:12px;color:var(--ink3)}
 .pl .pfoot.topline{border-top:0;border-bottom:1px solid var(--line)}
 .pl .locked{font-style:italic}
@@ -967,6 +1075,7 @@ const CSS = `
   .pl .srow{grid-template-columns:minmax(0,1fr) 92px 76px}
   .pl .hrow{grid-template-columns:92px minmax(0,1fr) 96px}
   .pl .hrow .c-until{display:none}
+  .pl .prow{grid-template-columns:minmax(0,1fr) 88px 80px}
   .pl .idtags{margin-left:0}
   .pl .acts{margin-left:0;width:100%}
   .pl .modal{max-width:none}
