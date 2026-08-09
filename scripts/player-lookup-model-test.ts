@@ -5,7 +5,7 @@ import "server-only"; // no-op under --conditions=react-server
 // one, or the assertion proves nothing).
 //   NODE_OPTIONS=--conditions=react-server npx tsx scripts/player-lookup-model-test.ts
 import {
-  detectKind, serverQuery, openSpots, matchOpen, suggestSpot, money, STRIKE_LIMIT, strikeReasonLabel, type SpotTeam,
+  detectKind, serverQuery, openSpots, matchOpen, suggestSpot, money, STRIKE_LIMIT, strikeReasonLabel, isKnownStrikeReason, type SpotTeam,
 } from "../src/lib/playerLookupModel";
 
 let pass = 0, fail = 0;
@@ -74,12 +74,16 @@ eq("reason LATE -> LATE", strikeReasonLabel("LATE"), "LATE");
 eq("reason NO_SHOW -> NO SHOW", strikeReasonLabel("NO_SHOW"), "NO SHOW");
 eq("reason CANCEL_W_IN_SOME_HOURS -> LATE CANCEL", strikeReasonLabel("CANCEL_W_IN_SOME_HOURS"), "LATE CANCEL");
 eq("reason null -> STRIKE (THAT one exists, not WHY)", strikeReasonLabel(null), "STRIKE");
-eq("reason unknown enum -> tidied raw", strikeReasonLabel("SOME_NEW_STATUS"), "SOME NEW STATUS");
-// the reason must NOT come from the 24h refund flag — a fresh label for a new status proves
-// the mapping is data-driven, not a fixed 3-way that would silently mislabel anything else.
-mutation("reason-not-fixed-3way", strikeReasonLabel, ((s: string | null) => // broken: everything unknown -> "LATE CANCEL"
-  s === "LATE" ? "LATE" : s === "NO_SHOW" ? "NO SHOW" : "LATE CANCEL") as typeof strikeReasonLabel,
-  (fn) => fn("SOME_NEW_STATUS") === "SOME NEW STATUS");
+// userStatus NONE / ON_TIME are NOT reasons — must NOT render as a label (the live bug:
+// 31/188 rows were NONE; the old impl printed "NONE" as a chip).
+eq("reason NONE -> STRIKE, never 'NONE'", strikeReasonLabel("NONE"), "STRIKE");
+eq("reason ON_TIME -> STRIKE, never 'ON TIME'", strikeReasonLabel("ON_TIME"), "STRIKE");
+eq("reason unknown enum -> STRIKE (no silent made-up label)", strikeReasonLabel("SOME_NEW_STATUS"), "STRIKE");
+eq("isKnownStrikeReason true only for the three", [isKnownStrikeReason("LATE"), isKnownStrikeReason("NO_SHOW"), isKnownStrikeReason("CANCEL_W_IN_SOME_HOURS"), isKnownStrikeReason("NONE"), isKnownStrikeReason(null)], [true, true, true, false, false]);
+// a NONE status must NEVER surface as a label — broken impl that echoes the raw status fails.
+mutation("none-not-labelled", strikeReasonLabel, ((s: string | null) => // broken: echo raw for unknowns
+  s === "LATE" ? "LATE" : s === "NO_SHOW" ? "NO SHOW" : s === "CANCEL_W_IN_SOME_HOURS" ? "LATE CANCEL" : (s ?? "STRIKE")) as typeof strikeReasonLabel,
+  (fn) => fn("NONE") === "STRIKE");
 
 // ---- money ----
 eq("money cents->dollars", money(1200), "$12.00");

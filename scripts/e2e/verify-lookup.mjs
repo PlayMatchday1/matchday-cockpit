@@ -47,6 +47,7 @@ const MARISOL = {
       { penaltyPoint: 1, active: true, reason: "CANCEL_W_IN_SOME_HOURS", matchName: "Soccer Central Field 1", when: "2026-08-02T18:00:00.000Z", issued: "2026-08-02T14:48:00.000Z", canceledAt: "2026-08-02T14:48:00.000Z", hoursBefore: 3.2 },
       { penaltyPoint: 1, active: true, reason: "LATE", matchName: "Soccer Central Field 4", when: "2026-08-05T19:00:00.000Z", issued: "2026-08-05T19:14:00.000Z", canceledAt: null, hoursBefore: null },
       { penaltyPoint: 1, active: false, reason: "NO_SHOW", matchName: "Havana Fields", when: "2026-04-19T20:30:00.000Z", issued: "2026-04-19T20:30:00.000Z", canceledAt: null, hoursBefore: null },
+      { penaltyPoint: 1, active: false, reason: "NONE", matchName: "Kickers Field 2", when: "2026-03-01T18:00:00.000Z", issued: "2026-03-01T18:00:00.000Z", canceledAt: null, hoursBefore: null },
     ],
   },
 };
@@ -179,7 +180,9 @@ async function main() {
   eq("strikes panel rendered for a member", !!(await page.$('[data-testid="strikes"]')), true);
   eq("strike count shows N of 4", (await page.$eval('[data-testid="strike-count"]', (e) => e.textContent)).trim(), "2 of 4 active");
   eq("4 pips, 2 lit", { pips: await page.$$eval('[data-testid="strikes"] .pip', (e) => e.length), lit: await page.$$eval('[data-testid="strikes"] .pip.on', (e) => e.length) }, { pips: 4, lit: 2 });
-  eq("reason labels come from userStatus (LATE CANCEL / LATE / NO SHOW)", await page.$$eval('[data-testid="strikes"] .srow .st:nth-child(2)', (els) => els.map((e) => e.textContent.trim())), ["LATE CANCEL", "LATE", "NO SHOW"]);
+  eq("reason labels come from userStatus; NONE renders STRIKE, never 'NONE'", await page.$$eval('[data-testid="strikes"] .srow .st:nth-child(2)', (els) => els.map((e) => e.textContent.trim())), ["LATE CANCEL", "LATE", "NO SHOW", "STRIKE"]);
+  eq("no strike chip ever says NONE or ON TIME", await page.$$eval('[data-testid="strikes"] .srow .st', (els) => els.some((e) => /^(NONE|ON TIME)$/.test(e.textContent.trim()))), false);
+  eq("NONE-reason strike shows 'reason not recorded', not a made-up reason", await page.$eval('[data-testid="strikes"] .srow:last-child .l2', (e) => /Reason not recorded/.test(e.textContent)), true);
   eq("cancellation strike shows hours-before-kickoff", await page.$eval('[data-testid="strikes"] .srow .l2', (e) => /3\.2h before kickoff/.test(e.textContent)), true);
   eq("expired strike marked EXPIRED not ACTIVE", await page.$$eval('[data-testid="strikes"] .srow', (els) => { const last = els[els.length - 1]; return { active: !!last.querySelector(".st.sactive"), expired: !!last.querySelector(".st.expired") }; }), { active: false, expired: true });
   eq("strikes panel is display-only (no write buttons)", await page.$$eval('[data-testid="strikes"] button', (e) => e.length), 0);

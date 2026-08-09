@@ -20,7 +20,7 @@ import { useAuth, canEditMatches } from "@/lib/useAuth";
 import { FULL_EDITOR_ENV } from "@/lib/matchEnv";
 import { envBadge } from "@/lib/matchEnvBadge";
 import {
-  detectKind, SEARCH_HINT, money, openSpots as openSpotsOf, suggestSpot, STRIKE_LIMIT, strikeReasonLabel,
+  detectKind, SEARCH_HINT, money, openSpots as openSpotsOf, suggestSpot, STRIKE_LIMIT, strikeReasonLabel, isKnownStrikeReason,
   type SpotTeam, type SearchKind,
 } from "@/lib/playerLookupModel";
 
@@ -431,12 +431,13 @@ function StrikePanel({ s, isMember }: { s: Strikes; isMember: boolean }) {
       <div className="rows">
         {s.logs.length === 0 && <p className="empty small">No strikes on record.</p>}
         {s.logs.map((l, i) => {
-          const label = strikeReasonLabel(l.reason);
+          const known = isKnownStrikeReason(l.reason);
+          const label = strikeReasonLabel(l.reason); // "STRIKE" for NONE / ON_TIME / absent
           const cls = l.reason === "NO_SHOW" ? "noshow" : l.reason === "CANCEL_W_IN_SOME_HOURS" ? "latecancel" : l.reason === "LATE" ? "late" : "strike";
           const detail = l.reason === "CANCEL_W_IN_SOME_HOURS" && l.hoursBefore != null ? `Cancelled ${l.hoursBefore}h before kickoff`
             : l.reason === "NO_SHOW" ? "Never checked in"
             : l.reason === "LATE" ? "Arrived after kickoff"
-            : l.reason ? "" : "Reason not on the linked match";
+            : known ? "" : "Reason not recorded on the linked match";
           return (
             <div className="row srow" key={i}>
               <span className="stitle"><span className="l1">{l.matchName ?? "Match"}</span>

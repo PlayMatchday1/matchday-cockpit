@@ -45,16 +45,21 @@ export function serverQuery(d: Detected): Record<string, string> {
 export const STRIKE_LIMIT = 4;
 
 // The strike reason is the user-match `userStatus` enum (NOT cancelledBefore24Hours,
-// which is the 24h REFUND flag for pay-per-match players). The three strike-earning
-// values, mapped to a short label; anything else falls through to a tidied raw value.
+// which is the 24h REFUND flag for pay-per-match players). Only these three values name
+// an actual reason.
 const STRIKE_REASON: Record<string, string> = {
   LATE: "LATE",
   NO_SHOW: "NO SHOW",
   CANCEL_W_IN_SOME_HOURS: "LATE CANCEL",
 };
+// userStatus "NONE"/"ON_TIME" (31 of 188 rows were NONE) are NOT reasons — they must
+// not be rendered as a label. A strike whose user-match carries one, or whose user-match
+// isn't in the list, says THAT a strike exists ("STRIKE"), never a made-up why.
+export function isKnownStrikeReason(userStatus: string | null | undefined): boolean {
+  return userStatus != null && userStatus in STRIKE_REASON;
+}
 export function strikeReasonLabel(userStatus: string | null | undefined): string {
-  if (!userStatus) return "STRIKE";
-  return STRIKE_REASON[userStatus] ?? userStatus.replace(/_/g, " ");
+  return isKnownStrikeReason(userStatus) ? STRIKE_REASON[userStatus as string] : "STRIKE";
 }
 
 export function money(cents: number | null | undefined): string {
