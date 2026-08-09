@@ -716,3 +716,83 @@ reading, since a fake won't show up to play. Before the fix the code effectively
 fakes (realCount was filled). If the backend actually counts fakes toward the minimum,
 flip realCount -> filledCount on the two lines flagged in gamedayModel (short/shortBy).
 UNCONFIRMED — verify with the backend dev.
+
+## STRIKES — the real model (Phase 18 investigation, confirmed by Ryan + live probe)
+
+A strike is a **COUNT toward a suspension, NOT a fine.** The per-city strike PRICE
+(`getStrikePriceByCityId` / `changeStrikePrice`) is what a **player pays to REMOVE** a
+strike — a redemption cost, not a penalty levied. That is why the price sits beside
+`removeStrike`. **Members only. 4 active strikes ⇒ suspended for 1 week.** The mockup's
+guessed rules (3 strikes, "suspends membership", 90-day expiry) were all wrong.
+
+Source of truth (Ryan, 2026-08-09) + live production probe of `/admin/players/{id}`:
+
+- `GET /admin/players/{id}` returns a `strike` object. TWO shapes:
+  - Zero strikes: `{ isSuspended, activeStrikes: 0, suspensionStartedAt, firstStrikeAt }`
+    (summary only — the parent strike row is absent).
+  - Has strikes: the full parent row
+    `{ id, userId, createdAt, updatedAt, expiredAt, suspendedTo, paymentIntendId (sic),
+       amount, strikeLogs: [...], isSuspended, activeStrikes, suspensionStartedAt,
+       firstStrikeAt }`.
+- **`activeStrikes` is server-computed** — read it directly; do NOT reduce penaltyPoints
+  yourself. (The `strikeLogs.reduce((p,e)=>p+e.penaltyPoint,0)` in the Retool export is
+  COMMENTED-OUT legacy; the live API pre-computes the count.)
+- **`isSuspended` is server-computed.** The suspension end is `suspendedTo` (a timestamp);
+  Retool derived `isSuspended = suspendedTo > now`, but the API now returns the bool too.
+- **`paymentIntendId` (note the typo) + `amount`** on the parent strike = the pay-to-remove
+  redemption (populated when a player has paid off the strike). Null when unpaid.
+- **StrikeLog (child, one per infraction):**
+  `{ id, strikeId, userMatchId, penaltyPoint, active, createdAt, updatedAt }`. It links to
+  a **user-match** (`userMatchId`) and carries a `penaltyPoint` (1 in the live sample) and
+  an `active` bool. **It carries NO reason field** — nothing says late / no-show /
+  cancelled-inside-6h. To explain WHY a strike was issued you must read the linked
+  user-match's `isAbsent` / `cancelledBefore24Hours` / `isCancelled` / `canceledAt`.
+- `GET /admin/strikes/strike-logs/{id}` **returns HTML, not JSON** — that path is not a
+  usable JSON GET. Read strikes via the player detail (`strike` + `matches[].strikeLog`),
+  not that endpoint.
+
+### The three facts Ryan asked me to find (Phase 18)
+
+1. **Expiry window.** The API exposes an absolute **`expiredAt` per strike** — so you do
+   NOT need to know/hardcode the window: read `expiredAt` and show the date. On the one
+   live strike observed (id 27883, user 80908): `createdAt 2026-07-12` → `expiredAt
+   2026-09-10` = **exactly 60 days**. So the window looks like **60 days, not the 90 the
+   mockup guessed** — but that is a single sample. Robust rule: render `expiredAt`
+   directly; treat "60 days" as likely-but-unconfirmed and get Vitalii to confirm the
+   fixed window length if a countdown ("expires in N days") is ever needed as policy.
+2. **Auto vs admin-applied.** Strikes look **auto-issued by the backend**: the strike row
+   carries **no issuer field** (contrast the ban system, which stores `bannedByUserId`),
+   and strike + strikeLog + firstStrikeAt share an identical-to-the-millisecond timestamp
+   (machine-created, not hand-entered). There is **no "suspend from strikes" endpoint** in
+   the export (only add/remove/set strike + strike price), and `isSuspended`/`suspendedTo`
+   are computed summary fields — so the 4-strike ⇒ 1-week suspension is most likely an
+   automatic backend consequence, NOT something an admin triggers. UNPROVEN at the
+   threshold crossing (no live 4-strike user observed); Vitalii confirms the automation.
+   → Clubhouse should DISPLAY the count/suspension (a countdown "3 of 4"), not trigger it.
+3. **StrikeLog payload** (real, live): `{ id: 38035, strikeId: 27883, userMatchId: 272473,
+   penaltyPoint: 1, active: true, createdAt, updatedAt }`. No reason, no type, no paid flag
+   on the log itself (payment is on the PARENT strike via paymentIntendId/amount).
+
+### Bans are a SEPARATE mechanism from strikes
+
+`GET /admin/players/banned` (paginated `{data,limit,page,totalItems}`) rows carry
+`bannedAt, banExpiredAt, isBanPermanent, bannedByUserId, banReason, isBanned`. Live sample:
+every ban was **admin-applied** (`bannedByUserId: 3193`, free-text `banReason` like
+"Fraudulent Dispute" / "Repeated abusive behavior"), some permanent (`isBanPermanent:true`,
+`banExpiredAt:null` = EXPEL) and some timed (`banExpiredAt` set = a fixed-date ban). This is
+the SUSPEND/EXPEL/LIFT surface (`PUT /admin/players/{id}/ban`), distinct from the
+strike-driven `suspendedTo`. The mockup conflated the two — keep them separate.
+
+## The Stripe DPP-vs-membership classifier — where it lives (Phase 18 verification)
+
+Load-bearing for the (future) payments panel. The rule: `classifyCharge` in
+**`src/lib/financeImport.ts:387`**; the match-join discriminator is **line 393**:
+`if (args.hasMatchId) return "DPP"` (hasMatchId = `metadata.matchId != null`, set in
+`stripeSync.ts` where the charge is read). Membership charges have no matchId — that's the
+discriminator; NEVER fall back to amount+timestamp. Strikes are their own charge type
+(`isStrikeCharge`, line 392). The **99.8% agreement figure is a probe OUTPUT, not a source
+constant** — computed by `ClassifierProbeResult` in `stripeSync.ts` (~486–608), which
+cross-checks the matchId rule against the older subscription-invoice discriminator and
+reports `agreeMatchIdPct`. Stripe customer is located by **email** (no stored
+`stripe_customer_id`); email-mismatch → renders as "no payments" (known, `financeImport.ts`
+comment ~line 87); also matching on `metadata.userId` would rescue those.
