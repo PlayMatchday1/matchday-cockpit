@@ -1,0 +1,407 @@
+<!doctype html>
+<html lang="en"><head><meta charset="utf-8"/>
+<title>Match editor</title>
+<style>
+:root{
+  --forest:#003326;--ink:#0d1f18;--muted:#5C6B62;--faint:#67746C;--cream:#F4EEE1;--paper:#fff;
+  --line:#E3E8E0;--slot:#F7F9F6;--mint:#2CDB87;--mintSoft:#E9FAF1;--mintEdge:#A8E7C9;
+  --mintInk:#046B45;--amber:#FFF6D6;--amberEdge:#F0DC9B;--amberInk:#7A5200;
+  --coral:#FDE9E5;--coralEdge:#F3C4BB;--coralInk:#A83120;--blue:#EFF3FF;--blueEdge:#CBD9FF;
+  --blueInk:#1B4FCB;
+}
+*{box-sizing:border-box}
+body{margin:0;background:var(--cream);padding:0 0 96px;
+  font-family:-apple-system,BlinkMacSystemFont,"Segoe UI",Inter,Helvetica,Arial,sans-serif;
+  color:var(--ink);-webkit-font-smoothing:antialiased}
+.page{max-width:1500px;margin:0 auto;padding:0 24px}
+
+/* ── identity header ── */
+.head{padding:24px 0 16px;display:flex;align-items:flex-start;gap:18px;flex-wrap:wrap}
+.head h1{margin:0;font-size:25px;font-weight:900;letter-spacing:-.6px;color:var(--forest)}
+.hmeta{margin-top:7px;font-size:12.5px;color:var(--muted);display:flex;gap:9px;flex-wrap:wrap;
+  align-items:center}
+.chip{font-size:10px;font-weight:900;letter-spacing:.6px;text-transform:uppercase;border-radius:99px;
+  padding:3px 9px;white-space:nowrap}
+.chip.live{background:var(--mintSoft);color:var(--mintInk);border:1px solid var(--mintEdge)}
+.chip.id{background:var(--slot);color:var(--muted);border:1px solid var(--line);
+  font-variant-numeric:tabular-nums}
+.chip.warn{background:var(--amber);color:var(--amberInk);border:1px solid var(--amberEdge)}
+
+.cols{display:grid;grid-template-columns:1fr 430px;gap:18px;align-items:start}
+
+.card{background:var(--paper);border:1px solid var(--line);border-radius:16px;
+  box-shadow:0 9px 26px rgba(0,51,38,.06);margin-bottom:16px;overflow:hidden}
+.ch{display:flex;align-items:center;gap:11px;padding:14px 20px;border-bottom:1px solid var(--line)}
+.ch h2{margin:0;font-size:12px;font-weight:900;letter-spacing:.9px;text-transform:uppercase;
+  color:var(--muted)}
+.ch .cnt{margin-left:auto;font-size:11px;font-weight:850;color:var(--mintInk)}
+.cb{padding:16px 20px}
+
+/* ── fields ── */
+.grid{display:grid;grid-template-columns:repeat(2,1fr);gap:14px}
+.grid.three{grid-template-columns:repeat(3,1fr)}
+.f{display:flex;flex-direction:column;gap:6px}
+.f.wide{grid-column:1/-1}
+label{font-size:10px;font-weight:900;letter-spacing:.7px;text-transform:uppercase;color:var(--muted)}
+label .hint{display:block;margin-top:3px;font-size:10px;font-weight:700;letter-spacing:0;
+  text-transform:none;color:var(--faint)}
+input[type=text],input[type=number],select,textarea{width:100%;font-family:inherit;font-size:13px;
+  font-weight:750;color:var(--ink);background:#fff;border:1px solid var(--line);border-radius:9px;
+  padding:9px 11px}
+textarea{min-height:96px;resize:vertical;line-height:1.5;font-weight:650}
+input:focus,select:focus,textarea:focus{outline:2px solid var(--mint);outline-offset:-1px;
+  border-color:var(--mint)}
+input:disabled,select:disabled{background:var(--slot);color:var(--faint);cursor:not-allowed}
+.money{position:relative}
+.money span{position:absolute;left:11px;top:50%;transform:translateY(-50%);font-size:13px;
+  font-weight:850;color:var(--muted)}
+.money input{padding-left:24px}
+.f.dirty input,.f.dirty select,.f.dirty textarea{border-color:var(--blueEdge);background:var(--blue)}
+.f.dirty label{color:var(--blueInk)}
+
+/* ── toggle ── */
+.tg{display:flex;align-items:center;gap:11px;padding:10px 0}
+.tg button{width:42px;height:24px;border-radius:99px;border:1px solid var(--line);background:var(--slot);
+  position:relative;cursor:pointer;flex:none;padding:0}
+.tg button i{position:absolute;top:2px;left:2px;width:18px;height:18px;border-radius:50%;
+  background:#fff;box-shadow:0 1px 3px rgba(0,0,0,.2);transition:left .12s}
+.tg button[aria-pressed=true]{background:var(--mint);border-color:#16C275}
+.tg button[aria-pressed=true] i{left:21px}
+.tg > span{display:flex;flex-direction:column;gap:2px}
+.tg .tl{font-size:13px;font-weight:800;color:var(--ink)}
+.tg .th{font-size:11px;color:var(--muted)}
+
+/* ── the spot ladder: five fields that are one idea ── */
+.ladder{display:grid;grid-template-columns:repeat(5,1fr);gap:10px;background:var(--slot);
+  border:1px solid var(--line);border-radius:12px;padding:13px}
+.ladder .f label{text-align:center}
+.ladder input{text-align:center;font-variant-numeric:tabular-nums}
+.ladderNote{font-size:11px;color:var(--muted);margin-top:9px;line-height:1.5}
+.ladderNote b{color:var(--coralInk);font-weight:900}
+
+/* ── teams ── */
+.team{display:grid;grid-template-columns:1fr 130px;gap:12px;align-items:center;
+  padding:11px 13px;border:1px solid var(--line);border-radius:11px;margin-bottom:9px}
+.team:last-child{margin-bottom:0}
+.team .nm{display:flex;align-items:center;gap:10px;font-size:13px;font-weight:850}
+.team .sw{width:14px;height:14px;border-radius:4px;border:1px solid rgba(0,51,38,.2);flex:none}
+
+/* ── danger ── */
+.card.danger{border-color:var(--coralEdge)}
+.card.danger .ch{background:var(--coral);border-bottom-color:var(--coralEdge)}
+.card.danger .ch h2{color:var(--coralInk)}
+.dz{display:flex;align-items:center;gap:14px}
+.dz p{margin:0;font-size:12px;color:var(--muted);line-height:1.5}
+.dz p b{color:var(--ink);font-weight:850}
+.dbtn{margin-left:auto;background:#fff;border:1px solid var(--coralEdge);color:var(--coralInk);
+  font-family:inherit;font-size:12px;font-weight:900;border-radius:9px;padding:9px 15px;cursor:pointer;
+  white-space:nowrap;flex:none}
+.dbtn:hover{background:var(--coral)}
+.dbtn[aria-pressed=true]{background:var(--coralInk);border-color:var(--coralInk);color:#fff}
+
+/* ── players ── */
+.psearch{width:100%;margin-bottom:11px}
+.ptable{max-height:520px;overflow:auto;border:1px solid var(--line);border-radius:11px}
+table{width:100%;border-collapse:separate;border-spacing:0;font-variant-numeric:tabular-nums}
+th{position:sticky;top:0;background:var(--slot);text-align:right;font-size:9px;font-weight:900;
+  letter-spacing:.7px;text-transform:uppercase;color:var(--muted);padding:9px 11px;
+  border-bottom:1px solid var(--line);white-space:nowrap;z-index:2}
+th:first-child{text-align:left}
+td{padding:9px 11px;text-align:right;font-size:12px;font-weight:800;border-bottom:1px solid #EDF1EC;
+  white-space:nowrap}
+td:first-child{text-align:left;font-weight:850;color:var(--forest)}
+tr.fake td{background:#FFFDF4}
+tr:hover td{background:#FAFCFA}
+.ptype{font-size:9px;font-weight:900;letter-spacing:.5px;text-transform:uppercase;border-radius:99px;
+  padding:2px 7px}
+.ptype.real{background:var(--slot);color:var(--muted);border:1px solid var(--line)}
+.ptype.fake{background:var(--amber);color:var(--amberInk);border:1px solid var(--amberEdge)}
+.pact{display:flex;gap:8px;margin-top:11px;flex-wrap:wrap}
+.sm{font-family:inherit;font-size:11.5px;font-weight:900;border-radius:8px;padding:7px 12px;
+  cursor:pointer;border:1px solid var(--line);background:#fff;color:var(--forest)}
+.sm:hover{border-color:#BCC9C0}
+.pfoot{font-size:11px;color:var(--muted);margin-top:10px;line-height:1.5}
+
+/* ── sticky save bar: the whole point, because the API replaces the object ── */
+.savebar{position:fixed;left:0;right:0;bottom:0;background:var(--paper);
+  border-top:1px solid var(--line);box-shadow:0 -8px 24px rgba(0,51,38,.09);z-index:60}
+.sbin{max-width:1500px;margin:0 auto;padding:13px 24px;display:flex;align-items:center;gap:14px}
+.sbtxt{font-size:12.5px;font-weight:850;color:var(--muted)}
+.sbtxt b{color:var(--forest)}
+.sbact{margin-left:auto;display:flex;gap:9px}
+.btn{font-family:inherit;font-size:12.5px;font-weight:900;border-radius:9px;padding:10px 17px;
+  cursor:pointer;border:1px solid var(--line);background:#fff;color:var(--forest)}
+.btn.go{background:var(--forest);border-color:var(--forest);color:#fff}
+.btn.go:disabled{background:var(--slot);border-color:var(--line);color:var(--faint);cursor:not-allowed}
+.btn:disabled{color:var(--faint);cursor:not-allowed}
+
+.diff{max-width:1500px;margin:0 auto;padding:0 24px 13px}
+.diffin{background:var(--blue);border:1px solid var(--blueEdge);border-radius:12px;padding:12px 15px}
+.diffin h3{margin:0 0 8px;font-size:10px;font-weight:900;letter-spacing:.9px;text-transform:uppercase;
+  color:var(--blueInk)}
+.dl{display:flex;flex-wrap:wrap;gap:8px}
+.di{background:#fff;border:1px solid var(--blueEdge);border-radius:99px;padding:5px 12px;
+  font-size:11.5px;font-weight:850;color:var(--ink)}
+.di b{color:var(--blueInk)}
+.di s{color:var(--faint);text-decoration:line-through;font-weight:750}
+.diffnote{font-size:11px;color:var(--blueInk);margin-top:9px;line-height:1.5;font-weight:750}
+</style></head>
+<body>
+<div class="page">
+
+  <div class="head">
+    <div>
+      <h1 id="title">NEMP — Field 13</h1>
+      <div class="hmeta">
+        <span class="chip id">ID 17267</span>
+        <span class="chip live" id="statusChip">Live</span>
+        <span>Fri Aug 7, 2026 · 6:30 – 7:30 PM · Austin — North East Metropolitan Park</span>
+      </div>
+    </div>
+  </div>
+
+  <div class="cols">
+    <div>
+      <div class="card"><div class="ch"><h2>Match</h2><span class="cnt" data-cnt="match"></span></div>
+        <div class="cb"><div class="grid" id="gMatch"></div></div></div>
+
+      <div class="card"><div class="ch"><h2>Teams</h2><span class="cnt" data-cnt="teams"></span></div>
+        <div class="cb"><div id="gTeams"></div>
+          <div class="ladderNote" id="teamNote"></div></div></div>
+
+      <div class="card"><div class="ch"><h2>Pricing</h2><span class="cnt" data-cnt="price"></span></div>
+        <div class="cb"><div class="grid three" id="gPrice"></div></div></div>
+
+      <div class="card"><div class="ch"><h2>Spots released before kick-off</h2>
+          <span class="cnt" data-cnt="ladder"></span></div>
+        <div class="cb"><div class="ladder" id="gLadder"></div>
+          <div class="ladderNote" id="ladderNote"></div></div></div>
+
+      <div class="card"><div class="ch"><h2>Automation</h2><span class="cnt" data-cnt="auto"></span></div>
+        <div class="cb" id="gAuto"></div></div>
+
+      <div class="card danger"><div class="ch"><h2>Cancel this match</h2></div>
+        <div class="cb"><div class="dz">
+          <p><b>44 players are signed up.</b> Cancelling notifies every one of them and starts refunds.
+             It is not part of Save — it happens on its own.</p>
+          <button class="dbtn" id="cancelBtn" aria-pressed="false">Cancel match</button>
+        </div></div></div>
+    </div>
+
+    <div class="card" style="position:sticky;top:16px">
+      <div class="ch"><h2>Players in the match</h2><span class="cnt" id="pcount"></span></div>
+      <div class="cb">
+        <input class="psearch" type="text" id="psearch" placeholder="Search name or email…"/>
+        <div class="ptable"><table><thead><tr>
+          <th>Player</th><th>Type</th><th>Paid</th><th>Credit</th></tr></thead>
+          <tbody id="ptbody"></tbody></table></div>
+        <div class="pact">
+          <button class="sm">Add player</button>
+          <button class="sm">Add fake player</button>
+          <button class="sm" id="chgTeam" disabled>Change team</button>
+          <button class="sm" id="tglFake" disabled>Toggle fake</button>
+        </div>
+        <div class="pfoot" id="pfoot"></div>
+      </div>
+    </div>
+  </div>
+</div>
+
+<div class="savebar">
+  <div class="diff" id="diffWrap" hidden><div class="diffin">
+    <h3>About to change</h3><div class="dl" id="diffList"></div>
+    <div class="diffnote">The API replaces the whole match object, so every field is sent on save —
+      including the ones you did not touch. This list is what actually differs from what was loaded.</div>
+  </div></div>
+  <div class="sbin">
+    <span class="sbtxt" id="sbTxt"></span>
+    <span class="sbact">
+      <button class="btn" id="revert" disabled>Revert</button>
+      <button class="btn go" id="save" disabled>Save</button>
+    </span>
+  </div>
+</div>
+
+<script>
+/* Loaded state. Everything is diffed against this, so the save bar can name exactly
+   what changed — which matters because PUT /admin/matches/{id} replaces the object. */
+const LOADED = {
+  name:"NEMP — Field 13", field:"Austin — North East Metropolitan Park",
+  category:"Open — Open to all", type:"Regular", teamSize:"9v9", teamNumbers:2,
+  price:9.00, spotPrice:0.00, guestCount:10,
+  s36:16, s24:12, s12:6, s6:4, s3:2,
+  autoCancel:true, autoCancelMins:75, minPlayers:16, freeToMember:true,
+  autoBump:true, bump2:"11v11", bump4:"10v10",
+  description:"Check your spot before checking in with the Match Manager!\n\nArrive 5–10 minutes prior to gear up and warm up properly. GK shifts evenly based on your corresponding number. Shag your own balls. No throw ins — all kicks. Call your own fouls, reset at keeper.",
+  manager1:"James Santiago", manager2:"",
+  managerIntro:"What's up guys I'm Ramon but you can call me Moncho, I've been playing soccer my whole life so I'm pretty familiar with the sport. I like to keep things fun and competitive but also clean and respectable. Let's ball up.",
+  teamWhiteOn:false, teamWhitePrice:0.00, teamDarkOn:false, teamDarkPrice:0.00
+};
+const state = JSON.parse(JSON.stringify(LOADED));
+
+const FIELDS = ["Austin — North East Metropolitan Park","Austin — Onion Creek","Austin — The Hattrick",
+  "Houston — PAC Global","Dallas — Crossbar Rowlett"];
+const CATS = ["Open — Open to all","Premier — Recommended for four stars and up","Women's","Over 30"];
+const TYPES = ["Regular","Tournament","Special event"];
+const SIZES = ["5v5","7v7","8v8","9v9","10v10","11v11"];
+
+const P = [];
+const NAMES = [["Hernandez","Jose Antonio"],["Angulo","David"],["Sanchez","Alexxis"],
+  ["Thomas","Brando"],["chavarria","chukyskull"],["Solis","Dany"],["","David"],["","jr"],
+  ["Ramirez","Luis"],["Ortega","Marco"],["Nguyen","Kevin"],["Patel","Arjun"]];
+NAMES.forEach((n,i) => P.push({ last:n[0], first:n[1], fake:i===9||i===11,
+  paid:i===5?6.86:i===7?32.48:16.24, credit:i===5?8.66:0,
+  email:(n[1]||"player").toLowerCase().replace(/\s+/g,"")+i+"@example.com" }));
+for(let i=P.length;i<44;i++) P.push({ last:"Player", first:"#"+(i+1), fake:i%9===0,
+  paid:16.24, credit:0, email:"player"+i+"@example.com" });
+
+const $ = id => document.getElementById(id);
+const money = n => "$" + Number(n).toFixed(2);
+const LABELS = {
+  name:"Name", field:"Field", category:"Category", type:"Type", teamSize:"Team size",
+  teamNumbers:"Team numbers", price:"Price", spotPrice:"Spot price", guestCount:"Guest count",
+  s36:"36 h", s24:"24 h", s12:"12 h", s6:"6 h", s3:"3 h",
+  autoCancel:"Auto-cancel", autoCancelMins:"Auto-cancel minutes", minPlayers:"Min players",
+  freeToMember:"Free to member", autoBump:"Auto bump to tourney", bump2:"Bump size, 2 teams",
+  bump4:"Bump size, 4 teams", description:"Description", manager1:"Manager 1",
+  manager2:"Manager 2", managerIntro:"Manager intro",
+  teamWhiteOn:"White tee", teamWhitePrice:"White tee price",
+  teamDarkOn:"Dark tee", teamDarkPrice:"Dark tee price"
+};
+const GROUPS = {
+  match:["name","field","category","type","teamSize","teamNumbers","description","manager1","manager2","managerIntro"],
+  teams:["teamWhiteOn","teamWhitePrice","teamDarkOn","teamDarkPrice"],
+  price:["price","spotPrice","guestCount"],
+  ladder:["s36","s24","s12","s6","s3"],
+  auto:["autoCancel","autoCancelMins","minPlayers","freeToMember","autoBump","bump2","bump4"]
+};
+
+const changed = () => Object.keys(LOADED).filter(k => String(state[k]) !== String(LOADED[k]));
+const fmt = (k,v) => typeof LOADED[k] === "boolean" ? (v ? "on" : "off")
+  : /price|^price$/i.test(k) ? money(v) : String(v);
+
+function field(k, kind, opts){
+  const dirty = String(state[k]) !== String(LOADED[k]) ? " dirty" : "";
+  const wide = opts && opts.wide ? " wide" : "";
+  const hint = opts && opts.hint ? `<span class="hint">${opts.hint}</span>` : "";
+  const dis = opts && opts.disabled ? " disabled" : "";
+  let ctl;
+  if(kind === "select")
+    ctl = `<select data-k="${k}"${dis}>${opts.list.map(o =>
+      `<option${o === state[k] ? " selected" : ""}>${o}</option>`).join("")}</select>`;
+  else if(kind === "money")
+    ctl = `<div class="money"><span>$</span><input type="number" step="0.01" data-k="${k}"
+      value="${Number(state[k]).toFixed(2)}"${dis}/></div>`;
+  else if(kind === "number")
+    ctl = `<input type="number" data-k="${k}" value="${state[k]}"${dis}/>`;
+  else if(kind === "textarea")
+    ctl = `<textarea data-k="${k}"${dis}>${state[k]}</textarea>`;
+  else ctl = `<input type="text" data-k="${k}" value="${state[k]}"${dis}/>`;
+  return `<div class="f${dirty}${wide}" data-f="${k}"><label>${LABELS[k]}${hint}</label>${ctl}</div>`;
+}
+function toggle(k, hint){
+  const dirty = state[k] !== LOADED[k] ? " dirty" : "";
+  return `<div class="tg${dirty}" data-f="${k}">
+    <button data-t="${k}" aria-pressed="${state[k]}"><i></i></button>
+    <span><span class="tl">${LABELS[k]}</span><span class="th">${hint}</span></span></div>`;
+}
+
+function render(){
+  $("gMatch").innerHTML =
+    field("name","text",{wide:true}) +
+    field("field","select",{list:FIELDS}) + field("category","select",{list:CATS}) +
+    field("type","select",{list:TYPES}) + field("teamSize","select",{list:SIZES}) +
+    field("teamNumbers","number") +
+    `<div class="f"><label>Start and end
+      <span class="hint">Set when the match was created. Change it by copying the match instead.</span></label>
+      <input type="text" value="Aug 7, 2026 · 6:30 – 7:30 PM" disabled/></div>` +
+    field("manager1","text") + field("manager2","text",{hint:"Leave empty if only one"}) +
+    field("description","textarea",{wide:true}) +
+    field("managerIntro","textarea",{wide:true});
+
+  const teams = [["teamWhiteOn","teamWhitePrice","White tee","#fff"],
+                 ["teamDarkOn","teamDarkPrice","Dark tee","#14352A"]];
+  $("gTeams").innerHTML = teams.slice(0, Math.max(2, Number(state.teamNumbers))).map(([on,pr,nm,sw]) => `
+    <div class="team" data-f="${on}">
+      <span class="nm"><i class="sw" style="background:${sw}"></i>${nm}
+        <button class="tgmini" style="all:unset"></button></span>
+      <div class="money"><span>$</span>
+        <input type="number" step="0.01" data-k="${pr}" value="${Number(state[pr]).toFixed(2)}"/></div>
+    </div>`).join("");
+  $("teamNote").innerHTML =
+    `Team prices are separate from the match price and are saved with everything else — ` +
+    `there is no second Update button.`;
+
+  $("gPrice").innerHTML = field("price","money") + field("spotPrice","money") +
+    field("guestCount","number",{hint:"Spots a player can buy for someone with no account"});
+
+  $("gLadder").innerHTML = GROUPS.ladder.map(k => field(k,"number")).join("");
+  const ladder = GROUPS.ladder.map(k => Number(state[k]));
+  const descending = ladder.every((v,i) => i === 0 || v <= ladder[i-1]);
+  $("ladderNote").innerHTML = descending
+    ? `Spots still unsold are released back at each mark. Each number should be no higher than the one before it.`
+    : `<b>These should descend.</b> ${ladder.join(" → ")} rises at some point, which releases more spots
+       closer to kick-off than further out.`;
+
+  $("gAuto").innerHTML =
+    toggle("autoCancel","Cancel automatically if the match has not filled") +
+    `<div class="grid">${field("autoCancelMins","number",{hint:"Minutes before kick-off"}) +
+      field("minPlayers","number",{hint:"Below this, it cancels"})}</div>` +
+    toggle("freeToMember","Members join special events at no charge") +
+    toggle("autoBump","Grow the match to a tournament if it fills") +
+    (state.autoBump
+      ? `<div class="grid" id="bumps">${field("bump2","select",{list:SIZES}) +
+          field("bump4","select",{list:SIZES})}</div>`
+      : "");
+
+  const q = ($("psearch").value || "").toLowerCase();
+  const shown = P.filter(p => !q ||
+    (p.first + " " + p.last + " " + p.email).toLowerCase().includes(q));
+  $("ptbody").innerHTML = shown.map((p,i) => `<tr class="${p.fake?"fake":""}" data-p="${i}">
+    <td>${[p.first,p.last].filter(Boolean).join(" ") || "—"}<br/>
+      <span style="font-size:10.5px;font-weight:700;color:#5C6B62">${p.email}</span></td>
+    <td><span class="ptype ${p.fake?"fake":"real"}">${p.fake?"Fake":"Player"}</span></td>
+    <td>${money(p.paid)}</td><td>${p.credit?money(p.credit):"—"}</td></tr>`).join("");
+  $("pcount").textContent = q ? `${shown.length} of ${P.length}` : `${P.length}`;
+  const real = P.filter(p => !p.fake).length;
+  $("pfoot").innerHTML = `${real} real · ${P.length - real} fake · ` +
+    `${money(P.reduce((a,p) => a + p.paid, 0))} paid, ` +
+    `${money(P.reduce((a,p) => a + p.credit, 0))} in credit. ` +
+    `Fake players are shaded and never charged.`;
+
+  const c = changed();
+  Object.keys(GROUPS).forEach(g => {
+    const n = GROUPS[g].filter(k => c.includes(k)).length;
+    document.querySelector(`[data-cnt="${g}"]`).textContent = n ? `${n} changed` : "";
+  });
+  $("sbTxt").innerHTML = c.length
+    ? `<b>${c.length}</b> ${c.length === 1 ? "change" : "changes"} not saved`
+    : "No changes";
+  $("save").disabled = !c.length;
+  $("revert").disabled = !c.length;
+  $("diffWrap").hidden = !c.length;
+  $("diffList").innerHTML = c.map(k =>
+    `<span class="di" data-d="${k}">${LABELS[k]} <s>${fmt(k,LOADED[k])}</s> → <b>${fmt(k,state[k])}</b></span>`).join("");
+}
+
+document.addEventListener("input", e => {
+  const k = e.target.dataset.k; if(!k) return;
+  state[k] = e.target.type === "number" ? Number(e.target.value) : e.target.value;
+  if(e.target.id === "psearch") return;
+  render();
+});
+$("psearch").addEventListener("input", render);
+document.addEventListener("change", e => {
+  const k = e.target.dataset.k; if(!k || e.target.tagName !== "SELECT") return;
+  state[k] = e.target.value; render();
+});
+document.addEventListener("click", e => {
+  const t = e.target.closest("[data-t]");
+  if(t){ state[t.dataset.t] = !state[t.dataset.t]; render(); return; }
+  if(e.target.id === "revert"){ Object.assign(state, JSON.parse(JSON.stringify(LOADED))); render(); return; }
+  const c = e.target.closest("#cancelBtn");
+  if(c){ c.setAttribute("aria-pressed", c.getAttribute("aria-pressed") === "true" ? "false" : "true"); }
+});
+render();
+</script>
+</body></html>

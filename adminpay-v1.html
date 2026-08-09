@@ -1,0 +1,212 @@
+<!doctype html>
+<html lang="en"><head><meta charset="utf-8"/>
+<title>Partner dashboards — admin panel</title>
+<style>
+:root{
+  --forest:#003326;--deep:#04241B;--ink:#0d1f18;--muted:#5C6B62;--faint:#67746C;
+  --cream:#F4EEE1;--paper:#fff;--line:#E3E8E0;--slot:#F7F9F6;
+  --mint:#2CDB87;--mintSoft:#E9FAF1;--mintEdge:#A8E7C9;--mintInk:#046B45;
+  --amber:#FFF6D6;--amberEdge:#F0DC9B;--amberInk:#7A5200;
+  --coral:#FDE9E5;--coralEdge:#F3C4BB;--coralInk:#A83120;
+  --onDark:#BFD8CD;--onDarkDim:#8FAEA1;
+}
+*{box-sizing:border-box}
+body{margin:0;background:var(--cream);padding:26px 22px 60px;
+  font-family:-apple-system,BlinkMacSystemFont,"Segoe UI",Inter,Helvetica,Arial,sans-serif;
+  color:var(--ink);-webkit-font-smoothing:antialiased}
+.wrap{max-width:1360px;margin:0 auto}
+h1{margin:0;font-size:26px;font-weight:900;letter-spacing:-.7px;color:var(--forest)}
+.sub{margin:7px 0 18px;font-size:12.5px;color:var(--muted)}
+
+/* ── the dark panel says "admin only" — keep that, but put the content on light cards ── */
+.admin{background:var(--deep);border-radius:18px;padding:16px}
+.abar{display:flex;align-items:center;gap:12px;padding:2px 6px 15px}
+.badge{font-size:9px;font-weight:900;letter-spacing:1px;text-transform:uppercase;background:var(--mint);
+  color:#00291E;border-radius:6px;padding:4px 8px}
+.abar p{margin:0;font-size:11.5px;color:var(--onDark);margin-right:auto}
+.ghost{background:transparent;border:1px solid #2B5647;color:#fff;font-family:inherit;font-size:11.5px;
+  font-weight:900;border-radius:9px;padding:8px 14px;cursor:pointer}
+.ghost:hover{background:#0C3327}
+
+.pcards{display:grid;grid-template-columns:repeat(3,1fr);gap:11px}
+.pc{background:#083024;border:1px solid #1C4B3B;border-radius:13px;padding:14px 15px;cursor:pointer;
+  text-align:left;font-family:inherit;color:#fff}
+.pc.on{background:var(--paper);border-color:var(--paper);color:var(--ink)}
+.pc b{display:flex;align-items:center;gap:8px;font-size:14px;font-weight:900}
+.pc b i{width:8px;height:8px;border-radius:50%;background:var(--mint);flex:none}
+.pc.on b{color:var(--forest)}
+.pc span{display:block;font-size:11px;color:var(--onDarkDim);margin-top:5px}
+.pc.on span{color:var(--muted)}
+.pc em{display:block;font-style:normal;font-size:12px;font-weight:900;margin-top:7px;color:var(--mint)}
+.pc.on em{color:var(--mintInk)}
+.pc em.owed{color:#FFD84D}
+.pc.on em.owed{color:var(--amberInk)}
+
+.linkrow{display:flex;gap:9px;align-items:center;margin-top:13px}
+.linkrow input{flex:1;background:#083024;border:1px solid #1C4B3B;border-radius:9px;padding:10px 13px;
+  font-family:inherit;font-size:12.5px;color:#DCEBE4}
+select.cad{background:#083024;border:1px solid #1C4B3B;color:#DCEBE4;border-radius:9px;padding:9px 11px;
+  font-family:inherit;font-size:11.5px;font-weight:850}
+.danger{border-color:#5C2A22;color:#FFB3A6}
+.danger:hover{background:#3A1710}
+
+/* ── payments, on light ── */
+.pay{background:var(--paper);border-radius:14px;margin-top:14px;overflow:hidden}
+.ph{display:flex;align-items:center;gap:11px;padding:13px 17px;border-bottom:1px solid var(--line)}
+.ph b{font-size:9.5px;font-weight:900;letter-spacing:1px;text-transform:uppercase;color:var(--muted)}
+.ph span{margin-left:auto;font-size:11.5px;font-weight:800;color:var(--muted)}
+
+.row{display:flex;align-items:center;gap:13px;padding:12px 17px;border-top:1px solid #EDF1EC}
+.row:first-of-type{border-top:0}
+.rp{font-size:13px;font-weight:900;color:var(--forest);min-width:132px}
+.ra{font-size:13px;font-weight:900;color:var(--forest);font-variant-numeric:tabular-nums;min-width:62px}
+.rm{font-size:11.5px;font-weight:800;color:var(--muted)}
+.act{margin-left:auto;display:flex;gap:8px}
+.btn{font-family:inherit;font-size:11.5px;font-weight:900;border-radius:8px;padding:7px 13px;
+  cursor:pointer;border:1px solid var(--line);background:#fff;color:var(--muted)}
+.btn:hover{border-color:#BCC9C0;color:var(--forest)}
+.btn.go{background:var(--forest);border-color:var(--forest);color:#fff}
+.btn.go:hover{background:#014C39}
+
+/* owed — the only loud thing, because it is the only thing to do */
+.row.owed{background:var(--amber);border-top-color:var(--amberEdge)}
+.row.owed .rp,.row.owed .ra{color:var(--amberInk)}
+.pill{font-size:9px;font-weight:900;letter-spacing:.7px;text-transform:uppercase;border-radius:99px;
+  padding:3px 8px;white-space:nowrap}
+.pill.owed{background:#fff;color:var(--amberInk);border:1px solid var(--amberEdge)}
+.pill.flag{background:var(--coral);color:var(--coralInk);border:1px solid var(--coralEdge);cursor:help}
+
+.none{padding:15px 17px;font-size:12px;color:var(--muted)}
+.none b{color:var(--mintInk);font-weight:900}
+
+/* the fold — says how many and what they add up to, so it is never a mystery */
+.fold{display:flex;align-items:center;gap:10px;width:100%;text-align:left;font-family:inherit;
+  background:var(--slot);border:0;border-top:1px solid var(--line);padding:12px 17px;cursor:pointer}
+.fold:hover{background:#EFF3EE}
+.fold .fv{color:var(--mintInk);font-size:10px;font-weight:900}
+.fold .fl{font-size:11.5px;font-weight:850;color:var(--muted)}
+.fold .fs{font-size:11.5px;font-weight:850;color:var(--mintInk)}
+.fold .fx{margin-left:auto;font-size:11px;font-weight:900;color:var(--mintInk);background:#fff;
+  border:1px solid var(--mintEdge);border-radius:99px;padding:4px 12px}
+.note{padding:13px 17px;border-top:1px solid var(--line);background:var(--slot);
+  font-size:11px;color:var(--muted);line-height:1.6}
+</style></head>
+<body>
+<div class="wrap">
+  <h1>Partner Dashboards</h1>
+  <div class="sub">3 venue partners have a live dashboard. Every closed period is settled across all 3 partners.</div>
+
+  <div class="admin">
+    <div class="abar">
+      <span class="badge">Admin</span>
+      <p>Everything in this panel is stripped out of the partner's page. They see only what is below the line.</p>
+      <button class="ghost" id="viewas">View as PAC Global sees it</button>
+    </div>
+    <div class="pcards" id="pcards"></div>
+    <div class="linkrow">
+      <input id="link" value="matchday-clubhouse.vercel.app/partners/pac-global-7vdybfv4" readonly/>
+      <button class="ghost">Copy link</button>
+      <button class="ghost">Open ↗</button>
+      <select class="cad"><option>Cadence: weekly</option><option>Cadence: monthly</option></select>
+      <button class="ghost">Regenerate link</button>
+      <button class="ghost">Disable</button>
+      <button class="ghost danger">Delete</button>
+    </div>
+
+    <div class="pay">
+      <div class="ph"><b>Payments</b><span id="phcount"></span></div>
+      <div id="owed"></div>
+      <div id="latest"></div>
+      <div id="history"></div>
+      <div class="note">Anyone holding the link can open this page — it is the only key, there is no
+        login on it, and it shows this venue and no other. Disabling returns 404 immediately and
+        regenerating does the same to the old link, so both break whatever the partner has bookmarked.
+        The link has been live since May 1, 2026.</div>
+    </div>
+  </div>
+</div>
+
+<script>
+const PARTNERS = [
+  { n:"PAC Global", meta:"Houston · PAC Global · paid weekly", owed:35 },
+  { n:"Hattrick", meta:"Austin · Hattrick · paid monthly", owed:0 },
+  { n:"Crossbar Rowlett", meta:"Dallas · Crossbar Rowlett · paid monthly", owed:0 }
+];
+/* newest first. `flag` marks a paid period whose figures moved after payment. */
+const PAYMENTS = [
+  { p:"Week of Aug 2",  amt:35,     owed:true },
+  { p:"Week of Jul 26", amt:77,     on:"2026-08-03" },
+  { p:"Week of Jul 19", amt:36,     on:"2026-08-03" },
+  { p:"Week of Jul 12", amt:92,     on:"2026-08-03" },
+  { p:"Week of Jul 5",  amt:58,     on:"2026-08-03" },
+  { p:"Week of Jun 28", amt:13,     on:"2026-07-03",
+    flag:"Paid $13. Recomputing today gives $27.50 — the figures behind this week changed after it was paid." },
+  { p:"Week of Jun 14", amt:20,     on:"2026-07-03" },
+  { p:"Week of Jun 7",  amt:38,     on:"2026-07-03" },
+  { p:"Week of May 31", amt:35,     on:"2026-07-03" },
+  { p:"Week of May 24", amt:30,     on:"2026-07-03" },
+  { p:"Week of May 17", amt:25,     on:"2026-07-03" },
+  { p:"Week of May 3",  amt:25,     on:"2026-07-03" },
+  { p:"Through Apr 30", amt:169.50, on:"2026-05-01", opening:true }
+];
+
+const money = n => "$" + (n % 1 ? n.toFixed(2) : n.toLocaleString("en-US"));
+const $ = id => document.getElementById(id);
+const state = { open:false, partner:0 };
+
+function render(){
+  $("pcards").innerHTML = PARTNERS.map((p,i) => `
+    <button class="pc ${i===state.partner?"on":""}" data-p="${i}">
+      <b><i></i>${p.n}</b><span>${p.meta}</span>
+      <em class="${p.owed?"owed":""}">${p.owed?`${money(p.owed)} owed`:"Nothing owed"}</em>
+    </button>`).join("");
+
+  const owed = PAYMENTS.filter(x => x.owed);
+  const paid = PAYMENTS.filter(x => !x.owed);
+  const latest = paid[0];
+  const rest = paid.slice(1);
+
+  $("phcount").textContent =
+    `${paid.length} settled · ${owed.length ? `${owed.length} awaiting` : "nothing awaiting"}`;
+
+  /* the only actionable rows sit at the top and are the only coloured thing here */
+  $("owed").innerHTML = owed.length
+    ? owed.map(x => `<div class="row owed" data-r="owed">
+        <span class="rp">${x.p}</span><span class="ra">${money(x.amt)}</span>
+        <span class="pill owed">Not paid yet</span>
+        <span class="act"><button class="btn go">Mark paid</button></span></div>`).join("")
+    : `<div class="none"><b>Nothing owed.</b> Every closed period has been settled.</div>`;
+
+  const rowHtml = x => `<div class="row" data-r="paid" data-p="${x.p}">
+    <span class="rp">${x.p}</span><span class="ra">${money(x.amt)}</span>
+    <span class="rm">paid ${x.on}</span>
+    ${x.flag ? `<span class="pill flag" title="${x.flag}">Figures changed after payment</span>` : ""}
+    <span class="act"><button class="btn">Undo</button></span></div>`;
+
+  $("latest").innerHTML = latest ? rowHtml(latest) : "";
+
+  if(!rest.length){ $("history").innerHTML = ""; return; }
+  const sum = rest.reduce((a,x) => a + x.amt, 0);
+  const flagged = rest.filter(x => x.flag).length;
+  $("history").innerHTML = state.open
+    ? rest.map(rowHtml).join("") +
+      `<button class="fold" data-fold="close"><span class="fv">&#9660;</span>
+        <span class="fl">${rest.length} earlier payments</span>
+        <span class="fs">${money(sum)}</span>
+        <span class="fx">Hide</span></button>`
+    : `<button class="fold" data-fold="open"><span class="fv">&#9654;</span>
+        <span class="fl">${rest.length} earlier payments hidden</span>
+        <span class="fs">${money(sum)}</span>
+        ${flagged ? `<span class="pill flag">${flagged} need a look</span>` : ""}
+        <span class="fx">Show</span></button>`;
+}
+
+document.addEventListener("click", e => {
+  const f = e.target.closest("[data-fold]");
+  if(f){ state.open = f.dataset.fold === "open"; render(); return; }
+  const p = e.target.closest("[data-p]");
+  if(p && p.classList.contains("pc")){ state.partner = +p.dataset.p; render(); }
+});
+render();
+</script>
+</body></html>

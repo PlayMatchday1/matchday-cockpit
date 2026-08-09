@@ -1,0 +1,817 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+<meta charset="utf-8">
+<title>Master Schedule — edit a match</title>
+<style>
+:root{
+  --forest:#003326; --deep:#04291D; --mint:#2CDB87; --mintInk:#046B45;
+  --ink:#0B1F17; --paper:#fff; --bg:#EDF2EF; --line:#DCE5E0; --line2:#E9EFEB;
+  --muted:#5C6B62; --faint:#67746C;
+  --veo:#F2E31D; --veoInk:#231F00;
+  --coralInk:#A83120; --amberInk:#7A5200; --blueInk:#1B4F9C;
+  --card:#0E4732;
+}
+*{box-sizing:border-box}
+html,body{margin:0;padding:0}
+body{
+  font:15px/1.45 -apple-system,BlinkMacSystemFont,"Segoe UI",Inter,Helvetica,Arial,sans-serif;
+  background:var(--bg); color:var(--ink); -webkit-font-smoothing:antialiased;
+}
+button{font:inherit;cursor:pointer}
+input,select{font:inherit;color:inherit}
+
+/* ---------- top nav ---------- */
+.topnav{background:var(--deep);color:#fff;display:flex;align-items:center;gap:34px;padding:14px 28px}
+.brand{font-weight:800;letter-spacing:.5px;font-style:italic;color:var(--mint);font-size:19px}
+.brand span{color:#fff;font-style:normal;font-weight:600;font-size:15px;margin-left:5px}
+.topnav nav{display:flex;gap:6px;margin-left:14px}
+.topnav nav a{color:#D6E5DD;text-decoration:none;padding:7px 15px;border-radius:20px;font-size:14.5px}
+.topnav nav a.on{background:var(--mint);color:#00291D;font-weight:600}
+.who{margin-left:auto;color:#D6E5DD;font-size:14px}
+
+/* ---------- shell ---------- */
+.shell{display:flex;min-height:calc(100vh - 56px)}
+.side{width:236px;flex:0 0 236px;background:#F4F8F6;border-right:1px solid var(--line);padding:18px 12px}
+.side h4{margin:6px 10px 8px;font-size:10.5px;letter-spacing:.12em;color:var(--faint);font-weight:700}
+.side a{display:flex;align-items:center;gap:10px;padding:9px 11px;border-radius:9px;text-decoration:none;color:#20372C;font-size:14.5px}
+.side a.on{background:#DFF3E8;font-weight:600;color:#00351F;box-shadow:inset 2px 0 0 var(--mint)}
+.side .ic{width:15px;height:15px;border:1.6px solid currentColor;border-radius:3px;opacity:.55;flex:0 0 15px}
+.side .gap{height:16px}
+.main{flex:1;min-width:0;padding:22px 26px 90px;transition:margin-right .17s ease-out}
+/* the drawer pushes the grid rather than covering it — all seven days stay clickable */
+body.drawering .main{margin-right:480px}
+
+/* ---------- page head ---------- */
+.panel{background:var(--paper);border:1px solid var(--line);border-radius:14px}
+.head{padding:20px 22px 18px;margin-bottom:16px}
+.head h1{margin:0 0 6px;font-size:23px;letter-spacing:-.2px}
+.head p{margin:0 0 16px;color:var(--muted);font-size:14px;max-width:64ch}
+.bar{display:flex;align-items:center;gap:10px;flex-wrap:wrap}
+.wk{display:flex;align-items:center;gap:8px}
+.arw{width:32px;height:32px;border-radius:8px;border:1px solid var(--line);background:#fff;color:#20372C;line-height:1}
+.arw:hover{background:#F2F7F4}
+.wklab{text-align:center;padding:0 6px}
+.wklab b{display:block;font-size:15px}
+.wklab i{display:block;font-style:normal;font-size:10px;letter-spacing:.1em;color:var(--mintInk);font-weight:700}
+.btn{border:1px solid var(--line);background:#fff;border-radius:9px;padding:7px 15px;color:#1B3227}
+.btn:hover{background:#F2F7F4}
+.seg{display:inline-flex;border:1px solid var(--line);border-radius:9px;overflow:hidden;background:#F2F5F3}
+.seg button{border:0;background:transparent;padding:7px 16px;color:var(--muted)}
+.seg button.on{background:#fff;color:var(--ink);font-weight:600;box-shadow:0 1px 3px rgba(0,0,0,.09)}
+.vlab{font-size:10.5px;letter-spacing:.12em;color:var(--faint);font-weight:700;margin-left:6px}
+
+/* ---------- stats ---------- */
+.stats{display:grid;grid-template-columns:repeat(4,1fr);margin-bottom:16px;overflow:hidden}
+.stat{padding:18px 22px;border-right:1px solid var(--line2)}
+.stat:last-child{border-right:0}
+.stat .k{font-size:10.5px;letter-spacing:.11em;color:var(--faint);font-weight:700;margin-bottom:7px}
+.stat .v{font-size:31px;font-weight:700;letter-spacing:-.5px;line-height:1}
+.stat .s{font-size:12.5px;color:var(--muted);margin-top:6px}
+
+/* ---------- city grid ---------- */
+.city{margin-bottom:16px;padding:18px 20px 20px}
+.cityhead{display:flex;align-items:center;margin-bottom:14px}
+.cityhead h2{margin:0;font-size:17px}
+.tzchip{margin-left:9px;font-size:10.5px;font-weight:700;letter-spacing:.06em;color:var(--faint);border:1px solid var(--line);border-radius:20px;padding:2px 8px}
+.camchip{margin-left:auto;font-size:12.5px;color:#28453A;background:#EFF4F1;border:1px solid var(--line);border-radius:20px;padding:5px 13px}
+.days{display:grid;grid-template-columns:repeat(7,minmax(0,1fr));gap:9px}
+.day{border:1px solid var(--line);border-radius:11px;padding:9px;background:#FCFDFC;min-height:112px}
+.day.today{border-color:var(--mint);box-shadow:0 0 0 1px var(--mint)}
+.dh{display:flex;justify-content:space-between;font-size:10.5px;letter-spacing:.1em;font-weight:700;color:var(--faint);margin-bottom:8px}
+.dh b{color:#2A473B;font-size:12px;letter-spacing:0}
+.none{font-size:13px;color:var(--faint);padding:6px 2px}
+
+.card{
+  width:100%;text-align:left;display:block;position:relative;
+  border:1px solid var(--line);border-radius:9px;background:#fff;
+  padding:9px 10px 8px;margin-bottom:7px;color:inherit;
+}
+.card:last-child{margin-bottom:0}
+.card:hover{border-color:#9FC4B2;box-shadow:0 2px 7px rgba(0,42,28,.09)}
+.card:focus-visible{outline:2px solid var(--mintInk);outline-offset:2px}
+.card .t{font-weight:700;font-size:13.5px;letter-spacing:-.1px}
+.card .v{font-size:12.5px;color:var(--muted);margin:1px 0 7px;white-space:nowrap;overflow:hidden;text-overflow:ellipsis}
+.card.hasveo{background:var(--card);border-color:#0B3A29;color:#fff}
+.card.hasveo .v{color:#A9D7C3}
+.card.hasveo:hover{border-color:var(--mint)}
+.veo{
+  display:inline-flex;align-items:center;gap:5px;border-radius:5px;
+  padding:2px 7px;font-size:10.5px;font-weight:800;letter-spacing:.07em;
+  border:1px solid #C3CDC7;background:#fff;color:#41514A;
+}
+.veo .cam{width:9px;height:7px;border:1.4px solid currentColor;border-radius:1.5px}
+.card.hasveo .veo{background:var(--veo);border-color:var(--veo);color:var(--veoInk)}
+.veo:hover{border-color:var(--mintInk)}
+.veo:focus-visible{outline:2px solid var(--mintInk);outline-offset:2px}
+.edithint{
+  position:absolute;right:8px;bottom:8px;font-size:10.5px;font-weight:700;
+  letter-spacing:.06em;color:var(--mintInk);opacity:0;
+}
+.card.hasveo .edithint{color:var(--mint)}
+.card:hover .edithint,.card:focus-visible .edithint{opacity:1}
+
+/* The open card is marked by a ring, not by dimming everything else. An ops person is
+   still reading the week while the drawer is open — washing it out defeats the point of
+   pushing the grid aside rather than covering it. */
+body.drawering .card.sel{box-shadow:0 0 0 3px var(--mint),0 6px 18px rgba(0,42,28,.20)}
+body.drawering .card.sel .v{color:#2A473B}
+body.drawering .card.sel.hasveo .v{color:#A9D7C3}
+
+/* ---------- drawer ---------- */
+.drawer:focus{outline:none}
+.drawer{
+  position:fixed;top:0;right:0;bottom:0;width:480px;background:#fff;
+  border-left:1px solid var(--line);box-shadow:-14px 0 40px rgba(0,32,21,.16);
+  display:flex;flex-direction:column;transform:translateX(100%);
+  transition:transform .17s ease-out;z-index:60;
+}
+body.drawering .drawer{transform:translateX(0)}
+.dhead{background:var(--deep);color:#fff;padding:15px 18px 16px;flex:0 0 auto}
+.dhead .row1{display:flex;align-items:center;gap:8px;margin-bottom:9px}
+.crumb{font-size:12px;color:#9FC9B6;letter-spacing:.02em}
+.dhead .row1 .sp{margin-left:auto;display:flex;gap:6px}
+.iconb{width:29px;height:29px;border-radius:7px;border:1px solid #2A5644;background:transparent;color:#CFE7DC;line-height:1;font-size:14px}
+.iconb:hover:not(:disabled){background:#14432F;color:#fff}
+.iconb:disabled{opacity:.32;cursor:not-allowed}
+.dhead h3{margin:0;font-size:18.5px;letter-spacing:-.2px}
+.chips{display:flex;gap:6px;margin-top:9px;flex-wrap:wrap;align-items:center}
+.chip{font-size:10.5px;font-weight:700;letter-spacing:.07em;border-radius:20px;padding:3px 9px}
+.chip.id{background:#14432F;color:#B7DECB}
+.chip.stg{background:var(--veo);color:var(--veoInk)}
+.chip.tz{background:#14432F;color:#B7DECB}
+.full{margin-left:auto;color:var(--mint);font-size:12.5px;text-decoration:none;font-weight:600;white-space:nowrap}
+.full:hover{text-decoration:underline}
+
+.dbody{flex:1 1 auto;overflow-y:auto;padding:4px 18px 18px}
+.sec{border-bottom:1px solid var(--line2);padding:16px 0}
+.sec:last-child{border-bottom:0}
+.sec h5{margin:0 0 12px;font-size:10.5px;letter-spacing:.12em;color:var(--faint);font-weight:700;display:flex;align-items:center}
+.sec h5 .n{margin-left:auto;font-size:11px;letter-spacing:0;color:var(--blueInk);font-weight:700;text-transform:none}
+.f{margin-bottom:12px}
+.f:last-child{margin-bottom:0}
+.f label{display:block;font-size:11px;letter-spacing:.09em;font-weight:700;color:var(--faint);margin-bottom:5px}
+.f.dirty label{color:var(--blueInk)}
+.two{display:grid;grid-template-columns:1fr 1fr;gap:11px}
+.three{display:grid;grid-template-columns:1fr 1fr 1fr;gap:11px}
+input[type=text],input[type=time],input[type=date],input[type=number],select{
+  width:100%;padding:9px 11px;border:1px solid #CBD7D1;border-radius:8px;background:#fff;
+}
+input:focus,select:focus{outline:2px solid var(--mintInk);outline-offset:-1px;border-color:var(--mintInk)}
+.f.dirty input,.f.dirty select{border-color:#9CB6DD;background:#F4F8FE}
+.money{position:relative}
+.money input{padding-left:24px}
+.money .cur{position:absolute;left:11px;top:9px;color:var(--muted)}
+.hint{font-size:12px;color:var(--muted);margin-top:5px}
+.hint.warn{color:var(--amberInk)}
+.tzline{font-size:12px;line-height:1.5;color:var(--muted);margin-top:6px}
+.tzline b{color:#2A473B}
+
+.veorow{display:flex;align-items:center;gap:12px;border:1px solid var(--line);border-radius:10px;padding:12px 13px;background:#FBFCFB}
+.veorow .lab{font-weight:600;font-size:14px}
+.veorow .sub{font-size:12px;color:var(--muted);margin-top:2px}
+.sw{margin-left:auto;width:46px;height:26px;border-radius:20px;border:1px solid #C3CDC7;background:#E7EDEA;position:relative;flex:0 0 46px}
+.sw i{position:absolute;top:2px;left:2px;width:20px;height:20px;border-radius:50%;background:#fff;box-shadow:0 1px 3px rgba(0,0,0,.28);transition:left .13s}
+.sw.on{background:var(--veo);border-color:#D9CA10}
+.sw.on i{left:22px}
+.sw:focus-visible{outline:2px solid var(--mintInk);outline-offset:2px}
+
+.ro{background:#F6F9F7;border:1px solid var(--line);border-radius:10px;padding:12px 13px}
+.ro .rr{display:flex;justify-content:space-between;font-size:13.5px;padding:3px 0}
+.ro .rr span{color:var(--muted)}
+.ro .note{font-size:12px;color:var(--muted);margin-top:9px;border-top:1px solid var(--line2);padding-top:9px}
+
+/* ---------- drawer footer ---------- */
+.dfoot{flex:0 0 auto;border-top:1px solid var(--line);background:#fff}
+.diff{background:#F2F7FE;border-bottom:1px solid #D9E5F7;padding:13px 18px}
+.diff .dt{font-size:10.5px;letter-spacing:.12em;font-weight:700;color:var(--blueInk);margin-bottom:9px}
+.dchip{display:inline-block;background:#fff;border:1px solid #C9DBF3;border-radius:7px;padding:4px 9px;font-size:12.5px;margin:0 6px 6px 0}
+.dchip b{font-weight:700}
+.dchip s{color:var(--muted);text-decoration:line-through}
+.dchip em{font-style:normal;color:var(--blueInk);font-weight:700}
+.diff .fine{font-size:11.5px;color:#264F8C;line-height:1.45;margin-top:3px}
+.acts{display:flex;align-items:center;gap:9px;padding:13px 18px}
+.acts .cnt{font-size:13px;color:var(--muted)}
+.acts .sp{margin-left:auto;display:flex;gap:9px}
+.gh{border:1px solid var(--line);background:#fff;border-radius:9px;padding:9px 17px;color:#1B3227}
+.gh:disabled{opacity:.42;cursor:not-allowed}
+.gh:not(:disabled):hover{background:#F2F7F4}
+.go{border:0;background:var(--forest);color:#fff;border-radius:9px;padding:9px 21px;font-weight:600}
+.go:disabled{background:#DCE3DF;color:#4E5A54;cursor:not-allowed}
+.go:not(:disabled):hover{background:#01452F}
+
+.toast{
+  position:fixed;left:50%;bottom:26px;transform:translateX(-50%) translateY(16px);
+  background:var(--forest);color:#fff;padding:11px 20px;border-radius:10px;font-size:14px;
+  opacity:0;pointer-events:none;transition:.16s;z-index:80;
+}
+.toast.up{opacity:1;transform:translateX(-50%) translateY(0)}
+.toast.warnt{background:var(--coralInk)}
+</style>
+</head>
+<body>
+
+<div class="topnav">
+  <div class="brand">MATCHDAY<span>Clubhouse</span></div>
+  <nav>
+    <a href="#">Home</a><a href="#">Finance</a><a href="#">Growth</a>
+    <a href="#">Membership</a><a href="#" class="on">Match Ops</a><a href="#">Tech</a>
+  </nav>
+  <div class="who">Ryan Mancuso &#9662;</div>
+</div>
+
+<div class="shell">
+  <aside class="side">
+    <h4>OPERATIONS</h4>
+    <a href="#" class="on"><i class="ic"></i>Master Schedule</a>
+    <a href="#"><i class="ic"></i>Slate Review</a>
+    <a href="#"><i class="ic"></i>Field Pipeline</a>
+    <a href="#"><i class="ic"></i>Field Ops</a>
+    <a href="#"><i class="ic"></i>Inventory</a>
+    <a href="#"><i class="ic"></i>Manager Pay</a>
+    <a href="#"><i class="ic"></i>Partner Dashboards</a>
+    <a href="#"><i class="ic"></i>Reviews</a>
+    <div class="gap"></div>
+    <h4>CONVERSATIONS</h4>
+    <a href="#"><i class="ic"></i>Match Chats</a>
+    <a href="#"><i class="ic"></i>Player Chats</a>
+  </aside>
+
+  <main class="main">
+    <div class="panel head">
+      <h1>Master Schedule</h1>
+      <p>Mark the matches a Veo camera will cover, then switch to Veo coverage to see the week as one grid &mdash; which nights are covered, which are open, and where a camera is idle or short.</p>
+      <div class="bar">
+        <div class="wk">
+          <button class="arw" aria-label="Previous week">&#8249;</button>
+          <div class="wklab"><b>Mon 3 &ndash; Sun 9 Aug 2026</b><i>THIS WEEK</i></div>
+          <button class="arw" aria-label="Next week">&#8250;</button>
+        </div>
+        <button class="btn">Today</button>
+        <span class="vlab">VIEW</span>
+        <div class="seg"><button class="on">Schedule</button><button>Veo coverage</button></div>
+        <button class="btn">Export worklist</button>
+      </div>
+    </div>
+
+    <div class="panel stats" id="stats"></div>
+    <div id="cities"></div>
+  </main>
+</div>
+
+<!-- ---------------- drawer ---------------- -->
+<aside class="drawer" id="drawer" role="dialog" aria-modal="false" aria-labelledby="dname" aria-hidden="true" tabindex="-1">
+  <div class="dhead">
+    <div class="row1">
+      <div class="crumb" id="crumb"></div>
+      <div class="sp">
+        <button class="iconb" id="prev" title="Previous match this day" aria-label="Previous match this day">&#8593;</button>
+        <button class="iconb" id="next" title="Next match this day" aria-label="Next match this day">&#8595;</button>
+        <button class="iconb" id="close" title="Close (Esc)" aria-label="Close">&#10005;</button>
+      </div>
+    </div>
+    <h3 id="dname"></h3>
+    <div class="chips">
+      <span class="chip id" id="cid"></span>
+      <span class="chip tz" id="ctz"></span>
+      <span class="chip stg">STAGING &middot; GUARDED</span>
+      <a class="full" href="#" id="fulllink">Open full editor &rarr;</a>
+    </div>
+  </div>
+
+  <div class="dbody" id="dbody">
+
+    <div class="sec">
+      <h5>WHEN <span class="n" id="n-when"></span></h5>
+      <div class="two">
+        <div class="f" id="f-date">
+          <label for="i-date">DATE</label>
+          <input type="date" id="i-date">
+        </div>
+        <div class="f" id="f-time">
+          <label for="i-time">START TIME</label>
+          <input type="time" id="i-time">
+        </div>
+      </div>
+      <div class="tzline">Entered as local wall-clock time in <b id="tzname"></b>. The server derives UTC from the field&rsquo;s timezone &mdash; Clubhouse never converts.</div>
+    </div>
+
+    <div class="sec">
+      <h5>WHERE <span class="n" id="n-where"></span></h5>
+      <div class="f" id="f-field">
+        <label for="i-field">FIELD</label>
+        <select id="i-field"></select>
+        <div class="hint warn" id="tzwarn" hidden></div>
+      </div>
+      <div class="f" id="f-name">
+        <label for="i-name">MATCH NAME</label>
+        <input type="text" id="i-name">
+      </div>
+    </div>
+
+    <div class="sec">
+      <h5>MONEY <span class="n" id="n-money"></span></h5>
+      <div class="three">
+        <div class="f" id="f-price">
+          <label for="i-price">PRICE</label>
+          <div class="money"><span class="cur">$</span><input type="number" id="i-price" step="0.01" min="0"></div>
+        </div>
+        <div class="f" id="f-spot">
+          <label for="i-spot">SPOT PRICE</label>
+          <div class="money"><span class="cur">$</span><input type="number" id="i-spot" step="0.01" min="0"></div>
+        </div>
+        <div class="f" id="f-guest">
+          <label for="i-guest">GUEST COUNT</label>
+          <input type="number" id="i-guest" min="0" step="1">
+        </div>
+      </div>
+      <div class="hint">Stored in cents. Clearing a box is not a change &mdash; type 0 to actually set a price to zero.</div>
+    </div>
+
+    <div class="sec">
+      <h5>WHO <span class="n" id="n-who"></span></h5>
+      <div class="two">
+        <div class="f" id="f-mgr1"><label for="i-mgr1">MANAGER</label><select id="i-mgr1"></select></div>
+        <div class="f" id="f-mgr2"><label for="i-mgr2">SECOND MANAGER</label><select id="i-mgr2"></select></div>
+      </div>
+      <div class="hint" id="delnote" hidden></div>
+    </div>
+
+    <div class="sec">
+      <h5>VEO COVERAGE</h5>
+      <div class="veorow">
+        <div>
+          <div class="lab">Camera assigned</div>
+          <div class="sub" id="veosub"></div>
+        </div>
+        <button class="sw" id="i-veo" role="switch" aria-checked="false" aria-label="Camera assigned"><i></i></button>
+      </div>
+      <div class="hint">Veo lives in Clubhouse, not the MatchDay API &mdash; it saves the instant you flip it and stays out of the list below.</div>
+    </div>
+
+    <div class="sec">
+      <h5>NOT EDITED HERE</h5>
+      <div class="ro">
+        <div class="rr"><span>Roster</span><b id="ro-roster"></b></div>
+        <div class="rr"><span>Teams &amp; tee prices</span><b id="ro-teams"></b></div>
+        <div class="rr"><span>Spots released before kick-off</span><b>5 marks</b></div>
+        <div class="rr"><span>Automation</span><b id="ro-auto"></b></div>
+        <div class="note">These need other endpoints or the room to lay them out. <a href="#" id="fulllink2">Open the full editor</a> for all 23 fields.</div>
+      </div>
+    </div>
+
+  </div>
+
+  <div class="dfoot">
+    <div class="diff" id="diff" hidden>
+      <div class="dt">ABOUT TO CHANGE</div>
+      <div id="dchips"></div>
+      <div class="fine">This list is the request. The API leaves out what you omit, so only these fields are sent &mdash; nothing you did not touch can be overwritten.</div>
+    </div>
+    <div class="acts">
+      <span class="cnt" id="cnt">No changes</span>
+      <div class="sp">
+        <button class="gh" id="revert" disabled>Revert</button>
+        <button class="go" id="save" disabled>Save</button>
+      </div>
+    </div>
+  </div>
+</aside>
+
+<div class="toast" id="toast"></div>
+
+<script>
+/* =====================================================================
+   Data. Two cities, two timezones — the whole point of the drawer's
+   timezone line. Atlanta is Eastern, Austin is Central.
+   startDate is LOCAL WALL-CLOCK despite the Z suffix the API uses;
+   nothing here ever calls new Date() on it.
+   ===================================================================== */
+const FIELDS = [
+  {id:11, name:"PRUMC",                      city:"Atlanta", tz:"Eastern"},
+  {id:12, name:"Chastain Park",              city:"Atlanta", tz:"Eastern"},
+  {id:1,  name:"NEMP",                       city:"Austin",  tz:"Central"},
+  {id:2,  name:"Onion Creek",                city:"Austin",  tz:"Central"},
+  {id:3,  name:"Hattrick",                   city:"Austin",  tz:"Central"},
+  {id:4,  name:"LBJ Early College High School", city:"Austin", tz:"Central"},
+  {id:5,  name:"Round Rock",                 city:"Austin",  tz:"Central"}
+];
+const fieldById = id => FIELDS.find(f => f.id === id);
+
+const MANAGERS = [
+  {id:null, name:"— none —"},
+  {id:101, name:"Marcus Webb"},
+  {id:102, name:"Dani Ferreira"},
+  {id:103, name:"Tolu Adeyemi"},
+  {id:104, name:"Sam Okafor"},
+  {id:999, name:"Deleted Account", deleted:true}
+];
+const mgrById = id => MANAGERS.find(m => m.id === id);
+
+const DAYS = ["MON","TUE","WED","THU","FRI","SAT","SUN"];
+const DATES = ["2026-08-03","2026-08-04","2026-08-05","2026-08-06","2026-08-07","2026-08-08","2026-08-09"];
+const TODAY = "2026-08-07";
+
+/* time strings are 24h wall-clock, rendered 12h */
+function mk(id, date, time, fieldId, veo, price, spot, guests, mgr, mgr2, name, filled, cap, teams){
+  return {id, date, time, fieldId, veo, registrationPrice:price, additionalSpotPrice:spot,
+          guestCount:guests, managerId:mgr, secondManagerId:mgr2, name, filled, cap, teams};
+}
+const MATCHES = [
+  /* Atlanta — Eastern */
+  mk(3101,"2026-08-03","19:00",11,true ,12000,4000,10,101,null,"Monday Night PRUMC",18,20,2),
+  mk(3102,"2026-08-04","19:00",11,true ,12000,4000,10,102,null,"Tuesday Night PRUMC",20,20,2),
+  mk(3104,"2026-08-06","19:00",11,true ,12000,4000,10,101,null,"Thursday Night PRUMC",16,20,2),
+  mk(3105,"2026-08-07","19:00",11,true ,12000,4000,10,103,null,"Friday Night PRUMC",19,20,2),
+  mk(3107,"2026-08-09","18:00",11,true ,10000,4000,10,102,null,"Sunday Evening PRUMC",14,20,2),
+
+  /* Austin — Central */
+  mk(2401,"2026-08-03","18:30", 1,false,12000,4000,10,104,null,"Monday Early NEMP",36,40,4),
+  mk(2402,"2026-08-03","19:00", 2,false,12000,4000,10,101,null,"Monday Onion Creek",22,30,3),
+  mk(2403,"2026-08-03","19:00", 2,true ,12000,4000,10,102,null,"Monday Onion Creek Late",28,30,3),
+  mk(2404,"2026-08-04","18:30", 1,false,12000,4000,10,104,null,"Tuesday Early NEMP",31,40,4),
+  mk(2405,"2026-08-04","19:00", 3,false, 9000,3500,10,103,null,"Tuesday Hattrick",18,20,2),
+  mk(2406,"2026-08-04","19:00", 2,false,12000,4000,10,101,null,"Tuesday Onion Creek",25,30,3),
+  mk(2407,"2026-08-05","19:00", 2,false,12000,4000,10,102,null,"Wednesday Onion Creek",27,30,3),
+  mk(2408,"2026-08-05","19:00", 2,true ,12000,4000,10,101,null,"Wednesday Onion Creek Late",30,30,3),
+  mk(2409,"2026-08-05","19:00", 3,false, 9000,3500,10,103,null,"Wednesday Hattrick",15,20,2),
+  mk(2410,"2026-08-06","18:30", 1,false,12000,4000,10,104,null,"Thursday Early NEMP",33,40,4),
+  mk(2411,"2026-08-06","19:00", 2,false,12000,4000,10,102,null,"Thursday Onion Creek",24,30,3),
+  mk(2412,"2026-08-06","19:30", 1,false,12000,4000,10,101,null,"Thursday Late NEMP",29,40,4),
+  mk(2470,"2026-08-07","18:30", 1,false,12000,4000,10,null,999,"Big Success Clubhouse",36,40,4),
+  mk(2414,"2026-08-07","19:30", 4,false,11000,4000,10,103,null,"Friday LBJ",21,30,3),
+  mk(2415,"2026-08-07","19:30", 1,true ,12000,4000,10,104,null,"Friday Late NEMP",38,40,4),
+  mk(2416,"2026-08-08","09:00", 2,false,10000,3500,10,102,null,"Saturday Morning Onion Creek",26,30,3),
+  mk(2417,"2026-08-08","09:30", 4,false,10000,3500,10,103,null,"Saturday Morning LBJ",19,30,3),
+  mk(2418,"2026-08-08","18:30", 1,false,12000,4000,10,104,null,"Saturday Evening NEMP",30,40,4),
+  mk(2419,"2026-08-09","18:30", 1,false,12000,4000,10,101,null,"Sunday Early NEMP",34,40,4),
+  mk(2420,"2026-08-09","19:00", 5,false,11000,4000,10,102,null,"Sunday Round Rock",23,30,3),
+  mk(2421,"2026-08-09","19:00", 3,false, 9000,3500,10,103,null,"Sunday Hattrick",17,20,2)
+];
+
+const CITIES = [
+  {name:"Atlanta", tz:"Eastern", cameras:1},
+  {name:"Austin",  tz:"Central", cameras:1}
+];
+const cityOf = m => fieldById(m.fieldId).city;
+
+/* ---------- formatting ---------- */
+function hhmm12(t){
+  const [H,M] = t.split(":").map(Number);
+  const ap = H >= 12 ? "PM" : "AM";
+  const h = H % 12 === 0 ? 12 : H % 12;
+  return h + ":" + String(M).padStart(2,"0") + " " + ap;
+}
+const money = c => "$" + (c/100).toFixed(2);
+const dollars = c => (c/100).toFixed(2);
+const centsOf = d => Math.round(parseFloat(d) * 100);
+
+/* ---------- stats, computed from the rendered data ---------- */
+function renderStats(){
+  const withVeo = MATCHES.filter(m => m.veo).length;
+  const total   = MATCHES.length;
+  const nightsAvailable = CITIES.reduce((a,c) => a + c.cameras * 7, 0);
+  const cityDay = new Set(), cityDayVeo = new Set();
+  MATCHES.forEach(m => {
+    const k = cityOf(m) + "|" + m.date;
+    cityDay.add(k);
+    if (m.veo) cityDayVeo.add(k);
+  });
+  const used = cityDayVeo.size;
+  const open = [...cityDay].filter(k => !cityDayVeo.has(k)).length;
+  const pct  = Math.round(used / nightsAvailable * 100);
+  document.getElementById("stats").innerHTML = `
+    <div class="stat"><div class="k">MATCHES WITH VEO</div><div class="v" id="s-veo">${withVeo}</div>
+      <div class="s">of ${total} this week</div></div>
+    <div class="stat"><div class="k">CAMERA NIGHTS USED</div><div class="v">${used}</div>
+      <div class="s">of ${nightsAvailable} available &middot; ${pct}%</div></div>
+    <div class="stat"><div class="k">OPEN NIGHTS</div><div class="v">${open}</div>
+      <div class="s">city-days with matches, no camera</div></div>
+    <div class="stat"><div class="k">OVER CAPACITY</div><div class="v">0</div>
+      <div class="s">none</div></div>`;
+}
+
+/* ---------- grid ---------- */
+function renderGrid(){
+  const host = document.getElementById("cities");
+  host.innerHTML = CITIES.map(c => {
+    const mine = MATCHES.filter(m => cityOf(m) === c.name);
+    const veoN = mine.filter(m => m.veo).length;
+    const cols = DATES.map((d,i) => {
+      const day = mine.filter(m => m.date === d)
+                      .sort((a,b) => a.time.localeCompare(b.time));
+      const inner = day.length
+        ? day.map(m => cardHTML(m)).join("")
+        : `<div class="none">No sessions</div>`;
+      return `<div class="day${d===TODAY?" today":""}">
+                <div class="dh"><span>${DAYS[i]}</span><b>${d.slice(-2)}</b></div>
+                ${inner}
+              </div>`;
+    }).join("");
+    return `<section class="panel city">
+      <div class="cityhead">
+        <h2>${c.name}</h2><span class="tzchip">${c.tz.toUpperCase()}</span>
+        <span class="camchip">${c.cameras} camera &middot; ${veoN} with Veo</span>
+      </div>
+      <div class="days">${cols}</div>
+    </section>`;
+  }).join("");
+}
+function cardHTML(m){
+  const f = fieldById(m.fieldId);
+  return `<button class="card${m.veo?" hasveo":""}" data-id="${m.id}" id="card-${m.id}"
+            aria-label="${hhmm12(m.time)} ${f.name} — edit match ${m.id}">
+      <div class="t">${hhmm12(m.time)}</div>
+      <div class="v">${f.name}</div>
+      <span class="veo" data-veo="${m.id}" role="switch" aria-checked="${m.veo}"
+            aria-label="Veo camera for match ${m.id}"><i class="cam"></i>VEO</span>
+      <span class="edithint">EDIT</span>
+    </button>`;
+}
+
+/* =====================================================================
+   The editor. LOADED is what the server gave us. state is what is on
+   screen. The diff between them IS the request body — the same rule the
+   full match editor uses, so the two cannot drift apart.
+   ===================================================================== */
+const EDITABLE = ["date","time","fieldId","name","registrationPrice",
+                  "additionalSpotPrice","guestCount","managerId","secondManagerId"];
+const NUMERIC  = ["registrationPrice","additionalSpotPrice","guestCount","fieldId"];
+
+let LOADED = null, state = null, current = null;
+
+/* null, undefined and "" are the same absence. 0 and false are real values.
+   A blank numeric box is NOT a change — it is a half-typed number. */
+const norm = v => (v === null || v === undefined || v === "") ? null : v;
+const blankNum = v => v === "" || v === null || v === undefined ||
+                      (typeof v === "number" && Number.isNaN(v));
+function fieldChanged(key){
+  if (NUMERIC.includes(key) && blankNum(state[key])) return false;
+  return String(norm(state[key])) !== String(norm(LOADED[key]));
+}
+const changedKeys = () => EDITABLE.filter(fieldChanged);
+
+function open(id, focusIt){
+  const m = MATCHES.find(x => x.id === id);
+  LOADED = {}; EDITABLE.forEach(k => LOADED[k] = m[k]);
+  state  = Object.assign({}, LOADED);
+  current = m;
+
+  document.querySelectorAll(".card.sel").forEach(e => e.classList.remove("sel"));
+  document.getElementById("card-" + id).classList.add("sel");
+  document.body.classList.add("drawering");
+  document.getElementById("drawer").setAttribute("aria-hidden","false");
+
+  paintStatic();
+  paint();
+  /* focus the panel itself, not the first input — landing inside a time box and
+     selecting its digits reads like the field is already being edited */
+  if (focusIt !== false) document.getElementById("drawer").focus();
+}
+function close(){
+  document.body.classList.remove("drawering");
+  document.getElementById("drawer").setAttribute("aria-hidden","true");
+  document.querySelectorAll(".card.sel").forEach(e => e.classList.remove("sel"));
+  if (current) document.getElementById("card-" + current.id).focus();
+  current = null;
+}
+
+function paintStatic(){
+  const m = current, f = fieldById(LOADED.fieldId), city = f.city;
+  const di = DATES.indexOf(LOADED.date);
+  document.getElementById("crumb").textContent =
+    city + "  ·  " + DAYS[di] + " " + LOADED.date.slice(-2) + " Aug";
+  document.getElementById("dname").textContent = LOADED.name;
+  document.getElementById("cid").textContent = "ID " + m.id;
+  document.getElementById("ctz").textContent = f.tz.toUpperCase();
+  document.getElementById("fulllink").setAttribute("href", "/match-ops/matches/" + m.id);
+  document.getElementById("fulllink2").setAttribute("href", "/match-ops/matches/" + m.id);
+  document.getElementById("tzname").textContent = city + " (" + f.tz + ")";
+  document.getElementById("veosub").textContent = m.veo
+    ? "Counted in this week's camera nights."
+    : "This match is not covered.";
+  const sw = document.getElementById("i-veo");
+  sw.classList.toggle("on", m.veo);
+  sw.setAttribute("aria-checked", String(m.veo));
+  document.getElementById("ro-roster").textContent = m.filled + " of " + m.cap + " filled";
+  document.getElementById("ro-teams").textContent  = m.teams + " teams";
+  document.getElementById("ro-auto").textContent   = "Auto-bump off";
+
+  /* selects */
+  const fs = document.getElementById("i-field");
+  fs.innerHTML = FIELDS.map(x =>
+    `<option value="${x.id}">${x.name} — ${x.city}</option>`).join("");
+  const opts = MANAGERS.filter(x => !x.deleted || x.id === LOADED.managerId ||
+                                    x.id === LOADED.secondManagerId);
+  ["i-mgr1","i-mgr2"].forEach(sel => {
+    document.getElementById(sel).innerHTML = opts.map(x =>
+      `<option value="${x.id === null ? "" : x.id}">${x.name}</option>`).join("");
+  });
+
+  document.getElementById("i-date").value  = LOADED.date;
+  document.getElementById("i-time").value  = LOADED.time;
+  document.getElementById("i-name").value  = LOADED.name;
+  document.getElementById("i-price").value = dollars(LOADED.registrationPrice);
+  document.getElementById("i-spot").value  = dollars(LOADED.additionalSpotPrice);
+  document.getElementById("i-guest").value = LOADED.guestCount;
+  fs.value = LOADED.fieldId;
+  document.getElementById("i-mgr1").value = LOADED.managerId === null ? "" : LOADED.managerId;
+  document.getElementById("i-mgr2").value = LOADED.secondManagerId === null ? "" : LOADED.secondManagerId;
+
+  /* the deleted-manager case, which staging match 3 actually has */
+  const dn = document.getElementById("delnote");
+  const del = [LOADED.managerId, LOADED.secondManagerId]
+                .map(mgrById).filter(x => x && x.deleted);
+  if (del.length){
+    dn.hidden = false;
+    dn.className = "hint warn";
+    dn.textContent = "This match points at a deleted account. It is kept in the list so "
+                   + "loading the match does not silently blank the field and report a "
+                   + "change you did not make.";
+  } else { dn.hidden = true; }
+
+  /* prev / next within the same city-day */
+  const sibs = siblings();
+  const i = sibs.findIndex(x => x.id === m.id);
+  document.getElementById("prev").disabled = i <= 0;
+  document.getElementById("next").disabled = i >= sibs.length - 1;
+}
+function siblings(){
+  return MATCHES
+    .filter(x => x.date === current.date && cityOf(x) === cityOf(current))
+    .sort((a,b) => a.time.localeCompare(b.time));
+}
+
+const LABEL = {date:"Date", time:"Start time", fieldId:"Field", name:"Name",
+  registrationPrice:"Price", additionalSpotPrice:"Spot price",
+  guestCount:"Guest count", managerId:"Manager", secondManagerId:"Second manager"};
+function show(key, v){
+  if (v === null || v === "") return "none";
+  if (key === "fieldId") return fieldById(Number(v)).name;
+  if (key === "time") return hhmm12(v);
+  if (key === "registrationPrice" || key === "additionalSpotPrice") return money(v);
+  if (key === "managerId" || key === "secondManagerId"){
+    const m = mgrById(v === "" ? null : Number(v)); return m ? m.name : String(v);
+  }
+  return String(v);
+}
+
+function paint(){
+  const ch = changedKeys();
+
+  EDITABLE.forEach(k => {
+    const map = {date:"f-date",time:"f-time",fieldId:"f-field",name:"f-name",
+      registrationPrice:"f-price",additionalSpotPrice:"f-spot",guestCount:"f-guest",
+      managerId:"f-mgr1",secondManagerId:"f-mgr2"};
+    document.getElementById(map[k]).classList.toggle("dirty", ch.includes(k));
+  });
+  const grp = (id, keys) => {
+    const n = keys.filter(k => ch.includes(k)).length;
+    document.getElementById(id).textContent = n ? n + " changed" : "";
+  };
+  grp("n-when", ["date","time"]);
+  grp("n-where", ["fieldId","name"]);
+  grp("n-money", ["registrationPrice","additionalSpotPrice","guestCount"]);
+  grp("n-who", ["managerId","secondManagerId"]);
+
+  /* moving a match across a timezone keeps the wall clock and moves the instant */
+  const w = document.getElementById("tzwarn");
+  const nf = fieldById(Number(state.fieldId)), of_ = fieldById(LOADED.fieldId);
+  if (nf && nf.tz !== of_.tz){
+    w.hidden = false;
+    w.textContent = "Moving from " + of_.tz + " to " + nf.tz + ". The clock time stays "
+                  + hhmm12(state.time) + " — that is one hour "
+                  + (nf.tz === "Central" ? "later" : "earlier") + " in real terms.";
+  } else { w.hidden = true; }
+
+  const diff = document.getElementById("diff");
+  const cnt  = document.getElementById("cnt");
+  if (ch.length){
+    diff.hidden = false;
+    document.getElementById("dchips").innerHTML = ch.map(k =>
+      `<span class="dchip" data-k="${k}"><b>${LABEL[k]}</b> <s>${show(k,LOADED[k])}</s> &rarr; <em>${show(k,state[k])}</em></span>`
+    ).join("");
+    cnt.textContent = ch.length + (ch.length === 1 ? " change not saved" : " changes not saved");
+  } else {
+    diff.hidden = true;
+    document.getElementById("dchips").innerHTML = "";   /* leave nothing stale behind */
+    cnt.textContent = "No changes";
+  }
+  document.getElementById("save").disabled   = ch.length === 0;
+  document.getElementById("revert").disabled = ch.length === 0;
+}
+
+/* ---------- wiring ---------- */
+function bind(id, key, read){
+  document.getElementById(id).addEventListener("input", e => {
+    state[key] = read(e.target.value); paint();
+  });
+}
+bind("i-date","date", v => v);
+bind("i-time","time", v => v);
+bind("i-name","name", v => v);
+bind("i-field","fieldId", v => Number(v));
+bind("i-guest","guestCount", v => v === "" ? "" : Number(v));
+bind("i-price","registrationPrice", v => v === "" ? "" : centsOf(v));
+bind("i-spot","additionalSpotPrice", v => v === "" ? "" : centsOf(v));
+bind("i-mgr1","managerId", v => v === "" ? null : Number(v));
+bind("i-mgr2","secondManagerId", v => v === "" ? null : Number(v));
+
+/* A blank numeric box is a half-typed number, not a change — so Revert is correctly
+   disabled and there is nothing to put the value back. Restore it on blur instead,
+   otherwise the box sits empty with no way out of it. */
+[["i-price","registrationPrice",dollars],
+ ["i-spot","additionalSpotPrice",dollars],
+ ["i-guest","guestCount",v=>String(v)]].forEach(([id,key,fmt]) => {
+  document.getElementById(id).addEventListener("blur", e => {
+    if (e.target.value === ""){ e.target.value = fmt(LOADED[key]); state[key] = LOADED[key]; paint(); }
+  });
+});
+
+document.getElementById("cities").addEventListener("click", e => {
+  const v = e.target.closest("[data-veo]");
+  if (v){                                   /* Veo toggle never opens the drawer */
+    e.preventDefault(); e.stopPropagation();
+    const m = MATCHES.find(x => x.id === Number(v.dataset.veo));
+    m.veo = !m.veo;
+    renderGrid(); renderStats();
+    if (current){
+      document.getElementById("card-" + current.id).classList.add("sel");
+      paintStatic(); paint();
+    }
+    toast(m.veo ? "Camera assigned to " + m.id : "Camera removed from " + m.id);
+    return;
+  }
+  const c = e.target.closest(".card");
+  if (!c) return;
+  const id = Number(c.dataset.id);
+  if (current && current.id !== id && changedKeys().length){
+    toast("Save or revert " + current.id + " first.", true); return;
+  }
+  open(id);
+});
+
+document.getElementById("close").addEventListener("click", () => {
+  if (changedKeys().length){ toast("Save or revert first.", true); return; }
+  close();
+});
+document.addEventListener("keydown", e => {
+  if (e.key === "Escape" && current){
+    if (changedKeys().length){ toast("Save or revert first.", true); return; }
+    close();
+  }
+});
+function step(d){
+  const sibs = siblings();
+  const i = sibs.findIndex(x => x.id === current.id);
+  const t = sibs[i + d];
+  if (!t) return;
+  if (changedKeys().length){ toast("Save or revert " + current.id + " first.", true); return; }
+  open(t.id);
+}
+document.getElementById("prev").addEventListener("click", () => step(-1));
+document.getElementById("next").addEventListener("click", () => step(1));
+
+document.getElementById("i-veo").addEventListener("click", () => {
+  current.veo = !current.veo;
+  renderGrid(); renderStats();
+  document.getElementById("card-" + current.id).classList.add("sel");
+  paintStatic(); paint();
+  toast(current.veo ? "Camera assigned" : "Camera removed");
+});
+
+document.getElementById("revert").addEventListener("click", () => {
+  state = Object.assign({}, LOADED);
+  paintStatic(); paint();
+});
+document.getElementById("save").addEventListener("click", () => {
+  const ch = changedKeys();
+  const body = {};
+  ch.forEach(k => { if (k !== "date" && k !== "time") body[k] = state[k]; });
+  if (ch.includes("date") || ch.includes("time")){
+    body.startDate = state.date + "T" + state.time + ":00.000Z";   /* wall-clock, never converted */
+  }
+  ch.forEach(k => { current[k] = state[k]; });
+  LOADED = Object.assign({}, state);
+  renderGrid(); renderStats();
+  document.getElementById("card-" + current.id).classList.add("sel");
+  paintStatic(); paint();
+  toast("Saved " + Object.keys(body).length + " field" +
+        (Object.keys(body).length === 1 ? "" : "s") + " to match " + current.id);
+  window.__lastBody = body;
+});
+
+let tt;
+function toast(msg, warn){
+  const t = document.getElementById("toast");
+  t.textContent = msg;
+  t.className = "toast up" + (warn ? " warnt" : "");
+  clearTimeout(tt); tt = setTimeout(() => t.className = "toast" + (warn ? " warnt" : ""), 2400);
+}
+
+renderStats(); renderGrid();
+window.__api = {open, close, changedKeys, get state(){return state}, get LOADED(){return LOADED},
+                MATCHES, fieldById};
+</script>
+</body>
+</html>
