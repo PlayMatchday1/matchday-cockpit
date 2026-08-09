@@ -15,6 +15,18 @@ const bad = (n, d = "") => { FAIL++; fails.push(`${n} — ${d}`); console.log(` 
 const eq = (n, got, want) => (JSON.stringify(got) === JSON.stringify(want) ? ok(n) : bad(n, `got ${JSON.stringify(got)} want ${JSON.stringify(want)}`));
 const near = (n, got, want, tol) => (Math.abs(got - want) <= tol ? ok(n) : bad(n, `got ${got} want ${want}±${tol}`));
 
+// The edit screens grey out their write affordances unless the user holds EDIT MATCHES
+// (Phase 17). The test identity doesn't, so patch the app_users read useAuth makes to
+// grant it — hermetic, independent of live DB grants. The SERVER still enforces it.
+const grantEdit = (ctx) => ctx.route("**/rest/v1/app_users*", async (route) => {
+  if (route.request().method() !== "GET") return route.continue();
+  const res = await route.fetch();
+  let json = await res.json().catch(() => null);
+  const patch = (r) => ({ ...r, can_edit_matches: true, can_access_matchops: true });
+  json = Array.isArray(json) ? json.map(patch) : (json && typeof json === "object" ? patch(json) : json);
+  return route.fulfill({ status: res.status(), contentType: "application/json", body: JSON.stringify(json) });
+});
+
 // scoped contrast (roster-suite pattern) — the board is what Phase 15 owns
 async function contrastIn(pg) {
   return pg.evaluate(() => {
@@ -54,7 +66,7 @@ function fixture(base, todayYMD) {
     // DALLAS warn (deadline 3.9h out, still in the four-hour band)
     mk({ id: 503, name: "Kiest Dallas", startDateUtc: iso(234), _count: { players: 6, fakePlayers: 0 }, field: { title: "Kiest", city: city("Dallas", "CDT") } }),
     // HOUSTON later, made-it, next-release maths: fakes 6 -> 3h rung 2 => +4 in 2h
-    mk({ id: 504, name: "Memorial Houston", startDateUtc: iso(300), minPlayerCount: 8, _count: { players: 10, fakePlayers: 6 }, fakeSpotLeft6h: 4, fakeSpotLeft3h: 2, field: { title: "Memorial", city: city("Houston", "CDT") } }),
+    mk({ id: 504, name: "Memorial Houston", startDateUtc: iso(300), minPlayerCount: 8, _count: { players: 14, fakePlayers: 6 }, fakeSpotLeft6h: 4, fakeSpotLeft3h: 2, field: { title: "Memorial", city: city("Houston", "CDT") } }),
     // CANCELLED (sinks, no countdown/releases, never coloured)
     mk({ id: 505, name: "Round Rock", isCancelled: true, startDateUtc: iso(90), _count: { players: 3, fakePlayers: 0 }, field: { title: "Round Rock", city: city("Austin", "CDT") } }),
     // FINISHED (>90m ago, never coloured)
@@ -89,6 +101,7 @@ async function main() {
       route.fulfill({ status: 200, contentType: "application/json", body: JSON.stringify({ date, env: "production", matches }) });
     });
     await ctx.route("**/api/veo**", (route) => route.fulfill({ status: 200, contentType: "application/json", body: JSON.stringify({ matches: [] }) }));
+    await grantEdit(ctx);
   };
 
   const browser = await chromium.launch({ headless: true });
@@ -106,10 +119,10 @@ async function main() {
   eq("Atlanta tile shows the earlier clock is later wall-time (8:00 PM EDT)", (await page.$eval(tile(501) + ' [data-testid="tile-when"]', (e) => e.textContent)).replace(/\s+/g, " ").trim().startsWith("8:00 PM EDT"), true);
 
   // ── real + fake + open == capacity exactly; fakes within room ──
-  { const nums = await page.$eval(tile(504) + ' [data-testid="fill-nums"]', (e) => e.textContent);
-    const real = 10, fake = 6, open = 20 - 10 - 6;
-    eq("real+fake+open === capacity, exactly (Houston 10+6+4=20)", /10.*real.*6 fake.*4 open.*of 20/s.test(nums), true);
-    ok(real + fake + open === 20 ? "sum equals capacity" : bad("sum")); }
+  // 504: _count {players:14, fakePlayers:6} — REAL is 8 (14-6), not the occupied 14.
+  { const nums = (await page.$eval(tile(504) + ' [data-testid="fill-nums"]', (e) => e.textContent)).replace(/\s+/g, " ");
+    eq("real is occupied MINUS fakes (8 real · 6 fake · 6 open of 20), NOT 14 real", /8 real · 6 fake · 6 open of 20/.test(nums), true);
+    ok(!/14 real/.test(nums) ? "the fake double-count bug is gone (never shows 14 real)" : bad("still shows 14 real")); }
 
   // ── next release matches ladder maths, tile says the same ──
   eq("next release: Houston +4 in 2h at the 3h mark", (await page.$eval(tile(504) + ' [data-testid="next-release"]', (e) => e.textContent)).replace(/\s+/g, " ").trim(), "+4 in 2h 0m, at the 3h mark");
@@ -182,7 +195,7 @@ async function main() {
   // ── the roster link navigates to the roster, not the drawer (do this last: it navigates away) ──
   const drawerBefore = (await page.$$('input')).length;
   await page.click(tile(501) + ' [data-testid="roster-link"]');
-  await page.waitForURL("**/matches/501/roster", { timeout: 6000 }).catch(() => {});
+  await page.waitForURL("**/matches/501/roster", { timeout: 15000 }).catch(() => {});
   eq("roster link goes to /match-ops/matches/501/roster (not the drawer)", { url: page.url().includes("/matches/501/roster"), openedDrawer: (await page.$$('input')).length > drawerBefore }, { url: true, openedDrawer: false });
 
   // ══════════════ PHONE (390×844, touch) ══════════════

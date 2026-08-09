@@ -53,7 +53,14 @@ const n = (v: unknown): number => (typeof v === "number" && Number.isFinite(v) ?
 
 export const kickoffMs = (m: ApiMatch): number => Date.parse(m.startDateUtc);
 export const minsUntil = (m: ApiMatch, now: number): number => (kickoffMs(m) - now) / 60000;
-export const realCount = (m: ApiMatch): number => n(m._count?.players);
+// `_count.players` is the TOTAL occupied count (real + fake); `_count.fakePlayers` is
+// the fakes among them. The REAL count — the number an operator acts on at a field — is
+// the difference. A fake is a placeholder, not a player who will show up. (Confirmed on
+// production 17325: players 6, fakePlayers 3 => 3 real.) Do NOT collapse this back to
+// `players` (that double-counts fakes: it inflates "real" and then openSpots =
+// cap-real-fake subtracts the fakes twice).
+export const realCount = (m: ApiMatch): number => Math.max(0, n(m._count?.players) - n(m._count?.fakePlayers));
+export const filledCount = (m: ApiMatch): number => n(m._count?.players); // total occupied (real + fake)
 export const fakeCount = (m: ApiMatch): number => n(m._count?.fakePlayers); // OBSERVED, not ladder-derived
 export const capacity = (m: ApiMatch): number | null => {
   const c = m.maxPlayerCount;
@@ -67,6 +74,10 @@ export const openSpots = (m: ApiMatch): number | null => {
 };
 
 export const teamCount = (m: ApiMatch): number => (Array.isArray(m.teams) ? m.teams.length : 0);
+// SHORTFALL BASIS (Q3, flagged): the minimum-to-avoid-auto-cancel is compared against
+// REAL players only — a fake won't show up to play. The MatchDay API does not expose
+// whether its own auto-cancel counts fakes; if it turns out it does, change realCount ->
+// filledCount on these two lines (only). See docs/matchday-api-facts.md.
 export const short = (m: ApiMatch): boolean => realCount(m) < n(m.minPlayerCount);
 export const shortBy = (m: ApiMatch): number => Math.max(0, n(m.minPlayerCount) - realCount(m));
 

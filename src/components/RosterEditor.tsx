@@ -20,6 +20,7 @@
 // outcomes (LANDED / FAILED / NOT APPLIED / UNKNOWN); only UNKNOWN stops the run.
 
 import { useCallback, useEffect, useMemo, useRef, useState } from "react";
+import { useRouter } from "next/navigation";
 import { supabase } from "@/lib/supabase";
 import { envBadge } from "@/lib/matchEnvBadge";
 import { FULL_EDITOR_ENV } from "@/lib/matchEnv";
@@ -60,8 +61,15 @@ export default function RosterEditor({ matchId }: { matchId: number }) {
   const [menuFor, setMenuFor] = useState<string | null>(null); // key of the row whose menu/sheet is open
   const nextTmp = useRef(-1);
   const badge = envBadge(ENV);
+  const router = useRouter();
   const { appUser } = useAuth();
   const canEdit = canEditMatches(appUser); // courtesy gate; the server holds regardless
+  // Return to wherever the user opened the roster from (Gameday Ops or Master Schedule).
+  // Browser history is the referrer; fall back to Gameday Ops on a direct load.
+  const goBack = () => {
+    if (typeof window !== "undefined" && window.history.length > 1) router.back();
+    else router.push("/match-ops/gameday");
+  };
 
   const ingest = useCallback((d: LoadResp) => {
     setName(d.name); setTeams(d.teams);
@@ -276,7 +284,7 @@ export default function RosterEditor({ matchId }: { matchId: number }) {
         </div>
       )}
       <div className="idbar">
-        <div className="r1"><h1>{name || `Match ${matchId}`}</h1><span className="pill id">ID {matchId}</span>
+        <div className="r1"><button className="backb" data-testid="roster-back" onClick={goBack} aria-label="Back">‹ Back</button><h1>{name || `Match ${matchId}`}</h1><span className="pill id">ID {matchId}</span>
           <span className={"pill " + (badge.tone === "prod" ? "live" : "stg")} data-testid="roster-env">{badge.tone === "prod" ? <><i />PRODUCTION — LIVE EDITS</> : badge.label}</span></div>
         <div className="counts"><div><b>{live.length}</b>filled</div><div><b>{slots - live.length}</b>open</div><div><b>{live.filter((p) => p.fake).length}</b>fake</div></div>
       </div>
@@ -398,6 +406,8 @@ const CSS = `
 .rse{font-family:-apple-system,BlinkMacSystemFont,"Segoe UI",Inter,Helvetica,Arial,sans-serif;color:#0B1F17;background:#EDF2EF;min-height:100vh;padding-bottom:220px}
 .rse .idbar{background:#04291D;color:#fff;padding:16px 24px}
 .rse .r1{display:flex;align-items:center;gap:10px}.rse h1{margin:0;font-size:20px}
+.rse .backb{border:1px solid #2A5644;background:transparent;color:#CFE7DC;border-radius:8px;padding:6px 12px;font-size:13px;font-weight:600}
+.rse .backb:hover{background:#14432F;color:#fff}
 .rse .pill{font-size:10.5px;font-weight:800;letter-spacing:.06em;border-radius:20px;padding:4px 10px}
 .rse .pill.id{background:#14432F;color:#B7DECB}
 .rse .pill.live{background:#E5121B;color:#fff;display:inline-flex;align-items:center;gap:6px}.rse .pill.live i{width:7px;height:7px;border-radius:50%;background:#fff}

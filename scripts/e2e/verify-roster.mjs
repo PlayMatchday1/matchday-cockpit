@@ -79,6 +79,15 @@ function applyOp(S, op, newUmId) {
   }
 }
 
+const grantEdit = (ctx) => ctx.route("**/rest/v1/app_users*", async (route) => {
+  if (route.request().method() !== "GET") return route.continue();
+  const res = await route.fetch();
+  let json = await res.json().catch(() => null);
+  const patch = (r) => ({ ...r, can_edit_matches: true, can_access_matchops: true });
+  json = Array.isArray(json) ? json.map(patch) : (json && typeof json === "object" ? patch(json) : json);
+  return route.fulfill({ status: res.status(), contentType: "application/json", body: JSON.stringify(json) });
+});
+
 async function main() {
   process.loadEnvFile(".env.local");
   const svc = createClient(process.env.NEXT_PUBLIC_SUPABASE_URL, process.env.SUPABASE_SERVICE_ROLE_KEY, { auth: { persistSession: false } });
@@ -110,6 +119,7 @@ async function main() {
     return landRow();
   };
   await context.route("**/api/matchday/**", routeHandler);
+  await grantEdit(context);
   const page = await context.newPage();
   const dialogs = []; page.on("dialog", (d) => { dialogs.push(d.message()); d.accept(); });
 
@@ -122,6 +132,7 @@ async function main() {
   // ═══ RENDER ═══
   STATE = FRESH(); await load();
   eq("team count comes from the data (2 sections)", await page.$$eval('[data-testid="team"]', (e) => e.length), 2);
+  eq("a Back control returns the user to where they came from", !!(await page.$('[data-testid="roster-back"]')), true);
   ok((await page.$eval('[data-testid="roster-env"]', (e) => e.textContent)).includes("PRODUCTION") ? "env badge reads PRODUCTION — LIVE EDITS" : bad("env badge PRODUCTION"));
   eq("all placed players rendered (3)", await page.$$eval('[data-testid="player"]', (e) => e.length), 3);
   eq("no changes on clean load -> plan empty + save disabled", { plan: (await planCodes()).length, save: await page.$eval('[data-testid="save"]', (b) => b.disabled) }, { plan: 0, save: true });
@@ -241,6 +252,7 @@ async function main() {
   // so the row menu (a bottom sheet) and pick-up-and-place are the interaction.
   const phoneCtx = await browser.newContext({ viewport: { width: 390, height: 844 }, isMobile: true, hasTouch: true, deviceScaleFactor: 2, storageState: { cookies: [], origins: [{ origin: BASE, localStorage: [{ name: `sb-${ref}-auth-token`, value: JSON.stringify(vv.data.session) }] }] } });
   await phoneCtx.route("**/api/matchday/**", routeHandler);
+  await grantEdit(phoneCtx);
   const ph = await phoneCtx.newPage();
   phoneCtx.on("page", () => {}); ph.on("dialog", (d) => d.accept());
   const phLoad = async () => { STATE = FRESH(); MODE = "landed"; posts = []; await ph.goto(PAGE_URL, { waitUntil: "domcontentloaded" }); await ph.waitForSelector('[data-testid="roster"]'); await ph.waitForTimeout(200); };
@@ -318,6 +330,7 @@ async function main() {
   //    confirm the "does not open the menu" assertion goes red. ──
   const mCtx = await browser.newContext({ viewport: { width: 390, height: 844 }, isMobile: true, hasTouch: true, storageState: { cookies: [], origins: [{ origin: BASE, localStorage: [{ name: `sb-${ref}-auth-token`, value: JSON.stringify(vv.data.session) }] }] } });
   await mCtx.route("**/api/matchday/**", routeHandler);
+  await grantEdit(mCtx);
   await mCtx.addInitScript(() => { window.__ROSTER_PLACE_BUBBLE__ = true; });
   const mp = await mCtx.newPage(); mp.on("dialog", (d) => d.accept());
   STATE = FRESH(); MODE = "landed"; posts = [];

@@ -23,6 +23,15 @@ const matchFixture = (name) => ({
   fieldTitle: "PRUMC", cityName: "Austin", cityId: 1, manager: null, secondManager: null,
 });
 
+const grantEdit = (ctx) => ctx.route("**/rest/v1/app_users*", async (route) => {
+  if (route.request().method() !== "GET") return route.continue();
+  const res = await route.fetch();
+  let json = await res.json().catch(() => null);
+  const patch = (r) => ({ ...r, can_edit_matches: true, can_access_matchops: true });
+  json = Array.isArray(json) ? json.map(patch) : (json && typeof json === "object" ? patch(json) : json);
+  return route.fulfill({ status: res.status(), contentType: "application/json", body: JSON.stringify(json) });
+});
+
 async function main() {
   process.loadEnvFile(".env.local");
   const svc = createClient(process.env.NEXT_PUBLIC_SUPABASE_URL, process.env.SUPABASE_SERVICE_ROLE_KEY, { auth: { persistSession: false } });
@@ -41,6 +50,7 @@ async function main() {
     return route.fulfill({ status: 200, contentType: "application/json", body: JSON.stringify({ match: matchFixture("Test Match"), fields: [{ id: 1, title: "PRUMC", city: "Austin" }], players: [], managers: [] }) });
   });
   await ctx.route("**/api/changelog**", (route) => route.fulfill({ status: 200, contentType: "application/json", body: JSON.stringify({ rows: [] }) }));
+  await grantEdit(ctx);
 
   const page = await ctx.newPage();
   const EDITOR = `${BASE}/match-ops/matches/${ID}`;

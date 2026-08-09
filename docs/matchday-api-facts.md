@@ -682,3 +682,28 @@ Rung 3 is inert while hardcoded true. Rung 2 is the one you reach for in an inci
 NOT the emergency stop: migration 0115 `revoke insert,update,delete on change_log from
 anon, authenticated` protects the AUDIT LOG from tampering — it has nothing to do with
 stopping MatchDay writes. Do not confuse the two.
+
+## Gameday Ops fake double-count fix + the auto-cancel minimum basis (Phase 17 follow-up)
+
+BUG (production, match 17325): the card showed "6 real · 3 fake · 9 open of 18" for a
+match that is 3 real + 3 fake + 12 open. `_count.players` from the LIST endpoint is the
+TOTAL OCCUPIED count (real + fake), NOT real-only — confirmed live: list
+`_count = {players: 6, fakePlayers: 3}`, roster shows 3 real. gamedayModel.realCount used
+`players` directly, so it reported filled as real, and openSpots = cap - real - fake then
+subtracted the fakes a SECOND time. The three numbers summed to cap (6+3+9=18), which is
+why it looked right and why a `real+fake+open===cap` test would not catch it.
+
+FIX: `realCount = max(0, _count.players - _count.fakePlayers)` (one line in gamedayModel).
+Added `filledCount = _count.players`. The regression test asserts the REAL count DIRECTLY
+against 17325's numbers (3 real), not via the sum. NOTE: the single-match GET
+/admin/matches/{id} returns `_count = {players}` with NO fakePlayers key; the LIST
+endpoint returns both — the board reads the LIST, which is correct here.
+
+OPEN QUESTION (Q3) — does MatchDay's auto-cancel count fakes toward minPlayerCount? The
+API does not say (minPlayerCount, autoCanceledMinutes, autoCanceled, isCancelled, and the
+fakeSpotLeft ladder are exposed; none states the comparison basis). The screen now
+assumes REAL players only (short = realCount < minPlayerCount) — the operationally-safe
+reading, since a fake won't show up to play. Before the fix the code effectively counted
+fakes (realCount was filled). If the backend actually counts fakes toward the minimum,
+flip realCount -> filledCount on the two lines flagged in gamedayModel (short/shortBy).
+UNCONFIRMED — verify with the backend dev.

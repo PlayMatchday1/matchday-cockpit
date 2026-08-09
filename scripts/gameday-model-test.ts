@@ -5,8 +5,8 @@ import "server-only"; // no-op under --conditions=react-server
 // assertion proves nothing.
 //   NODE_OPTIONS=--conditions=react-server npx tsx scripts/gameday-model-test.ts
 import {
-  byKickoff, bandOf, minsUntil, capacity, openSpots, realCount, fakeCount, clampFakes,
-  nextRelease, acLevel, minsToDeadline, short, fill, attention, inCities, passesFilter,
+  byKickoff, bandOf, minsUntil, capacity, openSpots, realCount, fakeCount, filledCount, clampFakes,
+  nextRelease, acLevel, minsToDeadline, short, shortBy, fill, attention, inCities, passesFilter,
   localClock, localDate, CRIT_HOURS, WARN_HOURS, type ApiMatch,
 } from "../src/lib/gamedayModel";
 
@@ -46,9 +46,30 @@ const wallMin = (m: ApiMatch) => { const t = /T(\d{2}):(\d{2})/.exec(m.startDate
 mutation("order by REAL instant, not clock time", byKickoff, ((a: ApiMatch, b: ApiMatch) => wallMin(a) - wallMin(b)) as typeof byKickoff,
   (cmp) => [aus, atl].sort(cmp)[0].id === 101); // real puts Atlanta first; wall-clock puts Austin first
 
+// ── PRODUCTION REGRESSION: match 17325 (ATH Katy) — the fake double-count bug ──
+// Ground truth read off the roster editor: 3 real, 3 fake, 12 open of 18; min 12.
+// The API list _count is {players: 6 (TOTAL, incl fake), fakePlayers: 3}. The bug used
+// players (6) as "real", then open = cap-real-fake subtracted the fakes twice (=9).
+{
+  const m17325 = mk({ startDateUtc: "2026-08-09T14:30:00.000Z", _count: { players: 6, fakePlayers: 3 }, maxPlayerCount: 18, minPlayerCount: 12 });
+  // Assert the REAL count DIRECTLY — not via real+fake+open===cap, which passes on the
+  // broken values too (6+3+9 === 18). This is the assertion the old harness lacked.
+  eq("17325: real is players MINUS fakes (3), not the occupied count (6)", realCount(m17325), 3);
+  eq("17325: fake is 3", fakeCount(m17325), 3);
+  eq("17325: open is 12 (cap - real - fake, no double subtraction)", openSpots(m17325), 12);
+  eq("17325: real + fake + open === capacity (18) — necessary but NOT sufficient", realCount(m17325) + fakeCount(m17325) + (openSpots(m17325) ?? 0), 18);
+  // the shortfall is on REAL players (Q3): 12 needed, 3 real => 9 short, not 6
+  eq("17325: short by 9 real players (needs 12, has 3 real)", shortBy(m17325), 9);
+  eq("17325: is short (under the minimum on real players)", short(m17325), true);
+  // guard the exact regression: the occupied count and the real count must differ here
+  ok(realCount(m17325) !== filledCount(m17325) ? "17325: real (3) != filled (6) — fakes are not counted as real" : bad("17325 real==filled"));
+}
+
 // ── real + fake + open == capacity, EXACTLY ──────────────────────────────────
+// players 6 = TOTAL occupied (2 real + 4 fake); open = 20 - 2 - 4 = 14.
 const packed = mk({ startDateUtc: "2026-08-08T22:00:00.000Z", _count: { players: 6, fakePlayers: 4 }, maxPlayerCount: 20 });
-eq("open spots fill the remainder (20-6-4=10)", openSpots(packed), 10);
+eq("open spots fill the remainder (20 - 2 real - 4 fake = 14)", openSpots(packed), 14);
+eq("real is occupied minus fakes (6 - 4 = 2)", realCount(packed), 2);
 ok(realCount(packed) + fakeCount(packed) + (openSpots(packed) ?? 0) === capacity(packed) ? "real + fake + open === capacity (equality)" : bad("equality"));
 mutation("open spots is the remainder, so the sum is EXACTLY capacity", openSpots,
   ((m: ApiMatch) => Math.max(0, (capacity(m) ?? 0) - realCount(m))) as typeof openSpots, // BUG: forgets fake
