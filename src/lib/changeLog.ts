@@ -88,13 +88,19 @@ export async function recordWrite(ctx: WriteCtx, io: WriteIO, store: LogStore): 
   }
   // BEFORE from the server read; AFTER is what was attempted (the body). Strip denied
   // keys and refuse to store a body that still carries one.
-  const safeBody = stripDenied(ctx.body);
-  if (bodyHasDenied(safeBody)) throw new Error("refusing to log a denied key");
+  const safeBody = bodyHasDenied(stripDenied(ctx.body)) ? {} : stripDenied(ctx.body);
   const changes = changesFromBody(before, safeBody, ctx.label);
-  await store.insert({
-    saveId: ctx.saveId, at: io.now(), actorName: ctx.actorName, actorEmail: ctx.actorEmail ?? null,
-    source: ctx.source, env: ctx.env, matchId: ctx.matchId, matchName: ctx.matchName ?? null,
-    method: ctx.method, endpoint: ctx.path, body: safeBody, outcome, serverSaid, changes,
-  });
+  // Logging is best-effort: it must NEVER throw over the write. The write already
+  // happened; a logging outage (or an unmigrated table) must not turn a landed edit
+  // into an error the operator would retry into a double-write.
+  try {
+    await store.insert({
+      saveId: ctx.saveId, at: io.now(), actorName: ctx.actorName, actorEmail: ctx.actorEmail ?? null,
+      source: ctx.source, env: ctx.env, matchId: ctx.matchId, matchName: ctx.matchName ?? null,
+      method: ctx.method, endpoint: ctx.path, body: safeBody, outcome, serverSaid, changes,
+    });
+  } catch (logErr) {
+    console.error("change_log insert failed (write already applied):", logErr);
+  }
   return { outcome, result, error };
 }

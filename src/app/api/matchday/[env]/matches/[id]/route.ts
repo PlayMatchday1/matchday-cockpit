@@ -5,9 +5,11 @@
 // production bolt still apply. Production PUT is a proven PARTIAL update (Phase 9),
 // so the client sends only the changed keys.
 
+import { randomUUID } from "node:crypto";
 import { authenticateAdmin } from "@/lib/adminAuth";
 import { apiGet, apiWrite, AmbiguousWriteError, WriteFailedError, StageHostGuardError, StageConfigError, DeniedFieldError, DeniedEndpointError, ProductionWriteBoltedError, type MatchdayEnv } from "@/lib/matchdayStageApi";
 import { EDITABLE_KEYS } from "@/lib/matchEditModel";
+import { recordWrite, supabaseLogStore } from "@/lib/changeLog";
 
 export const runtime = "nodejs";
 export const dynamic = "force-dynamic";
@@ -77,7 +79,7 @@ export async function PUT(req: Request, ctx: { params: Promise<{ env: string; id
   if (!isEnv(env)) return Response.json({ error: `unknown environment ${JSON.stringify(env)}` }, { status: 400 });
   if (!/^\d+$/.test(id)) return Response.json({ error: "Match id must be numeric" }, { status: 400 });
 
-  const body = (await req.json().catch(() => null)) as { changes?: Record<string, unknown> } | null;
+  const body = (await req.json().catch(() => null)) as { changes?: Record<string, unknown>; source?: string; saveId?: string } | null;
   const changes = body?.changes;
   if (!changes || typeof changes !== "object" || Array.isArray(changes)) return Response.json({ error: "changes object required" }, { status: 400 });
   const keys = Object.keys(changes);
@@ -88,9 +90,27 @@ export async function PUT(req: Request, ctx: { params: Promise<{ env: string; id
   if (dateKeys.length === 1) return Response.json({ error: "startDate and endDate must be sent together (the pair preserves duration)" }, { status: 400 });
 
   try {
-    await apiWrite(env, "PUT", `/admin/matches/${id}`, changes); // env-explicit; guarded + bolt + deny-lists in the client
-    const after = await apiGet<Record<string, unknown>>(env, `/admin/matches/${id}`);
-    return Response.json({ ok: true, match: pickMatch(after) });
+    // Every match write goes through the SHARED log hook (Phase 16): read the match
+    // before, write, read after, classify, record ONE entry. Three round trips, one
+    // cached so a name lookup does not add a fourth. Logging is best-effort and never
+    // throws over the write.
+    let cached = await apiGet<Record<string, unknown>>(env, `/admin/matches/${id}`); // before + name
+    let reads = 0;
+    const { outcome, error } = await recordWrite(
+      {
+        env, source: body?.source || "Match editor", actorName: auth.email, actorEmail: auth.email,
+        saveId: body?.saveId || randomUUID(), matchId: Number(id), matchName: (cached.name as string) ?? null,
+        method: "PUT", path: `/admin/matches/${id}`, body: changes, keys, label: (k) => k,
+      },
+      {
+        readResource: async () => { if (reads++ === 0) return cached; cached = await apiGet<Record<string, unknown>>(env, `/admin/matches/${id}`); return cached; },
+        write: () => apiWrite(env, "PUT", `/admin/matches/${id}`, changes),
+        now: () => new Date().toISOString(),
+      },
+      supabaseLogStore(),
+    );
+    if (error) return errToResponse(error);
+    return Response.json({ ok: true, outcome, match: pickMatch(cached) });
   } catch (e) {
     return errToResponse(e);
   }

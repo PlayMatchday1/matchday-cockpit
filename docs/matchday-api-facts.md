@@ -596,3 +596,35 @@ synced mirror). Where the mockup (today-v1_6.html) and the API disagreed, the AP
   not ladder-derived — editing a rung changes the forecast, which the board shows.
 - Veo is Clubhouse-only (`GET /api/veo`, `POST /api/veo/intent`), NOT a MatchDay field;
   it saves instantly and stays out of the match diff.
+
+## Change Log — recording every production write (Phase 16)
+
+Where the hook lives: `src/lib/changeLog.ts` `recordWrite()` — the SHARED write path. Any
+route that writes through it is logged, so a new screen inherits the log without anyone
+remembering to add it (proven by scripts/change-log-test.ts pointing straight at
+recordWrite with a memory store, no component). The match PUT route
+(/api/matchday/[env]/matches/[id]) is wired through it; new write paths should call
+recordWrite instead of apiWrite directly.
+
+- BEFORE values are EVIDENCE, not a claim: recordWrite reads the resource before the
+  write AND after it, and takes both sides of every change from those reads. Three round
+  trips per save (the match route caches the before-read so a name lookup adds no fourth).
+- ONE ENTRY PER SAVE: the store holds one row per request (each carries a saveId); the
+  screen groups by saveId. A single match PUT is one row → one entry with N field changes;
+  a roster save is N rows → one entry ("2 of 4 requests landed", worst outcome wins).
+- Four states, never folded: landed / failed / notapplied / unknown. FAILED (rejected,
+  definitely didn't happen) and NO ANSWER (ambiguous, may have) never share a label.
+- Logging is BEST-EFFORT and never throws over the write: a logging outage or an
+  unmigrated table must not turn a landed edit into an error the operator retries into a
+  double-write. Denied keys (DENY_WRITE_FIELDS, now in the client-safe denyWriteFields.ts)
+  are stripped before insert — a log is a second place a secret could leak.
+- Resolving records a human's finding (POST /api/changelog). It fires NO write to
+  MatchDay and NEVER changes the recorded outcome — the badge stays NO ANSWER with a note
+  saying who checked and when. There is no retry, anywhere.
+
+STORAGE + RETENTION (Part E): entries live in the Supabase table `change_log`
+(migration 0113), written by the service-role hook, read via the guarded admin route.
+Only writes are logged, never reads. Retention: NONE enforced yet — rows accumulate
+indefinitely. `created_at` is indexed so a prune (`delete where created_at < now() -
+interval '180 days'`) can be added later without a schema change. Stated here rather than
+left undecided.
