@@ -96,7 +96,7 @@ export async function PUT(req: Request, ctx: { params: Promise<{ env: string; id
     // throws over the write.
     let cached = await apiGet<Record<string, unknown>>(env, `/admin/matches/${id}`); // before + name
     let reads = 0;
-    const { outcome, error } = await recordWrite(
+    const { outcome, error, logged } = await recordWrite(
       {
         env, source: body?.source || "Match editor", actorName: auth.email, actorEmail: auth.email,
         saveId: body?.saveId || randomUUID(), matchId: Number(id), matchName: (cached.name as string) ?? null,
@@ -110,7 +110,7 @@ export async function PUT(req: Request, ctx: { params: Promise<{ env: string; id
       supabaseLogStore(),
     );
     if (error) return errToResponse(error);
-    return Response.json({ ok: true, outcome, match: pickMatch(cached) });
+    return Response.json({ ok: true, outcome, logRecorded: logged, match: pickMatch(cached) });
   } catch (e) {
     return errToResponse(e);
   }

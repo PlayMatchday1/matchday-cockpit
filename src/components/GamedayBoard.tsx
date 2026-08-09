@@ -19,6 +19,7 @@ import { envBadge } from "@/lib/matchEnvBadge";
 import { DRAWER_ENV } from "@/lib/matchEnv";
 import { centsToDollars } from "@/lib/matchMoney";
 import MatchDrawer, { DRAWER_W } from "@/components/MatchDrawer";
+import LogHealthBanner from "@/components/LogHealthBanner";
 import {
   type ApiMatch, type BoardFilter, BANDS, byKickoff, bandOf, minsUntil, fmtDur, localClock, tzAbbr,
   realCount, fakeCount, capacity, openSpots, teamCount, short, shortBy, fill, flags, attention,
@@ -117,6 +118,7 @@ export default function GamedayBoard() {
     <div className="gdo" data-testid="gameday" data-env={ENV} style={{ ["--drawer-w" as string]: `${DRAWER_W}px` }}>
       <style>{CSS}</style>
       <div className={"gmain" + (drawerId != null ? " drawering" : "")}>
+        <LogHealthBanner />
         <div className="panel head">
           <div className="r1">
             <h1>Gameday Ops</h1>

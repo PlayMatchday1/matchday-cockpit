@@ -24,6 +24,7 @@ import { tzLabelOfCity, tzShift } from "@/lib/matchTimezone";
 import { envBadge } from "@/lib/matchEnvBadge";
 import { centsToDollars, dollarsToCents } from "@/lib/matchMoney";
 import { DRAWER_ENV, FULL_EDITOR_ENV } from "@/lib/matchEnv";
+import { noteLogResponse } from "@/lib/logHealth";
 
 export const DRAWER_W = 480;
 
@@ -191,6 +192,7 @@ export default function MatchDrawer({
     const json = await res.json().catch(() => ({}));
     setSaving(false);
     if (!res.ok) { setMsg({ kind: json?.ambiguous ? "warn" : "err", text: json?.error ?? `HTTP ${res.status}` }); return; }
+    noteLogResponse(json); // the write landed; if the Change Log couldn't record it, make it loud
     // Rebase loaded onto the saved match and patch the card in place (no refetch).
     const m = (json.match ?? {}) as Detail["match"];
     const nextStart = m.startDate ?? state!.startDate;

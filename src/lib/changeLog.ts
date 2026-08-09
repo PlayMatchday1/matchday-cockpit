@@ -62,6 +62,11 @@ export type WriteCtx = {
   env: string; source: string; actorName: string; actorEmail?: string | null; saveId: string;
   matchId: number | null; matchName?: string | null; method: string; path: string;
   body: Record<string, unknown>; keys: string[]; label: (k: string) => string;
+  // Roster ops don't diff a flat object — they supply their own read-back predicate and
+  // their own descriptive changes ("Move: team 1 #3 → team 2 #4"). Match writes omit both
+  // and fall back to the flat key diff.
+  applied?: (before: Record<string, unknown>, after: Record<string, unknown>) => boolean;
+  changes?: Change[];
 };
 export type WriteIO = {
   readResource: () => Promise<Record<string, unknown>>; // before AND after come from this
@@ -72,14 +77,14 @@ export type WriteIO = {
 // THE shared hook. Reads before, writes, reads after, classifies, records — and
 // returns the outcome so the caller can respond. Logging never throws over the write:
 // a failed write is a real result to record, not an error to hide.
-export async function recordWrite(ctx: WriteCtx, io: WriteIO, store: LogStore): Promise<{ outcome: LogState; result?: unknown; error?: Error }> {
+export async function recordWrite(ctx: WriteCtx, io: WriteIO, store: LogStore): Promise<{ outcome: LogState; result?: unknown; error?: Error; logged: boolean }> {
   const before = await io.readResource().catch(() => ({} as Record<string, unknown>));
   let outcome: LogState; let serverSaid: string | null = null; let result: unknown; let error: Error | undefined;
   let after = before;
   try {
     result = await io.write();
     after = await io.readResource().catch(() => before);
-    outcome = outcomeForOk(appliedOnServer(before, after, ctx.keys));
+    outcome = outcomeForOk(ctx.applied ? ctx.applied(before, after) : appliedOnServer(before, after, ctx.keys));
   } catch (e) {
     error = e as Error;
     outcome = outcomeForThrow((e as Error).name);
@@ -89,7 +94,8 @@ export async function recordWrite(ctx: WriteCtx, io: WriteIO, store: LogStore): 
   // BEFORE from the server read; AFTER is what was attempted (the body). Strip denied
   // keys and refuse to store a body that still carries one.
   const safeBody = bodyHasDenied(stripDenied(ctx.body)) ? {} : stripDenied(ctx.body);
-  const changes = changesFromBody(before, safeBody, ctx.label);
+  const changes = ctx.changes ?? changesFromBody(before, safeBody, ctx.label);
+  let logged = false;
   // Logging is best-effort: it must NEVER throw over the write. The write already
   // happened; a logging outage (or an unmigrated table) must not turn a landed edit
   // into an error the operator would retry into a double-write.
@@ -99,8 +105,11 @@ export async function recordWrite(ctx: WriteCtx, io: WriteIO, store: LogStore): 
       source: ctx.source, env: ctx.env, matchId: ctx.matchId, matchName: ctx.matchName ?? null,
       method: ctx.method, endpoint: ctx.path, body: safeBody, outcome, serverSaid, changes,
     });
+    logged = true;
   } catch (logErr) {
     console.error("change_log insert failed (write already applied):", logErr);
   }
-  return { outcome, result, error };
+  // `logged: false` means the write happened but was NOT recorded — the caller surfaces
+  // this so a logging hole is loud, not silent.
+  return { outcome, result, error, logged };
 }

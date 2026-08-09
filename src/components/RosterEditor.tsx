@@ -24,6 +24,7 @@ import { supabase } from "@/lib/supabase";
 import { envBadge } from "@/lib/matchEnvBadge";
 import { FULL_EDITOR_ENV } from "@/lib/matchEnv";
 import { planRoster, classifyWrite, stopsRun, isRetryable, type LoadedPlayer, type StatePlayer, type RosterRequest } from "@/lib/rosterModel";
+import { noteLogResponse } from "@/lib/logHealth";
 
 const ENV = FULL_EDITOR_ENV; // roster edits the same environment as the full editor
 
@@ -223,14 +224,18 @@ export default function RosterEditor({ matchId }: { matchId: number }) {
 
   const execute = async (rows: RunRow[], only?: Set<number>) => {
     setBusy(true);
+    // One saveId for this whole save run, so its N requests group into ONE Change Log
+    // entry ("2 of 4 landed"). Source + match name travel with each op for the log.
+    const saveId = (typeof crypto !== "undefined" && crypto.randomUUID) ? crypto.randomUUID() : `${matchId}-${Date.now()}`;
     for (let i = 0; i < rows.length; i++) {
       if (only && !only.has(i)) continue;
       if (rows[i].status === "landed") continue; // never re-send a landed row
       rows[i] = { ...rows[i], status: "run" }; setRun([...rows]);
-      let resp: Response | null = null, json: { ok?: boolean; result?: unknown; ambiguous?: boolean; error?: string } = {}, networkError = false;
+      let resp: Response | null = null, json: { ok?: boolean; result?: unknown; ambiguous?: boolean; error?: string; logRecorded?: boolean } = {}, networkError = false;
       try {
-        resp = await authFetch(`/api/matchday/${ENV}/roster/${matchId}`, { method: "POST", body: JSON.stringify(rows[i].req.op) });
+        resp = await authFetch(`/api/matchday/${ENV}/roster/${matchId}`, { method: "POST", body: JSON.stringify({ ...rows[i].req.op, saveId, source: "Roster", matchName: name }) });
         json = await resp.json().catch(() => ({}));
+        noteLogResponse(json); // surface a logging hole even though the roster op itself landed
       } catch { networkError = true; }
       // A row is LANDED only after a read-back confirms it — never on HTTP alone.
       const applied = !networkError && !!resp && resp.ok && !json.ambiguous && resp.status !== 502

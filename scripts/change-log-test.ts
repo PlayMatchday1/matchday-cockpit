@@ -102,6 +102,14 @@ async function main() {
     const row = store.rows[0];
     eq("resolving fires NO write, keeps the outcome, records who + when", { writes: writeCalls, outcome: row.outcome, resolved: row.resolved, by: row.resolvedBy, at: row.resolvedAt }, { writes: 0, outcome: "unknown", resolved: "yes", by: "Deonna Garcia", at: "2:26 PM" }); }
 
+  // ── logging failure must NOT fail the write, but must be REPORTED (logged:false) ──
+  { const throwingStore = { ...memStore(), insert: async () => { throw new Error("relation change_log does not exist"); } };
+    const res = { x: 0 };
+    const out = await recordWrite(ctxOf({ saveId: "lf", body: { x: 1 } }), ioLanded(res, { x: 1 }), throwingStore);
+    eq("a log-write failure does NOT fail the write, and is reported as logged:false", { outcome: out.outcome, applied: res.x, logged: out.logged }, { outcome: "landed", applied: 1, logged: false }); }
+  { const s = memStore(); const out = await recordWrite(ctxOf({ saveId: "lg", body: { x: 1 } }), ioLanded({ x: 0 }, { x: 1 }), s);
+    eq("a recorded write reports logged:true", out.logged, true); }
+
   // ── no retry API exists anywhere (that absence is the whole point of the row) ──
   { const retry = [...Object.keys(CL), ...Object.keys(M)].some((k) => /retry/i.test(k));
     eq("no retry is offered on an unanswered write (no retry export anywhere)", retry, false); }

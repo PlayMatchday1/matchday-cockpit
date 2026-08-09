@@ -11,6 +11,7 @@ import { useCallback, useEffect, useMemo, useState } from "react";
 import { supabase } from "@/lib/supabase";
 import { centsToDollars } from "@/lib/matchMoney";
 import { groupBySave, entryUnresolved, passesLogFilters, STATE_LABEL, type LogRow, type LogEntry, type LogState, type LogFilters } from "@/lib/changeLogModel";
+import LogHealthBanner from "@/components/LogHealthBanner";
 
 const SOURCES = ["Gameday Ops", "Master Schedule", "Match editor", "Roster"];
 const LABELS: Record<string, string> = {
@@ -91,6 +92,8 @@ export default function ChangeLogScreen() {
           {SOURCES.map((s) => <button key={s} className={"chip" + (fSrc === s ? " on" : "")} data-testid={`src-${s}`} onClick={() => setFSrc(s)}>{s}<span className="b">{entries.filter((e) => e.source === s).length}</span></button>)}
         </span></div>
       </div>
+
+      <LogHealthBanner />
 
       {needs > 0 && (
         <div className="needs" data-testid="needs">

@@ -20,6 +20,8 @@ import { supabase } from "@/lib/supabase";
 import { EDITABLE_KEYS, MONEY_KEYS as MONEY, TOGGLE_KEYS as TOGGLE, NULLABLE_NUM, fieldChanged, diffKeys, pick } from "@/lib/matchEditModel";
 import { envBadge } from "@/lib/matchEnvBadge";
 import { FULL_EDITOR_ENV } from "@/lib/matchEnv";
+import { noteLogResponse } from "@/lib/logHealth";
+import LogHealthBanner from "@/components/LogHealthBanner";
 
 type FieldRow = { id: number; title: string; city: string | null };
 type Data = Record<string, unknown>;
@@ -219,6 +221,7 @@ export default function MatchEditor({ id }: { id: string }) {
     const json = await res.json().catch(() => ({}));
     setSaving(false);
     if (!res.ok) { setMsg({ kind: json?.ambiguous ? "warn" : "err", text: json?.error ?? `HTTP ${res.status}` }); return; }
+    noteLogResponse(json); // the write landed; surface a Change Log recording hole loudly
     ingest(json.match); setMsg({ kind: "ok", text: "Saved." });
   };
   const revert = () => setState(JSON.parse(JSON.stringify(loaded)));
@@ -230,6 +233,7 @@ export default function MatchEditor({ id }: { id: string }) {
   return (
     <div className="me">
       <style>{CSS}</style>
+      <LogHealthBanner />
 
       <div className="head">
         <div>
