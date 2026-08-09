@@ -628,3 +628,41 @@ Only writes are logged, never reads. Retention: NONE enforced yet — rows accum
 indefinitely. `created_at` is indexed so a prune (`delete where created_at < now() -
 interval '180 days'`) can be added later without a schema change. Stated here rather than
 left undecided.
+
+## The safety ladder is not what it looks like — the real emergency stop (Phase 17)
+
+PRODUCTION_WRITES_ENABLED is a HARDCODED `true` (src/lib/matchdayStageApi.ts:54 —
+`const PRODUCTION_WRITES_ENABLED = true;`). It is NOT read from env and NOT a live
+rung: on production it is a pass-through, and the only way to re-engage the bolt is a
+CODE CHANGE + DEPLOY. Do not think of it as a runtime control — it cannot be flipped
+from a dashboard or a SQL console.
+
+THE ACTUAL EMERGENCY STOP for production writes is the EDIT MATCHES grant in the
+database. `can_edit_matches` is read FRESH from app_users on EVERY request
+(src/lib/adminAuth.ts:48-49, a live SELECT; no JWT claim, no server cache, routes are
+force-dynamic), and the guarded write path refuses the write before any network call
+when it is false. So:
+
+  -- KILL ALL production/staging match writes, effective on the NEXT request (instant):
+  update app_users set can_edit_matches = false;
+
+  -- kill one user:
+  update app_users set can_edit_matches = false where id = '<uuid>';
+
+There is no lag on the SERVER side — the next write 403s at authenticateAdmin. The only
+thing that lags is the browser's greyed-button UI (useAuth caches AppUser per tab until
+reload), and that is cosmetic: an attempted write still hits the server and is refused.
+
+The safety rungs that are ACTUALLY live, in order (apiWrite / the routes):
+  1. authenticated (route: authenticateAdmin)
+  2. EDIT MATCHES  <-- the live kill switch (per-request DB read)
+  3. PRODUCTION_WRITES_ENABLED bolt  <-- HARDCODED true; changeable only by deploy
+  4. host allowlist
+  5. field deny-list
+  6. endpoint deny-list
+  7. single-shot, no retry
+Rung 3 is inert while hardcoded true. Rung 2 is the one you reach for in an incident.
+
+NOT the emergency stop: migration 0115 `revoke insert,update,delete on change_log from
+anon, authenticated` protects the AUDIT LOG from tampering — it has nothing to do with
+stopping MatchDay writes. Do not confuse the two.
