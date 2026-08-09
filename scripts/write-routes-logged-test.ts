@@ -71,6 +71,22 @@ const kinds = ["add", "add-fake", "bulk-fake", "move", "remove", "fake", "teams"
 const missing = kinds.filter((k) => !roster.includes(`case "${k}":`));
 missing.length === 0 ? ok(`roster route handles all ${kinds.length} write kinds (all logged)`) : bad("roster route missing kinds", missing.join(", "));
 
+// 4) PHASE 17 — no route imports the CLI backdoor actor, and every write route gates on
+//    EDIT MATCHES (canEditMatches). The write path enforces it unbypassably; this ensures
+//    a route also does the early zero-network 403 and never fakes an actor.
+const WRITE_ROUTES = [
+  "src/app/api/matchday/[env]/matches/[id]/route.ts",
+  "src/app/api/matchday/[env]/roster/[matchId]/route.ts",
+  "src/app/api/stage/matches/[id]/route.ts",
+];
+let cliOffenders: string[] = [];
+for (const f of files) if (readFileSync(f, "utf8").includes("CLI_WRITE_ACTOR")) cliOffenders.push(f);
+cliOffenders.length === 0 ? ok("no route imports CLI_WRITE_ACTOR (the script backdoor)") : bad("a route imports CLI_WRITE_ACTOR", cliOffenders.join(", "));
+for (const f of WRITE_ROUTES) {
+  const src = readFileSync(f, "utf8");
+  src.includes("canEditMatches") ? ok(`${f.split("/").slice(-2)[0]} gates on canEditMatches (EDIT MATCHES)`) : bad(`${f} does NOT check canEditMatches`);
+}
+
 console.log(`\nCanonical write endpoints (${WRITE_ENDPOINTS.length}), all via recordWrite:`);
 for (const e of WRITE_ENDPOINTS) console.log(`  · ${e}`);
 console.log(`\n${pass} passed, ${fail} failed`);

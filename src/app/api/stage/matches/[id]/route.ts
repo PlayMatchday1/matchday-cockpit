@@ -10,9 +10,11 @@
 // a non-editable field (startDate, scores, id, teams — team edits are a separate
 // endpoint) even if it tried.
 
+import { randomUUID } from "node:crypto";
 import { authenticateAdmin } from "@/lib/adminAuth";
-import { stageGet, stageWrite, AmbiguousWriteError, WriteFailedError, StageHostGuardError, StageConfigError } from "@/lib/matchdayStageApi";
+import { stageGet, apiWrite, AmbiguousWriteError, WriteFailedError, StageHostGuardError, StageConfigError, NotAuthorizedError } from "@/lib/matchdayStageApi";
 import { EDITABLE_KEYS } from "@/lib/matchEditModel";
+import { recordWrite, supabaseLogStore } from "@/lib/changeLog";
 
 export const runtime = "nodejs";
 export const dynamic = "force-dynamic";
@@ -89,17 +91,36 @@ export async function PUT(req: Request, ctx: { params: Promise<{ id: string }> }
   const dateKeys = keys.filter((k) => DATE_PAIR.has(k));
   if (dateKeys.length === 1) return Response.json({ error: "startDate and endDate must be sent together (the pair preserves duration)" }, { status: 400 });
 
+  // EDIT MATCHES check — before any MatchDay read or write (staging is still a match
+  // write). Read-only Match Ops users produce zero network calls.
+  if (!auth.canEditMatches) {
+    console.warn(`[edit-matches] 403: ${auth.email} attempted staging PUT /admin/matches/${id} without EDIT MATCHES`);
+    return Response.json({ error: "You have read-only Match Ops access. EDIT MATCHES is required to change matches." }, { status: 403 });
+  }
+  const actor = { canEditMatches: auth.canEditMatches, email: auth.email, userId: auth.appUserId };
+
   try {
-    // Partial write — send ONLY the changed keys. Omitted fields are untouched.
-    await stageWrite("PUT", `/admin/matches/${id}`, changes);
-    const after = await stageGet<Record<string, unknown>>(`/admin/matches/${id}`);
-    return Response.json({ ok: true, match: pickMatch(after) });
+    // Partial write — send ONLY the changed keys. Routed through the shared log hook so
+    // even the legacy staging editor is recorded and EDIT-MATCHES-guarded.
+    let cached = await stageGet<Record<string, unknown>>(`/admin/matches/${id}`);
+    let reads = 0;
+    const { error } = await recordWrite(
+      { env: "staging", source: "Match editor", actorName: auth.email, actorEmail: auth.email, saveId: randomUUID(),
+        matchId: Number(id), matchName: (cached.name as string) ?? null, method: "PUT", path: `/admin/matches/${id}`,
+        body: changes, keys, label: (k) => k },
+      { readResource: async () => { if (reads++ === 0) return cached; cached = await stageGet<Record<string, unknown>>(`/admin/matches/${id}`); return cached; },
+        write: () => apiWrite("staging", "PUT", `/admin/matches/${id}`, changes, actor), now: () => new Date().toISOString() },
+      supabaseLogStore(),
+    );
+    if (error) return errToResponse(error);
+    return Response.json({ ok: true, match: pickMatch(cached) });
   } catch (e) {
     return errToResponse(e);
   }
 }
 
 function errToResponse(e: unknown): Response {
+  if (e instanceof NotAuthorizedError) return Response.json({ error: e.message }, { status: 403 });
   if (e instanceof StageHostGuardError) return Response.json({ error: `Host guard blocked the write: ${e.message}` }, { status: 500 });
   if (e instanceof AmbiguousWriteError) return Response.json({ error: `AMBIGUOUS: ${e.message}`, ambiguous: true }, { status: 502 });
   if (e instanceof WriteFailedError) return Response.json({ error: e.message }, { status: e.status >= 400 && e.status < 600 ? e.status : 400 });

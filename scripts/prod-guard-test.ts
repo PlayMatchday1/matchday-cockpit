@@ -5,8 +5,9 @@ import "server-only"; // no-op under --conditions=react-server
 //   NODE_OPTIONS=--conditions=react-server npx tsx scripts/prod-guard-test.ts
 
 import {
-  assertAllowedHost, preflightWrite, apiWrite, assertAllowedEndpoint,
-  StageHostGuardError, DeniedFieldError, ProductionWriteBoltedError, DeniedEndpointError,
+  assertAllowedHost, preflightWrite, apiWrite, assertAllowedEndpoint, assertCanEditMatches,
+  StageHostGuardError, DeniedFieldError, ProductionWriteBoltedError, DeniedEndpointError, NotAuthorizedError,
+  CLI_WRITE_ACTOR, __setEditGuardForTest, type WriteActor,
 } from "../src/lib/matchdayStageApi";
 try { process.loadEnvFile(".env.local"); } catch {}
 
@@ -62,14 +63,54 @@ async function main() {
   // ProductionWriteBoltedError type still exists (the bolt can be re-engaged).
   void ProductionWriteBoltedError;
 
-  console.log("apiWrite to a DENIED ENDPOINT on production is refused BEFORE any network:");
+  console.log("apiWrite to a DENIED ENDPOINT on production is refused BEFORE any network (EDIT-MATCHES holder):");
   try {
-    await apiWrite("production", "DELETE", "/admin/matches/1", undefined);
+    await apiWrite("production", "DELETE", "/admin/matches/1", undefined, CLI_WRITE_ACTOR);
     bad("apiWrite production DELETE did NOT throw");
   } catch (e) {
     e instanceof DeniedEndpointError ? ok("apiWrite production DELETE /admin/matches/{id} -> DeniedEndpointError (no request sent)")
       : bad("apiWrite production DELETE wrong error", `${(e as Error).name}`);
   }
+
+  // ── PHASE 17: the EDIT MATCHES check — step 2, BEFORE the host guard, zero network ──
+  console.log("EDIT MATCHES check (Phase 17) — before the host guard, produces ZERO network calls:");
+  throws("assertCanEditMatches refuses undefined actor", NotAuthorizedError, () => assertCanEditMatches(undefined));
+  throws("assertCanEditMatches refuses a read-only actor", NotAuthorizedError, () => assertCanEditMatches({ canEditMatches: false } as WriteActor));
+  noThrow("assertCanEditMatches allows an EDIT MATCHES holder", () => assertCanEditMatches({ canEditMatches: true }));
+
+  // Spy the global fetch that matchdayStageApi uses, and prove a read-only actor makes
+  // NO outbound call — asserted by the spy, not the response status.
+  const realFetch = globalThis.fetch;
+  const noFetchTest = async (actor: WriteActor | undefined): Promise<{ threwNA: boolean; fetches: number }> => {
+    let fetches = 0;
+    globalThis.fetch = (async () => { fetches++; throw new Error("network must not be reached"); }) as typeof fetch;
+    let threwNA = false;
+    try { await apiWrite("staging", "PUT", "/admin/teams/1", { name: "x" }, actor); }
+    catch (e) { threwNA = e instanceof NotAuthorizedError; }
+    finally { globalThis.fetch = realFetch; }
+    return { threwNA, fetches };
+  };
+  { const r = await noFetchTest({ canEditMatches: false });
+    (r.threwNA && r.fetches === 0) ? ok("read-only actor -> NotAuthorizedError and ZERO fetches (spied)") : bad("no-fetch test", JSON.stringify(r)); }
+  // The check is BEFORE the host guard: a SPOOF host + read-only actor still yields the
+  // permission error, not a host-guard error.
+  { let name = ""; try { await apiWrite("staging", "PUT", "/admin/teams/1", { name: "x" }, undefined); } catch (e) { name = (e as Error).name; }
+    name === "NotAuthorizedError" ? ok("EDIT MATCHES check runs BEFORE the host/bolt guards") : bad("order", `first error was ${name}`); }
+  // Independent of the bolt: on STAGING (bolt N/A) a read-only actor is still refused —
+  // the two gates are separate mechanisms (per-user grant vs global constant).
+  { let na = false; try { await apiWrite("staging", "POST", "/admin/user-matches", { userMatchId: 1 }, { canEditMatches: false }); } catch (e) { na = e instanceof NotAuthorizedError; }
+    na ? ok("EDIT MATCHES is independent of PRODUCTION_WRITES_ENABLED (enforced on staging too)") : bad("independence"); }
+
+  // ── THE MUTATION: remove the guard -> the no-fetch test goes RED ──
+  console.log("MUTATION — monkeypatch the EDIT MATCHES guard to a no-op:");
+  const restore = __setEditGuardForTest(() => { /* guard removed */ });
+  const mutated = await noFetchTest({ canEditMatches: false });
+  restore();
+  (!(mutated.threwNA && mutated.fetches === 0))
+    ? ok(`guard removed => the no-fetch test goes RED (threwNotAuthorized=${mutated.threwNA}, fetches=${mutated.fetches})`)
+    : bad("MUTATION toothless — removing the guard left the no-fetch test green");
+  // and confirm the guard is back
+  { const r = await noFetchTest({ canEditMatches: false }); (r.threwNA && r.fetches === 0) ? ok("guard restored after the mutation") : bad("guard not restored", JSON.stringify(r)); }
 
   // Phase 12: the same machinery must cover a NON-match endpoint (PUT /admin/teams/{id}),
   // not have been shaped around /admin/matches/{id}.

@@ -8,7 +8,7 @@
 
 import { randomUUID } from "node:crypto";
 import { authenticateAdmin } from "@/lib/adminAuth";
-import { apiGet, apiWrite, AmbiguousWriteError, WriteFailedError, DeniedFieldError, DeniedEndpointError, ProductionWriteBoltedError, StageHostGuardError, StageConfigError, type MatchdayEnv } from "@/lib/matchdayStageApi";
+import { apiGet, apiWrite, AmbiguousWriteError, WriteFailedError, DeniedFieldError, DeniedEndpointError, ProductionWriteBoltedError, StageHostGuardError, StageConfigError, NotAuthorizedError, type MatchdayEnv } from "@/lib/matchdayStageApi";
 import { recordWrite, supabaseLogStore } from "@/lib/changeLog";
 import type { Change } from "@/lib/changeLogModel";
 
@@ -66,6 +66,14 @@ export async function POST(req: Request, ctx: { params: Promise<{ env: string; m
   if (!/^\d+$/.test(matchId)) return Response.json({ error: "matchId must be numeric" }, { status: 400 });
   const op = (await req.json().catch(() => null)) as { kind?: string; playerId?: number; userMatchId?: number; teamId?: number; team?: number; playerNumber?: number; totalFakes?: number; fields?: Record<string, unknown>; saveId?: string; source?: string; matchName?: string } | null;
   if (!op || typeof op.kind !== "string") return Response.json({ error: "op {kind} required" }, { status: 400 });
+
+  // EDIT MATCHES check — before ANY MatchDay read or write (the per-kind read-back
+  // below is a GET), so a read-only user produces zero network calls.
+  if (!auth.canEditMatches) {
+    console.warn(`[edit-matches] 403: ${auth.email} attempted roster ${op.kind} on match ${matchId} without EDIT MATCHES`);
+    return Response.json({ error: "You have read-only Match Ops access. EDIT MATCHES is required to change rosters." }, { status: 403 });
+  }
+  const actor = { canEditMatches: auth.canEditMatches, email: auth.email, userId: auth.appUserId };
 
   // Build the request SERVER-SIDE from the op kind — the client never sends a path.
   let method: "POST" | "PUT" | "DELETE" | "PATCH", path: string, body: Record<string, unknown> | undefined;
@@ -133,7 +141,7 @@ export async function POST(req: Request, ctx: { params: Promise<{ env: string; m
         saveId: op.saveId || randomUUID(), matchId: Number(M), matchName: preName,
         method, path, body: body ?? {}, keys: [], label: (k) => k, applied, changes,
       },
-      { readResource, write: () => apiWrite(env, method, path, body), now: () => new Date().toISOString() },
+      { readResource, write: () => apiWrite(env, method, path, body, actor), now: () => new Date().toISOString() },
       supabaseLogStore(),
     );
     if (error) return errToResponse(error);
@@ -142,6 +150,7 @@ export async function POST(req: Request, ctx: { params: Promise<{ env: string; m
 }
 
 function errToResponse(e: unknown): Response {
+  if (e instanceof NotAuthorizedError) return Response.json({ error: e.message }, { status: 403 });
   // AMBIGUOUS is a distinct fact the save UI must not conflate with a clean failure.
   if (e instanceof AmbiguousWriteError) return Response.json({ error: e.message, ambiguous: true }, { status: 502 });
   if (e instanceof ProductionWriteBoltedError) return Response.json({ error: e.message }, { status: 503 });

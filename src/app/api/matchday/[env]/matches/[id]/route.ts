@@ -7,7 +7,7 @@
 
 import { randomUUID } from "node:crypto";
 import { authenticateAdmin } from "@/lib/adminAuth";
-import { apiGet, apiWrite, AmbiguousWriteError, WriteFailedError, StageHostGuardError, StageConfigError, DeniedFieldError, DeniedEndpointError, ProductionWriteBoltedError, type MatchdayEnv } from "@/lib/matchdayStageApi";
+import { apiGet, apiWrite, AmbiguousWriteError, WriteFailedError, StageHostGuardError, StageConfigError, DeniedFieldError, DeniedEndpointError, ProductionWriteBoltedError, NotAuthorizedError, type MatchdayEnv } from "@/lib/matchdayStageApi";
 import { EDITABLE_KEYS } from "@/lib/matchEditModel";
 import { recordWrite, supabaseLogStore } from "@/lib/changeLog";
 
@@ -89,6 +89,14 @@ export async function PUT(req: Request, ctx: { params: Promise<{ env: string; id
   const dateKeys = keys.filter((k) => DATE_PAIR.has(k));
   if (dateKeys.length === 1) return Response.json({ error: "startDate and endDate must be sent together (the pair preserves duration)" }, { status: 400 });
 
+  // EDIT MATCHES check — before ANY MatchDay read or write, so a read-only user
+  // produces zero network calls (the guarded client enforces the same, unbypassably).
+  if (!auth.canEditMatches) {
+    console.warn(`[edit-matches] 403: ${auth.email} attempted PUT /admin/matches/${id} without EDIT MATCHES`);
+    return Response.json({ error: "You have read-only Match Ops access. EDIT MATCHES is required to change matches." }, { status: 403 });
+  }
+  const actor = { canEditMatches: auth.canEditMatches, email: auth.email, userId: auth.appUserId };
+
   try {
     // Every match write goes through the SHARED log hook (Phase 16): read the match
     // before, write, read after, classify, record ONE entry. Three round trips, one
@@ -104,7 +112,7 @@ export async function PUT(req: Request, ctx: { params: Promise<{ env: string; id
       },
       {
         readResource: async () => { if (reads++ === 0) return cached; cached = await apiGet<Record<string, unknown>>(env, `/admin/matches/${id}`); return cached; },
-        write: () => apiWrite(env, "PUT", `/admin/matches/${id}`, changes),
+        write: () => apiWrite(env, "PUT", `/admin/matches/${id}`, changes, actor),
         now: () => new Date().toISOString(),
       },
       supabaseLogStore(),
@@ -117,6 +125,7 @@ export async function PUT(req: Request, ctx: { params: Promise<{ env: string; id
 }
 
 function errToResponse(e: unknown): Response {
+  if (e instanceof NotAuthorizedError) return Response.json({ error: e.message }, { status: 403 });
   if (e instanceof ProductionWriteBoltedError) return Response.json({ error: `Production writes are bolted: ${e.message}` }, { status: 503 });
   if (e instanceof DeniedEndpointError) return Response.json({ error: e.message }, { status: 403 });
   if (e instanceof DeniedFieldError) return Response.json({ error: e.message }, { status: 400 });

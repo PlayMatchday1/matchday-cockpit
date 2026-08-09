@@ -1,5 +1,5 @@
 import "server-only"; // no-op under --conditions=react-server
-import { assertNoDeniedFields, stageWrite, apiWrite, DeniedFieldError } from "../src/lib/matchdayStageApi";
+import { assertNoDeniedFields, stageWrite, apiWrite, DeniedFieldError, CLI_WRITE_ACTOR } from "../src/lib/matchdayStageApi";
 try { process.loadEnvFile(".env.local"); } catch {}
 // PHASE 7: startDate/endDate came OFF (the drawer owns the date pair).
 // PHASE 13: `password` added — write-only on teams, undetectable/unrestorable.
@@ -19,11 +19,11 @@ async function main() {
   }
   console.log("a password write is refused BEFORE the network call, on BOTH environments:");
   for (const env of ["staging", "production"] as const) {
-    try { await apiWrite(env, "PUT", "/admin/teams/1", { password: "x" }); console.log(`  XX ${env} password write did not throw`); fail++; }
+    try { await apiWrite(env, "PUT", "/admin/teams/1", { password: "x" }, CLI_WRITE_ACTOR); console.log(`  XX ${env} password write did not throw`); fail++; }
     catch (e) { if (e instanceof DeniedFieldError) { console.log(`  ok ${env}: password -> DeniedFieldError (no request sent)`); pass++; } else { console.log(`  XX ${env} wrong: ${(e as Error).name}`); fail++; } }
   }
   console.log("stageWrite blocks a denied body BEFORE the network call:");
-  try { await stageWrite("PUT", "/admin/matches/2470", { teamHomeScore: 3 }); console.log("  XX stageWrite did not throw"); fail++; }
+  try { await stageWrite("PUT", "/admin/matches/2470", { teamHomeScore: 3 }, CLI_WRITE_ACTOR); console.log("  XX stageWrite did not throw"); fail++; }
   catch (e) { if (e instanceof DeniedFieldError) { console.log("  ok stageWrite threw DeniedFieldError (no request sent)"); pass++; } else { console.log(`  XX wrong: ${(e as Error).name}: ${(e as Error).message.slice(0, 60)}`); fail++; } }
   console.log(`\n${pass} passed, ${fail} failed (6 denied + 7 allowed + 2 password-both-envs + 1 wired)`);
   process.exit(fail ? 1 : 0);

@@ -11,7 +11,7 @@
 import { createClient, type SupabaseClient } from "@supabase/supabase-js";
 
 export type AdminAuthResult =
-  | { ok: true; supabase: SupabaseClient; appUserId: string; email: string }
+  | { ok: true; supabase: SupabaseClient; appUserId: string; email: string; canEditMatches: boolean }
   | { ok: false; status: number; error: string };
 
 export async function authenticateAdmin(req: Request): Promise<AdminAuthResult> {
@@ -46,7 +46,7 @@ export async function authenticateAdmin(req: Request): Promise<AdminAuthResult> 
   });
   const appUser = await sb
     .from("app_users")
-    .select("id, is_admin")
+    .select("id, is_admin, can_access_matchops, can_edit_matches")
     .ilike("email", email)
     .maybeSingle();
   if (appUser.error || !appUser.data) {
@@ -56,10 +56,16 @@ export async function authenticateAdmin(req: Request): Promise<AdminAuthResult> 
     return { ok: false, status: 403, error: "Admin access required" };
   }
 
+  // EDIT MATCHES is the WRITE permission (Phase 17). It is NOT implied by is_admin —
+  // it defaults off for everyone and must be granted explicitly — and it requires
+  // MATCH OPS (read). Routes pass this into the guarded write client.
+  const canEditMatches = appUser.data.can_edit_matches === true && appUser.data.can_access_matchops === true;
+
   return {
     ok: true,
     supabase: sb, // service-role client — bypasses RLS after the admin gate
     appUserId: appUser.data.id as string,
     email,
+    canEditMatches,
   };
 }

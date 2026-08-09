@@ -108,6 +108,39 @@ export class ProductionWriteBoltedError extends Error {
 export class DeniedEndpointError extends Error {
   constructor(message: string) { super(message); this.name = "DeniedEndpointError"; }
 }
+// The caller does not hold EDIT MATCHES (Phase 17). Thrown BEFORE the bolt and the
+// host guard, before creds are loaded — a caller without write permission produces
+// ZERO network calls. A route maps this to HTTP 403.
+export class NotAuthorizedError extends Error {
+  constructor(message: string) { super(message); this.name = "NotAuthorizedError"; }
+}
+
+// Who is performing a write, and whether they may. Derived server-side from the
+// authenticated user's app_users row (can_edit_matches AND can_access_matchops) — never
+// from client state. Reads (apiGet) need no actor; only writes do.
+export type WriteActor = { canEditMatches: boolean; email?: string; userId?: string };
+
+// The EDIT MATCHES check. Independent of PRODUCTION_WRITES_ENABLED: this is a per-USER
+// database grant; the bolt is a global deploy-time constant. Neither can satisfy the
+// other. Never references or logs any credential.
+export function assertCanEditMatches(actor: WriteActor | undefined): void {
+  if (!actor || actor.canEditMatches !== true) {
+    throw new NotAuthorizedError(
+      `Refusing write: the caller does not hold EDIT MATCHES. No request was sent to MatchDay. ` +
+      `(actor: ${actor?.email ? JSON.stringify(actor.email) : "none"})`,
+    );
+  }
+}
+// Indirection so a mutation test can monkeypatch the guard to a no-op and prove the
+// no-fetch test goes RED without it. TEST-ONLY — no route imports the setter.
+let editGuard: (a: WriteActor | undefined) => void = assertCanEditMatches;
+export function __setEditGuardForTest(fn: (a: WriteActor | undefined) => void): () => void {
+  const prev = editGuard; editGuard = fn; return () => { editGuard = prev; };
+}
+// A write actor for out-of-band CLI/proof scripts (run server-side by a developer who
+// already holds the API credentials). Routes MUST NOT import this — the enumeration
+// guard asserts they don't.
+export const CLI_WRITE_ACTOR: WriteActor = { canEditMatches: true, email: "cli-script" };
 
 // The write-deny field list lives in a client-safe module (denyWriteFields) so the
 // Change Log's deny-key guard shares the exact same set. Applies to BOTH environments.
@@ -287,8 +320,13 @@ export async function apiGet<T = unknown>(env: MatchdayEnv, path: string, query?
 }
 
 // WRITES — env-explicit, single-shot, host-allowlisted, deny-listed, prod-bolted.
-export async function apiWrite<T = unknown>(env: MatchdayEnv, method: "POST" | "PUT" | "PATCH" | "DELETE", path: string, body?: unknown): Promise<T> {
-  // The bolt fires FIRST, before creds are even loaded — production is refused
+export async function apiWrite<T = unknown>(env: MatchdayEnv, method: "POST" | "PUT" | "PATCH" | "DELETE", path: string, body?: unknown, actor?: WriteActor): Promise<T> {
+  // STEP 2 in the write pipeline (authenticated is step 1, in the route): does the
+  // caller hold EDIT MATCHES? This runs BEFORE the bolt and the host guard, before creds
+  // are loaded — a caller without it produces ZERO network calls. It is the low-level,
+  // unbypassable chokepoint; a route that forgets its own early check is still stopped here.
+  editGuard(actor);
+  // The bolt fires next, before creds are even loaded — production is refused
   // regardless of whether prod credentials happen to be configured. Nothing about
   // a production write can proceed while the bolt is engaged.
   if (env === "production" && !PRODUCTION_WRITES_ENABLED) {
@@ -340,8 +378,8 @@ export async function apiWrite<T = unknown>(env: MatchdayEnv, method: "POST" | "
 export function stageGet<T = unknown>(path: string, query?: Record<string, string | number | boolean>): Promise<T> {
   return apiGet<T>("staging", path, query);
 }
-export function stageWrite<T = unknown>(method: "POST" | "PUT" | "PATCH" | "DELETE", path: string, body?: unknown): Promise<T> {
-  return apiWrite<T>("staging", method, path, body);
+export function stageWrite<T = unknown>(method: "POST" | "PUT" | "PATCH" | "DELETE", path: string, body?: unknown, actor?: WriteActor): Promise<T> {
+  return apiWrite<T>("staging", method, path, body, actor);
 }
 
 export const STAGE = { STAGING_HOST: HOSTS.staging, PROD_HOST: HOSTS.production, REFRESH_SKEW_MS, HOSTS, PRODUCTION_WRITES_ENABLED };
