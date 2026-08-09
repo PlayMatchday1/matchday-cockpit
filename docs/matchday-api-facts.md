@@ -667,8 +667,16 @@ lockdown as pending; both migrations are live in production. Evidence (2026-08-0
     the trigger, and rule 3 are all live;
   * `is_service_account` returned TRUE on the E2E row (clubhouse-e2e@playmatchday.com);
   * `can_edit_matches` returned TRUE on Ryan's row (a real EDIT MATCHES holder exists).
-So the emergency-stop UPDATEs above are live-capable and pg_safeupdate-safe (both carry a
-WHERE), and the E2E-can-never-edit rule is DB-enforced, not aspirational.
+So the emergency-stop UPDATEs above are pg_safeupdate-safe (both carry a WHERE), and the
+E2E-can-never-edit rule is DB-enforced, not aspirational.
+
+The emergency-stop SQL has now been EXECUTED against production — TESTED because it ran,
+not because it looked right (confirmed 2026-08-09):
+  * `update app_users set can_edit_matches = false where can_edit_matches = true;` ran
+    clean, with NO pg_safeupdate error;
+  * the follow-up `select count(*) ... where can_edit_matches = true` returned 0 rows;
+  * re-granting to rmancuso@playmatchday.com returned `can_edit_matches` = true.
+The kill switch is a proven runbook command, not a plausible one.
 
 The safety rungs that are ACTUALLY live, in order (apiWrite / the routes):
   1. authenticated (route: authenticateAdmin)
