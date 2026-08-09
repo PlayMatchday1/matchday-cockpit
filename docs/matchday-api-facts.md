@@ -648,26 +648,27 @@ when it is false. So:
   -- UPDATE with no WHERE clause — an unqualified `set can_edit_matches = false` errors
   -- and fires nothing, exactly when you need it. `where can_edit_matches = true` both
   -- satisfies pg_safeupdate and touches only the rows that matter. Do NOT "clean up"
-  -- the WHERE.  [UNTESTED — never executed against this DB; see note below.]
+  -- the WHERE.
   update app_users set can_edit_matches = false where can_edit_matches = true;
 
   -- kill one user (the WHERE id = ... also satisfies pg_safeupdate):
-  --   [UNTESTED — never executed against this DB.]
   update app_users set can_edit_matches = false where id = '<uuid>';
 
 There is no lag on the SERVER side — the next write 403s at authenticateAdmin. The only
 thing that lags is the browser's greyed-button UI (useAuth caches AppUser per tab until
 reload), and that is cosmetic: an attempted write still hits the server and is refused.
 
-UNTESTED — both UPDATEs above have NOT been run against this database. They cannot be
-verified without either (a) migration 0114 applied so the column exists, and (b) an
-accepted mutation of the production app_users table. The SYNTAX is correct for
-pg_safeupdate (both carry a WHERE), and with no current EDIT MATCHES holders the global
-form matches zero rows (a safe no-op) — but "argues correct" is not "has been run".
-Promote to TESTED by executing the global form once after 0114 is applied (it is a
-no-op while nobody holds the grant) and confirming it returns without a pg_safeupdate
-error. What HAS been run against the live DB: a service-role INSERT into change_log
-(the recordWrite path) — see the 0115 verification.
+## Migrations 0114 + 0115 are APPLIED — confirmed 2026-08-09
+
+Settled. Do not re-flag `can_edit_matches` / `is_service_account` / the change_log
+lockdown as pending; both migrations are live in production. Evidence (2026-08-09):
+  * the guard trigger raised P0001 "Service account (clubhouse-e2e@playmatchday.com)
+    cannot hold EDIT MATCHES" on a live UPDATE run as the postgres role — so the column,
+    the trigger, and rule 3 are all live;
+  * `is_service_account` returned TRUE on the E2E row (clubhouse-e2e@playmatchday.com);
+  * `can_edit_matches` returned TRUE on Ryan's row (a real EDIT MATCHES holder exists).
+So the emergency-stop UPDATEs above are live-capable and pg_safeupdate-safe (both carry a
+WHERE), and the E2E-can-never-edit rule is DB-enforced, not aspirational.
 
 The safety rungs that are ACTUALLY live, in order (apiWrite / the routes):
   1. authenticated (route: authenticateAdmin)
