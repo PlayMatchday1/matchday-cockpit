@@ -25,6 +25,7 @@ import { envBadge } from "@/lib/matchEnvBadge";
 import { FULL_EDITOR_ENV } from "@/lib/matchEnv";
 import { planRoster, classifyWrite, stopsRun, isRetryable, type LoadedPlayer, type StatePlayer, type RosterRequest } from "@/lib/rosterModel";
 import { noteLogResponse } from "@/lib/logHealth";
+import { useAuth, canEditMatches } from "@/lib/useAuth";
 
 const ENV = FULL_EDITOR_ENV; // roster edits the same environment as the full editor
 
@@ -59,6 +60,8 @@ export default function RosterEditor({ matchId }: { matchId: number }) {
   const [menuFor, setMenuFor] = useState<string | null>(null); // key of the row whose menu/sheet is open
   const nextTmp = useRef(-1);
   const badge = envBadge(ENV);
+  const { appUser } = useAuth();
+  const canEdit = canEditMatches(appUser); // courtesy gate; the server holds regardless
 
   const ingest = useCallback((d: LoadResp) => {
     setName(d.name); setTeams(d.teams);
@@ -99,7 +102,7 @@ export default function RosterEditor({ matchId }: { matchId: number }) {
 
   // ── move: swap, never overwrite; never drop off the roster ───────────────────
   const place = (key: string, team: number, num: number) => {
-    if (run) return;
+    if (run || !canEdit) return;
     const p = players.find((x) => x.key === key); if (!p) return;
     if (p.team === team && p.num === num) return;
     if (teams[team]?.locked) { say(`${teams[team].name} is locked. Unlock it first.`, true); return; }
@@ -117,7 +120,7 @@ export default function RosterEditor({ matchId }: { matchId: number }) {
   //    never fires, and for choosing a specific slot / swapping two specific
   //    players — which "move to the first open slot" cannot do. Same place(). ──
   const isPhone = () => typeof window !== "undefined" && window.matchMedia("(max-width: 820px)").matches;
-  const startPlacing = (key: string) => { if (run) return; setMenuFor(null); setPlacing(key); };
+  const startPlacing = (key: string) => { if (run || !canEdit) return; setMenuFor(null); setPlacing(key); };
   const stopPlacing = () => setPlacing(null);
   // No `if (placing) return` guard here on purpose: during place mode the CAPTURE
   // tap handler stops the event before it reaches a slot's onClick, so the menu
@@ -162,13 +165,14 @@ export default function RosterEditor({ matchId }: { matchId: number }) {
 
   // ── shape: refuse a shrink that would strand anyone; name them ───────────────
   const stranded = (perTeam: number, teamN: number) => players.filter((p) => p.team !== null && (p.team >= teamN || (p.num ?? 0) > perTeam));
-  const stepSpots = (d: number) => { const next = shape.perTeam + d; if (next < 1 || next > 20) return; const s = stranded(next, shape.teamN); if (s.length) { say(`${s.length} player${s.length === 1 ? "" : "s"} would have no slot: ${s.slice(0, 3).map((p) => p.name).join(", ")}${s.length > 3 ? ` +${s.length - 3}` : ""}. Move or remove them first.`, true); return; } setShape((sh) => ({ ...sh, perTeam: next })); };
-  const stepTeams = (d: number) => { const next = shape.teamN + d; if (next < 1 || next > teams.length) return; const s = stranded(shape.perTeam, next); if (s.length) { say(`${s.length} player${s.length === 1 ? "" : "s"} would have no team: ${s.slice(0, 3).map((p) => p.name).join(", ")}${s.length > 3 ? ` +${s.length - 3}` : ""}. Move or remove them first.`, true); return; } setShape((sh) => ({ ...sh, teamN: next })); };
+  const stepSpots = (d: number) => { if (!canEdit) return; const next = shape.perTeam + d; if (next < 1 || next > 20) return; const s = stranded(next, shape.teamN); if (s.length) { say(`${s.length} player${s.length === 1 ? "" : "s"} would have no slot: ${s.slice(0, 3).map((p) => p.name).join(", ")}${s.length > 3 ? ` +${s.length - 3}` : ""}. Move or remove them first.`, true); return; } setShape((sh) => ({ ...sh, perTeam: next })); };
+  const stepTeams = (d: number) => { if (!canEdit) return; const next = shape.teamN + d; if (next < 1 || next > teams.length) return; const s = stranded(shape.perTeam, next); if (s.length) { say(`${s.length} player${s.length === 1 ? "" : "s"} would have no team: ${s.slice(0, 3).map((p) => p.name).join(", ")}${s.length > 3 ? ` +${s.length - 3}` : ""}. Move or remove them first.`, true); return; } setShape((sh) => ({ ...sh, teamN: next })); };
 
-  const setTeam = (id: number, patch: Partial<Team>) => setTeams((ts) => ts.map((t) => (t.id === id ? { ...t, ...patch } : t)));
+  const setTeam = (id: number, patch: Partial<Team>) => { if (!canEdit) return; setTeams((ts) => ts.map((t) => (t.id === id ? { ...t, ...patch } : t))); };
 
-  const toggleFake = (key: string) => setPlayers((ps) => ps.map((p) => (p.key === key ? { ...p, fake: !p.fake } : p)));
+  const toggleFake = (key: string) => { if (!canEdit) return; setPlayers((ps) => ps.map((p) => (p.key === key ? { ...p, fake: !p.fake } : p))); };
   const removePlayer = (key: string) => {
+    if (!canEdit) return;
     const p = players.find((x) => x.key === key); if (!p) return;
     const okd = window.confirm(
       `Remove ${p.name} from this match?\n\n` +
@@ -194,7 +198,7 @@ export default function RosterEditor({ matchId }: { matchId: number }) {
     return () => { live = false; clearTimeout(t); };
   }, [q, matchId]);
   const addTo = (team: number) => {
-    if (!pending) return; const n = firstOpen(team); if (n === null) return;
+    if (!pending || !canEdit) return; const n = firstOpen(team); if (n === null) return;
     setPlayers((ps) => [...ps, { key: `n${nextTmp.current--}`, umId: null, playerId: pending.id, team, num: n, fake: pending.fake, added: true, name: pending.name }]);
     say(`${pending.name} staged for ${teams[team].name} #${n} — nothing sent until you save`);
     setPending(null); setQ(""); setResults([]);
@@ -376,12 +380,12 @@ export default function RosterEditor({ matchId }: { matchId: number }) {
           </div>
         ) : null}
         <div className="acts">
-          <span className="cnt" data-testid="cnt">{hasUnknown ? "Stopped — reload before acting" : dirty ? `${dirty} change${dirty === 1 ? "" : "s"} not saved` : "No changes"}</span>
+          <span className="cnt" data-testid="cnt">{!canEdit ? "Read-only — you don't have EDIT MATCHES" : hasUnknown ? "Stopped — reload before acting" : dirty ? `${dirty} change${dirty === 1 ? "" : "s"} not saved` : "No changes"}</span>
           <span className="sp">
             <button className="gh" data-testid="revert" disabled={busy || (!dirty && !run)} onClick={revert}>Reload</button>
             {retryable > 0 && !hasUnknown
-              ? <button className="go retry" data-testid="retry" disabled={busy} onClick={retry}>Retry {retryable}</button>
-              : <button className="go" data-testid="save" disabled={busy || !dirty || !!run} onClick={save}>Save</button>}
+              ? <button className="go retry" data-testid="retry" disabled={busy || !canEdit} onClick={retry}>Retry {retryable}</button>
+              : <button className="go" data-testid="save" disabled={busy || !dirty || !!run || !canEdit} onClick={save}>Save</button>}
           </span>
         </div>
       </div>

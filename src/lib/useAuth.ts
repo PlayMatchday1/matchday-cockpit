@@ -16,6 +16,8 @@ export type AppUser = {
   can_access_matchops: boolean;
   can_access_chats: boolean;
   can_access_tech: boolean;
+  can_edit_matches?: boolean;      // Phase 17 — the WRITE permission for matches
+  is_service_account?: boolean;    // the Clubhouse E2E account (never holds EDIT MATCHES)
   created_at: string;
   last_login_at: string | null;
 };
@@ -94,6 +96,14 @@ export function useAuth() {
   }
 
   return { ...state, signOut };
+}
+
+// The WRITE permission for matches (Phase 17). Deliberately NOT short-circuited by
+// is_admin — EDIT MATCHES defaults off for everyone and must be granted explicitly — and
+// it requires MATCH OPS (read). The UI reads this to grey out write affordances; it is a
+// courtesy. The server check in the shared write path (apiWrite) is what actually holds.
+export function canEditMatches(appUser: AppUser | null | undefined): boolean {
+  return !!appUser && appUser.can_edit_matches === true && appUser.can_access_matchops === true;
 }
 
 export function canAccess(

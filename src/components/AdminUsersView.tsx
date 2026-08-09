@@ -86,11 +86,30 @@ export default function AdminUsersView() {
     }, 800);
   }
 
+  // MATCH OPS + EDIT MATCHES go through the guarded route so the hard rules apply
+  // (edit requires matchops, revoke cascades, E2E can't edit, self-demotion guard).
+  async function saveMatchPermission(user: AppUser, patch: { canAccessMatchops?: boolean; canEditMatches?: boolean }) {
+    const original = users;
+    // optimistic; the route returns the reconciled truth (cascade may clear edit)
+    setUsers((prev) => prev.map((u) => (u.id === user.id ? { ...u, ...(patch.canAccessMatchops !== undefined ? { can_access_matchops: patch.canAccessMatchops, can_edit_matches: patch.canAccessMatchops ? u.can_edit_matches : false } : {}), ...(patch.canEditMatches !== undefined ? { can_edit_matches: patch.canEditMatches } : {}) } : u)));
+    const { data: sess } = await supabase.auth.getSession();
+    const res = await fetch("/api/admin/users/match-permissions", {
+      method: "POST",
+      headers: { "Content-Type": "application/json", ...(sess.session ? { Authorization: `Bearer ${sess.session.access_token}` } : {}) },
+      body: JSON.stringify({ userId: user.id, ...patch }),
+    });
+    const json = await res.json().catch(() => ({}));
+    if (!res.ok) { setUsers(original); alert(json?.error ?? `HTTP ${res.status}`); return; }
+    setUsers((prev) => prev.map((u) => (u.id === user.id ? { ...u, can_access_matchops: json.user.can_access_matchops, can_edit_matches: json.user.can_edit_matches } : u)));
+    flash(user.id);
+  }
+
   async function togglePermission(user: AppUser, key: PermissionKey) {
     if (key === "is_admin" && appUser?.id === user.id) return;
     // Admins always have Finance access via is_admin — block toggling it
     // off on their own row so the UI doesn't mislead them.
     if (key === "can_access_finance" && appUser?.id === user.id) return;
+    if (key === "can_access_matchops") { await saveMatchPermission(user, { canAccessMatchops: !user.can_access_matchops }); return; }
     const newValue = !user[key];
     const original = users;
     setUsers((prev) =>
@@ -238,6 +257,21 @@ export default function AdminUsersView() {
                         const disabled =
                           (c.key === "is_admin" && isSelf) ||
                           (c.key === "can_access_finance" && isSelf);
+                        if (c.key === "can_access_matchops") {
+                          const matchops = !!u.can_access_matchops;
+                          return (
+                            <td key={c.key} className="px-2 py-2 align-middle text-center">
+                              <div className="flex flex-col items-center gap-1">
+                                <ToggleBox on={matchops} disabled={disabled} onClick={() => togglePermission(u, c.key)} label={`Match Ops (read) access for ${u.email}`} />
+                                {/* EDIT MATCHES — nested under Match Ops (the WRITE permission), disabled when read is off */}
+                                <div className="flex items-center gap-1 pl-3" title={u.is_service_account ? "The E2E service account can never hold EDIT MATCHES" : !matchops ? "Requires Match Ops" : "EDIT MATCHES — production writes"}>
+                                  <span className="text-[8px] leading-none text-deep-green/40">↳ edit</span>
+                                  <ToggleBox on={!!u.can_edit_matches} disabled={!matchops || !!u.is_service_account} onClick={() => saveMatchPermission(u, { canEditMatches: !u.can_edit_matches })} label={`EDIT MATCHES (write) for ${u.email}`} />
+                                </div>
+                              </div>
+                            </td>
+                          );
+                        }
                         return (
                           <td
                             key={c.key}

@@ -25,6 +25,7 @@ import { envBadge } from "@/lib/matchEnvBadge";
 import { centsToDollars, dollarsToCents } from "@/lib/matchMoney";
 import { DRAWER_ENV, FULL_EDITOR_ENV } from "@/lib/matchEnv";
 import { noteLogResponse } from "@/lib/logHealth";
+import { useAuth, canEditMatches } from "@/lib/useAuth";
 
 export const DRAWER_W = 480;
 
@@ -90,6 +91,8 @@ export default function MatchDrawer({
   onStep: (targetId: number) => void;
   onToast: (msg: string, warn?: boolean) => void;
 }) {
+  const { appUser } = useAuth();
+  const canEdit = canEditMatches(appUser); // courtesy gate; the server write path holds
   const [detail, setDetail] = useState<Detail | null>(null);
   const [loadErr, setLoadErr] = useState<string | null>(null);
   const [loaded, setLoaded] = useState<State | null>(null);
@@ -416,7 +419,7 @@ export default function MatchDrawer({
           {msg && <span className="mdw-msg" data-testid="dr-msg" style={{ color: msg.kind === "ok" ? "#046B45" : msg.kind === "warn" ? "#7A5200" : "#A83120" }}>{msg.kind === "warn" ? "⚠ " : ""}{msg.text}</span>}
           <div className="mdw-sp">
             <button type="button" className="mdw-gh" data-testid="dr-revert" disabled={!dirty || saving} onClick={revert}>Revert</button>
-            <button type="button" className="mdw-go" data-testid="dr-save" disabled={!dirty || saving} onClick={save}>{saving ? "Saving…" : "Save"}</button>
+            <button type="button" className="mdw-go" data-testid="dr-save" disabled={!dirty || saving || !canEdit} onClick={save} title={!canEdit ? "Read-only — you don't have EDIT MATCHES" : undefined}>{saving ? "Saving…" : "Save"}</button>
           </div>
         </div>
       </div>

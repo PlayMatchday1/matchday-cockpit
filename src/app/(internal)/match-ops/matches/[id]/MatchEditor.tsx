@@ -22,6 +22,7 @@ import { envBadge } from "@/lib/matchEnvBadge";
 import { FULL_EDITOR_ENV } from "@/lib/matchEnv";
 import { noteLogResponse } from "@/lib/logHealth";
 import LogHealthBanner from "@/components/LogHealthBanner";
+import { useAuth, canEditMatches } from "@/lib/useAuth";
 
 type FieldRow = { id: number; title: string; city: string | null };
 type Data = Record<string, unknown>;
@@ -96,6 +97,8 @@ async function authFetch(path: string, init?: RequestInit): Promise<Response> {
 const money = (cents: unknown) => "$" + (Number(cents ?? 0) / 100).toFixed(2);
 
 export default function MatchEditor({ id }: { id: string }) {
+  const { appUser } = useAuth();
+  const canEdit = canEditMatches(appUser); // courtesy gate; the server write path holds
   const [fields, setFields] = useState<FieldRow[]>([]);
   const [players, setPlayers] = useState<Data[]>([]);
   const [meta, setMeta] = useState<Data | null>(null); // read-only bits (start/end, teams, isCancelled)
@@ -351,7 +354,7 @@ export default function MatchEditor({ id }: { id: string }) {
           {msg ? <span className="sbmsg" data-testid="sb-msg" style={{ color: msg.kind === "ok" ? "#046B45" : msg.kind === "warn" ? "#7A5200" : "#A83120" }}>{msg.kind === "warn" ? "⚠ " : ""}{msg.text}</span> : null}
           <span className="sbact">
             <button className="btn" data-testid="revert" disabled={!changedKeys.length || saving} onClick={revert}>Revert</button>
-            <button className="btn go" data-testid="save" disabled={!changedKeys.length || saving} onClick={save}>{saving ? "Saving…" : "Save"}</button>
+            <button className="btn go" data-testid="save" disabled={!changedKeys.length || saving || !canEdit} onClick={save} title={!canEdit ? "Read-only — you don't have EDIT MATCHES" : undefined}>{saving ? "Saving…" : "Save"}</button>
           </span>
         </div>
       </div>
