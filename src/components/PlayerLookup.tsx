@@ -20,7 +20,8 @@ import { useAuth, canEditMatches } from "@/lib/useAuth";
 import { FULL_EDITOR_ENV } from "@/lib/matchEnv";
 import { envBadge } from "@/lib/matchEnvBadge";
 import {
-  detectKind, SEARCH_HINT, money, openSpots as openSpotsOf, suggestSpot, type SpotTeam, type SearchKind,
+  detectKind, SEARCH_HINT, money, openSpots as openSpotsOf, suggestSpot, STRIKE_LIMIT, strikeReasonLabel,
+  type SpotTeam, type SearchKind,
 } from "@/lib/playerLookupModel";
 
 const ENV = FULL_EDITOR_ENV;
@@ -35,6 +36,8 @@ async function authFetch(path: string, init?: RequestInit): Promise<Response> {
 type SearchRow = { id: number; name: string; email: string | null; phone: string | null; city: string | null; status: "expelled" | "suspended" | "ok"; hasMembership: boolean };
 type MatchRow = { umId: number; matchId: number; name: string; startDate: string | null; startDateUtc: string | null; team: number | null; num: number | null; price: number; state: "upcoming" | "played" | "cancelled"; removable: boolean };
 type Membership = { status: string; number: string | null; since: string | null; renews: string | null; canceledAt: string | null; price: number | null; city: string | null } | null;
+type StrikeLog = { penaltyPoint: number; active: boolean; reason: string | null; matchName: string | null; when: string | null; issued: string | null; canceledAt: string | null; hoursBefore: number | null };
+type Strikes = { activeCount: number; limit: number; isSuspended: boolean; suspendedTo: string | null; expiredAt: string | null; firstStrikeAt: string | null; logs: StrikeLog[] };
 type Profile = {
   player: {
     id: number; name: string; email: string | null; phone: string | null; phoneVerified: boolean; city: string | null;
@@ -44,6 +47,7 @@ type Profile = {
   };
   membership: Membership;
   matches: MatchRow[];
+  strikes: Strikes;
 };
 
 // ---- optional facts, chosen by the operator (persisted) ----
@@ -258,8 +262,8 @@ export default function PlayerLookup() {
             onRemove={(m) => setModal({ type: "remove", m })}
           />
           <p className="foot" data-testid="notbuilt">
-            Not built yet: <b>Strikes</b>, <b>Payments</b> and <b>Account history</b>. Their absence here does not mean zero —
-            check MatchDay / Stripe directly until those panels ship.
+            Not built yet: <b>Payments</b> and <b>Account history</b> (suspend / expel / lift). Their absence here does not mean zero —
+            check Stripe / MatchDay directly until those panels ship.
           </p>
         </div>
       )}
@@ -325,6 +329,8 @@ function ProfileView({ p, fields, canEdit, onOpenMatch, onAdd, onRemove }: {
 
       <MembershipPanel m={p.membership} />
 
+      <StrikePanel s={p.strikes} isMember={!!p.membership} />
+
       <div className="panel">
         <div className="ptitle">
           <h3>MATCH HISTORY</h3>
@@ -384,6 +390,64 @@ function MembershipPanel({ m }: { m: Membership }) {
         {m.city && <Fact k="CITY" v={m.city} />}
       </div>
       <p className="pfoot">From MatchDay subscriptions. Stripe payment detail is not shown here — check Stripe for charge status.</p>
+    </div>
+  );
+}
+
+// ---------- strikes (display only) ----------
+function StrikePanel({ s, isMember }: { s: Strikes; isMember: boolean }) {
+  // Strikes are a members-only penalty. A pay-per-match player who no-shows already
+  // forfeits the fee (the 24h refund rule), so there is no strike to show.
+  if (!isMember && s.logs.length === 0 && s.activeCount === 0) {
+    return (
+      <div className="panel" data-testid="strikes-members-only">
+        <div className="ptitle"><h3>STRIKES</h3></div>
+        <div className="nomem"><b>Members only</b>This player pays per match, so a missed spot already costs them the fee. Strikes exist because a member&apos;s does not.</div>
+      </div>
+    );
+  }
+  const active = s.activeCount;
+  const tripped = active >= s.limit;
+  const remaining = Math.max(0, s.limit - active);
+  return (
+    <div className="panel" data-testid="strikes">
+      <div className="ptitle"><h3>STRIKES</h3><span className="note" data-testid="strike-count">{active} of {s.limit} active</span></div>
+
+      {s.isSuspended && (
+        <div className="banner susp" data-testid="strike-suspended"><span><b>Suspended by strikes</b>
+          <small>{s.limit} active strikes = a one-week suspension{s.suspendedTo ? ` · until ${fmtDate(s.suspendedTo)}` : ""}</small></span></div>
+      )}
+
+      <div className="strikebar">
+        <span className="pips">{Array.from({ length: s.limit }, (_, i) => (
+          <span key={i} className={`pip ${i < active ? (tripped ? "trip" : "on") : ""}`} />
+        ))}</span>
+        <span className="stxt">
+          <b>{active} active</b>{active < s.limit ? ` · ${remaining} more triggers a one-week suspension` : " · at the suspension threshold"}
+          {s.expiredAt ? <> · current strikes expire {fmtDate(s.expiredAt)}</> : null}
+        </span>
+      </div>
+
+      <div className="rows">
+        {s.logs.length === 0 && <p className="empty small">No strikes on record.</p>}
+        {s.logs.map((l, i) => {
+          const label = strikeReasonLabel(l.reason);
+          const cls = l.reason === "NO_SHOW" ? "noshow" : l.reason === "CANCEL_W_IN_SOME_HOURS" ? "latecancel" : l.reason === "LATE" ? "late" : "strike";
+          const detail = l.reason === "CANCEL_W_IN_SOME_HOURS" && l.hoursBefore != null ? `Cancelled ${l.hoursBefore}h before kickoff`
+            : l.reason === "NO_SHOW" ? "Never checked in"
+            : l.reason === "LATE" ? "Arrived after kickoff"
+            : l.reason ? "" : "Reason not on the linked match";
+          return (
+            <div className="row srow" key={i}>
+              <span className="stitle"><span className="l1">{l.matchName ?? "Match"}</span>
+                <span className="l2">{fmtWhen(l.when)}{detail ? ` · ${detail}` : ""}{l.penaltyPoint > 1 ? ` · ×${l.penaltyPoint}` : ""}</span></span>
+              <span className={`st ${cls}`}>{label}</span>
+              <span className={`st ${l.active ? "sactive" : "expired"}`}>{l.active ? "ACTIVE" : "EXPIRED"}</span>
+            </div>
+          );
+        })}
+      </div>
+      <p className="pfoot">A member is struck for arriving late, not showing, or cancelling inside 6 hours of kickoff (see docs). {s.limit} active strikes suspends the membership for a week. Read-only here — issuing and removing strikes stays in MatchDay.</p>
     </div>
   );
 }
@@ -687,6 +751,21 @@ const CSS = `
 .pl .st.upcoming{background:var(--blubg);color:var(--blu);border-color:var(--bluln)}
 .pl .st.played{background:#f0f4f2;color:var(--ink2);border-color:var(--line)}
 .pl .st.cancelled{background:var(--ambbg);color:var(--amb);border-color:var(--ambln)}
+.pl .st.late{background:var(--ambbg);color:var(--amb);border-color:var(--ambln)}
+.pl .st.latecancel{background:var(--ambbg);color:var(--amb);border-color:var(--ambln)}
+.pl .st.noshow{background:var(--redbg);color:var(--red);border-color:var(--redln)}
+.pl .st.strike{background:#f0f4f2;color:var(--ink2);border-color:var(--line)}
+.pl .st.sactive{background:var(--redbg);color:var(--red);border-color:var(--redln)}
+.pl .st.expired{background:#f0f4f2;color:var(--ink2);border-color:var(--line)}
+.pl .strikebar{display:flex;align-items:center;gap:10px;padding:12px 16px;border-bottom:1px solid var(--line);flex-wrap:wrap}
+.pl .pips{display:flex;gap:5px}
+.pl .pip{width:16px;height:16px;border-radius:5px;background:#e7edea;border:1px solid var(--line);display:block}
+.pl .pip.on{background:var(--amb);border-color:var(--amb)}
+.pl .pip.trip{background:var(--red);border-color:var(--red)}
+.pl .strikebar .stxt{font-size:12.5px;color:var(--ink2)}
+.pl .strikebar .stxt b{color:var(--ink)}
+.pl .srow{grid-template-columns:minmax(0,1fr) 104px 84px}
+.pl .stitle{display:block;min-width:0}
 .pl .pfoot{padding:10px 16px;border-top:1px solid var(--line);background:#fafcfb;font-size:12px;color:var(--ink3)}
 .pl .pfoot.topline{border-top:0;border-bottom:1px solid var(--line)}
 .pl .locked{font-style:italic}
@@ -758,6 +837,7 @@ const CSS = `
   .pl .memgrid{grid-template-columns:1fr}
   .pl .mrow{grid-template-columns:minmax(0,1fr) 76px 84px}
   .pl .mrow .c-team{display:none}
+  .pl .srow{grid-template-columns:minmax(0,1fr) 92px 76px}
   .pl .idtags{margin-left:0}
   .pl .acts{margin-left:0;width:100%}
   .pl .modal{max-width:none}

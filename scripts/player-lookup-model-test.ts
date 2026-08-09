@@ -5,7 +5,7 @@ import "server-only"; // no-op under --conditions=react-server
 // one, or the assertion proves nothing).
 //   NODE_OPTIONS=--conditions=react-server npx tsx scripts/player-lookup-model-test.ts
 import {
-  detectKind, serverQuery, openSpots, matchOpen, suggestSpot, money, type SpotTeam,
+  detectKind, serverQuery, openSpots, matchOpen, suggestSpot, money, STRIKE_LIMIT, strikeReasonLabel, type SpotTeam,
 } from "../src/lib/playerLookupModel";
 
 let pass = 0, fail = 0;
@@ -67,6 +67,19 @@ mutation("suggest-balances", suggestSpot, ((teams: SpotTeam[]) => { // broken: f
   for (let i = 0; i < teams.length; i++) { const f = openSpots(teams[i]); if (f.length) return { team: i, spot: f[0] }; }
   return null;
 }) as typeof suggestSpot, (fn) => { const s = fn(balance); return !!s && s.team === 1; });
+
+// ---- strikes ----
+eq("strike limit is 4 (member 1-week rule)", STRIKE_LIMIT, 4);
+eq("reason LATE -> LATE", strikeReasonLabel("LATE"), "LATE");
+eq("reason NO_SHOW -> NO SHOW", strikeReasonLabel("NO_SHOW"), "NO SHOW");
+eq("reason CANCEL_W_IN_SOME_HOURS -> LATE CANCEL", strikeReasonLabel("CANCEL_W_IN_SOME_HOURS"), "LATE CANCEL");
+eq("reason null -> STRIKE (THAT one exists, not WHY)", strikeReasonLabel(null), "STRIKE");
+eq("reason unknown enum -> tidied raw", strikeReasonLabel("SOME_NEW_STATUS"), "SOME NEW STATUS");
+// the reason must NOT come from the 24h refund flag — a fresh label for a new status proves
+// the mapping is data-driven, not a fixed 3-way that would silently mislabel anything else.
+mutation("reason-not-fixed-3way", strikeReasonLabel, ((s: string | null) => // broken: everything unknown -> "LATE CANCEL"
+  s === "LATE" ? "LATE" : s === "NO_SHOW" ? "NO SHOW" : "LATE CANCEL") as typeof strikeReasonLabel,
+  (fn) => fn("SOME_NEW_STATUS") === "SOME NEW STATUS");
 
 // ---- money ----
 eq("money cents->dollars", money(1200), "$12.00");

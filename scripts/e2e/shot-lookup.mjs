@@ -15,6 +15,14 @@ const MARISOL = {
     { umId: 900002, matchId: 17244, name: "Soccer Central Field 4", startDate: "2026-08-05T19:00:00.000Z", startDateUtc: "2026-08-05T19:00:00.000Z", team: 1, num: 2, price: 1200, state: "played", removable: false },
     { umId: 900003, matchId: 17190, name: "Soccer Central Field 1", startDate: "2026-08-02T18:00:00.000Z", startDateUtc: "2026-08-02T18:00:00.000Z", team: 2, num: 5, price: 1200, state: "cancelled", removable: false },
   ],
+  strikes: {
+    activeCount: 2, limit: 4, isSuspended: false, suspendedTo: null, expiredAt: "2026-10-04T00:00:00.000Z", firstStrikeAt: "2026-08-02T18:00:00.000Z",
+    logs: [
+      { penaltyPoint: 1, active: true, reason: "CANCEL_W_IN_SOME_HOURS", matchName: "Soccer Central Field 1", when: "2026-08-02T18:00:00.000Z", issued: "2026-08-02T14:48:00.000Z", canceledAt: "2026-08-02T14:48:00.000Z", hoursBefore: 3.2 },
+      { penaltyPoint: 1, active: true, reason: "LATE", matchName: "Soccer Central Field 4", when: "2026-08-05T19:00:00.000Z", issued: "2026-08-05T19:14:00.000Z", canceledAt: null, hoursBefore: null },
+      { penaltyPoint: 1, active: false, reason: "NO_SHOW", matchName: "Havana Fields", when: "2026-04-19T20:30:00.000Z", issued: "2026-04-19T20:30:00.000Z", canceledAt: null, hoursBefore: null },
+    ],
+  },
 };
 const grantEdit = (ctx) => ctx.route("**/rest/v1/app_users*", async (route) => {
   if (route.request().method() !== "GET") return route.continue();

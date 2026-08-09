@@ -3,10 +3,11 @@
 //                     email, name AND phone-digits (confirmed live); a pure id uses
 //                     ?id=<n> (exact). Returns a light row per hit — no strikes, no
 //                     payments, no card data.
-//   GET ?id=<n>    -> one profile: identity, facts, membership, match history. The
-//                     STRIKES / PAYMENTS / ACCOUNT-HISTORY panels are deliberately NOT
-//                     built (see the mockup gate) — this route never returns strike,
-//                     Stripe charge, or ban-history data, so an empty panel can't lie.
+//   GET ?id=<n>    -> one profile: identity, facts, membership, match history and the
+//                     read-only STRIKES summary (server-computed activeStrikes + per-log
+//                     reason joined from the user-match's userStatus). PAYMENTS and
+//                     ACCOUNT-HISTORY are still NOT built — this route never returns Stripe
+//                     charge or ban-history data, so those empty panels can't lie.
 //
 // Writes (add to / remove from a match) do NOT live here — they reuse the existing
 // guarded roster route (/api/matchday/{env}/roster/{matchId}) so there is ONE write
@@ -83,6 +84,35 @@ export async function GET(req: Request, ctx: { params: Promise<{ env: string }> 
         };
       }).sort((a, b) => (Date.parse(b.startDateUtc ?? "") || 0) - (Date.parse(a.startDateUtc ?? "") || 0));
 
+      // Strikes — MEMBERS-ONLY penalty. The server pre-computes activeStrikes; we join
+      // each strikeLog to its user-match to recover the REASON (userStatus) and, for a
+      // cancellation, the timing (canceledAt vs kickoff). A log whose user-match is not
+      // in matches[] keeps its penalty but shows no reason (THAT a strike exists, not WHY).
+      const s = (d.strike as Record<string, unknown> | undefined) ?? {};
+      const umInfo = new Map<number, Record<string, unknown>>();
+      for (const um of matchesRaw) { const uid = num(um.id); if (uid != null) umInfo.set(uid, um); }
+      const logsRaw = Array.isArray(s.strikeLogs) ? (s.strikeLogs as Record<string, unknown>[]) : [];
+      const strikeLogs = logsRaw.map((l) => {
+        const um = umInfo.get(num(l.userMatchId) ?? -1);
+        const m = (um?.match as Record<string, unknown>) ?? {};
+        const kickoff = str(m.startDateUtc) ?? str(m.startDate);
+        const canceledAt = um ? str(um.canceledAt) : null;
+        const hoursBefore = canceledAt && kickoff && Number.isFinite(Date.parse(canceledAt)) && Number.isFinite(Date.parse(kickoff))
+          ? Math.round(((Date.parse(kickoff) - Date.parse(canceledAt)) / 3600e3) * 10) / 10 : null;
+        return {
+          penaltyPoint: num(l.penaltyPoint) ?? 1, active: l.active === true,
+          reason: um ? str(um.userStatus) : null,
+          matchName: str(m.name), when: str(m.startDate) ?? kickoff,
+          issued: str(l.createdAt), canceledAt, hoursBefore,
+        };
+      }).sort((a, b) => (Date.parse(b.issued ?? "") || 0) - (Date.parse(a.issued ?? "") || 0));
+      const strikes = {
+        activeCount: num(s.activeStrikes) ?? 0, limit: 4,
+        isSuspended: s.isSuspended === true, suspendedTo: str(s.suspendedTo),
+        expiredAt: str(s.expiredAt), firstStrikeAt: str(s.firstStrikeAt),
+        logs: strikeLogs,
+      };
+
       const sub = activeSub(d.userSubscriptions);
       // Defensive mapping — the exact userSubscriptions shape for active members is
       // unconfirmed live; render only fields that are present, never "undefined".
@@ -116,6 +146,7 @@ export async function GET(req: Request, ctx: { params: Promise<{ env: string }> 
         },
         membership,
         matches,
+        strikes,
       });
     }
 

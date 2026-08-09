@@ -39,6 +39,24 @@ export function serverQuery(d: Detected): Record<string, string> {
   return { email: d.norm };
 }
 
+// ---- strikes (MEMBERS ONLY) -------------------------------------------------
+// 4 active strikes ⇒ a 1-week suspension. activeStrikes is server-computed (a SUM of
+// penaltyPoints, so a single strike can weigh >1) — display it, never recompute it.
+export const STRIKE_LIMIT = 4;
+
+// The strike reason is the user-match `userStatus` enum (NOT cancelledBefore24Hours,
+// which is the 24h REFUND flag for pay-per-match players). The three strike-earning
+// values, mapped to a short label; anything else falls through to a tidied raw value.
+const STRIKE_REASON: Record<string, string> = {
+  LATE: "LATE",
+  NO_SHOW: "NO SHOW",
+  CANCEL_W_IN_SOME_HOURS: "LATE CANCEL",
+};
+export function strikeReasonLabel(userStatus: string | null | undefined): string {
+  if (!userStatus) return "STRIKE";
+  return STRIKE_REASON[userStatus] ?? userStatus.replace(/_/g, " ");
+}
+
 export function money(cents: number | null | undefined): string {
   const c = typeof cents === "number" && Number.isFinite(cents) ? cents : 0;
   return "$" + (c / 100).toFixed(2);

@@ -40,6 +40,23 @@ const MARISOL = {
     { umId: 900002, matchId: 17244, name: "Soccer Central Field 4", startDate: "2026-08-05T19:00:00.000Z", startDateUtc: "2026-08-05T19:00:00.000Z", team: 1, num: 2, price: 1200, state: "played", removable: false },
     { umId: 900003, matchId: 17190, name: "Soccer Central Field 1", startDate: "2026-08-02T18:00:00.000Z", startDateUtc: "2026-08-02T18:00:00.000Z", team: 2, num: 5, price: 1200, state: "cancelled", removable: false },
   ],
+  strikes: {
+    activeCount: 2, limit: 4, isSuspended: false, suspendedTo: null,
+    expiredAt: "2026-10-04T00:00:00.000Z", firstStrikeAt: "2026-08-02T18:00:00.000Z",
+    logs: [
+      { penaltyPoint: 1, active: true, reason: "CANCEL_W_IN_SOME_HOURS", matchName: "Soccer Central Field 1", when: "2026-08-02T18:00:00.000Z", issued: "2026-08-02T14:48:00.000Z", canceledAt: "2026-08-02T14:48:00.000Z", hoursBefore: 3.2 },
+      { penaltyPoint: 1, active: true, reason: "LATE", matchName: "Soccer Central Field 4", when: "2026-08-05T19:00:00.000Z", issued: "2026-08-05T19:14:00.000Z", canceledAt: null, hoursBefore: null },
+      { penaltyPoint: 1, active: false, reason: "NO_SHOW", matchName: "Havana Fields", when: "2026-04-19T20:30:00.000Z", issued: "2026-04-19T20:30:00.000Z", canceledAt: null, hoursBefore: null },
+    ],
+  },
+};
+// a non-member: strikes panel must say "Members only", never invent strikes
+const DANNY = {
+  env: "production",
+  player: { id: 60180, name: "Danny Vo", email: "danny@example.com", phone: "+18329015669", phoneVerified: true, city: "Houston", level: 3, registered: "2025-11-04T00:00:00.000Z", goals: 2, cityManager: false, credits: 0, status: "ok", banReason: null, bannedAt: null, banExpiredAt: null, matchesPlayed: 2, upcoming: 0 },
+  membership: null,
+  matches: [],
+  strikes: { activeCount: 0, limit: 4, isSuspended: false, suspendedTo: null, expiredAt: null, firstStrikeAt: null, logs: [] },
 };
 const SEARCH_HITS = [
   { id: 79214, name: "Marisol Reyes", email: "m.reyes@gmail.com", phone: "+12105557781", city: "San Antonio", status: "ok", hasMembership: true },
@@ -91,10 +108,12 @@ async function main() {
       const url = new URL(route.request().url());
       const id = url.searchParams.get("id");
       const q = url.searchParams.get("q");
-      if (id) return route.fulfill({ status: 200, contentType: "application/json", body: JSON.stringify(MARISOL) });
+      if (id) return route.fulfill({ status: 200, contentType: "application/json", body: JSON.stringify(id === "60180" ? DANNY : MARISOL) });
       // mimic detectKind for the kind field (component reads it for the hint too, but hint is local)
       const kind = !q ? "empty" : q.includes("@") ? "email" : /^\d{1,6}$/.test(q.trim()) ? "id" : q.replace(/\D/g, "").length >= 7 ? "phone" : "name";
-      const results = q && /mari|reyes|79214|2105557781|m\.reyes/i.test(q) ? SEARCH_HITS : [];
+      const results = q && /mari|reyes|79214|2105557781|m\.reyes/i.test(q) ? SEARCH_HITS
+        : q && /danny|60180/i.test(q) ? [{ id: 60180, name: "Danny Vo", email: "danny@example.com", phone: "+18329015669", city: "Houston", status: "ok", hasMembership: false }]
+        : [];
       return route.fulfill({ status: 200, contentType: "application/json", body: JSON.stringify({ kind, results }) });
     });
     await ctx.route("**/api/matchday/**/gameday**", (route) => {
@@ -156,10 +175,28 @@ async function main() {
   await page.keyboard.press("Escape").catch(() => {});
   await page.click("body", { position: { x: 5, y: 5 } }).catch(() => {});
 
-  // ── not-built footer names the absent panels ──
+  // ── strikes panel (display-only), member with 2 of 4 active ──
+  eq("strikes panel rendered for a member", !!(await page.$('[data-testid="strikes"]')), true);
+  eq("strike count shows N of 4", (await page.$eval('[data-testid="strike-count"]', (e) => e.textContent)).trim(), "2 of 4 active");
+  eq("4 pips, 2 lit", { pips: await page.$$eval('[data-testid="strikes"] .pip', (e) => e.length), lit: await page.$$eval('[data-testid="strikes"] .pip.on', (e) => e.length) }, { pips: 4, lit: 2 });
+  eq("reason labels come from userStatus (LATE CANCEL / LATE / NO SHOW)", await page.$$eval('[data-testid="strikes"] .srow .st:nth-child(2)', (els) => els.map((e) => e.textContent.trim())), ["LATE CANCEL", "LATE", "NO SHOW"]);
+  eq("cancellation strike shows hours-before-kickoff", await page.$eval('[data-testid="strikes"] .srow .l2', (e) => /3\.2h before kickoff/.test(e.textContent)), true);
+  eq("expired strike marked EXPIRED not ACTIVE", await page.$$eval('[data-testid="strikes"] .srow', (els) => { const last = els[els.length - 1]; return { active: !!last.querySelector(".st.sactive"), expired: !!last.querySelector(".st.expired") }; }), { active: false, expired: true });
+  eq("strikes panel is display-only (no write buttons)", await page.$$eval('[data-testid="strikes"] button', (e) => e.length), 0);
+
+  // ── not-built footer: Strikes is now built; only Payments + Account history remain ──
   { const foot = await page.$eval('[data-testid="notbuilt"]', (e) => e.textContent);
-    eq("footer names Strikes, Payments and Account history as not built", ["Strikes", "Payments", "Account history"].every((w) => foot.includes(w)), true); }
-  eq("no Strikes/Payments panel rendered", await page.$$eval(".ptitle h3", (els) => els.map((e) => e.textContent)), ["MEMBERSHIP", "MATCH HISTORY"]);
+    eq("footer names Payments + Account history, NOT Strikes", { pay: foot.includes("Payments"), acct: foot.includes("Account history"), strike: /\bStrikes\b/.test(foot) }, { pay: true, acct: true, strike: false }); }
+  eq("panels are MEMBERSHIP, STRIKES, MATCH HISTORY (no Payments panel)", await page.$$eval(".ptitle h3", (els) => els.map((e) => e.textContent)), ["MEMBERSHIP", "STRIKES", "MATCH HISTORY"]);
+
+  // ── non-member: strikes panel says Members only, never invents strikes ──
+  await type("Danny"); await page.waitForSelector('.res[data-pid="60180"]', { timeout: 5000 }); await page.click('.res[data-pid="60180"]');
+  await page.waitForSelector('.idcard[data-pid="60180"]', { timeout: 5000 });
+  eq("non-member strikes panel says Members only", await page.$eval('[data-testid="strikes-members-only"] .nomem b', (e) => e.textContent), "Members only");
+  eq("non-member membership panel says Not a member", await page.$$eval(".nomem b", (els) => els.some((e) => e.textContent === "Not a member")), true);
+  // back to the member for the write flows
+  await type("Marisol"); await page.waitForSelector('.res[data-pid="79214"]', { timeout: 5000 }); await page.click('.res[data-pid="79214"]');
+  await page.waitForSelector('.idcard[data-pid="79214"]', { timeout: 5000 });
 
   // ── ADD flow: walk it, suggestion pre-selected, then write ──
   await page.click('[data-testid="add-match"]');
