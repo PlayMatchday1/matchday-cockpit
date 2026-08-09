@@ -16,7 +16,7 @@
 import { useCallback, useEffect, useMemo, useRef, useState } from "react";
 import { useRouter } from "next/navigation";
 import { supabase } from "@/lib/supabase";
-import { useAuth, canEditMatches } from "@/lib/useAuth";
+import { useAuth, canEditMatches, canManagePlayers } from "@/lib/useAuth";
 import { FULL_EDITOR_ENV } from "@/lib/matchEnv";
 import { envBadge } from "@/lib/matchEnvBadge";
 import {
@@ -38,6 +38,7 @@ type MatchRow = { umId: number; matchId: number; name: string; startDate: string
 type Membership = { status: string; number: string | null; since: string | null; renews: string | null; canceledAt: string | null; price: number | null; city: string | null } | null;
 type StrikeLog = { penaltyPoint: number; active: boolean; reason: string | null; matchName: string | null; when: string | null; issued: string | null; canceledAt: string | null; hoursBefore: number | null };
 type Strikes = { activeCount: number; limit: number; isSuspended: boolean; suspendedTo: string | null; expiredAt: string | null; firstStrikeAt: string | null; logs: StrikeLog[] };
+type HistoryRow = { action: "suspend" | "expel"; reason: string | null; when: string | null; until: string | null; by: string | null };
 type Profile = {
   player: {
     id: number; name: string; email: string | null; phone: string | null; phoneVerified: boolean; city: string | null;
@@ -48,6 +49,7 @@ type Profile = {
   membership: Membership;
   matches: MatchRow[];
   strikes: Strikes;
+  accountHistory: HistoryRow[];
 };
 
 // ---- optional facts, chosen by the operator (persisted) ----
@@ -100,7 +102,8 @@ function statusTags(r: { status: string; hasMembership?: boolean }): [string, st
 export default function PlayerLookup() {
   const router = useRouter();
   const { appUser } = useAuth();
-  const canEdit = canEditMatches(appUser); // courtesy gate; the server holds regardless
+  const canEdit = canEditMatches(appUser);   // EDIT MATCHES — add/remove; server holds regardless
+  const canManage = canManagePlayers(appUser); // MANAGE PLAYERS — suspend/expel/lift; independent
   const badge = envBadge(ENV);
 
   const [q, setQ] = useState("");
@@ -116,7 +119,7 @@ export default function PlayerLookup() {
   const [fields, setFields] = useState<Record<FieldKey, boolean>>(() => (typeof window === "undefined" ? Object.fromEntries(OPTIONAL.map((f) => [f.key, f.def])) as Record<FieldKey, boolean> : loadFields()));
   const [fieldsOpen, setFieldsOpen] = useState(false);
   const [recent, setRecent] = useState<{ id: number; name: string }[]>([]);
-  const [modal, setModal] = useState<{ type: "add" } | { type: "remove"; m: MatchRow } | null>(null);
+  const [modal, setModal] = useState<{ type: "add" } | { type: "remove"; m: MatchRow } | { type: "suspend" | "expel" | "lift" } | null>(null);
   const [toast, setToast] = useState<string | null>(null);
   const seq = useRef(0);
 
@@ -178,7 +181,7 @@ export default function PlayerLookup() {
             <h1 className="h1">Player Lookup</h1>
             <p className="hsub">One player — account, membership and matches. Add them to a match or take them out.</p>
           </div>
-          <span className={`livetag ${badge.tone}`}><span className="livedot" />{ENV === "production" ? "PRODUCTION" : "STAGING"} · {canEdit ? "LIVE EDITS" : "READ ONLY"}</span>
+          <span className={`livetag ${badge.tone}`}><span className="livedot" />{ENV === "production" ? "PRODUCTION" : "STAGING"} · {canEdit || canManage ? "LIVE EDITS" : "READ ONLY"}</span>
         </div>
 
         <div className="searchrow">
@@ -256,14 +259,16 @@ export default function PlayerLookup() {
       {profile && !loadingProfile && (
         <div id="profileview">
           <button className="back" data-testid="lookup-back" onClick={backToSearch}>‹ Back to search</button>
-          <ProfileView p={profile} fields={fields} canEdit={canEdit}
+          <ProfileView p={profile} fields={fields} canEdit={canEdit} canManage={canManage}
             onOpenMatch={(id) => router.push(`/match-ops/matches/${id}`)}
             onAdd={() => setModal({ type: "add" })}
             onRemove={(m) => setModal({ type: "remove", m })}
+            onSuspend={() => setModal({ type: "suspend" })}
+            onExpel={() => setModal({ type: "expel" })}
+            onLift={() => setModal({ type: "lift" })}
           />
           <p className="foot" data-testid="notbuilt">
-            Not built yet: <b>Payments</b> and <b>Account history</b> (suspend / expel / lift). Their absence here does not mean zero —
-            check Stripe / MatchDay directly until those panels ship.
+            Not built yet: <b>Payments</b>. Its absence here does not mean zero — check Stripe directly until that panel ships.
           </p>
         </div>
       )}
@@ -274,6 +279,10 @@ export default function PlayerLookup() {
       )}
       {modal?.type === "remove" && profile && (
         <RemoveModal p={profile} m={modal.m} canEdit={canEdit} onClose={() => setModal(null)}
+          onDone={(msg) => { setModal(null); showToast(msg); reloadProfile(); }} />
+      )}
+      {(modal?.type === "suspend" || modal?.type === "expel" || modal?.type === "lift") && profile && (
+        <BanModal p={profile} kind={modal.type} canManage={canManage} onClose={() => setModal(null)}
           onDone={(msg) => { setModal(null); showToast(msg); reloadProfile(); }} />
       )}
 
@@ -287,9 +296,10 @@ function Fact({ k, v, big }: { k: string; v: React.ReactNode; big?: boolean }) {
   return <span className="f"><span className="k">{k}</span><span className={`v${big ? " big" : ""}`}>{v}</span></span>;
 }
 
-function ProfileView({ p, fields, canEdit, onOpenMatch, onAdd, onRemove }: {
-  p: Profile; fields: Record<FieldKey, boolean>; canEdit: boolean;
+function ProfileView({ p, fields, canEdit, canManage, onOpenMatch, onAdd, onRemove, onSuspend, onExpel, onLift }: {
+  p: Profile; fields: Record<FieldKey, boolean>; canEdit: boolean; canManage: boolean;
   onOpenMatch: (id: number) => void; onAdd: () => void; onRemove: (m: MatchRow) => void;
+  onSuspend: () => void; onExpel: () => void; onLift: () => void;
 }) {
   const pl = p.player;
   const tags = statusTags({ status: pl.status, hasMembership: !!p.membership && p.membership.status !== "canceled" });
@@ -363,7 +373,44 @@ function ProfileView({ p, fields, canEdit, onOpenMatch, onAdd, onRemove }: {
         </div>
         <p className="pfoot">From MatchDay, live. Click a match to open its roster. Removing a player writes to production and appears in the Change Log with your name on it.</p>
       </div>
+
+      <AccountHistoryPanel p={p} canManage={canManage} onSuspend={onSuspend} onExpel={onExpel} onLift={onLift} />
     </>
+  );
+}
+
+function AccountHistoryPanel({ p, canManage, onSuspend, onExpel, onLift }: {
+  p: Profile; canManage: boolean; onSuspend: () => void; onExpel: () => void; onLift: () => void;
+}) {
+  const st = p.player.status;
+  // Lift is offered when already suspended/expelled; otherwise suspend + expel.
+  const actions = !canManage
+    ? <span className="locked">Suspend, expel and lift need MANAGE PLAYERS</span>
+    : st === "expelled"
+      ? <button className="sbtn" data-testid="act-lift" onClick={onLift}>Lift expulsion</button>
+      : st === "suspended"
+        ? <><button className="sbtn" data-testid="act-lift" onClick={onLift}>Lift suspension</button>
+            <button className="sbtn danger" data-testid="act-expel" onClick={onExpel}>Expel</button></>
+        : <><button className="sbtn danger" data-testid="act-suspend" onClick={onSuspend}>Suspend</button>
+            <button className="sbtn danger" data-testid="act-expel" onClick={onExpel}>Expel</button></>;
+  return (
+    <div className="panel" data-testid="account-history">
+      <div className="ptitle"><h3>ACCOUNT HISTORY</h3><span className="acts">{actions}</span></div>
+      <div className="rows">
+        {p.accountHistory.length === 0
+          ? <p className="empty small"><b>Clean record</b>No suspensions or expulsions on file.</p>
+          : p.accountHistory.map((h, i) => (
+            <div className="row hrow" key={i}>
+              <span className={`st ${h.action === "expel" ? "expel" : "suspend"}`}>{h.action === "expel" ? "EXPELLED" : "SUSPENDED"}</span>
+              <span className="htitle"><span className="l1">{h.reason ?? "—"}</span>
+                <span className="l2">{fmtWhen(h.when)}{h.until ? ` · until ${fmtDate(h.until)}` : " · indefinite"}</span></span>
+              <span className="mid c-until">{h.until ? fmtDate(h.until) : "—"}</span>
+              <span className="mid c-by">{h.by ?? "—"}</span>
+            </div>
+          ))}
+      </div>
+      <p className="pfoot">The API exposes the CURRENT ban only, not a full audit trail. Suspending blocks new bookings until the date but does NOT cancel existing bookings — remove those separately. Every action you take here is recorded in the Change Log with your name on it.</p>
+    </div>
   );
 }
 
@@ -406,24 +453,31 @@ function StrikePanel({ s, isMember }: { s: Strikes; isMember: boolean }) {
       </div>
     );
   }
-  const active = s.activeCount;
+  const active = s.activeCount;         // POINT SUM from the server, not a row count
   const tripped = active >= s.limit;
+  const over = Math.max(0, active - s.limit);
   const remaining = Math.max(0, s.limit - active);
   return (
     <div className="panel" data-testid="strikes">
-      <div className="ptitle"><h3>STRIKES</h3><span className="note" data-testid="strike-count">{active} of {s.limit} active</span></div>
+      <div className="ptitle"><h3>STRIKES</h3><span className="note" data-testid="strike-count">{active} of {s.limit} points</span></div>
 
       {s.isSuspended && (
         <div className="banner susp" data-testid="strike-suspended"><span><b>Suspended by strikes</b>
-          <small>{s.limit} active strikes = a one-week suspension{s.suspendedTo ? ` · until ${fmtDate(s.suspendedTo)}` : ""}</small></span></div>
+          <small>{s.limit} strike points = a one-week suspension{s.suspendedTo ? ` · until ${fmtDate(s.suspendedTo)}` : ""}</small></span></div>
       )}
 
       <div className="strikebar">
-        <span className="pips">{Array.from({ length: s.limit }, (_, i) => (
-          <span key={i} className={`pip ${i < active ? (tripped ? "trip" : "on") : ""}`} />
-        ))}</span>
+        <span className="pips">
+          {Array.from({ length: s.limit }, (_, i) => (
+            <span key={i} className={`pip ${i < Math.min(active, s.limit) ? (tripped ? "trip" : "on") : ""}`} />
+          ))}
+          {over > 0 && <span className="pip pipover" data-testid="pip-over">+{over}</span>}
+        </span>
         <span className="stxt">
-          <b>{active} active</b>{active < s.limit ? ` · ${remaining} more triggers a one-week suspension` : " · at the suspension threshold"}
+          {/* activeStrikes is a SUM of penaltyPoints (a single strike can weigh >1), so the
+              number is POINTS, not rows — say so, or three rows under "N of 4" reads as a bug. */}
+          <b>{active} of {s.limit} strike points</b> · {s.limit} suspends a member for a week
+          {over > 0 ? ` · ${over} OVER the threshold` : active < s.limit ? ` · ${remaining} to go` : " · at the threshold"}
           {s.expiredAt ? <> · current strikes expire {fmtDate(s.expiredAt)}</> : null}
         </span>
       </div>
@@ -644,6 +698,73 @@ function RemoveModal({ p, m, canEdit, onClose, onDone }: { p: Profile; m: MatchR
   );
 }
 
+// ---------- suspend / expel / lift ----------
+function BanModal({ p, kind, canManage, onClose, onDone }: { p: Profile; kind: "suspend" | "expel" | "lift"; canManage: boolean; onClose: () => void; onDone: (msg: string) => void }) {
+  const [reason, setReason] = useState("");
+  const [until, setUntil] = useState("");
+  const [confirmName, setConfirmName] = useState("");
+  const [busy, setBusy] = useState(false);
+  const [err, setErr] = useState<string | null>(null);
+  const name = p.player.name;
+  const liftWord = p.player.status === "expelled" ? "expulsion" : "suspension";
+
+  const ready = kind === "suspend" ? !!reason.trim() && /^\d{4}-\d{2}-\d{2}$/.test(until)
+    : kind === "expel" ? !!reason.trim() && confirmName.trim() === name
+    : !!reason.trim();
+
+  const title = kind === "suspend" ? `Suspend ${name}` : kind === "expel" ? `Expel ${name}` : `Lift ${liftWord}`;
+
+  const submit = async () => {
+    if (!ready || busy) return;
+    setBusy(true); setErr(null);
+    try {
+      const res = await authFetch(`/api/lookup/${ENV}/ban`, {
+        method: "POST",
+        body: JSON.stringify({ action: kind, playerId: p.player.id, reason: reason.trim(), until: kind === "suspend" ? until : undefined, playerName: name }),
+      });
+      const j = await res.json().catch(() => ({}));
+      if (!res.ok) { setErr(j?.error || `Failed (${res.status})`); setBusy(false); return; }
+      onDone(kind === "suspend" ? `${name} suspended` : kind === "expel" ? `${name} expelled` : `${liftWord.charAt(0).toUpperCase() + liftWord.slice(1)} lifted for ${name}`);
+    } catch (e) { setErr(e instanceof Error ? e.message : String(e)); setBusy(false); }
+  };
+
+  return (
+    <Modal title={title} onClose={onClose}>
+      {kind === "suspend" && <div className="warn"><b>Suspension blocks new bookings until the date you set.</b>Existing bookings are NOT cancelled — remove those separately if that is what you mean.</div>}
+      {kind === "expel" && <div className="warn hard"><b>Expulsion is permanent until someone lifts it.</b>{name} loses access to the platform. Use suspension if there is any chance this is temporary.</div>}
+      {kind === "lift" && <div className="warn"><b>This restores {name}&apos;s access immediately.</b>Current reason on file: {p.player.banReason ?? "—"}</div>}
+
+      <span className="fld"><span className="lb">{kind === "lift" ? "WHY — REQUIRED" : "REASON — REQUIRED"}</span>
+        <input data-testid="ban-reason" value={reason} onChange={(e) => setReason(e.target.value)} autoComplete="off"
+          placeholder={kind === "suspend" ? "e.g. Repeated late cancellations" : kind === "expel" ? "e.g. Fraudulent dispute after playing" : "e.g. Appealed, dispute resolved"} autoFocus />
+        <span className="help">Recorded in the account history and the Change Log with your name on it. Write it for someone reading it in six months.</span>
+      </span>
+
+      {kind === "suspend" && (
+        <span className="fld"><span className="lb">SUSPENDED UNTIL — REQUIRED</span>
+          <input data-testid="ban-until" type="date" value={until} onChange={(e) => setUntil(e.target.value)} />
+          <span className="help">MatchDay stores an end date for a suspension. For an indefinite ban with no review date, use Expel instead.</span>
+        </span>
+      )}
+      {kind === "expel" && (
+        <span className="fld"><span className="lb">TYPE THE PLAYER&apos;S NAME TO CONFIRM</span>
+          <input data-testid="ban-confirm-name" value={confirmName} onChange={(e) => setConfirmName(e.target.value)} placeholder={name} autoComplete="off" />
+          <span className="help">Deliberate friction. Expulsion should not be one mis-click away.</span>
+        </span>
+      )}
+
+      {!canManage && <div className="warn hard"><b>You do not hold MANAGE PLAYERS.</b>The server will refuse this write.</div>}
+      {err && <div className="warn hard" data-testid="ban-err"><b>That didn&apos;t work.</b>{err}</div>}
+      <ModalFoot>
+        <button className="sbtn" onClick={onClose}>Cancel</button>
+        <button className={`sbtn ${kind === "lift" ? "go" : "danger"}`} data-testid="ban-confirm" disabled={!ready || busy || !canManage} onClick={submit}>
+          {busy ? "Working…" : kind === "suspend" ? "Suspend" : kind === "expel" ? "Expel" : `Lift ${liftWord}`}
+        </button>
+      </ModalFoot>
+    </Modal>
+  );
+}
+
 // ---------- modal shell ----------
 function Modal({ title, onClose, children }: { title: string; onClose: () => void; children: React.ReactNode }) {
   useEffect(() => {
@@ -763,10 +884,15 @@ const CSS = `
 .pl .pip{width:16px;height:16px;border-radius:5px;background:#e7edea;border:1px solid var(--line);display:block}
 .pl .pip.on{background:var(--amb);border-color:var(--amb)}
 .pl .pip.trip{background:var(--red);border-color:var(--red)}
+.pl .pip.pipover{width:auto;min-width:16px;padding:0 5px;background:var(--red);border-color:var(--red);color:#fff;font-size:10.5px;font-weight:800;line-height:16px;text-align:center}
 .pl .strikebar .stxt{font-size:12.5px;color:var(--ink2)}
 .pl .strikebar .stxt b{color:var(--ink)}
 .pl .srow{grid-template-columns:minmax(0,1fr) 104px 84px}
 .pl .stitle{display:block;min-width:0}
+.pl .st.suspend{background:var(--ambbg);color:var(--amb);border-color:var(--ambln)}
+.pl .st.expel{background:var(--redbg);color:var(--red);border-color:var(--redln)}
+.pl .hrow{grid-template-columns:104px minmax(0,1fr) 118px 128px}
+.pl .htitle{display:block;min-width:0}
 .pl .pfoot{padding:10px 16px;border-top:1px solid var(--line);background:#fafcfb;font-size:12px;color:var(--ink3)}
 .pl .pfoot.topline{border-top:0;border-bottom:1px solid var(--line)}
 .pl .locked{font-style:italic}
@@ -839,6 +965,8 @@ const CSS = `
   .pl .mrow{grid-template-columns:minmax(0,1fr) 76px 84px}
   .pl .mrow .c-team{display:none}
   .pl .srow{grid-template-columns:minmax(0,1fr) 92px 76px}
+  .pl .hrow{grid-template-columns:92px minmax(0,1fr) 96px}
+  .pl .hrow .c-until{display:none}
   .pl .idtags{margin-left:0}
   .pl .acts{margin-left:0;width:100%}
   .pl .modal{max-width:none}

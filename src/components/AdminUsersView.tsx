@@ -92,12 +92,18 @@ export default function AdminUsersView() {
   // NOT trust the optimistic value: on success we render the row the server re-read from
   // the DB (post-trigger truth); on failure we revert and surface the error INLINE — the
   // Clubhouse E2E row raises P0001 from the DB trigger and that message must be shown.
-  async function saveMatchPermission(user: AppUser, patch: { canAccessMatchops?: boolean; canEditMatches?: boolean }) {
+  async function saveMatchPermission(user: AppUser, patch: { canAccessMatchops?: boolean; canEditMatches?: boolean; canManagePlayers?: boolean }) {
     setPermErr((e) => (e?.id === user.id ? null : e));
     const original = users;
-    setUsers((prev) => prev.map((u) => (u.id === user.id ? { ...u, ...(patch.canAccessMatchops !== undefined ? { can_access_matchops: patch.canAccessMatchops, can_edit_matches: patch.canAccessMatchops ? u.can_edit_matches : false } : {}), ...(patch.canEditMatches !== undefined ? { can_edit_matches: patch.canEditMatches } : {}) } : u)));
+    setUsers((prev) => prev.map((u) => (u.id === user.id ? {
+      ...u,
+      // matchops off cascades BOTH write permissions off (rules mirrored server-side)
+      ...(patch.canAccessMatchops !== undefined ? { can_access_matchops: patch.canAccessMatchops, can_edit_matches: patch.canAccessMatchops ? u.can_edit_matches : false, can_manage_players: patch.canAccessMatchops ? u.can_manage_players : false } : {}),
+      ...(patch.canEditMatches !== undefined ? { can_edit_matches: patch.canEditMatches } : {}),
+      ...(patch.canManagePlayers !== undefined ? { can_manage_players: patch.canManagePlayers } : {}),
+    } : u)));
     const { data: sess } = await supabase.auth.getSession();
-    let json: { user?: { can_access_matchops: boolean; can_edit_matches: boolean; is_service_account?: boolean }; error?: string } = {};
+    let json: { user?: { can_access_matchops: boolean; can_edit_matches: boolean; can_manage_players?: boolean; is_service_account?: boolean }; error?: string } = {};
     try {
       const res = await fetch("/api/admin/users/match-permissions", {
         method: "POST",
@@ -109,7 +115,7 @@ export default function AdminUsersView() {
     } catch (e) { setUsers(original); setPermErr({ id: user.id, msg: e instanceof Error ? e.message : String(e) }); return; }
     // Render ACTUAL DB state returned by the server's re-read, never the optimistic value.
     const row = json.user;
-    if (row) setUsers((prev) => prev.map((u) => (u.id === user.id ? { ...u, can_access_matchops: row.can_access_matchops, can_edit_matches: row.can_edit_matches, ...(row.is_service_account !== undefined ? { is_service_account: row.is_service_account } : {}) } : u)));
+    if (row) setUsers((prev) => prev.map((u) => (u.id === user.id ? { ...u, can_access_matchops: row.can_access_matchops, can_edit_matches: row.can_edit_matches, ...(row.can_manage_players !== undefined ? { can_manage_players: row.can_manage_players } : {}), ...(row.is_service_account !== undefined ? { is_service_account: row.is_service_account } : {}) } : u)));
     flash(user.id);
   }
 
@@ -276,6 +282,11 @@ export default function AdminUsersView() {
                                 <div className="flex items-center gap-1 pl-3" title={u.is_service_account ? "The E2E service account can never hold EDIT MATCHES" : !matchops ? "Requires Match Ops" : "EDIT MATCHES — production writes"}>
                                   <span className="text-[8px] leading-none text-deep-green/40">↳ edit</span>
                                   <ToggleBox on={!!u.can_edit_matches} disabled={!matchops || !!u.is_service_account} onClick={() => saveMatchPermission(u, { canEditMatches: !u.can_edit_matches })} label={`EDIT MATCHES (write) for ${u.email}`} />
+                                </div>
+                                {/* MANAGE PLAYERS — INDEPENDENT of EDIT MATCHES (suspend/expel/lift); also disabled when read is off or service account */}
+                                <div className="flex items-center gap-1 pl-3" title={u.is_service_account ? "The E2E service account can never hold MANAGE PLAYERS" : !matchops ? "Requires Match Ops" : "MANAGE PLAYERS — suspend / expel / lift"}>
+                                  <span className="text-[8px] leading-none text-deep-green/40">↳ manage</span>
+                                  <ToggleBox on={!!u.can_manage_players} disabled={!matchops || !!u.is_service_account} onClick={() => saveMatchPermission(u, { canManagePlayers: !u.can_manage_players })} label={`MANAGE PLAYERS (write) for ${u.email}`} />
                                 </div>
                                 {permErr?.id === u.id && (
                                   <span className="mt-1 max-w-[160px] text-[10px] leading-tight text-coral" data-testid="perm-error">{permErr.msg}</span>

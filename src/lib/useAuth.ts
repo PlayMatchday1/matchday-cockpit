@@ -17,7 +17,8 @@ export type AppUser = {
   can_access_chats: boolean;
   can_access_tech: boolean;
   can_edit_matches?: boolean;      // Phase 17 — the WRITE permission for matches
-  is_service_account?: boolean;    // the Clubhouse E2E account (never holds EDIT MATCHES)
+  can_manage_players?: boolean;    // Phase 18 — the account-level WRITE permission (ban)
+  is_service_account?: boolean;    // the Clubhouse E2E account (never holds a write permission)
   created_at: string;
   last_login_at: string | null;
 };
@@ -104,6 +105,12 @@ export function useAuth() {
 // courtesy. The server check in the shared write path (apiWrite) is what actually holds.
 export function canEditMatches(appUser: AppUser | null | undefined): boolean {
   return !!appUser && appUser.can_edit_matches === true && appUser.can_access_matchops === true;
+}
+
+// MANAGE PLAYERS (Phase 18) — INDEPENDENT of EDIT MATCHES. Courtesy gate for the ban
+// affordances; the server enforces it regardless.
+export function canManagePlayers(appUser: AppUser | null | undefined): boolean {
+  return !!appUser && appUser.can_manage_players === true && appUser.can_access_matchops === true;
 }
 
 export function canAccess(

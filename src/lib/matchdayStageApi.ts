@@ -118,7 +118,7 @@ export class NotAuthorizedError extends Error {
 // Who is performing a write, and whether they may. Derived server-side from the
 // authenticated user's app_users row (can_edit_matches AND can_access_matchops) — never
 // from client state. Reads (apiGet) need no actor; only writes do.
-export type WriteActor = { canEditMatches: boolean; email?: string; userId?: string };
+export type WriteActor = { canEditMatches: boolean; canManagePlayers?: boolean; email?: string; userId?: string };
 
 // The EDIT MATCHES check. Independent of PRODUCTION_WRITES_ENABLED: this is a per-USER
 // database grant; the bolt is a global deploy-time constant. Neither can satisfy the
@@ -131,16 +131,31 @@ export function assertCanEditMatches(actor: WriteActor | undefined): void {
     );
   }
 }
-// Indirection so a mutation test can monkeypatch the guard to a no-op and prove the
-// no-fetch test goes RED without it. TEST-ONLY — no route imports the setter.
+// The MANAGE PLAYERS check — a SEPARATE authority from EDIT MATCHES (banning someone
+// from the platform is not the same power as moving them between teams). Independent of
+// both EDIT MATCHES and the bolt: a per-USER database grant. Never logs a credential.
+export function assertCanManagePlayers(actor: WriteActor | undefined): void {
+  if (!actor || actor.canManagePlayers !== true) {
+    throw new NotAuthorizedError(
+      `Refusing write: the caller does not hold MANAGE PLAYERS. No request was sent to MatchDay. ` +
+      `(actor: ${actor?.email ? JSON.stringify(actor.email) : "none"})`,
+    );
+  }
+}
+// Indirection so a mutation test can monkeypatch a guard to a no-op and prove the
+// no-fetch test goes RED without it. TEST-ONLY — no route imports the setters.
 let editGuard: (a: WriteActor | undefined) => void = assertCanEditMatches;
 export function __setEditGuardForTest(fn: (a: WriteActor | undefined) => void): () => void {
   const prev = editGuard; editGuard = fn; return () => { editGuard = prev; };
 }
+let manageGuard: (a: WriteActor | undefined) => void = assertCanManagePlayers;
+export function __setManageGuardForTest(fn: (a: WriteActor | undefined) => void): () => void {
+  const prev = manageGuard; manageGuard = fn; return () => { manageGuard = prev; };
+}
 // A write actor for out-of-band CLI/proof scripts (run server-side by a developer who
 // already holds the API credentials). Routes MUST NOT import this — the enumeration
 // guard asserts they don't.
-export const CLI_WRITE_ACTOR: WriteActor = { canEditMatches: true, email: "cli-script" };
+export const CLI_WRITE_ACTOR: WriteActor = { canEditMatches: true, canManagePlayers: true, email: "cli-script" };
 
 // The write-deny field list lives in a client-safe module (denyWriteFields) so the
 // Change Log's deny-key guard shares the exact same set. Applies to BOTH environments.
@@ -320,12 +335,14 @@ export async function apiGet<T = unknown>(env: MatchdayEnv, path: string, query?
 }
 
 // WRITES — env-explicit, single-shot, host-allowlisted, deny-listed, prod-bolted.
-export async function apiWrite<T = unknown>(env: MatchdayEnv, method: "POST" | "PUT" | "PATCH" | "DELETE", path: string, body?: unknown, actor?: WriteActor): Promise<T> {
-  // STEP 2 in the write pipeline (authenticated is step 1, in the route): does the
-  // caller hold EDIT MATCHES? This runs BEFORE the bolt and the host guard, before creds
-  // are loaded — a caller without it produces ZERO network calls. It is the low-level,
+export async function apiWrite<T = unknown>(env: MatchdayEnv, method: "POST" | "PUT" | "PATCH" | "DELETE", path: string, body?: unknown, actor?: WriteActor, requires: "edit" | "manage" = "edit"): Promise<T> {
+  // STEP 2 in the write pipeline (authenticated is step 1, in the route): does the caller
+  // hold the required authority — EDIT MATCHES for match/roster writes, MANAGE PLAYERS for
+  // ban writes? These are INDEPENDENT grants; the ban path passes requires="manage" so a
+  // manager needs no EDIT MATCHES and vice versa. This runs BEFORE the bolt and host guard,
+  // before creds load — a caller without it produces ZERO network calls. Low-level,
   // unbypassable chokepoint; a route that forgets its own early check is still stopped here.
-  editGuard(actor);
+  (requires === "manage" ? manageGuard : editGuard)(actor);
   // The bolt fires next, before creds are even loaded — production is refused
   // regardless of whether prod credentials happen to be configured. Nothing about
   // a production write can proceed while the bolt is engaged.

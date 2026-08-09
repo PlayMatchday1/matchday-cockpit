@@ -14,17 +14,18 @@ const ok = (n) => { PASS++; console.log(`  ✓ ${n}`); };
 const bad = (n, d = "") => { FAIL++; fails.push(`${n} — ${d}`); console.log(`  ✗ ${n} — ${d}`); };
 const eq = (n, got, want) => (JSON.stringify(got) === JSON.stringify(want) ? ok(n) : bad(n, `got ${JSON.stringify(got)} want ${JSON.stringify(want)}`));
 
-// patch the app_users read useAuth makes, so the gate is deterministic (server still enforces)
-const patchPerms = (edit) => (ctx) => ctx.route("**/rest/v1/app_users*", async (route) => {
+// patch the app_users read useAuth makes, so the gate is deterministic (server still enforces).
+// edit = EDIT MATCHES, manage = MANAGE PLAYERS — INDEPENDENT so we can prove one on / one off.
+const patchPerms = (edit, manage = edit) => (ctx) => ctx.route("**/rest/v1/app_users*", async (route) => {
   if (route.request().method() !== "GET") return route.continue();
   const res = await route.fetch();
   let json = await res.json().catch(() => null);
-  const patch = (r) => ({ ...r, can_edit_matches: edit, can_access_matchops: true });
+  const patch = (r) => ({ ...r, can_edit_matches: edit, can_manage_players: manage, can_access_matchops: true });
   json = Array.isArray(json) ? json.map(patch) : (json && typeof json === "object" ? patch(json) : json);
   return route.fulfill({ status: res.status(), contentType: "application/json", body: JSON.stringify(json) });
 });
-const grantEdit = patchPerms(true);
-const denyEdit = patchPerms(false);
+const grantEdit = patchPerms(true, true);
+const denyEdit = patchPerms(false, false);
 
 // ── fixtures ─────────────────────────────────────────────────────────────────
 const MARISOL = {
@@ -50,14 +51,25 @@ const MARISOL = {
       { penaltyPoint: 1, active: false, reason: "NONE", matchName: "Kickers Field 2", when: "2026-03-01T18:00:00.000Z", issued: "2026-03-01T18:00:00.000Z", canceledAt: null, hoursBefore: null },
     ],
   },
+  accountHistory: [], // clean record -> Suspend + Expel offered
 };
-// a non-member: strikes panel must say "Members only", never invent strikes
+// a SUSPENDED non-member: strikes say "Members only"; account history shows the ban + Lift offered
 const DANNY = {
   env: "production",
-  player: { id: 60180, name: "Danny Vo", email: "danny@example.com", phone: "+18329015669", phoneVerified: true, city: "Houston", level: 3, registered: "2025-11-04T00:00:00.000Z", goals: 2, cityManager: false, credits: 0, status: "ok", banReason: null, bannedAt: null, banExpiredAt: null, matchesPlayed: 2, upcoming: 0 },
+  player: { id: 60180, name: "Danny Vo", email: "danny@example.com", phone: "+18329015669", phoneVerified: true, city: "Houston", level: 3, registered: "2025-11-04T00:00:00.000Z", goals: 2, cityManager: false, credits: 0, status: "suspended", banReason: "Repeated late cancellations", bannedAt: "2026-07-07T18:55:00.000Z", banExpiredAt: "2026-08-31T00:00:00.000Z", matchesPlayed: 2, upcoming: 0 },
   membership: null,
   matches: [],
   strikes: { activeCount: 0, limit: 4, isSuspended: false, suspendedTo: null, expiredAt: null, firstStrikeAt: null, logs: [] },
+  accountHistory: [{ action: "suspend", reason: "Repeated late cancellations", when: "2026-07-07T18:55:00.000Z", until: "2026-08-31T00:00:00.000Z", by: "Nick Zelfine" }],
+};
+// an OVER-threshold member: activeStrikes 5 > limit 4 — pips must show the overflow visibly
+const OVER = {
+  env: "production",
+  player: { id: 88888, name: "Over Struck", email: "over@example.com", phone: "+15125550000", phoneVerified: true, city: "Austin", level: 5, registered: "2026-01-01T00:00:00.000Z", goals: 0, cityManager: false, credits: 0, status: "ok", banReason: null, bannedAt: null, banExpiredAt: null, matchesPlayed: 6, upcoming: 0 },
+  membership: { status: "active", number: "sub_OVER", since: "2026-01-01T00:00:00.000Z", renews: "2026-12-01T00:00:00.000Z", canceledAt: null, price: 2900, city: "AUS" },
+  matches: [],
+  strikes: { activeCount: 5, limit: 4, isSuspended: true, suspendedTo: "2026-09-01T00:00:00.000Z", expiredAt: "2026-11-01T00:00:00.000Z", firstStrikeAt: "2026-06-01T00:00:00.000Z", logs: [] },
+  accountHistory: [],
 };
 const SEARCH_HITS = [
   { id: 79214, name: "Marisol Reyes", email: "m.reyes@gmail.com", phone: "+12105557781", city: "San Antonio", status: "ok", hasMembership: true },
@@ -102,20 +114,30 @@ async function main() {
   const storageState = { cookies: [], origins: [{ origin: BASE, localStorage: [{ name: `sb-${ref}-auth-token`, value: JSON.stringify(vv.data.session) }] }] };
 
   const todayYMD = (() => { const d = new Date(); return `${d.getFullYear()}-${String(d.getMonth() + 1).padStart(2, "0")}-${String(d.getDate()).padStart(2, "0")}`; })();
-  let lastWrite = null; // capture the POST body the component sends
+  let lastWrite = null; // capture the roster POST body
+  let lastBan = null;   // capture the ban POST body
 
-  const routes = async (ctx, { edit }) => {
+  const routes = async (ctx, { edit, manage = edit }) => {
+    // NOTE: Playwright checks the LAST-registered matching route first. Register the
+    // general lookup handler FIRST and the specific /ban handler LAST so /ban wins.
     await ctx.route("**/api/lookup/**", (route) => {
       const url = new URL(route.request().url());
       const id = url.searchParams.get("id");
       const q = url.searchParams.get("q");
-      if (id) return route.fulfill({ status: 200, contentType: "application/json", body: JSON.stringify(id === "60180" ? DANNY : MARISOL) });
+      if (id) { const P = id === "60180" ? DANNY : id === "88888" ? OVER : MARISOL; return route.fulfill({ status: 200, contentType: "application/json", body: JSON.stringify(P) }); }
       // mimic detectKind for the kind field (component reads it for the hint too, but hint is local)
       const kind = !q ? "empty" : q.includes("@") ? "email" : /^\d{1,6}$/.test(q.trim()) ? "id" : q.replace(/\D/g, "").length >= 7 ? "phone" : "name";
       const results = q && /mari|reyes|79214|2105557781|m\.reyes/i.test(q) ? SEARCH_HITS
-        : q && /danny|60180/i.test(q) ? [{ id: 60180, name: "Danny Vo", email: "danny@example.com", phone: "+18329015669", city: "Houston", status: "ok", hasMembership: false }]
+        : q && /danny|60180/i.test(q) ? [{ id: 60180, name: "Danny Vo", email: "danny@example.com", phone: "+18329015669", city: "Houston", status: "suspended", hasMembership: false }]
+        : q && /over|88888/i.test(q) ? [{ id: 88888, name: "Over Struck", email: "over@example.com", phone: "+15125550000", city: "Austin", status: "ok", hasMembership: true }]
         : [];
       return route.fulfill({ status: 200, contentType: "application/json", body: JSON.stringify({ kind, results }) });
+    });
+    // /ban registered LAST so it takes precedence over the general lookup handler above.
+    await ctx.route("**/api/lookup/**/ban", (route) => {
+      lastBan = { url: route.request().url(), body: JSON.parse(route.request().postData() || "{}") };
+      if (!manage) return route.fulfill({ status: 403, contentType: "application/json", body: JSON.stringify({ error: "no MANAGE PLAYERS" }) });
+      return route.fulfill({ status: 200, contentType: "application/json", body: JSON.stringify({ ok: true, outcome: "LANDED", logRecorded: true }) });
     });
     await ctx.route("**/api/matchday/**/gameday**", (route) => {
       const date = new URL(route.request().url()).searchParams.get("date");
@@ -130,7 +152,7 @@ async function main() {
       return route.fulfill({ status: 200, contentType: "application/json", body: JSON.stringify({ logged: true, outcome: "LANDED" }) });
     });
     await ctx.route("**/api/veo**", (route) => route.fulfill({ status: 200, contentType: "application/json", body: JSON.stringify({ matches: [] }) }));
-    await (edit ? grantEdit : denyEdit)(ctx);
+    await patchPerms(edit, manage)(ctx); // independent edit/manage grants
   };
 
   const browser = await chromium.launch({ headless: true });
@@ -178,7 +200,8 @@ async function main() {
 
   // ── strikes panel (display-only), member with 2 of 4 active ──
   eq("strikes panel rendered for a member", !!(await page.$('[data-testid="strikes"]')), true);
-  eq("strike count shows N of 4", (await page.$eval('[data-testid="strike-count"]', (e) => e.textContent)).trim(), "2 of 4 active");
+  eq("strike count says POINTS (not rows) — '2 of 4 points'", (await page.$eval('[data-testid="strike-count"]', (e) => e.textContent)).trim(), "2 of 4 points");
+  eq("strikebar spells out it is strike POINTS", await page.$eval('[data-testid="strikes"] .stxt', (e) => /strike points/.test(e.textContent)), true);
   eq("4 pips, 2 lit", { pips: await page.$$eval('[data-testid="strikes"] .pip', (e) => e.length), lit: await page.$$eval('[data-testid="strikes"] .pip.on', (e) => e.length) }, { pips: 4, lit: 2 });
   eq("reason labels come from userStatus; NONE renders STRIKE, never 'NONE'", await page.$$eval('[data-testid="strikes"] .srow .st:nth-child(2)', (els) => els.map((e) => e.textContent.trim())), ["LATE CANCEL", "LATE", "NO SHOW", "STRIKE"]);
   eq("no strike chip ever says NONE or ON TIME", await page.$$eval('[data-testid="strikes"] .srow .st', (els) => els.some((e) => /^(NONE|ON TIME)$/.test(e.textContent.trim()))), false);
@@ -187,10 +210,53 @@ async function main() {
   eq("expired strike marked EXPIRED not ACTIVE", await page.$$eval('[data-testid="strikes"] .srow', (els) => { const last = els[els.length - 1]; return { active: !!last.querySelector(".st.sactive"), expired: !!last.querySelector(".st.expired") }; }), { active: false, expired: true });
   eq("strikes panel is display-only (no write buttons)", await page.$$eval('[data-testid="strikes"] button', (e) => e.length), 0);
 
-  // ── not-built footer: Strikes is now built; only Payments + Account history remain ──
+  // ── not-built footer: only Payments remains (Strikes + Account history now built) ──
   { const foot = await page.$eval('[data-testid="notbuilt"]', (e) => e.textContent);
-    eq("footer names Payments + Account history, NOT Strikes", { pay: foot.includes("Payments"), acct: foot.includes("Account history"), strike: /\bStrikes\b/.test(foot) }, { pay: true, acct: true, strike: false }); }
-  eq("panels are MEMBERSHIP, STRIKES, MATCH HISTORY (no Payments panel)", await page.$$eval(".ptitle h3", (els) => els.map((e) => e.textContent)), ["MEMBERSHIP", "STRIKES", "MATCH HISTORY"]);
+    eq("footer names ONLY Payments now", { pay: foot.includes("Payments"), strike: /\bStrikes\b/.test(foot), acct: /Account history/.test(foot) }, { pay: true, strike: false, acct: false }); }
+  eq("panels are MEMBERSHIP, STRIKES, MATCH HISTORY, ACCOUNT HISTORY (no Payments panel)", await page.$$eval(".ptitle h3", (els) => els.map((e) => e.textContent)), ["MEMBERSHIP", "STRIKES", "MATCH HISTORY", "ACCOUNT HISTORY"]);
+
+  // ── account history: clean member offers Suspend + Expel (MANAGE PLAYERS held) ──
+  eq("clean record shows Suspend + Expel, not Lift", { suspend: !!(await page.$('[data-testid="act-suspend"]')), expel: !!(await page.$('[data-testid="act-expel"]')), lift: !!(await page.$('[data-testid="act-lift"]')) }, { suspend: true, expel: true, lift: false });
+
+  // ── SUSPEND flow: reason + until required, then writes {action:suspend} ──
+  await page.click('[data-testid="act-suspend"]'); await page.waitForSelector(".modal", { timeout: 5000 });
+  eq("suspend confirm disabled until reason + until", await page.$eval('[data-testid="ban-confirm"]', (e) => e.disabled), true);
+  await page.fill('[data-testid="ban-reason"]', "Repeated late cancellations");
+  eq("suspend still disabled with reason but no date", await page.$eval('[data-testid="ban-confirm"]', (e) => e.disabled), true);
+  await page.fill('[data-testid="ban-until"]', "2026-09-30");
+  eq("suspend enabled once reason + date set", await page.$eval('[data-testid="ban-confirm"]', (e) => e.disabled), false);
+  lastBan = null; await page.click('[data-testid="ban-confirm"]'); await page.waitForTimeout(300);
+  eq("suspend wrote {action:suspend, until, reason} for the player", { a: lastBan?.body?.action, u: lastBan?.body?.until, r: !!lastBan?.body?.reason, id: lastBan?.body?.playerId }, { a: "suspend", u: "2026-09-30", r: true, id: 79214 });
+
+  // ── EXPEL flow: reason AND exact name typed ──
+  await page.click('[data-testid="act-expel"]'); await page.waitForSelector(".modal", { timeout: 5000 });
+  await page.fill('[data-testid="ban-reason"]', "Fraudulent dispute after playing");
+  eq("expel disabled until the exact name is typed", await page.$eval('[data-testid="ban-confirm"]', (e) => e.disabled), true);
+  await page.fill('[data-testid="ban-confirm-name"]', "Marisol Reyes");
+  eq("expel enabled once name matches", await page.$eval('[data-testid="ban-confirm"]', (e) => e.disabled), false);
+  lastBan = null; await page.click('[data-testid="ban-confirm"]'); await page.waitForTimeout(300);
+  eq("expel wrote {action:expel, reason}", { a: lastBan?.body?.action, r: !!lastBan?.body?.reason }, { a: "expel", r: true });
+
+  // ── OVER-threshold pips: 5 of 4 must not silently read as 4 ──
+  await type("Over"); await page.waitForSelector('.res[data-pid="88888"]', { timeout: 5000 }); await page.click('.res[data-pid="88888"]');
+  await page.waitForSelector('.idcard[data-pid="88888"]', { timeout: 5000 });
+  eq("over-threshold shows '5 of 4 points'", (await page.$eval('[data-testid="strike-count"]', (e) => e.textContent)).trim(), "5 of 4 points");
+  eq("overflow badge '+1' is shown (not silently clamped to 4 pips)", await page.$eval('[data-testid="pip-over"]', (e) => e.textContent).catch(() => ""), "+1");
+  eq("strike-suspended banner present at/over threshold", !!(await page.$('[data-testid="strike-suspended"]')), true);
+
+  // ── LIFT flow: a suspended player offers Lift, account history shows who/when/until ──
+  await type("Danny"); await page.waitForSelector('.res[data-pid="60180"]', { timeout: 5000 }); await page.click('.res[data-pid="60180"]');
+  await page.waitForSelector('.idcard[data-pid="60180"]', { timeout: 5000 });
+  eq("suspended player offers Lift (not Suspend)", { lift: !!(await page.$('[data-testid="act-lift"]')), suspend: !!(await page.$('[data-testid="act-suspend"]')) }, { lift: true, suspend: false });
+  { const row = (await page.$eval('[data-testid="account-history"] .hrow', (e) => e.textContent)).replace(/\s+/g, " ");
+    eq("account-history row shows action, reason, until, and WHO", { act: /SUSPENDED/.test(row), reason: /late cancellations/i.test(row), by: /Nick Zelfine/.test(row), until: /Aug 31/.test(row) }, { act: true, reason: true, by: true, until: true }); }
+  await page.click('[data-testid="act-lift"]'); await page.waitForSelector(".modal", { timeout: 5000 });
+  eq("lift disabled until reason", await page.$eval('[data-testid="ban-confirm"]', (e) => e.disabled), true);
+  await page.fill('[data-testid="ban-reason"]', "Appealed, dispute resolved");
+  lastBan = null; await page.click('[data-testid="ban-confirm"]'); await page.waitForTimeout(300);
+  eq("lift wrote {action:lift, reason} for the player", { a: lastBan?.body?.action, r: !!lastBan?.body?.reason, id: lastBan?.body?.playerId }, { a: "lift", r: true, id: 60180 });
+  await type("Marisol"); await page.waitForSelector('.res[data-pid="79214"]', { timeout: 5000 }); await page.click('.res[data-pid="79214"]');
+  await page.waitForSelector('.idcard[data-pid="79214"]', { timeout: 5000 });
 
   // ── non-member: strikes panel says Members only, never invents strikes ──
   await type("Danny"); await page.waitForSelector('.res[data-pid="60180"]', { timeout: 5000 }); await page.click('.res[data-pid="60180"]');
@@ -253,7 +319,29 @@ async function main() {
   await rp.waitForSelector('.idcard[data-pid="79214"]');
   eq("read-only: Add to a match is disabled", await rp.$eval('[data-testid="add-match"]', (e) => e.disabled), true);
   eq("read-only: Remove is disabled", await rp.$eval('.mrow[data-match="17402"] .rowbtn', (e) => e.disabled), true);
+  eq("read-only: ban actions locked (need MANAGE PLAYERS)", await rp.$eval('[data-testid="account-history"] .locked', (e) => /MANAGE PLAYERS/.test(e.textContent)).catch(() => false), true);
   eq("read-only: header says READ ONLY", await rp.$eval(".livetag", (e) => /READ ONLY/.test(e.textContent)), true);
+
+  // ══ INDEPENDENCE: restoring one authority does NOT restore the other ══
+  // EDIT MATCHES only -> Add/Remove enabled, but ban actions still locked.
+  const eo = await browser.newContext({ viewport: { width: 1280, height: 1000 }, storageState });
+  await routes(eo, { edit: true, manage: false });
+  const ep = await eo.newPage();
+  await ep.goto(PAGE, { waitUntil: "domcontentloaded" }); await ep.waitForSelector("#pl-q", { timeout: 30000 });
+  await ep.fill("#pl-q", "Marisol"); await ep.waitForTimeout(260);
+  await ep.waitForSelector('.res[data-pid="79214"]'); await ep.click('.res[data-pid="79214"]');
+  await ep.waitForSelector('.idcard[data-pid="79214"]');
+  eq("EDIT-only: Add enabled but ban actions LOCKED (independence)", { add: await ep.$eval('[data-testid="add-match"]', (e) => e.disabled), banLocked: await ep.$eval('[data-testid="account-history"] .locked', (e) => /MANAGE PLAYERS/.test(e.textContent)).catch(() => false) }, { add: false, banLocked: true });
+
+  // MANAGE PLAYERS only -> ban actions enabled, but Add/Remove disabled.
+  const mo = await browser.newContext({ viewport: { width: 1280, height: 1000 }, storageState });
+  await routes(mo, { edit: false, manage: true });
+  const mpg = await mo.newPage();
+  await mpg.goto(PAGE, { waitUntil: "domcontentloaded" }); await mpg.waitForSelector("#pl-q", { timeout: 30000 });
+  await mpg.fill("#pl-q", "Marisol"); await mpg.waitForTimeout(260);
+  await mpg.waitForSelector('.res[data-pid="79214"]'); await mpg.click('.res[data-pid="79214"]');
+  await mpg.waitForSelector('.idcard[data-pid="79214"]');
+  eq("MANAGE-only: ban actions enabled but Add DISABLED (independence)", { suspend: await mpg.$eval('[data-testid="act-suspend"]', (e) => e.disabled).catch(() => "missing"), add: await mpg.$eval('[data-testid="add-match"]', (e) => e.disabled) }, { suspend: false, add: true });
 
   await browser.close();
   console.log(`\nverify-lookup: ${PASS} passed, ${FAIL} failed`);

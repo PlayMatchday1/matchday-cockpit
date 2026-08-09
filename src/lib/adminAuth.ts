@@ -11,7 +11,7 @@
 import { createClient, type SupabaseClient } from "@supabase/supabase-js";
 
 export type AdminAuthResult =
-  | { ok: true; supabase: SupabaseClient; appUserId: string; email: string; canEditMatches: boolean }
+  | { ok: true; supabase: SupabaseClient; appUserId: string; email: string; canEditMatches: boolean; canManagePlayers: boolean }
   | { ok: false; status: number; error: string };
 
 export async function authenticateAdmin(req: Request): Promise<AdminAuthResult> {
@@ -46,7 +46,7 @@ export async function authenticateAdmin(req: Request): Promise<AdminAuthResult> 
   });
   const appUser = await sb
     .from("app_users")
-    .select("id, is_admin, can_access_matchops, can_edit_matches")
+    .select("id, is_admin, can_access_matchops, can_edit_matches, can_manage_players")
     .ilike("email", email)
     .maybeSingle();
   if (appUser.error || !appUser.data) {
@@ -61,11 +61,17 @@ export async function authenticateAdmin(req: Request): Promise<AdminAuthResult> 
   // MATCH OPS (read). Routes pass this into the guarded write client.
   const canEditMatches = appUser.data.can_edit_matches === true && appUser.data.can_access_matchops === true;
 
+  // MANAGE PLAYERS is the account-level WRITE permission (Phase 18) — suspend / expel /
+  // lift. Same rules as EDIT MATCHES and INDEPENDENT of it: not implied by is_admin, off
+  // by default, requires MATCH OPS. Holding one never implies the other.
+  const canManagePlayers = appUser.data.can_manage_players === true && appUser.data.can_access_matchops === true;
+
   return {
     ok: true,
     supabase: sb, // service-role client — bypasses RLS after the admin gate
     appUserId: appUser.data.id as string,
     email,
     canEditMatches,
+    canManagePlayers,
   };
 }

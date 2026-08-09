@@ -23,6 +23,7 @@ const MARISOL = {
       { penaltyPoint: 1, active: false, reason: "NO_SHOW", matchName: "Havana Fields", when: "2026-04-19T20:30:00.000Z", issued: "2026-04-19T20:30:00.000Z", canceledAt: null, hoursBefore: null },
     ],
   },
+  accountHistory: [],
 };
 const grantEdit = (ctx) => ctx.route("**/rest/v1/app_users*", async (route) => {
   if (route.request().method() !== "GET") return route.continue();

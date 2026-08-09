@@ -5,9 +5,9 @@ import "server-only"; // no-op under --conditions=react-server
 //   NODE_OPTIONS=--conditions=react-server npx tsx scripts/prod-guard-test.ts
 
 import {
-  assertAllowedHost, preflightWrite, apiWrite, assertAllowedEndpoint, assertCanEditMatches,
+  assertAllowedHost, preflightWrite, apiWrite, assertAllowedEndpoint, assertCanEditMatches, assertCanManagePlayers,
   StageHostGuardError, DeniedFieldError, ProductionWriteBoltedError, DeniedEndpointError, NotAuthorizedError,
-  CLI_WRITE_ACTOR, __setEditGuardForTest, type WriteActor,
+  CLI_WRITE_ACTOR, __setEditGuardForTest, __setManageGuardForTest, type WriteActor,
 } from "../src/lib/matchdayStageApi";
 try { process.loadEnvFile(".env.local"); } catch {}
 
@@ -111,6 +111,41 @@ async function main() {
     : bad("MUTATION toothless — removing the guard left the no-fetch test green");
   // and confirm the guard is back
   { const r = await noFetchTest({ canEditMatches: false }); (r.threwNA && r.fetches === 0) ? ok("guard restored after the mutation") : bad("guard not restored", JSON.stringify(r)); }
+
+  // ── PHASE 18: MANAGE PLAYERS — a SEPARATE authority (ban writes), same machinery ──
+  console.log("MANAGE PLAYERS check (Phase 18) — the ban authority, INDEPENDENT of EDIT MATCHES:");
+  throws("assertCanManagePlayers refuses undefined actor", NotAuthorizedError, () => assertCanManagePlayers(undefined));
+  throws("assertCanManagePlayers refuses a non-manager", NotAuthorizedError, () => assertCanManagePlayers({ canEditMatches: true, canManagePlayers: false } as WriteActor));
+  noThrow("assertCanManagePlayers allows a MANAGE PLAYERS holder", () => assertCanManagePlayers({ canEditMatches: false, canManagePlayers: true }));
+
+  // no-fetch test on the MANAGE path: apiWrite(..., "manage") checks manageGuard.
+  const noFetchManage = async (actor: WriteActor | undefined): Promise<{ threwNA: boolean; fetches: number }> => {
+    let fetches = 0; const rf = globalThis.fetch;
+    globalThis.fetch = (async () => { fetches++; throw new Error("network must not be reached"); }) as typeof fetch;
+    let threwNA = false;
+    try { await apiWrite("staging", "POST", "/admin/players/1/ban", { permanent: true, reason: "x" }, actor, "manage"); }
+    catch (e) { threwNA = e instanceof NotAuthorizedError; }
+    finally { globalThis.fetch = rf; }
+    return { threwNA, fetches };
+  };
+  { const r = await noFetchManage({ canEditMatches: true, canManagePlayers: false });
+    (r.threwNA && r.fetches === 0) ? ok("non-manager -> NotAuthorized and ZERO fetches on the ban path (spied)") : bad("manage no-fetch", JSON.stringify(r)); }
+
+  // INDEPENDENCE — holding one authority never satisfies the other:
+  { let na = false; try { await apiWrite("staging", "POST", "/admin/players/1/ban", {}, { canEditMatches: true, canManagePlayers: false }, "manage"); } catch (e) { na = e instanceof NotAuthorizedError; }
+    na ? ok("EDIT MATCHES does NOT grant MANAGE PLAYERS (independent)") : bad("independence: edit leaked into manage"); }
+  { let na = false; try { await apiWrite("staging", "PUT", "/admin/teams/1", { name: "x" }, { canEditMatches: false, canManagePlayers: true }, "edit"); } catch (e) { na = e instanceof NotAuthorizedError; }
+    na ? ok("MANAGE PLAYERS does NOT grant EDIT MATCHES (independent)") : bad("independence: manage leaked into edit"); }
+
+  // THE MUTATION: remove the manage guard -> the ban no-fetch test goes RED.
+  console.log("MUTATION — monkeypatch the MANAGE PLAYERS guard to a no-op:");
+  const restoreM = __setManageGuardForTest(() => { /* guard removed */ });
+  const mutatedM = await noFetchManage({ canEditMatches: false, canManagePlayers: false });
+  restoreM();
+  (!(mutatedM.threwNA && mutatedM.fetches === 0))
+    ? ok(`manage guard removed => ban no-fetch test goes RED (threwNotAuthorized=${mutatedM.threwNA}, fetches=${mutatedM.fetches})`)
+    : bad("MANAGE mutation toothless — removing the guard left the no-fetch test green");
+  { const r = await noFetchManage({ canManagePlayers: false }); (r.threwNA && r.fetches === 0) ? ok("manage guard restored after the mutation") : bad("manage guard not restored", JSON.stringify(r)); }
 
   // Phase 12: the same machinery must cover a NON-match endpoint (PUT /admin/teams/{id}),
   // not have been shaped around /admin/matches/{id}.

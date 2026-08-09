@@ -113,6 +113,26 @@ export async function GET(req: Request, ctx: { params: Promise<{ env: string }> 
         logs: strikeLogs,
       };
 
+      // Account history: the API exposes the CURRENT ban record, not a full audit trail
+      // (there is no per-player ban-history endpoint). One row when banned — action from
+      // isBanPermanent, who resolved from bannedByUserId. Our OWN future actions land in
+      // the Change Log with the actor; note that in the UI so absence isn't read as clean.
+      const accountHistory: { action: "suspend" | "expel"; reason: string | null; when: string | null; until: string | null; by: string | null }[] = [];
+      if (d.isBanned === true) {
+        const byId = num(d.bannedByUserId);
+        let by: string | null = byId != null ? `user ${byId}` : null;
+        if (byId != null) {
+          const b = await apiGet<Record<string, unknown>>(env, `/admin/players/${byId}`).catch(() => null);
+          const bd = b && typeof b === "object" && "data" in b ? (b.data as Record<string, unknown>) : b;
+          if (bd) by = name(bd);
+        }
+        accountHistory.push({
+          action: d.isBanPermanent === true ? "expel" : "suspend",
+          reason: str(d.banReason), when: str(d.bannedAt),
+          until: d.isBanPermanent === true ? null : str(d.banExpiredAt), by,
+        });
+      }
+
       const sub = activeSub(d.userSubscriptions);
       // Defensive mapping — the exact userSubscriptions shape for active members is
       // unconfirmed live; render only fields that are present, never "undefined".
@@ -147,6 +167,7 @@ export async function GET(req: Request, ctx: { params: Promise<{ env: string }> 
         membership,
         matches,
         strikes,
+        accountHistory,
       });
     }
 

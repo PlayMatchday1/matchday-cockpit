@@ -58,8 +58,8 @@ bareOffenders.length === 0
   ? ok("no route calls apiWrite directly — every write is a recordWrite closure")
   : bad("a route calls apiWrite OUTSIDE recordWrite (unlogged write!)", bareOffenders.join(", "));
 
-// 2) Both known write routes route through recordWrite.
-for (const f of ["src/app/api/matchday/[env]/matches/[id]/route.ts", "src/app/api/matchday/[env]/roster/[matchId]/route.ts"]) {
+// 2) Every known write route routes through recordWrite (incl. the Phase 18 ban route).
+for (const f of ["src/app/api/matchday/[env]/matches/[id]/route.ts", "src/app/api/matchday/[env]/roster/[matchId]/route.ts", "src/app/api/lookup/[env]/ban/route.ts"]) {
   const src = readFileSync(f, "utf8");
   src.includes("recordWrite(") ? ok(`${f.split("/").slice(-2)[0]} routes writes through recordWrite`) : bad(`${f} does NOT call recordWrite`);
 }
@@ -86,6 +86,10 @@ for (const f of WRITE_ROUTES) {
   const src = readFileSync(f, "utf8");
   src.includes("canEditMatches") ? ok(`${f.split("/").slice(-2)[0]} gates on canEditMatches (EDIT MATCHES)`) : bad(`${f} does NOT check canEditMatches`);
 }
+// Phase 18: the ban route gates on MANAGE PLAYERS (a separate authority), not EDIT MATCHES.
+{ const src = readFileSync("src/app/api/lookup/[env]/ban/route.ts", "utf8");
+  src.includes("canManagePlayers") ? ok("ban route gates on canManagePlayers (MANAGE PLAYERS)") : bad("ban route does NOT check canManagePlayers");
+  src.includes('"manage"') ? ok('ban route passes requires:"manage" to apiWrite (not EDIT MATCHES)') : bad("ban route does not require manage authority"); }
 
 console.log(`\nCanonical write endpoints (${WRITE_ENDPOINTS.length}), all via recordWrite:`);
 for (const e of WRITE_ENDPOINTS) console.log(`  · ${e}`);
