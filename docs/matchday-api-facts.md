@@ -796,3 +796,39 @@ cross-checks the matchId rule against the older subscription-invoice discriminat
 reports `agreeMatchIdPct`. Stripe customer is located by **email** (no stored
 `stripe_customer_id`); email-mismatch → renders as "no payments" (known, `financeImport.ts`
 comment ~line 87); also matching on `metadata.userId` would rescue those.
+
+## The 24-hour REFUND rule — PAY-PER-MATCH PLAYERS ONLY (Phase 18)
+
+Applies to **non-members** (they pay per match). Cancel **inside 24 hours** of kickoff and
+you do **not** get your money back. This is a MONEY rule, nothing to do with strikes — a
+pay-per-match player who cancels late is penalised by losing the fee, so no strike is
+needed. The user-match flag `cancelledBefore24Hours` (boolean) is THIS rule. Do NOT use it
+to derive a strike reason: it is often `null`, and it cannot tell a member who cancelled 20h
+out (no strike) from one who cancelled 5h out (a strike) — both are `false`/absent under
+the 24h test. Keep this rule and the 6-hour strike rule below as separate facts; they were
+nearly conflated by both Ryan and me.
+
+## The 6-hour STRIKE rule — MEMBERS ONLY (Phase 18)
+
+Applies to **members** (they pay nothing per match, so there is no fee to withhold — the
+strike IS the penalty). A member who cancels **inside 6 hours** of kickoff earns a strike.
+This is a COUNT rule (see the strike model above): 4 active strikes ⇒ 1-week suspension.
+Confirmed from live data: every `CANCEL_W_IN_SOME_HOURS` user-match sampled had
+`paidStatus = FREE` (a member) and `startDateUtc − canceledAt` ≤ 6h (observed 0.1–4.8h).
+
+## Strike REASON + cancellation timestamp — what the API actually stores (Phase 18)
+
+The strike REASON is NOT derived from `cancelledBefore24Hours`. It lives in the user-match
+field **`userStatus`**, a real enum. Observed distribution over 188 live user-matches:
+`ON_TIME` (133), `NONE` (31), `CANCEL_W_IN_SOME_HOURS` (11), `NO_SHOW` (7), `LATE` (6). The
+three strike-earning statuses are **`LATE`**, **`NO_SHOW`** and **`CANCEL_W_IN_SOME_HOURS`**
+(= cancelled inside the 6h window). So the panel can state WHY a strike exists from
+`userStatus` directly — no timestamp maths needed for late / no-show.
+
+The actual cancellation timestamp **IS stored**: user-match **`canceledAt`**. It is
+populated on cancellation-type rows (every `CANCEL_W_IN_SOME_HOURS` sample had it) and NULL
+on `LATE`/`NO_SHOW` (correctly — those are attendance outcomes, not cancellations).
+`startDateUtc − canceledAt` gives the exact hours-before-kickoff. To join a strike to its
+reason: `strike.strikeLogs[].userMatchId` → the user-match `id` in the player's `matches[]`
+→ read its `userStatus` (reason) and, for cancellations, `canceledAt` vs `match.startDateUtc`
+(timing). `strikeLog` itself carries no reason (see the strike model above).
