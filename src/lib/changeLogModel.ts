@@ -11,7 +11,7 @@
 //   notapplied  2xx but the read-back does NOT show it — accepted, did nothing
 //   unknown     no answer (ambiguous / 5xx / network) — it MAY or may not have happened
 
-import { DENY_WRITE_FIELDS } from "@/lib/matchdayStageApi";
+import { DENY_WRITE_FIELDS } from "@/lib/denyWriteFields";
 
 export type LogState = "landed" | "failed" | "notapplied" | "unknown";
 export const STATE_LABEL: Record<LogState, string> = {
