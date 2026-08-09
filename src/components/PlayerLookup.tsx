@@ -67,17 +67,21 @@ function loadFields(): Record<FieldKey, boolean> {
   return base;
 }
 
+// MatchDay stores wall-clock times labelled "Z" (startDate, activationDate, etc. are
+// the local clock, not a true instant). Format in UTC so the printed date/time is the
+// clock the API meant — and so a date-only midnight value never renders a day early in
+// a negative-offset timezone.
 const fmtDate = (iso: string | null) => {
   if (!iso) return "—";
   const t = Date.parse(iso);
   if (!Number.isFinite(t)) return "—";
-  return new Date(t).toLocaleDateString(undefined, { month: "short", day: "numeric", year: "numeric" });
+  return new Date(t).toLocaleDateString("en-US", { month: "short", day: "numeric", year: "numeric", timeZone: "UTC" });
 };
 const fmtWhen = (iso: string | null) => {
   if (!iso) return "—";
   const t = Date.parse(iso);
   if (!Number.isFinite(t)) return "—";
-  return new Date(t).toLocaleString(undefined, { month: "short", day: "numeric", year: "numeric", hour: "numeric", minute: "2-digit" });
+  return new Date(t).toLocaleString("en-US", { month: "short", day: "numeric", year: "numeric", hour: "numeric", minute: "2-digit", timeZone: "UTC" });
 };
 const todayYmd = () => { const d = new Date(); return `${d.getFullYear()}-${String(d.getMonth() + 1).padStart(2, "0")}-${String(d.getDate()).padStart(2, "0")}`; };
 
