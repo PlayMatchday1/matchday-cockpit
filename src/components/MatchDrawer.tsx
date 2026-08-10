@@ -387,16 +387,6 @@ export default function MatchDrawer({
             </div>
             <div className="mdw-hint">Veo lives in Clubhouse, not the MatchDay API — it saves the instant you flip it and stays out of the list below.</div>
           </div>
-
-          <div className="mdw-sec">
-            <h5>NOT EDITED HERE</h5>
-            <div className="mdw-ro">
-              <div className="mdw-rr"><span>Roster</span><b>{detail.players.length} of {m.maxPlayerCount ?? "—"} filled</b></div>
-              <div className="mdw-rr"><span>Teams &amp; tee prices</span><b>{Array.isArray(m.teams) ? m.teams.length : 0} teams</b></div>
-              <div className="mdw-rr"><span>Capacity &amp; automation</span><b>cap {m.maxPlayerCount ?? "none"}</b></div>
-              <div className="mdw-note">These need other endpoints or the room to lay them out.{SAME_ENV_AS_EDITOR ? <> <a href={`/match-ops/matches/${apiId}`}>Open the full editor</a> for every field.</> : " Use the full editor for every field."}</div>
-            </div>
-          </div>
         </div>
       )}
 

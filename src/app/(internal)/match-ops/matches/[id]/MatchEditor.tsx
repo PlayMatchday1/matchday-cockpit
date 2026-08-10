@@ -16,6 +16,7 @@
 // timing, so that becomes its own action.
 
 import { useCallback, useEffect, useMemo, useState } from "react";
+import { useRouter } from "next/navigation";
 import { supabase } from "@/lib/supabase";
 import { EDITABLE_KEYS, MONEY_KEYS as MONEY, TOGGLE_KEYS as TOGGLE, NULLABLE_NUM, fieldChanged, diffKeys, pick } from "@/lib/matchEditModel";
 import { envBadge } from "@/lib/matchEnvBadge";
@@ -98,18 +99,22 @@ const money = (cents: unknown) => "$" + (Number(cents ?? 0) / 100).toFixed(2);
 
 export default function MatchEditor({ id }: { id: string }) {
   const { appUser } = useAuth();
+  const router = useRouter();
   const canEdit = canEditMatches(appUser); // courtesy gate; the server write path holds
+  // Back to wherever we came from (Gameday Ops / Master Schedule), Gameday Ops on a direct
+  // load. Same control as the roster screen.
+  const goBack = () => {
+    if (typeof window !== "undefined" && window.history.length > 1) router.back();
+    else router.push("/match-ops/gameday");
+  };
   const [fields, setFields] = useState<FieldRow[]>([]);
   const [players, setPlayers] = useState<Data[]>([]);
-  const [meta, setMeta] = useState<Data | null>(null); // read-only bits (start/end, teams, isCancelled)
+  const [meta, setMeta] = useState<Data | null>(null); // read-only bits (start/end, teams, isCancelled, occupancy)
   const [loaded, setLoaded] = useState<Data | null>(null);
   const [state, setState] = useState<Data | null>(null);
   const [loadErr, setLoadErr] = useState<string | null>(null);
   const [saving, setSaving] = useState(false);
   const [msg, setMsg] = useState<{ kind: "ok" | "err" | "warn"; text: string } | null>(null);
-  // read-only roster preview controls (NOT saved fields)
-  const [viewTeams, setViewTeams] = useState(2);
-  const [viewSize, setViewSize] = useState(9);
   const [cancelArmed, setCancelArmed] = useState(false);
 
   const FIELDS = useMemo(() => specs(fields), [fields]);
@@ -118,10 +123,7 @@ export default function MatchEditor({ id }: { id: string }) {
     const ed: Data = {};
     for (const k of EDITABLE_KEYS) ed[k] = m[k] ?? (TOGGLE.has(k) ? false : null);
     setLoaded(ed); setState(JSON.parse(JSON.stringify(ed)));
-    setMeta({ id: m.id, startDate: m.startDate, endDate: m.endDate, isCancelled: m.isCancelled, teams: m.teams, fieldTitle: m.fieldTitle, cityName: m.cityName });
-    const teamsArr = Array.isArray(m.teams) ? m.teams : [];
-    setViewTeams(teamsArr.length >= 4 ? 4 : 2);
-    setViewSize(Number(m.maxTeamSize2Team) || 9);
+    setMeta({ id: m.id, startDate: m.startDate, endDate: m.endDate, isCancelled: m.isCancelled, teams: m.teams, fieldTitle: m.fieldTitle, cityName: m.cityName, occupancy: m.occupancy, maxPlayerCount: m.maxPlayerCount });
   }, []);
 
   const load = useCallback(async () => {
@@ -229,9 +231,32 @@ export default function MatchEditor({ id }: { id: string }) {
   };
   const revert = () => setState(JSON.parse(JSON.stringify(loaded)));
 
-  const playerCount = players.length;
-  const teamCols = Array.from({ length: viewTeams }, (_, t) => t);
-  const slotsPerTeam = Math.max(0, viewSize);
+  // WHO is in the match: real players (cancelled user-matches excluded), grouped by their
+  // ACTUAL team and playerNumber — not a preview shape.
+  const pname = (p: Data): string => {
+    const u = (p.user ?? {}) as Data;
+    const nm = [u.firstName, u.lastName].map((x) => String(x ?? "").trim()).filter(Boolean).join(" ");
+    return nm || (u.email ? String(u.email) : `Player ${p.userId ?? p.id}`);
+  };
+  // Plain computations (NOT hooks) — this runs after the early "Loading…" return, so
+  // useMemo here would change the hook count between renders.
+  const activePlayers = (players as Data[]).filter((p) => !p.isCancelled);
+  const rosterTeams = (() => {
+    const teamsMeta = (Array.isArray(meta?.teams) ? (meta!.teams as Data[]) : []).slice()
+      .sort((a, b) => Number(a.teamNumber) - Number(b.teamNumber));
+    const cols = teamsMeta.map((t) => ({ teamNumber: Number(t.teamNumber), name: String(t.name ?? `Team ${t.teamNumber}`), players: [] as Data[] }));
+    const byNum = new Map(cols.map((c) => [c.teamNumber, c]));
+    for (const p of activePlayers) { const c = byNum.get(Number(p.team)); if (c) c.players.push(p); else cols[0]?.players.push(p); }
+    for (const c of cols) c.players.sort((a, b) => Number(a.playerNumber) - Number(b.playerNumber));
+    return cols;
+  })();
+  // Authoritative occupancy = the API's _count.players (real+fake), NOT players.length
+  // (which counts cancelled rows and reads as over-capacity). Cap = maxPlayerCount; 0/blank
+  // = special event (no cap).
+  const occupancy = meta && meta.occupancy != null ? Number(meta.occupancy) : activePlayers.length;
+  const cap = meta && meta.maxPlayerCount != null && Number(meta.maxPlayerCount) !== 0 ? Number(meta.maxPlayerCount) : null;
+  const over = cap != null ? Math.max(0, occupancy - cap) : 0;
+  const playerCount = occupancy; // the cancel card's "N signed up" uses the real occupancy
 
   return (
     <div className="me">
@@ -240,6 +265,7 @@ export default function MatchEditor({ id }: { id: string }) {
 
       <div className="head">
         <div>
+          <button className="backb" data-testid="editor-back" onClick={goBack} aria-label="Back">‹ Back</button>
           <h1 data-testid="title">{String(state.name)}</h1>
           <div className="hmeta">
             <span className="chip id">ID {String(meta.id)}</span>
@@ -309,31 +335,31 @@ export default function MatchEditor({ id }: { id: string }) {
             {cancelArmed ? <div className="ladderNote" style={{ marginTop: 10 }}>Would call <code>PATCH /admin/matches/{id}/cancel</code> — a separate action, not wired in this phase.</div> : null}</div></section>
         </div>
 
-        {/* Roster — read-only */}
+        {/* Roster — the ACTUAL roster: real names, grouped by real team + number. */}
         <div className="card sticky">
-          <div className="ch"><h2>Players in the match</h2><span className="cnt" data-testid="pcount">{playerCount}</span></div>
+          <div className="ch"><h2>Players in the match</h2>
+            <span className={"cnt cap" + (over > 0 ? " over" : "")} data-testid="pcount">
+              {occupancy}{cap != null ? <> of {cap}{over > 0 ? <b data-testid="cap-over"> · over by {over}</b> : occupancy === cap ? " · full" : ""}</> : " · no cap (special event)"}
+            </span>
+          </div>
           <div className="cb">
-            <div className="viewctl">
-              <label>Preview layout <span className="hint">Not saved — shapes the roster only</span></label>
-              <div className="viewrow">
-                <span>Teams</span>
-                <select data-testid="view-teamnumbers" value={viewTeams} onChange={(e) => setViewTeams(Number(e.target.value))}><option value={2}>2</option><option value={4}>4</option></select>
-                <span>× size</span>
-                <input type="number" data-testid="view-teamsize" value={viewSize} onChange={(e) => setViewSize(Math.max(0, Number(e.target.value)))} style={{ width: 68 }} />
-              </div>
-            </div>
-            <div className="roster" data-testid="roster">
-              {teamCols.map((t) => (
-                <div className="teamcol" data-testid="team-col" key={t}>
-                  <div className="tch">Team {t + 1}</div>
-                  {Array.from({ length: slotsPerTeam }, (_, s) => {
-                    const p = players[t * slotsPerTeam + s] as Data | undefined;
-                    return <div className="slot" data-testid="slot" key={s}><span className="sn">{s + 1}</span>{p ? <span>{String(p.firstName ?? p.name ?? "Player")}</span> : <span className="open">open</span>}</div>;
-                  })}
+            <div className="roster real" data-testid="roster">
+              {rosterTeams.length === 0 && <div className="pfoot">No teams on this match.</div>}
+              {rosterTeams.map((c) => (
+                <div className="teamcol" data-testid="team-col" data-team={c.teamNumber} key={c.teamNumber}>
+                  <div className="tch">{c.name} <span className="tcn">{c.players.length}</span></div>
+                  {c.players.length === 0 ? <div className="slot open"><span className="open">no players</span></div>
+                    : c.players.map((p) => (
+                      <div className="slot filled" data-testid="slot" key={String(p.id)}>
+                        <span className="sn">{String(p.playerNumber ?? "—")}</span>
+                        <span className="pn" data-testid="player-name">{pname(p)}</span>
+                        {(p.user as Data)?.isFakePlayer ? <span className="fkb">FAKE</span> : null}
+                      </div>
+                    ))}
                 </div>
               ))}
             </div>
-            <div className="pfoot">{playerCount} in match · {teamCols.length * slotsPerTeam} slots shown. Add / Move / Toggle-fake are separate endpoints (later phase).</div>
+            <div className="pfoot">Real roster from MatchDay. {occupancy} counted toward the cap{activePlayers.length !== occupancy ? ` (${activePlayers.length} signed up)` : ""}. Add / Move / Remove are separate endpoints — use the roster editor.</div>
           </div>
         </div>
       </div>
@@ -368,6 +394,8 @@ const CSS = `
   --amberInk:#7A5200;--coral:#FDE9E5;--coralEdge:#F3C4BB;--coralInk:#A83120;--blue:#EFF3FF;--blueEdge:#CBD9FF;--blueInk:#1B4FCB;
   background:#F4EEE1;min-height:100vh;padding:0 0 130px;font-family:-apple-system,BlinkMacSystemFont,"Segoe UI",Inter,Helvetica,Arial,sans-serif;color:var(--ink);max-width:1500px;margin:0 auto}
 .me .head{padding:22px 24px 14px;display:flex;gap:18px;flex-wrap:wrap}
+.me .backb{background:none;border:0;padding:2px 0 6px;font-size:13px;font-weight:800;color:var(--muted);cursor:pointer;display:inline-flex;align-items:center;gap:4px}
+.me .backb:hover{color:var(--forest)}
 .me h1{margin:0;font-size:24px;font-weight:900;letter-spacing:-.5px;color:var(--forest)}
 .me .hmeta{margin-top:7px;font-size:12.5px;color:var(--muted);display:flex;gap:9px;flex-wrap:wrap;align-items:center}
 .me .chip{font-size:10px;font-weight:900;letter-spacing:.5px;text-transform:uppercase;border-radius:99px;padding:3px 9px;white-space:nowrap}
@@ -427,15 +455,18 @@ const CSS = `
 .me .dz p b{color:var(--ink);font-weight:850}
 .me .dbtn{margin-left:auto;background:#fff;border:1px solid var(--coralEdge);color:var(--coralInk);font-family:inherit;font-size:12px;font-weight:900;border-radius:9px;padding:9px 15px;cursor:pointer;white-space:nowrap;flex:none}
 .me .dbtn[aria-pressed=true]{background:var(--coralInk);border-color:var(--coralInk);color:#fff}
-.me .viewctl{margin-bottom:12px}
-.me .viewrow{display:flex;align-items:center;gap:8px;margin-top:6px;font-size:12px;font-weight:800;color:var(--muted)}
-.me .viewrow select,.me .viewrow input{width:auto;padding:6px 9px}
-.me .roster{display:grid;grid-auto-flow:column;grid-auto-columns:1fr;gap:10px;overflow-x:auto}
-.me .teamcol{border:1px solid var(--line);border-radius:10px;padding:8px;min-width:120px}
-.me .tch{font-size:10px;font-weight:900;text-transform:uppercase;letter-spacing:.5px;color:var(--muted);margin-bottom:7px}
-.me .slot{display:flex;align-items:center;gap:8px;font-size:12px;font-weight:750;padding:6px 7px;border-bottom:1px solid #EDF1EC}
-.me .slot .sn{font-size:10px;font-weight:900;color:var(--faint);min-width:15px;font-variant-numeric:tabular-nums}
+.me .roster{display:grid;grid-template-columns:repeat(2,minmax(0,1fr));gap:10px}
+.me .teamcol{border:1px solid var(--line);border-radius:10px;padding:8px;min-width:0}
+.me .tch{font-size:10px;font-weight:900;text-transform:uppercase;letter-spacing:.5px;color:var(--muted);margin-bottom:7px;display:flex;align-items:center;gap:6px}
+.me .tch .tcn{background:var(--slot);border:1px solid var(--line);border-radius:99px;padding:1px 7px;font-variant-numeric:tabular-nums;color:var(--forest)}
+.me .slot{display:flex;align-items:center;gap:8px;font-size:12.5px;font-weight:700;padding:6px 7px;border-bottom:1px solid #EDF1EC}
+.me .slot:last-child{border-bottom:0}
+.me .slot .sn{font-size:10px;font-weight:900;color:var(--faint);min-width:16px;font-variant-numeric:tabular-nums}
+.me .slot .pn{min-width:0;overflow-wrap:anywhere}
+.me .slot .fkb{margin-left:auto;font-size:9px;font-weight:900;letter-spacing:.4px;color:#7A5200;background:#FBF0DC;border:1px solid #E3C88A;border-radius:5px;padding:1px 5px}
 .me .slot .open{color:var(--faint);font-weight:700}
+.me .cnt.cap{font-variant-numeric:tabular-nums;color:var(--muted)}
+.me .cnt.cap.over{color:#A83120;font-weight:800}.me .cnt.cap.over b{color:#A83120}
 .me .pfoot{font-size:11px;color:var(--muted);margin-top:10px;line-height:1.5}
 .me .savebar{position:fixed;left:0;right:0;bottom:0;background:var(--paper);border-top:1px solid var(--line);box-shadow:0 -8px 24px rgba(0,51,38,.09);z-index:60}
 .me .savebar .diff{max-width:1500px;margin:0 auto;padding:12px 24px 0}

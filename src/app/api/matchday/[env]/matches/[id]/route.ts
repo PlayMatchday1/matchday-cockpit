@@ -34,6 +34,10 @@ function pickMatch(m: Record<string, unknown>) {
   out.cityId = (city.id as number | undefined) ?? null;
   out.manager = m.manager ?? null;
   out.secondManager = m.secondManager ?? null;
+  // Authoritative occupancy — the API's own count of who is IN the match (real + fake),
+  // the same number gameday/the drawer use. NOT players.length (which includes cancelled
+  // user-match rows and reads as over-capacity). Editor headlines this against the cap.
+  out.occupancy = (m._count as Record<string, unknown> | undefined)?.players ?? null;
   return out;
 }
 

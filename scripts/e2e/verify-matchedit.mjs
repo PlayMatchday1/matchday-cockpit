@@ -22,15 +22,36 @@ const MATCH = {
   maxTeamSize2Team: 10, maxTeamSize4Team: 20,
   fakeSpotLeft36h: 0, fakeSpotLeft24h: 0, fakeSpotLeft12h: 0, fakeSpotLeft6h: 0, fakeSpotLeft3h: 0,
   startDate: "2026-08-07T20:04:29.753Z", endDate: "2026-08-08T20:04:29.767Z", isCancelled: false,
+  maxPlayerCount: 4, occupancy: 4, // occupancy = the API's _count.players (real+fake), the authoritative in-match count
   teams: [{ id: 3122, teamNumber: 1, name: "White Tee", locked: false, price: null }, { id: 3123, teamNumber: 2, name: "Dark Tee", locked: false, price: null }],
   fieldTitle: "Bermondsey Field - Austin", cityName: "Austin",
 };
+// Real players — nested user (names), real team + playerNumber, one cancelled (must NOT
+// appear and must NOT be counted). 4 active across 2 teams; the cancelled row is excluded.
+const PLAYERS = [
+  { id: 91, userId: 11, team: 1, playerNumber: 1, isCancelled: false, user: { firstName: "Ada", lastName: "Lovelace", isFakePlayer: false } },
+  { id: 92, userId: 12, team: 1, playerNumber: 2, isCancelled: false, user: { firstName: "Grace", lastName: "Hopper", isFakePlayer: false } },
+  { id: 93, userId: 13, team: 2, playerNumber: 1, isCancelled: false, user: { firstName: "Alan", lastName: "Turing", isFakePlayer: false } },
+  { id: 94, userId: 14, team: 2, playerNumber: 2, isCancelled: false, user: { firstName: "Edsger", lastName: "Dijkstra", isFakePlayer: true } },
+  { id: 95, userId: 15, team: 1, playerNumber: 3, isCancelled: true, user: { firstName: "Cancelled", lastName: "Person", isFakePlayer: false } },
+];
 const FIELDS = [{ id: 1, title: "Bermondsey Field - Austin", city: "Austin" }, { id: 3, title: "Old Boys and Girls High School", city: "Austin" }];
-const GETBODY = JSON.stringify({ match: MATCH, fields: FIELDS, players: [] });
+const GETBODY = JSON.stringify({ match: MATCH, fields: FIELDS, players: PLAYERS });
+
+// grant EDIT MATCHES hermetically (server still enforces in prod)
+const grantEdit = (ctx) => ctx.route("**/rest/v1/app_users*", async (route) => {
+  if (route.request().method() !== "GET") return route.continue();
+  const res = await route.fetch(); let j = await res.json().catch(() => null);
+  const p = (r) => ({ ...r, can_edit_matches: true, can_access_matchops: true });
+  j = Array.isArray(j) ? j.map(p) : (j && typeof j === "object" ? p(j) : j);
+  return route.fulfill({ status: res.status(), contentType: "application/json", body: JSON.stringify(j) });
+});
 
 let lastPut = null;
 async function wire(context) {
-  await context.route("**/api/stage/matches/**", async (route) => {
+  // The editor fetches the guarded matchday route (FULL_EDITOR_ENV=production). Intercept
+  // GET (fixture) + PUT (capture, never sent).
+  await context.route("**/api/matchday/production/matches/**", async (route) => {
     const req = route.request();
     if (req.method() === "PUT") {
       lastPut = JSON.parse(req.postData() || "{}");
@@ -39,6 +60,7 @@ async function wire(context) {
     }
     return route.fulfill({ status: 200, contentType: "application/json", body: GETBODY });
   });
+  await grantEdit(context);
 }
 
 // contrast helpers
@@ -131,15 +153,26 @@ async function main() {
     if (!/should descend/i.test(note)) throw new Error(`no warning: "${note}"`);
     await page.click('[data-testid="revert"]');
   });
-  await check("roster slot count follows team size × numbers", async () => {
-    await page.selectOption('[data-testid="view-teamnumbers"]', "4");
-    await page.fill('[data-testid="view-teamsize"]', "5"); await page.waitForTimeout(60);
-    let slots = await page.$$eval('[data-testid="slot"]', (e) => e.length);
-    if (slots !== 20) throw new Error(`4×5 expected 20 slots, got ${slots}`);
-    await page.selectOption('[data-testid="view-teamnumbers"]', "2");
-    await page.fill('[data-testid="view-teamsize"]', "9"); await page.waitForTimeout(60);
-    slots = await page.$$eval('[data-testid="slot"]', (e) => e.length);
-    if (slots !== 18) throw new Error(`2×9 expected 18 slots, got ${slots}`);
+  await check("back control present (returns to where you came from)", async () => {
+    if (!(await page.$('[data-testid="editor-back"]'))) throw new Error("no back button");
+  });
+  await check("the preview-layout shaping widget is GONE", async () => {
+    if (await page.$('[data-testid="view-teamnumbers"]') || await page.$('[data-testid="view-teamsize"]')) throw new Error("preview widget still present");
+  });
+  await check("roster shows REAL player NAMES, grouped by real team, cancelled excluded", async () => {
+    const names = await page.$$eval('[data-testid="player-name"]', (e) => e.map((x) => x.textContent.trim()));
+    if (names.length !== 4) throw new Error(`expected 4 active names, got ${names.length}: ${JSON.stringify(names)}`);
+    for (const want of ["Ada Lovelace", "Grace Hopper", "Alan Turing"]) if (!names.includes(want)) throw new Error(`missing ${want}; got ${JSON.stringify(names)}`);
+    if (names.some((n) => /^Player$/.test(n) || /Cancelled Person/.test(n))) throw new Error(`literal "Player" or a cancelled player leaked: ${JSON.stringify(names)}`);
+    const cols = await page.$$eval('[data-testid="team-col"]', (e) => e.map((c) => ({ team: c.getAttribute("data-team"), n: c.querySelectorAll('[data-testid="player-name"]').length })));
+    if (cols.length !== 2) throw new Error(`expected 2 team columns, got ${cols.length}`);
+    if (!cols.every((c) => c.n === 2)) throw new Error(`each team should show 2 players: ${JSON.stringify(cols)}`);
+  });
+  await check("capacity headline uses occupancy (4) of cap (4) — NEVER a teams×size product", async () => {
+    const t = (await page.textContent('[data-testid="pcount"]')).replace(/\s+/g, " ").trim();
+    if (!/^4 of 4/.test(t)) throw new Error(`pcount should read "4 of 4…", got "${t}"`);
+    if (/(^|\D)(8|44|88)(\D|$)/.test(t)) throw new Error(`pcount reads a phantom product: "${t}"`);
+    if (!/full/i.test(t)) throw new Error(`occupancy==cap should say "full": "${t}"`);
   });
 
   console.log("\nCONTRAST (.me)");
