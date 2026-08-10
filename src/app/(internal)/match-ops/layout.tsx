@@ -25,7 +25,7 @@ import { useEffect, useState } from "react";
 import { usePathname } from "next/navigation";
 import { useAuth } from "@/lib/useAuth";
 import ChatsRail from "./ChatsRail";
-import MatchOpsMobileStrip from "./MatchOpsMobileStrip";
+import MatchOpsMobileBar from "./MatchOpsMobileBar";
 import { visibleSections } from "./sections";
 
 const COLLAPSE_KEY = "matchops:rail-collapsed";
@@ -89,11 +89,17 @@ export default function MatchOpsLayout({
       )}
       <div
         style={{ "--mo-rail-w": railW } as React.CSSProperties}
-        className={isChat ? undefined : "lg:pl-[var(--mo-rail-w)]"}
+        // Non-chat section pages go FULL-BLEED on a phone: break out of the app
+        // shell's 32px horizontal padding (AuthGate's `px-8`) so cards run edge to
+        // edge, the same full-screen treatment Gameday Ops has. Only below the
+        // 900px rail breakpoint; desktop keeps the rail offset and shell padding.
+        // Chat consoles own their full-bleed 100dvh shells, so they opt out.
+        className={isChat ? undefined : "lg:pl-[var(--mo-rail-w)] max-[899px]:w-screen max-[899px]:ml-[calc(50%-50vw)]"}
       >
-        {/* Non-chat routes get the mobile section strip here; chat consoles
-            render their own inside the inbox. */}
-        {!isChat && !isGameday && hasRail && <MatchOpsMobileStrip />}
+        {/* Non-chat routes get the mobile screen-picker app bar here (Gameday Ops
+            carries its own in-header picker; chat consoles render the pill strip
+            inside their inbox). */}
+        {!isChat && !isGameday && hasRail && <MatchOpsMobileBar />}
         {children}
       </div>
     </>
