@@ -52,6 +52,8 @@ function fixtures(now) {
     mk({ id: 302, code: "NOCAP", startDateUtc: iso(-3 * DAY), endDateUtc: iso(10 * DAY), numberOfUsesPerUser: 10000 }),                                        // no-cap sentinel
     mk({ id: 303, code: "OVERCAP", startDateUtc: iso(-3 * DAY), endDateUtc: iso(10 * DAY), targetMatchType: "TOTAL_USAGE", numberOfUsesPerUser: 3 }),          // over-redeemed (usage 7 > cap 3)
     mk({ id: 401, code: "PROMO301", startDateUtc: iso(-3 * DAY), endDateUtc: iso(12 * DAY) }),                                                                 // code CONTAINING digits "301" (dual-fire)
+    mk({ id: 501, code: "SLOWCODE", startDateUtc: iso(-3 * DAY), endDateUtc: iso(11 * DAY), createdAt: iso(-3 * DAY) }),                                        // detail is delayed — REDEEMED "loading" state
+    mk({ id: 502, code: "FAILCODE", startDateUtc: iso(-3 * DAY), endDateUtc: iso(11 * DAY), createdAt: iso(-2 * DAY) }),                                        // detail 500s — REDEEMED "failed" state
   ];
   const past = [
     mk({ id: 201, code: "EXPIRED1", startDateUtc: iso(-60 * DAY), endDateUtc: iso(-10 * DAY) }),           // expired
@@ -59,7 +61,7 @@ function fixtures(now) {
   ];
   return { live, past };
 }
-const usageFor = { 101: 4, 301: 7, 302: 235, 303: 7, 401: 0, 102: 0, 103: 1, 201: 9, 202: 3 };
+const usageFor = { 101: 4, 301: 7, 302: 235, 303: 7, 401: 0, 501: 9, 102: 0, 103: 1, 201: 9, 202: 3 };
 
 function serveList(url, now) {
   const u = new URL(url); const sp = u.searchParams;
@@ -101,11 +103,12 @@ async function main() {
       const hit = [...live, ...past].find((r) => r.code.toLowerCase() === code);
       route.fulfill({ status: 200, contentType: "application/json", body: JSON.stringify(hit ? { result: "taken", existing: { id: hit.id, code: hit.code, state: "active" } } : { result: "free", existing: null }) });
     });
-    await ctx.route("**/api/promos/detail/**", (route) => {
+    await ctx.route("**/api/promos/detail/**", async (route) => {
       const id = Number(route.request().url().split("/").pop().split("?")[0]);
+      if (id === 502) return route.fulfill({ status: 500, contentType: "application/json", body: JSON.stringify({ error: "boom" }) }); // REDEEMED failed state
+      if (id === 501) await new Promise((r) => setTimeout(r, 2500)); // slow → REDEEMED loading state is observable
       const { live, past } = fixtures(now);
-      const promo = [...live, ...past].find((r) => r.id === id);
-      if (!promo) return route.fulfill({ status: 404, contentType: "application/json", body: JSON.stringify({ error: "not found" }) });
+      const promo = [...live, ...past].find((r) => r.id === id) ?? null; // unknown (filler) → usageCount 0
       route.fulfill({ status: 200, contentType: "application/json", body: JSON.stringify({ promo, usageCount: usageFor[id] ?? 0, nowIso: new Date(now).toISOString() }) });
     });
     await ctx.route("**/api/promos/create**", (route) => route.fulfill({ status: 200, contentType: "application/json", body: JSON.stringify({ ok: true, result: { id: 9999 }, outcome: "landed", logRecorded: true }) }));
@@ -117,10 +120,15 @@ async function main() {
   await routes(ctx);
   const page = await ctx.newPage();
   await page.goto(PAGE, { waitUntil: "domcontentloaded" });
-  await page.waitForSelector('[data-testid="promos"]'); await page.waitForSelector('[data-testid="promo-row"]'); await page.waitForTimeout(200);
+  await page.waitForSelector('[data-testid="promos"]'); await page.waitForSelector('[data-testid="promo-row"]');
+  // EARLY (before SLOWCODE's 2.5s detail resolves): REDEEMED shows a loading dash, NEVER "0".
+  eq("REDEEMED loading state: SLOWCODE shows a dash, not a number, not 0", { rstate: await page.$eval('[data-testid="promo-row"][data-id="501"] [data-testid="redeemed"]', (e) => e.getAttribute("data-rstate")), notNumber: await page.$eval('[data-testid="promo-row"][data-id="501"] [data-testid="redeemed"]', (e) => !/\d/.test(e.textContent)) }, { rstate: "loading", notNumber: true });
+  await page.waitForTimeout(200);
 
   // ── search-first: the box is present, and focused on load ──
   eq("search box is focused on load", await page.evaluate(() => document.activeElement?.getAttribute("data-testid")), "promo-search");
+  // ── branch C: the order label says the visible date column is NOT sortable ──
+  eq("order label notes the CREATED dates are shown but not sortable (branch C)", await page.$('[data-testid="nosort-note"]') !== null, true);
 
   // ── browse headers: exact totals, order named as the API's (NOT 'newest') ──
   { const live = await page.$eval('[data-testid="live-sub"]', (e) => e.textContent);
@@ -135,10 +143,37 @@ async function main() {
     const struck = await page.$eval('[data-testid="promo-row"][data-id="103"] .code', (e) => getComputedStyle(e).textDecorationLine.includes("line-through"));
     eq("DELFUTURE: in LIVE, state=deleted, struck through", { inLive, state, struck }, { inLive: true, state: "deleted", struck: true }); }
 
-  // ── CAP on the list; no REDEEMED/LEFT columns on a row ──
+  // ── columns: CAP + REDEEMED on the list, LEFT is NOT; timezone stated ONCE ──
   eq("CAP shown on the row (ACTIVE1 = 5)", await page.$eval('[data-testid="promo-row"][data-id="101"] [data-testid="promo-cap"]', (e) => e.textContent.trim()), "5");
   eq("NOCAP row prints 'no cap', never 10000", await page.$eval('[data-testid="promo-row"][data-id="302"] [data-testid="promo-cap"]', (e) => e.textContent.trim()), "no cap");
-  eq("no REDEEMED/LEFT anywhere in the list", await page.$$eval('[data-testid="promos"] .colhead', (els) => els.every((e) => !/REDEEMED|LEFT/.test(e.textContent))), true);
+  eq("colheads: CREATED + REDEEMED present, LEFT is NOT (stays on detail)", await page.$eval('[data-testid="promos"] .colhead', (e) => ({ created: /CREATED/.test(e.textContent), redeemed: /REDEEMED/.test(e.textContent), noLeft: !/LEFT/.test(e.textContent) })), { created: true, redeemed: true, noLeft: true });
+  eq("timezone stated once (table header), never on each row", { header: await page.$('[data-testid="tzbar"]') !== null, notInRow: await page.$eval('[data-testid="promo-row"][data-id="101"] .c-win', (e) => !/America\/Chicago|Central/.test(e.textContent)) }, { header: true, notInRow: true });
+
+  // ── CREATED column: Chicago date; a code created in the last 14 days shows a relative age ──
+  eq("CREATED shows a date; a recent code (SLOWCODE, 3d) shows an age; an old one (ACTIVE1, 40d) does not", {
+    date: /\w+ \d+, \d{4}/.test(await page.$eval('[data-testid="promo-row"][data-id="501"] [data-testid="created"]', (e) => e.textContent)),
+    recentAge: await page.$('[data-testid="promo-row"][data-id="501"] [data-testid="created-age"]') !== null,
+    oldNoAge: await page.$('[data-testid="promo-row"][data-id="101"] [data-testid="created-age"]') === null,
+  }, { date: true, recentAge: true, oldNoAge: true });
+
+  // ── REDEEMED: the four states, none of which reads as a bare "0" unless it is a real zero ──
+  const waitR = (id, s) => page.waitForFunction(([i, st]) => { const e = document.querySelector(`[data-testid="promo-row"][data-id="${i}"] [data-testid="redeemed"]`); return e && e.getAttribute("data-rstate") === st; }, [id, s], { timeout: 9000 });
+  await waitR(101, "loaded");
+  eq("REDEEMED loaded N: ACTIVE1 = 4", await page.$eval('[data-testid="promo-row"][data-id="101"] [data-testid="redeemed"]', (e) => e.textContent.trim()), "4");
+  await waitR(102, "loaded");
+  eq("REDEEMED loaded ZERO: SCHEDULED1 shows '0' muted with data-value 0 (a REAL zero)", { text: await page.$eval('[data-testid="promo-row"][data-id="102"] [data-testid="redeemed"]', (e) => e.textContent.trim()), val: await page.$eval('[data-testid="promo-row"][data-id="102"] [data-testid="redeemed"]', (e) => e.getAttribute("data-value")) }, { text: "0", val: "0" });
+  await waitR(502, "failed");
+  eq("REDEEMED failed: shows a retry '?', never '0'", { notZero: await page.$eval('[data-testid="promo-row"][data-id="502"] [data-testid="redeemed"]', (e) => e.textContent.trim() !== "0"), retry: await page.$('[data-testid="promo-row"][data-id="502"] .red-retry') !== null }, { notZero: true, retry: true });
+
+  // ── cancel-on-change: SLOWCODE (2.5s) is loading; change the search before it resolves; after
+  //     its response would have landed, the searched row keeps its OWN value — no stale write. ──
+  await page.reload({ waitUntil: "domcontentloaded" }); await page.waitForSelector('[data-testid="promo-row"][data-id="501"]');
+  await page.fill('[data-testid="promo-search"]', "ACTIVE1"); // new generation → SLOWCODE aborted
+  await waitR(101, "loaded");
+  await page.waitForTimeout(2800); // SLOWCODE's delayed response has now elapsed
+  eq("no stale value: ACTIVE1 keeps 4 after SLOWCODE's aborted response window; SLOWCODE not shown", { active1: await page.$eval('[data-testid="promo-row"][data-id="101"] [data-testid="redeemed"]', (e) => e.textContent.trim()), slowGone: await page.$('[data-testid="promo-row"][data-id="501"]') === null }, { active1: "4", slowGone: true });
+  await page.fill('[data-testid="promo-search"]', ""); await page.waitForTimeout(300);
+  await page.waitForSelector('[data-testid="promo-row"][data-id="101"]');
 
   // ── detail drawer: REDEEMED + LEFT, the three branches ──
   const openDetail = async (id) => { await page.click(`[data-testid="promo-row"][data-id="${id}"]`); await page.waitForSelector('[data-testid="detail-usage"]'); await page.waitForTimeout(120); };
@@ -180,8 +215,12 @@ async function main() {
   await page.waitForSelector('[data-testid="promo-row"][data-id="101"]');
 
   // ── paging: 'Show 25 more' appends; past 100 the nudge replaces it ──
-  eq("browse LIVE shows 'Show 25 more' (25 of 120)", !!(await page.$('[data-testid="grp-live"] [data-testid="show-more"]')), true);
-  for (let i = 0; i < 3; i++) { await page.click('[data-testid="grp-live"] [data-testid="show-more"]').catch(() => {}); await page.waitForTimeout(200); }
+  eq("browse LIVE shows 'Show 25 more'", !!(await page.$('[data-testid="grp-live"] [data-testid="show-more"]')), true);
+  // click "Show more" until the nudge appears (loaded >= 100) — robust to REDEEMED reflow
+  for (let i = 0; i < 6 && !(await page.$('[data-testid="grp-live"] [data-testid="nudge"]')); i++) {
+    const btn = await page.$('[data-testid="grp-live"] [data-testid="show-more"]'); if (!btn) break;
+    await btn.scrollIntoViewIfNeeded().catch(() => {}); await btn.click().catch(() => {}); await page.waitForTimeout(350);
+  }
   eq("past 100 loaded: the search nudge replaces the button", { nudge: !!(await page.$('[data-testid="grp-live"] [data-testid="nudge"]')), noButton: (await page.$('[data-testid="grp-live"] [data-testid="show-more"]')) === null }, { nudge: true, noButton: true });
 
   // ── CREATE drawer: only code+value typed; defaults; dupe check; summary; create ──
@@ -205,6 +244,9 @@ async function main() {
   await page.click('[data-testid="f-create"]'); await page.waitForTimeout(400);
   eq("after create: just-created row at top of LIVE, marked", { marker: !!(await page.$('[data-testid="just-created"]')), code: await page.$eval('[data-testid="grp-live"] [data-testid="promo-row"] .code', (e) => e.textContent.replace(/JUST CREATED/, "").trim()) }, { marker: true, code: "NEWSUMMER" });
 
+  // ── no horizontal overflow at 1280 (the narrowest desktop that still shows the sidebar) ──
+  { const o = await overflow(page); (!o.pageLeak) ? ok("no horizontal overflow at 1280 with the 9-column table + sidebar") : bad("overflow at 1280", JSON.stringify(o.offenders.slice(0, 4))); }
+
   // ── contrast sweep (desktop), scoped to .promo ──
   { const c = await contrastIn(page);
     c.failures.length === 0 ? ok(`contrast: every promo node >= 4.5:1 (min ${c.min})`) : bad(`contrast: ${c.failures.length} < 4.5`, c.failures.slice(0, 5).map((f) => `${f.ratio} "${f.t}" .${f.c}`).join(" | ")); }
@@ -220,6 +262,13 @@ async function main() {
     small.length === 0 ? ok("phone: every enabled control >= 44px on its short axis") : bad(`phone: ${small.length} under 44px`, JSON.stringify(small.slice(0, 6))); }
   { const trunc = await ph.$$eval('[data-testid="promo-row"] .code', (els) => els.filter((e) => getComputedStyle(e).textOverflow === "ellipsis" || e.scrollWidth > e.clientWidth + 1).length);
     trunc === 0 ? ok("phone: code names wrap, never ellipsis-truncated") : bad("phone truncation", `${trunc}`); }
+  // ── phone: the "Created X · N redeemed · cap Y" line is on every card, 4 states, never bare 0 ──
+  { const lines = await ph.$$eval('[data-testid="promo-row"] [data-testid="usemob"]', (els) => els.map((e) => e.textContent.replace(/\s+/g, " ")));
+    (lines.length > 0 && lines.every((t) => /Created .+ · .+ · cap /.test(t))) ? ok(`phone: usage line present on every card (${lines.length})`) : bad("phone usemob missing/malformed", JSON.stringify(lines.slice(0, 3))); }
+  await ph.waitForFunction(() => { const e = document.querySelector('[data-testid="promo-row"][data-id="101"] [data-testid="usemob-redeemed"]'); return e && e.getAttribute("data-rstate") === "loaded"; }, { timeout: 9000 });
+  eq("phone usemob: ACTIVE1 reads '4 redeemed'", /4 redeemed/.test(await ph.$eval('[data-testid="promo-row"][data-id="101"] [data-testid="usemob-redeemed"]', (e) => e.textContent)), true);
+  await ph.waitForFunction(() => { const e = document.querySelector('[data-testid="promo-row"][data-id="502"] [data-testid="usemob-redeemed"]'); return e && e.getAttribute("data-rstate") === "failed"; }, { timeout: 9000 });
+  eq("phone usemob: failed reads 'unavailable', never '0 redeemed'", { unavail: /unavailable/.test(await ph.$eval('[data-testid="promo-row"][data-id="502"] [data-testid="usemob-redeemed"]', (e) => e.textContent)), notZero: !/0 redeemed/.test(await ph.$eval('[data-testid="promo-row"][data-id="502"] [data-testid="usemob-redeemed"]', (e) => e.textContent)) }, { unavail: true, notZero: true });
   // open a detail card on the phone: the usage one-liner is present (not hidden columns)
   await ph.click('[data-testid="promo-row"][data-id="301"]'); await ph.waitForSelector('[data-testid="detail-useline"]'); await ph.waitForTimeout(120);
   eq("phone detail: the three usage numbers collapse into ONE readable line", /7 redeemed · 13 left of 20/.test(await ph.$eval('[data-testid="detail-useline"]', (e) => e.textContent)), true);

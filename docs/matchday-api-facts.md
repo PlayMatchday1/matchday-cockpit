@@ -892,10 +892,24 @@ createdAt is the signature of **heap order** (no ORDER BY). Heap order survives 
 but not writes: an UPDATE moves the tuple to the end of the heap. So the order is not merely
 unsortable, it is not durably stable. `sortColumn`/`sortDirection`/`orderBy` all 400.
 
+**Phase 20 refinement — the two filters order DIFFERENTLY (still no global sort):** the
+`endDateMin={now}` filter (the LIVE table) comes back **id-ascending and stable** — pages 1/2/3
+strictly ascending within and across boundaries (…12227 | 12228…), id never drops at the 6
+endDate-changes in the first 500 rows, and createdAt is monotonic along ascending id (that filter
+gets an index plan). The `endDateMax={now}` filter (PAST) comes back **heap-ordered** — page 1 is
+15,16,17,9,11,12 with id dropping at endDate boundaries. So LIVE alone would be branch A
+(id≈creation order) but PAST is branch C (heap), and a **global** Newest/Oldest toggle needs BOTH
+tables to share an order — they don't. Sort stays cut; the screen says so next to the order label.
+(A LIVE-only sort is defensible on this evidence if ever wanted — but PAST cannot be ordered, and
+the missing ORDER BY (#1 above) remains the real fix.)
+
 FOR VITALII (in this order — #1 is the bug, the missing sort param is only a symptom):
   1. A deterministic ORDER BY on the promo list (id or createdAt), so paging is sound at all.
-  2. `sortColumn` / `sortDirection` params.
-  3. OVER-REDEEMED TOTAL_USAGE codes (Phase 18c audit): 193 codes have `targetMatchType =
+  2. **`usageCount` on the LIST payload.** It is detail-only today, so REDEEMED on the list (Phase
+     20 C) is a per-visible-row N+1 (cap 5, cached, cancelled — measured ~0.6s for a page). Put
+     `usageCount` on the list row and the whole lazy-fetch mechanism deletes itself.
+  3. `sortColumn` / `sortDirection` params.
+  4. OVER-REDEEMED TOTAL_USAGE codes (Phase 18c audit): 193 codes have `targetMatchType =
      TOTAL_USAGE` (a TOTAL cap), and **13 of them have `usageCount` > `numberOfUsesPerUser`** —
      the server allowed redemptions past a total cap. e.g. `ATX485FP` (id 2543) 7/3, `SATX194FP`
      (id 15719) 5/3, `HOU363FP` (id 18987) 4/3. All are small `…FP` field-promo caps of 3–4. The

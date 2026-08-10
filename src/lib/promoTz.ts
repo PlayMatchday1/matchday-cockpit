@@ -61,8 +61,17 @@ export function utcIsoToChicagoWall(iso: string): Wall {
 const MONTHS = ["Jan", "Feb", "Mar", "Apr", "May", "Jun", "Jul", "Aug", "Sep", "Oct", "Nov", "Dec"];
 const pad = (n: number) => String(n).padStart(2, "0");
 
-// Human display, in Chicago. "Aug 10, 2026" / "8:45 AM" / "Aug 10, 2026 8:45 AM".
+// Human display, in Chicago. "Aug 10, 2026" / "Aug 10" / "8:45 AM" / "Aug 10, 2026 8:45 AM".
 export function fmtChicagoDate(iso: string): string { const w = utcIsoToChicagoWall(iso); return `${MONTHS[w.mo - 1]} ${w.d}, ${w.y}`; }
+export function fmtChicagoDateShort(iso: string): string { const w = utcIsoToChicagoWall(iso); return `${MONTHS[w.mo - 1]} ${w.d}`; }
+// Relative age for a recently-created promo — "today" / "3d ago" — but ONLY within the last 14
+// days (the "what did I just make" window); null beyond that so the CREATED column stays calm.
+// createdAt is a true UTC instant, so a plain Date.parse is correct here (not the wall-clock trap).
+export function ageLabel(iso: string, nowMs: number): string | null {
+  const days = Math.floor((nowMs - Date.parse(iso)) / 86_400_000);
+  if (days < 0 || days > 14) return null;
+  return days === 0 ? "today" : `${days}d ago`;
+}
 export function fmtChicagoTime(iso: string): string {
   const w = utcIsoToChicagoWall(iso);
   const ap = w.h >= 12 ? "PM" : "AM", hh = w.h % 12 === 0 ? 12 : w.h % 12;

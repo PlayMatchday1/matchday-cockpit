@@ -17,7 +17,7 @@ import {
   USER_TYPE_LABEL, MATCH_TYPE_LABEL,
 } from "@/lib/promoModel";
 import {
-  PROMO_TZ_LABEL, fmtChicagoDate, fmtChicagoTime, fmtChicagoFull, toChicagoInputs, fromChicagoInputs,
+  PROMO_TZ_LABEL, fmtChicagoDate, fmtChicagoDateShort, fmtChicagoTime, fmtChicagoFull, ageLabel, toChicagoInputs, fromChicagoInputs,
   nextQuarterHourUtcIso, endOfYearUtcIso, chicagoYearOf, chicagoWallToUtcIso, utcIsoToChicagoWall,
 } from "@/lib/promoTz";
 
@@ -31,6 +31,71 @@ async function authFetch(path: string, init?: RequestInit): Promise<Response> {
 }
 
 type ListResp = { data: PromoRow[]; totalItems: number; nowIso: string; error?: string };
+
+// ── REDEEMED per-row lazy fetch (Phase 20 C). usageCount is detail-only, so the ban on N+1 is
+// lifted for the VISIBLE page only, under strict rules: render immediately (never block), fill in
+// after; cap 5 concurrent; cache by id for the session (paging back / reopening = zero calls);
+// and CANCEL in-flight when the visible id set changes so a late response can't write into the
+// wrong row. Four visually distinct states — a pending or failed fetch must NEVER read as "0". ──
+type RedeemState = { state: "loading" | "loaded" | "failed"; value?: number };
+const redeemedCache = new Map<number, number>(); // session cache: promo id -> usageCount
+
+function useRedeemed(ids: number[]): { get: (id: number) => RedeemState; retry: (id: number) => void } {
+  const [cells, setCells] = useState<Record<number, RedeemState>>({});
+  const genRef = useRef(0);
+  const inflight = useRef<Map<number, AbortController>>(new Map());
+  const key = ids.join(",");
+
+  const fetchOne = useCallback((id: number, gen: number): Promise<void> => {
+    const ac = new AbortController();
+    inflight.current.set(id, ac);
+    return authFetch(`/api/promos/detail/${id}`, { signal: ac.signal })
+      .then(async (res) => {
+        const j = await res.json().catch(() => ({}));
+        if (!res.ok) throw new Error(j.error || `HTTP ${res.status}`);
+        return typeof j.usageCount === "number" ? j.usageCount : 0;
+      })
+      .then((uc) => { redeemedCache.set(id, uc); if (gen === genRef.current) setCells((p) => ({ ...p, [id]: { state: "loaded", value: uc } })); })
+      .catch(() => { if (gen === genRef.current && !ac.signal.aborted) setCells((p) => ({ ...p, [id]: { state: "failed" } })); })
+      .finally(() => { inflight.current.delete(id); });
+  }, []);
+
+  useEffect(() => {
+    const gen = ++genRef.current;
+    for (const ac of inflight.current.values()) ac.abort(); // cancel the previous generation
+    inflight.current = new Map();
+    // seed: cached → loaded (0 calls); everything else → loading (NEVER a bare 0 while pending)
+    setCells(() => { const next: Record<number, RedeemState> = {}; for (const id of ids) next[id] = redeemedCache.has(id) ? { state: "loaded", value: redeemedCache.get(id)! } : { state: "loading" }; return next; });
+    const queue = ids.filter((id) => !redeemedCache.has(id));
+    let idx = 0, active = 0;
+    const pump = () => {
+      while (active < 5 && idx < queue.length) {
+        const id = queue[idx++]; active++;
+        void fetchOne(id, gen).finally(() => { active--; if (gen === genRef.current) pump(); });
+      }
+    };
+    pump();
+    return () => { for (const ac of inflight.current.values()) ac.abort(); };
+    // eslint-disable-next-line react-hooks/exhaustive-deps
+  }, [key, fetchOne]);
+
+  const retry = useCallback((id: number) => { redeemedCache.delete(id); setCells((p) => ({ ...p, [id]: { state: "loading" } })); void fetchOne(id, genRef.current); }, [fetchOne]);
+  return { get: (id) => cells[id] ?? { state: "loading" }, retry };
+}
+type Redeemed = ReturnType<typeof useRedeemed>;
+
+// the REDEEMED cell — four distinct states, never a bare number while loading/failed
+function RedeemedCell({ st, onRetry }: { st: RedeemState; onRetry: () => void }) {
+  if (st.state === "loading") return <span className="uses red loading" data-testid="redeemed" data-rstate="loading" aria-label="loading">–</span>;
+  if (st.state === "failed") return <span className="uses red" data-testid="redeemed" data-rstate="failed"><span role="button" tabIndex={0} className="red-retry" aria-label="Couldn't read redemptions — retry" title="Couldn't read redemptions — retry" onClick={(e) => { e.stopPropagation(); onRetry(); }} onKeyDown={(e) => { if (e.key === "Enter" || e.key === " ") { e.preventDefault(); e.stopPropagation(); onRetry(); } }}>?</span></span>;
+  return <span className={"uses red" + (st.value === 0 ? " zero" : "")} data-testid="redeemed" data-rstate="loaded" data-value={st.value}>{st.value!.toLocaleString()}</span>;
+}
+// mobile: the redeemed fragment of the one-line usage summary, same four states
+function redeemedMobile(st: RedeemState): string {
+  if (st.state === "loading") return "… redeemed";
+  if (st.state === "failed") return "redemptions unavailable";
+  return `${st.value!.toLocaleString()} redeemed`;
+}
 
 export default function PromoCodes() {
   const { appUser } = useAuth();
@@ -163,6 +228,17 @@ export default function PromoCodes() {
     return { liveRows: [...justCreated, ...live.rows], liveTotal: live.total + justCreated.length, pastRows: past.rows, pastTotal: past.total, searchTotal: 0, notFound: false };
   }, [mode, idResult, search, live, past, justCreated, nowIso]);
 
+  // REDEEMED lazy-loads only for the rows on screen now (LIVE always; PAST only when open),
+  // excluding just-created session rows (they're new → 0, no fetch). One shared pool + cache.
+  // PAUSED while a drawer is open — the list is obscured, and letting 100+ detail calls run then
+  // would starve the create form's own request off the browser's per-host connection pool.
+  const drawerOpen = createOpen || detailId != null;
+  const visibleIds = useMemo(
+    () => (drawerOpen ? [] : [...view.liveRows, ...(pastOpen ? view.pastRows : [])].filter((r) => !(r as PromoRow & { _new?: boolean })._new).map((r) => r.id)),
+    [view.liveRows, view.pastRows, pastOpen, drawerOpen],
+  );
+  const redeemed = useRedeemed(visibleIds);
+
   const onCreated = (row: PromoRow) => { setJustCreated((j) => [{ ...row }, ...j]); setCreateOpen(false); say(`Created ${row.code}`); };
 
   if (appUser && !mayManage) {
@@ -202,10 +278,10 @@ export default function PromoCodes() {
             <div className="ghead">
               <span className="gtitle">LIVE</span>
               <span className="gsub" data-testid="live-sub">{mode === "browse"
-                ? `${view.liveTotal.toLocaleString()} live codes, in the order the API returns them`
+                ? <>{view.liveTotal.toLocaleString()} live codes, in the order the API returns them <span className="nosort" data-testid="nosort-note">— no date sort; the CREATED dates are shown, not sortable</span></>
                 : `${view.liveTotal.toLocaleString()} live match${view.liveTotal === 1 ? "" : "es"}`}</span>
             </div>
-            <PromoTable rows={view.liveRows} nowIso={nowIso} onOpen={setDetailId}
+            <PromoTable rows={view.liveRows} nowIso={nowIso} onOpen={setDetailId} redeemed={redeemed}
               empty={mode !== "browse"
                 ? <p className="empty oneline" data-testid="live-empty"><b>No live codes match</b>Finished and deleted codes are in the PAST table below — it opens when a search hits it.</p>
                 : <p className="empty" data-testid="live-empty"><b>No live codes</b>Nothing is active or scheduled right now.</p>}
@@ -223,7 +299,7 @@ export default function PromoCodes() {
             </button>
             {pastOpen && (
               <div data-testid="past-body">
-                <PromoTable rows={view.pastRows} nowIso={nowIso} onOpen={setDetailId}
+                <PromoTable rows={view.pastRows} nowIso={nowIso} onOpen={setDetailId} redeemed={redeemed}
                   empty={<p className="empty" data-testid="past-empty"><b>No past codes match</b>Nothing expired or deleted matches that.</p>}
                   more={<MoreBar mode={mode} loaded={view.pastRows.length} total={mode === "search" ? view.searchTotal : view.pastTotal} onMore={() => loadMore("past")} />} />
               </div>
@@ -245,29 +321,36 @@ export default function PromoCodes() {
   );
 }
 
-// ── one row of a table ──
-function PromoTable({ rows, nowIso, onOpen, empty, more }: { rows: PromoRow[]; nowIso: string; onOpen: (id: number) => void; empty: React.ReactNode; more: React.ReactNode }) {
+// ── one table. The timezone is stated ONCE here (a property of the table), not per row. ──
+function PromoTable({ rows, nowIso, onOpen, redeemed, empty, more }: { rows: PromoRow[]; nowIso: string; onOpen: (id: number) => void; redeemed: Redeemed; empty: React.ReactNode; more: React.ReactNode }) {
   return (
     <div className="sheet">
-      <div className="colhead"><span /><span>CODE</span><span>WINDOW</span><span>DISCOUNT</span><span>WHO · WHICH</span><span style={{ textAlign: "right" }}>CAP</span><span>STATE</span></div>
-      {rows.length === 0 ? empty : rows.map((p) => <PromoRowEl key={p.id + ":" + p.code} p={p} nowIso={nowIso} onOpen={onOpen} />)}
+      <div className="tzbar" data-testid="tzbar">All times <b>America/Chicago</b></div>
+      <div className="colhead"><span /><span>CODE</span><span>CREATED</span><span>WINDOW</span><span>DISCOUNT</span><span>WHO · WHICH</span><span className="ra">CAP</span><span className="ra">REDEEMED</span><span>STATE</span></div>
+      {rows.length === 0 ? empty : rows.map((p) => <PromoRowEl key={p.id + ":" + p.code} p={p} nowIso={nowIso} onOpen={onOpen} redeemed={redeemed} />)}
       {rows.length > 0 && more}
     </div>
   );
 }
 
-function PromoRowEl({ p, nowIso, onOpen }: { p: PromoRow; nowIso: string; onOpen: (id: number) => void }) {
+function PromoRowEl({ p, nowIso, onOpen, redeemed }: { p: PromoRow; nowIso: string; onOpen: (id: number) => void; redeemed: Redeemed }) {
   const st: PromoState = promoState(p, nowIso);
   const tagged = p as PromoRow & { _new?: boolean; _idMatch?: boolean };
+  const age = ageLabel(p.createdAt, Date.parse(nowIso));
+  const rst: RedeemState = tagged._new ? { state: "loaded", value: 0 } : redeemed.get(p.id); // just-created = 0, no fetch
   return (
     <button type="button" className={"r " + st} data-testid="promo-row" data-id={p.id} data-state={st} data-code={p.code} onClick={() => onOpen(p.id)}>
       <span className="rail" />
       <span className="cell c-code"><span className="code">{p.code}{tagged._new && <span className="newtag" data-testid="just-created">JUST CREATED</span>}{tagged._idMatch && <span className="newtag idtag" data-testid="id-match">MATCHED BY ID</span>}</span><span className="cid">ID {p.id}</span></span>
-      <span className="cell c-win"><span className="win">{fmtChicagoDate(p.startDateUtc)} → {fmtChicagoDate(p.endDateUtc)}<small>{fmtChicagoTime(p.startDateUtc)} – {fmtChicagoTime(p.endDateUtc)} · {PROMO_TZ_LABEL.split(" (")[0]}</small></span></span>
+      <span className="cell c-created"><span className="cr" data-testid="created">{fmtChicagoDate(p.createdAt)}{age && <small data-testid="created-age">{age}</small>}</span></span>
+      <span className="cell c-win"><span className="win">{fmtChicagoDate(p.startDateUtc)} {fmtChicagoTime(p.startDateUtc)}<small>→ {fmtChicagoDate(p.endDateUtc)} {fmtChicagoTime(p.endDateUtc)}</small></span></span>
       <span className="cell c-val"><span className="val">{discountLabel(p)}<small>{p.discountType}</small></span></span>
       <span className="cell c-who"><span className="who">{USER_TYPE_LABEL[p.targetUserType]}<small>{MATCH_TYPE_LABEL[p.targetMatchType]}</small></span></span>
       <span className="cell c-cap"><span className="uses" data-testid="promo-cap">{capLabel(p)}</span></span>
+      <span className="cell c-redeemed"><RedeemedCell st={rst} onRetry={() => redeemed.retry(p.id)} /></span>
       <span className="cell c-st"><span className={"st " + st}>{st.toUpperCase()}</span></span>
+      {/* mobile-only one-line usage summary: "Created Aug 2 · 4 redeemed · cap 5" (same 4 states) */}
+      <span className="cell c-usemob" data-testid="usemob">Created {fmtChicagoDateShort(p.createdAt)} · <span data-testid="usemob-redeemed" data-rstate={rst.state}>{redeemedMobile(rst)}</span> · cap {capLabel(p)}</span>
     </button>
   );
 }
@@ -503,6 +586,7 @@ const CSS = `
 .promo .ghead{display:flex;align-items:center;gap:12px;flex-wrap:wrap;padding:0 2px 9px;width:100%;text-align:left}
 .promo .gtitle{font-size:11px;font-weight:800;letter-spacing:.13em;color:#0e1a13}
 .promo .gsub{font-size:12.5px;color:#5c7168;font-variant-numeric:tabular-nums}
+.promo .nosort{color:#8a5600;font-weight:600}
 .promo .gsub.pasthit{font-weight:700;color:#b3241f}
 .promo .gtoggle{border:1px solid #dde6e1;background:#fff;border-radius:12px;font:inherit;cursor:pointer;padding:11px 14px}
 .promo .gtoggle:hover{background:#f7fbf9}.promo .gtoggle:focus-visible{outline:2px solid #0b6bcb;outline-offset:2px}
@@ -511,9 +595,18 @@ const CSS = `
 .promo .grp.slim .empty.oneline{padding:13px 15px;text-align:left}
 .promo .grp.slim .empty.oneline b{display:inline;margin:0}.promo .grp.slim .empty.oneline b::after{content:" — "}
 .promo .sheet{background:#fff;border:1px solid #dde6e1;border-radius:14px;overflow:hidden}
-.promo .colhead,.promo .r{display:grid;gap:12px;align-items:center;grid-template-columns:5px minmax(140px,1.2fr) 190px 92px minmax(120px,1fr) 84px 96px;padding:0 16px 0 0}
+.promo .tzbar{padding:8px 16px;background:#e8f0fa;border-bottom:1px solid #a8c4e6;color:#123a6b;font-size:11.5px;font-weight:600}
+.promo .tzbar b{font-weight:800}
+.promo .colhead,.promo .r{display:grid;gap:12px;align-items:center;grid-template-columns:5px 150px 92px 138px 80px minmax(110px,1fr) 66px 84px 88px;padding:0 16px 0 0}
 .promo .colhead{padding-top:9px;padding-bottom:9px;background:#fafcfb;border-bottom:1px solid #dde6e1;font-size:10px;font-weight:800;letter-spacing:.11em;color:#5c7168}
-.promo .colhead>span{display:block}
+.promo .colhead>span{display:block}.promo .colhead .ra{text-align:right}
+.promo .cr{display:block;font-size:12.5px;color:#3d5349;font-variant-numeric:tabular-nums;white-space:nowrap}
+.promo .cr small{display:block;font-size:11px;color:#146c43;font-weight:700}
+.promo .uses.red{display:block;text-align:right}
+.promo .uses.red.zero{color:#5c7168}.promo .uses.red.loading{color:#5c7168}
+.promo .red-retry{display:inline-flex;align-items:center;justify-content:center;min-width:26px;min-height:26px;border-radius:6px;border:1px solid #f0a9a4;background:#fdecea;color:#b3241f;font-weight:800;cursor:pointer;font-size:13px}
+.promo .red-retry:hover{background:#fbdcd8}.promo .red-retry:focus-visible{outline:2px solid #0b6bcb;outline-offset:1px}
+.promo .c-usemob{display:none}
 .promo .r{width:100%;text-align:left;border:0;border-bottom:1px solid #dde6e1;background:#fff;font:inherit;color:inherit;cursor:pointer}
 .promo .r:last-child{border-bottom:0}.promo .r:hover{background:#f7fbf9}.promo .r:focus-visible{outline:2px solid #0b6bcb;outline-offset:-2px}
 .promo .rail{align-self:stretch;display:block;background:#cbd8d1}
@@ -525,7 +618,7 @@ const CSS = `
 .promo .newtag{margin-left:7px;background:#e6f4ec;color:#146c43;border:1px solid #9fd3b6;font-size:9px;font-weight:800;letter-spacing:.05em;padding:1px 5px;border-radius:4px;vertical-align:1px;font-family:-apple-system,sans-serif}
 .promo .newtag.idtag{background:#e8f0fa;color:#1d4f8f;border-color:#a8c4e6}
 .promo .cid{display:block;font-size:11.5px;color:#5c7168;font-variant-numeric:tabular-nums}
-.promo .win{display:block;font-size:12.5px;color:#3d5349;font-variant-numeric:tabular-nums}.promo .win small{display:block;font-size:11px;color:#5c7168}
+.promo .win{display:block;font-size:11.5px;color:#3d5349;font-variant-numeric:tabular-nums;white-space:nowrap}.promo .win small{display:block;font-size:11px;color:#5c7168;white-space:nowrap}
 .promo .val{display:block;font-weight:700;font-variant-numeric:tabular-nums}.promo .val small{display:block;font-size:11px;font-weight:600;color:#5c7168;letter-spacing:.04em}
 .promo .who{display:block;font-size:12.5px;color:#3d5349}.promo .who small{display:block;font-size:11px;color:#5c7168}
 .promo .uses{display:block;text-align:right;font-variant-numeric:tabular-nums;font-size:13px;color:#3d5349}
@@ -593,14 +686,16 @@ const CSS = `
   /* §9g — every interactive element is at least 44px on its short axis on the phone */
   .promo .btn,.promo .gtoggle,.promo .pbtn,.promo .more .btn{min-height:44px}
   .promo .colhead{display:none}
-  .promo .r{grid-template-columns:5px 1fr auto;grid-template-areas:"rail code st" "rail win st" "rail val val" "rail who who" "rail cap cap";gap:0 11px;padding:0 12px 0 0}
+  /* CREATED, CAP and REDEEMED collapse into one usage line on the card; WINDOW stays. */
+  .promo .r{grid-template-columns:5px 1fr auto;grid-template-areas:"rail code st" "rail win st" "rail val val" "rail who who" "rail usemob usemob";gap:0 11px;padding:0 12px 0 0}
   .promo .rail{grid-area:rail}
   .promo .c-code{grid-area:code;padding:9px 0 0}.promo .c-win{grid-area:win;padding:2px 0 0}
   .promo .c-val{grid-area:val;padding:6px 0 0}.promo .c-who{grid-area:who;padding:2px 0 0}
-  .promo .c-cap{grid-area:cap;padding:5px 0 10px}
+  .promo .c-created,.promo .c-cap,.promo .c-redeemed{display:none}
+  .promo .c-usemob{display:block;grid-area:usemob;padding:5px 0 10px;font-size:12px;color:#3d5349;font-variant-numeric:tabular-nums}
   .promo .c-st{grid-area:st;padding:9px 0 0;align-self:start}
-  .promo .uses{text-align:left}.promo .uses::before{content:"cap: ";color:#5c7168}
   .promo .win,.promo .who{white-space:normal}
+  .promo .win small{white-space:normal}
   .promo .code{white-space:normal;overflow-wrap:anywhere}
   .promo .fgrid{grid-template-columns:1fr}
   .promo .usebox{grid-template-columns:1fr 1fr 1fr}
