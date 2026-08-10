@@ -13,7 +13,7 @@ import { supabase } from "@/lib/supabase";
 import { useAuth, canManagePromos } from "@/lib/useAuth";
 import {
   type PromoRow, type PromoState, type DiscountType, type TargetUserType, type TargetMatchType,
-  promoState, promoBucket, discountLabel, capLabel, leftLabel, usageLine, createSummary,
+  promoState, promoBucket, discountLabel, capLabel, leftLabel, leftTone, usageLine, createSummary,
   USER_TYPE_LABEL, MATCH_TYPE_LABEL,
 } from "@/lib/promoModel";
 import {
@@ -97,20 +97,27 @@ export default function PromoCodes() {
     setLoading(false);
   }, [getList]);
 
-  // ── ID lookup: detail by id ──
+  // ── ALL-DIGIT lookup: fire BOTH the ID detail AND the code substring search, show both
+  //    (18c item 3). One extra call removes the ambiguity — a code literally named "2026" is a
+  //    code the substring search finds; the same digits as an ID are the detail lookup. If both
+  //    hit, both show (the ID match is tagged). ──
   const loadId = useCallback(async (id: string) => {
     setLoading(true); setErr(null);
     try {
-      const res = await authFetch(`/api/promos/detail/${id}`);
-      if (res.status === 404) { setIdResult({ row: null }); setSearch(null); setLoading(false); return; }
-      const j = await res.json();
-      if (!res.ok) throw new Error(j.error || `HTTP ${res.status}`);
-      const row = j.promo as PromoRow;
-      setIdResult({ row }); setNowIso(j.nowIso);
-      if (promoBucket(row, j.nowIso) === "past") setPastOpen(true);
+      const [detailRes, searchResp] = await Promise.all([
+        authFetch(`/api/promos/detail/${id}`),
+        getList({ code: id, page: 1 }).catch(() => ({ data: [] as PromoRow[], totalItems: 0, nowIso: new Date().toISOString() })),
+      ]);
+      let idRow: PromoRow | null = null;
+      if (detailRes.ok) { const j = await detailRes.json(); idRow = j.promo as PromoRow; }
+      setIdResult({ row: idRow });
+      setSearch({ rows: searchResp.data, total: searchResp.totalItems, page: 1 });
+      setNowIso(searchResp.nowIso);
+      const all = [...(idRow ? [idRow] : []), ...searchResp.data];
+      if (all.some((r) => promoBucket(r, searchResp.nowIso) === "past")) setPastOpen(true);
     } catch (e) { setErr(e instanceof Error ? e.message : String(e)); }
     setLoading(false);
-  }, []);
+  }, [getList]);
 
   useEffect(() => {
     if (mode === "browse") void loadBrowse();
@@ -134,12 +141,17 @@ export default function PromoCodes() {
   // ── compute what each table shows, per mode ──
   const view = useMemo(() => {
     if (mode === "id") {
-      const row = idResult?.row ?? null;
-      const b = row ? promoBucket(row, nowIso) : "live";
+      const idRow = idResult?.row ?? null;
+      const searchRows = search?.rows ?? [];
+      const idAlsoInSearch = idRow != null && searchRows.some((r) => r.id === idRow.id);
+      // ID match first (tagged), then the code-substring hits, minus the same row if it appears in both
+      const merged = idRow ? [{ ...idRow, _idMatch: true }, ...searchRows.filter((r) => r.id !== idRow.id)] : searchRows;
+      const liveRows = merged.filter((r) => promoBucket(r, nowIso) === "live");
+      const pastRows = merged.filter((r) => promoBucket(r, nowIso) === "past");
       return {
-        liveRows: row && b === "live" ? [row] : [], liveTotal: row && b === "live" ? 1 : 0,
-        pastRows: row && b === "past" ? [row] : [], pastTotal: row && b === "past" ? 1 : 0,
-        searchTotal: row ? 1 : 0, notFound: idResult != null && row == null,
+        liveRows, liveTotal: liveRows.length, pastRows, pastTotal: pastRows.length,
+        searchTotal: (search?.total ?? 0) + (idRow && !idAlsoInSearch ? 1 : 0),
+        notFound: idResult != null && idRow == null && searchRows.length === 0,
       };
     }
     if (mode === "search" && search) {
@@ -176,7 +188,7 @@ export default function PromoCodes() {
             </span>
           </div>
           <p className="hint" data-testid="promo-hint">{
-            mode === "id" ? <>Reading that as an <b>ID</b>.</>
+            mode === "id" ? <>All digits — showing the code with that <b>ID</b> and any code <b>containing</b> those digits.</>
             : mode === "search" ? <>Reading that as a <b>code</b> — substring, case-insensitive. Searches both tables, including deleted codes.</>
             : <>Type a code or an ID — all digits is read as an ID, anything else as a code.</>
           }</p>
@@ -221,7 +233,7 @@ export default function PromoCodes() {
           <p className="foot" data-testid="promo-foot">{mode === "browse"
             ? `Server order (no sort available). Deleted codes with a future end date appear in LIVE, struck through. CAP is here; redemptions are on a code's detail.`
             : mode === "id"
-              ? (view.notFound ? `No code with ID ${deferredQ.trim()}.` : `1 code with ID ${deferredQ.trim()}.`)
+              ? (view.notFound ? `No code with ID ${deferredQ.trim()}, and none containing those digits.` : `Matched by ID and/or by code substring for “${deferredQ.trim()}”. A code named entirely with digits is findable this way.`)
               : `${view.searchTotal.toLocaleString()} code${view.searchTotal === 1 ? "" : "s"} match “${deferredQ.trim()}”. Deleted codes are never hidden from search.`}</p>
         </>}
       </div>
@@ -246,11 +258,11 @@ function PromoTable({ rows, nowIso, onOpen, empty, more }: { rows: PromoRow[]; n
 
 function PromoRowEl({ p, nowIso, onOpen }: { p: PromoRow; nowIso: string; onOpen: (id: number) => void }) {
   const st: PromoState = promoState(p, nowIso);
-  const isJustCreated = (p as PromoRow & { _new?: boolean })._new;
+  const tagged = p as PromoRow & { _new?: boolean; _idMatch?: boolean };
   return (
     <button type="button" className={"r " + st} data-testid="promo-row" data-id={p.id} data-state={st} data-code={p.code} onClick={() => onOpen(p.id)}>
       <span className="rail" />
-      <span className="cell c-code"><span className="code">{p.code}{isJustCreated && <span className="newtag" data-testid="just-created">JUST CREATED</span>}</span><span className="cid">ID {p.id}</span></span>
+      <span className="cell c-code"><span className="code">{p.code}{tagged._new && <span className="newtag" data-testid="just-created">JUST CREATED</span>}{tagged._idMatch && <span className="newtag idtag" data-testid="id-match">MATCHED BY ID</span>}</span><span className="cid">ID {p.id}</span></span>
       <span className="cell c-win"><span className="win">{fmtChicagoDate(p.startDateUtc)} → {fmtChicagoDate(p.endDateUtc)}<small>{fmtChicagoTime(p.startDateUtc)} – {fmtChicagoTime(p.endDateUtc)} · {PROMO_TZ_LABEL.split(" (")[0]}</small></span></span>
       <span className="cell c-val"><span className="val">{discountLabel(p)}<small>{p.discountType}</small></span></span>
       <span className="cell c-who"><span className="who">{USER_TYPE_LABEL[p.targetUserType]}<small>{MATCH_TYPE_LABEL[p.targetMatchType]}</small></span></span>
@@ -296,7 +308,7 @@ function DetailDrawer({ id, onClose }: { id: number; onClose: () => void }) {
             <div className="usebox" data-testid="detail-usage">
               <div className="usecol"><span className="ul">REDEEMED</span><span className="uv" data-testid="detail-redeemed">{uc.toLocaleString()}</span></div>
               <div className="usecol"><span className="ul">CAP</span><span className="uv">{capLabel(p)}</span></div>
-              <div className="usecol"><span className="ul">LEFT</span><span className="uv" data-testid="detail-left">{leftLabel(p, uc)}</span></div>
+              <div className="usecol"><span className="ul">LEFT</span><span className={"uv left-" + leftTone(p, uc)} data-testid="detail-left">{leftLabel(p, uc)}</span></div>
             </div>
             <p className="useline" data-testid="detail-useline">{usageLine(p, uc)}</p>
             <dl className="facts">
@@ -325,7 +337,7 @@ function CreateDrawer({ onClose, onCreated }: { onClose: () => void; onCreated: 
   const startIso = nextQuarterHourUtcIso(now), endIso = endOfYearUtcIso(chicagoYearOf(now));
   const s0 = toChicagoInputs(startIso), e0 = toChicagoInputs(endIso);
   const [f, setF] = useState<Form>({ code: "", type: "PERCENT", value: "", sD: s0.date, sT: s0.time, eD: e0.date, eT: e0.time, who: "ALL_USERS", which: "ALL_MATCHES", uses: "1" });
-  const [dupe, setDupe] = useState<{ state: "idle" | "checking" | "free" | "taken" | "error"; existing?: { id: number; code: string; state: string } }>({ state: "idle" });
+  const [dupe, setDupe] = useState<{ state: "idle" | "checking" | "free" | "taken" | "inconclusive" | "error"; existing?: { id: number; code: string; state: string } }>({ state: "idle" });
   const [submitting, setSubmitting] = useState(false);
   const [submitErr, setSubmitErr] = useState<string | null>(null);
 
@@ -350,7 +362,8 @@ function CreateDrawer({ onClose, onCreated }: { onClose: () => void; onCreated: 
         const j = await res.json();
         if (codeRef.current.trim() !== code) return; // a newer keystroke won
         if (!res.ok) { setDupe({ state: "error" }); return; }
-        setDupe(j.taken ? { state: "taken", existing: j.existing } : { state: "free" });
+        // three-way: taken / free / inconclusive (too many similar to see the whole set)
+        setDupe(j.result === "taken" ? { state: "taken", existing: j.existing } : j.result === "inconclusive" ? { state: "inconclusive" } : { state: "free" });
       } catch { if (codeRef.current.trim() === code) setDupe({ state: "error" }); }
     }, 300);
     return () => clearTimeout(t);
@@ -405,6 +418,7 @@ function CreateDrawer({ onClose, onCreated }: { onClose: () => void; onCreated: 
               {dupe.state === "taken" ? <span className="dupe" data-testid="f-dupe"><b>{dupe.existing?.code}</b> already exists — ID {dupe.existing?.id}, {dupe.existing?.state}. Pick another.</span>
                : dupe.state === "checking" ? <span className="help" data-testid="f-checking">Checking availability…</span>
                : dupe.state === "free" ? <span className="help ok" data-testid="f-free">Available. Stored exactly as typed (case is kept).</span>
+               : dupe.state === "inconclusive" ? <span className="help" data-testid="f-inconclusive">Too many similar codes to check here — the server will reject a duplicate on save.</span>
                : dupe.state === "error" ? <span className="err" data-testid="f-checkerr">Couldn’t check uniqueness — the server enforces it on save.</span>
                : <span className="help">Checked against all codes as you type; the check ignores case, the stored value does not.</span>}
             </label>
@@ -509,6 +523,7 @@ const CSS = `
 .promo .code{display:block;font-weight:700;font-family:ui-monospace,SFMono-Regular,Menlo,monospace;font-size:13.5px}
 .promo .r.deleted .code{text-decoration:line-through;text-decoration-color:rgba(179,36,31,.5)}
 .promo .newtag{margin-left:7px;background:#e6f4ec;color:#146c43;border:1px solid #9fd3b6;font-size:9px;font-weight:800;letter-spacing:.05em;padding:1px 5px;border-radius:4px;vertical-align:1px;font-family:-apple-system,sans-serif}
+.promo .newtag.idtag{background:#e8f0fa;color:#1d4f8f;border-color:#a8c4e6}
 .promo .cid{display:block;font-size:11.5px;color:#5c7168;font-variant-numeric:tabular-nums}
 .promo .win{display:block;font-size:12.5px;color:#3d5349;font-variant-numeric:tabular-nums}.promo .win small{display:block;font-size:11px;color:#5c7168}
 .promo .val{display:block;font-weight:700;font-variant-numeric:tabular-nums}.promo .val small{display:block;font-size:11px;font-weight:600;color:#5c7168;letter-spacing:.04em}
@@ -538,6 +553,7 @@ const CSS = `
 .promo .usecol{background:#f6faf8;border:1px solid #dde6e1;border-radius:10px;padding:10px 12px}
 .promo .ul{display:block;font-size:9.5px;font-weight:800;letter-spacing:.11em;color:#5c7168;margin-bottom:4px}
 .promo .uv{display:block;font-size:19px;font-weight:800;font-variant-numeric:tabular-nums;color:#0e1a13}
+.promo .uv.left-over{color:#8a5600}.promo .uv.left-spent{color:#b42318}
 .promo .useline{margin:0 0 16px;font-size:12.5px;color:#3d5349;font-variant-numeric:tabular-nums}
 .promo .facts{margin:0;display:grid;gap:11px}.promo .facts div{display:grid;grid-template-columns:96px 1fr;gap:10px}
 .promo .facts dt{font-size:10px;font-weight:800;letter-spacing:.1em;color:#5c7168;padding-top:2px}

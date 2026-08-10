@@ -72,15 +72,18 @@ export async function POST(req: Request) {
   const body = { code, startDateUtc, endDateUtc, discountType, discountValue, numberOfUsesPerUser: uses, targetUserType: who, targetMatchType: which };
 
   const client = getMatchdayApiClient();
-  // read-back by exact code (substring search filtered to equality; includes soft-deleted)
+  // read-back by exact code (substring search filtered to equality; includes soft-deleted). A
+  // high limit so the exact code is in the fetched set for realistic full codes; if the substring
+  // set is larger, an exact hit is still definitive, and a miss falls through to the server check.
   const readResource = async (): Promise<Record<string, unknown>> => {
-    const r = await client.get<{ data?: PromoRow[] }>("/api/v1/admin/promocodes", { code, limit: 100, page: 1 }).catch(() => ({ data: [] as PromoRow[] }));
+    const r = await client.get<{ data?: PromoRow[] }>("/api/v1/admin/promocodes", { code, limit: 300, page: 1 }).catch(() => ({ data: [] as PromoRow[] }));
     const hit = (r.data ?? []).find((x) => x.code.toLowerCase() === code.toLowerCase());
     return { exists: !!hit, id: hit?.id ?? null };
   };
 
   try {
-    // pre-check: refuse a duplicate BEFORE writing (the server also enforces it on save).
+    // pre-check: refuse a CONFIRMED duplicate before writing. A non-confirmation (the exact code
+    // wasn't in the fetched set) is NOT treated as free — we proceed and let the server reject.
     const before = await readResource();
     if (before.exists) return Response.json({ error: `${code} already exists (ID ${before.id}). Pick another.`, duplicate: true }, { status: 409 });
 

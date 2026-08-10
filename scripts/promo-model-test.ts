@@ -4,7 +4,7 @@
 // offsets (proof the code is DST-aware, not a fixed −06:00).
 //   NODE_OPTIONS="--conditions=react-server" npx tsx scripts/promo-model-test.ts
 import {
-  promoState, promoBucket, discountLabel, capLabel, leftLabel, usageLine, UNCAPPED,
+  promoState, promoBucket, discountLabel, capLabel, leftLabel, leftTone, usageLine, UNCAPPED,
   type PromoRow,
 } from "../src/lib/promoModel";
 import {
@@ -43,17 +43,35 @@ eq("cap: 10000 sentinel prints 'no cap', never the number", capLabel(row({ numbe
 
 console.log("LEFT (the three branches; never negative):");
 eq("TOTAL_USAGE: cap − redeemed", leftLabel(row({ targetMatchType: "TOTAL_USAGE", numberOfUsesPerUser: 5 }), 2), "3");
-eq("TOTAL_USAGE over cap: clamps to 0, NOT negative", leftLabel(row({ targetMatchType: "TOTAL_USAGE", numberOfUsesPerUser: 1 }), 1288), "0");
+// 18c item 4 — over-redemption is SURFACED as "over by N", not clamped to 0 (it's a real finding).
+eq("TOTAL_USAGE over cap: 'over by N', not clamped to 0", leftLabel(row({ targetMatchType: "TOTAL_USAGE", numberOfUsesPerUser: 1 }), 1288), "over by 1,287");
 eq("non-TOTAL cap: 'per user'", leftLabel(row({ targetMatchType: "ALL_MATCHES", numberOfUsesPerUser: 1 }), 1288), "per user");
 eq("no-cap sentinel: '—'", leftLabel(row({ targetMatchType: "TOTAL_USAGE", numberOfUsesPerUser: UNCAPPED }), 500), "—");
-// no LEFT branch may ever contain a "-"
+eq("leftTone over-redeemed = 'over'", leftTone(row({ targetMatchType: "TOTAL_USAGE", numberOfUsesPerUser: 3 }), 7), "over");
+eq("leftTone exactly spent = 'spent'", leftTone(row({ targetMatchType: "TOTAL_USAGE", numberOfUsesPerUser: 5 }), 5), "spent");
+eq("leftTone with room = 'normal'", leftTone(row({ targetMatchType: "TOTAL_USAGE", numberOfUsesPerUser: 5 }), 2), "normal");
+// no LEFT branch may ever contain a "-" (a minus sign); "over by N" satisfies this
 { const samples = [leftLabel(row({ targetMatchType: "TOTAL_USAGE", numberOfUsesPerUser: 1 }), 1288), leftLabel(row({ targetMatchType: "ALL_MATCHES", numberOfUsesPerUser: 1 }), 1288), leftLabel(row({ numberOfUsesPerUser: UNCAPPED }), 9)];
   ok("no LEFT value contains a minus sign", samples.every((s) => !s.includes("-")), JSON.stringify(samples)); }
 
 console.log("USAGE LINE (one-liner, all three shapes):");
 eq("TOTAL_USAGE line", usageLine(row({ targetMatchType: "TOTAL_USAGE", numberOfUsesPerUser: 5 }), 4), "4 redeemed · 1 left of 5");
+eq("TOTAL_USAGE over-cap line surfaces the overage", usageLine(row({ targetMatchType: "TOTAL_USAGE", numberOfUsesPerUser: 3 }), 7), "7 redeemed · 4 OVER the total cap of 3");
 eq("per-user line", usageLine(row({ targetMatchType: "ALL_MATCHES", numberOfUsesPerUser: 1 }), 1288), "1,288 redeemed · cap 1 per user");
 eq("no-cap line", usageLine(row({ numberOfUsesPerUser: UNCAPPED }), 235), "235 redeemed · no cap");
+
+console.log("DUPLICATE VERDICT (18c item 1 — never call a taken code free):");
+// "MA" (id 2547) is a REAL two-char code. ?code=MA has totalItems=94, but the API's DEFAULT page
+// is 20 rows and the literal "MA" is NOT among them (it sorts elsewhere in the substring set). A
+// page-scan-only check finds no exact match in those 20 and would report FREE — for a code that
+// is taken. This is THE failure the three-way verdict prevents. Named "MA" on purpose: a generic
+// "duplicate detected" test passes today and would have passed while this bug was live.
+import { dupeVerdict } from "../src/lib/promoModel";
+eq("'MA': exact absent from the fetched page BUT more matches exist → inconclusive (never free)",
+   dupeVerdict([{ code: "matchday801" }, { code: "matchday1694" }], 94, "MA"), "inconclusive");
+eq("'MA': exact IS in the fetched set → taken", dupeVerdict([{ code: "MA" }, { code: "matchday801" }], 94, "MA"), "taken");
+eq("'MA' case-insensitive: 'ma' among rows → taken", dupeVerdict([{ code: "ma" }], 94, "MA"), "taken");
+eq("complete set fetched, no exact → free", dupeVerdict([{ code: "summerfun" }], 1, "summer"), "free");
 
 console.log("TIMEZONE — TRUE UTC ⇄ America/Chicago, DST-aware:");
 // The two worked defaults from the prompt, verbatim:

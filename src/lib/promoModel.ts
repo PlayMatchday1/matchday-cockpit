@@ -58,23 +58,57 @@ export function capLabel(p: Pick<PromoRow, "numberOfUsesPerUser">): string {
 }
 
 // LEFT (detail only — needs usageCount). Driven by targetMatchType, not inferred:
-//   >= 10000                -> "—"        (no cap; there is no remaining to show)
-//   targetMatchType TOTAL   -> a TOTAL cap: cap − redeemed, clamped at 0 so it is NEVER negative
-//   anything else           -> "per user" (a per-user cap has no single global remaining)
-// A negative number anywhere is a failure — this function never produces one.
+//   >= 10000                -> "—"          (no cap; there is no remaining to show)
+//   TOTAL_USAGE, usage<=cap -> cap − redeemed (a real remaining)
+//   TOTAL_USAGE, usage>cap  -> "over by N"   (18c item 4: the cap IS a total, so redemptions
+//                             beyond it means the server over-redeemed — a finding, not a 0 to
+//                             hide. "over by N" is not a negative number, so the rule holds.)
+//   anything else           -> "per user"   (a per-user cap has no single global remaining)
 export function leftLabel(p: Pick<PromoRow, "numberOfUsesPerUser" | "targetMatchType">, usageCount: number): string {
   if (p.numberOfUsesPerUser >= UNCAPPED) return "—";
-  if (p.targetMatchType === "TOTAL_USAGE") return Math.max(0, p.numberOfUsesPerUser - usageCount).toLocaleString();
+  if (p.targetMatchType === "TOTAL_USAGE") {
+    const left = p.numberOfUsesPerUser - usageCount;
+    return left < 0 ? `over by ${(-left).toLocaleString()}` : left.toLocaleString();
+  }
   return "per user";
 }
 
+// Colour hint for LEFT: "over" (warning — over-redeemed), "spent" (exactly 0 left), else "normal".
+export function leftTone(p: Pick<PromoRow, "numberOfUsesPerUser" | "targetMatchType">, usageCount: number): "normal" | "spent" | "over" {
+  if (p.numberOfUsesPerUser >= UNCAPPED) return "normal";
+  if (p.targetMatchType === "TOTAL_USAGE") {
+    const left = p.numberOfUsesPerUser - usageCount;
+    return left < 0 ? "over" : left === 0 ? "spent" : "normal";
+  }
+  return "normal";
+}
+
 // One-line usage summary for the detail view / mobile card (Phase 18a §9a). Reads honestly in
-// all three cap shapes without ever printing a negative or a bare 10000.
+// all cap shapes, surfacing over-redemption rather than rounding it away.
 export function usageLine(p: Pick<PromoRow, "numberOfUsesPerUser" | "targetMatchType">, usageCount: number): string {
   const redeemed = usageCount.toLocaleString();
   if (p.numberOfUsesPerUser >= UNCAPPED) return `${redeemed} redeemed · no cap`;
-  if (p.targetMatchType === "TOTAL_USAGE") return `${redeemed} redeemed · ${Math.max(0, p.numberOfUsesPerUser - usageCount).toLocaleString()} left of ${p.numberOfUsesPerUser.toLocaleString()}`;
+  if (p.targetMatchType === "TOTAL_USAGE") {
+    const left = p.numberOfUsesPerUser - usageCount;
+    return left < 0
+      ? `${redeemed} redeemed · ${(-left).toLocaleString()} OVER the total cap of ${p.numberOfUsesPerUser.toLocaleString()}`
+      : `${redeemed} redeemed · ${left.toLocaleString()} left of ${p.numberOfUsesPerUser.toLocaleString()}`;
+  }
   return `${redeemed} redeemed · cap ${p.numberOfUsesPerUser.toLocaleString()} per user`;
+}
+
+// The duplicate-check verdict (18c item 1). ?code= is a SUBSTRING filter that PAGES, so an exact
+// code can sit beyond the fetched rows. Never say "free" unless the COMPLETE result set was seen.
+//   taken        an exact (case-insensitive) match is among the fetched rows.
+//   inconclusive no exact match fetched, but totalItems > rows — the real one MAY be unseen.
+//   free         no exact match AND the whole set was fetched (totalItems <= rows).
+// The classic failure this prevents: ?code=MA has 94 matches but the default page is 20 and the
+// literal code "MA" is not in it — scanning that page alone would call a TAKEN name FREE.
+export function dupeVerdict(rows: { code: string }[], totalItems: number, code: string): "taken" | "free" | "inconclusive" {
+  const lc = code.trim().toLowerCase();
+  if (rows.some((r) => r.code.toLowerCase() === lc)) return "taken";
+  if (totalItems > rows.length) return "inconclusive";
+  return "free";
 }
 
 // ── display maps for audience / which-matches ──

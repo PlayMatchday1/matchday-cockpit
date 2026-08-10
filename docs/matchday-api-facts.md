@@ -833,6 +833,16 @@ reason: `strike.strikeLogs[].userMatchId` → the user-match `id` in the player'
 → read its `userStatus` (reason) and, for cancellations, `canceledAt` vs `match.startDateUtc`
 (timing). `strikeLog` itself carries no reason (see the strike model above).
 
+## DEPLOY ORDER — code ships before migrations apply (Phase 18c)
+
+`src/lib/adminAuth.ts` reads `app_users` with **`select("*")` deliberately. Never name permission
+columns explicitly there** — code deploys (git push → Vercel) BEFORE the migration is run by hand
+in the Supabase SQL editor, and a named column that does not exist yet makes the whole select
+error, which `authenticateAdmin` maps to a 403 — 500ing EVERY admin route until the SQL lands.
+`select("*")` returns whatever columns exist; a not-yet-migrated grant column then reads as
+`undefined` → the derived permission is simply `false` until the migration applies. (Caught when
+adding `can_manage_promos` to the explicit select broke `verify-admin-preview`, Phase 18b.)
+
 ## Promo codes — the endpoint, proven by read-only production GETs (Phase 18a)
 
 Live-probed on production 2026-08-10 (read-only, `scripts/promo-step0-probe.ts`). The
@@ -885,7 +895,13 @@ unsortable, it is not durably stable. `sortColumn`/`sortDirection`/`orderBy` all
 FOR VITALII (in this order — #1 is the bug, the missing sort param is only a symptom):
   1. A deterministic ORDER BY on the promo list (id or createdAt), so paging is sound at all.
   2. `sortColumn` / `sortDirection` params.
-Do NOT build around either; do NOT attempt a client-side workaround. Phase 18b cut the sort
+  3. OVER-REDEEMED TOTAL_USAGE codes (Phase 18c audit): 193 codes have `targetMatchType =
+     TOTAL_USAGE` (a TOTAL cap), and **13 of them have `usageCount` > `numberOfUsesPerUser`** —
+     the server allowed redemptions past a total cap. e.g. `ATX485FP` (id 2543) 7/3, `SATX194FP`
+     (id 15719) 5/3, `HOU363FP` (id 18987) 4/3. All are small `…FP` field-promo caps of 3–4. The
+     detail drawer now shows LEFT = "over by N" for these rather than clamping to 0. Confirm
+     whether TOTAL_USAGE is meant to hard-stop at the cap.
+Do NOT build around #1/#2; do NOT attempt a client-side workaround. Phase 18b cut the sort
 control for this reason (search-first UI instead).
 - **Enums (from Retool create DTO):** `discountType` = `USD|PERCENT` (USD value in CENTS,
   ×100); `targetUserType` = `ALL_USERS|NEW_USERS|CHURN_USERS|SPECIFIC_USERS`; `targetMatchType`

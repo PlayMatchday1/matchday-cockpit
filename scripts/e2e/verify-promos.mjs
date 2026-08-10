@@ -50,6 +50,8 @@ function fixtures(now) {
     mk({ id: 103, code: "DELFUTURE", startDateUtc: iso(-5 * DAY), endDateUtc: iso(15 * DAY), deletedAt: iso(-2 * DAY) }),                                       // DELETED but end in future -> stays LIVE
     mk({ id: 301, code: "TOTALCAP", startDateUtc: iso(-3 * DAY), endDateUtc: iso(10 * DAY), targetMatchType: "TOTAL_USAGE", numberOfUsesPerUser: 20 }),        // total cap (LEFT = 13)
     mk({ id: 302, code: "NOCAP", startDateUtc: iso(-3 * DAY), endDateUtc: iso(10 * DAY), numberOfUsesPerUser: 10000 }),                                        // no-cap sentinel
+    mk({ id: 303, code: "OVERCAP", startDateUtc: iso(-3 * DAY), endDateUtc: iso(10 * DAY), targetMatchType: "TOTAL_USAGE", numberOfUsesPerUser: 3 }),          // over-redeemed (usage 7 > cap 3)
+    mk({ id: 401, code: "PROMO301", startDateUtc: iso(-3 * DAY), endDateUtc: iso(12 * DAY) }),                                                                 // code CONTAINING digits "301" (dual-fire)
   ];
   const past = [
     mk({ id: 201, code: "EXPIRED1", startDateUtc: iso(-60 * DAY), endDateUtc: iso(-10 * DAY) }),           // expired
@@ -57,7 +59,7 @@ function fixtures(now) {
   ];
   return { live, past };
 }
-const usageFor = { 101: 4, 301: 7, 302: 235, 102: 0, 103: 1, 201: 9, 202: 3 };
+const usageFor = { 101: 4, 301: 7, 302: 235, 303: 7, 401: 0, 102: 0, 103: 1, 201: 9, 202: 3 };
 
 function serveList(url, now) {
   const u = new URL(url); const sp = u.searchParams;
@@ -94,8 +96,10 @@ async function main() {
     await ctx.route("**/api/promos/check**", (route) => {
       const code = (new URL(route.request().url()).searchParams.get("code") || "").toLowerCase();
       const { live, past } = fixtures(now);
+      // "manymatch" simulates a short substring with more matches than one page — inconclusive
+      if (code === "manymatch") return route.fulfill({ status: 200, contentType: "application/json", body: JSON.stringify({ result: "inconclusive", similar: 500 }) });
       const hit = [...live, ...past].find((r) => r.code.toLowerCase() === code);
-      route.fulfill({ status: 200, contentType: "application/json", body: JSON.stringify({ taken: !!hit, existing: hit ? { id: hit.id, code: hit.code, state: "active" } : null }) });
+      route.fulfill({ status: 200, contentType: "application/json", body: JSON.stringify(hit ? { result: "taken", existing: { id: hit.id, code: hit.code, state: "active" } } : { result: "free", existing: null }) });
     });
     await ctx.route("**/api/promos/detail/**", (route) => {
       const id = Number(route.request().url().split("/").pop().split("?")[0]);
@@ -149,6 +153,10 @@ async function main() {
   await openDetail(302); // no cap
   eq("detail 302 (no cap): LEFT '—', REDEEMED 235", { l: await page.$eval('[data-testid="detail-left"]', (e) => e.textContent.trim()), r: await page.$eval('[data-testid="detail-redeemed"]', (e) => e.textContent.trim()) }, { l: "—", r: "235" });
   await page.keyboard.press("Escape"); await page.waitForTimeout(120);
+  await openDetail(303); // TOTAL_USAGE cap 3, redeemed 7 -> over-redeemed (18c item 4)
+  eq("detail 303 (over-redeemed TOTAL_USAGE): LEFT 'over by 4' in the warning tone, NOT '0'", { left: await page.$eval('[data-testid="detail-left"]', (e) => e.textContent.trim()), over: await page.$eval('[data-testid="detail-left"]', (e) => e.className.includes("left-over")) }, { left: "over by 4", over: true });
+  eq("detail 303 usage line surfaces the overage", /7 redeemed · 4 OVER the total cap of 3/.test(await page.$eval('[data-testid="detail-useline"]', (e) => e.textContent)), true);
+  await page.keyboard.press("Escape"); await page.waitForTimeout(120);
 
   // ── search that hits ONLY past: PAST auto-expands (distinct), LIVE one-line empty, then re-collapse ──
   await page.fill('[data-testid="promo-search"]', "EXPIRED"); await page.waitForTimeout(500);
@@ -162,9 +170,12 @@ async function main() {
   eq("substring 'DEL' splits across LIVE (DELFUTURE) + PAST (DELETEDPAST)", { live: await page.$('[data-testid="grp-live"] [data-testid="promo-row"][data-id="103"]') !== null, past: await page.$('[data-testid="past-body"] [data-testid="promo-row"][data-id="202"]') !== null }, { live: true, past: true });
   await page.fill('[data-testid="promo-search"]', ""); await page.waitForTimeout(400);
 
-  // ── ID search (all digits) -> detail-by-id single row ──
-  await page.fill('[data-testid="promo-search"]', "201"); await page.waitForTimeout(500);
-  eq("ID search 201 -> the one code, in PAST", { rows: (await page.$$('[data-testid="promo-row"]')).length, isIt: await page.$('[data-testid="promo-row"][data-id="201"]') !== null }, { rows: 1, isIt: true });
+  // ── ALL-DIGIT search DUAL-FIRES: ID detail AND code substring (18c item 3) ──
+  await page.fill('[data-testid="promo-search"]', "301"); await page.waitForTimeout(600);
+  eq("all-digit '301' shows BOTH the ID match (301 TOTALCAP, tagged) AND the code match (PROMO301)", {
+    idMatchTagged: await page.$('[data-testid="promo-row"][data-id="301"] [data-testid="id-match"]') !== null,
+    codeMatch: await page.$('[data-testid="promo-row"][data-id="401"]') !== null,
+  }, { idMatchTagged: true, codeMatch: true });
   await page.fill('[data-testid="promo-search"]', ""); await page.waitForTimeout(400);
   await page.waitForSelector('[data-testid="promo-row"][data-id="101"]');
 
@@ -180,11 +191,15 @@ async function main() {
     sd: /\d{4}-\d{2}-\d{2}/.test(await page.$eval('[data-testid="f-sd"]', (e) => e.value)), ed: /\d{4}-\d{2}-\d{2}/.test(await page.$eval('[data-testid="f-ed"]', (e) => e.value)),
   }, { pct: "true", uses: "1", sd: true, ed: true });
   eq("create disabled until code + value", await page.$eval('[data-testid="f-create"]', (e) => e.disabled), true);
+  await page.fill('[data-testid="f-value"]', "40"); await page.waitForTimeout(150);
   await page.fill('[data-testid="f-code"]', "ACTIVE1"); await page.waitForTimeout(600); // taken
   eq("dupe check: taken code flagged, create disabled", { taken: !!(await page.$('[data-testid="f-dupe"]')), disabled: await page.$eval('[data-testid="f-create"]', (e) => e.disabled) }, { taken: true, disabled: true });
+  // 18c item 1 — inconclusive (too many similar to see the whole set): shown, but create NOT
+  // blocked; the server becomes the real check. Never a false "free".
+  await page.fill('[data-testid="f-code"]', "MANYMATCH"); await page.waitForTimeout(600);
+  eq("dupe check: inconclusive shown, create NOT blocked (server checks on save)", { inconclusive: !!(await page.$('[data-testid="f-inconclusive"]')), disabled: await page.$eval('[data-testid="f-create"]', (e) => e.disabled) }, { inconclusive: true, disabled: false });
   await page.fill('[data-testid="f-code"]', "NEWSUMMER"); await page.waitForTimeout(600); // free
   eq("dupe check: free code shows available", !!(await page.$('[data-testid="f-free"]')), true);
-  await page.fill('[data-testid="f-value"]', "40"); await page.waitForTimeout(200);
   eq("summary is plain-English and names the Chicago zone", { has: /gives 40% off/.test(await page.$eval('[data-testid="f-summary"]', (e) => e.textContent)), tz: /America\/Chicago/.test(await page.$eval('[data-testid="f-summary"]', (e) => e.textContent)) }, { has: true, tz: true });
   eq("create now enabled", await page.$eval('[data-testid="f-create"]', (e) => e.disabled), false);
   await page.click('[data-testid="f-create"]'); await page.waitForTimeout(400);
