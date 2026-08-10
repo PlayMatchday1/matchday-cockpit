@@ -20,6 +20,7 @@ import { DRAWER_ENV } from "@/lib/matchEnv";
 import { centsToDollars } from "@/lib/matchMoney";
 import MatchDrawer, { DRAWER_W } from "@/components/MatchDrawer";
 import LogHealthBanner from "@/components/LogHealthBanner";
+import MatchOpsSectionSheet from "@/app/(internal)/match-ops/MatchOpsSectionSheet";
 import {
   type ApiMatch, type BoardFilter, type RiskTier, type MatchGroup, GROUPS, byKickoff, matchGroup, minsUntil, fmtDur, localClock, tzAbbr,
   realCount, fakeCount, capacity, openSpots, teamCount, short, shortBy, fill, flags, attention,
@@ -31,6 +32,8 @@ const ENV = DRAWER_ENV; // the board reads and edits the same environment as the
 const localYMD = (d: Date) => `${d.getFullYear()}-${String(d.getMonth() + 1).padStart(2, "0")}-${String(d.getDate()).padStart(2, "0")}`;
 const addDays = (ymd: string, n: number) => { const [y, m, d] = ymd.split("-").map(Number); const dt = new Date(y, m - 1, d + n); return localYMD(dt); };
 const dayLabel = (ymd: string) => { const [y, m, d] = ymd.split("-").map(Number); return new Date(y, m - 1, d).toLocaleDateString(undefined, { weekday: "long", day: "numeric", month: "long", year: "numeric" }); };
+// Phone day label: "Sun, Aug 9" — the long weekday+month+year won't fit a 44px band.
+const shortDay = (ymd: string) => { const [y, m, d] = ymd.split("-").map(Number); return new Date(y, m - 1, d).toLocaleDateString(undefined, { weekday: "short", month: "short", day: "numeric" }); };
 const clockNow = (nowMs: number) => new Date(nowMs).toLocaleTimeString(undefined, { hour: "numeric", minute: "2-digit" });
 
 async function authFetch(path: string): Promise<Response> {
@@ -57,6 +60,9 @@ export default function GamedayBoard() {
   // field reload keeps the choice. Snapshot is the default — the whole day on one screen.
   const [view, setView] = useState<"snapshot" | "detail">("snapshot");
   const [sort, setSort] = useState<"time" | "risk">("time");
+  // Phone-only: the "Gameday Ops ▾" title opens the screen picker (replaces the tab strip).
+  const [pickerOpen, setPickerOpen] = useState(false);
+  const mheadRef = useRef<HTMLDivElement>(null);
   useEffect(() => {
     try { const v = localStorage.getItem("gameday-view"); if (v === "detail" || v === "snapshot") setView(v); } catch { /* no storage */ }
   }, []);
@@ -84,6 +90,14 @@ export default function GamedayBoard() {
   }, []);
   useEffect(() => { void load(date); }, [date, load]);
   useEffect(() => { const t = setInterval(() => setNow(Date.now()), 30000); return () => clearInterval(t); }, []);
+  // Phone: glue the sticky group subheads directly under the sticky header. The header
+  // is 3 fixed 44px bands + the 3px prod strip (~135px), but measure it so a wrapped
+  // chip row can't shove a group header under the wrong offset. Harmless on desktop
+  // (mhead is display:none → 0, and desktop group heads aren't sticky).
+  useEffect(() => {
+    const set = () => { const h = mheadRef.current?.getBoundingClientRect().height ?? 0; document.documentElement.style.setProperty("--gd-hdrh", `${Math.round(h) + 3}px`); };
+    set(); window.addEventListener("resize", set); return () => window.removeEventListener("resize", set);
+  }, []); // the mhead is 3 fixed bands — height is constant; only mount + viewport resize matter
 
   const guardLeave = () => { if (drawerDirty) { say("Save or revert first.", true); return false; } return true; };
   const goDay = (d: string) => { if (!guardLeave()) return; if (drawerId != null) setDrawerId(null); setDate(d); };
@@ -138,6 +152,43 @@ export default function GamedayBoard() {
     <div className="gdo" data-testid="gameday" data-env={ENV} style={{ ["--drawer-w" as string]: `${DRAWER_W}px` }}>
       <style>{CSS}</style>
       <div className={"gmain" + (drawerId != null ? " drawering" : "")}>
+        {/* ── PHONE header (≤759px). Desktop shows the .head card below; this is
+            display:none there. Three 44px bands under a 3px prod strip, ~135px total,
+            replacing 600px of chrome. The horizontal tab strip is gone (the layout
+            suppresses it on this route); the title itself is the screen picker. ── */}
+        <span className={"prodstrip " + (badge.tone === "prod" ? "live" : "stg")} data-testid="prodstrip" aria-hidden />
+        <div className="mhead" data-testid="mhead" ref={mheadRef}>
+          <div className="mband">
+            <button className="mpick" data-testid="screen-picker" aria-haspopup="dialog" aria-expanded={pickerOpen} onClick={() => setPickerOpen(true)}>
+              {badge.tone === "prod" && <span className="livedot" aria-hidden />}
+              <span className="mpickname">Gameday Ops</span><span className="caret" aria-hidden>▾</span>
+            </button>
+            <span className="seg mseg" role="group" aria-label="View">
+              <button className={view === "snapshot" ? "on" : ""} data-testid="m-view-snapshot" aria-pressed={view === "snapshot"} onClick={() => chooseView("snapshot")}>Snapshot</button>
+              <button className={view === "detail" ? "on" : ""} data-testid="m-view-detail" aria-pressed={view === "detail"} onClick={() => chooseView("detail")}>Detail</button>
+            </span>
+          </div>
+          <div className="mband">
+            <span className="mdaynav">
+              <button className="marw" data-testid="m-day-prev" aria-label="Previous day" onClick={() => goDay(addDays(date, -1))}>‹</button>
+              <span className="mdaylab"><b data-testid="m-daylab">{shortDay(date)}</b>{date === today && <i>TODAY</i>}</span>
+              <button className="marw" data-testid="m-day-next" aria-label="Next day" onClick={() => goDay(addDays(date, 1))}>›</button>
+            </span>
+            <span className="seg mseg" role="group" aria-label="Sort">
+              <button className={sort === "time" ? "on" : ""} data-testid="m-sort-time" aria-pressed={sort === "time"} onClick={() => setSort("time")}>Time</button>
+              <button className={sort === "risk" ? "on" : ""} data-testid="m-sort-risk" aria-pressed={sort === "risk"} onClick={() => setSort("risk")}>Risk</button>
+            </span>
+          </div>
+          {/* ONE scroller: filters + cities together, the only horizontal scroll on the page. */}
+          <div className="mchips" data-testid="mchips">
+            <button className={"chip" + (filter === "all" ? " on" : "")} onClick={() => setFilter("all")}>All<span className="b">{counts.all}</span></button>
+            <button className={"chip att" + (filter === "att" ? " on" : "")} onClick={() => setFilter("att")}>Needs attention<span className="b">{counts.att}</span></button>
+            <button className={"chip" + (filter === "upc" ? " on" : "")} onClick={() => setFilter("upc")}>Still to come<span className="b">{counts.upc}</span></button>
+            <span className="msep" aria-hidden />
+            <button className={"chip" + (cities.size === 0 ? " on" : "")} onClick={() => toggleCity("")}>All cities</button>
+            {cityNames.map(([c, n]) => <button key={c} className={"chip" + (cities.has(c) ? " on" : "")} onClick={() => toggleCity(c)}>{c}<span className="b">{n}</span></button>)}
+          </div>
+        </div>
         <LogHealthBanner />
         <div className="panel head">
           <div className="r1">
@@ -219,6 +270,7 @@ export default function GamedayBoard() {
         />
       )}
       {toast && <div className={"toast" + (toast.bad ? " bad" : "")} data-testid="toast">{toast.t}</div>}
+      <MatchOpsSectionSheet open={pickerOpen} onClose={() => setPickerOpen(false)} />
     </div>
   );
 }
@@ -315,8 +367,9 @@ function SnapRow({ m, now, group, selected, onOpen, money }: {
   const moreFake = fk > real;
   const mgr = m.manager ? [m.manager.firstName, m.manager.lastName].filter(Boolean).join(" ").trim() || "—" : "none";
   const price = money(m.registrationPrice);
-  // Cancelled: no countdown text (the CANCELLED badge carries it). Finished: "finished Nh ago".
-  const cd = isCx ? "" : t <= -90 ? `finished ${fmtDur(t)} ago` : t <= 0 ? "in play" : `in ${fmtDur(t)}`;
+  // Cancelled: "was due" (the slot still reads as a time, not the word "cancelled" — the
+  // CANCELLED badge already carries the state). Finished: "finished Nh ago".
+  const cd = isCx ? "was due" : t <= -90 ? `finished ${fmtDur(t)} ago` : t <= 0 ? "in play" : `in ${fmtDur(t)}`;
   const acTxt = ac <= 0 ? "passed" : `in ${fmtDur(ac)}`;
   // Risk rail ONLY for still-to-come; cancelled = red, finished = grey (muted).
   const railCls = isCx ? "cxrow" : isDone ? "donerow" : "risk-" + rk;
@@ -469,7 +522,7 @@ const CSS = `
 .gdo .chip.sm{padding:5px 11px;font-size:12px;min-height:30px}.gdo .chip.sm.on{background:#003326;border-color:#003326;color:#fff}
 .gdo .sheet{background:#fff;border:1px solid #DCE5E0;border-radius:14px;overflow:hidden}
 .gdo .colhead,.gdo .sheet .r{display:grid;align-items:center;gap:12px;grid-template-columns:5px 96px minmax(150px,1.5fr) minmax(150px,1.25fr) 108px 112px 92px 62px}
-.gdo .colhead{padding:9px 14px 9px 0;border-bottom:1px solid #DCE5E0;background:#FAFCFB;font-size:10px;font-weight:800;letter-spacing:.11em;color:#67746C}
+.gdo .colhead{padding:9px 14px 9px 0;border-bottom:1px solid #DCE5E0;background:#FAFCFB;font-size:10px;font-weight:800;letter-spacing:.11em;color:#536258}
 .gdo .colhead .ra{text-align:right}
 .gdo .sheet .r{padding:0 14px 0 0;border:0;border-bottom:1px solid #DCE5E0;background:#fff;width:100%;text-align:left;font:inherit;color:inherit;cursor:pointer;min-height:56px}
 .gdo .sheet .r:last-child{border-bottom:0}.gdo .sheet .r:hover{background:#F7FBF9}
@@ -482,16 +535,16 @@ const CSS = `
 .gdo .sheet .r.cxrow .rail{background:#A83120}.gdo .sheet .r.cxrow{background:#FBE4E0}.gdo .sheet .r.cxrow:hover{background:#F7D6D0}.gdo .sheet .r.cxrow .m1{text-decoration:line-through;text-decoration-color:#C98B83}
 .gdo .sheet .r.donerow .rail{background:#C3CCC7}.gdo .sheet .r.donerow{opacity:.66}
 .gdo .sheet .short.cxbadge{background:#A83120;color:#fff;border:1px solid #A83120;min-width:auto;padding:3px 9px;letter-spacing:.05em}
-.gdo .sheet .short.none{background:transparent;border:0;color:#98A29C;min-width:auto}
-.gdo .sheet .c1.dash{color:#98A29C;font-weight:600}
+.gdo .sheet .short.none{background:transparent;border:0;color:#536258;min-width:auto}
+.gdo .sheet .c1.dash{color:#536258;font-weight:600}
 .gdo .grouphd{margin:0 0 9px 3px;font-size:12px;letter-spacing:.11em;color:#55635B;font-weight:700;display:flex;align-items:center;gap:8px}
 .gdo .grouphd .n{color:#4E5A54;letter-spacing:0;font-weight:600;font-size:12.5px}
 .gdo .sheet .grp{margin-top:18px}.gdo .sheet .grp:first-of-type{margin-top:8px}
 .gdo .sheet .cell{display:block;padding:9px 0;min-width:0}
-.gdo .sheet .t1{display:block;font-weight:700;font-variant-numeric:tabular-nums}.gdo .sheet .t1 em{font-style:normal;font-size:10px;font-weight:800;color:#67746C;letter-spacing:.06em;margin-left:4px}
-.gdo .sheet .t2{display:block;font-size:12px;color:#67746C;font-variant-numeric:tabular-nums}
+.gdo .sheet .t1{display:block;font-weight:700;font-variant-numeric:tabular-nums}.gdo .sheet .t1 em{font-style:normal;font-size:10px;font-weight:800;color:#536258;letter-spacing:.06em;margin-left:4px}
+.gdo .sheet .t2{display:block;font-size:12px;color:#536258;font-variant-numeric:tabular-nums}
 .gdo .sheet .m1{display:block;font-weight:700;white-space:nowrap;overflow:hidden;text-overflow:ellipsis}
-.gdo .sheet .m2{display:block;font-size:12px;color:#67746C;white-space:nowrap;overflow:hidden;text-overflow:ellipsis}
+.gdo .sheet .m2{display:block;font-size:12px;color:#536258;white-space:nowrap;overflow:hidden;text-overflow:ellipsis}
 .gdo .sheet .flag{display:inline-block;margin-left:6px;vertical-align:1px;background:#FBF0DC;color:#7A5200;border:1px solid #E3C88A;font-size:9.5px;font-weight:800;letter-spacing:.05em;padding:1px 5px;border-radius:4px;white-space:nowrap}
 .gdo .sheet .bar{display:block;position:relative;height:7px;border-radius:4px;background:#EEF3F0;overflow:hidden}
 .gdo .sheet .seg1,.gdo .sheet .seg2{position:absolute;top:0;bottom:0;display:block}
@@ -505,36 +558,67 @@ const CSS = `
 .gdo .sheet .short.bad{background:#FDEEEB;color:#A83120;border:1px solid #F0A9A4}
 .gdo .sheet .short.warn{background:#FBF0DC;color:#7A5200;border:1px solid #E3C88A}
 .gdo .sheet .short.ok{background:#E6F4EC;color:#046B45;border:1px solid #9FD3B6}
-.gdo .sheet .minln{display:block;font-size:11.5px;color:#67746C;font-variant-numeric:tabular-nums;white-space:nowrap}
+.gdo .sheet .minln{display:block;font-size:11.5px;color:#536258;font-variant-numeric:tabular-nums;white-space:nowrap}
 .gdo .sheet .c1{display:block;font-weight:700;font-variant-numeric:tabular-nums}.gdo .sheet .c1.hot{color:#A83120}
-.gdo .sheet .c2{display:block;font-size:11.5px;color:#67746C}
+.gdo .sheet .c2{display:block;font-size:11.5px;color:#536258}
 .gdo .sheet .mgr{display:block;font-size:13px;color:#3D5349;white-space:nowrap;overflow:hidden;text-overflow:ellipsis}
 .gdo .sheet .price{display:block;text-align:right;font-weight:700;font-variant-numeric:tabular-nums}
 .gdo .sheet .cxlmob{display:none}
+/* cancelled time slot reads "was due" (red), never blank — both views. */
+.gdo .sheet .r.cxrow .t2{color:#A83120;font-weight:700}
 
-/* ── Phone: this is used one-handed at a field. Tiles reflow, cities scroll. ── */
-@media (max-width: 820px){
-  .gdo .gmain{padding:12px 12px 90px;margin-right:0 !important}
-  .gdo .head{padding:8px 12px}
-  .gdo .lede{display:none}
-  .gdo .dt{display:none}            /* the date is already in the day nav */
-  .gdo h1{font-size:18px}
-  .gdo .r1{gap:8px}
-  .gdo .clock{font-size:12px}
-  .gdo .chips{gap:7px;margin-top:8px}
-  .gdo .row2{margin-top:7px;padding-top:7px}
-  .gdo .pill{position:static;display:inline-flex;margin-top:6px}
-  .gdo .daynav{width:100%;justify-content:space-between;margin-right:0}
-  .gdo .daylab{min-width:0;flex:1}
-  .gdo .arw{width:40px;height:34px}
-  .gdo .filters{flex:1;display:flex;gap:6px;overflow-x:auto;-webkit-overflow-scrolling:touch;scrollbar-width:none}
-  .gdo .filters::-webkit-scrollbar{display:none}
-  .gdo .filters .chip{flex:0 0 auto}
-  .gdo .row2{flex-wrap:nowrap;overflow-x:auto;-webkit-overflow-scrolling:touch;scrollbar-width:none}
-  .gdo .row2::-webkit-scrollbar{display:none}
-  .gdo .row2 .lb{flex:0 0 auto}.gdo .cityf{flex-wrap:nowrap}.gdo .cityf .chip{flex:0 0 auto}
-  .gdo .chip{padding:9px 14px}
-  .gdo .row{padding:12px 12px 11px}
+/* ── PHONE header + prod strip: built here, hidden on desktop (the .head card and
+      the legend own the ≥760px layout). Kept out of the media block so the desktop
+      default is unambiguously "not shown". ── */
+.gdo .prodstrip,.gdo .mhead{display:none}
+
+/* ── Phone: this is used one-handed at a field. Edge to edge, cities scroll. ── */
+@media (max-width: 759px){
+  /* desktop chrome off; phone chrome on */
+  .gdo .head{display:none}
+  .gdo .legend{display:none}                      /* sort moved into the header band */
+  .gdo .prodstrip{display:block;position:sticky;top:0;z-index:40;height:3px}
+  .gdo .prodstrip.live{background:#C0201B}.gdo .prodstrip.stg{background:#F2E31D}
+  /* Break out of the app shell's horizontal padding (max-w px-8) so the board is
+     truly edge to edge — full viewport width regardless of the parent's inset. */
+  .gdo{width:100vw;margin-left:calc(50% - 50vw);margin-right:calc(50% - 50vw)}
+  .gdo .gmain{padding:0 0 90px;margin-right:0 !important}
+  .gdo .gmain.drawering{margin-right:0}
+
+  /* three 44px bands under the strip */
+  .gdo .mhead{display:block;position:sticky;top:3px;z-index:30;background:#F6F9F7;border-bottom:1px solid #D3DED8}
+  .gdo .mband{display:flex;align-items:center;gap:10px;padding:0 12px;min-height:44px}
+  .gdo .mband + .mband{border-top:1px solid #E9EFEB}
+  .gdo .mpick{display:inline-flex;align-items:center;gap:6px;background:none;border:0;padding:4px 2px;color:#0B1F17;cursor:pointer;min-height:36px;font-size:17px;font-weight:700;letter-spacing:-.02em}
+  .gdo .mpick .livedot{width:7px;height:7px;border-radius:50%;background:#C0201B;flex:0 0 auto}
+  .gdo .mpick .caret{font-size:11px;color:#5C7168}
+  .gdo .mseg{margin-left:auto;flex:0 0 auto}
+  .gdo .mseg button{padding:0 11px;min-height:32px;font-size:12.5px}
+  .gdo .mdaynav{display:flex;align-items:center;gap:4px;min-width:0}
+  .gdo .marw{width:32px;height:32px;border:1px solid #D3DED8;background:#fff;border-radius:8px;color:#3D5349;font-size:15px;line-height:1;flex:0 0 auto}
+  .gdo .marw:active{background:#EEF4F1}
+  .gdo .mdaylab{display:flex;align-items:baseline;gap:6px;font-weight:700;font-size:14px;padding:0 4px;white-space:nowrap}
+  .gdo .mdaylab i{font-style:normal;font-size:9.5px;font-weight:800;letter-spacing:.1em;color:#046B45}
+  .gdo .mchips{display:flex;align-items:center;gap:7px;overflow-x:auto;padding:6px 12px;min-height:44px;scrollbar-width:none;-webkit-overflow-scrolling:touch;background:#F6F9F7}
+  .gdo .mchips::-webkit-scrollbar{display:none}
+  .gdo .mchips .chip{flex:0 0 auto;min-height:32px;padding:0 12px;display:inline-flex;align-items:center;font-size:12.5px}
+  .gdo .mchips .msep{flex:0 0 auto;width:1px;align-self:stretch;background:#D3DED8;margin:6px 3px}
+
+  /* the day's list, edge to edge — no cards, no side margins, no radius */
+  .gdo .sheet,.gdo .bands{border:0;border-radius:0;background:transparent}
+  .gdo .sheet{overflow:visible}
+  /* group subheads: full-bleed, sticky UNDER the header */
+  .gdo .sheet .grp,.gdo .sheet .grp:first-of-type,.gdo .band{margin:0}
+  .gdo .grouphd{position:sticky;top:var(--gd-hdrh,135px);z-index:20;margin:0;display:flex;align-items:baseline;gap:8px;
+    padding:6px 12px;background:#EEF3F0;border-top:1px solid #D3DED8;border-bottom:1px solid #D3DED8;
+    font-size:10.5px;letter-spacing:.12em;color:#3D5349}
+  .gdo .grouphd .n{margin-left:auto;color:#5C7168;letter-spacing:.04em}
+
+  /* ── DETAIL view (cards) goes edge to edge too: no radius, no side gaps, a hairline
+        between rows. The coloured left rail survives as an inset box-shadow. ── */
+  .gdo .bands{gap:0}
+  .gdo .rows{gap:0}
+  .gdo .row{border-radius:0;border-left:0;border-right:0;border-top:0;border-bottom:1px solid #DCE5E0;padding:12px 12px 11px}
   .gdo .hdr{grid-template-columns:1fr auto auto 14px;grid-template-areas:"when price veo go" "ttl ttl ttl ttl";gap:8px 10px}
   .gdo .when{grid-area:when;display:flex;align-items:baseline;gap:7px;flex-wrap:wrap}.gdo .when .cd{display:inline}
   .gdo .ttl{grid-area:ttl}.gdo .ttl .nm{white-space:normal}
@@ -546,12 +630,7 @@ const CSS = `
   .gdo .rosterlink{min-height:32px;padding:6px 10px}
   .gdo .bar{height:14px}
   .gdo .toast{left:12px;right:12px;transform:none;text-align:center}
-  /* header stays compact: day nav + view toggle on line 1, filters scroll on their own */
-  .gdo [data-testid="day-today"]{display:none}
-  .gdo .daynav{order:1;width:auto;flex:1 1 auto}
-  .gdo .seg{order:2;margin-left:auto}
-  .gdo .filters{order:4;flex:0 0 100%;margin-top:6px}
-  /* snapshot rows reflow to a four-line stack */
+  /* ── SNAPSHOT rows: four-line stack, full-bleed, names WRAP (never truncated). ── */
   .gdo .colhead{display:none}
   .gdo .sheet .r{grid-template-columns:5px 1fr auto;grid-template-areas:"rail time short" "rail match short" "rail spots spots" "rail cxl cxl";gap:0 11px;padding:0 12px 0 0;min-height:0}
   .gdo .sheet .rail{grid-area:rail}
@@ -562,11 +641,9 @@ const CSS = `
   .gdo .sheet .c-cxl{grid-area:cxl;padding:4px 0 9px}
   .gdo .sheet .c-mgr,.gdo .sheet .c-price{display:none}
   .gdo .sheet .c-cxl .c1,.gdo .sheet .c-cxl .c2{display:none}
-  .gdo .sheet .cxlmob{display:block;font-size:12px;color:#67746C;white-space:nowrap;overflow:hidden;text-overflow:ellipsis}
+  .gdo .sheet .cxlmob{display:block;font-size:12px;color:#536258;white-space:nowrap;overflow:hidden;text-overflow:ellipsis}
+  .gdo .sheet .m1{white-space:normal;overflow:visible;text-overflow:clip}   /* match name never truncates */
   .gdo .sheet .t1{display:inline}.gdo .sheet .t2{display:inline;margin-left:8px}
   .gdo .sheet .bar{height:9px}
-  .gdo .legend .lg{display:none}            /* colour is self-evident next to a −N chip */
-  .gdo .legend{margin-bottom:8px}
-  .gdo .legend .sortbar{margin-left:auto}
 }
 `;

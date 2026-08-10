@@ -44,6 +44,11 @@ export default function MatchOpsLayout({
     (pathname.startsWith("/match-ops/match-chats") ||
       pathname.startsWith("/match-ops/player-chats")) &&
     !pathname.startsWith("/match-ops/match-chats/automation");
+  // Gameday Ops carries its OWN in-page screen picker (the "Gameday Ops ▾" title
+  // button + bottom sheet), so the shared horizontal tab strip is suppressed there —
+  // otherwise the phone would show two navs, and a horizontal nav scroller the
+  // redesign exists to kill. Every other non-chat route still gets the strip.
+  const isGameday = pathname === "/match-ops/gameday";
 
   const [collapsed, setCollapsed] = useState(false);
   useEffect(() => {
@@ -88,7 +93,7 @@ export default function MatchOpsLayout({
       >
         {/* Non-chat routes get the mobile section strip here; chat consoles
             render their own inside the inbox. */}
-        {!isChat && hasRail && <MatchOpsMobileStrip />}
+        {!isChat && !isGameday && hasRail && <MatchOpsMobileStrip />}
         {children}
       </div>
     </>

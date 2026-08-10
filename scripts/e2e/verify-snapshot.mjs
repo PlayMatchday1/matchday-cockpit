@@ -16,6 +16,25 @@ const bad = (n, d = "") => { FAIL++; fails.push(`${n} — ${d}`); console.log(` 
 const eq = (n, got, want) => (JSON.stringify(got) === JSON.stringify(want) ? ok(n) : bad(n, `got ${JSON.stringify(got)} want ${JSON.stringify(want)}`));
 const near = (n, got, want, tol) => (Math.abs(got - want) <= tol ? ok(n) : bad(n, `got ${got} want ${want}±${tol}`));
 
+// Contrast sweep SCOPED to the board (.gdo) so unrelated app chrome can't fail us.
+// Every visible text node's colour vs its effective background must be >= 4.5:1 —
+// including the −N chips, the muted spots/meta lines, and the red cancelled row.
+async function contrastIn(pg) {
+  return pg.evaluate(() => {
+    const root = document.querySelector(".gdo"); if (!root) return { failures: [], min: Infinity };
+    const pc = (s) => { const m = s.match(/rgba?\(([^)]+)\)/); if (!m) return null; const p = m[1].split(",").map((x) => parseFloat(x)); return { r: p[0], g: p[1], b: p[2], a: p[3] ?? 1 }; };
+    const lin = (c) => { c /= 255; return c <= 0.03928 ? c / 12.92 : Math.pow((c + 0.055) / 1.055, 2.4); };
+    const L = (c) => 0.2126 * lin(c.r) + 0.7152 * lin(c.g) + 0.0722 * lin(c.b);
+    const ratio = (a, b) => { const x = L(a), y = L(b), hi = Math.max(x, y), lo = Math.min(x, y); return (hi + 0.05) / (lo + 0.05); };
+    const bg = (el) => { let n = el; while (n && n.nodeType === 1) { const c = pc(getComputedStyle(n).backgroundColor); if (c && c.a > 0.85) return c; n = n.parentElement; } return { r: 255, g: 255, b: 255, a: 1 }; };
+    const txt = (el) => [...el.childNodes].some((n) => n.nodeType === 3 && n.textContent.trim());
+    const vis = (el) => { const s = getComputedStyle(el); if (s.display === "none" || s.visibility === "hidden" || +s.opacity === 0) return false; return el.offsetParent !== null || s.position === "fixed"; };
+    const failures = []; let min = Infinity;
+    for (const el of root.querySelectorAll("*")) { if (!txt(el) || !vis(el)) continue; const fg = pc(getComputedStyle(el).color); if (!fg) continue; const r = ratio(fg, bg(el)); if (r < min) min = Math.round(r * 100) / 100; if (r < 4.5) failures.push({ ratio: Math.round(r * 100) / 100, t: el.textContent.trim().slice(0, 32), c: (el.getAttribute("class") || "").slice(0, 34) }); }
+    return { failures, min };
+  });
+}
+
 const grantEdit = (ctx) => ctx.route("**/rest/v1/app_users*", async (route) => {
   if (route.request().method() !== "GET") return route.continue();
   const res = await route.fetch(); let j = await res.json().catch(() => null);
@@ -89,6 +108,9 @@ async function main() {
 
   // ── snapshot renders one row per match ──
   eq("one snapshot row per match (5)", (await page.$$('[data-testid="snap-row"]')).length, 5);
+
+  // ── desktop (1280) keeps the multi-column single-line row layout ──
+  eq("desktop: snapshot row keeps the 8-column single-line layout at 1280", await page.$eval('[data-testid="snap-row"]', (e) => getComputedStyle(e).gridTemplateColumns.split(" ").length), 8);
 
   // ── real is players − fakes, asserted DIRECTLY (601: 3 real, not 6) ──
   { const spots = await page.$eval('[data-testid="snap-row"][data-id="601"] [data-testid="snap-spots"]', (e) => e.textContent);
@@ -198,6 +220,7 @@ async function main() {
   eq("snapshot assigns each state to its group", snapG, { "801": "todo", "802": "cancelled", "803": "finished" });
   eq("snapshot renders the three groups in order", await page.$$eval('[data-testid="snapshot"] > section', (els) => els.map((e) => e.getAttribute("data-testid"))), ["snap-group-todo", "snap-group-cancelled", "snap-group-finished"]);
   eq("snapshot cancelled row: solid CANCELLED badge, NO −N short chip", { badge: !!(await page.$('[data-testid="snap-row"][data-id="802"] [data-testid="snap-cx-badge"]')), noShort: (await page.$('[data-testid="snap-row"][data-id="802"] [data-testid="snap-short"]')) === null }, { badge: true, noShort: true });
+  eq("snapshot cancelled time slot reads 'was due' (not blank, not 'cancelled')", /was due/i.test(await page.$eval('[data-testid="snap-row"][data-id="802"] .c-time', (e) => e.textContent)), true);
   await page.click('[data-testid="view-detail"]'); await page.waitForSelector('[data-testid="tile"]'); await page.waitForTimeout(150);
   const detailG = await groupOf('[data-testid="tile"]');
   eq("BOTH views agree on the group for every match (all three states)", snapG, detailG);
@@ -214,11 +237,42 @@ async function main() {
   await ph.waitForSelector('[data-testid="snapshot"]'); await ph.waitForTimeout(200);
   { const o = await overflow(ph); const past = await ph.evaluate(() => { const w = innerWidth; const inScroller = (el) => { let n = el.parentElement; while (n) { const s = getComputedStyle(n); if (s.overflowX === "auto" || s.overflowX === "scroll") return true; n = n.parentElement; } return false; }; return [...document.querySelectorAll(".gdo *")].filter((e) => { const r = e.getBoundingClientRect(); const s = getComputedStyle(e); return s.display !== "none" && r.width > 0 && r.right > w + 1 && !inScroller(e); }).length; });
     (!o.pageLeak && past === 0) ? ok("phone: no horizontal overflow (city + filter chips scroll)") : bad("phone overflow", `leak=${o.pageLeak} past=${past}`); }
-  { const h = await ph.$eval(".gdo .head", (e) => Math.round(e.getBoundingClientRect().height)); (h < 300) ? ok(`phone: header under 300px (${h})`) : bad("phone header too tall", `${h}px`); }
+  // header is the phone .mhead (three 44px bands): under 140px, not 600px of chrome
+  { const h = await ph.$eval(".gdo .mhead", (e) => Math.round(e.getBoundingClientRect().height)); (h < 140) ? ok(`phone: header under 140px (${h})`) : bad("phone header too tall", `${h}px`); }
+  // exactly ONE horizontal scroller on the page, and it is the filter+city chips — not a nav
+  { const scr = await ph.evaluate(() => { const out = []; for (const e of document.querySelectorAll(".gdo *")) { const s = getComputedStyle(e); if (s.display === "none" || s.visibility === "hidden") continue; if ((s.overflowX === "auto" || s.overflowX === "scroll") && e.getBoundingClientRect().width > 0 && e.scrollWidth > e.clientWidth + 2) out.push(e.getAttribute("data-testid") || (e.className || "").toString().slice(0, 20)); } return out; });
+    (scr.length === 1 && scr[0] === "mchips") ? ok("phone: exactly one horizontal scroller, and it is the filter chips") : bad("phone scrollers", JSON.stringify(scr)); }
+  // first match within 200px of the top; at least two matches visible in 844px
+  { const tops = await ph.$$eval('[data-testid="snap-row"]', (els) => els.map((e) => Math.round(e.getBoundingClientRect().top)));
+    (tops[0] < 200) ? ok(`phone: first match within 200px of top (${tops[0]})`) : bad("phone first match too low", `${tops[0]}px`);
+    (tops.filter((t) => t >= 0 && t < 844).length >= 2) ? ok("phone: at least two matches visible in 844px") : bad("phone <2 visible", JSON.stringify(tops)); }
+  // rows are edge to edge (x=0 to viewport width) and have no border radius
+  { const edge = await ph.$eval('[data-testid="snap-row"]', (e) => { const r = e.getBoundingClientRect(); const s = getComputedStyle(e); return { left: Math.round(r.left), rightAtVw: Math.round(r.right) === innerWidth, radii: [s.borderTopLeftRadius, s.borderTopRightRadius, s.borderBottomLeftRadius, s.borderBottomRightRadius] }; });
+    eq("phone: snapshot rows edge-to-edge (x=0..viewport), border-radius 0", { left: edge.left, rightAtVw: edge.rightAtVw, radiusZero: edge.radii.every((x) => x === "0px") }, { left: 0, rightAtVw: true, radiusZero: true }); }
+  // match names never truncate (they wrap on the phone, so scrollWidth <= clientWidth)
+  { const trunc = await ph.$$eval('[data-testid="snap-row"] .m1', (els) => els.filter((e) => e.scrollWidth > e.clientWidth + 1).length);
+    (trunc === 0) ? ok("phone: match names never truncate") : bad("phone names truncated", `${trunc} row(s)`); }
+  // no nested <button> anywhere on the board (a button inside a button is an a11y trap)
+  { const nested = await ph.$$eval(".gdo button button", (els) => els.length);
+    (nested === 0) ? ok("phone: no nested buttons") : bad("phone nested buttons", `${nested}`); }
   { const txt = (await ph.$eval('[data-testid="snap-row"][data-id="601"]', (e) => e.textContent)).replace(/\s+/g, " ");
     (txt.includes("Reda") && txt.includes("$12.00")) ? ok("phone: manager and price stay readable in the row (line 4)") : bad("phone row missing mgr/price", txt.slice(0, 120)); }
   { const small = await ph.evaluate(() => { const out = []; for (const el of document.querySelectorAll('.gdo button, .gdo [role="switch"]')) { const r = el.getBoundingClientRect(); const s = getComputedStyle(el); if (s.display === "none" || s.visibility === "hidden" || r.width === 0) continue; if (r.height < 30) out.push({ c: (el.className || "").toString().slice(0, 24), h: Math.round(r.height * 10) / 10 }); } return out; });
     small.length === 0 ? ok("phone: no tap target under 30px tall") : bad(`phone: ${small.length} under 30px`, JSON.stringify(small.slice(0, 6))); }
+
+  // ── cancelled on the red background: contrast holds, sticky group heads, was-due ──
+  activeRaw = GRP;
+  await ph.reload({ waitUntil: "domcontentloaded" });
+  await ph.waitForSelector('[data-testid="snapshot"]'); await ph.waitForTimeout(200);
+  { const c = await contrastIn(ph); c.failures.length === 0 ? ok(`phone contrast: every board node >= 4.5:1 incl. the red cancelled row (min ${c.min})`) : bad(`phone contrast: ${c.failures.length} < 4.5`, c.failures.slice(0, 5).map((f) => `${f.ratio} "${f.t}" .${f.c}`).join(" | ")); }
+  eq("phone: cancelled row still reads 'was due' with NO −N chip", { wasDue: /was due/i.test(await ph.$eval('[data-testid="snap-row"][data-id="802"] .c-time', (e) => e.textContent)), noShort: (await ph.$('[data-testid="snap-row"][data-id="802"] [data-testid="snap-short"]')) === null }, { wasDue: true, noShort: true });
+  // group subheads are sticky (they glue under the header, not scroll away)
+  { const sticky = await ph.$eval('[data-testid="snapshot"] .grouphd', (e) => getComputedStyle(e).position); (sticky === "sticky") ? ok("phone: group subheads are sticky") : bad("group head not sticky", sticky); }
+
+  // ── the screen picker replaces the tab strip: title opens the sheet, current marked ──
+  await ph.click('[data-testid="screen-picker"]');
+  await ph.waitForSelector('[data-testid="screen-sheet"]'); await ph.waitForTimeout(150);
+  eq("phone: screen picker opens the sheet with Gameday Ops marked current", { open: !!(await ph.$('[data-testid="screen-sheet"]')), current: await ph.$eval('[data-testid="screen-dest-gameday"]', (e) => e.getAttribute("aria-current")) }, { open: true, current: "page" });
 
   console.log(`\n================ RESULT ================\nAssertions: ${PASS} passed, ${FAIL} failed`);
   if (fails.length) fails.forEach((f) => console.log("   FAILED: " + f));
