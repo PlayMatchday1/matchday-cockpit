@@ -11,7 +11,7 @@
 import { createClient, type SupabaseClient } from "@supabase/supabase-js";
 
 export type AdminAuthResult =
-  | { ok: true; supabase: SupabaseClient; appUserId: string; email: string; canEditMatches: boolean; canManagePlayers: boolean }
+  | { ok: true; supabase: SupabaseClient; appUserId: string; email: string; canEditMatches: boolean; canManagePlayers: boolean; canManagePromos: boolean }
   | { ok: false; status: number; error: string };
 
 export async function authenticateAdmin(req: Request): Promise<AdminAuthResult> {
@@ -46,7 +46,10 @@ export async function authenticateAdmin(req: Request): Promise<AdminAuthResult> 
   });
   const appUser = await sb
     .from("app_users")
-    .select("id, is_admin, can_access_matchops, can_edit_matches, can_manage_players")
+    // select * (not an explicit column list) so a newly-added grant column that hasn't been
+    // migrated yet can't error the whole query — a missing column then reads as undefined →
+    // the derived permission is false until the migration lands. (can_manage_promos, 0117.)
+    .select("*")
     .ilike("email", email)
     .maybeSingle();
   if (appUser.error || !appUser.data) {
@@ -66,6 +69,11 @@ export async function authenticateAdmin(req: Request): Promise<AdminAuthResult> 
   // by default, requires MATCH OPS. Holding one never implies the other.
   const canManagePlayers = appUser.data.can_manage_players === true && appUser.data.can_access_matchops === true;
 
+  // MANAGE PROMOS is the promo-code WRITE permission (Phase 18b) — create / (later) edit,
+  // delete. Same rules as the other two and INDEPENDENT of both: not implied by is_admin, off
+  // by default, requires MATCH OPS. Read fresh here on every request (no JWT caching).
+  const canManagePromos = appUser.data.can_manage_promos === true && appUser.data.can_access_matchops === true;
+
   return {
     ok: true,
     supabase: sb, // service-role client — bypasses RLS after the admin gate
@@ -73,5 +81,6 @@ export async function authenticateAdmin(req: Request): Promise<AdminAuthResult> 
     email,
     canEditMatches,
     canManagePlayers,
+    canManagePromos,
   };
 }

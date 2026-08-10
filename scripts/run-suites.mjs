@@ -24,7 +24,7 @@ const SKIP = new Map([
 const NODE_SUITES = [
   "scripts/mutation-tests.ts", "scripts/prod-guard-test.ts", "scripts/stage-denylist-test.ts",
   "scripts/gameday-model-test.ts", "scripts/change-log-test.ts", "scripts/write-routes-logged-test.ts",
-  "scripts/player-lookup-model-test.ts", "scripts/walltime-guard-test.ts",
+  "scripts/player-lookup-model-test.ts", "scripts/walltime-guard-test.ts", "scripts/promo-model-test.ts",
 ];
 const E2E_SUITES = readdirSync("scripts/e2e").filter((f) => /^verify-.*\.mjs$/.test(f)).sort().map((f) => `scripts/e2e/${f}`);
 

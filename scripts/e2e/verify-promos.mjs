@@ -1,0 +1,222 @@
+// Promo Codes (Phase 18b), driven in a real browser, hermetic. The /api/promos/* routes are
+// route-fulfilled with a synthetic dataset so the screen is tested without touching production.
+// Grants MANAGE PROMOS via the app_users read patch (server still enforces; here we exercise the
+// UI). Desktop 1280 + a 390×844 touch context. Everything the prompt calls for is asserted.
+//   node scripts/e2e/verify-promos.mjs
+import { chromium } from "playwright";
+import { createClient } from "@supabase/supabase-js";
+import { overflow } from "./checks.mjs";
+
+// contrast sweep SCOPED to the promo screen (.promo) — the global sweep is noisy with app chrome.
+async function contrastIn(pg) {
+  return pg.evaluate(() => {
+    const root = document.querySelector(".promo"); if (!root) return { failures: [], min: Infinity };
+    const pc = (s) => { const m = s.match(/rgba?\(([^)]+)\)/); if (!m) return null; const p = m[1].split(",").map((x) => parseFloat(x)); return { r: p[0], g: p[1], b: p[2], a: p[3] ?? 1 }; };
+    const lin = (c) => { c /= 255; return c <= 0.03928 ? c / 12.92 : Math.pow((c + 0.055) / 1.055, 2.4); };
+    const L = (c) => 0.2126 * lin(c.r) + 0.7152 * lin(c.g) + 0.0722 * lin(c.b);
+    const ratio = (a, b) => { const x = L(a), y = L(b), hi = Math.max(x, y), lo = Math.min(x, y); return (hi + 0.05) / (lo + 0.05); };
+    const bg = (el) => { let n = el; while (n && n.nodeType === 1) { const c = pc(getComputedStyle(n).backgroundColor); if (c && c.a > 0.85) return c; n = n.parentElement; } return { r: 255, g: 255, b: 255, a: 1 }; };
+    const txt = (el) => [...el.childNodes].some((n) => n.nodeType === 3 && n.textContent.trim());
+    const vis = (el) => { const s = getComputedStyle(el); if (s.display === "none" || s.visibility === "hidden" || +s.opacity === 0) return false; return el.offsetParent !== null || s.position === "fixed"; };
+    const failures = []; let min = Infinity;
+    for (const el of root.querySelectorAll("*")) { if (!txt(el) || !vis(el)) continue; if (el.hasAttribute("disabled")) continue; const fg = pc(getComputedStyle(el).color); if (!fg) continue; const r = ratio(fg, bg(el)); if (r < min) min = Math.round(r * 100) / 100; if (r < 4.5) failures.push({ ratio: Math.round(r * 100) / 100, t: el.textContent.trim().slice(0, 28), c: (el.getAttribute("class") || "").slice(0, 30) }); }
+    return { failures, min };
+  });
+}
+
+const BASE = process.env.BASE || "http://localhost:3000";
+const PAGE = `${BASE}/match-ops/promos`;
+let PASS = 0, FAIL = 0; const fails = [];
+const ok = (n) => { PASS++; console.log(`  ✓ ${n}`); };
+const bad = (n, d = "") => { FAIL++; fails.push(`${n} — ${d}`); console.log(`  ✗ ${n} — ${d}`); };
+const eq = (n, got, want) => (JSON.stringify(got) === JSON.stringify(want) ? ok(n) : bad(n, `got ${JSON.stringify(got)} want ${JSON.stringify(want)}`));
+
+const grantPromos = (ctx) => ctx.route("**/rest/v1/app_users*", async (route) => {
+  if (route.request().method() !== "GET") return route.continue();
+  const res = await route.fetch(); let j = await res.json().catch(() => null);
+  const p = (r) => ({ ...r, is_admin: true, can_access_matchops: true, can_manage_promos: true });
+  j = Array.isArray(j) ? j.map(p) : (j && typeof j === "object" ? p(j) : j);
+  return route.fulfill({ status: res.status(), contentType: "application/json", body: JSON.stringify(j) });
+});
+
+// ── synthetic promo data, instants relative to `now` (true UTC) ──
+const HR = 3600000, DAY = 86400000;
+function fixtures(now) {
+  const iso = (ms) => new Date(now + ms).toISOString();
+  const mk = (o) => ({ id: 0, code: "X", startDateUtc: iso(-30 * DAY), endDateUtc: iso(30 * DAY), discountType: "PERCENT", discountValue: 50, targetUserType: "ALL_USERS", numberOfUsesPerUser: 5, targetMatchType: "ALL_MATCHES", matchTimePeriodStart: null, matchTimePeriodEnd: null, createdAt: iso(-40 * DAY), updatedAt: iso(-40 * DAY), deletedAt: null, ...o });
+  const live = [
+    mk({ id: 101, code: "ACTIVE1", startDateUtc: iso(-10 * DAY), endDateUtc: iso(20 * DAY), numberOfUsesPerUser: 5, targetMatchType: "ALL_MATCHES" }),        // active, per-user cap
+    mk({ id: 102, code: "SCHEDULED1", startDateUtc: iso(5 * DAY), endDateUtc: iso(40 * DAY), discountType: "USD", discountValue: 500, targetUserType: "NEW_USERS", numberOfUsesPerUser: 1 }), // scheduled
+    mk({ id: 103, code: "DELFUTURE", startDateUtc: iso(-5 * DAY), endDateUtc: iso(15 * DAY), deletedAt: iso(-2 * DAY) }),                                       // DELETED but end in future -> stays LIVE
+    mk({ id: 301, code: "TOTALCAP", startDateUtc: iso(-3 * DAY), endDateUtc: iso(10 * DAY), targetMatchType: "TOTAL_USAGE", numberOfUsesPerUser: 20 }),        // total cap (LEFT = 13)
+    mk({ id: 302, code: "NOCAP", startDateUtc: iso(-3 * DAY), endDateUtc: iso(10 * DAY), numberOfUsesPerUser: 10000 }),                                        // no-cap sentinel
+  ];
+  const past = [
+    mk({ id: 201, code: "EXPIRED1", startDateUtc: iso(-60 * DAY), endDateUtc: iso(-10 * DAY) }),           // expired
+    mk({ id: 202, code: "DELETEDPAST", startDateUtc: iso(-60 * DAY), endDateUtc: iso(-5 * DAY), deletedAt: iso(-30 * DAY) }), // deleted + past
+  ];
+  return { live, past };
+}
+const usageFor = { 101: 4, 301: 7, 302: 235, 102: 0, 103: 1, 201: 9, 202: 3 };
+
+function serveList(url, now) {
+  const u = new URL(url); const sp = u.searchParams;
+  const { live, past } = fixtures(now);
+  const nowIso = new Date(now).toISOString();
+  const code = (sp.get("code") || "").trim().toLowerCase();
+  if (code) {
+    const all = [...live, ...past].filter((r) => r.code.toLowerCase().includes(code));
+    return { data: all, totalItems: all.length, nowIso };
+  }
+  const bucket = sp.get("bucket");
+  const page = Number(sp.get("page") || "1");
+  if (bucket === "live") {
+    // page 1 = the 5 named rows + 20 filler (25); pages 2-6 = 25 filler each; totalItems 120 -> nudge past 100
+    const filler = Array.from({ length: 25 }, (_, i) => ({ ...live[0], id: 5000 + page * 100 + i, code: `LIVEFILL${page}_${i}` }));
+    const rows = page === 1 ? [...live, ...filler.slice(0, 20)] : filler;
+    return { data: rows, totalItems: 120, nowIso };
+  }
+  return { data: past, totalItems: past.length, nowIso };
+}
+
+async function main() {
+  process.loadEnvFile(".env.local");
+  const svc = createClient(process.env.NEXT_PUBLIC_SUPABASE_URL, process.env.SUPABASE_SERVICE_ROLE_KEY, { auth: { persistSession: false } });
+  const anon = createClient(process.env.NEXT_PUBLIC_SUPABASE_URL, process.env.NEXT_PUBLIC_SUPABASE_PUBLISHABLE_KEY, { auth: { persistSession: false } });
+  const link = await svc.auth.admin.generateLink({ type: "magiclink", email: "rmancuso@playmatchday.com" });
+  const vv = await anon.auth.verifyOtp({ type: "magiclink", token_hash: link.data.properties.hashed_token });
+  const ref = new URL(process.env.NEXT_PUBLIC_SUPABASE_URL).host.split(".")[0];
+  const storageState = { cookies: [], origins: [{ origin: BASE, localStorage: [{ name: `sb-${ref}-auth-token`, value: JSON.stringify(vv.data.session) }] }] };
+
+  const routes = async (ctx) => {
+    const now = Date.now();
+    await ctx.route("**/api/promos/list**", (route) => route.fulfill({ status: 200, contentType: "application/json", body: JSON.stringify(serveList(route.request().url(), now)) }));
+    await ctx.route("**/api/promos/check**", (route) => {
+      const code = (new URL(route.request().url()).searchParams.get("code") || "").toLowerCase();
+      const { live, past } = fixtures(now);
+      const hit = [...live, ...past].find((r) => r.code.toLowerCase() === code);
+      route.fulfill({ status: 200, contentType: "application/json", body: JSON.stringify({ taken: !!hit, existing: hit ? { id: hit.id, code: hit.code, state: "active" } : null }) });
+    });
+    await ctx.route("**/api/promos/detail/**", (route) => {
+      const id = Number(route.request().url().split("/").pop().split("?")[0]);
+      const { live, past } = fixtures(now);
+      const promo = [...live, ...past].find((r) => r.id === id);
+      if (!promo) return route.fulfill({ status: 404, contentType: "application/json", body: JSON.stringify({ error: "not found" }) });
+      route.fulfill({ status: 200, contentType: "application/json", body: JSON.stringify({ promo, usageCount: usageFor[id] ?? 0, nowIso: new Date(now).toISOString() }) });
+    });
+    await ctx.route("**/api/promos/create**", (route) => route.fulfill({ status: 200, contentType: "application/json", body: JSON.stringify({ ok: true, result: { id: 9999 }, outcome: "landed", logRecorded: true }) }));
+    await grantPromos(ctx);
+  };
+
+  const browser = await chromium.launch({ headless: true });
+  const ctx = await browser.newContext({ viewport: { width: 1280, height: 1000 }, storageState });
+  await routes(ctx);
+  const page = await ctx.newPage();
+  await page.goto(PAGE, { waitUntil: "domcontentloaded" });
+  await page.waitForSelector('[data-testid="promos"]'); await page.waitForSelector('[data-testid="promo-row"]'); await page.waitForTimeout(200);
+
+  // ── search-first: the box is present, and focused on load ──
+  eq("search box is focused on load", await page.evaluate(() => document.activeElement?.getAttribute("data-testid")), "promo-search");
+
+  // ── browse headers: exact totals, order named as the API's (NOT 'newest') ──
+  { const live = await page.$eval('[data-testid="live-sub"]', (e) => e.textContent);
+    eq("LIVE header states exact total + 'order the API returns', not 'newest'", { hasTotal: /120 live codes/.test(live), apiOrder: /order the API returns/.test(live), noNewest: !/newest/i.test(live) }, { hasTotal: true, apiOrder: true, noNewest: true }); }
+  eq("PAST collapsed by default", await page.$('[data-testid="past-body"]'), null);
+  eq("PAST header shows its exact total", /2 expired or deleted/.test(await page.$eval('[data-testid="past-sub"]', (e) => e.textContent)), true);
+
+  // ── deleted code with a future end date stays in LIVE, badged + struck ──
+  { const row = await page.$('[data-testid="promo-row"][data-id="103"]');
+    const inLive = await page.$eval('[data-testid="grp-live"] [data-testid="promo-row"][data-id="103"]', () => true).catch(() => false);
+    const state = row && await row.getAttribute("data-state");
+    const struck = await page.$eval('[data-testid="promo-row"][data-id="103"] .code', (e) => getComputedStyle(e).textDecorationLine.includes("line-through"));
+    eq("DELFUTURE: in LIVE, state=deleted, struck through", { inLive, state, struck }, { inLive: true, state: "deleted", struck: true }); }
+
+  // ── CAP on the list; no REDEEMED/LEFT columns on a row ──
+  eq("CAP shown on the row (ACTIVE1 = 5)", await page.$eval('[data-testid="promo-row"][data-id="101"] [data-testid="promo-cap"]', (e) => e.textContent.trim()), "5");
+  eq("NOCAP row prints 'no cap', never 10000", await page.$eval('[data-testid="promo-row"][data-id="302"] [data-testid="promo-cap"]', (e) => e.textContent.trim()), "no cap");
+  eq("no REDEEMED/LEFT anywhere in the list", await page.$$eval('[data-testid="promos"] .colhead', (els) => els.every((e) => !/REDEEMED|LEFT/.test(e.textContent))), true);
+
+  // ── detail drawer: REDEEMED + LEFT, the three branches ──
+  const openDetail = async (id) => { await page.click(`[data-testid="promo-row"][data-id="${id}"]`); await page.waitForSelector('[data-testid="detail-usage"]'); await page.waitForTimeout(120); };
+  await openDetail(101); // per-user cap 5, redeemed 4
+  eq("detail 101: REDEEMED 4, LEFT 'per user'", { r: await page.$eval('[data-testid="detail-redeemed"]', (e) => e.textContent.trim()), l: await page.$eval('[data-testid="detail-left"]', (e) => e.textContent.trim()) }, { r: "4", l: "per user" });
+  eq("detail 101: usage one-liner", /4 redeemed · cap 5 per user/.test(await page.$eval('[data-testid="detail-useline"]', (e) => e.textContent)), true);
+  eq("delete stub disabled + labelled 'Delete (reversible)'", { disabled: await page.$eval('[data-testid="detail-delete"]', (e) => e.disabled), label: (await page.$eval('[data-testid="detail-delete"]', (e) => e.textContent)).trim(), edit: await page.$eval('[data-testid="detail-edit"]', (e) => e.disabled) }, { disabled: true, label: "Delete (reversible)", edit: true });
+  await page.keyboard.press("Escape"); await page.waitForTimeout(120);
+  await openDetail(301); // TOTAL_USAGE cap 20, redeemed 7 -> LEFT 13
+  eq("detail 301 (TOTAL_USAGE): LEFT = 13", await page.$eval('[data-testid="detail-left"]', (e) => e.textContent.trim()), "13");
+  await page.keyboard.press("Escape"); await page.waitForTimeout(120);
+  await openDetail(302); // no cap
+  eq("detail 302 (no cap): LEFT '—', REDEEMED 235", { l: await page.$eval('[data-testid="detail-left"]', (e) => e.textContent.trim()), r: await page.$eval('[data-testid="detail-redeemed"]', (e) => e.textContent.trim()) }, { l: "—", r: "235" });
+  await page.keyboard.press("Escape"); await page.waitForTimeout(120);
+
+  // ── search that hits ONLY past: PAST auto-expands (distinct), LIVE one-line empty, then re-collapse ──
+  await page.fill('[data-testid="promo-search"]', "EXPIRED"); await page.waitForTimeout(500);
+  eq("search hits PAST: PAST auto-expanded, header distinct (pasthit)", { open: !!(await page.$('[data-testid="past-body"]')), distinct: await page.$eval('[data-testid="past-sub"]', (e) => e.className.includes("pasthit")) }, { open: true, distinct: true });
+  eq("LIVE empty state is ONE LINE (slim) pointing down", { slim: await page.$eval('[data-testid="grp-live"]', (e) => e.className.includes("slim")), oneline: !!(await page.$('[data-testid="grp-live"] .empty.oneline')) }, { slim: true, oneline: true });
+  await page.fill('[data-testid="promo-search"]', ""); await page.waitForTimeout(500);
+  eq("clearing the box re-collapses PAST", await page.$('[data-testid="past-body"]'), null);
+
+  // ── substring search hitting both tables ──
+  await page.fill('[data-testid="promo-search"]', "DEL"); await page.waitForTimeout(500);
+  eq("substring 'DEL' splits across LIVE (DELFUTURE) + PAST (DELETEDPAST)", { live: await page.$('[data-testid="grp-live"] [data-testid="promo-row"][data-id="103"]') !== null, past: await page.$('[data-testid="past-body"] [data-testid="promo-row"][data-id="202"]') !== null }, { live: true, past: true });
+  await page.fill('[data-testid="promo-search"]', ""); await page.waitForTimeout(400);
+
+  // ── ID search (all digits) -> detail-by-id single row ──
+  await page.fill('[data-testid="promo-search"]', "201"); await page.waitForTimeout(500);
+  eq("ID search 201 -> the one code, in PAST", { rows: (await page.$$('[data-testid="promo-row"]')).length, isIt: await page.$('[data-testid="promo-row"][data-id="201"]') !== null }, { rows: 1, isIt: true });
+  await page.fill('[data-testid="promo-search"]', ""); await page.waitForTimeout(400);
+  await page.waitForSelector('[data-testid="promo-row"][data-id="101"]');
+
+  // ── paging: 'Show 25 more' appends; past 100 the nudge replaces it ──
+  eq("browse LIVE shows 'Show 25 more' (25 of 120)", !!(await page.$('[data-testid="grp-live"] [data-testid="show-more"]')), true);
+  for (let i = 0; i < 3; i++) { await page.click('[data-testid="grp-live"] [data-testid="show-more"]').catch(() => {}); await page.waitForTimeout(200); }
+  eq("past 100 loaded: the search nudge replaces the button", { nudge: !!(await page.$('[data-testid="grp-live"] [data-testid="nudge"]')), noButton: (await page.$('[data-testid="grp-live"] [data-testid="show-more"]')) === null }, { nudge: true, noButton: true });
+
+  // ── CREATE drawer: only code+value typed; defaults; dupe check; summary; create ──
+  await page.click('[data-testid="promo-new"]'); await page.waitForSelector('[data-testid="f-create"]'); await page.waitForTimeout(150);
+  eq("create defaults: Percent pressed, uses=1, start & end date prefilled", {
+    pct: await page.$eval('[data-testid="f-type-pct"]', (e) => e.getAttribute("aria-pressed")), uses: await page.$eval('[data-testid="f-uses"]', (e) => e.value),
+    sd: /\d{4}-\d{2}-\d{2}/.test(await page.$eval('[data-testid="f-sd"]', (e) => e.value)), ed: /\d{4}-\d{2}-\d{2}/.test(await page.$eval('[data-testid="f-ed"]', (e) => e.value)),
+  }, { pct: "true", uses: "1", sd: true, ed: true });
+  eq("create disabled until code + value", await page.$eval('[data-testid="f-create"]', (e) => e.disabled), true);
+  await page.fill('[data-testid="f-code"]', "ACTIVE1"); await page.waitForTimeout(600); // taken
+  eq("dupe check: taken code flagged, create disabled", { taken: !!(await page.$('[data-testid="f-dupe"]')), disabled: await page.$eval('[data-testid="f-create"]', (e) => e.disabled) }, { taken: true, disabled: true });
+  await page.fill('[data-testid="f-code"]', "NEWSUMMER"); await page.waitForTimeout(600); // free
+  eq("dupe check: free code shows available", !!(await page.$('[data-testid="f-free"]')), true);
+  await page.fill('[data-testid="f-value"]', "40"); await page.waitForTimeout(200);
+  eq("summary is plain-English and names the Chicago zone", { has: /gives 40% off/.test(await page.$eval('[data-testid="f-summary"]', (e) => e.textContent)), tz: /America\/Chicago/.test(await page.$eval('[data-testid="f-summary"]', (e) => e.textContent)) }, { has: true, tz: true });
+  eq("create now enabled", await page.$eval('[data-testid="f-create"]', (e) => e.disabled), false);
+  await page.click('[data-testid="f-create"]'); await page.waitForTimeout(400);
+  eq("after create: just-created row at top of LIVE, marked", { marker: !!(await page.$('[data-testid="just-created"]')), code: await page.$eval('[data-testid="grp-live"] [data-testid="promo-row"] .code', (e) => e.textContent.replace(/JUST CREATED/, "").trim()) }, { marker: true, code: "NEWSUMMER" });
+
+  // ── contrast sweep (desktop), scoped to .promo ──
+  { const c = await contrastIn(page);
+    c.failures.length === 0 ? ok(`contrast: every promo node >= 4.5:1 (min ${c.min})`) : bad(`contrast: ${c.failures.length} < 4.5`, c.failures.slice(0, 5).map((f) => `${f.ratio} "${f.t}" .${f.c}`).join(" | ")); }
+
+  // ══════════════ PHONE (390×844) ══════════════
+  const pctx = await browser.newContext({ viewport: { width: 390, height: 844 }, isMobile: true, hasTouch: true, storageState });
+  await routes(pctx);
+  const ph = await pctx.newPage();
+  await ph.goto(PAGE, { waitUntil: "domcontentloaded" }); await ph.waitForSelector('[data-testid="promo-row"]'); await ph.waitForTimeout(200);
+  { const o = await overflow(ph); (!o.pageLeak) ? ok("phone: no horizontal page overflow") : bad("phone overflow", JSON.stringify(o.offenders.slice(0, 3))); }
+  eq("phone: rows reflow to cards (grid, not the 7-col desktop line)", await ph.$eval('[data-testid="promo-row"][data-id="101"]', (e) => getComputedStyle(e).gridTemplateColumns.split(" ").length), 3);
+  { const small = await ph.evaluate(() => { const out = []; for (const el of document.querySelectorAll('.promo button, .promo [role="switch"]')) { const r = el.getBoundingClientRect(); const s = getComputedStyle(el); if (s.display === "none" || s.visibility === "hidden" || r.width === 0 || el.disabled) continue; if (Math.min(r.height, r.width) < 44 && r.height < 44) out.push({ c: (el.className || "").toString().slice(0, 20), h: Math.round(r.height) }); } return out; });
+    small.length === 0 ? ok("phone: every enabled control >= 44px on its short axis") : bad(`phone: ${small.length} under 44px`, JSON.stringify(small.slice(0, 6))); }
+  { const trunc = await ph.$$eval('[data-testid="promo-row"] .code', (els) => els.filter((e) => getComputedStyle(e).textOverflow === "ellipsis" || e.scrollWidth > e.clientWidth + 1).length);
+    trunc === 0 ? ok("phone: code names wrap, never ellipsis-truncated") : bad("phone truncation", `${trunc}`); }
+  // open a detail card on the phone: the usage one-liner is present (not hidden columns)
+  await ph.click('[data-testid="promo-row"][data-id="301"]'); await ph.waitForSelector('[data-testid="detail-useline"]'); await ph.waitForTimeout(120);
+  eq("phone detail: the three usage numbers collapse into ONE readable line", /7 redeemed · 13 left of 20/.test(await ph.$eval('[data-testid="detail-useline"]', (e) => e.textContent)), true);
+  await ph.keyboard.press("Escape"); await ph.waitForTimeout(120);
+  // search a past-only term: the found row sits within two screen-heights of the top
+  await ph.fill('[data-testid="promo-search"]', "EXPIRED"); await ph.waitForTimeout(500);
+  { const top = await ph.$eval('[data-testid="promo-row"][data-id="201"]', (e) => Math.round(e.getBoundingClientRect().top));
+    (top < 2 * 844) ? ok(`phone: searched row within two screen-heights (${top}px)`) : bad("phone: found row too far down", `${top}px`); }
+
+  console.log(`\n================ RESULT ================\nAssertions: ${PASS} passed, ${FAIL} failed`);
+  if (fails.length) fails.forEach((f) => console.log("   FAILED: " + f));
+  await browser.close();
+  process.exit(FAIL === 0 ? 0 : 1);
+}
+main().catch((e) => { console.error("HARNESS ERROR:", e); process.exit(2); });

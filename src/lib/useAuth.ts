@@ -18,6 +18,7 @@ export type AppUser = {
   can_access_tech: boolean;
   can_edit_matches?: boolean;      // Phase 17 — the WRITE permission for matches
   can_manage_players?: boolean;    // Phase 18 — the account-level WRITE permission (ban)
+  can_manage_promos?: boolean;     // Phase 18b — the promo-code WRITE permission (create/edit/delete)
   is_service_account?: boolean;    // the Clubhouse E2E account (never holds a write permission)
   created_at: string;
   last_login_at: string | null;
@@ -111,6 +112,12 @@ export function canEditMatches(appUser: AppUser | null | undefined): boolean {
 // affordances; the server enforces it regardless.
 export function canManagePlayers(appUser: AppUser | null | undefined): boolean {
   return !!appUser && appUser.can_manage_players === true && appUser.can_access_matchops === true;
+}
+
+// MANAGE PROMOS (Phase 18b) — INDEPENDENT of EDIT MATCHES and MANAGE PLAYERS. Courtesy gate
+// for the Promo Codes screen + its create affordance; the server enforces it regardless.
+export function canManagePromos(appUser: AppUser | null | undefined): boolean {
+  return !!appUser && appUser.can_manage_promos === true && appUser.can_access_matchops === true;
 }
 
 export function canAccess(

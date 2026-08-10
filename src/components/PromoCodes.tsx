@@ -1,0 +1,595 @@
+"use client";
+
+// Promo Codes (Phase 18b). Search-first over 6,260 production codes with no server sort — so
+// browsing opens on the server's (heap) order, honestly labelled, and search is the workflow.
+// Two tables split by END DATE the way the server splits them (LIVE = endDateMin, PAST =
+// endDateMax); state is a per-row badge derived from the row's own dates + deletedAt, never a
+// server filter (there is none). CAP is on the list; REDEEMED/LEFT are on the detail drawer
+// only (usageCount is detail-only — no N+1). All times are TRUE UTC shown in America/Chicago
+// (promoTz) — the OPPOSITE model from the match screens; the two must never share helpers.
+
+import { useCallback, useEffect, useMemo, useRef, useState } from "react";
+import { supabase } from "@/lib/supabase";
+import { useAuth, canManagePromos } from "@/lib/useAuth";
+import {
+  type PromoRow, type PromoState, type DiscountType, type TargetUserType, type TargetMatchType,
+  promoState, promoBucket, discountLabel, capLabel, leftLabel, usageLine, createSummary,
+  USER_TYPE_LABEL, MATCH_TYPE_LABEL,
+} from "@/lib/promoModel";
+import {
+  PROMO_TZ_LABEL, fmtChicagoDate, fmtChicagoTime, fmtChicagoFull, toChicagoInputs, fromChicagoInputs,
+  nextQuarterHourUtcIso, endOfYearUtcIso, chicagoYearOf, chicagoWallToUtcIso, utcIsoToChicagoWall,
+} from "@/lib/promoTz";
+
+const PAGE = 25;
+const CEILING = 100; // past this, with an empty search box, stop offering "more" — point at search
+
+async function authFetch(path: string, init?: RequestInit): Promise<Response> {
+  const { data } = await supabase.auth.getSession();
+  const token = data.session?.access_token;
+  return fetch(path, { ...init, headers: { ...(init?.headers ?? {}), ...(token ? { Authorization: `Bearer ${token}` } : {}) }, cache: "no-store" });
+}
+
+type ListResp = { data: PromoRow[]; totalItems: number; nowIso: string; error?: string };
+
+export default function PromoCodes() {
+  const { appUser } = useAuth();
+  const mayManage = canManagePromos(appUser);
+
+  const [q, setQ] = useState("");
+  const [deferredQ, setDeferredQ] = useState("");
+  const [nowIso, setNowIso] = useState<string>(() => new Date().toISOString());
+
+  // browse buckets (accumulated across pages)
+  const [live, setLive] = useState<{ rows: PromoRow[]; total: number; page: number }>({ rows: [], total: 0, page: 0 });
+  const [past, setPast] = useState<{ rows: PromoRow[]; total: number; page: number }>({ rows: [], total: 0, page: 0 });
+  // search results (accumulated) + single-id result
+  const [search, setSearch] = useState<{ rows: PromoRow[]; total: number; page: number } | null>(null);
+  const [idResult, setIdResult] = useState<{ row: PromoRow | null } | null>(null);
+  const [pastOpen, setPastOpen] = useState(false);
+  const [loading, setLoading] = useState(true);
+  const [err, setErr] = useState<string | null>(null);
+  const [justCreated, setJustCreated] = useState<PromoRow[]>([]);
+
+  const [detailId, setDetailId] = useState<number | null>(null);
+  const [createOpen, setCreateOpen] = useState(false);
+  const [toast, setToast] = useState<string | null>(null);
+  const say = (t: string) => { setToast(t); setTimeout(() => setToast(null), 3200); };
+
+  const mode: "browse" | "search" | "id" = deferredQ.trim() === "" ? "browse" : /^\d+$/.test(deferredQ.trim()) ? "id" : "search";
+
+  // debounce the search box
+  useEffect(() => { const t = setTimeout(() => setDeferredQ(q), 280); return () => clearTimeout(t); }, [q]);
+  // clearing the box re-collapses PAST
+  useEffect(() => { if (deferredQ.trim() === "") setPastOpen(false); }, [deferredQ]);
+
+  const getList = useCallback(async (params: Record<string, string | number>): Promise<ListResp> => {
+    const qs = new URLSearchParams(Object.entries(params).map(([k, v]) => [k, String(v)])).toString();
+    const res = await authFetch(`/api/promos/list?${qs}`);
+    const j = (await res.json().catch(() => ({}))) as ListResp;
+    if (!res.ok) throw new Error(j.error || `HTTP ${res.status}`);
+    return j;
+  }, []);
+
+  // ── BROWSE: load both buckets, page 1 ──
+  const loadBrowse = useCallback(async () => {
+    setLoading(true); setErr(null);
+    try {
+      const [l, p] = await Promise.all([getList({ bucket: "live", page: 1 }), getList({ bucket: "past", page: 1 })]);
+      setLive({ rows: l.data, total: l.totalItems, page: 1 });
+      setPast({ rows: p.data, total: p.totalItems, page: 1 });
+      setNowIso(l.nowIso);
+      setSearch(null); setIdResult(null);
+    } catch (e) { setErr(e instanceof Error ? e.message : String(e)); }
+    setLoading(false);
+  }, [getList]);
+
+  // ── SEARCH: substring across both buckets, page 1 ──
+  const loadSearch = useCallback(async (text: string) => {
+    setLoading(true); setErr(null);
+    try {
+      const r = await getList({ code: text, page: 1 });
+      setSearch({ rows: r.data, total: r.totalItems, page: 1 });
+      setNowIso(r.nowIso);
+      // auto-expand PAST if the search hit there
+      if (r.data.some((row) => promoBucket(row, r.nowIso) === "past")) setPastOpen(true);
+    } catch (e) { setErr(e instanceof Error ? e.message : String(e)); }
+    setLoading(false);
+  }, [getList]);
+
+  // ── ID lookup: detail by id ──
+  const loadId = useCallback(async (id: string) => {
+    setLoading(true); setErr(null);
+    try {
+      const res = await authFetch(`/api/promos/detail/${id}`);
+      if (res.status === 404) { setIdResult({ row: null }); setSearch(null); setLoading(false); return; }
+      const j = await res.json();
+      if (!res.ok) throw new Error(j.error || `HTTP ${res.status}`);
+      const row = j.promo as PromoRow;
+      setIdResult({ row }); setNowIso(j.nowIso);
+      if (promoBucket(row, j.nowIso) === "past") setPastOpen(true);
+    } catch (e) { setErr(e instanceof Error ? e.message : String(e)); }
+    setLoading(false);
+  }, []);
+
+  useEffect(() => {
+    if (mode === "browse") void loadBrowse();
+    else if (mode === "search") void loadSearch(deferredQ.trim());
+    else void loadId(deferredQ.trim());
+  }, [mode, deferredQ, loadBrowse, loadSearch, loadId]);
+
+  const loadMore = async (bucket: "live" | "past") => {
+    if (mode === "search") { // one combined list, next page appends
+      if (!search) return;
+      const r = await getList({ code: deferredQ.trim(), page: search.page + 1 });
+      setSearch({ rows: [...search.rows, ...r.data], total: r.totalItems, page: search.page + 1 });
+      return;
+    }
+    const cur = bucket === "live" ? live : past;
+    const r = await getList({ bucket, page: cur.page + 1 });
+    const next = { rows: [...cur.rows, ...r.data], total: r.totalItems, page: cur.page + 1 };
+    bucket === "live" ? setLive(next) : setPast(next);
+  };
+
+  // ── compute what each table shows, per mode ──
+  const view = useMemo(() => {
+    if (mode === "id") {
+      const row = idResult?.row ?? null;
+      const b = row ? promoBucket(row, nowIso) : "live";
+      return {
+        liveRows: row && b === "live" ? [row] : [], liveTotal: row && b === "live" ? 1 : 0,
+        pastRows: row && b === "past" ? [row] : [], pastTotal: row && b === "past" ? 1 : 0,
+        searchTotal: row ? 1 : 0, notFound: idResult != null && row == null,
+      };
+    }
+    if (mode === "search" && search) {
+      const liveRows = search.rows.filter((r) => promoBucket(r, nowIso) === "live");
+      const pastRows = search.rows.filter((r) => promoBucket(r, nowIso) === "past");
+      return { liveRows, liveTotal: liveRows.length, pastRows, pastTotal: pastRows.length, searchTotal: search.total, notFound: search.total === 0 };
+    }
+    // browse — prepend session "just created" rows to LIVE
+    return { liveRows: [...justCreated, ...live.rows], liveTotal: live.total + justCreated.length, pastRows: past.rows, pastTotal: past.total, searchTotal: 0, notFound: false };
+  }, [mode, idResult, search, live, past, justCreated, nowIso]);
+
+  const onCreated = (row: PromoRow) => { setJustCreated((j) => [{ ...row }, ...j]); setCreateOpen(false); say(`Created ${row.code}`); };
+
+  if (appUser && !mayManage) {
+    return <div className="promo"><style>{CSS}</style><div className="wrap"><div className="empty" data-testid="promo-no-access"><b>You do not hold MANAGE PROMOS</b>This screen and its actions require the promo-code permission.</div></div></div>;
+  }
+
+  return (
+    <div className="promo" data-testid="promos">
+      <style>{CSS}</style>
+      <div className="wrap">
+        <div className="head">
+          <div className="htop">
+            <div>
+              <h1 className="h1">Promo Codes</h1>
+              <p className="hsub">Live codes and past ones. Search reaches both — there are 6,260, so search is faster than scroll.</p>
+            </div>
+            <button className="btn primary" data-testid="promo-new" onClick={() => setCreateOpen(true)}>+ New promo code</button>
+          </div>
+          <div className="srow">
+            <span className="sbox">
+              <span className="sicon" aria-hidden>⌕</span>
+              <input id="promo-q" data-testid="promo-search" type="search" autoFocus placeholder="Code or ID" autoComplete="off" aria-label="Search promo codes" value={q} onChange={(e) => setQ(e.target.value)} />
+            </span>
+          </div>
+          <p className="hint" data-testid="promo-hint">{
+            mode === "id" ? <>Reading that as an <b>ID</b>.</>
+            : mode === "search" ? <>Reading that as a <b>code</b> — substring, case-insensitive. Searches both tables, including deleted codes.</>
+            : <>Type a code or an ID — all digits is read as an ID, anything else as a code.</>
+          }</p>
+        </div>
+
+        {loading && !view.liveRows.length && !view.pastRows.length ? <div className="empty" data-testid="promo-loading">Loading…</div>
+         : err ? <div className="empty err" data-testid="promo-err">Couldn’t load promo codes: {err}</div>
+         : <>
+          {/* LIVE */}
+          <section className={"grp" + (mode !== "browse" && view.liveTotal === 0 ? " slim" : "")} data-testid="grp-live">
+            <div className="ghead">
+              <span className="gtitle">LIVE</span>
+              <span className="gsub" data-testid="live-sub">{mode === "browse"
+                ? `${view.liveTotal.toLocaleString()} live codes, in the order the API returns them`
+                : `${view.liveTotal.toLocaleString()} live match${view.liveTotal === 1 ? "" : "es"}`}</span>
+            </div>
+            <PromoTable rows={view.liveRows} nowIso={nowIso} onOpen={setDetailId}
+              empty={mode !== "browse"
+                ? <p className="empty oneline" data-testid="live-empty"><b>No live codes match</b>Finished and deleted codes are in the PAST table below — it opens when a search hits it.</p>
+                : <p className="empty" data-testid="live-empty"><b>No live codes</b>Nothing is active or scheduled right now.</p>}
+              more={<MoreBar mode={mode} loaded={view.liveRows.length - (mode === "browse" ? justCreated.length : 0)} total={mode === "search" ? view.searchTotal : view.liveTotal} onMore={() => loadMore("live")} />} />
+          </section>
+
+          {/* PAST — collapsible */}
+          <section className={"grp past"} data-testid="grp-past">
+            <button type="button" className="ghead gtoggle" data-testid="past-toggle" aria-expanded={pastOpen} onClick={() => setPastOpen((o) => !o)}>
+              <span className="caret" aria-hidden>{pastOpen ? "▾" : "▸"}</span>
+              <span className="gtitle">PAST</span>
+              <span className={"gsub" + (mode !== "browse" && view.pastTotal > 0 ? " pasthit" : "")} data-testid="past-sub">{mode === "browse"
+                ? `${view.pastTotal.toLocaleString()} expired or deleted`
+                : `${view.pastTotal.toLocaleString()} match${view.pastTotal === 1 ? "" : "es"} in here`}</span>
+            </button>
+            {pastOpen && (
+              <div data-testid="past-body">
+                <PromoTable rows={view.pastRows} nowIso={nowIso} onOpen={setDetailId}
+                  empty={<p className="empty" data-testid="past-empty"><b>No past codes match</b>Nothing expired or deleted matches that.</p>}
+                  more={<MoreBar mode={mode} loaded={view.pastRows.length} total={mode === "search" ? view.searchTotal : view.pastTotal} onMore={() => loadMore("past")} />} />
+              </div>
+            )}
+          </section>
+
+          <p className="foot" data-testid="promo-foot">{mode === "browse"
+            ? `Server order (no sort available). Deleted codes with a future end date appear in LIVE, struck through. CAP is here; redemptions are on a code's detail.`
+            : mode === "id"
+              ? (view.notFound ? `No code with ID ${deferredQ.trim()}.` : `1 code with ID ${deferredQ.trim()}.`)
+              : `${view.searchTotal.toLocaleString()} code${view.searchTotal === 1 ? "" : "s"} match “${deferredQ.trim()}”. Deleted codes are never hidden from search.`}</p>
+        </>}
+      </div>
+
+      {detailId != null && <DetailDrawer id={detailId} onClose={() => setDetailId(null)} />}
+      {createOpen && <CreateDrawer onClose={() => setCreateOpen(false)} onCreated={onCreated} />}
+      {toast && <div className="toast" data-testid="promo-toast" role="status">{toast}</div>}
+    </div>
+  );
+}
+
+// ── one row of a table ──
+function PromoTable({ rows, nowIso, onOpen, empty, more }: { rows: PromoRow[]; nowIso: string; onOpen: (id: number) => void; empty: React.ReactNode; more: React.ReactNode }) {
+  return (
+    <div className="sheet">
+      <div className="colhead"><span /><span>CODE</span><span>WINDOW</span><span>DISCOUNT</span><span>WHO · WHICH</span><span style={{ textAlign: "right" }}>CAP</span><span>STATE</span></div>
+      {rows.length === 0 ? empty : rows.map((p) => <PromoRowEl key={p.id + ":" + p.code} p={p} nowIso={nowIso} onOpen={onOpen} />)}
+      {rows.length > 0 && more}
+    </div>
+  );
+}
+
+function PromoRowEl({ p, nowIso, onOpen }: { p: PromoRow; nowIso: string; onOpen: (id: number) => void }) {
+  const st: PromoState = promoState(p, nowIso);
+  const isJustCreated = (p as PromoRow & { _new?: boolean })._new;
+  return (
+    <button type="button" className={"r " + st} data-testid="promo-row" data-id={p.id} data-state={st} data-code={p.code} onClick={() => onOpen(p.id)}>
+      <span className="rail" />
+      <span className="cell c-code"><span className="code">{p.code}{isJustCreated && <span className="newtag" data-testid="just-created">JUST CREATED</span>}</span><span className="cid">ID {p.id}</span></span>
+      <span className="cell c-win"><span className="win">{fmtChicagoDate(p.startDateUtc)} → {fmtChicagoDate(p.endDateUtc)}<small>{fmtChicagoTime(p.startDateUtc)} – {fmtChicagoTime(p.endDateUtc)} · {PROMO_TZ_LABEL.split(" (")[0]}</small></span></span>
+      <span className="cell c-val"><span className="val">{discountLabel(p)}<small>{p.discountType}</small></span></span>
+      <span className="cell c-who"><span className="who">{USER_TYPE_LABEL[p.targetUserType]}<small>{MATCH_TYPE_LABEL[p.targetMatchType]}</small></span></span>
+      <span className="cell c-cap"><span className="uses" data-testid="promo-cap">{capLabel(p)}</span></span>
+      <span className="cell c-st"><span className={"st " + st}>{st.toUpperCase()}</span></span>
+    </button>
+  );
+}
+
+function MoreBar({ mode, loaded, total, onMore }: { mode: "browse" | "search" | "id"; loaded: number; total: number; onMore: () => void }) {
+  const left = Math.max(0, total - loaded);
+  if (left === 0) return <div className="more" data-testid="more"><span>Showing {loaded.toLocaleString()} of {total.toLocaleString()} · all shown</span></div>;
+  // browse past the ceiling with an empty search box: stop offering a bigger haystack
+  if (mode === "browse" && loaded >= CEILING) {
+    return <div className="more" data-testid="more"><span className="nudge" data-testid="nudge">{left.toLocaleString()} more in this table — search by code or ID instead of paging.</span></div>;
+  }
+  return <div className="more" data-testid="more"><span>Showing {loaded.toLocaleString()} of {total.toLocaleString()}</span><button className="btn" data-testid="show-more" onClick={onMore}>Show {Math.min(PAGE, left)} more</button></div>;
+}
+
+// ── DETAIL drawer: the ONLY place redemptions (usageCount) appear → REDEEMED / LEFT here ──
+function DetailDrawer({ id, onClose }: { id: number; onClose: () => void }) {
+  const [state, setState] = useState<{ promo?: PromoRow & { usageCount?: number }; usageCount?: number; nowIso?: string; loading: boolean; error?: string }>({ loading: true });
+  useEffect(() => {
+    let live = true;
+    (async () => {
+      try { const res = await authFetch(`/api/promos/detail/${id}`); const j = await res.json();
+        if (!res.ok) throw new Error(j.error || `HTTP ${res.status}`);
+        if (live) setState({ promo: j.promo, usageCount: j.usageCount, nowIso: j.nowIso, loading: false });
+      } catch (e) { if (live) setState({ loading: false, error: e instanceof Error ? e.message : String(e) }); }
+    })();
+    return () => { live = false; };
+  }, [id]);
+  useEffect(() => { const h = (e: KeyboardEvent) => { if (e.key === "Escape") onClose(); }; document.addEventListener("keydown", h); return () => document.removeEventListener("keydown", h); }, [onClose]);
+
+  const p = state.promo; const uc = state.usageCount ?? 0;
+  return (
+    <div className="scrim" data-testid="detail-scrim" onClick={(e) => { if ((e.target as HTMLElement).classList.contains("scrim")) onClose(); }}>
+      <div className="drawer" role="dialog" aria-modal="true" aria-label="Promo code detail">
+        <div className="dhead"><h2>Promo code</h2><button className="x" aria-label="Close" onClick={onClose}>×</button></div>
+        <div className="dbody">
+          {state.loading ? <p className="empty">Loading…</p> : state.error ? <p className="empty err">{state.error}</p> : p ? <>
+            <div className="dcode"><span className="code big">{p.code}</span><span className="st inline">{promoState(p, state.nowIso ?? new Date().toISOString()).toUpperCase()}</span><span className="cid">ID {p.id}</span></div>
+            <div className="usebox" data-testid="detail-usage">
+              <div className="usecol"><span className="ul">REDEEMED</span><span className="uv" data-testid="detail-redeemed">{uc.toLocaleString()}</span></div>
+              <div className="usecol"><span className="ul">CAP</span><span className="uv">{capLabel(p)}</span></div>
+              <div className="usecol"><span className="ul">LEFT</span><span className="uv" data-testid="detail-left">{leftLabel(p, uc)}</span></div>
+            </div>
+            <p className="useline" data-testid="detail-useline">{usageLine(p, uc)}</p>
+            <dl className="facts">
+              <div><dt>Discount</dt><dd>{discountLabel(p)} <small>{p.discountType}</small></dd></div>
+              <div><dt>Window</dt><dd>{fmtChicagoFull(p.startDateUtc)} → {fmtChicagoFull(p.endDateUtc)}<small>{PROMO_TZ_LABEL}</small></dd></div>
+              <div><dt>Audience</dt><dd>{USER_TYPE_LABEL[p.targetUserType]}</dd></div>
+              <div><dt>Scope</dt><dd>{MATCH_TYPE_LABEL[p.targetMatchType]}</dd></div>
+              <div><dt>Created</dt><dd>{fmtChicagoFull(p.createdAt)}</dd></div>
+            </dl>
+          </> : null}
+        </div>
+        <div className="dfoot"><div className="dbtns">
+          <span className="sp" />
+          <button className="btn" disabled data-testid="detail-edit" title="Editing a promo lands in the next phase.">Edit</button>
+          <button className="btn" disabled data-testid="detail-delete" title="Delete is reversible (soft-delete + restore) and lands in the next phase.">Delete (reversible)</button>
+        </div></div>
+      </div>
+    </div>
+  );
+}
+
+// ── CREATE drawer: only CODE and VALUE typed; everything else prefills. TRUE UTC via Chicago. ──
+type Form = { code: string; type: DiscountType; value: string; sD: string; sT: string; eD: string; eT: string; who: TargetUserType; which: TargetMatchType; uses: string };
+function CreateDrawer({ onClose, onCreated }: { onClose: () => void; onCreated: (row: PromoRow) => void }) {
+  const now = Date.now();
+  const startIso = nextQuarterHourUtcIso(now), endIso = endOfYearUtcIso(chicagoYearOf(now));
+  const s0 = toChicagoInputs(startIso), e0 = toChicagoInputs(endIso);
+  const [f, setF] = useState<Form>({ code: "", type: "PERCENT", value: "", sD: s0.date, sT: s0.time, eD: e0.date, eT: e0.time, who: "ALL_USERS", which: "ALL_MATCHES", uses: "1" });
+  const [dupe, setDupe] = useState<{ state: "idle" | "checking" | "free" | "taken" | "error"; existing?: { id: number; code: string; state: string } }>({ state: "idle" });
+  const [submitting, setSubmitting] = useState(false);
+  const [submitErr, setSubmitErr] = useState<string | null>(null);
+
+  const set = (patch: Partial<Form>) => setF((prev) => ({ ...prev, ...patch }));
+  const startUtc = () => fromChicagoInputs(f.sD, f.sT);
+  const endUtc = () => fromChicagoInputs(f.eD, f.eT);
+  const badWindow = endUtc() <= startUtc();
+  const valNum = Number(f.value);
+  const valOk = f.value !== "" && Number.isFinite(valNum) && valNum > 0 && (f.type !== "PERCENT" || valNum <= 100);
+  const valid = f.code.trim() !== "" && valOk && !badWindow && dupe.state !== "taken" && Number(f.uses) >= 1;
+
+  // debounced duplicate check (server call — the browser cannot hold 6,260 codes)
+  const codeRef = useRef(f.code);
+  useEffect(() => { codeRef.current = f.code; }, [f.code]);
+  useEffect(() => {
+    const code = f.code.trim();
+    if (!code) { setDupe({ state: "idle" }); return; }
+    setDupe({ state: "checking" });
+    const t = setTimeout(async () => {
+      try {
+        const res = await authFetch(`/api/promos/check?code=${encodeURIComponent(code)}`);
+        const j = await res.json();
+        if (codeRef.current.trim() !== code) return; // a newer keystroke won
+        if (!res.ok) { setDupe({ state: "error" }); return; }
+        setDupe(j.taken ? { state: "taken", existing: j.existing } : { state: "free" });
+      } catch { if (codeRef.current.trim() === code) setDupe({ state: "error" }); }
+    }, 300);
+    return () => clearTimeout(t);
+  }, [f.code]);
+
+  useEffect(() => { const h = (e: KeyboardEvent) => { if (e.key === "Escape") onClose(); }; document.addEventListener("keydown", h); return () => document.removeEventListener("keydown", h); }, [onClose]);
+
+  const summary = f.code.trim() && valOk
+    ? createSummary({ code: f.code.trim(), discountType: f.type, value: f.type === "USD" ? Math.round(valNum * 100) : valNum, who: f.who, which: f.which, uses: Number(f.uses) || 1, startLabel: fmtChicagoFull(startUtc()), endLabel: fmtChicagoFull(endUtc()), tzName: PROMO_TZ_LABEL.split(" (")[0] })
+    : null;
+
+  const submit = async () => {
+    setSubmitting(true); setSubmitErr(null);
+    try {
+      const res = await authFetch(`/api/promos/create`, { method: "POST", headers: { "Content-Type": "application/json" }, body: JSON.stringify({
+        code: f.code.trim(), discountType: f.type, value: valNum, startDateUtc: startUtc(), endDateUtc: endUtc(), uses: Number(f.uses), who: f.who, which: f.which,
+      }) });
+      const j = await res.json();
+      if (!res.ok) { setSubmitErr(j.error || `HTTP ${res.status}`); setSubmitting(false); return; }
+      // synthesize the just-created row for the session marker
+      const row: PromoRow & { _new?: boolean } = {
+        id: (j.result && (j.result.id ?? j.result?.data?.id)) || Date.now(), code: f.code.trim(), startDateUtc: startUtc(), endDateUtc: endUtc(),
+        discountType: f.type, discountValue: f.type === "USD" ? Math.round(valNum * 100) : valNum, targetUserType: f.who, numberOfUsesPerUser: Number(f.uses),
+        targetMatchType: f.which, matchTimePeriodStart: null, matchTimePeriodEnd: null, createdAt: new Date().toISOString(), deletedAt: null, _new: true,
+      };
+      onCreated(row);
+    } catch (e) { setSubmitErr(e instanceof Error ? e.message : String(e)); setSubmitting(false); }
+  };
+
+  const preset = (kind: string) => {
+    const n = Date.now();
+    if (kind === "now") { const w = toChicagoInputs(nextQuarterHourUtcIso(n)); set({ sD: w.date, sT: w.time }); }
+    else if (kind === "tom9") { const c = utcIsoToChicagoWall(new Date(n).toISOString()); const iso = chicagoWallToUtcIso({ y: c.y, mo: c.mo, d: c.d + 1, h: 9, mi: 0 }); const w = toChicagoInputs(iso); set({ sD: w.date, sT: w.time }); }
+    else if (kind === "eoy") { const w = toChicagoInputs(endOfYearUtcIso(chicagoYearOf(n))); set({ eD: w.date, eT: w.time }); }
+    else if (kind === "eom") { const c = utcIsoToChicagoWall(new Date(n).toISOString()); const iso = chicagoWallToUtcIso({ y: c.y, mo: c.mo, d: new Date(Date.UTC(c.y, c.mo, 0)).getUTCDate(), h: 23, mi: 59 }); const w = toChicagoInputs(iso); set({ eD: w.date, eT: w.time }); }
+    else if (kind === "d30") { const c = utcIsoToChicagoWall(new Date(n).toISOString()); const iso = chicagoWallToUtcIso({ y: c.y, mo: c.mo, d: c.d + 30, h: 23, mi: 59 }); const w = toChicagoInputs(iso); set({ eD: w.date, eT: w.time }); }
+  };
+
+  const WHO_OPTS: { v: TargetUserType; disabled?: boolean }[] = [{ v: "ALL_USERS" }, { v: "NEW_USERS" }, { v: "CHURN_USERS" }, { v: "SPECIFIC_USERS", disabled: true }];
+  const WHICH_OPTS: { v: TargetMatchType; disabled?: boolean }[] = [{ v: "ALL_MATCHES" }, { v: "TOTAL_USAGE" }, { v: "TIME_PERIOD", disabled: true }, { v: "SPECIFIC_FIELDS", disabled: true }, { v: "SPECIFIC_MATCHES", disabled: true }];
+
+  return (
+    <div className="scrim" onClick={(e) => { if ((e.target as HTMLElement).classList.contains("scrim")) onClose(); }}>
+      <div className="drawer" role="dialog" aria-modal="true" aria-label="New promo code">
+        <div className="dhead"><h2>New promo code</h2><button className="x" aria-label="Close" onClick={onClose}>×</button></div>
+        <div className="dbody">
+          <span className="tzline">All promo times are <b>{PROMO_TZ_LABEL}</b>, entered here and stored as a true UTC instant. Clubhouse converts for you (and is DST-correct, unlike Retool).</span>
+
+          <div className="fgrid one">
+            <label className="fld"><span className="lb">CODE <span className="req">*</span></span>
+              <input className="mono" data-testid="f-code" value={f.code} placeholder="e.g. augweekend" autoComplete="off" aria-invalid={dupe.state === "taken"} onChange={(e) => set({ code: e.target.value })} />
+              {dupe.state === "taken" ? <span className="dupe" data-testid="f-dupe"><b>{dupe.existing?.code}</b> already exists — ID {dupe.existing?.id}, {dupe.existing?.state}. Pick another.</span>
+               : dupe.state === "checking" ? <span className="help" data-testid="f-checking">Checking availability…</span>
+               : dupe.state === "free" ? <span className="help ok" data-testid="f-free">Available. Stored exactly as typed (case is kept).</span>
+               : dupe.state === "error" ? <span className="err" data-testid="f-checkerr">Couldn’t check uniqueness — the server enforces it on save.</span>
+               : <span className="help">Checked against all codes as you type; the check ignores case, the stored value does not.</span>}
+            </label>
+          </div>
+
+          <div className="fgrid" style={{ marginTop: 13 }}>
+            <span className="fld"><span className="lb">DISCOUNT TYPE <span className="auto">PREFILLED</span></span>
+              <span className="seg" role="group" aria-label="Discount type">
+                <button type="button" data-testid="f-type-pct" aria-pressed={f.type === "PERCENT"} onClick={() => set({ type: "PERCENT" })}>Percent</button>
+                <button type="button" data-testid="f-type-usd" aria-pressed={f.type === "USD"} onClick={() => set({ type: "USD" })}>Amount</button>
+              </span>
+            </span>
+            <label className="fld"><span className="lb">VALUE <span className="req">*</span></span>
+              <input data-testid="f-value" inputMode="decimal" value={f.value} placeholder={f.type === "PERCENT" ? "50" : "5.00"} autoComplete="off" onChange={(e) => set({ value: e.target.value })} />
+              <span className="help">{f.type === "PERCENT" ? "Percent off, 1–100." : "Dollars off. Stored in cents."}</span>
+            </label>
+          </div>
+
+          <div className="sect"><h3>WHEN</h3>
+            <div className="fgrid">
+              <span className="fld"><span className="lb">STARTS</span>
+                <input type="date" data-testid="f-sd" value={f.sD} onChange={(e) => set({ sD: e.target.value })} />
+                <input type="time" data-testid="f-st" value={f.sT} style={{ marginTop: 7 }} onChange={(e) => set({ sT: e.target.value })} />
+                <span className="presets"><button type="button" className="pbtn" onClick={() => preset("now")}>Next quarter hour</button><button type="button" className="pbtn" onClick={() => preset("tom9")}>Tomorrow 9:00</button></span>
+              </span>
+              <span className="fld"><span className="lb">ENDS</span>
+                <input type="date" data-testid="f-ed" value={f.eD} aria-invalid={badWindow} onChange={(e) => set({ eD: e.target.value })} />
+                <input type="time" data-testid="f-et" value={f.eT} style={{ marginTop: 7 }} onChange={(e) => set({ eT: e.target.value })} />
+                <span className="presets"><button type="button" className="pbtn" onClick={() => preset("eoy")}>End of year</button><button type="button" className="pbtn" onClick={() => preset("eom")}>End of month</button><button type="button" className="pbtn" onClick={() => preset("d30")}>+30 days</button></span>
+                {badWindow && <span className="err" data-testid="f-winerr">The end must be after the start.</span>}
+              </span>
+            </div>
+          </div>
+
+          <div className="sect"><h3>WHO CAN USE IT</h3>
+            <span className="radios">{WHO_OPTS.map((o) => <button key={o.v} type="button" className="rad" disabled={o.disabled} aria-pressed={f.who === o.v} title={o.disabled ? "Selecting specific users needs a picker — lands next phase." : undefined} onClick={() => !o.disabled && set({ who: o.v })}>{USER_TYPE_LABEL[o.v]}</button>)}</span>
+            <label className="fld" style={{ marginTop: 13 }}><span className="lb">USES PER PERSON <span className="auto">PREFILLED 1</span></span>
+              <input data-testid="f-uses" inputMode="numeric" value={f.uses} onChange={(e) => set({ uses: e.target.value })} />
+              <span className="help">Starts at 1 (Retool defaults it to 0, which nobody can redeem). Becomes a total cap when scope is “All Matches (total cap)”.</span>
+            </label>
+          </div>
+
+          <div className="sect"><h3>WHICH MATCHES</h3>
+            <span className="radios">{WHICH_OPTS.map((o) => <button key={o.v} type="button" className="rad" disabled={o.disabled} aria-pressed={f.which === o.v} title={o.disabled ? "Selecting specific matches/fields or a time period needs a selector — lands next phase." : undefined} onClick={() => !o.disabled && set({ which: o.v })}>{MATCH_TYPE_LABEL[o.v]}</button>)}</span>
+          </div>
+        </div>
+
+        <div className="dfoot">
+          {summary ? <span className="summary" data-testid="f-summary"><b>WHAT THIS DOES</b>{summary}</span>
+                   : <span className="summary bad" data-testid="f-summary"><b>WHAT THIS DOES</b>Enter a code and a value and this line will say, in plain words, exactly what you are about to create.</span>}
+          {submitErr && <span className="dupe" data-testid="f-submiterr">{submitErr}</span>}
+          <span className="dbtns"><span className="sp" />
+            <button className="btn" data-testid="f-cancel" onClick={onClose}>Cancel</button>
+            <button className="btn primary" data-testid="f-create" disabled={!valid || submitting} onClick={submit}>{submitting ? "Creating…" : "Create promo code"}</button>
+          </span>
+        </div>
+      </div>
+    </div>
+  );
+}
+
+const CSS = `
+.promo{font-family:-apple-system,BlinkMacSystemFont,"Segoe UI",Inter,Helvetica,Arial,sans-serif;color:#0e1a13;background:#f2f6f4;min-height:100vh}
+.promo *{box-sizing:border-box}
+.promo .wrap{max-width:1200px;margin:0 auto;padding:16px 16px 72px}
+.promo .head{background:#fff;border:1px solid #dde6e1;border-radius:14px;padding:16px 18px;margin-bottom:14px}
+.promo .htop{display:flex;align-items:flex-start;gap:14px;flex-wrap:wrap}
+.promo .h1{font-size:23px;font-weight:700;letter-spacing:-.02em;margin:0}
+.promo .hsub{color:#3d5349;margin:2px 0 0;font-size:13.5px}
+.promo .btn{border:1px solid #cbd8d1;background:#fff;border-radius:11px;padding:0 16px;font:inherit;font-weight:700;cursor:pointer;color:#3d5349;min-height:42px;white-space:nowrap}
+.promo .btn:hover{background:#f6faf8}
+.promo .btn.primary{background:#12301f;border-color:#12301f;color:#fff;margin-left:auto}
+.promo .btn.primary:hover{background:#1b4630}
+.promo .btn:disabled{opacity:.45;cursor:not-allowed}
+.promo .srow{display:flex;gap:10px;margin-top:14px}
+.promo .sbox{flex:1 1 auto;min-width:0;position:relative;display:flex}
+.promo .sbox input{width:100%;min-width:0;border:1px solid #cbd8d1;border-radius:11px;padding:11px 14px 11px 38px;font:inherit;font-size:15px;background:#fbfdfc;color:#0e1a13}
+.promo .sbox input:focus{outline:2px solid #0b6bcb;outline-offset:-1px;background:#fff}
+.promo .sicon{position:absolute;left:13px;top:50%;transform:translateY(-50%);color:#5c7168;pointer-events:none}
+.promo .hint{margin:9px 2px 0;font-size:12.5px;color:#5c7168}.promo .hint b{color:#3d5349}
+.promo .grp{margin-bottom:16px}
+.promo .ghead{display:flex;align-items:center;gap:12px;flex-wrap:wrap;padding:0 2px 9px;width:100%;text-align:left}
+.promo .gtitle{font-size:11px;font-weight:800;letter-spacing:.13em;color:#0e1a13}
+.promo .gsub{font-size:12.5px;color:#5c7168;font-variant-numeric:tabular-nums}
+.promo .gsub.pasthit{font-weight:700;color:#b3241f}
+.promo .gtoggle{border:1px solid #dde6e1;background:#fff;border-radius:12px;font:inherit;cursor:pointer;padding:11px 14px}
+.promo .gtoggle:hover{background:#f7fbf9}.promo .gtoggle:focus-visible{outline:2px solid #0b6bcb;outline-offset:2px}
+.promo .caret{color:#5c7168;font-size:11px;width:11px;display:inline-block}
+.promo .grp.slim .colhead{display:none}
+.promo .grp.slim .empty.oneline{padding:13px 15px;text-align:left}
+.promo .grp.slim .empty.oneline b{display:inline;margin:0}.promo .grp.slim .empty.oneline b::after{content:" — "}
+.promo .sheet{background:#fff;border:1px solid #dde6e1;border-radius:14px;overflow:hidden}
+.promo .colhead,.promo .r{display:grid;gap:12px;align-items:center;grid-template-columns:5px minmax(140px,1.2fr) 190px 92px minmax(120px,1fr) 84px 96px;padding:0 16px 0 0}
+.promo .colhead{padding-top:9px;padding-bottom:9px;background:#fafcfb;border-bottom:1px solid #dde6e1;font-size:10px;font-weight:800;letter-spacing:.11em;color:#5c7168}
+.promo .colhead>span{display:block}
+.promo .r{width:100%;text-align:left;border:0;border-bottom:1px solid #dde6e1;background:#fff;font:inherit;color:inherit;cursor:pointer}
+.promo .r:last-child{border-bottom:0}.promo .r:hover{background:#f7fbf9}.promo .r:focus-visible{outline:2px solid #0b6bcb;outline-offset:-2px}
+.promo .rail{align-self:stretch;display:block;background:#cbd8d1}
+.promo .r.active .rail{background:#146c43}.promo .r.scheduled .rail{background:#1d4f8f}.promo .r.expired .rail{background:#c3cfc9}.promo .r.deleted .rail{background:#b3241f}
+.promo .r.deleted{background:#fdf7f6}
+.promo .cell{display:block;padding:10px 0;min-width:0}
+.promo .code{display:block;font-weight:700;font-family:ui-monospace,SFMono-Regular,Menlo,monospace;font-size:13.5px}
+.promo .r.deleted .code{text-decoration:line-through;text-decoration-color:rgba(179,36,31,.5)}
+.promo .newtag{margin-left:7px;background:#e6f4ec;color:#146c43;border:1px solid #9fd3b6;font-size:9px;font-weight:800;letter-spacing:.05em;padding:1px 5px;border-radius:4px;vertical-align:1px;font-family:-apple-system,sans-serif}
+.promo .cid{display:block;font-size:11.5px;color:#5c7168;font-variant-numeric:tabular-nums}
+.promo .win{display:block;font-size:12.5px;color:#3d5349;font-variant-numeric:tabular-nums}.promo .win small{display:block;font-size:11px;color:#5c7168}
+.promo .val{display:block;font-weight:700;font-variant-numeric:tabular-nums}.promo .val small{display:block;font-size:11px;font-weight:600;color:#5c7168;letter-spacing:.04em}
+.promo .who{display:block;font-size:12.5px;color:#3d5349}.promo .who small{display:block;font-size:11px;color:#5c7168}
+.promo .uses{display:block;text-align:right;font-variant-numeric:tabular-nums;font-size:13px;color:#3d5349}
+.promo .st{display:inline-flex;align-items:center;justify-content:center;padding:3px 6px;border-radius:6px;font-size:10.5px;font-weight:800;letter-spacing:.04em;border:1px solid;white-space:nowrap}
+.promo .st.active{background:#e6f4ec;color:#146c43;border-color:#9fd3b6}
+.promo .st.scheduled{background:#e8f0fa;color:#1d4f8f;border-color:#a8c4e6}
+.promo .st.expired{background:#f0f4f2;color:#3d5349;border-color:#cbd8d1}
+.promo .st.deleted{background:#fdecea;color:#b3241f;border-color:#f0a9a4}
+.promo .more{display:flex;align-items:center;gap:12px;padding:12px 16px;background:#fafcfb;border-top:1px solid #dde6e1;font-size:12.5px;color:#5c7168}
+.promo .more .btn{min-height:34px;padding:0 13px;font-size:12.5px}
+.promo .empty{padding:34px 16px;text-align:center;color:#5c7168}.promo .empty b{display:block;color:#3d5349;margin-bottom:4px}
+.promo .empty.err{color:#b3241f}
+.promo .foot{margin-top:10px;color:#5c7168;font-size:12px;padding:0 2px}
+/* drawer */
+.promo .scrim{position:fixed;inset:0;background:rgba(9,24,17,.42);z-index:60;display:flex;justify-content:flex-end}
+.promo .drawer{background:#fff;width:min(560px,100%);height:100%;overflow:auto;display:flex;flex-direction:column}
+.promo .dhead{display:flex;align-items:center;gap:10px;padding:15px 18px;border-bottom:1px solid #dde6e1;position:sticky;top:0;background:#fff;z-index:2}
+.promo .dhead h2{margin:0;font-size:18px;letter-spacing:-.02em}
+.promo .dhead .x{margin-left:auto;border:0;background:none;font-size:22px;line-height:1;color:#5c7168;min-width:44px;min-height:44px;cursor:pointer}
+.promo .dbody{padding:16px 18px;flex:1 1 auto}
+.promo .dfoot{border-top:1px solid #dde6e1;background:#fafcfb;position:sticky;bottom:0}
+.promo .dbtns{display:flex;gap:10px;align-items:center;padding:12px 18px;flex-wrap:wrap}.promo .dfoot .sp{flex:1 1 auto}
+.promo .dcode{display:flex;align-items:baseline;gap:10px;flex-wrap:wrap;margin-bottom:14px}.promo .code.big{font-size:18px}.promo .st.inline{font-size:10px}
+.promo .usebox{display:grid;grid-template-columns:1fr 1fr 1fr;gap:10px;margin-bottom:10px}
+.promo .usecol{background:#f6faf8;border:1px solid #dde6e1;border-radius:10px;padding:10px 12px}
+.promo .ul{display:block;font-size:9.5px;font-weight:800;letter-spacing:.11em;color:#5c7168;margin-bottom:4px}
+.promo .uv{display:block;font-size:19px;font-weight:800;font-variant-numeric:tabular-nums;color:#0e1a13}
+.promo .useline{margin:0 0 16px;font-size:12.5px;color:#3d5349;font-variant-numeric:tabular-nums}
+.promo .facts{margin:0;display:grid;gap:11px}.promo .facts div{display:grid;grid-template-columns:96px 1fr;gap:10px}
+.promo .facts dt{font-size:10px;font-weight:800;letter-spacing:.1em;color:#5c7168;padding-top:2px}
+.promo .facts dd{margin:0;font-size:13.5px;color:#0e1a13}.promo .facts small{display:block;font-size:11px;color:#5c7168}
+.promo .tzline{display:block;padding:9px 12px;border-radius:10px;background:#e8f0fa;border:1px solid #a8c4e6;color:#123a6b;font-size:12.5px;margin-bottom:16px}.promo .tzline b{font-weight:800}
+.promo .fgrid{display:grid;grid-template-columns:1fr 1fr;gap:13px}.promo .fgrid.one{grid-template-columns:1fr}
+.promo .fld{display:block;min-width:0}
+.promo .fld .lb{display:flex;align-items:baseline;gap:6px;font-size:10px;font-weight:800;letter-spacing:.11em;color:#5c7168;margin-bottom:5px}
+.promo .fld .lb .req{color:#b3241f}
+.promo .fld .lb .auto{margin-left:auto;font-size:9.5px;font-weight:800;letter-spacing:.06em;color:#146c43;background:#e6f4ec;border:1px solid #9fd3b6;border-radius:5px;padding:1px 5px}
+.promo .fld input,.promo .fld select{width:100%;min-width:0;border:1px solid #cbd8d1;border-radius:10px;padding:10px 12px;font:inherit;background:#fbfdfc;color:#0e1a13;min-height:44px}
+.promo .fld input:focus{outline:2px solid #0b6bcb;outline-offset:-1px;background:#fff}
+.promo .fld input.mono{font-family:ui-monospace,SFMono-Regular,Menlo,monospace}
+.promo .fld input[aria-invalid="true"]{border-color:#f0a9a4;background:#fffafa}
+.promo .fld .help{display:block;margin-top:5px;font-size:11.5px;color:#5c7168}.promo .fld .help.ok{color:#146c43;font-weight:600}
+.promo .fld .err{display:block;margin-top:5px;font-size:11.5px;color:#b3241f;font-weight:600}
+.promo .presets{display:flex;gap:6px;flex-wrap:wrap;margin-top:6px}
+.promo .pbtn{border:1px solid #cbd8d1;background:#fff;border-radius:8px;padding:0 9px;min-height:32px;font:inherit;font-size:11.5px;font-weight:600;color:#3d5349;cursor:pointer}
+.promo .pbtn:hover{background:#f4f8f6}
+.promo .seg{display:inline-flex;border:1px solid #cbd8d1;border-radius:10px;overflow:hidden;background:#fbfdfc;width:100%}
+.promo .seg button{flex:1 1 0;border:0;background:transparent;min-height:44px;font:inherit;font-size:13px;font-weight:700;color:#3d5349;cursor:pointer}
+.promo .seg button+button{border-left:1px solid #cbd8d1}
+.promo .seg button[aria-pressed="true"]{background:#12301f;color:#fff}
+.promo .radios{display:flex;gap:7px;flex-wrap:wrap}
+.promo .rad{border:1px solid #cbd8d1;background:#fff;border-radius:999px;padding:0 13px;min-height:44px;font:inherit;font-size:12.5px;font-weight:600;color:#3d5349;cursor:pointer;display:inline-flex;align-items:center}
+.promo .rad[aria-pressed="true"]{background:#12301f;border-color:#12301f;color:#fff}.promo .rad:disabled{opacity:.4;cursor:not-allowed}
+.promo .sect{margin-top:18px;padding-top:15px;border-top:1px solid #dde6e1}.promo .sect h3{margin:0 0 11px;font-size:10.5px;font-weight:800;letter-spacing:.12em;color:#5c7168}
+.promo .summary{display:block;margin:0;padding:12px 18px;background:#e6f4ec;border-bottom:1px solid #9fd3b6;color:#0d4a2e;font-size:13px;line-height:1.45}
+.promo .summary b{display:block;font-size:10px;letter-spacing:.12em;margin-bottom:4px;color:#0f5c39}
+.promo .summary.bad{background:#fdf2e0;border-bottom-color:#e8c383;color:#6b4400}.promo .summary.bad b{color:#7a4d00}
+.promo .dupe{display:block;margin:6px 18px 0;padding:9px 12px;border-radius:10px;background:#fdecea;border:1px solid #f0a9a4;color:#7d1a16;font-size:12.5px}.promo .dupe b{font-weight:800}
+.promo .toast{position:fixed;left:50%;bottom:22px;transform:translateX(-50%);background:#12301f;color:#fff;padding:12px 18px;border-radius:11px;font-size:13.5px;font-weight:600;z-index:80;box-shadow:0 10px 26px rgba(6,20,13,.3)}
+
+@media (max-width:820px){
+  .promo .wrap{padding:10px 10px 60px}
+  .promo .head{padding:14px}
+  /* §9g — every interactive element is at least 44px on its short axis on the phone */
+  .promo .btn,.promo .gtoggle,.promo .pbtn,.promo .more .btn{min-height:44px}
+  .promo .colhead{display:none}
+  .promo .r{grid-template-columns:5px 1fr auto;grid-template-areas:"rail code st" "rail win st" "rail val val" "rail who who" "rail cap cap";gap:0 11px;padding:0 12px 0 0}
+  .promo .rail{grid-area:rail}
+  .promo .c-code{grid-area:code;padding:9px 0 0}.promo .c-win{grid-area:win;padding:2px 0 0}
+  .promo .c-val{grid-area:val;padding:6px 0 0}.promo .c-who{grid-area:who;padding:2px 0 0}
+  .promo .c-cap{grid-area:cap;padding:5px 0 10px}
+  .promo .c-st{grid-area:st;padding:9px 0 0;align-self:start}
+  .promo .uses{text-align:left}.promo .uses::before{content:"cap: ";color:#5c7168}
+  .promo .win,.promo .who{white-space:normal}
+  .promo .code{white-space:normal;overflow-wrap:anywhere}
+  .promo .fgrid{grid-template-columns:1fr}
+  .promo .usebox{grid-template-columns:1fr 1fr 1fr}
+  .promo .drawer{width:100%}
+  .promo .dbtns{flex-wrap:nowrap}.promo .dbtns .btn{flex:1 1 0;padding:0 10px}.promo .btn.primary{margin-left:0;flex:2 1 0}
+  .promo .toast{left:12px;right:12px;transform:none;text-align:center}
+}
+`;

@@ -5,9 +5,9 @@ import "server-only"; // no-op under --conditions=react-server
 //   NODE_OPTIONS=--conditions=react-server npx tsx scripts/prod-guard-test.ts
 
 import {
-  assertAllowedHost, preflightWrite, apiWrite, assertAllowedEndpoint, assertCanEditMatches, assertCanManagePlayers,
+  assertAllowedHost, preflightWrite, apiWrite, assertAllowedEndpoint, assertCanEditMatches, assertCanManagePlayers, assertCanManagePromos,
   StageHostGuardError, DeniedFieldError, ProductionWriteBoltedError, DeniedEndpointError, NotAuthorizedError,
-  CLI_WRITE_ACTOR, __setEditGuardForTest, __setManageGuardForTest, type WriteActor,
+  CLI_WRITE_ACTOR, __setEditGuardForTest, __setManageGuardForTest, __setPromoGuardForTest, type WriteActor,
 } from "../src/lib/matchdayStageApi";
 try { process.loadEnvFile(".env.local"); } catch {}
 
@@ -146,6 +146,41 @@ async function main() {
     ? ok(`manage guard removed => ban no-fetch test goes RED (threwNotAuthorized=${mutatedM.threwNA}, fetches=${mutatedM.fetches})`)
     : bad("MANAGE mutation toothless — removing the guard left the no-fetch test green");
   { const r = await noFetchManage({ canManagePlayers: false }); (r.threwNA && r.fetches === 0) ? ok("manage guard restored after the mutation") : bad("manage guard not restored", JSON.stringify(r)); }
+
+  // ── PHASE 18b: MANAGE PROMOS — a THIRD authority (promo writes), same machinery ──
+  console.log("MANAGE PROMOS check (Phase 18b) — the promo authority, INDEPENDENT of the other two:");
+  throws("assertCanManagePromos refuses undefined actor", NotAuthorizedError, () => assertCanManagePromos(undefined));
+  throws("assertCanManagePromos refuses a non-holder", NotAuthorizedError, () => assertCanManagePromos({ canEditMatches: true, canManagePlayers: true, canManagePromos: false } as WriteActor));
+  noThrow("assertCanManagePromos allows a MANAGE PROMOS holder", () => assertCanManagePromos({ canEditMatches: false, canManagePromos: true }));
+
+  // no-fetch test on the PROMOS path: apiWrite(..., "promos") checks promoGuard.
+  const noFetchPromo = async (actor: WriteActor | undefined): Promise<{ threwNA: boolean; fetches: number }> => {
+    let fetches = 0; const rf = globalThis.fetch;
+    globalThis.fetch = (async () => { fetches++; throw new Error("network must not be reached"); }) as typeof fetch;
+    let threwNA = false;
+    try { await apiWrite("staging", "POST", "/admin/promocodes", { code: "x" }, actor, "promos"); }
+    catch (e) { threwNA = e instanceof NotAuthorizedError; }
+    finally { globalThis.fetch = rf; }
+    return { threwNA, fetches };
+  };
+  { const r = await noFetchPromo({ canEditMatches: true, canManagePlayers: true, canManagePromos: false });
+    (r.threwNA && r.fetches === 0) ? ok("non-holder -> NotAuthorized and ZERO fetches on the promo path (spied)") : bad("promo no-fetch", JSON.stringify(r)); }
+
+  // INDEPENDENCE — the other two authorities never satisfy MANAGE PROMOS, and vice versa:
+  { let na = false; try { await apiWrite("staging", "POST", "/admin/promocodes", {}, { canEditMatches: true, canManagePlayers: true }, "promos"); } catch (e) { na = e instanceof NotAuthorizedError; }
+    na ? ok("EDIT MATCHES + MANAGE PLAYERS do NOT grant MANAGE PROMOS (independent)") : bad("independence: other grants leaked into promos"); }
+  { let na = false; try { await apiWrite("staging", "POST", "/admin/players/1/ban", {}, { canEditMatches: false, canManagePromos: true }, "manage"); } catch (e) { na = e instanceof NotAuthorizedError; }
+    na ? ok("MANAGE PROMOS does NOT grant MANAGE PLAYERS (independent)") : bad("independence: promos leaked into manage"); }
+
+  // THE MUTATION: remove the promo guard -> the promo no-fetch test goes RED.
+  console.log("MUTATION — monkeypatch the MANAGE PROMOS guard to a no-op:");
+  const restoreP = __setPromoGuardForTest(() => { /* guard removed */ });
+  const mutatedP = await noFetchPromo({ canEditMatches: false, canManagePromos: false });
+  restoreP();
+  (!(mutatedP.threwNA && mutatedP.fetches === 0))
+    ? ok(`promo guard removed => promo no-fetch test goes RED (threwNotAuthorized=${mutatedP.threwNA}, fetches=${mutatedP.fetches})`)
+    : bad("PROMO mutation toothless — removing the guard left the no-fetch test green");
+  { const r = await noFetchPromo({ canManagePromos: false }); (r.threwNA && r.fetches === 0) ? ok("promo guard restored after the mutation") : bad("promo guard not restored", JSON.stringify(r)); }
 
   // Phase 12: the same machinery must cover a NON-match endpoint (PUT /admin/teams/{id}),
   // not have been shaped around /admin/matches/{id}.

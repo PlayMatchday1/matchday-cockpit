@@ -10,11 +10,13 @@
 // itself is fetched once by the shared hook and rendered by each surface, hidden
 // at zero (a false zero is worse than no badge).
 
-import type { AppUser } from "@/lib/useAuth";
-import { canAccess } from "@/lib/useAuth";
+import type { AppUser, PageName } from "@/lib/useAuth";
+import { canAccess, canManagePromos } from "@/lib/useAuth";
 
 export type MatchOpsGroup = "Operations" | "Conversations";
-export type MatchOpsAccess = "matchops" | "tech" | "chats" | "admin" | "finance";
+// "promos" is a WRITE-grant gate (can_manage_promos), not a page-read gate — handled specially
+// in visibleSections. The Promo Codes screen ships behind MANAGE PROMOS (Phase 18b).
+export type MatchOpsAccess = "matchops" | "tech" | "chats" | "admin" | "finance" | "promos";
 
 export type MatchOpsSection = {
   key: string;
@@ -47,6 +49,7 @@ export const MATCH_OPS_SECTIONS: MatchOpsSection[] = [
   { key: "partner-dashboards", group: "Operations", label: "Partner Dashboards", href: "/match-ops/partner-dashboards", desc: "Per-venue revenue pages partners see at their link", access: "tech", icon: <I><rect x="3" y="4" width="18" height="14" rx="2" /><path d="M7 20h10M7 9h5M7 13h9" /></I>, badge: "partner-dashboards" },
   { key: "reviews", group: "Operations", label: "Reviews", href: "/match-ops/reviews", desc: "Per-match ratings and manager standings", access: "matchops", icon: <I><path d="m12 4 2.4 4.9 5.4.8-3.9 3.8.9 5.4-4.8-2.6-4.8 2.6.9-5.4L4.2 9.7l5.4-.8z" /></I> },
   { key: "change-log", group: "Operations", label: "Change Log", href: "/match-ops/change-log", desc: "Every production write, and whether it landed", access: "matchops", icon: <I><path d="M4 5h16v14H4z" /><path d="M8 9h8M8 13h6" /><circle cx="17.5" cy="16.5" r="2.2" /></I> },
+  { key: "promos", group: "Operations", label: "Promo Codes", href: "/match-ops/promos", desc: "Discount codes — live and past; create a new one", access: "promos", icon: <I><path d="M8.5 3.5h7l5 5v7l-5 5h-7l-5-5v-7z" /><circle cx="12" cy="12" r="2.4" /></I> },
   { key: "match-chats", group: "Conversations", label: "Match Chats", href: "/match-ops/match-chats", desc: "One WhatsApp group per match", access: "chats", icon: <I><path d="M21 11.5a8.4 8.4 0 0 1-9 8.4 8.9 8.9 0 0 1-3.8-.9L3 21l1.9-5.1A8.4 8.4 0 0 1 12 3.1a8.4 8.4 0 0 1 9 8.4z" /></I> },
   { key: "player-chats", group: "Conversations", label: "Player Chats", href: "/match-ops/player-chats", desc: "1:1 threads with players", access: "chats", icon: <I><circle cx="9" cy="8" r="3.4" /><path d="M2.5 20a6.5 6.5 0 0 1 13 0" /><path d="M17 7.5a3 3 0 0 1 0 6M18.5 20a6 6 0 0 0-3-5.2" /></I>, badge: "awaiting" },
 ];
@@ -55,6 +58,8 @@ export const MATCH_OPS_SECTIONS: MatchOpsSection[] = [
 // item). Every rail/strip filters through this — the gate is still each route's.
 export function visibleSections(appUser: AppUser | null | undefined): MatchOpsSection[] {
   return MATCH_OPS_SECTIONS.filter((s) =>
-    s.access === "admin" ? !!appUser?.is_admin : canAccess(appUser ?? null, s.access),
+    s.access === "admin" ? !!appUser?.is_admin
+    : s.access === "promos" ? canManagePromos(appUser) // WRITE-grant gate, not a page-read gate
+    : canAccess(appUser ?? null, s.access as PageName),
   );
 }

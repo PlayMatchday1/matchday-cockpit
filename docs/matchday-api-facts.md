@@ -833,6 +833,70 @@ reason: `strike.strikeLogs[].userMatchId` → the user-match `id` in the player'
 → read its `userStatus` (reason) and, for cancellations, `canceledAt` vs `match.startDateUtc`
 (timing). `strikeLog` itself carries no reason (see the strike model above).
 
+## Promo codes — the endpoint, proven by read-only production GETs (Phase 18a)
+
+Live-probed on production 2026-08-10 (read-only, `scripts/promo-step0-probe.ts`). The
+promo resource is `/admin/promocodes` (create/update/delete/detail) but the LIST has a
+**path + param split that must not be papered over**:
+
+- **`GET /admin/promocodes`** and **`GET /api/v1/admin/promocodes`** BOTH exist and both
+  do paging (`limit`, `page` 1-based) + date filter (`endDateMin`, `endDateMax`, ISO).
+- **`?code=` search is ACCEPTED ONLY on `/api/v1/admin/promocodes`.** On plain
+  `/admin/promocodes` it 400s `"property code should not exist"` (the endpoint runs
+  `forbidNonWhitelisted`, same as matches). So the **list/search uses `/api/v1/admin/promocodes`**
+  (it accepts every list param) while **mutations use `/admin/promocodes`** (no `/api/v1`).
+  This asymmetry is real, not a transcription error.
+- **No sort param exists.** `sortColumn`/`sortDirection`, `orderBy` all 400 on both paths.
+  There is a STABLE default order (page 1 fetched twice is byte-identical) but it is
+  **neither `id`- nor `createdAt`-sorted** (page 1 begins with 2023 codes: ids 15,16,17,9,11,12…).
+  So "sort by date created" is NOT expressible server-side; only reverse-paging the stable
+  order is, and that order is not creation order.
+- **No `isDeleted` filter** (400). Soft-deleted rows are mixed into the date-filtered results.
+- **Counts:** response is `{ data, totalItems }`. `totalItems` is exact for the given filter.
+  No filter → **6,260** total (NOT the mock's 2,164). `endDateMin=now` → 2,161;
+  `endDateMax=now` → 4,099; 2,161 + 4,099 = 6,260, so the end-date split PARTITIONS cleanly.
+  There are **no per-state counts** (active/scheduled/expired/deleted are derived, uncounted).
+- **List row shape (raw payload, not Retool's column subset):** `id, code, startDateUtc,
+  endDateUtc, discountType, discountValue, targetUserType, numberOfUsesPerUser,
+  targetMatchType, matchTimePeriodStart, matchTimePeriodEnd, createdAt, updatedAt, deletedAt`.
+  **`usageCount` (redemptions) is NOT on the list row** — it is detail-only
+  (`GET /admin/promocodes/{id}`). So REDEEMED/LEFT cannot be list columns without an N+1.
+- **Dates are TRUE UTC**, not wall-clock-with-Z like matches. A promo carries only
+  `startDateUtc`/`endDateUtc` (no wall-clock twin); e.g. `MDTUESDAY` = `2023-06-06T20:30:00.000Z`.
+  These are genuine instants — display/enter in America/Chicago (IANA, DST-aware), store UTC.
+  **Do NOT reuse the match wall-clock helpers here; they implement the opposite model.**
+- **`?code=` semantics:** EXACT match (querying `MDTUESDAY` returns only `MDTUESDAY`) and
+  **case-INSENSITIVE** (`mdtuesday` matches). It ignores the date filter, and it **DOES return
+  soft-deleted codes** (proven: `AdeMem1`, `deletedAt` set, is returned). So the duplicate
+  check is ONE safe call: `GET /api/v1/admin/promocodes?code=<exact>` → any row ⇒ taken,
+  including soft-deleted names.
+
+### THE NO-ORDER-BY TRAP — paging is only sound while nothing writes (Phase 18b)
+
+`GET /api/v1/admin/promocodes` has no ORDER BY. Paging is only sound while nothing writes to
+the table. A row updated between two page fetches can be returned twice or skipped entirely.
+Do not build anything that assumes a complete, non-duplicated walk of this list.
+
+Evidence: 0b showed page 1 = ids 15,16,17,9,11,12… — non-monotonic id AND non-monotonic
+createdAt is the signature of **heap order** (no ORDER BY). Heap order survives repeated reads
+but not writes: an UPDATE moves the tuple to the end of the heap. So the order is not merely
+unsortable, it is not durably stable. `sortColumn`/`sortDirection`/`orderBy` all 400.
+
+FOR VITALII (in this order — #1 is the bug, the missing sort param is only a symptom):
+  1. A deterministic ORDER BY on the promo list (id or createdAt), so paging is sound at all.
+  2. `sortColumn` / `sortDirection` params.
+Do NOT build around either; do NOT attempt a client-side workaround. Phase 18b cut the sort
+control for this reason (search-first UI instead).
+- **Enums (from Retool create DTO):** `discountType` = `USD|PERCENT` (USD value in CENTS,
+  ×100); `targetUserType` = `ALL_USERS|NEW_USERS|CHURN_USERS|SPECIFIC_USERS`; `targetMatchType`
+  = `ALL_MATCHES|TOTAL_USAGE|TIME_PERIOD|SPECIFIC_FIELDS|SPECIFIC_MATCHES` (one value, so
+  `TOTAL_USAGE` and `SPECIFIC_*` are mutually exclusive). `numberOfUsesPerUser` is the cap
+  (per-user; a TOTAL cap when `targetMatchType === TOTAL_USAGE`); `>= 10000` = no-cap sentinel.
+- **Delete is soft + reversible:** `DELETE /admin/promocodes/{id}` sets `deletedAt`; restore is
+  `PATCH /admin/promocodes/{id}/restore`. Update is `PATCH /admin/promocodes/{id}` (partial diff).
+- **Code string: no constraints** (Retool validates non-empty only; no casing/regex/length/trim;
+  stored exactly as typed — the caps code `MA` is real).
+
 ### `userStatus` NONE DOMINATES historical rows — no attendance metric can trust it (Phase 18)
 
 CAUTION for any future "did they turn up" / attendance metric. On a real high-volume player
