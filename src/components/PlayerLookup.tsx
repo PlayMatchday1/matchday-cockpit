@@ -34,7 +34,21 @@ async function authFetch(path: string, init?: RequestInit): Promise<Response> {
 
 // ---- types (mirror the lookup route) ----
 type SearchRow = { id: number; name: string; email: string | null; phone: string | null; city: string | null; status: "expelled" | "suspended" | "ok"; hasMembership: boolean };
-type MatchRow = { umId: number; matchId: number; name: string; startDate: string | null; startDateUtc: string | null; team: number | null; num: number | null; price: number; state: "upcoming" | "played" | "cancelled"; removable: boolean };
+type MatchRow = { umId: number; matchId: number; name: string; startDate: string | null; startDateUtc: string | null; team: number | null; num: number | null; price: number; charged: number | null; userStatus: string | null; state: "upcoming" | "played" | "cancelled"; removable: boolean };
+type MatchBucket = "all" | "upcoming" | "played" | "noshow" | "cancelled";
+// Single source of truth for the header facts AND the filter chips, so they can never
+// disagree. state partitions into upcoming/played/cancelled; no-show is carved out of
+// played (a no-show is not "played"), keeping the four buckets summing to the total.
+function bucketOf(m: MatchRow): Exclude<MatchBucket, "all"> {
+  if (m.state === "cancelled") return "cancelled";
+  if (m.state === "upcoming") return "upcoming";
+  return m.userStatus === "NO_SHOW" ? "noshow" : "played";
+}
+function matchCounts(ms: MatchRow[]) {
+  const c = { all: ms.length, upcoming: 0, played: 0, noshow: 0, cancelled: 0 };
+  for (const m of ms) c[bucketOf(m)]++;
+  return c;
+}
 type Membership = { status: string; number: string | null; since: string | null; renews: string | null; canceledAt: string | null; price: number | null; city: string | null } | null;
 type StrikeLog = { penaltyPoint: number; active: boolean; reason: string | null; matchName: string | null; when: string | null; issued: string | null; canceledAt: string | null; hoursBefore: number | null };
 type Strikes = { activeCount: number; limit: number; isSuspended: boolean; suspendedTo: string | null; expiredAt: string | null; firstStrikeAt: string | null; logs: StrikeLog[] };
@@ -303,6 +317,7 @@ function ProfileView({ p, fields, canEdit, canManage, onOpenMatch, onAdd, onRemo
 }) {
   const pl = p.player;
   const tags = statusTags({ status: pl.status, hasMembership: !!p.membership && p.membership.status !== "canceled" });
+  const counts = useMemo(() => matchCounts(p.matches), [p.matches]);
   return (
     <>
       <div className="idcard" data-pid={pl.id}>
@@ -325,8 +340,9 @@ function ProfileView({ p, fields, canEdit, canManage, onOpenMatch, onAdd, onRemo
 
         <div className="facts">
           <Fact k="CREDITS" v={money(pl.credits)} big />
-          <Fact k="MATCHES PLAYED" v={pl.matchesPlayed} big />
-          <Fact k="UPCOMING" v={pl.upcoming} big />
+          {/* facts come from the SAME counts as the match-history chips (single source) */}
+          <Fact k="PLAYED" v={counts.played} big />
+          <Fact k="UPCOMING" v={counts.upcoming} big />
           {fields.uid && <Fact k="PLAYER ID" v={pl.id} />}
           {fields.city && <Fact k="PREFERABLE CITY" v={pl.city ?? "—"} />}
           {fields.level && <Fact k="SOCCER LEVEL" v={pl.level ?? "—"} />}
@@ -341,38 +357,8 @@ function ProfileView({ p, fields, canEdit, canManage, onOpenMatch, onAdd, onRemo
 
       <StrikePanel s={p.strikes} isMember={!!p.membership} />
 
-      <div className="panel">
-        <div className="ptitle">
-          <h3>MATCH HISTORY</h3>
-          <span className="acts">
-            <button className="sbtn go" data-testid="add-match" disabled={!canEdit}
-              title={canEdit ? undefined : "Requires EDIT MATCHES"} onClick={onAdd}>+ Add to a match</button>
-          </span>
-        </div>
-        <p className="pfoot topline">{p.matches.length} total · {pl.upcoming} upcoming{canEdit ? "" : <> · <span className="locked">write actions need EDIT MATCHES</span></>}</p>
-        <div className="rows">
-          {p.matches.length === 0 && <p className="empty small">No matches on record.</p>}
-          {p.matches.map((m) => (
-            <div className="row mrow" key={m.umId} data-match={m.matchId}>
-              <span className="mtitle" role="button" tabIndex={0}
-                onClick={() => onOpenMatch(m.matchId)}
-                onKeyDown={(e) => { if (e.key === "Enter" || e.key === " ") { e.preventDefault(); onOpenMatch(m.matchId); } }}>
-                <span className="l1">{m.name}</span>
-                <span className="l2">{fmtWhen(m.startDate)}{m.team != null ? ` · T${m.team}` : ""}{m.num != null ? ` · #${m.num}` : ""} · {money(m.price)}</span>
-              </span>
-              <span className={`st ${m.state}`}>{m.state.toUpperCase()}</span>
-              <span className="mid c-team">{m.team != null ? `T${m.team}` : ""}{m.num != null ? ` · #${m.num}` : ""}</span>
-              <span className="num">
-                {m.removable
-                  ? <button className="rowbtn" data-remove={m.matchId} disabled={!canEdit}
-                    title={canEdit ? undefined : "Requires EDIT MATCHES"} onClick={() => onRemove(m)}>Remove</button>
-                  : <span className="mid">{money(m.price)}</span>}
-              </span>
-            </div>
-          ))}
-        </div>
-        <p className="pfoot">From MatchDay, live. Click a match to open its roster. Removing a player writes to production and appears in the Change Log with your name on it.</p>
-      </div>
+      <MatchHistoryPanel matches={p.matches} counts={counts} canEdit={canEdit}
+        onOpenMatch={onOpenMatch} onAdd={onAdd} onRemove={onRemove} />
 
       <PaymentsPanel playerId={pl.id} email={pl.email} matches={p.matches} />
 
@@ -474,6 +460,7 @@ function PaymentsPanel({ playerId, email, matches }: { playerId: number; email: 
         })}
       </div>
       <p className="pfoot">Ten most recent, <b>live from Stripe, read-only, not cached</b>. <b>Pending</b> means Stripe has the charge but hasn&apos;t settled it — the player has paid as far as they know. Joined to matches on <code>metadata.matchId</code>; no matchId = a membership charge.</p>
+      <p className="pfoot" data-testid="pay-amount-note" style={{ borderTop: 0 }}>Amounts are what Stripe <b>charged the card</b> — the base spot price <b>plus the card processing fee, minus any credit</b>. The Match History shows the <b>base spot price</b>, so it reads a few cents lower for the same match. Both are correct; they answer different questions (what the match costs vs. what the player was charged).</p>
     </div>
   );
 }
@@ -509,6 +496,87 @@ function AccountHistoryPanel({ p, canManage, onSuspend, onExpel, onLift }: {
           ))}
       </div>
       <p className="pfoot">The API exposes the CURRENT ban only, not a full audit trail. Suspending blocks new bookings until the date but does NOT cancel existing bookings — remove those separately. Every action you take here is recorded in the Change Log with your name on it.</p>
+    </div>
+  );
+}
+
+const PAGE_STEP = 25;
+const BUCKET_LABEL: Record<MatchBucket, string> = { all: "All", upcoming: "Upcoming", played: "Played", noshow: "No-show", cancelled: "Cancelled" };
+
+function MatchHistoryPanel({ matches, counts, canEdit, onOpenMatch, onAdd, onRemove }: {
+  matches: MatchRow[]; counts: ReturnType<typeof matchCounts>; canEdit: boolean;
+  onOpenMatch: (id: number) => void; onAdd: () => void; onRemove: (m: MatchRow) => void;
+}) {
+  const [filter, setFilter] = useState<MatchBucket>("all");
+  const [pastShown, setPastShown] = useState(10);
+  const setF = (f: MatchBucket) => { setFilter(f); setPastShown(10); };
+
+  const asc = (a: MatchRow, b: MatchRow) => (Date.parse(a.startDateUtc ?? "") || 0) - (Date.parse(b.startDateUtc ?? "") || 0);
+  const desc = (a: MatchRow, b: MatchRow) => (Date.parse(b.startDateUtc ?? "") || 0) - (Date.parse(a.startDateUtc ?? "") || 0);
+
+  // Upcoming ALWAYS pinned to the top, ALL of them, soonest first — they're the only
+  // actionable rows (the only ones with Remove), so none is ever hidden behind "show more".
+  const upcoming = useMemo(() => matches.filter((m) => bucketOf(m) === "upcoming").sort(asc), [matches]);
+  // Past = everything else, newest first; paginated.
+  const pastAll = useMemo(() => {
+    const inFilter = (m: MatchRow) => filter === "all" ? bucketOf(m) !== "upcoming" : bucketOf(m) === filter;
+    return matches.filter((m) => bucketOf(m) !== "upcoming" && inFilter(m)).sort(desc);
+  }, [matches, filter]);
+
+  const showUpcoming = filter === "all" || filter === "upcoming";
+  const pastVisible = filter === "upcoming" ? [] : pastAll.slice(0, pastShown);
+  const totalInView = (showUpcoming ? upcoming.length : 0) + (filter === "upcoming" ? 0 : pastAll.length);
+  const shownInView = (showUpcoming ? upcoming.length : 0) + pastVisible.length;
+  const moreLeft = pastAll.length - pastVisible.length;
+
+  const chips: MatchBucket[] = ["all", "upcoming", "played", "noshow", "cancelled"];
+
+  const row = (m: MatchRow) => (
+    <div className="row mrow" key={m.umId} data-match={m.matchId} data-bucket={bucketOf(m)}>
+      <span className="mtitle" role="button" tabIndex={0}
+        onClick={() => onOpenMatch(m.matchId)}
+        onKeyDown={(e) => { if (e.key === "Enter" || e.key === " ") { e.preventDefault(); onOpenMatch(m.matchId); } }}>
+        <span className="l1">{m.name}</span>
+        <span className="l2">{fmtWhen(m.startDate)}{m.team != null ? ` · T${m.team}` : ""}{m.num != null ? ` · #${m.num}` : ""} · {money(m.price)}</span>
+      </span>
+      <span className={`st ${m.state}`}>{bucketOf(m) === "noshow" ? "NO SHOW" : m.state.toUpperCase()}</span>
+      <span className="mid c-team">{m.team != null ? `T${m.team}` : ""}{m.num != null ? ` · #${m.num}` : ""}</span>
+      <span className="num">
+        {m.removable
+          ? <button className="rowbtn" data-remove={m.matchId} disabled={!canEdit}
+            title={canEdit ? undefined : "Requires EDIT MATCHES"} onClick={() => onRemove(m)}>Remove</button>
+          : <span className="mid">{money(m.price)}</span>}
+      </span>
+    </div>
+  );
+
+  return (
+    <div className="panel" data-testid="match-history">
+      <div className="ptitle">
+        <h3>MATCH HISTORY</h3>
+        <span className="acts">
+          <button className="sbtn go" data-testid="add-match" disabled={!canEdit}
+            title={canEdit ? undefined : "Requires EDIT MATCHES"} onClick={onAdd}>+ Add to a match</button>
+        </span>
+      </div>
+      <div className="chips" data-testid="match-chips">
+        {chips.map((c) => (
+          <button key={c} className={`chip${filter === c ? " on" : ""}`} data-chip={c} aria-pressed={filter === c} onClick={() => setF(c)}>
+            {BUCKET_LABEL[c]} <b>{counts[c]}</b>
+          </button>
+        ))}
+      </div>
+      <p className="pfoot topline" data-testid="match-showing">Showing {shownInView} of {totalInView}{canEdit ? "" : <> · <span className="locked">write actions need EDIT MATCHES</span></>}</p>
+      <div className="rows">
+        {matches.length === 0 && <p className="empty small">No matches on record.</p>}
+        {showUpcoming && upcoming.map(row)}
+        {pastVisible.map(row)}
+        {matches.length > 0 && shownInView === 0 && <p className="empty small">No {BUCKET_LABEL[filter].toLowerCase()} matches.</p>}
+      </div>
+      {filter !== "upcoming" && moreLeft > 0
+        ? <button className="showmore" data-testid="show-more" onClick={() => setPastShown((n) => n + PAGE_STEP)}>Show {Math.min(PAGE_STEP, moreLeft)} more ({moreLeft} left)</button>
+        : filter !== "upcoming" && pastAll.length > 10 ? <p className="pfoot" data-testid="all-shown">All {pastAll.length} shown.</p> : null}
+      <p className="pfoot">Upcoming pinned on top (soonest first); past newest first. Click a match to open its roster. Removing writes to production and appears in the Change Log with your name on it.</p>
     </div>
   );
 }
@@ -962,6 +1030,14 @@ const CSS = `
 .pl .rows{display:block}
 .pl .row{display:grid;gap:11px;align-items:center;padding:10px 16px;border-bottom:1px solid var(--line)}
 .pl .row:last-child{border-bottom:0}
+.pl .chips{display:flex;gap:7px;flex-wrap:wrap;padding:11px 16px;border-bottom:1px solid var(--line);background:#fafcfb}
+.pl .chip{border:1px solid var(--line);background:var(--card);border-radius:999px;padding:5px 11px;font:inherit;font-size:12px;font-weight:600;color:var(--ink2);cursor:pointer;min-height:30px;white-space:nowrap}
+.pl .chip:hover{background:#f0f5f2}
+.pl .chip b{font-variant-numeric:tabular-nums;color:var(--ink)}
+.pl .chip.on{background:#12301f;border-color:#12301f;color:#fff}
+.pl .chip.on b{color:#fff}
+.pl .showmore{display:block;width:calc(100% - 32px);margin:12px 16px;border:1px solid var(--line);background:var(--card);border-radius:10px;padding:10px;font:inherit;font-weight:700;font-size:13px;color:var(--ink2);cursor:pointer;min-height:40px}
+.pl .showmore:hover{background:#f6faf8}
 .pl .mrow{grid-template-columns:minmax(0,1fr) 84px 96px 84px}
 .pl .mtitle{display:block;min-width:0;cursor:pointer}
 .pl .mtitle:hover .l1{text-decoration:underline}

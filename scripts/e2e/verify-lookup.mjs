@@ -77,6 +77,31 @@ const ERRP = {
   player: { id: 77777, name: "Err Or", email: "err@example.com", phone: "+15125559999", phoneVerified: true, city: "Austin", level: 4, registered: "2026-01-01T00:00:00.000Z", goals: 0, cityManager: false, credits: 0, status: "ok", banReason: null, bannedAt: null, banExpiredAt: null, matchesPlayed: 0, upcoming: 0 },
   membership: null, matches: [], strikes: { activeCount: 0, limit: 4, isSuspended: false, suspendedTo: null, expiredAt: null, firstStrikeAt: null, logs: [] }, accountHistory: [],
 };
+// HIGH-VOLUME player — 604 matches: 3 upcoming + 200 played + 1 no-show + 400 cancelled.
+// Exercises: not-all-rendered, upcoming pinned above past, chip counts sum, show-more append.
+const HV = (() => {
+  const base = Date.now();
+  const mk = (i, opts) => ({
+    umId: 500000 + i, matchId: 600000 + i, name: `Match ${600000 + i}`,
+    startDate: new Date(base + (opts.offDays || -i) * 86400e3).toISOString(),
+    startDateUtc: new Date(base + (opts.offDays || -i) * 86400e3).toISOString(),
+    team: 1, num: (i % 11) + 1, price: 1200, charged: 1266, userStatus: opts.userStatus ?? "NONE",
+    state: opts.state, removable: opts.state === "upcoming",
+  });
+  const rows = [];
+  let i = 0;
+  for (let u = 0; u < 3; u++) rows.push(mk(i++, { state: "upcoming", offDays: 3 - u })); // future, unsorted-ish
+  for (let p = 0; p < 200; p++) rows.push(mk(i++, { state: "played", offDays: -(p + 1) }));
+  rows.push(mk(i++, { state: "played", userStatus: "NO_SHOW", offDays: -500 }));
+  for (let c = 0; c < 400; c++) rows.push(mk(i++, { state: "cancelled", offDays: -(c + 1) }));
+  return {
+    env: "production",
+    player: { id: 78, name: "Ryan Mancuso", email: "rmancuso1@gmail.com", phone: "+14348259300", phoneVerified: true, city: "Austin", level: 4, registered: "2023-04-10T03:05:15.239Z", goals: 105, cityManager: true, credits: 0, status: "ok", banReason: null, bannedAt: null, banExpiredAt: null, matchesPlayed: 201, upcoming: 3 },
+    membership: null, matches: rows,
+    strikes: { activeCount: 0, limit: 4, isSuspended: false, suspendedTo: null, expiredAt: null, firstStrikeAt: null, logs: [] },
+    accountHistory: [],
+  };
+})();
 // live payments fixtures — MARISOL covers all FIVE states + a membership + a match join
 const PAY_MARISOL = { ok: true, customerMatched: true, foundVia: ["email"], email: "m.reyes@gmail.com", rows: [
   { id: "ch_1", description: "Soccer Central Field 6", created: "2026-08-09T19:00:00.000Z", card: "visa ••4242", status: "pending", amount: 1200, matchId: "17402", isMembership: false },
@@ -139,13 +164,14 @@ async function main() {
       const url = new URL(route.request().url());
       const id = url.searchParams.get("id");
       const q = url.searchParams.get("q");
-      if (id) { const P = id === "60180" ? DANNY : id === "88888" ? OVER : id === "77777" ? ERRP : MARISOL; return route.fulfill({ status: 200, contentType: "application/json", body: JSON.stringify(P) }); }
+      if (id) { const P = id === "60180" ? DANNY : id === "88888" ? OVER : id === "77777" ? ERRP : id === "78" ? HV : MARISOL; return route.fulfill({ status: 200, contentType: "application/json", body: JSON.stringify(P) }); }
       // mimic detectKind for the kind field (component reads it for the hint too, but hint is local)
       const kind = !q ? "empty" : q.includes("@") ? "email" : /^\d{1,6}$/.test(q.trim()) ? "id" : q.replace(/\D/g, "").length >= 7 ? "phone" : "name";
       const results = q && /mari|reyes|79214|2105557781|m\.reyes/i.test(q) ? SEARCH_HITS
         : q && /danny|60180/i.test(q) ? [{ id: 60180, name: "Danny Vo", email: "danny@example.com", phone: "+18329015669", city: "Houston", status: "suspended", hasMembership: false }]
         : q && /over|88888/i.test(q) ? [{ id: 88888, name: "Over Struck", email: "over@example.com", phone: "+15125550000", city: "Austin", status: "ok", hasMembership: true }]
         : q && /err|77777/i.test(q) ? [{ id: 77777, name: "Err Or", email: "err@example.com", phone: "+15125559999", city: "Austin", status: "ok", hasMembership: false }]
+        : q && /ryan|mancuso|^78$/i.test(q) ? [{ id: 78, name: "Ryan Mancuso", email: "rmancuso1@gmail.com", phone: "+14348259300", city: "Austin", status: "ok", hasMembership: false }]
         : [];
       return route.fulfill({ status: 200, contentType: "application/json", body: JSON.stringify({ kind, results }) });
     });
@@ -259,6 +285,15 @@ async function main() {
     eq("5 status chips, all backgrounds distinct", distinctBgs, 5);
     (minText >= 4.5) ? ok(`every status chip text/bg contrast >= 4.5 (min ${minText})`) : bad("status chip contrast", `min ${minText}: ${JSON.stringify(chips)}`); }
   eq("payments note counts pending + failed/disputed", await page.$eval('[data-testid="payments"] .ptitle .note', (e) => e.textContent).then((t) => /pending/.test(t) && /failed\/disputed/.test(t)), true);
+  eq("found-by-email => NO 'via userId' mismatch note", !!(await page.$('[data-testid="pay-via-userid"]')), false);
+  eq("payments amount note explains base vs charged (fee)", await page.$eval('[data-testid="pay-amount-note"]', (e) => /processing fee/i.test(e.textContent) && /base spot price/i.test(e.textContent)), true);
+
+  // ── #5 PREFERABLE CITY renders the real value (from the list row), not "—" ──
+  eq("PREFERABLE CITY shows the value, not a dash", await page.$$eval(".f", (els) => { const f = els.find((e) => e.querySelector(".k")?.textContent === "PREFERABLE CITY"); return f?.querySelector(".v")?.textContent?.trim(); }), "San Antonio");
+
+  // ── #1d footer can't lie: all five panels present AND builtnote makes no "not built" claim ──
+  eq("builtnote never claims a panel is 'not built'", await page.$eval('[data-testid="builtnote"]', (e) => /not built/i.test(e.textContent)), false);
+  eq("no stale 'notbuilt' footer element exists", await page.$('[data-testid="notbuilt"]') === null, true);
 
   // ── account history: clean member offers Suspend + Expel (MANAGE PLAYERS held) ──
   eq("clean record shows Suspend + Expel, not Lift", { suspend: !!(await page.$('[data-testid="act-suspend"]')), expel: !!(await page.$('[data-testid="act-expel"]')), lift: !!(await page.$('[data-testid="act-lift"]')) }, { suspend: true, expel: true, lift: false });
@@ -340,6 +375,33 @@ async function main() {
   await page.click('[data-testid="add-confirm"]');
   await page.waitForTimeout(300);
   eq("add wrote through the guarded roster route (kind=add, team #2 spot 2)", { kind: lastWrite?.body?.kind, playerId: lastWrite?.body?.playerId, team: lastWrite?.body?.team, num: lastWrite?.body?.playerNumber, mid: lastWrite?.url?.includes("/roster/17600") }, { kind: "add", playerId: 79214, team: 2, num: 2, mid: true });
+
+  // ══ #3/#4 HIGH-VOLUME (604 matches): structure, not just a limit ══
+  await type("Ryan"); await page.waitForSelector('.res[data-pid="78"]', { timeout: 5000 }); await page.click('.res[data-pid="78"]');
+  await page.waitForSelector('.idcard[data-pid="78"]', { timeout: 5000 });
+  await page.waitForSelector('[data-testid="match-chips"]', { timeout: 5000 });
+  const chipN = async (c) => Number(await page.$eval(`[data-chip="${c}"] b`, (e) => e.textContent));
+  { const all = await chipN("all"), up = await chipN("upcoming"), pl = await chipN("played"), ns = await chipN("noshow"), ca = await chipN("cancelled");
+    eq("chip counts partition the total (sum === All)", up + pl + ns + ca, all);
+    eq("All chip === 604", all, 604);
+    eq("header PLAYED fact === Played chip", Number(await page.$$eval(".f", (els) => { const f = els.find((e) => e.querySelector(".k")?.textContent === "PLAYED"); return f?.querySelector(".v")?.textContent?.trim(); })), pl); }
+  eq("604 rows NOT all rendered (upcoming 3 + first 10 past = 13)", await page.$$eval('[data-testid="match-history"] .mrow', (e) => e.length), 13);
+  eq("header says 'Showing 13 of 604'", (await page.$eval('[data-testid="match-showing"]', (e) => e.textContent)).includes("Showing 13 of 604"), true);
+  eq("first 3 rows are UPCOMING (pinned to top regardless of date)", await page.$$eval('[data-testid="match-history"] .mrow', (els) => els.slice(0, 3).map((r) => r.getAttribute("data-bucket"))), ["upcoming", "upcoming", "upcoming"]);
+  eq("row 4 is a PAST row (not upcoming)", await page.$$eval('[data-testid="match-history"] .mrow', (els) => els[3].getAttribute("data-bucket") !== "upcoming"), true);
+  { const firstBefore = await page.$eval('[data-testid="match-history"] .mrow', (e) => e.getAttribute("data-match"));
+    await page.click('[data-testid="show-more"]'); await page.waitForTimeout(120);
+    eq("Show more APPENDS 25 (13 -> 38), does not replace", { rows: await page.$$eval('[data-testid="match-history"] .mrow', (e) => e.length), firstUnchanged: (await page.$eval('[data-testid="match-history"] .mrow', (e) => e.getAttribute("data-match"))) === firstBefore }, { rows: 38, firstUnchanged: true });
+    eq("header updates to 'Showing 38 of 604'", (await page.$eval('[data-testid="match-showing"]', (e) => e.textContent)).includes("Showing 38 of 604"), true); }
+  // filter to Cancelled: only cancelled rows, no upcoming pinned, count reconciles
+  await page.click('[data-chip="cancelled"]'); await page.waitForTimeout(120);
+  eq("Cancelled filter: 10 shown of 400, all rows cancelled, none upcoming", { showing: (await page.$eval('[data-testid="match-showing"]', (e) => e.textContent)).includes("Showing 10 of 400"), allCancelled: await page.$$eval('[data-testid="match-history"] .mrow', (els) => els.every((r) => r.getAttribute("data-bucket") === "cancelled")) }, { showing: true, allCancelled: true });
+  // filter to Upcoming: all 3, no pagination, never truncated
+  await page.click('[data-chip="upcoming"]'); await page.waitForTimeout(120);
+  eq("Upcoming filter: all 3 shown, no Show-more", { rows: await page.$$eval('[data-testid="match-history"] .mrow', (e) => e.length), noMore: (await page.$('[data-testid="show-more"]')) === null }, { rows: 3, noMore: true });
+  // back to Marisol for the write flows
+  await type("Marisol"); await page.waitForSelector('.res[data-pid="79214"]', { timeout: 5000 }); await page.click('.res[data-pid="79214"]');
+  await page.waitForSelector('.idcard[data-pid="79214"]', { timeout: 5000 });
 
   // ── REMOVE dialog: names the person, match, paid amount + unconfirmed refund ──
   lastWrite = null;

@@ -75,7 +75,7 @@ export async function fetchPlayerPayments(email: string | null, userId: string |
   };
 
   try {
-    // Route 1 — email -> customer -> charges
+    // Route 1 — email -> customer -> charges.
     if (email && email.trim()) {
       const custs = await stripe.customers.list({ email: email.trim(), limit: 5 });
       customerMatched = custs.data.length > 0;
@@ -84,9 +84,11 @@ export async function fetchPlayerPayments(email: string | null, userId: string |
         for (const c of ch.data) add(c, "email");
       }
     }
-    // Route 2 — metadata.userId (rescues the email-mismatch case). charges.search may be
-    // unavailable on some keys; treat a search failure as "route found nothing", not fatal.
-    if (userId != null && String(userId).trim()) {
+    // Route 2 — metadata.userId, the email-mismatch RESCUE. Only runs when the email route
+    // found NO charges — otherwise we'd tag charges "via userId" that email actually found,
+    // i.e. report a mismatch that didn't happen. charges.search may be unavailable on some
+    // keys; a search failure means "rescue found nothing", not fatal.
+    if (collected.size === 0 && userId != null && String(userId).trim()) {
       try {
         const found = await stripe.charges.search({ query: `metadata['userId']:'${String(userId).trim()}'`, limit: 10 });
         for (const c of found.data) add(c, "userId");

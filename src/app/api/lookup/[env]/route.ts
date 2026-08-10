@@ -64,7 +64,15 @@ export async function GET(req: Request, ctx: { params: Promise<{ env: string }> 
     // ---- profile ----
     if (id !== null) {
       if (!/^\d+$/.test(id)) return Response.json({ error: "id must be numeric" }, { status: 400 });
-      const raw = await apiGet<Record<string, unknown>>(env, `/admin/players/${id}`);
+      // Detail + list, in parallel. preferableCity is on the LIST row but NOT the detail
+      // payload (confirmed live), so the profile reads it from the list — otherwise the
+      // header renders "—" for a field the API actually has.
+      const [raw, listRow] = await Promise.all([
+        apiGet<Record<string, unknown>>(env, `/admin/players/${id}`),
+        apiGet<{ data?: Record<string, unknown>[] }>(env, `/admin/players`, { id, limit: 1, page: 1 })
+          .then((r) => (Array.isArray(r) ? r[0] : (r.data ?? [])[0]) ?? null)
+          .catch(() => null),
+      ]);
       const d = (raw && typeof raw === "object" && "data" in raw ? (raw.data as Record<string, unknown>) : raw) ?? {};
       const now = Date.now();
 
@@ -78,7 +86,9 @@ export async function GET(req: Request, ctx: { params: Promise<{ env: string }> 
           umId: num(um.id), matchId: num(um.matchId ?? m.id), name: str(m.name) ?? `Match ${num(m.id)}`,
           startDate: str(m.startDate), startDateUtc: startUtc,
           team: num(um.team), num: num(um.playerNumber),
-          price: num(um.amount) ?? num(m.registrationPrice) ?? 0,
+          price: num(um.amount) ?? num(m.registrationPrice) ?? 0,   // base spot price
+          charged: num(um.totalAmount),                              // what Stripe actually took (base + card fee − credit); may differ from price
+          userStatus: str(um.userStatus),                            // attendance/reason enum (NO_SHOW etc.)
           state: cancelled ? "cancelled" : upcoming ? "upcoming" : "played",
           removable: upcoming, // only a future booking can be pulled
         };
@@ -151,7 +161,9 @@ export async function GET(req: Request, ctx: { params: Promise<{ env: string }> 
         player: {
           id: num(d.id), name: name(d), email: str(d.email), phone: str(d.phoneNumber),
           phoneVerified: d.phoneNumberVerifiedAt != null,
-          city: str((d.preferableCity as Record<string, unknown> | undefined)?.name),
+          // preferableCity lives on the LIST row, not detail — read it from there (fall back
+          // to detail in case the API changes), else null.
+          city: str(((listRow?.preferableCity ?? d.preferableCity) as Record<string, unknown> | undefined)?.name),
           level: num(d.selfRatingValue),
           registered: str(d.completedSignUpAt) ?? str(d.createdAt),
           goals: Array.isArray(d.goals) ? d.goals.length : 0,
