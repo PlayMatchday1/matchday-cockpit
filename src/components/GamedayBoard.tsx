@@ -515,18 +515,18 @@ const CSS = `
 /* ── Phone: this is used one-handed at a field. Tiles reflow, cities scroll. ── */
 @media (max-width: 820px){
   .gdo .gmain{padding:12px 12px 90px;margin-right:0 !important}
-  .gdo .head{padding:11px 12px}
+  .gdo .head{padding:8px 12px}
   .gdo .lede{display:none}
   .gdo .dt{display:none}            /* the date is already in the day nav */
   .gdo h1{font-size:18px}
   .gdo .r1{gap:8px}
   .gdo .clock{font-size:12px}
-  .gdo .chips{gap:7px;margin-top:10px}
-  .gdo .row2{margin-top:8px;padding-top:8px}
-  .gdo .pill{position:static;display:inline-flex;margin-top:8px}
+  .gdo .chips{gap:7px;margin-top:8px}
+  .gdo .row2{margin-top:7px;padding-top:7px}
+  .gdo .pill{position:static;display:inline-flex;margin-top:6px}
   .gdo .daynav{width:100%;justify-content:space-between;margin-right:0}
   .gdo .daylab{min-width:0;flex:1}
-  .gdo .arw{width:40px;height:40px}
+  .gdo .arw{width:40px;height:34px}
   .gdo .filters{flex:1;display:flex;gap:6px;overflow-x:auto;-webkit-overflow-scrolling:touch;scrollbar-width:none}
   .gdo .filters::-webkit-scrollbar{display:none}
   .gdo .filters .chip{flex:0 0 auto}

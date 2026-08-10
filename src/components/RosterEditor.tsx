@@ -32,7 +32,7 @@ const ENV = FULL_EDITOR_ENV; // roster edits the same environment as the full ed
 
 type Team = { id: number; teamNumber: number; name: string; locked: boolean };
 type ApiPlayer = { umId: number; playerId: number; team: number; playerNumber: number; name: string; fake: boolean };
-type LoadResp = { matchId: number; name: string; teams: Team[]; players: ApiPlayer[]; shape: { teamN: number; perTeam: number }; maxPlayerCount: number | null };
+type LoadResp = { matchId: number; name: string; teams: Team[]; players: ApiPlayer[]; shape: { teamN: number; perTeam: number }; maxPlayerCount: number | null; occupancy: number | null };
 
 type UIPlayer = StatePlayer & { name: string };
 type RowStatus = "" | "run" | "landed" | "failed" | "notapplied" | "unknown";
@@ -48,6 +48,7 @@ export default function RosterEditor({ matchId }: { matchId: number }) {
   const [name, setName] = useState("");
   const [teams, setTeams] = useState<Team[]>([]);
   const [players, setPlayers] = useState<UIPlayer[]>([]);
+  const [occupancy, setOccupancy] = useState<number | null>(null); // API _count.players — the authoritative in-match count
   const [shape, setShape] = useState({ teamN: 2, perTeam: 10 });
   // loaded snapshots (the diff baseline)
   const [loaded, setLoaded] = useState<Record<number, LoadedPlayer>>({});
@@ -75,7 +76,7 @@ export default function RosterEditor({ matchId }: { matchId: number }) {
     setName(d.name); setTeams(d.teams);
     const tByNum = (n: number) => d.teams.findIndex((t) => t.teamNumber === n);
     const ups: UIPlayer[] = d.players.map((p) => ({ key: `p${p.playerId}`, umId: p.umId, playerId: p.playerId, team: tByNum(p.team), num: p.playerNumber, fake: p.fake, added: false, name: p.name }));
-    setPlayers(ups);
+    setPlayers(ups); setOccupancy(d.occupancy);
     setShape(d.shape); setLoadedShape(d.shape);
     const L: Record<number, LoadedPlayer> = {};
     for (const p of d.players) L[p.playerId] = { umId: p.umId, playerId: p.playerId, team: tByNum(p.team), num: p.playerNumber, fake: p.fake };
@@ -105,7 +106,6 @@ export default function RosterEditor({ matchId }: { matchId: number }) {
   }, [players, teams, loaded, loadedTeams, loadedShape, shape, matchId]);
 
   const at = (t: number, n: number) => players.find((p) => p.team === t && p.num === n);
-  const onTeam = (t: number) => players.filter((p) => p.team === t).sort((a, b) => (a.num ?? 0) - (b.num ?? 0));
   const firstOpen = (t: number) => { if (t >= shape.teamN) return null; for (let n = 1; n <= shape.perTeam; n++) if (!at(t, n)) return n; return null; };
 
   // ── move: swap, never overwrite; never drop off the roster ───────────────────
@@ -215,6 +215,17 @@ export default function RosterEditor({ matchId }: { matchId: number }) {
   // ── counts ───────────────────────────────────────────────────────────────────
   const live = players.filter((p) => p.team !== null);
   const slots = shape.teamN * shape.perTeam;
+  // FILLED = distinct occupied slots, mirroring at() (first-wins per team:num). Not
+  // live.length — duplicate MatchDay rows on one slot double-counted it (filled 26, open −4
+  // on match 17260). This equals the API's _count.players (`occupancy`) at load and stays
+  // correct as the operator edits. `open` can never go negative.
+  const occupied = new Map<string, UIPlayer>();
+  for (const p of live) { if (p.num == null) continue; const k = `${p.team}:${p.num}`; if (!occupied.has(k)) occupied.set(k, p); }
+  const filled = occupied.size;
+  const fakeFilled = [...occupied.values()].filter((p) => p.fake).length;
+  const open = Math.max(0, slots - filled);
+  const teamFilled = (ti: number) => [...occupied.values()].filter((p) => p.team === ti).length; // distinct occupied slots in a team, not raw rows
+  void occupancy; // authoritative load-time count; `filled` matches it and tracks live edits
 
   // ── save: one at a time, read-back confirmed, four states ────────────────────
   const readbackApplied = async (req: RosterRequest, result: unknown): Promise<boolean> => {
@@ -286,7 +297,7 @@ export default function RosterEditor({ matchId }: { matchId: number }) {
       <div className="idbar">
         <div className="r1"><button className="backb" data-testid="roster-back" onClick={goBack} aria-label="Back">‹ Back</button><h1>{name || `Match ${matchId}`}</h1><span className="pill id">ID {matchId}</span>
           <span className={"pill " + (badge.tone === "prod" ? "live" : "stg")} data-testid="roster-env">{badge.tone === "prod" ? <><i />PRODUCTION — LIVE EDITS</> : badge.label}</span></div>
-        <div className="counts"><div><b>{live.length}</b>filled</div><div><b>{slots - live.length}</b>open</div><div><b>{live.filter((p) => p.fake).length}</b>fake</div></div>
+        <div className="counts"><div><b data-testid="rc-filled">{filled}</b>filled</div><div><b data-testid="rc-open">{open}</b>open</div><div><b>{fakeFilled}</b>fake</div></div>
       </div>
 
       <div className="wrap">
@@ -312,9 +323,9 @@ export default function RosterEditor({ matchId }: { matchId: number }) {
 
         <div className="teamjump" data-testid="teamjump">
           {teams.slice(0, shape.teamN).map((t, ti) => (
-            <button key={t.id} className={"tj" + (onTeam(ti).length >= shape.perTeam ? " full" : "") + (t.locked ? " locked" : "")} data-testid={`jump-${ti}`}
+            <button key={t.id} className={"tj" + (teamFilled(ti) >= shape.perTeam ? " full" : "") + (t.locked ? " locked" : "")} data-testid={`jump-${ti}`}
               onClick={() => document.querySelector(`[data-team="${ti}"]`)?.scrollIntoView({ behavior: "smooth", block: "start" })}>
-              <span className="dot" />{t.name} <b>{onTeam(ti).length}/{shape.perTeam}</b>
+              <span className="dot" />{t.name} <b>{teamFilled(ti)}/{shape.perTeam}</b>
             </button>
           ))}
         </div>
@@ -325,7 +336,7 @@ export default function RosterEditor({ matchId }: { matchId: number }) {
               onDragOver={(e) => e.preventDefault()}>
               <div className="th">
                 <input className="tname" value={t.name} data-testid={`tname-${ti}`} onChange={(e) => setTeam(t.id, { name: e.target.value })} />
-                <span className="cap">{onTeam(ti).length}/{shape.perTeam}</span>
+                <span className="cap">{teamFilled(ti)}/{shape.perTeam}</span>
                 <button className={"lockb" + (t.locked ? " on" : "")} data-testid={`lock-${ti}`} onClick={() => setTeam(t.id, { locked: !t.locked })}>{t.locked ? "LOCKED" : "OPEN"}</button>
               </div>
               <div className="slots">

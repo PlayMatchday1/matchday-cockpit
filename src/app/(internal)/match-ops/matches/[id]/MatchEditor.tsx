@@ -24,6 +24,13 @@ import { FULL_EDITOR_ENV } from "@/lib/matchEnv";
 import { noteLogResponse } from "@/lib/logHealth";
 import LogHealthBanner from "@/components/LogHealthBanner";
 import { useAuth, canEditMatches } from "@/lib/useAuth";
+import { wallDate, wallTime } from "@/lib/matchWallClock";
+
+// MatchDay startDate/endDate are WALL-CLOCK strings mislabelled "…Z" (the true instant is
+// startDateUtc). NEVER `new Date()` them — that re-shifts to the viewer's timezone and
+// shows a wrong clock. Read the wall parts by slicing, exactly like the drawer.
+const hhmm12 = (t: string) => { const [H, M] = t.split(":").map(Number); const ap = H >= 12 ? "PM" : "AM"; const h = H % 12 === 0 ? 12 : H % 12; return `${h}:${String(M).padStart(2, "0")} ${ap}`; };
+const wallStamp = (iso: string) => `${wallDate(iso)} ${hhmm12(wallTime(iso))}`; // "2026-08-09 8:00 PM"
 
 type FieldRow = { id: number; title: string; city: string | null };
 type Data = Record<string, unknown>;
@@ -270,7 +277,7 @@ export default function MatchEditor({ id }: { id: string }) {
           <div className="hmeta">
             <span className="chip id">ID {String(meta.id)}</span>
             <span className={`chip ${meta.isCancelled ? "warn" : "live"}`}>{meta.isCancelled ? "Cancelled" : "Live"}</span>
-            <span>{meta.startDate ? new Date(String(meta.startDate)).toLocaleString() : "—"} · {String(meta.fieldTitle ?? "—")}{meta.cityName ? ` · ${String(meta.cityName)}` : ""}</span>
+            <span>{meta.startDate ? wallStamp(String(meta.startDate)) : "—"} · {String(meta.fieldTitle ?? "—")}{meta.cityName ? ` · ${String(meta.cityName)}` : ""}</span>
             <span className={"chip " + (badge.tone === "prod" ? "prod" : "warn")} data-testid="ed-envbadge">{badge.tone === "prod" ? "● " : ""}{badge.label}</span>
           </div>
         </div>
@@ -282,7 +289,7 @@ export default function MatchEditor({ id }: { id: string }) {
           <section className="card"><div className="ch"><h2>Match</h2><span className="cnt" data-testid="cnt-match">{groupCount("match") ? `${groupCount("match")} changed` : ""}</span></div>
             <div className="cb"><div className="grid">{inGroup("match").map(renderField)}
               <div className="f"><label>Start and end<span className="hint">Set when the match was created; changing dates is its own action.</span></label>
-                <input type="text" disabled value={`${meta.startDate ? new Date(String(meta.startDate)).toLocaleString() : "—"} → ${meta.endDate ? new Date(String(meta.endDate)).toLocaleTimeString() : "—"}`} /></div>
+                <input type="text" disabled value={`${meta.startDate ? wallStamp(String(meta.startDate)) : "—"} → ${meta.endDate ? hhmm12(wallTime(String(meta.endDate))) : "—"}`} /></div>
             </div></div></section>
 
           {/* Teams (read-only this phase) */}

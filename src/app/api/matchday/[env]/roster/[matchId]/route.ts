@@ -19,7 +19,7 @@ export const maxDuration = 30;
 const isEnv = (x: string): x is MatchdayEnv => x === "staging" || x === "production";
 const num = (v: unknown) => (v === null || v === undefined || v === "" ? null : Number.isFinite(Number(v)) ? Number(v) : null);
 
-type Row = { id: number; userId: number; team: number; playerNumber: number; user?: { firstName?: string; lastName?: string; isFakePlayer?: boolean } };
+type Row = { id: number; userId: number; team: number; playerNumber: number; isCancelled?: boolean; refunded?: boolean; user?: { firstName?: string; lastName?: string; isFakePlayer?: boolean } };
 
 export async function GET(req: Request, ctx: { params: Promise<{ env: string; matchId: string }> }) {
   const auth = await authenticateAdmin(req);
@@ -41,11 +41,15 @@ export async function GET(req: Request, ctx: { params: Promise<{ env: string; ma
       apiGet<Record<string, unknown>>(env, `/admin/matches/${matchId}`),
       apiGet<Row[] | { data?: Row[] }>(env, `/admin/matches/${matchId}/players`),
     ]);
-    const players = (Array.isArray(playersRaw) ? playersRaw : (playersRaw.data ?? [])).map((p) => ({
-      umId: p.id, playerId: p.userId, team: p.team, playerNumber: p.playerNumber,
-      name: [p.user?.firstName, p.user?.lastName].filter(Boolean).join(" ").trim() || `Player ${p.userId}`,
-      fake: !!p.user?.isFakePlayer,
-    }));
+    // Cancelled/refunded user-matches are NOT in the match — they must never occupy a slot
+    // (hiding an active player) or inflate the count. Drop them here, at the single source.
+    const players = (Array.isArray(playersRaw) ? playersRaw : (playersRaw.data ?? []))
+      .filter((p) => !p.isCancelled && !p.refunded)
+      .map((p) => ({
+        umId: p.id, playerId: p.userId, team: p.team, playerNumber: p.playerNumber,
+        name: [p.user?.firstName, p.user?.lastName].filter(Boolean).join(" ").trim() || `Player ${p.userId}`,
+        fake: !!p.user?.isFakePlayer,
+      }));
     const teamsRaw = (match.teams as Record<string, unknown>[]) ?? [];
     const teams = teamsRaw.map((t) => ({ id: t.id as number, teamNumber: t.teamNumber as number, name: (t.name as string) ?? `Team ${t.teamNumber}`, locked: !!t.locked }))
       .sort((a, b) => a.teamNumber - b.teamNumber);
@@ -54,6 +58,9 @@ export async function GET(req: Request, ctx: { params: Promise<{ env: string; ma
     return Response.json({
       matchId: Number(matchId), name: (match.name as string) ?? "", teams, players,
       shape: { teamN, perTeam }, maxPlayerCount: num(match.maxPlayerCount),
+      // authoritative occupancy (real + fake) — the count the rest of the app uses; the
+      // roster headline reads THIS, not players.length (which double-counts duplicate rows).
+      occupancy: num((match._count as Record<string, unknown> | undefined)?.players),
     });
   } catch (e) { return errToResponse(e); }
 }
