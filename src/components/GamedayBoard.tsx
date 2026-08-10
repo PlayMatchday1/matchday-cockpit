@@ -21,7 +21,7 @@ import { centsToDollars } from "@/lib/matchMoney";
 import MatchDrawer, { DRAWER_W } from "@/components/MatchDrawer";
 import LogHealthBanner from "@/components/LogHealthBanner";
 import {
-  type ApiMatch, type BoardFilter, type RiskTier, BANDS, byKickoff, bandOf, minsUntil, fmtDur, localClock, tzAbbr,
+  type ApiMatch, type BoardFilter, type RiskTier, type MatchGroup, GROUPS, byKickoff, matchGroup, minsUntil, fmtDur, localClock, tzAbbr,
   realCount, fakeCount, capacity, openSpots, teamCount, short, shortBy, fill, flags, attention,
   acLevel, minsToDeadline, nextRelease, nextMark, inCities, passesFilter, riskTier, MARKS,
 } from "@/lib/gamedayModel";
@@ -120,16 +120,19 @@ export default function GamedayBoard() {
     } catch { setVeo((v) => ({ ...v, [id]: !enabled })); say("Couldn't save the camera change", true); }
   };
 
-  const banded = useMemo(() => BANDS.map((B) => ({ B, rows: visible.filter((m) => bandOf(m, now) === B.k) })).filter((x) => x.rows.length), [visible, now]);
-
-  // Snapshot: the same filtered/city-scoped `visible` list, flat, sorted by time or by
-  // risk (red, then amber, then green; within a tier, soonest cancel call first).
+  // THE grouping — three groups (still-to-come, cancelled, finished), from the ONE
+  // matchGroup() function, shared by BOTH views so they can never disagree. Risk sort
+  // reorders ONLY the still-to-come group (red→amber→green, soonest cancel call first);
+  // cancelled and finished always sort by kickoff and never reshuffle on risk.
   const RISK_RANK: Record<RiskTier, number> = { red: 0, amber: 1, green: 2 };
-  const snapList = useMemo(() => {
-    const l = visible.slice();
-    if (sort === "risk") l.sort((a, b) => (RISK_RANK[riskTier(a, now)] - RISK_RANK[riskTier(b, now)]) || (minsToDeadline(a, now) - minsToDeadline(b, now)) || byKickoff(a, b));
-    return l; // `visible` is already byKickoff for "time"
-  }, [visible, sort, now]);
+  const grouped = useMemo(() => GROUPS.map((G) => {
+    let rows = visible.filter((m) => matchGroup(m, now) === G.k);
+    if (G.k === "todo" && sort === "risk") {
+      rows = rows.slice().sort((a, b) => (RISK_RANK[riskTier(a, now)] - RISK_RANK[riskTier(b, now)]) || (minsToDeadline(a, now) - minsToDeadline(b, now)) || byKickoff(a, b));
+    }
+    return { G, rows }; // `visible` is already byKickoff, so cancelled/finished stay time-ordered
+  }).filter((x) => x.rows.length), [visible, now, sort]);
+  const anyRows = grouped.some((x) => x.rows.length > 0);
 
   return (
     <div className="gdo" data-testid="gameday" data-env={ENV} style={{ ["--drawer-w" as string]: `${DRAWER_W}px` }}>
@@ -183,18 +186,22 @@ export default function GamedayBoard() {
 
         {loading ? <div className="empty" data-testid="loading">Loading {dayLabel(date)}…</div>
           : err ? <div className="empty err" data-testid="board-err">Couldn’t load the board: {err}</div>
+          : !anyRows ? <div className="empty" data-testid="empty">Nothing to show for {dayLabel(date)} with these filters.</div>
           : view === "snapshot"
-            ? (snapList.length === 0 ? <div className="empty" data-testid="empty">Nothing to show for {dayLabel(date)} with these filters.</div>
-              : <div className="sheet" data-testid="snapshot">
-                  <div className="colhead"><span /><span>KICKOFF</span><span>MATCH · FIELD</span><span>SPOTS</span><span>SHORT</span><span>AUTO-CANCEL</span><span>MANAGER</span><span className="ra">PRICE</span></div>
-                  <div className="rowlist">{snapList.map((m) => <SnapRow key={m.id} m={m} now={now} selected={drawerId === m.id} onOpen={openDrawer} money={money} />)}</div>
-                </div>)
-            : banded.length === 0 ? <div className="empty" data-testid="empty">Nothing to show for {dayLabel(date)} with these filters.</div>
+            ? <div className="sheet" data-testid="snapshot">
+                <div className="colhead"><span /><span>KICKOFF</span><span>MATCH · FIELD</span><span>SPOTS</span><span>SHORT</span><span>AUTO-CANCEL</span><span>MANAGER</span><span className="ra">PRICE</span></div>
+                {grouped.map(({ G, rows }) => (
+                  <section className={"grp grp-" + G.k} data-testid={`snap-group-${G.k}`} key={G.k}>
+                    <h2 className="grouphd">{G.t}<span className="n">{rows.length}</span></h2>
+                    <div className="rowlist">{rows.map((m) => <SnapRow key={m.id} m={m} now={now} group={G.k} selected={drawerId === m.id} onOpen={openDrawer} money={money} />)}</div>
+                  </section>
+                ))}
+              </div>
             : <div className="bands" data-testid="bands">
-              {banded.map(({ B, rows }) => (
-                <section className="band" data-testid={`band-${B.k}`} key={B.k}>
-                  <h2>{B.t}<span className="n">{rows.length}</span></h2>
-                  <div className="rows">{rows.map((m) => <Tile key={m.id} m={m} now={now} veo={!!veo[m.id]} selected={drawerId === m.id} onOpen={openDrawer} onRoster={goRoster} onVeo={toggleVeo} money={money} />)}</div>
+              {grouped.map(({ G, rows }) => (
+                <section className={"band grp-" + G.k} data-testid={`group-${G.k}`} key={G.k}>
+                  <h2 className="grouphd">{G.t}<span className="n">{rows.length}</span></h2>
+                  <div className="rows">{rows.map((m) => <Tile key={m.id} m={m} now={now} group={G.k} veo={!!veo[m.id]} selected={drawerId === m.id} onOpen={openDrawer} onRoster={goRoster} onVeo={toggleVeo} money={money} />)}</div>
                 </section>
               ))}
             </div>}
@@ -216,26 +223,28 @@ export default function GamedayBoard() {
   );
 }
 
-function Tile({ m, now, veo, selected, onOpen, onRoster, onVeo, money }: {
-  m: ApiMatch; now: number; veo: boolean; selected: boolean;
+function Tile({ m, now, group, veo, selected, onOpen, onRoster, onVeo, money }: {
+  m: ApiMatch; now: number; group: MatchGroup; veo: boolean; selected: boolean;
   onOpen: (id: number) => void; onRoster: (id: number) => void; onVeo: (id: number, en: boolean) => void; money: (c: number | null | undefined) => string;
 }) {
-  const t = minsUntil(m, now), lvl = acLevel(m, now), band = bandOf(m, now);
+  const t = minsUntil(m, now), lvl = acLevel(m, now);
+  const isTodo = group === "todo", isCx = group === "cancelled", isDone = group === "finished";
   const cap = capacity(m), real = realCount(m), fk = fakeCount(m), open = openSpots(m);
   const f = fill(m), rel = nextRelease(m, now), mark = nextMark(m, now);
   const fl = flags(m, now);
-  const cd = m.isCancelled ? "" : t <= -90 ? `finished ${fmtDur(t)} ago` : t <= 0 ? "in play" : `in ${fmtDur(t)}`;
+  // Cancelled shows no countdown at all; finished keeps "finished Nh ago"; todo the live count.
+  const cd = isCx ? "" : t <= -90 ? `finished ${fmtDur(t)} ago` : t <= 0 ? "in play" : `in ${fmtDur(t)}`;
   const cdCls = t <= 0 && t > -90 ? "live" : t > 0 && t <= 180 ? "soon" : "";
   const rosterKey = (e: React.KeyboardEvent) => { if (e.key === "Enter" || e.key === " ") { e.preventDefault(); e.stopPropagation(); onRoster(m.id); } };
   const veoKey = (e: React.KeyboardEvent) => { if (e.key === "Enter" || e.key === " ") { e.preventDefault(); e.stopPropagation(); onVeo(m.id, !veo); } };
 
   return (
-    <button className={"row" + (band === "done" ? " done" : "") + (m.isCancelled ? " cx" : "") + (lvl ? " " + lvl : "") + (selected ? " sel" : "")}
-      data-testid="tile" data-id={m.id} data-band={band} data-ac={lvl} data-cx={m.isCancelled ? 1 : 0}
+    <button className={"row" + (isDone ? " done" : "") + (isCx ? " cx" : "") + (isTodo && lvl ? " " + lvl : "") + (selected ? " sel" : "")}
+      data-testid="tile" data-id={m.id} data-group={group} data-ac={isTodo ? lvl : ""} data-cx={isCx ? 1 : 0}
       onClick={() => onOpen(m.id)} aria-label={`${m.name} at ${m.field?.title ?? ""}, ${localClock(m)} ${tzAbbr(m)}`}>
       <span className="hdr">
         <span className="when" data-testid="tile-when"><b>{localClock(m)}</b> <span className="tz">{tzAbbr(m)}</span><span className={"cd " + cdCls}>{cd}</span></span>
-        <span className="ttl"><span className="nm">{m.name}{m.isCancelled && <span className="cxb">CANCELLED</span>}</span></span>
+        <span className="ttl"><span className="nm">{m.name}{isCx && <span className="cxb" data-testid="tile-cxb">CANCELLED</span>}</span></span>
         <span className="price" data-testid="tile-price">{money(m.registrationPrice)}</span>
         <span className="veocell" data-testid="tile-veo">
           <span className={"veob" + (veo ? " on" : "")} role="switch" tabIndex={0} data-testid="veo-badge" data-veo={m.id} aria-checked={veo} aria-label={`Veo for ${m.name}`}
@@ -251,32 +260,37 @@ function Tile({ m, now, veo, selected, onOpen, onRoster, onVeo, money }: {
       </span>
       <span className="stats" data-testid="tile-stats">
         <span className="st fill">
-          <span className="k">SPOTS{!m.isCancelled && (
+          <span className="k">SPOTS{!isCx && (
             <span className="rosterlink" role="link" tabIndex={0} data-testid="roster-link" data-roster={m.id} aria-label={`Open the roster for ${m.name}`}
               onClick={(e) => { e.stopPropagation(); onRoster(m.id); }} onKeyDown={rosterKey}>ROSTER ›</span>)}</span>
           {cap == null ? <span className="nums" data-testid="fill-nums">special event · no cap</span> : <>
             <span className="barwrap">
-              <span className={"bar" + (!m.isCancelled && !short(m) && t > -90 ? " cleared" : "")} data-testid="fill-bar">
+              <span className={"bar" + (isTodo && !short(m) ? " cleared" : "")} data-testid="fill-bar">
                 <i className="r" style={{ width: `${f!.realPct}%` }} data-testid="fill-real" /><i className="f" style={{ width: `${f!.fakePct}%` }} />
-                {!m.isCancelled && short(m) && <b className="gap" data-testid="fill-gap" style={{ left: `${f!.realPct}%`, width: `${f!.gapPct}%` }} />}
+                {isTodo && short(m) && <b className="gap" data-testid="fill-gap" style={{ left: `${f!.realPct}%`, width: `${f!.gapPct}%` }} />}
               </span>
-              {!m.isCancelled && <b className={"min" + (short(m) ? "" : " hit")} data-testid="fill-marker" style={{ left: `${f!.minPct}%` }} data-n={m.minPlayerCount} title={`${m.minPlayerCount} players needed to avoid an auto-cancel`} />}
+              {isTodo && <b className={"min" + (short(m) ? "" : " hit")} data-testid="fill-marker" style={{ left: `${f!.minPct}%` }} data-n={m.minPlayerCount} title={`${m.minPlayerCount} players needed to avoid an auto-cancel`} />}
             </span>
+            {/* spots line stays in every group — the post-mortem roster / final attendance */}
             <span className="nums" data-testid="fill-nums"><b>{real}</b> real{fk ? <> · <span className="fk">{fk} fake</span></> : null} · {open} open <span className="ofcap">of {cap}</span></span>
-            {!m.isCancelled && <span className="minlab" data-testid="minlab">{short(m)
-              ? <><span className="tag togo">{shortBy(m)} TO GO</span><span className="nn"><b>{real}</b> of {m.minPlayerCount} needed</span></>
-              : <><span className="tag made"><span className="ck">✓</span>MADE IT</span><span className="nn"><b>{real - (m.minPlayerCount ?? 0)}</b> clear of {m.minPlayerCount}</span></>}</span>}
+            {isTodo
+              ? <span className="minlab" data-testid="minlab">{short(m)
+                  ? <><span className="tag togo">{shortBy(m)} TO GO</span><span className="nn"><b>{real}</b> of {m.minPlayerCount} needed</span></>
+                  : <><span className="tag made"><span className="ck">✓</span>MADE IT</span><span className="nn"><b>{real - (m.minPlayerCount ?? 0)}</b> clear of {m.minPlayerCount}</span></>}</span>
+              : isCx
+                ? <span className="minlab" data-testid="minlab"><span className="tag cxtag" data-testid="cx-badge">CANCELLED</span></span>
+                : null}
           </>}
         </span>
         <span className="st rel"><span className="k">SPOTS RELEASED</span>
-          <span className="rungs">{t > 0 && !m.isCancelled
+          <span className="rungs">{isTodo && t > 0
             ? [[6, m.fakeSpotLeft6h], [3, m.fakeSpotLeft3h]].map(([h, v]) => <span key={h} className={"rung" + (mark === h ? " next" : "")} data-testid={`rung-${h}`}>{h}h <b>{Math.min(Number(v) || 0, Math.max(0, (cap ?? (Number(v) || 0)) - real))}</b></span>)
             : <span className="rung dash">—</span>}</span>
-          <span className={"nx" + (rel && !m.isCancelled ? "" : " none")} data-testid="next-release">{rel && !m.isCancelled ? `+${rel.drop} in ${fmtDur(rel.inMin)}, at the ${rel.mark}h mark` : (t > 0 && !m.isCancelled ? "no more releases" : "")}</span>
+          <span className={"nx" + (rel && isTodo ? "" : " none")} data-testid="next-release">{rel && isTodo ? `+${rel.drop} in ${fmtDur(rel.inMin)}, at the ${rel.mark}h mark` : (isTodo && t > 0 ? "no more releases" : "")}</span>
         </span>
-        <span className={"st ac " + (t <= 0 || m.isCancelled ? "" : !short(m) ? "ok" : (lvl || "warn"))} data-testid="tile-ac">
+        <span className={"st ac " + (!isTodo ? "" : !short(m) ? "ok" : (lvl || "warn"))} data-testid="tile-ac">
           <span className="k">AUTO-CANCEL</span>
-          {t <= 0 || m.isCancelled ? <span className="line dash">—</span> : <>
+          {!isTodo ? <span className="line dash" data-testid="tile-ac-dash">—</span> : <>
             <span className="line">Cancels <b>{m.autoCanceledMinutes}m</b> before · {minsToDeadline(m, now) > 0 ? <>in <b>{fmtDur(minsToDeadline(m, now))}</b></> : <b>deadline passed {fmtDur(minsToDeadline(m, now))} ago</b>}</span>
             <span className="cnt">{short(m) ? <>needs <b>{m.minPlayerCount}</b> — <b>{shortBy(m)} short</b></> : <>needs {m.minPlayerCount} — clear by {real - (m.minPlayerCount ?? 0)}</>}</span>
           </>}
@@ -290,42 +304,54 @@ function Tile({ m, now, veo, selected, onOpen, onRoster, onVeo, money }: {
 // One snapshot line. Every number comes from the SAME gamedayModel functions the card
 // Tile uses — realCount/fakeCount/openSpots/shortBy/fill/riskTier — so the two views can
 // never disagree. Clicking the row opens the same drawer a card opens.
-function SnapRow({ m, now, selected, onOpen, money }: {
-  m: ApiMatch; now: number; selected: boolean; onOpen: (id: number) => void; money: (c: number | null | undefined) => string;
+function SnapRow({ m, now, group, selected, onOpen, money }: {
+  m: ApiMatch; now: number; group: MatchGroup; selected: boolean; onOpen: (id: number) => void; money: (c: number | null | undefined) => string;
 }) {
+  const isTodo = group === "todo", isCx = group === "cancelled", isDone = group === "finished";
   const cap = capacity(m), real = realCount(m), fk = fakeCount(m), open = openSpots(m);
   const s = shortBy(m), rk = riskTier(m, now), ac = minsToDeadline(m, now), t = minsUntil(m, now);
   const f = fill(m);
   const moreFake = fk > real;
   const mgr = m.manager ? [m.manager.firstName, m.manager.lastName].filter(Boolean).join(" ").trim() || "—" : "none";
   const price = money(m.registrationPrice);
-  const cd = m.isCancelled ? "cancelled" : t <= -90 ? `finished ${fmtDur(t)} ago` : t <= 0 ? "in play" : `in ${fmtDur(t)}`;
+  // Cancelled: no countdown text (the CANCELLED badge carries it). Finished: "finished Nh ago".
+  const cd = isCx ? "" : t <= -90 ? `finished ${fmtDur(t)} ago` : t <= 0 ? "in play" : `in ${fmtDur(t)}`;
   const acTxt = ac <= 0 ? "passed" : `in ${fmtDur(ac)}`;
+  // Risk rail ONLY for still-to-come; cancelled = red, finished = grey (muted).
+  const railCls = isCx ? "cxrow" : isDone ? "donerow" : "risk-" + rk;
   const shortCls = cap == null ? "ok" : s === 0 ? "ok" : rk === "red" ? "bad" : "warn";
   const shortTxt = cap == null ? "—" : s === 0 ? "OK" : `−${s}`;
   return (
-    <button className={"r risk-" + rk + (selected ? " sel" : "")} data-testid="snap-row" data-id={m.id} data-risk={rk} data-short={s} data-open={open ?? ""} data-real={real}
+    <button className={"r " + railCls + (selected ? " sel" : "")} data-testid="snap-row" data-id={m.id} data-group={group} data-risk={isTodo ? rk : ""} data-short={s} data-open={open ?? ""} data-real={real}
       onClick={() => onOpen(m.id)} aria-label={`${m.name} at ${m.field?.title ?? ""}, ${localClock(m)} ${tzAbbr(m)}`}>
       <span className="rail" />
-      <span className="cell c-time"><span className="t1">{localClock(m)}<em>{tzAbbr(m)}</em></span><span className="t2">{cd}</span></span>
+      <span className="cell c-time"><span className="t1">{localClock(m)}<em>{tzAbbr(m)}</em></span>{cd ? <span className="t2">{cd}</span> : null}</span>
       <span className="cell c-match">
-        <span className="m1">{m.name}{moreFake && <span className="flag" data-testid="more-fake">MORE FAKE</span>}</span>
+        <span className="m1">{m.name}{isTodo && moreFake && <span className="flag" data-testid="more-fake">MORE FAKE</span>}</span>
         <span className="m2">{(m.field?.title ?? "—")} · {m.field?.city?.name ?? "—"}</span>
       </span>
       <span className="cell c-spots">
         {cap == null ? <span className="spotln" data-testid="snap-spots">special event · no cap</span> : <>
-          <span className="bar"><span className="seg1" style={{ width: `${f!.realPct}%` }} /><span className="seg2" style={{ left: `${f!.realPct}%`, width: `${f!.fakePct}%` }} /><span className="tick" data-testid="snap-tick" style={{ left: `calc(${f!.minPct}% - 1px)` }} /></span>
+          <span className="bar"><span className="seg1" style={{ width: `${f!.realPct}%` }} /><span className="seg2" style={{ left: `${f!.realPct}%`, width: `${f!.fakePct}%` }} />{isTodo && <span className="tick" data-testid="snap-tick" style={{ left: `calc(${f!.minPct}% - 1px)` }} />}</span>
           <span className="spotln" data-testid="snap-spots"><b>{real}</b> real · <span className="fk">{fk} fake</span> · {open} open of {cap}</span>
         </>}
       </span>
       <span className="cell c-short">
-        <span className={"short " + shortCls} data-testid="snap-short">{shortTxt}</span>
-        <span className="minln">{real} of {m.minPlayerCount ?? 0}</span>
+        {/* Cancelled: a solid CANCELLED badge where the shortfall chip goes — no −N, no countdown.
+            Finished: nothing (no shortfall to fix). Only still-to-come shows the −N chip. */}
+        {isCx ? <span className="short cxbadge" data-testid="snap-cx-badge">CANCELLED</span>
+          : isDone ? <span className="short none" data-testid="snap-short">—</span>
+          : <><span className={"short " + shortCls} data-testid="snap-short">{shortTxt}</span><span className="minln">{real} of {m.minPlayerCount ?? 0}</span></>}
       </span>
       <span className="cell c-cxl">
-        <span className={"c1" + (rk === "red" ? " hot" : "")}>{m.isCancelled ? "—" : acTxt}</span>
-        <span className="c2">cancels {m.autoCanceledMinutes ?? 0}m before</span>
-        <span className="cxlmob" data-testid="snap-cxlmob">cancel {m.isCancelled ? "—" : acTxt} · {m.autoCanceledMinutes ?? 0}m before · {mgr} · {price}</span>
+        {isTodo ? <>
+          <span className={"c1" + (rk === "red" ? " hot" : "")}>{acTxt}</span>
+          <span className="c2">cancels {m.autoCanceledMinutes ?? 0}m before</span>
+          <span className="cxlmob" data-testid="snap-cxlmob">cancel {acTxt} · {m.autoCanceledMinutes ?? 0}m before · {mgr} · {price}</span>
+        </> : <>
+          <span className="c1 dash">—</span>
+          <span className="cxlmob" data-testid="snap-cxlmob">{isCx ? "cancelled" : "finished"} · {mgr} · {price}</span>
+        </>}
       </span>
       <span className="cell c-mgr"><span className="mgr">{mgr}</span></span>
       <span className="cell c-price"><span className="price">{price}</span></span>
@@ -366,10 +392,11 @@ const CSS = `
 .gdo .row:hover{border-color:#9FC4B2;box-shadow:0 2px 8px rgba(0,42,28,.08)}
 .gdo .row:focus-visible{outline:2px solid #046B45;outline-offset:2px}
 .gdo .row.sel{box-shadow:0 0 0 3px #2CDB87,0 6px 18px rgba(0,42,28,.18)}
-.gdo .row.done{opacity:.72;background:#FAFBFA}
+.gdo .row.done{opacity:.66;background:#FAFBFA;box-shadow:inset 4px 0 0 #C3CCC7}
 .gdo .row.warn{background:#FEF9EF;border-color:#E3C88A}
 .gdo .row.crit{background:#FDF1EE;border-color:#E9B6AC;box-shadow:inset 3px 0 0 #A83120}
-.gdo .row.cx{opacity:.7;background:#FAFAFA}.gdo .row.cx .nm{text-decoration:line-through;text-decoration-color:#A7B3AD}
+/* CANCELLED — unmissable: red left rail + red-tinted bg, NOT dimmed. */
+.gdo .row.cx{background:#FBE4E0;border-color:#E9A79F;box-shadow:inset 4px 0 0 #A83120}.gdo .row.cx .nm{text-decoration:line-through;text-decoration-color:#C98B83}
 .gdo .hdr{display:grid;grid-template-columns:118px minmax(0,1fr) auto auto 18px;gap:12px;align-items:center}
 .gdo .hdr>*{min-width:0}
 .gdo .when b{font-size:15.5px;font-weight:700;letter-spacing:-.2px;font-variant-numeric:tabular-nums}
@@ -377,7 +404,8 @@ const CSS = `
 .gdo .when .cd{font-size:12px;color:#5C6B62;font-variant-numeric:tabular-nums;display:block}
 .gdo .when .cd.soon{color:#A83120;font-weight:700}.gdo .when .cd.live{color:#046B45;font-weight:700}
 .gdo .ttl .nm{font-weight:700;font-size:16px;letter-spacing:-.15px}
-.gdo .cxb{font-size:10px;font-weight:800;letter-spacing:.06em;background:#FDEEEB;color:#A83120;border:1px solid #E9B6AC;border-radius:5px;padding:2px 7px;margin-left:7px}
+.gdo .cxb{font-size:10px;font-weight:800;letter-spacing:.06em;background:#A83120;color:#fff;border:1px solid #A83120;border-radius:5px;padding:2px 7px;margin-left:7px}
+.gdo .minlab .tag.cxtag{background:#A83120;color:#fff;border:1px solid #A83120}
 .gdo .price{font-size:15px;font-weight:700;font-variant-numeric:tabular-nums;white-space:nowrap}
 .gdo .veob{display:inline-flex;align-items:center;justify-content:center;border-radius:6px;padding:6px 10px;font-size:10.5px;font-weight:800;letter-spacing:.06em;border:1px solid #C3CDC7;background:#fff;color:#41514A;cursor:pointer;min-height:32px}
 .gdo .veob.on{background:#F2E31D;border-color:#F2E31D;color:#231F00}
@@ -448,6 +476,15 @@ const CSS = `
 .gdo .sheet .rail{align-self:stretch;display:block;background:#CCD7D1}
 .gdo .sheet .r.risk-red .rail{background:#A83120}.gdo .sheet .r.risk-amber .rail{background:#B8860B}.gdo .sheet .r.risk-green .rail{background:#046B45}
 .gdo .sheet .r.risk-red{background:#FDEEEB}.gdo .sheet .r.risk-red:hover{background:#FBE2DF}
+/* snapshot CANCELLED — red rail + red bg, struck name; FINISHED — grey rail, muted. */
+.gdo .sheet .r.cxrow .rail{background:#A83120}.gdo .sheet .r.cxrow{background:#FBE4E0}.gdo .sheet .r.cxrow:hover{background:#F7D6D0}.gdo .sheet .r.cxrow .m1{text-decoration:line-through;text-decoration-color:#C98B83}
+.gdo .sheet .r.donerow .rail{background:#C3CCC7}.gdo .sheet .r.donerow{opacity:.66}
+.gdo .sheet .short.cxbadge{background:#A83120;color:#fff;border:1px solid #A83120;min-width:auto;padding:3px 9px;letter-spacing:.05em}
+.gdo .sheet .short.none{background:transparent;border:0;color:#98A29C;min-width:auto}
+.gdo .sheet .c1.dash{color:#98A29C;font-weight:600}
+.gdo .grouphd{margin:0 0 9px 3px;font-size:12px;letter-spacing:.11em;color:#55635B;font-weight:700;display:flex;align-items:center;gap:8px}
+.gdo .grouphd .n{color:#4E5A54;letter-spacing:0;font-weight:600;font-size:12.5px}
+.gdo .sheet .grp{margin-top:18px}.gdo .sheet .grp:first-of-type{margin-top:8px}
 .gdo .sheet .cell{display:block;padding:9px 0;min-width:0}
 .gdo .sheet .t1{display:block;font-weight:700;font-variant-numeric:tabular-nums}.gdo .sheet .t1 em{font-style:normal;font-size:10px;font-weight:800;color:#67746C;letter-spacing:.06em;margin-left:4px}
 .gdo .sheet .t2{display:block;font-size:12px;color:#67746C;font-variant-numeric:tabular-nums}

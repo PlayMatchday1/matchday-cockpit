@@ -121,6 +121,27 @@ export const BANDS: { k: Band; t: string }[] = [
   { k: "cx", t: "CANCELLED" },
 ];
 
+// ── the three top-level GROUPS (Phase 18) ────────────────────────────────────
+// The board splits by outcome, not just time: only STILL TO COME rows are actionable
+// (risk rails, shortfall chips, auto-cancel countdowns). CANCELLED and FINISHED get their
+// own treatment and NO risk tier — a cancelled match has no shortfall to fix, and a
+// countdown to a cancel call that already passed is noise. ONE function, used by BOTH
+// the Detail and Snapshot views, so they can never disagree about a match's group.
+// Order is deliberate: cancelled (a costly outcome, may need follow-up) sits ABOVE
+// finished (routine, nothing to do). "todo" includes in-play matches (kicked off but
+// <90m ago) — they're not finished and not cancelled, and their risk already no-ops.
+export type MatchGroup = "todo" | "cancelled" | "finished";
+export function matchGroup(m: ApiMatch, now: number): MatchGroup {
+  if (m.isCancelled) return "cancelled";
+  if (minsUntil(m, now) <= DONE_MIN) return "finished";
+  return "todo";
+}
+export const GROUPS: { k: MatchGroup; t: string }[] = [
+  { k: "todo", t: "STILL TO COME" },
+  { k: "cancelled", t: "CANCELLED" },
+  { k: "finished", t: "FINISHED" },
+];
+
 // ── fake-spot ladder countdown ───────────────────────────────────────────────
 // Fakes are clamped by available room: a rung of 8 on a match with 2 spots free is
 // 2 fakes. room = cap - real (fakes occupy real spots).

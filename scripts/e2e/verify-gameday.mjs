@@ -89,6 +89,13 @@ async function main() {
 
   const todayYMD = (() => { const d = new Date(); return `${d.getFullYear()}-${String(d.getMonth() + 1).padStart(2, "0")}-${String(d.getDate()).padStart(2, "0")}`; })();
   const tomorrowYMD = (() => { const d = new Date(Date.now() + 24 * HR); return `${d.getFullYear()}-${String(d.getMonth() + 1).padStart(2, "0")}-${String(d.getDate()).padStart(2, "0")}`; })();
+  const yesterdayYMD = (() => { const d = new Date(Date.now() - 24 * HR); return `${d.getFullYear()}-${String(d.getMonth() + 1).padStart(2, "0")}-${String(d.getDate()).padStart(2, "0")}`; })();
+  // A day where EVERYTHING is finished or cancelled — must render with NO "still to come"
+  // header (that is the real production "today" once matches are done).
+  const allDone = (base) => [
+    { id: 701, name: "Done AM", isCancelled: false, autoCanceledMinutes: 60, minPlayerCount: 11, maxPlayerCount: 20, registrationPrice: 1200, additionalSpotPrice: 400, fakeSpotLeft36h: 0, fakeSpotLeft24h: 0, fakeSpotLeft12h: 0, fakeSpotLeft6h: 0, fakeSpotLeft3h: 0, isAutoBump: false, category: "OPEN", type: "REGULAR", _count: { players: 14, fakePlayers: 0 }, manager: { firstName: "Sam", lastName: "Webb" }, teams: [{ teamNumber: 1 }], startDate: `${yesterdayYMD}T09:00:00.000`, startDateUtc: new Date(base - 6 * HR).toISOString(), field: { title: "NEMP", city: { id: 1, name: "Austin", timeZone: { abbr: "CDT" } } } },
+    { id: 702, name: "Cx PM", isCancelled: true, autoCanceledMinutes: 60, minPlayerCount: 11, maxPlayerCount: 20, registrationPrice: 1200, additionalSpotPrice: 400, fakeSpotLeft36h: 0, fakeSpotLeft24h: 0, fakeSpotLeft12h: 0, fakeSpotLeft6h: 0, fakeSpotLeft3h: 0, isAutoBump: false, category: "OPEN", type: "REGULAR", _count: { players: 3, fakePlayers: 0 }, manager: null, teams: [{ teamNumber: 1 }], startDate: `${yesterdayYMD}T18:00:00.000`, startDateUtc: new Date(base - 3 * HR).toISOString(), field: { title: "Kiest", city: { id: 1, name: "Dallas", timeZone: { abbr: "CDT" } } } },
+  ];
 
   const routes = async (ctx) => {
     await ctx.route("**/api/matchday/**/gameday**", (route) => {
@@ -96,6 +103,7 @@ async function main() {
       const base = Date.now();
       // tomorrow: a short match FAR from its deadline -> must NOT be coloured
       const matches = date === todayYMD ? fixture(base, todayYMD)
+        : date === yesterdayYMD ? allDone(base)
         : date === tomorrowYMD ? [{ id: 601, name: "Sunday NEMP", isCancelled: false, autoCanceledMinutes: 75, minPlayerCount: 11, maxPlayerCount: 20, registrationPrice: 1200, additionalSpotPrice: 400, fakeSpotLeft36h: 0, fakeSpotLeft24h: 0, fakeSpotLeft12h: 0, fakeSpotLeft6h: 0, fakeSpotLeft3h: 0, isAutoBump: false, category: "OPEN", type: "REGULAR", _count: { players: 4, fakePlayers: 0 }, manager: { firstName: "Sam", lastName: "Webb" }, teams: [{ teamNumber: 1 }], startDate: `${tomorrowYMD}T18:00:00.000`, startDateUtc: new Date(base + 26 * HR).toISOString(), field: { title: "NEMP", city: { id: 1, name: "Austin", timeZone: { abbr: "CDT" } } } }]
         : [];
       route.fulfill({ status: 200, contentType: "application/json", body: JSON.stringify({ date, env: "production", matches }) });
@@ -110,13 +118,14 @@ async function main() {
   const page = await ctx.newPage();
   await page.addInitScript(() => localStorage.setItem("gameday-view", "detail")); // existing assertions target the card view
   const load = async () => { await page.goto(PAGE, { waitUntil: "domcontentloaded" }); await page.waitForSelector('[data-testid="bands"]', { timeout: 30000 }); await page.waitForTimeout(150); };
-  const tilesIn = (band) => page.$$eval(`[data-testid="band-${band}"] [data-testid="tile"]`, (els) => els.map((e) => Number(e.getAttribute("data-id"))));
+  const tilesIn = (group) => page.$$eval(`[data-testid="group-${group}"] [data-testid="tile"]`, (els) => els.map((e) => Number(e.getAttribute("data-id"))));
   const tile = (id) => `[data-testid="tile"][data-id="${id}"]`;
 
   await load();
 
-  // ── real kickoff order within a band; Atlanta (later clock) ahead of Austin ──
-  eq("soon band: real kickoff order (ATL 501 before AUS 502, despite later clock)", (await tilesIn("soon")).slice(0, 2), [501, 502]);
+  // ── real kickoff order within STILL TO COME; Atlanta (later clock) ahead of Austin ──
+  { const order = await tilesIn("todo");
+    eq("still-to-come: 501 (ATL) ordered before 502 (AUS) despite later wall clock", order.indexOf(501) >= 0 && order.indexOf(501) < order.indexOf(502), true); }
   eq("Atlanta tile shows the earlier clock is later wall-time (8:00 PM EDT)", (await page.$eval(tile(501) + ' [data-testid="tile-when"]', (e) => e.textContent)).replace(/\s+/g, " ").trim().startsWith("8:00 PM EDT"), true);
 
   // ── real + fake + open == capacity exactly; fakes within room ──
@@ -152,9 +161,31 @@ async function main() {
     eq("cleared shows MADE IT not TO GO", { togo: /TO GO/.test(m), made: /MADE IT/.test(m) }, { togo: false, made: true }); }
   eq("short tile has a shortfall band; made tile has none", { short: !!(await page.$(tile(501) + ' [data-testid="fill-gap"]')), made: !!(await page.$(tile(502) + ' [data-testid="fill-gap"]')) }, { short: true, made: false });
 
-  // ── cancelled sinks below everything, no countdown, no releases ──
-  eq("cancelled is in the last band (cx)", (await page.$$eval('[data-testid="bands"] .band', (els) => els.map((e) => [...e.classList], ))) && (await page.$$eval('[data-testid="bands"] > section', (els) => els[els.length - 1].getAttribute("data-testid"))), "band-cx");
-  eq("cancelled tile: no countdown, no next release", { cd: (await page.$eval(tile(505) + ' [data-testid="tile-when"]', (e) => e.textContent)).replace(/\s+/g, " ").trim(), rel: await page.$eval(tile(505) + ' [data-testid="next-release"]', (e) => e.textContent).catch(() => "") }, { cd: "6:00 PM CDT", rel: "" });
+  // ── GROUP ORDER: still-to-come, then cancelled, then finished ──
+  eq("group order is todo, cancelled, finished", await page.$$eval('[data-testid="bands"] > section', (els) => els.map((e) => e.getAttribute("data-testid"))), ["group-todo", "group-cancelled", "group-finished"]);
+  eq("505 is in the cancelled group, 506 in finished", { cx: await page.$eval(tile(505), (e) => e.closest("section").getAttribute("data-testid")), fin: await page.$eval(tile(506), (e) => e.closest("section").getAttribute("data-testid")) }, { cx: "group-cancelled", fin: "group-finished" });
+
+  // ── CANCELLED tile: solid badge, NO shortfall chip, NO auto-cancel countdown ──
+  eq("cancelled tile: NO shortfall chip (no TO GO/MADE IT), NO gap/marker; HAS a solid CANCELLED badge", {
+    togo: !!(await page.$(tile(505) + ' .tag.togo')), made: !!(await page.$(tile(505) + ' .tag.made')),
+    gap: !!(await page.$(tile(505) + ' [data-testid="fill-gap"]')), marker: !!(await page.$(tile(505) + ' [data-testid="fill-marker"]')),
+    badge: !!(await page.$(tile(505) + ' [data-testid="cx-badge"]')),
+  }, { togo: false, made: false, gap: false, marker: false, badge: true });
+  eq("cancelled tile: auto-cancel countdown is a dash, not a live count", !!(await page.$(tile(505) + ' [data-testid="tile-ac-dash"]')), true);
+  eq("cancelled tile still shows the spots line (post-mortem roster)", /real/.test(await page.$eval(tile(505) + ' [data-testid="fill-nums"]', (e) => e.textContent)), true);
+  eq("cancelled tile has a red rail + red bg (data-cx)", await page.$eval(tile(505), (e) => e.getAttribute("data-cx")), "1");
+
+  // ── FINISHED tile: no shortfall chip, no countdown; shows final attendance ──
+  eq("finished tile: NO shortfall gap, NO marker, NO minlab, NO countdown", {
+    gap: !!(await page.$(tile(506) + ' [data-testid="fill-gap"]')), marker: !!(await page.$(tile(506) + ' [data-testid="fill-marker"]')),
+    minlab: !!(await page.$(tile(506) + ' [data-testid="minlab"]')), ac: !!(await page.$(tile(506) + ' [data-testid="tile-ac-dash"]')),
+  }, { gap: false, marker: false, minlab: false, ac: true });
+  eq("finished tile shows final attendance (the spots line)", /real/.test(await page.$eval(tile(506) + ' [data-testid="fill-nums"]', (e) => e.textContent)), true);
+
+  // ── Needs attention EXCLUDES cancelled + finished ──
+  await page.click('[data-testid="filter-att"]'); await page.waitForTimeout(150);
+  eq("Needs attention shows no cancelled and no finished group", { cx: await page.$('[data-testid="group-cancelled"]'), fin: await page.$('[data-testid="group-finished"]') }, { cx: null, fin: null });
+  await page.click('[data-testid="filter-all"]'); await page.waitForTimeout(150);
 
   // ── special-event (no cap): no bar/marker, says so ──
   eq("special event (no cap) shows no bar and says so", { nums: /no cap/.test(await page.$eval(tile(508) + ' [data-testid="fill-nums"]', (e) => e.textContent)), bar: !!(await page.$(tile(508) + ' [data-testid="fill-bar"]')) }, { nums: true, bar: false });
@@ -165,7 +196,17 @@ async function main() {
     const after = await page.$eval('[data-testid="filter-all"] .b', (e) => Number(e.textContent));
     const tiles = await page.$$eval('[data-testid="tile"]', (els) => els.length);
     eq("selecting a city changes the All count (stats derive from scope)", { before, after, tiles }, { before: 8, after: 1, tiles: 1 });
+    // Atlanta has only the one still-to-come match -> empty groups render NO header.
+    eq("empty groups render no header (Atlanta: only still-to-come)", { todo: !!(await page.$('[data-testid="group-todo"]')), cx: await page.$('[data-testid="group-cancelled"]'), fin: await page.$('[data-testid="group-finished"]') }, { todo: true, cx: null, fin: null });
     await page.click('[data-testid="city-all"]'); await page.waitForTimeout(120); }
+
+  // ── a day where EVERYTHING is finished/cancelled renders with NO still-to-come header ──
+  await page.click('[data-testid="day-prev"]'); await page.waitForSelector('[data-testid="bands"]', { timeout: 10000 }); await page.waitForTimeout(200);
+  eq("all-done day: renders groups, and NO empty 'still to come' header", {
+    empty: !!(await page.$('[data-testid="empty"]')), todo: await page.$('[data-testid="group-todo"]'),
+    cx: !!(await page.$('[data-testid="group-cancelled"]')), fin: !!(await page.$('[data-testid="group-finished"]')),
+  }, { empty: false, todo: null, cx: true, fin: true });
+  await page.click('[data-testid="day-today"]'); await page.waitForSelector('[data-testid="group-todo"]', { timeout: 10000 }); await page.waitForTimeout(150);
 
   // ── the tile is structurally whole: one button, roster+veo are SPANS ──
   { const whole = await page.$eval(tile(501), (t) => ({
@@ -191,7 +232,7 @@ async function main() {
   eq("Today re-enables on another day", await page.$eval('[data-testid="day-today"]', (b) => b.disabled), false);
   { const coloured = await page.$$eval('[data-testid="tile"]', (els) => els.filter((e) => e.getAttribute("data-ac")).map((e) => e.getAttribute("data-id")));
     eq("nothing tomorrow is coloured (no day-early auto-cancel)", coloured, []); }
-  await page.click('[data-testid="day-today"]'); await page.waitForSelector('[data-testid="band-soon"]'); await page.waitForTimeout(150);
+  await page.click('[data-testid="day-today"]'); await page.waitForSelector('[data-testid="group-todo"]'); await page.waitForTimeout(150);
 
   // ── the roster link navigates to the roster, not the drawer (do this last: it navigates away) ──
   const drawerBefore = (await page.$$('input')).length;
@@ -204,7 +245,7 @@ async function main() {
   await routes(pctx);
   const ph = await pctx.newPage();
   await ph.addInitScript(() => localStorage.setItem("gameday-view", "detail"));
-  await ph.goto(PAGE, { waitUntil: "domcontentloaded" }); await ph.waitForSelector('[data-testid="band-soon"]'); await ph.waitForTimeout(200);
+  await ph.goto(PAGE, { waitUntil: "domcontentloaded" }); await ph.waitForSelector('[data-testid="group-todo"]'); await ph.waitForTimeout(200);
   { const o = await overflow(ph); const past = await ph.evaluate(() => { const w = innerWidth;
       const inScroller = (el) => { let n = el.parentElement; while (n) { const s = getComputedStyle(n); if (s.overflowX === "auto" || s.overflowX === "scroll") return true; n = n.parentElement; } return false; };
       return [...document.querySelectorAll(".gdo *")].filter((e) => { const r = e.getBoundingClientRect(); const s = getComputedStyle(e); return s.display !== "none" && r.width > 0 && r.right > w + 1 && !inScroller(e); }).map((e) => (e.getAttribute("class") || e.tagName).toString().slice(0, 30)); });

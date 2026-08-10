@@ -42,11 +42,18 @@ const ADV = [
   [705, "Houston", 20, 6, 0, 12, 18, 30, "E", 1200, "CST"],   // auto-cancel deadline ALREADY passed (acIn -10)
   [706, "Austin", 300, 10, 0, 12, 20, 30, "F", 1200, "CST"],  // zero fakes
 ];
-let activeRaw = MAIN; // route serves this; flipped mid-run to exercise ADV
+// All three states (Phase 18) — both views must agree which GROUP each is in.
+const GRP = [
+  [801, "Austin", 180, 3, 0, 12, 18, 30, "T", 1200, "CST"],          // still to come (short)
+  [802, "Austin", 180, 3, 0, 12, 18, 30, "C", 1200, "CST", "cx"],    // cancelled
+  [803, "Austin", 0, 14, 2, 12, 18, 30, "F", 1200, "CST", "done"],   // finished (past kickoff)
+];
+let activeRaw = MAIN; // route serves this; flipped mid-run to exercise ADV / GRP
 function build(raw, base, ymd) {
-  return raw.map(([id, city, mins, real, fake, min, cap, acMin, mgr, price, tz]) => ({
-    id, name: `Match ${id}`, startDate: `${ymd}T12:00:00.000`, startDateUtc: new Date(base + mins * 60000).toISOString(),
-    isCancelled: false, autoCanceledMinutes: acMin, minPlayerCount: min, maxPlayerCount: cap,
+  return raw.map(([id, city, mins, real, fake, min, cap, acMin, mgr, price, tz, st]) => ({
+    id, name: `Match ${id}`, startDate: `${ymd}T12:00:00.000`,
+    startDateUtc: st === "done" ? new Date(base - 5 * 3600000).toISOString() : new Date(base + mins * 60000).toISOString(),
+    isCancelled: st === "cx", autoCanceledMinutes: acMin, minPlayerCount: min, maxPlayerCount: cap,
     registrationPrice: price, additionalSpotPrice: 400, fakeSpotLeft36h: 0, fakeSpotLeft24h: 0, fakeSpotLeft12h: 0, fakeSpotLeft6h: 0, fakeSpotLeft3h: 0,
     isAutoBump: false, category: "OPEN", type: "REGULAR", _count: { players: real + fake, fakePlayers: fake },
     manager: { firstName: mgr, lastName: "" }, teams: [{ teamNumber: 1 }, { teamNumber: 2 }],
@@ -179,6 +186,23 @@ async function main() {
   { const rf = ["701", "702", "703"].filter((id) => snapA[id].fake > 0 && snapA[id].real === snapA[id].real + snapA[id].fake);
     rf.length === 0 ? ok("real != filled on every fake-bearing adversarial row (701/702/703)") : bad("real==filled", rf.join(",")); }
   await page.click('[data-testid="view-snapshot"]'); await page.waitForTimeout(100);
+
+  // ══ BOTH VIEWS AGREE ON GROUP across all three states (Phase 18) ══
+  // Same discipline as the real/fake agreement: one grouping function, so Snapshot and
+  // Detail can never put a match in different groups.
+  activeRaw = GRP;
+  await page.reload({ waitUntil: "domcontentloaded" });
+  await page.waitForSelector('[data-testid="snapshot"]'); await page.waitForTimeout(200);
+  const groupOf = (sel) => page.$$eval(sel, (els) => Object.fromEntries(els.map((e) => [e.getAttribute("data-id"), e.getAttribute("data-group")])));
+  const snapG = await groupOf('[data-testid="snap-row"]');
+  eq("snapshot assigns each state to its group", snapG, { "801": "todo", "802": "cancelled", "803": "finished" });
+  eq("snapshot renders the three groups in order", await page.$$eval('[data-testid="snapshot"] > section', (els) => els.map((e) => e.getAttribute("data-testid"))), ["snap-group-todo", "snap-group-cancelled", "snap-group-finished"]);
+  eq("snapshot cancelled row: solid CANCELLED badge, NO −N short chip", { badge: !!(await page.$('[data-testid="snap-row"][data-id="802"] [data-testid="snap-cx-badge"]')), noShort: (await page.$('[data-testid="snap-row"][data-id="802"] [data-testid="snap-short"]')) === null }, { badge: true, noShort: true });
+  await page.click('[data-testid="view-detail"]'); await page.waitForSelector('[data-testid="tile"]'); await page.waitForTimeout(150);
+  const detailG = await groupOf('[data-testid="tile"]');
+  eq("BOTH views agree on the group for every match (all three states)", snapG, detailG);
+  await page.click('[data-testid="view-snapshot"]'); await page.waitForTimeout(100);
+
   activeRaw = MAIN; // restore for the phone section
 
   // ══════════════ PHONE ══════════════

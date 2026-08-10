@@ -7,7 +7,7 @@ import "server-only"; // no-op under --conditions=react-server
 import {
   byKickoff, bandOf, minsUntil, capacity, openSpots, realCount, fakeCount, filledCount, clampFakes,
   nextRelease, acLevel, minsToDeadline, short, shortBy, fill, attention, inCities, passesFilter,
-  localClock, localDate, CRIT_HOURS, WARN_HOURS, riskTier, CANCEL_SOON_MINUTES, type ApiMatch,
+  localClock, localDate, CRIT_HOURS, WARN_HOURS, riskTier, CANCEL_SOON_MINUTES, matchGroup, GROUPS, type ApiMatch,
 } from "../src/lib/gamedayModel";
 
 let pass = 0, fail = 0;
@@ -170,6 +170,33 @@ eq("attention filter is derived, not a flag", passesFilter(critShort, NOW, "att"
 eq("local clock reads the wall string, no timezone maths", localClock(atl), "6:00 PM");
 eq("local date is the wall calendar date", localDate(atl), "2026-08-08");
 ok(attention(critShort, NOW) === true ? "attention true for a short, near-deadline match" : bad("attention"));
+
+// ── the three groups (Phase 18) — ONE function both views share ──────────────
+const H2 = 3600000;
+const mkG = (o: Partial<ApiMatch>): ApiMatch => ({ id: 1, name: "M", startDate: "2026-08-08T18:00:00.000", startDateUtc: new Date(NOW + 3 * H2).toISOString(), minPlayerCount: 11, maxPlayerCount: 20, autoCanceledMinutes: 60, _count: { players: 4, fakePlayers: 0 }, teams: [{ teamNumber: 1 }], field: { title: "F", city: { name: "Austin", timeZone: { abbr: "CDT" } } }, ...o } as ApiMatch);
+const futureM = mkG({ startDateUtc: new Date(NOW + 3 * H2).toISOString() });
+const liveM = mkG({ startDateUtc: new Date(NOW - 20 * 60000).toISOString() }); // kicked off 20m ago
+const finishedM = mkG({ startDateUtc: new Date(NOW - 5 * H2).toISOString() }); // 5h past
+const cxFuture = mkG({ isCancelled: true, startDateUtc: new Date(NOW + 3 * H2).toISOString() });
+const cxPast = mkG({ isCancelled: true, startDateUtc: new Date(NOW - 5 * H2).toISOString() });
+
+eq("future match -> todo", matchGroup(futureM, NOW), "todo");
+eq("in-play match (kicked off <90m) -> todo, not finished", matchGroup(liveM, NOW), "todo");
+eq("well-past match -> finished", matchGroup(finishedM, NOW), "finished");
+eq("cancelled future -> cancelled (outcome beats time)", matchGroup(cxFuture, NOW), "cancelled");
+eq("cancelled past -> cancelled (never 'finished')", matchGroup(cxPast, NOW), "cancelled");
+eq("GROUPS order is todo, cancelled, finished", GROUPS.map((g) => g.k), ["todo", "cancelled", "finished"]);
+
+// riskTier must NOT apply to cancelled/finished — it is green (inert) for both, so a
+// cancelled/finished row can never carry an amber/red risk rail.
+eq("riskTier inert (green) for cancelled", riskTier(cxFuture, NOW), "green");
+eq("riskTier inert (green) for finished", riskTier(finishedM, NOW), "green");
+// A short cancelled match must still be green (the bug: it used to look risky/short).
+eq("short + cancelled is still green (no phantom risk)", riskTier(mkG({ isCancelled: true, _count: { players: 1, fakePlayers: 0 } }), NOW), "green");
+
+// attention counts ONLY still-to-come — never cancelled, never finished.
+ok(attention(cxFuture, NOW) === false ? "attention false for a cancelled match" : bad("attention cancelled"));
+ok(attention(finishedM, NOW) === false ? "attention false for a finished match" : bad("attention finished"));
 
 console.log(`\n${pass} passed, ${fail} failed`);
 process.exit(fail ? 1 : 0);
