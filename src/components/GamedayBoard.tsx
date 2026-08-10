@@ -292,6 +292,7 @@ function Tile({ m, now, group, veo, selected, onOpen, onRoster, onVeo, money }: 
           <span className="k">AUTO-CANCEL</span>
           {!isTodo ? <span className="line dash" data-testid="tile-ac-dash">—</span> : <>
             <span className="line">Cancels <b>{m.autoCanceledMinutes}m</b> before · {minsToDeadline(m, now) > 0 ? <>in <b>{fmtDur(minsToDeadline(m, now))}</b></> : <b>deadline passed {fmtDur(minsToDeadline(m, now))} ago</b>}</span>
+            <span className="acsep" aria-hidden> · </span>
             <span className="cnt">{short(m) ? <>needs <b>{m.minPlayerCount}</b> — <b>{shortBy(m)} short</b></> : <>needs {m.minPlayerCount} — clear by {real - (m.minPlayerCount ?? 0)}</>}</span>
           </>}
         </span>
@@ -440,7 +441,8 @@ const CSS = `
 .gdo .rung b{color:#1B4F9C}.gdo .rung.next{border-color:#C9DBF3;background:#F2F7FE}.gdo .rung.dash{color:#5C6B62}
 .gdo .nx{display:block;font-size:11.5px;color:#1B4F9C;margin-top:5px;font-variant-numeric:tabular-nums}.gdo .nx.none{color:#5C6B62}
 .gdo .ac .line{font-size:12.5px;font-variant-numeric:tabular-nums}.gdo .ac .line b{font-weight:700}.gdo .ac .line.dash{color:#5C6B62}
-.gdo .ac .cnt{font-size:12.5px;margin-top:2px;font-variant-numeric:tabular-nums}
+.gdo .ac .cnt{font-size:12.5px;font-variant-numeric:tabular-nums}
+.gdo .ac .acsep{color:#5C6B62;font-size:12.5px}
 .gdo .ac.ok .cnt{color:#046B45;font-weight:600}
 .gdo .ac.warn .line b,.gdo .ac.warn .cnt{color:#7A5200}
 .gdo .ac.crit .line b,.gdo .ac.crit .cnt{color:#A83120}
