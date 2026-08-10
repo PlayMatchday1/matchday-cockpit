@@ -375,8 +375,29 @@ function UserMenu({
           >
             Sign out
           </button>
+          <div aria-hidden className="my-1 h-px bg-cream-line" />
+          <BuildStamp />
         </div>
       )}
+    </div>
+  );
+}
+
+// Build stamp — the deployed commit + build time, shown at the bottom of the account
+// menu on every page. Values are inlined at build (next.config env): NEXT_PUBLIC_COMMIT_SHA
+// = VERCEL_GIT_COMMIT_SHA (or "local" in dev), NEXT_PUBLIC_BUILD_TIME = build instant.
+// Makes "is my push deployed?" a one-glance check instead of a diagnostic round.
+function BuildStamp() {
+  const sha = process.env.NEXT_PUBLIC_COMMIT_SHA ?? "local";
+  const shortSha = sha === "local" ? "local" : sha.slice(0, 7);
+  const builtIso = process.env.NEXT_PUBLIC_BUILD_TIME ?? "";
+  const builtLabel = builtIso
+    ? new Date(builtIso).toLocaleString(undefined, { month: "short", day: "numeric", hour: "numeric", minute: "2-digit" })
+    : "";
+  return (
+    <div className="px-3 py-1.5 text-[11px] leading-tight text-deep-green/45" title={`commit ${sha}${builtIso ? ` · built ${builtIso}` : ""}`}>
+      <span className="font-mono">{shortSha}</span>
+      {builtLabel ? <span> · {builtLabel}</span> : null}
     </div>
   );
 }

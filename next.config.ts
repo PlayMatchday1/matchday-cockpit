@@ -1,6 +1,14 @@
 import type { NextConfig } from "next";
 
 const nextConfig: NextConfig = {
+  // Build stamp — so "is this deployed?" is one glance, not a diagnostic round.
+  // VERCEL_GIT_COMMIT_SHA is set by Vercel at build time from the deployed commit;
+  // the build time is stamped when this config evaluates (i.e. during the build).
+  // Inlined into the client bundle as NEXT_PUBLIC_* and rendered in the account menu.
+  env: {
+    NEXT_PUBLIC_COMMIT_SHA: process.env.VERCEL_GIT_COMMIT_SHA ?? "local",
+    NEXT_PUBLIC_BUILD_TIME: new Date().toISOString(),
+  },
   // Redirects: legacy upload route folded into /data on 2026-05-05.
   // Permanent so any bookmarks / external references update.
   async redirects() {

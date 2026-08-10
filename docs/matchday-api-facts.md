@@ -832,3 +832,22 @@ on `LATE`/`NO_SHOW` (correctly — those are attendance outcomes, not cancellati
 reason: `strike.strikeLogs[].userMatchId` → the user-match `id` in the player's `matches[]`
 → read its `userStatus` (reason) and, for cancellations, `canceledAt` vs `match.startDateUtc`
 (timing). `strikeLog` itself carries no reason (see the strike model above).
+
+### `userStatus` NONE DOMINATES historical rows — no attendance metric can trust it (Phase 18)
+
+CAUTION for any future "did they turn up" / attendance metric. On a real high-volume player
+(id 78, 579 user-matches) the `userStatus` distribution was: **`NONE` 516**, CANCEL 37,
+ON_TIME 25, NO_SHOW 1. So **~89% of rows carry NO attendance signal at all** — `NONE` is not
+"absent" or "on time", it is "not recorded" (older matches predate attendance tracking).
+
+Consequences, learned the hard way:
+- The player header shows two numbers that don't add up unless you know this: **579 total**
+  user-matches vs **161 played** (161 played + 418 cancelled = 579, 0 upcoming). Neither is
+  "turned up" — 516/579 have no attendance recorded, so the honest positive signal is only
+  `ON_TIME` (25), which itself undercounts because old attended matches are `NONE`.
+- Player Lookup reconciles this by driving the header facts AND the match-history filter
+  chips from ONE count (upcoming / played / no-show / cancelled partition the total), so the
+  numbers can never disagree — but it does NOT claim any of them means "attended".
+- Any attendance rate built on `userStatus` will be **mostly blind** on history. If you need
+  real attendance, it must come from a source that backfills the `NONE` rows (check-in logs?),
+  not from this field — confirm with Vitalii before shipping any such metric.
