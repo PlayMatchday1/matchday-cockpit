@@ -8,7 +8,8 @@
     "start": "next start",
     "test": "node --test 'src/**/*.test.ts' && npx --yes tsx --test 'src/**/*.finance-test.ts'",
     "verify": "tsc --noEmit && node scripts/run-suites.mjs",
-    "verify:e2e": "node scripts/run-suites.mjs --e2e"
+    "verify:e2e": "node scripts/run-suites.mjs --e2e",
+    "postinstall": "git config core.hooksPath .githooks || true"
   },
   "dependencies": {
     "@supabase/supabase-js": "^2.104.1",

@@ -1,0 +1,15 @@
+#!/bin/sh
+# Pre-push gate (Phase 18). The FAST set (tsc + Node model/guard suites, ~9s) ALWAYS runs
+# and always blocks — that is the thing that could never be skipped again. The browser
+# suites run too (verify:e2e auto-starts a dev server, ~4-6 min). In a pinch set
+# VERIFY_SKIP_E2E=1 to skip ONLY the browser set (the fast set still runs). `git push
+# --no-verify` bypasses everything — use sparingly.
+set -e
+echo "▶ pre-push: npm run verify (fast set, ~9s) …"
+npm run verify
+if [ "${VERIFY_SKIP_E2E:-0}" = "1" ]; then
+  echo "⏭ pre-push: verify:e2e skipped via VERIFY_SKIP_E2E=1 (fast set still ran)"
+else
+  echo "▶ pre-push: npm run verify:e2e (browser suites) …"
+  npm run verify:e2e
+fi
