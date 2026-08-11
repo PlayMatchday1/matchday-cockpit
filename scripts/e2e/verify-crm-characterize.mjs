@@ -45,6 +45,7 @@ const DETAIL = {
   "t-sms": { thread: THREADS[2], messages: [msg({ id: "m5", tid: "t-sms", dir: "inbound", body: "text me back", at: iso(1900), channel: "sms" }), msg({ id: "m6", tid: "t-sms", dir: "outbound", body: "will do", at: iso(1800), channel: "sms" })], assignee: null, latest_inbound_at: iso(1900) },
 };
 const COUNTS = { open: 3, mine: 0, starred: 0, closed: 0, awaiting: 4 };
+let listFetches = 0; // counts GET /api/crm/threads (the inbox list) — proves debounced reloads fire
 
 const grantChats = (ctx, canSend = true) => ctx.route("**/rest/v1/app_users*", async (route) => {
   if (route.request().method() !== "GET") return route.continue();
@@ -66,7 +67,7 @@ async function crmRoutes(ctx, canSend = true) {
     }
     if (path.endsWith("/unread-count")) return json({ count: 2 });
     if (path.endsWith("/awaiting-count")) return json({ count: COUNTS.awaiting });
-    if (path.endsWith("/api/crm/threads")) return json({ threads: THREADS, counts: COUNTS });
+    if (path.endsWith("/api/crm/threads")) { listFetches++; return json({ threads: THREADS, counts: COUNTS }); }
     if (path.endsWith("/api/crm/operators")) return json({ operators: [] });
     if (path.endsWith("/api/crm/metrics")) return json({ metrics: { cohort: { conversations: COUNTS.open, repliedCount: 2, medianFirstResponseMin: 12, answeredWithin1h: 2, answeredWithin1hPct: 100, resolved: 1, resolvedPct: 33 } }, trend: { cohortMedianDeltaMin: null }, awaiting: { count: COUNTS.awaiting } });
     if (/\/api\/crm\/threads\/[^/]+\/mark-read$/.test(path) && method === "POST") return json({ ok: true });
@@ -169,6 +170,61 @@ async function main() {
     const after = await msgCount();
     const painted = await page.$$eval('[data-testid="crm-message"]', (els) => els.some((e) => /SYNTHETIC REALTIME PAINT/.test(e.textContent)));
     (fired && after === before + 1 && painted) ? ok("a synthetic realtime INSERT paints the new message with no refetch") : bad("realtime paint failed", `fired=${fired} before=${before} after=${after} painted=${painted}`); }
+
+  // ══════════════ Phase 19 Step 2: one assertion PER realtime handler ══════════════
+  // The Step-2 lift moves the ONE subscription's five handlers into a provider. One assertion per
+  // handler — driven through the SAME subscription-boundary seam as the paint test — so a move
+  // that drops or mis-wires any single handler is caught by name. This EXTENDS the net; the
+  // original 13 assertion bodies are untouched.
+  const fireRealtime = (event, table, newRow) => page.evaluate(({ event, table, newRow }) => {
+    const rec = (window.__CRM_TEST_REALTIME__ || []).find((c) => c.handlers.some((h) => h.filter && h.filter.event === event && h.filter.table === table));
+    const h = rec && rec.handlers.find((x) => x.filter && x.filter.event === event && x.filter.table === table);
+    if (!h) return false;
+    h.cb({ new: newRow, eventType: event });
+    return true;
+  }, { event, table, newRow });
+
+  // (1) crm_messages INSERT → the list row's preview AND its waiting-since update.
+  { const prevOf = (id) => page.$eval(`[data-testid="crm-thread-row"][data-thread-id="${id}"] [data-testid="crm-thread-preview"]`, (e) => e.textContent);
+    const waitOf = (id) => page.$eval(`[data-testid="crm-thread-row"][data-thread-id="${id}"]`, (e) => e.getAttribute("data-waiting"));
+    await fireRealtime("INSERT", "crm_messages", { id: "rt-out", thread_id: "t-marco", direction: "outbound", body: "handled, closing out", sent_at: new Date().toISOString(), channel: "whatsapp", delivery_status: "sent", media_kind: null, is_auto_reply: false, template_name: null });
+    await page.waitForTimeout(150);
+    const wAfterOut = await waitOf("t-marco"); // an outbound reply clears waiting-since
+    await fireRealtime("INSERT", "crm_messages", { id: "rt-in", thread_id: "t-marco", direction: "inbound", body: "RT-PREVIEW-MARKER", sent_at: new Date().toISOString(), channel: "whatsapp", delivery_status: "delivered", media_kind: null, is_auto_reply: false, template_name: null });
+    await page.waitForTimeout(200);
+    const prev = await prevOf("t-marco"); const wAfterIn = await waitOf("t-marco"); // an inbound sets it + preview
+    (/RT-PREVIEW-MARKER/.test(prev) && wAfterOut === "0" && wAfterIn === "1") ? ok("§handler crm_messages INSERT: list preview updates AND waiting-since flips (outbound clears, inbound sets)") : bad("crm_messages INSERT handler", `preview=${prev.slice(0, 30)} waitOut=${wAfterOut} waitIn=${wAfterIn}`); }
+
+  // (2) crm_messages UPDATE → delivery status flips in the OPEN conversation.
+  // Switch away and back so t-fredy reloads to its 3 fixture messages (the paint test left it at 4).
+  await selectThread("t-sms", 2); await selectThread("t-fredy", 3);
+  { const delOf = () => page.$$eval('[data-testid="crm-message"][data-direction="outbound"]', (els) => els[els.length - 1]?.getAttribute("data-delivery"));
+    const before = await delOf();
+    await fireRealtime("UPDATE", "crm_messages", { id: "m3", thread_id: "t-fredy", direction: "outbound", body: "let me check", sent_at: iso(5), channel: "whatsapp", delivery_status: "read", media_kind: null });
+    await page.waitForTimeout(200);
+    const after = await delOf();
+    (before !== "read" && after === "read") ? ok("§handler crm_messages UPDATE: the open thread's outbound flips delivery status (→ read)") : bad("crm_messages UPDATE handler", `before=${before} after=${after}`); }
+
+  // (3) crm_threads UPDATE → the list row AND the open thread's header both update.
+  { const headerAmb = () => page.$eval('[data-testid="crm-conv-header"]', (e) => e.getAttribute("data-amb"));
+    const beforeAmb = await headerAmb();
+    await fireRealtime("UPDATE", "crm_threads", { id: "t-fredy", last_message_at: new Date().toISOString(), last_message_preview: "RT-THREAD-UPD", match_ambiguous: true, player_id: 1001, assigned_to_user_id: null, assigned_at: null, status: "open", closed_at: null, closed_by_user_id: null, no_reply_needed_at: null });
+    await page.waitForTimeout(200);
+    const rowPrev = await page.$eval('[data-testid="crm-thread-row"][data-thread-id="t-fredy"] [data-testid="crm-thread-preview"]', (e) => e.textContent);
+    const afterAmb = await headerAmb();
+    (/RT-THREAD-UPD/.test(rowPrev) && beforeAmb === "0" && afterAmb === "1") ? ok("§handler crm_threads UPDATE: list row preview updates AND the open header reflects it (match_ambiguous)") : bad("crm_threads UPDATE handler", `rowPrev=${rowPrev.slice(0, 24)} ambBefore=${beforeAmb} ambAfter=${afterAmb}`); }
+
+  // (4) crm_threads INSERT → a debounced inbox reload (a fresh GET /api/crm/threads, >300ms debounce).
+  { const before = listFetches;
+    await fireRealtime("INSERT", "crm_threads", { id: "t-new", status: "open" });
+    await page.waitForTimeout(600);
+    (listFetches > before) ? ok("§handler crm_threads INSERT: fires the debounced inbox reload") : bad("crm_threads INSERT handler", `fetches ${before} → ${listFetches}`); }
+
+  // (5) crm_thread_reads change → a debounced inbox reload.
+  { const before = listFetches;
+    await fireRealtime("*", "crm_thread_reads", { user_id: "op-1", thread_id: "t-fredy" });
+    await page.waitForTimeout(600);
+    (listFetches > before) ? ok("§handler crm_thread_reads: fires the debounced inbox reload") : bad("crm_thread_reads handler", `fetches ${before} → ${listFetches}`); }
 
   // ── Phase 19 Step 1: WITHOUT can_send_messages the composer is a disabled, read-only box ──
   // Separate context whose app_users grant sets can_send_messages=false — proves the courtesy-grey.

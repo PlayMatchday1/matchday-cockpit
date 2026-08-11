@@ -169,6 +169,7 @@ export default function MessageBubble({
     <li
       data-testid="crm-message"
       data-direction={msg.direction}
+      data-delivery={msg.delivery_status ?? ""}
       className={`flex flex-col ${isInbound ? "items-start" : "items-end"} ${className ?? "mt-3"}`}
     >
       <div className={`max-w-[80%] overflow-hidden ${bubbleShape} ${bubbleColor}`}>

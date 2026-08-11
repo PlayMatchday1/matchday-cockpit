@@ -1797,6 +1797,7 @@ function MistInboxRow({
       data-testid="crm-thread-row"
       data-thread-id={thread.id}
       data-unread={thread.is_unread ? 1 : 0}
+      data-waiting={waiting ? 1 : 0}
       style={{
         touchAction: "manipulation",
         ...(active
@@ -1841,7 +1842,7 @@ function MistInboxRow({
             </>
           )}
         </span>
-        <span className="mt-[5px] block overflow-hidden text-[12.5px] leading-[1.42]" style={{ color: "#63736b", display: "-webkit-box", WebkitLineClamp: 2, WebkitBoxOrient: "vertical" }}>
+        <span data-testid="crm-thread-preview" className="mt-[5px] block overflow-hidden text-[12.5px] leading-[1.42]" style={{ color: "#63736b", display: "-webkit-box", WebkitLineClamp: 2, WebkitBoxOrient: "vertical" }}>
           <span className={inbound ? "font-[700]" : "font-[700] italic"} style={{ color: inbound ? "#4a5f55" : "#8a978f" }}>{speaker}: </span>
           {preview || <span className="italic" style={{ color: "#8d9c94" }}>(no preview)</span>}
         </span>
@@ -2228,7 +2229,7 @@ function ConversationHeader({
   const cityCode = cityCodeForThread(detail.thread);
   const channel = detail.thread.channel ?? "sms";
   return (
-    <div className="flex min-h-14 shrink-0 items-center gap-2 border-b border-cream-line bg-white px-1 pt-[var(--sat)] sm:px-3">
+    <div data-testid="crm-conv-header" data-thread-id={detail.thread.id} data-amb={detail.thread.match_ambiguous ? 1 : 0} className="flex min-h-14 shrink-0 items-center gap-2 border-b border-cream-line bg-white px-1 pt-[var(--sat)] sm:px-3">
       <button
         type="button"
         onClick={handleBack}
