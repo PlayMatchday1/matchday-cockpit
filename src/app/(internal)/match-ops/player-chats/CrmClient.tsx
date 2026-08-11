@@ -1694,6 +1694,7 @@ function SearchAndFilter({
         </svg>
         <input
           ref={searchRef}
+          data-testid="crm-search"
           value={search}
           onChange={(e) => onSearch(e.target.value)}
           placeholder="Search players…"
@@ -1788,6 +1789,9 @@ function MistInboxRow({
     <button
       type="button"
       onClick={onSelect}
+      data-testid="crm-thread-row"
+      data-thread-id={thread.id}
+      data-unread={thread.is_unread ? 1 : 0}
       style={{
         touchAction: "manipulation",
         ...(active
@@ -1809,7 +1813,7 @@ function MistInboxRow({
       </span>
       <span className="min-w-0 flex-1">
         <span className="flex items-baseline gap-1.5">
-          <span className={`min-w-0 flex-1 truncate text-[13.5px] tracking-[-0.008em] ${thread.is_unread ? "font-[760]" : "font-[660]"}`} style={{ color: "#12241d" }}>{name}</span>
+          <span data-testid="crm-thread-name" className={`min-w-0 flex-1 truncate text-[13.5px] tracking-[-0.008em] ${thread.is_unread ? "font-[760]" : "font-[660]"}`} style={{ color: "#12241d" }}>{name}</span>
           <button
             type="button"
             onClick={(e) => { e.stopPropagation(); onToggleFollowUp(); }}

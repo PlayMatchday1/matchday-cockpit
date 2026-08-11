@@ -18,6 +18,8 @@ export default function UnreadCountCircle({
       : "h-[18px] min-w-[18px] px-1.5 text-[10px]";
   return (
     <span
+      data-testid="crm-unread-badge"
+      data-count={count}
       aria-label={`${count} unread customer ${count === 1 ? "chat" : "chats"}`}
       className={`inline-flex items-center justify-center rounded-full bg-coral font-bold leading-none text-white tabular-nums ${dims}`}
     >

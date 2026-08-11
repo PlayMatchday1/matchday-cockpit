@@ -560,6 +560,7 @@ export default function Composer({
             )}
             <textarea
               ref={taRef}
+              data-testid="crm-composer"
               value={body}
               disabled={disabled}
               onChange={(e) => setBody(e.target.value)}
@@ -575,6 +576,7 @@ export default function Composer({
             />
             <button
               type="button"
+              data-testid="crm-send"
               onClick={() => void submitText()}
               disabled={
                 sending || !body.trim() || !appUserId || whatsappWindowExpired
