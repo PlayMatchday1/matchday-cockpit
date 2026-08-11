@@ -8,14 +8,17 @@ const key = process.env.NEXT_PUBLIC_SUPABASE_PUBLISHABLE_KEY!.trim();
 export const supabase = createClient(url, key);
 
 // ── TEST-ONLY realtime capture seam (Phase 19 Step 0b) ──────────────────────────────────────
-// Production behaviour is UNTOUCHED: unless a test sets `window.__CRM_TEST_REALTIME__ = []`
-// BEFORE the app mounts (via Playwright addInitScript), this wrapper is a transparent pass-
-// through — the flag is never set in prod. When it IS set, every channel's postgres_changes
-// handlers are recorded so a hermetic test can invoke a synthetic INSERT at the subscription
-// boundary and assert the realtime PAINT — the one CrmClient behaviour that can't be driven by
-// a live websocket in a hermetic run. `.subscribe()` still runs (harmless; receives nothing).
-// See scripts/e2e/verify-crm-characterize.mjs.
-if (typeof window !== "undefined") {
+// STRIPPED FROM THE PRODUCTION BUILD. The whole block is guarded by
+// `process.env.NODE_ENV !== "production"`, which Next inlines to `"production" !== "production"`
+// → `false` in the prod client bundle, so the minifier dead-code-eliminates everything below:
+// in production there is NO wrapper, NO per-call branch, NO allocation, and NO way to capture or
+// invoke a channel callback. The capability the test uses (invoking a captured postgres_changes
+// handler with a synthetic row) therefore CANNOT exist in the shipped app — so it is not a spoof
+// vector for an operator, who only ever runs the production build. It exists only in the dev
+// build (`npm run dev`, which verify-crm-characterize drives) and even there stays inert unless a
+// test explicitly arms `window.__CRM_TEST_REALTIME__ = []` before mount. `.subscribe()` still
+// runs (harmless; receives nothing). See scripts/e2e/verify-crm-characterize.mjs.
+if (process.env.NODE_ENV !== "production" && typeof window !== "undefined") {
   type Rec = { name: string; handlers: Array<{ event: unknown; filter: unknown; cb: (p: unknown) => void }> };
   const w = window as unknown as { __CRM_TEST_REALTIME__?: Rec[] };
   const origChannel = supabase.channel.bind(supabase);

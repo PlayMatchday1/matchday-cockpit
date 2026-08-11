@@ -145,13 +145,18 @@ async function main() {
   // Exactly one subscription for the whole feature, and invoking its crm_messages INSERT
   // callback directly paints the new message.
   await selectThread("t-fredy", 3);
-  // Assert ONE subscription IDENTITY on crm_messages, not one channel object: React StrictMode +
-  // effect re-runs re-create the SAME channel (all named "crm-stream-v2", each cleaned up), so a
-  // cumulative object count is noise. The real invariant — and the bug the spec guards against (a
-  // duplicate channel on crm_messages taking down pages) — is the number of DISTINCT channel names
-  // that subscribe to crm_messages. That is 1.
+  // NOTE ON THE FORM OF THIS ASSERTION (Phase 19, carry-over B). This suite runs against the DEV
+  // build (`npm run dev`, which the e2e runner starts), where React StrictMode double-invokes
+  // effects and re-creates the SAME channel (all named "crm-stream-v2", each cleaned up). A raw
+  // count of channel OBJECTS is therefore >1 in dev and is noise, NOT a bug. So the assertion is
+  // the DISTINCT channel-NAME count on crm_messages — which is the exact guard for the historical
+  // bug the spec cares about (a second, DIFFERENTLY-NAMED channel on crm_messages took every page
+  // down). This is the strongest form available against a dev build; it is deliberately NOT the
+  // "one subscription object" count, because that only holds under a production build (no
+  // StrictMode). If this suite is ever moved onto a prod-build harness (like verify-week's
+  // next-start), restore the strict object count there.
   { const names = await page.evaluate(() => Array.from(new Set((window.__CRM_TEST_REALTIME__ || []).filter((c) => c.handlers.some((h) => h.filter && h.filter.event === "INSERT" && h.filter.table === "crm_messages")).map((c) => c.name))));
-    eq("exactly ONE subscription identity on crm_messages (StrictMode re-creates the same channel)", names.length, 1); }
+    eq("exactly ONE subscription identity (distinct name) on crm_messages", names.length, 1); }
   { const before = await msgCount();
     const fired = await page.evaluate(() => {
       const rec = (window.__CRM_TEST_REALTIME__ || []).find((c) => c.handlers.some((h) => h.filter && h.filter.event === "INSERT" && h.filter.table === "crm_messages"));
