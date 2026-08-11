@@ -47,6 +47,7 @@ import {
 } from "lucide-react";
 import EnablePushNotificationsButton from "@/components/EnablePushNotificationsButton";
 import { supabase } from "@/lib/supabase";
+import { whatsappWindowExpired } from "@/lib/crmWindow";
 import { useAuth } from "@/lib/useAuth";
 import { UNKNOWN_CITY } from "@/lib/cityColors";
 import CityChip from "@/components/CityChip";
@@ -182,10 +183,6 @@ type ThreadDetail = {
   latest_inbound_at: string | null;
 };
 
-// ---------------- constants ----------------
-
-const WHATSAPP_WINDOW_MS = 24 * 60 * 60 * 1000;
-
 // ---------------- helpers ----------------
 
 function fullNameOf(t: ThreadListRow): string {
@@ -228,14 +225,11 @@ async function markThreadRead(threadId: string): Promise<void> {
   }
 }
 
+// Delegates to the shared, tested rule in src/lib/crmWindow (Phase 19 Step 0). A null detail
+// means "nothing loaded yet" → not expired (the composer stays enabled until we know).
 function computeWhatsAppExpired(detail: ThreadDetail | null): boolean {
   if (!detail) return false;
-  if ((detail.thread.channel ?? "sms") !== "whatsapp") return false;
-  const iso = detail.latest_inbound_at;
-  if (!iso) return true;
-  const t = Date.parse(iso);
-  if (Number.isNaN(t)) return true;
-  return Date.now() - t > WHATSAPP_WINDOW_MS;
+  return whatsappWindowExpired(detail.thread.channel, detail.latest_inbound_at, Date.now());
 }
 
 // ---------------- main ----------------
