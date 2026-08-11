@@ -13,13 +13,15 @@ import "server-only"; // no-op under --conditions=react-server
 //       seam code escaping the guard, or the guard being removed — at the source, before any build.
 //       Stronger than a blind grep, which can only run after a build and which in DEV legitimately
 //       finds the seam (dev IS non-production).
-//   (B) ARTIFACT (opportunistic): if an isolated PRODUCTION build exists at .next-seamcheck/static
-//       (built with `NEXT_DIST_DIR=.next-seamcheck NODE_ENV=production npx next build`), grep it and
-//       assert 0 occurrences. Never greps .next/static — a running `next dev` fills it with dev
-//       chunks that correctly contain the seam.
+//   (B) ARTIFACT (ALWAYS — never a silent skip): build a fresh isolated PRODUCTION bundle (via
+//       NEXT_DIST_DIR so it can't touch a running `next dev` .next), then grep its client chunks and
+//       assert 0 occurrences. A build that FAILS fails this check (with the tail of the error) — it
+//       never passes by skipping. Next rewrites tsconfig.json on build; a `finally` restores it so
+//       that edit can never be committed. Adds ~15s to the node set (well under the 180s cap).
 //   NODE_OPTIONS=--conditions=react-server npx tsx scripts/seam-stripped-test.ts
 
-import { readFileSync, readdirSync, existsSync, statSync } from "node:fs";
+import { readFileSync, writeFileSync, readdirSync, existsSync, statSync, rmSync } from "node:fs";
+import { execSync } from "node:child_process";
 import { join } from "node:path";
 
 let pass = 0, fail = 0;
@@ -91,7 +93,7 @@ if (block) {
     : bad(`teeth: the structural check did NOT flag an escaped seam reference`);
 }
 
-// ── (B) ARTIFACT (opportunistic) ────────────────────────────────────────────────────────────
+// ── (B) ARTIFACT — build fresh, then grep. NEVER a silent skip. ───────────────────────────────
 function walk(dir: string): string[] {
   const out: string[] = [];
   for (const e of readdirSync(dir, { withFileTypes: true })) {
@@ -101,16 +103,39 @@ function walk(dir: string): string[] {
   }
   return out;
 }
-if (existsSync(PROD_STATIC) && statSync(PROD_STATIC).isDirectory()) {
+
+const TSCONFIG = "tsconfig.json";
+const savedTsconfig = readFileSync(TSCONFIG, "utf8");
+let buildOk = false, buildErr = "";
+try {
+  rmSync(join(".next-seamcheck", "static"), { recursive: true, force: true }); // grep only FRESH chunks
+  execSync("npx next build", {
+    // NODE_ENV=production so the seam is dead-code-eliminated; NEXT_DIST_DIR isolates the output;
+    // NODE_OPTIONS cleared so run-suites' --conditions=react-server can't reach the app build.
+    env: { ...process.env, NODE_ENV: "production", NEXT_DIST_DIR: ".next-seamcheck", NODE_OPTIONS: "" },
+    stdio: "pipe",
+    timeout: 150_000,
+  });
+  buildOk = true;
+} catch (e) {
+  const err = e as { stderr?: Buffer; stdout?: Buffer; message?: string };
+  buildErr = (err.stderr?.toString() || err.stdout?.toString() || err.message || String(e)).split("\n").filter(Boolean).slice(-6).join(" | ");
+} finally {
+  writeFileSync(TSCONFIG, savedTsconfig); // undo Next's tsconfig rewrite whether the build passed or failed
+}
+
+if (!buildOk) {
+  bad(`ARTIFACT: isolated production build FAILED — cannot verify the seam is stripped`, buildErr);
+} else if (existsSync(PROD_STATIC) && statSync(PROD_STATIC).isDirectory()) {
   let hits = 0;
   for (const f of walk(PROD_STATIC)) {
     try { hits += (readFileSync(f, "utf8").match(new RegExp(SEAM_ID, "g")) ?? []).length; } catch { /* binary/asset */ }
   }
   hits === 0
-    ? ok(`ARTIFACT: 0 occurrences of ${SEAM_ID} in the production client chunks (${PROD_STATIC})`)
+    ? ok(`ARTIFACT: 0 occurrences of ${SEAM_ID} in the freshly-built production client chunks`)
     : bad(`ARTIFACT: ${SEAM_ID} appears ${hits}× in the production client chunks — the seam SHIPPED`);
 } else {
-  console.log(`  --  no isolated prod build at ${PROD_STATIC}; structural check (A) stands. To also grep chunks: NEXT_DIST_DIR=.next-seamcheck NODE_ENV=production npx next build`);
+  bad(`ARTIFACT: build reported success but ${PROD_STATIC} is missing`);
 }
 
 console.log(`\n${pass} passed, ${fail} failed`);
