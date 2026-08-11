@@ -985,3 +985,29 @@ so both paths are covered. **Both `recordWrite` into `change_log`** the same sha
 recipient phone, channel, message LENGTH, never the body — the operator path with the operator as
 actor, the auto-reply with `system (out-of-hours auto-reply)`. So the change log is a COMPLETE
 record of outbound messages regardless of which path sent them.
+
+## How an inbound thread is linked to a player — `player_id` + `match_ambiguous` (Phase 19)
+
+Read from the two inbound webhooks (`/api/whatsapp/webhook`, `/api/webhooks/telnyx`), identical
+logic. A `crm_thread` is attached to an mdapi account at FIRST inbound and the choice is essentially
+frozen:
+
+- **`match_ambiguous` is set true when >1 `mdapi_users` row shares the phone** — the matcher gathers
+  candidates by the phone in **E.164** form (`+15125550123`) AND bare **national** digits
+  (`5125550123`), deduped by id; `ambiguous = candidates.length > 1`.
+- **`player_id` = `candidates[0]`, ordered `created_at DESC` — the NEWEST account wins**, with
+  E.164-exact matches ahead of national-only ones. (The webhook comment calls duplicates "historical
+  artifacts" and newest "always the right active account" — that assumption is FALSE for a
+  family-shared phone; the matcher cannot tell an abandoned re-registration from two live people.)
+- **`player_id` is patched only when it was NULL** (an unlinked thread that later matches). Once set
+  it is **never revised**, even if a newer account appears.
+- **`match_ambiguous` latches false→true and never clears.**
+- **Neither is ever re-picked, and NO candidate count or candidate ids are stored on the thread.**
+  The count is computable live only via `GET /api/crm/threads/{id}/context` → `historical_account_count`
+  (and only when already ambiguous). `player_id IS NULL` means no account matched at all (unlinked).
+
+**Consequence, plainly:** on a shared phone the thread attaches to whichever account was created most
+recently and stays there permanently — there is no way to correct the linkage from Clubhouse. The
+docked chat + Player Chats header + context pane surface this as "This number is on N account(s).
+Showing {name} — it may not be who is writing." rather than the old, too-soft "historical accounts on
+file."

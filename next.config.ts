@@ -1,6 +1,10 @@
 import type { NextConfig } from "next";
 
 const nextConfig: NextConfig = {
+  // Allow an isolated build dir (NEXT_DIST_DIR) so a verification build (e.g. the seam-stripped
+  // proof in scripts/seam-stripped-test.ts) can run without clobbering a running `next dev` .next.
+  // Defaults to ".next" — production/Vercel builds are unaffected.
+  distDir: process.env.NEXT_DIST_DIR || ".next",
   // Build stamp — so "is this deployed?" is one glance, not a diagnostic round.
   // VERCEL_GIT_COMMIT_SHA is set by Vercel at build time from the deployed commit;
   // the build time is stamped when this config evaluates (i.e. during the build).
