@@ -596,6 +596,18 @@ synced mirror). Where the mockup (today-v1_6.html) and the API disagreed, the AP
   not ladder-derived — editing a rung changes the forecast, which the board shows.
 - Veo is Clubhouse-only (`GET /api/veo`, `POST /api/veo/intent`), NOT a MatchDay field;
   it saves instantly and stays out of the match diff.
+- STATE BANDS partition on the true instant (Phase 21 §0 / 21b item 2): a match is
+  STILL TO COME (`minsUntil > 0`), IN PLAY (`-90 < minsUntil <= 0`), DONE
+  (`minsUntil <= DONE_MIN`), or CANCELLED (`isCancelled`, any time). The header chip, the
+  STILL TO COME group, and the row state all call the SAME `stillToCome` predicate so the
+  three can't disagree. IN PLAY is BOUNDED at `DONE_MIN`, so a morning match is not "in
+  play" all night — it flips to done 90 min after kickoff.
+- **VITALII LIST — `DONE_MIN = -90` is a GUESS at match length.** The API gives us kickoff
+  (`startDateUtc`) but NOT match duration, so "in play vs done" uses a hardcoded 90-minute
+  window. Real match length varies by format (5-a-side / 7s / 11s / special events). ASK
+  the backend dev: **how long is a match, per format?** — then drive the in-play→done flip
+  off the actual duration instead of a flat 90. Until then the band is cosmetic (in-play and
+  done both carry no risk tier), so a wrong guess only mislabels the group header, not the ops.
 
 ## Change Log — recording every production write (Phase 16)
 

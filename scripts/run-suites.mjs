@@ -7,7 +7,7 @@
 //   node scripts/run-suites.mjs         # the Node/tsx model+guard suites (in `npm run verify`)
 //   node scripts/run-suites.mjs --e2e   # the browser suites (needs `npm run dev` up)
 import { spawn } from "node:child_process";
-import { readdirSync } from "node:fs";
+import { readdirSync, readFileSync } from "node:fs";
 import http from "node:http";
 
 const E2E = process.argv.includes("--e2e");
@@ -23,9 +23,29 @@ const QUARANTINE = new Map([
   // verify-adminpay REMOVED from quarantine (Phase 20 E2): the $59 owed label is now 5.4:1 — back in the gate.
   ["verify-partner.mjs", { why: "real: a frozen paid-snapshot expects $13 but shows $28 — needs a product decision (see Phase 20 E3)", restore: "reconcile the frozen snapshot (or update the expectation) and re-gate" }],
   ["verify-reviews.mjs", { why: "non-hermetic: waits for a LIVE 'due' review that may not exist at run time", restore: "fixture a due review so the suite is hermetic, then re-gate" }],
-  // Added Phase 20 E (not asked-for, but the gate must not stay red): time-dependent flake.
-  ["verify-week.mjs", { why: "time-dependent: the CalendarPanel fixture's meeting times are relative to now, so which meetings are 'elapsed'/folded shifts through the day and the fold-sum vs elapsed-count assertion disagrees at some clock times (observed sum 4 != 7); passed earlier the same session with no code change", restore: "freeze the fixture's meeting times (absolute, not now-relative) so 'elapsed' is deterministic, then re-gate" }],
+  // Added Phase 20 E (85e803d); root cause diagnosed Phase 21b item 1.
+  ["verify-week.mjs", { why: "time-dependent (HARNESS, not a product defect): the CalendarPanel fixture anchors meeting times to now, so in the evening the day-1/day-2 meetings (now-1440+300/420m) cross the Chicago midnight boundary into 'today' and drop out of the elapsed folds — the fold-sum then reads 4 instead of 7. Passes at other clock times with no code change.", restore: "pin a fixed browser clock (page.clock.setFixedTime to a mid-day instant) so elapsed/live/upcoming are deterministic. Started in 21b but NOT landed: the Show/Hide check does a mid-run page.reload() that re-authenticates under the frozen clock, and Supabase's token-refresh rate-limits at the tail of a full run — needs the fixture switched to fresh-mint auth AND the reload-based checks reworked to re-apply the clock (or avoid reload) before re-gating" }],
 ]);
+
+// ── QUARANTINE DRIFT GUARD (Phase 21b item 1) ────────────────────────────────
+// A suite must never leave the gate silently. The set of quarantined suites is PINNED in
+// scripts/quarantine.pinned.json; if the live QUARANTINE map above drifts from it — an
+// addition, a removal, OR a swap that keeps the count the same (exactly how verify-week
+// slipped in while adminpay left, both at 4) — the e2e gate FAILS until the pinned file is
+// updated in the SAME commit. Growing the quarantine is therefore an explicit, reviewable diff.
+function quarantineDrift() {
+  const live = [...QUARANTINE.keys()].sort();
+  let pinned;
+  try { pinned = (JSON.parse(readFileSync("scripts/quarantine.pinned.json", "utf8")).quarantined ?? []).slice().sort(); }
+  catch (e) { return { ok: false, msg: `cannot read scripts/quarantine.pinned.json (${e.message})` }; }
+  const added = live.filter((s) => !pinned.includes(s));
+  const removed = pinned.filter((s) => !live.includes(s));
+  if (added.length === 0 && removed.length === 0) return { ok: true, live };
+  const lines = [];
+  if (added.length) lines.push(`  + newly quarantined, NOT in the pinned list: ${added.join(", ")}`);
+  if (removed.length) lines.push(`  − pinned but no longer quarantined:        ${removed.join(", ")}`);
+  return { ok: false, live, msg: `quarantine set drifted from scripts/quarantine.pinned.json\n${lines.join("\n")}\n  → if intended, edit scripts/quarantine.pinned.json in THIS commit to match (keep it sorted).` };
+}
 
 // The Node suites, in the order `verify` ran them.
 const NODE_SUITES = [
@@ -95,8 +115,14 @@ for (const f of failed) {
 
 // The gate is only meaningful if what it excludes is VISIBLE. Print every quarantined suite,
 // why, and what brings it back — every gated e2e run, not buried in a config file.
-if (E2E && !QUARANTINE_ONLY && QUARANTINE.size) {
-  console.log(`\n${"─".repeat(60)}\n⚠ ${QUARANTINE.size} suite(s) QUARANTINED — excluded from this gate (run \`npm run verify:e2e:quarantine\` to run them):`);
+let driftFailed = false;
+if (E2E && !QUARANTINE_ONLY) {
+  const drift = quarantineDrift();
+  console.log(`\n${"─".repeat(60)}\n⚠ QUARANTINE: ${QUARANTINE.size} suite(s) excluded from this gate ${drift.ok ? "(matches the pinned list ✓)" : "(⛔ PIN MISMATCH)"} — run \`npm run verify:e2e:quarantine\` to run them:`);
   for (const [base, q] of QUARANTINE) console.log(`  • ${base}\n      why:     ${q.why}\n      restore: ${q.restore}`);
+  if (!drift.ok) {
+    driftFailed = true;
+    console.log(`\n⛔ QUARANTINE DRIFT GUARD FAILED — ${drift.msg}`);
+  }
 }
-process.exit(failed.length ? 1 : 0);
+process.exit(failed.length || driftFailed ? 1 : 0);

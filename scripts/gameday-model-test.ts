@@ -215,6 +215,41 @@ eq("GROUPS order is todo, inplay, cancelled, finished", GROUPS.map((g) => g.k), 
     (fn) => board.filter((m) => fn(m, NOW) === "todo").length === chip); // real: 3 == 3; broken: 5 != 3
 }
 
+// ── 21b item 2: the four states PARTITION the board (exact boundaries, no gaps/overlaps) ──
+// still to come : !cancelled && minsUntil > 0          (kickoff strictly in the future)
+// in play       : !cancelled && -90 < minsUntil <= 0   (0..90 min PAST kickoff — BOUNDED at -90)
+// done/finished : !cancelled && minsUntil <= -90        (>= 90 min past kickoff; DONE_MIN)
+// cancelled     : isCancelled                           (any time — outcome beats the clock)
+// IN PLAY IS BOUNDED: this morning's matches are NOT still in play at 11pm; after DONE_MIN
+// they are done. DONE_MIN = -90 is an ASSUMPTION about match length (see the Vitalii list).
+{
+  const donePred = (m: ApiMatch, now: number) => !m.isCancelled && minsUntil(m, now) <= -90;
+  // A board with at least one of each state, plus the two exact boundaries (0 and -90).
+  const board = [
+    mkG({ id: 1, startDateUtc: new Date(NOW + 120 * 60000).toISOString() }),   // still to come
+    mkG({ id: 2, startDateUtc: new Date(NOW - 30 * 60000).toISOString() }),    // in play
+    mkG({ id: 3, startDateUtc: new Date(NOW - 200 * 60000).toISOString() }),   // done
+    mkG({ id: 4, isCancelled: true, startDateUtc: new Date(NOW + 60 * 60000).toISOString() }), // cancelled (future)
+    mkG({ id: 5, isCancelled: true, startDateUtc: new Date(NOW - 300 * 60000).toISOString() }),// cancelled (past)
+    mkG({ id: 6, startDateUtc: new Date(NOW).toISOString() }),                  // EXACTLY at kickoff (0) → in play
+    mkG({ id: 7, startDateUtc: new Date(NOW - 90 * 60000).toISOString() }),     // EXACTLY at -90 → done
+  ];
+  const stc = board.filter((m) => stillToCome(m, NOW));
+  const ip = board.filter((m) => inPlay(m, NOW));
+  const dn = board.filter((m) => donePred(m, NOW));
+  const cx = board.filter((m) => m.isCancelled);
+  eq("21b§2 partition: still + in-play + done + cancelled === total (no gaps)", stc.length + ip.length + dn.length + cx.length, board.length);
+  // pairwise DISJOINT: every match lands in exactly one of the four (sum of memberships === 1)
+  const membership = (m: ApiMatch) => [stillToCome(m, NOW), inPlay(m, NOW), donePred(m, NOW), m.isCancelled].filter(Boolean).length;
+  eq("21b§2 partition: every match is in EXACTLY one state (no overlaps)", board.map(membership), board.map(() => 1));
+  eq("21b§2 boundary: exactly AT kickoff (minsUntil 0) is IN PLAY, not still-to-come", inPlay(board[5], NOW) && !stillToCome(board[5], NOW), true);
+  eq("21b§2 boundary: exactly at DONE_MIN (-90) is DONE, not in-play", donePred(board[6], NOW) && !inPlay(board[6], NOW), true);
+  // matchGroup buckets AGREE with the independent predicates (two views can't diverge).
+  eq("21b§2 matchGroup agrees with the predicates on every match",
+    board.map((m) => matchGroup(m, NOW)),
+    board.map((m) => (m.isCancelled ? "cancelled" : stillToCome(m, NOW) ? "todo" : donePred(m, NOW) ? "finished" : "inplay")));
+}
+
 // ── §3/§5: vs MIN — ONE relationship drives marker glyph/fill, the chip, and consistency ──
 {
   const over = mkG({ minPlayerCount: 11, maxPlayerCount: 20, _count: { players: 14, fakePlayers: 0 } });   // 14 real

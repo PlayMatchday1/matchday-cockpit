@@ -246,6 +246,30 @@ async function main() {
     ok(ids.includes(604) ? "§6: the at-min match (604) counts toward Needs attention" : bad("§6 at-min not in attention", JSON.stringify(ids)));
     await page.click('[data-testid="filter-all"]'); await page.waitForTimeout(120); }
 
+  // ══════════════ 21b item 4 — the at-min tier (604): ALL FOUR signals fire together ══════════════
+  // 0 of 23 live matches sit at-min today, so this is the only place the tier renders. Assert
+  // every channel on the one at-min row, not just one, so it can't be wrong the first time it fires.
+  { const chip = await page.$eval(row(604) + ' [data-testid="snap-short"]', (e) => ({ txt: e.textContent.trim(), col: getComputedStyle(e).color }));
+    const overChipCol = await page.$eval(row(603) + ' [data-testid="snap-short"]', (e) => getComputedStyle(e).color);
+    const shortChipCol = await page.$eval(row(601) + ' [data-testid="snap-short"]', (e) => getComputedStyle(e).color);
+    const mk = await page.$eval(row(604) + ' [data-testid="snap-marker"]', (e) => ({ state: e.getAttribute("data-state"), glyph: e.textContent.trim(), bg: getComputedStyle(e).backgroundColor, border: getComputedStyle(e).borderColor }));
+    const rail = await page.$eval(row(604) + " .rail", (e) => getComputedStyle(e).backgroundColor);
+    const overRail = await page.$eval(row(603) + " .rail", (e) => getComputedStyle(e).backgroundColor);
+    const shortRail = await page.$eval(row(601) + " .rail", (e) => getComputedStyle(e).backgroundColor);
+    const white = (s) => { const c = rgb(s); return c && c.r > 240 && c.g > 240 && c.b > 240; };
+    const isAmber = (s) => { const c = rgb(s); return c && c.r === 138 && c.g === 86 && c.b === 0; }; // #8a5600
+    // (1) gap chip
+    eq("21b§4(1): 604 gap chip reads '0 at min', colour distinct from BOTH over and short", { txt: chip.txt, distinct: chip.col !== overChipCol && chip.col !== shortChipCol }, { txt: "0 at min", distinct: true });
+    // (2) marker: at-line state — hollow (white fill), AMBER border, and a CHECK (not a bang)
+    eq("21b§4(2): 604 marker is at-line — data-state 'at', hollow white fill, amber border, CHECK glyph", { state: mk.state, hollow: white(mk.bg), amberBorder: isAmber(mk.border), glyph: mk.glyph }, { state: "at", hollow: true, amberBorder: true, glyph: "✓" });
+    // (3) row rail is the third distinct colour
+    ok(rail !== overRail && rail !== shortRail ? "21b§4(3): 604 rail is the third distinct colour (≠ over-green, ≠ short-red)" : bad("21b§4(3) rail not distinct", JSON.stringify({ rail, overRail, shortRail })));
+    // (4) counts toward Needs attention
+    await page.click('[data-testid="filter-att"]'); await page.waitForTimeout(150);
+    const inAtt = await page.$('[data-testid="snap-row"][data-id="604"]');
+    ok(inAtt ? "21b§4(4): 604 (at-min) is present under the Needs-attention filter" : bad("21b§4(4) at-min not in attention"));
+    await page.click('[data-testid="filter-all"]'); await page.waitForTimeout(120); }
+
   // ══════════════ §7 — THE TWO CLOCKS ══════════════
   eq("§7c: the DECIDE BY column header replaces AUTO-CANCEL", (await page.$$eval('[data-testid="snapshot"] .colhead > span', (els) => els.map((e) => e.textContent))).includes("DECIDE BY"), true);
   ok(!(await page.$$eval('[data-testid="snapshot"] .colhead > span', (els) => els.map((e) => e.textContent))).includes("AUTO-CANCEL") ? "§7c: 'AUTO-CANCEL' is gone from the snapshot header" : bad("§7c AUTO-CANCEL survives"));

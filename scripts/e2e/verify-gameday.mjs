@@ -167,6 +167,17 @@ async function main() {
   eq("in-play match (507, kicked off) is in the IN PLAY group, not still-to-come", await page.$eval(tile(507), (e) => e.closest("section").getAttribute("data-testid")), "group-inplay");
   eq("505 is in the cancelled group, 506 in finished", { cx: await page.$eval(tile(505), (e) => e.closest("section").getAttribute("data-testid")), fin: await page.$eval(tile(506), (e) => e.closest("section").getAttribute("data-testid")) }, { cx: "group-cancelled", fin: "group-finished" });
 
+  // ── 21b item 3: the card says DECIDE BY, in line with the snapshot column (one name for one thing) ──
+  // 501: kickoff 8:00 PM EDT, lead 30m (≠ standard 75) → decide-by 7:30 PM EDT, and the lead is named.
+  eq("card: the stat block is labelled DECIDE BY, not AUTO-CANCEL", (await page.$eval(tile(501) + ' [data-testid="tile-ac"] .k', (e) => e.textContent)).trim(), "DECIDE BY");
+  eq("card: decide-by leads with an absolute clock + zone (501: 7:30 PM EDT)", (await page.$eval(tile(501) + ' [data-testid="tile-decideby"]', (e) => e.textContent)).replace(/\s+/g, " ").trim(), "7:30 PM EDT");
+  { const line = (await page.$eval(tile(501) + ' [data-testid="tile-ac"] .line', (e) => e.textContent)).replace(/\s+/g, " ").trim();
+    ok(/left\b/.test(line) && !/^in\b/.test(line) ? `card: the deadline sub is a budget ("N left"), never "in …" (${line})` : bad("card decide-by sub", line));
+    ok(/cancels 30m before/.test(line) ? "card: a non-standard lead (30m) is named on the row" : bad("card lead not named", line)); }
+  { const anyAutoCancel = await page.$$eval('[data-testid="tile-ac"] .k', (els) => els.map((e) => e.textContent).filter((t) => /AUTO-CANCEL/.test(t)).length);
+    eq("card: 'AUTO-CANCEL' no longer appears as a stat label", anyAutoCancel, 0); }
+  eq("card: the 75m decide-by mechanism is stated ONCE in the detail note", /auto-cancels .* 75 minutes before kickoff/i.test(await page.$eval('[data-testid="decideby-detail"]', (e) => e.textContent)), true);
+
   // ── CANCELLED tile: solid badge, NO shortfall chip, NO auto-cancel countdown ──
   eq("cancelled tile: NO shortfall chip (no TO GO/MADE IT), NO gap/marker; HAS a solid CANCELLED badge", {
     togo: !!(await page.$(tile(505) + ' .tag.togo')), made: !!(await page.$(tile(505) + ' .tag.made')),

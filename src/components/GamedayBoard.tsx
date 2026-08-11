@@ -236,14 +236,18 @@ export default function GamedayBoard() {
                   </section>
                 ))}
               </div>
-            : <div className="bands" data-testid="bands">
-              {grouped.map(({ G, rows }) => (
-                <section className={"band grp-" + G.k} data-testid={`group-${G.k}`} key={G.k}>
-                  <h2 className="grouphd">{G.t}<span className="n">{rows.length}</span></h2>
-                  <div className="rows">{rows.map((m) => <Tile key={m.id} m={m} now={now} group={G.k} veo={!!veo[m.id]} selected={drawerId === m.id} onOpen={openDrawer} onRoster={goRoster} onVeo={toggleVeo} money={money} />)}</div>
-                </section>
-              ))}
-            </div>}
+            : <>
+              {/* the 75m decide-by mechanism, stated ONCE for the whole detail view (21b item 3) */}
+              <div className="detailnote" data-testid="decideby-detail">Decide by is when the match auto-cancels — {STD_LEAD} minutes before kickoff — unless the minimum is met by then.</div>
+              <div className="bands" data-testid="bands">
+                {grouped.map(({ G, rows }) => (
+                  <section className={"band grp-" + G.k} data-testid={`group-${G.k}`} key={G.k}>
+                    <h2 className="grouphd">{G.t}<span className="n">{rows.length}</span></h2>
+                    <div className="rows">{rows.map((m) => <Tile key={m.id} m={m} now={now} group={G.k} veo={!!veo[m.id]} selected={drawerId === m.id} onOpen={openDrawer} onRoster={goRoster} onVeo={toggleVeo} money={money} />)}</div>
+                  </section>
+                ))}
+              </div>
+            </>}
       </div>
 
       {drawerId != null && (
@@ -329,11 +333,18 @@ function Tile({ m, now, group, veo, selected, onOpen, onRoster, onVeo, money }: 
             : <span className="rung dash">—</span>}</span>
           <span className={"nx" + (rel && isTodo ? "" : " none")} data-testid="next-release">{rel && isTodo ? `+${rel.drop} in ${fmtDur(rel.inMin)}, at the ${rel.mark}h mark` : (isTodo && t > 0 ? "no more releases" : "")}</span>
         </span>
+        {/* DECIDE BY (21b item 3) — same concept and copy as the snapshot's column, so the
+            operator never learns two names for one thing: absolute clock leading, "N left"/
+            "passed" beneath (never "in"), the 75m mechanism on the title (stated once in the
+            detail note above), and the lead named only when it differs from the standard. */}
         <span className={"st ac " + (!isTodo ? "" : !short(m) ? "ok" : (lvl || "warn"))} data-testid="tile-ac">
-          <span className="k">AUTO-CANCEL</span>
+          <span className="k">DECIDE BY</span>
           {!isTodo ? <span className="line dash" data-testid="tile-ac-dash">—</span> : <>
-            <span className="line">Cancels <b>{m.autoCanceledMinutes}m</b> before · {minsToDeadline(m, now) > 0 ? <>in <b>{fmtDur(minsToDeadline(m, now))}</b></> : <b>deadline passed {fmtDur(minsToDeadline(m, now))} ago</b>}</span>
-            <span className="acsep" aria-hidden> · </span>
+            <span className="clk" data-testid="tile-decideby">{deadlineClock(m)} <em>{tzAbbr(m)}</em></span>
+            <span className="line" title={`Auto-cancels ${m.autoCanceledMinutes ?? 0} minutes before kickoff unless the minimum is met`}>
+              {minsToDeadline(m, now) > 0 ? <><b>{fmtDur(minsToDeadline(m, now))} left</b></> : <b>passed</b>}
+              {Number(m.autoCanceledMinutes ?? 0) !== STD_LEAD ? <span className="lead"> · cancels {m.autoCanceledMinutes}m before</span> : null}
+            </span>
             <span className="cnt">{short(m) ? <>needs <b>{m.minPlayerCount}</b> — <b>{shortBy(m)} short</b></> : <>needs {m.minPlayerCount} — clear by {real - (m.minPlayerCount ?? 0)}</>}</span>
           </>}
         </span>
@@ -513,12 +524,18 @@ const CSS = `
 .gdo .rung{border:1px solid #DCE5E0;border-radius:7px;padding:4px 9px;background:#fff;font-size:12px;font-variant-numeric:tabular-nums;white-space:nowrap;min-height:28px}
 .gdo .rung b{color:#1B4F9C}.gdo .rung.next{border-color:#C9DBF3;background:#F2F7FE}.gdo .rung.dash{color:#5C6B62}
 .gdo .nx{display:block;font-size:11.5px;color:#1B4F9C;margin-top:5px;font-variant-numeric:tabular-nums}.gdo .nx.none{color:#5C6B62}
-.gdo .ac .line{font-size:12.5px;font-variant-numeric:tabular-nums}.gdo .ac .line b{font-weight:700}.gdo .ac .line.dash{color:#5C6B62}
-.gdo .ac .cnt{font-size:12.5px;font-variant-numeric:tabular-nums}
-.gdo .ac .acsep{color:#5C6B62;font-size:12.5px}
+/* DECIDE BY on the card (21b item 3): absolute clock leads, then "N left"/"passed". */
+.gdo .ac .clk{display:block;font-size:14px;font-weight:700;font-variant-numeric:tabular-nums;letter-spacing:-.1px}
+.gdo .ac .clk em{font-style:normal;font-size:10px;font-weight:800;color:#5C6B62;letter-spacing:.06em;margin-left:3px}
+.gdo .ac .line{display:block;font-size:12.5px;font-variant-numeric:tabular-nums;margin-top:1px}.gdo .ac .line b{font-weight:700}.gdo .ac .line.dash{color:#5C6B62}
+.gdo .ac .line .lead{color:#5C6B62;font-weight:400}
+.gdo .ac .cnt{display:block;font-size:12px;color:#5C6B62;font-variant-numeric:tabular-nums;margin-top:2px}
 .gdo .ac.ok .cnt{color:#046B45;font-weight:600}
+.gdo .ac.ok .line b{color:#5C6B62;font-weight:600}
 .gdo .ac.warn .line b,.gdo .ac.warn .cnt{color:#7A5200}
 .gdo .ac.crit .line b,.gdo .ac.crit .cnt{color:#A83120}
+/* the decide-by mechanism, stated once above the detail cards */
+.gdo .detailnote{margin:0 2px 12px;color:#3D5349;font-size:12px}
 .gdo .row.warn .k,.gdo .row.crit .k{color:#5A6560}
 .gdo .flags{display:flex;gap:6px;flex-wrap:wrap;margin-top:8px}
 .gdo .fl{font-size:11px;font-weight:700;letter-spacing:.04em;border-radius:5px;padding:2px 8px}
