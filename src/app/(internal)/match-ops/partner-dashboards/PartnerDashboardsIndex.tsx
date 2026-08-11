@@ -196,7 +196,9 @@ export default function PartnerDashboardsIndex() {
                   {p.partnerName}
                 </div>
                 <div className="mt-0.5 text-[11.5px] font-semibold" style={{ color: on ? "#566a60" : "#9fbfae" }}>{p.city ? `${p.city} · ` : ""}{p.venue} · paid {p.cadence}</div>
-                <div data-testid="switcher-state" className="mt-[7px] text-[11.5px] font-[800]" style={{ color: o.owed > 0 ? (on ? C.amount : "#ffc79a") : (on ? C.ok : "#8fd9b4") }}>{stateLine(o)}</div>
+                {/* selected + owed uses a DARKER red than C.amount on the white chip: #e2502b was
+                    3.87:1 on white (below 4.5) at this 11.5px/800 size — #bf3d1c is 5.4:1. */}
+                <div data-testid="switcher-state" className="mt-[7px] text-[11.5px] font-[800]" style={{ color: o.owed > 0 ? (on ? "#bf3d1c" : "#ffc79a") : (on ? C.ok : "#8fd9b4") }}>{stateLine(o)}</div>
               </button>
             );
           })}

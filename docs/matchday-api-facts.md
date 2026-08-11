@@ -909,12 +909,18 @@ FOR VITALII (in this order — #1 is the bug, the missing sort param is only a s
      20 C) is a per-visible-row N+1 (cap 5, cached, cancelled — measured ~0.6s for a page). Put
      `usageCount` on the list row and the whole lazy-fetch mechanism deletes itself.
   3. `sortColumn` / `sortDirection` params.
-  4. OVER-REDEEMED TOTAL_USAGE codes (Phase 18c audit): 193 codes have `targetMatchType =
-     TOTAL_USAGE` (a TOTAL cap), and **13 of them have `usageCount` > `numberOfUsesPerUser`** —
-     the server allowed redemptions past a total cap. e.g. `ATX485FP` (id 2543) 7/3, `SATX194FP`
-     (id 15719) 5/3, `HOU363FP` (id 18987) 4/3. All are small `…FP` field-promo caps of 3–4. The
-     detail drawer now shows LEFT = "over by N" for these rather than clamping to 0. Confirm
-     whether TOTAL_USAGE is meant to hard-stop at the cap.
+  4. OVER-REDEEMED TOTAL_USAGE codes (Phase 18c audit, Phase 20 E1 split): of 193 `TOTAL_USAGE`
+     codes, 13 have `usageCount` > `numberOfUsesPerUser`. Phase 20 E1 checked `updatedAt` vs
+     `createdAt` to rule out "cap lowered after the fact":
+       • **6 were EDITED after creation** (`updatedAt` later than `createdAt`) — benign, the cap was
+         likely lowered post-redemption. NOT a bug: `ATX485FP`(2543) 7/3, `ATX537FP`(2584),
+         `ATX553FP`(2894), `ATX545FP`(2981), `Hou243FP`(11563) 5/4, `ATX1284FP`(15818).
+       • **7 were NEVER edited** (`updatedAt` == `createdAt`) — the server exceeded the code's OWN
+         total cap on its original settings. **This is the real bug**, all `…FP` PERCENT-100%
+         (free) field promos, cap 3: `SATX47FP`(10374) 4/3, `ATX1231FP`(15457) 4/3,
+         `ATX1265FP`(15521) 4/3, `SATX194FP`(15719) 5/3, `ATX1329FP`(16247) 4/3, `STL70FP`(18062)
+         4/3, `HOU363FP`(18987) 4/3. Confirm whether TOTAL_USAGE is meant to hard-stop at the cap.
+     The promo detail drawer shows LEFT = "over by N" (warning) for all 13 rather than clamping.
 Do NOT build around #1/#2; do NOT attempt a client-side workaround. Phase 18b cut the sort
 control for this reason (search-first UI instead).
 - **Enums (from Retool create DTO):** `discountType` = `USD|PERCENT` (USD value in CENTS,

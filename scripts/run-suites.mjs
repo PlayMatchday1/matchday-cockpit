@@ -20,8 +20,8 @@ const QUARANTINE_ONLY = process.argv.includes("--quarantine"); // run ONLY the q
 // phase's scope; the reason + restore condition make the debt visible, not silent.
 const QUARANTINE = new Map([
   ["verify-year.mjs", { why: "non-hermetic: drives LIVE manager-pay data; the Manager <select> has no options when the live manager list lacks the picked manager, and Supabase magic-link generation rate-limits at the tail of a full run", restore: "fixture the manager-pay + managers data (hermetic, like verify-snapshot), then move it back into the gated set" }],
-  ["verify-adminpay.mjs", { why: "real cosmetic bug: one amber label '$59 owed…' renders at 3.88 contrast (<4.5)", restore: "raise that label's contrast to >=4.5, then re-gate" }],
-  ["verify-partner.mjs", { why: "real: a frozen paid-snapshot expects $13 but shows $28 — needs a product decision", restore: "reconcile the frozen snapshot (or update the expectation) and re-gate" }],
+  // verify-adminpay REMOVED from quarantine (Phase 20 E2): the $59 owed label is now 5.4:1 — back in the gate.
+  ["verify-partner.mjs", { why: "real: a frozen paid-snapshot expects $13 but shows $28 — needs a product decision (see Phase 20 E3)", restore: "reconcile the frozen snapshot (or update the expectation) and re-gate" }],
   ["verify-reviews.mjs", { why: "non-hermetic: waits for a LIVE 'due' review that may not exist at run time", restore: "fixture a due review so the suite is hermetic, then re-gate" }],
 ]);
 
