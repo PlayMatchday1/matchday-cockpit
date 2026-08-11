@@ -46,7 +46,6 @@ import {
   Star,
 } from "lucide-react";
 import EnablePushNotificationsButton from "@/components/EnablePushNotificationsButton";
-import { supabase } from "@/lib/supabase";
 import { whatsappWindowExpired } from "@/lib/crmWindow";
 import {
   useCrmConversation,
@@ -67,12 +66,7 @@ import ChannelChip, {
 import PlayerAvatar from "@/components/PlayerAvatar";
 import type { MatchStatus } from "@/components/MatchStatusPill";
 import { type StatusFilter } from "./components/FilterBar";
-import {
-  isAwaitingReply,
-  isFreshThreadUpdate,
-  nextWaitingSince,
-  awaitingAgeLabel,
-} from "@/lib/awaitingReply";
+import { isAwaitingReply, awaitingAgeLabel } from "@/lib/awaitingReply";
 import AssignDropdown from "./components/AssignDropdown";
 import MessageBubble, {
   type ConversationMessage,
@@ -124,12 +118,12 @@ export default function CrmClient() {
   // Aliased so the body below is UNCHANGED: selectedThreadId → selectedId, selectThread →
   // setSelected. Selection is now provider state (OFF the URL); setFilters still owns ?view.
   const {
-    threads, setThreads, threadsError, setThreadsError, threadsLoading, setThreadsLoading,
-    counts, setCounts, operators, setOperators, operatorsById,
-    detail, setDetail, detailError, setDetailError, detailLoading, setDetailLoading, realtimeOk, setRealtimeOk,
-    selectedThreadId: selectedId, selectThread: setSelected, selectedRef,
-    view, viewRef, nowMs,
-    loadThreads, loadDetail, loadOperators, scheduleReload, refreshDetailForMediaInsert, onSent,
+    threads, setThreads, threadsError, threadsLoading, setThreadsLoading,
+    counts, operators,
+    detail, setDetail, detailError, detailLoading, realtimeOk,
+    selectedThreadId: selectedId, selectThread: setSelected,
+    view, nowMs,
+    loadThreads, loadDetail, loadOperators, onSent,
   } = useCrmConversation();
 
   const setFilters = useCallback(
@@ -255,227 +249,9 @@ export default function CrmClient() {
     void markThreadRead(selectedId);
   }, [selectedId, loadDetail]);
 
-  // --------- realtime ---------
-  // selectedRef moved to the provider (kept current there as a latest-value ref); consumed via
-  // the destructure above. The subscription below reads selectedRef.current at event time.
-
-  useEffect(() => {
-    const channel = supabase
-      .channel("crm-stream-v2")
-      .on(
-        "postgres_changes",
-        { event: "INSERT", schema: "public", table: "crm_messages" },
-        (payload) => {
-          const m = payload.new as Message;
-          if (m.thread_id === selectedRef.current) {
-            if (m.media_kind) {
-              // Media row — the realtime payload lacks
-              // signed_media_url (minted server-side per request).
-              // Refetch the thread so the bubble can render the
-              // image instead of falling back to caption-only.
-              // Text-only rows skip this to avoid an extra round-
-              // trip on every inbound message.
-              console.debug(
-                `[crm:realtime] media INSERT, refetching thread=${m.thread_id} kind=${m.media_kind}`,
-              );
-              void refreshDetailForMediaInsert(m.thread_id);
-            } else {
-              setDetail((prev) => {
-                if (!prev) return prev;
-                if (prev.messages.some((x) => x.id === m.id)) return prev;
-                return { ...prev, messages: [...prev.messages, m] };
-              });
-            }
-          }
-          // The out-of-hours auto-reply is intentionally invisible to the
-          // inbox row's state: it does not update last_message_* and must
-          // not clear Awaiting reply (the customer still needs a human).
-          // Mirrors the server, which writes the auto-reply message row
-          // without touching crm_threads.last_message_*. It still lands in
-          // the open conversation above so the operator sees it went out.
-          if (!m.is_auto_reply) {
-            setThreads((prev) =>
-              prev.map((t) =>
-                t.id === m.thread_id
-                  ? {
-                      ...t,
-                      last_message_at: m.sent_at,
-                      last_message_preview: m.body.slice(0, 80),
-                      // AUTHORITATIVE source of awaiting state. crm_messages
-                      // realtime always carries `direction` (+ template_name),
-                      // established columns unaffected by the 0071 realtime
-                      // schema-cache lag that can strip the denormalized
-                      // crm_threads columns. Every last_message change is
-                      // driven by a message insert, so owning direction here
-                      // means the indicator is always correct without
-                      // trusting the crm_threads UPDATE payload.
-                      last_message_direction: m.direction,
-                      last_message_is_template:
-                        m.direction === "outbound" && !!m.template_name,
-                      // First-response SLA anchor (Decision 2), owned here for
-                      // the same reason as direction — so it stays correct
-                      // without a refetch. Pure + unit-tested: a follow-up
-                      // inbound keeps the original anchor, a genuine reply
-                      // clears it. (This branch already excludes auto-replies,
-                      // which nextWaitingSince also guards.)
-                      waiting_since: nextWaitingSince(t, {
-                        direction: m.direction,
-                        sentAt: m.sent_at,
-                      }),
-                    }
-                  : t,
-              ),
-            );
-          }
-        },
-      )
-      .on(
-        "postgres_changes",
-        { event: "UPDATE", schema: "public", table: "crm_messages" },
-        (payload) => {
-          const m = payload.new as Message;
-          if (m.thread_id !== selectedRef.current) return;
-          setDetail((prev) => {
-            if (!prev) return prev;
-            const i = prev.messages.findIndex((x) => x.id === m.id);
-            if (i === -1) return prev;
-            const merged: Message = { ...prev.messages[i], ...m };
-            const next = prev.messages.slice();
-            next[i] = merged;
-            return { ...prev, messages: next };
-          });
-        },
-      )
-      .on(
-        "postgres_changes",
-        { event: "UPDATE", schema: "public", table: "crm_threads" },
-        (payload) => {
-          const t = payload.new as ThreadListRow;
-          setThreads((prev) => {
-            const exists = prev.find((x) => x.id === t.id);
-            if (!exists) {
-              // Not in the current view — a reopen or reassignment may
-              // now make it belong here. Refetch (debounced) to
-              // re-evaluate membership and counts.
-              scheduleReload();
-              return prev;
-            }
-            // A status flip (close / reopen / auto-reopen) can change
-            // which view this thread belongs to. Refetch rather than
-            // patch so it drops out of / into the right list and the
-            // counts stay correct. Debounced so a bulk close (N events)
-            // triggers one reload, not N.
-            if ((exists.status ?? "open") !== (t.status ?? "open")) {
-              scheduleReload();
-              return prev;
-            }
-            // Ignore stale / out-of-order events: an older last_message_at
-            // than what we already hold would revert a fresher reply.
-            if (!isFreshThreadUpdate(exists.last_message_at, t.last_message_at)) {
-              return prev;
-            }
-            return prev.map((x) =>
-              x.id === t.id
-                ? {
-                    // `...x` first preserves fields the crm_threads payload
-                    // never carries — is_follow_up AND waiting_since (both
-                    // non-columns). waiting_since is owned by the crm_messages
-                    // handler; a follow-up inbound must NOT move it, so leaving
-                    // it untouched here is exactly right.
-                    ...x,
-                    last_message_at: t.last_message_at,
-                    last_message_preview: t.last_message_preview,
-                    // Deliberately does NOT touch last_message_direction /
-                    // last_message_is_template. Supabase's realtime schema
-                    // cache can lag an ALTER TABLE ADD COLUMN and deliver
-                    // these as undefined, which is exactly what left a
-                    // replied thread stuck in Awaiting. The crm_messages
-                    // INSERT handler above owns those fields from the
-                    // always-present message row; a last_message change is
-                    // always accompanied by a message insert, so this
-                    // handler never needs to set them.
-                    match_ambiguous: t.match_ambiguous,
-                    player_id: t.player_id,
-                    assigned_to_user_id: t.assigned_to_user_id,
-                    assigned_at: t.assigned_at,
-                    status: t.status,
-                    closed_at: t.closed_at,
-                    closed_by_user_id: t.closed_by_user_id,
-                    // Pick up a dismiss / "reply anyway" from another
-                    // operator's session. Guarded with `in` because the
-                    // realtime schema cache can lag a freshly-added column
-                    // and omit it; when present (including an explicit
-                    // null) we apply it, otherwise keep our value.
-                    no_reply_needed_at:
-                      "no_reply_needed_at" in t
-                        ? t.no_reply_needed_at
-                        : x.no_reply_needed_at,
-                    assignee:
-                      t.assigned_to_user_id != null
-                        ? operatorsById.get(t.assigned_to_user_id) ??
-                          x.assignee
-                        : null,
-                  }
-                : x,
-            );
-          });
-          if (selectedRef.current === t.id) {
-            setDetail((prev) =>
-              prev
-                ? {
-                    ...prev,
-                    thread: { ...prev.thread, ...t },
-                    assignee:
-                      t.assigned_to_user_id != null
-                        ? operatorsById.get(t.assigned_to_user_id) ??
-                          prev.assignee
-                        : null,
-                  }
-                : prev,
-            );
-          }
-        },
-      )
-      .on(
-        "postgres_changes",
-        { event: "INSERT", schema: "public", table: "crm_threads" },
-        () => {
-          scheduleReload();
-        },
-      )
-      // Same-user multi-device read-state sync. When this viewer
-      // reads a thread on another device, their crm_thread_reads
-      // row updates and this session refetches to clear the dot.
-      // Cross-admin reads of unassigned threads converge through the
-      // separate crm_threads UPDATE subscription above, fired by the
-      // 0035 trigger that touches reads_updated_at.
-      .on(
-        "postgres_changes",
-        {
-          event: "*",
-          schema: "public",
-          table: "crm_thread_reads",
-          filter: appUser?.id ? `user_id=eq.${appUser.id}` : undefined,
-        },
-        () => {
-          scheduleReload();
-        },
-      )
-      .subscribe((status) => {
-        if (status === "SUBSCRIBED") setRealtimeOk(true);
-        else if (
-          status === "CHANNEL_ERROR" ||
-          status === "TIMED_OUT" ||
-          status === "CLOSED"
-        ) {
-          setRealtimeOk(false);
-        }
-      });
-
-    return () => {
-      supabase.removeChannel(channel);
-    };
-  }, [scheduleReload, operatorsById, refreshDetailForMediaInsert, appUser?.id]);
+  // The realtime subscription moved to the provider (@/lib/crmConversation) in B2 — one channel,
+  // mounted in the persistent layout so messages keep arriving while navigated away. Its five
+  // handlers write through the provider's setters, unchanged.
 
   // --------- derived list ---------
   // The server already filtered by the active view. Here we only apply

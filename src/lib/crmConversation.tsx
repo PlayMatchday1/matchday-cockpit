@@ -25,6 +25,8 @@ import {
 } from "react";
 import { useSearchParams } from "next/navigation";
 import { supabase } from "@/lib/supabase";
+import { useAuth } from "@/lib/useAuth";
+import { isFreshThreadUpdate, nextWaitingSince } from "@/lib/awaitingReply";
 import { type Assignee } from "@/components/AssigneeChip";
 import { type CrmChannel } from "@/components/ChannelChip";
 import type { DeliveryStatus } from "@/components/DeliveryStatusLabel";
@@ -185,6 +187,7 @@ const ZERO_COUNTS: ViewCounts = { open: 0, mine: 0, starred: 0, closed: 0, await
 
 export function CrmConversationProvider({ children }: { children: ReactNode }) {
   const searchParams = useSearchParams();
+  const { appUser } = useAuth(); // for the crm_thread_reads realtime filter (subscription below)
 
   // --------- inbox list state ---------
   const [threads, setThreads] = useState<ThreadListRow[]>([]);
@@ -201,10 +204,13 @@ export function CrmConversationProvider({ children }: { children: ReactNode }) {
 
   // --------- the active view (URL-derived) + a stable ref the loaders read ---------
   const view = useMemo<StatusFilter>(() => readViewParam(searchParams.get("view")), [searchParams]);
-  // viewRef is updated during RENDER (not in an effect) so it is already current before ANY
-  // effect runs — the loadThreads trigger effect lives in the child CrmClient, whose effects run
-  // BEFORE this parent provider's effects; a ref updated in a parent effect would be stale. This
-  // preserves the original single-component ordering (viewRef set before loadThreads reads it).
+  // viewRef is updated during RENDER, deliberately — and it CANNOT move to an effect (B2 item 2).
+  // Its reader is loadThreads, which is triggered by the view-change EFFECT that stays in the child
+  // CrmClient (an orchestration effect, per B1). Child effects run BEFORE this parent provider's
+  // effects, so a viewRef written in a parent effect would be stale when the child's loadThreads
+  // reads it. Updating it in render keeps it current before any effect fires. (selectedRef, by
+  // contrast, DID move back to an effect below — its only readers are the subscription and
+  // refreshDetailForMediaInsert, now both co-located here and both reading at async event time.)
   const viewRef = useRef<StatusFilter>(view);
   viewRef.current = view;
 
@@ -223,9 +229,13 @@ export function CrmConversationProvider({ children }: { children: ReactNode }) {
     () => searchParams.get("threadId"),
   );
   const selectThread = useCallback((id: string | null) => setSelectedThreadId(id), []);
-  // Latest-value ref for the subscription handlers (which read selectedRef.current at event time).
+  // selectedRef for the subscription handlers, which read selectedRef.current at (async) event
+  // time. Now that the subscription lives HERE (B2), reader and writer are the same component, so
+  // this is a normal effect — no cross-component ordering to work around (B2 item 2).
   const selectedRef = useRef<string | null>(selectedThreadId);
-  selectedRef.current = selectedThreadId;
+  useEffect(() => {
+    selectedRef.current = selectedThreadId;
+  }, [selectedThreadId]);
 
   // Mirror the selection into the URL so a refresh reopens the thread and deep links keep working —
   // but the PROVIDER stays the source of truth (selection is state, read from ?threadId only once
@@ -366,6 +376,167 @@ export function CrmConversationProvider({ children }: { children: ReactNode }) {
       ),
     );
   }, []);
+
+  // --------- realtime (B2: moved here from CrmClient — one channel, five handlers, now mounted
+  // in the persistent provider so messages keep arriving while navigated away). Bodies unchanged;
+  // handlers write through the provider's own setters/refs. ---------
+  useEffect(() => {
+    const channel = supabase
+      .channel("crm-stream-v2")
+      .on(
+        "postgres_changes",
+        { event: "INSERT", schema: "public", table: "crm_messages" },
+        (payload) => {
+          const m = payload.new as Message;
+          if (m.thread_id === selectedRef.current) {
+            if (m.media_kind) {
+              console.debug(
+                `[crm:realtime] media INSERT, refetching thread=${m.thread_id} kind=${m.media_kind}`,
+              );
+              void refreshDetailForMediaInsert(m.thread_id);
+            } else {
+              setDetail((prev) => {
+                if (!prev) return prev;
+                if (prev.messages.some((x) => x.id === m.id)) return prev;
+                return { ...prev, messages: [...prev.messages, m] };
+              });
+            }
+          }
+          // The out-of-hours auto-reply is intentionally invisible to the inbox row's state.
+          if (!m.is_auto_reply) {
+            setThreads((prev) =>
+              prev.map((t) =>
+                t.id === m.thread_id
+                  ? {
+                      ...t,
+                      last_message_at: m.sent_at,
+                      last_message_preview: m.body.slice(0, 80),
+                      last_message_direction: m.direction,
+                      last_message_is_template:
+                        m.direction === "outbound" && !!m.template_name,
+                      waiting_since: nextWaitingSince(t, {
+                        direction: m.direction,
+                        sentAt: m.sent_at,
+                      }),
+                    }
+                  : t,
+              ),
+            );
+          }
+        },
+      )
+      .on(
+        "postgres_changes",
+        { event: "UPDATE", schema: "public", table: "crm_messages" },
+        (payload) => {
+          const m = payload.new as Message;
+          if (m.thread_id !== selectedRef.current) return;
+          setDetail((prev) => {
+            if (!prev) return prev;
+            const i = prev.messages.findIndex((x) => x.id === m.id);
+            if (i === -1) return prev;
+            const merged: Message = { ...prev.messages[i], ...m };
+            const next = prev.messages.slice();
+            next[i] = merged;
+            return { ...prev, messages: next };
+          });
+        },
+      )
+      .on(
+        "postgres_changes",
+        { event: "UPDATE", schema: "public", table: "crm_threads" },
+        (payload) => {
+          const t = payload.new as ThreadListRow;
+          setThreads((prev) => {
+            const exists = prev.find((x) => x.id === t.id);
+            if (!exists) {
+              scheduleReload();
+              return prev;
+            }
+            if ((exists.status ?? "open") !== (t.status ?? "open")) {
+              scheduleReload();
+              return prev;
+            }
+            if (!isFreshThreadUpdate(exists.last_message_at, t.last_message_at)) {
+              return prev;
+            }
+            return prev.map((x) =>
+              x.id === t.id
+                ? {
+                    ...x,
+                    last_message_at: t.last_message_at,
+                    last_message_preview: t.last_message_preview,
+                    match_ambiguous: t.match_ambiguous,
+                    player_id: t.player_id,
+                    assigned_to_user_id: t.assigned_to_user_id,
+                    assigned_at: t.assigned_at,
+                    status: t.status,
+                    closed_at: t.closed_at,
+                    closed_by_user_id: t.closed_by_user_id,
+                    no_reply_needed_at:
+                      "no_reply_needed_at" in t
+                        ? t.no_reply_needed_at
+                        : x.no_reply_needed_at,
+                    assignee:
+                      t.assigned_to_user_id != null
+                        ? operatorsById.get(t.assigned_to_user_id) ??
+                          x.assignee
+                        : null,
+                  }
+                : x,
+            );
+          });
+          if (selectedRef.current === t.id) {
+            setDetail((prev) =>
+              prev
+                ? {
+                    ...prev,
+                    thread: { ...prev.thread, ...t },
+                    assignee:
+                      t.assigned_to_user_id != null
+                        ? operatorsById.get(t.assigned_to_user_id) ??
+                          prev.assignee
+                        : null,
+                  }
+                : prev,
+            );
+          }
+        },
+      )
+      .on(
+        "postgres_changes",
+        { event: "INSERT", schema: "public", table: "crm_threads" },
+        () => {
+          scheduleReload();
+        },
+      )
+      .on(
+        "postgres_changes",
+        {
+          event: "*",
+          schema: "public",
+          table: "crm_thread_reads",
+          filter: appUser?.id ? `user_id=eq.${appUser.id}` : undefined,
+        },
+        () => {
+          scheduleReload();
+        },
+      )
+      .subscribe((status) => {
+        if (status === "SUBSCRIBED") setRealtimeOk(true);
+        else if (
+          status === "CHANNEL_ERROR" ||
+          status === "TIMED_OUT" ||
+          status === "CLOSED"
+        ) {
+          setRealtimeOk(false);
+        }
+      });
+
+    return () => {
+      supabase.removeChannel(channel);
+    };
+  }, [scheduleReload, operatorsById, refreshDetailForMediaInsert, appUser?.id]);
 
   const value: CrmConversationValue = {
     threads, setThreads, threadsError, setThreadsError, threadsLoading, setThreadsLoading,

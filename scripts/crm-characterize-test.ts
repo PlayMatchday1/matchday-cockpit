@@ -94,10 +94,11 @@ const COMPOSER_C = noComments(COMPOSER), CRM_C = noComments(CRM), SEND_C = noCom
 // CrmClient delegates the window rule to the shared, tested helper (the Step-0 seam).
 /from "@\/lib\/crmWindow"/.test(CRM_C) && /whatsappWindowExpired\(/.test(CRM_C) ? ok("CrmClient delegates the window rule to src/lib/crmWindow (tested seam)") : bad("CrmClient no longer uses the shared window rule");
 
-// EXACTLY ONE realtime subscription for the whole Player Chats feature. The Step-2 lift moves
-// this single channel into the provider; there must never be two subscriptions on crm_messages
-// (a prior duplicate-channel bug took down every page — see useCrmUnreadCount). This scan is
-// scoped to the feature dir today; Step 2 broadens it to include the provider's new home.
+// EXACTLY ONE realtime subscription across the CRM conversation code. B2 moved the single channel
+// OUT of the feature dir INTO the provider (src/lib/crmConversation.tsx), so the scan now spans
+// both — the invariant is unchanged (one channel + one .subscribe), only its home moved. There
+// must never be two subscriptions on crm_messages (a prior duplicate-channel bug took every page
+// down — see useCrmUnreadCount).
 function walk(dir: string): string[] {
   const out: string[] = [];
   for (const e of readdirSync(dir, { withFileTypes: true })) {
@@ -107,10 +108,10 @@ function walk(dir: string): string[] {
   }
   return out;
 }
-const featureFiles = walk(CRM_DIR);
-const subscribeCount = featureFiles.reduce((n, f) => n + (readFileSync(f, "utf8").match(/\.subscribe\(/g)?.length ?? 0), 0);
-const channelCount = featureFiles.reduce((n, f) => n + (readFileSync(f, "utf8").match(/\.channel\(/g)?.length ?? 0), 0);
-eq("EXACTLY ONE realtime subscription across the Player Chats feature", { channels: channelCount, subscribes: subscribeCount }, { channels: 1, subscribes: 1 });
+const crmFiles = [...walk(CRM_DIR), "src/lib/crmConversation.tsx"];
+const subscribeCount = crmFiles.reduce((n, f) => n + (readFileSync(f, "utf8").match(/\.subscribe\(/g)?.length ?? 0), 0);
+const channelCount = crmFiles.reduce((n, f) => n + (readFileSync(f, "utf8").match(/\.channel\(/g)?.length ?? 0), 0);
+eq("EXACTLY ONE realtime subscription across the CRM conversation code (feature + provider)", { channels: channelCount, subscribes: subscribeCount }, { channels: 1, subscribes: 1 });
 // The nav unread badge is poll-only — NO realtime channel (documented crash-avoidance). Check
 // against comment-stripped source so the "uses NO supabase.channel()" note doesn't false-match.
 !/\.channel\(|\.subscribe\(/.test(BADGE_C) && /POLL_MS|setInterval/.test(BADGE_C) ? ok("nav unread badge stays poll-only (no realtime channel)") : bad("nav badge grew a realtime channel");
