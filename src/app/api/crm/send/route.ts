@@ -62,6 +62,19 @@ export async function POST(req: Request) {
     );
   }
   const { appUserId, email: actorEmail, supabase } = auth;
+  // A player-visible message must have a HUMAN behind it (Phase 19 Step 2 carry-over). The cron
+  // auth path (CRON_SECRET) sets canSendMessages=true for full server authority, and nothing
+  // scheduled calls this route today — but requiring a real operator (appUserId != null) closes
+  // the latent hole so a future scheduled job can never message a player through the operator send
+  // route without a human holding the grant. The one legitimate automated path — the inbound-
+  // triggered, debounced, reply-only out-of-hours auto-reply — sends via the webhook's own
+  // sendWhatsAppText (a bounded system acknowledgment), never here.
+  if (!appUserId) {
+    return Response.json(
+      { error: "Sends require a human operator.", reason: "no_human_actor" },
+      { status: 403 },
+    );
+  }
 
   let parsed: SendBody;
   try {

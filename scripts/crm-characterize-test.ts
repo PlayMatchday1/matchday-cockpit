@@ -84,6 +84,9 @@ const COMPOSER_C = noComments(COMPOSER), CRM_C = noComments(CRM), SEND_C = noCom
   !/retry|setTimeout\([^)]*submitText|while\s*\(/.test(sub) ? ok("composer send never auto-retries") : bad("composer added a retry");
 }
 !/retr(y|ies)|for\s*\(|while\s*\(/.test(SEND_C) ? ok("send route never retries the provider call (single-shot)") : bad("send route retries");
+// A player-visible send must have a human behind it — the cron/CRON_SECRET path can't reach it.
+/if \(!appUserId\)/.test(SEND_C) && /no_human_actor|human operator/.test(SEND_C) ? ok("send route requires a human operator (closes the cron send path)") : bad("send route missing human-actor guard");
+/auth\.canSendMessages/.test(SEND_C) ? ok("send route gates on can_send_messages") : bad("send route missing can_send_messages gate");
 // Enter sends, Shift+Enter newlines.
 /e\.key === "Enter" && !e\.shiftKey/.test(COMPOSER_C) ? ok("Enter sends, Shift+Enter makes a newline") : bad("Enter/Shift+Enter handler changed");
 // The composer disables on an expired WhatsApp window.
