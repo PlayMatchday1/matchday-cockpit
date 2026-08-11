@@ -148,8 +148,13 @@ export type CrmConversationValue = {
   operators: Assignee[];
   setOperators: React.Dispatch<React.SetStateAction<Assignee[]>>;
   operatorsById: Map<string, Assignee>;
-  // the open conversation
+  // the conversations map — every loaded ThreadDetail keyed by thread id. Both the Chats pane
+  // (selectedThreadId) and the dock (dockedThreadId) index into this ONE map (Step 3a item 1).
+  conversations: Record<string, ThreadDetail>;
+  // the open conversation — DERIVED: conversations[selectedThreadId] ?? null.
   detail: ThreadDetail | null;
+  // back-compat optimistic setter for the OPEN conversation; setDetail(null) clears the selection
+  // and leaves the map alone (the dock may point at the same thread).
   setDetail: React.Dispatch<React.SetStateAction<ThreadDetail | null>>;
   detailError: string | null;
   setDetailError: React.Dispatch<React.SetStateAction<string | null>>;
@@ -157,10 +162,15 @@ export type CrmConversationValue = {
   setDetailLoading: React.Dispatch<React.SetStateAction<boolean>>;
   realtimeOk: boolean | null;
   setRealtimeOk: React.Dispatch<React.SetStateAction<boolean | null>>;
-  // selection (OFF the url — useState, init once from ?threadId)
+  // selection (OFF the url — useState in the core atom, init once from ?threadId)
   selectedThreadId: string | null;
   selectThread: (id: string | null) => void;
-  selectedRef: React.MutableRefObject<string | null>;
+  // the docked conversation (Phase 19). dockThread loads it into the map; undockThread clears it.
+  dockedThreadId: string | null;
+  dockThread: (id: string) => void;
+  undockThread: () => void;
+  dockOpen: boolean;
+  setDockOpen: React.Dispatch<React.SetStateAction<boolean>>;
   // the active status view (URL-derived) + a stable ref the loaders read
   view: StatusFilter;
   viewRef: React.MutableRefObject<StatusFilter>;
@@ -208,9 +218,9 @@ export function CrmConversationProvider({ children }: { children: ReactNode }) {
   // Its reader is loadThreads, which is triggered by the view-change EFFECT that stays in the child
   // CrmClient (an orchestration effect, per B1). Child effects run BEFORE this parent provider's
   // effects, so a viewRef written in a parent effect would be stale when the child's loadThreads
-  // reads it. Updating it in render keeps it current before any effect fires. (selectedRef, by
-  // contrast, DID move back to an effect below — its only readers are the subscription and
-  // refreshDetailForMediaInsert, now both co-located here and both reading at async event time.)
+  // reads it. Updating it in render keeps it current before any effect fires. (Selection no longer
+  // needs a ref at all: it lives in the `core` atom below, and the subscription handlers read it
+  // straight out of the functional-updater snapshot — Step 3a amendment 1.)
   const viewRef = useRef<StatusFilter>(view);
   viewRef.current = view;
 
@@ -218,24 +228,51 @@ export function CrmConversationProvider({ children }: { children: ReactNode }) {
   const [operators, setOperators] = useState<Assignee[]>([]);
   const operatorsById = useMemo(() => new Map(operators.map((o) => [o.id, o])), [operators]);
 
-  // --------- the open conversation ---------
-  const [detail, setDetail] = useState<ThreadDetail | null>(null);
+  // --------- conversations map (Phase 19 Step 3a item 1) ---------
+  // ONE state ATOM holding the conversations map AND selectedThreadId together (amendment 1), so a
+  // functional updater always reads the id from the SAME snapshot as the map — no ref, and none of
+  // the child-effect-before-parent-effect ordering hazard that kept viewRef in the render body.
+  // Both selectedThreadId (Chats screen) and dockedThreadId (the dock) index into conversations, so
+  // a thread appended once is seen by every view — no second slot, no double-append. Selection is
+  // OFF the URL: initialised once from ?threadId (deep link), then state.
+  const [core, setCore] = useState<{ conversations: Record<string, ThreadDetail>; selectedThreadId: string | null }>(
+    () => ({ conversations: {}, selectedThreadId: searchParams.get("threadId") }),
+  );
+  const { conversations, selectedThreadId } = core;
   const [detailLoading, setDetailLoading] = useState(false);
   const [detailError, setDetailError] = useState<string | null>(null);
   const [realtimeOk, setRealtimeOk] = useState<boolean | null>(null);
 
-  // --------- selection, OFF the url: init once from ?threadId (deep links), then state ---------
-  const [selectedThreadId, setSelectedThreadId] = useState<string | null>(
-    () => searchParams.get("threadId"),
+  // The OPEN conversation for the Chats screen — DERIVED from the map, so CrmClient's `detail` is
+  // byte-identical to before (still one ThreadDetail | null).
+  const detail = selectedThreadId ? conversations[selectedThreadId] ?? null : null;
+
+  const selectThread = useCallback(
+    (id: string | null) => setCore((s) => ({ ...s, selectedThreadId: id })),
+    [],
   );
-  const selectThread = useCallback((id: string | null) => setSelectedThreadId(id), []);
-  // selectedRef for the subscription handlers, which read selectedRef.current at (async) event
-  // time. Now that the subscription lives HERE (B2), reader and writer are the same component, so
-  // this is a normal effect — no cross-component ordering to work around (B2 item 2).
-  const selectedRef = useRef<string | null>(selectedThreadId);
-  useEffect(() => {
-    selectedRef.current = selectedThreadId;
-  }, [selectedThreadId]);
+
+  // Back-compat setDetail for CrmClient's optimistic updates to the OPEN conversation. Routes into
+  // conversations[selectedThreadId], reading the id from the SAME atom (amendment 1 — no ref).
+  // setDetail(null) means "no conversation open": it CLEARS selectedThreadId and LEAVES THE MAP
+  // ALONE — never delete conversations[id], because the dock may point at that same thread.
+  const setDetail = useCallback((update: React.SetStateAction<ThreadDetail | null>) => {
+    setCore((s) => {
+      const id = s.selectedThreadId;
+      if (id == null) return s;
+      const cur = s.conversations[id] ?? null;
+      const next =
+        typeof update === "function"
+          ? (update as (p: ThreadDetail | null) => ThreadDetail | null)(cur)
+          : update;
+      if (next == null) return { ...s, selectedThreadId: null };
+      return { ...s, conversations: { ...s.conversations, [id]: next } };
+    });
+  }, []);
+
+  // --------- dock state (carried into commit A per amendment 3; the UI + sessionStorage are B) ---------
+  const [dockedThreadId, setDockedThreadId] = useState<string | null>(null);
+  const [dockOpen, setDockOpen] = useState<boolean>(true);
 
   // Mirror the selection into the URL so a refresh reopens the thread and deep links keep working —
   // but the PROVIDER stays the source of truth (selection is state, read from ?threadId only once
@@ -327,10 +364,13 @@ export function CrmConversationProvider({ children }: { children: ReactNode }) {
         throw new Error(j.error || `HTTP ${res.status}`);
       }
       const j = (await res.json()) as ThreadDetail;
-      setDetail(j);
+      // Write the loaded conversation straight into the map by its OWN id (not selectedThreadId):
+      // by the time this async fetch resolves the selection may have moved on, and a docked thread
+      // loads into the same map. A load ERROR does NOT clear the selection — it surfaces detailError
+      // for the still-selected thread (setDetail(null) here would wrongly deselect).
+      setCore((s) => ({ ...s, conversations: { ...s.conversations, [threadId]: j } }));
     } catch (err) {
       setDetailError(err instanceof Error ? err.message : String(err));
-      setDetail(null);
     } finally {
       setDetailLoading(false);
     }
@@ -338,15 +378,19 @@ export function CrmConversationProvider({ children }: { children: ReactNode }) {
 
   const refreshDetailForMediaInsert = useCallback(
     async (threadId: string): Promise<void> => {
-      if (selectedRef.current !== threadId) return;
       const headers = await bearerHeaders();
       if (!headers) return;
       try {
         const res = await fetch(`/api/crm/threads/${threadId}`, { headers });
         if (!res.ok) return;
         const j = (await res.json()) as ThreadDetail;
-        if (selectedRef.current !== threadId) return;
-        setDetail(j);
+        // Only apply if the thread is STILL in the map (selected or docked) — if it was
+        // deselected/undocked mid-fetch, drop the refresh rather than re-adding a stale entry.
+        setCore((s) =>
+          s.conversations[threadId]
+            ? { ...s, conversations: { ...s.conversations, [threadId]: j } }
+            : s,
+        );
       } catch {
         /* Silent best-effort. */
       }
@@ -355,13 +399,16 @@ export function CrmConversationProvider({ children }: { children: ReactNode }) {
   );
 
   const onSent = useCallback((msg: Message) => {
-    setDetail((prev) =>
-      prev
-        ? prev.messages.some((m) => m.id === msg.id)
-          ? prev
-          : { ...prev, messages: [...prev.messages, msg] }
-        : prev,
-    );
+    // Append to whichever conversation the message belongs to (by thread_id), if it is in the map.
+    setCore((s) => {
+      const c = s.conversations[msg.thread_id];
+      if (!c) return s;
+      if (c.messages.some((m) => m.id === msg.id)) return s;
+      return {
+        ...s,
+        conversations: { ...s.conversations, [msg.thread_id]: { ...c, messages: [...c.messages, msg] } },
+      };
+    });
     setThreads((prev) =>
       prev.map((t) =>
         t.id === msg.thread_id
@@ -377,6 +424,23 @@ export function CrmConversationProvider({ children }: { children: ReactNode }) {
     );
   }, []);
 
+  // Dock a thread (commit A defines the machinery; commit B renders the UI that calls it). Loads
+  // the conversation into the map if it is not already there — the dock reads the SAME map slot as
+  // the Chats pane, so a thread that is both open and docked is stored, appended, and patched once.
+  const dockThread = useCallback(
+    (id: string) => {
+      setDockedThreadId(id);
+      setDockOpen(true);
+      setCore((s) => {
+        if (s.conversations[id]) return s; // already loaded — reuse, don't refetch
+        void loadDetail(id);
+        return s;
+      });
+    },
+    [loadDetail],
+  );
+  const undockThread = useCallback(() => setDockedThreadId(null), []);
+
   // --------- realtime (B2: moved here from CrmClient — one channel, five handlers, now mounted
   // in the persistent provider so messages keep arriving while navigated away). Bodies unchanged;
   // handlers write through the provider's own setters/refs. ---------
@@ -388,19 +452,25 @@ export function CrmConversationProvider({ children }: { children: ReactNode }) {
         { event: "INSERT", schema: "public", table: "crm_messages" },
         (payload) => {
           const m = payload.new as Message;
-          if (m.thread_id === selectedRef.current) {
-            if (m.media_kind) {
-              console.debug(
-                `[crm:realtime] media INSERT, refetching thread=${m.thread_id} kind=${m.media_kind}`,
-              );
-              void refreshDetailForMediaInsert(m.thread_id);
-            } else {
-              setDetail((prev) => {
-                if (!prev) return prev;
-                if (prev.messages.some((x) => x.id === m.id)) return prev;
-                return { ...prev, messages: [...prev.messages, m] };
-              });
-            }
+          // Append to ANY loaded conversation this message belongs to — selected OR docked — keyed
+          // on thread_id, dedup on message id. (Was `=== selectedRef.current`; the map generalises
+          // it so a docked thread paints the same inbound the open one would.)
+          if (m.media_kind) {
+            // media rows arrive without their signed URL — refetch fills it in (map-guarded).
+            console.debug(
+              `[crm:realtime] media INSERT, refetching thread=${m.thread_id} kind=${m.media_kind}`,
+            );
+            void refreshDetailForMediaInsert(m.thread_id);
+          } else {
+            setCore((s) => {
+              const c = s.conversations[m.thread_id];
+              if (!c) return s;
+              if (c.messages.some((x) => x.id === m.id)) return s;
+              return {
+                ...s,
+                conversations: { ...s.conversations, [m.thread_id]: { ...c, messages: [...c.messages, m] } },
+              };
+            });
           }
           // The out-of-hours auto-reply is intentionally invisible to the inbox row's state.
           if (!m.is_auto_reply) {
@@ -430,15 +500,19 @@ export function CrmConversationProvider({ children }: { children: ReactNode }) {
         { event: "UPDATE", schema: "public", table: "crm_messages" },
         (payload) => {
           const m = payload.new as Message;
-          if (m.thread_id !== selectedRef.current) return;
-          setDetail((prev) => {
-            if (!prev) return prev;
-            const i = prev.messages.findIndex((x) => x.id === m.id);
-            if (i === -1) return prev;
-            const merged: Message = { ...prev.messages[i], ...m };
-            const next = prev.messages.slice();
+          // Patch the message in whichever loaded conversation holds it (selected or docked).
+          setCore((s) => {
+            const c = s.conversations[m.thread_id];
+            if (!c) return s;
+            const i = c.messages.findIndex((x) => x.id === m.id);
+            if (i === -1) return s;
+            const merged: Message = { ...c.messages[i], ...m };
+            const next = c.messages.slice();
             next[i] = merged;
-            return { ...prev, messages: next };
+            return {
+              ...s,
+              conversations: { ...s.conversations, [m.thread_id]: { ...c, messages: next } },
+            };
           });
         },
       )
@@ -486,21 +560,26 @@ export function CrmConversationProvider({ children }: { children: ReactNode }) {
                 : x,
             );
           });
-          if (selectedRef.current === t.id) {
-            setDetail((prev) =>
-              prev
-                ? {
-                    ...prev,
-                    thread: { ...prev.thread, ...t },
-                    assignee:
-                      t.assigned_to_user_id != null
-                        ? operatorsById.get(t.assigned_to_user_id) ??
-                          prev.assignee
-                        : null,
-                  }
-                : prev,
-            );
-          }
+          // Patch the loaded conversation's header for this thread if it is in the map (selected or
+          // docked) — so the dock's identity banner tracks reassignment/close the same as the pane.
+          setCore((s) => {
+            const c = s.conversations[t.id];
+            if (!c) return s;
+            return {
+              ...s,
+              conversations: {
+                ...s.conversations,
+                [t.id]: {
+                  ...c,
+                  thread: { ...c.thread, ...t },
+                  assignee:
+                    t.assigned_to_user_id != null
+                      ? operatorsById.get(t.assigned_to_user_id) ?? c.assignee
+                      : null,
+                },
+              },
+            };
+          });
         },
       )
       .on(
@@ -541,8 +620,9 @@ export function CrmConversationProvider({ children }: { children: ReactNode }) {
   const value: CrmConversationValue = {
     threads, setThreads, threadsError, setThreadsError, threadsLoading, setThreadsLoading,
     counts, setCounts, operators, setOperators, operatorsById,
-    detail, setDetail, detailError, setDetailError, detailLoading, setDetailLoading, realtimeOk, setRealtimeOk,
-    selectedThreadId, selectThread, selectedRef, view, viewRef, nowMs,
+    conversations, detail, setDetail, detailError, setDetailError, detailLoading, setDetailLoading, realtimeOk, setRealtimeOk,
+    selectedThreadId, selectThread, view, viewRef, nowMs,
+    dockedThreadId, dockThread, undockThread, dockOpen, setDockOpen,
     loadThreads, loadDetail, loadOperators, scheduleReload, refreshDetailForMediaInsert, onSent,
   };
 
