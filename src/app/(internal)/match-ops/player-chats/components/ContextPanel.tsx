@@ -264,16 +264,23 @@ function ContextBody({
   return (
     <div className="p-4">
       {ambiguous && (
-        <div className="mb-3 flex items-start gap-1.5 rounded-md border border-cream-line bg-white p-2 text-xs text-deep-green/60">
+        // >1 mdapi_users account shares this phone; the webhook attached the NEWEST by created_at.
+        // It may not be who is writing (often a real family-shared phone) — say so plainly. Amber,
+        // informational, blocks nothing. The count is live from /context; the dock + header carry
+        // the same statement without the count (ThreadDetail has no count).
+        <div className="mb-3 flex items-start gap-1.5 rounded-md border border-amber-300/50 bg-amber-50 p-2 text-xs text-amber-800">
           <span aria-hidden className="mt-px shrink-0">
-            ⓘ
+            ⚠
           </span>
           <span>
-            Phone has{" "}
             {historicalAccountCount != null && historicalAccountCount > 0
-              ? `${historicalAccountCount} historical account${historicalAccountCount === 1 ? "" : "s"}`
-              : "historical accounts"}{" "}
-            on file — showing the most recent.
+              ? `This number is on ${historicalAccountCount} account${historicalAccountCount === 1 ? "" : "s"}.`
+              : "This number is on more than one account."}{" "}
+            Showing{" "}
+            <strong>
+              {`${player?.first_name ?? ""} ${player?.last_name ?? ""}`.trim() || "the newest match"}
+            </strong>{" "}
+            — it may not be who is writing.
           </span>
         </div>
       )}

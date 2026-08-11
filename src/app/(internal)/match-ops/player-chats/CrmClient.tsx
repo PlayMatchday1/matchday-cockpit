@@ -1731,11 +1731,13 @@ function ConversationHeader({
             {detail.thread.match_ambiguous && (
               <>
                 <span aria-hidden>·</span>
+                {/* >1 account shares this phone; we attached the newest (created_at). It may not be
+                    who is writing — see the fuller note in the context pane. Amber, informational. */}
                 <span
-                  title="Phone has historical accounts on file — showing the most recent"
-                  className="inline-flex items-center gap-0.5 rounded-full bg-muted-soft px-1.5 py-px font-medium text-muted"
+                  title={`This number is on more than one account. Showing ${name} — it may not be who is writing.`}
+                  className="inline-flex items-center gap-0.5 rounded-full bg-amber-100 px-1.5 py-px font-medium text-amber-800"
                 >
-                  <span aria-hidden>ⓘ</span> historical
+                  <span aria-hidden>⚠</span> shared number
                 </span>
               </>
             )}

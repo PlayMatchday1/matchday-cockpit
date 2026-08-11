@@ -3,8 +3,8 @@
 // Phase 19 Step 3a — the DOCKED player chat (read-only shell). An operator pins a player's
 // conversation and it follows them across every Match Ops screen, so they can work the player's
 // problem on one screen while keeping the conversation in view. This commit is READ-ONLY: it
-// renders the identity, the mismatch warning, the message history and a "Reply in Player Chats"
-// hand-off. The composer / send path is Step 3b.
+// renders the identity, the two identity banners, the message history and a "Reply in Player
+// Chats" hand-off. The composer / send path is Step 3b.
 //
 // State lives in the CRM provider (crmConversation): the docked conversation is one slot in the
 // SAME conversations map the Chats pane reads, so realtime paints it exactly once. This component
@@ -15,20 +15,22 @@
 // edges, no collision. The dock is mounted by match-ops/layout.tsx and hidden on Player Chats
 // itself (the full inbox is already there).
 
-import { useMemo, useState } from "react";
+import { useMemo } from "react";
 import { useRouter } from "next/navigation";
-import { MessageSquare, X, ChevronRight, ChevronDown, Reply, AlertTriangle } from "lucide-react";
+import { MessageSquare, X, ChevronRight, Reply, AlertTriangle, Users, Unlink } from "lucide-react";
 import PlayerAvatar from "@/components/PlayerAvatar";
 import CityChip from "@/components/CityChip";
 import ChannelChip, { channelDisplay } from "@/components/ChannelChip";
 import MessageBubble from "@/app/(internal)/match-ops/player-chats/components/MessageBubble";
 import {
   useCrmConversation,
+  markThreadRead,
   type ThreadDetail,
   type ThreadListRow,
 } from "@/lib/crmConversation";
 
 const PLAYER_CHATS_PATH = "/match-ops/player-chats";
+const SWITCHER_MAX = 4;
 
 function nameOf(t: ThreadListRow): string {
   const first = t.player?.first_name?.trim() ?? "";
@@ -37,13 +39,15 @@ function nameOf(t: ThreadListRow): string {
   return full || t.phone_number;
 }
 
-function cityOf(t: ThreadListRow): string {
+// A real city code, or null — never the "UNK" placeholder, which reads like a city we failed to
+// load rather than one we don't have.
+function cityCodeOrNull(t: ThreadListRow): string | null {
   const c = t.player?.preferable_city_normalized;
-  return c && c.length > 0 ? c : "UNK";
+  return c && c.length > 0 ? c : null;
 }
 
 // Banner B fires only when BOTH sides name a concrete, DIFFERENT player. A thread with no player_id
-// (unmatched phone) or a screen with no subject can't be a "mismatch" — it's just unknown.
+// (unlinked phone) or a screen with no subject can't be a "mismatch" — it's a different case.
 function subjectMismatch(
   threadPlayerId: number | null,
   subjectPlayerId: string | number | null | undefined,
@@ -55,6 +59,8 @@ function subjectMismatch(
 export default function CrmDock() {
   const {
     conversations,
+    threads,
+    setThreads,
     dockedThreadId,
     dockOpen,
     setDockOpen,
@@ -65,20 +71,29 @@ export default function CrmDock() {
     realtimeOk,
   } = useCrmConversation();
   const router = useRouter();
-  const [switcherOpen, setSwitcherOpen] = useState(false);
 
   const detail: ThreadDetail | null = dockedThreadId
     ? conversations[dockedThreadId] ?? null
     : null;
 
-  // Every OTHER loaded conversation the operator could switch the dock to (viewed this session).
-  const others = useMemo(
+  // The switcher lists OTHER threads WITH UNREAD — read from the inbox `threads` list, the SAME
+  // is_unread the nav badge sums, not a second counter. Excludes the docked thread, most recent
+  // first, capped at four. When empty the whole region is absent from the DOM (below).
+  const switchable = useMemo(
     () =>
-      Object.values(conversations)
-        .filter((c) => c.thread.id !== dockedThreadId)
-        .sort((a, b) => b.thread.last_message_at.localeCompare(a.thread.last_message_at)),
-    [conversations, dockedThreadId],
+      threads
+        .filter((t) => t.is_unread && t.id !== dockedThreadId)
+        .sort((a, b) => b.last_message_at.localeCompare(a.last_message_at))
+        .slice(0, SWITCHER_MAX),
+    [threads, dockedThreadId],
   );
+
+  // Switch the dock to an unread thread and clear its unread (optimistic, like the inbox row).
+  const switchTo = (id: string) => {
+    setThreads((prev) => prev.map((t) => (t.id === id ? { ...t, is_unread: false } : t)));
+    void markThreadRead(id);
+    dockThread(id);
+  };
 
   // Nothing pinned → the dock is absent entirely (no rail, no bubble).
   if (!dockedThreadId) return null;
@@ -100,6 +115,9 @@ export default function CrmDock() {
 
   const t = detail.thread;
   const name = nameOf(t);
+  const unlinked = t.player_id == null;
+  const ambiguous = t.match_ambiguous === true;
+  const cityCode = cityCodeOrNull(t);
   const mismatch = subjectMismatch(t.player_id, dockSubject?.playerId);
 
   const openInChats = () => {
@@ -111,7 +129,6 @@ export default function CrmDock() {
   if (!dockOpen) {
     return (
       <>
-        {/* desktop rail — right edge, opposite ChatsRail's left edge */}
         <button
           type="button"
           data-testid="dock-rail"
@@ -122,9 +139,8 @@ export default function CrmDock() {
         >
           <PlayerAvatar name={name} seed={t.phone_number} channel={t.channel} size="sm" isMember={t.player?.is_member === true} />
           <ChevronRight aria-hidden className="h-4 w-4 text-deep-green/50" />
-          {mismatch && <AlertTriangle aria-hidden className="h-3.5 w-3.5 text-coral" data-testid="dock-rail-warn" />}
+          {(mismatch || unlinked || ambiguous) && <AlertTriangle aria-hidden className="h-3.5 w-3.5 text-coral" data-testid="dock-rail-warn" />}
         </button>
-        {/* phone bubble — bottom-right FAB */}
         <button
           type="button"
           data-testid="dock-bubble"
@@ -134,7 +150,7 @@ export default function CrmDock() {
           className="fixed right-3 bottom-3 z-40 flex h-12 w-12 items-center justify-center rounded-full bg-deep-green text-white shadow-lg sm:hidden"
         >
           <MessageSquare aria-hidden className="h-5 w-5" />
-          {mismatch && <span data-testid="dock-bubble-warn" className="absolute -right-0.5 -top-0.5 h-3 w-3 rounded-full border-2 border-white bg-coral" />}
+          {(mismatch || unlinked || ambiguous) && <span data-testid="dock-bubble-warn" className="absolute -right-0.5 -top-0.5 h-3 w-3 rounded-full border-2 border-white bg-coral" />}
         </button>
       </>
     );
@@ -147,47 +163,45 @@ export default function CrmDock() {
       data-docked-thread-id={t.id}
       data-guard="ready"
       data-mismatch={mismatch ? 1 : 0}
+      data-unlinked={unlinked ? 1 : 0}
+      data-amb={ambiguous ? 1 : 0}
       className="fixed right-0 bottom-0 z-40 flex w-[360px] max-w-[calc(100vw-8px)] flex-col overflow-hidden rounded-tl-xl border border-b-0 border-r-0 border-cream-line bg-white shadow-2xl"
       style={{ top: "calc(env(safe-area-inset-top, 0px) + 4rem)" }}
     >
-      {/* Banner A — attribution: exactly WHO this docked conversation is with. */}
+      {/* Banner A — attribution: WHO this docked conversation is with. */}
       <div
         data-testid="dock-banner-a"
         data-thread-id={t.id}
-        data-amb={t.match_ambiguous ? 1 : 0}
         className="flex shrink-0 items-center gap-2 border-b border-cream-line bg-cream-soft px-2 py-2"
       >
-        <PlayerAvatar name={name} seed={t.phone_number} channel={t.channel} size="sm" isMember={t.player?.is_member === true} />
+        <PlayerAvatar name={unlinked ? null : name} seed={t.phone_number} channel={t.channel} size="sm" isMember={t.player?.is_member === true} />
         <div className="min-w-0 flex-1">
-          <button
-            type="button"
-            data-testid="dock-switcher"
-            onClick={() => setSwitcherOpen((v) => !v)}
-            className="flex max-w-full items-center gap-1 truncate text-left text-sm font-extrabold tracking-tight text-deep-green"
-            aria-expanded={switcherOpen}
-            aria-label="Switch docked conversation"
-          >
-            <span className="truncate">{name}</span>
-            <ChevronDown aria-hidden className="h-3.5 w-3.5 shrink-0 text-deep-green/50" />
-          </button>
+          <div className="flex items-center gap-1.5">
+            {unlinked ? (
+              // No player name to show — do NOT dress the phone number up as an identity.
+              <>
+                <span className="truncate font-mono text-sm font-bold tracking-tight text-deep-green">{t.phone_number}</span>
+                <span
+                  data-testid="dock-unlinked-chip"
+                  className="shrink-0 rounded-full bg-muted-soft px-1.5 py-px text-[9px] font-bold uppercase tracking-wide text-muted"
+                >
+                  Unlinked
+                </span>
+              </>
+            ) : (
+              <span className="truncate text-sm font-extrabold tracking-tight text-deep-green">{name}</span>
+            )}
+          </div>
           <div className="mt-0.5 flex items-center gap-1 text-[10px] text-deep-green/55">
-            <CityChip code={cityOf(t)} />
-            <span aria-hidden>·</span>
+            {cityCode && (
+              <>
+                <CityChip code={cityCode} />
+                <span aria-hidden>·</span>
+              </>
+            )}
             <span className="inline-flex items-center gap-0.5">
               <ChannelChip channel={t.channel} /> via {channelDisplay(t.channel)}
             </span>
-            {t.match_ambiguous && (
-              <>
-                <span aria-hidden>·</span>
-                <span
-                  data-testid="dock-historical"
-                  title="Phone has historical accounts on file — showing the most recent"
-                  className="rounded-full bg-muted-soft px-1.5 py-px font-medium text-muted"
-                >
-                  ⓘ historical
-                </span>
-              </>
-            )}
           </div>
         </div>
         <button
@@ -210,28 +224,50 @@ export default function CrmDock() {
         </button>
       </div>
 
-      {/* switcher dropdown — pick another conversation viewed this session */}
-      {switcherOpen && (
-        <div data-testid="dock-switcher-menu" className="max-h-40 shrink-0 overflow-y-auto border-b border-cream-line bg-white">
-          {others.length === 0 ? (
-            <div className="px-3 py-2 text-[11px] text-deep-green/45">No other open chats</div>
-          ) : (
-            others.map((c) => (
-              <button
-                key={c.thread.id}
-                type="button"
-                data-testid={`dock-switch-${c.thread.id}`}
-                onClick={() => {
-                  dockThread(c.thread.id);
-                  setSwitcherOpen(false);
-                }}
-                className="flex w-full items-center gap-2 px-3 py-2 text-left text-xs text-deep-green hover:bg-cream-soft"
-              >
-                <PlayerAvatar name={nameOf(c.thread)} seed={c.thread.phone_number} channel={c.thread.channel} size="sm" isMember={c.thread.player?.is_member === true} />
-                <span className="truncate font-semibold">{nameOf(c.thread)}</span>
-              </button>
-            ))
-          )}
+      {/* Guard: no player account is linked to this number. Informational; blocks nothing. */}
+      {unlinked && (
+        <div
+          data-testid="dock-guard-unlinked"
+          className="flex shrink-0 items-start gap-2 border-b border-cream-line bg-muted-soft/40 px-2.5 py-2 text-[11px] text-deep-green/70"
+        >
+          <Unlink aria-hidden className="mt-px h-3.5 w-3.5 shrink-0" />
+          <span>No player account is linked to this number.</span>
+        </div>
+      )}
+
+      {/* Ambiguity: >1 account shares this number and we attached the newest — it may not be who
+          is writing. (No stored candidate count in ThreadDetail, so the generic form.) */}
+      {ambiguous && (
+        <div
+          data-testid="dock-ambiguous"
+          className="flex shrink-0 items-start gap-2 border-b border-amber-300/50 bg-amber-50 px-2.5 py-2 text-[11px] text-amber-800"
+        >
+          <Users aria-hidden className="mt-px h-3.5 w-3.5 shrink-0" />
+          <span>
+            This number is on more than one account. Showing <strong>{name}</strong> — it may not be who is writing.
+          </span>
+        </div>
+      )}
+
+      {/* Switcher — other threads WITH UNREAD (≤4, most recent first). Absent entirely at zero. */}
+      {switchable.length > 0 && (
+        <div data-testid="dock-switcher" className="shrink-0 border-b border-cream-line bg-white">
+          <div className="px-3 pt-1.5 text-[9px] font-bold uppercase tracking-wide text-deep-green/40">
+            Unread ({switchable.length})
+          </div>
+          {switchable.map((s) => (
+            <button
+              key={s.id}
+              type="button"
+              data-testid={`dock-switch-${s.id}`}
+              onClick={() => switchTo(s.id)}
+              className="flex w-full items-center gap-2 px-3 py-1.5 text-left text-xs text-deep-green hover:bg-cream-soft"
+            >
+              <PlayerAvatar name={s.player ? nameOf(s) : null} seed={s.phone_number} channel={s.channel} size="sm" isMember={s.player?.is_member === true} />
+              <span className="truncate font-semibold">{nameOf(s)}</span>
+              <span aria-hidden className="ml-auto h-2 w-2 shrink-0 rounded-full bg-coral" />
+            </button>
+          ))}
         </div>
       )}
 
