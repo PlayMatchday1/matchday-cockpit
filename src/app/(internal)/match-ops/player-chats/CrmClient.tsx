@@ -42,6 +42,7 @@ import {
   ChevronLeft,
   CircleCheck,
   Info,
+  Pin,
   RotateCcw,
   Star,
 } from "lucide-react";
@@ -124,6 +125,7 @@ export default function CrmClient() {
     selectedThreadId: selectedId, selectThread: setSelected,
     view, nowMs,
     loadThreads, loadDetail, loadOperators, onSent,
+    dockThread, dockedThreadId,
   } = useCrmConversation();
 
   const setFilters = useCallback(
@@ -948,6 +950,8 @@ export default function CrmClient() {
                 canManageStatus={canManageStatus}
                 onSetStatus={(action) => onSetThreadStatus(selectedId, action)}
                 whatsappWindowExpired={whatsappExpired}
+                onDock={() => dockThread(selectedId)}
+                isDocked={dockedThreadId === selectedId}
               />
             )}
           </section>
@@ -1397,6 +1401,8 @@ function Conversation({
   canManageStatus,
   onSetStatus,
   whatsappWindowExpired,
+  onDock,
+  isDocked,
 }: {
   selectedId: string;
   detail: ThreadDetail | null;
@@ -1418,6 +1424,8 @@ function Conversation({
   canManageStatus: boolean;
   onSetStatus: (action: "close" | "reopen") => void;
   whatsappWindowExpired: boolean;
+  onDock?: () => void;
+  isDocked?: boolean;
 }) {
   const messages = detail?.messages ?? [];
   const scrollRef = useRef<HTMLDivElement>(null);
@@ -1446,6 +1454,8 @@ function Conversation({
         threadStatus={threadStatus}
         canManageStatus={canManageStatus}
         onSetStatus={onSetStatus}
+        onDock={onDock}
+        isDocked={isDocked}
       />
       <div
         ref={scrollRef}
@@ -1634,6 +1644,8 @@ function ConversationHeader({
   threadStatus,
   canManageStatus,
   onSetStatus,
+  onDock,
+  isDocked,
 }: {
   detail: ThreadDetail | null;
   operators: Assignee[];
@@ -1648,6 +1660,8 @@ function ConversationHeader({
   threadStatus: "open" | "closed";
   canManageStatus: boolean;
   onSetStatus: (action: "close" | "reopen") => void;
+  onDock?: () => void;
+  isDocked?: boolean;
 }) {
   // Wrap onBack so any underlying touchstart/click ordering bugs
   // can't fall through to a parent handler. Bumped to h-11 w-11
@@ -1728,6 +1742,32 @@ function ConversationHeader({
           </div>
         </div>
       </div>
+      {/* Phase 19 Step 3a — pin this conversation to the dock so it follows the operator to other
+          Match Ops screens. The dock is hidden here on Player Chats; the DOCKED pill is the on-screen
+          confirmation that it's pinned. */}
+      {onDock &&
+        (isDocked ? (
+          <span
+            data-testid="dock-pin-current"
+            data-docked="1"
+            className="inline-flex shrink-0 items-center gap-1 rounded-full bg-deep-green/10 px-2 py-1 text-[10px] font-bold uppercase tracking-wide text-deep-green"
+            title="This chat is docked — it follows you across Match Ops"
+          >
+            <Pin aria-hidden className="h-3 w-3" /> Docked
+          </span>
+        ) : (
+          <button
+            type="button"
+            data-testid="dock-pin-current"
+            data-docked="0"
+            onClick={onDock}
+            aria-label="Dock this chat"
+            title="Dock this chat — keep it open on other Match Ops screens"
+            className="inline-flex h-8 w-8 shrink-0 items-center justify-center rounded-full text-deep-green/60 hover:bg-cream-soft hover:text-deep-green"
+          >
+            <Pin aria-hidden className="h-4 w-4" />
+          </button>
+        ))}
       <AssignDropdown
         current={detail.assignee}
         operators={operators}

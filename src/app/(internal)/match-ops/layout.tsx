@@ -28,6 +28,7 @@ import ChatsRail from "./ChatsRail";
 import MatchOpsMobileBar from "./MatchOpsMobileBar";
 import { visibleSections } from "./sections";
 import { CrmConversationProvider } from "@/lib/crmConversation";
+import CrmDock from "@/components/crm/CrmDock";
 
 const COLLAPSE_KEY = "matchops:rail-collapsed";
 
@@ -50,6 +51,9 @@ export default function MatchOpsLayout({
   // otherwise the phone would show two navs, and a horizontal nav scroller the
   // redesign exists to kill. Every other non-chat route still gets the strip.
   const isGameday = pathname === "/match-ops/gameday";
+  // The dock is HIDDEN on Player Chats itself (the full inbox + conversation is already there) and
+  // shown on every other Match Ops screen, so a pinned chat follows the operator everywhere else.
+  const isPlayerChats = pathname.startsWith("/match-ops/player-chats");
 
   const [collapsed, setCollapsed] = useState(false);
   useEffect(() => {
@@ -106,7 +110,12 @@ export default function MatchOpsLayout({
             survives navigation. Suspense wraps it because it reads useSearchParams (view +
             deep-link ?threadId). Every route is a consumer; only Player Chats reads it today. */}
         <Suspense fallback={null}>
-          <CrmConversationProvider>{children}</CrmConversationProvider>
+          <CrmConversationProvider>
+            {children}
+            {/* Phase 19 Step 3a: the docked player chat, a sibling of {children} INSIDE the provider
+                so it reads the same conversations map. Hidden on Player Chats (full inbox is there). */}
+            {!isPlayerChats && <CrmDock />}
+          </CrmConversationProvider>
         </Suspense>
       </div>
     </>

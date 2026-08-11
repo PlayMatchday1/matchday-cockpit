@@ -17,6 +17,7 @@ import { useCallback, useEffect, useMemo, useRef, useState } from "react";
 import { useRouter } from "next/navigation";
 import { supabase } from "@/lib/supabase";
 import { useAuth, canEditMatches, canManagePlayers } from "@/lib/useAuth";
+import { useDockSubject } from "@/lib/useDockSubject";
 import { FULL_EDITOR_ENV } from "@/lib/matchEnv";
 import { envBadge } from "@/lib/matchEnvBadge";
 import {
@@ -182,6 +183,10 @@ export default function PlayerLookup() {
   }, [recent]);
 
   const reloadProfile = useCallback(() => { if (profile) openProfile(profile.player.id); }, [profile, openProfile]);
+
+  // Phase 19 Step 3a — tell the docked player-chat which player THIS screen is about, so the dock
+  // raises Banner B if the operator has a different player's chat pinned. Inert when nothing is docked.
+  useDockSubject(profile?.player.id ?? null, profile?.player.name ?? null);
 
   const backToSearch = () => { setProfile(null); setProfileErr(null); };
 

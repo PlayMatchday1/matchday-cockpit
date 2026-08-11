@@ -108,7 +108,7 @@ function walk(dir: string): string[] {
   }
   return out;
 }
-const crmFiles = [...walk(CRM_DIR), "src/lib/crmConversation.tsx"];
+const crmFiles = [...walk(CRM_DIR), "src/lib/crmConversation.tsx", "src/components/crm/CrmDock.tsx"];
 const subscribeCount = crmFiles.reduce((n, f) => n + (readFileSync(f, "utf8").match(/\.subscribe\(/g)?.length ?? 0), 0);
 const channelCount = crmFiles.reduce((n, f) => n + (readFileSync(f, "utf8").match(/\.channel\(/g)?.length ?? 0), 0);
 eq("EXACTLY ONE realtime subscription across the CRM conversation code (feature + provider)", { channels: channelCount, subscribes: subscribeCount }, { channels: 1, subscribes: 1 });

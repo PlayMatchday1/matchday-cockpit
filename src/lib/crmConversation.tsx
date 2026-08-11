@@ -100,6 +100,22 @@ export type ThreadDetail = {
   latest_inbound_at: string | null;
 };
 
+// What the CURRENT Match Ops screen is about (a player + a human label). The dock compares it to
+// the docked thread's player to warn (Banner B) that you are chatting with someone other than the
+// person on screen. playerId is loose (number in rosters, string in a few callers) — compared by
+// string. label is what to show the operator ("Marco R.", "the player you're looking up").
+export type DockSubject = { playerId: string | number | null; label: string | null };
+
+const DOCK_THREAD_KEY = "crm:dockedThreadId";
+const DOCK_OPEN_KEY = "crm:dockOpen";
+function safeSession(): Storage | null {
+  try {
+    return window.sessionStorage;
+  } catch {
+    return null; // SSR / private mode
+  }
+}
+
 // ---------------- helpers (moved from CrmClient; bearerHeaders imported back there) ----------------
 
 export async function bearerHeaders(): Promise<Record<string, string> | null> {
@@ -171,6 +187,9 @@ export type CrmConversationValue = {
   undockThread: () => void;
   dockOpen: boolean;
   setDockOpen: React.Dispatch<React.SetStateAction<boolean>>;
+  // what the current screen is about (useDockSubject sets it) — drives Banner B.
+  dockSubject: DockSubject | null;
+  setDockSubject: React.Dispatch<React.SetStateAction<DockSubject | null>>;
   // the active status view (URL-derived) + a stable ref the loaders read
   view: StatusFilter;
   viewRef: React.MutableRefObject<StatusFilter>;
@@ -270,9 +289,15 @@ export function CrmConversationProvider({ children }: { children: ReactNode }) {
     });
   }, []);
 
-  // --------- dock state (carried into commit A per amendment 3; the UI + sessionStorage are B) ---------
+  // --------- dock state (Phase 19 Step 3a) ---------
+  // dockedThreadId + dockOpen persist to sessionStorage so the docked chat survives navigation AND
+  // a reload within the tab (sessionStorage, NOT localStorage — a docked chat is a per-tab working
+  // context, not a durable preference). dockSubject is what the CURRENT screen is about (set via
+  // useDockSubject), used only to raise Banner B when the docked chat is a different player.
   const [dockedThreadId, setDockedThreadId] = useState<string | null>(null);
   const [dockOpen, setDockOpen] = useState<boolean>(true);
+  const [dockSubject, setDockSubject] = useState<DockSubject | null>(null);
+  const dockRestoredRef = useRef(false);
 
   // Mirror the selection into the URL so a refresh reopens the thread and deep links keep working —
   // but the PROVIDER stays the source of truth (selection is state, read from ?threadId only once
@@ -440,6 +465,57 @@ export function CrmConversationProvider({ children }: { children: ReactNode }) {
     [loadDetail],
   );
   const undockThread = useCallback(() => setDockedThreadId(null), []);
+
+  // Restore the docked thread ONCE on mount from sessionStorage. A DEAD thread (deleted/merged →
+  // the detail fetch 404s) clears the stored dock SILENTLY rather than restoring a broken panel.
+  // The fetch (not dockThread) is used so a 404 is observable and clears storage.
+  useEffect(() => {
+    const store = safeSession();
+    const storedId = store?.getItem(DOCK_THREAD_KEY) ?? null;
+    const storedOpen = store?.getItem(DOCK_OPEN_KEY);
+    if (!storedId) {
+      dockRestoredRef.current = true;
+      return;
+    }
+    let cancelled = false;
+    (async () => {
+      try {
+        const headers = await bearerHeaders();
+        if (!headers) throw new Error("no-session");
+        const res = await fetch(`/api/crm/threads/${storedId}`, { headers });
+        if (!res.ok) throw new Error(`HTTP ${res.status}`);
+        const j = (await res.json()) as ThreadDetail;
+        if (cancelled) return;
+        setCore((s) =>
+          s.conversations[storedId]
+            ? s
+            : { ...s, conversations: { ...s.conversations, [storedId]: j } },
+        );
+        setDockedThreadId(storedId);
+        setDockOpen(storedOpen !== "0");
+      } catch {
+        // Dead/unreachable thread — clear it silently so we never restore a broken dock.
+        store?.removeItem(DOCK_THREAD_KEY);
+        store?.removeItem(DOCK_OPEN_KEY);
+      } finally {
+        dockRestoredRef.current = true;
+      }
+    })();
+    return () => {
+      cancelled = true;
+    };
+  }, []);
+
+  // Persist dock state — but NOT until the restore has run, so the initial null render can't clobber
+  // a stored id before we read it.
+  useEffect(() => {
+    if (!dockRestoredRef.current) return;
+    const store = safeSession();
+    if (!store) return;
+    if (dockedThreadId) store.setItem(DOCK_THREAD_KEY, dockedThreadId);
+    else store.removeItem(DOCK_THREAD_KEY);
+    store.setItem(DOCK_OPEN_KEY, dockOpen ? "1" : "0");
+  }, [dockedThreadId, dockOpen]);
 
   // --------- realtime (B2: moved here from CrmClient — one channel, five handlers, now mounted
   // in the persistent provider so messages keep arriving while navigated away). Bodies unchanged;
@@ -622,7 +698,7 @@ export function CrmConversationProvider({ children }: { children: ReactNode }) {
     counts, setCounts, operators, setOperators, operatorsById,
     conversations, detail, setDetail, detailError, setDetailError, detailLoading, setDetailLoading, realtimeOk, setRealtimeOk,
     selectedThreadId, selectThread, view, viewRef, nowMs,
-    dockedThreadId, dockThread, undockThread, dockOpen, setDockOpen,
+    dockedThreadId, dockThread, undockThread, dockOpen, setDockOpen, dockSubject, setDockSubject,
     loadThreads, loadDetail, loadOperators, scheduleReload, refreshDetailForMediaInsert, onSent,
   };
 
