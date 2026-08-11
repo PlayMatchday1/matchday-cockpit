@@ -159,7 +159,17 @@ export default function RosterEditor({ matchId }: { matchId: number }) {
       st.say(target ? `Swapped ${carried.name} with ${target.name}` : `${carried.name} moved to ${st.teams[t].name} #${n}`);
       st.stopPlacing();
     };
-    const capture = !(typeof window !== "undefined" && (window as unknown as { __ROSTER_PLACE_BUBBLE__?: boolean }).__ROSTER_PLACE_BUBBLE__);
+    // __ROSTER_PLACE_BUBBLE__ is an E2E-ONLY hook (armed by scripts/e2e/verify-roster.mjs) that
+    // flips this click listener to bubble-phase so Playwright's taps land. Gate the window read on
+    // NODE_ENV !== "production" — same policy as the realtime test seam in supabase.ts — so Next
+    // dead-code-eliminates it from the production bundle. No prod behaviour change: nothing sets the
+    // flag in production, so `capture` was already always true there. E2E runs on the dev build, so
+    // the hook still works. (Enforced by scripts/seam-stripped-test.ts.)
+    const bubbleHook =
+      process.env.NODE_ENV !== "production" &&
+      typeof window !== "undefined" &&
+      (window as unknown as { __ROSTER_PLACE_BUBBLE__?: boolean }).__ROSTER_PLACE_BUBBLE__ === true;
+    const capture = !bubbleHook;
     document.addEventListener("click", onTap, capture);
     return () => document.removeEventListener("click", onTap, capture);
   }, []);

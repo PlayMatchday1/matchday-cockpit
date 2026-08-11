@@ -13,6 +13,11 @@ import "server-only"; // no-op under --conditions=react-server
 //       seam code escaping the guard, or the guard being removed — at the source, before any build.
 //       Stronger than a blind grep, which can only run after a build and which in DEV legitimately
 //       finds the seam (dev IS non-production).
+//   (A2) GENERAL: the seam is one instance of a CLASS — app code trusting a page-settable global.
+//       Scan ALL of src/ for any window.__* / globalThis.__* reference (read OR write; direct, via a
+//       type cast, or via a `= window` alias) that is NOT protected by a NODE_ENV !== "production"
+//       guard (a brace block OR an inline check on the same statement), and fail on each. Closes the
+//       class by any name/file so a future seam can't slip in under a different identifier.
 //   (B) ARTIFACT (ALWAYS — never a silent skip): build a fresh isolated PRODUCTION bundle (via
 //       NEXT_DIST_DIR so it can't touch a running `next dev` .next), then grep its client chunks and
 //       assert 0 occurrences. A build that FAILS fails this check (with the tail of the error) — it
@@ -57,6 +62,72 @@ function allInside(src: string, id: string, block: { open: number; close: number
   return { count, allInside: inside };
 }
 
+function walk(dir: string): string[] {
+  const out: string[] = [];
+  for (const e of readdirSync(dir, { withFileTypes: true })) {
+    const p = join(dir, e.name);
+    if (e.isDirectory()) out.push(...walk(p));
+    else out.push(p);
+  }
+  return out;
+}
+
+// Blank comments in place (same length, newlines kept) so byte offsets — hence line numbers — still
+// map to the raw file, while comment text can no longer match a pattern.
+const blankComments = (s: string) =>
+  s.replace(/\/\/[^\n]*/g, (m) => " ".repeat(m.length))
+   .replace(/\/\*[\s\S]*?\*\//g, (m) => m.replace(/[^\n]/g, " "));
+
+// All `if (process.env.NODE_ENV !== "production" …) { … }` block ranges in a file.
+function nodeEnvBlocks(src: string): Array<{ open: number; close: number }> {
+  const blocks: Array<{ open: number; close: number }> = [];
+  let from = 0, i: number;
+  while ((i = src.indexOf('if (process.env.NODE_ENV !== "production"', from)) !== -1) {
+    const open = src.indexOf("{", i);
+    if (open === -1) break;
+    let depth = 0, close = -1;
+    for (let j = open; j < src.length; j++) {
+      if (src[j] === "{") depth++;
+      else if (src[j] === "}") { depth--; if (depth === 0) { close = j; break; } }
+    }
+    if (close === -1) break;
+    blocks.push({ open, close });
+    from = close + 1;
+  }
+  return blocks;
+}
+
+// The statement around `at`: back to the nearest ; { }, forward to the next ;.
+function statementText(src: string, at: number): string {
+  let s = at; while (s > 0 && !";{}".includes(src[s - 1])) s--;
+  let e = at; while (e < src.length && src[e] !== ";") e++;
+  return src.slice(s, e);
+}
+const lineOf = (src: string, idx: number) => src.slice(0, idx).split("\n").length;
+
+// Byte offsets of every window.__*/globalThis.__* reference (read OR write; direct, cast, or via a
+// `= window` / `= globalThis` alias) NOT protected by a NODE_ENV !== "production" guard — a brace
+// block OR an inline check on the same statement.
+function unguardedGlobalRefs(blanked: string): number[] {
+  const blocks = nodeEnvBlocks(blanked);
+  const aliases = new Set<string>();
+  for (const m of blanked.matchAll(/(?:const|let|var)\s+(\w+)\s*=\s*(?:window|globalThis)\b/g)) aliases.add(m[1]);
+  const patterns = [/\b(?:window|globalThis)\b[^;]{0,300}?\.\s*(__\w+)/g];
+  for (const a of aliases) patterns.push(new RegExp(`\\b${a}\\s*\\.\\s*(__\\w+)`, "g"));
+  const seen = new Set<number>(); const out: number[] = [];
+  for (const re of patterns) {
+    for (const m of blanked.matchAll(re)) {
+      const idx = m.index ?? -1;
+      if (idx < 0 || seen.has(idx)) continue;
+      seen.add(idx);
+      const inBlock = blocks.some((b) => idx >= b.open && idx <= b.close);
+      const inline = statementText(blanked, idx).includes("process.env.NODE_ENV");
+      if (!inBlock && !inline) out.push(idx);
+    }
+  }
+  return out;
+}
+
 // ── (A) STRUCTURAL ─────────────────────────────────────────────────────────────────────────
 // Analyse CODE only — a prose mention of the identifier in a comment is fine (comments never ship),
 // so strip comments first. (Same approach as scripts/crm-characterize-test.ts.)
@@ -93,17 +164,33 @@ if (block) {
     : bad(`teeth: the structural check did NOT flag an escaped seam reference`);
 }
 
-// ── (B) ARTIFACT — build fresh, then grep. NEVER a silent skip. ───────────────────────────────
-function walk(dir: string): string[] {
-  const out: string[] = [];
-  for (const e of readdirSync(dir, { withFileTypes: true })) {
-    const p = join(dir, e.name);
-    if (e.isDirectory()) out.push(...walk(p));
-    else out.push(p);
+// ── (A2) GENERAL: no ungated window.__/globalThis.__ reference anywhere in src/ ────────────────
+{
+  const files = walk("src").filter((f) => /\.tsx?$/.test(f));
+  const findings: string[] = [];
+  for (const f of files) {
+    const blanked = blankComments(readFileSync(f, "utf8"));
+    for (const idx of unguardedGlobalRefs(blanked)) {
+      findings.push(`${f}:${lineOf(blanked, idx)}  ${blanked.slice(idx, idx + 70).replace(/\s+/g, " ").trim()}`);
+    }
   }
-  return out;
+  findings.length === 0
+    ? ok(`(A2) no window.__/globalThis.__ reference in src/ escapes a NODE_ENV guard (${files.length} files scanned)`)
+    : bad(`(A2) ${findings.length} ungated window-global reference(s) — each would ship to clients:\n      ${findings.join("\n      ")}`);
 }
 
+// teeth for (A2): block-guarded and inline-guarded refs pass; a bare one is flagged.
+{
+  const guardedBlock = `if (process.env.NODE_ENV !== "production") { const w = window as any; w.__X__ = 1; }`;
+  const guardedInline = `const y = process.env.NODE_ENV !== "production" && (window as any).__Z__ === true;`;
+  const leak = `(window as any).__EVIL__ = 1;`;
+  const b = unguardedGlobalRefs(guardedBlock).length, il = unguardedGlobalRefs(guardedInline).length, lk = unguardedGlobalRefs(leak).length;
+  (b === 0 && il === 0 && lk === 1)
+    ? ok(`teeth: (A2) passes block- and inline-guarded window.__ refs, flags a bare one`)
+    : bad(`teeth: (A2) guard/leak classification is wrong`, `block=${b} inline=${il} leak=${lk}`);
+}
+
+// ── (B) ARTIFACT — build fresh, then grep. NEVER a silent skip. ───────────────────────────────
 const TSCONFIG = "tsconfig.json";
 const savedTsconfig = readFileSync(TSCONFIG, "utf8");
 let buildOk = false, buildErr = "";
