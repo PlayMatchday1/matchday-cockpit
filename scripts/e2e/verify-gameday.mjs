@@ -162,7 +162,9 @@ async function main() {
   eq("short tile has a shortfall band; made tile has none", { short: !!(await page.$(tile(501) + ' [data-testid="fill-gap"]')), made: !!(await page.$(tile(502) + ' [data-testid="fill-gap"]')) }, { short: true, made: false });
 
   // ── GROUP ORDER: still-to-come, then cancelled, then finished ──
-  eq("group order is todo, cancelled, finished", await page.$$eval('[data-testid="bands"] > section', (els) => els.map((e) => e.getAttribute("data-testid"))), ["group-todo", "group-cancelled", "group-finished"]);
+  eq("group order is todo, in-play, cancelled, finished", await page.$$eval('[data-testid="bands"] > section', (els) => els.map((e) => e.getAttribute("data-testid"))), ["group-todo", "group-inplay", "group-cancelled", "group-finished"]);
+  // §0 in the detail view too: the kicked-off match (507) sits in IN PLAY, NOT still-to-come.
+  eq("in-play match (507, kicked off) is in the IN PLAY group, not still-to-come", await page.$eval(tile(507), (e) => e.closest("section").getAttribute("data-testid")), "group-inplay");
   eq("505 is in the cancelled group, 506 in finished", { cx: await page.$eval(tile(505), (e) => e.closest("section").getAttribute("data-testid")), fin: await page.$eval(tile(506), (e) => e.closest("section").getAttribute("data-testid")) }, { cx: "group-cancelled", fin: "group-finished" });
 
   // ── CANCELLED tile: solid badge, NO shortfall chip, NO auto-cancel countdown ──

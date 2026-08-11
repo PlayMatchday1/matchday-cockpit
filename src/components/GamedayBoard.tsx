@@ -22,9 +22,9 @@ import MatchDrawer, { DRAWER_W } from "@/components/MatchDrawer";
 import LogHealthBanner from "@/components/LogHealthBanner";
 import MatchOpsSectionSheet from "@/app/(internal)/match-ops/MatchOpsSectionSheet";
 import {
-  type ApiMatch, type BoardFilter, type RiskTier, type MatchGroup, GROUPS, byKickoff, matchGroup, minsUntil, fmtDur, localClock, tzAbbr,
+  type ApiMatch, type BoardFilter, type MatchGroup, GROUPS, byKickoff, matchGroup, minsUntil, fmtDur, localClock, deadlineClock, tzAbbr,
   realCount, fakeCount, capacity, openSpots, teamCount, short, shortBy, fill, flags, attention,
-  acLevel, minsToDeadline, nextRelease, nextMark, inCities, passesFilter, riskTier, MARKS,
+  acLevel, minsToDeadline, nextRelease, nextMark, inCities, passesFilter, stillToCome, riskTier, snapRail, vsMin, vsMinDelta, STD_LEAD, MARKS,
 } from "@/lib/gamedayModel";
 
 const ENV = DRAWER_ENV; // the board reads and edits the same environment as the drawer
@@ -59,7 +59,6 @@ export default function GamedayBoard() {
   // Snapshot (one line per match) vs Detail (the card view). Persisted per-user so a
   // field reload keeps the choice. Snapshot is the default — the whole day on one screen.
   const [view, setView] = useState<"snapshot" | "detail">("snapshot");
-  const [sort, setSort] = useState<"time" | "risk">("time");
   // Phone-only: the "Gameday Ops ▾" title opens the screen picker (replaces the tab strip).
   const [pickerOpen, setPickerOpen] = useState(false);
   const mheadRef = useRef<HTMLDivElement>(null);
@@ -108,7 +107,7 @@ export default function GamedayBoard() {
   const counts = useMemo(() => ({
     all: scope.length,
     att: scope.filter((m) => attention(m, now)).length,
-    upc: scope.filter((m) => minsUntil(m, now) > 0).length,
+    upc: scope.filter((m) => stillToCome(m, now)).length, // §0: the ONE predicate the group + rows use
   }), [scope, now]);
   const cityNames = useMemo(() => {
     const map = new Map<string, number>();
@@ -134,18 +133,13 @@ export default function GamedayBoard() {
     } catch { setVeo((v) => ({ ...v, [id]: !enabled })); say("Couldn't save the camera change", true); }
   };
 
-  // THE grouping — three groups (still-to-come, cancelled, finished), from the ONE
-  // matchGroup() function, shared by BOTH views so they can never disagree. Risk sort
-  // reorders ONLY the still-to-come group (red→amber→green, soonest cancel call first);
-  // cancelled and finished always sort by kickoff and never reshuffle on risk.
-  const RISK_RANK: Record<RiskTier, number> = { red: 0, amber: 1, green: 2 };
-  const grouped = useMemo(() => GROUPS.map((G) => {
-    let rows = visible.filter((m) => matchGroup(m, now) === G.k);
-    if (G.k === "todo" && sort === "risk") {
-      rows = rows.slice().sort((a, b) => (RISK_RANK[riskTier(a, now)] - RISK_RANK[riskTier(b, now)]) || (minsToDeadline(a, now) - minsToDeadline(b, now)) || byKickoff(a, b));
-    }
-    return { G, rows }; // `visible` is already byKickoff, so cancelled/finished stay time-ordered
-  }).filter((x) => x.rows.length), [visible, now, sort]);
+  // THE grouping — four groups (still-to-come, in-play, cancelled, finished), from the ONE
+  // matchGroup() function, shared by BOTH views so they can never disagree. Every group sorts
+  // by kickoff (`visible` is already byKickoff). The Risk sort was removed in Phase 21 §8: it
+  // duplicated the "Needs attention" filter — sorting risk to the top and filtering to it
+  // answer the same question, and the filter answers it better without reshuffling the day.
+  const grouped = useMemo(() => GROUPS.map((G) => ({ G, rows: visible.filter((m) => matchGroup(m, now) === G.k) }))
+    .filter((x) => x.rows.length), [visible, now]);
   const anyRows = grouped.some((x) => x.rows.length > 0);
 
   return (
@@ -174,10 +168,7 @@ export default function GamedayBoard() {
               <span className="mdaylab"><b data-testid="m-daylab">{shortDay(date)}</b>{date === today && <i>TODAY</i>}</span>
               <button className="marw" data-testid="m-day-next" aria-label="Next day" onClick={() => goDay(addDays(date, 1))}>›</button>
             </span>
-            <span className="seg mseg" role="group" aria-label="Sort">
-              <button className={sort === "time" ? "on" : ""} data-testid="m-sort-time" aria-pressed={sort === "time"} onClick={() => setSort("time")}>Time</button>
-              <button className={sort === "risk" ? "on" : ""} data-testid="m-sort-risk" aria-pressed={sort === "risk"} onClick={() => setSort("risk")}>Risk</button>
-            </span>
+            <button className="chip mtoday" data-testid="m-day-today" disabled={date === today} onClick={() => goDay(today)}>Today</button>
           </div>
           {/* ONE scroller: filters + cities together, the only horizontal scroll on the page. */}
           <div className="mchips" data-testid="mchips">
@@ -225,13 +216,10 @@ export default function GamedayBoard() {
 
         {view === "snapshot" && !loading && !err && (
           <div className="legend" data-testid="legend">
-            <span className="lg"><span className="sw red" />Short · cancel call within 2h</span>
-            <span className="lg"><span className="sw amb" />Short, call later today</span>
-            <span className="lg"><span className="sw grn" />Minimum met</span>
-            <span className="sortbar">Sort
-              <button className={"chip sm" + (sort === "time" ? " on" : "")} data-testid="sort-time" onClick={() => setSort("time")}>Time</button>
-              <button className={"chip sm" + (sort === "risk" ? " on" : "")} data-testid="sort-risk" onClick={() => setSort("risk")}>Risk</button>
-            </span>
+            <span className="lg"><span className="sw red" />Short · decide within 2h</span>
+            <span className="lg"><span className="sw amb" />Short (or exactly at the minimum)</span>
+            <span className="lg"><span className="sw grn" />Over the minimum</span>
+            <span className="legnote" data-testid="decideby-legend">Decide by is when the match auto-cancels — {STD_LEAD} minutes before kickoff — unless the minimum is met by then.</span>
           </div>
         )}
 
@@ -240,7 +228,7 @@ export default function GamedayBoard() {
           : !anyRows ? <div className="empty" data-testid="empty">Nothing to show for {dayLabel(date)} with these filters.</div>
           : view === "snapshot"
             ? <div className="sheet" data-testid="snapshot">
-                <div className="colhead"><span /><span>KICKOFF</span><span>MATCH · FIELD</span><span>SPOTS</span><span>SHORT</span><span>AUTO-CANCEL</span><span>MANAGER</span><span className="ra">PRICE</span></div>
+                <div className="colhead"><span /><span>KICKOFF</span><span>MATCH · FIELD</span><span>SPOTS</span><span>vs MIN</span><span>DECIDE BY</span><span>MANAGER</span><span className="ra">PRICE</span></div>
                 {grouped.map(({ G, rows }) => (
                   <section className={"grp grp-" + G.k} data-testid={`snap-group-${G.k}`} key={G.k}>
                     <h2 className="grouphd">{G.t}<span className="n">{rows.length}</span></h2>
@@ -293,6 +281,7 @@ function Tile({ m, now, group, veo, selected, onOpen, onRoster, onVeo, money }: 
   return (
     <button className={"row" + (isDone ? " done" : "") + (isCx ? " cx" : "") + (isTodo && lvl ? " " + lvl : "") + (selected ? " sel" : "")}
       data-testid="tile" data-id={m.id} data-group={group} data-ac={isTodo ? lvl : ""} data-cx={isCx ? 1 : 0}
+      data-real={real} data-fake={fk} data-open={open ?? ""} data-total={real + fk} data-min={Number(m.minPlayerCount ?? 0)} data-short={shortBy(m)}
       onClick={() => onOpen(m.id)} aria-label={`${m.name} at ${m.field?.title ?? ""}, ${localClock(m)} ${tzAbbr(m)}`}>
       <span className="hdr">
         <span className="when" data-testid="tile-when"><b>{localClock(m)}</b> <span className="tz">{tzAbbr(m)}</span><span className={"cd " + cdCls}>{cd}</span></span>
@@ -360,51 +349,82 @@ function Tile({ m, now, group, veo, selected, onOpen, onRoster, onVeo, money }: 
 function SnapRow({ m, now, group, selected, onOpen, money }: {
   m: ApiMatch; now: number; group: MatchGroup; selected: boolean; onOpen: (id: number) => void; money: (c: number | null | undefined) => string;
 }) {
-  const isTodo = group === "todo", isCx = group === "cancelled", isDone = group === "finished";
-  const cap = capacity(m), real = realCount(m), fk = fakeCount(m), open = openSpots(m);
-  const s = shortBy(m), rk = riskTier(m, now), ac = minsToDeadline(m, now), t = minsUntil(m, now);
+  const isTodo = group === "todo", isCx = group === "cancelled", isDone = group === "finished", isInPlay = group === "inplay";
+  const cap = capacity(m), real = realCount(m), fk = fakeCount(m), open = openSpots(m), total = real + fk;
+  const min = Number(m.minPlayerCount ?? 0);
+  const rk = riskTier(m, now), rail = snapRail(m, now), t = minsUntil(m, now);
   const f = fill(m);
   const moreFake = fk > real;
   const mgr = m.manager ? [m.manager.firstName, m.manager.lastName].filter(Boolean).join(" ").trim() || "—" : "none";
   const price = money(m.registrationPrice);
-  // Cancelled: "was due" (the slot still reads as a time, not the word "cancelled" — the
-  // CANCELLED badge already carries the state). Finished: "finished Nh ago".
-  const cd = isCx ? "was due" : t <= -90 ? `finished ${fmtDur(t)} ago` : t <= 0 ? "in play" : `in ${fmtDur(t)}`;
-  const acTxt = ac <= 0 ? "passed" : `in ${fmtDur(ac)}`;
-  // Risk rail ONLY for still-to-come; cancelled = red, finished = grey (muted).
-  const railCls = isCx ? "cxrow" : isDone ? "donerow" : "risk-" + rk;
-  const shortCls = cap == null ? "ok" : s === 0 ? "ok" : rk === "red" ? "bad" : "warn";
-  const shortTxt = cap == null ? "—" : s === 0 ? "OK" : `−${s}`;
+  // Countdown reads off the GROUP, not a second time threshold — §0 unified the predicate, so
+  // a STILL TO COME row is always "in Xm" and only an IN PLAY row ever says "in play".
+  const cd = isCx ? "was due" : isDone ? `finished ${fmtDur(t)} ago` : isInPlay ? "in play" : `in ${fmtDur(t)}`;
+  // ── vs MIN (§3/§5): ONE relationship — real − min — drives the marker glyph+fill AND this
+  // chip AND the printed minimum, so they are consistent by construction. over/at/short. ──
+  const vm = vsMin(m), d = vsMinDelta(m); // d is signed: +over / 0 / −short
+  const gapNum = vm === "over" ? `+${d}` : vm === "at" ? "0" : `−${Math.abs(d)}`; // prominent number
+  const gapWord = vm === "over" ? "over" : vm === "at" ? "at min" : "short";       // one short word
+  const vsMinCls = vm === "over" ? "over" : vm === "at" ? "atmin" : "short";
+  const markGlyph = vm === "short" ? "!" : "✓";                 // only below-min gets the bang (§3)
+  const markTitle = vm === "short" ? `${Math.abs(d)} short of the ${min} real players needed` : `Minimum ${min} real players`;
+  // ── DECIDE BY (§7): both clocks lead with an ABSOLUTE wall time in the match's own zone;
+  // the deadline is DERIVED (deadlineClock) so it can't drift. Kickoff sub is "in X" (an event
+  // you wait for); the deadline sub is "X left" / "passed" (a budget you spend) — never "in".
+  const ac = minsToDeadline(m, now);
+  const decideSub = ac <= 0 ? "passed" : `${fmtDur(ac)} left`;
+  // Prominence follows the shortfall (§7f): muted when over, amber at the line, loud/red short.
+  const decideCls = vm === "over" ? "cleared" : vm === "at" ? "atmin" : rail === "red" ? "short hot" : "short";
+  const leadDiffers = Number(m.autoCanceledMinutes ?? 0) !== STD_LEAD; // name the lead only if non-standard (§7e)
+  // Risk rail ONLY for still-to-come (green/amber/red incl. the at-min amber); in-play &
+  // finished = grey (muted), cancelled = red.
+  const railCls = isCx ? "cxrow" : (isDone || isInPlay) ? "donerow" : "tier-" + rail;
   return (
-    <button className={"r " + railCls + (selected ? " sel" : "")} data-testid="snap-row" data-id={m.id} data-group={group} data-risk={isTodo ? rk : ""} data-short={s} data-open={open ?? ""} data-real={real}
+    <button className={"r " + railCls + (selected ? " sel" : "")} data-testid="snap-row" data-id={m.id} data-group={group}
+      data-risk={isTodo ? rk : ""} data-rail={isTodo ? rail : (isCx ? "cx" : "done")} data-vsmin={isTodo ? vm : ""}
+      data-real={real} data-fake={fk} data-open={open ?? ""} data-total={total} data-min={min} data-short={shortBy(m)}
       onClick={() => onOpen(m.id)} aria-label={`${m.name} at ${m.field?.title ?? ""}, ${localClock(m)} ${tzAbbr(m)}`}>
       <span className="rail" />
-      <span className="cell c-time"><span className="t1">{localClock(m)}<em>{tzAbbr(m)}</em></span>{cd ? <span className="t2">{cd}</span> : null}</span>
+      <span className="cell c-time"><span className="t1">{localClock(m)}<em>{tzAbbr(m)}</em></span><span className="t2">{cd}</span></span>
       <span className="cell c-match">
         <span className="m1">{m.name}{isTodo && moreFake && <span className="flag" data-testid="more-fake">MORE FAKE</span>}</span>
         <span className="m2">{(m.field?.title ?? "—")} · {m.field?.city?.name ?? "—"}</span>
       </span>
       <span className="cell c-spots">
         {cap == null ? <span className="spotln" data-testid="snap-spots">special event · no cap</span> : <>
-          <span className="bar"><span className="seg1" style={{ width: `${f!.realPct}%` }} /><span className="seg2" style={{ left: `${f!.realPct}%`, width: `${f!.fakePct}%` }} />{isTodo && <span className="tick" data-testid="snap-tick" style={{ left: `calc(${f!.minPct}% - 1px)` }} />}</span>
-          <span className="spotln" data-testid="snap-spots"><b>{real}</b> real · <span className="fk">{fk} fake</span> · {open} open of {cap}</span>
+          {/* Bar in flow; the marker (centred on it) and the printed minimum (below it) are its
+              children so the marker stays centred whatever the bar height and the label hangs
+              directly under the line. Marker reads the SOLID edge only — hatch may run past it. */}
+          <span className="barwrap">
+            <span className="bar">
+              <span className="seg1" style={{ width: `${Math.min(100, f!.realPct)}%` }} />
+              {/* clamp the hatch to the track (over-redemption can push real+fake past capacity);
+                  the bar is overflow:visible for the marker, so an unclamped hatch would spill. */}
+              {fk > 0 && <span className="seg2" style={{ left: `${Math.min(100, f!.realPct)}%`, width: `${Math.max(0, Math.min(f!.fakePct, 100 - f!.realPct))}%` }} />}
+              {isTodo && <span className="minlab" data-testid="snap-min" style={{ left: `clamp(20px, ${f!.minPct}%, calc(100% - 20px))` }}>min {min}</span>}
+              {isTodo && <span className={"marker " + vsMinCls} data-testid="snap-marker" data-state={vm} style={{ left: `${f!.minPct}%` }} title={markTitle}>{markGlyph}</span>}
+            </span>
+            {/* §1: real · fake · TOTAL of CAP spots — four numbers, no "open", no arithmetic to do. */}
+            <span className="spotln" data-testid="snap-spots"><b>{real}</b> real · <span className={"fk" + (fk === 0 ? " z" : "")}><b>{fk}</b> fake</span> · <b>{total}</b> total <span className="ofcap">of {cap} spots</span></span>
+          </span>
         </>}
       </span>
       <span className="cell c-short">
-        {/* Cancelled: a solid CANCELLED badge where the shortfall chip goes — no −N, no countdown.
-            Finished: nothing (no shortfall to fix). Only still-to-come shows the −N chip. */}
-        {isCx ? <span className="short cxbadge" data-testid="snap-cx-badge">CANCELLED</span>
-          : isDone ? <span className="short none" data-testid="snap-short">—</span>
-          : <><span className={"short " + shortCls} data-testid="snap-short">{shortTxt}</span><span className="minln">{real} of {m.minPlayerCount ?? 0}</span></>}
+        {/* §5: one prominent signed number + one short word. Cancelled keeps its solid badge;
+            in-play/finished have no minimum to make, so a dash. Only still-to-come shows vs MIN. */}
+        {isCx ? <span className="vsmin cxbadge" data-testid="snap-cx-badge">CANCELLED</span>
+          : (isDone || isInPlay) ? <span className="vsmin none" data-testid="snap-short">—</span>
+          : cap == null ? <span className="vsmin none" data-testid="snap-short">—</span>
+          : <span className={"vsmin " + vsMinCls} data-testid="snap-short"><b>{gapNum}</b>{" "}<span className="w">{gapWord}</span></span>}
       </span>
       <span className="cell c-cxl">
         {isTodo ? <>
-          <span className={"c1" + (rk === "red" ? " hot" : "")}>{acTxt}</span>
-          <span className="c2">cancels {m.autoCanceledMinutes ?? 0}m before</span>
-          <span className="cxlmob" data-testid="snap-cxlmob">cancel {acTxt} · {m.autoCanceledMinutes ?? 0}m before · {mgr} · {price}</span>
+          <span className="c1 clk">{deadlineClock(m)}<em>{tzAbbr(m)}</em></span>
+          <span className={"c2 " + decideCls} title={`Auto-cancels ${m.autoCanceledMinutes ?? 0} minutes before kickoff unless the minimum is met`}>{decideSub}{leadDiffers ? <span className="lead">cancels {m.autoCanceledMinutes ?? 0}m before</span> : null}</span>
+          <span className="cxlmob" data-testid="snap-cxlmob"><b>{deadlineClock(m)}</b> {tzAbbr(m)} · {decideSub} · {mgr} · {price}</span>
         </> : <>
           <span className="c1 dash">—</span>
-          <span className="cxlmob" data-testid="snap-cxlmob">{isCx ? "cancelled" : "finished"} · {mgr} · {price}</span>
+          <span className="cxlmob" data-testid="snap-cxlmob">{isCx ? "cancelled" : isInPlay ? "in play" : "finished"} · {mgr} · {price}</span>
         </>}
       </span>
       <span className="cell c-mgr"><span className="mgr">{mgr}</span></span>
@@ -518,24 +538,28 @@ const CSS = `
 .gdo .legend .lg{display:inline-flex;align-items:center;gap:6px}
 .gdo .legend .sw{width:11px;height:11px;border-radius:3px;display:inline-block;flex:0 0 11px}
 .gdo .legend .sw.red{background:#A83120}.gdo .legend .sw.amb{background:#B8860B}.gdo .legend .sw.grn{background:#046B45}
-.gdo .legend .sortbar{margin-left:auto;display:inline-flex;align-items:center;gap:7px}
+/* the decide-by mechanism, stated ONCE (§7e) instead of on every row */
+.gdo .legend .legnote{flex-basis:100%;margin-top:2px;color:#3D5349;font-size:11.5px}
 .gdo .chip.sm{padding:5px 11px;font-size:12px;min-height:30px}.gdo .chip.sm.on{background:#003326;border-color:#003326;color:#fff}
 .gdo .sheet{background:#fff;border:1px solid #DCE5E0;border-radius:14px;overflow:hidden}
-.gdo .colhead,.gdo .sheet .r{display:grid;align-items:center;gap:12px;grid-template-columns:5px 96px minmax(150px,1.5fr) minmax(150px,1.25fr) 108px 112px 92px 62px}
+.gdo .colhead,.gdo .sheet .r{display:grid;align-items:center;gap:12px;grid-template-columns:5px 108px minmax(150px,1fr) minmax(232px,1.6fr) 94px 122px 78px 56px}
 .gdo .colhead{padding:9px 14px 9px 0;border-bottom:1px solid #DCE5E0;background:#FAFCFB;font-size:10px;font-weight:800;letter-spacing:.11em;color:#536258}
 .gdo .colhead .ra{text-align:right}
-.gdo .sheet .r{padding:0 14px 0 0;border:0;border-bottom:1px solid #DCE5E0;background:#fff;width:100%;text-align:left;font:inherit;color:inherit;cursor:pointer;min-height:56px}
+/* Rows grow to ~76px to carry the marker + printed minimum under the bar (§2). A firm
+   min-height keeps EVERY row (todo, in-play, cancelled, finished, special-event) the same
+   height within a pixel — the marker content fits inside it, so nothing overflows past ~76px. */
+.gdo .sheet .r{padding:0 14px 0 0;border:0;border-bottom:1px solid #DCE5E0;background:#fff;width:100%;text-align:left;font:inherit;color:inherit;cursor:pointer;min-height:76px}
 .gdo .sheet .r:last-child{border-bottom:0}.gdo .sheet .r:hover{background:#F7FBF9}
 .gdo .sheet .r:focus-visible{outline:2px solid #046B45;outline-offset:-2px}
 .gdo .sheet .r.sel{background:#EAF9F1}
 .gdo .sheet .rail{align-self:stretch;display:block;background:#CCD7D1}
-.gdo .sheet .r.risk-red .rail{background:#A83120}.gdo .sheet .r.risk-amber .rail{background:#B8860B}.gdo .sheet .r.risk-green .rail{background:#046B45}
-.gdo .sheet .r.risk-red{background:#FDEEEB}.gdo .sheet .r.risk-red:hover{background:#FBE2DF}
+/* Three distinct rail colours (§6): green over-min, amber at-line/short-far, red short-and-
+   imminent. The at-min tier joins amber (snapRail), so exactly-on-the-line never reads green. */
+.gdo .sheet .r.tier-red .rail{background:#A83120}.gdo .sheet .r.tier-amber .rail{background:#B8860B}.gdo .sheet .r.tier-green .rail{background:#046B45}
+.gdo .sheet .r.tier-red{background:#FDEEEB}.gdo .sheet .r.tier-red:hover{background:#FBE2DF}
 /* snapshot CANCELLED — red rail + red bg, struck name; FINISHED — grey rail, muted. */
 .gdo .sheet .r.cxrow .rail{background:#A83120}.gdo .sheet .r.cxrow{background:#FBE4E0}.gdo .sheet .r.cxrow:hover{background:#F7D6D0}.gdo .sheet .r.cxrow .m1{text-decoration:line-through;text-decoration-color:#C98B83}
 .gdo .sheet .r.donerow .rail{background:#C3CCC7}.gdo .sheet .r.donerow{opacity:.66}
-.gdo .sheet .short.cxbadge{background:#A83120;color:#fff;border:1px solid #A83120;min-width:auto;padding:3px 9px;letter-spacing:.05em}
-.gdo .sheet .short.none{background:transparent;border:0;color:#536258;min-width:auto}
 .gdo .sheet .c1.dash{color:#536258;font-weight:600}
 .gdo .grouphd{margin:0 0 9px 3px;font-size:12px;letter-spacing:.11em;color:#55635B;font-weight:700;display:flex;align-items:center;gap:8px}
 .gdo .grouphd .n{color:#4E5A54;letter-spacing:0;font-weight:600;font-size:12.5px}
@@ -546,21 +570,51 @@ const CSS = `
 .gdo .sheet .m1{display:block;font-weight:700;white-space:nowrap;overflow:hidden;text-overflow:ellipsis}
 .gdo .sheet .m2{display:block;font-size:12px;color:#536258;white-space:nowrap;overflow:hidden;text-overflow:ellipsis}
 .gdo .sheet .flag{display:inline-block;margin-left:6px;vertical-align:1px;background:#FBF0DC;color:#7A5200;border:1px solid #E3C88A;font-size:9.5px;font-weight:800;letter-spacing:.05em;padding:1px 5px;border-radius:4px;white-space:nowrap}
-.gdo .sheet .bar{display:block;position:relative;height:7px;border-radius:4px;background:#EEF3F0;overflow:hidden}
-.gdo .sheet .seg1,.gdo .sheet .seg2{position:absolute;top:0;bottom:0;display:block}
-.gdo .sheet .seg1{left:0;background:#046B45}
-.gdo .sheet .seg2{background:repeating-linear-gradient(135deg,#E5A83A 0 4px,#F3CD8E 4px 8px)}
-.gdo .sheet .tick{position:absolute;top:0;bottom:0;width:2px;background:#0B1F17;display:block;border-radius:1px;z-index:2}
-.gdo .sheet .spotln{display:block;margin-top:5px;font-size:12px;color:#3D5349;font-variant-numeric:tabular-nums;white-space:nowrap;overflow:hidden;text-overflow:ellipsis}
-.gdo .sheet .spotln b{color:#0B1F17}.gdo .sheet .spotln .fk{color:#7A5200}
-.gdo .sheet .c-short{display:flex;align-items:baseline;gap:7px}
-.gdo .sheet .short{display:inline-flex;align-items:center;justify-content:center;min-width:50px;padding:3px 8px;border-radius:7px;font-weight:800;font-variant-numeric:tabular-nums;font-size:13px;flex:0 0 auto}
-.gdo .sheet .short.bad{background:#FDEEEB;color:#A83120;border:1px solid #F0A9A4}
-.gdo .sheet .short.warn{background:#FBF0DC;color:#7A5200;border:1px solid #E3C88A}
-.gdo .sheet .short.ok{background:#E6F4EC;color:#046B45;border:1px solid #9FD3B6}
-.gdo .sheet .minln{display:block;font-size:11.5px;color:#536258;font-variant-numeric:tabular-nums;white-space:nowrap}
-.gdo .sheet .c1{display:block;font-weight:700;font-variant-numeric:tabular-nums}.gdo .sheet .c1.hot{color:#A83120}
-.gdo .sheet .c2{display:block;font-size:11.5px;color:#536258}
+/* ── the bar + the minimum MARKER + the printed minimum (§2/§3/§4) ──
+   Bar in normal flow; the marker (centred on it) and the "min N" label (hanging just below)
+   are its children, and the counts sit under the bar with a fixed gap. overflow:visible so the
+   17px marker isn't clipped by the 10px bar. */
+.gdo .sheet .barwrap{display:block;position:relative;padding:2px 0 0}
+.gdo .sheet .bar{display:block;position:relative;height:10px;border-radius:6px;background:#E7EEEA;overflow:visible}
+.gdo .sheet .seg1,.gdo .sheet .seg2{position:absolute;top:0;bottom:0;display:block;border-radius:6px}
+.gdo .sheet .seg1{left:0;background:#046B45;z-index:2}
+.gdo .sheet .seg2{background:repeating-linear-gradient(135deg,#E5A83A 0 4px,#F3CD8E 4px 8px);z-index:1}
+/* the ~17px marker, centred on the minimum. GLYPH + FILL both change with state, never colour
+   alone (§3): solid green ✓ over-min; hollow white/amber ✓ AT the line; solid amber ! below.
+   Driven only by (real − min) — the hatch may run past it and must not change it (§4). */
+.gdo .sheet .marker{position:absolute;top:50%;transform:translate(-50%,-50%);z-index:4;width:17px;height:17px;border-radius:5px;display:flex;align-items:center;justify-content:center;font-size:11px;font-weight:900;line-height:1;border:1.5px solid;box-sizing:border-box}
+.gdo .sheet .marker.over{background:#046B45;border-color:#0E5433;color:#fff}
+.gdo .sheet .marker.atmin{background:#fff;border-color:#8a5600;color:#8a5600}
+.gdo .sheet .marker.short{background:#8a5600;border-color:#6D4400;color:#fff;font-size:12px}
+/* the printed minimum, hanging under the marker, clamped to stay inside the bar (§2/§11).
+   #4a6157, not the standard muted grey (4.44:1 was just under 4.5 on the row bg). */
+.gdo .sheet .minlab{position:absolute;top:100%;margin-top:4px;transform:translateX(-50%);z-index:3;font-size:10px;font-weight:700;color:#4a6157;white-space:nowrap;font-variant-numeric:tabular-nums;letter-spacing:.02em}
+/* ── counts line: four numbers, no "open", nothing to subtract (§1). zero fakes render muted. ── */
+.gdo .sheet .spotln{display:block;margin-top:20px;font-size:12px;color:#3D5349;font-variant-numeric:tabular-nums;white-space:nowrap;overflow:hidden;text-overflow:ellipsis}
+.gdo .sheet .spotln b{color:#0B1F17;font-weight:800}
+.gdo .sheet .spotln .fk b{color:#7A5200}.gdo .sheet .spotln .fk.z b{color:#4a6157;font-weight:700}
+.gdo .sheet .spotln .ofcap{color:#4a6157;font-weight:600;margin-left:3px}
+/* ── vs MIN chip (§5): a PROMINENT signed number + one small word, ALL chips the same height. ── */
+.gdo .sheet .c-short{display:flex;align-items:center}
+.gdo .sheet .vsmin{display:inline-flex;align-items:baseline;gap:5px;height:24px;padding:0 9px;border-radius:8px;font-variant-numeric:tabular-nums;white-space:nowrap;box-sizing:border-box;border:1px solid}
+.gdo .sheet .vsmin b{font-size:13px;font-weight:800;line-height:24px}
+.gdo .sheet .vsmin .w{font-size:10px;font-weight:700;letter-spacing:.03em}
+.gdo .sheet .vsmin.over{background:#E6F4EC;color:#046B45;border-color:#9FD3B6}
+.gdo .sheet .vsmin.atmin{background:#FBF0DC;color:#7A5200;border-color:#E3C88A}
+.gdo .sheet .vsmin.short{background:#FDEEEB;color:#A83120;border-color:#F0A9A4}
+.gdo .sheet .vsmin.none{border-color:transparent;background:transparent;color:#536258;padding:0}
+.gdo .sheet .vsmin.cxbadge{border-color:#A83120;background:#A83120;color:#fff;padding:0 9px;font-weight:800;letter-spacing:.05em;align-items:center}
+/* ── DECIDE BY (§7): absolute clock + a "X left"/"passed" sub whose colour AND weight follow
+      the shortfall — muted when over, amber at the line, loud/red when short. ── */
+.gdo .sheet .c1.clk{display:block;font-weight:700;font-variant-numeric:tabular-nums}
+.gdo .sheet .c1.clk em{font-style:normal;font-size:10px;font-weight:800;color:#536258;letter-spacing:.06em;margin-left:4px}
+.gdo .sheet .c2{display:block;font-size:11.5px;margin-top:1px;color:#536258;line-height:1.35}
+.gdo .sheet .c2.cleared{color:#5C7168;font-weight:400}
+.gdo .sheet .c2.atmin{color:#7A5200;font-weight:600}
+.gdo .sheet .c2.short{color:#7A5200;font-weight:700}
+.gdo .sheet .c2.short.hot{color:#A83120;font-weight:800}
+/* the non-standard lead time goes on its OWN line so it can't wrap the row taller (§7e) */
+.gdo .sheet .c2 .lead{display:block;font-size:10px;color:#5C7168;font-weight:400;letter-spacing:.01em}
 .gdo .sheet .mgr{display:block;font-size:13px;color:#3D5349;white-space:nowrap;overflow:hidden;text-overflow:ellipsis}
 .gdo .sheet .price{display:block;text-align:right;font-weight:700;font-variant-numeric:tabular-nums}
 .gdo .sheet .cxlmob{display:none}
@@ -599,6 +653,8 @@ const CSS = `
   .gdo .marw:active{background:#EEF4F1}
   .gdo .mdaylab{display:flex;align-items:baseline;gap:6px;font-weight:700;font-size:14px;padding:0 4px;white-space:nowrap}
   .gdo .mdaylab i{font-style:normal;font-size:9.5px;font-weight:800;letter-spacing:.1em;color:#046B45}
+  .gdo .mtoday{margin-left:auto;flex:0 0 auto;min-height:34px;padding:0 14px;font-size:12.5px}
+  .gdo .mtoday:disabled{opacity:.45}
   .gdo .mchips{display:flex;align-items:center;gap:7px;overflow-x:auto;padding:6px 12px;min-height:44px;scrollbar-width:none;-webkit-overflow-scrolling:touch;background:#F6F9F7}
   .gdo .mchips::-webkit-scrollbar{display:none}
   .gdo .mchips .chip{flex:0 0 auto;min-height:32px;padding:0 12px;display:inline-flex;align-items:center;font-size:12.5px}
@@ -644,6 +700,5 @@ const CSS = `
   .gdo .sheet .cxlmob{display:block;font-size:12px;color:#536258;white-space:nowrap;overflow:hidden;text-overflow:ellipsis}
   .gdo .sheet .m1{white-space:normal;overflow:visible;text-overflow:clip}   /* match name never truncates */
   .gdo .sheet .t1{display:inline}.gdo .sheet .t2{display:inline;margin-left:8px}
-  .gdo .sheet .bar{height:9px}
 }
 `;

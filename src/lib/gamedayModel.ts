@@ -91,6 +91,24 @@ export function localClock(m: ApiMatch): string {
   h = h % 12 === 0 ? 12 : h % 12;
   return `${h}:${mm} ${ap}`;
 }
+// The DECIDE-BY wall-clock in the match's own city (Phase 21 §7). DERIVED from the kickoff
+// wall string minus the lead — the two clocks can never drift because the deadline is never
+// carried as its own string. Same discipline as localClock: parse HH:MM off startDate (a
+// wall-clock value with no zone) and do integer-minute arithmetic. NEVER new Date() here —
+// the deadline shares the kickoff's timezone, so subtracting minutes in wall time is exact.
+export function deadlineClock(m: ApiMatch): string {
+  const t = /T(\d{2}):(\d{2})/.exec(m.startDate || "");
+  if (!t) return "";
+  let mins = Number(t[1]) * 60 + Number(t[2]) - n(m.autoCanceledMinutes);
+  mins = ((mins % 1440) + 1440) % 1440;                // wrap into the same day
+  let h = Math.floor(mins / 60); const mm = String(mins % 60).padStart(2, "0");
+  const ap = h >= 12 ? "PM" : "AM"; h = h % 12 === 0 ? 12 : h % 12;
+  return `${h}:${mm} ${ap}`;
+}
+// The standard auto-cancel lead. A row states its lead only when it DIFFERS from this; the
+// mechanism ("auto-cancels this many minutes before kickoff") is stated ONCE in the legend
+// (Phase 21 §7e), not repeated identically on every row.
+export const STD_LEAD = 75;
 export const tzAbbr = (m: ApiMatch): string => m.field?.city?.timeZone?.abbr?.trim() || "";
 // The date the operator files this match under — its LOCAL wall-clock calendar date
 // (YYYY-MM-DD), which is exactly how the API's fromDate/toDate filter bounds it.
@@ -121,23 +139,39 @@ export const BANDS: { k: Band; t: string }[] = [
   { k: "cx", t: "CANCELLED" },
 ];
 
-// ── the three top-level GROUPS (Phase 18) ────────────────────────────────────
+// ── THE ONE "still to come" predicate (Phase 21 §0) ──────────────────────────
+// Three things used to disagree about this set: the header chip compared kickoff to now
+// (minsUntil > 0); the STILL TO COME group used matchGroup, which held anything within 90m
+// PAST kickoff (minsUntil > DONE_MIN); and the row printed "in play" the instant kickoff
+// passed (minsUntil <= 0). So a match kicked off 20m ago read "in play" while sitting inside
+// a group that counted it as still-to-come, and the chip left it out entirely — one set, three
+// numbers. Now there is ONE rule and everyone calls it: a match is STILL TO COME iff its
+// kickoff is in the future. Anything past kickoff is in play (or, >90m later, finished). A
+// cancelled match is never "still to come" whatever its clock — its outcome is settled.
+export const stillToCome = (m: ApiMatch, now: number): boolean => !m.isCancelled && minsUntil(m, now) > 0;
+// In play: kicked off, not cancelled, not yet finished (< 90m past kickoff).
+export const inPlay = (m: ApiMatch, now: number): boolean => !m.isCancelled && minsUntil(m, now) <= 0 && minsUntil(m, now) > DONE_MIN;
+
+// ── the top-level GROUPS ──────────────────────────────────────────────────────
 // The board splits by outcome, not just time: only STILL TO COME rows are actionable
-// (risk rails, shortfall chips, auto-cancel countdowns). CANCELLED and FINISHED get their
-// own treatment and NO risk tier — a cancelled match has no shortfall to fix, and a
-// countdown to a cancel call that already passed is noise. ONE function, used by BOTH
-// the Detail and Snapshot views, so they can never disagree about a match's group.
-// Order is deliberate: cancelled (a costly outcome, may need follow-up) sits ABOVE
-// finished (routine, nothing to do). "todo" includes in-play matches (kicked off but
-// <90m ago) — they're not finished and not cancelled, and their risk already no-ops.
-export type MatchGroup = "todo" | "cancelled" | "finished";
+// (risk rails, shortfall chips, decide-by countdowns). IN PLAY, CANCELLED and FINISHED get
+// their own treatment and NO risk tier — a match already kicked off has no shortfall to
+// fix, and a countdown to a decision that already passed is noise. ONE function, used by BOTH
+// the Detail and Snapshot views, so they can never disagree about a match's group — and built
+// on the SAME stillToCome() predicate the chip and the rows use (Phase 21 §0), so the STILL
+// TO COME count is identical everywhere. Order is deliberate: still-to-come (actionable) at
+// top, then in-play (happening now, informational), then the two settled outcomes — cancelled
+// (costly, may need follow-up) above finished (routine, nothing to do).
+export type MatchGroup = "todo" | "inplay" | "cancelled" | "finished";
 export function matchGroup(m: ApiMatch, now: number): MatchGroup {
   if (m.isCancelled) return "cancelled";
-  if (minsUntil(m, now) <= DONE_MIN) return "finished";
-  return "todo";
+  if (stillToCome(m, now)) return "todo";              // kickoff in the future — the ONE predicate
+  if (minsUntil(m, now) <= DONE_MIN) return "finished"; // > 90m past kickoff
+  return "inplay";                                      // past kickoff, still under way
 }
 export const GROUPS: { k: MatchGroup; t: string }[] = [
   { k: "todo", t: "STILL TO COME" },
+  { k: "inplay", t: "IN PLAY" },
   { k: "cancelled", t: "CANCELLED" },
   { k: "finished", t: "FINISHED" },
 ];
@@ -204,6 +238,33 @@ export function riskTier(m: ApiMatch, now: number): RiskTier {
   return minsToDeadline(m, now) <= CANCEL_SOON_MINUTES ? "red" : "amber";
 }
 
+// ── vs MIN — the real count against the minimum (Phase 21 §3/§5/§6) ──────────
+// ONE relationship drives three things that must never disagree: the marker's glyph+fill,
+// the "vs MIN" chip, and whether the row lands in the at-min tier. It is (real − min), and
+// nothing else — NOT total fill, NOT the segment geometry (a match can be full of fakes and
+// still be short: fakes never clear a minimum, see §4). "over" = above the line, "at" =
+// exactly on it (met, barely — one cancellation from short), "short" = below.
+export type VsMin = "over" | "at" | "short";
+export const vsMinDelta = (m: ApiMatch): number => realCount(m) - n(m.minPlayerCount); // signed: +over / 0 / −short
+export function vsMin(m: ApiMatch): VsMin {
+  const d = vsMinDelta(m);
+  return d > 0 ? "over" : d === 0 ? "at" : "short";
+}
+// The SNAPSHOT row rail (Phase 21 §6). Three colours from riskTier, with the exactly-at-min
+// tier split OUT of green into its own amber — a match sitting on its minimum is one no-show
+// from short and must not read as "fine" (green). riskTier itself is LEFT UNTOUCHED (§9): the
+// at-min tier is a display layer on top of it, not a change to the cancel-risk rule. amber
+// therefore covers both "short but the call is not imminent" and "exactly at the line"; the
+// three distinct colours (green over-min, amber at-line/short-far, red short-and-imminent)
+// remain.
+export function snapRail(m: ApiMatch, now: number): RiskTier {
+  const rt = riskTier(m, now);
+  if (rt !== "green") return rt;                       // short-amber / short-red pass through unchanged
+  // green = met or inert. Split the exactly-at-min, still-live, capped case to amber.
+  if (stillToCome(m, now) && capacity(m) != null && vsMin(m) === "at") return "amber";
+  return "green";
+}
+
 // ── the minimum, marked on the bar ───────────────────────────────────────────
 // All as percentages of capacity, so the marker sits at its own number and the
 // hatched band's width IS the shortfall.
@@ -232,14 +293,19 @@ export function flags(m: ApiMatch, now: number): Flag[] {
   return out;
 }
 export function attention(m: ApiMatch, now: number): boolean {
-  return !m.isCancelled && minsUntil(m, now) > 0 &&
-    (acLevel(m, now) !== "" || flags(m, now).some((f) => f.k === "bad" || f.k === "warn"));
+  // Only still-to-come rows can need attention (same predicate as the chip and the group).
+  // The at-min tier counts too (Phase 21 §6): exactly on the minimum is one no-show from
+  // short, so it belongs on the "Needs attention" list alongside acLevel and the flags.
+  return stillToCome(m, now) &&
+    (acLevel(m, now) !== "" || (capacity(m) != null && vsMin(m) === "at") ||
+      flags(m, now).some((f) => f.k === "bad" || f.k === "warn"));
 }
 
 // ── selection / filtering (drives BOTH the grid and the stats) ────────────────
 export type BoardFilter = "all" | "att" | "upc";
 export function passesFilter(m: ApiMatch, now: number, filter: BoardFilter): boolean {
-  return filter === "all" ? true : filter === "att" ? attention(m, now) : minsUntil(m, now) > 0;
+  // "upc" is the SAME stillToCome() the chip counts and the STILL TO COME group holds (§0).
+  return filter === "all" ? true : filter === "att" ? attention(m, now) : stillToCome(m, now);
 }
 export function inCities(m: ApiMatch, cities: Set<string>): boolean {
   return cities.size === 0 || cities.has(m.field?.city?.name ?? "");

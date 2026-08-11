@@ -7,7 +7,8 @@ import "server-only"; // no-op under --conditions=react-server
 import {
   byKickoff, bandOf, minsUntil, capacity, openSpots, realCount, fakeCount, filledCount, clampFakes,
   nextRelease, acLevel, minsToDeadline, short, shortBy, fill, attention, inCities, passesFilter,
-  localClock, localDate, CRIT_HOURS, WARN_HOURS, riskTier, CANCEL_SOON_MINUTES, matchGroup, GROUPS, type ApiMatch,
+  localClock, localDate, CRIT_HOURS, WARN_HOURS, riskTier, CANCEL_SOON_MINUTES, matchGroup, GROUPS,
+  stillToCome, inPlay, vsMin, vsMinDelta, snapRail, deadlineClock, STD_LEAD, type ApiMatch,
 } from "../src/lib/gamedayModel";
 
 let pass = 0, fail = 0;
@@ -181,11 +182,89 @@ const cxFuture = mkG({ isCancelled: true, startDateUtc: new Date(NOW + 3 * H2).t
 const cxPast = mkG({ isCancelled: true, startDateUtc: new Date(NOW - 5 * H2).toISOString() });
 
 eq("future match -> todo", matchGroup(futureM, NOW), "todo");
-eq("in-play match (kicked off <90m) -> todo, not finished", matchGroup(liveM, NOW), "todo");
+eq("in-play match (kicked off <90m) -> inplay, NOT todo (§0: past kickoff is in play)", matchGroup(liveM, NOW), "inplay");
 eq("well-past match -> finished", matchGroup(finishedM, NOW), "finished");
 eq("cancelled future -> cancelled (outcome beats time)", matchGroup(cxFuture, NOW), "cancelled");
 eq("cancelled past -> cancelled (never 'finished')", matchGroup(cxPast, NOW), "cancelled");
-eq("GROUPS order is todo, cancelled, finished", GROUPS.map((g) => g.k), ["todo", "cancelled", "finished"]);
+eq("GROUPS order is todo, inplay, cancelled, finished", GROUPS.map((g) => g.k), ["todo", "inplay", "cancelled", "finished"]);
+
+// ── §0: ONE "still to come" predicate — chip, group, and rows can't disagree ──────────────
+{
+  // A board with a spread: 3 future (todo), 2 in-play (kicked off <90m), 1 finished, 1 cancelled-future.
+  const board = [
+    mkG({ id: 1, startDateUtc: new Date(NOW + 30 * 60000).toISOString() }),
+    mkG({ id: 2, startDateUtc: new Date(NOW + 2 * H2).toISOString() }),
+    mkG({ id: 3, startDateUtc: new Date(NOW + 6 * H2).toISOString() }),
+    mkG({ id: 4, startDateUtc: new Date(NOW - 10 * 60000).toISOString() }),   // in play
+    mkG({ id: 5, startDateUtc: new Date(NOW - 80 * 60000).toISOString() }),   // in play (<90m)
+    mkG({ id: 6, startDateUtc: new Date(NOW - 5 * H2).toISOString() }),       // finished
+    mkG({ id: 7, isCancelled: true, startDateUtc: new Date(NOW + 2 * H2).toISOString() }), // cancelled, future
+  ];
+  const chip = board.filter((m) => stillToCome(m, NOW)).length;                 // the header chip predicate
+  const groupTodo = board.filter((m) => matchGroup(m, NOW) === "todo").length;  // the STILL TO COME group
+  const rowsSayInPlay = board.filter((m) => matchGroup(m, NOW) === "todo" && inPlay(m, NOW)).length; // a row IN the group that reads "in play"
+  eq("§0: chip count == STILL TO COME group count", chip, groupTodo);
+  eq("§0: exactly 3 are still to come (future kickoff, not cancelled)", chip, 3);
+  eq("§0: NO row inside the STILL TO COME group ever reads 'in play'", rowsSayInPlay, 0);
+  eq("§0: a cancelled future match is NOT still to come", stillToCome(board[6], NOW), false);
+  eq("§0: the two in-play matches land in the inplay group, not todo", board.filter((m) => matchGroup(m, NOW) === "inplay").map((m) => m.id), [4, 5]);
+  // teeth: the OLD group predicate (minsUntil > DONE_MIN) would fold the in-play matches into todo,
+  // making the group (5) disagree with the chip (3). The fix is that both call stillToCome.
+  mutation("§0: group predicate matches the chip predicate (both stillToCome)", matchGroup,
+    ((m: ApiMatch, now: number) => (m.isCancelled ? "cancelled" : minsUntil(m, now) > -90 ? "todo" : "finished")) as typeof matchGroup,
+    (fn) => board.filter((m) => fn(m, NOW) === "todo").length === chip); // real: 3 == 3; broken: 5 != 3
+}
+
+// ── §3/§5: vs MIN — ONE relationship drives marker glyph/fill, the chip, and consistency ──
+{
+  const over = mkG({ minPlayerCount: 11, maxPlayerCount: 20, _count: { players: 14, fakePlayers: 0 } });   // 14 real
+  const at = mkG({ minPlayerCount: 11, maxPlayerCount: 20, _count: { players: 11, fakePlayers: 0 } });     // exactly 11
+  const below = mkG({ minPlayerCount: 11, maxPlayerCount: 20, _count: { players: 7, fakePlayers: 0 } });   // 7 real
+  eq("vsMin over when real > min", vsMin(over), "over");
+  eq("vsMin at when real == min (met, barely)", vsMin(at), "at");
+  eq("vsMin short when real < min", vsMin(below), "short");
+  eq("vsMinDelta is signed real−min (+3 / 0 / −4)", [vsMinDelta(over), vsMinDelta(at), vsMinDelta(below)], [3, 0, -4]);
+  // §2 consistency: real − printed-minimum == the vs MIN chip number, on the SOURCE data.
+  ok(realCount(below) - Number(below.minPlayerCount) === vsMinDelta(below) ? "§2: real − min === vs MIN number (source-consistent)" : bad("consistency"));
+  // §4 THE TRAP: fakes never move the marker state. LBJ — 7 real, 7 fake, min 11 — is BELOW.
+  const lbj = mkG({ minPlayerCount: 11, maxPlayerCount: 18, _count: { players: 14, fakePlayers: 7 } }); // 7 real, 7 fake, filled 14 > min
+  eq("§4: LBJ (7 real, 7 fake, min 11) is SHORT — fakes don't clear a minimum", vsMin(lbj), "short");
+  const fL = fill(lbj)!;
+  ok(fL.realPct < fL.minPct ? "§4: LBJ solid (real) edge is LEFT of the marker" : bad("LBJ solid edge"));
+  ok(fL.realPct + fL.fakePct > fL.minPct ? "§4: LBJ hatch (fake) edge runs PAST the marker (must not change it)" : bad("LBJ hatch edge"));
+  mutation("§4: marker state is (real−min), NOT total fill", vsMin,
+    ((m: ApiMatch) => (filledCount(m) - Number(m.minPlayerCount) > 0 ? "over" : filledCount(m) === Number(m.minPlayerCount) ? "at" : "short")) as typeof vsMin,
+    (fn) => fn(lbj) === "short"); // real: short; broken (by fill): 14 filled > 11 -> "over"
+}
+
+// ── §6: the at-min tier — amber rail, distinct from over(green) and short(red); needs attention ──
+{
+  const overM = mkG({ minPlayerCount: 11, maxPlayerCount: 20, _count: { players: 14, fakePlayers: 0 }, startDateUtc: new Date(NOW + 3 * H2).toISOString() });
+  const atM = mkG({ minPlayerCount: 11, maxPlayerCount: 20, _count: { players: 11, fakePlayers: 0 }, startDateUtc: new Date(NOW + 3 * H2).toISOString() });
+  const shortImm = mkG({ minPlayerCount: 11, maxPlayerCount: 20, _count: { players: 6, fakePlayers: 0 }, autoCanceledMinutes: 30, startDateUtc: new Date(NOW + 90 * 60000).toISOString() }); // deadline 60m
+  eq("§6: over-min rail is green", snapRail(overM, NOW), "green");
+  eq("§6: exactly-at-min rail is AMBER (was green — the invisible tier)", snapRail(atM, NOW), "amber");
+  eq("§6: short + imminent rail is red", snapRail(shortImm, NOW), "red");
+  eq("§6: three distinct rail colours", [snapRail(overM, NOW), snapRail(atM, NOW), snapRail(shortImm, NOW)], ["green", "amber", "red"]);
+  ok(attention(atM, NOW) === true ? "§6: an at-min match counts toward Needs attention" : bad("at-min attention"));
+  eq("§9: riskTier itself is UNCHANGED — at-min is still 'green' there (display layer only)", riskTier(atM, NOW), "green");
+  mutation("§6: snapRail splits at-min out of green to amber", snapRail,
+    (riskTier) as typeof snapRail, // the un-split rule: at-min would read green
+    (fn) => fn(atM, NOW) === "amber");
+}
+
+// ── §7: the deadline wall-clock is DERIVED from kickoff − lead, no independent string ─────
+{
+  // 6:00 PM kickoff, 75m lead -> 4:45 PM decide-by, same day, no new Date() on a wall value.
+  const m6 = mk({ startDate: "2026-08-08T18:00:00.000", startDateUtc: "2026-08-08T22:00:00.000Z", autoCanceledMinutes: 75 });
+  eq("§7: deadline clock is kickoff minus the lead (4:45 PM)", deadlineClock(m6), "4:45 PM");
+  eq("§7: STD_LEAD is 75 (named, stated once in the legend)", STD_LEAD, 75);
+  const mAM = mk({ startDate: "2026-08-08T00:30:00.000", startDateUtc: "2026-08-08T05:30:00.000Z", autoCanceledMinutes: 75 });
+  eq("§7: deadline wraps within the day (12:30 AM − 75m -> 11:15 PM)", deadlineClock(mAM), "11:15 PM");
+  mutation("§7: deadline derived from kickoff, never carried as its own string", deadlineClock,
+    ((_m: ApiMatch) => "9:99 PM") as typeof deadlineClock,
+    (fn) => fn(m6) === "4:45 PM");
+}
 
 // riskTier must NOT apply to cancelled/finished — it is green (inert) for both, so a
 // cancelled/finished row can never carry an amber/red risk rail.
