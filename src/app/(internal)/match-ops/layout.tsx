@@ -21,12 +21,13 @@
 // carries navigation; the chat consoles render that strip themselves, so we add
 // it here only for the non-chat routes.
 
-import { useEffect, useState } from "react";
+import { Suspense, useEffect, useState } from "react";
 import { usePathname } from "next/navigation";
 import { useAuth } from "@/lib/useAuth";
 import ChatsRail from "./ChatsRail";
 import MatchOpsMobileBar from "./MatchOpsMobileBar";
 import { visibleSections } from "./sections";
+import { CrmConversationProvider } from "@/lib/crmConversation";
 
 const COLLAPSE_KEY = "matchops:rail-collapsed";
 
@@ -100,7 +101,13 @@ export default function MatchOpsLayout({
             carries its own in-header picker; chat consoles render the pill strip
             inside their inbox). */}
         {!isChat && !isGameday && hasRail && <MatchOpsMobileBar />}
-        {children}
+        {/* Phase 19 Step 2 B1: the CRM conversation/inbox data layer lives here, mounted once in
+            the layout (which does not remount between Match Ops routes) so the open conversation
+            survives navigation. Suspense wraps it because it reads useSearchParams (view +
+            deep-link ?threadId). Every route is a consumer; only Player Chats reads it today. */}
+        <Suspense fallback={null}>
+          <CrmConversationProvider>{children}</CrmConversationProvider>
+        </Suspense>
       </div>
     </>
   );

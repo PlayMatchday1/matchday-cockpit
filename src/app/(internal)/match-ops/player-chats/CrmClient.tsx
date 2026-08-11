@@ -48,6 +48,14 @@ import {
 import EnablePushNotificationsButton from "@/components/EnablePushNotificationsButton";
 import { supabase } from "@/lib/supabase";
 import { whatsappWindowExpired } from "@/lib/crmWindow";
+import {
+  useCrmConversation,
+  bearerHeaders,
+  markThreadRead,
+  type ThreadListRow,
+  type Message,
+  type ThreadDetail,
+} from "@/lib/crmConversation";
 import { useAuth } from "@/lib/useAuth";
 import { UNKNOWN_CITY } from "@/lib/cityColors";
 import CityChip from "@/components/CityChip";
@@ -57,9 +65,8 @@ import ChannelChip, {
   type CrmChannel,
 } from "@/components/ChannelChip";
 import PlayerAvatar from "@/components/PlayerAvatar";
-import type { DeliveryStatus } from "@/components/DeliveryStatusLabel";
 import type { MatchStatus } from "@/components/MatchStatusPill";
-import { type StatusFilter, type ViewCounts } from "./components/FilterBar";
+import { type StatusFilter } from "./components/FilterBar";
 import {
   isAwaitingReply,
   isFreshThreadUpdate,
@@ -77,113 +84,9 @@ import ContextPane from "./components/ContextPane";
 import { colorForCity } from "@/lib/cityColors";
 import { KNOWN_CITY_CODES, HIDDEN_CITY_CODES } from "@/lib/cityNormalization";
 
-// ---------------- shared types ----------------
-
-type ThreadListRow = {
-  id: string;
-  phone_number: string;
-  player_id: number | null;
-  match_ambiguous: boolean;
-  last_message_at: string;
-  last_message_preview: string | null;
-  last_message_direction: "inbound" | "outbound" | null;
-  // True when the last outbound message was a WhatsApp template send —
-  // lets an answered row read "template sent" vs a plain "replied".
-  last_message_is_template: boolean;
-  created_at: string;
-  assigned_to_user_id: string | null;
-  assigned_at: string | null;
-  channel: CrmChannel;
-  // Ticket status. 'open' threads live in the Open inbox; 'closed'
-  // ones move to the Closed view. Auto-reopens to 'open' on a new
-  // inbound. closed_at / closed_by_user_id are set on close, cleared
-  // on reopen.
-  status: "open" | "closed";
-  closed_at: string | null;
-  closed_by_user_id: string | null;
-  // Operator "Done · no reply needed" dismissal (0073). Feeds the refined
-  // awaiting/wrapping-up split; null once "Reply anyway" clears it or a
-  // newer inbound supersedes it.
-  no_reply_needed_at: string | null;
-  // Server-computed per the assignment-aware rule. Authoritative —
-  // the client mirrors this for optimistic updates on mark-read but
-  // never recomputes the rule itself.
-  is_unread: boolean;
-  // Per-viewer follow-up star. Server-computed; optimistically patched
-  // on toggle. (Not a crm_threads column, so realtime crm_threads
-  // UPDATEs never carry it — the selective merge preserves it.)
-  is_follow_up: boolean;
-  // First-response SLA anchor: sent_at of the first inbound in the current
-  // unanswered run (Decision 2). Null when not awaiting. Also not a
-  // crm_threads column — the crm_messages realtime handler owns it (an
-  // inbound starts/keeps it, a genuine outbound clears it), and the
-  // crm_threads UPDATE merge preserves it via `...x`.
-  waiting_since: string | null;
-  player: {
-    first_name: string | null;
-    last_name: string | null;
-    preferable_city_normalized: string | null;
-    is_member?: boolean | null;
-  } | null;
-  assignee: Assignee | null;
-};
-
-type Message = {
-  id: string;
-  thread_id: string;
-  direction: "inbound" | "outbound";
-  body: string;
-  sent_at: string;
-  sent_by_user_id: string | null;
-  telnyx_message_id: string | null;
-  external_message_id: string | null;
-  segment_count: number;
-  channel: CrmChannel;
-  delivery_status: DeliveryStatus;
-  delivery_status_updated_at: string | null;
-  // Set for WhatsApp template sends (crm_messages.template_name, 0067).
-  // Lets a realtime INSERT mark the thread "template sent" vs "replied".
-  template_name?: string | null;
-  // True for the out-of-hours system auto-reply (0072). A courtesy
-  // greeting is an acknowledgment, not an answer: it must NOT move the
-  // thread out of Awaiting reply. The realtime INSERT handler skips the
-  // last_message_* patch for these, mirroring the server, which never
-  // touches those columns when writing an auto-reply.
-  is_auto_reply?: boolean;
-  sender?: { email: string; full_name: string | null } | null;
-  // Media columns. media_url (Storage path) is stripped by the
-  // detail route; clients receive the short-lived signed_media_url
-  // instead. Realtime INSERT payloads from Supabase do NOT include
-  // signed_media_url (it is minted server-side per request), so
-  // images that arrive via realtime fall back to caption-only
-  // rendering until the next thread refetch.
-  media_kind:
-    | "image"
-    | "video"
-    | "audio"
-    | "document"
-    | "sticker"
-    | "reaction"
-    | null;
-  media_filename?: string | null;
-  media_size_bytes?: number | null;
-  signed_media_url?: string | null;
-  reaction_target_wamid?: string | null;
-};
-
-// Chat-pane data only. Player + recent/upcoming matches +
-// historical-account count moved to /api/crm/threads/{id}/context
-// (Phase 3 split, 2026-05-17). ContextPanel fetches that endpoint
-// lazily when it becomes visible. Keeps initial thread switching
-// fast — chat pane no longer waits on heavy match queries.
-type ThreadDetail = {
-  thread: ThreadListRow;
-  messages: Message[];
-  assignee: Assignee | null;
-  latest_inbound_at: string | null;
-};
-
 // ---------------- helpers ----------------
+// The CRM data types (ThreadListRow / Message / ThreadDetail), bearerHeaders and markThreadRead
+// moved to @/lib/crmConversation with the data layer (Phase 19 Step 2 B1) and are imported above.
 
 function fullNameOf(t: ThreadListRow): string {
   if (t.player) {
@@ -200,31 +103,6 @@ function cityCodeForThread(t: ThreadListRow): string {
   return c && c.length > 0 ? c : UNKNOWN_CITY;
 }
 
-async function bearerHeaders(): Promise<Record<string, string> | null> {
-  const { data } = await supabase.auth.getSession();
-  const token = data.session?.access_token;
-  if (!token) return null;
-  return {
-    Authorization: `Bearer ${token}`,
-    "Content-Type": "application/json",
-  };
-}
-
-// Fire-and-forget. Best-effort: if it fails the optimistic local
-// clear stays and we converge on the next realtime refetch.
-async function markThreadRead(threadId: string): Promise<void> {
-  const headers = await bearerHeaders();
-  if (!headers) return;
-  try {
-    await fetch(`/api/crm/threads/${threadId}/mark-read`, {
-      method: "POST",
-      headers,
-    });
-  } catch {
-    // Silent — the inbox will reconcile on the next refetch.
-  }
-}
-
 // Delegates to the shared, tested rule in src/lib/crmWindow (Phase 19 Step 0). A null detail
 // means "nothing loaded yet" → not expired (the composer stays enabled until we know).
 function computeWhatsAppExpired(detail: ThreadDetail | null): boolean {
@@ -239,22 +117,20 @@ export default function CrmClient() {
   const router = useRouter();
   const searchParams = useSearchParams();
 
-  // --------- URL state ---------
-  // Ticket-style status view (single-select). Defaults to Open — the
-  // main inbox. Filtered server-side; changing it refetches.
-  const view = useMemo<StatusFilter>(() => {
-    const raw = searchParams.get("view");
-    if (
-      raw === "mine" ||
-      raw === "starred" ||
-      raw === "closed" ||
-      raw === "awaiting"
-    )
-      return raw;
-    return "open";
-  }, [searchParams]);
-
-  const selectedId = searchParams.get("threadId");
+  // --------- CRM data layer (Phase 19 Step 2 B1) ---------
+  // threads, the open conversation, selection, counts, view, the loaders and onSent now live in
+  // the provider mounted in match-ops/layout.tsx (so they survive navigation). CrmClient consumes
+  // them here; its ~15 setThreads sites and the realtime subscription write through these setters.
+  // Aliased so the body below is UNCHANGED: selectedThreadId → selectedId, selectThread →
+  // setSelected. Selection is now provider state (OFF the URL); setFilters still owns ?view.
+  const {
+    threads, setThreads, threadsError, setThreadsError, threadsLoading, setThreadsLoading,
+    counts, setCounts, operators, setOperators, operatorsById,
+    detail, setDetail, detailError, setDetailError, detailLoading, setDetailLoading, realtimeOk, setRealtimeOk,
+    selectedThreadId: selectedId, selectThread: setSelected, selectedRef,
+    view, viewRef, nowMs,
+    loadThreads, loadDetail, loadOperators, scheduleReload, refreshDetailForMediaInsert, onSent,
+  } = useCrmConversation();
 
   const setFilters = useCallback(
     (next: { view: StatusFilter }) => {
@@ -269,47 +145,6 @@ export default function CrmClient() {
     [router, searchParams],
   );
 
-  const setSelected = useCallback(
-    (id: string | null) => {
-      const params = new URLSearchParams(searchParams.toString());
-      if (id == null) params.delete("threadId");
-      else params.set("threadId", id);
-      const qs = params.toString();
-      router.replace(qs ? `/match-ops/player-chats?${qs}` : "/match-ops/player-chats", {
-        scroll: false,
-      });
-    },
-    [router, searchParams],
-  );
-
-  // --------- data state ---------
-  const [threads, setThreads] = useState<ThreadListRow[]>([]);
-  const [threadsError, setThreadsError] = useState<string | null>(null);
-  const [threadsLoading, setThreadsLoading] = useState(true);
-
-  // One shared clock for the whole list's first-response cues. A single 30s
-  // interval re-renders every row from timestamps already in memory — it does
-  // NOT refetch, hit the network, or touch the realtime channel. (See the
-  // effect below.) Rows read this instead of calling Date.now() themselves so
-  // the cadence is one timer, not one per row.
-  const [nowMs, setNowMs] = useState(() => Date.now());
-  useEffect(() => {
-    const id = window.setInterval(() => setNowMs(Date.now()), 30_000);
-    return () => window.clearInterval(id);
-  }, []);
-
-  // Server-computed global per-view counts + a lightweight all-threads
-  // index used to recompute counts scoped to the selected cities.
-  const ZERO_COUNTS: ViewCounts = {
-    open: 0,
-    mine: 0,
-    starred: 0,
-    closed: 0,
-    awaiting: 0,
-  };
-  const [counts, setCounts] = useState<ViewCounts>(ZERO_COUNTS);
-
-
   // Client-side inbox filters (no refetch): search over player name, a city
   // set, and additive flags. The filter popover carries the cities + flags;
   // the active count shows on the filter button.
@@ -320,26 +155,6 @@ export default function CrmClient() {
   const [flagMembers, setFlagMembers] = useState(false);
   const [contextHidden, setContextHidden] = useState(false);
 
-  // The active view lives in the URL. loadThreads reads it through a
-  // ref so its identity stays stable — the realtime subscription
-  // depends on loadThreads and must not resubscribe on every view
-  // change.
-  const viewRef = useRef<StatusFilter>(view);
-  useEffect(() => {
-    viewRef.current = view;
-  }, [view]);
-
-  const [operators, setOperators] = useState<Assignee[]>([]);
-  const operatorsById = useMemo(
-    () => new Map(operators.map((o) => [o.id, o])),
-    [operators],
-  );
-
-  const [detail, setDetail] = useState<ThreadDetail | null>(null);
-  const [detailLoading, setDetailLoading] = useState(false);
-  const [detailError, setDetailError] = useState<string | null>(null);
-
-  const [realtimeOk, setRealtimeOk] = useState<boolean | null>(null);
   // The player-context pane (ContextPane) is shown by default beside a
   // selected thread; contextHidden (declared with the other redesign UI state
   // above) toggles it off. It is always hidden below 1260px via CSS.
@@ -370,119 +185,9 @@ export default function CrmClient() {
     };
   }, []);
 
-  // --------- fetchers ---------
-  const loadThreads = useCallback(async () => {
-    setThreadsError(null);
-    const headers = await bearerHeaders();
-    if (!headers) {
-      setThreadsError("No active session — please sign in again.");
-      setThreadsLoading(false);
-      return;
-    }
-    try {
-      const res = await fetch(
-        `/api/crm/threads?view=${encodeURIComponent(viewRef.current)}`,
-        { headers },
-      );
-      if (!res.ok) {
-        const j = await res.json().catch(() => ({}));
-        throw new Error(j.error || `HTTP ${res.status}`);
-      }
-      const j = (await res.json()) as {
-        threads: ThreadListRow[];
-        counts?: ViewCounts;
-      };
-      setThreads(j.threads);
-      if (j.counts) setCounts(j.counts);
-    } catch (err) {
-      setThreadsError(err instanceof Error ? err.message : String(err));
-    } finally {
-      setThreadsLoading(false);
-    }
-  }, []);
-
-  // Debounced reload for realtime bursts. A bulk close/reopen emits one
-  // crm_threads UPDATE per thread; coalescing them into a single
-  // refetch avoids a storm of N list loads. User-initiated actions call
-  // loadThreads directly (no debounce needed).
-  const reloadTimer = useRef<ReturnType<typeof setTimeout> | null>(null);
-  const scheduleReload = useCallback(() => {
-    if (reloadTimer.current) clearTimeout(reloadTimer.current);
-    reloadTimer.current = setTimeout(() => {
-      void loadThreads();
-    }, 300);
-  }, [loadThreads]);
-  useEffect(
-    () => () => {
-      if (reloadTimer.current) clearTimeout(reloadTimer.current);
-    },
-    [],
-  );
-
-  const loadOperators = useCallback(async () => {
-    const headers = await bearerHeaders();
-    if (!headers) return;
-    try {
-      const res = await fetch("/api/crm/operators", { headers });
-      if (!res.ok) return;
-      const j = (await res.json()) as { operators: Assignee[] };
-      setOperators(j.operators);
-    } catch {
-      /* dropdown stays empty — non-fatal */
-    }
-  }, []);
-
-  const loadDetail = useCallback(async (threadId: string) => {
-    setDetailError(null);
-    setDetailLoading(true);
-    const headers = await bearerHeaders();
-    if (!headers) {
-      setDetailError("No active session — please sign in again.");
-      setDetailLoading(false);
-      return;
-    }
-    try {
-      const res = await fetch(`/api/crm/threads/${threadId}`, { headers });
-      if (!res.ok) {
-        const j = await res.json().catch(() => ({}));
-        throw new Error(j.error || `HTTP ${res.status}`);
-      }
-      const j = (await res.json()) as ThreadDetail;
-      setDetail(j);
-    } catch (err) {
-      setDetailError(err instanceof Error ? err.message : String(err));
-      setDetail(null);
-    } finally {
-      setDetailLoading(false);
-    }
-  }, []);
-
-  // Silent refetch used when a realtime INSERT carries a media_kind.
-  // The postgres_changes payload does NOT include signed_media_url
-  // (minted server-side per request), so for media rows we replace
-  // the local detail with a fresh fetch that includes signed URLs.
-  // Does NOT toggle detailLoading so the bubble area doesn't flash.
-  // Race-safe: re-checks selectedRef before applying.
-  const refreshDetailForMediaInsert = useCallback(
-    async (threadId: string): Promise<void> => {
-      if (selectedRef.current !== threadId) return;
-      const headers = await bearerHeaders();
-      if (!headers) return;
-      try {
-        const res = await fetch(`/api/crm/threads/${threadId}`, { headers });
-        if (!res.ok) return;
-        const j = (await res.json()) as ThreadDetail;
-        if (selectedRef.current !== threadId) return;
-        setDetail(j);
-      } catch {
-        // Silent best-effort. If the refetch fails, the optimistically
-        // appended raw payload is still in state with media_kind set
-        // but no signed URL; the bubble falls back to caption-text
-        // rendering until the next thread re-select.
-      }
-    },
-    [],
-  );
+  // The fetchers (loadThreads, scheduleReload, loadOperators, loadDetail,
+  // refreshDetailForMediaInsert) moved to @/lib/crmConversation with the data layer (B1) and are
+  // consumed via the destructure above. The effects that ORCHESTRATE them stay here.
 
   useEffect(() => {
     void loadOperators();
@@ -551,10 +256,8 @@ export default function CrmClient() {
   }, [selectedId, loadDetail]);
 
   // --------- realtime ---------
-  const selectedRef = useRef<string | null>(null);
-  useEffect(() => {
-    selectedRef.current = selectedId;
-  }, [selectedId]);
+  // selectedRef moved to the provider (kept current there as a latest-value ref); consumed via
+  // the destructure above. The subscription below reads selectedRef.current at event time.
 
   useEffect(() => {
     const channel = supabase
@@ -934,38 +637,8 @@ export default function CrmClient() {
     [loadThreads],
   );
 
-  const onSent = useCallback(
-    (msg: Message) => {
-      setDetail((prev) =>
-        prev
-          ? prev.messages.some((m) => m.id === msg.id)
-            ? prev
-            : { ...prev, messages: [...prev.messages, msg] }
-          : prev,
-      );
-      setThreads((prev) =>
-        prev.map((t) =>
-          t.id === msg.thread_id
-            ? {
-                ...t,
-                last_message_at: msg.sent_at,
-                last_message_preview: msg.body.slice(0, 80),
-                // onSent fires only after an operator's OWN send, so the
-                // last message is unambiguously outbound — hardcode it
-                // rather than trust msg.direction being populated. This
-                // is the synchronous, realtime-independent clear of the
-                // awaiting indicator.
-                last_message_direction: "outbound",
-                // Optimistic: assume a normal reply; a template send's
-                // flag is reconciled by the crm_threads realtime UPDATE.
-                last_message_is_template: false,
-              }
-            : t,
-        ),
-      );
-    },
-    [],
-  );
+  // onSent moved to the provider (setDetail + setThreads on an operator's own send); consumed via
+  // the destructure above and handed to Composer unchanged.
 
   // Follow-up star toggle. `desired` is passed from the call site (the
   // row/header knows the current state), so it's an explicit set, not a

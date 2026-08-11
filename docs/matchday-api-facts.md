@@ -963,3 +963,25 @@ Consequences, learned the hard way:
 - Any attendance rate built on `userStatus` will be **mostly blind** on history. If you need
   real attendance, it must come from a source that backfills the `NONE` rows (check-in logs?),
   not from this field — confirm with Vitalii before shipping any such metric.
+
+## CRM has TWO outbound message paths — both host-pinned, both recordWrite (Phase 19)
+
+A message reaches a player through one of TWO paths. `/api/crm/send` is NOT the only one — do
+not assume it is when auditing what we've said to players.
+
+1. **`POST /api/crm/send`** — the OPERATOR path. A human composes and sends from Player Chats.
+   Gated on `can_send_messages` (Step 1, distinct from the `can_access_chats` READ right) and on
+   a real operator (`appUserId != null` — the cron/`CRON_SECRET` path is rejected: a
+   player-visible message must have a human behind it). WhatsApp via `sendWhatsAppText`
+   (Meta Cloud API) or SMS via Telnyx.
+2. **The out-of-hours AUTO-REPLY** — the SYSTEM path. Fired by the WhatsApp inbound webhook
+   (`/api/whatsapp/webhook` → `sendAutoReply`) when a player messages outside hours. Inbound-
+   triggered, debounced (`auto_reply_sent_at`), reply-only, a fixed acknowledgment. It does NOT
+   go through `/api/crm/send` (by design — it's a machine acknowledgment, not an operator action).
+
+**Both are host-pinned:** `sendWhatsAppText` calls `assertAllowedOutboundHost` (`src/lib/crmHostGuard`)
+against the exact parsed host allowlist (`graph.facebook.com` + `api.telnyx.com`) before the fetch,
+so both paths are covered. **Both `recordWrite` into `change_log`** the same shape — thread id,
+recipient phone, channel, message LENGTH, never the body — the operator path with the operator as
+actor, the auto-reply with `system (out-of-hours auto-reply)`. So the change log is a COMPLETE
+record of outbound messages regardless of which path sent them.
