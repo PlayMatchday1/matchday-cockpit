@@ -23,9 +23,11 @@
 //   5. Update thread last_message_at + last_message_preview.
 //   6. Return the new message row.
 
+import { randomUUID } from "node:crypto";
 import Telnyx from "telnyx";
 import type { SupabaseClient } from "@supabase/supabase-js";
 import { authenticateCrm } from "@/lib/crmAuth";
+import { recordWrite, supabaseLogStore } from "@/lib/changeLog";
 import {
   sendWhatsAppText,
   WhatsAppApiError,
@@ -50,7 +52,16 @@ export async function POST(req: Request) {
   if (!auth.ok) {
     return Response.json({ error: auth.error }, { status: auth.status });
   }
-  const { appUserId, supabase } = auth;
+  // SEND is its own right (Phase 19 Step 1). Gated EARLY — before any provider work — so there is
+  // no reachable send path without can_send_messages: the route 403s immediately, not "late" after
+  // doing work, and the composer greys as a courtesy. can_access_chats still means READ only.
+  if (!auth.canSendMessages) {
+    return Response.json(
+      { error: "You don't have permission to send messages.", reason: "no_send_permission" },
+      { status: 403 },
+    );
+  }
+  const { appUserId, email: actorEmail, supabase } = auth;
 
   let parsed: SendBody;
   try {
@@ -95,6 +106,7 @@ export async function POST(req: Request) {
       toPhone,
       body,
       appUserId,
+      actorEmail,
       supabase,
       startedAt,
     });
@@ -107,9 +119,49 @@ export async function POST(req: Request) {
     toPhone,
     body,
     appUserId,
+    actorEmail,
     supabase,
     startedAt,
   });
+}
+
+// Record every send into change_log via the shared recordWrite hook (Phase 19 Step 1). Logs the
+// thread id, recipient phone, channel, actor, timestamp and message LENGTH — NEVER the body: the
+// text already lives in crm_messages, and copying player conversation content into an audit table
+// is a second store of the same PII under different access rules. `write` here is a no-op that
+// merely reflects the already-known provider outcome so recordWrite classifies landed vs failed;
+// the real send happened above (this hook is logging, not the send path). Best-effort: recordWrite
+// never throws over the send.
+async function logCrmSend(args: {
+  threadId: string; toPhone: string; channel: "sms" | "whatsapp";
+  appUserId: string | null; actorEmail: string | null; bodyLength: number;
+  sendError: string | null; nowIso: string; supabase: SupabaseClient;
+}) {
+  try {
+    await recordWrite(
+      {
+        env: "production", source: "crm-send",
+        actorName: args.actorEmail ?? (args.appUserId ? args.appUserId : "cron"),
+        actorEmail: args.actorEmail ?? null,
+        saveId: randomUUID(),
+        matchId: null, matchName: null,
+        method: "POST", path: "/api/crm/send",
+        // metadata ONLY — no message text ever enters change_log.
+        body: { thread_id: args.threadId, recipient_phone: args.toPhone, channel: args.channel, message_length: args.bodyLength },
+        keys: [], label: (k) => k,
+        applied: () => !args.sendError,
+        changes: [{ key: "message", field: "Message", before: "", after: `${args.channel} message · ${args.bodyLength} chars` }],
+      },
+      {
+        readResource: async () => ({}),
+        write: async () => { if (args.sendError) throw new Error(args.sendError); return true; },
+        now: () => args.nowIso,
+      },
+      supabaseLogStore(),
+    );
+  } catch (e) {
+    console.error("[crm:send] change_log record failed (send already happened):", e);
+  }
 }
 
 // ============================================================
@@ -121,6 +173,7 @@ type SendArgs = {
   toPhone: string;
   body: string;
   appUserId: string | null;
+  actorEmail: string | null;
   supabase: SupabaseClient;
   startedAt: number;
 };
@@ -130,6 +183,7 @@ async function handleSmsSend({
   toPhone,
   body,
   appUserId,
+  actorEmail,
   supabase,
   startedAt,
 }: SendArgs) {
@@ -212,6 +266,8 @@ async function handleSmsSend({
     `[crm:send] done channel=sms thread=${threadId} telnyx_id=${telnyxMessageId ?? "-"} segments=${segmentCount} elapsed=${elapsed}ms${sendError ? ` ERROR=${sendError}` : ""}`,
   );
 
+  await logCrmSend({ threadId, toPhone, channel: "sms", appUserId, actorEmail, bodyLength: body.length, sendError, nowIso, supabase });
+
   if (sendError) {
     return Response.json(
       { message: inserted.data, send_error: sendError },
@@ -230,6 +286,7 @@ async function handleWhatsAppSend({
   toPhone,
   body,
   appUserId,
+  actorEmail,
   supabase,
   startedAt,
 }: SendArgs) {
@@ -344,6 +401,8 @@ async function handleWhatsAppSend({
   console.log(
     `[crm:send] done channel=whatsapp thread=${threadId} wamid=${wamid ?? "-"} elapsed=${elapsed}ms${sendError ? ` ERROR=${sendError}` : ""}`,
   );
+
+  await logCrmSend({ threadId, toPhone, channel: "whatsapp", appUserId, actorEmail, bodyLength: body.length, sendError, nowIso, supabase });
 
   if (sendError) {
     return Response.json(

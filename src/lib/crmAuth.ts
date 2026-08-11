@@ -34,6 +34,11 @@ export type CrmAuthOk = {
   // or any other admin surface. Being an assignee is validated against
   // the same OR on the target user in the assign route.
   canAccessChats: boolean;
+  // True iff the authenticated app_user has can_send_messages = true (Phase 19 Step 1). READING a
+  // conversation (canAccessChats) and SENDING a message (canSendMessages) are different rights —
+  // one is irreversible. Read fresh from app_users every request, never cached in the JWT. Cron
+  // path sets this true. The send route gates on it; without it there is no reachable send path.
+  canSendMessages: boolean;
   supabase: SupabaseClient;
 };
 
@@ -74,6 +79,7 @@ export async function authenticateCrm(req: Request): Promise<CrmAuthResult> {
       email: null,
       isAdmin: true,
       canAccessChats: true,
+      canSendMessages: true, // cron runs with full server authority
       supabase: sb,
     };
   }
@@ -94,7 +100,7 @@ export async function authenticateCrm(req: Request): Promise<CrmAuthResult> {
   });
   const appUser = await sb
     .from("app_users")
-    .select("id, is_admin, can_access_chats")
+    .select("id, is_admin, can_access_chats, can_send_messages")
     .ilike("email", email)
     .maybeSingle();
   if (appUser.error || !appUser.data) {
@@ -102,6 +108,9 @@ export async function authenticateCrm(req: Request): Promise<CrmAuthResult> {
   }
   const isAdmin = appUser.data.is_admin === true;
   const canAccessChats = appUser.data.can_access_chats === true;
+  // Send is its own right (Phase 19 Step 1) — NOT implied by is_admin or can_access_chats. Read
+  // fresh here; the send route checks it and 403s early so no send path is reachable without it.
+  const canSendMessages = appUser.data.can_send_messages === true;
   // Chats access gates the CRM API at the application layer. RLS on
   // crm_* tables enforces the same OR-clause underneath so this can't
   // be bypassed even if a route forgets to call authenticateCrm.
@@ -116,6 +125,7 @@ export async function authenticateCrm(req: Request): Promise<CrmAuthResult> {
     email,
     isAdmin,
     canAccessChats,
+    canSendMessages,
     supabase: sb,
   };
 }

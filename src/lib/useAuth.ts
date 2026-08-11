@@ -19,6 +19,7 @@ export type AppUser = {
   can_edit_matches?: boolean;      // Phase 17 — the WRITE permission for matches
   can_manage_players?: boolean;    // Phase 18 — the account-level WRITE permission (ban)
   can_manage_promos?: boolean;     // Phase 18b — the promo-code WRITE permission (create/edit/delete)
+  can_send_messages?: boolean;     // Phase 19 — the chat SEND permission (read is can_access_chats)
   is_service_account?: boolean;    // the Clubhouse E2E account (never holds a write permission)
   created_at: string;
   last_login_at: string | null;

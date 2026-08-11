@@ -103,6 +103,7 @@ async function bearerHeadersMultipart(): Promise<Record<string, string> | null> 
 export default function Composer({
   threadId,
   appUserId,
+  canSendMessages,
   channel,
   whatsappWindowExpired,
   customerName,
@@ -110,6 +111,9 @@ export default function Composer({
 }: {
   threadId: string;
   appUserId: string | null;
+  // Phase 19 Step 1: the SEND right (distinct from read). Courtesy-grey only — /api/crm/send is
+  // the real gate. When false the composer is disabled with a stated reason and no send fires.
+  canSendMessages: boolean;
   channel: CrmChannel;
   whatsappWindowExpired: boolean;
   // First name of the thread's linked player, "" if none. Pre-fills
@@ -247,15 +251,18 @@ export default function Composer({
   }, []);
 
   // ---------------- text-mode submit ----------------
-  const disabled = sending || !appUserId || whatsappWindowExpired;
+  const disabled = sending || !appUserId || !canSendMessages || whatsappWindowExpired;
   const placeholder = !appUserId
     ? "Sign in to send."
-    : whatsappWindowExpired
-      ? "WhatsApp session expired — player must message first."
-      : "Type a reply. Enter to send, Shift+Enter for newline.";
+    : !canSendMessages
+      ? "You don't have permission to send messages (read-only)."
+      : whatsappWindowExpired
+        ? "WhatsApp session expired — player must message first."
+        : "Type a reply. Enter to send, Shift+Enter for newline.";
 
   const submitText = useCallback(async () => {
     if (sending) return;
+    if (!canSendMessages) return; // no send path without the SEND right (route also 403s)
     if (!body.trim()) return;
     setSending(true);
     setError(null);
@@ -286,7 +293,7 @@ export default function Composer({
     } finally {
       setSending(false);
     }
-  }, [body, sending, threadId, onSent]);
+  }, [body, sending, threadId, onSent, canSendMessages]);
 
   const onKeyDown = useCallback(
     (e: React.KeyboardEvent<HTMLTextAreaElement>) => {
@@ -579,7 +586,7 @@ export default function Composer({
               data-testid="crm-send"
               onClick={() => void submitText()}
               disabled={
-                sending || !body.trim() || !appUserId || whatsappWindowExpired
+                sending || !body.trim() || !appUserId || !canSendMessages || whatsappWindowExpired
               }
               aria-label={sending ? "Sending message" : "Send message"}
               className="flex h-11 w-11 shrink-0 items-center justify-center rounded-full bg-mint text-deep-green shadow-sm transition hover:bg-mint-hover disabled:opacity-40"

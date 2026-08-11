@@ -46,15 +46,15 @@ const DETAIL = {
 };
 const COUNTS = { open: 3, mine: 0, starred: 0, closed: 0, awaiting: 4 };
 
-const grantChats = (ctx) => ctx.route("**/rest/v1/app_users*", async (route) => {
+const grantChats = (ctx, canSend = true) => ctx.route("**/rest/v1/app_users*", async (route) => {
   if (route.request().method() !== "GET") return route.continue();
   const res = await route.fetch(); let j = await res.json().catch(() => null);
-  const p = (r) => ({ ...r, is_admin: true, can_access_chats: true, can_access_matchops: true });
+  const p = (r) => ({ ...r, is_admin: true, can_access_chats: true, can_access_matchops: true, can_send_messages: canSend });
   j = Array.isArray(j) ? j.map(p) : (j && typeof j === "object" ? p(j) : j);
   return route.fulfill({ status: res.status(), contentType: "application/json", body: JSON.stringify(j) });
 });
 
-async function crmRoutes(ctx) {
+async function crmRoutes(ctx, canSend = true) {
   await ctx.route("**/api/crm/**", (route) => {
     const url = new URL(route.request().url());
     const path = url.pathname;
@@ -75,7 +75,7 @@ async function crmRoutes(ctx) {
     if (detailMatch && method === "GET") { const d = DETAIL[detailMatch[1]]; return d ? json(d) : json({ error: "not found" }, 404); }
     return json({}); // permissive catch-all for any other crm sub-route
   });
-  await grantChats(ctx);
+  await grantChats(ctx, canSend);
 }
 
 async function main() {
@@ -169,6 +169,22 @@ async function main() {
     const after = await msgCount();
     const painted = await page.$$eval('[data-testid="crm-message"]', (els) => els.some((e) => /SYNTHETIC REALTIME PAINT/.test(e.textContent)));
     (fired && after === before + 1 && painted) ? ok("a synthetic realtime INSERT paints the new message with no refetch") : bad("realtime paint failed", `fired=${fired} before=${before} after=${after} painted=${painted}`); }
+
+  // ── Phase 19 Step 1: WITHOUT can_send_messages the composer is a disabled, read-only box ──
+  // Separate context whose app_users grant sets can_send_messages=false — proves the courtesy-grey.
+  { const roCtx = await browser.newContext({ viewport: { width: 1440, height: 1000 }, storageState });
+    await crmRoutes(roCtx, false);
+    const ro = await roCtx.newPage();
+    await ro.addInitScript(() => { window.__CRM_TEST_REALTIME__ = []; });
+    await ro.goto(PAGE, { waitUntil: "domcontentloaded" });
+    await ro.waitForSelector('[data-testid="crm-thread-row"]', { timeout: 30000 });
+    await ro.click('[data-testid="crm-thread-row"][data-thread-id="t-fredy"]');
+    await ro.waitForFunction(() => document.querySelectorAll('[data-testid="crm-message"]').length === 3, null, { timeout: 8000 });
+    const dis = await ro.$eval('[data-testid="crm-composer"]', (e) => e.disabled);
+    const ph = await ro.$eval('[data-testid="crm-composer"]', (e) => e.placeholder);
+    const sendDis = await ro.$eval('[data-testid="crm-send"]', (e) => e.disabled);
+    (dis && sendDis && /permission|read-only/i.test(ph)) ? ok(`Step 1: without can_send_messages the composer is disabled read-only (\"${ph}\")`) : bad("read-only composer", `disabled=${dis} sendDisabled=${sendDis} placeholder=${ph}`);
+    await roCtx.close(); }
 
   console.log(`\n================ RESULT ================\nAssertions: ${PASS} passed, ${FAIL} failed`);
   if (fails.length) fails.forEach((f) => console.log("   FAILED: " + f));

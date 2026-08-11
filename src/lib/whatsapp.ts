@@ -13,6 +13,7 @@
 // in /crm with the response body included.
 
 import "server-only";
+import { assertAllowedOutboundHost } from "@/lib/crmHostGuard";
 
 const GRAPH_VERSION = "v21.0";
 
@@ -59,6 +60,7 @@ export async function sendWhatsAppText(
   }
 
   const url = `https://graph.facebook.com/${GRAPH_VERSION}/${phoneNumberId}/messages`;
+  assertAllowedOutboundHost(url); // Phase 19 Step 1: parsed-host allowlist before any outbound send
   const payload = {
     messaging_product: "whatsapp",
     to: toMetaPhone(toPhone),

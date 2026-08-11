@@ -795,6 +795,10 @@ export default function CrmClient() {
   }, [threads, view]);
 
   const appUserId = appUser?.id ?? null;
+  // Phase 19 Step 1: SEND is its own right. Courtesy-grey only — the /api/crm/send route is the
+  // real gate (403s without it); this just disables the composer with a reason so the operator
+  // never types into a box the server will reject.
+  const canSendMessages = appUser?.can_send_messages === true;
 
   // Client-side filters over the server-scoped view (no refetch): city set,
   // additive flags, and a name/preview search. `filtersActive` distinguishes
@@ -1478,6 +1482,7 @@ export default function CrmClient() {
                 error={detailError}
                 loading={detailLoading}
                 appUserId={appUserId}
+                canSendMessages={canSendMessages}
                 operators={operators}
                 onAssign={(userId) => onAssign(selectedId, userId)}
                 onSent={onSent}
@@ -1927,6 +1932,7 @@ function Conversation({
   error,
   loading,
   appUserId,
+  canSendMessages,
   operators,
   onAssign,
   onSent,
@@ -1947,6 +1953,7 @@ function Conversation({
   error: string | null;
   loading: boolean;
   appUserId: string | null;
+  canSendMessages: boolean;
   operators: Assignee[];
   onAssign: (userId: string | null) => void;
   onSent: (m: Message) => void;
@@ -2012,6 +2019,7 @@ function Conversation({
       <Composer
         threadId={selectedId}
         appUserId={appUserId}
+        canSendMessages={canSendMessages}
         channel={channel}
         whatsappWindowExpired={whatsappWindowExpired}
         customerName={detail?.thread.player?.first_name?.trim() ?? ""}
