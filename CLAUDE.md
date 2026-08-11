@@ -77,6 +77,11 @@ stay unchanged**. A test you edited to make pass records the new behaviour; it
 does not verify the old one. Selector-path edits are allowed and must be
 itemised.
 
+**Every screen suite asserts LAYOUT at 1600px, not just data.** At minimum: no
+mobile-only block is rendered (by computed display, not by the `hidden` attribute),
+and each row occupies a single band. A suite that only checks data will pass while
+the page is visibly broken — this has now happened twice.
+
 ## Never
 
 - Echo, log, print or commit `MATCHDAY_STAGE_API_PASSWORD`,

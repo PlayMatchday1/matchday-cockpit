@@ -751,7 +751,7 @@ const CSS = `
 .promo .uses.red.zero{color:#5c7168}.promo .uses.red.loading{color:#5c7168}
 .promo .red-retry{display:inline-flex;align-items:center;justify-content:center;min-width:26px;min-height:26px;border-radius:6px;border:1px solid #f0a9a4;background:#fdecea;color:#b3241f;font-weight:800;cursor:pointer;font-size:13px}
 .promo .red-retry:hover{background:#fbdcd8}.promo .red-retry:focus-visible{outline:2px solid #0b6bcb;outline-offset:1px}
-.promo .cell.c-usemob{display:none}/* beat .cell{display:block} (same specificity, later source) — desktop hide must win regardless of rule order */
+.promo .cell.c-usemob{display:none}/* GUARD, not a cure: this beats .cell{display:block} by specificity, but the root cause is that a shared LAYOUT class (.cell) sits on a hide-me span — the next '.promo .cell.X' rule can reopen the desktop-leak. Structural fix: drop .cell from the c-usemob span (line ~353) and inline the padding/min-width it borrowed from .cell. */
 .promo .r{width:100%;text-align:left;border:0;border-bottom:1px solid #dde6e1;background:#fff;font:inherit;color:inherit;cursor:pointer}
 .promo .r:last-child{border-bottom:0}.promo .r:hover{background:#f7fbf9}.promo .r:focus-visible{outline:2px solid #0b6bcb;outline-offset:-2px}
 .promo .rail{align-self:stretch;display:block;background:#cbd8d1}
