@@ -35,6 +35,7 @@ import {
 import { downloadWhatsAppMedia, sendWhatsAppText } from "@/lib/whatsapp";
 import { uploadMessageMedia } from "@/lib/crmMedia";
 import { writeThreadStatusLog } from "@/lib/crmThreadStatus";
+import { recordWrite, supabaseLogStore } from "@/lib/changeLog";
 import {
   shouldAutoReply,
   OUT_OF_HOURS_AUTO_REPLY_TEXT,
@@ -1037,6 +1038,29 @@ async function sendAutoReply(
       ins.error,
     );
     return;
+  }
+  // Record the auto-reply in change_log too (Phase 19 Step 2 item B), the SAME shape as an
+  // operator send — thread id, recipient phone, channel, message LENGTH, never the body — but
+  // with the actor recorded as the SYSTEM, not a person. So when an operator opens a thread and
+  // sees an outbound they didn't send, the change log can tell them the system sent it, and the
+  // log stays a complete record of what we've said to players. Best-effort; never throws over the
+  // webhook ack.
+  try {
+    await recordWrite(
+      {
+        env: "production", source: "crm-send",
+        actorName: "system (out-of-hours auto-reply)", actorEmail: null,
+        saveId: randomUUID(), matchId: null, matchName: null,
+        method: "POST", path: "/api/whatsapp/webhook",
+        body: { thread_id: intent.threadId, recipient_phone: intent.phone, channel: "whatsapp", message_length: OUT_OF_HOURS_AUTO_REPLY_TEXT.length, auto_reply: true },
+        keys: [], label: (k) => k, applied: () => true,
+        changes: [{ key: "message", field: "Message", before: "", after: `whatsapp auto-reply · ${OUT_OF_HOURS_AUTO_REPLY_TEXT.length} chars (system)` }],
+      },
+      { readResource: async () => ({}), write: async () => true, now: () => new Date().toISOString() },
+      supabaseLogStore(),
+    );
+  } catch (e) {
+    console.error(`[whatsapp:webhook] auto-reply change_log record failed thread=${intent.threadId}`, e);
   }
   console.log(
     `[whatsapp:webhook] auto-reply sent thread=${intent.threadId} wamid=${wamid ?? "-"}`,
