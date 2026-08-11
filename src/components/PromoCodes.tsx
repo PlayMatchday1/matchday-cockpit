@@ -751,7 +751,7 @@ const CSS = `
 .promo .uses.red.zero{color:#5c7168}.promo .uses.red.loading{color:#5c7168}
 .promo .red-retry{display:inline-flex;align-items:center;justify-content:center;min-width:26px;min-height:26px;border-radius:6px;border:1px solid #f0a9a4;background:#fdecea;color:#b3241f;font-weight:800;cursor:pointer;font-size:13px}
 .promo .red-retry:hover{background:#fbdcd8}.promo .red-retry:focus-visible{outline:2px solid #0b6bcb;outline-offset:1px}
-.promo .c-usemob{display:none}
+.promo .cell.c-usemob{display:none}/* beat .cell{display:block} (same specificity, later source) — desktop hide must win regardless of rule order */
 .promo .r{width:100%;text-align:left;border:0;border-bottom:1px solid #dde6e1;background:#fff;font:inherit;color:inherit;cursor:pointer}
 .promo .r:last-child{border-bottom:0}.promo .r:hover{background:#f7fbf9}.promo .r:focus-visible{outline:2px solid #0b6bcb;outline-offset:-2px}
 .promo .rail{align-self:stretch;display:block;background:#cbd8d1}
@@ -854,7 +854,7 @@ const CSS = `
   .promo .c-code{grid-area:code;padding:9px 0 0}.promo .c-win{grid-area:win;padding:2px 0 0}
   .promo .c-val{grid-area:val;padding:6px 0 0}.promo .c-who{grid-area:who;padding:2px 0 0}
   .promo .c-created,.promo .c-cap,.promo .c-redeemed{display:none}
-  .promo .c-usemob{display:block;grid-area:usemob;padding:5px 0 10px;font-size:12px;color:#3d5349;font-variant-numeric:tabular-nums}
+  .promo .cell.c-usemob{display:block;grid-area:usemob;padding:5px 0 10px;font-size:12px;color:#3d5349;font-variant-numeric:tabular-nums}
   .promo .c-st{grid-area:st;padding:9px 0 0;align-self:start}
   .promo .win,.promo .who{white-space:normal}
   .promo .win small{white-space:normal}

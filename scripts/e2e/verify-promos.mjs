@@ -306,6 +306,33 @@ async function main() {
   { const c = await contrastIn(page);
     c.failures.length === 0 ? ok(`contrast: every promo node >= 4.5:1 (min ${c.min})`) : bad(`contrast: ${c.failures.length} < 4.5`, c.failures.slice(0, 5).map((f) => `${f.ratio} "${f.t}" .${f.c}`).join(" | ")); }
 
+  // ══════════════ DESKTOP 1600 — LAYOUT REGRESSION (the width Ryan actually uses) ══════════════
+  // Phase 20 8fcc5838 shipped through a green gate while the page was visually broken here: the
+  // mobile stacked summary (.c-usemob, shared class .cell) re-showed at desktop because
+  // .cell{display:block} out-ordered .c-usemob{display:none} at equal specificity, and with no
+  // desktop grid column it wrapped one word per line. These assert LAYOUT by computed display +
+  // row height, not the presence of a [hidden] attribute — the whole failure mode is a display
+  // rule being beaten, which a [hidden]-presence check would miss.
+  const dctx = await browser.newContext({ viewport: { width: 1600, height: 1000 }, storageState });
+  await routes(dctx);
+  const dt = await dctx.newPage();
+  await dt.goto(PAGE, { waitUntil: "domcontentloaded" });
+  await dt.waitForSelector('[data-testid="promo-row"]'); await dt.waitForTimeout(250);
+  // 1) the mobile stacked block is NOT rendered at desktop — by COMPUTED display, not [hidden].
+  { const displays = await dt.$$eval('[data-testid="promo-row"] [data-testid="usemob"]', (els) => els.map((e) => getComputedStyle(e).display));
+    (displays.length > 0 && displays.every((d) => d === "none"))
+      ? ok(`desktop 1600: the mobile usage block is display:none on every row (${displays.length} rows)`)
+      : bad("desktop 1600: mobile usage block LEAKED (should be display:none)", JSON.stringify(displays.slice(0, 5))); }
+  // 2) each visible row is a single row band — a wrapped stack is many times taller than a table row.
+  { const heights = await dt.$$eval('[data-testid="promo-row"]', (els) => els.map((e) => Math.round(e.getBoundingClientRect().height)));
+    const BAND_MAX = 80; // a healthy desktop row is ~45–60px; the broken one-word-per-line stack was ~200px
+    (heights.length > 0 && heights.every((h) => h <= BAND_MAX))
+      ? ok(`desktop 1600: every row is a single band ≤${BAND_MAX}px (tallest ${Math.max(...heights)}px, ${heights.length} rows)`)
+      : bad(`desktop 1600: a row is far too tall — stacked wrap?`, `max ${Math.max(...heights)}px; heights=${JSON.stringify(heights)}`); }
+  // 3) mirror: the real desktop columns DO render (the cap cell is visible), so #1 isn't just "all hidden".
+  eq("desktop 1600: the desktop cells render (cap cell visible)", await dt.$eval('[data-testid="promo-row"] [data-testid="promo-cap"]', (e) => getComputedStyle(e).display !== "none"), true);
+  await dctx.close();
+
   // ══════════════ PHONE (390×844) ══════════════
   const pctx = await browser.newContext({ viewport: { width: 390, height: 844 }, isMobile: true, hasTouch: true, storageState });
   await routes(pctx);
