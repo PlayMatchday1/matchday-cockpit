@@ -5,7 +5,7 @@
 //   NODE_OPTIONS="--conditions=react-server" npx tsx scripts/promo-model-test.ts
 import {
   promoState, promoBucket, discountLabel, capLabel, leftLabel, leftTone, usageLine, UNCAPPED,
-  type PromoRow,
+  nameList, createSummary, type PromoRow,
 } from "../src/lib/promoModel";
 import {
   chicagoWallToUtcIso, utcIsoToChicagoWall, nextQuarterHourUtcIso, endOfYearUtcIso, chicagoYearOf,
@@ -90,6 +90,20 @@ eq("chicagoYearOf(now) is 2026", chicagoYearOf(Date.parse(NOW)), 2026);
 // input helpers round-trip
 { const iso = "2026-08-10T13:45:00.000Z"; const { date, time } = toChicagoInputs(iso); eq("toChicagoInputs(13:45Z) = 08:45 Aug10", { date, time }, { date: "2026-08-10", time: "08:45" }); eq("fromChicagoInputs round-trips", fromChicagoInputs(date, time), iso); }
 ok("fmtChicagoFull renders August in Central", /Aug 10, 2026 8:45 AM/.test(fmtChicagoFull("2026-08-10T13:45:00.000Z")), fmtChicagoFull("2026-08-10T13:45:00.000Z"));
+
+console.log("SCOPE SUMMARY (Phase 20 D):");
+{ eq("nameList: <=3 joined with 'and'", nameList(["Ana", "Bo"]), "Ana and Bo");
+  eq("nameList: >3 → first three + '+N more'", nameList(["A", "B", "C", "D", "E"]), "A, B, C +2 more");
+  const base = { code: "SUMMER26", discountType: "PERCENT" as const, value: 25, uses: 1, startLabel: "Aug 10 4:30 PM", endLabel: "Dec 31 11:59 PM", tzName: "America/Chicago (Central)" };
+  eq("summary TIME_PERIOD names BOTH windows",
+    /gives 25% off matches kicking off between Sep 1 and Sep 30 to anyone, once each, redeemable from Aug 10 4:30 PM to Dec 31 11:59 PM/.test(
+      createSummary({ ...base, who: "ALL_USERS", which: "TIME_PERIOD", matchPeriod: { start: "Sep 1", end: "Sep 30" } })), true);
+  eq("summary SPECIFIC_USERS names the players",
+    /to Ana and Bo,/.test(createSummary({ ...base, who: "SPECIFIC_USERS", which: "ALL_MATCHES", userNames: ["Ana", "Bo"] })), true);
+  eq("summary SPECIFIC_MATCHES states the count",
+    /gives 25% off on 3 selected matches to/.test(createSummary({ ...base, who: "ALL_USERS", which: "SPECIFIC_MATCHES", matchCount: 3 })), true);
+  eq("summary ALL_MATCHES keeps 'off on any match'",
+    /gives 25% off on any match to anyone/.test(createSummary({ ...base, who: "ALL_USERS", which: "ALL_MATCHES" })), true); }
 
 console.log(`\n${pass} passed, ${fail} failed`);
 process.exit(fail === 0 ? 0 : 1);

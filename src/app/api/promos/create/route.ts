@@ -25,14 +25,18 @@ export const dynamic = "force-dynamic";
 export const maxDuration = 30;
 
 const ENV = "production" as const; // promos are managed on production (this replaces Retool)
-const WHO_ALLOWED: TargetUserType[] = ["ALL_USERS", "NEW_USERS", "CHURN_USERS"]; // SPECIFIC_USERS needs a picker
-const WHICH_ALLOWED: TargetMatchType[] = ["ALL_MATCHES", "TOTAL_USAGE"];         // SPECIFIC_*/TIME_PERIOD need selectors
+const WHO_ALLOWED: TargetUserType[] = ["ALL_USERS", "NEW_USERS", "CHURN_USERS", "SPECIFIC_USERS"];
+const WHICH_ALLOWED: TargetMatchType[] = ["ALL_MATCHES", "TOTAL_USAGE", "TIME_PERIOD", "SPECIFIC_FIELDS", "SPECIFIC_MATCHES"];
 
 type CreateBody = {
   code?: string; discountType?: DiscountType; value?: number | string;
   startDateUtc?: string; endDateUtc?: string; uses?: number | string;
   who?: TargetUserType; which?: TargetMatchType; saveId?: string;
+  // scope payloads — only the one matching who/which is read; the rest are ignored (D5)
+  userIDs?: number[]; matchIDs?: number[]; fieldIDs?: number[];
+  matchTimePeriodStart?: string; matchTimePeriodEnd?: string;
 };
+const ints = (a: unknown): number[] => Array.isArray(a) ? a.map(Number).filter(Number.isFinite) : [];
 
 const isoRe = /^\d{4}-\d{2}-\d{2}T\d{2}:\d{2}:\d{2}(\.\d+)?Z$/;
 
@@ -57,8 +61,19 @@ export async function POST(req: Request) {
   if (!Number.isFinite(uses) || uses < 1) return Response.json({ error: "Uses must be at least 1." }, { status: 400 });
   const who: TargetUserType = b.who && WHO_ALLOWED.includes(b.who) ? b.who : "ALL_USERS";
   const which: TargetMatchType = b.which && WHICH_ALLOWED.includes(b.which) ? b.which : "ALL_MATCHES";
-  if (b.who && !WHO_ALLOWED.includes(b.who)) return Response.json({ error: `${b.who} needs a user selector — not in this phase.` }, { status: 400 });
-  if (b.which && !WHICH_ALLOWED.includes(b.which)) return Response.json({ error: `${b.which} needs a selector — not in this phase.` }, { status: 400 });
+  if (b.who && !WHO_ALLOWED.includes(b.who)) return Response.json({ error: `Unknown audience ${b.who}.` }, { status: 400 });
+  if (b.which && !WHICH_ALLOWED.includes(b.which)) return Response.json({ error: `Unknown scope ${b.which}.` }, { status: 400 });
+  // scope payloads — validate ONLY the one the active scope needs (D5: the rest are dropped)
+  const userIDs = ints(b.userIDs), matchIDs = ints(b.matchIDs), fieldIDs = ints(b.fieldIDs);
+  if (who === "SPECIFIC_USERS" && userIDs.length === 0) return Response.json({ error: "Pick at least one user for a Specific Users code." }, { status: 400 });
+  if (which === "SPECIFIC_MATCHES" && matchIDs.length === 0) return Response.json({ error: "Pick at least one match for a Specific Matches code." }, { status: 400 });
+  if (which === "SPECIFIC_FIELDS" && fieldIDs.length === 0) return Response.json({ error: "Pick at least one field for a Specific Fields code." }, { status: 400 });
+  let mpStart = "", mpEnd = "";
+  if (which === "TIME_PERIOD") {
+    mpStart = String(b.matchTimePeriodStart ?? ""); mpEnd = String(b.matchTimePeriodEnd ?? "");
+    if (!isoRe.test(mpStart) || !isoRe.test(mpEnd)) return Response.json({ error: "The match time period needs a start and end." }, { status: 400 });
+    if (mpEnd <= mpStart) return Response.json({ error: "The match period end must be after its start." }, { status: 400 });
+  }
 
   // MANAGE PROMOS check — BEFORE any MatchDay call. Network-free 403. (apiWrite re-checks with
   // requires:"promos" as the unbypassable chokepoint; this early return keeps the 403 quiet.)
@@ -69,7 +84,12 @@ export async function POST(req: Request) {
   const actor = { canEditMatches: auth.canEditMatches, canManagePlayers: auth.canManagePlayers, canManagePromos: auth.canManagePromos, email: auth.email, userId: auth.appUserId };
 
   const discountValue = discountType === "USD" ? Math.round(value * 100) : value; // USD → cents
-  const body = { code, startDateUtc, endDateUtc, discountType, discountValue, numberOfUsesPerUser: uses, targetUserType: who, targetMatchType: which };
+  // The diff IS the body — include ONLY the active scope's array/keys, never a stale one (D5).
+  const body = {
+    code, startDateUtc, endDateUtc, discountType, discountValue, numberOfUsesPerUser: uses, targetUserType: who, targetMatchType: which,
+    ...(who === "SPECIFIC_USERS" ? { userIDs } : {}),
+    ...(which === "SPECIFIC_FIELDS" ? { fieldIDs } : which === "SPECIFIC_MATCHES" ? { matchIDs } : which === "TIME_PERIOD" ? { matchTimePeriodStart: mpStart, matchTimePeriodEnd: mpEnd } : {}),
+  };
 
   const client = getMatchdayApiClient();
   // read-back by exact code (substring search filtered to equality; includes soft-deleted). A

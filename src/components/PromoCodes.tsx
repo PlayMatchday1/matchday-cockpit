@@ -414,12 +414,21 @@ function DetailDrawer({ id, onClose }: { id: number; onClose: () => void }) {
 }
 
 // ── CREATE drawer: only CODE and VALUE typed; everything else prefills. TRUE UTC via Chicago. ──
-type Form = { code: string; type: DiscountType; value: string; sD: string; sT: string; eD: string; eT: string; who: TargetUserType; which: TargetMatchType; uses: string };
+type PickedUser = { id: number; name: string; email: string; phone: string; city: string };
+type PickedMatch = { id: number; name: string; city: string; venue: string; kickoffUtc: string | null };
+type PickedField = { id: number; title: string; city: string };
+type Form = {
+  code: string; type: DiscountType; value: string; sD: string; sT: string; eD: string; eT: string;
+  who: TargetUserType; which: TargetMatchType; uses: string;
+  users: PickedUser[]; matches: PickedMatch[]; fields: PickedField[]; // specific-scope selections
+  mpSD: string; mpST: string; mpED: string; mpET: string;            // TIME_PERIOD match window (Chicago)
+};
 function CreateDrawer({ onClose, onCreated }: { onClose: () => void; onCreated: (row: PromoRow) => void }) {
   const now = Date.now();
   const startIso = nextQuarterHourUtcIso(now), endIso = endOfYearUtcIso(chicagoYearOf(now));
   const s0 = toChicagoInputs(startIso), e0 = toChicagoInputs(endIso);
-  const [f, setF] = useState<Form>({ code: "", type: "PERCENT", value: "", sD: s0.date, sT: s0.time, eD: e0.date, eT: e0.time, who: "ALL_USERS", which: "ALL_MATCHES", uses: "1" });
+  const [f, setF] = useState<Form>({ code: "", type: "PERCENT", value: "", sD: s0.date, sT: s0.time, eD: e0.date, eT: e0.time, who: "ALL_USERS", which: "ALL_MATCHES", uses: "1", users: [], matches: [], fields: [], mpSD: s0.date, mpST: s0.time, mpED: e0.date, mpET: e0.time });
+  const [scopeNote, setScopeNote] = useState<string | null>(null);
   const [dupe, setDupe] = useState<{ state: "idle" | "checking" | "free" | "taken" | "inconclusive" | "error"; existing?: { id: number; code: string; state: string } }>({ state: "idle" });
   const [submitting, setSubmitting] = useState(false);
   const [submitErr, setSubmitErr] = useState<string | null>(null);
@@ -427,10 +436,29 @@ function CreateDrawer({ onClose, onCreated }: { onClose: () => void; onCreated: 
   const set = (patch: Partial<Form>) => setF((prev) => ({ ...prev, ...patch }));
   const startUtc = () => fromChicagoInputs(f.sD, f.sT);
   const endUtc = () => fromChicagoInputs(f.eD, f.eT);
+  const mpStartUtc = () => fromChicagoInputs(f.mpSD, f.mpST);
+  const mpEndUtc = () => fromChicagoInputs(f.mpED, f.mpET);
   const badWindow = endUtc() <= startUtc();
+  const badMatchPeriod = f.which === "TIME_PERIOD" && mpEndUtc() <= mpStartUtc(); // guarded INDEPENDENTLY of the promo window
   const valNum = Number(f.value);
   const valOk = f.value !== "" && Number.isFinite(valNum) && valNum > 0 && (f.type !== "PERCENT" || valNum <= 100);
-  const valid = f.code.trim() !== "" && valOk && !badWindow && dupe.state !== "taken" && Number(f.uses) >= 1;
+  // Switching scope AWAY from a specific option DROPS its selection (never sent stale) and says so.
+  const setWho = (w: TargetUserType) => {
+    setScopeNote(f.who === "SPECIFIC_USERS" && w !== "SPECIFIC_USERS" && f.users.length ? `${f.users.length} user${f.users.length > 1 ? "s" : ""} deselected` : null);
+    set({ who: w, ...(w === "SPECIFIC_USERS" ? {} : { users: [] }) });
+  };
+  const setWhich = (w: TargetMatchType) => {
+    const drops: string[] = [];
+    if (f.which === "SPECIFIC_MATCHES" && w !== "SPECIFIC_MATCHES" && f.matches.length) drops.push(`${f.matches.length} match${f.matches.length > 1 ? "es" : ""}`);
+    if (f.which === "SPECIFIC_FIELDS" && w !== "SPECIFIC_FIELDS" && f.fields.length) drops.push(`${f.fields.length} field${f.fields.length > 1 ? "s" : ""}`);
+    setScopeNote(drops.length ? `${drops.join(" and ")} deselected` : null);
+    set({ which: w, ...(w === "SPECIFIC_MATCHES" ? {} : { matches: [] }), ...(w === "SPECIFIC_FIELDS" ? {} : { fields: [] }) });
+  };
+  const scopeOk = (f.who !== "SPECIFIC_USERS" || f.users.length > 0)
+    && (f.which !== "SPECIFIC_MATCHES" || f.matches.length > 0)
+    && (f.which !== "SPECIFIC_FIELDS" || f.fields.length > 0)
+    && (f.which !== "TIME_PERIOD" || !badMatchPeriod);
+  const valid = f.code.trim() !== "" && valOk && !badWindow && dupe.state !== "taken" && Number(f.uses) >= 1 && scopeOk;
 
   // debounced duplicate check (server call — the browser cannot hold 6,260 codes)
   const codeRef = useRef(f.code);
@@ -455,14 +483,23 @@ function CreateDrawer({ onClose, onCreated }: { onClose: () => void; onCreated: 
   useEffect(() => { const h = (e: KeyboardEvent) => { if (e.key === "Escape") onClose(); }; document.addEventListener("keydown", h); return () => document.removeEventListener("keydown", h); }, [onClose]);
 
   const summary = f.code.trim() && valOk
-    ? createSummary({ code: f.code.trim(), discountType: f.type, value: f.type === "USD" ? Math.round(valNum * 100) : valNum, who: f.who, which: f.which, uses: Number(f.uses) || 1, startLabel: fmtChicagoFull(startUtc()), endLabel: fmtChicagoFull(endUtc()), tzName: PROMO_TZ_LABEL.split(" (")[0] })
+    ? createSummary({ code: f.code.trim(), discountType: f.type, value: f.type === "USD" ? Math.round(valNum * 100) : valNum, who: f.who, which: f.which, uses: Number(f.uses) || 1, startLabel: fmtChicagoFull(startUtc()), endLabel: fmtChicagoFull(endUtc()), tzName: PROMO_TZ_LABEL,
+        userNames: f.users.map((u) => u.name), matchCount: f.matches.length, fieldCount: f.fields.length,
+        matchPeriod: f.which === "TIME_PERIOD" ? { start: fmtChicagoFull(mpStartUtc()), end: fmtChicagoFull(mpEndUtc()) } : undefined })
     : null;
 
   const submit = async () => {
     setSubmitting(true); setSubmitErr(null);
     try {
+      // send ONLY the active scope's payload — a switched-away array is never in the body (D5).
+      const scopePayload: Record<string, unknown> = {
+        ...(f.who === "SPECIFIC_USERS" ? { userIDs: f.users.map((u) => u.id) } : {}),
+        ...(f.which === "SPECIFIC_MATCHES" ? { matchIDs: f.matches.map((m) => m.id) }
+          : f.which === "SPECIFIC_FIELDS" ? { fieldIDs: f.fields.map((x) => x.id) }
+          : f.which === "TIME_PERIOD" ? { matchTimePeriodStart: mpStartUtc(), matchTimePeriodEnd: mpEndUtc() } : {}),
+      };
       const res = await authFetch(`/api/promos/create`, { method: "POST", headers: { "Content-Type": "application/json" }, body: JSON.stringify({
-        code: f.code.trim(), discountType: f.type, value: valNum, startDateUtc: startUtc(), endDateUtc: endUtc(), uses: Number(f.uses), who: f.who, which: f.which,
+        code: f.code.trim(), discountType: f.type, value: valNum, startDateUtc: startUtc(), endDateUtc: endUtc(), uses: Number(f.uses), who: f.who, which: f.which, ...scopePayload,
       }) });
       const j = await res.json();
       if (!res.ok) { setSubmitErr(j.error || `HTTP ${res.status}`); setSubmitting(false); return; }
@@ -485,8 +522,8 @@ function CreateDrawer({ onClose, onCreated }: { onClose: () => void; onCreated: 
     else if (kind === "d30") { const c = utcIsoToChicagoWall(new Date(n).toISOString()); const iso = chicagoWallToUtcIso({ y: c.y, mo: c.mo, d: c.d + 30, h: 23, mi: 59 }); const w = toChicagoInputs(iso); set({ eD: w.date, eT: w.time }); }
   };
 
-  const WHO_OPTS: { v: TargetUserType; disabled?: boolean }[] = [{ v: "ALL_USERS" }, { v: "NEW_USERS" }, { v: "CHURN_USERS" }, { v: "SPECIFIC_USERS", disabled: true }];
-  const WHICH_OPTS: { v: TargetMatchType; disabled?: boolean }[] = [{ v: "ALL_MATCHES" }, { v: "TOTAL_USAGE" }, { v: "TIME_PERIOD", disabled: true }, { v: "SPECIFIC_FIELDS", disabled: true }, { v: "SPECIFIC_MATCHES", disabled: true }];
+  const WHO_OPTS: TargetUserType[] = ["ALL_USERS", "NEW_USERS", "CHURN_USERS", "SPECIFIC_USERS"];
+  const WHICH_OPTS: TargetMatchType[] = ["ALL_MATCHES", "TOTAL_USAGE", "TIME_PERIOD", "SPECIFIC_FIELDS", "SPECIFIC_MATCHES"];
 
   return (
     <div className="scrim" onClick={(e) => { if ((e.target as HTMLElement).classList.contains("scrim")) onClose(); }}>
@@ -537,15 +574,35 @@ function CreateDrawer({ onClose, onCreated }: { onClose: () => void; onCreated: 
           </div>
 
           <div className="sect"><h3>WHO CAN USE IT</h3>
-            <span className="radios">{WHO_OPTS.map((o) => <button key={o.v} type="button" className="rad" disabled={o.disabled} aria-pressed={f.who === o.v} title={o.disabled ? "Selecting specific users needs a picker — lands next phase." : undefined} onClick={() => !o.disabled && set({ who: o.v })}>{USER_TYPE_LABEL[o.v]}</button>)}</span>
-            <label className="fld" style={{ marginTop: 13 }}><span className="lb">USES PER PERSON <span className="auto">PREFILLED 1</span></span>
+            <span className="radios">{WHO_OPTS.map((v) => <button key={v} type="button" className="rad" data-testid={`f-who-${v}`} aria-pressed={f.who === v} onClick={() => setWho(v)}>{USER_TYPE_LABEL[v]}</button>)}</span>
+            {f.who === "SPECIFIC_USERS" && <UserPicker selected={f.users} onChange={(users) => set({ users })} />}
+            <label className="fld" style={{ marginTop: 13 }}><span className="lb">USES PER {f.which === "TOTAL_USAGE" ? "CODE (TOTAL)" : "PERSON"} <span className="auto">PREFILLED 1</span></span>
               <input data-testid="f-uses" inputMode="numeric" value={f.uses} onChange={(e) => set({ uses: e.target.value })} />
-              <span className="help">Starts at 1 (Retool defaults it to 0, which nobody can redeem). Becomes a total cap when scope is “All Matches (total cap)”.</span>
+              <span className="help" data-testid="f-uses-help">{f.which === "TOTAL_USAGE"
+                ? "A TOTAL cap across everyone — the code stops after this many redemptions in all."
+                : "Per person. Starts at 1 (Retool defaults it to 0, which nobody can redeem). Becomes a total cap under “All Matches (total cap)”."}</span>
             </label>
           </div>
 
           <div className="sect"><h3>WHICH MATCHES</h3>
-            <span className="radios">{WHICH_OPTS.map((o) => <button key={o.v} type="button" className="rad" disabled={o.disabled} aria-pressed={f.which === o.v} title={o.disabled ? "Selecting specific matches/fields or a time period needs a selector — lands next phase." : undefined} onClick={() => !o.disabled && set({ which: o.v })}>{MATCH_TYPE_LABEL[o.v]}</button>)}</span>
+            <span className="radios">{WHICH_OPTS.map((v) => <button key={v} type="button" className="rad" data-testid={`f-which-${v}`} aria-pressed={f.which === v} onClick={() => setWhich(v)}>{MATCH_TYPE_LABEL[v]}</button>)}</span>
+            {scopeNote && <span className="help" data-testid="f-scope-note">{scopeNote}.</span>}
+            {f.which === "TIME_PERIOD" && (
+              <div className="fgrid" style={{ marginTop: 13 }}>
+                <span className="fld"><span className="lb">MATCHES KICKING OFF FROM <span className="auto">PREFILLED</span></span>
+                  <input type="date" data-testid="f-mpsd" value={f.mpSD} onChange={(e) => set({ mpSD: e.target.value })} />
+                  <input type="time" data-testid="f-mpst" value={f.mpST} style={{ marginTop: 7 }} onChange={(e) => set({ mpST: e.target.value })} />
+                </span>
+                <span className="fld"><span className="lb">…UNTIL</span>
+                  <input type="date" data-testid="f-mped" value={f.mpED} aria-invalid={badMatchPeriod} onChange={(e) => set({ mpED: e.target.value })} />
+                  <input type="time" data-testid="f-mpet" value={f.mpET} style={{ marginTop: 7 }} onChange={(e) => set({ mpET: e.target.value })} />
+                  {badMatchPeriod && <span className="err" data-testid="f-mperr">The match period end must be after its start.</span>}
+                  <span className="help">Which matches the discount applies to — separate from when the code can be redeemed (above).</span>
+                </span>
+              </div>
+            )}
+            {f.which === "SPECIFIC_MATCHES" && <MatchPicker selected={f.matches} promoFrom={f.sD} promoTo={f.eD} onChange={(matches) => set({ matches })} />}
+            {f.which === "SPECIFIC_FIELDS" && <FieldPicker selected={f.fields} onChange={(fields) => set({ fields })} />}
           </div>
         </div>
 
@@ -558,6 +615,94 @@ function CreateDrawer({ onClose, onCreated }: { onClose: () => void; onCreated: 
             <button className="btn primary" data-testid="f-create" disabled={!valid || submitting} onClick={submit}>{submitting ? "Creating…" : "Create promo code"}</button>
           </span>
         </div>
+      </div>
+    </div>
+  );
+}
+
+// ── D2: Specific Users — reuses the universal player search (/api/lookup/{env}?q=), which fuzzy-
+//    matches email, name AND phone digits. Multi-select with removable chips. ──
+function UserPicker({ selected, onChange }: { selected: PickedUser[]; onChange: (u: PickedUser[]) => void }) {
+  const [q, setQ] = useState(""); const [results, setResults] = useState<PickedUser[]>([]); const [loading, setLoading] = useState(false);
+  const qref = useRef(q); useEffect(() => { qref.current = q; }, [q]);
+  useEffect(() => {
+    const term = q.trim(); if (term.length < 2) { setResults([]); return; }
+    setLoading(true);
+    const t = setTimeout(async () => {
+      try { const res = await authFetch(`/api/lookup/production?q=${encodeURIComponent(term)}`); const j = await res.json();
+        if (qref.current.trim() !== term) return;
+        setResults((j.results ?? []).map((r: Record<string, unknown>) => ({ id: Number(r.id), name: String(r.name ?? `User ${r.id}`), email: String(r.email ?? ""), phone: String(r.phone ?? ""), city: String(r.city ?? "") })));
+      } catch { /* ignore */ } finally { if (qref.current.trim() === term) setLoading(false); }
+    }, 300);
+    return () => clearTimeout(t);
+  }, [q]);
+  const add = (u: PickedUser) => { if (!selected.some((s) => s.id === u.id)) onChange([...selected, u]); };
+  const remove = (id: number) => onChange(selected.filter((s) => s.id !== id));
+  return (
+    <div className="pk" data-testid="user-picker">
+      <input className="pk-search" data-testid="user-search" placeholder="Search users by name, email or phone" value={q} onChange={(e) => setQ(e.target.value)} />
+      {selected.length > 0 && <div className="pk-chips" data-testid="user-chips">{selected.map((u) => <span key={u.id} className="pk-chip">{u.name}<button type="button" aria-label={`Remove ${u.name}`} onClick={() => remove(u.id)}>×</button></span>)}</div>}
+      {q.trim().length >= 2 && <div className="pk-results" data-testid="user-results">
+        {loading ? <div className="pk-empty">Searching…</div> : results.length === 0 ? <div className="pk-empty">No matching users.</div> :
+          results.map((u) => <button type="button" key={u.id} className="pk-row" data-testid={`user-opt-${u.id}`} disabled={selected.some((s) => s.id === u.id)} onClick={() => add(u)}>
+            <span className="pk-name">{u.name}</span><span className="pk-meta">{[u.email, u.phone, u.city].filter(Boolean).join(" · ")}</span></button>)}
+      </div>}
+    </div>
+  );
+}
+
+// ── D3: Specific Matches — date range (defaults to the promo window) + city filter, multi-select. ──
+function MatchPicker({ selected, promoFrom, promoTo, onChange }: { selected: PickedMatch[]; promoFrom: string; promoTo: string; onChange: (m: PickedMatch[]) => void }) {
+  const [from, setFrom] = useState(promoFrom); const [to, setTo] = useState(promoTo); const [city, setCity] = useState("");
+  const [data, setData] = useState<{ matches: PickedMatch[]; cities: { id: number; name: string }[] }>({ matches: [], cities: [] });
+  const [loading, setLoading] = useState(false); const [err, setErr] = useState<string | null>(null);
+  useEffect(() => {
+    setLoading(true); setErr(null);
+    const t = setTimeout(async () => {
+      try { const res = await authFetch(`/api/promos/matches?from=${from}&to=${to}`); const j = await res.json();
+        if (!res.ok) { setErr(j.error || "couldn't load matches"); setData({ matches: [], cities: [] }); } else setData({ matches: j.matches ?? [], cities: j.cities ?? [] });
+      } catch (e) { setErr(e instanceof Error ? e.message : String(e)); } finally { setLoading(false); }
+    }, 350);
+    return () => clearTimeout(t);
+  }, [from, to]);
+  const shown = data.matches.filter((m) => !city || String((m as PickedMatch & { cityId?: number }).cityId) === city);
+  const add = (m: PickedMatch) => { if (!selected.some((s) => s.id === m.id)) onChange([...selected, m]); };
+  const remove = (id: number) => onChange(selected.filter((s) => s.id !== id));
+  return (
+    <div className="pk" data-testid="match-picker">
+      <div className="pk-filters">
+        <input type="date" data-testid="match-from" value={from} onChange={(e) => setFrom(e.target.value)} aria-label="Matches from date" />
+        <input type="date" data-testid="match-to" value={to} onChange={(e) => setTo(e.target.value)} aria-label="Matches to date" />
+        <select data-testid="match-city" value={city} onChange={(e) => setCity(e.target.value)} aria-label="City"><option value="">All cities</option>{data.cities.map((c) => <option key={c.id} value={String(c.id)}>{c.name}</option>)}</select>
+      </div>
+      {selected.length > 0 && <div className="pk-chips" data-testid="match-chips">{selected.map((m) => <span key={m.id} className="pk-chip">{m.name}<button type="button" aria-label={`Remove ${m.name}`} onClick={() => remove(m.id)}>×</button></span>)}</div>}
+      <div className="pk-results" data-testid="match-results">
+        {loading ? <div className="pk-empty">Loading matches…</div> : err ? <div className="pk-empty">{err}</div> : shown.length === 0 ? <div className="pk-empty">No matches in this range/city.</div> :
+          shown.slice(0, 60).map((m) => <button type="button" key={m.id} className="pk-row" data-testid={`match-opt-${m.id}`} disabled={selected.some((s) => s.id === m.id)} onClick={() => add(m)}>
+            <span className="pk-name">{m.name}</span><span className="pk-meta">{[m.venue, m.city, m.kickoffUtc ? fmtChicagoFull(m.kickoffUtc) : null].filter(Boolean).join(" · ")}</span></button>)}
+      </div>
+    </div>
+  );
+}
+
+// ── D4: Specific Fields — grouped by city, multi-select toggle chips. ──
+function FieldPicker({ selected, onChange }: { selected: PickedField[]; onChange: (f: PickedField[]) => void }) {
+  const [data, setData] = useState<PickedField[]>([]); const [q, setQ] = useState(""); const [loading, setLoading] = useState(true); const [err, setErr] = useState<string | null>(null);
+  useEffect(() => { (async () => {
+    try { const res = await authFetch(`/api/promos/fields`); const j = await res.json();
+      if (!res.ok) setErr(j.error || "couldn't load fields"); else setData((j.fields ?? []).map((f: Record<string, unknown>) => ({ id: Number(f.id), title: String(f.title), city: String(f.city) })));
+    } catch (e) { setErr(e instanceof Error ? e.message : String(e)); } finally { setLoading(false); }
+  })(); }, []);
+  const shown = data.filter((f) => !q.trim() || `${f.title} ${f.city}`.toLowerCase().includes(q.trim().toLowerCase()));
+  const cities = [...new Set(shown.map((f) => f.city))];
+  const toggle = (fl: PickedField) => selected.some((s) => s.id === fl.id) ? onChange(selected.filter((s) => s.id !== fl.id)) : onChange([...selected, fl]);
+  return (
+    <div className="pk" data-testid="field-picker">
+      <input className="pk-search" data-testid="field-search" placeholder="Filter fields by name or city" value={q} onChange={(e) => setQ(e.target.value)} />
+      {selected.length > 0 && <div className="pk-chips" data-testid="field-chips">{selected.map((fl) => <span key={fl.id} className="pk-chip">{fl.title}<button type="button" aria-label={`Remove ${fl.title}`} onClick={() => toggle(fl)}>×</button></span>)}</div>}
+      <div className="pk-results" data-testid="field-results">
+        {loading ? <div className="pk-empty">Loading fields…</div> : err ? <div className="pk-empty">{err}</div> : cities.length === 0 ? <div className="pk-empty">No fields.</div> :
+          cities.map((c) => <div key={c} className="pk-group"><div className="pk-gh">{c}</div>{shown.filter((f) => f.city === c).map((fl) => <button type="button" key={fl.id} className={"pk-row" + (selected.some((s) => s.id === fl.id) ? " on" : "")} data-testid={`field-opt-${fl.id}`} onClick={() => toggle(fl)}><span className="pk-name">{fl.title}</span></button>)}</div>)}
       </div>
     </div>
   );
@@ -674,6 +819,23 @@ const CSS = `
 .promo .rad{border:1px solid #cbd8d1;background:#fff;border-radius:999px;padding:0 13px;min-height:44px;font:inherit;font-size:12.5px;font-weight:600;color:#3d5349;cursor:pointer;display:inline-flex;align-items:center}
 .promo .rad[aria-pressed="true"]{background:#12301f;border-color:#12301f;color:#fff}.promo .rad:disabled{opacity:.4;cursor:not-allowed}
 .promo .sect{margin-top:18px;padding-top:15px;border-top:1px solid #dde6e1}.promo .sect h3{margin:0 0 11px;font-size:10.5px;font-weight:800;letter-spacing:.12em;color:#5c7168}
+/* scope pickers */
+.promo .pk{margin-top:12px}
+.promo .pk-filters{display:flex;gap:8px;flex-wrap:wrap;margin-bottom:9px}
+.promo .pk-filters input,.promo .pk-filters select{flex:1 1 auto;min-width:0;border:1px solid #cbd8d1;border-radius:9px;padding:8px 10px;font:inherit;font-size:13px;background:#fbfdfc;color:#0e1a13;min-height:40px}
+.promo .pk-search{width:100%;border:1px solid #cbd8d1;border-radius:9px;padding:9px 11px;font:inherit;font-size:14px;background:#fbfdfc;color:#0e1a13;min-height:42px}
+.promo .pk-search:focus{outline:2px solid #0b6bcb;outline-offset:-1px;background:#fff}
+.promo .pk-chips{display:flex;flex-wrap:wrap;gap:6px;margin:9px 0}
+.promo .pk-chip{display:inline-flex;align-items:center;gap:5px;background:#e6f4ec;border:1px solid #9fd3b6;color:#0d4a2e;border-radius:999px;padding:3px 5px 3px 11px;font-size:12.5px;font-weight:600}
+.promo .pk-chip button{border:0;background:none;color:#146c43;font-size:16px;line-height:1;cursor:pointer;min-width:24px;min-height:24px}
+.promo .pk-results{margin-top:9px;max-height:230px;overflow-y:auto;border:1px solid #dde6e1;border-radius:10px}
+.promo .pk-row{display:block;width:100%;text-align:left;border:0;border-bottom:1px solid #eef3f0;background:#fff;padding:9px 12px;font:inherit;cursor:pointer;min-height:44px}
+.promo .pk-row:last-child{border-bottom:0}.promo .pk-row:hover{background:#f4f8f6}.promo .pk-row:disabled{opacity:.5;cursor:not-allowed}
+.promo .pk-row.on{background:#e6f4ec}
+.promo .pk-name{display:block;font-weight:700;font-size:13.5px;color:#0e1a13}
+.promo .pk-meta{display:block;font-size:11.5px;color:#5c7168;margin-top:1px}
+.promo .pk-empty{padding:14px 12px;text-align:center;color:#5c7168;font-size:13px}
+.promo .pk-group .pk-gh{position:sticky;top:0;background:#fafcfb;border-bottom:1px solid #dde6e1;padding:6px 12px;font-size:10px;font-weight:800;letter-spacing:.1em;color:#5c7168}
 .promo .summary{display:block;margin:0;padding:12px 18px;background:#e6f4ec;border-bottom:1px solid #9fd3b6;color:#0d4a2e;font-size:13px;line-height:1.45}
 .promo .summary b{display:block;font-size:10px;letter-spacing:.12em;margin-bottom:4px;color:#0f5c39}
 .promo .summary.bad{background:#fdf2e0;border-bottom-color:#e8c383;color:#6b4400}.promo .summary.bad b{color:#7a4d00}

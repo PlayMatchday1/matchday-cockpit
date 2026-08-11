@@ -124,18 +124,32 @@ export const MATCH_TYPES: TargetMatchType[] = ["ALL_MATCHES", "TOTAL_USAGE", "TI
 
 // Plain-English one-liner for the create form summary. `startIso`/`endIso` are UTC; the caller
 // renders the Chicago times via promoTz and passes them in already-formatted.
+// Name up to `n` items, then "+K more" — for the plain-English summary (Phase 20 D2).
+export function nameList(items: string[], n = 3): string {
+  if (items.length === 0) return "";
+  if (items.length <= n) return items.length === 1 ? items[0] : `${items.slice(0, -1).join(", ")} and ${items[items.length - 1]}`;
+  return `${items.slice(0, n).join(", ")} +${items.length - n} more`;
+}
+
 export function createSummary(args: {
   code: string; discountType: DiscountType; value: number; who: TargetUserType; which: TargetMatchType;
   uses: number; startLabel: string; endLabel: string; tzName: string;
+  userNames?: string[]; matchPeriod?: { start: string; end: string }; matchCount?: number; fieldCount?: number;
 }): string {
   const amt = args.discountType === "USD" ? `$${(args.value / 100).toFixed(2)} off` : `${args.value}% off`;
-  const who = { ALL_USERS: "anyone", NEW_USERS: "new players", CHURN_USERS: "churned players", SPECIFIC_USERS: "specific players" }[args.who];
-  const which = {
-    ALL_MATCHES: "any match", TOTAL_USAGE: "any match, capped in total",
-    TIME_PERIOD: "matches inside the promo window", SPECIFIC_FIELDS: "matches on selected fields", SPECIFIC_MATCHES: "selected matches",
-  }[args.which];
+  const who = args.who === "SPECIFIC_USERS"
+    ? (args.userNames && args.userNames.length ? nameList(args.userNames) : "selected players")
+    : { ALL_USERS: "anyone", NEW_USERS: "new players", CHURN_USERS: "churned players", SPECIFIC_USERS: "selected players" }[args.who];
+  // each scope phrase carries its own preposition — "off matches kicking off between…" reads
+  // wrong with a leading "on", while "off on any match" needs it.
+  const which = args.which === "TIME_PERIOD" && args.matchPeriod
+      ? `matches kicking off between ${args.matchPeriod.start} and ${args.matchPeriod.end}`
+    : args.which === "SPECIFIC_MATCHES" ? `on ${(args.matchCount ?? 0).toLocaleString()} selected match${args.matchCount === 1 ? "" : "es"}`
+    : args.which === "SPECIFIC_FIELDS" ? `on matches at ${(args.fieldCount ?? 0).toLocaleString()} selected field${args.fieldCount === 1 ? "" : "s"}`
+    : args.which === "TOTAL_USAGE" ? "on any match, capped in total"
+    : "on any match";
   const capPhrase = args.which === "TOTAL_USAGE"
     ? `${args.uses.toLocaleString()} uses in total`
     : args.uses === 1 ? "once each" : `${args.uses.toLocaleString()} times each`;
-  return `Code ${args.code} gives ${amt} on ${which} to ${who}, ${capPhrase}, from ${args.startLabel} to ${args.endLabel} ${args.tzName} time.`;
+  return `Code ${args.code} gives ${amt} ${which} to ${who}, ${capPhrase}, redeemable from ${args.startLabel} to ${args.endLabel} ${args.tzName}.`;
 }

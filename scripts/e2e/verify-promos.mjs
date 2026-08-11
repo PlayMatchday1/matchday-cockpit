@@ -92,6 +92,7 @@ async function main() {
   const ref = new URL(process.env.NEXT_PUBLIC_SUPABASE_URL).host.split(".")[0];
   const storageState = { cookies: [], origins: [{ origin: BASE, localStorage: [{ name: `sb-${ref}-auth-token`, value: JSON.stringify(vv.data.session) }] }] };
 
+  let lastCreate = null; // captured create-request payload, for the D5 drop-array assertion
   const routes = async (ctx) => {
     const now = Date.now();
     await ctx.route("**/api/promos/list**", (route) => route.fulfill({ status: 200, contentType: "application/json", body: JSON.stringify(serveList(route.request().url(), now)) }));
@@ -111,7 +112,20 @@ async function main() {
       const promo = [...live, ...past].find((r) => r.id === id) ?? null; // unknown (filler) → usageCount 0
       route.fulfill({ status: 200, contentType: "application/json", body: JSON.stringify({ promo, usageCount: usageFor[id] ?? 0, nowIso: new Date(now).toISOString() }) });
     });
-    await ctx.route("**/api/promos/create**", (route) => route.fulfill({ status: 200, contentType: "application/json", body: JSON.stringify({ ok: true, result: { id: 9999 }, outcome: "landed", logRecorded: true }) }));
+    await ctx.route("**/api/promos/create**", (route) => { try { lastCreate = route.request().postDataJSON(); } catch { /* */ } route.fulfill({ status: 200, contentType: "application/json", body: JSON.stringify({ ok: true, result: { id: 9999 }, outcome: "landed", logRecorded: true }) }); });
+    // ── scope-picker mocks (D2/D3/D4) ──
+    await ctx.route("**/api/lookup/**", (route) => {
+      const q = (new URL(route.request().url()).searchParams.get("q") || "").toLowerCase();
+      const people = [{ id: 88, name: "Sam Rivera", email: "sam@x.com", phone: "5551234", city: "Austin" }, { id: 91, name: "Sam Ortiz", email: "sortiz@x.com", phone: "5559876", city: "Houston" }];
+      route.fulfill({ status: 200, contentType: "application/json", body: JSON.stringify({ kind: "code", results: q ? people.filter((p) => p.name.toLowerCase().includes(q) || p.email.toLowerCase().includes(q)) : [] }) });
+    });
+    await ctx.route("**/api/promos/matches**", (route) => route.fulfill({ status: 200, contentType: "application/json", body: JSON.stringify({
+      matches: [{ id: 701, name: "NEMP Austin", venue: "NEMP", city: "Austin", cityId: 1, kickoffUtc: new Date(now + 5 * DAY).toISOString() }, { id: 702, name: "Kiest Dallas", venue: "Kiest", city: "Dallas", cityId: 2, kickoffUtc: new Date(now + 6 * DAY).toISOString() }],
+      cities: [{ id: 1, name: "Austin" }, { id: 2, name: "Dallas" }], totalItems: 2,
+    }) }));
+    await ctx.route("**/api/promos/fields**", (route) => route.fulfill({ status: 200, contentType: "application/json", body: JSON.stringify({
+      fields: [{ id: 11, title: "NEMP Field 1", city: "Austin", cityId: 1 }, { id: 12, title: "Zilker Metro", city: "Austin", cityId: 1 }, { id: 21, title: "Kiest Park", city: "Dallas", cityId: 2 }],
+    }) }));
     await grantPromos(ctx);
   };
 
@@ -243,6 +257,47 @@ async function main() {
   eq("create now enabled", await page.$eval('[data-testid="f-create"]', (e) => e.disabled), false);
   await page.click('[data-testid="f-create"]'); await page.waitForTimeout(400);
   eq("after create: just-created row at top of LIVE, marked", { marker: !!(await page.$('[data-testid="just-created"]')), code: await page.$eval('[data-testid="grp-live"] [data-testid="promo-row"] .code', (e) => e.textContent.replace(/JUST CREATED/, "").trim()) }, { marker: true, code: "NEWSUMMER" });
+
+  // ══════════════ D — SCOPE PICKERS ══════════════
+  await page.click('[data-testid="promo-new"]'); await page.waitForSelector('[data-testid="f-create"]'); await page.waitForTimeout(150);
+  await page.fill('[data-testid="f-value"]', "30"); await page.fill('[data-testid="f-code"]', "SCOPETEST"); await page.waitForTimeout(500);
+  // D6 — TOTAL_USAGE exclusive + the USES help re-renders (not stale)
+  { const before = await page.$eval('[data-testid="f-uses-help"]', (e) => e.textContent);
+    await page.click('[data-testid="f-which-TOTAL_USAGE"]'); await page.waitForTimeout(150);
+    const after = await page.$eval('[data-testid="f-uses-help"]', (e) => e.textContent);
+    eq("D6: USES help re-renders when scope flips to TOTAL_USAGE", { changed: before !== after, total: /total/i.test(after) }, { changed: true, total: true }); }
+  // D1 — Promo Time Period: inputs appear prefilled, guarded INDEPENDENTLY, summary states BOTH
+  await page.click('[data-testid="f-which-TIME_PERIOD"]'); await page.waitForSelector('[data-testid="f-mpsd"]'); await page.waitForTimeout(120);
+  eq("D1: match-period inputs appear, prefilled", { sd: /\d{4}-\d{2}-\d{2}/.test(await page.$eval('[data-testid="f-mpsd"]', (e) => e.value)), ed: /\d{4}-\d{2}-\d{2}/.test(await page.$eval('[data-testid="f-mped"]', (e) => e.value)) }, { sd: true, ed: true });
+  await page.fill('[data-testid="f-mped"]', "2020-01-01"); await page.waitForTimeout(150);
+  eq("D1: match-period guarded independently (end<start) blocks create", { err: !!(await page.$('[data-testid="f-mperr"]')), disabled: await page.$eval('[data-testid="f-create"]', (e) => e.disabled) }, { err: true, disabled: true });
+  await page.fill('[data-testid="f-mped"]', "2026-12-31"); await page.waitForTimeout(250);
+  eq("D1: summary states BOTH the match period AND the redeem window", { kicking: /kicking off between/.test(await page.$eval('[data-testid="f-summary"]', (e) => e.textContent)), redeem: /redeemable from/.test(await page.$eval('[data-testid="f-summary"]', (e) => e.textContent)) }, { kicking: true, redeem: true });
+  // D2 — Specific Users: search, add chip, summary NAMES the player
+  await page.click('[data-testid="f-who-SPECIFIC_USERS"]'); await page.waitForSelector('[data-testid="user-search"]');
+  await page.fill('[data-testid="user-search"]', "Sam"); await page.waitForSelector('[data-testid="user-opt-88"]', { timeout: 6000 });
+  await page.click('[data-testid="user-opt-88"]'); await page.waitForTimeout(150);
+  eq("D2: chosen user becomes a chip; summary NAMES the player", { chip: !!(await page.$('[data-testid="user-chips"]')), named: /Sam Rivera/.test(await page.$eval('[data-testid="f-summary"]', (e) => e.textContent)) }, { chip: true, named: true });
+  // D3 — Specific Matches: city filter + multi-select chip
+  await page.click('[data-testid="f-which-SPECIFIC_MATCHES"]'); await page.waitForSelector('[data-testid="match-opt-701"]', { timeout: 6000 });
+  await page.click('[data-testid="match-opt-701"]'); await page.waitForTimeout(120);
+  eq("D3: chosen match becomes a chip", !!(await page.$('[data-testid="match-chips"]')), true);
+  // D5 — switch scope AWAY → deselect announced
+  await page.click('[data-testid="f-which-ALL_MATCHES"]'); await page.waitForTimeout(150);
+  eq("D5: switching away from Specific Matches announces the deselection", /deselected/.test(await page.$eval('[data-testid="f-scope-note"]', (e) => e.textContent).catch(() => "")), true);
+  // D4 — Specific Fields: grouped, multi-select chip
+  await page.click('[data-testid="f-which-SPECIFIC_FIELDS"]'); await page.waitForSelector('[data-testid="field-opt-11"]', { timeout: 6000 });
+  await page.click('[data-testid="field-opt-11"]'); await page.waitForTimeout(120);
+  eq("D4: chosen field becomes a chip", !!(await page.$('[data-testid="field-chips"]')), true);
+  // D5 payload — create with SPECIFIC_USERS + ALL_MATCHES: userIDs sent, NO stale matchIDs/fieldIDs/period
+  await page.click('[data-testid="f-which-ALL_MATCHES"]'); await page.waitForTimeout(150); // drops the field selection
+  lastCreate = null;
+  await page.click('[data-testid="f-create"]'); await page.waitForTimeout(500);
+  eq("D5 payload: sends userIDs; NO matchIDs / fieldIDs / matchTimePeriod leaked", {
+    who: lastCreate?.who, userIDs: lastCreate?.userIDs,
+    noMatch: !("matchIDs" in (lastCreate || {})), noField: !("fieldIDs" in (lastCreate || {})), noPeriod: !("matchTimePeriodStart" in (lastCreate || {})),
+  }, { who: "SPECIFIC_USERS", userIDs: [88], noMatch: true, noField: true, noPeriod: true });
+  await page.waitForSelector('[data-testid="promo-row"][data-id="101"]');
 
   // ── no horizontal overflow at 1280 (the narrowest desktop that still shows the sidebar) ──
   { const o = await overflow(page); (!o.pageLeak) ? ok("no horizontal overflow at 1280 with the 9-column table + sidebar") : bad("overflow at 1280", JSON.stringify(o.offenders.slice(0, 4))); }
