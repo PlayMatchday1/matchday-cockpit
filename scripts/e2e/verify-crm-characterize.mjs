@@ -226,6 +226,20 @@ async function main() {
     await page.waitForTimeout(600);
     (listFetches > before) ? ok("§handler crm_thread_reads: fires the debounced inbox reload") : bad("crm_thread_reads handler", `fetches ${before} → ${listFetches}`); }
 
+  // ══════════════ Phase 19 Step 2 B1 follow-up: selection mirrors to the URL ══════════════
+  // The provider is the source of truth, but the selected thread is mirrored into ?threadId via
+  // window.history.replaceState — so a refresh reopens the thread and deep links work, WITHOUT a
+  // Next navigation. Assert the URL carries the threadId AND no history entry was pushed (a
+  // router.push/navigation would grow history.length; replaceState does not).
+  { const histBefore = await page.evaluate(() => history.length);
+    await selectThread("t-marco", 1);
+    const search = await page.evaluate(() => location.search);
+    const pathname = await page.evaluate(() => location.pathname);
+    const histAfter = await page.evaluate(() => history.length);
+    (/[?&]threadId=t-marco\b/.test(search) && histAfter === histBefore && pathname === "/match-ops/player-chats")
+      ? ok("selection mirrors to ?threadId via replaceState (URL carries it, no history entry, no navigation)")
+      : bad("URL mirror", `search=${search} histΔ=${histAfter - histBefore} path=${pathname}`); }
+
   // ── Phase 19 Step 1: WITHOUT can_send_messages the composer is a disabled, read-only box ──
   // Separate context whose app_users grant sets can_send_messages=false — proves the courtesy-grey.
   { const roCtx = await browser.newContext({ viewport: { width: 1440, height: 1000 }, storageState });

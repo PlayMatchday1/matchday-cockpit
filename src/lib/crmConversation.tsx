@@ -227,6 +227,22 @@ export function CrmConversationProvider({ children }: { children: ReactNode }) {
   const selectedRef = useRef<string | null>(selectedThreadId);
   selectedRef.current = selectedThreadId;
 
+  // Mirror the selection into the URL so a refresh reopens the thread and deep links keep working —
+  // but the PROVIDER stays the source of truth (selection is state, read from ?threadId only once
+  // at mount). This uses window.history.replaceState, NOT router.replace/push: those go through
+  // Next navigation, which is exactly what a persistent provider must avoid. replaceState updates
+  // the address bar with no navigation and no history entry — switching threads is not navigation,
+  // so back/forward must not stack it. Only ?threadId is touched; other params are preserved.
+  useEffect(() => {
+    if (typeof window === "undefined") return;
+    const url = new URL(window.location.href);
+    const cur = url.searchParams.get("threadId");
+    if (cur === selectedThreadId) return; // already in sync (incl. the deep-link init case)
+    if (selectedThreadId == null) url.searchParams.delete("threadId");
+    else url.searchParams.set("threadId", selectedThreadId);
+    window.history.replaceState(window.history.state, "", `${url.pathname}${url.search}`);
+  }, [selectedThreadId]);
+
   // --------- fetchers (bodies unchanged from CrmClient) ---------
   const loadThreads = useCallback(async () => {
     setThreadsError(null);
