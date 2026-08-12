@@ -11,7 +11,7 @@
 //   inconclusive more matches exist than we fetched (totalItems > rows) and none of the fetched
 //                rows is exact — the real one MAY be in the unseen remainder. Never say free.
 // On "inconclusive" the UI lets the save proceed and the server becomes the real check.
-import { authenticateAdmin } from "@/lib/adminAuth";
+import { authenticateMatchOpsRead } from "@/lib/matchOpsAuth"; // Part D round 2 — a Match Ops READ (was is_admin + MANAGE PROMOS)
 import { getMatchdayApiClient, MatchdayApiError } from "@/lib/matchdayApi";
 import { dupeVerdict, promoState, type PromoRow } from "@/lib/promoModel";
 
@@ -22,9 +22,8 @@ export const maxDuration = 30;
 const CHECK_LIMIT = 300; // fetch enough that a full intended code's substring set is usually complete
 
 export async function GET(req: Request) {
-  const auth = await authenticateAdmin(req);
+  const auth = await authenticateMatchOpsRead(req);
   if (!auth.ok) return Response.json({ error: auth.error }, { status: auth.status });
-  if (!auth.canManagePromos) return Response.json({ error: "You do not hold MANAGE PROMOS." }, { status: 403 });
 
   const code = (new URL(req.url).searchParams.get("code") ?? "").trim();
   if (!code) return Response.json({ result: "free", existing: null });

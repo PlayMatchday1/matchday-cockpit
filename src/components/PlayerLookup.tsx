@@ -905,6 +905,12 @@ function BanModal({ p, kind, canManage, onClose, onDone }: { p: Profile; kind: "
       });
       const j = await res.json().catch(() => ({}));
       if (!res.ok) { setErr(j?.error || `Failed (${res.status})`); setBusy(false); return; }
+      // A 2xx is not proof. The route re-reads the player and returns landed/status; a write that
+      // did NOT apply must never be reported as done — the operator would walk away believing it.
+      if (j?.landed === false) {
+        setErr(`${j.status === "NOT APPLIED" ? "NOT APPLIED" : "UNKNOWN"} — MatchDay accepted the request but the re-read shows the ban state unchanged. Recorded in the Change Log; check the account before trying again (writes never retry).`);
+        setBusy(false); return;
+      }
       onDone(kind === "suspend" ? `${name} suspended` : kind === "expel" ? `${name} expelled` : `${liftWord.charAt(0).toUpperCase() + liftWord.slice(1)} lifted for ${name}`);
     } catch (e) { setErr(e instanceof Error ? e.message : String(e)); setBusy(false); }
   };

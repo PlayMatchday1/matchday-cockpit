@@ -8,7 +8,7 @@
 
 import { readdirSync, readFileSync, statSync } from "node:fs";
 import { join } from "node:path";
-import { adminGate, deriveMatchOpsFlags } from "../src/lib/adminAuth";
+import { adminGate, deriveMatchOpsFlags, type AppUserRow } from "../src/lib/adminAuth";
 import { matchOpsReadGate, E2E_SERVICE_EMAIL } from "../src/lib/matchOpsAuth";
 
 let PASS = 0, FAIL = 0;
@@ -18,7 +18,11 @@ const is = (n: string, got: unknown, want: unknown) => (JSON.stringify(got) === 
 
 // ── flag shapes ──
 const ADMIN = { id: "u-admin", is_admin: true, can_access_matchops: true, can_edit_matches: true, can_manage_players: true, can_manage_promos: true };
-const DEONNA = { id: "u-deonna", is_admin: false, can_access_matchops: true, can_edit_matches: false, can_manage_players: false, can_manage_promos: false };
+// Deonna's REAL granted set after Part D round 2: Match Ops READ + MANAGE PLAYERS (ban). Nothing else
+// — no EDIT MATCHES, no MANAGE PROMOS, not is_admin.
+const DEONNA = { id: "u-deonna", is_admin: false, can_access_matchops: true, can_edit_matches: false, can_manage_players: true, can_manage_promos: false };
+// Match Ops read and NOTHING else — the shape that must still be refused every write, ban included.
+const MATCHOPS_ONLY = { id: "u-ro", is_admin: false, can_access_matchops: true, can_edit_matches: false, can_manage_players: false, can_manage_promos: false };
 const NOFLAGS = { id: "u-none" }; // every flag absent → every derived permission false
 const E2E = { id: "u-e2e", is_admin: false, can_access_matchops: true, is_service_account: true };
 const PROMO_ADMIN = { id: "u-pa", is_admin: true, can_access_matchops: true, can_manage_promos: false };
@@ -46,7 +50,8 @@ is("E2E constant is the expected email", E2E_SERVICE_EMAIL, "clubhouse-e2e@playm
 is("any is_service_account row is blocked regardless of email", matchOpsReadGate({ ...E2E, id: "svc" }, "someone-else@x.com").ok, false);
 
 console.log("\nWRITE flags stay gated (read open ≠ write open):");
-is("Deonna derives NO write flags", deriveMatchOpsFlags(DEONNA), { canEditMatches: false, canManagePlayers: false, canManagePromos: false });
+is("a Match-Ops-only account derives NO write flags", deriveMatchOpsFlags(MATCHOPS_ONLY), { canEditMatches: false, canManagePlayers: false, canManagePromos: false });
+is("Deonna derives MANAGE PLAYERS only — never EDIT MATCHES or MANAGE PROMOS", deriveMatchOpsFlags(DEONNA), { canEditMatches: false, canManagePlayers: true, canManagePromos: false });
 is("an admin WITHOUT manage-promos still cannot write promos", deriveMatchOpsFlags(PROMO_ADMIN).canManagePromos, false);
 is("manage-promos requires Match Ops too (flag true but no matchops → false)", deriveMatchOpsFlags({ can_manage_promos: true }).canManagePromos, false);
 is("manage-promos true + matchops → true", deriveMatchOpsFlags({ can_manage_promos: true, can_access_matchops: true }).canManagePromos, true);
@@ -61,14 +66,30 @@ const importsMatchOpsRead = routeFiles.filter((f) => readFileSync(f, "utf8").inc
 const importsAdmin = routeFiles.filter((f) => /authenticateAdmin\b/.test(readFileSync(f, "utf8")));
 const rel = (p: string) => p.replace("src/app/api/", "");
 
-// EXACTLY the three Deonna needs are on the read gate — no more (a fourth move must edit this test).
-is("authenticateMatchOpsRead is imported by EXACTLY the 3 intended read routes", importsMatchOpsRead.map(rel).sort(), [
+// EXACTLY the intended routes are on the read gate — no more (a further move must edit this test).
+// Round 1 moved 3; round 2 moved 9 more (6 reads + the 3 dual-gate routes whose GET moved and whose
+// write stayed) — the ban route is on the read gate too, but with a MANAGE PLAYERS check on top.
+is("authenticateMatchOpsRead is imported by EXACTLY the 12 intended routes", importsMatchOpsRead.map(rel).sort(), [
+  // round 1
   "lookup/[env]/route.ts", "matchday/[env]/gameday/route.ts", "promos/list/route.ts",
+  // round 2 — reads moved whole
+  "lookup/[env]/payments/route.ts", "promos/detail/[id]/route.ts", "promos/fields/route.ts",
+  "promos/matches/route.ts", "promos/check/route.ts",
+  // round 2 — the one WRITE moved, onto its own flag
+  "lookup/[env]/ban/route.ts",
+  // round 2 — dual-gate: GET on the read gate, the write still authenticateAdmin + EDIT MATCHES
+  "matchday/[env]/matches/[id]/route.ts", "matchday/[env]/roster/[matchId]/route.ts",
+  "matchday/[env]/matches/[id]/cancel/route.ts",
 ].sort());
-// none of the three still references the admin gate
-is("the 3 read routes NO LONGER reference authenticateAdmin", importsMatchOpsRead.filter((f) => /authenticateAdmin\b/.test(readFileSync(f, "utf8"))).map(rel), []);
-// the remaining is_admin surface is unchanged at 28 (was 31, moved 3) — a drop means a route lost its gate
-is("authenticateAdmin still guards 28 routes (31 − 3 moved)", importsAdmin.length, 28);
+// The ONLY routes allowed to keep BOTH gates are the three whose GET moved and whose write did not.
+// Anything else holding both is a half-finished move.
+is("exactly the 3 dual-gate routes still reference authenticateAdmin (their writes)",
+  importsMatchOpsRead.filter((f) => /authenticateAdmin\b/.test(readFileSync(f, "utf8"))).map(rel).sort(), [
+    "matchday/[env]/matches/[id]/route.ts", "matchday/[env]/roster/[matchId]/route.ts",
+    "matchday/[env]/matches/[id]/cancel/route.ts",
+  ].sort());
+// the remaining is_admin surface: 28 − 6 routes that moved WHOLE = 22 (the 3 dual-gate ones still count)
+is("authenticateAdmin still guards 22 routes (28 − 6 moved whole)", importsAdmin.length, 22);
 
 // the five Deonna must STILL be refused stay is_admin-gated (authenticateAdmin, or authenticateCrm + an is_admin check)
 const requiresAdmin = (f: string) => { const s = readFileSync(f, "utf8"); return /authenticateAdmin\b/.test(s) || (/authenticateCrm\b/.test(s) && /isAdmin|is_admin/.test(s)); };
@@ -85,14 +106,113 @@ for (const [name, f] of [
 // promos WRITE is untouched: still authenticateAdmin + canManagePromos (read opened, write did not)
 { const s = readFileSync("src/app/api/promos/create/route.ts", "utf8");
   is("promos/create still authenticateAdmin + MANAGE PROMOS (write stays gated)", /authenticateAdmin\b/.test(s) && /canManagePromos/.test(s), true); }
-// promos/list read no longer requires MANAGE PROMOS
-{ const s = readFileSync("src/app/api/promos/list/route.ts", "utf8");
-  is("promos/list read no longer gates on canManagePromos", /canManagePromos/.test(s), false); }
+// the promos READS no longer require MANAGE PROMOS (round 1 opened list; round 2 opened the other four)
+for (const r of ["list", "detail/[id]", "fields", "matches", "check"]) {
+  const s = readFileSync(`src/app/api/promos/${r}/route.ts`, "utf8");
+  is(`promos/${r} read no longer gates on canManagePromos`, /canManagePromos/.test(s), false);
+}
 
 // the third gate in the system (authenticateCrm) also denies a no-flags account — so the compositional
 // claim "no-flags is denied on every gated route" holds for the CRM surface too. Asserted at source.
 { const s = readFileSync("src/lib/crmAuth.ts", "utf8");
   is("authenticateCrm denies a no-flags account (!isAdmin && !canAccessChats → 403)", /!isAdmin\s*&&\s*!canAccessChats/.test(s), true); }
+
+// ── THE WALK: whole paths, not routes in isolation ──
+//
+// A route-by-route census cannot catch the failure that actually hurts: a panel that OPENS and then
+// 403s on the next click. So we resolve each step's gate FROM THE HANDLER SOURCE (the table below
+// cannot drift from the code), run the real pure gate functions against a real flag row, and assert
+// the whole sequence — every step, in order — with no denial anywhere.
+
+type Method = "GET" | "POST" | "PUT";
+type Flag = "canEditMatches" | "canManagePlayers" | "canManagePromos";
+type Step = { label: string; file: string; method: Method; flag?: Flag };
+
+// The body of ONE handler — so a route with an open GET and a gated POST is read per method, never
+// as a whole file (which is exactly how a dual-gate route would fool a file-level grep).
+function handlerBody(file: string, method: Method): string {
+  const s = readFileSync(file, "utf8");
+  const i = s.indexOf(`export async function ${method}(`);
+  if (i < 0) throw new Error(`${file}: no ${method} handler`);
+  const rest = s.slice(i + 10);
+  const j = rest.search(/\nexport async function |\nfunction errToResponse/);
+  return j < 0 ? rest : rest.slice(0, j);
+}
+
+// The DECISION for one step, using the gate the handler really calls + the flag check it really has.
+function decide(step: Step, row: AppUserRow, email: string): { ok: boolean; status?: number; why?: string } {
+  const body = handlerBody(step.file, step.method);
+  const usesMatchOps = /authenticateMatchOpsRead\(req\)/.test(body);
+  const usesAdmin = /authenticateAdmin\(req\)/.test(body);
+  if (usesMatchOps === usesAdmin) return { ok: false, status: 500, why: `${step.label}: expected exactly one gate` };
+  // the declared flag must ACTUALLY be checked in that handler — a table entry can't claim a check
+  // the code doesn't perform
+  if (step.flag && !new RegExp(`auth\\.${step.flag}`).test(body)) return { ok: false, status: 500, why: `${step.label}: no auth.${step.flag} check in source` };
+  const g = usesMatchOps ? matchOpsReadGate(row, email) : adminGate(row);
+  if (!g.ok) return { ok: false, status: g.status, why: g.error };
+  if (step.flag && !deriveMatchOpsFlags(row)[step.flag]) return { ok: false, status: 403, why: `missing ${step.flag}` };
+  return { ok: true };
+}
+
+const R = (p: string) => `src/app/api/${p}/route.ts`;
+// Deonna's actual click path through Gameday Ops.
+const PANEL_PATH: Step[] = [
+  { label: "board (gameday)", file: R("matchday/[env]/gameday"), method: "GET" },
+  { label: "tile → panel opens (match detail)", file: R("matchday/[env]/matches/[id]"), method: "GET" },
+  { label: "panel roster read-back", file: R("matchday/[env]/roster/[matchId]"), method: "GET" },
+  { label: "cancel preview (live credit numbers)", file: R("matchday/[env]/matches/[id]/cancel"), method: "GET" },
+];
+const BAN: Step = { label: "ban (suspend/expel/lift)", file: R("lookup/[env]/ban"), method: "POST", flag: "canManagePlayers" };
+// Every write she must STILL be refused, asserted individually.
+const WRITES: Step[] = [
+  { label: "PUT match (save edits)", file: R("matchday/[env]/matches/[id]"), method: "PUT", flag: "canEditMatches" },
+  { label: "POST roster op", file: R("matchday/[env]/roster/[matchId]"), method: "POST", flag: "canEditMatches" },
+  { label: "POST cancel (execute)", file: R("matchday/[env]/matches/[id]/cancel"), method: "POST", flag: "canEditMatches" },
+];
+const LOOKUP: Step[] = [
+  { label: "player lookup search", file: R("lookup/[env]"), method: "GET" },
+  { label: "player payments (why was I charged twice)", file: R("lookup/[env]/payments"), method: "GET" },
+];
+
+console.log("\nTHE WALK — Deonna's exact flag set, board → tile → panel → roster → cancel preview:");
+{
+  const results = PANEL_PATH.map((s) => ({ s, d: decide(s, DEONNA, DEONNA_EMAIL) }));
+  for (const { s, d } of results) is(`  ${s.label} — opens`, d.ok, true);
+  // the end-to-end claim: the WHOLE path, no denial at any step
+  is("THE WHOLE PATH walks with zero 403s (panel never opens-then-403s)", results.filter((r) => !r.d.ok).map((r) => `${r.s.label}: ${r.d.why}`), []);
+}
+
+console.log("\nDeonna's reads on Player Lookup:");
+for (const s of LOOKUP) is(`  ${s.label} — opens`, decide(s, DEONNA, DEONNA_EMAIL).ok, true);
+
+console.log("\nBAN — the one write she holds:");
+is("Deonna CAN ban (MANAGE PLAYERS)", decide(BAN, DEONNA, DEONNA_EMAIL).ok, true);
+is("Match Ops WITHOUT manage-players CANNOT ban → 403", decide(BAN, MATCHOPS_ONLY, "ro@playmatchday.com"), { ok: false, status: 403, why: "missing canManagePlayers" });
+is("an admin without manage-players CANNOT ban either", decide(BAN, { id: "a3", is_admin: true, can_access_matchops: true }, "a3@x.com").ok, false);
+
+console.log("\nEvery other write still refuses her — asserted individually:");
+for (const s of WRITES) is(`  ${s.label} — REFUSED`, decide(s, DEONNA, DEONNA_EMAIL).ok, false);
+
+console.log("\nA no-flags account is denied EVERYTHING (deny by default):");
+for (const s of [...PANEL_PATH, ...LOOKUP, BAN, ...WRITES]) {
+  const d = decide(s, NOFLAGS, "nobody@playmatchday.com");
+  is(`  ${s.label} — 403`, { ok: d.ok, status: d.status }, { ok: false, status: 403 });
+}
+
+console.log("\nThe E2E service account stays blocked, keyed on EMAIL:");
+for (const s of [...PANEL_PATH, ...LOOKUP, BAN]) {
+  const d = decide(s, { id: "e2e2", can_access_matchops: true }, E2E_SERVICE_EMAIL);
+  is(`  ${s.label} — blocked`, { ok: d.ok, why: d.why }, { ok: false, why: "Service accounts cannot access Match Ops" });
+}
+
+// The ban route must report LANDED / NOT APPLIED — a 2xx is not proof, and this write is
+// player-facing (it revokes platform access). Asserted at source.
+console.log("\n/ban outcome reporting (a 2xx is not proof):");
+{ const s = readFileSync(R("lookup/[env]/ban"), "utf8");
+  is("ban goes through recordWrite (change_log, with the actor)", /recordWrite\(/.test(s) && /actorEmail: auth\.email/.test(s), true);
+  is("ban re-reads and returns LANDED / NOT APPLIED", /"NOT APPLIED"/.test(s) && /landed/.test(s), true); }
+{ const s = readFileSync("src/components/PlayerLookup.tsx", "utf8");
+  is("the ban UI refuses to report success on landed:false", /j\?\.landed === false/.test(s), true); }
 
 console.log(`\n${PASS} passed, ${FAIL} failed`);
 process.exit(FAIL === 0 ? 0 : 1);

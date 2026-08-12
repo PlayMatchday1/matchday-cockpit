@@ -1,7 +1,7 @@
 // Promo Codes — FIELD LIST for the Specific Fields picker (Phase 20 D4). Read-only, PRODUCTION,
 // gated on MANAGE_PROMOS. /admin/fields returns every field with its city; the picker groups by
 // city. The MatchDay field id is what a promo scope stores (fieldIDs).
-import { authenticateAdmin } from "@/lib/adminAuth";
+import { authenticateMatchOpsRead } from "@/lib/matchOpsAuth"; // Part D round 2 — a Match Ops READ (was is_admin + MANAGE PROMOS)
 import { getMatchdayApiClient, MatchdayApiError } from "@/lib/matchdayApi";
 
 export const runtime = "nodejs";
@@ -11,9 +11,8 @@ export const maxDuration = 30;
 type ApiField = { id: number; title?: string; city?: { id?: number; name?: string } };
 
 export async function GET(req: Request) {
-  const auth = await authenticateAdmin(req);
+  const auth = await authenticateMatchOpsRead(req);
   if (!auth.ok) return Response.json({ error: auth.error }, { status: auth.status });
-  if (!auth.canManagePromos) return Response.json({ error: "You do not hold MANAGE PROMOS." }, { status: 403 });
 
   try {
     const client = getMatchdayApiClient();

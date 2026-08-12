@@ -893,11 +893,49 @@ the returned `canEdit/Manage*` flags are derived identically (`deriveMatchOpsFla
 write route keeps its own check. Because the split is opt-in, a route nobody moved keeps
 requiring `is_admin` — an overlooked route stays CLOSED, never accidentally open.
 
-Moved in Part D (READ only): `matchday/[env]/gameday`, `lookup/[env]`, `promos/list` (its read
-no longer needs MANAGE PROMOS; `promos/create` is untouched — still admin + MANAGE PROMOS). The
-other 28 `authenticateAdmin` routes stay `is_admin` until reviewed individually. Pinned by
-`scripts/matchops-auth-test.ts` (pure gate decisions + a route→gate census that fails if the
-28-count drops or a 4th route is moved without updating the test).
+Moved in Part D round 1 (READ only): `matchday/[env]/gameday`, `lookup/[env]`, `promos/list` (its
+read no longer needs MANAGE PROMOS; `promos/create` is untouched — still admin + MANAGE PROMOS).
+
+### Round 2 — the whole Match Ops click path (2026-08-12)
+
+Round 1 opened the BOARD but not what a tile opens onto, so the panel would have opened and then
+403'd on the next click. Round 2 moves the rest of the path. **12 routes are now on the read gate;
+`authenticateAdmin` guards 22** (28 − 6 moved whole; the 3 dual-gate routes below still import it
+for their writes).
+
+READS moved whole: `lookup/[env]/payments`, `promos/detail/[id]`, `promos/fields`,
+`promos/matches`, `promos/check` (all four promo reads dropped the MANAGE PROMOS requirement, like
+`list`).
+
+**DUAL-GATE routes — GET moved, write did NOT.** These are the only three files that legitimately
+import both gates, and the census test pins that set exactly:
+
+| route | GET | write |
+|---|---|---|
+| `matchday/[env]/matches/[id]` | Match Ops read | PUT — `authenticateAdmin` + EDIT MATCHES |
+| `matchday/[env]/roster/[matchId]` | Match Ops read | POST — `authenticateAdmin` + EDIT MATCHES |
+| `matchday/[env]/matches/[id]/cancel` | GET preview | POST — `authenticateAdmin` + EDIT MATCHES |
+
+**The one WRITE that moved: `lookup/[env]/ban` — `is_admin` → MANAGE PLAYERS.** `is_admin` was
+over-gating a write that already had its own permission, which is the same Part D bug (the flag
+could only restrict admins, never grant). It is now the read gate + `auth.canManagePlayers`;
+because `deriveMatchOpsFlags` makes every write flag imply `can_access_matchops`, this cannot open
+to anyone lacking Match Ops. Verified in the same pass: `/ban` does go through `recordWrite` into
+`change_log` with the actor's email, the verb/endpoint and a before/after ban state.
+
+**`/ban` reported a false success and no longer does.** It re-read and classified correctly
+(`recordWrite`'s read-after → `outcome`), but returned a bare `{ok:true}` and `PlayerLookup`
+branched on `res.ok` alone — so a 2xx that did NOT apply was announced to the operator as
+"X suspended". The route now returns `landed` + `status: LANDED / NOT APPLIED / UNKNOWN` and the UI
+refuses to report success on `landed:false`. `cancel` already did this; `/ban` was the outlier.
+
+`scripts/matchops-auth-test.ts` (66 assertions, was 28) pins all of it. Its new half **walks whole
+paths, not routes in isolation** — it resolves each step's gate from the handler source per HTTP
+method (so a dual-gate file can't fool a file-level grep, and a table entry can't claim a flag
+check the code doesn't perform), then runs the real gate functions: Deonna's exact flag set walks
+board → tile → panel → roster → cancel preview with zero 403s; she can ban; Match-Ops-without-
+MANAGE-PLAYERS cannot; PUT match / POST roster / POST cancel each refuse her individually; a
+no-flags account is 403 on all ten; the E2E account is blocked by email on every one.
 
 ## Promo codes — the endpoint, proven by read-only production GETs (Phase 18a)
 

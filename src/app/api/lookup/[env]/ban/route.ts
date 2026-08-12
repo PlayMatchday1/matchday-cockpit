@@ -9,7 +9,7 @@
 // with the actor, exactly like the roster writes.
 
 import { randomUUID } from "node:crypto";
-import { authenticateAdmin } from "@/lib/adminAuth";
+import { authenticateMatchOpsRead } from "@/lib/matchOpsAuth";
 import { apiGet, apiWrite, AmbiguousWriteError, WriteFailedError, DeniedFieldError, DeniedEndpointError, ProductionWriteBoltedError, StageHostGuardError, StageConfigError, NotAuthorizedError, type MatchdayEnv } from "@/lib/matchdayStageApi";
 import { recordWrite, supabaseLogStore } from "@/lib/changeLog";
 import type { Change } from "@/lib/changeLogModel";
@@ -29,7 +29,12 @@ function banLabel(p: Record<string, unknown>): string {
 }
 
 export async function POST(req: Request, ctx: { params: Promise<{ env: string }> }) {
-  const auth = await authenticateAdmin(req);
+  // Part D round 2 — the ONE write that moved. is_admin was OVER-gating a write that already had its
+  // own permission: MANAGE PLAYERS could never grant, only restrict admins (the Part D bug). The gate
+  // is now the Match Ops read gate + the canManagePlayers check below, which is the authority this
+  // action was always specified to require. deriveMatchOpsFlags makes canManagePlayers imply
+  // can_access_matchops, so this cannot open to anyone who lacks Match Ops.
+  const auth = await authenticateMatchOpsRead(req);
   if (!auth.ok) return Response.json({ error: auth.error }, { status: auth.status });
   const { env } = await ctx.params;
   if (!isEnv(env)) return Response.json({ error: `unknown environment ${JSON.stringify(env)}` }, { status: 400 });
@@ -90,7 +95,15 @@ export async function POST(req: Request, ctx: { params: Promise<{ env: string }>
       supabaseLogStore(),
     );
     if (error) return errToResponse(error);
-    return Response.json({ ok: true, result, outcome, logRecorded: logged });
+    // A 2xx IS NOT PROOF. recordWrite already re-read the player and classified via `applied`;
+    // surface that verdict instead of letting the status code stand in for it. Before Part D round 2
+    // this route returned bare {ok:true} and the client reported "X suspended" off res.ok alone — a
+    // write that returned 2xx without applying read as a success. Now it says NOT APPLIED.
+    const landed = outcome === "landed";
+    return Response.json({
+      ok: true, result, outcome, logRecorded: logged, landed,
+      status: landed ? "LANDED" : outcome === "notapplied" ? "NOT APPLIED" : "UNKNOWN",
+    });
   } catch (e) { return errToResponse(e); }
 }
 

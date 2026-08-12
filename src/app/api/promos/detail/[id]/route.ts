@@ -2,7 +2,7 @@
 // ONLY place usageCount (redemptions) is available, so REDEEMED / LEFT live here — never as a
 // list column, never an N+1 across rows. Called once when a row is opened. Also serves the
 // "all-digits search = look up by ID" path (GET /admin/promocodes/{id}).
-import { authenticateAdmin } from "@/lib/adminAuth";
+import { authenticateMatchOpsRead } from "@/lib/matchOpsAuth"; // Part D round 2 — a Match Ops READ (was is_admin + MANAGE PROMOS)
 import { getMatchdayApiClient, MatchdayApiError } from "@/lib/matchdayApi";
 import type { PromoRow } from "@/lib/promoModel";
 
@@ -13,9 +13,8 @@ export const maxDuration = 30;
 type Detail = PromoRow & { usageCount?: number };
 
 export async function GET(req: Request, ctx: { params: Promise<{ id: string }> }) {
-  const auth = await authenticateAdmin(req);
+  const auth = await authenticateMatchOpsRead(req);
   if (!auth.ok) return Response.json({ error: auth.error }, { status: auth.status });
-  if (!auth.canManagePromos) return Response.json({ error: "You do not hold MANAGE PROMOS." }, { status: 403 });
 
   const { id } = await ctx.params;
   if (!/^\d+$/.test(id)) return Response.json({ error: "numeric id required" }, { status: 400 });

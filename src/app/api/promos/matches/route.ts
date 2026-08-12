@@ -2,7 +2,7 @@
 // PRODUCTION, gated on MANAGE_PROMOS. Lists matches in a date range (the promo window by
 // default); the upstream /admin/matches has no city filter worth using, so the client narrows
 // by city. Same read client as the other promo routes.
-import { authenticateAdmin } from "@/lib/adminAuth";
+import { authenticateMatchOpsRead } from "@/lib/matchOpsAuth"; // Part D round 2 — a Match Ops READ (was is_admin + MANAGE PROMOS)
 import { getMatchdayApiClient, MatchdayApiError } from "@/lib/matchdayApi";
 
 export const runtime = "nodejs";
@@ -16,9 +16,8 @@ type ApiMatch = {
 };
 
 export async function GET(req: Request) {
-  const auth = await authenticateAdmin(req);
+  const auth = await authenticateMatchOpsRead(req);
   if (!auth.ok) return Response.json({ error: auth.error }, { status: auth.status });
-  if (!auth.canManagePromos) return Response.json({ error: "You do not hold MANAGE PROMOS." }, { status: 403 });
 
   const u = new URL(req.url);
   const from = (u.searchParams.get("from") ?? "").trim();

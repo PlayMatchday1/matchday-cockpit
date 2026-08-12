@@ -8,6 +8,7 @@
 
 import { randomUUID } from "node:crypto";
 import { authenticateAdmin } from "@/lib/adminAuth";
+import { authenticateMatchOpsRead } from "@/lib/matchOpsAuth"; // GET is a Match Ops READ (Part D round 2); POST stays admin + EDIT MATCHES
 import { apiGet, apiWrite, AmbiguousWriteError, WriteFailedError, DeniedFieldError, DeniedEndpointError, ProductionWriteBoltedError, StageHostGuardError, StageConfigError, NotAuthorizedError, type MatchdayEnv } from "@/lib/matchdayStageApi";
 import { recordWrite, supabaseLogStore } from "@/lib/changeLog";
 import type { Change } from "@/lib/changeLogModel";
@@ -22,7 +23,7 @@ const num = (v: unknown) => (v === null || v === undefined || v === "" ? null : 
 type Row = { id: number; userId: number; team: number; playerNumber: number; isCancelled?: boolean; refunded?: boolean; user?: { firstName?: string; lastName?: string; isFakePlayer?: boolean } };
 
 export async function GET(req: Request, ctx: { params: Promise<{ env: string; matchId: string }> }) {
-  const auth = await authenticateAdmin(req);
+  const auth = await authenticateMatchOpsRead(req);
   if (!auth.ok) return Response.json({ error: auth.error }, { status: auth.status });
   const { env, matchId } = await ctx.params;
   if (!isEnv(env)) return Response.json({ error: `unknown environment ${JSON.stringify(env)}` }, { status: 400 });

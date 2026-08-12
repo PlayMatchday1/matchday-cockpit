@@ -7,6 +7,7 @@
 
 import { randomUUID } from "node:crypto";
 import { authenticateAdmin } from "@/lib/adminAuth";
+import { authenticateMatchOpsRead } from "@/lib/matchOpsAuth"; // GET is a Match Ops READ (Part D round 2); PUT stays admin + EDIT MATCHES
 import { apiGet, apiWrite, AmbiguousWriteError, WriteFailedError, StageHostGuardError, StageConfigError, DeniedFieldError, DeniedEndpointError, ProductionWriteBoltedError, NotAuthorizedError, type MatchdayEnv } from "@/lib/matchdayStageApi";
 import { EDITABLE_KEYS } from "@/lib/matchEditModel";
 import { realOccupancyFromRoster, type RosterRow } from "@/lib/gamedayModel";
@@ -43,7 +44,7 @@ function pickMatch(m: Record<string, unknown>) {
 }
 
 export async function GET(req: Request, ctx: { params: Promise<{ env: string; id: string }> }) {
-  const auth = await authenticateAdmin(req);
+  const auth = await authenticateMatchOpsRead(req);
   if (!auth.ok) return Response.json({ error: auth.error }, { status: auth.status });
   const { env, id } = await ctx.params;
   if (!isEnv(env)) return Response.json({ error: `unknown environment ${JSON.stringify(env)}` }, { status: 400 });

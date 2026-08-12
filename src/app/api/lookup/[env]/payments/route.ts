@@ -1,10 +1,11 @@
 // Player Lookup — live Stripe payments (Phase 18). READ ONLY, NEVER cached. A separate
 // endpoint from the profile so it is an independent live call per profile view and can
-// fail on its own without blanking the rest of the page. Admin-gated (a read); reuses
+// fail on its own without blanking the rest of the page. MATCH OPS READ-gated as of Part D
+// round 2 — support answers "why was I charged twice", and cannot do that blind; reuses
 // STRIPE_SECRET_KEY server-side via stripePayments — the key is never in the response,
 // never logged, never in an error string.
 
-import { authenticateAdmin } from "@/lib/adminAuth";
+import { authenticateMatchOpsRead } from "@/lib/matchOpsAuth"; // Part D round 2 — a Match Ops READ (was is_admin)
 import { fetchPlayerPayments, StripeConfigError, StripeUnreachableError } from "@/lib/stripePayments";
 
 export const runtime = "nodejs";
@@ -14,7 +15,7 @@ export const maxDuration = 30;
 const isEnv = (x: string): boolean => x === "staging" || x === "production";
 
 export async function GET(req: Request, ctx: { params: Promise<{ env: string }> }) {
-  const auth = await authenticateAdmin(req);
+  const auth = await authenticateMatchOpsRead(req);
   if (!auth.ok) return Response.json({ error: auth.error }, { status: auth.status });
   const { env } = await ctx.params;
   if (!isEnv(env)) return Response.json({ error: `unknown environment ${JSON.stringify(env)}` }, { status: 400 });

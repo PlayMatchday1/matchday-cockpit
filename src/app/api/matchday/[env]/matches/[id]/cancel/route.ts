@@ -13,6 +13,7 @@
 
 import { randomUUID } from "node:crypto";
 import { authenticateAdmin } from "@/lib/adminAuth";
+import { authenticateMatchOpsRead } from "@/lib/matchOpsAuth"; // GET preview is a Match Ops READ (Part D round 2); POST stays admin + EDIT MATCHES
 import { apiGet, apiWrite, AmbiguousWriteError, WriteFailedError, DeniedFieldError, DeniedEndpointError, ProductionWriteBoltedError, StageHostGuardError, StageConfigError, NotAuthorizedError, type MatchdayEnv } from "@/lib/matchdayStageApi";
 import { rosterRowIsFake, rosterRowCancelled, type RosterRow } from "@/lib/gamedayModel";
 import { recordWrite, supabaseLogStore } from "@/lib/changeLog";
@@ -41,7 +42,7 @@ async function readLive(env: MatchdayEnv, id: string) {
 }
 
 export async function GET(req: Request, ctx: { params: Promise<{ env: string; id: string }> }) {
-  const auth = await authenticateAdmin(req);
+  const auth = await authenticateMatchOpsRead(req);
   if (!auth.ok) return Response.json({ error: auth.error }, { status: auth.status });
   const { env, id } = await ctx.params;
   if (!isEnv(env)) return Response.json({ error: `unknown environment ${JSON.stringify(env)}` }, { status: 400 });
