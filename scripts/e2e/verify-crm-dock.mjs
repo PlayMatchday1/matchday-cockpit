@@ -58,7 +58,7 @@ const DETAIL = {
 const COUNTS = { open: THREADS.length, mine: 0, starred: 0, closed: 0, awaiting: 3 };
 // Controllable /api/crm/send: count POSTs (no-retry proof), toggle failure, add latency so a
 // double-click lands inside the in-flight window (Step 3b, items 5/6/13).
-const sendState = { fail: false, delayMs: 0, posts: [] };
+const sendState = { fail: false, expire422: false, delayMs: 0, posts: [] };
 const OTHER_PID = 2002; // a different player, loaded via Player Lookup → mismatches the docked thread
 const otherProfile = (id) => ({
   player: { id, name: "Priya Nayar", email: null, phone: null, phoneVerified: false, city: null, level: null, registered: null, goals: 0, cityManager: false, credits: 0, status: "ok", banReason: null, bannedAt: null, banExpiredAt: null, matchesPlayed: 0, upcoming: 0 },
@@ -85,6 +85,8 @@ async function routes(ctx, canSend = true) {
       const b = JSON.parse(route.request().postData() || "{}");
       sendState.posts.push(b);
       if (sendState.delayMs) await new Promise((r) => setTimeout(r, sendState.delayMs));
+      // The 24h window closed between the client check and the server (the race): 422, no row inserted.
+      if (sendState.expire422) return json({ error: "WhatsApp session expired — player must message first to reopen the 24-hour window.", reason: "window_expired", last_inbound_at: iso(25 * 60) }, 422);
       if (sendState.fail) return json({ error: "send failed", send_error: "provider rejected" }, 502);
       return json({ message: msg({ id: `sent-${sendState.posts.length}-${sendState.posts.length}`, tid: b.thread_id, dir: "outbound", body: b.body, at: new Date(NOW).toISOString(), channel: DETAIL[b.thread_id]?.thread.channel ?? "whatsapp" }) });
     }
@@ -308,7 +310,7 @@ async function main() {
   const composerVal = () => page.$eval(DTA, (e) => e.value);
   const sendDisabled = () => page.$eval(DSEND, (e) => e.disabled);
   const sendLabelText = () => page.$eval(DSEND, (e) => e.textContent.replace(/\s+/g, " ").trim());
-  const resetSend = () => { sendState.fail = false; sendState.delayMs = 0; sendState.posts.length = 0; };
+  const resetSend = () => { sendState.fail = false; sendState.expire422 = false; sendState.delayMs = 0; sendState.posts.length = 0; };
   // Dock an arbitrary thread fast via the sessionStorage restore path, optionally seeding a draft.
   const setDock = async (id, draft) => {
     await page.evaluate(({ id, draft }) => {
@@ -473,6 +475,31 @@ async function main() {
       : bad(`layout ${w}px`, JSON.stringify(r));
   }
   await page.setViewportSize({ width: 1440, height: 1000 });
+
+  // ── item 1 (the race): server 422s an EXPIRED window the client believed OPEN ──
+  await setDock("t-marco", "");
+  resetSend(); sendState.expire422 = true;
+  { const before = await dockMsgCount();
+    await page.fill(DTA, "sending into a just-closed window");
+    await page.click(DSEND);
+    await page.waitForSelector('[data-testid="dock-root"] [data-testid="crm-window-expired"]', { timeout: 6000 });
+    const noBubble = (await dockMsgCount()) === before;
+    const draftKept = (await composerVal()) === "sending into a just-closed window";
+    const nowDisabled = await sendDisabled();
+    const noFailedResend = !(await has('[data-testid="dock-root"] [data-testid^="dock-resend-"]'));
+    const reasonNamesTemplate = /\/send-template/.test(await page.$eval('[data-testid="crm-window-expired"]', (e) => e.textContent));
+    (noBubble && draftKept && nowDisabled && noFailedResend && reasonNamesTemplate)
+      ? ok("gate3b: 422 expired-window RACE → no bubble, draft kept, composer flips to EXPIRED (not a failed bubble/Resend)")
+      : bad("422 race", `noBubble=${noBubble} draftKept=${draftKept} disabled=${nowDisabled} noResend=${noFailedResend} reasonNamesTemplate=${reasonNamesTemplate}`); }
+  resetSend();
+
+  // ── item 2: the dock's expired escape is a LINK to the full pane, not a control that "sends" ──
+  { const label = await page.$eval('[data-testid="crm-send-template"]', (e) => e.textContent.replace(/\s+/g, " ").trim());
+    await page.click('[data-testid="crm-send-template"]');
+    await page.waitForURL(/\/match-ops\/player-chats\?threadId=t-marco\b/, { timeout: 10000 });
+    (/Player Chats/.test(label) && /threadId=t-marco/.test(page.url()))
+      ? ok(`gate3b: dock expired-escape is a LINK to the full pane ("${label}"), not a send-from-dock control`)
+      : bad("expired escape", `label="${label}" url=${page.url()}`); }
 
   console.log(`\n================ RESULT ================\nAssertions: ${PASS} passed, ${FAIL} failed`);
   if (fails.length) fails.forEach((f) => console.log("   FAILED: " + f));

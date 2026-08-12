@@ -121,6 +121,7 @@ export default function Composer({
   windowClosesInMs,
   sendLabel,
   compact = false,
+  onOpenInFullPane,
 }: {
   threadId: string;
   appUserId: string | null;
@@ -145,6 +146,9 @@ export default function Composer({
   sendLabel?: string;
   // Tighter layout for the dock; also hides the media/template affordances (text-reply surface).
   compact?: boolean;
+  // Compact ONLY: the expired-window escape is a plain navigation to the full pane (where the
+  // approved-template send lives) — NOT a modal that appears to send from the dock.
+  onOpenInFullPane?: () => void;
 }) {
   const [internalBody, setInternalBody] = useState("");
   const controlled = onBodyChange !== undefined;
@@ -155,6 +159,11 @@ export default function Composer({
   );
   const [sending, setSending] = useState(false);
   const [error, setError] = useState<string | null>(null);
+  // The server 422'd this send as an EXPIRED window while the client believed it open (the window
+  // closed between the client check and the request). This flips the composer to the expired state
+  // — NOT a generic send failure, and NOT a failed bubble — and keeps the draft. Cleared on thread
+  // switch and when the window is clearly open again (a fresh inbound; see the effect below).
+  const [serverClosedWindow, setServerClosedWindow] = useState(false);
   const taRef = useRef<HTMLTextAreaElement>(null);
 
   // Media-mode state. file is the picked Blob (image: post-
@@ -168,9 +177,17 @@ export default function Composer({
   const [previewUrl, setPreviewUrl] = useState<string | null>(null);
   const [originalSize, setOriginalSize] = useState<number | null>(null);
   const fileInputRef = useRef<HTMLInputElement>(null);
+  // EFFECTIVE expired: the client's own 24h computation OR a server 422 that told us the window
+  // closed mid-send. Drives the disabled state, the placeholder, and the expired banner.
+  const windowExpired = whatsappWindowExpired || serverClosedWindow;
+  // A prior server-close flag is stale once the window is clearly open again — a fresh inbound
+  // pushes >2h of runway back onto windowClosesInMs. Clear it then.
+  useEffect(() => {
+    if (windowClosesInMs != null && windowClosesInMs > WINDOW_SOON_MS) setServerClosedWindow(false);
+  }, [windowClosesInMs]);
   // Media send only on WhatsApp threads inside the 24-hour window. The compact dock is a text-reply
   // surface — no media/template affordances there (Step 3b); the full pane keeps them.
-  const canSendMedia = channel === "whatsapp" && !whatsappWindowExpired && !compact;
+  const canSendMedia = channel === "whatsapp" && !windowExpired && !compact;
 
   // Drag-and-drop state. dragCounterRef compensates for the React
   // dragenter/dragleave child-traversal flicker by tracking how many
@@ -228,6 +245,7 @@ export default function Composer({
     setCaption("");
     setOriginalSize(null);
     setDragActive(false);
+    setServerClosedWindow(false); // a new thread has its own window
     dragCounterRef.current = 0;
   }, [threadId, controlled]);
 
@@ -285,12 +303,12 @@ export default function Composer({
   }, []);
 
   // ---------------- text-mode submit ----------------
-  const disabled = sending || !appUserId || !canSendMessages || whatsappWindowExpired;
+  const disabled = sending || !appUserId || !canSendMessages || windowExpired;
   const placeholder = !appUserId
     ? "Sign in to send."
     : !canSendMessages
       ? "You don't have permission to send messages (read-only)."
-      : whatsappWindowExpired
+      : windowExpired
         ? "WhatsApp session expired — player must message first."
         : "Type a reply. Enter to send, Shift+Enter for newline.";
 
@@ -318,8 +336,17 @@ export default function Composer({
         message?: ConversationMessage;
         error?: string;
         send_error?: string;
+        reason?: string;
       };
       if (!res.ok) {
+        // A 422 for a window that closed between the client check and the server (the race) is NOT a
+        // delivery failure: no row was inserted, so there is NO bubble and NO Resend (resending would
+        // just 422 again). Flip to the expired state and KEEP the draft — don't surface it as a
+        // generic send error.
+        if (res.status === 422 && (j.reason === "window_expired" || j.reason === "no_inbound")) {
+          setServerClosedWindow(true);
+          return;
+        }
         throw new Error(j.send_error || j.error || `HTTP ${res.status}`);
       }
       if (j.message) onSent(j.message);
@@ -503,7 +530,7 @@ export default function Composer({
         </div>
       )}
 
-      {whatsappWindowExpired ? (
+      {windowExpired ? (
         <div data-testid="crm-window-expired" className="mb-2 flex flex-wrap items-center justify-between gap-2 rounded-md border border-cream-line bg-cream-soft px-2 py-1.5 text-[11px] text-deep-green/65">
           <span>
             <span aria-hidden className="mr-1">
@@ -512,16 +539,30 @@ export default function Composer({
             WhatsApp session expired — reply is closed until the player messages. The one way past a
             closed window is to send an approved template (/send-template).
           </span>
-          <button
-            type="button"
-            data-testid="crm-send-template"
-            onClick={() => setTemplateSendOpen(true)}
-            disabled={!appUserId}
-            className="inline-flex shrink-0 items-center gap-1 rounded-full bg-deep-green px-3 py-1 text-[11px] font-bold text-cream transition hover:bg-deep-green-soft disabled:opacity-40"
-          >
-            <LayoutTemplate aria-hidden className="h-3.5 w-3.5" strokeWidth={2} />
-            Send template
-          </button>
+          {compact && onOpenInFullPane ? (
+            // In the dock the template send lives in the full pane — this is plainly a LINK there,
+            // not a control that appears to send from the dock (never-ship-a-dead-control).
+            <button
+              type="button"
+              data-testid="crm-send-template"
+              onClick={onOpenInFullPane}
+              className="inline-flex shrink-0 items-center gap-1 rounded-full bg-deep-green px-3 py-1 text-[11px] font-bold text-cream transition hover:bg-deep-green-soft"
+            >
+              <LayoutTemplate aria-hidden className="h-3.5 w-3.5" strokeWidth={2} />
+              Send a template in Player Chats
+            </button>
+          ) : (
+            <button
+              type="button"
+              data-testid="crm-send-template"
+              onClick={() => setTemplateSendOpen(true)}
+              disabled={!appUserId}
+              className="inline-flex shrink-0 items-center gap-1 rounded-full bg-deep-green px-3 py-1 text-[11px] font-bold text-cream transition hover:bg-deep-green-soft disabled:opacity-40"
+            >
+              <LayoutTemplate aria-hidden className="h-3.5 w-3.5" strokeWidth={2} />
+              Send template
+            </button>
+          )}
         </div>
       ) : windowClosesInMs != null && windowClosesInMs > 0 && windowClosesInMs < WINDOW_SOON_MS ? (
         <div data-testid="crm-window-soon" className="mb-2 rounded-md border border-amber-300/50 bg-amber-50 px-2 py-1.5 text-[11px] text-amber-800">
@@ -634,7 +675,7 @@ export default function Composer({
               data-testid="crm-send"
               onClick={() => void submitText()}
               disabled={
-                sending || !body.trim() || !appUserId || !canSendMessages || whatsappWindowExpired
+                sending || !body.trim() || !appUserId || !canSendMessages || windowExpired
               }
               aria-label={sendLabel ?? (sending ? "Sending message" : "Send message")}
               className={
@@ -686,7 +727,7 @@ export default function Composer({
         onChange={onFilePicked}
       />
 
-      {isWhatsApp && (
+      {!compact && isWhatsApp && (
         <TemplateSendModal
           open={templateSendOpen}
           onClose={() => setTemplateSendOpen(false)}

@@ -89,8 +89,10 @@ const COMPOSER_C = noComments(COMPOSER), CRM_C = noComments(CRM), SEND_C = noCom
 /auth\.canSendMessages/.test(SEND_C) ? ok("send route gates on can_send_messages") : bad("send route missing can_send_messages gate");
 // Enter sends, Shift+Enter newlines.
 /e\.key === "Enter" && !e\.shiftKey/.test(COMPOSER_C) ? ok("Enter sends, Shift+Enter makes a newline") : bad("Enter/Shift+Enter handler changed");
-// The composer disables on an expired WhatsApp window.
-/disabled\s*=\s*[^\n]*whatsappWindowExpired/.test(COMPOSER_C) ? ok("composer is disabled when the WhatsApp window is expired") : bad("composer expiry gate removed");
+// The composer disables on an expired WhatsApp window. SELECTOR-PATH UPDATE (Phase 19 Step 3b): the
+// disabled expression now keys on `windowExpired` = whatsappWindowExpired || serverClosedWindow (a
+// server 422 that closed the window mid-send also disables) — the gate is unchanged, only stronger.
+/disabled\s*=\s*[^\n]*windowExpired/.test(COMPOSER_C) ? ok("composer is disabled when the WhatsApp window is expired (client OR server-422 close)") : bad("composer expiry gate removed");
 // CrmClient delegates the window rule to the shared, tested helper (the Step-0 seam).
 /from "@\/lib\/crmWindow"/.test(CRM_C) && /whatsappWindowExpired\(/.test(CRM_C) ? ok("CrmClient delegates the window rule to src/lib/crmWindow (tested seam)") : bad("CrmClient no longer uses the shared window rule");
 
@@ -115,6 +117,15 @@ eq("EXACTLY ONE realtime subscription across the CRM conversation code (feature 
 // The nav unread badge is poll-only — NO realtime channel (documented crash-avoidance). Check
 // against comment-stripped source so the "uses NO supabase.channel()" note doesn't false-match.
 !/\.channel\(|\.subscribe\(/.test(BADGE_C) && /POLL_MS|setInterval/.test(BADGE_C) ? ok("nav unread badge stays poll-only (no realtime channel)") : bad("nav badge grew a realtime channel");
+
+// ── Phase 19 Step 3b — every send AND every Resend go through /api/crm/send, which recordWrites
+// METADATA ONLY. The message body is never copied into change_log (a second store of player PII
+// under different access rules). logCrmSend takes a LENGTH, not the text, so the body structurally
+// cannot reach the log.
+const SEND_SRC = noComments(readFileSync("src/app/api/crm/send/route.ts", "utf8"));
+/recordWrite\(/.test(SEND_SRC) ? ok("send route logs via recordWrite (Resend is the same route, so also logged)") : bad("send route not recordWrite-logged");
+/message_length:\s*args\.bodyLength/.test(SEND_SRC) ? ok("change_log records message_length (metadata), the actor, thread + recipient — not the body") : bad("change_log metadata shape changed");
+/bodyLength:\s*number/.test(SEND_SRC) ? ok("logCrmSend receives a LENGTH, never the message text — body can't reach change_log") : bad("logCrmSend now receives the message body (PII leak into change_log)");
 
 console.log(`\n${pass} passed, ${fail} failed`);
 process.exit(fail ? 1 : 0);

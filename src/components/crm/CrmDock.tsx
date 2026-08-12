@@ -403,6 +403,7 @@ export default function CrmDock() {
           onBodyChange={(text) => setDraft(t.id, text)}
           sendLabel={sendLabel}
           compact
+          onOpenInFullPane={openInChats}
         />
       ) : (
         <div data-testid="dock-readonly" className="shrink-0 border-t border-cream-line bg-white px-2.5 py-2 text-[10px] text-deep-green/45">
