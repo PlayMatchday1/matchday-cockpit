@@ -28,3 +28,18 @@ export function whatsappWindowExpired(
   if (Number.isNaN(t)) return true; // fail closed on a bad timestamp
   return nowMs - t > WHATSAPP_WINDOW_MS;
 }
+
+// Milliseconds left before the WhatsApp 24h window closes — for the composer's "closing soon"
+// warning (Phase 19 Step 3b). null when there is NO window (SMS / non-whatsapp). Once expired the
+// value is <= 0. Same model + inputs as whatsappWindowExpired, so the two never drift.
+export function whatsappWindowRemainingMs(
+  channel: CrmChannel | string | null | undefined,
+  latestInboundAtIso: string | null | undefined,
+  nowMs: number,
+): number | null {
+  if ((channel ?? "sms") !== "whatsapp") return null; // SMS: no window
+  if (!latestInboundAtIso) return 0; // never opened → treat as closed
+  const t = Date.parse(latestInboundAtIso);
+  if (Number.isNaN(t)) return 0; // fail closed
+  return WHATSAPP_WINDOW_MS - (nowMs - t);
+}

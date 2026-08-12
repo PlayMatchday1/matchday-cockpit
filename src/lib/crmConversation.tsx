@@ -104,10 +104,14 @@ export type ThreadDetail = {
 // the docked thread's player to warn (Banner B) that you are chatting with someone other than the
 // person on screen. playerId is loose (number in rosters, string in a few callers) — compared by
 // string. label is what to show the operator ("Marco R.", "the player you're looking up").
-export type DockSubject = { playerId: string | number | null; label: string | null };
+// snippets: per-SCREEN canned reply lines (Step 3b) — the screen that declares its dock subject
+// also declares the lines worth saying while looking at it. Undefined/empty → the dock renders no
+// snippet row. Wired off this signal (not the pathname) so it tracks the same screen state.
+export type DockSubject = { playerId: string | number | null; label: string | null; snippets?: string[] };
 
 const DOCK_THREAD_KEY = "crm:dockedThreadId";
 const DOCK_OPEN_KEY = "crm:dockOpen";
+const DOCK_DRAFT_KEY = "crm:draft"; // the docked thread's draft only ({threadId, text})
 function safeSession(): Storage | null {
   try {
     return window.sessionStorage;
@@ -187,9 +191,12 @@ export type CrmConversationValue = {
   undockThread: () => void;
   dockOpen: boolean;
   setDockOpen: React.Dispatch<React.SetStateAction<boolean>>;
-  // what the current screen is about (useDockSubject sets it) — drives Banner B.
+  // what the current screen is about (useDockSubject sets it) — drives Banner B + snippets.
   dockSubject: DockSubject | null;
   setDockSubject: React.Dispatch<React.SetStateAction<DockSubject | null>>;
+  // draft reply text per thread (Step 3b) — survives navigation; cleared only on a confirmed send.
+  drafts: Record<string, string>;
+  setDraft: (threadId: string, text: string) => void;
   // the active status view (URL-derived) + a stable ref the loaders read
   view: StatusFilter;
   viewRef: React.MutableRefObject<StatusFilter>;
@@ -298,6 +305,15 @@ export function CrmConversationProvider({ children }: { children: ReactNode }) {
   const [dockOpen, setDockOpen] = useState<boolean>(true);
   const [dockSubject, setDockSubject] = useState<DockSubject | null>(null);
   const dockRestoredRef = useRef(false);
+
+  // Draft reply text, keyed by threadId, held in the provider so it SURVIVES navigation between
+  // Match Ops routes (Step 3b). A draft is cleared ONLY by the composer on a confirmed successful
+  // send — never on failure, window expiry, or undock (those all keep the text).
+  const [drafts, setDrafts] = useState<Record<string, string>>({});
+  const setDraft = useCallback(
+    (threadId: string, text: string) => setDrafts((d) => ({ ...d, [threadId]: text })),
+    [],
+  );
 
   // Mirror the selection into the URL so a refresh reopens the thread and deep links keep working —
   // but the PROVIDER stays the source of truth (selection is state, read from ?threadId only once
@@ -493,6 +509,19 @@ export function CrmConversationProvider({ children }: { children: ReactNode }) {
         );
         setDockedThreadId(storedId);
         setDockOpen(storedOpen !== "0");
+        // Rehydrate the draft ONLY for the thread actually being restored — never resurrect drafts
+        // for threads no longer in play (item 1).
+        try {
+          const rawDraft = store?.getItem(DOCK_DRAFT_KEY);
+          if (rawDraft) {
+            const parsed = JSON.parse(rawDraft) as { threadId?: string; text?: string };
+            if (parsed.threadId === storedId && typeof parsed.text === "string" && parsed.text) {
+              setDrafts((d) => ({ ...d, [storedId]: parsed.text as string }));
+            }
+          }
+        } catch {
+          /* corrupt draft blob — ignore */
+        }
       } catch {
         // Dead/unreachable thread — clear it silently so we never restore a broken dock.
         store?.removeItem(DOCK_THREAD_KEY);
@@ -516,6 +545,18 @@ export function CrmConversationProvider({ children }: { children: ReactNode }) {
     else store.removeItem(DOCK_THREAD_KEY);
     store.setItem(DOCK_OPEN_KEY, dockOpen ? "1" : "0");
   }, [dockedThreadId, dockOpen]);
+
+  // Persist ONLY the docked thread's draft to sessionStorage (working-session state — a reload
+  // shouldn't eat typed text). Other threads' drafts stay in-memory only: after a reload just the
+  // docked thread is back in play, so resurrecting the rest would be noise (Step 3b, item 1).
+  useEffect(() => {
+    if (!dockRestoredRef.current) return;
+    const store = safeSession();
+    if (!store) return;
+    const text = dockedThreadId ? drafts[dockedThreadId] ?? "" : "";
+    if (dockedThreadId && text) store.setItem(DOCK_DRAFT_KEY, JSON.stringify({ threadId: dockedThreadId, text }));
+    else store.removeItem(DOCK_DRAFT_KEY);
+  }, [dockedThreadId, drafts]);
 
   // --------- realtime (B2: moved here from CrmClient — one channel, five handlers, now mounted
   // in the persistent provider so messages keep arriving while navigated away). Bodies unchanged;
@@ -544,7 +585,13 @@ export function CrmConversationProvider({ children }: { children: ReactNode }) {
               if (c.messages.some((x) => x.id === m.id)) return s;
               return {
                 ...s,
-                conversations: { ...s.conversations, [m.thread_id]: { ...c, messages: [...c.messages, m] } },
+                conversations: { ...s.conversations, [m.thread_id]: {
+                  ...c,
+                  messages: [...c.messages, m],
+                  // an inbound RESETS the WhatsApp 24h window — keep latest_inbound_at fresh so the
+                  // docked composer's window gate (Step 3b) re-evaluates without a detail refetch.
+                  latest_inbound_at: m.direction === "inbound" ? m.sent_at : c.latest_inbound_at,
+                } },
               };
             });
           }
@@ -648,6 +695,12 @@ export function CrmConversationProvider({ children }: { children: ReactNode }) {
                 [t.id]: {
                   ...c,
                   thread: { ...c.thread, ...t },
+                  // Keep latest_inbound_at fresh when a crm_threads UPDATE carries it — this is what
+                  // lets the docked composer's 24h gate re-evaluate as the window closes (Step 3b).
+                  latest_inbound_at:
+                    "latest_inbound_at" in t
+                      ? (t as { latest_inbound_at?: string | null }).latest_inbound_at ?? c.latest_inbound_at
+                      : c.latest_inbound_at,
                   assignee:
                     t.assigned_to_user_id != null
                       ? operatorsById.get(t.assigned_to_user_id) ?? c.assignee
@@ -699,6 +752,7 @@ export function CrmConversationProvider({ children }: { children: ReactNode }) {
     conversations, detail, setDetail, detailError, setDetailError, detailLoading, setDetailLoading, realtimeOk, setRealtimeOk,
     selectedThreadId, selectThread, view, viewRef, nowMs,
     dockedThreadId, dockThread, undockThread, dockOpen, setDockOpen, dockSubject, setDockSubject,
+    drafts, setDraft,
     loadThreads, loadDetail, loadOperators, scheduleReload, refreshDetailForMediaInsert, onSent,
   };
 

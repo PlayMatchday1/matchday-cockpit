@@ -15,18 +15,23 @@
 // edges, no collision. The dock is mounted by match-ops/layout.tsx and hidden on Player Chats
 // itself (the full inbox is already there).
 
-import { useMemo } from "react";
+import { Fragment, useMemo, useState } from "react";
 import { useRouter } from "next/navigation";
-import { MessageSquare, X, ChevronRight, Reply, AlertTriangle, Users, Unlink } from "lucide-react";
+import { MessageSquare, X, ChevronRight, Reply, AlertTriangle, Users, Unlink, RotateCw } from "lucide-react";
 import PlayerAvatar from "@/components/PlayerAvatar";
 import CityChip from "@/components/CityChip";
 import ChannelChip, { channelDisplay } from "@/components/ChannelChip";
 import MessageBubble from "@/app/(internal)/match-ops/player-chats/components/MessageBubble";
+import Composer from "@/app/(internal)/match-ops/player-chats/components/Composer";
+import { useAuth } from "@/lib/useAuth";
+import { whatsappWindowExpired, whatsappWindowRemainingMs } from "@/lib/crmWindow";
 import {
   useCrmConversation,
   markThreadRead,
+  bearerHeaders,
   type ThreadDetail,
   type ThreadListRow,
+  type Message,
 } from "@/lib/crmConversation";
 
 const PLAYER_CHATS_PATH = "/match-ops/player-chats";
@@ -69,8 +74,17 @@ export default function CrmDock() {
     dockSubject,
     selectThread,
     realtimeOk,
+    drafts,
+    setDraft,
+    onSent,
+    nowMs,
   } = useCrmConversation();
   const router = useRouter();
+  const { appUser } = useAuth();
+  const appUserId = appUser?.id ?? null;
+  const canSendMessages = appUser?.can_send_messages === true;
+  // Per-message in-flight guard for Resend — one attempt, no double-fire (Step 3b, item 4).
+  const [resendingId, setResendingId] = useState<string | null>(null);
 
   const detail: ThreadDetail | null = dockedThreadId
     ? conversations[dockedThreadId] ?? null
@@ -155,6 +169,49 @@ export default function CrmDock() {
       </>
     );
   }
+
+  // ---- send-path derived state (Step 3b) ----
+  // Window read from conversations[threadId].latest_inbound_at — kept fresh by the crm_messages
+  // INSERT + crm_threads UPDATE handlers (3a) — re-evaluated on the provider's 30s `nowMs` tick.
+  const expired = whatsappWindowExpired(t.channel, detail.latest_inbound_at, nowMs);
+  const remainingMs = whatsappWindowRemainingMs(t.channel, detail.latest_inbound_at, nowMs);
+  const firstName = t.player?.first_name?.trim() ?? "";
+  // The Send button NAMES the recipient. On a mismatch it says who you're actually talking to and
+  // who you're not — that IS the guard, no modal (item 3). nameOf → player name, or the phone when
+  // unlinked, so "Send to {name}" / "Send to {phone}" fall out of the same expression.
+  const sendLabel = mismatch
+    ? `Send to ${name}, not ${dockSubject?.label ?? "them"}`
+    : `Send to ${name}`;
+  const snippets = canSendMessages && dockSubject?.snippets ? dockSubject.snippets : [];
+
+  // Resend a delivery-failed bubble — a FRESH send (no Idempotency-Key, so never an auto-retry),
+  // one click, one attempt, disabled while in flight (item 4). Confirm-then-append: the new bubble
+  // appears only on 2xx; a failure leaves the original failed bubble untouched.
+  const resend = async (m: Message) => {
+    if (resendingId) return;
+    setResendingId(m.id);
+    try {
+      const headers = await bearerHeaders();
+      if (!headers) return;
+      const res = await fetch("/api/crm/send", {
+        method: "POST",
+        headers,
+        body: JSON.stringify({ thread_id: m.thread_id, body: m.body }),
+      });
+      const j = (await res.json().catch(() => ({}))) as { message?: Message };
+      if (res.ok && j.message) onSent(j.message);
+    } catch {
+      /* keep the failed bubble; the operator can try again */
+    } finally {
+      setResendingId(null);
+    }
+  };
+
+  // A snippet INSERTS into the draft (appends) — it never sends (item 5).
+  const insertSnippet = (text: string) => {
+    const cur = drafts[t.id] ?? "";
+    setDraft(t.id, cur ? `${cur} ${text}` : text);
+  };
 
   // ---- expanded PANEL ----
   return (
@@ -285,31 +342,84 @@ export default function CrmDock() {
         </div>
       )}
 
-      {/* read-only message history */}
-      <div data-testid="dock-messages" className="flex-1 overflow-y-auto bg-cream-soft/40 px-2 py-2" style={{ maxHeight: "min(52vh, 460px)" }}>
+      {/* message history — a delivery-failed OUTBOUND bubble gets a Resend (item 4) */}
+      <div data-testid="dock-messages" className="flex-1 overflow-y-auto bg-cream-soft/40 px-2 py-2" style={{ maxHeight: "min(46vh, 420px)" }}>
         {detail.messages.length === 0 ? (
           <div className="px-2 py-6 text-center text-[11px] text-deep-green/40">No messages yet.</div>
         ) : (
           <ul className="flex flex-col">
             {detail.messages.map((m) => (
-              <MessageBubble key={m.id} msg={m} className="mt-1.5" />
+              <Fragment key={m.id}>
+                <MessageBubble msg={m} className="mt-1.5" />
+                {m.direction === "outbound" && m.delivery_status === "failed" && canSendMessages && (
+                  <li className="mt-0.5 flex justify-end">
+                    <button
+                      type="button"
+                      data-testid={`dock-resend-${m.id}`}
+                      onClick={() => void resend(m)}
+                      disabled={resendingId === m.id}
+                      className="inline-flex items-center gap-1 rounded-full border border-coral/40 bg-coral/5 px-2 py-0.5 text-[10px] font-bold text-coral disabled:opacity-50"
+                    >
+                      <RotateCw aria-hidden className="h-3 w-3" /> {resendingId === m.id ? "Resending…" : "Resend"}
+                    </button>
+                  </li>
+                )}
+              </Fragment>
             ))}
           </ul>
         )}
       </div>
 
-      {/* read-only footer — the send path is Step 3b. Hand off to the full pane instead. */}
-      <div className="flex shrink-0 items-center justify-between gap-2 border-t border-cream-line bg-white px-2.5 py-2">
-        <span className="text-[10px] text-deep-green/45">
-          {realtimeOk === false ? "Reconnecting…" : "Read-only"}
-        </span>
+      {/* snippets — per-screen canned lines; a click INSERTS into the draft, never sends (item 5) */}
+      {snippets.length > 0 && (
+        <div data-testid="dock-snippets" className="flex shrink-0 flex-wrap gap-1 border-t border-cream-line bg-white px-2 py-1.5">
+          {snippets.map((s, i) => (
+            <button
+              key={i}
+              type="button"
+              data-testid={`dock-snippet-${i}`}
+              onClick={() => insertSnippet(s)}
+              className="max-w-full truncate rounded-full border border-cream-line bg-cream-soft px-2 py-0.5 text-[10px] text-deep-green/80 hover:bg-cream-line"
+            >
+              {s}
+            </button>
+          ))}
+        </div>
+      )}
+
+      {/* composer — the SAME Composer as the full pane, compact + draft-backed. Item 12: no SEND
+          right ⇒ NO composer at all (not a greyed one), just a stated read-only line. */}
+      {canSendMessages ? (
+        <Composer
+          threadId={t.id}
+          appUserId={appUserId}
+          canSendMessages={canSendMessages}
+          channel={t.channel}
+          whatsappWindowExpired={expired}
+          windowClosesInMs={remainingMs}
+          customerName={firstName}
+          onSent={onSent}
+          bodyValue={drafts[t.id] ?? ""}
+          onBodyChange={(text) => setDraft(t.id, text)}
+          sendLabel={sendLabel}
+          compact
+        />
+      ) : (
+        <div data-testid="dock-readonly" className="shrink-0 border-t border-cream-line bg-white px-2.5 py-2 text-[10px] text-deep-green/45">
+          You don&apos;t have permission to send messages (read-only).
+        </div>
+      )}
+
+      {/* hand-off to the full pane */}
+      <div className="flex shrink-0 items-center justify-between gap-2 border-t border-cream-line bg-white px-2.5 py-1.5">
+        <span className="text-[10px] text-deep-green/45">{realtimeOk === false ? "Reconnecting…" : ""}</span>
         <button
           type="button"
           data-testid="dock-reply"
           onClick={openInChats}
-          className="inline-flex items-center gap-1.5 rounded-full bg-deep-green px-3 py-1.5 text-xs font-bold text-white hover:bg-deep-green/90"
+          className="inline-flex items-center gap-1 text-[10px] font-bold text-deep-green hover:underline"
         >
-          <Reply aria-hidden className="h-3.5 w-3.5" /> Reply in Player Chats
+          <Reply aria-hidden className="h-3 w-3" /> Reply in Player Chats
         </button>
       </div>
     </aside>

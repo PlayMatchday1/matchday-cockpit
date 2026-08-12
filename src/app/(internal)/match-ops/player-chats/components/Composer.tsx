@@ -82,6 +82,14 @@ function smsBudget(body: string): {
 
 const MAX_IMAGE_BYTES = MEDIA_BYTE_LIMITS.image;
 const CAPTION_MAX = 1024;
+const WINDOW_SOON_MS = 2 * 60 * 60 * 1000; // "closing soon" threshold (Step 3b)
+
+function fmtRemaining(ms: number): string {
+  const totalMin = Math.max(0, Math.floor(ms / 60000));
+  const h = Math.floor(totalMin / 60);
+  const m = totalMin % 60;
+  return h > 0 ? `${h}h ${m}m` : `${m}m`;
+}
 
 async function bearerHeaders(): Promise<Record<string, string> | null> {
   const { data } = await supabase.auth.getSession();
@@ -108,6 +116,11 @@ export default function Composer({
   whatsappWindowExpired,
   customerName,
   onSent,
+  bodyValue,
+  onBodyChange,
+  windowClosesInMs,
+  sendLabel,
+  compact = false,
 }: {
   threadId: string;
   appUserId: string | null;
@@ -120,8 +133,26 @@ export default function Composer({
   // the customer_name variable in the WhatsApp template modal.
   customerName: string;
   onSent: (m: ConversationMessage) => void;
+  // Phase 19 Step 3b — optional CONTROLLED body. When onBodyChange is given the text lives in the
+  // parent (the provider's per-thread draft), so it survives navigation/reload and is cleared ONLY
+  // on a confirmed send. Omitted → the composer keeps its own state (CrmClient, unchanged).
+  bodyValue?: string;
+  onBodyChange?: (text: string) => void;
+  // Ms until the WhatsApp window closes (null = no window). Under 2h shows a "closing soon" warning
+  // with the real time; drives nothing else — expiry is still `whatsappWindowExpired`.
+  windowClosesInMs?: number | null;
+  // When set, the Send button NAMES the recipient (dock requirement). Omitted → icon-only.
+  sendLabel?: string;
+  // Tighter layout for the dock; also hides the media/template affordances (text-reply surface).
+  compact?: boolean;
 }) {
-  const [body, setBody] = useState("");
+  const [internalBody, setInternalBody] = useState("");
+  const controlled = onBodyChange !== undefined;
+  const body = controlled ? bodyValue ?? "" : internalBody;
+  const setBody = useCallback(
+    (v: string) => (onBodyChange ? onBodyChange(v) : setInternalBody(v)),
+    [onBodyChange],
+  );
   const [sending, setSending] = useState(false);
   const [error, setError] = useState<string | null>(null);
   const taRef = useRef<HTMLTextAreaElement>(null);
@@ -137,8 +168,9 @@ export default function Composer({
   const [previewUrl, setPreviewUrl] = useState<string | null>(null);
   const [originalSize, setOriginalSize] = useState<number | null>(null);
   const fileInputRef = useRef<HTMLInputElement>(null);
-  // Media send only on WhatsApp threads inside the 24-hour window.
-  const canSendMedia = channel === "whatsapp" && !whatsappWindowExpired;
+  // Media send only on WhatsApp threads inside the 24-hour window. The compact dock is a text-reply
+  // surface — no media/template affordances there (Step 3b); the full pane keeps them.
+  const canSendMedia = channel === "whatsapp" && !whatsappWindowExpired && !compact;
 
   // Drag-and-drop state. dragCounterRef compensates for the React
   // dragenter/dragleave child-traversal flicker by tracking how many
@@ -186,16 +218,18 @@ export default function Composer({
     };
   }, [file]);
 
-  // Reset both modes when switching threads.
+  // Reset media/error state when switching threads. The body is cleared here ONLY when uncontrolled
+  // — a controlled (provider-draft-backed) composer keys its text by thread, so the parent already
+  // shows the right draft and force-clearing would wipe it (Step 3b).
   useEffect(() => {
-    setBody("");
+    if (!controlled) setInternalBody("");
     setError(null);
     setFile(null);
     setCaption("");
     setOriginalSize(null);
     setDragActive(false);
     dragCounterRef.current = 0;
-  }, [threadId]);
+  }, [threadId, controlled]);
 
   const budget = useMemo(() => smsBudget(body), [body]);
 
@@ -263,6 +297,8 @@ export default function Composer({
   const submitText = useCallback(async () => {
     if (sending) return;
     if (!canSendMessages) return; // no send path without the SEND right (route also 403s)
+    if (whatsappWindowExpired) return; // re-evaluate the 24h window AT send time (the window can
+    // close while typing); the button is already disabled, this also covers the Enter path. Server 422s too.
     if (!body.trim()) return;
     setSending(true);
     setError(null);
@@ -293,7 +329,7 @@ export default function Composer({
     } finally {
       setSending(false);
     }
-  }, [body, sending, threadId, onSent, canSendMessages]);
+  }, [body, sending, threadId, onSent, canSendMessages, whatsappWindowExpired]);
 
   const onKeyDown = useCallback(
     (e: React.KeyboardEvent<HTMLTextAreaElement>) => {
@@ -451,7 +487,11 @@ export default function Composer({
   // ---------------- render ----------------
   return (
     <div
-      className="relative border-t border-cream-line bg-cream px-3 py-3 pb-[calc(0.75rem+var(--sab))] sm:px-4"
+      className={
+        compact
+          ? "relative border-t border-cream-line bg-cream px-2 py-2"
+          : "relative border-t border-cream-line bg-cream px-3 py-3 pb-[calc(0.75rem+var(--sab))] sm:px-4"
+      }
       onDragEnter={onDragEnter}
       onDragOver={onDragOver}
       onDragLeave={onDragLeave}
@@ -463,17 +503,18 @@ export default function Composer({
         </div>
       )}
 
-      {whatsappWindowExpired && (
-        <div className="mb-2 flex flex-wrap items-center justify-between gap-2 rounded-md border border-cream-line bg-cream-soft px-2 py-1.5 text-[11px] text-deep-green/65">
+      {whatsappWindowExpired ? (
+        <div data-testid="crm-window-expired" className="mb-2 flex flex-wrap items-center justify-between gap-2 rounded-md border border-cream-line bg-cream-soft px-2 py-1.5 text-[11px] text-deep-green/65">
           <span>
             <span aria-hidden className="mr-1">
               ⓘ
             </span>
-            WhatsApp session expired — reply is closed until the player
-            messages, or send an approved template to re-open the conversation.
+            WhatsApp session expired — reply is closed until the player messages. The one way past a
+            closed window is to send an approved template (/send-template).
           </span>
           <button
             type="button"
+            data-testid="crm-send-template"
             onClick={() => setTemplateSendOpen(true)}
             disabled={!appUserId}
             className="inline-flex shrink-0 items-center gap-1 rounded-full bg-deep-green px-3 py-1 text-[11px] font-bold text-cream transition hover:bg-deep-green-soft disabled:opacity-40"
@@ -482,7 +523,12 @@ export default function Composer({
             Send template
           </button>
         </div>
-      )}
+      ) : windowClosesInMs != null && windowClosesInMs > 0 && windowClosesInMs < WINDOW_SOON_MS ? (
+        <div data-testid="crm-window-soon" className="mb-2 rounded-md border border-amber-300/50 bg-amber-50 px-2 py-1.5 text-[11px] text-amber-800">
+          <span aria-hidden className="mr-1">⏳</span>
+          WhatsApp window closes in <strong data-testid="crm-window-soon-time">{fmtRemaining(windowClosesInMs)}</strong> — reply now, or the player must message first to reopen it.
+        </div>
+      ) : null}
 
       {file && kind ? (
         <MediaPreview
@@ -513,6 +559,7 @@ export default function Composer({
                 <Paperclip aria-hidden className="h-5 w-5" strokeWidth={1.75} />
               </button>
             )}
+            {!compact && (
             <div className="relative">
               <button
                 type="button"
@@ -548,7 +595,8 @@ export default function Composer({
                 }}
               />
             </div>
-            {isWhatsApp && (
+            )}
+            {!compact && isWhatsApp && (
               <button
                 type="button"
                 onClick={() => setTemplateSendOpen(true)}
@@ -588,10 +636,15 @@ export default function Composer({
               disabled={
                 sending || !body.trim() || !appUserId || !canSendMessages || whatsappWindowExpired
               }
-              aria-label={sending ? "Sending message" : "Send message"}
-              className="flex h-11 w-11 shrink-0 items-center justify-center rounded-full bg-mint text-deep-green shadow-sm transition hover:bg-mint-hover disabled:opacity-40"
+              aria-label={sendLabel ?? (sending ? "Sending message" : "Send message")}
+              className={
+                sendLabel
+                  ? "flex h-11 shrink-0 items-center justify-center gap-1.5 rounded-full bg-mint px-3 text-xs font-bold text-deep-green shadow-sm transition hover:bg-mint-hover disabled:opacity-40"
+                  : "flex h-11 w-11 shrink-0 items-center justify-center rounded-full bg-mint text-deep-green shadow-sm transition hover:bg-mint-hover disabled:opacity-40"
+              }
             >
-              <ArrowUp aria-hidden className="h-5 w-5" strokeWidth={2.5} />
+              <ArrowUp aria-hidden className="h-5 w-5 shrink-0" strokeWidth={2.5} />
+              {sendLabel && <span className="truncate">{sending ? "Sending…" : sendLabel}</span>}
             </button>
           </div>
           <div className="mt-1.5 flex items-center justify-between text-[10px] text-deep-green/55">

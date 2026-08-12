@@ -27,6 +27,14 @@ import {
 
 const ENV = FULL_EDITOR_ENV;
 
+// Per-screen dock snippets (Phase 19 Step 3b) — the lines worth saying while you have a player's
+// account open. Static to this screen; clicking one inserts into the docked chat's draft.
+const LOOKUP_SNIPPETS = [
+  "Can you confirm the email on your account?",
+  "I'm looking at your account now — one moment.",
+  "Which city are you playing in?",
+];
+
 async function authFetch(path: string, init?: RequestInit): Promise<Response> {
   const { data } = await supabase.auth.getSession();
   const token = data.session?.access_token;
@@ -184,9 +192,9 @@ export default function PlayerLookup() {
 
   const reloadProfile = useCallback(() => { if (profile) openProfile(profile.player.id); }, [profile, openProfile]);
 
-  // Phase 19 Step 3a — tell the docked player-chat which player THIS screen is about, so the dock
-  // raises Banner B if the operator has a different player's chat pinned. Inert when nothing is docked.
-  useDockSubject(profile?.player.id ?? null, profile?.player.name ?? null);
+  // Phase 19 Step 3a/3b — tell the docked player-chat which player THIS screen is about (Banner B)
+  // and the canned lines worth saying while looking a player up (snippets). Inert when nothing docked.
+  useDockSubject(profile?.player.id ?? null, profile?.player.name ?? null, LOOKUP_SNIPPETS);
 
   const backToSearch = () => { setProfile(null); setProfileErr(null); };
 
