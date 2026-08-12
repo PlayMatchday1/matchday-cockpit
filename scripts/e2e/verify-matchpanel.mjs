@@ -43,6 +43,7 @@ let puts = [];
 let rosterPosts = [];
 let rosterGets = 0;
 let cancelPosts = []; // POSTs to the cancel route (Part C)
+let forceNotApplied = false; // when set, roster ops return a 2xx the server did NOT apply (read-back test)
 const rosterStates = {};
 const twoTeamRoster = () => ({
   name: "PRUMC - Tuesday",
@@ -128,6 +129,8 @@ async function routes(ctx) {
     if (method === "POST") {
       const op = JSON.parse(route.request().postData() || "{}");
       rosterPosts.push(op);
+      // read-back test: a 2xx the server did NOT apply — return notapplied and DON'T mutate state.
+      if (forceNotApplied && (op.kind === "add" || op.kind === "move" || op.kind === "remove" || op.kind === "teams")) return json({ ok: true, outcome: "notapplied", result: {} });
       switch (op.kind) {
         case "teams": {
           if (op.fields?.name === "FAILNAME") return json({ error: "rename rejected by server" }, 400);
@@ -371,6 +374,28 @@ async function main() {
   await page.click('[data-testid="mp-remove-9003"]');
   await page.waitForTimeout(400);
   eq("gate7c: remove fires exactly one roster request, zero to the match endpoint", { remove: rosterPosts.filter((o) => o.kind === "remove").length, puts: puts.length }, { remove: 1, puts: 0 });
+
+  // RESTORED from verify-roster (four-state read-back): a 2xx the server did NOT apply reads as NOT
+  // APPLIED on this immediate surface, never a blind success.
+  delete rosterStates["17494"]; rosterPosts = []; forceNotApplied = true;
+  await page.goto(`${BASE}/match-ops/match-panel/17494`, { waitUntil: "domcontentloaded" });
+  await page.waitForSelector('[data-testid="mp-team"]', { timeout: 15000 });
+  await page.click('[data-testid="mp-move-9001-2"]');
+  await page.waitForFunction(() => /NOT APPLIED/.test(document.querySelector('[data-testid="mp-optoast"]')?.textContent || ""), null, { timeout: 6000 }).catch(() => {});
+  eq("gate7d: a roster op the server accepts but does NOT apply reads as NOT APPLIED (read-back, not blind 2xx)", /NOT APPLIED/.test(await page.$eval('[data-testid="mp-optoast"]', (e) => e.textContent).catch(() => "")), true);
+  forceNotApplied = false;
+
+  // RESTORED from verify-roster: the remove confirmation names that it is NOT a refund and cannot be undone.
+  delete rosterStates["17494"];
+  await page.goto(`${BASE}/match-ops/match-panel/17494`, { waitUntil: "domcontentloaded" });
+  await page.waitForSelector('[data-testid="mp-team"]', { timeout: 15000 });
+  rosterPosts = []; dlg.accept = false; dlg.msg = null; // dismiss so nothing fires — we only read the wording
+  await page.click('[data-testid="mp-remove-9001"]');
+  await page.waitForTimeout(200);
+  eq("gate7e: the remove confirmation names 'not a refund' + irreversible, and dismissing sends nothing",
+    { wording: /not a refund/i.test(dlg.msg || "") && /(will not undo|cannot|immediately|unconfirmed)/i.test(dlg.msg || ""), sent: rosterPosts.filter((o) => o.kind === "remove").length },
+    { wording: true, sent: 0 });
+  dlg.accept = true;
 
   // GATE 8 — fake players are visibly marked; real players are not
   delete rosterStates["17494"];

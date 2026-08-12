@@ -187,6 +187,18 @@ export default function MatchPanel({ matchId, env = "production", onDirtyChange 
     } catch (e) { setOpBusy(null); setOpToast({ text: `${label} — ${e instanceof Error ? e.message : String(e)}. UNKNOWN; reload before acting.`, bad: true }); return null; }
   };
 
+  // Classify an immediate op by the route's read-back OUTCOME ("landed"/"notapplied"), never by HTTP
+  // alone — the roster route re-reads after each write. This restores the standalone editor's rule:
+  // a change is LANDED only after a read-back confirms it; a 2xx that didn't take reads as NOT APPLIED.
+  const afterOp = async (r: { ok: boolean; j: Record<string, unknown> } | null, landedMsg: string, note: string): Promise<boolean> => {
+    if (!r) return false;    // network failure — rosterPost already toasted UNKNOWN
+    if (!r.ok) return false; // rejected — rosterPost toasted; do NOT reload (nothing changed; keeps the typed input)
+    await loadRoster();      // accepted — re-read to reflect the server and reseed
+    if (r.j.outcome === "landed") { noteImmediate(note); setOpToast({ text: landedMsg }); return true; }
+    setOpToast({ text: `NOT APPLIED — the server accepted it (2xx) but a re-read shows it did not take. Nothing changed; reload and check.`, bad: true });
+    return false;
+  };
+
   const firstOpenSlot = (teamNumber: number): number => {
     if (!roster) return 1;
     const used = new Set(roster.players.filter((p) => p.team === teamNumber).map((p) => p.playerNumber));
@@ -203,34 +215,31 @@ export default function MatchPanel({ matchId, env = "production", onDirtyChange 
     const team = roster.teams.find((t) => t.id === teamId);
     if (!team || !name || name === team.name) return;
     const r = await rosterPost({ kind: "teams", teamId, fields: { name } }, `Rename team ${teamNumber}`);
-    if (!r) return;
-    if (r.ok) {
-      await loadRoster(); // committed name now reflects the server; teamDraft is reseeded to it
-      noteImmediate(`renamed team ${teamNumber} → “${name}”`);
-      setOpToast({ text: `Team ${teamNumber} is now “${name}” — saved immediately.` });
-    }
-    // on failure rosterPost toasted; teamDraft keeps the typed text; the committed name is untouched (reverts)
+    // afterOp reloads (committed name follows the server) and reports LANDED / NOT APPLIED from the
+    // read-back. On failure or NOT APPLIED the committed name is unchanged and teamDraft keeps the text.
+    await afterOp(r, `Team ${teamNumber} is now “${name}” — saved (re-read confirmed).`, `renamed team ${teamNumber} → “${name}”`);
   };
 
   const addPlayer = async (teamNumber: number) => {
     if (!roster || !pendingAdd || opBusy) return;
+    const nm = pendingAdd.name;
     const n = firstOpenSlot(teamNumber);
-    const r = await rosterPost({ kind: "add", playerId: pendingAdd.id, team: teamNumber, playerNumber: n }, `Add ${pendingAdd.name}`);
-    if (r?.ok) { const nm = pendingAdd.name; setPendingAdd(null); setQ(""); setResults([]); await loadRoster(); noteImmediate(`added ${nm} to team ${teamNumber}`); setOpToast({ text: `${nm} added to team ${teamNumber} — saved immediately.` }); }
+    const r = await rosterPost({ kind: "add", playerId: pendingAdd.id, team: teamNumber, playerNumber: n }, `Add ${nm}`);
+    if (await afterOp(r, `${nm} added to team ${teamNumber} — saved (re-read confirmed).`, `added ${nm} to team ${teamNumber}`)) { setPendingAdd(null); setQ(""); setResults([]); }
   };
   const movePlayer = async (p: PlayerRow, toTeam: number) => {
     if (!roster || opBusy) return;
     const n = firstOpenSlot(toTeam);
     const r = await rosterPost({ kind: "move", userMatchId: p.umId, team: toTeam, playerNumber: n }, `Move ${p.name}`);
-    if (r?.ok) { await loadRoster(); noteImmediate(`moved ${p.name} to team ${toTeam}`); setOpToast({ text: `${p.name} moved to team ${toTeam} — saved immediately.` }); }
+    await afterOp(r, `${p.name} moved to team ${toTeam} — saved (re-read confirmed).`, `moved ${p.name} to team ${toTeam}`);
   };
   const removePlayer = async (p: PlayerRow) => {
     if (!roster || opBusy) return;
     const okd = typeof window !== "undefined" && window.confirm(
-      `Remove ${p.name} from this match now?\n\nThis fires immediately and Revert will not undo it. It takes them off the roster — it is NOT a refund; the effect on any charge is unconfirmed.`);
+      `Remove ${p.name} from this match now?\n\nThis fires IMMEDIATELY and Revert will NOT undo it. It takes them off the roster — it is NOT a refund, and the effect on any charge they paid is UNCONFIRMED. If ${p.name} paid, check before you do this.`);
     if (!okd) return;
     const r = await rosterPost({ kind: "remove", userMatchId: p.umId }, `Remove ${p.name}`);
-    if (r?.ok) { await loadRoster(); noteImmediate(`removed ${p.name}`); setOpToast({ text: `${p.name} removed — saved immediately.` }); }
+    await afterOp(r, `${p.name} removed — saved (re-read confirmed).`, `removed ${p.name}`);
   };
 
   // TEAM COUNT 2 ⇄ 4. teamNumbers is WRITE-ONLY: a 2xx is NOT proof. Send it, then RE-READ and
