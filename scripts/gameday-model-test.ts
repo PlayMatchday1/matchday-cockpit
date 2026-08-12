@@ -5,6 +5,7 @@ import "server-only"; // no-op under --conditions=react-server
 // assertion proves nothing.
 //   NODE_OPTIONS=--conditions=react-server npx tsx scripts/gameday-model-test.ts
 import {
+  realOccupancyFromRoster,
   byKickoff, bandOf, minsUntil, capacity, openSpots, realCount, fakeCount, filledCount, clampFakes,
   nextRelease, acLevel, minsToDeadline, short, shortBy, fill, attention, inCities, passesFilter,
   localClock, localDate, CRIT_HOURS, WARN_HOURS, riskTier, CANCEL_SOON_MINUTES, matchGroup, GROUPS,
@@ -311,6 +312,21 @@ eq("short + cancelled is still green (no phantom risk)", riskTier(mkG({ isCancel
 // attention counts ONLY still-to-come — never cancelled, never finished.
 ok(attention(cxFuture, NOW) === false ? "attention false for a cancelled match" : bad("attention cancelled"));
 ok(attention(finishedM, NOW) === false ? "attention false for a finished match" : bad("attention finished"));
+
+// Phase 23 — realOccupancyFromRoster: the match DETAIL endpoint's _count has ONLY { players } (no
+// fakePlayers — proven on production), so REAL active players for the fakeSpotLeft ceiling come from
+// the ROSTER: players − (fake rows, not cancelled). Pins the exact production observations.
+{
+  const fake = { user: { isFakePlayer: true } };
+  const real = { user: { isFakePlayer: false } };
+  const rowFake = { isFakePlayer: true };
+  eq("realOccupancy: prod 17476 — players 10, 8 fake roster rows → 2 real", realOccupancyFromRoster(10, [real, real, ...Array(8).fill(fake)]), 2);
+  eq("realOccupancy: prod 17650 — players 14, 13 fake → 1 real", realOccupancyFromRoster(14, [real, ...Array(13).fill(rowFake)]), 1);
+  eq("realOccupancy: prod 17558 — players 15, 0 fake → 15 real (fakes come from the roster, not _count)", realOccupancyFromRoster(15, Array(15).fill(real)), 15);
+  eq("realOccupancy: a CANCELLED fake is NOT subtracted (only active fakes count)", realOccupancyFromRoster(3, [{ isFakePlayer: true, isCancelled: true }, real, real, real]), 3);
+  eq("realOccupancy: never negative (guards a bad count)", realOccupancyFromRoster(1, [rowFake, rowFake]), 0);
+  eq("realOccupancy: empty roster → players unchanged", realOccupancyFromRoster(5, []), 5);
+}
 
 console.log(`\n${pass} passed, ${fail} failed`);
 process.exit(fail ? 1 : 0);

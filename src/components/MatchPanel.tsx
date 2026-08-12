@@ -55,7 +55,7 @@ type Manager = { id: number; name: string };
 type FieldRow = { id: number; title: string; city: string | null };
 type MatchData = Record<string, unknown> & {
   type?: string; startDate?: string; endDate?: string; teams?: unknown[];
-  occupancy?: number | null; fakeOccupancy?: number | null; cityName?: string | null; fieldTitle?: string | null;
+  occupancy?: number | null; realOccupancy?: number | null; cityName?: string | null; fieldTitle?: string | null;
   manager?: { firstName?: string; lastName?: string } | null;
 };
 
@@ -136,11 +136,12 @@ export default function MatchPanel({ matchId, env = "production" }: { matchId: s
   const typeExposed = orig ? Object.prototype.hasOwnProperty.call(EXPOSED_TYPES, String(orig.type)) : true;
 
   // ── the fakeSpotLeft ceiling math. capacity = maxPlayerCount (the server's cap field — see the
-  // report; NOT spotsPerTeam×teamCount, which is a UI derivation). realPlayers excludes fakes and
-  // cancelled: occupancy(=_count.players) − fakeOccupancy(=_count.fakePlayers). At each mark the
-  // ceiling caps shown-left, so fakes are added to reach it: max(0, capacity − real − ceiling).
+  // report; NOT spotsPerTeam×teamCount, which is a UI derivation). realPlayers = realOccupancy,
+  // computed by the route from the ROSTER as _count.players − fake rows (the detail _count has no
+  // fakePlayers — proven on prod). At each mark the ceiling caps shown-left, so fakes are added to
+  // reach it: max(0, capacity − real − ceiling).
   const capacity = Number(cur.maxPlayerCount) || 0;
-  const realPlayers = Math.max(0, Number(orig?.occupancy ?? 0) - Number(orig?.fakeOccupancy ?? 0));
+  const realPlayers = Math.max(0, Number(orig?.realOccupancy ?? 0));
   const fakesNeeded = (ceiling: number) => Math.max(0, capacity - realPlayers - ceiling);
   const ladderBreak = useMemo(() => {
     for (let i = 1; i < MARKS.length; i++) {

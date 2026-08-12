@@ -60,6 +60,20 @@ export const minsUntil = (m: ApiMatch, now: number): number => (kickoffMs(m) - n
 // `players` (that double-counts fakes: it inflates "real" and then openSpots =
 // cap-real-fake subtracts the fakes twice).
 export const realCount = (m: ApiMatch): number => Math.max(0, n(m._count?.players) - n(m._count?.fakePlayers));
+
+// The match DETAIL endpoint (GET /admin/matches/{id}) carries only `_count: { players }` — real +
+// fake, active, PLAYER-type; NO fakePlayers, and it excludes cancelled/guests/additional-spots.
+// (Proven on production: 17476 players=10 with 8 fake roster rows → 2 real; 17650 14 with 13 fake →
+// 1 real; 17558 15 with 0 fake → 15.) So on the detail path the fake count must come from the ROSTER
+// (/admin/matches/{id}/players), and REAL active players = players − (roster FAKE rows, not cancelled).
+// This is what the fakeSpotLeft ceiling math needs; do NOT reach for _count.fakePlayers here (absent).
+export type RosterRow = { isFakePlayer?: boolean; isCancelled?: boolean; canceledAt?: string | null; user?: { isFakePlayer?: boolean } };
+export const rosterRowIsFake = (r: RosterRow): boolean => r.isFakePlayer === true || r.user?.isFakePlayer === true;
+export const rosterRowCancelled = (r: RosterRow): boolean => r.isCancelled === true || r.canceledAt != null;
+export function realOccupancyFromRoster(playersCount: number, roster: RosterRow[]): number {
+  const fakes = (roster ?? []).filter((r) => rosterRowIsFake(r) && !rosterRowCancelled(r)).length;
+  return Math.max(0, (Number(playersCount) || 0) - fakes);
+}
 export const filledCount = (m: ApiMatch): number => n(m._count?.players); // total occupied (real + fake)
 export const fakeCount = (m: ApiMatch): number => n(m._count?.fakePlayers); // OBSERVED, not ladder-derived
 export const capacity = (m: ApiMatch): number | null => {

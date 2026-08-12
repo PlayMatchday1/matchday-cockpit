@@ -9,6 +9,7 @@ import { randomUUID } from "node:crypto";
 import { authenticateAdmin } from "@/lib/adminAuth";
 import { apiGet, apiWrite, AmbiguousWriteError, WriteFailedError, StageHostGuardError, StageConfigError, DeniedFieldError, DeniedEndpointError, ProductionWriteBoltedError, NotAuthorizedError, type MatchdayEnv } from "@/lib/matchdayStageApi";
 import { EDITABLE_KEYS } from "@/lib/matchEditModel";
+import { realOccupancyFromRoster, type RosterRow } from "@/lib/gamedayModel";
 import { recordWrite, supabaseLogStore } from "@/lib/changeLog";
 
 export const runtime = "nodejs";
@@ -38,10 +39,6 @@ function pickMatch(m: Record<string, unknown>) {
   // the same number gameday/the drawer use. NOT players.length (which includes cancelled
   // user-match rows and reads as over-capacity). Editor headlines this against the cap.
   out.occupancy = (m._count as Record<string, unknown> | undefined)?.players ?? null;
-  // The FAKE subset of the occupancy (Phase 23) — so the panel can derive real players
-  // (= occupancy − fakeOccupancy) for the fakeSpotLeft ceiling math. _count is authoritative;
-  // players.length is not (it includes cancelled rows).
-  out.fakeOccupancy = (m._count as Record<string, unknown> | undefined)?.fakePlayers ?? 0;
   return out;
 }
 
@@ -74,7 +71,11 @@ export async function GET(req: Request, ctx: { params: Promise<{ env: string; id
         name: [u.firstName, u.lastName].filter(Boolean).join(" ").trim() || `User ${u.id}`,
       }));
     }
-    return Response.json({ match: pickMatch(match), fields: fieldList, players: players ?? [], managers });
+    const picked = pickMatch(match);
+    // REAL active players (excl fakes AND cancelled) for the fakeSpotLeft ceiling math. Derived from
+    // the ROSTER because the detail _count has only { players } — no fakePlayers (proven on prod).
+    picked.realOccupancy = realOccupancyFromRoster(Number(picked.occupancy) || 0, (players ?? []) as RosterRow[]);
+    return Response.json({ match: picked, fields: fieldList, players: players ?? [], managers });
   } catch (e) {
     return errToResponse(e);
   }
