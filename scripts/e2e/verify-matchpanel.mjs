@@ -35,6 +35,39 @@ const MANAGERS = [{ id: 65903, name: "Troy" }, { id: 44120, name: "Christian Boa
 const FIELDS = [{ id: 199, title: "Atlanta — PRUMC", city: "Atlanta" }, { id: 201, title: "Austin — Onion Creek", city: "Austin" }];
 
 let puts = [];
+
+// ── Step 2 TEAMS (immediate) — a MUTABLE roster fixture per match id, driven by the SAME roster
+// route the standalone editor used. rosterPosts captures every immediate write (by kind) so the gate
+// can prove counts + endpoint isolation; the shape POST returns a deliberately MISLEADING outcome so
+// the "report from teams[].length, not the response status" rule can be tested.
+let rosterPosts = [];
+let rosterGets = 0;
+const rosterStates = {};
+const twoTeamRoster = () => ({
+  name: "PRUMC - Tuesday",
+  teams: [{ id: 501, teamNumber: 1, name: "Green", locked: false }, { id: 502, teamNumber: 2, name: "Blue", locked: false }],
+  players: [
+    { umId: 9001, playerId: 1, team: 1, playerNumber: 1, name: "Alex Kim", fake: false },
+    { umId: 9002, playerId: 2, team: 1, playerNumber: 2, name: "Sam Reyes", fake: true },
+    { umId: 9003, playerId: 3, team: 2, playerNumber: 1, name: "Jordan Lee", fake: false },
+  ], shape: { teamN: 2, perTeam: 9 }, maxPlayerCount: 18, occupancy: 3, _um: -1,
+});
+const fourTeamRoster = () => ({
+  name: "Bracket Night",
+  teams: [{ id: 601, teamNumber: 1, name: "Green", locked: false }, { id: 602, teamNumber: 2, name: "Blue", locked: false }, { id: 603, teamNumber: 3, name: "Red", locked: false }, { id: 604, teamNumber: 4, name: "Gold", locked: false }],
+  players: [
+    { umId: 8001, playerId: 1, team: 1, playerNumber: 1, name: "Alex Kim", fake: false },
+    { umId: 8003, playerId: 3, team: 3, playerNumber: 1, name: "Chris Vale", fake: false },
+    { umId: 8004, playerId: 4, team: 4, playerNumber: 1, name: "Dana Poe", fake: false },
+  ], shape: { teamN: 4, perTeam: 5 }, maxPlayerCount: 20, occupancy: 3, _um: -1,
+});
+const rosterFor = (id) => (rosterStates[id] ??= String(id).endsWith("4444") ? fourTeamRoster() : twoTeamRoster());
+const setTeamCount = (st, n) => {
+  const cur = st.teams.length;
+  if (n > cur) for (let k = cur + 1; k <= n; k++) st.teams.push({ id: 500 + k, teamNumber: k, name: `Team ${k}`, locked: false });
+  else if (n < cur) { st.teams = st.teams.slice(0, n); st.players = st.players.map((p) => (p.team > n ? { ...p, team: 1 } : p)); }
+};
+
 function matchFor(id) {
   if (String(id).endsWith("9999")) return { ...REGULAR, id: Number(id), type: "BRACKET" };
   if (String(id).endsWith("8888")) return { ...REGULAR, id: Number(id), maxPlayerCount: 18, teams: [{ teamNumber: 1 }, { teamNumber: 2 }, { teamNumber: 3 }, { teamNumber: 4 }] }; // 18/4 = 4.5, non-divisible
@@ -61,6 +94,37 @@ async function routes(ctx) {
       const b = JSON.parse(route.request().postData() || "{}");
       puts.push(b.changes || {});
       return json({ ok: true, outcome: "landed", logRecorded: true, match: { ...matchFor(id), ...(b.changes || {}) } });
+    }
+    return json({});
+  });
+  // roster route — the IMMEDIATE endpoint the TEAMS section fires on (rename / add / move / remove / shape)
+  await ctx.route(/\/api\/matchday\/production\/roster\/\d+(\?.*)?$/, async (route) => {
+    const url = new URL(route.request().url());
+    const id = url.pathname.split("/").pop();
+    const method = route.request().method();
+    const json = (o, status = 200) => route.fulfill({ status, contentType: "application/json", body: JSON.stringify(o) });
+    const st = rosterFor(id);
+    if (method === "GET") {
+      if (url.searchParams.get("q") !== null) return json({ results: [{ id: 77, name: "New Player", isFake: false }] });
+      rosterGets++;
+      return json({ matchId: Number(id), name: st.name, teams: st.teams, players: st.players, shape: st.shape, maxPlayerCount: st.maxPlayerCount, occupancy: st.occupancy });
+    }
+    if (method === "POST") {
+      const op = JSON.parse(route.request().postData() || "{}");
+      rosterPosts.push(op);
+      switch (op.kind) {
+        case "teams": {
+          if (op.fields?.name === "FAILNAME") return json({ error: "rename rejected by server" }, 400);
+          const t = st.teams.find((x) => x.id === op.teamId); if (t) t.name = op.fields.name;
+          return json({ ok: true, outcome: "landed", result: {} });
+        }
+        case "add": { const um = st._um--; st.players.push({ umId: um, playerId: op.playerId, team: op.team, playerNumber: op.playerNumber, name: "New Player", fake: false }); return json({ ok: true, outcome: "landed", result: { id: um } }); }
+        case "move": { const p = st.players.find((x) => x.umId === op.userMatchId); if (p) { p.team = op.team; p.playerNumber = op.playerNumber; } return json({ ok: true, outcome: "landed", result: {} }); }
+        case "remove": { st.players = st.players.filter((x) => x.umId !== op.userMatchId); return json({ ok: true, outcome: "landed", result: {} }); }
+        // MISLEADING outcome on purpose: teams[].length (the re-read) is the only honest signal.
+        case "shape": { setTeamCount(st, op.fields.teamNumbers); return json({ ok: true, outcome: "not applied", result: {} }); }
+        default: return json({ ok: true });
+      }
     }
     return json({});
   });
@@ -107,6 +171,10 @@ async function main() {
   const ctx = await browser.newContext({ viewport: { width: 1440, height: 1000 }, storageState });
   await routes(ctx);
   const page = await ctx.newPage();
+  // one persistent dialog handler; each test sets the intent just before it acts (immediate ops and
+  // Revert use window.confirm). dlg.msg captures the last message for assertion.
+  const dlg = { accept: true, msg: null };
+  page.on("dialog", async (d) => { dlg.msg = d.message(); if (dlg.accept) await d.accept(); else await d.dismiss(); });
   const openDiff = async () => { if (await page.$eval('[data-testid="mp-diffhd"]', (e) => e.getAttribute("aria-expanded")) === "false") await page.click('[data-testid="mp-diffhd"]'); };
   const diffKeysNow = () => page.$$eval('[data-testid="mp-diff-item"]', (els) => els.map((e) => e.getAttribute("data-key")).sort());
   const val = (t) => page.$eval(`[data-testid="${t}"]`, (e) => e.value);
@@ -209,9 +277,128 @@ async function main() {
   eq("spots: 18/4 hides the per-team figure + stepper, shows a total-only note", { na: await has("mp-spt-na"), perTeam: await has("mp-spt"), stepper: await has("mp-spt-plus") }, { na: true, perTeam: false, stepper: false });
   eq("spots: the note says why (doesn't divide evenly into 4 teams)", /doesn't divide evenly into 4 teams/.test(await page.$eval('[data-testid="mp-spt-na"]', (e) => e.textContent)), true);
 
-  // ── layout at 1600 and 390 — SEPARATE assertions ──
+  // ══════════════ Step 2 · TEAMS — the IMMEDIATE half (each op fires now; Save/Revert never touch it) ══════════════
+  await page.setViewportSize({ width: 1440, height: 1000 });
+  delete rosterStates["17494"]; // fresh 2-team roster (Green / Blue)
   await page.goto(`${BASE}/match-ops/match-panel/17494`, { waitUntil: "domcontentloaded" });
-  await page.waitForSelector('[data-testid="mp-panel"]', { timeout: 15000 });
+  await page.waitForSelector('[data-testid="mp-team"]', { timeout: 20000 });
+  eq("teams: the permanent banner says Save/Revert do not apply to these", /Save and Revert do not apply/i.test(await page.$eval('[data-testid="mp-immediate-banner"]', (e) => e.textContent)), true);
+
+  // GATE 1 — a rename fires exactly one request to the roster/teams endpoint and NOTHING to the match endpoint
+  rosterPosts = []; puts = []; dlg.accept = true;
+  await page.fill('[data-testid="mp-tname-1"]', "Orange");
+  await page.click('[data-testid="mp-rename-1"]');
+  await page.waitForFunction(() => document.querySelector('[data-testid="mp-tname-committed-1"]')?.textContent === "Orange", null, { timeout: 6000 });
+  eq("gate1: rename → exactly one teams request, zero to the match endpoint",
+    { teams: rosterPosts.filter((o) => o.kind === "teams").length, total: rosterPosts.length, puts: puts.length }, { teams: 1, total: 1, puts: 0 });
+
+  // GATE 6 — password appears in no teams request body
+  eq("gate6: no roster/teams request body contains 'password'", rosterPosts.some((o) => JSON.stringify(o).includes("password")), false);
+
+  // GATE 2 — a rename never enters the staged diff (edit a match field AND rename → the diff is only the field)
+  delete rosterStates["17494"]; rosterPosts = []; puts = [];
+  await page.goto(`${BASE}/match-ops/match-panel/17494`, { waitUntil: "domcontentloaded" });
+  await page.waitForSelector('[data-testid="mp-team"]', { timeout: 15000 });
+  await page.fill('[data-testid="mp-name"]', "Renamed Match");
+  await page.fill('[data-testid="mp-tname-1"]', "Teal");
+  await page.click('[data-testid="mp-rename-1"]');
+  await page.waitForFunction(() => document.querySelector('[data-testid="mp-tname-committed-1"]')?.textContent === "Teal", null, { timeout: 6000 });
+  await openDiff();
+  eq("gate2: a team rename never enters the staged diff (diff = only the match field)", await diffKeysNow(), ["name"]);
+
+  // GATE 3 — Revert after a rename leaves the new name in place; its confirmation SAYS it won't undo immediate changes
+  dlg.accept = true; dlg.msg = null;
+  await page.click('[data-testid="mp-revert"]');
+  await page.waitForTimeout(200);
+  { const nameStays = await page.$eval('[data-testid="mp-tname-committed-1"]', (e) => e.textContent);
+    const staged = await page.$eval('[data-testid="mp-diffcount"]', (e) => e.textContent.trim());
+    (nameStays === "Teal" && /No changes/.test(staged) && dlg.msg && /does NOT undo|team\/roster/i.test(dlg.msg))
+      ? ok("gate3: Revert leaves the renamed team in place and its confirmation says it won't undo immediate changes")
+      : bad("gate3", `name=${nameStays} staged=${staged} dlg=${JSON.stringify(dlg.msg)}`); }
+
+  // GATE 4 — rename failure: the shown name reverts, the typed text is kept, no success state
+  delete rosterStates["17494"]; rosterPosts = [];
+  await page.goto(`${BASE}/match-ops/match-panel/17494`, { waitUntil: "domcontentloaded" });
+  await page.waitForSelector('[data-testid="mp-team"]', { timeout: 15000 });
+  await page.fill('[data-testid="mp-tname-2"]', "FAILNAME");
+  await page.click('[data-testid="mp-rename-2"]');
+  await page.waitForSelector('[data-testid="mp-optoast"].bad', { timeout: 6000 }).catch(() => {});
+  { const committed = await page.$eval('[data-testid="mp-tname-committed-2"]', (e) => e.textContent);
+    const typed = await val("mp-tname-2");
+    const toastBad = await page.$('[data-testid="mp-optoast"].bad');
+    (committed === "Blue" && typed === "FAILNAME" && !!toastBad)
+      ? ok("gate4: rename failure keeps the typed text, reverts the shown name, shows no success")
+      : bad("gate4", `committed=${committed} typed=${typed} bad=${!!toastBad}`); }
+
+  // GATE 5 — no price and no locked control anywhere in TEAMS (count 0)
+  eq("gate5: TEAMS exposes no price and no locked control (count 0)", await page.$eval('[data-testid="mp-teams"]', (el) =>
+    el.querySelectorAll('[data-testid*="price" i],[data-testid*="lock" i],input[name*="price" i],input[name*="lock" i],[aria-label*="lock" i],[aria-label*="price" i]').length), 0);
+
+  // GATE 7 — add / move / remove each fire exactly one request, none touch the match endpoint
+  delete rosterStates["17494"]; rosterPosts = []; puts = [];
+  await page.goto(`${BASE}/match-ops/match-panel/17494`, { waitUntil: "domcontentloaded" });
+  await page.waitForSelector('[data-testid="mp-team"]', { timeout: 15000 });
+  await page.fill('[data-testid="mp-add-search"]', "new");
+  await page.waitForSelector('[data-testid="mp-add-result"]', { timeout: 6000 });
+  await page.click('[data-testid="mp-add-result"]');
+  await page.waitForSelector('[data-testid="mp-add-to-2"]', { timeout: 4000 });
+  await page.click('[data-testid="mp-add-to-2"]');
+  await page.waitForFunction(() => [...document.querySelectorAll('[data-testid="mp-player"]')].some((e) => e.textContent.includes("New Player")), null, { timeout: 6000 });
+  eq("gate7a: add fires exactly one roster request, zero to the match endpoint", { add: rosterPosts.filter((o) => o.kind === "add").length, puts: puts.length }, { add: 1, puts: 0 });
+
+  rosterPosts = []; puts = [];
+  await page.click('[data-testid="mp-move-9001-2"]');
+  await page.waitForTimeout(400);
+  eq("gate7b: move fires exactly one roster request, zero to the match endpoint", { move: rosterPosts.filter((o) => o.kind === "move").length, puts: puts.length }, { move: 1, puts: 0 });
+
+  rosterPosts = []; puts = []; dlg.accept = true;
+  await page.click('[data-testid="mp-remove-9003"]');
+  await page.waitForTimeout(400);
+  eq("gate7c: remove fires exactly one roster request, zero to the match endpoint", { remove: rosterPosts.filter((o) => o.kind === "remove").length, puts: puts.length }, { remove: 1, puts: 0 });
+
+  // GATE 8 — fake players are visibly marked; real players are not
+  delete rosterStates["17494"];
+  await page.goto(`${BASE}/match-ops/match-panel/17494`, { waitUntil: "domcontentloaded" });
+  await page.waitForSelector('[data-testid="mp-team"]', { timeout: 15000 });
+  { const marks = await page.evaluate(() => {
+      const rows = [...document.querySelectorAll('[data-testid="mp-player"]')];
+      const fakeRows = rows.filter((r) => r.getAttribute("data-fake") === "1");
+      return { fakeRows: fakeRows.length, taggedFakes: fakeRows.filter((r) => r.querySelector('[data-testid="mp-fake-tag"]')).length, taggedReal: rows.filter((r) => r.getAttribute("data-fake") === "0" && r.querySelector('[data-testid="mp-fake-tag"]')).length };
+    });
+    (marks.fakeRows >= 1 && marks.taggedFakes === marks.fakeRows && marks.taggedReal === 0)
+      ? ok(`gate8: every fake player carries a FAKE mark (${marks.taggedFakes}) and no real player does`) : bad("gate8", JSON.stringify(marks)); }
+
+  // GATE 9 — team count 2→4: the write is sent, the panel RE-READS, and the verdict comes from teams[].length,
+  //          NOT the response status (the shape POST deliberately returns outcome "not applied").
+  delete rosterStates["17494"]; rosterPosts = []; puts = [];
+  await page.goto(`${BASE}/match-ops/match-panel/17494`, { waitUntil: "domcontentloaded" });
+  await page.waitForSelector('[data-testid="mp-teamcount-4"]', { timeout: 15000 });
+  const getsBefore = rosterGets;
+  await page.click('[data-testid="mp-teamcount-4"]');
+  await page.waitForFunction(() => /LANDED|NOT APPLIED/.test(document.querySelector('[data-testid="mp-teamcount-result"]')?.textContent || ""), null, { timeout: 6000 });
+  { const result = await page.$eval('[data-testid="mp-teamcount-result"]', (e) => e.textContent);
+    const shapePost = rosterPosts.find((o) => o.kind === "shape");
+    (shapePost?.fields?.teamNumbers === 4 && puts.length === 0 && /LANDED/.test(result) && /4 teams/.test(result) && rosterGets > getsBefore)
+      ? ok("gate9: 2→4 sends teamNumbers, re-reads, reports LANDED from teams[].length (not the 'not applied' response)")
+      : bad("gate9", `post=${JSON.stringify(shapePost)} result=${result} reRead=${rosterGets > getsBefore}`); }
+
+  // GATE 10 — 4→2 with players on the disappearing teams: the confirmation NAMES the count; dismissing it sends nothing
+  delete rosterStates["14444"]; rosterPosts = [];
+  await page.goto(`${BASE}/match-ops/match-panel/14444`, { waitUntil: "domcontentloaded" });
+  await page.waitForSelector('[data-testid="mp-teamcount-2"]', { timeout: 15000 });
+  dlg.accept = false; dlg.msg = null;
+  await page.click('[data-testid="mp-teamcount-2"]');
+  await page.waitForTimeout(400);
+  { const named = dlg.msg && /2 player/.test(dlg.msg) && /reassigned/i.test(dlg.msg);
+    const sent = rosterPosts.filter((o) => o.kind === "shape").length;
+    (named && sent === 0) ? ok("gate10: 4→2 confirmation names the 2 affected players; dismissing sends nothing")
+      : bad("gate10", `dlg=${JSON.stringify(dlg.msg)} shapePosts=${sent}`); }
+  dlg.accept = true;
+
+  // ── layout at 1600 and 390 — SEPARATE assertions (the TEAMS section is now VISIBLE; assert it fits) ──
+  delete rosterStates["17494"];
+  await page.goto(`${BASE}/match-ops/match-panel/17494`, { waitUntil: "domcontentloaded" });
+  await page.waitForSelector('[data-testid="mp-teams"]', { timeout: 15000 });
   for (const w of [1600, 390]) {
     await page.setViewportSize({ width: w, height: 900 });
     await page.waitForTimeout(150);
@@ -219,11 +406,13 @@ async function main() {
       const noOverflow = document.documentElement.scrollWidth <= window.innerWidth + 1;
       const pr = document.querySelector('[data-testid="mp-panel"]').getBoundingClientRect();
       const fits = pr.right <= window.innerWidth + 1 && pr.left >= -1;
-      const slot = document.querySelector('[data-testid="mp-immediate-slot"]');
-      const slotHidden = !slot || getComputedStyle(slot).display === "none";
-      return { noOverflow, fits, slotHidden };
+      const teams = document.querySelector('[data-testid="mp-teams"]');
+      const teamsVisible = !!teams && getComputedStyle(teams).display !== "none";
+      const tr = teams.getBoundingClientRect();
+      const teamsFits = tr.right <= window.innerWidth + 1 && tr.left >= -1;
+      return { noOverflow, fits, teamsVisible, teamsFits };
     });
-    (r.noOverflow && r.fits && r.slotHidden) ? ok(`layout at ${w}px — no overflow, panel fits, no mobile-only block leaking`) : bad(`layout ${w}px`, JSON.stringify(r));
+    (r.noOverflow && r.fits && r.teamsVisible && r.teamsFits) ? ok(`layout at ${w}px — no overflow, panel + TEAMS fit, immediate section visible`) : bad(`layout ${w}px`, JSON.stringify(r));
   }
   await page.setViewportSize({ width: 1440, height: 1000 });
 

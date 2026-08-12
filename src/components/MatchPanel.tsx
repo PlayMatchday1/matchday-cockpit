@@ -53,6 +53,9 @@ const LABELS: Record<string, string> = {
 
 type Manager = { id: number; name: string };
 type FieldRow = { id: number; title: string; city: string | null };
+type TeamRow = { id: number; teamNumber: number; name: string; locked: boolean };
+type PlayerRow = { umId: number; playerId: number; team: number; playerNumber: number; name: string; fake: boolean };
+type RosterState = { name: string; teams: TeamRow[]; players: PlayerRow[]; shape: { teamN: number; perTeam: number }; maxPlayerCount: number | null; occupancy: number | null };
 type MatchData = Record<string, unknown> & {
   type?: string; startDate?: string; endDate?: string; teams?: unknown[];
   occupancy?: number | null; realOccupancy?: number | null; cityName?: string | null; fieldTitle?: string | null;
@@ -90,6 +93,20 @@ export default function MatchPanel({ matchId, env = "production" }: { matchId: s
   const [toast, setToast] = useState<string | null>(null);
   const [diffOpen, setDiffOpen] = useState(false);
 
+  // ── Step 2 · TEAMS — the IMMEDIATE half. None of this stages; each action fires on its own
+  // endpoint the moment it happens and Revert never touches it. State is entirely separate from the
+  // staged `cur`/STAGED_KEYS above, so a team rename or a roster move can NEVER enter the diff.
+  const [roster, setRoster] = useState<RosterState | null>(null);
+  const [rosterErr, setRosterErr] = useState<string | null>(null);
+  const [teamDraft, setTeamDraft] = useState<Record<number, string>>({}); // teamId → typed name (kept on failure)
+  const [opBusy, setOpBusy] = useState<string | null>(null);
+  const [opToast, setOpToast] = useState<{ text: string; bad?: boolean } | null>(null);
+  const [immediateOps, setImmediateOps] = useState<string[]>([]); // what fired this session — drives Revert's warning
+  const [countResult, setCountResult] = useState<string | null>(null); // LANDED / NOT APPLIED for team count
+  const [q, setQ] = useState("");
+  const [results, setResults] = useState<{ id: number; name: string }[]>([]);
+  const [pendingAdd, setPendingAdd] = useState<{ id: number; name: string } | null>(null);
+
   const load = useCallback(async () => {
     setLoadErr(null);
     const headers = await authHeaders();
@@ -113,6 +130,124 @@ export default function MatchPanel({ matchId, env = "production" }: { matchId: s
     }
   }, [env, matchId]);
   useEffect(() => { void load(); }, [load]);
+
+  // ── TEAMS (immediate) — load the roster + teams from the SAME guarded roster route the standalone
+  // editor used (Part A absorbs it). Returns the fresh payload so the write-only team-count re-read
+  // can compare teams[].length directly rather than racing setState.
+  const rosterPath = `/api/matchday/${env}/roster/${matchId}`;
+  const loadRoster = useCallback(async (): Promise<RosterState | null> => {
+    const headers = await authHeaders();
+    if (!headers) { setRosterErr("No active session — sign in again."); return null; }
+    try {
+      const res = await fetch(rosterPath, { headers, cache: "no-store" });
+      const j = await res.json();
+      if (!res.ok) { setRosterErr(j.error || `HTTP ${res.status}`); return null; }
+      setRoster(j as RosterState);
+      setTeamDraft(Object.fromEntries((j.teams as TeamRow[]).map((t) => [t.id, t.name])));
+      setRosterErr(null);
+      return j as RosterState;
+    } catch (e) { setRosterErr(e instanceof Error ? e.message : String(e)); return null; }
+  }, [rosterPath]);
+  useEffect(() => { void loadRoster(); }, [loadRoster]);
+
+  // add-a-player search (id or email), debounced — id + name only, no PII beyond the dropdown name.
+  useEffect(() => {
+    if (!q.trim()) { setResults([]); return; }
+    let live = true;
+    const t = setTimeout(async () => {
+      const headers = await authHeaders(); if (!headers) return;
+      const res = await fetch(`${rosterPath}?q=${encodeURIComponent(q.trim())}`, { headers, cache: "no-store" });
+      const j = await res.json().catch(() => ({}));
+      if (live) setResults((j.results ?? []).slice(0, 8));
+    }, 200);
+    return () => { live = false; clearTimeout(t); };
+  }, [q, rosterPath]);
+
+  const noteImmediate = (msg: string) => setImmediateOps((a) => [...a, msg]);
+
+  // One immediate write. Fires NOW; there is no staging and no batch. Returns {ok, j} or null (network).
+  const rosterPost = async (op: Record<string, unknown>, label: string): Promise<{ ok: boolean; j: Record<string, unknown> } | null> => {
+    const headers = await authHeaders();
+    if (!headers) { setOpToast({ text: "No active session — sign in again.", bad: true }); return null; }
+    setOpBusy(label); setOpToast(null);
+    try {
+      const res = await fetch(rosterPath, { method: "POST", headers, body: JSON.stringify({ ...op, source: "Match panel · teams", matchName: roster?.name }) });
+      const j = await res.json().catch(() => ({}));
+      setOpBusy(null);
+      if (!res.ok) { setOpToast({ text: `${label} failed: ${j.error || res.status}. Nothing else changed.`, bad: true }); return { ok: false, j }; }
+      return { ok: true, j };
+    } catch (e) { setOpBusy(null); setOpToast({ text: `${label} — ${e instanceof Error ? e.message : String(e)}. UNKNOWN; reload before acting.`, bad: true }); return null; }
+  };
+
+  const firstOpenSlot = (teamNumber: number): number => {
+    if (!roster) return 1;
+    const used = new Set(roster.players.filter((p) => p.team === teamNumber).map((p) => p.playerNumber));
+    const per = roster.shape?.perTeam || 0;
+    for (let n = 1; n <= per; n++) if (!used.has(n)) return n;
+    return (roster.players.filter((p) => p.team === teamNumber).reduce((m, p) => Math.max(m, p.playerNumber), 0)) + 1;
+  };
+
+  // RENAME — teams endpoint only, {name} only (password is deny-listed and never sent). Confirm THEN
+  // update: the committed name changes only after the response re-read confirms it, never optimistically.
+  const renameTeam = async (teamId: number, teamNumber: number) => {
+    if (!roster || opBusy) return;
+    const name = (teamDraft[teamId] ?? "").trim();
+    const team = roster.teams.find((t) => t.id === teamId);
+    if (!team || !name || name === team.name) return;
+    const r = await rosterPost({ kind: "teams", teamId, fields: { name } }, `Rename team ${teamNumber}`);
+    if (!r) return;
+    if (r.ok) {
+      await loadRoster(); // committed name now reflects the server; teamDraft is reseeded to it
+      noteImmediate(`renamed team ${teamNumber} → “${name}”`);
+      setOpToast({ text: `Team ${teamNumber} is now “${name}” — saved immediately.` });
+    }
+    // on failure rosterPost toasted; teamDraft keeps the typed text; the committed name is untouched (reverts)
+  };
+
+  const addPlayer = async (teamNumber: number) => {
+    if (!roster || !pendingAdd || opBusy) return;
+    const n = firstOpenSlot(teamNumber);
+    const r = await rosterPost({ kind: "add", playerId: pendingAdd.id, team: teamNumber, playerNumber: n }, `Add ${pendingAdd.name}`);
+    if (r?.ok) { const nm = pendingAdd.name; setPendingAdd(null); setQ(""); setResults([]); await loadRoster(); noteImmediate(`added ${nm} to team ${teamNumber}`); setOpToast({ text: `${nm} added to team ${teamNumber} — saved immediately.` }); }
+  };
+  const movePlayer = async (p: PlayerRow, toTeam: number) => {
+    if (!roster || opBusy) return;
+    const n = firstOpenSlot(toTeam);
+    const r = await rosterPost({ kind: "move", userMatchId: p.umId, team: toTeam, playerNumber: n }, `Move ${p.name}`);
+    if (r?.ok) { await loadRoster(); noteImmediate(`moved ${p.name} to team ${toTeam}`); setOpToast({ text: `${p.name} moved to team ${toTeam} — saved immediately.` }); }
+  };
+  const removePlayer = async (p: PlayerRow) => {
+    if (!roster || opBusy) return;
+    const okd = typeof window !== "undefined" && window.confirm(
+      `Remove ${p.name} from this match now?\n\nThis fires immediately and Revert will not undo it. It takes them off the roster — it is NOT a refund; the effect on any charge is unconfirmed.`);
+    if (!okd) return;
+    const r = await rosterPost({ kind: "remove", userMatchId: p.umId }, `Remove ${p.name}`);
+    if (r?.ok) { await loadRoster(); noteImmediate(`removed ${p.name}`); setOpToast({ text: `${p.name} removed — saved immediately.` }); }
+  };
+
+  // TEAM COUNT 2 ⇄ 4. teamNumbers is WRITE-ONLY: a 2xx is NOT proof. Send it, then RE-READ and
+  // report from teams[].length — never from the response status. 4→2 is the dangerous direction and
+  // gets a confirm naming how many players sit on the teams about to disappear.
+  const changeTeamCount = async (target: number) => {
+    if (!roster || opBusy) return;
+    const curN = roster.teams.length;
+    if (target === curN) return;
+    if (target < curN) {
+      const affected = roster.players.filter((p) => p.team > target);
+      const span = target + 1 === curN ? `team ${curN}` : `teams ${target + 1}–${curN}`;
+      const okd = typeof window !== "undefined" && window.confirm(
+        `Change to ${target} teams?\n\n${affected.length} player(s) currently on ${span} will be reassigned BY THE SERVER — Clubhouse cannot say where they land. This fires immediately and Revert will not undo it.` +
+        (affected.length ? `\n\nAffected: ${affected.slice(0, 8).map((p) => p.name).join(", ")}${affected.length > 8 ? ` +${affected.length - 8}` : ""}.` : ""));
+      if (!okd) { setCountResult(null); return; }
+    }
+    setCountResult(`Sending teamNumbers = ${target}…`);
+    const r = await rosterPost({ kind: "shape", fields: { teamNumbers: target } }, `Set ${target} teams`);
+    if (!r) { setCountResult("UNKNOWN — no answer from the server. Reload before acting."); return; }
+    const fresh = await loadRoster(); // the RE-READ; teamNumbers is absent from GET so we compare team ROWS
+    const landedN = fresh ? fresh.teams.length : null;
+    if (landedN === target) { noteImmediate(`set team count to ${target}`); setCountResult(`LANDED — the panel re-read the match and now sees ${landedN} teams.`); }
+    else setCountResult(`NOT APPLIED — the re-read shows ${landedN ?? "?"} team(s), not ${target}. teamNumbers is write-only so a 2xx proves nothing; the server did not change the count.`);
+  };
 
   // Recompute the derived date pair whenever the WHEN inputs move: apply the start delta to the
   // loaded end so DURATION is preserved, and send BOTH (the route rejects a lone date field).
@@ -189,6 +324,15 @@ export default function MatchPanel({ matchId, env = "production" }: { matchId: s
 
   const doRevert = () => {
     if (!orig) return;
+    // If any TEAMS action fired this session, Revert must NAME what it will NOT undo — the whole risk
+    // of Step 2 is someone removing a player, hitting Revert, and believing they took it back.
+    if (immediateOps.length > 0 && typeof window !== "undefined") {
+      const okd = window.confirm(
+        `Revert clears the ${changed.length} unsaved match-field change${changed.length === 1 ? "" : "s"} above.\n\n` +
+        `It does NOT undo the ${immediateOps.length} team/roster change${immediateOps.length === 1 ? "" : "s"} you already saved this session — those fired immediately on their own endpoints and cannot be taken back here:\n` +
+        `• ${immediateOps.slice(-6).join("\n• ")}\n\nContinue?`);
+      if (!okd) return;
+    }
     const next: Record<string, unknown> = {};
     for (const k of STAGED_KEYS) next[k] = orig[k] ?? null;
     setCur(next);
@@ -375,8 +519,88 @@ export default function MatchPanel({ matchId, env = "production" }: { matchId: s
               <textarea data-testid="mp-intro" value={String(cur.managerIntro ?? "")} className={isDirty("managerIntro") ? "mp-chg" : ""} onChange={(e) => setField("managerIntro", e.target.value)} /></label>
           </Section>
 
-          {/* Step 2 lands immediate roster/team actions HERE — Save/Revert never touch them. */}
-          <div className="mp-immediate" data-testid="mp-immediate-slot" hidden aria-hidden="true" />
+          {/* ── TEAMS (Step 2) — the IMMEDIATE half. Deliberately NOT another accordion: a red-edged
+             block, its own banner, so it never reads like the six staged sections above. Save and
+             Revert do not reach anything in here. ── */}
+          <div className="mp-teams" data-testid="mp-teams">
+            <div className="mp-teams-hd">
+              <span className="mp-teams-title">TEAMS · ROSTER · TEAM COUNT</span>
+              <span className="mp-immbadge">SAVES IMMEDIATELY</span>
+            </div>
+            <div className="mp-immbanner" data-testid="mp-immediate-banner">
+              <b>These changes save as you make them.</b> Team renames, roster moves and the team count fire the moment you click — on their own endpoints. <b>Save and Revert do not apply to them.</b>
+            </div>
+
+            {rosterErr ? <div className="mp-err" data-testid="mp-teams-error">Couldn’t load teams: {rosterErr}</div>
+             : !roster ? <div className="mp-loading" data-testid="mp-teams-loading">Loading teams…</div>
+             : <>
+              {opToast && <div className={"mp-optoast" + (opToast.bad ? " bad" : "")} data-testid="mp-optoast">{opToast.text}</div>}
+
+              {/* TEAM COUNT 2 ⇄ 4 — write-only teamNumbers; verdict comes from a re-read of teams[].length */}
+              <div className="mp-countrow">
+                <span className="mp-lb" style={{ marginBottom: 0 }}>TEAM COUNT</span>
+                <div className="mp-countbtns">
+                  {[2, 4].map((n) => (
+                    <button key={n} type="button" data-testid={`mp-teamcount-${n}`} className={"mp-cbtn" + (roster.teams.length === n ? " on" : "")}
+                      disabled={!!opBusy || roster.teams.length === n} onClick={() => void changeTeamCount(n)}>{n} teams</button>
+                  ))}
+                </div>
+                <span className="mp-help" style={{ marginTop: 0, marginLeft: "auto" }}>now <b>{roster.teams.length}</b></span>
+              </div>
+              {countResult && <div className="mp-note info" data-testid="mp-teamcount-result">{countResult}</div>}
+
+              {/* ADD — search id/email, then place onto a team; fires immediately */}
+              <div className="mp-addrow">
+                <input data-testid="mp-add-search" className="mp-addsearch" value={q} placeholder="Add a player — search name or email" onChange={(e) => setQ(e.target.value)} />
+                {results.length > 0 && (
+                  <div className="mp-addres">{results.map((r) => (
+                    <button key={r.id} type="button" data-testid="mp-add-result" onClick={() => { setPendingAdd({ id: r.id, name: r.name }); setQ(""); setResults([]); }}>{r.name}</button>
+                  ))}</div>
+                )}
+                {pendingAdd && <span className="mp-addpending" data-testid="mp-add-pending">Adding <b>{pendingAdd.name}</b> — pick a team →<button type="button" className="mp-x" onClick={() => setPendingAdd(null)}>cancel</button></span>}
+              </div>
+
+              {/* the teams themselves — rename + roster. No price control, no lock control (not asked for). */}
+              <div className="mp-teamgrid" data-testid="mp-teamgrid">
+                {roster.teams.map((t) => {
+                  const roster2 = roster; // narrow
+                  const members = roster2.players.filter((p) => p.team === t.teamNumber);
+                  const draft = teamDraft[t.id] ?? "";
+                  const canRename = draft.trim() !== "" && draft.trim() !== t.name;
+                  return (
+                    <section className="mp-team" data-testid="mp-team" data-teamnumber={t.teamNumber} key={t.id}>
+                      <div className="mp-teamtop">
+                        <span className="mp-teamname" data-testid={`mp-tname-committed-${t.teamNumber}`}>{t.name}</span>
+                        <span className="mp-teamcap">{members.length}{roster2.shape?.perTeam ? `/${roster2.shape.perTeam}` : ""}</span>
+                      </div>
+                      <div className="mp-renamerow">
+                        <input data-testid={`mp-tname-${t.teamNumber}`} className="mp-tnameinput" value={draft}
+                          aria-label={`Rename team ${t.teamNumber}`} onChange={(e) => setTeamDraft((d) => ({ ...d, [t.id]: e.target.value }))} />
+                        <button type="button" data-testid={`mp-rename-${t.teamNumber}`} className="mp-mini" disabled={!canRename || !!opBusy}
+                          onClick={() => void renameTeam(t.id, t.teamNumber)}>Rename</button>
+                      </div>
+                      {pendingAdd && <button type="button" data-testid={`mp-add-to-${t.teamNumber}`} className="mp-addto" disabled={!!opBusy} onClick={() => void addPlayer(t.teamNumber)}>+ Add {pendingAdd.name} here</button>}
+                      <ul className="mp-players">
+                        {members.length === 0 && <li className="mp-empty">no players</li>}
+                        {members.map((p) => (
+                          <li className="mp-player" data-testid="mp-player" data-um={p.umId} data-fake={p.fake ? "1" : "0"} key={p.umId}>
+                            <span className="mp-pnum">{p.playerNumber}</span>
+                            <span className="mp-pname">{p.name}{p.fake && <span className="mp-fake-tag" data-testid="mp-fake-tag">FAKE</span>}</span>
+                            <span className="mp-pacts">
+                              {roster2.teams.filter((o) => o.teamNumber !== t.teamNumber).map((o) => (
+                                <button key={o.id} type="button" data-testid={`mp-move-${p.umId}-${o.teamNumber}`} className="mp-mini" title={`Move to ${o.name}`} disabled={!!opBusy} onClick={() => void movePlayer(p, o.teamNumber)}>→ {o.teamNumber}</button>
+                              ))}
+                              <button type="button" data-testid={`mp-remove-${p.umId}`} className="mp-mini danger" title={`Remove ${p.name}`} disabled={!!opBusy} onClick={() => void removePlayer(p)}>✕</button>
+                            </span>
+                          </li>
+                        ))}
+                      </ul>
+                    </section>
+                  );
+                })}
+              </div>
+            </>}
+          </div>
         </div>
 
         <div className="mp-foot">
@@ -514,5 +738,47 @@ const CSS = `
 .mp-btn.mp-pri{background:#12301f;border-color:#12301f;color:#fff}
 .mp-err{padding:16px;color:var(--red);font-size:13px}
 .mp-loading{padding:16px;color:var(--ink3)}
-@media (max-width:560px){.mp-grid,.mp-grid3{grid-template-columns:1fr}}
+/* ── TEAMS (immediate half) — red-edged so it never reads as one of the staged accordions ── */
+.mp-teams{margin:14px 16px 4px;border:1px solid #e6b7b0;border-left:4px solid #c0392b;border-radius:11px;background:#fdf7f6;overflow:hidden}
+.mp-teams-hd{display:flex;align-items:center;gap:9px;padding:11px 13px;border-bottom:1px solid #eecdc8;background:#fbeeec}
+.mp-teams-title{font-size:10.5px;font-weight:800;letter-spacing:.12em;color:#7c241b}
+.mp-immbadge{margin-left:auto;font-size:9.5px;font-weight:800;letter-spacing:.07em;color:#fff;background:#c0392b;border-radius:5px;padding:2px 7px}
+.mp-immbanner{font-size:11.5px;line-height:1.45;color:#6b2019;padding:10px 13px;border-bottom:1px solid #eecdc8;background:#fdf1ef}
+.mp-immbanner b{font-weight:800}
+.mp-optoast{margin:11px 13px 0;font-size:12px;padding:8px 11px;border-radius:8px;background:#e6f3ea;border:1px solid #a9d3ba;color:#14512f}
+.mp-optoast.bad{background:#fbe7e4;border-color:#e6b0a8;color:#8a2018}
+.mp-countrow{display:flex;align-items:center;gap:10px;padding:12px 13px 4px}
+.mp-countbtns{display:inline-flex;border:1px solid #d9c3bf;border-radius:8px;overflow:hidden}
+.mp-cbtn{border:0;background:#fff;font:inherit;font-weight:700;color:#5a4b48;padding:8px 14px;min-height:38px;cursor:pointer}
+.mp-cbtn + .mp-cbtn{border-left:1px solid #d9c3bf}
+.mp-cbtn.on{background:#c0392b;color:#fff}
+.mp-cbtn:disabled:not(.on){opacity:.55;cursor:not-allowed}
+.mp-teams .mp-note.info{margin:10px 13px 0}
+.mp-addrow{position:relative;padding:10px 13px 2px}
+.mp-addsearch{width:100%;border:1px solid #d9c3bf;border-radius:9px;padding:9px 11px;font:inherit;font-size:13.5px;background:#fff;min-height:40px}
+.mp-addres{position:absolute;left:13px;right:13px;top:52px;z-index:20;background:#fff;border:1px solid #d9c3bf;border-radius:9px;box-shadow:0 8px 22px rgba(120,30,20,.16);overflow:hidden}
+.mp-addres button{display:block;width:100%;text-align:left;border:0;background:#fff;padding:9px 12px;font:inherit;font-size:13px;border-bottom:1px solid #f1e4e1;cursor:pointer}
+.mp-addres button:last-child{border-bottom:0}.mp-addres button:hover{background:#fbeeec}
+.mp-addpending{display:inline-flex;align-items:center;gap:7px;margin-top:8px;font-size:12px;color:#6b2019}
+.mp-x{border:0;background:none;color:#8a2018;text-decoration:underline;cursor:pointer;font:inherit;font-size:12px;padding:2px 4px}
+.mp-teamgrid{display:grid;grid-template-columns:1fr 1fr;gap:10px;padding:11px 13px 13px}
+.mp-team{border:1px solid #ecd6d2;border-radius:10px;background:#fff;padding:10px;min-width:0}
+.mp-teamtop{display:flex;align-items:baseline;gap:8px;margin-bottom:8px}
+.mp-teamname{font-size:14px;font-weight:800;color:var(--ink);white-space:nowrap;overflow:hidden;text-overflow:ellipsis}
+.mp-teamcap{margin-left:auto;font-size:11px;color:var(--ink3);font-variant-numeric:tabular-nums;flex:0 0 auto}
+.mp-renamerow{display:flex;gap:6px;margin-bottom:8px}
+.mp-tnameinput{flex:1;min-width:0;border:1px solid #d9c3bf;border-radius:8px;padding:7px 9px;font:inherit;font-size:13px;background:#fffdfc;min-height:36px}
+.mp-tnameinput:focus{outline:2px solid var(--focus);outline-offset:-1px;background:#fff}
+.mp-mini{border:1px solid #d9c3bf;background:#fff;border-radius:7px;padding:0 9px;font:inherit;font-size:12px;font-weight:700;color:#5a4b48;min-height:34px;min-width:34px;cursor:pointer;flex:0 0 auto}
+.mp-mini:disabled{opacity:.45;cursor:not-allowed}
+.mp-mini.danger{color:#a4231e;border-color:#e6b7b0}.mp-mini.danger:hover:not(:disabled){background:#fbeeec}
+.mp-addto{width:100%;border:1px dashed #7fb894;background:#eef8f1;color:#14512f;border-radius:8px;padding:8px;font:inherit;font-size:12.5px;font-weight:700;cursor:pointer;margin-bottom:8px}
+.mp-players{list-style:none;margin:0;padding:0;display:flex;flex-direction:column;gap:4px}
+.mp-empty{font-size:12px;color:var(--ink3);padding:4px 2px}
+.mp-player{display:flex;align-items:center;gap:7px;border:1px solid #eef1ef;border-radius:8px;padding:5px 7px;background:#fbfdfc;min-height:40px}
+.mp-pnum{width:18px;height:18px;flex:0 0 18px;border-radius:5px;background:#eef3f0;color:#3a5348;font-size:10px;font-weight:800;display:flex;align-items:center;justify-content:center}
+.mp-pname{flex:1;min-width:0;font-size:13px;white-space:nowrap;overflow:hidden;text-overflow:ellipsis}
+.mp-fake-tag{font-size:9px;font-weight:800;background:#f2e31d;color:#231f00;border-radius:4px;padding:1px 4px;margin-left:6px;vertical-align:middle}
+.mp-pacts{display:inline-flex;gap:4px;flex:0 0 auto}
+@media (max-width:560px){.mp-grid,.mp-grid3{grid-template-columns:1fr}.mp-teamgrid{grid-template-columns:1fr}}
 `;
