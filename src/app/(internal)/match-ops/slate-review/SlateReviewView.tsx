@@ -10,7 +10,7 @@
 // lede → games-per-week strip → Master Schedule + capture → Cancel patterns →
 // prices → honesty note.
 
-import { useCallback, useEffect, useMemo, useRef, useState } from "react";
+import { useEffect, useMemo, useState } from "react";
 import { supabase } from "@/lib/supabase";
 import { useMatchWindowData } from "@/lib/useMatchData";
 import { getCancelHeatmap, type SlotRow } from "@/lib/cityStats";
@@ -24,7 +24,7 @@ import { fetchLegacyMatchRegistrations } from "@/lib/mdapiMatchesRead";
 import { useFinanceData } from "@/lib/useFinanceData";
 import { detectDppPriceShifts, type DppPriceChange, type DppRegistration } from "@/lib/dppPriceHistory";
 import {
-  parseCapture, captureReadout, deriveFieldCodes, timeMinutes, CAPTURE_GRAMMAR, type Capture, type Day,
+  parseCapture, captureReadout, timeMinutes, CAPTURE_GRAMMAR, type Day,
 } from "@/lib/slateCapture";
 
 const C = {
@@ -58,7 +58,25 @@ const MON = ["Jan", "Feb", "Mar", "Apr", "May", "Jun", "Jul", "Aug", "Sep", "Oct
 const barFmt = (x: number) => (x === 0 ? "0" : x.toFixed(1));
 const fmtWk = (d: Date) => `${MON[d.getMonth()]} ${d.getDate()}`;
 
-type CapItem = Capture & { id: number };
+// Phase 26 — the note box PERSISTS (table slate_notes, migration 0119, route /api/slate-notes).
+// It is a to-do list: a row sits there until someone takes the action and deletes it.
+type SlateNote = {
+  id: string; city: string; kind: "proposal" | "note"; raw: string;
+  day: string | null; timeTxt: string | null; timeMin: number | null; fieldTxt: string | null;
+  weekStart: string; createdBy: string; createdAt: string;
+};
+
+async function authFetch(path: string, init?: RequestInit): Promise<Response> {
+  const { data } = await supabase.auth.getSession();
+  const token = data.session?.access_token;
+  return fetch(path, {
+    ...init,
+    headers: { "Content-Type": "application/json", ...(token ? { Authorization: `Bearer ${token}` } : {}), ...(init?.headers ?? {}) },
+    cache: "no-store",
+  });
+}
+// "who added it" — the local part of the email is enough on a shared screen.
+const shortWho = (email: string) => (email || "").split("@")[0] || email;
 
 export default function SlateReviewView() {
   const [city, setCity] = useState<string>("Austin");
@@ -194,33 +212,83 @@ function GamesStrip({ weekly }: { weekly: DemandWeek[] }) {
   );
 }
 
-// ── quick capture (in-memory only) ───────────────────────────────────────────
+// ── quick capture — PERSISTED (Phase 26) ─────────────────────────────────────
+//
+// NOTES ARE NOT WEEK-SCOPED: a note stays visible for its city whatever week is selected, tagged
+// with the week it was written on, until someone deletes it. PROPOSALS are pinned to their day AND
+// their week — a proposed slot means nothing against a different week, so changing week hides it.
+// No auto-expiry and no "show more": the list is the to-do list, and it shrinks by being done.
 function CaptureBar({ city, fields, weekStart }: { city: string; fields: string[]; weekStart: string }) {
   const [val, setVal] = useState("");
-  const [caps, setCaps] = useState<CapItem[]>([]);
+  const [caps, setCaps] = useState<SlateNote[]>([]);
   const [copy, setCopy] = useState<"" | "ok" | "manual">("");
-  const idRef = useRef(0);
-  // clear capture + input when the city changes (a new city is a new meeting scope)
-  useEffect(() => { setCaps([]); setVal(""); setCopy(""); }, [city]);
+  const [busy, setBusy] = useState(false);
+  const [err, setErr] = useState<string | null>(null);
+  const [loading, setLoading] = useState(true);
+
+  // Load this city's rows. A city change is a different list, not a cleared one.
+  useEffect(() => {
+    let dead = false;
+    setLoading(true); setVal(""); setCopy(""); setErr(null);
+    (async () => {
+      try {
+        const res = await authFetch(`/api/slate-notes?city=${encodeURIComponent(city)}`);
+        const j = await res.json().catch(() => ({}));
+        if (dead) return;
+        if (!res.ok) { setErr(j?.error || `Could not load notes (${res.status})`); setCaps([]); }
+        else setCaps((j.notes ?? []) as SlateNote[]);
+      } catch (e) { if (!dead) { setErr(e instanceof Error ? e.message : String(e)); setCaps([]); } }
+      finally { if (!dead) setLoading(false); }
+    })();
+    return () => { dead = true; };
+  }, [city]);
 
   const parsed = useMemo(() => parseCapture(val, fields), [val, fields]);
   const readout = captureReadout(parsed);
-  const codes = useMemo(() => deriveFieldCodes(fields), [fields]);
 
-  const commit = () => {
-    const p = parseCapture(val, fields);
-    if (!p) return;
-    setCaps((cs) => [...cs, { ...p, id: idRef.current++ }]);
-    setVal(""); setCopy("");
+  // CONFIRM THEN APPEND. The row is rendered only after the insert succeeds and only from the
+  // row the SERVER returned — never optimistically. On failure the typed text stays in the box so
+  // nothing a person said out loud is lost to a network blip.
+  const commit = async () => {
+    if (busy) return;
+    const raw = val.trim();
+    if (!raw) return;
+    setBusy(true); setErr(null);
+    try {
+      const res = await authFetch(`/api/slate-notes`, { method: "POST", body: JSON.stringify({ city, raw, weekStart, fields }) });
+      const j = await res.json().catch(() => ({}));
+      if (!res.ok || !j?.note) { setErr(j?.error || `Not saved (${res.status}) — your text is still here.`); return; }
+      setCaps((cs) => [j.note as SlateNote, ...cs]);
+      setVal(""); setCopy("");
+    } catch (e) {
+      setErr(`${e instanceof Error ? e.message : String(e)} — your text is still here.`);
+    } finally { setBusy(false); }
   };
-  const drop = (id: number) => { setCaps((cs) => cs.filter((c) => c.id !== id)); setCopy(""); };
+
+  // HARD delete — it is gone, here and in the table. The row leaves the list only after the
+  // server confirms, for the same reason the add waits.
+  const drop = async (id: string) => {
+    setErr(null);
+    try {
+      const res = await authFetch(`/api/slate-notes?id=${encodeURIComponent(id)}`, { method: "DELETE" });
+      if (!res.ok) { const j = await res.json().catch(() => ({})); setErr(j?.error || `Could not delete (${res.status})`); return; }
+      setCaps((cs) => cs.filter((c) => c.id !== id));
+      setCopy("");
+    } catch (e) { setErr(e instanceof Error ? e.message : String(e)); }
+  };
+
+  // What is ON SCREEN for the selected week: every note for the city + only this week's proposals.
+  const visible = useMemo(
+    () => caps.filter((c) => c.kind === "note" || c.weekStart === weekStart),
+    [caps, weekStart],
+  );
 
   const capText = () => {
-    const slots = caps.filter((c) => c.kind === "slot");
-    const notes = caps.filter((c) => c.kind !== "slot");
+    const slots = visible.filter((c) => c.kind === "proposal");
+    const notes = visible.filter((c) => c.kind !== "proposal");
     const L = [`${city} · week of ${weekStart} · slate review`];
-    if (slots.length) { L.push("", "Proposed slots"); slots.forEach((c) => { if (c.kind === "slot") L.push(`- ${c.day} ${c.time} · ${c.fieldTxt}   (typed: "${c.raw}")`); }); }
-    if (notes.length) { L.push("", "Notes"); notes.forEach((c) => L.push(`- ${c.raw}`)); }
+    if (slots.length) { L.push("", "Proposed slots"); slots.forEach((c) => L.push(`- ${c.day} ${c.timeTxt} · ${c.fieldTxt}   (typed: "${c.raw}")`)); }
+    if (notes.length) { L.push("", "Notes"); notes.forEach((c) => L.push(`- ${c.raw}${c.weekStart !== weekStart ? `   (week of ${c.weekStart})` : ""}`)); }
     return L.join("\n");
   };
   const copyAll = async () => {
@@ -231,37 +299,39 @@ function CaptureBar({ city, fields, weekStart }: { city: string; fields: string[
     } catch { setCopy("manual"); }
   };
 
-  const props = caps.filter((c): c is CapItem & { kind: "slot" } => c.kind === "slot");
+  const props = visible.filter((c) => c.kind === "proposal").slice().sort((a, b) => (a.timeMin ?? 0) - (b.timeMin ?? 0));
 
   return (
     <div>
       <p className="m-0 mb-2.5 text-[12.5px]" style={{ color: C.muted }}>
-        Talk through the week live: what you type becomes a dashed proposal on the day below, or is kept as a note. Nothing is saved — this clears on reload.
+        Talk through the week live: what you type becomes a dashed proposal on the day below, or is kept as a note. Everything here is saved and shared — it stays until someone deletes it.
       </p>
       <div className="flex items-stretch gap-2">
-        <input value={val} onChange={(e) => setVal(e.target.value)} onKeyDown={(e) => { if (e.key === "Enter") { e.preventDefault(); commit(); } if (e.key === "Escape") setVal(""); }}
-          autoComplete="off" spellCheck={false} aria-label="Add a slot or a note"
+        <input value={val} onChange={(e) => setVal(e.target.value)} onKeyDown={(e) => { if (e.key === "Enter") { e.preventDefault(); void commit(); } if (e.key === "Escape") setVal(""); }}
+          autoComplete="off" spellCheck={false} aria-label="Add a slot or a note" data-testid="slate-note-input"
           placeholder="Add 8PM thurs Crossbar — or just type a note"
           className="h-[34px] min-w-0 flex-1 rounded-[10px] border px-[11px] text-[13px]" style={{ borderColor: C.colLine, background: C.surface }} />
-        <button type="button" onClick={commit} className="h-[34px] rounded-[10px] px-4 text-[12px] font-bold text-white" style={{ background: C.forest }}>Add</button>
+        <button type="button" onClick={() => void commit()} disabled={busy} data-testid="slate-note-add"
+          className="h-[34px] flex-none rounded-[10px] px-4 text-[12px] font-bold text-white disabled:opacity-60" style={{ background: C.forest }}>{busy ? "Saving…" : "Add"}</button>
       </div>
+      {err && <div data-testid="slate-note-error" className="mt-1.5 rounded-[8px] border px-2.5 py-1.5 text-[11.5px] font-semibold" style={{ background: "#fdeeea", borderColor: "#f2c4b8", color: C.red, overflowWrap: "anywhere" }}>{err}</div>}
       <div className="min-h-[32px] px-0.5 py-1.5 text-[11.5px] leading-[1.35]" style={{ color: C.muted }}>{readout || <span style={{ color: C.muted }}>{CAPTURE_GRAMMAR}</span>}</div>
 
       {/* proposals day-aligned strip (the reused Master Schedule grid renders below) */}
       {props.length > 0 && (
         <div className="mb-1 grid grid-cols-7 gap-2">
           {DAYS.map((ab) => {
-            const here = props.filter((p) => p.day === ab).sort((a, b) => a.min - b.min);
+            const here = props.filter((p) => p.day === ab); // `props` is already sorted by timeMin
             return (
               <div key={ab} className="rounded-[10px] border p-1.5" style={{ borderColor: C.colLine, background: C.colBg, minHeight: 44 }}>
                 <div className="mb-1 text-[9.5px] font-bold uppercase tracking-[0.09em]" style={{ color: C.muted }}>{ab}</div>
                 {here.map((p) => (
-                  <div key={p.id} className="mb-1 flex items-start gap-1.5 rounded-[8px] border border-dashed p-[5px_6px]" style={{ borderColor: C.gold }}>
-                    <span className="min-w-0 flex-1">
-                      <span className="block text-[11px] font-bold" style={{ color: C.goldInk }}>{p.time}</span>
-                      <span className="block text-[10px]" style={{ color: "#77673c" }}>{codes[p.field ?? ""] ? "" : ""}{p.fieldTxt}</span>
+                  <div key={p.id} data-testid="slate-proposal" data-day={p.day} className="mb-1 flex items-start gap-1.5 rounded-[8px] border border-dashed p-[5px_6px]" style={{ borderColor: C.gold }}>
+                    <span className="min-w-0 flex-1" style={{ overflowWrap: "anywhere" }}>
+                      <span className="block text-[11px] font-bold" style={{ color: C.goldInk }}>{p.timeTxt}</span>
+                      <span className="block text-[10px]" style={{ color: "#77673c" }}>{p.fieldTxt}</span>
                     </span>
-                    <span className="rounded-[4px] border px-1 text-[9px] font-bold" style={{ background: "#fdf3d9", borderColor: C.gold, color: C.goldInk }}>NEW</span>
+                    <span className="flex-none rounded-[4px] border px-1 text-[9px] font-bold" style={{ background: "#fdf3d9", borderColor: C.gold, color: C.goldInk }}>NEW</span>
                   </div>
                 ))}
               </div>
@@ -270,32 +340,44 @@ function CaptureBar({ city, fields, weekStart }: { city: string; fields: string[
         </div>
       )}
 
-      {/* captured list */}
-      {caps.length > 0 && (
+      {/* the list — a to-do list, not a meeting transcript */}
+      {loading ? (
+        <div className="mt-3 border-t pt-2.5 text-[11.5px]" style={{ borderColor: C.line, color: C.muted }}>Loading notes…</div>
+      ) : visible.length > 0 && (
         <div className="mt-3 border-t pt-2.5" style={{ borderColor: C.line }}>
-          <div className="mb-1 flex items-center justify-between">
-            <span className="text-[10px] font-bold uppercase tracking-[0.8px]" style={{ color: C.muted }}>Captured in this meeting · {caps.length}</span>
+          <div className="mb-1 flex flex-wrap items-center justify-between gap-2">
+            <span className="text-[10px] font-bold uppercase tracking-[0.8px]" style={{ color: C.muted }}>Open · {visible.length}</span>
             <span className="flex items-center gap-2">
               {copy === "ok" && <span className="text-[11px] font-bold" style={{ color: C.ok }}>Copied.</span>}
-              <button type="button" onClick={copyAll} className="h-[28px] rounded-[8px] border px-3 text-[11px] font-bold" style={{ background: C.chipBg, borderColor: C.chipLine, color: C.forestDeep }}>Copy all</button>
+              <button type="button" onClick={copyAll} className="h-[28px] flex-none rounded-[8px] border px-3 text-[11px] font-bold" style={{ background: C.chipBg, borderColor: C.chipLine, color: C.forestDeep }}>Copy all</button>
             </span>
           </div>
-          {caps.map((c) => (
-            <div key={c.id} className="flex items-start gap-2.5 border-t py-[7px] first:border-t-0" style={{ borderColor: C.hair }}>
-              <span className="mt-0.5 flex-none rounded-[4px] border px-1.5 py-0.5 text-[9px] font-bold tracking-[0.7px]" style={c.kind === "slot" ? { background: "#fdf3d9", borderColor: C.gold, color: C.goldInk } : { background: C.chipBg, borderColor: C.chipLine, color: C.muted }}>{c.kind === "slot" ? "SLOT" : "NOTE"}</span>
-              <span className="min-w-0 flex-1">
-                {c.kind === "slot" ? (
-                  <>
-                    <span className="block text-[12.5px] font-semibold" style={{ color: C.ink }}>{c.day} {c.time} · {c.fieldTxt}</span>
-                    <span className="block text-[11px]" style={{ color: C.muted }}>typed: “{c.raw}”</span>
-                  </>
-                ) : (
-                  <span className="block text-[12.5px] font-semibold" style={{ color: C.ink }}>{c.raw}</span>
-                )}
-              </span>
-              <button type="button" onClick={() => drop(c.id)} aria-label="Remove" className="h-[28px] w-[28px] flex-none rounded-[8px] border text-[12px]" style={{ borderColor: C.chipLine, color: C.muted }}>✕</button>
-            </div>
-          ))}
+          {visible.map((c) => {
+            const wk = wkKeyToDate(c.weekStart);
+            return (
+              <div key={c.id} data-testid="slate-note-row" data-kind={c.kind} data-id={c.id} className="flex items-start gap-2.5 border-t py-[7px] first:border-t-0" style={{ borderColor: C.hair }}>
+                <span className="mt-0.5 flex-none rounded-[4px] border px-1.5 py-0.5 text-[9px] font-bold tracking-[0.7px]" style={c.kind === "proposal" ? { background: "#fdf3d9", borderColor: C.gold, color: C.goldInk } : { background: C.chipBg, borderColor: C.chipLine, color: C.muted }}>{c.kind === "proposal" ? "SLOT" : "NOTE"}</span>
+                <span className="min-w-0 flex-1" style={{ overflowWrap: "anywhere" }}>
+                  {c.kind === "proposal" ? (
+                    <>
+                      <span className="block text-[12.5px] font-semibold" style={{ color: C.ink }}>{c.day} {c.timeTxt} · {c.fieldTxt}</span>
+                      {/* the RAW text is stored and shown — the parser guesses, so the typed words stay reviewable */}
+                      <span className="block text-[11px]" style={{ color: C.muted }}>typed: “{c.raw}”</span>
+                    </>
+                  ) : (
+                    <span data-testid="slate-note-raw" className="block text-[12.5px] font-semibold" style={{ color: C.ink }}>{c.raw}</span>
+                  )}
+                  <span className="mt-0.5 flex flex-wrap items-center gap-x-1.5 gap-y-0.5 text-[10.5px]" style={{ color: C.muted }}>
+                    {/* a note outlives its week, so it says which week it was written on */}
+                    <span data-testid="slate-note-week" className="rounded-[4px] border px-1 py-px font-bold" style={{ background: C.chipBg, borderColor: C.chipLine }}>week of {wk ? fmtWk(wk) : c.weekStart}</span>
+                    <span data-testid="slate-note-who">{shortWho(c.createdBy)}</span>
+                  </span>
+                </span>
+                <button type="button" onClick={() => void drop(c.id)} aria-label="Remove" data-testid="slate-note-delete"
+                  className="h-[28px] w-[28px] flex-none rounded-[8px] border text-[12px]" style={{ borderColor: C.chipLine, color: C.muted }}>✕</button>
+              </div>
+            );
+          })}
           {copy === "manual" && (
             <textarea readOnly onClick={(e) => (e.target as HTMLTextAreaElement).select()} value={capText()} className="mt-2 h-[104px] w-full rounded-[8px] border p-2 text-[11.5px]" style={{ borderColor: C.colLine }} />
           )}

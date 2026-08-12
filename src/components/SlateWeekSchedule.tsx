@@ -416,7 +416,10 @@ const CSS = `
 .ms-nav{width:30px;height:30px;border-radius:999px;border:1px solid #e2eae5;background:#fff;color:#566661;font-size:14px;line-height:1;display:inline-flex;align-items:center;justify-content:center;cursor:pointer}
 .ms-week{border:1px solid #e2eae5;background:#eef3f0;color:#12241d;border-radius:999px;padding:6px 15px;font-size:13px;font-weight:700;font-variant-numeric:tabular-nums}
 .ms-today-btn{border:1px solid #0d3b2e;background:#0d3b2e;color:#fff;border-radius:999px;padding:6px 15px;font-size:12.5px;font-weight:700;cursor:pointer}
-.ms-counts{display:flex;gap:0;align-items:stretch;flex-wrap:nowrap}
+/* WRAP, not nowrap: five count blocks at 16px side padding measure ~417px and overflowed a
+   390px viewport horizontally (pre-existing, caught by verify-slate-notes gate 5). At 1600 there
+   is room for one line, so the desktop band is unchanged. */
+.ms-counts{display:flex;gap:0;align-items:stretch;flex-wrap:wrap;justify-content:flex-end}
 .ms-count{padding:0 16px;border-left:1px solid #eff3f1;text-align:right}
 .ms-count:first-child{border-left:0}
 .ms-count-n{font-size:19px;font-weight:800;color:#12241d;line-height:1.15;font-variant-numeric:tabular-nums}
