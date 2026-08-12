@@ -981,10 +981,15 @@ not assume it is when auditing what we've said to players.
 
 **Both are host-pinned:** `sendWhatsAppText` calls `assertAllowedOutboundHost` (`src/lib/crmHostGuard`)
 against the exact parsed host allowlist (`graph.facebook.com` + `api.telnyx.com`) before the fetch,
-so both paths are covered. **Both `recordWrite` into `change_log`** the same shape — thread id,
-recipient phone, channel, message LENGTH, never the body — the operator path with the operator as
-actor, the auto-reply with `system (out-of-hours auto-reply)`. So the change log is a COMPLETE
-record of outbound messages regardless of which path sent them.
+so both paths are covered. **Both `recordWrite` into `change_log`** the same minimized shape — thread
+id, recipient **LAST-4 only** (`phoneLast4`), channel, message LENGTH — **never the body AND never the
+full phone** — the operator path with the operator as actor, the auto-reply with `system (out-of-hours
+auto-reply)`. So the change log is a COMPLETE record of outbound messages regardless of which path
+sent them. Why last-4, not the full number (Phase 19 Step 3b closeout): `change_log`'s read gate is
+`is_admin` (`authenticateAdmin`) — a NARROWER audience than the CRM (`is_admin OR can_access_chats`),
+so it is not a *wider*-audience leak, but the full phone is still a gratuitous second copy of player
+PII that `thread_id` already resolves for any log reader. Last-4 keeps a human "which player" hint
+without the duplicate PII. Pinned by `scripts/crm-characterize-test.ts`.
 
 ## How an inbound thread is linked to a player — `player_id` + `match_ambiguous` (Phase 19)
 

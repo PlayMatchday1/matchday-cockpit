@@ -27,7 +27,7 @@ import { randomUUID } from "node:crypto";
 import Telnyx from "telnyx";
 import type { SupabaseClient } from "@supabase/supabase-js";
 import { authenticateCrm } from "@/lib/crmAuth";
-import { recordWrite, supabaseLogStore } from "@/lib/changeLog";
+import { recordWrite, supabaseLogStore, phoneLast4 } from "@/lib/changeLog";
 import {
   sendWhatsAppText,
   WhatsAppApiError,
@@ -139,9 +139,10 @@ export async function POST(req: Request) {
 }
 
 // Record every send into change_log via the shared recordWrite hook (Phase 19 Step 1). Logs the
-// thread id, recipient phone, channel, actor, timestamp and message LENGTH — NEVER the body: the
-// text already lives in crm_messages, and copying player conversation content into an audit table
-// is a second store of the same PII under different access rules. `write` here is a no-op that
+// thread id, recipient LAST-4 (a hint, not the full number — Step 3b closeout), channel, actor,
+// timestamp and message LENGTH — NEVER the body OR the full phone: both are player PII, and the
+// text/number already live in crm_messages; copying them into an audit table with a different
+// (is_admin) audience is a second store of the same PII. `write` here is a no-op that
 // merely reflects the already-known provider outcome so recordWrite classifies landed vs failed;
 // the real send happened above (this hook is logging, not the send path). Best-effort: recordWrite
 // never throws over the send.
@@ -160,7 +161,7 @@ async function logCrmSend(args: {
         matchId: null, matchName: null,
         method: "POST", path: "/api/crm/send",
         // metadata ONLY — no message text ever enters change_log.
-        body: { thread_id: args.threadId, recipient_phone: args.toPhone, channel: args.channel, message_length: args.bodyLength },
+        body: { thread_id: args.threadId, recipient_last4: phoneLast4(args.toPhone), channel: args.channel, message_length: args.bodyLength },
         keys: [], label: (k) => k,
         applied: () => !args.sendError,
         changes: [{ key: "message", field: "Message", before: "", after: `${args.channel} message · ${args.bodyLength} chars` }],

@@ -124,7 +124,12 @@ eq("EXACTLY ONE realtime subscription across the CRM conversation code (feature 
 // cannot reach the log.
 const SEND_SRC = noComments(readFileSync("src/app/api/crm/send/route.ts", "utf8"));
 /recordWrite\(/.test(SEND_SRC) ? ok("send route logs via recordWrite (Resend is the same route, so also logged)") : bad("send route not recordWrite-logged");
-/message_length:\s*args\.bodyLength/.test(SEND_SRC) ? ok("change_log records message_length (metadata), the actor, thread + recipient — not the body") : bad("change_log metadata shape changed");
+// change_log metadata is minimized: message_length (not the body) AND recipient LAST-4 only (not
+// the full phone — a second copy of player PII in a table with an is_admin audience). thread_id is
+// the authoritative recipient identifier. Pin BOTH so neither the body nor the full number drifts back.
+(/message_length:\s*args\.bodyLength/.test(SEND_SRC) && /recipient_last4:\s*phoneLast4\(/.test(SEND_SRC) && !/recipient_phone/.test(SEND_SRC))
+  ? ok("change_log records message_length + recipient LAST-4 (hint) — never the body OR the full phone")
+  : bad("change_log metadata leaks the full recipient phone or the message body");
 /bodyLength:\s*number/.test(SEND_SRC) ? ok("logCrmSend receives a LENGTH, never the message text — body can't reach change_log") : bad("logCrmSend now receives the message body (PII leak into change_log)");
 
 console.log(`\n${pass} passed, ${fail} failed`);

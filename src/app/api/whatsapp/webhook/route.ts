@@ -35,7 +35,7 @@ import {
 import { downloadWhatsAppMedia, sendWhatsAppText } from "@/lib/whatsapp";
 import { uploadMessageMedia } from "@/lib/crmMedia";
 import { writeThreadStatusLog } from "@/lib/crmThreadStatus";
-import { recordWrite, supabaseLogStore } from "@/lib/changeLog";
+import { recordWrite, supabaseLogStore, phoneLast4 } from "@/lib/changeLog";
 import {
   shouldAutoReply,
   OUT_OF_HOURS_AUTO_REPLY_TEXT,
@@ -1052,7 +1052,7 @@ async function sendAutoReply(
         actorName: "system (out-of-hours auto-reply)", actorEmail: null,
         saveId: randomUUID(), matchId: null, matchName: null,
         method: "POST", path: "/api/whatsapp/webhook",
-        body: { thread_id: intent.threadId, recipient_phone: intent.phone, channel: "whatsapp", message_length: OUT_OF_HOURS_AUTO_REPLY_TEXT.length, auto_reply: true },
+        body: { thread_id: intent.threadId, recipient_last4: phoneLast4(intent.phone), channel: "whatsapp", message_length: OUT_OF_HOURS_AUTO_REPLY_TEXT.length, auto_reply: true },
         keys: [], label: (k) => k, applied: () => true,
         changes: [{ key: "message", field: "Message", before: "", after: `whatsapp auto-reply · ${OUT_OF_HOURS_AUTO_REPLY_TEXT.length} chars (system)` }],
       },

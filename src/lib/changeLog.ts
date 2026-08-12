@@ -20,6 +20,17 @@ import {
   type LogState, type LogRow, type Change,
 } from "@/lib/changeLogModel";
 
+// PII minimization for change_log. The log is an audit table whose read gate is is_admin
+// (authenticateAdmin) — a NARROWER audience than the CRM (is_admin OR can_access_chats), but the
+// full recipient phone is still a gratuitous second copy of player PII that thread_id already
+// resolves for anyone with log access. Store the LAST FOUR digits only — a human-readable "which
+// player" hint — never the whole number. (Phase 19 Step 3b closeout.) Same reasoning that keeps the
+// message body out of change_log.
+export function phoneLast4(phone: string | null | undefined): string {
+  const digits = (phone ?? "").replace(/\D/g, "");
+  return digits.length >= 4 ? digits.slice(-4) : digits;
+}
+
 export type LogStore = {
   insert: (row: Omit<LogRow, "id"> & { id?: string }) => Promise<void>;
   list: (limit?: number) => Promise<LogRow[]>;
