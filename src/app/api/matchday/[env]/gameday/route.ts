@@ -9,7 +9,7 @@
 // (YYYY-MM-DD, bounding the WALL-CLOCK date — exactly the operator's "day"),
 // sortColumn/sortDirection, page/limit. We over-fetch nothing and page to the end.
 
-import { authenticateAdmin } from "@/lib/adminAuth";
+import { authenticateMatchOpsRead } from "@/lib/matchOpsAuth";
 import { apiGet, StageHostGuardError, StageConfigError, type MatchdayEnv } from "@/lib/matchdayStageApi";
 
 export const runtime = "nodejs";
@@ -50,7 +50,7 @@ function trim(m: Raw) {
 }
 
 export async function GET(req: Request, ctx: { params: Promise<{ env: string }> }) {
-  const auth = await authenticateAdmin(req);
+  const auth = await authenticateMatchOpsRead(req);
   if (!auth.ok) return Response.json({ error: auth.error }, { status: auth.status });
   const { env } = await ctx.params;
   if (!isEnv(env)) return Response.json({ error: `unknown environment ${JSON.stringify(env)}` }, { status: 400 });

@@ -13,7 +13,7 @@
 // guarded roster route (/api/matchday/{env}/roster/{matchId}) so there is ONE write
 // path with the EDIT MATCHES gate, deny-lists and recordWrite already on it.
 
-import { authenticateAdmin } from "@/lib/adminAuth";
+import { authenticateMatchOpsRead } from "@/lib/matchOpsAuth";
 import { apiGet, StageHostGuardError, StageConfigError, type MatchdayEnv } from "@/lib/matchdayStageApi";
 import { detectKind, serverQuery } from "@/lib/playerLookupModel";
 
@@ -52,7 +52,7 @@ function lightRow(r: Record<string, unknown>) {
 }
 
 export async function GET(req: Request, ctx: { params: Promise<{ env: string }> }) {
-  const auth = await authenticateAdmin(req);
+  const auth = await authenticateMatchOpsRead(req);
   if (!auth.ok) return Response.json({ error: auth.error }, { status: auth.status });
   const { env } = await ctx.params;
   if (!isEnv(env)) return Response.json({ error: `unknown environment ${JSON.stringify(env)}` }, { status: 400 });

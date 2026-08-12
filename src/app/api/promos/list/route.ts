@@ -5,7 +5,7 @@
 // (matchdayApi, the Vercel-wired sync creds), NOT the write client — a list render must not
 // depend on write credentials. Every page uses the /api/v1 path because only it accepts ?code=
 // (see docs/matchday-api-facts.md "Promo codes").
-import { authenticateAdmin } from "@/lib/adminAuth";
+import { authenticateMatchOpsRead } from "@/lib/matchOpsAuth";
 import { getMatchdayApiClient, MatchdayApiError } from "@/lib/matchdayApi";
 import type { PromoRow } from "@/lib/promoModel";
 
@@ -16,9 +16,9 @@ export const maxDuration = 30;
 const PAGE = 25;
 
 export async function GET(req: Request) {
-  const auth = await authenticateAdmin(req);
+  // READ is now open to Match Ops (Part D); the promo WRITE route stays admin + MANAGE-PROMOS gated.
+  const auth = await authenticateMatchOpsRead(req);
   if (!auth.ok) return Response.json({ error: auth.error }, { status: auth.status });
-  if (!auth.canManagePromos) return Response.json({ error: "You do not hold MANAGE PROMOS." }, { status: 403 });
 
   const url = new URL(req.url);
   const code = (url.searchParams.get("code") ?? "").trim();

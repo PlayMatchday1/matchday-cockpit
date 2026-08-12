@@ -337,8 +337,10 @@ Full inventory: docs/retool-prod-inventory.md. Key points that touch this file:
   LIVE credit preview `{ name, count, totalCents, alreadyCancelled }`; POST requires
   the match NAME typed and re-checked against the live name server-side, fires once
   (no retry), is `recordWrite`'d WITHOUT any player identity, and reports LANDED /
-  NOT APPLIED from a re-read of `isCancelled` (not the status code). The endpoint is
-  still bolted on production by `PRODUCTION_WRITES_ENABLED` like every other write.
+  NOT APPLIED from a re-read of `isCancelled` (not the status code). Like every other
+  MatchDay write, it goes through the production bolt — which is currently OPEN
+  (`PRODUCTION_WRITES_ENABLED = true`, a hardcoded pass-through; see the bolt section
+  below), so a confirmed cancel LANDS on production. It is NOT bolted.
 
 - COPY ENDPOINTS — NOT BUILT, warning for whoever builds them. The three copy
   endpoints have NO idempotency key and fan out server-side:
@@ -377,7 +379,10 @@ BOUNDARY of what this proves / does NOT prove:
   from GET) — a read-back cannot verify a write-only field was undisturbed, so this
   says nothing about write-only fields.
 
-The bolt (`PRODUCTION_WRITES_ENABLED`) is back to `false` after this write.
+The bolt (`PRODUCTION_WRITES_ENABLED`) is back to `false` after this write. **(Phase 9
+state only — the constant was later hardcoded to `true` in Phase 17 and IS `true` today,
+so production writes now LAND. See "The safety ladder is not what it looks like" below.
+Do not read this line as the current state.)**
 
 ## Capacity model — CORRECTED in Phase 10.1 (revert the single-perTeam model)
 
@@ -869,6 +874,30 @@ error, which `authenticateAdmin` maps to a 403 — 500ing EVERY admin route unti
 `select("*")` returns whatever columns exist; a not-yet-migrated grant column then reads as
 `undefined` → the derived permission is simply `false` until the migration applies. (Caught when
 adding `can_manage_promos` to the explicit select broke `verify-admin-preview`, Phase 18b.)
+
+## The auth split — Match Ops READ vs admin (Phase 23 Step 2 Part D)
+
+**`authenticateAdmin` requires `is_admin` BEFORE it computes `canEditMatches` /
+`canManagePlayers` / `canManagePromos`. So those flags have never GRANTED access to anyone —
+they have only ever RESTRICTED admins.** A non-admin who was granted `can_access_matchops`
+was still 403'd ("Admin access required") on every `authenticateAdmin` route, because line-1
+of the gate is `is_admin`. That is why Deonna saw "admin access needed" on Gameday Ops,
+Player Lookup and Promo Codes while holding Match Ops.
+
+The fix is a SEPARATE gate, `authenticateMatchOpsRead` (`src/lib/matchOpsAuth.ts`), and routes
+move onto it ONE AT A TIME. It shares `authenticateAdmin`'s session plumbing
+(`resolveSessionUser`) but requires `can_access_matchops` (NOT `is_admin`), **deny by default**
+— a missing/false flag is a refusal, and the E2E service account is blocked explicitly by email
+(`clubhouse-e2e@playmatchday.com`) atop the `is_service_account` DB trigger. WRITES stay gated:
+the returned `canEdit/Manage*` flags are derived identically (`deriveMatchOpsFlags`) and each
+write route keeps its own check. Because the split is opt-in, a route nobody moved keeps
+requiring `is_admin` — an overlooked route stays CLOSED, never accidentally open.
+
+Moved in Part D (READ only): `matchday/[env]/gameday`, `lookup/[env]`, `promos/list` (its read
+no longer needs MANAGE PROMOS; `promos/create` is untouched — still admin + MANAGE PROMOS). The
+other 28 `authenticateAdmin` routes stay `is_admin` until reviewed individually. Pinned by
+`scripts/matchops-auth-test.ts` (pure gate decisions + a route→gate census that fails if the
+28-count drops or a 4th route is moved without updating the test).
 
 ## Promo codes — the endpoint, proven by read-only production GETs (Phase 18a)
 
