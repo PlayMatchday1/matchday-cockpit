@@ -82,7 +82,7 @@ async function authHeaders(): Promise<Record<string, string> | null> {
   return t ? { Authorization: `Bearer ${t}`, "Content-Type": "application/json" } : null;
 }
 
-export default function MatchPanel({ matchId, env = "production" }: { matchId: string; env?: "production" | "staging" }) {
+export default function MatchPanel({ matchId, env = "production", onDirtyChange }: { matchId: string; env?: "production" | "staging"; onDirtyChange?: (dirty: boolean) => void }) {
   const [orig, setOrig] = useState<MatchData | null>(null);
   const [cur, setCur] = useState<Record<string, unknown>>({});
   const [when, setWhen] = useState<{ date: string; time: string }>({ date: "", time: "" });
@@ -265,6 +265,9 @@ export default function MatchPanel({ matchId, env = "production" }: { matchId: s
   const setField = (k: string, v: unknown) => setCur((c) => ({ ...c, [k]: v }));
 
   const changed = useMemo(() => (orig ? diffKeys(STAGED_KEYS, orig, cur) : []), [orig, cur]);
+  // Report STAGED dirtiness to a host (the Gameday panel guards close/step on it). Immediate TEAMS
+  // ops are already saved, so they never count as dirty.
+  useEffect(() => { onDirtyChange?.(changed.length > 0); }, [changed.length, onDirtyChange]);
   const isDirty = (k: string) => changed.includes(k);
   const secDirty = (keys: string[]) => keys.some((k) => changed.includes(k));
 

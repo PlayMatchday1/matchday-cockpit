@@ -18,7 +18,8 @@ import { supabase } from "@/lib/supabase";
 import { envBadge } from "@/lib/matchEnvBadge";
 import { DRAWER_ENV } from "@/lib/matchEnv";
 import { centsToDollars } from "@/lib/matchMoney";
-import MatchDrawer, { DRAWER_W } from "@/components/MatchDrawer";
+import MatchPanel from "@/components/MatchPanel";
+import { useCrmConversation } from "@/lib/crmConversation";
 import LogHealthBanner from "@/components/LogHealthBanner";
 import MatchOpsSectionSheet from "@/app/(internal)/match-ops/MatchOpsSectionSheet";
 import {
@@ -42,6 +43,9 @@ async function authFetch(path: string): Promise<Response> {
   return fetch(path, { headers: { ...(token ? { Authorization: `Bearer ${token}` } : {}) }, cache: "no-store" });
 }
 
+const PANEL_W = 600; // the in-place match panel (replaces the old side drawer + "Open full editor")
+const DOCK_W = 360;  // the CRM chat dock's expanded width — they sit side-by-side at ≥1600
+
 export default function GamedayBoard() {
   const router = useRouter();
   const [today] = useState(() => localYMD(new Date()));
@@ -55,6 +59,28 @@ export default function GamedayBoard() {
   const [cities, setCities] = useState<Set<string>>(new Set());
   const [drawerId, setDrawerId] = useState<number | null>(null);
   const [drawerDirty, setDrawerDirty] = useState(false);
+  // The dock collision. The CRM chat dock is already a right-edge column; the panel wants the same
+  // edge. ≥1600 they coexist (panel sits left of the dock, main shrinks). <1600 opening the panel
+  // COLLAPSES the dock to its rail — the thread and draft live in the provider, so nothing is lost;
+  // it is not reopened when the panel closes (the operator's choice). Said once, the first time.
+  const crm = useCrmConversation();
+  const [wide, setWide] = useState(false);
+  const [dockNotice, setDockNotice] = useState(false);
+  const dockNoticeShown = useRef(false);
+  useEffect(() => {
+    if (typeof window === "undefined") return;
+    const mq = window.matchMedia("(min-width: 1600px)");
+    const on = () => setWide(mq.matches); on();
+    mq.addEventListener("change", on); return () => mq.removeEventListener("change", on);
+  }, []);
+  useEffect(() => {
+    if (drawerId == null || wide) return;
+    if (crm.dockedThreadId && crm.dockOpen) {
+      crm.setDockOpen(false); // collapse only — dockedThreadId + drafts stay in the provider
+      if (!dockNoticeShown.current) { dockNoticeShown.current = true; setDockNotice(true); }
+    }
+  }, [drawerId, wide, crm.dockedThreadId, crm.dockOpen, crm]);
+  const coexist = drawerId != null && wide && !!crm.dockedThreadId && crm.dockOpen;
   const [toast, setToast] = useState<{ t: string; bad?: boolean } | null>(null);
   // Snapshot (one line per match) vs Detail (the card view). Persisted per-user so a
   // field reload keeps the choice. Snapshot is the default — the whole day on one screen.
@@ -121,7 +147,8 @@ export default function GamedayBoard() {
   const money = (c: number | null | undefined) => (c == null ? "—" : "$" + centsToDollars(c));
 
   const openDrawer = (id: number) => { if (drawerId != null && drawerId !== id && !guardLeave()) return; setDrawerId(id); };
-  const goRoster = (id: number) => { if (!guardLeave()) return; router.push(`/match-ops/matches/${id}/roster`); };
+  const stepIdx = drawerId != null ? drawerSiblings.indexOf(drawerId) : -1;
+  const step = (d: number) => { if (!guardLeave()) return; const i = stepIdx + d; if (i >= 0 && i < drawerSiblings.length) setDrawerId(drawerSiblings[i]); };
   const toggleCity = (c: string) => setCities((prev) => { const n = new Set(prev); if (c === "") return new Set(); n.has(c) ? n.delete(c) : n.add(c); return n; });
   const toggleVeo = async (id: number, enabled: boolean) => {
     setVeo((v) => ({ ...v, [id]: enabled }));
@@ -143,7 +170,7 @@ export default function GamedayBoard() {
   const anyRows = grouped.some((x) => x.rows.length > 0);
 
   return (
-    <div className="gdo" data-testid="gameday" data-env={ENV} style={{ ["--drawer-w" as string]: `${DRAWER_W}px` }}>
+    <div className="gdo" data-testid="gameday" data-env={ENV} style={{ ["--drawer-w" as string]: `${PANEL_W + (coexist ? DOCK_W : 0)}px` }}>
       <style>{CSS}</style>
       <div className={"gmain" + (drawerId != null ? " drawering" : "")}>
         {/* ── PHONE header (≤759px). Desktop shows the .head card below; this is
@@ -243,7 +270,7 @@ export default function GamedayBoard() {
                 {grouped.map(({ G, rows }) => (
                   <section className={"band grp-" + G.k} data-testid={`group-${G.k}`} key={G.k}>
                     <h2 className="grouphd">{G.t}<span className="n">{rows.length}</span></h2>
-                    <div className="rows">{rows.map((m) => <Tile key={m.id} m={m} now={now} group={G.k} veo={!!veo[m.id]} selected={drawerId === m.id} onOpen={openDrawer} onRoster={goRoster} onVeo={toggleVeo} money={money} />)}</div>
+                    <div className="rows">{rows.map((m) => <Tile key={m.id} m={m} now={now} group={G.k} veo={!!veo[m.id]} selected={drawerId === m.id} onOpen={openDrawer} onVeo={toggleVeo} money={money} />)}</div>
                   </section>
                 ))}
               </div>
@@ -251,15 +278,24 @@ export default function GamedayBoard() {
       </div>
 
       {drawerId != null && (
-        <MatchDrawer
-          apiId={drawerId} cardVeo={!!veo[drawerId]} siblings={drawerSiblings}
-          onClose={() => { if (guardLeave()) setDrawerId(null); }}
-          onDirtyChange={setDrawerDirty}
-          onSaved={() => { void load(date); say("Saved"); }}
-          onToggleVeo={(id, en) => void toggleVeo(id, en)}
-          onStep={(id) => setDrawerId(id)}
-          onToast={(m, w) => say(m, w)}
-        />
+        <aside className={"gpanel" + (coexist ? " coexist" : "")} data-testid="gday-panel" style={{ ["--panel-w" as string]: `${PANEL_W}px`, right: coexist ? DOCK_W : 0 }}>
+          <div className="gpanel-bar">
+            <button className="gpanel-x" data-testid="gday-panel-close" aria-label="Close panel" onClick={() => { if (guardLeave()) setDrawerId(null); }}>✕ Close</button>
+            <span className="gpanel-step">
+              <button data-testid="gday-prev" aria-label="Previous match" disabled={stepIdx <= 0} onClick={() => step(-1)}>‹</button>
+              <button data-testid="gday-next" aria-label="Next match" disabled={stepIdx < 0 || stepIdx >= drawerSiblings.length - 1} onClick={() => step(1)}>›</button>
+            </span>
+          </div>
+          {dockNotice && (
+            <div className="gpanel-notice" data-testid="gday-dock-notice">
+              Chat dock collapsed to make room — reopen it any time from the tab on the right; the thread and your draft are kept.
+              <button onClick={() => setDockNotice(false)} aria-label="Dismiss">Got it</button>
+            </div>
+          )}
+          <div className="gpanel-body">
+            <MatchPanel key={drawerId} matchId={String(drawerId)} onDirtyChange={setDrawerDirty} />
+          </div>
+        </aside>
       )}
       {toast && <div className={"toast" + (toast.bad ? " bad" : "")} data-testid="toast">{toast.t}</div>}
       <MatchOpsSectionSheet open={pickerOpen} onClose={() => setPickerOpen(false)} />
@@ -267,9 +303,9 @@ export default function GamedayBoard() {
   );
 }
 
-function Tile({ m, now, group, veo, selected, onOpen, onRoster, onVeo, money }: {
+function Tile({ m, now, group, veo, selected, onOpen, onVeo, money }: {
   m: ApiMatch; now: number; group: MatchGroup; veo: boolean; selected: boolean;
-  onOpen: (id: number) => void; onRoster: (id: number) => void; onVeo: (id: number, en: boolean) => void; money: (c: number | null | undefined) => string;
+  onOpen: (id: number) => void; onVeo: (id: number, en: boolean) => void; money: (c: number | null | undefined) => string;
 }) {
   const t = minsUntil(m, now), lvl = acLevel(m, now);
   const isTodo = group === "todo", isCx = group === "cancelled", isDone = group === "finished";
@@ -279,7 +315,6 @@ function Tile({ m, now, group, veo, selected, onOpen, onRoster, onVeo, money }: 
   // Cancelled shows no countdown at all; finished keeps "finished Nh ago"; todo the live count.
   const cd = isCx ? "" : t <= -90 ? `finished ${fmtDur(t)} ago` : t <= 0 ? "in play" : `in ${fmtDur(t)}`;
   const cdCls = t <= 0 && t > -90 ? "live" : t > 0 && t <= 180 ? "soon" : "";
-  const rosterKey = (e: React.KeyboardEvent) => { if (e.key === "Enter" || e.key === " ") { e.preventDefault(); e.stopPropagation(); onRoster(m.id); } };
   const veoKey = (e: React.KeyboardEvent) => { if (e.key === "Enter" || e.key === " ") { e.preventDefault(); e.stopPropagation(); onVeo(m.id, !veo); } };
 
   return (
@@ -305,9 +340,7 @@ function Tile({ m, now, group, veo, selected, onOpen, onRoster, onVeo, money }: 
       </span>
       <span className="stats" data-testid="tile-stats">
         <span className="st fill">
-          <span className="k">SPOTS{!isCx && (
-            <span className="rosterlink" role="link" tabIndex={0} data-testid="roster-link" data-roster={m.id} aria-label={`Open the roster for ${m.name}`}
-              onClick={(e) => { e.stopPropagation(); onRoster(m.id); }} onKeyDown={rosterKey}>ROSTER ›</span>)}</span>
+          <span className="k">SPOTS</span>
           {cap == null ? <span className="nums" data-testid="fill-nums">special event · no cap</span> : <>
             <span className="barwrap">
               <span className={"bar" + (isTodo && !short(m) ? " cleared" : "")} data-testid="fill-bar">
@@ -448,6 +481,18 @@ const CSS = `
 .gdo{font-family:-apple-system,BlinkMacSystemFont,"Segoe UI",Inter,Helvetica,Arial,sans-serif;color:#0B1F17;background:#EDF2EF;min-height:100vh}
 .gdo .gmain{padding:20px 24px 70px;transition:margin-right .17s ease-out}
 .gdo .gmain.drawering{margin-right:var(--drawer-w,480px)}
+/* the in-place match panel (replaces the old drawer). Fixed right edge; the right offset is set
+   inline to the dock width when they coexist (>=1600) so the two never overlap. */
+.gdo .gpanel{position:fixed;top:0;bottom:0;width:var(--panel-w,600px);max-width:100vw;background:#eef2f0;border-left:1px solid #d4e0da;box-shadow:-8px 0 26px rgba(4,26,18,.12);z-index:60;display:flex;flex-direction:column}
+.gdo .gpanel-bar{display:flex;align-items:center;gap:8px;padding:9px 12px;background:#04291d;color:#fff;flex:0 0 auto}
+.gdo .gpanel-x{border:1px solid #2a5644;background:transparent;color:#cfe7dc;border-radius:8px;padding:7px 13px;font:inherit;font-size:13px;font-weight:600;cursor:pointer}
+.gdo .gpanel-x:hover{background:#14432f;color:#fff}
+.gdo .gpanel-step{margin-left:auto;display:inline-flex;gap:5px}
+.gdo .gpanel-step button{border:1px solid #2a5644;background:transparent;color:#cfe7dc;border-radius:8px;min-width:36px;min-height:34px;font:inherit;font-size:17px;cursor:pointer}
+.gdo .gpanel-step button:disabled{opacity:.4;cursor:not-allowed}
+.gdo .gpanel-notice{display:flex;align-items:center;gap:10px;background:#fdf2e0;border-bottom:1px solid #e8c383;color:#6b4400;font-size:12px;line-height:1.4;padding:9px 12px;flex:0 0 auto}
+.gdo .gpanel-notice button{margin-left:auto;border:1px solid #e8c383;background:#fff;border-radius:6px;padding:4px 10px;font:inherit;font-size:11.5px;font-weight:600;cursor:pointer;white-space:nowrap}
+.gdo .gpanel-body{flex:1;min-height:0;overflow-y:auto;padding:12px}
 .gdo .panel{background:#fff;border:1px solid #DCE5E0;border-radius:14px}
 .gdo .head{padding:18px 20px 16px;margin-bottom:14px;position:relative}
 .gdo .r1{display:flex;align-items:baseline;gap:12px}.gdo h1{margin:0;font-size:23px;letter-spacing:-.2px}
@@ -655,6 +700,7 @@ const CSS = `
   .gdo{width:100vw;margin-left:calc(50% - 50vw);margin-right:calc(50% - 50vw)}
   .gdo .gmain{padding:0 0 90px;margin-right:0 !important}
   .gdo .gmain.drawering{margin-right:0}
+  .gdo .gpanel{width:100vw;right:0 !important}
 
   /* three 44px bands under the strip */
   .gdo .mhead{display:block;position:sticky;top:3px;z-index:30;background:#F6F9F7;border-bottom:1px solid #D3DED8}

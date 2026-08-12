@@ -111,6 +111,9 @@ async function main() {
       route.fulfill({ status: 200, contentType: "application/json", body: JSON.stringify({ date, env: "production", matches }) });
     });
     await ctx.route("**/api/veo**", (route) => route.fulfill({ status: 200, contentType: "application/json", body: JSON.stringify({ matches: [] }) }));
+    // the in-place match panel (replaced the drawer) loads these when a tile opens it
+    await ctx.route(/\/api\/matchday\/production\/matches\/\d+(\?.*)?$/, (route) => route.fulfill({ status: 200, contentType: "application/json", body: JSON.stringify({ match: { id: 502, name: "Board Match", type: "REGULAR", managerId: null, secondManagerId: null, fieldId: 1, startDate: "2026-08-12T19:00:00.000Z", endDate: "2026-08-12T20:00:00.000Z", registrationPrice: 1000, additionalSpotPrice: null, guestCount: 0, isFreeMember: false, maxPlayerCount: 20, fakeSpotLeft36h: 0, fakeSpotLeft24h: 0, fakeSpotLeft12h: 0, fakeSpotLeft6h: 0, fakeSpotLeft3h: 0, autoCanceled: false, autoCanceledMinutes: 60, minPlayerCount: 10, isAutoBump: false, maxTeamSize2Team: 20, maxTeamSize4Team: 40, description: "", managerIntro: "", teams: [{ teamNumber: 1 }, { teamNumber: 2 }], occupancy: 0, realOccupancy: 0, cityName: "Austin", fieldTitle: "NEMP" }, fields: [], players: [], managers: [] }) }));
+    await ctx.route(/\/api\/matchday\/production\/roster\/\d+(\?.*)?$/, (route) => route.fulfill({ status: 200, contentType: "application/json", body: JSON.stringify({ matchId: 502, name: "Board Match", teams: [{ id: 1, teamNumber: 1, name: "A", locked: false }, { id: 2, teamNumber: 2, name: "B", locked: false }], players: [], shape: { teamN: 2, perTeam: 10 }, maxPlayerCount: 20, occupancy: 0 }) }));
     await grantEdit(ctx);
   };
 
@@ -223,18 +226,24 @@ async function main() {
   }, { empty: false, todo: null, cx: true, fin: true });
   await page.click('[data-testid="day-today"]'); await page.waitForSelector('[data-testid="group-todo"]', { timeout: 10000 }); await page.waitForTimeout(150);
 
-  // ── the tile is structurally whole: one button, roster+veo are SPANS ──
+  // ── the tile is structurally whole: one button, veo is a SPAN (roster-link removed — the panel
+  //    absorbed the roster in Phase 23 Step 2 Part B) ──
   { const whole = await page.$eval(tile(501), (t) => ({
       when: !!t.querySelector('[data-testid="tile-when"]'), meta: !!t.querySelector('[data-testid="tile-meta"]'), stats: !!t.querySelector('[data-testid="tile-stats"]'),
-      nestedButtons: t.querySelectorAll("button").length, rosterTag: t.querySelector('[data-testid="roster-link"]')?.tagName, veoTag: t.querySelector('[data-testid="veo-badge"]')?.tagName,
+      nestedButtons: t.querySelectorAll("button").length, veoTag: t.querySelector('[data-testid="veo-badge"]')?.tagName,
     }));
-    eq("tile contains all three blocks, no nested <button>, roster+veo are SPANs", whole, { when: true, meta: true, stats: true, nestedButtons: 0, rosterTag: "SPAN", veoTag: "SPAN" }); }
+    eq("tile contains all three blocks, no nested <button>, veo is a SPAN", whole, { when: true, meta: true, stats: true, nestedButtons: 0, veoTag: "SPAN" }); }
 
-  // ── clicking the tile body opens the drawer; the roster link does NOT ──
+  // ── clicking the tile body opens the IN-PLACE MATCH PANEL (replaced the drawer + 'Open full editor') ──
   await page.click(tile(502) + ' [data-testid="tile-when"]');
-  await page.waitForTimeout(300);
-  eq("clicking the tile opens the edit drawer", !!(await page.$('[data-testid="gameday"] aside, .mdw, [role="dialog"]')) || (await page.$$('input')).length > 0, true);
-  await page.keyboard.press("Escape"); await page.waitForTimeout(200);
+  await page.waitForSelector('[data-testid="gday-panel"]', { timeout: 8000 });
+  eq("clicking the tile opens the in-place match panel", await page.$$eval('[data-testid="gday-panel"]', (e) => e.length), 1);
+  eq("old side-panel markup gone (count 0) and no 'Open full editor' anywhere", await page.evaluate(() => ({
+    drawer: document.querySelectorAll('.mdw,[data-testid="drawer"]').length,
+    fulleditor: document.querySelectorAll('[data-testid="dr-fulleditor"]').length,
+    text: [...document.querySelectorAll("*")].some((e) => e.children.length === 0 && /Open full editor/i.test(e.textContent || "")) ? 1 : 0,
+  })), { drawer: 0, fulleditor: 0, text: 0 });
+  await page.click('[data-testid="gday-panel-close"]'); await page.waitForTimeout(200);
 
   // ── contrast sweep: normal + amber + red tiles on screen ──
   { const c = await contrastIn(page);
@@ -249,11 +258,8 @@ async function main() {
     eq("nothing tomorrow is coloured (no day-early auto-cancel)", coloured, []); }
   await page.click('[data-testid="day-today"]'); await page.waitForSelector('[data-testid="group-todo"]'); await page.waitForTimeout(150);
 
-  // ── the roster link navigates to the roster, not the drawer (do this last: it navigates away) ──
-  const drawerBefore = (await page.$$('input')).length;
-  await page.click(tile(501) + ' [data-testid="roster-link"]');
-  await page.waitForURL("**/matches/501/roster", { timeout: 15000 }).catch(() => {});
-  eq("roster link goes to /match-ops/matches/501/roster (not the drawer)", { url: page.url().includes("/matches/501/roster"), openedDrawer: (await page.$$('input')).length > drawerBefore }, { url: true, openedDrawer: false });
+  // (the roster-link navigation test was removed with the standalone roster route — the roster now
+  //  lives in the in-place panel's TEAMS section, gated by verify-matchpanel + verify-gday-panel.)
 
   // ══════════════ PHONE (390×844, touch) ══════════════
   const pctx = await browser.newContext({ viewport: { width: 390, height: 844 }, isMobile: true, hasTouch: true, storageState });
