@@ -285,13 +285,23 @@ export default function MatchPanel({ matchId, env = "production" }: { matchId: s
                 <input data-testid="mp-maxplayers" inputMode="numeric" value={cur.maxPlayerCount == null ? "" : String(cur.maxPlayerCount)} className={isDirty("maxPlayerCount") ? "mp-chg" : ""}
                   onChange={(e) => setField("maxPlayerCount", e.target.value.trim() === "" ? "" : Number(e.target.value))} /></label>
               <div className="mp-f"><span className="mp-lb">SPOTS PER TEAM <em>{teamCount} teams</em></span>
-                <div className="mp-step">
-                  <button type="button" data-testid="mp-spt-minus" aria-label="Fewer per team" disabled={teamCount === 0 || capacity <= teamCount}
-                    onClick={() => teamCount && setField("maxPlayerCount", Math.max(teamCount, capacity - teamCount))}>−</button>
-                  <span className="mp-step-val" data-testid="mp-spt">{teamCount ? (capacity / teamCount % 1 === 0 ? capacity / teamCount : (capacity / teamCount).toFixed(1)) : "—"}</span>
-                  <button type="button" data-testid="mp-spt-plus" aria-label="More per team" disabled={teamCount === 0}
-                    onClick={() => teamCount && setField("maxPlayerCount", capacity + teamCount)}>+</button>
-                </div></div>
+                {teamCount > 0 && capacity % teamCount === 0 ? (
+                  // whole number per team — the stepper writes maxPlayerCount = perTeam × teamCount
+                  <div className="mp-step">
+                    <button type="button" data-testid="mp-spt-minus" aria-label="Fewer per team" disabled={capacity <= teamCount}
+                      onClick={() => setField("maxPlayerCount", Math.max(teamCount, capacity - teamCount))}>−</button>
+                    <span className="mp-step-val" data-testid="mp-spt">{capacity / teamCount}</span>
+                    <button type="button" data-testid="mp-spt-plus" aria-label="More per team"
+                      onClick={() => setField("maxPlayerCount", capacity + teamCount)}>+</button>
+                  </div>
+                ) : (
+                  // NOT a whole number per team (or team count unknown). A fractional "4.5 per team" is
+                  // nonsense and a silently-rounded one would write a capacity the operator never chose —
+                  // so hide the per-team figure and edit the total directly.
+                  <span className="mp-ro" data-testid="mp-spt-na">{teamCount > 0
+                    ? `${capacity} total doesn't divide evenly into ${teamCount} teams — edit the total above.`
+                    : `Team count unknown — edit the total above.`}</span>
+                )}</div>
             </div>
             <div className="mp-derived">Capacity is <b>{capacity} total</b>{teamCount ? <> over <b>{teamCount} teams</b></> : null}. The server caps on maxPlayerCount; team count is Step 2.</div>
           </Section>

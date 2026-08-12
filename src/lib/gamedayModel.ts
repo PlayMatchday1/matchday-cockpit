@@ -61,6 +61,13 @@ export const minsUntil = (m: ApiMatch, now: number): number => (kickoffMs(m) - n
 // cap-real-fake subtracts the fakes twice).
 export const realCount = (m: ApiMatch): number => Math.max(0, n(m._count?.players) - n(m._count?.fakePlayers));
 
+// IMPORTANT — the two endpoints differ, and this is why realCount above is still CORRECT for the
+// Gameday board: the LIST endpoint (GET /admin/matches, what gameday/route.ts reads) DOES return
+// `_count: { players, fakePlayers }` (probed on prod: every match carries fakePlayers), so
+// realCount = players − fakePlayers is right for the board. Only the DETAIL endpoint (the match
+// panel) is missing fakePlayers — hence realOccupancyFromRoster below, used ONLY there. realCount is
+// untouched; no Gameday number changes.
+//
 // The match DETAIL endpoint (GET /admin/matches/{id}) carries only `_count: { players }` — real +
 // fake, active, PLAYER-type; NO fakePlayers, and it excludes cancelled/guests/additional-spots.
 // (Proven on production: 17476 players=10 with 8 fake roster rows → 2 real; 17650 14 with 13 fake →

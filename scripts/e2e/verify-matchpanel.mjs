@@ -35,6 +35,7 @@ const FIELDS = [{ id: 199, title: "Atlanta — PRUMC", city: "Atlanta" }, { id: 
 let puts = [];
 function matchFor(id) {
   if (String(id).endsWith("9999")) return { ...REGULAR, id: Number(id), type: "BRACKET" };
+  if (String(id).endsWith("8888")) return { ...REGULAR, id: Number(id), maxPlayerCount: 18, teams: [{ teamNumber: 1 }, { teamNumber: 2 }, { teamNumber: 3 }, { teamNumber: 4 }] }; // 18/4 = 4.5, non-divisible
   return { ...REGULAR, id: Number(id) };
 }
 
@@ -125,6 +126,9 @@ async function main() {
   eq("render: start = 19:00 (raw wall time, no shift)", await val("mp-start"), "19:00");
   eq("render: date = 2026-08-11 (raw wall date)", await val("mp-date"), "2026-08-11");
 
+  // SPOTS — divisible capacity (18 over 3 teams = 6/team) shows a WHOLE per-team, no na note
+  eq("spots: divisible capacity (18/3) shows 6 per team, no total-only note", { spt: await page.$eval('[data-testid="mp-spt"]', (e) => e.textContent.trim()), na: await has("mp-spt-na") }, { spt: "6", na: false });
+
   // ── ISOLATE: editing each field stages EXACTLY its own key ──
   for (const f of FLD) {
     await doEdit(f);
@@ -196,6 +200,12 @@ async function main() {
   await page.goto(`${BASE}/match-ops/match-panel/19999`, { waitUntil: "domcontentloaded" });
   await page.waitForSelector('[data-testid="mp-name"]', { timeout: 15000 });
   eq("BRACKET match shows type read-only, no dropdown", { ro: await has("mp-type-readonly"), dropdown: await has("mp-type") }, { ro: true, dropdown: false });
+
+  // ── non-divisible capacity (18 over 4 teams = 4.5): hide per-team, show total-only, say why ──
+  await page.goto(`${BASE}/match-ops/match-panel/18888`, { waitUntil: "domcontentloaded" });
+  await page.waitForSelector('[data-testid="mp-name"]', { timeout: 15000 });
+  eq("spots: 18/4 hides the per-team figure + stepper, shows a total-only note", { na: await has("mp-spt-na"), perTeam: await has("mp-spt"), stepper: await has("mp-spt-plus") }, { na: true, perTeam: false, stepper: false });
+  eq("spots: the note says why (doesn't divide evenly into 4 teams)", /doesn't divide evenly into 4 teams/.test(await page.$eval('[data-testid="mp-spt-na"]', (e) => e.textContent)), true);
 
   // ── layout at 1600 and 390 — SEPARATE assertions ──
   await page.goto(`${BASE}/match-ops/match-panel/17494`, { waitUntil: "domcontentloaded" });
