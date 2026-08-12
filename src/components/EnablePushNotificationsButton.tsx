@@ -233,7 +233,10 @@ export default function EnablePushNotificationsButton() {
         aria-label={label}
         title={label}
         style={{ touchAction: "manipulation" }}
-        className={`rounded-full p-1 transition disabled:opacity-40 ${
+        // 44px target on touch, shrinking to the 31px desktop icon size — matching the Refresh
+        // button beside it. The old `p-1` gave a ~24px target, unusable on the phone this control
+        // now has to be operated from.
+        className={`flex h-11 w-11 items-center justify-center rounded-[10px] transition hover:bg-white/85 disabled:opacity-40 min-[900px]:h-[31px] min-[900px]:w-[31px] ${
           status === "subscribed"
             ? "text-deep-green"
             : "text-deep-green/55 hover:text-deep-green"

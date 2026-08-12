@@ -2,10 +2,16 @@
 // the WhatsApp and Telnyx inbound webhooks after the crm_messages
 // insert succeeds.
 //
-// Recipient resolution mirrors the assignment-aware unread rule
-// (PR #69):
-//   thread.assigned_to_user_id IS NULL  → push every admin
-//   thread.assigned_to_user_id  set     → push only the assignee
+// RECIPIENTS — EVERYONE, ALWAYS (Phase 26b, Ryan's call).
+//
+// This used to mirror the assignment-aware unread rule (PR #69): an assigned thread pushed ONLY to
+// its assignee. That is why "notifications stopped" — every recent inbound sat on threads assigned
+// to one operator, so nobody else was told. The assignee-only branch is GONE. Every inbound player
+// message now pushes to every admin holding a live subscription, whoever the thread belongs to.
+//
+// Still NOT pushed: outbound messages and the out-of-hours auto-reply. That is guaranteed two ways
+// — notifyInboundChatMessage is only ever called from the inbound webhook path, AND shouldPushForMessage
+// below is a hard guard at the top of doNotify.
 //
 // Each helper call is bounded by PUSH_TIMEOUT_MS so a slow Apple /
 // Google push service can't stall the webhook ack. Never throws —
@@ -35,8 +41,25 @@ export type CrmInboundPushArgs = {
   body: string;
   mediaKind?: "image" | "video" | "audio" | "document" | "sticker" | null;
   mediaFilename?: string | null;
+  // Both default to the inbound, non-auto-reply case — the only case any caller has. They exist so
+  // the "outbound and auto-replies never push" rule is a CHECKED guard, not just a convention about
+  // where the function happens to be called from.
+  direction?: "inbound" | "outbound";
+  isAutoReply?: boolean;
   supabase: SupabaseClient;
 };
+
+// PURE — who gets pushed. EVERY admin, always; assignment is irrelevant. Kept as a function (rather
+// than inlined) so the rule is assertable offline, which is what was missing when this broke.
+export function pushRecipientIds(admins: Array<{ id: string }>): string[] {
+  return admins.map((a) => a.id).filter(Boolean);
+}
+
+// PURE — whether a message pushes at all. Only inbound player messages do.
+export function shouldPushForMessage(m: { direction?: string | null; isAutoReply?: boolean | null }): boolean {
+  if (m.isAutoReply === true) return false;      // the out-of-hours auto-reply is ours, not the player's
+  return (m.direction ?? "inbound") === "inbound"; // outbound is something we sent
+}
 
 // Top-level entry. Wraps doNotify in a timeout race so the webhook
 // can ack within budget even if a push service is slow.
@@ -60,34 +83,25 @@ async function doNotify({
   body,
   mediaKind,
   mediaFilename,
+  direction,
+  isAutoReply,
   supabase,
 }: CrmInboundPushArgs): Promise<void> {
-  // 1. Resolve recipients per the assignment-aware rule.
-  const thread = await supabase
-    .from("crm_threads")
-    .select("assigned_to_user_id")
-    .eq("id", threadId)
-    .maybeSingle();
-  if (thread.error || !thread.data) {
-    console.error("[crm:push] thread lookup failed", thread.error);
+  // 0. Outbound / auto-reply never push. Belt-and-braces with the call sites.
+  if (!shouldPushForMessage({ direction, isAutoReply })) return;
+
+  // 1. Recipients: EVERY admin. The thread's assignee no longer narrows this — an assigned thread
+  //    pushes to everyone exactly like an unassigned one, so a conversation someone else owns can
+  //    still reach the rest of the team.
+  const admins = await supabase
+    .from("app_users")
+    .select("id")
+    .eq("is_admin", true);
+  if (admins.error) {
+    console.error("[crm:push] admin lookup failed", admins.error);
     return;
   }
-  const assigneeId = (thread.data.assigned_to_user_id as string | null) ?? null;
-
-  let recipientIds: string[];
-  if (assigneeId) {
-    recipientIds = [assigneeId];
-  } else {
-    const admins = await supabase
-      .from("app_users")
-      .select("id")
-      .eq("is_admin", true);
-    if (admins.error) {
-      console.error("[crm:push] admin lookup failed", admins.error);
-      return;
-    }
-    recipientIds = (admins.data ?? []).map((r) => r.id as string);
-  }
+  const recipientIds = pushRecipientIds((admins.data ?? []) as Array<{ id: string }>);
   if (recipientIds.length === 0) return;
 
   // 2. Resolve push subscriptions for those recipients, grouped by
@@ -159,7 +173,10 @@ async function doNotify({
       unread_count: unreadCounts.get(userId) ?? 1,
       data: {
         thread_id: threadId,
-        route: `/chats?threadId=${encodeURIComponent(threadId)}`,
+        // MUST be the real page. "/chats" is permanently redirected to /match-ops/match-chats by
+        // next.config.ts (the 2026-07-31 split), so this used to land a PLAYER-chat notification on
+        // the MATCH chats console with a threadId that means nothing there.
+        route: `/match-ops/player-chats?threadId=${encodeURIComponent(threadId)}`,
       },
     };
     const results = await sendPushNotificationToMany(userSubs, payload);

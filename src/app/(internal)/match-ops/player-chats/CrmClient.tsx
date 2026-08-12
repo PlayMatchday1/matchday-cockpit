@@ -756,6 +756,12 @@ export default function CrmClient() {
                 {liveLabel}
               </span>
               <span className="ml-auto flex items-center gap-0.5">
+                {/* Notification toggle — renders at EVERY width. It used to sit in a
+                    `hidden … min-[900px]:flex` footer (4f7c3fd, which was stripping KEYBOARD
+                    affordances on touch and swept this along), so on a phone there was no way to
+                    subscribe at all — the one place push matters most. The keyboard hints stay
+                    hidden; that part of 4f7c3fd was right. */}
+                <EnablePushNotificationsButton />
                 <button
                   type="button"
                   onClick={() => void loadThreads()}
@@ -909,10 +915,6 @@ export default function CrmClient() {
                 ))}
             </div>
 
-            {/* footer hints — desktop only (small push affordance) */}
-            <div className="hidden flex-none items-center gap-2.5 border-t px-4 py-2 text-[11px] font-semibold min-[900px]:flex" style={{ borderColor: "#e6ebe8", background: "#eef3f0", color: "#93a49b" }}>
-              <EnablePushNotificationsButton />
-            </div>
           </aside>
 
           {/* ---- THREAD ---- */}
