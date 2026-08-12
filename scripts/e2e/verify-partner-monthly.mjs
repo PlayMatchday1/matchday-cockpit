@@ -2,6 +2,8 @@
 // the production build served locally. Run: node scripts/e2e/verify-partner-monthly.mjs
 
 import { chromium } from "playwright";
+import { fatal, installHarnessGuard } from "./_session.mjs";
+installHarnessGuard();
 const BASE = process.env.E2E_BASE_URL || "http://localhost:3000";
 const SLUG = "hattrick-yx4sur4t";
 let PASS = 0, FAIL = 0; const fails = [];
@@ -100,4 +102,4 @@ async function main() {
   await browser.close();
   process.exit(FAIL === 0 && NCF === 0 ? 0 : 1);
 }
-main().catch((e) => { console.error("HARNESS ERROR:", e); process.exit(2); });
+main().catch(fatal);

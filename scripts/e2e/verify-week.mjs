@@ -9,6 +9,8 @@
 // Run: node scripts/e2e/verify-week.mjs   (expects .auth/state.json for localhost)
 
 import { chromium } from "playwright";
+import { fatal, installHarnessGuard } from "./_session.mjs";
+installHarnessGuard();
 import { readFileSync } from "node:fs";
 
 const BASE = process.env.E2E_BASE_URL || "http://localhost:3000";
@@ -308,4 +310,4 @@ async function main() {
   process.exit(FAIL === 0 && NCF === 0 ? 0 : 1);
 }
 
-main().catch((e) => { console.error("HARNESS ERROR:", e); process.exit(2); });
+main().catch(fatal);

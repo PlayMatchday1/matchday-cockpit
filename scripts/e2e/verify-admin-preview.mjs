@@ -4,6 +4,8 @@
 
 import { chromium } from "playwright";
 import { createClient } from "@supabase/supabase-js";
+import { netRetry, installHarnessGuard, fatal } from "./_session.mjs";
+installHarnessGuard();
 
 const BASE = "http://localhost:3000";
 let PASS = 0, FAIL = 0; const fails = [];
@@ -15,8 +17,8 @@ async function main() {
   process.loadEnvFile(".env.local");
   const svc = createClient(process.env.NEXT_PUBLIC_SUPABASE_URL, process.env.SUPABASE_SERVICE_ROLE_KEY, { auth: { persistSession: false } });
   const anon = createClient(process.env.NEXT_PUBLIC_SUPABASE_URL, process.env.NEXT_PUBLIC_SUPABASE_PUBLISHABLE_KEY, { auth: { persistSession: false } });
-  const link = await svc.auth.admin.generateLink({ type: "magiclink", email: "rmancuso@playmatchday.com" });
-  const vv = await anon.auth.verifyOtp({ type: "magiclink", token_hash: link.data.properties.hashed_token });
+  const link = await netRetry(() => svc.auth.admin.generateLink({ type: "magiclink", email: "rmancuso@playmatchday.com" }), "generateLink");
+  const vv = await netRetry(() => anon.auth.verifyOtp({ type: "magiclink", token_hash: link.data.properties.hashed_token }), "verifyOtp");
   const TOK = vv.data.session.access_token;
 
   console.log("PREVIEW API (same builder as the public page)");
@@ -99,4 +101,4 @@ async function main() {
   await browser.close();
   process.exit(FAIL === 0 ? 0 : 1);
 }
-main().catch((e) => { console.error("HARNESS ERROR:", e); process.exit(2); });
+main().catch(fatal);

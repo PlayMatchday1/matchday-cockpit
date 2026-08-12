@@ -15,6 +15,8 @@
 //   node scripts/e2e/verify-roster.mjs
 import { chromium } from "playwright";
 import { createClient } from "@supabase/supabase-js";
+import { netRetry, installHarnessGuard, fatal } from "./_session.mjs";
+installHarnessGuard();
 import { contrast, overflow } from "./checks.mjs";
 
 // contrast, scoped to a subtree — the roster screen is what Phase 13 owns; the
@@ -92,8 +94,8 @@ async function main() {
   process.loadEnvFile(".env.local");
   const svc = createClient(process.env.NEXT_PUBLIC_SUPABASE_URL, process.env.SUPABASE_SERVICE_ROLE_KEY, { auth: { persistSession: false } });
   const anon = createClient(process.env.NEXT_PUBLIC_SUPABASE_URL, process.env.NEXT_PUBLIC_SUPABASE_PUBLISHABLE_KEY, { auth: { persistSession: false } });
-  const link = await svc.auth.admin.generateLink({ type: "magiclink", email: "rmancuso@playmatchday.com" });
-  const vv = await anon.auth.verifyOtp({ type: "magiclink", token_hash: link.data.properties.hashed_token });
+  const link = await netRetry(() => svc.auth.admin.generateLink({ type: "magiclink", email: "rmancuso@playmatchday.com" }), "generateLink");
+  const vv = await netRetry(() => anon.auth.verifyOtp({ type: "magiclink", token_hash: link.data.properties.hashed_token }), "verifyOtp");
   const ref = new URL(process.env.NEXT_PUBLIC_SUPABASE_URL).host.split(".")[0];
 
   const browser = await chromium.launch({ headless: true });
@@ -359,4 +361,4 @@ async function main() {
   await browser.close();
   process.exit(FAIL === 0 ? 0 : 1);
 }
-main().catch((e) => { console.error("HARNESS ERROR:", e); process.exit(2); });
+main().catch(fatal);

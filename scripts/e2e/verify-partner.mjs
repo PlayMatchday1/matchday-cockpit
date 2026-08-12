@@ -4,6 +4,8 @@
 // the real Jun 28 paid-snapshot divergence. Run: node scripts/e2e/verify-partner.mjs
 
 import { chromium } from "playwright";
+import { fatal, installHarnessGuard } from "./_session.mjs";
+installHarnessGuard();
 
 const BASE = process.env.E2E_BASE_URL || "http://localhost:3000";
 const SLUG = "pac-global-7vdybfv4";
@@ -143,4 +145,4 @@ async function main() {
   await browser.close();
   process.exit(FAIL === 0 && NCF === 0 ? 0 : 1);
 }
-main().catch((e) => { console.error("HARNESS ERROR:", e); process.exit(2); });
+main().catch(fatal);

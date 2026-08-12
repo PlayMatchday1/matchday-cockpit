@@ -80,6 +80,9 @@ function run(suite) {
       // last "(N) passed, (M) failed" anywhere in the output (also matches "Assertions: N passed, M failed")
       const matches = [...out.matchAll(/(\d+)\s+passed,\s+(\d+)\s+failed/g)];
       const last = matches[matches.length - 1];
+      // exit 3 is the harness guard's NETWORK signal (retried 3×, gave up / died mid-run) — name it
+      // so the summary line itself separates a network death from an assertion failure ("N failed").
+      if (code === 3) return resolve({ suite, ok: false, why: "NETWORK — retried 3×, gave up (not an assertion failure; see output)", out });
       if (code !== 0) return resolve({ suite, ok: false, why: `exited ${code}`, out });
       if (!last) return resolve({ suite, ok: false, why: "ZERO ASSERTIONS — no 'N passed, M failed' summary (rotted mock / early return?)", out });
       const passed = Number(last[1]), failed = Number(last[2]);
