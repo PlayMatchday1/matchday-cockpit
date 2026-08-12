@@ -67,9 +67,11 @@ function mutation<T>(name: string, real: T, broken: T, assertion: (impl: T) => b
   mutation("wall-clock (buildStartDate verbatim)", buildStartDate, brokenBuild, assertion);
 }
 
-// ── endpoint deny-list: cancel is refused ─────────────────────────────────────
+// ── endpoint deny-list: refund-and-cancel is refused ──────────────────────────
+// (Match CANCEL was removed from the deny-list in Phase 23 Step 2 Part C — it is now guarded by the
+//  dedicated cancel route's typed-name confirmation instead. refund-and-cancel stays denied.)
 {
-  const url = "https://playmatchday.herokuapp.com/admin/matches/17256/cancel";
+  const url = "https://playmatchday.herokuapp.com/admin/matches/17256/players/5/refund-and-cancel";
   const brokenAssert = (() => { /* no-op: guard removed */ }) as typeof assertAllowedEndpoint;
   const assertion = (fn: typeof assertAllowedEndpoint) => {
     try { fn("PATCH", url); return false; } catch (e) { return e instanceof DeniedEndpointError; }

@@ -106,6 +106,14 @@ export default function MatchPanel({ matchId, env = "production", onDirtyChange 
   const [q, setQ] = useState("");
   const [results, setResults] = useState<{ id: number; name: string }[]>([]);
   const [pendingAdd, setPendingAdd] = useState<{ id: number; name: string } | null>(null);
+  // ── CANCEL (Part C) — the rarest, heaviest, irreversible action. Reaches everyone at once and
+  // cannot be undone, so the friction is deliberately the opposite of the chat composer: live numbers
+  // read at confirm time + the match NAME typed, not a yes/no.
+  const [cancelOpen, setCancelOpen] = useState(false);
+  const [cancelPreview, setCancelPreview] = useState<{ name: string; count: number; perPlayerCents: number; totalCents: number; alreadyCancelled: boolean } | null>(null);
+  const [cancelTyped, setCancelTyped] = useState("");
+  const [cancelBusy, setCancelBusy] = useState(false);
+  const [cancelResult, setCancelResult] = useState<string | null>(null);
 
   const load = useCallback(async () => {
     setLoadErr(null);
@@ -247,6 +255,37 @@ export default function MatchPanel({ matchId, env = "production", onDirtyChange 
     const landedN = fresh ? fresh.teams.length : null;
     if (landedN === target) { noteImmediate(`set team count to ${target}`); setCountResult(`LANDED — the panel re-read the match and now sees ${landedN} teams.`); }
     else setCountResult(`NOT APPLIED — the re-read shows ${landedN ?? "?"} team(s), not ${target}. teamNumbers is write-only so a 2xx proves nothing; the server did not change the count.`);
+  };
+
+  const cancelPath = `/api/matchday/${env}/matches/${matchId}/cancel`;
+  const openCancel = async () => {
+    if (cancelBusy) return;
+    const headers = await authHeaders(); if (!headers) { setCancelResult("No active session — sign in again."); return; }
+    setCancelBusy(true); setCancelResult(null);
+    try {
+      const res = await fetch(cancelPath, { headers, cache: "no-store" }); // LIVE preview, read at confirm time
+      const j = await res.json();
+      setCancelBusy(false);
+      if (!res.ok) { setCancelResult(`Couldn't read the cancellation preview: ${j.error || res.status}`); return; }
+      setCancelPreview(j); setCancelTyped(""); setCancelOpen(true);
+    } catch (e) { setCancelBusy(false); setCancelResult(`UNKNOWN — ${e instanceof Error ? e.message : String(e)}.`); }
+  };
+  const doCancel = async () => {
+    if (!cancelPreview || cancelBusy || cancelTyped.trim() !== cancelPreview.name) return;
+    const headers = await authHeaders(); if (!headers) { setCancelResult("No active session — sign in again."); return; }
+    setCancelBusy(true); setCancelResult(null);
+    try {
+      const res = await fetch(cancelPath, { method: "POST", headers, body: JSON.stringify({ confirmName: cancelTyped.trim(), source: "Match panel · cancel" }) });
+      const j = await res.json();
+      setCancelBusy(false);
+      if (!res.ok) { setCancelResult(`Cancel failed: ${j.error || res.status}. Nothing was credited.`); return; }
+      setCancelOpen(false); noteImmediate("cancelled the match");
+      // Report from match state (server re-read of isCancelled), NOT the status code.
+      setCancelResult(j.landed
+        ? `LANDED — “${j.name}” is cancelled. ${j.count} player(s) credited $${centsToDollars(j.totalCents)} and texted (re-read confirmed).`
+        : `NOT APPLIED — the re-read shows the match is NOT cancelled; nothing was credited. Reload and check before retrying.`);
+      await load(); await loadRoster();
+    } catch (e) { setCancelBusy(false); setCancelResult(`UNKNOWN — ${e instanceof Error ? e.message : String(e)}. Reload before acting.`); }
   };
 
   // Recompute the derived date pair whenever the WHEN inputs move: apply the start delta to the
@@ -604,6 +643,29 @@ export default function MatchPanel({ matchId, env = "production", onDirtyChange 
               </div>
             </>}
           </div>
+
+          {/* ── CANCEL (Part C) — the danger zone. Separate, immediate, irreversible. ── */}
+          <div className="mp-danger" data-testid="mp-danger">
+            <div className="mp-danger-hd">DANGER ZONE · CANCEL THE MATCH</div>
+            {!cancelOpen ? (
+              <button type="button" className="mp-cancelbtn" data-testid="mp-cancel-open" disabled={cancelBusy} onClick={() => void openCancel()}>{cancelBusy ? "Reading…" : "Cancel this match…"}</button>
+            ) : cancelPreview?.alreadyCancelled ? (
+              <div className="mp-note warn" data-testid="mp-cancel-already">This match is already cancelled — nothing to do.</div>
+            ) : cancelPreview ? (
+              <div className="mp-cancelconfirm" data-testid="mp-cancel-confirm">
+                <p className="mp-cancel-line" data-testid="mp-cancel-line">
+                  <b>{cancelPreview.count} player{cancelPreview.count === 1 ? "" : "s"} will be credited ${centsToDollars(cancelPreview.totalCents)}</b> and texted that “{cancelPreview.name}” is off. Each gets a <b>CREDIT</b> of the match value to their MatchDay account — nothing leaves Stripe and no money returns to a card. This fires once and cannot be undone.
+                </p>
+                <label className="mp-f"><span className="mp-lb">TYPE THE MATCH NAME TO CONFIRM <em>{cancelPreview.name}</em></span>
+                  <input data-testid="mp-cancel-name" value={cancelTyped} placeholder={cancelPreview.name} onChange={(e) => setCancelTyped(e.target.value)} /></label>
+                <div className="mp-cancel-acts">
+                  <button type="button" className="mp-btn" data-testid="mp-cancel-abort" onClick={() => { setCancelOpen(false); setCancelTyped(""); }}>Keep the match</button>
+                  <button type="button" className="mp-cancelbtn" data-testid="mp-cancel-do" disabled={cancelBusy || cancelTyped.trim() !== cancelPreview.name} onClick={() => void doCancel()}>{cancelBusy ? "Cancelling…" : "Cancel the match"}</button>
+                </div>
+              </div>
+            ) : null}
+            {cancelResult && <div className="mp-note info" data-testid="mp-cancel-result" style={{ marginTop: 10 }}>{cancelResult}</div>}
+          </div>
         </div>
 
         <div className="mp-foot">
@@ -783,5 +845,15 @@ const CSS = `
 .mp-pname{flex:1;min-width:0;font-size:13px;white-space:nowrap;overflow:hidden;text-overflow:ellipsis}
 .mp-fake-tag{font-size:9px;font-weight:800;background:#f2e31d;color:#231f00;border-radius:4px;padding:1px 4px;margin-left:6px;vertical-align:middle}
 .mp-pacts{display:inline-flex;gap:4px;flex:0 0 auto}
+/* ── CANCEL danger zone — the darkest treatment; separate from everything above ── */
+.mp-danger{margin:14px 16px 16px;border:1px solid #d8968f;border-left:4px solid #8a1a12;border-radius:11px;background:#fbeeec;padding:13px}
+.mp-danger-hd{font-size:10.5px;font-weight:800;letter-spacing:.12em;color:#8a1a12;margin-bottom:10px}
+.mp-cancelbtn{border:1px solid #8a1a12;background:#a4231e;color:#fff;border-radius:9px;padding:0 16px;font:inherit;font-weight:700;cursor:pointer;min-height:40px}
+.mp-cancelbtn:hover:not(:disabled){background:#8a1a12}
+.mp-cancelbtn:disabled{opacity:.5;cursor:not-allowed}
+.mp-cancelconfirm{display:block}
+.mp-cancel-line{font-size:13px;line-height:1.5;color:#5a1611;margin:0 0 12px}
+.mp-cancel-line b{font-weight:800;color:#3d0e0a}
+.mp-cancel-acts{display:flex;gap:9px;justify-content:flex-end;margin-top:12px}
 @media (max-width:560px){.mp-grid,.mp-grid3{grid-template-columns:1fr}.mp-teamgrid{grid-template-columns:1fr}}
 `;

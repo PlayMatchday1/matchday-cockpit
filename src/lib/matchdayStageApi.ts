@@ -178,14 +178,18 @@ export const CLI_WRITE_ACTOR: WriteActor = { canEditMatches: true, canManagePlay
 export { DENY_WRITE_FIELDS } from "./denyWriteFields";
 import { DENY_WRITE_FIELDS } from "./denyWriteFields";
 
-// Endpoints no screen may fire blindly. These have side effects a field write
-// does NOT: cancel NOTIFIES every signed-up player, delete DESTROYS the match,
-// refund-and-cancel MOVES MONEY. Matched on the PARSED path SHAPE (method + exact
-// segment list, {id} = one wildcard segment), never a substring — so
-// /admin/matches/17256/cancel-something-else is NOT caught and a trailing slash or
-// ?query does not let /.../cancel slip through. Applies to BOTH environments.
+// Endpoints no screen may fire blindly. These have side effects a field write does NOT: delete
+// DESTROYS the match; refund-and-cancel MOVES MONEY. Matched on the PARSED path SHAPE (method + exact
+// segment list, {id} = one wildcard segment), never a substring — so a trailing slash or ?query does
+// not let a denied path slip through, and a near-miss segment is not caught. Applies to BOTH envs.
+//
+// Match CANCEL (PATCH /admin/matches/{id}/cancel) WAS on this list and was REMOVED in Phase 23 Step 2
+// Part C. It is now reachable ONLY through the dedicated cancel route, which requires the match NAME
+// typed at confirm time and reads the live credit count/amount before firing. A read-only audit of
+// the Retool prod export proved Retool cancels with this SINGLE PATCH and no separate credit/notify
+// call (there is no credit/notify endpoint or non-MatchDay host anywhere in the export) — the credit
+// and the SMS are server-side effects of /cancel. Calling it alone therefore reproduces Retool exactly.
 const DENY_WRITE_ENDPOINTS: { method: string; segs: (string | null)[]; why: string }[] = [
-  { method: "PATCH", segs: ["admin", "matches", null, "cancel"], why: "cancels the match and NOTIFIES every signed-up player (the only player-facing notification)" },
   { method: "DELETE", segs: ["admin", "matches", null], why: "permanently destroys the match" },
   { method: "PATCH", segs: ["admin", "matches", null, "players", null, "refund-and-cancel"], why: "refunds money and cancels the player (moves money)" },
 ];

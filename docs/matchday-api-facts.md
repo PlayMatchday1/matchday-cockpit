@@ -316,14 +316,29 @@ Full inventory: docs/retool-prod-inventory.md. Key points that touch this file:
   on the parsed path SHAPE — method + exact segment list, `{id}` = one wildcard —
   never a substring; trailing slash and query string are stripped). Refused on BOTH
   environments before any network call (throws `DeniedEndpointError`):
-    - `PATCH  /admin/matches/{id}/cancel` — cancels the match and notifies every
-      signed-up player (the only player-facing notification).
     - `DELETE /admin/matches/{id}` — permanently destroys the match.
     - `PATCH  /admin/matches/{id}/players/{playerId}/refund-and-cancel` — moves
       money (refund) and cancels the player.
   A near-miss like `/admin/matches/{id}/cancel-something-else` is deliberately NOT
   caught, and normal ops (`PUT /admin/matches/{id}`, `DELETE .../players/{pid}`,
   `.../user-matches/{um}/absent`) pass.
+
+- **CANCEL is now BUILT and OFF the deny-list (Phase 23 Step 2 Part C).**
+  `PATCH /admin/matches/{id}/cancel` cancels the match, CREDITS every signed-up
+  player the match value (a wallet CREDIT — no money leaves Stripe, not a card
+  reversal), and TEXTS them. Ryan confirmed the effect; a **read-only audit of the
+  Retool prod export** (`retool-export-prod.json`, gitignored) proved HOW: Retool's
+  Cancel button fires this **single** PATCH and nothing else — the credit and the SMS
+  are SERVER-SIDE effects. Evidence: the export's complete `/admin/...` surface has
+  NO credit/wallet/balance/notify endpoint, and its only external host is the MatchDay
+  API (no Twilio/Stripe/Supabase). So calling `/cancel` alone reproduces Retool
+  exactly; it does NOT cancel-without-crediting. It is reachable ONLY through the
+  dedicated cancel route (`/api/matchday/{env}/matches/{id}/cancel`): GET returns a
+  LIVE credit preview `{ name, count, totalCents, alreadyCancelled }`; POST requires
+  the match NAME typed and re-checked against the live name server-side, fires once
+  (no retry), is `recordWrite`'d WITHOUT any player identity, and reports LANDED /
+  NOT APPLIED from a re-read of `isCancelled` (not the status code). The endpoint is
+  still bolted on production by `PRODUCTION_WRITES_ENABLED` like every other write.
 
 - COPY ENDPOINTS — NOT BUILT, warning for whoever builds them. The three copy
   endpoints have NO idempotency key and fan out server-side:

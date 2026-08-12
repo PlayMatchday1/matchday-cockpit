@@ -44,14 +44,17 @@ async function main() {
 
   console.log("ENDPOINT deny-list — refused on BOTH environments, before any network:");
   for (const [env, base] of Object.entries(H)) {
-    throws(`[${env}] PATCH /admin/matches/{id}/cancel refused`, DeniedEndpointError, () => preflightWrite(env as "staging" | "production", "PATCH", `${base}/admin/matches/17256/cancel`, {}));
     throws(`[${env}] DELETE /admin/matches/{id} refused`, DeniedEndpointError, () => preflightWrite(env as "staging" | "production", "DELETE", `${base}/admin/matches/17256`, undefined));
     throws(`[${env}] PATCH /admin/matches/{id}/players/{pid}/refund-and-cancel refused`, DeniedEndpointError, () => preflightWrite(env as "staging" | "production", "PATCH", `${base}/admin/matches/17256/players/5/refund-and-cancel`, {}));
   }
-  console.log("endpoint deny — robust to trailing slash + query string:");
-  throws("cancel with trailing slash refused", DeniedEndpointError, () => assertAllowedEndpoint("PATCH", `${H.production}/admin/matches/17256/cancel/`));
-  throws("cancel with query string refused", DeniedEndpointError, () => assertAllowedEndpoint("PATCH", `${H.production}/admin/matches/17256/cancel?foo=1`));
+  console.log("endpoint deny — robust to trailing slash + query string (anchored on refund-and-cancel, still denied):");
+  throws("refund-and-cancel with trailing slash refused", DeniedEndpointError, () => assertAllowedEndpoint("PATCH", `${H.production}/admin/matches/17256/players/5/refund-and-cancel/`));
+  throws("refund-and-cancel with query string refused", DeniedEndpointError, () => assertAllowedEndpoint("PATCH", `${H.production}/admin/matches/17256/players/5/refund-and-cancel?foo=1`));
   console.log("endpoint deny — NEAR-MISS discrimination (must NOT be caught):");
+  // Phase 23 Step 2 Part C: match CANCEL was REMOVED from the deny-list — it is now reachable only
+  // through the dedicated cancel route (typed match-name confirmation + live credit count). It must
+  // pass the endpoint check on both envs. (Production still stops at the prod bolt separately.)
+  noThrow("PATCH /admin/matches/{id}/cancel ALLOWED by the endpoint check (deny entry removed, Part C)", () => assertAllowedEndpoint("PATCH", `${H.production}/admin/matches/17256/cancel`));
   noThrow("PATCH /admin/matches/{id}/cancel-something-else allowed", () => assertAllowedEndpoint("PATCH", `${H.production}/admin/matches/17256/cancel-something-else`));
   noThrow("PUT /admin/matches/{id} allowed (the name write)", () => assertAllowedEndpoint("PUT", `${H.production}/admin/matches/17256`));
   noThrow("DELETE /admin/matches/{id}/players/{pid} allowed (remove player)", () => assertAllowedEndpoint("DELETE", `${H.production}/admin/matches/17256/players/5`));

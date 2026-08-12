@@ -42,6 +42,7 @@ let puts = [];
 // the "report from teams[].length, not the response status" rule can be tested.
 let rosterPosts = [];
 let rosterGets = 0;
+let cancelPosts = []; // POSTs to the cancel route (Part C)
 const rosterStates = {};
 const twoTeamRoster = () => ({
   name: "PRUMC - Tuesday",
@@ -94,6 +95,21 @@ async function routes(ctx) {
       const b = JSON.parse(route.request().postData() || "{}");
       puts.push(b.changes || {});
       return json({ ok: true, outcome: "landed", logRecorded: true, match: { ...matchFor(id), ...(b.changes || {}) } });
+    }
+    return json({});
+  });
+  // cancel route (Part C) — GET is the LIVE preview; POST executes with the typed name. Registered
+  // before the roster/matches routes; the matches regex is $-anchored on the id so /cancel never hits it.
+  await ctx.route(/\/api\/matchday\/production\/matches\/\d+\/cancel(\?.*)?$/, async (route) => {
+    const method = route.request().method();
+    const json = (o, status = 200) => route.fulfill({ status, contentType: "application/json", body: JSON.stringify(o) });
+    if (method === "GET") return json({ name: "PRUMC - Tuesday", count: 9, perPlayerCents: 1000, totalCents: 9000, alreadyCancelled: false });
+    if (method === "POST") {
+      const b = JSON.parse(route.request().postData() || "{}");
+      cancelPosts.push(b);
+      if (b.confirmName !== "PRUMC - Tuesday") return json({ error: "The typed name doesn't match.", nameMismatch: true }, 400);
+      // report LANDED from match state (isCancelled), not the status code
+      return json({ ok: true, landed: true, status: "LANDED", count: 9, totalCents: 9000, name: "PRUMC - Tuesday" });
     }
     return json({});
   });
@@ -394,6 +410,34 @@ async function main() {
     (named && sent === 0) ? ok("gate10: 4→2 confirmation names the 2 affected players; dismissing sends nothing")
       : bad("gate10", `dlg=${JSON.stringify(dlg.msg)} shapePosts=${sent}`); }
   dlg.accept = true;
+
+  // ══════════════ Part C · CANCEL — live numbers, typed-name gate, one request, credit not refund ══════════════
+  delete rosterStates["17494"]; cancelPosts = [];
+  await page.goto(`${BASE}/match-ops/match-panel/17494`, { waitUntil: "domcontentloaded" });
+  await page.waitForSelector('[data-testid="mp-danger"]', { timeout: 15000 });
+  await page.click('[data-testid="mp-cancel-open"]');
+  await page.waitForSelector('[data-testid="mp-cancel-confirm"]', { timeout: 6000 });
+  { const line = await page.$eval('[data-testid="mp-cancel-line"]', (e) => e.textContent);
+    eq("cancelC1: the confirmation shows the LIVE count and amount (9 players, $90.00)", /9 players/.test(line) && /\$90\.00/.test(line), true); }
+  { const zone = (await page.$eval('[data-testid="mp-danger"]', (e) => e.textContent)).toLowerCase();
+    eq("cancelC2: the cancel copy says 'credit' and never 'refund'", { credit: zone.includes("credit"), refund: zone.includes("refund") }, { credit: true, refund: false }); }
+  // wrong typed name → button stays disabled
+  await page.fill('[data-testid="mp-cancel-name"]', "not the name");
+  eq("cancelC3: a wrong typed match name keeps the Cancel button disabled", await page.$eval('[data-testid="mp-cancel-do"]', (e) => e.disabled), true);
+  // abort sends nothing
+  cancelPosts = [];
+  await page.click('[data-testid="mp-cancel-abort"]');
+  await page.waitForTimeout(150);
+  eq("cancelC4: keeping the match (abort) sends no request", cancelPosts.length, 0);
+  // correct name → exactly one request; verdict from match state
+  await page.click('[data-testid="mp-cancel-open"]');
+  await page.waitForSelector('[data-testid="mp-cancel-confirm"]', { timeout: 6000 });
+  await page.fill('[data-testid="mp-cancel-name"]', "PRUMC - Tuesday");
+  cancelPosts = [];
+  await page.click('[data-testid="mp-cancel-do"]');
+  await page.waitForSelector('[data-testid="mp-cancel-result"]', { timeout: 6000 });
+  { const result = await page.$eval('[data-testid="mp-cancel-result"]', (e) => e.textContent);
+    eq("cancelC5: one correct confirm sends exactly one cancel request and reports LANDED from match state", { posts: cancelPosts.length, name: cancelPosts[0]?.confirmName, landed: /LANDED/.test(result) }, { posts: 1, name: "PRUMC - Tuesday", landed: true }); }
 
   // ── layout at 1600 and 390 — SEPARATE assertions (the TEAMS section is now VISIBLE; assert it fits) ──
   delete rosterStates["17494"];
