@@ -38,6 +38,10 @@ function pickMatch(m: Record<string, unknown>) {
   // the same number gameday/the drawer use. NOT players.length (which includes cancelled
   // user-match rows and reads as over-capacity). Editor headlines this against the cap.
   out.occupancy = (m._count as Record<string, unknown> | undefined)?.players ?? null;
+  // The FAKE subset of the occupancy (Phase 23) — so the panel can derive real players
+  // (= occupancy − fakeOccupancy) for the fakeSpotLeft ceiling math. _count is authoritative;
+  // players.length is not (it includes cancelled rows).
+  out.fakeOccupancy = (m._count as Record<string, unknown> | undefined)?.fakePlayers ?? 0;
   return out;
 }
 
