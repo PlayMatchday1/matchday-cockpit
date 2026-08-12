@@ -138,6 +138,8 @@ async function routes(ctx) {
           return json({ ok: true, outcome: "landed", result: {} });
         }
         case "add": { const um = st._um--; st.players.push({ umId: um, playerId: op.playerId, team: op.team, playerNumber: op.playerNumber, name: "New Player", fake: false }); return json({ ok: true, outcome: "landed", result: { id: um } }); }
+        case "add-fake": { const um = st._um--; st.players.push({ umId: um, playerId: null, team: op.team, playerNumber: op.playerNumber, name: "Fake player", fake: true }); return json({ ok: true, outcome: "landed", result: { id: um } }); }
+        case "bulk-fake": { for (let k = 0; k < (op.totalFakes || 0); k++) { const um = st._um--; st.players.push({ umId: um, playerId: null, team: 1, playerNumber: 90 + k, name: "Fake player", fake: true }); } return json({ ok: true, outcome: "landed", result: {} }); }
         case "move": { const p = st.players.find((x) => x.umId === op.userMatchId); if (p) { p.team = op.team; p.playerNumber = op.playerNumber; } return json({ ok: true, outcome: "landed", result: {} }); }
         case "remove": { st.players = st.players.filter((x) => x.umId !== op.userMatchId); return json({ ok: true, outcome: "landed", result: {} }); }
         // MISLEADING outcome on purpose: teams[].length (the re-read) is the only honest signal.
@@ -374,6 +376,27 @@ async function main() {
   await page.click('[data-testid="mp-remove-9003"]');
   await page.waitForTimeout(400);
   eq("gate7c: remove fires exactly one roster request, zero to the match endpoint", { remove: rosterPosts.filter((o) => o.kind === "remove").length, puts: puts.length }, { remove: 1, puts: 0 });
+
+  // RESTORED capability (Part b): ADD FAKE — the manual fake control the standalone editor had.
+  delete rosterStates["17494"]; rosterPosts = []; puts = [];
+  await page.goto(`${BASE}/match-ops/match-panel/17494`, { waitUntil: "domcontentloaded" });
+  await page.waitForSelector('[data-testid="mp-team"]', { timeout: 15000 });
+  await page.click('[data-testid="mp-add-fake"]');
+  await page.waitForSelector('[data-testid="mp-add-to-1"]', { timeout: 4000 });
+  await page.click('[data-testid="mp-add-to-1"]');
+  await page.waitForFunction(() => [...document.querySelectorAll('[data-testid="mp-player"]')].some((e) => e.getAttribute("data-fake") === "1" && !!e.querySelector('[data-testid="mp-fake-tag"]') && /Fake player/.test(e.textContent || "")), null, { timeout: 6000 });
+  eq("gate7f: add-fake fires exactly one add-fake request (no real add, none to the match endpoint) and the new player is marked FAKE",
+    { fake: rosterPosts.filter((o) => o.kind === "add-fake").length, realAdd: rosterPosts.filter((o) => o.kind === "add").length, puts: puts.length }, { fake: 1, realAdd: 0, puts: 0 });
+
+  // RESTORED capability (Part b): BULK FAKE — one call carrying totalFakes.
+  delete rosterStates["17494"]; rosterPosts = []; puts = [];
+  await page.goto(`${BASE}/match-ops/match-panel/17494`, { waitUntil: "domcontentloaded" });
+  await page.waitForSelector('[data-testid="mp-team"]', { timeout: 15000 });
+  await page.fill('[data-testid="mp-bulk-fakes"]', "3");
+  await page.click('[data-testid="mp-add-fakes-bulk"]');
+  await page.waitForTimeout(400);
+  eq("gate7g: bulk-fake sends exactly one bulk-fake request carrying totalFakes, zero to the match endpoint",
+    { bulk: rosterPosts.filter((o) => o.kind === "bulk-fake").length, total: rosterPosts.find((o) => o.kind === "bulk-fake")?.totalFakes, puts: puts.length }, { bulk: 1, total: 3, puts: 0 });
 
   // RESTORED from verify-roster (four-state read-back): a 2xx the server did NOT apply reads as NOT
   // APPLIED on this immediate surface, never a blind success.

@@ -105,7 +105,8 @@ export default function MatchPanel({ matchId, env = "production", onDirtyChange 
   const [countResult, setCountResult] = useState<string | null>(null); // LANDED / NOT APPLIED for team count
   const [q, setQ] = useState("");
   const [results, setResults] = useState<{ id: number; name: string }[]>([]);
-  const [pendingAdd, setPendingAdd] = useState<{ id: number; name: string } | null>(null);
+  const [pendingAdd, setPendingAdd] = useState<{ id: number | null; name: string; fake?: boolean } | null>(null);
+  const [bulkFakes, setBulkFakes] = useState("");
   // ── CANCEL (Part C) — the rarest, heaviest, irreversible action. Reaches everyone at once and
   // cannot be undone, so the friction is deliberately the opposite of the chat composer: live numbers
   // read at confirm time + the match NAME typed, not a yes/no.
@@ -222,10 +223,23 @@ export default function MatchPanel({ matchId, env = "production", onDirtyChange 
 
   const addPlayer = async (teamNumber: number) => {
     if (!roster || !pendingAdd || opBusy) return;
-    const nm = pendingAdd.name;
+    const isFake = pendingAdd.fake === true;
+    const nm = isFake ? "fake player" : pendingAdd.name;
     const n = firstOpenSlot(teamNumber);
-    const r = await rosterPost({ kind: "add", playerId: pendingAdd.id, team: teamNumber, playerNumber: n }, `Add ${nm}`);
+    // fakes are their own endpoint (add-fake), never the real-player add — they carry no playerId.
+    const op = isFake
+      ? { kind: "add-fake", team: teamNumber, playerNumber: n }
+      : { kind: "add", playerId: pendingAdd.id, team: teamNumber, playerNumber: n };
+    const r = await rosterPost(op, isFake ? "Add fake player" : `Add ${nm}`);
     if (await afterOp(r, `${nm} added to team ${teamNumber} — saved (re-read confirmed).`, `added ${nm} to team ${teamNumber}`)) { setPendingAdd(null); setQ(""); setResults([]); }
+  };
+  // bulk fakes — one call sets the match's fake count (kind:"bulk-fake" → /batch/fake-players {totalFakes}).
+  const addFakesBulk = async () => {
+    if (!roster || opBusy) return;
+    const n = Number(bulkFakes);
+    if (!Number.isFinite(n) || n <= 0) return;
+    const r = await rosterPost({ kind: "bulk-fake", totalFakes: n }, `Add ${n} fake players`);
+    if (await afterOp(r, `${n} fake player${n === 1 ? "" : "s"} added — saved (re-read confirmed).`, `added ${n} fake players`)) setBulkFakes("");
   };
   const movePlayer = async (p: PlayerRow, toTeam: number) => {
     if (!roster || opBusy) return;
@@ -602,13 +616,20 @@ export default function MatchPanel({ matchId, env = "production", onDirtyChange 
 
               {/* ADD — search id/email, then place onto a team; fires immediately */}
               <div className="mp-addrow">
-                <input data-testid="mp-add-search" className="mp-addsearch" value={q} placeholder="Add a player — search name or email" onChange={(e) => setQ(e.target.value)} />
+                <div className="mp-addtop">
+                  <input data-testid="mp-add-search" className="mp-addsearch" value={q} placeholder="Add a player — search name or email" onChange={(e) => setQ(e.target.value)} />
+                  <button type="button" className="mp-mini" data-testid="mp-add-fake" disabled={!!opBusy} onClick={() => { setPendingAdd({ id: null, name: "Fake player", fake: true }); setQ(""); setResults([]); }}>+ Fake</button>
+                  <span className="mp-bulk">
+                    <input data-testid="mp-bulk-fakes" className="mp-bulkin" inputMode="numeric" placeholder="N" value={bulkFakes} onChange={(e) => setBulkFakes(e.target.value.replace(/[^0-9]/g, ""))} aria-label="Number of fake players to add in bulk" />
+                    <button type="button" className="mp-mini" data-testid="mp-add-fakes-bulk" disabled={!!opBusy || !(Number(bulkFakes) > 0)} onClick={() => void addFakesBulk()}>Add fakes</button>
+                  </span>
+                </div>
                 {results.length > 0 && (
                   <div className="mp-addres">{results.map((r) => (
                     <button key={r.id} type="button" data-testid="mp-add-result" onClick={() => { setPendingAdd({ id: r.id, name: r.name }); setQ(""); setResults([]); }}>{r.name}</button>
                   ))}</div>
                 )}
-                {pendingAdd && <span className="mp-addpending" data-testid="mp-add-pending">Adding <b>{pendingAdd.name}</b> — pick a team →<button type="button" className="mp-x" onClick={() => setPendingAdd(null)}>cancel</button></span>}
+                {pendingAdd && <span className="mp-addpending" data-testid="mp-add-pending">Adding <b>{pendingAdd.fake ? "a FAKE player" : pendingAdd.name}</b> — pick a team →<button type="button" className="mp-x" onClick={() => setPendingAdd(null)}>cancel</button></span>}
               </div>
 
               {/* the teams themselves — rename + roster. No price control, no lock control (not asked for). */}
@@ -630,7 +651,7 @@ export default function MatchPanel({ matchId, env = "production", onDirtyChange 
                         <button type="button" data-testid={`mp-rename-${t.teamNumber}`} className="mp-mini" disabled={!canRename || !!opBusy}
                           onClick={() => void renameTeam(t.id, t.teamNumber)}>Rename</button>
                       </div>
-                      {pendingAdd && <button type="button" data-testid={`mp-add-to-${t.teamNumber}`} className="mp-addto" disabled={!!opBusy} onClick={() => void addPlayer(t.teamNumber)}>+ Add {pendingAdd.name} here</button>}
+                      {pendingAdd && <button type="button" data-testid={`mp-add-to-${t.teamNumber}`} className="mp-addto" disabled={!!opBusy} onClick={() => void addPlayer(t.teamNumber)}>+ Add {pendingAdd.fake ? "fake player" : pendingAdd.name} here</button>}
                       <ul className="mp-players">
                         {members.length === 0 && <li className="mp-empty">no players</li>}
                         {members.map((p) => (
@@ -829,7 +850,10 @@ const CSS = `
 .mp-cbtn:disabled:not(.on){opacity:.55;cursor:not-allowed}
 .mp-teams .mp-note.info{margin:10px 13px 0}
 .mp-addrow{position:relative;padding:10px 13px 2px}
-.mp-addsearch{width:100%;border:1px solid #d9c3bf;border-radius:9px;padding:9px 11px;font:inherit;font-size:13.5px;background:#fff;min-height:40px}
+.mp-addtop{display:flex;gap:7px;align-items:center}
+.mp-addsearch{flex:1;min-width:0;border:1px solid #d9c3bf;border-radius:9px;padding:9px 11px;font:inherit;font-size:13.5px;background:#fff;min-height:40px}
+.mp-bulk{display:inline-flex;gap:5px;align-items:center;flex:0 0 auto}
+.mp-bulkin{width:48px;text-align:center;border:1px solid #d9c3bf;border-radius:8px;padding:7px 4px;font:inherit;font-size:13px;background:#fff;min-height:36px}
 .mp-addres{position:absolute;left:13px;right:13px;top:52px;z-index:20;background:#fff;border:1px solid #d9c3bf;border-radius:9px;box-shadow:0 8px 22px rgba(120,30,20,.16);overflow:hidden}
 .mp-addres button{display:block;width:100%;text-align:left;border:0;background:#fff;padding:9px 12px;font:inherit;font-size:13px;border-bottom:1px solid #f1e4e1;cursor:pointer}
 .mp-addres button:last-child{border-bottom:0}.mp-addres button:hover{background:#fbeeec}
