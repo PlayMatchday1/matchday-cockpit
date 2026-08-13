@@ -121,6 +121,38 @@ for (const r of ["list", "detail/[id]", "fields", "matches", "check"]) {
   is(`promos/${r} read no longer gates on canManagePromos`, /canManagePromos/.test(s), false);
 }
 
+// ── /api/veo/* — CLOSING A CENSUS BLIND SPOT ──
+// The census pinned the match-ops read gate exactly and counted the admin gate, but it never
+// enumerated the veo routes. Adding a GET to /api/veo/intent therefore changed an auth surface
+// without the gate noticing — a census with a hole is worse than a known gap, so the veo surface
+// is now pinned by name. Each entry states the gate it sits behind; changing one must edit this.
+{
+  const veoDir = "src/app/api/veo";
+  const veoRoutes: string[] = [];
+  (function walk(d: string) { for (const e of readdirSync(d)) { const q = join(d, e); if (statSync(q).isDirectory()) walk(q); else if (e === "route.ts") veoRoutes.push(q); } })(veoDir);
+  const gateOf = (f: string) => {
+    const src = readFileSync(f, "utf8");
+    if (/authenticateAdmin\b/.test(src)) return "admin";
+    if (/authenticateCrm\b/.test(src)) return "crm";
+    if (/VEO_INBOUND_SECRET/.test(src)) return "shared-secret";
+    return "NONE";
+  };
+  // sorted: the walk order is directory order, which is not a fact worth asserting
+  const map = Object.fromEntries(veoRoutes.map((f) => [f.replace("src/app/api/", ""), gateOf(f)] as const).sort((a, b) => a[0].localeCompare(b[0])));
+  is("every /api/veo route is pinned to a named gate (a NONE here is an unauthenticated route)", map, {
+    "veo/[id]/route.ts": "crm",              // resolve a queued review item
+    "veo/cameras/route.ts": "crm",
+    "veo/codes/[id]/route.ts": "admin",
+    "veo/codes/route.ts": "admin",
+    "veo/inbound/route.ts": "shared-secret", // machine-to-machine from the Gmail forwarder, no session
+    "veo/intent/route.ts": "crm",            // GET (read one match's intent) + POST (toggle it)
+    "veo/route.ts": "crm",
+  });
+  // and the one unauthenticated route really does compare its secret rather than merely mention it
+  { const inbound = readFileSync("src/app/api/veo/inbound/route.ts", "utf8");
+    is("veo/inbound compares its shared secret in constant time", /timingSafeEqual|constantTime/.test(inbound), true); }
+}
+
 // the third gate in the system (authenticateCrm) also denies a no-flags account — so the compositional
 // claim "no-flags is denied on every gated route" holds for the CRM surface too. Asserted at source.
 { const s = readFileSync("src/lib/crmAuth.ts", "utf8");
