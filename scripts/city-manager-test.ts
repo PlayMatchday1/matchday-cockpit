@@ -44,6 +44,26 @@ console.log("gate1 — a city manager reaches ONE route and is refused everywher
     cityManagerGate({ id: "a", is_admin: true }, "a@x.com").ok, false);
 }
 
+// ── the ADMIN BOUNCE — the page is narrowed, the GATE is not widened ──
+console.log("\nadmins are bounced from the page, and the gate keeps ONE meaning:");
+{
+  // Strip comments first: the gate DISCUSSES is_admin (explaining why it deliberately does not
+  // honour it), and an assertion that cannot tell prose from a branch would either fail on a
+  // comment or have to be weakened until it proves nothing.
+  const stripComments = (src: string) => src.replace(/\/\*[\s\S]*?\*\//g, "").split("\n").filter((l) => !l.trim().startsWith("//")).join("\n");
+  const GATE = stripComments(readFileSync("src/lib/cityManagerAuth.ts", "utf8"));
+  const PG = readFileSync("src/app/(internal)/city/manager-pay/page.tsx", "utf8");
+  // the gate must NOT carry an is_admin exception — every future assertion would have to carry it too
+  is("  the city gate has NO 'or admin' BRANCH (comments stripped)", /is_admin/.test(GATE), false);
+  is("  an admin row is still refused by the gate", cityManagerGate({ id: "a", is_admin: true, can_access_matchops: true }, "a@x.com").ok, false);
+  // the PAGE is what narrowed: allowed is the tier alone
+  is("  the page admits the tier ALONE (no || is_admin)", /const allowed = isCityManager\(appUser\);/.test(PG), true);
+  is("  an admin is sent to the admin Manager Pay screen, not a generic landing", /ADMIN_MANAGER_PAY = "\/match-ops\/manager-pay"/.test(PG), true);
+  is("  and is told why, in one line", /that page covers every city/.test(PG), true);
+  // the route is unchanged: it never admitted an admin either
+  is("  the ROUTE was not widened to admit admins", /is_admin/.test(stripComments(ROUTE)), false);
+}
+
 // ── GATE 9 — SERVER-SIDE SCOPE. The assertion Ryan cares most about. ──
 console.log("\ngate9 — a request for a match in ANOTHER city is REFUSED (not merely absent):");
 is("  another city is a 403 with a reason", assertCityScope("DFW", "ATX"), { ok: false, status: 403, error: "That match is not in your city." });

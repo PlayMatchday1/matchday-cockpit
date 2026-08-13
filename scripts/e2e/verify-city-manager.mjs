@@ -144,6 +144,19 @@ async function main() {
       { overflow: 0, unclipped: 0, weekCols: 1, mobileShows: true });
 
     await ctx.close();
+
+    // ── the ADMIN BOUNCE — same login, app_users NOT patched with the tier ──
+    // Ryan is is_admin and holds no city tier, so the page must send him to the admin Manager Pay
+    // screen rather than rendering a page whose own API would 403 him.
+    { const ctx2 = await browser.newContext({ viewport: { width: 1600, height: 1000 }, storageState });
+      await ctx2.route("**/api/manager-pay/city-week**", (r) =>
+        r.fulfill({ status: 403, contentType: "application/json", body: JSON.stringify({ error: "City manager access required." }) }));
+      const p2 = await ctx2.newPage();
+      await p2.goto(PAGE, { waitUntil: "domcontentloaded" });
+      await p2.waitForFunction(() => location.pathname !== "/city/manager-pay", null, { timeout: 20000 }).catch(() => {});
+      eq("admin bounce: an admin without the tier is redirected to the admin Manager Pay screen",
+        new URL(p2.url()).pathname, "/match-ops/manager-pay");
+      await ctx2.close(); }
   } finally {
     await browser.close();
   }
