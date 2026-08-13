@@ -57,6 +57,14 @@ async function routes(ctx) {
     return route.fulfill({ status: 200, contentType: "application/json", body: JSON.stringify({ date, env: "production", matches: boardMatch() }) });
   });
   await ctx.route("**/api/veo**", (route) => route.fulfill({ status: 200, contentType: "application/json", body: JSON.stringify({ matches: [] }) }));
+  // camera intent, stateful — the panel reads it on open, writes, then RE-READS to decide the verdict
+  const veoState = { enabled: false };
+  await ctx.route("**/api/veo/intent**", (route) => {
+    const r = route.request();
+    if (r.method() === "POST") { veoState.enabled = JSON.parse(r.postData() || "{}").enabled === true; return route.fulfill({ status: 200, contentType: "application/json", body: JSON.stringify({ ok: true }) }); }
+    return route.fulfill({ status: 200, contentType: "application/json", body: JSON.stringify({ matchApiId: 501, enabled: veoState.enabled, recorded: true }) });
+  });
+
   await ctx.route(/\/api\/matchday\/production\/matches\/\d+(\?.*)?$/, (route) => route.fulfill({ status: 200, contentType: "application/json", body: JSON.stringify({ match: { id: 501, name: "PRUMC Tuesday", type: "REGULAR", managerId: null, secondManagerId: null, fieldId: 1, startDate: "2026-08-12T19:00:00.000Z", endDate: "2026-08-12T20:00:00.000Z", registrationPrice: 1200, additionalSpotPrice: null, guestCount: 0, isFreeMember: false, maxPlayerCount: 20, fakeSpotLeft36h: 0, fakeSpotLeft24h: 0, fakeSpotLeft12h: 0, fakeSpotLeft6h: 0, fakeSpotLeft3h: 0, autoCanceled: false, autoCanceledMinutes: 75, minPlayerCount: 10, isAutoBump: false, maxTeamSize2Team: 20, maxTeamSize4Team: 40, description: "", managerIntro: "", teams: [{ teamNumber: 1 }, { teamNumber: 2 }], occupancy: 0, realOccupancy: 0, cityName: "Atlanta", fieldTitle: "PRUMC" }, fields: [], players: [], managers: [] }) }));
   await ctx.route(/\/api\/matchday\/production\/roster\/\d+(\?.*)?$/, (route) => route.fulfill({ status: 200, contentType: "application/json", body: JSON.stringify({ matchId: 501, name: "PRUMC Tuesday", teams: [{ id: 1, teamNumber: 1, name: "Green", locked: false }, { id: 2, teamNumber: 2, name: "Blue", locked: false }], players: [], shape: { teamN: 2, perTeam: 10 }, maxPlayerCount: 20, occupancy: 0 }) }));
   await ctx.route("**/api/crm/**", (route) => {
@@ -180,6 +188,40 @@ async function main() {
     eq("gate3: the deleted roster route returns 404", resp ? resp.status() : "no-response", 404);
     await ctx.close();
   }
+
+  // ══ CAMERA (Veo) restored into the PANEL ══
+  { const ctx = await browser.newContext({ viewport: { width: 1440, height: 1000 }, storageState });
+    await routes(ctx);
+    const page = await ctx.newPage();
+    await page.goto(GAMEDAY, { waitUntil: "domcontentloaded" });
+    await page.waitForSelector('[data-testid="snap-group-todo"]', { timeout: 20000 });
+    await page.click('[data-testid="snap-row"][data-id="501"]');
+    await page.waitForSelector('[data-testid="gday-panel"]', { timeout: 10000 });
+    await page.waitForSelector('[data-testid="mp-veo"]', { timeout: 10000 });
+    await page.waitForFunction(() => document.querySelector('[data-testid="mp-veo-state"]').textContent.trim() !== "reading…", null, { timeout: 8000 });
+    eq("veo: the toggle lives in the MATCH PANEL and reflects the current state on open (OFF)", {
+      inPanel: await page.$$eval('[data-testid="gday-panel"] [data-testid="mp-veo"]', (e) => e.length),
+      inRow: await page.$$eval('[data-testid="snap-row"] input[type=checkbox]', (e) => e.length),
+      checked: await page.$eval('[data-testid="mp-veo"]', (e) => e.checked),
+      state: await page.$eval('[data-testid="mp-veo-state"]', (e) => e.textContent.trim()),
+    }, { inPanel: 1, inRow: 0, checked: false, state: "OFF" });
+
+    await page.click('[data-testid="mp-veo"]');
+    await page.waitForFunction(() => document.querySelector('[data-testid="mp-veo-result"]'), null, { timeout: 10000 });
+    eq("veo: turning it on re-reads and reports LANDED (a 2xx alone is not proof)", {
+      outcome: await page.$eval('[data-testid="mp-veo-result"]', (e) => e.getAttribute("data-outcome")),
+      state: await page.$eval('[data-testid="mp-veo-state"]', (e) => e.textContent.trim()),
+      checked: await page.$eval('[data-testid="mp-veo"]', (e) => e.checked),
+    }, { outcome: "LANDED", state: "ON", checked: true });
+
+    // the panel and the server agree after a change — reopen and re-read
+    await page.click('[data-testid="gday-panel-close"]'); await page.waitForTimeout(200);
+    await page.click('[data-testid="snap-row"][data-id="501"]');
+    await page.waitForSelector('[data-testid="mp-veo"]', { timeout: 10000 });
+    await page.waitForFunction(() => document.querySelector('[data-testid="mp-veo-state"]').textContent.trim() !== "reading…", null, { timeout: 8000 });
+    eq("veo: reopening the panel shows the CHANGED state, so the control and the record agree",
+      await page.$eval('[data-testid="mp-veo-state"]', (e) => e.textContent.trim()), "ON");
+    await ctx.close(); }
 
   console.log(`\n================ RESULT ================\nAssertions: ${PASS} passed, ${FAIL} failed`);
   if (fails.length) fails.forEach((f) => console.log("   FAILED: " + f));

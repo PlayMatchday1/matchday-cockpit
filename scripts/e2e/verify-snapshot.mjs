@@ -348,8 +348,9 @@ async function main() {
   eq("snapshot renders the non-empty groups in order (empty IN PLAY filtered out)", await page.$$eval('[data-testid="snapshot"] > section', (els) => els.map((e) => e.getAttribute("data-testid"))), ["snap-group-todo", "snap-group-cancelled", "snap-group-finished"]);
   eq("snapshot cancelled row: solid CANCELLED badge, NO vs MIN chip", { badge: !!(await page.$(row(802) + ' [data-testid="snap-cx-badge"]')), noShort: (await page.$(row(802) + ' [data-testid="snap-short"]')) === null }, { badge: true, noShort: true });
   eq("snapshot cancelled time slot reads 'was due'", /was due/i.test(await page.$eval(row(802) + ' .c-time', (e) => e.textContent)), true);
-  // (removed: "BOTH views agree on the group" — Detail is gone; snapG below is asserted directly)
-  eq("snapshot groups every match into the intended band (all states)", Object.keys(snapG).length > 0, true);
+  // (removed: "BOTH views agree on the group" — Detail is gone, so there is no second view to agree
+  //  with. No replacement is needed: "snapshot assigns each state to its group" above already pins
+  //  the INTENDED grouping, which is the assertion that carried the proof.)
 
   activeRaw = MAIN; // restore for the phone section
 

@@ -139,12 +139,12 @@ async function main() {
 
   // ── cross-timezone ordering: the board interleaves by the actual instant ──
   { const order = await tilesIn("todo");
-    eq("still-to-come: 501 (ATL) is ordered before 502 (AUS) despite the later wall clock",
-      order.indexOf(501) >= 0 && order.indexOf(502) > order.indexOf(501), true); }
-  // the cell renders the clock and the zone as adjacent nodes (no space between them), so assert
-  // both parts rather than a joined string
-  { const t = (await page.$eval(row(501) + ' .c-time', (e) => e.textContent)).replace(/\s+/g, " ");
-    eq("the row shows the match's OWN zone (501 = 8:00 PM, EDT)", { clock: t.includes("8:00 PM"), zone: t.includes("EDT") }, { clock: true, zone: true }); }
+    eq("still-to-come: 501 (ATL) ordered before 502 (AUS) despite later wall clock", order.indexOf(501) >= 0 && order.indexOf(501) < order.indexOf(502), true); }
+  // Original body kept: the cell must LEAD with the clock then the zone (startsWith, not includes).
+  // Only the selector moved (tile-when → .c-time); the snapshot cell concatenates the two nodes with
+  // no space, so the comparison strips whitespace on both sides rather than weakening to includes().
+  eq("Atlanta row shows the earlier clock is later wall-time (8:00 PM EDT)",
+    (await page.$eval(row(501) + ' .c-time', (e) => e.textContent)).replace(/\s+/g, "").startsWith("8:00PMEDT"), true);
 
   // ── grouping ──
   eq("group order is todo, in-play, cancelled, finished",
@@ -164,27 +164,45 @@ async function main() {
   }, { cx: null, fin: null });
   await page.click('[data-testid="filter-all"]'); await page.waitForTimeout(150);
 
-  // ── city filter ──
-  { const before = (await page.$$('[data-testid="snap-row"]')).length;
-    await page.click('[data-testid="city-Atlanta"]'); await page.waitForTimeout(200);
-    const after = (await page.$$('[data-testid="snap-row"]')).length;
-    eq("a city chip narrows the board", after > 0 && after < before, true);
-    await page.click('[data-testid="city-all"]'); await page.waitForTimeout(200);
-    eq("All cities restores every row", (await page.$$('[data-testid="snap-row"]')).length, before); }
+  // ── the city filter drives the STATS, not just the grid (original bodies, re-pointed) ──
+  { const before = await page.$eval('[data-testid="filter-all"] .b', (e) => Number(e.textContent));
+    await page.click('[data-testid="city-Atlanta"]'); await page.waitForTimeout(120);
+    const after = await page.$eval('[data-testid="filter-all"] .b', (e) => Number(e.textContent));
+    const tiles = await page.$$eval('[data-testid="snap-row"]', (els) => els.length);
+    eq("selecting a city changes the All count (stats derive from scope)", { before, after, tiles }, { before: 8, after: 1, tiles: 1 });
+    // Atlanta has only the one still-to-come match -> empty groups render NO header.
+    eq("empty groups render no header (Atlanta: only still-to-come)", { todo: !!(await page.$('[data-testid="snap-group-todo"]')), cx: await page.$('[data-testid="snap-group-cancelled"]'), fin: await page.$('[data-testid="snap-group-finished"]') }, { todo: true, cx: null, fin: null });
+    await page.click('[data-testid="city-all"]'); await page.waitForTimeout(120); }
 
   // ── day navigation + the empty state ──
-  await page.click('[data-testid="day-prev"]'); await page.waitForTimeout(400);
-  eq("yesterday: everything is finished, nothing still-to-come", {
-    todo: await page.$('[data-testid="snap-group-todo"]'), fin: !!(await page.$('[data-testid="snap-group-finished"]')),
-  }, { todo: null, fin: true });
+  await page.click('[data-testid="day-prev"]'); await page.waitForSelector('[data-testid="snapshot"]', { timeout: 10000 }); await page.waitForTimeout(200);
+  eq("all-done day: renders groups, and NO empty 'still to come' header", {
+    empty: !!(await page.$('[data-testid="empty"]')), todo: await page.$('[data-testid="snap-group-todo"]'),
+    cx: !!(await page.$('[data-testid="snap-group-cancelled"]')), fin: !!(await page.$('[data-testid="snap-group-finished"]')),
+  }, { empty: false, todo: null, cx: true, fin: true });
   await page.click('[data-testid="day-today"]'); await page.waitForSelector('[data-testid="snap-group-todo"]', { timeout: 10000 }); await page.waitForTimeout(150);
-  eq("Today returns to the live board", !!(await page.$('[data-testid="snap-group-todo"]')), true);
 
-  // ── the match panel opens from a row ──
+  // ── clicking the row opens the IN-PLACE MATCH PANEL (original bodies, re-pointed) ──
   await page.click(row(502));
-  await page.waitForSelector('[data-testid="gday-panel"]', { timeout: 10000 });
-  eq("clicking a row opens the match panel", !!(await page.$('[data-testid="gday-panel"]')), true);
+  await page.waitForSelector('[data-testid="gday-panel"]', { timeout: 8000 });
+  eq("clicking the row opens the in-place match panel", await page.$$eval('[data-testid="gday-panel"]', (e) => e.length), 1);
+  eq("old side-panel markup gone (count 0) and no 'Open full editor' anywhere", await page.evaluate(() => ({
+    drawer: document.querySelectorAll('.mdw,[data-testid="drawer"]').length,
+    fulleditor: document.querySelectorAll('[data-testid="dr-fulleditor"]').length,
+    text: [...document.querySelectorAll("*")].some((e) => e.children.length === 0 && /Open full editor/i.test(e.textContent || "")) ? 1 : 0,
+  })), { drawer: 0, fulleditor: 0, text: 0 });
   await page.click('[data-testid="gday-panel-close"]'); await page.waitForTimeout(200);
+
+  // ── contrast + overflow sweeps (layout-independent; restored, they were never Detail-specific) ──
+  { const c = await contrastIn(page);
+    c.failures.length === 0 ? ok(`contrast: every board node >= 4.5:1 (min ${c.min})`) : bad(`contrast: ${c.failures.length} node(s) < 4.5`, c.failures.slice(0, 5).map((f) => `${f.ratio} "${f.t}" .${f.c}`).join(" | ")); }
+  { const o = await overflow(page); (!o.pageLeak) ? ok("no page-level horizontal overflow at 1600") : bad("overflow", JSON.stringify(o.offenders.slice(0, 3))); }
+
+  // ── the day picker: Today disabled on today (restored) ──
+  eq("Today button disabled while on today", await page.$eval('[data-testid="day-today"]', (b) => b.disabled), true);
+  await page.click('[data-testid="day-next"]'); await page.waitForSelector('[data-testid="snapshot"]'); await page.waitForTimeout(200);
+  eq("Today re-enables on another day", await page.$eval('[data-testid="day-today"]', (b) => b.disabled), false);
+  await page.click('[data-testid="day-today"]'); await page.waitForSelector('[data-testid="snap-group-todo"]'); await page.waitForTimeout(150);
 
   // ══ THE TOGGLE IS GONE ══
   eq("the Snapshot/Detail toggle is absent from the DOM (both the desktop and mobile copies)", {
@@ -249,6 +267,21 @@ async function main() {
     const pill = await box('[data-testid="gameday-env"]'); const fresh = await box('[data-testid="fresh"]');
     const overlaps = !(fresh.r <= pill.l + 1 || fresh.l >= pill.r - 1 || fresh.b <= pill.t + 1 || fresh.t >= pill.b - 1);
     eq("1600: the PRODUCTION — LIVE EDITS badge and the freshness stamp do not overlap", overlaps, false); }
+
+  // ── 390px touch context (RESTORED). Only ONE of the original four assertions here was
+  //    Detail-specific ("tile stats stack to one column"); the other three are layout-independent
+  //    and dropping them left this page with ZERO mobile cover. Bodies are the originals.
+  const pctx = await browser.newContext({ viewport: { width: 390, height: 844 }, isMobile: true, hasTouch: true, storageState });
+  await routes(pctx);
+  const ph = await pctx.newPage();
+  await ph.goto(PAGE, { waitUntil: "domcontentloaded" }); await ph.waitForSelector('[data-testid="snap-group-todo"]'); await ph.waitForTimeout(200);
+  { const o = await overflow(ph); const past = await ph.evaluate(() => { const w = innerWidth;
+      const inScroller = (el) => { let n = el.parentElement; while (n) { const s = getComputedStyle(n); if (s.overflowX === "auto" || s.overflowX === "scroll") return true; n = n.parentElement; } return false; };
+      return [...document.querySelectorAll(".gdo *")].filter((e) => { const r = e.getBoundingClientRect(); const s = getComputedStyle(e); return s.display !== "none" && r.width > 0 && r.right > w + 1 && !inScroller(e); }).map((e) => (e.getAttribute("class") || e.tagName).toString().slice(0, 30)); });
+    (!o.pageLeak && past.length === 0) ? ok("phone: no horizontal scroll (city chips scroll intentionally), nothing past the edge") : bad("phone overflow", `leak=${o.pageLeak} past=${JSON.stringify([...new Set(past)].slice(0, 6))}`); }
+  { const small = await ph.evaluate(() => { const out = []; for (const el of document.querySelectorAll('.gdo button, .gdo [role="switch"], .gdo [role="link"]')) { const r = el.getBoundingClientRect(); const s = getComputedStyle(el); if (s.display === "none" || s.visibility === "hidden" || r.width === 0) continue; if (r.height < 32) out.push({ c: (el.className || "").toString().slice(0, 22), h: Math.round(r.height * 10) / 10 }); } return out; });
+    small.length === 0 ? ok("phone: every control >= 32px tall") : bad(`phone: ${small.length} under 32px`, JSON.stringify(small.slice(0, 6))); }
+  { const c = await contrastIn(ph); c.failures.length === 0 ? ok(`phone contrast: every board node >= 4.5:1 (min ${c.min})`) : bad(`phone contrast: ${c.failures.length} < 4.5`, c.failures.slice(0, 5).map((f) => `${f.ratio} "${f.t}"`).join(" | ")); }
 
   await browser.close();
   console.log(`\n${PASS} passed, ${FAIL} failed`);

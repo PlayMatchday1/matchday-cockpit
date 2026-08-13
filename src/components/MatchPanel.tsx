@@ -115,6 +115,47 @@ export default function MatchPanel({ matchId, env = "production", onDirtyChange 
   const [cancelTyped, setCancelTyped] = useState("");
   const [cancelBusy, setCancelBusy] = useState(false);
   const [cancelResult, setCancelResult] = useState<string | null>(null);
+  // ── CAMERA (Veo) — restored from GamedayBoard (a2fd814) when the Detail card view was deleted.
+  // It lives HERE, not in the snapshot row: the row is dense and a toggle in it is a mis-tap on a
+  // decision surface, whereas the panel already exists to fix what looks wrong on one match.
+  // This is Clubhouse-side intent (match_veo_intent), NOT a MatchDay write.
+  const [veo, setVeo] = useState<boolean | null>(null);      // null until read
+  const [veoBusy, setVeoBusy] = useState(false);
+  const [veoResult, setVeoResult] = useState<string | null>(null); // LANDED / NOT APPLIED / FAILED
+
+  // Read the CURRENT camera intent so the toggle reflects reality on open rather than a default.
+  const loadVeo = useCallback(async () => {
+    const headers = await authHeaders();
+    if (!headers) return;
+    try {
+      const r = await fetch(`/api/veo/intent?matchApiId=${matchId}`, { headers, cache: "no-store" });
+      if (!r.ok) { setVeo(null); return; }
+      const j = await r.json();
+      setVeo(j?.enabled === true);
+    } catch { setVeo(null); }
+  }, [matchId]);
+
+  // WRITE DISCIPLINE, same as everything else: fire once (writes never retry), then RE-READ and
+  // report from what came back — a 2xx is not proof. On failure the toggle returns to what the
+  // server actually says, not to an optimistic guess.
+  const toggleVeo = useCallback(async (next: boolean) => {
+    if (veoBusy) return;
+    setVeoBusy(true); setVeoResult(null);
+    const headers = await authHeaders();
+    if (!headers) { setVeoBusy(false); setVeoResult("FAILED — no session"); return; }
+    try {
+      const res = await fetch(`/api/veo/intent`, { method: "POST", headers, body: JSON.stringify({ matchApiId: Number(matchId), enabled: next }) });
+      if (!res.ok) { setVeoResult(`FAILED — HTTP ${res.status}`); await loadVeo(); return; }
+      const after = await fetch(`/api/veo/intent?matchApiId=${matchId}`, { headers, cache: "no-store" });
+      if (!after.ok) { setVeoResult("UNKNOWN — the write returned 2xx but the re-read failed"); return; }
+      const j = await after.json();
+      setVeo(j?.enabled === true);
+      setVeoResult(j?.enabled === next ? "LANDED" : "NOT APPLIED");
+    } catch (e) {
+      setVeoResult(`FAILED — ${e instanceof Error ? e.message : String(e)}`);
+      await loadVeo();
+    } finally { setVeoBusy(false); }
+  }, [matchId, veoBusy, loadVeo]);
 
   const load = useCallback(async () => {
     setLoadErr(null);
@@ -139,6 +180,7 @@ export default function MatchPanel({ matchId, env = "production", onDirtyChange 
     }
   }, [env, matchId]);
   useEffect(() => { void load(); }, [load]);
+  useEffect(() => { void loadVeo(); }, [loadVeo]);
 
   // ── TEAMS (immediate) — load the roster + teams from the SAME guarded roster route the standalone
   // editor used (Part A absorbs it). Returns the fresh payload so the write-only team-count re-read
@@ -458,6 +500,28 @@ export default function MatchPanel({ matchId, env = "production", onDirtyChange 
           </Section>
 
           {/* WHEN */}
+          {/* CAMERA — Clubhouse-side intent only; this never writes to MatchDay (the 🎥 in the
+              match name stays a manual edit there). Restored here when the Detail card view, which
+              used to carry this toggle, was deleted. */}
+          <Section title="CAMERA">
+            <label className="mp-veo" data-testid="mp-veo-row">
+              <input type="checkbox" data-testid="mp-veo" checked={veo === true} disabled={veo === null || veoBusy}
+                onChange={(e) => void toggleVeo(e.target.checked)} />
+              <span className="mp-veolab">Veo camera on this match</span>
+              <span className="mp-veostate" data-testid="mp-veo-state">
+                {veo === null ? "reading…" : veo ? "ON" : "OFF"}
+              </span>
+            </label>
+            {veoResult && (
+              <p className="mp-veores" data-testid="mp-veo-result" data-outcome={veoResult.split(" ")[0]}>
+                {veoResult === "LANDED" ? "Saved — re-read confirms it."
+                  : veoResult === "NOT APPLIED" ? "NOT APPLIED — the write returned 2xx but the re-read shows it unchanged. Nothing was retried."
+                  : veoResult}
+              </p>
+            )}
+            <p className="mp-hint">Clubhouse only — this does not change the match in MatchDay.</p>
+          </Section>
+
           <Section title="WHEN" dirty={secDirty(["startDate", "endDate"])}>
             <span className="mp-note info">Entered as LOCAL wall-clock in <b>{orig.cityName ?? "the field's city"}</b>. The server derives UTC from the field's timezone — Clubhouse never converts. Date + start move together preserving the match duration.</span>
             <div className="mp-grid">
@@ -772,6 +836,14 @@ const CSS = `
 .mp-meta{display:flex;gap:7px;flex-wrap:wrap;align-items:center;margin-top:6px;font-size:11.5px;color:var(--ink3)}
 .mp-tag{display:inline-flex;border-radius:6px;padding:2px 7px;font-size:10.5px;font-weight:800;border:1px solid var(--line2);background:#eef4f1;color:var(--ink2)}
 .mp-body{overflow:auto;min-height:0;padding:0 0 8px}
+.mp-veo{display:flex;align-items:center;gap:9px;min-height:40px;cursor:pointer}
+.mp-veo input{width:18px;height:18px}
+.mp-veolab{font-size:13px}
+.mp-veostate{margin-left:auto;font-size:10.5px;font-weight:800;letter-spacing:.06em;border:1px solid #C3CDC7;border-radius:6px;padding:2px 7px;color:#41514A}
+.mp-veores{margin:6px 0 0;font-size:11.5px;font-weight:600}
+.mp-veores[data-outcome="LANDED"]{color:#12704a}
+.mp-veores[data-outcome="NOT"]{color:#8a6300}
+.mp-veores[data-outcome="FAILED"],.mp-veores[data-outcome="UNKNOWN"]{color:#a8391a}
 .mp-sec{border-bottom:1px solid var(--line)}
 .mp-sechd{display:flex;align-items:center;gap:10px;width:100%;border:0;background:none;font:inherit;text-align:left;padding:13px 16px;cursor:pointer;min-height:50px}
 .mp-sechd:hover{background:#f7fbf9}
