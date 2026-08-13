@@ -30,8 +30,13 @@ import {
   reviewManagerName,
   hasText,
   needsReply,
+  isNotReviewed,
+  notReviewedRows,
+  groupByMatch,
+  compareByMatchStart,
   type PageFilters,
   type CommentWindow,
+  type MatchGroup,
 } from "@/lib/reviewsDerive";
 
 // Mist palette (mockup CSS vars)
@@ -76,7 +81,12 @@ export default function ReviewsClient() {
   const [mgr, setMgr] = useState("all");
   const [focus, setFocus] = useState<null | "attn" | "stand">(null);
   const [cwin, setCwin] = useState<CommentWindow>("week");
-  const [csev, setCsev] = useState<"all" | "needs" | "open" | "praise">("all");
+  // THREE filters. "Needs a reply" (all <=3★, handled or not) and "Unanswered" (the unresolved
+  // subset) were the same queue counted two ways; the unresolved one is the actionable one and is
+  // now the only one, labelled NOT REVIEWED.
+  const [csev, setCsev] = useState<"all" | "notreviewed" | "praise">("all");
+  // Sort. "recent" is the existing default and STAYS the default until Ryan has used the other.
+  const [csort, setCsort] = useState<"recent" | "match">("recent");
   const [shareOpen, setShareOpen] = useState(false);
   const [stick, setStick] = useState<Set<number>>(new Set());
 
@@ -88,7 +98,7 @@ export default function ReviewsClient() {
   // Any page-level view change is a view change — release the sticky rows.
   useEffect(() => {
     setStick(new Set());
-  }, [month, city, venue, mgr, cwin, csev]);
+  }, [month, city, venue, mgr, cwin, csev, csort]);
 
   const filters: PageFilters = { month, city, venue, mgr };
   const filtering = city !== "all" || venue !== "all" || mgr !== "all";
@@ -118,16 +128,24 @@ export default function ReviewsClient() {
 
   // comment severity rows (open depends on live replies + sticky)
   const openRows = useMemo(
-    () => cm.included.filter((r) => needsReply(r) && !replies.has(r.apiId)),
+    () => notReviewedRows(cm.included, replies),
     [cm.included, replies],
   );
   const shownComments = useMemo(() => {
-    if (csev === "needs") return cm.included.filter(needsReply);
     if (csev === "praise") return cm.included.filter((r) => r.starRating === 5);
-    if (csev === "open")
-      return cm.included.filter((r) => needsReply(r) && (!replies.has(r.apiId) || stick.has(r.apiId)));
+    // NOT REVIEWED: owed a reply and unresolved. `stick` keeps a just-marked row on screen for a
+    // beat so it does not vanish under the operator's cursor.
+    if (csev === "notreviewed")
+      return cm.included.filter((r) => isNotReviewed(r, replies) || (needsReply(r) && stick.has(r.apiId)));
     return cm.included;
   }, [csev, cm.included, replies, stick]);
+
+  // Grouped view — only when the match sort is on. Rows for one match become contiguous AND get a
+  // header, because adjacency alone does not tell you "this match got 4 reviews averaging 1.8".
+  const matchGroups = useMemo(
+    () => (csort === "match" ? groupByMatch([...shownComments].sort(compareByMatchStart)) : null),
+    [csort, shownComments],
+  );
 
   const openN = openRows.length;
   const needsN = cm.needs;
@@ -150,14 +168,14 @@ export default function ReviewsClient() {
   // "open" filter (shows "no longer unanswered" before the row drops out).
   const onReplied = (r: ReviewRow) => {
     if (!replyEnabled || !canReply) return;
-    if (csev === "open") setStick((s) => new Set(s).add(r.apiId));
+    if (csev === "notreviewed") setStick((s) => new Set(s).add(r.apiId));
     void setMark(r.apiId, "replied");
   };
   // ONE click — no note is ever collected (a reason field on a non-event is
   // friction nobody fills in honestly; who + when is the audit trail).
   const onNoReplyNeeded = (r: ReviewRow) => {
     if (!replyEnabled || !canReply) return;
-    if (csev === "open") setStick((s) => new Set(s).add(r.apiId));
+    if (csev === "notreviewed") setStick((s) => new Set(s).add(r.apiId));
     void setMark(r.apiId, "no_reply_needed");
   };
   const onUndoMark = (r: ReviewRow) => {
@@ -170,11 +188,14 @@ export default function ReviewsClient() {
       <style>{`
         .rv-ctab{table-layout:fixed}
         .rv-ctab th:nth-child(1){width:96px}.rv-ctab th:nth-child(2){width:58px}
-        .rv-ctab th:nth-child(4){width:180px}.rv-ctab th:nth-child(5){width:196px}
+        /* PLAYER (4) widened 180->224 so a real gmail address wraps in two lines rather than
+           three. Column 3 (COMMENT) is the unsized one under table-layout:fixed, so it absorbs
+           the difference — the slack comes from COMMENT exactly as intended. */
+        .rv-ctab th:nth-child(4){width:224px}.rv-ctab th:nth-child(5){width:196px}
         .rv-ctab th:nth-child(6){width:124px}.rv-ctab th:nth-child(7){width:222px}
         @media(max-width:1400px){
           .rv-ctab th:nth-child(1){width:86px}.rv-ctab th:nth-child(2){width:52px}
-          .rv-ctab th:nth-child(4){width:130px}.rv-ctab th:nth-child(5){width:150px}
+          .rv-ctab th:nth-child(4){width:172px}.rv-ctab th:nth-child(5){width:150px}
           .rv-ctab th:nth-child(6){width:112px}.rv-ctab th:nth-child(7){width:206px}
         }
         /* REPLIED? — one fixed 86px slot, four states; state changes colour + words,
@@ -424,8 +445,14 @@ export default function ReviewsClient() {
               : openN === 0 ? <>all <b>{needsN}</b> owed a reply have one</>
               : <><b>{openN}</b> of <b>{needsN}</b> owed a reply {openN === 1 ? "is" : "are"} still unanswered</>}
           </div>
-          <Seg dark rvPrefix="sev" value={csev} onChange={(v) => setCsev(v as typeof csev)} className="ml-auto"
-            options={[["all", `All ${cm.all}`], ["needs", `Needs a reply ${cm.needs}`], ["open", `Unanswered ${openN}`], ["praise", `Praise ${cm.praise}`]]} />
+          <div className="ml-auto flex flex-wrap items-center gap-2">
+            {/* THREE filters. The count is derived from the same predicate that builds the rows. */}
+            <Seg dark rvPrefix="sev" value={csev} onChange={(v) => setCsev(v as typeof csev)}
+              options={[["all", `All ${cm.all}`], ["notreviewed", `Not reviewed ${openN}`], ["praise", `Praise ${cm.praise}`]]} />
+            {/* Sort. Newest-first stays the DEFAULT; by-match is opt-in until Ryan has lived with it. */}
+            <Seg dark rvPrefix="sort" value={csort} onChange={(v) => setCsort(v as typeof csort)}
+              options={[["recent", "Newest first"], ["match", "By match"]]} />
+          </div>
         </div>
 
         {!replyEnabled && (
@@ -449,12 +476,25 @@ export default function ReviewsClient() {
               </tr></thead>
             )}
             <tbody>
-              {shownComments.length ? shownComments.map((r) => (
+              {shownComments.length ? (matchGroups
+                // BY MATCH: rows for one match are contiguous AND carry a header stating the match,
+                // how many reviews it drew and their average — five reviews about one late start
+                // read as one problem, not five.
+                ? matchGroups.flatMap((g) => [
+                    <MatchGroupHeader key={`h-${g.key}`} g={g} />,
+                    ...g.rows.map((r) => (
+                      <CommentRow key={r.apiId} r={r} mark={replies.get(r.apiId)} owed={needsReply(r)}
+                        enabled={replyEnabled} canTick={canReply} noReplyNeededEnabled={noReplyNeededEnabled}
+                        leaving={csev === "notreviewed" && replies.has(r.apiId) && stick.has(r.apiId)}
+                        onReplied={() => onReplied(r)} onNoReplyNeeded={() => onNoReplyNeeded(r)} onUndo={() => onUndoMark(r)} />
+                    )),
+                  ])
+                : shownComments.map((r) => (
                 <CommentRow key={r.apiId} r={r} mark={replies.get(r.apiId)} owed={needsReply(r)}
                   enabled={replyEnabled} canTick={canReply} noReplyNeededEnabled={noReplyNeededEnabled}
-                  leaving={csev === "open" && replies.has(r.apiId) && stick.has(r.apiId)}
+                  leaving={csev === "notreviewed" && replies.has(r.apiId) && stick.has(r.apiId)}
                   onReplied={() => onReplied(r)} onNoReplyNeeded={() => onNoReplyNeeded(r)} onUndo={() => onUndoMark(r)} />
-              )) : (
+              ))) : (
                 <tr><Td colSpan={7} className="p-4 text-[11.5px]" style={{ color: C.muted }}>
                   Nothing to read in {cm.window.label} for this selection{csev !== "all" ? ` under the “${SEV_LABEL[csev]}” filter` : ""}. Widen the window or clear a filter.
                 </Td></tr>
@@ -477,7 +517,7 @@ export default function ReviewsClient() {
   );
 }
 
-const SEV_LABEL: Record<string, string> = { all: "All", needs: "Needs a reply", open: "Unanswered", praise: "Praise" };
+const SEV_LABEL: Record<string, string> = { all: "All", notreviewed: "Not reviewed", praise: "Praise" };
 
 // ── small components ──
 function Field({ label, children }: { label: string; children: React.ReactNode }) {
@@ -588,8 +628,13 @@ function TrailingWeeks({ wk }: { wk: ReturnType<typeof deriveWeeks> }) {
         </ChartCol>
       </div>
 
-      {/* numbers reachable without colour or pointer */}
-      <table className="sr-only">
+      {/* numbers reachable without colour or pointer.
+          sr-only goes on a WRAPPER, not on the <table>: an auto-layout table treats sr-only's
+          width:1px as a floor and expands to its content anyway (this one measured 477px), so it
+          escaped its own clip and pushed the PAGE into horizontal overflow at 390. A block wrapper
+          collapses properly and clips the table inside it. */}
+      <div className="sr-only">
+      <table>
         <caption>Trailing eight weeks — average rating and review volume by week</caption>
         <thead><tr><th>Week of</th><th>Average rating</th><th>Reviews</th></tr></thead>
         <tbody>
@@ -602,6 +647,7 @@ function TrailingWeeks({ wk }: { wk: ReturnType<typeof deriveWeeks> }) {
           ))}
         </tbody>
       </table>
+      </div>
 
       {/* caption */}
       <div className="mt-3 border-t border-dashed pt-2 text-[11px]" style={{ borderColor: C.hair, color: C.muted }}>
@@ -749,6 +795,38 @@ function Td({ children, right, colSpan, className, style }: { children: React.Re
 //   owed (≤3★), open  → due (amber) — the ONLY filled button in the column
 //   not owed, open    → notreq (white) — praise, nothing to action
 // "No reply needed" resolves in ONE click: no prompt, no note, no dialog.
+// The break row for the by-match sort. This is what makes the grouping usable: it states the
+// match, when and where, who managed it, how many reviews it drew and their average — before you
+// read a single comment.
+function MatchGroupHeader({ g }: { g: MatchGroup }) {
+  const avg = g.avgRating;
+  const tone = avg <= 2.5 ? { bg: C.critBg, line: C.critLine, ink: C.critInk }
+    : avg <= 3.5 ? { bg: C.warnBg, line: C.warnLine, ink: C.warnInk }
+    : { bg: C.mint, line: "#bfe4cf", ink: C.ok };
+  return (
+    <tr data-testid="match-group-header" data-key={g.key} data-count={g.count}>
+      <Td colSpan={7} className="px-4 py-2" style={{ background: C.railB, borderTop: `1px solid ${C.line}` }}>
+        <div className="flex flex-wrap items-baseline gap-x-2.5 gap-y-1">
+          <span className="text-[12.5px] font-[800]" style={{ color: C.forestDeep, overflowWrap: "anywhere" }}>{g.fieldTitle || "Unnamed field"}</span>
+          <span className="text-[11.5px]" style={{ color: C.muted }}>
+            {/* A match with no start time says so, rather than rendering a blank. These sort last. */}
+            {g.startDate ? matchDateLabel(g.startDate) : "no start time on record"}
+          </span>
+          <span className="text-[11.5px]" style={{ color: C.muted }}>· {g.city}</span>
+          <span className="text-[11.5px]" style={{ color: C.muted }}>· {g.manager ?? "no manager"}</span>
+          <span className="ml-auto flex flex-wrap items-center gap-1.5">
+            <span data-testid="match-group-count" className="rounded-full border px-2 py-px text-[11px] font-bold" style={{ background: C.chipBg, borderColor: C.chipLine, color: C.forest }}>
+              {g.count} review{g.count === 1 ? "" : "s"}
+            </span>
+            <span className="rounded-full border px-2 py-px text-[11px] font-bold" style={{ background: tone.bg, borderColor: tone.line, color: tone.ink }}>
+              avg {avg.toFixed(1)}★
+            </span>
+          </span>
+        </div>
+      </Td>
+    </tr>
+  );
+}
 function CommentRow({ r, mark, owed, enabled, canTick, noReplyNeededEnabled, leaving, onReplied, onNoReplyNeeded, onUndo }: {
   r: ReviewRow; mark: ReplyMark | undefined; owed: boolean; enabled: boolean; canTick: boolean; noReplyNeededEnabled: boolean; leaving: boolean; onReplied: () => void; onNoReplyNeeded: () => void; onUndo: () => void;
 }) {
@@ -772,7 +850,9 @@ function CommentRow({ r, mark, owed, enabled, canTick, noReplyNeededEnabled, lea
       </Td>
       <Td>
         <div className="text-[12.5px] font-bold" style={{ color: C.forestDeep }}>{r.userFirstName || r.userLastName ? `${r.userFirstName ?? ""} ${r.userLastName ?? ""}`.trim() : "—"}</div>
-        {r.userEmail && <a href={`mailto:${r.userEmail}`} title={r.userEmail} className="block max-w-full overflow-hidden text-ellipsis whitespace-nowrap py-0.5 text-[11.5px]" style={{ color: C.ok }}>{r.userEmail}</a>}
+        {/* The email is the one thing an operator acts on, so it is readable and selectable AT REST:
+            it WRAPS to as many lines as it needs. No ellipsis, no title-only reveal. */}
+        {r.userEmail && <a href={`mailto:${r.userEmail}`} data-testid="review-email" className="block max-w-full py-0.5 text-[11.5px] leading-[1.35]" style={{ color: C.ok, overflowWrap: "anywhere", wordBreak: "break-word" }}>{r.userEmail}</a>}
       </Td>
       <Td><div className="text-[12.5px] font-semibold">{r.fieldTitle}</div><div className="mt-0.5 text-[11.5px]" style={{ color: C.muted }}>{shortDate(r.startDate)} · {r.city}</div></Td>
       <Td>{r.managerFirstName || r.managerLastName ? <div className="text-[12.5px] font-bold" style={{ color: C.forestDeep }}>{reviewManagerName(r)}</div> : <div className="text-[12.5px] font-semibold italic" style={{ color: C.muted }}>no manager</div>}</Td>

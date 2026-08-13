@@ -34,8 +34,13 @@ export function monthLabel(key: string): string {
 export function reviewManagerName(r: ReviewRow): string | null {
   return managerKey(r) ? managerDisplayName(r.managerFirstName, r.managerLastName) : null;
 }
-function matchKeyOf(r: ReviewRow): string {
-  return `${r.fieldTitle}@@${r.startDate.getTime()}`;
+// Match identity. mdapi_reviews carries NO match id, so a match is keyed by its field + start
+// instant — two matches cannot occupy one field at one moment. Exported (Phase 26c) so the
+// group-by-match rendering and this file's existing aggregation cannot disagree about what "the
+// same match" means. Null-safe: an unparseable start collapses to one shared "no-start" key.
+export function matchKeyOf(r: ReviewRow): string {
+  const t = r.startDate instanceof Date && !Number.isNaN(r.startDate.getTime()) ? String(r.startDate.getTime()) : "no-start";
+  return `${r.fieldTitle}@@${t}`;
 }
 export function matchDateLabel(d: Date): string {
   let h = d.getHours();
@@ -375,4 +380,84 @@ export function deriveComments(
     needs: inWin.filter(needsReply).length,
     praise: inWin.filter((r) => r.starRating === 5).length,
   };
+}
+
+// ── Phase 26c — NOT REVIEWED + group-by-match ────────────────────────────────
+
+// NOT REVIEWED = owed a reply (<=3★) and nobody has resolved it yet. This replaces the old
+// "Needs a reply" / "Unanswered" pair, which differed only by whether a resolution mark existed:
+// "Needs a reply" counted the whole <=3★ workload INCLUDING rows already handled, "Unanswered"
+// counted only the outstanding part. The outstanding part is the actionable one, so it is the one
+// that survives. A resolution is EITHER kind — "replied" or "no_reply_needed"; both close the row.
+// `resolved` is anything keyed by apiId that answers has() — the live page passes the
+// review_replies Map; tests pass a Set. Either kind of mark ("replied" / "no_reply_needed") counts
+// as resolved, which is why membership is all we ask.
+export type ResolvedLookup = { has(apiId: number): boolean };
+export function isNotReviewed(r: ReviewRow, resolved: ResolvedLookup): boolean {
+  return needsReply(r) && !resolved.has(r.apiId);
+}
+export function notReviewedRows(rows: ReviewRow[], resolved: ResolvedLookup): ReviewRow[] {
+  return rows.filter((r) => isNotReviewed(r, resolved));
+}
+
+const startMs = (r: ReviewRow): number | null =>
+  r.startDate instanceof Date && !Number.isNaN(r.startDate.getTime()) ? r.startDate.getTime() : null;
+
+// Newest match first — the page's convention everywhere else. A match with NO start time sorts
+// LAST (never first with a blank), and all of them land together because they compare equal.
+// NOTE: useReviewData drops rows whose start_date will not parse, so this branch cannot trigger
+// with today's data — it exists so the ordering is correct if that filter is ever relaxed.
+export function compareByMatchStart(a: ReviewRow, b: ReviewRow): number {
+  const x = startMs(a), y = startMs(b);
+  if (x === null && y === null) return 0;
+  if (x === null) return 1;   // undated last
+  if (y === null) return -1;
+  return y - x;               // newest first
+}
+
+export type MatchGroup = {
+  key: string;
+  fieldTitle: string;
+  startDate: Date | null;   // null == no start time on record
+  city: string;
+  manager: string | null;
+  count: number;            // reviews in this group — must equal rows.length
+  avgRating: number;        // mean star rating for the match, 1 decimal at render
+  rows: ReviewRow[];
+};
+
+// Group already-filtered rows by match, ordered by match start (newest first, undated last).
+// Row order WITHIN a group is preserved from the input.
+export function groupByMatch(rows: ReviewRow[]): MatchGroup[] {
+  const byKey = new Map<string, ReviewRow[]>();
+  for (const r of rows) {
+    const k = matchKeyOf(r);
+    const list = byKey.get(k) ?? [];
+    list.push(r);
+    byKey.set(k, list);
+  }
+  const groups: MatchGroup[] = [];
+  for (const [key, list] of byKey) {
+    const s = list[0];
+    const sum = list.reduce((a, r) => a + (Number(r.starRating) || 0), 0);
+    groups.push({
+      key,
+      fieldTitle: s.fieldTitle,
+      startDate: startMs(s) === null ? null : s.startDate,
+      city: s.city,
+      manager: reviewManagerName(s),
+      count: list.length,
+      avgRating: list.length ? sum / list.length : 0,
+      rows: list,
+    });
+  }
+  groups.sort((g1, g2) => {
+    const a = g1.startDate ? g1.startDate.getTime() : null;
+    const b = g2.startDate ? g2.startDate.getTime() : null;
+    if (a === null && b === null) return g1.fieldTitle.localeCompare(g2.fieldTitle);
+    if (a === null) return 1;
+    if (b === null) return -1;
+    return b - a;
+  });
+  return groups;
 }
