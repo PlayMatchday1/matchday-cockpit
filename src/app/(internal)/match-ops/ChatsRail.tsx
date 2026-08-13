@@ -20,7 +20,7 @@ import { useAuth } from "@/lib/useAuth";
 import { useCrmAwaitingCount } from "@/lib/useCrmAwaitingCount";
 import { useManagerPayAttnCount } from "@/lib/useManagerPayAttnCount";
 import { usePartnerDashboardsCount } from "@/lib/usePartnerDashboardsCount";
-import { visibleSections } from "./sections";
+import { visibleSections, tabForPath } from "./sections";
 
 export default function ChatsRail({
   collapsed,
@@ -35,7 +35,8 @@ export default function ChatsRail({
   const managerPayAttn = useManagerPayAttnCount();
   const partnerCount = usePartnerDashboardsCount();
 
-  const items = visibleSections(appUser);
+  // Phase 24 — only the CURRENT tab's items, derived from the route (no tab state).
+  const items = visibleSections(appUser, tabForPath(pathname));
   const badgeCount = (kind?: "awaiting" | "manager-pay" | "partner-dashboards") =>
     kind === "awaiting" ? awaiting : kind === "manager-pay" ? managerPayAttn : kind === "partner-dashboards" ? partnerCount : undefined;
 
@@ -52,7 +53,7 @@ export default function ChatsRail({
         const count = badgeCount(it.badge);
         const header =
           it.group !== lastGroup && !collapsed ? (
-            <div key={`hd-${it.group}`} className="whitespace-nowrap px-[10px] pb-[6px] pt-[14px] text-[9.5px] font-[780] uppercase tracking-[0.13em] first:pt-[2px]" style={{ color: "#93a49b" }}>
+            <div key={`hd-${it.group}`} data-testid="rail-group" data-group={it.group} className="whitespace-nowrap px-[10px] pb-[6px] pt-[14px] text-[9.5px] font-[780] uppercase tracking-[0.13em] first:pt-[2px]" style={{ color: "#93a49b" }}>
               {it.group}
             </div>
           ) : it.group !== lastGroup && collapsed ? (
@@ -65,6 +66,8 @@ export default function ChatsRail({
             {header}
             <Link
               href={it.href}
+              data-testid="rail-item"
+              data-key={it.key}
               aria-current={active ? "page" : undefined}
               title={collapsed ? it.label : undefined}
               className={`relative flex min-h-[44px] items-center rounded-[11px] text-[13.5px] font-semibold transition ${

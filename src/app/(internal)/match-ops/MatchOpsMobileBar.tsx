@@ -18,7 +18,7 @@
 import { useMemo, useState } from "react";
 import { usePathname } from "next/navigation";
 import { useAuth } from "@/lib/useAuth";
-import { visibleSections } from "./sections";
+import { visibleSections, tabForPath } from "./sections";
 import MatchOpsSectionSheet from "./MatchOpsSectionSheet";
 
 export default function MatchOpsMobileBar() {
@@ -26,7 +26,9 @@ export default function MatchOpsMobileBar() {
   const pathname = usePathname() ?? "";
   const [open, setOpen] = useState(false);
 
-  const items = useMemo(() => visibleSections(appUser), [appUser]);
+  // Phase 24 — only the CURRENT tab's items. The tab is derived from the route; there is no
+  // tab state to fall out of sync with where the operator actually is.
+  const items = useMemo(() => visibleSections(appUser, tabForPath(pathname)), [appUser, pathname]);
   const current = items.find((s) => pathname === s.href || pathname.startsWith(s.href + "/"));
 
   return (

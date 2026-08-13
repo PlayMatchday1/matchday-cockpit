@@ -16,7 +16,7 @@ import { useAuth } from "@/lib/useAuth";
 import { useCrmAwaitingCount } from "@/lib/useCrmAwaitingCount";
 import { useManagerPayAttnCount } from "@/lib/useManagerPayAttnCount";
 import { usePartnerDashboardsCount } from "@/lib/usePartnerDashboardsCount";
-import { visibleSections } from "./sections";
+import { visibleSections, tabForPath } from "./sections";
 
 export default function MatchOpsSectionSheet({ open, onClose }: { open: boolean; onClose: () => void }) {
   const { appUser } = useAuth();
@@ -26,7 +26,9 @@ export default function MatchOpsSectionSheet({ open, onClose }: { open: boolean;
   const managerPayAttn = useManagerPayAttnCount();
   const partnerCount = usePartnerDashboardsCount();
 
-  const items = useMemo(() => visibleSections(appUser), [appUser]);
+  // Phase 24 — only the CURRENT tab's items. The tab is derived from the route; there is no
+  // tab state to fall out of sync with where the operator actually is.
+  const items = useMemo(() => visibleSections(appUser, tabForPath(pathname)), [appUser, pathname]);
   const isActive = (href: string) => pathname === href || pathname.startsWith(href + "/");
   const countFor = (badge?: "awaiting" | "manager-pay" | "partner-dashboards") => {
     const n = badge === "awaiting" ? awaiting : badge === "manager-pay" ? managerPayAttn : badge === "partner-dashboards" ? partnerCount : 0;

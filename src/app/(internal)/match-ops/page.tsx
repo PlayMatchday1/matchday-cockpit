@@ -1,14 +1,18 @@
 "use client";
 
 // /match-ops on its own has no content — redirect to the landing sub-tab.
-// Master Schedule (page="matchops") is the default landing; users without
-// matchops access fall through to chats, then their own first-allowed
-// page (the top-level tab is hidden for them anyway, but typing the URL must not
-// 500).
+//
+// Phase 24: bare /match-ops lands on the FIRST DAILY OPS ITEM the viewer can actually open
+// (Gameday Ops for anyone with matchops; the chats-only operator falls through to Match Chats,
+// which is also Daily Ops). Previously this went to Master Schedule, which is now Back Office —
+// landing there would drop an operator into the weeks-long rhythm rather than today's.
+// firstSectionHref reads the same list the rail draws, so the landing target can never name a
+// route the viewer cannot open.
 
 import { useEffect } from "react";
 import { useRouter } from "next/navigation";
 import { canAccess, firstAllowedPath, useAuth } from "@/lib/useAuth";
+import { firstSectionHref } from "./sections";
 
 export default function MatchOpsIndex() {
   const { appUser, isLoading } = useAuth();
@@ -16,10 +20,9 @@ export default function MatchOpsIndex() {
 
   useEffect(() => {
     if (isLoading || !appUser) return;
-    if (canAccess(appUser, "matchops")) router.replace("/match-ops/master-schedule");
-    else if (canAccess(appUser, "chats")) router.replace("/match-ops/chats");
-    else if (canAccess(appUser, "tech"))
-      router.replace("/match-ops/field-pipeline");
+    const daily = firstSectionHref(appUser, "daily");
+    if (daily) router.replace(daily);
+    else if (canAccess(appUser, "tech")) router.replace("/match-ops/field-pipeline");
     else router.replace(firstAllowedPath(appUser));
   }, [appUser, isLoading, router]);
 
