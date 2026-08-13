@@ -1,0 +1,670 @@
+<!doctype html>
+<html lang="en">
+<head>
+<meta charset="utf-8">
+<meta name="viewport" content="width=device-width,initial-scale=1,viewport-fit=cover">
+<title>MatchDay — Check in</title>
+<style>
+*{box-sizing:border-box;-webkit-tap-highlight-color:transparent}
+:root{
+  /* The manager already lives in the MatchDay app; this should feel like it,
+     not like the admin console. Dark green, one bright accent, colour doing
+     the reading so the thumb can move before the eye finishes. */
+  --bg:#0b1f15; --bg2:#0e2a1c; --card:#143223; --card2:#183b29;
+  --line:#1f4c36; --line2:#286044;
+  --ink:#ecf7f0; --ink2:#b6d3c3; --ink3:#7fa793;
+  --acc:#3ddc84; --accd:#0d5c33;
+  --ok:#27a35f; --okbg:#153a27; --okln:#2c7a4f;
+  --late:#c98a00; --latebg:#3a2f10; --lateln:#8a6410;
+  --no:#cf4436; --nobg:#3a1a17; --noln:#8d3229;
+  --focus:#7ee2a7;
+  --tap:56px;
+}
+html,body{margin:0;padding:0}
+body{font:15px/1.4 ui-sans-serif,-apple-system,"Segoe UI",Roboto,Helvetica,Arial,sans-serif;
+  color:var(--ink);background:var(--bg);-webkit-font-smoothing:antialiased;
+  padding-bottom:calc(84px + env(safe-area-inset-bottom))}
+
+/* ── header ──────────────────────────────────────────────── */
+.top{background:linear-gradient(180deg,#0e2a1c 0%,#0b1f15 100%);color:#fff;
+  padding:14px 14px 12px;position:sticky;top:0;z-index:30;border-bottom:1px solid var(--line)}
+.mname{font-size:17px;font-weight:800;letter-spacing:-.01em;margin:0;
+  white-space:nowrap;overflow:hidden;text-overflow:ellipsis}
+.mwhen{font-size:12.5px;color:var(--ink3);margin:3px 0 0}
+.prog{display:flex;align-items:center;gap:9px;margin-top:9px}
+.pbarwrap{flex:1 1 auto;height:9px;background:#0a1a12;border-radius:999px;overflow:hidden;
+  box-shadow:inset 0 0 0 1px var(--line)}
+.pbar{display:block;height:100%;border-radius:999px;transition:width .22s cubic-bezier(.4,0,.2,1);
+  background:linear-gradient(90deg,#2aa864,#3ddc84)}
+.pnum{font-size:12.5px;font-weight:800;color:#fff;font-variant-numeric:tabular-nums;white-space:nowrap}
+
+/* ── search + filters ────────────────────────────────────── */
+.tools{position:sticky;top:0;z-index:20;background:var(--bg);padding:11px 12px 9px;
+  border-bottom:1px solid var(--line)}
+.searchwrap{position:relative}
+#q{width:100%;min-height:var(--tap);border:1px solid var(--line2);border-radius:14px;
+  padding:0 44px 0 15px;font:inherit;font-size:16px;background:var(--card);color:var(--ink)}
+#q::placeholder{color:var(--ink3)}
+#q:focus{outline:2px solid var(--focus);outline-offset:-1px}
+#qclear{position:absolute;right:6px;top:50%;transform:translateY(-50%);width:42px;height:42px;
+  border:0;background:none;font-size:19px;color:var(--ink3);cursor:pointer;border-radius:10px}
+#qclear[hidden]{display:none}
+
+.chips{display:flex;gap:7px;overflow-x:auto;margin-top:9px;padding-bottom:2px;
+  scrollbar-width:none;-ms-overflow-style:none}
+.chips::-webkit-scrollbar{display:none}
+.chip{flex:0 0 auto;border:1px solid var(--line2);background:var(--card);border-radius:999px;
+  padding:0 15px;min-height:42px;font:inherit;font-size:13.5px;font-weight:700;color:var(--ink2);
+  cursor:pointer;white-space:nowrap}
+.chip.on{background:var(--acc);border-color:var(--acc);color:#06301a}
+.chip b{font-variant-numeric:tabular-nums}
+
+/* ── team blocks ─────────────────────────────────────────── */
+.team{margin:12px 12px 0}
+.thead{display:flex;align-items:center;gap:9px;padding:0 2px 7px}
+.tdot{width:14px;height:14px;border-radius:4px;border:1px solid var(--line2);flex:0 0 14px}
+.tdot.white{background:#f2ece0;border-color:#f2ece0}
+.tdot.green{background:#2f8f5b;border-color:#2f8f5b}
+.tname{font-size:14px;font-weight:800;letter-spacing:.01em}
+.tcount{margin-left:auto;font-size:12.5px;color:var(--ink3);font-variant-numeric:tabular-nums}
+.tcount.short{color:var(--late);font-weight:800}
+
+.rows{background:var(--card);border:1px solid var(--line);border-radius:16px;overflow:hidden}
+.empty{padding:16px 14px;color:var(--ink3);font-size:13.5px}
+
+/* one player */
+.p{display:flex;align-items:center;gap:9px;padding:8px 10px 8px 13px;
+  border-bottom:1px solid var(--line);min-height:74px}
+/* the meta line never wraps — a taller row breaks the rhythm of a thumb moving
+   down a list of forty, which is the one thing this screen is optimised for */
+.pmeta{white-space:nowrap;overflow:hidden;text-overflow:ellipsis}
+.p:last-child{border-bottom:0}
+.p.done{background:var(--card2)}
+.pnumb{font-size:12px;font-weight:800;color:var(--ink3);font-variant-numeric:tabular-nums}
+.pwho{flex:1 1 auto;min-width:0;display:flex;align-items:center;gap:10px;border:0;
+  background:none;font:inherit;color:inherit;text-align:left;cursor:pointer;padding:0;
+  min-height:var(--tap)}
+.ptxt{flex:1 1 auto;min-width:0}
+/* the shirt number rides on the avatar instead of owning a column */
+.avwrap{position:relative;flex:0 0 40px;display:block;width:40px;height:40px}
+.avwrap .pnumb{position:absolute;right:-3px;bottom:-3px;min-width:17px;height:17px;
+  border-radius:6px;background:var(--bg2);border:1px solid var(--line2);color:var(--ink2);
+  font-size:10px;display:flex;align-items:center;justify-content:center;padding:0 2px}
+.gst{display:inline-block;margin-left:6px;font-size:9px;font-weight:800;letter-spacing:.06em;
+  color:var(--late);border:1px solid var(--lateln);background:var(--latebg);
+  border-radius:5px;padding:1px 4px;vertical-align:1px}
+.pname{display:block;font-size:15.5px;font-weight:700;white-space:nowrap;overflow:hidden;
+  text-overflow:ellipsis}
+.pmeta{display:block;font-size:11.5px;color:var(--ink3);margin-top:2px}
+.pmeta .stk{color:var(--late);font-weight:800}
+
+/* the three marks — the whole screen exists for these */
+.marks{display:flex;gap:6px;flex:0 0 auto}
+/* Off-state is already tinted its own colour. The thumb aims by hue, not by
+   position, which is what makes forty of these fast rather than careful. */
+.mk{width:47px;height:var(--tap);border:1px solid;border-radius:13px;
+  font:inherit;font-size:18px;font-weight:800;cursor:pointer;
+  display:flex;align-items:center;justify-content:center;line-height:1;
+  transition:transform .08s, background .12s}
+.mk:active{transform:scale(.92)}
+.mk[data-mark="ok"]  {background:var(--okbg);  border-color:var(--okln);  color:#5fd694}
+.mk[data-mark="late"]{background:var(--latebg);border-color:var(--lateln);color:#e0aa3a}
+.mk[data-mark="no"]  {background:var(--nobg);  border-color:var(--noln);  color:#e8776a}
+.mk.on-ok{background:var(--ok);border-color:var(--ok);color:#04220f;
+  box-shadow:0 0 0 3px rgba(39,163,95,.22)}
+.mk.on-late{background:var(--late);border-color:var(--late);color:#231a03;
+  box-shadow:0 0 0 3px rgba(201,138,0,.22)}
+.mk.on-no{background:var(--no);border-color:var(--no);color:#2a0b08;
+  box-shadow:0 0 0 3px rgba(207,68,54,.22)}
+/* the strike weight rides on the button, so the cost is visible at the moment
+   of the tap — NOT the player's strike history, which would invite a manager to
+   go easy on someone about to be banned */
+.mk .w{position:absolute;font-size:9px;font-weight:800;margin:26px 0 0 0}
+.mkwrap{position:relative;display:flex;align-items:center;justify-content:center}
+
+.pend{font-size:10.5px;font-weight:800;color:#6fb8e0;letter-spacing:.03em}
+.failed{font-size:10.5px;font-weight:800;color:#ff8878;letter-spacing:.03em}
+
+.more{width:34px;height:var(--tap);border:0;background:none;color:var(--ink3);font-size:19px;
+  cursor:pointer;flex:0 0 34px;border-radius:10px}
+
+/* ── sticky footer ───────────────────────────────────────── */
+.foot{position:fixed;left:0;right:0;bottom:0;z-index:40;
+  background:linear-gradient(180deg,rgba(11,31,21,.92),var(--bg2));
+  backdrop-filter:blur(8px);border-top:1px solid var(--line);padding:10px 12px calc(10px + env(safe-area-inset-bottom));
+  display:flex;align-items:center;gap:10px}
+.fnote{font-size:12.5px;color:var(--ink3);line-height:1.3}
+.fnote b{color:var(--ink);font-weight:800;font-size:13.5px}
+.btn{border:1px solid var(--line2);background:var(--card);border-radius:14px;padding:0 16px;
+  font:inherit;font-size:15px;font-weight:800;cursor:pointer;color:var(--ink);min-height:var(--tap);
+  white-space:nowrap}
+.btn.pri{background:var(--acc);border-color:var(--acc);color:#06301a;margin-left:auto;
+  box-shadow:0 4px 14px rgba(61,220,132,.22)}
+.btn.pri:disabled{opacity:.4}
+.btn.wide{width:100%;margin-left:0}
+
+/* ── offline banner ──────────────────────────────────────── */
+.bar{margin:10px 12px 0;border-radius:12px;padding:10px 12px;font-size:13px;border:1px solid;display:block}
+.bar.warn{background:var(--latebg);border-color:var(--lateln);color:#f0c569}
+.bar.bad{background:var(--nobg);border-color:var(--noln);color:#ffa79a}
+.bar b{font-weight:800}
+.bar .btn{min-height:40px;font-size:13px;margin-top:8px}
+
+/* ── sheets ──────────────────────────────────────────────── */
+.scrim{position:fixed;inset:0;background:rgba(9,24,17,.42);z-index:60}
+.scrim[hidden]{display:none}
+.sheet{position:fixed;left:0;right:0;bottom:0;z-index:61;background:var(--bg2);
+  border-radius:18px 18px 0 0;max-height:86vh;display:flex;flex-direction:column;
+  padding-bottom:env(safe-area-inset-bottom)}
+.sheet[hidden]{display:none}
+.grab{width:44px;height:4px;border-radius:999px;background:var(--line2);margin:10px auto 2px}
+.shd{padding:8px 16px 12px;border-bottom:1px solid var(--line)}
+.sht{font-size:17px;font-weight:800;margin:0}
+.shs{font-size:13px;color:var(--ink3);margin:3px 0 0}
+.sbd{overflow:auto;padding:12px 16px 16px}
+
+.opt{display:flex;align-items:center;gap:11px;width:100%;border:1px solid var(--line2);
+  background:var(--card);border-radius:14px;color:var(--ink);padding:11px 13px;margin-bottom:9px;
+  font:inherit;text-align:left;cursor:pointer;min-height:var(--tap)}
+.opt:disabled{opacity:.45;cursor:not-allowed}
+.optt{flex:1 1 auto;min-width:0}
+.optn{display:block;font-size:15px;font-weight:800}
+.optm{display:block;font-size:12px;color:var(--ink3);margin-top:1px}
+.optr{font-size:12.5px;font-weight:800;color:var(--acc);white-space:nowrap}
+.optr.full{color:var(--ink3)}
+
+.backb{border:0;background:none;font:inherit;font-size:13px;font-weight:800;color:var(--acc);
+  padding:0 0 6px;cursor:pointer;min-height:34px}
+/* Nine spots, three across — the same shape the player app uses, so a manager
+   who has seen that screen already knows what this is. */
+.spots{display:grid;grid-template-columns:repeat(3,1fr);gap:8px}
+.spot{border:1px solid var(--line2);background:var(--card);border-radius:14px;color:var(--ink);padding:9px 6px 8px;
+  font:inherit;cursor:pointer;min-height:76px;display:flex;flex-direction:column;
+  align-items:center;justify-content:center;gap:2px;text-align:center}
+.spot.open{border-style:dashed;border-color:var(--accd);background:var(--okbg)}
+.spot:active{transform:scale(.96)}
+.spn{font-size:11px;font-weight:800;color:var(--ink3);font-variant-numeric:tabular-nums}
+.spw{font-size:13px;font-weight:800;line-height:1.15;max-width:100%;overflow:hidden;
+  text-overflow:ellipsis;white-space:nowrap;display:block;width:100%}
+.spot.open .spw{color:var(--acc)}
+.spa{font-size:9.5px;font-weight:800;letter-spacing:.05em;color:var(--ink3);text-transform:uppercase}
+.spot.open .spa{color:var(--acc)}
+
+.win{display:flex;gap:10px}
+.winb{color:var(--ink);flex:1 1 0;border:2px solid var(--line2);background:var(--card);border-radius:14px;
+  padding:16px 10px;font:inherit;font-size:16px;font-weight:800;cursor:pointer;min-height:78px}
+.winb.on{border-color:var(--acc);background:var(--okbg);color:var(--acc)}
+.winb.draw{flex:0 0 92px}
+
+:focus-visible{outline:2px solid var(--focus);outline-offset:2px}
+
+@media (min-width:760px){
+  body{max-width:620px;margin:0 auto;box-shadow:0 0 0 1px var(--line)}
+  .sheet{max-width:620px;margin:0 auto}
+}
+
+/* ── avatars ─────────────────────────────────────────────── */
+/* A wall of names is slow to scan. A colour and two letters give the eye
+   something to lock onto before it reads anything, which is the whole game
+   when there are forty of them. */
+.av{width:40px;height:40px;flex:0 0 40px;border-radius:12px;display:flex;align-items:center;
+  justify-content:center;font-size:14px;font-weight:800;letter-spacing:.02em;color:#08150e;
+  box-shadow:inset 0 0 0 1px rgba(255,255,255,.08)}
+/* A photo and an initials tile occupy the SAME box. A list where some rows are
+   taller than others because of an image is a list the thumb has to think
+   about. */
+.av.ph{object-fit:cover;background:var(--card2)}
+.p{position:relative;overflow:hidden}
+/* the status rail — read the row without reading the words */
+.p::before{content:"";position:absolute;left:0;top:0;bottom:0;width:4px;background:transparent}
+.p.s-ok::before{background:var(--ok)}
+.p.s-late::before{background:var(--late)}
+.p.s-no::before{background:var(--no)}
+</style>
+</head>
+<body>
+
+<div class="top">
+  <p class="mname" id="mname">HOU Sunday 8v8 · Bear Creek</p>
+  <p class="mwhen" id="mwhen">Sun Aug 16 · 7:30 PM · kicks off in 42 min</p>
+  <div class="prog">
+    <span class="pbarwrap"><span class="pbar" id="pbar"></span></span>
+    <span class="pnum" id="pnum">0 of 20</span>
+  </div>
+</div>
+
+<div class="tools">
+  <div class="searchwrap">
+    <input id="q" type="search" inputmode="search" autocomplete="off"
+      placeholder="Search a player…" aria-label="Search a player">
+    <button id="qclear" hidden aria-label="Clear search">×</button>
+  </div>
+  <div class="chips" id="chips"></div>
+</div>
+
+<div id="banner"></div>
+<div id="list"></div>
+
+<div class="foot" id="foot"></div>
+
+<div class="scrim" id="scrim" hidden></div>
+<div class="sheet" id="sheet" hidden role="dialog" aria-label="Options"></div>
+
+<script>
+/* ══════════════════════════════════════════════════════════════
+   MANAGER CHECK-IN — phone first, 40 people, one thumb.
+
+   The problem is not marking a player. It is FINDING one. So the
+   default view is only the people still to mark: the list shrinks as
+   the manager works, and by the last five minutes they are looking at
+   three rows instead of forty. Search is there for the one person who
+   walks up out of order.
+
+   Three rules the design is built on:
+
+   1. ONE TAP, NO CONFIRM. A mis-tap is fixed by tapping again. A
+      confirmation dialog on a screen used forty times in ten minutes
+      gets dismissed without reading, which makes it worse than none.
+
+   2. THE FIELD HAS BAD SIGNAL. Marks apply immediately and sync behind
+      the manager. This deliberately departs from the never-optimistic
+      rule used for messages, and the reason is that a status is
+      IDEMPOTENT — setting "late" twice is the same as once, so a retry
+      cannot double anything. A message send is not idempotent, which is
+      why that one waits.
+
+   3. THE COST IS ON THE BUTTON, NOT THE PERSON. "No show" says +2. It
+      does not say "this player is already on 3 strikes" — a manager who
+      knows someone is one strike from a ban will start going easy, and
+      the record stops being true.
+   ══════════════════════════════════════════════════════════════ */
+
+const TEAMS = [
+  { id:"white", name:"White", cap:10, cls:"white" },
+  { id:"green", name:"Green", cap:10, cls:"green" },
+];
+
+/* strikes: LATE 1, NO SHOW 2 — Ryan's rule */
+const WEIGHT = { late:1, no:2, ok:0 };
+const LABEL  = { ok:"On time", late:"Late", no:"No show" };
+const GLYPH  = { ok:"✓", late:"◴", no:"✕" };
+
+const P = (n, team, name, num) =>
+  ({ id:n, team, name, num, status:null, sync:"idle" });   /* idle | pending | failed */
+
+const PLAYERS = [
+  P("p1","white","Ze",1), P("p2","white","Pedro Alvarez",2), P("p3","white","Bryan",3),
+  P("p4","white","Heber",4), P("p5","white","Marcus Oyelaran",5), P("p6","white","Tom",6),
+  P("p7","white","Ravi Chandrasekaran",7), P("p8","white","Nico",8), P("p9","white","Sam",9),
+  P("p10","green","Ben",1), P("p11","green","Anthony",2), P("p12","green","anelka",3),
+  P("p13","green","aiken",4), P("p14","green","Jorge Luis Gonzalez",5), P("p15","green","Kiru",6),
+  P("p16","green","Paige",7), P("p17","green","Oran",8), P("p18","green","Connor",9),
+  P("p19","green","Aviv",10),
+];
+
+let q       = "";
+let filter  = "todo";          /* todo | all | ok | late | no */
+let sheet   = null;            /* {kind:"move"|"winner", pid, to} — `to` is the
+                                  chosen destination team, set on the second step */
+let winner  = null;            /* "white" | "green" | "draw" */
+let offline = false;           /* toggled by the demo banner button */
+
+/* Two letters and a stable colour per person. Derived from the name so the
+   same player looks the same every week — a colour that shuffles is worse than
+   no colour, because the manager stops trusting it. */
+const initials = n => n.replace(/[^a-zA-Z ]/g, "").trim().split(/\s+/)
+  .slice(0, 2).map(w => w[0] ? w[0].toUpperCase() : "").join("") || "?";
+const AVC = ["#8fd6a8","#f0c987","#e79f92","#9fc4e8","#d6b6e0","#93d9cf","#e8c0a0","#b9d59a"];
+const avColor = n => AVC[[...n].reduce((a,c) => a + c.charCodeAt(0), 0) % AVC.length];
+
+/* Stand-in for a real profile photo. In the build this is the player's own
+   image; the point of showing it here is that HALF of them have one and half
+   do not, and the row has to look right either way. */
+const fakePhoto = n => {
+  const c = avColor(n), b = "#" + (0x101010 + (c.charCodeAt(1) * 7919 % 0x505050)).toString(16).slice(-6);
+  return "data:image/svg+xml;utf8," + encodeURIComponent(
+    `<svg xmlns="http://www.w3.org/2000/svg" viewBox="0 0 40 40">
+       <rect width="40" height="40" fill="${b}"/>
+       <circle cx="20" cy="15" r="7" fill="${c}"/>
+       <path d="M6 40c0-8 6.5-13 14-13s14 5 14 13z" fill="${c}"/>
+     </svg>`);
+};
+
+/* Who has a photo is a property of the player, not of the render — so it stays
+   put when the list re-sorts. */
+const HAS_PHOTO = new Set();
+PLAYERS.forEach((p, i) => { if (i % 5 !== 2 && i % 7 !== 3) HAS_PHOTO.add(p.id); });
+
+/* A manager on a touchline says "Ravi C.", not "Ravi Chandrasekaran". So a name
+   that will not fit is SHORTENED the way a person would shorten it, rather than
+   chopped mid-word — "Marcu…" is unreadable, "Marcus O." is not. Search still
+   matches the full name, so nothing is lost. */
+const GUEST = /\s*\((guest|gu\.?|g)\)\s*$/i;
+function displayName(full){
+  const guest = GUEST.test(full);
+  const base  = full.replace(GUEST, "").trim();
+  if (base.length <= 15) return { name: base, guest };
+  const w = base.split(/\s+/);
+  if (w.length === 1) return { name: base, guest };
+  return { name: `${w[0]} ${w[w.length - 1][0].toUpperCase()}.`, guest };
+}
+
+const byId   = id => PLAYERS.find(p => p.id === id);
+const team   = id => TEAMS.find(t => t.id === id);
+const onTeam = t => PLAYERS.filter(p => p.team === t);
+const marked = () => PLAYERS.filter(p => p.status).length;
+const todo   = () => PLAYERS.filter(p => !p.status).length;
+const failed = () => PLAYERS.filter(p => p.sync === "failed").length;
+const pending= () => PLAYERS.filter(p => p.sync === "pending").length;
+const strikes= () => PLAYERS.reduce((n,p) => n + (p.status ? WEIGHT[p.status] : 0), 0);
+
+/* Search is forgiving on purpose: a manager types two letters while holding a
+   ball. Match anywhere in the name, case-insensitive, and on the shirt number. */
+function visible(){
+  const s = q.trim().toLowerCase();
+  return PLAYERS.filter(p => {
+    if (s && !(p.name.toLowerCase().includes(s) || String(p.num) === s)) return false;
+    if (filter === "todo") return !p.status;
+    if (filter === "all")  return true;
+    return p.status === filter;
+  });
+}
+
+/* ── chips ─────────────────────────────────────────────────── */
+const CHIPS = [
+  ["todo","To do",   () => todo()],
+  ["all","Everyone", () => PLAYERS.length],
+  ["ok","On time",   () => PLAYERS.filter(p => p.status === "ok").length],
+  ["late","Late",    () => PLAYERS.filter(p => p.status === "late").length],
+  ["no","No show",   () => PLAYERS.filter(p => p.status === "no").length],
+];
+function paintChips(){
+  const h = document.getElementById("chips");
+  h.textContent = "";
+  CHIPS.forEach(([k, label, count]) => {
+    const b = document.createElement("button");
+    b.className = "chip" + (filter === k ? " on" : "");
+    b.id = "chip-" + k; b.type = "button";
+    b.innerHTML = `${label} <b>${count()}</b>`;
+    b.addEventListener("click", () => { filter = k; render(); });
+    h.appendChild(b);
+  });
+}
+
+/* ── the list ──────────────────────────────────────────────── */
+function paintList(){
+  const h = document.getElementById("list");
+  const vis = visible();
+  h.textContent = "";
+
+  if (vis.length === 0){
+    const d = document.createElement("div");
+    d.className = "team";
+    d.innerHTML = `<div class="rows"><p class="empty" id="empty">${
+      q.trim() ? `Nobody matches “${q.trim()}”. Check the spelling, or clear the search.`
+      : filter === "todo" ? "Everyone is marked. Pick the winner below."
+      : "Nobody in this list yet."}</p></div>`;
+    h.appendChild(d);
+    return;
+  }
+
+  TEAMS.forEach(t => {
+    const rows = vis.filter(p => p.team === t.id);
+    if (rows.length === 0) return;
+    const filledNow = onTeam(t.id).length;
+    const d = document.createElement("div");
+    d.className = "team"; d.dataset.team = t.id;
+    d.innerHTML = `
+      <div class="thead">
+        <span class="tdot ${t.cls}"></span>
+        <span class="tname">${t.name}</span>
+        <span class="tcount ${filledNow < t.cap ? "short" : ""}" id="tc-${t.id}">${
+          filledNow}/${t.cap}${filledNow < t.cap ? ` · ${t.cap - filledNow} open` : ""}</span>
+      </div>
+      <div class="rows">${rows.map(rowHTML).join("")}</div>`;
+    h.appendChild(d);
+  });
+
+  h.querySelectorAll("[data-mark]").forEach(b =>
+    b.addEventListener("click", () => mark(b.dataset.pid, b.dataset.mark)));
+  h.querySelectorAll("[data-more]").forEach(b =>
+    b.addEventListener("click", () => { sheet = { kind:"move", pid:b.dataset.more }; render(); }));
+  h.querySelectorAll("[data-retry]").forEach(b =>
+    b.addEventListener("click", () => { const p = byId(b.dataset.retry); p.sync = "idle"; render(); }));
+}
+
+function rowHTML(p){
+  /* The sync state NEVER replaces the status. A row reading only "NOT SAVED"
+     tells the manager something is wrong but not what they marked — so the one
+     person they need to re-check is the one they can no longer see. */
+  const st = p.status
+    ? `${LABEL[p.status]}${WEIGHT[p.status]
+        ? ` · <span class="stk">+${WEIGHT[p.status]}</span>` : ""}`
+    : "Not marked";
+  const meta = p.sync === "pending" ? `${st} · <span class="pend">SAVING…</span>`
+    : p.sync === "failed" ? `${st} · <span class="failed">NOT SAVED</span>`
+    : p.status ? `${LABEL[p.status]}${WEIGHT[p.status]
+        ? ` · <span class="stk">+${WEIGHT[p.status]} strike${WEIGHT[p.status] > 1 ? "s" : ""}</span>` : ""}`
+    : "Not marked";
+  /* The name and face ARE the options button. A separate ⋯ column costs 44px
+     of a 390px row, and that width is the difference between "Marcus Oyelaran"
+     and "Marcu…" — on a screen whose entire job is recognising a person. */
+  return `<div class="p ${p.status ? "done s-" + p.status : ""}" data-p="${p.id}">
+    <button type="button" class="pwho" data-more="${p.id}" id="more-${p.id}"
+      aria-label="Options for ${p.name}">
+      <span class="avwrap">
+        ${HAS_PHOTO.has(p.id)
+          ? `<img class="av ph" src="${fakePhoto(p.name)}" alt="" loading="lazy">`
+          : `<span class="av" style="background:${avColor(p.name)}">${initials(p.name)}</span>`}
+        <span class="pnumb">${p.num}</span>
+      </span>
+      <span class="ptxt">
+        <span class="pname" title="${p.name}">${displayName(p.name).name}${
+          displayName(p.name).guest ? `<span class="gst">GUEST</span>` : ""}</span>
+        <span class="pmeta" id="meta-${p.id}">${meta}</span>
+      </span>
+    </button>
+    <span class="marks">
+      ${["ok","late","no"].map(k => `<button type="button"
+        class="mk ${p.status === k ? "on-" + k : ""}" data-mark="${k}" data-pid="${p.id}"
+        id="mk-${k}-${p.id}" aria-label="${LABEL[k]} — ${p.name}">${GLYPH[k]}</button>`).join("")}
+    </span>
+    ${p.sync === "failed" ? `<button type="button" class="more" data-retry="${p.id}"
+      id="retry-${p.id}" aria-label="Retry saving ${p.name}">↻</button>` : ""}
+  </div>`;
+}
+
+/* Tapping the mark you already have CLEARS it. That is the undo — no dialog,
+   no separate control, same thumb position. */
+function mark(pid, k){
+  const p = byId(pid);
+  p.status = p.status === k ? null : k;
+  p.sync = p.status ? (offline ? "failed" : "pending") : "idle";
+  render();
+  if (p.sync === "pending") setTimeout(() => { p.sync = "idle"; render(); }, 420);
+}
+
+/* ── banner ────────────────────────────────────────────────── */
+function paintBanner(){
+  const h = document.getElementById("banner");
+  h.textContent = "";
+  if (failed() > 0){
+    h.innerHTML = `<span class="bar bad" id="failbar"><b>${failed()} mark${
+      failed() === 1 ? "" : "s"} did not save.</b> They are still on this phone. Tap the ↻ on
+      each row, or retry them all once you have signal.
+      <button class="btn" id="retryall" type="button">Retry all ${failed()}</button></span>`;
+    document.getElementById("retryall").addEventListener("click", () => {
+      PLAYERS.forEach(p => { if (p.sync === "failed") p.sync = "idle"; });
+      offline = false; render();
+    });
+  } else if (offline){
+    h.innerHTML = `<span class="bar warn" id="offbar"><b>No signal.</b> Keep marking —
+      everything is saved on this phone and will sync when you are back.</span>`;
+  }
+}
+
+/* ── footer ────────────────────────────────────────────────── */
+function paintFoot(){
+  const h = document.getElementById("foot");
+  const left = todo();
+  h.innerHTML = `
+    <span class="fnote" id="fnote">${left === 0
+      ? `<b>All ${PLAYERS.length} marked.</b> ${strikes()} strike${strikes() === 1 ? "" : "s"} issued.`
+      : `<b>${left} still to mark.</b> ${marked()} done${pending() ? " · saving" : ""}`}</span>
+    <button class="btn pri" id="winbtn" type="button">${
+      winner ? `Winner: ${winner === "draw" ? "Draw" : team(winner).name}` : "Pick the winner"}</button>`;
+  document.getElementById("winbtn").addEventListener("click", () => {
+    sheet = { kind:"winner" }; render();
+  });
+}
+
+/* ── sheets ────────────────────────────────────────────────── */
+function paintSheet(){
+  const el = document.getElementById("sheet");
+  const sc = document.getElementById("scrim");
+  if (!sheet){ el.hidden = true; sc.hidden = true; el.textContent = ""; return; }
+  sc.hidden = false; el.hidden = false;
+
+  if (sheet.kind === "winner"){
+    el.innerHTML = `
+      <span class="grab"></span>
+      <div class="shd">
+        <p class="sht">Who won?</p>
+        <p class="shs" id="win-sub">${todo() > 0
+          ? `${todo()} player${todo() === 1 ? " is" : "s are"} still unmarked. You can set the
+             winner now and finish check-in after.`
+          : `Everyone is marked.`}</p>
+      </div>
+      <div class="sbd">
+        <div class="win">
+          ${TEAMS.map(t => `<button type="button" class="winb ${winner === t.id ? "on" : ""}"
+            data-win="${t.id}" id="win-${t.id}">${t.name}</button>`).join("")}
+          <button type="button" class="winb draw ${winner === "draw" ? "on" : ""}"
+            data-win="draw" id="win-draw">Draw</button>
+        </div>
+        <p class="shs" style="margin-top:12px">Tap again to change it. Nothing is final until
+          you leave the match.</p>
+      </div>`;
+    el.querySelectorAll("[data-win]").forEach(b =>
+      b.addEventListener("click", () => { winner = b.dataset.win; sheet = null; render(); }));
+    return;
+  }
+
+  /* MOVE — two steps, because at four teams a flat list of everyone else is
+     twenty-seven rows and lands the manager right back in the find-a-player
+     problem the rest of this screen exists to remove.
+
+       step 1  which team
+       step 2  that team's NINE spots, laid out the way the app lays them out
+
+     An open spot and a swap are the same gesture: tap the spot you want. That
+     is what makes it fast — there is no separate "swap mode" to find. */
+  const p = byId(sheet.pid);
+  const others = TEAMS.filter(t => t.id !== p.team);
+
+  if (!sheet.to){
+    el.innerHTML = `
+      <span class="grab"></span>
+      <div class="shd">
+        <p class="sht" id="mv-title">Move ${p.name}</p>
+        <p class="shs">Currently ${team(p.team).name} · shirt ${p.num}</p>
+      </div>
+      <div class="sbd">
+        ${others.map(t => {
+          const open = t.cap - onTeam(t.id).length;
+          return `<button type="button" class="opt" data-pick="${t.id}" id="mv-${t.id}">
+            <span class="tdot ${t.cls}"></span>
+            <span class="optt">
+              <span class="optn">${t.name}</span>
+              <span class="optm">${onTeam(t.id).length} of ${t.cap} filled</span>
+            </span>
+            <span class="optr ${open > 0 ? "" : "full"}">${
+              open > 0 ? `${open} open` : "swap only"}</span>
+          </button>`;
+        }).join("")}
+        <p class="shs" id="mv-hint" style="margin-top:6px">A full team is still a choice —
+          you pick who comes back the other way.</p>
+      </div>`;
+    el.querySelectorAll("[data-pick]").forEach(b =>
+      b.addEventListener("click", () => { sheet.to = b.dataset.pick; render(); }));
+    return;
+  }
+
+  const t = team(sheet.to);
+  const held = onTeam(t.id);
+  const spots = [];
+  for (let n = 1; n <= t.cap; n++) spots.push({ n, who: held.find(x => x.num === n) || null });
+
+  el.innerHTML = `
+    <span class="grab"></span>
+    <div class="shd">
+      <button type="button" class="backb" id="mv-back">‹ Teams</button>
+      <p class="sht" id="mv-title2">${p.name} → ${t.name}</p>
+      <p class="shs" id="mv-sub2">Tap an open spot, or tap a player to swap places
+        with them.</p>
+    </div>
+    <div class="sbd">
+      <div class="spots" id="spots">
+        ${spots.map(s2 => s2.who
+          ? `<button type="button" class="spot taken" data-swap="${s2.who.id}"
+               id="sp-${s2.n}" aria-label="Swap with ${s2.who.name}">
+               <span class="spn">${s2.n}</span>
+               <span class="spw">${s2.who.name}</span>
+               <span class="spa">swap</span></button>`
+          : `<button type="button" class="spot open" data-slot="${s2.n}"
+               id="sp-${s2.n}" aria-label="Move to open spot ${s2.n}">
+               <span class="spn">${s2.n}</span>
+               <span class="spw">Open</span>
+               <span class="spa">move here</span></button>`).join("")}
+      </div>
+    </div>`;
+
+  document.getElementById("mv-back").addEventListener("click", () => { sheet.to = null; render(); });
+  el.querySelectorAll("[data-slot]").forEach(b =>
+    b.addEventListener("click", () => {
+      p.team = t.id; p.num = Number(b.dataset.slot);
+      sheet = null; render();
+    }));
+  el.querySelectorAll("[data-swap]").forEach(b =>
+    b.addEventListener("click", () => {
+      const o = byId(b.dataset.swap);
+      const pt = p.team, pn = p.num;
+      p.team = o.team; p.num = o.num; o.team = pt; o.num = pn;
+      sheet = null; render();
+    }));
+}
+function nextShirt(t){
+  const used = new Set(onTeam(t).map(x => x.num));
+  for (let i = 1; i <= 40; i++) if (!used.has(i)) return i;
+  return 0;
+}
+
+document.getElementById("scrim").addEventListener("click", () => { sheet = null; render(); });
+
+/* ── search wiring ─────────────────────────────────────────── */
+const qEl = document.getElementById("q");
+qEl.addEventListener("input", e => {
+  q = e.target.value;
+  /* typing a name is how you find someone who is NOT in the current filter —
+     so searching widens to everyone rather than returning nothing */
+  if (q.trim() && filter === "todo") filter = "all";
+  render(); qEl.focus();
+});
+document.getElementById("qclear").addEventListener("click", () => {
+  q = ""; qEl.value = ""; filter = "todo"; render();
+});
+
+function render(){
+  document.getElementById("qclear").hidden = !q.trim();
+  const pct = Math.round((marked() / PLAYERS.length) * 100);
+  document.getElementById("pbar").style.width = pct + "%";
+  document.getElementById("pnum").textContent = `${marked()} of ${PLAYERS.length}`;
+  paintChips(); paintBanner(); paintList(); paintFoot(); paintSheet();
+}
+render();
+
+/* demo only: flip the signal to show the offline path */
+window.__toggleOffline = () => { offline = !offline; render(); };
+</script>
+</body>
+</html>
