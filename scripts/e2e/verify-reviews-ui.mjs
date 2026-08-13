@@ -71,6 +71,12 @@ async function open(page) {
   await page.goto(REVIEWS, { waitUntil: "domcontentloaded" });
   await page.waitForSelector('[data-rv="sev-all"]', { timeout: 25000 });
   await page.waitForFunction(() => document.querySelectorAll('.rv-ctab tbody tr').length > 0, null, { timeout: 15000 });
+  // WAIT FOR review_replies TO LAND. The rows render as soon as the reviews arrive, but the
+  // resolution marks are a SECOND fetch — until it resolves, every owed review still looks
+  // unresolved and the NOT REVIEWED chip reads 5 instead of 4. Reading the chip before this point
+  // is a race that passes locally and fails under a full-gate run (it did). The resolved row paints
+  // data-s="done", so that attribute IS the signal that the marks are in.
+  await page.waitForSelector('.rv-ctab tbody tr [data-s="done"]', { timeout: 15000 });
 }
 
 async function main() {
