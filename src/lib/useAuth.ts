@@ -18,6 +18,10 @@ export type AppUser = {
   can_access_tech: boolean;
   can_edit_matches?: boolean;      // Phase 17 — the WRITE permission for matches
   can_manage_players?: boolean;    // Phase 18 — the account-level WRITE permission (ban)
+  // Phase 25 — the THIRD tier. Deliberately NOT can_access_matchops: that flag opens twelve routes
+  // and would be inherited silently by anything added to it later.
+  is_city_manager?: boolean;
+  city_identifier?: string | null;
   can_manage_promos?: boolean;     // Phase 18b — the promo-code WRITE permission (create/edit/delete)
   can_send_messages?: boolean;     // Phase 19 — the chat SEND permission (read is can_access_chats)
   is_service_account?: boolean;    // the Clubhouse E2E account (never holds a write permission)
@@ -159,8 +163,17 @@ export function hasAnyAccess(appUser: AppUser | null): boolean {
   );
 }
 
+// The city-manager tier: the flag AND a scope. A tier with no city is not partially valid — the
+// server refuses it, so the client must not route to a page that will 403.
+export function isCityManager(appUser: AppUser | null | undefined): boolean {
+  return !!appUser && appUser.is_city_manager === true && !!(appUser.city_identifier ?? "").trim();
+}
+
 export function firstAllowedPath(appUser: AppUser | null): string {
   if (!appUser) return "/login";
+  // Checked BEFORE the operator paths: a city manager holds none of those flags, and without this
+  // they would land on /no-access.
+  if (isCityManager(appUser) && !appUser.is_admin) return "/city/manager-pay";
   if (appUser.is_admin || appUser.can_access_home) return "/home";
   if (appUser.can_access_growth) return "/growth";
   if (appUser.can_access_membership) return "/membership";

@@ -937,6 +937,38 @@ board → tile → panel → roster → cancel preview with zero 403s; she can b
 MANAGE-PLAYERS cannot; PUT match / POST roster / POST cancel each refuse her individually; a
 no-flags account is 403 on all ten; the E2E account is blocked by email on every one.
 
+## Manager pay: co-managed matches, and why the sheet has ONE dropdown (Phase 25)
+
+**`mdapi_matches` carries `manager_email` for the primary but ONLY `second_manager_id` for the
+secondary — there is no `second_manager_email`.** The two slots are not symmetric, and the pay model
+accumulates on `lower(manager_email)` (`manager_gusto_aliases` is keyed the same way, with a DB CHECK
+enforcing it). So a second dropdown would require an email↔id bridge this data does not have.
+
+Measured on production, 8 weeks to 2026-08-12, non-cancelled matches:
+
+| fact | value |
+|---|---|
+| matches | 706 |
+| **co-managed** (`second_manager_id` set) | **3 (0.4%)**, never >1 in a week, all ATX |
+| **unassigned** (no manager at all) | **0** |
+| tournaments (`maxPlayerCount >= 25`) | 260 (37%) |
+
+Consequences, all deliberate:
+
+- The city-manager sheet edits the PRIMARY only and **refuses a co-managed match** (409, "This match
+  has two managers"). Silently editing one of two people's pay is a payroll error with no visible
+  cause.
+- **Pay is never a flat $20.** `payAmount()` — now exported — is $20 solo, $30 solo tournament,
+  $20 to the primary when co-managed (no tournament premium), $0 cancelled. At 37% tournaments a
+  hardcoded $20 would be wrong most days, including in the "this reassignment moves $X" line.
+- **A city manager is not filling gaps, they are reassigning.** Zero unassigned matches in 8 weeks.
+  The unassigned handling is built in full (the model supports a null manager) but the page's copy
+  leads with reassignment, and the tile reads "every match that will run has a manager" at zero.
+- **The manager↔account join is EMAIL ONLY, with no id fallback.** A manager whose MatchDay email
+  differs from their Clubhouse login silently looks like someone who worked nothing. The city page
+  detects this and says so ("We could not match your login to any manager record for DFW") rather
+  than rendering an empty row.
+
 ## Promo codes — the endpoint, proven by read-only production GETs (Phase 18a)
 
 Live-probed on production 2026-08-10 (read-only, `scripts/promo-step0-probe.ts`). The

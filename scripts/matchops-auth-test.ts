@@ -10,6 +10,7 @@ import { readdirSync, readFileSync, statSync } from "node:fs";
 import { join } from "node:path";
 import { adminGate, deriveMatchOpsFlags, type AppUserRow } from "../src/lib/adminAuth";
 import { matchOpsReadGate, E2E_SERVICE_EMAIL } from "../src/lib/matchOpsAuth";
+import { cityManagerGate, assertCityScope } from "../src/lib/cityManagerAuth";
 
 let PASS = 0, FAIL = 0;
 const ok = (n: string) => { PASS++; console.log(`  ok  ${n}`); };
@@ -120,6 +121,43 @@ for (const r of ["list", "detail/[id]", "fields", "matches", "check"]) {
 // claim "no-flags is denied on every gated route" holds for the CRM surface too. Asserted at source.
 { const s = readFileSync("src/lib/crmAuth.ts", "utf8");
   is("authenticateCrm denies a no-flags account (!isAdmin && !canAccessChats → 403)", /!isAdmin\s*&&\s*!canAccessChats/.test(s), true); }
+
+// ── Phase 25 — the CITY MANAGER tier, the THIRD gate ──
+//
+// Its whole reason to exist is that it is NOT can_access_matchops: that flag opens twelve routes
+// and would hand a city manager every one of them, plus anything added later, silently.
+console.log("\ncityManagerGate — a third tier, deny by default, scope REQUIRED:");
+const CITYMGR = { id: "u-cm", is_admin: false, is_city_manager: true, city_identifier: "DFW" };
+is("a city manager passes and gets their SCOPE back", cityManagerGate(CITYMGR, "cm@playmatchday.com"), { ok: true, cityIdentifier: "DFW" });
+is("a city manager with NO city is refused (never 'all cities')",
+  cityManagerGate({ id: "u-nc", is_city_manager: true }, "nc@x.com").ok, false);
+is("a blank/whitespace city is refused too", cityManagerGate({ id: "u-b", is_city_manager: true, city_identifier: "   " }, "b@x.com").ok, false);
+is("a no-flags account is refused", cityManagerGate(NOFLAGS, "x@playmatchday.com").ok, false);
+is("missing row is refused", cityManagerGate(null, "x@x").ok, false);
+// an ADMIN is NOT a city manager — this gate answers "which city are you scoped to", and an admin
+// has no scope to hand back. Deliberate asymmetry with matchOpsAuth, where is_admin IS sufficient.
+is("an ADMIN does not satisfy the city-manager gate (no scope to return)", cityManagerGate(ADMIN, "admin@playmatchday.com").ok, false);
+// Deonna holds Match Ops, which must NOT imply the city tier
+is("a Match Ops operator does NOT get the city tier for free", cityManagerGate(DEONNA, DEONNA_EMAIL).ok, false);
+is("the E2E service account is BLOCKED by email", cityManagerGate({ id: "e", is_city_manager: true, city_identifier: "ATX" }, E2E_SERVICE_EMAIL).ok, false);
+is("any is_service_account row is blocked regardless of email",
+  cityManagerGate({ id: "e2", is_city_manager: true, city_identifier: "ATX", is_service_account: true }, "someone@x.com").ok, false);
+// the city tier grants NO match-ops write flags
+is("the city tier derives NO Match Ops write flags", deriveMatchOpsFlags(CITYMGR), { canEditMatches: false, canManagePlayers: false, canManagePromos: false });
+// and it does NOT open the Match Ops read gate
+is("a city manager is REFUSED by the Match Ops read gate (separate tiers)", matchOpsReadGate(CITYMGR, "cm@playmatchday.com").ok, false);
+
+console.log("\nassertCityScope — the SERVER-SIDE refusal (not a hidden UI row):");
+is("a match in the caller's own city passes", assertCityScope("DFW", "DFW"), { ok: true });
+is("a match in ANOTHER city is REFUSED 403", assertCityScope("DFW", "ATX"), { ok: false, status: 403, error: "That match is not in your city." });
+is("case and whitespace do not open a hole", assertCityScope("DFW", " dfw "), { ok: true });
+is("a spoofed ?city= for another city is refused", assertCityScope("DFW", "atx").ok, false);
+is("naming no city applies the caller's own scope", assertCityScope("DFW", null), { ok: true });
+
+// CENSUS: the city gate is opt-in, route by route. Nothing is on it yet — Part B adds the first.
+{ const importsCity = routeFiles.filter((f) => readFileSync(f, "utf8").includes("authenticateCityManager"));
+  is("authenticateCityManager is imported by EXACTLY the intended routes (a new one must edit this test)",
+    importsCity.map(rel).sort(), ["manager-pay/city-week/route.ts"]); }
 
 // ── THE WALK: whole paths, not routes in isolation ──
 //

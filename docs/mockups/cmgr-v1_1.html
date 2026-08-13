@@ -1,0 +1,615 @@
+<!doctype html>
+<html lang="en">
+<head>
+<meta charset="utf-8">
+<meta name="viewport" content="width=device-width,initial-scale=1">
+<title>Clubhouse — City Manager</title>
+<style>
+*{box-sizing:border-box}
+:root{
+  --ink:#0e1a13; --ink2:#3d5349; --ink3:#4a6157;
+  --line:#dde6e1; --line2:#cbd8d1; --bg:#f2f6f4; --card:#fff;
+  --grn:#146c43; --grnbg:#e6f4ec; --grnln:#9fd3b6;
+  --amb:#8a5600; --ambbg:#fdf2e0; --ambln:#e8c383;
+  --red:#b3241f; --redbg:#fdecea; --redln:#f0a9a4;
+  --blu:#1d4f8f; --blubg:#e8f0fa; --bluln:#a8c4e6;
+  --dark:#12301f; --nav:#0f2a1c; --acc:#3ddc84; --focus:#0b6bcb;
+  --navh:58px;
+}
+html,body{margin:0;padding:0;min-height:100%}
+body{font:14px/1.45 ui-sans-serif,-apple-system,"Segoe UI",Roboto,Helvetica,Arial,sans-serif;
+  color:var(--ink);background:var(--bg);-webkit-font-smoothing:antialiased}
+
+/* ── top nav ─────────────────────────────────────────────── */
+.topnav{height:var(--navh);background:var(--nav);color:#fff;display:flex;align-items:center;
+  gap:14px;padding:0 18px;position:sticky;top:0;z-index:40}
+.brand{font-weight:800;letter-spacing:-.02em;color:var(--acc);font-size:16px;white-space:nowrap}
+.brand span{color:#fff;font-weight:600;font-style:italic;margin-left:5px;font-size:14px}
+/* The role is stated in the chrome, not left to be inferred from what is missing.
+   Someone who only ever sees two pages should be told why, once, permanently. */
+.rolechip{display:inline-flex;align-items:center;gap:7px;background:#1d4a31;border:1px solid #2f6b48;
+  color:#cfe4d8;border-radius:999px;padding:4px 11px;font-size:11.5px;font-weight:700;
+  letter-spacing:.02em}
+.rolechip b{color:var(--acc);font-weight:800}
+.me{margin-left:auto;font-size:13px;color:#cfe4d8;white-space:nowrap}
+
+.frame{display:flex;align-items:flex-start;min-height:calc(100vh - var(--navh))}
+.side{width:212px;flex:0 0 212px;background:var(--card);border-right:1px solid var(--line);
+  padding:12px 0;align-self:stretch}
+.sgrp{font-size:9.5px;font-weight:800;letter-spacing:.14em;color:var(--ink3);padding:10px 18px 6px}
+.snav{display:flex;align-items:center;gap:11px;width:100%;border:0;background:none;font:inherit;
+  text-align:left;padding:9px 18px;cursor:pointer;color:var(--ink2);font-size:13.5px;min-height:40px}
+.snav:hover{background:#f4f9f6}
+.snav.on{background:var(--grnbg);color:var(--grn);font-weight:700;box-shadow:inset 3px 0 0 var(--grn)}
+.snav .ic{width:15px;text-align:center;opacity:.75}
+
+.main{flex:1 1 auto;min-width:0;padding:18px 20px 70px}
+.mtitle{font-size:22px;font-weight:700;letter-spacing:-.02em;margin:0 0 2px}
+.msub{color:var(--ink2);font-size:13px;margin:0 0 15px}
+
+/* the city badge replaces the admin city filter row entirely */
+.citybar{display:flex;align-items:center;gap:10px;margin:0 0 14px;flex-wrap:wrap}
+.citybadge{display:inline-flex;align-items:center;gap:8px;background:var(--dark);color:#fff;
+  border-radius:9px;padding:6px 13px;font-weight:800;font-size:13px;letter-spacing:.02em}
+.citynote{font-size:12px;color:var(--ink3)}
+
+.tiles{display:grid;grid-template-columns:repeat(4,1fr);gap:11px;margin-bottom:14px}
+.tile{background:var(--card);border:1px solid var(--line);border-radius:13px;padding:14px 15px;min-width:0}
+.tile.hero{background:#f3fbf6;border-color:var(--grnln)}
+.tl{font-size:9.5px;font-weight:800;letter-spacing:.13em;color:var(--ink3);margin:0 0 6px}
+.tv{font-size:27px;font-weight:800;line-height:1;letter-spacing:-.02em;font-variant-numeric:tabular-nums;margin:0}
+.tile.hero .tv{color:#b8460f}
+.tf{font-size:11.5px;color:var(--ink3);margin:7px 0 0}
+
+.card{background:var(--card);border:1px solid var(--line);border-radius:13px;margin-bottom:13px}
+.chd{display:flex;align-items:center;gap:10px;padding:14px 16px;border-bottom:1px solid var(--line);flex-wrap:wrap}
+.cht{font-size:15px;font-weight:800;letter-spacing:-.01em;margin:0}
+.chs{font-size:12px;color:var(--ink3)}
+.chr{margin-left:auto;display:flex;align-items:center;gap:10px}
+
+/* ── the week ────────────────────────────────────────────── */
+.week{display:grid;grid-template-columns:repeat(7,1fr);gap:10px;padding:14px 16px}
+.day{min-width:0}
+.dnm{font-size:9.5px;font-weight:800;letter-spacing:.12em;color:var(--ink3)}
+.ddt{font-size:13.5px;font-weight:700;margin:1px 0 9px}
+.mcard{display:block;width:100%;text-align:left;border:1px solid var(--line);background:var(--card);
+  border-radius:10px;padding:9px 10px;margin-bottom:8px;cursor:pointer;font:inherit;color:var(--ink)}
+.mcard:hover{border-color:var(--grn);background:#f7fcf9}
+.mcard.cx{background:#fdf6f5;border-color:var(--redln)}
+.mcard.cx .mt,.mcard.cx .mf{text-decoration:line-through;color:var(--red)}
+.mcard.open{border-color:var(--grn);box-shadow:0 0 0 2px var(--grnbg)}
+/* a match nobody is on is the thing a city manager is here to fix, so it is
+   loud rather than absent — an empty MANAGER line reads as a rendering bug */
+.mcard.none{border-color:var(--ambln);background:var(--ambbg)}
+.mt{display:block;font-weight:800;font-size:12.5px}
+.mf{display:block;font-size:12px;color:var(--ink2);margin-top:1px}
+.mmg{display:block;font-size:12.5px;font-weight:700;margin-top:5px}
+.mmg.unset{color:var(--amb)}
+.msg{display:block;font-size:11.5px;color:var(--ink3);margin-top:3px}
+.pay{color:var(--grn);font-weight:800}
+.dash{color:var(--ink3);font-size:13px}
+
+/* ── pay table ───────────────────────────────────────────── */
+table.t{width:100%;border-collapse:collapse}
+table.t th{font-size:9.5px;font-weight:800;letter-spacing:.11em;color:var(--ink3);text-align:left;
+  padding:12px 14px 8px;border-bottom:1px solid var(--line);white-space:nowrap}
+table.t td{padding:12px 14px;border-bottom:1px solid var(--line);font-size:13.5px;vertical-align:top}
+table.t tr:last-child td{border-bottom:0}
+.num{text-align:right;font-variant-numeric:tabular-nums}
+.mono{font-variant-numeric:tabular-nums}
+.mgname{font-weight:800}
+.mgmail{display:block;font-size:11.5px;color:var(--ink3);font-weight:400;margin-top:1px}
+tr.meRow{background:#f3fbf6}
+.youchip{display:inline-block;margin-left:7px;background:var(--grnbg);color:var(--grn);
+  border:1px solid var(--grnln);border-radius:999px;padding:1px 8px;font-size:10px;font-weight:800;
+  letter-spacing:.04em;vertical-align:1px}
+tr.tot td{font-weight:800;background:#fafcfb;font-size:14px}
+.adjr{font-size:11.5px;color:var(--ink3);display:block;margin-top:2px}
+/* Mobile-only summary. It carries NO shared layout class — the Promo Codes bug was
+   a hide-me element wearing .cell, which won on source order and leaked at desktop. */
+.cmmob{display:none;font-size:11.5px;color:var(--ink3);margin-top:3px}
+.nadj{color:var(--ink3);font-size:12.5px}
+
+.pill{display:inline-block;padding:2px 8px;border-radius:999px;font-size:10.5px;font-weight:800;
+  letter-spacing:.03em;border:1px solid}
+.pill.cx{background:var(--redbg);color:var(--red);border-color:var(--redln)}
+.pill.ok{background:var(--grnbg);color:var(--grn);border-color:var(--grnln)}
+
+.btn{border:1px solid var(--line2);background:var(--card);border-radius:10px;padding:0 14px;
+  font:inherit;font-weight:700;cursor:pointer;color:var(--ink2);min-height:40px;white-space:nowrap}
+.btn:hover{background:#f6faf8}
+.btn.pri{background:var(--dark);border-color:var(--dark);color:#fff}
+.btn.pri:hover{background:#1b4630}
+.btn.sm{min-height:34px;padding:0 11px;font-size:12.5px;border-radius:9px}
+.btn:disabled{opacity:.45;cursor:not-allowed}
+:focus-visible{outline:2px solid var(--focus);outline-offset:2px}
+
+.note{display:block;border-radius:10px;padding:10px 12px;font-size:12.5px;border:1px solid}
+.note.info{background:var(--blubg);border-color:var(--bluln);color:#123a6b}
+.note.warn{background:var(--ambbg);border-color:var(--ambln);color:#6b4400}
+.note.bad{background:var(--redbg);border-color:var(--redln);color:#7d1a16}
+.note.good{background:var(--grnbg);border-color:var(--grnln);color:#0d5433}
+.note b{font-weight:800}
+
+/* ── the match sheet ─────────────────────────────────────── */
+.scrim{position:fixed;inset:0;background:rgba(9,24,17,.34);z-index:60}
+.scrim[hidden]{display:none}
+.sheet{position:fixed;top:0;right:0;bottom:0;width:min(430px,100%);background:var(--card);
+  z-index:61;display:flex;flex-direction:column;box-shadow:-16px 0 40px rgba(9,24,17,.2)}
+.sheet[hidden]{display:none}
+.shd{display:flex;align-items:flex-start;gap:10px;padding:14px 16px;border-bottom:1px solid var(--line);
+  background:#fafcfb}
+.sht{font-size:15.5px;font-weight:800;margin:0;letter-spacing:-.01em}
+.shs{font-size:12px;color:var(--ink3);margin:2px 0 0}
+.ibtn{margin-left:auto;border:1px solid transparent;background:none;border-radius:8px;min-width:36px;
+  min-height:36px;cursor:pointer;color:var(--ink3);font-size:17px;line-height:1;display:inline-flex;
+  align-items:center;justify-content:center}
+.ibtn:hover{background:#eef4f1;color:var(--ink)}
+.sbd{flex:1 1 auto;overflow:auto;padding:14px 16px}
+.sft{border-top:1px solid var(--line);padding:12px 16px;display:flex;align-items:center;gap:10px;
+  background:var(--card)}
+.sft .btn.pri{margin-left:auto}
+
+.ro{display:grid;grid-template-columns:1fr 1fr;gap:9px;margin-bottom:13px}
+.rof{background:#f7faf8;border:1px solid var(--line);border-radius:10px;padding:8px 10px;min-width:0}
+.rok{display:block;font-size:9.5px;font-weight:800;letter-spacing:.11em;color:var(--ink3)}
+.rov{display:block;font-size:13.5px;font-weight:700;margin-top:2px;overflow:hidden;text-overflow:ellipsis}
+
+.lb{display:block;font-size:9.5px;font-weight:800;letter-spacing:.12em;color:var(--ink3);margin-bottom:5px}
+select.f{width:100%;font:inherit;font-size:14.5px;font-weight:700;min-height:46px;padding:0 10px;
+  border:1px solid var(--line2);border-radius:11px;background:#fbfdfc;color:var(--ink)}
+select.f:disabled{background:#f1f4f2;color:var(--ink3);cursor:not-allowed}
+select.f.chg{border-color:var(--grn);background:#f2fbf6;box-shadow:inset 0 0 0 1px var(--grnln)}
+
+.only{display:block;margin:12px 0 0;font-size:12px;color:var(--ink3)}
+.only b{color:var(--ink2)}
+
+/* ── narrow ──────────────────────────────────────────────── */
+@media (max-width:1180px){
+  .tiles{grid-template-columns:repeat(2,1fr)}
+  .week{grid-template-columns:repeat(2,1fr)}
+}
+@media (max-width:760px){
+  .side{display:none}
+  .main{padding:14px 12px 70px}
+  .tiles{grid-template-columns:1fr}
+  .week{grid-template-columns:1fr;padding:12px}
+  .day{border-bottom:1px solid var(--line);padding-bottom:9px;margin-bottom:2px}
+  .day:last-child{border-bottom:0}
+  table.t th,table.t td{padding:10px 10px}
+  table.t th.thide,table.t td.thide{display:none}
+  .cmmob{display:block}
+  .topnav{gap:9px;padding:0 12px}
+  .me{display:none}
+  .rolechip{font-size:11px;padding:3px 9px}
+}
+</style>
+</head>
+<body>
+
+<div class="topnav">
+  <span class="brand">MATCHDAY<span>Clubhouse</span></span>
+  <span class="rolechip" id="rolechip">City manager · <b id="rolecity">DFW</b></span>
+  <span class="me" id="whoami">Chris Padilla ▾</span>
+</div>
+
+<div class="frame">
+  <div class="side" id="side"></div>
+  <div class="main" id="main"></div>
+</div>
+
+<div class="scrim" id="scrim" hidden></div>
+<aside class="sheet" id="sheet" hidden aria-label="Match"></aside>
+
+<script>
+/* ══════════════════════════════════════════════════════════════
+   CITY MANAGER VIEW
+
+   The first Clubhouse account that is not an admin. Two ideas govern it.
+
+   1. ONE WRITE. A city manager can change who manages a match. That is
+      the whole of their write access. Every other value on this screen
+      is rendered read-only and says so in words, because a field that
+      merely LOOKS uneditable is a field someone will try to edit.
+
+   2. THE SCOPE IS THE ACCOUNT, NOT THE SCREEN. There is no city filter
+      because there is nothing to filter — the account is one city. A
+      real build must enforce that on the server, on every read AND on
+      the write: a manager who edits the match id in a request must be
+      refused, not merely un-shown the other cities.
+   ══════════════════════════════════════════════════════════════ */
+
+const CITY = "DFW";
+const PAYDAY = "Tue Aug 11";
+const WEEK_PAID = false;          /* has this week's payout already gone out */
+
+const ME = "chris";
+const MGRS = {
+  chris:   { id:"chris",   name:"Chris Padilla",   email:"chrispadilla21@me.com" },
+  lemmy:   { id:"lemmy",   name:"Lemmy",           email:"lemueltembi@gmail.com" },
+  rooby:   { id:"rooby",   name:"Rooby Amilcar",   email:"roobyamilcar@gmail.com" },
+  sheridan:{ id:"sheridan",name:"Sheridan Nguyen", email:"sheridan.nguyen@gmail.com" },
+  alan:    { id:"alan",    name:"alan mendieta",   email:"alan.mendieta@gmail.com" },
+  desheng: { id:"desheng", name:"Desheng Liu",     email:"desheng.liu@gmail.com" },
+};
+const RATE = 2000;                              /* cents per match worked */
+
+/* Aug 3–9. Cancelled matches pay nobody; neither does an unassigned one. */
+const MATCHES = [
+  { id:"m1", day:0, time:"8:00 PM", field:"Lowell H. Strike Middle School",
+    mgr:"chris",   signed:22, cap:22, cancelled:false },
+  { id:"m2", day:1, time:"7:00 PM", field:"Bicentennial Park",
+    mgr:"sheridan",signed:6,  cap:18, cancelled:true  },
+  { id:"m3", day:1, time:"8:00 PM", field:"Lowell H. Strike Middle School",
+    mgr:"alan",    signed:5,  cap:18, cancelled:true  },
+  { id:"m4", day:1, time:"8:00 PM", field:"Crossbar Rowlett",
+    mgr:"rooby",   signed:12, cap:18, cancelled:false },
+  { id:"m5", day:3, time:"8:00 PM", field:"Crossbar Rowlett",
+    mgr:"rooby",   signed:20, cap:20, cancelled:false },
+  { id:"m6", day:3, time:"8:00 PM", field:"Lowell H. Strike Middle School",
+    mgr:"desheng", signed:8,  cap:18, cancelled:true  },
+  { id:"m7", day:3, time:"8:00 PM", field:"Bicentennial Park",
+    mgr:"lemmy",   signed:12, cap:18, cancelled:false },
+  { id:"m8", day:5, time:"8:00 PM", field:"Crossbar Rowlett",
+    mgr:"rooby",   signed:4,  cap:18, cancelled:true  },
+  { id:"m9", day:6, time:"7:00 PM", field:"Bicentennial Park",
+    mgr:"lemmy",   signed:5,  cap:18, cancelled:true  },
+  { id:"m10",day:6, time:"8:00 PM", field:"Crossbar Rowlett",
+    mgr:null,      signed:4,  cap:18, cancelled:false },
+];
+
+/* Adjustments are visible — Ryan chose whole-city transparency — but they are
+   not editable here. The admin view's "+ Add adjustment" must not render. */
+const ADJUSTMENTS = [
+  { mgr:"chris", cents:1000, why:"backup team member coverage · Aug 4" },
+];
+
+const DAYS  = ["MON","TUE","WED","THU","FRI","SAT","SUN"];
+const DATES = ["Aug 3","Aug 4","Aug 5","Aug 6","Aug 7","Aug 8","Aug 9"];
+
+let screen = "pay";           /* pay | reviews */
+let openId = null;            /* which match sheet is open */
+let pick   = null;            /* staged manager id inside the sheet */
+let toast  = null;            /* { kind, text } after a save */
+
+const money = c => "$" + (c / 100).toFixed(0);
+const mgrName = id => id ? MGRS[id].name : null;
+const match = id => MATCHES.find(m => m.id === id);
+
+/* A match pays exactly when it ran and somebody was on it. Both conditions,
+   every time — this predicate is the only place the rule lives. */
+const pays = m => !m.cancelled && !!m.mgr;
+
+function worked(mid){ return MATCHES.filter(m => pays(m) && m.mgr === mid).length; }
+function adjFor(mid){ return ADJUSTMENTS.filter(a => a.mgr === mid); }
+function adjTotal(mid){ return adjFor(mid).reduce((n,a) => n + a.cents, 0); }
+function payFor(mid){ return worked(mid) * RATE + adjTotal(mid); }
+
+/* Every manager with either a worked match or an adjustment, in the order they
+   appear in the roster — not "everyone in the city", which would list six
+   people with $0 and bury the four who are owed something. */
+function payRows(){
+  return Object.values(MGRS)
+    .filter(m => worked(m.id) > 0 || adjFor(m.id).length > 0)
+    .map(m => ({ ...m, n: worked(m.id), base: worked(m.id) * RATE,
+                 adj: adjTotal(m.id), total: payFor(m.id) }));
+}
+const cityTotal   = () => payRows().reduce((n,r) => n + r.total, 0);
+const cityBase    = () => payRows().reduce((n,r) => n + r.base, 0);
+const cityAdj     = () => payRows().reduce((n,r) => n + r.adj, 0);
+const paidMatches = () => MATCHES.filter(pays).length;
+const cancelled   = () => MATCHES.filter(m => m.cancelled).length;
+const unassigned  = () => MATCHES.filter(m => !m.cancelled && !m.mgr).length;
+
+/* ── sidebar ───────────────────────────────────────────────── */
+const NAV = [["pay","◫","Manager Pay"],["reviews","☆","Reviews"]];
+function paintSide(){
+  const h = document.getElementById("side");
+  h.textContent = "";
+  const g = document.createElement("p");
+  g.className = "sgrp"; g.textContent = "YOUR CITY";
+  h.appendChild(g);
+  NAV.forEach(([k, ic, label]) => {
+    const b = document.createElement("button");
+    b.className = "snav" + (screen === k ? " on" : "");
+    b.id = "nav-" + k; b.dataset.screen = k;
+    b.innerHTML = `<span class="ic">${ic}</span><span>${label}</span>`;
+    b.addEventListener("click", () => { screen = k; openId = null; render(); });
+    h.appendChild(b);
+  });
+}
+
+/* ── main ──────────────────────────────────────────────────── */
+function paintMain(){
+  const h = document.getElementById("main");
+  h.innerHTML = screen === "pay" ? payHTML() : reviewsHTML();
+
+  h.querySelectorAll("[data-open]").forEach(b =>
+    b.addEventListener("click", () => {
+      openId = b.dataset.open;
+      pick = match(openId).mgr;
+      toast = null;
+      render();
+    }));
+}
+
+function tilesHTML(){
+  return `
+  <div class="tiles" id="tiles">
+    <div class="tile hero">
+      <p class="tl">TOTAL PAYOUT</p>
+      <p class="tv" id="tv-total">${money(cityTotal())}</p>
+      <p class="tf">${money(cityBase())} in match pay + ${money(cityAdj())} across
+        ${ADJUSTMENTS.length} adjustment${ADJUSTMENTS.length === 1 ? "" : "s"} · ${CITY} only</p>
+    </div>
+    <div class="tile">
+      <p class="tl">MANAGERS PAID</p>
+      <p class="tv" id="tv-mgrs">${payRows().length}</p>
+      <p class="tf">pays ${PAYDAY}</p>
+    </div>
+    <div class="tile">
+      <p class="tl">MATCHES PAID</p>
+      <p class="tv" id="tv-paid">${paidMatches()}</p>
+      <p class="tf">of ${MATCHES.length} on the calendar · ${cancelled()} cancelled and
+        ${unassigned()} with nobody assigned, neither of which pays</p>
+    </div>
+    <div class="tile">
+      <p class="tl">NEEDS A LOOK</p>
+      <p class="tv" id="tv-look">${unassigned()}</p>
+      <p class="tf" id="tf-look">${unassigned() === 0
+        ? "every match that will run has a manager"
+        : `${unassigned()} match${unassigned() === 1 ? "" : "es"} will run with nobody on it`}</p>
+    </div>
+  </div>`;
+}
+
+function payHTML(){
+  const rows = payRows();
+  return `
+  <h1 class="mtitle">Manager Pay</h1>
+  <p class="msub">The week of Aug 3 — what your city owes, and who worked it.</p>
+
+  <div class="citybar">
+    <span class="citybadge" id="citybadge">${CITY}</span>
+    <span class="citynote" id="citynote">Your account covers ${CITY}. Other cities are not
+      shown and cannot be reached from this login.</span>
+  </div>
+
+  ${tilesHTML()}
+
+  ${unassigned() > 0 ? `<span class="note warn" id="unassigned-note" style="margin-bottom:13px">
+    <b>${unassigned()} match${unassigned() === 1 ? " has" : "es have"} nobody assigned.</b>
+    It will still run, and it pays nobody until someone is on it. Click the amber card below
+    to assign a manager.</span>` : ""}
+
+  ${toast ? `<span class="note ${toast.kind}" id="toast" style="margin-bottom:13px">${toast.text}</span>` : ""}
+
+  <div class="card">
+    <div class="chd">
+      <p class="cht">The week, and what it pays</p>
+      <span class="chs">${MATCHES.length} matches · click a match to change its manager</span>
+    </div>
+    <div class="week" id="week">
+      ${DAYS.map((d, i) => {
+        const list = MATCHES.filter(m => m.day === i);
+        return `<div class="day" data-day="${i}">
+          <span class="dnm">${d}</span>
+          <span class="ddt">${DATES[i]}</span>
+          ${list.length === 0 ? `<span class="dash">—</span>` : list.map(m => {
+            const cls = m.cancelled ? "cx" : !m.mgr ? "none" : "";
+            return `<button type="button" class="mcard ${cls} ${openId === m.id ? "open" : ""}"
+              data-open="${m.id}" id="mc-${m.id}"
+              aria-label="${m.time} ${m.field}, ${m.mgr ? mgrName(m.mgr) : "no manager"}">
+              <span class="mt">${m.time}</span>
+              <span class="mf">${m.field}</span>
+              <span class="mmg ${m.mgr ? "" : "unset"}">${m.mgr ? mgrName(m.mgr) : "No manager"}</span>
+              <span class="msg">${m.signed}/${m.cap} signed up
+                ${m.cancelled ? `<span class="pill cx">CANCELLED</span>`
+                  : pays(m) ? `<span class="pay">${money(RATE)}</span>` : ""}</span>
+            </button>`;
+          }).join("")}
+        </div>`;
+      }).join("")}
+    </div>
+
+    <table class="t" id="paytable">
+      <thead><tr>
+        <th>MANAGER</th><th class="num thide">MATCHES WORKED</th><th class="num thide">MATCH PAY</th>
+        <th class="thide">ADJUSTMENT</th><th class="num">TOTAL</th>
+      </tr></thead>
+      <tbody>
+        ${rows.map(r => `<tr class="${r.id === ME ? "meRow" : ""}" data-mgrrow="${r.id}">
+          <td><span class="mgname">${r.name}${r.id === ME
+                ? `<span class="youchip" id="youchip">YOU</span>` : ""}</span>
+            <span class="mgmail">${r.email}</span>
+            <span class="cmmob">${r.n} match${r.n === 1 ? "" : "es"} · ${money(r.base)} pay${
+              r.adj ? ` · ${money(r.adj)} adjustment` : ""}</span></td>
+          <td class="num mono thide">${r.n}<span class="adjr">all at ${money(RATE)}</span></td>
+          <td class="num mono thide">${money(r.base)}</td>
+          <td class="thide">${r.adj ? adjFor(r.id).map(a =>
+                `<b>${money(a.cents)}</b><span class="adjr">${a.why}</span>`).join("")
+              : `<span class="nadj">—</span>`}</td>
+          <td class="num mono"><b>${money(r.total)}</b></td>
+        </tr>`).join("")}
+        <tr class="tot"><td>${CITY} total</td>
+          <td class="num mono thide">${paidMatches()}</td>
+          <td class="num mono thide">${money(cityBase())}</td>
+          <td class="thide">${money(cityAdj())} in adjustments</td>
+          <td class="num mono">${money(cityTotal())}</td></tr>
+      </tbody>
+    </table>
+  </div>
+
+  <span class="note info" id="readonly-note">
+    <b>Pay figures are read-only.</b> Match pay follows from who worked, so changing a
+    manager changes it. Adjustments are entered by MatchDay — message us and we will add one.
+  </span>`;
+}
+
+function reviewsHTML(){
+  const R = [
+    { who:"Marco R.", stars:5, when:"Aug 6", field:"Crossbar Rowlett", mgr:"rooby",
+      text:"Well run, teams were even, started on time." },
+    { who:"Priya S.", stars:2, when:"Aug 4", field:"Crossbar Rowlett", mgr:"rooby",
+      text:"Nets were down and nobody had a pump. Waited 20 minutes." },
+    { who:"Dan W.",   stars:4, when:"Aug 3", field:"Lowell H. Strike Middle School", mgr:"chris",
+      text:"Good match, would have liked more subs." },
+    { who:"Aisha K.", stars:5, when:"Aug 6", field:"Bicentennial Park", mgr:"lemmy",
+      text:"Lemmy is great, always sorts the teams out fairly." },
+  ];
+  const avg = (R.reduce((n,r) => n + r.stars, 0) / R.length).toFixed(1);
+  return `
+  <h1 class="mtitle">Reviews</h1>
+  <p class="msub">What players said about matches in your city.</p>
+
+  <div class="citybar">
+    <span class="citybadge">${CITY}</span>
+    <span class="citynote">Your account covers ${CITY}. Other cities are not shown.</span>
+  </div>
+
+  <div class="tiles" style="grid-template-columns:repeat(3,1fr)">
+    <div class="tile"><p class="tl">AVERAGE</p><p class="tv" id="rv-avg">${avg}</p>
+      <p class="tf">across ${R.length} reviews this week</p></div>
+    <div class="tile"><p class="tl">REVIEWS</p><p class="tv">${R.length}</p>
+      <p class="tf">Aug 3 – Aug 9</p></div>
+    <div class="tile"><p class="tl">UNDER 3 STARS</p><p class="tv" id="rv-low">
+      ${R.filter(r => r.stars < 3).length}</p><p class="tf">worth reading first</p></div>
+  </div>
+
+  <div class="card">
+    <div class="chd"><p class="cht">This week</p>
+      <span class="chs">newest first</span></div>
+    <table class="t" id="revtable">
+      <thead><tr><th>PLAYER</th><th>STARS</th><th class="thide">MATCH</th><th class="thide">MANAGER</th><th>WHAT THEY SAID</th></tr></thead>
+      <tbody>${R.map(r => `<tr class="${r.stars < 3 ? "low" : ""}">
+        <td><b>${r.who}</b><span class="mgmail">${r.when}</span></td>
+        <td class="mono"><b>${r.stars}</b> / 5</td>
+        <td class="thide">${r.field}</td>
+        <td class="thide">${mgrName(r.mgr)}</td>
+        <td style="color:var(--ink2)">${r.text}</td></tr>`).join("")}</tbody>
+    </table>
+  </div>
+
+  <span class="note info" id="rev-readonly">
+    <b>Reviews are read-only.</b> Nothing here can be edited or removed from this login.
+  </span>`;
+}
+
+/* ── the match sheet ───────────────────────────────────────── */
+function paintSheet(){
+  const sheet = document.getElementById("sheet");
+  const scrim = document.getElementById("scrim");
+  if (!openId){ sheet.hidden = true; scrim.hidden = true; sheet.textContent = ""; return; }
+  scrim.hidden = false; sheet.hidden = false;
+
+  const m = match(openId);
+  const dirty = pick !== m.mgr;
+
+  /* A cancelled match pays nobody, so assigning one is a no-op that LOOKS like
+     an action. Disabled, with the reason, beats a control that quietly wastes
+     someone's time. */
+  const locked = m.cancelled || WEEK_PAID;
+  const lockWhy = m.cancelled
+    ? `This match was cancelled, so it pays nobody. Assigning a manager would not
+       change anyone's pay.`
+    : `This week was already paid out on ${PAYDAY}. Changing a manager now would not
+       move any money. Message MatchDay if a payment was wrong.`;
+
+  /* The consequence, in money, before the click — not after. Match pay follows
+     from who worked, so a reassignment always moves $20 between two people. */
+  let impact = "";
+  if (dirty && !locked){
+    const from = m.mgr ? mgrName(m.mgr) : null;
+    const to   = pick ? mgrName(pick) : null;
+    if (from && to)      impact = `<b>${money(RATE)} moves from ${from} to ${to}</b> for the week
+                                   of Aug 3. ${from}'s total becomes ${money(payFor(m.mgr) - RATE)},
+                                   ${to}'s becomes ${money(payFor(pick) + RATE)}.`;
+    else if (!from && to) impact = `<b>${to} is paid ${money(RATE)}</b> for this match. Their total
+                                   becomes ${money(payFor(pick) + RATE)} and the city total becomes
+                                   ${money(cityTotal() + RATE)}.`;
+    else if (from && !to) impact = `<b>${from} loses ${money(RATE)}</b> and this match pays nobody.
+                                   The city total becomes ${money(cityTotal() - RATE)}.`;
+  }
+
+  sheet.innerHTML = `
+    <div class="shd">
+      <div>
+        <p class="sht" id="sh-title">${m.time} · ${m.field}</p>
+        <p class="shs" id="sh-sub">${DAYS[m.day]} ${DATES[m.day]} · ${m.signed}/${m.cap} signed up
+          ${m.cancelled ? " · cancelled" : ""}</p>
+      </div>
+      <button class="ibtn" id="sh-close" aria-label="Close">×</button>
+    </div>
+
+    <div class="sbd">
+      ${m.cancelled ? `<span class="note bad" id="sh-cancelled" style="margin-bottom:13px">
+        <b>This match is cancelled.</b> Players were credited and told.</span>` : ""}
+
+      <span class="lb">MANAGER</span>
+      <select class="f ${dirty ? "chg" : ""}" id="sh-mgr" ${locked ? "disabled" : ""}
+        aria-label="Manager for this match">
+        <option value=""${pick ? "" : " selected"}>— nobody —</option>
+        ${Object.values(MGRS).map(g =>
+          `<option value="${g.id}"${pick === g.id ? " selected" : ""}>${g.name}</option>`).join("")}
+      </select>
+      <span class="only" id="sh-scope">Only managers in <b>${CITY}</b> can be assigned.</span>
+
+      ${locked ? `<span class="note warn" id="sh-locked" style="margin-top:13px">${lockWhy}</span>` : ""}
+      ${impact ? `<span class="note good" id="sh-impact" style="margin-top:13px">${impact}</span>` : ""}
+
+      <div class="ro" style="margin-top:16px">
+        <span class="rof"><span class="rok">DATE</span><span class="rov">${DATES[m.day]}</span></span>
+        <span class="rof"><span class="rok">KICK-OFF</span><span class="rov">${m.time}</span></span>
+        <span class="rof"><span class="rok">FIELD</span><span class="rov">${m.field}</span></span>
+        <span class="rof"><span class="rok">SIGNED UP</span><span class="rov">${m.signed} of ${m.cap}</span></span>
+        <span class="rof"><span class="rok">PAYS</span><span class="rov" id="sh-pays">${
+          /* reads the STAGED pick, not the saved manager — sitting next to "Chris is
+             paid $20", a PAYS line still saying "nothing" reads as a contradiction */
+          (!m.cancelled && pick) ? money(RATE) : "nothing"}</span></span>
+        <span class="rof"><span class="rok">STATUS</span><span class="rov">${
+          m.cancelled ? "Cancelled" : "Scheduled"}</span></span>
+      </div>
+
+      <span class="only" id="sh-only">
+        <b>The manager is the only thing you can change here.</b> Everything above is shown so you
+        know what you are looking at. Times, fields, prices and cancellations are changed by
+        MatchDay — message us and we will do it.
+      </span>
+    </div>
+
+    <div class="sft">
+      <button class="btn" id="sh-cancelbtn">Close</button>
+      <button class="btn pri" id="sh-save" ${dirty && !locked ? "" : "disabled"}>${
+        pick ? `Assign ${mgrName(pick)}` : "Remove the manager"}</button>
+    </div>`;
+
+  document.getElementById("sh-close").addEventListener("click", closeSheet);
+  document.getElementById("sh-cancelbtn").addEventListener("click", closeSheet);
+  document.getElementById("scrim").addEventListener("click", closeSheet);
+  const sel = document.getElementById("sh-mgr");
+  sel.addEventListener("change", e => { pick = e.target.value || null; paintSheet(); });
+  document.getElementById("sh-save").addEventListener("click", save);
+}
+
+function closeSheet(){ openId = null; pick = null; render(); }
+
+/* Confirm then apply. The row does not move until the write is accepted —
+   an optimistic pay table would show money that had not actually moved. */
+function save(){
+  const m = match(openId);
+  const from = m.mgr, to = pick;
+  m.mgr = to;
+  toast = { kind:"good", text: to
+    ? `<b>${mgrName(to)} is now on ${m.time} ${m.field}.</b>${
+        from ? ` ${mgrName(from)} was removed from it.` : ""} Pay for the week has been recalculated.`
+    : `<b>${from ? mgrName(from) + " was removed" : "Nobody is on"} ${m.time} ${m.field}.</b>
+       It now pays nobody.` };
+  openId = null; pick = null;
+  render();
+}
+
+function render(){ paintSide(); paintMain(); paintSheet(); }
+render();
+</script>
+</body>
+</html>

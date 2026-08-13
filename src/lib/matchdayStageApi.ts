@@ -118,7 +118,11 @@ export class NotAuthorizedError extends Error {
 // Who is performing a write, and whether they may. Derived server-side from the
 // authenticated user's app_users row (can_edit_matches AND can_access_matchops) — never
 // from client state. Reads (apiGet) need no actor; only writes do.
-export type WriteActor = { canEditMatches: boolean; canManagePlayers?: boolean; canManagePromos?: boolean; email?: string; userId?: string };
+export type WriteActor = { canEditMatches: boolean; canManagePlayers?: boolean; canManagePromos?: boolean; email?: string; userId?: string;
+  // Phase 25 — a CITY MANAGER's scope. A FOURTH authority, not a variant of EDIT MATCHES: it
+  // permits exactly one field (managerId) on matches the route has already proven are in this
+  // city. Set only by the city-manager route, from the DB row, never from client state.
+  cityScope?: string | null };
 
 // The EDIT MATCHES check. Independent of PRODUCTION_WRITES_ENABLED: this is a per-USER
 // database grant; the bolt is a global deploy-time constant. Neither can satisfy the
@@ -154,6 +158,19 @@ export function assertCanManagePromos(actor: WriteActor | undefined): void {
     );
   }
 }
+// The CITY-MANAGER check — a FOURTH independent authority (Phase 25). A city manager holds no
+// EDIT MATCHES and must never inherit it: this permits reassigning the manager on a match in
+// THEIR OWN city and nothing else. The route proves the match is in-city (assertCityScope) before
+// calling; this is the unbypassable chokepoint that a route forgetting to do so still hits.
+export function assertCityManagerScope(actor: WriteActor | undefined): void {
+  const scope = typeof actor?.cityScope === "string" ? actor.cityScope.trim() : "";
+  if (!scope) {
+    throw new NotAuthorizedError(
+      `Refusing write: the caller holds no city-manager scope. No request was sent to MatchDay. ` +
+      `(actor: ${actor?.email ? JSON.stringify(actor.email) : "none"})`,
+    );
+  }
+}
 // Indirection so a mutation test can monkeypatch a guard to a no-op and prove the
 // no-fetch test goes RED without it. TEST-ONLY — no route imports the setters.
 let editGuard: (a: WriteActor | undefined) => void = assertCanEditMatches;
@@ -163,6 +180,10 @@ export function __setEditGuardForTest(fn: (a: WriteActor | undefined) => void): 
 let manageGuard: (a: WriteActor | undefined) => void = assertCanManagePlayers;
 export function __setManageGuardForTest(fn: (a: WriteActor | undefined) => void): () => void {
   const prev = manageGuard; manageGuard = fn; return () => { manageGuard = prev; };
+}
+let cityGuard: (a: WriteActor | undefined) => void = assertCityManagerScope;
+export function __setCityGuardForTest(fn: (a: WriteActor | undefined) => void): () => void {
+  const prev = cityGuard; cityGuard = fn; return () => { cityGuard = prev; };
 }
 let promoGuard: (a: WriteActor | undefined) => void = assertCanManagePromos;
 export function __setPromoGuardForTest(fn: (a: WriteActor | undefined) => void): () => void {
@@ -355,14 +376,14 @@ export async function apiGet<T = unknown>(env: MatchdayEnv, path: string, query?
 }
 
 // WRITES — env-explicit, single-shot, host-allowlisted, deny-listed, prod-bolted.
-export async function apiWrite<T = unknown>(env: MatchdayEnv, method: "POST" | "PUT" | "PATCH" | "DELETE", path: string, body?: unknown, actor?: WriteActor, requires: "edit" | "manage" | "promos" = "edit"): Promise<T> {
+export async function apiWrite<T = unknown>(env: MatchdayEnv, method: "POST" | "PUT" | "PATCH" | "DELETE", path: string, body?: unknown, actor?: WriteActor, requires: "edit" | "manage" | "promos" | "city" = "edit"): Promise<T> {
   // STEP 2 in the write pipeline (authenticated is step 1, in the route): does the caller
   // hold the required authority — EDIT MATCHES for match/roster writes, MANAGE PLAYERS for
   // ban writes, MANAGE PROMOS for promo writes? These are INDEPENDENT grants; each path names
   // its own so holding one never implies another. This runs BEFORE the bolt and host guard,
   // before creds load — a caller without it produces ZERO network calls. Low-level,
   // unbypassable chokepoint; a route that forgets its own early check is still stopped here.
-  (requires === "promos" ? promoGuard : requires === "manage" ? manageGuard : editGuard)(actor);
+  (requires === "promos" ? promoGuard : requires === "manage" ? manageGuard : requires === "city" ? cityGuard : editGuard)(actor);
   // The bolt fires next, before creds are even loaded — production is refused
   // regardless of whether prod credentials happen to be configured. Nothing about
   // a production write can proceed while the bolt is engaged.

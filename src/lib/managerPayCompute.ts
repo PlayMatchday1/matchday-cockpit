@@ -189,7 +189,10 @@ export function workWeekStartForPayDate(payDate: string): string {
   return addDays(payDate, -8);
 }
 
-function payAmount(
+// EXPORTED (Phase 25) so the city-manager sheet's "this reassignment moves $X" line is computed
+// from the SAME rule that computes the payroll. A page that hardcoded $20 would be wrong on the
+// 37% of matches that are tournaments.
+export function payAmount(
   maxPlayerCount: number | null,
   coManaged: boolean,
 ): number {
@@ -289,6 +292,11 @@ function isOrphanedMatch(m: MatchRow, now: Date): boolean {
 
 export type ComputeOpts = {
   isAdmin?: boolean;
+  // Phase 25 — SERVER-SIDE city scope. When set, the city filter is pushed INTO the mdapi_matches
+  // query, so a scoped caller's response can never contain another city's payroll. Filtering the
+  // result afterwards would still have shipped every city over the wire, which is not scoping.
+  // Unset = every city, the admin behaviour, unchanged.
+  city?: string | null;
 };
 
 export async function computeManagerPayForWeek(
@@ -310,8 +318,8 @@ export async function computeManagerPayForWeek(
   const queryFrom = `${addDays(weekStart, -1)}T00:00:00Z`;
   const queryTo = `${addDays(weekEnd, 2)}T00:00:00Z`;
 
-  const rawMatches = await selectAll<MatchRow>(() =>
-    supabase
+  const rawMatches = await selectAll<MatchRow>(() => {
+    const q = supabase
       .from("mdapi_matches")
       .select(
         "api_id, city_identifier, field_title, start_date, start_date_utc, is_cancelled, manager_id, manager_email, manager_first_name, manager_last_name, second_manager_id, max_player_count, player_count, fake_player_count, registration_price, name, raw",
@@ -320,9 +328,12 @@ export async function computeManagerPayForWeek(
       // pays a manager. Defense-in-depth alongside the orphan filter.
       .is("deleted_at", null)
       .gte("start_date", queryFrom)
-      .lt("start_date", queryTo)
-      .order("api_id"),
-  );
+      .lt("start_date", queryTo);
+    // Phase 25 — the scope goes IN THE QUERY. Filtering the result afterwards would still have
+    // shipped every city's payroll over the wire, which is not scoping.
+    const scoped = opts.city ? q.eq("city_identifier", opts.city) : q;
+    return scoped.order("api_id");
+  });
 
   const now = new Date();
   const matches = rawMatches.filter((m) => !isOrphanedMatch(m, now));
