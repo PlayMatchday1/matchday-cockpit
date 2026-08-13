@@ -1,4 +1,6 @@
-// Phase 24 — Match Ops split into DAILY OPS + BACK OFFICE, in the NAV ONLY.
+// Phase 24 (corrected) — Match Ops split into DAILY OPS + BACK OFFICE, in the SIDEBAR.
+//
+// The top nav keeps ONE Match Ops entry; the switch is a sidebar control above the group headings.
 //
 // THE ROUTES DID NOT MOVE. Gate 4 is the one that matters: crossing between the two tabs is an
 // ordinary in-layout navigation, so the docked chat and its single realtime subscription survive
@@ -64,8 +66,10 @@ async function routes(ctx) {
 
 const railKeys = (page) => page.$$eval('[data-testid="rail-item"]', (a) => a.map((e) => e.getAttribute("data-key")));
 const railGroups = (page) => page.$$eval('[data-testid="rail-group"]', (a) => a.map((e) => e.getAttribute("data-group")));
-const activeTabs = (page) => page.$$eval('[data-testid="topnav-tab"][data-active="true"]', (a) => a.map((e) => e.getAttribute("data-tab")));
 const allTabs = (page) => page.$$eval('[data-testid="topnav-tab"]', (a) => a.map((e) => e.getAttribute("data-tab")));
+// the SIDEBAR switch — this is where the split lives now
+const switchItems = (page) => page.$$eval('[data-testid="section-switch-item"]', (a) => a.map((e) => e.getAttribute("data-tab")));
+const activeTabs = (page) => page.$$eval('[data-testid="section-switch-item"][data-active="true"]', (a) => a.map((e) => e.getAttribute("data-tab")));
 
 async function go(page, path) {
   await page.goto(`${BASE}${path}`, { waitUntil: "domcontentloaded" });
@@ -91,12 +95,17 @@ async function main() {
 
     // ── GATE 1 — both tabs render; the right one is active on a route from each section ──
     await go(page, "/match-ops/gameday");
-    eq("gate1a: both tabs render and DAILY OPS is active on a Daily Ops route", {
-      present: (await allTabs(page)).filter((t) => t === "Daily Ops" || t === "Back Office"),
+    eq("gate1a: the SIDEBAR switch offers both halves and DAILY OPS is live on a Daily Ops route", {
+      halves: await switchItems(page),
       active: await activeTabs(page),
-    }, { present: ["Daily Ops", "Back Office"], active: ["Daily Ops"] });
+    }, { halves: ["daily", "back"], active: ["daily"] });
+    // THE TOP NAV IS BACK TO ONE ENTRY. The split is not a top-level section.
+    eq("gate1b: the top nav has EXACTLY ONE Match Ops entry and no Daily Ops / Back Office entry", {
+      matchOps: (await allTabs(page)).filter((t) => t === "Match Ops").length,
+      split: (await allTabs(page)).filter((t) => t === "Daily Ops" || t === "Back Office"),
+    }, { matchOps: 1, split: [] });
     await go(page, "/match-ops/manager-pay");
-    eq("gate1b: BACK OFFICE is active on a Back Office route (and only it)", await activeTabs(page), ["Back Office"]);
+    eq("gate1c: BACK OFFICE is live on a Back Office route (and only it)", await activeTabs(page), ["back"]);
 
     // ── GATE 2 — the Daily Ops sidebar is EXACTLY its items, by count ──
     await go(page, "/match-ops/gameday");
@@ -136,8 +145,8 @@ async function main() {
     const dockCount = () => page.$$eval('[data-testid="dock-messages"] [data-testid="crm-message"]', (e) => e.length);
     const before = await dockCount();
 
-    // cross tabs via the top nav — client-side navigation inside the SAME layout
-    await page.click('[data-testid="topnav-tab"][data-tab="Back Office"]');
+    // cross halves via the SIDEBAR SWITCH — client-side navigation inside the SAME layout
+    await page.click('[data-testid="section-switch-item"][data-tab="back"]');
     await page.waitForFunction(() => location.pathname.startsWith("/match-ops/master-schedule"), null, { timeout: 15000 });
     await page.waitForTimeout(600);
     eq("gate4a: after crossing, we are on a Back Office route with its sidebar and the dock intact", {
@@ -145,7 +154,7 @@ async function main() {
       tab: await activeTabs(page),
       railCount: (await railKeys(page)).length,
       dockStillThere: await page.$eval('[data-testid="dock-root"]', (e) => e.getAttribute("data-docked-thread-id")),
-    }, { path: "/match-ops/master-schedule", tab: ["Back Office"], railCount: BACK.items.length, dockStillThere: "t-1" });
+    }, { path: "/match-ops/master-schedule", tab: ["back"], railCount: BACK.items.length, dockStillThere: "t-1" });
 
     const live = await page.evaluate(() => (window.__CRM_TEST_REALTIME__ || []).filter((c) => !c.removed && c.handlers.some((h) => h.filter && h.filter.event === "INSERT" && h.filter.table === "crm_messages")).length);
     const painted = await page.evaluate(() => {
@@ -179,12 +188,12 @@ async function main() {
     await page2.waitForTimeout(800);
     const samples = await page2.evaluate(() => window.__NAV_SAMPLES__ || []);
     for (const s of new Set(samples)) if (DAILY.items.some((k) => s.split(",").includes(k))) wrongFlash.push(s);
-    eq("gate5: a Back Office deep link shows the right tab and sidebar, with no flash of Daily Ops", {
+    eq("gate5: a Back Office deep link lights the right switch item and sidebar, with no flash of Daily Ops", {
       tab: await activeTabs(page2),
       keys: await railKeys(page2),
       sampledFrames: samples.length > 0,
       wrongSectionFrames: wrongFlash.length,
-    }, { tab: ["Back Office"], keys: BACK.items, sampledFrames: true, wrongSectionFrames: 0 });
+    }, { tab: ["back"], keys: BACK.items, sampledFrames: true, wrongSectionFrames: 0 });
 
     await ctx.close();
   } finally {

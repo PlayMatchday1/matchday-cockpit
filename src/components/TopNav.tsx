@@ -15,7 +15,6 @@ import { useCrmUnreadCount } from "@/lib/useCrmUnreadCount";
 import { useCrmAwaitingCount } from "@/lib/useCrmAwaitingCount";
 import { useFaviconUnreadDot } from "@/lib/useFaviconUnreadDot";
 import UnreadCountCircle from "@/components/UnreadCountCircle";
-import { tabForPath } from "@/app/(internal)/match-ops/sections";
 
 type Tab = {
   href: string;
@@ -32,8 +31,7 @@ type GatedTab = Tab & {
 };
 
 // Primary header tabs, left→right: Home · Finance · Growth · Membership ·
-// Daily Ops · Back Office · Tech (Test is appended separately, admin-only, unchanged).
-// Match Ops became the two tabs Daily Ops + Back Office in Phase 24 — same routes, same permission.
+// Match Ops · Tech (Test is appended separately, admin-only, unchanged).
 // A tab shows when the user can reach at least one thing under it. Chats and
 // Field Pipeline moved under Match Ops; Tech Roadmap under Tech. Membership has
 // no route yet — it renders as a disabled "Coming soon" label for everyone.
@@ -71,23 +69,18 @@ const PRIMARY_TABS: PrimaryTab[] = [
     visible: (u) => canAccess(u, "membership"),
     match: (p) => p.startsWith("/membership"),
   },
-  // Phase 24 — Match Ops is TWO tabs: DAILY OPS (today's rhythm) and BACK OFFICE (the weeks-long
-  // one). Both point INTO /match-ops/* — the routes did not move and there is still one layout, so
-  // crossing between these two tabs is an ordinary in-layout navigation and the docked chat
-  // survives it. The active tab is DERIVED from the route via tabForPath; no tab state exists.
-  // Identical `visible` on both: no new permission, whatever gates Match Ops gates both.
+  // Phase 24 (corrected) — ONE Match Ops entry, as it always was. The Daily Ops / Back Office
+  // split lives in the LEFT SIDEBAR, not up here: it is a switch between two halves of one
+  // section, not two top-level sections. tabForPath still derives which half is active — it just
+  // drives the rail now.
   {
-    label: "Daily Ops",
-    href: "/match-ops/gameday",
-    badge: true, // the chats-unread badge lives with Conversations, which is in Daily Ops
+    label: "Match Ops",
+    href: "/match-ops",
+    badge: true,
+    // reachable if the user can open the Match Ops pages (Master Schedule, Slate Review, Reviews,
+    // Field Ops, …) OR the Chats sub-permission.
     visible: (u) => canAccess(u, "matchops") || canAccess(u, "chats"),
-    match: (p) => p.startsWith("/match-ops") && tabForPath(p) === "daily",
-  },
-  {
-    label: "Back Office",
-    href: "/match-ops/master-schedule",
-    visible: (u) => canAccess(u, "matchops") || canAccess(u, "chats"),
-    match: (p) => p.startsWith("/match-ops") && tabForPath(p) === "back",
+    match: (p) => p.startsWith("/match-ops"),
   },
   {
     label: "Tech",

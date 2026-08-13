@@ -22,6 +22,7 @@ import { useCrmAwaitingCount } from "@/lib/useCrmAwaitingCount";
 import { useManagerPayAttnCount } from "@/lib/useManagerPayAttnCount";
 import { usePartnerDashboardsCount } from "@/lib/usePartnerDashboardsCount";
 import { visibleSections, tabForPath } from "./sections";
+import SectionSwitch from "./SectionSwitch";
 
 export default function MatchOpsMobileStrip() {
   const { appUser } = useAuth();
@@ -70,6 +71,8 @@ export default function MatchOpsMobileStrip() {
         className="sticky top-0 z-[12] flex items-center gap-2 border-b px-3 pb-2"
         style={{ background: "#f8faf9", borderColor: "#e6ebe8", paddingTop: "calc(8px + var(--sat))" }}
       >
+        {/* the same half-switch the desktop rail shows, above the pills */}
+        <SectionSwitch />
         <button
           type="button"
           onClick={() => setSheetOpen(true)}

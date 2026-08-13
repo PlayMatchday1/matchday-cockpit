@@ -17,6 +17,7 @@ import { useCrmAwaitingCount } from "@/lib/useCrmAwaitingCount";
 import { useManagerPayAttnCount } from "@/lib/useManagerPayAttnCount";
 import { usePartnerDashboardsCount } from "@/lib/usePartnerDashboardsCount";
 import { visibleSections, tabForPath } from "./sections";
+import SectionSwitch from "./SectionSwitch";
 
 export default function MatchOpsSectionSheet({ open, onClose }: { open: boolean; onClose: () => void }) {
   const { appUser } = useAuth();
@@ -57,6 +58,7 @@ export default function MatchOpsSectionSheet({ open, onClose }: { open: boolean;
           </button>
         </div>
         <div className="px-2.5">
+          <SectionSwitch />
           {items.map((s) => {
             const on = isActive(s.href);
             const n = countFor(s.badge);

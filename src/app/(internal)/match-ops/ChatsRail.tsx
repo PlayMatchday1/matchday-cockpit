@@ -21,6 +21,7 @@ import { useCrmAwaitingCount } from "@/lib/useCrmAwaitingCount";
 import { useManagerPayAttnCount } from "@/lib/useManagerPayAttnCount";
 import { usePartnerDashboardsCount } from "@/lib/usePartnerDashboardsCount";
 import { visibleSections, tabForPath } from "./sections";
+import SectionSwitch from "./SectionSwitch";
 
 export default function ChatsRail({
   collapsed,
@@ -48,6 +49,9 @@ export default function ChatsRail({
       className="flex h-full w-full flex-col gap-[2px] overflow-y-auto border-r px-[10px] py-[14px]"
       style={{ background: "linear-gradient(180deg,#fafbfa,#f6f9f7)", borderColor: "#e6ebe8" }}
     >
+      {/* Phase 24 (corrected) — the DAILY OPS / BACK OFFICE switch lives HERE, above the group
+          headings, not in the top nav. It picks which half of Match Ops this list shows. */}
+      <SectionSwitch collapsed={collapsed} />
       {items.map((it) => {
         const active = pathname === it.href || pathname.startsWith(it.href + "/");
         const count = badgeCount(it.badge);
