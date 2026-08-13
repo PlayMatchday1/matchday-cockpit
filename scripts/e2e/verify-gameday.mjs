@@ -1,4 +1,14 @@
-// Phase 15 PART H — Gameday Ops, driven in a real browser, hermetic. The live day
+// Gameday Ops, driven in a real browser, hermetic.
+//
+// THE DETAIL CARD VIEW WAS REMOVED — Snapshot is the only layout, and this suite used to force
+// `gameday-view: detail` in an init script, so it was the Detail suite by construction. What
+// remains here is the coverage verify-snapshot.mjs does NOT have: day navigation, city filters,
+// empty states, opening the match panel, cross-timezone ordering, and the header's refresh +
+// freshness stamp. Every card-internal assertion was removed as obsolete rather than duplicated
+// into verify-snapshot, which already proves the same rules against Snapshot. Itemised in the
+// commit message.
+//
+// Phase 15 PART H origin — The live day
 // route /api/matchday/**/gameday and /api/veo are route-fulfilled with a synthetic
 // day whose kickoff instants are computed RELATIVE to now, so bands/colours are
 // deterministic without freezing the clock. Desktop + a 390×844 touch context.
@@ -118,167 +128,131 @@ async function main() {
   };
 
   const browser = await chromium.launch({ headless: true });
-  const ctx = await browser.newContext({ viewport: { width: 1440, height: 1200 }, storageState });
+  const ctx = await browser.newContext({ viewport: { width: 1600, height: 1200 }, storageState });
   await routes(ctx);
   const page = await ctx.newPage();
-  await page.addInitScript(() => localStorage.setItem("gameday-view", "detail")); // existing assertions target the card view
-  const load = async () => { await page.goto(PAGE, { waitUntil: "domcontentloaded" }); await page.waitForSelector('[data-testid="bands"]', { timeout: 30000 }); await page.waitForTimeout(150); };
-  const tilesIn = (group) => page.$$eval(`[data-testid="group-${group}"] [data-testid="tile"]`, (els) => els.map((e) => Number(e.getAttribute("data-id"))));
-  const tile = (id) => `[data-testid="tile"][data-id="${id}"]`;
+  const load = async () => { await page.goto(PAGE, { waitUntil: "domcontentloaded" }); await page.waitForSelector('[data-testid="snapshot"]', { timeout: 30000 }); await page.waitForTimeout(150); };
+  const tilesIn = (group) => page.$$eval(`[data-testid="snap-group-${group}"] [data-testid="snap-row"]`, (els) => els.map((e) => Number(e.getAttribute("data-id"))));
+  const row = (id) => `[data-testid="snap-row"][data-id="${id}"]`;
 
   await load();
 
-  // ── real kickoff order within STILL TO COME; Atlanta (later clock) ahead of Austin ──
+  // ── cross-timezone ordering: the board interleaves by the actual instant ──
   { const order = await tilesIn("todo");
-    eq("still-to-come: 501 (ATL) ordered before 502 (AUS) despite later wall clock", order.indexOf(501) >= 0 && order.indexOf(501) < order.indexOf(502), true); }
-  eq("Atlanta tile shows the earlier clock is later wall-time (8:00 PM EDT)", (await page.$eval(tile(501) + ' [data-testid="tile-when"]', (e) => e.textContent)).replace(/\s+/g, " ").trim().startsWith("8:00 PM EDT"), true);
+    eq("still-to-come: 501 (ATL) is ordered before 502 (AUS) despite the later wall clock",
+      order.indexOf(501) >= 0 && order.indexOf(502) > order.indexOf(501), true); }
+  // the cell renders the clock and the zone as adjacent nodes (no space between them), so assert
+  // both parts rather than a joined string
+  { const t = (await page.$eval(row(501) + ' .c-time', (e) => e.textContent)).replace(/\s+/g, " ");
+    eq("the row shows the match's OWN zone (501 = 8:00 PM, EDT)", { clock: t.includes("8:00 PM"), zone: t.includes("EDT") }, { clock: true, zone: true }); }
 
-  // ── real + fake + open == capacity exactly; fakes within room ──
-  // 504: _count {players:14, fakePlayers:6} — REAL is 8 (14-6), not the occupied 14.
-  { const nums = (await page.$eval(tile(504) + ' [data-testid="fill-nums"]', (e) => e.textContent)).replace(/\s+/g, " ");
-    eq("real is occupied MINUS fakes (8 real · 6 fake · 6 open of 20), NOT 14 real", /8 real · 6 fake · 6 open of 20/.test(nums), true);
-    ok(!/14 real/.test(nums) ? "the fake double-count bug is gone (never shows 14 real)" : bad("still shows 14 real")); }
+  // ── grouping ──
+  eq("group order is todo, in-play, cancelled, finished",
+    await page.$$eval('[data-testid="snapshot"] > section', (els) => els.map((e) => e.getAttribute("data-testid"))),
+    ["snap-group-todo", "snap-group-inplay", "snap-group-cancelled", "snap-group-finished"]);
+  eq("a kicked-off match (507) sits in IN PLAY, not still-to-come",
+    await page.$eval(row(507), (e) => e.closest("section").getAttribute("data-testid")), "snap-group-inplay");
+  eq("505 is cancelled, 506 finished", {
+    cx: await page.$eval(row(505), (e) => e.closest("section").getAttribute("data-testid")),
+    fin: await page.$eval(row(506), (e) => e.closest("section").getAttribute("data-testid")),
+  }, { cx: "snap-group-cancelled", fin: "snap-group-finished" });
 
-  // ── next release matches ladder maths, tile says the same ──
-  eq("next release: Houston +4 in 2h at the 3h mark", (await page.$eval(tile(504) + ' [data-testid="next-release"]', (e) => e.textContent)).replace(/\s+/g, " ").trim(), "+4 in 2h 0m, at the 3h mark");
-  eq("the 3h rung is marked as next-to-fire", await page.$eval(tile(504) + ' [data-testid="rung-3"]', (e) => e.className.includes("next")), true);
-
-  // ── tile colour by DEADLINE distance, both thresholds; never on made/finished/cancelled ──
-  eq("crit tile (Atlanta, deadline <3h + short)", await page.$eval(tile(501), (e) => e.getAttribute("data-ac")), "crit");
-  eq("warn tile (Dallas, deadline 3-6h + short)", await page.$eval(tile(503), (e) => e.getAttribute("data-ac")), "warn");
-  eq("made-it match never coloured (Austin 502)", await page.$eval(tile(502), (e) => e.getAttribute("data-ac")), "");
-  eq("finished match never coloured (506)", await page.$eval(tile(506), (e) => e.getAttribute("data-ac")), "");
-  eq("cancelled match never coloured (505)", await page.$eval(tile(505), (e) => e.getAttribute("data-ac")), "");
-
-  // ── the marker's measured position and the band's measured width ──
-  { const bar = await page.$eval(tile(501) + ' [data-testid="fill-bar"]', (e) => { const r = e.getBoundingClientRect(); return { left: r.left, w: r.width }; });
-    const mk = await page.$eval(tile(501) + ' [data-testid="fill-marker"]', (e) => e.getBoundingClientRect().left);
-    const gap = await page.$eval(tile(501) + ' [data-testid="fill-gap"]', (e) => e.getBoundingClientRect().width);
-    near("marker measured at minPlayers/capacity (11/20 = 55%)", (mk - bar.left) / bar.w * 100, 55, 2);
-    near("hatched band measured width IS the shortfall ((11-3)/20 = 40%)", gap / bar.w * 100, 40, 2); }
-  { const outside = await page.$eval(tile(501) + ' [data-testid="fill-marker"]', (e) => { const bar = e.parentElement.querySelector('[data-testid="fill-bar"]'); return getComputedStyle(bar).overflow === "hidden" && e.parentElement.contains(e) && !bar.contains(e); });
-    ok(outside ? "marker sits outside the bar's clip (label not cut off)" : bad("marker clipped")); }
-
-  // ── both minimum states, mutually exclusive ──
-  { const s = await page.$eval(tile(501) + ' [data-testid="minlab"]', (e) => e.textContent);
-    const m = await page.$eval(tile(502) + ' [data-testid="minlab"]', (e) => e.textContent);
-    eq("short shows TO GO not MADE IT", { togo: /TO GO/.test(s), made: /MADE IT/.test(s) }, { togo: true, made: false });
-    eq("cleared shows MADE IT not TO GO", { togo: /TO GO/.test(m), made: /MADE IT/.test(m) }, { togo: false, made: true }); }
-  eq("short tile has a shortfall band; made tile has none", { short: !!(await page.$(tile(501) + ' [data-testid="fill-gap"]')), made: !!(await page.$(tile(502) + ' [data-testid="fill-gap"]')) }, { short: true, made: false });
-
-  // ── GROUP ORDER: still-to-come, then cancelled, then finished ──
-  eq("group order is todo, in-play, cancelled, finished", await page.$$eval('[data-testid="bands"] > section', (els) => els.map((e) => e.getAttribute("data-testid"))), ["group-todo", "group-inplay", "group-cancelled", "group-finished"]);
-  // §0 in the detail view too: the kicked-off match (507) sits in IN PLAY, NOT still-to-come.
-  eq("in-play match (507, kicked off) is in the IN PLAY group, not still-to-come", await page.$eval(tile(507), (e) => e.closest("section").getAttribute("data-testid")), "group-inplay");
-  eq("505 is in the cancelled group, 506 in finished", { cx: await page.$eval(tile(505), (e) => e.closest("section").getAttribute("data-testid")), fin: await page.$eval(tile(506), (e) => e.closest("section").getAttribute("data-testid")) }, { cx: "group-cancelled", fin: "group-finished" });
-
-  // ── 21b item 3: the card says DECIDE BY, in line with the snapshot column (one name for one thing) ──
-  // 501: kickoff 8:00 PM EDT, lead 30m (≠ standard 75) → decide-by 7:30 PM EDT, and the lead is named.
-  eq("card: the stat block is labelled DECIDE BY, not AUTO-CANCEL", (await page.$eval(tile(501) + ' [data-testid="tile-ac"] .k', (e) => e.textContent)).trim(), "DECIDE BY");
-  eq("card: decide-by leads with an absolute clock + zone (501: 7:30 PM EDT)", (await page.$eval(tile(501) + ' [data-testid="tile-decideby"]', (e) => e.textContent)).replace(/\s+/g, " ").trim(), "7:30 PM EDT");
-  { const line = (await page.$eval(tile(501) + ' [data-testid="tile-ac"] .line', (e) => e.textContent)).replace(/\s+/g, " ").trim();
-    ok(/left\b/.test(line) && !/^in\b/.test(line) ? `card: the deadline sub is a budget ("N left"), never "in …" (${line})` : bad("card decide-by sub", line));
-    ok(/cancels 30m before/.test(line) ? "card: a non-standard lead (30m) is named on the row" : bad("card lead not named", line)); }
-  { const anyAutoCancel = await page.$$eval('[data-testid="tile-ac"] .k', (els) => els.map((e) => e.textContent).filter((t) => /AUTO-CANCEL/.test(t)).length);
-    eq("card: 'AUTO-CANCEL' no longer appears as a stat label", anyAutoCancel, 0); }
-  eq("card: the 75m decide-by mechanism is stated ONCE in the detail note", /auto-cancels .* 75 minutes before kickoff/i.test(await page.$eval('[data-testid="decideby-detail"]', (e) => e.textContent)), true);
-
-  // ── CANCELLED tile: solid badge, NO shortfall chip, NO auto-cancel countdown ──
-  eq("cancelled tile: NO shortfall chip (no TO GO/MADE IT), NO gap/marker; HAS a solid CANCELLED badge", {
-    togo: !!(await page.$(tile(505) + ' .tag.togo')), made: !!(await page.$(tile(505) + ' .tag.made')),
-    gap: !!(await page.$(tile(505) + ' [data-testid="fill-gap"]')), marker: !!(await page.$(tile(505) + ' [data-testid="fill-marker"]')),
-    badge: !!(await page.$(tile(505) + ' [data-testid="cx-badge"]')),
-  }, { togo: false, made: false, gap: false, marker: false, badge: true });
-  eq("cancelled tile: auto-cancel countdown is a dash, not a live count", !!(await page.$(tile(505) + ' [data-testid="tile-ac-dash"]')), true);
-  eq("cancelled tile still shows the spots line (post-mortem roster)", /real/.test(await page.$eval(tile(505) + ' [data-testid="fill-nums"]', (e) => e.textContent)), true);
-  eq("cancelled tile has a red rail + red bg (data-cx)", await page.$eval(tile(505), (e) => e.getAttribute("data-cx")), "1");
-
-  // ── FINISHED tile: no shortfall chip, no countdown; shows final attendance ──
-  eq("finished tile: NO shortfall gap, NO marker, NO minlab, NO countdown", {
-    gap: !!(await page.$(tile(506) + ' [data-testid="fill-gap"]')), marker: !!(await page.$(tile(506) + ' [data-testid="fill-marker"]')),
-    minlab: !!(await page.$(tile(506) + ' [data-testid="minlab"]')), ac: !!(await page.$(tile(506) + ' [data-testid="tile-ac-dash"]')),
-  }, { gap: false, marker: false, minlab: false, ac: true });
-  eq("finished tile shows final attendance (the spots line)", /real/.test(await page.$eval(tile(506) + ' [data-testid="fill-nums"]', (e) => e.textContent)), true);
-
-  // ── Needs attention EXCLUDES cancelled + finished ──
+  // ── filters ──
   await page.click('[data-testid="filter-att"]'); await page.waitForTimeout(150);
-  eq("Needs attention shows no cancelled and no finished group", { cx: await page.$('[data-testid="group-cancelled"]'), fin: await page.$('[data-testid="group-finished"]') }, { cx: null, fin: null });
+  eq("Needs attention excludes cancelled and finished", {
+    cx: await page.$('[data-testid="snap-group-cancelled"]'), fin: await page.$('[data-testid="snap-group-finished"]'),
+  }, { cx: null, fin: null });
   await page.click('[data-testid="filter-all"]'); await page.waitForTimeout(150);
 
-  // ── special-event (no cap): no bar/marker, says so ──
-  eq("special event (no cap) shows no bar and says so", { nums: /no cap/.test(await page.$eval(tile(508) + ' [data-testid="fill-nums"]', (e) => e.textContent)), bar: !!(await page.$(tile(508) + ' [data-testid="fill-bar"]')) }, { nums: true, bar: false });
+  // ── city filter ──
+  { const before = (await page.$$('[data-testid="snap-row"]')).length;
+    await page.click('[data-testid="city-Atlanta"]'); await page.waitForTimeout(200);
+    const after = (await page.$$('[data-testid="snap-row"]')).length;
+    eq("a city chip narrows the board", after > 0 && after < before, true);
+    await page.click('[data-testid="city-all"]'); await page.waitForTimeout(200);
+    eq("All cities restores every row", (await page.$$('[data-testid="snap-row"]')).length, before); }
 
-  // ── the city filter drives the STATS, not just the grid ──
-  { const before = await page.$eval('[data-testid="filter-all"] .b', (e) => Number(e.textContent));
-    await page.click('[data-testid="city-Atlanta"]'); await page.waitForTimeout(120);
-    const after = await page.$eval('[data-testid="filter-all"] .b', (e) => Number(e.textContent));
-    const tiles = await page.$$eval('[data-testid="tile"]', (els) => els.length);
-    eq("selecting a city changes the All count (stats derive from scope)", { before, after, tiles }, { before: 8, after: 1, tiles: 1 });
-    // Atlanta has only the one still-to-come match -> empty groups render NO header.
-    eq("empty groups render no header (Atlanta: only still-to-come)", { todo: !!(await page.$('[data-testid="group-todo"]')), cx: await page.$('[data-testid="group-cancelled"]'), fin: await page.$('[data-testid="group-finished"]') }, { todo: true, cx: null, fin: null });
-    await page.click('[data-testid="city-all"]'); await page.waitForTimeout(120); }
+  // ── day navigation + the empty state ──
+  await page.click('[data-testid="day-prev"]'); await page.waitForTimeout(400);
+  eq("yesterday: everything is finished, nothing still-to-come", {
+    todo: await page.$('[data-testid="snap-group-todo"]'), fin: !!(await page.$('[data-testid="snap-group-finished"]')),
+  }, { todo: null, fin: true });
+  await page.click('[data-testid="day-today"]'); await page.waitForSelector('[data-testid="snap-group-todo"]', { timeout: 10000 }); await page.waitForTimeout(150);
+  eq("Today returns to the live board", !!(await page.$('[data-testid="snap-group-todo"]')), true);
 
-  // ── a day where EVERYTHING is finished/cancelled renders with NO still-to-come header ──
-  await page.click('[data-testid="day-prev"]'); await page.waitForSelector('[data-testid="bands"]', { timeout: 10000 }); await page.waitForTimeout(200);
-  eq("all-done day: renders groups, and NO empty 'still to come' header", {
-    empty: !!(await page.$('[data-testid="empty"]')), todo: await page.$('[data-testid="group-todo"]'),
-    cx: !!(await page.$('[data-testid="group-cancelled"]')), fin: !!(await page.$('[data-testid="group-finished"]')),
-  }, { empty: false, todo: null, cx: true, fin: true });
-  await page.click('[data-testid="day-today"]'); await page.waitForSelector('[data-testid="group-todo"]', { timeout: 10000 }); await page.waitForTimeout(150);
-
-  // ── the tile is structurally whole: one button, veo is a SPAN (roster-link removed — the panel
-  //    absorbed the roster in Phase 23 Step 2 Part B) ──
-  { const whole = await page.$eval(tile(501), (t) => ({
-      when: !!t.querySelector('[data-testid="tile-when"]'), meta: !!t.querySelector('[data-testid="tile-meta"]'), stats: !!t.querySelector('[data-testid="tile-stats"]'),
-      nestedButtons: t.querySelectorAll("button").length, veoTag: t.querySelector('[data-testid="veo-badge"]')?.tagName,
-    }));
-    eq("tile contains all three blocks, no nested <button>, veo is a SPAN", whole, { when: true, meta: true, stats: true, nestedButtons: 0, veoTag: "SPAN" }); }
-
-  // ── clicking the tile body opens the IN-PLACE MATCH PANEL (replaced the drawer + 'Open full editor') ──
-  await page.click(tile(502) + ' [data-testid="tile-when"]');
-  await page.waitForSelector('[data-testid="gday-panel"]', { timeout: 8000 });
-  eq("clicking the tile opens the in-place match panel", await page.$$eval('[data-testid="gday-panel"]', (e) => e.length), 1);
-  eq("old side-panel markup gone (count 0) and no 'Open full editor' anywhere", await page.evaluate(() => ({
-    drawer: document.querySelectorAll('.mdw,[data-testid="drawer"]').length,
-    fulleditor: document.querySelectorAll('[data-testid="dr-fulleditor"]').length,
-    text: [...document.querySelectorAll("*")].some((e) => e.children.length === 0 && /Open full editor/i.test(e.textContent || "")) ? 1 : 0,
-  })), { drawer: 0, fulleditor: 0, text: 0 });
+  // ── the match panel opens from a row ──
+  await page.click(row(502));
+  await page.waitForSelector('[data-testid="gday-panel"]', { timeout: 10000 });
+  eq("clicking a row opens the match panel", !!(await page.$('[data-testid="gday-panel"]')), true);
   await page.click('[data-testid="gday-panel-close"]'); await page.waitForTimeout(200);
 
-  // ── contrast sweep: normal + amber + red tiles on screen ──
-  { const c = await contrastIn(page);
-    c.failures.length === 0 ? ok(`contrast: every board node >= 4.5:1 (min ${c.min}, incl. amber + red tiles)`) : bad(`contrast: ${c.failures.length} node(s) < 4.5`, c.failures.slice(0, 5).map((f) => `${f.ratio} "${f.t}" .${f.c}`).join(" | ")); }
-  { await page.setViewportSize({ width: 1600, height: 1200 }); const o = await overflow(page); (!o.pageLeak) ? ok("no page-level horizontal overflow at 1600") : bad("overflow", JSON.stringify(o.offenders.slice(0, 3))); await page.setViewportSize({ width: 1440, height: 1200 }); }
+  // ══ THE TOGGLE IS GONE ══
+  eq("the Snapshot/Detail toggle is absent from the DOM (both the desktop and mobile copies)", {
+    snap: await page.$$eval('[data-testid="view-snapshot"], [data-testid="m-view-snapshot"]', (e) => e.length),
+    detail: await page.$$eval('[data-testid="view-detail"], [data-testid="m-view-detail"]', (e) => e.length),
+    bands: await page.$$eval('[data-testid="bands"]', (e) => e.length),
+  }, { snap: 0, detail: 0, bands: 0 });
+  // a stale ?view=detail bookmark must simply load the page
+  await page.goto(PAGE + "?view=detail", { waitUntil: "domcontentloaded" });
+  await page.waitForSelector('[data-testid="snapshot"]', { timeout: 20000 });
+  eq("a stale ?view=detail bookmark still loads Snapshot, not a blank page", {
+    snapshot: !!(await page.$('[data-testid="snapshot"]')), rows: (await page.$$('[data-testid="snap-row"]')).length > 0,
+  }, { snapshot: true, rows: true });
 
-  // ── the day picker: Today disabled on today; nothing tomorrow is coloured ──
-  eq("Today button disabled while on today", await page.$eval('[data-testid="day-today"]', (b) => b.disabled), true);
-  await page.click('[data-testid="day-next"]'); await page.waitForSelector('[data-testid="bands"]'); await page.waitForTimeout(200);
-  eq("Today re-enables on another day", await page.$eval('[data-testid="day-today"]', (b) => b.disabled), false);
-  { const coloured = await page.$$eval('[data-testid="tile"]', (els) => els.filter((e) => e.getAttribute("data-ac")).map((e) => e.getAttribute("data-id")));
-    eq("nothing tomorrow is coloured (no day-early auto-cancel)", coloured, []); }
-  await page.click('[data-testid="day-today"]'); await page.waitForSelector('[data-testid="group-todo"]'); await page.waitForTimeout(150);
+  // ══ REFRESH ══
+  eq("the refresh button and the freshness stamp render in the header", {
+    btn: !!(await page.$('[data-testid="gday-refresh"]')), stamp: !!(await page.$('[data-testid="updated-at"]')),
+  }, { btn: true, stamp: true });
+  { const t0 = await page.$eval('[data-testid="updated-at"]', (e) => e.textContent.trim());
+    eq("the stamp reads 'Updated <time>', not a ticking clock", /^Updated \d/.test(t0), true); }
 
-  // (the roster-link navigation test was removed with the standalone roster route — the roster now
-  //  lives in the in-place panel's TEAMS section, gated by verify-matchpanel + verify-gday-panel.)
+  // disabled while in flight — hold the response open so the button is observably disabled
+  { let release; const gate = new Promise((r) => { release = r; });
+    await ctx.route("**/api/matchday/**/gameday**", async (route) => { await gate; route.fallback(); });
+    await page.click('[data-testid="gday-refresh"]');
+    await page.waitForTimeout(250);
+    const during = await page.$eval('[data-testid="gday-refresh"]', (e) => e.disabled);
+    const spinning = await page.$eval('[data-testid="gday-refresh"] .rspin', (e) => e.classList.contains("on"));
+    release(); await page.waitForTimeout(600);
+    const after = await page.$eval('[data-testid="gday-refresh"]', (e) => e.disabled);
+    await ctx.unroute("**/api/matchday/**/gameday**");
+    eq("refresh is disabled and spinning WHILE in flight, and re-enabled after", { during, spinning, after }, { during: true, spinning: true, after: false }); }
 
-  // ══════════════ PHONE (390×844, touch) ══════════════
-  const pctx = await browser.newContext({ viewport: { width: 390, height: 844 }, isMobile: true, hasTouch: true, storageState });
-  await routes(pctx);
-  const ph = await pctx.newPage();
-  await ph.addInitScript(() => localStorage.setItem("gameday-view", "detail"));
-  await ph.goto(PAGE, { waitUntil: "domcontentloaded" }); await ph.waitForSelector('[data-testid="group-todo"]'); await ph.waitForTimeout(200);
-  { const o = await overflow(ph); const past = await ph.evaluate(() => { const w = innerWidth;
-      const inScroller = (el) => { let n = el.parentElement; while (n) { const s = getComputedStyle(n); if (s.overflowX === "auto" || s.overflowX === "scroll") return true; n = n.parentElement; } return false; };
-      return [...document.querySelectorAll(".gdo *")].filter((e) => { const r = e.getBoundingClientRect(); const s = getComputedStyle(e); return s.display !== "none" && r.width > 0 && r.right > w + 1 && !inScroller(e); }).map((e) => (e.getAttribute("class") || e.tagName).toString().slice(0, 30)); });
-    (!o.pageLeak && past.length === 0) ? ok("phone: no horizontal scroll (city chips scroll intentionally), nothing past the edge") : bad("phone overflow", `leak=${o.pageLeak} past=${JSON.stringify([...new Set(past)].slice(0, 6))}`); }
-  eq("phone: tile stats stack to one column", await ph.$eval(tile(501) + ' [data-testid="tile-stats"]', (e) => getComputedStyle(e).gridTemplateColumns.split(" ").length), 1);
-  { const small = await ph.evaluate(() => { const out = []; for (const el of document.querySelectorAll('.gdo button, .gdo [role="switch"], .gdo [role="link"]')) { const r = el.getBoundingClientRect(); const s = getComputedStyle(el); if (s.display === "none" || s.visibility === "hidden" || r.width === 0) continue; if (r.height < 32) out.push({ c: (el.className || "").toString().slice(0, 22), h: Math.round(r.height * 10) / 10 }); } return out; });
-    small.length === 0 ? ok("phone: every control >= 32px tall") : bad(`phone: ${small.length} under 32px`, JSON.stringify(small.slice(0, 6))); }
-  { const c = await contrastIn(ph); c.failures.length === 0 ? ok(`phone contrast: every board node >= 4.5:1 (min ${c.min})`) : bad(`phone contrast: ${c.failures.length} < 4.5`, c.failures.slice(0, 5).map((f) => `${f.ratio} "${f.t}"`).join(" | ")); }
+  // filters + city + day survive a refresh
+  await page.click('[data-testid="filter-att"]'); await page.click('[data-testid="city-Atlanta"]'); await page.waitForTimeout(200);
+  { const state = async () => ({
+      att: await page.$eval('[data-testid="filter-att"]', (e) => e.className.includes("on")),
+      city: await page.$eval('[data-testid="city-Atlanta"]', (e) => e.className.includes("on")),
+      day: await page.$eval('[data-testid="daylab"]', (e) => e.textContent.trim()),
+    });
+    const before = await state();
+    await page.click('[data-testid="gday-refresh"]'); await page.waitForTimeout(800);
+    eq("a refresh preserves the filter, the city chip and the day being viewed", await state(), before); }
+  await page.click('[data-testid="filter-all"]'); await page.click('[data-testid="city-all"]'); await page.waitForTimeout(200);
 
-  console.log(`\n================ RESULT ================\nAssertions: ${PASS} passed, ${FAIL} failed`);
-  if (fails.length) fails.forEach((f) => console.log("   FAILED: " + f));
+  // a FAILED refresh keeps the rows and marks the stamp
+  // let the previous refresh settle before taking the baseline — measuring mid-flight captured the
+  // still-filtered count and made this assertion a flake
+  await page.waitForFunction(() => !document.querySelector('[data-testid="gday-refresh"]').disabled, null, { timeout: 10000 });
+  await page.waitForTimeout(400);
+  { const rowsBefore = (await page.$$('[data-testid="snap-row"]')).length;
+    await ctx.route("**/api/matchday/**/gameday**", (route) => route.fulfill({ status: 500, contentType: "application/json", body: JSON.stringify({ error: "boom" }) }));
+    await page.click('[data-testid="gday-refresh"]'); await page.waitForTimeout(900);
+    const stamp = await page.$eval('[data-testid="updated-at"]', (e) => e.textContent.trim());
+    await ctx.unroute("**/api/matchday/**/gameday**");
+    eq("a failed refresh KEEPS the old rows and says the refresh failed", {
+      rows: (await page.$$('[data-testid="snap-row"]')).length, failed: /couldn.t refresh/i.test(stamp), table: !!(await page.$('[data-testid="snapshot"]')),
+    }, { rows: rowsBefore, failed: true, table: true }); }
+
+  // ── the header layout bug: the badge and the stamp must not overlap ──
+  { const box = async (sel) => page.$eval(sel, (e) => { const r = e.getBoundingClientRect(); return { l: r.left, r: r.right, t: r.top, b: r.bottom }; });
+    const pill = await box('[data-testid="gameday-env"]'); const fresh = await box('[data-testid="fresh"]');
+    const overlaps = !(fresh.r <= pill.l + 1 || fresh.l >= pill.r - 1 || fresh.b <= pill.t + 1 || fresh.t >= pill.b - 1);
+    eq("1600: the PRODUCTION — LIVE EDITS badge and the freshness stamp do not overlap", overlaps, false); }
+
   await browser.close();
-  process.exit(FAIL === 0 ? 0 : 1);
+  console.log(`\n${PASS} passed, ${FAIL} failed`);
+  if (FAIL) { console.log(fails.map((f) => `  ✗ ${f}`).join("\n")); process.exit(1); }
 }
+
 main().catch(fatal);

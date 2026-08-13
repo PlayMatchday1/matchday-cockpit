@@ -82,13 +82,12 @@ const DTA = '[data-testid="dock-root"] [data-testid="crm-composer"]';
 // rehydrates the docked thread + draft.
 async function openGamedayWithDock(page, draft) {
   await page.addInitScript(({ draft }) => {
-    localStorage.setItem("gameday-view", "detail");
     sessionStorage.setItem("crm:dockedThreadId", "t-1");
     sessionStorage.setItem("crm:dockOpen", "1");
     if (draft != null) sessionStorage.setItem("crm:draft", JSON.stringify({ threadId: "t-1", text: draft }));
   }, { draft: draft ?? null });
   await page.goto(GAMEDAY, { waitUntil: "domcontentloaded" });
-  await page.waitForSelector('[data-testid="group-todo"]', { timeout: 20000 });
+  await page.waitForSelector('[data-testid="snap-group-todo"]', { timeout: 20000 });
   await page.waitForSelector('[data-testid="dock-root"]', { timeout: 15000 });
   await page.waitForFunction(() => document.querySelector('[data-testid="dock-root"]')?.getAttribute("data-guard") === "ready", null, { timeout: 15000 });
 }
@@ -117,7 +116,7 @@ async function main() {
     }, { docked: "t-1", expanded: true, draft: "my unsent draft" });
 
     // open the panel by clicking the tile
-    await page.click('[data-testid="tile"][data-id="501"] [data-testid="tile-when"]');
+    await page.click('[data-testid="snap-row"][data-id="501"]');
     await page.waitForSelector('[data-testid="gday-panel"]', { timeout: 8000 });
     await page.waitForTimeout(250);
     // GATE — the dock collapsed to its rail; panel body no longer present; a one-time line said so
@@ -156,7 +155,7 @@ async function main() {
     await routes(ctx);
     const page = await ctx.newPage();
     await openGamedayWithDock(page, "keep me");
-    await page.click('[data-testid="tile"][data-id="501"] [data-testid="tile-when"]');
+    await page.click('[data-testid="snap-row"][data-id="501"]');
     await page.waitForSelector('[data-testid="gday-panel"]', { timeout: 8000 });
     await page.waitForTimeout(300);
     // dock stays expanded (NOT collapsed) at >=1600

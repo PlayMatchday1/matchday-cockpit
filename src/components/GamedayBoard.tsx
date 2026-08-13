@@ -51,10 +51,13 @@ export default function GamedayBoard() {
   const [today] = useState(() => localYMD(new Date()));
   const [date, setDate] = useState(today);
   const [matches, setMatches] = useState<ApiMatch[]>([]);
-  const [veo, setVeo] = useState<Record<number, boolean>>({});
   const [loading, setLoading] = useState(true);
   const [err, setErr] = useState<string | null>(null);
   const [now, setNow] = useState(() => Date.now());
+  // When the DATA landed — not the wall clock. null until the first successful fetch.
+  const [updatedAt, setUpdatedAt] = useState<number | null>(null);
+  const [refreshing, setRefreshing] = useState(false);
+  const [staleFail, setStaleFail] = useState(false); // last manual refresh failed; rows are old but kept
   const [filter, setFilter] = useState<BoardFilter>("all");
   const [cities, setCities] = useState<Set<string>>(new Set());
   const [drawerId, setDrawerId] = useState<number | null>(null);
@@ -82,36 +85,41 @@ export default function GamedayBoard() {
   }, [drawerId, wide, crm.dockedThreadId, crm.dockOpen, crm]);
   const coexist = drawerId != null && wide && !!crm.dockedThreadId && crm.dockOpen;
   const [toast, setToast] = useState<{ t: string; bad?: boolean } | null>(null);
-  // Snapshot (one line per match) vs Detail (the card view). Persisted per-user so a
-  // field reload keeps the choice. Snapshot is the default — the whole day on one screen.
-  const [view, setView] = useState<"snapshot" | "detail">("snapshot");
+  // Snapshot is the ONLY layout. The Detail card view and its Snapshot/Detail toggle were removed
+  // — the whole day on one screen is the job, and a second layout was a fork nobody chose.
+  // A stale ?view=detail bookmark is simply ignored: nothing reads the param, so the page loads.
   // Phone-only: the "Gameday Ops ▾" title opens the screen picker (replaces the tab strip).
   const [pickerOpen, setPickerOpen] = useState(false);
   const mheadRef = useRef<HTMLDivElement>(null);
   useEffect(() => {
-    try { const v = localStorage.getItem("gameday-view"); if (v === "detail" || v === "snapshot") setView(v); } catch { /* no storage */ }
   }, []);
-  const chooseView = (v: "snapshot" | "detail") => { setView(v); try { localStorage.setItem("gameday-view", v); } catch { /* no storage */ } };
   const badge = envBadge(ENV);
+  const updatedLabel = updatedAt == null ? "—" : clockNow(updatedAt);
+  // `now` already ticks every 30s, so the "Nm ago" figure stays honest without its own timer.
+  const staleMins = updatedAt == null ? 0 : Math.floor((now - updatedAt) / 60000);
 
   const say = (t: string, bad = false) => { setToast({ t, bad }); setTimeout(() => setToast(null), 2800); };
 
-  const load = useCallback(async (d: string) => {
-    setLoading(true); setErr(null);
+  // `quiet` = a manual refresh: keep the current rows on screen instead of flashing the loader,
+  // and NEVER blank the table on failure. Stale data the manager knows is stale beats an empty page.
+  const load = useCallback(async (d: string, quiet = false) => {
+    if (quiet) setRefreshing(true); else setLoading(true);
+    if (!quiet) setErr(null);
+    setStaleFail(false);
+    let landed = false;
     try {
       const res = await authFetch(`/api/matchday/${ENV}/gameday?date=${d}`);
       const j = await res.json().catch(() => ({}));
-      if (!res.ok) { setErr(j?.error ?? `HTTP ${res.status}`); setMatches([]); }
-      else setMatches((j.matches ?? []) as ApiMatch[]);
-    } catch (e) { setErr(e instanceof Error ? e.message : String(e)); setMatches([]); }
-    // Veo coverage (Clubhouse-side) for the week of this day — best effort.
-    try {
-      const vr = await authFetch(`/api/veo?week=${d}`);
-      if (vr.ok) { const vj = await vr.json(); const map: Record<number, boolean> = {};
-        for (const m of (vj?.matches ?? []) as { apiId: number; veo: boolean }[]) map[m.apiId] = !!m.veo;
-        setVeo(map); }
-    } catch { /* veo is non-critical to triage */ }
-    setLoading(false);
+      if (!res.ok) {
+        if (quiet) setStaleFail(true); else { setErr(j?.error ?? `HTTP ${res.status}`); setMatches([]); }
+      } else { setMatches((j.matches ?? []) as ApiMatch[]); landed = true; }
+    } catch (e) {
+      if (quiet) setStaleFail(true); else { setErr(e instanceof Error ? e.message : String(e)); setMatches([]); }
+    }
+    // THE TIMESTAMP MOVES ONLY WHEN DATA LANDED. A clock that ticks regardless is a clock
+    // pretending to be a freshness indicator.
+    if (landed) setUpdatedAt(Date.now());
+    setLoading(false); setRefreshing(false);
   }, []);
   useEffect(() => { void load(date); }, [date, load]);
   useEffect(() => { const t = setInterval(() => setNow(Date.now()), 30000); return () => clearInterval(t); }, []);
@@ -150,15 +158,6 @@ export default function GamedayBoard() {
   const stepIdx = drawerId != null ? drawerSiblings.indexOf(drawerId) : -1;
   const step = (d: number) => { if (!guardLeave()) return; const i = stepIdx + d; if (i >= 0 && i < drawerSiblings.length) setDrawerId(drawerSiblings[i]); };
   const toggleCity = (c: string) => setCities((prev) => { const n = new Set(prev); if (c === "") return new Set(); n.has(c) ? n.delete(c) : n.add(c); return n; });
-  const toggleVeo = async (id: number, enabled: boolean) => {
-    setVeo((v) => ({ ...v, [id]: enabled }));
-    try {
-      const { data } = await supabase.auth.getSession();
-      const res = await fetch(`/api/veo/intent`, { method: "POST", headers: { "Content-Type": "application/json", ...(data.session ? { Authorization: `Bearer ${data.session.access_token}` } : {}) }, body: JSON.stringify({ matchApiId: id, enabled }) });
-      if (!res.ok) throw new Error();
-      say(enabled ? "Camera assigned" : "Camera removed");
-    } catch { setVeo((v) => ({ ...v, [id]: !enabled })); say("Couldn't save the camera change", true); }
-  };
 
   // THE grouping — four groups (still-to-come, in-play, cancelled, finished), from the ONE
   // matchGroup() function, shared by BOTH views so they can never disagree. Every group sorts
@@ -185,8 +184,6 @@ export default function GamedayBoard() {
               <span className="mpickname">Gameday Ops</span><span className="caret" aria-hidden>▾</span>
             </button>
             <span className="seg mseg" role="group" aria-label="View">
-              <button className={view === "snapshot" ? "on" : ""} data-testid="m-view-snapshot" aria-pressed={view === "snapshot"} onClick={() => chooseView("snapshot")}>Snapshot</button>
-              <button className={view === "detail" ? "on" : ""} data-testid="m-view-detail" aria-pressed={view === "detail"} onClick={() => chooseView("detail")}>Detail</button>
             </span>
           </div>
           <div className="mband">
@@ -212,7 +209,25 @@ export default function GamedayBoard() {
           <div className="r1">
             <h1>Gameday Ops</h1>
             <span className="dt" data-testid="date-label">{dayLabel(date)}</span>
-            <span className="clock" data-testid="clock">now {clockNow(now)}</span>
+            {/* Refresh + freshness, in the space the Snapshot/Detail toggle vacated. The stamp is
+                when the DATA landed; it goes muted with "· Nm ago" after 2 minutes so staleness is
+                visible without being loud. NO AUTO-POLLING: this page has live edit controls and
+                rows re-sort by kickoff, so a background refetch could reorder the list under a
+                cursor mid-click. Manual only. */}
+            <span className="fresh" data-testid="fresh">
+              <button type="button" className="refresh" data-testid="gday-refresh" disabled={refreshing}
+                aria-label="Refresh the board" title="Refresh the board"
+                onClick={() => void load(date, true)}>
+                <span className={"rspin" + (refreshing ? " on" : "")} aria-hidden />
+                <span className="rlab">{refreshing ? "Refreshing…" : "Refresh"}</span>
+              </button>
+              <span className={"stamp" + (staleFail ? " failed" : staleMins >= 2 ? " stale" : "")} data-testid="updated-at">
+                {staleFail ? `Couldn't refresh · showing ${updatedLabel}`
+                  : updatedAt == null ? "Loading…"
+                  : staleMins >= 2 ? `Updated ${updatedLabel} · ${staleMins}m ago`
+                  : `Updated ${updatedLabel}`}
+              </span>
+            </span>
           </div>
           <p className="lede">Everything for one day, soonest kickoff first in real time — cities in different timezones interleave by the actual instant, so clock order and kickoff order are not the same thing. Click a match to fix what looks wrong.</p>
           <div className="chips">
@@ -227,10 +242,6 @@ export default function GamedayBoard() {
               <button className={"chip att" + (filter === "att" ? " on" : "")} data-testid="filter-att" onClick={() => setFilter("att")}>Needs attention<span className="b">{counts.att}</span></button>
               <button className={"chip" + (filter === "upc" ? " on" : "")} data-testid="filter-upc" onClick={() => setFilter("upc")}>Still to come<span className="b">{counts.upc}</span></button>
             </span>
-            <span className="seg" role="group" aria-label="View">
-              <button className={view === "snapshot" ? "on" : ""} data-testid="view-snapshot" aria-pressed={view === "snapshot"} onClick={() => chooseView("snapshot")}>Snapshot</button>
-              <button className={view === "detail" ? "on" : ""} data-testid="view-detail" aria-pressed={view === "detail"} onClick={() => chooseView("detail")}>Detail</button>
-            </span>
           </div>
           <div className="row2"><span className="lb">CITIES</span>
             <span className="cityf" data-testid="cityf">
@@ -241,7 +252,7 @@ export default function GamedayBoard() {
           <span className={"pill " + (badge.tone === "prod" ? "live" : "stg")} data-testid="gameday-env">{badge.tone === "prod" ? <><i />PRODUCTION — LIVE EDITS</> : badge.label}</span>
         </div>
 
-        {view === "snapshot" && !loading && !err && (
+        {!loading && !err && (
           <div className="legend" data-testid="legend">
             <span className="lg"><span className="sw red" />Short · decide within 2h</span>
             <span className="lg"><span className="sw amb" />Short (or exactly at the minimum)</span>
@@ -253,8 +264,7 @@ export default function GamedayBoard() {
         {loading ? <div className="empty" data-testid="loading">Loading {dayLabel(date)}…</div>
           : err ? <div className="empty err" data-testid="board-err">Couldn’t load the board: {err}</div>
           : !anyRows ? <div className="empty" data-testid="empty">Nothing to show for {dayLabel(date)} with these filters.</div>
-          : view === "snapshot"
-            ? <div className="sheet" data-testid="snapshot">
+          : <div className="sheet" data-testid="snapshot">
                 <div className="colhead"><span /><span>KICKOFF</span><span>MATCH · FIELD</span><span>SPOTS</span><span>vs MIN</span><span>DECIDE BY</span><span>MANAGER</span><span className="ra">PRICE</span></div>
                 {grouped.map(({ G, rows }) => (
                   <section className={"grp grp-" + G.k} data-testid={`snap-group-${G.k}`} key={G.k}>
@@ -262,19 +272,7 @@ export default function GamedayBoard() {
                     <div className="rowlist">{rows.map((m) => <SnapRow key={m.id} m={m} now={now} group={G.k} selected={drawerId === m.id} onOpen={openDrawer} money={money} />)}</div>
                   </section>
                 ))}
-              </div>
-            : <>
-              {/* the 75m decide-by mechanism, stated ONCE for the whole detail view (21b item 3) */}
-              <div className="detailnote" data-testid="decideby-detail">Decide by is when the match auto-cancels — {STD_LEAD} minutes before kickoff — unless the minimum is met by then.</div>
-              <div className="bands" data-testid="bands">
-                {grouped.map(({ G, rows }) => (
-                  <section className={"band grp-" + G.k} data-testid={`group-${G.k}`} key={G.k}>
-                    <h2 className="grouphd">{G.t}<span className="n">{rows.length}</span></h2>
-                    <div className="rows">{rows.map((m) => <Tile key={m.id} m={m} now={now} group={G.k} veo={!!veo[m.id]} selected={drawerId === m.id} onOpen={openDrawer} onVeo={toggleVeo} money={money} />)}</div>
-                  </section>
-                ))}
-              </div>
-            </>}
+              </div>}
       </div>
 
       {drawerId != null && (
@@ -303,93 +301,6 @@ export default function GamedayBoard() {
   );
 }
 
-function Tile({ m, now, group, veo, selected, onOpen, onVeo, money }: {
-  m: ApiMatch; now: number; group: MatchGroup; veo: boolean; selected: boolean;
-  onOpen: (id: number) => void; onVeo: (id: number, en: boolean) => void; money: (c: number | null | undefined) => string;
-}) {
-  const t = minsUntil(m, now), lvl = acLevel(m, now);
-  const isTodo = group === "todo", isCx = group === "cancelled", isDone = group === "finished";
-  const cap = capacity(m), real = realCount(m), fk = fakeCount(m), open = openSpots(m);
-  const f = fill(m), rel = nextRelease(m, now), mark = nextMark(m, now);
-  const fl = flags(m, now);
-  // Cancelled shows no countdown at all; finished keeps "finished Nh ago"; todo the live count.
-  const cd = isCx ? "" : t <= -90 ? `finished ${fmtDur(t)} ago` : t <= 0 ? "in play" : `in ${fmtDur(t)}`;
-  const cdCls = t <= 0 && t > -90 ? "live" : t > 0 && t <= 180 ? "soon" : "";
-  const veoKey = (e: React.KeyboardEvent) => { if (e.key === "Enter" || e.key === " ") { e.preventDefault(); e.stopPropagation(); onVeo(m.id, !veo); } };
-
-  return (
-    <button className={"row" + (isDone ? " done" : "") + (isCx ? " cx" : "") + (isTodo && lvl ? " " + lvl : "") + (selected ? " sel" : "")}
-      data-testid="tile" data-id={m.id} data-group={group} data-ac={isTodo ? lvl : ""} data-cx={isCx ? 1 : 0}
-      data-real={real} data-fake={fk} data-open={open ?? ""} data-total={real + fk} data-min={Number(m.minPlayerCount ?? 0)} data-short={shortBy(m)}
-      onClick={() => onOpen(m.id)} aria-label={`${m.name} at ${m.field?.title ?? ""}, ${localClock(m)} ${tzAbbr(m)}`}>
-      <span className="hdr">
-        <span className="when" data-testid="tile-when"><b>{localClock(m)}</b> <span className="tz">{tzAbbr(m)}</span><span className={"cd " + cdCls}>{cd}</span></span>
-        <span className="ttl"><span className="nm">{m.name}{isCx && <span className="cxb" data-testid="tile-cxb">CANCELLED</span>}</span></span>
-        <span className="price" data-testid="tile-price">{money(m.registrationPrice)}</span>
-        <span className="veocell" data-testid="tile-veo">
-          <span className={"veob" + (veo ? " on" : "")} role="switch" tabIndex={0} data-testid="veo-badge" data-veo={m.id} aria-checked={veo} aria-label={`Veo for ${m.name}`}
-            onClick={(e) => { e.stopPropagation(); onVeo(m.id, !veo); }} onKeyDown={veoKey}>VEO</span>
-        </span>
-        <span className="go">›</span>
-      </span>
-      <span className="meta" data-testid="tile-meta">
-        <span><span className="k">FIELD</span><span className="v">{m.field?.title ?? "—"}</span></span>
-        <span><span className="k">CITY</span><span className="v">{m.field?.city?.name ?? "—"}</span></span>
-        <span><span className="k">FORMAT</span><span className="v">{(m.category ?? "—")} · {teamCount(m)} teams</span></span>
-        <span><span className="k">MANAGER</span><span className={"v" + (!m.manager ? " none" : "")}>{m.manager ? [m.manager.firstName, m.manager.lastName].filter(Boolean).join(" ") : "none assigned"}</span></span>
-      </span>
-      <span className="stats" data-testid="tile-stats">
-        <span className="st fill">
-          <span className="k">SPOTS</span>
-          {cap == null ? <span className="nums" data-testid="fill-nums">special event · no cap</span> : <>
-            <span className="barwrap">
-              <span className={"bar" + (isTodo && !short(m) ? " cleared" : "")} data-testid="fill-bar">
-                <i className="r" style={{ width: `${f!.realPct}%` }} data-testid="fill-real" /><i className="f" style={{ width: `${f!.fakePct}%` }} />
-                {isTodo && short(m) && <b className="gap" data-testid="fill-gap" style={{ left: `${f!.realPct}%`, width: `${f!.gapPct}%` }} />}
-              </span>
-              {isTodo && <b className={"min" + (short(m) ? "" : " hit")} data-testid="fill-marker" style={{ left: `${f!.minPct}%` }} data-n={m.minPlayerCount} title={`${m.minPlayerCount} players needed to avoid an auto-cancel`} />}
-            </span>
-            {/* spots line stays in every group — the post-mortem roster / final attendance */}
-            <span className="nums" data-testid="fill-nums"><b>{real}</b> real{fk ? <> · <span className="fk">{fk} fake</span></> : null} · {open} open <span className="ofcap">of {cap}</span></span>
-            {isTodo
-              ? <span className="minlab" data-testid="minlab">{short(m)
-                  ? <><span className="tag togo">{shortBy(m)} TO GO</span><span className="nn"><b>{real}</b> of {m.minPlayerCount} needed</span></>
-                  : <><span className="tag made"><span className="ck">✓</span>MADE IT</span><span className="nn"><b>{real - (m.minPlayerCount ?? 0)}</b> clear of {m.minPlayerCount}</span></>}</span>
-              : isCx
-                ? <span className="minlab" data-testid="minlab"><span className="tag cxtag" data-testid="cx-badge">CANCELLED</span></span>
-                : null}
-          </>}
-        </span>
-        <span className="st rel"><span className="k">SPOTS RELEASED</span>
-          <span className="rungs">{isTodo && t > 0
-            ? [[6, m.fakeSpotLeft6h], [3, m.fakeSpotLeft3h]].map(([h, v]) => <span key={h} className={"rung" + (mark === h ? " next" : "")} data-testid={`rung-${h}`}>{h}h <b>{Math.min(Number(v) || 0, Math.max(0, (cap ?? (Number(v) || 0)) - real))}</b></span>)
-            : <span className="rung dash">—</span>}</span>
-          <span className={"nx" + (rel && isTodo ? "" : " none")} data-testid="next-release">{rel && isTodo ? `+${rel.drop} in ${fmtDur(rel.inMin)}, at the ${rel.mark}h mark` : (isTodo && t > 0 ? "no more releases" : "")}</span>
-        </span>
-        {/* DECIDE BY (21b item 3) — same concept and copy as the snapshot's column, so the
-            operator never learns two names for one thing: absolute clock leading, "N left"/
-            "passed" beneath (never "in"), the 75m mechanism on the title (stated once in the
-            detail note above), and the lead named only when it differs from the standard. */}
-        <span className={"st ac " + (!isTodo ? "" : !short(m) ? "ok" : (lvl || "warn"))} data-testid="tile-ac">
-          <span className="k">DECIDE BY</span>
-          {!isTodo ? <span className="line dash" data-testid="tile-ac-dash">—</span> : <>
-            <span className="clk" data-testid="tile-decideby">{deadlineClock(m)} <em>{tzAbbr(m)}</em></span>
-            <span className="line" title={`Auto-cancels ${m.autoCanceledMinutes ?? 0} minutes before kickoff unless the minimum is met`}>
-              {minsToDeadline(m, now) > 0 ? <><b>{fmtDur(minsToDeadline(m, now))} left</b></> : <b>passed</b>}
-              {Number(m.autoCanceledMinutes ?? 0) !== STD_LEAD ? <span className="lead"> · cancels {m.autoCanceledMinutes}m before</span> : null}
-            </span>
-            <span className="cnt">{short(m) ? <>needs <b>{m.minPlayerCount}</b> — <b>{shortBy(m)} short</b></> : <>needs {m.minPlayerCount} — clear by {real - (m.minPlayerCount ?? 0)}</>}</span>
-          </>}
-        </span>
-      </span>
-      {fl.length > 0 && <span className="flags" data-testid="tile-flags">{fl.map((x, i) => <span key={i} className={"fl " + x.k}>{x.t}</span>)}</span>}
-    </button>
-  );
-}
-
-// One snapshot line. Every number comes from the SAME gamedayModel functions the card
-// Tile uses — realCount/fakeCount/openSpots/shortBy/fill/riskTier — so the two views can
-// never disagree. Clicking the row opens the same drawer a card opens.
 function SnapRow({ m, now, group, selected, onOpen, money }: {
   m: ApiMatch; now: number; group: MatchGroup; selected: boolean; onOpen: (id: number) => void; money: (c: number | null | undefined) => string;
 }) {
@@ -496,7 +407,7 @@ const CSS = `
 .gdo .panel{background:#fff;border:1px solid #DCE5E0;border-radius:14px}
 .gdo .head{padding:18px 20px 16px;margin-bottom:14px;position:relative}
 .gdo .r1{display:flex;align-items:baseline;gap:12px}.gdo h1{margin:0;font-size:23px;letter-spacing:-.2px}
-.gdo .dt{font-size:14px;color:#5C6B62}.gdo .clock{margin-left:auto;font-size:13px;color:#5C6B62;font-variant-numeric:tabular-nums}
+.gdo .dt{font-size:14px;color:#5C6B62}
 .gdo .lede{margin:7px 0 14px;color:#5C6B62;font-size:14px;max-width:74ch}
 .gdo .chips{display:flex;gap:7px;flex-wrap:wrap;align-items:center}
 .gdo .daynav{display:flex;align-items:center;gap:8px;margin-right:4px}
@@ -514,9 +425,6 @@ const CSS = `
 .gdo .pill{position:absolute;top:18px;right:20px;font-size:10.5px;font-weight:800;letter-spacing:.06em;border-radius:20px;padding:4px 10px}
 .gdo .pill.live{background:#E5121B;color:#fff;display:inline-flex;align-items:center;gap:6px}.gdo .pill.live i{width:7px;height:7px;border-radius:50%;background:#fff}
 .gdo .pill.stg{background:#F2E31D;color:#231F00}
-.gdo .bands{display:flex;flex-direction:column;gap:14px}
-.gdo .band h2{margin:0 0 9px 3px;font-size:12px;letter-spacing:.11em;color:#55635B;font-weight:700;display:flex;align-items:center;gap:8px}
-.gdo .band h2 .n{color:#4E5A54;letter-spacing:0;font-weight:600;font-size:12.5px}
 .gdo .rows{display:flex;flex-direction:column;gap:8px}
 .gdo .row{display:block;width:100%;text-align:left;color:inherit;background:#fff;border:1px solid #DCE5E0;border-radius:12px;padding:11px 13px 10px;cursor:pointer}
 .gdo .row:hover{border-color:#9FC4B2;box-shadow:0 2px 8px rgba(0,42,28,.08)}
@@ -579,8 +487,6 @@ const CSS = `
 .gdo .ac.ok .line b{color:#5C6B62;font-weight:600}
 .gdo .ac.warn .line b,.gdo .ac.warn .cnt{color:#7A5200}
 .gdo .ac.crit .line b,.gdo .ac.crit .cnt{color:#A83120}
-/* the decide-by mechanism, stated once above the detail cards */
-.gdo .detailnote{margin:0 2px 12px;color:#3D5349;font-size:12px}
 .gdo .row.warn .k,.gdo .row.crit .k{color:#5A6560}
 .gdo .flags{display:flex;gap:6px;flex-wrap:wrap;margin-top:8px}
 .gdo .fl{font-size:11px;font-weight:700;letter-spacing:.04em;border-radius:5px;padding:2px 8px}
@@ -591,6 +497,25 @@ const CSS = `
 .gdo .empty.err{color:#A83120;border-color:#E9B6AC;background:#FDEEEB}
 .gdo .toast{position:fixed;left:50%;top:16px;transform:translateX(-50%);background:#003326;color:#fff;padding:10px 19px;border-radius:10px;font-size:14px;z-index:90;box-shadow:0 6px 20px rgba(0,32,21,.28)}
 .gdo .toast.bad{background:#A83120}
+
+/* ── header: refresh + freshness ──────────────────────────────────────────────
+   The old "now HH:MM" span sat in .r1 and collided with the absolutely-positioned
+   PRODUCTION — LIVE EDITS pill, which covered half of it at 1600. The block now sits at the row
+   end with right padding reserved for the pill, so the two can never share pixels. */
+.gdo .head .r1{position:relative;padding-right:220px}
+.gdo .fresh{margin-left:auto;display:inline-flex;align-items:center;gap:8px}
+.gdo .refresh{display:inline-flex;align-items:center;gap:6px;min-height:32px;border:1px solid #D8E2DC;
+  border-radius:9px;background:#fff;color:#20402F;font:inherit;font-size:12px;font-weight:700;padding:0 10px;
+  cursor:pointer}
+.gdo .refresh:disabled{opacity:.6;cursor:default}
+/* the spinner replaces the glyph IN PLACE — a fixed 12px box, so nothing shifts while it spins */
+.gdo .rspin{width:12px;height:12px;flex:none;border-radius:50%;border:2px solid #B9CBC1;border-top-color:#20402F}
+.gdo .rspin.on{animation:gdspin .7s linear infinite}
+@keyframes gdspin{to{transform:rotate(360deg)}}
+.gdo .stamp{font-size:12px;color:#3D5349;white-space:nowrap}
+.gdo .stamp.stale{color:#7C8A83}
+.gdo .stamp.failed{color:#A8391A;font-weight:600}
+@media(prefers-reduced-motion:reduce){.gdo .rspin.on{animation:none}}
 
 /* ── Snapshot view: one line per match, whole day on one screen ── */
 .gdo .seg{display:inline-flex;background:#E4EAE7;border-radius:10px;padding:3px;gap:3px;margin-left:auto}
@@ -724,7 +649,7 @@ const CSS = `
   .gdo .mchips .msep{flex:0 0 auto;width:1px;align-self:stretch;background:#D3DED8;margin:6px 3px}
 
   /* the day's list, edge to edge — no cards, no side margins, no radius */
-  .gdo .sheet,.gdo .bands{border:0;border-radius:0;background:transparent}
+  .gdo .sheet{border:0;border-radius:0;background:transparent}
   .gdo .sheet{overflow:visible}
   /* group subheads: full-bleed, sticky UNDER the header */
   .gdo .sheet .grp,.gdo .sheet .grp:first-of-type,.gdo .band{margin:0}
@@ -732,10 +657,6 @@ const CSS = `
     padding:6px 12px;background:#EEF3F0;border-top:1px solid #D3DED8;border-bottom:1px solid #D3DED8;
     font-size:10.5px;letter-spacing:.12em;color:#3D5349}
   .gdo .grouphd .n{margin-left:auto;color:#5C7168;letter-spacing:.04em}
-
-  /* ── DETAIL view (cards) goes edge to edge too: no radius, no side gaps, a hairline
-        between rows. The coloured left rail survives as an inset box-shadow. ── */
-  .gdo .bands{gap:0}
   .gdo .rows{gap:0}
   .gdo .row{border-radius:0;border-left:0;border-right:0;border-top:0;border-bottom:1px solid #DCE5E0;padding:12px 12px 11px}
   .gdo .hdr{grid-template-columns:1fr auto auto 14px;grid-template-areas:"when price veo go" "ttl ttl ttl ttl";gap:8px 10px}

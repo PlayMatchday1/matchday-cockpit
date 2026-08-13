@@ -52,7 +52,7 @@ async function main() {
     const p = await ctx.newPage();
     await p.addInitScript((v) => localStorage.setItem("gameday-view", v), view);
     await p.goto(PAGE, { waitUntil: "domcontentloaded" });
-    await p.waitForSelector('[data-testid="group-todo"], [data-testid="snap-group-todo"]', { timeout: 30000 });
+    await p.waitForSelector('[data-testid="snap-group-todo"], [data-testid="snap-group-todo"]', { timeout: 30000 });
     await p.waitForTimeout(250);
     await p.screenshot({ path: `${OUT}/gameday-${tag}.png`, fullPage: true });
     console.log(`wrote ${OUT}/gameday-${tag}.png`);
