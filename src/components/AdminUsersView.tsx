@@ -6,6 +6,7 @@ import { supabase } from "@/lib/supabase";
 import { type AppUser, useAuth } from "@/lib/useAuth";
 import AddUserModal from "./AddUserModal";
 import InlineEdit from "./InlineEdit";
+import { CITY_SCOPES, cityNameFor, isUnknownScope } from "@/lib/cityScope";
 
 type PermissionKey =
   | "is_admin"
@@ -31,6 +32,11 @@ const PERMISSION_COLUMNS: { key: PermissionKey; label: string; hint?: string }[]
   },
   { key: "can_access_tech", label: "Tech" },
 ];
+
+// Rendered AFTER the eight permission columns, as a pair: the tier and the scope it is worthless
+// without. They are not PermissionKeys — neither is a plain boolean toggle on app_users, and both
+// write through the guarded city-manager route.
+const CITY_MANAGER_COLUMNS = ["City Manager", "City"] as const;
 
 function lastLoginText(iso: string | null): string {
   if (!iso) return "Never";
@@ -117,6 +123,28 @@ export default function AdminUsersView() {
     const row = json.user;
     if (row) setUsers((prev) => prev.map((u) => (u.id === user.id ? { ...u, can_access_matchops: row.can_access_matchops, can_edit_matches: row.can_edit_matches, ...(row.can_manage_players !== undefined ? { can_manage_players: row.can_manage_players } : {}), ...(row.is_service_account !== undefined ? { is_service_account: row.is_service_account } : {}) } : u)));
     flash(user.id);
+  }
+
+  // CITY MANAGER goes through its own guarded route, for the same reason MATCH OPS does: the hard
+  // rules (allowlisted city, mutually exclusive with Admin, tier-off nulls the city, service
+  // accounts refused, recordWrite) live on the server. The grid renders whatever the server
+  // re-read from the database afterwards — never the optimistic value, because the 0120 trigger
+  // nulls the city on its own and the grid must show what actually happened.
+  async function saveCityManager(user: AppUser, patch: { isCityManager?: boolean; cityIdentifier?: string | null }) {
+    setPermErr((e) => (e?.id === user.id ? null : e));
+    const { data: sess } = await supabase.auth.getSession();
+    try {
+      const res = await fetch("/api/admin/users/city-manager", {
+        method: "POST",
+        headers: { "Content-Type": "application/json", ...(sess.session ? { Authorization: `Bearer ${sess.session.access_token}` } : {}) },
+        body: JSON.stringify({ userId: user.id, ...patch }),
+      });
+      const json = await res.json().catch(() => ({}));
+      if (!res.ok) { setPermErr({ id: user.id, msg: json?.error ?? `HTTP ${res.status}` }); return; }
+      const row = json.user as { is_city_manager: boolean; city_identifier: string | null } | undefined;
+      if (row) setUsers((prev) => prev.map((u) => (u.id === user.id ? { ...u, is_city_manager: row.is_city_manager, city_identifier: row.city_identifier } : u)));
+      flash(user.id);
+    } catch (e) { setPermErr({ id: user.id, msg: e instanceof Error ? e.message : String(e) }); }
   }
 
   async function togglePermission(user: AppUser, key: PermissionKey) {
@@ -222,6 +250,12 @@ export default function AdminUsersView() {
                     {c.label}
                   </th>
                 ))}
+                {CITY_MANAGER_COLUMNS.map((label) => (
+                  <th key={label} className="px-2 py-3 text-center" data-testid={`col-${label.toLowerCase().replace(/ /g, "-")}`}
+                    title={label === "City" ? "The scope every page this account sees is filtered to" : "A scoped, non-admin tier — mutually exclusive with Admin"}>
+                    {label}
+                  </th>
+                ))}
                 <th className="px-3 py-3 text-left">Last login</th>
                 <th className="px-3 py-3 text-right">{""}</th>
               </tr>
@@ -230,7 +264,7 @@ export default function AdminUsersView() {
               {loading ? (
                 <tr>
                   <td
-                    colSpan={PERMISSION_COLUMNS.length + 4}
+                    colSpan={PERMISSION_COLUMNS.length + CITY_MANAGER_COLUMNS.length + 4}
                     className="px-4 py-8 text-center text-sm text-deep-green/50"
                   >
                     Loading…
@@ -239,7 +273,7 @@ export default function AdminUsersView() {
               ) : users.length === 0 ? (
                 <tr>
                   <td
-                    colSpan={PERMISSION_COLUMNS.length + 4}
+                    colSpan={PERMISSION_COLUMNS.length + CITY_MANAGER_COLUMNS.length + 4}
                     className="px-4 py-8 text-center text-sm text-deep-green/50"
                   >
                     No users yet.
@@ -309,6 +343,54 @@ export default function AdminUsersView() {
                           </td>
                         );
                       })}
+                      {/* CITY MANAGER — refused for admins in the UI as well as at the route, and
+                          the reason is on screen rather than a silently disabled box. */}
+                      <td className="px-2 py-2 align-middle text-center" data-testid="cell-city-manager">
+                        <div className="flex flex-col items-center gap-1">
+                          <ToggleBox
+                            on={!!u.is_city_manager}
+                            disabled={!!u.is_admin || !!u.is_service_account}
+                            onClick={() => saveCityManager(u, { isCityManager: !u.is_city_manager, ...(u.is_city_manager ? {} : { cityIdentifier: u.city_identifier ?? CITY_SCOPES[1].identifier }) })}
+                            label={`City Manager tier for ${u.email}`}
+                          />
+                          {u.is_admin && (
+                            <span className="max-w-[120px] text-[9px] leading-tight text-deep-green/50" data-testid="cm-admin-conflict">
+                              Admins can&rsquo;t be City Managers
+                            </span>
+                          )}
+                        </div>
+                      </td>
+                      {/* CITY — A DROPDOWN, NEVER FREE TEXT. A typed value scopes the account to
+                          nothing and looks identical here, which is why this was SQL-only before. */}
+                      <td className="px-2 py-2 align-middle text-center" data-testid="cell-city">
+                        {u.is_city_manager ? (
+                          <div className="flex flex-col items-center gap-1">
+                            <select
+                              data-testid="city-select"
+                              aria-label={`City scope for ${u.email}`}
+                              value={u.city_identifier ?? ""}
+                              onChange={(e) => saveCityManager(u, { cityIdentifier: e.target.value })}
+                              className="rounded-md border border-cream-line bg-white px-2 py-1 text-xs text-deep-green"
+                            >
+                              {/* a stored value outside the list is shown as itself rather than
+                                  silently re-pointed at a city this account was never scoped to */}
+                              {isUnknownScope(u.city_identifier) && (
+                                <option value={u.city_identifier ?? ""}>{u.city_identifier} — unknown</option>
+                              )}
+                              {CITY_SCOPES.map((c) => (
+                                <option key={c.identifier} value={c.identifier}>{c.name}</option>
+                              ))}
+                            </select>
+                            {isUnknownScope(u.city_identifier) && (
+                              <span className="max-w-[120px] text-[9px] leading-tight text-coral" data-testid="city-unknown">
+                                Not a known city — this account sees nothing
+                              </span>
+                            )}
+                          </div>
+                        ) : (
+                          <span className="text-xs text-deep-green/35" data-testid="city-empty">&mdash;</span>
+                        )}
+                      </td>
                       <td className="px-3 py-2 align-middle text-sm text-deep-green/65">
                         {lastLoginText(u.last_login_at)}
                       </td>

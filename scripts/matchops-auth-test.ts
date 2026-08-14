@@ -119,8 +119,12 @@ is("exactly ONE route is on the credits gate", importsCredits.map(rel).sort(), [
 // no OTHER route may reference the credits flag — a second money surface must be a deliberate edit here
 is("no other route reads can_edit_credits directly", routeFiles.filter((f) => /can_edit_credits/.test(readFileSync(f, "utf8"))).map(rel), []);
 
-// the remaining is_admin surface: 28 − 6 routes that moved WHOLE = 22 (the 3 dual-gate ones still count)
-is("authenticateAdmin still guards 22 routes (28 − 6 moved whole)", importsAdmin.length, 22);
+// the remaining is_admin surface: 28 − 6 routes that moved WHOLE = 22 (the 3 dual-gate ones still
+// count), + 1 for Phase 29's /admin/users/city-manager (granting the tier is an ADMIN act — the
+// tier itself is not admin-gated, the act of handing it out is) = 23.
+is("authenticateAdmin still guards 23 routes (28 − 6 moved whole, + the city-manager grant route)", importsAdmin.length, 23);
+is("...and the added one is exactly the city-manager grant route",
+  importsAdmin.map(rel).filter((f) => /city-manager/.test(f)), ["admin/users/city-manager/route.ts"]);
 
 // the five Deonna must STILL be refused stay is_admin-gated (authenticateAdmin, or authenticateCrm + an is_admin check)
 const requiresAdmin = (f: string) => { const s = readFileSync(f, "utf8"); return /authenticateAdmin\b/.test(s) || (/authenticateCrm\b/.test(s) && /isAdmin|is_admin/.test(s)); };

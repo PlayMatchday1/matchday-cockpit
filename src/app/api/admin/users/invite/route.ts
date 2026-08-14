@@ -26,6 +26,7 @@
 
 import { createClient } from "@supabase/supabase-js";
 
+import { resolveCityScope } from "@/lib/cityScope";
 export const runtime = "nodejs";
 export const maxDuration = 30;
 
@@ -68,13 +69,21 @@ type PermissionFlags = {
   can_access_matchops?: boolean;
   can_access_chats?: boolean;
   can_access_tech?: boolean;
+  // Phase 29 — the CITY MANAGER tier. is_city_manager is a boolean like the rest;
+  // city_identifier is the only STRING in this allowlist and is validated against the
+  // scope list rather than merely accepted (see pickPermissions).
+  is_city_manager?: boolean;
+  city_identifier?: string | null;
 };
 
 // Whitelist of accepted permission keys. Any other key in
 // body.permissions is ignored — prevents arbitrary column writes if
 // the modal ever drifts or a request is hand-crafted.
-const PERMISSION_KEYS: (keyof PermissionFlags)[] = [
+// Boolean keys only — city_identifier is the one string and is handled explicitly below.
+type BoolPermissionKey = Exclude<keyof PermissionFlags, "city_identifier">;
+const PERMISSION_KEYS: BoolPermissionKey[] = [
   "is_admin",
+  "is_city_manager",
   "can_access_home",
   "can_access_finance",
   "can_access_growth",
@@ -84,13 +93,29 @@ const PERMISSION_KEYS: (keyof PermissionFlags)[] = [
   "can_access_tech",
 ];
 
+// The allowlist stays an ALLOWLIST: city_identifier is named explicitly and validated, not a
+// door held open for arbitrary columns. It is also the only key here that is not a boolean, which
+// is why it is picked separately rather than by loosening the loop's type check.
 function pickPermissions(input: unknown): PermissionFlags {
   if (!input || typeof input !== "object") return {};
   const src = input as Record<string, unknown>;
   const out: PermissionFlags = {};
   for (const k of PERMISSION_KEYS) {
-    if (typeof src[k] === "boolean") out[k] = src[k] as boolean;
+    if (typeof src[k] === "boolean") (out as Record<string, boolean>)[k] = src[k] as boolean;
   }
+  // CITY MANAGER and ADMIN are mutually exclusive — the city gate refuses admins, so an invite
+  // carrying both would create an account that can use neither tier. Admin wins and the tier is
+  // dropped, because the tier without a working page is the more misleading of the two.
+  if (out.is_city_manager && out.is_admin) { out.is_city_manager = false; }
+  if (out.is_city_manager) {
+    // EXACT match against the known scopes. An unknown value is dropped along with the tier
+    // rather than stored: a free-text city scopes the account to nothing and looks correct.
+    const scope = resolveCityScope(src.city_identifier);
+    if (!scope) { out.is_city_manager = false; }
+    else out.city_identifier = scope.identifier;
+  }
+  // The tier off means no scope — mirrors the 0120 trigger rather than fighting it.
+  if (!out.is_city_manager) out.city_identifier = null;
   return out;
 }
 
