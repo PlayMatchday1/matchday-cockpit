@@ -20,6 +20,18 @@ import { useEffect, useMemo, useState } from "react";
 import { supabase } from "./supabase";
 import { isFakePlayerEmail } from "./mdapiFakePlayer";
 import { useReviewData, type ReviewRow } from "./useReviewData";
+import { normalizeCity } from "./cityMap";
+
+// The SAME wall-clock parse useReviewData used — start_date is a local timestamp, so it is read
+// component-by-component and rebuilt in local time. Never new Date(str), which re-reads it as UTC.
+function parseLocal(s: string | null | undefined): Date | null {
+  if (!s) return null;
+  const parts = s.slice(0, 16).split(/[- T:]/);
+  if (parts.length < 5) return null;
+  const [yr, mo, dy, hr, mn] = parts.map(Number);
+  if ([yr, mo, dy, hr, mn].some((n) => Number.isNaN(n))) return null;
+  return new Date(yr, mo - 1, dy, hr, mn);
+}
 
 let fakeIdsCache: Set<string> | null = null;
 let fakePending: Promise<Set<string>> | null = null;
@@ -63,8 +75,74 @@ export type CleanReviews = {
   error: string | null;
 };
 
+// ── THE SCOPED SOURCE (Phase 29 Part B) ────────────────────────────────────────────────────────
+// Every review surface used to call useReviewData, which paginates the WHOLE of mdapi_reviews into
+// the browser (~23k rows) and filters in JS. That is why the admin page is slow AND why a city
+// manager could not have one: scoping in the browser would mean shipping every city's reviews —
+// names, emails, comments — to their machine and hiding most of them.
+//
+// This hits /api/reviews instead, which returns rows ALREADY filtered to whatever the caller's
+// session allows: one city for a city manager, everything (or one, on request) for an admin. The
+// row mapping below is byte-for-byte the one useReviewData applied, so nothing downstream changes
+// shape — only how many rows arrive, and whose.
+type ApiReviewRow = {
+  api_id: number; city_name: string | null; field_title: string | null;
+  manager_first_name: string | null; manager_last_name: string | null;
+  star_rating: number | null; start_date: string | null; user_id: number | null;
+  updated_at_rating: string | null; comment: string | null;
+  user_first_name: string | null; user_last_name: string | null; user_email: string | null;
+  tags_rating: unknown;
+};
+
+export function useScopedReviews(city?: string | null): { rows: ReviewRow[]; scope: string | null; loading: boolean; error: string | null } {
+  const [state, setState] = useState<{ rows: ReviewRow[]; scope: string | null; loading: boolean; error: string | null }>(
+    { rows: [], scope: null, loading: true, error: null });
+  useEffect(() => {
+    let live = true;
+    void (async () => {
+      try {
+        const { data: sess } = await supabase.auth.getSession();
+        const qs = city ? `?city=${encodeURIComponent(city)}` : "";
+        const res = await fetch(`/api/reviews${qs}`, {
+          headers: sess.session ? { Authorization: `Bearer ${sess.session.access_token}` } : {},
+          cache: "no-store",
+        });
+        const j = await res.json().catch(() => ({}));
+        if (!live) return;
+        if (!res.ok) { setState({ rows: [], scope: null, loading: false, error: j?.error ?? `HTTP ${res.status}` }); return; }
+        // Same row filters as the old client path: unparseable date, missing star, unknown city.
+        const out: ReviewRow[] = [];
+        for (const r of (j.rows ?? []) as ApiReviewRow[]) {
+          const startDate = parseLocal(r.start_date);
+          if (!startDate) continue;
+          if (r.star_rating === null) continue;
+          const cityName = normalizeCity(r.city_name);
+          if (!cityName) continue;
+          out.push({
+            apiId: r.api_id, city: cityName, fieldTitle: r.field_title ?? "",
+            managerFirstName: r.manager_first_name, managerLastName: r.manager_last_name,
+            starRating: r.star_rating, startDate,
+            userId: r.user_id == null ? null : String(r.user_id),
+            ratingAt: parseLocal(r.updated_at_rating),
+            comment: r.comment, userFirstName: r.user_first_name, userLastName: r.user_last_name,
+            userEmail: r.user_email,
+            tags: Array.isArray(r.tags_rating) ? (r.tags_rating as string[]) : [],
+          });
+        }
+        setState({ rows: out, scope: j.scope ?? null, loading: false, error: null });
+      } catch (e) {
+        if (live) setState({ rows: [], scope: null, loading: false, error: e instanceof Error ? e.message : String(e) });
+      }
+    })();
+    return () => { live = false; };
+  }, [city]);
+  return state;
+}
+
 export function useCleanReviews(): CleanReviews {
-  const { rows, meta, loading, error } = useReviewData();
+  const { rows, scope, loading, error } = useScopedReviews();
+  void scope;
+  const meta = null as unknown as ReturnType<typeof useReviewData>["meta"];
   const [fakeIds, setFakeIds] = useState<Set<string>>(fakeIdsCache ?? new Set());
   useEffect(() => {
     let live = true;

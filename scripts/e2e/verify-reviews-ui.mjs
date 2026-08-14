@@ -62,7 +62,15 @@ async function routes(ctx) {
     const res = await route.fetch();
     return route.fulfill({ status: res.status(), contentType: "application/json", body: await res.text() });
   });
+  // Phase 29: the page now reads /api/reviews (scoped SERVER-side) instead of paginating
+  // mdapi_reviews into the browser. Registered AFTER the catch-all so it wins, and it serves the
+  // SAME fixture — this suite's subject is the UI, and the scoping itself is asserted in
+  // scripts/reviews-scope-test.ts where it can be tested without a browser.
   await ctx.route(/\/api\//, (r) => json(r, {}));
+  await ctx.route("**/api/reviews*", (r) => json(r, {
+    scope: null, scopeName: null, isAdmin: true, rows: REVIEWS_FIXTURE,
+    counts: { total: REVIEWS_FIXTURE.length, rated: REVIEWS_FIXTURE.length, withComment: 0, withoutComment: 0, averageStars: null, byCity: [] },
+  }));
 }
 
 const rowCount = (page) => page.$$eval('.rv-ctab tbody tr', (trs) => trs.filter((t) => !t.hasAttribute("data-testid")).length);

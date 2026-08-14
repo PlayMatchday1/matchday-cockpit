@@ -17,6 +17,7 @@
 // days. The impact line calls payAmount() — the same function that computes the payroll.
 
 import { useCallback, useEffect, useMemo, useState } from "react";
+import CityNav from "../CityNav";
 import { supabase } from "@/lib/supabase";
 import { useAuth } from "@/lib/useAuth";
 import { payAmount } from "@/lib/managerPayCompute";
@@ -101,6 +102,7 @@ export default function CityManagerPayClient() {
 
   return (
     <div className="mx-auto max-w-[1180px] px-4 pb-16 pt-5" style={{ color: C.ink }}>
+      <CityNav />
       {/* ── header: the scope, stated, with no filter ── */}
       <div className="mb-1 flex flex-wrap items-center gap-2.5">
         <h1 className="m-0 text-[20px] font-bold tracking-[-0.2px]" style={{ color: C.forestDeep }}>Manager Pay</h1>
