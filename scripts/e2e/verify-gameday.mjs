@@ -251,7 +251,8 @@ async function main() {
     await page.click('[data-testid="gday-refresh"]');
     await page.waitForTimeout(250);
     const during = await page.$eval('[data-testid="gday-refresh"]', (e) => e.disabled);
-    const spinning = await page.$eval('[data-testid="gday-refresh"] .ricon', (e) => e.classList.contains("on"));
+    // the glyph is now the SHARED RefreshIcon component, used by every refresh control
+    const spinning = await page.$eval('[data-testid="gday-refresh"] [data-testid="refresh-icon"]', (e) => e.getAttribute("data-spinning") === "true");
     release(); await page.waitForTimeout(600);
     const after = await page.$eval('[data-testid="gday-refresh"]', (e) => e.disabled);
     await ctx.unroute("**/api/matchday/**/gameday**");
@@ -335,7 +336,7 @@ async function main() {
   eq("390 portrait: the empty leftover toggle container is gone", await ph.$$eval('.gdo .mseg', (e) => e.length), 0);
 
   // ══ the refresh ICON is a real glyph, not an empty ring ══
-  eq("390 portrait: the refresh control renders an actual icon element with drawn paths", await ph.$eval('[data-testid="m-refresh-icon"]', (e) => ({
+  eq("390 portrait: the refresh control renders an actual icon element with drawn paths", await ph.$eval('[data-testid="m-gday-refresh"] [data-testid="refresh-icon"]', (e) => ({
     tag: e.tagName.toLowerCase(), paths: e.querySelectorAll("path").length,
     hasGeometry: [...e.querySelectorAll("path")].every((p) => (p.getAttribute("d") || "").length > 8),
     box: e.getBoundingClientRect().width > 10,

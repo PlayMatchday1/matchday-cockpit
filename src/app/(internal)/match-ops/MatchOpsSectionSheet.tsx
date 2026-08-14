@@ -1,12 +1,12 @@
 "use client";
 
 // The Match Ops screen picker, as a bottom sheet. On a phone, Gameday Ops replaces
-// the horizontal tab scroller (MatchOpsMobileStrip) with a title BUTTON that opens
+// the horizontal tab scroller (the since-deleted MatchOpsMobileStrip) with a title BUTTON that opens
 // this — eleven destinations is a list you read, not a strip you hunt in. Self-
 // contained: it owns the shared badge-count hooks and the section list, so a caller
 // only toggles `open`. The current screen is marked from the pathname (aria-current).
 //
-// Same visual language as MatchOpsMobileStrip's sheet (safe-area padding, scrim below
+// Same visual language as that strip's sheet (safe-area padding, scrim below
 // the OS status band) so the two nav surfaces feel identical; this one is used by the
 // Gameday board, that one by every other Match Ops route.
 

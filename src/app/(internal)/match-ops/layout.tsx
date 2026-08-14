@@ -17,9 +17,10 @@
 // a reload. One key for every route — collapse a rail on Chats and it stays
 // collapsed on Master Schedule and after F5.
 //
-// Below the rail breakpoint the desktop rail is hidden and MatchOpsMobileStrip
-// carries navigation; the chat consoles render that strip themselves, so we add
-// it here only for the non-chat routes.
+// Below the rail breakpoint the desktop rail is hidden and MatchOpsMobileBar
+// carries navigation; the chat consoles and Gameday Ops render that SAME bar
+// themselves (they wrap it in their own header), so we add it here only for the
+// routes that do not.
 
 import { Suspense, useEffect, useState } from "react";
 import { usePathname } from "next/navigation";

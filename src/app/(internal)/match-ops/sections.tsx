@@ -1,9 +1,9 @@
 "use client";
 
 // THE Match Ops navigation list — one array, one file. Every Match Ops nav
-// surface (the desktop rail ChatsRail, the mobile MatchOpsMobileStrip, and the
+// surface (the desktop rail ChatsRail, the mobile MatchOpsMobileBar, and the
 // section layout's access gate) reads from here. Previously the list lived in
-// three places (layout.tsx, ChatsRail.tsx, MatchOpsMobileStrip.tsx) and drifted;
+// three places (layout.tsx, ChatsRail.tsx, and the mobile header) and drifted;
 // one place per fact means they can't disagree again.
 //
 // `badge` names WHICH count feeds an item's badge, not a number — the count
@@ -104,6 +104,19 @@ export const MATCH_OPS_TABS: { tab: MatchOpsTab; label: string; href: string }[]
   { tab: "daily", label: "Daily Ops", href: "/match-ops/gameday" },
   { tab: "back", label: "Back Office", href: "/match-ops/master-schedule" },
 ];
+
+// THE MATCH OPS LANDING TARGET. Gameday Ops is the front door — it is what "Match Ops" means to
+// someone tapping it — but a viewer who cannot open it must never be sent there. A city manager
+// holds neither Gameday Ops nor most of Daily Ops, and a 403 on the section's own nav entry is
+// worse than landing somewhere arbitrary. So: Gameday Ops if reachable, otherwise the first item in
+// THIS viewer's own list (which is already permission-filtered), otherwise null for the caller to
+// fall back on firstAllowedPath.
+export function matchOpsLandingHref(appUser: AppUser | null | undefined): string | null {
+  const daily = visibleSections(appUser, "daily");
+  const gameday = daily.find((s) => s.key === "gameday");
+  if (gameday) return gameday.href;
+  return daily[0]?.href ?? visibleSections(appUser, "back")[0]?.href ?? null;
+}
 
 // Where a viewer should land inside a tab — the first item they can actually open.
 export function firstSectionHref(appUser: AppUser | null | undefined, tab: MatchOpsTab): string | null {

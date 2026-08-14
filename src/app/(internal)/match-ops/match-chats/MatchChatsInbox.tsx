@@ -20,7 +20,7 @@ import { type MatchChatInboxRow } from "@/lib/matchChats";
 import { formatMatchTitle } from "@/lib/cityTimezones";
 import { KNOWN_CITY_CODES, HIDDEN_CITY_CODES } from "@/lib/cityNormalization";
 import { UNKNOWN_CITY } from "@/lib/cityColors";
-import MatchOpsMobileStrip from "../MatchOpsMobileStrip";
+import MatchOpsMobileBar from "../MatchOpsMobileBar";
 
 export type InboxTab = "active" | "upcoming" | "past";
 
@@ -190,7 +190,7 @@ export default function MatchChatsInbox({
     >
       {/* Mobile-only section nav — the desktop rail is hidden below 900px, so
           this is how you reach the rest of Match Ops on a phone. */}
-      <MatchOpsMobileStrip />
+      <MatchOpsMobileBar />
 
       {/* Header */}
       <div className="flex-none px-4 pt-3.5">

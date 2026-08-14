@@ -73,7 +73,7 @@ import MessageBubble, {
   type ConversationMessage,
 } from "./components/MessageBubble";
 import Composer from "./components/Composer";
-import MatchOpsMobileStrip from "../MatchOpsMobileStrip";
+import MatchOpsMobileBar from "../MatchOpsMobileBar";
 import MetricsStrip from "./components/MetricsStrip";
 import ContextPane from "./components/ContextPane";
 import { colorForCity } from "@/lib/cityColors";
@@ -741,7 +741,7 @@ export default function CrmClient() {
             style={{ background: "#f8faf9", borderColor: "#e6ebe8" }}
           >
             {/* Mobile-only section nav — desktop rail is hidden below 900px. */}
-            <MatchOpsMobileStrip />
+            <MatchOpsMobileBar />
 
             {/* header */}
             <div className="flex flex-none items-center gap-2.5 px-4 pt-3.5">

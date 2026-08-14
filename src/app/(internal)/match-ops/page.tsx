@@ -2,7 +2,8 @@
 
 // /match-ops on its own has no content — redirect to the landing sub-tab.
 //
-// Phase 24: bare /match-ops lands on the FIRST DAILY OPS ITEM the viewer can actually open
+// Bare /match-ops lands on GAMEDAY OPS when the viewer can open it — that is what Match Ops means
+// to someone tapping it — and otherwise on the first item in their own list, never a 403
 // (Gameday Ops for anyone with matchops; the chats-only operator falls through to Match Chats,
 // which is also Daily Ops). Previously this went to Master Schedule, which is now Back Office —
 // landing there would drop an operator into the weeks-long rhythm rather than today's.
@@ -12,7 +13,7 @@
 import { useEffect } from "react";
 import { useRouter } from "next/navigation";
 import { canAccess, firstAllowedPath, useAuth } from "@/lib/useAuth";
-import { firstSectionHref } from "./sections";
+import { matchOpsLandingHref } from "./sections";
 
 export default function MatchOpsIndex() {
   const { appUser, isLoading } = useAuth();
@@ -20,8 +21,8 @@ export default function MatchOpsIndex() {
 
   useEffect(() => {
     if (isLoading || !appUser) return;
-    const daily = firstSectionHref(appUser, "daily");
-    if (daily) router.replace(daily);
+    const landing = matchOpsLandingHref(appUser);
+    if (landing) router.replace(landing);
     else if (canAccess(appUser, "tech")) router.replace("/match-ops/field-pipeline");
     else router.replace(firstAllowedPath(appUser));
   }, [appUser, isLoading, router]);

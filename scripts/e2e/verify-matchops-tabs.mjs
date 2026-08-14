@@ -46,6 +46,9 @@ async function routes(ctx) {
     const j = (o, s = 200) => route.fulfill({ status: s, contentType: "application/json", body: JSON.stringify(o) });
     if (path.endsWith("/api/crm/threads")) return j({ threads: [THREAD], counts: { open: 1, mine: 0, starred: 0, closed: 0, awaiting: 1 } });
     if (path.endsWith("/api/crm/operators")) return j({ operators: [] });
+    // CrmClient reads metrics on mount; the catch-all's {} makes it throw into the error boundary,
+    // which is why Player Chats rendered "This page couldn't load" under this suite's mocks.
+    if (path.endsWith("/api/crm/metrics")) return j({ metrics: { cohort: { conversations: 1, repliedCount: 1, medianFirstResponseMin: 5, answeredWithin1h: 1, answeredWithin1hPct: 100, resolved: 0, resolvedPct: 0 } }, trend: { cohortMedianDeltaMin: null }, awaiting: { count: 1 } });
     if (path.endsWith("/unread-count")) return j({ count: 0 });
     if (path.endsWith("/awaiting-count")) return j({ count: 1 });
     if (/\/api\/crm\/threads\/[^/]+\/context$/.test(path)) return j({ player: null, membership: null, recent_matches: [], upcoming_matches: [], historical_account_count: null });
@@ -194,6 +197,105 @@ async function main() {
       sampledFrames: samples.length > 0,
       wrongSectionFrames: wrongFlash.length,
     }, { tab: ["back"], keys: BACK.items, sampledFrames: true, wrongSectionFrames: 0 });
+
+  // ══ THE MOBILE HEADER — one shared component, on every Match Ops page ══
+  { const ph = await browser.newContext({ viewport: { width: 390, height: 844 }, isMobile: true, hasTouch: true, storageState });
+    await routes(ph);
+    const pg = await ph.newPage();
+    const notch = async () => pg.evaluate(() => {
+      document.documentElement.style.setProperty("--sat", "59px");
+      document.documentElement.style.setProperty("--sab", "34px");
+    });
+
+    // LANDING — an admin tapping Match Ops arrives at Gameday Ops.
+    await pg.goto(`${BASE}/match-ops`, { waitUntil: "domcontentloaded" });
+    await pg.waitForFunction(() => location.pathname !== "/match-ops", null, { timeout: 20000 }).catch(() => {});
+    eq("390 portrait: the Match Ops root lands an ADMIN on Gameday Ops",
+      new URL(pg.url()).pathname, "/match-ops/gameday");
+
+    // ...and a viewer who CANNOT open Gameday Ops must not be sent there. The landing target is
+    // computed client-side from the app_users row, so patching that row exercises the real path.
+    { const lim = await browser.newContext({ viewport: { width: 390, height: 844 }, isMobile: true, hasTouch: true, storageState });
+      await routes(lim);
+      // chats-only: no matchops, so Gameday Ops is not in this viewer's list at all
+      await lim.route("**/rest/v1/app_users*", async (route) => {
+        if (route.request().method() !== "GET") return route.continue();
+        const res = await route.fetch(); let b = await res.json().catch(() => null);
+        const p = (r) => ({ ...r, is_admin: false, can_access_matchops: false, can_access_chats: true, can_access_tech: false, can_manage_promos: false });
+        b = Array.isArray(b) ? b.map(p) : (b && typeof b === "object" ? p(b) : b);
+        return route.fulfill({ status: res.status(), contentType: "application/json", body: JSON.stringify(b) });
+      });
+      const lp = await lim.newPage();
+      await lp.goto(`${BASE}/match-ops`, { waitUntil: "domcontentloaded" });
+      await lp.waitForFunction(() => location.pathname !== "/match-ops", null, { timeout: 20000 }).catch(() => {});
+      const landed = new URL(lp.url()).pathname;
+      const reachable = await lp.$$eval('[data-testid="rail-item"]', (a) => a.map((e) => e.getAttribute("data-key"))).catch(() => []);
+      eq("a viewer WITHOUT Gameday Ops access never lands on it — and lands somewhere they can open", {
+        notGameday: landed !== "/match-ops/gameday",
+        notNoAccess: !landed.startsWith("/no-access"),
+        landed,
+      }, { notGameday: true, notNoAccess: true, landed: "/match-ops/match-chats" });
+      await lim.close(); }
+
+    // the SAME component on Gameday and on both chat consoles — asserted on the shared testid,
+    // not on two lookalike selectors
+    const headerOn = async (path) => {
+      await pg.goto(`${BASE}${path}`, { waitUntil: "domcontentloaded" });
+      // If the header never appears, a bare 0 tells you nothing — print what the page actually
+      // rendered. That is how the missing /api/crm/metrics fixture here was found.
+      await pg.waitForSelector('[data-testid="mo-mobile-header"]', { timeout: 25000 }).catch(async () => {
+        console.log(`   ↳ ${path} rendered no header — url=${pg.url()} body=${(await pg.innerText("body").catch(() => "?")).slice(0, 160).replace(/\s+/g, " ")}`);
+      });
+      await notch();
+      return pg.$$eval('[data-testid="mo-mobile-header"]', (e) => e.length);
+    };
+    eq("Gameday Ops, Player Chats and Match Chats all render the SAME header component", {
+      gameday: await headerOn("/match-ops/gameday"),
+      player: await headerOn("/match-ops/player-chats"),
+      match: await headerOn("/match-ops/match-chats"),
+    }, { gameday: 1, player: 1, match: 1 });
+
+    // the pill rail and its unsized-icon grey circle are gone
+    eq("the old pill rail is gone from Chats (one nav system, not two)", {
+      pills: await pg.$$eval('[data-testid="mo-screen-picker"]', (e) => e.length),
+      switchInHeader: await pg.$$eval('[data-testid="mo-mobile-header"] [data-testid="section-switch"]', (e) => e.length),
+    }, { pills: 1, switchInHeader: 0 });
+
+    // NO EMPTY, NON-ZERO-SIZED ELEMENT anywhere in the header — this is what the grey circle was
+    eq("no element in the Match Ops header is empty with a non-zero box", await pg.$$eval('[data-testid="mo-mobile-header"] *', (els) =>
+      els.filter((e) => {
+        const r = e.getBoundingClientRect();
+        if (r.width < 6 || r.height < 6) return false;              // decorative dots are fine
+        if (e.children.length > 0) return false;                    // containers judged by their children
+        if ((e.textContent || "").trim().length > 0) return false;  // has text
+        const tag = e.tagName.toLowerCase();
+        if (tag === "svg" || tag === "path" || tag === "img" || tag === "input") return false; // draws itself
+        return true;
+      }).map((e) => `${e.tagName}.${(e.className || "").toString().slice(0, 20)}`)), []);
+
+    // ...and the glyph check the rule above CANNOT make: an <svg> is exempted there (it draws
+    // itself), which is exactly how the grey circle survived — a pathless, unsized <svg> inside a
+    // round tinted button reads as an empty blob, and every element in that pair looks legitimate
+    // on its own. So judge the svg itself: it must have a real box AND something to draw.
+    eq("every glyph in the Match Ops header has a real box and something to draw", await pg.$$eval('[data-testid="mo-mobile-header"] svg', (els) =>
+      els.filter((e) => {
+        const r = e.getBoundingClientRect();
+        if (r.width < 4 || r.height < 4) return true;                                   // unsized
+        return e.querySelector("path,circle,rect,line,polyline,polygon,use,text") === null; // nothing drawn
+      }).map((e) => `${e.getAttribute("data-testid") || e.getAttribute("class") || "svg"} ${Math.round(e.getBoundingClientRect().width)}x${Math.round(e.getBoundingClientRect().height)} kids=${e.children.length}`)), []);
+
+    // labels are not clipped mid-word at 390
+    eq("390: no nav label is horizontally clipped", await pg.$$eval('[data-testid="mo-mobile-header"] span, [data-testid="mo-mobile-header"] button', (els) =>
+      els.filter((e) => e.scrollWidth > e.clientWidth + 1 && (e.textContent || "").trim().length > 0).map((e) => (e.textContent || "").trim().slice(0, 20))), []);
+
+    // the refresh glyph is the SHARED one, with a real arrowhead (two drawn paths)
+    await pg.goto(`${BASE}/match-ops/gameday`, { waitUntil: "domcontentloaded" });
+    await pg.waitForSelector('[data-testid="refresh-icon"]', { timeout: 20000 });
+    eq("the refresh glyph is the shared component and draws an arrowhead", await pg.$eval('[data-testid="refresh-icon"]', (e) => ({
+      tag: e.tagName.toLowerCase(), paths: e.querySelectorAll("path").length,
+    })), { tag: "svg", paths: 2 });
+    await ph.close(); }
+
 
     await ctx.close();
   } finally {

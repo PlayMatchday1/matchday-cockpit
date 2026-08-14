@@ -22,6 +22,8 @@ import MatchPanel from "@/components/MatchPanel";
 import { useCrmConversation } from "@/lib/crmConversation";
 import LogHealthBanner from "@/components/LogHealthBanner";
 import MatchOpsSectionSheet from "@/app/(internal)/match-ops/MatchOpsSectionSheet";
+import MatchOpsMobileBar from "@/app/(internal)/match-ops/MatchOpsMobileBar";
+import RefreshIcon from "@/components/RefreshIcon";
 import {
   type ApiMatch, type BoardFilter, type MatchGroup, GROUPS, byKickoff, matchGroup, minsUntil, fmtDur, localClock, deadlineClock, tzAbbr,
   realCount, fakeCount, capacity, openSpots, teamCount, short, shortBy, fill, flags, attention,
@@ -180,35 +182,24 @@ export default function GamedayBoard() {
             suppresses it on this route); the title itself is the screen picker. ── */}
         <span className={"prodstrip " + (badge.tone === "prod" ? "live" : "stg")} data-testid="prodstrip" aria-hidden />
         <div className="mhead" data-testid="mhead" ref={mheadRef}>
-          <div className="mband">
-            <button className="mpick" data-testid="screen-picker" aria-haspopup="dialog" aria-expanded={pickerOpen} onClick={() => setPickerOpen(true)}>
-              {badge.tone === "prod" && <span className="livedot" aria-hidden />}
-              <span className="mpickname">Gameday Ops</span><span className="caret" aria-hidden>▾</span>
-            </button>
-            {/* REFRESH, in the MOBILE bar. The desktop .head is display:none below the breakpoint,
-                so putting it "where the toggle was" made it reachable only in landscape. (What was
-                left here was an EMPTY <span class="seg mseg"> from the deleted toggle — the grey dot.)
-                The stamp is abbreviated at this width but never dropped: the manager has to be able
-                to tell how old the numbers are without rotating the phone. */}
-            <span className="mfresh" data-testid="m-fresh">
-              <span className={"mstamp" + (staleFail ? " failed" : staleMins >= 2 ? " stale" : "")} data-testid="m-updated-at">
-                {/* KEEP THE TIME and APPEND the age — "11:51 PM · 3m ago". Dropping the clock made
-                    it impossible to tell what the numbers were actually from. */}
-                {staleFail ? "not refreshed" : updatedAt == null ? "…" : staleMins >= 2 ? `${updatedLabel} · ${staleMins}m ago` : updatedLabel}
+          {/* THE SHARED HEADER. Gameday Ops used to build its own picker row here and Chats used a
+              different system entirely; this is the one component both now render, so they cannot
+              drift again. The page's own controls go in `actions`. */}
+          <MatchOpsMobileBar
+            leading={badge.tone === "prod" ? <span className="livedot" aria-hidden /> : null}
+            actions={
+              <span className="mfresh" data-testid="m-fresh">
+                <span className={"mstamp" + (staleFail ? " failed" : staleMins >= 2 ? " stale" : "")} data-testid="m-updated-at">
+                  {/* KEEP THE TIME and APPEND the age — "11:51 PM · 3m ago". */}
+                  {staleFail ? "not refreshed" : updatedAt == null ? "…" : staleMins >= 2 ? `${updatedLabel} · ${staleMins}m ago` : updatedLabel}
+                </span>
+                <button type="button" className="mrefresh" data-testid="m-gday-refresh" disabled={refreshing}
+                  aria-label="Refresh the board" onClick={() => void load(date, true)}>
+                  <RefreshIcon size={19} spinning={refreshing} />
+                </button>
               </span>
-              <button type="button" className="mrefresh" data-testid="m-gday-refresh" disabled={refreshing}
-                aria-label="Refresh the board" onClick={() => void load(date, true)}>
-                {/* An actual circular arrow WITH an arrowhead. The old empty ring read as a spinner
-                    stuck mid-spin, or as nothing. Busy is the SAME glyph rotating, so idle and
-                    in-flight are recognisably one control. */}
-                <svg className={"ricon" + (refreshing ? " on" : "")} data-testid="m-refresh-icon" viewBox="0 0 24 24" width="19" height="19"
-                  fill="none" stroke="currentColor" strokeWidth="2.1" strokeLinecap="round" strokeLinejoin="round" aria-hidden>
-                  <path d="M20 11a8 8 0 1 0-2.3 5.7" />
-                  <path d="M20 4.5V11h-6.2" />
-                </svg>
-              </button>
-            </span>
-          </div>
+            }
+          />
           <div className="mband">
             <span className="mdaynav">
               <button className="marw" data-testid="m-day-prev" aria-label="Previous day" onClick={() => goDay(addDays(date, -1))}>‹</button>
@@ -241,10 +232,7 @@ export default function GamedayBoard() {
               <button type="button" className="refresh" data-testid="gday-refresh" disabled={refreshing}
                 aria-label="Refresh the board" title="Refresh the board"
                 onClick={() => void load(date, true)}>
-                <svg className={"ricon" + (refreshing ? " on" : "")} data-testid="gday-refresh-icon" viewBox="0 0 24 24" width="14" height="14"
-                  fill="none" stroke="currentColor" strokeWidth="2.1" strokeLinecap="round" strokeLinejoin="round" aria-hidden>
-                  <path d="M20 11a8 8 0 1 0-2.3 5.7" /><path d="M20 4.5V11h-6.2" />
-                </svg>
+                <RefreshIcon size={14} spinning={refreshing} />
                 <span className="rlab">{refreshing ? "Refreshing…" : "Refresh"}</span>
               </button>
               <span className={"stamp" + (staleFail ? " failed" : staleMins >= 2 ? " stale" : "")} data-testid="updated-at">

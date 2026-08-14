@@ -366,7 +366,9 @@ async function main() {
   const prow = (id) => `[data-testid="snap-row"][data-id="${id}"]`;
   { const o = await overflow(ph); const past = await ph.evaluate(() => { const w = innerWidth; const inScroller = (el) => { let n = el.parentElement; while (n) { const s = getComputedStyle(n); if (s.overflowX === "auto" || s.overflowX === "scroll") return true; n = n.parentElement; } return false; }; return [...document.querySelectorAll(".gdo *")].filter((e) => { const r = e.getBoundingClientRect(); const s = getComputedStyle(e); return s.display !== "none" && r.width > 0 && r.right > w + 1 && !inScroller(e); }).length; });
     (!o.pageLeak && past === 0) ? ok("phone: no horizontal overflow (city + filter chips scroll)") : bad("phone overflow", `leak=${o.pageLeak} past=${past}`); }
-  { const h = await ph.$eval(".gdo .mhead", (e) => Math.round(e.getBoundingClientRect().height)); (h < 140) ? ok(`phone: header under 140px (${h})`) : bad("phone header too tall", `${h}px`); }
+  // When this fails, the useful answer is WHICH band grew — a bare total sends you guessing.
+  { const m = await ph.$eval(".gdo .mhead", (e) => ({ h: Math.round(e.getBoundingClientRect().height), bands: [...e.children].map((c) => `${c.getAttribute("data-testid") || c.className}=${Math.round(c.getBoundingClientRect().height)}`) }));
+    (m.h < 140) ? ok(`phone: header under 140px (${m.h})`) : bad("phone header too tall", `${m.h}px — ${m.bands.join(" ")}`); }
   { const scr = await ph.evaluate(() => { const out = []; for (const e of document.querySelectorAll(".gdo *")) { const s = getComputedStyle(e); if (s.display === "none" || s.visibility === "hidden") continue; if ((s.overflowX === "auto" || s.overflowX === "scroll") && e.getBoundingClientRect().width > 0 && e.scrollWidth > e.clientWidth + 2) out.push(e.getAttribute("data-testid") || (e.className || "").toString().slice(0, 20)); } return out; });
     (scr.length === 1 && scr[0] === "mchips") ? ok("phone: exactly one horizontal scroller, and it is the filter chips") : bad("phone scrollers", JSON.stringify(scr)); }
   // §10 — the bar stays readable (>=220px) and the marker stays >=14px
@@ -406,7 +408,9 @@ async function main() {
   { const sticky = await ph.$eval('[data-testid="snapshot"] .grouphd', (e) => getComputedStyle(e).position); (sticky === "sticky") ? ok("phone: group subheads are sticky") : bad("group head not sticky", sticky); }
 
   // the screen picker still replaces the tab strip
-  await ph.click('[data-testid="screen-picker"]');
+  // (selector-path edit: Gameday's bespoke picker is gone; the picker is now the SHARED
+  //  MatchOpsMobileBar's, testid mo-screen-picker. Same control, same assertion.)
+  await ph.click('[data-testid="mo-screen-picker"]');
   await ph.waitForSelector('[data-testid="screen-sheet"]'); await ph.waitForTimeout(150);
   eq("phone: screen picker opens the sheet with Gameday Ops marked current", { open: !!(await ph.$('[data-testid="screen-sheet"]')), current: await ph.$eval('[data-testid="screen-dest-gameday"]', (e) => e.getAttribute("aria-current")) }, { open: true, current: "page" });
 
