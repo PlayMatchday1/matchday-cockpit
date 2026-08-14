@@ -1185,3 +1185,34 @@ recently and stays there permanently — there is no way to correct the linkage 
 docked chat + Player Chats header + context pane surface this as "This number is on N account(s).
 Showing {name} — it may not be who is writing." rather than the old, too-soft "historical accounts on
 file."
+
+## Player CREDITS (Phase 27) — the only endpoint Clubhouse uses that moves money
+
+**`creditAmount` is CENTS. PROVEN.** Read-only scan of 1,200 production players: 31 hold a
+non-zero balance and **22 of those are NOT multiples of 100** (74, 99, 399, 866, 974). Read as
+dollars those would be $74.00 / $866.00 balances on 22 of 31 accounts; read as cents they are the
+$0.74 / $8.66 of change a match leaves behind. Retool independently agrees in both directions —
+it renders `creditAmount / 100` as USD and writes back `parseInt(value * 100)`.
+
+**The write is `PUT /admin/players/{id}/profile` with `{ "creditAmount": <cents> }`.** From
+Retool's `updateUserCredits` query (`type: PUT`, `bodyType: raw`, Bearer auth). It is an
+**ABSOLUTE SET, not a delta** — Retool pre-fills its stepper with the current balance and posts
+the whole new value, which would double every balance on save if the field were additive. Only
+that one key is sent, so this PUT has PATCH semantics like every other PUT in this API.
+
+**Idempotency follows from that**: the same absolute call twice leaves ONE grant, not two. Not
+verified by making the call twice — a duplicate credit probe is a duplicate grant to a real person.
+
+**Side effects: UNKNOWN.** Whether setting `creditAmount` notifies the player, emails them or
+touches Stripe cannot be established from the Retool export or from any read. (Note the contrast
+with cancel-a-match, where the credit AND the SMS are server-side effects of a single PATCH — so
+"a credit is silent" is not a safe inference.) Clubhouse states this rather than assuming it.
+
+**Negative balances: 0 of 1,200 accounts hold one.** Whether the API would *accept* one is
+UNKNOWN and untestable without writing one, so Clubhouse refuses to send a negative and says so.
+
+**Clubhouse takes a DELTA anyway.** The operator enters `+25` / `-10` and the server computes
+`fresh_balance + delta`. A stepper pre-filled with a balance means one mis-key silently replaces
+someone's money and nothing on screen looks wrong. Because the endpoint is an absolute set, the
+route **re-reads the balance immediately before writing and ABORTS if it moved** — otherwise a
+spend between read and write would be silently put back. It never re-bases and continues.

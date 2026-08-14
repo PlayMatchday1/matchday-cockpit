@@ -23,6 +23,7 @@ export type AppUser = {
   is_city_manager?: boolean;
   city_identifier?: string | null;
   can_manage_promos?: boolean;     // Phase 18b — the promo-code WRITE permission (create/edit/delete)
+  can_edit_credits?: boolean;      // Phase 27 — adjust a player's credit balance. MOVES MONEY; not tied to Match Ops
   can_send_messages?: boolean;     // Phase 19 — the chat SEND permission (read is can_access_chats)
   is_service_account?: boolean;    // the Clubhouse E2E account (never holds a write permission)
   created_at: string;
@@ -117,6 +118,14 @@ export function canEditMatches(appUser: AppUser | null | undefined): boolean {
 // affordances; the server enforces it regardless.
 export function canManagePlayers(appUser: AppUser | null | undefined): boolean {
   return !!appUser && appUser.can_manage_players === true && appUser.can_access_matchops === true;
+}
+
+// EDIT CREDITS (Phase 27) — the only grant that MOVES MONEY, and the only one that does NOT also
+// require Match Ops. Every other write permission is a power you exercise inside Match Ops;
+// adjusting someone's balance is not, so it must not arrive as a side effect of a read grant.
+// Courtesy gate only — the route re-checks against a fresh database read on every request.
+export function canEditCredits(appUser: AppUser | null | undefined): boolean {
+  return !!appUser && appUser.can_edit_credits === true;
 }
 
 // MANAGE PROMOS (Phase 18b) — INDEPENDENT of EDIT MATCHES and MANAGE PLAYERS. Courtesy gate

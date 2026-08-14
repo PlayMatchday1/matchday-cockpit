@@ -18,11 +18,13 @@ const eq = (n, got, want) => (JSON.stringify(got) === JSON.stringify(want) ? ok(
 
 // patch the app_users read useAuth makes, so the gate is deterministic (server still enforces).
 // edit = EDIT MATCHES, manage = MANAGE PLAYERS — INDEPENDENT so we can prove one on / one off.
-const patchPerms = (edit, manage = edit) => (ctx) => ctx.route("**/rest/v1/app_users*", async (route) => {
+const patchPerms = (edit, manage = edit, credits = false) => (ctx) => ctx.route("**/rest/v1/app_users*", async (route) => {
   if (route.request().method() !== "GET") return route.continue();
   const res = await route.fetch();
   let json = await res.json().catch(() => null);
-  const patch = (r) => ({ ...r, can_edit_matches: edit, can_manage_players: manage, can_access_matchops: true });
+  // can_edit_credits is patched INDEPENDENTLY and defaults to FALSE — the whole point of Phase 27
+  // is that it is not implied by matchops, edit-matches or manage-players.
+  const patch = (r) => ({ ...r, can_edit_matches: edit, can_manage_players: manage, can_access_matchops: true, can_edit_credits: credits });
   json = Array.isArray(json) ? json.map(patch) : (json && typeof json === "object" ? patch(json) : json);
   return route.fulfill({ status: res.status(), contentType: "application/json", body: JSON.stringify(json) });
 });
@@ -35,7 +37,7 @@ const MARISOL = {
   player: {
     id: 79214, name: "Marisol Reyes", email: "m.reyes@gmail.com", phone: "+12105557781", phoneVerified: true,
     city: "San Antonio", level: 6, registered: "2026-02-11T00:00:00.000Z", goals: 14, cityManager: false,
-    credits: 0, status: "ok", banReason: null, bannedAt: null, banExpiredAt: null, matchesPlayed: 1, upcoming: 1,
+    credits: 1234, status: "ok", banReason: null, bannedAt: null, banExpiredAt: null, matchesPlayed: 1, upcoming: 1,
   },
   membership: { status: "active", number: "sub_ABC123", since: "2026-03-02T00:00:00.000Z", renews: "2026-09-02T00:00:00.000Z", canceledAt: null, price: 2900, city: "SAT" },
   matches: [
@@ -158,8 +160,10 @@ async function main() {
   const todayYMD = (() => { const d = new Date(); return `${d.getFullYear()}-${String(d.getMonth() + 1).padStart(2, "0")}-${String(d.getDate()).padStart(2, "0")}`; })();
   let lastWrite = null; // capture the roster POST body
   let lastBan = null;   // capture the ban POST body
+  let creditPosts = []; // every credit POST body — proves "attempted exactly once"
+  const creditState = { balance: 1234, serverBalance: 1234 };  // CENTS, and deliberately non-round
 
-  const routes = async (ctx, { edit, manage = edit }) => {
+  const routes = async (ctx, { edit, manage = edit, credits = false }) => {
     // NOTE: Playwright checks the LAST-registered matching route first. Register the
     // general lookup handler FIRST and the specific /ban handler LAST so /ban wins.
     await ctx.route("**/api/lookup/**", (route) => {
@@ -202,8 +206,31 @@ async function main() {
       if (!edit) return route.fulfill({ status: 403, contentType: "application/json", body: JSON.stringify({ error: "read-only" }) });
       return route.fulfill({ status: 200, contentType: "application/json", body: JSON.stringify({ logged: true, outcome: "LANDED" }) });
     });
+    // ── CREDITS (Phase 27). A stateful balance so a landed adjustment can be re-read, plus the
+    // two failure shapes that matter: the RACE (the balance moved) and a hard rejection.
+    await ctx.route("**/api/matchday/**/players/**/credits", (route) => {
+      const req = route.request();
+      // The ROUTE gate, not the button: refused even if the client somehow posts.
+      if (!credits) return route.fulfill({ status: 403, contentType: "application/json", body: JSON.stringify({ error: "EDIT CREDITS is required to change a player's balance. This is not part of Match Ops and is granted separately." }) });
+      if (req.method() === "GET") return route.fulfill({ status: 200, contentType: "application/json", body: JSON.stringify({ balanceCents: creditState.balance, canEditCredits: true }) });
+      const b = JSON.parse(req.postData() || "{}");
+      creditPosts.push(b);
+      if (b.reason === "FAILME") return route.fulfill({ status: 400, contentType: "application/json", body: JSON.stringify({ error: "rejected by the server", landed: false, outcome: "FAILED" }) });
+      // THE RACE — the server re-read finds a different balance than the screen showed.
+      if (creditState.serverBalance !== b.expectedBeforeCents) {
+        return route.fulfill({ status: 409, contentType: "application/json", body: JSON.stringify({
+          aborted: true, landed: false, outcome: "NOT APPLIED", balanceCents: creditState.serverBalance,
+          error: `Aborted — nothing was sent. The balance changed from $${(b.expectedBeforeCents / 100).toFixed(2)} to $${(creditState.serverBalance / 100).toFixed(2)} between the screen loading and this click. Re-enter the adjustment against the new figure if you still want it.`,
+        }) });
+      }
+      creditState.balance = creditState.serverBalance = creditState.serverBalance + b.deltaCents;
+      return route.fulfill({ status: 200, contentType: "application/json", body: JSON.stringify({
+        ok: true, landed: true, outcome: "LANDED", beforeCents: b.expectedBeforeCents,
+        intendedAfterCents: creditState.balance, balanceCents: creditState.balance, deltaCents: b.deltaCents, logRecorded: true,
+      }) });
+    });
     await ctx.route("**/api/veo**", (route) => route.fulfill({ status: 200, contentType: "application/json", body: JSON.stringify({ matches: [] }) }));
-    await patchPerms(edit, manage)(ctx); // independent edit/manage grants
+    await patchPerms(edit, manage, credits)(ctx); // independent edit / manage / credits grants
   };
 
   const browser = await chromium.launch({ headless: true });
@@ -463,6 +490,186 @@ async function main() {
   await mpg.waitForSelector('.res[data-pid="79214"]'); await mpg.click('.res[data-pid="79214"]');
   await mpg.waitForSelector('.idcard[data-pid="79214"]');
   eq("MANAGE-only: ban actions enabled but Add DISABLED (independence)", { suspend: await mpg.$eval('[data-testid="act-suspend"]', (e) => e.disabled).catch(() => "missing"), add: await mpg.$eval('[data-testid="add-match"]', (e) => e.disabled) }, { suspend: false, add: true });
+
+  // ══════════════ PHASE 27 · CREDIT ADJUSTMENT ══════════════
+  // Every assertion below is on a NON-ROUND balance (1234 cents = $12.34). $0.00 and $25.00 both
+  // survive a 100x error in either direction and would prove nothing about the units.
+
+  // ── (a) WITHOUT the grant: the control is disabled AND the route refuses ──────────────────────
+  { const nc = await browser.newContext({ viewport: { width: 1280, height: 1200 }, storageState });
+    await routes(nc, { edit: true, manage: true, credits: false });   // matchops + edit + manage, NO credits
+    const np = await nc.newPage();
+    await np.goto(PAGE, { waitUntil: "domcontentloaded" }); await np.waitForSelector("#pl-q", { timeout: 30000 });
+    await np.fill("#pl-q", "Marisol"); await np.waitForTimeout(260);
+    await np.click('.res[data-pid="79214"]'); await np.waitForSelector('.idcard[data-pid="79214"]');
+    await np.waitForSelector('[data-testid="credit-panel"]', { timeout: 10000 });
+    const st = await np.evaluate(() => ({
+      amount: document.querySelector('[data-testid="credit-amount"]')?.disabled,
+      reason: document.querySelector('[data-testid="credit-reason"]')?.disabled,
+      apply: document.querySelector('[data-testid="credit-apply"]')?.disabled,
+      locked: !!document.querySelector('[data-testid="credit-locked"]'),
+    }));
+    eq("credits: WITHOUT the grant every input and the button are disabled, and it says why",
+      st, { amount: true, reason: true, apply: true, locked: true });
+    // ...and the ROUTE refuses too — the button is a courtesy, not the control.
+    creditPosts = [];
+    const direct = await np.evaluate(async () => {
+      const r = await fetch("/api/matchday/production/players/79214/credits", {
+        method: "POST", headers: { "Content-Type": "application/json" },
+        body: JSON.stringify({ deltaCents: 2500, expectedBeforeCents: 1234, reason: "bypassing the button" }),
+      });
+      return { status: r.status, body: await r.json().catch(() => ({})) };
+    });
+    (direct.status === 403 && /granted separately/i.test(direct.body.error || ""))
+      ? ok("credits: the ROUTE refuses a direct POST without the grant, not just the button")
+      : bad("credits: route did not refuse", JSON.stringify(direct));
+    await nc.close(); }
+
+  // ── (b) WITH the grant ───────────────────────────────────────────────────────────────────────
+  const cc = await browser.newContext({ viewport: { width: 1280, height: 1200 }, storageState });
+  await routes(cc, { edit: true, manage: true, credits: true });
+  const cp = await cc.newPage();
+  const openMarisol = async () => {
+    await cp.goto(PAGE, { waitUntil: "domcontentloaded" }); await cp.waitForSelector("#pl-q", { timeout: 30000 });
+    await cp.fill("#pl-q", "Marisol"); await cp.waitForTimeout(260);
+    await cp.click('.res[data-pid="79214"]'); await cp.waitForSelector('.idcard[data-pid="79214"]');
+    await cp.waitForSelector('[data-testid="credit-panel"]', { timeout: 10000 });
+  };
+  await openMarisol();
+
+  // UNITS — the headline and the panel agree, and both read $12.34 from 1234 cents
+  { const shown = await cp.evaluate(() => ({
+      panel: document.querySelector('[data-testid="credit-balance"]')?.textContent.trim(),
+      cents: document.querySelector('[data-testid="credit-balance"]')?.getAttribute("data-cents"),
+      headline: [...document.querySelectorAll(".facts .f")].find((f) => /CREDITS/.test(f.textContent))?.textContent,
+    }));
+    (shown.panel === "Balance $12.34" && shown.cents === "1234" && /\$12\.34/.test(shown.headline || ""))
+      ? ok("credits: 1234 cents renders as $12.34 in BOTH the headline and the panel (not $1234.00, not $0.12)")
+      : bad("credits: units", JSON.stringify(shown)); }
+
+  // THE REASON IS REQUIRED
+  await cp.fill('[data-testid="credit-amount"]', "+25");
+  await cp.waitForTimeout(120);
+  { const st = await cp.evaluate(() => ({
+      apply: document.querySelector('[data-testid="credit-apply"]')?.disabled,
+      err: [...document.querySelectorAll('[data-testid="credit-error"]')].some((e) => /reason is required/i.test(e.textContent)),
+    }));
+    (st.apply === true && st.err) ? ok("credits: an amount with NO reason leaves the button disabled and says a reason is required")
+      : bad("credits: reason not required", JSON.stringify(st)); }
+
+  // THE STATED CONSEQUENCE MATCHES THE DELTA ENTERED
+  eq("credits: the consequence states the before and after in dollars, from the entered delta",
+    await cp.$eval('[data-testid="credit-consequence"]', (e) => e.textContent.trim()),
+    "Marisol Reyes's balance goes from $12.34 to $37.34.");
+  await cp.fill('[data-testid="credit-amount"]', "-2.34");
+  await cp.waitForTimeout(120);
+  eq("credits: a subtraction restates it, still in cents-exact dollars",
+    await cp.$eval('[data-testid="credit-consequence"]', (e) => e.textContent.trim()),
+    "Marisol Reyes's balance goes from $12.34 to $10.00.");
+
+  // THE CAP
+  await cp.fill('[data-testid="credit-amount"]', "200.01");
+  await cp.fill('[data-testid="credit-reason"]', "over the cap on purpose");
+  await cp.waitForTimeout(150);
+  { creditPosts = [];
+    const st = await cp.evaluate(() => ({
+      apply: document.querySelector('[data-testid="credit-apply"]')?.disabled,
+      msg: [...document.querySelectorAll('[data-testid="credit-error"]')].map((e) => e.textContent).join(" "),
+    }));
+    (st.apply === true && /\$200\.00/.test(st.msg) && /typo guard/i.test(st.msg) && creditPosts.length === 0)
+      ? ok("credits: an adjustment over the $200.00 cap is refused, explains it is a typo guard, and sends nothing")
+      : bad("credits: cap", JSON.stringify(st)); }
+  eq("credits: exactly $200.00 is allowed (the cap is inclusive)",
+    await (async () => { await cp.fill('[data-testid="credit-amount"]', "200"); await cp.waitForTimeout(150);
+      return cp.$eval('[data-testid="credit-apply"]', (e) => e.disabled); })(), false);
+
+  // A HAPPY PATH — exactly ONE request, and the balance re-reads
+  creditPosts = [];
+  await cp.fill('[data-testid="credit-amount"]', "+12.66");
+  await cp.fill('[data-testid="credit-reason"]', "goodwill after the Tuesday cancellation");
+  await cp.waitForTimeout(150);
+  await cp.click('[data-testid="credit-apply"]');
+  await cp.waitForSelector('[data-testid="credit-result"]', { timeout: 10000 });
+  { const r = await cp.evaluate(() => ({
+      verdict: document.querySelector('[data-testid="credit-result"]')?.getAttribute("data-verdict"),
+      text: document.querySelector('[data-testid="credit-result"]')?.textContent,
+      balance: document.querySelector('[data-testid="credit-balance"]')?.getAttribute("data-cents"),
+      headline: [...document.querySelectorAll(".facts .f")].find((f) => /CREDITS/.test(f.textContent))?.textContent,
+    }));
+    (r.verdict === "LANDED" && creditPosts.length === 1 && r.balance === "2500" && /\$25\.00/.test(r.text) && /\$25\.00/.test(r.headline || ""))
+      ? ok("credits: one adjustment = exactly ONE request, reports LANDED from a re-read, and the true balance ($25.00) replaces the old one everywhere")
+      : bad("credits: happy path", `${JSON.stringify(r)} posts=${creditPosts.length}`); }
+  eq("credits: the request carried the DELTA and the expected before-balance — never an absolute new balance",
+    { keys: Object.keys(creditPosts[0]).sort(), delta: creditPosts[0].deltaCents, expected: creditPosts[0].expectedBeforeCents, hasAbsolute: "creditAmount" in creditPosts[0] || "balanceCents" in creditPosts[0] },
+    { keys: ["deltaCents", "expectedBeforeCents", "reason"], delta: 1266, expected: 1234, hasAbsolute: false });
+  eq("credits: the reason travels with it, for the change log", creditPosts[0].reason, "goodwill after the Tuesday cancellation");
+
+  // A FAILURE IS ATTEMPTED EXACTLY ONCE — no retry, ever
+  creditPosts = [];
+  await cp.fill('[data-testid="credit-amount"]', "+1");
+  await cp.fill('[data-testid="credit-reason"]', "FAILME");
+  await cp.waitForTimeout(150);
+  await cp.click('[data-testid="credit-apply"]');
+  await cp.waitForFunction(() => document.querySelector('[data-testid="credit-result"]')?.getAttribute("data-verdict") === "FAILED", null, { timeout: 10000 });
+  await cp.waitForTimeout(900);   // give any retry time to appear
+  { const balance = await cp.$eval('[data-testid="credit-balance"]', (e) => e.getAttribute("data-cents"));
+    (creditPosts.length === 1 && balance === "2500")
+      ? ok("credits: a FAILED write is attempted exactly ONCE — never retried — and the balance is unchanged")
+      : bad("credits: retry on failure", `posts=${creditPosts.length} balance=${balance}`); }
+
+  // THE RACE — the balance moved between the screen and the click
+  creditState.serverBalance = 500;    // someone spent; the screen still shows $25.00
+  creditPosts = [];
+  await cp.fill('[data-testid="credit-amount"]', "+10");
+  await cp.fill('[data-testid="credit-reason"]', "against a stale balance");
+  await cp.waitForTimeout(150);
+  await cp.click('[data-testid="credit-apply"]');
+  await cp.waitForFunction(() => document.querySelector('[data-testid="credit-result"]')?.getAttribute("data-verdict") === "ABORTED", null, { timeout: 10000 });
+  await cp.waitForTimeout(900);
+  { const r = await cp.evaluate(() => ({
+      text: document.querySelector('[data-testid="credit-result"]')?.textContent,
+      balance: document.querySelector('[data-testid="credit-balance"]')?.getAttribute("data-cents"),
+    }));
+    const reportsNew = /\$5\.00/.test(r.text || "") && /\$25\.00/.test(r.text || "");
+    (creditPosts.length === 1 && reportsNew && r.balance === "500" && creditState.serverBalance === 500)
+      ? ok("credits: a balance that changed between read and write ABORTS, reports the new value ($5.00), applies nothing, and does not re-try with the new figure")
+      : bad("credits: race", `${JSON.stringify(r)} posts=${creditPosts.length} server=${creditState.serverBalance}`); }
+
+  // ...and the aborted attempt did not quietly become a second, re-based write
+  eq("credits: after an abort the panel is showing the TRUE balance, so a deliberate retry is against real facts",
+    await cp.$eval('[data-testid="credit-consequence"]', (e) => e.textContent.trim()),
+    "Marisol Reyes's balance goes from $5.00 to $15.00.");
+
+  // NEGATIVE — Clubhouse refuses to be the thing that finds out
+  await cp.fill('[data-testid="credit-amount"]', "-10");
+  await cp.waitForTimeout(150);
+  { creditPosts = [];
+    const st = await cp.evaluate(() => ({
+      apply: document.querySelector('[data-testid="credit-apply"]')?.disabled,
+      msg: [...document.querySelectorAll('[data-testid="credit-error"]')].map((e) => e.textContent).join(" "),
+    }));
+    (st.apply === true && /-\$5\.00/.test(st.msg) && creditPosts.length === 0)
+      ? ok("credits: an adjustment that would go negative is refused before any request")
+      : bad("credits: negative", JSON.stringify(st)); }
+
+  // 390 PORTRAIT — the same control on a phone
+  await cp.setViewportSize({ width: 390, height: 844 });
+  await cp.waitForTimeout(200);
+  { const m = await cp.evaluate(() => {
+      const panel = document.querySelector('[data-testid="credit-panel"]');
+      const r = panel.getBoundingClientRect();
+      const fields = [...panel.querySelectorAll("input")];
+      return {
+        insideViewport: r.left >= -1 && r.right <= window.innerWidth + 1,
+        pageLeak: document.documentElement.scrollWidth > window.innerWidth + 1,
+        stacked: new Set(fields.map((f) => Math.round(f.getBoundingClientRect().top))).size === fields.length,
+        tapTargets: fields.every((f) => f.getBoundingClientRect().height >= 36),
+        consequenceVisible: !!panel.querySelector('[data-testid="credit-consequence"]'),
+      }; });
+    JSON.stringify(m) === JSON.stringify({ insideViewport: true, pageLeak: false, stacked: true, tapTargets: true, consequenceVisible: true })
+      ? ok("credits @390 portrait: the panel fits, the fields stack one per band, tap targets survive, and the consequence is still shown")
+      : bad("credits @390", JSON.stringify(m)); }
+  await cc.close();
 
   await browser.close();
   console.log(`\nverify-lookup: ${PASS} passed, ${FAIL} failed`);

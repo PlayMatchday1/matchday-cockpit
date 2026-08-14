@@ -16,7 +16,8 @@
 import { useCallback, useEffect, useMemo, useRef, useState } from "react";
 import { useRouter } from "next/navigation";
 import { supabase } from "@/lib/supabase";
-import { useAuth, canEditMatches, canManagePlayers } from "@/lib/useAuth";
+import { useAuth, canEditMatches, canManagePlayers, canEditCredits } from "@/lib/useAuth";
+import { validateAdjustment, fmtUsd, MAX_ADJUSTMENT_CENTS } from "@/lib/creditsModel";
 import { useDockSubject } from "@/lib/useDockSubject";
 import { FULL_EDITOR_ENV } from "@/lib/matchEnv";
 import { envBadge } from "@/lib/matchEnvBadge";
@@ -127,6 +128,9 @@ export default function PlayerLookup() {
   const { appUser } = useAuth();
   const canEdit = canEditMatches(appUser);   // EDIT MATCHES — add/remove; server holds regardless
   const canManage = canManagePlayers(appUser); // MANAGE PLAYERS — suspend/expel/lift; independent
+  // EDIT CREDITS — the only grant here that moves MONEY, and the only one not tied to Match Ops.
+  // Courtesy only: the route re-reads the flag from the database on every request.
+  const canCredit = canEditCredits(appUser);
   const badge = envBadge(ENV);
 
   const [q, setQ] = useState("");
@@ -286,7 +290,7 @@ export default function PlayerLookup() {
       {profile && !loadingProfile && (
         <div id="profileview">
           <button className="back" data-testid="lookup-back" onClick={backToSearch}>‹ Back to search</button>
-          <ProfileView p={profile} fields={fields} canEdit={canEdit} canManage={canManage}
+          <ProfileView p={profile} fields={fields} canEdit={canEdit} canManage={canManage} canCredit={canCredit}
             onOpenMatch={(id) => router.push(`/match-ops/matches/${id}`)}
             onAdd={() => setModal({ type: "add" })}
             onRemove={(m) => setModal({ type: "remove", m })}
@@ -323,14 +327,17 @@ function Fact({ k, v, big }: { k: string; v: React.ReactNode; big?: boolean }) {
   return <span className="f"><span className="k">{k}</span><span className={`v${big ? " big" : ""}`}>{v}</span></span>;
 }
 
-function ProfileView({ p, fields, canEdit, canManage, onOpenMatch, onAdd, onRemove, onSuspend, onExpel, onLift }: {
-  p: Profile; fields: Record<FieldKey, boolean>; canEdit: boolean; canManage: boolean;
+function ProfileView({ p, fields, canEdit, canManage, canCredit, onOpenMatch, onAdd, onRemove, onSuspend, onExpel, onLift }: {
+  p: Profile; fields: Record<FieldKey, boolean>; canEdit: boolean; canManage: boolean; canCredit: boolean;
   onOpenMatch: (id: number) => void; onAdd: () => void; onRemove: (m: MatchRow) => void;
   onSuspend: () => void; onExpel: () => void; onLift: () => void;
 }) {
   const pl = p.player;
   const tags = statusTags({ status: pl.status, hasMembership: !!p.membership && p.membership.status !== "canceled" });
   const counts = useMemo(() => matchCounts(p.matches), [p.matches]);
+  // The live balance, in CENTS, once an adjustment has landed — so the headline figure and the
+  // panel below it can never disagree about what this player has.
+  const [liveCredits, setLiveCredits] = useState<number | null>(null);
   return (
     <>
       <div className="idcard" data-pid={pl.id}>
@@ -352,7 +359,7 @@ function ProfileView({ p, fields, canEdit, canManage, onOpenMatch, onAdd, onRemo
         )}
 
         <div className="facts">
-          <Fact k="CREDITS" v={money(pl.credits)} big />
+          <Fact k="CREDITS" v={money(liveCredits ?? pl.credits)} big />
           {/* facts come from the SAME counts as the match-history chips (single source) */}
           <Fact k="PLAYED" v={counts.played} big />
           <Fact k="UPCOMING" v={counts.upcoming} big />
@@ -366,6 +373,9 @@ function ProfileView({ p, fields, canEdit, canManage, onOpenMatch, onAdd, onRemo
         </div>
       </div>
 
+      <CreditPanel playerId={pl.id} playerName={pl.name} balanceCents={liveCredits ?? pl.credits}
+        canCredit={canCredit} onBalance={setLiveCredits} />
+
       <MembershipPanel m={p.membership} />
 
       <StrikePanel s={p.strikes} isMember={!!p.membership} />
@@ -377,6 +387,101 @@ function ProfileView({ p, fields, canEdit, canManage, onOpenMatch, onAdd, onRemo
 
       <AccountHistoryPanel p={p} canManage={canManage} onSuspend={onSuspend} onExpel={onExpel} onLift={onLift} />
     </>
+  );
+}
+
+// ---------- CREDIT ADJUSTMENT (Phase 27) — the only control in Clubhouse that moves money ----------
+//
+// AN ADJUSTMENT, NOT AN OVERWRITE. Retool's version is a stepper pre-filled with the current
+// balance: one mis-key silently REPLACES someone's money with a different number, and nothing on
+// the screen would look wrong, because a balance and a typo look identical. Here you enter "+25" or
+// "-10" and Clubhouse computes the absolute value the API wants — the worst a mis-key can do is
+// move the wrong amount, which the sentence below states before you commit and the change log
+// records after.
+//
+// The route is the control; every rule here is re-checked server-side against a fresh read of the
+// permission and a fresh read of the balance.
+function CreditPanel({ playerId, playerName, balanceCents, canCredit, onBalance }: {
+  playerId: number; playerName: string; balanceCents: number; canCredit: boolean; onBalance: (cents: number) => void;
+}) {
+  const [amt, setAmt] = useState("");
+  const [reason, setReason] = useState("");
+  const [busy, setBusy] = useState(false);
+  const [res, setRes] = useState<{ verdict: "LANDED" | "FAILED" | "NOT APPLIED" | "UNKNOWN" | "ABORTED"; text: string } | null>(null);
+
+  const v = validateAdjustment({ raw: amt, reason, beforeCents: balanceCents, playerName, canEdit: canCredit });
+
+  const apply = async () => {
+    if (!v.ok || v.deltaCents == null || busy) return;
+    setBusy(true); setRes(null);
+    try {
+      // ONE ATTEMPT. No retry on any outcome — if the endpoint were a delta a retry would be a
+      // second grant, and even for an absolute set it is a second money movement nobody asked for.
+      const r = await authFetch(`/api/matchday/${ENV}/players/${playerId}/credits`, {
+        method: "POST",
+        body: JSON.stringify({ deltaCents: v.deltaCents, expectedBeforeCents: balanceCents, reason: reason.trim() }),
+      });
+      const j = await r.json().catch(() => ({}));
+      if (r.status === 409 && j.aborted) {
+        // The balance moved between the screen loading and this click. Nothing was sent.
+        if (typeof j.balanceCents === "number") onBalance(j.balanceCents);
+        setRes({ verdict: "ABORTED", text: String(j.error) });
+        return;
+      }
+      if (!r.ok) { setRes({ verdict: j.outcome === "UNKNOWN" ? "UNKNOWN" : "FAILED", text: String(j.error ?? `HTTP ${r.status}`) }); return; }
+      if (typeof j.balanceCents === "number") onBalance(j.balanceCents);
+      if (j.landed) {
+        setRes({ verdict: "LANDED", text: `${playerName}'s balance is now ${fmtUsd(j.balanceCents)} — a re-read confirms it. Logged with your reason.` });
+        setAmt(""); setReason("");
+      } else {
+        setRes({ verdict: "NOT APPLIED", text: `The server accepted the write (2xx) but a re-read shows ${fmtUsd(j.balanceCents)}, not ${fmtUsd(j.intendedAfterCents)}. Nothing was retried.` });
+      }
+    } catch (e) {
+      // UNKNOWN is not FAILED: the write may have landed. Never retried, and it says so.
+      setRes({ verdict: "UNKNOWN", text: `${e instanceof Error ? e.message : String(e)} — the request may or may not have landed. Nothing was retried; reload and check the balance before acting.` });
+    } finally { setBusy(false); }
+  };
+
+  return (
+    <section className="panel credpanel" data-testid="credit-panel">
+      <h3>CREDITS</h3>
+      <p className="credbal" data-testid="credit-balance" data-cents={balanceCents}>
+        Balance <b>{fmtUsd(balanceCents)}</b>
+      </p>
+      {!canCredit ? (
+        <p className="credlock" data-testid="credit-locked">
+          Adjusting credits needs <b>EDIT CREDITS</b>, which is granted separately from Match Ops — holding Match Ops does not include it.
+        </p>
+      ) : null}
+      <div className="credrow">
+        <label className="credf">
+          <span>ADJUSTMENT <em>+ adds, − subtracts</em></span>
+          <input data-testid="credit-amount" value={amt} inputMode="decimal" placeholder="+25 or -10"
+            disabled={!canCredit || busy} onChange={(e) => setAmt(e.target.value)} aria-label="Credit adjustment" />
+        </label>
+        <label className="credf grow">
+          <span>REASON <em>required — written to the change log</em></span>
+          <input data-testid="credit-reason" value={reason} placeholder="Why this is being adjusted"
+            disabled={!canCredit || busy} onChange={(e) => setReason(e.target.value)} aria-label="Reason for the adjustment" />
+        </label>
+      </div>
+      {/* THE CONSEQUENCE, BEFORE THE CLICK — same pattern as the manager-pay screen. It is drawn
+          from the SAME arithmetic that produces the number sent, so it cannot promise one figure
+          and send another. */}
+      {v.consequence && <p className="credconseq" data-testid="credit-consequence">{v.consequence}</p>}
+      {v.errors.length > 0 && (
+        <ul className="crederrs" data-testid="credit-errors">
+          {v.errors.map((e, i) => <li key={i} data-testid="credit-error">{e}</li>)}
+        </ul>
+      )}
+      <div className="credacts">
+        <button type="button" className="credbtn" data-testid="credit-apply" disabled={!v.ok || busy} onClick={() => void apply()}>
+          {busy ? "Applying…" : "Apply adjustment"}
+        </button>
+        <span className="credcap">One adjustment at a time, up to {fmtUsd(MAX_ADJUSTMENT_CENTS)}. Sent once — never retried.</span>
+      </div>
+      {res && <p className="credres" data-testid="credit-result" data-verdict={res.verdict}><b>{res.verdict}</b> — {res.text}</p>}
+    </section>
   );
 }
 
@@ -1175,4 +1280,34 @@ const CSS = `
   .pl .acts{margin-left:0;width:100%}
   .pl .modal{max-width:none}
 }
+
+/* ── CREDIT ADJUSTMENT (Phase 27). Deliberately NOT alarm-coloured: this is a routine, logged,
+   reversible-by-a-second-adjustment action, and dressing it in red would teach people to ignore
+   red. The friction that matters is the required reason and the stated consequence, not the paint. */
+.pl .credpanel{padding:0 0 13px}
+.pl .credpanel h3{margin:0;padding:12px 14px;font-size:10.5px;font-weight:800;letter-spacing:.12em;color:var(--ink3);border-bottom:1px solid var(--line)}
+.pl .credbal{margin:11px 14px 0;font-size:13px;color:var(--ink2)}
+.pl .credbal b{font-size:17px;font-weight:800;color:var(--ink);font-variant-numeric:tabular-nums}
+.pl .credlock{margin:8px 14px 0;font-size:11.5px;line-height:1.5;color:var(--ink3);background:#f4f7f5;border:1px solid var(--line);border-radius:8px;padding:8px 10px}
+.pl .credrow{display:flex;gap:9px;margin:10px 14px 0;flex-wrap:wrap}
+.pl .credf{display:flex;flex-direction:column;gap:4px;min-width:140px}
+.pl .credf.grow{flex:1;min-width:200px}
+.pl .credf span{font-size:10px;font-weight:800;letter-spacing:.09em;color:var(--ink3)}
+.pl .credf em{font-style:normal;font-weight:600;letter-spacing:0;color:var(--ink3);opacity:.85;margin-left:5px}
+.pl .credf input{border:1px solid var(--line2);border-radius:9px;padding:9px 11px;font:inherit;font-size:13.5px;background:#fff;min-height:40px;width:100%}
+.pl .credf input:disabled{background:#f4f7f5;color:var(--ink3);cursor:not-allowed}
+.pl .credf input:focus{outline:2px solid var(--focus);outline-offset:-1px}
+.pl .credconseq{margin:10px 14px 0;font-size:13px;line-height:1.5;color:var(--ink);background:#eef7f1;border:1px solid #a9d3ba;border-radius:9px;padding:9px 11px;font-weight:600}
+.pl .crederrs{list-style:none;margin:8px 14px 0;padding:0;display:flex;flex-direction:column;gap:4px}
+.pl .crederrs li{font-size:11.5px;line-height:1.45;color:#7a2a12;background:#fdf3ef;border:1px solid #e6c3b6;border-radius:8px;padding:7px 10px}
+.pl .credacts{display:flex;align-items:center;gap:10px;margin:11px 14px 0;flex-wrap:wrap}
+.pl .credbtn{border:1px solid #10603f;background:var(--grn,#146c43);color:#fff;border-radius:9px;padding:0 16px;min-height:40px;font:inherit;font-weight:700;cursor:pointer}
+.pl .credbtn:disabled{opacity:.45;cursor:not-allowed}
+.pl .credcap{font-size:11px;color:var(--ink3)}
+.pl .credres{margin:10px 14px 0;font-size:12px;line-height:1.5;border-radius:9px;padding:9px 11px;border:1px solid var(--line);background:#f4f7f5}
+.pl .credres b{font-weight:800;letter-spacing:.04em}
+.pl .credres[data-verdict="LANDED"]{background:#eef7f1;border-color:#a9d3ba;color:#14512f}
+.pl .credres[data-verdict="FAILED"],.pl .credres[data-verdict="NOT APPLIED"]{background:#fbeeec;border-color:#e6b7b0;color:#8a2018}
+.pl .credres[data-verdict="UNKNOWN"],.pl .credres[data-verdict="ABORTED"]{background:#fdf8ee;border-color:#dcbc71;color:#6b4a09}
+@media (max-width:560px){.pl .credrow{flex-direction:column}.pl .credf,.pl .credf.grow{min-width:0;width:100%}}
 `;

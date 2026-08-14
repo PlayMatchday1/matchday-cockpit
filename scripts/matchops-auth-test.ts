@@ -64,6 +64,7 @@ const routeFiles: string[] = [];
 (function walk(dir: string) { for (const e of readdirSync(dir)) { const p = join(dir, e); if (statSync(p).isDirectory()) walk(p); else if (e === "route.ts") routeFiles.push(p); } })(API);
 
 const importsMatchOpsRead = routeFiles.filter((f) => readFileSync(f, "utf8").includes("authenticateMatchOpsRead"));
+const importsCredits = routeFiles.filter((f) => readFileSync(f, "utf8").includes("authenticateCredits"));
 const importsAdmin = routeFiles.filter((f) => /authenticateAdmin\b/.test(readFileSync(f, "utf8")));
 const rel = (p: string) => p.replace("src/app/api/", "");
 
@@ -97,6 +98,27 @@ is("exactly the 3 dual-gate routes still reference authenticateAdmin (their writ
     "matchday/[env]/matches/[id]/route.ts", "matchday/[env]/roster/[matchId]/route.ts",
     "matchday/[env]/matches/[id]/cancel/route.ts",
   ].sort());
+// ── EDIT CREDITS (Phase 27) — the money route, and the ONE route on a gate of its own ──────────
+// It is registered here so it can never drift onto a shared gate: the whole point of the grant is
+// that nobody acquires the ability to move money as a side effect of Match Ops.
+console.log("\nEDIT CREDITS — its own gate, deliberately outside Match Ops:");
+is("exactly ONE route is on the credits gate", importsCredits.map(rel).sort(), ["matchday/[env]/players/[playerId]/credits/route.ts"]);
+{
+  const f = importsCredits[0];
+  const src = f ? readFileSync(f, "utf8") : "";
+  is("the credits route exists", !!f, true);
+  is("...and does NOT use authenticateAdmin (an admin is not automatically allowed to move money)", /authenticateAdmin\b/.test(src), false);
+  is("...and does NOT use authenticateMatchOpsRead (Match Ops does not include it)", /authenticateMatchOpsRead\b/.test(src), false);
+  is("BOTH its GET and its POST are gated", (src.match(/authenticateCredits\(req\)/g) ?? []).length, 2);
+  is("...the write names the credits authority at the apiWrite chokepoint", /"credits"\s*\)/.test(src), true);
+  is("...it re-reads the balance and race-checks before writing", /raceCheck\(/.test(src), true);
+  is("...it goes through recordWrite (never a bare apiWrite)", /recordWrite\(/.test(src), true);
+  is("...it logs the REASON", /field: "Reason"/.test(src), true);
+  is("...and never reads a name, phone or email onto the log", /phone|email(?!:? auth\.email|Email)/i.test(src.slice(src.indexOf("const changes"), src.indexOf("supabaseLogStore"))), false);
+}
+// no OTHER route may reference the credits flag — a second money surface must be a deliberate edit here
+is("no other route reads can_edit_credits directly", routeFiles.filter((f) => /can_edit_credits/.test(readFileSync(f, "utf8"))).map(rel), []);
+
 // the remaining is_admin surface: 28 − 6 routes that moved WHOLE = 22 (the 3 dual-gate ones still count)
 is("authenticateAdmin still guards 22 routes (28 − 6 moved whole)", importsAdmin.length, 22);
 
