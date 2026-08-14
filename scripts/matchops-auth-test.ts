@@ -122,9 +122,12 @@ is("no other route reads can_edit_credits directly", routeFiles.filter((f) => /c
 // the remaining is_admin surface: 28 − 6 routes that moved WHOLE = 22 (the 3 dual-gate ones still
 // count), + 1 for Phase 29's /admin/users/city-manager (granting the tier is an ADMIN act — the
 // tier itself is not admin-gated, the act of handing it out is) = 23.
-is("authenticateAdmin still guards 23 routes (28 − 6 moved whole, + the city-manager grant route)", importsAdmin.length, 23);
-is("...and the added one is exactly the city-manager grant route",
-  importsAdmin.map(rel).filter((f) => /city-manager/.test(f)), ["admin/users/city-manager/route.ts"]);
+// +1 Phase 29 city-manager grant, +2 Phase 30 (auth-status read, resend-invite) = 25.
+is("authenticateAdmin still guards 25 routes (28 − 6 moved whole, + 3 admin-user routes)", importsAdmin.length, 25);
+is("...and the added ones are exactly the three admin-user routes",
+  importsAdmin.map(rel).filter((f) => /admin\/users\//.test(f)).sort(),
+  // NOT invite/ — that one is gated on isProvisioningOwner (stricter than admin), deliberately.
+  ["admin/users/auth-status/route.ts", "admin/users/city-manager/route.ts", "admin/users/match-permissions/route.ts", "admin/users/resend-invite/route.ts"].sort());
 
 // the five Deonna must STILL be refused stay is_admin-gated (authenticateAdmin, or authenticateCrm + an is_admin check)
 const requiresAdmin = (f: string) => { const s = readFileSync(f, "utf8"); return /authenticateAdmin\b/.test(s) || (/authenticateCrm\b/.test(s) && /isAdmin|is_admin/.test(s)); };

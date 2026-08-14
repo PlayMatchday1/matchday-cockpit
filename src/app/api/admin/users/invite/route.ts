@@ -180,27 +180,53 @@ export async function POST(req: Request) {
   // emails them a one-click confirmation link that lands on the
   // configured Site URL. After confirmation they can request OTP
   // codes via the normal /login flow.
+  // ── WHAT THIS ROUTE CAN AND CANNOT KNOW ───────────────────────────────────────────────────────
+  // inviteUserByEmail returning without an error means Supabase ACCEPTED the request. It does NOT
+  // mean an email was delivered — delivery happens downstream (SMTP relay, the recipient's spam
+  // filter) and nothing here observes it. This used to return status "invited", the modal said
+  // success, and a real invite silently never arrived. Same rule as every other write in this
+  // codebase: a 2xx is not proof it landed.
+  const acceptedAt = new Date().toISOString();
   const { data: invited, error: inviteErr } = await admin.auth.admin.inviteUserByEmail(
     email,
     { data: { full_name: fullName } },
   );
+
   if (inviteErr) {
-    // "Already registered" means the auth identity was created out-
-    // of-band (Supabase Auth dashboard, a prior invite, a backfill).
-    // The app_users row is now in sync, so report success rather than
-    // failing the whole call.
-    const msg = (inviteErr.message ?? "").toLowerCase();
-    const alreadyExists =
-      msg.includes("already") ||
-      msg.includes("registered") ||
-      msg.includes("exists");
+    const msg = inviteErr.message ?? "";
+    const lower = msg.toLowerCase();
+    const alreadyExists = lower.includes("already") || lower.includes("registered") || lower.includes("exists");
+
+    // ALREADY REGISTERED — the auth identity exists (a prior invite, a backfill, the Supabase
+    // dashboard). The app_users row is now in sync, so the PERMISSIONS half succeeded. But NO
+    // EMAIL WAS SENT, and reporting a bare success here is what hid the problem: nothing arrives
+    // and the screen looks fine. Say it plainly and point at the recovery path.
     if (alreadyExists) {
-      return Response.json({ ok: true, status: "already-registered", email });
+      return Response.json({
+        ok: true,
+        status: "already-registered",
+        email,
+        rowCreated: true,
+        emailSent: false,
+        deliveryConfirmed: false,
+        message: "The permissions row is saved, but NO invite email was sent — this address already has a sign-in identity. Use Re-send on their row to send a fresh sign-in link.",
+      });
     }
-    return Response.json(
-      { error: `invite failed: ${inviteErr.message}` },
-      { status: 500 },
-    );
+
+    // RATE LIMITED — the one failure most likely to look like nothing happening. Named separately
+    // so the modal can say "wait and retry" rather than "invite failed".
+    const rateLimited = /rate limit|too many|429/i.test(msg) || (inviteErr as { status?: number }).status === 429;
+    return Response.json({
+      ok: false,
+      status: rateLimited ? "rate-limited" : "invite-failed",
+      email,
+      rowCreated: true,      // step 1 already succeeded — say so, or it looks like nothing happened
+      emailSent: false,
+      deliveryConfirmed: false,
+      error: rateLimited
+        ? `The permissions row is saved, but the email was REFUSED: ${msg}. This is the auth email quota — wait and use Re-send on their row.`
+        : `The permissions row is saved, but the invite email failed: ${msg}`,
+    }, { status: rateLimited ? 429 : 502 });
   }
 
   return Response.json({
@@ -208,5 +234,11 @@ export async function POST(req: Request) {
     status: "invited",
     email,
     user_id: invited?.user?.id ?? null,
+    rowCreated: true,
+    // ACCEPTED, not delivered. The distinction is the whole point of this change.
+    emailAccepted: true,
+    acceptedAt,
+    deliveryConfirmed: false,
+    message: `Row created. Supabase accepted the invite at ${acceptedAt}. Delivery is NOT confirmed — the row shows Signed in once they actually arrive.`,
   });
 }

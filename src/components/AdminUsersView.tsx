@@ -38,6 +38,19 @@ const PERMISSION_COLUMNS: { key: PermissionKey; label: string; hint?: string }[]
 // write through the guarded city-manager route.
 const CITY_MANAGER_COLUMNS = ["City Manager", "City"] as const;
 
+// WHO HAS ACTUALLY ARRIVED. app_users says what someone may do; only auth.users says whether they
+// ever signed in. The grid showed the first and not the second, so an account whose invite silently
+// never landed was indistinguishable from a working one — which is exactly how a real invite went
+// missing without anyone noticing.
+type AuthStatus = { invitedAt: string | null; confirmedAt: string | null; lastSignInAt: string | null };
+
+function whenShort(iso: string | null): string {
+  if (!iso) return "—";
+  const d = new Date(iso);
+  if (Number.isNaN(d.getTime())) return "—";
+  return d.toLocaleDateString("en-US", { month: "short", day: "numeric" });
+}
+
 function lastLoginText(iso: string | null): string {
   if (!iso) return "Never";
   const d = new Date(iso);
@@ -66,6 +79,9 @@ export default function AdminUsersView() {
   const [showAddModal, setShowAddModal] = useState(false);
   const [flashedId, setFlashedId] = useState<string | null>(null);
   const [permErr, setPermErr] = useState<{ id: string; msg: string } | null>(null);
+  const [authStatus, setAuthStatus] = useState<Record<string, AuthStatus>>({});
+  const [resend, setResend] = useState<{ email: string; msg: string; bad: boolean } | null>(null);
+  const [resending, setResending] = useState<string | null>(null);
 
   const load = useCallback(async () => {
     setLoading(true);
@@ -85,6 +101,38 @@ export default function AdminUsersView() {
   useEffect(() => {
     load();
   }, [load]);
+
+  // auth.users is service-role only, so this is a route rather than a client read.
+  useEffect(() => {
+    void (async () => {
+      const { data: sess } = await supabase.auth.getSession();
+      if (!sess.session) return;
+      const res = await fetch("/api/admin/users/auth-status", {
+        headers: { Authorization: `Bearer ${sess.session.access_token}` }, cache: "no-store",
+      }).catch(() => null);
+      if (!res?.ok) return;
+      const j = await res.json().catch(() => ({}));
+      if (j?.users) setAuthStatus(j.users as Record<string, AuthStatus>);
+    })();
+  }, []);
+
+  // RE-SEND. A silently undelivered invite had no recovery path short of the Supabase dashboard.
+  // The result reports what is actually known — ACCEPTED, not delivered.
+  async function resendInvite(user: AppUser) {
+    setResending(user.id); setResend(null);
+    const { data: sess } = await supabase.auth.getSession();
+    try {
+      const res = await fetch("/api/admin/users/resend-invite", {
+        method: "POST",
+        headers: { "Content-Type": "application/json", ...(sess.session ? { Authorization: `Bearer ${sess.session.access_token}` } : {}) },
+        body: JSON.stringify({ email: user.email }),
+      });
+      const j = await res.json().catch(() => ({}));
+      setResend({ email: user.email, msg: (res.ok ? j.message : j.error) ?? `HTTP ${res.status}`, bad: !res.ok });
+    } catch (e) {
+      setResend({ email: user.email, msg: e instanceof Error ? e.message : String(e), bad: true });
+    } finally { setResending(null); }
+  }
 
   function flash(id: string) {
     setFlashedId(id);
@@ -234,6 +282,14 @@ export default function AdminUsersView() {
         </div>
       )}
 
+      {/* ACCEPTED is not DELIVERED, and the banner says which one happened. */}
+      {resend && (
+        <div data-testid="resend-result" data-bad={resend.bad ? "true" : "false"}
+          className={`rounded-md border px-3 py-2 text-sm ${resend.bad ? "border-coral/40 bg-coral-soft text-coral" : "border-cream-line bg-cream-soft text-deep-green/80"}`}>
+          <b>{resend.email}</b> — {resend.msg}
+        </div>
+      )}
+
       <div className="overflow-hidden rounded-2xl border-[1.5px] border-cream-line bg-white shadow-md shadow-deep-green/10">
         <div className="overflow-x-auto">
           <table className="w-full border-collapse text-sm">
@@ -256,6 +312,8 @@ export default function AdminUsersView() {
                     {label}
                   </th>
                 ))}
+                <th className="px-2 py-3 text-left" data-testid="col-invited" title="When Supabase ACCEPTED an invite — not proof it was delivered">Invited</th>
+                <th className="px-2 py-3 text-left" data-testid="col-signed-in" title="When they actually followed a link — the only proof of delivery this system gets">Signed in</th>
                 <th className="px-3 py-3 text-left">Last login</th>
                 <th className="px-3 py-3 text-right">{""}</th>
               </tr>
@@ -264,7 +322,7 @@ export default function AdminUsersView() {
               {loading ? (
                 <tr>
                   <td
-                    colSpan={PERMISSION_COLUMNS.length + CITY_MANAGER_COLUMNS.length + 4}
+                    colSpan={PERMISSION_COLUMNS.length + CITY_MANAGER_COLUMNS.length + 6}
                     className="px-4 py-8 text-center text-sm text-deep-green/50"
                   >
                     Loading…
@@ -273,7 +331,7 @@ export default function AdminUsersView() {
               ) : users.length === 0 ? (
                 <tr>
                   <td
-                    colSpan={PERMISSION_COLUMNS.length + CITY_MANAGER_COLUMNS.length + 4}
+                    colSpan={PERMISSION_COLUMNS.length + CITY_MANAGER_COLUMNS.length + 6}
                     className="px-4 py-8 text-center text-sm text-deep-green/50"
                   >
                     No users yet.
@@ -391,6 +449,36 @@ export default function AdminUsersView() {
                           <span className="text-xs text-deep-green/35" data-testid="city-empty">&mdash;</span>
                         )}
                       </td>
+                      {(() => {
+                        const st = authStatus[(u.email ?? "").toLowerCase()];
+                        const neverArrived = !!st && !st.confirmedAt;
+                        return (
+                          <>
+                            <td className="px-2 py-2 align-middle text-xs text-deep-green/65" data-testid="cell-invited" data-value={st?.invitedAt ?? ""}>
+                              {whenShort(st?.invitedAt ?? null)}
+                            </td>
+                            {/* NEVER SIGNED IN is the state worth seeing — it is what an
+                                undelivered invite looks like, and it used to look like nothing. */}
+                            <td className="px-2 py-2 align-middle text-xs" data-testid="cell-signed-in" data-value={st?.confirmedAt ?? ""}
+                              data-never={neverArrived ? "true" : "false"}>
+                              {st?.confirmedAt ? (
+                                <span className="text-deep-green/65">{whenShort(st.confirmedAt)}</span>
+                              ) : st ? (
+                                <span className="flex flex-col items-start gap-1">
+                                  <span className="text-coral" data-testid="never-signed-in">Never</span>
+                                  <button type="button" data-testid="resend-invite" disabled={resending === u.id}
+                                    onClick={() => void resendInvite(u)}
+                                    className="rounded-md border border-cream-line px-2 py-0.5 text-[10px] font-bold text-deep-green/70 hover:bg-cream-soft disabled:opacity-50">
+                                    {resending === u.id ? "Sending…" : "Re-send"}
+                                  </button>
+                                </span>
+                              ) : (
+                                <span className="text-deep-green/35">—</span>
+                              )}
+                            </td>
+                          </>
+                        );
+                      })()}
                       <td className="px-3 py-2 align-middle text-sm text-deep-green/65">
                         {lastLoginText(u.last_login_at)}
                       </td>
