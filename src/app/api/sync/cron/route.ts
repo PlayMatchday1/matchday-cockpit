@@ -53,7 +53,7 @@ import { ingestTelnyxSms } from "@/lib/telnyxSmsIngest";
 import { listInstalls, ingestAllMonths, PlayGrantPendingError } from "@/lib/playInstallsSync";
 import { ingestAppStore, AppleAuthError } from "@/lib/appStoreInstallsSync";
 import { syncAllCalendars, CalendarConfigError } from "@/lib/calendarSync";
-import { runWithLog, type TriggeredBy } from "@/lib/syncLogging";
+import { runWithLog, type TriggeredBy, type SourceName } from "@/lib/syncLogging";
 import { refreshGrowthViews } from "@/lib/growthViews";
 
 // Stripe ~60s + mdapi_reviews ~10s + mdapi_subscriptions ~60s +
@@ -162,6 +162,29 @@ export async function POST(req: Request) {
     if (userErr || !userData?.user) {
       return Response.json({ error: "Invalid session" }, { status: 401 });
     }
+  }
+
+  // ── THE TIME BUDGET ────────────────────────────────────────────────────────
+  // maxDuration is 300s and the pipeline has already been killed mid-step (app-store-installs
+  // started at +288s and never completed; google-calendar, then step 15, never started at all and
+  // so left NO row). A step that dies to the platform runs no code and cannot log — so the guard
+  // stops BEFORE the kill and records why, which is what makes the next drift visible.
+  const BUDGET_MS = 300_000;
+  const SAFETY_MS = 25_000; // stop with enough left to write the rows and return a response
+  const elapsedMs = () => Date.now() - startedAt;
+  const budgetLeftMs = () => BUDGET_MS - SAFETY_MS - elapsedMs();
+  const skippedForBudget: string[] = [];
+  // Records the skip in fin_sync_log so "never ran" is a visible fact, not an absence.
+  async function skipForBudget(source: SourceName): Promise<{ ok: false; error: string }> {
+    const msg = `Skipped: cron budget exhausted (${Math.round(elapsedMs() / 1000)}s of ${BUDGET_MS / 1000}s used before this step)`;
+    skippedForBudget.push(source);
+    await supabase.from("fin_sync_log").insert({
+      source, triggered_by: triggeredBy,
+      started_at: new Date().toISOString(), completed_at: new Date().toISOString(),
+      error_message: msg,
+    });
+    console.warn(`[cron] ${source}: ${msg}`);
+    return { ok: false, error: msg };
   }
 
   // --- Run all three syncs sequentially with per-source isolation ---
@@ -308,8 +331,20 @@ export async function POST(req: Request) {
   // reflects fresh data. Estimated ~6s. Skips if mdapi-users failed
   // (snapshot would just reproduce yesterday's data with a fresh
   // computed_at, masking the upstream failure).
-  console.time("mdapi-users-lens-snapshot");
-  const usersLensSnapshotResult = await runWithLog(
+
+  // ── THE TWO SLOW STEPS, RUN CONCURRENTLY ───────────────────────────────────
+  // These were 84s + 57s = 141s of the ~289s that exhausted the budget. They are INDEPENDENT of
+  // each other: users-lens depends on mdapi-users, membership-snapshots depends on
+  // mdapi-subscriptions, and they write different tables. Overlapping them costs max(84,57)=84s
+  // instead of 141s — ~57s of margin, which is what actually gets the pipeline under budget.
+  // (Reordering alone did NOT: moving google-calendar to step 5 pushed every later step ~5s out,
+  // so app-store-installs started LATER, not earlier. The starvation rotated; it did not end.)
+  //
+  // Promise.all is safe here because runWithLog never throws — it returns a discriminated union —
+  // so one failing does not cancel the other or reject the pair.
+  console.time("users-lens + membership-snapshots (concurrent)");
+  const [usersLensSnapshotResult, snapshotResult] = await Promise.all([
+    runWithLog(
     "mdapi-users-lens-snapshot",
     triggeredBy,
     supabase,
@@ -322,8 +357,29 @@ export async function POST(req: Request) {
       return refreshUsersLensSnapshot(sb);
     },
     (r) => ({ rows_imported: r.perCityRowsWritten + r.aggregateRowsWritten }),
-  );
-  console.timeEnd("mdapi-users-lens-snapshot");
+  ),
+    runWithLog(
+    "membership-snapshots",
+    triggeredBy,
+    supabase,
+    async (sb) => {
+      if (!subscriptionsResult.ok) {
+        throw new Error(
+          "Skipped: mdapi_subscriptions sync failed; snapshot needs fresh data",
+        );
+      }
+      return refreshMembershipSnapshots({ client: sb, sourceFileName: "cron" });
+    },
+    // rows_imported = months written; rows_replaced = months the
+    // regression guard refused (so the preflight is visible in
+    // fin_sync_log — a non-zero rows_replaced means a guard fired).
+    (r) => ({
+      rows_imported: r.writtenMonths.length,
+      rows_replaced: r.guardedMonths.length,
+    }),
+  ),
+  ]);
+  console.timeEnd("users-lens + membership-snapshots (concurrent)");
 
   // Membership price snapshots — per-city MAX(active price). Same
   // mdapi_subscriptions dependency as the broader members_monthly
@@ -351,26 +407,6 @@ export async function POST(req: Request) {
   // runs if that sync succeeded. The throw-on-skip pattern lets
   // runWithLog handle the log row uniformly — error_message records
   // why the snapshot was skipped so it shows up in Recent Syncs.
-  const snapshotResult = await runWithLog(
-    "membership-snapshots",
-    triggeredBy,
-    supabase,
-    async (sb) => {
-      if (!subscriptionsResult.ok) {
-        throw new Error(
-          "Skipped: mdapi_subscriptions sync failed; snapshot needs fresh data",
-        );
-      }
-      return refreshMembershipSnapshots({ client: sb, sourceFileName: "cron" });
-    },
-    // rows_imported = months written; rows_replaced = months the
-    // regression guard refused (so the preflight is visible in
-    // fin_sync_log — a non-zero rows_replaced means a guard fired).
-    (r) => ({
-      rows_imported: r.writtenMonths.length,
-      rows_replaced: r.guardedMonths.length,
-    }),
-  );
 
   // Telnyx SMS log — refresh the local outbound-SMS cache (migration
   // 0063) so the /sms-log dashboard has fresh data and bodies are
@@ -426,6 +462,11 @@ export async function POST(req: Request) {
   let playInstallsResult: { ok: boolean; rows?: number; note?: string };
   if (triggeredBy !== "cron") {
     playInstallsResult = { ok: true, rows: 0, note: "manual mode: skipped (needs service role + runtime SA key)" };
+  } else if (budgetLeftMs() <= 0) {
+    // Out of time. Stop HERE and record it, rather than starting a step the platform will kill
+    // mid-flight — that leaves a started-but-never-completed row, or for a step that never begins,
+    // no row at all. This is the signal that says which step ran out of budget and when.
+    playInstallsResult = { ok: false, note: (await skipForBudget("play-installs")).error };
   } else {
     const run = await runWithLog("play-installs", triggeredBy, supabase, async () => {
       try {
@@ -463,6 +504,11 @@ export async function POST(req: Request) {
   let appStoreInstallsResult: { ok: boolean; rows?: number; note?: string };
   if (triggeredBy !== "cron") {
     appStoreInstallsResult = { ok: true, rows: 0, note: "manual mode: skipped (needs service role + runtime SA key)" };
+  } else if (budgetLeftMs() <= 0) {
+    // Out of time. Stop HERE and record it, rather than starting a step the platform will kill
+    // mid-flight — that leaves a started-but-never-completed row, or for a step that never begins,
+    // no row at all. This is the signal that says which step ran out of budget and when.
+    appStoreInstallsResult = { ok: false, note: (await skipForBudget("app-store-installs")).error };
   } else {
     const run = await runWithLog("app-store-installs", triggeredBy, supabase, async () => {
       try {
@@ -513,6 +559,15 @@ export async function POST(req: Request) {
     {
       triggeredBy,
       durationMs: Date.now() - startedAt,
+      // The margin, reported every run. "It fits today" is not a guarantee — this is the number to
+      // watch, and skippedForBudget names any step that did not get to run.
+      budget: {
+        limitMs: BUDGET_MS,
+        safetyMs: SAFETY_MS,
+        usedMs: Date.now() - startedAt,
+        marginMs: budgetLeftMs(),
+        skippedForBudget,
+      },
       results: {
         stripe: stripeResult,
         mdapi_reviews: reviewsResult,

@@ -90,6 +90,20 @@ async function main() {
     is("  the message is the thrown text only", updated[0]?.error_message, "Error: auth failed");
   }
 
+  console.log("\nTHE BUDGET — concurrency, a guard, and a reported margin:");
+  {
+    const src = (await import("node:fs")).readFileSync("src/app/api/sync/cron/route.ts", "utf8");
+    // The two slow INDEPENDENT steps overlap. Reordering alone rotated the starvation (moving the
+    // calendar to step 5 pushed app-store-installs ~5s LATER); this is the change that buys margin.
+    is("  users-lens and membership-snapshots run CONCURRENTLY, not one after the other",
+      /await Promise\.all\(\[[\s\S]{0,400}?"mdapi-users-lens-snapshot"[\s\S]{0,900}?"membership-snapshots"/.test(src), true);
+    is("  a step with no budget left is SKIPPED and RECORDED, never started to be killed",
+      /budgetLeftMs\(\) <= 0/.test(src) && /skipForBudget\(/.test(src), true);
+    is("  the skip writes a fin_sync_log row naming the reason", /error_message: msg/.test(src) && /budget exhausted/.test(src), true);
+    is("  the response reports the margin and any budget-skipped steps",
+      /marginMs: budgetLeftMs\(\)/.test(src) && /skippedForBudget,/.test(src), true);
+  }
+
   console.log("\nORDERING — the calendar step is no longer in the starved tail:");
   {
     const src = (await import("node:fs")).readFileSync("src/app/api/sync/cron/route.ts", "utf8");
