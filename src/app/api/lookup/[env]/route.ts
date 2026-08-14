@@ -79,6 +79,11 @@ export async function GET(req: Request, ctx: { params: Promise<{ env: string }> 
       const matchesRaw = Array.isArray(d.matches) ? (d.matches as Record<string, unknown>[]) : [];
       const matches = matchesRaw.map((um) => {
         const m = (um.match as Record<string, unknown>) ?? {};
+        // DELIBERATELY NOT rosterRowCounts(). This is one PLAYER'S history, not a roster count:
+        // the question here is "did this participation get cancelled", and an unsettled checkout
+        // (paidStatus "WAITING") is a real thing that happened to this player and should stay
+        // visible in their history. rosterRowCounts answers "does this row occupy a spot", which is
+        // a different question — see docs/matchday-api-facts.md, the roster population.
         const cancelled = um.isCancelled === true || m.isCancelled === true;
         const startUtc = str(m.startDateUtc) ?? str(m.startDate);
         const upcoming = !cancelled && !!startUtc && Date.parse(startUtc) > now;

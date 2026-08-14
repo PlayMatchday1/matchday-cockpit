@@ -42,8 +42,12 @@ in the report, not just in the code.
   and the spec is wrong.
 - **`maxTeamSize2Team` / `maxTeamSize4Team` are TOTALS**, not per side. A "10 ×
   10" control sends 20.
-- **`_count.players` is authoritative.** `players.length` includes cancelled
-  rows.
+- **`_count.players` is authoritative — and excludes MORE than cancelled rows.**
+  Proven on prod 17516: 38 user-match rows, `_count.players` **18** = 15 `PAID` + 3 `FREE`;
+  excluded are **18 `paidStatus:"WAITING"`** + 2 `isCancelled`. WAITING = a checkout that never
+  settled; a retried one leaves a row per attempt (one player made 27). Filtering only cancelled
+  leaves 36 of 38 — the bug this rule used to cause. Use **`rosterRowCounts()`**
+  (`src/lib/gamedayModel.ts`); never re-derive it.
 - **Player names live under `p.user`**, not on `p` directly.
 - `GET /api/v1/admin/promocodes` has **no ORDER BY**. Paging is only sound while
   nothing writes; a row updated between two page fetches can appear twice or be

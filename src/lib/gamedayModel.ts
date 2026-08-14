@@ -91,7 +91,11 @@ export const rosterRowCancelled = (r: RosterRow): boolean => r.isCancelled === t
 export const rosterRowCounts = (r: RosterRow): boolean =>
   !rosterRowCancelled(r) && r.refunded !== true && r.paidStatus !== "WAITING";
 export function realOccupancyFromRoster(playersCount: number, roster: RosterRow[]): number {
-  const fakes = (roster ?? []).filter((r) => rosterRowIsFake(r) && !rosterRowCancelled(r)).length;
+  // The fakes subtracted must come from the SAME population playersCount (_count.players) counted.
+  // This previously excluded only cancelled fakes, so a fake row sitting at paidStatus "WAITING" —
+  // never in _count to begin with — would have been subtracted anyway and under-reported the real
+  // occupancy. Same family of bug as the roster list; one predicate fixes both.
+  const fakes = (roster ?? []).filter((r) => rosterRowIsFake(r) && rosterRowCounts(r)).length;
   return Math.max(0, (Number(playersCount) || 0) - fakes);
 }
 export const filledCount = (m: ApiMatch): number => n(m._count?.players); // total occupied (real + fake)

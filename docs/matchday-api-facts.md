@@ -937,6 +937,39 @@ board → tile → panel → roster → cancel preview with zero 403s; she can b
 MANAGE-PLAYERS cannot; PUT match / POST roster / POST cancel each refuse her individually; a
 no-flags account is 403 on all ten; the E2E account is blocked by email on every one.
 
+## The roster population — what `_count.players` actually counts (2026-08-14)
+
+**The old rule was true but incomplete, and the incompleteness was the bug.** "`_count.players` is
+authoritative; `players.length` includes cancelled rows" leads a reader to filter cancelled and
+stop — which leaves every unsettled sign-up in the list.
+
+Proven on production **17516** (Soccer Central Field 4, Fri 14 Aug), `_count.players` **18**,
+**38** user-match rows:
+
+| bucket | rows | counted by `_count.players` |
+|---|---|---|
+| `paidStatus: "PAID"` | 15 | yes |
+| `paidStatus: "FREE"`, not cancelled | 3 | yes |
+| **`paidStatus: "WAITING"`** | **18** | **no** |
+| `isCancelled: true` | 2 | no |
+
+15 + 3 = 18, exactly. A **WAITING** row is a sign-up whose checkout never settled; a retried checkout
+leaves one row per attempt — one player ("Grego mrtnz") produced **27** rows on that match, only 2 of
+them cancelled, most `userType: "GUEST"`.
+
+**Prevalence:** across 8 weeks, **578 of 897 matches (64.4%)** carry at least 3 more rows than
+`_count.players`; **2,389** WAITING rows in the window; worst case **16674 "ATH Katy" — 22 counted,
+59 rows**.
+
+**THE SINGLE PREDICATE IS `rosterRowCounts()` in `src/lib/gamedayModel.ts`:**
+`!cancelled && refunded !== true && paidStatus !== "WAITING"`. Every surface that lists or counts a
+roster uses it. **Do not re-derive it** — a second copy is how the two numbers drift again, and the
+invariant (rendered rows == `_count.players`) is asserted in `scripts/gameday-model-test.ts`.
+
+OPEN (for Vitalii): does a WAITING row RESERVE capacity in the player-facing app? If it does, 18
+WAITING rows on an 18-spot match are blocking real sign-ups, and this is a lost-revenue bug rather
+than a display one.
+
 ## Manager pay: co-managed matches, and why the sheet has ONE dropdown (Phase 25)
 
 **`mdapi_matches` carries `manager_email` for the primary but ONLY `second_manager_id` for the

@@ -21,6 +21,7 @@ import { makeServerClient } from "@/lib/supabaseServer";
 import { apiGet, apiWrite, AmbiguousWriteError, WriteFailedError, NotAuthorizedError } from "@/lib/matchdayStageApi";
 import { recordWrite, supabaseLogStore } from "@/lib/changeLog";
 import { strikeValueFor, type MarkStatus } from "@/lib/checkinModel";
+import { rosterRowCounts } from "@/lib/gamedayModel";
 
 export const runtime = "nodejs";
 export const dynamic = "force-dynamic";
@@ -33,9 +34,12 @@ const isStatus = (s: unknown): s is MarkStatus => typeof s === "string" && (STAT
 type Row = Record<string, unknown>;
 const num = (v: unknown) => (v == null || v === "" ? null : Number.isFinite(Number(v)) ? Number(v) : null);
 
-// Cancelled / refunded rows are NOT in the match — the same exclusion _count.players applies, so
-// the check-in list and the occupancy number can never disagree.
-const isLive = (p: Row) => p.isCancelled !== true && p.refunded !== true;
+// THE SAME POPULATION _count.players COUNTS. This previously filtered cancelled + refunded only,
+// which is the incomplete rule that made the match panel render 36 rows against an authoritative 18
+// — and here it was worse than cosmetic: a manager at a touchline would have been handed 38 people
+// to mark on an 18-player match, most of them the same name repeated (one unsettled checkout leaves
+// a row per retry). rosterRowCounts is the single predicate; do not re-derive it.
+const isLive = (p: Row) => rosterRowCounts(p as { isCancelled?: boolean; canceledAt?: string | null; refunded?: boolean; paidStatus?: string | null });
 
 function playerOut(p: Row) {
   const u = (p.user as Row | undefined) ?? {};
