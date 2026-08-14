@@ -1,0 +1,306 @@
+<!doctype html>
+<html lang="en">
+<head>
+<meta charset="utf-8">
+<meta name="viewport" content="width=device-width,initial-scale=1">
+<title>Promo code — uses</title>
+<style>
+/* ══════════════════════════════════════════════════════════════
+   PROMO CODE → WHO ACTUALLY USED IT
+
+   Ryan's question is not "list the redemptions". It is "is somebody
+   working this code". So:
+
+   1. THE BREACH IS THE HEADLINE, NOT A ROW. 10 redemptions against a cap
+      of 2 per user is only alarming once you know how many people that
+      was. Distinct users sits beside the total and the comparison is
+      done for you — you should not have to count rows to find a problem.
+
+   2. GROUPED BY PERSON BY DEFAULT. One person's five uses read as one
+      block with a 5 on it. A flat chronological list buries exactly the
+      pattern being hunted. Chronological is one tap away, because "when
+      was this used" is the other real question.
+
+   3. A DELETED ACCOUNT IS A FINDING, NOT AN ERROR. Redemptions whose
+      player no longer exists render as their own state with whatever id
+      survived. Blanking them would hide the thing Ryan is looking for.
+
+   4. THE COST IS SHOWN, NOT IMPLIED. A 100%-off code is free matches
+      leaving the building; each group carries what it was worth.
+   ══════════════════════════════════════════════════════════════ */
+:root{
+  --bg:#eaf0ea; --panel:#fff; --line:#e3e9e3; --line2:#d3ddd4;
+  --ink:#10231a; --ink2:#4a6355; --ink3:#7d9587;
+  --acc:#0f5132; --accbg:#e6f4ec;
+  --bad:#a8321f; --badbg:#fdeceb; --badln:#f0c4bf;
+  --warn:#8a6410; --warnbg:#fdf6e3;
+  --dead:#5c5c5c; --deadbg:#f1f1f1;
+  --tap:44px;
+}
+*{box-sizing:border-box}
+body{margin:0;background:var(--bg);color:var(--ink);
+  font:15px/1.45 ui-sans-serif,-apple-system,"Segoe UI",Roboto,sans-serif}
+
+/* the drawer — the thing being designed */
+.drawer{position:relative;margin:0 0 0 auto;width:660px;min-height:100vh;
+  background:var(--panel);border-left:1px solid var(--line2);
+  box-shadow:-18px 0 48px rgba(16,35,26,.10)}
+@media(max-width:700px){.drawer{width:100%;border-left:0}}
+
+.dhead{display:flex;align-items:center;justify-content:space-between;
+  padding:18px 22px;border-bottom:1px solid var(--line)}
+.dhead h1{margin:0;font-size:19px;font-weight:700}
+.x{width:var(--tap);height:var(--tap);border:0;background:transparent;
+  border-radius:10px;font-size:20px;color:var(--ink2);cursor:pointer}
+.x:hover{background:var(--bg)}
+
+.body{padding:20px 22px 60px}
+
+.codeline{display:flex;align-items:center;gap:10px;flex-wrap:wrap;margin-bottom:16px}
+.code{font-size:22px;font-weight:800;letter-spacing:.02em}
+.pill{font-size:11px;font-weight:700;letter-spacing:.06em;padding:4px 9px;
+  border-radius:999px;border:1px solid var(--line2);color:var(--ink2)}
+.pill.on{background:var(--accbg);border-color:#bfe0cd;color:var(--acc)}
+.id{color:var(--ink3);font-size:13px}
+
+/* ── the three numbers that answer the question ──────────────── */
+.tiles{display:grid;grid-template-columns:repeat(3,minmax(0,1fr));gap:10px}
+@media(max-width:520px){.tiles{grid-template-columns:repeat(2,minmax(0,1fr))}}
+.tile{border:1px solid var(--line);border-radius:12px;padding:12px 14px;background:#fbfdfb}
+.tile .k{font-size:10.5px;letter-spacing:.08em;color:var(--ink3);font-weight:700}
+.tile .v{font-size:26px;font-weight:800;margin-top:2px;line-height:1.1}
+.tile .s{font-size:12px;color:var(--ink2);margin-top:2px}
+.tile.alarm{background:var(--badbg);border-color:var(--badln)}
+.tile.alarm .v{color:var(--bad)}
+
+/* The comparison is made FOR the reader. "10 redemptions, cap 2 per user"
+   is only a problem once you know it was 4 people, and nobody does that
+   arithmetic while scanning. */
+.breach{display:flex;gap:10px;align-items:flex-start;margin-top:12px;
+  background:var(--badbg);border:1px solid var(--badln);border-radius:12px;
+  padding:12px 14px;color:#6d2415;font-size:13.5px}
+.breach b{color:var(--bad)}
+.breach .ic{font-size:15px;line-height:1.2}
+
+.sect{margin-top:26px}
+.sect h2{font-size:11px;letter-spacing:.09em;color:var(--ink3);
+  font-weight:700;margin:0 0 10px}
+
+.kv{display:grid;grid-template-columns:120px 1fr;gap:8px 16px;font-size:13.5px}
+.kv dt{color:var(--ink3)}
+.kv dd{margin:0}
+.kv .sub{color:var(--ink3);font-size:12px}
+
+/* ── uses ────────────────────────────────────────────────────── */
+.usehead{display:flex;align-items:center;justify-content:space-between;gap:12px;
+  flex-wrap:wrap;margin-bottom:12px}
+.seg{display:inline-flex;border:1px solid var(--line2);border-radius:10px;overflow:hidden}
+.seg button{min-height:var(--tap);padding:0 14px;border:0;background:#fff;
+  font-size:13px;font-weight:600;color:var(--ink2);cursor:pointer}
+.seg button[aria-pressed="true"]{background:var(--acc);color:#fff}
+
+.grp{border:1px solid var(--line);border-radius:12px;margin-bottom:10px;overflow:hidden}
+.grp.hot{border-color:var(--badln)}
+.grp.gone{border-style:dashed}
+.gtop{display:flex;align-items:flex-start;gap:12px;padding:12px 14px;background:#fbfdfb}
+.grp.hot .gtop{background:var(--badbg)}
+.grp.gone .gtop{background:var(--deadbg)}
+.who{min-width:0;flex:1}
+.nm{font-weight:700;font-size:15px}
+.grp.gone .nm{color:var(--dead)}
+/* Email and phone are shown because identifying a repeat offender is the
+   entire job. They are NEVER written to change_log — id only. */
+.ct{color:var(--ink2);font-size:12.5px;margin-top:2px;
+  overflow-wrap:anywhere;font-variant-numeric:tabular-nums}
+.cnt{text-align:right;white-space:nowrap}
+.cnt .n{font-size:19px;font-weight:800;line-height:1}
+.cnt .l{font-size:10.5px;letter-spacing:.06em;color:var(--ink3);font-weight:700}
+.grp.hot .cnt .n{color:var(--bad)}
+.worth{font-size:12px;color:var(--ink2);margin-top:3px}
+
+.uses{list-style:none;margin:0;padding:0;border-top:1px solid var(--line)}
+.use{display:grid;grid-template-columns:150px 1fr auto;gap:12px;align-items:baseline;
+  padding:9px 14px;border-bottom:1px solid #f0f4f0;font-size:13.5px}
+.use:last-child{border-bottom:0}
+/* At 390 the row stacks. The city chip must still hug its text — a chip
+   stretched to the full row width stops reading as a chip. */
+@media(max-width:560px){.use{grid-template-columns:1fr;gap:2px;padding:10px 14px}
+  .use .city{justify-self:start;margin-top:4px}}
+.when{color:var(--ink2);font-variant-numeric:tabular-nums}
+.match{min-width:0}
+.match .mn{font-weight:600}
+.match .mk{color:var(--ink3);font-size:12.5px}
+.city{font-size:11px;font-weight:700;letter-spacing:.05em;color:var(--ink2);
+  background:var(--bg);border-radius:6px;padding:3px 7px;white-space:nowrap}
+
+.deadnote{font-size:12.5px;color:var(--dead);padding:0 14px 12px}
+.foot{margin-top:14px;font-size:12.5px;color:var(--ink3)}
+</style>
+</head>
+<body>
+<div class="drawer">
+  <div class="dhead"><h1>Promo code</h1><button class="x" aria-label="Close">✕</button></div>
+  <div class="body">
+
+    <div class="codeline">
+      <span class="code">TOMBALL</span>
+      <span class="pill on">ACTIVE</span>
+      <span class="id">ID 21494</span>
+    </div>
+
+    <div class="tiles" id="tiles"></div>
+    <div id="breach"></div>
+
+    <div class="sect">
+      <h2>SETTINGS</h2>
+      <dl class="kv">
+        <dt>Discount</dt><dd><b>100%</b> <span class="sub">PERCENT</span></dd>
+        <dt>Window</dt><dd>Aug 11, 2026 10:00 AM → Aug 15, 2026 12:15 AM
+          <div class="sub">America/Chicago (Central)</div></dd>
+        <dt>Audience</dt><dd>All Users</dd>
+        <dt>Scope</dt><dd>Specific Matches</dd>
+        <dt>Cap</dt><dd>2 per user</dd>
+        <dt>Created</dt><dd>Aug 11, 2026 9:59 AM</dd>
+      </dl>
+    </div>
+
+    <div class="sect">
+      <div class="usehead">
+        <h2 style="margin:0">USES</h2>
+        <div class="seg" role="group" aria-label="Group uses">
+          <button id="byPerson" aria-pressed="true">By person</button>
+          <button id="byTime" aria-pressed="false">By time</button>
+        </div>
+      </div>
+      <div id="list"></div>
+      <div class="foot" id="foot"></div>
+    </div>
+
+  </div>
+</div>
+
+<script>
+/* ── data stand-in ────────────────────────────────────────────
+   In the build this is the redemption feed. Shape kept deliberately
+   flat — one row per redemption — because that is what any of the
+   candidate sources will give us. */
+const CAP_PER_USER = 2;
+const FACE_VALUE   = 1500; /* cents. 100% off a $15 spot. */
+
+const USES = [
+  { id:1,  playerId:4471, name:"Marcus Oyelaran", email:"marcus.oyelaran@gmail.com", phone:"+1 512 555 0142",
+    at:"2026-08-13 21:04", match:"NEMP - Field 13",       kickoff:"Thu Aug 13, 6:30 PM", city:"ATX" },
+  { id:2,  playerId:4471, name:"Marcus Oyelaran", email:"marcus.oyelaran@gmail.com", phone:"+1 512 555 0142",
+    at:"2026-08-13 20:58", match:"The Hattrick (Leander)", kickoff:"Thu Aug 13, 7:00 PM", city:"ATX" },
+  { id:3,  playerId:4471, name:"Marcus Oyelaran", email:"marcus.oyelaran@gmail.com", phone:"+1 512 555 0142",
+    at:"2026-08-12 19:22", match:"Onion Creek - Field 6",  kickoff:"Wed Aug 12, 7:00 PM", city:"ATX" },
+  { id:4,  playerId:4471, name:"Marcus Oyelaran", email:"marcus.oyelaran@gmail.com", phone:"+1 512 555 0142",
+    at:"2026-08-12 19:19", match:"Onion Creek - Field 5",  kickoff:"Wed Aug 12, 7:00 PM", city:"ATX" },
+  { id:5,  playerId:4471, name:"Marcus Oyelaran", email:"marcus.oyelaran@gmail.com", phone:"+1 512 555 0142",
+    at:"2026-08-11 10:41", match:"PAC GLOBAL",             kickoff:"Tue Aug 11, 9:00 PM", city:"HOU" },
+  { id:6,  playerId:null, deletedRef:"user 88213", name:null, email:null, phone:null,
+    at:"2026-08-13 08:12", match:"ATH Katy",              kickoff:"Thu Aug 13, 9:15 PM", city:"HOU" },
+  { id:7,  playerId:null, deletedRef:"user 88213", name:null, email:null, phone:null,
+    at:"2026-08-12 07:55", match:"Tourney ATH Pearland",  kickoff:"Wed Aug 12, 9:15 PM", city:"HOU" },
+  { id:8,  playerId:9902, name:"Ana Ruiz", email:"ana.ruiz@outlook.com", phone:"+1 214 555 0188",
+    at:"2026-08-12 16:30", match:"Crossbar Rowlett",      kickoff:"Wed Aug 12, 8:00 PM", city:"DFW" },
+  { id:9,  playerId:9902, name:"Ana Ruiz", email:"ana.ruiz@outlook.com", phone:"+1 214 555 0188",
+    at:"2026-08-11 15:02", match:"Lowell H. Strike",      kickoff:"Tue Aug 11, 8:00 PM", city:"DFW" },
+  { id:10, playerId:3310, name:"Devon Clarke", email:"dclarke91@gmail.com", phone:"+1 404 555 0119",
+    at:"2026-08-11 11:47", match:"PRUMC - Tuesday",       kickoff:"Tue Aug 11, 7:00 PM", city:"ATL" },
+];
+
+const money = c => "$" + (c/100).toFixed(2);
+const keyOf = u => u.playerId !== null ? "p" + u.playerId : "d" + u.deletedRef;
+
+/* Distinct USERS, not distinct rows. A deleted account is still one person
+   — collapsing every deleted row into "unknown" would understate the
+   denominator and hide the very breach we are looking for. */
+function groups(){
+  const m = new Map();
+  USES.forEach(u => {
+    const k = keyOf(u);
+    if(!m.has(k)) m.set(k, { key:k, u, rows:[] });
+    m.get(k).rows.push(u);
+  });
+  return [...m.values()].sort((a,b) => b.rows.length - a.rows.length
+    || (a.rows[0].at < b.rows[0].at ? 1 : -1));
+}
+
+const G = groups();
+const distinct = G.length;
+const total = USES.length;
+const over = G.filter(g => g.rows.length > CAP_PER_USER);
+
+/* ── the three numbers ───────────────────────────────────────── */
+document.getElementById("tiles").innerHTML = `
+  <div class="tile"><div class="k">REDEEMED</div><div class="v" id="tRed">${total}</div>
+    <div class="s">${money(total*FACE_VALUE)} of spots</div></div>
+  <div class="tile ${over.length ? "alarm" : ""}"><div class="k">DISTINCT USERS</div>
+    <div class="v" id="tUsers">${distinct}</div>
+    <div class="s">${(total/distinct).toFixed(1)} uses each on average</div></div>
+  <div class="tile"><div class="k">CAP</div><div class="v">${CAP_PER_USER}</div>
+    <div class="s">per user</div></div>`;
+
+document.getElementById("breach").innerHTML = over.length ? `
+  <div class="breach" id="breachBox"><span class="ic">▲</span><div>
+    <b>${over.length} ${over.length===1?"account is":"accounts are"} over the ${CAP_PER_USER}-per-user cap.</b>
+    ${over.map(g => `${g.u.name || "A deleted account"} used it ${g.rows.length} times`).join("; ")}.
+    That is ${money(over.reduce((a,g)=>a+g.rows.length,0)*FACE_VALUE)} of free spots on
+    ${over.length===1?"one account":"these accounts"} — the cap is not holding.
+  </div></div>` : "";
+
+/* ── list ────────────────────────────────────────────────────── */
+let mode = "person";
+function render(){
+  const el = document.getElementById("list");
+  if(mode === "person"){
+    el.innerHTML = G.map(g => {
+      const dead = g.u.playerId === null;
+      const hot  = g.rows.length > CAP_PER_USER;
+      const rows = [...g.rows].sort((a,b) => a.at < b.at ? 1 : -1);
+      return `<div class="grp ${hot?"hot":""} ${dead?"gone":""}" data-uses="${g.rows.length}"
+                   data-dead="${dead}">
+        <div class="gtop">
+          <div class="who">
+            <div class="nm">${dead ? "Account deleted" : g.u.name}</div>
+            <div class="ct">${dead
+              ? `no account remains &middot; ${g.deletedRef || g.u.deletedRef}`
+              : `${g.u.email} &middot; ${g.u.phone}`}</div>
+          </div>
+          <div class="cnt"><div class="n">${g.rows.length}</div>
+            <div class="l">USE${g.rows.length>1?"S":""}</div>
+            <div class="worth">${money(g.rows.length*FACE_VALUE)}</div></div>
+        </div>
+        ${dead ? `<div class="deadnote">The player record is gone, the redemptions are not.
+          This is what a deleted account looks like from here.</div>` : ""}
+        <ul class="uses">${rows.map(r => `<li class="use">
+          <span class="when">${r.at}</span>
+          <span class="match"><span class="mn">${r.match}</span>
+            <span class="mk"> &middot; ${r.kickoff}</span></span>
+          <span class="city">${r.city}</span></li>`).join("")}</ul>
+      </div>`;
+    }).join("");
+  } else {
+    const rows = [...USES].sort((a,b) => a.at < b.at ? 1 : -1);
+    el.innerHTML = `<div class="grp"><ul class="uses">${rows.map(r => {
+      const dead = r.playerId === null;
+      return `<li class="use" data-dead="${dead}">
+        <span class="when">${r.at}</span>
+        <span class="match"><span class="mn">${dead ? "Account deleted" : r.name}</span>
+          <span class="mk"> &middot; ${r.match} &middot; ${r.kickoff}</span></span>
+        <span class="city">${r.city}</span></li>`;
+    }).join("")}</ul></div>`;
+  }
+  document.getElementById("foot").textContent =
+    `${total} uses by ${distinct} accounts. Times are America/Chicago. `
+    + `Redemptions survive account deletion, so a deleted player still shows their uses.`;
+}
+document.getElementById("byPerson").onclick = () => { mode="person";
+  byPerson.setAttribute("aria-pressed","true"); byTime.setAttribute("aria-pressed","false"); render(); };
+document.getElementById("byTime").onclick = () => { mode="time";
+  byTime.setAttribute("aria-pressed","true"); byPerson.setAttribute("aria-pressed","false"); render(); };
+render();
+</script>
+</body>
+</html>
