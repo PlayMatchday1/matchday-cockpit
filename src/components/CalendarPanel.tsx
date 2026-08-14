@@ -117,7 +117,9 @@ export default function CalendarPanel() {
       <style>{CSS}</style>
       <div className="card">
         <div className="chead">
-          <div className="ctitle">This week</div>
+          {/* The heading names the SELECTED view. It read "This week" while the toggle sat on
+              Today, so the card contradicted its own control. */}
+          <div className="ctitle" data-testid="cal-title">{view === "today" ? "Today" : "This week"}</div>
           {ui === "ready" && data?.grantConfigured && data?.syncHasRun && (
             <div className="seg">
               <button type="button" className={view === "today" ? "on" : ""} onClick={() => setView("today")}>Today</button>

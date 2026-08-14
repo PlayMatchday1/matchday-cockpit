@@ -17,6 +17,12 @@ import GoalCommentsDrawer from "./GoalCommentsDrawer";
 import CalendarPanel from "./CalendarPanel";
 import PdSchedulePanel from "./PdSchedulePanel";
 
+const HG_STATS_CSS = `
+.hg-stats{grid-template-columns:repeat(var(--hg-cols,4),minmax(0,1fr))}
+@media(max-width:760px){ .hg-stats{grid-template-columns:repeat(2,minmax(0,1fr))} }
+`;
+
+
 const HERO_FALLBACK =
   "Building the premier pickup soccer experience. We're rewriting how the world plays.";
 
@@ -286,13 +292,18 @@ function SnapshotStrip({ snapshot }: { snapshot: Snapshot | null }) {
           {mo} · month to date
         </span>
       </div>
+      <style>{HG_STATS_CSS}</style>
       <div
-        className="grid overflow-hidden rounded-[16px] border"
+        className="hg-stats grid overflow-hidden rounded-[16px] border"
         style={{
-          gridTemplateColumns: `repeat(${cells.length},minmax(0,1fr))`,
+          // 2 x 2 below the breakpoint (see the hg-stats rule): four across at 390px gave each tile
+          // ~80px, which wrapped "used in the last 30 days" onto three lines.
+          ["--hg-cols" as string]: String(cells.length),
           background: "rgba(255,255,255,.055)",
           borderColor: "rgba(255,255,255,.13)",
-          backdropFilter: "blur(2px)",
+          // NO backdrop-filter. It is decorative, and a backdrop-filter creates a CONTAINING BLOCK
+          // for position:fixed descendants — the documented cause of a fixed bottom nav painting
+          // mid-page. Not worth 2px of blur.
         }}
       >
         {cells.map((c, i) => (
