@@ -211,6 +211,31 @@ export async function POST(req: Request) {
   // for the now-14d → now+60d window. Independent of upstream syncs;
   // snapshots will run even if this fails (only avg_matches stat goes
   // stale, member metrics stay fresh). ~150s typical.
+  // ── GOOGLE CALENDAR — MOVED EARLY, DELIBERATELY ────────────────────────────
+  // It used to be step 15 of 15. The orchestrator's maxDuration is 300s and the run reached
+  // app-store-installs at +288s, so the function was killed before this step ever started —
+  // which is why it produced NO fin_sync_log row at all (runWithLog was never called) and sat
+  // frozen for 8 days while every earlier step logged cleanly. It is a ~5s step; starving it
+  // behind a 288s tail was purely an ordering accident.
+  let googleCalendarResult: { ok: boolean; rows?: number; note?: string };
+  if (triggeredBy !== "cron") {
+    googleCalendarResult = { ok: true, rows: 0, note: "manual mode: skipped (needs service role + runtime SA key)" };
+  } else {
+    const run = await runWithLog("google-calendar", triggeredBy, supabase, async () => {
+      try {
+        const summary = await syncAllCalendars(supabase, new Date());
+        return { rows: summary.eventsStored };
+      } catch (e) {
+        if (e instanceof CalendarConfigError) {
+          throw new Error(`Calendar sync config: ${e.message}`);
+        }
+        throw e;
+      }
+    }, (r) => ({ rows_imported: r.rows }));
+    googleCalendarResult = run.ok ? { ok: true, rows: run.result.rows } : { ok: false, note: run.error };
+    if (!run.ok) console.error("[cron] google-calendar step failed (isolated, non-fatal):", run.error);
+  }
+
   const matchesResult = await runWithLog(
     "mdapi-matches",
     triggeredBy,
@@ -466,24 +491,6 @@ export async function POST(req: Request) {
   // on failure) — the KPI's status label reads that row. The SA key never reaches
   // the log: the lib throws sanitized messages only and CalendarConfigError is
   // normalized here.
-  let googleCalendarResult: { ok: boolean; rows?: number; note?: string };
-  if (triggeredBy !== "cron") {
-    googleCalendarResult = { ok: true, rows: 0, note: "manual mode: skipped (needs service role + runtime SA key)" };
-  } else {
-    const run = await runWithLog("google-calendar", triggeredBy, supabase, async () => {
-      try {
-        const summary = await syncAllCalendars(supabase, new Date());
-        return { rows: summary.eventsStored };
-      } catch (e) {
-        if (e instanceof CalendarConfigError) {
-          throw new Error(`Calendar sync config: ${e.message}`);
-        }
-        throw e;
-      }
-    }, (r) => ({ rows_imported: r.rows }));
-    googleCalendarResult = run.ok ? { ok: true, rows: run.result.rows } : { ok: false, note: run.error };
-    if (!run.ok) console.error("[cron] google-calendar step failed (isolated, non-fatal):", run.error);
-  }
 
   const anyFailed =
     !stripeResult.ok ||

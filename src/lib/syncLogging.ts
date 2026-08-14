@@ -81,36 +81,36 @@ export async function runWithLog<T>(
   }
   const logId = logInsert.id as string;
 
+  // THE COMPLETION STAMP IS IN A `finally`. Previously it lived on both the happy path and the
+  // catch, which is the same thing only while every exit goes through one of those two — a future
+  // early `return` inside the try would have left a started-but-never-completed row that reads
+  // identically to a crash. A row that never completes is indistinguishable from a step that ran
+  // clean, and that ambiguity is what let a frozen sync sit unnoticed for eight days.
+  let outcome: "ok" | "failed" = "failed";
+  let patch: LogPatch = {};
+  let out: RunResult<T>;
   try {
     const result = await fn(supabase);
-    const patch = toLogPatch(result);
+    patch = toLogPatch(result);
+    outcome = "ok";
+    out = { ok: true, result };
+  } catch (e) {
+    // The error CLASS as well as the message — "TypeError: x is not a function" tells you where to
+    // look; the message alone often does not. NEVER a token or credential: the message is whatever
+    // the sync lib threw, and those libs throw sanitized text by contract (see calendarSync).
+    const cls = e instanceof Error ? e.constructor.name : typeof e;
+    const msg = e instanceof Error ? e.message : String(e);
+    patch = { error_message: `${cls}: ${msg}`.slice(0, 500) };
+    out = { ok: false, error: `${cls}: ${msg}` };
+  } finally {
     const { error: updateErr } = await supabase
       .from("fin_sync_log")
       .update({ completed_at: new Date().toISOString(), ...patch })
       .eq("id", logId);
     if (updateErr) {
-      // Log-update failure is non-fatal — the sync itself succeeded.
-      console.warn(
-        `fin_sync_log update failed for ${source}/${logId}:`,
-        updateErr.message,
-      );
+      // Non-fatal either way: the sync's own outcome is not changed by a logging failure.
+      console.warn(`fin_sync_log ${outcome}-update failed for ${source}/${logId}:`, updateErr.message);
     }
-    return { ok: true, result };
-  } catch (e) {
-    const msg = e instanceof Error ? e.message : String(e);
-    const { error: updateErr } = await supabase
-      .from("fin_sync_log")
-      .update({
-        completed_at: new Date().toISOString(),
-        error_message: msg,
-      })
-      .eq("id", logId);
-    if (updateErr) {
-      console.warn(
-        `fin_sync_log error-update failed for ${source}/${logId}:`,
-        updateErr.message,
-      );
-    }
-    return { ok: false, error: msg };
   }
+  return out!;
 }
