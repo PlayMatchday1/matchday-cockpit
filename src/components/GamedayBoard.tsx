@@ -46,6 +46,10 @@ async function authFetch(path: string): Promise<Response> {
 }
 
 const PANEL_W = 600; // the in-place match panel (replaces the old side drawer + "Open full editor")
+// WIDER WHEN THERE IS ROOM. The panel's teams grid holds a name AND a phone number per row, two
+// columns of them at four teams; 600px squeezed both. It only widens when the chat dock is NOT
+// sharing the edge — coexisting at 600 + 360 already leaves the board little enough.
+const PANEL_W_WIDE = 820;
 const DOCK_W = 360;  // the CRM chat dock's expanded width — they sit side-by-side at ≥1600
 
 export default function GamedayBoard() {
@@ -86,6 +90,7 @@ export default function GamedayBoard() {
     }
   }, [drawerId, wide, crm.dockedThreadId, crm.dockOpen, crm]);
   const coexist = drawerId != null && wide && !!crm.dockedThreadId && crm.dockOpen;
+  const panelW = wide && !coexist ? PANEL_W_WIDE : PANEL_W;
   const [toast, setToast] = useState<{ t: string; bad?: boolean } | null>(null);
   // Snapshot is the ONLY layout. The Detail card view and its Snapshot/Detail toggle were removed
   // — the whole day on one screen is the job, and a second layout was a fork nobody chose.
@@ -173,7 +178,7 @@ export default function GamedayBoard() {
   const anyRows = grouped.some((x) => x.rows.length > 0);
 
   return (
-    <div className="gdo" data-testid="gameday" data-env={ENV} style={{ ["--drawer-w" as string]: `${PANEL_W + (coexist ? DOCK_W : 0)}px` }}>
+    <div className="gdo" data-testid="gameday" data-env={ENV} style={{ ["--drawer-w" as string]: `${panelW + (coexist ? DOCK_W : 0)}px` }}>
       <style>{CSS}</style>
       <div className={"gmain" + (drawerId != null ? " drawering" : "")}>
         {/* ── PHONE header (≤759px). Desktop shows the .head card below; this is
@@ -290,7 +295,7 @@ export default function GamedayBoard() {
       </div>
 
       {drawerId != null && (
-        <aside className={"gpanel" + (coexist ? " coexist" : "")} data-testid="gday-panel" style={{ ["--panel-w" as string]: `${PANEL_W}px`, right: coexist ? DOCK_W : 0 }}>
+        <aside className={"gpanel" + (coexist ? " coexist" : "")} data-testid="gday-panel" style={{ ["--panel-w" as string]: `${panelW}px`, right: coexist ? DOCK_W : 0 }}>
           <div className="gpanel-bar">
             <button className="gpanel-x" data-testid="gday-panel-close" aria-label="Close panel" onClick={() => { if (guardLeave()) setDrawerId(null); }}>✕ Close</button>
             <span className="gpanel-step">

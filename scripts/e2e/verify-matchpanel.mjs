@@ -52,21 +52,43 @@ const twoTeamRoster = () => ({
   name: "PRUMC - Tuesday",
   teams: [{ id: 501, teamNumber: 1, name: "Green", locked: false }, { id: 502, teamNumber: 2, name: "Blue", locked: false }],
   players: [
-    { umId: 9001, playerId: 1, team: 1, playerNumber: 1, name: "Alex Kim", fake: false },
-    { umId: 9002, playerId: 2, team: 1, playerNumber: 2, name: "Sam Reyes", fake: true },
-    { umId: 9003, playerId: 3, team: 2, playerNumber: 1, name: "Jordan Lee", fake: false },
+    { umId: 9001, playerId: 1, team: 1, playerNumber: 1, name: "Alex Kim", phone: "+15125550101", fake: false },
+    { umId: 9002, playerId: 2, team: 1, playerNumber: 2, name: "Sam Reyes", phone: null, fake: true },
+    { umId: 9003, playerId: 3, team: 2, playerNumber: 1, name: "Jordan Lee", phone: "+15125550103", fake: false },
   ], shape: { teamN: 2, perTeam: 9 }, maxPlayerCount: 18, occupancy: 3, _um: -1,
 });
+// ITEM 5's fixture: a team returned in the order the API actually uses. Measured on production, 55
+// of 95 teams came back NOT ascending — [9,4,5,1,2,3] is the real shape of the White team the brief
+// names. It also carries a NULL spot and a DUPLICATE, the two states that must not be papered over.
+const shuffledRoster = () => ({
+  name: "Shuffle Night",
+  teams: [{ id: 701, teamNumber: 1, name: "White", locked: false }, { id: 702, teamNumber: 2, name: "Green", locked: false }],
+  players: [
+    { umId: 7009, playerId: 9, team: 1, playerNumber: 9, name: "Wanda Nine", phone: "+15125550909", fake: false },
+    { umId: 7004, playerId: 4, team: 1, playerNumber: 4, name: "Wes Four", phone: "+15125550404", fake: false },
+    { umId: 7005, playerId: 5, team: 1, playerNumber: 5, name: "Will Five", phone: "+15125550505", fake: false },
+    { umId: 7001, playerId: 1, team: 1, playerNumber: 1, name: "Wynn One", phone: "+15125550101", fake: false },
+    { umId: 7002, playerId: 2, team: 1, playerNumber: 2, name: "Wade Two", phone: "+15125550202", fake: false },
+    { umId: 7003, playerId: 3, team: 1, playerNumber: 3, name: "Wren Three", phone: "+15125550303", fake: false },
+    { umId: 7099, playerId: 99, team: 1, playerNumber: 3, name: "Dee Dupe", phone: "+15125550399", fake: false },   // DUPLICATE of spot 3
+    { umId: 7000, playerId: 90, team: 1, playerNumber: null, name: "Nula Nospot", phone: "+15125550000", fake: false }, // NULL spot
+    { umId: 7011, playerId: 11, team: 2, playerNumber: 1, name: "Gina One", phone: "+15125551111", fake: false },
+    { umId: 7012, playerId: 12, team: 2, playerNumber: 2, name: "Gus Two", phone: "+15125551212", fake: false },
+  ], shape: { teamN: 2, perTeam: 9 }, maxPlayerCount: 18, occupancy: 10, _um: -1,
+});
+// Four teams with names and phone numbers long enough to be the real test of item 4's layout —
+// the brief's complaint was names crushed to "L", "T", "G" at this team count.
 const fourTeamRoster = () => ({
   name: "Bracket Night",
   teams: [{ id: 601, teamNumber: 1, name: "Green", locked: false }, { id: 602, teamNumber: 2, name: "Blue", locked: false }, { id: 603, teamNumber: 3, name: "Red", locked: false }, { id: 604, teamNumber: 4, name: "Gold", locked: false }],
   players: [
-    { umId: 8001, playerId: 1, team: 1, playerNumber: 1, name: "Alex Kim", fake: false },
-    { umId: 8003, playerId: 3, team: 3, playerNumber: 1, name: "Chris Vale", fake: false },
-    { umId: 8004, playerId: 4, team: 4, playerNumber: 1, name: "Dana Poe", fake: false },
-  ], shape: { teamN: 4, perTeam: 5 }, maxPlayerCount: 20, occupancy: 3, _um: -1,
+    { umId: 8001, playerId: 1, team: 1, playerNumber: 1, name: "Alexandra Kimberly", phone: "+15125558001", fake: false },
+    { umId: 8002, playerId: 2, team: 2, playerNumber: 1, name: "Bartholomew Reyes", phone: "+15125558002", fake: false },
+    { umId: 8003, playerId: 3, team: 3, playerNumber: 1, name: "Christopher Vale", phone: "+15125558003", fake: false },
+    { umId: 8004, playerId: 4, team: 4, playerNumber: 1, name: "Dana Poe-Fitzgerald", phone: "+15125558004", fake: false },
+  ], shape: { teamN: 4, perTeam: 5 }, maxPlayerCount: 20, occupancy: 4, _um: -1,
 });
-const rosterFor = (id) => (rosterStates[id] ??= String(id).endsWith("4444") ? fourTeamRoster() : twoTeamRoster());
+const rosterFor = (id) => (rosterStates[id] ??= String(id).endsWith("4444") ? fourTeamRoster() : String(id).endsWith("7777") ? shuffledRoster() : twoTeamRoster());
 const setTeamCount = (st, n) => {
   const cur = st.teams.length;
   if (n > cur) for (let k = cur + 1; k <= n; k++) st.teams.push({ id: 500 + k, teamNumber: k, name: `Team ${k}`, locked: false });
@@ -76,6 +98,8 @@ const setTeamCount = (st, n) => {
 function matchFor(id) {
   if (String(id).endsWith("9999")) return { ...REGULAR, id: Number(id), type: "BRACKET" };
   if (String(id).endsWith("2222")) return { ...REGULAR, id: Number(id), maxPlayerCount: 18, teams: [{ teamNumber: 1 }, { teamNumber: 2 }] };
+  if (String(id).endsWith("4444")) return { ...REGULAR, id: Number(id), maxPlayerCount: 20, teams: [{ teamNumber: 1 }, { teamNumber: 2 }, { teamNumber: 3 }, { teamNumber: 4 }] };
+  if (String(id).endsWith("7777")) return { ...REGULAR, id: Number(id), maxPlayerCount: 18, teams: [{ teamNumber: 1 }, { teamNumber: 2 }] };
   if (String(id).endsWith("8888")) return { ...REGULAR, id: Number(id), maxPlayerCount: 18, teams: [{ teamNumber: 1 }, { teamNumber: 2 }, { teamNumber: 3 }, { teamNumber: 4 }] }; // 18/4 = 4.5, non-divisible
   return { ...REGULAR, id: Number(id) };
 }
@@ -141,10 +165,16 @@ async function routes(ctx) {
           const t = st.teams.find((x) => x.id === op.teamId); if (t) t.name = op.fields.name;
           return json({ ok: true, outcome: "landed", result: {} });
         }
-        case "add": { const um = st._um--; st.players.push({ umId: um, playerId: op.playerId, team: op.team, playerNumber: op.playerNumber, name: "New Player", fake: false }); return json({ ok: true, outcome: "landed", result: { id: um } }); }
-        case "add-fake": { const um = st._um--; st.players.push({ umId: um, playerId: null, team: op.team, playerNumber: op.playerNumber, name: "Fake player", fake: true }); return json({ ok: true, outcome: "landed", result: { id: um } }); }
-        case "bulk-fake": { for (let k = 0; k < (op.totalFakes || 0); k++) { const um = st._um--; st.players.push({ umId: um, playerId: null, team: 1, playerNumber: 90 + k, name: "Fake player", fake: true }); } return json({ ok: true, outcome: "landed", result: {} }); }
-        case "move": { const p = st.players.find((x) => x.umId === op.userMatchId); if (p) { p.team = op.team; p.playerNumber = op.playerNumber; } return json({ ok: true, outcome: "landed", result: {} }); }
+        case "add": { const um = st._um--; st.players.push({ umId: um, playerId: op.playerId, team: op.team, playerNumber: op.playerNumber, name: "New Player", phone: "+15125559999", fake: false }); return json({ ok: true, outcome: "landed", result: { id: um } }); }
+        case "add-fake": { const um = st._um--; st.players.push({ umId: um, playerId: null, team: op.team, playerNumber: op.playerNumber, name: "Fake player", phone: null, fake: true }); return json({ ok: true, outcome: "landed", result: { id: um } }); }
+        case "bulk-fake": { for (let k = 0; k < (op.totalFakes || 0); k++) { const um = st._um--; st.players.push({ umId: um, playerId: null, team: 1, playerNumber: 90 + k, name: "Fake player", phone: null, fake: true }); } return json({ ok: true, outcome: "landed", result: {} }); }
+        // spot 9 is the fixture's FAILING move — it lets the gate prove that a batch stops at the
+        // first failure with the earlier writes still applied and the later ones never sent.
+        case "move": {
+          if (op.playerNumber === 9) return json({ error: "move rejected by server" }, 400);
+          const p = st.players.find((x) => x.umId === op.userMatchId); if (p) { p.team = op.team; p.playerNumber = op.playerNumber; }
+          return json({ ok: true, outcome: "landed", result: {} });
+        }
         case "remove": { st.players = st.players.filter((x) => x.umId !== op.userMatchId); return json({ ok: true, outcome: "landed", result: {} }); }
         // MISLEADING outcome on purpose: teams[].length (the re-read) is the only honest signal.
         case "shape": { setTeamCount(st, op.fields.teamNumbers); return json({ ok: true, outcome: "not applied", result: {} }); }
@@ -350,67 +380,173 @@ async function main() {
     body: puts.at(-1), touched4: Object.keys(puts.at(-1) ?? {}).includes("maxTeamSize4Team"),
   }, { body: { maxPlayerCount: 20, maxTeamSize2Team: 20 }, touched4: false });
 
-  // ══════════════ Step 2 · TEAMS — the IMMEDIATE half (each op fires now; Save/Revert never touch it) ══════════════
-  await page.setViewportSize({ width: 1440, height: 1000 });
-  delete rosterStates["17494"]; // fresh 2-team roster (Green / Blue)
+  // ══════════════ TEAMS · ROSTER · TEAM COUNT — STAGED. Nothing leaves until Save. ══════════════
+  // These gates used to assert the opposite: that a click fired a write immediately. The behaviour
+  // they described was the thing the brief asked to remove, so the bodies below are new — each is
+  // itemised in the commit against the gate it replaces. What SURVIVES unchanged is the coverage
+  // that still applies: no password in any body, no roster edit inside the match PUT, the fake mark,
+  // no price/lock control, the four-state read-back, and the add path (still immediate by design).
+  await page.setViewportSize({ width: 1600, height: 1000 });
+  delete rosterStates["17494"];
   await page.goto(`${BASE}/match-ops/match-panel/17494`, { waitUntil: "domcontentloaded" });
   await page.waitForSelector('[data-testid="mp-team"]', { timeout: 20000 });
-  eq("teams: the permanent banner says Save/Revert do not apply to these", /Save and Revert do not apply/i.test(await page.$eval('[data-testid="mp-immediate-banner"]', (e) => e.textContent)), true);
 
-  // GATE 1 — a rename fires exactly one request to the roster/teams endpoint and NOTHING to the match endpoint
-  rosterPosts = []; puts = []; dlg.accept = true;
+  // ITEM 1a — THE RED IS GONE. Asserted on computed colour and on the removed nodes, not on a class
+  // name alone: a class can be renamed while the treatment stays.
+  { const red = await page.evaluate(() => {
+      const sec = document.querySelector('[data-testid="mp-teams"]');
+      const holder = sec?.closest("[data-section]") ?? sec;
+      const reddish = (c) => { const m = /rgba?\((\d+),\s*(\d+),\s*(\d+)/.exec(c || ""); if (!m) return false;
+        const [r, g, b] = [+m[1], +m[2], +m[3]]; return r > 120 && r - g > 45 && r - b > 45; };
+      const nodes = [holder, ...(holder?.querySelectorAll("*") ?? [])].filter(Boolean);
+      return {
+        badge: !!document.querySelector('[data-testid="mp-immediate-banner"]'),
+        legacyClasses: nodes.filter((e) => /mp-immbadge|mp-immbanner|mp-teams-hd|mp-teams-title/.test(e.className || "")).length,
+        redBorders: nodes.filter((e) => { const st = getComputedStyle(e); return reddish(st.borderLeftColor) && parseFloat(st.borderLeftWidth) >= 3; }).length,
+        redFills: nodes.filter((e) => reddish(getComputedStyle(e).backgroundColor)).length,
+        savesImmediately: /SAVES IMMEDIATELY/i.test(holder?.textContent || ""),
+      }; });
+    JSON.stringify(red) === JSON.stringify({ badge: false, legacyClasses: 0, redBorders: 0, redFills: 0, savesImmediately: false })
+      ? ok("item1a: no SAVES IMMEDIATELY badge, no red banner, no red border, no red fill anywhere in the section")
+      : bad("item1a: the red survives", JSON.stringify(red)); }
+
+  // ITEM 1b — CLICKING A MOVE ISSUES NO NETWORK REQUEST UNTIL SAVE. The single most important
+  // assertion in this file: it is the whole difference between the old behaviour and the new one.
+  rosterPosts = []; puts = [];
+  await page.click('[data-testid="mp-move-9001"]');
+  await page.waitForSelector('[data-testid="mp-movepick"]', { timeout: 6000 });
+  await page.click('[data-testid="mp-movepick-team-2"]');
+  await page.click('[data-testid="mp-movepick-spot-3"]');
+  await page.waitForSelector('[data-testid="mp-pending-move"]', { timeout: 6000 });
+  await page.click('[data-testid="mp-remove-9003"]');
+  await page.waitForSelector('[data-testid="mp-pending-remove"]', { timeout: 6000 });
   await page.fill('[data-testid="mp-tname-1"]', "Orange");
-  await page.click('[data-testid="mp-rename-1"]');
-  await page.waitForFunction(() => document.querySelector('[data-testid="mp-tname-committed-1"]')?.textContent === "Orange", null, { timeout: 6000 });
-  eq("gate1: rename → exactly one teams request, zero to the match endpoint",
-    { teams: rosterPosts.filter((o) => o.kind === "teams").length, total: rosterPosts.length, puts: puts.length }, { teams: 1, total: 1, puts: 0 });
+  await page.click('[data-testid="mp-teamcount-4"]');
+  await page.waitForTimeout(500);
+  eq("item1b: a move, a removal, a rename and a team-count choice send NOTHING before Save",
+    { roster: rosterPosts.length, matchPuts: puts.length }, { roster: 0, matchPuts: 0 });
 
-  // GATE 6 — password appears in no teams request body
+  // ...and the pending rows SAY they are pending, rather than looking identical to saved ones
+  { const marks = await page.evaluate(() => ({
+      move: document.querySelector('[data-testid="mp-player"][data-um="9001"]')?.getAttribute("data-pending"),
+      remove: document.querySelector('[data-testid="mp-player"][data-um="9003"]')?.getAttribute("data-pending"),
+      moveTag: !!document.querySelector('[data-testid="mp-pending-move"]'),
+      removeTag: !!document.querySelector('[data-testid="mp-pending-remove"]'),
+      rename: !!document.querySelector('[data-testid="mp-rename-pending-1"]'),
+      countPending: document.querySelector('[data-testid="mp-teamcount-pending"]')?.textContent,
+    }));
+    JSON.stringify(marks) === JSON.stringify({ move: "move", remove: "remove", moveTag: true, removeTag: true, rename: true, countPending: "4" })
+      ? ok("item1c: every pending edit is visibly marked as pending") : bad("item1c", JSON.stringify(marks)); }
+
+  // ITEM 1d — THE SAVE LABEL REFLECTS THE PENDING COUNT
+  eq("item1d: the Save label counts the pending edits", await page.$eval('[data-testid="mp-save"]', (e) => e.textContent.trim()), "Save · 4 changes");
+
+  // ITEM 1e — REVERT DISCARDS AND ISSUES NO REQUEST, and says so
+  rosterPosts = []; puts = [];
+  { const sub = await page.$eval('[data-testid="mp-revert"]', (e) => e.textContent);
+    /sends nothing/i.test(sub) ? ok("item1e: Revert's own copy says it sends nothing") : bad("item1e copy", sub); }
+  await page.click('[data-testid="mp-revert"]');
+  await page.waitForTimeout(400);
+  { const after = await page.evaluate(() => ({
+      pendingRows: document.querySelectorAll('[data-testid="mp-player"][data-pending="move"],[data-testid="mp-player"][data-pending="remove"]').length,
+      save: document.querySelector('[data-testid="mp-save"]')?.textContent.trim(),
+      tname: document.querySelector('[data-testid="mp-tname-1"]')?.value,
+    }));
+    (rosterPosts.length === 0 && puts.length === 0 && after.pendingRows === 0 && after.save === "Save" && after.tname === "Green")
+      ? ok("item1f: Revert discards every pending edit and issues NO request")
+      : bad("item1f", `posts=${rosterPosts.length} puts=${puts.length} ${JSON.stringify(after)}`); }
+
+  // ITEM 1g — SAVE ORDER: team count BEFORE moves, proven by the ORDER OF THE CALLS themselves.
+  delete rosterStates["17494"]; rosterPosts = []; puts = [];
+  await page.goto(`${BASE}/match-ops/match-panel/17494`, { waitUntil: "domcontentloaded" });
+  await page.waitForSelector('[data-testid="mp-team"]', { timeout: 15000 });
+  await page.click('[data-testid="mp-teamcount-4"]');
+  await page.click('[data-testid="mp-move-9001"]');
+  await page.click('[data-testid="mp-movepick-team-2"]');
+  await page.click('[data-testid="mp-movepick-spot-4"]');
+  await page.click('[data-testid="mp-remove-9003"]');
+  await page.fill('[data-testid="mp-tname-1"]', "Orange");
+  await page.waitForTimeout(200);
+  await page.click('[data-testid="mp-save"]');
+  await page.waitForFunction(() => document.querySelectorAll('[data-testid="mp-write-result"]').length >= 4, null, { timeout: 20000 });
+  eq("item1g: Save sends team count FIRST, then the move, then the removal, then the rename — proven by call order",
+    rosterPosts.map((o) => o.kind), ["shape", "move", "remove", "teams"]);
+  eq("item1g2: the shape write carries teamNumbers and the move carries the chosen spot",
+    { teamNumbers: rosterPosts[0]?.fields?.teamNumbers, move: { t: rosterPosts[1]?.team, n: rosterPosts[1]?.playerNumber } },
+    { teamNumbers: 4, move: { t: 2, n: 4 } });
+  eq("item1g3: every write in one Save shares ONE saveId, so change_log groups the batch",
+    new Set(rosterPosts.map((o) => o.saveId)).size, 1);
+  eq("item1g4: each write reports its OWN outcome, not one verdict for the Save",
+    await page.$$eval('[data-testid="mp-write-result"]', (els) => els.map((e) => e.getAttribute("data-verdict"))),
+    ["LANDED", "LANDED", "LANDED", "LANDED"]);
+
+  // GATE 6 (kept) — password appears in no roster request body
   eq("gate6: no roster/teams request body contains 'password'", rosterPosts.some((o) => JSON.stringify(o).includes("password")), false);
 
-  // GATE 2 — a rename never enters the staged diff (edit a match field AND rename → the diff is only the field)
+  // GATE 2 (kept, re-aimed) — a roster edit NEVER enters the match PUT body. It used to be proved by
+  // the staged diff excluding renames; now renames are staged too, so the honest place to prove
+  // isolation is the request that actually goes to the match endpoint.
   delete rosterStates["17494"]; rosterPosts = []; puts = [];
   await page.goto(`${BASE}/match-ops/match-panel/17494`, { waitUntil: "domcontentloaded" });
   await page.waitForSelector('[data-testid="mp-team"]', { timeout: 15000 });
   await page.fill('[data-testid="mp-name"]', "Renamed Match");
   await page.fill('[data-testid="mp-tname-1"]', "Teal");
-  await page.click('[data-testid="mp-rename-1"]');
-  await page.waitForFunction(() => document.querySelector('[data-testid="mp-tname-committed-1"]')?.textContent === "Teal", null, { timeout: 6000 });
-  await openDiff();
-  eq("gate2: a team rename never enters the staged diff (diff = only the match field)", await diffKeysNow(), ["name"]);
-
-  // GATE 3 — Revert after a rename leaves the new name in place; its confirmation SAYS it won't undo immediate changes
-  dlg.accept = true; dlg.msg = null;
-  await page.click('[data-testid="mp-revert"]');
   await page.waitForTimeout(200);
-  { const nameStays = await page.$eval('[data-testid="mp-tname-committed-1"]', (e) => e.textContent);
-    const staged = await page.$eval('[data-testid="mp-diffcount"]', (e) => e.textContent.trim());
-    (nameStays === "Teal" && /No changes/.test(staged) && dlg.msg && /does NOT undo|team\/roster/i.test(dlg.msg))
-      ? ok("gate3: Revert leaves the renamed team in place and its confirmation says it won't undo immediate changes")
-      : bad("gate3", `name=${nameStays} staged=${staged} dlg=${JSON.stringify(dlg.msg)}`); }
+  await page.click('[data-testid="mp-save"]');
+  await page.waitForFunction(() => /LANDED|NOT APPLIED|Save failed/.test(document.querySelector('[data-testid="mp-toast"]')?.textContent || ""), null, { timeout: 20000 });
+  eq("gate2: a team rename never enters the match PUT body — the match write carries only the match field",
+    { putKeys: Object.keys(puts[0] ?? {}), teamsPosts: rosterPosts.filter((o) => o.kind === "teams").length },
+    { putKeys: ["name"], teamsPosts: 1 });
 
-  // GATE 4 — rename failure: the shown name reverts, the typed text is kept, no success state
-  delete rosterStates["17494"]; rosterPosts = [];
-  await page.goto(`${BASE}/match-ops/match-panel/17494`, { waitUntil: "domcontentloaded" });
-  await page.waitForSelector('[data-testid="mp-team"]', { timeout: 15000 });
-  await page.fill('[data-testid="mp-tname-2"]', "FAILNAME");
-  await page.click('[data-testid="mp-rename-2"]');
-  await page.waitForSelector('[data-testid="mp-optoast"].bad', { timeout: 6000 }).catch(() => {});
-  { const committed = await page.$eval('[data-testid="mp-tname-committed-2"]', (e) => e.textContent);
-    const typed = await val("mp-tname-2");
-    const toastBad = await page.$('[data-testid="mp-optoast"].bad');
-    (committed === "Blue" && typed === "FAILNAME" && !!toastBad)
-      ? ok("gate4: rename failure keeps the typed text, reverts the shown name, shows no success")
-      : bad("gate4", `committed=${committed} typed=${typed} bad=${!!toastBad}`); }
-
-  // GATE 5 — no price and no locked control anywhere in TEAMS (count 0)
-  eq("gate5: TEAMS exposes no price and no locked control (count 0)", await page.$eval('[data-testid="mp-teams"]', (el) =>
-    el.querySelectorAll('[data-testid*="price" i],[data-testid*="lock" i],input[name*="price" i],input[name*="lock" i],[aria-label*="lock" i],[aria-label*="price" i]').length), 0);
-
-  // GATE 7 — add / move / remove each fire exactly one request, none touch the match endpoint
+  // ITEM 1h — A FAILED SECOND WRITE LEAVES THE FIRST APPLIED AND THE REST PENDING.
+  // The move to team 2 spot 9 is rejected by the fixture; the team-count write before it landed.
   delete rosterStates["17494"]; rosterPosts = []; puts = [];
   await page.goto(`${BASE}/match-ops/match-panel/17494`, { waitUntil: "domcontentloaded" });
   await page.waitForSelector('[data-testid="mp-team"]', { timeout: 15000 });
+  await page.click('[data-testid="mp-teamcount-4"]');
+  await page.click('[data-testid="mp-move-9001"]');
+  await page.click('[data-testid="mp-movepick-team-2"]');
+  await page.click('[data-testid="mp-movepick-spot-9"]');   // FAILSPOT — the fixture rejects this one
+  await page.click('[data-testid="mp-remove-9003"]');
+  await page.waitForTimeout(200);
+  await page.click('[data-testid="mp-save"]');
+  await page.waitForFunction(() => [...document.querySelectorAll('[data-testid="mp-write-result"]')].some((e) => e.getAttribute("data-verdict") !== "LANDED"), null, { timeout: 20000 });
+  { const st = await page.evaluate(() => ({
+      verdicts: [...document.querySelectorAll('[data-testid="mp-write-result"]')].map((e) => e.getAttribute("data-verdict")),
+      stillPendingRemove: !!document.querySelector('[data-testid="mp-pending-remove"]'),
+      countPending: !!document.querySelector('[data-testid="mp-teamcount-pending"]'),
+      toast: document.querySelector('[data-testid="mp-toast"]')?.textContent || "",
+    }));
+    const stopped = rosterPosts.filter((o) => o.kind === "remove").length === 0;
+    (st.verdicts[0] === "LANDED" && st.verdicts[1] === "FAILED" && st.verdicts.length === 2 && stopped
+      && st.stillPendingRemove && !st.countPending && /not undone|LANDED/i.test(st.toast))
+      ? ok("item1h: the first write LANDED and is NOT auto-reverted, the failed one is reported, the rest stay pending and were never sent")
+      : bad("item1h", `${JSON.stringify(st)} sentKinds=${JSON.stringify(rosterPosts.map((o) => o.kind))}`); }
+
+  // GATE 7d (kept) — a 2xx the server did NOT apply reads as NOT APPLIED, never a blind success.
+  delete rosterStates["17494"]; rosterPosts = []; forceNotApplied = true;
+  await page.goto(`${BASE}/match-ops/match-panel/17494`, { waitUntil: "domcontentloaded" });
+  await page.waitForSelector('[data-testid="mp-team"]', { timeout: 15000 });
+  await page.click('[data-testid="mp-move-9001"]');
+  await page.click('[data-testid="mp-movepick-team-2"]');
+  await page.click('[data-testid="mp-movepick-spot-3"]');
+  await page.waitForTimeout(150);
+  await page.click('[data-testid="mp-save"]');
+  await page.waitForSelector('[data-testid="mp-write-result"]', { timeout: 20000 });
+  eq("gate7d: a roster write the server accepts but does NOT apply reads as NOT APPLIED (read-back, not blind 2xx)",
+    await page.$eval('[data-testid="mp-write-result"]', (e) => e.getAttribute("data-verdict")), "NOT APPLIED");
+  forceNotApplied = false;
+
+  // GATE 5 (kept) — no price and no locked control anywhere in the section
+  eq("gate5: TEAMS exposes no price and no locked control (count 0)", await page.$eval('[data-testid="mp-teams"]', (el) =>
+    el.querySelectorAll('[data-testid*="price" i],[data-testid*="lock" i],input[name*="price" i],input[name*="lock" i],[aria-label*="lock" i],[aria-label*="price" i]').length), 0);
+
+  // ── ADD — still immediate BY DESIGN, and it says so on itself ─────────────────────────────────
+  delete rosterStates["17494"]; rosterPosts = []; puts = [];
+  await page.goto(`${BASE}/match-ops/match-panel/17494`, { waitUntil: "domcontentloaded" });
+  await page.waitForSelector('[data-testid="mp-team"]', { timeout: 15000 });
+  eq("add says on itself that it does not wait for Save",
+    /does not wait for Save/i.test(await page.$eval('[data-testid="mp-add-immediate-note"]', (e) => e.textContent)), true);
   await page.fill('[data-testid="mp-add-search"]', "new");
   await page.waitForSelector('[data-testid="mp-add-result"]', { timeout: 6000 });
   await page.click('[data-testid="mp-add-result"]');
@@ -419,17 +555,6 @@ async function main() {
   await page.waitForFunction(() => [...document.querySelectorAll('[data-testid="mp-player"]')].some((e) => e.textContent.includes("New Player")), null, { timeout: 6000 });
   eq("gate7a: add fires exactly one roster request, zero to the match endpoint", { add: rosterPosts.filter((o) => o.kind === "add").length, puts: puts.length }, { add: 1, puts: 0 });
 
-  rosterPosts = []; puts = [];
-  await page.click('[data-testid="mp-move-9001-2"]');
-  await page.waitForTimeout(400);
-  eq("gate7b: move fires exactly one roster request, zero to the match endpoint", { move: rosterPosts.filter((o) => o.kind === "move").length, puts: puts.length }, { move: 1, puts: 0 });
-
-  rosterPosts = []; puts = []; dlg.accept = true;
-  await page.click('[data-testid="mp-remove-9003"]');
-  await page.waitForTimeout(400);
-  eq("gate7c: remove fires exactly one roster request, zero to the match endpoint", { remove: rosterPosts.filter((o) => o.kind === "remove").length, puts: puts.length }, { remove: 1, puts: 0 });
-
-  // RESTORED capability (Part b): ADD FAKE — the manual fake control the standalone editor had.
   delete rosterStates["17494"]; rosterPosts = []; puts = [];
   await page.goto(`${BASE}/match-ops/match-panel/17494`, { waitUntil: "domcontentloaded" });
   await page.waitForSelector('[data-testid="mp-team"]', { timeout: 15000 });
@@ -440,7 +565,6 @@ async function main() {
   eq("gate7f: add-fake fires exactly one add-fake request (no real add, none to the match endpoint) and the new player is marked FAKE",
     { fake: rosterPosts.filter((o) => o.kind === "add-fake").length, realAdd: rosterPosts.filter((o) => o.kind === "add").length, puts: puts.length }, { fake: 1, realAdd: 0, puts: 0 });
 
-  // RESTORED capability (Part b): BULK FAKE — one call carrying totalFakes.
   delete rosterStates["17494"]; rosterPosts = []; puts = [];
   await page.goto(`${BASE}/match-ops/match-panel/17494`, { waitUntil: "domcontentloaded" });
   await page.waitForSelector('[data-testid="mp-team"]', { timeout: 15000 });
@@ -450,29 +574,7 @@ async function main() {
   eq("gate7g: bulk-fake sends exactly one bulk-fake request carrying totalFakes, zero to the match endpoint",
     { bulk: rosterPosts.filter((o) => o.kind === "bulk-fake").length, total: rosterPosts.find((o) => o.kind === "bulk-fake")?.totalFakes, puts: puts.length }, { bulk: 1, total: 3, puts: 0 });
 
-  // RESTORED from verify-roster (four-state read-back): a 2xx the server did NOT apply reads as NOT
-  // APPLIED on this immediate surface, never a blind success.
-  delete rosterStates["17494"]; rosterPosts = []; forceNotApplied = true;
-  await page.goto(`${BASE}/match-ops/match-panel/17494`, { waitUntil: "domcontentloaded" });
-  await page.waitForSelector('[data-testid="mp-team"]', { timeout: 15000 });
-  await page.click('[data-testid="mp-move-9001-2"]');
-  await page.waitForFunction(() => /NOT APPLIED/.test(document.querySelector('[data-testid="mp-optoast"]')?.textContent || ""), null, { timeout: 6000 }).catch(() => {});
-  eq("gate7d: a roster op the server accepts but does NOT apply reads as NOT APPLIED (read-back, not blind 2xx)", /NOT APPLIED/.test(await page.$eval('[data-testid="mp-optoast"]', (e) => e.textContent).catch(() => "")), true);
-  forceNotApplied = false;
-
-  // RESTORED from verify-roster: the remove confirmation names that it is NOT a refund and cannot be undone.
-  delete rosterStates["17494"];
-  await page.goto(`${BASE}/match-ops/match-panel/17494`, { waitUntil: "domcontentloaded" });
-  await page.waitForSelector('[data-testid="mp-team"]', { timeout: 15000 });
-  rosterPosts = []; dlg.accept = false; dlg.msg = null; // dismiss so nothing fires — we only read the wording
-  await page.click('[data-testid="mp-remove-9001"]');
-  await page.waitForTimeout(200);
-  eq("gate7e: the remove confirmation names 'not a refund' + irreversible, and dismissing sends nothing",
-    { wording: /not a refund/i.test(dlg.msg || "") && /(will not undo|cannot|immediately|unconfirmed)/i.test(dlg.msg || ""), sent: rosterPosts.filter((o) => o.kind === "remove").length },
-    { wording: true, sent: 0 });
-  dlg.accept = true;
-
-  // GATE 8 — fake players are visibly marked; real players are not
+  // GATE 8 (kept) — fake players are visibly marked; real players are not
   delete rosterStates["17494"];
   await page.goto(`${BASE}/match-ops/match-panel/17494`, { waitUntil: "domcontentloaded" });
   await page.waitForSelector('[data-testid="mp-team"]', { timeout: 15000 });
@@ -484,32 +586,147 @@ async function main() {
     (marks.fakeRows >= 1 && marks.taggedFakes === marks.fakeRows && marks.taggedReal === 0)
       ? ok(`gate8: every fake player carries a FAKE mark (${marks.taggedFakes}) and no real player does`) : bad("gate8", JSON.stringify(marks)); }
 
-  // GATE 9 — team count 2→4: the write is sent, the panel RE-READS, and the verdict comes from teams[].length,
-  //          NOT the response status (the shape POST deliberately returns outcome "not applied").
-  delete rosterStates["17494"]; rosterPosts = []; puts = [];
-  await page.goto(`${BASE}/match-ops/match-panel/17494`, { waitUntil: "domcontentloaded" });
-  await page.waitForSelector('[data-testid="mp-teamcount-4"]', { timeout: 15000 });
-  const getsBefore = rosterGets;
-  await page.click('[data-testid="mp-teamcount-4"]');
-  await page.waitForFunction(() => /LANDED|NOT APPLIED/.test(document.querySelector('[data-testid="mp-teamcount-result"]')?.textContent || ""), null, { timeout: 6000 });
-  { const result = await page.$eval('[data-testid="mp-teamcount-result"]', (e) => e.textContent);
-    const shapePost = rosterPosts.find((o) => o.kind === "shape");
-    (shapePost?.fields?.teamNumbers === 4 && puts.length === 0 && /LANDED/.test(result) && /4 teams/.test(result) && rosterGets > getsBefore)
-      ? ok("gate9: 2→4 sends teamNumbers, re-reads, reports LANDED from teams[].length (not the 'not applied' response)")
-      : bad("gate9", `post=${JSON.stringify(shapePost)} result=${result} reRead=${rosterGets > getsBefore}`); }
-
-  // GATE 10 — 4→2 with players on the disappearing teams: the confirmation NAMES the count; dismissing it sends nothing
+  // GATE 10 (kept, re-aimed) — the team-count CONSEQUENCE is stated BEFORE the click, not in a
+  // dialog after it, and choosing it still sends nothing.
   delete rosterStates["14444"]; rosterPosts = [];
   await page.goto(`${BASE}/match-ops/match-panel/14444`, { waitUntil: "domcontentloaded" });
   await page.waitForSelector('[data-testid="mp-teamcount-2"]', { timeout: 15000 });
-  dlg.accept = false; dlg.msg = null;
-  await page.click('[data-testid="mp-teamcount-2"]');
-  await page.waitForTimeout(400);
-  { const named = dlg.msg && /2 player/.test(dlg.msg) && /reassigned/i.test(dlg.msg);
-    const sent = rosterPosts.filter((o) => o.kind === "shape").length;
-    (named && sent === 0) ? ok("gate10: 4→2 confirmation names the 2 affected players; dismissing sends nothing")
-      : bad("gate10", `dlg=${JSON.stringify(dlg.msg)} shapePosts=${sent}`); }
-  dlg.accept = true;
+  { const line = await page.$eval('[data-testid="mp-teamcount-consequence"] li[data-n="2"]', (e) => e.textContent);
+    const named = /Teams 3 and 4 are removed/.test(line) && /2 players move to teams 1 and 2/.test(line);
+    await page.click('[data-testid="mp-teamcount-2"]');
+    await page.waitForTimeout(400);
+    (named && rosterPosts.length === 0)
+      ? ok("gate10: 4→2 states its consequence BEFORE the click (teams removed + how many players move) and sends nothing")
+      : bad("gate10", `line=${JSON.stringify(line)} posts=${rosterPosts.length}`); }
+
+  // ── ITEM 2 · THE MOVE CONTROL SCALES ─────────────────────────────────────────────────────────
+  delete rosterStates["14444"];
+  await page.goto(`${BASE}/match-ops/match-panel/14444`, { waitUntil: "domcontentloaded" });
+  await page.waitForSelector('[data-testid="mp-team"]', { timeout: 15000 });
+  { const perRow = await page.evaluate(() => {
+      const row = document.querySelector('[data-testid="mp-player"][data-um="8001"]');
+      return { buttons: row.querySelectorAll("button").length, hasDestButtons: /→\s*[234]/.test(row.textContent || "") };
+    });
+    (perRow.buttons === 2 && !perRow.hasDestButtons)
+      ? ok("item2a: at FOUR teams a row carries ONE move control + one remove — not → 2, → 3, → 4, ✕")
+      : bad("item2a", JSON.stringify(perRow)); }
+  await page.click('[data-testid="mp-move-8001"]');
+  await page.waitForSelector('[data-testid="mp-movepick"][data-step="team"]', { timeout: 6000 });
+  eq("item2b: step one offers every team", await page.$$eval('[data-testid="mp-movepick"] button[data-testid^="mp-movepick-team-"]', (e) => e.length), 4);
+  await page.click('[data-testid="mp-movepick-team-3"]');
+  await page.waitForSelector('[data-testid="mp-movepick"][data-step="spot"]', { timeout: 6000 });
+  { const spots = await page.$$eval('[data-testid="mp-movepick"] [data-testid^="mp-movepick-spot-"]', (els) =>
+      els.map((e) => ({ n: e.getAttribute("data-testid").replace("mp-movepick-spot-", ""), occupied: e.getAttribute("data-occupied") })));
+    (spots.length === 5 && spots[0].occupied === "true" && spots[1].occupied === "false")
+      ? ok("item2c: step two is that team's SPOT GRID, marking which are held — an open spot and a swap are one gesture")
+      : bad("item2c", JSON.stringify(spots)); }
+  rosterPosts = [];
+  await page.click('[data-testid="mp-movepick-spot-1"]');   // OCCUPIED by Christopher Vale → a swap
+  await page.waitForSelector('[data-testid="mp-pending-move"]', { timeout: 6000 });
+  { const moving = await page.$$eval('[data-testid="mp-pending-move"]', (e) => e.length);
+    (moving === 2 && rosterPosts.length === 0)
+      ? ok("item2d: moving onto an occupied spot stages a SWAP — two pending moves, still zero requests")
+      : bad("item2d", `movingRows=${moving} posts=${rosterPosts.length}`); }
+  await page.click('[data-testid="mp-revert"]');
+  await page.waitForTimeout(300);
+
+  // ── ITEM 3 · NAME AND PHONE, ITEM 4 · FOUR TEAMS VISIBLE, at 1600 ────────────────────────────
+  { const layout = await page.evaluate(() => {
+      const grid = document.querySelector('[data-testid="mp-teamgrid"]');
+      const panel = document.querySelector('[data-testid="mp-panel"]');
+      const teams = [...grid.querySelectorAll('[data-testid="mp-team"]')];
+      const pr = panel.getBoundingClientRect();
+      const tops = [...new Set(teams.map((t) => Math.round(t.getBoundingClientRect().top)))];
+      const clipped = (e) => e.scrollWidth > e.clientWidth + 1;
+      const rows = [...grid.querySelectorAll('[data-testid="mp-player"]')];
+      return {
+        teams: teams.length,
+        rowsOfTeams: tops.length,                                     // 2 x 2, not 4 abreast
+        allInsidePanel: teams.every((t) => { const r = t.getBoundingClientRect(); return r.left >= pr.left - 1 && r.right <= pr.right + 1; }),
+        gridOverflows: grid.scrollWidth > grid.clientWidth + 1,
+        panelOverflows: panel.scrollWidth > panel.clientWidth + 1,
+        everyRowHasBoth: rows.every((r) => (r.querySelector('[data-testid="mp-pname"]')?.textContent || "").trim().length > 0
+                                        && (r.querySelector('[data-testid="mp-pphone"]')?.textContent || "").trim().length > 0),
+        truncatedNames: rows.filter((r) => clipped(r.querySelector('[data-testid="mp-pname"]'))).length,
+        truncatedPhones: rows.filter((r) => clipped(r.querySelector('[data-testid="mp-pphone"]'))).length,
+        // two LINES, not two columns: the phone sits below the name
+        phoneBelowName: rows.every((r) => r.querySelector('[data-testid="mp-pphone"]').getBoundingClientRect().top
+                                        > r.querySelector('[data-testid="mp-pname"]').getBoundingClientRect().top),
+        phoneText: rows[0]?.querySelector('[data-testid="mp-pphone"]')?.textContent,
+      }; });
+    JSON.stringify(layout) === JSON.stringify({ teams: 4, rowsOfTeams: 2, allInsidePanel: true, gridOverflows: false, panelOverflows: false,
+      everyRowHasBoth: true, truncatedNames: 0, truncatedPhones: 0, phoneBelowName: true, phoneText: "+15125558001" })
+      ? ok("item3+4 @1600: all four teams sit inside the panel as 2 x 2, no overflow, and every row shows a full name AND phone, neither truncated")
+      : bad("item3+4 @1600", JSON.stringify(layout)); }
+
+  // ── ITEM 5 · SORT BY SPOT, NULLS LAST, COLLISIONS MARKED ─────────────────────────────────────
+  delete rosterStates["17777"];
+  await page.goto(`${BASE}/match-ops/match-panel/17777`, { waitUntil: "domcontentloaded" });
+  await page.waitForSelector('[data-testid="mp-team"]', { timeout: 15000 });
+  { const t1 = await page.$$eval('[data-testid="mp-team"][data-teamnumber="1"] [data-testid="mp-player"]', (els) =>
+      els.map((e) => ({ spot: e.getAttribute("data-spot"), name: e.querySelector('[data-testid="mp-pname"]').textContent.trim(), clash: e.getAttribute("data-collision") })));
+    const spots = t1.map((r) => r.spot);
+    const nullLast = spots[spots.length - 1] === "";
+    const clashRows = t1.filter((r) => r.clash === "true").map((r) => r.name);
+    const adjacent = spots.indexOf("3") >= 0 && spots[spots.indexOf("3") + 1] === "3";
+    (JSON.stringify(spots) === JSON.stringify(["1", "2", "3", "3", "4", "5", "9", ""]) && nullLast && adjacent
+      && JSON.stringify(clashRows) === JSON.stringify(["Wren Three", "Dee Dupe"]))
+      ? ok("item5: a shuffled team renders 1..N in order, a null spot lands LAST, and a duplicated spot renders BOTH rows adjacent and marked")
+      : bad("item5", JSON.stringify(t1)); }
+  eq("item5b: the collision is marked VISIBLY, not only in an attribute",
+    await page.$$eval('[data-testid="mp-collision"]', (e) => e.length), 2);
+  // a pending move sorts into its NEW position at once
+  await page.click('[data-testid="mp-move-7009"]');   // Wanda, spot 9
+  await page.click('[data-testid="mp-movepick-team-1"]');
+  await page.click('[data-testid="mp-movepick-spot-6"]');
+  await page.waitForSelector('[data-testid="mp-pending-move"]', { timeout: 6000 });
+  eq("item5c: a pending move sorts into its NEW position immediately — the list reads the way it will look after Save",
+    await page.$$eval('[data-testid="mp-team"][data-teamnumber="1"] [data-testid="mp-player"]', (els) => els.map((e) => e.getAttribute("data-spot"))),
+    ["1", "2", "3", "3", "4", "5", "6", ""]);
+
+  // ── ITEM 1 · THE UNSAVED-CHANGES GUARD (it ships with the batching, because batching creates it)
+  { rosterPosts = [];
+    dlg.accept = false; dlg.msg = null;
+    await page.click('a[href="/match-ops/gameday"]').catch(() => {});
+    await page.waitForTimeout(400);
+    const stillHere = page.url().includes("/match-panel/17777");
+    (stillHere && rosterPosts.length === 0)
+      ? ok("item1i: a route change with pending edits is guarded — declining keeps you on the panel and sends nothing")
+      : bad("item1i", `url=${page.url()} posts=${rosterPosts.length}`);
+    dlg.accept = true; }
+
+  // ── 390 PORTRAIT — the same behaviour on a phone ──────────────────────────────────────────────
+  await page.setViewportSize({ width: 390, height: 844 });
+  delete rosterStates["14444"];
+  await page.goto(`${BASE}/match-ops/match-panel/14444`, { waitUntil: "domcontentloaded" });
+  await page.waitForSelector('[data-testid="mp-team"]', { timeout: 15000 });
+  { const m = await page.evaluate(() => {
+      const grid = document.querySelector('[data-testid="mp-teamgrid"]');
+      const rows = [...grid.querySelectorAll('[data-testid="mp-player"]')];
+      const clipped = (e) => e.scrollWidth > e.clientWidth + 1;
+      return {
+        teams: grid.querySelectorAll('[data-testid="mp-team"]').length,
+        oneColumn: new Set([...grid.querySelectorAll('[data-testid="mp-team"]')].map((t) => Math.round(t.getBoundingClientRect().left))).size === 1,
+        pageLeak: document.documentElement.scrollWidth > window.innerWidth + 1,
+        everyRowHasBoth: rows.every((r) => (r.querySelector('[data-testid="mp-pname"]')?.textContent || "").trim() && (r.querySelector('[data-testid="mp-pphone"]')?.textContent || "").trim()),
+        truncated: rows.filter((r) => clipped(r.querySelector('[data-testid="mp-pname"]')) || clipped(r.querySelector('[data-testid="mp-pphone"]'))).length,
+        red: [...grid.querySelectorAll("*")].filter((e) => { const m2 = /rgba?\((\d+),\s*(\d+),\s*(\d+)/.exec(getComputedStyle(e).backgroundColor || ""); if (!m2) return false; const [r, g, b] = [+m2[1], +m2[2], +m2[3]]; return r > 120 && r - g > 45 && r - b > 45; }).length,
+      }; });
+    JSON.stringify(m) === JSON.stringify({ teams: 4, oneColumn: true, pageLeak: false, everyRowHasBoth: true, truncated: 0, red: 0 })
+      ? ok("item3+4 @390 portrait: four teams stack to one column, no page overflow, name + phone both intact on every row, no red")
+      : bad("item3+4 @390", JSON.stringify(m)); }
+  { rosterPosts = [];
+    await page.click('[data-testid="mp-move-8001"]');
+    await page.waitForSelector('[data-testid="mp-movepick"]', { timeout: 6000 });
+    await page.click('[data-testid="mp-movepick-team-2"]');
+    await page.click('[data-testid="mp-movepick-spot-2"]');
+    await page.waitForSelector('[data-testid="mp-pending-move"]', { timeout: 6000 });
+    const save = await page.$eval('[data-testid="mp-save"]', (e) => e.textContent.trim());
+    (rosterPosts.length === 0 && save === "Save · 1 change")
+      ? ok("item1j @390: the two-step move works on a phone, still sends nothing, and the Save label counts it")
+      : bad("item1j @390", `posts=${rosterPosts.length} save=${save}`);
+    await page.click('[data-testid="mp-revert"]'); await page.waitForTimeout(200); }
+  await page.setViewportSize({ width: 1600, height: 1000 });
 
   // ══════════════ Part C · CANCEL — live numbers, typed-name gate, one request, credit not refund ══════════════
   delete rosterStates["17494"]; cancelPosts = [];

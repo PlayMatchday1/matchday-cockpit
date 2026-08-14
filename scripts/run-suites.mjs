@@ -54,7 +54,7 @@ const NODE_SUITES = [
   "scripts/player-lookup-model-test.ts", "scripts/walltime-guard-test.ts", "scripts/promo-model-test.ts",
   "scripts/crm-characterize-test.ts", "scripts/crm-host-guard-test.ts",
   "scripts/seam-stripped-test.ts", "scripts/matchops-auth-test.ts",
-  "scripts/crm-push-test.ts", "scripts/city-manager-test.ts", "scripts/sync-logging-test.ts", "scripts/verify-checkin-model.ts",
+  "scripts/crm-push-test.ts", "scripts/city-manager-test.ts", "scripts/sync-logging-test.ts", "scripts/verify-checkin-model.ts", "scripts/roster-edit-model-test.ts",
 ];
 const ALL_E2E = readdirSync("scripts/e2e").filter((f) => /^verify-.*\.mjs$/.test(f)).sort().map((f) => `scripts/e2e/${f}`);
 const GATED_E2E = ALL_E2E.filter((s) => !QUARANTINE.has(s.split("/").pop()));

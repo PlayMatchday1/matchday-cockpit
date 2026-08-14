@@ -22,7 +22,7 @@ const isEnv = (x: string): x is MatchdayEnv => x === "staging" || x === "product
 const num = (v: unknown) => (v === null || v === undefined || v === "" ? null : Number.isFinite(Number(v)) ? Number(v) : null);
 
 type RosterShape = { isCancelled?: boolean; canceledAt?: string | null; refunded?: boolean; paidStatus?: string | null };
-type Row = { id: number; userId: number; team: number; playerNumber: number; isCancelled?: boolean; refunded?: boolean; user?: { firstName?: string; lastName?: string; isFakePlayer?: boolean } };
+type Row = { id: number; userId: number; team: number; playerNumber: number; isCancelled?: boolean; refunded?: boolean; user?: { firstName?: string; lastName?: string; isFakePlayer?: boolean; phoneNumber?: string | null } };
 
 export async function GET(req: Request, ctx: { params: Promise<{ env: string; matchId: string }> }) {
   const auth = await authenticateMatchOpsRead(req);
@@ -56,6 +56,17 @@ export async function GET(req: Request, ctx: { params: Promise<{ env: string; ma
       .map((p) => ({
         umId: p.id, playerId: p.userId, team: p.team, playerNumber: p.playerNumber,
         name: [p.user?.firstName, p.user?.lastName].filter(Boolean).join(" ").trim() || `Player ${p.userId}`,
+        // PHONE — DISPLAY ONLY, and it goes no further than the screen. The panel shows it so an
+        // operator can reach a player without leaving for the CRM. It is carried on p.user as
+        // `phoneNumber` in E.164; measured on production it is present on 239/239 REAL players
+        // across 49 matches (the rows without one are fake players, which have no phone at all).
+        //
+        // IT MUST NEVER REACH change_log. The standing rule is last-4 via phoneLast4(), and showing
+        // the full number on screen does not relax it — the log has different access rules and a
+        // longer life than the panel. The POST below builds its `changes` from names and spot
+        // numbers only; scripts/roster-edit-model-test.ts asserts no logged payload can carry a
+        // phone, and mutates the payload to prove that assertion can fail.
+        phone: typeof p.user?.phoneNumber === "string" && p.user.phoneNumber.trim() !== "" ? p.user.phoneNumber : null,
         fake: !!p.user?.isFakePlayer,
       }));
     const teamsRaw = (match.teams as Record<string, unknown>[]) ?? [];

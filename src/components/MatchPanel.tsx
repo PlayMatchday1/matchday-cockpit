@@ -20,6 +20,11 @@ import { useCallback, useEffect, useMemo, useState } from "react";
 import { supabase } from "@/lib/supabase";
 import { diffKeys, pick, MONEY_KEYS, TOGGLE_KEYS, NULLABLE_NUM } from "@/lib/matchEditModel";
 import { centsToDollars, dollarsToCents } from "@/lib/matchMoney";
+import {
+  emptyPending, normalizePending, pendingCount, sortedTeam, spotsOfTeam, planMove,
+  savePlan, clearApplied, teamCountConsequence,
+  type Pending, type RosterOrigin, type EditRow, type PlannedWrite,
+} from "@/lib/rosterEditModel";
 
 // Only these two `type` values are exposed. The known enum also has BRACKET and GROUP and the full
 // set is UNKNOWN (no spec in repo). A match whose current type is NOT one of these renders as
@@ -54,7 +59,7 @@ const LABELS: Record<string, string> = {
 type Manager = { id: number; name: string };
 type FieldRow = { id: number; title: string; city: string | null };
 type TeamRow = { id: number; teamNumber: number; name: string; locked: boolean };
-type PlayerRow = { umId: number; playerId: number; team: number; playerNumber: number; name: string; fake: boolean };
+type PlayerRow = { umId: number; playerId: number; team: number; playerNumber: number | null; name: string; phone: string | null; fake: boolean };
 type RosterState = { name: string; teams: TeamRow[]; players: PlayerRow[]; shape: { teamN: number; perTeam: number }; maxPlayerCount: number | null; occupancy: number | null; hidden?: { total: number; cancelled: number; unpaid: number; refunded: number } };
 type MatchData = Record<string, unknown> & {
   type?: string; startDate?: string; endDate?: string; teams?: unknown[];
@@ -93,16 +98,28 @@ export default function MatchPanel({ matchId, env = "production", onDirtyChange 
   const [toast, setToast] = useState<string | null>(null);
   const [diffOpen, setDiffOpen] = useState(false);
 
-  // ── Step 2 · TEAMS — the IMMEDIATE half. None of this stages; each action fires on its own
-  // endpoint the moment it happens and Revert never touches it. State is entirely separate from the
-  // staged `cur`/STAGED_KEYS above, so a team rename or a roster move can NEVER enter the diff.
+  // ── TEAMS · ROSTER · TEAM COUNT — STAGED, like every other section ──────────────────────────────
+  // These used to fire the instant they were clicked, on their own endpoints, with Save and Revert
+  // reaching none of them — which is why the section needed a red badge and a red banner saying so.
+  // Moves, removals, renames and the team count are now PENDING LOCAL EDITS held in `pending`; the
+  // rules (what counts as a change, what order the writes go in, what a swap means) live in
+  // rosterEditModel so they are testable and cannot drift from what the UI draws.
+  //
+  // STILL IMMEDIATE, AND DELIBERATELY SO: adding a player, adding a fake and the bulk-fake count.
+  // Those were not in the brief's list of four, and bulk-fake in particular sets a TOTAL rather than
+  // describing a delta, so it has no coherent pending form. They say so on themselves, in the
+  // section's own voice rather than a red banner. See the report — this is the one place the
+  // section does not behave like the others, and it is flagged rather than hidden.
   const [roster, setRoster] = useState<RosterState | null>(null);
   const [rosterErr, setRosterErr] = useState<string | null>(null);
-  const [teamDraft, setTeamDraft] = useState<Record<number, string>>({}); // teamId → typed name (kept on failure)
+  const [teamDraft, setTeamDraft] = useState<Record<number, string>>({}); // teamId → typed name (the pending rename)
   const [opBusy, setOpBusy] = useState<string | null>(null);
   const [opToast, setOpToast] = useState<{ text: string; bad?: boolean } | null>(null);
-  const [immediateOps, setImmediateOps] = useState<string[]>([]); // what fired this session — drives Revert's warning
-  const [countResult, setCountResult] = useState<string | null>(null); // LANDED / NOT APPLIED for team count
+  const [immediateOps, setImmediateOps] = useState<string[]>([]); // adds that fired this session — drives Revert's warning
+  const [pending, setPending] = useState<Pending>(emptyPending());
+  const [movePick, setMovePick] = useState<{ umId: number; team: number | null } | null>(null);
+  // PER WRITE, not per Save. A batch that stops half-way has to say which of its writes landed.
+  const [writeResults, setWriteResults] = useState<{ label: string; verdict: "LANDED" | "FAILED" | "NOT APPLIED" | "UNKNOWN"; detail?: string }[]>([]);
   const [q, setQ] = useState("");
   const [results, setResults] = useState<{ id: number; name: string }[]>([]);
   const [pendingAdd, setPendingAdd] = useState<{ id: number | null; name: string; fake?: boolean } | null>(null);
@@ -247,20 +264,7 @@ export default function MatchPanel({ matchId, env = "production", onDirtyChange 
     const used = new Set(roster.players.filter((p) => p.team === teamNumber).map((p) => p.playerNumber));
     const per = roster.shape?.perTeam || 0;
     for (let n = 1; n <= per; n++) if (!used.has(n)) return n;
-    return (roster.players.filter((p) => p.team === teamNumber).reduce((m, p) => Math.max(m, p.playerNumber), 0)) + 1;
-  };
-
-  // RENAME — teams endpoint only, {name} only (password is deny-listed and never sent). Confirm THEN
-  // update: the committed name changes only after the response re-read confirms it, never optimistically.
-  const renameTeam = async (teamId: number, teamNumber: number) => {
-    if (!roster || opBusy) return;
-    const name = (teamDraft[teamId] ?? "").trim();
-    const team = roster.teams.find((t) => t.id === teamId);
-    if (!team || !name || name === team.name) return;
-    const r = await rosterPost({ kind: "teams", teamId, fields: { name } }, `Rename team ${teamNumber}`);
-    // afterOp reloads (committed name follows the server) and reports LANDED / NOT APPLIED from the
-    // read-back. On failure or NOT APPLIED the committed name is unchanged and teamDraft keeps the text.
-    await afterOp(r, `Team ${teamNumber} is now “${name}” — saved (re-read confirmed).`, `renamed team ${teamNumber} → “${name}”`);
+    return (roster.players.filter((p) => p.team === teamNumber).reduce((m, p) => Math.max(m, p.playerNumber ?? 0), 0)) + 1;
   };
 
   const addPlayer = async (teamNumber: number) => {
@@ -283,49 +287,33 @@ export default function MatchPanel({ matchId, env = "production", onDirtyChange 
     const r = await rosterPost({ kind: "bulk-fake", totalFakes: n }, `Add ${n} fake players`);
     if (await afterOp(r, `${n} fake player${n === 1 ? "" : "s"} added — saved (re-read confirmed).`, `added ${n} fake players`)) setBulkFakes("");
   };
-  const movePlayer = async (p: PlayerRow, toTeam: number) => {
-    if (!roster || opBusy) return;
-    const n = firstOpenSlot(toTeam);
-    const r = await rosterPost({ kind: "move", userMatchId: p.umId, team: toTeam, playerNumber: n }, `Move ${p.name}`);
-    await afterOp(r, `${p.name} moved to team ${toTeam} — saved (re-read confirmed).`, `moved ${p.name} to team ${toTeam}`);
-  };
-  const removePlayer = async (p: PlayerRow) => {
-    if (!roster || opBusy) return;
-    const okd = typeof window !== "undefined" && window.confirm(
-      `Remove ${p.name} from this match now?\n\nThis fires IMMEDIATELY and Revert will NOT undo it. It takes them off the roster — it is NOT a refund, and the effect on any charge they paid is UNCONFIRMED. If ${p.name} paid, check before you do this.`);
-    if (!okd) return;
-    const r = await rosterPost({ kind: "remove", userMatchId: p.umId }, `Remove ${p.name}`);
-    await afterOp(r, `${p.name} removed — saved (re-read confirmed).`, `removed ${p.name}`);
-  };
+  // ── the STAGED roster edits. None of these touch the network. ─────────────────────────────────
+  // `origin` is what the server last told us; `pending` is the intent laid over it. Every read of
+  // pending goes through the model, so a move back to where a player started, or a rename back to
+  // the committed name, simply stops being a change — the diff IS the request body.
+  const origin: RosterOrigin = useMemo(
+    () => ({ rows: (roster?.players ?? []) as EditRow[], teams: roster?.teams ?? [] }),
+    [roster],
+  );
+  const pendingN = useMemo(() => pendingCount(pending, origin), [pending, origin]);
+  const norm = useMemo(() => normalizePending(pending, origin), [pending, origin]);
 
-  // TEAM COUNT 2 ⇄ 4. teamNumbers is WRITE-ONLY: a 2xx is NOT proof. Send it, then RE-READ and
-  // report from teams[].length — never from the response status. 4→2 is the dangerous direction and
-  // gets a confirm naming how many players sit on the teams about to disappear.
-  const changeTeamCount = async (target: number) => {
-    if (!roster || opBusy) return;
-    const curN = roster.teams.length;
-    if (target === curN) return;
-    if (target < curN) {
-      const affected = roster.players.filter((p) => p.team > target);
-      const span = target + 1 === curN ? `team ${curN}` : `teams ${target + 1}–${curN}`;
-      const okd = typeof window !== "undefined" && window.confirm(
-        `Change to ${target} teams?\n\n${affected.length} player(s) currently on ${span} will be reassigned BY THE SERVER — Clubhouse cannot say where they land. This fires immediately and Revert will not undo it.` +
-        (affected.length ? `\n\nAffected: ${affected.slice(0, 8).map((p) => p.name).join(", ")}${affected.length > 8 ? ` +${affected.length - 8}` : ""}.` : ""));
-      if (!okd) { setCountResult(null); return; }
-    }
-    setCountResult(`Sending teamNumbers = ${target}…`);
-    const r = await rosterPost({ kind: "shape", fields: { teamNumbers: target } }, `Set ${target} teams`);
-    if (!r) { setCountResult("UNKNOWN — no answer from the server. Reload before acting."); return; }
-    const fresh = await loadRoster(); // the RE-READ; teamNumbers is absent from GET so we compare team ROWS
-    const landedN = fresh ? fresh.teams.length : null;
-    if (landedN === target) {
-      noteImmediate(`set team count to ${target}`);
-      // Re-read the MATCH too: the TEAMS picker and the derived capacity both read orig.teams, so
-      // without this they keep showing the old count after a change that actually landed.
-      await load();
-      setCountResult(`LANDED — the panel re-read the match and now sees ${landedN} teams.`);
-    }
-    else setCountResult(`NOT APPLIED — the re-read shows ${landedN ?? "?"} team(s), not ${target}. teamNumbers is write-only so a 2xx proves nothing; the server did not change the count.`);
+  const stageMove = (mover: EditRow, toTeam: number, toSpot: number) => {
+    setPending((p) => planMove(p, origin, mover, toTeam, toSpot));
+    setMovePick(null);
+  };
+  const toggleRemove = (p: { umId: number }) => {
+    setPending((prev) => {
+      const on = prev.removes.includes(p.umId);
+      return normalizePending({ ...prev, removes: on ? prev.removes.filter((x) => x !== p.umId) : [...prev.removes, p.umId] }, origin);
+    });
+  };
+  const stageTeamCount = (target: number) => {
+    setPending((p) => normalizePending({ ...p, teamCount: target }, origin));
+  };
+  const stageRename = (teamId: number, value: string) => {
+    setTeamDraft((d) => ({ ...d, [teamId]: value }));
+    setPending((p) => normalizePending({ ...p, names: { ...p.names, [teamId]: value } }, origin));
   };
 
   const cancelPath = `/api/matchday/${env}/matches/${matchId}/cancel`;
@@ -375,9 +363,32 @@ export default function MatchPanel({ matchId, env = "production", onDirtyChange 
   const setField = (k: string, v: unknown) => setCur((c) => ({ ...c, [k]: v }));
 
   const changed = useMemo(() => (orig ? diffKeys(STAGED_KEYS, orig, cur) : []), [orig, cur]);
-  // Report STAGED dirtiness to a host (the Gameday panel guards close/step on it). Immediate TEAMS
-  // ops are already saved, so they never count as dirty.
-  useEffect(() => { onDirtyChange?.(changed.length > 0); }, [changed.length, onDirtyChange]);
+  // EVERYTHING UNSAVED, in one number: staged match fields AND pending roster edits. Batching is
+  // what created the risk — while roster actions fired on click there was nothing to lose, so the
+  // host's close/step guard only had to know about match fields. Now a close or a ‹ / › with a
+  // staged removal on screen would silently throw it away, so the guard ships in the same commit
+  // as the batching. The Gameday panel blocks Close and both match arrows on this flag.
+  const unsaved = changed.length + pendingN;
+  useEffect(() => { onDirtyChange?.(unsaved > 0); }, [unsaved, onDirtyChange]);
+
+  // ...and the same guard for leaving the PAGE, which the host cannot see: a full unload
+  // (beforeunload) and an in-app link click, which App Router navigates without unloading.
+  useEffect(() => {
+    if (unsaved === 0 || typeof window === "undefined") return;
+    const onUnload = (e: BeforeUnloadEvent) => { e.preventDefault(); e.returnValue = ""; };
+    const onClick = (e: MouseEvent) => {
+      if (e.defaultPrevented || e.button !== 0 || e.metaKey || e.ctrlKey || e.shiftKey || e.altKey) return;
+      const a = (e.target as HTMLElement | null)?.closest?.("a[href]") as HTMLAnchorElement | null;
+      if (!a || a.target === "_blank" || a.hasAttribute("download")) return;
+      if (a.getAttribute("href")?.startsWith("#")) return;
+      if (!window.confirm(`You have ${unsaved} unsaved change${unsaved === 1 ? "" : "s"} on this match. Leaving discards ${unsaved === 1 ? "it" : "them"} — nothing has been sent.\n\nLeave anyway?`)) {
+        e.preventDefault(); e.stopPropagation();
+      }
+    };
+    window.addEventListener("beforeunload", onUnload);
+    document.addEventListener("click", onClick, true); // capture: ahead of the router's own handler
+    return () => { window.removeEventListener("beforeunload", onUnload); document.removeEventListener("click", onClick, true); };
+  }, [unsaved]);
   const isDirty = (k: string) => changed.includes(k);
   const secDirty = (keys: string[]) => keys.some((k) => changed.includes(k));
 
@@ -401,7 +412,16 @@ export default function MatchPanel({ matchId, env = "production", onDirtyChange 
     return null;
   }, [cur]);
 
-  const teamCount = Array.isArray(orig?.teams) ? orig!.teams!.length : 0;
+  // The EFFECTIVE team count — the pending one if the operator has chosen a different shape, else
+  // what the server last said. SPOTS derives capacity and the rung field from this, so the derived
+  // numbers describe the match as it will be after Save rather than as it is now.
+  // TWO COUNTS, FROM TWO PAYLOADS, DELIBERATELY. SPOTS derives capacity and the rung field from the
+  // MATCH detail; the TEAMS section draws the roster route's team rows. They agree in production,
+  // but each section reads what it renders — a picker driven by a payload it does not draw is how
+  // you end up offering a team that is not on screen.
+  const committedTeamCount = Array.isArray(orig?.teams) ? orig!.teams!.length : 0;
+  const teamCount = norm.teamCount ?? committedTeamCount;
+  const rosterTeamCount = norm.teamCount ?? (roster?.teams.length ?? committedTeamCount);
 
   // The RUNG this team count writes. 2 and 4 have dedicated size fields; 3 has none (the API models
   // only maxTeamSize2Team / maxTeamSize4Team), so a 3-team match's capacity lives in maxPlayerCount
@@ -417,10 +437,84 @@ export default function MatchPanel({ matchId, env = "production", onDirtyChange 
     if (rungKey) setField(rungKey, total);
   };
 
+  // ── ONE roster write, then the RE-READ that decides its verdict ─────────────────────────────────
+  // A 2xx is not proof. Every kind is judged against the roster the server returns AFTERWARDS, never
+  // against the status code — teamNumbers in particular is write-only and absent from every GET, so
+  // the only evidence it took is the number of team rows that come back.
+  const runRosterWrite = async (w: PlannedWrite, saveId: string): Promise<{ verdict: "LANDED" | "FAILED" | "NOT APPLIED" | "UNKNOWN"; detail?: string }> => {
+    const op: Record<string, unknown> =
+      w.kind === "shape" ? { kind: "shape", fields: w.fields }
+      : w.kind === "move" ? { kind: "move", userMatchId: w.umId, team: w.team, playerNumber: w.playerNumber }
+      : w.kind === "remove" ? { kind: "remove", userMatchId: w.umId }
+      : { kind: "teams", teamId: w.teamId, fields: w.fields };
+    const r = await rosterPost({ ...op, saveId }, w.label);
+    if (!r) return { verdict: "UNKNOWN", detail: "no answer from the server — reload before acting" };
+    if (!r.ok) return { verdict: "FAILED", detail: String(r.j.error ?? "rejected") };
+
+    const fresh = await loadRoster(); // THE RE-READ
+    if (!fresh) return { verdict: "UNKNOWN", detail: "the write returned 2xx but the re-read failed" };
+    const took =
+      w.kind === "shape" ? fresh.teams.length === w.fields.teamNumbers
+      : w.kind === "move" ? fresh.players.some((p) => p.umId === w.umId && p.team === w.team && p.playerNumber === w.playerNumber)
+      : w.kind === "remove" ? !fresh.players.some((p) => p.umId === w.umId)
+      : fresh.teams.find((t) => t.id === w.teamId)?.name === w.fields.name;
+    if (took) return { verdict: "LANDED" };
+    return {
+      verdict: "NOT APPLIED",
+      detail: w.kind === "shape"
+        ? `the re-read shows ${fresh.teams.length} team(s), not ${w.fields.teamNumbers}`
+        : "the server accepted it (2xx) but a re-read shows it did not take",
+    };
+  };
+
   const doSave = async () => {
-    if (!orig || saving || changed.length === 0) return;
-    setSaving(true); setToast(null);
+    if (!orig || saving) return;
+    if (changed.length === 0 && pendingN === 0) return;
+    setSaving(true); setToast(null); setWriteResults([]);
+    let rosterLanded = 0;
+    // CAPTURE THE MATCH DIFF FIRST. The roster batch below re-reads the match, and a re-read
+    // reseeds `cur` from the server — which would silently discard the staged field edits before
+    // they were ever sent. Taking the diff up front means what Save promised is what Save sends.
     const changes = pick(cur, changed);
+
+    // ── ROSTER FIRST, IN ORDER, ONE AT A TIME ────────────────────────────────────────────────────
+    // Team count leads because a move to team 3 is invalid while the match still has two teams.
+    // We STOP at the first write that does not land, and we do NOT auto-revert what already did —
+    // a revert is another write that can also fail, and a failed revert on a half-applied batch
+    // leaves nobody able to say what is true. What landed stays; what did not stays PENDING, on
+    // screen, for a deliberate retry. Writes never retry on their own.
+    if (pendingN > 0) {
+      const saveId = crypto.randomUUID();
+      const plan = savePlan(pending, origin);
+      const results: typeof writeResults = [];
+      let stopped = false;
+      for (const w of plan) {
+        const res = await runRosterWrite(w, saveId);
+        results.push({ label: w.label, ...res });
+        setWriteResults([...results]);
+        if (res.verdict !== "LANDED") { stopped = true; break; }
+        rosterLanded++;
+        setPending((p) => clearApplied(p, w));   // forget an intention that is now reality
+      }
+      if (stopped) {
+        const landed = results.filter((r) => r.verdict === "LANDED").length;
+        setToast(
+          `Stopped after ${results.length} of ${plan.length} write(s). ${landed} LANDED and ${landed === 1 ? "is" : "are"} not undone — ` +
+          `a revert is another write that can also fail. The rest are still pending below; nothing was retried.`);
+        setSaving(false);
+        return;   // the staged MATCH FIELDS are not sent either — stop means stop
+      }
+      setPending(emptyPending());
+      // Only re-read the match here when there is nothing staged to send: `load()` reseeds `cur`,
+      // and the PUT below does its own re-read anyway.
+      if (changed.length === 0) await load();
+    }
+
+    if (changed.length === 0) {
+      setToast(`All ${rosterLanded} roster write(s) LANDED (each confirmed by a re-read).`);
+      setSaving(false);
+      return;
+    }
     // Money fields staged as cents already; nothing to convert here.
     const headers = await authHeaders();
     if (!headers) { setToast("No active session — sign in again."); setSaving(false); return; }
@@ -450,14 +544,18 @@ export default function MatchPanel({ matchId, env = "production", onDirtyChange 
     }
   };
 
+  // REVERT DISCARDS PENDING STATE AND ISSUES NO REQUEST. It is not an undo: it cannot take back a
+  // write, because taking one back would mean issuing another write, which can fail in its own
+  // right. It throws away intentions that were never sent — nothing more. The copy says exactly
+  // that, so nobody reaches for it expecting it to reverse something that already landed.
   const doRevert = () => {
     if (!orig) return;
-    // If any TEAMS action fired this session, Revert must NAME what it will NOT undo — the whole risk
-    // of Step 2 is someone removing a player, hitting Revert, and believing they took it back.
+    // Adds are the one control here that still fires on click. If any fired this session, Revert
+    // must NAME what it will not undo, rather than letting the word imply more than it does.
     if (immediateOps.length > 0 && typeof window !== "undefined") {
       const okd = window.confirm(
-        `Revert clears the ${changed.length} unsaved match-field change${changed.length === 1 ? "" : "s"} above.\n\n` +
-        `It does NOT undo the ${immediateOps.length} team/roster change${immediateOps.length === 1 ? "" : "s"} you already saved this session — those fired immediately on their own endpoints and cannot be taken back here:\n` +
+        `Revert discards your ${changed.length + pendingN} unsaved change${changed.length + pendingN === 1 ? "" : "s"} and sends nothing.\n\n` +
+        `It does NOT undo the ${immediateOps.length} add${immediateOps.length === 1 ? "" : "s"} that already fired this session — those went to the server on click and cannot be taken back here:\n` +
         `• ${immediateOps.slice(-6).join("\n• ")}\n\nContinue?`);
       if (!okd) return;
     }
@@ -465,6 +563,10 @@ export default function MatchPanel({ matchId, env = "production", onDirtyChange 
     for (const k of STAGED_KEYS) next[k] = orig[k] ?? null;
     setCur(next);
     setWhen(orig.startDate ? parseWall(orig.startDate) : { date: "", time: "" });
+    setPending(emptyPending());
+    setTeamDraft(Object.fromEntries((roster?.teams ?? []).map((t) => [t.id, t.name])));
+    setMovePick(null);
+    setWriteResults([]);
     setDiffOpen(false);
     setToast(null);
   };
@@ -588,12 +690,15 @@ export default function MatchPanel({ matchId, env = "production", onDirtyChange 
                 anyway and shows the TRUE stored total rather than rounding it to something the picker
                 could say. */}
             <div className="mp-grid">
-              <div className="mp-f"><span className="mp-lb">TEAMS <em>fires immediately</em></span>
+              {/* ONE team-count control for the whole panel. This picker and the one in TEAMS below
+                  set the SAME pending value — two controls that disagreed about the shape of the
+                  match is exactly the drift worth avoiding. Neither fires anything. */}
+              <div className="mp-f"><span className="mp-lb">TEAMS <em>{norm.teamCount != null ? "pending" : "staged"}</em></span>
                 <div className="mp-seg" role="group" aria-label="Team count" data-testid="mp-teams-seg">
                   {[2, 3, 4].map((n) => (
                     <button key={n} type="button" data-testid={`mp-teams-${n}`} data-on={teamCount === n ? "true" : "false"}
                       aria-pressed={teamCount === n} disabled={!!opBusy}
-                      className={teamCount === n ? "on" : ""} onClick={() => void changeTeamCount(n)}>{n}</button>
+                      className={teamCount === n ? "on" : ""} onClick={() => stageTeamCount(n)}>{n}</button>
                   ))}
                 </div>
               </div>
@@ -622,7 +727,6 @@ export default function MatchPanel({ matchId, env = "production", onDirtyChange 
                 </span>
               </div>
             </div>
-            {countResult && <p className="mp-hint" data-testid="mp-teamcount-result" data-outcome={countResult.split(" ")[0]}>{countResult}</p>}
             <p className="mp-hint">
               {/* THESE ARE TOTALS — the trap this note exists for. 4 × 9 sends 36, not 9. */}
               These are TOTALS, not per-side: 4 teams × 9 sends <b>36</b>, 2 × 11 sends <b>22</b>.
@@ -631,7 +735,7 @@ export default function MatchPanel({ matchId, env = "production", onDirtyChange 
                 : teamCount === 2 || teamCount === 4
                   ? `Saving writes maxPlayerCount and maxTeamSize${teamCount}Team only — the other rung is the alternate configuration the auto-bump ladder uses and is never touched.`
                   : "Team count is unknown, so only maxPlayerCount is written."}
-              {" "}Changing TEAMS fires immediately and the server reassigns players; the size is staged and lands on Save.
+              {" "}Both TEAMS and the size are staged and land on Save. Team count is written FIRST, before any roster move — a move to team 3 is rejected while the match still has two teams.
             </p>
           </Section>
 
@@ -703,37 +807,41 @@ export default function MatchPanel({ matchId, env = "production", onDirtyChange 
               <textarea data-testid="mp-intro" value={String(cur.managerIntro ?? "")} className={isDirty("managerIntro") ? "mp-chg" : ""} onChange={(e) => setField("managerIntro", e.target.value)} /></label>
           </Section>
 
-          {/* ── TEAMS (Step 2) — the IMMEDIATE half. Deliberately NOT another accordion: a red-edged
-             block, its own banner, so it never reads like the six staged sections above. Save and
-             Revert do not reach anything in here. ── */}
-          <div className="mp-teams" data-testid="mp-teams">
-            <div className="mp-teams-hd">
-              <span className="mp-teams-title">TEAMS · ROSTER · TEAM COUNT</span>
-              <span className="mp-immbadge">SAVES IMMEDIATELY</span>
-            </div>
-            <div className="mp-immbanner" data-testid="mp-immediate-banner">
-              <b>These changes save as you make them.</b> Team renames, roster moves and the team count fire the moment you click — on their own endpoints. <b>Save and Revert do not apply to them.</b>
-            </div>
-
+          {/* ── TEAMS · ROSTER · TEAM COUNT — a staged section like every other one ────────────────
+             It was a red-edged block with a SAVES IMMEDIATELY badge and a banner explaining that
+             Save and Revert did not reach it. All three are gone, because the thing they warned
+             about is gone: these edits now stage and land on Save with everything else. ── */}
+          <Section title="TEAMS · ROSTER · TEAM COUNT" dirty={pendingN > 0}>
+            <div data-testid="mp-teams">
             {rosterErr ? <div className="mp-err" data-testid="mp-teams-error">Couldn’t load teams: {rosterErr}</div>
              : !roster ? <div className="mp-loading" data-testid="mp-teams-loading">Loading teams…</div>
              : <>
               {opToast && <div className={"mp-optoast" + (opToast.bad ? " bad" : "")} data-testid="mp-optoast">{opToast.text}</div>}
 
-              {/* TEAM COUNT 2 ⇄ 4 — write-only teamNumbers; verdict comes from a re-read of teams[].length */}
+              {/* TEAM COUNT — the consequence is stated BEFORE the click, not in a dialog after it.
+                  Same pattern as the manager-pay screen: the sentence that tells you what this does
+                  to real people is on screen while you are still deciding. */}
               <div className="mp-countrow">
                 <span className="mp-lb" style={{ marginBottom: 0 }}>TEAM COUNT</span>
                 <div className="mp-countbtns">
-                  {[2, 4].map((n) => (
-                    <button key={n} type="button" data-testid={`mp-teamcount-${n}`} className={"mp-cbtn" + (roster.teams.length === n ? " on" : "")}
-                      disabled={!!opBusy || roster.teams.length === n} onClick={() => void changeTeamCount(n)}>{n} teams</button>
+                  {[2, 3, 4].map((n) => (
+                    <button key={n} type="button" data-testid={`mp-teamcount-${n}`}
+                      className={"mp-cbtn" + (rosterTeamCount === n ? " on" : "") + (norm.teamCount === n ? " pend" : "")}
+                      aria-pressed={rosterTeamCount === n} disabled={!!opBusy} onClick={() => stageTeamCount(n)}>{n} teams</button>
                   ))}
                 </div>
-                <span className="mp-help" style={{ marginTop: 0, marginLeft: "auto" }}>now <b>{roster.teams.length}</b></span>
+                <span className="mp-help" style={{ marginTop: 0, marginLeft: "auto" }}>
+                  now <b>{roster.teams.length}</b>{norm.teamCount != null && <> → <b data-testid="mp-teamcount-pending">{norm.teamCount}</b> on Save</>}
+                </span>
               </div>
-              {countResult && <div className="mp-note info" data-testid="mp-teamcount-result">{countResult}</div>}
+              <ul className="mp-conseq" data-testid="mp-teamcount-consequence">
+                {[2, 3, 4].filter((n) => n !== roster.teams.length).map((n) => {
+                  const line = teamCountConsequence(origin, pending, n);
+                  return line ? <li key={n} data-n={n} data-chosen={norm.teamCount === n ? "true" : "false"}><b>{n} teams:</b> {line}</li> : null;
+                })}
+              </ul>
 
-              {/* ADD — search id/email, then place onto a team; fires immediately */}
+              {/* ADD — the one control here that still fires on click. It says so on itself. */}
               <div className="mp-addrow">
                 <div className="mp-addtop">
                   <input data-testid="mp-add-search" className="mp-addsearch" value={q} placeholder="Add a player — search name or email" onChange={(e) => setQ(e.target.value)} />
@@ -749,6 +857,7 @@ export default function MatchPanel({ matchId, env = "production", onDirtyChange 
                   ))}</div>
                 )}
                 {pendingAdd && <span className="mp-addpending" data-testid="mp-add-pending">Adding <b>{pendingAdd.fake ? "a FAKE player" : pendingAdd.name}</b> — pick a team →<button type="button" className="mp-x" onClick={() => setPendingAdd(null)}>cancel</button></span>}
+                <span className="mp-help" data-testid="mp-add-immediate-note">Adding sends straight away — it is the one control here that does not wait for Save.</span>
               </div>
 
               {!!roster.hidden?.total && (
@@ -765,38 +874,89 @@ export default function MatchPanel({ matchId, env = "production", onDirtyChange 
                 </p>
               )}
 
-              {/* the teams themselves — rename + roster. No price control, no lock control (not asked for). */}
-              <div className="mp-teamgrid" data-testid="mp-teamgrid">
+              {/* THE TEAMS. 2 x 2 at four teams, never four abreast: a column narrow enough to fit
+                  four across cannot hold a name and a phone number at any panel width worth having.
+                  The columns are minmax(0,1fr) so they can actually SHRINK — with a bare 1fr the
+                  old per-destination move buttons set a min-content floor and pushed teams 3 and 4
+                  clean off the side of the panel. */}
+              <div className="mp-teamgrid" data-testid="mp-teamgrid" data-teams={roster.teams.length}>
                 {roster.teams.map((t) => {
-                  const roster2 = roster; // narrow
-                  const members = roster2.players.filter((p) => p.team === t.teamNumber);
+                  const rows = sortedTeam(origin, pending, t.teamNumber);
+                  const live = rows.filter((r) => !r.removed);
                   const draft = teamDraft[t.id] ?? "";
-                  const canRename = draft.trim() !== "" && draft.trim() !== t.name;
+                  const renamePending = norm.names[t.id] != null;
                   return (
                     <section className="mp-team" data-testid="mp-team" data-teamnumber={t.teamNumber} key={t.id}>
                       <div className="mp-teamtop">
                         <span className="mp-teamname" data-testid={`mp-tname-committed-${t.teamNumber}`}>{t.name}</span>
-                        <span className="mp-teamcap">{members.length}{roster2.shape?.perTeam ? `/${roster2.shape.perTeam}` : ""}</span>
+                        <span className="mp-teamcap">{live.length}{roster.shape?.perTeam ? `/${roster.shape.perTeam}` : ""}</span>
                       </div>
                       <div className="mp-renamerow">
-                        <input data-testid={`mp-tname-${t.teamNumber}`} className="mp-tnameinput" value={draft}
-                          aria-label={`Rename team ${t.teamNumber}`} onChange={(e) => setTeamDraft((d) => ({ ...d, [t.id]: e.target.value }))} />
-                        <button type="button" data-testid={`mp-rename-${t.teamNumber}`} className="mp-mini" disabled={!canRename || !!opBusy}
-                          onClick={() => void renameTeam(t.id, t.teamNumber)}>Rename</button>
+                        <input data-testid={`mp-tname-${t.teamNumber}`} className={"mp-tnameinput" + (renamePending ? " mp-chg" : "")} value={draft}
+                          aria-label={`Rename team ${t.teamNumber}`} onChange={(e) => stageRename(t.id, e.target.value)} />
+                        {renamePending && <span className="mp-pendtag" data-testid={`mp-rename-pending-${t.teamNumber}`}>PENDING</span>}
                       </div>
                       {pendingAdd && <button type="button" data-testid={`mp-add-to-${t.teamNumber}`} className="mp-addto" disabled={!!opBusy} onClick={() => void addPlayer(t.teamNumber)}>+ Add {pendingAdd.fake ? "fake player" : pendingAdd.name} here</button>}
                       <ul className="mp-players">
-                        {members.length === 0 && <li className="mp-empty">no players</li>}
-                        {members.map((p) => (
-                          <li className="mp-player" data-testid="mp-player" data-um={p.umId} data-fake={p.fake ? "1" : "0"} key={p.umId}>
-                            <span className="mp-pnum">{p.playerNumber}</span>
-                            <span className="mp-pname">{p.name}{p.fake && <span className="mp-fake-tag" data-testid="mp-fake-tag">FAKE</span>}</span>
-                            <span className="mp-pacts">
-                              {roster2.teams.filter((o) => o.teamNumber !== t.teamNumber).map((o) => (
-                                <button key={o.id} type="button" data-testid={`mp-move-${p.umId}-${o.teamNumber}`} className="mp-mini" title={`Move to ${o.name}`} disabled={!!opBusy} onClick={() => void movePlayer(p, o.teamNumber)}>→ {o.teamNumber}</button>
-                              ))}
-                              <button type="button" data-testid={`mp-remove-${p.umId}`} className="mp-mini danger" title={`Remove ${p.name}`} disabled={!!opBusy} onClick={() => void removePlayer(p)}>✕</button>
+                        {rows.length === 0 && <li className="mp-empty">no players</li>}
+                        {rows.map(({ row: p, spot, moved, removed, collision }) => (
+                          <li className={"mp-player" + (moved ? " pend-move" : "") + (removed ? " pend-remove" : "") + (collision ? " clash" : "")}
+                            data-testid="mp-player" data-um={p.umId} data-fake={p.fake ? "1" : "0"}
+                            data-spot={spot == null ? "" : spot} data-pending={removed ? "remove" : moved ? "move" : ""}
+                            data-collision={collision ? "true" : "false"} key={p.umId}>
+                            <span className="mp-pnum" data-testid="mp-spot">{spot ?? "—"}</span>
+                            {/* NAME then PHONE. Two lines: a phone number on the same line as a name
+                                is what crushed both. Display only — see the roster route: it never
+                                reaches change_log, where the rule is last-4 via phoneLast4(). */}
+                            <span className="mp-pident">
+                              <span className="mp-pname" data-testid="mp-pname">{p.name}{p.fake && <span className="mp-fake-tag" data-testid="mp-fake-tag">FAKE</span>}</span>
+                              <span className="mp-pphone" data-testid="mp-pphone">{p.phone ?? (p.fake ? "fake — no phone" : "no phone on file")}</span>
                             </span>
+                            <span className="mp-pacts">
+                              {collision && <span className="mp-clashtag" data-testid="mp-collision">SAME SPOT</span>}
+                              {removed ? <span className="mp-pendtag rm" data-testid="mp-pending-remove">REMOVING</span>
+                               : moved && <span className="mp-pendtag" data-testid="mp-pending-move">MOVING</span>}
+                              {/* ONE move control at ANY team count. Four teams used to mean three
+                                  destination buttons plus a x on every row, which is what crushed
+                                  the names to "L", "T", "G". */}
+                              <button type="button" data-testid={`mp-move-${p.umId}`} className="mp-mini" disabled={removed}
+                                aria-expanded={movePick?.umId === p.umId} title={`Move ${p.name}`}
+                                onClick={() => setMovePick((m) => (m?.umId === p.umId ? null : { umId: p.umId, team: null }))}>Move</button>
+                              <button type="button" data-testid={`mp-remove-${p.umId}`} className={"mp-mini" + (removed ? "" : " danger")}
+                                title={removed ? `Keep ${p.name}` : `Remove ${p.name}`} onClick={() => toggleRemove(p)}>{removed ? "Undo" : "\u2715"}</button>
+                            </span>
+                            {movePick?.umId === p.umId && (
+                              // TWO STEPS, the same shape as the check-in screen: which team, then
+                              // that team's spots. An open spot and a swap are the same gesture.
+                              <div className="mp-movepick" data-testid="mp-movepick" data-step={movePick.team == null ? "team" : "spot"}>
+                                {movePick.team == null ? (
+                                  <>
+                                    <span className="mp-picklb">Move to which team?</span>
+                                    <span className="mp-pickrow">
+                                      {roster.teams.filter((o) => o.teamNumber <= rosterTeamCount).map((o) => (
+                                        <button key={o.id} type="button" data-testid={`mp-movepick-team-${o.teamNumber}`} className="mp-mini"
+                                          onClick={() => setMovePick({ umId: p.umId, team: o.teamNumber })}>{o.teamNumber} · {o.name}</button>
+                                      ))}
+                                    </span>
+                                  </>
+                                ) : (
+                                  <>
+                                    <span className="mp-picklb">Which spot on team {movePick.team}? <em>an occupied spot swaps the two</em></span>
+                                    <span className="mp-pickrow">
+                                      {spotsOfTeam(origin, pending, movePick.team, roster.shape?.perTeam || 0).map((sp) => (
+                                        <button key={sp.n} type="button" data-testid={`mp-movepick-spot-${sp.n}`} className={"mp-spotbtn" + (sp.who ? " taken" : "")}
+                                          data-occupied={sp.who ? "true" : "false"}
+                                          title={sp.who ? `Swap with ${sp.who.name}` : `Open spot ${sp.n}`}
+                                          onClick={() => stageMove(p as EditRow, movePick.team!, sp.n)}>
+                                          <b>{sp.n}</b>{sp.who && <i>{sp.who.name}</i>}
+                                        </button>
+                                      ))}
+                                    </span>
+                                    <button type="button" className="mp-x" data-testid="mp-movepick-back" onClick={() => setMovePick({ umId: p.umId, team: null })}>back</button>
+                                  </>
+                                )}
+                              </div>
+                            )}
                           </li>
                         ))}
                       </ul>
@@ -805,7 +965,8 @@ export default function MatchPanel({ matchId, env = "production", onDirtyChange 
                 })}
               </div>
             </>}
-          </div>
+            </div>
+          </Section>
 
           {/* ── CANCEL (Part C) — the danger zone. Separate, immediate, irreversible. ── */}
           <div className="mp-danger" data-testid="mp-danger">
@@ -833,12 +994,24 @@ export default function MatchPanel({ matchId, env = "production", onDirtyChange 
 
         <div className="mp-foot">
           {toast && <span className="mp-note info" data-testid="mp-toast">{toast}</span>}
+          {/* PER WRITE, NOT PER SAVE. A batch that stops half-way has no single verdict: some of it
+              landed and is not coming back, and the rest never left. One line each. */}
+          {writeResults.length > 0 && (
+            <ul className="mp-wres" data-testid="mp-write-results">
+              {writeResults.map((r, i) => (
+                <li key={i} data-testid="mp-write-result" data-verdict={r.verdict}>
+                  <span className="v">{r.verdict}</span>
+                  <span>{r.label}{r.detail ? ` — ${r.detail}` : ""}</span>
+                </li>
+              ))}
+            </ul>
+          )}
           <div className="mp-diffbox">
-            <button type="button" className="mp-diffhd" data-testid="mp-diffhd" aria-expanded={diffOpen} disabled={changed.length === 0} onClick={() => setDiffOpen((o) => !o)}>
-              <span className="mp-caret">{changed.length ? (diffOpen ? "▾" : "▸") : "·"}</span>
-              <span data-testid="mp-diffcount">{changed.length ? `${changed.length} change${changed.length === 1 ? "" : "s"} will be sent` : "No changes"}</span>
+            <button type="button" className="mp-diffhd" data-testid="mp-diffhd" aria-expanded={diffOpen} disabled={unsaved === 0} onClick={() => setDiffOpen((o) => !o)}>
+              <span className="mp-caret">{unsaved ? (diffOpen ? "▾" : "▸") : "·"}</span>
+              <span data-testid="mp-diffcount">{unsaved ? `${unsaved} change${unsaved === 1 ? "" : "s"} will be sent` : "No changes"}</span>
             </button>
-            {changed.length > 0 && diffOpen && (
+            {unsaved > 0 && diffOpen && (
               <ul className="mp-difflist" data-testid="mp-diff">
                 {changed.map((k) => (
                   <li key={k} data-testid="mp-diff-item" data-key={k}>
@@ -846,13 +1019,24 @@ export default function MatchPanel({ matchId, env = "production", onDirtyChange 
                     <span className="mp-to">{shownVal(k, cur[k], managers)}</span>
                   </li>
                 ))}
+                {/* the roster writes, IN THE ORDER THEY WILL BE SENT — team count first */}
+                {savePlan(pending, origin).map((w, i) => (
+                  <li key={`w${i}`} data-testid="mp-diff-item" data-key={`roster:${w.kind}`}>
+                    <span className="mp-k">{i + 1}.</span>{" "}
+                    <span className="mp-to">{w.label}</span>
+                  </li>
+                ))}
               </ul>
             )}
           </div>
           <div className="mp-btns">
             <span className="mp-sp" />
-            <button type="button" className="mp-btn" data-testid="mp-revert" disabled={changed.length === 0} onClick={doRevert}>Revert</button>
-            <button type="button" className="mp-btn mp-pri" data-testid="mp-save" disabled={changed.length === 0 || saving} onClick={() => void doSave()}>{saving ? "Saving…" : "Save"}</button>
+            {/* REVERT SENDS NOTHING. It discards intentions; it cannot take back a write, because
+                taking one back would BE another write. The label says so. */}
+            <button type="button" className="mp-btn" data-testid="mp-revert" disabled={unsaved === 0} onClick={doRevert}
+              title="Discards every unsaved change on this panel. Sends no request — it cannot undo anything already saved.">Revert <em className="mp-btnsub">discards, sends nothing</em></button>
+            <button type="button" className="mp-btn mp-pri" data-testid="mp-save" disabled={unsaved === 0 || saving} onClick={() => void doSave()}>
+              {saving ? "Saving…" : unsaved ? `Save · ${unsaved} change${unsaved === 1 ? "" : "s"}` : "Save"}</button>
           </div>
         </div>
       </div>
@@ -899,6 +1083,9 @@ const CSS = `
 .mp *{box-sizing:border-box}
 .mp [hidden]{display:none !important}
 .mp{--ink:#0e1a13;--ink2:#3d5349;--ink3:#4a6157;--line:#dde6e1;--line2:#cbd8d1;--card:#fff;--grn:#146c43;--focus:#0b6bcb;--red:#a4231e;font:14px/1.45 ui-sans-serif,-apple-system,"Segoe UI",Roboto,Helvetica,Arial,sans-serif;color:var(--ink)}
+/* ITEM 4 — WIDER AT LARGE VIEWPORTS. 620px was set when a team column held a name and nothing
+   else; a name PLUS a phone number needs the room, and at four teams there are two columns of
+   them. The phone breakpoint below still collapses the grid to one column. */
 .mp-panel{max-width:620px;width:100%;background:var(--card);border:1px solid var(--line);border-radius:12px;display:flex;flex-direction:column;min-height:0;overflow:hidden}
 .mp-head{padding:13px 16px;border-bottom:1px solid var(--line);background:#fafcfb}
 .mp-name{font-size:18px;font-weight:800;letter-spacing:-.02em;white-space:nowrap;overflow:hidden;text-overflow:ellipsis}
@@ -973,57 +1160,96 @@ const CSS = `
 .mp-k{font-weight:800}
 .mp-to{color:var(--grn);font-weight:700}
 .mp-btns{display:flex;gap:9px;align-items:center}
+.mp-btnsub{font-style:normal;font-weight:600;font-size:10px;color:var(--ink3);margin-left:6px}
 .mp-sp{flex:1 1 auto}
 .mp-btn{border:1px solid var(--line2);background:var(--card);border-radius:9px;padding:0 14px;font:inherit;font-weight:700;cursor:pointer;color:var(--ink2);min-height:40px}
 .mp-btn:disabled{opacity:.5;cursor:not-allowed}
 .mp-btn.mp-pri{background:#12301f;border-color:#12301f;color:#fff}
 .mp-err{padding:16px;color:var(--red);font-size:13px}
 .mp-loading{padding:16px;color:var(--ink3)}
-/* ── TEAMS (immediate half) — red-edged so it never reads as one of the staged accordions ── */
-.mp-teams{margin:14px 16px 4px;border:1px solid #e6b7b0;border-left:4px solid #c0392b;border-radius:11px;background:#fdf7f6;overflow:hidden}
-.mp-teams-hd{display:flex;align-items:center;gap:9px;padding:11px 13px;border-bottom:1px solid #eecdc8;background:#fbeeec}
-.mp-teams-title{font-size:10.5px;font-weight:800;letter-spacing:.12em;color:#7c241b}
-.mp-immbadge{margin-left:auto;font-size:9.5px;font-weight:800;letter-spacing:.07em;color:#fff;background:#c0392b;border-radius:5px;padding:2px 7px}
-.mp-immbanner{font-size:11.5px;line-height:1.45;color:#6b2019;padding:10px 13px;border-bottom:1px solid #eecdc8;background:#fdf1ef}
-.mp-immbanner b{font-weight:800}
+/* ── TEAMS · ROSTER · TEAM COUNT ─────────────────────────────────────────────────────────────────
+   NO RED. Every rule that painted this section as a hazard is gone: the red left edge and border
+   (.mp-teams), the red header band (.mp-teams-hd / .mp-teams-title), the SAVES IMMEDIATELY pill
+   (.mp-immbadge) and the red banner (.mp-immbanner). They existed to warn that Save and Revert did
+   not reach these controls, and that is no longer true. What is left is the neutral palette every
+   other section uses, and the pink-tinted borders inside it are neutralised to the shared --line. */
 .mp-optoast{margin:11px 13px 0;font-size:12px;padding:8px 11px;border-radius:8px;background:#e6f3ea;border:1px solid #a9d3ba;color:#14512f}
 .mp-optoast.bad{background:#fbe7e4;border-color:#e6b0a8;color:#8a2018}
-.mp-countrow{display:flex;align-items:center;gap:10px;padding:12px 13px 4px}
-.mp-countbtns{display:inline-flex;border:1px solid #d9c3bf;border-radius:8px;overflow:hidden}
-.mp-cbtn{border:0;background:#fff;font:inherit;font-weight:700;color:#5a4b48;padding:8px 14px;min-height:38px;cursor:pointer}
-.mp-cbtn + .mp-cbtn{border-left:1px solid #d9c3bf}
-.mp-cbtn.on{background:#c0392b;color:#fff}
+.mp-countrow{display:flex;align-items:center;gap:10px;padding:4px 0}
+.mp-countbtns{display:inline-flex;border:1px solid var(--line2);border-radius:8px;overflow:hidden}
+.mp-cbtn{border:0;background:#fff;font:inherit;font-weight:700;color:var(--ink2);padding:8px 14px;min-height:38px;cursor:pointer}
+.mp-cbtn + .mp-cbtn{border-left:1px solid var(--line2)}
+.mp-cbtn.on{background:#e7efe9;color:var(--ink)}
+.mp-cbtn.pend{background:var(--grn);color:#fff}
 .mp-cbtn:disabled:not(.on){opacity:.55;cursor:not-allowed}
-.mp-teams .mp-note.info{margin:10px 13px 0}
-.mp-addrow{position:relative;padding:10px 13px 2px}
+/* the consequence, stated BEFORE the click */
+.mp-conseq{list-style:none;margin:6px 0 2px;padding:0;display:flex;flex-direction:column;gap:4px}
+.mp-conseq li{font-size:11.5px;line-height:1.45;color:var(--ink3);border-left:2px solid var(--line2);padding:2px 0 2px 8px}
+.mp-conseq li[data-chosen="true"]{border-left-color:var(--grn);color:var(--ink2);font-weight:600}
+.mp-conseq b{font-weight:800;color:var(--ink2)}
+.mp-addrow{position:relative;padding:10px 0 2px}
 .mp-addtop{display:flex;gap:7px;align-items:center}
-.mp-addsearch{flex:1;min-width:0;border:1px solid #d9c3bf;border-radius:9px;padding:9px 11px;font:inherit;font-size:13.5px;background:#fff;min-height:40px}
+.mp-addsearch{flex:1;min-width:0;border:1px solid var(--line2);border-radius:9px;padding:9px 11px;font:inherit;font-size:13.5px;background:#fff;min-height:40px}
 .mp-bulk{display:inline-flex;gap:5px;align-items:center;flex:0 0 auto}
-.mp-bulkin{width:48px;text-align:center;border:1px solid #d9c3bf;border-radius:8px;padding:7px 4px;font:inherit;font-size:13px;background:#fff;min-height:36px}
-.mp-addres{position:absolute;left:13px;right:13px;top:52px;z-index:20;background:#fff;border:1px solid #d9c3bf;border-radius:9px;box-shadow:0 8px 22px rgba(120,30,20,.16);overflow:hidden}
-.mp-addres button{display:block;width:100%;text-align:left;border:0;background:#fff;padding:9px 12px;font:inherit;font-size:13px;border-bottom:1px solid #f1e4e1;cursor:pointer}
-.mp-addres button:last-child{border-bottom:0}.mp-addres button:hover{background:#fbeeec}
-.mp-addpending{display:inline-flex;align-items:center;gap:7px;margin-top:8px;font-size:12px;color:#6b2019}
-.mp-x{border:0;background:none;color:#8a2018;text-decoration:underline;cursor:pointer;font:inherit;font-size:12px;padding:2px 4px}
-.mp-teamgrid{display:grid;grid-template-columns:1fr 1fr;gap:10px;padding:11px 13px 13px}
-.mp-team{border:1px solid #ecd6d2;border-radius:10px;background:#fff;padding:10px;min-width:0}
+.mp-bulkin{width:48px;text-align:center;border:1px solid var(--line2);border-radius:8px;padding:7px 4px;font:inherit;font-size:13px;background:#fff;min-height:36px}
+.mp-addres{position:absolute;left:0;right:0;top:52px;z-index:20;background:#fff;border:1px solid var(--line2);border-radius:9px;box-shadow:0 8px 22px rgba(10,40,26,.16);overflow:hidden}
+.mp-addres button{display:block;width:100%;text-align:left;border:0;background:#fff;padding:9px 12px;font:inherit;font-size:13px;border-bottom:1px solid var(--line);cursor:pointer}
+.mp-addres button:last-child{border-bottom:0}.mp-addres button:hover{background:#eef4f1}
+.mp-addpending{display:inline-flex;align-items:center;gap:7px;margin-top:8px;font-size:12px;color:var(--ink2)}
+.mp-x{border:0;background:none;color:var(--ink2);text-decoration:underline;cursor:pointer;font:inherit;font-size:12px;padding:2px 4px}
+
+/* ITEM 4 — 2 x 2 at four teams, never four abreast, and columns that can actually SHRINK.
+   minmax(0,1fr) is the whole fix for the overflow: a bare 1fr is minmax(AUTO,1fr), so the grid
+   could not go below its content's min-content width and simply ran off the side of the panel. */
+.mp-teamgrid{display:grid;grid-template-columns:repeat(2,minmax(0,1fr));gap:10px;padding:11px 0 4px}
+.mp-team{border:1px solid var(--line);border-radius:10px;background:#fff;padding:10px;min-width:0}
 .mp-teamtop{display:flex;align-items:baseline;gap:8px;margin-bottom:8px}
 .mp-teamname{font-size:14px;font-weight:800;color:var(--ink);white-space:nowrap;overflow:hidden;text-overflow:ellipsis}
 .mp-teamcap{margin-left:auto;font-size:11px;color:var(--ink3);font-variant-numeric:tabular-nums;flex:0 0 auto}
-.mp-renamerow{display:flex;gap:6px;margin-bottom:8px}
-.mp-tnameinput{flex:1;min-width:0;border:1px solid #d9c3bf;border-radius:8px;padding:7px 9px;font:inherit;font-size:13px;background:#fffdfc;min-height:36px}
+.mp-renamerow{display:flex;gap:6px;margin-bottom:8px;align-items:center}
+.mp-tnameinput{flex:1;min-width:0;border:1px solid var(--line2);border-radius:8px;padding:7px 9px;font:inherit;font-size:13px;background:#fff;min-height:36px}
 .mp-tnameinput:focus{outline:2px solid var(--focus);outline-offset:-1px;background:#fff}
-.mp-mini{border:1px solid #d9c3bf;background:#fff;border-radius:7px;padding:0 9px;font:inherit;font-size:12px;font-weight:700;color:#5a4b48;min-height:34px;min-width:34px;cursor:pointer;flex:0 0 auto}
+.mp-mini{border:1px solid var(--line2);background:#fff;border-radius:7px;padding:0 9px;font:inherit;font-size:12px;font-weight:700;color:var(--ink2);min-height:34px;min-width:34px;cursor:pointer;flex:0 0 auto}
 .mp-mini:disabled{opacity:.45;cursor:not-allowed}
-.mp-mini.danger{color:#a4231e;border-color:#e6b7b0}.mp-mini.danger:hover:not(:disabled){background:#fbeeec}
+.mp-mini.danger{color:var(--red);border-color:#e6b7b0}.mp-mini.danger:hover:not(:disabled){background:#fbeeec}
 .mp-addto{width:100%;border:1px dashed #7fb894;background:#eef8f1;color:#14512f;border-radius:8px;padding:8px;font:inherit;font-size:12.5px;font-weight:700;cursor:pointer;margin-bottom:8px}
 .mp-players{list-style:none;margin:0;padding:0;display:flex;flex-direction:column;gap:4px}
 .mp-empty{font-size:12px;color:var(--ink3);padding:4px 2px}
-.mp-player{display:flex;align-items:center;gap:7px;border:1px solid #eef1ef;border-radius:8px;padding:5px 7px;background:#fbfdfc;min-height:40px}
-.mp-pnum{width:18px;height:18px;flex:0 0 18px;border-radius:5px;background:#eef3f0;color:#3a5348;font-size:10px;font-weight:800;display:flex;align-items:center;justify-content:center}
-.mp-pname{flex:1;min-width:0;font-size:13px;white-space:nowrap;overflow:hidden;text-overflow:ellipsis}
+
+/* ITEM 3 — TWO LINES per row: name, then the phone beneath it. flex-wrap lets the move picker
+   occupy a full row of its own beneath the controls rather than squeezing in beside them. */
+.mp-player{display:flex;align-items:center;gap:7px;flex-wrap:wrap;border:1px solid var(--line);border-radius:8px;padding:6px 7px;background:#fbfdfc;min-height:44px}
+.mp-player.pend-move{border-color:#8fbf9f;background:#f2fbf5}
+.mp-player.pend-remove{border-color:#e6b7b0;background:#fdf4f3}
+.mp-player.pend-remove .mp-pident{text-decoration:line-through;opacity:.65}
+.mp-player.clash{border-color:#d9a441;background:#fdf8ee}
+.mp-pnum{width:20px;height:20px;flex:0 0 20px;border-radius:5px;background:#eef3f0;color:#3a5348;font-size:10px;font-weight:800;display:flex;align-items:center;justify-content:center;font-variant-numeric:tabular-nums}
+.mp-pident{flex:1;min-width:0;display:flex;flex-direction:column;gap:1px}
+.mp-pname{font-size:13px;line-height:1.25;white-space:nowrap;overflow:hidden;text-overflow:ellipsis}
+.mp-pphone{font-size:11px;line-height:1.25;color:var(--ink3);font-variant-numeric:tabular-nums;white-space:nowrap;overflow:hidden;text-overflow:ellipsis}
 .mp-fake-tag{font-size:9px;font-weight:800;background:#f2e31d;color:#231f00;border-radius:4px;padding:1px 4px;margin-left:6px;vertical-align:middle}
-.mp-pacts{display:inline-flex;gap:4px;flex:0 0 auto}
+.mp-pacts{display:inline-flex;gap:4px;flex:0 0 auto;align-items:center}
+.mp-pendtag{font-size:9px;font-weight:800;letter-spacing:.06em;background:#e7f3ea;color:#14512f;border:1px solid #a9d3ba;border-radius:4px;padding:2px 5px}
+.mp-pendtag.rm{background:#fbeeec;color:#8a2018;border-color:#e6b7b0}
+.mp-clashtag{font-size:9px;font-weight:800;letter-spacing:.06em;background:#fbf0d8;color:#6b4a09;border:1px solid #dcbc71;border-radius:4px;padding:2px 5px}
+
+/* the two-step move picker — same shape as the check-in screen */
+.mp-movepick{flex:1 0 100%;margin-top:6px;padding:8px;border:1px solid var(--line2);border-radius:8px;background:#f7faf8}
+.mp-picklb{display:block;font-size:11px;font-weight:800;letter-spacing:.05em;color:var(--ink2);margin-bottom:6px}
+.mp-picklb em{font-style:normal;font-weight:600;letter-spacing:0;color:var(--ink3);text-transform:none}
+.mp-pickrow{display:flex;flex-wrap:wrap;gap:5px}
+.mp-spotbtn{display:inline-flex;flex-direction:column;align-items:center;justify-content:center;gap:1px;border:1px solid var(--line2);background:#fff;border-radius:7px;min-height:38px;min-width:38px;padding:3px 7px;font:inherit;cursor:pointer;max-width:96px}
+.mp-spotbtn b{font-size:12px;font-weight:800;color:var(--ink)}
+.mp-spotbtn i{font-style:normal;font-size:9.5px;color:var(--ink3);max-width:84px;white-space:nowrap;overflow:hidden;text-overflow:ellipsis}
+.mp-spotbtn.taken{background:#eef4f1;border-color:#bcd0c6}
+/* per-write outcomes — one line per write, because a batch that stops half-way cannot be
+   summarised by a single verdict */
+.mp-wres{list-style:none;margin:0 0 10px;padding:0;display:flex;flex-direction:column;gap:3px}
+.mp-wres li{display:flex;gap:8px;align-items:baseline;font-size:11.5px;padding:5px 8px;border-radius:7px;background:#f4f7f5;border:1px solid var(--line)}
+.mp-wres li[data-verdict="LANDED"]{background:#eef7f1;border-color:#a9d3ba}
+.mp-wres li[data-verdict="FAILED"],.mp-wres li[data-verdict="NOT APPLIED"]{background:#fbeeec;border-color:#e6b7b0}
+.mp-wres li[data-verdict="UNKNOWN"]{background:#fdf8ee;border-color:#dcbc71}
+.mp-wres .v{font-weight:800;letter-spacing:.04em;flex:0 0 auto;font-size:10px}
 /* ── CANCEL danger zone — the darkest treatment; separate from everything above ── */
 .mp-danger{margin:14px 16px 16px;border:1px solid #d8968f;border-left:4px solid #8a1a12;border-radius:11px;background:#fbeeec;padding:13px}
 .mp-danger-hd{font-size:10.5px;font-weight:800;letter-spacing:.12em;color:#8a1a12;margin-bottom:10px}
@@ -1034,5 +1260,6 @@ const CSS = `
 .mp-cancel-line{font-size:13px;line-height:1.5;color:#5a1611;margin:0 0 12px}
 .mp-cancel-line b{font-weight:800;color:#3d0e0a}
 .mp-cancel-acts{display:flex;gap:9px;justify-content:flex-end;margin-top:12px}
+@media (min-width:1100px){.mp-panel{max-width:860px}}
 @media (max-width:560px){.mp-grid,.mp-grid3{grid-template-columns:1fr}.mp-teamgrid{grid-template-columns:1fr}}
 `;

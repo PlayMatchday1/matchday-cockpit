@@ -514,6 +514,28 @@ matter (getting them wrong targets the wrong record):
   search       GET    /admin/players?email|id&limit&page&sort
 In the roster row: `id` = userMatchId (move, remove), `userId` = playerId (add, fake).
 
+**The roster row carries the player's PHONE.** `p.user.phoneNumber`, a string in
+E.164 (`+15125550123`, length 12). Measured on production over 49 played matches:
+present on **239 of 239 REAL players (100%)** among the rows the panel renders. The
+lower raw figure (240/417) is entirely fake players, which have no phone at all —
+so treat a missing phone on a non-fake row as notable, not normal. The match panel
+displays it; it is **display only**. It must never enter `change_log`, where the
+rule remains last-4 via `phoneLast4()` — the log has different access rules and a
+longer life than a screen. `scripts/roster-edit-model-test.ts` asserts both halves
+(the client's write plan and the POST half of the roster route) and mutates each to
+prove the assertion can fail.
+
+**`playerNumber` comes back in NO PARTICULAR ORDER.** Over the same 49 matches,
+**55 of 95 teams (58%)** were returned NOT ascending — e.g. `[9,6,4,7,2]` and
+`[6,3,1,4,8,7,5]`. Any surface showing a team must sort it. A `null` playerNumber
+must sort LAST, not as zero.
+
+**Duplicate `playerNumber` on one team is a raw-payload artefact, not a real state.**
+21 of 101 teams show one BEFORE filtering, and **0 of 95 after `rosterRowCounts()`** —
+every duplicate came from hidden `WAITING` retry rows. It is still rendered and
+marked where it occurs, because the move control writes `playerNumber` and a rare
+wrong state that draws as normal survives forever.
+
 CONFLICTS with the mockup / Phase-6 inventory (API wins):
   - REMOVE is DELETE /admin/matches/user-matches/{userMatchId}. The inventory's
     DELETE /admin/matches/{id}/players/{playerId} returns 403 USER_NOT_JOINED — so
