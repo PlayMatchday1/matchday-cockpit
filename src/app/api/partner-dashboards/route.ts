@@ -49,6 +49,13 @@ async function fetchAllPartners(supabase: import("@supabase/supabase-js").Supaba
     managerPayBase: (r.manager_pay_base as number | null) ?? null,
     managerPayHigh: (r.manager_pay_high as number | null) ?? null,
     managerPayThreshold: (r.manager_pay_threshold as number | null) ?? null,
+    // Phase 28: these two call sites drive the ADMIN list and the actionable counter, both of
+    // which run the LEGACY payout path only. They carry the pre-0123 defaults so nothing here
+    // can select the rental model by accident — the public dashboard is the one surface that
+    // reads the real columns.
+    payoutModel: ((r.revenue_model as string) === "per_match_minus_manager" ? "PER_MATCH_MINUS_MANAGER" : "REVENUE_SHARE") as PartnerConfig["payoutModel"],
+    payoutSharePct: (r.revenue_share_pct as number) ?? 50,
+    fieldRentalCents: null, matchManagerCents: null, partnerSharePct: null, spotPriceCents: null,
   }));
 }
 

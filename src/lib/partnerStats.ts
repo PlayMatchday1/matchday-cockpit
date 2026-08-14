@@ -4,6 +4,7 @@
 // partner page.
 
 import { createClient, type SupabaseClient } from "@supabase/supabase-js";
+import type { PayoutModel, RentalProfitShareParams } from "./partnerPayoutModel";
 import {
   fetchLegacyMatchRegistrations,
   loadMembershipWindowsByUserId,
@@ -163,6 +164,16 @@ export type PartnerConfig = {
   managerPayBase: number | null;
   managerPayHigh: number | null;
   managerPayThreshold: number | null;
+  // Phase 28 — the EXPLICIT payout selector and the rental-model parameters, in CENTS. `payoutModel`
+  // is derived from revenueModel for every pre-existing row by migration 0123, so the two flat
+  // partners and Crossbar keep the exact behaviour their live payments were computed with; only a
+  // row that opts into RENTAL_PLUS_PROFIT_SHARE takes the new path.
+  payoutModel: PayoutModel;
+  payoutSharePct: number | null;
+  fieldRentalCents: number | null;
+  matchManagerCents: number | null;
+  partnerSharePct: number | null;
+  spotPriceCents: number | null;
 };
 
 // Fetch the partner_dashboards row by slug. Returns null on miss or
@@ -186,6 +197,10 @@ export type PartnerConfig = {
 // Column lists for the partner_dashboards select cascade. FULL includes
 // the migration-0057 revenue-model columns; NO_MODEL drops them (post-
 // 0005, pre-0057); the older tiers live inline in fetchPartnerBySlug.
+// Phase 28 columns are appended to their OWN tier: code deploys before migrations apply, and a
+// named column that does not exist yet fails the whole select. The cascade below falls back.
+const PARTNER_COLS_PAYOUT =
+  "id, venue_id, partner_name, enabled, revenue_share_pct, payment_start_date, payment_day_of_week, payment_cadence, revenue_model, manager_pay_base, manager_pay_high, manager_pay_threshold, payout_model, payout_share_pct, field_rental_cents, match_manager_cents, partner_share_pct, spot_price_cents";
 const PARTNER_COLS_FULL =
   "id, venue_id, partner_name, enabled, revenue_share_pct, payment_start_date, payment_day_of_week, payment_cadence, revenue_model, manager_pay_base, manager_pay_high, manager_pay_threshold";
 const PARTNER_COLS_NO_MODEL =
@@ -217,7 +232,34 @@ function rowToPartnerConfig(row: Record<string, unknown>): PartnerConfig {
     managerPayBase: numOrNull(row.manager_pay_base),
     managerPayHigh: numOrNull(row.manager_pay_high),
     managerPayThreshold: numOrNull(row.manager_pay_threshold),
+    // DEFAULTS THAT PRESERVE TODAY. A row read from a pre-0123 schema has no payout_model, so it
+    // falls back to the model revenueModel already implies — the same behaviour, by a new name.
+    payoutModel: normalisePayoutModel(row.payout_model, revenueModel),
+    payoutSharePct: numOrNull(row.payout_share_pct) ?? Number(row.revenue_share_pct ?? 50),
+    fieldRentalCents: numOrNull(row.field_rental_cents),
+    matchManagerCents: numOrNull(row.match_manager_cents),
+    partnerSharePct: numOrNull(row.partner_share_pct),
+    spotPriceCents: numOrNull(row.spot_price_cents),
   };
+}
+
+// A partner can only be on the rental model by SAYING SO. An unrecognised or missing value falls
+// back to whatever revenue_model already meant, so the failure mode of a bad row is "unchanged",
+// never "silently on a different payout formula".
+function normalisePayoutModel(raw: unknown, revenueModel: PartnerRevenueModel): PayoutModel {
+  if (raw === "RENTAL_PLUS_PROFIT_SHARE") return "RENTAL_PLUS_PROFIT_SHARE";
+  if (raw === "PER_MATCH_MINUS_MANAGER") return "PER_MATCH_MINUS_MANAGER";
+  if (raw === "REVENUE_SHARE") return "REVENUE_SHARE";
+  return revenueModel === "per_match_minus_manager" ? "PER_MATCH_MINUS_MANAGER" : "REVENUE_SHARE";
+}
+
+// The parameters, or null if this partner is not on the rental model / is missing any of them.
+// Returning null rather than defaulting is deliberate: a partner with a half-filled parameter set
+// must render as unconfigured, not be paid on a guessed figure.
+export function rentalParamsOf(p: PartnerConfig): RentalProfitShareParams | null {
+  if (p.payoutModel !== "RENTAL_PLUS_PROFIT_SHARE") return null;
+  if (p.fieldRentalCents == null || p.matchManagerCents == null || p.partnerSharePct == null) return null;
+  return { fieldRentalCents: p.fieldRentalCents, matchManagerCents: p.matchManagerCents, partnerSharePct: p.partnerSharePct };
 }
 
 export async function fetchAllEnabledPartnerDashboards(
@@ -227,20 +269,13 @@ export async function fetchAllEnabledPartnerDashboards(
   let data: any = null;
   // eslint-disable-next-line @typescript-eslint/no-explicit-any
   let error: any = null;
-  const primary = await supabase
-    .from("partner_dashboards")
-    .select(PARTNER_COLS_FULL)
-    .eq("enabled", true);
-  data = primary.data;
-  error = primary.error;
-  if (error && error.code === "42703") {
-    // migration 0057 not yet applied — retry without revenue-model cols.
-    const fallback = await supabase
-      .from("partner_dashboards")
-      .select(PARTNER_COLS_NO_MODEL)
-      .eq("enabled", true);
-    data = fallback.data;
-    error = fallback.error;
+  // Same newest-first cascade as fetchPartnerBySlug: 0123 cols, then 0057, then pre-0057. Code
+  // deploys before migrations apply, and a named column that does not exist yet fails the select.
+  for (const cols of [PARTNER_COLS_PAYOUT, PARTNER_COLS_FULL, PARTNER_COLS_NO_MODEL]) {
+    const res = await supabase.from("partner_dashboards").select(cols).eq("enabled", true);
+    data = res.data; error = res.error;
+    if (!error) break;
+    if (error.code !== "42703") break;   // a real error, not a missing column
   }
   if (error || !data) return [];
   return (data as Record<string, unknown>[]).map((row) =>
@@ -255,11 +290,13 @@ export async function fetchPartnerBySlug(
   // Column-set cascade, newest schema first. Each tier drops the
   // columns added by one migration so the public URL keeps working
   // through the gap between deploying code and applying the migration:
+  //   PAYOUT      — incl. 0123 payout-model cols
   //   FULL        — incl. 0057 revenue-model cols
   //   NO_MODEL    — incl. 0005 payment_cadence, no revenue-model cols
   //   no-cadence  — incl. 0003 payment_* cols, no cadence
   //   legacy      — pre-0003 (id, venue_id, partner_name, enabled)
   const tiers = [
+    PARTNER_COLS_PAYOUT,   // incl. 0123 payout-model cols
     PARTNER_COLS_FULL,
     PARTNER_COLS_NO_MODEL,
     "id, venue_id, partner_name, enabled, revenue_share_pct, payment_start_date, payment_day_of_week",

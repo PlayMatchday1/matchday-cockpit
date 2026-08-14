@@ -3,6 +3,7 @@ import { makeServerClient } from "@/lib/supabaseServer";
 import { buildPartnerDashboardData } from "@/lib/partnerDashboardData";
 import PartnerDashboardV14 from "./PartnerDashboardV14";
 import PartnerMonthlyView from "./PartnerMonthlyView";
+import PartnerRentalView from "./PartnerRentalView";
 
 // Server component. Slug → venue_id resolution and stats fetch run
 // server-side against a service-role Supabase client. venue_id is
@@ -46,6 +47,7 @@ export default async function PartnerPage({
   const data = await buildPartnerDashboardData(makeServerClient(), slug);
   if (!data) notFound(); // 404 — generic, no leak about why
 
+  if (data.kind === "rental") return <PartnerRentalView {...data.rental} />;
   return data.kind === "monthly"
     ? <PartnerMonthlyView {...data.monthly} />
     : <PartnerDashboardV14 {...data.weekly} />;

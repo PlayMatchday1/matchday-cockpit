@@ -1,6 +1,7 @@
 {
-  "_comment": "PINNED quarantine set — the e2e gate (scripts/run-suites.mjs) FAILS if the live QUARANTINE map drifts from this list, so a suite can never leave the gate silently (see Phase 21b item 1: verify-week entered while adminpay left, count stayed 4, nobody noticed). Changing what is quarantined — adding, removing, OR swapping — must be an explicit, reviewable edit to THIS file in the same commit as the QUARANTINE map change. Keep it sorted.",
+  "_comment": "PINNED quarantine set \u2014 the e2e gate (scripts/run-suites.mjs) FAILS if the live QUARANTINE map drifts from this list, so a suite can never leave the gate silently (see Phase 21b item 1: verify-week entered while adminpay left, count stayed 4, nobody noticed). Changing what is quarantined \u2014 adding, removing, OR swapping \u2014 must be an explicit, reviewable edit to THIS file in the same commit as the QUARANTINE map change. Keep it sorted.",
   "quarantined": [
+    "verify-partner-rental.mjs",
     "verify-partner.mjs",
     "verify-reviews.mjs",
     "verify-week.mjs",

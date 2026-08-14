@@ -7,7 +7,8 @@ import "server-only";
 // client over the preview API.
 
 import type { SupabaseClient } from "@supabase/supabase-js";
-import { computePartnerStats, computeWeeklyPayments, fetchPartnerBySlug, fetchPartnerRows, fetchPartnerWeeklyPayments } from "./partnerStats";
+import { computePartnerStats, computeWeeklyPayments, fetchPartnerBySlug, fetchPartnerRows, fetchPartnerWeeklyPayments, rentalParamsOf } from "./partnerStats";
+import { buildRentalDashboard, type RentalDashboardProps } from "./partnerRentalDashboard";
 import { derivePartnerGrains } from "./partnerGrain";
 import { dfull, dshort, todayYmd } from "./partnerDashboardView";
 import type { PartnerV14Props } from "@/app/partners/[slug]/PartnerDashboardV14";
@@ -20,7 +21,8 @@ export const PARTNER_DATA_BASELINE: Record<string, string> = {
 
 export type PartnerDashboardData =
   | { kind: "weekly"; weekly: PartnerV14Props }
-  | { kind: "monthly"; monthly: PartnerMonthlyProps };
+  | { kind: "monthly"; monthly: PartnerMonthlyProps }
+  | { kind: "rental"; rental: RentalDashboardProps };
 
 export async function buildPartnerDashboardData(
   supabase: SupabaseClient,
@@ -31,6 +33,21 @@ export async function buildPartnerDashboardData(
   if (!partner) return null;
 
   const { rows, extra, venueName } = await fetchPartnerRows(supabase, partner.venueId);
+
+  // ── RENTAL_PLUS_PROFIT_SHARE branches out FIRST, before any of the flat-model derivation runs.
+  // Not a flag threaded through computePartnerStats/periodOwed: this model shares no arithmetic
+  // with them, and running their pipeline just to discard it is how a "special case" quietly
+  // acquires the other model's rounding. The three existing partners never reach this branch.
+  const rentalParams = rentalParamsOf(partner);
+  if (rentalParams) {
+    return {
+      kind: "rental",
+      rental: buildRentalDashboard(rows, rentalParams, {
+        partnerName: partner.partnerName, venue: venueName, spotPriceCents: partner.spotPriceCents,
+      }),
+    };
+  }
+
   const records = await fetchPartnerWeeklyPayments(supabase, partner.id);
   const { data: venueRow } = await supabase.from("fin_venues").select("city, launch_date").eq("id", partner.venueId).maybeSingle();
 

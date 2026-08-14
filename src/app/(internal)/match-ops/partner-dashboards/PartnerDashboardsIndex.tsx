@@ -23,6 +23,7 @@ import { deriveOwed, derivePeriodRows, stateLine, headerLine, todayYmd, money, d
 import type { PartnerDashboardData } from "@/lib/partnerDashboardData";
 import PartnerDashboardV14 from "@/app/partners/[slug]/PartnerDashboardV14";
 import PartnerMonthlyView from "@/app/partners/[slug]/PartnerMonthlyView";
+import PartnerRentalView from "@/app/partners/[slug]/PartnerRentalView";
 
 type AdminPartner = {
   id: string; slug: string; partnerName: string; venue: string; city: string | null;
@@ -364,5 +365,8 @@ function PaymentsCard({ partner, today, busy, onMark }: {
 function PreviewDashboard({ data, err }: { data: PartnerDashboardData | null; err: string | null }) {
   if (err) return <div style={{ padding: 24, fontSize: 13, color: "#a8391a" }}>{err}</div>;
   if (!data) return <div style={{ padding: 24, fontSize: 13, color: "#6d7b74" }}>Loading the partner’s page…</div>;
+  // The preview renders the SAME component the partner gets, including the rental model — the
+  // whole point of this path is that admin and partner cannot see different pages.
+  if (data.kind === "rental") return <PartnerRentalView {...data.rental} />;
   return data.kind === "monthly" ? <PartnerMonthlyView {...data.monthly} /> : <PartnerDashboardV14 {...data.weekly} />;
 }
