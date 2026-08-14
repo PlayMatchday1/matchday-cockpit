@@ -22,6 +22,7 @@ export type ApiMatch = {
   startDate: string;          // wall-clock local time at the field's city
   startDateUtc: string;       // the true kickoff instant (used for ordering)
   isCancelled?: boolean;      // the real did-it-happen flag (READONLY)
+  autoCanceled?: boolean;     // THE SWITCH. false => this match can never auto-cancel.
   autoCanceledMinutes?: number; // MINUTES before kickoff (spec says hours; spec is wrong)
   minPlayerCount?: number;
   maxPlayerCount?: number | null; // capacity cap; null/0 = special event (no cap)
@@ -231,6 +232,11 @@ export function nextMark(m: ApiMatch, now: number): number | null {
 }
 
 // ── auto-cancel drives the tile ──────────────────────────────────────────────
+// Does this match auto-cancel AT ALL? Everything deadline-shaped must ask this first. A match with
+// the switch off has a minutes value sitting in the payload, but it is inert — reading it without
+// the flag is what made the board show a countdown to a deadline that cannot arrive.
+export const autoCancels = (m: ApiMatch): boolean => m.autoCanceled === true;
+
 // The deadline is autoCanceledMinutes BEFORE kickoff. Distance to the DEADLINE (not
 // kickoff) decides the colour. Because kickoff is a real instant, this needs no day
 // offset — the mockup's "tomorrow coloured a day early" bug cannot occur here.
@@ -252,6 +258,9 @@ export function acLevel(m: ApiMatch, now: number): AcLevel {
 export const CANCEL_SOON_MINUTES = 120;
 export type RiskTier = "green" | "amber" | "red";
 export function riskTier(m: ApiMatch, now: number): RiskTier {
+  // NO AUTO-CANCEL => NO DEADLINE RISK. Being short still matters and is still shown, but the
+  // urgency of "decide within 2h" is about a cancellation that will never happen here.
+  if (!autoCancels(m)) return "green";
   // GREEN when the minimum is met — OR the match carries no live cancel risk (cancelled,
   // finished, or uncapped). RED needs BOTH short AND the cancel call within 2h; a full
   // match close to its deadline stays green.
@@ -317,8 +326,10 @@ export function attention(m: ApiMatch, now: number): boolean {
   // Only still-to-come rows can need attention (same predicate as the chip and the group).
   // The at-min tier counts too (Phase 21 §6): exactly on the minimum is one no-show from
   // short, so it belongs on the "Needs attention" list alongside acLevel and the flags.
+  // acLevel is the DEADLINE reason and only counts when the match can actually auto-cancel; the
+  // other reasons (at-min, bad/warn flags) stand on their own.
   return stillToCome(m, now) &&
-    (acLevel(m, now) !== "" || (capacity(m) != null && vsMin(m) === "at") ||
+    ((autoCancels(m) && acLevel(m, now) !== "") || (capacity(m) != null && vsMin(m) === "at") ||
       flags(m, now).some((f) => f.k === "bad" || f.k === "warn"));
 }
 

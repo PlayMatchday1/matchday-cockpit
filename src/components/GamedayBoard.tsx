@@ -25,7 +25,7 @@ import MatchOpsSectionSheet from "@/app/(internal)/match-ops/MatchOpsSectionShee
 import {
   type ApiMatch, type BoardFilter, type MatchGroup, GROUPS, byKickoff, matchGroup, minsUntil, fmtDur, localClock, deadlineClock, tzAbbr,
   realCount, fakeCount, capacity, openSpots, teamCount, short, shortBy, fill, flags, attention,
-  acLevel, minsToDeadline, nextRelease, nextMark, inCities, passesFilter, stillToCome, riskTier, snapRail, vsMin, vsMinDelta, STD_LEAD, MARKS,
+  acLevel, minsToDeadline, nextRelease, nextMark, inCities, passesFilter, stillToCome, riskTier, snapRail, vsMin, vsMinDelta, STD_LEAD, MARKS, autoCancels,
 } from "@/lib/gamedayModel";
 
 const ENV = DRAWER_ENV; // the board reads and edits the same environment as the drawer
@@ -183,7 +183,19 @@ export default function GamedayBoard() {
               {badge.tone === "prod" && <span className="livedot" aria-hidden />}
               <span className="mpickname">Gameday Ops</span><span className="caret" aria-hidden>▾</span>
             </button>
-            <span className="seg mseg" role="group" aria-label="View">
+            {/* REFRESH, in the MOBILE bar. The desktop .head is display:none below the breakpoint,
+                so putting it "where the toggle was" made it reachable only in landscape. (What was
+                left here was an EMPTY <span class="seg mseg"> from the deleted toggle — the grey dot.)
+                The stamp is abbreviated at this width but never dropped: the manager has to be able
+                to tell how old the numbers are without rotating the phone. */}
+            <span className="mfresh" data-testid="m-fresh">
+              <span className={"mstamp" + (staleFail ? " failed" : staleMins >= 2 ? " stale" : "")} data-testid="m-updated-at">
+                {staleFail ? "not refreshed" : updatedAt == null ? "…" : staleMins >= 2 ? `${staleMins}m ago` : updatedLabel}
+              </span>
+              <button type="button" className="mrefresh" data-testid="m-gday-refresh" disabled={refreshing}
+                aria-label="Refresh the board" onClick={() => void load(date, true)}>
+                <span className={"rspin" + (refreshing ? " on" : "")} aria-hidden />
+              </button>
             </span>
           </div>
           <div className="mband">
@@ -373,7 +385,13 @@ function SnapRow({ m, now, group, selected, onOpen, money }: {
           : <span className={"vsmin " + vsMinCls} data-testid="snap-short"><b>{gapNum}</b>{" "}<span className="w">{gapWord}</span></span>}
       </span>
       <span className="cell c-cxl">
-        {isTodo ? <>
+        {/* NO AUTO-CANCEL => NO DECIDE-BY. The minutes field is still populated upstream on these
+            matches, so drawing a countdown from it invented a deadline that can never arrive. */}
+        {isTodo && !autoCancels(m) ? <>
+          <span className="c1 dash" data-testid="snap-noac">—</span>
+          <span className="c2" style={{ color: "#5C6B62" }}>no auto-cancel</span>
+          <span className="cxlmob" data-testid="snap-cxlmob">no auto-cancel · {mgr} · {price}</span>
+        </> : isTodo ? <>
           <span className="c1 clk">{deadlineClock(m)}<em>{tzAbbr(m)}</em></span>
           <span className={"c2 " + decideCls} title={`Auto-cancels ${m.autoCanceledMinutes ?? 0} minutes before kickoff unless the minimum is met`}>{decideSub}{leadDiffers ? <span className="lead">cancels {m.autoCanceledMinutes ?? 0}m before</span> : null}</span>
           <span className="cxlmob" data-testid="snap-cxlmob"><b>{deadlineClock(m)}</b> {tzAbbr(m)} · {decideSub} · {mgr} · {price}</span>
@@ -611,6 +629,13 @@ const CSS = `
 /* ── PHONE header + prod strip: built here, hidden on desktop (the .head card and
       the legend own the ≥760px layout). Kept out of the media block so the desktop
       default is unambiguously "not shown". ── */
+.gdo .mfresh{margin-left:auto;display:inline-flex;align-items:center;gap:7px}
+.gdo .mstamp{font-size:11.5px;color:#41514A;font-variant-numeric:tabular-nums;white-space:nowrap}
+.gdo .mstamp.stale{color:#6B7A72}
+.gdo .mstamp.failed{color:#A8391A;font-weight:700}
+.gdo .mrefresh{width:44px;height:44px;flex:none;display:inline-flex;align-items:center;justify-content:center;
+  border:1px solid #D3DED8;border-radius:11px;background:#fff;cursor:pointer}
+.gdo .mrefresh:disabled{opacity:.6;cursor:default}
 .gdo .prodstrip,.gdo .mhead{display:none}
 
 /* ── Phone: this is used one-handed at a field. Edge to edge, cities scroll. ── */

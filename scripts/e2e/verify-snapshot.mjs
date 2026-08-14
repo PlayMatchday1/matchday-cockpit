@@ -91,7 +91,9 @@ function build(raw, base, ymd) {
   return raw.map(([id, city, mins, real, fake, min, cap, acMin, mgr, price, tz, st]) => ({
     id, name: `Match ${id}`, startDate: `${ymd}T12:00:00.000`,
     startDateUtc: st === "done" ? new Date(base - 5 * 3600000).toISOString() : new Date(base + mins * 60000).toISOString(),
-    isCancelled: st === "cx", autoCanceledMinutes: acMin, minPlayerCount: min, maxPlayerCount: cap,
+    // autoCanceled defaults ON here: every rail/decide-by assertion in this suite presupposes a
+    // match that CAN auto-cancel. The OFF case is asserted in verify-gameday and the model suite.
+    isCancelled: st === "cx", autoCanceled: true, autoCanceledMinutes: acMin, minPlayerCount: min, maxPlayerCount: cap,
     registrationPrice: price, additionalSpotPrice: 400, fakeSpotLeft36h: 0, fakeSpotLeft24h: 0, fakeSpotLeft12h: 0, fakeSpotLeft6h: 0, fakeSpotLeft3h: 0,
     isAutoBump: false, category: "OPEN", type: "REGULAR", _count: { players: real + fake, fakePlayers: fake },
     manager: { firstName: mgr, lastName: "" }, teams: [{ teamNumber: 1 }, { teamNumber: 2 }],

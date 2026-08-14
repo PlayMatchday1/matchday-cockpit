@@ -9,7 +9,7 @@ import {
   byKickoff, bandOf, minsUntil, capacity, openSpots, realCount, fakeCount, filledCount, clampFakes,
   nextRelease, acLevel, minsToDeadline, short, shortBy, fill, attention, inCities, passesFilter,
   localClock, localDate, CRIT_HOURS, WARN_HOURS, riskTier, CANCEL_SOON_MINUTES, matchGroup, GROUPS,
-  stillToCome, inPlay, vsMin, vsMinDelta, snapRail, deadlineClock, STD_LEAD, type ApiMatch,
+  stillToCome, inPlay, vsMin, vsMinDelta, snapRail, deadlineClock, STD_LEAD, autoCancels, type ApiMatch,
 } from "../src/lib/gamedayModel";
 
 let pass = 0, fail = 0;
@@ -28,7 +28,7 @@ const H = 3600000;
 function mk(o: Partial<ApiMatch> & { startDateUtc: string }): ApiMatch {
   return {
     id: 1, name: "M", startDate: "2026-08-08T15:00:00.000", isCancelled: false,
-    autoCanceledMinutes: 75, minPlayerCount: 11, maxPlayerCount: 20,
+    autoCanceled: true, autoCanceledMinutes: 75, minPlayerCount: 11, maxPlayerCount: 20,
     registrationPrice: 1200, fakeSpotLeft36h: 0, fakeSpotLeft24h: 0, fakeSpotLeft12h: 0,
     fakeSpotLeft6h: 0, fakeSpotLeft3h: 0, isAutoBump: false, category: "OPEN", type: "REGULAR",
     _count: { players: 6, fakePlayers: 0 }, manager: { firstName: "Sam", lastName: "W" },
@@ -175,7 +175,25 @@ ok(attention(critShort, NOW) === true ? "attention true for a short, near-deadli
 
 // ── the three groups (Phase 18) — ONE function both views share ──────────────
 const H2 = 3600000;
-const mkG = (o: Partial<ApiMatch>): ApiMatch => ({ id: 1, name: "M", startDate: "2026-08-08T18:00:00.000", startDateUtc: new Date(NOW + 3 * H2).toISOString(), minPlayerCount: 11, maxPlayerCount: 20, autoCanceledMinutes: 60, _count: { players: 4, fakePlayers: 0 }, teams: [{ teamNumber: 1 }], field: { title: "F", city: { name: "Austin", timeZone: { abbr: "CDT" } } }, ...o } as ApiMatch);
+const mkG = (o: Partial<ApiMatch>): ApiMatch => ({ id: 1, name: "M", startDate: "2026-08-08T18:00:00.000", startDateUtc: new Date(NOW + 3 * H2).toISOString(), minPlayerCount: 11, maxPlayerCount: 20, autoCanceled: true, autoCanceledMinutes: 60, _count: { players: 4, fakePlayers: 0 }, teams: [{ teamNumber: 1 }], field: { title: "F", city: { name: "Austin", timeZone: { abbr: "CDT" } } }, ...o } as ApiMatch);
+// ── AUTO-CANCEL OFF: no deadline risk, and no deadline reason for Needs attention ──
+{
+  // Sited so the DEADLINE is the only variable: kickoff +190m clears the "<180m, spots unsold"
+  // warn flag, and a 75m lead puts the deadline 115m out — inside the 2h window. The pair differs
+  // ONLY in the switch, so any difference below is attributable to it and nothing else.
+  const at = new Date(NOW + 190 * 60000).toISOString();
+  // mkG carries no manager, which would fire a "NO MANAGER" bad flag and put BOTH in Needs
+  // attention for a reason that has nothing to do with the deadline. Give them one.
+  const mgr = { firstName: "Sam", lastName: "W" };
+  const off = mkG({ autoCanceled: false, autoCanceledMinutes: 75, startDateUtc: at, manager: mgr, _count: { players: 3, fakePlayers: 0 } });
+  const on = mkG({ autoCanceled: true, autoCanceledMinutes: 75, startDateUtc: at, manager: mgr, _count: { players: 3, fakePlayers: 0 } });
+  eq("autoCancels reads the SWITCH, not the minutes field", [autoCancels(off), autoCancels(on)], [false, true]);
+  eq("switch OFF: riskTier is green even when short and inside the 2h window", riskTier(off, NOW), "green");
+  eq("switch ON with the same numbers: riskTier is red (proves the switch is what changed it)", riskTier(on, NOW), "red");
+  eq("switch OFF: acLevel is not a Needs-attention reason", attention(off, NOW), false);
+  eq("switch ON with the same numbers: it IS in Needs attention", attention(on, NOW), true);
+}
+
 const futureM = mkG({ startDateUtc: new Date(NOW + 3 * H2).toISOString() });
 const liveM = mkG({ startDateUtc: new Date(NOW - 20 * 60000).toISOString() }); // kicked off 20m ago
 const finishedM = mkG({ startDateUtc: new Date(NOW - 5 * H2).toISOString() }); // 5h past

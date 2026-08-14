@@ -61,7 +61,7 @@ const MIN = 60000, HR = 3600000;
 function fixture(base, todayYMD) {
   const iso = (offMin) => new Date(base + offMin * MIN).toISOString();
   const mk = (o) => ({
-    id: 0, name: "M", isCancelled: false, autoCanceledMinutes: 0, minPlayerCount: 11, maxPlayerCount: 20,
+    id: 0, name: "M", isCancelled: false, autoCanceled: true, autoCanceledMinutes: 0, minPlayerCount: 11, maxPlayerCount: 20,
     registrationPrice: 1200, additionalSpotPrice: 400, fakeSpotLeft36h: 0, fakeSpotLeft24h: 0,
     fakeSpotLeft12h: 0, fakeSpotLeft6h: 0, fakeSpotLeft3h: 0, isAutoBump: false, category: "OPEN", type: "REGULAR",
     _count: { players: 6, fakePlayers: 0 }, manager: { firstName: "Sam", lastName: "Webb" },
@@ -85,6 +85,12 @@ function fixture(base, todayYMD) {
     mk({ id: 506, name: "Blossom AM", startDateUtc: iso(-120), _count: { players: 3, fakePlayers: 0 }, field: { title: "Blossom", city: city("Austin", "CDT") } }),
     // LIVE (kicked off)
     mk({ id: 507, name: "Will Rogers", startDateUtc: iso(-30), _count: { players: 14, fakePlayers: 0 }, field: { title: "Will Rogers", city: city("Dallas", "CDT") } }),
+    // AUTO-CANCEL OFF. Deliberately sited so the DEADLINE is the ONLY thing that could put it in
+    // Needs attention: kickoff +190m (past the <180m "spots unsold" flag), a manager present, no
+    // fakes, short of the minimum, and a 75m lead => deadline 115m out, inside the 2h "decide soon"
+    // window. On the OLD logic that is red with a live countdown; with the switch off there is no
+    // deadline at all, so it must be neither.
+    mk({ id: 509, name: "No-AC Dallas", autoCanceled: false, autoCanceledMinutes: 75, startDateUtc: iso(190), _count: { players: 3, fakePlayers: 0 }, field: { title: "Kiest", city: city("Dallas", "CDT") } }),
     // SPECIAL EVENT (no cap)
     mk({ id: 508, name: "Chastain Event", startDateUtc: iso(180), maxPlayerCount: null, _count: { players: 5, fakePlayers: 0 }, field: { title: "Chastain", city: city("Houston", "CDT") } }),
   ];
@@ -137,6 +143,21 @@ async function main() {
 
   await load();
 
+  // ══ BUG 1 — a match with AUTO-CANCEL OFF must show no deadline and not be "needs attention"
+  //    for deadline reasons. Fixture 508 is short of its minimum AND close to kickoff, so it would
+  //    be red on the old logic; with the switch off it must be neither.
+  { await page.click('[data-testid="filter-all"]'); await page.waitForTimeout(150);
+    const cell = await page.$eval(row(509) + ' .c-cxl', (e) => e.textContent.replace(/\s+/g, " ").trim());
+    eq("auto-cancel OFF: the row shows no decide-by countdown, it says so", {
+      noAc: !!(await page.$(row(509) + ' [data-testid="snap-noac"]')),
+      text: /no auto-cancel/.test(cell), noCountdown: !/left|passed/.test(cell),
+      rail: await page.$eval(row(509), (e) => e.getAttribute("data-rail")),
+    }, { noAc: true, text: true, noCountdown: true, rail: "green" });
+    await page.click('[data-testid="filter-att"]'); await page.waitForTimeout(200);
+    eq("auto-cancel OFF: the match is NOT in Needs attention on a deadline basis",
+      await page.$$eval('[data-testid="snap-row"]', (els) => els.map((e) => Number(e.getAttribute("data-id")))).then((ids) => ids.includes(509)), false);
+    await page.click('[data-testid="filter-all"]'); await page.waitForTimeout(150); }
+
   // ── cross-timezone ordering: the board interleaves by the actual instant ──
   { const order = await tilesIn("todo");
     eq("still-to-come: 501 (ATL) ordered before 502 (AUS) despite later wall clock", order.indexOf(501) >= 0 && order.indexOf(501) < order.indexOf(502), true); }
@@ -169,7 +190,7 @@ async function main() {
     await page.click('[data-testid="city-Atlanta"]'); await page.waitForTimeout(120);
     const after = await page.$eval('[data-testid="filter-all"] .b', (e) => Number(e.textContent));
     const tiles = await page.$$eval('[data-testid="snap-row"]', (els) => els.length);
-    eq("selecting a city changes the All count (stats derive from scope)", { before, after, tiles }, { before: 8, after: 1, tiles: 1 });
+    eq("selecting a city changes the All count (stats derive from scope)", { before, after, tiles }, { before: 9, after: 1, tiles: 1 });
     // Atlanta has only the one still-to-come match -> empty groups render NO header.
     eq("empty groups render no header (Atlanta: only still-to-come)", { todo: !!(await page.$('[data-testid="snap-group-todo"]')), cx: await page.$('[data-testid="snap-group-cancelled"]'), fin: await page.$('[data-testid="snap-group-finished"]') }, { todo: true, cx: null, fin: null });
     await page.click('[data-testid="city-all"]'); await page.waitForTimeout(120); }
@@ -281,6 +302,23 @@ async function main() {
     (!o.pageLeak && past.length === 0) ? ok("phone: no horizontal scroll (city chips scroll intentionally), nothing past the edge") : bad("phone overflow", `leak=${o.pageLeak} past=${JSON.stringify([...new Set(past)].slice(0, 6))}`); }
   { const small = await ph.evaluate(() => { const out = []; for (const el of document.querySelectorAll('.gdo button, .gdo [role="switch"], .gdo [role="link"]')) { const r = el.getBoundingClientRect(); const s = getComputedStyle(el); if (s.display === "none" || s.visibility === "hidden" || r.width === 0) continue; if (r.height < 32) out.push({ c: (el.className || "").toString().slice(0, 22), h: Math.round(r.height * 10) / 10 }); } return out; });
     small.length === 0 ? ok("phone: every control >= 32px tall") : bad(`phone: ${small.length} under 32px`, JSON.stringify(small.slice(0, 6))); }
+  // ══ BUG 2 — the refresh must be reachable in PORTRAIT, at a real tap size, with the stamp.
+  //    It shipped broken because it was only ever asserted at 1600, where the desktop header shows.
+  { const r = await ph.$eval('[data-testid="m-gday-refresh"]', (e) => { const b = e.getBoundingClientRect(); const s = getComputedStyle(e);
+      return { w: b.width, h: b.height, visible: s.display !== "none" && s.visibility !== "hidden" && b.width > 0, right: b.right, top: b.top }; });
+    const stamp = await ph.$eval('[data-testid="m-updated-at"]', (e) => ({ text: e.textContent.trim(), visible: getComputedStyle(e).display !== "none" }));
+    const vw = await ph.evaluate(() => innerWidth);
+    eq("390x844 PORTRAIT: refresh is visible, >=44px, on screen, and the freshness text is present", {
+      visible: r.visible, big: r.w >= 43 && r.h >= 43, onScreen: r.right <= vw + 1 && r.top >= 0,
+      stampShown: stamp.visible, stampHasText: stamp.text.length > 0,
+    }, { visible: true, big: true, onScreen: true, stampShown: true, stampHasText: true }); }
+  // the desktop header (where it used to live) is genuinely hidden here — proving the old placement
+  // could not have worked in portrait
+  eq("390 portrait: the desktop header block is display:none, which is why the old placement failed",
+    await ph.$eval('.gdo .head', (e) => getComputedStyle(e).display), "none");
+  // and the empty leftover toggle container is gone (it rendered as a small grey dot)
+  eq("390 portrait: the empty leftover toggle container is gone", await ph.$$eval('.gdo .mseg', (e) => e.length), 0);
+
   { const c = await contrastIn(ph); c.failures.length === 0 ? ok(`phone contrast: every board node >= 4.5:1 (min ${c.min})`) : bad(`phone contrast: ${c.failures.length} < 4.5`, c.failures.slice(0, 5).map((f) => `${f.ratio} "${f.t}"`).join(" | ")); }
 
   await browser.close();

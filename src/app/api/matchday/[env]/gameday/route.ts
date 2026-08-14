@@ -34,6 +34,10 @@ function trim(m: Raw) {
     id: m.id as number, name: (m.name as string) ?? "",
     startDate: m.startDate as string, startDateUtc: m.startDateUtc as string,
     isCancelled: !!m.isCancelled, autoCanceledMinutes: num(m.autoCanceledMinutes) ?? 0,
+    // THE AUTO-CANCEL SWITCH ITSELF. Without it the board could only see the MINUTES field and so
+    // drew a decide-by countdown for every match that had one, whether or not the match can
+    // actually auto-cancel. A deadline that will never fire is a fiction the row was telling.
+    autoCanceled: m.autoCanceled === true,
     minPlayerCount: num(m.minPlayerCount) ?? 0, maxPlayerCount: num(m.maxPlayerCount),
     registrationPrice: num(m.registrationPrice), additionalSpotPrice: num(m.additionalSpotPrice),
     fakeSpotLeft36h: num(m.fakeSpotLeft36h) ?? 0, fakeSpotLeft24h: num(m.fakeSpotLeft24h) ?? 0,
