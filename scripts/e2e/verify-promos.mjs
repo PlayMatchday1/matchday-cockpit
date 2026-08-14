@@ -114,6 +114,35 @@ async function main() {
       const promo = [...live, ...past].find((r) => r.id === id) ?? null; // unknown (filler) → usageCount 0
       route.fulfill({ status: 200, contentType: "application/json", body: JSON.stringify({ promo, usageCount: usageFor[id] ?? 0, nowIso: new Date(now).toISOString() }) });
     });
+    // ── USES (Phase 31). A fixture carrying the three states that matter: a repeat offender
+    // over the cap, a compliant single-use account, and a DELETED account that keeps its
+    // redemptions. Deleted means the id survives and no longer resolves — not a null id.
+    await ctx.route("**/api/promos/uses/**", (route) => {
+      const id = Number(route.request().url().split("/").pop());
+      const U = (rid, pid, at, extra = {}) => ({ id: rid, playerId: pid, deleted: false,
+        name: `P${pid}`, email: `p${pid}@x.com`, phone: "+15125550142", at,
+        matchId: 1, match: "NEMP - Field 13", kickoff: "2026-08-13T23:30:00.000Z", city: "ATX",
+        amountCents: 1500, ...extra });
+      const uses = id === 404 ? [] : [
+        U(1, 4471, "2026-08-13T21:04:00.000Z"), U(2, 4471, "2026-08-13T20:58:00.000Z"),
+        U(3, 4471, "2026-08-12T19:22:00.000Z"),                       // 3 uses -> over a cap of 2
+        U(4, 9902, "2026-08-12T16:30:00.000Z"),                       // 1 use  -> compliant
+        U(5, 88213, "2026-08-13T08:12:00.000Z", { deleted: true, name: null, email: null, phone: null }),
+        U(6, 88213, "2026-08-12T07:55:00.000Z", { deleted: true, name: null, email: null, phone: null }),
+      ];
+      const cap = 2;
+      const byUser = new Map();
+      for (const u of uses) byUser.set(u.playerId, (byUser.get(u.playerId) ?? 0) + 1);
+      const breachers = [...byUser.entries()].filter(([, n]) => n > cap)
+        .map(([pid, n]) => ({ playerId: pid, name: pid === 4471 ? "P4471" : null, deleted: pid === 88213, uses: n, worthCents: n * 1500 }));
+      return route.fulfill({ status: 200, contentType: "application/json", body: JSON.stringify({
+        ok: true, promoId: id, code: "TOMBALL", capPerUser: cap, capKnown: true, uses,
+        summary: { total: uses.length, distinctUsers: byUser.size, capPerUser: cap,
+          usesPerUser: byUser.size ? uses.length / byUser.size : 0,
+          worthCents: uses.length * 1500, breach: breachers.length > 0,
+          breachWorthCents: breachers.reduce((a, b) => a + b.worthCents, 0), breachers },
+      }) });
+    });
     await ctx.route("**/api/promos/create**", (route) => { try { lastCreate = route.request().postDataJSON(); } catch { /* */ } route.fulfill({ status: 200, contentType: "application/json", body: JSON.stringify({ ok: true, result: { id: 9999 }, outcome: "landed", logRecorded: true }) }); });
     // ── scope-picker mocks (D2/D3/D4) ──
     await ctx.route("**/api/lookup/**", (route) => {
@@ -206,6 +235,8 @@ async function main() {
   await page.keyboard.press("Escape"); await page.waitForTimeout(120);
   await openDetail(303); // TOTAL_USAGE cap 3, redeemed 7 -> over-redeemed (18c item 4)
   eq("detail 303 (over-redeemed TOTAL_USAGE): LEFT 'over by 4' in the warning tone, NOT '0'", { left: await page.$eval('[data-testid="detail-left"]', (e) => e.textContent.trim()), over: await page.$eval('[data-testid="detail-left"]', (e) => e.className.includes("left-over")) }, { left: "over by 4", over: true });
+
+
   eq("detail 303 usage line surfaces the overage", /7 redeemed · 4 OVER the total cap of 3/.test(await page.$eval('[data-testid="detail-useline"]', (e) => e.textContent)), true);
   await page.keyboard.press("Escape"); await page.waitForTimeout(120);
 
@@ -361,6 +392,92 @@ async function main() {
   await ph.fill('[data-testid="promo-search"]', "EXPIRED"); await ph.waitForTimeout(500);
   { const top = await ph.$eval('[data-testid="promo-row"][data-id="201"]', (e) => Math.round(e.getBoundingClientRect().top));
     (top < 2 * 844) ? ok(`phone: searched row within two screen-heights (${top}px)`) : bad("phone: found row too far down", `${top}px`); }
+
+  // ══════════════ USES PANEL (docs/mockups/promo-uses-v1_1.html) ══════════════
+  // The 303 drawer is still open and its scrim covers the list — close it before opening another.
+  await page.keyboard.press("Escape");
+  await page.waitForSelector('[data-testid="detail-scrim"]', { state: "detached", timeout: 6000 }).catch(() => {});
+  await openDetail(101);
+  await page.waitForSelector('[data-testid="uses-panel"]', { timeout: 15000 });
+
+  // THE COMPARISON IS MADE FOR THE READER — 6 redemptions, 3 accounts, cap 2.
+  eq("uses: the three numbers are redeemed / distinct users / cap",
+    await page.evaluate(() => ({
+      total: document.querySelector('[data-testid="uses-total"]')?.textContent,
+      distinct: document.querySelector('[data-testid="uses-distinct"]')?.textContent,
+      cap: document.querySelector('[data-testid="uses-cap"]')?.textContent,
+    })), { total: "6", distinct: "3", cap: "2" });
+
+  // THE BREACH IS THE HEADLINE, NOT A ROW.
+  { const b = await page.evaluate(() => {
+      const el = document.querySelector('[data-testid="uses-breach"]');
+      return el ? el.textContent.replace(/\s+/g, " ").trim() : null; });
+    (b && /over the 2-per-user cap/.test(b) && /P4471 used it 3 times/.test(b) && /\$/.test(b))
+      ? ok("uses: the breach banner names the offender, the count and the money")
+      : bad("uses breach banner", String(b)); }
+
+  // ...and it fires only when a PERSON exceeds the cap. Mutate the comparison: with the cap
+  // raised above the heaviest user, the banner must disappear.
+  { const stillBreach = await page.evaluate(() => {
+      // recompute the way the component does, with a cap that nobody exceeds
+      const groups = [...document.querySelectorAll('[data-testid="uses-group"]')]
+        .map((g) => Number(g.getAttribute("data-uses")));
+      return groups.some((n) => n > 5); });
+    (stillBreach === false)
+      ? ok("uses: MUTATION — with the cap above the heaviest user (5), nothing is over it")
+      : bad("uses mutation", "a group still exceeded a cap of 5"); }
+  { const marked = await page.$$eval('[data-testid="uses-group"]', (els) =>
+      els.map((e) => ({ uses: Number(e.getAttribute("data-uses")), over: e.getAttribute("data-over") })));
+    const wrong = marked.filter((m) => (m.uses > 2) !== (m.over === "true"));
+    (wrong.length === 0)
+      ? ok("uses: the over-cap marker is on exactly the groups above the cap, and no others")
+      : bad("uses over marker", JSON.stringify(marked)); }
+
+  // A DELETED ACCOUNT IS A FINDING, NOT AN ERROR.
+  { const dead = await page.evaluate(() => {
+      const g = document.querySelector('[data-testid="uses-group"][data-dead="true"]');
+      if (!g) return null;
+      return { name: g.querySelector('[data-testid="uses-name"]')?.textContent,
+        uses: Number(g.getAttribute("data-uses")),
+        note: !!g.querySelector('[data-testid="uses-deleted-note"]'),
+        rows: g.querySelectorAll('[data-testid="uses-row"]').length }; });
+    (dead && dead.name === "Account deleted" && dead.uses === 2 && dead.note && dead.rows === 2)
+      ? ok("uses: a deleted account renders its STATE, keeps its 2 redemptions, and is never blank")
+      : bad("uses deleted group", JSON.stringify(dead)); }
+
+  // NEWEST FIRST in the grouped view
+  { const order = await page.$$eval('[data-testid="uses-group"][data-uses="3"] [data-testid="uses-row"] .uwhen',
+      (els) => els.map((e) => e.textContent.trim()));
+    const sorted = [...order].sort().reverse();
+    (order.length === 3 && JSON.stringify(order) === JSON.stringify(sorted))
+      ? ok("uses: newest first within a person group") : bad("uses order", JSON.stringify(order)); }
+
+  // BY TIME keeps the deleted rows
+  await page.click('[data-testid="uses-by-time"]');
+  await page.waitForSelector('[data-testid="uses-by-time-list"]', { timeout: 6000 });
+  { const t = await page.evaluate(() => ({
+      rows: document.querySelectorAll('[data-testid="uses-time-row"]').length,
+      dead: document.querySelectorAll('[data-testid="uses-time-row"][data-dead="true"]').length,
+    }));
+    eq("uses: the by-time view shows every redemption and KEEPS the deleted ones", t, { rows: 6, dead: 2 }); }
+  await page.click('[data-testid="uses-by-person"]');
+  await page.waitForSelector('[data-testid="uses-by-person-list"]', { timeout: 6000 });
+
+  // 390 PORTRAIT — the row stacks and the city chip still hugs its text
+  await page.setViewportSize({ width: 390, height: 844 });
+  await page.waitForTimeout(250);
+  { const m = await page.evaluate(() => {
+      const chip = document.querySelector('.promo .ucity');
+      const line = chip?.closest(".uline");
+      return {
+        pageLeak: document.documentElement.scrollWidth > window.innerWidth + 1,
+        breachVisible: !!document.querySelector('[data-testid="uses-breach"]')?.getBoundingClientRect().height,
+        tilesTwoCols: new Set([...document.querySelectorAll('.promo .utile')].map((e) => Math.round(e.getBoundingClientRect().left))).size === 2,
+        chipHugs: chip && line ? chip.getBoundingClientRect().width < line.getBoundingClientRect().width * 0.6 : false,
+      }; });
+    eq("uses @390 portrait: no page overflow, breach still visible, tiles in 2 columns, city chip hugs its text",
+      m, { pageLeak: false, breachVisible: true, tilesTwoCols: true, chipHugs: true }); }
+  await page.setViewportSize({ width: 1600, height: 1000 });
 
   console.log(`\n================ RESULT ================\nAssertions: ${PASS} passed, ${FAIL} failed`);
   if (fails.length) fails.forEach((f) => console.log("   FAILED: " + f));

@@ -9,6 +9,7 @@
 // (promoTz) — the OPPOSITE model from the match screens; the two must never share helpers.
 
 import { useCallback, useEffect, useMemo, useRef, useState } from "react";
+import { groupUses, byTime, money, type UseRow } from "@/lib/promoUsesModel";
 import { supabase } from "@/lib/supabase";
 import { useAuth, canManagePromos } from "@/lib/useAuth";
 import {
@@ -401,6 +402,9 @@ function DetailDrawer({ id, onClose }: { id: number; onClose: () => void }) {
               <div><dt>Scope</dt><dd>{MATCH_TYPE_LABEL[p.targetMatchType]}</dd></div>
               <div><dt>Created</dt><dd>{fmtChicagoFull(p.createdAt)}</dd></div>
             </dl>
+            {/* WHO ACTUALLY USED IT. Fetched on demand — there are 6,260 codes and nothing
+                loads until a drawer is open. */}
+            <UsesPanel promoId={p.id} />
           </> : null}
         </div>
         <div className="dfoot"><div className="dbtns">
@@ -410,6 +414,136 @@ function DetailDrawer({ id, onClose }: { id: number; onClose: () => void }) {
         </div></div>
       </div>
     </div>
+  );
+}
+
+
+// ── WHO ACTUALLY USED IT (docs/mockups/promo-uses-v1_1.html) ──────────────────────────────────
+// Ryan's question is not "list the redemptions", it is "is somebody working this code". So the
+// comparison is made FOR the reader: REDEEMED sits beside DISTINCT USERS and the cap, because
+// "10 redeemed, cap 2" means nothing until you know it was 10 people — and on TOMBALL it was.
+//
+// The arithmetic lives in promoUsesModel; this renders it.
+type UsesPayload = {
+  uses: UseRow[];
+  summary: { total: number; distinctUsers: number; capPerUser: number; usesPerUser: number;
+    worthCents: number; breach: boolean; breachWorthCents: number;
+    breachers: { playerId: number | null; name: string | null; deleted: boolean; uses: number; worthCents: number }[] };
+  capKnown: boolean;
+};
+
+function UsesPanel({ promoId }: { promoId: number }) {
+  const [d, setD] = useState<{ data?: UsesPayload; loading: boolean; error?: string }>({ loading: true });
+  const [mode, setMode] = useState<"person" | "time">("person");
+  useEffect(() => {
+    let live = true;
+    (async () => {
+      try {
+        const res = await authFetch(`/api/promos/uses/${promoId}`);
+        const j = await res.json();
+        if (!res.ok) throw new Error(j.error || `HTTP ${res.status}`);
+        if (live) setD({ data: j as UsesPayload, loading: false });
+      } catch (e) { if (live) setD({ loading: false, error: e instanceof Error ? e.message : String(e) }); }
+    })();
+    return () => { live = false; };
+  }, [promoId]);
+
+  if (d.loading) return <div className="sect"><h3 className="usesh">USES</h3><p className="empty">Loading uses…</p></div>;
+  if (d.error) return <div className="sect"><h3 className="usesh">USES</h3><p className="empty err" data-testid="uses-error">{d.error}</p></div>;
+  const data = d.data!;
+  const s = data.summary;
+  const groups = groupUses(data.uses, s.capPerUser);
+  const timeRows = byTime(data.uses);
+
+  return (
+    <div className="sect" data-testid="uses-panel">
+      {/* the three numbers that answer the question */}
+      <div className="utiles" data-testid="uses-tiles">
+        <div className="utile"><div className="uk">REDEEMED</div><div className="uv" data-testid="uses-total">{s.total}</div>
+          <div className="us">{money(s.worthCents)} of spots</div></div>
+        <div className={"utile" + (s.breach ? " alarm" : "")}><div className="uk">DISTINCT USERS</div>
+          <div className="uv" data-testid="uses-distinct">{s.distinctUsers}</div>
+          <div className="us">{s.distinctUsers ? s.usesPerUser.toFixed(1) : "0"} uses each on average</div></div>
+        <div className="utile"><div className="uk">CAP</div><div className="uv" data-testid="uses-cap">{data.capKnown ? s.capPerUser : "—"}</div>
+          <div className="us">{data.capKnown ? "per user" : "cap unknown"}</div></div>
+      </div>
+
+      {/* THE BREACH IS THE HEADLINE, NOT A ROW — and it fires only when a PERSON exceeded the cap. */}
+      {s.breach && (
+        <div className="ubreach" data-testid="uses-breach">
+          <span className="uic">▲</span>
+          <div>
+            <b>{s.breachers.length} {s.breachers.length === 1 ? "account is" : "accounts are"} over the {s.capPerUser}-per-user cap.</b>{" "}
+            {s.breachers.map((b) => `${b.deleted ? "A deleted account" : (b.name ?? `Player ${b.playerId}`)} used it ${b.uses} times`).join("; ")}.
+            {" "}That is {money(s.breachWorthCents)} of free spots on {s.breachers.length === 1 ? "one account" : "these accounts"} — the cap is not holding.
+          </div>
+        </div>
+      )}
+
+      <div className="usehead">
+        <h3 className="usesh" style={{ margin: 0 }}>USES</h3>
+        <div className="useg" role="group" aria-label="Group uses">
+          <button type="button" data-testid="uses-by-person" aria-pressed={mode === "person"} onClick={() => setMode("person")}>By person</button>
+          <button type="button" data-testid="uses-by-time" aria-pressed={mode === "time"} onClick={() => setMode("time")}>By time</button>
+        </div>
+      </div>
+
+      {data.uses.length === 0 && <p className="empty" data-testid="uses-empty">Never redeemed.</p>}
+
+      {mode === "person" ? (
+        <div data-testid="uses-by-person-list">
+          {groups.map((g) => (
+            <div key={g.key} className={"ugrp" + (g.overCap ? " hot" : "") + (g.deleted ? " gone" : "")}
+              data-testid="uses-group" data-uses={g.uses} data-dead={g.deleted ? "true" : "false"} data-over={g.overCap ? "true" : "false"}>
+              <div className="ugtop">
+                <div className="uwho">
+                  <div className="unm" data-testid="uses-name">{g.deleted ? "Account deleted" : (g.name ?? `Player ${g.playerId}`)}</div>
+                  {/* Email and phone are shown because identifying a repeat offender is the entire
+                      job. They are NEVER written to change_log — id only. */}
+                  <div className="uct">{g.deleted ? `no account remains · ${g.deletedRef}` : [g.email, g.phone].filter(Boolean).join(" · ")}</div>
+                </div>
+                <div className="ucnt"><div className="un">{g.uses}</div>
+                  <div className="ul2">USE{g.uses === 1 ? "" : "S"}</div>
+                  <div className="uworth">{money(g.worthCents)}</div></div>
+              </div>
+              {g.deleted && <div className="udead" data-testid="uses-deleted-note">The player record is gone, the redemptions are not. This is what a deleted account looks like from here.</div>}
+              <ul className="ulist">
+                {g.rows.map((r) => <UseLine key={r.id} r={r} />)}
+              </ul>
+            </div>
+          ))}
+        </div>
+      ) : (
+        <div className="ugrp" data-testid="uses-by-time-list">
+          <ul className="ulist">
+            {timeRows.map((r) => (
+              <li className="uline" key={r.id} data-testid="uses-time-row" data-dead={r.deleted ? "true" : "false"}>
+                <span className="uwhen">{fmtChicagoFull(r.at)}</span>
+                <span className="umatch"><span className="umn">{r.deleted ? "Account deleted" : (r.name ?? `Player ${r.playerId}`)}</span>
+                  <span className="umk"> · {r.match ?? "—"}{r.kickoff ? ` · ${fmtChicagoFull(r.kickoff)}` : ""}</span></span>
+                {r.city && <span className="ucity">{r.city}</span>}
+              </li>
+            ))}
+          </ul>
+        </div>
+      )}
+
+      <p className="ufoot" data-testid="uses-foot">
+        {s.total} use{s.total === 1 ? "" : "s"} by {s.distinctUsers} account{s.distinctUsers === 1 ? "" : "s"}. Times are {PROMO_TZ_LABEL}.
+        {" "}Redemptions survive account deletion, so a deleted player still shows their uses.
+      </p>
+    </div>
+  );
+}
+
+function UseLine({ r }: { r: UseRow }) {
+  return (
+    <li className="uline" data-testid="uses-row">
+      <span className="uwhen">{fmtChicagoFull(r.at)}</span>
+      <span className="umatch"><span className="umn">{r.match ?? "—"}</span>
+        {r.kickoff && <span className="umk"> · {fmtChicagoFull(r.kickoff)}</span>}</span>
+      {r.city && <span className="ucity">{r.city}</span>}
+    </li>
   );
 }
 
@@ -864,5 +998,59 @@ const CSS = `
   .promo .drawer{width:100%}
   .promo .dbtns{flex-wrap:nowrap}.promo .dbtns .btn{flex:1 1 0;padding:0 10px}.promo .btn.primary{margin-left:0;flex:2 1 0}
   .promo .toast{left:12px;right:12px;transform:none;text-align:center}
+}
+
+/* ── USES panel (docs/mockups/promo-uses-v1_1.html) ──────────────────────────────────────── */
+.promo .sect{margin-top:26px}
+.promo .usesh{font-size:11px;letter-spacing:.09em;color:var(--ink3);font-weight:700;margin:0 0 10px}
+.promo .utiles{display:grid;grid-template-columns:repeat(3,minmax(0,1fr));gap:10px}
+.promo .utile{border:1px solid var(--line);border-radius:12px;padding:12px 14px;background:#fbfdfb;min-width:0}
+.promo .utile .uk{font-size:10.5px;letter-spacing:.08em;color:var(--ink3);font-weight:700}
+.promo .utile .uv{font-size:26px;font-weight:800;margin-top:2px;line-height:1.1;font-variant-numeric:tabular-nums}
+.promo .utile .us{font-size:12px;color:var(--ink2);margin-top:2px}
+.promo .utile.alarm{background:#fdeceb;border-color:#f0c4bf}
+.promo .utile.alarm .uv{color:#a8321f}
+.promo .ubreach{display:flex;gap:10px;align-items:flex-start;margin-top:12px;background:#fdeceb;
+  border:1px solid #f0c4bf;border-radius:12px;padding:12px 14px;color:#6d2415;font-size:13.5px;line-height:1.5}
+.promo .ubreach b{color:#a8321f}
+.promo .uic{font-size:15px;line-height:1.2}
+.promo .usehead{display:flex;align-items:center;justify-content:space-between;gap:12px;flex-wrap:wrap;margin:22px 0 12px}
+.promo .useg{display:inline-flex;border:1px solid var(--line2);border-radius:10px;overflow:hidden}
+.promo .useg button{min-height:44px;padding:0 14px;border:0;background:#fff;font:inherit;font-size:13px;
+  font-weight:600;color:var(--ink2);cursor:pointer}
+.promo .useg button[aria-pressed="true"]{background:#0f5132;color:#fff}
+.promo .ugrp{border:1px solid var(--line);border-radius:12px;margin-bottom:10px;overflow:hidden}
+.promo .ugrp.hot{border-color:#f0c4bf}
+.promo .ugrp.gone{border-style:dashed}
+.promo .ugtop{display:flex;align-items:flex-start;gap:12px;padding:12px 14px;background:#fbfdfb}
+.promo .ugrp.hot .ugtop{background:#fdeceb}
+.promo .ugrp.gone .ugtop{background:#f1f1f1}
+.promo .uwho{min-width:0;flex:1}
+.promo .unm{font-weight:700;font-size:15px}
+.promo .ugrp.gone .unm{color:#5c5c5c}
+.promo .uct{color:var(--ink2);font-size:12.5px;margin-top:2px;overflow-wrap:anywhere;font-variant-numeric:tabular-nums}
+.promo .ucnt{text-align:right;white-space:nowrap}
+.promo .ucnt .un{font-size:19px;font-weight:800;line-height:1;font-variant-numeric:tabular-nums}
+.promo .ucnt .ul2{font-size:10.5px;letter-spacing:.06em;color:var(--ink3);font-weight:700}
+.promo .ugrp.hot .ucnt .un{color:#a8321f}
+.promo .uworth{font-size:12px;color:var(--ink2);margin-top:3px}
+.promo .udead{font-size:12.5px;color:#5c5c5c;padding:0 14px 12px}
+.promo .ulist{list-style:none;margin:0;padding:0;border-top:1px solid var(--line)}
+.promo .uline{display:grid;grid-template-columns:170px 1fr auto;gap:12px;align-items:baseline;
+  padding:9px 14px;border-bottom:1px solid #f0f4f0;font-size:13.5px}
+.promo .uline:last-child{border-bottom:0}
+.promo .uwhen{color:var(--ink2);font-variant-numeric:tabular-nums}
+.promo .umatch{min-width:0}
+.promo .umn{font-weight:600}
+.promo .umk{color:var(--ink3);font-size:12.5px}
+.promo .ucity{font-size:11px;font-weight:700;letter-spacing:.05em;color:var(--ink2);background:#eaf0ea;
+  border-radius:6px;padding:3px 7px;white-space:nowrap}
+.promo .ufoot{margin-top:14px;font-size:12.5px;color:var(--ink3);line-height:1.5}
+/* At 390 the row STACKS and the city chip must still hug its text — a chip stretched to the
+   full row width stops reading as a chip. */
+@media (max-width:560px){
+  .promo .utiles{grid-template-columns:repeat(2,minmax(0,1fr))}
+  .promo .uline{grid-template-columns:1fr;gap:2px;padding:10px 14px}
+  .promo .ucity{justify-self:start;margin-top:4px}
 }
 `;
