@@ -55,7 +55,7 @@ type Manager = { id: number; name: string };
 type FieldRow = { id: number; title: string; city: string | null };
 type TeamRow = { id: number; teamNumber: number; name: string; locked: boolean };
 type PlayerRow = { umId: number; playerId: number; team: number; playerNumber: number; name: string; fake: boolean };
-type RosterState = { name: string; teams: TeamRow[]; players: PlayerRow[]; shape: { teamN: number; perTeam: number }; maxPlayerCount: number | null; occupancy: number | null };
+type RosterState = { name: string; teams: TeamRow[]; players: PlayerRow[]; shape: { teamN: number; perTeam: number }; maxPlayerCount: number | null; occupancy: number | null; hidden?: { total: number; cancelled: number; unpaid: number; refunded: number } };
 type MatchData = Record<string, unknown> & {
   type?: string; startDate?: string; endDate?: string; teams?: unknown[];
   occupancy?: number | null; realOccupancy?: number | null; cityName?: string | null; fieldTitle?: string | null;
@@ -750,6 +750,20 @@ export default function MatchPanel({ matchId, env = "production", onDirtyChange 
                 )}
                 {pendingAdd && <span className="mp-addpending" data-testid="mp-add-pending">Adding <b>{pendingAdd.fake ? "a FAKE player" : pendingAdd.name}</b> — pick a team →<button type="button" className="mp-x" onClick={() => setPendingAdd(null)}>cancel</button></span>}
               </div>
+
+              {!!roster.hidden?.total && (
+                // NOT silent. A 20-deep repeat from one player is a payment failure; the noise is
+                // gone from the teams but the fact that it happened is stated.
+                <p className="mp-hint" data-testid="mp-roster-hidden" data-count={roster.hidden.total}>
+                  <b>{roster.hidden.total} sign-up{roster.hidden.total === 1 ? "" : "s"} hidden</b>
+                  {" — "}
+                  {[roster.hidden.unpaid ? `${roster.hidden.unpaid} unpaid (payment never completed)` : "",
+                    roster.hidden.cancelled ? `${roster.hidden.cancelled} cancelled` : "",
+                    roster.hidden.refunded ? `${roster.hidden.refunded} refunded` : ""].filter(Boolean).join(" · ")}.
+                  {" "}These hold no spot and are not in the match&apos;s own count, so they are left out of the
+                  teams below. A repeated name is usually one person&apos;s retried checkout.
+                </p>
+              )}
 
               {/* the teams themselves — rename + roster. No price control, no lock control (not asked for). */}
               <div className="mp-teamgrid" data-testid="mp-teamgrid">

@@ -45,6 +45,9 @@ let rosterGets = 0;
 let cancelPosts = []; // POSTs to the cancel route (Part C)
 let forceNotApplied = false; // when set, roster ops return a 2xx the server did NOT apply (read-back test)
 const rosterStates = {};
+// A roster carrying the shapes production actually contains: counted rows, an unpaid retry chain
+// (paidStatus WAITING — the 27-repeat case on 17516), a cancelled row and a refunded one. The route
+// filters these; the fixture exists so the INVARIANT below can bite.
 const twoTeamRoster = () => ({
   name: "PRUMC - Tuesday",
   teams: [{ id: 501, teamNumber: 1, name: "Green", locked: false }, { id: 502, teamNumber: 2, name: "Blue", locked: false }],

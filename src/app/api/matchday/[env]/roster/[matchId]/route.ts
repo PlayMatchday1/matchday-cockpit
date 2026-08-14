@@ -11,6 +11,7 @@ import { authenticateAdmin } from "@/lib/adminAuth";
 import { authenticateMatchOpsRead } from "@/lib/matchOpsAuth"; // GET is a Match Ops READ (Part D round 2); POST stays admin + EDIT MATCHES
 import { apiGet, apiWrite, AmbiguousWriteError, WriteFailedError, DeniedFieldError, DeniedEndpointError, ProductionWriteBoltedError, StageHostGuardError, StageConfigError, NotAuthorizedError, type MatchdayEnv } from "@/lib/matchdayStageApi";
 import { recordWrite, supabaseLogStore } from "@/lib/changeLog";
+import { rosterRowCounts } from "@/lib/gamedayModel";
 import type { Change } from "@/lib/changeLogModel";
 
 export const runtime = "nodejs";
@@ -20,6 +21,7 @@ export const maxDuration = 30;
 const isEnv = (x: string): x is MatchdayEnv => x === "staging" || x === "production";
 const num = (v: unknown) => (v === null || v === undefined || v === "" ? null : Number.isFinite(Number(v)) ? Number(v) : null);
 
+type RosterShape = { isCancelled?: boolean; canceledAt?: string | null; refunded?: boolean; paidStatus?: string | null };
 type Row = { id: number; userId: number; team: number; playerNumber: number; isCancelled?: boolean; refunded?: boolean; user?: { firstName?: string; lastName?: string; isFakePlayer?: boolean } };
 
 export async function GET(req: Request, ctx: { params: Promise<{ env: string; matchId: string }> }) {
@@ -42,10 +44,15 @@ export async function GET(req: Request, ctx: { params: Promise<{ env: string; ma
       apiGet<Record<string, unknown>>(env, `/admin/matches/${matchId}`),
       apiGet<Row[] | { data?: Row[] }>(env, `/admin/matches/${matchId}/players`),
     ]);
-    // Cancelled/refunded user-matches are NOT in the match — they must never occupy a slot
-    // (hiding an active player) or inflate the count. Drop them here, at the single source.
-    const players = (Array.isArray(playersRaw) ? playersRaw : (playersRaw.data ?? []))
-      .filter((p) => !p.isCancelled && !p.refunded)
+    // THE POPULATION _count.players COUNTS — cancelled, refunded AND paidStatus "WAITING" are all
+    // excluded. The old filter dropped only cancelled/refunded, which left every unsettled sign-up
+    // in the list: on production 17516 that meant 36 rendered rows against an authoritative 18, and
+    // one player's retried checkout appeared 27 times. Across the last 8 weeks 64% of matches had
+    // at least 3 extra rows (worst: 22 counted, 59 rendered).
+    const allRows = (Array.isArray(playersRaw) ? playersRaw : (playersRaw.data ?? []));
+    const hiddenRows = allRows.filter((p) => !rosterRowCounts(p as RosterShape));
+    const players = allRows
+      .filter((p) => rosterRowCounts(p as RosterShape))
       .map((p) => ({
         umId: p.id, playerId: p.userId, team: p.team, playerNumber: p.playerNumber,
         name: [p.user?.firstName, p.user?.lastName].filter(Boolean).join(" ").trim() || `Player ${p.userId}`,
@@ -62,6 +69,14 @@ export async function GET(req: Request, ctx: { params: Promise<{ env: string; ma
       // authoritative occupancy (real + fake) — the count the rest of the app uses; the
       // roster headline reads THIS, not players.length (which double-counts duplicate rows).
       occupancy: num((match._count as Record<string, unknown> | undefined)?.players),
+      // NOT dropped silently. A 20-deep repeat from one player is a payment failure and the panel
+      // says so; only the noise is removed, never the signal that it happened.
+      hidden: {
+        total: hiddenRows.length,
+        cancelled: hiddenRows.filter((p) => (p as RosterShape).isCancelled === true || (p as RosterShape).canceledAt != null).length,
+        unpaid: hiddenRows.filter((p) => (p as RosterShape).paidStatus === "WAITING").length,
+        refunded: hiddenRows.filter((p) => (p as RosterShape).refunded === true).length,
+      },
     });
   } catch (e) { return errToResponse(e); }
 }

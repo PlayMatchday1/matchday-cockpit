@@ -9,7 +9,7 @@ import {
   byKickoff, bandOf, minsUntil, capacity, openSpots, realCount, fakeCount, filledCount, clampFakes,
   nextRelease, acLevel, minsToDeadline, short, shortBy, fill, attention, inCities, passesFilter,
   localClock, localDate, CRIT_HOURS, WARN_HOURS, riskTier, CANCEL_SOON_MINUTES, matchGroup, GROUPS,
-  stillToCome, inPlay, vsMin, vsMinDelta, snapRail, deadlineClock, STD_LEAD, autoCancels, type ApiMatch,
+  stillToCome, inPlay, vsMin, vsMinDelta, snapRail, deadlineClock, STD_LEAD, autoCancels, rosterRowCounts, type ApiMatch,
 } from "../src/lib/gamedayModel";
 
 let pass = 0, fail = 0;
@@ -192,6 +192,30 @@ const mkG = (o: Partial<ApiMatch>): ApiMatch => ({ id: 1, name: "M", startDate: 
   eq("switch ON with the same numbers: riskTier is red (proves the switch is what changed it)", riskTier(on, NOW), "red");
   eq("switch OFF: acLevel is not a Needs-attention reason", attention(off, NOW), false);
   eq("switch ON with the same numbers: it IS in Needs attention", attention(on, NOW), true);
+}
+
+// ── THE ROSTER INVARIANT — rendered rows must equal _count.players ──────────
+// Built from the REAL shape of production 17516 (2026-08-14): 38 user-match rows, _count.players 18.
+// The gap was never cancellations: 18 of them are paidStatus "WAITING" (a checkout that never
+// settled; a retried one leaves a row per attempt, which is how ONE player produced 27 rows).
+{
+  const row = (o: Record<string, unknown>) => o as never;
+  const rows17516 = [
+    ...Array.from({ length: 15 }, () => row({ paidStatus: "PAID" })),
+    ...Array.from({ length: 3 }, () => row({ paidStatus: "FREE" })),
+    ...Array.from({ length: 18 }, () => row({ paidStatus: "WAITING" })),
+    ...Array.from({ length: 2 }, () => row({ paidStatus: "FREE", isCancelled: true, canceledAt: "2026-08-13T00:00:00Z" })),
+  ];
+  eq("17516: the filter reproduces _count.players EXACTLY (38 rows -> 18)", rows17516.filter(rosterRowCounts).length, 18);
+  eq("17516: 20 rows are withheld, and they are the unpaid + cancelled ones", rows17516.length - rows17516.filter(rosterRowCounts).length, 20);
+  eq("a WAITING row never counts (this is the case the old filter missed)", rosterRowCounts(row({ paidStatus: "WAITING" })), false);
+  eq("a cancelled row never counts", rosterRowCounts(row({ paidStatus: "PAID", isCancelled: true })), false);
+  eq("a canceledAt row never counts even without the bool", rosterRowCounts(row({ paidStatus: "PAID", canceledAt: "2026-08-13T00:00:00Z" })), false);
+  eq("a refunded row never counts", rosterRowCounts(row({ paidStatus: "PAID", refunded: true })), false);
+  eq("PAID and FREE rows DO count", [rosterRowCounts(row({ paidStatus: "PAID" })), rosterRowCounts(row({ paidStatus: "FREE" }))], [true, true]);
+  // the general invariant, over a mixed population
+  const mixed = [row({ paidStatus: "PAID" }), row({ paidStatus: "WAITING" }), row({ paidStatus: "FREE" }), row({ paidStatus: "PAID", refunded: true })];
+  eq("INVARIANT: for any roster, rows kept == the population _count counts", mixed.filter(rosterRowCounts).length, 2);
 }
 
 const futureM = mkG({ startDateUtc: new Date(NOW + 3 * H2).toISOString() });

@@ -75,9 +75,21 @@ export const realCount = (m: ApiMatch): number => Math.max(0, n(m._count?.player
 // 1 real; 17558 15 with 0 fake → 15.) So on the detail path the fake count must come from the ROSTER
 // (/admin/matches/{id}/players), and REAL active players = players − (roster FAKE rows, not cancelled).
 // This is what the fakeSpotLeft ceiling math needs; do NOT reach for _count.fakePlayers here (absent).
-export type RosterRow = { isFakePlayer?: boolean; isCancelled?: boolean; canceledAt?: string | null; user?: { isFakePlayer?: boolean } };
+export type RosterRow = { isFakePlayer?: boolean; isCancelled?: boolean; canceledAt?: string | null; refunded?: boolean; paidStatus?: string | null; user?: { isFakePlayer?: boolean } };
 export const rosterRowIsFake = (r: RosterRow): boolean => r.isFakePlayer === true || r.user?.isFakePlayer === true;
 export const rosterRowCancelled = (r: RosterRow): boolean => r.isCancelled === true || r.canceledAt != null;
+
+// WHAT _count.players ACTUALLY COUNTS — proven on production 17516 (2026-08-14): 38 user-match rows,
+// _count.players 18. The gap is NOT cancellations. It is:
+//     PAID 15 + FREE-not-cancelled 3            = 18  ← counted
+//     paidStatus "WAITING" 18 + isCancelled 2   = 20  ← NOT counted
+// A WAITING row is a sign-up whose payment never settled; a retried checkout leaves one behind each
+// time, which is how one player produced 27 rows on that match. CLAUDE.md says "_count.players is
+// authoritative; players.length includes cancelled rows" — true but INCOMPLETE: it also excludes
+// WAITING. Any surface that lists a roster must use THIS predicate or it will disagree with every
+// occupancy number on the board.
+export const rosterRowCounts = (r: RosterRow): boolean =>
+  !rosterRowCancelled(r) && r.refunded !== true && r.paidStatus !== "WAITING";
 export function realOccupancyFromRoster(playersCount: number, roster: RosterRow[]): number {
   const fakes = (roster ?? []).filter((r) => rosterRowIsFake(r) && !rosterRowCancelled(r)).length;
   return Math.max(0, (Number(playersCount) || 0) - fakes);
