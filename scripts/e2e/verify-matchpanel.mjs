@@ -72,6 +72,7 @@ const setTeamCount = (st, n) => {
 
 function matchFor(id) {
   if (String(id).endsWith("9999")) return { ...REGULAR, id: Number(id), type: "BRACKET" };
+  if (String(id).endsWith("2222")) return { ...REGULAR, id: Number(id), maxPlayerCount: 18, teams: [{ teamNumber: 1 }, { teamNumber: 2 }] };
   if (String(id).endsWith("8888")) return { ...REGULAR, id: Number(id), maxPlayerCount: 18, teams: [{ teamNumber: 1 }, { teamNumber: 2 }, { teamNumber: 3 }, { teamNumber: 4 }] }; // 18/4 = 4.5, non-divisible
   return { ...REGULAR, id: Number(id) };
 }
@@ -158,7 +159,9 @@ const FLD = [
   { t: "mp-price", key: "registrationPrice", kind: "text", render: "10.00", edit: { fill: "20.00" } },
   { t: "mp-spot", key: "additionalSpotPrice", kind: "text", render: "", edit: { fill: "3.00" } },
   { t: "mp-guests", key: "guestCount", kind: "text", render: "10", edit: { fill: "5" } },
-  { t: "mp-maxplayers", key: "maxPlayerCount", kind: "text", render: "18", edit: { fill: "24" } },
+  // REMOVED: mp-maxplayers was a typed capacity input. Capacity is now DERIVED and read-only —
+  // teams × spots-per-team — so there is no text field to stage. The behaviour it covered
+  // (maxPlayerCount enters the diff when changed) is asserted below through the stepper instead.
   { t: "mp-acmin", key: "autoCanceledMinutes", kind: "text", render: "75", edit: { fill: "90" } },
   { t: "mp-min", key: "minPlayerCount", kind: "text", render: "6", edit: { fill: "9" } },
   { t: "mp-fake36", key: "fakeSpotLeft36h", kind: "text", render: "12", edit: { fill: "14" } },
@@ -297,6 +300,52 @@ async function main() {
   await page.waitForSelector('[data-testid="mp-name"]', { timeout: 15000 });
   eq("spots: 18/4 hides the per-team figure + stepper, shows a total-only note", { na: await has("mp-spt-na"), perTeam: await has("mp-spt"), stepper: await has("mp-spt-plus") }, { na: true, perTeam: false, stepper: false });
   eq("spots: the note says why (doesn't divide evenly into 4 teams)", /doesn't divide evenly into 4 teams/.test(await page.$eval('[data-testid="mp-spt-na"]', (e) => e.textContent)), true);
+  // NEVER a rounded number: production had 0 non-divisible matches in 8 weeks, but if one exists the
+  // TRUE stored total must be what is shown.
+  eq("spots: the non-divisible case shows the TRUE stored total (18), not a rounded 16 or 20", {
+    note: /stored capacity is 18/.test(await page.$eval('[data-testid="mp-spt-na"]', (e) => e.textContent)),
+    cap: await page.$eval('[data-testid="mp-capacity"]', (e) => e.getAttribute("data-value")),
+  }, { note: true, cap: "18" });
+
+  // ══ SPOTS: capacity is DERIVED and read-only; teams is a picker ══
+  await page.goto(`${BASE}/match-ops/match-panel/17494`, { waitUntil: "domcontentloaded" });
+  await page.waitForSelector('[data-testid="mp-capacity"]', { timeout: 15000 });
+  eq("spots: capacity is derived and NOT editable (no typed capacity input anywhere)", {
+    readonly: await page.$eval('[data-testid="mp-capacity"]', (e) => e.tagName.toLowerCase()),
+    noInput: await page.$$eval('[data-testid="mp-maxplayers"]', (e) => e.length),
+    text: (await page.$eval('[data-testid="mp-capacity"]', (e) => e.textContent)).replace(/\s+/g, " ").trim(),
+  }, { readonly: "span", noInput: 0, text: "18 total — 3 teams × 6" });
+  // the picker offers exactly what production proved storable: 2, 3 and 4 (28 of 711 matches run 3)
+  eq("spots: the TEAMS picker offers exactly 2 / 3 / 4", await page.$$eval('[data-testid="mp-teams-seg"] button', (b) => b.map((x) => x.textContent.trim())), ["2", "3", "4"]);
+  eq("spots: the picker marks the match's CURRENT team count", await page.$eval('[data-testid="mp-teams-3"]', (e) => e.getAttribute("data-on")), "true");
+  // 3 teams has no rung field — the copy says so instead of silently writing nothing
+  eq("spots: at 3 teams the note states only maxPlayerCount is written", /Three teams has no size field of its own/.test(await page.$eval('[data-section="SPOTS"]', (e) => e.textContent)), true);
+
+  // stepping the per-team figure writes ONLY what changed, and TOTALS not per-side
+  puts = [];
+  await page.click('[data-testid="mp-spt-plus"]');       // 6 -> 7 per team, 3 teams => 21 total
+  eq("spots: the stepper recomputes capacity as a TOTAL (3 × 7 = 21)",
+    (await page.$eval('[data-testid="mp-capacity"]', (e) => e.textContent)).replace(/\s+/g, " ").trim(), "21 total — 3 teams × 7");
+  await page.click('[data-testid="mp-save"]');
+  await page.waitForTimeout(400);
+  eq("spots: a 3-team save sends ONLY maxPlayerCount — no rung field, and nothing that did not change",
+    puts.at(-1), { maxPlayerCount: 21 });
+
+  // A 2-TEAM match writes its OWN rung and NEVER the other one — maxTeamSize4Team is the alternate
+  // configuration the auto-bump ladder moves between, and clobbering it would corrupt that ladder.
+  await page.goto(`${BASE}/match-ops/match-panel/12222`, { waitUntil: "domcontentloaded" });
+  await page.waitForSelector('[data-testid="mp-capacity"]', { timeout: 15000 });
+  eq("spots: a 2-team match derives 18 total — 2 teams × 9",
+    (await page.$eval('[data-testid="mp-capacity"]', (e) => e.textContent)).replace(/\s+/g, " ").trim(), "18 total — 2 teams × 9");
+  puts = [];
+  // Step UP: the fixture already stores maxTeamSize2Team 16, so stepping DOWN to 16 total would
+  // correctly omit the rung as unchanged and prove nothing. 9 -> 10 changes both fields.
+  await page.click('[data-testid="mp-spt-plus"]');       // 9 -> 10 per team, 2 teams => 20 total
+  await page.click('[data-testid="mp-save"]');
+  await page.waitForTimeout(400);
+  eq("spots: a 2-team save writes maxPlayerCount + maxTeamSize2Team and NEVER touches maxTeamSize4Team", {
+    body: puts.at(-1), touched4: Object.keys(puts.at(-1) ?? {}).includes("maxTeamSize4Team"),
+  }, { body: { maxPlayerCount: 20, maxTeamSize2Team: 20 }, touched4: false });
 
   // ══════════════ Step 2 · TEAMS — the IMMEDIATE half (each op fires now; Save/Revert never touch it) ══════════════
   await page.setViewportSize({ width: 1440, height: 1000 });

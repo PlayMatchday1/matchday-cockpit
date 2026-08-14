@@ -251,7 +251,7 @@ async function main() {
     await page.click('[data-testid="gday-refresh"]');
     await page.waitForTimeout(250);
     const during = await page.$eval('[data-testid="gday-refresh"]', (e) => e.disabled);
-    const spinning = await page.$eval('[data-testid="gday-refresh"] .rspin', (e) => e.classList.contains("on"));
+    const spinning = await page.$eval('[data-testid="gday-refresh"] .ricon', (e) => e.classList.contains("on"));
     release(); await page.waitForTimeout(600);
     const after = await page.$eval('[data-testid="gday-refresh"]', (e) => e.disabled);
     await ctx.unroute("**/api/matchday/**/gameday**");
@@ -295,7 +295,22 @@ async function main() {
   const pctx = await browser.newContext({ viewport: { width: 390, height: 844 }, isMobile: true, hasTouch: true, storageState });
   await routes(pctx);
   const ph = await pctx.newPage();
+  // REAL SAFE-AREA INSETS. Chromium reports env(safe-area-inset-*) as 0 in a plain 390px window,
+  // which is exactly why the status-bar collision shipped: a narrow desktop viewport cannot see it.
+  // Force the four insets so the assertions below run against a phone-shaped page.
+  // globals.css routes the insets through --sat/--sab exactly so a harness can force a notch;
+  // a raw env() could not be overridden and therefore could not be tested.
+  const SAT = 59; // iPhone 14 Pro portrait status bar / Dynamic Island
+  // The clock is installed BEFORE navigation so Date.now() is controllable — fastForward later
+  // proves the freshness stamp actually ages instead of waiting three real minutes.
+  await ph.clock.install();
   await ph.goto(PAGE, { waitUntil: "domcontentloaded" }); await ph.waitForSelector('[data-testid="snap-group-todo"]'); await ph.waitForTimeout(200);
+  // Forced insets, set AFTER load: addInitScript runs before documentElement exists, so the inline
+  // property never landed and --sat read 0 — i.e. the notch was not actually simulated.
+  await ph.evaluate((sat) => {
+    document.documentElement.style.setProperty("--sat", `${sat}px`);
+    document.documentElement.style.setProperty("--sab", "34px");
+  }, SAT);
   { const o = await overflow(ph); const past = await ph.evaluate(() => { const w = innerWidth;
       const inScroller = (el) => { let n = el.parentElement; while (n) { const s = getComputedStyle(n); if (s.overflowX === "auto" || s.overflowX === "scroll") return true; n = n.parentElement; } return false; };
       return [...document.querySelectorAll(".gdo *")].filter((e) => { const r = e.getBoundingClientRect(); const s = getComputedStyle(e); return s.display !== "none" && r.width > 0 && r.right > w + 1 && !inScroller(e); }).map((e) => (e.getAttribute("class") || e.tagName).toString().slice(0, 30)); });
@@ -318,6 +333,32 @@ async function main() {
     await ph.$eval('.gdo .head', (e) => getComputedStyle(e).display), "none");
   // and the empty leftover toggle container is gone (it rendered as a small grey dot)
   eq("390 portrait: the empty leftover toggle container is gone", await ph.$$eval('.gdo .mseg', (e) => e.length), 0);
+
+  // ══ the refresh ICON is a real glyph, not an empty ring ══
+  eq("390 portrait: the refresh control renders an actual icon element with drawn paths", await ph.$eval('[data-testid="m-refresh-icon"]', (e) => ({
+    tag: e.tagName.toLowerCase(), paths: e.querySelectorAll("path").length,
+    hasGeometry: [...e.querySelectorAll("path")].every((p) => (p.getAttribute("d") || "").length > 8),
+    box: e.getBoundingClientRect().width > 10,
+  })), { tag: "svg", paths: 2, hasGeometry: true, box: true });
+
+  // ══ the panel CLOSE button must clear the status bar ══
+  await ph.click('[data-testid="snap-row"][data-id="502"]');
+  await ph.waitForSelector('[data-testid="gday-panel-close"]', { timeout: 10000 });
+  { const r = await ph.$eval('[data-testid="gday-panel-close"]', (e) => { const b = e.getBoundingClientRect(); return { top: b.top, h: b.height, w: b.width }; });
+    const sat = await ph.evaluate(() => parseFloat(getComputedStyle(document.documentElement).getPropertyValue("--sat")) || 0);
+    eq("390 portrait + 59px notch: Close sits BELOW the safe-area inset and is >=44px",
+      { clearsInset: r.top >= sat, bigEnough: r.h >= 43 && r.w >= 43, sat },
+      { clearsInset: true, bigEnough: true, sat: 59 }); }
+  await ph.click('[data-testid="gday-panel-close"]'); await ph.waitForTimeout(200);
+
+  // ══ the stamp AGES: past 2 minutes it keeps the clock, appends the age, and goes muted ══
+  { const before = await ph.$eval('[data-testid="m-updated-at"]', (e) => e.textContent.trim());
+    await ph.clock.fastForward("03:10"); // past the 2-minute threshold, without waiting for it
+    await ph.waitForTimeout(400);
+    const after = await ph.$eval('[data-testid="m-updated-at"]', (e) => ({ text: e.textContent.trim(), muted: e.className.includes("stale") }));
+    eq("390 portrait: a stamp older than 2 minutes keeps its clock, appends the age, and is muted",
+      { aged: /·\s*\dm ago$/.test(after.text), keptClock: /\d{1,2}:\d{2}/.test(after.text), muted: after.muted, changed: after.text !== before },
+      { aged: true, keptClock: true, muted: true, changed: true }); }
 
   { const c = await contrastIn(ph); c.failures.length === 0 ? ok(`phone contrast: every board node >= 4.5:1 (min ${c.min})`) : bad(`phone contrast: ${c.failures.length} < 4.5`, c.failures.slice(0, 5).map((f) => `${f.ratio} "${f.t}"`).join(" | ")); }
 

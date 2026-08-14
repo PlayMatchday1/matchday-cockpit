@@ -122,7 +122,9 @@ export default function GamedayBoard() {
     setLoading(false); setRefreshing(false);
   }, []);
   useEffect(() => { void load(date); }, [date, load]);
-  useEffect(() => { const t = setInterval(() => setNow(Date.now()), 30000); return () => clearInterval(t); }, []);
+  // 15s, not 30s: this clock drives the freshness age, and at 30s the "2 minutes" threshold
+  // could be reported up to half a minute late — which reads as "the stamp is not ageing".
+  useEffect(() => { const t = setInterval(() => setNow(Date.now()), 15000); return () => clearInterval(t); }, []);
   // Phone: glue the sticky group subheads directly under the sticky header. The header
   // is 3 fixed 44px bands + the 3px prod strip (~135px), but measure it so a wrapped
   // chip row can't shove a group header under the wrong offset. Harmless on desktop
@@ -190,11 +192,20 @@ export default function GamedayBoard() {
                 to tell how old the numbers are without rotating the phone. */}
             <span className="mfresh" data-testid="m-fresh">
               <span className={"mstamp" + (staleFail ? " failed" : staleMins >= 2 ? " stale" : "")} data-testid="m-updated-at">
-                {staleFail ? "not refreshed" : updatedAt == null ? "…" : staleMins >= 2 ? `${staleMins}m ago` : updatedLabel}
+                {/* KEEP THE TIME and APPEND the age — "11:51 PM · 3m ago". Dropping the clock made
+                    it impossible to tell what the numbers were actually from. */}
+                {staleFail ? "not refreshed" : updatedAt == null ? "…" : staleMins >= 2 ? `${updatedLabel} · ${staleMins}m ago` : updatedLabel}
               </span>
               <button type="button" className="mrefresh" data-testid="m-gday-refresh" disabled={refreshing}
                 aria-label="Refresh the board" onClick={() => void load(date, true)}>
-                <span className={"rspin" + (refreshing ? " on" : "")} aria-hidden />
+                {/* An actual circular arrow WITH an arrowhead. The old empty ring read as a spinner
+                    stuck mid-spin, or as nothing. Busy is the SAME glyph rotating, so idle and
+                    in-flight are recognisably one control. */}
+                <svg className={"ricon" + (refreshing ? " on" : "")} data-testid="m-refresh-icon" viewBox="0 0 24 24" width="19" height="19"
+                  fill="none" stroke="currentColor" strokeWidth="2.1" strokeLinecap="round" strokeLinejoin="round" aria-hidden>
+                  <path d="M20 11a8 8 0 1 0-2.3 5.7" />
+                  <path d="M20 4.5V11h-6.2" />
+                </svg>
               </button>
             </span>
           </div>
@@ -230,7 +241,10 @@ export default function GamedayBoard() {
               <button type="button" className="refresh" data-testid="gday-refresh" disabled={refreshing}
                 aria-label="Refresh the board" title="Refresh the board"
                 onClick={() => void load(date, true)}>
-                <span className={"rspin" + (refreshing ? " on" : "")} aria-hidden />
+                <svg className={"ricon" + (refreshing ? " on" : "")} data-testid="gday-refresh-icon" viewBox="0 0 24 24" width="14" height="14"
+                  fill="none" stroke="currentColor" strokeWidth="2.1" strokeLinecap="round" strokeLinejoin="round" aria-hidden>
+                  <path d="M20 11a8 8 0 1 0-2.3 5.7" /><path d="M20 4.5V11h-6.2" />
+                </svg>
                 <span className="rlab">{refreshing ? "Refreshing…" : "Refresh"}</span>
               </button>
               <span className={"stamp" + (staleFail ? " failed" : staleMins >= 2 ? " stale" : "")} data-testid="updated-at">
@@ -413,15 +427,26 @@ const CSS = `
 /* the in-place match panel (replaces the old drawer). Fixed right edge; the right offset is set
    inline to the dock width when they coexist (>=1600) so the two never overlap. */
 .gdo .gpanel{position:fixed;top:0;bottom:0;width:var(--panel-w,600px);max-width:100vw;background:#eef2f0;border-left:1px solid #d4e0da;box-shadow:-8px 0 26px rgba(4,26,18,.12);z-index:60;display:flex;flex-direction:column}
-.gdo .gpanel-bar{display:flex;align-items:center;gap:8px;padding:9px 12px;background:#04291d;color:#fff;flex:0 0 auto}
-.gdo .gpanel-x{border:1px solid #2a5644;background:transparent;color:#cfe7dc;border-radius:8px;padding:7px 13px;font:inherit;font-size:13px;font-weight:600;cursor:pointer}
+/* SAFE AREA. The panel is position:fixed top:0, so without this the header renders beneath the iOS
+   status bar and the Dynamic Island — "× Close" was drawn straight through the clock and could not
+   be tapped without rotating the device. The bar is STICKY and starts BELOW the inset; the body
+   scrolls under it. env() is 0 on desktop, so this changes nothing there. */
+.gdo .gpanel-bar{display:flex;align-items:center;gap:8px;padding:9px 12px;background:#04291d;color:#fff;flex:0 0 auto;
+  position:sticky;top:0;z-index:2;padding-top:calc(9px + var(--sat));
+  padding-left:calc(12px + var(--sal, 0px));padding-right:calc(12px + var(--sar, 0px))}
+/* >=44px: this is the only way out of the panel on a phone. */
+.gdo .gpanel-x{border:1px solid #2a5644;background:transparent;color:#cfe7dc;border-radius:8px;padding:7px 13px;
+  min-height:44px;min-width:44px;font:inherit;font-size:13px;font-weight:600;cursor:pointer}
 .gdo .gpanel-x:hover{background:#14432f;color:#fff}
 .gdo .gpanel-step{margin-left:auto;display:inline-flex;gap:5px}
 .gdo .gpanel-step button{border:1px solid #2a5644;background:transparent;color:#cfe7dc;border-radius:8px;min-width:36px;min-height:34px;font:inherit;font-size:17px;cursor:pointer}
 .gdo .gpanel-step button:disabled{opacity:.4;cursor:not-allowed}
 .gdo .gpanel-notice{display:flex;align-items:center;gap:10px;background:#fdf2e0;border-bottom:1px solid #e8c383;color:#6b4400;font-size:12px;line-height:1.4;padding:9px 12px;flex:0 0 auto}
 .gdo .gpanel-notice button{margin-left:auto;border:1px solid #e8c383;background:#fff;border-radius:6px;padding:4px 10px;font:inherit;font-size:11.5px;font-weight:600;cursor:pointer;white-space:nowrap}
-.gdo .gpanel-body{flex:1;min-height:0;overflow-y:auto;padding:12px}
+/* the home indicator: the body is the only scroller, so its bottom padding is what keeps the last
+   control clear of it. */
+.gdo .gpanel-body{flex:1;min-height:0;overflow-y:auto;padding:12px;
+  padding-bottom:calc(12px + var(--sab))}
 .gdo .panel{background:#fff;border:1px solid #DCE5E0;border-radius:14px}
 .gdo .head{padding:18px 20px 16px;margin-bottom:14px;position:relative}
 .gdo .r1{display:flex;align-items:baseline;gap:12px}.gdo h1{margin:0;font-size:23px;letter-spacing:-.2px}
@@ -527,8 +552,6 @@ const CSS = `
   cursor:pointer}
 .gdo .refresh:disabled{opacity:.6;cursor:default}
 /* the spinner replaces the glyph IN PLACE — a fixed 12px box, so nothing shifts while it spins */
-.gdo .rspin{width:12px;height:12px;flex:none;border-radius:50%;border:2px solid #B9CBC1;border-top-color:#20402F}
-.gdo .rspin.on{animation:gdspin .7s linear infinite}
 @keyframes gdspin{to{transform:rotate(360deg)}}
 .gdo .stamp{font-size:12px;color:#3D5349;white-space:nowrap}
 .gdo .stamp.stale{color:#7C8A83}
@@ -631,10 +654,12 @@ const CSS = `
       default is unambiguously "not shown". ── */
 .gdo .mfresh{margin-left:auto;display:inline-flex;align-items:center;gap:7px}
 .gdo .mstamp{font-size:11.5px;color:#41514A;font-variant-numeric:tabular-nums;white-space:nowrap}
-.gdo .mstamp.stale{color:#6B7A72}
+.gdo .mstamp.stale{color:#5C6B62}  /* muted vs #41514A, but still >=4.5:1 on the bar */
 .gdo .mstamp.failed{color:#A8391A;font-weight:700}
 .gdo .mrefresh{width:44px;height:44px;flex:none;display:inline-flex;align-items:center;justify-content:center;
-  border:1px solid #D3DED8;border-radius:11px;background:#fff;cursor:pointer}
+  border:1px solid #D3DED8;border-radius:11px;background:#EEF3F0;color:#20402F;cursor:pointer}
+.gdo .ricon{display:block;transform-origin:50% 50%}
+.gdo .ricon.on{animation:gdspin .8s linear infinite}
 .gdo .mrefresh:disabled{opacity:.6;cursor:default}
 .gdo .prodstrip,.gdo .mhead{display:none}
 

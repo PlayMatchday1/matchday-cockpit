@@ -318,7 +318,13 @@ export default function MatchPanel({ matchId, env = "production", onDirtyChange 
     if (!r) { setCountResult("UNKNOWN — no answer from the server. Reload before acting."); return; }
     const fresh = await loadRoster(); // the RE-READ; teamNumbers is absent from GET so we compare team ROWS
     const landedN = fresh ? fresh.teams.length : null;
-    if (landedN === target) { noteImmediate(`set team count to ${target}`); setCountResult(`LANDED — the panel re-read the match and now sees ${landedN} teams.`); }
+    if (landedN === target) {
+      noteImmediate(`set team count to ${target}`);
+      // Re-read the MATCH too: the TEAMS picker and the derived capacity both read orig.teams, so
+      // without this they keep showing the old count after a change that actually landed.
+      await load();
+      setCountResult(`LANDED — the panel re-read the match and now sees ${landedN} teams.`);
+    }
     else setCountResult(`NOT APPLIED — the re-read shows ${landedN ?? "?"} team(s), not ${target}. teamNumbers is write-only so a 2xx proves nothing; the server did not change the count.`);
   };
 
@@ -383,6 +389,7 @@ export default function MatchPanel({ matchId, env = "production", onDirtyChange 
   // fakePlayers — proven on prod). At each mark the ceiling caps shown-left, so fakes are added to
   // reach it: max(0, capacity − real − ceiling).
   const capacity = Number(cur.maxPlayerCount) || 0;
+
   const realPlayers = Math.max(0, Number(orig?.realOccupancy ?? 0));
   const fakesNeeded = (ceiling: number) => Math.max(0, capacity - realPlayers - ceiling);
   const ladderBreak = useMemo(() => {
@@ -395,6 +402,20 @@ export default function MatchPanel({ matchId, env = "production", onDirtyChange 
   }, [cur]);
 
   const teamCount = Array.isArray(orig?.teams) ? orig!.teams!.length : 0;
+
+  // The RUNG this team count writes. 2 and 4 have dedicated size fields; 3 has none (the API models
+  // only maxTeamSize2Team / maxTeamSize4Team), so a 3-team match's capacity lives in maxPlayerCount
+  // alone — confirmed on 28 live 3-team matches, e.g. 15322: 21 total = 3 × 7, while its m2/m4 hold
+  // the OTHER configurations and say nothing about the 3-team shape.
+  const rungKey: "maxTeamSize2Team" | "maxTeamSize4Team" | null =
+    teamCount === 2 ? "maxTeamSize2Team" : teamCount === 4 ? "maxTeamSize4Team" : null;
+  // Sets the TOTAL from a per-team figure, and touches ONLY this rung. The other rung is the
+  // alternate configuration the auto-bump ladder moves between; writing it would corrupt that.
+  const setPerTeam = (per: number) => {
+    const total = Math.max(teamCount, Math.round(per) * teamCount);
+    setField("maxPlayerCount", total);
+    if (rungKey) setField(rungKey, total);
+  };
 
   const doSave = async () => {
     if (!orig || saving || changed.length === 0) return;
@@ -552,34 +573,68 @@ export default function MatchPanel({ matchId, env = "production", onDirtyChange 
           </Section>
 
           {/* SPOTS */}
-          <Section title="SPOTS" dirty={secDirty(["maxPlayerCount"])}>
+          <Section title="SPOTS" dirty={secDirty(["maxPlayerCount", "maxTeamSize2Team", "maxTeamSize4Team"])}>
+            {/* NOBODY DECIDES "36". They decide how many teams and how many a side; the capacity
+                falls out. So the two controls are TEAMS and SPOTS PER TEAM, and the total is derived
+                and read-only.
+
+                THE PICKER OFFERS 2 / 3 / 4, and 3 is real: 28 of 711 non-cancelled matches over the
+                last 8 weeks run 3 teams (e.g. 15322, 21 total = 3 × 7). What 3 lacks is a RUNG FIELD
+                — the API models only maxTeamSize2Team and maxTeamSize4Team. A 3-team match stores its
+                capacity in maxPlayerCount alone, which is why selecting 3 writes only that and says so.
+
+                maxPlayerCount was divisible by the team count on 711 of 711 matches in that window, so
+                a derived control can express every real match. The non-divisible branch below is kept
+                anyway and shows the TRUE stored total rather than rounding it to something the picker
+                could say. */}
             <div className="mp-grid">
-              <label className="mp-f"><span className="mp-lb">MAX PLAYERS <em>total capacity</em></span>
-                <input data-testid="mp-maxplayers" inputMode="numeric" value={cur.maxPlayerCount == null ? "" : String(cur.maxPlayerCount)} className={isDirty("maxPlayerCount") ? "mp-chg" : ""}
-                  onChange={(e) => setField("maxPlayerCount", e.target.value.trim() === "" ? "" : Number(e.target.value))} /></label>
+              <div className="mp-f"><span className="mp-lb">TEAMS <em>fires immediately</em></span>
+                <div className="mp-seg" role="group" aria-label="Team count" data-testid="mp-teams-seg">
+                  {[2, 3, 4].map((n) => (
+                    <button key={n} type="button" data-testid={`mp-teams-${n}`} data-on={teamCount === n ? "true" : "false"}
+                      aria-pressed={teamCount === n} disabled={!!opBusy}
+                      className={teamCount === n ? "on" : ""} onClick={() => void changeTeamCount(n)}>{n}</button>
+                  ))}
+                </div>
+              </div>
               <div className="mp-f"><span className="mp-lb">SPOTS PER TEAM <em>{teamCount} teams</em></span>
                 {teamCount > 0 && capacity % teamCount === 0 ? (
-                  // whole number per team — the stepper writes maxPlayerCount = perTeam × teamCount
                   <div className="mp-step">
                     <button type="button" data-testid="mp-spt-minus" aria-label="Fewer per team" disabled={capacity <= teamCount}
-                      onClick={() => setField("maxPlayerCount", Math.max(teamCount, capacity - teamCount))}>−</button>
+                      onClick={() => setPerTeam(capacity / teamCount - 1)}>−</button>
                     <span className="mp-step-val" data-testid="mp-spt">{capacity / teamCount}</span>
                     <button type="button" data-testid="mp-spt-plus" aria-label="More per team"
-                      onClick={() => setField("maxPlayerCount", capacity + teamCount)}>+</button>
+                      onClick={() => setPerTeam(capacity / teamCount + 1)}>+</button>
                   </div>
                 ) : (
-                  // NOT a whole number per team (or team count unknown). A fractional "4.5 per team" is
-                  // nonsense and a silently-rounded one would write a capacity the operator never chose —
-                  // so hide the per-team figure and edit the total directly.
+                  // The TRUE stored total, never a rounded one. Unobserved in 8 weeks of production
+                  // data, but a real match that got here must not be silently reshaped.
                   <span className="mp-ro" data-testid="mp-spt-na">{teamCount > 0
-                    ? `${capacity} total doesn't divide evenly into ${teamCount} teams — edit the total above.`
-                    : `Team count unknown — edit the total above.`}</span>
-                )}</div>
+                    ? `${capacity} total doesn't divide evenly into ${teamCount} teams — this match's stored capacity is ${capacity} and is shown as-is.`
+                    : `Team count unknown — stored capacity is ${capacity}.`}</span>
+                )}
+              </div>
+              <div className="mp-f"><span className="mp-lb">CAPACITY <em>derived</em></span>
+                <span className="mp-ro" data-testid="mp-capacity" data-value={capacity}>
+                  {teamCount > 0 && capacity % teamCount === 0
+                    ? `${capacity} total — ${teamCount} teams × ${capacity / teamCount}`
+                    : `${capacity} total`}
+                </span>
+              </div>
             </div>
-            <div className="mp-derived">Capacity is <b>{capacity} total</b>{teamCount ? <> over <b>{teamCount} teams</b></> : null}. The server caps on maxPlayerCount; team count is Step 2.</div>
+            {countResult && <p className="mp-hint" data-testid="mp-teamcount-result" data-outcome={countResult.split(" ")[0]}>{countResult}</p>}
+            <p className="mp-hint">
+              {/* THESE ARE TOTALS — the trap this note exists for. 4 × 9 sends 36, not 9. */}
+              These are TOTALS, not per-side: 4 teams × 9 sends <b>36</b>, 2 × 11 sends <b>22</b>.
+              {" "}{teamCount === 3
+                ? "Three teams has no size field of its own in the API — only maxPlayerCount is written, and the 2- and 4-team rungs are left exactly as they are."
+                : teamCount === 2 || teamCount === 4
+                  ? `Saving writes maxPlayerCount and maxTeamSize${teamCount}Team only — the other rung is the alternate configuration the auto-bump ladder uses and is never touched.`
+                  : "Team count is unknown, so only maxPlayerCount is written."}
+              {" "}Changing TEAMS fires immediately and the server reassigns players; the size is staged and lands on Save.
+            </p>
           </Section>
 
-          {/* SPOTS SHOWN — the fakeSpotLeft ceilings */}
           <Section title="SPOTS SHOWN" dirty={secDirty(MARKS.map((h) => `fakeSpotLeft${h}h`))}>
             <span className="mp-lb" style={{ marginBottom: 8 }}>MOST SPOTS SHOWN AS LEFT</span>
             <div className="mp-rel" data-testid="mp-ladder">
@@ -844,6 +899,11 @@ const CSS = `
 .mp-veores[data-outcome="LANDED"]{color:#12704a}
 .mp-veores[data-outcome="NOT"]{color:#8a6300}
 .mp-veores[data-outcome="FAILED"],.mp-veores[data-outcome="UNKNOWN"]{color:#a8391a}
+.mp-seg{display:inline-flex;border:1px solid #D8E2DC;border-radius:10px;overflow:hidden}
+.mp-seg button{min-width:44px;min-height:40px;border:0;background:#fff;color:#41514A;font:inherit;font-weight:800;font-size:13px;cursor:pointer;border-left:1px solid #D8E2DC}
+.mp-seg button:first-child{border-left:0}
+.mp-seg button.on{background:#0d3b2e;color:#fff}
+.mp-seg button:disabled{opacity:.55;cursor:default}
 .mp-sec{border-bottom:1px solid var(--line)}
 .mp-sechd{display:flex;align-items:center;gap:10px;width:100%;border:0;background:none;font:inherit;text-align:left;padding:13px 16px;cursor:pointer;min-height:50px}
 .mp-sechd:hover{background:#f7fbf9}
