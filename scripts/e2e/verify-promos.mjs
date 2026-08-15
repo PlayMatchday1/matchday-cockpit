@@ -127,14 +127,15 @@ async function main() {
         U(1, 4471, "2026-08-13T21:04:00.000Z"), U(2, 4471, "2026-08-13T20:58:00.000Z"),
         U(3, 4471, "2026-08-12T19:22:00.000Z"),                       // 3 uses -> over a cap of 2
         U(4, 9902, "2026-08-12T16:30:00.000Z"),                       // 1 use  -> compliant
-        U(5, 88213, "2026-08-13T08:12:00.000Z", { deleted: true, name: null, email: null, phone: null }),
-        U(6, 88213, "2026-08-12T07:55:00.000Z", { deleted: true, name: null, email: null, phone: null }),
+        // a deleted account KEEPS its last-known identity — that is the finding
+        U(5, 88213, "2026-08-13T08:12:00.000Z", { deleted: true, name: "Dana Gone", email: "dana@x.com", phone: "+15125559999" }),
+        U(6, 88213, "2026-08-12T07:55:00.000Z", { deleted: true, name: "Dana Gone", email: "dana@x.com", phone: "+15125559999" }),
       ];
       const cap = 2;
       const byUser = new Map();
       for (const u of uses) byUser.set(u.playerId, (byUser.get(u.playerId) ?? 0) + 1);
       const breachers = [...byUser.entries()].filter(([, n]) => n > cap)
-        .map(([pid, n]) => ({ playerId: pid, name: pid === 4471 ? "P4471" : null, deleted: pid === 88213, uses: n, worthCents: n * 1500 }));
+        .map(([pid, n]) => ({ playerId: pid, name: pid === 4471 ? "P4471" : "Dana Gone", deleted: pid === 88213, uses: n, worthCents: n * 1500 }));
       return route.fulfill({ status: 200, contentType: "application/json", body: JSON.stringify({
         ok: true, promoId: id, code: "TOMBALL", capPerUser: cap, capKnown: true, uses,
         summary: { total: uses.length, distinctUsers: byUser.size, capPerUser: cap,
@@ -441,9 +442,17 @@ async function main() {
         uses: Number(g.getAttribute("data-uses")),
         note: !!g.querySelector('[data-testid="uses-deleted-note"]'),
         rows: g.querySelectorAll('[data-testid="uses-row"]').length }; });
-    (dead && dead.name === "Account deleted" && dead.uses === 2 && dead.note && dead.rows === 2)
-      ? ok("uses: a deleted account renders its STATE, keeps its 2 redemptions, and is never blank")
+    (dead && /Dana Gone/.test(dead.name ?? "") && /ACCOUNT DELETED/.test(dead.name ?? "")
+      && dead.uses === 2 && dead.note && dead.rows === 2)
+      ? ok("uses: a deleted account shows WHO it was plus an ACCOUNT DELETED mark, and keeps its 2 redemptions")
       : bad("uses deleted group", JSON.stringify(dead)); }
+  // ...and its LAST KNOWN contact details, which is the whole point of the panel
+  { const c = await page.evaluate(() => {
+      const g = document.querySelector('[data-testid="uses-group"][data-dead="true"]');
+      return g?.querySelector('[data-testid="uses-contact"]')?.textContent?.replace(/\s+/g, " ").trim() ?? null; });
+    (c && /last known/i.test(c) && c.includes("dana@x.com") && c.includes("+15125559999"))
+      ? ok("uses: a deleted account shows its LAST KNOWN email and phone, labelled as such")
+      : bad("uses deleted contact", String(c)); }
 
   // NEWEST FIRST in the grouped view
   { const order = await page.$$eval('[data-testid="uses-group"][data-uses="3"] [data-testid="uses-row"] .uwhen',

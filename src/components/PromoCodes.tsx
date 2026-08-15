@@ -497,16 +497,25 @@ function UsesPanel({ promoId }: { promoId: number }) {
               data-testid="uses-group" data-uses={g.uses} data-dead={g.deleted ? "true" : "false"} data-over={g.overCap ? "true" : "false"}>
               <div className="ugtop">
                 <div className="uwho">
-                  <div className="unm" data-testid="uses-name">{g.deleted ? "Account deleted" : (g.name ?? `Player ${g.playerId}`)}</div>
-                  {/* Email and phone are shown because identifying a repeat offender is the entire
-                      job. They are NEVER written to change_log — id only. */}
-                  <div className="uct">{g.deleted ? `no account remains · ${g.deletedRef}` : [g.email, g.phone].filter(Boolean).join(" · ")}</div>
+                  <div className="unm" data-testid="uses-name">
+                    {g.deleted
+                      ? <>{g.name ?? `Player ${g.playerId}`} <span className="udel" data-testid="uses-deleted-tag">ACCOUNT DELETED</span></>
+                      : (g.name ?? `Player ${g.playerId}`)}
+                  </div>
+                  {/* Name, email and phone are shown because identifying a repeat offender is the
+                      entire job — INCLUDING for a deleted account, which is the case being hunted.
+                      They are NEVER written to change_log — id only. */}
+                  <div className="uct" data-testid="uses-contact">
+                    {g.deleted && <span className="ulast">last known · </span>}
+                    {[g.email, g.phone].filter(Boolean).join(" · ") || "no contact on file"}
+                    {g.deleted && <> · {g.deletedRef}</>}
+                  </div>
                 </div>
                 <div className="ucnt"><div className="un">{g.uses}</div>
                   <div className="ul2">USE{g.uses === 1 ? "" : "S"}</div>
                   <div className="uworth">{money(g.worthCents)}</div></div>
               </div>
-              {g.deleted && <div className="udead" data-testid="uses-deleted-note">The player record is gone, the redemptions are not. This is what a deleted account looks like from here.</div>}
+              {g.deleted && <div className="udead" data-testid="uses-deleted-note">The account is gone; the redemptions are not. The name and contact details above are the LAST KNOWN values, held on the redemption rows themselves — which is how a deleted account is still identifiable here.</div>}
               <ul className="ulist">
                 {g.rows.map((r) => <UseLine key={r.id} r={r} />)}
               </ul>
@@ -1034,7 +1043,10 @@ const CSS = `
 .promo .ucnt .ul2{font-size:10.5px;letter-spacing:.06em;color:var(--ink3);font-weight:700}
 .promo .ugrp.hot .ucnt .un{color:#a8321f}
 .promo .uworth{font-size:12px;color:var(--ink2);margin-top:3px}
-.promo .udead{font-size:12.5px;color:#5c5c5c;padding:0 14px 12px}
+.promo .udead{font-size:12.5px;color:#5c5c5c;padding:0 14px 12px;line-height:1.5}
+.promo .udel{font-size:9.5px;font-weight:800;letter-spacing:.07em;color:#5c5c5c;background:#e4e4e4;
+  border-radius:5px;padding:2px 6px;margin-left:7px;vertical-align:middle;white-space:nowrap}
+.promo .ulast{color:#5c5c5c;font-weight:700}
 .promo .ulist{list-style:none;margin:0;padding:0;border-top:1px solid var(--line)}
 .promo .uline{display:grid;grid-template-columns:170px 1fr auto;gap:12px;align-items:baseline;
   padding:9px 14px;border-bottom:1px solid #f0f4f0;font-size:13.5px}

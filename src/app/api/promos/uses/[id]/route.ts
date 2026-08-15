@@ -69,11 +69,14 @@ export async function GET(req: Request, ctx: { params: Promise<{ id: string }> }
       id: r.api_id as number,
       playerId: (r.user_id as number) ?? null,
       deleted,
-      // A deleted account's cached name/email/phone are NOT shown — the account is gone and the
-      // panel says so rather than displaying contact details for someone who asked to be removed.
-      name: deleted ? null : [r.user_first_name, r.user_last_name].filter(Boolean).join(" ").trim() || null,
-      email: deleted ? null : (r.user_email as string) ?? null,
-      phone: deleted ? null : (r.user_phone_number as string) ?? null,
+      // A DELETED ACCOUNT'S LAST-KNOWN IDENTITY IS RETURNED, deliberately. The panel exists to
+      // answer "is somebody deleting accounts to re-use codes" — hiding who the deleted person
+      // was defeats the entire purpose. This is not new exposure: the mirror already holds these
+      // values on the user-match row, which is why they survive the account. The panel labels
+      // them LAST KNOWN and marks the account deleted rather than presenting them as current.
+      name: [r.user_first_name, r.user_last_name].filter(Boolean).join(" ").trim() || null,
+      email: (r.user_email as string) ?? null,
+      phone: (r.user_phone_number as string) ?? null,
       at: (r.created_at as string) ?? "",
       matchId: (r.match_api_id as number) ?? null,
       match: m?.name ?? null,
