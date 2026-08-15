@@ -1090,17 +1090,27 @@ FOR VITALII (in this order — #1 is the bug, the missing sort param is only a s
      20 C) is a per-visible-row N+1 (cap 5, cached, cancelled — measured ~0.6s for a page). Put
      `usageCount` on the list row and the whole lazy-fetch mechanism deletes itself.
   3. `sortColumn` / `sortDirection` params.
-  4b. **THE PER-USER CAP IS NOT ENFORCED EITHER — same defect, wider scope.** Measured
-     2026-08-15 (`scripts/probe-promo-cap-enforcement.ts`, read-only), staff excluded
-     (@playmatchday.com, the fake-player email tail, `is_fake_player`, promo 104):
-     **259 of 580 redeemed per-user-capped codes have been breached by a real player — 44.7%.**
-     1,197 distinct real players; 1,416 redemptions beyond cap; worst single (code,player)
-     +17 over. `welcomeback` (117) has a cap of **1** and one account redeemed it **10 times**.
-     A 44.7% breach rate is not a race — the server does not check the cap.
-     **Consequence: `numberOfUsesPerUser` is ADVISORY at BOTH scopes.** Item 4 above is the
-     same defect measured on TOTAL_USAGE; this is it measured per-user. Any screen that
-     renders a cap without saying so is promising something the API does not do.
-     (Counts move ±1% between runs — the list has no ORDER BY, see #1.)
+  4b. **THE PER-USER CAP IS IMPERFECTLY ENFORCED — measured, and CORRECTED.** Re-measured
+     2026-08-15 with a STABLE keyset read (`scripts/probe-promo-excess-value.ts`), staff
+     excluded (@playmatchday.com, the fake-player email tail, `is_fake_player`, promo 104):
+       • **70 of 812** redeemed per-user-capped codes have been exceeded by a real player — **8.6%**
+       • 118 distinct real players; 120 (code,player) pairs; **135** redemptions beyond cap
+       • worst overage on one (code,player): **+3** (`comeplay` 2581 cap 1 used 4x;
+         `MATCHDAY` 15356 cap 1 used 4x)
+       • of the 135 excess, **71 were on CANCELLED matches** (cost nothing) and 64 priced
+       • **MEASURED cost of the excess: $648.45**
+     A cap of 1 redeemed 4 times still means the server does not HARD-stop at the cap, so the
+     number is advisory rather than guaranteed — but at 8.6% and a worst case of +3 it is
+     mostly holding, and the exposure is hundreds of dollars, not thousands.
+
+     **THE EARLIER FIGURES IN THIS DOC WERE WRONG AND ARE WITHDRAWN** (they claimed 258/600 =
+     43%, 1,416 excess, $6,872). They came from an OFFSET scan of `mdapi_match_players` with no
+     ORDER BY. An unordered offset scan returns some rows twice and skips others: the row TOTAL
+     was right (14,149 both times), which is exactly what made it convincing, while the
+     per-(code,user) counts were inflated by the duplicates. The corrected read walks `api_id`
+     forward (keyset), rides the PK index, and reports 0 duplicate ids.
+     **The lesson generalises: paginate our own mirror by keyset, never by offset-without-order.**
+     It is the same defect the promo LIST endpoint has (#1 above) — we reproduced it locally.
 
   4. OVER-REDEEMED TOTAL_USAGE codes (Phase 18c audit, Phase 20 E1 split): of 193 `TOTAL_USAGE`
      codes, 13 have `usageCount` > `numberOfUsesPerUser`. Phase 20 E1 checked `updatedAt` vs

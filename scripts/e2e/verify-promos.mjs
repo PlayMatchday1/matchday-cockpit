@@ -277,6 +277,11 @@ async function main() {
     pct: await page.$eval('[data-testid="f-type-pct"]', (e) => e.getAttribute("aria-pressed")), uses: await page.$eval('[data-testid="f-uses"]', (e) => e.value),
     sd: /\d{4}-\d{2}-\d{2}/.test(await page.$eval('[data-testid="f-sd"]', (e) => e.value)), ed: /\d{4}-\d{2}-\d{2}/.test(await page.$eval('[data-testid="f-ed"]', (e) => e.value)),
   }, { pct: "true", uses: "1", sd: true, ed: true });
+  // The cap note belongs on the form where the cap is SET — the moment an expectation forms.
+  { const c = await page.evaluate(() => document.querySelector('[data-testid="cap-note-create"]')?.textContent?.trim() ?? null);
+    (c && /does not enforce/i.test(c) && /70 of 812/.test(c))
+      ? ok("cap note: the CREATE form states the cap is advisory, with the measured evidence")
+      : bad("cap note create", String(c)); }
   eq("create disabled until code + value", await page.$eval('[data-testid="f-create"]', (e) => e.disabled), true);
   await page.fill('[data-testid="f-value"]', "40"); await page.waitForTimeout(150);
   await page.fill('[data-testid="f-code"]', "ACTIVE1"); await page.waitForTimeout(600); // taken
@@ -394,6 +399,16 @@ async function main() {
   { const top = await ph.$eval('[data-testid="promo-row"][data-id="201"]', (e) => Math.round(e.getBoundingClientRect().top));
     (top < 2 * 844) ? ok(`phone: searched row within two screen-heights (${top}px)`) : bad("phone: found row too far down", `${top}px`); }
 
+  // ══════════════ THE CAP IS ADVISORY, AND EVERY SITE THAT RENDERS ONE SAYS SO ══════════════
+  // A screen showing "cap 2" without this note promises something the server does not do:
+  // 70 of 812 redeemed capped codes have been exceeded by a real player.
+  { const listNote = await page.evaluate(() => {
+      const el = document.querySelector('[data-testid="cap-note-list"]');
+      return el ? { text: el.textContent.trim(), title: el.getAttribute("title") ?? el.closest("[title]")?.getAttribute("title") ?? "" } : null; });
+    (listNote && /advisory/i.test(listNote.text) && /not enforce/i.test(listNote.title))
+      ? ok("cap note: the promo LIST's CAP column is annotated advisory, with the evidence in its title")
+      : bad("cap note list", JSON.stringify(listNote)); }
+
   // ══════════════ USES PANEL (docs/mockups/promo-uses-v1_1.html) ══════════════
   // The 303 drawer is still open and its scrim covers the list — close it before opening another.
   await page.keyboard.press("Escape");
@@ -471,6 +486,15 @@ async function main() {
     eq("uses: the by-time view shows every redemption and KEEPS the deleted ones", t, { rows: 6, dead: 2 }); }
   await page.click('[data-testid="uses-by-person"]');
   await page.waitForSelector('[data-testid="uses-by-person-list"]', { timeout: 6000 });
+
+  // the annotation on the two cap sites inside the drawer
+  { const inDrawer = await page.evaluate(() => ({
+      uses: document.querySelector('[data-testid="cap-note-uses"]')?.textContent?.trim() ?? null,
+      detail: document.querySelector('[data-testid="cap-note-detail"]')?.textContent?.trim() ?? null,
+    }));
+    (/advisory/i.test(inDrawer.uses ?? "") && /advisory/i.test(inDrawer.detail ?? ""))
+      ? ok("cap note: the uses tile AND the detail usage box both say the cap is advisory")
+      : bad("cap note drawer", JSON.stringify(inDrawer)); }
 
   // 390 PORTRAIT — the row stacks and the city chip still hugs its text
   await page.setViewportSize({ width: 390, height: 844 });
