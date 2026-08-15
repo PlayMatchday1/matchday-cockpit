@@ -16,6 +16,14 @@ Retool table mapping does not mean the API omits it — read the payload.
 **Say what you did not do.** Scope cuts, disabled controls and unbuilt paths go
 in the report, not just in the code.
 
+## Evidence
+
+Every entry in `docs/matchday-api-facts.md` carries its evidence: the endpoint and the
+payload it came from, or a `file:line`. **An entry with no evidence is UNKNOWN, however
+confidently it is worded.** This is not a style rule — a line reading `Update is PATCH
+/admin/promocodes/{id}` with no probe behind it was treated as settled and nearly became an
+edit form aimed at 100%-off codes.
+
 ## Writes
 
 - **The diff IS the request body.** `PUT` has PATCH semantics — send only what

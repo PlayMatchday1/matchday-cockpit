@@ -85,5 +85,53 @@ async function main() {
   console.log(`...of those, breached by a real player   : ${codes.size}  (${redeemedPerUserCodes.size ? ((codes.size / redeemedPerUserCodes.size) * 100).toFixed(1) : 0}%)`);
   const maxOver = offenders.length ? Math.max(...offenders.map((o) => o.uses - o.cap)) : 0;
   console.log(`worst overage on a single (code,player)  : +${maxOver} beyond the cap`);
+
+  // ── WHAT THE UNENFORCED CAP COST ────────────────────────────────────────────────────────────
+  // EXCESS = redemptions beyond each code's own per-user cap. Valued at the MATCH's own price and
+  // the CODE's own discount, not a flat assumption: a 50%-off code on a $12 match is $6, not $15.
+  const excessPairs = offenders.map((o) => ({ ...o, excess: o.uses - o.cap }));
+  const totalExcess = excessPairs.reduce((s2, o) => s2 + o.excess, 0);
+  console.log(`\n──────── WHAT IT COST ────────`);
+  console.log(`EXCESS redemptions beyond cap (real players): ${totalExcess}`);
+
+  // price each excess redemption. Take that (code,player)'s OWN rows, newest first, and value the
+  // ones beyond the cap.
+  const rowsByPair = new Map<string, { amount: number | null; match: number | null }[]>();
+  for (let from = 0; ; from += 1000) {
+    const { data } = await sb.from("mdapi_match_players")
+      .select("user_id,promocode_id,amount,match_api_id,user_email,user_is_fake_player")
+      .not("promocode_id", "is", null).range(from, from + 999);
+    if (!data?.length) break;
+    for (const r of data) {
+      if (isStaff(r as never) || STAFF_CODE_IDS.has(r.promocode_id as number) || r.user_id == null) continue;
+      const k = `${r.promocode_id}|${r.user_id}`;
+      if (!rowsByPair.has(k)) rowsByPair.set(k, []);
+      rowsByPair.get(k)!.push({ amount: r.amount as number, match: r.match_api_id as number });
+    }
+    if (data.length < 1000) break;
+  }
+  // the match's own price, for a 100% code where amount is 0
+  const matchIds = [...new Set([...rowsByPair.values()].flat().map((x) => x.match).filter((x): x is number => x != null))];
+  const price = new Map<number, number>();
+  for (let i = 0; i < matchIds.length; i += 500) {
+    const { data } = await sb.from("mdapi_matches").select("api_id,registration_price").in("api_id", matchIds.slice(i, i + 500));
+    for (const m of data ?? []) price.set(m.api_id as number, Number(m.registration_price) || 0);
+  }
+  let worthCents = 0, valued = 0, unpriced = 0;
+  for (const o of excessPairs) {
+    const rs = rowsByPair.get(`${o.codeId}|${o.userId}`) ?? [];
+    const beyond = rs.slice(0, o.excess);   // the excess redemptions
+    for (const r of beyond) {
+      const face = price.get(r.match ?? -1) ?? 0;
+      // A 100%-off spot has amount 0 — its COST is the match's full price (a free spot given away).
+      // A partial discount cost the difference between the face price and what was actually paid.
+      const paid = Number(r.amount) || 0;
+      const cost = o.type === "PERCENT" && o.value >= 100 ? face : Math.max(0, face - paid);
+      if (face > 0) valued++; else unpriced++;
+      worthCents += cost;
+    }
+  }
+  console.log(`  priced against the match's own registration_price: ${valued} (unpriced: ${unpriced})`);
+  console.log(`  VALUE OF THE EXCESS: $${(worthCents / 100).toFixed(2)}`);
 }
 main().catch((e) => { console.error(e); process.exit(1); });

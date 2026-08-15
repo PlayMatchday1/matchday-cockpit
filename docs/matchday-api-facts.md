@@ -1090,6 +1090,18 @@ FOR VITALII (in this order — #1 is the bug, the missing sort param is only a s
      20 C) is a per-visible-row N+1 (cap 5, cached, cancelled — measured ~0.6s for a page). Put
      `usageCount` on the list row and the whole lazy-fetch mechanism deletes itself.
   3. `sortColumn` / `sortDirection` params.
+  4b. **THE PER-USER CAP IS NOT ENFORCED EITHER — same defect, wider scope.** Measured
+     2026-08-15 (`scripts/probe-promo-cap-enforcement.ts`, read-only), staff excluded
+     (@playmatchday.com, the fake-player email tail, `is_fake_player`, promo 104):
+     **259 of 580 redeemed per-user-capped codes have been breached by a real player — 44.7%.**
+     1,197 distinct real players; 1,416 redemptions beyond cap; worst single (code,player)
+     +17 over. `welcomeback` (117) has a cap of **1** and one account redeemed it **10 times**.
+     A 44.7% breach rate is not a race — the server does not check the cap.
+     **Consequence: `numberOfUsesPerUser` is ADVISORY at BOTH scopes.** Item 4 above is the
+     same defect measured on TOTAL_USAGE; this is it measured per-user. Any screen that
+     renders a cap without saying so is promising something the API does not do.
+     (Counts move ±1% between runs — the list has no ORDER BY, see #1.)
+
   4. OVER-REDEEMED TOTAL_USAGE codes (Phase 18c audit, Phase 20 E1 split): of 193 `TOTAL_USAGE`
      codes, 13 have `usageCount` > `numberOfUsesPerUser`. Phase 20 E1 checked `updatedAt` vs
      `createdAt` to rule out "cap lowered after the fact":
@@ -1110,7 +1122,21 @@ control for this reason (search-first UI instead).
   `TOTAL_USAGE` and `SPECIFIC_*` are mutually exclusive). `numberOfUsesPerUser` is the cap
   (per-user; a TOTAL cap when `targetMatchType === TOTAL_USAGE`); `>= 10000` = no-cap sentinel.
 - **Delete is soft + reversible:** `DELETE /admin/promocodes/{id}` sets `deletedAt`; restore is
-  `PATCH /admin/promocodes/{id}/restore`. Update is `PATCH /admin/promocodes/{id}` (partial diff).
+  `PATCH /admin/promocodes/{id}/restore`. Update is **`PATCH /admin/promocodes/{id}`** — CONFIRMED 2026-08-15 from the Retool export:
+  three query nodes target it, body `{{ generateDtoToUpdatePromocode.value }}`, which starts from
+  `updateFuturePromocodeState` (only touched fields) and is therefore a genuine partial diff.
+  **Editable fields:** `code`, `startDateUtc`/`endDateUtc`, `discountType`/`discountValue`,
+  `numberOfUsesPerUser`, `targetUserType` (+`userIDs`), `targetMatchType`
+  (+`matchIDs`/`fieldIDs`/`matchTimePeriodStart`+`End`).
+  **Two pairing rules the DTO enforces and any client must copy:** changing `discountValue`
+  alone back-fills `discountType`; changing ONE of `startDateUtc`/`endDateUtc` back-fills the
+  other. Switching `targetMatchType` DELETES the other scopes' keys. USD `discountValue` is
+  multiplied by 100 (cents) on the wire; PERCENT is sent as-is.
+  **Post-redemption behaviour: UNKNOWN.** The DTO has no branch on `usageCount` and excludes
+  nothing once a code is redeemed, so it cannot answer which fields the server ignores. Settling
+  it needs the server source or a write probe, and probing a live 100%-off code is not
+  acceptable. A client should therefore RE-READ after the write and report per field — that
+  read-back is what turns a silently-ignored field into a visible NOT APPLIED.
 - **Code string: no constraints** (Retool validates non-empty only; no casing/regex/length/trim;
   stored exactly as typed — the caps code `MA` is real).
 
