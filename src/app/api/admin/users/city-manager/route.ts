@@ -20,6 +20,7 @@
 //   5. The E2E service account can never hold it (0120's trigger raises; this is the second lock).
 //   6. Every change goes through recordWrite into change_log.
 
+import { mapAppUsersConstraint } from "@/lib/appUsersConstraint";
 import { randomUUID } from "node:crypto";
 import { authenticateAdmin } from "@/lib/adminAuth";
 import { recordWrite, supabaseLogStore } from "@/lib/changeLog";
@@ -33,7 +34,11 @@ type Target = {
   id: string; email: string; is_admin: boolean; is_service_account: boolean;
   is_city_manager: boolean; city_identifier: string | null;
 };
-const SELECT = "id, email, is_admin, is_service_account, is_city_manager, city_identifier";
+// The broad flags are selected so RULE 4 can refuse the combination that leaked. NOTE the
+// adminAuth rule about never NAMING permission columns applies to THAT file (code deploys
+// before migrations); these columns are long-established, and this route already 500s
+// meaningfully if they are missing.
+const SELECT = "id, email, is_admin, is_service_account, is_city_manager, city_identifier, can_access_matchops, can_access_home, can_access_finance, can_access_growth, can_access_membership, can_access_chats, can_access_tech, can_access_org";
 
 export async function POST(req: Request) {
   const auth = await authenticateAdmin(req);
@@ -75,6 +80,23 @@ export async function POST(req: Request) {
     return Response.json({
       error: "This account is an Admin. City Manager and Admin are mutually exclusive: the city gate refuses admins (an admin has no city, so there is no scope), so holding both leaves the account unable to use either tier properly. Remove Admin first.",
     }, { status: 409 });
+  }
+  // RULE 4 — THE COMBINATION THAT LEAKED (Phase 29b), refused at the ROUTE.
+  // Granting the tier to an account that also holds the broad access flags is exactly how a DFW
+  // city manager came to read the whole Match Ops estate, Player Lookup included: the tier was
+  // ADDITIVE and the Match Ops gate knew nothing about it. The gate now confines them regardless,
+  // so this is DEFENCE rather than the guarantee — but a state that cannot be created is a state
+  // nobody has to notice later, and the grid is where it was created the first time.
+  if (nextIsCm) {
+    const broad = ["can_access_matchops", "can_access_home", "can_access_finance", "can_access_growth",
+      "can_access_membership", "can_access_chats", "can_access_tech", "can_access_org"] as const;
+    const held = broad.filter((k) => (t as unknown as Record<string, unknown>)[k] === true);
+    if (held.length > 0) {
+      return Response.json({
+        error: `This account still holds ${held.join(", ")}. A City Manager is scoped to their own city pages, so those flags grant nothing here and previously opened the whole Match Ops estate. Remove them before granting the tier.`,
+        held,
+      }, { status: 409 });
+    }
   }
   // RULE 5 — service accounts never hold it. The 0120 trigger raises P0001 too; this returns a
   // readable message instead of a database error string.
@@ -126,7 +148,13 @@ export async function POST(req: Request) {
     supabaseLogStore(),
   );
 
-  if (updErr) return Response.json({ error: (updErr as { message: string }).message, code: (updErr as { code?: string }).code }, { status: 400 });
+  if (updErr) {
+    // RULE 4 above refuses the combination before we get here, so this is belt and braces — but a
+    // constraint arriving raw would still name an internal identifier at the operator.
+    const mapped = mapAppUsersConstraint(updErr);
+    if (mapped) return Response.json({ error: mapped.error, conflict: mapped.conflict }, { status: mapped.status });
+    return Response.json({ error: (updErr as { message: string }).message, code: (updErr as { code?: string }).code }, { status: 400 });
+  }
 
   // Re-read AFTER the write so the client renders actual DB state — the 0120 trigger nulls the
   // city on its own when the tier goes off, and the grid must show what the database did.

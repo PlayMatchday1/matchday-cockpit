@@ -244,10 +244,29 @@ is("case and whitespace do not open a hole", assertCityScope("DFW", " dfw "), { 
 is("a spoofed ?city= for another city is refused", assertCityScope("DFW", "atx").ok, false);
 is("naming no city applies the caller's own scope", assertCityScope("DFW", null), { ok: true });
 
-// CENSUS: the city gate is opt-in, route by route. Nothing is on it yet — Part B adds the first.
+// CENSUS: the city gate is opt-in, route by route.
+// Phase 29b adds city/gameday — the tier's third and last page, READ ONLY. Growing this list is
+// the moment to ask whether the new route scopes from the SESSION and refuses a ?city= naming
+// another city; both are asserted below.
 { const importsCity = routeFiles.filter((f) => readFileSync(f, "utf8").includes("authenticateCityManager"));
   is("authenticateCityManager is imported by EXACTLY the intended routes (a new one must edit this test)",
-    importsCity.map(rel).sort(), ["manager-pay/city-week/route.ts"]); }
+    importsCity.map(rel).sort(), ["city/gameday/route.ts", "manager-pay/city-week/route.ts"]); }
+
+// ── THE CONFINEMENT (Phase 29b): the tier is RESTRICTIVE, not additive ──
+// The leak: a city manager also held can_access_matchops, and matchOpsReadGate requires exactly
+// that flag and knew nothing about the tier — so the whole estate opened, Player Lookup included.
+// The full assertion set lives in scripts/city-confinement-test.ts; these pin the WIRING here so
+// a future edit to either gate cannot quietly drop it.
+for (const f of ["src/lib/adminAuth.ts", "src/lib/matchOpsAuth.ts"]) {
+  is(`${f.split("/").pop()} enforces isCityManagerConfined`, /isCityManagerConfined/.test(readFileSync(f, "utf8")), true);
+}
+// Every city route must take its scope from the session and REFUSE a mismatched ?city= — a silent
+// fallback to another city (or to "all") is the leak wearing a different shape.
+for (const f of ["src/app/api/city/gameday/route.ts", "src/app/api/reviews/route.ts"]) {
+  const src = readFileSync(f, "utf8");
+  is(`${f.split("/api/")[1]} refuses a ?city= naming another city (403, not a fallback)`,
+    /searchParams\.get\("city"\)/.test(src) && /403/.test(src) && /cannot read/i.test(src), true);
+}
 
 // ── THE WALK: whole paths, not routes in isolation ──
 //

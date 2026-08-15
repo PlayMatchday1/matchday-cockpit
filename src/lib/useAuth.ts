@@ -160,6 +160,16 @@ export function canAccess(
 
 export function hasAnyAccess(appUser: AppUser | null): boolean {
   if (!appUser) return false;
+  // THE CITY-MANAGER TIER IS ACCESS IN ITS OWN RIGHT (Phase 29b). It was not, and that was half
+  // of the leak: the tier held no access of its own, so it rode on a borrowed can_access_matchops
+  // — which is precisely the flag that opened the whole Match Ops estate. Revoking that flag
+  // closed the leak and simultaneously bounced both city managers to /no-access, because this
+  // function did not know the tier existed. firstAllowedPath already routed them to
+  // /city/manager-pay; AuthGate never got that far.
+  //
+  // Counting the tier here is what makes it a first-class grant instead of a passenger on someone
+  // else's flag.
+  if (isCityManager(appUser)) return true;
   return (
     appUser.is_admin ||
     appUser.can_access_home ||

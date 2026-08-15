@@ -12,9 +12,14 @@ import { usePathname } from "next/navigation";
 import { useAuth } from "@/lib/useAuth";
 import { cityNameFor } from "@/lib/cityScope";
 
+// THREE items, FLAT — no Daily Ops / Back Office switch. That switch exists to divide a large
+// estate; this tier has three pages, and a section toggle over three items is chrome pretending
+// to be structure. Order is deliberate: Manager Pay is the primary page and the only one carrying
+// a write (the manager assignment).
 const ITEMS = [
   { href: "/city/manager-pay", label: "Manager Pay" },
   { href: "/city/reviews", label: "Reviews" },
+  { href: "/city/gameday", label: "Gameday Ops" },
 ];
 
 export default function CityNav() {

@@ -25,6 +25,31 @@ export type AppUserRow = Record<string, unknown>;
 // explicit grant (off by default), independent of is_admin and of each other, and each REQUIRES
 // MATCH OPS (read). Derived identically wherever a route needs them, so the admin gate and the
 // match-ops read gate can never disagree about what a row is allowed to write.
+// ── THE CITY-MANAGER CONFINEMENT (Phase 29b — a production leak) ─────────────
+//
+// WHAT WENT WRONG. The city-manager tier was ADDITIVE: the grant set is_city_manager +
+// city_identifier, but the account ALSO carried the ordinary can_access_matchops, and
+// authenticateMatchOpsRead requires exactly that flag and knows nothing about the tier. A DFW
+// city manager could therefore open the entire Match Ops estate — Master Schedule, Slate Review,
+// Field Ops, Inventory, Change Log, and Player Lookup, which is player PII for EVERY city.
+// Observed live on rgmstrategicventures@gmail.com.
+//
+// The flags were revoked by hand to close it. THIS is what stops it coming back: the tier is now
+// RESTRICTIVE, not additive. A row with is_city_manager === true is refused by the admin gate and
+// by the Match Ops read gate NO MATTER WHICH can_* FLAGS IT CARRIES — so re-adding Match Ops in
+// the user grid cannot reopen the leak. Their access is exactly the /city/* pages, which gate on
+// cityManagerGate (is_city_manager + a city scope) and never on these flags.
+//
+// is_admin WINS if somehow both are set — an admin must never be locked out of their own tool.
+// The two are already mutually exclusive at the grant; this is belt and braces, stated rather
+// than assumed.
+export function isCityManagerConfined(row: AppUserRow): boolean {
+  return row.is_city_manager === true && row.is_admin !== true;
+}
+
+export const CITY_MANAGER_CONFINED_ERROR =
+  "City manager accounts are scoped to their own city. Use Manager Pay, Reviews or Gameday Ops under /city.";
+
 export function deriveMatchOpsFlags(row: AppUserRow): { canEditMatches: boolean; canManagePlayers: boolean; canManagePromos: boolean } {
   const matchops = row.can_access_matchops === true;
   return {
@@ -77,6 +102,9 @@ export async function resolveSessionUser(req: Request):
 export async function authenticateAdmin(req: Request): Promise<AdminAuthResult> {
   const r = await resolveSessionUser(req);
   if (!r.ok) return r;
+  // The tier is confined BEFORE the admin gate: a city manager holding a stray flag must not be
+  // admitted by it. (is_admin wins inside isCityManagerConfined, so a real admin is unaffected.)
+  if (isCityManagerConfined(r.row)) return { ok: false, status: 403, error: CITY_MANAGER_CONFINED_ERROR };
   const gate = adminGate(r.row);
   if (!gate.ok) return gate;
   return { ok: true, supabase: r.supabase, appUserId: r.row.id as string, email: r.email, ...deriveMatchOpsFlags(r.row) };

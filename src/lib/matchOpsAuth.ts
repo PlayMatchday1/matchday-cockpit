@@ -11,7 +11,7 @@
 // nobody moved keeps requiring is_admin — so a route we overlook stays CLOSED, never accidentally open.
 
 import { type SupabaseClient } from "@supabase/supabase-js";
-import { resolveSessionUser, deriveMatchOpsFlags, type AppUserRow } from "./adminAuth";
+import { resolveSessionUser, deriveMatchOpsFlags, isCityManagerConfined, CITY_MANAGER_CONFINED_ERROR, type AppUserRow } from "./adminAuth";
 
 export type MatchOpsAuthResult =
   | { ok: true; supabase: SupabaseClient; appUserId: string; email: string; isAdmin: boolean; canEditMatches: boolean; canManagePlayers: boolean; canManagePromos: boolean }
@@ -32,6 +32,12 @@ export function matchOpsReadGate(row: AppUserRow | null, email: string): { ok: t
   // it locked out Match Ops grantees) but it is SUFFICIENT: an admin must never be denied a read they
   // could always do. So the gate opens for is_admin OR can_access_matchops; a no-flags account has
   // neither and is refused.
+  // CONFINEMENT FIRST (Phase 29b). A city manager is refused here regardless of can_access_matchops
+  // — that flag being true on their row IS the leak this closes, and revoking it by hand fixes the
+  // rows that exist, not the next one someone grants from the grid.
+  if (isCityManagerConfined(row)) {
+    return { ok: false, status: 403, error: CITY_MANAGER_CONFINED_ERROR };
+  }
   if (row.is_admin !== true && row.can_access_matchops !== true) {
     return { ok: false, status: 403, error: "Match Ops access required. Ask an admin to grant you Match Ops." };
   }

@@ -25,6 +25,7 @@
 // add happened between the row write and the invite call.
 
 import { createClient } from "@supabase/supabase-js";
+import { mapAppUsersConstraint, cityManagerConstraintMessage } from "@/lib/appUsersConstraint";
 
 import { resolveCityScope } from "@/lib/cityScope";
 export const runtime = "nodejs";
@@ -159,6 +160,22 @@ export async function POST(req: Request) {
     auth: { persistSession: false, autoRefreshToken: false },
   });
 
+  // THE COMBINATION THAT LEAKED, refused BEFORE the write (Phase 29b). pickPermissions already
+  // makes City Manager and Admin exclusive; the broad access flags are the other half, and they
+  // are what actually opened the estate. Refusing here means the invite never reaches the CHECK,
+  // so the operator gets a sentence rather than a database error.
+  if (perms.is_city_manager === true) {
+    const broad = ["can_access_matchops", "can_access_home", "can_access_finance", "can_access_growth",
+      "can_access_membership", "can_access_chats", "can_access_tech", "can_access_org"] as const;
+    const held = broad.filter((k) => (perms as unknown as Record<string, unknown>)[k] === true);
+    if (held.length > 0) {
+      return Response.json({
+        error: cityManagerConstraintMessage(perms as unknown as Record<string, unknown>),
+        conflict: "city-manager-exclusive", held, rowCreated: false,
+      }, { status: 409 });
+    }
+  }
+
   // Step 1: upsert the permissions row. Idempotent on email so a
   // re-run after a partial failure (e.g. invite send hits a transient
   // SMTP issue) still finishes the row state cleanly.
@@ -169,6 +186,11 @@ export async function POST(req: Request) {
       { onConflict: "email" },
     );
   if (upsertErr) {
+    // Migration 0124's CHECK would otherwise arrive here as a 500 with a raw Postgres string
+    // naming the constraint. Inviting an EXISTING city manager is a real path (the upsert merges
+    // on email), so it reads as a stated 409 instead — the same wording as the grant route.
+    const mapped = mapAppUsersConstraint(upsertErr, perms as unknown as Record<string, unknown>);
+    if (mapped) return Response.json({ error: mapped.error, conflict: mapped.conflict, rowCreated: false }, { status: mapped.status });
     return Response.json(
       { error: `app_users upsert failed: ${upsertErr.message}` },
       { status: 500 },

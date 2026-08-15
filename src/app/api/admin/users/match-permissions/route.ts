@@ -8,6 +8,7 @@
 //           ZERO users holding EDIT MATCHES.
 // This route NEVER touches Vercel env or MatchDay — it only sets app_users flags.
 
+import { mapAppUsersConstraint } from "@/lib/appUsersConstraint";
 import { authenticateAdmin } from "@/lib/adminAuth";
 
 export const runtime = "nodejs";
@@ -68,7 +69,14 @@ export async function POST(req: Request) {
     .maybeSingle();
   // The DB triggers (0114/0116) raise P0001 on a service account or a write-without-matchops
   // attempt — surface the message verbatim, do not swallow it.
-  if (upd.error) return Response.json({ error: upd.error.message, code: upd.error.code }, { status: 400 });
+  // Migration 0124's CHECK is different: it would arrive as a raw Postgres string naming the
+  // constraint. Ticking Match Ops on a city manager is a REAL thing an admin will try from this
+  // grid, so it reads as a stated refusal instead (409), matching the grant route's wording.
+  if (upd.error) {
+    const mapped = mapAppUsersConstraint(upd.error, { can_access_matchops: nextMatchops });
+    if (mapped) return Response.json({ error: mapped.error, conflict: mapped.conflict }, { status: mapped.status });
+    return Response.json({ error: upd.error.message, code: upd.error.code }, { status: 400 });
+  }
   // Re-read the row after the write so the client renders ACTUAL DB state (the trigger
   // may have cascaded, e.g. matchops off => edit/manage off), never the optimistic guess.
   const fresh = await auth.supabase
