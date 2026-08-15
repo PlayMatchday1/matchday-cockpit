@@ -6,7 +6,7 @@
 //
 // Player + recent/upcoming matches + historical-account count moved
 // to a separate /context endpoint so the chat pane can render
-// without waiting on those heavier queries. ContextPanel fetches
+// without waiting on those heavier queries. ContextPane fetches
 // /context lazily only when it becomes visible.
 //
 // Auth: dual-mode bearer via src/lib/crmAuth.

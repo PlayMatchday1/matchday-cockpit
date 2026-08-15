@@ -1,0 +1,211 @@
+<!doctype html>
+<html lang="en">
+<head>
+<meta charset="utf-8">
+<meta name="viewport" content="width=device-width,initial-scale=1">
+<title>Copy phone — thread header</title>
+<style>
+/* ══════════════════════════════════════════════════════════════
+   COPY THE PHONE NUMBER
+
+   Four decisions, all of them about not being noticed:
+
+   1. IT DOES NOT MOVE ANYTHING. The confirmation is a check in the SAME
+      box, not the word "Copied" in place of a glyph — swapping a 14px
+      icon for a 48px word shifts the number every time you use it, on a
+      header you read constantly.
+   2. MUTED UNTIL HOVER. The number is the content; the button is a tool.
+      At rest it is barely there. It still meets contrast on hover and
+      focus, and it is always in the tab order.
+   3. THE HIT AREA IS BIGGER THAN THE GLYPH. 14px icon, 32px target. The
+      thing you aim at and the thing you see are not the same size.
+   4. IT COPIES THE RAW E.164. What you paste into Player Lookup is
+      +14697046974, not "+1 (469) 704-6974" — the display form is for
+      reading, the copied form is for machines.
+   ══════════════════════════════════════════════════════════════ */
+:root{
+  --ink:#0f2417; --ink2:#5b7568; --ink3:#8ba295;
+  --line:#e4eae5; --bg:#eef2ef; --panel:#fff;
+  --acc:#0f5132; --accbg:#e7f5ed; --ok:#15803d;
+}
+*{box-sizing:border-box}
+body{margin:0;background:var(--bg);color:var(--ink);
+  font:15px/1.45 ui-sans-serif,-apple-system,"Segoe UI",Roboto,sans-serif;padding:28px}
+
+.wrap{max-width:900px;margin:0 auto}
+h2{font-size:11px;letter-spacing:.09em;color:var(--ink3);font-weight:700;
+  margin:26px 0 10px}
+h2:first-child{margin-top:0}
+
+/* ── the thread header, as it is in the app ──────────────────── */
+.hdr{background:var(--panel);border:1px solid var(--line);border-radius:12px;
+  display:flex;align-items:center;gap:12px;padding:12px 16px}
+.av{width:38px;height:38px;border-radius:10px;background:#2f6fd0;flex:none;
+  display:grid;place-items:center;color:#fff;font-size:17px}
+.who{min-width:0;flex:1}
+
+/* The number and the button share a row and a baseline. The button is a
+   sibling of the number, not floating near it — so it moves with the
+   number at any width. */
+.numline{display:flex;align-items:center;gap:2px}
+.num{font-size:17px;font-weight:700;letter-spacing:.01em;
+  font-variant-numeric:tabular-nums}
+.sub{color:var(--ink2);font-size:12.5px;margin-top:1px}
+
+.cp{position:relative;width:32px;height:32px;flex:none;border:0;padding:0;
+  background:transparent;border-radius:8px;cursor:pointer;
+  display:grid;place-items:center;color:var(--ink3);
+  transition:color .12s,background .12s}
+.cp:hover{color:var(--ink2);background:var(--bg)}
+.cp:focus-visible{outline:2px solid var(--acc);outline-offset:1px;color:var(--ink2)}
+.cp svg{width:14px;height:14px;display:block}
+/* Both icons occupy the same cell. Nothing reflows when they swap. */
+.cp .ic{grid-area:1/1;transition:opacity .1s}
+.cp .tick{opacity:0;color:var(--ok)}
+.cp[data-copied="1"]{color:var(--ok)}
+.cp[data-copied="1"] .copy{opacity:0}
+.cp[data-copied="1"] .tick{opacity:1}
+
+/* "Copied" is absolutely positioned, so it says the word without costing
+   the layout a pixel. */
+.cp .say{position:absolute;left:50%;transform:translateX(-50%);bottom:-19px;
+  font-size:10.5px;font-weight:700;letter-spacing:.04em;color:var(--ok);
+  white-space:nowrap;opacity:0;pointer-events:none;transition:opacity .1s}
+.cp[data-copied="1"] .say{opacity:1}
+
+.acts{display:flex;align-items:center;gap:8px;color:var(--ink3);font-size:13px}
+.chip{border:1px solid var(--line);border-radius:999px;padding:5px 11px;
+  font-size:12.5px;color:var(--ink2);white-space:nowrap}
+
+/* ── the state strip ─────────────────────────────────────────── */
+.states{display:grid;grid-template-columns:repeat(3,1fr);gap:10px}
+@media(max-width:640px){.states{grid-template-columns:1fr}}
+.st{background:var(--panel);border:1px solid var(--line);border-radius:12px;
+  padding:14px 16px 26px}
+.st .lab{font-size:10.5px;letter-spacing:.07em;color:var(--ink3);
+  font-weight:700;margin-bottom:8px}
+.st .numline{gap:2px}
+.st .num{font-size:15px}
+/* forced states for the strip — the real control uses hover/JS */
+.st.hover .cp{color:var(--ink2);background:var(--bg)}
+
+.note{color:var(--ink2);font-size:13px;margin-top:10px;max-width:640px}
+.note code{background:var(--panel);border:1px solid var(--line);
+  border-radius:5px;padding:1px 5px;font-size:12.5px}
+</style>
+</head>
+<body>
+<div class="wrap">
+
+  <h2>IN PLACE — the thread header</h2>
+  <div class="hdr">
+    <div class="av">✆</div>
+    <div class="who">
+      <div class="numline">
+        <span class="num" id="n1">+14697046974</span>
+        <button class="cp" id="cp1" aria-label="Copy phone number +14697046974"
+                data-copied="0" data-value="+14697046974">
+          <svg class="ic copy" viewBox="0 0 16 16" fill="none" stroke="currentColor"
+               stroke-width="1.6" stroke-linecap="round" stroke-linejoin="round">
+            <rect x="5.5" y="5.5" width="8" height="8" rx="1.6"/>
+            <path d="M10.5 5.5V4a1.5 1.5 0 0 0-1.5-1.5H4A1.5 1.5 0 0 0 2.5 4v5A1.5 1.5 0 0 0 4 10.5h1.5"/>
+          </svg>
+          <svg class="ic tick" viewBox="0 0 16 16" fill="none" stroke="currentColor"
+               stroke-width="2" stroke-linecap="round" stroke-linejoin="round">
+            <path d="M3 8.5 6.5 12 13 4.5"/>
+          </svg>
+          <span class="say">Copied</span>
+        </button>
+      </div>
+      <div class="sub">Unknown · via WhatsApp</div>
+    </div>
+    <div class="acts">
+      <span class="chip">DG Deonna</span>
+      <span class="chip">Close</span>
+    </div>
+  </div>
+  <div class="note">
+    Live — click it. Copies <code>+14697046974</code>, the raw E.164, which is
+    what Player Lookup takes. The displayed form is for reading; the copied
+    form is for pasting.
+  </div>
+
+  <h2>STATES</h2>
+  <div class="states">
+    <div class="st">
+      <div class="lab">AT REST</div>
+      <div class="numline">
+        <span class="num">+14697046974</span>
+        <button class="cp" tabindex="-1" aria-hidden="true" data-copied="0">
+          <svg class="ic copy" viewBox="0 0 16 16" fill="none" stroke="currentColor"
+               stroke-width="1.6" stroke-linecap="round" stroke-linejoin="round">
+            <rect x="5.5" y="5.5" width="8" height="8" rx="1.6"/>
+            <path d="M10.5 5.5V4a1.5 1.5 0 0 0-1.5-1.5H4A1.5 1.5 0 0 0 2.5 4v5A1.5 1.5 0 0 0 4 10.5h1.5"/>
+          </svg>
+          <svg class="ic tick" viewBox="0 0 16 16" fill="none" stroke="currentColor"
+               stroke-width="2" stroke-linecap="round" stroke-linejoin="round">
+            <path d="M3 8.5 6.5 12 13 4.5"/>
+          </svg>
+          <span class="say">Copied</span>
+        </button>
+      </div>
+    </div>
+    <div class="st hover">
+      <div class="lab">HOVER / FOCUS</div>
+      <div class="numline">
+        <span class="num">+14697046974</span>
+        <button class="cp" tabindex="-1" aria-hidden="true" data-copied="0">
+          <svg class="ic copy" viewBox="0 0 16 16" fill="none" stroke="currentColor"
+               stroke-width="1.6" stroke-linecap="round" stroke-linejoin="round">
+            <rect x="5.5" y="5.5" width="8" height="8" rx="1.6"/>
+            <path d="M10.5 5.5V4a1.5 1.5 0 0 0-1.5-1.5H4A1.5 1.5 0 0 0 2.5 4v5A1.5 1.5 0 0 0 4 10.5h1.5"/>
+          </svg>
+          <svg class="ic tick" viewBox="0 0 16 16" fill="none" stroke="currentColor"
+               stroke-width="2" stroke-linecap="round" stroke-linejoin="round">
+            <path d="M3 8.5 6.5 12 13 4.5"/>
+          </svg>
+          <span class="say">Copied</span>
+        </button>
+      </div>
+    </div>
+    <div class="st">
+      <div class="lab">COPIED · 1.5s</div>
+      <div class="numline">
+        <span class="num">+14697046974</span>
+        <button class="cp" tabindex="-1" aria-hidden="true" data-copied="1">
+          <svg class="ic copy" viewBox="0 0 16 16" fill="none" stroke="currentColor"
+               stroke-width="1.6" stroke-linecap="round" stroke-linejoin="round">
+            <rect x="5.5" y="5.5" width="8" height="8" rx="1.6"/>
+            <path d="M10.5 5.5V4a1.5 1.5 0 0 0-1.5-1.5H4A1.5 1.5 0 0 0 2.5 4v5A1.5 1.5 0 0 0 4 10.5h1.5"/>
+          </svg>
+          <svg class="ic tick" viewBox="0 0 16 16" fill="none" stroke="currentColor"
+               stroke-width="2" stroke-linecap="round" stroke-linejoin="round">
+            <path d="M3 8.5 6.5 12 13 4.5"/>
+          </svg>
+          <span class="say">Copied</span>
+        </button>
+      </div>
+    </div>
+  </div>
+  <div class="note">
+    The check sits in the same 14px cell as the copy glyph and “Copied” is
+    positioned outside the flow, so the number never moves. A word swapped in
+    place of the icon would shift it every single time.
+  </div>
+
+</div>
+
+<script>
+const btn = document.getElementById("cp1");
+let t = null;
+btn.addEventListener("click", async () => {
+  const v = btn.dataset.value;
+  try { await navigator.clipboard.writeText(v); }
+  catch { /* file:// and older browsers — the state still shows */ }
+  btn.dataset.copied = "1";
+  clearTimeout(t);
+  t = setTimeout(() => { btn.dataset.copied = "0"; }, 1500);
+});
+</script>
+</body>
+</html>

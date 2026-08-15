@@ -216,7 +216,55 @@ async function main() {
     eq("…including the Match Ops gameday board the city manager is refused", g.status, 200);
   }
 
-  // ── 7. MUTATION — prove the payload assertion can FAIL ───────────────────
+  // ── 7. WHERE THE BARE DOMAIN LANDS EACH TIER ─────────────────────────────
+  // /home redirecting correctly is worth almost nothing on its own, because nobody TYPES /home.
+  // `/` is the URL an operator actually has bookmarked, so it is the one that has to be right —
+  // and it is the one that had no assertion. It works today by CHAINING: `/` renders the internal
+  // shell, which routes to /home, whose PagePermissionGuard then routes to firstAllowedPath().
+  // Nothing on the root consults the tier directly, and it does not need to; what this pins is
+  // that the chain ENDS in the right place for both tiers, so a future short-circuit of the middle
+  // hop cannot silently strand a city manager on a page they are refused.
+  //
+  // WAIT FOR THE CHAIN TO STOP, NOT FOR THE PATH TO APPEAR. Two different wrong measurements were
+  // made here before this landed, and both LOOKED right:
+  //   • a flat 3s sample caught the chain mid-hop still on `/` and was read as a broken redirect;
+  //   • `waitForFunction(pathname === want)` then passed for the WRONG want, because `/` routes
+  //     THROUGH /home — so "did it ever equal /home" is true for a city manager, and the mutation
+  //     below sailed straight through it.
+  // A transient hop satisfies any point-in-time path check. So settle by QUIESCENCE — poll until
+  // the path has not changed for 4s (measured: whole chain 4.5s, largest gap between hops 1.45s,
+  // so 4s is ~2.7× the real gap) — and only then compare.
+  console.log("\nwhere / and /home land each tier:");
+  {
+    const settledPath = async (page, quietMs = 4000, timeout = 40000) => {
+      const t0 = Date.now();
+      let last = new URL(page.url()).pathname, since = Date.now();
+      while (Date.now() - t0 < timeout) {
+        await page.waitForTimeout(250);
+        const now = new URL(page.url()).pathname;
+        if (now !== last) { last = now; since = Date.now(); }
+        else if (Date.now() - since >= quietMs) break;
+      }
+      return last;
+    };
+    const settles = async (page, from, want, who, readySel) => {
+      await page.goto(`${BASE}${from}`, { waitUntil: "domcontentloaded" });
+      const got = await settledPath(page);
+      if (got !== want) { bad(`${who}: ${from} should settle on ${want}`, `settled on ${got}`); return; }
+      // The URL being right is not the same as having ARRIVED. Where the destination has a ready
+      // marker, require it — a stalled shell showing the right path is not a landing.
+      if (readySel && !(await page.$(readySel))) { bad(`${who}: ${from} → ${want}`, `path right but ${readySel} never rendered`); return; }
+      ok(`${who}: ${from} settles on ${want}`);
+    };
+    await settles(cm, "/", "/city/manager-pay", "city manager", '[data-testid="paytable"]');
+    await settles(cm, "/home", "/city/manager-pay", "city manager", '[data-testid="paytable"]');
+    // The same two entry points must be UNCHANGED for an admin — a landing fix that quietly
+    // re-routes everyone is a different bug wearing this one's clothes.
+    await settles(ad, "/", "/home", "admin");
+    await settles(ad, "/home", "/home", "admin");
+  }
+
+  // ── 8. MUTATION — prove the payload assertion can FAIL ───────────────────
   // The scoping lives on the server and cannot be mutated from here, so the ASSERTION is run
   // against a deliberately poisoned payload: one foreign-city row added. If the check still
   // passes, it was never testing anything.

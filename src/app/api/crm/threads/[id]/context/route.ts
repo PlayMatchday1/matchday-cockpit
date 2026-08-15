@@ -1,10 +1,10 @@
 // GET /api/crm/threads/[id]/context — player + match data for the
-// ContextPanel right column / mobile sheet.
+// ContextPane right column / mobile sheet.
 //
 // Split out from /api/crm/threads/[id] so the chat pane can render
 // the moment messages arrive. This endpoint holds the heavier
 // player + recent/upcoming match queries and is fetched lazily by
-// ContextPanel only when the panel becomes visible.
+// ContextPane only when the panel becomes visible.
 //
 // Auth: dual-mode bearer via src/lib/crmAuth.
 //
@@ -20,7 +20,7 @@
 // `membership` is resolved by joining fin_members against the
 // player's email (case-insensitive) or the thread's phone number
 // (rightmost 10 digits — fin_members.phone is E.164 with +1 prefix
-// per Retool sync). Used by ContextPanel to surface member_id and a
+// per Retool sync). Used by ContextPane to surface member_id and a
 // "Cancelled on …" notice when an active member has scheduled their
 // membership to end.
 
@@ -105,7 +105,7 @@ export async function GET(req: Request, ctx: RouteCtx) {
   // Joins on player email (case-insensitive) OR phone (rightmost 10
   // digits, since fin_members.phone is E.164 with +1 prefix and the
   // cockpit-side phone may be stored without). Returns null when no
-  // row matches — ContextPanel renders nothing in that case.
+  // row matches — ContextPane renders nothing in that case.
   const membership = await loadMembership(supabase, {
     email: player?.email ?? null,
     threadPhone: thread.phone_number as string | null,

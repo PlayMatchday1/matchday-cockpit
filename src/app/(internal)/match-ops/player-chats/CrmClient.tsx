@@ -10,7 +10,7 @@
 //     <ChatsHeader />        : title bar, Players/Matches segmented
 //                              control, merged filter row, status
 //     ┌──────────────┬───────────────────┬──────────────┐
-//     │ InboxPane    │ ConversationPane  │ ContextPanel │
+//     │ InboxPane    │ ConversationPane  │ ContextPane │
 //     │ (280px on    │ (flex-1)          │ (240px on    │
 //     │  lg:, full   │                   │  lg:, sheet  │
 //     │  width on    │                   │  on mobile)  │
@@ -38,6 +38,7 @@ import {
   useState,
 } from "react";
 import { useRouter, useSearchParams } from "next/navigation";
+import { CopyPhoneInline } from "@/components/CopyPhone";
 import {
   ChevronLeft,
   CircleCheck,
@@ -959,7 +960,7 @@ export default function CrmClient() {
           </section>
 
           {/* ---- PLAYER CONTEXT (292px, hidden < 1260px + toggle) ---- */}
-          {selectedThread && !contextHidden && <ContextPane threadId={selectedThread.id} />}
+          {selectedThread && !contextHidden && <ContextPane threadId={selectedThread.id} phone={selectedThread.phone_number} />}
         </div>
       </div>
 
@@ -1720,9 +1721,9 @@ function ConversationHeader({
             `hidden lg:flex` and stays accessible on mobile via the
             info-icon sheet. */}
         <div className="mt-0.5 flex items-center gap-1.5 text-[10px] text-deep-green/55">
-          <span className="truncate font-mono lg:hidden">
-            {detail.thread.phone_number}
-          </span>
+          {/* MOBILE ONLY. The number IS the button here — a 32px control beside 10px text would
+              dominate it. See CopyPhoneInline: the box is held still so the header cannot shift. */}
+          <CopyPhoneInline value={detail.thread.phone_number} className="min-w-0 lg:hidden" />
           <div className="hidden items-center gap-1.5 lg:flex">
             <CityChip code={cityCode} />
             <span aria-hidden>·</span>

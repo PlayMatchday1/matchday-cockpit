@@ -189,7 +189,7 @@ h3 {
 }
 
 /* Bottom-sheet open animation. Used by the /chats player context
-   drawer (ContextPanel sheet mode). Sheet unmounts on close, so
+   drawer (ContextPane sheet mode). Sheet unmounts on close, so
    only the open transition needs an animation. */
 @keyframes sheet-slide-up {
   from {

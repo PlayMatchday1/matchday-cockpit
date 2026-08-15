@@ -16,6 +16,7 @@
 
 import { useEffect, useState } from "react";
 import { supabase } from "@/lib/supabase";
+import CopyPhone from "@/components/CopyPhone";
 import { colorForCity } from "@/lib/cityColors";
 
 type RecentMatch = {
@@ -72,7 +73,7 @@ const STATUS_STYLE: Record<RecentMatch["status"], { color: string }> = {
   Canceled: { color: "#a83b1c" },
 };
 
-export default function ContextPane({ threadId }: { threadId: string }) {
+export default function ContextPane({ threadId, phone }: { threadId: string; phone?: string | null }) {
   const [data, setData] = useState<ContextResponse | null>(null);
   const [error, setError] = useState<string | null>(null);
 
@@ -119,9 +120,25 @@ export default function ContextPane({ threadId }: { threadId: string }) {
       className="hidden min-h-0 w-[292px] shrink-0 flex-col overflow-y-auto border-l min-[1260px]:flex"
       style={{ background: "linear-gradient(180deg,#fafbfa,#f6f9f7)", borderColor: "#e6ebe8" }}
     >
-      {!p && !error && (
+      {!p && !error && !data && (
         <div className="px-4 py-8 text-center text-[12px]" style={{ color: "#93a49b" }}>
           Loading player…
+        </div>
+      )}
+      {/* LOADED BUT UNMATCHED. Previously this state fell through to "Loading player…" forever —
+          an unknown thread looked like a pane that never finished. It is also the thread where the
+          NUMBER matters most, because working out who this is starts with pasting it into Player
+          Lookup, so it gets the number and the copy control. */}
+      {!p && !error && data && (
+        <div className="px-4 py-6 text-center text-[12px]" style={{ color: "#6d7b74" }}>
+          <div className="font-[760]" style={{ color: "#12241d" }}>Unknown number</div>
+          <p className="mt-1 text-[11.5px]">No player account matched this number.</p>
+          {phone && (
+            <div className="mt-2 inline-flex items-center gap-0.5">
+              <span className="font-mono text-[12px]" data-testid="ctx-phone-unknown" style={{ color: "#6d7b74" }}>{phone}</span>
+              <CopyPhone value={phone} />
+            </div>
+          )}
         </div>
       )}
       {error && (
@@ -143,6 +160,14 @@ export default function ContextPane({ threadId }: { threadId: string }) {
             {(cityName || joined) && (
               <div className="mt-[3px] text-[11.5px] font-semibold" style={{ color: "#6d7b74" }}>
                 {[cityName, joined ? `joined ${joined}` : null].filter(Boolean).join(" · ")}
+              </div>
+            )}
+            {/* The number, with copy beside it — this is the desktop surface you paste into Player
+                Lookup from. The glyph shares the number's row so it travels with it. */}
+            {phone && (
+              <div className="mt-[5px] inline-flex items-center justify-center gap-0.5">
+                <span className="font-mono text-[11.5px]" data-testid="ctx-phone" style={{ color: "#6d7b74" }}>{phone}</span>
+                <CopyPhone value={phone} />
               </div>
             )}
             <div className="mt-[9px] flex flex-wrap justify-center gap-[5px]">
