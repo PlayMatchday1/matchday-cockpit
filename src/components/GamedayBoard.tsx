@@ -19,10 +19,11 @@ import { envBadge } from "@/lib/matchEnvBadge";
 import { DRAWER_ENV } from "@/lib/matchEnv";
 import { centsToDollars } from "@/lib/matchMoney";
 import MatchPanel from "@/components/MatchPanel";
-import { useCrmConversation } from "@/lib/crmConversation";
+import { useCrmConversationOptional } from "@/lib/crmConversation";
 import LogHealthBanner from "@/components/LogHealthBanner";
 import MatchOpsSectionSheet from "@/app/(internal)/match-ops/MatchOpsSectionSheet";
 import MatchOpsMobileBar from "@/app/(internal)/match-ops/MatchOpsMobileBar";
+import type { RailItem } from "@/app/(internal)/match-ops/sections";
 import RefreshIcon from "@/components/RefreshIcon";
 import {
   type ApiMatch, type BoardFilter, type MatchGroup, GROUPS, byKickoff, matchGroup, minsUntil, fmtDur, localClock, deadlineClock, tzAbbr,
@@ -52,7 +53,33 @@ const PANEL_W = 600; // the in-place match panel (replaces the old side drawer +
 const PANEL_W_WIDE = 820;
 const DOCK_W = 360;  // the CRM chat dock's expanded width — they sit side-by-side at ≥1600
 
-export default function GamedayBoard() {
+// ONE BOARD, TWO CALLERS. Match Ops renders it bare; the city-manager tier passes three props.
+// Everything else — the rails, the bands, the fake-spot ladder, the decide-by countdown, the
+// grouping, both layouts — is the same component, because the difference between the two pages is
+// WHICH MATCHES, not what a match looks like.
+//
+//   endpoint    where the day comes from. Default is the admin route (every city). The city tier
+//               passes its own, which is scoped server-side from the session.
+//   lockedCity  renders the city control as a single locked chip instead of the chip row. The lock
+//               is a UI fact, not the security: the scoped endpoint has already decided.
+//   onOpenMatch replaces "open the match panel". The city tier sends the operator to the match's
+//               Manager Pay row instead — the panel, the roster and the cancel preview are all
+//               things this tier must not reach, and the routes behind them refuse it anyway.
+//               When this is set the panel is never mounted at all.
+//   nav         the board renders the app bar itself (its refresh + freshness stamp share that
+//               44px band), so the caller's nav list has to reach it here rather than from the
+//               layout. Omitted = the Match Ops list, as before.
+export default function GamedayBoard({
+  endpoint,
+  lockedCity = null,
+  onOpenMatch,
+  nav,
+}: {
+  endpoint?: string;
+  lockedCity?: string | null;
+  onOpenMatch?: (id: number) => void;
+  nav?: { items: RailItem[]; title: string };
+} = {}) {
   const router = useRouter();
   const [today] = useState(() => localYMD(new Date()));
   const [date, setDate] = useState(today);
@@ -72,7 +99,9 @@ export default function GamedayBoard() {
   // edge. ≥1600 they coexist (panel sits left of the dock, main shrinks). <1600 opening the panel
   // COLLAPSES the dock to its rail — the thread and draft live in the provider, so nothing is lost;
   // it is not reopened when the panel closes (the operator's choice). Said once, the first time.
-  const crm = useCrmConversation();
+  // NULL in the city-manager shell, which mounts no CRM provider on purpose. Every use below is
+  // guarded — see useCrmConversationOptional.
+  const crm = useCrmConversationOptional();
   const [wide, setWide] = useState(false);
   const [dockNotice, setDockNotice] = useState(false);
   const dockNoticeShown = useRef(false);
@@ -84,12 +113,12 @@ export default function GamedayBoard() {
   }, []);
   useEffect(() => {
     if (drawerId == null || wide) return;
-    if (crm.dockedThreadId && crm.dockOpen) {
+    if (crm?.dockedThreadId && crm.dockOpen) {
       crm.setDockOpen(false); // collapse only — dockedThreadId + drafts stay in the provider
       if (!dockNoticeShown.current) { dockNoticeShown.current = true; setDockNotice(true); }
     }
-  }, [drawerId, wide, crm.dockedThreadId, crm.dockOpen, crm]);
-  const coexist = drawerId != null && wide && !!crm.dockedThreadId && crm.dockOpen;
+  }, [drawerId, wide, crm?.dockedThreadId, crm?.dockOpen, crm]);
+  const coexist = drawerId != null && wide && !!crm?.dockedThreadId && crm.dockOpen;
   const panelW = wide && !coexist ? PANEL_W_WIDE : PANEL_W;
   const [toast, setToast] = useState<{ t: string; bad?: boolean } | null>(null);
   // Snapshot is the ONLY layout. The Detail card view and its Snapshot/Detail toggle were removed
@@ -115,7 +144,7 @@ export default function GamedayBoard() {
     setStaleFail(false);
     let landed = false;
     try {
-      const res = await authFetch(`/api/matchday/${ENV}/gameday?date=${d}`);
+      const res = await authFetch(`${endpoint ?? `/api/matchday/${ENV}/gameday`}?date=${d}`);
       const j = await res.json().catch(() => ({}));
       if (!res.ok) {
         if (quiet) setStaleFail(true); else { setErr(j?.error ?? `HTTP ${res.status}`); setMatches([]); }
@@ -127,7 +156,7 @@ export default function GamedayBoard() {
     // pretending to be a freshness indicator.
     if (landed) setUpdatedAt(Date.now());
     setLoading(false); setRefreshing(false);
-  }, []);
+  }, [endpoint]);
   useEffect(() => { void load(date); }, [date, load]);
   // 15s, not 30s: this clock drives the freshness age, and at 30s the "2 minutes" threshold
   // could be reported up to half a minute late — which reads as "the stamp is not ageing".
@@ -163,7 +192,12 @@ export default function GamedayBoard() {
 
   const money = (c: number | null | undefined) => (c == null ? "—" : "$" + centsToDollars(c));
 
-  const openDrawer = (id: number) => { if (drawerId != null && drawerId !== id && !guardLeave()) return; setDrawerId(id); };
+  // A read-only caller never opens the panel — it is not hidden, it is not built.
+  const openDrawer = (id: number) => {
+    if (onOpenMatch) { onOpenMatch(id); return; }
+    if (drawerId != null && drawerId !== id && !guardLeave()) return;
+    setDrawerId(id);
+  };
   const stepIdx = drawerId != null ? drawerSiblings.indexOf(drawerId) : -1;
   const step = (d: number) => { if (!guardLeave()) return; const i = stepIdx + d; if (i >= 0 && i < drawerSiblings.length) setDrawerId(drawerSiblings[i]); };
   const toggleCity = (c: string) => setCities((prev) => { const n = new Set(prev); if (c === "") return new Set(); n.has(c) ? n.delete(c) : n.add(c); return n; });
@@ -191,6 +225,9 @@ export default function GamedayBoard() {
               different system entirely; this is the one component both now render, so they cannot
               drift again. The page's own controls go in `actions`. */}
           <MatchOpsMobileBar
+            items={nav?.items}
+            sheetTitle={nav?.title}
+            showSwitch={!nav}
             leading={badge.tone === "prod" ? <span className="livedot" aria-hidden /> : null}
             actions={
               <span className="mfresh" data-testid="m-fresh">
@@ -219,8 +256,14 @@ export default function GamedayBoard() {
             <button className={"chip att" + (filter === "att" ? " on" : "")} onClick={() => setFilter("att")}>Needs attention<span className="b">{counts.att}</span></button>
             <button className={"chip" + (filter === "upc" ? " on" : "")} onClick={() => setFilter("upc")}>Still to come<span className="b">{counts.upc}</span></button>
             <span className="msep" aria-hidden />
-            <button className={"chip" + (cities.size === 0 ? " on" : "")} onClick={() => toggleCity("")}>All cities</button>
-            {cityNames.map(([c, n]) => <button key={c} className={"chip" + (cities.has(c) ? " on" : "")} onClick={() => toggleCity(c)}>{c}<span className="b">{n}</span></button>)}
+            {/* LOCKED, NOT REMOVED — the control still says which city this is. */}
+            {lockedCity ? (
+              <button className="chip on" data-testid="city-locked" disabled aria-disabled="true"
+                title={`Scoped to ${lockedCity}`}>{lockedCity}<span className="b">{counts.all}</span></button>
+            ) : (<>
+              <button className={"chip" + (cities.size === 0 ? " on" : "")} onClick={() => toggleCity("")}>All cities</button>
+              {cityNames.map(([c, n]) => <button key={c} className={"chip" + (cities.has(c) ? " on" : "")} onClick={() => toggleCity(c)}>{c}<span className="b">{n}</span></button>)}
+            </>)}
           </div>
         </div>
         <LogHealthBanner />
@@ -262,8 +305,13 @@ export default function GamedayBoard() {
           </div>
           <div className="row2"><span className="lb">CITIES</span>
             <span className="cityf" data-testid="cityf">
-              <button className={"chip" + (cities.size === 0 ? " on" : "")} data-testid="city-all" onClick={() => toggleCity("")}>All cities</button>
-              {cityNames.map(([c, n]) => <button key={c} className={"chip" + (cities.has(c) ? " on" : "")} data-testid={`city-${c}`} onClick={() => toggleCity(c)}>{c}<span className="b">{n}</span></button>)}
+              {lockedCity ? (
+                <button className="chip on" data-testid="city-locked" disabled aria-disabled="true"
+                  title={`Scoped to ${lockedCity}`}>{lockedCity}<span className="b">{counts.all}</span></button>
+              ) : (<>
+                <button className={"chip" + (cities.size === 0 ? " on" : "")} data-testid="city-all" onClick={() => toggleCity("")}>All cities</button>
+                {cityNames.map(([c, n]) => <button key={c} className={"chip" + (cities.has(c) ? " on" : "")} data-testid={`city-${c}`} onClick={() => toggleCity(c)}>{c}<span className="b">{n}</span></button>)}
+              </>)}
             </span>
           </div>
           <span className={"pill " + (badge.tone === "prod" ? "live" : "stg")} data-testid="gameday-env">{badge.tone === "prod" ? <><i />PRODUCTION — LIVE EDITS</> : badge.label}</span>
@@ -283,7 +331,11 @@ export default function GamedayBoard() {
               </div>}
       </div>
 
-      {drawerId != null && (
+      {/* NOT HIDDEN — NOT BUILT. A read-only caller sets onOpenMatch, drawerId therefore never
+          leaves null, and MatchPanel is never mounted: no roster fetch, no cancel preview, no
+          control that looks live. The routes behind it refuse this tier as well; this is the UI
+          half of the same statement. */}
+      {drawerId != null && !onOpenMatch && (
         <aside className={"gpanel" + (coexist ? " coexist" : "")} data-testid="gday-panel" style={{ ["--panel-w" as string]: `${panelW}px`, right: coexist ? DOCK_W : 0 }}>
           <div className="gpanel-bar">
             <button className="gpanel-x" data-testid="gday-panel-close" aria-label="Close panel" onClick={() => { if (guardLeave()) setDrawerId(null); }}>✕ Close</button>

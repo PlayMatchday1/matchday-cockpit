@@ -1,31 +1,45 @@
-// City manager — GAMEDAY OPS, READ ONLY (Phase 29b).
+// City manager — GAMEDAY OPS, READ ONLY (Phase 29b; rebuilt Phase 29c).
 //
-// THE THIRD AND LAST PAGE OF THE TIER. It answers one question — "is tonight covered, and is
-// anything short?" — and it answers it for ONE city.
+// THE REAL BOARD, SCOPED. This used to read the synced Supabase mirror and return a thin,
+// bespoke row shape, which is why the city page could only ever be a stripped-down rebuild: the
+// mirror does not carry _count.fakePlayers, the fakeSpotLeft* ladder, autoCanceled or the team
+// list, so the real board's colour rails, fake-spot countdown and decide-by deadline had nothing
+// to render from. It now reads the SAME live MatchDay API the admin board reads, through the same
+// trimMatch, and returns the same rows — filtered to one city.
 //
-// READ ONLY, DELIBERATELY. No match panel, no roster, no cancel preview. The Match Ops board
-// carries all three, and each is something this tier must not reach: a roster read is player
-// names and phone numbers for every match in the city, and the cancel preview is one confirm
-// from crediting and texting every signed-up player. The ONE write a city manager gets is the
-// manager assignment, and it stays on /city/manager-pay where it is scoped, logged and read back.
-// Clicking a match here links to that row rather than opening anything.
+// LIVE, NOT THE MIRROR — the same reason the admin route gives: a stale board on a match night is
+// worse than none.
 //
-// SCOPE COMES FROM THE SESSION, NEVER THE REQUEST. city_identifier is read fresh from the
-// caller's app_users row on every call (authenticateCityManager → cityManagerGate, no JWT claim,
-// no cache). A caller naming another city with ?city= is REFUSED with a 403 that names their
-// scope — not silently corrected, which would look like it worked and show them the wrong city,
-// and not a fallback to "all", which is the leak this phase exists to close.
+// SCOPE COMES FROM THE SESSION, NEVER THE REQUEST. city_identifier is read fresh from the caller's
+// app_users row on every call (authenticateCityManager → cityManagerGate, no JWT claim, no cache).
+// A caller naming another city with ?city= is REFUSED with a 403 that names their scope — not
+// silently corrected, which would look like it worked and show them the wrong city, and not a
+// fallback to "all", which is the leak this phase exists to close.
 //
-// EVERYTHING DERIVED IS COMPUTED AFTER SCOPING. The counts, the short list and the totals are all
-// built from the already-scoped rows. A count computed before scoping leaks the SHAPE of data the
-// caller cannot see — "you have 40 matches tonight" when four are theirs is still a disclosure.
+// THE FILTER IS APPLIED HERE, IN THIS PROCESS, BEFORE THE RESPONSE IS BUILT. The upstream API has
+// no city parameter worth using, so the day's rows for every city do arrive in this handler — and
+// they must never leave it. Everything derived (the summary) is computed from the ALREADY-SCOPED
+// array: a count taken before scoping leaks the shape of data the caller cannot see.
+//
+// READ ONLY, DELIBERATELY. No match panel, no roster, no cancel preview. Each is something this
+// tier must not reach: a roster read is player names and phone numbers for every match in the
+// city, and the cancel preview is one confirm from crediting and texting every signed-up player.
+// The ONE write a city manager gets is the manager assignment, and it stays on /city/manager-pay
+// where it is scoped, logged and read back. This route is GET only and grants nothing else.
 import { authenticateCityManager } from "@/lib/cityManagerAuth";
 import { cityNameFor } from "@/lib/cityScope";
+import { apiGet, StageHostGuardError, StageConfigError } from "@/lib/matchdayStageApi";
+import { trimMatch, apiCityNameOf, type Raw } from "@/lib/gamedayApiShape";
 
 export const runtime = "nodejs";
 export const dynamic = "force-dynamic";
+export const maxDuration = 30;
 
-type Row = Record<string, unknown>;
+// PRODUCTION ONLY. The admin route takes the environment in its path because Match Ops edits both;
+// this tier reads its own city's real matches and nothing else, so there is no env to choose and
+// no way to ask for staging.
+const ENV = "production" as const;
+const PAGE_LIMIT = 100;
 
 export async function GET(req: Request) {
   const auth = await authenticateCityManager(req);
@@ -45,61 +59,43 @@ export async function GET(req: Request) {
   const date = (url.searchParams.get("date") || "").trim() || new Date().toISOString().slice(0, 10);
   if (!/^\d{4}-\d{2}-\d{2}$/.test(date)) return Response.json({ error: "date must be YYYY-MM-DD" }, { status: 400 });
 
-  // THE SCOPE IS PUSHED INTO THE QUERY (.eq on city_identifier), never applied after fetching.
-  // Filtering in the client — or even in this process — means the unscoped rows existed here.
-  const { data, error } = await auth.supabase
-    .from("mdapi_matches")
-    .select("api_id, name, field_title, start_date, start_date_utc, is_cancelled, manager_id, manager_email, manager_first_name, manager_last_name, second_manager_id, max_player_count, min_player_count, player_count, city_identifier")
-    .eq("city_identifier", auth.cityIdentifier)
-    .is("deleted_at", null)
-    .gte("start_date", `${date}T00:00:00`)
-    .lte("start_date", `${date}T23:59:59`)
-    .order("start_date_utc", { ascending: true });
+  // A scope the code does not recognise is refused rather than compared. cityNameFor returns null
+  // for a hand-typed identifier, and `name === null` would match every row whose city is missing —
+  // an unknown scope must be an error, never a filter that quietly passes things.
+  const cityName = cityNameFor(auth.cityIdentifier);
+  if (!cityName) {
+    return Response.json({
+      error: `This account is scoped to ${JSON.stringify(auth.cityIdentifier)}, which is not a known city.`,
+      scope: auth.cityIdentifier,
+    }, { status: 409 });
+  }
 
-  if (error) return Response.json({ error: error.message }, { status: 500 });
+  try {
+    const out: Raw[] = [];
+    for (let page = 1; page <= 20; page++) { // 20*100 = 2000 hard ceiling; a single day is never near it
+      const res = await apiGet<{ data?: Raw[]; totalItems?: number }>(ENV, `/admin/matches`, {
+        fromDate: date, toDate: date, page, limit: PAGE_LIMIT, sortColumn: "startDate", sortDirection: "asc",
+      });
+      const rows = Array.isArray(res) ? (res as Raw[]) : (res.data ?? []);
+      out.push(...rows);
+      const total = Array.isArray(res) ? rows.length : (res.totalItems ?? rows.length);
+      if (rows.length < PAGE_LIMIT || out.length >= total) break;
+    }
 
-  const rows = (data ?? []) as Row[];
-  const matches = rows.map((m) => {
-    const cap = Number(m.max_player_count ?? 0) || 0;
-    const min = Number(m.min_player_count ?? 0) || 0;
-    const signed = Number(m.player_count ?? 0) || 0;
-    const cancelled = m.is_cancelled === true;
-    const managerName = [m.manager_first_name, m.manager_last_name].filter(Boolean).join(" ").trim();
-    return {
-      matchId: Number(m.api_id),
-      name: (m.name as string | null) ?? null,
-      field: (m.field_title as string | null) ?? null,
-      // start_date is LOCAL WALL CLOCK wearing a Z (the match model, the opposite of promo dates)
-      // — handed over verbatim for the label; start_date_utc is the true instant used for order.
-      startDate: (m.start_date as string | null) ?? null,
-      startDateUtc: (m.start_date_utc as string | null) ?? null,
-      cancelled,
-      manager: managerName || null,
-      managerId: m.manager_id == null ? null : Number(m.manager_id),
-      coManaged: m.second_manager_id != null,
-      signed, cap, min,
-      // "short" is the operationally-safe reading used everywhere else: REAL signups vs the
-      // minimum. A cancelled match is not short, it is over.
-      short: !cancelled && min > 0 && signed < min,
-    };
-  });
+    // SCOPE, then derive. Nothing below this line sees another city's rows.
+    const matches = out.map(trimMatch).filter((m) => apiCityNameOf(m) === cityName);
 
-  // DERIVED AFTER SCOPING — every number below is computed from `matches`, which is already
-  // one city's rows and nothing else.
-  const summary = {
-    total: matches.length,
-    cancelled: matches.filter((m) => m.cancelled).length,
-    short: matches.filter((m) => m.short).length,
-    unassigned: matches.filter((m) => !m.cancelled && m.managerId == null).length,
-  };
-
-  return Response.json({
-    ok: true,
-    scope: auth.cityIdentifier,
-    cityName: cityNameFor(auth.cityIdentifier) ?? auth.cityIdentifier,
-    date,
-    matches,
-    summary,
-    readOnly: true,
-  });
+    return Response.json({
+      date,
+      env: ENV,
+      scope: auth.cityIdentifier,
+      cityName,
+      readOnly: true,
+      matches,
+    });
+  } catch (e) {
+    if (e instanceof StageHostGuardError) return Response.json({ error: e.message }, { status: 500 });
+    if (e instanceof StageConfigError) return Response.json({ error: e.message }, { status: 500 });
+    return Response.json({ error: e instanceof Error ? e.message : String(e) }, { status: 500 });
+  }
 }

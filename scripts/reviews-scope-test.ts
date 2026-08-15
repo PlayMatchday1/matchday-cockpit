@@ -76,19 +76,50 @@ console.log("\nTHE ADMIN PAGE NO LONGER PULLS THE WHOLE TABLE");
     /useCleanReviews\(\)/.test(client), true);
 }
 
-console.log("\nTHE NAV appears only now that the endpoint is live");
+// PHASE 29c REWROTE THIS BLOCK, and it is a behaviour change, not a selector-path edit — four of
+// the assertions below used to describe things that are now deliberately gone:
+//   • CityNav.tsx (the bespoke top pill row) is DELETED; the tier renders the app's own rail.
+//   • the city Reviews page no longer calls useScopedReviews itself — it renders the REAL
+//     ReviewsClient, which reaches the same scoped endpoint through useCleanReviews.
+//   • "Scoped on the server to your city…" was REMOVED on purpose (the brief: the city is already
+//     in the heading and the locked control).
+//   • Manager Pay no longer renders <CityNav /> — the layout carries navigation for all three.
+// What has NOT changed is what these assertions are for: the tier is navigable, its Reviews page
+// is server-scoped, and a non-tier account is refused. Those are re-asserted against the new shape.
+console.log("\nTHE NAV — the app's own rail, not a bespoke one");
 {
-  const nav = readFileSync("src/app/(internal)/city/CityNav.tsx", "utf8");
-  is("the city-manager nav carries a Reviews item", /href: "\/city\/reviews"/.test(nav), true);
-  is("...alongside Manager Pay, which was the tier's only page before", /href: "\/city\/manager-pay"/.test(nav), true);
-  is("...and it shows which city the account is scoped to", /data-testid="city-nav-scope"/.test(nav), true);
+  const secs = readFileSync("src/app/(internal)/city/citySections.tsx", "utf8");
+  is("the city-manager nav carries a Reviews item", /href: "\/city\/reviews"/.test(secs), true);
+  is("...alongside Manager Pay, which was the tier's only page before", /href: "\/city\/manager-pay"/.test(secs), true);
+  is("...and Gameday Ops", /href: "\/city\/gameday"/.test(secs), true);
+  is("...with icons taken from MATCH_OPS_SECTIONS by key, never copied path data",
+    /iconFor\("manager-pay"\)/.test(secs) && !/<svg/.test(secs), true);
+
+  const layout = readFileSync("src/app/(internal)/city/layout.tsx", "utf8");
+  is("the tier mounts the app's SHARED rail, not a second implementation", /<ChatsRail\b/.test(layout), true);
+  is("...with the Daily Ops / Back Office switch OFF, because it has one section",
+    /showSwitch=\{false\}/.test(layout), true);
+  // On the JSX, not the name: the file's header explains WHY the provider is absent, and a bare
+  // text search counts that explanation as the thing it forbids. (This exact trap bit twice in one
+  // sitting — a source-text assertion must target something only real code can produce.)
+  is("...and NO CRM provider is MOUNTED, since this tier holds no chats grant",
+    /<CrmConversationProvider/.test(layout), false);
+
   const page = readFileSync("src/app/(internal)/city/reviews/page.tsx", "utf8");
-  is("the city Reviews page reads the SCOPED hook", /useScopedReviews\(\)/.test(page), true);
-  is("...and holds no city filter of its own to be bypassed", /\?city=|city:\s*["\x27]/.test(page), false);
-  is("...it says the scoping happened on the SERVER", /Scoped on the server/.test(page), true);
+  is("the city Reviews page renders the REAL ReviewsClient, not a rebuild", /<ReviewsClient\b/.test(page), true);
+  is("...locked to one city in the UI", /lockedCity=\{lockedCity\}/.test(page), true);
+  is("...and holds no city filter of its own to be bypassed", /\?city=/.test(page), false);
+  // Asserted on the ELEMENT, not on the phrase: the file's header comment explains why the line
+  // was removed, and a text search cannot tell a comment from rendered copy. The rendered text is
+  // checked for real in verify-city-confinement, against the actual page.
+  is("...and no longer explains its own scoping in prose", /data-testid="cr-scope-note"/.test(page), false);
   is("a non-city-manager, non-admin is refused by the page too", /data-testid="cr-denied"/.test(page), true);
-  const payClient = readFileSync("src/app/(internal)/city/manager-pay/CityManagerPayClient.tsx", "utf8");
-  is("Manager Pay renders the same nav, so the two pages are navigable", /<CityNav \/>/.test(payClient), true);
+
+  // THE LOCK IS NOT THE SECURITY, and the page must not read as though it were: scoping is the
+  // endpoint's job. This pins that the page never passes a city to the DATA layer.
+  const client = readFileSync("src/app/(internal)/match-ops/reviews/ReviewsClient.tsx", "utf8");
+  is("lockedCity drives the CONTROL only — the data hook is still called with no city",
+    /useCleanReviews\(\)/.test(client), true);
 }
 
 console.log("\nMUTATION — prove the payload assertion can fail");

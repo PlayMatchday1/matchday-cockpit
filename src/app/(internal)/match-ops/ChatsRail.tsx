@@ -20,15 +20,24 @@ import { useAuth } from "@/lib/useAuth";
 import { useCrmAwaitingCount } from "@/lib/useCrmAwaitingCount";
 import { useManagerPayAttnCount } from "@/lib/useManagerPayAttnCount";
 import { usePartnerDashboardsCount } from "@/lib/usePartnerDashboardsCount";
-import { visibleSections, tabForPath } from "./sections";
+import { visibleSections, tabForPath, type RailItem } from "./sections";
 import SectionSwitch from "./SectionSwitch";
 
+// ONE RAIL, TWO CALLERS. `items` and `showSwitch` are the only things that differ between Match
+// Ops and the city-manager tier — the chrome itself is identical, which is the point. Omitting
+// them keeps the original derived behaviour byte-for-byte, so Match Ops is untouched.
 export default function ChatsRail({
   collapsed,
   onToggle,
+  items: itemsProp,
+  showSwitch = true,
+  label = "Match Ops",
 }: {
   collapsed: boolean;
   onToggle: () => void;
+  items?: RailItem[];
+  showSwitch?: boolean;
+  label?: string;
 }) {
   const { appUser } = useAuth();
   const pathname = usePathname() ?? "";
@@ -37,7 +46,11 @@ export default function ChatsRail({
   const partnerCount = usePartnerDashboardsCount();
 
   // Phase 24 — only the CURRENT tab's items, derived from the route (no tab state).
-  const items = visibleSections(appUser, tabForPath(pathname));
+  const items: RailItem[] = itemsProp ?? visibleSections(appUser, tabForPath(pathname));
+  // A single group is not structure. Match Ops always has two or more per tab and is unaffected;
+  // the city tier's three items would otherwise get one heading over the whole list, which labels
+  // nothing and reads as a section that has no sibling.
+  const showGroups = new Set(items.map((i) => i.group)).size > 1;
   const badgeCount = (kind?: "awaiting" | "manager-pay" | "partner-dashboards") =>
     kind === "awaiting" ? awaiting : kind === "manager-pay" ? managerPayAttn : kind === "partner-dashboards" ? partnerCount : undefined;
 
@@ -45,18 +58,22 @@ export default function ChatsRail({
 
   return (
     <nav
-      aria-label="Match Ops"
+      aria-label={label}
+      data-testid="app-rail"
       className="flex h-full w-full flex-col gap-[2px] overflow-y-auto border-r px-[10px] py-[14px]"
       style={{ background: "linear-gradient(180deg,#fafbfa,#f6f9f7)", borderColor: "#e6ebe8" }}
     >
       {/* Phase 24 (corrected) — the DAILY OPS / BACK OFFICE switch lives HERE, above the group
-          headings, not in the top nav. It picks which half of Match Ops this list shows. */}
-      <SectionSwitch collapsed={collapsed} />
+          headings, not in the top nav. It picks which half of Match Ops this list shows.
+          The city tier passes showSwitch={false}: it has ONE section, and a switch over one half
+          is a control that looks live and goes nowhere. */}
+      {showSwitch && <SectionSwitch collapsed={collapsed} />}
       {items.map((it) => {
         const active = pathname === it.href || pathname.startsWith(it.href + "/");
         const count = badgeCount(it.badge);
         const header =
-          it.group !== lastGroup && !collapsed ? (
+          !showGroups ? null
+          : it.group !== lastGroup && !collapsed ? (
             <div key={`hd-${it.group}`} data-testid="rail-group" data-group={it.group} className="whitespace-nowrap px-[10px] pb-[6px] pt-[14px] text-[9.5px] font-[780] uppercase tracking-[0.13em] first:pt-[2px]" style={{ color: "#93a49b" }}>
               {it.group}
             </div>

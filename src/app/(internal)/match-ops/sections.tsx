@@ -28,16 +28,24 @@ export type MatchOpsGroup =
 // in visibleSections. The Promo Codes screen ships behind MANAGE PROMOS (Phase 18b).
 export type MatchOpsAccess = "matchops" | "tech" | "chats" | "admin" | "finance" | "promos";
 
-export type MatchOpsSection = {
+// WHAT A RAIL DRAWS, independent of who may open it. The rail, the mobile app bar and the screen
+// sheet render THIS; Match Ops adds its own permission/tab fields on top. Splitting the shape out
+// is what lets the city-manager tier reuse the real chrome instead of growing a second nav: one
+// component, two callers — the difference is the LIST, not the UI.
+export type RailItem = {
   key: string;
-  section: MatchOpsTab;
-  group: MatchOpsGroup;
+  group: string; // "" renders no heading — see ChatsRail (a single group is not structure)
   label: string;
   href: string;
   desc: string; // one-line, used by the mobile sheet
-  access: MatchOpsAccess;
   icon: React.ReactNode;
   badge?: "awaiting" | "manager-pay" | "partner-dashboards"; // which shared count feeds this item's badge
+};
+
+export type MatchOpsSection = RailItem & {
+  section: MatchOpsTab;
+  group: MatchOpsGroup;
+  access: MatchOpsAccess;
 };
 
 function I({ children }: { children: React.ReactNode }) {
@@ -121,4 +129,11 @@ export function matchOpsLandingHref(appUser: AppUser | null | undefined): string
 // Where a viewer should land inside a tab — the first item they can actually open.
 export function firstSectionHref(appUser: AppUser | null | undefined, tab: MatchOpsTab): string | null {
   return visibleSections(appUser, tab)[0]?.href ?? null;
+}
+
+// THE ICON FOR A KEY. Exported so another surface can reuse the EXACT glyph rather than copy the
+// path data: the city-manager rail shows Gameday Ops, Reviews and Manager Pay, and they must be
+// the same marks an admin sees or the two rails slowly stop being the same application.
+export function iconFor(key: string): React.ReactNode | null {
+  return MATCH_OPS_SECTIONS.find((s) => s.key === key)?.icon ?? null;
 }

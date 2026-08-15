@@ -17,7 +17,7 @@
 import { useMemo, useState } from "react";
 import { usePathname } from "next/navigation";
 import { useAuth } from "@/lib/useAuth";
-import { visibleSections, tabForPath } from "./sections";
+import { visibleSections, tabForPath, type RailItem } from "./sections";
 import MatchOpsSectionSheet from "./MatchOpsSectionSheet";
 
 // THE ONE Match Ops mobile header. Every page below the rail breakpoint uses THIS — Gameday Ops,
@@ -29,14 +29,16 @@ import MatchOpsSectionSheet from "./MatchOpsSectionSheet";
 //
 // `actions` is the page's own right-hand controls (Gameday's refresh + freshness stamp, a chat
 // screen's own buttons). The bar owns the title + section sheet and nothing else.
-export default function MatchOpsMobileBar({ actions, title, leading }: { actions?: React.ReactNode; title?: string; leading?: React.ReactNode } = {}) {
+// ONE BAR, TWO CALLERS — see ChatsRail. `items`/`sheetTitle`/`showSwitch` omitted keeps the
+// original Match Ops behaviour exactly.
+export default function MatchOpsMobileBar({ actions, title, leading, items: itemsProp, sheetTitle, showSwitch = true }: { actions?: React.ReactNode; title?: string; leading?: React.ReactNode; items?: RailItem[]; sheetTitle?: string; showSwitch?: boolean } = {}) {
   const { appUser } = useAuth();
   const pathname = usePathname() ?? "";
   const [open, setOpen] = useState(false);
 
   // Phase 24 — only the CURRENT tab's items. The tab is derived from the route; there is no
   // tab state to fall out of sync with where the operator actually is.
-  const items = useMemo(() => visibleSections(appUser, tabForPath(pathname)), [appUser, pathname]);
+  const items: RailItem[] = useMemo(() => itemsProp ?? visibleSections(appUser, tabForPath(pathname)), [itemsProp, appUser, pathname]);
   const current = items.find((s) => pathname === s.href || pathname.startsWith(s.href + "/"));
 
   return (
@@ -70,7 +72,7 @@ export default function MatchOpsMobileBar({ actions, title, leading }: { actions
         </button>
         {actions && <span className="ml-auto flex items-center gap-1.5" data-testid="mo-header-actions">{actions}</span>}
       </div>
-      <MatchOpsSectionSheet open={open} onClose={() => setOpen(false)} />
+      <MatchOpsSectionSheet open={open} onClose={() => setOpen(false)} items={itemsProp} title={sheetTitle} showSwitch={showSwitch} />
     </div>
   );
 }

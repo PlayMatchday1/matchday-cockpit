@@ -11,6 +11,8 @@
 
 import { authenticateMatchOpsRead } from "@/lib/matchOpsAuth";
 import { apiGet, StageHostGuardError, StageConfigError, type MatchdayEnv } from "@/lib/matchdayStageApi";
+// The row shape is SHARED with /api/city/gameday — same board, same rows. See gamedayApiShape.
+import { trimMatch, type Raw } from "@/lib/gamedayApiShape";
 
 export const runtime = "nodejs";
 export const dynamic = "force-dynamic";
@@ -18,40 +20,6 @@ export const maxDuration = 30;
 
 const isEnv = (x: string): x is MatchdayEnv => x === "staging" || x === "production";
 const PAGE_LIMIT = 100;
-
-type RawCount = { players?: number; fakePlayers?: number };
-type Raw = Record<string, unknown> & { _count?: RawCount; field?: Record<string, unknown>; manager?: Record<string, unknown> | null; teams?: Record<string, unknown>[] };
-
-// Only the fields the board needs. No player arrays, no manager email/phone — a name
-// is all a triage tile shows.
-function trim(m: Raw) {
-  const field = (m.field ?? {}) as Record<string, unknown>;
-  const city = (field.city ?? {}) as Record<string, unknown>;
-  const tz = (city.timeZone ?? {}) as Record<string, unknown>;
-  const mgr = m.manager as Record<string, unknown> | null;
-  const num = (v: unknown) => (typeof v === "number" ? v : v == null ? null : Number(v));
-  return {
-    id: m.id as number, name: (m.name as string) ?? "",
-    startDate: m.startDate as string, startDateUtc: m.startDateUtc as string,
-    isCancelled: !!m.isCancelled, autoCanceledMinutes: num(m.autoCanceledMinutes) ?? 0,
-    // THE AUTO-CANCEL SWITCH ITSELF. Without it the board could only see the MINUTES field and so
-    // drew a decide-by countdown for every match that had one, whether or not the match can
-    // actually auto-cancel. A deadline that will never fire is a fiction the row was telling.
-    autoCanceled: m.autoCanceled === true,
-    minPlayerCount: num(m.minPlayerCount) ?? 0, maxPlayerCount: num(m.maxPlayerCount),
-    registrationPrice: num(m.registrationPrice), additionalSpotPrice: num(m.additionalSpotPrice),
-    fakeSpotLeft36h: num(m.fakeSpotLeft36h) ?? 0, fakeSpotLeft24h: num(m.fakeSpotLeft24h) ?? 0,
-    fakeSpotLeft12h: num(m.fakeSpotLeft12h) ?? 0, fakeSpotLeft6h: num(m.fakeSpotLeft6h) ?? 0,
-    fakeSpotLeft3h: num(m.fakeSpotLeft3h) ?? 0,
-    isAutoBump: !!m.isAutoBump, category: (m.category as string) ?? null, type: (m.type as string) ?? null,
-    _count: { players: m._count?.players ?? 0, fakePlayers: m._count?.fakePlayers ?? 0 },
-    field: { title: ((field.title as string | undefined) ?? "").trim() || null,
-      city: { id: (city.id as number) ?? null, name: (city.name as string) ?? null,
-        timeZone: { abbr: ((tz.abbr as string | undefined) ?? "").trim() || null, name: (tz.name as string) ?? null } } },
-    manager: mgr ? { firstName: (mgr.firstName as string) ?? "", lastName: (mgr.lastName as string) ?? "" } : null,
-    teams: Array.isArray(m.teams) ? m.teams.map((t) => ({ teamNumber: (t.teamNumber as number) ?? null })) : [],
-  };
-}
 
 export async function GET(req: Request, ctx: { params: Promise<{ env: string }> }) {
   const auth = await authenticateMatchOpsRead(req);
@@ -72,7 +40,7 @@ export async function GET(req: Request, ctx: { params: Promise<{ env: string }> 
       const total = Array.isArray(res) ? rows.length : (res.totalItems ?? rows.length);
       if (rows.length < PAGE_LIMIT || out.length >= total) break;
     }
-    return Response.json({ date, env, matches: out.map(trim) });
+    return Response.json({ date, env, matches: out.map(trimMatch) });
   } catch (e) {
     if (e instanceof StageHostGuardError) return Response.json({ error: e.message }, { status: 500 });
     if (e instanceof StageConfigError) return Response.json({ error: e.message }, { status: 500 });

@@ -62,7 +62,21 @@ const plural = (n: number, s: string) => {
   return `${nf(n)} ${s}${es ? "es" : "s"}`;
 };
 
-export default function ReviewsClient() {
+// ONE PAGE, TWO CALLERS. `lockedCity` is the ONLY difference between what an admin sees and what
+// a city manager sees — the tiles, the trailing-8-weeks strip, the leaderboard, Needs attention,
+// Standouts and the month/venue/manager filters are all the same component tree. The city tier
+// used to have a bespoke stripped-down rebuild; a second implementation of a page is a second
+// place for it to be wrong.
+//
+// LOCKED, NOT REMOVED. The city control still renders, still shows the city, and is disabled.
+// Removing it makes the page look like a different product; locking it says what you are looking
+// at. Every other filter works normally.
+//
+// THE LOCK IS NOT THE SECURITY. Scoping happens server-side in /api/reviews, which decides from
+// the caller's session and never from anything this page sends — a city manager's rows are one
+// city before they reach the browser. This prop only stops the UI from offering a filter that
+// would do nothing.
+export default function ReviewsClient({ lockedCity = null }: { lockedCity?: string | null } = {}) {
   const { appUser } = useAuth();
   // Marking a review replied is city-manager ops work, not a finance/admin
   // mutation — any signed-in app_user may do it (the page is already gated to
@@ -76,7 +90,7 @@ export default function ReviewsClient() {
   const months = useMemo(() => monthsPresent(rows), [rows]);
 
   const [month, setMonth] = useState<string>("");
-  const [city, setCity] = useState("all");
+  const [city, setCity] = useState(lockedCity ?? "all");
   const [venue, setVenue] = useState("all");
   const [mgr, setMgr] = useState("all");
   const [focus, setFocus] = useState<null | "attn" | "stand">(null);
@@ -101,7 +115,10 @@ export default function ReviewsClient() {
   }, [month, city, venue, mgr, cwin, csev, csort]);
 
   const filters: PageFilters = { month, city, venue, mgr };
-  const filtering = city !== "all" || venue !== "all" || mgr !== "all";
+  // A locked city is not a filter the operator applied, so it does not count toward "Clear
+  // filters" and Clear does not reset it — a button that says it will clear something and then
+  // leaves it set is worse than no button.
+  const filtering = (!lockedCity && city !== "all") || venue !== "all" || mgr !== "all";
 
   // filter dropdown options — scoped to the selected month
   const opts = useMemo(() => {
@@ -265,7 +282,9 @@ export default function ReviewsClient() {
           <Select value={month} onChange={setMonth} options={months.map((m) => ({ v: m, l: monthLabel(m) }))} />
         </Field>
         <Field label="CITY">
-          <Select value={city} onChange={setCity} all="All cities" options={opts.cities.map((c) => ({ v: c, l: c }))} />
+          <Select value={city} onChange={setCity} all={lockedCity ? undefined : "All cities"}
+            disabled={!!lockedCity}
+            options={lockedCity ? [{ v: lockedCity, l: lockedCity }] : opts.cities.map((c) => ({ v: c, l: c }))} />
         </Field>
         <Field label="VENUE">
           <Select value={venue} onChange={setVenue} all="All venues" wide options={opts.venues.map((v) => ({ v, l: v }))} />
@@ -274,7 +293,7 @@ export default function ReviewsClient() {
           <Select value={mgr} onChange={setMgr} all="All managers" options={opts.mgrs.map((m) => ({ v: m, l: m }))} />
         </Field>
         {filtering && (
-          <button type="button" onClick={() => { setCity("all"); setVenue("all"); setMgr("all"); }}
+          <button type="button" onClick={() => { if (!lockedCity) setCity("all"); setVenue("all"); setMgr("all"); }}
             className="h-9 rounded-[9px] border px-[14px] text-[13px] font-bold" style={{ background: C.surface, borderColor: C.line, color: C.forest }}>
             Clear filters
           </button>
@@ -528,11 +547,12 @@ function Field({ label, children }: { label: string; children: React.ReactNode }
     </div>
   );
 }
-function Select({ value, onChange, options, all, wide }: { value: string; onChange: (v: string) => void; options: { v: string; l: string }[]; all?: string; wide?: boolean }) {
+function Select({ value, onChange, options, all, wide, disabled }: { value: string; onChange: (v: string) => void; options: { v: string; l: string }[]; all?: string; wide?: boolean; disabled?: boolean }) {
   return (
-    <select value={value} onChange={(e) => onChange(e.target.value)}
-      className={`h-9 rounded-[9px] border pl-[11px] pr-8 text-[13.5px] font-semibold ${wide ? "min-w-[200px]" : ""}`}
-      style={{ background: C.railB, borderColor: C.line, color: C.ink }}>
+    <select value={value} onChange={(e) => onChange(e.target.value)} disabled={disabled}
+      data-testid={disabled ? "city-locked" : undefined}
+      className={`h-9 rounded-[9px] border pl-[11px] pr-8 text-[13.5px] font-semibold ${wide ? "min-w-[200px]" : ""} ${disabled ? "cursor-not-allowed opacity-70" : ""}`}
+      style={{ background: disabled ? C.chipBg : C.railB, borderColor: C.line, color: C.ink }}>
       {all && <option value="all">{all}</option>}
       {options.map((o) => <option key={o.v} value={o.v}>{o.l}</option>)}
     </select>

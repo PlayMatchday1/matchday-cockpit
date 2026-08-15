@@ -17,7 +17,6 @@
 // days. The impact line calls payAmount() — the same function that computes the payroll.
 
 import { useCallback, useEffect, useMemo, useState } from "react";
-import CityNav from "../CityNav";
 import { supabase } from "@/lib/supabase";
 import { useAuth } from "@/lib/useAuth";
 import { payAmount } from "@/lib/managerPayCompute";
@@ -102,7 +101,6 @@ export default function CityManagerPayClient() {
 
   return (
     <div className="mx-auto max-w-[1180px] px-4 pb-16 pt-5" style={{ color: C.ink }}>
-      <CityNav />
       {/* ── header: the scope, stated, with no filter ── */}
       <div className="mb-1 flex flex-wrap items-center gap-2.5">
         <h1 className="m-0 text-[20px] font-bold tracking-[-0.2px]" style={{ color: C.forestDeep }}>Manager Pay</h1>
@@ -165,12 +163,21 @@ export default function CityManagerPayClient() {
                   const noMgr = !isCx && !m.primaryManagerName;
                   return (
                     <button key={m.matchId} type="button" onClick={() => setOpenId(m.matchId)}
+                      // THE ONLY CHANGE TO THIS PAGE (Phase 29c): an anchor so Gameday Ops can
+                      // link to a MATCH rather than to the page. Clicking a match on the read-only
+                      // board scrolls to its row here. Deliberately an id and not a ?match= param
+                      // that auto-opens the sheet — the sheet is the WRITE, and a write that opens
+                      // itself because of where you clicked last is not a write anyone asked for.
+                      id={`match-${m.matchId}`}
                       data-testid="match-card" data-match-id={m.matchId}
                       data-state={isCx ? "cancelled" : noMgr ? "unassigned" : "ok"}
                       className="mb-1.5 block w-full rounded-[9px] border p-[7px_8px] text-left"
-                      style={isCx ? { background: C.critBg, borderColor: C.critLine }
-                        : noMgr ? { background: C.warnBg, borderColor: C.warnLine }
-                        : { background: C.surface, borderColor: C.chipLine }}>
+                      // scrollMarginTop clears the sticky header, so the anchored row lands below
+                      // it rather than under it.
+                      style={{ scrollMarginTop: "96px",
+                        ...(isCx ? { background: C.critBg, borderColor: C.critLine }
+                          : noMgr ? { background: C.warnBg, borderColor: C.warnLine }
+                          : { background: C.surface, borderColor: C.chipLine }) }}>
                       <span className="block text-[11px] font-bold" style={{ color: isCx ? C.critInk : C.forestDeep, textDecoration: isCx ? "line-through" : undefined }}>
                         {m.centralTime} · {m.fieldTitle ?? "—"}
                       </span>

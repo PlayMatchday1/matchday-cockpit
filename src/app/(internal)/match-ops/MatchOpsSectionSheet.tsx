@@ -16,10 +16,12 @@ import { useAuth } from "@/lib/useAuth";
 import { useCrmAwaitingCount } from "@/lib/useCrmAwaitingCount";
 import { useManagerPayAttnCount } from "@/lib/useManagerPayAttnCount";
 import { usePartnerDashboardsCount } from "@/lib/usePartnerDashboardsCount";
-import { visibleSections, tabForPath } from "./sections";
+import { visibleSections, tabForPath, type RailItem } from "./sections";
 import SectionSwitch from "./SectionSwitch";
 
-export default function MatchOpsSectionSheet({ open, onClose }: { open: boolean; onClose: () => void }) {
+// ONE SHEET, TWO CALLERS — see ChatsRail. `items`/`title`/`showSwitch` omitted keeps the original
+// Match Ops behaviour exactly; the city tier passes its three and suppresses the switch.
+export default function MatchOpsSectionSheet({ open, onClose, items: itemsProp, title = "Match Ops", showSwitch = true }: { open: boolean; onClose: () => void; items?: RailItem[]; title?: string; showSwitch?: boolean }) {
   const { appUser } = useAuth();
   const pathname = usePathname() ?? "";
   const router = useRouter();
@@ -29,7 +31,7 @@ export default function MatchOpsSectionSheet({ open, onClose }: { open: boolean;
 
   // Phase 24 — only the CURRENT tab's items. The tab is derived from the route; there is no
   // tab state to fall out of sync with where the operator actually is.
-  const items = useMemo(() => visibleSections(appUser, tabForPath(pathname)), [appUser, pathname]);
+  const items: RailItem[] = useMemo(() => itemsProp ?? visibleSections(appUser, tabForPath(pathname)), [itemsProp, appUser, pathname]);
   const isActive = (href: string) => pathname === href || pathname.startsWith(href + "/");
   const countFor = (badge?: "awaiting" | "manager-pay" | "partner-dashboards") => {
     const n = badge === "awaiting" ? awaiting : badge === "manager-pay" ? managerPayAttn : badge === "partner-dashboards" ? partnerCount : 0;
@@ -47,18 +49,18 @@ export default function MatchOpsSectionSheet({ open, onClose }: { open: boolean;
   if (!open) return null;
 
   return (
-    <div className="fixed inset-0 z-[60] flex flex-col justify-end" role="dialog" aria-modal="true" aria-label="Go to Match Ops screen" data-testid="screen-sheet">
+    <div className="fixed inset-0 z-[60] flex flex-col justify-end" role="dialog" aria-modal="true" aria-label={`Go to ${title} screen`} data-testid="screen-sheet">
       <button type="button" aria-label="Close" onClick={onClose} className="absolute inset-x-0 bottom-0" style={{ top: "var(--sat)", background: "rgba(6,26,18,.42)" }} />
       <div className="relative max-h-[86%] overflow-y-auto rounded-t-[22px]" style={{ background: "#ffffff", boxShadow: "0 -2px 8px rgba(7,42,32,.06), 0 -26px 60px -20px rgba(7,42,32,.42)", paddingBottom: "calc(14px + var(--sab))" }}>
         <div className="flex justify-center pb-1 pt-2"><span className="h-[5px] w-[38px] rounded-full" style={{ background: "#dbe3df" }} /></div>
         <div className="flex items-center gap-2.5 px-[18px] pb-2.5 pt-1.5">
-          <h2 className="text-[17px] font-[760] tracking-[-0.02em]" style={{ color: "#12241d" }}>Match Ops</h2>
+          <h2 className="text-[17px] font-[760] tracking-[-0.02em]" style={{ color: "#12241d" }}>{title}</h2>
           <button type="button" onClick={onClose} aria-label="Close" className="ml-auto flex h-9 w-9 items-center justify-center rounded-full" style={{ color: "#42594e" }}>
             <svg viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth={2.1} strokeLinecap="round" aria-hidden><path d="M6 6l12 12M18 6L6 18" /></svg>
           </button>
         </div>
         <div className="px-2.5">
-          <SectionSwitch />
+          {showSwitch && <SectionSwitch />}
           {items.map((s) => {
             const on = isActive(s.href);
             const n = countFor(s.badge);

@@ -24,8 +24,15 @@ installHarnessGuard();
 const BASE = process.env.BASE || "http://localhost:3000";
 const CITY_MANAGER = "rmancuso1@gmail.com";   // real tier holder, city_identifier = ATX
 const SCOPE = "ATX";
+// The API's own name for that scope. The board and the payload both speak city NAMES
+// (field.city.name), not identifiers — CITY_SCOPES pins the pair and city-scope-test.ts guards it.
+const SCOPE_NAME = "Austin";
 const OTHER_CITY = "DFW";
 const ADMIN = "rmancuso@playmatchday.com";
+// ONE day for every board assertion, so the city board and the admin board are compared over the
+// same matches. Not "today": a date with no matches would make every row/rail comparison pass by
+// having nothing to compare.
+const BOARD_DATE = "2026-08-16";
 
 let PASS = 0, FAIL = 0; const fails = [];
 const ok = (n) => { PASS++; console.log(`  ✓ ${n}`); };
@@ -94,14 +101,27 @@ async function main() {
   // ── 1. THE THREE PAGES load and return SINGLE-CITY data ──────────────────
   console.log("the three pages — payload, not render:");
   {
-    const g = await call(cm, `/api/city/gameday?date=2026-08-15`);
+    const g = await call(cm, `/api/city/gameday?date=${BOARD_DATE}`);
     eq("Gameday Ops: the route answers for a city manager", g.status, 200);
     if (g.status === 200) {
       eq("…scoped to their city", g.body.scope, SCOPE);
-      const cities = new Set((g.body.matches ?? []).map((m) => m.cityIdentifier ?? SCOPE));
+      // THE CITY IS READ OFF THE ROW, not assumed. The route now serves the live API shape, where
+      // the city lives at field.city.name — the same field the admin board draws its chips from.
+      // Defaulting a missing city to SCOPE (as this once did) would make the check unfalsifiable.
+      const cities = new Set((g.body.matches ?? []).map((m) => m.field?.city?.name ?? "(missing)"));
       eq("…and the PAYLOAD carries rows from exactly one city", [...cities].length <= 1, true);
-      eq("…with the derived summary computed AFTER scoping (counts match the returned rows)",
-        g.body.summary.total, (g.body.matches ?? []).length);
+      if (cities.size === 1) eq("…and it is THEIR city, by name", [...cities][0], SCOPE_NAME);
+      // SAME SHAPE AS THE ADMIN BOARD. This is what makes the page the real board rather than a
+      // rebuild: the fake-spot ladder, the auto-cancel switch and the observed counts are exactly
+      // the fields the rails, the countdown and the decide-by deadline render from. The old
+      // mirror-backed payload carried none of them, which is WHY the page had to be a rebuild.
+      const m0 = (g.body.matches ?? [])[0];
+      if (m0) {
+        const need = ["fakeSpotLeft36h", "fakeSpotLeft24h", "fakeSpotLeft12h", "fakeSpotLeft6h", "fakeSpotLeft3h",
+          "autoCanceled", "autoCanceledMinutes", "minPlayerCount", "maxPlayerCount", "startDateUtc", "_count"];
+        const missing = need.filter((k) => !Object.prototype.hasOwnProperty.call(m0, k));
+        eq("…and every field the REAL board renders from is present (same shape as the admin route)", missing, []);
+      }
       eq("…and no roster is returned at all (no player PII on this page)",
         (g.body.matches ?? []).every((m) => m.players === undefined && m.roster === undefined), true);
     }
@@ -155,15 +175,21 @@ async function main() {
   await cm.waitForTimeout(500);
   {
     const m = await cm.evaluate(() => ({
-      navItems: [...document.querySelectorAll('[data-testid="city-nav"] a')].map((a) => a.textContent.trim()),
+      // THE APP'S OWN RAIL, not a bespoke pill row. `app-rail` is the shared ChatsRail; asserting
+      // on it is what proves the tier renders the same chrome rather than a lookalike.
+      navItems: [...document.querySelectorAll('[data-testid="app-rail"] [data-testid="rail-item"]')].map((a) => a.textContent.trim()),
       sectionSwitch: !!document.querySelector('[data-testid="section-switch"]')
         || /Daily Ops|Back Office/.test(document.body.innerText),
-      citySelect: !!document.querySelector('[data-testid="city-gameday"] select'),
-      cityLocked: !!document.querySelector('[data-testid="cg-city-locked"]'),
+      cityAll: !!document.querySelector('[data-testid="city-all"]'),
+      locked: document.querySelector('[data-testid="city-locked"]'),
     }));
-    eq("the nav is exactly three flat items, in order", m.navItems, ["Manager Pay", "Reviews", "Gameday Ops"]);
+    eq("the rail is the app's own rail, with exactly three items in order", m.navItems, ["Manager Pay", "Reviews", "Gameday Ops"]);
     eq("NO Daily Ops / Back Office switch renders for this tier", m.sectionSwitch, false);
-    eq("the city is a LOCKED label, not a selector they can change", { select: m.citySelect, locked: m.cityLocked }, { select: false, locked: true });
+    eq("the city control is present and LOCKED, and the 'All cities' chip is gone",
+      { locked: !!m.locked, allCities: m.cityAll }, { locked: true, allCities: false });
+    eq("…and the locked control is genuinely disabled, not just styled",
+      await cm.$eval('[data-testid="city-locked"]', (e) => e.disabled === true), true);
+    eq("…and it names their city", await cm.$eval('[data-testid="city-locked"]', (e) => e.textContent.trim().startsWith("Austin")), true);
   }
   await cm.setViewportSize({ width: 390, height: 844 });
   await cm.waitForTimeout(400);
@@ -171,6 +197,21 @@ async function main() {
     await cm.evaluate(() => /Daily Ops|Back Office/.test(document.body.innerText)), false);
   eq("…with no horizontal overflow at 390",
     await cm.evaluate(() => document.documentElement.scrollWidth <= window.innerWidth + 1), true);
+  {
+    // At 390 the rail is hidden and the shared app bar carries navigation. The three items must
+    // still be reachable — a tier whose nav simply vanishes on a phone has no nav on a phone.
+    await cm.click('[data-testid="mo-screen-picker"]');
+    await cm.waitForSelector('[data-testid="screen-sheet"]', { timeout: 8000 });
+    const sheet = await cm.evaluate(() => ({
+      items: [...document.querySelectorAll('[data-testid="screen-sheet"] [data-testid^="screen-dest-"]')]
+        .map((b) => b.querySelector("span span")?.textContent?.trim()),
+      sw: !!document.querySelector('[data-testid="screen-sheet"] [data-testid="section-switch"]'),
+    }));
+    eq("@390: the screen sheet offers the same three, with no section switch",
+      { items: sheet.items, sw: sheet.sw }, { items: ["Manager Pay", "Reviews", "Gameday Ops"], sw: false });
+    await cm.keyboard.press("Escape");
+    await cm.waitForTimeout(250);
+  }
   await cm.setViewportSize({ width: 1600, height: 1000 });
 
   // ── 5. MANAGER PAY exposes ONE lever ─────────────────────────────────────
@@ -214,6 +255,115 @@ async function main() {
     eq("the confinement is NOT a blanket lockout — an admin still reaches the operator routes", opened >= 3, true);
     const g = await call(ad, `/api/matchday/production/gameday?date=2026-08-15`);
     eq("…including the Match Ops gameday board the city manager is refused", g.status, 200);
+  }
+
+  // ── 6b. THE PAGES ARE THE REAL PAGES, NOT REBUILDS ───────────────────────
+  // The tier's Reviews and Gameday Ops used to be bespoke stripped-down rebuilds. What follows
+  // asserts they are now the SAME COMPONENTS an admin gets, by comparing the two renders directly
+  // rather than by checking that some city-page selectors exist — a lookalike selector is exactly
+  // what a rebuild has.
+  console.log("\nthe pages are the REAL pages, not rebuilds:");
+  {
+    // `data-rv` marks exist ONLY inside ReviewsClient. Comparing the SET of them across the two
+    // routes is what proves one component tree: a rebuild cannot accidentally have the same marks,
+    // and dropping the leaderboard or the trailing strip from one caller would change the set.
+    const rvMarks = (page) => page.evaluate(() =>
+      [...new Set([...document.querySelectorAll("[data-rv]")].map((e) => e.getAttribute("data-rv")))].sort());
+
+    await ad.goto(`${BASE}/match-ops/reviews`, { waitUntil: "domcontentloaded" });
+    await ad.waitForSelector('[data-rv="avg"]', { timeout: 30000 });
+    await ad.waitForTimeout(400);
+    // FILTER THE ADMIN PAGE TO THE SAME CITY before comparing. Some marks are conditional on the
+    // DATA, not on the component: `unranked-row` only renders for managers below the ranking
+    // threshold, and comparing all-cities against one city made this assertion fail for a reason
+    // that had nothing to do with the component tree. Same component + same rows = same marks; any
+    // difference that survives this is a real structural one.
+    // selectOption, not a synthetic event — it drives the control the way a person does, so React
+    // state actually changes rather than only the DOM value.
+    let picked = false;
+    for (const sel of await ad.$$("select")) {
+      const has = await sel.evaluate((s, city) => [...s.options].some((o) => o.value === city), SCOPE_NAME);
+      if (!has) continue;
+      await sel.selectOption(SCOPE_NAME);
+      picked = true;
+      break;
+    }
+    eq("the admin Reviews page can be filtered to the same city (so the comparison is like-for-like)", picked, true);
+    await ad.waitForTimeout(900);
+    const adminMarks = await rvMarks(ad);
+
+    await cm.goto(`${BASE}/city/reviews`, { waitUntil: "domcontentloaded" });
+    await cm.waitForSelector('[data-rv="avg"]', { timeout: 30000 });
+    await cm.waitForTimeout(400);
+    const cityMarks = await rvMarks(cm);
+
+    eq("Reviews renders the SAME component tree as the admin page", cityMarks, adminMarks);
+    // Name the pieces the brief named, so a future deletion fails with a useful message rather
+    // than an opaque set difference.
+    for (const [mark, what] of [["avg", "the AVG RATING tile"], ["volume", "the REVIEW VOLUME tile"],
+      ["attn", "the NEEDS ATTENTION tile"], ["stand", "the STANDOUTS tile"],
+      ["trailing", "the trailing-8-weeks strip"], ["ranked-row", "the managers leaderboard"]]) {
+      cityMarks.includes(mark) ? ok(`…including ${what}`) : bad(`Reviews is missing ${what}`, `no [data-rv="${mark}"]`);
+    }
+    const filters = await cm.evaluate(() => [...document.querySelectorAll("select")].length);
+    eq("…and the month / city / venue / manager filters are all there", filters, 4);
+    eq("…with the city one LOCKED and the other three live",
+      await cm.evaluate(() => [...document.querySelectorAll("select")].filter((s) => s.disabled).length), 1);
+    eq("…and the old bespoke explanatory line is gone",
+      await cm.evaluate(() => /never receives another city|Scoped on the server/i.test(document.body.innerText)), false);
+  }
+  {
+    // THE BOARD: same rows, same rails. Compare the city board against the ADMIN board filtered to
+    // the same city on the same day — id for id, rail for rail. This is the assertion that would
+    // fail if the city page went back to being its own table.
+    const boardRows = (page) => page.evaluate(() =>
+      [...document.querySelectorAll('[data-testid="snap-row"]')].map((e) => ({
+        id: Number(e.getAttribute("data-id")),
+        group: e.getAttribute("data-group"),
+        // the colour rail is a class on the row — the thing the brief calls "the real colour rails"
+        rail: [...e.classList].filter((c) => c !== "r" && c !== "sel").sort().join(" "),
+      })).sort((a, b) => a.id - b.id));
+
+    await cm.goto(`${BASE}/city/gameday`, { waitUntil: "domcontentloaded" });
+    await cm.waitForSelector('[data-testid="snap-row"]', { timeout: 30000 });
+    await cm.waitForTimeout(500);
+    const cityRows = await boardRows(cm);
+
+    // The admin board defaults to today, so drive it to the same day the city board is showing.
+    const day = await cm.evaluate(() => document.querySelector('[data-testid="daylab"]')?.textContent?.trim() ?? null);
+    await ad.goto(`${BASE}/match-ops/gameday`, { waitUntil: "domcontentloaded" });
+    await ad.waitForSelector('[data-testid="snap-row"]', { timeout: 30000 });
+    await ad.waitForTimeout(500);
+    const adminDay = await ad.evaluate(() => document.querySelector('[data-testid="daylab"]')?.textContent?.trim() ?? null);
+    if (day && adminDay && day === adminDay) {
+      await ad.click(`[data-testid="city-${SCOPE_NAME}"]`);
+      await ad.waitForTimeout(600);
+      const adminRows = await boardRows(ad);
+      eq("Gameday renders the SAME rows and rails as the admin board, scoped", cityRows, adminRows);
+    } else {
+      bad("board comparison", `the two boards are on different days (city ${day}, admin ${adminDay}) — not compared`);
+    }
+    eq("…and the board really did render rows (the comparison is not two empty lists)", cityRows.length > 0, true);
+  }
+  {
+    // CLICKING A MATCH GOES TO MANAGER PAY. Not "the panel is hidden" — the panel is never mounted,
+    // and the click navigates. Asserted as a navigation plus the panel's absence AFTER it.
+    await cm.goto(`${BASE}/city/gameday`, { waitUntil: "domcontentloaded" });
+    await cm.waitForSelector('[data-testid="snap-row"]', { timeout: 30000 });
+    await cm.waitForTimeout(400);
+    const id = await cm.$eval('[data-testid="snap-row"]', (e) => Number(e.getAttribute("data-id")));
+    await cm.click('[data-testid="snap-row"]');
+    try {
+      await cm.waitForFunction(() => location.pathname === "/city/manager-pay", null, { timeout: 12000 });
+      ok(`clicking a match navigates to Manager Pay (#match-${id}), it does not open a panel`);
+    } catch {
+      bad("match click", `stayed on ${new URL(cm.url()).pathname}`);
+    }
+    eq("…and the hash addresses THAT match's row", new URL(cm.url()).hash, `#match-${id}`);
+    eq("…and NO match panel was ever mounted", await cm.$('[data-testid="gday-panel"]') === null, true);
+    // The row it points at has to exist, or the link is decoration.
+    await cm.waitForSelector('[data-testid="paytable"]', { timeout: 25000 });
+    eq("…and that row exists on the Manager Pay page", await cm.$(`#match-${id}`) !== null, true);
   }
 
   // ── 7. WHERE THE BARE DOMAIN LANDS EACH TIER ─────────────────────────────

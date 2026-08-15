@@ -219,6 +219,23 @@ export function useCrmConversation(): CrmConversationValue {
   return ctx;
 }
 
+// THE SAME CONTEXT, FOR A SURFACE THAT MAY LEGITIMATELY HAVE NO PROVIDER (Phase 29c).
+//
+// The throwing hook above stays the default and stays throwing: inside Match Ops, a missing
+// provider means the layout broke, and failing loudly is right.
+//
+// But GamedayBoard is now rendered in TWO shells. Match Ops mounts the provider; the city-manager
+// shell deliberately does not — that tier holds no chats grant, every CRM route refuses it, and
+// mounting the provider would open a realtime channel for data the account cannot read. The board
+// only touches this context to get out of the chat dock's way when its match panel opens, and the
+// city tier never opens that panel. So "no provider" is a real, correct state there, not a bug —
+// and a hook that cannot express it forces the wrong fix (mount the provider anyway).
+//
+// Callers MUST handle null. Everything dock-related in GamedayBoard is guarded on it.
+export function useCrmConversationOptional(): CrmConversationValue | null {
+  return useContext(CrmConversationContext);
+}
+
 const ZERO_COUNTS: ViewCounts = { open: 0, mine: 0, starred: 0, closed: 0, awaiting: 0 };
 
 export function CrmConversationProvider({ children }: { children: ReactNode }) {
