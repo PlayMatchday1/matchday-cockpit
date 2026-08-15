@@ -22,7 +22,7 @@ const isEnv = (x: string): x is MatchdayEnv => x === "staging" || x === "product
 const num = (v: unknown) => (v === null || v === undefined || v === "" ? null : Number.isFinite(Number(v)) ? Number(v) : null);
 
 type RosterShape = { isCancelled?: boolean; canceledAt?: string | null; refunded?: boolean; paidStatus?: string | null };
-type Row = { id: number; userId: number; team: number; playerNumber: number; isCancelled?: boolean; refunded?: boolean; user?: { firstName?: string; lastName?: string; isFakePlayer?: boolean; phoneNumber?: string | null } };
+type Row = { id: number; userId: number; team: number; playerNumber: number; promocodeId?: number | null; isCancelled?: boolean; refunded?: boolean; user?: { firstName?: string; lastName?: string; isFakePlayer?: boolean; phoneNumber?: string | null } };
 
 export async function GET(req: Request, ctx: { params: Promise<{ env: string; matchId: string }> }) {
   const auth = await authenticateMatchOpsRead(req);
@@ -68,14 +68,33 @@ export async function GET(req: Request, ctx: { params: Promise<{ env: string; ma
         // phone, and mutates the payload to prove that assertion can fail.
         phone: typeof p.user?.phoneNumber === "string" && p.user.phoneNumber.trim() !== "" ? p.user.phoneNumber : null,
         fake: !!p.user?.isFakePlayer,
+        // WHO CAME IN ON A PROMO. Same join the uses panel uses (promocode_id on the user-match
+        // row) — no new data path. The CODE NAME is resolved below, because "promo" tells you
+        // nothing and "TOMBALL" tells you half a team arrived on one code.
+        promocodeId: (p as { promocodeId?: number | null }).promocodeId ?? null,
       }));
     const teamsRaw = (match.teams as Record<string, unknown>[]) ?? [];
     const teams = teamsRaw.map((t) => ({ id: t.id as number, teamNumber: t.teamNumber as number, name: (t.name as string) ?? `Team ${t.teamNumber}`, locked: !!t.locked }))
       .sort((a, b) => a.teamNumber - b.teamNumber);
     const teamN = teams.length || 2;
     const perTeam = teamN > 0 ? Math.round((num(match.maxPlayerCount) ?? 0) / teamN) || 0 : 0;
+    // Resolve the distinct promo ids to their CODE names. One call per distinct code on this
+    // match — typically 0 or 1, never per row.
+    const promoIds = [...new Set(players.map((p) => p.promocodeId).filter((x): x is number => x != null))];
+    const promoCodes: Record<number, string> = {};
+    await Promise.all(promoIds.map(async (pid) => {
+      try {
+        const d = await apiGet<Record<string, unknown>>(env, `/admin/promocodes/${pid}`);
+        if (typeof d.code === "string") promoCodes[pid] = d.code;
+      } catch { /* an unresolvable code still shows as a chip, by id */ }
+    }));
+    const withCode = players.map((p) => ({ ...p, promoCode: p.promocodeId != null ? (promoCodes[p.promocodeId] ?? `#${p.promocodeId}`) : null }));
+
     return Response.json({
-      matchId: Number(matchId), name: (match.name as string) ?? "", teams, players,
+      matchId: Number(matchId), name: (match.name as string) ?? "", teams, players: withCode,
+      // once per match: how many spots came in on a code. A 100%-off code filling a roster is
+      // revenue that never arrived, and that should be visible without opening Promo Codes.
+      promo: { spots: withCode.filter((p) => p.promocodeId != null).length, codes: Object.values(promoCodes) },
       shape: { teamN, perTeam }, maxPlayerCount: num(match.maxPlayerCount),
       // authoritative occupancy (real + fake) — the count the rest of the app uses; the
       // roster headline reads THIS, not players.length (which double-counts duplicate rows).

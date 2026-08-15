@@ -14,6 +14,7 @@ installHarnessGuard();
 
 const BASE = process.env.BASE || "http://localhost:3000";
 let PASS = 0, FAIL = 0; const fails = [];
+let veoPosts = [];
 const ok = (n) => { PASS++; console.log(`  ok  ${n}`); };
 const bad = (n, d = "") => { FAIL++; fails.push(`${n} — ${d}`); console.log(`  XX  ${n} — ${d}`); };
 const is = (n, got, exp) => (JSON.stringify(got) === JSON.stringify(exp) ? ok(n) : bad(n, `got ${JSON.stringify(got)} want ${JSON.stringify(exp)}`));
@@ -87,7 +88,12 @@ async function main() {
   let lastPut = null;
   await context.route("**/api/veo**", (route) => {
     const url = route.request().url();
-    if (url.includes("/veo/intent") || url.includes("/veo/cameras")) return route.fulfill({ status: 200, contentType: "application/json", body: JSON.stringify({ ok: true }) });
+    if (url.includes("/veo/intent")) { if (route.request().method() === "POST") { try { const b = route.request().postDataJSON(); veoPosts.push(b);
+      // STATEFUL: reflect the posted intent back into the fixture, so the badge's state after a
+      // refetch is the REAL round trip rather than a constant. A fixture that never changes cannot
+      // tell a working toggle from a dead one.
+      const t = MATCHES.find((m) => m.apiId === b.matchApiId); if (t) t.veo = !!b.enabled; } catch { /* */ } } return route.fulfill({ status: 200, contentType: "application/json", body: JSON.stringify({ ok: true }) }); }
+    if (url.includes("/veo/cameras")) return route.fulfill({ status: 200, contentType: "application/json", body: JSON.stringify({ ok: true }) });
     return route.fulfill({ status: 200, contentType: "application/json", body: JSON.stringify(veoWeek(url.includes("week="))) });
   });
   await context.route("**/api/matchday/production/matches/**", (route) => {
@@ -214,6 +220,21 @@ async function main() {
   is("[neg] same-tz change: no warning", await T("dr-tzwarn").count(), 0);
 
   console.log(`\n== drawer: VEO badge, push, sticky bar ==`);
+  // THE MASTER SCHEDULE VEO TOGGLE STILL WORKS. Asserted here because the match panel's own camera
+  // section was deleted on the strength of this one existing — "nothing is lost" has to be a fact,
+  // not an assumption. The previous check only proved the badge does not open the drawer.
+  { await gotoSchedule();
+    veoPosts = [];
+    const badge = page.locator(`[data-testid="veo-badge"][data-veo="2470"]`);
+    const before = await badge.getAttribute("aria-checked");   // role="switch" — aria-checked is the state
+    await badge.click();
+    await page.waitForTimeout(400);
+    const after = await badge.getAttribute("aria-checked");
+    const post = veoPosts.at(-1);
+    (veoPosts.length === 1 && post?.matchApiId === 2470 && typeof post?.enabled === "boolean" && after !== before)
+      ? ok(`master schedule: the VEO toggle still posts /api/veo/intent and flips the badge (${before} -> ${after})`)
+      : bad("master schedule veo toggle", `posts=${veoPosts.length} post=${JSON.stringify(post)} ${before}->${after}`); }
+
   // VEO badge does not open the drawer
   await gotoSchedule();
   await page.locator(`[data-testid="veo-badge"][data-veo="2470"]`).click();

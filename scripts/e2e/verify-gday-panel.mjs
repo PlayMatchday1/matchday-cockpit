@@ -189,7 +189,13 @@ async function main() {
     await ctx.close();
   }
 
-  // ══ CAMERA (Veo) restored into the PANEL ══
+  // ══ CAMERA (Veo) is NO LONGER IN THE PANEL ══
+  // The three assertions that used to live here drove the panel's own Veo toggle (open state,
+  // LANDED-on-toggle, agreement after reopen). The section is deleted — Master Schedule carries
+  // the toggle on every card — so they are REPLACED by an absence check rather than dropped, and
+  // the behaviour they covered is now asserted against VeoMasterSchedule in verify-schededit
+  // ("the VEO toggle still posts /api/veo/intent and flips the badge"), against a fixture made
+  // stateful for the purpose.
   { const ctx = await browser.newContext({ viewport: { width: 1440, height: 1000 }, storageState });
     await routes(ctx);
     const page = await ctx.newPage();
@@ -197,30 +203,12 @@ async function main() {
     await page.waitForSelector('[data-testid="snap-group-todo"]', { timeout: 20000 });
     await page.click('[data-testid="snap-row"][data-id="501"]');
     await page.waitForSelector('[data-testid="gday-panel"]', { timeout: 10000 });
-    await page.waitForSelector('[data-testid="mp-veo"]', { timeout: 10000 });
-    await page.waitForFunction(() => document.querySelector('[data-testid="mp-veo-state"]').textContent.trim() !== "reading…", null, { timeout: 8000 });
-    eq("veo: the toggle lives in the MATCH PANEL and reflects the current state on open (OFF)", {
+    await page.waitForSelector('[data-testid="mp-panel"]', { timeout: 10000 });
+    eq("veo: the camera section is GONE from the panel, and did not reappear in the snapshot row", {
       inPanel: await page.$$eval('[data-testid="gday-panel"] [data-testid="mp-veo"]', (e) => e.length),
+      section: await page.$$eval('[data-testid="gday-panel"] [data-section="CAMERA"]', (e) => e.length),
       inRow: await page.$$eval('[data-testid="snap-row"] input[type=checkbox]', (e) => e.length),
-      checked: await page.$eval('[data-testid="mp-veo"]', (e) => e.checked),
-      state: await page.$eval('[data-testid="mp-veo-state"]', (e) => e.textContent.trim()),
-    }, { inPanel: 1, inRow: 0, checked: false, state: "OFF" });
-
-    await page.click('[data-testid="mp-veo"]');
-    await page.waitForFunction(() => document.querySelector('[data-testid="mp-veo-result"]'), null, { timeout: 10000 });
-    eq("veo: turning it on re-reads and reports LANDED (a 2xx alone is not proof)", {
-      outcome: await page.$eval('[data-testid="mp-veo-result"]', (e) => e.getAttribute("data-outcome")),
-      state: await page.$eval('[data-testid="mp-veo-state"]', (e) => e.textContent.trim()),
-      checked: await page.$eval('[data-testid="mp-veo"]', (e) => e.checked),
-    }, { outcome: "LANDED", state: "ON", checked: true });
-
-    // the panel and the server agree after a change — reopen and re-read
-    await page.click('[data-testid="gday-panel-close"]'); await page.waitForTimeout(200);
-    await page.click('[data-testid="snap-row"][data-id="501"]');
-    await page.waitForSelector('[data-testid="mp-veo"]', { timeout: 10000 });
-    await page.waitForFunction(() => document.querySelector('[data-testid="mp-veo-state"]').textContent.trim() !== "reading…", null, { timeout: 8000 });
-    eq("veo: reopening the panel shows the CHANGED state, so the control and the record agree",
-      await page.$eval('[data-testid="mp-veo-state"]', (e) => e.textContent.trim()), "ON");
+    }, { inPanel: 0, section: 0, inRow: 0 });
     await ctx.close(); }
 
   console.log(`\n================ RESULT ================\nAssertions: ${PASS} passed, ${FAIL} failed`);

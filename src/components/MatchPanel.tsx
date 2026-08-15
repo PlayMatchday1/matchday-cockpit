@@ -31,6 +31,9 @@ import {
 // READ-ONLY TEXT — never a two-option dropdown that would silently rewrite a BRACKET on first touch.
 const EXPOSED_TYPES: Record<string, string> = { REGULAR: "Regular", EVENT: "Special event" };
 const MARKS = [36, 24, 12, 6, 3] as const;
+// EXACT, lowercase, trimmed. "Cancel" and " cancel " with inner spaces are refused — trimmed means
+// the surrounding whitespace only, not a fuzzy match.
+const CANCEL_WORD = "cancel";
 const SIZES = [4, 5, 6, 7, 8, 9, 10, 11, 12] as const;
 
 // The API keys this panel stages. (category is EDITABLE but out of scope this step, so it is never
@@ -59,8 +62,8 @@ const LABELS: Record<string, string> = {
 type Manager = { id: number; name: string };
 type FieldRow = { id: number; title: string; city: string | null };
 type TeamRow = { id: number; teamNumber: number; name: string; locked: boolean };
-type PlayerRow = { umId: number; playerId: number; team: number; playerNumber: number | null; name: string; phone: string | null; fake: boolean };
-type RosterState = { name: string; teams: TeamRow[]; players: PlayerRow[]; shape: { teamN: number; perTeam: number }; maxPlayerCount: number | null; occupancy: number | null; hidden?: { total: number; cancelled: number; unpaid: number; refunded: number } };
+type PlayerRow = { umId: number; playerId: number; team: number; playerNumber: number | null; name: string; phone: string | null; fake: boolean; promoCode?: string | null };
+type RosterState = { name: string; teams: TeamRow[]; players: PlayerRow[]; shape: { teamN: number; perTeam: number }; maxPlayerCount: number | null; occupancy: number | null; hidden?: { total: number; cancelled: number; unpaid: number; refunded: number }; promo?: { spots: number; codes: string[] } };
 type MatchData = Record<string, unknown> & {
   type?: string; startDate?: string; endDate?: string; teams?: unknown[];
   occupancy?: number | null; realOccupancy?: number | null; cityName?: string | null; fieldTitle?: string | null;
@@ -132,48 +135,6 @@ export default function MatchPanel({ matchId, env = "production", onDirtyChange 
   const [cancelTyped, setCancelTyped] = useState("");
   const [cancelBusy, setCancelBusy] = useState(false);
   const [cancelResult, setCancelResult] = useState<string | null>(null);
-  // ── CAMERA (Veo) — restored from GamedayBoard (a2fd814) when the Detail card view was deleted.
-  // It lives HERE, not in the snapshot row: the row is dense and a toggle in it is a mis-tap on a
-  // decision surface, whereas the panel already exists to fix what looks wrong on one match.
-  // This is Clubhouse-side intent (match_veo_intent), NOT a MatchDay write.
-  const [veo, setVeo] = useState<boolean | null>(null);      // null until read
-  const [veoBusy, setVeoBusy] = useState(false);
-  const [veoResult, setVeoResult] = useState<string | null>(null); // LANDED / NOT APPLIED / FAILED
-
-  // Read the CURRENT camera intent so the toggle reflects reality on open rather than a default.
-  const loadVeo = useCallback(async () => {
-    const headers = await authHeaders();
-    if (!headers) return;
-    try {
-      const r = await fetch(`/api/veo/intent?matchApiId=${matchId}`, { headers, cache: "no-store" });
-      if (!r.ok) { setVeo(null); return; }
-      const j = await r.json();
-      setVeo(j?.enabled === true);
-    } catch { setVeo(null); }
-  }, [matchId]);
-
-  // WRITE DISCIPLINE, same as everything else: fire once (writes never retry), then RE-READ and
-  // report from what came back — a 2xx is not proof. On failure the toggle returns to what the
-  // server actually says, not to an optimistic guess.
-  const toggleVeo = useCallback(async (next: boolean) => {
-    if (veoBusy) return;
-    setVeoBusy(true); setVeoResult(null);
-    const headers = await authHeaders();
-    if (!headers) { setVeoBusy(false); setVeoResult("FAILED — no session"); return; }
-    try {
-      const res = await fetch(`/api/veo/intent`, { method: "POST", headers, body: JSON.stringify({ matchApiId: Number(matchId), enabled: next }) });
-      if (!res.ok) { setVeoResult(`FAILED — HTTP ${res.status}`); await loadVeo(); return; }
-      const after = await fetch(`/api/veo/intent?matchApiId=${matchId}`, { headers, cache: "no-store" });
-      if (!after.ok) { setVeoResult("UNKNOWN — the write returned 2xx but the re-read failed"); return; }
-      const j = await after.json();
-      setVeo(j?.enabled === true);
-      setVeoResult(j?.enabled === next ? "LANDED" : "NOT APPLIED");
-    } catch (e) {
-      setVeoResult(`FAILED — ${e instanceof Error ? e.message : String(e)}`);
-      await loadVeo();
-    } finally { setVeoBusy(false); }
-  }, [matchId, veoBusy, loadVeo]);
-
   const load = useCallback(async () => {
     setLoadErr(null);
     const headers = await authHeaders();
@@ -197,7 +158,6 @@ export default function MatchPanel({ matchId, env = "production", onDirtyChange 
     }
   }, [env, matchId]);
   useEffect(() => { void load(); }, [load]);
-  useEffect(() => { void loadVeo(); }, [loadVeo]);
 
   // ── TEAMS (immediate) — load the roster + teams from the SAME guarded roster route the standalone
   // editor used (Part A absorbs it). Returns the fresh payload so the write-only team-count re-read
@@ -330,11 +290,14 @@ export default function MatchPanel({ matchId, env = "production", onDirtyChange 
     } catch (e) { setCancelBusy(false); setCancelResult(`UNKNOWN — ${e instanceof Error ? e.message : String(e)}.`); }
   };
   const doCancel = async () => {
-    if (!cancelPreview || cancelBusy || cancelTyped.trim() !== cancelPreview.name) return;
+    // The typed word is "cancel" — lowercase, exact, trimmed. Typing a match name was a
+    // transcription exercise, not a decision; this is still a deliberate act but the friction is
+    // in the CONSEQUENCE stated above it, not in the copying.
+    if (!cancelPreview || cancelBusy || cancelTyped.trim() !== CANCEL_WORD) return;
     const headers = await authHeaders(); if (!headers) { setCancelResult("No active session — sign in again."); return; }
     setCancelBusy(true); setCancelResult(null);
     try {
-      const res = await fetch(cancelPath, { method: "POST", headers, body: JSON.stringify({ confirmName: cancelTyped.trim(), source: "Match panel · cancel" }) });
+      const res = await fetch(cancelPath, { method: "POST", headers, body: JSON.stringify({ confirmName: cancelPreview.name, source: "Match panel · cancel" }) });
       const j = await res.json();
       setCancelBusy(false);
       if (!res.ok) { setCancelResult(`Cancel failed: ${j.error || res.status}. Nothing was credited.`); return; }
@@ -622,38 +585,16 @@ export default function MatchPanel({ matchId, env = "production", onDirtyChange 
             </div>
           </Section>
 
-          {/* WHEN */}
-          {/* CAMERA — Clubhouse-side intent only; this never writes to MatchDay (the 🎥 in the
-              match name stays a manual edit there). Restored here when the Detail card view, which
-              used to carry this toggle, was deleted. */}
-          <Section title="CAMERA">
-            <label className="mp-veo" data-testid="mp-veo-row">
-              <input type="checkbox" data-testid="mp-veo" checked={veo === true} disabled={veo === null || veoBusy}
-                onChange={(e) => void toggleVeo(e.target.checked)} />
-              <span className="mp-veolab">Veo camera on this match</span>
-              <span className="mp-veostate" data-testid="mp-veo-state">
-                {veo === null ? "reading…" : veo ? "ON" : "OFF"}
-              </span>
-            </label>
-            {veoResult && (
-              <p className="mp-veores" data-testid="mp-veo-result" data-outcome={veoResult.split(" ")[0]}>
-                {veoResult === "LANDED" ? "Saved — re-read confirms it."
-                  : veoResult === "NOT APPLIED" ? "NOT APPLIED — the write returned 2xx but the re-read shows it unchanged. Nothing was retried."
-                  : veoResult}
-              </p>
-            )}
-            <p className="mp-hint">Clubhouse only — this does not change the match in MatchDay.</p>
-          </Section>
-
+          {/* CAMERA lived here. Removed — Master Schedule carries the Veo toggle on every
+              match card (VeoMasterSchedule posts the same /api/veo/intent), so nothing is lost and
+              nothing shared went with it. */}
           <Section title="WHEN" dirty={secDirty(["startDate", "endDate"])}>
-            <span className="mp-note info">Entered as LOCAL wall-clock in <b>{orig.cityName ?? "the field's city"}</b>. The server derives UTC from the field's timezone — Clubhouse never converts. Date + start move together preserving the match duration.</span>
             <div className="mp-grid">
               <label className="mp-f"><span className="mp-lb">DATE</span>
                 <input type="date" data-testid="mp-date" value={when.date} className={isDirty("startDate") ? "mp-chg" : ""} onChange={(e) => applyWhen(e.target.value, when.time)} /></label>
               <label className="mp-f"><span className="mp-lb">START TIME</span>
                 <input type="time" data-testid="mp-start" value={when.time} className={isDirty("startDate") ? "mp-chg" : ""} onChange={(e) => applyWhen(when.date, e.target.value)} /></label>
             </div>
-            <div className="mp-derived" data-testid="mp-when-derived">Sends <b>startDate</b> {String(cur.startDate)} and <b>endDate</b> {String(cur.endDate)} together.</div>
           </Section>
 
           {/* MONEY */}
@@ -669,7 +610,6 @@ export default function MatchPanel({ matchId, env = "production", onDirtyChange 
                 <input data-testid="mp-guests" inputMode="numeric" value={cur.guestCount == null ? "" : String(cur.guestCount)} className={isDirty("guestCount") ? "mp-chg" : ""}
                   onChange={(e) => setField("guestCount", e.target.value.trim() === "" ? "" : Number(e.target.value))} /></label>
             </div>
-            <span className="mp-help">Stored in CENTS. Clearing a box is <b>not</b> a change — type 0 to set a price to zero.</span>
             <Toggle id="mp-free" on={!!cur.isFreeMember} dirty={isDirty("isFreeMember")} onToggle={(v) => setField("isFreeMember", v)}
               title="Free to member" sub="Members join at no charge" />
           </Section>
@@ -727,16 +667,6 @@ export default function MatchPanel({ matchId, env = "production", onDirtyChange 
                 </span>
               </div>
             </div>
-            <p className="mp-hint">
-              {/* THESE ARE TOTALS — the trap this note exists for. 4 × 9 sends 36, not 9. */}
-              These are TOTALS, not per-side: 4 teams × 9 sends <b>36</b>, 2 × 11 sends <b>22</b>.
-              {" "}{teamCount === 3
-                ? "Three teams has no size field of its own in the API — only maxPlayerCount is written, and the 2- and 4-team rungs are left exactly as they are."
-                : teamCount === 2 || teamCount === 4
-                  ? `Saving writes maxPlayerCount and maxTeamSize${teamCount}Team only — the other rung is the alternate configuration the auto-bump ladder uses and is never touched.`
-                  : "Team count is unknown, so only maxPlayerCount is written."}
-              {" "}Both TEAMS and the size are staged and land on Save. Team count is written FIRST, before any roster move — a move to team 3 is rejected while the match still has two teams.
-            </p>
           </Section>
 
           <Section title="SPOTS SHOWN" dirty={secDirty(MARKS.map((h) => `fakeSpotLeft${h}h`))}>
@@ -757,7 +687,6 @@ export default function MatchPanel({ matchId, env = "production", onDirtyChange 
                 );
               })}
             </div>
-            <span className="mp-help">From each mark onward the app never shows more than this many spots left — fake players are added to reach it. The grey figure is how many fakes that ceiling needs at today's roster (<b>{capacity} capacity</b>, <b>{realPlayers} real</b>). Each number should be no higher than the one before it.</span>
             {ladderBreak && (
               <span className="mp-note warn" data-testid="mp-ladderwarn">
                 <b>{ladderBreak.n} at {ladderBreak.mark} H is higher than {ladderBreak.prevN} at {ladderBreak.prevMark} H.</b> A ceiling that RISES as kickoff approaches takes fake players back OFF the match, so players watch it empty out instead of filling up. (This is a UI caution — the server does not enforce it, so Save is not blocked.)
@@ -777,9 +706,6 @@ export default function MatchPanel({ matchId, env = "production", onDirtyChange 
                 <input data-testid="mp-min" inputMode="numeric" value={cur.minPlayerCount == null ? "" : String(cur.minPlayerCount)} disabled={!cur.autoCanceled}
                   className={isDirty("minPlayerCount") ? "mp-chg" : ""} onChange={(e) => setField("minPlayerCount", e.target.value.trim() === "" ? "" : Number(e.target.value))} /></label>
             </div>
-            <p className="mp-derived" data-testid="mp-ac-line">{cur.autoCanceled
-              ? <>Decides <b>{Number(cur.autoCanceledMinutes) || 0} minutes</b> before kickoff, cancelling if fewer than <b>{Number(cur.minPlayerCount) || 0} real players</b> have joined. (Both the timer and the threshold — the API's fake-vs-real basis is unproven; Clubhouse assumes real.)</>
-              : <>Auto-cancel is off; the two fields above are inert.</>}</p>
 
             <Toggle id="mp-bump" on={!!cur.isAutoBump} dirty={isDirty("isAutoBump")} onToggle={(v) => setField("isAutoBump", v)}
               title="Auto bump to tournament" sub="Grow the match to a tournament if it fills" />
@@ -795,8 +721,6 @@ export default function MatchPanel({ matchId, env = "production", onDirtyChange 
                 </select>
                 <span className="mp-help">4 × {(Number(cur.maxTeamSize4Team) || 0) / 4} = <b>{Number(cur.maxTeamSize4Team) || 0} spots</b></span></label>
             </div>
-            <p className="mp-derived" data-testid="mp-ladder-text">The bump ladder: a 2-team match grows one spot a side up to its 2-team ceiling of <b>{(Number(cur.maxTeamSize2Team) || 0) / 2} v {(Number(cur.maxTeamSize2Team) || 0) / 2}</b> (<b>{Number(cur.maxTeamSize2Team) || 0} spots</b>). {cur.isAutoBump ? <>Then it CONVERTS TO 4 TEAMS and climbs again to <b>{(Number(cur.maxTeamSize4Team) || 0) / 4} each</b> (<b>{Number(cur.maxTeamSize4Team) || 0} spots</b>).</> : <>Auto-bump is off, so it stops there — it never becomes a tournament.</>}</p>
-            <span className="mp-note info"><b>These two are sent as TOTALS.</b> maxTeamSize2Team / maxTeamSize4Team store the whole match size, not the per-side number the dropdown shows. "10 × 10" is sent as 20.</span>
           </Section>
 
           {/* DESCRIPTION */}
@@ -857,20 +781,24 @@ export default function MatchPanel({ matchId, env = "production", onDirtyChange 
                   ))}</div>
                 )}
                 {pendingAdd && <span className="mp-addpending" data-testid="mp-add-pending">Adding <b>{pendingAdd.fake ? "a FAKE player" : pendingAdd.name}</b> — pick a team →<button type="button" className="mp-x" onClick={() => setPendingAdd(null)}>cancel</button></span>}
-                <span className="mp-help" data-testid="mp-add-immediate-note">Adding sends straight away — it is the one control here that does not wait for Save.</span>
+                <span className="mp-help" data-testid="mp-add-immediate-note">sends on click, not on Save</span>
               </div>
 
+              {!!roster.promo?.spots && (
+                // Once per match. A 100%-off code filling a roster is revenue that never arrived.
+                <p className="mp-hint" data-testid="mp-promo-count" data-spots={roster.promo.spots}>
+                  <b>{roster.promo.spots} on a promo</b>{roster.promo.codes.length ? ` — ${roster.promo.codes.join(", ")}` : ""}
+                </p>
+              )}
               {!!roster.hidden?.total && (
                 // NOT silent. A 20-deep repeat from one player is a payment failure; the noise is
                 // gone from the teams but the fact that it happened is stated.
                 <p className="mp-hint" data-testid="mp-roster-hidden" data-count={roster.hidden.total}>
-                  <b>{roster.hidden.total} sign-up{roster.hidden.total === 1 ? "" : "s"} hidden</b>
-                  {" — "}
-                  {[roster.hidden.unpaid ? `${roster.hidden.unpaid} unpaid (payment never completed)` : "",
+                  <b>{roster.hidden.total} hidden</b>{" — "}
+                  {[roster.hidden.unpaid ? `${roster.hidden.unpaid} unpaid` : "",
                     roster.hidden.cancelled ? `${roster.hidden.cancelled} cancelled` : "",
-                    roster.hidden.refunded ? `${roster.hidden.refunded} refunded` : ""].filter(Boolean).join(" · ")}.
-                  {" "}These hold no spot and are not in the match&apos;s own count, so they are left out of the
-                  teams below. A repeated name is usually one person&apos;s retried checkout.
+                    roster.hidden.refunded ? `${roster.hidden.refunded} refunded` : ""].filter(Boolean).join(" · ")}
+                  {". They hold no spot."}
                 </p>
               )}
 
@@ -909,7 +837,7 @@ export default function MatchPanel({ matchId, env = "production", onDirtyChange 
                                 is what crushed both. Display only — see the roster route: it never
                                 reaches change_log, where the rule is last-4 via phoneLast4(). */}
                             <span className="mp-pident">
-                              <span className="mp-pname" data-testid="mp-pname">{p.name}{p.fake && <span className="mp-fake-tag" data-testid="mp-fake-tag">FAKE</span>}</span>
+                              <span className="mp-pname" data-testid="mp-pname">{p.name}{p.fake && <span className="mp-fake-tag" data-testid="mp-fake-tag">FAKE</span>}{(p as PlayerRow).promoCode && <span className="mp-promo-tag" data-testid="mp-promo-tag">{(p as PlayerRow).promoCode}</span>}</span>
                               <span className="mp-pphone" data-testid="mp-pphone">{p.phone ?? (p.fake ? "fake — no phone" : "no phone on file")}</span>
                             </span>
                             <span className="mp-pacts">
@@ -980,11 +908,11 @@ export default function MatchPanel({ matchId, env = "production", onDirtyChange 
                 <p className="mp-cancel-line" data-testid="mp-cancel-line">
                   <b>{cancelPreview.count} player{cancelPreview.count === 1 ? "" : "s"} will be credited ${centsToDollars(cancelPreview.totalCents)}</b> and texted that “{cancelPreview.name}” is off. Each gets a <b>CREDIT</b> of the match value to their MatchDay account — nothing leaves Stripe and no money returns to a card. This fires once and cannot be undone.
                 </p>
-                <label className="mp-f"><span className="mp-lb">TYPE THE MATCH NAME TO CONFIRM <em>{cancelPreview.name}</em></span>
-                  <input data-testid="mp-cancel-name" value={cancelTyped} placeholder={cancelPreview.name} onChange={(e) => setCancelTyped(e.target.value)} /></label>
+                <label className="mp-f"><span className="mp-lb">TYPE <em>cancel</em></span>
+                  <input data-testid="mp-cancel-name" value={cancelTyped} placeholder={CANCEL_WORD} onChange={(e) => setCancelTyped(e.target.value)} /></label>
                 <div className="mp-cancel-acts">
                   <button type="button" className="mp-btn" data-testid="mp-cancel-abort" onClick={() => { setCancelOpen(false); setCancelTyped(""); }}>Keep the match</button>
-                  <button type="button" className="mp-cancelbtn" data-testid="mp-cancel-do" disabled={cancelBusy || cancelTyped.trim() !== cancelPreview.name} onClick={() => void doCancel()}>{cancelBusy ? "Cancelling…" : "Cancel the match"}</button>
+                  <button type="button" className="mp-cancelbtn" data-testid="mp-cancel-do" disabled={cancelBusy || cancelTyped.trim() !== CANCEL_WORD} onClick={() => void doCancel()}>{cancelBusy ? "Cancelling…" : "Cancel the match"}</button>
                 </div>
               </div>
             ) : null}
@@ -1092,26 +1020,18 @@ const CSS = `
 .mp-meta{display:flex;gap:7px;flex-wrap:wrap;align-items:center;margin-top:6px;font-size:11.5px;color:var(--ink3)}
 .mp-tag{display:inline-flex;border-radius:6px;padding:2px 7px;font-size:10.5px;font-weight:800;border:1px solid var(--line2);background:#eef4f1;color:var(--ink2)}
 .mp-body{overflow:auto;min-height:0;padding:0 0 8px}
-.mp-veo{display:flex;align-items:center;gap:9px;min-height:40px;cursor:pointer}
-.mp-veo input{width:18px;height:18px}
-.mp-veolab{font-size:13px}
-.mp-veostate{margin-left:auto;font-size:10.5px;font-weight:800;letter-spacing:.06em;border:1px solid #C3CDC7;border-radius:6px;padding:2px 7px;color:#41514A}
-.mp-veores{margin:6px 0 0;font-size:11.5px;font-weight:600}
-.mp-veores[data-outcome="LANDED"]{color:#12704a}
-.mp-veores[data-outcome="NOT"]{color:#8a6300}
-.mp-veores[data-outcome="FAILED"],.mp-veores[data-outcome="UNKNOWN"]{color:#a8391a}
 .mp-seg{display:inline-flex;border:1px solid #D8E2DC;border-radius:10px;overflow:hidden}
 .mp-seg button{min-width:44px;min-height:40px;border:0;background:#fff;color:#41514A;font:inherit;font-weight:800;font-size:13px;cursor:pointer;border-left:1px solid #D8E2DC}
 .mp-seg button:first-child{border-left:0}
 .mp-seg button.on{background:#0d3b2e;color:#fff}
 .mp-seg button:disabled{opacity:.55;cursor:default}
 .mp-sec{border-bottom:1px solid var(--line)}
-.mp-sechd{display:flex;align-items:center;gap:10px;width:100%;border:0;background:none;font:inherit;text-align:left;padding:13px 16px;cursor:pointer;min-height:50px}
+.mp-sechd{display:flex;align-items:center;gap:10px;width:100%;border:0;background:none;font:inherit;text-align:left;padding:10px 16px;cursor:pointer;min-height:44px}
 .mp-sechd:hover{background:#f7fbf9}
 .mp-caret{color:var(--ink3);font-size:10px;width:11px;flex:0 0 11px}
 .mp-st{font-size:10.5px;font-weight:800;letter-spacing:.12em;color:var(--ink)}
 .mp-dirty{width:7px;height:7px;border-radius:50%;background:#c98a00;flex:0 0 7px}
-.mp-secbd{padding:2px 16px 16px}
+.mp-secbd{padding:2px 16px 12px}
 .mp-note{display:block;font-size:11.5px;line-height:1.4;padding:8px 11px;border-radius:9px;margin-bottom:12px}
 .mp-note.info{background:#e8f0fa;border:1px solid #a8c4e6;color:#123a6b}
 .mp-note.warn{background:#fdf2e0;border:1px solid #e8c383;color:#6b4400;margin-top:10px}
@@ -1119,7 +1039,10 @@ const CSS = `
 .mp-grid{display:grid;grid-template-columns:1fr 1fr;gap:12px}
 .mp-grid3{display:grid;grid-template-columns:1fr 1fr 1fr;gap:12px}
 .mp-f{display:block;min-width:0;margin-bottom:0}
-.mp-f + .mp-f,.mp-grid + .mp-grid,.mp-grid + .mp-help{margin-top:12px}
+/* DENSER, now the paragraphs are gone: label, control, microlabel. The old spacing was tuned
+   around blocks of prose that no longer sit between the fields, so leaving it would just be the
+   gaps the paragraphs used to fill. */
+.mp-f + .mp-f,.mp-grid + .mp-grid,.mp-grid + .mp-help{margin-top:9px}
 .mp-lb{display:flex;align-items:baseline;gap:6px;font-size:9.5px;font-weight:800;letter-spacing:.11em;color:var(--ink3);margin-bottom:5px}
 .mp-lb em{margin-left:auto;font-style:normal;font-size:9.5px;font-weight:700;color:var(--ink3);text-transform:none}
 .mp input,.mp select,.mp textarea{width:100%;min-width:0;border:1px solid var(--line2);border-radius:9px;padding:9px 11px;font:inherit;font-size:13.5px;background:#fbfdfc;color:var(--ink);min-height:40px}
@@ -1129,8 +1052,8 @@ const CSS = `
 .mp .mp-chg{border-color:#c98a00;background:#fffdf7}
 .mp .mp-bad{border-color:#f0a9a4;background:#fff7f6;color:var(--red)}
 .mp-ro{display:block;padding:9px 11px;border:1px dashed var(--line2);border-radius:9px;background:#f4f9f6;color:var(--ink2);font-size:12.5px}
-.mp-help{display:block;margin-top:5px;font-size:11.5px;color:var(--ink3)}
-.mp-derived{font-size:12.5px;color:var(--ink2);margin-top:9px}
+.mp-help{display:block;margin-top:3px;font-size:11.5px;color:var(--ink3)}
+.mp-derived{font-size:12.5px;color:var(--ink2);margin-top:6px}
 .mp-derived b{font-weight:800;color:var(--ink)}
 .mp-step{display:inline-flex;align-items:center;border:1px solid var(--line2);border-radius:9px;overflow:hidden;background:#fbfdfc}
 .mp-step button{border:0;background:none;font:inherit;font-size:16px;font-weight:800;color:var(--ink2);min-width:40px;min-height:40px;cursor:pointer}
@@ -1228,6 +1151,8 @@ const CSS = `
 .mp-pname{font-size:13px;line-height:1.25;white-space:nowrap;overflow:hidden;text-overflow:ellipsis}
 .mp-pphone{font-size:11px;line-height:1.25;color:var(--ink3);font-variant-numeric:tabular-nums;white-space:nowrap;overflow:hidden;text-overflow:ellipsis}
 .mp-fake-tag{font-size:9px;font-weight:800;background:#f2e31d;color:#231f00;border-radius:4px;padding:1px 4px;margin-left:6px;vertical-align:middle}
+/* the promo chip carries the CODE NAME and sits at the same weight as the spot number */
+.mp-promo-tag{font-size:9px;font-weight:800;letter-spacing:.03em;background:#e7eefb;color:#1c3f7a;border:1px solid #c3d5f0;border-radius:4px;padding:1px 5px;margin-left:6px;vertical-align:middle;white-space:nowrap}
 .mp-pacts{display:inline-flex;gap:4px;flex:0 0 auto;align-items:center}
 .mp-pendtag{font-size:9px;font-weight:800;letter-spacing:.06em;background:#e7f3ea;color:#14512f;border:1px solid #a9d3ba;border-radius:4px;padding:2px 5px}
 .mp-pendtag.rm{background:#fbeeec;color:#8a2018;border-color:#e6b7b0}

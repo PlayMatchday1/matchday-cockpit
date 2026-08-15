@@ -52,10 +52,11 @@ const twoTeamRoster = () => ({
   name: "PRUMC - Tuesday",
   teams: [{ id: 501, teamNumber: 1, name: "Green", locked: false }, { id: 502, teamNumber: 2, name: "Blue", locked: false }],
   players: [
-    { umId: 9001, playerId: 1, team: 1, playerNumber: 1, name: "Alex Kim", phone: "+15125550101", fake: false },
-    { umId: 9002, playerId: 2, team: 1, playerNumber: 2, name: "Sam Reyes", phone: null, fake: true },
-    { umId: 9003, playerId: 3, team: 2, playerNumber: 1, name: "Jordan Lee", phone: "+15125550103", fake: false },
+    { umId: 9001, playerId: 1, team: 1, playerNumber: 1, name: "Alex Kim", phone: "+15125550101", fake: false, promoCode: "TOMBALL" },
+    { umId: 9002, playerId: 2, team: 1, playerNumber: 2, name: "Sam Reyes", phone: null, fake: true, promoCode: null },
+    { umId: 9003, playerId: 3, team: 2, playerNumber: 1, name: "Jordan Lee", phone: "+15125550103", fake: false, promoCode: "TOMBALL" },
   ], shape: { teamN: 2, perTeam: 9 }, maxPlayerCount: 18, occupancy: 3, _um: -1,
+  promo: { spots: 2, codes: ["TOMBALL"] },
 });
 // ITEM 5's fixture: a team returned in the order the API actually uses. Measured on production, 55
 // of 95 teams came back NOT ascending — [9,4,5,1,2,3] is the real shape of the White team the brief
@@ -152,7 +153,7 @@ async function routes(ctx) {
     if (method === "GET") {
       if (url.searchParams.get("q") !== null) return json({ results: [{ id: 77, name: "New Player", isFake: false }] });
       rosterGets++;
-      return json({ matchId: Number(id), name: st.name, teams: st.teams, players: st.players, shape: st.shape, maxPlayerCount: st.maxPlayerCount, occupancy: st.occupancy });
+      return json({ matchId: Number(id), name: st.name, teams: st.teams, players: st.players, shape: st.shape, maxPlayerCount: st.maxPlayerCount, occupancy: st.occupancy, promo: st.promo });
     }
     if (method === "POST") {
       const op = JSON.parse(route.request().postData() || "{}");
@@ -351,9 +352,9 @@ async function main() {
   // the picker offers exactly what production proved storable: 2, 3 and 4 (28 of 711 matches run 3)
   eq("spots: the TEAMS picker offers exactly 2 / 3 / 4", await page.$$eval('[data-testid="mp-teams-seg"] button', (b) => b.map((x) => x.textContent.trim())), ["2", "3", "4"]);
   eq("spots: the picker marks the match's CURRENT team count", await page.$eval('[data-testid="mp-teams-3"]', (e) => e.getAttribute("data-on")), "true");
-  // 3 teams has no rung field — the copy says so instead of silently writing nothing
-  eq("spots: at 3 teams the note states only maxPlayerCount is written", /Three teams has no size field of its own/.test(await page.$eval('[data-section="SPOTS"]', (e) => e.textContent)), true);
-
+  // (The 3-team rule — only maxPlayerCount is written, never a rung field — is asserted on the
+  //  REQUEST BODY a few lines below, and always was. Deleting the sentence that explained it cost
+  //  no coverage, which is the test this removal had to pass.)
   // stepping the per-team figure writes ONLY what changed, and TOTALS not per-side
   puts = [];
   await page.click('[data-testid="mp-spt-plus"]');       // 6 -> 7 per team, 3 teams => 21 total
@@ -545,8 +546,8 @@ async function main() {
   delete rosterStates["17494"]; rosterPosts = []; puts = [];
   await page.goto(`${BASE}/match-ops/match-panel/17494`, { waitUntil: "domcontentloaded" });
   await page.waitForSelector('[data-testid="mp-team"]', { timeout: 15000 });
-  eq("add says on itself that it does not wait for Save",
-    /does not wait for Save/i.test(await page.$eval('[data-testid="mp-add-immediate-note"]', (e) => e.textContent)), true);
+  eq("add says on itself that it sends on click, not on Save",
+    /sends on click, not on Save/i.test(await page.$eval('[data-testid="mp-add-immediate-note"]', (e) => e.textContent)), true);
   await page.fill('[data-testid="mp-add-search"]', "new");
   await page.waitForSelector('[data-testid="mp-add-result"]', { timeout: 6000 });
   await page.click('[data-testid="mp-add-result"]');
@@ -728,6 +729,94 @@ async function main() {
     await page.click('[data-testid="mp-revert"]'); await page.waitForTimeout(200); }
   await page.setViewportSize({ width: 1600, height: 1000 });
 
+  // ── the stripped panel on a phone: prose gone, chips legible, cancel word enforced ───────────
+  await page.setViewportSize({ width: 390, height: 844 });
+  delete rosterStates["17494"];
+  await page.goto(`${BASE}/match-ops/match-panel/17494`, { waitUntil: "domcontentloaded" });
+  await page.waitForSelector('[data-testid="mp-team"]', { timeout: 20000 });
+  { const m = await page.evaluate(() => {
+      const panel = document.querySelector('[data-testid="mp-panel"]');
+      const skip = (el) => el.closest('[data-testid="mp-desc"],[data-testid="mp-intro"],.mp-difflist,[data-testid="mp-toast"],[data-testid="mp-write-results"]');
+      const long = [];
+      const w = document.createTreeWalker(panel, NodeFilter.SHOW_TEXT);
+      for (let n = w.nextNode(); n; n = w.nextNode()) {
+        const t = (n.textContent || "").trim();
+        if (t.length > 120 && !(n.parentElement && skip(n.parentElement))) long.push(t.slice(0, 60));
+      }
+      const chip = panel.querySelector('[data-testid="mp-promo-tag"]');
+      const row = chip?.closest('[data-testid="mp-player"]');
+      return {
+        longText: long.length,
+        pageLeak: document.documentElement.scrollWidth > window.innerWidth + 1,
+        camera: !!panel.querySelector('[data-section="CAMERA"]'),
+        chipText: chip?.textContent?.trim() ?? null,
+        // the chip must not push the name out of the row on a phone
+        chipInsideRow: chip && row ? chip.getBoundingClientRect().right <= row.getBoundingClientRect().right + 1 : false,
+        countVisible: !!panel.querySelector('[data-testid="mp-promo-count"]')?.getBoundingClientRect().height,
+      }; });
+    eq("stripped @390 portrait: no prose, no overflow, no camera, the promo chip reads TOMBALL inside its row, and the per-match count survives",
+      m, { longText: 0, pageLeak: false, camera: false, chipText: "TOMBALL", chipInsideRow: true, countVisible: true }); }
+  await page.setViewportSize({ width: 1600, height: 1000 });
+
+  // ══════════════ STRIPPED FOR SOMEONE WHO ALREADY KNOWS ══════════════
+  delete rosterStates["17494"];
+  await page.goto(`${BASE}/match-ops/match-panel/17494`, { waitUntil: "domcontentloaded" });
+  await page.waitForSelector('[data-testid="mp-team"]', { timeout: 20000 });
+
+  // 1 — THE CAMERA SECTION IS GONE from the panel. (Master Schedule keeps the toggle; asserted in
+  //     verify-schededit, which drives VeoMasterSchedule's own /api/veo/intent post.)
+  eq("camera: no CAMERA section, no veo control and no veo markup anywhere in the panel",
+    await page.evaluate(() => ({
+      section: !!document.querySelector('[data-section="CAMERA"]'),
+      toggle: !!document.querySelector('[data-testid="mp-veo"]'),
+      state: !!document.querySelector('[data-testid="mp-veo-state"]'),
+      result: !!document.querySelector('[data-testid="mp-veo-result"]'),
+      cls: document.querySelectorAll('[class*="mp-veo"]').length,
+      word: /\bveo\b/i.test(document.querySelector('[data-testid="mp-panel"]').textContent || ""),
+    })), { section: false, toggle: false, state: false, result: false, cls: 0, word: false });
+
+  // 2 — THE MECHANICAL PROSE CHECK. No text node over 120 chars outside the two free-text fields.
+  //     This is what stops the paragraphs creeping back one sentence at a time.
+  { const long = await page.evaluate(() => {
+      const panel = document.querySelector('[data-testid="mp-panel"]');
+      const skip = (el) => el.closest('[data-testid="mp-desc"],[data-testid="mp-intro"],.mp-difflist,[data-testid="mp-toast"],[data-testid="mp-write-results"]');
+      const out = [];
+      const w = document.createTreeWalker(panel, NodeFilter.SHOW_TEXT);
+      for (let n = w.nextNode(); n; n = w.nextNode()) {
+        const t = (n.textContent || "").trim();
+        if (t.length <= 120) continue;
+        if (n.parentElement && skip(n.parentElement)) continue;
+        out.push(t.slice(0, 90));
+      }
+      return out; });
+    eq("prose: no text node in the panel exceeds 120 characters (DESCRIPTION / MANAGER INTRO aside)", long, []); }
+
+  // ...and the MICROLABELS and COMPUTED VALUES survived. Deleting the prose must not delete these.
+  { const kept = await page.evaluate(() => {
+      const txt = document.querySelector('[data-testid="mp-panel"]').textContent || "";
+      return {
+        total: /\btotal\b/i.test(txt), staged: /staged|pending/i.test(txt), derived: /derived/i.test(txt),
+        beforeKickoff: /before kickoff/i.test(txt), belowCancels: /below this, it cancels/i.test(txt),
+        optional: /optional/i.test(txt), sendId: /send the id/i.test(txt),
+        capacity: /\d+ total — \d+ teams × \d+/.test(txt.replace(/\s+/g, " ")),
+      }; });
+    eq("prose: the microlabels and computed values are all still there", kept,
+      { total: true, staged: true, derived: true, beforeKickoff: true, belowCancels: true,
+        optional: true, sendId: true, capacity: true }); }
+
+  // 5 — WHO CAME IN ON A PROMO: the CODE NAME on the row, and the count once per match.
+  { const promo = await page.evaluate(() => {
+      const rows = [...document.querySelectorAll('[data-testid="mp-player"]')];
+      const chips = rows.map((r) => r.querySelector('[data-testid="mp-promo-tag"]')?.textContent?.trim() ?? null);
+      const count = document.querySelector('[data-testid="mp-promo-count"]');
+      return { chips, chipped: chips.filter(Boolean).length, countText: count?.textContent?.replace(/\s+/g, " ").trim() ?? null,
+        countAttr: count?.getAttribute("data-spots") ?? null }; });
+    (promo.chips.filter((c) => c === "TOMBALL").length === 2
+      && promo.chips.filter((c) => c === null).length === 1
+      && promo.countAttr === "2" && /2 on a promo/.test(promo.countText ?? "") && /TOMBALL/.test(promo.countText ?? ""))
+      ? ok("promo: rows with a code show the CODE NAME, the row without shows no chip, and the per-match count matches the chipped rows")
+      : bad("promo chips", JSON.stringify(promo)); }
+
   // ══════════════ Part C · CANCEL — live numbers, typed-name gate, one request, credit not refund ══════════════
   delete rosterStates["17494"]; cancelPosts = [];
   await page.goto(`${BASE}/match-ops/match-panel/17494`, { waitUntil: "domcontentloaded" });
@@ -739,8 +828,22 @@ async function main() {
   { const zone = (await page.$eval('[data-testid="mp-danger"]', (e) => e.textContent)).toLowerCase();
     eq("cancelC2: the cancel copy says 'credit' and never 'refund'", { credit: zone.includes("credit"), refund: zone.includes("refund") }, { credit: true, refund: false }); }
   // wrong typed name → button stays disabled
-  await page.fill('[data-testid="mp-cancel-name"]', "not the name");
-  eq("cancelC3: a wrong typed match name keeps the Cancel button disabled", await page.$eval('[data-testid="mp-cancel-do"]', (e) => e.disabled), true);
+  // TYPE "cancel" — lowercase, exact, trimmed. Each near-miss is asserted separately: a
+  // case-insensitive or fuzzy compare would pass a single "wrong word" check and still be wrong.
+  const capDisabled = () => page.$eval('[data-testid="mp-cancel-do"]', (e) => e.disabled);
+  await page.fill('[data-testid="mp-cancel-name"]', "not the word");
+  eq("cancelC3: a wrong word keeps the Cancel button disabled", await capDisabled(), true);
+  await page.fill('[data-testid="mp-cancel-name"]', "PRUMC - Tuesday");
+  eq("cancelC3b: the MATCH NAME no longer unlocks it — the word is 'cancel'", await capDisabled(), true);
+  await page.fill('[data-testid="mp-cancel-name"]', "Cancel");
+  eq("cancelC3c: 'Cancel' is refused — lowercase, exact", await capDisabled(), true);
+  await page.fill('[data-testid="mp-cancel-name"]', "CANCEL");
+  eq("cancelC3d: 'CANCEL' is refused", await capDisabled(), true);
+  await page.fill('[data-testid="mp-cancel-name"]', "  cancel  ");
+  eq("cancelC3e: ' cancel ' IS accepted — trimmed means surrounding whitespace", await capDisabled(), false);
+  await page.fill('[data-testid="mp-cancel-name"]', "can cel");
+  eq("cancelC3f: inner whitespace is NOT trimmed away", await capDisabled(), true);
+  await page.fill('[data-testid="mp-cancel-name"]', "not the word");
   // abort sends nothing
   cancelPosts = [];
   await page.click('[data-testid="mp-cancel-abort"]');
@@ -749,7 +852,7 @@ async function main() {
   // correct name → exactly one request; verdict from match state
   await page.click('[data-testid="mp-cancel-open"]');
   await page.waitForSelector('[data-testid="mp-cancel-confirm"]', { timeout: 6000 });
-  await page.fill('[data-testid="mp-cancel-name"]', "PRUMC - Tuesday");
+  await page.fill('[data-testid="mp-cancel-name"]', "cancel");
   cancelPosts = [];
   await page.click('[data-testid="mp-cancel-do"]');
   await page.waitForSelector('[data-testid="mp-cancel-result"]', { timeout: 6000 });
