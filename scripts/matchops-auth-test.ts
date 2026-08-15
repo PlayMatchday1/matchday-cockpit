@@ -124,7 +124,28 @@ is("no other route reads can_edit_credits directly", routeFiles.filter((f) => /c
 // tier itself is not admin-gated, the act of handing it out is) = 23.
 // +1 Phase 29 city-manager grant, +2 Phase 30 (auth-status, resend-invite), +1 Phase 31
 // (promos/uses — admin AND can_manage_promos, because it returns player contact details) = 26.
-is("authenticateAdmin still guards 26 routes", importsAdmin.length, 26);
+// +2 Phase 18d — promos/edit/[id] and promos/delete/[id] (the latter serves DELETE *and* the
+// PATCH restore). Both are production WRITES on a promo, so they sit with create on
+// authenticateAdmin + MANAGE PROMOS, not on the Match Ops read gate the promo READS use = 28.
+is("authenticateAdmin still guards 28 routes", importsAdmin.length, 28);
+
+// Phase 18d — every promo WRITE is gated on MANAGE PROMOS, and the check is in the route (not
+// only on the button). A route that forgot it would 200 for any admin.
+for (const f of ["promos/create/route.ts", "promos/edit/[id]/route.ts", "promos/delete/[id]/route.ts"]) {
+  const src = readFileSync(`src/app/api/${f}`, "utf8");
+  is(`${f} checks canManagePromos in the ROUTE`, /canManagePromos/.test(src), true);
+  is(`${f} passes requires:"promos" to apiWrite (the unbypassable chokepoint)`, /"promos"/.test(src), true);
+  is(`${f} records the write into change_log`, /recordWrite/.test(src), true);
+}
+// The restore verb is PATCH — confirmed from the Retool prod export (restoreDeletedPromocode).
+// Pinned because it was briefed as POST: wiring POST would 404 on a path that looks correct.
+is("restore is wired as PATCH /admin/promocodes/{id}/restore, not POST",
+  /const method[^\n]*"DELETE" : "PATCH"/.test(readFileSync("src/app/api/promos/delete/[id]/route.ts", "utf8"))
+  && /promocodes\/\$\{id\}\/restore/.test(readFileSync("src/app/api/promos/delete/[id]/route.ts", "utf8")), true);
+// A retried delete must be IMPOSSIBLE, not merely harmless: the route re-reads deletedAt and
+// refuses a no-op before any outbound request.
+is("delete refuses an already-deleted code before sending anything",
+  /already deleted[\s\S]{0,120}noop: true/.test(readFileSync("src/app/api/promos/delete/[id]/route.ts", "utf8")), true);
 is("the promo USES route is gated on MANAGE PROMOS, not the Match Ops read gate the other promo reads use",
   /canManagePromos/.test(readFileSync("src/app/api/promos/uses/[id]/route.ts", "utf8"))
   && !/authenticateMatchOpsRead/.test(readFileSync("src/app/api/promos/uses/[id]/route.ts", "utf8")), true);

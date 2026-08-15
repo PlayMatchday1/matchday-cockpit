@@ -227,7 +227,6 @@ export default function GamedayBoard() {
         <div className="panel head">
           <div className="r1">
             <h1>Gameday Ops</h1>
-            <span className="dt" data-testid="date-label">{dayLabel(date)}</span>
             {/* Refresh + freshness, in the space the Snapshot/Detail toggle vacated. The stamp is
                 when the DATA landed; it goes muted with "· Nm ago" after 2 minutes so staleness is
                 visible without being loud. NO AUTO-POLLING: this page has live edit controls and
@@ -248,7 +247,6 @@ export default function GamedayBoard() {
               </span>
             </span>
           </div>
-          <p className="lede">Everything for one day, soonest kickoff first in real time — cities in different timezones interleave by the actual instant, so clock order and kickoff order are not the same thing. Click a match to fix what looks wrong.</p>
           <div className="chips">
             <div className="daynav">
               <button className="arw" data-testid="day-prev" aria-label="Previous day" onClick={() => goDay(addDays(date, -1))}>‹</button>
@@ -270,15 +268,6 @@ export default function GamedayBoard() {
           </div>
           <span className={"pill " + (badge.tone === "prod" ? "live" : "stg")} data-testid="gameday-env">{badge.tone === "prod" ? <><i />PRODUCTION — LIVE EDITS</> : badge.label}</span>
         </div>
-
-        {!loading && !err && (
-          <div className="legend" data-testid="legend">
-            <span className="lg"><span className="sw red" />Short · decide within 2h</span>
-            <span className="lg"><span className="sw amb" />Short (or exactly at the minimum)</span>
-            <span className="lg"><span className="sw grn" />Over the minimum</span>
-            <span className="legnote" data-testid="decideby-legend">Decide by is when the match auto-cancels — {STD_LEAD} minutes before kickoff — unless the minimum is met by then.</span>
-          </div>
-        )}
 
         {loading ? <div className="empty" data-testid="loading">Loading {dayLabel(date)}…</div>
           : err ? <div className="empty err" data-testid="board-err">Couldn’t load the board: {err}</div>
@@ -443,8 +432,9 @@ const CSS = `
 .gdo .panel{background:#fff;border:1px solid #DCE5E0;border-radius:14px}
 .gdo .head{padding:18px 20px 16px;margin-bottom:14px;position:relative}
 .gdo .r1{display:flex;align-items:baseline;gap:12px}.gdo h1{margin:0;font-size:23px;letter-spacing:-.2px}
-.gdo .dt{font-size:14px;color:#5C6B62}
-.gdo .lede{margin:7px 0 14px;color:#5C6B62;font-size:14px;max-width:74ch}
+/* The lede and the duplicate date beside the title were removed (cosmetic pass): the chips row
+   now supplies the gap the paragraph used to, so the header closes up instead of leaving a hole. */
+.gdo .chips{margin-top:12px}
 .gdo .chips{display:flex;gap:7px;flex-wrap:wrap;align-items:center}
 .gdo .daynav{display:flex;align-items:center;gap:8px;margin-right:4px}
 .gdo .arw{width:34px;height:34px;border-radius:8px;border:1px solid #DCE5E0;background:#fff;color:#20372C;line-height:1;font-size:16px}

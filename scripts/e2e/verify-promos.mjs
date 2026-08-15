@@ -226,7 +226,16 @@ async function main() {
   await openDetail(101); // per-user cap 5, redeemed 4
   eq("detail 101: REDEEMED 4, LEFT 'per user'", { r: await page.$eval('[data-testid="detail-redeemed"]', (e) => e.textContent.trim()), l: await page.$eval('[data-testid="detail-left"]', (e) => e.textContent.trim()) }, { r: "4", l: "per user" });
   eq("detail 101: usage one-liner", /4 redeemed · cap 5 per user/.test(await page.$eval('[data-testid="detail-useline"]', (e) => e.textContent)), true);
-  eq("delete stub disabled + labelled 'Delete (reversible)'", { disabled: await page.$eval('[data-testid="detail-delete"]', (e) => e.disabled), label: (await page.$eval('[data-testid="detail-delete"]', (e) => e.textContent)).trim(), edit: await page.$eval('[data-testid="detail-edit"]', (e) => e.disabled) }, { disabled: true, label: "Delete (reversible)", edit: true });
+  // BEHAVIOUR CHANGED IN PHASE 18d — itemised, not quietly edited to pass.
+  // Was: "delete stub disabled + labelled 'Delete (reversible)'" — both controls were DISABLED
+  // stubs waiting on this phase. Edit and Delete are now BUILT, so asserting they are disabled
+  // would pin the placeholder rather than the feature. What still matters and is still asserted:
+  // the label keeps saying REVERSIBLE (it is a soft delete, and the word is the whole calibration
+  // of the confirm), and both controls are now live. Their behaviour is asserted in full by
+  // scripts/e2e/verify-promo-edit.mjs.
+  eq("edit + delete are LIVE, and delete still says 'reversible'",
+    { disabled: await page.$eval('[data-testid="detail-delete"]', (e) => e.disabled), label: (await page.$eval('[data-testid="detail-delete"]', (e) => e.textContent)).trim(), edit: await page.$eval('[data-testid="detail-edit"]', (e) => e.disabled) },
+    { disabled: false, label: "Delete (reversible)", edit: false });
   await page.keyboard.press("Escape"); await page.waitForTimeout(120);
   await openDetail(301); // TOTAL_USAGE cap 20, redeemed 7 -> LEFT 13
   eq("detail 301 (TOTAL_USAGE): LEFT = 13", await page.$eval('[data-testid="detail-left"]', (e) => e.textContent.trim()), "13");

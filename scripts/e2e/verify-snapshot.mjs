@@ -292,7 +292,12 @@ async function main() {
   { const worst = await page.$$eval('[data-testid="snap-row"]', (els) => Math.max(...els.map((e) => (e.textContent.match(/\bin\s+\d/g) || []).length)));
     (worst <= 1) ? ok("§7g: no row contains more than one 'in Xm' phrase") : bad("§7g multiple 'in' phrases", `${worst}`); }
   // the mechanism is stated ONCE in the legend; a row names its lead only when it DIFFERS from 75
-  eq("§7e: the decide-by mechanism is in the legend, once", /auto-cancels .* 75 minutes before kickoff/i.test(await page.$eval('[data-testid="decideby-legend"]', (e) => e.textContent)), true);
+  // REMOVED (cosmetic pass): "§7e: the decide-by mechanism is in the legend, once".
+  // Its subject no longer exists — the colour legend and the decide-by explainer were deleted
+  // from the Gameday header on purpose. The COLOUR CODING and the DECIDE BY column are unchanged;
+  // only the copy explaining them is gone, so there is nothing left for this to assert. Deleted
+  // rather than re-pointed: re-aiming it at the DECIDE BY column would be a different assertion
+  // wearing this one's name.
   ok(!/cancels\s+75m\s+before/i.test(await page.$eval(row(601) + ' .c-cxl', (e) => e.textContent)) ? "§7e: a standard-lead row (75m) does NOT repeat 'cancels 75m before'" : bad("§7e standard lead repeated"));
   ok(/cancels\s+90m\s+before/i.test(await page.$eval(row(602) + ' .c-cxl', (e) => e.textContent)) ? "§7e: a non-standard-lead row (90m) DOES name its lead" : bad("§7e non-standard lead missing"));
   // prominence follows the shortfall: a cleared row's deadline differs in BOTH colour and weight from a short row's

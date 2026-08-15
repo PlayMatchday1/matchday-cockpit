@@ -17,6 +17,7 @@ import {
   promoState, promoBucket, discountLabel, capLabel, leftLabel, leftTone, usageLine, createSummary,
   USER_TYPE_LABEL, MATCH_TYPE_LABEL,
 } from "@/lib/promoModel";
+import { promoDiff, consequenceLine, DELETE_CONSEQUENCE, type PromoEditable } from "@/lib/promoEditModel";
 import {
   PROMO_TZ_LABEL, fmtChicagoDate, fmtChicagoDateShort, fmtChicagoTime, fmtChicagoFull, ageLabel, toChicagoInputs, fromChicagoInputs,
   nextQuarterHourUtcIso, endOfYearUtcIso, chicagoYearOf, chicagoWallToUtcIso, utcIsoToChicagoWall,
@@ -119,6 +120,11 @@ export default function PromoCodes() {
 
   const [detailId, setDetailId] = useState<number | null>(null);
   const [createOpen, setCreateOpen] = useState(false);
+  const [editing, setEditing] = useState<PromoRow | null>(null);
+  // Locally-applied edits, so a saved row shows its new values immediately without a full
+  // refetch of a 6,260-row unsorted list. reloadKey nudges the loaders for the real value.
+  const [edited, setEdited] = useState<Record<number, PromoRow>>({});
+  const [reloadKey, setReloadKey] = useState(0);
   const [toast, setToast] = useState<string | null>(null);
   const say = (t: string) => { setToast(t); setTimeout(() => setToast(null), 3200); };
 
@@ -189,7 +195,7 @@ export default function PromoCodes() {
     if (mode === "browse") void loadBrowse();
     else if (mode === "search") void loadSearch(deferredQ.trim());
     else void loadId(deferredQ.trim());
-  }, [mode, deferredQ, loadBrowse, loadSearch, loadId]);
+  }, [mode, deferredQ, loadBrowse, loadSearch, loadId, reloadKey]);
 
   const loadMore = async (bucket: "live" | "past") => {
     if (mode === "search") { // one combined list, next page appends
@@ -229,14 +235,23 @@ export default function PromoCodes() {
     return { liveRows: [...justCreated, ...live.rows], liveTotal: live.total + justCreated.length, pastRows: past.rows, pastTotal: past.total, searchTotal: 0, notFound: false };
   }, [mode, idResult, search, live, past, justCreated, nowIso]);
 
+  // Overlay locally-saved edits. The list endpoint has no ORDER BY and 6,260 rows, so refetching
+  // to see one changed field is both slow and unreliable; the row the operator just saved shows
+  // its new values immediately, and the next real load supersedes it.
+  const shown = useMemo(() => ({
+    ...view,
+    liveRows: view.liveRows.map((r) => (edited[r.id] ? { ...r, ...edited[r.id] } : r)),
+    pastRows: view.pastRows.map((r) => (edited[r.id] ? { ...r, ...edited[r.id] } : r)),
+  }), [view, edited]);
+
   // REDEEMED lazy-loads only for the rows on screen now (LIVE always; PAST only when open),
   // excluding just-created session rows (they're new → 0, no fetch). One shared pool + cache.
   // PAUSED while a drawer is open — the list is obscured, and letting 100+ detail calls run then
   // would starve the create form's own request off the browser's per-host connection pool.
   const drawerOpen = createOpen || detailId != null;
   const visibleIds = useMemo(
-    () => (drawerOpen ? [] : [...view.liveRows, ...(pastOpen ? view.pastRows : [])].filter((r) => !(r as PromoRow & { _new?: boolean })._new).map((r) => r.id)),
-    [view.liveRows, view.pastRows, pastOpen, drawerOpen],
+    () => (drawerOpen ? [] : [...view.liveRows, ...(pastOpen ? shown.pastRows : [])].filter((r) => !(r as PromoRow & { _new?: boolean })._new).map((r) => r.id)),
+    [shown.liveRows, shown.pastRows, pastOpen, drawerOpen],
   );
   const redeemed = useRedeemed(visibleIds);
 
@@ -271,22 +286,22 @@ export default function PromoCodes() {
           }</p>
         </div>
 
-        {loading && !view.liveRows.length && !view.pastRows.length ? <div className="empty" data-testid="promo-loading">Loading…</div>
+        {loading && !shown.liveRows.length && !shown.pastRows.length ? <div className="empty" data-testid="promo-loading">Loading…</div>
          : err ? <div className="empty err" data-testid="promo-err">Couldn’t load promo codes: {err}</div>
          : <>
           {/* LIVE */}
-          <section className={"grp" + (mode !== "browse" && view.liveTotal === 0 ? " slim" : "")} data-testid="grp-live">
+          <section className={"grp" + (mode !== "browse" && shown.liveTotal === 0 ? " slim" : "")} data-testid="grp-live">
             <div className="ghead">
               <span className="gtitle">LIVE</span>
               <span className="gsub" data-testid="live-sub">{mode === "browse"
-                ? <>{view.liveTotal.toLocaleString()} live codes, in the order the API returns them <span className="nosort" data-testid="nosort-note">— no date sort; the CREATED dates are shown, not sortable</span></>
-                : `${view.liveTotal.toLocaleString()} live match${view.liveTotal === 1 ? "" : "es"}`}</span>
+                ? <>{shown.liveTotal.toLocaleString()} live codes, in the order the API returns them <span className="nosort" data-testid="nosort-note">— no date sort; the CREATED dates are shown, not sortable</span></>
+                : `${shown.liveTotal.toLocaleString()} live match${shown.liveTotal === 1 ? "" : "es"}`}</span>
             </div>
-            <PromoTable rows={view.liveRows} nowIso={nowIso} onOpen={setDetailId} redeemed={redeemed}
+            <PromoTable rows={shown.liveRows} nowIso={nowIso} onOpen={setDetailId} redeemed={redeemed}
               empty={mode !== "browse"
                 ? <p className="empty oneline" data-testid="live-empty"><b>No live codes match</b>Finished and deleted codes are in the PAST table below — it opens when a search hits it.</p>
                 : <p className="empty" data-testid="live-empty"><b>No live codes</b>Nothing is active or scheduled right now.</p>}
-              more={<MoreBar mode={mode} loaded={view.liveRows.length - (mode === "browse" ? justCreated.length : 0)} total={mode === "search" ? view.searchTotal : view.liveTotal} onMore={() => loadMore("live")} />} />
+              more={<MoreBar mode={mode} loaded={shown.liveRows.length - (mode === "browse" ? justCreated.length : 0)} total={mode === "search" ? shown.searchTotal : shown.liveTotal} onMore={() => loadMore("live")} />} />
           </section>
 
           {/* PAST — collapsible */}
@@ -294,15 +309,15 @@ export default function PromoCodes() {
             <button type="button" className="ghead gtoggle" data-testid="past-toggle" aria-expanded={pastOpen} onClick={() => setPastOpen((o) => !o)}>
               <span className="caret" aria-hidden>{pastOpen ? "▾" : "▸"}</span>
               <span className="gtitle">PAST</span>
-              <span className={"gsub" + (mode !== "browse" && view.pastTotal > 0 ? " pasthit" : "")} data-testid="past-sub">{mode === "browse"
-                ? `${view.pastTotal.toLocaleString()} expired or deleted`
-                : `${view.pastTotal.toLocaleString()} match${view.pastTotal === 1 ? "" : "es"} in here`}</span>
+              <span className={"gsub" + (mode !== "browse" && shown.pastTotal > 0 ? " pasthit" : "")} data-testid="past-sub">{mode === "browse"
+                ? `${shown.pastTotal.toLocaleString()} expired or deleted`
+                : `${shown.pastTotal.toLocaleString()} match${shown.pastTotal === 1 ? "" : "es"} in here`}</span>
             </button>
             {pastOpen && (
               <div data-testid="past-body">
-                <PromoTable rows={view.pastRows} nowIso={nowIso} onOpen={setDetailId} redeemed={redeemed}
+                <PromoTable rows={shown.pastRows} nowIso={nowIso} onOpen={setDetailId} redeemed={redeemed}
                   empty={<p className="empty" data-testid="past-empty"><b>No past codes match</b>Nothing expired or deleted matches that.</p>}
-                  more={<MoreBar mode={mode} loaded={view.pastRows.length} total={mode === "search" ? view.searchTotal : view.pastTotal} onMore={() => loadMore("past")} />} />
+                  more={<MoreBar mode={mode} loaded={shown.pastRows.length} total={mode === "search" ? shown.searchTotal : shown.pastTotal} onMore={() => loadMore("past")} />} />
               </div>
             )}
           </section>
@@ -310,13 +325,17 @@ export default function PromoCodes() {
           <p className="foot" data-testid="promo-foot">{mode === "browse"
             ? `Server order (no sort available). Deleted codes with a future end date appear in LIVE, struck through. CAP is here; redemptions are on a code's detail.`
             : mode === "id"
-              ? (view.notFound ? `No code with ID ${deferredQ.trim()}, and none containing those digits.` : `Matched by ID and/or by code substring for “${deferredQ.trim()}”. A code named entirely with digits is findable this way.`)
-              : `${view.searchTotal.toLocaleString()} code${view.searchTotal === 1 ? "" : "s"} match “${deferredQ.trim()}”. Deleted codes are never hidden from search.`}</p>
+              ? (shown.notFound ? `No code with ID ${deferredQ.trim()}, and none containing those digits.` : `Matched by ID and/or by code substring for “${deferredQ.trim()}”. A code named entirely with digits is findable this way.`)
+              : `${shown.searchTotal.toLocaleString()} code${shown.searchTotal === 1 ? "" : "s"} match “${deferredQ.trim()}”. Deleted codes are never hidden from search.`}</p>
         </>}
       </div>
 
-      {detailId != null && <DetailDrawer id={detailId} onClose={() => setDetailId(null)} />}
+      {detailId != null && <DetailDrawer id={detailId} onClose={() => setDetailId(null)}
+        onEdit={(row) => { setDetailId(null); setEditing(row); }}
+        onChanged={() => setReloadKey((k) => k + 1)} />}
       {createOpen && <CreateDrawer onClose={() => setCreateOpen(false)} onCreated={onCreated} />}
+      {editing && <CreateDrawer editing={editing} onClose={() => setEditing(null)} onCreated={onCreated}
+        onEdited={(row) => { setEdited((m) => ({ ...m, [row.id]: row })); setReloadKey((k) => k + 1); say(`Saved ${row.code}`); }} />}
       {toast && <div className="toast" data-testid="promo-toast" role="status">{toast}</div>}
     </div>
   );
@@ -367,7 +386,16 @@ function MoreBar({ mode, loaded, total, onMore }: { mode: "browse" | "search" | 
 }
 
 // ── DETAIL drawer: the ONLY place redemptions (usageCount) appear → REDEEMED / LEFT here ──
-function DetailDrawer({ id, onClose }: { id: number; onClose: () => void }) {
+function DetailDrawer({ id, onClose, onEdit, onChanged }: {
+  id: number; onClose: () => void;
+  onEdit?: (row: PromoRow) => void; onChanged?: () => void;
+}) {
+  // delete/restore state. A SOFT delete earns a single plain confirm — not the type-the-name
+  // friction cancelling a match earns, because that one moves money and texts players and cannot
+  // be undone. Friction that does not match the stakes just teaches people to click through it.
+  const [confirmKind, setConfirmKind] = useState<null | "delete" | "restore">(null);
+  const [busy, setBusy] = useState(false);
+  const [actionMsg, setActionMsg] = useState<{ tone: "ok" | "bad"; text: string } | null>(null);
   const [state, setState] = useState<{ promo?: PromoRow & { usageCount?: number }; usageCount?: number; nowIso?: string; loading: boolean; error?: string }>({ loading: true });
   useEffect(() => {
     let live = true;
@@ -407,11 +435,57 @@ function DetailDrawer({ id, onClose }: { id: number; onClose: () => void }) {
             <UsesPanel promoId={p.id} />
           </> : null}
         </div>
-        <div className="dfoot"><div className="dbtns">
-          <span className="sp" />
-          <button className="btn" disabled data-testid="detail-edit" title="Editing a promo lands in the next phase.">Edit</button>
-          <button className="btn" disabled data-testid="detail-delete" title="Delete is reversible (soft-delete + restore) and lands in the next phase.">Delete (reversible)</button>
-        </div></div>
+        <div className="dfoot">
+          {/* The confirm STATES WHAT HAPPENS. Every clause here is a claim about the API: soft
+              delete, redemptions untouched, restorable. If any of it stops being true the copy
+              is wrong, not just stale. */}
+          {confirmKind && p && (
+            <span className="summary" data-testid="detail-confirm">
+              <b>{confirmKind === "delete" ? "DELETE THIS CODE?" : "RESTORE THIS CODE?"}</b>
+              {confirmKind === "delete"
+                ? DELETE_CONSEQUENCE
+                : "The code starts working again for new redemptions, with its original settings and dates."}
+            </span>
+          )}
+          {actionMsg && <span className={actionMsg.tone === "ok" ? "help ok" : "dupe"} data-testid="detail-actionmsg">{actionMsg.text}</span>}
+          <div className="dbtns">
+            <span className="sp" />
+            {confirmKind ? (
+              <>
+                <button className="btn" data-testid="detail-confirm-cancel" onClick={() => setConfirmKind(null)} disabled={busy}>Keep it</button>
+                <button className="btn primary" data-testid="detail-confirm-go" disabled={busy}
+                  onClick={async () => {
+                    if (!p) return;
+                    setBusy(true); setActionMsg(null);
+                    const del = confirmKind === "delete";
+                    try {
+                      const res = await authFetch(`/api/promos/delete/${p.id}`, { method: del ? "DELETE" : "PATCH", headers: { "Content-Type": "application/json" }, body: "{}" });
+                      const j = await res.json();
+                      if (!res.ok) { setActionMsg({ tone: "bad", text: j.error || `HTTP ${res.status}` }); setBusy(false); return; }
+                      // LANDED comes from the route's RE-READ of deletedAt, never the status code.
+                      if (j.landed) {
+                        setActionMsg({ tone: "ok", text: del ? "Deleted. It no longer works for new redemptions; existing ones are untouched. You can restore it." : "Restored. It works again for new redemptions." });
+                        setState((st) => ({ ...st, promo: st.promo ? { ...st.promo, deletedAt: j.deletedAt ?? null } : st.promo }));
+                        onChanged?.();
+                      } else {
+                        setActionMsg({ tone: "bad", text: `NOT APPLIED — the server accepted the request but the code is still ${del ? "active" : "deleted"} on re-read.` });
+                      }
+                    } catch (e) { setActionMsg({ tone: "bad", text: e instanceof Error ? e.message : String(e) }); }
+                    setBusy(false); setConfirmKind(null);
+                  }}>
+                  {busy ? "Working…" : confirmKind === "delete" ? "Delete it" : "Restore it"}
+                </button>
+              </>
+            ) : (
+              <>
+                <button className="btn" data-testid="detail-edit" disabled={!p} onClick={() => p && onEdit?.(p)}>Edit</button>
+                {p?.deletedAt
+                  ? <button className="btn primary" data-testid="detail-restore" onClick={() => setConfirmKind("restore")}>Restore</button>
+                  : <button className="btn" data-testid="detail-delete" onClick={() => setConfirmKind("delete")}>Delete (reversible)</button>}
+              </>
+            )}
+          </div>
+        </div>
       </div>
     </div>
   );
@@ -577,11 +651,24 @@ type Form = {
   users: PickedUser[]; matches: PickedMatch[]; fields: PickedField[]; // specific-scope selections
   mpSD: string; mpST: string; mpED: string; mpET: string;            // TIME_PERIOD match window (Chicago)
 };
-function CreateDrawer({ onClose, onCreated }: { onClose: () => void; onCreated: (row: PromoRow) => void }) {
+// ONE drawer for CREATE and EDIT (Phase 18d). The brief was explicit: reuse the create form's
+// fields, validation and Chicago↔UTC helpers rather than author a second set — two copies of a
+// USD-×100 rule or a DST conversion is how they drift apart.
+function CreateDrawer({ onClose, onCreated, editing, onEdited }: {
+  onClose: () => void; onCreated: (row: PromoRow) => void;
+  editing?: PromoRow | null; onEdited?: (row: PromoRow) => void;
+}) {
+  const isEdit = !!editing;
   const now = Date.now();
-  const startIso = nextQuarterHourUtcIso(now), endIso = endOfYearUtcIso(chicagoYearOf(now));
+  const startIso = editing ? editing.startDateUtc : nextQuarterHourUtcIso(now);
+  const endIso = editing ? editing.endDateUtc : endOfYearUtcIso(chicagoYearOf(now));
   const s0 = toChicagoInputs(startIso), e0 = toChicagoInputs(endIso);
-  const [f, setF] = useState<Form>({ code: "", type: "PERCENT", value: "", sD: s0.date, sT: s0.time, eD: e0.date, eT: e0.time, who: "ALL_USERS", which: "ALL_MATCHES", uses: "1", users: [], matches: [], fields: [], mpSD: s0.date, mpST: s0.time, mpED: e0.date, mpET: e0.time });
+  const mp0 = toChicagoInputs(editing?.matchTimePeriodStart || startIso);
+  const mp1 = toChicagoInputs(editing?.matchTimePeriodEnd || endIso);
+  // The form holds DOLLARS for USD (the operator's unit); the wire is cents. One ×100, at submit.
+  const initialValue = editing ? (editing.discountType === "USD" ? String(editing.discountValue / 100) : String(editing.discountValue)) : "";
+  const [f, setF] = useState<Form>({ code: editing?.code ?? "", type: editing?.discountType ?? "PERCENT", value: initialValue, sD: s0.date, sT: s0.time, eD: e0.date, eT: e0.time, who: editing?.targetUserType ?? "ALL_USERS", which: editing?.targetMatchType ?? "ALL_MATCHES", uses: String(editing?.numberOfUsesPerUser ?? 1), users: [], matches: [], fields: [], mpSD: mp0.date, mpST: mp0.time, mpED: mp1.date, mpET: mp1.time });
+  const [writeResult, setWriteResult] = useState<{ status: string; fields: { key: string; sent: unknown; got: unknown; landed: boolean }[]; notApplied: string[] } | null>(null);
   const [scopeNote, setScopeNote] = useState<string | null>(null);
   const [dupe, setDupe] = useState<{ state: "idle" | "checking" | "free" | "taken" | "inconclusive" | "error"; existing?: { id: number; code: string; state: string } }>({ state: "idle" });
   const [submitting, setSubmitting] = useState(false);
@@ -620,6 +707,8 @@ function CreateDrawer({ onClose, onCreated }: { onClose: () => void; onCreated: 
   useEffect(() => {
     const code = f.code.trim();
     if (!code) { setDupe({ state: "idle" }); return; }
+    // editing and the code is untouched → it is not a duplicate of itself
+    if (isEdit && code === editing?.code) { setDupe({ state: "idle" }); return; }
     setDupe({ state: "checking" });
     const t = setTimeout(async () => {
       try {
@@ -642,8 +731,42 @@ function CreateDrawer({ onClose, onCreated }: { onClose: () => void; onCreated: 
         matchPeriod: f.which === "TIME_PERIOD" ? { start: fmtChicagoFull(mpStartUtc()), end: fmtChicagoFull(mpEndUtc()) } : undefined })
     : null;
 
+  // The PENDING diff, computed with the SAME model the route uses — so the consequence line the
+  // operator reads before clicking is derived from the identical rules that build the body.
+  const beforeEditable: PromoEditable | null = editing ? {
+    code: editing.code, startDateUtc: editing.startDateUtc, endDateUtc: editing.endDateUtc,
+    discountType: editing.discountType, discountValue: editing.discountValue,
+    numberOfUsesPerUser: editing.numberOfUsesPerUser, targetUserType: editing.targetUserType,
+    targetMatchType: editing.targetMatchType,
+    matchTimePeriodStart: editing.matchTimePeriodStart, matchTimePeriodEnd: editing.matchTimePeriodEnd,
+  } : null;
+  const afterEditable: PromoEditable | null = beforeEditable ? {
+    ...beforeEditable,
+    code: f.code.trim(), startDateUtc: startUtc(), endDateUtc: endUtc(),
+    discountType: f.type, discountValue: f.type === "USD" ? Math.round(valNum * 100) : valNum,
+    numberOfUsesPerUser: Number(f.uses) || 1, targetUserType: f.who, targetMatchType: f.which,
+    ...(f.which === "TIME_PERIOD" ? { matchTimePeriodStart: mpStartUtc(), matchTimePeriodEnd: mpEndUtc() } : {}),
+  } : null;
+  const pendingDiff = beforeEditable && afterEditable && valOk ? promoDiff(beforeEditable, afterEditable) : null;
+  const pendingConsequence = pendingDiff && beforeEditable && afterEditable ? consequenceLine(pendingDiff, beforeEditable, afterEditable) : "";
+
   const submit = async () => {
-    setSubmitting(true); setSubmitErr(null);
+    setSubmitting(true); setSubmitErr(null); setWriteResult(null);
+    if (isEdit && editing && afterEditable) {
+      try {
+        const res = await authFetch(`/api/promos/edit/${editing.id}`, { method: "PATCH", headers: { "Content-Type": "application/json" }, body: JSON.stringify({ after: afterEditable }) });
+        const j = await res.json();
+        if (!res.ok) { setSubmitErr(j.error || `HTTP ${res.status}`); setSubmitting(false); return; }
+        if (j.noop) { setSubmitErr("Nothing changed — no request was sent."); setSubmitting(false); return; }
+        // PER-FIELD read-back, shown ON SCREEN. A 2xx is not proof, and ignored-after-redemption
+        // is UNKNOWN for this endpoint — so a silently-dropped field is visible here, not only
+        // in a report nobody reads.
+        setWriteResult({ status: j.status, fields: j.fields ?? [], notApplied: j.notApplied ?? [] });
+        setSubmitting(false);
+        if (j.status === "LANDED") onEdited?.({ ...editing, ...afterEditable } as PromoRow);
+      } catch (e) { setSubmitErr(e instanceof Error ? e.message : String(e)); setSubmitting(false); }
+      return;
+    }
     try {
       // send ONLY the active scope's payload — a switched-away array is never in the body (D5).
       const scopePayload: Record<string, unknown> = {
@@ -681,8 +804,8 @@ function CreateDrawer({ onClose, onCreated }: { onClose: () => void; onCreated: 
 
   return (
     <div className="scrim" onClick={(e) => { if ((e.target as HTMLElement).classList.contains("scrim")) onClose(); }}>
-      <div className="drawer" role="dialog" aria-modal="true" aria-label="New promo code">
-        <div className="dhead"><h2>New promo code</h2><button className="x" aria-label="Close" onClick={onClose}>×</button></div>
+      <div className="drawer" role="dialog" aria-modal="true" aria-label={isEdit ? "Edit promo code" : "New promo code"}>
+        <div className="dhead"><h2 data-testid="drawer-title">{isEdit ? `Edit ${editing?.code}` : "New promo code"}</h2><button className="x" aria-label="Close" onClick={onClose}>×</button></div>
         <div className="dbody">
           <span className="tzline">All promo times are <b>{PROMO_TZ_LABEL}</b>, entered here and stored as a true UTC instant. Clubhouse converts for you (and is DST-correct, unlike Retool).</span>
 
@@ -764,12 +887,48 @@ function CreateDrawer({ onClose, onCreated }: { onClose: () => void; onCreated: 
         </div>
 
         <div className="dfoot">
-          {summary ? <span className="summary" data-testid="f-summary"><b>WHAT THIS DOES</b>{summary}</span>
-                   : <span className="summary bad" data-testid="f-summary"><b>WHAT THIS DOES</b>Enter a code and a value and this line will say, in plain words, exactly what you are about to create.</span>}
+          {/* THE CONSEQUENCE, BEFORE THE CLICK. On edit this is derived from the SAME promoDiff
+              the route uses, so it describes the pending change and nothing else — and when the
+              cap is what is moving it says the cap is advisory, because it is. */}
+          {isEdit
+            ? (pendingConsequence
+                ? <span className="summary" data-testid="f-consequence"><b>WHAT THIS CHANGES</b>{pendingConsequence}</span>
+                : <span className="summary bad" data-testid="f-consequence"><b>WHAT THIS CHANGES</b>Nothing yet — edit a field and this line will say exactly what changes on save.</span>)
+            : (summary ? <span className="summary" data-testid="f-summary"><b>WHAT THIS DOES</b>{summary}</span>
+                       : <span className="summary bad" data-testid="f-summary"><b>WHAT THIS DOES</b>Enter a code and a value and this line will say, in plain words, exactly what you are about to create.</span>)}
+          {isEdit && pendingDiff && pendingDiff.pairedIn.length > 0 && (
+            <span className="help" data-testid="f-paired">
+              Also sent, because this endpoint requires them together: {pendingDiff.pairedIn.join(", ")}.
+            </span>
+          )}
+          {isEdit && pendingDiff && pendingDiff.removed.length > 0 && (
+            <span className="help" data-testid="f-removed">
+              Cleared by the scope change: {pendingDiff.removed.join(", ")}.
+            </span>
+          )}
+          {/* PER-FIELD READ-BACK, ON SCREEN. Whether a redeemed code ignores a field is UNKNOWN
+              for this endpoint, so nothing is pre-emptively disabled — instead every field that
+              came back different from what was sent is named here, the first time it happens. */}
+          {writeResult && (
+            <span className={writeResult.status === "LANDED" ? "help ok" : "dupe"} data-testid="f-writeresult">
+              {writeResult.status === "LANDED"
+                ? `Saved. All ${writeResult.fields.length} field${writeResult.fields.length === 1 ? "" : "s"} read back exactly as sent.`
+                : `NOT APPLIED — the server accepted the request but ${writeResult.notApplied.length} field${writeResult.notApplied.length === 1 ? "" : "s"} came back different: ${writeResult.notApplied.join(", ")}.`}
+              {writeResult.status !== "LANDED" && (
+                <span data-testid="f-notapplied-list">
+                  {writeResult.fields.filter((x) => !x.landed).map((x) => ` ${x.key}: sent ${JSON.stringify(x.sent)}, got ${JSON.stringify(x.got)};`).join("")}
+                </span>
+              )}
+            </span>
+          )}
           {submitErr && <span className="dupe" data-testid="f-submiterr">{submitErr}</span>}
           <span className="dbtns"><span className="sp" />
-            <button className="btn" data-testid="f-cancel" onClick={onClose}>Cancel</button>
-            <button className="btn primary" data-testid="f-create" disabled={!valid || submitting} onClick={submit}>{submitting ? "Creating…" : "Create promo code"}</button>
+            <button className="btn" data-testid="f-cancel" onClick={onClose}>{writeResult ? "Close" : "Cancel"}</button>
+            <button className="btn primary" data-testid={isEdit ? "f-save" : "f-create"}
+              disabled={!valid || submitting || (isEdit && (!pendingDiff || Object.keys(pendingDiff.body).length === 0))}
+              onClick={submit}>
+              {submitting ? (isEdit ? "Saving…" : "Creating…") : (isEdit ? "Save changes" : "Create promo code")}
+            </button>
           </span>
         </div>
       </div>
