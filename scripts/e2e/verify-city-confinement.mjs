@@ -175,7 +175,13 @@ async function main() {
 
   // ── 5. MANAGER PAY exposes ONE lever ─────────────────────────────────────
   await cm.goto(`${BASE}/city/manager-pay`, { waitUntil: "domcontentloaded" });
-  await cm.waitForTimeout(1200);
+  // WAIT FOR A READY SIGNAL, not a guess. A flat 1200ms sleep here asserted against the page's
+  // "Loading your week…" state: the readonly-note was legitimately absent, AND the no-Gusto /
+  // no-CSV / no-share checks below passed VACUOUSLY because a loading screen contains none of
+  // those words either. Measured: note absent at 1200ms, present at 3000ms. Waiting on the table
+  // makes all four assertions mean something instead of racing the fetch.
+  await cm.waitForSelector('[data-testid="paytable"]', { timeout: 25000 });
+  await cm.waitForTimeout(200);
   {
     const m = await cm.evaluate(() => {
       const root = document.body;

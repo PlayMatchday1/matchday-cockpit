@@ -15,11 +15,11 @@
 //   node scripts/e2e/verify-promo-edit.mjs
 import { chromium } from "playwright";
 import { createClient } from "@supabase/supabase-js";
-import { netRetry, installHarnessGuard, fatal } from "./_session.mjs";
-// NOTE: the one-mint-per-run session helper and the unroute-then-close teardown helpers live on
-// the phase22-gate branch, not on main. This suite follows main's existing per-suite mint.
-const closeContext = (c) => c.close();
-const closeBrowser = (b) => b.close();
+// The teardown helpers are now on main (cherry-picked from phase22-gate): they unroute before
+// closing so an in-flight route.fetch() cannot reject after the context is gone. This suite hit
+// exactly that — "31 passed, 0 failed" then HARNESS ERROR: route.fetch: Request context disposed.
+// The one-mint-per-run session helper is still branch-only; this suite keeps main's per-suite mint.
+import { netRetry, installHarnessGuard, fatal, closeContext, closeBrowser } from "./_session.mjs";
 installHarnessGuard();
 
 const BASE = process.env.BASE || "http://localhost:3000";
@@ -308,13 +308,24 @@ async function main() {
     const ro = await ctxFor({ canManage: false });
     const p2 = await ro.newPage();
     await p2.goto(PAGE, { waitUntil: "domcontentloaded" });
-    await p2.waitForTimeout(800);
+    // PRESENCE WAIT BEFORE AN ABSENCE ASSERTION. This block asserts a control is NOT offered, and
+    // it used a flat 800ms sleep — so while the screen was still loading, `promo-new` was absent
+    // for the ordinary reason that NOTHING had rendered, and the check passed VACUOUSLY. An
+    // absence that reads as a permission guarantee is the worst kind to get for free.
+    // The screen resolves to exactly one of two roots, so waiting for either is deterministic:
+    // the no-access panel (no MANAGE PROMOS) or the promo screen itself.
+    await p2.waitForFunction(
+      () => !!document.querySelector('[data-testid="promo-no-access"],[data-testid="promos"]'),
+      null, { timeout: 25000 },
+    );
     const gated = await p2.evaluate(() => ({
+      rendered: !!document.querySelector('[data-testid="promo-no-access"],[data-testid="promos"]'),
       noAccessPanel: !!document.querySelector('[data-testid="promo-no-access"]'),
       noNewButton: !document.querySelector('[data-testid="promo-new"]'),
     }));
-    (gated.noAccessPanel || gated.noNewButton)
-      ? ok("without MANAGE PROMOS the screen does not offer the write controls")
+    // `rendered` is asserted alongside, so the absence below can never be satisfied by a blank page.
+    (gated.rendered && (gated.noAccessPanel || gated.noNewButton))
+      ? ok("without MANAGE PROMOS the screen RENDERED and does not offer the write controls")
       : bad("ungated UI", JSON.stringify(gated));
     await closeContext(ro);
   }

@@ -94,6 +94,29 @@ mobile-only block is rendered (by computed display, not by the `hidden` attribut
 and each row occupies a single band. A suite that only checks data will pass while
 the page is visibly broken — this has now happened twice.
 
+**AN ABSENCE ASSERTION NEEDS A PRESENCE WAIT FIRST.** Checking that something is
+NOT on the page proves nothing until you have proven the page rendered. Wait on a
+positive ready signal before asserting anything is missing. A flat sleep is not a
+ready signal, and a loading screen satisfies almost every absence check you can
+write.
+
+**Test effort is TIERED by what the change can cost.**
+
+- **Writes and money** — credits, payouts, cancel, promo edit, roster moves:
+  full treatment. Mutation-test every guard, read back after every write,
+  report per-write outcomes. No exceptions.
+- **Numbers on screen** — counts, lists, derived figures: assert the numbers.
+  Layout only where it has already broken.
+- **Cosmetic** — deleting copy, spacing, labels, renaming: no new assertions.
+  Keep the existing ones passing and move on.
+
+When a brief asks for more than the tier warrants, say so and do the tier
+rather than the brief.
+
+This corrects how the briefs have been written, not how the work has been done.
+Mutation tests and dual-breakpoint assertions have been demanded on changes that
+only delete paragraphs.
+
 ## Never
 
 - Echo, log, print or commit `MATCHDAY_STAGE_API_PASSWORD`,
