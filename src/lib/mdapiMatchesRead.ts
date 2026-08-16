@@ -33,9 +33,9 @@ import { canonicalVenueName } from "./venueResolver";
 import { isFakePlayerRow } from "./mdapiFakePlayer";
 
 const MATCHES_COLS =
-  "api_id, city_identifier, field_id, field_title, start_date, start_date_utc, is_cancelled, max_player_count";
+  "api_id, city_identifier, field_id, field_title, start_date, start_date_utc, end_date_utc, is_cancelled, max_player_count";
 const PLAYERS_COLS =
-  "api_id, match_api_id, user_id, user_email, user_type, paid_status, promocode_id, is_cancelled, canceled_at, amount, credit_amount, created_at, is_absent, user_is_fake_player";
+  "api_id, match_api_id, user_id, user_email, user_type, paid_status, promocode_id, is_cancelled, canceled_at, refunded, amount, credit_amount, created_at, is_absent, user_is_fake_player";
 
 // chunk size for .in("match_api_id", chunk) — keeps URL length under
 // PostgREST's ~2KB practical limit (200 ids × ~7 chars = ~1.4KB).
@@ -88,6 +88,9 @@ type MatchSelect = {
   // this column — start_date runs 4–5h early (each city's DST offset),
   // which silently drops members who activated during that gap.
   start_date_utc: string | null;
+  // The match's true END instant — same model as start_date_utc, and the only sound basis for
+  // "has this match been played".
+  end_date_utc: string | null;
   is_cancelled: boolean | null;
   max_player_count: number | null;
 };
@@ -99,6 +102,7 @@ type PlayerSelect = {
   user_email: string | null;
   user_type: string | null;
   paid_status: string | null;
+  refunded?: boolean | null;
   promocode_id: number | null;
   is_cancelled: boolean | null;
   canceled_at: string | null;
@@ -130,6 +134,16 @@ export type JoinedMatchPlayerRow = {
   // when comparing against genuine UTC timestamps such as subscription
   // activation/cancellation dates.
   matchStartUtcIso: string;
+  // THE MATCH'S TRUE END INSTANT (mdapi_matches.end_date_utc). This is what "has it been played"
+  // must be decided from: start_date/end_date are LOCAL WALL CLOCK wearing a Z, so parsing them
+  // lands hours off, while *_utc are genuine instants. Null when upstream has not populated it.
+  matchEndUtcIso: string | null;
+  // The roster row's own state, carried so consumers can use rosterRowCounts() rather than
+  // re-deriving "does this row occupy a spot". paid_status/canceled_at were already here in
+  // spirit (via paymentType); `refunded` was simply dropped, which is why a refunded row still
+  // counted as a sold spot on the partner payout page.
+  paidStatus: string | null;
+  refunded: boolean;
   matchApiId: number;
   // mdapi field_id — the canonical numeric venue id, populated since
   // migration 0016. Threaded through here so PR-E's Finance read paths
@@ -222,6 +236,10 @@ export type LegacyMatchRegRow = {
   match_start_utc: string;
   match_canceled: boolean;
   player_canceled_at: string | null;
+  // Carried so consumers can call rosterRowCounts() instead of re-deriving "is this a sold spot".
+  paid_status: string | null;
+  refunded: boolean;
+  match_end_utc: string | null;
   payment_type: string | null;
   promocode: string | null;
   match_price_paid: number;
@@ -445,6 +463,9 @@ function mapJoinedRow(
     matchStart,
     matchStartUtcIso,
     matchCanceled: !!match.is_cancelled,
+    matchEndUtcIso: match.end_date_utc ?? null,
+    paidStatus: player.paid_status ?? null,
+    refunded: player.refunded === true,
     playerCanceledAt: parseLocal(player.canceled_at),
     paymentType: derivePaymentType(player, matchStartUtcIso, membershipWindows),
     promocode,
@@ -511,6 +532,9 @@ export function toLegacyShape(r: JoinedMatchPlayerRow): LegacyMatchRegRow {
     player_canceled_at: r.playerCanceledAt
       ? dateToLocalIso(r.playerCanceledAt)
       : null,
+    paid_status: r.paidStatus,
+    refunded: r.refunded,
+    match_end_utc: r.matchEndUtcIso,
     payment_type: r.paymentType,
     promocode: r.promocode,
     match_price_paid: r.matchPricePaid,

@@ -30,6 +30,11 @@ export type PartnerRegRow = {
   // them; the per-match calc treats a missing capacity as base-rate.
   match_api_id?: number;
   max_player_count?: number | null;
+  // Roster-row state, so the count can go through rosterRowCounts() rather than being re-derived.
+  paid_status?: string | null;
+  refunded?: boolean;
+  // The match's TRUE end instant, for deciding whether it has been played.
+  match_end_utc?: string | null;
 };
 
 // Manual revenue rows from fin_revenue (Venmo / Stripe / Manual entries

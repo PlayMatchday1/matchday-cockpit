@@ -20,7 +20,12 @@ const eq = (n: string, got: unknown, want: unknown) =>
 // grep assertion at the bottom proves no other file hardcodes them.
 const PARMER: RentalProfitShareParams = { fieldRentalCents: 16000, matchManagerCents: 4000, partnerSharePct: 40 };
 const M = (gross: number, extra: Partial<MatchInput> = {}): MatchInput =>
-  ({ matchApiId: 1, startYmd: "2026-08-05", cancelled: false, grossCents: gross, spotsSold: Math.round(gross / 1500), ...extra });
+  // `played: true` by default — every existing assertion below describes a match that HAPPENED,
+  // and the payout of one that has not is a separate question asserted on its own further down.
+  // Helper signature only; no assertion body changed.
+  ({ matchApiId: 1, startYmd: "2026-08-05", cancelled: false, played: true, grossCents: gross, spotsSold: Math.round(gross / 1500), ...extra });
+
+const isnt = (n: string, got: unknown, want: unknown) => (got !== want ? ok(n) : bad(n, `got ${JSON.stringify(got)} — expected it to DIFFER`));
 
 console.log("\nTHE TWO WORKED EXAMPLES, to the cent");
 {
@@ -233,6 +238,35 @@ is("cents render as dollars", fmtCents(16000), "$160.00");
 is("a negative retained figure renders with its sign", fmtCents(-500), "-$5.00");
 is("...and is not shown as zero", fmtCents(-500) !== "$0.00", true);
 is("an odd cent survives", fmtCents(20003), "$200.03");
+
+
+// ── AN OPEN MONTH IS NOT A BILL ────────────────────────────────────────────────────────────────
+// The live page booked MatchDay a −$185.00 loss on Aug 19, a match that had not been played, and
+// credited Parmer $160.00 of rental for a field that had not been rented. $1,368.00 "owed" was
+// really $1,208.00 earned. A scheduled match contributes NOTHING — and is still listed.
+console.log("\nA MATCH THAT HAS NOT BEEN PLAYED CONTRIBUTES NOTHING");
+{
+  const scheduled = payoutForMatch(M(1500, { played: false }), PARMER);
+  is("no rental is owed on a field that has not been rented", scheduled.fieldRentalCents, 0);
+  is("...no manager cost either", scheduled.matchManagerCents, 0);
+  is("...no loss is booked against MatchDay", scheduled.matchdayRetainedCents, 0);
+  is("...and no revenue is claimed", scheduled.grossCents, 0);
+  is("...it is still marked scheduled, so the page can LIST it rather than hide it", scheduled.played, false);
+  is("...and it is NOT marked cancelled — 'has not happened yet' is a different fact", scheduled.cancelled, false);
+
+  // The exact shape of the bug: one unplayed match among played ones must not move any total.
+  const played = [payoutForMatch(M(46500), PARMER), payoutForMatch(M(66000), PARMER)];
+  const withScheduled = totalsOf([...played, scheduled]);
+  const withoutIt = totalsOf(played);
+  is("a scheduled match changes NO total", JSON.stringify(withScheduled), JSON.stringify(withoutIt));
+  is("...and does not inflate the match count", withScheduled.matches, 2);
+
+  // POSITIVE CONTROL — the same match, played, DOES move the totals. Without this the assertion
+  // above would pass just as well if payoutForMatch always returned zeros.
+  const nowPlayed = totalsOf([...played, payoutForMatch(M(1500, { played: true }), PARMER)]);
+  isnt("...while the SAME match, once played, does move them", JSON.stringify(nowPlayed), JSON.stringify(withoutIt));
+  is("...and a played match under cost still pays the full rental", payoutForMatch(M(1500, { played: true }), PARMER).partnerTotalCents, 16000);
+}
 
 console.log(`\n${pass} passed, ${fail} failed`);
 process.exit(fail === 0 ? 0 : 1);

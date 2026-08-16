@@ -46,6 +46,14 @@ export type MatchInput = {
   matchApiId: number;
   startYmd: string;        // YYYY-MM-DD, the match's local wall-clock date
   cancelled: boolean;
+  // HAS IT BEEN PLAYED. An open month is not a bill: a match that has not happened has not rented
+  // a field and has not lost money, so it contributes NOTHING to any total. It is still listed —
+  // scheduled, greyed, not counted — because hiding it would be a different lie.
+  //
+  // Decided upstream from the match's TRUE end instant (mdapi_matches.end_date_utc), never from
+  // start_date/end_date, which are LOCAL WALL CLOCK wearing a Z and land hours off through
+  // new Date(). Passed in as a boolean so this pure model never reads a clock.
+  played: boolean;
   grossCents: number;      // every spot at what was ACTUALLY paid — see grossCentsFromRows
   spotsSold: number;       // seats held, staff excluded
 };
@@ -63,6 +71,11 @@ export type MatchPayout = {
   partnerTotalCents: number;
   matchdayRetainedCents: number;
   reconciles: boolean;     // partnerTotal + matchdayRetained + matchManager === gross, exactly
+  // Carried through so the view can list a scheduled match without it reaching any sum, and so
+  // "did not happen" (cancelled) stays distinguishable from "has not happened yet" (scheduled).
+  // Both are zeroed; only one of them is worth showing the partner.
+  played: boolean;
+  cancelled: boolean;
 };
 
 // ROUND ONCE, AT THE END, IN CENTS. The only non-integer step in the whole model is the share
@@ -71,12 +84,16 @@ export type MatchPayout = {
 export function payoutForMatch(m: MatchInput, p: RentalProfitShareParams): MatchPayout {
   // A CANCELLED MATCH CONTRIBUTES NOTHING. Not a zero-revenue match that still owes rent — no
   // rental, no manager cost, no share. It did not happen.
-  if (m.cancelled) {
+  // A CANCELLED MATCH, or ONE THAT HAS NOT BEEN PLAYED YET, contributes nothing. Same zeroed
+  // shape, different reason: cancelled did not happen and never will; scheduled has not happened
+  // yet. Both are wrong to bill for, and `played` keeps the second one listable.
+  if (m.cancelled || !m.played) {
     return {
       matchApiId: m.matchApiId, startYmd: m.startYmd, grossCents: 0, spotsSold: 0,
       fieldRentalCents: 0, matchManagerCents: 0, poolCents: 0,
       partnerProfitShareCents: 0, matchdayProfitShareCents: 0,
       partnerTotalCents: 0, matchdayRetainedCents: 0, reconciles: true,
+      played: m.played, cancelled: m.cancelled,
     };
   }
   const fieldRentalCents = p.fieldRentalCents;
@@ -96,6 +113,7 @@ export function payoutForMatch(m: MatchInput, p: RentalProfitShareParams): Match
     matchdayProfitShareCents: poolCents > 0 ? poolCents - partnerProfitShareCents : poolCents,
     partnerTotalCents, matchdayRetainedCents,
     reconciles: partnerTotalCents + matchdayRetainedCents + matchManagerCents === m.grossCents,
+    played: true, cancelled: false,
   };
 }
 

@@ -16,6 +16,7 @@ import "server-only";
 
 import type { PartnerRegRow } from "./partnerStats";
 import { isFakePlayerEmail } from "./mdapiFakePlayer";
+import { rosterRowCounts } from "./gamedayModel";
 import {
   payoutForMatch, totalsOf, breakevenSpots, newVsReturning,
   type RentalProfitShareParams, type MatchPayout, type PayoutTotals, type VenueAppearance,
@@ -46,53 +47,102 @@ export type RentalDashboardProps = {
 const MONTH_NAMES = ["January", "February", "March", "April", "May", "June", "July", "August", "September", "October", "November", "December"];
 const monthLabel = (ym: string) => `${MONTH_NAMES[Number(ym.slice(5, 7)) - 1]} ${ym.slice(0, 4)}`;
 
-// A row is a SPOT if it became one. payment_type is null for WAITING/unknown (never a spot);
-// fake players and MatchDay staff are excluded, as they are everywhere else.
+// A row is a SPOT if it OCCUPIES ONE — decided by rosterRowCounts(), the single predicate for that
+// question, not by a second definition living here.
+//
+// THE BUG THIS FIXES: the old predicate was `payment_type != null` plus fake/staff exclusions. That
+// drops WAITING (payment_type is null for it) but NOT a sign-up the player later CANCELLED, and not
+// a REFUNDED one. So cancelled spots were sold spots on a payout page. It surfaced as Aug 13
+// rendering 45 on a 44-capacity match — but it was never one match: every match was carrying its
+// cancellations, and Aug 13 is only the one that breached a ceiling loudly enough to be noticed.
+//
+// Clamping to capacity was explicitly rejected: capacity varies by match, and a clamp hides the
+// bug instead of fixing it.
+//
+// REVENUE IS NOT RE-DERIVED FROM THIS. A cancelled spot that was never refunded still earned its
+// money, so gross reads what was actually collected and is allowed to diverge from the spot count.
 const STAFF = new Set(["STAFF", "MATCHDAY_STAFF"]);
-const isSpot = (r: PartnerRegRow) =>
-  r.payment_type != null && !isFakePlayerEmail(r.email) && !(r.user_type != null && STAFF.has(r.user_type));
+const isPerson = (r: PartnerRegRow) =>
+  !isFakePlayerEmail(r.email) && !(r.user_type != null && STAFF.has(r.user_type));
+
+// TWO QUESTIONS, TWO PREDICATES. They are allowed to disagree, and forcing them to agree is what
+// produced a wrong number in each direction.
+//
+// DOES THIS ROW OCCUPY A SPOT — rosterRowCounts(), the single predicate for that question, not a
+// second definition living here. The old code asked only `payment_type != null`, which drops
+// WAITING but NOT a sign-up the player later cancelled, so cancelled spots were sold spots on a
+// payout page. It surfaced as Aug 13 rendering 45 on a 44-capacity match, but it was never one
+// match: every match was carrying its cancellations. Clamping to capacity was rejected outright —
+// capacity varies by match and a clamp hides the bug.
+const occupiesSpot = (r: PartnerRegRow) =>
+  r.payment_type != null && isPerson(r) && rosterRowCounts({
+    canceledAt: r.player_canceled_at,
+    refunded: r.refunded === true,
+    paidStatus: r.paid_status ?? null,
+  });
+
+// DID THIS ROW EARN MONEY — what was actually collected, which is NOT the same set. A player who
+// cancelled and was never refunded still paid; that money is real and the partner is owed their
+// share of it. Only a REFUND takes it back. Revenue is read, never recomputed from the spot count.
+const earnedRevenue = (r: PartnerRegRow) =>
+  r.payment_type != null && isPerson(r) && r.refunded !== true;
 
 export function buildRentalDashboard(
   rows: PartnerRegRow[],
   params: RentalProfitShareParams,
-  opts: { partnerName: string; venue: string; spotPriceCents: number | null },
+  opts: { partnerName: string; venue: string; spotPriceCents: number | null; nowMs?: number },
 ): RentalDashboardProps {
+  // The clock enters HERE and nowhere else, and it is injectable so the suites can pin it.
+  const nowMs = opts.nowMs ?? Date.now();
   // ONE RENTAL = ONE MATCH, so everything groups by match_api_id — never by night, never by date.
   // Three matches at the same field on the same evening are three rentals and three manager costs.
-  type Acc = { startYmd: string; cancelled: boolean; grossCents: number; spotsSold: number };
+  type Acc = { startYmd: string; cancelled: boolean; grossCents: number; spotsSold: number; endUtc: string | null };
   const byMatch = new Map<string, Acc>();
   const appearances: VenueAppearance[] = [];
 
   for (const r of rows) {
     const key = r.match_api_id != null ? `id:${r.match_api_id}` : `ts:${r.match_start}`;
     const startYmd = r.match_start.slice(0, 10);
-    const acc = byMatch.get(key) ?? { startYmd, cancelled: !!r.match_canceled, grossCents: 0, spotsSold: 0 };
+    const acc = byMatch.get(key) ?? { startYmd, cancelled: !!r.match_canceled, grossCents: 0, spotsSold: 0, endUtc: r.match_end_utc ?? null };
     // A cancelled match stays in the map so it can be reported as cancelled, but contributes
     // nothing — payoutForMatch zeroes it, and totalsOf does not count it as a match played.
-    if (!r.match_canceled && isSpot(r)) {
+    if (!r.match_canceled && (occupiesSpot(r) || earnedRevenue(r))) {
       // match_price_paid is DOLLARS in this row shape (the legacy reader's unit). Convert PER ROW,
       // so each real payment rounds to its own exact cent rather than accumulating float error and
       // rounding once at the end of a sum that was never exact.
-      acc.grossCents += Math.round((Number(r.match_price_paid ?? 0) || 0) * 100);
-      acc.spotsSold += 1;
+      if (earnedRevenue(r)) acc.grossCents += Math.round((Number(r.match_price_paid ?? 0) || 0) * 100);
+      if (occupiesSpot(r)) acc.spotsSold += 1;
       // NEW vs RETURNING is computed against ALL venue history — every appearance ever, not the
       // displayed window — so someone whose first Parmer match was in July is returning in August.
-      if (r.user_id) appearances.push({ userId: String(r.user_id), ymd: startYmd });
+      // A person who cancelled did not attend, so they are not an appearance at the venue.
+      if (r.user_id && occupiesSpot(r)) appearances.push({ userId: String(r.user_id), ymd: startYmd });
     }
     byMatch.set(key, acc);
   }
 
   const payouts: MatchPayout[] = [...byMatch.entries()]
     .map(([key, a]) => payoutForMatch(
-      { matchApiId: Number(key.replace(/^id:/, "")) || 0, startYmd: a.startYmd, cancelled: a.cancelled, grossCents: a.grossCents, spotsSold: a.spotsSold },
+      {
+        matchApiId: Number(key.replace(/^id:/, "")) || 0, startYmd: a.startYmd, cancelled: a.cancelled,
+        grossCents: a.grossCents, spotsSold: a.spotsSold,
+        // PLAYED = the match's true END instant is in the past. end_date_utc is a genuine UTC
+        // timestamp (unlike start_date/end_date, which wear a Z over local wall clock), so this is
+        // an instant comparison and not a wall-clock one. A match with no end_date_utc is treated
+        // as NOT played: on a payout page, refusing to bill for something unproven is the safe
+        // direction, and it shows up as "scheduled" rather than silently earning money.
+        played: a.endUtc != null && Date.parse(a.endUtc) < nowMs,
+      },
       params,
     ))
     .sort((x, y) => x.startYmd.localeCompare(y.startYmd) || x.matchApiId - y.matchApiId);
 
   const byYm = new Map<string, MatchPayout[]>();
   for (const p of payouts) {
-    // A cancelled match has been zeroed; it must not create an otherwise-empty month either.
-    if (p.grossCents === 0 && p.spotsSold === 0 && p.fieldRentalCents === 0) continue;
+    // A CANCELLED match is dropped entirely — it did not happen and there is nothing to show.
+    // A SCHEDULED one is KEPT, because the partner should see that Aug 19 exists and is not being
+    // counted; hiding it would be a different lie from billing for it. It is already zeroed, so
+    // totalsOf skips it and no sum can pick it up.
+    if (p.cancelled) continue;
     const ym = p.startYmd.slice(0, 7);
     byYm.set(ym, [...(byYm.get(ym) ?? []), p]);
   }
