@@ -321,7 +321,7 @@ export default function GamedayBoard({
           : err ? <div className="empty err" data-testid="board-err">Couldn’t load the board: {err}</div>
           : !anyRows ? <div className="empty" data-testid="empty">Nothing to show for {dayLabel(date)} with these filters.</div>
           : <div className="sheet" data-testid="snapshot">
-                <div className="colhead"><span /><span>KICKOFF</span><span>MATCH · FIELD</span><span>SPOTS</span><span>vs MIN</span><span>DECIDE BY</span><span>MANAGER</span><span className="ra">PRICE</span></div>
+                <div className="colhead"><span /><span>KICKOFF</span><span>MATCH · FIELD</span><span>SPOTS</span><span>vs MIN</span><span>CANCEL TIME</span><span>MANAGER</span><span className="ra">PRICE</span></div>
                 {grouped.map(({ G, rows }) => (
                   <section className={"grp grp-" + G.k} data-testid={`snap-group-${G.k}`} key={G.k}>
                     <h2 className="grouphd">{G.t}<span className="n">{rows.length}</span></h2>
@@ -383,14 +383,23 @@ function SnapRow({ m, now, group, selected, onOpen, money }: {
   const vsMinCls = vm === "over" ? "over" : vm === "at" ? "atmin" : "short";
   const markGlyph = vm === "short" ? "!" : "✓";                 // only below-min gets the bang (§3)
   const markTitle = vm === "short" ? `${Math.abs(d)} short of the ${min} real players needed` : `Minimum ${min} real players`;
-  // ── DECIDE BY (§7): both clocks lead with an ABSOLUTE wall time in the match's own zone;
-  // the deadline is DERIVED (deadlineClock) so it can't drift. Kickoff sub is "in X" (an event
-  // you wait for); the deadline sub is "X left" / "passed" (a budget you spend) — never "in".
   const ac = minsToDeadline(m, now);
-  const decideSub = ac <= 0 ? "passed" : `${fmtDur(ac)} left`;
-  // Prominence follows the shortfall (§7f): muted when over, amber at the line, loud/red short.
-  const decideCls = vm === "over" ? "cleared" : vm === "at" ? "atmin" : rail === "red" ? "short hot" : "short";
+  // CANCEL TIME (cancel-time-v1). Kickoff is a FIXED POINT; this is a COUNTDOWN. They used to
+  // share a format — both 16px tabular clocks — so a row read as two kickoffs. The cell is now a
+  // DURATION over a caption, and the clock moves to the title attribute, leaving exactly ONE
+  // time-shaped thing in the row. `left`/`passed` wording goes with it: the duration IS the
+  // budget, and "1h 56m left / until auto-cancel" says it twice.
+  const decideDur = ac <= 0 ? "passed" : fmtDur(ac);
   const leadDiffers = Number(m.autoCanceledMinutes ?? 0) !== STD_LEAD; // name the lead only if non-standard (§7e)
+  // OVER THE MINIMUM = NO LIVE DEADLINE. Auto-cancel only fires below the minimum, so a match
+  // that has made it has nothing counting down. On a healthy day that is most rows, and drawing a
+  // countdown on all of them was most of the noise. At-min is NOT over — it is one drop from
+  // short — so it keeps its countdown.
+  const hasLiveDeadline = isTodo && autoCancels(m) && vm !== "over";
+  // The clock, and the lead when it is not the standard one, live HERE now — hover on desktop.
+  // There is no tooltip on touch, which is why mobile shows the countdown and not the clock.
+  const decideTitle = `Auto-cancels at ${deadlineClock(m)} ${tzAbbr(m)}`
+    + (leadDiffers ? ` · ${m.autoCanceledMinutes ?? 0} minutes before kickoff` : "");
   // Risk rail ONLY for still-to-come (green/amber/red incl. the at-min amber); in-play &
   // finished = grey (muted), cancelled = red.
   const railCls = isCx ? "cxrow" : (isDone || isInPlay) ? "donerow" : "tier-" + rail;
@@ -431,22 +440,37 @@ function SnapRow({ m, now, group, selected, onOpen, money }: {
           : (isDone || isInPlay) ? <span className="vsmin none" data-testid="snap-short">—</span>
           : cap == null ? <span className="vsmin none" data-testid="snap-short">—</span>
           : <span className={"vsmin " + vsMinCls} data-testid="snap-short"><b>{gapNum}</b>{" "}<span className="w">{gapWord}</span></span>}
+        {/* MOBILE ONLY — the deadline joins the shortfall here, because they are ONE THOUGHT:
+            this match is two short, and in 1h 56m that becomes final. Desktop hides it (the cell
+            carries it). THE CLOCK IS NOT HERE, DELIBERATELY: there is no tooltip on touch, and
+            putting 6:45 back inline restores the second time-shaped thing that was the bug. */}
+        {hasLiveDeadline && (
+          <span className="mcnt" data-testid="snap-cxl-mcnt"><span className="w">cancels in</span> {decideDur}</span>
+        )}
+        {/* Auto-cancel switched off keeps its state on the phone too. Without this the card would
+            be indistinguishable from an over-the-minimum one, which is a different fact. */}
+        {isTodo && !autoCancels(m) && (
+          <span className="mnoac" data-testid="snap-cxl-mnoac">no auto-cancel</span>
+        )}
       </span>
-      <span className="cell c-cxl">
+      <span className="cell c-cxl" title={isTodo && autoCancels(m) ? decideTitle : undefined}>
         {/* NO AUTO-CANCEL => NO DECIDE-BY. The minutes field is still populated upstream on these
             matches, so drawing a countdown from it invented a deadline that can never arrive. */}
         {isTodo && !autoCancels(m) ? <>
           <span className="c1 dash" data-testid="snap-noac">—</span>
           <span className="c2" style={{ color: "#5C6B62" }}>no auto-cancel</span>
-          <span className="cxlmob" data-testid="snap-cxlmob">no auto-cancel · {mgr} · {price}</span>
-        </> : isTodo ? <>
-          <span className="c1 clk">{deadlineClock(m)}<em>{tzAbbr(m)}</em></span>
-          <span className={"c2 " + decideCls} title={`Auto-cancels ${m.autoCanceledMinutes ?? 0} minutes before kickoff unless the minimum is met`}>{decideSub}{leadDiffers ? <span className="lead">cancels {m.autoCanceledMinutes ?? 0}m before</span> : null}</span>
-          <span className="cxlmob" data-testid="snap-cxlmob"><b>{deadlineClock(m)}</b> {tzAbbr(m)} · {decideSub} · {mgr} · {price}</span>
-        </> : <>
-          <span className="c1 dash">—</span>
-          <span className="cxlmob" data-testid="snap-cxlmob">{isCx ? "cancelled" : isInPlay ? "in play" : "finished"} · {mgr} · {price}</span>
-        </>}
+        </> : hasLiveDeadline ? <>
+          {/* A duration where a time used to be, over a caption naming what it counts down to.
+              No box, no border — shape does the work. */}
+          <span className="cxbig" data-testid="snap-cxl-dur">{decideDur}</span>
+          <span className="cxcap">until <b>auto-cancel</b></span>
+        </> : (
+          <span className="c1 dash" data-testid="snap-cxl-none">—</span>
+        )}
+        {/* THE META LINE (mobile only): who and how much. Nothing else. The deadline used to sit
+            here in a run-on line with the manager and the price — four unrelated facts, one
+            weight, the same dots. It now lives in the status stack with the shortfall. */}
+        <span className="cxlmob" data-testid="snap-cxlmob">{mgr} · {price}</span>
       </span>
       <span className="cell c-mgr"><span className="mgr">{mgr}</span></span>
       <span className="cell c-price"><span className="price">{price}</span></span>
@@ -667,17 +691,20 @@ const CSS = `
 .gdo .sheet .vsmin.short{background:#FDEEEB;color:#A83120;border-color:#F0A9A4}
 .gdo .sheet .vsmin.none{border-color:transparent;background:transparent;color:#536258;padding:0}
 .gdo .sheet .vsmin.cxbadge{border-color:#A83120;background:#A83120;color:#fff;padding:0 9px;font-weight:800;letter-spacing:.05em;align-items:center}
-/* ── DECIDE BY (§7): absolute clock + a "X left"/"passed" sub whose colour AND weight follow
-      the shortfall — muted when over, amber at the line, loud/red when short. ── */
-.gdo .sheet .c1.clk{display:block;font-weight:700;font-variant-numeric:tabular-nums}
-.gdo .sheet .c1.clk em{font-style:normal;font-size:10px;font-weight:800;color:#536258;letter-spacing:.06em;margin-left:4px}
+/* ── CANCEL TIME (cancel-time-v1) ───────────────────────────────────────────
+   A DURATION, then what it is a countdown to. 15px against kickoff's inherited
+   16px: strictly smaller, so the two stop reading as the same kind of fact. The
+   clock is in the cell's title attribute, not in the cell. */
+.gdo .sheet .cxbig{display:block;font-size:15px;font-weight:800;color:#8A5A00;font-variant-numeric:tabular-nums;line-height:1.05}
+.gdo .sheet .cxcap{display:block;font-size:11.5px;color:#536258;margin-top:1px;line-height:1.3}
+.gdo .sheet .cxcap b{color:#8A5A00;font-weight:700}
+/* mobile-only members of the status stack */
+.gdo .sheet .mcnt,.gdo .sheet .mnoac{display:none}
+/* .c2 still styles the "no auto-cancel" caption, the one remaining user of this cell's sub
+   line. The shortfall-tinted variants (.cleared/.atmin/.short/.short.hot) and .c1.clk went with
+   the clock they coloured — prominence now comes from the countdown's own weight, not from
+   re-stating the shortfall a third time in the same row. */
 .gdo .sheet .c2{display:block;font-size:11.5px;margin-top:1px;color:#536258;line-height:1.35}
-.gdo .sheet .c2.cleared{color:#5C7168;font-weight:400}
-.gdo .sheet .c2.atmin{color:#7A5200;font-weight:600}
-.gdo .sheet .c2.short{color:#7A5200;font-weight:700}
-.gdo .sheet .c2.short.hot{color:#A83120;font-weight:800}
-/* the non-standard lead time goes on its OWN line so it can't wrap the row taller (§7e) */
-.gdo .sheet .c2 .lead{display:block;font-size:10px;color:#5C7168;font-weight:400;letter-spacing:.01em}
 .gdo .sheet .mgr{display:block;font-size:13px;color:#3D5349;white-space:nowrap;overflow:hidden;text-overflow:ellipsis}
 .gdo .sheet .price{display:block;text-align:right;font-weight:700;font-variant-numeric:tabular-nums}
 .gdo .sheet .cxlmob{display:none}
@@ -762,10 +789,21 @@ const CSS = `
   .gdo .sheet .c-time{grid-area:time;padding:8px 0 0}
   .gdo .sheet .c-match{grid-area:match;padding:0}
   .gdo .sheet .c-spots{grid-area:spots;padding:7px 0 0}
-  .gdo .sheet .c-short{grid-area:short;padding:8px 0 0;align-self:start;display:block}
+  /* THE STATUS STACK — the shortfall pill and its deadline, top right, where the eye
+     already goes. Column so the countdown sits directly under the pill. */
+  .gdo .sheet .c-short{grid-area:short;padding:8px 0 0;align-self:start;display:flex;flex-direction:column;align-items:flex-end;gap:5px}
+  .gdo .sheet .mcnt{display:block;font-size:13px;font-weight:800;color:#8A5A00;white-space:nowrap;font-variant-numeric:tabular-nums}
+  /* The mockup mutes "cancels in" with a lighter amber (#A8813A). Measured on the real card
+     backgrounds that is 3.17–3.58:1 — below 4.5. WEIGHT carries the hierarchy instead, at the
+     same accessible amber as the duration. */
+  .gdo .sheet .mcnt .w{font-weight:600;color:#8A5A00}
+  .gdo .sheet .mnoac{display:block;font-size:12px;font-weight:700;color:#5C6B62;white-space:nowrap}
   .gdo .sheet .c-cxl{grid-area:cxl;padding:4px 0 9px}
   .gdo .sheet .c-mgr,.gdo .sheet .c-price{display:none}
-  .gdo .sheet .c-cxl .c1,.gdo .sheet .c-cxl .c2{display:none}
+  /* The desktop cell's contents are ALL hidden on the phone — the duration and its caption
+     included. Missing them here put "cancels in 7m" in the stack AND "7m until auto-cancel" in
+     the cell: two countdowns on one card, which is the bug in a new costume. */
+  .gdo .sheet .c-cxl .c1,.gdo .sheet .c-cxl .c2,.gdo .sheet .c-cxl .cxbig,.gdo .sheet .c-cxl .cxcap{display:none}
   .gdo .sheet .cxlmob{display:block;font-size:12px;color:#536258;white-space:nowrap;overflow:hidden;text-overflow:ellipsis}
   .gdo .sheet .m1{white-space:normal;overflow:visible;text-overflow:clip}   /* match name never truncates */
   .gdo .sheet .t1{display:inline}.gdo .sheet .t2{display:inline;margin-left:8px}

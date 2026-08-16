@@ -100,6 +100,19 @@ positive ready signal before asserting anything is missing. A flat sleep is not 
 ready signal, and a loading screen satisfies almost every absence check you can
 write.
 
+**A COUNTING OR ABSENCE ASSERTION NEEDS A POSITIVE CONTROL.** Any assertion that
+counts matches, or asserts absence, must be paired with the same pattern or
+selector proven to find at least one match somewhere it definitely exists, in the
+same run. **An assertion whose needle is never proven present has not been run.**
+A regex that matches nothing, a selector that names a class nobody renders and a
+page that failed to load all produce the same zero, and zero is the answer these
+assertions are usually hoping for.
+
+This applies to assertions whose **passing value is zero or absence** — expects of
+`0`, "not present", "no match", and upper bounds. An assertion that expects exactly
+N where N >= 1 is **already self-controlling**: a pattern that matches nothing
+yields 0 and fails. Do not add redundant controls to those.
+
 **Test effort is TIERED by what the change can cost.**
 
 - **Writes and money** — credits, payouts, cancel, promo edit, roster moves:

@@ -1,0 +1,233 @@
+<!doctype html>
+<html lang="en">
+<head>
+<meta charset="utf-8">
+<meta name="viewport" content="width=device-width,initial-scale=1">
+<title>Cancel time — spec</title>
+<style>
+/* ══════════════════════════════════════════════════════════════
+   CANCEL TIME — the spec. Desktop and mobile, one file.
+
+   THE PROBLEM. Kickoff (8:00 PM) and the auto-cancel deadline
+   (6:45 PM) were typeset identically, so the row read as two
+   kickoffs. On mobile it was worse: the deadline sat in a run-on
+   line with the manager and the price —
+
+       6:45 PM CST · 1h 56m left · Rooby Amilcar · $9.00
+
+   — four unrelated facts, same weight, same dots.
+
+   THE PRINCIPLE. Kickoff is a FIXED POINT: when the thing happens.
+   The deadline is a COUNTDOWN: when you lose the option to act.
+   Different kinds of fact, so they stop sharing a format. After
+   this, each view contains exactly ONE time-shaped thing, and it
+   is kickoff.
+
+   DESKTOP — a duration where a time used to be, and the clock moves
+   to the title attribute. The column header becomes CANCEL TIME.
+
+   MOBILE — the deadline LEAVES the meta line, which becomes what it
+   should always have been (who and how much), and joins the
+   shortfall at the top right, because they are one thought: this
+   match is two short, and in 1h 56m that becomes final.
+
+   ON MOBILE THE CLOCK TIME IS GONE, DELIBERATELY. There is no
+   tooltip on touch, and adding it back inline puts a second
+   time-shaped thing on the card — which is the bug. The countdown
+   is the number you act on; if someone needs 6:45 they open the
+   match.
+
+   A match over the minimum has no live deadline: the desktop cell
+   is "—" and the mobile card shows only its green chip. On a
+   healthy day that is most rows.
+   ══════════════════════════════════════════════════════════════ */
+:root{
+  --ink:#10231a; --ink2:#5b7568; --ink3:#93a89c;
+  --line:#e6ebe7; --bg:#eef2ef; --panel:#fff;
+  --amb:#8a5a00; --amb2:#a8813a;
+  --red:#a8321f; --redbg:#fdeceb; --redln:#f0c4bf; --rowbg:#fdf0ee;
+  --grn:#166534; --grnln:#cfe3d5; --grnbg:#eef7f1;
+}
+*{box-sizing:border-box}
+body{margin:0;background:var(--bg);color:var(--ink);padding:24px 18px 70px;
+  font:15px/1.4 ui-sans-serif,-apple-system,"Segoe UI",Roboto,sans-serif}
+.wrap{max-width:1560px;margin:0 auto}
+h1{font-size:12px;letter-spacing:.11em;color:var(--ink2);font-weight:800;
+  margin:32px 0 10px;padding-bottom:7px;border-bottom:1px solid #dde4df}
+h1:first-child{margin-top:0}
+.why{color:var(--ink2);font-size:12.5px;margin:0 0 12px;max-width:880px}
+.why b{color:var(--ink)}
+
+/* ── DESKTOP ─────────────────────────────────────────────────── */
+.tbl{background:var(--panel);border:1px solid var(--line);border-radius:12px;overflow:hidden}
+.hd,.row{display:grid;align-items:center;
+  grid-template-columns:150px minmax(0,1.3fr) minmax(0,1.45fr) 106px 176px 116px 80px;
+  gap:16px;padding:13px 20px}
+.hd{font-size:10.5px;letter-spacing:.08em;color:var(--ink3);font-weight:700;
+  border-bottom:1px solid var(--line);padding:10px 20px}
+.row{border-left:4px solid #d0a03a}
+.row+.row{border-top:1px solid #f1f4f2}
+.row.ok{border-left-color:#2f7a4f}
+
+.ko{font-size:17px;font-weight:700;font-variant-numeric:tabular-nums}
+.ko .tz{font-size:10.5px;font-weight:700;color:var(--ink3);letter-spacing:.05em;margin-left:3px}
+.ko .in{display:block;font-size:12.5px;color:var(--ink2);font-weight:400;margin-top:1px}
+.mt{min-width:0}
+.mt .nm{font-weight:700;font-size:15px;white-space:nowrap;overflow:hidden;text-overflow:ellipsis}
+.mt .sub{color:var(--ink2);font-size:12.5px;white-space:nowrap;overflow:hidden;text-overflow:ellipsis}
+.sp .bar{height:9px;border-radius:5px;background:#eceee9;position:relative;overflow:hidden;margin-bottom:5px}
+.sp .fill{position:absolute;inset:0 auto 0 0;background:#2f7a4f;border-radius:5px}
+.sp .fake{position:absolute;top:0;bottom:0;
+  background:repeating-linear-gradient(135deg,#e5c069 0 6px,#f2ddab 6px 12px)}
+.sp .txt{font-size:12.5px;color:var(--ink2)}
+.sp .txt b{color:var(--ink)}
+.short{display:inline-block;font-size:12.5px;font-weight:700;color:var(--red);
+  border:1px solid var(--redln);background:var(--redbg);border-radius:999px;padding:3px 10px}
+.over{display:inline-block;font-size:12.5px;font-weight:700;color:var(--grn);
+  border:1px solid var(--grnln);background:var(--grnbg);border-radius:999px;padding:3px 10px}
+.mgr{color:var(--ink2);font-size:13.5px;white-space:nowrap;overflow:hidden;text-overflow:ellipsis}
+.pr{font-size:15px;font-weight:700;text-align:right;font-variant-numeric:tabular-nums}
+
+/* THE CELL. A duration, then what it is a countdown to. No clock —
+   it lives in the title attribute, and the row is left with exactly
+   one time-shaped thing. */
+.cx .big{font-size:16px;font-weight:800;color:var(--amb);
+  font-variant-numeric:tabular-nums;line-height:1.05}
+.cx .sub{font-size:11.5px;color:var(--ink2);margin-top:1px}
+.cx .sub b{color:var(--amb);font-weight:700}
+.none{color:var(--ink3);font-size:13px}
+
+/* ── MOBILE ──────────────────────────────────────────────────── */
+.phones{display:flex;gap:18px;flex-wrap:wrap}
+.phone{width:392px;flex:none}
+.plab{font-size:10.5px;letter-spacing:.08em;color:var(--ink3);font-weight:800;margin-bottom:6px}
+.card{background:var(--rowbg);border-left:5px solid var(--red);
+  border-top:1px solid var(--line);border-bottom:1px solid var(--line);
+  padding:14px 16px 15px}
+.card.ok{background:var(--panel);border-left-color:#2f7a4f}
+.top{display:flex;align-items:flex-start;justify-content:space-between;gap:12px}
+.k{font-size:19px;font-weight:800;font-variant-numeric:tabular-nums;white-space:nowrap}
+.k .tz{font-size:11px;font-weight:800;color:var(--ink3);letter-spacing:.06em;margin-left:4px}
+.k .in{font-size:14px;font-weight:400;color:var(--ink2);margin-left:8px}
+.mshort{display:inline-block;font-size:14px;font-weight:800;color:var(--red);
+  border:1.5px solid var(--redln);background:#fff;border-radius:999px;
+  padding:5px 13px;white-space:nowrap}
+.mover{display:inline-block;font-size:14px;font-weight:800;color:var(--grn);
+  border:1.5px solid var(--grnln);background:var(--grnbg);border-radius:999px;
+  padding:5px 13px;white-space:nowrap}
+.nm2{font-size:19px;font-weight:800;margin-top:8px;line-height:1.2}
+.fl{color:var(--ink2);font-size:14px;margin-top:2px}
+.mbar{height:13px;border-radius:7px;background:#e6eae6;position:relative;
+  overflow:hidden;margin-top:16px}
+.mbar .fill{position:absolute;inset:0 auto 0 0;background:#2f7a4f;border-radius:7px}
+.mbar .fake{position:absolute;top:0;bottom:0;
+  background:repeating-linear-gradient(135deg,#e0b64f 0 7px,#f0d692 7px 14px)}
+.min{text-align:center;font-size:12.5px;font-weight:700;color:var(--ink2);margin-top:4px}
+.cnt{font-size:15px;margin-top:9px}
+.cnt b{font-weight:800}
+.cnt .f{color:var(--amb)}
+.cnt .g{color:var(--ink2)}
+
+/* THE STATUS STACK. Shortfall and its deadline together, top right —
+   where the eye already goes. */
+.stack{display:flex;flex-direction:column;align-items:flex-end;gap:5px}
+.mcnt{font-size:13px;font-weight:800;color:var(--amb);white-space:nowrap;
+  font-variant-numeric:tabular-nums}
+.mcnt .w{font-weight:600;color:var(--amb2)}
+
+/* THE META LINE. Who and how much. Nothing else. */
+.meta{font-size:14px;color:var(--ink2);margin-top:9px}
+</style>
+</head>
+<body>
+<div class="wrap">
+
+<h1>DESKTOP</h1>
+<p class="why">The cell is a <b>duration</b> where a time used to be, over a caption
+naming what it counts down to. <b>No clock in the cell</b> — it moves to the title
+attribute, so the row contains exactly one time-shaped thing. Header renamed
+<b>DECIDE BY → CANCEL TIME</b>. The second row is over the minimum, so it has no
+live deadline and the cell is empty.</p>
+
+<div class="tbl" id="tbl">
+  <div class="hd"><span>KICKOFF</span><span>MATCH · FIELD</span><span>SPOTS</span>
+    <span>vs MIN</span><span>CANCEL TIME</span><span>MANAGER</span>
+    <span style="text-align:right">PRICE</span></div>
+
+  <div class="row">
+    <div class="ko">8:00 PM<span class="tz">CST</span><span class="in">in 3h 11m</span></div>
+    <div class="mt"><div class="nm">🎥 Crossbar Rowlett - Saturday</div>
+      <div class="sub">Crossbar Rowlett · Dallas / Fort Worth</div></div>
+    <div class="sp"><div class="bar"><div class="fill" style="width:39%"></div>
+      <div class="fake" style="left:39%;width:39%"></div></div>
+      <div class="txt"><b>7</b> real · <b>7</b> fake · <b>14</b> total of 18 spots</div></div>
+    <div><span class="short">−2 short</span></div>
+    <div class="cx" id="cell" title="Auto-cancels at 6:45 PM CST">
+      <div class="big">1h 56m</div><div class="sub">until <b>auto-cancel</b></div></div>
+    <div class="mgr">Rooby Amilcar</div><div class="pr">$9.00</div>
+  </div>
+
+  <div class="row ok">
+    <div class="ko">8:00 PM<span class="tz">CST</span><span class="in">in 3h 11m</span></div>
+    <div class="mt"><div class="nm">🎥 Soccer Central Field 4</div>
+      <div class="sub">Tourney at Soccer Central · San Antonio</div></div>
+    <div class="sp"><div class="bar"><div class="fill" style="width:100%"></div></div>
+      <div class="txt"><b>36</b> real · <b>0</b> fake · <b>36</b> total of 36 spots</div></div>
+    <div><span class="over">+27 over</span></div>
+    <div class="none" id="cellNone">—</div>
+    <div class="mgr">Ricki</div><div class="pr">$12.00</div>
+  </div>
+</div>
+
+<h1>MOBILE</h1>
+<p class="why">The deadline <b>leaves the meta line</b> — which becomes who and how
+much, nothing else — and <b>joins the shortfall</b> at the top right, because they
+are one thought. <b>The clock is gone on mobile, deliberately:</b> there is no
+tooltip on touch, and putting 6:45 back inline restores the second time-shaped
+thing that was the bug. A match over the minimum shows only its green chip.</p>
+
+<div class="phones">
+
+  <div class="phone">
+    <div class="plab">SHORT — a live deadline</div>
+    <div class="card">
+      <div class="top">
+        <div class="k">8:00 PM<span class="tz">CST</span><span class="in">in 3h 11m</span></div>
+        <div class="stack" id="stack"><span class="mshort">−2 short</span>
+          <span class="mcnt" id="mcnt"><span class="w">cancels in</span> 1h 56m</span></div>
+      </div>
+      <div class="nm2">🎥 Crossbar Rowlett - Saturday</div>
+      <div class="fl">Crossbar Rowlett · Dallas / Fort Worth</div>
+      <div class="mbar"><div class="fill" style="width:39%"></div>
+        <div class="fake" style="left:39%;width:39%"></div></div>
+      <div class="min">min 9</div>
+      <div class="cnt"><b>7</b> <span class="g">real ·</span> <b class="f">7</b>
+        <span class="g">fake ·</span> <b>14</b> <span class="g">total</span>
+        <b class="g">of 18 spots</b></div>
+      <div class="meta" id="meta">Rooby Amilcar · $9.00</div>
+    </div>
+  </div>
+
+  <div class="phone">
+    <div class="plab">OVER THE MINIMUM — no deadline exists</div>
+    <div class="card ok">
+      <div class="top">
+        <div class="k">8:00 PM<span class="tz">CST</span><span class="in">in 3h 11m</span></div>
+        <div class="stack" id="stackOk"><span class="mover">+27 over</span></div>
+      </div>
+      <div class="nm2">🎥 Soccer Central Field 4</div>
+      <div class="fl">Tourney at Soccer Central · San Antonio</div>
+      <div class="mbar"><div class="fill" style="width:100%"></div></div>
+      <div class="min">min 9</div>
+      <div class="cnt"><b>36</b> <span class="g">real ·</span> <b class="f">0</b>
+        <span class="g">fake ·</span> <b>36</b> <span class="g">total</span>
+        <b class="g">of 36 spots</b></div>
+      <div class="meta" id="metaOk">Ricki · $12.00</div>
+    </div>
+  </div>
+
+</div>
+
+</div>
+</body>
+</html>

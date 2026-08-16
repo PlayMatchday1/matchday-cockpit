@@ -1,7 +1,7 @@
 // Gameday Ops — the Snapshot view, hermetic. Phase 21 rebuilt the ROW: one unified
 // still-to-come predicate (chip == group == rows), a four-number counts line (no "open"),
 // the printed minimum under a three-state marker (glyph AND fill change), the vs MIN chip,
-// two ABSOLUTE clocks (kickoff + DECIDE BY), the at-min rail tier, and the removed Risk sort.
+// kickoff's absolute clock + the CANCEL TIME countdown, the at-min rail tier, and the removed Risk sort.
 // Still proves the two views derive real/fake/open/short from the SAME gamedayModel, over an
 // adversarial set. Desktop (1280) + a 390x844 touch context.
 //   node scripts/e2e/verify-snapshot.mjs
@@ -275,19 +275,40 @@ async function main() {
     await page.click('[data-testid="filter-all"]'); await page.waitForTimeout(120); }
 
   // ══════════════ §7 — THE TWO CLOCKS ══════════════
-  eq("§7c: the DECIDE BY column header replaces AUTO-CANCEL", (await page.$$eval('[data-testid="snapshot"] .colhead > span', (els) => els.map((e) => e.textContent))).includes("DECIDE BY"), true);
+  // PHASE 29d REWROTE §7a/§7b/§7d AND THE PHONE CLOCK ASSERTION. Not selector-path edits — the
+  // behaviour they described is the bug cancel-time-v1 fixed. Kickoff and the deadline used to be
+  // typeset identically (both 16px tabular clocks), so a row read as two kickoffs. The deadline is
+  // now a DURATION and its clock lives in the cell's title attribute; on the phone the clock is
+  // gone entirely and the countdown sits with the shortfall. Itemised:
+  //   §7c  header  DECIDE BY -> CANCEL TIME
+  //   §7a  "decide-by leads with an absolute clock" -> it is a duration; the clock is in title=
+  //   §7d  the kickoff-minus-lead derivation is KEPT, read from the title instead of the cell
+  //   §7b  "the sub does not start with in" -> the caption reads "until auto-cancel"
+  //   §10  "phone: decide-by keeps its absolute clock" -> INVERTED: the phone must have no clock
+  // What each was FOR — the deadline is derived, is not a second kickoff, and reads as a budget —
+  // is re-asserted below against the new shape.
+  eq("§7c: the CANCEL TIME column header replaces DECIDE BY", (await page.$$eval('[data-testid="snapshot"] .colhead > span', (els) => els.map((e) => e.textContent))).includes("CANCEL TIME"), true);
+  eq("§7c: 'DECIDE BY' is gone from the snapshot header", (await page.$$eval('[data-testid="snapshot"] .colhead > span', (els) => els.map((e) => e.textContent))).includes("DECIDE BY"), false);
   ok(!(await page.$$eval('[data-testid="snapshot"] .colhead > span', (els) => els.map((e) => e.textContent))).includes("AUTO-CANCEL") ? "§7c: 'AUTO-CANCEL' is gone from the snapshot header" : bad("§7c AUTO-CANCEL survives"));
   // both clocks lead with an ABSOLUTE time + zone marker (601: kickoff & decide-by)
   { const kick = (await page.$eval(row(601) + ' .c-time .t1', (e) => e.textContent)).replace(/\s+/g, " ").trim();
-    const dec = (await page.$eval(row(601) + ' .c-cxl .c1.clk', (e) => e.textContent)).replace(/\s+/g, " ").trim();
+    const dur = (await page.$eval(row(601) + ' [data-testid="snap-cxl-dur"]', (e) => e.textContent)).trim();
     ok(/\d{1,2}:\d{2}\s*(AM|PM)\s*CST/.test(kick) ? `§7a: kickoff leads with an absolute clock + zone (${kick})` : bad("§7a kickoff clock", kick));
-    ok(/\d{1,2}:\d{2}\s*(AM|PM)\s*CST/.test(dec) ? `§7a: decide-by leads with an absolute clock + zone (${dec})` : bad("§7a decide clock", dec)); }
+    // POSITIVE CONTROL for the count below: the clock pattern is proven to match kickoff in this
+    // very row before it is used to assert the deadline has none.
+    ok(/^\d+[hm]/.test(dur) ? `§7a: the deadline is a DURATION, not a second clock (${dur})` : bad("§7a deadline duration", dur));
+    const clocksInRow = (await page.$eval(row(601), (e) => e.innerText)).match(/\d{1,2}:\d{2}\s?(AM|PM)/gi) || [];
+    eq("§7a: the row therefore contains exactly ONE clock time — kickoff", clocksInRow.length, 1); }
   // deadline is DERIVED from kickoff − lead. 601 kickoff 12:00 PM, lead 75 -> 10:45 AM. The clock
   // text node and the zone <em> are separate; read the clock text node for the exact derived time.
-  eq("§7d: decide-by is kickoff minus the lead (601: 12:00 PM − 75m = 10:45 AM)", (await page.$eval(row(601) + ' .c-cxl .c1.clk', (e) => e.childNodes[0].textContent)).trim(), "10:45 AM");
+  // The derivation still matters; only where it is READ has changed.
+  eq("§7d: decide-by is kickoff minus the lead (601: 12:00 PM − 75m = 10:45 AM), now in the title",
+    /Auto-cancels at 10:45\s?AM/.test(await page.$eval(row(601) + ' .c-cxl', (e) => e.getAttribute("title") ?? "")), true);
   // the deadline SUB is a budget ("X left" / "passed"), never "in ..."
-  { const sub = (await page.$eval(row(601) + ' .c-cxl .c2', (e) => e.textContent)).trim();
-    ok(!/^in\b/.test(sub) ? `§7b: the decide-by sub does NOT start with 'in' (${sub})` : bad("§7b decide sub starts with in", sub)); }
+  { const cap = (await page.$eval(row(601) + ' .c-cxl .cxcap', (e) => e.textContent)).replace(/\s+/g, " ").trim();
+    ok(!/^in\b/.test(cap) && /until auto-cancel/i.test(cap)
+      ? `§7b: the caption names what it counts down to and does not start with 'in' (${cap})`
+      : bad("§7b caption", cap)); }
   // no row contains more than one "in Xm" phrase
   { const worst = await page.$$eval('[data-testid="snap-row"]', (els) => Math.max(...els.map((e) => (e.textContent.match(/\bin\s+\d/g) || []).length)));
     (worst <= 1) ? ok("§7g: no row contains more than one 'in Xm' phrase") : bad("§7g multiple 'in' phrases", `${worst}`); }
@@ -299,11 +320,24 @@ async function main() {
   // rather than re-pointed: re-aiming it at the DECIDE BY column would be a different assertion
   // wearing this one's name.
   ok(!/cancels\s+75m\s+before/i.test(await page.$eval(row(601) + ' .c-cxl', (e) => e.textContent)) ? "§7e: a standard-lead row (75m) does NOT repeat 'cancels 75m before'" : bad("§7e standard lead repeated"));
-  ok(/cancels\s+90m\s+before/i.test(await page.$eval(row(602) + ' .c-cxl', (e) => e.textContent)) ? "§7e: a non-standard-lead row (90m) DOES name its lead" : bad("§7e non-standard lead missing"));
-  // prominence follows the shortfall: a cleared row's deadline differs in BOTH colour and weight from a short row's
-  { const clr = await page.$eval(row(603) + ' .c-cxl .c2', (e) => ({ c: getComputedStyle(e).color, w: getComputedStyle(e).fontWeight }));
-    const sht = await page.$eval(row(601) + ' .c-cxl .c2', (e) => ({ c: getComputedStyle(e).color, w: getComputedStyle(e).fontWeight }));
-    (clr.c !== sht.c && clr.w !== sht.w) ? ok("§7f: a cleared row's decide-by differs in BOTH colour and weight from a short row's") : bad("§7f prominence", JSON.stringify({ clr, sht })); }
+  // The lead moved into the title with the clock, so the cell stays one duration + one caption.
+  ok(/90 minutes before kickoff/i.test(await page.$eval(row(602) + ' .c-cxl', (e) => e.getAttribute("title") ?? "")) ? "§7e: a non-standard-lead row (90m) DOES name its lead, in the title" : bad("§7e non-standard lead missing"));
+  ok(!/minutes before kickoff/i.test(await page.$eval(row(601) + ' .c-cxl', (e) => e.getAttribute("title") ?? "")) ? "§7e: …and a standard-lead row does not" : bad("§7e standard lead named anyway"));
+  // §7f REPLACED, not re-pointed. It compared the deadline's colour and weight on a CLEARED row
+  // against a SHORT one — prominence following the shortfall. A cleared row no longer HAS a
+  // deadline to tint: auto-cancel only fires below the minimum, so a match that has made it has
+  // nothing counting down, and drawing one on most rows of a healthy day was the noise. The
+  // stronger statement replaces the subtler one.
+  { const cleared = await page.$eval(row(603) + ' .c-cxl', (e) => e.innerText.replace(/\s+/g, " ").trim());
+    const short601 = await page.$eval(row(601) + ' .c-cxl', (e) => e.innerText.replace(/\s+/g, " ").trim());
+    // POSITIVE CONTROL: the same phrase is proven present on a short row before its absence on a
+    // cleared row is claimed to mean anything.
+    /until auto-cancel/i.test(short601)
+      ? ok("§7f: a SHORT row shows 'until auto-cancel' (the needle exists)")
+      : bad("§7f control", short601);
+    !/until auto-cancel/i.test(cleared)
+      ? ok("§7f: an OVER-the-minimum row has no deadline at all, not a quieter one")
+      : bad("§7f cleared row still counts down", cleared); }
 
   // ══════════════ §8 — THE RISK SORT IS GONE ══════════════
   { const gone = await page.evaluate(() => ["sort-time", "sort-risk", "m-sort-time", "m-sort-risk"].every((t) => !document.querySelector(`[data-testid="${t}"]`)));
@@ -391,8 +425,13 @@ async function main() {
   // §10 — both clocks keep their ABSOLUTE times (kickoff in the row, decide-by in the mobile line)
   { const kick = (await ph.$eval(prow(601) + ' .c-time .t1', (e) => e.textContent)).replace(/\s+/g, " ").trim();
     const mob = (await ph.$eval(prow(601) + ' [data-testid="snap-cxlmob"]', (e) => e.textContent)).replace(/\s+/g, " ").trim();
-    ok(/\d{1,2}:\d{2}\s*(AM|PM)/.test(kick) ? "phone: kickoff keeps its absolute clock" : bad("phone kickoff clock", kick));
-    ok(/10:45\s*(AM|PM)/.test(mob) ? `phone: decide-by keeps its absolute clock (${mob})` : bad("phone decide clock", mob)); }
+    const cnt = (await ph.$eval(prow(601) + ' [data-testid="snap-cxl-mcnt"]', (e) => e.textContent)).replace(/\s+/g, " ").trim();
+    const CLOCK = /\d{1,2}:\d{2}\s?(AM|PM)/gi;
+    // POSITIVE CONTROL — the pattern is proven to match kickoff before it is used to assert the
+    // meta line has none. Without this, a broken pattern would report "no clock" everywhere.
+    ok(CLOCK.test(kick) ? "phone: kickoff keeps its absolute clock" : bad("phone kickoff clock", kick));
+    eq("phone: the meta line is who and how much — no clock left in it", (mob.match(CLOCK) || []).length, 0);
+    ok(/cancels in\s+\d/.test(cnt) ? `phone: the deadline is a countdown beside the shortfall (${cnt})` : bad("phone countdown", cnt)); }
   // §10 — nothing truncates
   { const trunc = await ph.$$eval('[data-testid="snap-row"] .m1, [data-testid="snap-row"] [data-testid="snap-spots"]', (els) => els.filter((e) => e.scrollWidth > e.clientWidth + 1).length);
     (trunc === 0) ? ok("phone: names and counts never truncate") : bad("phone truncation", `${trunc} node(s)`); }
