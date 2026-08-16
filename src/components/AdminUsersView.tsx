@@ -78,6 +78,7 @@ export default function AdminUsersView() {
   const [error, setError] = useState<string | null>(null);
   const [showAddModal, setShowAddModal] = useState(false);
   const [deletingId, setDeletingId] = useState<string | null>(null);
+  const [savingId, setSavingId] = useState<string | null>(null);
   const [flashedId, setFlashedId] = useState<string | null>(null);
   const [permErr, setPermErr] = useState<{ id: string; msg: string } | null>(null);
   const [authStatus, setAuthStatus] = useState<Record<string, AuthStatus>>({});
@@ -203,42 +204,57 @@ export default function AdminUsersView() {
     if (key === "can_access_finance" && appUser?.id === user.id) return;
     if (key === "can_access_matchops") { await saveMatchPermission(user, { canAccessMatchops: !user.can_access_matchops }); return; }
     const newValue = !user[key];
-    const original = users;
-    setUsers((prev) =>
-      prev.map((u) => (u.id === user.id ? { ...u, [key]: newValue } : u)),
-    );
-    const { error: updateErr } = await supabase
-      .from("app_users")
-      .update({ [key]: newValue })
-      .eq("id", user.id);
-    if (updateErr) {
-      setUsers(original);
-      alert(updateErr.message);
-      return;
+    // NO OPTIMISTIC UPDATE. The switch used to move BEFORE the await and only came back if
+    // `updateErr` was truthy — which it never was, because RLS makes the client's UPDATE match zero
+    // rows and return no error. A revoke that failed looked exactly like one that worked. The
+    // toggle now moves when the SERVER confirms it moved.
+    const { data: sess } = await supabase.auth.getSession();
+    const token = sess.session?.access_token;
+    if (!token) { alert("No active session."); return; }
+    setSavingId(`${user.id}:${key}`);
+    try {
+      const res = await fetch("/api/admin/users/permissions", {
+        method: "POST",
+        headers: { "Content-Type": "application/json", Authorization: `Bearer ${token}` },
+        body: JSON.stringify({ id: user.id, key, value: newValue }),
+      });
+      const json = (await res.json().catch(() => ({}))) as { ok?: boolean; outcome?: string; error?: string; conflict?: string };
+      if (!res.ok || !json.ok) {
+        alert(`${json.error ?? `HTTP ${res.status}`}\n\nOutcome: ${json.outcome ?? "UNKNOWN"} — the setting was not changed.`);
+        return;
+      }
+      setUsers((prev) => prev.map((u) => (u.id === user.id ? { ...u, [key]: newValue } : u)));
+      flash(user.id);
+    } finally {
+      setSavingId(null);
     }
-    flash(user.id);
   }
 
   async function updateName(user: AppUser, value: string) {
     const trimmed = value.trim();
     const next = trimmed.length > 0 ? trimmed : null;
     if (next === user.full_name) return;
-    const original = users;
-    setUsers((prev) =>
-      sortUsers(
-        prev.map((u) => (u.id === user.id ? { ...u, full_name: next } : u)),
-      ),
-    );
-    const { error: updateErr } = await supabase
-      .from("app_users")
-      .update({ full_name: next })
-      .eq("id", user.id);
-    if (updateErr) {
-      setUsers(original);
-      alert(updateErr.message);
-      return;
+    // Same server route, same reason — see the toggle above.
+    const { data: sess } = await supabase.auth.getSession();
+    const token = sess.session?.access_token;
+    if (!token) { alert("No active session."); return; }
+    setSavingId(`${user.id}:full_name`);
+    try {
+      const res = await fetch("/api/admin/users/permissions", {
+        method: "POST",
+        headers: { "Content-Type": "application/json", Authorization: `Bearer ${token}` },
+        body: JSON.stringify({ id: user.id, key: "full_name", value: next }),
+      });
+      const json = (await res.json().catch(() => ({}))) as { ok?: boolean; outcome?: string; error?: string };
+      if (!res.ok || !json.ok) {
+        alert(`${json.error ?? `HTTP ${res.status}`}\n\nOutcome: ${json.outcome ?? "UNKNOWN"} — the name was not changed.`);
+        return;
+      }
+      setUsers((prev) => sortUsers(prev.map((u) => (u.id === user.id ? { ...u, full_name: next } : u))));
+      flash(user.id);
+    } finally {
+      setSavingId(null);
     }
-    flash(user.id);
   }
 
   async function deleteUser(user: AppUser) {

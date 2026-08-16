@@ -155,9 +155,18 @@ async function constraintMessageChecks() {
     const src = readFileSync(f, "utf8");
     return /from\("app_users"\)[\s\S]{0,200}?\.(insert|update|upsert)\(/.test(src);
   });
-  eq("the writer scan finds the three admin-user routes and nothing else",
+  // +admin/users/permissions (Phase 31c). The browser toggle was silently no-opped by RLS and had
+  // never once written — zero broad-flag entries in change_log's entire history — so it moved
+  // server-side. It is a genuine new app_users writer, which is exactly what this scan is for, and
+  // it satisfies the requirement below: granting a broad flag to a city manager surfaces 0124's
+  // CHECK as a stated 409 rather than the silent no-op the old path would have given.
+  //
+  // NOT admin/users/delete: the scan matches insert|update|upsert, and a DELETE cannot violate an
+  // exclusivity CHECK — there is no row left to be inconsistent. Deliberate, not an oversight.
+  eq("the writer scan finds the four admin-user routes and nothing else",
     writers.map((f) => f.replace("src/app/api/", "")).sort(),
-    ["admin/users/city-manager/route.ts", "admin/users/invite/route.ts", "admin/users/match-permissions/route.ts"]);
+    ["admin/users/city-manager/route.ts", "admin/users/invite/route.ts",
+     "admin/users/match-permissions/route.ts", "admin/users/permissions/route.ts"]);
   const unmapped = writers.filter((f) => !readFileSync(f, "utf8").includes("mapAppUsersConstraint"));
   eq("EVERY route that writes app_users maps the constraint (enumerated from the filesystem)",
     unmapped.map((f) => f.replace("src/app/api/", "")), []);

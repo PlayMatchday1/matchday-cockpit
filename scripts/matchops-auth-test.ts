@@ -63,9 +63,18 @@ const API = "src/app/api";
 const routeFiles: string[] = [];
 (function walk(dir: string) { for (const e of readdirSync(dir)) { const p = join(dir, e); if (statSync(p).isDirectory()) walk(p); else if (e === "route.ts") routeFiles.push(p); } })(API);
 
-const importsMatchOpsRead = routeFiles.filter((f) => readFileSync(f, "utf8").includes("authenticateMatchOpsRead"));
+// READ THE CODE, NOT THE PROSE. These detectors used to grep the raw file, so a route that merely
+// NAMED a gate in a comment was counted as using it — which is a false positive in the one direction
+// that matters: it inflates the census and makes a real addition indistinguishable from a mention.
+// (It fired the moment a route explained, in its header, why is_admin short-circuits the
+// can_access_* flags.) Comments are stripped first; string literals are left alone, since a gate
+// name in a literal is worth a second look.
+const code = (f: string) => readFileSync(f, "utf8")
+  .replace(/\/\*[\s\S]*?\*\//g, "")   // block comments
+  .replace(/^\s*\/\/.*$/gm, "");      // line comments
+const importsMatchOpsRead = routeFiles.filter((f) => code(f).includes("authenticateMatchOpsRead"));
 const importsCredits = routeFiles.filter((f) => readFileSync(f, "utf8").includes("authenticateCredits"));
-const importsAdmin = routeFiles.filter((f) => /authenticateAdmin\b/.test(readFileSync(f, "utf8")));
+const importsAdmin = routeFiles.filter((f) => /authenticateAdmin\b/.test(code(f)));
 const rel = (p: string) => p.replace("src/app/api/", "");
 
 // EXACTLY the intended routes are on the read gate — no more (a further move must edit this test).
@@ -117,7 +126,13 @@ is("exactly ONE route is on the credits gate", importsCredits.map(rel).sort(), [
   is("...and never reads a name, phone or email onto the log", /phone|email(?!:? auth\.email|Email)/i.test(src.slice(src.indexOf("const changes"), src.indexOf("supabaseLogStore"))), false);
 }
 // no OTHER route may reference the credits flag — a second money surface must be a deliberate edit here
-is("no other route reads can_edit_credits directly", routeFiles.filter((f) => /can_edit_credits/.test(readFileSync(f, "utf8"))).map(rel), []);
+// A SECOND MONEY SURFACE MUST BE A DELIBERATE EDIT HERE — and this is one, acknowledged rather
+// than filtered away. admin/users/permissions does NOT consume can_edit_credits to authorise a
+// credit write; it is the route that GRANTS it, so the flag appears in its allowlist and its
+// labels. Granting the right to move money is worth the same deliberate edit as spending it.
+is("no other route reads can_edit_credits directly",
+  routeFiles.filter((f) => /can_edit_credits/.test(code(f))).map(rel).sort(),
+  ["admin/users/permissions/route.ts"]);
 
 // the remaining is_admin surface: 28 − 6 routes that moved WHOLE = 22 (the 3 dual-gate ones still
 // count), + 1 for Phase 29's /admin/users/city-manager (granting the tier is an ADMIN act — the
@@ -133,7 +148,7 @@ is("no other route reads can_edit_credits directly", routeFiles.filter((f) => /c
 // CATCHING A NEW SURFACE, which is what it is for — the route appears here BECAUSE it calls
 // authenticateAdmin, and its gate is asserted for real below (a non-admin gets 403, not merely a
 // listing) = 29.
-is("authenticateAdmin still guards 29 routes", importsAdmin.length, 29);
+is("authenticateAdmin still guards 30 routes", importsAdmin.length, 30);
 
 // Phase 18d — every promo WRITE is gated on MANAGE PROMOS, and the check is in the route (not
 // only on the button). A route that forgot it would 200 for any admin.
@@ -159,7 +174,8 @@ is("...and the admin-user routes are exactly these five",
   importsAdmin.map(rel).filter((f) => /admin\/users\//.test(f)).sort(),
   // NOT invite/ — that one is gated on isProvisioningOwner (stricter than admin), deliberately.
   ["admin/users/auth-status/route.ts", "admin/users/city-manager/route.ts", "admin/users/delete/route.ts",
-   "admin/users/match-permissions/route.ts", "admin/users/resend-invite/route.ts"].sort());
+   "admin/users/match-permissions/route.ts", "admin/users/permissions/route.ts",
+   "admin/users/resend-invite/route.ts"].sort());
 
 // LISTED IS NOT GATED. Appearing in the census only proves the file mentions authenticateAdmin;
 // it does not prove the gate runs BEFORE anything happens. Pin that the delete route checks auth
@@ -174,6 +190,26 @@ is("...and the admin-user routes are exactly these five",
   is("...deleting your own account is refused", /cannot delete your own account/i.test(src), true);
   is("...and the Supabase Auth identity goes too — a delete that leaves it is not a delete",
     /auth\.admin\.deleteUser\(/.test(src), true);
+}
+
+// THE PERMISSIONS ROUTE — listed is not gated, same as the delete. The live 401/403 is asserted in
+// verify-user-permissions.mjs; these pin the properties a text search CAN establish.
+{
+  const src = readFileSync("src/app/api/admin/users/permissions/route.ts", "utf8");
+  const gateAt = src.indexOf("await authenticateAdmin(req)");
+  is("the permissions route's FIRST act is the admin gate", gateAt > -1 && gateAt < src.indexOf("req.json()"), true);
+  is("...it uses the gate's service-role client", /auth\.supabase/.test(src), true);
+  // `key` becomes a column name in an UPDATE. An allowlist is the difference between a permission
+  // toggle and an arbitrary write to app_users.
+  is("...the settable columns are an ALLOWLIST, not whatever the request names",
+    /BOOLEAN_KEYS = \[/.test(src) && /is not a permission this route may set/.test(src), true);
+  is("...is_service_account is NOT settable through it", !/["']is_service_account["']/.test(src.slice(src.indexOf("BOOLEAN_KEYS"), src.indexOf("] as const"))), true);
+  is("...removing your own admin is refused", /cannot remove your own admin/i.test(src), true);
+  // The verdict must come from a re-read; `error: null` on zero rows is what hid this bug.
+  is("...the UPDATE reads back with .select() and treats zero rows as a failure",
+    /\.select\("id"\)/.test(src) && /matched no rows/.test(src), true);
+  is("...and migration 0124's exclusivity surfaces as a stated 409",
+    /mapAppUsersConstraint/.test(src) && /status: 409/.test(src), true);
 }
 
 // the five Deonna must STILL be refused stay is_admin-gated (authenticateAdmin, or authenticateCrm + an is_admin check)
