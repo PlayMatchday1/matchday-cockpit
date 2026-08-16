@@ -424,6 +424,22 @@ async function main() {
         : bad("pay-arrival write reachable by a city manager", `status ${r}`);
     }
 
+    // DELETING AN ACCOUNT IS AN ADMIN ACT. Asserted with POST — the real method; a GET returns 405
+    // on this route whatever the caller is, which would prove nothing. authenticateAdmin runs
+    // before the body is read, and the id below is a nonexistent UUID besides, so a refused caller
+    // cannot remove anyone by being asserted against.
+    {
+      const r = await cm.evaluate(async (tok) => {
+        const res = await fetch("/api/admin/users/delete", {
+          method: "POST", headers: { "Content-Type": "application/json", Authorization: `Bearer ${tok}` },
+          body: JSON.stringify({ id: "00000000-0000-0000-0000-000000000000" }),
+        });
+        return res.status;
+      }, cmSession.access_token);
+      [401, 403].includes(r) ? ok(`…and the account-delete route refuses this tier (${r})`)
+        : bad("account delete reachable by a city manager", `status ${r}`);
+    }
+
     // The toggle must DO something.
     await cm.click('[data-testid="pay-view-pay"]');
     await cm.waitForTimeout(400);

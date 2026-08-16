@@ -127,7 +127,13 @@ is("no other route reads can_edit_credits directly", routeFiles.filter((f) => /c
 // +2 Phase 18d — promos/edit/[id] and promos/delete/[id] (the latter serves DELETE *and* the
 // PATCH restore). Both are production WRITES on a promo, so they sit with create on
 // authenticateAdmin + MANAGE PROMOS, not on the Match Ops read gate the promo READS use = 28.
-is("authenticateAdmin still guards 28 routes", importsAdmin.length, 28);
+// +1 Phase 31b — admin/users/delete. Deleting an account is an ADMIN act, and it moved server-side
+// precisely because the browser could not do it: RLS on app_users grants SELECT only, so the old
+// client-side DELETE matched zero rows and returned 204 with error null. THIS COUNT IS THE CENSUS
+// CATCHING A NEW SURFACE, which is what it is for — the route appears here BECAUSE it calls
+// authenticateAdmin, and its gate is asserted for real below (a non-admin gets 403, not merely a
+// listing) = 29.
+is("authenticateAdmin still guards 29 routes", importsAdmin.length, 29);
 
 // Phase 18d — every promo WRITE is gated on MANAGE PROMOS, and the check is in the route (not
 // only on the button). A route that forgot it would 200 for any admin.
@@ -149,10 +155,26 @@ is("delete refuses an already-deleted code before sending anything",
 is("the promo USES route is gated on MANAGE PROMOS, not the Match Ops read gate the other promo reads use",
   /canManagePromos/.test(readFileSync("src/app/api/promos/uses/[id]/route.ts", "utf8"))
   && !/authenticateMatchOpsRead/.test(readFileSync("src/app/api/promos/uses/[id]/route.ts", "utf8")), true);
-is("...and the added ones are exactly the three admin-user routes",
+is("...and the admin-user routes are exactly these five",
   importsAdmin.map(rel).filter((f) => /admin\/users\//.test(f)).sort(),
   // NOT invite/ — that one is gated on isProvisioningOwner (stricter than admin), deliberately.
-  ["admin/users/auth-status/route.ts", "admin/users/city-manager/route.ts", "admin/users/match-permissions/route.ts", "admin/users/resend-invite/route.ts"].sort());
+  ["admin/users/auth-status/route.ts", "admin/users/city-manager/route.ts", "admin/users/delete/route.ts",
+   "admin/users/match-permissions/route.ts", "admin/users/resend-invite/route.ts"].sort());
+
+// LISTED IS NOT GATED. Appearing in the census only proves the file mentions authenticateAdmin;
+// it does not prove the gate runs BEFORE anything happens. Pin that the delete route checks auth
+// as its first act and refuses before it reads a body or touches a store — the live 401/403 is
+// asserted in scripts/e2e/verify-user-delete.mjs and verify-city-confinement.mjs.
+{
+  const src = readFileSync("src/app/api/admin/users/delete/route.ts", "utf8");
+  const gateAt = src.indexOf("await authenticateAdmin(req)");
+  is("the delete route's FIRST act is the admin gate", gateAt > -1 && gateAt < src.indexOf("req.json()"), true);
+  is("...and it returns immediately when the gate refuses", /if \(!auth\.ok\) return Response\.json/.test(src), true);
+  is("...it uses the gate's service-role client, not a browser one", /auth\.supabase/.test(src), true);
+  is("...deleting your own account is refused", /cannot delete your own account/i.test(src), true);
+  is("...and the Supabase Auth identity goes too — a delete that leaves it is not a delete",
+    /auth\.admin\.deleteUser\(/.test(src), true);
+}
 
 // the five Deonna must STILL be refused stay is_admin-gated (authenticateAdmin, or authenticateCrm + an is_admin check)
 const requiresAdmin = (f: string) => { const s = readFileSync(f, "utf8"); return /authenticateAdmin\b/.test(s) || (/authenticateCrm\b/.test(s) && /isAdmin|is_admin/.test(s)); };
