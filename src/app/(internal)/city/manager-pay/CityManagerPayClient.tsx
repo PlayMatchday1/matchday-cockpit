@@ -21,6 +21,7 @@ import { supabase } from "@/lib/supabase";
 import { useAuth } from "@/lib/useAuth";
 import { payAmount } from "@/lib/managerPayCompute";
 import { reassignImpact } from "@/lib/cityManagerPayModel";
+import PayPeriodBar from "@/components/PayPeriodBar";
 
 const C = {
   forest: "#0d3b2e", forestDeep: "#072a20", accent: "#35c77f", mint: "#e0f2e7",
@@ -34,6 +35,13 @@ const MO = ["Jan", "Feb", "Mar", "Apr", "May", "Jun", "Jul", "Aug", "Sep", "Oct"
 const money = (n: number) => `$${(Math.round(n * 100) / 100).toLocaleString(undefined, { minimumFractionDigits: 0, maximumFractionDigits: 2 })}`;
 const ymd = (d: Date) => `${d.getFullYear()}-${String(d.getMonth() + 1).padStart(2, "0")}-${String(d.getDate()).padStart(2, "0")}`;
 const mondayOf = (d: Date) => { const x = new Date(d.getFullYear(), d.getMonth(), d.getDate()); x.setDate(x.getDate() - ((x.getDay() + 6) % 7)); return x; };
+// The "last completed" Monday — the same definition the admin bar uses for its chip.
+function defaultWeekStart(): string {
+  const t = new Date();
+  const m = mondayOf(t);
+  m.setDate(m.getDate() - 7);
+  return ymd(m);
+}
 const short = (iso: string) => { const d = new Date(iso.slice(0, 10) + "T00:00:00"); return `${MO[d.getMonth()]} ${d.getDate()}`; };
 
 type MatchRow = {
@@ -50,6 +58,8 @@ type ManagerRow = {
 type CitySection = { cityIdentifier: string; managers: ManagerRow[]; matches: MatchRow[]; total: number; baseTotal: number; adjustment: number };
 type Payload = {
   weekStart: string; weekEnd: string; payDate: string; cityIdentifier: string;
+  payRun?: string | null; effectiveArrival?: string | null; arrivalError?: string | null;
+  arrivalOverride?: { by?: string | null; at: string; reason: string } | null;
   city: CitySection | null; managers: { id: number; name: string; email: string | null }[];
   you: { email: string; matched: boolean; unmatchedAccount: boolean };
 };
@@ -71,6 +81,8 @@ export default function CityManagerPayClient() {
   const [err, setErr] = useState<string | null>(null);
   const [loading, setLoading] = useState(true);
   const [openId, setOpenId] = useState<number | null>(null);
+  // The same Week + pay / Pay only toggle the admin bar carries.
+  const [view, setView] = useState<"both" | "pay">("both");
   const [toast, setToast] = useState<string | null>(null);
 
   const load = useCallback(async () => {
@@ -114,6 +126,28 @@ export default function CityManagerPayClient() {
         cities are not shown and cannot be reached from this login.
       </p>
 
+      {/* THE PERIOD BAR — the app's own component, city-scoped. This tier previously had no period
+          controls at all and could only ever see one week; the bar was inline in ManagerPayView, so
+          there was nothing to mount. It is shared now, not rebuilt.
+          The arrival "Change" is a WRITE (PUT /api/manager-pay/pay-arrival) and is rendered
+          DISABLED with its reason rather than hidden — see PayPeriodBar's header. */}
+      {data && (
+        <PayPeriodBar
+          weekStart={data.weekStart}
+          weekEnd={data.weekEnd}
+          defaultWeekStart={defaultWeekStart()}
+          payRun={data.payRun ?? data.payDate ?? null}
+          effectiveArrival={data.effectiveArrival ?? null}
+          arrivalError={data.arrivalError ?? null}
+          arrivalOverride={data.arrivalOverride ?? null}
+          onWeek={setWeek}
+          view={view}
+          onView={setView}
+          canChangeArrival={false}
+          arrivalDisabledReason="only MatchDay can move this date"
+        />
+      )}
+
       {/* the email-only join, made loud rather than looking like "you worked nothing" */}
       {data?.you.unmatchedAccount && (
         <div data-testid="unmatched-account" className="mb-3 rounded-[10px] border px-3 py-2 text-[12px] font-semibold"
@@ -146,6 +180,9 @@ export default function CityManagerPayClient() {
 
       {/* ── the week ── */}
       <section className="mb-4 rounded-[12px] border" style={{ background: C.surface, borderColor: C.line }}>
+        {/* PAY ONLY hides the week grid — the toggle in the period bar has to DO something, or it
+            is a control that looks live and does nothing. */}
+        {view === "both" && (<>
         <div className="border-b px-4 py-3" style={{ borderColor: C.hair }}>
           <h2 className="m-0 text-[12px] font-bold tracking-[0.07em]" style={{ color: C.muted }}>THE WEEK, AND WHAT IT PAYS</h2>
           <p className="m-0 mt-1 text-[11.5px]" style={{ color: C.muted2 }}>
@@ -195,6 +232,7 @@ export default function CityManagerPayClient() {
             );
           })}
         </div>
+        </>)}
       </section>
 
       {/* ── the pay table — whole city, read-only ── */}

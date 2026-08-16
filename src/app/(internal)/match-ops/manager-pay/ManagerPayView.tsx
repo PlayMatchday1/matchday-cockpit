@@ -11,6 +11,7 @@ import { useCallback, useEffect, useMemo, useRef, useState } from "react";
 import Link from "next/link";
 import { usePathname, useRouter, useSearchParams } from "next/navigation";
 import { supabase } from "@/lib/supabase";
+import PayPeriodBar from "@/components/PayPeriodBar";
 import {
   addDays, weekdayUtc, TOURNAMENT_THRESHOLD,
   type ManagerPayWeekPayload, type CitySection, type MatchSummary, type ManagerRow, type ManagerMatch,
@@ -265,36 +266,26 @@ export default function ManagerPayView() {
         </div>
       </div>
 
-      {/* week bar */}
-      <div className="mb-3 flex flex-wrap items-center gap-3 rounded-[12px] border p-[11px_14px]" style={{ background: C.surface, borderColor: C.line, padding: "11px 14px" }}>
-        <div className="flex items-center gap-2">
-          <button type="button" aria-label="Previous week" onClick={() => setWeek(addDays(weekStart, -7))} className="flex h-[30px] w-[30px] items-center justify-center rounded-[8px] border" style={{ background: C.railA, borderColor: C.chipLine, color: C.forest }}>‹</button>
-          <span className="whitespace-nowrap text-[14.5px] font-[800]" style={{ color: C.forestDeep }}>{dshort(payload.weekStart)} – {dfull(payload.weekEnd)}</span>
-          <button type="button" aria-label="Next week" onClick={() => setWeek(addDays(weekStart, 7))} className="flex h-[30px] w-[30px] items-center justify-center rounded-[8px] border" style={{ background: C.railA, borderColor: C.chipLine, color: C.forest }}>›</button>
-        </div>
-        <span className="rounded-full border px-[9px] py-[3px] text-[10.5px] font-[800] tracking-[0.05em]" style={{ background: C.chipBg, borderColor: C.chipLine, color: C.muted }}>
-          {weekStart === defaultWeekStart() ? "LAST COMPLETED" : weekStart > defaultWeekStart() ? "IN PROGRESS" : "PAST WEEK"}
-        </span>
-        <div className="ml-auto flex flex-wrap items-center gap-x-4 gap-y-1 text-[12px]" style={{ color: C.muted }}>
-          <span>Pay run <b style={{ color: C.ink }}>{dfull(payload.payRun ?? payload.payDate)}</b></span>
-          <span className="inline-flex items-center gap-1.5">
-            Est. arrival <b style={{ color: C.ink }}>{payload.effectiveArrival ? dfull(payload.effectiveArrival) : (payload.arrivalError ? "unavailable" : "—")}</b>
-            {payload.arrivalOverride && (
-              <span title={`Adjusted by ${payload.arrivalOverride.by ?? "an admin"} on ${payload.arrivalOverride.at} — ${payload.arrivalOverride.reason}`} className="rounded-full border px-[7px] py-[2px] text-[9.5px] font-[800]" style={{ background: C.warnBg, borderColor: C.warnLine, color: C.warnInk }}>ADJUSTED</span>
-            )}
-            {isAdmin && <button type="button" onClick={() => setArrivalEdit((v) => !v)} className="text-[10.5px] font-bold underline" style={{ color: C.ok }}>{arrivalEdit ? "Close" : "Change"}</button>}
-          </span>
-        </div>
-        {arrivalEdit && isAdmin && (
-          <div className="w-full">
-            <ArrivalEditor computed={payload.estimatedArrival} override={payload.arrivalOverride} onSave={saveArrival} onReset={resetArrival} />
-          </div>
-        )}
-        <div className="inline-flex overflow-hidden rounded-[9px] border" style={{ borderColor: C.chipLine, background: C.railA }}>
-          <button type="button" onClick={() => setView("both")} className="px-[13px] py-[7px] text-[12.5px] font-bold" style={view === "both" ? { background: C.accent, color: "#06281d" } : { background: "transparent", color: C.muted }}>Week + pay</button>
-          <button type="button" onClick={() => setView("pay")} className="px-[13px] py-[7px] text-[12.5px] font-bold" style={view === "pay" ? { background: C.accent, color: "#06281d" } : { background: "transparent", color: C.muted }}>Pay only</button>
-        </div>
-      </div>
+      {/* week bar — the SHARED component (src/components/PayPeriodBar). It was inline here, which
+          is why the city-manager view had none of it: there was nothing to mount. Markup carried
+          over verbatim; the admin keeps the arrival write via canChangeArrival. */}
+      <PayPeriodBar
+        weekStart={payload.weekStart}
+        weekEnd={payload.weekEnd}
+        defaultWeekStart={defaultWeekStart()}
+        payRun={payload.payRun ?? payload.payDate ?? null}
+        effectiveArrival={payload.effectiveArrival ?? null}
+        arrivalError={payload.arrivalError ?? null}
+        arrivalOverride={payload.arrivalOverride ?? null}
+        onWeek={setWeek}
+        view={view}
+        onView={setView}
+        canChangeArrival={isAdmin}
+        arrivalDisabledReason="only MatchDay can move this date"
+        arrivalEditing={arrivalEdit}
+        onToggleArrival={() => setArrivalEdit((v) => !v)}
+        arrivalEditor={<ArrivalEditor computed={payload.estimatedArrival} override={payload.arrivalOverride} onSave={saveArrival} onReset={resetArrival} />}
+      />
 
       {/* city chips (scope) */}
       <div className="mb-3 flex flex-wrap gap-1.5">

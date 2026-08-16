@@ -10,6 +10,7 @@
 // one filtered array, so no fact is computed two different ways.
 
 import type { ReviewRow } from "./useReviewData";
+import { normalizeCity } from "./cityMap";
 import { managerKey, managerDisplayName } from "./reviewStats";
 
 // Thresholds — named once, printed on screen wherever they gate anything.
@@ -23,6 +24,24 @@ const MO = ["Jan", "Feb", "Mar", "Apr", "May", "Jun", "Jul", "Aug", "Sep", "Oct"
 const DAY_MS = 86_400_000;
 
 export type PageFilters = { month: string; city: string; venue: string; mgr: string };
+
+
+// ONE CITY VOCABULARY AT THE FILTER.
+//
+// THE BUG THIS CLOSES: the page compared `r.city` against `f.city` directly. `r.city` is the
+// NORMALISED cockpit name (useScopedReviews runs every row through normalizeCity), while `f.city`
+// arrives as the PLATFORM label — cityScope.cityNameFor("DFW") is "Dallas / Fort Worth". cityMap
+// maps that to "Dallas", so the two were never equal and a DFW city manager's Reviews page dropped
+// all 922 of their rows and rendered zeros. Austin is the one city where both maps return the same
+// string, which is why the ATX-scoped suite could not see it.
+//
+// `normalizeCity(c) ?? c` is the canonical form BOTH sides go through, so a raw name can no longer
+// be compared against a normalised one. The `?? c` matters: "Dallas" is not itself a key in
+// CSV_TO_COCKPIT_CITY, so normalizeCity("Dallas") is null — mapping both sides with a bare
+// normalizeCity would compare null to "Dallas" and stay broken, and comparing null to null would
+// make every city match every other. Falling back to the input keeps already-canonical values
+// intact and keeps genuinely different cities distinct.
+export const canonCity = (c: string | null | undefined): string => normalizeCity(c) ?? (c ?? "");
 
 export function monthKeyOf(d: Date): string {
   return `${d.getFullYear()}-${String(d.getMonth() + 1).padStart(2, "0")}`;
@@ -174,7 +193,7 @@ export function derivePage(rows: ReviewRow[], f: PageFilters): PageDerived {
   // one predicate for the whole page
   const filtered = rows.filter((r) => {
     if (!inMonth(r, f.month)) return false;
-    if (f.city !== "all" && r.city !== f.city) return false;
+    if (f.city !== "all" && canonCity(r.city) !== canonCity(f.city)) return false;
     if (f.venue !== "all" && r.fieldTitle !== f.venue) return false;
     if (f.mgr !== "all" && (reviewManagerName(r) ?? "Unattributed") !== f.mgr) return false;
     return true;
@@ -365,7 +384,7 @@ export function deriveComments(
   const inWin = rows.filter((r) => {
     const d = new Date(r.startDate.getFullYear(), r.startDate.getMonth(), r.startDate.getDate());
     if (d < w.a || d > w.b) return false;
-    if (f.city !== "all" && r.city !== f.city) return false;
+    if (f.city !== "all" && canonCity(r.city) !== canonCity(f.city)) return false;
     if (f.venue !== "all" && r.fieldTitle !== f.venue) return false;
     if (f.mgr !== "all" && (reviewManagerName(r) ?? "Unattributed") !== f.mgr) return false;
     return isCommentRow(r);

@@ -12,6 +12,7 @@
 //                          recordWrite'd, then re-read: LANDED / NOT APPLIED, never a bare 2xx.
 
 import { randomUUID } from "node:crypto";
+import { getArrivalInfo } from "@/lib/managerPayArrival";
 import type { SupabaseClient } from "@supabase/supabase-js";
 import { authenticateCityManager, assertCityScope } from "@/lib/cityManagerAuth";
 import { computeManagerPayForWeek, ISO_DATE_RX, weekdayUtc } from "@/lib/managerPayCompute";
@@ -76,8 +77,17 @@ export async function GET(req: Request) {
     const mine = (city?.managers ?? []).find((m) => (m.managerEmail ?? "").toLowerCase() === auth.email.toLowerCase()) ?? null;
     const everWorkedHere = managers.some((m) => (m.email ?? "").toLowerCase() === auth.email.toLowerCase());
 
+    // THE SAME PAY-RUN AND ARRIVAL THE ADMIN BAR SHOWS. Read-only here: a city manager sees when
+    // the money runs and when it should land, and cannot move either — pay-arrival is admin-gated,
+    // so the write is refused at the route regardless of what the page renders.
+    const arrival = await getArrivalInfo(auth.supabase, week);
+
     return Response.json({
       weekStart: payload.weekStart, weekEnd: payload.weekEnd, payDate: payload.payDate,
+      payRun: arrival.payRun,
+      effectiveArrival: arrival.effectiveArrival,
+      arrivalError: arrival.arrivalError,
+      arrivalOverride: arrival.override,
       cityIdentifier: auth.cityIdentifier,
       city, managers,
       you: {

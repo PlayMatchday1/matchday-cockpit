@@ -77,6 +77,7 @@ export default function AdminUsersView() {
   const [loading, setLoading] = useState(true);
   const [error, setError] = useState<string | null>(null);
   const [showAddModal, setShowAddModal] = useState(false);
+  const [deletingId, setDeletingId] = useState<string | null>(null);
   const [flashedId, setFlashedId] = useState<string | null>(null);
   const [permErr, setPermErr] = useState<{ id: string; msg: string } | null>(null);
   const [authStatus, setAuthStatus] = useState<Record<string, AuthStatus>>({});
@@ -249,15 +250,29 @@ export default function AdminUsersView() {
     ) {
       return;
     }
-    const original = users;
-    setUsers((prev) => prev.filter((u) => u.id !== user.id));
-    const { error: delErr } = await supabase
-      .from("app_users")
-      .delete()
-      .eq("id", user.id);
-    if (delErr) {
-      setUsers(original);
-      alert(delErr.message);
+    // NO OPTIMISTIC REMOVAL. The row used to disappear on the line BEFORE the await and only came
+    // back if `error` was truthy — which it never was, because RLS makes the client's DELETE match
+    // zero rows and return 204 with error: null. A failed delete was indistinguishable from a
+    // successful one until you refreshed. The row now goes when the SERVER confirms it went.
+    const { data: sess } = await supabase.auth.getSession();
+    const token = sess.session?.access_token;
+    if (!token) { alert("No active session."); return; }
+    setDeletingId(user.id);
+    try {
+      const res = await fetch("/api/admin/users/delete", {
+        method: "POST",
+        headers: { "Content-Type": "application/json", Authorization: `Bearer ${token}` },
+        body: JSON.stringify({ id: user.id }),
+      });
+      const json = (await res.json().catch(() => ({}))) as { ok?: boolean; outcome?: string; error?: string };
+      // THE VERDICT IS THE SERVER'S, and it comes from a re-read of both stores — not from res.ok.
+      if (!res.ok || !json.ok) {
+        alert(`${json.error ?? `HTTP ${res.status}`}\n\nOutcome: ${json.outcome ?? "UNKNOWN"} — nothing was removed from the list.`);
+        return;
+      }
+      setUsers((prev) => prev.filter((u) => u.id !== user.id));
+    } finally {
+      setDeletingId(null);
     }
   }
 
@@ -486,7 +501,8 @@ export default function AdminUsersView() {
                         <button
                           type="button"
                           onClick={() => deleteUser(u)}
-                          disabled={isSelf}
+                          data-testid="delete-user"
+                          disabled={isSelf || deletingId === u.id}
                           aria-label={`Delete ${u.email}`}
                           className="rounded-full p-1.5 text-deep-green/30 transition hover:bg-coral-soft hover:text-coral disabled:cursor-not-allowed disabled:opacity-30 disabled:hover:bg-transparent disabled:hover:text-deep-green/30"
                         >

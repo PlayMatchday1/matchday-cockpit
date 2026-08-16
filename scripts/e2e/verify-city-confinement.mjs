@@ -18,7 +18,7 @@
 //   node scripts/e2e/verify-city-confinement.mjs
 import { chromium } from "playwright";
 import { createClient } from "@supabase/supabase-js";
-import { netRetry, installHarnessGuard, fatal } from "./_session.mjs";
+import { netRetry, installHarnessGuard, fatal, closeContext } from "./_session.mjs";
 installHarnessGuard();
 
 const BASE = process.env.BASE || "http://localhost:3000";
@@ -28,6 +28,13 @@ const SCOPE = "ATX";
 // (field.city.name), not identifiers — CITY_SCOPES pins the pair and city-scope-test.ts guards it.
 const SCOPE_NAME = "Austin";
 const OTHER_CITY = "DFW";
+// A SECOND CITY MANAGER, DELIBERATELY DFW. Everything else here runs as ATX — and Austin is the
+// ONE city where cityScope's platform label and cityMap's cockpit name are the same string
+// ("Austin"). That made the whole fixture the degenerate case: a filter comparing a raw name to a
+// normalised one matched in Austin and dropped every row everywhere else, and this suite could
+// not see it. DFW is "Dallas / Fort Worth" → "Dallas", so it is the case that exercises the join.
+const CITY_MANAGER_DFW = "rgmstrategicventures@gmail.com";
+const SCOPE_DFW = "DFW";
 const ADMIN = "rmancuso@playmatchday.com";
 // ONE day for every board assertion, so the city board and the admin board are compared over the
 // same matches. Not "today": a date with no matches would make every row/rail comparison pass by
@@ -364,6 +371,117 @@ async function main() {
     // The row it points at has to exist, or the link is decoration.
     await cm.waitForSelector('[data-testid="paytable"]', { timeout: 25000 });
     eq("…and that row exists on the Manager Pay page", await cm.$(`#match-${id}`) !== null, true);
+  }
+
+
+  // ── THE PERIOD BAR — the app's own component, city-scoped ────────────────
+  // The tier had NO period controls and could only ever see one week, because the bar was inline
+  // in ManagerPayView and there was nothing to mount. It is shared now, not rebuilt.
+  console.log("\nthe manager-pay period bar:");
+  {
+    await cm.goto(`${BASE}/city/manager-pay`, { waitUntil: "domcontentloaded" });
+    await cm.waitForSelector('[data-testid="pay-period-bar"]', { timeout: 30000 });
+    await cm.waitForSelector('[data-testid="paytable"]', { timeout: 30000 });
+    const before = await cm.$eval('[data-testid="pay-week-label"]', (e) => e.textContent.trim());
+    ok(`the bar renders, showing ${before}`);
+    for (const [what, sel] of [["the period chip", "pay-week-chip"], ["Pay run", "pay-run"],
+      ["Est. arrival", "pay-arrival"], ["the Week + pay / Pay only toggle", "pay-view-toggle"]]) {
+      eq(`…with ${what}`, await cm.$(`[data-testid="${sel}"]`) !== null, true);
+    }
+
+    // THE WEEK ACTUALLY MOVES — a nav that renders but does not navigate is the same class of
+    // defect as the missing bar.
+    await cm.click('[data-testid="pay-week-prev"]');
+    await cm.waitForFunction((b) => document.querySelector('[data-testid="pay-week-label"]')?.textContent.trim() !== b, before, { timeout: 20000 }).catch(() => {});
+    const after = await cm.$eval('[data-testid="pay-week-label"]', (e) => e.textContent.trim());
+    after !== before ? ok(`…and ‹ moves the period (${before} → ${after})`) : bad("week nav", `stayed on ${before}`);
+
+    // THE ARRIVAL WRITE IS NOT THEIRS. PUT /api/manager-pay/pay-arrival moves the date every
+    // manager is told to expect their money. Disabled AND visible, with the reason stated.
+    eq("the arrival 'Change' write is NOT offered to a city manager", await cm.$('[data-testid="pay-arrival-change"]'), null);
+    eq("…it is DISABLED and visible, not hidden", await cm.$('[data-testid="pay-arrival-change-disabled"]') !== null, true);
+    eq("…and genuinely disabled, not just styled",
+      await cm.$eval('[data-testid="pay-arrival-change-disabled"]', (e) => e.disabled === true), true);
+    eq("…with the reason stated beside it",
+      await cm.$eval('[data-testid="pay-arrival-reason"]', (e) => e.textContent.trim()), "only MatchDay can move this date");
+    // The server is the real guard either way.
+    {
+      // THE REAL METHOD. A GET returns 405 on this route whatever the caller is, which would prove
+      // nothing about the gate. PUT is the write — and authenticateAdmin runs BEFORE the body is
+      // parsed, so a refused caller cannot move anyone's arrival date by being asserted against.
+      const r = await cm.evaluate(async (tok) => {
+        const res = await fetch("/api/manager-pay/pay-arrival", {
+          method: "PUT", headers: { "Content-Type": "application/json", Authorization: `Bearer ${tok}` },
+          body: JSON.stringify({ weekStart: "2026-08-03", arrivalDate: "2026-08-20", reason: "e2e refusal probe" }),
+        });
+        return res.status;
+        // cmSession.access_token, NOT session0 — that variable is reassigned to the ADMIN in
+        // section 6, and using it here made this probe a real admin write against production. It
+        // set a live pay-arrival override, which had to be reverted by hand. Bind the identity you
+        // are asserting about; never a mutable that something else owns.
+      }, cmSession.access_token);
+      [401, 403].includes(r) ? ok(`…and a PUT to pay-arrival is refused for this tier (${r})`)
+        : bad("pay-arrival write reachable by a city manager", `status ${r}`);
+    }
+
+    // The toggle must DO something.
+    await cm.click('[data-testid="pay-view-pay"]');
+    await cm.waitForTimeout(400);
+    eq("Pay only hides the week grid", await cm.$('[data-testid="week"]'), null);
+    eq("…and keeps the pay table", await cm.$('[data-testid="paytable"]') !== null, true);
+    await cm.click('[data-testid="pay-view-both"]');
+    await cm.waitForTimeout(400);
+    eq("Week + pay brings it back", await cm.$('[data-testid="week"]') !== null, true);
+  }
+
+
+  // ── 6c. A SECOND CITY, WHERE THE TWO NAME MAPS DISAGREE ──────────────────
+  // Reviews rendered ALL ZEROS for DFW while the trailing-8-week strip on the same page showed 232
+  // reviews — the strip is the one panel that ignores the page filters. The city filter was
+  // comparing "Dallas / Fort Worth" against "Dallas" and dropping all 922 rows.
+  console.log("\na DFW city manager sees their own reviews (the non-degenerate city):");
+  {
+    const dfwSession = await mint(CITY_MANAGER_DFW);
+    const dctx = await ctxFor(dfwSession);
+    const dfw = await dctx.newPage();
+    await dfw.goto(`${BASE}/city/reviews`, { waitUntil: "domcontentloaded" });
+    await dfw.waitForSelector('[data-rv="avg"]', { timeout: 45000 });
+    await dfw.waitForTimeout(600);
+
+    const shown = await dfw.evaluate(() => ({
+      month: [...document.querySelectorAll("select")][0]?.value ?? null,
+      city: [...document.querySelectorAll("select")][1]?.value ?? null,
+      volume: Number(document.querySelector('[data-rv="volume"]')?.textContent.trim().replace(/,/g, "")),
+      avg: document.querySelector('[data-rv="avg"]')?.textContent.trim(),
+    }));
+    eq("the city control is locked to their city", shown.city, "Dallas / Fort Worth");
+    // THE ASSERTION THAT WOULD HAVE CAUGHT IT: non-zero.
+    shown.volume > 0
+      ? ok(`REVIEW VOLUME is non-zero for DFW (${shown.volume})`)
+      : bad("DFW reviews render zero", "the city filter is dropping every row again");
+    eq("…and AVG RATING is a number, not a dash", /^\d/.test(shown.avg ?? ""), true);
+
+    // AND IT MATCHES THE FUNNEL: rows in the selected month, from the payload the page fetched.
+    const expected = await dfw.evaluate(async ([tok, month]) => {
+      const r = await fetch("/api/reviews", { headers: { Authorization: `Bearer ${tok}` }, cache: "no-store" });
+      const j = await r.json();
+      const parseLocal = (s) => { const q = (s || "").slice(0, 16).split(/[- T:]/); if (q.length < 5) return null;
+        const [y, mo, d, h, mi] = q.map(Number); return new Date(y, mo - 1, d, h, mi); };
+      const key = (d) => `${d.getFullYear()}-${String(d.getMonth() + 1).padStart(2, "0")}`;
+      let n = 0, cities = new Set();
+      for (const x of (j.rows ?? [])) {
+        const sd = parseLocal(x.start_date);
+        if (!sd || x.star_rating === null) continue;
+        cities.add(x.city_name);
+        if (key(sd) === month) n++;
+      }
+      return { n, cities: [...cities], total: (j.rows ?? []).length };
+    }, [dfwSession.access_token, shown.month]);
+    eq("…and the tile equals the month-filtered payload count", shown.volume, expected.n);
+    eq("…over a payload that is DFW and nothing else", expected.cities, ["Dallas / Fort Worth"]);
+    // POSITIVE CONTROL: the payload was not empty, so the equality above is not 0 === 0.
+    eq("…and the payload really had rows (this is not 0 === 0)", expected.total > 0 && expected.n > 0, true);
+    await closeContext(dctx);
   }
 
   // ── 7. WHERE THE BARE DOMAIN LANDS EACH TIER ─────────────────────────────
