@@ -21,7 +21,7 @@ import {
   payoutForMatch, totalsOf, breakevenSpots, newVsReturning,
   monthCloseYmd, monthPayYmd, periodStatusOf,
   type RentalProfitShareParams, type MatchPayout, type PayoutTotals, type VenueAppearance,
-  type PeriodStatus,
+  type PeriodStatus, type PeriodLedger,
 } from "./partnerPayoutModel";
 
 export type RentalMonth = {
@@ -45,6 +45,11 @@ export type RentalMonth = {
   paysYmd: string;
   open: boolean;
   status: PeriodStatus;
+  // THE LEDGER, when a partner_weekly_payments row exists for this period. `paidAt` is what the
+  // chip shows beside "Paid"; `periodKey` is the row's key (the FIRST DAY of the month, which is
+  // what monthly cadence stores in week_start_date) and is what a Mark paid write addresses.
+  paidAt: string | null;
+  periodKey: string;
 };
 
 export type RentalDashboardProps = {
@@ -105,7 +110,12 @@ const earnedRevenue = (r: PartnerRegRow) =>
 export function buildRentalDashboard(
   rows: PartnerRegRow[],
   params: RentalProfitShareParams,
-  opts: { partnerName: string; venue: string; spotPriceCents: number | null; nowMs?: number },
+  opts: {
+    partnerName: string; venue: string; spotPriceCents: number | null; nowMs?: number;
+    // Keyed by YYYY-MM. Absent for a period with no ledger row yet, which is the normal state
+    // before anyone has marked anything.
+    ledger?: Map<string, PeriodLedger>;
+  },
 ): RentalDashboardProps {
   // The clock enters HERE and nowhere else, and it is injectable so the suites can pin it.
   const nowMs = opts.nowMs ?? Date.now();
@@ -188,7 +198,9 @@ export function buildRentalDashboard(
         closesYmd: monthCloseYmd(ym),
         paysYmd: monthPayYmd(ym),
         open: todayYmd <= monthCloseYmd(ym),
-        status: periodStatusOf(ym, todayYmd, totals.partnerTotalCents),
+        status: periodStatusOf(ym, todayYmd, totals.partnerTotalCents, opts.ledger?.get(ym) ?? null),
+        paidAt: opts.ledger?.get(ym)?.paidAt ?? null,
+        periodKey: `${ym}-01`,
       };
     });
 

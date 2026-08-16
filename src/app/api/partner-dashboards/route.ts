@@ -13,12 +13,17 @@
 // the period (never trusted from the client) so a later data sync can't silently
 // change what was recorded as paid.
 
+import { randomUUID } from "node:crypto";
 import { authenticateAdmin } from "@/lib/adminAuth";
+import { recordWrite, supabaseLogStore } from "@/lib/changeLog";
+import type { Change } from "@/lib/changeLogModel";
+import { buildRentalDashboard } from "@/lib/partnerRentalDashboard";
 import {
   computePartnerStats,
   computeWeeklyPayments,
   fetchPartnerRows,
   fetchPartnerWeeklyPayments,
+  rentalParamsOf,
   type PartnerConfig,
 } from "@/lib/partnerStats";
 
@@ -141,65 +146,144 @@ export async function POST(req: Request) {
   const partner = (await fetchAllPartners(supabase)).find((p) => p.id === partnerId);
   if (!partner) return Response.json({ error: "Partner not found" }, { status: 404 });
 
-  // Recompute this partner's periods to get the authoritative row for the target
-  // week (owedAmount snapshot + open-period guard).
+  // ── THE LEDGER ROW, WHICHEVER PAYOUT MODEL THE PARTNER IS ON ────────────────────────────────
+  // Both branches end at the same table (partner_weekly_payments) and the same key
+  // (week_start_date), so a rental partner is not a second ledger — only a second way of
+  // computing the authoritative amount to snapshot. The amount is NEVER taken from the client.
   const { rows, extra } = await fetchPartnerRows(supabase, partner.venueId);
   const records = await fetchPartnerWeeklyPayments(supabase, partner.id);
-  const payment = computeWeeklyPayments(
-    rows,
-    extra,
-    {
-      revenueSharePct: partner.revenueSharePct,
-      paymentStartDate: partner.paymentStartDate,
-      paymentDayOfWeek: partner.paymentDayOfWeek,
-      paymentCadence: partner.paymentCadence,
-      revenueModel: partner.revenueModel,
-      managerPayBase: partner.managerPayBase,
-      managerPayHigh: partner.managerPayHigh,
-      managerPayThreshold: partner.managerPayThreshold,
-    },
-    records,
-  );
-  const period = payment.weeklyPayments.find((w) => w.weekStartDate === weekStartDate);
-  if (!period) return Response.json({ error: "No payment period for that date" }, { status: 400 });
-  if (period.isPreSystem) return Response.json({ error: "Historical settlements can't be changed here" }, { status: 400 });
+
+  const rentalParams = rentalParamsOf(partner);
+  let owedAmount: number;
+  let periodIsOpen: boolean;
+  let periodLabel: string;
+
+  if (rentalParams) {
+    // RENTAL_PLUS_PROFIT_SHARE. Its periods are calendar months and its figure comes from the
+    // rental builder — the same one the page renders, so what is recorded as paid is exactly what
+    // the partner was shown.
+    const dash = buildRentalDashboard(rows, rentalParams, {
+      partnerName: partner.partnerName, venue: "", spotPriceCents: partner.spotPriceCents,
+    });
+    const ym = weekStartDate.slice(0, 7);
+    const month = dash.months.find((m) => m.ym === ym);
+    if (!month) return Response.json({ error: "No payment period for that date" }, { status: 400 });
+    owedAmount = month.totals.partnerTotalCents / 100;
+    periodIsOpen = month.open;
+    periodLabel = month.label;
+  } else {
+    const payment = computeWeeklyPayments(
+      rows,
+      extra,
+      {
+        revenueSharePct: partner.revenueSharePct,
+        paymentStartDate: partner.paymentStartDate,
+        paymentDayOfWeek: partner.paymentDayOfWeek,
+        paymentCadence: partner.paymentCadence,
+        revenueModel: partner.revenueModel,
+        managerPayBase: partner.managerPayBase,
+        managerPayHigh: partner.managerPayHigh,
+        managerPayThreshold: partner.managerPayThreshold,
+      },
+      records,
+    );
+    const period = payment.weeklyPayments.find((w) => w.weekStartDate === weekStartDate);
+    if (!period) return Response.json({ error: "No payment period for that date" }, { status: 400 });
+    if (period.isPreSystem) return Response.json({ error: "Historical settlements can't be changed here" }, { status: 400 });
+    const today = new Date().toISOString().slice(0, 10);
+    owedAmount = period.owedAmount;
+    periodIsOpen = period.weekEndDate >= today && period.status !== "paid";
+    periodLabel = weekStartDate;
+  }
 
   const existing = records.find((r) => r.week_start_date === weekStartDate) ?? null;
 
-  if (action === "paid") {
-    // Guard: only a CLOSED period can be paid (an open, in-progress period has no
-    // final figure yet). Matches the client, but enforced here regardless.
-    const today = new Date().toISOString().slice(0, 10);
-    const isOpen = period.weekEndDate >= today && period.status !== "paid";
-    if (isOpen) return Response.json({ error: "This period is still open — it can't be marked paid yet" }, { status: 400 });
-
-    if (existing) {
-      const { error } = await supabase
-        .from("partner_weekly_payments")
-        .update({ status: "paid", paid_at: paidAt, calculated_amount: period.owedAmount })
-        .eq("id", existing.id);
-      if (error) return Response.json({ error: error.message }, { status: 500 });
-    } else {
-      const { error } = await supabase.from("partner_weekly_payments").insert({
-        partner_dashboard_id: partner.id,
-        week_start_date: weekStartDate,
-        calculated_amount: period.owedAmount,
-        status: "paid",
-        paid_at: paidAt,
-        is_pre_system_settlement: false,
-      });
-      if (error) return Response.json({ error: error.message }, { status: 500 });
-    }
-  } else {
-    // Undo: revert to pending. Nothing to do if no row exists (already pending).
-    if (existing) {
-      const { error } = await supabase
-        .from("partner_weekly_payments")
-        .update({ status: "pending", paid_at: null })
-        .eq("id", existing.id);
-      if (error) return Response.json({ error: error.message }, { status: 500 });
-    }
+  // Only a CLOSED period can be marked paid — an open one has no final figure yet.
+  if (action === "paid" && periodIsOpen) {
+    return Response.json({ error: "This period is still open — it can't be marked paid yet" }, { status: 400 });
   }
 
-  return Response.json({ ok: true });
+  // ── THE WRITE, THROUGH recordWrite ──────────────────────────────────────────────────────────
+  // NO HOST GUARD HERE, deliberately, and this is the one place that rule does not apply: the
+  // host guard exists for writes leaving for the MatchDay API. This write goes to our own
+  // Supabase through the service-role client the admin gate already established; there is no
+  // attacker-supplied host in the path to guard.
+  //
+  // ONE ATTEMPT. The closure below is called exactly once by recordWrite and nothing retries it —
+  // a duplicate "marked paid" is a false statement about money having moved.
+  //
+  // UNDO IS A REVERSAL, NOT AN ERASURE. It sets the row back to pending rather than deleting it,
+  // and it is logged as its own change_log entry with its own before/after. The fact that a
+  // payment was once marked survives in change_log even though the ledger row no longer says so —
+  // deleting the row would destroy both.
+  const before = existing ? { status: existing.status as string, paidAt: (existing.paid_at as string | null) ?? null } : { status: "pending", paidAt: null };
+  const after = action === "paid" ? { status: "paid", paidAt } : { status: "pending", paidAt: null };
+
+  const readLedger = async (): Promise<Record<string, unknown>> => {
+    const { data } = await supabase
+      .from("partner_weekly_payments")
+      .select("status, paid_at")
+      .eq("partner_dashboard_id", partner.id)
+      .eq("week_start_date", weekStartDate)
+      .maybeSingle();
+    return { status: (data?.status as string) ?? "pending", paidAt: (data?.paid_at as string | null) ?? null };
+  };
+
+  const changes: Change[] = [
+    { key: "status", field: `${partner.partnerName} · ${periodLabel}`, before: before.status, after: after.status },
+    { key: "paidAt", field: "Paid on", before: before.paidAt ?? "—", after: after.paidAt ?? "—" },
+    { key: "amount", field: "Amount", before: "—", after: `$${owedAmount.toFixed(2)}` },
+  ];
+
+  const { error: writeErr, outcome } = await recordWrite(
+    {
+      env: "production", source: "Partner Dashboards · payments",
+      actorName: auth.email, actorEmail: auth.email, saveId: randomUUID(),
+      matchId: null, matchName: null,
+      method: "POST", path: `/partner-dashboards/${partner.id}/payments/${weekStartDate}`,
+      body: { action, weekStartDate, amount: owedAmount },
+      keys: ["status", "paidAt"],
+      label: (k) => (k === "status" ? "Payment status" : k === "paidAt" ? "Paid on" : k),
+      // THE VERDICT COMES FROM A RE-READ, never from the absence of an error.
+      applied: (_b, a) => a.status === after.status,
+      changes,
+    },
+    {
+      readResource: readLedger,
+      write: async () => {
+        if (action === "paid") {
+          if (existing) {
+            const { error } = await supabase.from("partner_weekly_payments")
+              .update({ status: "paid", paid_at: paidAt, calculated_amount: owedAmount })
+              .eq("id", existing.id);
+            if (error) throw new Error(error.message);
+          } else {
+            const { error } = await supabase.from("partner_weekly_payments").insert({
+              partner_dashboard_id: partner.id,
+              week_start_date: weekStartDate,
+              calculated_amount: owedAmount,
+              status: "paid",
+              paid_at: paidAt,
+              is_pre_system_settlement: false,
+            });
+            if (error) throw new Error(error.message);
+          }
+        } else if (existing) {
+          const { error } = await supabase.from("partner_weekly_payments")
+            .update({ status: "pending", paid_at: null })
+            .eq("id", existing.id);
+          if (error) throw new Error(error.message);
+        }
+        return true;
+      },
+      now: () => new Date().toISOString(),
+    },
+    supabaseLogStore(),
+  );
+
+  // A 2xx IS NOT PROOF. The outcome is reported from the read-back, and the caller is told which.
+  const OUT: Record<string, string> = { landed: "LANDED", failed: "FAILED", "not applied": "NOT APPLIED", unknown: "UNKNOWN" };
+  const reported = OUT[outcome] ?? "UNKNOWN";
+  if (writeErr) return Response.json({ ok: false, outcome: reported, error: writeErr.message }, { status: 502 });
+  return Response.json({ ok: outcome === "landed", outcome: reported });
 }

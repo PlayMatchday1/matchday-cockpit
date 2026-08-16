@@ -6,6 +6,7 @@ import { readFileSync, readdirSync, statSync } from "node:fs";
 import { join } from "node:path";
 import {
   payoutForMatch, totalsOf, breakevenSpots, grossCentsFromRows, newVsReturning, fmtCents,
+  periodStatusOf, monthCloseYmd, monthPayYmd, PERIOD_STATUS_LABEL,
   type RentalProfitShareParams, type MatchInput,
 } from "../src/lib/partnerPayoutModel";
 
@@ -266,6 +267,38 @@ console.log("\nA MATCH THAT HAS NOT BEEN PLAYED CONTRIBUTES NOTHING");
   const nowPlayed = totalsOf([...played, payoutForMatch(M(1500, { played: true }), PARMER)]);
   isnt("...while the SAME match, once played, does move them", JSON.stringify(nowPlayed), JSON.stringify(withoutIt));
   is("...and a played match under cost still pays the full rental", payoutForMatch(M(1500, { played: true }), PARMER).partnerTotalCents, 16000);
+}
+
+
+// ── THE PERIOD LEDGER ──────────────────────────────────────────────────────────────────────────
+// periodStatusOf shipped deriving from dates alone, with a comment asserting Paid could never be
+// returned because nothing recorded a partner payment. partner_weekly_payments has existed since
+// migration 0003 and drives PAC Global's Paid chips. These pin the corrected behaviour.
+console.log("\nTHE PERIOD STATUS READS THE LEDGER, NOT JUST THE CALENDAR");
+{
+  const AUG = "2026-08";
+  const OPEN_DAY = "2026-08-16", AFTER_CLOSE = "2026-09-02";
+  is("a closed month with money and no ledger row is DUE", periodStatusOf(AUG, AFTER_CLOSE, 120800, null), "due");
+  is("...an open month is IN PROGRESS", periodStatusOf(AUG, OPEN_DAY, 120800, null), "in_progress");
+  is("...a closed month owing nothing is NOTHING OWED", periodStatusOf(AUG, AFTER_CLOSE, 0, null), "nothing_owed");
+
+  const PAID = { status: "paid" as const, paidAt: "2026-09-05" };
+  is("a ledger row marked paid reads PAID", periodStatusOf(AUG, AFTER_CLOSE, 120800, PAID), "paid");
+  // PAID WINS OVER THE CALENDAR. This ordering is what stops a settled period rendering
+  // "Due next cycle" — the mismatch visible on PAC Global's monthly table.
+  is("...even while the month is still OPEN — an early settlement is money that moved",
+    periodStatusOf(AUG, OPEN_DAY, 120800, PAID), "paid");
+
+  const PENDING = { status: "pending" as const, paidAt: null };
+  is("a pending ledger row does NOT read paid", periodStatusOf(AUG, AFTER_CLOSE, 120800, PENDING), "due");
+  // A dispute is not a payment. It must never claim money has moved.
+  const DISPUTED = { status: "disputed" as const, paidAt: null };
+  is("a disputed row does NOT read paid", periodStatusOf(AUG, AFTER_CLOSE, 120800, DISPUTED), "due");
+
+  is("Paid has a label, so the chip can render it", PERIOD_STATUS_LABEL.paid, "Paid");
+  is("the period key a Mark paid write addresses is the FIRST of the month", monthCloseYmd(AUG), "2026-08-31");
+  is("...and a month pays on the 5th of the next", monthPayYmd(AUG), "2026-09-05");
+  is("...December rolls the year", monthPayYmd("2026-12"), "2027-01-05");
 }
 
 console.log(`\n${pass} passed, ${fail} failed`);

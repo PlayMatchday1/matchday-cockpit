@@ -23,7 +23,7 @@ import { deriveOwed, derivePeriodRows, stateLine, headerLine, todayYmd, money, d
 import type { PartnerDashboardData } from "@/lib/partnerDashboardData";
 import PartnerDashboardV14 from "@/app/partners/[slug]/PartnerDashboardV14";
 import PartnerMonthlyView from "@/app/partners/[slug]/PartnerMonthlyView";
-import PartnerRentalView from "@/app/partners/[slug]/PartnerRentalView";
+import PartnerRentalView, { type RentalAdmin } from "@/app/partners/[slug]/PartnerRentalView";
 
 type AdminPartner = {
   id: string; slug: string; partnerName: string; venue: string; city: string | null;
@@ -154,7 +154,7 @@ export default function PartnerDashboardsIndex() {
         <button type="button" onClick={() => setViewAs(false)} style={btnDark}>Back to admin view</button>
       </div>
       <div style={{ maxWidth: 1220, margin: "0 auto", padding: "18px 22px 40px" }}>
-        <PreviewDashboard data={previewData} err={previewErr} />
+        <PreviewDashboard data={previewData} err={previewErr} admin={selected ? { partnerId: selected.id, busy, onMark: doMarkPaid } : undefined} />
       </div>
     </div>
   );
@@ -233,7 +233,7 @@ export default function PartnerDashboardsIndex() {
 
       {/* the identical partner-facing component */}
       <div data-testid="dashboard-below-seam">
-        <PreviewDashboard data={previewData} err={previewErr} />
+        <PreviewDashboard data={previewData} err={previewErr} admin={selected ? { partnerId: selected.id, busy, onMark: doMarkPaid } : undefined} />
       </div>
 
       {viewAs && mounted && createPortal(preview, document.body)}
@@ -362,11 +362,14 @@ function PaymentsCard({ partner, today, busy, onMark }: {
 
 // Renders the EXACT public component from the /preview data path. No fallback to a
 // different component: the preview is the partner's page or it is a loading/error state.
-function PreviewDashboard({ data, err }: { data: PartnerDashboardData | null; err: string | null }) {
+function PreviewDashboard({ data, err, admin }: { data: PartnerDashboardData | null; err: string | null; admin?: RentalAdmin }) {
   if (err) return <div style={{ padding: 24, fontSize: 13, color: "#a8391a" }}>{err}</div>;
   if (!data) return <div style={{ padding: 24, fontSize: 13, color: "#6d7b74" }}>Loading the partner’s page…</div>;
   // The preview renders the SAME component the partner gets, including the rental model — the
   // whole point of this path is that admin and partner cannot see different pages.
-  if (data.kind === "rental") return <PartnerRentalView {...data.rental} />;
+  //
+  // ONE DIFFERENCE, AND IT IS PASSED IN: `admin`. The public route omits it, so Mark paid / Undo
+  // are absent from the partner's markup rather than hidden in it.
+  if (data.kind === "rental") return <PartnerRentalView {...data.rental} admin={admin} />;
   return data.kind === "monthly" ? <PartnerMonthlyView {...data.monthly} /> : <PartnerDashboardV14 {...data.weekly} />;
 }

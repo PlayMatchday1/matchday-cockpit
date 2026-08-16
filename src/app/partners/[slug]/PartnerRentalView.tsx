@@ -28,6 +28,7 @@
 //
 // NO EXPLANATORY PROSE. Where a row or a chip states a thing, the sentence repeating it is cut.
 
+import { useState } from "react";
 import type { RentalDashboardProps, RentalMonth } from "@/lib/partnerRentalDashboard";
 import { fmtCents, PERIOD_STATUS_LABEL } from "@/lib/partnerPayoutModel";
 
@@ -45,7 +46,24 @@ const dayLabel = (ymd: string) => {
 };
 const closesLabel = (ymd: string) => { const { m, d } = ymdParts(ymd); return `${MONTHS_SHORT[m - 1]} ${d}`; };
 
-export default function PartnerRentalView(p: RentalDashboardProps) {
+// THE ADMIN HALF, PASSED IN — never inferred, never toggled by CSS.
+//
+// The public partner link is UNAUTHENTICATED BY DESIGN: anyone holding the URL loads this
+// component. So the write controls must not exist in its markup at all — hiding them with
+// `display:none` would ship Mark paid and Undo to every partner and rely on them not opening dev
+// tools. `admin` is omitted by the public route (src/app/partners/[slug]/page.tsx), so the whole
+// payments card is absent from the tree rather than hidden in it.
+//
+// The server side of the same statement: POST /api/partner-dashboards is authenticateAdmin-gated,
+// so even a hand-made request from a partner link is refused. The prop is the UI half of a rule
+// enforced in two places.
+export type RentalAdmin = {
+  partnerId: string;
+  busy?: boolean;
+  onMark: (partnerId: string, periodKey: string, action: "paid" | "unpaid") => void;
+};
+
+export default function PartnerRentalView(p: RentalDashboardProps & { admin?: RentalAdmin }) {
   // THE HEADLINE MONTH is the newest one — months are already sorted newest first.
   const current: RentalMonth | undefined = p.months[0];
   const totalHead = `${p.partnerName} total`;
@@ -127,6 +145,12 @@ export default function PartnerRentalView(p: RentalDashboardProps) {
         </section>
 
         {p.months.length === 0 && <p className="prv-empty" data-testid="prv-empty">No matches yet.</p>}
+
+        {/* ── PAYMENTS (ADMIN ONLY) ───────────────────────────────────────────────────────
+            Same shape as the other partner dashboards: one row per period with its amount and
+            state, Mark paid / Undo per row, an "N settled · N awaiting" count, and everything
+            already settled collapsed behind a Show toggle. Rendered ONLY when `admin` is passed. */}
+        {p.admin && <PaymentsCard months={p.months} admin={p.admin} />}
 
         {/* ── EVERY MONTH ────────────────────────────────────────────────────────────────── */}
         {p.months.length > 0 && (
@@ -294,13 +318,83 @@ export default function PartnerRentalView(p: RentalDashboardProps) {
   );
 }
 
+function PaymentsCard({ months, admin }: { months: RentalMonth[]; admin: RentalAdmin }) {
+  const [showEarlier, setShowEarlier] = useState(false);
+  // A period is ACTIONABLE when it has closed and is not already paid — an open month has no final
+  // figure, so it gets no button rather than a disabled one that invites a click.
+  const settled = months.filter((m) => m.status === "paid");
+  const awaiting = months.filter((m) => m.status === "due");
+  const rest = months.filter((m) => m.status !== "paid");
+  const earlier = settled;
+
+  return (
+    <section className="prv-pays" data-testid="prv-payments">
+      <div className="prv-pays-hd">
+        <span className="prv-h">Payments</span>
+        <span className="prv-pays-count" data-testid="prv-pays-count">
+          {settled.length} settled · {awaiting.length} awaiting
+        </span>
+      </div>
+
+      {rest.map((m) => (
+        <div className="prv-pay-row" key={m.ym} data-testid="prv-pay-row" data-ym={m.ym} data-status={m.status}>
+          <div>
+            <div className="prv-pay-pd">{m.label}</div>
+            <div className="prv-pay-nt">
+              {m.status === "in_progress" ? `Closes ${m.closesYmd} · no final figure yet` : `Closed ${m.closesYmd}`}
+            </div>
+          </div>
+          <div className="prv-pay-r">
+            <span className="prv-pay-amt">{fmtCents(m.totals.partnerTotalCents)}</span>
+            <StatusChip m={m} />
+            {/* Only a CLOSED, UNPAID period can be marked. The server enforces this too. */}
+            {m.status === "due" && (
+              <button type="button" className="prv-btn go" data-testid="prv-mark-paid" disabled={admin.busy}
+                onClick={() => admin.onMark(admin.partnerId, m.periodKey, "paid")}>Mark paid</button>
+            )}
+          </div>
+        </div>
+      ))}
+
+      {earlier.length > 0 && (
+        <>
+          <button type="button" className="prv-showmore" data-testid="prv-show-earlier"
+            onClick={() => setShowEarlier((v) => !v)}>
+            {showEarlier ? "Hide" : "Show"} {earlier.length} earlier payment{earlier.length === 1 ? "" : "s"}
+            {" "}{fmtCents(earlier.reduce((s, m) => s + m.totals.partnerTotalCents, 0))}
+          </button>
+          {showEarlier && earlier.map((m) => (
+            <div className="prv-pay-row settled" key={m.ym} data-testid="prv-pay-row" data-ym={m.ym} data-status={m.status}>
+              <div>
+                <div className="prv-pay-pd">{m.label}</div>
+                <div className="prv-pay-nt">{m.paidAt ? `paid ${m.paidAt.slice(0, 10)}` : "paid"}</div>
+              </div>
+              <div className="prv-pay-r">
+                <span className="prv-pay-amt">{fmtCents(m.totals.partnerTotalCents)}</span>
+                <StatusChip m={m} />
+                {/* UNDO IS A REVERSAL, not an erasure — the server sets the row back to pending and
+                    logs it; the change_log keeps the fact that it was once marked. */}
+                <button type="button" className="prv-btn" data-testid="prv-undo" disabled={admin.busy}
+                  onClick={() => admin.onMark(admin.partnerId, m.periodKey, "unpaid")}>Undo</button>
+              </div>
+            </div>
+          ))}
+        </>
+      )}
+    </section>
+  );
+}
+
 function StatusChip({ m }: { m: RentalMonth }) {
-  // "Paid" is absent because nothing records it — see periodStatusOf. A chip that always reads
-  // Paid is a control that looks live and does nothing.
-  const cls = m.status === "in_progress" ? "prog" : m.status === "due" ? "due" : "none";
+  // Every state here is READ FROM THE LEDGER or derived from the period's own dates — including
+  // Paid, which comes from partner_weekly_payments. An earlier version of this file claimed Paid
+  // could never render because nothing recorded it; that was wrong, and the table has existed
+  // since migration 0003.
+  const cls = m.status === "paid" ? "paid" : m.status === "in_progress" ? "prog" : m.status === "due" ? "due" : "none";
   return (
     <span className={`prv-chip ${cls}`} data-testid="prv-status" data-status={m.status}>
       {PERIOD_STATUS_LABEL[m.status]}
+      {m.status === "paid" && m.paidAt && <i className="prv-chip-dt"> {m.paidAt.slice(0, 10)}</i>}
     </span>
   );
 }
@@ -390,6 +484,24 @@ const CSS = `
 .prv-chip.prog{color:var(--blu);background:var(--blubg);border:1px solid var(--blln)}
 .prv-chip.due{color:var(--amb);background:var(--ambbg);border:1px solid var(--ambln)}
 .prv-chip.none{color:var(--ink2);background:#f4f6f5;border:1px solid var(--line)}
+.prv-chip.paid{color:var(--grn);background:var(--grnbg);border:1px solid var(--grnln)}
+.prv-chip-dt{font-style:normal;font-weight:700;opacity:.75;margin-left:2px}
+
+/* ADMIN ONLY — this whole block is absent from the public page's markup, not hidden in it. */
+.prv-pays{border-top:1px solid var(--line);background:#fbfdfc}
+.prv-pays-hd{display:flex;align-items:baseline;gap:10px;padding:19px 26px 10px}
+.prv-pays-count{margin-left:auto;font-size:12.5px;color:var(--ink2);font-weight:700}
+.prv-pay-row{display:flex;align-items:center;justify-content:space-between;gap:14px;padding:11px 26px;border-top:1px solid var(--line2)}
+.prv-pay-row.settled{background:#f7f9f8}
+.prv-pay-pd{font-weight:800;font-size:14.5px}
+.prv-pay-nt{font-size:12px;color:var(--ink2);margin-top:2px}
+.prv-pay-r{display:flex;align-items:center;gap:10px;flex:none}
+.prv-pay-amt{font-size:16px;font-weight:800;font-variant-numeric:tabular-nums;color:var(--grn2)}
+.prv-btn{border:1px solid var(--line);background:#fff;border-radius:8px;padding:7px 13px;font:inherit;font-size:12.5px;font-weight:700;color:var(--ink);cursor:pointer;min-height:34px}
+.prv-btn:disabled{opacity:.45;cursor:not-allowed}
+/* the ONE filled-dark button — Mark paid is the single thing to do here */
+.prv-btn.go{background:#003326;border-color:#003326;color:#fff}
+.prv-showmore{display:block;width:100%;text-align:left;border:0;border-top:1px solid var(--line2);background:transparent;padding:11px 26px;font:inherit;font-size:12.5px;font-weight:700;color:var(--ink2);cursor:pointer}
 
 .prv-metrics{display:grid;grid-template-columns:repeat(4,minmax(0,1fr));gap:1px;background:var(--line);
   border-top:1px solid var(--line);border-bottom:1px solid var(--line)}

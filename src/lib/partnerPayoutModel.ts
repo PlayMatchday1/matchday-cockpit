@@ -238,7 +238,10 @@ export const fmtCents = (cents: number): string =>
 // YMD STRING MATHS ONLY. No Date parsing anywhere in this file: match dates are local wall clock
 // wearing a Z, and a period boundary computed through new Date() is the same class of bug as the
 // one that let an unplayed match be billed for.
-export type PeriodStatus = "in_progress" | "due" | "nothing_owed";
+export type PeriodStatus = "in_progress" | "due" | "paid" | "nothing_owed";
+
+/** The ledger row for a period, from partner_weekly_payments. Null when none exists yet. */
+export type PeriodLedger = { status: "pending" | "paid" | "disputed"; paidAt: string | null } | null;
 
 const DAYS_IN = (y: number, m: number) => new Date(Date.UTC(y, m, 0)).getUTCDate(); // m is 1-based
 
@@ -256,17 +259,32 @@ export function monthPayYmd(ym: string): string {
 }
 
 /**
- * THE ONLY THREE STATES THAT CAN BE PROVEN TODAY.
+ * THE PERIOD'S STATE — read from the LEDGER first, derived from dates only when the ledger is
+ * silent.
  *
- * "Paid" is DELIBERATELY ABSENT and this function can never return it. Nothing in the schema
- * records that a partner was paid — partner_dashboards carries payment_start_date, cadence and
- * day-of-week, but there is no payment ledger anywhere. A chip that always reads Paid is a control
- * that looks live and does nothing, and so is a Paid branch that can never fire.
+ * I previously shipped this deriving from dates alone, with a comment asserting that "paid" could
+ * never be returned because nothing recorded a partner payment. THAT WAS WRONG:
+ * `partner_weekly_payments` has existed since migration 0003 and is what drives PAC Global's Paid
+ * chips. My schema search missed it twice — a case-sensitive grep for `create table` against a
+ * file that says `CREATE TABLE`, and a content grep for `partner_payment` which is not a substring
+ * of `partner_weekly_payments`. Asserting a negative from searches that can only produce false
+ * negatives is the actual error.
  *
- * "due" therefore means CLOSED WITH NO PAYMENT RECORDED, which is the honest claim. When a ledger
- * exists, this is the one place that has to change.
+ * PAID WINS OVER EVERY DATE RULE. A period marked paid is paid even if the month is still open —
+ * an early settlement is a fact about money that moved, not something to be second-guessed by a
+ * calendar. This ordering is also what stops a paid period being rendered "Due next cycle", which
+ * is the mismatch visible on PAC Global's monthly table today.
+ *
+ * A `disputed` row deliberately does NOT read as paid; it falls through to the date rules, so it
+ * shows as due/in progress rather than claiming money has moved.
  */
-export function periodStatusOf(ym: string, todayYmd: string, partnerTotalCents: number): PeriodStatus {
+export function periodStatusOf(
+  ym: string,
+  todayYmd: string,
+  partnerTotalCents: number,
+  ledger: PeriodLedger = null,
+): PeriodStatus {
+  if (ledger?.status === "paid") return "paid";
   if (todayYmd <= monthCloseYmd(ym)) return "in_progress";
   return partnerTotalCents === 0 ? "nothing_owed" : "due";
 }
@@ -274,5 +292,6 @@ export function periodStatusOf(ym: string, todayYmd: string, partnerTotalCents: 
 export const PERIOD_STATUS_LABEL: Record<PeriodStatus, string> = {
   in_progress: "In progress",
   due: "Due",
+  paid: "Paid",
   nothing_owed: "Nothing owed",
 };

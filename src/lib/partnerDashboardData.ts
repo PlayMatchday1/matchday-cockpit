@@ -9,6 +9,7 @@ import "server-only";
 import type { SupabaseClient } from "@supabase/supabase-js";
 import { computePartnerStats, computeWeeklyPayments, fetchPartnerBySlug, fetchPartnerRows, fetchPartnerWeeklyPayments, rentalParamsOf } from "./partnerStats";
 import { buildRentalDashboard, type RentalDashboardProps } from "./partnerRentalDashboard";
+import type { PeriodLedger } from "./partnerPayoutModel";
 import { derivePartnerGrains } from "./partnerGrain";
 import { dfull, dshort, todayYmd } from "./partnerDashboardView";
 import type { PartnerV14Props } from "@/app/partners/[slug]/PartnerDashboardV14";
@@ -40,10 +41,21 @@ export async function buildPartnerDashboardData(
   // acquires the other model's rounding. The three existing partners never reach this branch.
   const rentalParams = rentalParamsOf(partner);
   if (rentalParams) {
+    // THE PAYMENT LEDGER — partner_weekly_payments, the same table PAC Global's Paid chips read.
+    // Monthly cadence stores the FIRST DAY of the calendar month in week_start_date, so the map is
+    // keyed by YYYY-MM. Without this the status could only ever be derived from dates, which is
+    // what shipped in eae5a6a and why Parmer could never show Paid.
+    const paymentRows = await fetchPartnerWeeklyPayments(supabase, partner.id);
+    const ledger = new Map<string, PeriodLedger>(
+      paymentRows.map((r) => [
+        String(r.week_start_date).slice(0, 7),
+        { status: (r.status as "pending" | "paid" | "disputed") ?? "pending", paidAt: (r.paid_at as string | null) ?? null },
+      ]),
+    );
     return {
       kind: "rental",
       rental: buildRentalDashboard(rows, rentalParams, {
-        partnerName: partner.partnerName, venue: venueName, spotPriceCents: partner.spotPriceCents,
+        partnerName: partner.partnerName, venue: venueName, spotPriceCents: partner.spotPriceCents, ledger,
       }),
     };
   }

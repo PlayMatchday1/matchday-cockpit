@@ -208,6 +208,53 @@ async function main() {
     await closeContext(mctx);
   }
 
+
+  // ── THE ADMIN / PARTNER SPLIT ────────────────────────────────────────────
+  // The partner link is UNAUTHENTICATED BY DESIGN: anyone holding the URL loads this page. So the
+  // write controls must be ABSENT FROM THE MARKUP, not hidden in it — a display:none Mark paid
+  // button is one dev-tools click from being pressed by the partner.
+  console.log("\nthe partner view carries no admin affordance at all:");
+  {
+    const { ctx: pctx, page: pp } = await read({ width: 1400, height: 1300 });
+    for (const [what, sel] of [
+      ["the payments card", '[data-testid="prv-payments"]'],
+      ["Mark paid", '[data-testid="prv-mark-paid"]'],
+      ["Undo", '[data-testid="prv-undo"]'],
+      ["the earlier-payments toggle", '[data-testid="prv-show-earlier"]'],
+    ]) {
+      eq(`${what} is not in the partner's DOM at all`, await pp.$(sel), null);
+    }
+    // POSITIVE CONTROL — the page rendered, so those four absences mean something. Without it a
+    // blank page would satisfy every check above.
+    eq("…and the page really rendered (control for those four absences)",
+      await pp.$('[data-testid="prv-status"]') !== null, true);
+    // NOT ONE BUTTON ANYWHERE. Stronger than naming the two we know about: it catches a third
+    // control added later without a testid.
+    // SCOPED TO THE PAGE'S OWN ROOT, not the document: `next dev` injects its own overlay button
+    // (id="next-logo") outside the app tree, which exists only in development and is not ours.
+    // Counting inside [data-testid="partner-rental"] still catches any control WE add later
+    // without a testid, which is the point of counting rather than naming.
+    eq("the partner page renders NO buttons of its own, at all",
+      await pp.$$eval('[data-testid="partner-rental"] button', (els) => els.length), 0);
+
+    // THE SERVER HALF of the same rule. A partner holding the link can hand-make this request.
+    const unauth = await pp.evaluate(async () => {
+      const r = await fetch("/api/partner-dashboards", {
+        method: "POST", headers: { "Content-Type": "application/json" },
+        body: JSON.stringify({ partnerId: "x", weekStartDate: "2026-08-01", action: "paid" }),
+      });
+      return r.status;
+    });
+    [401, 403].includes(unauth)
+      ? ok(`the write endpoint refuses an unauthenticated caller (${unauth})`)
+      : bad("write endpoint reachable from a partner link", `status ${unauth}`);
+    const unauthGet = await pp.evaluate(async () => (await fetch("/api/partner-dashboards")).status);
+    [401, 403].includes(unauthGet)
+      ? ok(`…and so does the admin read (${unauthGet})`)
+      : bad("admin read reachable unauthenticated", `status ${unauthGet}`);
+    await closeContext(pctx);
+  }
+
   console.log(`\n================ RESULT ================\nAssertions: ${PASS} passed, ${FAIL} failed`);
   if (fails.length) fails.forEach((f) => console.log("   FAILED: " + f));
   await closeBrowser(browser);
