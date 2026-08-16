@@ -6,10 +6,14 @@ export const metadata: Metadata = {
   title: "Growth",
 };
 
+import GrowthShell from "./GrowthShell";
+
+// The shell is a client component (rail state, provider); this stays a server layout so the tab
+// title above can still be exported.
 export default function GrowthLayout({
   children,
 }: {
   children: React.ReactNode;
 }) {
-  return children;
+  return <GrowthShell>{children}</GrowthShell>;
 }

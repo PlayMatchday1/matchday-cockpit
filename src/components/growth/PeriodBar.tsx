@@ -39,8 +39,13 @@ export default function PeriodBar({
   period: Period;
   setPeriod: (p: Period) => void;
   generatedAt: string;
-  followCount: number;
-  cardCount: number;
+  // OPTIONAL SINCE THE SECTION SPLIT. "applies to N of 7 cards" existed because seven cards with
+  // three different time behaviours shared one scroll and the bar had to say how much of the page
+  // it governed. Per section there is nothing to disambiguate — the bar is on the page or it is
+  // not — so the sections omit these and the line does not render. The old single-scroll caller
+  // is gone; kept optional rather than deleted so the count can return if a page ever mixes again.
+  followCount?: number;
+  cardCount?: number;
 }) {
   // Default selection = Last 6 months (matches the dashboard's initial period).
   const [quick, setQuick] = useState<Quick>("6");
@@ -143,9 +148,11 @@ export default function PeriodBar({
             <span className={styles.pbVal}>
               {monthLabel(period.start)} – {monthLabel(period.end)}
             </span>
-            <span className={styles.pbScope}>
-              applies to {followCount} of {cardCount} cards
-            </span>
+            {followCount != null && cardCount != null && (
+              <span className={styles.pbScope}>
+                applies to {followCount} of {cardCount} cards
+              </span>
+            )}
           </div>
           <div className={styles.pbActions}>
             {QUICKS.map(({ q, label }) => (
