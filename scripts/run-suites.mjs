@@ -107,6 +107,47 @@ if (E2E && !(await ping())) {
   console.log("✓ dev up");
 }
 
+// ── WARM THE DEV SERVER BEFORE ANY SUITE (Phase 22, landed 29e) ──────────────
+// `next dev` COMPILES ROUTES ON DEMAND, and the first suite to touch an uncompiled route pays
+// for it inside its own waitForSelector/waitForFunction budget (10-30s). That is why timeout
+// failures land on DIFFERENT suites from run to run and all pass when run alone — contention
+// with the compiler, not a defect in what they assert.
+//
+// Paying the compile ONCE, sequentially, before any suite starts removes that. Measured on
+// phase22-gate: 429s → 259s sequential.
+//
+// This is the dev-server half of the problem. The bigger lever (`next build && next start`) is
+// deliberately NOT here: it is unmeasured and it strips the CRM realtime test seam that
+// verify-crm-characterize depends on.
+//
+// Cherry-picked from phase22-gate 5eb553e — THIS BLOCK ONLY. The one-auth-event-per-run change
+// and the concurrency switch in that commit did NOT come with it and remain unsoaked there.
+if (E2E) {
+  const WARM = [
+    "/home", "/match-ops", "/match-ops/gameday", "/match-ops/change-log", "/match-ops/field-ops",
+    "/match-ops/master-schedule", "/match-ops/partner-dashboards", "/match-ops/reviews",
+    "/match-ops/slate-review", "/match-ops/promos", "/match-ops/player-lookup",
+    "/match-ops/player-chats", "/match-ops/manager-pay/history",
+    "/city/manager-pay", "/city/reviews", "/city/gameday",
+    "/match-ops/match-panel/17494", "/match-ops/matches/2470", "/match-ops/matches/501/roster",
+    "/matchops/checkin/2470",
+  ];
+  const t0 = Date.now();
+  process.stdout.write(`↻ warming ${WARM.length} routes (next dev compiles on demand) `);
+  for (const r of WARM) {
+    try {
+      const res = await fetch(`http://localhost:3000${r}`, { redirect: "manual" });
+      await res.arrayBuffer().catch(() => {});
+      process.stdout.write(".");
+    } catch { process.stdout.write("x"); }
+  }
+  console.log(` done in ${Math.round((Date.now() - t0) / 1000)}s`);
+}
+
+// Wall-clock for the run, so every gate reports its own duration and a regression in the gate
+// itself is visible rather than felt.
+const RUN_T0 = Date.now();
+
 const results = [];
 for (const s of suites) {
   process.stdout.write(`▶ ${s} … `); const r = await run(s); results.push(r); console.log(r.ok ? `ok (${r.passed} assertions)` : `FAIL — ${r.why}`);
@@ -114,7 +155,7 @@ for (const s of suites) {
 if (devProc) { try { process.kill(-devProc.pid, "SIGKILL"); } catch {} }
 
 const failed = results.filter((r) => !r.ok);
-console.log(`\n${"=".repeat(60)}\n${results.length} suites · ${results.length - failed.length} ok · ${failed.length} FAILED`);
+console.log(`\n${"=".repeat(60)}\n${results.length} suites · ${results.length - failed.length} ok · ${failed.length} FAILED · ${Math.round((Date.now() - RUN_T0) / 1000)}s`);
 for (const f of failed) {
   console.log(`\n✗ ${f.suite} — ${f.why}`);
   console.log(f.out.split("\n").slice(-12).map((l) => "    " + l).join("\n"));
