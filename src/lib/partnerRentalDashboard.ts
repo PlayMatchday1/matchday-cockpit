@@ -19,17 +19,32 @@ import { isFakePlayerEmail } from "./mdapiFakePlayer";
 import { rosterRowCounts } from "./gamedayModel";
 import {
   payoutForMatch, totalsOf, breakevenSpots, newVsReturning,
+  monthCloseYmd, monthPayYmd, periodStatusOf,
   type RentalProfitShareParams, type MatchPayout, type PayoutTotals, type VenueAppearance,
+  type PeriodStatus,
 } from "./partnerPayoutModel";
 
 export type RentalMonth = {
   ym: string;             // YYYY-MM
   label: string;          // "August 2026"
-  rows: MatchPayout[];
+  rows: MatchPayout[];    // played rows ONLY — the ones every total is built from
+  scheduled: MatchPayout[]; // listed below the line, greyed, contributing nothing
   totals: PayoutTotals;
   spotsSold: number;
   newPlayers: number;
   returning: number;
+  // DISTINCT PEOPLE and REPEAT VISITS. NEW PLAYERS and RETURNING read 130 and 0 against 175 spots
+  // sold, which is two defensible numbers that look broken side by side — in a venue's first month
+  // NEW duplicates PLAYERS exactly. So the tiles show PLAYERS (distinct) and RETURNING, which SUM
+  // to PLAYERS, and the repeat visits explain the gap to the spot count without a second tile
+  // repeating a number already on screen.
+  distinctPlayers: number;
+  repeatVisits: number;
+  // THE PERIOD, stated rather than inferable.
+  closesYmd: string;
+  paysYmd: string;
+  open: boolean;
+  status: PeriodStatus;
 };
 
 export type RentalDashboardProps = {
@@ -147,16 +162,33 @@ export function buildRentalDashboard(
     byYm.set(ym, [...(byYm.get(ym) ?? []), p]);
   }
 
+  // TODAY, in YMD, from the injected clock. Used only for period open/closed — never for whether a
+  // match was played, which comes from the match's own end instant.
+  const todayYmd = new Date(nowMs).toISOString().slice(0, 10);
+
   const months: RentalMonth[] = [...byYm.entries()]
     .sort((a, b) => b[0].localeCompare(a[0]))   // newest first
-    .map(([ym, rs]) => {
+    .map(([ym, all]) => {
       const start = `${ym}-01`;
       const end = `${ym}-31`;   // string comparison against YYYY-MM-DD; a 31 upper bound is safe
       const nv = newVsReturning(appearances, start, end);
+      // SPLIT AT THE SOURCE. `rows` is what the totals are built from, so a scheduled match cannot
+      // reach a sum by being forgotten in one place — it is not in the array at all.
+      const rs = all.filter((r) => r.played);
+      const scheduled = all.filter((r) => !r.played);
+      const totals = totalsOf(rs);
       return {
-        ym, label: monthLabel(ym), rows: rs, totals: totalsOf(rs),
+        ym, label: monthLabel(ym), rows: rs, scheduled, totals,
         spotsSold: rs.reduce((s, r) => s + r.spotsSold, 0),
         newPlayers: nv.newPlayers, returning: nv.returning,
+        distinctPlayers: nv.newPlayers + nv.returning,
+        // Spots minus distinct people: the same person taking two spots in a month is one player
+        // and two visits. Never negative.
+        repeatVisits: Math.max(0, rs.reduce((s, r) => s + r.spotsSold, 0) - (nv.newPlayers + nv.returning)),
+        closesYmd: monthCloseYmd(ym),
+        paysYmd: monthPayYmd(ym),
+        open: todayYmd <= monthCloseYmd(ym),
+        status: periodStatusOf(ym, todayYmd, totals.partnerTotalCents),
       };
     });
 

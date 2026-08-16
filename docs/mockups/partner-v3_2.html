@@ -1,0 +1,344 @@
+<!doctype html>
+<html lang="en">
+<head>
+<meta charset="utf-8">
+<meta name="viewport" content="width=device-width,initial-scale=1">
+<title>Partner payout — monthly periods</title>
+<style>
+/* ══════════════════════════════════════════════════════════════
+   V3 — WHAT MOVED SINCE V2
+
+   1. A MONTH IN PROGRESS IS NOT A BILL.
+      Today is Aug 16. Aug 19 has not been played. The live page counts
+      it anyway: MatchDay is shown a −$185.00 loss on a match that has
+      not happened, and Parmer is shown $160.00 of rental for a field
+      that has not been rented. $1,368.00 "owed" is really $1,208.00
+      earned so far, plus one scheduled match.
+
+      So: only PLAYED matches count. Scheduled matches are listed
+      below the line, greyed, explicitly not counted. The headline
+      says SO FAR, never OWED, until the month closes.
+
+   2. THE GREEN BOX CARRIES BOTH HALVES OF THE PAYOUT.
+      "you take 40%" was only half the deal — the $160.00 rental is
+      the other half and it was a footnote. The box now reads
+      "$160.00 rental + 40% of the pool", which is the whole answer
+      in six words.
+
+   3. EVERY MONTH, WITH ITS STATUS AND ITS DATE.
+      One row per period: what it earned, whether it is paid, and when.
+      A month closes on its last day and pays on the 5th of the next.
+      Nothing about a period is inferable — it is stated.
+   ══════════════════════════════════════════════════════════════ */
+:root{
+  --ink:#0e1f16; --ink2:#5b7568; --ink3:#93a89c;
+  --line:#e4eae6; --line2:#eff3f0; --bg:#f2f5f3; --panel:#fff;
+  --grn:#15803d; --grn2:#166534; --grnbg:#effaf3; --grnln:#c8ead6;
+  --red:#a8321f; --redbg:#fdf1ef;
+  --blu:#1d4ed8; --blubg:#eef2ff; --blln:#c7d2fe;
+  --amb:#8a5a00; --ambbg:#fdf6e7; --ambln:#f0dfb4;
+}
+*{box-sizing:border-box}
+body{margin:0;background:var(--bg);color:var(--ink);padding:26px 20px 70px;
+  font:15px/1.45 ui-sans-serif,-apple-system,"Segoe UI",Roboto,sans-serif}
+.wrap{max-width:1250px;margin:0 auto}
+.mwrap{max-width:390px;margin:44px auto 0}
+.sec{font-size:10.5px;letter-spacing:.1em;color:var(--ink3);font-weight:800;
+  margin:0 0 9px;text-transform:uppercase}
+.page{background:var(--panel);border:1px solid var(--line);border-radius:14px;overflow:hidden}
+
+.mast{padding:22px 26px 20px;border-bottom:1px solid var(--line)}
+.mast h1{margin:0;font-size:27px;font-weight:800;letter-spacing:-.02em}
+.mast .sub{color:var(--ink2);font-size:14px;margin-top:3px}
+
+/* the payment */
+.pay{display:flex;align-items:flex-end;justify-content:space-between;gap:24px;
+  padding:22px 26px 23px;background:var(--grnbg);border-bottom:1px solid var(--grnln)}
+.pay .amt{font-size:44px;font-weight:800;color:var(--grn2);letter-spacing:-.025em;
+  line-height:1;font-variant-numeric:tabular-nums}
+.pay .for{font-size:14px;color:var(--ink2);margin-top:7px}
+.pay .for b{color:var(--ink);font-weight:700}
+.pay .when{text-align:right;flex:none}
+.pay .when .lb{font-size:10.5px;letter-spacing:.09em;font-weight:800;color:var(--grn);
+  text-transform:uppercase}
+.pay .when .dt{font-size:20px;font-weight:800;margin-top:4px;letter-spacing:-.01em}
+.pay .when .nt{font-size:12.5px;color:var(--ink2);margin-top:3px}
+.sofar{display:inline-block;font-size:10.5px;font-weight:800;letter-spacing:.07em;
+  text-transform:uppercase;color:var(--blu);background:var(--blubg);
+  border:1px solid var(--blln);border-radius:999px;padding:3px 9px;margin-left:10px;
+  vertical-align:middle}
+
+/* how it works */
+.how{padding:18px 26px 19px;border-bottom:1px solid var(--line)}
+.how .lb{font-size:10.5px;letter-spacing:.09em;font-weight:800;color:var(--ink3);
+  text-transform:uppercase;margin-bottom:11px}
+.f{display:flex;align-items:center;gap:9px;flex-wrap:wrap;font-size:15px}
+.f .tok{font-weight:700;white-space:nowrap}
+.f .op{color:var(--ink3);font-weight:700}
+.f .cost{color:var(--ink2)}
+.f .out{background:var(--grn2);color:#fff;padding:6px 14px;border-radius:8px;
+  font-weight:800;white-space:nowrap;font-size:15.5px}
+.gtee{margin-top:12px;font-size:13.5px;color:var(--ink2)}
+.gtee span{display:inline;margin-right:22px}
+.gtee b{color:var(--ink);font-weight:700}
+
+/* generic table */
+table{width:100%;border-collapse:collapse}
+thead th{font-size:10.5px;letter-spacing:.06em;font-weight:800;color:var(--ink3);
+  text-transform:uppercase;text-align:right;padding:12px 14px 10px;
+  border-bottom:1px solid var(--line);white-space:nowrap}
+thead th:first-child{text-align:left;padding-left:26px}
+tbody td{padding:12px 14px;text-align:right;font-size:14px;
+  font-variant-numeric:tabular-nums;border-bottom:1px solid var(--line2)}
+tbody td:first-child{text-align:left;padding-left:26px;font-weight:600}
+.dim{color:var(--ink2)}
+.neg{color:var(--red)}
+.tot{background:var(--grnbg);font-size:17px;font-weight:800;color:var(--grn2);
+  border-left:1px solid var(--grnln);border-right:1px solid var(--grnln)}
+th.tot{color:var(--grn2);font-size:10.5px;background:var(--grnbg);
+  border-left:1px solid var(--grnln);border-right:1px solid var(--grnln)}
+tfoot td{padding:14px;text-align:right;font-size:15px;font-weight:800;
+  font-variant-numeric:tabular-nums;border-top:2px solid var(--ink);background:#fbfdfc}
+tfoot td:first-child{text-align:left;padding-left:26px}
+tfoot td.tot{font-size:21px;background:#dff3e7;border-top:2px solid var(--grn2)}
+
+/* status chips */
+.chip{display:inline-block;font-size:11.5px;font-weight:800;border-radius:999px;
+  padding:4px 11px;white-space:nowrap;letter-spacing:.01em}
+.chip.paid{color:var(--grn);background:var(--grnbg);border:1px solid var(--grnln)}
+.chip.prog{color:var(--blu);background:var(--blubg);border:1px solid var(--blln)}
+.chip.due{color:var(--amb);background:var(--ambbg);border:1px solid var(--ambln)}
+.chip.none{color:var(--ink2);background:#f4f6f5;border:1px solid var(--line)}
+
+/* section headings inside the page */
+.blk{padding:19px 26px 8px;border-top:1px solid var(--line)}
+.blk .h{font-size:10.5px;letter-spacing:.1em;font-weight:800;color:var(--ink3);
+  text-transform:uppercase}
+.blk .p{font-size:13px;color:var(--ink2);margin-top:5px}
+
+/* scheduled-but-not-played */
+.sched td{background:#f7f9f8;color:var(--ink3)}
+.sched td:first-child{font-weight:600;color:var(--ink2)}
+.schednote{padding:11px 26px 18px;font-size:12.5px;color:var(--ink2)}
+.schednote b{color:var(--ink)}
+
+.illu{margin-top:34px;border:1px dashed #b9c6bf;border-radius:14px;background:#fafcfb;
+  overflow:hidden}
+.illu .bnr{background:#eef1ef;padding:9px 26px;font-size:11px;font-weight:800;
+  letter-spacing:.08em;text-transform:uppercase;color:#6b7f74}
+
+/* phone */
+.ph{background:var(--panel);border:1px solid var(--line);border-radius:14px;overflow:hidden}
+.ph .mast{padding:17px 17px 15px}
+.ph .mast h1{font-size:22px}
+.ph .pay{display:block;padding:17px}
+.ph .pay .amt{font-size:37px}
+.ph .pay .when{text-align:left;margin-top:14px;padding-top:13px;border-top:1px solid var(--grnln)}
+.ph .pay .when .dt{font-size:18px}
+.ph .how{padding:15px 17px 16px}
+.ph .f{font-size:13.5px;gap:7px}
+.ph .f .out{font-size:14px}
+.pm{padding:12px 17px;border-bottom:1px solid var(--line2);display:flex;
+  justify-content:space-between;align-items:center;gap:12px}
+.pm .l .pd{font-weight:800;font-size:15px}
+.pm .l .nt{font-size:12px;color:var(--ink2);margin-top:2px}
+.pm .r{text-align:right;flex:none}
+.pm .r .v{font-size:19px;font-weight:800;color:var(--grn2);font-variant-numeric:tabular-nums}
+.pm .r .v.na{color:var(--ink3);font-size:15px}
+.pm .r .c{margin-top:4px}
+</style>
+</head>
+<body>
+
+<!-- ══════════════ DESKTOP ══════════════ -->
+<div class="wrap">
+<div class="sec">Desktop — what Parmer sees at their link</div>
+<div class="page" id="page">
+
+  <div class="mast">
+    <h1>Parmer</h1>
+    <div class="sub">PARMER Stadium · monthly payout</div>
+  </div>
+
+  <div class="pay" id="pay">
+    <div>
+      <div class="amt" id="amt">$1,208.00</div>
+      <div class="for">for <b>August 2026</b> · 4 matches played
+        <span class="sofar" id="sofar">so far</span></div>
+    </div>
+    <div class="when">
+      <div class="lb" id="paylb">First payment</div>
+      <div class="dt" id="paydt">September 5, 2026</div>
+      <div class="nt" id="paynt">August closes Aug 31 · then the 5th of each month</div>
+    </div>
+  </div>
+
+  <div class="how" id="how">
+    <div class="lb">How your payout works</div>
+    <div class="f">
+      <span class="tok">Match revenue</span>
+      <span class="op">−</span><span class="tok cost">$160.00 field rental</span>
+      <span class="op">−</span><span class="tok cost">$40.00 match manager</span>
+      <span class="op">=</span><span class="tok">profit pool</span>
+    </div>
+    <div class="f" style="margin-top:11px">
+      <span class="tok">You get</span>
+      <span class="out" id="green">$160.00 rental + 40% of the pool</span>
+    </div>
+    <div class="gtee">
+      <span><b>The $160.00 rental is yours on every match played</b>, whatever the turnout.</span>
+      <span id="be"><b>Below $200.00 of revenue</b> there is no profit share and MatchDay absorbs the loss.</span>
+    </div>
+  </div>
+
+  <!-- ── EVERY MONTH ─────────────────────────────────────────── -->
+  <div class="blk">
+    <div class="h">Every month</div>
+    <div class="p">A month closes on its last day and is paid on the 5th of the next.</div>
+  </div>
+  <table id="months">
+    <thead><tr>
+      <th>Period</th><th>Matches</th><th>Spots</th><th>Revenue</th>
+      <th class="tot">Your payment</th><th style="text-align:left;padding-left:22px">Status</th>
+      <th>When</th>
+    </tr></thead>
+    <tbody>
+      <tr>
+        <td>August 2026</td><td>4</td><td>174</td><td class="dim">$2,220.00</td>
+        <td class="tot" id="mAug">$1,208.00</td>
+        <td style="text-align:left;padding-left:22px"><span class="chip prog">In progress</span></td>
+        <td class="dim">Closes Aug 31 · pays Sept 5</td>
+      </tr>
+    </tbody>
+  </table>
+  <div class="schednote">August is Parmer's first month.</div>
+
+  <!-- ── AUGUST DETAIL ───────────────────────────────────────── -->
+  <div class="blk">
+    <div class="h">August 2026 · match by match</div>
+  </div>
+  <table id="tbl">
+    <thead><tr>
+      <th>Match</th><th>Spots</th><th>Revenue</th><th>Field rental</th>
+      <th>Match manager</th><th>Profit pool</th><th>Your 40%</th>
+      <th>MatchDay share</th><th class="tot" id="totHead">Parmer total</th>
+    </tr></thead>
+    <tbody>
+      <tr><td>Wed, Aug 5</td><td>42</td><td class="dim">$465.00</td><td class="dim">$160.00</td>
+        <td class="dim">$40.00</td><td class="dim">$265.00</td><td>$106.00</td>
+        <td class="dim">$159.00</td><td class="tot">$266.00</td></tr>
+      <tr><td>Thu, Aug 6</td><td>44</td><td class="dim">$660.00</td><td class="dim">$160.00</td>
+        <td class="dim">$40.00</td><td class="dim">$460.00</td><td>$184.00</td>
+        <td class="dim">$276.00</td><td class="tot">$344.00</td></tr>
+      <tr><td>Wed, Aug 12</td><td>44</td><td class="dim">$585.00</td><td class="dim">$160.00</td>
+        <td class="dim">$40.00</td><td class="dim">$385.00</td><td>$154.00</td>
+        <td class="dim">$231.00</td><td class="tot">$314.00</td></tr>
+      <tr><td>Thu, Aug 13</td><td id="c813">44</td><td class="dim">$510.00</td><td class="dim">$160.00</td>
+        <td class="dim">$40.00</td><td class="dim">$310.00</td><td>$124.00</td>
+        <td class="dim">$186.00</td><td class="tot">$284.00</td></tr>
+    </tbody>
+    <tfoot><tr>
+      <td>4 matches played</td><td id="fSpots">174</td><td>$2,220.00</td><td>$640.00</td>
+      <td>$160.00</td><td>$1,420.00</td><td>$568.00</td><td>$852.00</td>
+      <td class="tot" id="fTot">$1,208.00</td>
+    </tr></tfoot>
+  </table>
+
+  <table id="schedTbl">
+    <tbody>
+      <tr class="sched" id="schedRow">
+        <td style="padding-left:26px">Wed, Aug 19</td>
+        <td style="width:9%">1 spot sold</td>
+        <td colspan="6" style="text-align:left;color:#93a89c">Scheduled · not played yet</td>
+        <td class="tot" style="background:#f4f6f5;color:#93a89c;font-size:14px;
+          border-color:var(--line)">not counted</td>
+      </tr>
+    </tbody>
+  </table>
+  <div class="schednote">Counts once it is played.</div>
+</div>
+
+<!-- illustration of the filled state -->
+<div class="illu">
+  <div class="bnr">Illustration only — not Parmer's data. How the monthly list reads once months close.</div>
+  <table id="illuTbl">
+    <thead><tr>
+      <th>Period</th><th>Matches</th><th>Spots</th><th>Revenue</th>
+      <th class="tot">Your payment</th><th style="text-align:left;padding-left:22px">Status</th>
+      <th>When</th>
+    </tr></thead>
+    <tbody>
+      <tr><td>August 2026</td><td>5</td><td>218</td><td class="dim">$2,710.00</td>
+        <td class="tot">$1,484.00</td>
+        <td style="text-align:left;padding-left:22px"><span class="chip paid">Paid</span></td>
+        <td class="dim">Sept 5, 2026</td></tr>
+      <tr><td>September 2026</td><td>9</td><td>378</td><td class="dim">$3,960.00</td>
+        <td class="tot">$2,304.00</td>
+        <td style="text-align:left;padding-left:22px"><span class="chip paid">Paid</span></td>
+        <td class="dim">Oct 5, 2026</td></tr>
+      <tr><td>October 2026</td><td>10</td><td>421</td><td class="dim">$4,350.00</td>
+        <td class="tot">$2,540.00</td>
+        <td style="text-align:left;padding-left:22px"><span class="chip paid">Paid</span></td>
+        <td class="dim">Nov 5, 2026</td></tr>
+      <tr><td>November 2026</td><td>8</td><td>301</td><td class="dim">$2,980.00</td>
+        <td class="tot">$1,832.00</td>
+        <td style="text-align:left;padding-left:22px"><span class="chip due">Due</span></td>
+        <td class="dim">Dec 5, 2026</td></tr>
+      <tr><td>December 2026</td><td>3</td><td>96</td><td class="dim">$960.00</td>
+        <td class="tot">$624.00</td>
+        <td style="text-align:left;padding-left:22px"><span class="chip prog">In progress</span></td>
+        <td class="dim">Closes Dec 31 · pays Jan 5</td></tr>
+    </tbody>
+  </table>
+</div>
+</div>
+
+<!-- ══════════════ PHONE ══════════════ -->
+<div class="mwrap">
+<div class="sec">Phone 390</div>
+<div class="ph" id="ph">
+  <div class="mast"><h1>Parmer</h1><div class="sub">PARMER Stadium · monthly payout</div></div>
+
+  <div class="pay">
+    <div class="amt" id="mamt">$1,208.00</div>
+    <div class="for">for <b>August 2026</b> · 4 played <span class="sofar">so far</span></div>
+    <div class="when">
+      <div class="lb">First payment</div>
+      <div class="dt" id="mpaydt">September 5, 2026</div>
+      <div class="nt">August closes Aug 31 · then the 5th of each month</div>
+    </div>
+  </div>
+
+  <div class="how" id="mhow">
+    <div class="lb">How your payout works</div>
+    <div class="f">
+      <span class="tok">Revenue</span>
+      <span class="op">−</span><span class="tok cost">$160.00 rental</span>
+      <span class="op">−</span><span class="tok cost">$40.00 manager</span>
+      <span class="op">=</span><span class="tok">pool</span>
+    </div>
+    <div class="f" style="margin-top:10px">
+      <span class="out" id="mgreen">$160.00 rental + 40% of the pool</span>
+    </div>
+    <div class="gtee"><span><b>The $160.00 rental is yours on every match played.</b>
+      Below $200.00 of revenue there is no profit share and MatchDay absorbs the loss.</span></div>
+  </div>
+
+  <div class="blk" style="border-top:1px solid var(--line);padding:15px 17px 6px">
+    <div class="h">Every month</div>
+    <div class="p">Closes on the last day, paid on the 5th.</div>
+  </div>
+
+  <div class="pm">
+    <div class="l"><div class="pd">August 2026</div>
+      <div class="nt">4 played · 174 spots</div></div>
+    <div class="r"><div class="v">$1,208.00</div>
+      <div class="c"><span class="chip prog">In progress</span></div></div>
+  </div>
+  <div class="schednote" style="padding:11px 17px 15px">Closes Aug 31 · pays Sept 5.
+    <b>Aug 19 is scheduled and not counted yet.</b></div>
+</div>
+</div>
+
+</body>
+</html>

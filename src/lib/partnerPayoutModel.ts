@@ -230,3 +230,49 @@ export function newVsReturning(
 
 export const fmtCents = (cents: number): string =>
   `${cents < 0 ? "-" : ""}$${(Math.abs(cents) / 100).toFixed(2)}`;
+
+// ── PERIODS ─────────────────────────────────────────────────────────────────────────────────────
+// A month closes on its LAST DAY and is paid on the 5TH of the next. Both are stated on the page
+// rather than left inferable, and both are derived here so the view never does date arithmetic.
+//
+// YMD STRING MATHS ONLY. No Date parsing anywhere in this file: match dates are local wall clock
+// wearing a Z, and a period boundary computed through new Date() is the same class of bug as the
+// one that let an unplayed match be billed for.
+export type PeriodStatus = "in_progress" | "due" | "nothing_owed";
+
+const DAYS_IN = (y: number, m: number) => new Date(Date.UTC(y, m, 0)).getUTCDate(); // m is 1-based
+
+/** Last day of the month, YYYY-MM-DD. */
+export function monthCloseYmd(ym: string): string {
+  const y = Number(ym.slice(0, 4)), m = Number(ym.slice(5, 7));
+  return `${ym}-${String(DAYS_IN(y, m)).padStart(2, "0")}`;
+}
+
+/** The 5th of the following month, YYYY-MM-DD. */
+export function monthPayYmd(ym: string): string {
+  const y = Number(ym.slice(0, 4)), m = Number(ym.slice(5, 7));
+  const ny = m === 12 ? y + 1 : y, nm = m === 12 ? 1 : m + 1;
+  return `${ny}-${String(nm).padStart(2, "0")}-05`;
+}
+
+/**
+ * THE ONLY THREE STATES THAT CAN BE PROVEN TODAY.
+ *
+ * "Paid" is DELIBERATELY ABSENT and this function can never return it. Nothing in the schema
+ * records that a partner was paid — partner_dashboards carries payment_start_date, cadence and
+ * day-of-week, but there is no payment ledger anywhere. A chip that always reads Paid is a control
+ * that looks live and does nothing, and so is a Paid branch that can never fire.
+ *
+ * "due" therefore means CLOSED WITH NO PAYMENT RECORDED, which is the honest claim. When a ledger
+ * exists, this is the one place that has to change.
+ */
+export function periodStatusOf(ym: string, todayYmd: string, partnerTotalCents: number): PeriodStatus {
+  if (todayYmd <= monthCloseYmd(ym)) return "in_progress";
+  return partnerTotalCents === 0 ? "nothing_owed" : "due";
+}
+
+export const PERIOD_STATUS_LABEL: Record<PeriodStatus, string> = {
+  in_progress: "In progress",
+  due: "Due",
+  nothing_owed: "Nothing owed",
+};
