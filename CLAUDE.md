@@ -86,9 +86,14 @@ an explicit, reviewable edit in the same commit.
 
 **WHEN THE FULL GATE IS REQUIRED.** The full gate runs when the diff touches a
 route, anything under `src/lib`, a query, an auth path, a migration, or any
-write. **That list is exhaustive.** A diff that touches none of them gets
-typecheck plus only the suites that assert on the files or selectors in the diff
-— say which you ran and which you skipped, then push.
+write. That is the list.
+
+When the diff is confined to CSS, `className` strings, copy, and JSX that adds no
+new data access, run typecheck plus only the suites that assert on the files or
+selectors in the diff. **Say which suites you ran and which you skipped.** Then
+push.
+
+**If you are unsure which side a diff falls on, it is the full gate.**
 
 Refactors get a characterization net first, and the existing assertion **bodies
 stay unchanged**. A test you edited to make pass records the new behaviour; it

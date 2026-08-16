@@ -386,21 +386,29 @@ async function main() {
   // so 4s is ~2.7× the real gap) — and only then compare.
   console.log("\nwhere / and /home land each tier:");
   {
-    const settledPath = async (page, quietMs = 4000, timeout = 40000) => {
-      const t0 = Date.now();
-      let last = new URL(page.url()).pathname, since = Date.now();
-      while (Date.now() - t0 < timeout) {
-        await page.waitForTimeout(250);
-        const now = new URL(page.url()).pathname;
-        if (now !== last) { last = now; since = Date.now(); }
-        else if (Date.now() - since >= quietMs) break;
-      }
-      return last;
-    };
+    // WAIT FOR THE EXPECTED PATH, THEN REQUIRE IT TO HOLD. Two earlier versions were wrong in
+    // opposite directions:
+    //   • `waitForFunction(pathname === want)` alone passed for the WRONG want, because `/` routes
+    //     THROUGH /home and any point-in-time check is satisfied by a transient hop;
+    //   • pure QUIESCENCE (path unchanged for 4s) passed standalone and FAILED under gate load —
+    //     a chain that stalls mid-hop longer than the quiet window looks settled on `/`. It is a
+    //     time-based assertion, so it was load-sensitive by construction. Green alone, red in a
+    //     full gate, which is the worst kind of assertion to own.
+    // Waiting for `want` and THEN requiring it to persist is tolerant of a slow chain (it simply
+    // waits longer) and still kills a transient hop: mutate the expected path to /home for a city
+    // manager and it matches at the hop, then moves on within the hold window and fails.
+    const HOLD_MS = 2500;
     const settles = async (page, from, want, who, readySel) => {
       await page.goto(`${BASE}${from}`, { waitUntil: "domcontentloaded" });
-      const got = await settledPath(page);
-      if (got !== want) { bad(`${who}: ${from} should settle on ${want}`, `settled on ${got}`); return; }
+      try {
+        await page.waitForFunction((w) => location.pathname === w, want, { timeout: 45000 });
+      } catch {
+        bad(`${who}: ${from} should settle on ${want}`, `never reached it — stopped at ${new URL(page.url()).pathname}`);
+        return;
+      }
+      await page.waitForTimeout(HOLD_MS);
+      const held = new URL(page.url()).pathname;
+      if (held !== want) { bad(`${who}: ${from} should settle on ${want}`, `reached it but moved on to ${held}`); return; }
       // The URL being right is not the same as having ARRIVED. Where the destination has a ready
       // marker, require it — a stalled shell showing the right path is not a landing.
       if (readySel && !(await page.$(readySel))) { bad(`${who}: ${from} → ${want}`, `path right but ${readySel} never rendered`); return; }

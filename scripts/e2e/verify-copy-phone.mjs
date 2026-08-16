@@ -51,6 +51,36 @@ async function main() {
     return ctx;
   };
 
+  // OPEN A THREAD — WITHOUT ASSUMING THE DEFAULT VIEW HAS ONE.
+  //
+  // This suite used to drive the default (open) view and wait 25s for a thread row. That is an
+  // assumption about PRODUCTION STATE, not about the control under test: when the inbox reaches
+  // "all caught up" — measured on production at 21 of 21 resolved — the open view has zero rows,
+  // the wait times out, and the suite dies on the thread selector having proven nothing about the
+  // copy button. It went red for exactly that reason while the control itself was fine.
+  //
+  // The control is the subject; WHICH thread carries it is not. So try the operator's real path
+  // first, and fall back to a view that has threads rather than reporting a failure about the
+  // inbox being empty.
+  const openAThread = async (page) => {
+    for (const view of ["", "?view=closed", "?view=all"]) {
+      await page.goto(`${CHATS}${view}`, { waitUntil: "domcontentloaded" });
+      const row = await page.waitForSelector('[data-testid="crm-thread-row"]', { timeout: 20000 }).catch(() => null);
+      if (row) {
+        if (view) console.log(`  · the open view is empty; driving ${view} instead (state of the inbox, not of the control)`);
+        await page.click('[data-testid="crm-thread-row"]');
+        return;
+      }
+    }
+    throw new Error("no thread in any view — the CRM has no conversations at all, so the copy control cannot be exercised");
+  };
+
+  // EITHER identity state. ContextPane renders the number as `ctx-phone` when the thread resolves
+  // to a player and `ctx-phone-unknown` when it does not — and the copy control is in BOTH. Which
+  // one a given thread lands in is production state; the control is the subject either way, so the
+  // suite must not require a matched player to exercise it.
+  const CTX_PHONE = '[data-testid="ctx-phone"], [data-testid="ctx-phone-unknown"]';
+
   const clip = (page) => page.evaluate(() => navigator.clipboard.readText());
   const box = (page, sel) => page.$eval(sel, (e) => { const r = e.getBoundingClientRect(); return { x: Math.round(r.x), y: Math.round(r.y), w: Math.round(r.width), h: Math.round(r.height) }; });
 
@@ -61,11 +91,7 @@ async function main() {
     // the context pane is min-[1260px]:flex — 1600 clears it
     const ctx = await makeCtx({ width: 1600, height: 1000 });
     const page = await ctx.newPage();
-    await page.goto(CHATS, { waitUntil: "domcontentloaded" });
-    // Drive the REAL flow — click the thread — rather than a ?threadId= deep link, so the suite
-    // exercises the path an operator takes.
-    await page.waitForSelector('[data-testid="crm-thread-row"]', { timeout: 25000 });
-    await page.click('[data-testid="crm-thread-row"]');
+    await openAThread(page);
     // PRESENCE WAIT BEFORE ANY MEASUREMENT — a still-loading pane would satisfy almost anything.
     await page.waitForSelector('[data-testid="copy-phone"]', { timeout: 25000 });
     await page.waitForTimeout(200);
@@ -78,14 +104,14 @@ async function main() {
       : bad("desktop hit area", `${b.w}×${b.h}`);
 
     // THE ASSERTION THE DESIGN RESTS ON — measure the NUMBER before and after.
-    const before = await box(page, '[data-testid="ctx-phone"]');
+    const before = await box(page, CTX_PHONE);
     await page.evaluate(() => navigator.clipboard.writeText("")); // clear
     await page.click('[data-testid="copy-phone"]');
     await page.waitForFunction(() => document.querySelector('[data-testid="copy-phone"]')?.getAttribute("data-state") === "copied", null, { timeout: 5000 });
-    const after = await box(page, '[data-testid="ctx-phone"]');
+    const after = await box(page, CTX_PHONE);
     eq("desktop: THE NUMBER DOES NOT MOVE when the confirmation shows", after, before);
 
-    const shown = await page.$eval('[data-testid="ctx-phone"]', (e) => e.textContent.trim());
+    const shown = await page.$eval(CTX_PHONE, (e) => e.textContent.trim());
     const got = await clip(page);
     eq("desktop: the clipboard holds the number, raw", got, shown);
     /^\+\d{8,}$/.test(got)
@@ -107,9 +133,7 @@ async function main() {
   {
     const ctx = await makeCtx({ width: 390, height: 844 });
     const page = await ctx.newPage();
-    await page.goto(CHATS, { waitUntil: "domcontentloaded" });
-    await page.waitForSelector('[data-testid="crm-thread-row"]', { timeout: 25000 });
-    await page.click('[data-testid="crm-thread-row"]');
+    await openAThread(page);
     await page.waitForSelector('[data-testid="copy-phone-inline"]', { timeout: 25000 });
     await page.waitForTimeout(200);
 
