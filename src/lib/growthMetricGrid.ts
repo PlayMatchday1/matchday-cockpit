@@ -18,12 +18,21 @@ export type GridMetric =
   | "newPlayers"
   | "totalPlayers"
   | "spots"
-  | "spotsPerPlayer";
+  | "spotsPerPlayer"
+  // RECURRING — two metrics, not one, because they answer different questions.
+  //   recurring    = totalPlayers − newPlayers   → HOW MANY came back
+  //   pctRecurring = recurring / totalPlayers    → WHETHER we are keeping them
+  // The count falls whenever the month is smaller even if loyalty is unchanged, so the RATE is the
+  // one to watch; the count is what you act on. Neither is sufficient alone.
+  | "recurring"
+  | "pctRecurring";
 
 export const GRID_METRICS: GridMetric[] = [
   "registrations",
   "newPlayers",
   "totalPlayers",
+  "recurring",
+  "pctRecurring",
   "spots",
   "spotsPerPlayer",
 ];
@@ -32,9 +41,14 @@ export const METRIC_LABEL: Record<GridMetric, string> = {
   registrations: "Registrations",
   newPlayers: "New players",
   totalPlayers: "Total players",
+  recurring: "Recurring players",
+  pctRecurring: "% recurring",
   spots: "Spots booked",
   spotsPerPlayer: "Spots per player",
 };
+
+/** A rate, charted 0–100 and moved in PERCENTAGE POINTS rather than percent. */
+export const IS_RATE = new Set<GridMetric>(["pctRecurring"]);
 
 const ADDITIVE = new Set<GridMetric>(["registrations", "newPlayers", "spots"]);
 export const isAdditive = (m: GridMetric): boolean => ADDITIVE.has(m);
@@ -47,6 +61,22 @@ export function metricValue(p: BehaviorPoint | undefined, m: GridMetric): number
   if (!p) return null;
   if (m === "spotsPerPlayer") {
     return p.spots != null && p.totalPlayers ? p.spots / p.totalPlayers : null;
+  }
+  if (m === "recurring" || m === "pctRecurring") {
+    if (p.totalPlayers == null || p.newPlayers == null) return null;
+    // NEVER CLAMPED, AND NEVER RENDERED AS A NUMBER. new > total is impossible when the
+    // definitions agree — new players at a scope are a SUBSET of the players at that scope — so a
+    // negative recurring figure is a DEFINITION error. Math.max(0, …) would paint it as 0% and
+    // hide the only condition worth catching.
+    //
+    // It returns null (a dash) rather than throwing: a throw takes the whole page down, which
+    // punishes the reader for a data problem and hides every other metric too. The loud part is
+    // the SUITE — verify-growth-sections fails on any scope/month where new exceeds total, so a
+    // violation cannot reach main quietly.
+    if (p.newPlayers > p.totalPlayers) return null;
+    const recurring = p.totalPlayers - p.newPlayers;
+    if (m === "recurring") return recurring;
+    return p.totalPlayers ? (recurring / p.totalPlayers) * 100 : null;
   }
   return p[m];
 }

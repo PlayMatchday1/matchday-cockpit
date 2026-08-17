@@ -668,7 +668,39 @@ export function computeGrowth(input: RawInput): GrowthData {
     [nowMonth, playMonths[playMonths.length - 1] ?? playFloor].sort().pop()!,
   );
 
-  // new player = first-play month.
+  // NEW AT A FIELD = the month of that player's FIRST MATCH AT THAT FIELD.
+  //
+  // NOT their first-ever MatchDay match. The two are different questions and they gave different
+  // answers: on PARMER Stadium in Aug 2026, "first-ever match happened here" counts 28 while
+  // "first match at this field" counts 116 — a 4x gap. The second is what the partner dashboard
+  // means by "new to PARMER Stadium" (partnerPayoutModel.newVsReturning computes firstSeen PER
+  // VENUE across all venue history), so Growth must use it too or the two pages state different
+  // numbers for the same venue and month.
+  //
+  // Computed here from the plays themselves rather than from p.firstField, which is the field of
+  // the player's first-ever match and can only ever attribute a player to ONE field for life.
+  //
+  // EVENTS ARE EXCLUDED HERE, matching activeByField/spotsByField exactly. The field series counts
+  // REGULAR play only — a tournament at ATH Pearland gets its own section rather than inflating
+  // that pitch's ranking — so counting event entrants as "new at this field" while the total that
+  // month excludes them makes new EXCEED total. That is not hypothetical: it is what the
+  // newPlayers > totalPlayers guard in metricValue caught the first time this shipped, which is
+  // precisely why that guard throws instead of clamping to zero.
+  const firstMonthAtField = new Map<string, string>();   // `${user}\u0000${field}` -> first month
+  for (const p of plays) {
+    if (p.isEvent) continue;
+    const k = `${p.u}\u0000${p.field}`;
+    const cur = firstMonthAtField.get(k);
+    if (cur == null || p.month < cur) firstMonthAtField.set(k, p.month);
+  }
+  const newAtFieldByField = new Map<string, Map<string, number>>();
+  for (const [k, month] of firstMonthAtField) {
+    const field = k.slice(k.indexOf("\u0000") + 1);
+    upsert2(newAtFieldByField, field, month);
+  }
+
+  // new player = first-play month (MatchDay-wide — correct for the Overall series, where "new"
+  // genuinely means new to MatchDay).
   const newByMonth = new Map<string, number>();
   const newByCity = new Map<string, Map<string, number>>();
   const newByField = new Map<string, Map<string, number>>();
@@ -760,7 +792,9 @@ export function computeGrowth(input: RawInput): GrowthData {
       points: playMonths.map<BehaviorPoint>((m) => ({
         m,
         registrations: null,
-        newPlayers: newByField.get(f)?.get(m) ?? 0,
+        // FIRST MATCH AT THIS FIELD — see firstMonthAtField. newByField (first-ever match here)
+        // is deliberately NOT used: it disagrees with the partner dashboard by 4x.
+        newPlayers: newAtFieldByField.get(f)?.get(m) ?? 0,
         totalPlayers: activeByField.get(f)?.get(m)?.size ?? 0,
         spots: spotsByField.get(f)?.get(m) ?? 0,
       })),

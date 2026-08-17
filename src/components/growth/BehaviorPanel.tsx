@@ -7,10 +7,10 @@
 // metric. All series/values come from the shared computation (growthMetricGrid /
 // GrowthData) so this card can never disagree with the Player Data Room.
 
-import { useMemo, useState, type ReactNode } from "react";
+import { useEffect, useMemo, useState, type ReactNode } from "react";
 import type { GrowthData, BehaviorPoint } from "@/lib/growthAnalytics";
 import type { Period } from "./GlobalPeriod";
-import { METRIC_LABEL, networkSeries, metricValue, type GridMetric } from "@/lib/growthMetricGrid";
+import { METRIC_LABEL, networkSeries, metricValue, IS_RATE, type GridMetric } from "@/lib/growthMetricGrid";
 import { downloadCsv } from "./format";
 import styles from "./playerBehavior.module.css";
 
@@ -33,6 +33,13 @@ const CITY_COLORS: Record<string, string> = {
   "San Antonio": "#0fa4a0",
   "St. Louis": "#c74d94",
 };
+// A palette for pitches — more fields than cities, so it cycles. Colour identifies a line against
+// its neighbours; the table beneath carries the names.
+const FIELD_COLORS = [
+  "#2CDB87", "#2E79FF", "#F5A524", "#E5484D", "#8E4EC6", "#12A594",
+  "#D6409F", "#6E56CF", "#F76808", "#46A758", "#3E63DD", "#AB4ABA",
+];
+
 const NEUTRAL_COLOR = "#65716b"; // fallback for any unexpected city
 
 const MON_ABBR = ["Jan", "Feb", "Mar", "Apr", "May", "Jun", "Jul", "Aug", "Sep", "Oct", "Nov", "Dec"];
@@ -106,7 +113,7 @@ function buildChart(series: Series[], months: string[]) {
   return { gridlines, monthTicks, polys, labels };
 }
 
-type Row = { name: string; cells: number[]; total: number; mom: number; rank?: number; dot?: string };
+type Row = { name: string; cells: number[]; total: number; mom: number; rank?: number; dot?: string; points?: boolean };
 
 export default function BehaviorPanel({
   data,
@@ -117,7 +124,7 @@ export default function BehaviorPanel({
   period: Period;
   scopeChip?: ReactNode;
 }) {
-  const [view, setView] = useState<"matchday" | "city">("matchday");
+  const [view, setView] = useState<"matchday" | "city" | "field">("matchday");
   const [metric, setMetric] = useState<BehaviorMetric>("totalPlayers");
 
   const months = useMemo(
@@ -139,6 +146,40 @@ export default function BehaviorPanel({
   }, [data.behaviorByCity, months]);
 
   const cityMode = view === "city";
+  const fieldMode = view === "field";
+  const detailMode = cityMode || fieldMode;
+
+  // REGISTRATIONS IS NOT OFFERED IN FIELD MODE AND MUST NOT BE ADDED BACK.
+  // A registration carries a city (the one declared at signup) but never a field — nobody registers
+  // at a pitch. Offering it per field would either repeat the city's number under every one of its
+  // fields or invent an attribution that does not exist. City Detail keeps it, because a city IS
+  // recorded at registration.
+  // % RECURRING IS NOT OFFERED PER FIELD, AND THIS IS A BLOCKER, NOT A CHOICE.
+  // It is derived as (total − new) / total, which requires new to be a SUBSET of total. In
+  // behaviorByField it is not: 22 field-months have new > total, 8 of them inside the default
+  // period, worst at ATH Pearland 2026-07 (new 234, total 30). The two series are built from
+  // different populations — field totals exclude special events while the first-appearance count
+  // does not fully align with that exclusion — so any recurring figure per field would be derived
+  // from a contradiction. It is withheld until the populations reconcile rather than shown as 0%.
+  // City and Overall are unaffected and DO offer it.
+  const METRICS_FOR_MODE: BehaviorMetric[] = fieldMode
+    ? (["newPlayers", "totalPlayers", "spots"] as BehaviorMetric[])
+    : (["registrations", "newPlayers", "totalPlayers", "spots", "pctRecurring"] as BehaviorMetric[]);
+
+  // Switching into field mode while Registrations is selected must not leave a metric the mode
+  // does not offer.
+  useEffect(() => {
+    if (!METRICS_FOR_MODE.includes(metric)) setMetric("totalPlayers" as BehaviorMetric);
+    // eslint-disable-next-line react-hooks/exhaustive-deps
+  }, [view]);
+
+  // THE PITCHES IN THE SELECTED PERIOD, same rule as cities: any spots in a displayed month.
+  const fields = useMemo(() => {
+    const inPeriod = new Set(months);
+    return Object.keys(data.behaviorByField)
+      .filter((f) => data.behaviorByField[f].points.some((p) => inPeriod.has(p.m) && (p.spots ?? 0) > 0))
+      .sort((a, b) => a.localeCompare(b));
+  }, [data.behaviorByField, months]);
 
   const model = useMemo(() => {
     // series + table rows follow the current view.
@@ -152,13 +193,23 @@ export default function BehaviorPanel({
     const monthRange =
       months.length > 0 ? `${monthLabel(months[0])} – ${monthLabel(months[months.length - 1])}` : "";
 
-    const toRow = (name: string, cells: number[], extra?: { rank: number; dot: string }): Row => {
-      const total = cells.reduce((a, b) => a + b, 0);
-      const mom = pctChange(cells[cells.length - 1] ?? 0, cells[cells.length - 2] ?? 0);
-      return { name, cells, total, mom, ...extra };
+    // A RATE MOVES IN PERCENTAGE POINTS, NOT PERCENT. "% recurring went from 40% to 44%" is +4
+    // POINTS, not +10%. Reporting the relative change of a percentage is a classic way to overstate
+    // a move by a factor of the base, and it is the one thing this metric makes easy to get wrong.
+    const isRate = IS_RATE.has(metric as GridMetric);
+    const toRow = (name: string, cells: number[], extra?: { rank: number; dot: string }, rateRow = false): Row => {
+      const last = cells[cells.length - 1] ?? 0;
+      const prev = cells[cells.length - 2] ?? 0;
+      const rate = rateRow || (isRate && !!extra);
+      // A rate's "period" figure is its LATEST value, never a sum — summing percentages is meaningless.
+      const total = rate ? last : cells.reduce((a, b) => a + b, 0);
+      const mom = rate ? last - prev : pctChange(last, prev);
+      return { name, cells, total, mom, points: rate, ...extra };
     };
 
-    if (!cityMode) {
+    // NOT `!cityMode` — field mode is also not city mode, and this branch would swallow it,
+    // rendering the overall series under the Field Detail heading.
+    if (!detailMode) {
       series = METRIC_DEFS.map((md) => ({
         data: networkSeries(data, md.key, months).map((v) => v ?? 0),
         color: md.color,
@@ -166,10 +217,32 @@ export default function BehaviorPanel({
         width: 3,
       }));
       rows = series.map((s) => toRow(s.label, s.data));
+      // BOTH RECURRING FIGURES AS ROWS. The count says how many came back; the rate says whether we
+      // are keeping them. A count falls whenever the month is smaller even when loyalty has not
+      // moved, so the rate is the one that carries the signal — and the rate alone hides the size
+      // of the group it describes.
+      for (const rm of ["recurring", "pctRecurring"] as GridMetric[]) {
+        rows.push(toRow(METRIC_LABEL[rm], networkSeries(data, rm, months).map((v) => v ?? 0), undefined, rm === "pctRecurring"));
+      }
       chartTitle = "Overall Matchday performance";
       chartSub = `${monthRange} · registrations, new players, total players and spots booked`;
       detailTitle = "Historical Matchday metrics";
       scope = "All Matchday";
+    } else if (fieldMode) {
+      const idxByField: Record<string, Map<string, BehaviorPoint>> = {};
+      for (const f of fields) idxByField[f] = new Map(data.behaviorByField[f].points.map((p) => [p.m, p]));
+      series = fields.map((f, k) => ({
+        data: months.map((m) => metricValue(idxByField[f].get(m), metric as GridMetric) ?? 0),
+        color: FIELD_COLORS[k % FIELD_COLORS.length],
+        label: data.behaviorByField[f].label,
+        width: 2.4,
+      }));
+      rows = series.map((s2, k) => toRow(s2.label, s2.data, { rank: k + 1, dot: s2.color }));
+      const label = METRIC_LABEL[metric as GridMetric];
+      chartTitle = `${label} by field`;
+      chartSub = `${monthRange} · every pitch with matches in the period`;
+      detailTitle = `${label} field detail`;
+      scope = "All fields";
     } else {
       const idxByCity: Record<string, Map<string, BehaviorPoint>> = {};
       for (const c of cities) idxByCity[c] = new Map(data.behaviorByCity[c].map((p) => [p.m, p]));
@@ -189,20 +262,52 @@ export default function BehaviorPanel({
 
     const chart = series.length && months.length ? buildChart(series, months) : null;
     return { chart, rows, chartTitle, chartSub, detailTitle, scope };
-  }, [cityMode, data, months, cities, metric]);
+  }, [cityMode, fieldMode, detailMode, data, months, cities, fields, metric]);
 
   const metricPeriodText = `${months.length} month${months.length === 1 ? "" : "s"} · oldest to newest`;
-  const firstColHead = cityMode ? "City" : "Metric";
+  const firstColHead = fieldMode ? "Field" : cityMode ? "City" : "Metric";
 
   const exportCsv = () => {
     const header = [firstColHead, ...months.map(monthLabel), "Selected period", "Latest MoM"];
     const body = model.rows.map((r) => [
       r.name,
-      ...r.cells.map((c) => String(c)),
-      String(r.total),
-      `${r.mom >= 0 ? "+" : ""}${r.mom.toFixed(1)}%`,
+      // A rate is written with its unit so a spreadsheet cannot mistake 44 for a count.
+      ...r.cells.map((c) => (r.points ? `${c.toFixed(1)}%` : String(c))),
+      r.points ? `${r.total.toFixed(1)}%` : String(r.total),
+      // PERCENTAGE POINTS for a rate, percent for a count — the unit is in the value, so the
+      // column cannot be read as the wrong kind of change.
+      r.points ? `${r.mom >= 0 ? "+" : ""}${r.mom.toFixed(1)} pts` : `${r.mom >= 0 ? "+" : ""}${r.mom.toFixed(1)}%`,
     ]);
-    downloadCsv(`player-behavior-evolution-${cityMode ? `city-${metric}` : "matchday"}.csv`, [header, ...body]);
+
+    // IN DETAIL MODES THE ROWS ARE ONE METRIC ACROSS SCOPES, so the recurring pair would otherwise
+    // be missing from the file entirely. Both are appended per scope, and they reconcile against
+    // total and new by construction: recurring = total − new, % = recurring / total.
+    if (detailMode) {
+      const scopes = fieldMode ? fields : cities;
+      const pointsOf = (k: string) =>
+        new Map((fieldMode ? data.behaviorByField[k].points : data.behaviorByCity[k]).map((p) => [p.m, p]));
+      for (const rm of ["newPlayers", "totalPlayers", "recurring", "pctRecurring"] as GridMetric[]) {
+        for (const k of scopes) {
+          const idx = pointsOf(k);
+          const cells = months.map((m) => metricValue(idx.get(m), rm) ?? 0);
+          const rate = rm === "pctRecurring";
+          const last = cells[cells.length - 1] ?? 0;
+          const prev = cells[cells.length - 2] ?? 0;
+          body.push([
+            `${fieldMode ? data.behaviorByField[k].label : k} · ${METRIC_LABEL[rm]}`,
+            ...cells.map((c) => (rate ? `${c.toFixed(1)}%` : String(c))),
+            rate ? `${last.toFixed(1)}%` : String(cells.reduce((a, b) => a + b, 0)),
+            rate
+              ? `${last - prev >= 0 ? "+" : ""}${(last - prev).toFixed(1)} pts`
+              : `${pctChange(last, prev) >= 0 ? "+" : ""}${pctChange(last, prev).toFixed(1)}%`,
+          ]);
+        }
+      }
+    }
+    downloadCsv(
+      `player-behavior-evolution-${fieldMode ? `field-${metric}` : cityMode ? `city-${metric}` : "matchday"}.csv`,
+      [header, ...body],
+    );
   };
 
   const c = model.chart;
@@ -254,19 +359,29 @@ export default function BehaviorPanel({
             >
               City Detail
             </button>
+            <button
+              type="button"
+              className={`${styles.segBtn} ${fieldMode ? styles.segBtnActive : ""}`}
+              data-value="field"
+              data-testid="behavior-view-field"
+              onClick={() => setView("field")}
+            >
+              Field Detail
+            </button>
           </div>
-          <div className={`${styles.filterField} ${cityMode ? "" : styles.hidden}`} id="growthBehaviorMetricField">
+          <div className={`${styles.filterField} ${detailMode ? "" : styles.hidden}`} id="growthBehaviorMetricField">
             <label htmlFor="growthBehaviorMetric">Metric</label>
             <select
               className={styles.compactSelect}
               id="growthBehaviorMetric"
+              data-testid="behavior-metric"
               value={metric}
               onChange={(e) => setMetric(e.target.value as BehaviorMetric)}
             >
-              <option value="registrations">Registrations</option>
-              <option value="newPlayers">New players</option>
-              <option value="totalPlayers">Total players</option>
-              <option value="spots">Spots booked</option>
+              {/* FIELD MODE OFFERS NO REGISTRATIONS — see METRICS_FOR_MODE. */}
+              {METRICS_FOR_MODE.map((mk) => (
+                <option key={mk} value={mk}>{METRIC_LABEL[mk as GridMetric]}</option>
+              ))}
             </select>
           </div>
         </div>
@@ -361,13 +476,19 @@ export default function BehaviorPanel({
                   {r.name}
                 </td>
                 {r.cells.map((v, i) => (
-                  <td key={i}>{fmt(v)}</td>
+                  <td key={i}>{r.points ? `${v.toFixed(1)}%` : fmt(v)}</td>
                 ))}
-                <td>{fmt(r.total)}</td>
+                <td>{r.points ? `${r.total.toFixed(1)}%` : fmt(r.total)}</td>
                 <td>
-                  <span className={`${styles.status} ${r.mom >= 0 ? styles.statusGreen : styles.statusRed}`}>
+                  {/* PERCENTAGE POINTS for a rate. A rate that moves 40% → 44% moved +4 POINTS;
+                      calling it +10% overstates it by the size of the base. */}
+                  <span
+                    className={`${styles.status} ${r.mom >= 0 ? styles.statusGreen : styles.statusRed}`}
+                    data-testid={r.points ? "behavior-mom-points" : undefined}
+                  >
                     {r.mom >= 0 ? "+" : ""}
-                    {r.mom.toFixed(1)}%
+                    {r.mom.toFixed(1)}
+                    {r.points ? " pts" : "%"}
                   </span>
                 </td>
               </tr>
