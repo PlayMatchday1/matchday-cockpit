@@ -19,8 +19,6 @@ export default function GrowthFunnelPage() {
     <SectionFrame
       title="Player Funnel"
       subtitle="Download to registration to a fifth match — where players arrive and where they fall away."
-      startDates
-      storeHistory
     >
       {g.data && g.activePeriod && (
         <>

@@ -14,7 +14,6 @@ export default function GrowthArppPage() {
     <SectionFrame
       title="Revenue per Player"
       subtitle="What an active player is worth per month, and how that has moved."
-      startDates
     >
       {g.data && <ArppPanel data={g.data} />}
     </SectionFrame>

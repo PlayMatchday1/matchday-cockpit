@@ -142,11 +142,10 @@ export default function PlayerFunnel({
     <div className={styles.card}>
       <div className={styles.cardHead}>
         <div>
+          {/* TITLE ONLY. The cohort definition, the bar's meaning, the aggregate-ratio caveat and
+              the store-coverage explanation all moved to the Player Data Room, which is the page
+              for how a number is made. Nothing methodological is stated twice. */}
           <div className={styles.cardTitle}>Player funnel comparison</div>
-          <div className={styles.cardSub}>
-            Of each period&rsquo;s sign-up cohort, how many went on to play that many non-cancelled matches <b>ever</b> —
-            so every stage is a subset of the one before it.
-          </div>
         </div>
         <div style={{ display: "flex", alignItems: "flex-start", gap: 12, flexWrap: "wrap" }}>
           {scopeChip}
@@ -211,14 +210,6 @@ export default function PlayerFunnel({
         </div>
       </div>
 
-      <div className={styles.funnelNote}>
-        The bar in each cell is that stage as a share of the row&rsquo;s largest stage, so the funnel narrows left to
-        right; the figure between two cells is the conversion from the left one to the right one, dashed whenever either
-        side is unknown. <b>Downloads → Registrations is an aggregate ratio, not a per-user conversion</b> — store
-        installs can&rsquo;t be linked to a player (Apple and Google never reveal who installed), unlike every later step,
-        which is a true cohort subset. Downloads is Android only until Apple lands, and is a dash wherever we have no
-        install data — never 0.
-      </div>
     </div>
   );
 }

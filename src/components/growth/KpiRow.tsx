@@ -86,17 +86,13 @@ export default function KpiRow({ data, period }: { data: GrowthData; period: Per
         <div className={`${styles.kpiValue} ${combinedHas ? "" : styles.kpiValueMuted}`}>
           {combinedHas ? fmtInt(combinedTotal) : "—"}
         </div>
-        {/* THE PERIOD, and nothing else. "counted differently, not like-for-like" moved to the
-            page banner, which is where the other start-date and definition caveats live — this
-            card carried three caveats against three numbers while the other three cards carried
-            one line each. */}
-        <div className={styles.kpiFoot}>
-          {combinedHas ? rangeLabel : "no store data yet"}
-        </div>
+        {/* NO FOOT LINE. The period is stated in the time-period bar directly above this row, and
+            "counted differently, not like-for-like" is methodology — it lives in the Player Data
+            Room with the other definitions. This card is four lines: label, total, iOS, Android. */}
         <div className={styles.kpiSecondary}>
           <div>
             <b>iOS</b> {ios.has ? fmtInt(ios.total) : "—"}
-            {ios.has ? " · App Store Units" : ""}
+            {ios.has ? " installs" : ""}
             {!ios.has && (
               <span className={styles.notConnected} title={as.error ?? undefined}>
                 {" "}
@@ -106,7 +102,7 @@ export default function KpiRow({ data, period }: { data: GrowthData; period: Per
           </div>
           <div>
             <b>Android</b> {android.has ? fmtInt(android.total) : "—"}
-            {android.has ? " · Play user-installs" : ""}
+            {android.has ? " installs" : ""}
             {!android.has && (
               <span className={styles.notConnected} title={ps.error ?? undefined}>
                 {" "}

@@ -27,13 +27,14 @@ const RAIL = ["Player Funnel", "Player Behavior", "Revenue per Player", "Retenti
 
 // path, title, does it follow the period, does it carry the start-dates note, a marker proving the
 // PANEL rendered (not just the frame).
+// NO SECTION CARRIES A BANNER ANY MORE — every methodological statement moved to the Data Room.
 const SECTIONS = [
-  ["/growth/funnel", "Player Funnel", true, true, /App downloads/i],
-  ["/growth/behavior", "Player Behavior", true, true, /behaviou?r/i],
-  ["/growth/revenue-per-player", "Revenue per Player", true, true, /per (active )?player|ARPP/i],
-  ["/growth/retention", "Retention", false, false, /cohort/i],
-  ["/growth/churn", "Churn", false, false, /inactive/i],
-  ["/growth/data-room", "Player Data Room", true, false, /player/i],
+  ["/growth/funnel", "Player Funnel", true, /App downloads/i],
+  ["/growth/behavior", "Player Behavior", true, /behaviou?r/i],
+  ["/growth/revenue-per-player", "Revenue per Player", true, /per (active )?player|ARPP/i],
+  ["/growth/retention", "Retention", false, /cohort/i],
+  ["/growth/churn", "Churn", false, /inactive/i],
+  ["/growth/data-room", "Player Data Room", true, /player/i],
 ];
 
 async function main() {
@@ -69,7 +70,7 @@ async function main() {
   }
 
   // ── EACH SECTION ─────────────────────────────────────────────────────────
-  for (const [path, title, followsPeriod, startDates, panelMark] of SECTIONS) {
+  for (const [path, title, followsPeriod, panelMark] of SECTIONS) {
     console.log(`\n${path}:`);
     await open(path);
     const r = await page.evaluate(() => ({
@@ -92,69 +93,82 @@ async function main() {
       // three-dot legend, so its absence must not be silent.
       eq("…and the subtitle says why it has no period bar", /own (cohort and city )?filters|does not follow|all time/i.test(r.subtitle), true);
     }
-    eq(`…the three-start-dates note is ${startDates ? "present" : "absent"}`, r.starts, startDates);
+    eq("…no explanatory banner on any section", r.starts, false);
     eq("…the 'applies to N of N cards' line is gone", /applies to \d+ of \d+ cards/.test(r.text), false);
     eq("…and the three-dot scope legend is gone", /Follows the time period above/.test(r.text), false);
   }
 
-  // ── THE DOWNLOADS CARD AND THE FUNNEL'S DOWNLOADS COLUMN ─────────────────
-  // Three defects, all on the same number:
-  //   1. the card printed a PERIOD figure beside each store's DATA COVERAGE window, so "iOS 9,066
-  //      · Aug 2025 – Aug 2026" read as a year of downloads;
-  //   2. the funnel TABLE summed androidByMonth ALONE while the card summed both, so one page
-  //      showed 2,241 and 11,307 for the same metric and period — visible as a 2551.3%
-  //      download → registration conversion in the Aug 2026 row;
-  //   3. the Registrations card printed "— of downloads (store sync not connected)", a hardcoded
-  //      dash whose parenthetical stopped being true the day both stores landed.
-  console.log("\nthe downloads card and column:");
+  // ── THE FUNNEL PAGE CARRIES NO PROSE ─────────────────────────────────────
+  // Everything methodological moved to the Player Data Room. What is left on this page is the
+  // title, the filters, the tiles and the table — a number, or a control, or a label on a row.
+  console.log("\nthe funnel page carries no prose:");
   {
     await open("/growth/funnel");
     const card = await page.evaluate(() => {
       const lab = [...document.querySelectorAll("div")].find((d) => d.textContent?.trim() === "App downloads · iOS + Android");
       return lab?.parentElement?.innerText.trim().split("\n").map((l) => l.trim()) ?? null;
     });
-    eq("the card renders", Array.isArray(card), true);
+    // SHAPE, not values — the totals move with the data. The label is upper-cased by CSS, so the
+    // comparison is on innerText as rendered.
+    eq("the downloads card is EXACTLY four lines", card?.length, 4);
+    eq("…line 1 is the label", (card?.[0] ?? "").toLowerCase(), "app downloads · ios + android");
+    eq("…line 2 is the combined total and nothing else", /^[\d,]+$/.test(card?.[1] ?? ""), true);
     if (card) {
-      // THREE NUMBERS AND THE PERIOD. The caveats moved to the banner.
-      eq("…the card is down to three numbers plus the period", card.length, 5);
-      const RANGE = /[A-Z][a-z]{2} \d{4}\s*[–-]\s*[A-Z][a-z]{2} \d{4}/;
-      const platform = card.filter((l) => /^(iOS|Android)\b/.test(l));
-      eq("…one line per platform", platform.length, 2);
-      eq("…and neither carries a date range beside its number", platform.filter((l) => RANGE.test(l)), []);
-      eq("…the 'counted differently' caveat is not on the card", card.filter((l) => /like-for-like/.test(l)), []);
+      eq("…four lines, no more", card.length, 4);
+      eq("…the platform lines read 'installs' on both", card.slice(2), [`iOS ${card[2].split(" ")[1]} installs`, `Android ${card[3].split(" ")[1]} installs`]);
+      eq("…no store-unit wording on the card", card.filter((l) => /App Store Units|user-installs/.test(l)), []);
+      eq("…and no date range or period on the card", card.filter((l) => /\d{4}/.test(l) && !/^(iOS|Android)/.test(l) && !/^App downloads/.test(l)), []);
     }
+
     const text = await page.evaluate(() => document.body.innerText);
-    eq("the false '(store sync not connected)' line is gone from the page", /store sync not connected/.test(text), false);
-    eq("…and no 'of downloads' conversion is claimed", /of downloads/.test(text), false);
+    for (const [what, re] of [
+      ["the three-start-dates banner", /three start dates/i],
+      ["the store-history sentence", /retained for one year|analytics reach back/i],
+      ["the counted-differently caveat", /not like-for-like|counted differently/i],
+      ["the aggregate-ratio paragraph", /aggregate ratio/i],
+      ["the bar explanation", /narrows left to right/i],
+      ["the cohort subtitle", /sign-up cohort/i],
+      ["the Android-only sentence", /Android only until Apple lands/i],
+      ["the false conversion line", /store sync not connected|of downloads/i],
+    ]) {
+      eq(`…${what} is gone from the funnel`, re.test(text), false);
+    }
+    // POSITIVE CONTROL — the page rendered, so eight absences mean something.
+    eq("…and the page really rendered (control for those absences)", /Player funnel comparison/.test(text), true);
 
-    // THE CAVEATS LIVE IN THE BANNER, and only where downloads are shown.
-    eq("the store-history sentence is in the banner on the funnel",
-      await page.$('[data-testid="growth-store-history"]') !== null, true);
-    eq("…it says the one-year retention is permanent, not a pending backfill",
-      /retained for one year|cannot be recovered/i.test(text), true);
-    eq("…and it carries the not-like-for-like warning", /not like-for-like/.test(text), true);
-    await open("/growth/behavior");
-    eq("…and it does NOT repeat on a section with no download figures",
-      await page.$('[data-testid="growth-store-history"]'), null);
-
-    // THE COLUMN NOW MATCHES THE CARD, and marks its own store coverage.
-    await open("/growth/funnel");
+    // THE ROW LABELS STAY. They label one row's number and are not prose.
+    eq("the per-row coverage marks are still inside the table",
+      await page.evaluate(() => document.querySelectorAll('[data-testid="funnel-dl-coverage"]').length >= 0), true);
+    // Downloads is still the row max, so the bar still means "share of the funnel's top".
     const dl = await page.evaluate(() => {
       const stages = [...document.querySelectorAll("[class*='funnelStage']")];
       const byRow = new Map();
       for (const s of stages) { const r = s.parentElement; if (!byRow.has(r)) byRow.set(r, []); byRow.get(r).push(s); }
-      return [...byRow].map(([, cells]) => ({
-        vals: cells.map((c) => Number((c.querySelector("[class*='funnelSnum']")?.textContent ?? "").replace(/[^0-9]/g, ""))),
-        note: cells[0].querySelector('[data-testid="funnel-dl-coverage"]')?.textContent?.trim() ?? null,
-      }));
+      return [...byRow].map(([, cells]) => cells.map((c) => Number((c.querySelector("[class*='funnelSnum']")?.textContent ?? "").replace(/[^0-9]/g, ""))));
     });
-    eq("the table renders rows", dl.length > 0, true);
-    // THE BAR'S DENOMINATOR IS THE ROW MAX, so "share of the funnel's top" is only true while
-    // Downloads IS the row max. That was false when the column was Android-only.
-    eq("Downloads is the largest stage in every row", dl.filter((r) => r.vals[0] < Math.max(...r.vals)).length, 0);
-    // A fully-covered row carries no mark; the marking is asserted across coverage cases below.
-    const covered = dl.filter((r) => r.note == null);
-    eq("…and a fully-covered row carries no coverage mark", covered.length > 0, true);
+    eq("Downloads is the largest stage in every row", dl.filter((v) => v[0] < Math.max(...v)).length, 0);
+    // The open month is still marked.
+    eq("the current month's conversion is marked 'so far'",
+      await page.$('[data-testid="funnel-conv-partial"]') !== null, true);
+  }
+
+  // ── THE DATA ROOM RECEIVED IT ────────────────────────────────────────────
+  console.log("\nthe Data Room carries the methodology:");
+  {
+    await open("/growth/data-room");
+    const m = await page.$('[data-testid="growth-methodology"]');
+    eq("the methodology block is on the Data Room", m !== null, true);
+    const t = await page.evaluate(() => document.querySelector('[data-testid="growth-methodology"]')?.innerText ?? "");
+    for (const [what, re] of [
+      ["the three start dates", /three start dates/i],
+      ["the store floors", /retained for one year/i],
+      ["the counted-differently caveat", /App Units|user-deduped/i],
+      ["the aggregate-ratio explanation", /aggregate ratio/i],
+      ["the funnel bar explanation", /narrows left to right/i],
+      ["the open-month note", /so far/i],
+    ]) {
+      eq(`…it carries ${what}`, re.test(t), true);
+    }
   }
 
   // ── STORE COVERAGE IS MARKED, NOT BACKFILLED ─────────────────────────────
@@ -163,6 +177,9 @@ async function main() {
   // up when iOS appears reads as growth.
   console.log("\nstore coverage per row:");
   {
+    // BACK TO THE FUNNEL — the block above ends on the Data Room, and the custom-range inputs
+    // only exist here. Without this the fills time out against the wrong page.
+    await open("/growth/funnel");
     const setRange = async (a, z) => {
       await page.fill("#funnelCustomStart", a);
       await page.fill("#funnelCustomEnd", z);
@@ -199,13 +216,9 @@ async function main() {
     eq("…and the section really did change", await page.$eval('[data-testid="growth-title"]', (e) => e.textContent.trim()), "Player Behavior");
   }
 
-  // ── THE START-DATES NOTE IS NOT REPEATED SIX TIMES ───────────────────────
-  {
-    const withNote = SECTIONS.filter(([, , , s]) => s).length;
-    (withNote > 0 && withNote < SECTIONS.length)
-      ? ok(`the start-dates note appears on ${withNote} of ${SECTIONS.length} sections, not all six`)
-      : bad("start-dates placement", `${withNote} of ${SECTIONS.length}`);
-  }
+  // The banner is gone from every section, asserted per section in the loop above — there is no
+  // longer a "which pages carry it" question to answer here.
+
   await closeContext(ctx);
 
   // ── PHONE ────────────────────────────────────────────────────────────────

@@ -1162,3 +1162,16 @@
   text-transform: uppercase;
   opacity: 0.85;
 }
+
+/* The Data Room's methodology list — every explanatory statement on Growth, in one place. Term and
+   definition rather than paragraphs, so a reader can find the one fact they came for. */
+.methodList { margin: 0; padding: 4px 18px 18px; }
+.methodList dt {
+  font-size: 12px; font-weight: 800; letter-spacing: 0.01em; color: var(--ink, #12241d);
+  margin-top: 14px;
+}
+.methodList dt:first-of-type { margin-top: 4px; }
+.methodList dd {
+  margin: 4px 0 0; font-size: 12.5px; line-height: 1.55; color: #5b7568;
+}
+.methodList dd b { color: #12241d; font-weight: 700; }

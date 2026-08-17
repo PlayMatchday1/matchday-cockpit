@@ -14,7 +14,6 @@ export default function GrowthBehaviorPage() {
     <SectionFrame
       title="Player Behavior"
       subtitle="How playing habits change month over month — how many play once, occasionally, or every week."
-      startDates
     >
       {g.data && g.activePeriod && <BehaviorPanel data={g.data} period={g.activePeriod} />}
     </SectionFrame>
