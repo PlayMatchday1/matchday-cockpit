@@ -36,7 +36,7 @@ export default function KpiRow({ data, period }: { data: GrowthData; period: Per
   // period.start..period.end, summed, just above); the span is availability. Two unrelated facts
   // on one line. The span now appears once, as its own sentence, and never beside a number it
   // does not describe.
-  const androidFirst = data.downloads.android ? monthLabel(data.downloads.android.earliest.slice(0, 7)) : null;
+
 
   // Play-ingest status label. Replaces the static "awaiting Play sync" — which
   // could not fail and so could not be debugged — with one line per real state:
@@ -66,7 +66,7 @@ export default function KpiRow({ data, period }: { data: GrowthData; period: Per
     const months = data.downloads.iosByMonth.filter((d) => d.m >= period.start && d.m <= period.end);
     return { has: data.downloads.ios != null && months.length > 0, total: months.reduce((a, d) => a + d.count, 0) };
   }, [data.downloads, period]);
-  const iosFirst = data.downloads.ios ? monthLabel(data.downloads.ios.earliest.slice(0, 7)) : null;
+
   // Combined total across whichever platforms have data — explicitly labelled as a
   // mixed-definition sum, never presented as a single clean install count.
   const combinedHas = android.has || ios.has;
@@ -86,16 +86,12 @@ export default function KpiRow({ data, period }: { data: GrowthData; period: Per
         <div className={`${styles.kpiValue} ${combinedHas ? "" : styles.kpiValueMuted}`}>
           {combinedHas ? fmtInt(combinedTotal) : "—"}
         </div>
+        {/* THE PERIOD, and nothing else. "counted differently, not like-for-like" moved to the
+            page banner, which is where the other start-date and definition caveats live — this
+            card carried three caveats against three numbers while the other three cards carried
+            one line each. */}
         <div className={styles.kpiFoot}>
-          {/* State exactly what the total includes. The two stores count differently
-              (Apple App Units vs Google user-installs), so the sum is approximate. */}
-          {bothHave
-            ? `iOS App Units + Android user-installs · ${rangeLabel} — counted differently, not like-for-like`
-            : android.has
-              ? `Android only · ${rangeLabel} — iOS pending`
-              : ios.has
-                ? `iOS only · ${rangeLabel} — Android pending`
-                : "iOS + Android — no store data yet"}
+          {combinedHas ? rangeLabel : "no store data yet"}
         </div>
         <div className={styles.kpiSecondary}>
           <div>
@@ -118,24 +114,17 @@ export default function KpiRow({ data, period }: { data: GrowthData; period: Per
               </span>
             )}
           </div>
-          {/* AVAILABILITY, SAID ONCE. Why the two platforms have different history — Apple's
-              analytics only reach back about a year, Google's go back further. Stated as its own
-              fact rather than as a date range pinned to a count it does not describe. */}
-          {(iosFirst || androidFirst) && (
-            <div data-testid="kpi-download-history">
-              History differs by store:{" "}
-              {iosFirst ? <>Apple&rsquo;s analytics reach back to <b>{iosFirst}</b></> : null}
-              {iosFirst && androidFirst ? ", " : null}
-              {androidFirst ? <>Google&rsquo;s to <b>{androidFirst}</b></> : null}.
-            </div>
-          )}
         </div>
       </div>
 
       <div className={styles.kpi}>
         <div className={styles.kpiLabel}>Registrations · {rangeLabel}</div>
         <div className={styles.kpiValue}>{fmtInt(scoped.registrations)}</div>
-        <div className={styles.kpiFoot}>— of downloads (store sync not connected)</div>
+        {/* NO "— of downloads" LINE. A download cannot be tied to an account — Apple and Google
+            never reveal who installed — so there is no honest per-user conversion to print, and an
+            aggregate ratio shown in that slot would claim more than it knows. The line was also a
+            hardcoded dash with a parenthetical ("store sync not connected") that stopped being
+            true the day both stores landed. Deleted rather than replaced. */}
         <div className={styles.kpiSecondary}>
           All time: {fmtInt(k.registrations)} completed · {fmtInt(k.accountsCreated)} accounts · {fmtInt(k.onboardingGap)}{" "}
           {plural(k.onboardingGap, "account", "accounts")} never finished onboarding

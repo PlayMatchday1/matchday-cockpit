@@ -76,11 +76,51 @@ export default function PlayerFunnel({
       },
     ].map((r) => {
       const c = sumCohort(data.funnelByMonth, new Set(r.months));
-      // Downloads = Android installs summed over the row's months; null (dash)
-      // when we have NO install data for that period — never 0. iOS not wired.
+      // Downloads = iOS App Units + Android user-installs summed over the row's months; null
+      // (dash) when we have NO install data for that period — never 0.
+      //
+      // THIS READ BOTH STORES ONLY AFTER APPLE LANDED. It summed androidByMonth alone while the
+      // KPI card above already summed both, so the same metric over the same period appeared twice
+      // on one page as 2,241 and 11,307. The visible symptom was a download → registration
+      // conversion of 2551.3% in the Aug 2026 row (995 registrations from 39 downloads) — a funnel
+      // stage that grew 25× at its first step, on screen the whole time.
+      //
+      // The two stores count differently (Apple App Units = new downloads, Google user-installs =
+      // user-deduped), which is why the card calls the sum not-like-for-like. That caveat now lives
+      // in the page banner; it is a reason to label the number, not a reason to show a different
+      // one here than the card shows.
+      // THE TWO STORES DO NOT COVER THE SAME HISTORY, AND THEY NEVER WILL. Apple's monthly Sales
+      // and Trends reports are retained for ONE YEAR and are not regenerated once that window
+      // passes, so iOS monthly data before Aug 2025 is PERMANENTLY GONE — not unsynced, not
+      // pending, not fillable. (Apple keeps YEARLY reports for ten years, so annual iOS totals for
+      // 2023 and 2024 are recoverable, but with no monthly granularity, which is the granularity
+      // this table is built on.) Google's begin Mar 2023.
+      //
+      // So the boundary below is a PERMANENT PROPERTY OF THE DATA. There is deliberately no TODO
+      // here: nothing later can remove this label, and writing it as a temporary gap would invite
+      // someone to try. A naive sum is genuinely both stores only from Apple's floor onward, and
+      // the step up when iOS appears would otherwise read as growth when it is a second source
+      // arriving.
+      //
+      // NOT BACKFILLED, NOT ESTIMATED, AND ROWS ARE NOT RESTRICTED to the covered window. The row
+      // still shows what we have; it is LABELLED with what that number is made of. Computed per
+      // row from the months it actually spans, because two of the four rows (YTD and the custom
+      // range) are driven by data or by the operator and can straddle the floor at any time.
       const monthSet = new Set(r.months);
-      const dlMonths = data.downloads.androidByMonth.filter((d) => monthSet.has(d.m));
+      const iosFloor = data.downloads.ios?.earliest.slice(0, 7) ?? null;
+      const withIos = iosFloor ? r.months.filter((m) => m >= iosFloor) : [];
+      const coverage: "both" | "partial" | "android" =
+        !iosFloor || withIos.length === 0 ? "android"
+        : withIos.length === r.months.length ? "both"
+        : "partial";
+      const dlMonths = [...data.downloads.androidByMonth, ...data.downloads.iosByMonth]
+        .filter((d) => monthSet.has(d.m));
       const downloads = dlMonths.length ? dlMonths.reduce((a, d) => a + d.count, 0) : null;
+      const dlNote =
+        downloads == null ? null
+        : coverage === "both" ? null
+        : coverage === "android" ? "Android only · no iOS data exists"
+        : `Android only before ${monthLabel(iosFloor!)}`;
       const vals = [downloads, c.registrations, c.played1, c.played3, c.played5, c.played10] as (number | null)[];
       // Assert nested — a violation is a bug, not a number to render.
       for (let i = 2; i < vals.length; i++) {
@@ -89,7 +129,7 @@ export default function PlayerFunnel({
           console.error(`Funnel not nested in "${r.name}" at stage ${i}`, vals);
         }
       }
-      return { ...r, vals };
+      return { ...r, vals, dlNote };
     });
   }, [data.funnelByMonth, customStart, customEnd, months]);
 
@@ -160,7 +200,7 @@ export default function PlayerFunnel({
                 <span className={styles.funnelPeriodName}>{r.name}</span>
                 <span className={styles.funnelPeriodMeta}>{r.meta}</span>
               </div>
-              {renderRowCells(r.vals)}
+              {renderRowCells(r.vals, r.dlNote)}
             </div>
           ))}
         </div>
@@ -180,7 +220,7 @@ export default function PlayerFunnel({
 
 // Builds a row's stage + conversion cells. The conversion between stage i and i+1
 // is b/a (b = vals[i+1], a = vals[i]); a dash when either is null or a is 0.
-function renderRowCells(vals: (number | null)[]): ReactNode[] {
+function renderRowCells(vals: (number | null)[], dlNote?: string | null): ReactNode[] {
   // Bars are a share of the LARGEST stage in the row (Downloads when known, else
   // Registrations) so the funnel narrows left → right even now that Downloads is
   // a real, larger-than-registrations value.
@@ -196,6 +236,11 @@ function renderRowCells(vals: (number | null)[]): ReactNode[] {
     out.push(
       <div key={`s${i}`} className={`${styles.funnelStage} ${stageDashed ? styles.funnelStageNull : ""}`}>
         <span className={styles.funnelSnum}>{isNull ? "—" : fmtInt(v)}</span>
+        {/* STORE COVERAGE, on the Downloads cell only. A bare combined number on a row the two
+            stores do not both cover would read as one metric when it is two spliced together. */}
+        {i === 0 && dlNote && (
+          <span className={styles.funnelDlNote} data-testid="funnel-dl-coverage">{dlNote}</span>
+        )}
         {isNull ? (
           <span className={styles.funnelSbar} style={{ background: "transparent" }} />
         ) : (

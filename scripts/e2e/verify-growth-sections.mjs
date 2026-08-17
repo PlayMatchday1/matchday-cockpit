@@ -97,34 +97,90 @@ async function main() {
     eq("…and the three-dot scope legend is gone", /Follows the time period above/.test(r.text), false);
   }
 
-  // ── THE DOWNLOADS CARD: A COUNT IS NOT A COVERAGE WINDOW ─────────────────
-  // "iOS 9,066 · App Store Units · Aug 2025 – Aug 2026" put a PERIOD figure beside the store's
-  // DATA AVAILABILITY, which read as though 9,066 downloads happened across that span. The count
-  // is filtered to the selected period; the span is how far back Apple's analytics go. Neither
-  // date range may sit beside the number again.
-  console.log("\nthe downloads card:");
+  // ── THE DOWNLOADS CARD AND THE FUNNEL'S DOWNLOADS COLUMN ─────────────────
+  // Three defects, all on the same number:
+  //   1. the card printed a PERIOD figure beside each store's DATA COVERAGE window, so "iOS 9,066
+  //      · Aug 2025 – Aug 2026" read as a year of downloads;
+  //   2. the funnel TABLE summed androidByMonth ALONE while the card summed both, so one page
+  //      showed 2,241 and 11,307 for the same metric and period — visible as a 2551.3%
+  //      download → registration conversion in the Aug 2026 row;
+  //   3. the Registrations card printed "— of downloads (store sync not connected)", a hardcoded
+  //      dash whose parenthetical stopped being true the day both stores landed.
+  console.log("\nthe downloads card and column:");
   {
     await open("/growth/funnel");
-    const lines = await page.evaluate(() => {
-      const h = document.querySelector('[data-testid="kpi-download-history"]');
-      if (!h) return null;
-      const box = h.parentElement;
-      return [...box.children].map((el) => el.textContent.trim());
+    const card = await page.evaluate(() => {
+      const lab = [...document.querySelectorAll("div")].find((d) => d.textContent?.trim() === "App downloads · iOS + Android");
+      return lab?.parentElement?.innerText.trim().split("\n").map((l) => l.trim()) ?? null;
     });
-    eq("the card renders its platform breakdown", Array.isArray(lines) && lines.length >= 3, true);
-    if (lines) {
-      const platform = lines.filter((l) => /^(iOS|Android)\b/.test(l));
-      eq("…one line per platform", platform.length, 2);
-      // A MONTH RANGE beside the count is the defect. A single month is fine (it never appeared
-      // there), so the pattern is specifically "Mon YYYY – Mon YYYY".
+    eq("the card renders", Array.isArray(card), true);
+    if (card) {
+      // THREE NUMBERS AND THE PERIOD. The caveats moved to the banner.
+      eq("…the card is down to three numbers plus the period", card.length, 5);
       const RANGE = /[A-Z][a-z]{2} \d{4}\s*[–-]\s*[A-Z][a-z]{2} \d{4}/;
+      const platform = card.filter((l) => /^(iOS|Android)\b/.test(l));
+      eq("…one line per platform", platform.length, 2);
       eq("…and neither carries a date range beside its number", platform.filter((l) => RANGE.test(l)), []);
-      const hist = lines.find((l) => /History differs by store/.test(l)) ?? "";
-      eq("the availability is stated ONCE, as its own fact", hist.length > 0, true);
-      eq("…naming why the two platforms differ", /Apple/.test(hist) && /Google/.test(hist), true);
-      // POSITIVE CONTROL — the coverage months are still on the page, just not beside the counts.
-      eq("…and it still carries the months (they were moved, not dropped)", /\b\d{4}\b/.test(hist), true);
+      eq("…the 'counted differently' caveat is not on the card", card.filter((l) => /like-for-like/.test(l)), []);
     }
+    const text = await page.evaluate(() => document.body.innerText);
+    eq("the false '(store sync not connected)' line is gone from the page", /store sync not connected/.test(text), false);
+    eq("…and no 'of downloads' conversion is claimed", /of downloads/.test(text), false);
+
+    // THE CAVEATS LIVE IN THE BANNER, and only where downloads are shown.
+    eq("the store-history sentence is in the banner on the funnel",
+      await page.$('[data-testid="growth-store-history"]') !== null, true);
+    eq("…it says the one-year retention is permanent, not a pending backfill",
+      /retained for one year|cannot be recovered/i.test(text), true);
+    eq("…and it carries the not-like-for-like warning", /not like-for-like/.test(text), true);
+    await open("/growth/behavior");
+    eq("…and it does NOT repeat on a section with no download figures",
+      await page.$('[data-testid="growth-store-history"]'), null);
+
+    // THE COLUMN NOW MATCHES THE CARD, and marks its own store coverage.
+    await open("/growth/funnel");
+    const dl = await page.evaluate(() => {
+      const stages = [...document.querySelectorAll("[class*='funnelStage']")];
+      const byRow = new Map();
+      for (const s of stages) { const r = s.parentElement; if (!byRow.has(r)) byRow.set(r, []); byRow.get(r).push(s); }
+      return [...byRow].map(([, cells]) => ({
+        vals: cells.map((c) => Number((c.querySelector("[class*='funnelSnum']")?.textContent ?? "").replace(/[^0-9]/g, ""))),
+        note: cells[0].querySelector('[data-testid="funnel-dl-coverage"]')?.textContent?.trim() ?? null,
+      }));
+    });
+    eq("the table renders rows", dl.length > 0, true);
+    // THE BAR'S DENOMINATOR IS THE ROW MAX, so "share of the funnel's top" is only true while
+    // Downloads IS the row max. That was false when the column was Android-only.
+    eq("Downloads is the largest stage in every row", dl.filter((r) => r.vals[0] < Math.max(...r.vals)).length, 0);
+    // A fully-covered row carries no mark; the marking is asserted across coverage cases below.
+    const covered = dl.filter((r) => r.note == null);
+    eq("…and a fully-covered row carries no coverage mark", covered.length > 0, true);
+  }
+
+  // ── STORE COVERAGE IS MARKED, NOT BACKFILLED ─────────────────────────────
+  // Apple retains monthly reports for ONE YEAR and does not regenerate them, so pre-Aug-2025 iOS
+  // months are permanently gone. A row the two stores do not both cover must say so, or the step
+  // up when iOS appears reads as growth.
+  console.log("\nstore coverage per row:");
+  {
+    const setRange = async (a, z) => {
+      await page.fill("#funnelCustomStart", a);
+      await page.fill("#funnelCustomEnd", z);
+      await page.waitForTimeout(700);
+      return page.evaluate(() => {
+        const stages = [...document.querySelectorAll("[class*='funnelStage']")];
+        const byRow = new Map();
+        for (const s of stages) { const r = s.parentElement; if (!byRow.has(r)) byRow.set(r, []); byRow.get(r).push(s); }
+        const rows = [...byRow];
+        const last = rows[rows.length - 1][1];
+        return last[0].querySelector('[data-testid="funnel-dl-coverage"]')?.textContent?.trim() ?? null;
+      });
+    };
+    eq("a range entirely before iOS is marked Android-only, permanently",
+      await setRange("2023-03", "2024-12"), "Android only · no iOS data exists");
+    eq("a range straddling the iOS floor names the boundary",
+      await setRange("2025-01", "2025-12"), "Android only before Aug 2025");
+    eq("a fully-covered range is NOT marked", await setRange("2025-08", "2026-07"), null);
   }
 
   // ── THE MOVE DID NOT DUPLICATE THE FETCH ─────────────────────────────────

@@ -18,13 +18,18 @@ import PeriodBar from "./PeriodBar";
 import { useGrowth } from "./GrowthDataProvider";
 
 export default function SectionFrame({
-  title, subtitle, period = true, startDates = false, children,
+  title, subtitle, period = true, startDates = false, storeHistory = false, children,
 }: {
   title: string;
   subtitle: string;
   period?: boolean;
   // THE THREE START DATES follow the pages that PLOT ACROSS THEM — see each page for why.
   startDates?: boolean;
+  // THE STORE FLOORS — a FOURTH start date, and the "counted differently" caveat. Only the funnel
+  // shows download figures, so only the funnel passes this. It renders INSIDE the same banner
+  // rather than as a second banner variant: the banner's whole job is saying when different series
+  // begin, and Apple's floor is one of those.
+  storeHistory?: boolean;
   children: React.ReactNode;
 }) {
   const g = useGrowth();
@@ -65,6 +70,19 @@ export default function SectionFrame({
           <b>{monthLabel(g.data.floors.registrations)}</b> and memberships to <b>{monthLabel(g.data.floors.memberships)}</b>,
           but every play-derived number begins <b>{monthLabel(g.data.floors.play)}</b>, the first month any matches
           exist. Empty regions before a series&rsquo; start mean &ldquo;no data yet&rdquo;, never zero.
+          {storeHistory && g.data.downloads.ios && (
+            <>
+              {" "}
+              <span data-testid="growth-store-history">
+                App downloads have a fourth: Apple&rsquo;s monthly reports begin{" "}
+                <b>{monthLabel(g.data.downloads.ios.earliest.slice(0, 7))}</b> and are retained for one year
+                only, so earlier iOS months do not exist and cannot be recovered
+                {g.data.downloads.android ? <>; Google&rsquo;s reach back to <b>{monthLabel(g.data.downloads.android.earliest.slice(0, 7))}</b></> : null}.
+                The two stores also count differently — Apple App Units are new downloads, Google
+                user-installs are user-deduped — so a combined figure is not like-for-like.
+              </span>
+            </>
+          )}
         </div>
       )}
       {children}
