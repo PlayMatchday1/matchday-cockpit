@@ -5,6 +5,7 @@ import type { GrowthData } from "@/lib/growthAnalytics";
 import type { Period } from "./GlobalPeriod";
 import styles from "./growth.module.css";
 import { fmtInt, monthLabel } from "./format";
+import { canonCity } from "@/lib/reviewsDerive";
 
 // PART 1 (c0d3853, unchanged): a nested COHORT funnel. For the users who completed
 // sign-up in a window, how many went on to play ≥1/≥3/≥5/≥10 non-cancelled
@@ -26,7 +27,29 @@ const STAGES: { label: string; hue: string | null }[] = [
   { label: "10 matches", hue: "var(--forest)" },
 ];
 
+const ALL_CITIES = "All cities";
+
 type Cohort = { registrations: number; played1: number; played3: number; played5: number; played10: number };
+
+// The city-dimensioned cohort for one city. canonCity on BOTH sides — see the comment at the
+// city state above for why that is not optional.
+function sumCohortCity(
+  rows: { m: string; city: string; registrations: number; played1: number; played3: number; played5: number; played10: number }[],
+  monthSet: Set<string>,
+  city: string,
+): Cohort {
+  const want = canonCity(city);
+  const acc: Cohort = { registrations: 0, played1: 0, played3: 0, played5: 0, played10: 0 };
+  for (const r of rows) {
+    if (!monthSet.has(r.m) || canonCity(r.city) !== want) continue;
+    acc.registrations += r.registrations;
+    acc.played1 += r.played1;
+    acc.played3 += r.played3;
+    acc.played5 += r.played5;
+    acc.played10 += r.played10;
+  }
+  return acc;
+}
 
 function sumCohort(rows: GrowthData["funnelByMonth"], monthSet: Set<string>): Cohort {
   const acc: Cohort = { registrations: 0, played1: 0, played3: 0, played5: 0, played10: 0 };
@@ -53,6 +76,18 @@ export default function PlayerFunnel({
   const months = data.behaviorOverall.map((p) => p.m);
   const [customStart, setCustomStart] = useState(period.start);
   const [customEnd, setCustomEnd] = useState(period.end);
+  // LIVE, no Apply button — every other filter in Clubhouse applies on change.
+  const [city, setCity] = useState<string>(ALL_CITIES);
+
+  // ONE VOCABULARY AT THE POINT OF COMPARISON. canonCity runs on BOTH sides, so a cockpit name can
+  // never be compared against a normalised one. That exact mismatch made /city/reviews return zero
+  // rows for DFW — "Dallas / Fort Worth" against "Dallas" — while passing in Austin, the one city
+  // where the two maps agree. The dropdown is built from the same canonicalised set the rows carry.
+  const cityOptions = useMemo(() => {
+    const set = new Set<string>();
+    for (const r of data.funnelByMonthCity) set.add(canonCity(r.city));
+    return [...set].sort();
+  }, [data.funnelByMonthCity]);
 
   const rows = useMemo(() => {
     // "Current" is the latest data month (independent of the global period);
@@ -80,7 +115,13 @@ export default function PlayerFunnel({
         months: custom,
       },
     ].map((r) => {
-      const c = sumCohort(data.funnelByMonth, new Set(r.months));
+      const monthsOf = new Set(r.months);
+      // ALL CITIES uses the national cohort; a single city uses the city-dimensioned one. They are
+      // built from the same users in the same pass on the server, so the only difference is which
+      // rows are summed.
+      const c = city === ALL_CITIES
+        ? sumCohort(data.funnelByMonth, monthsOf)
+        : sumCohortCity(data.funnelByMonthCity, monthsOf, city);
       // Downloads = iOS App Units + Android user-installs summed over the row's months; null
       // (dash) when we have NO install data for that period — never 0.
       //
@@ -118,11 +159,17 @@ export default function PlayerFunnel({
         !iosFloor || withIos.length === 0 ? "android"
         : withIos.length === r.months.length ? "both"
         : "partial";
-      const dlMonths = [...data.downloads.androidByMonth, ...data.downloads.iosByMonth]
-        .filter((d) => monthSet.has(d.m));
+      // DOWNLOADS CANNOT BE ATTRIBUTED TO A CITY. Apple and Google report country and region,
+      // never city. With a single city selected the cell is a DASH and its conversion is a dash —
+      // NOT the national figure, and never a city's registrations divided by a national
+      // denominator, which would invent a conversion rate that does not exist.
+      const dlMonths = city === ALL_CITIES
+        ? [...data.downloads.androidByMonth, ...data.downloads.iosByMonth].filter((d) => monthSet.has(d.m))
+        : [];
       const downloads = dlMonths.length ? dlMonths.reduce((a, d) => a + d.count, 0) : null;
       const dlNote =
-        downloads == null ? null
+        city !== ALL_CITIES ? null
+        : downloads == null ? null
         : coverage === "both" ? null
         : coverage === "android" ? "Android only · no iOS data exists"
         : `Android only before ${monthLabel(iosFloor!)}`;
@@ -136,7 +183,7 @@ export default function PlayerFunnel({
       }
       return { ...r, vals, dlNote, partial: "partial" in r ? Boolean(r.partial) : false };
     });
-  }, [data.funnelByMonth, customStart, customEnd, months]);
+  }, [data.funnelByMonth, data.funnelByMonthCity, data.downloads, city, customStart, customEnd, months]);
 
   return (
     <div className={styles.card}>
@@ -150,6 +197,23 @@ export default function PlayerFunnel({
         <div style={{ display: "flex", alignItems: "flex-start", gap: 12, flexWrap: "wrap" }}>
           {scopeChip}
           <div className={styles.controlsRow}>
+          <div className={styles.field}>
+            <label className={styles.fieldLabel} htmlFor="funnelCity">
+              City
+            </label>
+            <select
+              id="funnelCity"
+              data-testid="funnel-city"
+              className={styles.control}
+              value={city}
+              onChange={(e) => setCity(e.target.value)}
+            >
+              <option value={ALL_CITIES}>{ALL_CITIES}</option>
+              {cityOptions.map((c) => (
+                <option key={c} value={c}>{c}</option>
+              ))}
+            </select>
+          </div>
           <div className={styles.field}>
             <label className={styles.fieldLabel} htmlFor="funnelCustomStart">
               Custom start

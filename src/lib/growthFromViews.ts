@@ -210,6 +210,33 @@ export function computeGrowthFromViews(input: ViewInput): GrowthData {
     if (lm >= 10) row.played10++;
   }
   const funnelByMonth = [...funnelAgg.entries()].sort().map(([m, r]) => ({ m, ...r }));
+
+  // THE SAME COHORT FUNNEL, SPLIT BY THE CITY DECLARED AT REGISTRATION — mirrors computeGrowth so
+  // both producers of GrowthData agree. Downloads are absent by definition (the stores report
+  // country/region, never city), and registrations with no usable declared city are counted
+  // separately rather than folded into a city, so the cities do not sum to the national row.
+  const funnelCityAgg = new Map<string, { registrations: number; played1: number; played3: number; played5: number; played10: number }>();
+  const funnelUnattributedAgg = new Map<string, number>();
+  for (const u of completedUsers) {
+    const m = u.signup_month!;
+    const city = declaredByUser.get(u.user_id) ?? null;
+    if (!city) {
+      funnelUnattributedAgg.set(m, (funnelUnattributedAgg.get(m) ?? 0) + 1);
+      continue;
+    }
+    const key = `${m}\u0000${city}`;
+    let row = funnelCityAgg.get(key);
+    if (!row) funnelCityAgg.set(key, (row = { registrations: 0, played1: 0, played3: 0, played5: 0, played10: 0 }));
+    row.registrations++;
+    const lm = u.lifetime_matches ?? 0;
+    if (lm >= 1) row.played1++;
+    if (lm >= 3) row.played3++;
+    if (lm >= 5) row.played5++;
+    if (lm >= 10) row.played10++;
+  }
+  const funnelByMonthCity = [...funnelCityAgg.entries()].sort()
+    .map(([k, r]) => { const [m, city] = k.split("\u0000"); return { m, city, ...r }; });
+  const funnelUnattributed = [...funnelUnattributedAgg.entries()].sort().map(([m, registrations]) => ({ m, registrations }));
   for (const r of funnelByMonth) {
     if (!(r.registrations >= r.played1 && r.played1 >= r.played3 && r.played3 >= r.played5 && r.played5 >= r.played10))
       throw new Error(`funnel cohort not nested for ${r.m}: ${JSON.stringify(r)}`);
@@ -465,6 +492,8 @@ export function computeGrowthFromViews(input: ViewInput): GrowthData {
     },
     registrationsByMonth: [], // unused by the client
     funnelByMonth,
+    funnelByMonthCity,
+    funnelUnattributed,
     players: [], // dropped from the payload — churn card reads /api/growth/churn
     behaviorOverall,
     behaviorByCity,

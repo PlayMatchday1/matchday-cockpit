@@ -326,6 +326,12 @@ export type GrowthData = {
   // Nested cohort funnel by signup month (additive across months). downloads is
   // not here — it has no per-person source.
   funnelByMonth: { m: string; registrations: number; played1: number; played3: number; played5: number; played10: number }[];
+  // The same cohort funnel split by the city declared at registration. Downloads are absent by
+  // definition — the stores report country/region, never city.
+  funnelByMonthCity: { m: string; city: string; registrations: number; played1: number; played3: number; played5: number; played10: number }[];
+  // Registrations in a month with NO usable declared city. The cities therefore do not sum to
+  // funnelByMonth, and this is the difference — stated rather than absorbed.
+  funnelUnattributed: { m: string; registrations: number }[];
   players: PlayerRow[]; // one row per played player (7,517); powers funnel, churn, data room
   behaviorOverall: BehaviorPoint[];
   behaviorByCity: Record<string, BehaviorPoint[]>;
@@ -602,6 +608,45 @@ export function computeGrowth(input: RawInput): GrowthData {
   const funnelByMonth = [...funnelAgg.entries()]
     .sort()
     .map(([m, r]) => ({ m, ...r }));
+
+  // ── THE SAME COHORT FUNNEL, SPLIT BY CITY ───────────────────────────────────
+  // A signup cohort is defined at REGISTRATION, so the city that belongs to it is the one known at
+  // registration: preferable_city_name (declaredByUser, already canonicalised by
+  // normalizeDeclared). NOT the most-frequent play city — that exists only for users who played,
+  // so using it would drop every registration that never converted, which is precisely the
+  // population the top of a funnel is about.
+  //
+  // DOWNLOADS ARE ABSENT HERE ON PURPOSE. Apple and Google report country and region, never city,
+  // so there is no per-city download figure to emit and the client renders a dash rather than
+  // dividing a city's registrations by a national number.
+  //
+  // THE UNATTRIBUTED REMAINDER IS COUNTED, NOT HIDDEN. A user with no declared city (or one that
+  // does not canonicalise) belongs to no city, so the cities do NOT sum to the national row. That
+  // gap is reported as funnelUnattributed rather than being silently absorbed into a city.
+  const funnelCityAgg = new Map<string, { registrations: number; played1: number; played3: number; played5: number; played10: number }>();
+  const funnelUnattributedAgg = new Map<string, number>();
+  for (const u of completedUsers) {
+    if (!u.completed_sign_up_at) continue;
+    const m = monthKey(u.completed_sign_up_at);
+    const city = declaredByUser.get(u.id) ?? null;
+    if (!city) {
+      funnelUnattributedAgg.set(m, (funnelUnattributedAgg.get(m) ?? 0) + 1);
+      continue;
+    }
+    const key = `${m}\u0000${city}`;
+    let row = funnelCityAgg.get(key);
+    if (!row) funnelCityAgg.set(key, (row = { registrations: 0, played1: 0, played3: 0, played5: 0, played10: 0 }));
+    row.registrations++;
+    const lm = lifetimeMatches.get(u.id) ?? 0;
+    if (lm >= 1) row.played1++;
+    if (lm >= 3) row.played3++;
+    if (lm >= 5) row.played5++;
+    if (lm >= 10) row.played10++;
+  }
+  const funnelByMonthCity = [...funnelCityAgg.entries()]
+    .sort()
+    .map(([k, r]) => { const [m, city] = k.split("\u0000"); return { m, city, ...r }; });
+  const funnelUnattributed = [...funnelUnattributedAgg.entries()].sort().map(([m, registrations]) => ({ m, registrations }));
   // Invariant (asserted again on the client before render): nested subsets.
   for (const r of funnelByMonth) {
     if (!(r.registrations >= r.played1 && r.played1 >= r.played3 && r.played3 >= r.played5 && r.played5 >= r.played10)) {
@@ -994,6 +1039,8 @@ export function computeGrowth(input: RawInput): GrowthData {
     },
     registrationsByMonth: [...regByMonth.entries()].sort().map(([m, count]) => ({ m, count })),
     funnelByMonth,
+    funnelByMonthCity,
+    funnelUnattributed,
     players: playerRows,
     behaviorOverall,
     behaviorByCity,

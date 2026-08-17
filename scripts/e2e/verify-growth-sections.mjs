@@ -171,6 +171,71 @@ async function main() {
     }
   }
 
+
+  // ── THE CITY FILTER ──────────────────────────────────────────────────────
+  console.log("\nthe funnel's city filter:");
+  {
+    await open("/growth/funnel");
+    const opts = await page.$eval('[data-testid="funnel-city"]', (e) => [...e.options].map((o) => o.value));
+    eq("it defaults to All cities", await page.$eval('[data-testid="funnel-city"]', (e) => e.value), "All cities");
+    eq("…and offers real cities beside it", opts.length > 1, true);
+    // LIVE, no Apply — every other filter in Clubhouse applies on change.
+    eq("…with no Apply button", await page.evaluate(() =>
+      [...document.querySelectorAll("button")].some((b) => /^apply$/i.test(b.textContent?.trim() ?? ""))), false);
+
+    const rowsNow = () => page.evaluate(() => {
+      const stages = [...document.querySelectorAll("[class*='funnelStage']")];
+      const byRow = new Map();
+      for (const s of stages) { const r = s.parentElement; if (!byRow.has(r)) byRow.set(r, []); byRow.get(r).push(s); }
+      return [...byRow].map(([row, cells]) => ({
+        nums: cells.map((x) => x.querySelector("[class*='funnelSnum']")?.textContent?.trim() ?? ""),
+        conv1: row.querySelector("[class*='funnelConv']")?.textContent?.trim() ?? "",
+      }));
+    });
+
+    // DFW SPECIFICALLY. Austin is the ONE city where the cockpit name and the normalised name are
+    // the same string, so a filter comparing the two vocabularies passes there and returns zero
+    // rows everywhere else — exactly what happened on /city/reviews. Dallas is the case that
+    // catches it, so it is the case asserted.
+    const dallas = opts.find((o) => /dallas/i.test(o));
+    eq("Dallas is offered (the non-degenerate city)", !!dallas, true);
+    await page.selectOption('[data-testid="funnel-city"]', dallas);
+    await page.waitForTimeout(700);
+    const dRows = await rowsNow();
+    const dReg = dRows.map((r) => Number(r.nums[1].replace(/[^0-9]/g, ""))).filter((n) => Number.isFinite(n));
+    eq("…and selecting it returns NON-ZERO registrations", dReg.some((n) => n > 0), true);
+
+    // DOWNLOADS CANNOT BE ATTRIBUTED TO A CITY — the stores report country/region, never city.
+    eq("…the Downloads cell is a dash for every row", dRows.every((r) => r.nums[0] === "—"), true);
+    eq("…and its conversion is a dash too, never a number",
+      dRows.every((r) => r.conv1.replace(/so far/i, "").trim() === "—"), true);
+
+    // The rest of the funnel is city-attributable and filters normally.
+    eq("…while the later stages still render numbers", dRows.some((r) => /\d/.test(r.nums[2] ?? "")), true);
+
+    // POSITIVE CONTROL — All cities DOES show a downloads figure, so the dashes above mean
+    // "not attributable", not "the table is broken".
+    await page.selectOption('[data-testid="funnel-city"]', "All cities");
+    await page.waitForTimeout(700);
+    const allRows = await rowsNow();
+    eq("All cities shows a real Downloads figure", allRows.some((r) => /\d/.test(r.nums[0])), true);
+
+    // THE CITIES SUM TO THE NATIONAL FIGURE, or the difference is stated.
+    const bal = await page.evaluate(async (t) => {
+      const j = await (await fetch("/api/growth", { headers: { Authorization: `Bearer ${t}` } })).json();
+      const nat = new Map(j.funnelByMonth.map((x) => [x.m, x.registrations]));
+      const byM = new Map();
+      for (const x of j.funnelByMonthCity) byM.set(x.m, (byM.get(x.m) ?? 0) + x.registrations);
+      const un = new Map((j.funnelUnattributed ?? []).map((x) => [x.m, x.registrations]));
+      const bad = [];
+      for (const [m, n] of nat) if ((byM.get(m) ?? 0) + (un.get(m) ?? 0) !== n) bad.push({ m, n, c: byM.get(m) ?? 0, u: un.get(m) ?? 0 });
+      return { bad, months: nat.size, unattributedTotal: [...un.values()].reduce((a, b) => a + b, 0) };
+    }, vv.data.session.access_token);
+    eq("every month's cities + unattributed equals the national figure", bal.bad, []);
+    eq("…over a real number of months (not a vacuous zero-month check)", bal.months > 0, true);
+    console.log(`   · registrations with no declared city, all time: ${bal.unattributedTotal}`);
+  }
+
   // ── STORE COVERAGE IS MARKED, NOT BACKFILLED ─────────────────────────────
   // Apple retains monthly reports for ONE YEAR and does not regenerate them, so pre-Aug-2025 iOS
   // months are permanently gone. A row the two stores do not both cover must say so, or the step
