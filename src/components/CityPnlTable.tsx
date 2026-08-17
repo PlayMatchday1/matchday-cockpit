@@ -1,10 +1,39 @@
 "use client";
 
-// City P&L — one ranked table row per city, replacing the old stacked city
-// cards. Ranked by net descending. Applies the unmapped-cost rule (unknown-cost
-// fields held out of net, surfaced as "untracked"). Basis controls live behind a
-// gear popover with the current selection printed next to it; the city filter
-// stays visible. See src/lib/cityPnl.ts for the arithmetic + assertions.
+// CITY P&L — one row per city, and the row reads left to right as a running calculation:
+//
+//     DPP rev + Member rev = TOTAL REV  −  Field cost  =  Field net  −  Overhead  =  Net P&L
+//
+// WHY IT WAS REBUILT (four things were wrong, none of them the typography):
+//
+//   1. THE COLUMNS NEVER SHARED AN EDGE. Every numeric column sized itself by its own content, so
+//      $14,208 and $55 ended in different places and the eye had nothing to run down. Fixed widths
+//      via <colgroup>, tabular numerals, one right edge per column across header, body and footer.
+//      That is the whole fix.
+//   2. THE MARGIN'S DENOMINATOR WAS INVISIBLE. Margin is Net P&L ÷ (DPP + Member) and that sum
+//      appeared nowhere. TOTAL REV is not decoration — it is the number every margin is measured
+//      against, so it is on the page and set heavier than the two columns it sums.
+//   3. COSTS DID NOT LOOK LIKE COSTS. Field cost was folded invisibly into field net — and on
+//      Austin it is the second largest number on the row. Both it and Overhead now carry a minus
+//      and the cost colour.
+//   4. THE DRILL-DOWN HAD ITS OWN COLUMN WIDTHS. A nested table under a table is exactly where
+//      "the columns don't align" was loudest. The pitches now sit in the SAME nine columns.
+//
+// FIELD NET CHANGED DEFINITION — see src/lib/cityPnl.ts. It is Total rev − Field cost now, not
+// DPP − Field cost. Both give the same Net P&L; only the new one chains, which is what lets a
+// reader check any cell against its neighbours.
+//
+// A PITCH DOES NOT HAVE AN OVERHEAD, A NET OR A MARGIN. Those are city-level facts, so the pitch
+// rows render dashes there rather than inventing a share of them.
+//
+// MEMBER REV ON A PITCH IS ALLOCATED, NOT MEASURED — nobody buys a membership at a pitch. Every
+// pitch row is marked ALLOC. The allocation happens in cityPnl.ts so the pitches sum to the city
+// by construction; it used to be done here, which is how a drill-down starts disagreeing with the
+// row it opened from.
+//
+// MOBILE IS A DIFFERENT LAYOUT, NOT A SQUEEZE. A nine-column chain does not survive 390px, so
+// below the table breakpoint each city becomes a card with the chain stacked. Same numbers, same
+// order, same colours.
 
 import { useMemo, useState } from "react";
 import { useFinanceData } from "@/lib/useFinanceData";
@@ -13,12 +42,27 @@ import { useFinanceQuarter } from "@/lib/financeQuarter";
 import { quarterTabToMonths, CITY_DISPLAY_ORDER } from "@/lib/financeStats";
 import { isCurrentMonth, type QuarterInfo } from "@/lib/quarters";
 import { isCityHidden } from "@/lib/types";
-import { computeCityPnl, type CityCostMode, type CityCostScope, type CityPnl } from "@/lib/cityPnl";
+import { computeCityPnl, type CityCostMode, type CityCostScope, type CityPnl, type PnlField } from "@/lib/cityPnl";
 import styles from "./cityPnl.module.css";
 
-const OH_HUES = ["var(--gold-dot)", "var(--forest)", "var(--accent)", "var(--muted)", "var(--ns-ink)"];
 const usd = (v: number) => (v < 0 ? "−$" : "$") + Math.abs(Math.round(v)).toLocaleString("en-US");
-const pctInt = (x: number) => Math.round(x * 100) + "%";
+const usdNeg = (v: number) => (v === 0 ? "$0" : "−$" + Math.abs(Math.round(v)).toLocaleString("en-US"));
+// The same minus sign as the money cells — a hyphen next to "−$1,611" reads as a different mark.
+const pctInt = (x: number) => {
+  const n = Math.round(x * 100);
+  return (n < 0 ? "−" : "") + Math.abs(n) + "%";
+};
+
+// BASIS IS ONE CONTROL over two dimensions; MONTH is its own. Folding the month in with them (the
+// old gear popover printed "Aug · Per-Match · Realized" as one string) made the month look like a
+// property of the cost basis, which it is not.
+type BasisId = `${CityCostMode}|${CityCostScope}`;
+const BASIS_OPTIONS: { id: BasisId; label: string }[] = [
+  { id: "per_match|realized", label: "Per-match · Realized" },
+  { id: "per_match|fullMonth", label: "Per-match · Full month" },
+  { id: "as_billed|realized", label: "As billed · Realized" },
+  { id: "as_billed|fullMonth", label: "As billed · Full month" },
+];
 
 function defaultTab(quarter: QuarterInfo, now = new Date()): string {
   const cur = quarter.months.find((m) => isCurrentMonth(m, now));
@@ -27,16 +71,15 @@ function defaultTab(quarter: QuarterInfo, now = new Date()): string {
 
 export default function CityPnlTable() {
   const { data, loading } = useFinanceData();
-  const { rows: matchRegistrations } = useMatchData();
+  const { rows: matchRegistrations, loading: matchLoading } = useMatchData();
   const quarter = useFinanceQuarter();
 
-  const [costMode, setCostMode] = useState<CityCostMode>("per_match");
-  const [costScope, setCostScope] = useState<CityCostScope>("realized");
+  const [basis, setBasis] = useState<BasisId>("per_match|realized");
   const [tab, setTab] = useState<string>(() => defaultTab(quarter));
   const [scope, setScope] = useState<string>("All cities");
   const [open, setOpen] = useState<string | null>(null);
-  const [gearOpen, setGearOpen] = useState(false);
 
+  const [costMode, costScope] = basis.split("|") as [CityCostMode, CityCostScope];
   const now = useMemo(() => new Date(), []);
   const months = useMemo(() => quarterTabToMonths(quarter, tab), [quarter, tab]);
   const cities = useMemo(() => CITY_DISPLAY_ORDER.filter((c) => !isCityHidden(c)), []);
@@ -46,10 +89,12 @@ export default function CityPnlTable() {
     return cities.map((c) => computeCityPnl(data, matchRegistrations, c, months, costMode, costScope, now));
   }, [data, matchRegistrations, cities, months, costMode, costScope, now]);
 
-  if (loading) {
-    return <div className="rounded-2xl border border-cream-line bg-white p-8 text-sm text-deep-green/60">Loading…</div>;
+  // BOTH loaders gate the render. useMatchData carries every DPP dollar and resolves long after
+  // the finance fetch; rendering on the first alone printed a real-looking $0 in the DPP column of
+  // every city until the second landed.
+  if (loading || matchLoading || !data) {
+    return <div className={styles.loading}>Loading…</div>;
   }
-  if (!data) return null;
 
   const hasData = (k: CityPnl) => k.gross !== 0 || k.overheadTotal !== 0 || k.untracked !== 0;
   const live = rows.filter(hasData).sort((a, b) => b.net - a.net);
@@ -61,25 +106,13 @@ export default function CityPnlTable() {
     (a, k) => ({
       dpp: a.dpp + k.mappedDpp,
       memb: a.memb + k.membership,
-      fieldNet: a.fieldNet + k.fieldNet,
+      total: a.total + k.gross,
+      cost: a.cost + k.fieldCost,
+      afterCost: a.afterCost + k.netAfterFieldCost,
       over: a.over + k.overheadTotal,
       net: a.net + k.net,
-      gross: a.gross + k.gross,
     }),
-    { dpp: 0, memb: 0, fieldNet: 0, over: 0, net: 0, gross: 0 },
-  );
-
-  const billed = costMode === "as_billed";
-  const gearNow = [tab, billed ? "As Billed" : "Per-Match", billed ? "Full Month" : costScope === "realized" ? "Realized" : "Full Month"].join(" · ");
-
-  const seg = <V extends string>(opts: readonly V[], cur: V, onPick: (v: V) => void, disabled = false) => (
-    <div className={`${styles.seg} ${disabled ? styles.segOff : ""}`}>
-      {opts.map((o) => (
-        <button key={o} type="button" disabled={disabled} className={o === cur ? styles.on : ""} onClick={() => !disabled && onPick(o)}>
-          {o}
-        </button>
-      ))}
-    </div>
+    { dpp: 0, memb: 0, total: 0, cost: 0, afterCost: 0, over: 0, net: 0 },
   );
 
   const periodTabs = [`Q${quarter.quarter}`, ...quarter.months.map((m) => m.shortName)];
@@ -87,122 +120,205 @@ export default function CityPnlTable() {
   return (
     <div className={styles.wrap}>
       <div className={styles.card}>
-        <div className={styles.head}>
+        <div className={styles.top}>
           <div>
             <p className={styles.eyebrow}>Finance · Cities</p>
             <h1 className={styles.title}>City P&amp;L</h1>
-            <p className={styles.sub}>Every city on one line, ranked by net. Click a city for its pitches and its overhead.</p>
           </div>
           <div className={styles.ctrls}>
-            <div className={styles.segwrap}>
-              <span className={styles.seglab}>City</span>
-              {seg(["All cities", ...live.map((k) => k.city)] as const, scope, (v) => {
-                setScope(v);
-                if (v !== "All cities") setOpen(v);
-              })}
+            <div className={styles.crow}>
+              <span className={styles.clab}>Month</span>
+              <div className={styles.seg} role="group" aria-label="Month">
+                {periodTabs.map((t) => (
+                  <button key={t} type="button" aria-pressed={t === tab} className={t === tab ? styles.on : ""} onClick={() => setTab(t)}>
+                    {t}
+                  </button>
+                ))}
+              </div>
             </div>
-            <div className={styles.gearwrap}>
-              <button
-                type="button"
-                className={`${styles.gear} ${gearOpen ? styles.gearOpen : ""}`}
-                aria-expanded={gearOpen}
-                onClick={() => setGearOpen((o) => !o)}
-              >
-                <span className={styles.gearico} aria-hidden>
-                  ⚙
-                </span>
-                <span className={styles.gearnow}>{gearNow}</span>
-              </button>
-              {gearOpen && (
-                <div className={styles.panel}>
-                  <div className={styles.segwrap}>
-                    <span className={styles.seglab}>Period</span>
-                    {seg(periodTabs, tab, setTab)}
-                  </div>
-                  <div className={styles.segwrap}>
-                    <span className={styles.seglab}>Field cost</span>
-                    {seg(["as_billed", "per_match"] as const, costMode, setCostMode)}
-                  </div>
-                  <div className={styles.segwrap}>
-                    <span className={styles.seglab}>Period window</span>
-                    {seg(["realized", "fullMonth"] as const, billed ? "fullMonth" : costScope, setCostScope, billed)}
-                  </div>
-                  {billed && (
-                    <div className={styles.why}>An invoice is a whole-month object — it does not partially realise, so the window is inert under As Billed.</div>
-                  )}
-                </div>
-              )}
+            <div className={styles.crow}>
+              <span className={styles.clab}>Basis</span>
+              <select className={styles.basis} aria-label="Cost basis" value={basis} onChange={(e) => setBasis(e.target.value as BasisId)}>
+                {BASIS_OPTIONS.map((o) => <option key={o.id} value={o.id}>{o.label}</option>)}
+              </select>
             </div>
           </div>
         </div>
 
+        <div className={styles.cities}>
+          <button type="button" aria-pressed={!single} className={!single ? styles.on : ""} onClick={() => { setScope("All cities"); setOpen(null); }}>
+            All cities
+          </button>
+          {live.map((k) => (
+            <button key={k.city} type="button" aria-pressed={scope === k.city} className={scope === k.city ? styles.on : ""}
+              onClick={() => { setScope(k.city); setOpen(k.city); }}>
+              {k.city}
+            </button>
+          ))}
+        </div>
+
+        {/* ── DESKTOP: the nine-column chain ───────────────────────────────── */}
         <div className={styles.tblWrap}>
-          <table className={styles.tbl}>
+          <table className={styles.tbl} data-testid="citypnl-table">
+            <colgroup>
+              <col className={styles.cCity} />
+              <col className={styles.cNum} /><col className={styles.cNum} /><col className={styles.cNum} />
+              <col className={styles.cNum} /><col className={styles.cNum} /><col className={styles.cNum} />
+              <col className={styles.cNum} />
+              <col className={styles.cMar} />
+            </colgroup>
             <thead>
               <tr>
-                <th className="l">City</th>
+                <th className={styles.thCity}>City</th>
                 <th>DPP rev</th>
-                <th>Member rev</th>
-                <th>Field net</th>
-                <th>Overhead</th>
-                <th>Net P&amp;L</th>
-                <th>Margin</th>
+                {/* The equation, stated quietly in the header: DPP + Member = Total. */}
+                <th className={styles.plus}>Member rev</th>
+                <th className={styles.eq}>Total rev</th>
+                <th className={styles.gsep}>Field cost</th>
+                <th className={styles.gsep}>Field net</th>
+                <th className={styles.gsep}>Overhead</th>
+                <th className={styles.gsep}>Net P&amp;L</th>
+                <th className={styles.thMar}>Margin</th>
               </tr>
             </thead>
             <tbody>
               {shown.map((k, i) => (
-                <CityRows key={k.city} k={k} rank={i + 1} open={open === k.city} onToggle={() => setOpen(open === k.city ? null : k.city)} />
+                <CityRows key={k.city} k={k} rank={i + 1} open={open === k.city}
+                  onToggle={() => setOpen(open === k.city ? null : k.city)} />
               ))}
-              {!single &&
-                blank.map((k) => (
-                  <tr key={k.city} className={`${styles.row} ${styles.blank}`}>
-                    <td className="l" style={{ paddingLeft: 41 }}>
-                      {k.city}
-                    </td>
-                    <td>—</td>
-                    <td>—</td>
-                    <td>—</td>
-                    <td>—</td>
-                    <td>—</td>
-                    <td>—</td>
-                  </tr>
-                ))}
-              <tr className={styles.total}>
-                <td className="l">{single ? scope : "All cities"}</td>
+              {!single && blank.map((k) => (
+                <tr key={k.city} className={styles.blank} data-testid="citypnl-blank-row">
+                  <td className={styles.tdCity}><span className={styles.rkSpacer} />{k.city}</td>
+                  <td>—</td><td>—</td><td>—</td>
+                  <td className={styles.gsep}>—</td><td className={styles.gsep}>—</td>
+                  <td className={styles.gsep}>—</td><td className={styles.gsep}>—</td>
+                  <td className={styles.tdMar}>—</td>
+                </tr>
+              ))}
+            </tbody>
+            <tfoot>
+              <tr data-testid="citypnl-total-row">
+                <td className={styles.tdCity}>{single ? scope : "All cities"}</td>
                 <td>{usd(T.dpp)}</td>
-                <td className={styles.pos}>{usd(T.memb)}</td>
-                <td className={T.fieldNet >= 0 ? styles.pos : styles.neg}>{usd(T.fieldNet)}</td>
-                <td className={styles.neg}>{usd(-T.over)}</td>
-                <td className={`${styles.net} ${T.net >= 0 ? styles.pos : styles.neg}`}>{usd(T.net)}</td>
-                <td>
-                  <span className={`${styles.marg} ${T.net >= 0 ? "" : styles.margNeg}`}>{T.gross ? pctInt(T.net / T.gross) : "—"}</span>
+                <td>{usd(T.memb)}</td>
+                <td>{usd(T.total)}</td>
+                <td className={`${styles.gsep} ${styles.cost}`}>{usdNeg(T.cost)}</td>
+                <td className={`${styles.gsep} ${T.afterCost < 0 ? styles.negv : ""}`}>{usd(T.afterCost)}</td>
+                <td className={`${styles.gsep} ${styles.cost}`}>{usdNeg(T.over)}</td>
+                <td className={`${styles.gsep} ${styles.res} ${T.net >= 0 ? styles.up : styles.dn}`} data-testid="citypnl-total-net">{usd(T.net)}</td>
+                <td className={styles.tdMar}>
+                  <span className={`${styles.pill} ${T.net >= 0 ? styles.pillUp : styles.pillDn}`}>
+                    {T.total ? pctInt(T.net / T.total) : "—"}
+                  </span>
                 </td>
               </tr>
-            </tbody>
+            </tfoot>
           </table>
         </div>
+
+        {/* ── PHONE: one card per city, the chain stacked ──────────────────── */}
+        <div className={styles.cards}>
+          {shown.map((k, i) => (
+            <CityCard key={k.city} k={k} rank={i + 1} open={open === k.city}
+              onToggle={() => setOpen(open === k.city ? null : k.city)} />
+          ))}
+          <div className={`${styles.mcard} ${styles.mtotal}`} data-testid="citypnl-card-total">
+            <div className={styles.mhead}><span className={styles.mcity}>{single ? scope : "All cities"}</span>
+              <span className={`${styles.pill} ${T.net >= 0 ? styles.pillUp : styles.pillDn}`}>
+                {T.total ? pctInt(T.net / T.total) : "—"}
+              </span>
+            </div>
+            <Chain dpp={T.dpp} memb={T.memb} total={T.total} cost={T.cost} afterCost={T.afterCost} over={T.over} net={T.net} />
+          </div>
+        </div>
+
+        <p className={styles.foot}>Click a city for its pitches and its overhead.</p>
       </div>
     </div>
   );
 }
 
+// The stacked chain used by the phone cards. Same order and same colours as the table row.
+function Chain({ dpp, memb, total, cost, afterCost, over, net }: {
+  dpp: number; memb: number; total: number; cost: number; afterCost: number; over: number; net: number;
+}) {
+  return (
+    <dl className={styles.chain}>
+      <div><dt>DPP rev</dt><dd>{usd(dpp)}</dd></div>
+      <div><dt>+ Member rev</dt><dd>{usd(memb)}</dd></div>
+      <div className={styles.chainSum}><dt>= Total rev</dt><dd>{usd(total)}</dd></div>
+      <div><dt>Field cost</dt><dd className={styles.cost}>{usdNeg(cost)}</dd></div>
+      <div className={styles.chainSum}><dt>= Field net</dt><dd className={afterCost < 0 ? styles.negv : ""}>{usd(afterCost)}</dd></div>
+      <div><dt>Overhead</dt><dd className={styles.cost}>{usdNeg(over)}</dd></div>
+      <div className={styles.chainSum}><dt>= Net P&amp;L</dt>
+        <dd className={`${styles.res} ${net >= 0 ? styles.up : styles.dn}`}>{usd(net)}</dd></div>
+    </dl>
+  );
+}
+
+function CityCard({ k, rank, open, onToggle }: { k: CityPnl; rank: number; open: boolean; onToggle: () => void }) {
+  return (
+    <div className={styles.mcard} data-testid="citypnl-card">
+      <button type="button" className={styles.mhead} onClick={onToggle} aria-expanded={open}>
+        <span className={styles.mcity}><span className={styles.rk}>{rank}</span>{k.city}</span>
+        <span className={`${styles.pill} ${k.net >= 0 ? styles.pillUp : styles.pillDn}`}>{pctInt(k.margin)}</span>
+      </button>
+      <Chain dpp={k.mappedDpp} memb={k.membership} total={k.gross} cost={k.fieldCost}
+        afterCost={k.netAfterFieldCost} over={k.overheadTotal} net={k.net} />
+      {open && (
+        <div className={styles.mpitches}>
+          <p className={styles.subhdText}>{k.city} · by pitch</p>
+          {k.fields.map((f) => (
+            <div key={f.venue} className={styles.mpitch}>
+              <span className={styles.ven}>{f.venue}</span>
+              <span className={styles.vmeta}>{pitchMeta(f)}</span>
+              <dl className={styles.chain}>
+                <div><dt>DPP rev</dt><dd>{usd(f.dppRev)}</dd></div>
+                <div><dt>+ Member rev <i className={styles.alloc}>alloc</i></dt>
+                  <dd className={f.memberRev == null ? styles.na : ""}>{f.memberRev == null ? "—" : usd(f.memberRev)}</dd></div>
+                <div className={styles.chainSum}><dt>= Total rev</dt><dd>{usd(f.totalRev)}</dd></div>
+                <div><dt>Field cost</dt>
+                  <dd className={f.cost == null ? styles.na : styles.cost}>{f.cost == null ? "—" : usdNeg(f.cost)}</dd></div>
+                <div className={styles.chainSum}><dt>= Field net</dt>
+                  <dd className={f.net == null ? styles.na : f.net < 0 ? styles.negv : ""}>{f.net == null ? "—" : usd(f.net)}</dd></div>
+              </dl>
+            </div>
+          ))}
+          <OverheadMakeup k={k} />
+        </div>
+      )}
+    </div>
+  );
+}
+
+function pitchMeta(f: PnlField): string {
+  const spots = f.memberSpots != null ? `${f.memberSpots} spots` : "spots unavailable";
+  const rate =
+    f.basis === "share" ? "billed as a share of revenue"
+    : f.basis === "unmapped" ? "no cost on file"
+    : f.unitCost != null ? `per match $${f.unitCost}`
+    : "flat billing";
+  return `${spots} · ${rate}`;
+}
+
 function CityRows({ k, rank, open, onToggle }: { k: CityPnl; rank: number; open: boolean; onToggle: () => void }) {
   return (
     <>
-      <tr className={styles.row} onClick={onToggle}>
-        <td className="l">
-          <span className={styles.rank}>{rank}</span>
+      <tr className={styles.row} onClick={onToggle} data-testid="citypnl-row">
+        <td className={styles.tdCity}>
+          <span className={styles.rk}>{rank}</span>
           <span className={styles.city}>{k.city}</span>
           <span className={styles.caret}>{open ? "▾" : "▸"}</span>
-          {k.untracked > 0 && <span className={styles.flag}>cost gap</span>}
         </td>
-        <td>{usd(k.mappedDpp)}</td>
-        <td className={styles.pos}>{usd(k.membership)}</td>
-        <td className={k.fieldNet >= 0 ? styles.pos : styles.neg}>{usd(k.fieldNet)}</td>
-        <td className={styles.neg}>{usd(-k.overheadTotal)}</td>
-        <td className={`${styles.net} ${k.net >= 0 ? styles.pos : styles.neg}`}>{usd(k.net)}</td>
-        <td>
-          <span className={`${styles.marg} ${k.net >= 0 ? "" : styles.margNeg}`}>{pctInt(k.margin)}</span>
+        <td className={styles.dim}>{usd(k.mappedDpp)}</td>
+        <td className={styles.dim}>{usd(k.membership)}</td>
+        <td className={styles.subT}>{usd(k.gross)}</td>
+        <td className={`${styles.gsep} ${styles.cost}`}>{usdNeg(k.fieldCost)}</td>
+        <td className={`${styles.gsep} ${k.netAfterFieldCost < 0 ? styles.negv : ""}`}>{usd(k.netAfterFieldCost)}</td>
+        <td className={`${styles.gsep} ${styles.cost}`}>{usdNeg(k.overheadTotal)}</td>
+        <td className={`${styles.gsep} ${styles.res} ${k.net >= 0 ? styles.up : styles.dn}`} data-testid="citypnl-net">{usd(k.net)}</td>
+        <td className={styles.tdMar}>
+          <span className={`${styles.pill} ${k.net >= 0 ? styles.pillUp : styles.pillDn}`}>{pctInt(k.margin)}</span>
         </td>
       </tr>
       {open && <Drill k={k} />}
@@ -210,94 +326,70 @@ function CityRows({ k, rank, open, onToggle }: { k: CityPnl; rank: number; open:
   );
 }
 
+// The pitches, IN THE SAME NINE COLUMNS. No nested table, no second set of widths.
 function Drill({ k }: { k: CityPnl }) {
-  const alloc = (spots: number | null) =>
-    k.citySpots && spots != null ? usd(k.membership * (spots / k.citySpots)) : "—";
-  const ohTot = k.overheadTotal || 1;
-
   return (
-    <tr className={styles.drill}>
-      <td colSpan={7}>
-        <div className={styles.din}>
-          <p className={styles.dh}>{k.city} · by pitch</p>
-          <table className={styles.ftbl}>
-            <thead>
-              <tr>
-                <th className="l">Venue</th>
-                <th>Spots</th>
-                <th>DPP rev</th>
-                <th>Member rev</th>
-                <th>Field cost</th>
-                <th>Field net</th>
-              </tr>
-            </thead>
-            <tbody>
-              {k.fields.map((f) => {
-                const sub =
-                  f.basis === "share"
-                    ? "billed as a share of revenue"
-                    : f.basis === "unmapped"
-                      ? "held out of net until a rate is mapped"
-                      : f.perMatchRate != null
-                        ? `per match · $${f.perMatchRate}`
-                        : "flat billing";
-                return (
-                  <tr key={f.venue}>
-                    <td className="l">
-                      {f.venue}
-                      {f.basis === "share" && <span className={`${styles.bucket} ${styles.bucketShare}`}>Profit share</span>}
-                      {f.basis === "unmapped" && <span className={`${styles.bucket} ${styles.bucketUnmapped}`}>No cost on file</span>}
-                      <span className={styles.rate}>{sub}</span>
-                    </td>
-                    <td className={f.memberSpots == null ? styles.mut : ""}>{f.memberSpots ?? "—"}</td>
-                    <td>{usd(f.dppRev)}</td>
-                    <td className={f.memberSpots == null ? styles.mut : ""}>{alloc(f.memberSpots)}</td>
-                    <td className={f.cost == null ? styles.mut : styles.neg}>{f.cost == null ? "—" : usd(-f.cost)}</td>
-                    <td className={f.net == null ? styles.mut : f.net >= 0 ? styles.pos : styles.neg}>{f.net == null ? "—" : usd(f.net)}</td>
-                  </tr>
-                );
-              })}
-              <tr className={styles.ftot}>
-                <td className="l">Measured</td>
-                <td className={styles.mut}>—</td>
-                <td>{usd(k.mappedDpp)}</td>
-                <td className={styles.mut}>—</td>
-                <td className={styles.neg}>{usd(-k.fieldCost)}</td>
-                <td className={k.fieldNet >= 0 ? styles.pos : styles.neg}>{usd(k.fieldNet)}</td>
-              </tr>
-            </tbody>
-          </table>
+    <>
+      <tr className={styles.subhd}><td colSpan={9}>{k.city} · by pitch</td></tr>
+      {k.fields.map((f) => (
+        <tr key={f.venue} className={styles.sub} data-testid="citypnl-pitch-row">
+          <td className={styles.tdCity}>
+            <span className={styles.ven}>{f.venue}</span>
+            <span className={styles.vmeta}>{pitchMeta(f)}</span>
+          </td>
+          <td className={styles.dim}>{usd(f.dppRev)}</td>
+          <td className={f.memberRev == null ? styles.na : styles.dim}>
+            {f.memberRev == null ? "—" : usd(f.memberRev)}
+            {f.memberRev != null && <i className={styles.alloc}>alloc</i>}
+          </td>
+          <td className={styles.subT}>{usd(f.totalRev)}</td>
+          <td className={`${styles.gsep} ${f.cost == null ? styles.na : styles.cost}`}>
+            {f.cost == null ? "—" : usdNeg(f.cost)}
+          </td>
+          <td className={`${styles.gsep} ${f.net == null ? styles.na : f.net < 0 ? styles.negv : ""}`}>
+            {f.net == null ? "—" : usd(f.net)}
+          </td>
+          {/* A PITCH HAS NO OVERHEAD, NET OR MARGIN — those are city facts. */}
+          <td className={`${styles.gsep} ${styles.na}`}>—</td>
+          <td className={`${styles.gsep} ${styles.na}`}>—</td>
+          <td className={`${styles.tdMar} ${styles.na}`}>—</td>
+        </tr>
+      ))}
+      {k.untracked > 0 && (
+        <tr className={styles.sub}>
+          <td colSpan={9} className={styles.gapNote} data-testid="citypnl-untracked">
+            <b>{usd(k.untracked)} of DPP is untracked</b> — it sits at pitches with no cost basis on
+            file, so it is held out of DPP rev and Field net entirely rather than counted at $0.
+          </td>
+        </tr>
+      )}
+      <tr className={styles.ohrow}><td colSpan={9}><OverheadMakeup k={k} /></td></tr>
+    </>
+  );
+}
 
-          {k.untracked > 0 && (
-            <p className={styles.dnote}>
-              <b>{usd(k.untracked)} of DPP is untracked</b> — it sits at fields with no cost basis on file, so it is held out of
-              DPP rev and Field net entirely rather than counted at $0. Map a rate to bring it in.
-            </p>
-          )}
-          <p className={`${styles.dnote} ${styles.dnoteInfo}`}>
-            <b>Member rev per pitch</b> = city member revenue ÷ city member-spots × that pitch&rsquo;s member-spots
-            {k.citySpots ? ` (${usd(k.membership)} ÷ ${k.citySpots} spots).` : " — spots unavailable, so it shows a dash."}
-          </p>
+const OH_HUES = ["#2f7a4f", "var(--hdr, #0f2e1f)", "var(--gold-dot, #d8a72b)", "var(--accent, #5b7568)", "#93a89c"];
 
-          <div className={styles.mk}>
-            <p className={styles.mkH}>Overhead makeup · field cost excluded</p>
-            <div className={styles.mkBar}>
-              {k.overhead.map((o, i) => (
-                <span key={o.label} className={styles.mkSeg} style={{ width: `${(o.value / ohTot) * 100}%`, background: OH_HUES[i % OH_HUES.length] }} />
-              ))}
-            </div>
-            <div className={styles.mkRows}>
-              {k.overhead.map((o, i) => (
-                <span key={o.label} className={styles.mkRow}>
-                  <span className={styles.mkDot} style={{ background: OH_HUES[i % OH_HUES.length] }} />
-                  {o.label} <span className={styles.mkV}>{usd(o.value)}</span>
-                  <span className={styles.mkP}>{Math.round((o.value / ohTot) * 100)}%</span>
-                </span>
-              ))}
-            </div>
-          </div>
-        </div>
-      </td>
-    </tr>
+function OverheadMakeup({ k }: { k: CityPnl }) {
+  const total = k.overheadTotal;
+  if (total === 0) return null;
+  return (
+    <div data-testid="citypnl-overhead">
+      <div className={styles.ohlab}>Overhead makeup · field cost excluded</div>
+      <div className={styles.ohbar}>
+        {k.overhead.map((o, i) => (
+          <span key={o.label} className={styles.ohseg}
+            style={{ width: `${(o.value / total) * 100}%`, background: OH_HUES[i % OH_HUES.length] }} />
+        ))}
+      </div>
+      <div className={styles.ohkey}>
+        {k.overhead.map((o, i) => (
+          <span key={o.label} data-testid="citypnl-oh-item">
+            <i className={styles.k} style={{ background: OH_HUES[i % OH_HUES.length] }} />
+            {o.label} <b>{usd(o.value)}</b> <span className={styles.ohpct}>{Math.round((o.value / total) * 100)}%</span>
+          </span>
+        ))}
+      </div>
+    </div>
   );
 }
