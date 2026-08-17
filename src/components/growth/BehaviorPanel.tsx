@@ -154,16 +154,13 @@ export default function BehaviorPanel({
   // at a pitch. Offering it per field would either repeat the city's number under every one of its
   // fields or invent an attribution that does not exist. City Detail keeps it, because a city IS
   // recorded at registration.
-  // % RECURRING IS NOT OFFERED PER FIELD, AND THIS IS A BLOCKER, NOT A CHOICE.
-  // It is derived as (total − new) / total, which requires new to be a SUBSET of total. In
-  // behaviorByField it is not: 22 field-months have new > total, 8 of them inside the default
-  // period, worst at ATH Pearland 2026-07 (new 234, total 30). The two series are built from
-  // different populations — field totals exclude special events while the first-appearance count
-  // does not fully align with that exclusion — so any recurring figure per field would be derived
-  // from a contradiction. It is withheld until the populations reconcile rather than shown as 0%.
-  // City and Overall are unaffected and DO offer it.
+  // % RECURRING IS OFFERED EVERYWHERE. It was withheld from field mode while behaviorByField had
+  // 22 field-months where new exceeded total — a rate derived from a contradiction. That is fixed
+  // at the source: events now count toward a field's players, spots AND new players alike, the same
+  // single population the partner dashboard uses. Verified: 22 violations → 0, and PARMER Stadium
+  // Aug 2026 agrees with the partner page exactly (128 = 128).
   const METRICS_FOR_MODE: BehaviorMetric[] = fieldMode
-    ? (["newPlayers", "totalPlayers", "spots"] as BehaviorMetric[])
+    ? (["newPlayers", "totalPlayers", "spots", "pctRecurring"] as BehaviorMetric[])
     : (["registrations", "newPlayers", "totalPlayers", "spots", "pctRecurring"] as BehaviorMetric[]);
 
   // Switching into field mode while Registrations is selected must not leave a metric the mode

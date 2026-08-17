@@ -206,6 +206,9 @@ export type RawInput = {
 // ── output payload ───────────────────────────────────────────────────────────
 export type BehaviorPoint = {
   m: string;
+  // Field points only: spots at this pitch that month that came from a special event. Informational
+  // — the totals above already include them.
+  eventSpots?: number;
   registrations: number | null; // null = series has no data yet this month (not zero)
   newPlayers: number | null;
   totalPlayers: number | null;
@@ -680,15 +683,19 @@ export function computeGrowth(input: RawInput): GrowthData {
   // Computed here from the plays themselves rather than from p.firstField, which is the field of
   // the player's first-ever match and can only ever attribute a player to ONE field for life.
   //
-  // EVENTS ARE EXCLUDED HERE, matching activeByField/spotsByField exactly. The field series counts
-  // REGULAR play only — a tournament at ATH Pearland gets its own section rather than inflating
-  // that pitch's ranking — so counting event entrants as "new at this field" while the total that
-  // month excludes them makes new EXCEED total. That is not hypothetical: it is what the
-  // newPlayers > totalPlayers guard in metricValue caught the first time this shipped, which is
-  // precisely why that guard throws instead of clamping to zero.
+  // EVENTS COUNT, ON BOTH SIDES. The field series previously excluded special events from totals
+  // and spots but NOT from "new", which is the defect: it made ATH Pearland read 0 total players in
+  // April 2026, a month in which 75 people played there for the first time. A field view that
+  // reports a busy pitch as idle is worse than one where a tournament is visibly large.
+  //
+  // ONE POPULATION, ONE FILTER — and it is the same population the partner dashboard uses.
+  // partnerRentalDashboard has no event filter at all: its "new to this venue" figure counts every
+  // roster row that occupies a spot, tournaments included. Growth was the only side that differed.
+  //
+  // The ranking concern is handled by MARKING (eventSpots below), never by excluding, scaling or
+  // capping.
   const firstMonthAtField = new Map<string, string>();   // `${user}\u0000${field}` -> first month
   for (const p of plays) {
-    if (p.isEvent) continue;
     const k = `${p.u}\u0000${p.field}`;
     const cur = firstMonthAtField.get(k);
     if (cur == null || p.month < cur) firstMonthAtField.set(k, p.month);
@@ -730,12 +737,13 @@ export function computeGrowth(input: RawInput): GrowthData {
     inc2(spotsByCity, p.city, p.month);
     addSet(activeByMonth, p.month, p.u);
     addSet2(activeByCity, p.city, p.month, p.u);
+    // INCLUSIVE. Every play counts toward the field's spots and players. The event maps below are
+    // kept so a field-month can be LABELLED as event-driven — they no longer divert anything.
+    inc2(spotsByField, p.field, p.month);
+    addSet2(activeByField, p.field, p.month, p.u);
     if (p.isEvent) {
       inc2(eventSpotsByField, p.field, p.month);
       addSet2(eventActiveByField, p.field, p.month, p.u);
-    } else {
-      inc2(spotsByField, p.field, p.month);
-      addSet2(activeByField, p.field, p.month, p.u);
     }
     if (!fieldCity.has(p.field)) fieldCity.set(p.field, p.city);
   }
@@ -797,6 +805,9 @@ export function computeGrowth(input: RawInput): GrowthData {
         newPlayers: newAtFieldByField.get(f)?.get(m) ?? 0,
         totalPlayers: activeByField.get(f)?.get(m)?.size ?? 0,
         spots: spotsByField.get(f)?.get(m) ?? 0,
+        // HOW MUCH OF THIS MONTH IS A TOURNAMENT. Not subtracted from anything — it exists so a
+        // spike can be LABELLED as an event rather than read as growth.
+        eventSpots: eventSpotsByField.get(f)?.get(m) ?? 0,
       })),
     };
   }

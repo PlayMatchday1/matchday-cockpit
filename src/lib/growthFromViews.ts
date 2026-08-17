@@ -275,10 +275,25 @@ export function computeGrowthFromViews(input: ViewInput): GrowthData {
   const newByMonth = new Map<string, number>();
   const newByCity = new Map<string, Map<string, number>>();
   const newByField = new Map<string, Map<string, number>>();
+  // NEW AT A FIELD = the month of that player's FIRST MATCH AT THAT FIELD, events included.
+  //
+  // a.firstField is the field of the player's FIRST-EVER MatchDay match, which can only attribute a
+  // player to ONE field for life. Measured on PARMER Stadium, Aug 2026: that rule counts 28 while
+  // "first match at this field" counts 116 — and the second is what the partner dashboard means by
+  // "new to PARMER Stadium". partnerRentalDashboard has NO event filter at all, so this must not
+  // have one either: one population, one filter, or the two pages disagree.
+  const newAtFieldByField = new Map<string, Map<string, number>>();
   for (const a of aggs) {
     newByMonth.set(a.first, (newByMonth.get(a.first) ?? 0) + 1);
     inc2(newByCity, a.firstCity, a.first);
     inc2(newByField, a.firstField, a.first);
+    // evField is this player's distinct (month, field) appearances — event rows included.
+    const firstAt = new Map<string, string>();
+    for (const ef of a.evField) {
+      const cur = firstAt.get(ef.field);
+      if (cur == null || ef.month < cur) firstAt.set(ef.field, ef.month);
+    }
+    for (const [field, month] of firstAt) inc2(newAtFieldByField, field, month);
   }
   // spots (additive, from play_dims); distinct active (from ev)
   const spotsByMonth = new Map<string, number>();
@@ -292,8 +307,12 @@ export function computeGrowthFromViews(input: ViewInput): GrowthData {
     const isEvent = venueCategory(d.field_title) === "event";
     spotsByMonth.set(d.match_month, (spotsByMonth.get(d.match_month) ?? 0) + d.spots);
     inc2(spotsByCity, city, d.match_month, d.spots);
+    // EVENTS COUNT ON BOTH SIDES. Excluding them from totals while counting them nowhere else made
+    // ATH Pearland read 0 players in April 2026 — a month in which 75 people played there for the
+    // first time. The event share is still tracked, for MARKING a spike as a tournament rather than
+    // for removing it.
+    inc2(spotsByField, field, d.match_month, d.spots);
     if (isEvent) inc2(eventSpotsByField, field, d.match_month, d.spots);
-    else inc2(spotsByField, field, d.match_month, d.spots);
     if (!fieldCity.has(field)) fieldCity.set(field, city);
   }
   const activeByMonth = new Map<string, Set<number>>();
@@ -304,8 +323,8 @@ export function computeGrowthFromViews(input: ViewInput): GrowthData {
     for (const m of a.activeMonths) addSet(activeByMonth, m, a.u);
     for (const [m, citySet] of a.evCity) for (const c of citySet) addSet2(activeByCity, c, m, a.u);
     for (const ef of a.evField) {
+      addSet2(activeByField, ef.field, ef.month, a.u);
       if (ef.isEvent) addSet2(eventActiveByField, ef.field, ef.month, a.u);
-      else addSet2(activeByField, ef.field, ef.month, a.u);
     }
   }
   const eventFields = [...eventSpotsByField.keys()]
@@ -348,9 +367,13 @@ export function computeGrowthFromViews(input: ViewInput): GrowthData {
       points: playMonths.map<BehaviorPoint>((m) => ({
         m,
         registrations: null,
-        newPlayers: newByField.get(f)?.get(m) ?? 0,
+        // FIRST MATCH AT THIS FIELD — newByField (first-EVER match here) is deliberately not used;
+        // it disagrees with the partner dashboard by 4x.
+        newPlayers: newAtFieldByField.get(f)?.get(m) ?? 0,
         totalPlayers: activeByField.get(f)?.get(m)?.size ?? 0,
         spots: spotsByField.get(f)?.get(m) ?? 0,
+        // Informational: how much of this month was a tournament. Already inside the totals above.
+        eventSpots: eventSpotsByField.get(f)?.get(m) ?? 0,
       })),
     };
   }

@@ -172,6 +172,110 @@ async function main() {
   }
 
 
+
+  // ── PLAYER BEHAVIOR: FIELD DETAIL AND RECURRING ──────────────────────────
+  console.log("\nplayer behavior — field detail and recurring:");
+  {
+    await open("/growth/behavior");
+    const views = await page.$$eval("#growthBehaviorView button", (els) => els.map((e) => e.textContent.trim()));
+    eq("three views are offered", views, ["Overall Matchday", "City Detail", "Field Detail"]);
+
+    // BOTH RECURRING FIGURES IN OVERALL — the count says how many came back, the rate whether we
+    // are keeping them. Neither is sufficient alone.
+    const rows = await page.evaluate(() => [...document.querySelectorAll("tbody tr")].map((tr) => tr.querySelector("td")?.textContent?.trim()));
+    eq("Overall carries Recurring players", rows.includes("Recurring players"), true);
+    eq("…and % recurring", rows.includes("% recurring"), true);
+    // A RATE MOVES IN PERCENTAGE POINTS, not percent.
+    const pts = await page.$eval('[data-testid="behavior-mom-points"]', (e) => e.textContent.trim());
+    eq("…whose month-over-month is in POINTS, not percent", /pts$/.test(pts), true);
+
+    // FIELD MODE
+    await page.click('[data-testid="behavior-view-field"]');
+    await page.waitForTimeout(900);
+    const opts = await page.$eval('[data-testid="behavior-metric"]', (e) => [...e.options].map((o) => o.value));
+    // REGISTRATIONS IS NOT ATTRIBUTABLE TO A FIELD and must never be offered there.
+    eq("field mode does NOT offer Registrations", opts.includes("registrations"), false);
+    eq("…and offers exactly the three metrics plus the rate",
+      opts, ["newPlayers", "totalPlayers", "spots", "pctRecurring"]);
+    eq("…the first column is the field", await page.$eval("thead th", (e) => e.textContent.trim()), "Field");
+    await page.selectOption('[data-testid="behavior-metric"]', "pctRecurring");
+    await page.waitForTimeout(900);
+    eq("…% recurring renders rows in field mode", await page.evaluate(() => document.querySelectorAll("tbody tr").length) > 0, true);
+
+    // CITY MODE keeps Registrations, because a city IS recorded at registration.
+    await page.click('#growthBehaviorView button[data-value="city"]');
+    await page.waitForTimeout(900);
+    eq("city mode DOES offer Registrations",
+      await page.$eval('[data-testid="behavior-metric"]', (e) => [...e.options].map((o) => o.value)).then((o) => o.includes("registrations")), true);
+    // DFW, not Austin — Austin is the one city where both name maps agree.
+    const cityRows = await page.evaluate(() => [...document.querySelectorAll("tbody tr")].map((tr) => ({
+      name: tr.querySelector("td")?.textContent?.trim() ?? "",
+      cells: [...tr.querySelectorAll("td")].slice(1, -2).map((td) => Number(td.textContent.replace(/[^0-9.]/g, "")) || 0),
+    })));
+    const dallas = cityRows.find((r) => /dallas/i.test(r.name));
+    eq("Dallas is a row in city mode", !!dallas, true);
+    eq("…and returns NON-ZERO values (Austin cannot catch a vocabulary mismatch)",
+      (dallas?.cells ?? []).some((n) => n > 0), true);
+  }
+
+  // ── new <= total EVERYWHERE, UNCLAMPED ───────────────────────────────────
+  // 22 field-months once violated this — field totals excluded special events while "new" did not.
+  // Events now count on both sides, the same single population the partner dashboard uses.
+  console.log("\nnew players never exceed total players:");
+  {
+    const v = await page.evaluate(async (t) => {
+      const j = await (await fetch(`/api/growth?b=${Date.now()}`, { headers: { Authorization: `Bearer ${t}` }, cache: "no-store" })).json();
+      const bad = [];
+      const scan = (label, pts) => {
+        for (const p of pts) {
+          if (p.newPlayers != null && p.totalPlayers != null && p.newPlayers > p.totalPlayers) {
+            bad.push(`${label} ${p.m}: new ${p.newPlayers} > total ${p.totalPlayers}`);
+          }
+        }
+      };
+      scan("overall", j.behaviorOverall);
+      for (const [c, pts] of Object.entries(j.behaviorByCity)) scan(`city ${c}`, pts);
+      for (const [, f] of Object.entries(j.behaviorByField)) scan(`field ${f.label}`, f.points);
+      const months = j.behaviorOverall.length;
+      const fields = Object.keys(j.behaviorByField).length;
+      return { bad: bad.slice(0, 10), count: bad.length, months, fields };
+    }, vv.data.session.access_token);
+    eq("no scope/month has new > total", v.bad, []);
+    // POSITIVE CONTROL — the scan actually covered something.
+    eq("…across a real number of scopes and months", v.months > 0 && v.fields > 0, true);
+    console.log(`   · scanned overall + every city + ${v.fields} fields over ${v.months} months`);
+  }
+
+  // ── THE PARTNER CROSS-CHECK ──────────────────────────────────────────────
+  // A field's New players must equal the partner dashboard's "new to this venue" for the same
+  // field and month, or the two pages state different numbers for the same venue.
+  console.log("\ngrowth agrees with the partner dashboard:");
+  {
+    const g = await page.evaluate(async (t) => {
+      const j = await (await fetch(`/api/growth?b=${Date.now()}`, { headers: { Authorization: `Bearer ${t}` }, cache: "no-store" })).json();
+      const f = Object.values(j.behaviorByField).find((x) => /PARMER/i.test(x.label));
+      return f ? f.points.map((p) => ({ m: p.m, nw: p.newPlayers })) : null;
+    }, vv.data.session.access_token);
+    eq("Growth has a PARMER Stadium field series", !!g, true);
+
+    await page.goto(`${BASE}/partners/parmer-stadium-q8x2m5rk`, { waitUntil: "domcontentloaded" });
+    await page.waitForSelector('[data-testid="prv-players"]', { timeout: 45000 });
+    await page.waitForTimeout(400);
+    const partner = await page.evaluate(() => ({
+      players: Number(document.querySelector('[data-testid="prv-players"]')?.getAttribute("data-value")),
+      returning: Number(document.querySelector('[data-testid="prv-returning"]')?.getAttribute("data-value")),
+      ym: document.querySelector('[data-testid="prv-period-row"]')?.getAttribute("data-ym") ?? "",
+    }));
+    const partnerNew = partner.players - partner.returning;
+    const growthNew = g?.find((x) => x.m === partner.ym)?.nw;
+    growthNew === partnerNew
+      ? ok(`PARMER ${partner.ym}: Growth new (${growthNew}) equals the partner dashboard's new-to-venue (${partnerNew})`)
+      : bad("growth and the partner dashboard disagree",
+            `PARMER ${partner.ym}: growth ${growthNew} vs partner ${partnerNew}`);
+    // POSITIVE CONTROL — both sides produced a real figure.
+    eq("…and both sides are non-zero (not two nulls agreeing)", (growthNew ?? 0) > 0 && partnerNew > 0, true);
+  }
+
   // ── THE CITY FILTER ──────────────────────────────────────────────────────
   console.log("\nthe funnel's city filter:");
   {
