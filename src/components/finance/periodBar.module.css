@@ -1,0 +1,70 @@
+/* THE PERIOD BAR. On a phone it wraps to two rows — the grain and the stepper must both stay
+   reachable without horizontal scroll, so nothing here is fixed-width and nothing is nowrap
+   except the two labels that must not break mid-figure. */
+
+.bar {
+  display: flex; align-items: center; gap: 14px; flex-wrap: wrap;
+  background: #fff; border: 1px solid var(--cream-line, #e3eae5);
+  border-radius: 14px; padding: 12px 16px; margin: 14px 0 18px;
+}
+.lab {
+  font-size: 10px; letter-spacing: .09em; font-weight: 800;
+  color: #93a89c; text-transform: uppercase; white-space: nowrap;
+}
+
+.grain {
+  display: inline-flex; background: #f2f5f3; border: 1px solid var(--cream-line, #e3eae5);
+  border-radius: 999px; padding: 2px;
+}
+.grain button {
+  border: 0; background: transparent; font: inherit; font-size: 13px; font-weight: 700;
+  color: #5b7568; padding: 6px 16px; border-radius: 999px; cursor: pointer;
+  min-height: 44px; white-space: nowrap;
+}
+.grain button.on { background: #0f2e1f; color: #fff; }
+.grain button:disabled { opacity: .38; cursor: not-allowed; }
+
+.stepper { display: inline-flex; align-items: center; gap: 4px; }
+.nav {
+  width: 44px; height: 44px; border: 1px solid var(--cream-line, #e3eae5); background: #fff;
+  border-radius: 9px; font-size: 15px; line-height: 1; color: #5b7568; cursor: pointer;
+}
+.nav:disabled { color: #d4dcd7; cursor: default; }
+.cur {
+  font-size: 17px; font-weight: 800; letter-spacing: -.01em;
+  padding: 0 12px; min-width: 150px; text-align: center; white-space: nowrap;
+  color: var(--deep-green, #10231a);
+}
+
+/* Amber, not red: a partial period is not an error, it is an unfinished one. */
+.partial {
+  display: inline-flex; align-items: center; gap: 7px; font-size: 12.5px; font-weight: 700;
+  color: #8a5a00; background: #fdf6e7; border: 1px solid #efdcaf;
+  border-radius: 999px; padding: 5px 12px; white-space: nowrap;
+}
+.partial b { font-weight: 800; }
+
+.jump {
+  font: inherit; font-size: 13px; font-weight: 700; color: var(--deep-green, #10231a);
+  border: 1px solid var(--cream-line, #e3eae5); background: #fff; border-radius: 999px;
+  padding: 7px 12px; cursor: pointer; min-height: 44px; white-space: nowrap;
+}
+/* Grey, not amber: a period that has not begun is not an unfinished measurement, it is an empty
+   one. Different fact, different weight. */
+.future {
+  display: inline-flex; align-items: center; gap: 7px; font-size: 12.5px; font-weight: 700;
+  color: #5b7568; background: #f2f5f3; border: 1px solid var(--cream-line, #e3eae5);
+  border-radius: 999px; padding: 5px 12px; white-space: nowrap;
+}
+.future b { font-weight: 800; }
+.note { font-size: 12px; color: #8a5a00; }
+.spacer { flex: 1; }
+.links { font-size: 12.5px; color: #5b7568; }
+
+@media (max-width: 899px) {
+  .bar { gap: 10px 12px; padding: 12px; }
+  /* The spacer collapses so the links wrap onto their own row rather than being pushed off. */
+  .spacer { display: none; }
+  .cur { min-width: 120px; font-size: 16px; }
+  .links { width: 100%; }
+}

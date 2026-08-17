@@ -221,3 +221,13 @@
 .mpitch .ven { padding: 0 14px; }
 .mpitch .vmeta { padding: 0 14px 6px; }
 .mpitches > div[data-testid="citypnl-overhead"] { padding: 12px 14px 4px; }
+
+/* The full-month-on-a-partial-period marker. Amber like the period chip: not an error, an
+   unfinished comparison. */
+.basisNote {
+  margin: 0 22px 14px; padding: 9px 13px; border-radius: 12px;
+  background: #fdf6e7; border: 1px solid #efdcaf;
+  font-size: 12.5px; line-height: 1.5; color: #8a5a00;
+}
+.basisNote b { color: #6b4600; }
+@media (max-width: 899px) { .basisNote { margin: 0 14px 12px; } }

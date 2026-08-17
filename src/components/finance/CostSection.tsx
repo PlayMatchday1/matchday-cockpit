@@ -27,15 +27,14 @@
 // true, and unreadable as anything but an error unless the row says how the money moves.
 
 import { useMemo, useState } from "react";
-import { useFinanceData } from "@/lib/useFinanceData";
+import { useFinancePeriodData } from "@/lib/useFinancePeriodData";
 import { useMatchData } from "@/lib/useMatchData";
-import { useFinanceQuarter } from "@/lib/financeQuarter";
+import { useFinancePeriod } from "@/lib/financePeriodContext";
 import {
   buildFieldMonths, byCity, byField, canonCity, costNotRecorded, highestRatioField, rollup,
   COST_BASIS_LABEL, type CostBasis, type CostMode, type FieldMonth,
 } from "@/lib/fieldEconomics";
 import { CITY_DISPLAY_ORDER, type Q2Month } from "@/lib/financeStats";
-import { isCurrentMonth } from "@/lib/quarters";
 import { isCityHidden } from "@/lib/types";
 import { downloadCsv, fmtInt, fmtMoney, fmtPct } from "@/components/growth/format";
 import s from "./financeSection.module.css";
@@ -47,21 +46,16 @@ type Grain = "city" | "field";
 const STRUCTURES: readonly CostBasis[] = ["per_match", "profit_share", "monthly_flat"];
 
 export default function CostSection() {
-  const quarter = useFinanceQuarter();
-  const now = useMemo(() => new Date(), []);
-  const { data, loading } = useFinanceData();
+  // The window is the page's period. This card used to carry its own Jul/Aug/Sep segment, which
+  // was the second of the two controls doing one job.
+  const { period, now } = useFinancePeriod();
+  const { data, loading } = useFinancePeriodData(period);
   // BOTH LOADERS GATE THE RENDER. useMatchData pulls every match-player row and takes far longer
   // than the finance fetch; rendering on the finance half alone put a REAL-LOOKING $0 in the
   // revenue column of every city for as long as it took to arrive. A zero is a claim, and this
   // page's whole argument is that a number you do not have yet is not a number you may print.
   const { rows: matchRegistrations, loading: matchLoading } = useMatchData();
 
-  const defaultMonth = useMemo(() => {
-    const cur = quarter.months.find((m) => isCurrentMonth(m, now));
-    return (cur ?? quarter.months[quarter.months.length - 1]).key;
-  }, [quarter, now]);
-
-  const [month, setMonth] = useState<Q2Month>(defaultMonth);
   const [structures, setStructures] = useState<Set<CostBasis>>(() => new Set(STRUCTURES));
   const [grain, setGrain] = useState<Grain>("city");
   const [cityFilter, setCityFilter] = useState<string>("all");
@@ -71,22 +65,19 @@ export default function CostSection() {
   // Lowell H. Strike), and the reader would have no way to see which number they were looking at.
   const [mode, setMode] = useState<CostMode>("per_match");
 
-  // The selected month may not be in the selected quarter after a quarter switch; fall back
-  // rather than render an empty month that looks like a zero month.
-  const activeMonth = quarter.months.some((m) => m.key === month) ? month : defaultMonth;
-  const isPartial = useMemo(
-    () => quarter.months.some((m) => m.key === activeMonth && isCurrentMonth(m, now)),
-    [quarter, activeMonth, now],
-  );
+  // THE PERIOD IS THE WINDOW. The tiles describe the whole of it, at whatever grain was asked
+  // for, and it is partial exactly when the period bar says it is.
+  const months = period.months;
+  const isPartial = period.isCurrent;
 
   const cities = useMemo(() => CITY_DISPLAY_ORDER.filter((c) => !isCityHidden(c)).map(canonCity), []);
 
   const allRows = useMemo(
-    () => (data ? buildFieldMonths(data, matchRegistrations, quarter.months.map((m) => m.key), mode) : []),
-    [data, matchRegistrations, quarter, mode],
+    () => (data ? buildFieldMonths(data, matchRegistrations, months, mode) : []),
+    [data, matchRegistrations, months, mode],
   );
 
-  const monthRows = useMemo(() => allRows.filter((r) => r.month === activeMonth), [allRows, activeMonth]);
+  const monthRows = allRows;
 
   // The structure filter narrows WHICH FIELDS are in scope. It is a filter on the estate, not on
   // the arithmetic — the totals below are always the sum of the rows on screen.
@@ -109,11 +100,11 @@ export default function CostSection() {
     [allRows, structures, cityFilter],
   );
   const series = useMemo(
-    () => quarter.months.map((m) => {
-      const r = rollup(seriesRows.filter((x) => x.month === m.key));
-      return { month: m.key, cost: r.cost, revenue: r.revenueWithKnownCost, ratio: r.ratio };
+    () => months.map((m) => {
+      const r = rollup(seriesRows.filter((x) => x.month === m));
+      return { month: m, cost: r.cost, revenue: r.revenueWithKnownCost, ratio: r.ratio };
     }),
-    [quarter, seriesRows],
+    [months, seriesRows],
   );
 
   if ((loading && !data) || matchLoading) return <div className={s.empty}>Loading…</div>;
@@ -132,7 +123,7 @@ export default function CostSection() {
 
   function exportTable() {
     const grouped = grain === "city" ? byCity(live) : byField(live);
-    downloadCsv(`matchday-field-cost-${activeMonth.replace(" ", "-")}.csv`, [
+    downloadCsv(`matchday-field-cost-${period.key}.csv`, [
       [grain === "city" ? "City" : "Field", "City", "Billing", "Matches", "Revenue", "Event revenue", "Ratio denominator", "Field cost", "Cost ratio", "Cost recorded"],
       ...[...grouped.values()].map((rows) => {
         const r = rollup(rows);
@@ -155,16 +146,6 @@ export default function CostSection() {
   return (
     <div className={s.wrap} data-testid="finance-cost">
       <div className={s.ctrlRow}>
-        <div className={s.ctrlGroup}>
-          <span className={s.ctrlLab}>Month</span>
-          <div className={s.seg}>
-            {quarter.months.map((m) => (
-              <button key={m.key} type="button" className={activeMonth === m.key ? s.on : ""} onClick={() => setMonth(m.key)}>
-                {m.shortName}
-              </button>
-            ))}
-          </div>
-        </div>
         <div className={s.ctrlGroup}>
           <span className={s.ctrlLab}>Basis</span>
           <div className={s.seg}>
@@ -253,7 +234,7 @@ export default function CostSection() {
 
       <div className={s.card}>
         <div className={s.cardHead}>
-          <span className={s.cardTitle}>Revenue, field cost and cost ratio · {quarter.label}</span>
+          <span className={s.cardTitle}>Revenue, field cost and cost ratio · {period.label}</span>
         </div>
         <div className={s.chart}>
           {series.map((p) => (

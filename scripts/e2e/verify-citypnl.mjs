@@ -257,22 +257,44 @@ async function main() {
     near("…and the shares sum to 100%", shares.reduce((a, b) => a + b, 0), 100, 2);
   }
 
-  // ── MONTH AND BASIS ARE TWO CONTROLS ─────────────────────────────────────
-  console.log("\nmonth and basis are separate controls:");
+  // ── BASIS STAYS IN THE CARD; THE PERIOD DOES NOT ─────────────────────────
+  // The in-card Month segment (Q3 / Jul / Aug / Sep) is gone — it was the second of two controls
+  // doing one job, and it could only ever offer the selected quarter's three months. Basis stays
+  // because it describes how field cost is COMPUTED, not which period is shown.
+  console.log("\nbasis stays in the card, the period does not:");
   {
     const c = await page.evaluate(() => {
       const sel = document.querySelector('select[aria-label="Cost basis"]');
-      const seg = document.querySelector('[role="group"][aria-label="Month"]');
+      const card = document.querySelector('[data-testid="citypnl-table"]')?.closest("div");
       return {
         basis: sel ? [...sel.options].map((o) => o.textContent.trim()) : null,
-        month: seg ? [...seg.querySelectorAll("button")].map((b) => b.textContent.trim()) : null,
+        inCardMonth: !!document.querySelector('[role="group"][aria-label="Month"]'),
+        periodBar: !!document.querySelector('[data-testid="finance-period-bar"]'),
+        quarterSelect: [...document.querySelectorAll("select")].some((x) => /quarter/i.test(x.getAttribute("aria-label") ?? "")),
+        cardHasSel: !!card,
       };
     });
     eq("basis offers the four combinations", c.basis,
       ["Per-match · Realized", "Per-match · Full month", "As billed · Realized", "As billed · Full month"]);
     eq("the month does not appear inside the basis control",
       (c.basis ?? []).some((o) => /Jan|Feb|Mar|Apr|May|Jun|Jul|Aug|Sep|Oct|Nov|Dec|Q[1-4]/.test(o)), false);
-    eq("month is its own segmented control", (c.month ?? []).length >= 4, true);
+    eq("the in-card MONTH segment is gone", c.inCardMonth, false);
+    // FULL MONTH ON A PARTIAL PERIOD is a projection of cost against part-period revenue. It is
+    // selectable, so the page must say what it is rendering — stated, not discovered.
+    const noteWhenRealized = await page.evaluate(() => !!document.querySelector('[data-testid="citypnl-fullmonth-note"]'));
+    eq("Realized on a partial period carries no projection note", noteWhenRealized, false);
+    await page.selectOption('select[aria-label="Cost basis"]', { label: "Per-match · Full month" });
+    await page.waitForTimeout(900);
+    const projected = await page.evaluate(() => {
+      const n = document.querySelector('[data-testid="citypnl-fullmonth-note"]');
+      return n ? n.textContent.replace(/\s+/g, " ").trim() : null;
+    });
+    eq("…switching to Full month on a partial period states the mismatch", /Full month against a partial period/.test(projected ?? ""), true);
+    eq("…and names Realized as the like-for-like basis", /Realized/.test(projected ?? ""), true);
+    await page.selectOption('select[aria-label="Cost basis"]', { label: "Per-match · Realized" });
+    await page.waitForTimeout(900);
+    eq("the page-level QUARTER dropdown is gone", c.quarterSelect, false);
+    eq("…replaced by the one period bar", c.periodBar, true);
   }
 
   // ── NOTHING CLIPPED, EITHER WIDTH ────────────────────────────────────────

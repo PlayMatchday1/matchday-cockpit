@@ -25,7 +25,6 @@ import { usePathname, useRouter, useSearchParams } from "next/navigation";
 import PagePermissionGuard from "@/components/PagePermissionGuard";
 import ChatsRail from "../../match-ops/ChatsRail";
 import MatchOpsMobileBar from "../../match-ops/MatchOpsMobileBar";
-import QuarterSelector from "@/components/QuarterSelector";
 import ChangeLogView from "@/components/ChangeLogView";
 import CheckInsView from "@/components/CheckInsView";
 import ExpenseAdminView from "@/components/ExpenseAdminView";
@@ -37,15 +36,14 @@ import FinanceConfigureSubNav, {
   type ConfigureSubTabId,
 } from "@/components/FinanceConfigureSubNav";
 import FinanceSecondaryNav, { type SecondaryId } from "@/components/FinanceSecondaryNav";
-import { FinanceQuarterProvider } from "@/lib/financeQuarter";
+import FinancePeriodBar from "@/components/finance/FinancePeriodBar";
+import { FinancePeriodProvider } from "@/lib/financePeriodContext";
 import {
-  getAvailableQuarters,
-  getCurrentQuarter,
-  isPlanningQuarter,
-  resolveQuarterFromUrl,
-  type QuarterInfo,
-} from "@/lib/quarters";
-import { FINANCE_SECTIONS } from "./financeSections";
+  changeGrain, containingQuarter, currentPeriod, periodFromUrl, stepPeriod,
+  type FinancePeriod, type Grain,
+} from "@/lib/financePeriod";
+import { FinanceQuarterProvider } from "@/lib/financeQuarter";
+import { FINANCE_SECTIONS, SECTION_GRAINS } from "./financeSections";
 
 const COLLAPSE_KEY = "finance:rail-collapsed";
 // Which Configure sub-tab was last open, so leaving Configure and coming back lands where you
@@ -134,30 +132,45 @@ function FinanceShellInner({ children }: { children: React.ReactNode }) {
     else setOverlay("check-ins");
   }
 
-  // === Quarter selector + URL state. Moved verbatim from the old page. ===
-  const availableQuarters = useMemo(() => getAvailableQuarters(), []);
-  const quarter = useMemo<QuarterInfo>(
-    () => resolveQuarterFromUrl(searchParams?.get("q") ?? null, new Date()),
-    [searchParams],
+  // === THE PERIOD. One control, three grains, ?p= in the URL. ===
+  //
+  // ONE `now` FOR THE WHOLE SUBTREE. There is no server date on this path, and every section used
+  // to mint its own `new Date()`. Minting it once here is what lets the partial chip and the
+  // realized-cost figures beside it agree about which day it is.
+  const now = useMemo(() => new Date(), []);
+  const period = useMemo<FinancePeriod>(
+    () => periodFromUrl(searchParams?.get("p") ?? null, now),
+    [searchParams, now],
   );
-  const handleQuarterChange = useCallback(
-    (key: string) => {
+  const setPeriod = useCallback(
+    (p: FinancePeriod) => {
       const qs = new URLSearchParams(searchParams?.toString() ?? "");
-      if (key === getCurrentQuarter().key) qs.delete("q");
-      else qs.set("q", key);
+      // The default (current month) drops the param, so the clean URL is the common case.
+      if (p.key === currentPeriod("month", now).key && p.grain === "month") qs.delete("p");
+      else qs.set("p", p.key);
       const s = qs.toString();
       router.replace(s ? `?${s}` : "?");
     },
-    [router, searchParams],
+    [router, searchParams, now],
   );
-  const planning = isPlanningQuarter(quarter, new Date());
+  // The quarter CONTAINING the period, for the fifteen components that still read
+  // useFinanceQuarter() and expect three months. They keep behaving exactly as before.
+  const quarter = useMemo(() => containingQuarter(period), [period]);
   const openExpenses = useMemo(() => ({ openExpenses: () => setOverlay("expenses") }), []);
+
+  const grainSupport = SECTION_GRAINS[pathname] ?? { grains: ["month", "quarter", "year"] as const, why: "" };
+  // If the section cannot render the current grain, fall back to one it can rather than showing a
+  // window it will silently ignore.
+  const shownPeriod = grainSupport.grains.includes(period.grain)
+    ? period
+    : changeGrain(period, grainSupport.grains[0], now);
 
   const railW = collapsed ? "60px" : "212px";
   const secondary: SecondaryId | null =
     overlay === null ? null : overlay === "check-ins" ? "check-ins" : "configure";
 
   return (
+    <FinancePeriodProvider value={{ period: shownPeriod, now, setPeriod }}>
     <FinanceQuarterProvider quarter={quarter}>
       <div className="fixed left-0 z-30 hidden lg:block"
         style={{
@@ -173,33 +186,23 @@ function FinanceShellInner({ children }: { children: React.ReactNode }) {
       >
         <MatchOpsMobileBar items={FINANCE_SECTIONS} sheetTitle="Finance" showSwitch={false} />
 
-        <div className="mb-3 flex flex-wrap items-end justify-between gap-x-6 gap-y-3">
-          <div>
-            <h1 data-testid="finance-title" className="font-display text-5xl uppercase leading-none tracking-tight text-deep-green md:text-6xl">
-              Finance
-            </h1>
-            <p className="mt-2 text-sm text-deep-green/65">{quarter.label}</p>
-          </div>
-          <QuarterSelector
-            available={availableQuarters}
-            value={quarter.key}
-            onChange={handleQuarterChange}
-            now={new Date()}
-          />
-        </div>
+        <h1 data-testid="finance-title" className="font-display text-5xl uppercase leading-none tracking-tight text-deep-green md:text-6xl">
+          Finance
+        </h1>
 
-        {planning && (
-          <div
-            role="note"
-            className="mb-6 rounded-2xl border-[1.5px] border-cream-line bg-cream-soft/60 px-5 py-3 text-sm text-deep-green/70 shadow-sm shadow-deep-green/5"
-          >
-            <span className="font-bold text-deep-green">{quarter.label}</span> · Planning quarter —
-            actuals will populate as the quarter begins. Enter expenses, revenue projections, and
-            starting cash now to forecast.
-          </div>
-        )}
-
-        <FinanceSecondaryNav active={secondary} onChange={openSecondary} />
+        {/* ONE control, THREE grains, read by every section. The Configure / Check-Ins / Managers
+            links ride in this bar rather than a strip of their own — they were already a quiet
+            right-aligned row, and the bar is where the page-level controls now live. */}
+        <FinancePeriodBar
+          period={shownPeriod}
+          now={now}
+          supportedGrains={grainSupport.grains}
+          unsupportedReason={grainSupport.why}
+          onChangeGrain={(g: Grain) => setPeriod(changeGrain(shownPeriod, g, now))}
+          onStep={(dir) => setPeriod(stepPeriod(shownPeriod, dir, now))}
+          onJumpToNow={() => setPeriod(currentPeriod(shownPeriod.grain, now))}
+          links={<FinanceSecondaryNav active={secondary} onChange={openSecondary} inline />}
+        />
 
         {secondary === "configure" && (
           <FinanceConfigureSubNav
@@ -219,6 +222,7 @@ function FinanceShellInner({ children }: { children: React.ReactNode }) {
         </OverlayCtx.Provider>
       </div>
     </FinanceQuarterProvider>
+    </FinancePeriodProvider>
   );
 }
 

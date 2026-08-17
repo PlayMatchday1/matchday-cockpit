@@ -43,11 +43,10 @@
 // order, same colours.
 
 import { useMemo, useState } from "react";
-import { useFinanceData } from "@/lib/useFinanceData";
+import { useFinancePeriodData } from "@/lib/useFinancePeriodData";
 import { useMatchData } from "@/lib/useMatchData";
-import { useFinanceQuarter } from "@/lib/financeQuarter";
-import { quarterTabToMonths, CITY_DISPLAY_ORDER } from "@/lib/financeStats";
-import { isCurrentMonth, type QuarterInfo } from "@/lib/quarters";
+import { useFinancePeriod } from "@/lib/financePeriodContext";
+import { CITY_DISPLAY_ORDER } from "@/lib/financeStats";
 import { isCityHidden } from "@/lib/types";
 import { computeCityPnl, type CityCostMode, type CityCostScope, type CityPnl, type PnlField } from "@/lib/cityPnl";
 import styles from "./cityPnl.module.css";
@@ -71,24 +70,21 @@ const BASIS_OPTIONS: { id: BasisId; label: string }[] = [
   { id: "as_billed|fullMonth", label: "As billed · Full month" },
 ];
 
-function defaultTab(quarter: QuarterInfo, now = new Date()): string {
-  const cur = quarter.months.find((m) => isCurrentMonth(m, now));
-  return (cur ?? quarter.months[quarter.months.length - 1]).shortName;
-}
-
 export default function CityPnlTable() {
-  const { data, loading } = useFinanceData();
+  // THE WINDOW COMES FROM THE PAGE, NOT FROM THIS CARD. The in-card Month segment (Q3 / Jul / Aug /
+  // Sep) is gone: it could only ever offer the selected quarter's three months, so reaching August
+  // meant first knowing August is in Q3. The period bar answers that question once for every
+  // section, at whichever grain is asked for.
+  const { period, now } = useFinancePeriod();
+  const { data, loading } = useFinancePeriodData(period);
   const { rows: matchRegistrations, loading: matchLoading } = useMatchData();
-  const quarter = useFinanceQuarter();
 
   const [basis, setBasis] = useState<BasisId>("per_match|realized");
-  const [tab, setTab] = useState<string>(() => defaultTab(quarter));
   const [scope, setScope] = useState<string>("All cities");
   const [open, setOpen] = useState<string | null>(null);
 
   const [costMode, costScope] = basis.split("|") as [CityCostMode, CityCostScope];
-  const now = useMemo(() => new Date(), []);
-  const months = useMemo(() => quarterTabToMonths(quarter, tab), [quarter, tab]);
+  const months = period.months;
   const cities = useMemo(() => CITY_DISPLAY_ORDER.filter((c) => !isCityHidden(c)), []);
 
   const rows = useMemo(() => {
@@ -122,8 +118,6 @@ export default function CityPnlTable() {
     { dpp: 0, memb: 0, total: 0, cost: 0, afterCost: 0, over: 0, net: 0 },
   );
 
-  const periodTabs = [`Q${quarter.quarter}`, ...quarter.months.map((m) => m.shortName)];
-
   return (
     <div className={styles.wrap}>
       <div className={styles.card}>
@@ -133,16 +127,8 @@ export default function CityPnlTable() {
             <h1 className={styles.title}>City P&amp;L</h1>
           </div>
           <div className={styles.ctrls}>
-            <div className={styles.crow}>
-              <span className={styles.clab}>Month</span>
-              <div className={styles.seg} role="group" aria-label="Month">
-                {periodTabs.map((t) => (
-                  <button key={t} type="button" aria-pressed={t === tab} className={t === tab ? styles.on : ""} onClick={() => setTab(t)}>
-                    {t}
-                  </button>
-                ))}
-              </div>
-            </div>
+            {/* BASIS STAYS. It describes how field cost is COMPUTED, not which period is shown —
+                a different kind of choice, so a different home from the period bar. */}
             <div className={styles.crow}>
               <span className={styles.clab}>Basis</span>
               <select className={styles.basis} aria-label="Cost basis" value={basis} onChange={(e) => setBasis(e.target.value as BasisId)}>
@@ -151,6 +137,19 @@ export default function CityPnlTable() {
             </div>
           </div>
         </div>
+        {/* FULL MONTH ON A PARTIAL PERIOD IS A PROJECTION OF COST. venueChargedMatchCountFor counts
+            every match SCHEDULED in the window, including the ones that have not been played, so
+            the cost column carries the whole period while revenue has only accrued to today. Field
+            net and both margins are understated for as long as the period is open. Realized is the
+            like-for-like basis; this says so rather than leaving it to be discovered. */}
+        {costScope === "fullMonth" && period.isCurrent && (
+          <p className={styles.basisNote} data-testid="citypnl-fullmonth-note">
+            <b>Full month against a partial period.</b> Cost covers all {period.totalDays} days —
+            every match scheduled in {period.label}, played or not — while revenue has only accrued
+            over {period.elapsedDays}. Field net and both margins read low until the period closes.
+            Switch to Realized to compare like with like.
+          </p>
+        )}
 
         <div className={styles.cities}>
           <button type="button" aria-pressed={!single} className={!single ? styles.on : ""} onClick={() => { setScope("All cities"); setOpen(null); }}>

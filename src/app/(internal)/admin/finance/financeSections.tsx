@@ -15,6 +15,22 @@
 // they were. Putting them in the rail would say they are peers of Cities and Revenue; they are not.
 
 import type { RailItem } from "../../match-ops/sections";
+import type { Grain } from "@/lib/financePeriod";
+
+// WHICH GRAINS A SECTION CAN HONOUR. The period bar disables the rest and states the reason on
+// the control — a grain that is silently ignored is a control that looks live and does nothing.
+// This is data, not a guess: OpEx draws a day grid for ONE month and has no quarter form; Cash
+// Flow's panels are built around a quarter (starting cash, quarter P&L, the three-month expense
+// forecast) and have no month or year form.
+export type SectionGrains = { grains: readonly Grain[]; why: string };
+export const SECTION_GRAINS: Record<string, SectionGrains> = {
+  "/admin/finance/cities":        { grains: ["month", "quarter", "year"], why: "" },
+  "/admin/finance/revenue":       { grains: ["month", "quarter", "year"], why: "" },
+  "/admin/finance/cost":          { grains: ["month", "quarter", "year"], why: "" },
+  "/admin/finance/cash-flow":     { grains: ["quarter"], why: "Cash Flow is built around a quarter — starting cash, quarter P&L and a three-month expense forecast. It has no month or year form." },
+  "/admin/finance/opex":          { grains: ["month"], why: "OpEx draws a day-by-day calendar for one month. A quarter or a year has no calendar grid." },
+  "/admin/finance/field-ranking": { grains: ["month", "quarter"], why: "Field Ranking ranks venues within a month and compares across a quarter. A year would average away the ranking it exists to show." },
+};
 
 function I({ children }: { children: React.ReactNode }) {
   return (

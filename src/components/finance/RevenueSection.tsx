@@ -18,12 +18,12 @@
 
 import { useEffect, useMemo, useState } from "react";
 import { supabase } from "@/lib/supabase";
-import { useFinanceData, useFinanceDataForQuarter } from "@/lib/useFinanceData";
+import { useFinancePeriodData } from "@/lib/useFinancePeriodData";
 import { useMatchData } from "@/lib/useMatchData";
-import { useFinanceQuarter } from "@/lib/financeQuarter";
-import { mergeFinanceDataByMonth } from "@/lib/financeDataMerge";
+import { useFinancePeriod } from "@/lib/financePeriodContext";
+import { comparisonSpan } from "@/lib/financePeriod";
 import {
-  buildFieldMonths, buildMatchRows, byCity, byField, canonCity, revenueWindow,
+  buildFieldMonths, buildMatchRows, byCity, byField, canonCity,
   COST_BASIS_LABEL, type FieldMonth, type MatchRow,
 } from "@/lib/fieldEconomics";
 import { cityMembershipRevenueFor, CITY_DISPLAY_ORDER, type Q2Month } from "@/lib/financeStats";
@@ -53,18 +53,12 @@ const dateLabel = (d: Date) =>
   `${d.getFullYear()}-${String(d.getMonth() + 1).padStart(2, "0")}-${String(d.getDate()).padStart(2, "0")}`;
 
 export default function RevenueSection() {
-  const quarter = useFinanceQuarter();
-  const now = useMemo(() => new Date(), []);
-  const win = useMemo(() => revenueWindow(quarter, now), [quarter, now]);
-
-  // Two loaders, one cache. When the window needs no earlier quarter this resolves to the same
-  // key as the primary and costs nothing.
-  const primary = useFinanceData();
-  const secondary = useFinanceDataForQuarter(win.prevQuarter ?? quarter);
-  const data = useMemo(
-    () => mergeFinanceDataByMonth(primary.data, win.prevQuarter ? secondary.data : null, win.prevMonths),
-    [primary.data, secondary.data, win.prevQuarter, win.prevMonths],
-  );
+  // THE CHART IS THE SELECTED PERIOD PLUS THE PRIOR THREE AT THE SAME GRAIN. comparisonSpan
+  // collapses those four into one synthetic span so this is a SINGLE fetch, and reports how many
+  // it had to drop when the span would need more quarters than can be mounted.
+  const { period, now } = useFinancePeriod();
+  const { periods, span, dropped } = useMemo(() => comparisonSpan(period, 4, now), [period, now]);
+  const { data, loading: primaryLoading } = useFinancePeriodData(span);
   // BOTH LOADERS GATE THE RENDER — see the same note on CostSection. useMatchData carries every
   // DPP dollar on this page; rendering before it lands printed a real-looking $0 in every tile.
   const { rows: matchRegistrations, loading: matchLoading } = useMatchData();
@@ -92,8 +86,8 @@ export default function RevenueSection() {
   );
 
   const fieldRows = useMemo(
-    () => (data ? buildFieldMonths(data, matchRegistrations, win.months) : []),
-    [data, matchRegistrations, win.months],
+    () => (data ? buildFieldMonths(data, matchRegistrations, span.months) : []),
+    [data, matchRegistrations, span.months],
   );
 
   const matchRows = useMemo(
@@ -127,33 +121,33 @@ export default function RevenueSection() {
     [cities, cityFilter],
   );
 
+  // ONE BAR PER PERIOD, not per month — at Quarter grain a bar is a quarter, and its value is the
+  // sum of that quarter's months.
   const series = useMemo(() => {
     if (!data) return [];
-    return win.months.map((month) => {
-      const dpp = shownFields.filter((r) => r.month === month).reduce((a, r) => a + r.revenue, 0);
+    return periods.map((p) => {
+      const ms = new Set(p.months);
+      const dpp = shownFields.filter((r) => ms.has(r.month)).reduce((a, r) => a + r.revenue, 0);
       let membership = 0;
       if (membershipScoped) {
-        for (const c of membershipCities) membership += cityMembershipRevenueFor(data, c, month);
+        for (const c of membershipCities) for (const m of p.months) membership += cityMembershipRevenueFor(data, c, m);
       }
-      return { month, dpp, membership };
+      return { month: p.label, key: p.key, dpp, membership };
     });
-  }, [data, win.months, shownFields, membershipScoped, membershipCities]);
+  }, [data, periods, shownFields, membershipScoped, membershipCities]);
 
   const valueOf = (p: { dpp: number; membership: number }) =>
     view === "dpp" ? p.dpp : view === "membership" ? p.membership : p.dpp + p.membership;
 
-  const anchorPoint = series.find((p) => p.month === win.anchor) ?? { month: win.anchor, dpp: 0, membership: 0 };
+  const anchorPoint = series.find((p) => p.key === period.key) ?? { month: period.label, key: period.key, dpp: 0, membership: 0 };
   const anchorValue = valueOf(anchorPoint);
 
-  // Elapsed days drive both the daily average and the pace. For a completed anchor the whole
-  // month has elapsed, so the two collapse into the same number — which is correct.
-  const anchorMonthInfo = useMemo(() => {
-    const m = quarter.months.find((x) => x.key === win.anchor);
-    return m ?? quarter.months[quarter.months.length - 1];
-  }, [quarter, win.anchor]);
-  const daysInMonth = anchorMonthInfo.daysInMonth;
-  const daysElapsed = win.anchorIsPartial ? Math.max(1, now.getDate()) : daysInMonth;
-  const avgDaily = anchorValue / daysElapsed;
+  // ELAPSED AND TOTAL COME FROM THE PERIOD, at whatever grain it is — 17 of 31 for August, 48 of
+  // 92 for Q3. Computing them here from the day of the month would have been right only at Month
+  // grain and quietly wrong at the other two.
+  const daysInMonth = period.totalDays;
+  const daysElapsed = period.elapsedDays;
+  const avgDaily = anchorValue / Math.max(1, daysElapsed);
   const pace = avgDaily * daysInMonth;
 
   const topCity = useMemo(() => {
@@ -161,61 +155,55 @@ export default function RevenueSection() {
     let best: { city: string; value: number } | null = null;
     for (const c of cities) {
       if (cityFilter !== "all" && c !== canonCity(cityFilter)) continue;
-      const dpp = shownFields.filter((r) => r.month === win.anchor && r.city === c).reduce((a, r) => a + r.revenue, 0);
-      const membership = membershipScoped ? cityMembershipRevenueFor(data, c, win.anchor) : 0;
+      const ms = new Set(period.months);
+      const dpp = shownFields.filter((r) => ms.has(r.month) && r.city === c).reduce((a, r) => a + r.revenue, 0);
+      let membership = 0;
+      if (membershipScoped) for (const m of period.months) membership += cityMembershipRevenueFor(data, c, m);
       const value = valueOf({ dpp, membership });
       if (value <= 0) continue;
       if (!best || value > best.value) best = { city: c, value };
     }
     return best;
-  }, [data, cities, cityFilter, shownFields, win.anchor, membershipScoped, view]);
+  }, [data, cities, cityFilter, shownFields, period, membershipScoped, view]);
 
   // ===== Comparison basis =====
-  // A partial anchor is compared on PACE, not on its part-month total — otherwise every mid-month
-  // visit reports a collapse. The sub-line says which of the two is being compared.
-  const prevQuarterRows = useMemo(() => {
-    if (!win.prevQuarter || !secondary.data) return null;
-    return buildFieldMonths(secondary.data, matchRegistrations, win.prevQuarter.months.map((m) => m.key));
-  }, [win.prevQuarter, secondary.data, matchRegistrations]);
-
+  // THE OPTIONS FOLLOW THE GRAIN. Under the old quarter-only control these were fixed as
+  // "previous month" and "previous quarter avg"; with three grains a fixed word would lie — at
+  // Quarter grain the previous bar IS a quarter. So the comparison is stated in periods and the
+  // label names the actual bar it used.
+  //
+  // A PARTIAL PERIOD IS COMPARED ON PACE, not on its part-period total, or every mid-month visit
+  // reports a collapse. The sub-line says which of the two is being compared.
   const comparison = useMemo((): { label: string; basis: number | null; note: string } => {
     if (compare === "prev_year_avg") {
-      return { label: "Previous year avg", basis: null, note: "no comparable year on record" };
+      return { label: "Previous year", basis: null, note: "no comparable year on record" };
     }
+    const idx = series.findIndex((p) => p.key === period.key);
     if (compare === "prev_month") {
-      const idx = win.months.indexOf(win.anchor);
-      const prev = idx > 0 ? series.find((p) => p.month === win.months[idx - 1]) : undefined;
+      const prev = idx > 0 ? series[idx - 1] : undefined;
       return {
-        label: win.months[idx - 1] ?? "Previous month",
+        label: prev ? prev.month : "Previous period",
         basis: prev ? valueOf(prev) : null,
-        note: prev ? "" : "the month before the window",
+        note: prev ? "" : `nothing before this on record`,
       };
     }
-    if (!win.prevQuarter || !prevQuarterRows || !secondary.data) {
-      return { label: "Previous quarter avg", basis: null, note: "no prior quarter on record" };
-    }
-    const ms = win.prevQuarter.months.map((m) => m.key);
-    let total = 0;
-    for (const month of ms) {
-      const dpp = prevQuarterRows
-        .filter((r) => r.month === month && (cityFilter === "all" || r.city === canonCity(cityFilter)) && (fieldFilter === "all" || r.key === fieldFilter))
-        .reduce((a, r) => a + r.revenue, 0);
-      let membership = 0;
-      if (membershipScoped) for (const c of membershipCities) membership += cityMembershipRevenueFor(secondary.data, c, month);
-      total += valueOf({ dpp, membership });
-    }
-    return { label: `${win.prevQuarter.label} avg`, basis: total / ms.length, note: "" };
-  }, [compare, win, series, prevQuarterRows, secondary.data, cityFilter, fieldFilter, membershipScoped, membershipCities, view]);
+    const priors = idx > 0 ? series.slice(0, idx) : [];
+    if (priors.length === 0) return { label: "Prior periods avg", basis: null, note: "nothing before this on record" };
+    return {
+      label: `${priors.length} prior ${priors.length === 1 ? "period" : "periods"} avg`,
+      basis: priors.reduce((a, p) => a + valueOf(p), 0) / priors.length,
+      note: "",
+    };
+  }, [compare, series, period, view]);
 
-  const comparedValue = win.anchorIsPartial ? pace : anchorValue;
+  const comparedValue = period.isCurrent ? pace : anchorValue;
   const delta =
     comparison.basis && comparison.basis > 0 ? (comparedValue - comparison.basis) / comparison.basis : null;
 
-  const loading = primary.loading || (win.prevQuarter != null && secondary.loading);
-  if (matchLoading || (loading && !data)) {
+  if (matchLoading || (primaryLoading && !data)) {
     return <div className={s.empty}>Loading…</div>;
   }
-  if (!data) return <div className={s.empty}>No finance data for this quarter.</div>;
+  if (!data) return <div className={s.empty}>No finance data for this period.</div>;
 
   const fieldOptions = [...byField(fieldRows).values()]
     .map((g) => ({ key: g[0].key, label: g[0].field, city: g[0].city }))
@@ -228,15 +216,15 @@ export default function RevenueSection() {
   const max = Math.max(1, ...series.map((p) => valueOf(p)));
 
   function exportChart() {
-    downloadCsv(`matchday-revenue-${win.anchor.replace(" ", "-")}.csv`, [
-      ["Month", "DPP revenue", "Membership revenue", "Total"],
+    downloadCsv(`matchday-revenue-${period.key}.csv`, [
+      ["Period", "DPP revenue", "Membership revenue", "Total"],
       ...series.map((p) => [p.month, p.dpp.toFixed(2), membershipScoped ? p.membership.toFixed(2) : "", (p.dpp + p.membership).toFixed(2)]),
     ]);
   }
 
   function exportTable() {
     if (grain === "match") {
-      downloadCsv(`matchday-revenue-matches-${win.anchor.replace(" ", "-")}.csv`, [
+      downloadCsv(`matchday-revenue-matches-${period.key}.csv`, [
         ["Date", "Month", "Week", "Weekday", "City", "Location", "Hour", "Match", "Members Code", "Free Code", "DPP's", "Total Spots", "DPP Revenue", "Field Cost"],
         ...shownMatches.map((r) => [
           dateLabel(r.start), r.month, r.week, WEEKDAY[r.start.getDay()], r.city, r.location,
@@ -247,7 +235,7 @@ export default function RevenueSection() {
       return;
     }
     const grouped = grain === "city" ? byCity(shownFields) : byField(shownFields);
-    downloadCsv(`matchday-revenue-${grain}-${win.anchor.replace(" ", "-")}.csv`, [
+    downloadCsv(`matchday-revenue-${grain}-${period.key}.csv`, [
       ["Month", grain === "city" ? "City" : "Location", "Billing", "Matches", "DPP Revenue", "Private Rental", "Field Cost"],
       ...[...grouped.values()].flatMap((rows) =>
         rows.map((r) => [
@@ -275,7 +263,7 @@ export default function RevenueSection() {
                 <button key={o} type="button" disabled={off}
                   title={off ? "Disabled: the finance record starts March 2026, so there is no comparable month a year back." : undefined}
                   className={compare === o ? s.on : ""} onClick={() => !off && setCompare(o)}>
-                  {o === "prev_month" ? "Previous month" : o === "prev_quarter_avg" ? "Previous quarter avg" : "Previous year avg"}
+                  {o === "prev_month" ? "Previous period" : o === "prev_quarter_avg" ? "Prior periods avg" : "Previous year"}
                 </button>
               );
             })}
@@ -295,35 +283,35 @@ export default function RevenueSection() {
 
       <div className={s.tiles}>
         <Tile
-          label={`${win.anchor} revenue`}
+          label={`${period.label} revenue`}
           value={fmtMoney(anchorValue)}
-          partial={win.anchorIsPartial}
+          partial={period.isCurrent}
           sub={
             comparison.basis == null
               ? `vs ${comparison.label} — ${comparison.note}`
               : `${delta == null ? "—" : (delta >= 0 ? "+" : "") + (delta * 100).toFixed(1) + "%"} vs ${comparison.label}` +
-                (win.anchorIsPartial ? " (pace compared, not part-month)" : "")
+                (period.isCurrent ? " (pace compared, not part-period)" : "")
           }
         />
         <Tile
           label="Avg daily revenue"
           value={fmtMoney(avgDaily)}
-          partial={win.anchorIsPartial}
+          partial={period.isCurrent}
           sub={`${fmtMoney(anchorValue)} over ${daysElapsed} ${daysElapsed === 1 ? "day" : "days"}`}
         />
         <Tile
           label="Top revenue city"
           value={topCity ? topCity.city : "—"}
-          partial={win.anchorIsPartial && topCity != null}
+          partial={period.isCurrent && topCity != null}
           sub={topCity ? fmtMoney(topCity.value) : "no revenue recorded this month"}
         />
         <Tile
           label="Pace to month end"
-          value={win.anchorIsPartial ? fmtMoney(pace) : fmtMoney(anchorValue)}
+          value={period.isCurrent ? fmtMoney(pace) : fmtMoney(anchorValue)}
           sub={
-            win.anchorIsPartial
+            period.isCurrent
               ? `PROJECTED — ${fmtMoney(avgDaily)}/day × ${daysInMonth} days. The only grossed-up number here.`
-              : "Month closed — this is the actual, not a projection."
+              : "Period closed — this is the actual, not a projection."
           }
         />
       </div>
@@ -347,7 +335,7 @@ export default function RevenueSection() {
                 </div>
                 <span className={s.colLab} data-testid="revenue-chart-month">
                   {p.month}
-                  {p.month === win.anchor && win.anchorIsPartial && <i className={s.soFar}>so far</i>}
+                  {p.key === period.key && period.isCurrent && <i className={s.soFar}>so far</i>}
                 </span>
               </div>
             );
@@ -357,6 +345,19 @@ export default function RevenueSection() {
           {view !== "membership" && <span><i className={`${s.dot} ${s.barA}`} />DPP</span>}
           {view !== "dpp" && membershipScoped && <span><i className={`${s.dot} ${s.barB}`} />Membership</span>}
           {!membershipScoped && <span>Membership withheld — it is a city figure and cannot be narrowed to one pitch.</span>}
+          {/* A chart that quietly drew fewer bars than asked would read as "this is all there
+              was". It says so instead. */}
+          {dropped > 0 && (
+            <span data-testid="revenue-span-dropped">
+              {dropped} earlier {dropped === 1 ? "period" : "periods"} not drawn — the span would
+              need more quarters than can be loaded at once.
+            </span>
+          )}
+          {periods.length < 4 && dropped === 0 && (
+            <span data-testid="revenue-span-short">
+              {periods.length} of 4 {periods.length === 1 ? "period" : "periods"} — the record does not go back further.
+            </span>
+          )}
         </div>
       </div>
 

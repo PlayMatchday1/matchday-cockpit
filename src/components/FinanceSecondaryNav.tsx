@@ -30,14 +30,18 @@ const ITEMS: { id: SecondaryId; label: string }[] = [
 export default function FinanceSecondaryNav({
   active,
   onChange,
+  // INLINE drops the strip's own margin and right-alignment: the links now ride inside the period
+  // bar, which already handles that placement. Same buttons, same behaviour, one less row.
+  inline = false,
 }: {
   active: SecondaryId | null;
   onChange: (id: SecondaryId) => void;
+  inline?: boolean;
 }) {
   return (
     <nav
       aria-label="Finance secondary views"
-      className="mb-3 flex justify-end"
+      className={inline ? "flex" : "mb-3 flex justify-end"}
     >
       <div className="flex items-center gap-2 text-[10px] font-bold uppercase tracking-[0.12em]">
         {ITEMS.map((item, i) => {
