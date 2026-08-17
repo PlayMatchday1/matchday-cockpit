@@ -93,10 +93,34 @@ async function main() {
   console.log("\nTHE BUDGET — concurrency, a guard, and a reported margin:");
   {
     const src = (await import("node:fs")).readFileSync("src/app/api/sync/cron/route.ts", "utf8");
-    // The two slow INDEPENDENT steps overlap. Reordering alone rotated the starvation (moving the
-    // calendar to step 5 pushed app-store-installs ~5s LATER); this is the change that buys margin.
-    is("  users-lens and membership-snapshots run CONCURRENTLY, not one after the other",
-      /await Promise\.all\(\[[\s\S]{0,400}?"mdapi-users-lens-snapshot"[\s\S]{0,900}?"membership-snapshots"/.test(src), true);
+    // CHANGED, and the old assertion is recorded here rather than quietly dropped.
+    //
+    // This used to assert that mdapi-users-lens-snapshot and membership-snapshots ran CONCURRENTLY
+    // via Promise.all — an optimisation that bought margin when both were slow. It cannot hold any
+    // more because ONE OF THE TWO IS GONE: users-lens was a cache warmer that timed out at 113s on
+    // 14 consecutive runs and wrote nothing, while the read path silently served live aggregation.
+    // A pairing assertion whose partner has been deleted verifies nothing.
+    //
+    // What replaces it guards the reason it was deleted: the step must not come back into the
+    // pipeline and re-consume 113s of a 300s budget without that being a visible, reviewable edit.
+    is("  mdapi-users-lens-snapshot is NOT in the cron pipeline",
+      /runWithLog\(\s*"mdapi-users-lens-snapshot"/.test(src), false);
+    is("  …and membership-snapshots still is",
+      /runWithLog\(\s*"membership-snapshots"/.test(src), true);
+    // THE FIX ITSELF: the scan that timed out was fetchJoinedMatchPlayers with no range. It must
+    // stay bounded — an unbounded call here is a 203,000-row read on a 1GB instance.
+    {
+      // STRIP COMMENTS FIRST. The absence half of this reads "never calls it unbounded", and the
+      // comment above that call SAYS `fetchJoinedMatchPlayers(sb)` while explaining why it no
+      // longer does — so a raw source match fails on the prose describing the fix. A source-text
+      // assertion must target code.
+      const code = (str: string) =>
+        str.replace(/\/\*[\s\S]*?\*\//g, "").replace(/(^|[^:])\/\/.*$/gm, "$1");
+      const ms = code((await import("node:fs")).readFileSync("src/lib/membershipSnapshots.ts", "utf8"));
+      is("  membership-snapshots bounds its attendance read by date",
+        /fetchJoinedMatchPlayers\(sb,\s*attendanceRange\(/.test(ms), true);
+      is("  …and never calls it unbounded", /fetchJoinedMatchPlayers\(sb\)/.test(ms), false);
+    }
     is("  a step with no budget left is SKIPPED and RECORDED, never started to be killed",
       /budgetLeftMs\(\) <= 0/.test(src) && /skipForBudget\(/.test(src), true);
     is("  the skip writes a fin_sync_log row naming the reason", /error_message: msg/.test(src) && /budget exhausted/.test(src), true);
