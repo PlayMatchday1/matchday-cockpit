@@ -48,9 +48,10 @@ const pct = (t) => {
   return Number.isFinite(n) ? (neg ? -n : n) : null;
 };
 
-const HEAD = ["City", "DPP rev", "Member rev", "Total rev", "Field cost", "Field net", "Overhead", "Net P&L", "Margin"];
+const HEAD = ["City", "DPP rev", "Member rev", "Total rev", "Field cost", "Field net", "Field margin",
+              "Overhead", "Net P&L", "Margin"];
 // column index → meaning
-const C = { CITY: 0, DPP: 1, MEMB: 2, TOTAL: 3, COST: 4, FNET: 5, OH: 6, NET: 7, MAR: 8 };
+const C = { CITY: 0, DPP: 1, MEMB: 2, TOTAL: 3, COST: 4, FNET: 5, FMAR: 6, OH: 7, NET: 8, MAR: 9 };
 
 async function main() {
   process.loadEnvFile(".env.local");
@@ -84,7 +85,7 @@ async function main() {
   {
     const head = await page.evaluate(() =>
       [...document.querySelectorAll('[data-testid="citypnl-table"] thead th')].map((h) => h.textContent.trim()));
-    eq("the nine columns, in order", head, HEAD);
+    eq("the ten columns, in order", head, HEAD);
     const t = await page.evaluate(() => document.body.innerText);
     eq("COST GAP appears nowhere", /cost gap/i.test(t), false);
   }
@@ -105,7 +106,15 @@ async function main() {
     // cost and overhead render NEGATIVE, so the chain adds them.
     near(`${name}: field net = total − field cost`, fnet, total + cost, 2);
     near(`${name}: net = field net − overhead`, net, fnet + oh, 2);
+    near(`${name}: field margin = field net ÷ total`, pct(r[C.FMAR]), total ? (fnet / total) * 100 : 0, 1.2);
     near(`${name}: margin = net ÷ total`, pct(r[C.MAR]), total ? (net / total) * 100 : 0, 1.2);
+    // OVERHEAD CAN ONLY SUBTRACT, so field margin can never sit below net margin. If this ever
+    // fails it means an overhead category went negative, which is a real fact worth stopping on
+    // rather than a tolerance to widen.
+    const fm = pct(r[C.FMAR]), nm = pct(r[C.MAR]);
+    (fm != null && nm != null && fm >= nm - 1.2
+      ? ok(`${name}: field margin is not below net margin`)
+      : bad(`${name}: field margin is not below net margin`, `field ${fm}% vs net ${nm}%`));
   }
 
   // ── THE FOOTER IS THE SUM OF ITS COLUMN ──────────────────────────────────
@@ -124,6 +133,11 @@ async function main() {
     near("…and the footer itself chains", net, total + cost + oh, 2.5);
     near("…its margin is net ÷ total", pct(tot[C.MAR]), (net / total) * 100, 1.2);
     near("…its field net is total − field cost", fnet, total + cost, 2.5);
+    near("…its field margin is field net ÷ total", pct(tot[C.FMAR]), (fnet / total) * 100, 1.2);
+    (pct(tot[C.FMAR]) >= pct(tot[C.MAR]) - 1.2
+      ? ok("…and the footer's field margin is not below its net margin")
+      : bad("…and the footer's field margin is not below its net margin",
+            `field ${pct(tot[C.FMAR])}% vs net ${pct(tot[C.MAR])}%`));
   }
 
   // ── COLOUR BY SIGN ───────────────────────────────────────────────────────
@@ -155,7 +169,7 @@ async function main() {
         if (!tr) continue;
         const cells = [...tr.children];
         // Skip the full-width spanning rows (sub-headings, overhead, notes) — they have no columns.
-        if (cells.length !== 9) continue;
+        if (cells.length !== 10) continue;
         cells.forEach((c, i) => {
           (byCol[i] ??= []).push(Math.round(c.getBoundingClientRect().right));
         });
@@ -191,7 +205,7 @@ async function main() {
     const city = rows[0];
     const pitches = await page.evaluate(() =>
       [...document.querySelectorAll('[data-testid="citypnl-pitch-row"]')].map((tr) => [...tr.querySelectorAll("td")].map((c) => c.textContent.trim())));
-    eq("the pitch rows have nine cells each", [...new Set(pitches.map((p) => p.length))], [9]);
+    eq("the pitch rows have ten cells each", [...new Set(pitches.map((p) => p.length))], [10]);
 
     // Pitch DPP and field cost must reconcile to the city EXACTLY — it is the same money re-cut.
     const pDpp = pitches.reduce((a, p) => a + (money(p[C.DPP]) ?? 0), 0);
@@ -204,9 +218,21 @@ async function main() {
 
     eq("every pitch row marks member rev as allocated",
       pitches.every((p) => !/\d/.test(p[C.MEMB]) || /alloc/i.test(p[C.MEMB])), true);
-    // A pitch has no overhead, net or margin — those are city facts.
+    // A pitch has no overhead and no net — those are city facts.
     eq("pitches show dashes for overhead, net and margin",
       pitches.every((p) => p[C.OH] === "—" && p[C.NET] === "—" && p[C.MAR] === "—"), true);
+    // BUT IT DOES HAVE A FIELD MARGIN: its own revenue against its own venue cost. A pitch whose
+    // cost is unknown still dashes — there is nothing to divide.
+    eq("a pitch with a known cost carries a real field margin",
+      pitches.filter((p) => p[C.COST] !== "—").every((p) => /\d/.test(p[C.FMAR])), true);
+    // POSITIVE CONTROL: at least one pitch must actually print one, or the rule above is vacuous.
+    eq("…and at least one is on screen", pitches.some((p) => /\d/.test(p[C.FMAR])), true);
+    for (const p of pitches) {
+      if (!/\d/.test(p[C.FMAR])) continue;
+      const nm2 = p[C.CITY].split("\n")[0].slice(0, 22);
+      near(`  ${nm2}: field margin = field net ÷ total`, pct(p[C.FMAR]),
+        (money(p[C.FNET]) / money(p[C.TOTAL])) * 100, 1.2);
+    }
     // Each pitch chains on the columns it does have.
     for (const p of pitches) {
       const nm = p[C.CITY].split("\n")[0].slice(0, 22);
@@ -271,7 +297,7 @@ async function main() {
     eq(`${w}: the page does not scroll sideways`, r.overflow, false);
     eq(`${w}: every enabled control clears 36px`, r.small, []);
     if (w === 1560) {
-      eq("1560: the nine-column table is what renders", [r.tableVisible, r.cardsVisible], [true, false]);
+      eq("1560: the ten-column table is what renders", [r.tableVisible, r.cardsVisible], [true, false]);
     } else {
       // MOBILE IS A DIFFERENT LAYOUT: the chain becomes a card per city, and the wide table is
       // not merely scrolled off — it is not painted at all.
@@ -279,7 +305,7 @@ async function main() {
       const chain = await page.evaluate(() =>
         [...document.querySelectorAll('[data-testid="citypnl-card"]')][0]?.innerText ?? "");
       eq("390: the card carries the whole chain",
-        ["DPP rev", "Member rev", "Total rev", "Field cost", "Field net", "Overhead", "Net P&L"]
+        ["DPP rev", "Member rev", "Total rev", "Field cost", "Field net", "Field margin", "Overhead", "Net P&L"]
           .every((l) => chain.includes(l)), true);
     }
   }

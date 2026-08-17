@@ -74,12 +74,14 @@
 
 /* ── the table ──────────────────────────────────────────────────────── */
 .tblWrap { overflow-x: auto; -webkit-overflow-scrolling: touch; }
-.tbl { width: 100%; min-width: 1120px; border-collapse: collapse; table-layout: fixed; }
+.tbl { width: 100%; min-width: 1240px; border-collapse: collapse; table-layout: fixed; }
 
 /* FIXED WIDTHS ARE THE FIX. One right edge per column, shared by header, body and footer. */
-.cCity { width: 210px; }
-.cNum { width: 11.4%; }
-.cMar { width: 96px; }
+/* TWO pill columns now (field margin, margin), so the numeric share is re-cut to keep the
+   ten columns inside one screen without shrinking the money. */
+.cCity { width: 196px; }
+.cNum { width: 10.1%; }
+.cMar { width: 86px; }
 
 .tbl thead th {
   font-size: 10px; letter-spacing: .07em; font-weight: 800; color: var(--ink3);
@@ -133,7 +135,7 @@
 .blank .tdCity { font-weight: 400; }
 
 .pill {
-  display: inline-block; min-width: 58px; text-align: center; font-size: 12.5px;
+  display: inline-block; min-width: 52px; text-align: center; font-size: 12.5px;
   font-weight: 800; border-radius: 999px; padding: 4px 9px; font-variant-numeric: tabular-nums;
 }
 .pillUp { color: var(--grn); background: var(--grnbg); border: 1px solid var(--grnln); }

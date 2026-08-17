@@ -4,6 +4,13 @@
 //
 //     DPP rev + Member rev = TOTAL REV  −  Field cost  =  Field net  −  Overhead  =  Net P&L
 //
+// EACH MARGIN PILL RIDES WITH THE NUMBER IT DESCRIBES. Field margin sits immediately after Field
+// net with no rule between them, the way Margin sits after Net P&L. The hairlines mark the four
+// STEPS of the chain — Field cost, Field net, Overhead, Net P&L — not the ten columns.
+//
+// A PITCH DOES HAVE A FIELD MARGIN. Its overhead and net are city facts and stay dashes, but
+// field margin is measurable at a pitch: its own revenue against its own venue cost.
+//
 // WHY IT WAS REBUILT (four things were wrong, none of them the typography):
 //
 //   1. THE COLUMNS NEVER SHARED AN EDGE. Every numeric column sized itself by its own content, so
@@ -163,8 +170,9 @@ export default function CityPnlTable() {
             <colgroup>
               <col className={styles.cCity} />
               <col className={styles.cNum} /><col className={styles.cNum} /><col className={styles.cNum} />
-              <col className={styles.cNum} /><col className={styles.cNum} /><col className={styles.cNum} />
-              <col className={styles.cNum} />
+              <col className={styles.cNum} /><col className={styles.cNum} />
+              <col className={styles.cMar} />
+              <col className={styles.cNum} /><col className={styles.cNum} />
               <col className={styles.cMar} />
             </colgroup>
             <thead>
@@ -176,6 +184,7 @@ export default function CityPnlTable() {
                 <th className={styles.eq}>Total rev</th>
                 <th className={styles.gsep}>Field cost</th>
                 <th className={styles.gsep}>Field net</th>
+                <th className={styles.thMar}>Field margin</th>
                 <th className={styles.gsep}>Overhead</th>
                 <th className={styles.gsep}>Net P&amp;L</th>
                 <th className={styles.thMar}>Margin</th>
@@ -191,6 +200,7 @@ export default function CityPnlTable() {
                   <td className={styles.tdCity}><span className={styles.rkSpacer} />{k.city}</td>
                   <td>—</td><td>—</td><td>—</td>
                   <td className={styles.gsep}>—</td><td className={styles.gsep}>—</td>
+                  <td>—</td>
                   <td className={styles.gsep}>—</td><td className={styles.gsep}>—</td>
                   <td className={styles.tdMar}>—</td>
                 </tr>
@@ -204,6 +214,11 @@ export default function CityPnlTable() {
                 <td>{usd(T.total)}</td>
                 <td className={`${styles.gsep} ${styles.cost}`}>{usdNeg(T.cost)}</td>
                 <td className={`${styles.gsep} ${T.afterCost < 0 ? styles.negv : ""}`}>{usd(T.afterCost)}</td>
+                <td className={styles.tdMar} data-testid="citypnl-fieldmargin">
+                  <span className={`${styles.pill} ${T.afterCost >= 0 ? styles.pillUp : styles.pillDn}`}>
+                    {T.total ? pctInt(T.afterCost / T.total) : "\u2014"}
+                  </span>
+                </td>
                 <td className={`${styles.gsep} ${styles.cost}`}>{usdNeg(T.over)}</td>
                 <td className={`${styles.gsep} ${styles.res} ${T.net >= 0 ? styles.up : styles.dn}`} data-testid="citypnl-total-net">{usd(T.net)}</td>
                 <td className={styles.tdMar}>
@@ -242,6 +257,7 @@ export default function CityPnlTable() {
 function Chain({ dpp, memb, total, cost, afterCost, over, net }: {
   dpp: number; memb: number; total: number; cost: number; afterCost: number; over: number; net: number;
 }) {
+  const fieldMargin = total ? afterCost / total : null;
   return (
     <dl className={styles.chain}>
       <div><dt>DPP rev</dt><dd>{usd(dpp)}</dd></div>
@@ -249,6 +265,9 @@ function Chain({ dpp, memb, total, cost, afterCost, over, net }: {
       <div className={styles.chainSum}><dt>= Total rev</dt><dd>{usd(total)}</dd></div>
       <div><dt>Field cost</dt><dd className={styles.cost}>{usdNeg(cost)}</dd></div>
       <div className={styles.chainSum}><dt>= Field net</dt><dd className={afterCost < 0 ? styles.negv : ""}>{usd(afterCost)}</dd></div>
+      <div><dt>Field margin</dt>
+        <dd><span className={`${styles.pill} ${afterCost >= 0 ? styles.pillUp : styles.pillDn}`}>
+          {fieldMargin == null ? "\u2014" : pctInt(fieldMargin)}</span></dd></div>
       <div><dt>Overhead</dt><dd className={styles.cost}>{usdNeg(over)}</dd></div>
       <div className={styles.chainSum}><dt>= Net P&amp;L</dt>
         <dd className={`${styles.res} ${net >= 0 ? styles.up : styles.dn}`}>{usd(net)}</dd></div>
@@ -281,6 +300,10 @@ function CityCard({ k, rank, open, onToggle }: { k: CityPnl; rank: number; open:
                   <dd className={f.cost == null ? styles.na : styles.cost}>{f.cost == null ? "—" : usdNeg(f.cost)}</dd></div>
                 <div className={styles.chainSum}><dt>= Field net</dt>
                   <dd className={f.net == null ? styles.na : f.net < 0 ? styles.negv : ""}>{f.net == null ? "—" : usd(f.net)}</dd></div>
+                <div><dt>Field margin</dt>
+                  <dd>{f.net == null || !f.totalRev ? <span className={styles.na}>—</span> : (
+                    <span className={`${styles.pill} ${f.net >= 0 ? styles.pillUp : styles.pillDn}`}>{pctInt(f.net / f.totalRev)}</span>
+                  )}</dd></div>
               </dl>
             </div>
           ))}
@@ -315,6 +338,11 @@ function CityRows({ k, rank, open, onToggle }: { k: CityPnl; rank: number; open:
         <td className={styles.subT}>{usd(k.gross)}</td>
         <td className={`${styles.gsep} ${styles.cost}`}>{usdNeg(k.fieldCost)}</td>
         <td className={`${styles.gsep} ${k.netAfterFieldCost < 0 ? styles.negv : ""}`}>{usd(k.netAfterFieldCost)}</td>
+        <td className={styles.tdMar} data-testid="citypnl-fieldmargin">
+          <span className={`${styles.pill} ${k.netAfterFieldCost >= 0 ? styles.pillUp : styles.pillDn}`}>
+            {k.gross ? pctInt(k.netAfterFieldCost / k.gross) : "\u2014"}
+          </span>
+        </td>
         <td className={`${styles.gsep} ${styles.cost}`}>{usdNeg(k.overheadTotal)}</td>
         <td className={`${styles.gsep} ${styles.res} ${k.net >= 0 ? styles.up : styles.dn}`} data-testid="citypnl-net">{usd(k.net)}</td>
         <td className={styles.tdMar}>
@@ -330,7 +358,7 @@ function CityRows({ k, rank, open, onToggle }: { k: CityPnl; rank: number; open:
 function Drill({ k }: { k: CityPnl }) {
   return (
     <>
-      <tr className={styles.subhd}><td colSpan={9}>{k.city} · by pitch</td></tr>
+      <tr className={styles.subhd}><td colSpan={10}>{k.city} · by pitch</td></tr>
       {k.fields.map((f) => (
         <tr key={f.venue} className={styles.sub} data-testid="citypnl-pitch-row">
           <td className={styles.tdCity}>
@@ -349,7 +377,15 @@ function Drill({ k }: { k: CityPnl }) {
           <td className={`${styles.gsep} ${f.net == null ? styles.na : f.net < 0 ? styles.negv : ""}`}>
             {f.net == null ? "—" : usd(f.net)}
           </td>
-          {/* A PITCH HAS NO OVERHEAD, NET OR MARGIN — those are city facts. */}
+          {/* MEASURABLE AT A PITCH: its own revenue against its own venue cost. */}
+          <td className={styles.tdMar} data-testid="citypnl-pitch-fieldmargin">
+            {f.net == null || !f.totalRev ? <span className={styles.na}>—</span> : (
+              <span className={`${styles.pill} ${f.net >= 0 ? styles.pillUp : styles.pillDn}`}>
+                {pctInt(f.net / f.totalRev)}
+              </span>
+            )}
+          </td>
+          {/* A PITCH HAS NO OVERHEAD AND NO NET — those are city facts. */}
           <td className={`${styles.gsep} ${styles.na}`}>—</td>
           <td className={`${styles.gsep} ${styles.na}`}>—</td>
           <td className={`${styles.tdMar} ${styles.na}`}>—</td>
@@ -357,13 +393,13 @@ function Drill({ k }: { k: CityPnl }) {
       ))}
       {k.untracked > 0 && (
         <tr className={styles.sub}>
-          <td colSpan={9} className={styles.gapNote} data-testid="citypnl-untracked">
+          <td colSpan={10} className={styles.gapNote} data-testid="citypnl-untracked">
             <b>{usd(k.untracked)} of DPP is untracked</b> — it sits at pitches with no cost basis on
             file, so it is held out of DPP rev and Field net entirely rather than counted at $0.
           </td>
         </tr>
       )}
-      <tr className={styles.ohrow}><td colSpan={9}><OverheadMakeup k={k} /></td></tr>
+      <tr className={styles.ohrow}><td colSpan={10}><OverheadMakeup k={k} /></td></tr>
     </>
   );
 }
