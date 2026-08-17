@@ -148,7 +148,11 @@ is("no other route reads can_edit_credits directly",
 // CATCHING A NEW SURFACE, which is what it is for — the route appears here BECAUSE it calls
 // authenticateAdmin, and its gate is asserted for real below (a non-admin gets 403, not merely a
 // listing) = 29.
-is("authenticateAdmin still guards 30 routes", importsAdmin.length, 30);
+// +1 Phase 31d — sync/app-store-monthly. The Apple monthly archive: admin OR the cron secret, and
+// nothing unauthenticated. Its own route rather than a step inside app-store-installs, because that
+// step has been starved at +288s against a 300s ceiling and an archive that silently does not run
+// is the failure this area keeps producing = 31.
+is("authenticateAdmin still guards 31 routes", importsAdmin.length, 31);
 
 // Phase 18d — every promo WRITE is gated on MANAGE PROMOS, and the check is in the route (not
 // only on the button). A route that forgot it would 200 for any admin.

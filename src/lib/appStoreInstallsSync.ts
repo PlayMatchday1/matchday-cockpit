@@ -298,3 +298,122 @@ export async function ingestAppStore(sb: SupabaseClient, now: Date): Promise<App
     productTypeTotals,
   };
 }
+
+// ── THE MONTHLY ARCHIVE ──────────────────────────────────────────────────────
+//
+// WHY THIS EXISTS, and why it is separate from the daily ingest above.
+//
+// Apple retains MONTHLY Sales and Trends reports for ONE YEAR and does not regenerate them. Once a
+// month falls out of that window it is gone permanently — Apple keeps YEARLY reports for ten years,
+// but those carry no monthly granularity, which is the granularity every growth surface is built
+// on. The daily ingest above inherits the same rolling window (it asks for DAILY and Apple serves
+// roughly the last 365 days), so it is not an archive: it re-reads whatever Apple still has.
+//
+// This op copies each month Apple still serves into app_downloads at period_grain 'month', where it
+// stays after Apple drops it. It is the only thing here with a DEADLINE: roughly twelve months are
+// retrievable today and one more falls off every month.
+//
+// NO MIGRATION. app_downloads already carries period_grain 'month' with the 1st-of-month
+// convention, and the same (platform, package, metric, period_grain, period_date) conflict key.
+//
+// A MONTH IS NEVER OVERWRITTEN WITH A WORSE COPY. Re-running is safe: an archived month is upserted
+// with the same key, and a 404 (Apple no longer serves it) writes NOTHING rather than a zero. That
+// distinction is the whole point — a zero would erase a real archived figure the day Apple drops
+// the month.
+export type AppleMonthlyArchiveSummary = {
+  vendor: string;
+  monthsRequested: number;
+  monthsArchived: number;      // months Apple actually served
+  monthsUnavailable: number;   // 404 — past retention, or not yet published
+  earliestArchived: string | null;
+  latestArchived: string | null;
+  unitsTotal: number;
+  retentionEdge: string | null; // the oldest month Apple refused
+};
+
+const ymOf = (d: Date) => `${d.getUTCFullYear()}-${String(d.getUTCMonth() + 1).padStart(2, "0")}`;
+
+async function fetchSalesMonth(token: string, vendor: string, ym: string): Promise<DayResult> {
+  const q = new URLSearchParams({
+    "filter[frequency]": "MONTHLY",
+    "filter[reportType]": "SALES",
+    "filter[reportSubType]": "SUMMARY",
+    "filter[vendorNumber]": vendor,
+    "filter[reportDate]": ym, // MONTHLY takes YYYY-MM
+    "filter[version]": "1_1",
+  });
+  const res = await fetch(`https://api.appstoreconnect.apple.com/v1/salesReports?${q.toString()}`, {
+    headers: { Authorization: `Bearer ${token}`, Accept: "application/a-gzip" },
+  });
+  if (res.status === 401 || res.status === 403) {
+    return { kind: "auth-error", status: res.status, error: (await res.text().catch(() => "")).slice(0, 1200) };
+  }
+  // Same rule as the daily path: ANY 404 means "no report", and we do not classify it from the
+  // body text. A not-yet-published current month 404s exactly like one past retention.
+  if (res.status === 404) return { kind: "no-report" };
+  if (!res.ok) {
+    return { kind: "auth-error", status: res.status, error: (await res.text().catch(() => "")).slice(0, 1200) };
+  }
+  const gz = Buffer.from(await res.arrayBuffer());
+  let tsv: string;
+  try { tsv = gunzipSync(gz).toString("utf8"); } catch { tsv = gz.toString("utf8"); }
+  return { kind: "data", sales: parseSalesTsv(tsv) };
+}
+
+/**
+ * Archive every month Apple still serves, newest first, stopping after `stopAfterMisses`
+ * consecutive unavailable months (the retention edge). `months` bounds the walk.
+ */
+export async function archiveAppStoreMonths(
+  sb: SupabaseClient,
+  now: Date,
+  opts: { months?: number; stopAfterMisses?: number } = {},
+): Promise<AppleMonthlyArchiveSummary> {
+  const { token, vendor } = mintToken();
+  const maxMonths = opts.months ?? 18;          // walk past 12 so the true edge is discovered
+  const stopAfterMisses = opts.stopAfterMisses ?? 3;
+
+  const out: AppleMonthlyArchiveSummary = {
+    vendor, monthsRequested: 0, monthsArchived: 0, monthsUnavailable: 0,
+    earliestArchived: null, latestArchived: null, unitsTotal: 0, retentionEdge: null,
+  };
+
+  let misses = 0;
+  for (let back = 0; back < maxMonths; back++) {
+    const d = new Date(Date.UTC(now.getUTCFullYear(), now.getUTCMonth() - back, 1));
+    const ym = ymOf(d);
+    out.monthsRequested++;
+    const r = await fetchSalesMonth(token, vendor, ym);
+    if (r.kind === "auth-error") throw new AppleAuthError(`App Store Connect ${r.status}: ${r.error}`);
+    if (r.kind === "no-report") {
+      out.monthsUnavailable++;
+      out.retentionEdge = `${ym}-01`;
+      // Consecutive misses walking backwards = we have passed the retention edge. A single miss
+      // near the top is the current month not yet published, which is why one is not enough.
+      if (++misses >= stopAfterMisses) break;
+      continue;
+    }
+    misses = 0;
+    const periodDate = `${ym}-01`;
+    const { error } = await sb.from("app_downloads").upsert(
+      {
+        platform: APPLE_PLATFORM,
+        package: `apple:${vendor}`,
+        metric: APPLE_METRIC,
+        period_grain: "month",
+        period_date: periodDate,
+        count: r.sales.units,
+        source: "app_store_connect",
+        raw: { byType: r.sales.byType, skus: r.sales.skus, archived: true },
+        ingested_at: new Date().toISOString(),
+      },
+      { onConflict: "platform,package,metric,period_grain,period_date" },
+    );
+    if (error) throw new Error(`app_downloads(ios monthly) upsert failed: ${error.message}`);
+    out.monthsArchived++;
+    out.unitsTotal += r.sales.units;
+    if (!out.latestArchived || periodDate > out.latestArchived) out.latestArchived = periodDate;
+    if (!out.earliestArchived || periodDate < out.earliestArchived) out.earliestArchived = periodDate;
+  }
+  return out;
+}

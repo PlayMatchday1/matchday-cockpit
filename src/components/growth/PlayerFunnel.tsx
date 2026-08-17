@@ -66,7 +66,12 @@ export default function PlayerFunnel({
     const hi = customStart <= customEnd ? customEnd : customStart;
     const custom = months.filter((m) => m >= lo && m <= hi);
     return [
-      { name: monthLabel(end), meta: "current month", months: [end] },
+      // THE CURRENT MONTH IS AN OPEN PERIOD. Its registrations are current while its downloads
+      // are short — the month is part-elapsed AND Apple's daily feed lags — so its conversion is
+      // computed on a denominator that has not finished arriving. The NUMBER is fine; the
+      // COMPARISON to the closed rows beneath it is not. Marked, exactly as the partner page marks
+      // a month that has not closed; neither excluded nor annualised.
+      { name: monthLabel(end), meta: "current month", months: [end], partial: true },
       { name: monthLabel(prev), meta: "previous month", months: [prev] },
       { name: `${year} YTD`, meta: "year to date", months: ytd },
       {
@@ -129,7 +134,7 @@ export default function PlayerFunnel({
           console.error(`Funnel not nested in "${r.name}" at stage ${i}`, vals);
         }
       }
-      return { ...r, vals, dlNote };
+      return { ...r, vals, dlNote, partial: "partial" in r ? Boolean(r.partial) : false };
     });
   }, [data.funnelByMonth, customStart, customEnd, months]);
 
@@ -200,7 +205,7 @@ export default function PlayerFunnel({
                 <span className={styles.funnelPeriodName}>{r.name}</span>
                 <span className={styles.funnelPeriodMeta}>{r.meta}</span>
               </div>
-              {renderRowCells(r.vals, r.dlNote)}
+              {renderRowCells(r.vals, r.dlNote, r.partial)}
             </div>
           ))}
         </div>
@@ -220,7 +225,7 @@ export default function PlayerFunnel({
 
 // Builds a row's stage + conversion cells. The conversion between stage i and i+1
 // is b/a (b = vals[i+1], a = vals[i]); a dash when either is null or a is 0.
-function renderRowCells(vals: (number | null)[], dlNote?: string | null): ReactNode[] {
+function renderRowCells(vals: (number | null)[], dlNote?: string | null, partial = false): ReactNode[] {
   // Bars are a share of the LARGEST stage in the row (Downloads when known, else
   // Registrations) so the funnel narrows left → right even now that Downloads is
   // a real, larger-than-registrations value.
@@ -260,8 +265,13 @@ function renderRowCells(vals: (number | null)[], dlNote?: string | null): ReactN
       if (mustDash && known) throw new Error(`funnel: conversion at ${i} should be dashed`);
       out.push(
         <div key={`c${i}`} className={styles.funnelConv}>
-          <span className={`${styles.funnelCpill} ${known ? "" : styles.funnelCpillNone}`}>
+          <span
+            className={`${styles.funnelCpill} ${known ? "" : styles.funnelCpillNone} ${partial && known ? styles.funnelCpillPartial : ""}`}
+            data-testid={partial && known ? "funnel-conv-partial" : undefined}
+            title={partial && known ? "So far — this month is still open and Apple's daily feed lags, so the denominator is incomplete. Not comparable to the closed rows below." : undefined}
+          >
             {known ? `${((b! / a!) * 100).toFixed(1)}%` : "—"}
+            {partial && known && <i className={styles.funnelCpillSoFar}>so far</i>}
           </span>
         </div>,
       );

@@ -1144,3 +1144,21 @@
   color: #8a5a00;
   white-space: nowrap;
 }
+
+/* AN OPEN PERIOD'S CONVERSION. The current month is part-elapsed and Apple's daily feed lags, so
+   its denominator is still arriving: the figure is right, the comparison to the closed rows below
+   it is not. Same statement the partner page makes with "so far" on an open month — the number is
+   never hidden, annualised or excluded, only qualified. */
+.funnelCpillPartial {
+  border-style: dashed;
+  color: #8a5a00;
+}
+.funnelCpillSoFar {
+  font-style: normal;
+  margin-left: 4px;
+  font-size: 8.5px;
+  font-weight: 800;
+  letter-spacing: 0.06em;
+  text-transform: uppercase;
+  opacity: 0.85;
+}
