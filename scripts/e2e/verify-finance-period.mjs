@@ -327,9 +327,20 @@ async function main() {
       `${["January","February","March","April","May","June","July","August","September","October","November","December"][fut.getMonth()]} ${fut.getFullYear()}`);
     eq("…and it is marked Not started, not closed", b.partial, null);
 
+    // EXPAND THE CATEGORY FIRST. The calendar renders leaf rows only while their category group
+    // is open (`{opened && group.rows.map(...)}`), so the chip is in the DOM but unrendered until
+    // the header is clicked. Waiting for it without expanding times out against a page that is
+    // working perfectly.
+    await page.waitForSelector("tr.ox-cat", { timeout: 60000 });
+    const chipSel = `[data-testid="opex-amount-chip"][data-expense-id="${expenseId}"]`;
+    for (const row of await page.$$("tr.ox-cat")) {
+      if (await page.$(chipSel)) break;
+      await row.click();
+      await page.waitForTimeout(250);
+    }
     // The chip is the edit affordance. It exists only when the row is editable, so its presence
     // IS the "this will accept input" claim being tested.
-    const chip = page.locator(`[data-testid="opex-amount-chip"][data-expense-id="${expenseId}"]`);
+    const chip = page.locator(chipSel);
     await chip.waitFor({ state: "visible", timeout: 60000 });
     ok("the expense renders on the future month with a live edit affordance");
 

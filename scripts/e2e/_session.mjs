@@ -132,10 +132,19 @@ export function installHarnessGuard() {
 // ═══════════════════════════════════════════════════════════════════════════════════════════════
 // THE KEYED SESSION CACHE — 33 magic links per gate run down to 2 cold, 0 warm.
 //
-// THE PROBLEM. Every gated suite inlined its own admin.generateLink('magiclink') + verifyOtp: 33
-// links per run against Supabase's BUILT-IN LIMIT OF 2 PER HOUR PER PROJECT. The tail of a long
-// run therefore died with "Cannot read properties of null (reading 'hashed_token')", which reads
-// as a code failure and is a quota failure. It killed three unrelated suites in push 18.
+// THE PROBLEM. Every gated suite inlined its own admin.generateLink('magiclink') + verifyOtp — 33
+// links per gate run, each a full round trip to GoTrue, to produce sessions for TWO identities.
+//
+// CORRECTION TO AN EARLIER NOTE HERE: this file previously said the ceiling was Supabase's
+// built-in 2/hour/project. THAT LIMIT NEVER APPLIED — the project has had custom SMTP configured
+// (SendGrid, smtp.sendgrid.net:587, sender info@playmatchday.com) all along, which supersedes it.
+// The tail-of-run failures in push 18 ("Cannot read properties of null (reading 'hashed_token')")
+// coincided with a GoTrue OUTAGE — /auth/v1/health returned 522 for ~20s on every sample while
+// PostgREST answered in 90ms — so generateLink was failing because the auth service was
+// unreachable, not because a quota was exhausted.
+//
+// 33 round trips to mint 2 sessions is still waste worth removing, and it makes the suite immune
+// to exactly that kind of transient: one mint per identity, reused for 45 minutes.
 //
 // WHY NOT signInWithPassword. scripts/e2e/auth.mjs uses the password grant, which never touches
 // the email quota — but it authenticates as E2E_EMAIL (clubhouse-e2e@playmatchday.com), and we
@@ -200,9 +209,13 @@ export async function sessionFor(email) {
     // NAME THE QUOTA. This used to surface as "Cannot read properties of null", which sent an
     // investigation through the dev server, a clean .next and three unrelated commits before
     // anyone counted links.
+    // NAME WHAT IT USUALLY IS. This surfaced as "Cannot read properties of null", which sent an
+    // investigation through the dev server, a clean .next and three unrelated commits. Check
+    // /auth/v1/health first: a 522 there means GoTrue is unreachable and nothing is wrong here.
     throw new Error(
-      `Supabase returned no magic link for ${email}. This is almost always the EMAIL QUOTA — ` +
-      `the built-in service allows 2/hour/project; custom SMTP raises it. Not a code failure.`,
+      `Supabase returned no magic link for ${email}. Check GET /auth/v1/health — a 522 means the ` +
+      `auth service is down, which is the usual cause and is not a code failure. A rate limit ` +
+      `would return 429 with a JSON body instead.`,
     );
   }
   const vv = await netRetry(() => anon.auth.verifyOtp({ type: "magiclink", token_hash: hashed }), `verifyOtp ${email}`);

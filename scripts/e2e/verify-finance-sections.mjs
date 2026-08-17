@@ -192,15 +192,35 @@ async function main() {
   // payment to compare against. The card's own Jul/Aug/Sep segment is gone — that was the second
   // of two controls doing one job — so the previous month is reached with the period stepper.
   await open("/admin/finance/cost", '[data-testid="finance-cost"]');
+  // WAIT FOR THE LABEL TO CHANGE, not for something already true. The previous version waited for
+  // cost rows and a populated footer — both of which were on screen BEFORE the click — so the wait
+  // passed instantly, the step never landed, and the partner cross-check silently compared
+  // AUGUST's live figures against JULY's published payment.
+  const beforeStep = await page.$eval('[data-testid="period-label"]', (e) => e.textContent.trim());
   await page.click('[data-testid="period-prev"]');
+  await page.waitForFunction(
+    (prev) => document.querySelector('[data-testid="period-label"]')?.textContent?.trim() !== prev,
+    beforeStep, { timeout: 60000 });
   await page.waitForSelector('[data-testid="cost-row"]', { timeout: 120000 });
-  await page.waitForTimeout(1200);
+  await page.waitForFunction(() => {
+    const t = document.querySelector('[data-testid="cost-total-row"]');
+    return !!t && /\d/.test(t.querySelectorAll("td")[4]?.textContent ?? "");
+  }, null, { timeout: 60000 });
   const costMonth = await page.$eval('[data-testid="period-label"]', (e) => e.textContent.trim());
-  ok(`stepped back to ${costMonth} with the period control`);
+  eq(`the period stepped off ${beforeStep}`, costMonth !== beforeStep, true);
+  ok(`the cost page is showing ${costMonth}`);
+  // THE CROSS-CHECK'S MONTH COMES FROM THE PAGE, never a literal. Hardcoding "2026-07-01" is what
+  // let a failed step compare two different months and read as a cost regression.
+  const MONTH_NAMES = ["January","February","March","April","May","June","July","August","September","October","November","December"];
+  const [mName, mYear] = costMonth.split(" ");
+  const costMonthKey = `${mYear}-${String(MONTH_NAMES.indexOf(mName) + 1).padStart(2, "0")}-01`;
 
   const cityView = await readCost();
   await page.getByRole("button", { name: "Field Economics" }).click();
-  await page.waitForTimeout(1200);
+  // The field grain adds a City column, so the header width is the signal that the swap landed.
+  await page.waitForFunction(() =>
+    document.querySelectorAll('[data-testid="cost-economics-table"] thead th').length === 7,
+    null, { timeout: 60000 });
   const fieldView = await readCost();
 
   {
@@ -284,11 +304,11 @@ async function main() {
       return m?.payment ?? null;
     };
     for (const [slug, venue] of [["hattrick-yx4sur4t", "Hattrick"], ["crossbar-rowlett-xhr8y3t3", "Crossbar Rowlett"]]) {
-      const owed = await owedFor(slug, "2026-07-01");
+      const owed = await owedFor(slug, costMonthKey);
       const row = fieldView.rows.find((r) => r.name === venue);
-      if (owed == null) { bad(`${venue}: the partner dashboard published a July figure`, "payment was null"); continue; }
-      if (!row) { bad(`${venue}: the cost page renders a July row`, "row not found"); continue; }
-      near(`${venue} · July cost equals the partner dashboard's $${owed}`, money(row.cells[5]), owed, 1);
+      if (owed == null) { bad(`${venue}: the partner dashboard published a ${costMonth} figure`, "payment was null — an OPEN month has none, so the step must land on a closed one"); continue; }
+      if (!row) { bad(`${venue}: the cost page renders a ${costMonth} row`, "row not found"); continue; }
+      near(`${venue} · ${costMonth} cost equals the partner dashboard's $${owed}`, money(row.cells[5]), owed, 1);
       eq(`…and the row says it is billed as a share`, row.marks.includes("Profit share"), true);
     }
   }
@@ -346,7 +366,7 @@ async function main() {
   console.log("\nrevenue · the year-ago control is disabled, not fake:");
   {
     const d = await page.evaluate(() => {
-      const b = [...document.querySelectorAll("button")].find((x) => x.textContent.trim() === "Previous year avg");
+      const b = [...document.querySelectorAll("button")].find((x) => x.textContent.trim() === "Previous year");
       return b ? { disabled: b.disabled, why: b.title } : null;
     });
     eq("Previous year avg is disabled", d?.disabled, true);
@@ -355,14 +375,20 @@ async function main() {
 
   console.log("\nrevenue · the chart is four months, oldest to newest:");
   {
+    await page.waitForFunction(() =>
+      document.querySelectorAll('[data-testid="revenue-chart-month"]').length >= 2,
+      null, { timeout: 90000 }).catch(() => {});
     const labels = await page.evaluate(() =>
       [...document.querySelectorAll('[data-testid="revenue-chart-month"]')].map((s) => s.textContent.trim()));
-    const MON = ["Jan","Feb","Mar","Apr","May","Jun","Jul","Aug","Sep","Oct","Nov","Dec"];
-    const parsed = labels.map((l) => l.match(/^([A-Z][a-z]{2}) (\d{4})/)).filter(Boolean)
+    // ONE BAR PER PERIOD, labelled in full ("August 2026") since the grain can be a quarter or a
+    // year. The count is what the span could reach, not a fixed four — the record floor can make
+    // it fewer, and the page says so when it does.
+    const MON = ["January","February","March","April","May","June","July","August","September","October","November","December"];
+    const parsed = labels.map((l) => l.match(/^([A-Z][a-z]+) (\d{4})/)).filter(Boolean)
       .map((m) => Number(m[2]) * 12 + MON.indexOf(m[1]));
-    const chart = parsed.slice(0, 4);
-    eq("the chart draws four months", chart.length, 4);
-    eq("…oldest to newest", chart.every((v, i) => i === 0 || v > chart[i - 1]), true);
+    eq("the chart draws the selected period plus its priors", parsed.length, 4);
+    eq("…oldest to newest", parsed.every((v, i) => i === 0 || v > parsed[i - 1]), true);
+    eq("…and the newest is the selected period", labels[labels.length - 1].startsWith("August") || /so far/.test(labels[labels.length - 1]), true);
   }
 
   console.log("\nrevenue · match view carries the columns the brief named:");

@@ -469,7 +469,9 @@ async function main() {
   // comparing "Dallas / Fort Worth" against "Dallas" and dropping all 922 rows.
   console.log("\na DFW city manager sees their own reviews (the non-degenerate city):");
   {
-    const dfwSession = await mint(CITY_MANAGER_DFW);
+    // A THIRD NAMED IDENTITY, cached like the other two. `mint` was this suite's own helper and
+    // went with the switch to sessionFor.
+    const dfwSession = await sessionFor(CITY_MANAGER_DFW);
     const dctx = await ctxFor(dfwSession);
     const dfw = await dctx.newPage();
     await dfw.goto(`${BASE}/city/reviews`, { waitUntil: "domcontentloaded" });
