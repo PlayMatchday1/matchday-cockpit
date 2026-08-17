@@ -126,6 +126,13 @@ function autoCost(
   }
   if (venue.billing_type === "per_match") {
     const matchCount = venueMatchCount(data, venue, month);
+    // per_match_rate ONLY — not cost_per_match. The two columns are two different models, not one
+    // fact entered twice: per_match_rate is what the venue INVOICES per match, cost_per_match is
+    // the operator's normalized per-match unit cost (see legPerMatchUnitCost in financeStats).
+    // A venue with per_match_rate = null does not invoice per match — it lump-sums, and those
+    // lumps arrive as fin_venue_cost_overrides. So $0 here in a month with no override is the
+    // as-billed truth: no invoice landed. Reading cost_per_match in as-billed mode would
+    // manufacture an invoice that was never sent.
     const rate = venue.per_match_rate ?? 0;
     const amount = matchCount * rate;
     return {

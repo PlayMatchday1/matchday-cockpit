@@ -48,7 +48,7 @@ export default function FinanceSecondaryNav({
               <button
                 type="button"
                 onClick={() => onChange(item.id)}
-                className={`transition ${
+                className={`inline-flex min-h-[44px] items-center transition ${
                   isActive
                     ? "text-deep-green underline underline-offset-4"
                     : "text-deep-green/55 hover:text-deep-green hover:underline hover:underline-offset-4"

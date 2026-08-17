@@ -1,19 +1,19 @@
 "use client";
 
-// Sub-strip rendered when the Configure secondary nav item is
-// active. Six tabs that used to live in the main pill nav's "admin
-// / maintenance" row. Same visual style as the old Field Costs
-// sub-toggle (rounded segments inside a cream-soft container).
+// Sub-strip rendered when the Configure secondary nav item is active. Four admin surfaces that
+// are not sections: they are reachable from wherever you are in Finance, and the shell renders
+// them over the routed section. Same visual style as the old Field Costs sub-toggle.
+//
+// The id union used to be Extract<FinanceTabId, …> — a narrowing of the old page's nine-tab enum.
+// That enum described a page that no longer exists (the four daily views are routes now, and
+// FinanceTabNav went with them), so the four ids are declared here directly rather than carved
+// out of a type whose other members had no meaning left.
 
-import type { FinanceTabId } from "./FinanceTabNav";
-
-export type ConfigureSubTabId = Extract<
-  FinanceTabId,
+export type ConfigureSubTabId =
   | "revenue"
   | "expenses"
   | "field-costs"
-  | "change-log"
->;
+  | "change-log";
 
 export const CONFIGURE_TAB_IDS: readonly ConfigureSubTabId[] = [
   "revenue",

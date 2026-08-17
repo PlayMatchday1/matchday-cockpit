@@ -25,7 +25,7 @@ export default function QuarterSelector({
       <select
         value={value}
         onChange={(e) => onChange(e.target.value)}
-        className="rounded-full border border-cream-line bg-white px-3 py-1.5 text-[12px] font-bold tracking-[0.05em] text-deep-green shadow-sm transition hover:border-deep-green/40 focus:border-deep-green focus:outline-none"
+        className="min-h-[44px] rounded-full border border-cream-line bg-white px-3 py-1.5 text-[12px] font-bold tracking-[0.05em] text-deep-green shadow-sm transition hover:border-deep-green/40 focus:border-deep-green focus:outline-none"
         aria-label="Select quarter"
       >
         {available.map((q) => (

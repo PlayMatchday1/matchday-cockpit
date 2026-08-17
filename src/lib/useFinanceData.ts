@@ -962,7 +962,19 @@ async function load(quarter: QuarterInfo): Promise<void> {
 }
 
 export function useFinanceData(): State {
-  const quarter = useFinanceQuarter();
+  return useFinanceDataForQuarter(useFinanceQuarter());
+}
+
+// EXPLICIT-QUARTER SIBLING of useFinanceData. Identical body — useFinanceData now delegates here
+// with the context quarter, so there is one loader and one cache, not two.
+//
+// WHY IT IS NEEDED. The fetch window is ONE quarter (padded 14d), and Finance › Revenue plots the
+// current month plus the prior three. Four months always cross a quarter boundary, so the page
+// mounts this a second time for the previous quarter and merges the two by month ownership (see
+// mergeFinanceDataByMonth). Reading the earlier months out of the current quarter's 14-day buffer
+// instead would hand back a partial month wearing a whole month's label — the same clipping that
+// inflated the Dallas benchmark rate ~4×.
+export function useFinanceDataForQuarter(quarter: QuarterInfo): State {
   const key = quarter.key;
   const [s, setS] = useState<State>(getCachedFor(key));
 

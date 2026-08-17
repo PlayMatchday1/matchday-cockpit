@@ -1252,3 +1252,74 @@ UNKNOWN and untestable without writing one, so Clubhouse refuses to send a negat
 someone's money and nothing on screen looks wrong. Because the endpoint is an absolute set, the
 route **re-reads the balance immediately before writing and ABORTS if it moved** — otherwise a
 spend between read and write would be silently put back. It never re-bases and continues.
+
+## Field cost: `per_match_rate` and `cost_per_match` are TWO MODELS, not one fact (Finance rail, 2026-08-17)
+
+Proven against prod `fin_venues` (32 rows) while building `/admin/finance/cost`.
+
+**They are not duplicates and neither is a fallback for the other.**
+
+| column | meaning | read by |
+|---|---|---|
+| `per_match_rate` | what the venue **invoices** per match | `canonicalVenueCost` → `autoCost` (financeCosts.ts) — the **As Billed** basis |
+| `cost_per_match` | the operator's **normalized** per-match unit cost, deliberately bypassing billing-timing lumps | `legPerMatchUnitCost` → `groupPerMatchCostFor` (financeStats.ts) — the **Per-Match** basis |
+
+**6 of 25 `per_match` venues carry `per_match_rate = null`.** Four of those hold a real rate in
+`cost_per_match`: NEMP $77, Onion Creek $40, Bicentennial Park $90, Lowell H. Strike $113.50. In
+As Billed mode those venues cost **$0** in any month with no override — and that is CORRECT, not a
+bug: they do not invoice per match, they lump-sum, and the lumps arrive as
+`fin_venue_cost_overrides` (Onion Creek "Lump 2025 up to May 21st 2026", Bicentennial Apr/May/Jun).
+Reading `cost_per_match` in As Billed mode would manufacture an invoice nobody sent. I made that
+change and reverted it.
+
+The remaining two: **Carroll Senior HS** `cost_per_match = 0` — a GENUINE zero, renders `$0`.
+**Helix Park** both columns null, inactive — the only venue with no rate at all, renders a dash.
+
+### A `$0` field cost is legitimate via exactly three mechanisms
+1. the unit cost really is 0 (Carroll Senior HS)
+2. an operator recorded a `$0` override for the month — prepaid / lump-summed elsewhere
+   (Lou Fusz Outdoor "Paid in January"; Centennial Commons "Custom billing month")
+3. a share venue whose partner dashboard publishes `$0` owed — **Crossbar Rowlett May 2026:
+   3 matches, $49 revenue, `payment: 0`, `state: "nothing"`**
+
+Anything else showing `$0` is the null-rate trap. `verify-finance-sections.mjs` asserts this set
+from the database rather than from a name list.
+
+### `matchPnL.ts` reads `cost_per_match` for EVERY billing type — including `profit_share`
+`resolveSoccerCentral` / the bucket builder assign `fieldCost = venue.cost_per_match` with no
+billing-type branch. Crossbar Rowlett stores a **placeholder 0** there, so any money column fed
+from `MatchPnLRow.fieldCost` renders `$0` for a venue whose real cost is the partner payout. The
+Finance money pages route through `src/lib/fieldEconomics.ts` and never through that field.
+
+### Partner dashboards: FIVE `profit_share` venues, FOUR dashboards
+`partner_dashboards` (all `enabled`): venue 3 Hattrick (flat_percentage 50), 51 Crossbar Rowlett
+(per_match_minus_manager 50), 10 PAC Global (flat_percentage 50), 63 PARMER Stadium
+(flat_percentage 50). **Venue 52 Hattrick T. (Houston) has none** — its cost is UNKNOWN and
+renders a dash. PAC Global and PARMER *do* have dashboards, so their cost is derivable despite
+`cost_per_match` being null; an earlier report of mine said otherwise and was wrong.
+
+Cross-check that holds: Hattrick July 2026 = **$1,428**, Crossbar Rowlett July 2026 = **$1,000** —
+identical on `/admin/finance/cost` and on `GET /api/partner-dashboards/preview?slug=…`
+(`monthly.months[].payment`).
+
+### EVENTS carry revenue but no venue cost — the ratio must not mix them
+`isEventSchedule` (`category === "event"`, derived from the **field title** via `EVENT_MARKERS`,
+not a match flag) excludes tournament/combine rows from venue cost by policy. But those events
+sell spots, and `venuePartnerRevenueFor` counts every DAILY PAID spot at the venue. A naive cost
+ratio therefore divides non-event cost by ALL revenue. **ATH Pearland, July 2026: 2 billable
+matches against $16,368 of revenue → a 2.0% ratio** that says the pitch is nearly free.
+`fieldEconomics.rollup` holds event revenue out of the denominator and states the exclusion.
+
+### `fin_revenue` history — the usable record starts 2026-03
+Rows span 2023-05-09 → present, but 2025 has only **two** months with any rows (Jun $5,032,
+Nov $2,679) and 2026-02 is empty. First substantial month is **2026-03 ($32,245)**. A
+year-over-year comparison would divide by an empty ledger, which is why Revenue's "Previous year
+avg" control is **disabled with its reason stated** rather than rendered.
+Current-month rows are all `source: Stripe` actuals — no PROJECTION rows leak into the
+month totals, so the "so far" mark is measured, not projected.
+
+### Both loaders must gate the render
+`useFinanceData` (quarter-scoped) resolves long before `useMatchData` (every match-player row).
+Gating on the finance half alone put a real-looking **$0** in the revenue column of every city
+until the second landed. `CityPnlTable` still gates on `useFinanceData` only and has the same
+transient — not fixed here, and worth fixing.
