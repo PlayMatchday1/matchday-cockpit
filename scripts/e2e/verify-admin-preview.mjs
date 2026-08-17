@@ -4,7 +4,7 @@
 
 import { chromium } from "playwright";
 import { createClient } from "@supabase/supabase-js";
-import { netRetry, installHarnessGuard, fatal } from "./_session.mjs";
+import { netRetry, installHarnessGuard, fatal, sessionFor } from "./_session.mjs";
 installHarnessGuard();
 
 const BASE = "http://localhost:3000";
@@ -17,9 +17,9 @@ async function main() {
   process.loadEnvFile(".env.local");
   const svc = createClient(process.env.NEXT_PUBLIC_SUPABASE_URL, process.env.SUPABASE_SERVICE_ROLE_KEY, { auth: { persistSession: false } });
   const anon = createClient(process.env.NEXT_PUBLIC_SUPABASE_URL, process.env.NEXT_PUBLIC_SUPABASE_PUBLISHABLE_KEY, { auth: { persistSession: false } });
-  const link = await netRetry(() => svc.auth.admin.generateLink({ type: "magiclink", email: "rmancuso@playmatchday.com" }), "generateLink");
-  const vv = await netRetry(() => anon.auth.verifyOtp({ type: "magiclink", token_hash: link.data.properties.hashed_token }), "verifyOtp");
-  const TOK = vv.data.session.access_token;
+  // ONE SESSION PER IDENTITY, cached across the whole gate run — see sessionFor in _session.mjs.
+  const session = await sessionFor("rmancuso@playmatchday.com");
+  const TOK = session.access_token;
 
   console.log("PREVIEW API (same builder as the public page)");
   const api = async (path, tok) => { const r = await fetch(`${BASE}${path}`, { headers: tok ? { Authorization: `Bearer ${tok}` } : {} }); return { status: r.status, json: await r.json().catch(() => null) }; };
@@ -55,7 +55,7 @@ async function main() {
   const ref = new URL(process.env.NEXT_PUBLIC_SUPABASE_URL).host.split(".")[0];
   const key = `sb-${ref}-auth-token`;
   const browser = await chromium.launch({ headless: true });
-  const context = await browser.newContext({ storageState: { cookies: [], origins: [{ origin: BASE, localStorage: [{ name: key, value: JSON.stringify(vv.data.session) }] }] } });
+  const context = await browser.newContext({ storageState: { cookies: [], origins: [{ origin: BASE, localStorage: [{ name: key, value: JSON.stringify(session) }] }] } });
   const page = await context.newPage();
   await page.goto(`${BASE}/match-ops/partner-dashboards`, { waitUntil: "domcontentloaded" });
   await page.waitForSelector('[data-testid="dashboard-below-seam"]', { timeout: 30_000 });

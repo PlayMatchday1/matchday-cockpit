@@ -188,6 +188,12 @@ function windowKey(weeks: number, city: string | null | undefined): string {
   return `${weeks}|${city ?? ""}`;
 }
 
+// RANGE KEY. An explicit from/to pair is the real cache identity; the weeks variant resolves to
+// one of these. Two components asking for the same range share one fetch.
+function rangeKey(fromDate: string, toDate: string, city: string | null | undefined): string {
+  return `r|${fromDate}|${toDate}|${city ?? ""}`;
+}
+
 const windowedCache = new Map<string, State>();
 const windowedPending = new Map<string, Promise<void>>();
 const windowedSubs = new Map<string, Set<(s: State) => void>>();
@@ -197,11 +203,12 @@ function publishWindow(key: string, s: State) {
   windowedSubs.get(key)?.forEach((fn) => fn(s));
 }
 
-async function loadWindow(
-  weeks: number,
+async function loadRange(
+  key: string,
+  fromDate: string,
+  toDate: string,
   city: string | null,
 ): Promise<void> {
-  const key = windowKey(weeks, city);
   publishWindow(key, {
     rows: [],
     scheduledMatches: [],
@@ -209,13 +216,6 @@ async function loadWindow(
     loading: true,
     error: null,
   });
-
-  // Pad the window edge by 14 days so MTD calcs (current-month
-  // cancellation rate, in-progress weeks) never miss matches that
-  // landed just before the strict 12-week cutoff.
-  const fromMs = Date.now() - (weeks * 7 + 14) * 86400 * 1000;
-  const fromDate = new Date(fromMs).toISOString().slice(0, 10);
-  const toDate = forwardBoundIso();
 
   let rows: JoinedMatchPlayerRow[];
   let scheduledMatches: ScheduledMatch[];
@@ -278,8 +278,41 @@ export function useMatchWindowData(
   weeks: number,
   city: string | null = null,
 ): State {
+  // Pad the window edge by 14 days so MTD calcs (current-month cancellation rate, in-progress
+  // weeks) never miss matches that landed just before the strict cutoff.
+  const fromDate = new Date(Date.now() - (weeks * 7 + 14) * 86400_000).toISOString().slice(0, 10);
+  return useMatchRangeData(fromDate, forwardBoundIso(), city);
+}
+
+// ═══════════════════════════════════════════════════════════════════════════════════════════════
+// THE RANGE HOOK — the one every windowed consumer should use.
+//
+// WHY IT EXISTS. useMatchData() fetches mdapi_match_players UNFILTERED. That table is ~203,000
+// rows and selectAll pages it at 1,000, so a single view of Finance › Cities cost 280 REST
+// round-trips re-materialising the whole table. Growth and Match Ops cost 3, because they read
+// server-side aggregates. That difference was the database load, not the instance size.
+//
+// WHY A RANGE AND NOT A WEEK COUNT. useMatchWindowData(12) hardcodes a constant whose comment says
+// "12 weeks ≈ ~12k rows" — written when the table held 38k. It holds 203k now, and a constant like
+// that goes stale silently. A range is bounded by an operator's choice instead: Finance passes the
+// period control's own window.
+//
+// EACH CALLER DECLARES ITS OWN WIDENING. Several components legitimately need more than the
+// selected period — Period Compare spans five months, Field Ranking reconciles lump billing across
+// a quarter. Those widenings are properties of the component and are stated at each call site, NOT
+// collapsed into a shared constant, because a shared constant is how one component's need silently
+// becomes another's ceiling.
+//
+// A NARROWED WINDOW IS A CORRECTNESS CHANGE, not just a speed one: rows outside it are absent, not
+// slow. That is why nothing here picks a default — omitting the range is not an option the type
+// allows.
+export function useMatchRangeData(
+  fromDate: string,
+  toDate: string,
+  city: string | null = null,
+): State {
   const cityIdentifier = cityToAbbr(city);
-  const key = windowKey(weeks, cityIdentifier);
+  const key = rangeKey(fromDate, toDate, cityIdentifier);
   const [s, setS] = useState<State>(windowedCache.get(key) ?? INITIAL);
 
   useEffect(() => {
@@ -294,7 +327,7 @@ export function useMatchWindowData(
     if (cached) {
       setS(cached);
     } else if (!windowedPending.has(key)) {
-      const p = loadWindow(weeks, cityIdentifier).finally(() => {
+      const p = loadRange(key, fromDate, toDate, cityIdentifier).finally(() => {
         windowedPending.delete(key);
       });
       windowedPending.set(key, p);
@@ -303,7 +336,7 @@ export function useMatchWindowData(
     return () => {
       subs?.delete(setS);
     };
-  }, [key, weeks, cityIdentifier]);
+  }, [key, fromDate, toDate, cityIdentifier]);
 
   return s;
 }

@@ -1,7 +1,9 @@
 "use client";
 
+import { useMemo } from "react";
 import { useFinanceData } from "@/lib/useFinanceData";
-import { useMatchData } from "@/lib/useMatchData";
+import { useMatchRangeData } from "@/lib/useMatchData";
+import { matchRange } from "@/lib/financePeriod";
 import {
   computeAvgMatchesPerMember,
   isActiveMember,
@@ -25,8 +27,16 @@ export default function MembershipSnapshot({
 
 function LiveMonthKPIs({ label }: { label: string }) {
   const { data, loading } = useFinanceData();
-  const { rows: matchRows } = useMatchData();
   const now = new Date();
+  // THE MONTH IT DISPLAYS. This card is a CURRENT-MONTH snapshot, and the only thing it takes
+  // from match rows is computeAvgMatchesPerMember for that month — so a whole-table read bought
+  // ~203,000 rows to use one month of them.
+  const { fromDate, toDate } = useMemo(() => {
+    const start = new Date(now.getFullYear(), now.getMonth(), 1);
+    const end = new Date(now.getFullYear(), now.getMonth() + 1, 0);
+    return matchRange(start, end);
+  }, [now]);
+  const { rows: matchRows } = useMatchRangeData(fromDate, toDate);
 
   if (loading && !data) {
     return (

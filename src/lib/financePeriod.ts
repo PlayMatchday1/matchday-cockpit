@@ -165,9 +165,17 @@ export function stepPeriod(p: FinancePeriod, dir: -1 | 1, now: Date): FinancePer
 // so August 2026 widens to Q3 2026 and to 2026 and narrows back to August — a zoom, not a jump.
 export const changeGrain = (p: FinancePeriod, grain: Grain, now: Date) => periodFor(grain, p.anchor, now);
 
-// FORWARD IS DISABLED ON THE CURRENT PERIOD. There is no next period to look at, and a stepper
-// that walks into an empty future is a control that does nothing.
-export const canStepForward = (p: FinancePeriod, now: Date) => midnight(now) > p.end;
+// FORWARD IS NOT CAPPED. Future periods have to be reachable — expenses and cash-flow projections
+// are entered ahead of time, and that is what the old quarter dropdown's planning entry was for.
+//
+// THE MODEL DOES NOT END GOING FORWARD: getQuarterByKey accepts any year at or above the floor, so
+// there is no boundary to stop at and inventing one would only take the entry surface away again.
+// An empty future period is not ambiguous — it carries the grey "Not started" chip, which is
+// exactly what distinguishes it from a closed period whose numbers are final.
+//
+// `now` is kept in the signature: the cap belongs to the period model, and a future limit added
+// later belongs here rather than in the bar.
+export const canStepForward = (_p: FinancePeriod, _now: Date) => true;
 // BACK STOPS AT THE RECORD. Stepping below it would render a period of structural zeroes.
 export const canStepBack = (p: FinancePeriod) => {
   const prevEnd = new Date(p.start.getTime() - DAY);
@@ -239,4 +247,22 @@ function spanOf(periods: FinancePeriod[], anchorPeriod: FinancePeriod, now: Date
   const end = periods[periods.length - 1].end;
   return build(anchorPeriod.grain, anchorPeriod.anchor, start, end,
     `${periods[0].label} – ${periods[periods.length - 1].label}`, anchorPeriod.key, now);
+}
+
+// ── MATCH-ROW RANGES ───────────────────────────────────────────────────────────────────────────
+// The from/to bounds a component passes to useMatchRangeData. Dates are LOCAL calendar dates,
+// which is the right frame: mdapi_matches.start_date is local wall clock, and the fetch filters on
+// it as a YYYY-MM-DD bound.
+//
+// PADDED BY TWO DAYS on each side. The consumers bucket rows by matchStart's own month, so a pad
+// can only add rows they will ignore — whereas being one day short at a boundary silently drops a
+// match from the month it belongs to.
+export const ymdLocal = (d: Date) =>
+  `${d.getFullYear()}-${String(d.getMonth() + 1).padStart(2, "0")}-${String(d.getDate()).padStart(2, "0")}`;
+
+const PAD_DAYS = 2;
+export function matchRange(start: Date, end: Date): { fromDate: string; toDate: string } {
+  const a = new Date(start); a.setDate(a.getDate() - PAD_DAYS);
+  const b = new Date(end); b.setDate(b.getDate() + PAD_DAYS);
+  return { fromDate: ymdLocal(a), toDate: ymdLocal(b) };
 }

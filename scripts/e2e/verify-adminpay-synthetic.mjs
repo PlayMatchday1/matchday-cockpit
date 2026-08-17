@@ -8,7 +8,7 @@
 
 import { chromium } from "playwright";
 import { createClient } from "@supabase/supabase-js";
-import { netRetry, installHarnessGuard, fatal } from "./_session.mjs";
+import { netRetry, installHarnessGuard, fatal, sessionFor } from "./_session.mjs";
 installHarnessGuard();
 
 const BASE = process.env.BASE || "http://localhost:3000";
@@ -60,12 +60,12 @@ async function main() {
   process.loadEnvFile(".env.local");
   const anon = createClient(process.env.NEXT_PUBLIC_SUPABASE_URL, process.env.NEXT_PUBLIC_SUPABASE_PUBLISHABLE_KEY, { auth: { persistSession: false } });
   const svc = createClient(process.env.NEXT_PUBLIC_SUPABASE_URL, process.env.SUPABASE_SERVICE_ROLE_KEY, { auth: { persistSession: false } });
-  const link = await netRetry(() => svc.auth.admin.generateLink({ type: "magiclink", email: "rmancuso@playmatchday.com" }), "generateLink");
-  const vv = await netRetry(() => anon.auth.verifyOtp({ type: "magiclink", token_hash: link.data.properties.hashed_token }), "verifyOtp");
+  // ONE SESSION PER IDENTITY, cached across the whole gate run — see sessionFor in _session.mjs.
+  const session = await sessionFor("rmancuso@playmatchday.com");
   const ref = new URL(process.env.NEXT_PUBLIC_SUPABASE_URL).host.split(".")[0];
 
   const browser = await chromium.launch({ headless: true });
-  const context = await browser.newContext({ viewport: { width: 1440, height: 1000 }, storageState: { cookies: [], origins: [{ origin: BASE, localStorage: [{ name: `sb-${ref}-auth-token`, value: JSON.stringify(vv.data.session) }] }] } });
+  const context = await browser.newContext({ viewport: { width: 1440, height: 1000 }, storageState: { cookies: [], origins: [{ origin: BASE, localStorage: [{ name: `sb-${ref}-auth-token`, value: JSON.stringify(session) }] }] } });
 
   const FIX = fixture();
   let actionablePayload = { count: 0, awaiting: 0, disputed: 0, diverged: 0, byPartner: [] };

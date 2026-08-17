@@ -30,6 +30,7 @@ import {
   type CalRow,
 } from "@/lib/opexSources";
 import { updateFinExpense } from "@/lib/finExpenseWrites";
+import { useFinancePeriod } from "@/lib/financePeriodContext";
 import { canAccess, useAuth } from "@/lib/useAuth";
 
 const WD = ["S", "M", "T", "W", "T", "F", "S"];
@@ -51,9 +52,15 @@ export default function OpExCalendarView({
   // re-checks the manual_entry lock on every save.
   const canEdit = canAccess(appUser, "finance");
 
-  const now = new Date();
-  const [year, setYear] = useState(now.getFullYear());
-  const [month0, setMonth0] = useState(now.getMonth());
+  // THE MONTH COMES FROM THE PAGE'S PERIOD CONTROL, not from state here. This view used to carry
+  // its own ‹ Prev | Current | Next › nav, which was a third month control on a page that now has
+  // one — and the two could disagree, so the bar would say August while the grid drew July.
+  //
+  // The period bar disables Quarter and Year on this route (a day grid has no quarter form), so
+  // the period reaching this component is always a month.
+  const { period, now } = useFinancePeriod();
+  const year = period.start.getFullYear();
+  const month0 = period.start.getMonth();
   const [open, setOpen] = useState<Record<string, boolean>>({});
   // The fin_expenses row id currently in inline edit (one at a time).
   const [editingId, setEditingId] = useState<number | null>(null);
@@ -132,12 +139,6 @@ export default function OpExCalendarView({
 
   const topCat = bars.find((b) => b.amount > 0) ?? null;
 
-  function shiftMonth(delta: number) {
-    const d = new Date(year, month0 + delta, 1);
-    setYear(d.getFullYear());
-    setMonth0(d.getMonth());
-  }
-
   const dayCols = Array.from({ length: days }, (_, i) => i + 1);
   const cellCls = (d: number) =>
     (d === today ? " today-c" : "") + (isWeekend(year, month0, d) ? " wknd-c" : "");
@@ -153,19 +154,7 @@ export default function OpExCalendarView({
           <div className="ox-sub">Operating cash outflow · {monthLabel(year, month0)}</div>
         </div>
         <div className="ox-controls">
-          <div className="ox-seg">
-            <button onClick={() => shiftMonth(-1)}>‹ Prev</button>
-            <button
-              className={isThisMonth ? "on" : ""}
-              onClick={() => {
-                setYear(now.getFullYear());
-                setMonth0(now.getMonth());
-              }}
-            >
-              Current
-            </button>
-            <button onClick={() => shiftMonth(1)}>Next ›</button>
-          </div>
+          {/* The month nav lived here. It is the period bar's job now — see the note on `period`. */}
           <button className="ox-add" onClick={() => onAddExpense?.()}>
             + Add expense
           </button>
@@ -414,6 +403,8 @@ function GroupRows({
                         type="button"
                         className={`chip ${r.quarterly ? "q" : ""}`}
                         title="Click to edit amount / date"
+                        data-testid="opex-amount-chip"
+                        data-expense-id={exp.id}
                         onClick={() => onStartEdit(exp.id)}
                         style={{ cursor: "pointer", border: "none", font: "inherit" }}
                       >
@@ -565,7 +556,7 @@ function LeafEditRow({
   );
 
   return (
-    <tr className="ox-child ox-editing">
+    <tr className="ox-child ox-editing" data-testid="opex-edit-row">
       <td className="lab">
         <span className="nm">{row.label}</span>
         {row.sublabel && <span className="city">{row.sublabel}</span>}
@@ -577,6 +568,7 @@ function LeafEditRow({
             <input
               type="number"
               step="0.01"
+              data-testid="opex-amount-input"
               value={amount}
               autoFocus
               disabled={saving}
@@ -597,6 +589,7 @@ function LeafEditRow({
           <button
             type="button"
             className="ox-save"
+            data-testid="opex-save"
             disabled={saving}
             onClick={() => void commit()}
           >

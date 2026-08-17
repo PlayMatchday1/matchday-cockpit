@@ -23,7 +23,8 @@
 
 import { useMemo, useState } from "react";
 import { useFinanceData } from "@/lib/useFinanceData";
-import { useMatchData } from "@/lib/useMatchData";
+import { useMatchRangeData } from "@/lib/useMatchData";
+import { matchRange } from "@/lib/financePeriod";
 import { VISIBLE_CITIES } from "@/lib/types";
 import { buildFieldIdToVenueIdMap } from "@/lib/venueNormalization";
 import {
@@ -84,7 +85,6 @@ export default function PeriodComparePanel({
   onModeChange: (next: PeriodMode) => void;
 }) {
   const { data } = useFinanceData();
-  const { rows: matchRegistrations } = useMatchData();
 
   // Periods + aggregations recompute when the mode flips. `new Date()`
   // is evaluated once per mount; an explicit re-render is required to
@@ -94,6 +94,17 @@ export default function PeriodComparePanel({
     () => (mode === "monthly" ? generateMonthlyPeriods() : generateWeeklyPeriods()),
     [mode],
   );
+
+  // ITS OWN WIDENING: THE SPAN IT DRAWS. generateMonthlyPeriods walks back four months plus the
+  // current (five columns); weekly mode walks back seven weeks plus the current (eight). The
+  // window is taken from `periods` itself rather than a constant, so the two can never disagree —
+  // a 12-week cap would have silently emptied two of the five monthly columns.
+  const { fromDate, toDate } = useMemo(
+    () => matchRange(new Date(periods[0].startIso + "T00:00:00"),
+                     new Date(periods[periods.length - 1].endIso + "T00:00:00")),
+    [periods],
+  );
+  const { rows: matchRegistrations } = useMatchRangeData(fromDate, toDate);
 
   // PR-E: build the field-title → canonical-venue-name display map
   // by going field_id → fin_venue_id → fin_venues.venue_name. Output

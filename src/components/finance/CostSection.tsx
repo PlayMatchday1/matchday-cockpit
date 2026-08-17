@@ -28,8 +28,9 @@
 
 import { useMemo, useState } from "react";
 import { useFinancePeriodData } from "@/lib/useFinancePeriodData";
-import { useMatchData } from "@/lib/useMatchData";
+import { useMatchRangeData } from "@/lib/useMatchData";
 import { useFinancePeriod } from "@/lib/financePeriodContext";
+import { matchRange } from "@/lib/financePeriod";
 import {
   buildFieldMonths, byCity, byField, canonCity, costNotRecorded, highestRatioField, rollup,
   COST_BASIS_LABEL, type CostBasis, type CostMode, type FieldMonth,
@@ -54,7 +55,10 @@ export default function CostSection() {
   // than the finance fetch; rendering on the finance half alone put a REAL-LOOKING $0 in the
   // revenue column of every city for as long as it took to arrive. A zero is a claim, and this
   // page's whole argument is that a number you do not have yet is not a number you may print.
-  const { rows: matchRegistrations, loading: matchLoading } = useMatchData();
+  // The period's own window — see the note on CityPnlTable. buildFieldMonths buckets by
+  // `months`, so rows outside the period never reach a figure on this page.
+  const { fromDate, toDate } = useMemo(() => matchRange(period.start, period.end), [period]);
+  const { rows: matchRegistrations, loading: matchLoading } = useMatchRangeData(fromDate, toDate);
 
   const [structures, setStructures] = useState<Set<CostBasis>>(() => new Set(STRUCTURES));
   const [grain, setGrain] = useState<Grain>("city");

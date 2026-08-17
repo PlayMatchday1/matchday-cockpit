@@ -124,6 +124,12 @@ This applies to assertions whose **passing value is zero or absence** — expect
 N where N >= 1 is **already self-controlling**: a pattern that matches nothing
 yields 0 and fails. Do not add redundant controls to those.
 
+**ASSERT ON THE THING, NOT ON A SHAPE.** A selector broad enough to match a
+different element is not a positive control — it passes on the wrong subject.
+`verify-finance-sections` asserted the quarter control existed via
+`querySelector("select")`, which matched the Basis dropdown and kept passing after
+the quarter control was deleted.
+
 **Test effort is TIERED by what the change can cost.**
 
 - **Writes and money** — credits, payouts, cancel, promo edit, roster moves:

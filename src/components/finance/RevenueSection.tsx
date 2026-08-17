@@ -19,9 +19,9 @@
 import { useEffect, useMemo, useState } from "react";
 import { supabase } from "@/lib/supabase";
 import { useFinancePeriodData } from "@/lib/useFinancePeriodData";
-import { useMatchData } from "@/lib/useMatchData";
+import { useMatchRangeData } from "@/lib/useMatchData";
 import { useFinancePeriod } from "@/lib/financePeriodContext";
-import { comparisonSpan } from "@/lib/financePeriod";
+import { comparisonSpan, matchRange } from "@/lib/financePeriod";
 import {
   buildFieldMonths, buildMatchRows, byCity, byField, canonCity,
   COST_BASIS_LABEL, type FieldMonth, type MatchRow,
@@ -61,7 +61,11 @@ export default function RevenueSection() {
   const { data, loading: primaryLoading } = useFinancePeriodData(span);
   // BOTH LOADERS GATE THE RENDER — see the same note on CostSection. useMatchData carries every
   // DPP dollar on this page; rendering before it lands printed a real-looking $0 in every tile.
-  const { rows: matchRegistrations, loading: matchLoading } = useMatchData();
+  // THE SPAN, NOT THE PERIOD. This page draws the selected period plus the prior three at the
+  // same grain, so its window is the span's — narrower than the whole table by two orders of
+  // magnitude, and wider than the period by exactly what the chart needs.
+  const { fromDate, toDate } = useMemo(() => matchRange(span.start, span.end), [span]);
+  const { rows: matchRegistrations, loading: matchLoading } = useMatchRangeData(fromDate, toDate);
 
   // Subscription windows, for the member-vs-comp split only. useMatchData fetches without them,
   // which collapses every free spot into "member".

@@ -2,7 +2,8 @@
 
 import { useMemo } from "react";
 import { useFinanceData } from "@/lib/useFinanceData";
-import { useMatchData } from "@/lib/useMatchData";
+import { useMatchRangeData } from "@/lib/useMatchData";
+import { matchRange } from "@/lib/financePeriod";
 import { useFinanceQuarter } from "@/lib/financeQuarter";
 import {
   buildMembershipHealthRows,
@@ -67,8 +68,16 @@ function HealthUnavailable({ view }: { view: MembershipMonthView }) {
 
 function LiveMembershipHealth() {
   const { data, loading: financeLoading } = useFinanceData();
-  const { rows: matchRows, loading: matchLoading } = useMatchData();
   const quarter = useFinanceQuarter();
+  // ITS OWN WIDENING: the QUARTER. History comes from members_monthly_snapshots (frozen rows),
+  // so the live match rows are only ever needed for the months in view.
+  //
+  // NOTE IT RENDERS OUTSIDE FINANCE — /membership mounts it via CitiesMembershipLens, where there
+  // is no period provider. useFinanceQuarter falls back to the current quarter; useFinancePeriod
+  // would throw. That is why the window is derived from the quarter here and not from the period.
+  const { fromDate, toDate } = useMemo(
+    () => matchRange(quarter.start, quarter.end), [quarter]);
+  const { rows: matchRows, loading: matchLoading } = useMatchRangeData(fromDate, toDate);
 
   // Default to current month in the active quarter; fall back to the
   // last month of the quarter (so viewing past quarters lands on the

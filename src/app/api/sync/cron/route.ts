@@ -45,7 +45,6 @@ import {
 } from "@/lib/mdapiMatchesSync";
 import { syncFirstmatchLedger } from "@/lib/firstmatchLedgerSync";
 import { syncMdapiUsers, mdapiUsersLogPatch } from "@/lib/mdapiUsersSync";
-import { refreshUsersLensSnapshot } from "@/lib/usersLensSnapshot";
 import { refreshMembershipSnapshots } from "@/lib/membershipSnapshots";
 import { refreshMembershipPriceSnapshots } from "@/lib/membershipPriceSnapshots";
 import { recomputeManagerPayIntoFinExpenses } from "@/lib/managerPayCompute";
@@ -342,23 +341,25 @@ export async function POST(req: Request) {
   //
   // Promise.all is safe here because runWithLog never throws — it returns a discriminated union —
   // so one failing does not cancel the other or reject the pair.
-  console.time("users-lens + membership-snapshots (concurrent)");
-  const [usersLensSnapshotResult, snapshotResult] = await Promise.all([
-    runWithLog(
-    "mdapi-users-lens-snapshot",
-    triggeredBy,
-    supabase,
-    async (sb) => {
-      if (!usersResult.ok) {
-        throw new Error(
-          "Skipped: mdapi-users sync failed; lens snapshot would reproduce stale data",
-        );
-      }
-      return refreshUsersLensSnapshot(sb);
-    },
-    (r) => ({ rows_imported: r.perCityRowsWritten + r.aggregateRowsWritten }),
-  ),
-    runWithLog(
+  // ── mdapi-users-lens-snapshot: REMOVED ────────────────────────────────────────────────────────
+  //
+  // It was a CACHE WARMER, and it had been a no-op for 14 consecutive runs.
+  //
+  // refreshUsersLensSnapshot calls fetchAll() in /api/cities/users-lens, which selectAll's the
+  // whole of mdapi_users AND mdapi_match_players (~203,000 rows) to pre-compute six windows
+  // including all_time. Every run timed out at ~113s and wrote nothing: the snapshot's newest
+  // computed_at was 14.4 days old while the step "ran" nightly.
+  //
+  // NOBODY NOTICED, and that is the evidence. The read path treats a snapshot older than 25h as
+  // stale and falls through to live aggregation, so /cities kept working — 4.6s slower, silently.
+  // A warmer whose absence is invisible for two weeks is not earning 113s of a 300s budget that
+  // app-store-installs was being starved out of.
+  //
+  // The TABLE and the READ PATH are untouched: mdapi_users_lens_snapshot still exists, still
+  // holds its 54 + 6 rows, and the route still serves them when fresh. Only the nightly rebuild
+  // is gone. Re-adding it needs an incremental or materialised approach — an all_time window
+  // cannot be date-bounded the way membership-snapshots just was.
+  const snapshotResult = await runWithLog(
     "membership-snapshots",
     triggeredBy,
     supabase,
@@ -377,9 +378,7 @@ export async function POST(req: Request) {
       rows_imported: r.writtenMonths.length,
       rows_replaced: r.guardedMonths.length,
     }),
-  ),
-  ]);
-  console.timeEnd("users-lens + membership-snapshots (concurrent)");
+  );
 
   // Membership price snapshots — per-city MAX(active price). Same
   // mdapi_subscriptions dependency as the broader members_monthly
@@ -547,7 +546,6 @@ export async function POST(req: Request) {
     !firstmatchLedgerResult.ok ||
     !managerPayResult.ok ||
     !usersResult.ok ||
-    !usersLensSnapshotResult.ok ||
     !membershipPricesResult.ok ||
     !snapshotResult.ok ||
     !telnyxSmsResult.ok;
@@ -577,7 +575,6 @@ export async function POST(req: Request) {
         firstmatch_ledger: firstmatchLedgerResult,
         manager_pay_recompute: managerPayResult,
         mdapi_users: usersResult,
-        mdapi_users_lens_snapshot: usersLensSnapshotResult,
         membership_prices: membershipPricesResult,
         membership_snapshots: snapshotResult,
         telnyx_sms: telnyxSmsResult,

@@ -13,7 +13,7 @@
 //   node scripts/e2e/verify-growth-sections.mjs
 import { chromium } from "playwright";
 import { createClient } from "@supabase/supabase-js";
-import { netRetry, installHarnessGuard, fatal, closeContext, closeBrowser } from "./_session.mjs";
+import { netRetry, installHarnessGuard, fatal, closeContext, closeBrowser, sessionFor } from "./_session.mjs";
 installHarnessGuard();
 
 const BASE = process.env.BASE || "http://localhost:3000";
@@ -42,10 +42,10 @@ async function main() {
   const url = process.env.NEXT_PUBLIC_SUPABASE_URL;
   const svc = createClient(url, process.env.SUPABASE_SERVICE_ROLE_KEY, { auth: { persistSession: false } });
   const anon = createClient(url, process.env.NEXT_PUBLIC_SUPABASE_PUBLISHABLE_KEY, { auth: { persistSession: false } });
-  const link = await netRetry(() => svc.auth.admin.generateLink({ type: "magiclink", email: "rmancuso@playmatchday.com" }), "generateLink");
-  const vv = await netRetry(() => anon.auth.verifyOtp({ type: "magiclink", token_hash: link.data.properties.hashed_token }), "verifyOtp");
+  // ONE SESSION PER IDENTITY, cached across the whole gate run — see sessionFor in _session.mjs.
+  const session = await sessionFor("rmancuso@playmatchday.com");
   const ref = new URL(url).host.split(".")[0];
-  const storageState = { cookies: [], origins: [{ origin: BASE, localStorage: [{ name: `sb-${ref}-auth-token`, value: JSON.stringify(vv.data.session) }] }] };
+  const storageState = { cookies: [], origins: [{ origin: BASE, localStorage: [{ name: `sb-${ref}-auth-token`, value: JSON.stringify(session) }] }] };
 
   const browser = await chromium.launch({ headless: true });
   const ctx = await browser.newContext({ viewport: { width: 1500, height: 1200 }, storageState });
@@ -239,7 +239,7 @@ async function main() {
       const months = j.behaviorOverall.length;
       const fields = Object.keys(j.behaviorByField).length;
       return { bad: bad.slice(0, 10), count: bad.length, months, fields };
-    }, vv.data.session.access_token);
+    }, session.access_token);
     eq("no scope/month has new > total", v.bad, []);
     // POSITIVE CONTROL — the scan actually covered something.
     eq("…across a real number of scopes and months", v.months > 0 && v.fields > 0, true);
@@ -255,7 +255,7 @@ async function main() {
       const j = await (await fetch(`/api/growth?b=${Date.now()}`, { headers: { Authorization: `Bearer ${t}` }, cache: "no-store" })).json();
       const f = Object.values(j.behaviorByField).find((x) => /PARMER/i.test(x.label));
       return f ? f.points.map((p) => ({ m: p.m, nw: p.newPlayers })) : null;
-    }, vv.data.session.access_token);
+    }, session.access_token);
     eq("Growth has a PARMER Stadium field series", !!g, true);
 
     await page.goto(`${BASE}/partners/parmer-stadium-q8x2m5rk`, { waitUntil: "domcontentloaded" });
@@ -334,7 +334,7 @@ async function main() {
       const bad = [];
       for (const [m, n] of nat) if ((byM.get(m) ?? 0) + (un.get(m) ?? 0) !== n) bad.push({ m, n, c: byM.get(m) ?? 0, u: un.get(m) ?? 0 });
       return { bad, months: nat.size, unattributedTotal: [...un.values()].reduce((a, b) => a + b, 0) };
-    }, vv.data.session.access_token);
+    }, session.access_token);
     eq("every month's cities + unattributed equals the national figure", bal.bad, []);
     eq("…over a real number of months (not a vacuous zero-month check)", bal.months > 0, true);
     console.log(`   · registrations with no declared city, all time: ${bal.unattributedTotal}`);

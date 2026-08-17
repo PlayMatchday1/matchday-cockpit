@@ -2,7 +2,9 @@
 
 import { useMemo, useState } from "react";
 import { useFinanceData } from "@/lib/useFinanceData";
-import { useMatchData } from "@/lib/useMatchData";
+import { useMatchRangeData } from "@/lib/useMatchData";
+import { useFinancePeriod } from "@/lib/financePeriodContext";
+import { matchRange } from "@/lib/financePeriod";
 import {
   computeRevenuePerMatchByCity,
   computeRevenuePerMatchTotal,
@@ -13,7 +15,12 @@ type SortKey = "gross" | "dpp";
 
 export default function RevenuePerMatchCard() {
   const { data, loading: financeLoading } = useFinanceData();
-  const { rows: matchRows, loading: matchLoading } = useMatchData();
+  // FOLLOWS THE PERIOD. This read the whole table and aggregated "all time", which answers no
+  // question on a page that has a period selector — and left one unbounded reader, so any page
+  // mounting this card still paid for 203,000 rows.
+  const { period } = useFinancePeriod();
+  const { fromDate, toDate } = useMemo(() => matchRange(period.start, period.end), [period]);
+  const { rows: matchRows, loading: matchLoading } = useMatchRangeData(fromDate, toDate);
   const [sortBy, setSortBy] = useState<SortKey>("gross");
 
   const { rows, total } = useMemo(() => {

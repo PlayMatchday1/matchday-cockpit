@@ -44,8 +44,9 @@
 
 import { useMemo, useState } from "react";
 import { useFinancePeriodData } from "@/lib/useFinancePeriodData";
-import { useMatchData } from "@/lib/useMatchData";
+import { useMatchRangeData } from "@/lib/useMatchData";
 import { useFinancePeriod } from "@/lib/financePeriodContext";
+import { matchRange } from "@/lib/financePeriod";
 import { CITY_DISPLAY_ORDER } from "@/lib/financeStats";
 import { isCityHidden } from "@/lib/types";
 import { computeCityPnl, type CityCostMode, type CityCostScope, type CityPnl, type PnlField } from "@/lib/cityPnl";
@@ -77,7 +78,11 @@ export default function CityPnlTable() {
   // section, at whichever grain is asked for.
   const { period, now } = useFinancePeriod();
   const { data, loading } = useFinancePeriodData(period);
-  const { rows: matchRegistrations, loading: matchLoading } = useMatchData();
+  // THE PERIOD'S OWN WINDOW. This used to call useMatchData(), which fetches mdapi_match_players
+  // UNFILTERED — ~203,000 rows in 203 paginated round-trips, on every view. The table is bucketed
+  // by month against `period.months`, so anything outside the period was fetched and discarded.
+  const { fromDate, toDate } = useMemo(() => matchRange(period.start, period.end), [period]);
+  const { rows: matchRegistrations, loading: matchLoading } = useMatchRangeData(fromDate, toDate);
 
   const [basis, setBasis] = useState<BasisId>("per_match|realized");
   const [scope, setScope] = useState<string>("All cities");

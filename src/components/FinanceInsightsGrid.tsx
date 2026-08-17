@@ -5,7 +5,8 @@ import Link from "next/link";
 import { ChevronDown, ChevronRight } from "lucide-react";
 import FinanceInsightCard from "./FinanceInsightCard";
 import { useFinanceData } from "@/lib/useFinanceData";
-import { useMatchData } from "@/lib/useMatchData";
+import { useMatchRangeData } from "@/lib/useMatchData";
+import { matchRange } from "@/lib/financePeriod";
 import { useFinanceQuarter } from "@/lib/financeQuarter";
 import {
   buildCityInsightRows,
@@ -58,8 +59,13 @@ export default function FinanceInsightsGrid({
   onToggle?: () => void;
 } = {}) {
   const { data, loading } = useFinanceData();
-  const { rows: matchRows } = useMatchData();
   const quarter = useFinanceQuarter();
+  // ITS OWN WIDENING: the QUARTER, not the selected month. The "new venues" and trend lists
+  // compare a month against its neighbours, so a month-wide window would empty them. Stated here
+  // rather than shared — the widening is a property of this component.
+  const { fromDate, toDate } = useMemo(
+    () => matchRange(quarter.start, quarter.end), [quarter]);
+  const { rows: matchRows } = useMatchRangeData(fromDate, toDate);
   const [month, setMonth] = useState<Q2Month>(
     () =>
       getCurrentMonthInQuarter(quarter, new Date()) ??

@@ -5,7 +5,7 @@
 //   node scripts/e2e/verify-lookup.mjs
 import { chromium } from "playwright";
 import { createClient } from "@supabase/supabase-js";
-import { netRetry, installHarnessGuard, fatal } from "./_session.mjs";
+import { netRetry, installHarnessGuard, fatal, sessionFor } from "./_session.mjs";
 installHarnessGuard();
 import { overflow } from "./checks.mjs";
 
@@ -152,10 +152,10 @@ async function main() {
   process.loadEnvFile(".env.local");
   const svc = createClient(process.env.NEXT_PUBLIC_SUPABASE_URL, process.env.SUPABASE_SERVICE_ROLE_KEY, { auth: { persistSession: false } });
   const anon = createClient(process.env.NEXT_PUBLIC_SUPABASE_URL, process.env.NEXT_PUBLIC_SUPABASE_PUBLISHABLE_KEY, { auth: { persistSession: false } });
-  const link = await netRetry(() => svc.auth.admin.generateLink({ type: "magiclink", email: "rmancuso@playmatchday.com" }), "generateLink");
-  const vv = await netRetry(() => anon.auth.verifyOtp({ type: "magiclink", token_hash: link.data.properties.hashed_token }), "verifyOtp");
+  // ONE SESSION PER IDENTITY, cached across the whole gate run — see sessionFor in _session.mjs.
+  const session = await sessionFor("rmancuso@playmatchday.com");
   const ref = new URL(process.env.NEXT_PUBLIC_SUPABASE_URL).host.split(".")[0];
-  const storageState = { cookies: [], origins: [{ origin: BASE, localStorage: [{ name: `sb-${ref}-auth-token`, value: JSON.stringify(vv.data.session) }] }] };
+  const storageState = { cookies: [], origins: [{ origin: BASE, localStorage: [{ name: `sb-${ref}-auth-token`, value: JSON.stringify(session) }] }] };
 
   const todayYMD = (() => { const d = new Date(); return `${d.getFullYear()}-${String(d.getMonth() + 1).padStart(2, "0")}-${String(d.getDate()).padStart(2, "0")}`; })();
   let lastWrite = null; // capture the roster POST body

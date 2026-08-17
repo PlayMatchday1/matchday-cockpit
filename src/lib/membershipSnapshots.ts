@@ -1,6 +1,21 @@
 import { type SupabaseClient } from "@supabase/supabase-js";
 import { supabase as defaultClient } from "./supabase";
 import { selectAll } from "./supabasePagination";
+
+// The attendance window for the months this run writes: the current month, plus the PRIOR month —
+// which the 1st-to-5th catch-up path also refreshes — padded two days each side.
+//
+// Two months, not the whole table. The pad can only add rows the month-bucketing ignores; being a
+// day short would drop a real match from the month it belongs to.
+function attendanceRange(now: Date): { fromDate: string; toDate: string } {
+  const from = new Date(now.getFullYear(), now.getMonth() - 1, 1);
+  from.setDate(from.getDate() - 2);
+  const to = new Date(now.getFullYear(), now.getMonth() + 1, 0);
+  to.setDate(to.getDate() + 2);
+  const ymd = (d: Date) =>
+    `${d.getFullYear()}-${String(d.getMonth() + 1).padStart(2, "0")}-${String(d.getDate()).padStart(2, "0")}`;
+  return { fromDate: ymd(from), toDate: ymd(to) };
+}
 import {
   computeMonthlySnapshot,
   type AttendanceRow,
@@ -63,7 +78,15 @@ export async function refreshMembershipSnapshots(opts: {
     // mdapi_match_players via the shared lib. Project the joined
     // rows to the AttendanceRow shape (match_start as Date is
     // accepted by computeAvgMatchesPerMember).
-    fetchJoinedMatchPlayers(sb),
+    // DATE-BOUND. This called fetchJoinedMatchPlayers(sb) with no range — the entire
+    // mdapi_match_players table (~203,000 rows) — to compute average matches per member for ONE
+    // month. It timed out at 80s on every run for the last 14, writing nothing, while holding a
+    // large scan open on a 1GB instance.
+    //
+    // The snapshots this run writes are the current month and (on the 1st-5th) the prior one, and
+    // computeAvgMatchesPerMember only looks at rows inside them — so everything else was fetched
+    // and discarded.
+    fetchJoinedMatchPlayers(sb, attendanceRange(now)),
   ]);
   const attendance: AttendanceRow[] = joinedMatches.rows.map((r) => ({
     match_start: r.matchStart,

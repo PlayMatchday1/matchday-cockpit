@@ -3,7 +3,8 @@
 import { useEffect, useMemo, useState } from "react";
 import { ChevronDown, ChevronRight } from "lucide-react";
 import { useFinanceData } from "@/lib/useFinanceData";
-import { useMatchData } from "@/lib/useMatchData";
+import { useMatchRangeData } from "@/lib/useMatchData";
+import { matchRange } from "@/lib/financePeriod";
 import { useFinanceQuarter } from "@/lib/financeQuarter";
 import {
   buildRankingRows,
@@ -82,8 +83,13 @@ export default function FieldRankingTable({
   costScope?: "projected" | "realized";
 } = {}) {
   const { data } = useFinanceData();
-  const { rows: matchRegistrations } = useMatchData();
   const quarter = useFinanceQuarter();
+  // ITS OWN WIDENING: the QUARTER. Lump-billed venues (NEMP's four irregular payments a year)
+  // reconcile as-billed against per-match ACROSS months — truncating to one month would shift the
+  // cost, not merely hide rows.
+  const { fromDate, toDate } = useMemo(
+    () => matchRange(quarter.start, quarter.end), [quarter]);
+  const { rows: matchRegistrations } = useMatchRangeData(fromDate, toDate);
   // Default: current month within the active quarter; falls back to
   // the last month of the quarter (operator reads "the most recent
   // closed month" when viewing past quarters or pre-first-month).

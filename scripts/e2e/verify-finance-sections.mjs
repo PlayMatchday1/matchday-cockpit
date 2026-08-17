@@ -23,7 +23,7 @@
 //   node scripts/e2e/verify-finance-sections.mjs
 import { chromium } from "playwright";
 import { createClient } from "@supabase/supabase-js";
-import { netRetry, installHarnessGuard, fatal, closeContext, closeBrowser } from "./_session.mjs";
+import { netRetry, installHarnessGuard, fatal, closeContext, closeBrowser, sessionFor } from "./_session.mjs";
 installHarnessGuard();
 
 const BASE = process.env.BASE || "http://localhost:3000";
@@ -63,11 +63,11 @@ async function main() {
   const url = process.env.NEXT_PUBLIC_SUPABASE_URL;
   const svc = createClient(url, process.env.SUPABASE_SERVICE_ROLE_KEY, { auth: { persistSession: false } });
   const anon = createClient(url, process.env.NEXT_PUBLIC_SUPABASE_PUBLISHABLE_KEY, { auth: { persistSession: false } });
-  const link = await netRetry(() => svc.auth.admin.generateLink({ type: "magiclink", email: "rmancuso@playmatchday.com" }), "generateLink");
-  const vv = await netRetry(() => anon.auth.verifyOtp({ type: "magiclink", token_hash: link.data.properties.hashed_token }), "verifyOtp");
-  const token = vv.data.session.access_token;
+  // ONE SESSION PER IDENTITY, cached across the whole gate run — see sessionFor in _session.mjs.
+  const session = await sessionFor("rmancuso@playmatchday.com");
+  const token = session.access_token;
   const ref = new URL(url).host.split(".")[0];
-  const storageState = { cookies: [], origins: [{ origin: BASE, localStorage: [{ name: `sb-${ref}-auth-token`, value: JSON.stringify(vv.data.session) }] }] };
+  const storageState = { cookies: [], origins: [{ origin: BASE, localStorage: [{ name: `sb-${ref}-auth-token`, value: JSON.stringify(session) }] }] };
 
   // === Evidence gathered OUTSIDE the page under test ===
   // The venues whose stored cost really is zero. Anything else showing $0 is the null-rate bug.
@@ -133,7 +133,8 @@ async function main() {
     const r = await page.evaluate(() => ({
       rail: [...document.querySelectorAll('[data-testid="app-rail"] [data-testid="rail-item"]')].map((a) => a.textContent.trim()),
       title: document.querySelector('[data-testid="finance-title"]')?.textContent?.trim() ?? null,
-      quarter: !!document.querySelector("select, [data-testid='quarter-selector']") || /QUARTER/i.test(document.body.innerText),
+      periodBar: !!document.querySelector('[data-testid="finance-period-bar"]'),
+      quarterDropdown: [...document.querySelectorAll("select")].some((x) => /quarter/i.test(x.getAttribute("aria-label") ?? "")),
       configure: /Configure/.test(document.body.innerText),
       checkIns: /City Manager Check-Ins/.test(document.body.innerText),
       managers: /\bManagers\b/.test(document.body.innerText),
@@ -142,7 +143,10 @@ async function main() {
     eq("the rail is the app's own six items, in order", r.rail, RAIL);
     eq("the frame title is Finance", r.title, "Finance");
     eq("…the panel rendered", panelMark.test(r.text), true);
-    eq("…the quarter selector is in the frame", r.quarter, true);
+    // The old assertion here was `!!querySelector("select")`, which matched the Basis dropdown and
+    // kept passing after the QUARTER control was deleted. Name the control instead.
+    eq("…the period bar is in the frame", r.periodBar, true);
+    eq("…and the old quarter dropdown is gone", r.quarterDropdown, false);
     eq("…Configure / Check-Ins / Managers are all reachable", [r.configure, r.checkIns, r.managers], [true, true, true]);
     // NO PROSE: the two mockup lines must not have come along.
     eq("…no 'Track Matchday revenue across' line", /Track Matchday revenue across/i.test(r.text), false);
@@ -184,11 +188,15 @@ async function main() {
       };
     });
 
+  // A CLOSED month is what the partner cross-check needs: an open one has no published partner
+  // payment to compare against. The card's own Jul/Aug/Sep segment is gone — that was the second
+  // of two controls doing one job — so the previous month is reached with the period stepper.
   await open("/admin/finance/cost", '[data-testid="finance-cost"]');
-  // Jul 2026 is a CLOSED month, which is what the partner cross-check needs — an open month has
-  // no published partner payment to compare against.
-  await page.getByRole("button", { name: "Jul", exact: true }).click();
-  await page.waitForTimeout(1500);
+  await page.click('[data-testid="period-prev"]');
+  await page.waitForSelector('[data-testid="cost-row"]', { timeout: 120000 });
+  await page.waitForTimeout(1200);
+  const costMonth = await page.$eval('[data-testid="period-label"]', (e) => e.textContent.trim());
+  ok(`stepped back to ${costMonth} with the period control`);
 
   const cityView = await readCost();
   await page.getByRole("button", { name: "Field Economics" }).click();

@@ -14,7 +14,7 @@
 //   node scripts/e2e/verify-user-permissions.mjs
 import { chromium } from "playwright";
 import { createClient } from "@supabase/supabase-js";
-import { netRetry, installHarnessGuard, fatal, closeContext, closeBrowser } from "./_session.mjs";
+import { netRetry, installHarnessGuard, fatal, closeContext, closeBrowser, sessionFor } from "./_session.mjs";
 installHarnessGuard();
 
 const BASE = process.env.BASE || "http://localhost:3000";
@@ -45,13 +45,13 @@ async function main() {
     return data?.[key] ?? null;
   };
 
-  const link = await netRetry(() => svc.auth.admin.generateLink({ type: "magiclink", email: ADMIN }), "generateLink");
-  const vv = await netRetry(() => anon.auth.verifyOtp({ type: "magiclink", token_hash: link.data.properties.hashed_token }), "verifyOtp");
-  const token = vv.data.session.access_token;
+  // ONE SESSION PER IDENTITY, cached across the whole gate run — see sessionFor in _session.mjs.
+  const session = await sessionFor(ADMIN);
+  const token = session.access_token;
 
   const browser = await chromium.launch({ headless: true });
   const ctx = await browser.newContext({
-    storageState: { cookies: [], origins: [{ origin: BASE, localStorage: [{ name: `sb-${ref}-auth-token`, value: JSON.stringify(vv.data.session) }] }] },
+    storageState: { cookies: [], origins: [{ origin: BASE, localStorage: [{ name: `sb-${ref}-auth-token`, value: JSON.stringify(session) }] }] },
   });
   const page = await ctx.newPage();
   await page.goto(`${BASE}/login`, { waitUntil: "domcontentloaded" });

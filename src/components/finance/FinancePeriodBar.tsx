@@ -69,6 +69,14 @@ export default function FinancePeriodBar({
           data-testid="period-next" onClick={() => forwardOk && onStep(1)}>›</button>
       </div>
 
+      {/* NEXT TO THE LABEL, not in a footnote: "2026" is not 2026 in this system, and the reader
+          has to see that where they read the year — not further down the bar. */}
+      {period.monthsOmitted > 0 && (
+        <span className={s.note} data-testid="period-omitted">
+          {period.monthsOmitted} month{period.monthsOmitted === 1 ? "" : "s"} before {RECORD_STARTS} not on record
+        </span>
+      )}
+
       {period.isCurrent && (
         <span className={s.partial} data-testid="period-partial">
           Partial · <b>{period.elapsedDays} of {period.totalDays} days</b>
@@ -87,13 +95,6 @@ export default function FinancePeriodBar({
         {THIS_LABEL[period.grain]}
       </button>
 
-      {/* The label can span more than the record does — 2026 has no January in this system. Said
-          out loud rather than left to be inferred from a short bar. */}
-      {period.monthsOmitted > 0 && (
-        <span className={s.note} data-testid="period-omitted">
-          {period.monthsOmitted} month{period.monthsOmitted === 1 ? "" : "s"} before {RECORD_STARTS} not on record
-        </span>
-      )}
 
       <span className={s.spacer} />
       <span className={s.links}>{links}</span>

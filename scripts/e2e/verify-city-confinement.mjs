@@ -18,7 +18,7 @@
 //   node scripts/e2e/verify-city-confinement.mjs
 import { chromium } from "playwright";
 import { createClient } from "@supabase/supabase-js";
-import { netRetry, installHarnessGuard, fatal, closeContext } from "./_session.mjs";
+import { netRetry, installHarnessGuard, fatal, closeContext, sessionFor } from "./_session.mjs";
 installHarnessGuard();
 
 const BASE = process.env.BASE || "http://localhost:3000";
@@ -74,14 +74,23 @@ async function main() {
   eq("the account under test really is a city manager, scoped, and not an admin",
     { cm: row?.is_city_manager, city: row?.city_identifier, admin: row?.is_admin }, { cm: true, city: SCOPE, admin: false });
 
-  const mint = async (email) => {
-    const link = await netRetry(() => svc.auth.admin.generateLink({ type: "magiclink", email }), `generateLink ${email}`);
-    const vv = await netRetry(() => anon.auth.verifyOtp({ type: "magiclink", token_hash: link.data.properties.hashed_token }), `verifyOtp ${email}`);
-    if (!vv.data?.session) throw new Error(`no session for ${email}`);
-    return vv.data.session;
+  // TWO IDENTITIES, EACH NAMED. sessionFor caches per email, so this costs at most two magic links
+  // per hour across the WHOLE gate rather than two more on top of thirty-one others. The identity
+  // is the cache key, so a city-manager call can never be served an admin session.
+  const cmSession = await sessionFor(CITY_MANAGER);
+  const adminSession = await sessionFor(ADMIN);
+
+  // WHOSE TOKEN IS WHOSE, asserted before anything is refused. A refusal probe proves nothing
+  // unless the credentials it holds are the ones under test: an admin token refused by a
+  // city-manager guard would be a passing test of the wrong thing, and pointing this at the wrong
+  // variable is how a pay-arrival probe once became a real production write.
+  const whoIs = async (tok) => {
+    const { data } = await svc.auth.getUser(tok);
+    return data?.user?.email ?? null;
   };
-  const cmSession = await mint(CITY_MANAGER);
-  const adminSession = await mint(ADMIN);
+  eq("the city-manager session really belongs to the city manager", await whoIs(cmSession.access_token), CITY_MANAGER);
+  eq("…and the admin session really belongs to the admin", await whoIs(adminSession.access_token), ADMIN);
+  eq("…and they are different tokens", cmSession.access_token !== adminSession.access_token, true);
 
   const browser = await chromium.launch({ headless: true });
   const ctxFor = (session, viewport = { width: 1600, height: 1000 }) => browser.newContext({
@@ -253,6 +262,9 @@ async function main() {
   await ad.goto(`${BASE}/match-ops/gameday`, { waitUntil: "domcontentloaded" });
   await ad.waitForTimeout(600);
   session0 = adminSession.access_token;
+  // THE REASSIGNMENT, STATED. Everything below this line runs as the ADMIN; everything above ran
+  // as the city manager. Asserting it here is what keeps the two halves from silently swapping.
+  eq("from here the shared token is the ADMIN's", await whoIs(session0), ADMIN);
   {
     let opened = 0;
     for (const [, path] of FORBIDDEN.slice(0, 4)) {

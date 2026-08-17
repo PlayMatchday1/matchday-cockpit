@@ -128,3 +128,105 @@ export function installHarnessGuard() {
   process.on("unhandledRejection", fatal);
   process.on("uncaughtException", fatal);
 }
+
+// ═══════════════════════════════════════════════════════════════════════════════════════════════
+// THE KEYED SESSION CACHE — 33 magic links per gate run down to 2 cold, 0 warm.
+//
+// THE PROBLEM. Every gated suite inlined its own admin.generateLink('magiclink') + verifyOtp: 33
+// links per run against Supabase's BUILT-IN LIMIT OF 2 PER HOUR PER PROJECT. The tail of a long
+// run therefore died with "Cannot read properties of null (reading 'hashed_token')", which reads
+// as a code failure and is a quota failure. It killed three unrelated suites in push 18.
+//
+// WHY NOT signInWithPassword. scripts/e2e/auth.mjs uses the password grant, which never touches
+// the email quota — but it authenticates as E2E_EMAIL (clubhouse-e2e@playmatchday.com), and we
+// hold a password for that account and no other. The 32 admin suites run as
+// rmancuso@playmatchday.com because they need full admin, and the e2e service account is
+// DELIBERATELY blocked at the database keyed on email. Repointing them would make them pass, or
+// fail, as somebody else. So this takes the CACHING half of auth.mjs and leaves the password half.
+//
+// KEYED BY IDENTITY, NEVER SHARED. verify-city-confinement drives a real city manager, and every
+// refusal probe needs a non-admin. One entry per email; the caller must NAME the identity, there
+// is no default, and nothing inherits a session it did not ask for. A cached admin session
+// reaching a refusal probe is how a pay-arrival probe once became a real production write.
+//
+// ON DISK: .auth/sessions/<email>.json, mode 0600, and .auth/ is already gitignored. These are
+// bearer tokens — never logged, never printed; the filename is the only thing naming them.
+
+import { createClient } from "@supabase/supabase-js";
+import { mkdirSync, readFileSync, writeFileSync, existsSync } from "node:fs";
+
+const SESSION_DIR = ".auth/sessions";
+// Supabase access tokens live ~1h. 45 minutes leaves room for a long run to finish on a session it
+// picked up near the end of the window.
+const TTL_MS = 45 * 60 * 1000;
+
+const cachePath = (email) => `${SESSION_DIR}/${email.replace(/[^a-z0-9]+/gi, "_")}.json`;
+
+function readCached(email) {
+  const p = cachePath(email);
+  if (!existsSync(p)) return null;
+  try {
+    const raw = JSON.parse(readFileSync(p, "utf8"));
+    // The stored email must match: a mismatched file is a session for someone else, which is the
+    // one failure this cache must never produce.
+    if (!raw?.session?.access_token || raw.email !== email) return null;
+    if (Date.now() - raw.mintedAt > TTL_MS) return null;
+    // expires_at is seconds since epoch. A token expiring inside five minutes is no use to a suite
+    // about to run for three.
+    const exp = Number(raw.session.expires_at ?? 0) * 1000;
+    if (exp && exp - Date.now() < 5 * 60 * 1000) return null;
+    return raw.session;
+  } catch {
+    return null;
+  }
+}
+
+// A SESSION FOR A NAMED IDENTITY. Reuses the cached one while it is good; mints exactly one magic
+// link when it is not.
+export async function sessionFor(email) {
+  if (!email || typeof email !== "string") {
+    throw new Error("sessionFor(email): name the identity explicitly — there is no default");
+  }
+  const cached = readCached(email);
+  if (cached) return cached;
+
+  const url = process.env.NEXT_PUBLIC_SUPABASE_URL;
+  const svc = createClient(url, process.env.SUPABASE_SERVICE_ROLE_KEY, { auth: { persistSession: false } });
+  const anon = createClient(url, process.env.NEXT_PUBLIC_SUPABASE_PUBLISHABLE_KEY, { auth: { persistSession: false } });
+
+  const link = await netRetry(() => svc.auth.admin.generateLink({ type: "magiclink", email }), `generateLink ${email}`);
+  const hashed = link?.data?.properties?.hashed_token;
+  if (!hashed) {
+    // NAME THE QUOTA. This used to surface as "Cannot read properties of null", which sent an
+    // investigation through the dev server, a clean .next and three unrelated commits before
+    // anyone counted links.
+    throw new Error(
+      `Supabase returned no magic link for ${email}. This is almost always the EMAIL QUOTA — ` +
+      `the built-in service allows 2/hour/project; custom SMTP raises it. Not a code failure.`,
+    );
+  }
+  const vv = await netRetry(() => anon.auth.verifyOtp({ type: "magiclink", token_hash: hashed }), `verifyOtp ${email}`);
+  const session = vv?.data?.session;
+  if (!session) throw new Error(`verifyOtp returned no session for ${email}`);
+
+  try {
+    mkdirSync(SESSION_DIR, { recursive: true });
+    writeFileSync(cachePath(email), JSON.stringify({ email, mintedAt: Date.now(), session }), { mode: 0o600 });
+  } catch { /* a cache we cannot write is a slower run, not a broken one */ }
+  return session;
+}
+
+// The Playwright storageState for a NAMED identity — the shape every suite was building by hand.
+// Returns the session and token too, so a suite that also calls routes directly does not re-mint.
+export async function storageStateFor(email, base) {
+  const session = await sessionFor(email);
+  const ref = new URL(process.env.NEXT_PUBLIC_SUPABASE_URL).host.split(".")[0];
+  return {
+    storageState: {
+      cookies: [],
+      origins: [{ origin: base, localStorage: [{ name: `sb-${ref}-auth-token`, value: JSON.stringify(session) }] }],
+    },
+    session,
+    token: session.access_token,
+  };
+}
