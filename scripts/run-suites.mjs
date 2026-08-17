@@ -18,15 +18,11 @@ const QUARANTINE_ONLY = process.argv.includes("--quarantine"); // run ONLY the q
 // why and what brings it back. Run them with `node scripts/run-suites.mjs --e2e --quarantine`
 // (npm run verify:e2e:quarantine). Each is quarantined, not fixed, because the fix is out of this
 // phase's scope; the reason + restore condition make the debt visible, not silent.
-const QUARANTINE = new Map([
-  ["verify-year.mjs", { why: "non-hermetic: drives LIVE manager-pay data; the Manager <select> has no options when the live manager list lacks the picked manager, and Supabase magic-link generation rate-limits at the tail of a full run", restore: "fixture the manager-pay + managers data (hermetic, like verify-snapshot), then move it back into the gated set" }],
-  // verify-adminpay REMOVED from quarantine (Phase 20 E2): the $59 owed label is now 5.4:1 — back in the gate.
-  ["verify-partner.mjs", { why: "real: a frozen paid-snapshot expects $13 but shows $28 — needs a product decision (see Phase 20 E3)", restore: "reconcile the frozen snapshot (or update the expectation) and re-gate" }],
-  ["verify-reviews.mjs", { why: "non-hermetic: waits for a LIVE 'due' review that may not exist at run time", restore: "fixture a due review so the suite is hermetic, then re-gate" }],
-  ["verify-partner-rental.mjs", { why: "the Parmer partner row does not exist until migration 0123 is applied, and the partner page is SERVER-rendered from Supabase — there is no client request to intercept, so the suite cannot be made hermetic from the browser. It fails loudly with that message rather than passing vacuously.", restore: "apply migration 0123, run `node scripts/e2e/verify-partner-rental.mjs` to confirm it is green against the real row, then remove it from the QUARANTINE map AND scripts/quarantine.pinned.json in the same commit" }],
-  // Added Phase 20 E (85e803d); root cause diagnosed Phase 21b item 1.
-  ["verify-week.mjs", { why: "time-dependent (HARNESS, not a product defect): the CalendarPanel fixture anchors meeting times to now, so in the evening the day-1/day-2 meetings (now-1440+300/420m) cross the Chicago midnight boundary into 'today' and drop out of the elapsed folds — the fold-sum then reads 4 instead of 7. Passes at other clock times with no code change.", restore: "pin a fixed browser clock (page.clock.setFixedTime to a mid-day instant) so elapsed/live/upcoming are deterministic. Started in 21b but NOT landed: the Show/Hide check does a mid-run page.reload() that re-authenticates under the frozen clock, and Supabase's token-refresh rate-limits at the tail of a full run — needs the fixture switched to fresh-mint auth AND the reload-based checks reworked to re-apply the clock (or avoid reload) before re-gating" }],
-]);
+// EMPTY. All five quarantined suites were Finance/partner/reviews/calendar screens — every one of
+// them outside the testing rule (the gate exists for writes to the MatchDay API), so they were
+// deleted rather than carried as debt. The drift guard below stays: it is what stops a suite
+// leaving the gate silently, and it will bind the moment anything is quarantined again.
+const QUARANTINE = new Map([]);
 
 // ── QUARANTINE DRIFT GUARD (Phase 21b item 1) ────────────────────────────────
 // A suite must never leave the gate silently. The set of quarantined suites is PINNED in
@@ -49,13 +45,30 @@ function quarantineDrift() {
 }
 
 // The Node suites, in the order `verify` ran them.
+// THE UNIT SUITES THAT SURVIVE THE TESTING RULE — writes to the MatchDay API, and the guards
+// that pin traps which have already cost a real production write. Nine model/scope suites for
+// internal dashboards and read gates were deleted with the policy change; a wrong number on an
+// internal screen is visible to Ryan and says so faster than a suite does.
+//
+// matchops-auth-test is KEPT despite testing reads: a route shipped with NO gate is invisible
+// on screen, which is exactly the case a suite has to cover.
 const NODE_SUITES = [
-  "scripts/mutation-tests.ts", "scripts/prod-guard-test.ts", "scripts/stage-denylist-test.ts",
-  "scripts/gameday-model-test.ts", "scripts/change-log-test.ts", "scripts/write-routes-logged-test.ts",
-  "scripts/player-lookup-model-test.ts", "scripts/walltime-guard-test.ts", "scripts/promo-model-test.ts",
-  "scripts/crm-characterize-test.ts", "scripts/crm-host-guard-test.ts",
-  "scripts/seam-stripped-test.ts", "scripts/matchops-auth-test.ts",
-  "scripts/crm-push-test.ts", "scripts/city-manager-test.ts", "scripts/city-scope-test.ts", "scripts/reviews-scope-test.ts", "scripts/promo-uses-model-test.ts", "scripts/sync-logging-test.ts", "scripts/verify-checkin-model.ts", "scripts/roster-edit-model-test.ts", "scripts/credits-model-test.ts", "scripts/partner-payout-model-test.ts", "scripts/promo-edit-model-test.ts", "scripts/city-confinement-test.ts",
+  "scripts/mutation-tests.ts",
+  "scripts/prod-guard-test.ts",
+  "scripts/stage-denylist-test.ts",
+  "scripts/change-log-test.ts",
+  "scripts/write-routes-logged-test.ts",
+  "scripts/walltime-guard-test.ts",
+  "scripts/promo-model-test.ts",
+  "scripts/crm-characterize-test.ts",
+  "scripts/crm-host-guard-test.ts",
+  "scripts/seam-stripped-test.ts",
+  "scripts/matchops-auth-test.ts",
+  "scripts/crm-push-test.ts",
+  "scripts/verify-checkin-model.ts",
+  "scripts/roster-edit-model-test.ts",
+  "scripts/credits-model-test.ts",
+  "scripts/promo-edit-model-test.ts",
 ];
 const ALL_E2E = readdirSync("scripts/e2e").filter((f) => /^verify-.*\.mjs$/.test(f)).sort().map((f) => `scripts/e2e/${f}`);
 const GATED_E2E = ALL_E2E.filter((s) => !QUARANTINE.has(s.split("/").pop()));
