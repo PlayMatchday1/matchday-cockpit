@@ -97,6 +97,36 @@ async function main() {
     eq("…and the three-dot scope legend is gone", /Follows the time period above/.test(r.text), false);
   }
 
+  // ── THE DOWNLOADS CARD: A COUNT IS NOT A COVERAGE WINDOW ─────────────────
+  // "iOS 9,066 · App Store Units · Aug 2025 – Aug 2026" put a PERIOD figure beside the store's
+  // DATA AVAILABILITY, which read as though 9,066 downloads happened across that span. The count
+  // is filtered to the selected period; the span is how far back Apple's analytics go. Neither
+  // date range may sit beside the number again.
+  console.log("\nthe downloads card:");
+  {
+    await open("/growth/funnel");
+    const lines = await page.evaluate(() => {
+      const h = document.querySelector('[data-testid="kpi-download-history"]');
+      if (!h) return null;
+      const box = h.parentElement;
+      return [...box.children].map((el) => el.textContent.trim());
+    });
+    eq("the card renders its platform breakdown", Array.isArray(lines) && lines.length >= 3, true);
+    if (lines) {
+      const platform = lines.filter((l) => /^(iOS|Android)\b/.test(l));
+      eq("…one line per platform", platform.length, 2);
+      // A MONTH RANGE beside the count is the defect. A single month is fine (it never appeared
+      // there), so the pattern is specifically "Mon YYYY – Mon YYYY".
+      const RANGE = /[A-Z][a-z]{2} \d{4}\s*[–-]\s*[A-Z][a-z]{2} \d{4}/;
+      eq("…and neither carries a date range beside its number", platform.filter((l) => RANGE.test(l)), []);
+      const hist = lines.find((l) => /History differs by store/.test(l)) ?? "";
+      eq("the availability is stated ONCE, as its own fact", hist.length > 0, true);
+      eq("…naming why the two platforms differ", /Apple/.test(hist) && /Google/.test(hist), true);
+      // POSITIVE CONTROL — the coverage months are still on the page, just not beside the counts.
+      eq("…and it still carries the months (they were moved, not dropped)", /\b\d{4}\b/.test(hist), true);
+    }
+  }
+
   // ── THE MOVE DID NOT DUPLICATE THE FETCH ─────────────────────────────────
   console.log("\nswitching sections in the rail does not refetch:");
   {

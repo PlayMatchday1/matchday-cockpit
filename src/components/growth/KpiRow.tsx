@@ -29,9 +29,14 @@ export default function KpiRow({ data, period }: { data: GrowthData; period: Per
     const months = data.downloads.androidByMonth.filter((d) => d.m >= period.start && d.m <= period.end);
     return { has: data.downloads.android != null && months.length > 0, total: months.reduce((a, d) => a + d.count, 0) };
   }, [data.downloads, period]);
-  const androidRange = data.downloads.android
-    ? `${monthLabel(data.downloads.android.earliest.slice(0, 7))} – ${monthLabel(data.downloads.android.latest.slice(0, 7))}`
-    : null;
+  // COVERAGE, NOT THE WINDOW THE NUMBER COVERS. `earliest`/`latest` are the extremes of what the
+  // store has ever given us and do not move with the period. This used to print beside the count —
+  // "Android 2,241 · Play user-installs · Mar 2023 – Aug 2026" — which read as though 2,241
+  // installs happened across that span. The count is the PERIOD figure (filtered to
+  // period.start..period.end, summed, just above); the span is availability. Two unrelated facts
+  // on one line. The span now appears once, as its own sentence, and never beside a number it
+  // does not describe.
+  const androidFirst = data.downloads.android ? monthLabel(data.downloads.android.earliest.slice(0, 7)) : null;
 
   // Play-ingest status label. Replaces the static "awaiting Play sync" — which
   // could not fail and so could not be debugged — with one line per real state:
@@ -61,9 +66,7 @@ export default function KpiRow({ data, period }: { data: GrowthData; period: Per
     const months = data.downloads.iosByMonth.filter((d) => d.m >= period.start && d.m <= period.end);
     return { has: data.downloads.ios != null && months.length > 0, total: months.reduce((a, d) => a + d.count, 0) };
   }, [data.downloads, period]);
-  const iosRange = data.downloads.ios
-    ? `${monthLabel(data.downloads.ios.earliest.slice(0, 7))} – ${monthLabel(data.downloads.ios.latest.slice(0, 7))}`
-    : null;
+  const iosFirst = data.downloads.ios ? monthLabel(data.downloads.ios.earliest.slice(0, 7)) : null;
   // Combined total across whichever platforms have data — explicitly labelled as a
   // mixed-definition sum, never presented as a single clean install count.
   const combinedHas = android.has || ios.has;
@@ -97,7 +100,7 @@ export default function KpiRow({ data, period }: { data: GrowthData; period: Per
         <div className={styles.kpiSecondary}>
           <div>
             <b>iOS</b> {ios.has ? fmtInt(ios.total) : "—"}
-            {ios.has ? ` · App Store Units${iosRange ? ` · ${iosRange}` : ""}` : ""}
+            {ios.has ? " · App Store Units" : ""}
             {!ios.has && (
               <span className={styles.notConnected} title={as.error ?? undefined}>
                 {" "}
@@ -107,7 +110,7 @@ export default function KpiRow({ data, period }: { data: GrowthData; period: Per
           </div>
           <div>
             <b>Android</b> {android.has ? fmtInt(android.total) : "—"}
-            {android.has ? ` · Play user-installs${androidRange ? ` · ${androidRange}` : ""}` : ""}
+            {android.has ? " · Play user-installs" : ""}
             {!android.has && (
               <span className={styles.notConnected} title={ps.error ?? undefined}>
                 {" "}
@@ -115,6 +118,17 @@ export default function KpiRow({ data, period }: { data: GrowthData; period: Per
               </span>
             )}
           </div>
+          {/* AVAILABILITY, SAID ONCE. Why the two platforms have different history — Apple's
+              analytics only reach back about a year, Google's go back further. Stated as its own
+              fact rather than as a date range pinned to a count it does not describe. */}
+          {(iosFirst || androidFirst) && (
+            <div data-testid="kpi-download-history">
+              History differs by store:{" "}
+              {iosFirst ? <>Apple&rsquo;s analytics reach back to <b>{iosFirst}</b></> : null}
+              {iosFirst && androidFirst ? ", " : null}
+              {androidFirst ? <>Google&rsquo;s to <b>{androidFirst}</b></> : null}.
+            </div>
+          )}
         </div>
       </div>
 
