@@ -24,8 +24,45 @@ const daysAgo = (n, h) => { const d = new Date(); d.setDate(d.getDate() - n); d.
 // The email that motivated this work: long enough to have been ellipsised at 180px.
 const LONG_EMAIL = "mickeymaloney23.longaddress@gmail.com";
 
-const A_START = local(daysAgo(1, 20)); // Crossbar — the newer match, 4 reviews
-const B_START = local(daysAgo(2, 19)); // Hattrick — older, 2 reviews
+// THE COMMENTS PANEL DEFAULTS TO THE CURRENT MONDAY–SUNDAY WEEK.
+//
+// `cwin` opens on "week", and reviewsDerive.commentWindow("week") resolves that to
+// monday(today) .. monday(today)+6 — a CALENDAR week, not a rolling seven days. The fixture used
+// to sit at `daysAgo(1)` and `daysAgo(2)`, which asserted that "1 and 2 days ago" is always inside
+// "this week". THAT WAS NEVER TRUE:
+//
+//   Wed–Sun  both rows land inside the week            → green
+//   Tue      the 2-days-ago row is last Sunday          → 4 comment rows, NOT REVIEWED reads 3
+//   Mon      BOTH rows are last week                    → 0 rows, and open() times out waiting
+//            for data-s="done" on a table that rendered nothing
+//
+// It went red on Monday 2026-08-17 for exactly that reason, having been latently broken every
+// Monday and Tuesday since it was written. Nothing in the page changed; the fixture aged into a
+// weekday it could not survive.
+//
+// So the rows are now anchored INSIDE the current week: take the day we want, and clamp it
+// forward to Monday if it would fall into the previous week. A stays strictly newer than B on
+// every weekday (on Mon/Tue they share a date and are separated by the hour), which is what
+// gate 4b's "newest match first" depends on.
+//
+// The hour can sit later than the clock on a Monday. That is immaterial here — commentWindow
+// compares DATES at midnight, and nothing on this path filters a review for being in the future.
+const mondayOf = (d) => {
+  const x = new Date(d);
+  x.setDate(x.getDate() - ((x.getDay() + 6) % 7)); // Sun=0 → 6 days back, Mon=1 → 0
+  x.setHours(0, 0, 0, 0);
+  return x;
+};
+const thisWeek = (backDays, h) => {
+  const today = new Date(); today.setHours(0, 0, 0, 0);
+  const want = new Date(today); want.setDate(want.getDate() - backDays);
+  const d = want < mondayOf(today) ? mondayOf(today) : want;
+  d.setHours(h, 0, 0, 0);
+  return d;
+};
+
+const A_START = local(thisWeek(1, 20)); // Crossbar — the newer match, 4 reviews
+const B_START = local(thisWeek(2, 19)); // Hattrick — older, 2 reviews
 const REV = (id, field, start, stars, email, comment) => ({
   api_id: id, city_name: "Austin", field_title: field,
   manager_first_name: "Troy", manager_last_name: "M", star_rating: stars,
@@ -87,7 +124,32 @@ async function open(page) {
   await page.waitForSelector('.rv-ctab tbody tr [data-s="done"]', { timeout: 15000 });
 }
 
+// THE FIXTURE MUST BE INSIDE THE WINDOW IT DEPENDS ON. Without this, a fixture that drifts out
+// again surfaces as "waitForSelector timeout" — which reads as a slow page and sent the last
+// investigation looking at the dev server, the network and three unrelated commits. It is a
+// harness precondition, so it fails LOUDLY and by name.
+function assertFixtureInWindow() {
+  const today = new Date(); today.setHours(0, 0, 0, 0);
+  const a = mondayOf(today);
+  const b = new Date(a.getFullYear(), a.getMonth(), a.getDate() + 6);
+  const dayOf = (iso) => { const p = iso.slice(0, 10).split("-").map(Number); return new Date(p[0], p[1] - 1, p[2]); };
+  const out = [["A_START", A_START], ["B_START", B_START]].filter(([, iso]) => {
+    const d = dayOf(iso);
+    return d < a || d > b;
+  });
+  if (out.length) {
+    const w = `${a.toDateString()} .. ${b.toDateString()}`;
+    throw new Error(
+      `FIXTURE OUT OF WINDOW: ${out.map(([n, iso]) => `${n}=${iso.slice(0, 10)}`).join(", ")} ` +
+      `falls outside the comments panel's default week (${w}). The page is fine; the fixture drifted.`,
+    );
+  }
+  // A newer than B is what gate 4b's "newest match first" rests on.
+  if (!(A_START > B_START)) throw new Error(`FIXTURE ORDER: A_START ${A_START} must be newer than B_START ${B_START}`);
+}
+
 async function main() {
+  assertFixtureInWindow();
   process.loadEnvFile(".env.local");
   const svc = createClient(process.env.NEXT_PUBLIC_SUPABASE_URL, process.env.SUPABASE_SERVICE_ROLE_KEY, { auth: { persistSession: false } });
   const anon = createClient(process.env.NEXT_PUBLIC_SUPABASE_URL, process.env.NEXT_PUBLIC_SUPABASE_PUBLISHABLE_KEY, { auth: { persistSession: false } });
