@@ -128,6 +128,39 @@ export async function PUT(req: Request, ctx: { params: Promise<{ env: string; id
       supabaseLogStore(),
     );
     if (error) return errToResponse(error);
+
+    // ── WRITE THROUGH TO THE MIRROR ──────────────────────────────────────────────────────────
+    //
+    // mdapi_matches is a read-only MIRROR of MatchDay refreshed by one daily cron (vercel.json:
+    // "0 11 * * *" → /api/sync/cron → mdapi-matches). Every Clubhouse screen reads names from it,
+    // so until that cron runs — up to ~24 hours — a name written here is invisible in Clubhouse
+    // and the UI still shows the old one. Measured on production: 6 of 6 landed Veo name writes
+    // were still absent from the mirror an hour later. That staleness is what made the Veo chip
+    // look unsynced after a SUCCESSFUL write and invited a retry of a name that was already
+    // correct — three of those duplicates are in change_log as `notapplied`.
+    //
+    // ONLY ON LANDED, and only the value the RE-READ returned. `cached` holds the after-state from
+    // recordWrite's own read-back, so this writes what MatchDay actually has, never what we hoped
+    // to send. A mirror claiming a write landed when it did not is worse than a stale one, so a
+    // FAILED / NOT APPLIED / UNKNOWN outcome leaves the row alone.
+    //
+    // ONE ROW, ONE COLUMN. Not a resync, not a cron trigger — the rest of the row keeps whatever
+    // the last real sync put there, and the next sync overwrites this the ordinary way.
+    // PRODUCTION ONLY. mdapi_matches is fed by getMatchdayApiClient() — the PRODUCTION read client
+    // (mdapiMatchesSync.ts:311) — so it holds production api_ids. A staging write carries a
+    // staging id into the same number space and would refresh whatever production match happens to
+    // share it. Gated on the parsed env, not on a config string.
+    if (env === "production" && outcome === "landed" && keys.includes("name")) {
+      const readBack = cached.name;
+      if (typeof readBack === "string") {
+        // Best-effort, like the logging above: the write itself has already landed and reporting it
+        // must not fail over a mirror refresh.
+        const { error: mirrorErr } = await auth.supabase
+          .from("mdapi_matches").update({ name: readBack }).eq("api_id", Number(id));
+        if (mirrorErr) console.warn(`[mirror] mdapi_matches name not refreshed for ${id}: ${mirrorErr.message}`);
+      }
+    }
+
     return Response.json({ ok: true, outcome, logRecorded: logged, match: pickMatch(cached) });
   } catch (e) {
     return errToResponse(e);

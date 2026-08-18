@@ -22,7 +22,7 @@
 // Schedule cards, where a Veo match is the exception among many.
 
 import { useCallback, useEffect, useMemo, useRef, useState } from "react";
-import { nameForVeo, isVeoUnsynced, unsyncedReason } from "@/lib/veoNameSync";
+import { nameForVeo } from "@/lib/veoNameSync";
 import { FULL_EDITOR_ENV } from "@/lib/matchEnv";
 import { supabase } from "@/lib/supabase";
 import { downloadCsv, plural } from "@/components/growth/format";
@@ -141,6 +141,23 @@ export default function VeoMasterSchedule() {
   const [week, setWeek] = useState<VeoWeek | null>(null);
   const [loading, setLoading] = useState(true);
   const [error, setError] = useState<string>("");
+  // THE UNSYNCED MARKER IS SESSION STATE, NOT DERIVED STATE.
+  //
+  // It was derived from (flag, name) and that was wrong twice over. It cannot tell "this write
+  // just failed" from "this predates the feature", so it flagged 38 historical rows nobody
+  // touched — matches toggled through Clubhouse before the name write existed. And because
+  // /api/veo reads the mdapi_matches MIRROR, which lags the write (measured: 6 of 6 landed writes
+  // absent from the mirror an hour later), it also flagged every SUCCESSFUL write, which invited
+  // the operator to hit Retry and send the identical name again. Three such duplicates are in
+  // change_log as `notapplied`.
+  //
+  // Held for the life of the page: a marker means THIS page tried a write and it did not land.
+  // Navigating away clears it, which is correct — the operator can toggle off and on again.
+  const [nameFailed, setNameFailed] = useState<Map<number, string>>(new Map());
+  // WHAT WE ACTUALLY WROTE, so the next toggle diffs against reality rather than the lagging
+  // mirror. Without this, toggling on then straight off computes from the stale (un-emoji'd) name,
+  // finds no 🎥 to strip, sends nothing, and leaves the camera on a match whose flag is off.
+  const [wroteName, setWroteName] = useState<Map<number, string>>(new Map());
   const [view, setView] = useState<View>("schedule");
   const [busy, setBusy] = useState(false);
   // "" = current week; otherwise a date (YYYY-MM-DD) within the selected week.
@@ -235,18 +252,37 @@ export default function VeoMasterSchedule() {
       const j = (await res.json().catch(() => ({}))) as { outcome?: string; error?: string };
       if (!res.ok) {
         setError(`Camera mark not written to the match name: ${j.error ?? `HTTP ${res.status}`}`);
+        markFailed(apiId, enabled);
         return { outcome: "FAILED", sent: edit.next };
       }
       // A 2xx IS NOT PROOF. The route classifies from a read-back; anything but `landed` is a
       // failure to surface, not a success to assume.
       const outcome = (j.outcome ?? "unknown").toUpperCase();
-      if (outcome !== "LANDED") setError(`Camera mark reported ${outcome} — the match name may not have changed.`);
+      if (outcome === "LANDED") {
+        // Remember what landed. The mirror will not agree for a while, and the next toggle must
+        // not be computed from a name we know is out of date.
+        setWroteName((m) => new Map(m).set(apiId, edit.next));
+        setNameFailed((m) => { const n = new Map(m); n.delete(apiId); return n; });
+      } else {
+        setError(`Camera mark reported ${outcome} — the match name may not have changed.`);
+        markFailed(apiId, enabled);
+      }
       return { outcome, sent: edit.next };
     } catch {
       setError("Network error writing the match name — the camera flag is set, the name is not.");
+      markFailed(apiId, enabled);
       return { outcome: "FAILED", sent: edit.next };
     }
   }
+
+  const markFailed = (apiId: number, enabled: boolean) =>
+    setNameFailed((m) => new Map(m).set(apiId, enabled ? "the 🎥 was not added" : "the 🎥 is still there"));
+
+  // The name this page believes MatchDay holds: what we last wrote, else the mirror's copy.
+  const liveName = useCallback(
+    (m: VeoMatch) => wroteName.get(m.apiId) ?? m.rawName,
+    [wroteName],
+  );
 
   // Optimistic: patch local state, POST, refetch on success / revert on failure.
   async function toggleIntent(apiId: number, enabled: boolean) {
@@ -259,7 +295,9 @@ export default function VeoMasterSchedule() {
     const ok = await post("/api/veo/intent", { matchApiId: apiId, enabled });
     if (ok) {
       // Then the name. A failure here does NOT roll the flag back.
-      if (match) await writeName(apiId, match.rawName, enabled);
+      // A new attempt supersedes whatever the last one reported.
+      setNameFailed((m) => { const n = new Map(m); n.delete(apiId); return n; });
+      if (match) await writeName(apiId, liveName(match), enabled);
       await load(weekRef); // refetch the DISPLAYED week, not "now" — re-derives the synced state
     } else {
       setWeek(snapshot);
@@ -275,7 +313,7 @@ export default function VeoMasterSchedule() {
     if (!match) return;
     setBusy(true);
     setError("");
-    await writeName(apiId, match.rawName, match.veo);
+    await writeName(apiId, liveName(match), match.veo);
     await load(weekRef);
     setBusy(false);
   }
@@ -423,7 +461,7 @@ export default function VeoMasterSchedule() {
       ) : error && !week ? (
         <div className="vms-card"><div className="vms-state">{error} <button type="button" className="vms-btn" onClick={() => { setLoading(true); void load(weekRef); }}>Retry</button></div></div>
       ) : !week || !fweek ? null : view === "schedule" ? (
-        <ScheduleView week={fweek} busy={busy} onToggle={toggleIntent} onRetry={retryName} onOpen={openCard} selectedId={drawerId} />
+        <ScheduleView week={fweek} busy={busy} onToggle={toggleIntent} onRetry={retryName} onOpen={openCard} selectedId={drawerId} failed={nameFailed} />
       ) : (
         <VeoView week={fweek} stats={stats!} busy={busy} onCameras={setCameras} needEmoji={needEmoji} needClubhouse={needClubhouse} onExport={exportWorklist} />
       )}
@@ -465,8 +503,10 @@ const CamIcon = () => (
 // HTML) that stops propagation so toggling coverage never opens the drawer. The
 // open card is marked by a ring; nothing else is dimmed — the week stays legible
 // beside the pushed-open drawer.
-function ScheduleView({ week, busy, onToggle, onRetry, onOpen, selectedId }: {
+function ScheduleView({ week, busy, onToggle, onRetry, onOpen, selectedId, failed }: {
   week: VeoWeek; busy: boolean; onToggle: (id: number, en: boolean) => void; onRetry: (id: number) => void;
+  // Session-scoped: match id -> why the last attempt on THIS page did not land.
+  failed: Map<number, string>;
   onOpen: (id: number) => void; selectedId: number | null;
 }) {
   const veoKey = (e: React.KeyboardEvent, id: number, en: boolean) => {
@@ -494,18 +534,19 @@ function ScheduleView({ week, busy, onToggle, onRetry, onOpen, selectedId }: {
                         aria-label={`${m.time} ${m.venue} — edit match ${m.apiId}`} onClick={() => onOpen(m.apiId)}>
                         <div className="vms-slot-t">{m.time}</div>
                         <div className="vms-slot-v">{m.venue}</div>
-                        {/* UNSYNCED IS DERIVED, never stored — recomputed from the flag and the
-                            raw name on every render, so it survives navigation, cannot drift from
-                            what it describes, and needs no column. */}
+                        {/* THE MARKER IS THIS SESSION'S, not the data's. It appears only for a
+                            write THIS page attempted and did not land — never for history, and
+                            never for a write that succeeded but whose result the mirror has not
+                            caught up with yet. */}
                         {(() => {
-                          const off = isVeoUnsynced(m.rawName, m.veo);
+                          const off = failed.has(m.apiId);
                           return (
                             <span role="switch" data-testid="veo-badge" data-veo={m.apiId} tabIndex={0}
                               data-unsynced={off ? "true" : "false"}
                               className={"vms-cam" + (m.veo ? " vms-on" : "") + (off ? " vms-unsynced" : "")}
                               aria-checked={m.veo}
                               aria-label={`Veo camera for match ${m.apiId}${off ? " — name not updated" : ""}`}
-                              title={off ? (unsyncedReason(m.rawName, m.veo) ?? "") : m.veo ? "Remove Veo" : "Assign Veo"}
+                              title={off ? `name not updated — ${failed.get(m.apiId)}` : m.veo ? "Remove Veo" : "Assign Veo"}
                               onClick={(e) => { e.stopPropagation(); if (!busy) onToggle(m.apiId, !m.veo); }}
                               onKeyDown={(e) => !busy && veoKey(e, m.apiId, !m.veo)}>
                               <CamIcon />Veo
@@ -513,7 +554,7 @@ function ScheduleView({ week, busy, onToggle, onRetry, onOpen, selectedId }: {
                             </span>
                           );
                         })()}
-                        {isVeoUnsynced(m.rawName, m.veo) && (
+                        {failed.has(m.apiId) && (
                           <span className="vms-unsyncrow" data-testid="veo-unsynced">
                             <span className="vms-unsynctxt">name not updated</span>
                             {/* A HUMAN CLICKS THIS. Nothing retries on its own — a duplicate name

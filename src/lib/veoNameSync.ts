@@ -83,27 +83,14 @@ export function nameForVeo(name: string | null | undefined, enabled: boolean): N
   return enabled ? nameOn(name) : nameOff(name);
 }
 
-/**
- * THE UNSYNCED STATE IS DERIVED, NEVER STORED.
- *
- * No column, no migration, nothing for anyone to apply — and nothing that can drift from the thing
- * it describes. It is recomputed from the two facts themselves on every render, so it survives
- * navigation for free and self-heals the moment either side changes.
- *
- * It reads today's 166 mid-string cameras as SYNCED, which is correct: the flag is on and the name
- * carries a camera. Their position is not this feature's business.
- */
-export function isVeoUnsynced(name: string | null | undefined, enabled: boolean): boolean {
-  // Unknown name => nothing to claim. Reporting "unsynced" here would put a warning dot on every
-  // chip the moment a payload lacked the field.
-  if (typeof name !== "string" || name === "") return false;
-  return enabled !== name.includes(CAMERA);
-}
-
-/** Why the chip is unsynced, in the words it should say. */
-export function unsyncedReason(name: string | null | undefined, enabled: boolean): string | null {
-  if (!isVeoUnsynced(name, enabled)) return null;
-  return enabled
-    ? "name not updated — the 🎥 was not added"
-    : "name not updated — the 🎥 is still there";
-}
+// THERE IS NO DERIVED "UNSYNCED" PREDICATE HERE, DELIBERATELY.
+//
+// isVeoUnsynced(name, enabled) used to live here and the chip rendered from it. It could not tell
+// a write that JUST FAILED from a row that predates this feature, so it flagged 38 historical
+// matches nobody had touched. Worse, /api/veo reads the mdapi_matches MIRROR, which lags a write —
+// 6 of 6 landed writes were still absent from it an hour later — so it also flagged every
+// SUCCESSFUL write and invited a Retry that re-sent the identical name. Three of those duplicates
+// are in change_log as `notapplied`.
+//
+// "Did the write I just made land?" is a fact about a session, not about a row. It lives in
+// component state in VeoMasterSchedule and dies with the page, which is the correct lifetime.

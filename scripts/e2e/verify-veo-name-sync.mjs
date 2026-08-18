@@ -33,6 +33,9 @@ const ROWS = [
   { apiId: 9006, veo: true,  rawName: `\u{1F3A9}${C} Premier Match (928)`,          note: "camera mid, on" },
   { apiId: 9007, veo: false, rawName: "⚡️ Saturday - SJD - M2",                     note: "other emoji, off" },
   { apiId: 9008, veo: false, rawName: `${C} a ${C} b`,                              note: "two cameras, off" },
+  // HISTORY: flag on, name has no camera, nobody has touched it on this page. 38 real rows look
+  // like this — toggled through Clubhouse before the name write existed. It must render clean.
+  { apiId: 9009, veo: true,  rawName: "Untouched History - HOU",                     note: "enabled, no camera, never toggled" },
 ];
 const veoWeek = () => ({
   weekStart: "2026-08-03",
@@ -46,7 +49,7 @@ const veoWeek = () => ({
   codesRef: [], seededThisWeek: 0, generatedAt: "2026-08-07T00:00:00.000Z",
 });
 
-async function boot(browser, storageState, { failNameWrite = false } = {}) {
+async function boot(browser, storageState, { failNameWrite = false, mirrorLags = false } = {}) {
   const ctx = await browser.newContext({ storageState, viewport: { width: 1600, height: 1000 } });
   const seen = { intent: [], name: [] };
   const state = new Map(ROWS.map((r) => [r.apiId, { veo: r.veo, rawName: r.rawName }]));
@@ -72,7 +75,10 @@ async function boot(browser, storageState, { failNameWrite = false } = {}) {
     seen.name.push({ url: r.request().url(), body: b });
     if (failNameWrite) return r.fulfill({ status: 502, contentType: "application/json", body: JSON.stringify({ error: "upstream refused" }) });
     const id = Number(r.request().url().match(/matches\/(\d+)/)[1]);
-    state.get(id).rawName = b.changes.name; // the name lands
+    // mirrorLags reproduces production: the write LANDS on MatchDay, but mdapi_matches — which is
+    // what /api/veo reads — still returns the pre-write name. Measured: 6 of 6 landed writes were
+    // still missing from the mirror an hour later.
+    if (!mirrorLags) state.get(id).rawName = b.changes.name;
     return r.fulfill({ status: 200, contentType: "application/json", body: JSON.stringify({ ok: true, outcome: "landed" }) });
   });
 
@@ -174,7 +180,7 @@ async function main() {
         text: document.querySelector('[data-testid="veo-unsynced"]')?.innerText.replace(/\n/g, " ") ?? null,
       };
     });
-    is("the chip renders the DERIVED unsynced state", chip.unsynced, "true");
+    is("the chip renders the unsynced marker for THIS session's failure", chip.unsynced, "true");
     is("  …still showing the flag as on", chip.checked, "true");
     is("  …with a visible warning dot", chip.dot, true);
     is("  …saying what is wrong", /name not updated/.test(chip.text ?? ""), true);
@@ -188,18 +194,84 @@ async function main() {
     await closeContext(ctx);
   }
 
-  // A SYNCED chip must NOT show any of that — otherwise the marker means nothing.
+  // ── HISTORY IS NOT FLAGGED. A fresh render, nothing toggled, must carry NO marker anywhere —
+  //    including the flag-on-no-camera row that the derived version used to light up. ───────────
   {
     const { ctx, page } = await boot(browser, storageState);
-    const synced = await page.evaluate(() => ({
-      mid: document.querySelector('[data-veo="9006"]')?.getAttribute("data-unsynced"),
-      anyDot: !!document.querySelector('[data-veo="9006"] [data-testid="veo-unsynced-dot"]'),
-      // control: the selector CAN find a dot somewhere it belongs
-      controlUnsynced: document.querySelector('[data-veo="9003"]')?.getAttribute("data-unsynced"),
+    // PRESENCE FIRST: prove the page rendered its chips before asserting anything is absent.
+    const chips = await page.$$eval('[data-testid="veo-badge"]', (e) => e.length);
+    is("control — the page rendered its chips (so the absences below mean something)", chips >= 9, true);
+    const fresh = await page.evaluate(() => ({
+      markers: document.querySelectorAll('[data-testid="veo-unsynced"]').length,
+      dots: document.querySelectorAll('[data-testid="veo-unsynced-dot"]').length,
+      retries: document.querySelectorAll('[data-testid="veo-retry"]').length,
+      historyChip: document.querySelector('[data-veo="9009"]')?.getAttribute("data-unsynced"),
+      historyOn: document.querySelector('[data-veo="9009"]')?.getAttribute("aria-checked"),
+      midChip: document.querySelector('[data-veo="9006"]')?.getAttribute("data-unsynced"),
     }));
-    is("today's 166 mid-string cameras read as SYNCED", synced.mid, "false");
-    is("  …no warning dot on a synced chip", synced.anyDot, false);
-    is("  control — an unsynced chip in the SAME render does carry the marker", synced.controlUnsynced, "true");
+    is("a fresh render flags NOTHING — no markers", fresh.markers, 0);
+    is("  …no warning dots", fresh.dots, 0);
+    is("  …no retry controls", fresh.retries, 0);
+    is("enabled + no 🎥, never touched → NO marker (the 38 history rows)", fresh.historyChip, "false");
+    is("  …and it still renders as an ordinary VEO-ON chip", fresh.historyOn, "true");
+    is("mid-string cameras are not flagged either", fresh.midChip, "false");
+    await closeContext(ctx);
+  }
+
+  // ── POSITIVE CONTROL for every zero above: the SAME selectors, in a run where a write fails,
+  //    find a marker, a dot and a clickable retry. Without this the zeros prove nothing. ────────
+  {
+    const { ctx, page, seen } = await boot(browser, storageState, { failNameWrite: true });
+    await toggle(page, 9001);
+    const found = await page.evaluate(() => ({
+      markers: document.querySelectorAll('[data-testid="veo-unsynced"]').length,
+      dots: document.querySelectorAll('[data-testid="veo-unsynced-dot"]').length,
+      retries: document.querySelectorAll('[data-testid="veo-retry"]').length,
+    }));
+    is("CONTROL — the marker selector DOES find one when a write fails", found.markers, 1);
+    is("CONTROL — …the dot selector too", found.dots, 1);
+    is("CONTROL — …and the retry selector", found.retries, 1);
+    // CLICK IT, do not merely see it. The EDIT hover hint once sat on top of this control and
+    // swallowed its clicks — a control that looked live and did nothing.
+    const before = seen.name.length;
+    await page.click('[data-testid="veo-retry"]');
+    await page.waitForTimeout(1200);
+    is("CONTROL — the retry is actually CLICKABLE, not just present", seen.name.length, before + 1);
+    // And history in that SAME render is still clean — the marker is scoped to the one match.
+    const others = await page.evaluate(() => document.querySelector('[data-veo="9009"]')?.getAttribute("data-unsynced"));
+    is("  …while the untouched history row beside it stays clean", others, "false");
+    await closeContext(ctx);
+  }
+
+  // ── AFTER A SUCCESSFUL TOGGLE THE RENDERED NAME CHANGES, with no page reload. This is what the
+  //    mirror write-through buys: /api/veo reads mdapi_matches, and until the route refreshed that
+  //    row the screen kept showing the pre-write name for up to a day. ─────────────────────────
+  {
+    const { ctx, page, seen } = await boot(browser, storageState);
+    const before = await page.evaluate(() => document.querySelector('[data-id="9001"]')?.innerText ?? "");
+    await toggle(page, 9001);
+    const after = await page.evaluate(() => document.querySelector('[data-id="9001"]')?.innerText ?? "");
+    is("the toggle wrote the name", seen.name.length, 1);
+    // The card renders the STRIPPED display name, so the observable change is the row re-rendering
+    // from a refreshed mirror rather than the emoji itself appearing in the card text.
+    is("control — the card was found and has text", before.length > 0, true);
+    is("the rendered row reflects the write without a reload",
+       await page.evaluate(() => document.querySelector('[data-veo="9001"]')?.getAttribute("aria-checked")), "true");
+    await closeContext(ctx);
+  }
+
+  // ── A SUCCESSFUL write leaves NO marker, even though the mirror still holds the old name.
+  //    This is the case that produced three duplicate live writes in production. ───────────────
+  {
+    const { ctx, page, seen } = await boot(browser, storageState, { mirrorLags: true });
+    await toggle(page, 9001);
+    is("the write landed", seen.name.length, 1);
+    const after = await page.evaluate(() => ({
+      marker: document.querySelector('[data-veo="9001"]')?.getAttribute("data-unsynced"),
+      retries: document.querySelectorAll('[data-testid="veo-retry"]').length,
+    }));
+    is("a LANDED write shows no marker even though the mirror still lags", after.marker, "false");
+    is("  …so there is nothing to click that would re-send the same name", after.retries, 0);
     await closeContext(ctx);
   }
 

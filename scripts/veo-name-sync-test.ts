@@ -7,7 +7,7 @@
 //
 //   NODE_OPTIONS="--conditions=react-server" npx tsx scripts/veo-name-sync-test.ts
 
-import { nameOn, nameOff, nameForVeo, isVeoUnsynced, unsyncedReason, CAMERA, type NameEdit } from "../src/lib/veoNameSync";
+import { nameOn, nameOff, nameForVeo, CAMERA, type NameEdit } from "../src/lib/veoNameSync";
 
 // NEVER CAST AN EDIT TO {change:true}. A regression that returns "no change" would then throw on
 // `.next` and the suite would die with a stack trace instead of naming the assertion that broke —
@@ -81,17 +81,16 @@ console.log("\na MISSING name never produces a write (rawName is newly carried):
 is("undefined, on", nameForVeo(undefined, true), { change: false, reason: "already-marked" });
 is("undefined, off", nameForVeo(undefined, false), { change: false, reason: "not-marked" });
 is("empty string, on", nameForVeo("", true), { change: false, reason: "already-marked" });
-is("null is not treated as unsynced", isVeoUnsynced(null, true), false);
-
-console.log("\nthe DERIVED unsynced state:");
-is("flag on + no camera = unsynced", isVeoUnsynced(PLAIN, true), true);
-is("flag off + a camera = unsynced", isVeoUnsynced(LEAD, false), true);
-is("flag on + camera at index 0 = synced", isVeoUnsynced(LEAD, true), false);
-is("flag on + camera at index > 0 = SYNCED (today's 166)", isVeoUnsynced(MID, true), false);
-is("flag off + no camera = synced", isVeoUnsynced(PLAIN, false), false);
-is("the reason names the missing direction", unsyncedReason(PLAIN, true), "name not updated — the 🎥 was not added");
-is("the reason names the lingering direction", unsyncedReason(LEAD, false), "name not updated — the 🎥 is still there");
-is("synced has no reason", unsyncedReason(MID, true), null);
+// THE DERIVED UNSYNCED ASSERTIONS ARE GONE, with the predicate they described.
+//
+// They pinned isVeoUnsynced(name, enabled) — "flag and name disagree ⇒ show the marker". That rule
+// was wrong in production for two reasons neither the rule nor its tests could see: it flagged 38
+// historical rows nobody had touched, and because /api/veo reads a mirror that lags the write, it
+// flagged every SUCCESSFUL write too, prompting a Retry that re-sent the identical name (three such
+// duplicates are in change_log as `notapplied`).
+//
+// "Did the write I just made land?" is now session state in the component, and it is asserted where
+// it lives — verify-veo-name-sync.mjs drives a real failure and a real fresh render.
 
 // A WRITE THIS MODULE PRODUCES MUST BE THE SMALLEST ONE. Every {change:true} must actually differ
 // from its input — a "change" equal to the input would be a live write that alters nothing.
