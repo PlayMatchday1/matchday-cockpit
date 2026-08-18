@@ -128,11 +128,20 @@ export function canEditCredits(appUser: AppUser | null | undefined): boolean {
   return !!appUser && appUser.can_edit_credits === true;
 }
 
-// MANAGE PROMOS (Phase 18b) — INDEPENDENT of EDIT MATCHES and MANAGE PLAYERS. Courtesy gate
-// for the Promo Codes screen + its create affordance; the server enforces it regardless.
+// MANAGE PROMOS (Phase 18b) — INDEPENDENT of EDIT MATCHES and MANAGE PLAYERS. This is the WRITE
+// permission: create, edit, delete, and sight of who redeemed a code (that view carries player
+// contact details). It gates AFFORDANCES, never the promo screen itself — see canReadPromos.
+//
+// NOT WIDENED, DELIBERATELY. It does not include is_admin: five of six admins do not hold this
+// flag, and reading the codes is not a power any of them should have to be granted twice.
 export function canManagePromos(appUser: AppUser | null | undefined): boolean {
   return !!appUser && appUser.can_manage_promos === true && appUser.can_access_matchops === true;
 }
+
+// READ PROMO CODES — re-exported so components keep importing their predicates from one place.
+// The decision itself lives in promoAccess.ts with no imports, because useAuth cannot be loaded
+// outside a browser and an untestable gate is how the last one drifted. See that file for why.
+export { canReadPromos } from "./promoAccess";
 
 export function canAccess(
   appUser: AppUser | null,

@@ -10,6 +10,7 @@ import { readdirSync, readFileSync, statSync } from "node:fs";
 import { join } from "node:path";
 import { adminGate, deriveMatchOpsFlags, type AppUserRow } from "../src/lib/adminAuth";
 import { matchOpsReadGate, E2E_SERVICE_EMAIL } from "../src/lib/matchOpsAuth";
+import { canReadPromos } from "../src/lib/promoAccess";
 import { cityManagerGate, assertCityScope } from "../src/lib/cityManagerAuth";
 
 let PASS = 0, FAIL = 0;
@@ -426,6 +427,72 @@ console.log("\n/ban outcome reporting (a 2xx is not proof):");
   is("ban re-reads and returns LANDED / NOT APPLIED", /"NOT APPLIED"/.test(s) && /landed/.test(s), true); }
 { const s = readFileSync("src/components/PlayerLookup.tsx", "utf8");
   is("the ban UI refuses to report success on landed:false", /j\?\.landed === false/.test(s), true); }
+
+// ── THE PROMO CLIENT GATE ────────────────────────────────────────────────────────────────────
+//
+// The screen was gated on canManagePromos — the WRITE flag — while /api/promos/list enforced the
+// Match Ops READ gate. One account in the estate holds the write flag, so fifteen people (five of
+// them admins) were shown a refusal for a list the server would have returned. These assertions
+// pin the client predicate TO the server gate, so the two cannot drift apart again.
+console.log("\ncanReadPromos — the CLIENT mirror of matchOpsReadGate:");
+const CITY_MGR = { id: "u-cm", is_admin: false, is_city_manager: true, city_identifier: "ATX", can_access_matchops: true };
+const SHAPES: [string, Record<string, unknown>, string][] = [
+  ["admin + manage-promos (Ryan)", ADMIN, "admin@playmatchday.com"],
+  ["admin WITHOUT manage-promos (5 of 6 admins)", PROMO_ADMIN, "pa@playmatchday.com"],
+  ["Deonna — matchops, no promos", DEONNA, DEONNA_EMAIL],
+  ["matchops and nothing else", MATCHOPS_ONLY, "ro@playmatchday.com"],
+  ["no flags at all", NOFLAGS, "nobody@playmatchday.com"],
+  ["E2E service account", E2E, E2E_SERVICE_EMAIL],
+  ["city manager (confined to /city)", CITY_MGR, "cm@playmatchday.com"],
+];
+for (const [label, row, email] of SHAPES) {
+  const server = matchOpsReadGate(row as AppUserRow, email).ok;
+  const client = canReadPromos(row);
+  is(`  ${label} — client agrees with the server (${server ? "may read" : "refused"})`, client, server);
+}
+
+console.log("\nthe promo SCREEN opens on the read; the WRITE flag is a separate question:");
+is("Deonna may READ promo codes", canReadPromos(DEONNA), true);
+is("Deonna may NOT write them", deriveMatchOpsFlags(DEONNA).canManagePromos, false);
+is("an admin without manage-promos may READ", canReadPromos(PROMO_ADMIN), true);
+is("…and still may NOT write", deriveMatchOpsFlags(PROMO_ADMIN).canManagePromos, false);
+is("a no-flags account may NOT read", canReadPromos(NOFLAGS), false);
+is("the write flag was NOT widened by is_admin", deriveMatchOpsFlags({ is_admin: true, can_access_matchops: true }).canManagePromos, false);
+
+console.log("\nthe rail and the screen are wired to the read, not the write:");
+{
+  const sec = readFileSync("src/app/(internal)/match-ops/sections.tsx", "utf8");
+  const promoItem = sec.split("\n").find((l) => /key: "promos"/.test(l)) ?? "";
+  is("the Promo Codes rail item is gated on matchops", /access: "matchops"/.test(promoItem), true);
+  is("…and no longer on the write grant", /access: "promos"/.test(promoItem), false);
+  // POSITIVE CONTROL: the same line-scan proves it can see an access clause at all.
+  is("  control — the scan found the rail item and its access clause", /access: "/.test(promoItem), true);
+  is("the dead 'promos' branch is gone from visibleSections", /s\.access === "promos"/.test(sec), false);
+  is("…and 'promos' is off the MatchOpsAccess union (it would silently hide the item)", /\| "promos"/.test(sec), false);
+}
+{
+  const ui = readFileSync("src/components/PromoCodes.tsx", "utf8");
+  is("the screen-level denial keys on canReadPromos", /!mayRead/.test(ui), true);
+  is("…and NOT on the write flag", /if \(appUser && !mayManage\)/.test(ui), false);
+  is("mayManage is still derived (it gates the affordances)", /const mayManage = canManagePromos\(appUser\)/.test(ui), true);
+  is("'+ New promo code' is DISABLED, not hidden, without the flag", /data-testid="promo-new" disabled=\{!mayManage\}/.test(ui), true);
+  is("Edit is disabled without the flag", /data-testid="detail-edit" disabled=\{!p \|\| !mayManage\}/.test(ui), true);
+  is("Delete is disabled without the flag", /data-testid="detail-delete" disabled=\{!mayManage\}/.test(ui), true);
+  is("Restore is disabled without the flag", /data-testid="detail-restore" disabled=\{!mayManage\}/.test(ui), true);
+  is("each greyed control carries a reason", /title=\{mayManage \? undefined : noWrite\}/.test(ui), true);
+}
+
+console.log("\nthe USES panel is UNCHANGED — admin AND manage-promos, because it shows contact details:");
+{
+  const src = readFileSync(R("promos/uses/[id]"), "utf8");
+  is("uses/[id] still uses authenticateAdmin", /authenticateAdmin\(req\)/.test(src), true);
+  is("uses/[id] still requires canManagePromos on top", /!auth\.canManagePromos/.test(src), true);
+  is("uses/[id] did NOT move to the Match Ops read gate", /authenticateMatchOpsRead/.test(src), false);
+  is("Deonna is refused it by the admin gate", adminGate(DEONNA).ok, false);
+  is("an admin without manage-promos is refused it by the flag", deriveMatchOpsFlags(PROMO_ADMIN).canManagePromos, false);
+  const ui = readFileSync("src/components/PromoCodes.tsx", "utf8");
+  is("the panel RENDERS the refusal rather than swallowing it", /data-testid="uses-error">\{d\.error\}/.test(ui), true);
+}
 
 console.log(`\n${PASS} passed, ${FAIL} failed`);
 process.exit(FAIL === 0 ? 0 : 1);

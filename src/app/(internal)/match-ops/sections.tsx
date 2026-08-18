@@ -11,7 +11,7 @@
 // at zero (a false zero is worse than no badge).
 
 import type { AppUser, PageName } from "@/lib/useAuth";
-import { canAccess, canManagePromos } from "@/lib/useAuth";
+import { canAccess } from "@/lib/useAuth";
 
 // Phase 24 — Match Ops is TWO TABS: what you do today, and what you manage over weeks.
 // THE ROUTES DID NOT MOVE. Every href is still /match-ops/*, there is still ONE route group and
@@ -24,9 +24,13 @@ export type MatchOpsTab = "daily" | "back";
 export type MatchOpsGroup =
   | "Operations" | "Conversations"                 // daily
   | "Scheduling" | "Fields" | "People" | "System"; // back office
-// "promos" is a WRITE-grant gate (can_manage_promos), not a page-read gate — handled specially
+// PROMO CODES IS A MATCH OPS READ. It was gated on "promos" (can_manage_promos) until the client
+// caught up with Phase 23 Part D, which opened /api/promos/list, /detail, /check, /fields and
+// /matches to Match Ops. One account in the estate holds that write flag, so the rail hid the page
+// from fifteen people the server would have served — five of them admins. The WRITE controls on
+// the screen carry the flag now; the link does not.
 // in visibleSections. The Promo Codes screen ships behind MANAGE PROMOS (Phase 18b).
-export type MatchOpsAccess = "matchops" | "tech" | "chats" | "admin" | "finance" | "promos";
+export type MatchOpsAccess = "matchops" | "tech" | "chats" | "admin" | "finance";
 
 // WHAT A RAIL DRAWS, independent of who may open it. The rail, the mobile app bar and the screen
 // sheet render THIS; Match Ops adds its own permission/tab fields on top. Splitting the shape out
@@ -60,7 +64,7 @@ export const MATCH_OPS_SECTIONS: MatchOpsSection[] = [
   // DAILY OPS — today's rhythm: 6 items in 2 groups.
   { key: "gameday", section: "daily", group: "Operations", label: "Gameday Ops", href: "/match-ops/gameday", desc: "Today's matches, soonest first — what's about to go wrong", access: "matchops", icon: <I><circle cx="12" cy="12" r="9" /><path d="M12 7v5l3 2" /></I> },
   { key: "player-lookup", section: "daily", group: "Operations", label: "Player Lookup", href: "/match-ops/player-lookup", desc: "One player — account, membership, matches; add or remove them", access: "matchops", icon: <I><circle cx="11" cy="8" r="3.6" /><path d="M4 20a7 7 0 0 1 12.2-4.6" /><circle cx="17.5" cy="16.5" r="3.2" /><path d="M19.8 18.8 22 21" /></I> },
-  { key: "promos", section: "daily", group: "Operations", label: "Promo Codes", href: "/match-ops/promos", desc: "Discount codes — live and past; create a new one", access: "promos", icon: <I><path d="M8.5 3.5h7l5 5v7l-5 5h-7l-5-5v-7z" /><circle cx="12" cy="12" r="2.4" /></I> },
+  { key: "promos", section: "daily", group: "Operations", label: "Promo Codes", href: "/match-ops/promos", desc: "Discount codes — live and past; create a new one", access: "matchops", icon: <I><path d="M8.5 3.5h7l5 5v7l-5 5h-7l-5-5v-7z" /><circle cx="12" cy="12" r="2.4" /></I> },
   { key: "reviews", section: "daily", group: "Operations", label: "Reviews", href: "/match-ops/reviews", desc: "Per-match ratings and manager standings", access: "matchops", icon: <I><path d="m12 4 2.4 4.9 5.4.8-3.9 3.8.9 5.4-4.8-2.6-4.8 2.6.9-5.4L4.2 9.7l5.4-.8z" /></I> },
   { key: "match-chats", section: "daily", group: "Conversations", label: "Match Chats", href: "/match-ops/match-chats", desc: "One WhatsApp group per match", access: "chats", icon: <I><path d="M21 11.5a8.4 8.4 0 0 1-9 8.4 8.9 8.9 0 0 1-3.8-.9L3 21l1.9-5.1A8.4 8.4 0 0 1 12 3.1a8.4 8.4 0 0 1 9 8.4z" /></I> },
   { key: "player-chats", section: "daily", group: "Conversations", label: "Player Chats", href: "/match-ops/player-chats", desc: "1:1 threads with players", access: "chats", icon: <I><circle cx="9" cy="8" r="3.4" /><path d="M2.5 20a6.5 6.5 0 0 1 13 0" /><path d="M17 7.5a3 3 0 0 1 0 6M18.5 20a6 6 0 0 0-3-5.2" /></I>, badge: "awaiting" },
@@ -85,7 +89,6 @@ export function visibleSections(
   return MATCH_OPS_SECTIONS.filter((s) =>
     (tab === undefined || s.section === tab) &&
     (s.access === "admin" ? !!appUser?.is_admin
-     : s.access === "promos" ? canManagePromos(appUser) // WRITE-grant gate, not a page-read gate
      : canAccess(appUser ?? null, s.access as PageName)),
   );
 }

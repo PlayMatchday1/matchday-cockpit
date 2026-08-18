@@ -11,7 +11,7 @@
 import { useCallback, useEffect, useMemo, useRef, useState } from "react";
 import { groupUses, byTime, money, type UseRow } from "@/lib/promoUsesModel";
 import { supabase } from "@/lib/supabase";
-import { useAuth, canManagePromos } from "@/lib/useAuth";
+import { useAuth, canManagePromos, canReadPromos } from "@/lib/useAuth";
 import {
   type PromoRow, type PromoState, type DiscountType, type TargetUserType, type TargetMatchType,
   promoState, promoBucket, discountLabel, capLabel, leftLabel, leftTone, usageLine, createSummary,
@@ -101,7 +101,14 @@ function redeemedMobile(st: RedeemState): string {
 
 export default function PromoCodes() {
   const { appUser } = useAuth();
+  // TWO PERMISSIONS, TWO JOBS. mayRead decides whether the SCREEN opens — it mirrors what
+  // /api/promos/list enforces, so nobody is refused a list the server would hand them. mayManage
+  // decides whether the WRITE controls work, and it is the only thing it decides now.
+  const mayRead = canReadPromos(appUser);
   const mayManage = canManagePromos(appUser);
+  // Said once, wherever a write control is greyed. DISABLED AND EXPLAINED, not hidden: someone who
+  // cannot create a code still needs to know the capability exists and who to ask for it.
+  const noWrite = "You have read access to promo codes. Creating, editing and deleting them needs MANAGE PROMOS — ask an admin.";
 
   const [q, setQ] = useState("");
   const [deferredQ, setDeferredQ] = useState("");
@@ -257,8 +264,10 @@ export default function PromoCodes() {
 
   const onCreated = (row: PromoRow) => { setJustCreated((j) => [{ ...row }, ...j]); setCreateOpen(false); say(`Created ${row.code}`); };
 
-  if (appUser && !mayManage) {
-    return <div className="promo"><style>{CSS}</style><div className="wrap"><div className="empty" data-testid="promo-no-access"><b>You do not hold MANAGE PROMOS</b>This screen and its actions require the promo-code permission.</div></div></div>;
+  // THE SCREEN OPENS ON THE READ, NOT THE WRITE. This branch used to key on mayManage, which
+  // refused fifteen of sixteen accounts a list /api/promos/list would have returned.
+  if (appUser && !mayRead) {
+    return <div className="promo"><style>{CSS}</style><div className="wrap"><div className="empty" data-testid="promo-no-access"><b>You do not have Match Ops access</b>Promo codes are part of Match Ops. Ask an admin to grant it.</div></div></div>;
   }
 
   return (
@@ -271,7 +280,12 @@ export default function PromoCodes() {
               <h1 className="h1">Promo Codes</h1>
               <p className="hsub">Live codes and past ones. Search reaches both — there are 6,260, so search is faster than scroll.</p>
             </div>
-            <button className="btn primary" data-testid="promo-new" onClick={() => setCreateOpen(true)}>+ New promo code</button>
+            <span className="newwrap">
+              <button className="btn primary" data-testid="promo-new" disabled={!mayManage}
+                title={mayManage ? undefined : noWrite}
+                onClick={() => mayManage && setCreateOpen(true)}>+ New promo code</button>
+              {!mayManage && <span className="whynot" data-testid="promo-new-why">Needs MANAGE PROMOS</span>}
+            </span>
           </div>
           <div className="srow">
             <span className="sbox">
@@ -332,6 +346,7 @@ export default function PromoCodes() {
 
       {detailId != null && <DetailDrawer id={detailId} onClose={() => setDetailId(null)}
         onEdit={(row) => { setDetailId(null); setEditing(row); }}
+        mayManage={mayManage} noWrite={noWrite}
         onChanged={() => setReloadKey((k) => k + 1)} />}
       {createOpen && <CreateDrawer onClose={() => setCreateOpen(false)} onCreated={onCreated} />}
       {editing && <CreateDrawer editing={editing} onClose={() => setEditing(null)} onCreated={onCreated}
@@ -386,9 +401,12 @@ function MoreBar({ mode, loaded, total, onMore }: { mode: "browse" | "search" | 
 }
 
 // ── DETAIL drawer: the ONLY place redemptions (usageCount) appear → REDEEMED / LEFT here ──
-function DetailDrawer({ id, onClose, onEdit, onChanged }: {
+function DetailDrawer({ id, onClose, onEdit, onChanged, mayManage, noWrite }: {
   id: number; onClose: () => void;
   onEdit?: (row: PromoRow) => void; onChanged?: () => void;
+  // PASSED IN, NOT RE-DERIVED. One evaluation of the permission per render of this screen; a
+  // second call here would be a second place for the two to disagree.
+  mayManage: boolean; noWrite: string;
 }) {
   // delete/restore state. A SOFT delete earns a single plain confirm — not the type-the-name
   // friction cancelling a match earns, because that one moves money and texts players and cannot
@@ -478,10 +496,20 @@ function DetailDrawer({ id, onClose, onEdit, onChanged }: {
               </>
             ) : (
               <>
-                <button className="btn" data-testid="detail-edit" disabled={!p} onClick={() => p && onEdit?.(p)}>Edit</button>
+                {/* GREYED, NOT GONE. The routes refuse these regardless (create/edit/delete each
+                    re-check canManagePromos server-side); this is the courtesy layer that says so
+                    before the click instead of after it. */}
+                <button className="btn" data-testid="detail-edit" disabled={!p || !mayManage}
+                  title={mayManage ? undefined : noWrite}
+                  onClick={() => mayManage && p && onEdit?.(p)}>Edit</button>
                 {p?.deletedAt
-                  ? <button className="btn primary" data-testid="detail-restore" onClick={() => setConfirmKind("restore")}>Restore</button>
-                  : <button className="btn" data-testid="detail-delete" onClick={() => setConfirmKind("delete")}>Delete (reversible)</button>}
+                  ? <button className="btn primary" data-testid="detail-restore" disabled={!mayManage}
+                      title={mayManage ? undefined : noWrite}
+                      onClick={() => mayManage && setConfirmKind("restore")}>Restore</button>
+                  : <button className="btn" data-testid="detail-delete" disabled={!mayManage}
+                      title={mayManage ? undefined : noWrite}
+                      onClick={() => mayManage && setConfirmKind("delete")}>Delete (reversible)</button>}
+                {!mayManage && <span className="whynot" data-testid="detail-why">Needs MANAGE PROMOS</span>}
               </>
             )}
           </div>
@@ -1092,6 +1120,9 @@ const CSS = `
 .promo .more .btn{min-height:34px;padding:0 13px;font-size:12.5px}
 .promo .empty{padding:34px 16px;text-align:center;color:#5c7168}.promo .empty b{display:block;color:#3d5349;margin-bottom:4px}
 .promo .empty.err{color:#b3241f}
+.promo .newwrap{display:inline-flex;align-items:center;gap:9px}
+.promo .whynot{font-size:11px;font-weight:700;letter-spacing:.02em;color:#8a5a00;white-space:nowrap}
+.promo .btn:disabled{opacity:.45;cursor:not-allowed}
 .promo .foot{margin-top:10px;color:#5c7168;font-size:12px;padding:0 2px}
 /* drawer */
 .promo .scrim{position:fixed;inset:0;background:rgba(9,24,17,.42);z-index:60;display:flex;justify-content:flex-end}
