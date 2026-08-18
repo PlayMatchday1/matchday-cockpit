@@ -243,6 +243,47 @@ async function main() {
     await closeContext(ctx);
   }
 
+  // ── THE RETRY HONOURS THE NO-OP GUARD. Three `notapplied` rows on production match 17956 were
+  //    this path re-sending an already-correct name, because it was computed from the lagging
+  //    mirror. A retry against a correct name must send NOTHING and clear the stale marker. ─────
+  {
+    // The write fails, so the marker appears — then the mirror "catches up" to the correct name,
+    // which is exactly the production sequence that produced the duplicates.
+    const { ctx, page, seen, state } = await boot(browser, storageState, { failNameWrite: true });
+    await toggle(page, 9001);
+    is("setup — the failed write left a marker", await page.evaluate(() => document.querySelector('[data-veo="9001"]')?.getAttribute("data-unsynced")), "true");
+    const afterToggle = seen.name.length;
+
+    // THE PRODUCTION SEQUENCE: the write actually landed, the client could not tell, and the
+    // mirror later caught up. Nudging the fixture alone is not enough — the component holds the
+    // week it last fetched, so the corrected name has to reach it the way it would in real use.
+    state.get(9001).rawName = `${C} Saturday - SJD`;
+    await page.click('[aria-label="Next week"]');
+    await page.waitForTimeout(900);
+    await page.click('[aria-label="Previous week"]');
+    await page.waitForFunction(() => !!document.querySelector('[data-veo="9001"]'), null, { timeout: 20000 });
+    await page.waitForTimeout(600);
+    is("  setup — the marker survives navigating weeks (it is session state)",
+       await page.evaluate(() => document.querySelector('[data-veo="9001"]')?.getAttribute("data-unsynced")), "true");
+    await page.click('[data-testid="veo-retry"]');
+    await page.waitForTimeout(1500);
+    is("retry on an already-correct name sends ZERO requests", seen.name.length, afterToggle);
+    is("  …and clears the stale marker", await page.evaluate(() => document.querySelector('[data-veo="9001"]')?.getAttribute("data-unsynced")), "false");
+    is("  …and says why, rather than doing nothing silently",
+       await page.evaluate(() => /already correct/i.test(document.body.innerText)), true);
+    await closeContext(ctx);
+  }
+  {
+    // POSITIVE CONTROL, same shape, same run-set: a genuinely wrong name DOES send exactly one.
+    const { ctx, page, seen } = await boot(browser, storageState, { failNameWrite: true });
+    await toggle(page, 9001);
+    const afterToggle = seen.name.length;
+    await page.click('[data-testid="veo-retry"]');
+    await page.waitForTimeout(1500);
+    is("CONTROL — retry on a genuinely wrong name sends exactly one request", seen.name.length, afterToggle + 1);
+    await closeContext(ctx);
+  }
+
   // ── AFTER A SUCCESSFUL TOGGLE THE RENDERED NAME CHANGES, with no page reload. This is what the
   //    mirror write-through buys: /api/veo reads mdapi_matches, and until the route refreshed that
   //    row the screen kept showing the pre-write name for up to a day. ─────────────────────────

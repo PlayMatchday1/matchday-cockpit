@@ -307,12 +307,29 @@ export default function VeoMasterSchedule() {
 
   // The manual retry behind the unsynced chip. Same single write, no flag change, still no
   // automatic anything — it exists only because a person clicked it.
+  // THE RETRY RUNS THE SAME TRANSFORM AND THE SAME NO-OP GUARD AS THE TOGGLE.
+  //
+  // The three `notapplied` rows on match 17956 were this path re-sending a name that was already
+  // correct. The guard was not missing — writeName has always refused a no-change edit — it was
+  // being fed a STALE name: rawName came from the mdapi_matches mirror, which lags the write, so
+  // the transform saw a name with no 🎥 and computed a prefix that had already been applied.
+  //
+  // Two things close it. liveName() feeds the transform what we actually wrote, not the mirror's
+  // copy. And a no-change decision now CLEARS the marker and says why, instead of returning
+  // quietly and leaving a warning dot above a button that does nothing when clicked.
   async function retryName(apiId: number) {
     if (!week || busy) return;
     const match = week.matches.find((m) => m.apiId === apiId);
     if (!match) return;
-    setBusy(true);
     setError("");
+    const edit = nameForVeo(liveName(match), match.veo);
+    if (!edit.change) {
+      // Already correct. No request, no change_log row — and the marker was stale, so it goes.
+      setNameFailed((m) => { const n = new Map(m); n.delete(apiId); return n; });
+      setError("The match name is already correct — nothing to write.");
+      return;
+    }
+    setBusy(true);
     await writeName(apiId, liveName(match), match.veo);
     await load(weekRef);
     setBusy(false);
