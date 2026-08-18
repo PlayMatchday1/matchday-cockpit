@@ -9,6 +9,20 @@
    not have that side effect. */
 html {
   overflow-x: hidden;
+  /* A STICKY NAV OWNS THE TOP 64px OF THE VIEWPORT, so anything scrolled to the top of the
+     document lands UNDERNEATH it — in-page anchors, scrollIntoView, and a browser restoring a
+     scroll position. Reserving the nav's height on the scroll container is what keeps the target
+     visible instead of hidden behind the bar.
+
+     This is not cosmetic: verify-lookup timed out clicking a button that had been scrolled under
+     the nav, which is the same thing a person experiences as a click that does nothing. Derived
+     from --nav-h, so it cannot drift from the bar it compensates for. */
+  scroll-padding-top: calc(env(safe-area-inset-top, 0px) + var(--nav-h));
+}
+
+/* The same reservation for elements that ask to be scrolled to individually. */
+:where([id]) {
+  scroll-margin-top: calc(env(safe-area-inset-top, 0px) + var(--nav-h));
 }
 
 /* THE NAV HEIGHT, DEFINED ONCE.

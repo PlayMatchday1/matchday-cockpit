@@ -273,8 +273,21 @@ async function main() {
   await page.click(".fieldswrap .btn");
   await page.click('.pop input[data-field="goals"]');
   eq("toggling goals ON reveals GOALS SCORED", await page.$$eval(".f .k", (els) => els.some((e) => e.textContent === "GOALS SCORED")), true);
+  // DISMISS THE POPOVER BY ITS OWN SCRIM, not by clicking a corner of the page.
+  //
+  // This was `page.click("body", {position:{x:5,y:5}})` — "click somewhere harmless". That spot
+  // stopped being harmless when TopNav became sticky: (5,5) is now inside the header, the click
+  // never reached the scrim, `fieldsOpen` stayed true, and the popover's full-viewport
+  // `.scrim-quiet` (z-15) then swallowed EVERY later click in this suite. It surfaced as a 30s
+  // timeout on act-suspend, fifty assertions away from the cause, because the .catch() below
+  // swallowed the miss.
+  //
+  // The scrim IS the dismiss affordance, so clicking it is both what a user does and stable
+  // against anything that later occupies a corner of the viewport.
   await page.keyboard.press("Escape").catch(() => {});
-  await page.click("body", { position: { x: 5, y: 5 } }).catch(() => {});
+  await page.click(".scrim-quiet").catch(() => {});
+  // Prove it actually closed — the silent .catch() above is exactly how this hid the first time.
+  await page.waitForSelector(".pop", { state: "detached", timeout: 5000 });
 
   // ── strikes panel (display-only), member with 2 of 4 active ──
   eq("strikes panel rendered for a member", !!(await page.$('[data-testid="strikes"]')), true);
