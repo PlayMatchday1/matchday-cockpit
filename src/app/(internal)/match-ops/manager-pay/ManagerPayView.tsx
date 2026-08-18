@@ -742,9 +742,11 @@ function AliasEditor({ managerEmail, managerName, alias, onSaveAlias }: { manage
   return (
     <div className="mb-3 rounded-[10px] border p-2.5" style={{ background: C.surface, borderColor: C.line }}>
       <div className="mb-1.5 flex flex-wrap items-baseline gap-x-2 gap-y-0.5 text-[10px] font-bold uppercase tracking-[0.1em]" style={{ color: C.muted }}>
-        Gusto payroll name
-        <span className="text-[10.5px] font-normal normal-case tracking-normal" style={{ color: C.muted2 }}>overrides the CSV First/Last for {managerName} — leave blank to use the schedule name</span>
-        <span className="text-[10.5px] font-normal normal-case tracking-normal" style={{ color: C.muted2 }} data-testid="alias-email-hint">overrides the CSV email — leave blank to use the schedule email</span>
+        Gusto payroll identity
+        {/* ONE SENTENCE, NOT TWO JAMMED TOGETHER. The email hint was appended beside the name hint
+            and the two ran on as a single unreadable line. Each field keeps its own placeholder;
+            the shared rule — blank means fall back to the schedule — is stated once. */}
+        <span className="text-[10.5px] font-normal normal-case tracking-normal" style={{ color: C.muted2 }} data-testid="alias-hint">overrides the CSV name and email for {managerName} — leave a field blank to use the schedule value</span>
       </div>
       <div className="flex flex-wrap items-center gap-2">
         <input value={first} disabled={saving} onChange={(e) => setFirst(e.target.value)} placeholder="First name" aria-label="Gusto first name" className={`${inputCls} w-32`} style={{ borderColor: C.chipLine }} />
@@ -754,6 +756,15 @@ function AliasEditor({ managerEmail, managerName, alias, onSaveAlias }: { manage
         <button type="button" onClick={save} disabled={saving || !dirty || invalid} className="rounded-[7px] px-3 py-1 text-[11.5px] font-bold disabled:opacity-40" style={{ background: C.accent, color: "#06281d" }}>{clearing && alias ? "Clear alias" : "Save alias"}</button>
         {invalid && <span className="text-[11px]" style={{ color: C.critInk }}>Both first and last name required.</span>}
         {msg && !invalid && <span className="text-[11px]" style={{ color: C.muted }}>{msg}</span>}
+        {/* A GREYED SAVE WITH THE FIELDS FILLED IS THE POST-SAVE STATE, and it is indistinguishable
+            from a broken one — that is what was reported as "the alias email will not save". The
+            in-session "Saved" message dies on reload, so nothing on a freshly-loaded panel said the
+            value was already stored. This does, and it disappears the moment anything is edited. */}
+        {!dirty && !msg && alias && (
+          <span className="text-[11px]" style={{ color: C.muted }} data-testid="alias-stored">
+            Stored — this is what the export will use.
+          </span>
+        )}
       </div>
     </div>
   );
