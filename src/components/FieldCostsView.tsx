@@ -27,6 +27,8 @@ import {
   type FieldCostRow,
 } from "@/lib/financeCosts";
 import { useFinanceQuarter } from "@/lib/financeQuarter";
+// THE SINGLE BILLING-DATE DERIVATION — the same call OpEx makes. See its note in opexSources.ts.
+import { resolveBillingDates } from "@/lib/opexSources";
 import {
   getCurrentMonthInQuarter,
   type Q2Month,
@@ -79,15 +81,16 @@ function monthParts(monthKey: string): { year: number; month0: number } | null {
   const y = Number(yr);
   return m < 0 || !Number.isFinite(y) ? null : { year: y, month0: m };
 }
-// THE DAY, RESOLVED INTO THE SELECTED MONTH — mirroring billingDayForMonth in opexSources.ts:208,
-// including its Math.min clamp, so "31" reads as the 28th/29th in February exactly as the money
-// is dated. Billing is SAME-MONTH (opexSources.ts:540 keys the cost to the same month0 it resolves
-// the day against, with no +1 on that path), so the date shown is always in the month above it.
-function resolveBillingDate(monthKey: string, day: number | null): string | null {
+// THE DATE COMES FROM opexSources, NEVER FROM THIS FILE. resolveBillingDates is the single
+// derivation — the same call OpEx makes to decide where the money lands. This file previously
+// re-derived it from billing_day alone, which is wrong for CUSTOM cadence (that reads
+// billing_custom_days and ignores billing_day entirely), so five venues showed a date the money
+// does not land on. Billing is SAME-MONTH, so the date is always in the month above it.
+function billingDatesFor(venue: FinVenue | null, monthKey: string): { labels: string[]; cadence: string } {
   const p = monthParts(monthKey);
-  if (!p || day == null) return null;
-  const last = new Date(p.year, p.month0 + 1, 0).getDate();
-  return `${MONTHS_SHORT[p.month0]} ${Math.min(day, last)}`;
+  if (!p) return { labels: [], cadence: "monthly" };
+  const { days, cadence } = resolveBillingDates(venue, p.year, p.month0);
+  return { labels: days.map((d) => `${MONTHS_SHORT[p.month0]} ${d}`), cadence };
 }
 const BILLING_LABEL: Record<string, string> = {
   per_match: "Per match",
@@ -1104,7 +1107,7 @@ function FieldCostTableRow({
 
   // BILLS ON — three states, and only three.
   const perMatchDated = row.billingType === "per_match" && v?.billing_day == null;
-  const resolved = resolveBillingDate(month, v?.billing_day ?? null);
+  const bill = billingDatesFor(v, month);
   return (
     <>
       <tr
@@ -1156,7 +1159,7 @@ function FieldCostTableRow({
         </td>
 
         {/* BILLS ON */}
-        <td className={"px-3 py-2.5 " + (!perMatchDated && resolved == null ? "bg-[#fdeceb]" : "")}>
+        <td className={"px-3 py-2.5 " + (!perMatchDated && bill.labels.length === 0 ? "bg-[#fdeceb]" : "")}>
           {perMatchDated ? (
             <>
               <div className="text-[13.5px] font-bold text-deep-green/70">On each match date</div>
@@ -1164,11 +1167,15 @@ function FieldCostTableRow({
                 {row.matchCount === 0 ? `no matches in ${monthShort(month)}` : `${row.matchCount} dates in ${monthShort(month)}`}
               </div>
             </>
-          ) : resolved != null ? (
+          ) : bill.labels.length > 0 ? (
             <>
-              <div className="text-[14.5px] font-extrabold text-deep-green">{resolved}</div>
+              <div className="text-[14.5px] font-extrabold text-deep-green">{bill.labels.join(", ")}</div>
               <div className="mt-0.5 text-[11px] text-deep-green/45">
-                {zero ? "nothing to bill" : (v?.billing_cadence ?? "monthly")}
+                {zero
+                  ? "nothing to bill"
+                  : bill.labels.length > 1
+                    ? `${bill.labels.length} dates · ${bill.cadence}`
+                    : bill.cadence}
               </div>
             </>
           ) : (
@@ -1259,7 +1266,7 @@ function VenuePanel({
 }) {
   const day = venue?.billing_day ?? null;
   const nonMonthly = venue != null && venue.billing_cadence !== "monthly";
-  const resolved = resolveBillingDate(month, day);
+  const resolved = billingDatesFor(venue, month).labels.join(", ") || null;
   const glab = "mb-2.5 text-[9.5px] font-extrabold uppercase tracking-[0.09em] text-deep-green/45";
   const fld = "mb-2 flex items-center gap-2.5";
   const lab = "w-[104px] flex-none text-[12.5px] font-semibold text-deep-green/60";

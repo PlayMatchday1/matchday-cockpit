@@ -216,6 +216,32 @@ function billingDayForMonth(
   return (((target - anchor) % 3) + 3) % 3 === 0 ? day : null;
 }
 
+// ── THE ONE PLACE A BILLING DATE IS DERIVED ───────────────────────────────────────────────────
+//
+// Which day(s) of THIS month a venue's lump lands on. An empty array means UNDATED — counted in
+// the month's subtotal, landing on no day, which OpEx files under "Undated — timing not set".
+//
+// WHY IT IS EXPORTED. The Field Costs "Bills on" column used to re-derive this from billing_day
+// alone, which is wrong for CUSTOM cadence: custom reads billing_custom_days and ignores
+// billing_day entirely, so five venues displayed a date the money does not land on (NEMP showed
+// Aug 20 while its August cost was undated). Two code paths answering one question is what
+// produced that bug and the cost_per_match one before it. There is now one, and both callers use
+// it — grep billing_day / billing_custom_days to confirm nothing else derives a date.
+//
+// BEHAVIOUR IS UNCHANGED: custom → customDaysFor; everything else → billingDayForMonth, which
+// already folds in cadence, anchor month and the Math.min day clamp.
+export function resolveBillingDates(
+  venue: FinVenue | undefined | null,
+  year: number,
+  month0: number,
+): { days: number[]; cadence: FinVenue["billing_cadence"] } {
+  const cadence = venue?.billing_cadence ?? "monthly";
+  if (!venue) return { days: [], cadence };
+  if (cadence === "custom") return { days: customDaysFor(venue, year, month0), cadence };
+  const day = billingDayForMonth(venue, year, month0);
+  return { days: day == null ? [] : [day], cadence };
+}
+
 // True when a venue's cost is driven by a partner-dashboard payout rather
 // than matchCount × rate (Crossbar's per_match_minus_manager). It's stored
 // as billing_type='per_match' but its amount can't be spread over match
@@ -420,21 +446,14 @@ function fieldCostGroup(
       continue;
     }
 
-    // --- custom: this month's cost lands on the captured day(s), split
-    // evenly. A month with a cost but no day set → undated remainder.
-    if (cadence === "custom") {
-      const days = customDaysFor(primary, year, month0);
-      if (days.length > 0) push(fc, splitEven(fc.amount, days), "custom");
-      else undated += fc.amount;
-      continue;
-    }
-
-    // --- monthly / quarterly / annual: single dated lump on the billing
-    // day (cadence + anchor aware). No captured timing → undated remainder,
-    // never defaulted to day 1.
-    const day = billingDayForMonth(primary, year, month0);
-    if (day != null) push(fc, { [day]: fc.amount }, cadence, cadence !== "monthly");
-    else undated += fc.amount;
+    // --- the dated lump. CUSTOM spreads across its captured days; monthly /
+    // quarterly / annual land on one. No captured timing → undated remainder,
+    // never defaulted to day 1. Both resolve through resolveBillingDates so the
+    // Field Costs column cannot answer this question differently.
+    const { days } = resolveBillingDates(primary, year, month0);
+    if (days.length === 0) undated += fc.amount;
+    else if (cadence === "custom") push(fc, splitEven(fc.amount, days), "custom");
+    else push(fc, { [days[0]]: fc.amount }, cadence, cadence !== "monthly");
   }
 
   rows.sort((a, b) => a.label.localeCompare(b.label));
