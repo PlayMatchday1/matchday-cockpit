@@ -28,6 +28,15 @@ type SortDir = "asc" | "desc";
 type MonthFilter = Q2Month | "ALL" | "RANGE";
 
 const ALL = "All";
+// THE DEFAULT VIEW. This table is for inspecting and adding revenue that is NOT automatic —
+// Stripe rows are synced and never edited here, and at 987 rows against 13 Venmo they bury the
+// manual ones 98.7% deep. So the page opens on everything EXCEPT Stripe.
+//
+// Stripe is named here, and only here, because "the synced source" is what it IS — the one thing
+// this filter is defined against. The rest of the options stay derived from the data, so a new
+// payment method appears on its own without a code change.
+const NON_STRIPE = "All except Stripe";
+const STRIPE = "Stripe";
 
 const CITY_DISPLAY = [
   "Austin",
@@ -83,7 +92,7 @@ export default function RevenueAdminView() {
   const [rangeFrom, setRangeFrom] = useState("");
   const [rangeTo, setRangeTo] = useState("");
   const [cityFilter, setCityFilter] = useState<string>(ALL);
-  const [sourceFilter, setSourceFilter] = useState<string>(ALL);
+  const [sourceFilter, setSourceFilter] = useState<string>(NON_STRIPE);
 
   const [sortKey, setSortKey] = useState<SortKey>("date");
   const [sortDir, setSortDir] = useState<SortDir>("desc");
@@ -96,10 +105,12 @@ export default function RevenueAdminView() {
 
   const allRows = data?.revenue ?? [];
 
+  // DERIVED FROM THE DATA, not a list. Whatever source values exist in fin_revenue appear here —
+  // the two sentinels lead, every real source follows, Stripe included so its rows stay auditable.
   const sourceOptions = useMemo(() => {
     const set = new Set<string>();
     for (const r of allRows) if (r.source) set.add(r.source);
-    return [ALL, ...[...set].sort()];
+    return [NON_STRIPE, ALL, ...[...set].sort()];
   }, [allRows]);
 
   const cityOptions = useMemo(() => {
@@ -125,8 +136,8 @@ export default function RevenueAdminView() {
       rows = rows.filter((r) => monthSet.has(r.month));
     }
     if (cityFilter !== ALL) rows = rows.filter((r) => r.city === cityFilter);
-    if (sourceFilter !== ALL)
-      rows = rows.filter((r) => r.source === sourceFilter);
+    if (sourceFilter === NON_STRIPE) rows = rows.filter((r) => r.source !== STRIPE);
+    else if (sourceFilter !== ALL) rows = rows.filter((r) => r.source === sourceFilter);
     return rows;
   }, [allRows, monthFilter, rangeFrom, rangeTo, cityFilter, sourceFilter, quarter]);
 
@@ -278,10 +289,6 @@ export default function RevenueAdminView() {
           <h1 className="font-display text-5xl uppercase leading-none tracking-tight text-deep-green md:text-6xl">
             Revenue
           </h1>
-          <p className="mt-2 text-sm text-deep-green/65">
-            Inspect every fin_revenue row. Imported rows are read-only —
-            re-upload via Weekly Update or Q2 Import to change them.
-          </p>
         </div>
         <button
           type="button"
@@ -431,6 +438,14 @@ export default function RevenueAdminView() {
                     className="px-3 py-8 text-center text-sm text-deep-green/55"
                   >
                     No revenue rows match these filters.
+                    {sourceFilter === NON_STRIPE && (
+                      /* THE FILTER IS PRE-APPLIED, so an empty table has to say so. Stripe is
+                         98.7% of fin_revenue; without this line the page reads as "there is no
+                         revenue" rather than "the synced rows are hidden by default". */
+                      <>
+                        {" "}Source is set to <b>{NON_STRIPE}</b> — switch it to see synced rows.
+                      </>
+                    )}
                   </td>
                 </tr>
               ) : (
