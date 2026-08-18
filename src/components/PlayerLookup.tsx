@@ -17,7 +17,7 @@ import { useCallback, useEffect, useMemo, useRef, useState } from "react";
 import { useRouter } from "next/navigation";
 import { supabase } from "@/lib/supabase";
 import { useAuth, canEditMatches, canManagePlayers, canEditCredits } from "@/lib/useAuth";
-import { validateAdjustment, fmtUsd, MAX_ADJUSTMENT_CENTS } from "@/lib/creditsModel";
+import { validateAdjustment, fmtUsd, MAX_ADJUSTMENT_CENTS, REASON_REQUIRED } from "@/lib/creditsModel";
 import { useDockSubject } from "@/lib/useDockSubject";
 import { FULL_EDITOR_ENV } from "@/lib/matchEnv";
 import { envBadge } from "@/lib/matchEnvBadge";
@@ -407,9 +407,18 @@ function CreditPanel({ playerId, playerName, balanceCents, canCredit, onBalance 
   const [amt, setAmt] = useState("");
   const [reason, setReason] = useState("");
   const [busy, setBusy] = useState(false);
+  // AN ERROR ON AN UNTOUCHED FORM READS AS A BROKEN FEATURE, NOT AS GUIDANCE. The panel opened with
+  // "A reason is required" already in red and Apply greyed, which is what a refusal looks like —
+  // and it was reported as credits being broken. The hint under the field ("required — written to
+  // the change log") already says it before you start, so the error is only useful once you have
+  // either tried to submit or left the field empty behind you.
+  const [reasonTouched, setReasonTouched] = useState(false);
+  const [attempted, setAttempted] = useState(false);
   const [res, setRes] = useState<{ verdict: "LANDED" | "FAILED" | "NOT APPLIED" | "UNKNOWN" | "ABORTED"; text: string } | null>(null);
 
   const v = validateAdjustment({ raw: amt, reason, beforeCents: balanceCents, playerName, canEdit: canCredit });
+  // The BUTTON still uses the full validation — readiness is unchanged, only what is SHOWN moves.
+  const shownErrors = v.errors.filter((e) => e !== REASON_REQUIRED || reasonTouched || attempted);
 
   const apply = async () => {
     if (!v.ok || v.deltaCents == null || busy) return;
@@ -462,22 +471,27 @@ function CreditPanel({ playerId, playerName, balanceCents, canCredit, onBalance 
         <label className="credf grow">
           <span>REASON <em>required — written to the change log</em></span>
           <input data-testid="credit-reason" value={reason} placeholder="Why this is being adjusted"
-            disabled={!canCredit || busy} onChange={(e) => setReason(e.target.value)} aria-label="Reason for the adjustment" />
+            disabled={!canCredit || busy} onChange={(e) => setReason(e.target.value)}
+            onBlur={() => setReasonTouched(true)} aria-label="Reason for the adjustment" />
         </label>
       </div>
       {/* THE CONSEQUENCE, BEFORE THE CLICK — same pattern as the manager-pay screen. It is drawn
           from the SAME arithmetic that produces the number sent, so it cannot promise one figure
           and send another. */}
       {v.consequence && <p className="credconseq" data-testid="credit-consequence">{v.consequence}</p>}
-      {v.errors.length > 0 && (
+      {shownErrors.length > 0 && (
         <ul className="crederrs" data-testid="credit-errors">
-          {v.errors.map((e, i) => <li key={i} data-testid="credit-error">{e}</li>)}
+          {shownErrors.map((e, i) => <li key={i} data-testid="credit-error">{e}</li>)}
         </ul>
       )}
       <div className="credacts">
-        <button type="button" className="credbtn" data-testid="credit-apply" disabled={!v.ok || busy} onClick={() => void apply()}>
+        {/* onPointerDown fires even though the button is disabled for a click, so reaching for
+            Apply counts as an attempt and the outstanding reason error appears. */}
+        <span onPointerDown={() => setAttempted(true)} className="credbtnwrap">
+        <button type="button" className="credbtn" data-testid="credit-apply" disabled={!v.ok || busy} onClick={() => { setAttempted(true); void apply(); }}>
           {busy ? "Applying…" : "Apply adjustment"}
         </button>
+        </span>
         <span className="credcap">One adjustment at a time, up to {fmtUsd(MAX_ADJUSTMENT_CENTS)}. Sent once — never retried.</span>
       </div>
       {res && <p className="credres" data-testid="credit-result" data-verdict={res.verdict}><b>{res.verdict}</b> — {res.text}</p>}

@@ -560,15 +560,38 @@ async function main() {
       ? ok("credits: 1234 cents renders as $12.34 in BOTH the headline and the panel (not $1234.00, not $0.12)")
       : bad("credits: units", JSON.stringify(shown)); }
 
-  // THE REASON IS REQUIRED
-  await cp.fill('[data-testid="credit-amount"]', "+25");
-  await cp.waitForTimeout(120);
+  // THE REASON IS REQUIRED — BUT THE ERROR WAITS FOR A TOUCH OR AN ATTEMPT.
+  //
+  // This used to assert the error appeared as soon as an amount was typed. It now asserts the
+  // opposite first, because the panel opened with "A reason is required" already in red and Apply
+  // greyed — which is what a refusal looks like, and was reported as credits being broken. The
+  // hint under the field already says it before you start. Readiness is unchanged: the button is
+  // disabled throughout, which is the half that protects the money.
+  const reasonErrShown = () => cp.evaluate(() =>
+    [...document.querySelectorAll('[data-testid="credit-error"]')].some((e) => /reason is required/i.test(e.textContent)));
   { const st = await cp.evaluate(() => ({
+      errs: document.querySelectorAll('[data-testid="credit-error"]').length,
       apply: document.querySelector('[data-testid="credit-apply"]')?.disabled,
-      err: [...document.querySelectorAll('[data-testid="credit-error"]')].some((e) => /reason is required/i.test(e.textContent)),
     }));
-    (st.apply === true && st.err) ? ok("credits: an amount with NO reason leaves the button disabled and says a reason is required")
-      : bad("credits: reason not required", JSON.stringify(st)); }
+    (st.errs === 0 && st.apply === true)
+      ? ok("credits: an UNTOUCHED panel shows no error at all, and Apply is already disabled")
+      : bad("credits: premature error on an untouched panel", JSON.stringify(st)); }
+
+  await cp.fill('[data-testid="credit-amount"]', "+25");
+  await cp.waitForTimeout(150);
+  { const st = { apply: await cp.$eval('[data-testid="credit-apply"]', (e) => e.disabled), err: await reasonErrShown() };
+    (st.apply === true && st.err === false)
+      ? ok("credits: typing an amount alone still shows no reason error — and the button stays disabled")
+      : bad("credits: reason error fired too early", JSON.stringify(st)); }
+
+  // REACHING FOR APPLY IS AN ATTEMPT. The button is disabled so it never fires a click; the error
+  // has to appear anyway or the operator is left with a dead button and no explanation.
+  await cp.dispatchEvent('[data-testid="credit-apply"]', "pointerdown");
+  await cp.waitForTimeout(150);
+  { const st = { apply: await cp.$eval('[data-testid="credit-apply"]', (e) => e.disabled), err: await reasonErrShown() };
+    (st.apply === true && st.err === true)
+      ? ok("credits: reaching for Apply surfaces the reason requirement, button still disabled")
+      : bad("credits: no reason error after an attempt", JSON.stringify(st)); }
 
   // THE STATED CONSEQUENCE MATCHES THE DELTA ENTERED
   eq("credits: the consequence states the before and after in dollars, from the entered delta",

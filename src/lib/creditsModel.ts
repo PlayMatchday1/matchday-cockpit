@@ -64,6 +64,12 @@ export type Validation = {
 // Everything the button needs to know, in one place, so the sentence shown to the operator and the
 // number that would be sent are computed from the SAME arithmetic. If they were computed
 // separately, the screen could promise one figure and send another.
+// Exported so the panel can tell this apart from the other errors by identity rather than by
+// matching its prose. It is the only error that fires on an UNTOUCHED form — the amount error is
+// already guarded on a non-empty input above — so it is the only one the panel has to hold back.
+export const REASON_REQUIRED =
+  "A reason is required — it is written to the change log with the amount.";
+
 export function validateAdjustment(input: { raw: string; reason: string; beforeCents: number; playerName: string; canEdit: boolean }): Validation {
   const errors: string[] = [];
   const parsed = parseAdjustment(input.raw);
@@ -73,7 +79,7 @@ export function validateAdjustment(input: { raw: string; reason: string; beforeC
   // A REASON IS MANDATORY. Money that moves with no recorded reason is unauditable, and this is
   // the one place in Clubhouse where that matters most. The button does not enable without it.
   const reason = String(input.reason ?? "").trim();
-  if (reason.length < 3) errors.push("A reason is required — it is written to the change log with the amount.");
+  if (reason.length < 3) errors.push(REASON_REQUIRED);
 
   if (delta != null && Math.abs(delta) > MAX_ADJUSTMENT_CENTS) {
     errors.push(
