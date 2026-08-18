@@ -2,8 +2,17 @@
 //      can reflect reality on open instead of assuming a default. Added when the Veo toggle moved
 //      into the match panel: the week endpoint (/api/veo?week=) is the wrong shape for one match.
 // POST /api/veo/intent { matchApiId, enabled } — toggle Clubhouse camera intent for
-// a match. Writes veo_intent only; NEVER the MatchDay API (the 🎥 emoji stays a
-// manual edit there). set_by marks it a manual toggle, distinct from the emoji seed.
+// a match. Writes veo_intent ONLY. set_by marks it a manual toggle, distinct from the emoji seed.
+//
+// THE 🎥 IS NO LONGER A MANUAL EDIT. This header used to say the emoji stays a hand edit in the
+// MatchDay app and that Clubhouse never writes it. That changed: toggling the chip on Master
+// Schedule now also writes the camera into the MatchDay match name, which players see.
+//
+// THAT WRITE IS NOT HERE, DELIBERATELY. It goes through the existing match write path
+// (PUT /api/matchday/{env}/matches/{id}) so there is ONE match-name writer, with one host guard,
+// one EDIT MATCHES gate and one recordWrite() into change_log. The order is flag first, name
+// second — this route owns the source of truth, and a name write that fails leaves the flag
+// flipped and the chip showing a derived unsynced state. See src/lib/veoNameSync.ts.
 import { authenticateCrm } from "@/lib/crmAuth";
 
 export const runtime = "nodejs";

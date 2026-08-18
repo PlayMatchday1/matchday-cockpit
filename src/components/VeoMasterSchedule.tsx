@@ -22,6 +22,8 @@
 // Schedule cards, where a Veo match is the exception among many.
 
 import { useCallback, useEffect, useMemo, useRef, useState } from "react";
+import { nameForVeo, isVeoUnsynced, unsyncedReason } from "@/lib/veoNameSync";
+import { FULL_EDITOR_ENV } from "@/lib/matchEnv";
 import { supabase } from "@/lib/supabase";
 import { downloadCsv, plural } from "@/components/growth/format";
 import MatchDrawer, { DRAWER_W, type DrawerMatch } from "@/components/MatchDrawer";
@@ -30,7 +32,7 @@ type VeoDay = { dow: string; date: number; iso: string; today: boolean };
 type VeoCity = { city: string; cameras: number };
 type VeoMatch = {
   apiId: number; city: string; dayIdx: number; time: string; minutes: number;
-  venue: string; name: string; veo: boolean; hasEmoji: boolean;
+  venue: string; name: string; rawName: string; veo: boolean; hasEmoji: boolean;
 };
 type VeoCode = { code: string; confirmed: boolean };
 type VeoCodesRef = { city: string; codes: VeoCode[] };
@@ -204,14 +206,77 @@ export default function VeoMasterSchedule() {
     } catch { setError("Network error — nothing changed."); return false; }
   }
 
+  // THE NAME WRITE — the second half of the toggle, and the half players see.
+  //
+  // ORDER IS NOT NEGOTIABLE: the flag is the source of truth and is already flipped by the time
+  // this runs. If the name write fails, the flag STAYS FLIPPED — the person meant to mark this
+  // match VEO, and un-marking it behind their back would be a worse lie than an out-of-date name.
+  // The chip derives "unsynced" from the two facts and offers a retry a HUMAN clicks.
+  //
+  // NO AUTOMATIC RETRY, EVER. There is no Idempotency-Key on this API. A duplicated name write is
+  // visible to every player in that match, so a retry is a decision, not a fallback.
+  //
+  // THE DIFF IS THE REQUEST BODY: `changes` carries `name` and nothing else. Echoing startDate back
+  // would re-shift it — those are LOCAL WALL CLOCK despite the Z suffix.
+  async function writeName(apiId: number, rawName: string, enabled: boolean): Promise<{ outcome: string; sent: string } | null> {
+    const edit = nameForVeo(rawName, enabled);
+    if (!edit.change) return null; // NOT A CHANGE — send nothing at all.
+    const { data: sess } = await supabase.auth.getSession();
+    const token = sess.session?.access_token;
+    if (!token) { setError("No active session."); return { outcome: "FAILED", sent: edit.next }; }
+    try {
+      const res = await fetch(`/api/matchday/${FULL_EDITOR_ENV}/matches/${apiId}`, {
+        method: "PUT",
+        headers: { Authorization: `Bearer ${token}`, "Content-Type": "application/json" },
+        // The existing match write path: admin + EDIT MATCHES, host-guarded on the parsed host,
+        // recordWrite() into change_log with the old and new name, verdict from a re-read.
+        body: JSON.stringify({ changes: { name: edit.next }, source: "Veo camera toggle", saveId: crypto.randomUUID() }),
+      });
+      const j = (await res.json().catch(() => ({}))) as { outcome?: string; error?: string };
+      if (!res.ok) {
+        setError(`Camera mark not written to the match name: ${j.error ?? `HTTP ${res.status}`}`);
+        return { outcome: "FAILED", sent: edit.next };
+      }
+      // A 2xx IS NOT PROOF. The route classifies from a read-back; anything but `landed` is a
+      // failure to surface, not a success to assume.
+      const outcome = (j.outcome ?? "unknown").toUpperCase();
+      if (outcome !== "LANDED") setError(`Camera mark reported ${outcome} — the match name may not have changed.`);
+      return { outcome, sent: edit.next };
+    } catch {
+      setError("Network error writing the match name — the camera flag is set, the name is not.");
+      return { outcome: "FAILED", sent: edit.next };
+    }
+  }
+
   // Optimistic: patch local state, POST, refetch on success / revert on failure.
   async function toggleIntent(apiId: number, enabled: boolean) {
     if (!week || busy) return;
     const snapshot = week;
+    const match = week.matches.find((m) => m.apiId === apiId);
     setWeek({ ...week, matches: week.matches.map((m) => (m.apiId === apiId ? { ...m, veo: enabled } : m)) });
     setBusy(true);
+    // FLAG FIRST. It is the source of truth; the name is derived from it.
     const ok = await post("/api/veo/intent", { matchApiId: apiId, enabled });
-    if (ok) await load(weekRef); else setWeek(snapshot); // refetch the DISPLAYED week, not "now"
+    if (ok) {
+      // Then the name. A failure here does NOT roll the flag back.
+      if (match) await writeName(apiId, match.rawName, enabled);
+      await load(weekRef); // refetch the DISPLAYED week, not "now" — re-derives the synced state
+    } else {
+      setWeek(snapshot);
+    }
+    setBusy(false);
+  }
+
+  // The manual retry behind the unsynced chip. Same single write, no flag change, still no
+  // automatic anything — it exists only because a person clicked it.
+  async function retryName(apiId: number) {
+    if (!week || busy) return;
+    const match = week.matches.find((m) => m.apiId === apiId);
+    if (!match) return;
+    setBusy(true);
+    setError("");
+    await writeName(apiId, match.rawName, match.veo);
+    await load(weekRef);
     setBusy(false);
   }
   async function setCameras(city: string, cameras: number) {
@@ -358,7 +423,7 @@ export default function VeoMasterSchedule() {
       ) : error && !week ? (
         <div className="vms-card"><div className="vms-state">{error} <button type="button" className="vms-btn" onClick={() => { setLoading(true); void load(weekRef); }}>Retry</button></div></div>
       ) : !week || !fweek ? null : view === "schedule" ? (
-        <ScheduleView week={fweek} busy={busy} onToggle={toggleIntent} onOpen={openCard} selectedId={drawerId} />
+        <ScheduleView week={fweek} busy={busy} onToggle={toggleIntent} onRetry={retryName} onOpen={openCard} selectedId={drawerId} />
       ) : (
         <VeoView week={fweek} stats={stats!} busy={busy} onCameras={setCameras} needEmoji={needEmoji} needClubhouse={needClubhouse} onExport={exportWorklist} />
       )}
@@ -400,8 +465,8 @@ const CamIcon = () => (
 // HTML) that stops propagation so toggling coverage never opens the drawer. The
 // open card is marked by a ring; nothing else is dimmed — the week stays legible
 // beside the pushed-open drawer.
-function ScheduleView({ week, busy, onToggle, onOpen, selectedId }: {
-  week: VeoWeek; busy: boolean; onToggle: (id: number, en: boolean) => void;
+function ScheduleView({ week, busy, onToggle, onRetry, onOpen, selectedId }: {
+  week: VeoWeek; busy: boolean; onToggle: (id: number, en: boolean) => void; onRetry: (id: number) => void;
   onOpen: (id: number) => void; selectedId: number | null;
 }) {
   const veoKey = (e: React.KeyboardEvent, id: number, en: boolean) => {
@@ -429,14 +494,38 @@ function ScheduleView({ week, busy, onToggle, onOpen, selectedId }: {
                         aria-label={`${m.time} ${m.venue} — edit match ${m.apiId}`} onClick={() => onOpen(m.apiId)}>
                         <div className="vms-slot-t">{m.time}</div>
                         <div className="vms-slot-v">{m.venue}</div>
-                        <span role="switch" data-testid="veo-badge" data-veo={m.apiId} tabIndex={0}
-                          className={"vms-cam" + (m.veo ? " vms-on" : "")} aria-checked={m.veo}
-                          aria-label={`Veo camera for match ${m.apiId}`}
-                          title={m.veo ? "Remove Veo" : "Assign Veo"}
-                          onClick={(e) => { e.stopPropagation(); if (!busy) onToggle(m.apiId, !m.veo); }}
-                          onKeyDown={(e) => !busy && veoKey(e, m.apiId, !m.veo)}>
-                          <CamIcon />Veo
-                        </span>
+                        {/* UNSYNCED IS DERIVED, never stored — recomputed from the flag and the
+                            raw name on every render, so it survives navigation, cannot drift from
+                            what it describes, and needs no column. */}
+                        {(() => {
+                          const off = isVeoUnsynced(m.rawName, m.veo);
+                          return (
+                            <span role="switch" data-testid="veo-badge" data-veo={m.apiId} tabIndex={0}
+                              data-unsynced={off ? "true" : "false"}
+                              className={"vms-cam" + (m.veo ? " vms-on" : "") + (off ? " vms-unsynced" : "")}
+                              aria-checked={m.veo}
+                              aria-label={`Veo camera for match ${m.apiId}${off ? " — name not updated" : ""}`}
+                              title={off ? (unsyncedReason(m.rawName, m.veo) ?? "") : m.veo ? "Remove Veo" : "Assign Veo"}
+                              onClick={(e) => { e.stopPropagation(); if (!busy) onToggle(m.apiId, !m.veo); }}
+                              onKeyDown={(e) => !busy && veoKey(e, m.apiId, !m.veo)}>
+                              <CamIcon />Veo
+                              {off && <span className="vms-dot" data-testid="veo-unsynced-dot" aria-hidden />}
+                            </span>
+                          );
+                        })()}
+                        {isVeoUnsynced(m.rawName, m.veo) && (
+                          <span className="vms-unsyncrow" data-testid="veo-unsynced">
+                            <span className="vms-unsynctxt">name not updated</span>
+                            {/* A HUMAN CLICKS THIS. Nothing retries on its own — a duplicate name
+                                write is visible to every player in the match. */}
+                            <span role="button" tabIndex={0} data-testid="veo-retry" data-retry={m.apiId}
+                              className="vms-retry" title="Write the camera mark to the match name again"
+                              onClick={(e) => { e.stopPropagation(); if (!busy) onRetry(m.apiId); }}
+                              onKeyDown={(e) => { if (e.key === "Enter" || e.key === " ") { e.preventDefault(); e.stopPropagation(); if (!busy) onRetry(m.apiId); } }}>
+                              Retry
+                            </span>
+                          </span>
+                        )}
                         <span className="vms-edithint">EDIT</span>
                       </button>
                     )) : <div className="vms-none">No sessions</div>}
@@ -655,10 +744,20 @@ const CSS = `
 .vms-navbtn:hover:not(:disabled){background:var(--slot)}
 .vms-navbtn:disabled{opacity:.5;cursor:default}
 .vms-wklabel{display:flex;flex-direction:column;align-items:center;min-width:172px;line-height:1.15}
+.vms-cam.vms-unsynced{box-shadow:inset 0 0 0 1.5px #d08a00}
+.vms-dot{display:inline-block;width:6px;height:6px;border-radius:50%;background:#d08a00;margin-left:5px;vertical-align:middle}
+.vms-unsyncrow{position:relative;z-index:2;display:flex;align-items:center;gap:6px;margin-top:3px}
+.vms-unsynctxt{font-size:10px;font-weight:800;color:#8a5a00;letter-spacing:.01em}
+.vms-retry{font-size:10px;font-weight:800;color:#8a5a00;text-decoration:underline;cursor:pointer}
 .vms-wkrange{font-size:12.5px;font-weight:900;color:var(--forest);white-space:nowrap;font-variant-numeric:tabular-nums}
 .vms-wktag{font-size:8.5px;font-weight:900;letter-spacing:.7px;text-transform:uppercase;color:var(--muted)}
 .vms-wktag-now{color:#046B45}
-.vms-wklabel-away .vms-wkrange{color:var(--coralInk)}
+.vms-wklabel-away .vms-cam.vms-unsynced{box-shadow:inset 0 0 0 1.5px #d08a00}
+.vms-dot{display:inline-block;width:6px;height:6px;border-radius:50%;background:#d08a00;margin-left:5px;vertical-align:middle}
+.vms-unsyncrow{position:relative;z-index:2;display:flex;align-items:center;gap:6px;margin-top:3px}
+.vms-unsynctxt{font-size:10px;font-weight:800;color:#8a5a00;letter-spacing:.01em}
+.vms-retry{font-size:10px;font-weight:800;color:#8a5a00;text-decoration:underline;cursor:pointer}
+.vms-wkrange{color:var(--coralInk)}
 .vms-wklabel-away .vms-wktag{color:var(--coralInk)}
 .vms-todaybtn-hot{border-color:var(--forest);background:var(--forest);color:#fff}
 .vms-todaybtn-hot:hover{background:var(--forest)}
@@ -716,7 +815,7 @@ const CSS = `
 .vms-cardbtn:focus-visible{outline:2px solid var(--mintInk);outline-offset:2px}
 .vms-cardbtn.vms-sel{box-shadow:0 0 0 3px var(--mint),0 6px 18px rgba(0,42,28,.20)}
 .vms-cardbtn.vms-veo.vms-sel{box-shadow:0 0 0 3px var(--mint),0 6px 18px rgba(0,42,28,.30)}
-.vms-edithint{position:absolute;right:8px;bottom:7px;font-size:9px;font-weight:900;letter-spacing:.5px;color:var(--mintInk);opacity:0}
+.vms-edithint{pointer-events:none;position:absolute;right:8px;bottom:7px;font-size:9px;font-weight:900;letter-spacing:.5px;color:var(--mintInk);opacity:0}
 .vms-slot.vms-veo .vms-edithint{color:var(--mint)}
 .vms-cardbtn:hover .vms-edithint,.vms-cardbtn:focus-visible .vms-edithint{opacity:1}
 span.vms-cam{cursor:pointer}

@@ -69,6 +69,8 @@ const NODE_SUITES = [
   "scripts/roster-edit-model-test.ts",
   "scripts/credits-model-test.ts",
   "scripts/promo-edit-model-test.ts",
+  // The 🎥 name transform — a MatchDay match-name write that reaches players in the live app.
+  "scripts/veo-name-sync-test.ts",
 ];
 const ALL_E2E = readdirSync("scripts/e2e").filter((f) => /^verify-.*\.mjs$/.test(f)).sort().map((f) => `scripts/e2e/${f}`);
 const GATED_E2E = ALL_E2E.filter((s) => !QUARANTINE.has(s.split("/").pop()));

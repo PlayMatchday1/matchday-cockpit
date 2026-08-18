@@ -38,6 +38,11 @@ export type VeoMatch = {
   minutes: number; // sort key
   venue: string; // canonical venue
   name: string; // emoji-stripped display name
+  // THE RAW NAME, exactly as MatchDay holds it. The stripped one above is for display and cannot
+  // drive a write: the name sync has to diff against what is actually stored, and it has to be
+  // able to say "no change". Carried here rather than re-fetched per toggle — it is one more
+  // string on a row already being selected, and the alternative is a GET per chip.
+  rawName: string;
   veo: boolean; // Clubhouse intent (veo_intent.enabled)
   hasEmoji: boolean; // 🎥 present in the raw MatchDay name
 };
@@ -102,6 +107,7 @@ export async function fetchVeoWeek(sb: SupabaseClient, now: Date, weekRef: Date 
       minutes: d.getHours() * 60 + d.getMinutes(),
       venue: canonicalVenueName(r.field_title ?? "") || (r.field_title ?? "Unknown"),
       name: stripCameraEmoji(r.name),
+      rawName: (r.name as string) ?? "",
       veo: rec?.enabled ?? false,
       hasEmoji: hasCameraEmoji(r.name),
     });
