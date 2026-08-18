@@ -113,6 +113,16 @@ const grantAdmin = (ctx) => ctx.route("**/rest/v1/app_users*", async (route) => 
   return route.fulfill({ status: res.status(), contentType: "application/json", body: JSON.stringify(j) });
 });
 
+// The same stub as grantAdmin, for an arbitrary flag shape — so the panel's permission behaviour
+// can be driven without touching a real account.
+const grantShape = (ctx, shape) => ctx.route("**/rest/v1/app_users*", async (route) => {
+  if (route.request().method() !== "GET") return route.continue();
+  const res = await route.fetch(); let j = await res.json().catch(() => null);
+  const p = (r) => ({ ...r, ...shape });
+  j = Array.isArray(j) ? j.map(p) : (j && typeof j === "object" ? p(j) : j);
+  return route.fulfill({ status: res.status(), contentType: "application/json", body: JSON.stringify(j) });
+});
+
 async function routes(ctx) {
   await ctx.route("**/rest/v1/**", (r) => r.fulfill({ status: 200, contentType: "application/json", body: "[]" }));
   await ctx.route("**/api/**", (r) => r.fulfill({ status: 200, contentType: "application/json", body: "{}" }));
@@ -879,6 +889,70 @@ async function main() {
     (r.noOverflow && r.fits && r.teamsVisible && r.teamsFits) ? ok(`layout at ${w}px — no overflow, panel + TEAMS fit, immediate section visible`) : bad(`layout ${w}px`, JSON.stringify(r));
   }
   await page.setViewportSize({ width: 1440, height: 1000 });
+
+  // ── THE PANEL DOES NOT OFFER A WRITE THE ROUTE WILL REFUSE ─────────────────────────────────
+  //
+  // It used to offer exactly that: Save was disabled only on `unsaved === 0 || saving`, so a
+  // holder of EDIT MATCHES who is not an admin could edit 24 fields, press Save, and get back
+  // "Admin access required" — a permission the grant screen never offered.
+  console.log("\npermission: the panel matches the route's rule");
+  for (const [label, shape, expectWritable] of [
+    ["NON-admin holding EDIT MATCHES (Deonna's shape)", { is_admin: false, can_access_matchops: true, can_edit_matches: true }, false],
+    ["admin holding EDIT MATCHES (the positive control)", { is_admin: true, can_access_matchops: true, can_edit_matches: true }, true],
+  ]) {
+    const c = await browser.newContext({ viewport: { width: 1440, height: 1000 }, storageState });
+    await routes(c);
+    // ORDER MATTERS: routes() registers a catch-all "**/rest/v1/**" that answers []. Playwright
+    // runs the LAST registered matching handler, so the app_users shape has to go on AFTER it —
+    // registered before, the catch-all swallows the row and every shape reads as "no user".
+    await grantShape(c, shape);
+    const pg = await c.newPage();
+    await pg.goto(`${BASE}/match-ops/match-panel/17494`, { waitUntil: "domcontentloaded" });
+    await pg.waitForSelector('[data-testid="mp-save"]', { timeout: 40000 });
+    await pg.waitForTimeout(1500);
+
+    const st = await pg.evaluate(() => {
+      const fs = document.querySelector('[data-testid="mp-fieldset"]');
+      const nameInput = document.querySelector('[data-testid="mp-name"]');
+      const save = document.querySelector('[data-testid="mp-save"]');
+      return {
+        fieldsetDisabled: fs?.disabled === true,
+        // :disabled is the EFFECTIVE state — `.disabled` only reports the element's OWN attribute
+        // and reads false for a control disabled by an ancestor <fieldset>, which is how this is
+        // implemented. The field refusing an edit (below) is the behavioural half of the same fact.
+        nameDisabled: nameInput ? nameInput.matches(":disabled") : null,
+        saveDisabled: save?.disabled === true,
+        banner: document.querySelector('[data-testid="mp-readonly-why"]')?.textContent ?? null,
+        saveTitle: save?.getAttribute("title") ?? null,
+      };
+    });
+
+    if (expectWritable) {
+      eq(`${label}: fields are LIVE`, { fieldset: st.fieldsetDisabled, name: st.nameDisabled }, { fieldset: false, name: false });
+      eq(`${label}: no read-only banner`, st.banner, null);
+      // Save is enabled once there is something to save — dirty the form first.
+      await pg.fill('[data-testid="mp-name"]', "Panel Permission Control");
+      await pg.waitForTimeout(400);
+      eq(`${label}: Save becomes ENABLED once dirty`, await pg.$eval('[data-testid="mp-save"]', (e) => e.disabled), false);
+    } else {
+      eq(`${label}: fields are READ-ONLY`, { fieldset: st.fieldsetDisabled, name: st.nameDisabled }, { fieldset: true, name: true });
+      eq(`${label}: Save is DISABLED`, st.saveDisabled, true);
+      eq(`${label}: the reason names EDIT MATCHES and admin, not just admin`,
+         /EDIT MATCHES/.test(st.banner ?? "") && /admin/i.test(st.banner ?? ""), true);
+      eq(`${label}: …and the reason is on the Save control too`, /EDIT MATCHES/.test(st.saveTitle ?? ""), true);
+      // CLICK IT. A control that is only styled dead still fires — that was the VEO EDIT-hint bug.
+      let fired = false;
+      pg.on("request", (r) => { if (/\/api\/matchday\/production\/matches\/\d+$/.test(r.url()) && r.method() === "PUT") fired = true; });
+      await pg.click('[data-testid="mp-save"]', { force: true, timeout: 5000 }).catch(() => {});
+      await pg.waitForTimeout(900);
+      eq(`${label}: the disabled Save is genuinely inert — no PUT fired`, fired, false);
+      // Typing into a disabled field must not work either.
+      await pg.fill('[data-testid="mp-name"]', "should not take").catch(() => {});
+      eq(`${label}: the name field refused the edit`,
+         await pg.$eval('[data-testid="mp-name"]', (e) => e.value !== "should not take"), true);
+    }
+    await c.close();
+  }
 
   console.log(`\n================ RESULT ================\nAssertions: ${PASS} passed, ${FAIL} failed`);
   if (fails.length) fails.forEach((f) => console.log("   FAILED: " + f));

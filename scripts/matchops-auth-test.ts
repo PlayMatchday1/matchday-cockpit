@@ -11,6 +11,7 @@ import { join } from "node:path";
 import { adminGate, deriveMatchOpsFlags, type AppUserRow } from "../src/lib/adminAuth";
 import { matchOpsReadGate, E2E_SERVICE_EMAIL } from "../src/lib/matchOpsAuth";
 import { canReadPromos } from "../src/lib/promoAccess";
+import { matchEditAccess, MATCH_EDIT_REQUIREMENT, NO_EDIT_MATCHES } from "../src/lib/matchEditAccess";
 import { cityManagerGate, assertCityScope } from "../src/lib/cityManagerAuth";
 
 let PASS = 0, FAIL = 0;
@@ -492,6 +493,59 @@ console.log("\nthe USES panel is UNCHANGED — admin AND manage-promos, because 
   is("an admin without manage-promos is refused it by the flag", deriveMatchOpsFlags(PROMO_ADMIN).canManagePromos, false);
   const ui = readFileSync("src/components/PromoCodes.tsx", "utf8");
   is("the panel RENDERS the refusal rather than swallowing it", /data-testid="uses-error">\{d\.error\}/.test(ui), true);
+}
+
+// ── THE PANEL'S RULE IS PINNED TO THE ROUTE'S ────────────────────────────────────────────────
+//
+// MatchPanel offered a Save that the route would refuse: it checked nothing, so a holder of EDIT
+// MATCHES who is not an admin could edit 24 fields and be told "Admin access required" — naming a
+// permission the grant screen never offered. The panel now reads matchEditAccess().
+//
+// The route CANNOT call that helper (authenticateAdmin does not return the row), so this is what
+// stops the two drifting: for every flag shape, the helper must agree exactly with the route's real
+// composition — adminGate(row).ok && deriveMatchOpsFlags(row).canEditMatches. Widen one and this
+// fails until the other follows.
+console.log("\nmatchEditAccess agrees with the route's actual gates, shape for shape:");
+const EDIT_SHAPES: [string, Record<string, unknown>][] = [
+  ["admin + edit + matchops (Ryan)", ADMIN],
+  ["NON-admin + edit + matchops (Deonna's shape)", { ...DEONNA, can_edit_matches: true }],
+  ["Deonna as she is today (no edit flag)", DEONNA],
+  ["admin WITHOUT the edit flag", { id: "u-ae", is_admin: true, can_access_matchops: true, can_edit_matches: false }],
+  ["edit flag but NO matchops", { id: "u-nm", is_admin: true, can_access_matchops: false, can_edit_matches: true }],
+  ["matchops only", MATCHOPS_ONLY],
+  ["no flags", NOFLAGS],
+];
+for (const [label, row] of EDIT_SHAPES) {
+  const routeWould = adminGate(row as AppUserRow).ok && deriveMatchOpsFlags(row as AppUserRow).canEditMatches;
+  is(`  ${label} — panel agrees with the route (${routeWould ? "may write" : "refused"})`,
+     matchEditAccess(row).ok, routeWould);
+}
+
+console.log("\nand the refusal NAMES the real requirement:");
+{
+  const deonna = matchEditAccess({ ...DEONNA, can_edit_matches: true });
+  is("a non-admin EDIT MATCHES holder is refused", deonna.ok, false);
+  is("  …and is told about EDIT MATCHES, not just admin",
+     !deonna.ok && /EDIT MATCHES/.test(deonna.reason) && /admin/i.test(deonna.reason), true);
+  is("  …with the shared wording", !deonna.ok && deonna.reason === MATCH_EDIT_REQUIREMENT, true);
+  const noEdit = matchEditAccess(DEONNA);
+  is("someone without the flag gets the ROUTE'S OWN sentence", !noEdit.ok && noEdit.reason === NO_EDIT_MATCHES, true);
+  const ok = matchEditAccess(ADMIN);
+  is("  control — an admin holder is NOT refused, so those refusals mean something", ok.ok, true);
+}
+{
+  // The route must be reading the shared sentence, not a second copy of it.
+  const src = readFileSync(R("matchday/[env]/matches/[id]"), "utf8");
+  is("the route imports the shared refusal wording", /NO_EDIT_MATCHES/.test(src), true);
+  is("…and no longer inlines its own copy", /"You have read-only Match Ops access\. EDIT MATCHES/.test(src), false);
+  // POSITIVE CONTROL: the scan can see the route's other literals, so that `false` is real.
+  is("  control — the scan does see the route's source", /authenticateAdmin/.test(src), true);
+}
+{
+  const ui = readFileSync("src/components/MatchPanel.tsx", "utf8");
+  is("the panel reads matchEditAccess", /matchEditAccess\(appUser\)/.test(ui), true);
+  is("Save is disabled when the person may not write", /data-testid="mp-save" disabled=\{!mayWrite/.test(ui), true);
+  is("the fields sit in a real disabled <fieldset>", /<fieldset className="mp-fs" disabled=\{!mayWrite\}/.test(ui), true);
 }
 
 console.log(`\n${PASS} passed, ${FAIL} failed`);

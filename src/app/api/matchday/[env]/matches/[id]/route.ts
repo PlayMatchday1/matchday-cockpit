@@ -12,6 +12,9 @@ import { apiGet, apiWrite, AmbiguousWriteError, WriteFailedError, StageHostGuard
 import { EDITABLE_KEYS } from "@/lib/matchEditModel";
 import { realOccupancyFromRoster, type RosterRow } from "@/lib/gamedayModel";
 import { recordWrite, supabaseLogStore } from "@/lib/changeLog";
+// The refusal wording lives with the rule (matchEditAccess.ts) so the panel and this route cannot
+// say different things about the same denial. The GATE below is unchanged.
+import { NO_EDIT_MATCHES } from "@/lib/matchEditAccess";
 
 export const runtime = "nodejs";
 export const dynamic = "force-dynamic";
@@ -103,7 +106,7 @@ export async function PUT(req: Request, ctx: { params: Promise<{ env: string; id
   // produces zero network calls (the guarded client enforces the same, unbypassably).
   if (!auth.canEditMatches) {
     console.warn(`[edit-matches] 403: ${auth.email} attempted PUT /admin/matches/${id} without EDIT MATCHES`);
-    return Response.json({ error: "You have read-only Match Ops access. EDIT MATCHES is required to change matches." }, { status: 403 });
+    return Response.json({ error: NO_EDIT_MATCHES }, { status: 403 });
   }
   const actor = { canEditMatches: auth.canEditMatches, email: auth.email, userId: auth.appUserId };
 

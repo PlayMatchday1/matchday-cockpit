@@ -12,11 +12,19 @@
 // It EXTENDS the existing write path /api/matchday/{env}/matches/{id} (env-explicit,
 // canEditMatches-gated, diff-as-body, recordWrite-wrapped). Always production; no env badge/toggle.
 //
+// THE PANEL CHECKS WHAT THE ROUTE ENFORCES. It used to check NOTHING — Save was disabled only on
+// `unsaved === 0 || saving` — so someone holding EDIT MATCHES but not admin could edit 24 fields,
+// press Save, and be told "Admin access required": a permission the grant screen never offered,
+// contradicting the ticked EDIT MATCHES box. The rule is matchEditAccess(), the single definition
+// this and the route are pinned to.
+//
 // The diff panel and the request body are BOTH built from matchEditModel's diffKeys()+pick() — the
 // one shared engine, so they can never disagree about what is sent (that is the whole point of the
 // model; never re-implement it).
 
 import { useCallback, useEffect, useMemo, useState } from "react";
+import { useAuth } from "@/lib/useAuth";
+import { matchEditAccess } from "@/lib/matchEditAccess";
 import { supabase } from "@/lib/supabase";
 import { diffKeys, pick, MONEY_KEYS, TOGGLE_KEYS, NULLABLE_NUM } from "@/lib/matchEditModel";
 import { centsToDollars, dollarsToCents } from "@/lib/matchMoney";
@@ -91,6 +99,11 @@ async function authHeaders(): Promise<Record<string, string> | null> {
 }
 
 export default function MatchPanel({ matchId, env = "production", onDirtyChange }: { matchId: string; env?: "production" | "staging"; onDirtyChange?: (dirty: boolean) => void }) {
+  // THE SAME RULE THE ROUTE ENFORCES. Not a guess and not a second copy — matchEditAccess() is
+  // pinned to adminGate + deriveMatchOpsFlags by an equivalence assertion in matchops-auth-test.
+  const { appUser } = useAuth();
+  const access = matchEditAccess(appUser);
+  const mayWrite = access.ok;
   const [orig, setOrig] = useState<MatchData | null>(null);
   const [cur, setCur] = useState<Record<string, unknown>>({});
   const [when, setWhen] = useState<{ date: string; time: string }>({ date: "", time: "" });
@@ -553,6 +566,15 @@ export default function MatchPanel({ matchId, env = "production", onDirtyChange 
           </div>
         </div>
 
+        {!mayWrite && (
+          <div className="mp-noedit" data-testid="mp-readonly">
+            <b>Read-only</b>
+            <span data-testid="mp-readonly-why">{access.ok ? "" : access.reason}</span>
+          </div>
+        )}
+        {/* A real <fieldset disabled> — the browser makes every control inside genuinely
+            unclickable, rather than a class that only looks disabled. */}
+        <fieldset className="mp-fs" disabled={!mayWrite} data-testid="mp-fieldset">
         <div className="mp-body">
           {/* MATCH */}
           <Section title="MATCH" dirty={secDirty(["name", "type", "managerId", "secondManagerId", "fieldId"])}>
@@ -920,6 +942,7 @@ export default function MatchPanel({ matchId, env = "production", onDirtyChange 
           </div>
         </div>
 
+        </fieldset>
         <div className="mp-foot">
           {toast && <span className="mp-note info" data-testid="mp-toast">{toast}</span>}
           {/* PER WRITE, NOT PER SAVE. A batch that stops half-way has no single verdict: some of it
@@ -963,7 +986,7 @@ export default function MatchPanel({ matchId, env = "production", onDirtyChange 
                 taking one back would BE another write. The label says so. */}
             <button type="button" className="mp-btn" data-testid="mp-revert" disabled={unsaved === 0} onClick={doRevert}
               title="Discards every unsaved change on this panel. Sends no request — it cannot undo anything already saved.">Revert <em className="mp-btnsub">discards, sends nothing</em></button>
-            <button type="button" className="mp-btn mp-pri" data-testid="mp-save" disabled={unsaved === 0 || saving} onClick={() => void doSave()}>
+            <button type="button" className="mp-btn mp-pri" data-testid="mp-save" disabled={!mayWrite || unsaved === 0 || saving} title={mayWrite ? undefined : (access.ok ? undefined : access.reason)} onClick={() => { if (mayWrite) void doSave(); }}>
               {saving ? "Saving…" : unsaved ? `Save · ${unsaved} change${unsaved === 1 ? "" : "s"}` : "Save"}</button>
           </div>
         </div>
@@ -1088,6 +1111,10 @@ const CSS = `
 .mp-btn{border:1px solid var(--line2);background:var(--card);border-radius:9px;padding:0 14px;font:inherit;font-weight:700;cursor:pointer;color:var(--ink2);min-height:40px}
 .mp-btn:disabled{opacity:.5;cursor:not-allowed}
 .mp-btn.mp-pri{background:#12301f;border-color:#12301f;color:#fff}
+.mp-fs{border:0;margin:0;padding:0;min-width:0}
+.mp-noedit{display:flex;flex-direction:column;gap:2px;margin:0 0 10px;border-radius:9px;padding:9px 11px;background:#fdf3e2;border:1px solid #e6c98a}
+.mp-noedit b{font-size:11px;font-weight:900;letter-spacing:.06em;text-transform:uppercase;color:#8a5a00}
+.mp-noedit span{font-size:12px;line-height:1.35;color:#6b4a08}
 .mp-err{padding:16px;color:var(--red);font-size:13px}
 .mp-loading{padding:16px;color:var(--ink3)}
 /* ── TEAMS · ROSTER · TEAM COUNT ─────────────────────────────────────────────────────────────────
