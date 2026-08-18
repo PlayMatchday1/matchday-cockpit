@@ -318,14 +318,29 @@ async function main() {
       () => !!document.querySelector('[data-testid="promo-no-access"],[data-testid="promos"]'),
       null, { timeout: 25000 },
     );
-    const gated = await p2.evaluate(() => ({
-      rendered: !!document.querySelector('[data-testid="promo-no-access"],[data-testid="promos"]'),
-      noAccessPanel: !!document.querySelector('[data-testid="promo-no-access"]'),
-      noNewButton: !document.querySelector('[data-testid="promo-new"]'),
-    }));
-    // `rendered` is asserted alongside, so the absence below can never be satisfied by a blank page.
-    (gated.rendered && (gated.noAccessPanel || gated.noNewButton))
-      ? ok("without MANAGE PROMOS the screen RENDERED and does not offer the write controls")
+    // WHAT "NOT OFFERED" MEANS CHANGED, AND THIS ASSERTION MOVED WITH IT.
+    //
+    // It used to accept the screen being refused outright, or the create button being ABSENT.
+    // Neither is the contract any more: /api/promos/list has been a Match Ops READ since Phase 23
+    // Part D, so a holder of Match Ops without MANAGE PROMOS now SEES the codes — refusing them
+    // was the bug — and the write controls are DISABLED WITH A REASON rather than hidden, because
+    // someone who cannot create a code still needs to know the capability exists.
+    //
+    // So this is now a stricter check than the one it replaces: not "the button is missing"
+    // (which a blank render also satisfies) but "the button is there, and it does not work".
+    const gated = await p2.evaluate(() => {
+      const b = document.querySelector('[data-testid="promo-new"]');
+      return {
+        rendered: !!document.querySelector('[data-testid="promo-no-access"],[data-testid="promos"]'),
+        screenOpened: !!document.querySelector('[data-testid="promos"]'),
+        newButtonPresent: !!b,
+        newButtonDisabled: b?.disabled === true,
+        newButtonSaysWhy: /MANAGE PROMOS/.test(b?.getAttribute("title") ?? ""),
+      };
+    });
+    (gated.rendered && gated.screenOpened && gated.newButtonPresent
+      && gated.newButtonDisabled && gated.newButtonSaysWhy)
+      ? ok("without MANAGE PROMOS the screen RENDERS the codes and the create control is disabled, with a reason")
       : bad("ungated UI", JSON.stringify(gated));
     await closeContext(ro);
   }
