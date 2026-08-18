@@ -2,7 +2,14 @@
 
 import { Fragment } from "react";
 
-// Secondary nav for /admin/finance — three muted text links above the
+// Secondary nav for /admin/finance — ONE muted text link, riding in the period bar.
+//
+// WAS THREE. "Managers" only ever redirected to /match-ops/manager-pay, which has its own rail
+// entry — a second door to the same room. "City Manager Check-Ins" moved to Match Ops › Back
+// Office › People, where the other people-shaped pages live, and became a real page instead of an
+// overlay. Configure is the only one left that is genuinely a Finance-wide affordance.
+//
+// (original note) Secondary nav for /admin/finance — three muted text links above the
 // hero, aligned right. Visually quieter than the green pill row so
 // it reads as "secondary" at a glance. Items map to non-pill views:
 //   - configure        → expands a sub-strip (Revenue, Expenses,
@@ -14,17 +21,12 @@ import { Fragment } from "react";
 // `active` is null when no secondary item is selected (the user is
 // on a primary pill instead).
 
-export type SecondaryId =
-  | "configure"
-  | "check-ins"
-  | "managers";
+export type SecondaryId = "configure";
 
 // Partner Dashboards moved to Match Ops (2026-08); Managers is a convenience
 // jump to its Match Ops home.
 const ITEMS: { id: SecondaryId; label: string }[] = [
   { id: "configure", label: "Configure" },
-  { id: "check-ins", label: "City Manager Check-Ins" },
-  { id: "managers", label: "Managers" },
 ];
 
 export default function FinanceSecondaryNav({

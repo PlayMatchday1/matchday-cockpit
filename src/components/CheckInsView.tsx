@@ -3,20 +3,12 @@
 import Link from "next/link";
 import { MANAGERS } from "@/lib/checkIns";
 import { useCheckIns } from "@/lib/useCheckIns";
-import CheckInsCalendar from "./CheckInsCalendar";
-import CheckInsNextPayments from "./CheckInsNextPayments";
 import CheckInsStatusGrid from "./CheckInsStatusGrid";
 
 export default function CheckInsView() {
-  const { data, loading, syncing, lastSyncedAt, error, autoRefresh, refresh, setAutoRefresh } =
+  const { data, loading, error } =
     useCheckIns();
 
-  const lastSyncedLabel = lastSyncedAt
-    ? lastSyncedAt.toLocaleTimeString("en-US", {
-        hour: "numeric",
-        minute: "2-digit",
-      })
-    : null;
 
   return (
     <>
@@ -40,47 +32,12 @@ export default function CheckInsView() {
         </div>
       </div>
 
-      <div className="mb-8 flex flex-wrap items-center gap-3 rounded-2xl border-[1.5px] border-cream-line bg-white px-4 py-3 shadow-md shadow-deep-green/10">
-        <SyncDot state={error ? "error" : syncing ? "loading" : "ok"} />
-        <div className="flex-1 text-xs font-medium text-deep-green/65">
-          {error
-            ? `Connection error: ${error}`
-            : loading
-              ? "Connecting to sheet…"
-              : lastSyncedLabel
-                ? `Live · last synced ${lastSyncedLabel}${autoRefresh ? " · auto-refresh on" : " · paused"}`
-                : "Connected"}
-        </div>
-        <button
-          type="button"
-          onClick={() => refresh()}
-          disabled={syncing}
-          className="rounded-full bg-mint px-4 py-1.5 text-xs font-bold text-deep-green transition hover:bg-mint-hover disabled:opacity-50"
-        >
-          {syncing ? "Refreshing…" : "↻ Refresh now"}
-        </button>
-        <button
-          type="button"
-          onClick={() => setAutoRefresh(!autoRefresh)}
-          className="rounded-full border border-cream-line bg-white px-4 py-1.5 text-xs font-bold text-deep-green transition hover:bg-cream-soft"
-        >
-          Auto-refresh: {autoRefresh ? "ON" : "OFF"}
-        </button>
-      </div>
-
-      <SectionHeader
-        title="Payment Calendar"
-        subtitle={`Pay days for ${MANAGERS.length} managers · current month`}
-      />
-      <div className="mb-10">
-        <CheckInsCalendar />
-      </div>
-
-      <SectionHeader title="Next Payments" subtitle="Sorted by upcoming pay date" />
-      <div className="mb-10">
-        <CheckInsNextPayments />
-      </div>
-
+      {/* STRIPPED BACK TO THE MONTHLY CHECK-IN STATUS.
+          Removed: the live-sync bar (sync dot / last-synced / Refresh / Auto-refresh), the Payment
+          Calendar month grid, and Next Payments. The calendar and the payment cards both rendered
+          MANAGERS[].payDay and were mounted nowhere else; that fact now rides on each status card
+          so it is not lost with them. An error is still surfaced below, because a failed sheet read
+          must not read as "nobody submitted". */}
       <SectionHeader
         title="Monthly Check-In Status"
         subtitle={
@@ -122,12 +79,3 @@ function SectionHeader({
   );
 }
 
-function SyncDot({ state }: { state: "ok" | "loading" | "error" }) {
-  const cls =
-    state === "error"
-      ? "bg-coral animate-pulse"
-      : state === "loading"
-        ? "bg-blue-info animate-pulse"
-        : "bg-mint";
-  return <span aria-hidden className={`h-2 w-2 rounded-full ${cls}`} />;
-}

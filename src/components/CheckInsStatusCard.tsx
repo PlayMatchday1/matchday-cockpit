@@ -2,6 +2,15 @@
 
 import type { ManagerStatus } from "@/lib/checkIns";
 
+// THE PAY DAY, carried onto the card. It used to live only in the Payment Calendar and Next
+// Payments panels, both of which have been removed — and it is the one fact those blocks showed
+// that appears NOWHERE ELSE in the app. Manager Pay shows a single aggregate pay date for the
+// period, not each manager's own day.
+function ordinal(d: number): string {
+  const s = ["th", "st", "nd", "rd"][(d % 100 - 20) % 10] ?? ["th", "st", "nd", "rd"][d % 100] ?? "th";
+  return `${d}${s}`;
+}
+
 export default function CheckInsStatusCard({
   status,
 }: {
@@ -18,7 +27,7 @@ export default function CheckInsStatusCard({
               {manager.name}
             </div>
             <div className="mt-0.5 text-[10px] font-bold uppercase tracking-wider text-deep-green/55">
-              {manager.city}
+              {manager.city} · pays {ordinal(manager.payDay)}
             </div>
           </div>
           <span className="inline-flex shrink-0 rounded-full bg-muted-soft px-2 py-0.5 text-[10px] font-bold uppercase tracking-wider text-muted ring-1 ring-inset ring-cream-line">
@@ -49,7 +58,7 @@ export default function CheckInsStatusCard({
             {manager.name}
           </div>
           <div className="mt-0.5 text-[10px] font-bold uppercase tracking-wider text-deep-green/55">
-            {manager.city}
+            {manager.city} · pays {ordinal(manager.payDay)}
           </div>
         </div>
         {submitted ? (

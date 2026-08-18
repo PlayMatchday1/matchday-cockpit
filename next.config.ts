@@ -63,6 +63,14 @@ const nextConfig: NextConfig = {
       // new home. 308 (permanent) so bookmarks to /managers survive. The old
       // /finance/match-managers + /admin/finance/match-managers redirects above
       // still point at /managers, so they chain here — kept intentionally.
+      // City Manager Check-Ins moved to Match Ops › Back Office › People. It was never a route
+      // under Finance (it was in-page tab state, then an overlay), so this is belt-and-braces for
+      // anything that guessed the URL rather than a bookmark we know exists.
+      {
+        source: "/admin/finance/check-ins",
+        destination: "/match-ops/check-ins",
+        permanent: true,
+      },
       {
         source: "/managers",
         destination: "/match-ops/manager-pay",

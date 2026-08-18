@@ -26,7 +26,6 @@ import PagePermissionGuard from "@/components/PagePermissionGuard";
 import ChatsRail from "../../match-ops/ChatsRail";
 import MatchOpsMobileBar from "../../match-ops/MatchOpsMobileBar";
 import ChangeLogView from "@/components/ChangeLogView";
-import CheckInsView from "@/components/CheckInsView";
 import ExpenseAdminView from "@/components/ExpenseAdminView";
 import FieldCostsView from "@/components/FieldCostsView";
 import RevenueAdminView from "@/components/RevenueAdminView";
@@ -51,7 +50,7 @@ const COLLAPSE_KEY = "finance:rail-collapsed";
 const LAST_CONFIGURE_KEY = "finance:lastConfigureSubTab";
 
 // The overlay is either a Configure sub-tab or Check-Ins. `null` means the routed section shows.
-type Overlay = ConfigureSubTabId | "check-ins" | null;
+type Overlay = ConfigureSubTabId | null;
 
 // OpEx Calendar's "add an expense" affordance used to be `selectTab("expenses")` on the old page.
 // The Expenses editor is a Configure surface, not a section, so a routed section reaches it the
@@ -97,7 +96,7 @@ function FinanceShellInner({ children }: { children: React.ReactNode }) {
 
   // Remember the last Configure sub-tab. Same key, same session scope as before the split.
   useEffect(() => {
-    if (overlay && overlay !== "check-ins" && typeof window !== "undefined") {
+    if (overlay && typeof window !== "undefined") {
       window.sessionStorage.setItem(LAST_CONFIGURE_KEY, overlay);
     }
   }, [overlay]);
@@ -126,10 +125,10 @@ function FinanceShellInner({ children }: { children: React.ReactNode }) {
   // for rather than the admin surface you left open on the previous one.
   useEffect(() => { setOverlay(null); }, [pathname]);
 
-  function openSecondary(s: SecondaryId) {
-    if (s === "configure") setOverlay(getLastConfigureSubTab());
-    else if (s === "managers") router.push("/managers");
-    else setOverlay("check-ins");
+  // ONE ITEM LEFT. Managers was a second door to /match-ops/manager-pay; Check-Ins is now its own
+  // page in Match Ops › Back Office › People.
+  function openSecondary(_s: SecondaryId) {
+    setOverlay(getLastConfigureSubTab());
   }
 
   // === THE PERIOD. One control, three grains, ?p= in the URL. ===
@@ -166,8 +165,7 @@ function FinanceShellInner({ children }: { children: React.ReactNode }) {
     : changeGrain(period, grainSupport.grains[0], now);
 
   const railW = collapsed ? "60px" : "212px";
-  const secondary: SecondaryId | null =
-    overlay === null ? null : overlay === "check-ins" ? "check-ins" : "configure";
+  const secondary: SecondaryId | null = overlay === null ? null : "configure";
 
   return (
     <FinancePeriodProvider value={{ period: shownPeriod, now, setPeriod }}>
@@ -206,7 +204,7 @@ function FinanceShellInner({ children }: { children: React.ReactNode }) {
 
         {secondary === "configure" && (
           <FinanceConfigureSubNav
-            value={overlay && overlay !== "check-ins" ? overlay : "revenue"}
+            value={overlay ?? "revenue"}
             onChange={(id) => setOverlay(id)}
           />
         )}
@@ -227,7 +225,6 @@ function FinanceShellInner({ children }: { children: React.ReactNode }) {
 }
 
 function OverlayView({ overlay }: { overlay: Exclude<Overlay, null> }) {
-  if (overlay === "check-ins") return <CheckInsView />;
   if (overlay === "revenue") return <RevenueAdminView />;
   if (overlay === "expenses") return <ExpenseAdminView />;
   if (overlay === "field-costs") return <FieldCostsView />;
