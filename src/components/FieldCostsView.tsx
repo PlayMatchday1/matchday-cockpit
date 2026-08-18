@@ -43,7 +43,11 @@ import {
   type FinVenueCostOverride,
 } from "@/lib/useFinanceData";
 
-type PriceField = "dpp_price" | "member_price" | "cost_per_match";
+// per_match_rate joins these because it is the column the COST COMPUTATION reads
+// (financeCosts.ts:136 `venue.per_match_rate ?? 0`). It was not editable on this page at all,
+// while cost_per_match — which that arithmetic never consults for as-billed cost — was.
+// savePrice is column-generic, so this needs no new write path.
+type PriceField = "dpp_price" | "member_price" | "cost_per_match" | "per_match_rate";
 type EditableField =
   | PriceField
   | "billing_type"
@@ -59,6 +63,38 @@ type EditableField =
 type CellStateKey = EditableField | "custom_amount";
 type CellState = { saving: boolean; error: string | null; flash: boolean };
 type EditMap = Map<string, CellState>;
+
+// ── DISPLAY HELPERS FOR THE REBUILT TABLE ──────────────────────────────────────────────────────
+const MONTHS_SHORT = ["Jan","Feb","Mar","Apr","May","Jun","Jul","Aug","Sep","Oct","Nov","Dec"];
+const MONTHS_FULL = ["January","February","March","April","May","June","July","August","September","October","November","December"];
+// "Aug 2026" → "Aug"
+function monthShort(monthKey: string): string { return monthKey.split(" ")[0] ?? monthKey; }
+function monthFull(monthKey: string): string {
+  const i = MONTHS_SHORT.indexOf(monthShort(monthKey));
+  return i < 0 ? monthKey : MONTHS_FULL[i];
+}
+function monthParts(monthKey: string): { year: number; month0: number } | null {
+  const [mon, yr] = monthKey.split(" ");
+  const m = MONTHS_SHORT.indexOf(mon);
+  const y = Number(yr);
+  return m < 0 || !Number.isFinite(y) ? null : { year: y, month0: m };
+}
+// THE DAY, RESOLVED INTO THE SELECTED MONTH — mirroring billingDayForMonth in opexSources.ts:208,
+// including its Math.min clamp, so "31" reads as the 28th/29th in February exactly as the money
+// is dated. Billing is SAME-MONTH (opexSources.ts:540 keys the cost to the same month0 it resolves
+// the day against, with no +1 on that path), so the date shown is always in the month above it.
+function resolveBillingDate(monthKey: string, day: number | null): string | null {
+  const p = monthParts(monthKey);
+  if (!p || day == null) return null;
+  const last = new Date(p.year, p.month0 + 1, 0).getDate();
+  return `${MONTHS_SHORT[p.month0]} ${Math.min(day, last)}`;
+}
+const BILLING_LABEL: Record<string, string> = {
+  per_match: "Per match",
+  profit_share: "Profit share",
+  monthly_flat: "Monthly flat",
+};
+
 function editKey(venueId: number, field: CellStateKey): string {
   return `${venueId}|${field}`;
 }
@@ -650,13 +686,7 @@ export default function FieldCostsView() {
         <h1 className="font-display text-5xl uppercase leading-none tracking-tight text-deep-green md:text-6xl">
           Field Costs
         </h1>
-        <p className="mt-2 text-sm text-deep-green/65">
-          Single source of truth for venue costs. Per-match billing
-          auto-computes from the schedule; monthly_flat and profit_share
-          venues read from per-month overrides — set them with the
-          row-level Override button. Cash Flow&apos;s Field Costs line sums
-          all of this.
-        </p>
+
       </div>
 
       <div className="mb-5 flex flex-wrap items-end gap-3 rounded-2xl border-[1.5px] border-cream-line bg-white p-4 shadow-md shadow-deep-green/10">
@@ -758,32 +788,42 @@ export default function FieldCostsView() {
         </div>
       )}
 
+      {/* THE ONE LINE OF PROSE THIS PAGE KEEPS, because it is the rule. SAME-MONTH: opexSources.ts
+          keys the cost to monthKeyFor(year, month0) (:540) and resolves the day against that same
+          month0 (:435) — there is no +1 on that path. */}
+      <div className="mb-4 rounded-lg border border-cream-line border-l-[3px] border-l-deep-green/20 bg-[#f7faf8] px-3.5 py-2.5 text-[12.5px] text-deep-green/70">
+        <b className="font-extrabold text-deep-green">Monthly venues bill within the month.</b>{" "}
+        {monthFull(month)}&rsquo;s field cost is dated in {monthFull(month)}, on the venue&rsquo;s
+        billing day. Per-match venues cost on each match date and have no billing day.
+      </div>
+
       <section className="overflow-hidden rounded-2xl border-[1.5px] border-cream-line bg-white shadow-md shadow-deep-green/10">
         <div className="overflow-x-auto">
           <table className="w-full text-xs">
             <thead className="bg-cream-soft text-[10px] font-bold uppercase tracking-wider text-deep-green/60">
+              {/* SEVEN COLUMNS. City folded into Venue; Pay-on-cancel folded into the Rate
+                  sub-line; DPP and Member price moved into the row panel — they are what a PLAYER
+                  pays, and they held the two widest columns on a table about what MatchDay pays. */}
               <tr className="border-b border-cream-line">
-                <th className="w-8 px-3 py-2"></th>
-                <th className="px-3 py-2 text-left">Venue</th>
-                <th className="px-3 py-2 text-left">City</th>
+                <th className="px-3 py-2 pl-5 text-left">Venue</th>
                 <th className="px-3 py-2 text-left">Billing</th>
-                <th className="px-3 py-2 text-right">DPP Price</th>
-                <th className="px-3 py-2 text-right">Member Price</th>
-                <th className="px-3 py-2 text-right">Cost/Match</th>
-                <th className="px-3 py-2 text-center">Pay on Cancel</th>
-                <th className="px-3 py-2 text-right">Match Count</th>
-                <th className="px-3 py-2 text-right">Cost</th>
-                <th className="px-3 py-2 text-left">When it bills</th>
-                <th className="px-3 py-2 text-left">How it's computed</th>
-                <th className="px-3 py-2 text-left">Source</th>
-                <th className="px-3 py-2 text-right">&nbsp;</th>
+                <th className="px-3 py-2 text-left">Rate</th>
+                <th className="px-3 py-2 text-right">Matches</th>
+                <th className="px-3 py-2 text-right">{monthShort(month)} cost</th>
+                <th className="px-3 py-2 text-left">
+                  Bills on
+                  <span className="block text-[8.5px] font-bold normal-case tracking-normal text-deep-green/35">
+                    when the money leaves
+                  </span>
+                </th>
+                <th className="w-8 px-3 py-2"></th>
               </tr>
             </thead>
             <tbody>
               {loading && filtered.length === 0 ? (
                 <tr>
                   <td
-                    colSpan={14}
+                    colSpan={7}
                     className="px-3 py-8 text-center text-sm text-deep-green/55"
                   >
                     Loading field costs…
@@ -792,7 +832,7 @@ export default function FieldCostsView() {
               ) : filtered.length === 0 ? (
                 <tr>
                   <td
-                    colSpan={14}
+                    colSpan={7}
                     className="px-3 py-8 text-center text-sm text-deep-green/55"
                   >
                     No venues match these filters.
@@ -861,6 +901,20 @@ export default function FieldCostsView() {
                 })
               )}
             </tbody>
+            <tfoot className="border-t-2 border-deep-green bg-[#fbfdfc] text-deep-green">
+              <tr>
+                <td className="px-3 py-3.5 pl-5 text-left text-[15px] font-extrabold">{monthFull(month)}</td>
+                <td /><td />
+                <td className="px-3 py-3.5 text-right text-[15px] font-extrabold tabular-nums">
+                  {filtered.reduce((a, r) => a + r.matchCount, 0)}
+                </td>
+                {/* THE SAME SUM AS THE HEADLINE — both are the rows on screen, so they cannot drift. */}
+                <td className="px-3 py-3.5 text-right text-[19px] font-extrabold tabular-nums">
+                  {fmtMoney(filtered.reduce((a, r) => a + r.amount, 0))}
+                </td>
+                <td /><td />
+              </tr>
+            </tfoot>
           </table>
         </div>
         {recon && (
@@ -1017,179 +1071,158 @@ function FieldCostTableRow({
 }) {
   const isOverride = Boolean(row.override);
   const isCombined = row.secondaryVenueIds.length > 0;
+  const v = primaryVenue;
+  const zero = Math.abs(row.amount) < 0.005;
+
+  // RATE RENDERS THE COLUMN THE COST COMPUTATION READS. autoCost uses
+  // `venue.per_match_rate ?? 0` (financeCosts.ts:136) — NOT cost_per_match, which is what this
+  // table used to print. Six per_match venues carry per_match_rate = NULL with a non-null
+  // cost_per_match, so the old cell showed "$90 / match" beside a computed $0. The cell now says
+  // what the arithmetic actually used.
+  let rateMain: React.ReactNode;
+  let rateSub = v?.charge_on_cancel ? "cancelled matches billed" : "cancels not billed";
+  let rateAmber = false;
+  if (row.billingType === "per_match") {
+    if (v?.per_match_rate == null) {
+      rateMain = "No rate set";
+      rateSub = "per-match cost computes $0";
+      rateAmber = true;
+    } else if (v.per_match_rate === 0) {
+      rateMain = "Free";
+      rateSub = "no charge from venue";
+    } else {
+      rateMain = <>{fmtMoney(v.per_match_rate)} <span className="font-semibold text-deep-green/45">/ match</span></>;
+    }
+  } else if (row.billingType === "profit_share") {
+    rateMain = <>Share <span className="font-semibold text-deep-green/45">of revenue</span></>;
+  } else {
+    rateMain = v?.monthly_flat != null
+      ? <>{fmtMoney(v.monthly_flat)} <span className="font-semibold text-deep-green/45">/ month</span></>
+      : <span className="text-deep-green/40">Set per month</span>;
+    rateSub = "flat, regardless of matches";
+  }
+
+  // BILLS ON — three states, and only three.
+  const perMatchDated = row.billingType === "per_match" && v?.billing_day == null;
+  const resolved = resolveBillingDate(month, v?.billing_day ?? null);
   return (
     <>
       <tr
         id={`venue-row-${row.primaryVenueId}`}
-        className={`group border-t border-cream-line/40 ${
-          expandable ? "cursor-pointer" : ""
-        } hover:bg-cream-soft/50 ${highlight ? "animate-pulse bg-mint-soft" : ""}`}
-        onClick={expandable ? onToggleExpand : undefined}
+        className={
+          "border-b border-cream-line/70 transition " +
+          (expanded ? "bg-cream-soft/40" : "hover:bg-cream-soft/30") +
+          (highlight ? " animate-pulse bg-mint/20" : "")
+        }
       >
-        <td className="px-3 py-2 text-deep-green/55">
-          {expandable ? (
-            expanded ? (
-              <ChevronDown size={14} aria-hidden />
-            ) : (
-              <ChevronRight size={14} aria-hidden />
-            )
-          ) : null}
+        {/* VENUE — city (and "combined") as a sub-line. Kills the separate City column. */}
+        <td className="px-3 py-2.5 pl-5">
+          <div className="text-[14.5px] font-bold text-deep-green">{row.displayName}</div>
+          <div className="mt-0.5 text-[11px] text-deep-green/45">
+            {row.city}{isCombined ? " · combined" : ""}
+          </div>
         </td>
-        <td className="px-3 py-2 font-semibold text-deep-green">
-          {row.displayName}
-          {isCombined && (
-            <span className="ml-1 text-[10px] font-normal text-deep-green/45">
-              (combined)
-            </span>
-          )}
-        </td>
-        <td className="px-3 py-2 text-deep-green/85">{row.city}</td>
-        <td
-          className="px-3 py-2"
-          onClick={(e) => e.stopPropagation()}
-        >
-          <BillingTypeCell
-            stored={primaryVenue?.billing_type ?? null}
-            combined={isCombined}
-            state={cellState("billing_type")}
-            onSave={onSaveBillingType}
-          />
-        </td>
-        <td
-          className="px-3 py-2 text-right"
-          onClick={(e) => e.stopPropagation()}
-        >
-          <PriceCell
-            stored={primaryVenue?.dpp_price ?? null}
-            state={cellState("dpp_price")}
-            onSave={(raw) => onSavePrice("dpp_price", raw)}
-          />
-        </td>
-        <td
-          className="px-3 py-2 text-right"
-          onClick={(e) => e.stopPropagation()}
-        >
-          <PriceCell
-            stored={primaryVenue?.member_price ?? null}
-            state={cellState("member_price")}
-            onSave={(raw) => onSavePrice("member_price", raw)}
-          />
-        </td>
-        <td
-          className="px-3 py-2 text-right"
-          onClick={(e) => e.stopPropagation()}
-        >
-          <PriceCell
-            stored={primaryVenue?.cost_per_match ?? null}
-            state={cellState("cost_per_match")}
-            onSave={(raw) => onSavePrice("cost_per_match", raw)}
-          />
-        </td>
-        <td
-          className="px-3 py-2 text-center"
-          onClick={(e) => e.stopPropagation()}
-        >
-          <ChargeOnCancelCell
-            stored={primaryVenue?.charge_on_cancel ?? true}
-            state={cellState("charge_on_cancel")}
-            onSave={onSaveChargeOnCancel}
-          />
-        </td>
-        <td className="px-3 py-2 text-right font-mono tabular-nums text-deep-green/75">
-          {row.matchCount}
-        </td>
-        <td className="px-3 py-2 text-right">
-          <span
-            className={`inline-flex items-center gap-1 font-mono font-bold tabular-nums ${
-              isOverride ? "text-deep-green" : "text-deep-green"
-            }`}
-          >
-            {isOverride && (
-              <span title="Override active" className="inline-flex">
-                <Pin
-                  size={11}
-                  aria-hidden
-                  className="text-mint-hover"
-                />
-              </span>
-            )}
-            {fmtMoney(row.amount, true)}
-            {!isOverride && row.billingType === "per_match" && (
-              <Lock
-                size={10}
-                aria-hidden
-                className="ml-1 text-deep-green/35"
-              />
-            )}
+
+        {/* BILLING — a quiet tag, title case, never the raw enum. */}
+        <td className="px-3 py-2.5">
+          <span className="inline-block whitespace-nowrap rounded border border-cream-line bg-cream-soft px-[7px] py-[3px] text-[10px] font-extrabold uppercase tracking-[0.05em] text-deep-green/70">
+            {BILLING_LABEL[row.billingType ?? ""] ?? "—"}
           </span>
         </td>
-        <td
-          className="px-3 py-2"
-          onClick={(e) => e.stopPropagation()}
-        >
-          <BillingTimingCell
-            venue={primaryVenue}
-            dashboardDriven={dashboardDriven}
-            isCombinedPrimary={isCombinedPrimary}
-            month={month}
-            autoAmount={autoAmount}
-            monthOverride={row.override}
-            cadenceState={cellState("billing_cadence")}
-            dayState={cellState("billing_day")}
-            anchorState={cellState("billing_anchor_month")}
-            weekdayState={cellState("billing_weekday")}
-            customDaysState={cellState("billing_custom_days")}
-            customAmountState={cellState("custom_amount")}
-            onSaveCadence={onSaveBillingCadence}
-            onSaveDay={onSaveBillingDay}
-            onSaveAnchorMonth={onSaveBillingAnchorMonth}
-            onSaveWeekday={onSaveBillingWeekday}
-            onSaveCustomDays={onSaveCustomDays}
-            onSaveCustomAmount={onSaveCustomAmount}
-          />
+
+        {/* RATE — unit is part of the value; pay-on-cancel folded into the sub-line. */}
+        <td className="px-3 py-2.5">
+          <div className={"text-[13.5px] font-bold " + (rateAmber ? "text-[#8a5a00]" : "text-deep-green")}>{rateMain}</div>
+          <div className={"mt-0.5 text-[11px] " + (rateAmber ? "text-[#8a5a00]" : "text-deep-green/45")}>{rateSub}</div>
         </td>
-        <td className="px-3 py-2 text-deep-green/85">{row.formula}</td>
-        <td className="px-3 py-2 text-deep-green/55">{row.source}</td>
-        <td
-          className="px-3 py-2 text-right"
-          onClick={(e) => e.stopPropagation()}
-        >
-          {isOverride ? (
-            <div className="inline-flex items-center gap-1 opacity-100 transition group-hover:opacity-100">
-              <button
-                type="button"
-                onClick={onSetOverride}
-                className="inline-flex items-center gap-1 rounded-full border border-cream-line bg-cream-soft px-2 py-1 text-[10px] font-bold uppercase tracking-wider text-deep-green hover:bg-cream"
-                aria-label="Edit override"
-              >
-                <Pencil size={10} aria-hidden />
-                Edit
-              </button>
-              <button
-                type="button"
-                onClick={onRemoveOverride}
-                className="inline-flex items-center gap-1 rounded-full border border-coral/30 bg-coral-soft/30 px-2 py-1 text-[10px] font-bold uppercase tracking-wider text-coral hover:bg-coral-soft/60"
-                aria-label="Remove override"
-              >
-                <Trash2 size={10} aria-hidden />
-                Remove
-              </button>
+
+        <td className={"px-3 py-2.5 text-right tabular-nums " + (row.matchCount === 0 ? "text-deep-green/30" : "text-deep-green")}>
+          {row.matchCount}
+        </td>
+
+        {/* MONTH COST — dim when zero. An amber sub-line only when the figure was entered by hand,
+            and it only claims an auto figure for a billing type that HAS one. */}
+        <td className="px-3 py-2.5 text-right">
+          <div className={zero ? "text-[15px] font-semibold tabular-nums text-deep-green/30" : "text-[15px] font-extrabold tabular-nums text-deep-green"}>
+            {fmtMoney(row.amount)}
+          </div>
+          {isOverride && (
+            <div className="mt-0.5 text-[10.5px] font-bold text-[#8a5a00]">
+              {row.billingType === "per_match"
+                ? `override · auto ${fmtMoney(autoAmount)}`
+                : `set for ${monthFull(month)}`}
             </div>
-          ) : (
-            <button
-              type="button"
-              onClick={onSetOverride}
-              className="rounded-full border border-cream-line bg-white px-2 py-1 text-[10px] font-bold uppercase tracking-wider text-deep-green/65 hover:bg-cream-soft hover:text-deep-green"
-            >
-              Set Override
-            </button>
           )}
         </td>
+
+        {/* BILLS ON */}
+        <td className={"px-3 py-2.5 " + (!perMatchDated && resolved == null ? "bg-[#fdeceb]" : "")}>
+          {perMatchDated ? (
+            <>
+              <div className="text-[13.5px] font-bold text-deep-green/70">On each match date</div>
+              <div className="mt-0.5 text-[11px] text-deep-green/45">
+                {row.matchCount === 0 ? `no matches in ${monthShort(month)}` : `${row.matchCount} dates in ${monthShort(month)}`}
+              </div>
+            </>
+          ) : resolved != null ? (
+            <>
+              <div className="text-[14.5px] font-extrabold text-deep-green">{resolved}</div>
+              <div className="mt-0.5 text-[11px] text-deep-green/45">
+                {zero ? "nothing to bill" : (v?.billing_cadence ?? "monthly")}
+              </div>
+            </>
+          ) : (
+            <>
+              {/* THE ONLY RED ON THE PAGE. The money is NOT lost — it is in the month's subtotal
+                  (opexSources.ts:371) and lands on no day (:437). */}
+              <div className="text-[14.5px] font-extrabold text-[#a8321f]">No billing day</div>
+              <div className="mt-0.5 text-[11px] font-bold text-[#a8321f]">
+                in {monthFull(month)}&rsquo;s total, on no day
+              </div>
+            </>
+          )}
+        </td>
+
+        <td className="px-3 py-2.5 text-center text-deep-green/35">
+          <button type="button" onClick={onToggleExpand} aria-expanded={expanded}
+            className="px-1 text-base leading-none hover:text-deep-green">
+            {expanded ? "⌄" : "›"}
+          </button>
+        </td>
       </tr>
-      {expanded && expandable && (
-        <tr className="bg-cream-soft/40">
-          <td colSpan={14} className="px-5 py-3">
-            <PerMatchExpand row={row} scheduleRows={scheduleRows} />
+
+      {expanded && (
+        <tr className="border-b border-cream-line bg-[#fbfdfc]">
+          <td colSpan={7} className="px-5 pb-5 pt-1">
+            <VenuePanel
+              row={row} venue={v} month={month} autoAmount={autoAmount}
+              cellState={cellState} onSavePrice={onSavePrice}
+              onSaveBillingType={onSaveBillingType}
+              onSaveChargeOnCancel={onSaveChargeOnCancel}
+              onSaveBillingDay={onSaveBillingDay}
+              onSetOverride={onSetOverride}
+              onRemoveOverride={onRemoveOverride}
+              isOverride={isOverride}
+              timing={
+                // THE NON-MONTHLY EDITOR, PRESERVED. Seven venues are on `custom` cadence — five
+                // of them active, carrying real billing_custom_days (NEMP {"2026-07":[29]},
+                // Scissortail three months of them). BillingTimingCell is their ONLY editor for
+                // cadence, anchor month, weekday and custom days; dropping it with the old table
+                // would have deleted that ability silently.
+                <BillingTimingCell
+                  venue={v} dashboardDriven={dashboardDriven}
+                  isCombinedPrimary={isCombinedPrimary} month={month}
+                  autoAmount={autoAmount} monthOverride={row.override}
+                  cadenceState={cellState("billing_cadence")} dayState={cellState("billing_day")}
+                  anchorState={cellState("billing_anchor_month")} weekdayState={cellState("billing_weekday")}
+                  customDaysState={cellState("billing_custom_days")} customAmountState={cellState("custom_amount")}
+                  onSaveCadence={onSaveBillingCadence} onSaveDay={onSaveBillingDay}
+                  onSaveAnchorMonth={onSaveBillingAnchorMonth} onSaveWeekday={onSaveBillingWeekday}
+                  onSaveCustomDays={onSaveCustomDays} onSaveCustomAmount={onSaveCustomAmount}
+                />
+              }
+            />
+            {expandable && <PerMatchExpand row={row} scheduleRows={scheduleRows} />}
           </td>
         </tr>
       )}
@@ -1197,117 +1230,174 @@ function FieldCostTableRow({
   );
 }
 
-function BillingTypeCell({
-  stored,
-  combined,
-  state,
-  onSave,
-}: {
-  stored: FinVenue["billing_type"] | null;
-  combined: boolean;
-  state: CellState | null;
-  onSave: (next: FinVenue["billing_type"]) => void;
-}) {
-  const showFlash = state?.flash;
-  const showError = Boolean(state?.error);
-  const showSaving = Boolean(state?.saving);
 
-  if (combined) {
-    return (
-      <span
-        title="Combined groups (e.g. ATH Katy + ATH Katy Sunday) edit billing on individual venue rows."
-        className="inline-flex items-center gap-1 font-mono text-[10px] uppercase tracking-wider text-deep-green/65"
-      >
-        {(stored ?? "—").toUpperCase()}
-        <span className="font-normal normal-case text-deep-green/40">
-          (combined)
-        </span>
-      </span>
-    );
-  }
+
+// ── THE ROW PANEL — this is where the boxes went ───────────────────────────────────────────────
+//
+// Nine venues by four editable fields was thirty-six bordered inputs on a page you mostly come to
+// READ. The table is text now; every control lives here, in the row you opened.
+//
+// Three groups in one card: what MatchDay pays, when it bills, and what a PLAYER pays — the last
+// labelled as not-a-cost, because it sat in the two widest columns of a cost table.
+function VenuePanel({
+  row, venue, month, autoAmount, cellState, onSavePrice, onSaveBillingType,
+  onSaveChargeOnCancel, onSaveBillingDay, onSetOverride, onRemoveOverride, isOverride, timing,
+}: {
+  row: FieldCostRow;
+  venue: FinVenue | null;
+  month: Q2Month;
+  autoAmount: number;
+  cellState: (field: CellStateKey) => CellState | null;
+  onSavePrice: (field: PriceField, raw: string) => void;
+  onSaveBillingType: (next: FinVenue["billing_type"]) => void;
+  onSaveChargeOnCancel: (next: boolean) => void;
+  onSaveBillingDay: (raw: string) => void;
+  onSetOverride: () => void;
+  onRemoveOverride: () => void;
+  isOverride: boolean;
+  timing: React.ReactNode;
+}) {
+  const day = venue?.billing_day ?? null;
+  const nonMonthly = venue != null && venue.billing_cadence !== "monthly";
+  const resolved = resolveBillingDate(month, day);
+  const glab = "mb-2.5 text-[9.5px] font-extrabold uppercase tracking-[0.09em] text-deep-green/45";
+  const fld = "mb-2 flex items-center gap-2.5";
+  const lab = "w-[104px] flex-none text-[12.5px] font-semibold text-deep-green/60";
+  const inp = "w-[130px] rounded-md border border-cream-line bg-white px-2 py-1.5 text-[13.5px] font-bold tabular-nums text-deep-green focus:border-deep-green focus:outline-none";
+
+  // The days actually in use, so the select never omits a value the data already holds.
+  const DAY_CHOICES = [1, 5, 15, 28];
+  const days = [...new Set([...DAY_CHOICES, ...(day != null && day !== 31 ? [day] : [])])].sort((a, b) => a - b);
 
   return (
-    <div
-      className={`relative inline-flex items-center rounded-md ${
-        showError ? "ring-2 ring-coral" : "ring-1 ring-cream-line"
-      } ${showFlash ? "flash-mint" : ""}`}
-      title={state?.error ?? ""}
-    >
-      <select
-        value={stored ?? ""}
-        disabled={showSaving}
-        onChange={(e) => {
-          const next = e.target.value as FinVenue["billing_type"];
-          if (next === stored) return;
-          onSave(next);
-        }}
-        className="bg-transparent px-2 py-1.5 pr-7 font-mono text-[10px] uppercase tracking-wider text-deep-green focus:outline-none disabled:opacity-60"
-      >
-        {stored == null && (
-          <option value="" disabled>
-            —
-          </option>
+    <div className="grid grid-cols-1 overflow-hidden rounded-[10px] border border-cream-line bg-white lg:grid-cols-3">
+      {/* ── WHAT MATCHDAY PAYS ─────────────────────────────────────────────────────────────── */}
+      <div className="border-b border-cream-line p-4 lg:border-b-0 lg:border-r">
+        <div className={glab}>What MatchDay pays</div>
+        <div className={fld}>
+          <label className={lab}>Billing</label>
+          <select
+            value={row.billingType ?? "per_match"}
+            onChange={(e) => onSaveBillingType(e.target.value as FinVenue["billing_type"])}
+            className={inp + " w-[170px]"}
+          >
+            <option value="per_match">Per match</option>
+            <option value="profit_share">Profit share</option>
+            <option value="monthly_flat">Monthly flat</option>
+          </select>
+        </div>
+        {row.billingType === "per_match" && (
+          <div className={fld}>
+            <label className={lab}>Rate / match</label>
+            <PriceCell stored={venue?.per_match_rate ?? null} state={cellState("per_match_rate")}
+              onSave={(raw) => onSavePrice("per_match_rate", raw)} />
+          </div>
         )}
-        {BILLING_TYPE_OPTIONS.map((opt) => (
-          <option key={opt} value={opt}>
-            {opt}
-          </option>
-        ))}
-      </select>
-      {showSaving && (
-        <span className="absolute right-2 top-1/2 inline-block h-2 w-2 -translate-y-1/2 animate-pulse rounded-full bg-deep-green/50" />
-      )}
-      {showError && !showSaving && (
-        <span className="absolute right-2 top-1/2 -translate-y-1/2 text-[10px] font-bold text-coral">
-          !
-        </span>
-      )}
+        <div className={fld}>
+          <label className={lab}>Cancels</label>
+          <select
+            value={venue?.charge_on_cancel ? "yes" : "no"}
+            onChange={(e) => onSaveChargeOnCancel(e.target.value === "yes")}
+            className={inp + " w-[170px]"}
+          >
+            <option value="yes">Billed</option>
+            <option value="no">Not billed</option>
+          </select>
+        </div>
+        <div className={fld}>
+          <label className={lab}>{monthFull(month)}</label>
+          <span className="text-[14px] font-bold tabular-nums text-deep-green">{fmtMoney(row.amount)}</span>
+          <button type="button" onClick={onSetOverride}
+            className="rounded-full border border-cream-line px-2.5 py-1 text-[11px] font-bold text-deep-green/70 hover:bg-cream-soft">
+            {isOverride ? "Edit" : "Set"}
+          </button>
+          {isOverride && (
+            <button type="button" onClick={onRemoveOverride}
+              className="text-[11px] font-bold text-deep-green/45 underline hover:text-deep-green">
+              Clear
+            </button>
+          )}
+        </div>
+        <p className="mt-2 text-[11.5px] leading-relaxed text-deep-green/45">
+          The month value overrides the base for {monthFull(month)} only. Clearing it falls back to{" "}
+          <b className="text-deep-green/70">{fmtMoney(autoAmount)}</b>.
+        </p>
+      </div>
+
+      {/* ── WHEN IT BILLS ──────────────────────────────────────────────────────────────────── */}
+      <div className="border-b border-cream-line p-4 lg:border-b-0 lg:border-r">
+        <div className={glab}>When it bills</div>
+        {nonMonthly ? (
+          <div className="mb-2">{timing}</div>
+        ) : (
+        <div className={fld}>
+          <label className={lab}>Billing day</label>
+          {/* A SELECT, not a number field. No timing toggle: the code has ONE behaviour
+              (same-month), so a month-after option would be a control that does nothing. */}
+          <select
+            value={day == null ? "" : String(day)}
+            onChange={(e) => onSaveBillingDay(e.target.value)}
+            className={inp + " w-[170px]"}
+          >
+            <option value="">— not set —</option>
+            {days.map((d) => <option key={d} value={String(d)}>{ordinalDay(d)}</option>)}
+            <option value="31">Last day</option>
+          </select>
+        </div>
+        )}
+        <div className="mt-1 rounded-md bg-cream-soft px-2.5 py-2 text-[12.5px] text-deep-green/70">
+          {resolved
+            ? <>{monthFull(month)}&rsquo;s {fmtMoney(row.amount)} bills <b className="text-deep-green">{resolved}</b></>
+            : <><b className="text-deep-green">{monthShort(month)} —</b> · pick a day to date it</>}
+        </div>
+        <p className="mt-2 text-[11px] leading-relaxed text-deep-green/45">
+          Last day stores 31 and is clamped to the month&rsquo;s length, so February resolves to the
+          28th or 29th.
+        </p>
+        {day == null && row.billingType !== "per_match" && (
+          <div className="mt-2 rounded-md border border-[#f2cdc8] bg-[#fdeceb] px-2.5 py-2 text-[12px] font-bold leading-relaxed text-[#a8321f]">
+            Without a day the {fmtMoney(row.amount)} still counts in {monthFull(month)}&rsquo;s total
+            — it just lands on no day, and OpEx files it under &ldquo;Undated — timing not set&rdquo;.
+            Cash Flow is unaffected; it never reads the billing day.
+          </div>
+        )}
+      </div>
+
+      {/* ── PLAYER PRICING · NOT A COST ────────────────────────────────────────────────────── */}
+      <div className="p-4">
+        <div className={glab}>Player pricing · not a cost</div>
+        {/* EDITABLE, because the write lands: fin_venues UPDATE from the browser affects the row
+            (unlike app_users, where RLS made the same shape a silent no-op). */}
+        <div className={fld}>
+          <label className={lab}>DPP price</label>
+          <PriceCell stored={venue?.dpp_price ?? null} state={cellState("dpp_price")}
+            onSave={(raw) => onSavePrice("dpp_price", raw)} />
+        </div>
+        <div className={fld}>
+          <label className={lab}>Member price</label>
+          <PriceCell stored={venue?.member_price ?? null} state={cellState("member_price")}
+            onSave={(raw) => onSavePrice("member_price", raw)} />
+        </div>
+        <p className="mt-2 text-[11.5px] leading-relaxed text-deep-green/45">
+          What a player pays to join a match here. Changing it changes <b className="text-deep-green/70">revenue</b>,
+          not field cost.
+        </p>
+      </div>
     </div>
   );
 }
+
+function ordinalDay(d: number): string {
+  const s = ["th", "st", "nd", "rd"][(d % 100 - 20) % 10] ?? ["th", "st", "nd", "rd"][d % 100] ?? "th";
+  return `${d}${s}`;
+}
+
 
 // Click-to-toggle Yes/No pill for fin_venues.charge_on_cancel. Same
 // optimistic save + flash/error pattern as BillingTypeCell — drives
 // straight into saveVenueField via the onSave prop. Yes = mint
 // highlight (positive, matches the "active" affordance used by the
 // As Billed / Per-Match toggle), No = cream-soft.
-function ChargeOnCancelCell({
-  stored,
-  state,
-  onSave,
-}: {
-  stored: boolean;
-  state: CellState | null;
-  onSave: (next: boolean) => void;
-}) {
-  const showFlash = state?.flash;
-  const showError = Boolean(state?.error);
-  const showSaving = Boolean(state?.saving);
-  return (
-    <button
-      type="button"
-      disabled={showSaving}
-      onClick={() => onSave(!stored)}
-      title={state?.error ?? "Toggle whether this venue charges for cancelled matches"}
-      aria-pressed={stored}
-      className={`relative inline-flex items-center rounded-full px-3 py-0.5 text-[10px] font-bold uppercase tracking-wider ring-1 ${
-        stored
-          ? "bg-mint text-deep-green ring-mint/60"
-          : "bg-cream-soft text-deep-green/65 ring-cream-line"
-      } ${showError ? "ring-2 ring-coral" : ""} ${
-        showFlash ? "flash-mint" : ""
-      } disabled:opacity-60`}
-    >
-      {stored ? "Yes" : "No"}
-      {showSaving && (
-        <span className="ml-1 inline-block h-1.5 w-1.5 animate-pulse rounded-full bg-deep-green/50" />
-      )}
-      {showError && !showSaving && (
-        <span className="ml-1 text-[10px] font-bold text-coral">!</span>
-      )}
-    </button>
-  );
-}
 
 const CADENCE_OPTIONS: FinVenue["billing_cadence"][] = [
   "monthly",
