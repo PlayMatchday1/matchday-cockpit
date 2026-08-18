@@ -173,7 +173,7 @@ export default function ManagerPayView() {
   // Returns an error string on failure, null on success — the inline editor
   // renders it. Two separate name fields, written to the CSV verbatim (never
   // re-split from managerName).
-  const saveAlias = useCallback(async (email: string, firstName: string, lastName: string, note: string | null): Promise<string | null> => {
+  const saveAlias = useCallback(async (email: string, firstName: string, lastName: string, gustoEmail: string | null, note: string | null): Promise<string | null> => {
     const { data: sess } = await supabase.auth.getSession();
     const token = sess.session?.access_token;
     if (!token) return "No active session.";
@@ -183,7 +183,7 @@ export default function ManagerPayView() {
       {
         method: clearing ? "DELETE" : "PUT",
         headers: { "Content-Type": "application/json", Authorization: `Bearer ${token}` },
-        body: clearing ? undefined : JSON.stringify({ managerEmail: email, firstName, lastName, note }),
+        body: clearing ? undefined : JSON.stringify({ managerEmail: email, firstName, lastName, email: gustoEmail, note }),
       },
     );
     const json = await res.json().catch(() => ({}));
@@ -552,7 +552,7 @@ function ConflictAliasRow({ email, first, last, onSaveAlias, onSaved }: { email:
   const save = async () => {
     if (!email || !f.trim() || !l.trim()) return;
     setSaving(true);
-    const e = await onSaveAlias(email, f.trim(), l.trim(), null);
+    const e = await onSaveAlias(email, f.trim(), l.trim(), null, null);
     setSaving(false);
     if (e) setErr(e); else onSaved(); // re-export re-checks conflicts
   };
@@ -706,8 +706,8 @@ function MgrRow({ r, isAdmin, open, editing, alias, onToggle, onEditAdj, onCance
 // A Gusto payroll alias for one manager — First/Last written to the CSV
 // verbatim, plus an optional note. saveAlias clears it (DELETE) when both names
 // are blank, and returns an error string (or null on success).
-type Alias = { firstName: string; lastName: string; note?: string | null };
-type SaveAlias = (email: string, firstName: string, lastName: string, note: string | null) => Promise<string | null>;
+type Alias = { firstName: string; lastName: string; email?: string | null; note?: string | null };
+type SaveAlias = (email: string, firstName: string, lastName: string, gustoEmail: string | null, note: string | null) => Promise<string | null>;
 
 // Inline Gusto-alias editor, in the expanded manager row. Two separate name
 // fields (never one, never re-split from managerName); clearing both removes
@@ -715,20 +715,26 @@ type SaveAlias = (email: string, firstName: string, lastName: string, note: stri
 function AliasEditor({ managerEmail, managerName, alias, onSaveAlias }: { managerEmail: string; managerName: string; alias: Alias | undefined; onSaveAlias: SaveAlias }) {
   const [first, setFirst] = useState(alias?.firstName ?? "");
   const [last, setLast] = useState(alias?.lastName ?? "");
+  // The EMAIL override, alongside the names and stored on the same row. Blank is the ordinary
+  // state and means "use the schedule email" — it is not an incomplete alias.
+  const [gEmail, setGEmail] = useState(alias?.email ?? "");
   const [note, setNote] = useState(alias?.note ?? "");
   const [saving, setSaving] = useState(false);
   const [msg, setMsg] = useState<string | null>(null);
   useEffect(() => {
-    setFirst(alias?.firstName ?? ""); setLast(alias?.lastName ?? ""); setNote(alias?.note ?? ""); setMsg(null);
-  }, [alias?.firstName, alias?.lastName, alias?.note]);
+    setFirst(alias?.firstName ?? ""); setLast(alias?.lastName ?? "");
+    setGEmail(alias?.email ?? ""); setNote(alias?.note ?? ""); setMsg(null);
+  }, [alias?.firstName, alias?.lastName, alias?.email, alias?.note]);
 
   const clearing = !first.trim() && !last.trim();
-  const dirty = first.trim() !== (alias?.firstName ?? "") || last.trim() !== (alias?.lastName ?? "") || (note.trim() || null) !== (alias?.note ?? null);
+  const dirty = first.trim() !== (alias?.firstName ?? "") || last.trim() !== (alias?.lastName ?? "")
+    || (gEmail.trim() || null) !== (alias?.email ?? null)
+    || (note.trim() || null) !== (alias?.note ?? null);
   const invalid = !clearing && (!first.trim() || !last.trim());
   const save = async () => {
     if (!dirty || invalid) return;
     setSaving(true); setMsg(null);
-    const err = await onSaveAlias(managerEmail, first.trim(), last.trim(), note.trim() || null);
+    const err = await onSaveAlias(managerEmail, first.trim(), last.trim(), gEmail.trim() || null, note.trim() || null);
     setSaving(false);
     setMsg(err ?? (clearing ? "Alias cleared" : "Saved"));
   };
@@ -738,10 +744,12 @@ function AliasEditor({ managerEmail, managerName, alias, onSaveAlias }: { manage
       <div className="mb-1.5 flex flex-wrap items-baseline gap-x-2 gap-y-0.5 text-[10px] font-bold uppercase tracking-[0.1em]" style={{ color: C.muted }}>
         Gusto payroll name
         <span className="text-[10.5px] font-normal normal-case tracking-normal" style={{ color: C.muted2 }}>overrides the CSV First/Last for {managerName} — leave blank to use the schedule name</span>
+        <span className="text-[10.5px] font-normal normal-case tracking-normal" style={{ color: C.muted2 }} data-testid="alias-email-hint">overrides the CSV email — leave blank to use the schedule email</span>
       </div>
       <div className="flex flex-wrap items-center gap-2">
         <input value={first} disabled={saving} onChange={(e) => setFirst(e.target.value)} placeholder="First name" aria-label="Gusto first name" className={`${inputCls} w-32`} style={{ borderColor: C.chipLine }} />
         <input value={last} disabled={saving} onChange={(e) => setLast(e.target.value)} placeholder="Last name" aria-label="Gusto last name" className={`${inputCls} w-32`} style={{ borderColor: C.chipLine }} />
+        <input value={gEmail} disabled={saving} onChange={(e) => setGEmail(e.target.value)} placeholder="Gusto email" aria-label="Gusto email" data-testid="alias-email" className={`${inputCls} w-52`} style={{ borderColor: C.chipLine }} />
         <input value={note} disabled={saving} onChange={(e) => setNote(e.target.value)} placeholder="Note (optional)" aria-label="Alias note" className={`${inputCls} w-40`} style={{ borderColor: C.chipLine }} />
         <button type="button" onClick={save} disabled={saving || !dirty || invalid} className="rounded-[7px] px-3 py-1 text-[11.5px] font-bold disabled:opacity-40" style={{ background: C.accent, color: "#06281d" }}>{clearing && alias ? "Clear alias" : "Save alias"}</button>
         {invalid && <span className="text-[11px]" style={{ color: C.critInk }}>Both first and last name required.</span>}

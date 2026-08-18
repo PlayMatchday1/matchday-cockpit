@@ -73,6 +73,8 @@ const NODE_SUITES = [
   "scripts/veo-name-sync-test.ts",
   // The mirror write-through: only on LANDED, only the read-back value, production only.
   "scripts/veo-mirror-writethrough-test.ts",
+  // The Gusto payroll CSV — proves the email alias moved no amount or memo.
+  "scripts/gusto-alias-email-test.ts",
 ];
 const ALL_E2E = readdirSync("scripts/e2e").filter((f) => /^verify-.*\.mjs$/.test(f)).sort().map((f) => `scripts/e2e/${f}`);
 const GATED_E2E = ALL_E2E.filter((s) => !QUARANTINE.has(s.split("/").pop()));

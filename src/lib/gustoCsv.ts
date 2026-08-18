@@ -16,17 +16,20 @@ export type GustoPayload = { weekStart: string; cities: GustoCity[] };
 
 // Alias map keyed by lower(manager_email) — the same key the pay compute
 // accumulates on. First/last are written into the CSV VERBATIM (no split).
-export type GustoAlias = { firstName: string; lastName: string; note?: string | null };
+// `email` is an OPTIONAL override of the Email column. Absent/null/blank all mean the same thing:
+// use the manager's MatchDay address, which is the behaviour that predates this field.
+export type GustoAlias = { firstName: string; lastName: string; email?: string | null; note?: string | null };
 export type GustoAliasMap = Record<string, GustoAlias>;
 
 export type GustoRow = {
-  email: string; // manager email (may be "")
+  email: string; // the Email column: the alias override when set, else the MatchDay email
+  scheduleEmail: string; // the manager's MatchDay email, kept so the UI can show what was replaced
   origName: string; // managerName as shown on the page
   firstName: string; // First Name column, verbatim from alias when aliased
   lastName: string; // Last Name column
   amount: string; // total.toFixed(2)
   memo: string;
-  aliased: boolean;
+  aliased: boolean; // a NAME alias applied — unchanged meaning, not widened to cover the email
 };
 
 // RFC-4180 cell quoting — identical to the view's previous csvCell so the
@@ -54,6 +57,12 @@ export function buildGustoRows(
       const email = m.managerEmail ?? "";
       const key = email.toLowerCase();
       const alias = key ? aliasMap[key] : undefined;
+      // THE EMAIL OVERRIDE IS INDEPENDENT OF THE NAME OVERRIDE. An alias row may set the name and
+      // leave the email blank, or the reverse. A blank/whitespace override is NOT an override —
+      // falling through to the schedule email is what "leave blank" has to mean, or clearing the
+      // box would write an empty Email column into a file that pays people.
+      const aliasEmail = (alias?.email ?? "").trim();
+      const csvEmail = aliasEmail !== "" ? aliasEmail : email;
       let firstName: string;
       let lastName: string;
       if (alias) {
@@ -66,7 +75,8 @@ export function buildGustoRows(
       }
       const memo = `${m.matchCount} match${m.matchCount === 1 ? "" : "es"} · ${city.cityIdentifier} · week of ${payload.weekStart}`;
       rows.push({
-        email,
+        email: csvEmail,
+        scheduleEmail: email,
         origName: m.managerName,
         firstName,
         lastName,

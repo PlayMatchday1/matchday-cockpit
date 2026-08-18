@@ -1,8 +1,8 @@
 // Manager → Gusto name aliases for the payroll CSV. Optional, one row per
 // manager, keyed by lower(manager_email).
 //
-//   GET    → { aliases: { [lowerEmail]: { firstName, lastName, note } } }
-//   PUT    { managerEmail, firstName, lastName, note? } → upsert one
+//   GET    → { aliases: { [lowerEmail]: { firstName, lastName, email, note } } }
+//   PUT    { managerEmail, firstName, lastName, email?, note? } → upsert one
 //   DELETE ?email=... → remove one (clear the alias)
 //
 // Admin-only on app_users.is_admin (authenticateAdmin) — this decides who a
@@ -24,21 +24,27 @@ export async function GET(req: Request) {
 
   const { data, error } = await auth.supabase
     .from(TABLE)
-    .select("manager_email, gusto_first_name, gusto_last_name, note");
+    // select("*") NOT a column list: code deploys before migrations apply, and naming
+    // gusto_email before 0127 has run would 500 this read for everyone. A missing column then
+    // reads as undefined and the alias simply carries no email override.
+    .select("*");
   if (error) {
     return Response.json({ error: `alias read failed: ${error.message}` }, { status: 500 });
   }
-  const aliases: Record<string, { firstName: string; lastName: string; note: string | null }> = {};
+  const aliases: Record<string, { firstName: string; lastName: string; email: string | null; note: string | null }> = {};
   for (const r of (data ?? []) as {
     manager_email: string;
     gusto_first_name: string;
     gusto_last_name: string;
+    gusto_email?: string | null;
     note: string | null;
   }[]) {
     // Key on lower(email) — the same key the pay compute accumulates on.
     aliases[r.manager_email.toLowerCase()] = {
       firstName: r.gusto_first_name,
       lastName: r.gusto_last_name,
+      // Absent column (pre-0127) and an unset override are the same thing here: no override.
+      email: r.gusto_email ?? null,
       note: r.note,
     };
   }
@@ -49,6 +55,7 @@ type PutBody = {
   managerEmail?: unknown;
   firstName?: unknown;
   lastName?: unknown;
+  email?: unknown;
   note?: unknown;
 };
 
@@ -72,6 +79,10 @@ export async function PUT(req: Request) {
   const lastName = typeof body.lastName === "string" ? body.lastName.trim() : "";
   const note =
     typeof body.note === "string" && body.note.trim() !== "" ? body.note.trim() : null;
+  // CLEARING IS A REAL ACTION. An empty box means "go back to the schedule email", which is NULL —
+  // not an empty string. Writing "" would put a blank Email column in a file that pays people.
+  const gustoEmail =
+    typeof body.email === "string" && body.email.trim() !== "" ? body.email.trim().toLowerCase() : null;
 
   if (!EMAIL_RX.test(managerEmail)) {
     return Response.json({ error: "Invalid managerEmail" }, { status: 400 });
@@ -82,12 +93,18 @@ export async function PUT(req: Request) {
       { status: 400 },
     );
   }
+  // A malformed override would silently pay nobody, so it is refused here rather than written.
+  // Blank is NOT malformed — it is how the override is removed.
+  if (gustoEmail !== null && !EMAIL_RX.test(gustoEmail)) {
+    return Response.json({ error: "The Gusto email is not a valid address. Leave it blank to use the schedule email." }, { status: 400 });
+  }
 
   const { error } = await auth.supabase.from(TABLE).upsert(
     {
       manager_email: managerEmail,
       gusto_first_name: firstName,
       gusto_last_name: lastName,
+      gusto_email: gustoEmail,
       note,
       updated_at: new Date().toISOString(),
       updated_by: auth.appUserId,
