@@ -45,9 +45,13 @@ import {
   type FinVenueCostOverride,
 } from "@/lib/useFinanceData";
 
-// per_match_rate joins these because it is the column the COST COMPUTATION reads
-// (financeCosts.ts:136 `venue.per_match_rate ?? 0`). It was not editable on this page at all,
-// while cost_per_match — which that arithmetic never consults for as-billed cost — was.
+// TWO RATE COLUMNS, TWO DIFFERENT FACTS — neither is a stale copy of the other.
+//   cost_per_match  = the rate AGREED with the venue. Reference data, read deliberately.
+//   per_match_rate  = whether we AUTO-BILL per match. NULL is a real answer: not auto-billed,
+//                     so a month with no override correctly costs $0 (financeCosts.ts:136
+//                     `venue.per_match_rate ?? 0`), and which months were $0 is a thing this
+//                     page is read for.
+// The panel labels them apart. Never write one from the other.
 // savePrice is column-generic, so this needs no new write path.
 type PriceField = "dpp_price" | "member_price" | "cost_per_match" | "per_match_rate";
 type EditableField =
@@ -1076,25 +1080,36 @@ function FieldCostTableRow({
   const isCombined = row.secondaryVenueIds.length > 0;
   const v = primaryVenue;
   const zero = Math.abs(row.amount) < 0.005;
+  // An agreed rate on record — cost_per_match, or an auto-bill rate. Drives the "not billed"
+  // sub-line and keeps a genuinely rate-less venue from claiming one.
+  const hasAgreedRate = (v?.cost_per_match ?? null) !== null || (v?.per_match_rate ?? null) !== null;
 
-  // RATE RENDERS THE COLUMN THE COST COMPUTATION READS. autoCost uses
-  // `venue.per_match_rate ?? 0` (financeCosts.ts:136) — NOT cost_per_match, which is what this
-  // table used to print. Six per_match venues carry per_match_rate = NULL with a non-null
-  // cost_per_match, so the old cell showed "$90 / match" beside a computed $0. The cell now says
-  // what the arithmetic actually used.
+  // THE AGREED RATE IS REFERENCE DATA, NOT A BUG.
+  //
+  // cost_per_match is the rate AGREED WITH THE VENUE. per_match_rate is a different fact: whether
+  // we auto-bill per match. A NULL per_match_rate is INTENTIONAL — it means the venue is not
+  // auto-billed per match, so a month with no override correctly costs $0, and "which months were
+  // $0" is something this page is read for.
+  //
+  // So the cell shows the agreed rate, LABELLED so it cannot be mistaken for what drives the cost.
+  // An agreed rate differing from what we paid this month is normal.
   let rateMain: React.ReactNode;
   let rateSub = v?.charge_on_cancel ? "cancelled matches billed" : "cancels not billed";
-  let rateAmber = false;
+  // NO AMBER ON THIS CELL. A rate that differs from what we paid this month is normal under this
+  // model, not a fault, so there is no warning state left for the rate to be in.
   if (row.billingType === "per_match") {
-    if (v?.per_match_rate == null) {
-      rateMain = "No rate set";
-      rateSub = "per-match cost computes $0";
-      rateAmber = true;
-    } else if (v.per_match_rate === 0) {
+    if (v?.cost_per_match === 0 || v?.per_match_rate === 0) {
       rateMain = "Free";
       rateSub = "no charge from venue";
-    } else {
+    } else if (v?.per_match_rate != null) {
       rateMain = <>{fmtMoney(v.per_match_rate)} <span className="font-semibold text-deep-green/45">/ match</span></>;
+    } else if (v?.cost_per_match != null) {
+      // Agreed, but not auto-billed — the cost comes from a monthly override instead.
+      rateMain = <>{fmtMoney(v.cost_per_match)} <span className="font-semibold text-deep-green/45">/ match agreed</span></>;
+      rateSub = "billed monthly, not per match";
+    } else {
+      rateMain = <span className="text-deep-green/40">—</span>;
+      rateSub = "no rate on record";
     }
   } else if (row.billingType === "profit_share") {
     rateMain = <>Share <span className="font-semibold text-deep-green/45">of revenue</span></>;
@@ -1108,6 +1123,10 @@ function FieldCostTableRow({
   // BILLS ON — three states, and only three.
   const perMatchDated = row.billingType === "per_match" && v?.billing_day == null;
   const bill = billingDatesFor(v, month);
+  // RED ONLY WHERE MONEY IS. A month with no billing is normal under this model, so an undated $0
+  // is not an error — it is the ordinary case. The cell turns red on its own the month the venue
+  // actually carries cost, which is the state worth interrupting for.
+  const undatedWithMoney = !perMatchDated && bill.labels.length === 0 && !zero;
   return (
     <>
       <tr
@@ -1135,8 +1154,8 @@ function FieldCostTableRow({
 
         {/* RATE — unit is part of the value; pay-on-cancel folded into the sub-line. */}
         <td className="px-3 py-2.5">
-          <div className={"text-[13.5px] font-bold " + (rateAmber ? "text-[#8a5a00]" : "text-deep-green")}>{rateMain}</div>
-          <div className={"mt-0.5 text-[11px] " + (rateAmber ? "text-[#8a5a00]" : "text-deep-green/45")}>{rateSub}</div>
+          <div className="text-[13.5px] font-bold text-deep-green">{rateMain}</div>
+          <div className="mt-0.5 text-[11px] text-deep-green/45">{rateSub}</div>
         </td>
 
         <td className={"px-3 py-2.5 text-right tabular-nums " + (row.matchCount === 0 ? "text-deep-green/30" : "text-deep-green")}>
@@ -1149,17 +1168,23 @@ function FieldCostTableRow({
           <div className={zero ? "text-[15px] font-semibold tabular-nums text-deep-green/30" : "text-[15px] font-extrabold tabular-nums text-deep-green"}>
             {fmtMoney(row.amount)}
           </div>
-          {isOverride && (
+          {isOverride ? (
             <div className="mt-0.5 text-[10.5px] font-bold text-[#8a5a00]">
               {row.billingType === "per_match"
                 ? `override · auto ${fmtMoney(autoAmount)}`
                 : `set for ${monthFull(month)}`}
             </div>
-          )}
+          ) : zero && hasAgreedRate ? (
+            // THE STATE RYAN SCANS FOR. Plain, uncoloured: a venue with an agreed rate that we did
+            // not bill this month. Normal, not a warning.
+            <div className="mt-0.5 text-[10.5px] text-deep-green/40">
+              not billed in {monthShort(month)}
+            </div>
+          ) : null}
         </td>
 
         {/* BILLS ON */}
-        <td className={"px-3 py-2.5 " + (!perMatchDated && bill.labels.length === 0 ? "bg-[#fdeceb]" : "")}>
+        <td className={"px-3 py-2.5 " + (undatedWithMoney ? "bg-[#fdeceb]" : "")}>
           {perMatchDated ? (
             <>
               <div className="text-[13.5px] font-bold text-deep-green/70">On each match date</div>
@@ -1178,15 +1203,18 @@ function FieldCostTableRow({
                     : bill.cadence}
               </div>
             </>
-          ) : (
+          ) : undatedWithMoney ? (
             <>
-              {/* THE ONLY RED ON THE PAGE. The money is NOT lost — it is in the month's subtotal
-                  (opexSources.ts:371) and lands on no day (:437). */}
+              {/* THE ONLY RED ON THE PAGE, and only when there is money to misplace. It is NOT
+                  lost — it is in the month's subtotal (opexSources.ts:371) and lands on no day
+                  (:437). */}
               <div className="text-[14.5px] font-extrabold text-[#a8321f]">No billing day</div>
               <div className="mt-0.5 text-[11px] font-bold text-[#a8321f]">
                 in {monthFull(month)}&rsquo;s total, on no day
               </div>
             </>
+          ) : (
+            <div className="text-[13.5px] text-deep-green/40">not billed in {monthShort(month)}</div>
           )}
         </td>
 
@@ -1294,11 +1322,23 @@ function VenuePanel({
           </select>
         </div>
         {row.billingType === "per_match" && (
-          <div className={fld}>
-            <label className={lab}>Rate / match</label>
-            <PriceCell stored={venue?.per_match_rate ?? null} state={cellState("per_match_rate")}
-              onSave={(raw) => onSavePrice("per_match_rate", raw)} />
-          </div>
+          <>
+            <div className={fld}>
+              <label className={lab}>Agreed rate</label>
+              <PriceCell stored={venue?.cost_per_match ?? null} state={cellState("cost_per_match")}
+                onSave={(raw) => onSavePrice("cost_per_match", raw)} />
+            </div>
+            <div className={fld}>
+              <label className={lab}>Auto-bill / match</label>
+              <PriceCell stored={venue?.per_match_rate ?? null} state={cellState("per_match_rate")}
+                onSave={(raw) => onSavePrice("per_match_rate", raw)} />
+            </div>
+            {/* EMPTY IS A CHOICE HERE, not an omission — say so where the empty box is. */}
+            <div className="mb-2.5 ml-[116px] text-[11px] leading-snug text-deep-green/45">
+              Leave empty for venues billed monthly — the month&rsquo;s cost then comes from an
+              override, not from the match count.
+            </div>
+          </>
         )}
         <div className={fld}>
           <label className={lab}>Cancels</label>
