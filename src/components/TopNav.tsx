@@ -30,11 +30,12 @@ type GatedTab = Tab & {
   page: PageName;
 };
 
-// Primary header tabs, left→right: Home · Finance · Growth · Membership ·
+// Primary header tabs, left→right: Home · Finance · Player Lifecycle ·
 // Match Ops · Tech (Test is appended separately, admin-only, unchanged).
 // A tab shows when the user can reach at least one thing under it. Chats and
-// Field Pipeline moved under Match Ops; Tech Roadmap under Tech. Membership has
-// no route yet — it renders as a disabled "Coming soon" label for everyone.
+// Field Pipeline moved under Match Ops; Tech Roadmap under Tech; Membership
+// under Player Lifecycle — it is a rail item there now, not a peer up here.
+// Its URL is unchanged, which is why this tab matches BOTH prefixes.
 type PrimaryTab = {
   label: string;
   href?: string; // undefined → disabled placeholder
@@ -58,16 +59,15 @@ const PRIMARY_TABS: PrimaryTab[] = [
     match: (p) => p.startsWith("/admin/finance"),
   },
   {
-    label: "Growth",
+    // LABEL ONLY. The route is still /growth — see growthSections.tsx.
+    label: "Player Lifecycle",
     href: "/growth",
-    visible: (u) => canAccess(u, "growth"),
-    match: (p) => p.startsWith("/growth"),
-  },
-  {
-    label: "Membership",
-    href: "/membership",
-    visible: (u) => canAccess(u, "membership"),
-    match: (p) => p.startsWith("/membership"),
+    // Reachable on either permission: someone who holds only `membership` still has a section to
+    // open, and the tab now leads to a rail that will show them their half of it.
+    visible: (u) => canAccess(u, "growth") || canAccess(u, "membership"),
+    // /membership is a section of this tab that lives outside its path, so it is matched here or
+    // the tab would go dark on the page the user is standing on.
+    match: (p) => p.startsWith("/growth") || p.startsWith("/membership"),
   },
   // Phase 24 (corrected) — ONE Match Ops entry, as it always was. The Daily Ops / Back Office
   // split lives in the LEFT SIDEBAR, not up here: it is a switch between two halves of one

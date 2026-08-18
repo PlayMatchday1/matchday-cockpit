@@ -1,9 +1,10 @@
 import type { Metadata } from "next";
 
-// Page-scoped browser-tab title for the Growth section (formerly Cities). The
-// page is a client component and can't export metadata, so it lives here.
+// Page-scoped browser-tab title for the Player Lifecycle section (named Growth until the
+// Membership move, and Cities before that; the route has been /growth throughout). The page is a
+// client component and can't export metadata, so it lives here.
 export const metadata: Metadata = {
-  title: "Growth",
+  title: "Player Lifecycle",
 };
 
 import GrowthShell from "./GrowthShell";

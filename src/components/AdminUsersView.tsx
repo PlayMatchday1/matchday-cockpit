@@ -22,7 +22,7 @@ const PERMISSION_COLUMNS: { key: PermissionKey; label: string; hint?: string }[]
   { key: "is_admin", label: "Admin" },
   { key: "can_access_home", label: "Home" },
   { key: "can_access_finance", label: "Finance" },
-  { key: "can_access_growth", label: "Growth" },
+  { key: "can_access_growth", label: "Player Lifecycle" },
   { key: "can_access_membership", label: "Membership" },
   { key: "can_access_matchops", label: "Match Ops" },
   {

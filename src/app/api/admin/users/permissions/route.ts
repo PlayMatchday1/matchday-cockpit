@@ -47,7 +47,7 @@ const TEXT_KEYS = ["full_name"] as const;
 
 const LABEL: Record<string, string> = {
   is_admin: "Admin",
-  can_access_home: "Home", can_access_finance: "Finance", can_access_growth: "Growth",
+  can_access_home: "Home", can_access_finance: "Finance", can_access_growth: "Player Lifecycle",
   can_access_membership: "Membership", can_access_matchops: "Match Ops", can_access_chats: "Chats",
   can_access_tech: "Tech", can_access_org: "Org",
   can_manage_promos: "Manage promos", can_edit_matches: "Edit matches",

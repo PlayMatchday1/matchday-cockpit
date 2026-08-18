@@ -1,16 +1,20 @@
 "use client";
 
-// Membership — its own top-level tab. Moved out of the Growth page's
-// ?tab=membership lens on 2026-08-02 (same component, same data; now gated on
-// the Membership permission, split out of the old Cities gate). /growth?tab=membership
-// permanently redirects here.
+// Membership — a section of Player Lifecycle, reached from that rail. It was its own top-level tab
+// from 2026-08-02 (when it moved out of the Growth page's ?tab=membership lens, same component and
+// same data, gated on the Membership permission split out of the old Cities gate) until the rail
+// move. /growth?tab=membership still permanently redirects here, and so does every bookmark: the
+// URL has not changed.
+//
+// THE GUARD MOVED UP, not away — MembershipShell wraps this page in the same
+// PagePermissionGuard page="membership" it used to declare itself, so the rail is not drawn for
+// someone the page would then refuse.
 
-import PagePermissionGuard from "@/components/PagePermissionGuard";
 import CitiesMembershipLens from "@/components/CitiesMembershipLens";
 
 export default function MembershipPage() {
   return (
-    <PagePermissionGuard page="membership">
+    <>
       <div className="mb-6">
         <h1 className="text-3xl font-extrabold tracking-tight text-deep-green">
           Membership
@@ -20,6 +24,6 @@ export default function MembershipPage() {
         </p>
       </div>
       <CitiesMembershipLens />
-    </PagePermissionGuard>
+    </>
   );
 }

@@ -211,11 +211,11 @@ export default function DataPage() {
       <section className="mb-12">
         <SectionHeader
           title="Google Play installs"
-          subtitle="Android install counts feeding the App downloads KPI on the Growth tab."
+          subtitle="Android install counts feeding the App downloads KPI on the Player Lifecycle tab."
         />
         <SyncCard
           title="Google Play installs"
-          description="Ingests Android install counts from the Google Play Console export bucket into app_downloads (the App downloads KPI on the Growth tab). Re-downloads the current month in full and upserts each day, so late restatements overwrite cleanly."
+          description="Ingests Android install counts from the Google Play Console export bucket into app_downloads (the App downloads KPI on the Player Lifecycle tab). Re-downloads the current month in full and upserts each day, so late restatements overwrite cleanly."
           source="play-installs"
           endpoint="/api/sync/play-installs"
           estimatedDuration="~10 seconds"
@@ -226,7 +226,7 @@ export default function DataPage() {
       <section className="mb-12">
         <SectionHeader
           title="App Store installs"
-          subtitle="iOS install counts feeding the App downloads KPI on the Growth tab."
+          subtitle="iOS install counts feeding the App downloads KPI on the Player Lifecycle tab."
         />
         <SyncCard
           title="App Store installs (iOS)"

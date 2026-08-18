@@ -28,7 +28,6 @@ import {
   MessageCircle,
   MoreHorizontal,
   Shield,
-  Users,
   Wrench,
   X,
   type LucideIcon,
@@ -38,9 +37,11 @@ import { useCrmAwaitingCount } from "@/lib/useCrmAwaitingCount";
 import UnreadCountCircle from "@/components/UnreadCountCircle";
 
 // Mobile mirror of TopNav's primary sections, in the same order. The bottom bar
-// can't hold six, so the user's first three *accessible* sections show in the
-// bar and the rest fall into the More sheet (nothing dropped). Membership is a
-// disabled "Coming soon" row in the sheet, mirroring the disabled desktop tab.
+// can't hold five, so the user's first three *accessible* sections show in the
+// bar and the rest fall into the More sheet (nothing dropped). Membership is no
+// longer listed here: it is a Player Lifecycle rail item, reached from that
+// section's mobile sheet, and the disabled "Coming soon" row it used to have
+// here had outlived the tab it was mirroring.
 type MobilePrimary = {
   key: string;
   href: string;
@@ -71,10 +72,11 @@ const MOBILE_PRIMARY: MobilePrimary[] = [
   {
     key: "growth",
     href: "/growth",
-    label: "Growth",
+    // LABEL ONLY — the key, the href and the permission are untouched.
+    label: "Player Lifecycle",
     icon: MapPin,
-    visible: (u) => canAccess(u, "growth"),
-    isActive: (p) => p.startsWith("/growth"),
+    visible: (u) => canAccess(u, "growth") || canAccess(u, "membership"),
+    isActive: (p) => p.startsWith("/growth") || p.startsWith("/membership"),
   },
   {
     key: "match-ops",
@@ -164,8 +166,6 @@ export default function MobileBottomNav({
       visible: true,
       badge: t.badge,
     })),
-    // Membership — disabled placeholder, mirroring the desktop tab.
-    { label: "Membership", icon: Users, visible: true, disabled: true },
     {
       href: "/data",
       label: "Data",
