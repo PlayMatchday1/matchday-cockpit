@@ -644,12 +644,6 @@ export default function FieldCostsView() {
   return (
     <>
       <div className="mb-6 text-sm">
-        <Link
-          href="/admin/finance"
-          className="text-deep-green/60 transition hover:text-deep-green"
-        >
-          ← Back to Finance
-        </Link>
       </div>
 
       <div className="mb-6">

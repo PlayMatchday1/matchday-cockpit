@@ -1,6 +1,6 @@
 "use client";
 
-import { useMemo, useState } from "react";
+import { useEffect, useMemo, useState } from "react";
 import Link from "next/link";
 import { Lock, Pencil, Plus, Trash2 } from "lucide-react";
 import ConfirmDeleteDialog from "@/components/ConfirmDeleteDialog";
@@ -59,6 +59,8 @@ function fmtMoney(n: number, signZero = false): string {
   return `${r < 0 ? "-" : ""}$${abs.toLocaleString("en-US")}`;
 }
 
+const chipAct = "text-[12px] font-bold text-deep-green/60 underline decoration-cream-line underline-offset-2 hover:text-deep-green";
+
 export default function ExpenseAdminView() {
   const { data, loading } = useFinanceData();
   const { appUser } = useAuth();
@@ -68,7 +70,16 @@ export default function ExpenseAdminView() {
   const [rangeFrom, setRangeFrom] = useState("");
   const [rangeTo, setRangeTo] = useState("");
   const [cityFilter, setCityFilter] = useState<string>(ALL);
-  const [categoryFilter, setCategoryFilter] = useState<string>(ALL);
+  // CHIPS, NOT A DROPDOWN. Eight categories were invisible inside a single-select that could only
+  // ever show one, and picking one meant guessing whether it had any spend. Each chip carries its
+  // own period total, so the choice is informed before it is made.
+  //
+  // A CATEGORY WITH NO SPEND STARTS OFF. That is what removes the fifteen $0.00 rows — a DEFAULT,
+  // not a rule: the chip is still there, still tappable, and turning it on brings its rows back.
+  // Dim-and-off and unavailable are drawn differently for exactly that reason.
+  //
+  // REMEMBERED BETWEEN VISITS, so a deliberate selection is not undone by navigating away.
+  const [selectedCats, setSelectedCats] = useState<Set<string> | null>(null);
 
   const [sortKey, setSortKey] = useState<SortKey>("date");
   const [sortDir, setSortDir] = useState<SortDir>("desc");
@@ -129,10 +140,50 @@ export default function ExpenseAdminView() {
     return [...set].sort();
   }, [knownCategories, BASE_CATEGORIES]);
 
-  const categoryOptions = useMemo(
-    () => [ALL, ...selectableCategories],
-    [selectableCategories],
-  );
+  // Per-category spend for the ACTIVE PERIOD — the number on the chip, and what decides which
+  // chips open on.
+  const categorySpend = useMemo(() => {
+    const months = new Set(quarter.months.map((m) => m.key));
+    const out = new Map<string, number>();
+    for (const c of selectableCategories) out.set(c, 0);
+    for (const r of allRows) {
+      if (!months.has(r.month)) continue;
+      if (!out.has(r.category)) continue;
+      out.set(r.category, (out.get(r.category) ?? 0) + Number(r.amount || 0));
+    }
+    return out;
+  }, [allRows, selectableCategories, quarter]);
+
+  const CHIP_KEY = "finance:expenses:categories";
+  // Restore a remembered selection; otherwise open on "only the ones with spend".
+  useEffect(() => {
+    // WAIT FOR THE DATA. This ran on the first render, when allRows is empty and every category
+    // therefore looks like $0 — so "only with spend" resolved to NOTHING and the guard below kept
+    // it that way once the rows arrived. The page opened with every chip off and an empty table.
+    if (selectedCats !== null || selectableCategories.length === 0) return;
+    if (allRows.length === 0) return;
+    let restored: Set<string> | null = null;
+    try {
+      const raw = window.localStorage.getItem(CHIP_KEY);
+      if (raw) {
+        const arr = JSON.parse(raw) as string[];
+        // Intersect with what exists today — a category that has since disappeared must not
+        // resurrect, and a NEW one must not be silently excluded by an old selection.
+        restored = new Set(arr.filter((c) => selectableCategories.includes(c)));
+      }
+    } catch { /* private mode */ }
+    setSelectedCats(
+      restored && restored.size > 0
+        ? restored
+        : new Set(selectableCategories.filter((c) => (categorySpend.get(c) ?? 0) !== 0)),
+    );
+  }, [selectedCats, selectableCategories, categorySpend, allRows.length]);
+
+  const activeCats = selectedCats ?? new Set(selectableCategories);
+  const setCats = (next: Set<string>) => {
+    setSelectedCats(next);
+    try { window.localStorage.setItem(CHIP_KEY, JSON.stringify([...next])); } catch { /* private mode */ }
+  };
 
   // Filter dropdown options. Real city names come from row data;
   // "Company-wide" is synthetic — included when any row has city
@@ -186,10 +237,9 @@ export default function ExpenseAdminView() {
         rows = rows.filter((r) => r.city === cityFilter);
       }
     }
-    if (categoryFilter !== ALL)
-      rows = rows.filter((r) => r.category === categoryFilter);
+    rows = rows.filter((r) => activeCats.has(r.category));
     return rows;
-  }, [allRows, monthFilter, rangeFrom, rangeTo, cityFilter, categoryFilter, quarter]);
+  }, [allRows, monthFilter, rangeFrom, rangeTo, cityFilter, activeCats, quarter]);
 
   const sorted = useMemo(() => {
     const rows = filtered.slice();
@@ -224,9 +274,9 @@ export default function ExpenseAdminView() {
         rows = rows.filter((r) => r.city === cityFilter);
       }
     }
-    if (categoryFilter !== ALL) rows = rows.filter((r) => r.category === categoryFilter);
+    rows = rows.filter((r) => activeCats.has(r.category));
     return rows;
-  }, [allRows, cityFilter, categoryFilter]);
+  }, [allRows, cityFilter, activeCats]);
 
   // Ignore a single-month selection that isn't in the active quarter (e.g. the
   // page-level ?q selector changed quarters while a month drill-down was set).
@@ -321,12 +371,6 @@ export default function ExpenseAdminView() {
   return (
     <>
       <div className="mb-6 text-sm">
-        <Link
-          href="/admin/finance"
-          className="text-deep-green/60 transition hover:text-deep-green"
-        >
-          ← Back to Finance
-        </Link>
       </div>
 
       <div className="mb-6 flex flex-wrap items-end justify-between gap-4">
@@ -334,11 +378,6 @@ export default function ExpenseAdminView() {
           <h1 className="font-display text-5xl uppercase leading-none tracking-tight text-deep-green md:text-6xl">
             Expenses
           </h1>
-          <p className="mt-2 max-w-xl text-sm text-deep-green/65">
-            Most of these repeat. The <b>Recurring</b> view groups the flat rows
-            into line items so a missing month reads as a gap. Imported and
-            recompute-owned rows stay read-only.
-          </p>
           <p className="mt-1 text-xs text-deep-green/55">
             Match Manager Pay is managed separately on the{" "}
             <Link
@@ -452,20 +491,58 @@ export default function ExpenseAdminView() {
           </select>
         </Filter>
 
-        <Filter label="Category">
-          <select
-            value={categoryFilter}
-            onChange={(e) => setCategoryFilter(e.target.value)}
-            className="rounded-md border border-cream-line bg-cream-soft px-3 py-1.5 text-sm font-bold text-deep-green focus:border-deep-green focus:outline-none"
-          >
-            {categoryOptions.map((c) => (
-              <option key={c} value={c}>
-                {c}
-              </option>
-            ))}
-          </select>
-        </Filter>
+
       </div>
+
+      {/* ── THE CATEGORIES ARE THE CONTROL ───────────────────────────────────────────────────── */}
+      <div className="mb-5">
+        <div className="mb-2 flex items-baseline gap-3">
+          <span className="text-[9.5px] font-extrabold uppercase tracking-[0.09em] text-deep-green/45">
+            Show
+          </span>
+          <button type="button" className={chipAct} onClick={() => setCats(new Set(selectableCategories))}>All</button>
+          <button type="button" className={chipAct} onClick={() => setCats(new Set())}>None</button>
+          <button type="button" className={chipAct}
+            onClick={() => setCats(new Set(selectableCategories.filter((c) => (categorySpend.get(c) ?? 0) !== 0)))}>
+            Only with spend
+          </button>
+        </div>
+        <div className="flex flex-wrap gap-[7px]">
+          {selectableCategories.map((c) => {
+            const spend = categorySpend.get(c) ?? 0;
+            const on = activeCats.has(c);
+            // DIM = no spend this period. Still tappable — off and unavailable must not look alike.
+            const dim = spend === 0;
+            return (
+              <button
+                key={c}
+                type="button"
+                aria-pressed={on}
+                data-testid="expense-cat-chip"
+                onClick={() => {
+                  const next = new Set(activeCats);
+                  if (next.has(c)) next.delete(c); else next.add(c);
+                  setCats(next);
+                }}
+                className={
+                  "inline-flex min-h-[36px] items-center gap-[7px] rounded-full border px-3 py-1 text-[12.5px] transition " +
+                  (on
+                    ? "border-[#d5ded8] bg-[#f2f5f3] font-bold text-deep-green"
+                    : dim
+                      ? "border-[#eef2ef] bg-white font-semibold text-deep-green/25"
+                      : "border-cream-line bg-white font-semibold text-deep-green/55")
+                }
+              >
+                {c}
+                <span className={"text-[11.5px] font-bold tabular-nums " + (on ? "text-deep-green/60" : "text-deep-green/25")}>
+                  {spend === 0 ? "$0" : fmtMoney(spend)}
+                </span>
+              </button>
+            );
+          })}
+        </div>
+      </div>
+
 
       {view === "rec" && (
         <>

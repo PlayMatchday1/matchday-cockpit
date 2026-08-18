@@ -39,9 +39,7 @@ export default function OpExCalendarView({
   // Wired by the Finance page to switch to the Expenses tab, where
   // fin_expenses rows are added/edited (the single source this calendar
   // mirrors). Optional so the component still renders standalone.
-  onAddExpense,
 }: {
-  onAddExpense?: () => void;
 } = {}) {
   const { data, loading, error } = useFinanceData();
   const { appUser } = useAuth();
@@ -155,9 +153,9 @@ export default function OpExCalendarView({
         </div>
         <div className="ox-controls">
           {/* The month nav lived here. It is the period bar's job now — see the note on `period`. */}
-          <button className="ox-add" onClick={() => onAddExpense?.()}>
+          <Link className="ox-add" href="/admin/finance/ledger/expenses">
             + Add expense
-          </button>
+          </Link>
         </div>
       </div>
 
