@@ -125,12 +125,19 @@ export default function TopNav() {
   const adminActive = pathname === "/admin";
 
   return (
+    // STICKY, BECAUSE THE RAILS ARE FIXED. The rails sit at `top: var(--nav-h)` against the
+    // VIEWPORT; this header was `position: static` and scrolled away, so from the first pixel of
+    // scroll the rails hung 64px below nothing and the vacated strip read as a gap. The offset was
+    // never wrong — the two elements simply did not agree about what they were anchored to.
+    //
+    // z-[35]: above the rails (z-30) so content and rail scroll under it, below every scrim and
+    // drawer (z-40 and up) so a modal still covers the nav.
     <header
-      className="hidden bg-deep-green text-cream md:block"
+      className="sticky top-0 z-[35] hidden bg-deep-green text-cream md:block"
       style={{ paddingTop: "env(safe-area-inset-top)" }}
     >
       <div className="mx-auto max-w-6xl px-4 sm:px-6">
-        <div className="flex h-16 items-center justify-between gap-2 sm:gap-4">
+        <div className="flex items-center justify-between gap-2 sm:gap-4" style={{ height: "var(--nav-h)" }}>
           <Link href="/home" className="flex shrink-0 items-center gap-2">
             {/* Inlined SVG (fill=currentColor) tinted with the header's `mint`
                 accent token via text-mint; 22px tall, width auto. The svg

@@ -24,7 +24,7 @@ export default function MatchChatsPage() {
   return (
     <PagePermissionGuard page="chats">
       <div
-        className="relative left-1/2 flex h-[100dvh] w-screen -translate-x-1/2 flex-col md:h-[calc(100dvh-4rem)]"
+        className="relative left-1/2 flex h-[100dvh] w-screen -translate-x-1/2 flex-col md:h-[calc(100dvh-var(--nav-h))]"
         style={{
           // Cancel AuthGate <main>'s paddingTop max(env,26px) and
           // paddingBottom calc(60px + var(--bottom-nav-h)) so the shell

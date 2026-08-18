@@ -14,7 +14,7 @@ import CrmClient from "./CrmClient";
 // The outer div escapes the AuthGate <main> wrapper's
 // `mx-auto max-w-6xl px-6 py-8` padding so CrmClient occupies a
 // single full-bleed area that sits flush under the top nav. Height
-// is calculated against TopNav (4rem) so the inner column can flex
+// is calculated against TopNav (--nav-h, globals.css) so the inner column can flex
 // to fill the rest of the viewport.
 //
 // The Players/Matches segmented control is rendered inside
@@ -30,7 +30,7 @@ export default function PlayerChatPage() {
   return (
     <PagePermissionGuard page="chats">
       <div
-        className="relative left-1/2 flex h-[100dvh] w-screen -translate-x-1/2 flex-col md:h-[calc(100dvh-4rem)]"
+        className="relative left-1/2 flex h-[100dvh] w-screen -translate-x-1/2 flex-col md:h-[calc(100dvh-var(--nav-h))]"
         style={{
           // Full-bleed escape from AuthGate <main> (mx-auto max-w-[1600px]
           // px-8 + vertical padding). Horizontal: left-1/2 w-screen

@@ -11,6 +11,28 @@ html {
   overflow-x: hidden;
 }
 
+/* THE NAV HEIGHT, DEFINED ONCE.
+
+   Seven places carried their own `4rem`: the four section rails (Finance, Match Ops, Player
+   Lifecycle, /city), the CRM dock, and the two chat shells. They all happened to agree — the bug
+   was never a stale number — but a measurement copied seven times is a measurement that will
+   eventually disagree with itself, and nothing here would have caught it.
+
+   PER BREAKPOINT, IN ONE PLACE. TopNav is `hidden md:block`, so below md there is no bar and the
+   offset is genuinely zero. Setting that here means no use site has to branch on the breakpoint.
+
+   This is the BAR itself. The iOS safe-area inset is added at each use site that needs it
+   (`calc(env(safe-area-inset-top, 0px) + var(--nav-h))`), because the header adds it as padding
+   and only some consumers sit inside that box. */
+:root {
+  --nav-h: 0px;
+}
+@media (min-width: 768px) {
+  :root {
+    --nav-h: 4rem;
+  }
+}
+
 /* Lock document scroll for fixed-height app shells (e.g. /chats).
    iOS Safari standalone PWA scrolls the document when the on-screen
    keyboard opens and does not restore scrollTop on dismiss, which

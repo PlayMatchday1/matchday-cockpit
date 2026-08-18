@@ -223,7 +223,7 @@ export default function CrmDock() {
       data-unlinked={unlinked ? 1 : 0}
       data-amb={ambiguous ? 1 : 0}
       className="fixed right-0 bottom-0 z-40 flex w-[360px] max-w-[calc(100vw-8px)] flex-col overflow-hidden rounded-tl-xl border border-b-0 border-r-0 border-cream-line bg-white shadow-2xl"
-      style={{ top: "calc(env(safe-area-inset-top, 0px) + 4rem)" }}
+      style={{ top: "calc(env(safe-area-inset-top, 0px) + var(--nav-h))" }}
     >
       {/* Banner A — attribution: WHO this docked conversation is with. */}
       <div

@@ -49,8 +49,8 @@ export default function LifecycleRail({ children }: { children: React.ReactNode 
     <>
       <div className="fixed left-0 z-30 hidden lg:block"
         style={{
-          top: "calc(env(safe-area-inset-top, 0px) + 4rem)",
-          height: "calc(100dvh - env(safe-area-inset-top, 0px) - 4rem)",
+          top: "calc(env(safe-area-inset-top, 0px) + var(--nav-h))",
+          height: "calc(100dvh - env(safe-area-inset-top, 0px) - var(--nav-h))",
           width: railW, transition: "width .18s ease-out",
         }}>
         <ChatsRail collapsed={collapsed} onToggle={toggle} items={items} showSwitch={false} label={LABEL} />
