@@ -136,3 +136,12 @@
   color: var(--deep-green, #12352b);
   max-width: 190px;
 }
+
+.rank { display: inline-flex; align-items: center; justify-content: center; min-width: 18px; height: 18px; margin-right: 8px; border-radius: 5px; background: var(--cream-soft, #f4f1e8); font-size: 10px; font-weight: 800; color: color-mix(in srgb, var(--deep-green, #12352b) 65%, transparent); }
+
+/* The Match View filter panel — thirteen fields on a fluid grid so it reflows rather than
+   overflowing at narrow widths. */
+.filterGrid { display: grid; grid-template-columns: repeat(auto-fill, minmax(150px, 1fr)); gap: 10px; margin-bottom: 12px; }
+.filterField { display: flex; flex-direction: column; gap: 4px; min-width: 0; }
+.filterField > span { font-size: 10px; font-weight: 800; letter-spacing: .05em; text-transform: uppercase; color: color-mix(in srgb, var(--deep-green, #12352b) 55%, transparent); }
+.filterField .sel { max-width: none; width: 100%; }

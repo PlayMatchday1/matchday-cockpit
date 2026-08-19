@@ -109,13 +109,44 @@ export default function RevenueSection() {
     ),
     [fieldRows, cityFilter, fieldFilter],
   );
-  const shownMatches = useMemo(
+  // ── MATCH VIEW FILTERS (the mockup's panel) ─────────────────────────────────────────────────
+  //
+  // EVERY FIELD HERE BACKS A COLUMN THAT EXISTS. The mockup lists thirteen; Match View renders all
+  // thirteen, so none was dropped. A filter over a column the table does not show would narrow the
+  // rows for a reason the reader cannot see.
+  //
+  // Scoped to Match View only — City and Field views keep the chips and the Field dropdown, which
+  // the mockup drops entirely and which would be a real regression to lose.
+  const [mf, setMf] = useState<Record<string, string>>({});
+  const setMF = (k: string, v: string) => setMf((m) => ({ ...m, [k]: v }));
+  const clearMatchFilters = () => setMf({});
+  const matchFiltersOn = Object.values(mf).some((v) => v && v !== "all");
+
+  const shownMatchesBase = useMemo(
     () => matchRows.filter(
       (r) => (cityFilter === "all" || r.city === canonCity(cityFilter)) &&
              (fieldFilter === "all" || r.fieldKey === fieldFilter),
     ),
     [matchRows, cityFilter, fieldFilter],
   );
+
+  const HOUR = (d: Date) => `${((d.getHours() + 11) % 12) + 1}${d.getHours() < 12 ? "am" : "pm"}`;
+  const dayName = (d: Date) => ["Sun", "Mon", "Tue", "Wed", "Thu", "Fri", "Sat"][d.getDay()];
+  const ymd = (d: Date) => `${d.getFullYear()}-${String(d.getMonth() + 1).padStart(2, "0")}-${String(d.getDate()).padStart(2, "0")}`;
+  const shownMatches = useMemo(() => shownMatchesBase.filter((r) => {
+    const eq = (k: string, v: string) => !mf[k] || mf[k] === "all" || mf[k] === v;
+    return eq("date", ymd(r.start)) && eq("month", r.month) && eq("week", String(r.week))
+      && eq("weekday", dayName(r.start)) && eq("city", r.city) && eq("location", r.location)
+      && eq("hour", HOUR(r.start)) && eq("match", String(r.matchApiId))
+      && eq("members", String(r.memberSpots)) && eq("free", String(r.freeSpots))
+      && eq("dpps", String(r.dppSpots)) && eq("spots", String(r.totalSpots))
+      && eq("dpprev", String(Math.round(r.dppRevenue)));
+  }), [shownMatchesBase, mf]);
+
+  // Options come from the rows ALREADY narrowed by the chips, so the panel never offers a value
+  // that would return nothing.
+  const opts = (get: (r: MatchRow) => string) =>
+    [...new Set(shownMatchesBase.map(get))].filter(Boolean).sort();
 
   // Membership is a city fact, not a pitch fact, so the field filter cannot narrow it. When one
   // is applied the membership series is withheld rather than shown unnarrowed next to a narrowed
@@ -128,7 +159,8 @@ export default function RevenueSection() {
 
   // ONE BAR PER PERIOD, not per month — at Quarter grain a bar is a quarter, and its value is the
   // sum of that quarter's months.
-  const series = useMemo(() => {
+  type SeriesPoint = { month: string; key: string; dpp: number; membership: number };
+  const series = useMemo<SeriesPoint[]>(() => {
     if (!data) return [];
     return periods.map((p) => {
       const ms = new Set(p.months);
@@ -143,6 +175,68 @@ export default function RevenueSection() {
 
   const valueOf = (p: { dpp: number; membership: number }) =>
     view === "dpp" ? p.dpp : view === "membership" ? p.membership : p.dpp + p.membership;
+
+  // ── AVERAGE DAILY REVENUE, DIVIDED BY THE RIGHT NUMBER ──────────────────────────────────────
+  //
+  // The mockup hardcodes /31 for every month. That is wrong for April, June, September, November
+  // (30) and badly wrong for February (28/29) — $66,267 for April reads $2,138 instead of $2,209.
+  // The mockup is the spec for layout, not for arithmetic it gets wrong.
+  //
+  // A CLOSED month divides by its own length. The CURRENT month divides by days ELAPSED — dividing
+  // a partial month by its full length understates the daily rate every single day of that month.
+  // Which was used is stated on screen rather than left for the reader to infer.
+  //
+  // daysInMonthOf() is Date's own month-end arithmetic (day 0 of the next month), so February and
+  // leap years fall out of it rather than out of a table someone has to maintain.
+  // ACCEPTS BOTH NAMINGS. The series labels months in FULL ("June 2026") while the period keys use
+  // the three-letter form ("Jun 2026"). A three-letter-only lookup returned -1 for June, July and
+  // every other long name, the divisor fell through to 1, and the row printed the month's entire
+  // revenue as its daily average — $68,997/day. Caught by dividing the rendered figures back out.
+  const MONTH_NAMES = ["January","February","March","April","May","June",
+    "July","August","September","October","November","December"];
+  const daysInMonthOf = (label: string) => {
+    const [mLab, yStr] = String(label ?? "").trim().split(/\s+/);
+    const yr = Number(yStr);
+    if (!mLab || !Number.isFinite(yr)) return 0;
+    const mi = MONTH_NAMES.findIndex((n) => n.toLowerCase().startsWith(mLab.slice(0, 3).toLowerCase()));
+    if (mi < 0) return 0;
+    // Day 0 of the next month is the last day of this one — February and leap years included,
+    // with no table to keep in step.
+    return new Date(yr, mi + 1, 0).getDate();
+  };
+  // For the month in progress the period model already counts elapsed days inclusive of today.
+  const divisorFor = (p: { key: string; month: string }) =>
+    p.key === period.key && period.isCurrent
+      ? { days: Math.max(1, period.elapsedDays), basis: "elapsed" as const }
+      : { days: Math.max(1, daysInMonthOf(p.month)), basis: "full" as const };
+
+  const SUMMARY_ROWS = [
+    { key: "total", label: "Total revenue",
+      render: (p: SeriesPoint) => fmtMoney(p.dpp + p.membership) },
+    { key: "dpp", label: "DPP",
+      render: (p: SeriesPoint) => fmtMoney(p.dpp) },
+    { key: "membership", label: "Membership",
+      render: (p: SeriesPoint) => (membershipScoped ? fmtMoney(p.membership) : "—") },
+    { key: "avgdaily", label: "Average daily revenue",
+      render: (p: SeriesPoint) => {
+        const { days, basis } = divisorFor(p);
+        return (
+          <>
+            {fmtMoney((p.dpp + p.membership) / days)}
+            <i className={s.soFar} data-testid="avg-daily-basis">
+              {basis === "elapsed" ? `÷ ${days} elapsed` : `÷ ${days} days`}
+            </i>
+          </>
+        );
+      } },
+  ];
+
+  // The count beside the Breakdown segments, in the units of the view being shown.
+  const breakdownCount = useMemo(() => {
+    if (grain === "match") return `${shownMatches.length} ${shownMatches.length === 1 ? "match" : "matches"}`;
+    const n = (grain === "city" ? byCity(shownFields) : byField(shownFields)).size;
+    return `${n} ${grain === "city" ? (n === 1 ? "city" : "cities") : (n === 1 ? "field" : "fields")}`;
+  }, [grain, shownFields, shownMatches]);
 
   const anchorPoint = series.find((p) => p.key === period.key) ?? { month: period.label, key: period.key, dpp: 0, membership: 0 };
   const anchorValue = valueOf(anchorPoint);
@@ -328,34 +422,69 @@ export default function RevenueSection() {
 
       <div className={s.card}>
         <div className={s.cardHead}>
-          <span className={s.cardTitle}>Matchday revenue</span>
+          <div>
+            <span className={s.cardTitle}>Matchday revenue</span>
+            <div className={s.cardSub} data-testid="revenue-summary-sub">
+              Current month and prior three months · oldest to newest
+            </div>
+          </div>
+          {/* ONE Export, ghost, in the table head — the mockup has one and the page had two. */}
           <button type="button" className={s.btn} onClick={exportChart}>Export</button>
         </div>
-        <div className={s.chart}>
-          {series.map((p) => {
-            const total = valueOf(p);
-            const dppH = view === "membership" ? 0 : (p.dpp / max) * 150;
-            const memH = view === "dpp" || !membershipScoped ? 0 : (p.membership / max) * 150;
-            return (
-              <div key={p.month} className={s.col}>
-                <span className={s.colVal}>{fmtMoney(total)}</span>
-                <div className={s.stack}>
-                  {dppH > 0 && <div className={s.barA} style={{ height: `${dppH}px` }} />}
-                  {memH > 0 && <div className={s.barB} style={{ height: `${memH}px` }} />}
-                </div>
-                <span className={s.colLab} data-testid="revenue-chart-month">
-                  {p.month}
-                  {p.key === period.key && period.isCurrent && <i className={s.soFar}>so far</i>}
-                </span>
-              </div>
-            );
-          })}
+
+        {/* THE FOUR-COLUMN SUMMARY replaces the stacked bar chart, which is not in the mockup and
+            is gone rather than hidden behind a toggle. Four months across, oldest left; four
+            concept rows down. The bars showed the same two numbers with less precision and no
+            room for the third and fourth rows. */}
+        <div className={s.tblWrap}>
+          <table className={s.tbl} data-testid="revenue-summary">
+            <thead>
+              <tr>
+                <th className="l">&nbsp;</th>
+                {series.map((p) => (
+                  <th key={p.key} data-testid="revenue-summary-month">
+                    {p.month}
+                    {p.key === period.key && period.isCurrent && <i className={s.soFar}>so far</i>}
+                  </th>
+                ))}
+              </tr>
+            </thead>
+            <tbody>
+              {SUMMARY_ROWS.map((row) => (
+                <tr key={row.key} data-testid="revenue-summary-row" data-row={row.key}>
+                  <td className="l">{row.label}</td>
+                  {series.map((p) => (
+                    <td key={p.key} data-testid={`sum-${row.key}`} data-month={p.key}>
+                      {row.render(p)}
+                    </td>
+                  ))}
+                </tr>
+              ))}
+            </tbody>
+          </table>
         </div>
+
+        {/* BREAKDOWN LIVES IN THE CARD, directly under the table, as the mockup places it — it was
+            floating below in its own row. The count sits beside the segments. */}
+        <div className={s.ctrlRow}>
+          <div className={s.ctrlGroup}>
+            <span className={s.ctrlLab}>Breakdown</span>
+            <div className={s.seg} role="group" aria-label="Breakdown">
+              {(["city", "field", "match"] as const).map((g) => (
+                <button key={g} type="button" data-testid={`breakdown-${g}`}
+                  aria-pressed={grain === g}
+                  className={grain === g ? s.on : ""} onClick={() => setGrain(g)}>
+                  {g === "city" ? "City View" : g === "field" ? "Field View" : "Match View"}
+                </button>
+              ))}
+            </div>
+            <span className={s.ctrlLab} data-testid="breakdown-count">{breakdownCount}</span>
+          </div>
+        </div>
+
         <div className={s.legend}>
-          {view !== "membership" && <span><i className={`${s.dot} ${s.barA}`} />DPP</span>}
-          {view !== "dpp" && membershipScoped && <span><i className={`${s.dot} ${s.barB}`} />Membership</span>}
           {!membershipScoped && <span>Membership withheld — it is a city figure and cannot be narrowed to one pitch.</span>}
-          {/* A chart that quietly drew fewer bars than asked would read as "this is all there
+          {/* A table that quietly drew fewer months than asked would read as "this is all there
               was". It says so instead. */}
           {dropped > 0 && (
             <span data-testid="revenue-span-dropped">
@@ -371,17 +500,10 @@ export default function RevenueSection() {
         </div>
       </div>
 
+      {/* THE CHIPS AND THE FIELD DROPDOWN STAY. The mockup replaces them with a Match-View-only
+          filter panel and leaves City and Field views unfilterable — that would be a real
+          regression on a working control, so they are kept and the panel is added alongside. */}
       <div className={s.ctrlRow}>
-        <div className={s.ctrlGroup}>
-          <span className={s.ctrlLab}>Breakdown</span>
-          <div className={s.seg}>
-            {(["city", "field", "match"] as const).map((g) => (
-              <button key={g} type="button" className={grain === g ? s.on : ""} onClick={() => setGrain(g)}>
-                {g === "city" ? "City View" : g === "field" ? "Field View" : "Match View"}
-              </button>
-            ))}
-          </div>
-        </div>
         <div className={s.ctrlGroup}>
           <span className={s.ctrlLab}>City</span>
           <div className={s.seg}>
@@ -405,14 +527,53 @@ export default function RevenueSection() {
         </div>
         <div className={s.ctrlGroup}>
           <button type="button" className={s.btn} onClick={clearFilters} disabled={!filtersOn}>Clear filters</button>
-          <button type="button" className={s.btn} onClick={exportTable}>Export</button>
         </div>
       </div>
+
+      {/* THE MOCKUP'S MATCH FILTER PANEL — Match View only. Thirteen fields, each backing a column
+          Match View actually renders, so nothing narrows the table for an invisible reason. */}
+      {grain === "match" && (
+        <div className={s.card} data-testid="match-filter-panel">
+          <div className={s.filterGrid}>
+            {([
+              ["date", "Date", () => opts((r) => ymd(r.start))],
+              ["month", "Month", () => opts((r) => r.month)],
+              ["week", "Week", () => opts((r) => String(r.week))],
+              ["weekday", "Weekday", () => opts((r) => dayName(r.start))],
+              ["city", "City", () => opts((r) => r.city)],
+              ["location", "Location", () => opts((r) => r.location)],
+              ["hour", "Hour", () => opts((r) => HOUR(r.start))],
+              ["match", "Match", () => opts((r) => String(r.matchApiId))],
+              ["members", "Members Code", () => opts((r) => String(r.memberSpots))],
+              ["free", "Free Code", () => opts((r) => String(r.freeSpots))],
+              ["dpps", "DPP\u2019s", () => opts((r) => String(r.dppSpots))],
+              ["spots", "Total Spots", () => opts((r) => String(r.totalSpots))],
+              ["dpprev", "DPP Revenue", () => opts((r) => String(Math.round(r.dppRevenue)))],
+            ] as [string, string, () => string[]][]).map(([k, lab, get]) => (
+              <label key={k} className={s.filterField}>
+                <span>{lab}</span>
+                <select className={s.sel} data-testid={`mf-${k}`} value={mf[k] ?? "all"}
+                  onChange={(e) => setMF(k, e.target.value)}>
+                  <option value="all">All</option>
+                  {get().map((v) => <option key={v} value={v}>{v}</option>)}
+                </select>
+              </label>
+            ))}
+          </div>
+          <div className={s.ctrlGroup}>
+            <button type="button" className={s.btn} data-testid="mf-clear"
+              onClick={clearMatchFilters} disabled={!matchFiltersOn}>Clear filters</button>
+            <span className={s.ctrlLab}>{shownMatches.length} of {shownMatchesBase.length} matches</span>
+          </div>
+        </div>
+      )}
 
       {grain === "match" ? (
         <MatchTable rows={shownMatches} />
       ) : (
-        <GroupTable rows={shownFields} grain={grain} />
+        <GroupTable rows={shownFields} grain={grain} month={period.months[period.months.length - 1] ?? ""}
+          membershipOf={(c) => (data ? cityMembershipRevenueFor(data, c, period.months[period.months.length - 1] ?? "") : 0)}
+          membershipScoped={membershipScoped} />
       )}
     </div>
   );
@@ -436,29 +597,45 @@ function BillingMark({ basis, unknown }: { basis: FieldMonth["basis"]; unknown: 
   return <span className={`${s.bt} ${cls}`} data-testid="billing-mark">{unknown ? "No cost on file" : COST_BASIS_LABEL[basis]}</span>;
 }
 
-function GroupTable({ rows, grain }: { rows: FieldMonth[]; grain: "city" | "field" }) {
-  if (rows.length === 0) return <div className={s.empty}>No rows for this selection.</div>;
-  // City view aggregates its fields; field view lists them. Either way the row is a (thing, month)
-  // pair so the months stay separable — a single blended figure across four months would hide the
-  // very trend the chart above is drawing.
-  const keyed = new Map<string, { label: string; month: Q2Month; basisSet: Set<FieldMonth["basis"]>; matches: number; dpp: number; rental: number; cost: number; anyUnknown: boolean; allUnknown: boolean }>();
-  for (const r of rows) {
+// CITY / FIELD VIEW — ranked, for the month the period is on, to the mockup's column set.
+//
+// SCOPED TO ONE MONTH, which is what every "(in month)" header says. The previous table paired
+// each thing with each month and ranked by DPP across the span; that answered a different question
+// and had none of the derived columns.
+//
+// EVERY DERIVED COLUMN IS COMPUTED FROM THE TWO IT DIVIDES, so a reader can check them by hand:
+// avg/venue = total ÷ venues, avg/match = total ÷ matches, mix = membership ÷ total. The match
+// denominator is guarded — a city with revenue and no matches would otherwise print Infinity.
+function GroupTable({ rows, grain, month, membershipOf, membershipScoped }: {
+  rows: FieldMonth[]; grain: "city" | "field"; month: Q2Month;
+  membershipOf: (city: string) => number; membershipScoped: boolean;
+}) {
+  const scoped = rows.filter((r) => r.month === month);
+  if (scoped.length === 0) return <div className={s.empty}>No rows for this selection.</div>;
+
+  const keyed = new Map<string, { label: string; city: string; venues: Set<string>; matches: number; dpp: number }>();
+  for (const r of scoped) {
     const label = grain === "city" ? r.city : r.field;
-    const k = `${label}|${r.month}`;
-    let e = keyed.get(k);
-    if (!e) {
-      e = { label, month: r.month, basisSet: new Set(), matches: 0, dpp: 0, rental: 0, cost: 0, anyUnknown: false, allUnknown: true };
-      keyed.set(k, e);
-    }
-    e.basisSet.add(r.basis);
+    let e = keyed.get(label);
+    if (!e) { e = { label, city: r.city, venues: new Set(), matches: 0, dpp: 0 }; keyed.set(label, e); }
+    e.venues.add(r.field);
     e.matches += r.matches;
-    e.dpp += r.revenue - r.privateRental;
-    e.rental += r.privateRental;
-    if (r.cost == null) e.anyUnknown = true;
-    else { e.cost += r.cost; e.allUnknown = false; }
+    e.dpp += r.revenue;
   }
-  const list = [...keyed.values()].sort((a, b) => (a.label === b.label ? a.month.localeCompare(b.month) : b.dpp - a.dpp));
-  const T = list.reduce((a, r) => ({ matches: a.matches + r.matches, dpp: a.dpp + r.dpp, rental: a.rental + r.rental, cost: a.cost + (r.allUnknown ? 0 : r.cost) }), { matches: 0, dpp: 0, rental: 0, cost: 0 });
+  // Membership is a CITY figure. In field view it cannot be narrowed to one pitch, so it is shown
+  // as — rather than split on a guess.
+  const list = [...keyed.values()].map((e) => {
+    const membership = grain === "city" && membershipScoped ? membershipOf(e.city) : 0;
+    const total = e.dpp + membership;
+    return { ...e, membership, total, venueCount: e.venues.size };
+  }).sort((a, b) => b.total - a.total);
+
+  const T = list.reduce((a, r) => ({
+    venues: a.venues + r.venueCount, matches: a.matches + r.matches,
+    total: a.total + r.total, dpp: a.dpp + r.dpp, membership: a.membership + r.membership,
+  }), { venues: 0, matches: 0, total: 0, dpp: 0, membership: 0 });
+  const showMembership = grain === "city" && membershipScoped;
+  const pct = (n: number, d: number) => `${((n / Math.max(1, d)) * 100).toFixed(1)}%`;
 
   return (
     <div className={s.card}>
@@ -467,38 +644,41 @@ function GroupTable({ rows, grain }: { rows: FieldMonth[]; grain: "city" | "fiel
           <thead>
             <tr>
               <th className="l">{grain === "city" ? "City" : "Location"}</th>
-              <th className="l">Month</th>
+              <th>Venues</th>
               <th>Matches</th>
-              <th>DPP Revenue</th>
-              <th>Private Rental</th>
-              <th>Field Cost</th>
+              <th>Total revenue <i className={s.mut}>(in month)</i></th>
+              <th>Avg revenue / venue</th>
+              <th>Avg revenue / match</th>
+              <th>DPP revenue <i className={s.mut}>(in month)</i></th>
+              <th>Membership revenue <i className={s.mut}>(in month)</i></th>
+              <th>Member mix <i className={s.mut}>(in month)</i></th>
             </tr>
           </thead>
           <tbody>
-            {list.map((r) => (
-              <tr key={`${r.label}|${r.month}`} data-testid="revenue-group-row">
-                <td className="l">
-                  {r.label}
-                  {[...r.basisSet].map((b) => <BillingMark key={b} basis={b} unknown={false} />)}
-                  {r.anyUnknown && <BillingMark basis="per_match" unknown />}
-                </td>
-                <td className="l">{r.month}</td>
-                <td>{fmtInt(r.matches)}</td>
-                <td>{fmtMoney(r.dpp)}</td>
-                <td className={r.rental === 0 ? s.mut : ""}>{r.rental === 0 ? "—" : fmtMoney(r.rental)}</td>
-                {/* A dash, never a zero: no basis on file is not a free pitch. */}
-                <td className={r.allUnknown ? s.mut : s.neg} data-testid="revenue-cost-cell">
-                  {r.allUnknown ? "—" : fmtMoney(r.cost)}
-                </td>
+            {list.map((r, i) => (
+              <tr key={r.label} data-testid="revenue-group-row" data-label={r.label}>
+                <td className="l"><span className={s.rank}>{i + 1}</span>{r.label}</td>
+                <td data-testid="gt-venues">{fmtInt(r.venueCount)}</td>
+                <td data-testid="gt-matches">{fmtInt(r.matches)}</td>
+                <td data-testid="gt-total">{fmtMoney(r.total)}</td>
+                <td data-testid="gt-avgvenue">{fmtMoney(r.total / Math.max(1, r.venueCount))}</td>
+                {/* guarded: revenue with zero matches must not print Infinity */}
+                <td data-testid="gt-avgmatch">{fmtMoney(r.total / Math.max(1, r.matches))}</td>
+                <td data-testid="gt-dpp">{fmtMoney(r.dpp)}</td>
+                <td data-testid="gt-member">{showMembership ? fmtMoney(r.membership) : "—"}</td>
+                <td data-testid="gt-mix">{showMembership ? pct(r.membership, r.total) : "—"}</td>
               </tr>
             ))}
             <tr className={s.tot}>
               <td className="l">Total</td>
-              <td className="l">—</td>
+              <td>{fmtInt(T.venues)}</td>
               <td>{fmtInt(T.matches)}</td>
-              <td>{fmtMoney(T.dpp)}</td>
-              <td>{fmtMoney(T.rental)}</td>
-              <td className={s.neg}>{fmtMoney(T.cost)}</td>
+              <td data-testid="gt-tot-total">{fmtMoney(T.total)}</td>
+              <td>{fmtMoney(T.total / Math.max(1, T.venues))}</td>
+              <td>{fmtMoney(T.total / Math.max(1, T.matches))}</td>
+              <td data-testid="gt-tot-dpp">{fmtMoney(T.dpp)}</td>
+              <td data-testid="gt-tot-member">{showMembership ? fmtMoney(T.membership) : "—"}</td>
+              <td>{showMembership ? pct(T.membership, T.total) : "—"}</td>
             </tr>
           </tbody>
         </table>
