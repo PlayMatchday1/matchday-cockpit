@@ -110,3 +110,29 @@
 .gapRow { display: flex; flex-wrap: wrap; align-items: center; gap: 8px; }
 
 .empty { padding: 28px 16px; text-align: center; font-size: 13px; color: color-mix(in srgb, var(--deep-green, #12352b) 55%, transparent); }
+
+/* ── DAILY REVENUE PACE ─────────────────────────────────────────────────────────────────────
+   The card's own additions: a subtitle under the title, a stacked pair of control rows in the
+   head, and the compact selects the View row uses. Everything else (.card, .seg, .legend, .dot)
+   is the shared kit already on this page, so the chart sits under the same period control looking
+   like the rest of Finance rather than like a transplant. */
+.cardSub {
+  margin-top: 3px;
+  font-size: 11.5px;
+  font-weight: 500;
+  letter-spacing: 0;
+  text-transform: none;
+  color: color-mix(in srgb, var(--deep-green, #12352b) 62%, transparent);
+}
+.ctrlStack { display: flex; flex-direction: column; align-items: flex-end; gap: 6px; }
+.sel {
+  height: 30px;
+  border-radius: 8px;
+  border: 1px solid var(--cream-line, #e6e2d8);
+  background: #fff;
+  padding: 0 8px;
+  font-size: 11.5px;
+  font-weight: 700;
+  color: var(--deep-green, #12352b);
+  max-width: 190px;
+}

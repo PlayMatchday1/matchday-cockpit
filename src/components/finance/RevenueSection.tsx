@@ -30,6 +30,7 @@ import { cityMembershipRevenueFor, CITY_DISPLAY_ORDER, type Q2Month } from "@/li
 import { loadMembershipWindowsByUserId, type MembershipWindowsByUserId } from "@/lib/mdapiMatchesRead";
 import { isCityHidden } from "@/lib/types";
 import { downloadCsv, fmtMoney, fmtInt } from "@/components/growth/format";
+import DailyRevenuePace from "./DailyRevenuePace";
 import s from "./financeSection.module.css";
 
 type View = "both" | "dpp" | "membership";
@@ -319,6 +320,11 @@ export default function RevenueSection() {
           }
         />
       </div>
+
+      {/* DAILY PACE, above the period bars. The bars answer "how did the month end"; this answers
+          "are we ahead of last month, today" — which is the question that can still be acted on.
+          The existing bar chart below is untouched. */}
+      <DailyRevenuePace />
 
       <div className={s.card}>
         <div className={s.cardHead}>

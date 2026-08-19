@@ -46,10 +46,21 @@ export interface QuarterInfo {
   months: [QuarterMonth, QuarterMonth, QuarterMonth];
 }
 
-// Lower bound on what the selector exposes. Q1 2026 and earlier have
-// no cockpit data; we don't surface them.
+// Lower bound on what the selector exposes — the first quarter the finance record can serve.
+//
+// THIS WAS 2026Q2, on a comment claiming "Q1 2026 and earlier have no cockpit data". That was
+// false: fin_revenue holds 7,822 rows from 2023-05-09 onward, including 4,292 Stripe-sourced rows
+// across 2023-2025. The floor was hiding three years of real revenue behind "nothing before this
+// on record" — the page was not missing data, it was refusing to look at it.
+//
+// Q2 2023 is where the record actually begins: the earliest row is 9 May 2023.
+//
+// EVERYTHING DOWNSTREAM FOLLOWS THIS CONSTANT. financeStats' seedMonthRecords() builds
+// MONTH_BY_KEY from getAvailableQuarters(), and financePeriod's floor derives from it, so widening
+// here widens the seeding and the period control together rather than leaving an unseeded month to
+// return a silent 0.
 export const EARLIEST_QUARTER: { year: number; quarter: Quarter } = {
-  year: 2026,
+  year: 2023,
   quarter: 2,
 };
 
