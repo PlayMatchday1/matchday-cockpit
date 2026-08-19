@@ -12,7 +12,7 @@
 // what supabase-js writes in the browser under sb-<ref>-auth-token.
 
 import { createClient } from "@supabase/supabase-js";
-import { mkdirSync, writeFileSync, existsSync, statSync } from "node:fs";
+import { mkdirSync, readFileSync, writeFileSync, existsSync, statSync } from "node:fs";
 
 try { process.loadEnvFile(".env.local"); } catch { /* env may already be set */ }
 
@@ -29,13 +29,32 @@ if (!SUPA_URL || !ANON) { console.error("Missing Supabase public env"); process.
 const ref = new URL(SUPA_URL).host.split(".")[0];
 const STORAGE_KEY = `sb-${ref}-auth-token`;
 
-// reuse a fresh state file (Supabase access tokens live ~1h)
+// REUSE ONLY WHAT STILL WORKS. This used to reuse the state file purely on mtime < 55 min, which
+// says nothing about whether the token is still honoured — minting a session for an identity
+// REVOKES the previous one, so a young file can hold a dead token. That produced 401s fifty
+// assertions downstream of the cause. One validation call, not a loop, not a poller.
 if (!force && existsSync(OUT)) {
   const ageMin = (Date.now() - statSync(OUT).mtimeMs) / 60000;
-  if (ageMin < 55) {
-    console.log(`Reusing ${OUT} (${ageMin.toFixed(0)} min old). Use --force to refresh.`);
+  if (ageMin < 55 && await cachedStateStillValid()) {
+    console.log(`Reusing ${OUT} (${ageMin.toFixed(0)} min old, validated). Use --force to refresh.`);
     process.exit(0);
   }
+  if (ageMin < 55) console.log(`${OUT} is ${ageMin.toFixed(0)} min old but the server rejected it — re-authenticating.`);
+}
+
+async function cachedStateStillValid() {
+  try {
+    const state = JSON.parse(readFileSync(OUT, "utf8"));
+    const raw = state?.origins?.[0]?.localStorage?.find((e) => e.name === STORAGE_KEY)?.value;
+    const token = raw ? JSON.parse(raw)?.access_token : null;
+    if (!token) return false;
+    const probe = createClient(SUPA_URL, ANON, {
+      global: { headers: { Authorization: `Bearer ${token}` } },
+      auth: { persistSession: false, autoRefreshToken: false },
+    });
+    const { data, error } = await probe.auth.getUser(token);
+    return !error && !!data?.user?.email;
+  } catch { return false; }
 }
 
 // capture exactly what supabase-js persists, via a storage shim.

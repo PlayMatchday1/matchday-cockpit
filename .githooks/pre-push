@@ -1,10 +1,43 @@
 #!/bin/sh
-# Pre-push gate (Phase 18). The FAST set (tsc + Node model/guard suites, ~9s) ALWAYS runs
-# and always blocks — that is the thing that could never be skipped again. The browser
-# suites run too (verify:e2e auto-starts a dev server, ~4-6 min). In a pinch set
-# VERIFY_SKIP_E2E=1 to skip ONLY the browser set (the fast set still runs). `git push
-# --no-verify` bypasses everything — use sparingly.
+# PRE-PUSH GATE, SCOPED TO WHAT THE DIFF CAN BREAK.
+#
+# The testing policy is that the gate exists for WRITES TO THE MATCHDAY API — those reach players.
+# Everything else gets typecheck. This hook used to run all nine minutes on every push regardless,
+# so a CSS change and a match-edit change cost the same.
+#
+# The decision lives in scripts/gate-scope.mjs as a named list, NOT in this shell — it is a safety
+# rule and it should be reviewable in a diff. That file allowlists what is SAFE, so anything
+# unrecognised falls to the full gate: a false full gate costs nine minutes, a false skip costs a
+# player.
+#
+# `git push --no-verify` still bypasses everything. VERIFY_SKIP_E2E=1 still skips only the browser
+# set within a full run.
 set -e
+
+# What this push actually changes, against the remote's current tip. If the remote branch is
+# unknown (first push of a branch), RANGE stays empty and gate-scope takes the full gate.
+REMOTE_REF=$(git rev-parse --abbrev-ref --symbolic-full-name '@{u}' 2>/dev/null || echo "")
+if [ -n "$REMOTE_REF" ]; then
+  CHANGED=$(git diff --name-only "$REMOTE_REF"...HEAD 2>/dev/null || echo "")
+else
+  CHANGED=""
+fi
+
+# Exit 10 = full gate, 0 = typecheck. The decision and its reason are printed by that script, every
+# time, so which mode ran is never a mystery.
+set +e
+# shellcheck disable=SC2086
+node scripts/gate-scope.mjs $CHANGED
+SCOPE=$?
+set -e
+
+if [ "$SCOPE" -ne 10 ]; then
+  echo "▶ pre-push: typecheck only (policy: the gate is for MatchDay writes)"
+  npx tsc --noEmit
+  echo "✓ pre-push: typecheck passed"
+  exit 0
+fi
+
 echo "▶ pre-push: npm run verify (fast set, ~9s) …"
 npm run verify
 if [ "${VERIFY_SKIP_E2E:-0}" = "1" ]; then

@@ -190,6 +190,39 @@ function readCached(email) {
   }
 }
 
+// DOES THIS TOKEN STILL WORK? Age is not the question.
+//
+// THE BUG THIS ENDS. readCached() decided a session was good from the TTL and the token's own
+// expires_at claim — both read off the local file. But minting a session for an identity REVOKES
+// the previous one, so a token minted eight minutes ago and killed two minutes ago still looks
+// perfect on disk. When the pre-push hook ran the gate straight after a local run, it picked up
+// exactly such a token and every assertion came back 401 "Invalid session" instead of the 403 it
+// was testing for — fifty assertions downstream of the real cause. That fired four times in one
+// day, each costing a full nine-minute gate run.
+//
+// ONE CALL, PER IDENTITY, PER RUN. sessionFor() is called once per identity in a suite, so this
+// adds one round trip to a run that lasts minutes. It is NOT a retry loop and NOT a poller: a
+// monitor polling auth locked production out earlier today, and this must never become that.
+async function stillValid(session) {
+  const url = process.env.NEXT_PUBLIC_SUPABASE_URL;
+  const anon = process.env.NEXT_PUBLIC_SUPABASE_PUBLISHABLE_KEY;
+  if (!url || !anon) return false;
+  try {
+    // The cheapest authenticated call there is, and the same one the server gates read through:
+    // adminAuth/resolveSessionUser both verify with getUser(token).
+    const client = createClient(url, anon, {
+      global: { headers: { Authorization: `Bearer ${session.access_token}` } },
+      auth: { persistSession: false, autoRefreshToken: false },
+    });
+    const { data, error } = await client.auth.getUser(session.access_token);
+    return !error && !!data?.user?.email;
+  } catch {
+    // A network blip is not proof the token is dead — but reusing it would risk the 401 cascade
+    // this function exists to prevent, so treat it as unusable and mint.
+    return false;
+  }
+}
+
 // A SESSION FOR A NAMED IDENTITY. Reuses the cached one while it is good; mints exactly one magic
 // link when it is not.
 export async function sessionFor(email) {
@@ -197,7 +230,9 @@ export async function sessionFor(email) {
     throw new Error("sessionFor(email): name the identity explicitly — there is no default");
   }
   const cached = readCached(email);
-  if (cached) return cached;
+  // VALIDATED, NOT ASSUMED. If the server no longer honours it, fall through and mint.
+  if (cached && await stillValid(cached)) return cached;
+  if (cached) console.log(`  ↻ cached session for ${email} was rejected by the server — minting a fresh one`);
 
   const url = process.env.NEXT_PUBLIC_SUPABASE_URL;
   const svc = createClient(url, process.env.SUPABASE_SERVICE_ROLE_KEY, { auth: { persistSession: false } });
@@ -220,7 +255,18 @@ export async function sessionFor(email) {
   }
   const vv = await netRetry(() => anon.auth.verifyOtp({ type: "magiclink", token_hash: hashed }), `verifyOtp ${email}`);
   const session = vv?.data?.session;
-  if (!session) throw new Error(`verifyOtp returned no session for ${email}`);
+  // FAIL LOUDLY, HERE, NAMING THE IDENTITY. The alternative is what used to happen: a null session
+  // handed to a suite, which then reports 401 on an assertion fifty lines away that has nothing to
+  // do with auth. The identity and the status are the two facts needed to act on this.
+  if (!session) {
+    const st = vv?.error?.status ?? "no status";
+    const msg = vv?.error?.message ?? "no session and no error";
+    throw new Error(
+      `Could not mint a session for ${email} — verifyOtp returned ${st}: ${msg}. ` +
+      `The magic link was issued, so this is the exchange failing, not the link. ` +
+      `If the account was deleted, that is the cause: its auth record can outlive its app_users row.`,
+    );
+  }
 
   try {
     mkdirSync(SESSION_DIR, { recursive: true });
