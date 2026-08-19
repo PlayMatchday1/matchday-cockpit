@@ -316,15 +316,33 @@ function EconomicsTable({
 
   return (
     <div className={s.card}>
+      <div className={s.legend} data-testid="cost-ratio-note">
+        <span>
+          <b>Cost ratio is field cost ÷ revenue at costed fields</b> — the column beside it, not
+          total revenue. Event play is billed to nobody and fields with no cost basis have no cost
+          behind them, so neither can sit under a cost in a ratio. The three revenue columns add up
+          to the total on every row.
+        </span>
+      </div>
       <div className={s.tblWrap}>
         <table className={s.tbl} data-testid="cost-economics-table">
           <thead>
             <tr>
               <th className="l">{grain === "city" ? "City" : "Field"}</th>
               {grain === "field" && <th className="l">City</th>}
-              <th className="l">Billing</th>
+              {/* "Cost structure" is the mockup's wording for this column. */}
+              <th className="l">Cost structure</th>
               <th>Matches</th>
               <th>Revenue</th>
+              {/* THE RATIO'S DENOMINATOR, ON SCREEN. The ratio has always divided by revenue at
+                  COSTED fields, but only total revenue was shown — so Austin printed 83.3% beside
+                  columns that divide to 65.2%, and San Antonio printed 170.1% beside 39.3%. A
+                  reader doing the arithmetic in the row got a different number from the one in the
+                  row, which is a column lying by omission. The three components are split out so
+                  the division on screen is the division performed. */}
+              <th data-testid="cost-th-costed">At costed fields</th>
+              <th data-testid="cost-th-event">Event play</th>
+              <th data-testid="cost-th-nobasis">No cost basis</th>
               <th>Field cost</th>
               <th>Cost ratio</th>
             </tr>
@@ -344,7 +362,13 @@ function EconomicsTable({
                   {x.anyUnknown && <span className={`${s.bt} ${s.btNone}`} data-testid="cost-billing-mark">No cost on file</span>}
                 </td>
                 <td>{fmtInt(x.r.matches)}</td>
-                <td>{fmtMoney(x.r.revenue)}</td>
+                <td data-testid="cost-rev-total">{fmtMoney(x.r.revenue)}</td>
+                {/* denominator + event + no-basis === revenue, on every row */}
+                <td data-testid="cost-rev-costed">{fmtMoney(x.r.revenueWithKnownCost)}</td>
+                <td className={s.mut} data-testid="cost-rev-event">{fmtMoney(x.r.eventRevenue)}</td>
+                <td className={s.mut} data-testid="cost-rev-nobasis">
+                  {fmtMoney(x.r.revenue - x.r.revenueWithKnownCost - x.r.eventRevenue)}
+                </td>
                 <td className={x.allUnknown ? s.mut : s.neg} data-testid="cost-amount-cell">
                   {x.allUnknown ? "—" : fmtMoney(x.r.cost)}
                 </td>
@@ -358,7 +382,12 @@ function EconomicsTable({
               {grain === "field" && <td className="l">—</td>}
               <td className="l">—</td>
               <td>{fmtInt(total.matches)}</td>
-              <td>{fmtMoney(total.revenue)}</td>
+              <td data-testid="cost-tot-total">{fmtMoney(total.revenue)}</td>
+              <td data-testid="cost-tot-costed">{fmtMoney(total.revenueWithKnownCost)}</td>
+              <td className={s.mut} data-testid="cost-tot-event">{fmtMoney(total.eventRevenue)}</td>
+              <td className={s.mut} data-testid="cost-tot-nobasis">
+                {fmtMoney(total.revenue - total.revenueWithKnownCost - total.eventRevenue)}
+              </td>
               <td className={s.neg} data-testid="cost-total-amount">{fmtMoney(total.cost)}</td>
               <td>{total.ratio == null ? "—" : fmtPct(total.ratio)}</td>
             </tr>
