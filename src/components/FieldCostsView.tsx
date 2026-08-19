@@ -1292,6 +1292,22 @@ function VenuePanel({
   isOverride: boolean;
   timing: React.ReactNode;
 }) {
+  // AUTO-BILL IS per_match_rate BEING SET AT ALL. NULL means "not auto-billed per match", which is
+  // a real, deliberate state for six venues — the money arrives as a monthly override instead.
+  const autoBill = (venue?.per_match_rate ?? null) !== null;
+
+  // ONE RATE, TWO COLUMNS. The agreed rate always lands in cost_per_match. per_match_rate mirrors
+  // it while auto-bill is on and is cleared when it is off, so the switch and the stored shape can
+  // never disagree. No value is invented for a venue that had none.
+  const onSaveRate = (raw: string) => {
+    onSavePrice("cost_per_match", raw);
+    if (autoBill) onSavePrice("per_match_rate", raw);
+  };
+  const onToggleAutoBill = (next: boolean) => {
+    // On → mirror the agreed rate. Off → NULL, never "0", which would be a real £0 rate.
+    onSavePrice("per_match_rate", next ? String(venue?.cost_per_match ?? "") : "");
+  };
+
   const day = venue?.billing_day ?? null;
   const nonMonthly = venue != null && venue.billing_cadence !== "monthly";
   const resolved = billingDatesFor(venue, month).labels.join(", ") || null;
@@ -1301,8 +1317,14 @@ function VenuePanel({
   const inp = "w-[130px] rounded-md border border-cream-line bg-white px-2 py-1.5 text-[13.5px] font-bold tabular-nums text-deep-green focus:border-deep-green focus:outline-none";
 
   // The days actually in use, so the select never omits a value the data already holds.
-  const DAY_CHOICES = [1, 5, 15, 28];
-  const days = [...new Set([...DAY_CHOICES, ...(day != null && day !== 31 ? [day] : [])])].sort((a, b) => a - b);
+  // ANY DAY OF THE MONTH. This offered 1st, 5th, 15th, 28th and "Last day" — a shortlist that
+  // could not express the day a real invoice actually falls on.
+  //
+  // 31 IS THE ONLY "LAST DAY" THERE IS. A separate "Last day" option stored 31 too, so the two
+  // were the same row in the database wearing different labels — nothing downstream could tell
+  // them apart, and a reader who picked one and saw the other on reload would be right to distrust
+  // the control. There is one option now, labelled for what 31 does.
+  const days = Array.from({ length: 31 }, (_, i) => i + 1);
 
   return (
     <div className="grid grid-cols-1 overflow-hidden rounded-[10px] border border-cream-line bg-white lg:grid-cols-3">
@@ -1323,20 +1345,43 @@ function VenuePanel({
         </div>
         {row.billingType === "per_match" && (
           <>
+            {/* ONE RATE AND A SWITCH, not two money boxes showing the same number.
+                cost_per_match is the AGREED rate — reference. per_match_rate is whether we
+                AUTO-BILL it against the match count. For ATH Katy both are $140, so the panel
+                showed one figure twice under two labels with nothing to distinguish them.
+                The columns are unchanged; this is the same two fields shown as what they mean. */}
             <div className={fld}>
-              <label className={lab}>Agreed rate</label>
+              <label className={lab}>Rate</label>
               <PriceCell stored={venue?.cost_per_match ?? null} state={cellState("cost_per_match")}
-                onSave={(raw) => onSavePrice("cost_per_match", raw)} />
+                onSave={(raw) => onSaveRate(raw)} />
             </div>
             <div className={fld}>
-              <label className={lab}>Auto-bill / match</label>
-              <PriceCell stored={venue?.per_match_rate ?? null} state={cellState("per_match_rate")}
-                onSave={(raw) => onSavePrice("per_match_rate", raw)} />
+              <label className={lab}>Auto-bill</label>
+              <button type="button" role="switch" aria-checked={autoBill}
+                data-testid="autobill-switch" disabled={cellState("per_match_rate")?.saving === true}
+                onClick={() => onToggleAutoBill(!autoBill)}
+                className={"relative h-[24px] w-[44px] flex-none rounded-full border transition "
+                  + (autoBill ? "border-[#2fa36b] bg-[#cfeee0]" : "border-cream-line bg-white")}>
+                <span className={"absolute top-[2px] h-[18px] w-[18px] rounded-full transition-all "
+                  + (autoBill ? "left-[23px] bg-[#2fa36b]" : "left-[2px] bg-deep-green/30")} />
+              </button>
+              <span className="text-[12px] font-bold text-deep-green/60">{autoBill ? "On" : "Off"}</span>
             </div>
-            {/* EMPTY IS A CHOICE HERE, not an omission — say so where the empty box is. */}
-            <div className="mb-2.5 ml-[116px] text-[11px] leading-snug text-deep-green/45">
-              Leave empty for venues billed monthly — the month&rsquo;s cost then comes from an
-              override, not from the match count.
+            {/* WHICH ONE IS IN FORCE, in this month's numbers. The switch says what the setting is;
+                this says what it does to the money on screen. */}
+            <div className="mb-2.5 ml-[116px] text-[11px] leading-snug text-deep-green/55"
+              data-testid="autobill-effect">
+              {autoBill
+                // A COMBINED VENUE HAS LEGS AT DIFFERENT RATES — ATH Katy is $140 and its Sunday
+                // leg $160, so "16 × $140" would not produce the $2,340 printed beside it. Where
+                // the row is combined, the row's own formula is shown instead of a multiplication
+                // that does not check out.
+                ? (row.legs.length > 1
+                    ? <>{monthFull(month)}: <b className="text-deep-green">{fmtMoney(row.autoAmount)}</b> — {row.autoFormula}</>
+                    : <>{monthFull(month)}: {row.matchCount} match{row.matchCount === 1 ? "" : "es"}
+                        {" × "}{fmtMoney(venue?.cost_per_match ?? 0)} = <b className="text-deep-green">{fmtMoney(row.autoAmount)}</b></>)
+                : <>Billed monthly — {monthFull(month)}&rsquo;s cost comes from the month value below,
+                    not the match count.</>}
             </div>
           </>
         )}
@@ -1387,8 +1432,11 @@ function VenuePanel({
             className={inp + " w-[170px]"}
           >
             <option value="">— not set —</option>
-            {days.map((d) => <option key={d} value={String(d)}>{ordinalDay(d)}</option>)}
-            <option value="31">Last day</option>
+            {days.map((d) => (
+              <option key={d} value={String(d)}>
+                {d === 31 ? "31st — last day of the month" : ordinalDay(d)}
+              </option>
+            ))}
           </select>
         </div>
         )}
@@ -1398,8 +1446,9 @@ function VenuePanel({
             : <><b className="text-deep-green">{monthShort(month)} —</b> · pick a day to date it</>}
         </div>
         <p className="mt-2 text-[11px] leading-relaxed text-deep-green/45">
-          Last day stores 31 and is clamped to the month&rsquo;s length, so February resolves to the
-          28th or 29th.
+          A day past the month&rsquo;s length is clamped to its last day, so the 31st resolves to the
+          28th or 29th in February and the 30th in April. That is why there is no separate
+          &ldquo;last day&rdquo; option — it would store 31 as well, and nothing could tell the two apart.
         </p>
         {day == null && row.billingType !== "per_match" && (
           <div className="mt-2 rounded-md border border-[#f2cdc8] bg-[#fdeceb] px-2.5 py-2 text-[12px] font-bold leading-relaxed text-[#a8321f]">
