@@ -22,7 +22,11 @@ import { netRetry, installHarnessGuard, fatal, closeContext, sessionFor } from "
 installHarnessGuard();
 
 const BASE = process.env.BASE || "http://localhost:3000";
-const CITY_MANAGER = "rmancuso1@gmail.com";   // real tier holder, city_identifier = ATX
+// ITEMISED (identity, not rule): was rmancuso1@gmail.com, which was DELETED through the User
+// access screen on 2026-08-18 at 20:16. Its auth record outlived its app_users row, so sessionFor
+// still minted a token and every assertion came back 401 "Invalid session" instead of the 403 it
+// was testing for. garrettsuits@gmail.com is a real ATX tier holder — same scope, same assertions.
+const CITY_MANAGER = "garrettsuits@gmail.com";   // real tier holder, city_identifier = ATX
 const SCOPE = "ATX";
 // The API's own name for that scope. The board and the payload both speak city NAMES
 // (field.city.name), not identifiers — CITY_SCOPES pins the pair and city-scope-test.ts guards it.

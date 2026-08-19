@@ -1,11 +1,11 @@
 // Admin CRUD for the Veo code→field map (veo_codes). Admin-only (service role
-// behind is_admin, via authenticateAdmin). veo_codes has no client write RLS,
+// behind the Match Ops capability, via authenticateCapability). veo_codes has no client write RLS,
 // so all edits go through here.
 //
 //   GET  /api/veo/codes — code rows + the venue/field options for the editor.
 //   POST /api/veo/codes — create a code.
 
-import { authenticateAdmin } from "@/lib/adminAuth";
+import { authenticateCapability } from "@/lib/capabilityAuth";
 import { validateVeoCodeInput } from "@/lib/veo";
 import {
   fetchVeoCodeRows,
@@ -18,7 +18,7 @@ export const runtime = "nodejs";
 export const maxDuration = 15;
 
 export async function GET(req: Request) {
-  const auth = await authenticateAdmin(req);
+  const auth = await authenticateCapability(req, "matchops");
   if (!auth.ok) return Response.json({ error: auth.error }, { status: auth.status });
   try {
     const [codes, venueFields] = await Promise.all([
@@ -33,7 +33,7 @@ export async function GET(req: Request) {
 }
 
 export async function POST(req: Request) {
-  const auth = await authenticateAdmin(req);
+  const auth = await authenticateCapability(req, "matchops");
   if (!auth.ok) return Response.json({ error: auth.error }, { status: auth.status });
 
   const body = await req.json().catch(() => null);

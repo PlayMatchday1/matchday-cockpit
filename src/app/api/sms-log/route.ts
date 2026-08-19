@@ -20,9 +20,10 @@
 // response (recipient name + city carry identification); the raw E.164
 // stays server-side.
 //
-// Auth: admin session via authenticateCrm. RLS already restricts the
-// table to authenticated, but the dashboard is admin-only PII, so we
-// gate on auth.isAdmin too.
+// Auth: Chats, via authenticateCrm. This used to also require auth.isAdmin — the SMS log is
+// player PII, and admin was standing in for "who should see PII". The box that names that is
+// Chats, which authenticateCrm already requires; a second is_admin term only meant the Chats
+// checkbox did not work for anyone who was not already an admin.
 
 import { authenticateCrm } from "@/lib/crmAuth";
 import { maskPhone } from "@/lib/matchNotify";
@@ -88,9 +89,6 @@ export async function GET(req: Request) {
   const auth = await authenticateCrm(req);
   if (!auth.ok) {
     return Response.json({ error: auth.error }, { status: auth.status });
-  }
-  if (!auth.isAdmin) {
-    return Response.json({ error: "Admin access required" }, { status: 403 });
   }
   const { supabase } = auth;
 

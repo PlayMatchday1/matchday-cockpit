@@ -10,7 +10,7 @@
 // This phase supports the non-picker audiences/scopes (ALL/NEW/CHURN, ALL_MATCHES/TOTAL_USAGE);
 // SPECIFIC_* and TIME_PERIOD need selectors and are rejected with a clear message.
 import { randomUUID } from "node:crypto";
-import { authenticateAdmin } from "@/lib/adminAuth";
+import { authenticateCapability } from "@/lib/capabilityAuth";
 import { getMatchdayApiClient } from "@/lib/matchdayApi";
 import {
   apiWrite, AmbiguousWriteError, WriteFailedError, DeniedFieldError, DeniedEndpointError,
@@ -41,7 +41,7 @@ const ints = (a: unknown): number[] => Array.isArray(a) ? a.map(Number).filter(N
 const isoRe = /^\d{4}-\d{2}-\d{2}T\d{2}:\d{2}:\d{2}(\.\d+)?Z$/;
 
 export async function POST(req: Request) {
-  const auth = await authenticateAdmin(req);
+  const auth = await authenticateCapability(req, "managePromos");
   if (!auth.ok) return Response.json({ error: auth.error }, { status: auth.status });
 
   const b = (await req.json().catch(() => null)) as CreateBody | null;

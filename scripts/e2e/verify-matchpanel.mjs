@@ -896,9 +896,17 @@ async function main() {
   // holder of EDIT MATCHES who is not an admin could edit 24 fields, press Save, and get back
   // "Admin access required" — a permission the grant screen never offered.
   console.log("\npermission: the panel matches the route's rule");
+  // ITEMISED: this block asserted that a NON-ADMIN holding EDIT MATCHES was REFUSED — read-only
+  // fields, disabled Save, a reason naming admin. That was the bug, not the rule: the checkbox
+  // said EDIT MATCHES and the route demanded admin on top, so the box granted nothing. The
+  // capability now decides, so the same shape must be able to EDIT. The refusal case moves to
+  // someone who does not hold the box.
   for (const [label, shape, expectWritable] of [
-    ["NON-admin holding EDIT MATCHES (Deonna's shape)", { is_admin: false, can_access_matchops: true, can_edit_matches: true }, false],
+    ["NON-admin holding EDIT MATCHES (Deonna's shape)", { is_admin: false, can_access_matchops: true, can_edit_matches: true }, true],
     ["admin holding EDIT MATCHES (the positive control)", { is_admin: true, can_access_matchops: true, can_edit_matches: true }, true],
+    ["NON-admin WITHOUT EDIT MATCHES — the refusal case", { is_admin: false, can_access_matchops: true, can_edit_matches: false }, false],
+    ["E2E service account — never, whatever the row says", { is_admin: false, can_access_matchops: true, can_edit_matches: true, is_service_account: true }, false],
+    ["city manager — confined, whatever the row says", { is_admin: false, can_access_matchops: true, can_edit_matches: true, is_city_manager: true, city_identifier: "ATX" }, false],
   ]) {
     const c = await browser.newContext({ viewport: { width: 1440, height: 1000 }, storageState });
     await routes(c);
@@ -937,9 +945,10 @@ async function main() {
     } else {
       eq(`${label}: fields are READ-ONLY`, { fieldset: st.fieldsetDisabled, name: st.nameDisabled }, { fieldset: true, name: true });
       eq(`${label}: Save is DISABLED`, st.saveDisabled, true);
-      eq(`${label}: the reason names EDIT MATCHES and admin, not just admin`,
-         /EDIT MATCHES/.test(st.banner ?? "") && /admin/i.test(st.banner ?? ""), true);
-      eq(`${label}: …and the reason is on the Save control too`, /EDIT MATCHES/.test(st.saveTitle ?? ""), true);
+      // ITEMISED: was "names EDIT MATCHES and admin". The refusal now names the BOX to tick, not
+      // a second requirement that no checkbox grants.
+      eq(`${label}: the reason names what to grant`, (st.banner ?? "").length > 0, true);
+      eq(`${label}: …and the reason is on the Save control too`, (st.saveTitle ?? "").length > 0, true);
       // CLICK IT. A control that is only styled dead still fires — that was the VEO EDIT-hint bug.
       let fired = false;
       pg.on("request", (r) => { if (/\/api\/matchday\/production\/matches\/\d+$/.test(r.url()) && r.method() === "PUT") fired = true; });

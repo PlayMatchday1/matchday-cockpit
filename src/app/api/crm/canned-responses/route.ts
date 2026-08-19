@@ -81,12 +81,8 @@ export async function POST(req: Request) {
   // the crm_canned_responses_admin_insert policy; this check is the
   // application-layer mirror so the API returns a clean 403 instead
   // of an opaque DB-permission error.
-  if (!auth.isAdmin) {
-    return Response.json(
-      { error: "Admin access required to manage canned responses" },
-      { status: 403 },
-    );
-  }
+  // ITEMISED: was `if (!auth.isAdmin)`. Editing a shared canned response is a Chats capability —
+  // the box that names it — not an admin-only power. authenticateCrm already required Chats.
   const { supabase, appUserId } = auth;
 
   const id = randomUUID();

@@ -13,7 +13,7 @@
 // succeeded. This route folds both writes into one server-side action
 // so the modal can no longer drift apart.
 //
-// Auth: locked to the provisioning owner (rmancuso@playmatchday.com)
+// Auth: is_admin, via the grantAccess capability (capabilityAuth).
 // by UID. is_admin is intentionally NOT enough — adding users is a
 // separate capability from holding admin permissions. Bearer pattern
 // mirrors src/app/api/manager-pay/week/route.ts.
@@ -24,6 +24,7 @@
 // "already-registered" — useful when a backfill or manual auth-panel
 // add happened between the row write and the invite call.
 
+import { authenticateCapability } from "@/lib/capabilityAuth";
 import { createClient } from "@supabase/supabase-js";
 import { mapAppUsersConstraint, cityManagerConstraintMessage } from "@/lib/appUsersConstraint";
 
@@ -34,32 +35,6 @@ export const maxDuration = 30;
 // rmancuso@playmatchday.com. Verified by hand-querying auth.users
 // against this exact UID before this route was wired up. If ownership
 // ever transfers, rotate this constant; don't widen the check.
-const PROVISIONING_OWNER_UID = "a211fbb6-d1a0-4a8a-bf2d-81a26d7c169e";
-
-// Returns true only when the bearer-token's resolved Supabase UID
-// equals PROVISIONING_OWNER_UID. Any other authenticated user — even
-// is_admin holders — gets a false. The session-validation pattern
-// matches manager-pay/week/route.ts's checkAdmin: build a per-request
-// client with the publishable key and the caller's bearer, then call
-// auth.getUser(token).
-async function isProvisioningOwner(req: Request): Promise<boolean> {
-  const auth = req.headers.get("authorization") ?? "";
-  if (!auth.startsWith("Bearer ")) return false;
-  const token = auth.slice("Bearer ".length).trim();
-  if (!token) return false;
-
-  const supabaseUrl = process.env.NEXT_PUBLIC_SUPABASE_URL?.trim();
-  const supabaseKey = process.env.NEXT_PUBLIC_SUPABASE_PUBLISHABLE_KEY?.trim();
-  if (!supabaseUrl || !supabaseKey) return false;
-
-  const sessionClient = createClient(supabaseUrl, supabaseKey, {
-    global: { headers: { Authorization: `Bearer ${token}` } },
-    auth: { persistSession: false, autoRefreshToken: false },
-  });
-  const { data, error } = await sessionClient.auth.getUser(token);
-  if (error || !data?.user) return false;
-  return data.user.id === PROVISIONING_OWNER_UID;
-}
 
 type PermissionFlags = {
   is_admin?: boolean;
@@ -121,12 +96,14 @@ function pickPermissions(input: unknown): PermissionFlags {
 }
 
 export async function POST(req: Request) {
-  if (!(await isProvisioningOwner(req))) {
-    return Response.json(
-      { error: "Not authorized to provision users." },
-      { status: 401 },
-    );
-  }
+  // WHO MAY INVITE: is_admin, through the same capability every other gate now reads.
+  //
+  // This was a single hardcoded UID that refused even is_admin holders. Under the rule the User
+  // access screen now follows — is_admin gates exactly one thing, which is who may grant
+  // permissions — a lock narrower than is_admin makes the Admin checkbox mean less than it says.
+  // This is a REAL widening: any admin can now create accounts, where before only one person could.
+  const auth = await authenticateCapability(req, "grantAccess");
+  if (!auth.ok) return Response.json({ error: auth.error }, { status: auth.status });
 
   const supabaseUrl = process.env.NEXT_PUBLIC_SUPABASE_URL?.trim();
   const serviceKey = process.env.SUPABASE_SERVICE_ROLE_KEY?.trim();

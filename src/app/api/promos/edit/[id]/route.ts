@@ -14,7 +14,7 @@
 // NOT pre-emptively disable anything. Instead every sent key is compared against a RE-READ and
 // reported per field, so a silently-ignored field becomes visible the first time it happens.
 import { randomUUID } from "node:crypto";
-import { authenticateAdmin } from "@/lib/adminAuth";
+import { authenticateCapability } from "@/lib/capabilityAuth";
 import { getMatchdayApiClient } from "@/lib/matchdayApi";
 import {
   apiWrite, AmbiguousWriteError, WriteFailedError, DeniedFieldError, DeniedEndpointError,
@@ -60,7 +60,7 @@ function toEditable(raw: Record<string, unknown>): PromoEditable {
 }
 
 export async function PATCH(req: Request, ctx: { params: Promise<{ id: string }> }) {
-  const auth = await authenticateAdmin(req);
+  const auth = await authenticateCapability(req, "managePromos");
   if (!auth.ok) return Response.json({ error: auth.error }, { status: auth.status });
 
   const { id: idRaw } = await ctx.params;

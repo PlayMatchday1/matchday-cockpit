@@ -9,6 +9,8 @@ import InlineEdit from "./InlineEdit";
 import { CITY_SCOPES, cityNameFor, isUnknownScope } from "@/lib/cityScope";
 
 type PermissionKey =
+  | "can_manage_promos"
+  | "can_edit_credits"
   | "is_admin"
   | "can_access_home"
   | "can_access_finance"
@@ -391,7 +393,7 @@ export default function AdminUsersView() {
                         {u.email}
                       </td>
                       {PERMISSION_COLUMNS.map((c) => {
-                        const on = u[c.key];
+                        const on = u[c.key] === true;
                         const disabled =
                           (c.key === "is_admin" && isSelf) ||
                           (c.key === "can_access_finance" && isSelf);
@@ -410,6 +412,20 @@ export default function AdminUsersView() {
                                 <div className="flex items-center gap-1 pl-3" title={u.is_service_account ? "The E2E service account can never hold MANAGE PLAYERS" : !matchops ? "Requires Match Ops" : "MANAGE PLAYERS — suspend / expel / lift"}>
                                   <span className="text-[8px] leading-none text-deep-green/40">↳ manage</span>
                                   <ToggleBox on={!!u.can_manage_players} disabled={!matchops || !!u.is_service_account} onClick={() => saveMatchPermission(u, { canManagePlayers: !u.can_manage_players })} label={`MANAGE PLAYERS (write) for ${u.email}`} />
+                                </div>
+                                {/* MANAGE PROMOS — had NO checkbox until now, which is why it has
+                                    never been granted to anyone: there was no way to tick it. */}
+                                <div className="flex items-center gap-1 pl-3" title={u.is_service_account ? "The E2E service account can never hold MANAGE PROMOS" : !matchops ? "Requires Match Ops" : "MANAGE PROMOS — create / edit / delete codes, and see who redeemed them"}>
+                                  <span className="text-[8px] leading-none text-deep-green/40">↳ promos</span>
+                                  <ToggleBox on={!!u.can_manage_promos} disabled={!matchops || !!u.is_service_account} onClick={() => togglePermission(u, "can_manage_promos")} label={`MANAGE PROMOS (write) for ${u.email}`} />
+                                </div>
+                                {/* EDIT CREDITS — also had no checkbox. NOT nested under Match Ops
+                                    in meaning: moving a player's balance is not a Match Ops power,
+                                    so it is granted independently and stays enabled when Match Ops
+                                    is off. It sits here because this is where write grants live. */}
+                                <div className="flex items-center gap-1 pl-3" title={u.is_service_account ? "The E2E service account can never hold EDIT CREDITS" : "EDIT CREDITS — adjust a player's balance. Granted separately from Match Ops."}>
+                                  <span className="text-[8px] leading-none text-deep-green/40">↳ credits</span>
+                                  <ToggleBox on={!!u.can_edit_credits} disabled={!!u.is_service_account} onClick={() => togglePermission(u, "can_edit_credits")} label={`EDIT CREDITS (write) for ${u.email}`} />
                                 </div>
                                 {permErr?.id === u.id && (
                                   <span className="mt-1 max-w-[160px] text-[10px] leading-tight text-coral" data-testid="perm-error">{permErr.msg}</span>

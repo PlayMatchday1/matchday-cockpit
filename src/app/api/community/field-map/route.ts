@@ -7,13 +7,13 @@
 //   community_id number → upsert the assignment
 //   community_id null   → delete the row (field becomes unassigned)
 
-import { authenticateAdmin } from "@/lib/adminAuth";
+import { authenticateCapability } from "@/lib/capabilityAuth";
 
 export const runtime = "nodejs";
 export const maxDuration = 15;
 
 export async function PUT(req: Request) {
-  const auth = await authenticateAdmin(req);
+  const auth = await authenticateCapability(req, "matchops");
   if (!auth.ok) return Response.json({ error: auth.error }, { status: auth.status });
 
   const body = (await req.json().catch(() => null)) as

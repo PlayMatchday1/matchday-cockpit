@@ -23,6 +23,7 @@
 
 import { useCallback, useEffect, useMemo, useRef, useState } from "react";
 import { nameForVeo } from "@/lib/veoNameSync";
+import { useAuth, canEditMatches } from "@/lib/useAuth";
 import { FULL_EDITOR_ENV } from "@/lib/matchEnv";
 import { supabase } from "@/lib/supabase";
 import { downloadCsv, plural } from "@/components/growth/format";
@@ -153,6 +154,12 @@ export default function VeoMasterSchedule() {
   //
   // Held for the life of the page: a marker means THIS page tried a write and it did not land.
   // Navigating away clears it, which is correct — the operator can toggle off and on again.
+  // THE NAME WRITE GOES THROUGH THE MATCH EDIT ROUTE, so it needs EDIT MATCHES. This panel had no
+  // permission check at all: a holder of Match Ops without EDIT MATCHES could toggle the chip, the
+  // flag would land, and the name write would 403 into a permanent unsynced state with a Retry that
+  // could never succeed. Same predicate the route enforces.
+  const { appUser } = useAuth();
+  const mayWriteName = canEditMatches(appUser);
   const [nameFailed, setNameFailed] = useState<Map<number, string>>(new Map());
   // WHAT WE ACTUALLY WROTE, so the next toggle diffs against reality rather than the lagging
   // mirror. Without this, toggling on then straight off computes from the stale (un-emoji'd) name,
@@ -238,6 +245,13 @@ export default function VeoMasterSchedule() {
   async function writeName(apiId: number, rawName: string, enabled: boolean): Promise<{ outcome: string; sent: string } | null> {
     const edit = nameForVeo(rawName, enabled);
     if (!edit.change) return null; // NOT A CHANGE — send nothing at all.
+    // Without EDIT MATCHES the request would 403. The flag still lands (the toggle is Clubhouse's
+    // own record); the name simply is not written, and the chip says so rather than retrying.
+    if (!mayWriteName) {
+      setError("The camera flag is set. Writing the 🎥 into the match name needs EDIT MATCHES.");
+      markFailed(apiId, enabled);
+      return { outcome: "FAILED", sent: edit.next };
+    }
     const { data: sess } = await supabase.auth.getSession();
     const token = sess.session?.access_token;
     if (!token) { setError("No active session."); return { outcome: "FAILED", sent: edit.next }; }

@@ -7,14 +7,14 @@
 // lowercase) isn't expressible in a simple SQL equality, so the route
 // fetches the candidate rows and deletes the matched ids by id.
 
-import { authenticateAdmin } from "@/lib/adminAuth";
+import { authenticateCapability } from "@/lib/capabilityAuth";
 import { rowsForManager } from "@/lib/inventory";
 
 export const runtime = "nodejs";
 export const maxDuration = 10;
 
 export async function POST(req: Request) {
-  const auth = await authenticateAdmin(req);
+  const auth = await authenticateCapability(req, "matchops");
   if (!auth.ok) return Response.json({ error: auth.error }, { status: auth.status });
 
   const body = (await req.json().catch(() => null)) as

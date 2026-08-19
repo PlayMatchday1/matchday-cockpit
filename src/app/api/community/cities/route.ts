@@ -5,7 +5,7 @@
 // unassigned fields (recent matches, no map row) that need attention.
 // Admin-only (service role behind is_admin).
 
-import { authenticateAdmin } from "@/lib/adminAuth";
+import { authenticateCapability } from "@/lib/capabilityAuth";
 import {
   loadCityLinks,
   loadCommunitiesRaw,
@@ -20,7 +20,7 @@ export const runtime = "nodejs";
 export const maxDuration = 20;
 
 export async function GET(req: Request) {
-  const auth = await authenticateAdmin(req);
+  const auth = await authenticateCapability(req, "matchops");
   if (!auth.ok) return Response.json({ error: auth.error }, { status: auth.status });
   try {
     const [links, communities, fieldMap, postCounts, fieldInv, markets, settings] =

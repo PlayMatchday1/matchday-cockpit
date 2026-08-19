@@ -56,12 +56,8 @@ export async function PATCH(req: Request, ctx: RouteCtx) {
   if (!auth.ok) {
     return Response.json({ error: auth.error }, { status: auth.status });
   }
-  if (!auth.isAdmin) {
-    return Response.json(
-      { error: "Admin access required to manage canned responses" },
-      { status: 403 },
-    );
-  }
+  // ITEMISED: was `if (!auth.isAdmin)`. Editing a shared canned response is a Chats capability —
+  // the box that names it — not an admin-only power. authenticateCrm already required Chats.
   const { supabase } = auth;
 
   const { id } = await ctx.params;
@@ -230,12 +226,8 @@ export async function DELETE(req: Request, ctx: RouteCtx) {
   if (!auth.ok) {
     return Response.json({ error: auth.error }, { status: auth.status });
   }
-  if (!auth.isAdmin) {
-    return Response.json(
-      { error: "Admin access required to manage canned responses" },
-      { status: 403 },
-    );
-  }
+  // ITEMISED: was `if (!auth.isAdmin)`. Editing a shared canned response is a Chats capability —
+  // the box that names it — not an admin-only power. authenticateCrm already required Chats.
   const { supabase } = auth;
 
   const { id } = await ctx.params;

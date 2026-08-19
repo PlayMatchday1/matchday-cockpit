@@ -3,14 +3,14 @@
 // on a save. Resolving fires NO write to MatchDay and never changes the recorded outcome
 // — it only stamps who checked and when. Admin-gated; reads via the service-role client.
 
-import { authenticateAdmin } from "@/lib/adminAuth";
+import { authenticateCapability } from "@/lib/capabilityAuth";
 import { supabaseLogStore } from "@/lib/changeLog";
 
 export const runtime = "nodejs";
 export const dynamic = "force-dynamic";
 
 export async function GET(req: Request) {
-  const auth = await authenticateAdmin(req);
+  const auth = await authenticateCapability(req, "tech");
   if (!auth.ok) return Response.json({ error: auth.error }, { status: auth.status });
   try {
     const rows = await supabaseLogStore().list(500);
@@ -21,7 +21,7 @@ export async function GET(req: Request) {
 }
 
 export async function POST(req: Request) {
-  const auth = await authenticateAdmin(req);
+  const auth = await authenticateCapability(req, "tech");
   if (!auth.ok) return Response.json({ error: auth.error }, { status: auth.status });
   const body = (await req.json().catch(() => null)) as { saveId?: string; verdict?: string } | null;
   if (!body?.saveId || (body.verdict !== "yes" && body.verdict !== "no")) {

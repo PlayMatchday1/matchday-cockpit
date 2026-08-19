@@ -14,7 +14,7 @@
 // change what was recorded as paid.
 
 import { randomUUID } from "node:crypto";
-import { authenticateAdmin } from "@/lib/adminAuth";
+import { authenticateCapability } from "@/lib/capabilityAuth";
 import { recordWrite, supabaseLogStore } from "@/lib/changeLog";
 import type { Change } from "@/lib/changeLogModel";
 import { buildRentalDashboard } from "@/lib/partnerRentalDashboard";
@@ -65,7 +65,7 @@ async function fetchAllPartners(supabase: import("@supabase/supabase-js").Supaba
 }
 
 export async function GET(req: Request) {
-  const auth = await authenticateAdmin(req);
+  const auth = await authenticateCapability(req, "matchops");
   if (!auth.ok) return Response.json({ error: auth.error }, { status: auth.status });
   const supabase = auth.supabase;
 
@@ -126,7 +126,7 @@ export async function GET(req: Request) {
 // at most one row per (partner_dashboard_id, week_start_date); we select-then-
 // update/insert rather than rely on an ON CONFLICT constraint.
 export async function POST(req: Request) {
-  const auth = await authenticateAdmin(req);
+  const auth = await authenticateCapability(req, "matchops");
   if (!auth.ok) return Response.json({ error: auth.error }, { status: auth.status });
   const supabase = auth.supabase;
 

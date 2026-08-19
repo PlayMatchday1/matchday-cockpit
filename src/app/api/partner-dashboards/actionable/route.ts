@@ -7,7 +7,7 @@
 // computeWeeklyPayments + derivePeriodRows the panel uses, so the badge and the
 // panel can never disagree. Returns the breakdown too, so the count is auditable.
 
-import { authenticateAdmin } from "@/lib/adminAuth";
+import { authenticateCapability } from "@/lib/capabilityAuth";
 import { computeWeeklyPayments, fetchPartnerRows, fetchPartnerWeeklyPayments, type PartnerConfig } from "@/lib/partnerStats";
 import { actionableCounts, derivePeriodRows, todayYmd } from "@/lib/partnerDashboardView";
 
@@ -16,7 +16,7 @@ export const maxDuration = 30;
 export const dynamic = "force-dynamic";
 
 export async function GET(req: Request) {
-  const auth = await authenticateAdmin(req);
+  const auth = await authenticateCapability(req, "matchops");
   if (!auth.ok) return Response.json({ error: auth.error }, { status: auth.status });
   const supabase = auth.supabase;
 

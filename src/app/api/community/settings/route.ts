@@ -1,13 +1,13 @@
 // PATCH /api/community/settings — flip the global kill switch (posting_enabled)
 // that gates ALL community posting. Admin-only.
 
-import { authenticateAdmin } from "@/lib/adminAuth";
+import { authenticateCapability } from "@/lib/capabilityAuth";
 
 export const runtime = "nodejs";
 export const maxDuration = 15;
 
 export async function PATCH(req: Request) {
-  const auth = await authenticateAdmin(req);
+  const auth = await authenticateCapability(req, "matchops");
   if (!auth.ok) return Response.json({ error: auth.error }, { status: auth.status });
 
   const body = (await req.json().catch(() => null)) as { posting_enabled?: unknown } | null;

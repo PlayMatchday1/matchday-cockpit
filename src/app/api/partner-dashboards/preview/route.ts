@@ -4,7 +4,7 @@
 // admin "view as the partner" preview can render the identical component from the
 // identical data path (no raw rows — buildPartnerDashboardData returns aggregates).
 
-import { authenticateAdmin } from "@/lib/adminAuth";
+import { authenticateCapability } from "@/lib/capabilityAuth";
 import { buildPartnerDashboardData } from "@/lib/partnerDashboardData";
 
 export const runtime = "nodejs";
@@ -12,7 +12,7 @@ export const maxDuration = 30;
 export const dynamic = "force-dynamic";
 
 export async function GET(req: Request) {
-  const auth = await authenticateAdmin(req);
+  const auth = await authenticateCapability(req, "matchops");
   if (!auth.ok) return Response.json({ error: auth.error }, { status: auth.status });
 
   const slug = new URL(req.url).searchParams.get("slug");

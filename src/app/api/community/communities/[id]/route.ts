@@ -4,7 +4,7 @@
 // activated_at stamps only on an inactive→active flip (so the poster's
 // per-community floor starts now and can't backfill).
 
-import { authenticateAdmin } from "@/lib/adminAuth";
+import { authenticateCapability } from "@/lib/capabilityAuth";
 import { canonicalWhatsAppInviteUrl } from "@/lib/community";
 
 export const runtime = "nodejs";
@@ -13,7 +13,7 @@ export const maxDuration = 15;
 type Ctx = { params: Promise<{ id: string }> };
 
 export async function PATCH(req: Request, ctx: Ctx) {
-  const auth = await authenticateAdmin(req);
+  const auth = await authenticateCapability(req, "matchops");
   if (!auth.ok) return Response.json({ error: auth.error }, { status: auth.status });
 
   const { id } = await ctx.params;

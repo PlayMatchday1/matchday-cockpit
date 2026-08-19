@@ -11,7 +11,7 @@
 // gone, the dashboard refetches, and dedupeLatest naturally surfaces the
 // manager's prior report — or drops the card if none remains.
 
-import { authenticateAdmin } from "@/lib/adminAuth";
+import { authenticateCapability } from "@/lib/capabilityAuth";
 import {
   validateInventorySubmission,
   type InventorySubmissionInput,
@@ -26,7 +26,7 @@ const UUID_RX =
 type Ctx = { params: Promise<{ id: string }> };
 
 export async function PATCH(req: Request, ctx: Ctx) {
-  const auth = await authenticateAdmin(req);
+  const auth = await authenticateCapability(req, "matchops");
   if (!auth.ok) return Response.json({ error: auth.error }, { status: auth.status });
 
   const { id } = await ctx.params;
@@ -61,7 +61,7 @@ export async function PATCH(req: Request, ctx: Ctx) {
 }
 
 export async function DELETE(req: Request, ctx: Ctx) {
-  const auth = await authenticateAdmin(req);
+  const auth = await authenticateCapability(req, "matchops");
   if (!auth.ok) return Response.json({ error: auth.error }, { status: auth.status });
 
   const { id } = await ctx.params;

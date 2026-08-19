@@ -11,7 +11,7 @@
 // endpoint) even if it tried.
 
 import { randomUUID } from "node:crypto";
-import { authenticateAdmin } from "@/lib/adminAuth";
+import { authenticateCapability } from "@/lib/capabilityAuth";
 import { stageGet, apiWrite, AmbiguousWriteError, WriteFailedError, StageHostGuardError, StageConfigError, NotAuthorizedError } from "@/lib/matchdayStageApi";
 import { EDITABLE_KEYS } from "@/lib/matchEditModel";
 import { recordWrite, supabaseLogStore } from "@/lib/changeLog";
@@ -50,7 +50,7 @@ function pickMatch(m: Record<string, unknown>) {
 }
 
 export async function GET(req: Request, ctx: { params: Promise<{ id: string }> }) {
-  const auth = await authenticateAdmin(req);
+  const auth = await authenticateCapability(req, "editMatches");
   if (!auth.ok) return Response.json({ error: auth.error }, { status: auth.status });
   const { id } = await ctx.params;
   if (!/^\d+$/.test(id)) return Response.json({ error: "Match id must be numeric" }, { status: 400 });
@@ -71,7 +71,7 @@ export async function GET(req: Request, ctx: { params: Promise<{ id: string }> }
 }
 
 export async function PUT(req: Request, ctx: { params: Promise<{ id: string }> }) {
-  const auth = await authenticateAdmin(req);
+  const auth = await authenticateCapability(req, "editMatches");
   if (!auth.ok) return Response.json({ error: auth.error }, { status: auth.status });
   const { id } = await ctx.params;
   if (!/^\d+$/.test(id)) return Response.json({ error: "Match id must be numeric" }, { status: 400 });

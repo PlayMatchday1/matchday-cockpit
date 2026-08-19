@@ -165,6 +165,37 @@ async function main() {
   }
 
   // ── THE OLD FAILURE MODE CANNOT RETURN ───────────────────────────────────
+  // ── A CITY MANAGER'S EMAIL IS NOT TIED TO THE MATCHDAY APP ────────────────────────────────
+  //
+  // Whatever email is typed IS the email. There is no lookup against the app's manager list on
+  // creation — asserted here with an address that exists nowhere in MatchDay, on a domain that
+  // cannot resolve.
+  console.log("\na city manager can be created with an email the MatchDay app has never seen:");
+  {
+    const NOWHERE = "zz-not-in-matchday@invalid.test";
+    await svc.from("app_users").delete().eq("email", NOWHERE);
+    const { data: made } = await svc.from("app_users")
+      .insert({ email: NOWHERE, full_name: "Nowhere Manager", can_access_matchops: false })
+      .select("id").maybeSingle();
+    eq("the account is created with an address unknown to the app", !!made?.id, true);
+    const r = await page.evaluate(async ([id, t]) => {
+      const res = await fetch("/api/admin/users/city-manager", {
+        method: "POST",
+        headers: { "Content-Type": "application/json", Authorization: `Bearer ${t}` },
+        body: JSON.stringify({ userId: id, isCityManager: true, cityIdentifier: "ATX" }),
+      });
+      return { status: res.status, body: await res.json().catch(() => ({})) };
+    }, [made.id, token]);
+    eq("…and the city-manager tier is granted to it, no manager lookup", r.status, 200);
+    const { data: after } = await svc.from("app_users")
+      .select("is_city_manager, city_identifier, email").eq("id", made.id).maybeSingle();
+    eq("…the tier and scope landed in the database", { cm: after?.is_city_manager, city: after?.city_identifier }, { cm: true, city: "ATX" });
+    eq("…and the email is stored verbatim, unmodified", after?.email, NOWHERE);
+    await svc.from("app_users").delete().eq("email", NOWHERE);
+    const { data: gone } = await svc.from("app_users").select("id").eq("email", NOWHERE).maybeSingle();
+    eq("  cleanup — the throwaway account is removed", gone, null);
+  }
+
   console.log("\nthe client still cannot write app_users directly:");
   {
     const id = await make();

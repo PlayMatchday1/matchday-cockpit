@@ -111,13 +111,13 @@ export function useAuth() {
 // it requires MATCH OPS (read). The UI reads this to grey out write affordances; it is a
 // courtesy. The server check in the shared write path (apiWrite) is what actually holds.
 export function canEditMatches(appUser: AppUser | null | undefined): boolean {
-  return !!appUser && appUser.can_edit_matches === true && appUser.can_access_matchops === true;
+  return can(appUser as CapRow | null, "editMatches", appUser?.email);
 }
 
 // MANAGE PLAYERS (Phase 18) — INDEPENDENT of EDIT MATCHES. Courtesy gate for the ban
 // affordances; the server enforces it regardless.
 export function canManagePlayers(appUser: AppUser | null | undefined): boolean {
-  return !!appUser && appUser.can_manage_players === true && appUser.can_access_matchops === true;
+  return can(appUser as CapRow | null, "managePlayers", appUser?.email);
 }
 
 // EDIT CREDITS (Phase 27) — the only grant that MOVES MONEY, and the only one that does NOT also
@@ -125,7 +125,7 @@ export function canManagePlayers(appUser: AppUser | null | undefined): boolean {
 // adjusting someone's balance is not, so it must not arrive as a side effect of a read grant.
 // Courtesy gate only — the route re-checks against a fresh database read on every request.
 export function canEditCredits(appUser: AppUser | null | undefined): boolean {
-  return !!appUser && appUser.can_edit_credits === true;
+  return can(appUser as CapRow | null, "editCredits", appUser?.email);
 }
 
 // MANAGE PROMOS (Phase 18b) — INDEPENDENT of EDIT MATCHES and MANAGE PLAYERS. This is the WRITE
@@ -135,13 +135,19 @@ export function canEditCredits(appUser: AppUser | null | undefined): boolean {
 // NOT WIDENED, DELIBERATELY. It does not include is_admin: five of six admins do not hold this
 // flag, and reading the codes is not a power any of them should have to be granted twice.
 export function canManagePromos(appUser: AppUser | null | undefined): boolean {
-  return !!appUser && appUser.can_manage_promos === true && appUser.can_access_matchops === true;
+  return can(appUser as CapRow | null, "managePromos", appUser?.email);
 }
 
 // READ PROMO CODES — re-exported so components keep importing their predicates from one place.
 // The decision itself lives in promoAccess.ts with no imports, because useAuth cannot be loaded
 // outside a browser and an untestable gate is how the last one drifted. See that file for why.
 export { canReadPromos } from "./promoAccess";
+
+// THE PANELS CALL THE SAME PREDICATE THE ROUTES DO. These wrappers exist only so the hundreds of
+// existing call sites keep their names; every one of them now resolves through capabilities.ts,
+// which is the module capabilityAuth.ts asks on the server. There is no second implementation to
+// drift, and no equivalence test standing in for one.
+import { can, type CapRow } from "./capabilities";
 
 export function canAccess(
   appUser: AppUser | null,

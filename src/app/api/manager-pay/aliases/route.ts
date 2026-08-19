@@ -10,7 +10,7 @@
 // grants authenticated SELECT (mirrors manager_pay_adjustments). Nothing here
 // touches a synced mdapi_* table.
 
-import { authenticateAdmin } from "@/lib/adminAuth";
+import { authenticateCapability } from "@/lib/capabilityAuth";
 
 export const runtime = "nodejs";
 export const maxDuration = 10;
@@ -19,7 +19,7 @@ const EMAIL_RX = /^[^\s@]+@[^\s@]+\.[^\s@]+$/;
 const TABLE = "manager_gusto_aliases";
 
 export async function GET(req: Request) {
-  const auth = await authenticateAdmin(req);
+  const auth = await authenticateCapability(req, "matchops");
   if (!auth.ok) return Response.json({ error: auth.error }, { status: auth.status });
 
   const { data, error } = await auth.supabase
@@ -60,7 +60,7 @@ type PutBody = {
 };
 
 export async function PUT(req: Request) {
-  const auth = await authenticateAdmin(req);
+  const auth = await authenticateCapability(req, "matchops");
   if (!auth.ok) return Response.json({ error: auth.error }, { status: auth.status });
 
   let body: PutBody;
@@ -130,7 +130,7 @@ export async function PUT(req: Request) {
 }
 
 export async function DELETE(req: Request) {
-  const auth = await authenticateAdmin(req);
+  const auth = await authenticateCapability(req, "matchops");
   if (!auth.ok) return Response.json({ error: auth.error }, { status: auth.status });
 
   const email = (new URL(req.url).searchParams.get("email") ?? "").trim().toLowerCase();

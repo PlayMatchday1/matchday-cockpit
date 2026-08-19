@@ -5,7 +5,7 @@
 //   PATCH  /api/veo/codes/[id]  { code, finVenueId, fieldIds, … } — full edit
 //   DELETE /api/veo/codes/[id]
 
-import { authenticateAdmin } from "@/lib/adminAuth";
+import { authenticateCapability } from "@/lib/capabilityAuth";
 import { validateVeoCodeInput } from "@/lib/veo";
 import { invalidateVeoCodesCache, validateFieldOwnership } from "@/lib/veoCodes";
 
@@ -18,7 +18,7 @@ const UUID_RX =
 type Ctx = { params: Promise<{ id: string }> };
 
 export async function PATCH(req: Request, ctx: Ctx) {
-  const auth = await authenticateAdmin(req);
+  const auth = await authenticateCapability(req, "matchops");
   if (!auth.ok) return Response.json({ error: auth.error }, { status: auth.status });
 
   const { id } = await ctx.params;
@@ -78,7 +78,7 @@ export async function PATCH(req: Request, ctx: Ctx) {
 }
 
 export async function DELETE(req: Request, ctx: Ctx) {
-  const auth = await authenticateAdmin(req);
+  const auth = await authenticateCapability(req, "matchops");
   if (!auth.ok) return Response.json({ error: auth.error }, { status: auth.status });
 
   const { id } = await ctx.params;

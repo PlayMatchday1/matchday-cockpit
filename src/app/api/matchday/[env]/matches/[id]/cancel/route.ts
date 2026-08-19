@@ -12,7 +12,7 @@
 //        LANDED / NOT APPLIED from match.isCancelled — not the status code.
 
 import { randomUUID } from "node:crypto";
-import { authenticateAdmin } from "@/lib/adminAuth";
+import { authenticateCapability } from "@/lib/capabilityAuth";
 import { authenticateMatchOpsRead } from "@/lib/matchOpsAuth"; // GET preview is a Match Ops READ (Part D round 2); POST stays admin + EDIT MATCHES
 import { apiGet, apiWrite, AmbiguousWriteError, WriteFailedError, DeniedFieldError, DeniedEndpointError, ProductionWriteBoltedError, StageHostGuardError, StageConfigError, NotAuthorizedError, type MatchdayEnv } from "@/lib/matchdayStageApi";
 import { rosterRowIsFake, rosterRowCancelled, type RosterRow } from "@/lib/gamedayModel";
@@ -54,7 +54,7 @@ export async function GET(req: Request, ctx: { params: Promise<{ env: string; id
 }
 
 export async function POST(req: Request, ctx: { params: Promise<{ env: string; id: string }> }) {
-  const auth = await authenticateAdmin(req);
+  const auth = await authenticateCapability(req, "editMatches");
   if (!auth.ok) return Response.json({ error: auth.error }, { status: auth.status });
   const { env, id } = await ctx.params;
   if (!isEnv(env)) return Response.json({ error: `unknown environment ${JSON.stringify(env)}` }, { status: 400 });

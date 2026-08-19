@@ -9,14 +9,14 @@
 // A token-authenticated caller (the public share token) has no session Bearer and
 // is rejected 401 here — this endpoint is unreachable with just the share link.
 
-import { authenticateAdmin } from "@/lib/adminAuth";
+import { authenticateCapability } from "@/lib/capabilityAuth";
 import { generateShareToken } from "@/lib/managerPayShareToken";
 
 export const runtime = "nodejs";
 export const dynamic = "force-dynamic";
 
 export async function GET(req: Request) {
-  const auth = await authenticateAdmin(req);
+  const auth = await authenticateCapability(req, "matchops");
   if (!auth.ok) return Response.json({ error: auth.error }, { status: auth.status });
   const { data, error } = await auth.supabase
     .from("manager_pay_share_token")
@@ -28,7 +28,7 @@ export async function GET(req: Request) {
 }
 
 export async function POST(req: Request) {
-  const auth = await authenticateAdmin(req);
+  const auth = await authenticateCapability(req, "matchops");
   if (!auth.ok) return Response.json({ error: auth.error }, { status: auth.status });
   const { token, hash } = generateShareToken();
   const { data, error } = await auth.supabase

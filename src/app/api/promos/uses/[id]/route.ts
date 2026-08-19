@@ -12,7 +12,7 @@
 // The player id SURVIVES account deletion (4 of 3,258 no longer resolve), which is what makes the
 // deleted-account state a finding rather than an error.
 
-import { authenticateAdmin } from "@/lib/adminAuth";
+import { authenticateCapability } from "@/lib/capabilityAuth";
 import { createClient } from "@supabase/supabase-js";
 import type { UseRow } from "@/lib/promoUsesModel";
 import { summarise } from "@/lib/promoUsesModel";
@@ -22,7 +22,7 @@ export const dynamic = "force-dynamic";
 export const maxDuration = 30;
 
 export async function GET(req: Request, ctx: { params: Promise<{ id: string }> }) {
-  const auth = await authenticateAdmin(req);
+  const auth = await authenticateCapability(req, "managePromos");
   if (!auth.ok) return Response.json({ error: auth.error }, { status: auth.status });
   if (!auth.canManagePromos) {
     return Response.json({ error: "MANAGE PROMOS is required to see who redeemed a code — this view includes player contact details." }, { status: 403 });

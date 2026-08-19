@@ -1,11 +1,11 @@
 // GET /api/manager-pay/manager-year?year=YYYY[&manager=<email>]
 //
-// ADMIN ONLY (authenticateAdmin). One manager's full year is a different thing
+// ADMIN ONLY (authenticateCapability). One manager's full year is a different thing
 // from one week everyone can see — this is deliberately NOT on the shared-token
 // surface. Without ?manager, returns the manager select for that year; with it,
 // the full derived year report (src/lib/managerYearReport.ts).
 
-import { authenticateAdmin } from "@/lib/adminAuth";
+import { authenticateCapability } from "@/lib/capabilityAuth";
 import { buildYearReport, listYearManagers } from "@/lib/managerYearReport";
 
 export const runtime = "nodejs";
@@ -13,7 +13,7 @@ export const maxDuration = 60;
 export const dynamic = "force-dynamic";
 
 export async function GET(req: Request) {
-  const auth = await authenticateAdmin(req);
+  const auth = await authenticateCapability(req, "matchops");
   if (!auth.ok) return Response.json({ error: auth.error }, { status: auth.status });
 
   const url = new URL(req.url);

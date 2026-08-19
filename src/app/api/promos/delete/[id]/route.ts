@@ -15,7 +15,7 @@
 // A retried delete on an already-deleted code is IMPOSSIBLE, not merely harmless: the state is
 // re-read first and a no-op is refused before any outbound request.
 import { randomUUID } from "node:crypto";
-import { authenticateAdmin } from "@/lib/adminAuth";
+import { authenticateCapability } from "@/lib/capabilityAuth";
 import { getMatchdayApiClient } from "@/lib/matchdayApi";
 import {
   apiWrite, AmbiguousWriteError, WriteFailedError, DeniedFieldError, DeniedEndpointError,
@@ -33,7 +33,7 @@ const ENV = "production" as const;
 type Ctx = { params: Promise<{ id: string }> };
 
 async function run(req: Request, ctx: Ctx, mode: "delete" | "restore") {
-  const auth = await authenticateAdmin(req);
+  const auth = await authenticateCapability(req, "managePromos");
   if (!auth.ok) return Response.json({ error: auth.error }, { status: auth.status });
 
   const { id: idRaw } = await ctx.params;

@@ -9,14 +9,14 @@
 // offers reset. A token-authenticated (share-link) caller has no session Bearer
 // and is rejected 401 — this endpoint is unreachable with just the share token.
 
-import { authenticateAdmin } from "@/lib/adminAuth";
+import { authenticateCapability } from "@/lib/capabilityAuth";
 import { ISO_DATE_RX, weekdayUtc } from "@/lib/managerPayCompute";
 
 export const runtime = "nodejs";
 export const dynamic = "force-dynamic";
 
 export async function PUT(req: Request) {
-  const auth = await authenticateAdmin(req);
+  const auth = await authenticateCapability(req, "matchops");
   if (!auth.ok) return Response.json({ error: auth.error }, { status: auth.status });
 
   const body = await req.json().catch(() => null);
@@ -40,7 +40,7 @@ export async function PUT(req: Request) {
 }
 
 export async function DELETE(req: Request) {
-  const auth = await authenticateAdmin(req);
+  const auth = await authenticateCapability(req, "matchops");
   if (!auth.ok) return Response.json({ error: auth.error }, { status: auth.status });
 
   const week = new URL(req.url).searchParams.get("week") ?? "";

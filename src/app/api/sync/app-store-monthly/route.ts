@@ -17,7 +17,7 @@
 // A 404 WRITES NOTHING. Not a zero — a zero would erase a month already archived on the day Apple
 // stops serving it, which is precisely when the archive is the only copy left.
 import { archiveAppStoreMonths, AppleAuthError } from "@/lib/appStoreInstallsSync";
-import { authenticateAdmin } from "@/lib/adminAuth";
+import { authenticateCapability } from "@/lib/capabilityAuth";
 import { createClient } from "@supabase/supabase-js";
 
 export const runtime = "nodejs";
@@ -38,7 +38,7 @@ async function authorize(req: Request): Promise<{ ok: true; who: string } | { ok
   const secret = process.env.CRON_SECRET;
   const auth = req.headers.get("authorization") ?? "";
   if (secret && auth === `Bearer ${secret}`) return { ok: true, who: "cron" };
-  const a = await authenticateAdmin(req);
+  const a = await authenticateCapability(req, "tech");
   if (a.ok) return { ok: true, who: a.email };
   return { ok: false, status: a.status, error: a.error };
 }

@@ -11,8 +11,11 @@ import { join } from "node:path";
 import { adminGate, deriveMatchOpsFlags, type AppUserRow } from "../src/lib/adminAuth";
 import { matchOpsReadGate, E2E_SERVICE_EMAIL } from "../src/lib/matchOpsAuth";
 import { canReadPromos } from "../src/lib/promoAccess";
-import { matchEditAccess, MATCH_EDIT_REQUIREMENT, NO_EDIT_MATCHES } from "../src/lib/matchEditAccess";
+import { can, denial, E2E_SERVICE_EMAIL, CITY_MANAGER_CONFINED_ERROR, type Capability } from "../src/lib/capabilities";
 import { cityManagerGate, assertCityScope } from "../src/lib/cityManagerAuth";
+
+const stripComments = (src: string) =>
+  src.replace(/\/\*[\s\S]*?\*\//g, "").split("\n").filter((l) => !l.trim().startsWith("//")).join("\n");
 
 let PASS = 0, FAIL = 0;
 const ok = (n: string) => { PASS++; console.log(`  ok  ${n}`); };
@@ -102,13 +105,11 @@ is("authenticateMatchOpsRead is imported by EXACTLY the 14 intended routes", imp
   "matchday/[env]/matches/[id]/route.ts", "matchday/[env]/roster/[matchId]/route.ts",
   "matchday/[env]/matches/[id]/cancel/route.ts",
 ].sort());
-// The ONLY routes allowed to keep BOTH gates are the three whose GET moved and whose write did not.
-// Anything else holding both is a half-finished move.
-is("exactly the 3 dual-gate routes still reference authenticateAdmin (their writes)",
-  importsMatchOpsRead.filter((f) => /authenticateAdmin\b/.test(readFileSync(f, "utf8"))).map(rel).sort(), [
-    "matchday/[env]/matches/[id]/route.ts", "matchday/[env]/roster/[matchId]/route.ts",
-    "matchday/[env]/matches/[id]/cancel/route.ts",
-  ].sort());
+// ITEMISED: this asserted that exactly THREE routes still carried both gates — a read on Match Ops
+// and a write on is_admin. The dual gate is gone entirely: a write now reads the capability its
+// checkbox grants, so NO route holds both.
+is("no route carries both a Match Ops read gate and an is_admin write gate any more",
+  importsMatchOpsRead.filter((f) => /authenticateAdmin\b/.test(readFileSync(f, "utf8"))).map(rel).sort(), []);
 // ── EDIT CREDITS (Phase 27) — the money route, and the ONE route on a gate of its own ──────────
 // It is registered here so it can never drift onto a shared gate: the whole point of the grant is
 // that nobody acquires the ability to move money as a side effect of Match Ops.
@@ -154,7 +155,13 @@ is("no other route reads can_edit_credits directly",
 // nothing unauthenticated. Its own route rather than a step inside app-store-installs, because that
 // step has been starved at +288s against a 300s ceiling and an archive that silently does not run
 // is the failure this area keeps producing = 31.
-is("authenticateAdmin still guards 31 routes", importsAdmin.length, 31);
+// ITEMISED: was 31. is_admin now gates ONE thing — the User access screen, which is who may grant
+// permissions. Every other route reads the flag its checkbox grants.
+is("authenticateAdmin guards only the User access screen", importsAdmin.map(rel).sort(),
+   ["admin/users/auth-status/route.ts", "admin/users/city-manager/route.ts", "admin/users/delete/route.ts",
+    "admin/users/match-permissions/route.ts", "admin/users/permissions/route.ts",
+    "admin/users/resend-invite/route.ts"].sort());
+is("  …and every one of those is under admin/users", importsAdmin.map(rel).every((f) => f.startsWith("admin/users/")), true);
 
 // Phase 18d — every promo WRITE is gated on MANAGE PROMOS, and the check is in the route (not
 // only on the button). A route that forgot it would 200 for any admin.
@@ -219,7 +226,8 @@ is("...and the admin-user routes are exactly these five",
 }
 
 // the five Deonna must STILL be refused stay is_admin-gated (authenticateAdmin, or authenticateCrm + an is_admin check)
-const requiresAdmin = (f: string) => { const s = readFileSync(f, "utf8"); return /authenticateAdmin\b/.test(s) || (/authenticateCrm\b/.test(s) && /isAdmin|is_admin/.test(s)); };
+// Comments are not gates — two of these routes still DESCRIBED the old is_admin gate after moving.
+const requiresAdmin = (f: string) => { const s = stripComments(readFileSync(f, "utf8")); return /authenticateAdmin\b/.test(s) || (/authenticateCrm\b/.test(s) && /auth\.isAdmin/.test(s)); };
 for (const [name, f] of [
   ["change log", "src/app/api/changelog/route.ts"],
   ["veo codes", "src/app/api/veo/codes/route.ts"],
@@ -227,12 +235,16 @@ for (const [name, f] of [
   ["sms-log", "src/app/api/sms-log/route.ts"],
   ["canned responses", "src/app/api/crm/canned-responses/route.ts"],
 ] as const) {
-  is(`${name} still requires is_admin (Deonna stays 403 there)`, requiresAdmin(f), true);
+  // ITEMISED: was "still requires is_admin (Deonna stays 403 there)". The Change Log reads the
+  // Tech flag now — the box that names it — so a Tech holder can open it without being an admin.
+  is(`${name} gates on a capability, not is_admin`, !requiresAdmin(f), true);
 }
 
 // promos WRITE is untouched: still authenticateAdmin + canManagePromos (read opened, write did not)
+// ITEMISED: was "still authenticateAdmin + MANAGE PROMOS". The is_admin half is gone; the grant
+// its checkbox names is now sufficient, which is the whole point of the change.
 { const s = readFileSync("src/app/api/promos/create/route.ts", "utf8");
-  is("promos/create still authenticateAdmin + MANAGE PROMOS (write stays gated)", /authenticateAdmin\b/.test(s) && /canManagePromos/.test(s), true); }
+  is("promos/create gates on MANAGE PROMOS alone", /authenticateCapability\(req, "managePromos"\)/.test(s) && !/authenticateAdmin\b/.test(s), true); }
 // the promos READS no longer require MANAGE PROMOS (round 1 opened list; round 2 opened the other four)
 for (const r of ["list", "detail/[id]", "fields", "matches", "check"]) {
   const s = readFileSync(`src/app/api/promos/${r}/route.ts`, "utf8");
@@ -249,9 +261,11 @@ for (const r of ["list", "detail/[id]", "fields", "matches", "check"]) {
   const veoRoutes: string[] = [];
   (function walk(d: string) { for (const e of readdirSync(d)) { const q = join(d, e); if (statSync(q).isDirectory()) walk(q); else if (e === "route.ts") veoRoutes.push(q); } })(veoDir);
   const gateOf = (f: string) => {
-    const src = readFileSync(f, "utf8");
+    // Comments are not gates: veo/codes still DESCRIBES the old is_admin gate in its header.
+    const src = stripComments(readFileSync(f, "utf8"));
     if (/authenticateAdmin\b/.test(src)) return "admin";
     if (/authenticateCrm\b/.test(src)) return "crm";
+    if (/authenticateCapability/.test(src)) return "capability";
     if (/VEO_INBOUND_SECRET/.test(src)) return "shared-secret";
     return "NONE";
   };
@@ -260,8 +274,8 @@ for (const r of ["list", "detail/[id]", "fields", "matches", "check"]) {
   is("every /api/veo route is pinned to a named gate (a NONE here is an unauthenticated route)", map, {
     "veo/[id]/route.ts": "crm",              // resolve a queued review item
     "veo/cameras/route.ts": "crm",
-    "veo/codes/[id]/route.ts": "admin",
-    "veo/codes/route.ts": "admin",
+    "veo/codes/[id]/route.ts": "capability",  // ITEMISED: was "admin" — now Match Ops
+    "veo/codes/route.ts": "capability",       // ITEMISED: was "admin" — now Match Ops
     "veo/inbound/route.ts": "shared-secret", // machine-to-machine from the Gmail forwarder, no session
     "veo/intent/route.ts": "crm",            // GET (read one match's intent) + POST (toggle it)
     "veo/route.ts": "crm",
@@ -359,7 +373,17 @@ function decide(step: Step, row: AppUserRow, email: string): { ok: boolean; stat
   const body = handlerBody(step.file, step.method);
   const usesMatchOps = /authenticateMatchOpsRead\(req\)/.test(body);
   const usesAdmin = /authenticateAdmin\(req\)/.test(body);
-  if (usesMatchOps === usesAdmin) return { ok: false, status: 500, why: `${step.label}: expected exactly one gate` };
+  // ITEMISED: decide() knew only two gates. Writes now authenticate on the CAPABILITY their
+  // checkbox grants, so a third is recognised — and a route on it is decided by can(), the same
+  // function the route and the panel call.
+  const capMatch = /authenticateCapability\(req, "([a-zA-Z]+)"\)/.exec(body);
+  const gates = [usesMatchOps, usesAdmin, !!capMatch].filter(Boolean).length;
+  if (gates !== 1) return { ok: false, status: 500, why: `${step.label}: expected exactly one gate` };
+  if (capMatch) {
+    const cap = capMatch[1] as Capability;
+    if (!can(row, cap, email)) return { ok: false, status: 403, why: denial(row, cap, email) ?? "refused" };
+    return { ok: true };
+  }
   // the declared flag must ACTUALLY be checked in that handler — a table entry can't claim a check
   // the code doesn't perform
   if (step.flag && !new RegExp(`auth\\.${step.flag}`).test(body)) return { ok: false, status: 500, why: `${step.label}: no auth.${step.flag} check in source` };
@@ -486,7 +510,9 @@ console.log("\nthe rail and the screen are wired to the read, not the write:");
 console.log("\nthe USES panel is UNCHANGED — admin AND manage-promos, because it shows contact details:");
 {
   const src = readFileSync(R("promos/uses/[id]"), "utf8");
-  is("uses/[id] still uses authenticateAdmin", /authenticateAdmin\(req\)/.test(src), true);
+  // ITEMISED: was "still uses authenticateAdmin". It reads MANAGE PROMOS now — the flag that
+  // names the capability, including sight of the contact details this route returns.
+  is("uses/[id] gates on MANAGE PROMOS", /authenticateCapability\(req, "managePromos"\)/.test(src), true);
   is("uses/[id] still requires canManagePromos on top", /!auth\.canManagePromos/.test(src), true);
   is("uses/[id] did NOT move to the Match Ops read gate", /authenticateMatchOpsRead/.test(src), false);
   is("Deonna is refused it by the admin gate", adminGate(DEONNA).ok, false);
@@ -495,57 +521,69 @@ console.log("\nthe USES panel is UNCHANGED — admin AND manage-promos, because 
   is("the panel RENDERS the refusal rather than swallowing it", /data-testid="uses-error">\{d\.error\}/.test(ui), true);
 }
 
-// ── THE PANEL'S RULE IS PINNED TO THE ROUTE'S ────────────────────────────────────────────────
+// ── THE CHECKBOXES ARE THE ACCESS CONTROL ────────────────────────────────────────────────────
 //
-// MatchPanel offered a Save that the route would refuse: it checked nothing, so a holder of EDIT
-// MATCHES who is not an admin could edit 24 fields and be told "Admin access required" — naming a
-// permission the grant screen never offered. The panel now reads matchEditAccess().
-//
-// The route CANNOT call that helper (authenticateAdmin does not return the row), so this is what
-// stops the two drifting: for every flag shape, the helper must agree exactly with the route's real
-// composition — adminGate(row).ok && deriveMatchOpsFlags(row).canEditMatches. Widen one and this
-// fails until the other follows.
-console.log("\nmatchEditAccess agrees with the route's actual gates, shape for shape:");
-const EDIT_SHAPES: [string, Record<string, unknown>][] = [
-  ["admin + edit + matchops (Ryan)", ADMIN],
-  ["NON-admin + edit + matchops (Deonna's shape)", { ...DEONNA, can_edit_matches: true }],
-  ["Deonna as she is today (no edit flag)", DEONNA],
-  ["admin WITHOUT the edit flag", { id: "u-ae", is_admin: true, can_access_matchops: true, can_edit_matches: false }],
-  ["edit flag but NO matchops", { id: "u-nm", is_admin: true, can_access_matchops: false, can_edit_matches: true }],
-  ["matchops only", MATCHOPS_ONLY],
-  ["no flags", NOFLAGS],
-];
-for (const [label, row] of EDIT_SHAPES) {
-  const routeWould = adminGate(row as AppUserRow).ok && deriveMatchOpsFlags(row as AppUserRow).canEditMatches;
-  is(`  ${label} — panel agrees with the route (${routeWould ? "may write" : "refused"})`,
-     matchEditAccess(row).ok, routeWould);
+// ITEMISED CHANGE. This block previously asserted the OLD rule — that matchEditAccess equalled
+// `adminGate(row).ok && deriveMatchOpsFlags(row).canEditMatches`, i.e. is_admin AND the flag — and
+// that the panel was pinned to the route by an EQUIVALENCE test because the two could not share a
+// call. Both premises are gone: is_admin is no longer required for any feature, and the panel and
+// route now call the same `can()`. Six assertions were replaced by the ones below, which assert
+// what WORKS rather than what is refused.
+console.log("\nevery write grant works for a NON-ADMIN who holds it:");
+const holder = (col: string) => ({ id: "u-h", is_admin: false, can_access_matchops: true, [col]: true });
+for (const [label, cap, col] of [
+  ["EDIT MATCHES", "editMatches", "can_edit_matches"],
+  ["MANAGE PLAYERS", "managePlayers", "can_manage_players"],
+  ["MANAGE PROMOS", "managePromos", "can_manage_promos"],
+  ["SEND MESSAGES", "sendMessages", "can_send_messages"],
+] as [string, Capability, string][]) {
+  is(`  a non-admin with ${label} HAS it`, can(holder(col), cap), true);
+  is(`  …and a non-admin without ${label} does NOT`, can({ id: "u-n", is_admin: false, can_access_matchops: true }, cap), false);
 }
+// EDIT CREDITS is deliberately NOT nested under Match Ops — moving a balance is not a Match Ops
+// power and must not arrive as a side effect of a read grant.
+is("  a non-admin with EDIT CREDITS has it WITHOUT Match Ops", can({ id: "u-c", is_admin: false, can_edit_credits: true }, "editCredits"), true);
+is("  …and without the flag does not", can({ id: "u-c2", is_admin: false, can_access_matchops: true }, "editCredits"), false);
 
-console.log("\nand the refusal NAMES the real requirement:");
-{
-  const deonna = matchEditAccess({ ...DEONNA, can_edit_matches: true });
-  is("a non-admin EDIT MATCHES holder is refused", deonna.ok, false);
-  is("  …and is told about EDIT MATCHES, not just admin",
-     !deonna.ok && /EDIT MATCHES/.test(deonna.reason) && /admin/i.test(deonna.reason), true);
-  is("  …with the shared wording", !deonna.ok && deonna.reason === MATCH_EDIT_REQUIREMENT, true);
-  const noEdit = matchEditAccess(DEONNA);
-  is("someone without the flag gets the ROUTE'S OWN sentence", !noEdit.ok && noEdit.reason === NO_EDIT_MATCHES, true);
-  const ok = matchEditAccess(ADMIN);
-  is("  control — an admin holder is NOT refused, so those refusals mean something", ok.ok, true);
+console.log("\nis_admin is NOT required for any feature:");
+for (const [label, cap, col] of [
+  ["EDIT MATCHES", "editMatches", "can_edit_matches"],
+  ["MANAGE PROMOS", "managePromos", "can_manage_promos"],
+] as [string, Capability, string][]) {
+  is(`  ${label}: the flag alone is enough — no admin term`, can(holder(col), cap), true);
 }
-{
-  // The route must be reading the shared sentence, not a second copy of it.
-  const src = readFileSync(R("matchday/[env]/matches/[id]"), "utf8");
-  is("the route imports the shared refusal wording", /NO_EDIT_MATCHES/.test(src), true);
-  is("…and no longer inlines its own copy", /"You have read-only Match Ops access\. EDIT MATCHES/.test(src), false);
-  // POSITIVE CONTROL: the scan can see the route's other literals, so that `false` is real.
-  is("  control — the scan does see the route's source", /authenticateAdmin/.test(src), true);
-}
+is("is_admin still gates the User access screen, and only that", can({ id: "u-a", is_admin: true }, "grantAccess"), true);
+is("  …a non-admin cannot grant access however many flags they hold",
+   can({ id: "u-b", is_admin: false, can_access_matchops: true, can_edit_matches: true, can_manage_promos: true }, "grantAccess"), false);
+
+console.log("\nthe two things that are NOT page gates survive:");
+is("the E2E service account holds nothing (by row flag)", can({ id: "e", is_service_account: true, can_access_matchops: true, can_edit_matches: true }, "editMatches"), false);
+is("…and by EMAIL, whatever the row says", can({ id: "e2", can_access_matchops: true, can_edit_matches: true }, "editMatches", E2E_SERVICE_EMAIL), false);
+is("a city manager is confined regardless of flags", can({ id: "cm", is_city_manager: true, can_access_matchops: true, can_edit_matches: true }, "editMatches"), false);
+is("  …and the refusal says where to go", denial({ id: "cm", is_city_manager: true }, "matchops"), CITY_MANAGER_CONFINED_ERROR);
+
+console.log("\nthe panel and the route make the SAME call, not two that agree:");
 {
   const ui = readFileSync("src/components/MatchPanel.tsx", "utf8");
-  is("the panel reads matchEditAccess", /matchEditAccess\(appUser\)/.test(ui), true);
-  is("Save is disabled when the person may not write", /data-testid="mp-save" disabled=\{!mayWrite/.test(ui), true);
-  is("the fields sit in a real disabled <fieldset>", /<fieldset className="mp-fs" disabled=\{!mayWrite\}/.test(ui), true);
+  is("MatchPanel reads matchEditAccess", /matchEditAccess\(appUser\)/.test(ui), true);
+  const lib = readFileSync("src/lib/matchEditAccess.ts", "utf8");
+  is("…which is a thin read of capabilities.can", /can\(row, "editMatches"/.test(lib), true);
+  // COMMENTS ARE NOT CODE. This scan matched the comment that EXPLAINS the removal — the same trap
+  // that has bitten this suite before. Strip them before asserting on source.
+  const libCode = lib.replace(/\/\*[\s\S]*?\*\//g, "").split("\n").filter((l) => !l.trim().startsWith("//")).join("\n");
+  is("…and no longer restates the gate", /is_admin/.test(libCode), false);
+  const route = readFileSync(R("matchday/[env]/matches/[id]"), "utf8");
+  is("the match write route gates on the editMatches CAPABILITY", /authenticateCapability\(req, "editMatches"\)/.test(route), true);
+  is("…and no longer on is_admin", /authenticateAdmin/.test(route), false);
+  is("  control — the scan does see the route's source", /recordWrite/.test(route), true);
+}
+{
+  // Every promo WRITE moved too, and the USES panel with them.
+  for (const f of ["promos/create", "promos/edit/[id]", "promos/delete/[id]", "promos/uses/[id]"]) {
+    const src = readFileSync(R(f), "utf8");
+    is(`${f} gates on managePromos, not is_admin`,
+       /authenticateCapability\(req, "managePromos"\)/.test(src) && !/authenticateAdmin/.test(src), true);
+  }
 }
 
 console.log(`\n${PASS} passed, ${FAIL} failed`);
