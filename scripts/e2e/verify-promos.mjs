@@ -411,12 +411,19 @@ async function main() {
   // ══════════════ THE CAP IS ADVISORY, AND EVERY SITE THAT RENDERS ONE SAYS SO ══════════════
   // A screen showing "cap 2" without this note promises something the server does not do:
   // 70 of 812 redeemed capped codes have been exceeded by a real player.
-  { const listNote = await page.evaluate(() => {
-      const el = document.querySelector('[data-testid="cap-note-list"]');
-      return el ? { text: el.textContent.trim(), title: el.getAttribute("title") ?? el.closest("[title]")?.getAttribute("title") ?? "" } : null; });
-    (listNote && /advisory/i.test(listNote.text) && /not enforce/i.test(listNote.title))
-      ? ok("cap note: the promo LIST's CAP column is annotated advisory, with the evidence in its title")
-      : bad("cap note list", JSON.stringify(listNote)); }
+  // THE "advisory · not enforced" BADGE IS GONE from the list header and from both CAP boxes in the
+  // drawer. The CREATE form keeps the full sentence — that is where the cap is chosen, and it is
+  // asserted above. The over-cap banner, which is derived from real uses, is asserted below.
+  { const badges = await page.$$eval('[data-testid="cap-note-list"], [data-testid="cap-note-detail"], [data-testid="cap-note-uses"]', (e) => e.length);
+    eq("cap note: the advisory badge is gone from the list header and both drawer CAP boxes", badges, 0); }
+  { const anyBadge = await page.$$eval(".promo .capnote", (e) => e.length);
+    eq("cap note: no .capnote badge is rendered anywhere on the screen", anyBadge, 0); }
+  // CONTROLS for those two zeros — the queries run against a loaded promo screen, and the CAP
+  // column and its values are still there, so "0 badges" is not "0 because nothing rendered".
+  { const caps = await page.$$eval('[data-testid="promo-cap"]', (e) => e.length);
+    eq("  control — the CAP column itself still renders its values", caps > 0, true); }
+  { const head = await page.$$eval(".promo .colhead", (e) => e.length);
+    eq("  control — the list header is on screen to have been checked", head > 0, true); }
 
   // ══════════════ USES PANEL (docs/mockups/promo-uses-v1_1.html) ══════════════
   // The 303 drawer is still open and its scrim covers the list — close it before opening another.
@@ -475,14 +482,12 @@ async function main() {
       dead: document.querySelectorAll('[data-testid="uses-time-row"][data-dead="true"]').length,
     }));
     eq("uses: the by-time view shows every redemption and KEEPS the deleted ones", t, { rows: 6, dead: 2 }); }
-  // the annotation on the two cap sites inside the drawer
-  { const inDrawer = await page.evaluate(() => ({
-      uses: document.querySelector('[data-testid="cap-note-uses"]')?.textContent?.trim() ?? null,
-      detail: document.querySelector('[data-testid="cap-note-detail"]')?.textContent?.trim() ?? null,
-    }));
-    (/advisory/i.test(inDrawer.uses ?? "") && /advisory/i.test(inDrawer.detail ?? ""))
-      ? ok("cap note: the uses tile AND the detail usage box both say the cap is advisory")
-      : bad("cap note drawer", JSON.stringify(inDrawer)); }
+  // THE BADGE IS GONE FROM THE DRAWER TOO — but the CAP tile still states the number, and the
+  // over-cap banner (asserted above) is the one that is derived from actual uses and stays.
+  { const inDrawer = await page.$$eval('[data-testid="cap-note-uses"], [data-testid="cap-note-detail"]', (e) => e.length);
+    eq("cap note: no advisory badge in the drawer", inDrawer, 0); }
+  { const capTile = await page.$eval('[data-testid="uses-cap"]', (e) => e.textContent.trim());
+    eq("  control — the drawer's CAP tile still shows the cap", capTile, "2"); }
 
   // 390 PORTRAIT — the row stacks and the city chip still hugs its text
   await page.setViewportSize({ width: 390, height: 844 });

@@ -361,7 +361,7 @@ function PromoTable({ rows, nowIso, onOpen, redeemed, empty, more }: { rows: Pro
   return (
     <div className="sheet">
       <div className="tzbar" data-testid="tzbar">All times <b>America/Chicago</b></div>
-      <div className="colhead"><span /><span>CODE</span><span>CREATED</span><span>WINDOW</span><span>DISCOUNT</span><span>WHO · WHICH</span><span className="ra" title={CAP_ADVISORY}>CAP<CapNote testid="cap-note-list" /></span><span className="ra">REDEEMED</span><span>STATE</span></div>
+      <div className="colhead"><span /><span>CODE</span><span>CREATED</span><span>WINDOW</span><span>DISCOUNT</span><span>WHO · WHICH</span><span className="ra">CAP</span><span className="ra">REDEEMED</span><span>STATE</span></div>
       {rows.length === 0 ? empty : rows.map((p) => <PromoRowEl key={p.id + ":" + p.code} p={p} nowIso={nowIso} onOpen={onOpen} redeemed={redeemed} />)}
       {rows.length > 0 && more}
     </div>
@@ -437,7 +437,7 @@ function DetailDrawer({ id, onClose, onEdit, onChanged, mayManage, noWrite }: {
             <div className="dcode"><span className="code big">{p.code}</span><span className="st inline">{promoState(p, state.nowIso ?? new Date().toISOString()).toUpperCase()}</span><span className="cid">ID {p.id}</span></div>
             <div className="usebox" data-testid="detail-usage">
               <div className="usecol"><span className="ul">REDEEMED</span><span className="uv" data-testid="detail-redeemed">{uc.toLocaleString()}</span></div>
-              <div className="usecol"><span className="ul">CAP</span><span className="uv">{capLabel(p)}</span><CapNote testid="cap-note-detail" /></div>
+              <div className="usecol"><span className="ul">CAP</span><span className="uv">{capLabel(p)}</span></div>
               <div className="usecol"><span className="ul">LEFT</span><span className={"uv left-" + leftTone(p, uc)} data-testid="detail-left">{leftLabel(p, uc)}</span></div>
             </div>
             <p className="useline" data-testid="detail-useline">{usageLine(p, uc)}</p>
@@ -525,11 +525,7 @@ function DetailDrawer({ id, onClose, onEdit, onChanged, mayManage, noWrite }: {
 // a real player — 8.6%, worst case a cap of 1 redeemed 4 times. The server does not hard-stop at
 // the cap, so a screen showing "cap 2" without this note implies something the API does not do.
 const CAP_ADVISORY = "Advisory — the server does not enforce this; 70 of 812 redeemed capped codes have been exceeded.";
-const CAP_ADVISORY_SHORT = "advisory · not enforced";
 
-function CapNote({ testid }: { testid: string }) {
-  return <span className="capnote" data-testid={testid} title={CAP_ADVISORY}>{CAP_ADVISORY_SHORT}</span>;
-}
 
 // ── WHO ACTUALLY USED IT (docs/mockups/promo-uses-v1_1.html) ──────────────────────────────────
 // Ryan's question is not "list the redemptions", it is "is somebody working this code". So the
@@ -576,7 +572,7 @@ function UsesPanel({ promoId }: { promoId: number }) {
           <div className="uv" data-testid="uses-distinct">{s.distinctUsers}</div>
           <div className="us">{s.distinctUsers ? s.usesPerUser.toFixed(1) : "0"} uses each on average</div></div>
         <div className="utile"><div className="uk">CAP</div><div className="uv" data-testid="uses-cap">{data.capKnown ? s.capPerUser : "—"}</div>
-          <div className="us">{data.capKnown ? "per user" : "cap unknown"}{data.capKnown && <> · <CapNote testid="cap-note-uses" /></>}</div></div>
+          <div className="us">{data.capKnown ? "per user" : "cap unknown"}</div></div>
       </div>
 
       {/* THE BREACH IS THE HEADLINE, NOT A ROW — and it fires only when a PERSON exceeded the cap. */}
@@ -1186,12 +1182,8 @@ const CSS = `
 .promo .ubreach b{color:#a8321f}
 .promo .uic{font-size:15px;line-height:1.2}
 .promo .ugrp{border:1px solid var(--line);border-radius:12px;margin-bottom:10px;overflow:hidden}
-/* the advisory note — factual, not alarming: it sits in the same muted tone as other help text */
-.promo .capnote{display:inline-block;font-size:9.5px;font-weight:700;letter-spacing:.04em;
-  /* --ink2, not --ink3: the muted tone failed the 4.5:1 sweep at 2.93. A note nobody can read is
-     not a factual note, it is decoration. */
-  color:#3f5a4b;background:#f1f5f2;border:1px solid #e3e9e3;border-radius:5px;padding:1px 5px;
-  margin-left:6px;white-space:nowrap;text-transform:none;vertical-align:middle}
+/* the advisory sentence on the CREATE form — the one place the cap is chosen, so the one place
+   it still says so. The short badge that repeated it on the list and in the drawer is gone. */
 .promo .capadv{display:block;margin-top:5px;color:#3f5a4b}
 .promo .ulist{list-style:none;margin:0;padding:0;border-top:1px solid var(--line)}
 .promo .uline{display:grid;grid-template-columns:170px 1fr auto;gap:12px;align-items:baseline;
