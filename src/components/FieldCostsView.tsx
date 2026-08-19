@@ -13,9 +13,6 @@ import {
 } from "lucide-react";
 import AddVenueDialog, { type AddVenueDraft } from "@/components/AddVenueDialog";
 import ConfirmDeleteDialog from "@/components/ConfirmDeleteDialog";
-import FieldCostOverrideEditor, {
-  type OverrideDraft,
-} from "@/components/FieldCostOverrideEditor";
 import { logChange } from "@/lib/financeAudit";
 import {
   buildFieldCostRows,
@@ -150,10 +147,7 @@ export default function FieldCostsView() {
 
   const [expandedKey, setExpandedKey] = useState<string | null>(null);
 
-  const [overrideEditorOpen, setOverrideEditorOpen] = useState(false);
-  const [overrideEditorRow, setOverrideEditorRow] = useState<FieldCostRow | null>(null);
 
-  const [removeRow, setRemoveRow] = useState<FieldCostRow | null>(null);
 
   const [addVenueOpen, setAddVenueOpen] = useState(false);
   // After a successful Add Venue, surface a banner + flash the new
@@ -481,72 +475,6 @@ export default function FieldCostsView() {
     };
   }, [allRows, filtered, data, month]);
 
-  function openSetOverride(row: FieldCostRow) {
-    setOverrideEditorRow(row);
-    setOverrideEditorOpen(true);
-  }
-
-  async function handleSubmitOverride(draft: OverrideDraft) {
-    const email = appUser?.email;
-    if (!email) throw new Error("Not signed in");
-    if (!overrideEditorRow) return;
-    const row = overrideEditorRow;
-    const before = row.override;
-
-    if (before) {
-      const updates = {
-        month: draft.month,
-        override_amount: draft.override_amount,
-        reason: draft.reason || null,
-      };
-      const { data: updated, error } = await supabase
-        .from("fin_venue_cost_overrides")
-        .update(updates)
-        .eq("id", before.id)
-        .select()
-        .single();
-      if (error) throw new Error(error.message);
-      await logChange({
-        tableName: "fin_venue_cost_overrides",
-        rowId: before.id,
-        action: "update",
-        changedBy: email,
-        before: before as unknown as Record<string, unknown>,
-        after: updated as Record<string, unknown>,
-      });
-    } else {
-      const payload = {
-        venue_id: row.primaryVenueId,
-        month: draft.month,
-        override_amount: draft.override_amount,
-        reason: draft.reason || null,
-        created_by: email,
-      };
-      const { data: inserted, error } = await supabase
-        .from("fin_venue_cost_overrides")
-        .insert(payload)
-        .select()
-        .single();
-      if (error) throw new Error(error.message);
-      await logChange({
-        tableName: "fin_venue_cost_overrides",
-        rowId: (inserted as { id: number }).id,
-        action: "insert",
-        changedBy: email,
-        after: inserted as Record<string, unknown>,
-      });
-    }
-
-    // No secondary mirror: a combined primary's override covers the PRIMARY
-    // leg only. Each secondary leg bills its own canonical cost (buildField-
-    // CostRows sums per leg). To mark a secondary as covered by this invoice,
-    // set an explicit $0 override on that leg — surfaced as a hint in the
-    // editor.
-    await refetchFinanceData();
-    setOverrideEditorOpen(false);
-    setOverrideEditorRow(null);
-  }
-
   async function handleSubmitAddVenue(draft: AddVenueDraft) {
     const email = appUser?.email;
     if (!email) throw new Error("Not signed in");
@@ -657,32 +585,6 @@ export default function FieldCostsView() {
     setTimeout(() => setLastAdded(null), 12000);
   }
 
-  async function handleRemoveOverride() {
-    const email = appUser?.email;
-    if (!email) throw new Error("Not signed in");
-    if (!removeRow || !removeRow.override) return;
-    const row = removeRow;
-    const primaryOverride = row.override!;
-
-    await logChange({
-      tableName: "fin_venue_cost_overrides",
-      rowId: primaryOverride.id,
-      action: "delete",
-      changedBy: email,
-      before: primaryOverride as unknown as Record<string, unknown>,
-    });
-    const { error } = await supabase
-      .from("fin_venue_cost_overrides")
-      .delete()
-      .eq("id", primaryOverride.id);
-    if (error) throw new Error(error.message);
-
-    // Secondary-leg overrides are explicit, user-owned choices now (a $0
-    // override marks a leg as covered by the primary invoice). Removing the
-    // primary override no longer auto-deletes them.
-    await refetchFinanceData();
-    setRemoveRow(null);
-  }
 
   return (
     <>
@@ -737,7 +639,7 @@ export default function FieldCostsView() {
                 {opt}
               </option>
             ))}
-            <option value="OVERRIDE">Override</option>
+            <option value="OVERRIDE">Month value</option>
           </select>
         </Filter>
         <label className="flex cursor-pointer items-center gap-2 text-xs text-deep-green/75">
@@ -746,7 +648,7 @@ export default function FieldCostsView() {
             checked={hasOverrideOnly}
             onChange={(e) => setHasOverrideOnly(e.target.checked)}
           />
-          Has override only
+          Has a month value only
         </label>
         <button
           type="button"
@@ -860,8 +762,6 @@ export default function FieldCostsView() {
                       onToggleExpand={() =>
                         setExpandedKey(expanded ? null : row.key)
                       }
-                      onSetOverride={() => openSetOverride(row)}
-                      onRemoveOverride={() => setRemoveRow(row)}
                       primaryVenue={primaryVenue}
                       highlight={
                         lastAdded?.venueId === row.primaryVenueId
@@ -962,7 +862,7 @@ export default function FieldCostsView() {
               </li>
               <li className="flex items-baseline gap-2">
                 <span className="text-deep-green/55">•</span>
-                <span>Manual overrides ({month}):</span>
+                <span>Hand-entered month values ({month}):</span>
                 <span className="font-mono font-bold tabular-nums text-deep-green">
                   {fmtMoney(recon.overrideRaw, true)}
                 </span>
@@ -975,51 +875,12 @@ export default function FieldCostsView() {
         )}
       </section>
 
-      <FieldCostOverrideEditor
-        open={overrideEditorOpen}
-        row={overrideEditorRow}
-        initialMonth={month}
-        onClose={() => {
-          setOverrideEditorOpen(false);
-          setOverrideEditorRow(null);
-        }}
-        onSubmit={handleSubmitOverride}
-      />
-
       <AddVenueDialog
         open={addVenueOpen}
         onClose={() => setAddVenueOpen(false)}
         onSubmit={handleSubmitAddVenue}
       />
 
-      <ConfirmDeleteDialog
-        open={Boolean(removeRow)}
-        title="Remove override?"
-        confirmLabel="Remove Override"
-        summary={
-          removeRow ? (
-            <div className="space-y-1 text-xs">
-              <div className="font-mono">
-                {removeRow.displayName} · {removeRow.override?.month}
-              </div>
-              <div>
-                Cost will revert to auto-compute (
-                <span className="font-mono">
-                  {fmtMoney(removeRow.autoAmount, true)}
-                </span>
-                ).
-              </div>
-              {removeRow.override?.reason && (
-                <div className="text-deep-green/55">
-                  Reason on file: {removeRow.override.reason}
-                </div>
-              )}
-            </div>
-          ) : null
-        }
-        onCancel={() => setRemoveRow(null)}
-        onConfirm={handleRemoveOverride}
-      />
 
     </>
   );
@@ -1030,8 +891,6 @@ function FieldCostTableRow({
   expanded,
   expandable,
   onToggleExpand,
-  onSetOverride,
-  onRemoveOverride,
   primaryVenue,
   cellState,
   onSavePrice,
@@ -1054,8 +913,6 @@ function FieldCostTableRow({
   expanded: boolean;
   expandable: boolean;
   onToggleExpand: () => void;
-  onSetOverride: () => void;
-  onRemoveOverride: () => void;
   primaryVenue: FinVenue | null;
   cellState: (field: CellStateKey) => CellState | null;
   onSavePrice: (field: PriceField, raw: string) => void;
@@ -1116,7 +973,7 @@ function FieldCostTableRow({
   } else {
     rateMain = v?.monthly_flat != null
       ? <>{fmtMoney(v.monthly_flat)} <span className="font-semibold text-deep-green/45">/ month</span></>
-      : <span className="text-deep-green/40">Set per month</span>;
+      : <span className="text-deep-green/40">Per month</span>;
     rateSub = "flat, regardless of matches";
   }
 
@@ -1171,7 +1028,7 @@ function FieldCostTableRow({
           {isOverride ? (
             <div className="mt-0.5 text-[10.5px] font-bold text-[#8a5a00]">
               {row.billingType === "per_match"
-                ? `override · auto ${fmtMoney(autoAmount)}`
+                ? `set for ${monthFull(month)} · auto ${fmtMoney(autoAmount)}`
                 : `set for ${monthFull(month)}`}
             </div>
           ) : zero && hasAgreedRate ? (
@@ -1235,8 +1092,7 @@ function FieldCostTableRow({
               onSaveBillingType={onSaveBillingType}
               onSaveChargeOnCancel={onSaveChargeOnCancel}
               onSaveBillingDay={onSaveBillingDay}
-              onSetOverride={onSetOverride}
-              onRemoveOverride={onRemoveOverride}
+              onSaveCustomAmount={onSaveCustomAmount}
               isOverride={isOverride}
               timing={
                 // THE NON-MONTHLY EDITOR, PRESERVED. Seven venues are on `custom` cadence — five
@@ -1276,7 +1132,7 @@ function FieldCostTableRow({
 // labelled as not-a-cost, because it sat in the two widest columns of a cost table.
 function VenuePanel({
   row, venue, month, autoAmount, cellState, onSavePrice, onSaveBillingType,
-  onSaveChargeOnCancel, onSaveBillingDay, onSetOverride, onRemoveOverride, isOverride, timing,
+  onSaveChargeOnCancel, onSaveBillingDay, onSaveCustomAmount, isOverride, timing,
 }: {
   row: FieldCostRow;
   venue: FinVenue | null;
@@ -1287,8 +1143,7 @@ function VenuePanel({
   onSaveBillingType: (next: FinVenue["billing_type"]) => void;
   onSaveChargeOnCancel: (next: boolean) => void;
   onSaveBillingDay: (raw: string) => void;
-  onSetOverride: () => void;
-  onRemoveOverride: () => void;
+  onSaveCustomAmount: (raw: string) => void;
   isOverride: boolean;
   timing: React.ReactNode;
 }) {
@@ -1396,23 +1251,28 @@ function VenuePanel({
             <option value="no">Not billed</option>
           </select>
         </div>
+        {/* ONE FIELD, ONE RULE. There is no "override" — there is a month box, and if there is a
+            number in it that number is the cost. Empty with auto-bill on computes; empty with it
+            off means nothing has been entered. That is the whole thing, so there is no Set button
+            to press, no mode to be in, and nothing to name. */}
         <div className={fld}>
-          <label className={lab}>{monthFull(month)}</label>
-          <span className="text-[14px] font-bold tabular-nums text-deep-green">{fmtMoney(row.amount)}</span>
-          <button type="button" onClick={onSetOverride}
-            className="rounded-full border border-cream-line px-2.5 py-1 text-[11px] font-bold text-deep-green/70 hover:bg-cream-soft">
-            {isOverride ? "Edit" : "Set"}
-          </button>
-          {isOverride && (
-            <button type="button" onClick={onRemoveOverride}
-              className="text-[11px] font-bold text-deep-green/45 underline hover:text-deep-green">
-              Clear
-            </button>
-          )}
+          <label className={lab}>{monthFull(month)} cost</label>
+          <PriceCell
+            stored={row.override?.override_amount ?? null}
+            state={cellState("custom_amount")}
+            onSave={(raw) => onSaveCustomAmount(raw)}
+            // The placeholder is what leaving it empty actually produces.
+            placeholder={autoBill ? `auto ${fmtMoney(autoAmount)}` : "—"}
+            emptyOk={autoBill}
+          />
         </div>
-        <p className="mt-2 text-[11.5px] leading-relaxed text-deep-green/45">
-          The month value overrides the base for {monthFull(month)} only. Clearing it falls back to{" "}
-          <b className="text-deep-green/70">{fmtMoney(autoAmount)}</b>.
+        <p className="mt-2 text-[11.5px] leading-relaxed text-deep-green/45" data-testid="month-help">
+          {autoBill
+            ? (row.legs.length > 1
+                // autoFormula already ends with its own total — appending one printed it twice.
+                ? <>Empty computes {row.autoFormula}.</>
+                : <>Empty computes {row.matchCount} × {fmtMoney(venue?.cost_per_match ?? 0)} = <b className="text-deep-green/70">{fmtMoney(autoAmount)}</b>.</>)
+            : <>This venue is not billed per match — enter {monthFull(month)}&rsquo;s cost.</>}
         </p>
       </div>
 
@@ -1805,7 +1665,7 @@ function BillingTimingCell({
             <>
               <span className="inline-flex items-center gap-0.5 rounded-full bg-mint px-1.5 py-0.5 text-[9px] font-bold uppercase tracking-wider text-deep-green">
                 <Pin size={9} aria-hidden />
-                override
+                set
               </span>
               <button
                 type="button"
@@ -1829,8 +1689,8 @@ function BillingTimingCell({
           their own cost unless explicitly $0-overridden. */}
       {showCustom && isCombinedPrimary && !anySaving && (
         <span className="text-[9px] font-semibold text-[#9a6a00]">
-          secondary legs still bill their own cost — set a $0 override on a leg
-          if this invoice covers it
+          secondary legs still bill their own cost — enter $0 on a leg if this
+          invoice covers it
         </span>
       )}
       {/* per_match caveat, surfaced (not silent): quarterly/annual only
@@ -1890,10 +1750,18 @@ function PriceCell({
   stored,
   state,
   onSave,
+  placeholder = "—",
+  emptyOk = false,
 }: {
   stored: number | null;
   state: CellState | null;
   onSave: (raw: string) => void;
+  // What an empty box shows when empty is a legitimate state — for the month field that is the
+  // figure it WOULD compute, so the box says what leaving it alone gets you.
+  placeholder?: string;
+  // Suppresses the coral "you have not filled this in" ring. Empty is not a gap on the month
+  // field; it is the normal state that means "use the computed figure".
+  emptyOk?: boolean;
 }) {
   const [local, setLocal] = useState<string>(stored == null ? "" : String(stored));
 
@@ -1906,7 +1774,7 @@ function PriceCell({
     }
   }, [stored, state]);
 
-  const isEmpty = stored == null && !state;
+  const isEmpty = stored == null && !state && !emptyOk;
   const showFlash = state?.flash;
   const showError = Boolean(state?.error);
   const showSaving = Boolean(state?.saving);
@@ -1928,7 +1796,7 @@ function PriceCell({
         min="0"
         step="0.01"
         value={local}
-        placeholder="—"
+        placeholder={placeholder}
         onChange={(e) => setLocal(e.target.value)}
         onBlur={() => {
           const cur = stored == null ? "" : String(stored);
@@ -1943,7 +1811,7 @@ function PriceCell({
           }
         }}
         disabled={showSaving}
-        className="w-full bg-transparent py-1.5 pr-6 text-right font-mono text-xs tabular-nums text-deep-green focus:outline-none disabled:opacity-60"
+        className="w-full bg-transparent py-1.5 pr-6 text-right font-mono text-xs tabular-nums text-deep-green placeholder:text-[10px] placeholder:font-bold placeholder:text-deep-green/35 focus:outline-none disabled:opacity-60"
       />
       {showSaving && (
         <span className="absolute right-2 top-1/2 inline-block h-2 w-2 -translate-y-1/2 animate-pulse rounded-full bg-deep-green/50" />
