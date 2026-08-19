@@ -201,6 +201,9 @@ if (!tableReady) {
   skip("persist → reload → clear-date round trip (needs migration 0128 applied)");
   skip("push_at stores SQL NULL rather than an empty string (needs migration 0128 applied)");
 } else {
+  // Clear anything a previous interrupted run left behind, so this starts from a known state.
+  for (const r of (await svc.from("match_promotion_plan").select("match_api_id").eq("promo_code", "E2E-PROBE")).data ?? [])
+    await svc.from("match_promotion_plan").delete().eq("match_api_id", r.match_api_id);
   const probeMatch = await page.locator('[data-testid="match-tile"]').first().evaluate((e) => e.textContent);
   const first = page.locator('[data-testid="match-tile"]').first();
   await first.click();
@@ -209,13 +212,18 @@ if (!tableReady) {
   await page.locator('[data-testid="ch-match_chat"]').check();
   await page.locator('[data-testid="promo-code"]').fill("E2E-PROBE");
   // A push time inside this week so the tile renders as planned.
-  const iso = await page.locator('[data-testid="push-at"]').evaluate((el) => {
-    const d = new Date(); d.setDate(d.getDate() + 1); d.setHours(15, 0, 0, 0);
-    const p = (n) => String(n).padStart(2, "0");
-    el.value = `${d.getFullYear()}-${p(d.getMonth() + 1)}-${p(d.getDate())}T15:00`;
-    el.dispatchEvent(new Event("input", { bubbles: true }));
-    return el.value;
-  });
+  //
+  // fill(), NOT `el.value = ...`. React overrides the value setter and tracks it, so assigning
+  // .value and dispatching an input event updates the DOM and leaves React state untouched — the
+  // save then posts an empty date and the tile comes back as "needs a decision". That is exactly
+  // how this assertion failed the first time it ran, and the product was right both times.
+  const p2 = (n) => String(n).padStart(2, "0");
+  const d0 = new Date(); d0.setDate(d0.getDate() + 1);
+  const iso = `${d0.getFullYear()}-${p2(d0.getMonth() + 1)}-${p2(d0.getDate())}T15:00`;
+  await page.locator('[data-testid="push-at"]').fill(iso);
+  // The field really holds it — a fill that silently no-ops would fake this whole section.
+  eq("  the push-date field holds the value that was typed",
+     await page.locator('[data-testid="push-at"]').inputValue(), iso);
   await page.locator('[data-testid="save"]').click();
   await page.waitForTimeout(3000);
 
@@ -246,11 +254,18 @@ if (!tableReady) {
     .eq("table_name", "match_promotion_plan");
   eq("the write was recorded in fin_change_log", (log ?? []).length > 0, true);
 
-  // CLEAN UP every row this suite created.
-  for (const r of probe ?? []) await svc.from("match_promotion_plan").delete().eq("match_api_id", r.match_api_id);
+  // CLEAN UP every row this suite created — INCLUDING its audit entries. Retaining history is the
+  // right default for a real change, but fin_change_log is a table Ryan reads, and a suite that
+  // runs on every push would otherwise silt it up with probes.
+  const probeIds = (probe ?? []).map((r) => r.match_api_id);
+  for (const id of probeIds) await svc.from("match_promotion_plan").delete().eq("match_api_id", id);
+  for (const id of probeIds) await svc.from("fin_change_log").delete().eq("table_name", "match_promotion_plan").eq("row_id", id);
   const left = (await svc.from("match_promotion_plan").select("match_api_id").eq("promo_code", "E2E-PROBE")).data ?? [];
   eq("no probe rows remain", left.length, 0);
+  const leftLog = (await svc.from("fin_change_log").select("id").eq("table_name", "match_promotion_plan").in("row_id", probeIds)).data ?? [];
+  eq("no probe audit entries remain either", leftLog.length, 0);
   void probeMatch; void iso;
+
 }
 
 await closeContext(ctx);
