@@ -7,6 +7,7 @@ import {
   promoState, promoBucket, discountLabel, capLabel, leftLabel, leftTone, usageLine, UNCAPPED,
   nameList, createSummary, type PromoRow,
 } from "../src/lib/promoModel";
+import { groupUses, summarise, type UseRow } from "../src/lib/promoUsesModel";
 import {
   chicagoWallToUtcIso, utcIsoToChicagoWall, nextQuarterHourUtcIso, endOfYearUtcIso, chicagoYearOf,
   toChicagoInputs, fromChicagoInputs, fmtChicagoFull,
@@ -104,6 +105,51 @@ console.log("SCOPE SUMMARY (Phase 20 D):");
     /gives 25% off on 3 selected matches to/.test(createSummary({ ...base, who: "ALL_USERS", which: "SPECIFIC_MATCHES", matchCount: 3 })), true);
   eq("summary ALL_MATCHES keeps 'off on any match'",
     /gives 25% off on any match to anyone/.test(createSummary({ ...base, who: "ALL_USERS", which: "ALL_MATCHES" })), true); }
+
+// ── THE PER-USER CAP BOUNDARY, and who is over it ─────────────────────────────────────────────
+//
+// WHY THIS LIVES HERE NOW. This was pinned only by verify-promos, through the "By person" DOM —
+// data-uses and data-over on each group. That view has been deleted, and deleting its assertions
+// with it would have taken the cap boundary's ONLY witness along with a view nobody asked to keep.
+// The boundary itself is not removed behaviour: the over-cap banner still fires from summarise(),
+// and this is the level the rule actually lives at.
+console.log("\nUSES — the per-user cap boundary:");
+{
+  const use = (o: Partial<UseRow>): UseRow => ({
+    id: 1, playerId: 100, deleted: false, name: "A", email: null, phone: null,
+    at: "2026-08-01T12:00:00.000Z", matchId: null, match: null, kickoff: null, city: null,
+    amountCents: 1000, ...o,
+  });
+  const many = (playerId: number, n: number, o: Partial<UseRow> = {}) =>
+    Array.from({ length: n }, (_, i) => use({ id: playerId * 100 + i, playerId, ...o }));
+
+  // STRICTLY GREATER. A cap of 2 permits two uses; three is the breach. This boundary decides
+  // whether the banner accuses somebody, so both sides of it are asserted, not just the failing one.
+  eq("cap 2 · exactly 2 uses is NOT over", groupUses(many(1, 2), 2)[0].overCap, false);
+  eq("cap 2 · 3 uses IS over", groupUses(many(1, 3), 2)[0].overCap, true);
+  eq("cap 1 · exactly 1 use is NOT over", groupUses(many(1, 1), 1)[0].overCap, false);
+  eq("cap 1 · 2 uses IS over", groupUses(many(1, 2), 1)[0].overCap, true);
+
+  // The marker lands on exactly the groups above the cap and no others — the mutation the DOM
+  // test used to run, done directly: raise the cap above the heaviest user and the breach clears.
+  const mixed = [...many(1, 3), ...many(2, 2), ...many(3, 1)];
+  eq("cap 2 · over-cap is set on exactly the groups above it",
+     groupUses(mixed, 2).map((g) => [g.playerId, g.overCap]), [[1, true], [2, false], [3, false]]);
+  eq("MUTATION — cap raised to 5, nobody is over it",
+     groupUses(mixed, 5).some((g) => g.overCap), false);
+  eq("MUTATION — …and summarise agrees there is no breach", summarise(mixed, 5).breach, false);
+  eq("cap 2 · summarise names exactly the breaching account",
+     summarise(mixed, 2).breachers.map((g) => g.playerId), [1]);
+
+  // A DELETED ACCOUNT IS STILL ONE PERSON. Its uses stay in one group rather than scattering, which
+  // is what would hide the breach being hunted. This still feeds the banner's wording.
+  const dead = many(9, 3, { deleted: true, name: "Dana Gone" });
+  eq("a deleted account's uses stay ONE group", groupUses(dead, 2).length, 1);
+  eq("…carrying its uses, its deleted flag and its last known name",
+     (({ uses, deleted, name, overCap }) => ({ uses, deleted, name, overCap }))(groupUses(dead, 2)[0]),
+     { uses: 3, deleted: true, name: "Dana Gone", overCap: true });
+  eq("…and summarise reports it as a breacher", summarise(dead, 2).breachers.map((g) => g.deleted), [true]);
+}
 
 console.log(`\n${pass} passed, ${fail} failed`);
 process.exit(fail === 0 ? 0 : 1);

@@ -9,7 +9,7 @@
 // (promoTz) — the OPPOSITE model from the match screens; the two must never share helpers.
 
 import { useCallback, useEffect, useMemo, useRef, useState } from "react";
-import { groupUses, byTime, money, type UseRow } from "@/lib/promoUsesModel";
+import { byTime, money, type UseRow } from "@/lib/promoUsesModel";
 import { supabase } from "@/lib/supabase";
 import { useAuth, canManagePromos, canReadPromos } from "@/lib/useAuth";
 import {
@@ -547,7 +547,6 @@ type UsesPayload = {
 
 function UsesPanel({ promoId }: { promoId: number }) {
   const [d, setD] = useState<{ data?: UsesPayload; loading: boolean; error?: string }>({ loading: true });
-  const [mode, setMode] = useState<"person" | "time">("person");
   useEffect(() => {
     let live = true;
     (async () => {
@@ -565,7 +564,6 @@ function UsesPanel({ promoId }: { promoId: number }) {
   if (d.error) return <div className="sect"><h3 className="usesh">USES</h3><p className="empty err" data-testid="uses-error">{d.error}</p></div>;
   const data = d.data!;
   const s = data.summary;
-  const groups = groupUses(data.uses, s.capPerUser);
   const timeRows = byTime(data.uses);
 
   return (
@@ -593,62 +591,22 @@ function UsesPanel({ promoId }: { promoId: number }) {
         </div>
       )}
 
-      <div className="usehead">
-        <h3 className="usesh" style={{ margin: 0 }}>USES</h3>
-        <div className="useg" role="group" aria-label="Group uses">
-          <button type="button" data-testid="uses-by-person" aria-pressed={mode === "person"} onClick={() => setMode("person")}>By person</button>
-          <button type="button" data-testid="uses-by-time" aria-pressed={mode === "time"} onClick={() => setMode("time")}>By time</button>
-        </div>
-      </div>
+      <h3 className="usesh">USES</h3>
 
       {data.uses.length === 0 && <p className="empty" data-testid="uses-empty">Never redeemed.</p>}
 
-      {mode === "person" ? (
-        <div data-testid="uses-by-person-list">
-          {groups.map((g) => (
-            <div key={g.key} className={"ugrp" + (g.overCap ? " hot" : "") + (g.deleted ? " gone" : "")}
-              data-testid="uses-group" data-uses={g.uses} data-dead={g.deleted ? "true" : "false"} data-over={g.overCap ? "true" : "false"}>
-              <div className="ugtop">
-                <div className="uwho">
-                  <div className="unm" data-testid="uses-name">
-                    {g.deleted
-                      ? <>{g.name ?? `Player ${g.playerId}`} <span className="udel" data-testid="uses-deleted-tag">ACCOUNT DELETED</span></>
-                      : (g.name ?? `Player ${g.playerId}`)}
-                  </div>
-                  {/* Name, email and phone are shown because identifying a repeat offender is the
-                      entire job — INCLUDING for a deleted account, which is the case being hunted.
-                      They are NEVER written to change_log — id only. */}
-                  <div className="uct" data-testid="uses-contact">
-                    {g.deleted && <span className="ulast">last known · </span>}
-                    {[g.email, g.phone].filter(Boolean).join(" · ") || "no contact on file"}
-                    {g.deleted && <> · {g.deletedRef}</>}
-                  </div>
-                </div>
-                <div className="ucnt"><div className="un">{g.uses}</div>
-                  <div className="ul2">USE{g.uses === 1 ? "" : "S"}</div>
-                  <div className="uworth">{money(g.worthCents)}</div></div>
-              </div>
-              {g.deleted && <div className="udead" data-testid="uses-deleted-note">The account is gone; the redemptions are not. The name and contact details above are the LAST KNOWN values, held on the redemption rows themselves — which is how a deleted account is still identifiable here.</div>}
-              <ul className="ulist">
-                {g.rows.map((r) => <UseLine key={r.id} r={r} />)}
-              </ul>
-            </div>
+      <div className="ugrp" data-testid="uses-by-time-list">
+        <ul className="ulist">
+          {timeRows.map((r) => (
+            <li className="uline" key={r.id} data-testid="uses-time-row" data-dead={r.deleted ? "true" : "false"}>
+              <span className="uwhen">{fmtChicagoFull(r.at)}</span>
+              <span className="umatch"><span className="umn">{r.deleted ? "Account deleted" : (r.name ?? `Player ${r.playerId}`)}</span>
+                <span className="umk"> · {r.match ?? "—"}{r.kickoff ? ` · ${fmtChicagoFull(r.kickoff)}` : ""}</span></span>
+              {r.city && <span className="ucity">{r.city}</span>}
+            </li>
           ))}
-        </div>
-      ) : (
-        <div className="ugrp" data-testid="uses-by-time-list">
-          <ul className="ulist">
-            {timeRows.map((r) => (
-              <li className="uline" key={r.id} data-testid="uses-time-row" data-dead={r.deleted ? "true" : "false"}>
-                <span className="uwhen">{fmtChicagoFull(r.at)}</span>
-                <span className="umatch"><span className="umn">{r.deleted ? "Account deleted" : (r.name ?? `Player ${r.playerId}`)}</span>
-                  <span className="umk"> · {r.match ?? "—"}{r.kickoff ? ` · ${fmtChicagoFull(r.kickoff)}` : ""}</span></span>
-                {r.city && <span className="ucity">{r.city}</span>}
-              </li>
-            ))}
-          </ul>
-        </div>
-      )}
+        </ul>
+      </div>
 
       <p className="ufoot" data-testid="uses-foot">
         {s.total} use{s.total === 1 ? "" : "s"} by {s.distinctUsers} account{s.distinctUsers === 1 ? "" : "s"}. Times are {PROMO_TZ_LABEL}.
@@ -1227,30 +1185,7 @@ const CSS = `
   border:1px solid #f0c4bf;border-radius:12px;padding:12px 14px;color:#6d2415;font-size:13.5px;line-height:1.5}
 .promo .ubreach b{color:#a8321f}
 .promo .uic{font-size:15px;line-height:1.2}
-.promo .usehead{display:flex;align-items:center;justify-content:space-between;gap:12px;flex-wrap:wrap;margin:22px 0 12px}
-.promo .useg{display:inline-flex;border:1px solid var(--line2);border-radius:10px;overflow:hidden}
-.promo .useg button{min-height:44px;padding:0 14px;border:0;background:#fff;font:inherit;font-size:13px;
-  font-weight:600;color:var(--ink2);cursor:pointer}
-.promo .useg button[aria-pressed="true"]{background:#0f5132;color:#fff}
 .promo .ugrp{border:1px solid var(--line);border-radius:12px;margin-bottom:10px;overflow:hidden}
-.promo .ugrp.hot{border-color:#f0c4bf}
-.promo .ugrp.gone{border-style:dashed}
-.promo .ugtop{display:flex;align-items:flex-start;gap:12px;padding:12px 14px;background:#fbfdfb}
-.promo .ugrp.hot .ugtop{background:#fdeceb}
-.promo .ugrp.gone .ugtop{background:#f1f1f1}
-.promo .uwho{min-width:0;flex:1}
-.promo .unm{font-weight:700;font-size:15px}
-.promo .ugrp.gone .unm{color:#5c5c5c}
-.promo .uct{color:var(--ink2);font-size:12.5px;margin-top:2px;overflow-wrap:anywhere;font-variant-numeric:tabular-nums}
-.promo .ucnt{text-align:right;white-space:nowrap}
-.promo .ucnt .un{font-size:19px;font-weight:800;line-height:1;font-variant-numeric:tabular-nums}
-.promo .ucnt .ul2{font-size:10.5px;letter-spacing:.06em;color:var(--ink3);font-weight:700}
-.promo .ugrp.hot .ucnt .un{color:#a8321f}
-.promo .uworth{font-size:12px;color:var(--ink2);margin-top:3px}
-.promo .udead{font-size:12.5px;color:#5c5c5c;padding:0 14px 12px;line-height:1.5}
-.promo .udel{font-size:9.5px;font-weight:800;letter-spacing:.07em;color:#5c5c5c;background:#e4e4e4;
-  border-radius:5px;padding:2px 6px;margin-left:7px;vertical-align:middle;white-space:nowrap}
-.promo .ulast{color:#5c5c5c;font-weight:700}
 /* the advisory note — factual, not alarming: it sits in the same muted tone as other help text */
 .promo .capnote{display:inline-block;font-size:9.5px;font-weight:700;letter-spacing:.04em;
   /* --ink2, not --ink3: the muted tone failed the 4.5:1 sweep at 2.93. A note nobody can read is

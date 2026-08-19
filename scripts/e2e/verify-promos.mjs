@@ -425,6 +425,15 @@ async function main() {
   await openDetail(101);
   await page.waitForSelector('[data-testid="uses-panel"]', { timeout: 15000 });
 
+  // A screenshot of the drawer, at the width Ryan reviews at.
+  if (process.env.SHOT) {
+    await page.setViewportSize({ width: 1620, height: 1200 });
+    await page.waitForTimeout(400);
+    const box = await page.$eval('[data-testid="uses-panel"]', (e) => { const r = e.getBoundingClientRect(); return { x: 0, y: Math.max(0, r.top - 260), width: 1620, height: Math.min(1180, r.height + 300) }; });
+    await page.screenshot({ path: "/tmp/promo-uses-1620.png", clip: box });
+    console.log("  saved /tmp/promo-uses-1620.png");
+  }
+
   // THE COMPARISON IS MADE FOR THE READER — 6 redemptions, 3 accounts, cap 2.
   eq("uses: the three numbers are redeemed / distinct users / cap",
     await page.evaluate(() => ({
@@ -441,61 +450,31 @@ async function main() {
       ? ok("uses: the breach banner names the offender, the count and the money")
       : bad("uses breach banner", String(b)); }
 
-  // ...and it fires only when a PERSON exceeds the cap. Mutate the comparison: with the cap
-  // raised above the heaviest user, the banner must disappear.
-  { const stillBreach = await page.evaluate(() => {
-      // recompute the way the component does, with a cap that nobody exceeds
-      const groups = [...document.querySelectorAll('[data-testid="uses-group"]')]
-        .map((g) => Number(g.getAttribute("data-uses")));
-      return groups.some((n) => n > 5); });
-    (stillBreach === false)
-      ? ok("uses: MUTATION — with the cap above the heaviest user (5), nothing is over it")
-      : bad("uses mutation", "a group still exceeded a cap of 5"); }
-  { const marked = await page.$$eval('[data-testid="uses-group"]', (els) =>
-      els.map((e) => ({ uses: Number(e.getAttribute("data-uses")), over: e.getAttribute("data-over") })));
-    const wrong = marked.filter((m) => (m.uses > 2) !== (m.over === "true"));
-    (wrong.length === 0)
-      ? ok("uses: the over-cap marker is on exactly the groups above the cap, and no others")
-      : bad("uses over marker", JSON.stringify(marked)); }
+  // THE GROUPED "BY PERSON" VIEW IS GONE, and with it five assertions that read its DOM: the cap
+  // mutation, the per-group over-cap marker, the deleted-account block, its last-known contact
+  // details, and newest-first within a person group. The first two were the ONLY witness to the
+  // cap boundary, so they moved to scripts/promo-model-test.ts against groupUses/summarise —
+  // where the rule lives and where no layout change can take it out again. The other three
+  // described a view that was deliberately deleted.
 
-  // A DELETED ACCOUNT IS A FINDING, NOT AN ERROR.
-  { const dead = await page.evaluate(() => {
-      const g = document.querySelector('[data-testid="uses-group"][data-dead="true"]');
-      if (!g) return null;
-      return { name: g.querySelector('[data-testid="uses-name"]')?.textContent,
-        uses: Number(g.getAttribute("data-uses")),
-        note: !!g.querySelector('[data-testid="uses-deleted-note"]'),
-        rows: g.querySelectorAll('[data-testid="uses-row"]').length }; });
-    (dead && /Dana Gone/.test(dead.name ?? "") && /ACCOUNT DELETED/.test(dead.name ?? "")
-      && dead.uses === 2 && dead.note && dead.rows === 2)
-      ? ok("uses: a deleted account shows WHO it was plus an ACCOUNT DELETED mark, and keeps its 2 redemptions")
-      : bad("uses deleted group", JSON.stringify(dead)); }
-  // ...and its LAST KNOWN contact details, which is the whole point of the panel
-  { const c = await page.evaluate(() => {
-      const g = document.querySelector('[data-testid="uses-group"][data-dead="true"]');
-      return g?.querySelector('[data-testid="uses-contact"]')?.textContent?.replace(/\s+/g, " ").trim() ?? null; });
-    (c && /last known/i.test(c) && c.includes("dana@x.com") && c.includes("+15125559999"))
-      ? ok("uses: a deleted account shows its LAST KNOWN email and phone, labelled as such")
-      : bad("uses deleted contact", String(c)); }
-
-  // NEWEST FIRST in the grouped view
-  { const order = await page.$$eval('[data-testid="uses-group"][data-uses="3"] [data-testid="uses-row"] .uwhen',
-      (els) => els.map((e) => e.textContent.trim()));
-    const sorted = [...order].sort().reverse();
-    (order.length === 3 && JSON.stringify(order) === JSON.stringify(sorted))
-      ? ok("uses: newest first within a person group") : bad("uses order", JSON.stringify(order)); }
-
-  // BY TIME keeps the deleted rows
-  await page.click('[data-testid="uses-by-time"]');
+  // BY TIME IS THE ONLY VIEW — no toggle, so nothing to click; it must already be on screen.
   await page.waitForSelector('[data-testid="uses-by-time-list"]', { timeout: 6000 });
+  { const toggles = await page.$$eval('[data-testid="uses-by-person"], [data-testid="uses-by-time"]', (e) => e.length);
+    eq("uses: the By person / By time toggle is gone", toggles, 0); }
+  { const groups = await page.$$eval('[data-testid="uses-group"]', (e) => e.length);
+    eq("uses: no By person grouping is rendered", groups, 0); }
+  // CONTROLS for those two zeros. A data-testid nobody renders returns 0 whether the view was
+  // removed or the drawer never loaded, so the same query shape is proven to find something that
+  // IS on screen — and the panel is proven to be the uses panel at all.
+  { const rows = await page.$$eval('[data-testid="uses-time-row"]', (e) => e.length);
+    eq("  control — the same $$eval finds the by-time rows that ARE rendered", rows > 0, true); }
+  { const panel = await page.$$eval('[data-testid="uses-panel"]', (e) => e.length);
+    eq("  control — the uses panel itself is on screen", panel, 1); }
   { const t = await page.evaluate(() => ({
       rows: document.querySelectorAll('[data-testid="uses-time-row"]').length,
       dead: document.querySelectorAll('[data-testid="uses-time-row"][data-dead="true"]').length,
     }));
     eq("uses: the by-time view shows every redemption and KEEPS the deleted ones", t, { rows: 6, dead: 2 }); }
-  await page.click('[data-testid="uses-by-person"]');
-  await page.waitForSelector('[data-testid="uses-by-person-list"]', { timeout: 6000 });
-
   // the annotation on the two cap sites inside the drawer
   { const inDrawer = await page.evaluate(() => ({
       uses: document.querySelector('[data-testid="cap-note-uses"]')?.textContent?.trim() ?? null,
