@@ -19,9 +19,9 @@ import { fetchVeoWeek, weekMonday, type VeoMatch } from "./veoSchedule";
 
 /** The six channels, fixed, and always rendered in this order. */
 export const CHANNELS = [
-  { key: "wa", short: "WA", label: "WhatsApp push" },
+  { key: "wa", short: "WA", label: "WhatsApp" },
   { key: "match_chat", short: "MC", label: "Match chat" },
-  { key: "fb", short: "FB", label: "Facebook push" },
+  { key: "fb", short: "FB", label: "Facebook" },
   { key: "dm", short: "DM", label: "DM" },
   { key: "klaviyo_email", short: "EM", label: "Klaviyo email" },
   { key: "klaviyo_sms", short: "SMS", label: "Klaviyo SMS" },

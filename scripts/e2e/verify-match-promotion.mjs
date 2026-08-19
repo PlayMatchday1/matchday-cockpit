@@ -132,17 +132,6 @@ if (chips === 0) {
 } else {
   eq("the city rows sum to the headline total", rowCounts.reduce((a, b) => a + b, 0), headline);
   eq("…and the headline equals the chips actually drawn", headline, chips);
-  const marked = await page.locator('[data-testid="not-promoted"]').count();
-  eq("'dying and unpromoted' equals the NOT PROMOTED markers on screen",
-     Number((await page.locator('[data-testid="stat-unprom"]').textContent()) ?? "-1"), marked);
-  // A 1-of-4 slot must never carry the marker — one bad week is not a pattern.
-  const badMark = await page.locator('[data-testid="cancel-chip"]').evaluateAll((els) =>
-    els.filter((e) => /1\/4/.test(e.textContent ?? "") && e.querySelector('[data-testid="not-promoted"]')).length);
-  eq("no 1-of-4 slot carries NOT PROMOTED", badMark, 0);
-  // CONTROL for that zero: 1-of-4 chips exist to be found.
-  const oneOfFour = await page.locator('[data-testid="cancel-chip"]').evaluateAll((els) =>
-    els.filter((e) => /1\/4/.test(e.textContent ?? "")).length);
-  eq("  CONTROL — 1-of-4 chips are present to be caught", oneOfFour > 0, true);
   // Worst day card must name the weekday column carrying the most chips.
   const perDay = await page.locator('[data-testid="cancel-row"]').evaluateAll((els) => {
     const c = [0, 0, 0, 0, 0, 0, 0];
@@ -240,6 +229,67 @@ console.log("\n── the plan panel opens inline, beside the tile that opened i
   eq("…and the panel is gone", await page.locator('[data-testid="panel"]').count(), 0);
 }
 
+// ── 5c. THE STRIPPING STAYS STRIPPED ──────────────────────────────────────────────────────────
+// Explanatory prose grows back one helpful sentence at a time. These assertions are the ratchet:
+// they fail on the FIRST paragraph re-added, not once the panel is a wall of text again.
+console.log("\n── the panel and cancel grid stay stripped ──");
+{
+  const tile = page.locator('[data-testid="city-block"]').first().locator('[data-testid="match-tile"]').first();
+  await tile.click();
+  await page.waitForSelector('[data-testid="panel"]', { timeout: 15000 });
+
+  const h = await page.locator('[data-testid="panel"]').evaluate((e) => Math.round(e.getBoundingClientRect().height));
+  eq("the panel is under 250px tall", h < 250, true);
+  console.log(`     measured height: ${h}px`);
+
+  // NO TEXT NODE OF FIVE OR MORE WORDS anywhere inside the panel — excluding its title and the
+  // user's own comment, which are content rather than explanation.
+  const longNodes = await page.locator('[data-testid="panel"]').evaluate((panel) => {
+    const out = [];
+    const walk = document.createTreeWalker(panel, NodeFilter.SHOW_TEXT);
+    for (let n = walk.nextNode(); n; n = walk.nextNode()) {
+      const el = n.parentElement;
+      if (!el) continue;
+      if (el.closest("h3")) continue;                       // the title
+      if (el.tagName === "TEXTAREA" || el.closest("textarea")) continue; // the operator's comment
+      const words = (n.textContent ?? "").trim().split(/\s+/).filter(Boolean);
+      if (words.length >= 5) out.push(words.join(" "));
+    }
+    return out;
+  });
+  eq("no text node inside the panel runs to five or more words", longNodes, []);
+  // CONTROL for that empty array: the walker DOES see the panel's short labels, so an empty result
+  // means "nothing long", not "nothing scanned".
+  const seen = await page.locator('[data-testid="panel"]').evaluate((panel) => {
+    const walk = document.createTreeWalker(panel, NodeFilter.SHOW_TEXT);
+    let n = 0; for (let x = walk.nextNode(); x; x = walk.nextNode()) if ((x.textContent ?? "").trim()) n++;
+    return n;
+  });
+  eq("  CONTROL — the walker found text nodes to scan", seen > 5, true);
+
+  eq("the lead time survives as a fragment beside the When field",
+     await page.locator('[data-testid="lead"]').count(), 1);
+  const leadWords = ((await page.locator('[data-testid="lead"]').textContent()) ?? "").trim().split(/\s+/).length;
+  eq("…and it is a fragment, not a sentence", leadWords <= 4, true);
+
+  await page.locator('[data-testid="panel"]').getByText("Cancel", { exact: true }).click();
+  await page.waitForTimeout(300);
+}
+{
+  eq("there are three stat cards, not four", await page.locator('[data-testid^="stat-"]').count(), 3);
+  eq("the 'dying and unpromoted' card is gone", await page.locator('[data-testid="stat-unprom"]').count(), 0);
+  const grid = page.locator('[data-testid="cancel-patterns"]');
+  const text = ((await grid.textContent()) ?? "").toLowerCase();
+  eq("'not promoted' appears nowhere in the cancel grid", text.includes("not promoted"), false);
+  // CONTROL: the same scan DOES find text that is definitely there.
+  eq("  CONTROL — the scan reads the grid (it finds 'cancel patterns')", text.includes("cancel patterns"), true);
+  const longChips = await page.locator('[data-testid="cancel-chip"]').evaluateAll((els) =>
+    els.map((e) => (e.textContent ?? "").trim().split(/\s+/).filter(Boolean))
+       .filter((w) => w.length > 5).map((w) => w.join(" ")));
+  eq("no chip's text runs longer than five words", longChips, []);
+  eq("  CONTROL — there are chips to measure", await page.locator('[data-testid="cancel-chip"]').count() > 0, true);
+}
+
 // ── 6. SCREENSHOTS ────────────────────────────────────────────────────────────────────────────
 console.log("\n── screenshots ──");
 for (const width of [1620, 1280]) {
@@ -261,7 +311,7 @@ if (!tableReady) {
   const first = page.locator('[data-testid="match-tile"]').first();
   await first.click();
   await page.waitForSelector('[data-testid="panel"]');
-  await page.locator('[data-testid="ch-wa"]').check();
+  await page.locator('[data-testid="ch-wa"]').click();
   await page.locator('[data-testid="save"]').click();
   await page.waitForTimeout(2500);
   const msg = (await page.locator('[data-testid="panel"]').textContent()) ?? "";
@@ -277,8 +327,8 @@ if (!tableReady) {
   const first = page.locator('[data-testid="match-tile"]').first();
   await first.click();
   await page.waitForSelector('[data-testid="panel"]');
-  await page.locator('[data-testid="ch-wa"]').check();
-  await page.locator('[data-testid="ch-match_chat"]').check();
+  await page.locator('[data-testid="ch-wa"]').click();
+  await page.locator('[data-testid="ch-match_chat"]').click();
   await page.locator('[data-testid="promo-code"]').fill("E2E-PROBE");
   // A push time inside this week so the tile renders as planned.
   //

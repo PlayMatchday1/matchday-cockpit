@@ -20,20 +20,12 @@ import { supabase } from "@/lib/supabase";
 import { useMatchData } from "@/lib/useMatchData";
 import { useFinanceData } from "@/lib/useFinanceData";
 import { getCancelPatterns } from "@/lib/cancelPatterns";
-import { normalizeMatchName } from "@/lib/venueNormalization";
+import { mostRecentCompletedWeekMonday } from "@/lib/weekWindow";
 import {
   CHANNELS, CHANNEL_KEYS, type ChannelKey, type PromoMatch, type PromoWeek,
 } from "@/lib/matchPromotion";
 
 const DOW = ["Mon", "Tue", "Wed", "Thu", "Fri", "Sat", "Sun"];
-
-/* ── slot identity ──────────────────────────────────────────────────────────────────────────────
-   THE JOIN BETWEEN THE TWO GRIDS. A "slot" is (canonical field, weekday, minutes-past-midnight).
-   Both sides are canonicalised by normalizeMatchName with the SAME alias map — the match side uses
-   fieldRaw for exactly this reason, because veoSchedule's canonicalVenueName is a different
-   pipeline and a near-miss here would silently mark everything unpromoted. */
-const slotKey = (canonical: string, dowIdx: number, minutes: number) =>
-  `${canonical}|${dowIdx}|${minutes}`;
 
 function fmtPushLocal(iso: string): { day: string; time: string } {
   const d = new Date(iso);
@@ -194,19 +186,6 @@ export default function MatchPromotionView() {
   const overdue = jobs.filter((j) => j.at < now).length;
   const noPlan = week?.matches.filter((m) => m.state === "none").length ?? 0;
 
-  /* ── promoted slots this week, for NOT PROMOTED ───────────────────────────────────────────── */
-  const { data: finData } = useFinanceData();
-  const aliases = useMemo(() => finData?.venueAliases ?? new Map<string, string>(), [finData]);
-  const promotedSlots = useMemo(() => {
-    const s = new Set<string>();
-    for (const m of week?.matches ?? []) {
-      if (!m.plan?.pushAt) continue;
-      const canon = normalizeMatchName(m.fieldRaw, aliases).canonical;
-      if (canon) s.add(slotKey(canon, m.dayIdx, m.minutes));
-    }
-    return s;
-  }, [week, aliases]);
-
   const byCity = useMemo(() => {
     const map = new Map<string, PromoMatch[]>();
     for (const m of week?.matches ?? []) {
@@ -231,8 +210,7 @@ export default function MatchPromotionView() {
           <div>
             <h1 className="m-0 text-[28px] font-black uppercase tracking-[-0.03em]">Match Promotion</h1>
             <p className="mt-1.5 max-w-[620px] text-[13px] text-deep-green/65">
-              Pick the matches marketing will promote, on which channels, and when the push goes out.
-              The push has its own time — a Sunday match is promoted on Friday.
+Which matches get promoted, on which channels, and when the push goes out.
             </p>
           </div>
         </div>
@@ -297,75 +275,72 @@ export default function MatchPromotionView() {
           : <Plan week={week} byCity={byCity} openId={openId} onOpen={openMatch}
                    openCity={open?.city ?? null}
                    panel={tab === "plan" && open && draft ? (
-          <div className="mx-5 mb-4 rounded-xl border border-cream-line bg-[#fbfdfc] px-4 pb-4 pt-3.5" data-testid="panel">
-            <div className="mb-3 flex items-baseline gap-2.5">
-              <h3 className="m-0 text-[15px] font-extrabold">{open.venue} · {DOW[open.dayIdx]} {open.time}</h3>
-              <span className="text-[12px] font-bold text-deep-green/45">{open.city}</span>
-            </div>
-            <div className="grid grid-cols-1 overflow-hidden rounded-[10px] border border-cream-line bg-white md:grid-cols-[1.15fr_1fr_1fr]">
-              <div className="border-b border-cream-line p-[13px_15px_15px] md:border-b-0 md:border-r">
-                <div className="mb-3 text-[9.5px] font-extrabold uppercase tracking-[0.09em] text-deep-green/45">Channels</div>
-                <div className="flex flex-col gap-[7px]">
-                  {CHANNELS.map((c) => (
-                    <label key={c.key} className="flex cursor-pointer items-center gap-2.5 text-[13px] font-semibold text-deep-green/70">
-                      <input type="checkbox" data-testid={`ch-${c.key}`} checked={draft.channels[c.key]}
-                        onChange={(e) => setDraft({ ...draft, channels: { ...draft.channels, [c.key]: e.target.checked } })}
-                        className="h-4 w-4 accent-emerald-500" />
-                      {c.label}
-                    </label>
-                  ))}
-                </div>
+            <div className="mb-4 rounded-xl border border-cream-line bg-[#fbfdfc] px-[13px] pb-[9px] pt-[9px]" data-testid="panel">
+              <div className="mb-1.5 flex items-baseline gap-2">
+                <h3 className="m-0 text-[13.5px] font-extrabold">{open.venue} · {DOW[open.dayIdx]} {open.time}</h3>
+                <span className="text-[11.5px] font-bold text-deep-green/45">{open.city}</span>
               </div>
+              <div className="grid grid-cols-1 overflow-hidden rounded-[10px] border border-cream-line bg-white md:grid-cols-[1.15fr_1fr_1fr]">
+                <div className="border-b border-cream-line px-[13px] pb-[9px] pt-[9px] md:border-b-0 md:border-r">
+                  <div className="mb-1 text-[9px] font-extrabold uppercase tracking-[0.09em] text-deep-green/45">Channels</div>
+                  <div className="flex flex-col gap-[3px]">
+                    {CHANNELS.map((c) => (
+                      // The input stays a real checkbox — visually hidden, not replaced — so the
+                      // control is still keyboard-reachable and still reports checked state.
+                      <label key={c.key} data-testid={`ch-${c.key}`}
+                        className="flex cursor-pointer items-center gap-2 text-[12.5px] font-semibold leading-none text-deep-green/70">
+                        <input type="checkbox" className="peer sr-only" checked={draft.channels[c.key]}
+                          onChange={(e) => setDraft({ ...draft, channels: { ...draft.channels, [c.key]: e.target.checked } })} />
+                        <span className="relative h-[17px] w-[30px] flex-none rounded-full bg-[#e6eae8] transition after:absolute after:left-0.5 after:top-0.5 after:h-[13px] after:w-[13px] after:rounded-full after:bg-white after:shadow-sm after:transition peer-checked:bg-mint peer-checked:after:left-[15px]" />
+                        {c.label}
+                      </label>
+                    ))}
+                  </div>
+                </div>
 
-              <div className="border-b border-cream-line p-[13px_15px_15px] md:border-b-0 md:border-r">
-                <div className="mb-3 text-[9.5px] font-extrabold uppercase tracking-[0.09em] text-deep-green/45">When the push goes out</div>
-                <div className="mb-2.5 flex items-center gap-2.5">
-                  <label className="w-[78px] flex-none text-[12.5px] font-semibold text-deep-green/65">Date &amp; time</label>
-                  <input type="datetime-local" data-testid="push-at" value={draft.pushAt}
-                    onChange={(e) => setDraft({ ...draft, pushAt: e.target.value })}
-                    className="rounded-[7px] border border-cream-line px-2.5 py-1.5 text-[13.5px] font-bold" />
+                <div className="border-b border-cream-line px-[13px] pb-[9px] pt-[9px] md:border-b-0 md:border-r">
+                  <div className="mb-1 text-[9px] font-extrabold uppercase tracking-[0.09em] text-deep-green/45">Push</div>
+                  <div className="mb-[7px] flex items-center gap-2">
+                    <label className="w-12 flex-none text-[12px] font-bold text-deep-green/45">When</label>
+                    <input type="datetime-local" data-testid="push-at" value={draft.pushAt}
+                      onChange={(e) => setDraft({ ...draft, pushAt: e.target.value })}
+                      className="rounded-[7px] border border-cream-line px-2 py-1 text-[12.5px] font-bold" />
+                    {/* The lead time is a fragment, not a sentence and not a box. */}
+                    <span data-testid="lead"
+                      className={`whitespace-nowrap text-[11px] font-bold ${draft.pushAt ? "text-deep-green/45" : "text-amber-700"}`}>
+                      {draft.pushAt
+                        ? leadLabel(new Date(draft.pushAt).toISOString(), week.weekStart, open.dayIdx, open.minutes)
+                        : "needs a decision"}
+                    </span>
+                  </div>
+                  <div className="flex items-center gap-2">
+                    <label className="w-12 flex-none text-[12px] font-bold text-deep-green/45">Code</label>
+                    <input type="text" data-testid="promo-code" value={draft.promoCode} placeholder="none"
+                      onChange={(e) => setDraft({ ...draft, promoCode: e.target.value })}
+                      className="w-[132px] rounded-[7px] border border-cream-line px-2 py-1 text-[12.5px] font-bold" />
+                  </div>
                 </div>
-                <div className="mb-2.5 flex items-center gap-2.5">
-                  <label className="w-[78px] flex-none text-[12.5px] font-semibold text-deep-green/65">Promo code</label>
-                  <input type="text" data-testid="promo-code" value={draft.promoCode} placeholder="none"
-                    onChange={(e) => setDraft({ ...draft, promoCode: e.target.value })}
-                    className="w-[140px] rounded-[7px] border border-cream-line px-2.5 py-1.5 text-[13.5px] font-bold" />
-                </div>
-                <div className="mt-2.5 rounded-[7px] bg-[#f2f5f3] px-2.5 py-[7px] text-[12.5px] text-deep-green/70" data-testid="lead">
-                  {draft.pushAt
-                    ? <>Goes out <b>{leadLabel(new Date(draft.pushAt).toISOString(), week.weekStart, open.dayIdx, open.minutes)}</b> kick-off. Match is {DOW[open.dayIdx]} {open.time}.</>
-                    : <>No send time set — this stays on the plan as <b>needs a decision</b>.</>}
-                </div>
-                <div className="mt-2 text-[11.5px] leading-[1.4] text-deep-green/45">
-                  Clearing the date parks this as <b>needs a decision</b>. It stays on the plan and
-                  keeps its channels — it is not deleted and it is not “no plan”.
-                </div>
-              </div>
 
-              <div className="p-[13px_15px_15px]">
-                <div className="mb-3 text-[9.5px] font-extrabold uppercase tracking-[0.09em] text-deep-green/45">Comment</div>
-                <textarea data-testid="comment" value={draft.comment}
-                  onChange={(e) => setDraft({ ...draft, comment: e.target.value })}
-                  className="min-h-[74px] w-full resize-y rounded-lg border border-cream-line px-2.5 py-2 text-[13px]" />
-                <div className="mt-2 text-[11.5px] leading-[1.4] text-deep-green/45">
-                  What the team needs to know when they send it — the offer, the limit, who it targets.
+                <div className="px-[13px] pb-[9px] pt-[9px]">
+                  <div className="mb-1 text-[9px] font-extrabold uppercase tracking-[0.09em] text-deep-green/45">Comment</div>
+                  <textarea data-testid="comment" value={draft.comment}
+                    onChange={(e) => setDraft({ ...draft, comment: e.target.value })}
+                    className="min-h-[58px] w-full resize-y rounded-[7px] border border-cream-line px-[9px] py-[7px] text-[12.5px]" />
                 </div>
               </div>
+              <div className="mt-2 flex items-center gap-3">
+                <button onClick={() => void save()} disabled={saving} data-testid="save"
+                  className="rounded-full bg-deep-green px-[15px] py-1 text-[12.5px] font-extrabold text-white disabled:opacity-50">
+                  {saving ? "Saving…" : "Save plan"}
+                </button>
+                <span onClick={closePanel} className="cursor-pointer text-[12.5px] font-bold text-deep-green/65">Cancel</span>
+                {toast && <span className={`text-[12px] font-bold ${toast.bad ? "text-coral" : "text-emerald-700"}`}>{toast.msg}</span>}
+              </div>
             </div>
-            <div className="mt-3 flex items-center gap-3.5">
-              <button onClick={() => void save()} disabled={saving} data-testid="save"
-                className="rounded-full bg-deep-green px-4 py-2 text-[13px] font-extrabold text-white disabled:opacity-50">
-                {saving ? "Saving…" : "Save plan"}
-              </button>
-              <span onClick={closePanel}
-                className="cursor-pointer text-[13px] font-bold text-deep-green/65">Cancel</span>
-              {toast && <span className={`text-[12.5px] font-bold ${toast.bad ? "text-coral" : "text-emerald-700"}`}>{toast.msg}</span>}
-            </div>
-          </div>
                    ) : null} />}
 
         {tab === "plan" && (
-          <CancelGrid promotedSlots={promotedSlots} />
+          <CancelGrid />
         )}
       </div>
       {toast && !open && (
@@ -397,9 +372,7 @@ function Plan({ week, byCity, openId, onOpen, openCity, panel }: {
       <div className="px-5 pb-0.5 pt-1">
         <h2 className="m-0 text-[15px] font-extrabold uppercase tracking-[0.02em]">The week</h2>
         <p className="mt-1.5 max-w-[930px] text-[12.5px] text-deep-green/65">
-          Click a match to pick channels, set when the push goes out, and add a comment.
-          <b> All six channels show on every tile</b> — an unlit chip means that channel is not being
-          used, which is information.
+Click a match to plan it. All six channels show on every tile.
         </p>
       </div>
       {byCity.map(([city, matches]) => {
@@ -485,9 +458,7 @@ function Coverage({ week }: { week: PromoWeek }) {
       <div className="px-5 pb-0.5 pt-1">
         <h2 className="m-0 text-[15px] font-extrabold uppercase tracking-[0.02em]">Push coverage</h2>
         <p className="mt-1.5 max-w-[930px] text-[12.5px] text-deep-green/65">
-          One row per city, one column per day — what is going out and where nothing is.
-          <b> A coral cell is a day with matches and no push planned.</b> An em-dash means the city
-          has no matches that day.
+Coral is a day with matches and no push planned.
         </p>
       </div>
       <div className="mx-5 mb-1.5 overflow-x-auto">
@@ -556,7 +527,20 @@ const TIER: Record<number, string> = {
   1: "bg-[#eef0ee] text-deep-green/65 border border-cream-line",
 };
 
-function CancelGrid({ promotedSlots }: { promotedSlots: Set<string> }) {
+/**
+ * THE WINDOW, DERIVED. The mockup prints "Jul 20 – Aug 16" because a mockup is a photograph; on a
+ * live page a hardcoded range is a lie from next Monday. Anchored on the SAME helper
+ * getCancelPatterns uses, so the caption cannot drift from the data underneath it.
+ */
+function cancelWindowLabel(now: Date = new Date()): string {
+  const M = ["Jan","Feb","Mar","Apr","May","Jun","Jul","Aug","Sep","Oct","Nov","Dec"];
+  const newest = mostRecentCompletedWeekMonday(now);
+  const from = new Date(newest.getFullYear(), newest.getMonth(), newest.getDate() - 21);
+  const to = new Date(newest.getFullYear(), newest.getMonth(), newest.getDate() + 6);
+  return `${M[from.getMonth()]} ${from.getDate()} – ${M[to.getMonth()]} ${to.getDate()}`;
+}
+
+function CancelGrid() {
   const { rows, meta, loading } = useMatchData();
   const { data: finData } = useFinanceData();
   const aliases = useMemo(() => finData?.venueAliases ?? new Map<string, string>(), [finData]);
@@ -597,8 +581,6 @@ function CancelGrid({ promotedSlots }: { promotedSlots: Set<string> }) {
 
   const headline = grid.reduce((s, c) => s + c.total, 0);
   const all = grid.flatMap((c) => c.byDay.flat().map((s) => ({ ...s, city: c.city })));
-  // NOT PROMOTED: died 2+ of the four weeks AND no push planned for that slot this week.
-  const unpromoted = all.filter((s) => s.n >= 2 && !promotedSlots.has(s.slot));
   const worst = all.slice().sort((a, b) => b.n - a.n || b.booked - a.booked)[0] ?? null;
   const worstDay = useMemo(() => {
     const c = [0, 0, 0, 0, 0, 0, 0];
@@ -614,18 +596,16 @@ function CancelGrid({ promotedSlots }: { promotedSlots: Set<string> }) {
       <div className="mt-2 border-t border-cream-line px-5 pb-0.5 pt-5">
         <h2 className="m-0 text-[15px] font-extrabold uppercase tracking-[0.02em]">Cancel patterns</h2>
         <p className="mt-1.5 max-w-[930px] text-[12.5px] text-deep-green/65">
-          Every cancelled match over the last 4 completed weeks, folded into one grid. A chip reads
-          field, time, spots already booked, and <b>how many of the four weeks that exact slot died</b>.
-          <b> NOT PROMOTED</b> means that slot has no push planned this week — scroll up and mark it.
+Last 4 completed weeks · Jul 20 – Aug 16. Chip reads field, time, spots booked, and how many
+          of the four weeks it died.
         </p>
       </div>
 
-      <div className="mx-5 mt-3 grid grid-cols-2 overflow-hidden rounded-[11px] border border-cream-line bg-white md:grid-cols-4">
+      <div className="mx-5 mt-3 grid grid-cols-1 overflow-hidden rounded-[11px] border border-cream-line bg-white md:grid-cols-3">
         <Stat label="Cancelled slots" value={String(headline)} note={`over 4 weeks · ${grid.length} cities`} testid="stat-total" />
         <Stat label="Worst slot" small value={worst ? `${worst.canonical} · ${DOW[Number(worst.slot.split("|")[1])]} ${worst.time}` : "—"}
           note={worst ? `${worst.n} of 4 weeks · ${worst.booked} spots booked` : ""} testid="stat-worst" />
         <Stat label="Worst day" small value={worstDay?.dow ?? "—"} note={worstDay ? `${worstDay.n} cancelled slots` : ""} testid="stat-worstday" />
-        <Stat label="Dying and unpromoted" value={String(unpromoted.length)} note="cancelled 2+ weeks with no push planned" testid="stat-unprom" />
       </div>
 
       <div className="mx-5 mt-3 overflow-x-auto">
@@ -647,9 +627,7 @@ function CancelGrid({ promotedSlots }: { promotedSlots: Set<string> }) {
                 {c.byDay.map((day, i) => (
                   <td key={i} className="border-b border-l border-cream-line/60 p-2 align-top">
                     {day.length === 0 && <span className="block py-1.5 text-center text-[13px] text-deep-green/25">—</span>}
-                    {day.map((s) => {
-                      const marked = s.n >= 2 && !promotedSlots.has(s.slot);
-                      return (
+                    {day.map((s) => (
                         <div key={s.slot} data-testid="cancel-chip"
                           className={`mb-1 flex items-center gap-1.5 rounded-md px-1.5 py-1 text-[10.5px] leading-[1.15] last:mb-0 ${TIER[s.n]}`}>
                           <span className="font-extrabold tracking-[0.02em]">{s.code}</span>
@@ -658,15 +636,8 @@ function CancelGrid({ promotedSlots }: { promotedSlots: Set<string> }) {
                           {/* N OF 4 AS TEXT, not shade alone — 3/4 against 2/4 is unreadable across a
                               wide screen and gone entirely in print. */}
                           <span className={`whitespace-nowrap rounded px-1 font-extrabold ${s.n >= 3 ? "bg-white/25" : "bg-black/10"}`}>{s.n}/4</span>
-                          {marked && (
-                            <span data-testid="not-promoted"
-                              className={`ml-1 rounded px-[3px] py-px text-[8.5px] font-extrabold uppercase tracking-[0.04em] ${s.n >= 3 ? "bg-white/30" : "bg-black/12"}`}>
-                              not promoted
-                            </span>
-                          )}
                         </div>
-                      );
-                    })}
+                    ))}
                   </td>
                 ))}
               </tr>
