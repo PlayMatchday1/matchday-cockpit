@@ -36,7 +36,13 @@ export type VeoMatch = {
   dayIdx: number; // 0=Mon..6=Sun
   time: string; // "6:30 PM"
   minutes: number; // sort key
-  venue: string; // canonical venue
+  venue: string; // canonical venue (canonicalVenueName rules)
+  // THE RAW field_title, UNTOUCHED. `venue` above is canonicalised by canonicalVenueName;
+  // cancelPatterns canonicalises through normalizeMatchName + the fin_venues aliases, which is a
+  // DIFFERENT pipeline. Anything that has to line a match up against a cancel slot must run both
+  // sides through ONE of them, so the raw string travels and the consumer decides. Free: field_title
+  // is already in the select.
+  fieldRaw: string;
   name: string; // emoji-stripped display name
   // THE RAW NAME, exactly as MatchDay holds it. The stripped one above is for display and cannot
   // drive a write: the name sync has to diff against what is actually stored, and it has to be
@@ -106,6 +112,7 @@ export async function fetchVeoWeek(sb: SupabaseClient, now: Date, weekRef: Date 
       time: fmtTime(d),
       minutes: d.getHours() * 60 + d.getMinutes(),
       venue: canonicalVenueName(r.field_title ?? "") || (r.field_title ?? "Unknown"),
+      fieldRaw: (r.field_title as string) ?? "",
       name: stripCameraEmoji(r.name),
       rawName: (r.name as string) ?? "",
       veo: rec?.enabled ?? false,
