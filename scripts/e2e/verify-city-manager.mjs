@@ -115,11 +115,16 @@ async function main() {
       readonly: (await page.$eval('[data-testid="readonly-note"]', (e) => e.textContent)).includes("read-only"),
     }, { addBtns: 0, readonly: true });
 
-    // the unassigned callout + the unmatched-account warning both render from the data
-    eq("the unassigned callout and the unmatched-login warning both render", {
+    // ITEMISED: this asserted the unmatched-login WARNING rendered. It is deleted. Nothing is wrong
+    // when the login email is not among a city's manager rows — the pay, the scope and every figure
+    // are correct; the only effect is that no row carries the YOU chip. The warning announced a
+    // problem that did not exist. The unassigned callout is unrelated and still asserted, which is
+    // also the positive control: the same $$eval finds an element that SHOULD be there, so the zero
+    // beside it is a real reading and not a page that failed to render.
+    eq("the unassigned callout renders, and no unmatched-login warning does", {
       callout: await page.$$eval('[data-testid="unassigned-note"]', (e) => e.length),
       unmatched: await page.$$eval('[data-testid="unmatched-account"]', (e) => e.length),
-    }, { callout: 1, unmatched: 1 });
+    }, { callout: 1, unmatched: 0 });
 
     // ── GATE 12 — layout at 1600 and 390 ──
     const layout = async (w) => {

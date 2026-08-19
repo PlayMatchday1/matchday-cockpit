@@ -148,14 +148,10 @@ export default function CityManagerPayClient() {
         />
       )}
 
-      {/* the email-only join, made loud rather than looking like "you worked nothing" */}
-      {data?.you.unmatchedAccount && (
-        <div data-testid="unmatched-account" className="mb-3 rounded-[10px] border px-3 py-2 text-[12px] font-semibold"
-          style={{ background: C.warnBg, borderColor: C.warnLine, color: C.warnInk }}>
-          We could not match your login to any manager record for {data.cityIdentifier} — your own row will not be marked.
-          Pay is matched by email, so this usually means your MatchDay email differs from your Clubhouse login.
-        </div>
-      )}
+      {/* NO UNMATCHED-ACCOUNT WARNING. The YOU chip is a convenience: when the login email does not
+          appear in this city's manager rows, no row is marked and that is the whole effect. The pay,
+          the city scope and every figure on the page are correct either way, so a warning here
+          announced a problem that did not exist. */}
       {err && <div role="alert" className="mb-3 rounded-[10px] border px-3 py-2 text-[12px] font-semibold" style={{ background: C.critBg, borderColor: C.critLine, color: C.critInk }}>{err}</div>}
 
       {/* ── tiles ── */}
