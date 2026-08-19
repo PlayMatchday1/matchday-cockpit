@@ -18,6 +18,7 @@ import { authenticateCityManager, assertCityScope } from "@/lib/cityManagerAuth"
 import { computeManagerPayForWeek, ISO_DATE_RX, weekdayUtc } from "@/lib/managerPayCompute";
 import { apiGet, apiWrite, AmbiguousWriteError, WriteFailedError, DeniedFieldError, DeniedEndpointError, ProductionWriteBoltedError, StageHostGuardError, StageConfigError, NotAuthorizedError } from "@/lib/matchdayStageApi";
 import { recordWrite, supabaseLogStore } from "@/lib/changeLog";
+import { refreshMatchMirror } from "@/lib/mirrorWriteThrough";
 
 export const runtime = "nodejs";
 export const dynamic = "force-dynamic";
@@ -173,6 +174,16 @@ export async function POST(req: Request) {
     // A 2xx IS NOT PROOF — re-read and classify from the match's own manager id.
     const after = await apiGet<Record<string, unknown>>(ENV, `/admin/matches/${matchId}`).catch(() => null);
     const landed = ((after?.managerId as number | null) ?? null) === managerId;
+
+    // WRITE THROUGH TO THE MIRROR, before this responds — so the client's refetch reads the new
+    // manager instead of the stale row. Same shared function the match-edit route uses: production
+    // only, LANDED only, the READ-BACK value, best-effort. Without it the assignment lands on
+    // MatchDay and Clubhouse keeps showing the old manager until the 11:00 cron, which is the whole
+    // bug: the week grid, the pay table and every KPI derive from this row.
+    if (landed && after) {
+      await refreshMatchMirror(auth.supabase, ENV, matchId, ["managerId"], after, "landed");
+    }
+
     return Response.json({
       ok: true, outcome, logRecorded: logged, landed,
       status: landed ? "LANDED" : "NOT APPLIED",

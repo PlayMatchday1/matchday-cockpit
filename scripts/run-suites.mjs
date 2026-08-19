@@ -72,7 +72,7 @@ const NODE_SUITES = [
   // The 🎥 name transform — a MatchDay match-name write that reaches players in the live app.
   "scripts/veo-name-sync-test.ts",
   // The mirror write-through: only on LANDED, only the read-back value, production only.
-  "scripts/veo-mirror-writethrough-test.ts",
+  "scripts/mirror-writethrough-test.ts",
   // The Gusto payroll CSV — proves the email alias moved no amount or memo.
   "scripts/gusto-alias-email-test.ts",
 ];
