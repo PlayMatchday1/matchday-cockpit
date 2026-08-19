@@ -107,6 +107,26 @@ export async function deleteFinExpense(row: FinExpense, user: AppUser): Promise<
     changedBy: user.email,
     before: row as unknown as Record<string, unknown>,
   });
-  const { error } = await supabase.from("fin_expenses").delete().eq("id", row.id);
+  // .select() TURNS A ZERO-ROW DELETE INTO AN OBSERVABLE ONE. Checking `error` alone is how the
+  // account-delete bug survived for months: RLS makes a blocked write match zero rows and return
+  // 204 with error: null, so "it worked" and "it did nothing" are the same response.
+  //
+  // Measured on fin_expenses 2026-08-19: an authenticated client delete DOES land here — this
+  // table's RLS permits it, unlike app_users. The verification is not because it is currently
+  // broken; it is so a policy change cannot silently break it later.
+  const { data, error } = await supabase.from("fin_expenses").delete().eq("id", row.id).select("id");
   if (error) throw new Error(error.message);
+  if (!data || data.length === 0) {
+    throw new Error(
+      "NOT APPLIED — the delete matched no rows and nothing was removed. The entry is still there; " +
+      "reload before trying again.",
+    );
+  }
+  // READ BACK. A 2xx is not proof, and this row is a real figure in OpEx and Cash Flow.
+  const { data: still } = await supabase.from("fin_expenses").select("id").eq("id", row.id).maybeSingle();
+  if (still) {
+    throw new Error(
+      "NOT APPLIED — the delete reported success but the entry is still on file. Nothing was retried.",
+    );
+  }
 }

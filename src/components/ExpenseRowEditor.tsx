@@ -94,6 +94,7 @@ export default function ExpenseRowEditor({
   knownCategories,
   onClose,
   onSubmit,
+  onDelete,
 }: {
   open: boolean;
   mode: "add" | "edit";
@@ -101,6 +102,11 @@ export default function ExpenseRowEditor({
   knownCategories: string[];
   onClose: () => void;
   onSubmit: (draft: ExpenseDraft) => Promise<void>;
+  /**
+   * Hands the row being edited to the confirmation step. Optional: in "add" mode there is nothing
+   * to delete yet, and a caller that does not pass it simply gets no Delete button.
+   */
+  onDelete?: (row: FinExpense) => void;
 }) {
   const [draft, setDraft] = useState<ExpenseDraft>(emptyDraft);
   const [monthOverridden, setMonthOverridden] = useState(false);
@@ -286,12 +292,25 @@ export default function ExpenseRowEditor({
           </div>
         )}
 
-        <div className="mt-6 flex flex-wrap items-center justify-end gap-2">
+        <div className="mt-6 flex flex-wrap items-center gap-2">
+          {/* DELETE SITS APART FROM Cancel/Save — left-aligned, outlined in coral, so it is never
+              the button someone reaches for on the way to Save. Absent while adding: there is no
+              row to remove yet. */}
+          {mode === "edit" && initial && onDelete && (
+            <button
+              type="button"
+              onClick={() => onDelete(initial)}
+              disabled={saving}
+              className="mr-auto rounded-full border border-coral/60 bg-transparent px-4 py-2 text-xs font-bold text-coral transition hover:bg-coral-soft/40 disabled:opacity-50"
+            >
+              Delete
+            </button>
+          )}
           <button
             type="button"
             onClick={onClose}
             disabled={saving}
-            className="rounded-full border border-cream-line bg-transparent px-4 py-2 text-xs font-bold text-deep-green hover:bg-cream-soft disabled:opacity-50"
+            className="ml-auto rounded-full border border-cream-line bg-transparent px-4 py-2 text-xs font-bold text-deep-green hover:bg-cream-soft disabled:opacity-50"
           >
             Cancel
           </button>

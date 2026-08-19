@@ -61,6 +61,38 @@ function fmtMoney(n: number, signZero = false): string {
 
 const chipAct = "text-[12px] font-bold text-deep-green/60 underline decoration-cream-line underline-offset-2 hover:text-deep-green";
 
+/** "2026-09-30" → "Sep 2026". Only used when a row carries no explicit month string. */
+function monthOf(date: string): string {
+  const M = ["Jan","Feb","Mar","Apr","May","Jun","Jul","Aug","Sep","Oct","Nov","Dec"];
+  const [y, m] = (date ?? "").split("-");
+  const i = Number(m) - 1;
+  return M[i] ? `${M[i]} ${y}` : (date ?? "");
+}
+
+/**
+ * HOW MANY OTHER MONTHS OF THE SAME LINE ITEM SURVIVE THIS DELETE.
+ *
+ * fin_expenses has no recurrence column — "City Manager · Dallas · $800, monthly" is not one row
+ * with a repeat rule, it is one row per month. So a delete can only ever remove a single month, and
+ * this counts what is left so the confirmation can say so with a number rather than a reassurance.
+ *
+ * Identity is city + category + vendor, all compared case-insensitively and null-tolerantly, and
+ * NOT amount — a raise mid-year is the same line item at a different price.
+ */
+function otherMonthsOf(row: FinExpense, all: FinExpense[]): number {
+  const key = (r: FinExpense) =>
+    [r.city ?? "", r.category ?? "", r.vendor ?? ""].map((v) => v.trim().toLowerCase()).join("|");
+  const k = key(row);
+  const months = new Set<string>();
+  for (const r of all) {
+    if (r.id === row.id) continue;
+    if (key(r) !== k) continue;
+    months.add(r.month || monthOf(r.date));
+  }
+  months.delete(row.month || monthOf(row.date));
+  return months.size;
+}
+
 export default function ExpenseAdminView() {
   const { data, loading } = useFinanceData();
   const { appUser } = useAuth();
@@ -759,25 +791,62 @@ export default function ExpenseAdminView() {
         knownCategories={selectableCategories}
         onClose={() => setEditorOpen(false)}
         onSubmit={handleSubmit}
+        onDelete={(row) => {
+          // Close the editor first so the confirmation is the only thing on screen. Leaving a form
+          // full of half-typed edits behind a delete prompt invites confirming the wrong thing.
+          setEditorOpen(false);
+          setDeleteRow(row);
+        }}
       />
 
       <ConfirmDeleteDialog
         open={Boolean(deleteRow)}
-        title="Delete this expense entry?"
+        title={
+          deleteRow
+            ? `Delete ${deleteRow.category} — ${fmtMoney(deleteRow.amount, true)} — ${deleteRow.month || deleteRow.date}?`
+            : "Delete this expense entry?"
+        }
         summary={
           deleteRow ? (
-            <div className="space-y-1 font-mono text-xs">
-              <div>{deleteRow.date}</div>
-              <div>
-                {deleteRow.city} · {deleteRow.category}
-                {deleteRow.vendor ? ` · ${deleteRow.vendor}` : ""}
+            <div className="space-y-2 text-xs">
+              <div className="space-y-1 font-mono">
+                <div>
+                  <span className="text-deep-green/55">Line item </span>
+                  <span className="font-bold">
+                    {deleteRow.city || "Company-wide"} · {deleteRow.category}
+                    {deleteRow.vendor ? ` · ${deleteRow.vendor}` : ""}
+                  </span>
+                </div>
+                <div>
+                  <span className="text-deep-green/55">Month </span>
+                  <span className="font-bold">{deleteRow.month || monthOf(deleteRow.date)}</span>
+                  <span className="text-deep-green/55"> (dated {deleteRow.date})</span>
+                </div>
+                <div className="font-bold text-coral">
+                  Amount {fmtMoney(deleteRow.amount, true)}
+                </div>
+                {deleteRow.notes && (
+                  <div className="text-deep-green/55">{deleteRow.notes}</div>
+                )}
               </div>
-              <div className="font-bold text-coral">
-                Amount: {fmtMoney(deleteRow.amount, true)}
+              {/* SCOPE, SAID OUT LOUD. fin_expenses has no recurrence column — a recurring cost is
+                  stored as one row per month, so this removes THIS month and nothing else. Someone
+                  who believes they are cancelling a subscription needs to know that. */}
+              <div className="rounded-md border border-cream-line bg-cream-soft/60 px-3 py-2 leading-relaxed text-deep-green/70">
+                This removes <span className="font-bold">one month only</span> —{" "}
+                {deleteRow.month || monthOf(deleteRow.date)}. If{" "}
+                {deleteRow.category} recurs, every other month is stored as its own entry and stays.
+                {otherMonthsOf(deleteRow, allRows) > 0 && (
+                  <>
+                    {" "}
+                    <span className="font-bold">
+                      {otherMonthsOf(deleteRow, allRows)} other month
+                      {otherMonthsOf(deleteRow, allRows) === 1 ? "" : "s"}
+                    </span>{" "}
+                    of this line item will remain.
+                  </>
+                )}
               </div>
-              {deleteRow.notes && (
-                <div className="text-deep-green/55">{deleteRow.notes}</div>
-              )}
             </div>
           ) : null
         }
