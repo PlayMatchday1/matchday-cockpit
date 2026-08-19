@@ -17,6 +17,7 @@
 
 import { useCallback, useEffect, useMemo, useState } from "react";
 import { supabase } from "@/lib/supabase";
+import MatchPromotionMobile from "@/components/MatchPromotionMobile";
 import { useMatchData } from "@/lib/useMatchData";
 import { useFinanceData } from "@/lib/useFinanceData";
 import { getCancelPatterns } from "@/lib/cancelPatterns";
@@ -26,6 +27,26 @@ import {
 } from "@/lib/matchPromotion";
 
 const DOW = ["Mon", "Tue", "Wed", "Thu", "Fri", "Sat", "Sun"];
+
+/**
+ * BELOW 768px THE PHONE LAYOUT, AT AND ABOVE THE DESKTOP ONE. There is deliberately no state in
+ * between: all three desktop views are city × weekday grids and seven columns do not survive a
+ * narrow screen by getting narrower, so the middle ground would be a third layout nobody asked for.
+ *
+ * Starts false so the server and the first client paint agree on the desktop tree; matchMedia can
+ * only be asked in a browser, so the phone swaps in on mount.
+ */
+function useIsMobile(): boolean {
+  const [m, setM] = useState(false);
+  useEffect(() => {
+    const q = window.matchMedia("(max-width: 767px)");
+    const on = () => setM(q.matches);
+    on();
+    q.addEventListener("change", on);
+    return () => q.removeEventListener("change", on);
+  }, []);
+  return m;
+}
 
 function fmtPushLocal(iso: string): { day: string; time: string } {
   const d = new Date(iso);
@@ -75,6 +96,10 @@ export default function MatchPromotionView() {
   const [loading, setLoading] = useState(true);
   const [error, setError] = useState("");
   const [tab, setTab] = useState<"plan" | "coverage">("plan");
+  // THE PHONE OPENS ON DUE; desktop opens on Plan and is untouched. Separate state because "due"
+  // is not a desktop view and must never leak into the desktop tab set.
+  const [mTab, setMTab] = useState<"due" | "week" | "coverage">("due");
+  const isMobile = useIsMobile();
   const [weekRef, setWeekRef] = useState("");
   const [openId, setOpenId] = useState<number | null>(null);
   const [draft, setDraft] = useState<Draft | null>(null);
@@ -186,6 +211,16 @@ export default function MatchPromotionView() {
   const overdue = jobs.filter((j) => j.at < now).length;
   const noPlan = week?.matches.filter((m) => m.state === "none").length ?? 0;
 
+  // THE PHONE'S CANCEL RANKING — the desktop matrix's own numbers, flattened and ordered. 1-of-4
+  // slots are dropped on the phone only: a list has to be short to be read, and one bad week is
+  // not a pattern. The desktop grid still shows them.
+  const cancels = useCancelRanking();
+  const { all: rankAll, headline: rankTotal, ready: rankReady } = cancels;
+  const ranking = useMemo(
+    () => rankAll.filter((s) => s.n >= 2).sort((a, b) => b.n - a.n || b.booked - a.booked),
+    [rankAll],
+  );
+
   const byCity = useMemo(() => {
     const map = new Map<string, PromoMatch[]>();
     for (const m of week?.matches ?? []) {
@@ -198,6 +233,21 @@ export default function MatchPromotionView() {
   if (loading && !week) return <div className="p-8 text-sm text-deep-green/60">Loading the week…</div>;
   if (error) return <div className="p-8 text-sm text-coral">{error}</div>;
   if (!week) return null;
+
+  if (isMobile) {
+    return (
+      <MatchPromotionMobile
+        week={week} tab={mTab} setTab={setMTab}
+        jobs={jobs} overdue={overdue}
+        openId={openId} draft={draft} setDraft={setDraft}
+        onOpen={openMatch} onClose={closePanel} onSave={() => void save()}
+        saving={saving} toast={toast}
+        onNav={(d) => void nav(d)} weekLabel={weekLabel(week)}
+        fmtPush={fmtPushLocal} leadLabel={leadLabel}
+        ranking={ranking} rankingReady={rankReady} rankingTotal={rankTotal}
+      />
+    );
+  }
 
   return (
     <div className="mx-auto max-w-[1560px] px-4 pb-16">
@@ -340,7 +390,7 @@ Which matches get promoted, on which channels, and when the push goes out.
                    ) : null} />}
 
         {tab === "plan" && (
-          <CancelGrid />
+          <CancelGrid c={cancels} />
         )}
       </div>
       {toast && !open && (
@@ -540,7 +590,13 @@ function cancelWindowLabel(now: Date = new Date()): string {
   return `${M[from.getMonth()]} ${from.getDate()} – ${M[to.getMonth()]} ${to.getDate()}`;
 }
 
-function CancelGrid() {
+/**
+ * ONE DERIVATION, TWO LAYOUTS. The desktop matrix and the phone ranking are the same numbers seen
+ * two ways, so the computation is lifted here rather than written twice. The body below is the
+ * memo that used to sit inside CancelGrid, moved verbatim — desktop renders from exactly what it
+ * rendered from before.
+ */
+export function useCancelRanking() {
   const { rows, meta, loading } = useMatchData();
   const { data: finData } = useFinanceData();
   const aliases = useMemo(() => finData?.venueAliases ?? new Map<string, string>(), [finData]);
@@ -589,7 +645,13 @@ function CancelGrid() {
     return max === 0 ? null : { dow: DOW[c.indexOf(max)], n: max };
   }, [grid]);
 
-  if (loading || !meta) return <div className="px-5 py-6 text-[12.5px] text-deep-green/45">Loading cancel patterns…</div>;
+  return { grid, all, headline, worst, worstDay, ready: !loading && !!meta };
+}
+
+/** Desktop matrix. Takes the derivation as a prop so it is computed once for both layouts. */
+function CancelGrid({ c }: { c: ReturnType<typeof useCancelRanking> }) {
+  const { grid, headline, worst, worstDay, ready } = c;
+  if (!ready) return <div className="px-5 py-6 text-[12.5px] text-deep-green/45">Loading cancel patterns…</div>;
 
   return (
     <div data-testid="cancel-patterns">

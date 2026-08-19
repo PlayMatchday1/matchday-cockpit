@@ -1,0 +1,437 @@
+<!doctype html>
+<html lang="en">
+<head>
+<meta charset="utf-8">
+<meta name="viewport" content="width=device-width,initial-scale=1">
+<title>Match Promotion — phone</title>
+<style>
+/* ══════════════════════════════════════════════════════════════
+   WHAT A PHONE CANNOT DO, AND WHAT IT IS BETTER AT
+
+   1. SEVEN COLUMNS IS NOT A LAYOUT ON A PHONE. All three grids —
+      the week, cancel patterns, coverage — are city × weekday. At
+      390px a column is 48px. Every one of them becomes a LIST.
+
+   2. THE WEEK GROUPS BY DAY, NOT BY CITY. On desktop you scan a
+      city's week across. On a phone you are looking at today and
+      tomorrow, across every city. So the section header is the day,
+      and the city is a chip on the row.
+
+   3. WHAT'S DUE IS THE POINT OF THE PHONE. Nobody plans a week
+      standing up. They check what has to go out and send it. The
+      worklist is the landing view, not a strip above something else.
+
+   4. CANCEL PATTERNS BECOME A RANKING. A matrix answers "when does
+      this city struggle". A phone can only answer "which slots keep
+      dying" — so it is one list, worst first, and that is the more
+      useful question anyway.
+
+   5. THE PANEL IS ONE COLUMN AND OPENS UNDER THE ROW. Three columns
+      side by side is a desktop shape. Stacked, in place, no modal —
+      a modal on a phone loses your place in a 60-row list.
+   ══════════════════════════════════════════════════════════════ */
+:root{
+  --ink:#10231a; --ink2:#5b7568; --ink3:#93a89c; --ink4:#c3cfc8;
+  --line:#e3eae5; --line2:#eff3f0; --bg:#eef2ef; --panel:#fff;
+  --grn:#15803d; --grnbg:#effaf3; --grnln:#c8ead6; --grnchip:#5ede8f;
+  --amb:#8a5a00; --ambbg:#fdf6e7; --ambln:#efdcaf;
+  --red:#a8321f; --redbg:#fdeceb; --redln:#f2cdc8;
+  --c4:#c0392b; --c3:#7d3220; --c2:#e6a532; --c1:#eef0ee;
+  --hdr:#0f2e1f;
+}
+*{box-sizing:border-box}
+body{margin:0;background:var(--bg);color:var(--ink);
+  font:15px/1.42 ui-sans-serif,-apple-system,"Segoe UI",Roboto,sans-serif}
+.ph{max-width:390px;margin:0 auto;min-height:100vh;background:var(--bg);
+  padding-bottom:70px}
+
+/* sticky header */
+.hd{position:sticky;top:0;z-index:20;background:var(--hdr);color:#fff;
+  padding:11px 14px 10px}
+.hd h1{margin:0;font-size:16px;font-weight:900;letter-spacing:-.01em;
+  text-transform:uppercase}
+.wk{display:flex;align-items:center;gap:9px;margin-top:8px}
+.wk .nav{width:34px;height:34px;border:0;border-radius:8px;flex:none;
+  background:rgba(255,255,255,.14);color:#fff;font-size:15px}
+.wk .lab{font-size:13px;font-weight:800;flex:1;text-align:center}
+.tabs{display:flex;gap:0;background:rgba(255,255,255,.12);border-radius:9px;
+  padding:2px;margin-top:9px}
+.tabs button{flex:1;border:0;background:transparent;color:rgba(255,255,255,.72);
+  font:inherit;font-size:12.5px;font-weight:800;padding:7px 0;border-radius:7px}
+.tabs button.on{background:#fff;color:var(--hdr)}
+
+/* ── DUE: the landing view ─────────────────────────────────────── */
+.sect{padding:14px 12px 2px}
+.sect h2{margin:0 0 2px;font-size:11px;letter-spacing:.09em;font-weight:800;
+  color:var(--ink3);text-transform:uppercase}
+.sect .n{font-size:11.5px;color:var(--ink2);font-weight:700;margin-bottom:9px}
+
+.due{background:#fff;border:1px solid var(--line);border-radius:11px;
+  padding:10px 12px;margin:0 12px 8px}
+.due.over{border-color:var(--redln);background:var(--redbg)}
+.due.soon{border-color:var(--ambln);background:var(--ambbg)}
+.due .when{font-size:13px;font-weight:800}
+.due.over .when{color:var(--red)}
+.due.soon .when{color:var(--amb)}
+.due .what{font-size:12.5px;color:var(--ink2);margin:2px 0 7px}
+.due .go{margin-left:auto;font-size:12px;font-weight:800;color:var(--grn);
+  padding:8px 2px 8px 12px;margin-right:-2px}
+.duetop{display:flex;align-items:baseline;gap:8px}
+
+/* channel chips */
+.chset{display:flex;gap:4px;flex-wrap:wrap}
+.ch{display:inline-flex;align-items:center;justify-content:center;
+  min-width:27px;height:19px;padding:0 5px;border-radius:5px;
+  font-size:9.5px;font-weight:800;letter-spacing:.03em;
+  border:1px solid var(--line2);background:#fff;color:var(--ink4)}
+.ch.on{background:var(--grnbg);border-color:var(--grnln);color:var(--grn)}
+
+/* ── THE WEEK: grouped by DAY, city on the row ─────────────────── */
+.day{padding:16px 12px 0}
+.dayhd{display:flex;align-items:baseline;gap:8px;margin-bottom:8px;
+  position:sticky;top:104px;z-index:10;background:var(--bg);padding:5px 0}
+.dayhd b{font-size:14px;font-weight:900}
+.dayhd .dt{font-size:12px;color:var(--ink3);font-weight:700}
+.dayhd .cnt{margin-left:auto;font-size:11px;color:var(--ink3);font-weight:700}
+.dayhd.today b{color:var(--grn)}
+
+.row{background:#fff;border:1px solid var(--line);border-radius:11px;
+  padding:11px 12px;margin-bottom:8px}
+.row.unplanned{border-style:dashed}
+.row.check{border-color:var(--ambln);background:var(--ambbg)}
+.row.open{border-color:var(--hdr);box-shadow:0 0 0 2px #e6efe9}
+.rtop{display:flex;align-items:baseline;gap:8px}
+.rtop .tm{font-size:15px;font-weight:900;font-variant-numeric:tabular-nums}
+.rtop .fd{font-size:13.5px;font-weight:700;flex:1;min-width:0;
+  overflow:hidden;text-overflow:ellipsis;white-space:nowrap}
+.cty{font-size:9px;font-weight:800;letter-spacing:.05em;text-transform:uppercase;
+  background:#f2f5f3;border:1px solid var(--line);border-radius:5px;
+  padding:2px 5px;color:var(--ink2);white-space:nowrap}
+.rmid{display:flex;align-items:center;gap:7px;margin-top:8px;flex-wrap:wrap}
+.code{font-size:9.5px;font-weight:800;border-radius:5px;padding:2px 6px;
+  background:var(--ambbg);border:1px solid var(--ambln);color:var(--amb)}
+.code.none{background:#f4f6f5;border-color:var(--line);color:var(--ink4)}
+.push{font-size:11.5px;font-weight:700;color:var(--ink3);margin-top:7px}
+.push b{color:var(--ink2)}
+.row.check .push{color:var(--amb)}
+.row.unplanned .push{color:var(--ink4)}
+
+/* ── the panel: one column, under the row ──────────────────────── */
+.pan{background:#fbfdfc;border:1px solid var(--hdr);border-radius:11px;
+  padding:12px;margin:-2px 0 8px}
+.pan h3{margin:0 0 11px;font-size:13px;font-weight:800}
+.plab{font-size:9px;letter-spacing:.09em;font-weight:800;color:var(--ink3);
+  text-transform:uppercase;margin:0 0 7px}
+.tg{display:flex;align-items:center;gap:9px;font-size:13.5px;color:var(--ink2);
+  font-weight:600;padding:7px 0;border-bottom:1px solid var(--line2)}
+.tg:last-of-type{border-bottom:0}
+.sw{width:36px;height:21px;border-radius:999px;background:#e6eae8;
+  position:relative;flex:none}
+.sw::after{content:"";position:absolute;top:2px;left:2px;width:17px;height:17px;
+  border-radius:50%;background:#fff;box-shadow:0 1px 2px rgba(0,0,0,.18)}
+.tg.on .sw{background:var(--grnchip)}
+.tg.on .sw::after{left:17px}
+.tg.on{color:var(--ink);font-weight:700}
+.pfld{margin-top:12px}
+.pfld label{display:block;font-size:9px;letter-spacing:.09em;font-weight:800;
+  color:var(--ink3);text-transform:uppercase;margin-bottom:4px}
+.pfld input,.pfld select,.pfld textarea{font:inherit;font-size:15px;
+  font-weight:600;color:var(--ink);border:1px solid var(--line);
+  border-radius:9px;padding:10px 11px;width:100%;background:#fff}
+.pfld textarea{min-height:62px;font-size:14px;resize:vertical}
+.lead{font-size:11.5px;font-weight:700;color:var(--ink3);margin-top:4px}
+.pfoot{display:flex;gap:9px;margin-top:13px}
+.save{flex:1;border:0;background:var(--hdr);color:#fff;font:inherit;
+  font-size:14px;font-weight:800;border-radius:999px;padding:12px 0}
+.cancel{flex:none;border:1px solid var(--line);background:#fff;font:inherit;
+  font-size:14px;font-weight:700;color:var(--ink2);border-radius:999px;
+  padding:12px 20px}
+
+/* ── CANCEL PATTERNS: a ranking, not a matrix ──────────────────── */
+.cx{background:#fff;border:1px solid var(--line);border-radius:11px;
+  margin:0 12px 8px;padding:11px 12px;display:flex;align-items:center;gap:10px}
+.cx .nn{flex:none;width:38px;height:38px;border-radius:9px;display:flex;
+  align-items:center;justify-content:center;font-size:11.5px;font-weight:800;
+  font-variant-numeric:tabular-nums}
+.cx .nn.w4{background:var(--c4);color:#fff}
+.cx .nn.w3{background:var(--c3);color:#fff}
+.cx .nn.w2{background:var(--c2);color:#3d2a05}
+.cx .nn.w1{background:var(--c1);color:var(--ink2);border:1px solid #e4e8e5}
+.cx .body{flex:1;min-width:0}
+.cx .slot{font-size:13.5px;font-weight:800;overflow:hidden;
+  text-overflow:ellipsis;white-space:nowrap}
+.cx .meta{font-size:11.5px;color:var(--ink3);font-weight:700;margin-top:1px}
+
+/* ── COVERAGE: per city, seven dots ────────────────────────────── */
+.cov{background:#fff;border:1px solid var(--line);border-radius:11px;
+  margin:0 12px 8px;padding:11px 12px}
+.covtop{display:flex;align-items:baseline;gap:8px;margin-bottom:9px}
+.covtop .c{font-size:13px;font-weight:800;letter-spacing:.03em}
+.covtop .s{margin-left:auto;font-size:11.5px;color:var(--ink3);font-weight:700}
+.dots{display:grid;grid-template-columns:repeat(7,minmax(0,1fr));gap:5px}
+.dot{border-radius:7px;padding:6px 0 5px;text-align:center;
+  font-size:9px;font-weight:800;letter-spacing:.03em;text-transform:uppercase}
+.dot i{display:block;font-style:normal;font-size:12px;margin-top:2px}
+.dot.p{background:var(--grnbg);color:var(--grn);border:1px solid var(--grnln)}
+.dot.o{background:#f8d5cd;color:var(--red);border:1px solid var(--redln)}
+.dot.n{background:#fafbfa;color:var(--ink4);border:1px solid var(--line2)}
+
+.key{padding:12px 14px 24px;font-size:11.5px;color:var(--ink2);line-height:1.8}
+.key b{color:var(--ink)}
+</style>
+</head>
+<body>
+<div class="ph" id="ph">
+
+  <div class="hd">
+    <h1>Match Promotion</h1>
+    <div class="wk">
+      <button class="nav">‹</button>
+      <span class="lab">Mon 17 – Sun 23 Aug</span>
+      <button class="nav">›</button>
+    </div>
+    <div class="tabs" id="tabs">
+      <button class="on">Due</button><button>Week</button><button>Coverage</button>
+    </div>
+  </div>
+
+  <!-- ══ DUE — the landing view ═══════════════════════════════ -->
+  <div class="sect">
+    <h2>Due next</h2>
+    <div class="n" id="duen">4 pushes · 1 overdue</div>
+  </div>
+
+  <div class="due over" data-min="-960">
+    <div class="duetop"><span class="when">Overdue · Mon 3:00 PM</span>
+      <span class="go">Send ›</span></div>
+    <div class="what">Onion Creek · Sat 10:00 AM · Austin</div>
+    <div class="chset"><i class="ch on">WA</i><i class="ch on">MC</i><i class="ch on">FB</i></div>
+  </div>
+
+  <div class="due soon" data-min="180">
+    <div class="duetop"><span class="when">Today 3:00 PM</span>
+      <span class="go">Send ›</span></div>
+    <div class="what">Soccer Central · Sat 10:00 AM · San Antonio</div>
+    <div class="chset"><i class="ch on">WA</i><i class="ch on">FB</i><i class="ch on">DM</i></div>
+  </div>
+
+  <div class="due" data-min="1140">
+    <div class="duetop"><span class="when">Tomorrow 12:00 PM</span>
+      <span class="go">Send ›</span></div>
+    <div class="what">PAC Global · Thu 9:00 PM · Houston</div>
+    <div class="chset"><i class="ch on">WA</i><i class="ch on">MC</i></div>
+  </div>
+
+  <div class="due" data-min="2580">
+    <div class="duetop"><span class="when">Thu 3:00 PM</span>
+      <span class="go">Send ›</span></div>
+    <div class="what">ATH Katy · Sun 9:30 AM · Houston</div>
+    <div class="chset"><i class="ch on">WA</i><i class="ch on">MC</i><i class="ch on">FB</i></div>
+  </div>
+
+  <!-- ══ THE WEEK — by day, all cities ════════════════════════ -->
+  <div class="day">
+    <div class="dayhd today"><b>Wed</b><span class="dt">19 Aug</span>
+      <span class="cnt">1 match</span></div>
+
+    <div class="row check" data-state="check">
+      <div class="rtop"><span class="tm">8:00 PM</span>
+        <span class="fd">Scissortail Park</span><span class="cty">OKC</span></div>
+      <div class="rmid">
+        <span class="chset"><i class="ch on">WA</i><i class="ch">MC</i><i class="ch">FB</i><i class="ch">DM</i><i class="ch">EM</i><i class="ch">SMS</i></span>
+        <span class="code none">No code</span></div>
+      <div class="push">Needs a decision</div>
+    </div>
+  </div>
+
+  <div class="day">
+    <div class="dayhd"><b>Thu</b><span class="dt">20 Aug</span>
+      <span class="cnt">4 matches</span></div>
+
+    <div class="row open" data-state="planned">
+      <div class="rtop"><span class="tm">7:00 PM</span>
+        <span class="fd">PRUMC</span><span class="cty">Atlanta</span></div>
+      <div class="rmid">
+        <span class="chset"><i class="ch on">WA</i><i class="ch on">MC</i><i class="ch">FB</i><i class="ch on">DM</i><i class="ch">EM</i><i class="ch">SMS</i></span>
+        <span class="code none">No code</span></div>
+      <div class="push">Needs a decision</div>
+    </div>
+
+    <!-- the panel, one column, under the row it belongs to -->
+    <div class="pan" id="pan">
+      <h3>PRUMC · Thu 20 Aug, 7:00 PM</h3>
+      <div class="plab">Channels</div>
+      <span class="tg on"><i class="sw"></i>WhatsApp</span>
+      <span class="tg on"><i class="sw"></i>Match chat</span>
+      <span class="tg"><i class="sw"></i>Facebook</span>
+      <span class="tg on"><i class="sw"></i>DM</span>
+      <span class="tg"><i class="sw"></i>Klaviyo email</span>
+      <span class="tg"><i class="sw"></i>Klaviyo SMS</span>
+
+      <div class="pfld"><label>When</label>
+        <input type="text" value="Wed 19 Aug, 3:00 PM">
+        <div class="lead">28h before</div></div>
+      <div class="pfld"><label>Code</label>
+        <select><option>50%</option><option>100% X-players</option><option>none</option></select></div>
+      <div class="pfld"><label>Comment</label>
+        <textarea placeholder="Offer, limit, who it targets"></textarea></div>
+
+      <div class="pfoot"><button class="save">Save plan</button>
+        <button class="cancel">Cancel</button></div>
+    </div>
+
+    <div class="row" data-state="planned">
+      <div class="rtop"><span class="tm">8:00 PM</span>
+        <span class="fd">Crossbar Rowlett</span><span class="cty">Dallas</span></div>
+      <div class="rmid">
+        <span class="chset"><i class="ch on">WA</i><i class="ch on">MC</i><i class="ch">FB</i><i class="ch">DM</i><i class="ch">EM</i><i class="ch">SMS</i></span>
+        <span class="code none">No code</span></div>
+      <div class="push">Push <b>Thu 12:00 PM</b> · 8h before</div>
+    </div>
+
+    <div class="row" data-state="planned">
+      <div class="rtop"><span class="tm">9:00 PM</span>
+        <span class="fd">PAC Global</span><span class="cty">Houston</span></div>
+      <div class="rmid">
+        <span class="chset"><i class="ch on">WA</i><i class="ch on">MC</i><i class="ch">FB</i><i class="ch">DM</i><i class="ch">EM</i><i class="ch">SMS</i></span>
+        <span class="code none">No code</span></div>
+      <div class="push">Push <b>Thu 12:00 PM</b> · 9h before</div>
+    </div>
+
+    <div class="row check" data-state="check">
+      <div class="rtop"><span class="tm">7:30 PM</span>
+        <span class="fd">Star Soccer Complex</span><span class="cty">SATX</span></div>
+      <div class="rmid">
+        <span class="chset"><i class="ch on">WA</i><i class="ch on">MC</i><i class="ch">FB</i><i class="ch">DM</i><i class="ch">EM</i><i class="ch">SMS</i></span>
+        <span class="code none">No code</span></div>
+      <div class="push">Needs a decision</div>
+    </div>
+  </div>
+
+  <div class="day">
+    <div class="dayhd"><b>Fri</b><span class="dt">21 Aug</span>
+      <span class="cnt">1 match</span></div>
+
+    <div class="row" data-state="planned">
+      <div class="rtop"><span class="tm">7:30 PM</span>
+        <span class="fd">LBJ Early College HS</span><span class="cty">Austin</span></div>
+      <div class="rmid">
+        <span class="chset"><i class="ch on">WA</i><i class="ch on">MC</i><i class="ch">FB</i><i class="ch on">DM</i><i class="ch">EM</i><i class="ch">SMS</i></span>
+        <span class="code">50%</span></div>
+      <div class="push">Push <b>Fri 12:00 PM</b> · 7h before</div>
+    </div>
+  </div>
+
+  <div class="day">
+    <div class="dayhd"><b>Sun</b><span class="dt">23 Aug</span>
+      <span class="cnt">2 matches</span></div>
+
+    <div class="row unplanned" data-state="unplanned">
+      <div class="rtop"><span class="tm">7:00 PM</span>
+        <span class="fd">Hattrick</span><span class="cty">Austin</span></div>
+      <div class="rmid">
+        <span class="chset"><i class="ch">WA</i><i class="ch">MC</i><i class="ch">FB</i><i class="ch">DM</i><i class="ch">EM</i><i class="ch">SMS</i></span>
+        <span class="code none">No code</span></div>
+      <div class="push">No push planned</div>
+    </div>
+
+    <div class="row" data-state="planned">
+      <div class="rtop"><span class="tm">7:00 PM</span>
+        <span class="fd">Bicentennial Park</span><span class="cty">Dallas</span></div>
+      <div class="rmid">
+        <span class="chset"><i class="ch on">WA</i><i class="ch on">MC</i><i class="ch">FB</i><i class="ch">DM</i><i class="ch">EM</i><i class="ch">SMS</i></span>
+        <span class="code">50%</span></div>
+      <div class="push">Push <b>Sun 12:00 PM</b> · 7h before</div>
+    </div>
+  </div>
+
+  <!-- ══ CANCEL PATTERNS — a ranking ══════════════════════════ -->
+  <div class="sect">
+    <h2>Cancel patterns</h2>
+    <div class="n">49 slots · last 4 completed weeks</div>
+  </div>
+
+  <div class="cx" data-n="3">
+    <span class="nn w3">3/4</span>
+    <div class="body"><div class="slot">Lowell H. Strike · Tue 8p</div>
+      <div class="meta">12 spots booked · Dallas</div></div>
+  </div>
+  <div class="cx" data-n="3">
+    <span class="nn w3">3/4</span>
+    <div class="body"><div class="slot">Hattrick · Fri 7p</div>
+      <div class="meta">7 spots booked · Austin</div></div>
+  </div>
+  <div class="cx" data-n="3">
+    <span class="nn w3">3/4</span>
+    <div class="body"><div class="slot">Onion Creek · Sat 9a</div>
+      <div class="meta">10 spots booked · Austin</div></div>
+  </div>
+  <div class="cx" data-n="3">
+    <span class="nn w3">3/4</span>
+    <div class="body"><div class="slot">ATH Katy · Sun 9:30a</div>
+      <div class="meta">10 spots booked · Houston</div></div>
+  </div>
+  <div class="cx" data-n="2">
+    <span class="nn w2">2/4</span>
+    <div class="body"><div class="slot">Hattrick · Tue 8p</div>
+      <div class="meta">4 spots booked · Austin</div></div>
+  </div>
+  <div class="cx" data-n="2">
+    <span class="nn w2">2/4</span>
+    <div class="body"><div class="slot">Bicentennial · Tue 7p</div>
+      <div class="meta">11 spots booked · Dallas</div></div>
+  </div>
+
+  <!-- ══ COVERAGE — per city, seven dots ══════════════════════ -->
+  <div class="sect">
+    <h2>Coverage</h2>
+    <div class="n">7 cities · 3 open days</div>
+  </div>
+
+  <div class="cov" data-city="ATLA">
+    <div class="covtop"><span class="c">Atlanta</span><span class="s">1 planned · 1 open</span></div>
+    <div class="dots">
+      <span class="dot o">Mon<i>!</i></span><span class="dot n">Tue<i>–</i></span>
+      <span class="dot n">Wed<i>–</i></span><span class="dot p">Thu<i>✓</i></span>
+      <span class="dot n">Fri<i>–</i></span><span class="dot n">Sat<i>–</i></span>
+      <span class="dot n">Sun<i>–</i></span>
+    </div>
+  </div>
+
+  <div class="cov" data-city="AUST">
+    <div class="covtop"><span class="c">Austin</span><span class="s">3 planned · 1 open</span></div>
+    <div class="dots">
+      <span class="dot n">Mon<i>–</i></span><span class="dot n">Tue<i>–</i></span>
+      <span class="dot n">Wed<i>–</i></span><span class="dot n">Thu<i>–</i></span>
+      <span class="dot p">Fri<i>✓</i></span><span class="dot p">Sat<i>✓</i></span>
+      <span class="dot o">Sun<i>!</i></span>
+    </div>
+  </div>
+
+  <div class="cov" data-city="DALL">
+    <div class="covtop"><span class="c">Dallas</span><span class="s">3 planned</span></div>
+    <div class="dots">
+      <span class="dot n">Mon<i>–</i></span><span class="dot n">Tue<i>–</i></span>
+      <span class="dot n">Wed<i>–</i></span><span class="dot p">Thu<i>✓</i></span>
+      <span class="dot n">Fri<i>–</i></span><span class="dot p">Sat<i>✓</i></span>
+      <span class="dot p">Sun<i>✓</i></span>
+    </div>
+  </div>
+
+  <div class="cov" data-city="SANA">
+    <div class="covtop"><span class="c">San Antonio</span><span class="s">2 planned · 1 open</span></div>
+    <div class="dots">
+      <span class="dot n">Mon<i>–</i></span><span class="dot n">Tue<i>–</i></span>
+      <span class="dot n">Wed<i>–</i></span><span class="dot p">Thu<i>✓</i></span>
+      <span class="dot n">Fri<i>–</i></span><span class="dot p">Sat<i>✓</i></span>
+      <span class="dot o">Sun<i>!</i></span>
+    </div>
+  </div>
+
+  <div class="key">
+    <b>✓</b> push planned · <b>!</b> matches, no push · <b>–</b> no matches<br>
+    A dashed row has no plan. Amber needs a push date.
+  </div>
+</div>
+</body>
+</html>
