@@ -76,6 +76,22 @@ function serveList(url, now) {
   }
   const bucket = sp.get("bucket");
   const page = Number(sp.get("page") || "1");
+  // ?all=1 — the route assembles every page server-side and returns the lot, deduped, with the
+  // raw-vs-distinct counts. The fixture mirrors that so browse is exercised the way it now runs.
+  if (sp.get("all") === "1") {
+    const build = (base, n, tag) => [
+      ...base,
+      ...Array.from({ length: n - base.length }, (_, i) => ({
+        ...base[0], id: 5000 + (tag === "live" ? 0 : 100000) + i, code: `${tag.toUpperCase()}FILL${i}`,
+        // A SPREAD OF createdAt VALUES, deliberately NOT in id order — otherwise "sorted by created"
+        // and "sorted by id" are indistinguishable and the assertion proves nothing.
+        createdAt: new Date(now - ((i * 37) % 900) * 86400000).toISOString(),
+      })),
+    ];
+    const rows = bucket === "live" ? build(live, 120, "live") : past;
+    return { data: rows, totalItems: rows.length, rawCount: rows.length, distinctCount: rows.length,
+             elapsedMs: 12, complete: true, nowIso };
+  }
   if (bucket === "live") {
     // page 1 = the 5 named rows + 20 filler (25); pages 2-6 = 25 filler each; totalItems 120 -> nudge past 100
     const filler = Array.from({ length: 25 }, (_, i) => ({ ...live[0], id: 5000 + page * 100 + i, code: `LIVEFILL${page}_${i}` }));
@@ -173,12 +189,18 @@ async function main() {
 
   // ── search-first: the box is present, and focused on load ──
   eq("search box is focused on load", await page.evaluate(() => document.activeElement?.getAttribute("data-testid")), "promo-search");
-  // ── branch C: the order label says the visible date column is NOT sortable ──
-  eq("order label notes the CREATED dates are shown but not sortable (branch C)", await page.$('[data-testid="nosort-note"]') !== null, true);
+  // ── the order label: the API still returns no order, which is WHY the sort is ours ──
+  { const note = await page.$eval('[data-testid="nosort-note"]', (e) => e.textContent.replace(/\s+/g, " "));
+    eq("the note still states the API returns no order", /API returns no order/i.test(note), true);
+    eq("…and no longer claims the column is not sortable", /not sortable/i.test(note), false); }
 
   // ── browse headers: exact totals, order named as the API's (NOT 'newest') ──
   { const live = await page.$eval('[data-testid="live-sub"]', (e) => e.textContent);
-    eq("LIVE header states exact total + 'order the API returns', not 'newest'", { hasTotal: /120 live codes/.test(live), apiOrder: /order the API returns/.test(live), noNewest: !/newest/i.test(live) }, { hasTotal: true, apiOrder: true, noNewest: true }); }
+    // CHANGED DELIBERATELY: the list is now sorted client-side, so the header says so. The old
+    // assertion required the WORD "newest" to be absent — it was pinning the absence of this sort.
+    eq("LIVE header states the exact total and that it is newest first",
+       { hasTotal: /120 live codes/.test(live), newest: /newest first/i.test(live) },
+       { hasTotal: true, newest: true }); }
   eq("PAST collapsed by default", await page.$('[data-testid="past-body"]'), null);
   eq("PAST header shows its exact total", /2 expired or deleted/.test(await page.$eval('[data-testid="past-sub"]', (e) => e.textContent)), true);
 
@@ -272,6 +294,27 @@ async function main() {
   await page.waitForSelector('[data-testid="promo-row"][data-id="101"]');
 
   // ── paging: 'Show 25 more' appends; past 100 the nudge replaces it ──
+  // ── CREATED IS SORTED, NEWEST FIRST ──────────────────────────────────────────────────────────
+  // The API has no ORDER BY and no sort param, so this order is produced here, over the whole set.
+  { const dates = await page.$$eval('[data-testid="grp-live"] [data-testid="promo-row"] [data-testid="created"]',
+      (els) => els.map((e) => e.firstChild?.textContent?.trim() ?? e.textContent.trim()));
+    // POSITIVE CONTROL FIRST — an ordering assertion over an empty list is vacuously true.
+    eq("  control — rows actually loaded to be ordered", dates.length > 1, true);
+    const ts = dates.map((d) => Date.parse(d)).filter((n) => !Number.isNaN(n));
+    eq("  control — those dates parsed", ts.length, dates.length);
+    eq("the first row's CREATED is the most recent on screen", ts[0], Math.max(...ts));
+    eq("…and the whole column descends", JSON.stringify(ts), JSON.stringify([...ts].sort((a, b) => b - a))); }
+  { const dir = await page.$eval('[data-testid="sort-created"]', (e) => e.getAttribute("data-dir"));
+    eq("the CREATED header carries the sort indicator, descending by default", dir, "desc"); }
+  // Clicking it flips the order — proof the control is wired to the data and not decoration.
+  { await page.click('[data-testid="sort-created"]');
+    await page.waitForTimeout(300);
+    const ts2 = (await page.$$eval('[data-testid="grp-live"] [data-testid="promo-row"] [data-testid="created"]',
+      (els) => els.map((e) => e.firstChild?.textContent?.trim() ?? e.textContent.trim()))).map((d) => Date.parse(d));
+    eq("clicking CREATED flips it to oldest first", JSON.stringify(ts2), JSON.stringify([...ts2].sort((a, b) => a - b)));
+    eq("…and the indicator follows", await page.$eval('[data-testid="sort-created"]', (e) => e.getAttribute("data-dir")), "asc");
+    await page.click('[data-testid="sort-created"]'); await page.waitForTimeout(300); }
+
   eq("browse LIVE shows 'Show 25 more'", !!(await page.$('[data-testid="grp-live"] [data-testid="show-more"]')), true);
   // click "Show more" until the nudge appears (loaded >= 100) — robust to REDEEMED reflow
   for (let i = 0; i < 6 && !(await page.$('[data-testid="grp-live"] [data-testid="nudge"]')); i++) {

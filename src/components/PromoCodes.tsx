@@ -32,7 +32,28 @@ async function authFetch(path: string, init?: RequestInit): Promise<Response> {
   return fetch(path, { ...init, headers: { ...(init?.headers ?? {}), ...(token ? { Authorization: `Bearer ${token}` } : {}) }, cache: "no-store" });
 }
 
-type ListResp = { data: PromoRow[]; totalItems: number; nowIso: string; error?: string };
+type ListResp = {
+  data: PromoRow[]; totalItems: number; nowIso: string; error?: string;
+  // ?all=1 only. rawCount vs distinctCount is the no-ORDER-BY trap made visible: if the API handed
+  // back the same row twice while assembling, these differ.
+  rawCount?: number; distinctCount?: number; elapsedMs?: number; complete?: boolean;
+};
+
+type Assembly = { raw: number; distinct: number; total: number; ms: number; complete: boolean };
+
+/**
+ * NEWEST FIRST, BY createdAt. The API cannot sort — no sort param exists and the default order is
+ * neither id nor createdAt (page 1 starts with 2023 codes). So the order is ours, over the whole
+ * set, which is the only place it can be correct.
+ *
+ * createdAt is TRUE UTC on a promo, not wall-clock-with-Z like a match, so a plain instant compare
+ * is right here and the match helpers must not be borrowed. A row with no createdAt sorts last
+ * rather than jumping to the top on a NaN.
+ */
+function sortByCreatedDesc(rows: PromoRow[]): PromoRow[] {
+  const t = (r: PromoRow) => { const v = Date.parse(r.createdAt ?? ""); return Number.isNaN(v) ? -Infinity : v; };
+  return [...rows].sort((a, b) => t(b) - t(a) || b.id - a.id);
+}
 
 // ── REDEEMED per-row lazy fetch (Phase 20 C). usageCount is detail-only, so the ban on N+1 is
 // lifted for the VISIBLE page only, under strict rules: render immediately (never block), fill in
@@ -117,6 +138,13 @@ export default function PromoCodes() {
   // browse buckets (accumulated across pages)
   const [live, setLive] = useState<{ rows: PromoRow[]; total: number; page: number }>({ rows: [], total: 0, page: 0 });
   const [past, setPast] = useState<{ rows: PromoRow[]; total: number; page: number }>({ rows: [], total: 0, page: 0 });
+  // What the assembly actually returned, per bucket — surfaced rather than assumed.
+  const [assembly, setAssembly] = useState<{ live: Assembly; past: Assembly } | null>(null);
+  // How many rows each browse table RENDERS. Browse holds every row; this is the window over it.
+  const [windowN, setWindowN] = useState<{ live: number; past: number }>({ live: PAGE, past: PAGE });
+  // DEFAULT DESCENDING — newest first is the whole point; October 2024 should not be page one.
+  const [sortDir, setSortDir] = useState<"asc" | "desc">("desc");
+  const toggleSort = useCallback(() => setSortDir((d) => (d === "desc" ? "asc" : "desc")), []);
   // search results (accumulated) + single-id result
   const [search, setSearch] = useState<{ rows: PromoRow[]; total: number; page: number } | null>(null);
   const [idResult, setIdResult] = useState<{ row: PromoRow | null } | null>(null);
@@ -151,12 +179,24 @@ export default function PromoCodes() {
   }, []);
 
   // ── BROWSE: load both buckets, page 1 ──
+  // ── BROWSE: every row, once, then sorted here ──
+  //
+  // The list endpoint has no ORDER BY and no sort param (docs/matchday-api-facts.md), so ordering
+  // by CREATED cannot be asked for — it has to be done over the whole set. ?all=1 assembles the
+  // pages server-side and dedupes by id; this sorts what comes back and renders a window of it.
+  //
+  // A SHORT LIST SORTED IS WORSE THAN A LONG LIST UNSORTED, so if the assembly comes back short of
+  // totalItems the rows are still shown but the sort is NOT claimed — see `sorted` below.
   const loadBrowse = useCallback(async () => {
     setLoading(true); setErr(null);
     try {
-      const [l, p] = await Promise.all([getList({ bucket: "live", page: 1 }), getList({ bucket: "past", page: 1 })]);
-      setLive({ rows: l.data, total: l.totalItems, page: 1 });
-      setPast({ rows: p.data, total: p.totalItems, page: 1 });
+      const [l, p] = await Promise.all([getList({ bucket: "live", all: 1 }), getList({ bucket: "past", all: 1 })]);
+      setLive({ rows: sortByCreatedDesc(l.data), total: l.totalItems, page: 1 });
+      setPast({ rows: sortByCreatedDesc(p.data), total: p.totalItems, page: 1 });
+      setAssembly({
+        live: { raw: l.rawCount ?? l.data.length, distinct: l.distinctCount ?? l.data.length, total: l.totalItems, ms: l.elapsedMs ?? 0, complete: l.complete !== false },
+        past: { raw: p.rawCount ?? p.data.length, distinct: p.distinctCount ?? p.data.length, total: p.totalItems, ms: p.elapsedMs ?? 0, complete: p.complete !== false },
+      });
       setNowIso(l.nowIso);
       setSearch(null); setIdResult(null);
     } catch (e) { setErr(e instanceof Error ? e.message : String(e)); }
@@ -211,10 +251,8 @@ export default function PromoCodes() {
       setSearch({ rows: [...search.rows, ...r.data], total: r.totalItems, page: search.page + 1 });
       return;
     }
-    const cur = bucket === "live" ? live : past;
-    const r = await getList({ bucket, page: cur.page + 1 });
-    const next = { rows: [...cur.rows, ...r.data], total: r.totalItems, page: cur.page + 1 };
-    bucket === "live" ? setLive(next) : setPast(next);
+    // Browse already holds every row. "Show more" widens the RENDER window; it fetches nothing.
+    setWindowN((w) => ({ ...w, [bucket]: (w[bucket] ?? PAGE) + PAGE }));
   };
 
   // ── compute what each table shows, per mode ──
@@ -238,9 +276,15 @@ export default function PromoCodes() {
       const pastRows = search.rows.filter((r) => promoBucket(r, nowIso) === "past");
       return { liveRows, liveTotal: liveRows.length, pastRows, pastTotal: pastRows.length, searchTotal: search.total, notFound: search.total === 0 };
     }
-    // browse — prepend session "just created" rows to LIVE
-    return { liveRows: [...justCreated, ...live.rows], liveTotal: live.total + justCreated.length, pastRows: past.rows, pastTotal: past.total, searchTotal: 0, notFound: false };
-  }, [mode, idResult, search, live, past, justCreated, nowIso]);
+    // browse — every row is already held and sorted newest-first; render a window of it. Session
+    // "just created" rows stay pinned at the top, which is also where the sort would put them.
+    return {
+      liveRows: [...justCreated, ...(sortDir === "desc" ? live.rows : [...live.rows].reverse()).slice(0, windowN.live)],
+      liveTotal: live.total + justCreated.length,
+      pastRows: (sortDir === "desc" ? past.rows : [...past.rows].reverse()).slice(0, windowN.past),
+      pastTotal: past.total, searchTotal: 0, notFound: false,
+    };
+  }, [mode, idResult, search, live, past, justCreated, nowIso, windowN, sortDir]);
 
   // Overlay locally-saved edits. The list endpoint has no ORDER BY and 6,260 rows, so refetching
   // to see one changed field is both slow and unreliable; the row the operator just saved shows
@@ -308,14 +352,15 @@ export default function PromoCodes() {
             <div className="ghead">
               <span className="gtitle">LIVE</span>
               <span className="gsub" data-testid="live-sub">{mode === "browse"
-                ? <>{shown.liveTotal.toLocaleString()} live codes, in the order the API returns them <span className="nosort" data-testid="nosort-note">— no date sort; the CREATED dates are shown, not sortable</span></>
+                ? <>{shown.liveTotal.toLocaleString()} live codes, <b>newest first</b> <span className="nosort" data-testid="nosort-note">— the API returns no order, so the sort is ours: every row is fetched, then sorted by CREATED</span>{assembly && !assembly.live.complete && <span className="nosort" data-testid="assembly-short"> · only {assembly.live.distinct.toLocaleString()} of {assembly.live.total.toLocaleString()} rows loaded — NOT sorted</span>}</>
                 : `${shown.liveTotal.toLocaleString()} live match${shown.liveTotal === 1 ? "" : "es"}`}</span>
             </div>
             <PromoTable rows={shown.liveRows} nowIso={nowIso} onOpen={setDetailId} redeemed={redeemed}
               empty={mode !== "browse"
                 ? <p className="empty oneline" data-testid="live-empty"><b>No live codes match</b>Finished and deleted codes are in the PAST table below — it opens when a search hits it.</p>
                 : <p className="empty" data-testid="live-empty"><b>No live codes</b>Nothing is active or scheduled right now.</p>}
-              more={<MoreBar mode={mode} loaded={shown.liveRows.length - (mode === "browse" ? justCreated.length : 0)} total={mode === "search" ? shown.searchTotal : shown.liveTotal} onMore={() => loadMore("live")} />} />
+              more={<MoreBar mode={mode} loaded={shown.liveRows.length - (mode === "browse" ? justCreated.length : 0)} total={mode === "search" ? shown.searchTotal : shown.liveTotal} onMore={() => loadMore("live")} />}
+              onSort={mode === "browse" ? toggleSort : undefined} sortDir={mode === "browse" ? sortDir : undefined} />
           </section>
 
           {/* PAST — collapsible */}
@@ -331,7 +376,8 @@ export default function PromoCodes() {
               <div data-testid="past-body">
                 <PromoTable rows={shown.pastRows} nowIso={nowIso} onOpen={setDetailId} redeemed={redeemed}
                   empty={<p className="empty" data-testid="past-empty"><b>No past codes match</b>Nothing expired or deleted matches that.</p>}
-                  more={<MoreBar mode={mode} loaded={shown.pastRows.length} total={mode === "search" ? shown.searchTotal : shown.pastTotal} onMore={() => loadMore("past")} />} />
+                  more={<MoreBar mode={mode} loaded={shown.pastRows.length} total={mode === "search" ? shown.searchTotal : shown.pastTotal} onMore={() => loadMore("past")} />}
+                  onSort={mode === "browse" ? toggleSort : undefined} sortDir={mode === "browse" ? sortDir : undefined} />
               </div>
             )}
           </section>
@@ -357,11 +403,23 @@ export default function PromoCodes() {
 }
 
 // ── one table. The timezone is stated ONCE here (a property of the table), not per row. ──
-function PromoTable({ rows, nowIso, onOpen, redeemed, empty, more }: { rows: PromoRow[]; nowIso: string; onOpen: (id: number) => void; redeemed: Redeemed; empty: React.ReactNode; more: React.ReactNode }) {
+function PromoTable({ rows, nowIso, onOpen, redeemed, empty, more, onSort, sortDir }: {
+  rows: PromoRow[]; nowIso: string; onOpen: (id: number) => void; redeemed: Redeemed;
+  empty: React.ReactNode; more: React.ReactNode;
+  // Sorting is offered in BROWSE only. Search and ID return a small, relevance-ordered result set
+  // and re-ordering it by date would fight the question that was asked.
+  onSort?: () => void; sortDir?: "asc" | "desc";
+}) {
   return (
     <div className="sheet">
       <div className="tzbar" data-testid="tzbar">All times <b>America/Chicago</b></div>
-      <div className="colhead"><span /><span>CODE</span><span>CREATED</span><span>WINDOW</span><span>DISCOUNT</span><span>WHO · WHICH</span><span className="ra">CAP</span><span className="ra">REDEEMED</span><span>STATE</span></div>
+      <div className="colhead"><span /><span>CODE</span>
+        <span>{onSort
+          ? <button type="button" className="sorthd" data-testid="sort-created" data-dir={sortDir ?? ""}
+              aria-sort={sortDir === "desc" ? "descending" : sortDir === "asc" ? "ascending" : "none"}
+              onClick={onSort}>CREATED<i className="sarrow">{sortDir === "asc" ? "▲" : "▼"}</i></button>
+          : "CREATED"}</span>
+        <span>WINDOW</span><span>DISCOUNT</span><span>WHO · WHICH</span><span className="ra">CAP</span><span className="ra">REDEEMED</span><span>STATE</span></div>
       {rows.length === 0 ? empty : rows.map((p) => <PromoRowEl key={p.id + ":" + p.code} p={p} nowIso={nowIso} onOpen={onOpen} redeemed={redeemed} />)}
       {rows.length > 0 && more}
     </div>
@@ -1041,6 +1099,11 @@ const CSS = `
 .promo .tzbar{padding:8px 16px;background:#e8f0fa;border-bottom:1px solid #a8c4e6;color:#123a6b;font-size:11.5px;font-weight:600}
 .promo .tzbar b{font-weight:800}
 .promo .colhead,.promo .r{display:grid;gap:12px;align-items:center;grid-template-columns:5px 150px 92px 138px 80px minmax(110px,1fr) 66px 84px 88px;padding:0 16px 0 0}
+.promo .sorthd{border:0;background:transparent;font:inherit;font-size:inherit;font-weight:inherit;
+  letter-spacing:inherit;color:inherit;cursor:pointer;padding:6px 0;display:inline-flex;align-items:center;gap:4px}
+.promo .sorthd:hover{color:#0f5132}
+.promo .sorthd:focus-visible{outline:2px solid #0b6bcb;outline-offset:2px}
+.promo .sarrow{font-style:normal;font-size:8px;line-height:1}
 .promo .colhead{padding-top:9px;padding-bottom:9px;background:#fafcfb;border-bottom:1px solid #dde6e1;font-size:10px;font-weight:800;letter-spacing:.11em;color:#5c7168}
 .promo .colhead>span{display:block}.promo .colhead .ra{text-align:right}
 .promo .cr{display:block;font-size:12.5px;color:#3d5349;font-variant-numeric:tabular-nums;white-space:nowrap}
