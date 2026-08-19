@@ -159,6 +159,52 @@ export default function RevenueSection() {
 
   // ONE BAR PER PERIOD, not per month — at Quarter grain a bar is a quarter, and its value is the
   // sum of that quarter's months.
+  // ── GROSS, FROM fin_revenue ─────────────────────────────────────────────────────────────────
+  //
+  // THE HEADLINE IS MONEY COLLECTED, not play reconstructed. It used to be roster-derived — the
+  // sum of DAILY PAID registrations at mapped venues (venuePartnerRevenueFor) — which answers
+  // "what did play generate at our venues" and was labelled as revenue. Measured against Stripe it
+  // ran 7-8% low every month, because money with no matching roster row, or at a field not mapped
+  // to a venue, cannot appear in it.
+  //
+  // GROSS, NOT NET: fees and refunds are separate columns and are not subtracted, so this lines up
+  // with Stripe's gross volume rather than its payout.
+  //
+  // venuePartnerRevenueFor IS UNTOUCHED and still drives Field View, Match View, Field Ranking,
+  // City P&L and Cost. It is the single derivation behind revenue and field cost, and this change
+  // deliberately does not go near it — it adds a second, differently-sourced figure beside it and
+  // names both.
+  const [grossRows, setGrossRows] = useState<{ date: string; city: string; type: string; gross: number }[] | null>(null);
+  useEffect(() => {
+    const keys = periods.map((p) => p.key);
+    if (keys.length === 0) return;
+    let live = true;
+    const lo = `${periods[0].start.getFullYear()}-${String(periods[0].start.getMonth() + 1).padStart(2, "0")}-01`;
+    const last = periods[periods.length - 1];
+    const hiD = new Date(last.end.getFullYear(), last.end.getMonth() + 1, 0);
+    const hi = `${hiD.getFullYear()}-${String(hiD.getMonth() + 1).padStart(2, "0")}-${String(hiD.getDate()).padStart(2, "0")}`;
+    void (async () => {
+      // PAGED — PostgREST caps at 1,000 and four months is ~2,000 rows. An unpaged read here would
+      // silently under-report the headline, which is the exact class of bug this change fixes.
+      const acc: { date: string; city: string; type: string; gross: number }[] = [];
+      for (let from = 0; ; from += 1000) {
+        const { data, error } = await supabase
+          .from("fin_revenue").select("date, city, type, gross")
+          .gte("date", lo).lte("date", hi).order("date").range(from, from + 999);
+        if (error || !data) break;
+        acc.push(...(data as typeof acc));
+        if (data.length < 1000) break;
+      }
+      if (live) setGrossRows(acc);
+    })();
+    return () => { live = false; };
+  }, [periods]);
+
+  const monthOfDate = (d: string) => {
+    const [y, m] = String(d).split("-");
+    return `${["Jan","Feb","Mar","Apr","May","Jun","Jul","Aug","Sep","Oct","Nov","Dec"][Number(m) - 1]} ${y}`;
+  };
+
   type SeriesPoint = { month: string; key: string; dpp: number; membership: number };
   const series = useMemo<SeriesPoint[]>(() => {
     if (!data) return [];
@@ -210,19 +256,39 @@ export default function RevenueSection() {
       ? { days: Math.max(1, period.elapsedDays), basis: "elapsed" as const }
       : { days: Math.max(1, daysInMonthOf(p.month)), basis: "full" as const };
 
+  // Gross per month, and the roster-matched figure beside it, so the gap can be stated rather
+  // than quietly absorbed.
+  const grossFor = (p: SeriesPoint) => {
+    if (!grossRows) return null;
+    const ms = periods.find((q) => q.key === p.key)?.months ?? [p.month];
+    const set = new Set(ms);
+    return grossRows.filter((r) => set.has(monthOfDate(r.date)))
+      .reduce((a, r) => a + Number(r.gross ?? 0), 0);
+  };
+  const grossByType = (p: SeriesPoint, want: "dpp" | "member") => {
+    if (!grossRows) return null;
+    const ms = periods.find((q) => q.key === p.key)?.months ?? [p.month];
+    const set = new Set(ms);
+    return grossRows.filter((r) => set.has(monthOfDate(r.date))
+      && (want === "member" ? /member/i.test(r.type ?? "") : !/member/i.test(r.type ?? "")))
+      .reduce((a, r) => a + Number(r.gross ?? 0), 0);
+  };
+
   const SUMMARY_ROWS = [
     { key: "total", label: "Total revenue",
-      render: (p: SeriesPoint) => fmtMoney(p.dpp + p.membership) },
+      render: (p: SeriesPoint) => { const g = grossFor(p); return g == null ? "…" : fmtMoney(g); } },
     { key: "dpp", label: "DPP",
-      render: (p: SeriesPoint) => fmtMoney(p.dpp) },
+      render: (p: SeriesPoint) => { const g = grossByType(p, "dpp"); return g == null ? "…" : fmtMoney(g); } },
     { key: "membership", label: "Membership",
-      render: (p: SeriesPoint) => (membershipScoped ? fmtMoney(p.membership) : "—") },
+      render: (p: SeriesPoint) => { const g = grossByType(p, "member"); return g == null ? "…" : fmtMoney(g); } },
     { key: "avgdaily", label: "Average daily revenue",
       render: (p: SeriesPoint) => {
         const { days, basis } = divisorFor(p);
+        const g = grossFor(p);
+        if (g == null) return "…";
         return (
           <>
-            {fmtMoney((p.dpp + p.membership) / days)}
+            {fmtMoney(g / days)}
             <i className={s.soFar} data-testid="avg-daily-basis">
               {basis === "elapsed" ? `÷ ${days} elapsed` : `÷ ${days} days`}
             </i>
@@ -239,7 +305,11 @@ export default function RevenueSection() {
   }, [grain, shownFields, shownMatches]);
 
   const anchorPoint = series.find((p) => p.key === period.key) ?? { month: period.label, key: period.key, dpp: 0, membership: 0 };
-  const anchorValue = valueOf(anchorPoint);
+  // THE KPI CARDS READ GROSS TOO — they sat on the same roster-derived figure as the headline.
+  const anchorGross = grossFor(anchorPoint as SeriesPoint);
+  const anchorValue = anchorGross ?? valueOf(anchorPoint);
+  // What the roster walk matched to a venue, for the gap line below the table.
+  const anchorMatched = valueOf(anchorPoint);
 
   // ELAPSED AND TOTAL COME FROM THE PERIOD, at whatever grain it is — 17 of 31 for August, 48 of
   // 92 for Q3. Computing them here from the day of the month would have been right only at Month
@@ -482,6 +552,26 @@ export default function RevenueSection() {
           </div>
         </div>
 
+        {/* THE GAP, STATED. Gross is money collected; the per-field views below are built from
+            roster rows matched to a venue, and the difference is 7-8% every month. It was
+            invisible because one number was labelled as the other. Naming it is the whole point —
+            explaining it is not this pass's job. */}
+        <div className={s.legend} data-testid="revenue-gap">
+          {series.map((p) => {
+            const g = grossFor(p);
+            const matched = valueOf(p);
+            if (g == null || g <= 0) return null;
+            const gap = g - matched;
+            if (gap <= 0.5) return null;
+            return (
+              <span key={p.key} data-testid="gap-line" data-month={p.key}>
+                <b>{fmtMoney(gap)}</b> collected in {p.month} is not matched to a venue —{" "}
+                {((gap / g) * 100).toFixed(1)}% of gross.
+              </span>
+            );
+          })}
+        </div>
+
         <div className={s.legend}>
           {!membershipScoped && <span>Membership withheld — it is a city figure and cannot be narrowed to one pitch.</span>}
           {/* A table that quietly drew fewer months than asked would read as "this is all there
@@ -646,10 +736,10 @@ function GroupTable({ rows, grain, month, membershipOf, membershipScoped }: {
               <th className="l">{grain === "city" ? "City" : "Location"}</th>
               <th>Venues</th>
               <th>Matches</th>
-              <th>Total revenue <i className={s.mut}>(in month)</i></th>
+              <th>Revenue matched to a venue <i className={s.mut}>(in month)</i></th>
               <th>Avg revenue / venue</th>
               <th>Avg revenue / match</th>
-              <th>DPP revenue <i className={s.mut}>(in month)</i></th>
+              <th>DPP matched to a venue <i className={s.mut}>(in month)</i></th>
               <th>Membership revenue <i className={s.mut}>(in month)</i></th>
               <th>Member mix <i className={s.mut}>(in month)</i></th>
             </tr>
@@ -715,7 +805,7 @@ function MatchTable({ rows }: { rows: MatchRow[] }) {
               <th>Free Code</th>
               <th>DPP&rsquo;s</th>
               <th>Total Spots</th>
-              <th>DPP Revenue</th>
+              <th>DPP Revenue <i className={s.mut}>(matched to a venue)</i></th>
               <th>Field Cost</th>
             </tr>
           </thead>
