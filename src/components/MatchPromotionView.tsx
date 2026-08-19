@@ -110,9 +110,32 @@ export default function MatchPromotionView() {
 
   const open = week?.matches.find((m) => m.apiId === openId) ?? null;
 
-  function openMatch(m: PromoMatch) {
-    setOpenId(m.apiId);
-    setDraft(draftFrom(m));
+  /**
+   * KEEP THE CLICKED TILE WHERE IT IS. Opening a panel inserts a block into the flow, and closing
+   * one removes it. Neither should move the thing you just clicked: if a panel is already open in
+   * a city ABOVE this one, closing it shortens the page and the whole grid jumps up under the
+   * pointer. So the tile's viewport offset is measured before the state change and restored after
+   * paint — which is also what makes "closing returns you to the same scroll position" true.
+   */
+  function anchor(el: HTMLElement | null, mutate: () => void) {
+    const before = el?.getBoundingClientRect().top ?? null;
+    mutate();
+    if (before === null || !el) return;
+    requestAnimationFrame(() => {
+      const after = el.getBoundingClientRect().top;
+      if (after !== before) window.scrollBy(0, after - before);
+    });
+  }
+
+  function openMatch(m: PromoMatch, el: HTMLElement) {
+    anchor(el, () => { setOpenId(m.apiId); setDraft(draftFrom(m)); });
+  }
+
+  function closePanel() {
+    const el = openId != null
+      ? (document.querySelector(`[data-testid="match-tile"][data-api-id="${openId}"]`) as HTMLElement | null)
+      : null;
+    anchor(el, () => { setOpenId(null); setDraft(null); });
   }
 
   async function save() {
@@ -137,7 +160,7 @@ export default function MatchPromotionView() {
       const json = (await res.json()) as { outcome?: string; error?: string };
       if (json.outcome === "LANDED") {
         setToast({ msg: "Plan saved.", bad: false });
-        setOpenId(null); setDraft(null);
+        closePanel();
         await load(weekRef);
       } else {
         setToast({ msg: `${json.outcome ?? "FAILED"} — ${json.error ?? "nothing was written."}`, bad: true });
@@ -271,10 +294,9 @@ export default function MatchPromotionView() {
 
         {tab === "coverage"
           ? <Coverage week={week} />
-          : <Plan week={week} byCity={byCity} openId={openId} onOpen={openMatch} />}
-
-        {/* ── THE PANEL ──────────────────────────────────────────────────────────────────────── */}
-        {tab === "plan" && open && draft && (
+          : <Plan week={week} byCity={byCity} openId={openId} onOpen={openMatch}
+                   openCity={open?.city ?? null}
+                   panel={tab === "plan" && open && draft ? (
           <div className="mx-5 mb-4 rounded-xl border border-cream-line bg-[#fbfdfc] px-4 pb-4 pt-3.5" data-testid="panel">
             <div className="mb-3 flex items-baseline gap-2.5">
               <h3 className="m-0 text-[15px] font-extrabold">{open.venue} · {DOW[open.dayIdx]} {open.time}</h3>
@@ -335,12 +357,12 @@ export default function MatchPromotionView() {
                 className="rounded-full bg-deep-green px-4 py-2 text-[13px] font-extrabold text-white disabled:opacity-50">
                 {saving ? "Saving…" : "Save plan"}
               </button>
-              <span onClick={() => { setOpenId(null); setDraft(null); }}
+              <span onClick={closePanel}
                 className="cursor-pointer text-[13px] font-bold text-deep-green/65">Cancel</span>
               {toast && <span className={`text-[12.5px] font-bold ${toast.bad ? "text-coral" : "text-emerald-700"}`}>{toast.msg}</span>}
             </div>
           </div>
-        )}
+                   ) : null} />}
 
         {tab === "plan" && (
           <CancelGrid promotedSlots={promotedSlots} />
@@ -362,8 +384,13 @@ function weekLabel(w: PromoWeek): string {
 }
 
 /* ── THE WEEK ───────────────────────────────────────────────────────────────────────────────── */
-function Plan({ week, byCity, openId, onOpen }: {
-  week: PromoWeek; byCity: [string, PromoMatch[]][]; openId: number | null; onOpen: (m: PromoMatch) => void;
+function Plan({ week, byCity, openId, onOpen, openCity, panel }: {
+  week: PromoWeek; byCity: [string, PromoMatch[]][]; openId: number | null;
+  onOpen: (m: PromoMatch, el: HTMLElement) => void;
+  // THE PANEL OPENS INLINE, UNDER THE CITY WHOSE TILE WAS CLICKED — not at the foot of the page.
+  // Rendering it once at page level meant clicking an Atlanta match scrolled you past every other
+  // city to reach the editor. A panel that is correct but a page away is the bug.
+  openCity: string | null; panel: React.ReactNode;
 }) {
   return (
     <>
@@ -402,6 +429,7 @@ function Plan({ week, byCity, openId, onOpen }: {
                 );
               })}
             </div>
+            {city === openCity && panel}
           </div>
         );
       })}
@@ -409,13 +437,14 @@ function Plan({ week, byCity, openId, onOpen }: {
   );
 }
 
-function Tile({ m, open, onOpen, weekStart }: { m: PromoMatch; open: boolean; onOpen: (m: PromoMatch) => void; weekStart: string }) {
+function Tile({ m, open, onOpen, weekStart }: { m: PromoMatch; open: boolean; onOpen: (m: PromoMatch, el: HTMLElement) => void; weekStart: string }) {
   const border =
     m.state === "needs-decision" ? "border-amber-300 bg-amber-50"
     : m.state === "none" ? "border-dashed border-cream-line"
     : "border-cream-line";
   return (
-    <div data-testid="match-tile" data-state={m.state} onClick={() => onOpen(m)}
+    <div data-testid="match-tile" data-state={m.state} data-api-id={m.apiId} data-open={open ? "1" : "0"}
+      onClick={(e) => onOpen(m, e.currentTarget as HTMLElement)}
       className={`mb-1.5 cursor-pointer rounded-[9px] border bg-white p-[7px_8px] last:mb-0 ${border} ${open ? "border-deep-green shadow-[0_0_0_2px_#e6efe9]" : ""}`}>
       <div className="text-[12.5px] font-extrabold">{m.time}</div>
       <div className="mb-[5px] mt-px text-[11px] leading-[1.25] text-deep-green/65">{m.venue}</div>

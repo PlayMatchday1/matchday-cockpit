@@ -171,6 +171,75 @@ if (chips === 0) {
      DOW[perDay.indexOf(Math.max(...perDay))]);
 }
 
+// ── 5b. THE PANEL OPENS INLINE, UNDER ITS OWN CITY ────────────────────────────────────────────
+// The panel used to render once at the foot of the page: clicking an Atlanta match scrolled you
+// past every other city to reach the editor. Correct-but-a-page-away is the bug, so proximity is
+// measured in pixels and position is checked in DOM order — either alone would miss it.
+console.log("\n── the plan panel opens inline, beside the tile that opened it ──");
+{
+  const cityBlocks = page.locator('[data-testid="city-block"]');
+  const nCities = await cityBlocks.count();
+  eq("there is more than one city, so 'under the right one' is a real question", nCities > 1, true);
+
+  // Deliberately use a tile in the LAST city — the case the old layout got most wrong.
+  const lastCity = cityBlocks.nth(nCities - 1);
+  const tile = lastCity.locator('[data-testid="match-tile"]').first();
+  await tile.click();
+  await page.waitForSelector('[data-testid="panel"]', { timeout: 15000 });
+
+  const gap = await page.evaluate(() => {
+    const t = document.querySelector('[data-testid="match-tile"][data-open="1"]')
+      ?? document.querySelector('[data-testid="panel"]')?.closest('[data-testid="city-block"]')?.querySelector('[data-testid="match-tile"]');
+    const p = document.querySelector('[data-testid="panel"]');
+    if (!t || !p) return null;
+    return Math.round(p.getBoundingClientRect().top - t.getBoundingClientRect().bottom);
+  });
+  eq("the panel's top edge is within 420px of the open tile's bottom edge", gap !== null && gap < 420, true);
+  console.log(`     measured gap: ${gap}px`);
+
+  // DOM ORDER: the panel must live inside its own city block, and that block must be the one
+  // holding the clicked tile — not a later sibling, and not the page root.
+  const placement = await page.evaluate(() => {
+    const p = document.querySelector('[data-testid="panel"]');
+    const own = p?.closest('[data-testid="city-block"]') ?? null;
+    const blocks = [...document.querySelectorAll('[data-testid="city-block"]')];
+    return {
+      insideACityBlock: !!own,
+      indexOfOwn: own ? blocks.indexOf(own) : -1,
+      lastIndex: blocks.length - 1,
+      // the panel comes AFTER the week grid within its block
+      afterTheGrid: !!own && own.lastElementChild === p,
+    };
+  });
+  eq("the panel sits INSIDE a city block, not at the page root", placement.insideACityBlock, true);
+  eq("…specifically the block whose tile was clicked (the last city)", placement.indexOfOwn, placement.lastIndex);
+  eq("…and after that city's week grid, before the next city", placement.afterTheGrid, true);
+
+  eq("the clicked tile keeps its selected border while the panel is open",
+     await page.locator('[data-testid="match-tile"][data-open="1"]').count(), 1);
+  eq("only one panel is open at a time", await page.locator('[data-testid="panel"]').count(), 1);
+
+  // Clicking a tile in a DIFFERENT city moves the panel with it.
+  const firstCity = cityBlocks.nth(0);
+  await firstCity.locator('[data-testid="match-tile"]').first().click();
+  await page.waitForTimeout(400);
+  const moved = await page.evaluate(() => {
+    const p = document.querySelector('[data-testid="panel"]');
+    const blocks = [...document.querySelectorAll('[data-testid="city-block"]')];
+    return blocks.indexOf(p?.closest('[data-testid="city-block"]'));
+  });
+  eq("clicking another city's tile moves the panel to THAT city", moved, 0);
+  eq("…and still only one panel exists", await page.locator('[data-testid="panel"]').count(), 1);
+
+  // CLOSING RETURNS THE PAGE TO THE SAME SCROLL POSITION.
+  const before = await page.evaluate(() => window.scrollY);
+  await page.locator('[data-testid="panel"]').getByText("Cancel", { exact: true }).click();
+  await page.waitForTimeout(500);
+  const after = await page.evaluate(() => window.scrollY);
+  eq("closing the panel leaves the scroll position within 4px of where it was", Math.abs(after - before) <= 4, true);
+  eq("…and the panel is gone", await page.locator('[data-testid="panel"]').count(), 0);
+}
+
 // ── 6. SCREENSHOTS ────────────────────────────────────────────────────────────────────────────
 console.log("\n── screenshots ──");
 for (const width of [1620, 1280]) {
