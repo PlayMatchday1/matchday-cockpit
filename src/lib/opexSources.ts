@@ -132,7 +132,11 @@ function cityManagerGroup(
     .filter((r) => r.category === "City Manager" && r.month === monthKey)
     .map((r, i) => {
       const day = dayInMonth(r.date, year, month0);
-      const name = (r.notes?.trim() || r.vendor?.trim() || r.city?.trim() || "Manager");
+      // VENDOR FIRST — the person's name. This read notes first, which was wrong the moment the
+      // Apr–Jun batch put a sentence there: those rows labelled themselves "April CM payment"
+      // instead of "Yara". notes survives only as the fallback for a row that has no vendor yet,
+      // and this now matches the generic expense path below, which has always been vendor-first.
+      const name = (r.vendor?.trim() || r.notes?.trim() || r.city?.trim() || "Manager");
       return {
         key: `cm:${r.id ?? i}`,
         label: name,
