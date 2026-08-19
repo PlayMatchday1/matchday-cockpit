@@ -33,7 +33,6 @@ export const SECTION_GRAINS: Record<string, SectionGrains> = {
   "/admin/finance/cost":          { grains: ["month", "quarter", "year"], why: "" },
   "/admin/finance/cash-flow":     { grains: ["quarter"], why: "Cash Flow is built around a quarter — starting cash, quarter P&L and a three-month expense forecast. It has no month or year form." },
   "/admin/finance/opex":          { grains: ["month"], why: "OpEx draws a day-by-day calendar for one month. A quarter or a year has no calendar grid." },
-  "/admin/finance/field-ranking": { grains: ["month", "quarter"], why: "Field Ranking ranks venues within a month and compares across a quarter. A year would average away the ranking it exists to show." },
 };
 
 function I({ children }: { children: React.ReactNode }) {
@@ -69,11 +68,6 @@ export const FINANCE_SECTIONS: RailItem[] = [
     key: "fin-opex", group: "Reports", label: "OpEx", href: "/admin/finance/opex",
     desc: "When each recurring expense is billed",
     icon: <I><rect x="3.5" y="4.5" width="17" height="16" rx="2.5" /><path d="M3.5 9.5h17" /><path d="M8 3v3M16 3v3" /><path d="M8 13.5h3M8 17h3M14 13.5h2" /></I>,
-  },
-  {
-    key: "fin-field-ranking", group: "Reports", label: "Field Ranking", href: "/admin/finance/field-ranking",
-    desc: "Which pitches carry their own cost",
-    icon: <I><path d="M8 21h8" /><path d="M12 17v4" /><path d="M6 4h12v5a6 6 0 0 1-12 0z" /><path d="M6 5.5H3.5V7a3.5 3.5 0 0 0 3 3.4" /><path d="M18 5.5h2.5V7a3.5 3.5 0 0 1-3 3.4" /></I>,
   },
 
   // ── LEDGERS: the tables the money is entered and corrected in ──────────────────────────────

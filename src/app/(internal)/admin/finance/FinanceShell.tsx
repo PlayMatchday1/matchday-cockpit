@@ -6,7 +6,7 @@
 // WHAT MOVED. Finance was ONE page holding nine tab panels behind local state, lazy-mounted and
 // hidden with display:none. Four of those panels were reachable from a pill row; the rest hung off
 // a secondary nav. Nothing about the panels changes here — CityPnlTable, CashFlowTabContent,
-// OpExCalendarView and FieldRankingTabContent are the same components, now reached by URL instead
+// and OpExCalendarView are the same components, now reached by URL instead
 // of by setState. Revenue and Cost are the two genuinely new sections.
 //
 // WHY THE QUARTER LIVES HERE. FinanceQuarterProvider wraps the whole subtree, so the quarter

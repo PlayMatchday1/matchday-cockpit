@@ -17,6 +17,14 @@ const nextConfig: NextConfig = {
   // Permanent so any bookmarks / external references update.
   async redirects() {
     return [
+      // FIELD RANKING WAS REMOVED (2026-08-19) — Cost's Field Economics now carries what it
+      // showed, so the page repeated a view rather than adding one. `permanent: true` is a 308, so
+      // a bookmark lands on Cost instead of a 404.
+      {
+        source: "/admin/finance/field-ranking",
+        destination: "/admin/finance/cost",
+        permanent: true,
+      },
       // Cities section renamed to Growth; route moved /cities → /growth on
       // 2026-07-31. Permanent so bookmarks/hardcoded links don't 404. The
       // /api/cities/* endpoints, city/cities data columns, and ?tab= lens
