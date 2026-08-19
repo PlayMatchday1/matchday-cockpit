@@ -49,9 +49,8 @@ export async function GET(req: Request, ctx: RouteCtx) {
   if (!auth.ok) {
     return Response.json({ error: auth.error }, { status: auth.status });
   }
-  if (!auth.isAdmin) {
-    return Response.json({ error: "Admin access required" }, { status: 403 });
-  }
+  // ITEMISED: was `if (!auth.isAdmin)` on top of authenticateCrm, which already requires Chats.
+  // The second term meant the Chats checkbox did not work for anyone who was not already an admin.
   const { chatId } = await ctx.params;
   const matchApiId = matchApiIdFrom(chatId);
   if (matchApiId == null) {
@@ -92,9 +91,8 @@ export async function POST(req: Request, ctx: RouteCtx) {
   if (!auth.ok) {
     return Response.json({ error: auth.error }, { status: auth.status });
   }
-  if (!auth.isAdmin) {
-    return Response.json({ error: "Admin access required" }, { status: 403 });
-  }
+  // ITEMISED: was `if (!auth.isAdmin)` on top of authenticateCrm, which already requires Chats.
+  // The second term meant the Chats checkbox did not work for anyone who was not already an admin.
   const { appUserId, supabase } = auth;
 
   const { chatId } = await ctx.params;

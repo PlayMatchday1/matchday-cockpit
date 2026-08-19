@@ -556,6 +556,32 @@ is("is_admin still gates the User access screen, and only that", can({ id: "u-a"
 is("  …a non-admin cannot grant access however many flags they hold",
    can({ id: "u-b", is_admin: false, can_access_matchops: true, can_edit_matches: true, can_manage_promos: true }, "grantAccess"), false);
 
+console.log("\nReviews and Gameday Ops open on the MATCH OPS box, not on Admin:");
+{
+  // These two were missed by the capability sweep: both the /city page and the /api/reviews route
+  // accepted "Admin OR the City Manager tier" and never looked at Match Ops, so a Match Ops holder
+  // was refused a page that lives inside Match Ops. Deonna hit exactly this.
+  is("a NON-admin Match Ops holder may open Reviews", can(DEONNA, "matchops", DEONNA_EMAIL), true);
+  is("  …and Gameday Ops, which had the identical gate", can(DEONNA, "matchops", DEONNA_EMAIL), true);
+  is("  …someone with NEITHER is still refused", can(NOFLAGS, "matchops", "nobody@playmatchday.com"), false);
+
+  const route = stripComments(readFileSync("src/app/api/reviews/route.ts", "utf8"));
+  is("the Reviews route asks the Match Ops capability", /can\(sess\.row, "matchops"/.test(route), true);
+  is("  …and no longer refuses on Admin-or-tier", /requires Admin or the City Manager tier/.test(route), false);
+  is("  control — the scan does see the route's source", /cityManagerGate/.test(route), true);
+  // The city tier still reaches its own pages: these ARE their pages.
+  is("  …the city-manager path is preserved alongside it", /cm\.ok/.test(route), true);
+
+  for (const [label, f] of [
+    ["Reviews", "src/app/(internal)/city/reviews/page.tsx"],
+    ["Gameday Ops", "src/app/(internal)/city/gameday/page.tsx"],
+  ]) {
+    const page = stripComments(readFileSync(f, "utf8"));
+    is(`the ${label} page asks the same predicate as its route`, /canAccess\(appUser \?\? null, "matchops"\)/.test(page), true);
+    is(`  …${label} no longer gates on appUser.is_admin`, /&& !appUser\?\.is_admin\) \{/.test(page), false);
+  }
+}
+
 console.log("\nthe two things that are NOT page gates survive:");
 is("the E2E service account holds nothing (by row flag)", can({ id: "e", is_service_account: true, can_access_matchops: true, can_edit_matches: true }, "editMatches"), false);
 is("…and by EMAIL, whatever the row says", can({ id: "e2", can_access_matchops: true, can_edit_matches: true }, "editMatches", E2E_SERVICE_EMAIL), false);

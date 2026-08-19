@@ -17,7 +17,7 @@
 // receives another city's reviews". The city is in the heading and in the locked control; the rest
 // was the app explaining itself to someone who works here every day.
 
-import { useAuth, isCityManager } from "@/lib/useAuth";
+import { useAuth, isCityManager, canAccess } from "@/lib/useAuth";
 import { cityNameFor } from "@/lib/cityScope";
 import ReviewsClient from "@/app/(internal)/match-ops/reviews/ReviewsClient";
 
@@ -25,8 +25,10 @@ export default function CityReviewsPage() {
   const { appUser, isLoading } = useAuth();
 
   if (isLoading) return <div className="p-6 text-sm text-deep-green/50">Loading…</div>;
-  if (!isCityManager(appUser) && !appUser?.is_admin) {
-    return <div className="p-6 text-sm text-coral" data-testid="cr-denied">Reviews requires Admin or the City Manager tier.</div>;
+  // THE CHECKBOX DECIDES — the same predicate the route enforces. This accepted Admin or the city
+  // tier and never Match Ops, so a Match Ops holder was refused a page inside Match Ops.
+  if (!isCityManager(appUser) && !canAccess(appUser ?? null, "matchops")) {
+    return <div className="p-6 text-sm text-coral" data-testid="cr-denied">Reviews needs Match Ops access. Ask an admin to tick it on the User access screen.</div>;
   }
 
   // The API's scope is the authority; this is the label for it. An admin opening the route sees

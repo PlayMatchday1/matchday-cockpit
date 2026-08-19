@@ -27,9 +27,8 @@ export async function POST(req: Request) {
   if (!auth.ok) {
     return Response.json({ error: auth.error }, { status: auth.status });
   }
-  if (!auth.isAdmin) {
-    return Response.json({ error: "Admin access required" }, { status: 403 });
-  }
+  // ITEMISED: was `if (!auth.isAdmin)` on top of authenticateCrm, which already requires Chats.
+  // The second term meant the Chats checkbox did not work for anyone who was not already an admin.
 
   const url = new URL(req.url);
   const rawHours = Number.parseInt(url.searchParams.get("hours") ?? "", 10);

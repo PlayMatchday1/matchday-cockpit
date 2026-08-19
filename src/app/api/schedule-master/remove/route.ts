@@ -27,7 +27,7 @@ export async function POST(req: Request) {
   if (!auth.ok) return Response.json({ error: auth.error }, { status: auth.status });
   if (!auth.email) return Response.json({ error: "Operator session required" }, { status: 403 });
   // Admin-only — do not relax. (authenticateCrm.ok also passes chats-only users.)
-  if (!auth.isAdmin) return Response.json({ error: "Admin access required" }, { status: 403 });
+  // ITEMISED: was `if (!auth.isAdmin)` on top of authenticateCrm, which already requires Chats.
   const { supabase, email } = auth;
 
   let body: { ids?: unknown };

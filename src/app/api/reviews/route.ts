@@ -16,6 +16,7 @@
 // scoping is a leak of a different shape — it tells you how many reviews the other cities have.
 
 import { resolveSessionUser } from "@/lib/adminAuth";
+import { can } from "@/lib/capabilities";
 import { cityManagerGate } from "@/lib/cityManagerAuth";
 import { adminGate } from "@/lib/adminAuth";
 import { CITY_SCOPES, resolveCityScope } from "@/lib/cityScope";
@@ -43,10 +44,13 @@ export async function GET(req: Request) {
   const sess = await resolveSessionUser(req);
   if (!sess.ok) return Response.json({ error: sess.error }, { status: sess.status });
 
+  // THE CHECKBOX DECIDES. This required Admin OR the city tier and never looked at Match Ops, so a
+  // Match Ops holder was refused a page that lives inside Match Ops. isAdmin is still computed —
+  // it decides SCOPE below (all cities vs one), which is a different question from access.
   const isAdmin = adminGate(sess.row).ok;
   const cm = cityManagerGate(sess.row, sess.email);
-  if (!isAdmin && !cm.ok) {
-    return Response.json({ error: "Reviews requires Admin or the City Manager tier." }, { status: 403 });
+  if (!can(sess.row, "matchops", sess.email) && !cm.ok) {
+    return Response.json({ error: "Reviews needs Match Ops access. Ask an admin to tick it on the User access screen." }, { status: 403 });
   }
 
   const asked = new URL(req.url).searchParams.get("city");

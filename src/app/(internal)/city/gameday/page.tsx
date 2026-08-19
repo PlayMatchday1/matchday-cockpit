@@ -19,7 +19,7 @@
 // Manager Pay". Clicking a match now does exactly that, which is a better way of saying it.
 
 import { useRouter } from "next/navigation";
-import { useAuth, isCityManager } from "@/lib/useAuth";
+import { useAuth, isCityManager, canAccess } from "@/lib/useAuth";
 import { cityNameFor } from "@/lib/cityScope";
 import GamedayBoard from "@/components/GamedayBoard";
 import { CITY_SECTIONS } from "../citySections";
@@ -29,8 +29,10 @@ export default function CityGamedayPage() {
   const router = useRouter();
 
   if (isLoading) return <div className="p-6 text-sm text-deep-green/50">Loading…</div>;
-  if (!isCityManager(appUser) && !appUser?.is_admin) {
-    return <div className="p-6 text-sm text-coral" data-testid="cg-denied">Gameday Ops requires Admin or the City Manager tier.</div>;
+  // THE CHECKBOX DECIDES — the same predicate the route enforces. This accepted Admin or the city
+  // tier and never Match Ops, so a Match Ops holder was refused a page inside Match Ops.
+  if (!isCityManager(appUser) && !canAccess(appUser ?? null, "matchops")) {
+    return <div className="p-6 text-sm text-coral" data-testid="cg-denied">Gameday Ops needs Match Ops access. Ask an admin to tick it on the User access screen.</div>;
   }
 
   const lockedCity = cityNameFor(appUser?.city_identifier) ?? appUser?.city_identifier ?? null;
