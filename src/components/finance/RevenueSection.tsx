@@ -22,7 +22,7 @@ import { supabase } from "@/lib/supabase";
 import { useFinancePeriodData } from "@/lib/useFinancePeriodData";
 import { useMatchRangeData } from "@/lib/useMatchData";
 import { useFinancePeriod } from "@/lib/financePeriodContext";
-import { comparisonSpan, matchRange } from "@/lib/financePeriod";
+import { comparisonSpan, matchRange, projectMonthEnd } from "@/lib/financePeriod";
 import {
   buildFieldMonths, buildMatchRows, byCity, byField, canonCity,
   COST_BASIS_LABEL, type FieldMonth, type MatchRow,
@@ -348,6 +348,41 @@ export default function RevenueSection() {
   const avgDaily = anchorValue / Math.max(1, daysElapsed);
   const pace = avgDaily * daysInMonth;
 
+  /* ── PACE TO MONTH END ─────────────────────────────────────────────────────────────────────
+   * Days 1-N are excluded from the RATE because membership bills at the start of the month, so
+   * they are not a normal day. They are NOT excluded from revenue-so-far: that is money that
+   * happened, and it goes in at face value. Only the days that have not happened yet are
+   * projected.
+   *
+   *     rate       = (so far − days 1..N) ÷ (elapsed − N)
+   *     projection = so far + remaining × rate
+   *
+   * MONTH GRAIN ONLY. At quarter or year the "first three days" are the first three days of one
+   * month inside a much longer window and excluding them means nothing, so those keep the plain
+   * mean × total days.
+   *
+   * MEASURED, AND THE MEASUREMENT DISAGREES WITH THE WINDOW. Across May-Aug 2026 the spike is day
+   * ONE and only day one: 5.8×-7.8× the median day, every month. Day 2 runs 1.0×-1.5×, day 3
+   * 0.9×-1.2×, day 4 0.6×-1.4× — days 2 and 3 are ordinary days. The window is a named constant
+   * so narrowing it to 1 is a one-line change once Ryan has read the figures.
+   */
+  const RATE_EXCLUDED_DAYS = 3;
+
+  const paceModel = useMemo(() => {
+    if (!period.isCurrent || period.grain !== "month") return null;
+    const anchorMonth = period.months[period.months.length - 1] ?? "";
+    // Revenue on the excluded days, from the same gross rows every other figure on this card uses.
+    const excluded = (grossRows ?? [])
+      .filter((r) => monthOfDate(r.date) === anchorMonth && Number(r.date.slice(8, 10)) <= RATE_EXCLUDED_DAYS)
+      .reduce((a, r) => a + Number(r.gross ?? 0), 0);
+    const r = projectMonthEnd({
+      soFar: anchorValue, excludedRevenue: excluded,
+      daysElapsed, daysInMonth, excludedDays: RATE_EXCLUDED_DAYS,
+    });
+    return r.ok ? { ...r, excluded } : r;
+  // eslint-disable-next-line react-hooks/exhaustive-deps
+  }, [period, grossRows, anchorValue, daysElapsed, daysInMonth]);
+
   const topCity = useMemo(() => {
     if (!data) return null;
     let best: { city: string; value: number } | null = null;
@@ -481,6 +516,7 @@ export default function RevenueSection() {
 
       <div className={s.tiles}>
         <Tile
+          testid="tile-revenue"
           label={`${period.label} revenue`}
           value={fmtMoney(anchorValue)}
           partial={period.isCurrent}
@@ -492,6 +528,7 @@ export default function RevenueSection() {
           }
         />
         <Tile
+          testid="tile-avgdaily"
           label="Avg daily revenue"
           value={fmtMoney(avgDaily)}
           partial={period.isCurrent}
@@ -505,11 +542,25 @@ export default function RevenueSection() {
         />
         <Tile
           label="Pace to month end"
-          value={period.isCurrent ? fmtMoney(pace) : fmtMoney(anchorValue)}
+          testid="tile-pace"
+          value={
+            paceModel
+              ? (paceModel.ok ? fmtMoney(paceModel.projection) : "—")
+              : period.isCurrent ? fmtMoney(pace) : fmtMoney(anchorValue)
+          }
+          partial={period.isCurrent}
           sub={
-            period.isCurrent
-              ? `PROJECTED — ${fmtMoney(avgDaily)}/day × ${daysInMonth} days. The only grossed-up number here.`
-              : "Period closed — this is the actual, not a projection."
+            paceModel
+              ? (paceModel.ok
+                  // THE SUBTITLE STATES THE ARITHMETIC IT USED, and nothing else — no explanation
+                  // of why the days are out. It is also what reconciles this card with Avg daily
+                  // revenue, which is the true mean and disagrees with it on purpose.
+                  ? `PROJECTED — ${fmtMoney(anchorValue)} so far + ${paceModel.remaining} ${paceModel.remaining === 1 ? "day" : "days"} × ${fmtMoney(paceModel.rate)} · days 1–${RATE_EXCLUDED_DAYS} excluded`
+                    + (paceModel.rateDays === 1 ? " · rate from one day" : "")
+                  : `Fewer than ${RATE_EXCLUDED_DAYS + 1} days elapsed — no rate to project from.`)
+              : period.isCurrent
+                ? `PROJECTED — ${fmtMoney(avgDaily)}/day × ${daysInMonth} days. The only grossed-up number here.`
+                : "Period closed — this is the actual, not a projection."
           }
         />
       </div>
@@ -679,15 +730,17 @@ export default function RevenueSection() {
   );
 }
 
-function Tile({ label, value, sub, partial }: { label: string; value: string; sub: string; partial?: boolean }) {
+function Tile({ label, value, sub, partial, testid }: {
+  label: string; value: string; sub: string; partial?: boolean; testid?: string;
+}) {
   return (
-    <div className={s.tile}>
+    <div className={s.tile} data-testid={testid}>
       <span className={s.tileLab}>{label}</span>
       <span className={s.tileVal} data-testid="revenue-tile-value">
         {value}
         {partial && <i className={s.soFar} data-testid="revenue-tile-partial">so far</i>}
       </span>
-      <span className={s.tileSub}>{sub}</span>
+      <span className={s.tileSub} data-testid="revenue-tile-sub">{sub}</span>
     </div>
   );
 }
