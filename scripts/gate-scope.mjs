@@ -17,6 +17,11 @@
 //      PlayerLookup, VeoMasterSchedule, MatchEditor and MatchDrawer are caught — none of them
 //      imports the client, all of them POST to a route that does.
 //
+// SUITES ROUTE BY WHAT THEY TOUCH, exactly like src/. A bare `scripts/` rule used to answer FULL
+// before either question was asked — 06529c1's whole-directory policy, carried into this file's
+// import-graph rewrite by omission rather than by decision. A test for a pure arithmetic function
+// cost the same nine minutes as a match edit.
+//
 // THE DIRECTION IS UNCHANGED AND DELIBERATE: unrecognised falls to the FULL gate. A file that
 // cannot be read, an import that cannot be resolved, an empty diff — all take the gate. A false
 // full gate costs nine minutes. A false skip costs a player.
@@ -31,9 +36,14 @@ export const MATCHDAY_CLIENTS = [
 ];
 
 /**
- * Always full gate regardless of what the graph says — the gate's own machinery, the permission
- * carve-outs the testing cut kept, and anything that changes the database under it. A permission
- * regression is invisible on screen, which is exactly why those suites survived.
+ * Always full gate regardless of what the graph says — the gate's own machinery, anything that
+ * changes the database under it, and the two permission suites.
+ *
+ * THE SIX GUARD SUITES THAT USED TO BE LISTED HERE ARE GONE, and nothing was weakened by it: each
+ * imports a MatchDay client and so re-earns the full lane through the graph, which is the same
+ * answer arrived at by evidence rather than by memory. The permission pair stays because it does
+ * NOT re-earn it — those suites drive permissions through the browser and touch no client — and a
+ * permission regression is invisible on screen.
  */
 export const FULL_GATE_ALWAYS = [
   ".githooks/",
@@ -45,19 +55,17 @@ export const FULL_GATE_ALWAYS = [
   "scripts/quarantine.pinned.json",
   "scripts/e2e/verify-user-permissions.mjs",
   "scripts/e2e/verify-user-delete.mjs",
-  "scripts/matchops-auth-test.ts",
-  // the five sub-second guards
-  "scripts/mutation-tests.ts",
-  "scripts/prod-guard-test.ts",
-  "scripts/stage-denylist-test.ts",
-  "scripts/change-log-test.ts",
-  "scripts/write-routes-logged-test.ts",
 ];
 
 /** Presentation and prose, wherever they live. */
 export const TYPECHECK_ONLY_EXT = [".css", ".md", ".svg", ".png", ".jpg", ".jpeg", ".webp", ".ico", ".json"];
 
 const SRC = "src";
+// WALK ROOTS. src/ alone could not see a suite file, which is why the blanket rule below was
+// load-bearing: delete it without this and every suite routes to typecheck. Adding scripts/ as an
+// IMPORTER root cannot pull src/ files in — reachability runs from the clients outward to whoever
+// imports them, so a new root only ever adds itself.
+const GRAPH_ROOTS = ["src", "scripts"];
 const exts = [".ts", ".tsx"];
 
 function walk(dir, out = []) {
@@ -105,7 +113,7 @@ function importsOf(file) {
 let _reach = null;
 export function matchdayReachable() {
   if (_reach) return _reach;
-  const files = walk(SRC);
+  const files = GRAPH_ROOTS.flatMap((r) => walk(r));
   const rev = new Map();            // file -> [files that import it]
   for (const f of files) for (const dep of importsOf(f)) {
     if (!rev.has(dep)) rev.set(dep, []);
@@ -148,10 +156,11 @@ export function fullGateReason(p) {
   if (inList(p, FULL_GATE_ALWAYS)) return "gate machinery, a migration, or a kept permission carve-out";
   if (TYPECHECK_ONLY_EXT.some((e) => p.toLowerCase().endsWith(e))) return null;
   if (!p.startsWith("src/") && !p.startsWith("scripts/")) return null;   // docs, mockups, public…
-  if (p.startsWith("scripts/")) return "a suite or tool that runs inside the gate";
   if (!existsSync(p)) return "the file could not be read — taking the gate rather than guessing";
   if (matchdayReachable().has(p)) return "its import graph reaches the MatchDay API client";
-  const src = (() => { try { return readFileSync(p, "utf8"); } catch { return ""; } })();
+  let src;
+  try { src = readFileSync(p, "utf8"); }
+  catch { return "the file could not be read — taking the gate rather than guessing"; }
   const hit = matchdayUrlPrefixes().find((u) => src.includes(u));
   if (hit) return `it sends requests to ${hit} — a route that reaches the MatchDay API`;
   return null;

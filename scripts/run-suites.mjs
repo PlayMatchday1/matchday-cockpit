@@ -53,6 +53,9 @@ function quarantineDrift() {
 // matchops-auth-test is KEPT despite testing reads: a route shipped with NO gate is invisible
 // on screen, which is exactly the case a suite has to cover.
 const NODE_SUITES = [
+  // The gate's own router. It decides which lane every other suite here runs in, so it is guarded
+  // like the writes are — on fixtures, not on the names of files whose imports can change.
+  "scripts/gate-scope-test.mjs",
   "scripts/mutation-tests.ts",
   "scripts/prod-guard-test.ts",
   "scripts/stage-denylist-test.ts",
