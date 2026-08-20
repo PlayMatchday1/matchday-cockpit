@@ -28,10 +28,11 @@
 .seg button:disabled { opacity: .42; cursor: not-allowed; }
 
 /* ===== Tiles ===== */
-/* grid-auto-rows: 1fr so EVERY row is the height of the tallest card, not just every card within
-   one row. At 4 columns there is one row and this is a no-op; at 2 columns the row holding the
-   card that still has a subtitle would otherwise stand taller than the row above it. */
-.tiles { display: grid; grid-template-columns: repeat(4, minmax(0, 1fr)); gap: 12px; grid-auto-rows: 1fr; }
+/* NO grid-auto-rows HERE ANY MORE. It existed to stretch three cards up to the height of the one
+   with a third line — which is exactly the void it was papering over. Every card is label + value
+   now, so the rows come out equal on their own; measured 78px across all four at 1620, 1440 and
+   1024, both rows included. Equal because the content is equal, not because one is stretched. */
+.tiles { display: grid; grid-template-columns: repeat(4, minmax(0, 1fr)); gap: 12px; }
 @media (max-width: 1100px) { .tiles { grid-template-columns: repeat(2, minmax(0, 1fr)); } }
 @media (max-width: 560px)  { .tiles { grid-template-columns: 1fr; } }
 .tile {
@@ -43,7 +44,14 @@
   color: color-mix(in srgb, var(--deep-green, #12352b) 55%, transparent);
 }
 .tileVal { font-size: 26px; font-weight: 800; line-height: 1.1; color: var(--deep-green, #12352b); overflow-wrap: anywhere; }
-.tileSub { font-size: 11px; color: color-mix(in srgb, var(--deep-green, #12352b) 62%, transparent); }
+/* The city's own revenue, on the city's line. Inline and unstyled for baseline — an inline-block
+   or a flex child would sit on its own box's baseline instead of the text's. Just space between
+   them: no bullet, no slash. */
+.tileAmt {
+  font-style: normal; font-weight: 600; font-size: 14px; margin-left: 10px;
+  font-variant-numeric: tabular-nums;
+  color: color-mix(in srgb, var(--deep-green, #12352b) 55%, transparent);
+}
 .tileNone { color: color-mix(in srgb, var(--deep-green, #12352b) 40%, transparent); }
 
 /* The partial-period mark, same idea as the funnel's "so far" pill. */

@@ -503,8 +503,9 @@ export default function RevenueSection() {
         <Tile
           label="Top revenue city"
           value={topCity ? topCity.city : "—"}
-          // $24,544 IS A FIGURE, NOT A CAPTION — it stays.
-          sub={topCity ? fmtMoney(topCity.value) : "no revenue recorded this month"}
+          // THE FIGURE STAYS, ON THE VALUE LINE. It is the city's revenue, so it belongs beside
+          // the city rather than under it.
+          amount={topCity ? fmtMoney(topCity.value) : null}
         />
         <Tile
           label="Pace to month end"
@@ -745,10 +746,11 @@ export default function RevenueSection() {
   );
 }
 
-function Tile({ label, value, sub, partial, testid, rate, info }: {
-  // SUB IS OPTIONAL AND ITS ELEMENT GOES WITH IT. Rendering an empty span would leave the card
-  // holding the height of a line it no longer has, which is the thing that makes a row ragged.
-  label: string; value: string; sub?: string; partial?: boolean; testid?: string;
+function Tile({ label, value, amount, partial, testid, rate, info }: {
+  // EVERY CARD IS LABEL + VALUE, and nothing else. The subtitle slot is gone rather than optional:
+  // one card carrying a third line forced the other three to pad out to match it, which is the
+  // void this removes. A card-specific figure rides on the VALUE line instead.
+  label: string; value: string; amount?: string | null; partial?: boolean; testid?: string;
   // THE RATE THE CARD WAS BUILT FROM, verbatim. Two cards printing it prove they share a
   // derivation; two cards printing the same rounded money only prove they agree this month.
   rate?: number | null;
@@ -763,9 +765,12 @@ function Tile({ label, value, sub, partial, testid, rate, info }: {
       <span className={s.tileLab}>{label}{info?.(cardRef)}</span>
       <span className={s.tileVal} data-testid="revenue-tile-value">
         {value}
+        {/* Inline, so it sits on the same baseline as the name it belongs to — it is that city's
+            revenue, and underneath it made this the only three-line card on the row. */}
+        {amount != null && <i className={s.tileAmt} data-testid="revenue-tile-amount">{amount}</i>}
         {partial && <i className={s.soFar} data-testid="revenue-tile-partial">so far</i>}
       </span>
-      {sub != null && <span className={s.tileSub} data-testid="revenue-tile-sub">{sub}</span>}
+
     </div>
   );
 }

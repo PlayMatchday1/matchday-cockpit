@@ -258,14 +258,12 @@ console.log("\n── the four cards ──");
   const REMOVED = ["vs July 2026", "pace compared, not part-period", "over 18 days",
                    "day 1 and today excluded", "PROJECTED —", "so far +"];
 
-  // POSITIVE CONTROL ON THE SCAN: a subtitle that IS still there. $24,544 under TOP REVENUE CITY
-  // is a figure, not a caption, and it stays — so the scan is looking at a page that rendered.
-  const kept = await page.evaluate(() => {
-    const t = [...document.querySelectorAll('[class*="tiles"] > *')]
-      .find((x) => /top revenue city/i.test(x.querySelector('[class*="tileLab"]')?.textContent ?? ""));
-    return t?.querySelector('[data-testid="revenue-tile-sub"]')?.textContent?.trim() ?? null;
-  });
-  eq("  control — TOP REVENUE CITY keeps its figure line", /^\$[\d,]+$/.test(kept ?? ""), true);
+  // POSITIVE CONTROL ON THE SCAN: a figure that IS still on the page. TOP REVENUE CITY's revenue
+  // survived the subtitle cull — it moved onto the value line rather than being deleted — so the
+  // scan is looking at a page that rendered.
+  const kept = await page.evaluate(() =>
+    document.querySelector('[data-testid="revenue-tile-amount"]')?.textContent?.trim() ?? null);
+  eq("  control — TOP REVENUE CITY keeps its figure, on the value line", /^\$[\d,]+$/.test(kept ?? ""), true);
   console.log(`     kept: ${kept}`);
   const keptScan = await scan(kept);
   eq("  control — the scan finds that surviving line", keptScan.total > 0, true);
@@ -309,26 +307,89 @@ console.log("\n── the four cards ──");
   eq("  control — four cards rendered", heads.length, 4);
   eq("the revenue headline equals August gross", Math.abs(money(heads[0].v) - monthTotal("2026-08")) < 1, true);
   eq("the four headlines are figures, not dashes", heads.map((h) => h.v === "—"), [false, false, false, false]);
-  eq("exactly one card still carries a subtitle", heads.filter((h) => h.sub != null).length, 1);
-  eq("  …and it is TOP REVENUE CITY", heads.find((h) => h.sub != null)?.lab?.toLowerCase(), "top revenue city");
+  eq("no card carries a subtitle any more", heads.filter((h) => h.sub != null).length, 0);
+  // TOP REVENUE CITY'S FIGURE MOVED ONTO THE VALUE LINE rather than being deleted.
+  const amt = await page.evaluate(() =>
+    document.querySelector('[data-testid="revenue-tile-amount"]')?.textContent?.trim() ?? null);
+  eq("  …and the city's revenue rides on its value line", /^\$[\d,]+$/.test(amt ?? ""), true);
+  console.log(`     amount: ${amt}`);
   console.log(`     ${heads.map((h) => `${h.lab}=${h.v}`).join(" · ")}`);
 
-  // ALL FOUR THE SAME HEIGHT, AT BOTH WIDTHS. Three cards losing a line and one keeping it is
-  // exactly how a row goes ragged, so the grid's stretch is asserted rather than assumed.
-  for (const w of [1620, 1024]) {
+  // ── SPACING ────────────────────────────────────────────────────────────────────────────────
+  // Equal because the content is equal. grid-auto-rows: 1fr is gone; if these pass, nothing is
+  // being stretched to cover a void under a shorter card.
+  for (const w of [1620, 1440, 1024]) {
     await page.setViewportSize({ width: w, height: 1200 });
-    await page.waitForTimeout(600);
-    const H = await page.evaluate(() => {
-      const t = [...document.querySelectorAll('[class*="tiles"] > *')].filter((x) => x.querySelector('[data-testid="revenue-tile-value"]'));
-      return { hs: t.map((x) => Math.round(x.getBoundingClientRect().height)),
-               tops: t.map((x) => Math.round(x.getBoundingClientRect().top)) };
+    await page.waitForTimeout(650);
+    const G = await page.evaluate(() => {
+      const cards = [...document.querySelectorAll('[class*="tiles"] > *')];
+      return cards.map((c) => {
+        const r = c.getBoundingClientRect();
+        const cs = getComputedStyle(c);
+        const lab = c.querySelector('[class*="tileLab"]').getBoundingClientRect();
+        const val = c.querySelector('[data-testid="revenue-tile-value"]').getBoundingClientRect();
+        return {
+          h: Math.round(r.height), top: Math.round(r.top),
+          labTop: lab.top, valTop: val.top,
+          padT: parseFloat(cs.paddingTop), padB: parseFloat(cs.paddingBottom),
+          // The distance from the value's bottom to the card's inner bottom edge. THIS is the
+          // whole complaint: on the old layout three cards carried a void here and one did not.
+          gapUnder: r.bottom - parseFloat(cs.paddingBottom) - val.bottom,
+        };
+      });
     });
-    eq(`at ${w}px all four cards are the same height`, [...new Set(H.hs)].length, 1);
-    if (w === 1620) eq(`  …and on a single row`, [...new Set(H.tops)].length, 1);
-    console.log(`     ${w}px heights ${JSON.stringify(H.hs)}`);
+    eq(`  control — four cards measured at ${w}px`, G.length, 4);
+    eq(`${w}px: all four cards are the same height`, [...new Set(G.map((g) => g.h))].length, 1);
+
+    // ROW BY ROW. At 1024px the grid is two columns; four equal heights spread across two rows
+    // passes a naive check, so the rows are grouped by their own top and each checked.
+    const rows = [...new Set(G.map((g) => g.top))].sort((a, b) => a - b);
+    for (const t of rows) {
+      const inRow = G.filter((g) => g.top === t);
+      eq(`  …row at y=${t}: ${inRow.length} cards, one height`, [...new Set(inRow.map((g) => g.h))].length, 1);
+    }
+    if (w === 1024) eq(`  control — 1024px really is two rows`, rows.length, 2);
+
+    // BASELINES, per row — across rows the tops differ by the row offset, which proves nothing.
+    for (const t of rows) {
+      const inRow = G.filter((g) => g.top === t);
+      const labSpread = Math.max(...inRow.map((g) => g.labTop)) - Math.min(...inRow.map((g) => g.labTop));
+      const valSpread = Math.max(...inRow.map((g) => g.valTop)) - Math.min(...inRow.map((g) => g.valTop));
+      eq(`  …labels share one top within 1px (row y=${t})`, labSpread <= 1, true);
+      eq(`  …values share one top within 1px (row y=${t})`, valSpread <= 1, true);
+    }
+
+    // PADDING AND THE GAP UNDER THE VALUE, across all four regardless of row.
+    eq(`${w}px: top and bottom padding are equal in every card`,
+       [...new Set(G.map((g) => `${g.padT}/${g.padB}`))], [`${G[0].padT}/${G[0].padB}`]);
+    eq(`  …and top padding equals bottom padding`, G[0].padT, G[0].padB);
+    const gaps = G.map((g) => g.gapUnder);
+    eq(`${w}px: the gap under the value is equal across all four, within 2px`,
+       Math.max(...gaps) - Math.min(...gaps) <= 2, true);
+    console.log(`     ${w}px h=${G[0].h} pad=${G[0].padT}/${G[0].padB} gapUnder=${gaps.map((x) => x.toFixed(1)).join(",")}`);
   }
   await page.setViewportSize({ width: 1620, height: 1200 });
-  await page.waitForTimeout(500);
+  await page.waitForTimeout(600);
+
+  // THE AMOUNT IS ON THE SAME LINE AS THE CITY — measured, not inferred from the DOM shape.
+  {
+    const L = await page.evaluate(() => {
+      const a = document.querySelector('[data-testid="revenue-tile-amount"]');
+      // NOT closest('[class*="tile"]') — that matches the VALUE SPAN itself, whose class is
+      // tileVal, so the lookup for the value inside it came back null.
+      const v = a.closest('[data-testid="revenue-tile-value"]');
+      const ar = a.getBoundingClientRect(), vr = v.getBoundingClientRect();
+      return { amtMid: ar.top + ar.height / 2, valMid: vr.top + vr.height / 2,
+               contained: ar.top >= vr.top - 1 && ar.bottom <= vr.bottom + 1,
+               name: v.firstChild?.textContent?.trim() };
+    });
+    eq("the amount sits on the city's line (centres within 4px)", Math.abs(L.amtMid - L.valMid) < 4, true);
+    // STURDIER THAN THE CENTRE TEST, which is tight by design: the two sizes are baseline-aligned,
+    // so their centres can never coincide. Containment says "same line" without depending on that.
+    eq("  …and its box sits inside the value's line box", L.contained, true);
+    eq("  …beside the city name, not replacing it", L.name, "Austin");
+    console.log(`     centres ${L.amtMid.toFixed(1)} vs ${L.valMid.toFixed(1)} — ${Math.abs(L.amtMid - L.valMid).toFixed(1)}px apart`);
+  }
 
   // THE ⓘ IS NOW THE ONLY PLACE THE ARITHMETIC LIVES.
   const btn = await page.$('[data-testid="pace-info"]');
