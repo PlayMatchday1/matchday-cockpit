@@ -63,6 +63,98 @@ console.log("\n── the word 'override' ──");
   eq("  control — the scan catches a planted 'override'", planted, true);
 }
 
+// ── THE DELETED PROSE STAYS DELETED ──────────────────────────────────────────────────────────
+// Two blocks of explanation were cut: the clamping paragraph in WHEN IT BILLS, and the page-level
+// banner about monthly venues. Both restated what the page already answers per row, and both are
+// the kind of thing that grows back one helpful sentence at a time.
+console.log("\n── the removed prose ──");
+{
+  // EXPAND A VENUE FIRST. The clamping paragraph only ever rendered inside an open panel, so
+  // scanning a collapsed table would report it absent no matter what.
+  await page.locator('table tbody tr button[aria-expanded]').first().click();
+  await page.waitForTimeout(900);
+  const expanded = await page.locator('[data-testid="month-help"]').count();
+  eq("  control — a venue panel is expanded, so panel prose is in scope", expanded > 0, true);
+
+  const scan = await page.evaluate(() => document.body.innerText || "");
+  eq("  control — the scan read a real rendered page", scan.length > 800, true);
+  // …and it finds text that IS on the page, so a zero below means absent, not unscanned.
+  eq("  control — it finds a string that is present ('Billing day')", /Billing day/i.test(scan), true);
+
+  eq("the clamping paragraph is gone ('clamped')", /clamped/i.test(scan), false);
+  eq("…including its last clause", /nothing could tell the two apart/i.test(scan), false);
+  eq("the page banner is gone ('Monthly venues bill within the month')",
+     /Monthly venues bill within the month/i.test(scan), false);
+
+  // THE THIRD CONTROL: plant each removed string and prove the scan would have caught it.
+  for (const needle of ["clamped", "nothing could tell the two apart", "Monthly venues bill within the month"]) {
+    const caught = await page.evaluate((t) => {
+      const d = document.createElement("div"); d.textContent = t;
+      document.body.appendChild(d);
+      const hit = document.body.innerText.includes(t);
+      d.remove();
+      return hit;
+    }, needle);
+    eq(`  control — a planted "${needle.slice(0, 28)}" IS caught`, caught, true);
+  }
+
+  // THE ANSWER SURVIVES THE EXPLANATION. The resolved line is what actually tells you the date.
+  const resolved = await page.evaluate(() => {
+    const hit = [...document.querySelectorAll("div")]
+      .map((e) => e.textContent ?? "")
+      .find((t) => /bills\s+\w{3}\s+\d{1,2}$/.test(t.trim()) && t.length < 80);
+    return hit?.trim() ?? null;
+  });
+  eq("the resolved-date line still renders", resolved !== null, true);
+  if (resolved) console.log(`     resolved line: ${resolved}`);
+
+  // THE CLAMP MUST STILL BE VISIBLE IN THE ANSWER even though the explanation is gone. ATH Katy
+  // is billing_day 15 (id 7) and Westlake is billing_day 31 (id 49); a 30-day month is where 31
+  // has to resolve to the 30th. If that ever silently became "Sep 31" the paragraph's removal
+  // would have hidden a real defect.
+  eq("  day 15 resolves to the 15th", /bills\s+\w{3}\s+15\b/.test(resolved ?? ""), true);
+
+  await page.locator('table tbody tr button[aria-expanded]').first().click(); // collapse
+  await page.waitForTimeout(400);
+
+  // Switch to a 30-day month and open the day-31 venue.
+  const monthSel = page.locator("select").filter({ hasText: /\d{4}/ }).first();
+  const opts = await page.evaluate(() => {
+    for (const sel of document.querySelectorAll("select")) {
+      const vals = [...sel.options].map((o) => o.value);
+      if (vals.some((v) => /^[A-Z][a-z]{2} \d{4}$/.test(v))) return vals;
+    }
+    return [];
+  });
+  const thirty = opts.find((v) => /^(Apr|Jun|Sep|Nov) /.test(v));
+  if (!thirty) {
+    console.log("  --  no 30-day month in the selector; day-31 clamp not exercised this run");
+  } else {
+    await monthSel.selectOption(thirty);
+    await page.waitForTimeout(2500);
+    const row31 = page.locator("#venue-row-49");
+    if (await row31.count() === 0) {
+      console.log(`  --  Westlake (day 31) not listed in ${thirty}; clamp not exercised`);
+    } else {
+      await row31.locator('button[aria-expanded]').first().click();
+      await page.waitForTimeout(1200);
+      const line = await page.evaluate(() => {
+        const hit = [...document.querySelectorAll("div")].map((e) => e.textContent ?? "")
+          .find((t) => /bills\s+\w{3}\s+\d{1,2}$/.test(t.trim()) && t.length < 80);
+        return hit?.trim() ?? null;
+      });
+      console.log(`     ${thirty} day-31 venue: ${line}`);
+      eq(`  day 31 in a 30-day month resolves to the 30th, not the 31st`,
+         /bills\s+\w{3}\s+30\b/.test(line ?? ""), true);
+      eq("  …and never prints a 31st in a 30-day month", /bills\s+\w{3}\s+31\b/.test(line ?? ""), false);
+    }
+  }
+}
+
+await page.reload({ waitUntil: "domcontentloaded" });
+await page.waitForSelector("table tbody tr", { timeout: 60000 });
+await page.waitForTimeout(2000);
+
 // ── THE FILTER AND THE HELPER READ THE NEW WAY ───────────────────────────────────────────────
 console.log("\n── the labels that replaced it ──");
 {

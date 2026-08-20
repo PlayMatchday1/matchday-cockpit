@@ -697,15 +697,6 @@ export default function FieldCostsView() {
         </div>
       )}
 
-      {/* THE ONE LINE OF PROSE THIS PAGE KEEPS, because it is the rule. SAME-MONTH: opexSources.ts
-          keys the cost to monthKeyFor(year, month0) (:540) and resolves the day against that same
-          month0 (:435) — there is no +1 on that path. */}
-      <div className="mb-4 rounded-lg border border-cream-line border-l-[3px] border-l-deep-green/20 bg-[#f7faf8] px-3.5 py-2.5 text-[12.5px] text-deep-green/70">
-        <b className="font-extrabold text-deep-green">Monthly venues bill within the month.</b>{" "}
-        {monthFull(month)}&rsquo;s field cost is dated in {monthFull(month)}, on the venue&rsquo;s
-        billing day. Per-match venues cost on each match date and have no billing day.
-      </div>
-
       <section className="overflow-hidden rounded-2xl border-[1.5px] border-cream-line bg-white shadow-md shadow-deep-green/10">
         <div className="overflow-x-auto">
           <table className="w-full text-xs">
@@ -1305,11 +1296,6 @@ function VenuePanel({
             ? <>{monthFull(month)}&rsquo;s {fmtMoney(row.amount)} bills <b className="text-deep-green">{resolved}</b></>
             : <><b className="text-deep-green">{monthShort(month)} —</b> · pick a day to date it</>}
         </div>
-        <p className="mt-2 text-[11px] leading-relaxed text-deep-green/45">
-          A day past the month&rsquo;s length is clamped to its last day, so the 31st resolves to the
-          28th or 29th in February and the 30th in April. That is why there is no separate
-          &ldquo;last day&rdquo; option — it would store 31 as well, and nothing could tell the two apart.
-        </p>
         {day == null && row.billingType !== "per_match" && (
           <div className="mt-2 rounded-md border border-[#f2cdc8] bg-[#fdeceb] px-2.5 py-2 text-[12px] font-bold leading-relaxed text-[#a8321f]">
             Without a day the {fmtMoney(row.amount)} still counts in {monthFull(month)}&rsquo;s total
