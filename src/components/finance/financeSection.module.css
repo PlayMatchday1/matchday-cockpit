@@ -180,3 +180,34 @@
   font-size: 11px; font-style: normal; font-weight: 700; letter-spacing: 0;
   color: color-mix(in srgb, var(--deep-green, #12352b) 45%, transparent);
 }
+
+/* ⓘ on the "Revenue matched to a venue" header. 14px glyph inside a 24px hit area — a 14px tap
+   target is unusable on a phone, and the header must not grow, so the extra area is negative
+   margin rather than padding that would push the row taller. */
+.infoBtn {
+  display: inline-flex; align-items: center; justify-content: center;
+  width: 24px; height: 24px; margin: -6px 0 -6px 5px; padding: 0;
+  border: 0; background: transparent; cursor: pointer;
+  font-size: 14px; line-height: 1; vertical-align: middle;
+  color: color-mix(in srgb, var(--deep-green, #12352b) 55%, transparent);
+}
+.infoBtn:hover { color: var(--deep-green, #12352b); }
+.infoBtn:focus-visible { outline: 2px solid #0b6bcb; outline-offset: 1px; border-radius: 5px; }
+
+/* Portalled to body and position:fixed, so the table's overflow-x cannot clip it and no column
+   can be widened by it. */
+.infoPanel {
+  position: fixed; z-index: 60; width: 260px;
+  background: #fff; border: 1px solid var(--cream-line, #e6e2d8); border-radius: 12px;
+  box-shadow: 0 10px 28px rgba(18, 53, 43, .16);
+  padding: 10px 12px 11px;
+}
+/* NOT uppercased. The content was specified verbatim — "Not matched to a venue" — and
+   text-transform would render something the spec did not say. */
+.infoHead {
+  font-size: 10.5px; font-weight: 800; letter-spacing: .04em;
+  color: color-mix(in srgb, var(--deep-green, #12352b) 55%, transparent); margin-bottom: 7px;
+}
+.infoTbl { width: 100%; border-collapse: collapse; font-size: 12px; font-variant-numeric: tabular-nums; }
+.infoTbl td { padding: 3px 0; text-align: right; color: var(--deep-green, #12352b); font-weight: 700; }
+.infoTbl td.l { text-align: left; font-weight: 600; color: color-mix(in srgb, var(--deep-green, #12352b) 70%, transparent); }

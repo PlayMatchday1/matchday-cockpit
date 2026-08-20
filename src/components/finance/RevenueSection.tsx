@@ -16,7 +16,8 @@
 // number on this page is an extrapolation — the pace tile — and it is named as one. Nothing else
 // is grossed up to a full month.
 
-import { useEffect, useMemo, useState } from "react";
+import { useCallback, useEffect, useMemo, useRef, useState } from "react";
+import { createPortal } from "react-dom";
 import { supabase } from "@/lib/supabase";
 import { useFinancePeriodData } from "@/lib/useFinancePeriodData";
 import { useMatchRangeData } from "@/lib/useMatchData";
@@ -265,6 +266,20 @@ export default function RevenueSection() {
     return grossRows.filter((r) => set.has(monthOfDate(r.date)))
       .reduce((a, r) => a + Number(r.gross ?? 0), 0);
   };
+
+  // THE GAP, AS DATA. Identical arithmetic to the month sentences this replaced — gross collected
+  // minus what the roster walk matched to a venue — now shaped for the popover on the column the
+  // caveat is actually about.
+  const gapRows = useMemo(() => series.flatMap((p) => {
+    const g = grossFor(p);
+    const matched = valueOf(p);
+    if (g == null || g <= 0) return [];
+    const gap = g - matched;
+    if (gap <= 0.5) return [];
+    return [{ key: p.key, month: p.month, gap, pct: (gap / g) * 100 }];
+  // eslint-disable-next-line react-hooks/exhaustive-deps
+  }), [series]);
+
   const grossByType = (p: SeriesPoint, want: "dpp" | "member") => {
     if (!grossRows) return null;
     const ms = periods.find((q) => q.key === p.key)?.months ?? [p.month];
@@ -552,26 +567,6 @@ export default function RevenueSection() {
           </div>
         </div>
 
-        {/* THE GAP, STATED. Gross is money collected; the per-field views below are built from
-            roster rows matched to a venue, and the difference is 7-8% every month. It was
-            invisible because one number was labelled as the other. Naming it is the whole point —
-            explaining it is not this pass's job. */}
-        <div className={s.legend} data-testid="revenue-gap">
-          {series.map((p) => {
-            const g = grossFor(p);
-            const matched = valueOf(p);
-            if (g == null || g <= 0) return null;
-            const gap = g - matched;
-            if (gap <= 0.5) return null;
-            return (
-              <span key={p.key} data-testid="gap-line" data-month={p.key}>
-                <b>{fmtMoney(gap)}</b> collected in {p.month} is not matched to a venue —{" "}
-                {((gap / g) * 100).toFixed(1)}% of gross.
-              </span>
-            );
-          })}
-        </div>
-
         <div className={s.legend}>
           {!membershipScoped && <span>Membership withheld — it is a city figure and cannot be narrowed to one pitch.</span>}
           {/* A table that quietly drew fewer months than asked would read as "this is all there
@@ -662,6 +657,7 @@ export default function RevenueSection() {
         <MatchTable rows={shownMatches} />
       ) : (
         <GroupTable rows={shownFields} grain={grain} month={period.months[period.months.length - 1] ?? ""}
+          gapRows={gapRows}
           membershipOf={(c) => (data ? cityMembershipRevenueFor(data, c, period.months[period.months.length - 1] ?? "") : 0)}
           membershipScoped={membershipScoped} />
       )}
@@ -689,6 +685,126 @@ function BillingMark({ basis, unknown }: { basis: FieldMonth["basis"]; unknown: 
 
 // CITY / FIELD VIEW — ranked, for the month the period is on, to the mockup's column set.
 //
+
+/* ── THE "NOT MATCHED TO A VENUE" POPOVER ────────────────────────────────────────────────────────
+ * It lives on the column the caveat is about, and nowhere else.
+ *
+ * PORTALLED TO document.body ON PURPOSE. The table sits in an overflow-x container — Member mix
+ * is already off-screen — so a popover rendered inside it would be clipped by that scroller or
+ * drift away from its trigger when the table scrolls sideways. Portalling escapes the clip;
+ * position:fixed off the trigger's own rect keeps it attached, and it is recomputed on any scroll
+ * (capture phase, so the TABLE's scroll counts, not just the window's) and on resize.
+ *
+ * IT NEVER CHANGES THE HEADER'S LAYOUT. The trigger is inline and sized in the flow whether the
+ * popover is open or shut; the panel itself is out of flow entirely, so no column can be widened
+ * and no header row made taller by opening it.
+ */
+function NotMatchedInfo({ rows }: { rows: { key: string; month: string; gap: number; pct: number }[] }) {
+  const [open, setOpen] = useState(false);
+  const [pos, setPos] = useState<{ top: number; left: number } | null>(null);
+  // WHO OWNS THE OPEN STATE. On a pointer device the mouse arrives before the click, so hover
+  // opened it and the click that followed immediately toggled it shut — the control looked dead.
+  // Hover-opened is provisional and closes on mouse-out; a click takes ownership and only another
+  // click closes it. Touch and keyboard never fire the hover path at all.
+  const hoverOwned = useRef(false);
+  const btnRef = useRef<HTMLButtonElement | null>(null);
+  const panelRef = useRef<HTMLDivElement | null>(null);
+
+  const place = useCallback(() => {
+    const b = btnRef.current;
+    if (!b) return;
+    const r = b.getBoundingClientRect();
+    const W = 260, MARGIN = 8;
+    // FLIP LEFT rather than run off the right edge.
+    let left = r.left;
+    if (left + W + MARGIN > window.innerWidth) left = r.right - W;
+    left = Math.max(MARGIN, Math.min(left, window.innerWidth - W - MARGIN));
+    setPos({ top: r.bottom + 6, left });
+  }, []);
+
+  useEffect(() => {
+    if (!open) return;
+    // MEASURE MORE THAN ONCE. A single measurement on open reads the layout as it is at that
+    // instant — which after a viewport change or a late reflow is the OLD layout, and the panel
+    // then sits at a position the trigger has since left. Re-placing on the next frame and once
+    // more after the browser has settled costs nothing and removes a whole class of drift.
+    place();
+    const raf = requestAnimationFrame(place);
+    const settle = setTimeout(place, 80);
+    // capture:true so a scroll inside the table's own overflow container reaches this.
+    const onScroll = () => place();
+    window.addEventListener("scroll", onScroll, true);
+    window.addEventListener("resize", onScroll);
+    const onKey = (e: KeyboardEvent) => { if (e.key === "Escape") setOpen(false); };
+    const onDown = (e: MouseEvent) => {
+      const t = e.target as Node;
+      if (btnRef.current?.contains(t) || panelRef.current?.contains(t)) return;
+      setOpen(false);
+    };
+    document.addEventListener("keydown", onKey);
+    document.addEventListener("mousedown", onDown);
+    return () => {
+      cancelAnimationFrame(raf);
+      clearTimeout(settle);
+      window.removeEventListener("scroll", onScroll, true);
+      window.removeEventListener("resize", onScroll);
+      document.removeEventListener("keydown", onKey);
+      document.removeEventListener("mousedown", onDown);
+    };
+  }, [open, place]);
+
+  return (
+    <>
+      <button
+        ref={btnRef}
+        type="button"
+        data-testid="notmatched-info"
+        aria-label="Revenue not matched to a venue, by month"
+        aria-expanded={open}
+        className={s.infoBtn}
+        // STOP PROPAGATION. These headers carry no sort handler today; if one is ever added, the
+        // ⓘ must not trigger it — a control that silently re-sorts the table when you ask it a
+        // question is worse than no control.
+        onClick={(e) => {
+          e.stopPropagation();
+          e.preventDefault();
+          if (open && !hoverOwned.current) { setOpen(false); return; }
+          hoverOwned.current = false;
+          setOpen(true);
+        }}
+        onMouseEnter={() => { if (!open) { hoverOwned.current = true; setOpen(true); } }}
+      >
+        <span aria-hidden>ⓘ</span>
+      </button>
+      {open && pos && createPortal(
+        <div
+          ref={panelRef}
+          role="dialog"
+          aria-label="Revenue not matched to a venue"
+          data-testid="notmatched-panel"
+          className={s.infoPanel}
+          style={{ top: pos.top, left: pos.left }}
+          onMouseLeave={() => { if (hoverOwned.current) setOpen(false); }}
+        >
+          <div className={s.infoHead}>Not matched to a venue</div>
+          <table className={s.infoTbl}>
+            <tbody>
+              {rows.map((r) => (
+                <tr key={r.key} data-testid="notmatched-row" data-month={r.key}>
+                  <td className="l">{r.month}</td>
+                  <td data-testid="notmatched-amount">{fmtMoney(r.gap)}</td>
+                  <td data-testid="notmatched-pct">{r.pct.toFixed(1)}%</td>
+                </tr>
+              ))}
+            </tbody>
+          </table>
+        </div>,
+        document.body,
+      )}
+    </>
+  );
+}
+
 // SCOPED TO ONE MONTH, which is what every "(in month)" header says. The previous table paired
 // each thing with each month and ranked by DPP across the span; that answered a different question
 // and had none of the derived columns.
@@ -696,9 +812,10 @@ function BillingMark({ basis, unknown }: { basis: FieldMonth["basis"]; unknown: 
 // EVERY DERIVED COLUMN IS COMPUTED FROM THE TWO IT DIVIDES, so a reader can check them by hand:
 // avg/venue = total ÷ venues, avg/match = total ÷ matches, mix = membership ÷ total. The match
 // denominator is guarded — a city with revenue and no matches would otherwise print Infinity.
-function GroupTable({ rows, grain, month, membershipOf, membershipScoped }: {
+function GroupTable({ rows, grain, month, membershipOf, membershipScoped, gapRows }: {
   rows: FieldMonth[]; grain: "city" | "field"; month: Q2Month;
   membershipOf: (city: string) => number; membershipScoped: boolean;
+  gapRows: { key: string; month: string; gap: number; pct: number }[];
 }) {
   const scoped = rows.filter((r) => r.month === month);
   if (scoped.length === 0) return <div className={s.empty}>No rows for this selection.</div>;
@@ -736,7 +853,8 @@ function GroupTable({ rows, grain, month, membershipOf, membershipScoped }: {
               <th className="l">{grain === "city" ? "City" : "Location"}</th>
               <th>Venues</th>
               <th>Matches</th>
-              <th>Revenue matched to a venue <i className={s.mut}>(in month)</i></th>
+              <th>Revenue matched to a venue <i className={s.mut}>(in month)</i>
+                {gapRows.length > 0 && <NotMatchedInfo rows={gapRows} />}</th>
               <th>Avg revenue / venue</th>
               <th>Avg revenue / match</th>
               <th>DPP matched to a venue <i className={s.mut}>(in month)</i></th>
