@@ -148,6 +148,18 @@ export default function CostSection() {
     [live, grain],
   );
 
+  // ROWS THE FIELD COST CARD DOES NOT INCLUDE. rollup skips an unknown-cost row when summing cost
+  // but still counts its revenue, so the card's total is smaller than the table it sits over by an
+  // amount nothing on screen names. This is that count — grouped the SAME way the table groups, so
+  // it is the number of DASHES a reader can see, and it moves with the grain, the month and the
+  // structure/city filters because `live` does.
+  const dashedCount = useMemo(() => {
+    const grouped = grain === "city" ? byCity(live) : byField(live);
+    let n = 0;
+    for (const g of grouped.values()) if (g.every((x) => x.cost == null)) n += 1;
+    return n;
+  }, [live, grain]);
+
   const T = useMemo(() => rollup(live), [live]);
   const worst = useMemo(() => highestRatioField(live), [live]);
   const gaps = useMemo(() => costNotRecorded(live), [live]);
@@ -255,6 +267,12 @@ export default function CostSection() {
           <span className={s.tileLab}>Field cost</span>
           <span className={s.tileVal}>
             {fmtMoney(T.cost)}
+            {/* NOTHING AT ALL WHEN NOTHING IS EXCLUDED. The marker is the whole signal — no
+                subtitle, no banner, no colour. It says a number is missing, not which: the
+                "Cost not recorded" block below the table already names them. */}
+            {dashedCount > 0 && (
+              <i className={s.excl} data-testid="cost-excluded">· {dashedCount} excluded</i>
+            )}
             {isPartial && <i className={s.soFar}>so far</i>}
           </span>
         </div>

@@ -190,6 +190,38 @@ await page.waitForTimeout(2500);
   eq("  control — a genuinely $0 venue still prints $0, not a dash", zero != null, true);
 }
 
+// ── 8b. THE FIELD COST CARD SAYS WHAT IT LEAVES OUT ───────────────────────────────────────────
+// rollup skips an unknown-cost row's cost but keeps its revenue, so the card's total is smaller
+// than the table it sits over by an amount nothing used to name. The marker is that name — and it
+// must equal the dashes a reader can actually count, on the active tab.
+console.log("\n── the Field cost card names its exclusions ──");
+{
+  const f = await readTable();
+  const dashes = f.rows.filter((r) => /—/.test(r.cost ?? "")).length;
+  const marker = await page.evaluate(() =>
+    document.querySelector('[data-testid="cost-excluded"]')?.innerText.trim() ?? null);
+  eq("  control — there ARE dashed rows on this tab", dashes > 0, true);
+  eq("the marker is present when rows are excluded", marker != null, true);
+  eq("…and its count equals the dashes on screen", Number((marker ?? "").replace(/\D/g, "")), dashes);
+  eq("…and it reads as a plain suffix, not a sentence", /^· \d+ excluded$/.test(marker ?? ""), true);
+
+  // IT MOVES WITH THE TAB. City groups differently — a city with one costed field is not dashed
+  // even when one of its fields is — so the count is re-derived, not carried over.
+  await page.locator('[data-testid="grain-city"]').click();
+  await page.waitForTimeout(2000);
+  const c = await readTable();
+  const cityDashes = c.rows.filter((r) => /—/.test(r.cost ?? "")).length;
+  const cityMarker = await page.evaluate(() =>
+    document.querySelector('[data-testid="cost-excluded"]')?.innerText.trim() ?? null);
+  eq("on City Economics the count matches that tab's dashes",
+     cityMarker == null ? 0 : Number(cityMarker.replace(/\D/g, "")), cityDashes);
+  eq("…and renders NOTHING AT ALL when nothing is excluded",
+     cityDashes === 0 ? cityMarker === null : cityMarker !== null, true);
+  console.log(`     field tab: ${dashes} dashed · city tab: ${cityDashes} dashed`);
+  await page.locator('[data-testid="grain-field"]').click();
+  await page.waitForTimeout(2000);
+}
+
 // ── 9. CROSS-TAB ──────────────────────────────────────────────────────────────────────────────
 console.log("\n── every city equals the sum of its fields ──");
 {

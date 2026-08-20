@@ -171,3 +171,12 @@
         border-color: color-mix(in srgb, #a4372f 30%, transparent);
         color: #a4372f; }
 .bad .pillDot { background: #a4372f; }
+
+/* "· N excluded" beside the Field cost value. Deliberately NOT a status colour — it reports that
+   the total omits some rows, which is a fact about completeness, not a good or bad one. Same
+   muted ink the rest of this module uses for secondary text. */
+.excl {
+  display: inline-block; margin-left: 7px;
+  font-size: 11px; font-style: normal; font-weight: 700; letter-spacing: 0;
+  color: color-mix(in srgb, var(--deep-green, #12352b) 45%, transparent);
+}
