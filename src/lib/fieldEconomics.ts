@@ -57,10 +57,27 @@ export const canonCity = (c: string | null | undefined): string =>
 // offering them would be offering empty sets.
 export type CostBasis = "per_match" | "profit_share" | "monthly_flat";
 
+/**
+ * COST STRUCTURE, DERIVED FROM fin_venues.billing_type AND NOTHING ELSE.
+ *
+ * billing_cadence is deliberately NOT consulted. It says WHEN the invoice lands, not how the
+ * figure is computed — Westlake is per_match billed monthly, which is one structure on a monthly
+ * cadence, not a "monthly lease". Reading cadence into this label is what produces a per-match
+ * venue described as a lease.
+ *
+ * Measured across all 32 fin_venues rows: billing_type is only ever `per_match` (28) or
+ * `profit_share` (4). No venue carries monthly_flat, and hourly_rate and monthly_flat are NULL on
+ * every row. monthly_flat keeps a label because the type exists and a venue could be moved onto
+ * it; it costs nothing to keep the branch.
+ *
+ * "Profit share" MATCHES FIELD COSTS. That page has always used that wording for the same
+ * billing_type, and two labels for one arrangement is how someone concludes they are two
+ * arrangements.
+ */
 export const COST_BASIS_LABEL: Record<CostBasis, string> = {
   per_match: "Per match",
   profit_share: "Profit share",
-  monthly_flat: "Monthly flat",
+  monthly_flat: "Monthly lease",
 };
 
 // Which canonical kinds mean "we do not know what this cost". Everything else is a real figure.
@@ -415,21 +432,102 @@ export function rollup(rows: FieldMonth[]): CostRollup {
       continue;
     }
     cost += r.cost;
-    // Event play is billed to nobody, so it cannot sit under a cost in a ratio.
+    // Still tracked, and still in the Export — it is the narrower denominator and the reason the
+    // three revenue buckets exist. It is no longer what the RATIO divides by; see below.
     revenueWithKnownCost += r.revenue - r.eventRevenue;
   }
   return {
     cost,
     revenue,
     revenueWithKnownCost,
-    // A ratio against revenue that includes unknown-cost fields would flatter the number by
-    // adding revenue with no cost behind it. Denominator is known-cost revenue only.
-    ratio: revenueWithKnownCost > 0 ? cost / revenueWithKnownCost : null,
+    // THE DENOMINATOR IS TOTAL REVENUE — the REVENUE column on screen, all of it.
+    //
+    // It used to be revenueWithKnownCost (known-cost revenue, event play removed), on the argument
+    // that a ratio should compare the same matches on both sides. That argument is intact and the
+    // narrower figure is still computed and still exported; it is simply not what the page
+    // divides by any more. The reason is legibility: a ratio whose denominator is not the number
+    // printed beside it cannot be checked by the person reading it, and that invisibility has
+    // already caused one round of confusion on this page.
+    //
+    // Consequence, stated: event-heavy and partly-uncosted rows now read LOWER than before,
+    // because revenue with no cost behind it is in the denominator.
+    //
+    // AND NULL WHEN NOTHING IS KNOWN. If every row in the group has an unknown cost there is no
+    // numerator, and 0 ÷ revenue = 0.0% would read as "free" for exactly the venues whose cost is
+    // merely unrecorded — the same lie the amount column stopped telling.
+    ratio: revenue > 0 && unknownFields < rows.length ? cost / revenue : null,
     unknownFields,
     unknownRevenue,
     eventRevenue,
     matches,
   };
+}
+
+
+/* ── PRIOR-PERIOD WINDOWS ─────────────────────────────────────────────────────────────────────
+ * Both are anchored on the FIRST month of the selected period, so August 2026 compares against
+ * July 2026 and against Q2 2026 (Apr–Jun) — the month before it and the quarter before it.
+ *
+ * PRIOR QUARTER IS A POOLED RATIO, NOT AN AVERAGE OF THREE MONTHLY ONES: the three months' cost
+ * summed, divided by the three months' revenue summed. An average of ratios would weight a thin
+ * month equally with a heavy one and is a different, wronger number.
+ */
+const MONTH_KEYS = ["Jan","Feb","Mar","Apr","May","Jun","Jul","Aug","Sep","Oct","Nov","Dec"];
+
+/** "Aug 2026" → { y: 2026, m: 7 }. Returns null on anything that is not a month key. */
+export function parseMonthKey(k: string): { y: number; m: number } | null {
+  const [mon, yr] = (k ?? "").split(" ");
+  const m = MONTH_KEYS.indexOf(mon);
+  const y = Number(yr);
+  return m < 0 || !Number.isFinite(y) ? null : { y, m };
+}
+const fmtMonthKey = (y: number, m: number) => `${MONTH_KEYS[m]} ${y}`;
+
+/** The calendar month immediately before `key`. */
+export function priorMonthOf(key: Q2Month): Q2Month | null {
+  const p = parseMonthKey(key);
+  if (!p) return null;
+  return p.m === 0 ? fmtMonthKey(p.y - 1, 11) : fmtMonthKey(p.y, p.m - 1);
+}
+
+/** The three months of the calendar quarter immediately before the one containing `key`. */
+export function priorQuarterOf(key: Q2Month): Q2Month[] {
+  const p = parseMonthKey(key);
+  if (!p) return [];
+  const qStart = Math.floor(p.m / 3) * 3;          // 0, 3, 6, 9
+  const py = qStart === 0 ? p.y - 1 : p.y;
+  const pStart = qStart === 0 ? 9 : qStart - 3;
+  return [0, 1, 2].map((i) => fmtMonthKey(py, pStart + i));
+}
+
+/**
+ * Cost ÷ revenue for one entity over a set of months, pooled. Null — rendered as a dash — when
+ * there is no revenue in the window, which is the only honest answer: a ratio with a zero
+ * denominator is not 0.0%, it is unanswerable.
+ */
+export function pooledRatio(rows: FieldMonth[]): number | null {
+  let cost = 0, revenue = 0, known = false;
+  for (const r of rows) {
+    revenue += r.revenue;
+    if (r.cost != null) { cost += r.cost; known = true; }
+  }
+  if (!known || revenue <= 0) return null;
+  return cost / revenue;
+}
+
+/**
+ * THE COST-RATIO BAND. Green under 50%, amber 50–60%, red 60% and over.
+ *
+ * THE BOUNDARY BELONGS TO THE HIGHER BAND — 50.0 is amber, 60.0 is red. A pill that disagrees
+ * with the number printed inside it is worse than no pill, and an off-by-one at a threshold is
+ * exactly the failure a colour is supposed to prevent. Lives here, not in the component, so the
+ * four boundary cases can be asserted directly.
+ */
+export function ratioBand(ratio: number): "good" | "warn" | "bad" {
+  const pct = ratio * 100;
+  if (pct < 50) return "good";
+  if (pct < 60) return "warn";
+  return "bad";
 }
 
 export function byCity(rows: FieldMonth[]): Map<string, FieldMonth[]> {

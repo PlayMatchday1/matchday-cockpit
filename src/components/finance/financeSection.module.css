@@ -145,3 +145,29 @@
 .filterField { display: flex; flex-direction: column; gap: 4px; min-width: 0; }
 .filterField > span { font-size: 10px; font-weight: 800; letter-spacing: .05em; text-transform: uppercase; color: color-mix(in srgb, var(--deep-green, #12352b) 55%, transparent); }
 .filterField .sel { max-width: none; width: 100%; }
+
+/* COST-RATIO PILL. Built from the palette this module already uses — --mint for good,
+   --gold-dot for warn, the same #a4372f as .neg for bad. No new colours were introduced.
+   The dot carries the hue at full strength so the band is legible when the tint is not. */
+.pill {
+  display: inline-flex; align-items: center; gap: 6px;
+  padding: 3px 10px 3px 8px; border-radius: 999px;
+  font-size: 11.5px; font-weight: 800; font-variant-numeric: tabular-nums;
+  border: 1px solid transparent;
+}
+.pillDot { width: 6px; height: 6px; border-radius: 50%; flex: none; }
+
+.good { background: color-mix(in srgb, var(--mint, #cfeee0) 45%, transparent);
+        border-color: color-mix(in srgb, var(--mint, #cfeee0) 90%, transparent);
+        color: var(--forest, #2f6b4f); }
+.good .pillDot { background: var(--forest, #2f6b4f); }
+
+.warn { background: color-mix(in srgb, var(--gold-dot, #d8a72b) 20%, transparent);
+        border-color: color-mix(in srgb, var(--gold-dot, #d8a72b) 45%, transparent);
+        color: #8a6410; }
+.warn .pillDot { background: var(--gold-dot, #d8a72b); }
+
+.bad  { background: color-mix(in srgb, #a4372f 12%, transparent);
+        border-color: color-mix(in srgb, #a4372f 30%, transparent);
+        color: #a4372f; }
+.bad .pillDot { background: #a4372f; }

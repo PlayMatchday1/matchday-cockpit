@@ -33,6 +33,7 @@ import { useFinancePeriod } from "@/lib/financePeriodContext";
 import { matchRange } from "@/lib/financePeriod";
 import {
   buildFieldMonths, byCity, byField, canonCity, costNotRecorded, highestRatioField, rollup,
+  priorMonthOf, priorQuarterOf, pooledRatio, ratioBand,
   COST_BASIS_LABEL, type CostBasis, type CostMode, type FieldMonth,
 } from "@/lib/fieldEconomics";
 import { CITY_DISPLAY_ORDER, type Q2Month } from "@/lib/financeStats";
@@ -57,7 +58,26 @@ export default function CostSection() {
   // page's whole argument is that a number you do not have yet is not a number you may print.
   // The period's own window — see the note on CityPnlTable. buildFieldMonths buckets by
   // `months`, so rows outside the period never reach a figure on this page.
-  const { fromDate, toDate } = useMemo(() => matchRange(period.start, period.end), [period]);
+  // THE WINDOW REACHES BACK A QUARTER. The two prior-ratio columns need cost AND revenue for the
+  // preceding calendar month and the preceding calendar quarter, and revenue is roster-derived —
+  // so those months' match rows have to be loaded too. Without this the columns would render a
+  // dash for everything and look like missing data rather than an unfetched window.
+  const priorMonth = useMemo(() => (period.months[0] ? priorMonthOf(period.months[0]) : null), [period]);
+  const priorQuarter = useMemo(() => (period.months[0] ? priorQuarterOf(period.months[0]) : []), [period]);
+  const extraMonths = useMemo(
+    () => [...new Set([...priorQuarter, ...(priorMonth ? [priorMonth] : [])])],
+    [priorQuarter, priorMonth],
+  );
+  const windowStart = useMemo(() => {
+    // Earliest month we need, as a local-midnight date.
+    const all = [...extraMonths];
+    if (all.length === 0) return period.start;
+    const M = ["Jan","Feb","Mar","Apr","May","Jun","Jul","Aug","Sep","Oct","Nov","Dec"];
+    const parsed = all.map((k) => { const [mo, yr] = k.split(" "); return new Date(Number(yr), M.indexOf(mo), 1); });
+    const earliest = parsed.reduce((a, b) => (a < b ? a : b), parsed[0]);
+    return earliest < period.start ? earliest : period.start;
+  }, [extraMonths, period]);
+  const { fromDate, toDate } = useMemo(() => matchRange(windowStart, period.end), [windowStart, period]);
   const { rows: matchRegistrations, loading: matchLoading } = useMatchRangeData(fromDate, toDate);
 
   const [structures, setStructures] = useState<Set<CostBasis>>(() => new Set(STRUCTURES));
@@ -79,10 +99,14 @@ export default function CostSection() {
 
   const cities = useMemo(() => CITY_DISPLAY_ORDER.filter((c) => !isCityHidden(c)).map(canonCity), []);
 
-  const allRows = useMemo(
-    () => (data ? buildFieldMonths(data, matchRegistrations, months, mode) : []),
-    [data, matchRegistrations, months, mode],
+  // Rows for the period AND the prior windows, from one call — so the prior figures come off the
+  // same derivation as the current one and cannot drift from it.
+  const everyMonth = useMemo(() => [...new Set([...extraMonths, ...months])], [extraMonths, months]);
+  const everyRow = useMemo(
+    () => (data ? buildFieldMonths(data, matchRegistrations, everyMonth, mode) : []),
+    [data, matchRegistrations, everyMonth, mode],
   );
+  const allRows = useMemo(() => everyRow.filter((r) => months.includes(r.month)), [everyRow, months]);
 
   const monthRows = allRows;
 
@@ -95,6 +119,34 @@ export default function CostSection() {
   // A field with neither cost nor revenue in the month did not trade; listing it adds a row of
   // dashes and nothing else.
   const live = useMemo(() => scoped.filter((r) => r.revenue > 0 || (r.cost ?? 0) !== 0 || r.matches > 0), [scoped]);
+
+  // PRIOR RATIOS, per entity, on the SAME structure/city filters as the table. Keyed by city and
+  // by field so either grain can look itself up. pooledRatio is cost-summed ÷ revenue-summed over
+  // the window — never an average of monthly ratios.
+  const priorRatios = useMemo(() => {
+    const scopedAll = everyRow.filter(
+      (r) => structures.has(r.basis) && (cityFilter === "all" || r.city === canonCity(cityFilter)),
+    );
+    const build = (monthsIn: string[]) => {
+      const rows = scopedAll.filter((r) => monthsIn.includes(r.month));
+      const cityMap = new Map<string, number | null>();
+      for (const [k, g] of byCity(rows)) cityMap.set(k, pooledRatio(g));
+      const fieldMap = new Map<string, number | null>();
+      for (const [k, g] of byField(rows)) fieldMap.set(k, pooledRatio(g));
+      return { cityMap, fieldMap, any: rows.length > 0 };
+    };
+    return {
+      month: build(priorMonth ? [priorMonth] : []),
+      quarter: build(priorQuarter),
+    };
+  }, [everyRow, structures, cityFilter, priorMonth, priorQuarter]);
+
+  // The same grouping the table performs — a second count computed another way is how a caption
+  // and its table start disagreeing.
+  const rowCount = useMemo(
+    () => (grain === "city" ? byCity(live) : byField(live)).size,
+    [live, grain],
+  );
 
   const T = useMemo(() => rollup(live), [live]);
   const worst = useMemo(() => highestRatioField(live), [live]);
@@ -109,7 +161,9 @@ export default function CostSection() {
   const series = useMemo(
     () => months.map((m) => {
       const r = rollup(seriesRows.filter((x) => x.month === m));
-      return { month: m, cost: r.cost, revenue: r.revenueWithKnownCost, ratio: r.ratio };
+      // TOTAL revenue, matching the column and the ratio's denominator. The chart used to plot
+      // revenueWithKnownCost, so its bars and its printed ratio disagreed with the table.
+      return { month: m, cost: r.cost, revenue: r.revenue, ratio: r.ratio };
     }),
     [months, seriesRows],
   );
@@ -196,14 +250,6 @@ export default function CostSection() {
             {T.ratio == null ? "—" : fmtPct(T.ratio)}
             {isPartial && T.ratio != null && <i className={s.soFar}>so far</i>}
           </span>
-          <span className={s.tileSub}>
-            {T.ratio == null
-              ? "no revenue at a costed field this month"
-              : `${fmtMoney(T.cost)} against ${fmtMoney(T.revenueWithKnownCost)} at costed fields` +
-                // Event play is real revenue that carries no venue cost by policy. Dividing cost
-                // by a denominator that included it would report a pitch as nearly free.
-                (T.eventRevenue > 0 ? ` · ${fmtMoney(T.eventRevenue)} of event play excluded — events are not billed as matches` : "")}
-          </span>
         </div>
         <div className={s.tile}>
           <span className={s.tileLab}>Field cost</span>
@@ -211,24 +257,12 @@ export default function CostSection() {
             {fmtMoney(T.cost)}
             {isPartial && <i className={s.soFar}>so far</i>}
           </span>
-          <span className={s.tileSub}>
-            {T.unknownFields > 0
-              ? `${fmtInt(T.unknownFields)} field-${T.unknownFields === 1 ? "month" : "months"} excluded — no cost on file`
-              : "every field in scope has a cost basis"}
-          </span>
         </div>
         <div className={s.tile}>
           <span className={s.tileLab}>Revenue</span>
           <span className={s.tileVal}>
             {fmtMoney(T.revenue)}
             {isPartial && <i className={s.soFar}>so far</i>}
-          </span>
-          <span className={s.tileSub}>
-            {T.unknownRevenue > 0
-              ? `${fmtMoney(T.unknownRevenue)} of it sits at fields with no cost basis`
-              : T.eventRevenue > 0
-                ? `${fmtMoney(T.eventRevenue)} of it is event play, across ${fmtInt(T.matches)} billable ${T.matches === 1 ? "match" : "matches"}`
-                : `across ${fmtInt(T.matches)} ${T.matches === 1 ? "match" : "matches"}`}
           </span>
         </div>
         {/* MEASURED, NOT ASSERTED. There is no target to be above. */}
@@ -259,7 +293,7 @@ export default function CostSection() {
           ))}
         </div>
         <div className={s.legend}>
-          <span><i className={`${s.dot} ${s.barB}`} />Revenue at costed fields</span>
+          <span><i className={`${s.dot} ${s.barB}`} />Revenue</span>
           <span><i className={`${s.dot} ${s.barA}`} />Field cost</span>
           <span>Ratio printed above each pair.</span>
         </div>
@@ -267,18 +301,26 @@ export default function CostSection() {
 
       <div className={s.ctrlRow}>
         <div className={s.ctrlGroup}>
-          <span className={s.ctrlLab}>Economics</span>
+          <span className={s.ctrlLab}>Breakdown</span>
           <div className={s.seg}>
-            <button type="button" className={grain === "city" ? s.on : ""} onClick={() => setGrain("city")}>City Economics</button>
-            <button type="button" className={grain === "field" ? s.on : ""} onClick={() => setGrain("field")}>Field Economics</button>
+            <button type="button" data-testid="grain-city" aria-pressed={grain === "city"}
+              className={grain === "city" ? s.on : ""} onClick={() => setGrain("city")}>City Economics</button>
+            <button type="button" data-testid="grain-field" aria-pressed={grain === "field"}
+              className={grain === "field" ? s.on : ""} onClick={() => setGrain("field")}>Field Economics</button>
           </div>
+          {/* COUNTS THE ROWS ACTUALLY RENDERED for the selected month, so it moves with the month
+              filter and with the structure/city filters. A count that did not would be a caption
+              describing a different table. */}
+          <span className={s.ctrlLab} data-testid="breakdown-count">
+            {rowCount} {grain === "city" ? (rowCount === 1 ? "city" : "cities") : (rowCount === 1 ? "field" : "fields")}
+          </span>
         </div>
         <div className={s.ctrlGroup}>
           <button type="button" className={s.btn} onClick={exportTable}>Export</button>
         </div>
       </div>
 
-      <EconomicsTable rows={live} grain={grain} total={T} />
+      <EconomicsTable rows={live} grain={grain} total={T} prior={priorRatios} />
 
       {gaps.length > 0 && (
         <div className={s.gap} data-testid="cost-not-recorded">
@@ -300,101 +342,102 @@ export default function CostSection() {
 }
 
 function EconomicsTable({
-  rows, grain, total,
+  rows, grain, total, prior,
 }: {
   rows: FieldMonth[];
   grain: Grain;
   total: ReturnType<typeof rollup>;
+  prior: {
+    month: { cityMap: Map<string, number | null>; fieldMap: Map<string, number | null>; any: boolean };
+    quarter: { cityMap: Map<string, number | null>; fieldMap: Map<string, number | null>; any: boolean };
+  };
 }) {
   if (rows.length === 0) return <div className={s.empty}>No fields match this selection.</div>;
   const grouped = grain === "city" ? byCity(rows) : byField(rows);
   const list = [...grouped.values()]
     .map((g) => ({
+      // byCity keys on city, byField keys on FieldMonth.key — match both exactly.
+      key: grain === "city" ? g[0].city : g[0].key,
       label: grain === "city" ? g[0].city : g[0].field,
       city: g[0].city,
       bases: [...new Set(g.map((x) => x.basis))],
       allUnknown: g.every((x) => x.cost == null),
-      anyUnknown: g.some((x) => x.cost == null),
       r: rollup(g),
     }))
     .sort((a, b) => b.r.revenue - a.r.revenue);
 
+  // THE RANK IS ASSIGNED BY REVENUE AND THEN TRAVELS WITH THE ROW. Assigned here, off the
+  // revenue-sorted list, so #1 is the top earner whatever the table is later sorted by — a rank
+  // that renumbered itself on sort would be a row index wearing a badge.
+  const ranked = list.map((x, i) => ({ ...x, rank: i + 1 }));
+
+  const priorFor = (which: "month" | "quarter", x: (typeof ranked)[number]) =>
+    (grain === "city" ? prior[which].cityMap : prior[which].fieldMap).get(x.key) ?? null;
+
+  const dash = <span className={s.mut}>—</span>;
+
   return (
     <div className={s.card}>
-      <div className={s.legend} data-testid="cost-ratio-note">
-        <span>
-          <b>Cost ratio is field cost ÷ revenue at costed fields</b> — the column beside it, not
-          total revenue. Event play is billed to nobody and fields with no cost basis have no cost
-          behind them, so neither can sit under a cost in a ratio. The three revenue columns add up
-          to the total on every row.
-        </span>
-      </div>
       <div className={s.tblWrap}>
         <table className={s.tbl} data-testid="cost-economics-table">
           <thead>
             <tr>
+              <th data-testid="cost-th-rank">#</th>
               <th className="l">{grain === "city" ? "City" : "Field"}</th>
               {grain === "field" && <th className="l">City</th>}
-              {/* "Cost structure" is the mockup's wording for this column. */}
-              <th className="l">Cost structure</th>
-              <th>Matches</th>
+              {grain === "field" && <th className="l">Cost structure</th>}
               <th>Revenue</th>
-              {/* THE RATIO'S DENOMINATOR, ON SCREEN. The ratio has always divided by revenue at
-                  COSTED fields, but only total revenue was shown — so Austin printed 83.3% beside
-                  columns that divide to 65.2%, and San Antonio printed 170.1% beside 39.3%. A
-                  reader doing the arithmetic in the row got a different number from the one in the
-                  row, which is a column lying by omission. The three components are split out so
-                  the division on screen is the division performed. */}
-              <th data-testid="cost-th-costed">At costed fields</th>
-              <th data-testid="cost-th-event">Event play</th>
-              <th data-testid="cost-th-nobasis">No cost basis</th>
               <th>Field cost</th>
               <th>Cost ratio</th>
+              <th>Prior month ratio</th>
+              <th>Prior quarter ratio</th>
             </tr>
           </thead>
           <tbody>
-            {list.map((x) => (
-              <tr key={x.label} data-testid="cost-row">
-                <td className="l">{x.label}</td>
-                {grain === "field" && <td className="l">{x.city}</td>}
-                <td className="l">
-                  {/* ON EVERY ROW — a >100% ratio is legible only if the billing says why. */}
-                  {x.bases.map((b) => (
-                    <span key={b} className={`${s.bt} ${b === "profit_share" ? s.btShare : b === "monthly_flat" ? s.btFlat : ""}`} data-testid="cost-billing-mark">
-                      {COST_BASIS_LABEL[b]}
-                    </span>
-                  ))}
-                  {x.anyUnknown && <span className={`${s.bt} ${s.btNone}`} data-testid="cost-billing-mark">No cost on file</span>}
-                </td>
-                <td>{fmtInt(x.r.matches)}</td>
-                <td data-testid="cost-rev-total">{fmtMoney(x.r.revenue)}</td>
-                {/* denominator + event + no-basis === revenue, on every row */}
-                <td data-testid="cost-rev-costed">{fmtMoney(x.r.revenueWithKnownCost)}</td>
-                <td className={s.mut} data-testid="cost-rev-event">{fmtMoney(x.r.eventRevenue)}</td>
-                <td className={s.mut} data-testid="cost-rev-nobasis">
-                  {fmtMoney(x.r.revenue - x.r.revenueWithKnownCost - x.r.eventRevenue)}
-                </td>
-                <td className={x.allUnknown ? s.mut : s.neg} data-testid="cost-amount-cell">
-                  {x.allUnknown ? "—" : fmtMoney(x.r.cost)}
-                </td>
-                <td className={x.r.ratio == null ? s.mut : ""} data-testid="cost-ratio-cell">
-                  {x.r.ratio == null ? "—" : fmtPct(x.r.ratio)}
-                </td>
-              </tr>
-            ))}
+            {ranked.map((x) => {
+              const pm = priorFor("month", x);
+              const pq = priorFor("quarter", x);
+              return (
+                <tr key={x.label} data-testid="cost-row">
+                  <td><span className={s.rank} data-testid="cost-rank">{x.rank}</span></td>
+                  <td className="l"><b>{x.label}</b></td>
+                  {grain === "field" && <td className="l">{x.city}</td>}
+                  {grain === "field" && (
+                    <td className="l" data-testid="cost-structure">
+                      {x.bases.map((b) => COST_BASIS_LABEL[b]).join(" + ")}
+                    </td>
+                  )}
+                  <td data-testid="cost-revenue-cell">{fmtMoney(x.r.revenue)}</td>
+                  <td className={x.allUnknown ? s.mut : ""} data-testid="cost-amount-cell">
+                    {x.allUnknown ? "—" : fmtMoney(x.r.cost)}
+                  </td>
+                  <td data-testid="cost-ratio-cell">
+                    {x.r.ratio == null ? dash : (
+                      <span className={`${s.pill} ${s[ratioBand(x.r.ratio)]}`} data-testid="cost-ratio-pill"
+                        data-band={ratioBand(x.r.ratio)}>
+                        <i className={s.pillDot} />{fmtPct(x.r.ratio)}
+                      </span>
+                    )}
+                  </td>
+                  <td className={pm == null ? s.mut : ""} data-testid="cost-prior-month">
+                    {pm == null ? "—" : fmtPct(pm)}
+                  </td>
+                  <td className={pq == null ? s.mut : ""} data-testid="cost-prior-quarter">
+                    {pq == null ? "—" : fmtPct(pq)}
+                  </td>
+                </tr>
+              );
+            })}
             <tr className={s.tot} data-testid="cost-total-row">
+              <td />
               <td className="l">{grain === "city" ? "All cities" : "All fields"}</td>
               {grain === "field" && <td className="l">—</td>}
-              <td className="l">—</td>
-              <td>{fmtInt(total.matches)}</td>
-              <td data-testid="cost-tot-total">{fmtMoney(total.revenue)}</td>
-              <td data-testid="cost-tot-costed">{fmtMoney(total.revenueWithKnownCost)}</td>
-              <td className={s.mut} data-testid="cost-tot-event">{fmtMoney(total.eventRevenue)}</td>
-              <td className={s.mut} data-testid="cost-tot-nobasis">
-                {fmtMoney(total.revenue - total.revenueWithKnownCost - total.eventRevenue)}
-              </td>
-              <td className={s.neg} data-testid="cost-total-amount">{fmtMoney(total.cost)}</td>
-              <td>{total.ratio == null ? "—" : fmtPct(total.ratio)}</td>
+              {grain === "field" && <td className="l">—</td>}
+              <td>{fmtMoney(total.revenue)}</td>
+              <td>{fmtMoney(total.cost)}</td>
+              <td>{total.ratio == null ? dash : fmtPct(total.ratio)}</td>
+              <td>—</td>
+              <td>—</td>
             </tr>
           </tbody>
         </table>

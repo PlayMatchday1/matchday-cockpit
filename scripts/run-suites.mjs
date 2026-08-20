@@ -61,6 +61,7 @@ const NODE_SUITES = [
   "scripts/walltime-guard-test.ts",
   "scripts/promo-model-test.ts",
   "scripts/cost-basis-confinement-test.ts",
+  "scripts/cost-ratio-band-test.ts",
   "scripts/crm-characterize-test.ts",
   "scripts/crm-host-guard-test.ts",
   "scripts/seam-stripped-test.ts",
