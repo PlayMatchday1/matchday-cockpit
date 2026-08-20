@@ -28,7 +28,10 @@
 .seg button:disabled { opacity: .42; cursor: not-allowed; }
 
 /* ===== Tiles ===== */
-.tiles { display: grid; grid-template-columns: repeat(4, minmax(0, 1fr)); gap: 12px; }
+/* grid-auto-rows: 1fr so EVERY row is the height of the tallest card, not just every card within
+   one row. At 4 columns there is one row and this is a no-op; at 2 columns the row holding the
+   card that still has a subtitle would otherwise stand taller than the row above it. */
+.tiles { display: grid; grid-template-columns: repeat(4, minmax(0, 1fr)); gap: 12px; grid-auto-rows: 1fr; }
 @media (max-width: 1100px) { .tiles { grid-template-columns: repeat(2, minmax(0, 1fr)); } }
 @media (max-width: 560px)  { .tiles { grid-template-columns: 1fr; } }
 .tile {

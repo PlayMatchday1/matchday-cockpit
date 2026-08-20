@@ -133,7 +133,7 @@ console.log("\n── the scan catches a planted copy ──");
 // ── 3. THE FIGURES, ASSERTED AS NUMBERS ───────────────────────────────────────────────────────
 console.log("\n── the four cards still read what the ledger says ──");
 {
-  const cards = await page.evaluate(() => [...document.querySelectorAll('[class*="tile"]')]
+  const cards = await page.evaluate(() => [...document.querySelectorAll('[class*="tiles"] > *')]
     .filter((t) => t.querySelector('[data-testid="revenue-tile-value"]'))
     .map((t) => ({ lab: t.querySelector('[class*="tileLab"]')?.textContent?.trim(),
                    v: t.querySelector('[data-testid="revenue-tile-value"]')?.firstChild?.textContent?.trim() })));
@@ -152,13 +152,7 @@ console.log("\n── the four cards still read what the ledger says ──");
   const dashes = cards.filter((c) => /^—$/.test(c.v ?? "")).map((c) => c.lab);
   eq("no card fell back to a dash", dashes, []);
 
-  // THE DELTA SUBTITLE SURVIVES on the previous period, which is what the removed control's
-  // default already was — the other two bases went with it.
-  const sub = await page.evaluate(() =>
-    document.querySelector('[data-testid="tile-revenue"] [data-testid="revenue-tile-sub"]')?.innerText.trim());
-  eq("the revenue card still states a comparison", /vs /.test(sub ?? ""), true);
-  eq("  …against the previous period, not a prior-periods average", /prior period/i.test(sub ?? ""), false);
-  console.log(`     ${sub}`);
+  // THE COMPARISON SUBTITLE IS GONE — and so is the computation behind it. Asserted below.
 }
 
 // ── 4. NO EMPTY CONTAINER, NO DOUBLED GAP ─────────────────────────────────────────────────────
@@ -251,36 +245,106 @@ console.log("\n── one basis, everywhere ──");
   eq("the comparison series sums to July gross, to the dollar", Math.abs(sum(S.cmp) - monthTotal("2026-07")) < 1, true);
   console.log(`     current ${Math.round(sum(S.cur))} · comparison ${Math.round(sum(S.cmp))} · July gross ${Math.round(monthTotal("2026-07"))}`);
 
-  // (c) THE PERCENTAGE, FROM TWO FIGURES ON THE SAME FOOTING.
-  const sub = await page.evaluate(() =>
-    document.querySelector('[data-testid="tile-revenue"] [data-testid="revenue-tile-sub"]')?.innerText.trim());
-  const printed = Number((sub.match(/([+-]?[\d.]+)%/) ?? [])[1]);
-  eq("  control — a percentage is printed", Number.isFinite(printed), true);
-  // The compared value for a CURRENT period is the plain-mean pace: gross so far ÷ elapsed × month.
-  const chicago = new Date(new Date().toLocaleString("en-US", { timeZone: "America/Chicago" }));
-  const elapsed = chicago.getDate(), inMonth = new Date(2026, 8, 0).getDate();
-  const paceInternal = (monthTotal("2026-08") / elapsed) * inMonth;
-  const grossBasis = monthTotal("2026-07");
-  const expected = ((paceInternal - grossBasis) / grossBasis) * 100;
-  eq("the percentage is computed against the comparison month's GROSS",
-     Math.abs(printed - expected) < 0.06, true);
-  console.log(`     printed ${printed}% · gross-vs-gross ${expected.toFixed(2)}%`);
+  // THE PERCENTAGE ASSERTIONS THAT STOOD HERE ARE GONE WITH THE SUBTITLE. Putting the basis on
+  // gross fixed a number that is no longer rendered; the computation was orphaned and deleted, so
+  // there is nothing left to assert about it. What survives is the pair above: both series are
+  // gross, and both tie to the ledger.
+}
 
-  // THE NEGATIVE CONTROL THAT MATTERS: the roster-matched basis gives a materially different
-  // answer, so this assertion would have failed before the fix rather than passing either way.
-  const gapPct = await page.evaluate(async () => {
-    document.querySelector('[data-testid="notmatched-info"]')?.click();
-    await new Promise((r) => setTimeout(r, 500));
-    const row = document.querySelector('[data-testid="notmatched-row"][data-month="2026-07"]');
-    const v = row?.querySelector('[data-testid="notmatched-amount"]')?.textContent ?? null;
-    document.querySelector('[data-testid="notmatched-info"]')?.click();
-    return v;
+// ── 8. THE CARDS ARE STRIPPED TO FIGURES ──────────────────────────────────────────────────────
+console.log("\n── the four cards ──");
+{
+  await goto("2026-08");
+  const REMOVED = ["vs July 2026", "pace compared, not part-period", "over 18 days",
+                   "day 1 and today excluded", "PROJECTED —", "so far +"];
+
+  // POSITIVE CONTROL ON THE SCAN: a subtitle that IS still there. $24,544 under TOP REVENUE CITY
+  // is a figure, not a caption, and it stays — so the scan is looking at a page that rendered.
+  const kept = await page.evaluate(() => {
+    const t = [...document.querySelectorAll('[class*="tiles"] > *')]
+      .find((x) => /top revenue city/i.test(x.querySelector('[class*="tileLab"]')?.textContent ?? ""));
+    return t?.querySelector('[data-testid="revenue-tile-sub"]')?.textContent?.trim() ?? null;
   });
-  const rosterBasis = grossBasis - money(gapPct);
-  const wrongWay = ((paceInternal - rosterBasis) / rosterBasis) * 100;
-  eq("  control — the roster basis is a real, different figure", money(gapPct) > 0, true);
-  eq("  …and it would have printed a materially different percentage", Math.abs(wrongWay - expected) > 5, true);
-  console.log(`     roster basis ${Math.round(rosterBasis)} would print ${wrongWay.toFixed(1)}% — a ${(wrongWay - expected).toFixed(1)} point error`);
+  eq("  control — TOP REVENUE CITY keeps its figure line", /^\$[\d,]+$/.test(kept ?? ""), true);
+  console.log(`     kept: ${kept}`);
+  const keptScan = await scan(kept);
+  eq("  control — the scan finds that surviving line", keptScan.total > 0, true);
+
+  for (const needle of REMOVED) {
+    const r = await scan(needle);
+    eq(`"${needle}" appears nowhere on the page`, r.total, 0);
+  }
+
+  // AND THE SCAN CAN STILL CATCH ONE — planted, outside the chart.
+  await page.evaluate(() => {
+    const d = document.createElement("div");
+    d.id = "planted-sub";
+    d.textContent = "PROJECTED — $65,092 so far + 11 days × $2,669 · day 1 and today excluded";
+    document.querySelector('[data-testid="finance-revenue"]').appendChild(d);
+  });
+  for (const needle of ["PROJECTED —", "day 1 and today excluded", "so far +"]) {
+    const r = await scan(needle);
+    eq(`  the scan catches the planted "${needle}"`, r.total >= 1, true);
+  }
+  await page.evaluate(() => document.getElementById("planted-sub")?.remove());
+  eq("  …and the page is clean again", (await scan("PROJECTED —")).total, 0);
+
+  // EXACTLY ONE "so far" CHIP, AND IT IS ON THE HEADLINE CARD.
+  const chips = await page.evaluate(() => {
+    const all = [...document.querySelectorAll('[data-testid="revenue-tile-partial"]')];
+    const rev = document.querySelector('[data-testid="tile-revenue"]');
+    return { n: all.length, allInRevenue: all.every((c) => rev?.contains(c)),
+             text: all.map((c) => c.textContent.trim()) };
+  });
+  eq("exactly one \"so far\" chip renders", chips.n, 1);
+  eq("  …and it is inside the AUGUST 2026 REVENUE card", chips.allInRevenue, true);
+  console.log(`     chip: ${JSON.stringify(chips.text)}`);
+
+  // THE HEADLINES ARE UNCHANGED.
+  const heads = await page.evaluate(() => [...document.querySelectorAll('[class*="tiles"] > *')]
+    .filter((t) => t.querySelector('[data-testid="revenue-tile-value"]'))
+    .map((t) => ({ lab: t.querySelector('[class*="tileLab"]')?.textContent?.trim(),
+                   v: t.querySelector('[data-testid="revenue-tile-value"]')?.firstChild?.textContent?.trim(),
+                   sub: t.querySelector('[data-testid="revenue-tile-sub"]')?.textContent?.trim() ?? null })));
+  eq("  control — four cards rendered", heads.length, 4);
+  eq("the revenue headline equals August gross", Math.abs(money(heads[0].v) - monthTotal("2026-08")) < 1, true);
+  eq("the four headlines are figures, not dashes", heads.map((h) => h.v === "—"), [false, false, false, false]);
+  eq("exactly one card still carries a subtitle", heads.filter((h) => h.sub != null).length, 1);
+  eq("  …and it is TOP REVENUE CITY", heads.find((h) => h.sub != null)?.lab?.toLowerCase(), "top revenue city");
+  console.log(`     ${heads.map((h) => `${h.lab}=${h.v}`).join(" · ")}`);
+
+  // ALL FOUR THE SAME HEIGHT, AT BOTH WIDTHS. Three cards losing a line and one keeping it is
+  // exactly how a row goes ragged, so the grid's stretch is asserted rather than assumed.
+  for (const w of [1620, 1024]) {
+    await page.setViewportSize({ width: w, height: 1200 });
+    await page.waitForTimeout(600);
+    const H = await page.evaluate(() => {
+      const t = [...document.querySelectorAll('[class*="tiles"] > *')].filter((x) => x.querySelector('[data-testid="revenue-tile-value"]'));
+      return { hs: t.map((x) => Math.round(x.getBoundingClientRect().height)),
+               tops: t.map((x) => Math.round(x.getBoundingClientRect().top)) };
+    });
+    eq(`at ${w}px all four cards are the same height`, [...new Set(H.hs)].length, 1);
+    if (w === 1620) eq(`  …and on a single row`, [...new Set(H.tops)].length, 1);
+    console.log(`     ${w}px heights ${JSON.stringify(H.hs)}`);
+  }
+  await page.setViewportSize({ width: 1620, height: 1200 });
+  await page.waitForTimeout(500);
+
+  // THE ⓘ IS NOW THE ONLY PLACE THE ARITHMETIC LIVES.
+  const btn = await page.$('[data-testid="pace-info"]');
+  eq("the ⓘ still renders on the pace card", btn != null, true);
+  await btn.click();
+  await page.waitForSelector('[data-testid="pace-info-panel"]', { timeout: 5000 });
+  await page.waitForTimeout(300);
+  const P = await page.evaluate(() => ({
+    projected: document.querySelector('[data-testid="pace-info-projected"]')?.textContent ?? null,
+    collected: document.querySelector('[data-testid="pace-info-collected"]')?.textContent ?? null,
+    forward: document.querySelector('[data-testid="pace-info-forward"]')?.textContent ?? null,
+    headline: document.querySelector('[data-testid="tile-pace"] [data-testid="revenue-tile-value"]')?.firstChild?.textContent?.trim(),
+  }));
+  eq("  …and its panel still ties to the headline", money(P.projected), money(P.headline));
+  eq("  …collected + forward still equals projected", money(P.collected) + money(P.forward), money(P.projected));
+  console.log(`     panel ${P.collected} + ${P.forward} = ${P.projected} · headline ${P.headline}`);
 }
 
 console.log(`\n================ RESULT ================`);

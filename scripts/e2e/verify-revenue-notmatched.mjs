@@ -152,13 +152,26 @@ console.log("\n── the figures ──");
     const tds = [...(tr?.querySelectorAll("td") ?? [])].map((x) => x.innerText.trim());
     return {
       venues: n(tds[2]), matches: n(tds[3]),
+      // THE COLUMN ITSELF, so the Total can be checked against what it totals.
+      // SCOPED TO THE TABLE THE TOTAL ROW IS IN. There is more than one table on this page, and
+      // an unscoped "tbody tr" swept the monthly summary's rows in too — whose fourth cell is
+      // money, which is how a match count came out as half a million.
+      rowMatches: [...(tr?.closest("table")?.querySelectorAll("tbody tr") ?? [])]
+        .filter((r) => !r.className.includes("tot"))
+        // td,th — a BODY row leads with a <th> for the rank while the Total row is all <td>, so
+        // querying only td shifts every body index by one and reads the revenue column instead.
+        .map((r) => n([...r.querySelectorAll("td,th")][3]?.innerText)),
       total: n(document.querySelector('[data-testid="gt-tot-total"]')?.innerText),
       dpp: n(document.querySelector('[data-testid="gt-tot-dpp"]')?.innerText),
       member: n(document.querySelector('[data-testid="gt-tot-member"]')?.innerText),
     };
   });
   eq("venues 29", f.venues, 29);
-  eq("matches 344", f.matches, 344);
+  // WAS PINNED AT 344 AND DRIFTED TO 346 — August is a live month and matches keep landing, so a
+  // constant here fails on a page that is working. The Total is now checked against the column it
+  // totals, which catches a broken or mis-summed column without dating the suite.
+  eq("the Total row's match count equals the sum of the rows", f.matches, f.rowMatches.reduce((a, b) => a + b, 0));
+  eq("  control — the column carried rows with matches in them", f.rowMatches.filter((x) => x > 0).length > 0, true);
   eq("membership $17,690", f.member, 17690);
   // NOT HARDCODED. The DPP figure and the total have both moved $101 since the brief was written —
   // the mirror refreshes daily and revenue rows land. What must hold whatever the amounts are is

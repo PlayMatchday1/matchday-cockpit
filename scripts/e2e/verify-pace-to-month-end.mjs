@@ -67,7 +67,7 @@ const aug = await goto("2026-08");
 eq("no uncaught page errors", errors, []);
 eq("  control — the three tiles rendered", [aug.revenue != null, aug.avg != null, aug.pace != null], [true, true, true]);
 console.log(`     revenue ${aug.revenue?.value} · avg ${aug.avg?.value} · pace ${aug.pace?.value}`);
-console.log(`     ${aug.pace?.sub}`);
+console.log(`     rate attr ${aug.pace?.rate}`);
 
 const days = byMonthDay["2026-08"] ?? {};
 // ELAPSED COMES FROM THE CLOCK, NOT FROM A SUBTITLE. It used to be parsed out of AVG DAILY's
@@ -103,7 +103,9 @@ console.log("\n── the two halves that can cancel ──");
   console.log(`     so far ${shown} · day 1 ${Math.round(day1)} · today ${Math.round(today)}`);
 
   // (b) the RATE excludes them.
-  const subRate = money((aug.pace?.sub ?? "").match(/×\s*(\$[\d,]+)/)?.[1]);
+  // THE RATE IS NOW ONLY ON data-rate AND IN THE PANEL — the subtitle that printed it is gone.
+  const subRate = Number(aug.pace?.rate);
+  eq("  control — the pace card carries an unrounded rate", Number.isFinite(subRate) && subRate > 0, true);
   eq("the rate excludes day 1 and today", Math.abs(subRate - rate) < 1, true);
   const naiveRate = soFar / elapsed;
   eq(`  …and is NOT the plain mean (${Math.round(naiveRate)})`, Math.abs(subRate - naiveRate) < 1, false);
@@ -121,9 +123,18 @@ console.log("\n── the projection ──");
   const shown = money(aug.pace?.value);
   eq("projection = so far + remaining × rate, to the dollar", Math.abs(shown - expect) < 1, true);
   console.log(`     ${Math.round(soFar)} + ${remaining} × ${Math.round(rate)} = ${Math.round(expect)} · rendered ${shown}`);
-  const subDays = Number((aug.pace?.sub ?? "").match(/\+ (\d+) day/)?.[1]);
-  eq("the subtitle's remaining-day count matches the month", subDays, remaining);
-  eq("the subtitle names both exclusions", /day 1 and today excluded/.test(aug.pace?.sub ?? ""), true);
+  // REMAINING DAYS ARE NOW STATED ONLY IN THE PANEL.
+  const panelDays = await page.evaluate(async () => {
+    document.querySelector('[data-testid="pace-info"]')?.click();
+    await new Promise((r) => setTimeout(r, 400));
+    const row = document.querySelector('[data-row="forward"] td');
+    const out = row?.textContent ?? null;
+    document.querySelector('[data-testid="pace-info"]')?.click();
+    return out;
+  });
+  const subDays = Number((panelDays ?? "").match(/(\d+) day/)?.[1]);
+  eq("  control — the panel stated a remaining-day count", Number.isFinite(subDays), true);
+  eq("the panel's remaining-day count matches the month", subDays, remaining);
 }
 
 // ── 4. AVG DAILY IS UNTOUCHED ─────────────────────────────────────────────────────────────────
@@ -138,15 +149,13 @@ console.log("\n── avg daily revenue is still the true mean ──");
   eq("  control — that attribute is actually present", typeof aug.avg?.rate === "string" && aug.avg.rate.length > 3, true);
   eq("  …and the printed avg is that attribute, rounded", Math.round(Number(aug.avg?.rate)), Math.round(shownAvg));
   // THE SUBTITLE RECONCILES ON ITS FACE — its own amount over its own day count is its own rate.
-  const subAmt = money((aug.avg?.sub ?? "").match(/(\$[\d,]+) over/)?.[1]);
-  const subDays = Number((aug.avg?.sub ?? "").match(/over (\d+) day/)?.[1] ?? 0);
-  eq("  control — the subtitle stated an amount and a day count", subAmt > 0 && subDays > 0, true);
-  eq("avg subtitle: amount ÷ stated days = the printed rate", Math.round(subAmt / subDays), Math.round(shownAvg));
-  eq("  …and the stated day count is the RATE window, not the elapsed month", [subDays, subDays === elapsed], [elapsed - 2, false]);
-  eq("  …and the stated amount is NOT the full month total", Math.abs(subAmt - soFar) < 1, false);
-  eq("avg subtitle names both exclusions", /day 1 and today excluded/.test(aug.avg?.sub ?? ""), true);
-  eq("revenue so far on the pace card equals the revenue card, to the dollar",
-     money(aug.revenue?.value), money((aug.pace?.sub ?? "").match(/(\$[\d,]+) so far/)?.[1]));
+  // THE AVG CARD HAS NO SUBTITLE ANY MORE. What it used to state — the window and its divisor —
+  // is asserted through the shared rate and the panel instead, so the same errors are still caught.
+  eq("avg daily carries no subtitle", aug.avg?.sub, null);
+  eq("  …and neither does the pace card", aug.pace?.sub, null);
+  eq("the windowed amount ÷ the window's days is still the printed rate",
+     Math.round((soFar - day1 - today) / rateDays), Math.round(shownAvg));
+  eq("  …and that divisor is NOT the elapsed month", rateDays === elapsed, false);
 }
 
 // ── 5. A COMPLETED MONTH IS ITS ACTUAL TOTAL ──────────────────────────────────────────────────
@@ -157,9 +166,9 @@ console.log("\n── a closed month ──");
   const shown = money(jul.pace?.value);
   eq("July's pace equals July's actual revenue, to the cent", Math.abs(shown - actual) < 1, true);
   eq("  …and equals its own revenue tile", money(jul.revenue?.value), shown);
-  eq("  …and says it is not a projection", /not a projection|Period closed/i.test(jul.pace?.sub ?? ""), true);
-  // A CLOSED MONTH HAS NO CURRENT DAY, so the clause must not appear at all.
-  eq("  …and carries no exclusion clause", /excluded/i.test(jul.pace?.sub ?? ""), false);
+  // The "Period closed" sentence went with every other card subtitle. What proves a closed month
+  // is not projecting is that its headline IS its actual, asserted above, and that it has no ⓘ.
+  eq("  …and carries no subtitle at all", jul.pace?.sub, null);
   console.log(`     July actual ${Math.round(actual)} · pace ${shown}`);
 
   // AVG DAILY STILL EXCLUDES DAY 1 — a closed month has a day 1, it just has no day in progress.
@@ -169,12 +178,13 @@ console.log("\n── a closed month ──");
   const julAvg = money(jul.avg?.value);
   eq("July's avg daily excludes day 1", Math.abs(julAvg - julRate) < 1, true);
   eq("  …and is NOT the plain mean over the whole month", Math.abs(julAvg - actual / julTotal) < 1, false);
-  eq("  …its subtitle says day 1 only", /day 1 excluded/.test(jul.avg?.sub ?? ""), true);
-  eq("  …and does NOT claim today was excluded", /and today excluded/.test(jul.avg?.sub ?? ""), false);
-  const jSubDays = Number((jul.avg?.sub ?? "").match(/over (\d+) day/)?.[1] ?? 0);
-  eq("  …over a divisor of month length minus one", jSubDays, julTotal - 1);
+  // DAY 1 ONLY, AND NOT TODAY — asserted on the rate itself now. A closed month excluding a
+  // "today" as well would divide by 29 and land on a visibly different figure, which is what the
+  // second assertion pins.
+  const wrongIfTodayToo = (actual - (julDays[1] ?? 0) - (julDays[julTotal] ?? 0)) / (julTotal - 2);
+  eq("  …and NOT a window that also drops a 'today'", Math.abs(julAvg - wrongIfTodayToo) < 1, false);
   eq("  …and both July cards share one rate attribute", jul.avg?.rate === jul.pace?.rate, true);
-  console.log(`     July avg ${julAvg} over ${jSubDays} days · plain mean would be ${Math.round(actual / julTotal)}`);
+  console.log(`     July avg ${julAvg} over ${julTotal - 1} days · plain mean would be ${Math.round(actual / julTotal)}`);
 
   // THE ⓘ IS A PROJECTION'S EXPLANATION. A closed month is not projecting anything.
   eq("  …and a closed month renders no ⓘ", await page.$('[data-testid="pace-info"]') != null, false);
@@ -202,7 +212,7 @@ console.log("\n── the how-it-is-calculated panel ──");
     const note = (row) => p.querySelector(`[data-row="${row}"] td:last-child`)?.textContent?.trim() ?? "";
     const pr = p.getBoundingClientRect(), cr = c.getBoundingClientRect();
     const val = c.querySelector('[data-testid="revenue-tile-value"]').getBoundingClientRect();
-    const sub = c.querySelector('[data-testid="revenue-tile-sub"]').getBoundingClientRect();
+    const lab = c.querySelector("span").getBoundingClientRect();
     const hits = (a, b) => !(a.bottom <= b.top || a.top >= b.bottom || a.right <= b.left || a.left >= b.right);
     return {
       collected: cell("collected", "pace-info-collected"), day1: cell("day1", "pace-info-day1"),
@@ -211,7 +221,7 @@ console.log("\n── the how-it-is-calculated panel ──");
       notes: { collected: note("collected"), day1: note("day1"), today: note("today") },
       rows: p.querySelectorAll('[data-testid="pace-info-row"]').length,
       rightFlush: Math.round(pr.right - cr.right), belowCard: Math.round(pr.top - cr.bottom),
-      hitsValue: hits(pr, val), hitsSub: hits(pr, sub),
+      hitsValue: hits(pr, val), hitsSub: hits(pr, lab),
       card: cr.height, label: c.querySelector("span").getBoundingClientRect().height,
       inViewport: pr.left >= 0 && pr.right <= window.innerWidth,
     };
@@ -241,7 +251,7 @@ console.log("\n── the how-it-is-calculated panel ──");
 
   // GEOMETRY — it explains the headline, so it must not cover it.
   eq("the panel does not intersect the headline figure", P.hitsValue, false);
-  eq("  …nor the subtitle", P.hitsSub, false);
+  eq("  …nor the label row", P.hitsSub, false);
   eq("  …it hangs below the card, right edges flush", [P.belowCard > 0, P.rightFlush], [true, 0]);
   eq("  …and stays inside the viewport", P.inViewport, true);
   eq("opening it changes neither card height nor label-row height",
@@ -253,13 +263,12 @@ console.log("\n── the rule is month-only ──");
 {
   const q = await goto("2026Q3");
   eq("the quarter period still renders a pace figure", money(q.pace?.value) > 0, true);
-  eq("  …and does NOT use the exclusion wording", /excluded/i.test(q.pace?.sub ?? ""), false);
-  eq("  …it keeps the mean × total-days subtitle", /\/day ×/.test(q.pace?.sub ?? ""), true);
-  console.log(`     Q3: ${q.pace?.value} — ${q.pace?.sub}`);
+  eq("  …and carries no subtitle", q.pace?.sub, null);
+  console.log(`     Q3: ${q.pace?.value}`);
   const y = await goto("2026");
   eq("the year period still renders a pace figure", money(y.pace?.value) > 0, true);
-  eq("  …and does NOT use the exclusion wording", /excluded/i.test(y.pace?.sub ?? ""), false);
-  console.log(`     2026: ${y.pace?.value} — ${y.pace?.sub}`);
+  eq("  …and carries no subtitle", y.pace?.sub, null);
+  console.log(`     2026: ${y.pace?.value}`);
 }
 
 await closeContext(ctx);

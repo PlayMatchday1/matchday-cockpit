@@ -212,9 +212,8 @@ export default function RevenueSection() {
 
   // DPP + MEMBERSHIP, ALWAYS. This used to switch on a page-level VIEW control that no figure on
   // the page actually read: the cards take anchorGross and only fall back to this when gross is
-  // missing, and the breakdown tables never used it at all. The one number it moved was the
-  // comparison BASIS — which made the delta compare a full-revenue anchor against a DPP-only or
-  // membership-only prior, a mixed-basis percentage. Removed with the control.
+  // missing, and the breakdown tables never used it at all. It survives as that fallback and as
+  // the Top-revenue-city ranking, both of which want the two summed.
   const valueOf = (p: { dpp: number; membership: number }) => p.dpp + p.membership;
 
   // ── AVERAGE DAILY REVENUE, DIVIDED BY THE RIGHT NUMBER ──────────────────────────────────────
@@ -403,39 +402,6 @@ export default function RevenueSection() {
     return best;
   }, [data, cities, cityFilter, shownFields, period, membershipScoped]);
 
-  // ===== Comparison basis =====
-  // THE OPTIONS FOLLOW THE GRAIN. Under the old quarter-only control these were fixed as
-  // "previous month" and "previous quarter avg"; with three grains a fixed word would lie — at
-  // Quarter grain the previous bar IS a quarter. So the comparison is stated in periods and the
-  // label names the actual bar it used.
-  //
-  // A PARTIAL PERIOD IS COMPARED ON PACE, not on its part-period total, or every mid-month visit
-  // reports a collapse. The sub-line says which of the two is being compared.
-  const comparison = useMemo((): { label: string; basis: number | null; note: string } => {
-    // THE PREVIOUS PERIOD, FULL STOP. The two other bases lived on a control that has been
-    // removed; "previous year" was permanently disabled anyway — the finance record starts March
-    // 2026, so a year-back comparison would read this month against an empty ledger.
-    const idx = series.findIndex((p) => p.key === period.key);
-    const prev = idx > 0 ? series[idx - 1] : undefined;
-    return {
-      label: prev ? prev.month : "Previous period",
-      // GROSS AGAINST GROSS. This used to be valueOf(prev) — the roster-matched figure — while the
-      // anchor it is divided into is anchorGross. July's roster figure is $83,732 against $97,024
-      // collected, so the delta was not merely overstated: it printed +12.8% where like-for-like
-      // is −2.7%. A percentage built from two bases is wrong at every value, and with the View
-      // control gone there is nothing left to make it obviously wrong.
-      //
-      // THE FALLBACK MATCHES THE ANCHOR'S. anchorValue is `anchorGross ?? valueOf(anchorPoint)`,
-      // so before fin_revenue lands both sides are roster and the ratio is still like-for-like.
-      basis: prev ? (grossFor(prev) ?? valueOf(prev)) : null,
-      note: prev ? "" : `nothing before this on record`,
-    };
-  // eslint-disable-next-line react-hooks/exhaustive-deps
-  }, [series, period, grossRows]);
-
-  const comparedValue = period.isCurrent ? pace : anchorValue;
-  const delta =
-    comparison.basis && comparison.basis > 0 ? (comparedValue - comparison.basis) / comparison.basis : null;
 
   if (matchLoading || (primaryLoading && !data)) {
     return <div className={s.empty}>Loading…</div>;
@@ -491,13 +457,10 @@ export default function RevenueSection() {
           testid="tile-revenue"
           label={`${period.label} revenue`}
           value={fmtMoney(anchorValue)}
+          // THE ONLY CARD THAT KEEPS THE "so far" CHIP. It is the one figure on the row that is a
+          // running total of a period still in progress; the other three are rates, a name and an
+          // extrapolation, and the chip said something different — or nothing — on each.
           partial={period.isCurrent}
-          sub={
-            comparison.basis == null
-              ? `vs ${comparison.label} — ${comparison.note}`
-              : `${delta == null ? "—" : (delta >= 0 ? "+" : "") + (delta * 100).toFixed(1) + "%"} vs ${comparison.label}` +
-                (period.isCurrent ? " (pace compared, not part-period)" : "")
-          }
         />
         <Tile
           testid="tile-avgdaily"
@@ -505,15 +468,6 @@ export default function RevenueSection() {
           // THE PACE RATE, NOT THE PLAIN MEAN. Two daily rates on adjacent cards is how the wrong
           // one gets quoted; this reads paceModel.rate, the same field the pace card projects from.
           value={paceModel?.ok ? fmtMoney(paceModel.rate) : fmtMoney(avgDaily)}
-          partial={period.isCurrent}
-          // THE SUBTITLE RECONCILES ON ITS FACE: the amount is the money the rate averaged, and the
-          // day count is the divisor it was averaged over — both out of the same call, so the
-          // division a reader does by hand is the division the code did.
-          sub={paceModel?.ok
-            ? `${fmtMoney(paceModel.windowRevenue)} over ${paceModel.rateDays} ${paceModel.rateDays === 1 ? "day" : "days"}`
-              + ` · ${RATE_EXCLUDED_DAYS === 1 ? "day 1" : `days 1–${RATE_EXCLUDED_DAYS}`}`
-              + (paceModel.todayExcluded ? " and today" : "") + " excluded"
-            : `${fmtMoney(anchorValue)} over ${daysElapsed} ${daysElapsed === 1 ? "day" : "days"}`}
           // BOTH CARDS CARRY THE SAME ATTRIBUTE FROM THE SAME OBJECT, so a test can prove shared
           // provenance rather than watching two independent numbers happen to agree.
           rate={paceModel?.ok ? paceModel.rate : null}
@@ -521,7 +475,7 @@ export default function RevenueSection() {
         <Tile
           label="Top revenue city"
           value={topCity ? topCity.city : "—"}
-          partial={period.isCurrent && topCity != null}
+          // $24,544 IS A FIGURE, NOT A CAPTION — it stays.
           sub={topCity ? fmtMoney(topCity.value) : "no revenue recorded this month"}
         />
         <Tile
@@ -535,21 +489,7 @@ export default function RevenueSection() {
               : paceModel ? (paceModel.ok ? fmtMoney(paceModel.projection) : "—")
               : fmtMoney(pace)
           }
-          partial={period.isCurrent}
           rate={paceModel?.ok ? paceModel.rate : null}
-          sub={
-            !period.isCurrent ? "Period closed — this is the actual, not a projection."
-              : paceModel
-                ? (paceModel.ok
-                    // THE SUBTITLE STATES THE ARITHMETIC IT USED, and nothing else — no explanation
-                    // of why the days are out. That is what the ⓘ is for.
-                    ? `PROJECTED — ${fmtMoney(anchorValue)} so far + ${paceModel.remaining} ${paceModel.remaining === 1 ? "day" : "days"} × ${fmtMoney(paceModel.rate)}`
-                      + ` · ${RATE_EXCLUDED_DAYS === 1 ? "day 1" : `days 1–${RATE_EXCLUDED_DAYS}`}`
-                      + (paceModel.todayExcluded ? " and today" : "") + " excluded"
-                      + (paceModel.rateDays === 1 ? " · rate from one day" : "")
-                    : "Not enough elapsed days to project from.")
-                : `PROJECTED — ${fmtMoney(avgDaily)}/day × ${daysInMonth} days`
-          }
           // ANCHORED TO THE CARD, NOT THE BUTTON. Hung off the ⓘ it opens directly over the figure
           // it exists to explain.
           info={paceModel?.ok && period.isCurrent
@@ -778,7 +718,9 @@ export default function RevenueSection() {
 }
 
 function Tile({ label, value, sub, partial, testid, rate, info }: {
-  label: string; value: string; sub: string; partial?: boolean; testid?: string;
+  // SUB IS OPTIONAL AND ITS ELEMENT GOES WITH IT. Rendering an empty span would leave the card
+  // holding the height of a line it no longer has, which is the thing that makes a row ragged.
+  label: string; value: string; sub?: string; partial?: boolean; testid?: string;
   // THE RATE THE CARD WAS BUILT FROM, verbatim. Two cards printing it prove they share a
   // derivation; two cards printing the same rounded money only prove they agree this month.
   rate?: number | null;
@@ -795,7 +737,7 @@ function Tile({ label, value, sub, partial, testid, rate, info }: {
         {value}
         {partial && <i className={s.soFar} data-testid="revenue-tile-partial">so far</i>}
       </span>
-      <span className={s.tileSub} data-testid="revenue-tile-sub">{sub}</span>
+      {sub != null && <span className={s.tileSub} data-testid="revenue-tile-sub">{sub}</span>}
     </div>
   );
 }
