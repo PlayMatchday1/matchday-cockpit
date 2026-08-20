@@ -259,6 +259,20 @@ export default function RevenueSection() {
 
   // Gross per month, and the roster-matched figure beside it, so the gap can be stated rather
   // than quietly absorbed.
+  // fin_venues.launch_date, by field. A field group can span several venue rows (split-rate legs);
+  // the earliest date is the one that means "this pitch started trading".
+  const launchOf = useCallback((field: string): string | null => {
+    const dates = (data?.venues ?? [])
+      .filter((v) => v.venue_name === field)
+      .map((v) => v.launch_date)
+      .filter((d): d is string => !!d)
+      .sort();
+    if (dates.length === 0) return null;
+    const d = new Date(`${dates[0].slice(0, 10)}T00:00:00`);
+    if (Number.isNaN(d.getTime())) return dates[0].slice(0, 10);
+    return `${["Jan","Feb","Mar","Apr","May","Jun","Jul","Aug","Sep","Oct","Nov","Dec"][d.getMonth()]} ${d.getFullYear()}`;
+  }, [data]);
+
   const grossFor = (p: SeriesPoint) => {
     if (!grossRows) return null;
     const ms = periods.find((q) => q.key === p.key)?.months ?? [p.month];
@@ -657,7 +671,7 @@ export default function RevenueSection() {
         <MatchTable rows={shownMatches} />
       ) : (
         <GroupTable rows={shownFields} grain={grain} month={period.months[period.months.length - 1] ?? ""}
-          gapRows={gapRows}
+          gapRows={gapRows} launchOf={launchOf}
           membershipOf={(c) => (data ? cityMembershipRevenueFor(data, c, period.months[period.months.length - 1] ?? "") : 0)}
           membershipScoped={membershipScoped} />
       )}
@@ -812,10 +826,15 @@ function NotMatchedInfo({ rows }: { rows: { key: string; month: string; gap: num
 // EVERY DERIVED COLUMN IS COMPUTED FROM THE TWO IT DIVIDES, so a reader can check them by hand:
 // avg/venue = total ÷ venues, avg/match = total ÷ matches, mix = membership ÷ total. The match
 // denominator is guarded — a city with revenue and no matches would otherwise print Infinity.
-function GroupTable({ rows, grain, month, membershipOf, membershipScoped, gapRows }: {
+function GroupTable({ rows, grain, month, membershipOf, membershipScoped, gapRows, launchOf }: {
   rows: FieldMonth[]; grain: "city" | "field"; month: Q2Month;
   membershipOf: (city: string) => number; membershipScoped: boolean;
   gapRows: { key: string; month: string; gap: number; pct: number }[];
+  // LAUNCHED is field-only and is NEW data, not a relabelled column: fin_venues.launch_date was
+  // not reaching this table. A field group can span several venue rows (split-rate legs), so the
+  // launch date is the EARLIEST among them — the day the pitch started trading, not the day its
+  // second rate tier was added.
+  launchOf: (field: string) => string | null;
 }) {
   const scoped = rows.filter((r) => r.month === month);
   if (scoped.length === 0) return <div className={s.empty}>No rows for this selection.</div>;
@@ -849,15 +868,23 @@ function GroupTable({ rows, grain, month, membershipOf, membershipScoped, gapRow
       <div className={s.tblWrap}>
         <table className={s.tbl} data-testid="revenue-group-table">
           <thead>
+            {/* ONE THEAD, TWO GRAINS — the columns the two views share are written ONCE and in
+                one order, so they cannot drift apart. Only the genuinely view-specific ones are
+                conditional: VENUES and AVG REVENUE / VENUE are city-only, CITY and LAUNCHED are
+                field-only. AVG REVENUE / MATCH sits ahead of AVG REVENUE / VENUE so the shared
+                run reads identically in both. */}
             <tr>
-              <th className="l">{grain === "city" ? "City" : "Location"}</th>
-              <th>Venues</th>
+              <th data-testid="gt-th-rank">#</th>
+              <th className="l">{grain === "city" ? "City" : "Field"}</th>
+              {grain === "field" && <th className="l">City</th>}
+              {grain === "field" && <th className="l">Launched</th>}
+              {grain === "city" && <th>Venues</th>}
               <th>Matches</th>
-              <th>Revenue matched to a venue <i className={s.mut}>(in month)</i>
+              <th>Total revenue <i className={s.mut}>(in month)</i>
                 {gapRows.length > 0 && <NotMatchedInfo rows={gapRows} />}</th>
-              <th>Avg revenue / venue</th>
               <th>Avg revenue / match</th>
-              <th>DPP matched to a venue <i className={s.mut}>(in month)</i></th>
+              {grain === "city" && <th>Avg revenue / venue</th>}
+              <th>DPP revenue <i className={s.mut}>(in month)</i></th>
               <th>Membership revenue <i className={s.mut}>(in month)</i></th>
               <th>Member mix <i className={s.mut}>(in month)</i></th>
             </tr>
@@ -865,25 +892,31 @@ function GroupTable({ rows, grain, month, membershipOf, membershipScoped, gapRow
           <tbody>
             {list.map((r, i) => (
               <tr key={r.label} data-testid="revenue-group-row" data-label={r.label}>
-                <td className="l"><span className={s.rank}>{i + 1}</span>{r.label}</td>
-                <td data-testid="gt-venues">{fmtInt(r.venueCount)}</td>
+                <td><span className={s.rank}>{i + 1}</span></td>
+                <td className="l">{r.label}</td>
+                {grain === "field" && <td className="l">{r.city}</td>}
+                {grain === "field" && <td className="l" data-testid="gt-launched">{launchOf(r.label) ?? "—"}</td>}
+                {grain === "city" && <td data-testid="gt-venues">{fmtInt(r.venueCount)}</td>}
                 <td data-testid="gt-matches">{fmtInt(r.matches)}</td>
                 <td data-testid="gt-total">{fmtMoney(r.total)}</td>
-                <td data-testid="gt-avgvenue">{fmtMoney(r.total / Math.max(1, r.venueCount))}</td>
                 {/* guarded: revenue with zero matches must not print Infinity */}
                 <td data-testid="gt-avgmatch">{fmtMoney(r.total / Math.max(1, r.matches))}</td>
+                {grain === "city" && <td data-testid="gt-avgvenue">{fmtMoney(r.total / Math.max(1, r.venueCount))}</td>}
                 <td data-testid="gt-dpp">{fmtMoney(r.dpp)}</td>
                 <td data-testid="gt-member">{showMembership ? fmtMoney(r.membership) : "—"}</td>
                 <td data-testid="gt-mix">{showMembership ? pct(r.membership, r.total) : "—"}</td>
               </tr>
             ))}
             <tr className={s.tot}>
+              <td />
               <td className="l">Total</td>
-              <td>{fmtInt(T.venues)}</td>
+              {grain === "field" && <td className="l">—</td>}
+              {grain === "field" && <td className="l">—</td>}
+              {grain === "city" && <td>{fmtInt(T.venues)}</td>}
               <td>{fmtInt(T.matches)}</td>
               <td data-testid="gt-tot-total">{fmtMoney(T.total)}</td>
-              <td>{fmtMoney(T.total / Math.max(1, T.venues))}</td>
               <td>{fmtMoney(T.total / Math.max(1, T.matches))}</td>
+              {grain === "city" && <td>{fmtMoney(T.total / Math.max(1, T.venues))}</td>}
               <td data-testid="gt-tot-dpp">{fmtMoney(T.dpp)}</td>
               <td data-testid="gt-tot-member">{showMembership ? fmtMoney(T.membership) : "—"}</td>
               <td>{showMembership ? pct(T.membership, T.total) : "—"}</td>
@@ -923,7 +956,7 @@ function MatchTable({ rows }: { rows: MatchRow[] }) {
               <th>Free Code</th>
               <th>DPP&rsquo;s</th>
               <th>Total Spots</th>
-              <th>DPP Revenue <i className={s.mut}>(matched to a venue)</i></th>
+              <th>DPP revenue</th>
               <th>Field Cost</th>
             </tr>
           </thead>

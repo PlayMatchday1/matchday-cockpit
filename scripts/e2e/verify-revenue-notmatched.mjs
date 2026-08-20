@@ -45,8 +45,8 @@ console.log("\n── the month sentences are gone ──");
 {
   const body = await page.evaluate(() => document.body.innerText);
   eq("  control — the scan read a real page", body.length > 1200, true);
-  eq("  control — it finds text that IS present ('Revenue matched to a venue')",
-     /revenue matched to a venue/i.test(body), true);
+  eq("  control — it finds text that IS present ('Total revenue')",
+     /total revenue/i.test(body), true);
   eq("no 'is not matched to a venue —' sentence survives", /is not matched to a venue/i.test(body), false);
   eq("no '% of gross' sentence survives", /% of gross/i.test(body), false);
   eq("the old gap element is gone", await page.locator('[data-testid="revenue-gap"]').count(), 0);
@@ -58,6 +58,114 @@ console.log("\n── the month sentences are gone ──");
     d.remove(); return hit;
   });
   eq("  control — a planted sentence IS caught", planted, true);
+}
+
+// ── 1b. THE HEADERS ───────────────────────────────────────────────────────────────────────────
+// "Matched to a venue" was a qualifier on a figure, printed as if it were the figure's name. It is
+// gone from every header; the ⓘ carries the qualification now, on the one column it applies to.
+console.log("\n── the headers ──");
+const readHeads = () => page.evaluate(() => {
+  // NAME THE TABLE. The bare document.querySelector("table") fallback grabbed the SUMMARY table
+  // at the top of the page in Match View, so the scan read the wrong headers entirely.
+  const t = document.querySelector('[data-testid="revenue-group-table"]')
+    ?? document.querySelector('[data-testid="revenue-match-table"]');
+  return {
+    // CSS uppercases these and the ⓘ glyph sits inside the cell — normalise both away so the
+    // assertion is about the WORDS, which is what was specified.
+    heads: [...(t?.querySelectorAll("thead th") ?? [])]
+      .map((h) => h.innerText.replace(/ⓘ/g, "").replace(/\s+/g, " ").trim().toUpperCase()),
+    cells: [...new Set([...(t?.querySelectorAll("tbody tr") ?? [])]
+      .filter((r) => !r.className.includes("tot"))
+      .map((r) => r.querySelectorAll("td").length))],
+  };
+});
+// TARGET THE BREAKDOWN CONTROL BY TESTID. Matching on the visible label matched nothing, so every
+// "switch view" call silently did nothing and three assertions compared City View to itself.
+const setGrain = async (g) => {
+  await page.locator(`[data-testid="breakdown-${g}"]`).click();
+  await page.waitForTimeout(2200);
+};
+
+const cityHeads = await readHeads();
+eq("City View headers are exactly the specified list", cityHeads.heads,
+   ["#", "CITY", "VENUES", "MATCHES", "TOTAL REVENUE (IN MONTH)", "AVG REVENUE / MATCH",
+    "AVG REVENUE / VENUE", "DPP REVENUE (IN MONTH)", "MEMBERSHIP REVENUE (IN MONTH)",
+    "MEMBER MIX (IN MONTH)"]);
+eq("City View: every row's cell count equals the header count", cityHeads.cells, [cityHeads.heads.length]);
+
+await setGrain("field");
+const fieldHeads = await readHeads();
+eq("Field View headers are exactly the specified list", fieldHeads.heads,
+   ["#", "FIELD", "CITY", "LAUNCHED", "MATCHES", "TOTAL REVENUE (IN MONTH)", "AVG REVENUE / MATCH",
+    "DPP REVENUE (IN MONTH)", "MEMBERSHIP REVENUE (IN MONTH)", "MEMBER MIX (IN MONTH)"]);
+eq("Field View: every row's cell count equals the header count", fieldHeads.cells, [fieldHeads.heads.length]);
+
+// SHARED HEADERS: byte-identical, and in the same relative order.
+{
+  const shared = ["MATCHES", "TOTAL REVENUE (IN MONTH)", "AVG REVENUE / MATCH",
+                  "DPP REVENUE (IN MONTH)", "MEMBERSHIP REVENUE (IN MONTH)", "MEMBER MIX (IN MONTH)"];
+  const orderIn = (heads) => shared.map((h) => heads.indexOf(h));
+  eq("every shared header is present in City View", orderIn(cityHeads.heads).every((i) => i >= 0), true);
+  eq("…and in Field View", orderIn(fieldHeads.heads).every((i) => i >= 0), true);
+  const asc = (a) => a.every((v, i) => i === 0 || v > a[i - 1]);
+  eq("the shared columns run in the same relative order in both",
+     [asc(orderIn(cityHeads.heads)), asc(orderIn(fieldHeads.heads))], [true, true]);
+  eq("  control — the shared list is not empty", shared.length, 6);
+}
+
+// NO "MATCHED TO A VENUE" IN ANY HEADER, on any of the three views.
+{
+  const scan = async (view) => {
+    const h = await readHeads();
+    const hit = h.heads.filter((x) => /matched to a venue/i.test(x));
+    eq(`${view}: no header says "matched to a venue"`, hit, []);
+    return h.heads;
+  };
+  await setGrain("city"); const c = await scan("City View");
+  await setGrain("field"); await scan("Field View");
+  await setGrain("match"); const m = await scan("Match View");
+  eq("  control — Match View rendered its own headers", m.length > 3 && m.join() !== c.join(), true);
+  eq("  control — a header that IS present is found ('DPP revenue')",
+     m.some((x) => /dpp revenue/i.test(x)), true);
+  const planted = await page.evaluate(() => {
+    const th = document.querySelector("thead th");
+    const old = th.textContent;
+    th.textContent = "Revenue matched to a venue";
+    const hit = /matched to a venue/i.test(document.querySelector("thead").innerText);
+    th.textContent = old;
+    return hit;
+  });
+  eq("  control — a planted 'matched to a venue' header IS caught", planted, true);
+  await setGrain("city");
+}
+
+// ── 1c. THE FIGURES ARE UNTOUCHED ─────────────────────────────────────────────────────────────
+// This was a header rename and a reorder. Nothing about the arithmetic moved, and the assertion
+// that proves it is the one that cannot pass by accident: DPP + membership must equal the total
+// exactly, on the rendered page.
+console.log("\n── the figures ──");
+{
+  await setGrain("city");
+  const f = await page.evaluate(() => {
+    const n = (t) => Number(String(t ?? "").replace(/[^0-9.-]/g, ""));
+    const tr = [...document.querySelectorAll("tbody tr")].find((r) => r.className.includes("tot"));
+    const tds = [...(tr?.querySelectorAll("td") ?? [])].map((x) => x.innerText.trim());
+    return {
+      venues: n(tds[2]), matches: n(tds[3]),
+      total: n(document.querySelector('[data-testid="gt-tot-total"]')?.innerText),
+      dpp: n(document.querySelector('[data-testid="gt-tot-dpp"]')?.innerText),
+      member: n(document.querySelector('[data-testid="gt-tot-member"]')?.innerText),
+    };
+  });
+  eq("venues 29", f.venues, 29);
+  eq("matches 344", f.matches, 344);
+  eq("membership $17,690", f.member, 17690);
+  // NOT HARDCODED. The DPP figure and the total have both moved $101 since the brief was written —
+  // the mirror refreshes daily and revenue rows land. What must hold whatever the amounts are is
+  // that the parts add to the whole; a rename cannot break that and a broken column would.
+  eq("DPP + membership equals the total exactly", f.dpp + f.member, f.total);
+  eq("  control — the figures are non-zero, so the sum is a real check", f.total > 1000 && f.dpp > 1000, true);
+  console.log(`     total $${f.total.toLocaleString()} = DPP $${f.dpp.toLocaleString()} + membership $${f.member.toLocaleString()}`);
 }
 
 // ── 2. CLOSED ON LOAD, AND ABSENT FROM THE TREE ───────────────────────────────────────────────
@@ -193,6 +301,9 @@ console.log("\n── 390px ──");
     if (t?.parentElement) t.parentElement.scrollLeft = 0;
     window.scrollTo(0, 0);
   });
+  await page.keyboard.press("Escape");
+  await page.waitForTimeout(300);
+  eq("  control — the panel is shut before the viewport changes", await isOpen(), false);
   await page.setViewportSize({ width: 390, height: 844 });
   await page.waitForTimeout(1500);
   const i2 = page.locator('[data-testid="notmatched-info"]');
@@ -202,6 +313,11 @@ console.log("\n── 390px ──");
     await i2.scrollIntoViewIfNeeded();
     await i2.click();
     await page.waitForSelector('[data-testid="notmatched-panel"]', { timeout: 8000 });
+    // WAIT FOR THE SETTLE RE-PLACE. The panel measures on open, again next frame, and again once
+    // the browser has settled — that third pass is what corrects a position taken mid-reflow after
+    // scrollIntoViewIfNeeded. Measuring immediately reads the first pass and reports a drift the
+    // user would never see.
+    await page.waitForTimeout(500);
     const openW = await page.evaluate(() => {
       const p = document.querySelector('[data-testid="notmatched-panel"]').getBoundingClientRect();
       return {
