@@ -1271,11 +1271,13 @@ function VenuePanel({
             One reservation per time slot
           </span>
         </div>
-        <div className="mb-2.5 ml-[116px] text-[11px] leading-snug text-deep-green/55" data-testid="fc-per-reservation-effect">
-          {perReservation
-            ? <>Two matches in one slot count once. {monthFull(month)}: <b className="text-deep-green">{row.rawMatchCount} matches</b> → <b className="text-deep-green">{row.matchCount} reservations</b>.</>
-            : <>Off — every match is billed. {monthFull(month)}: {row.rawMatchCount} matches, {row.rawMatchCount} billed.</>}
-        </div>
+        {perReservation && (
+          <div className="mb-2.5 ml-[116px] text-[11px] leading-snug text-deep-green/55" data-testid="fc-per-reservation-effect">
+            Two matches in one slot count once. {monthFull(month)}:{" "}
+            <b className="text-deep-green">{row.rawMatchCount} matches</b> →{" "}
+            <b className="text-deep-green">{row.matchCount} reservations</b>.
+          </div>
+        )}
         <div className={fld}>
           <label className={lab}>Cancels</label>
           <select

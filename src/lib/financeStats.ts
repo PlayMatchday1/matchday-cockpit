@@ -17,6 +17,7 @@ import {
   fieldCostsFor,
   findOverride,
   isEventSchedule,
+  chargedUnitCount,
   perMatchMinusManagerOwed,
   perMatchTotalFor,
   type VenueCostInfo,
@@ -1636,6 +1637,15 @@ export function venueRealizedMatchCountFor(
     return venueMatchCountFor(data, venueId, month);
   }
   const today = isoDateLocal(now);
+  // THE REALIZED LENS DOES NOT HONOUR bills_per_reservation, DELIBERATELY.
+  //
+  // This half and venueRealizedChargedCancelCountFor are SUMMED by their callers
+  // (buildRankingRows :2339-2344, groupPerMatchCostRealizedFor). Collapsing each half separately
+  // would still double-count a slot holding one alive and one cancelled match — two collapsed
+  // halves are not a collapsed whole. Making it correct means routing the realized cost through a
+  // single chargedUnitCount call with this date predicate, which changes the Slate Review realized
+  // lens and Field Ranking. That is named in the report and left for Ryan to approve rather than
+  // widened into this change.
   let n = 0;
   for (const s of data.masterSchedule) {
     if (isEventSchedule(s)) continue;
@@ -1706,10 +1716,13 @@ export function venueChargedMatchCountFor(
   venueId: number,
   month: Q2Month,
 ): number {
-  return (
-    venueMatchCountFor(data, venueId, month) +
-    venueChargedCancelCountFor(data, venueId, month)
-  );
+  // ONE DERIVATION, SHARED WITH financeCosts. This used to be alive + cancelled summed as two
+  // independent counters. That cannot express "one reservation per time slot": a cancelled match
+  // in a collapsed slot would add a second unit. chargedUnitCount walks both arrays into one set,
+  // and with the flag off returns exactly the same number this always did.
+  const venue = data.venues.find((v) => v.id === venueId);
+  if (!venue) return 0;
+  return chargedUnitCount(data, venue, month);
 }
 
 // Per-leg per-match unit cost for the Per-Match normalized view. Single

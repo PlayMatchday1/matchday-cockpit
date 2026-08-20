@@ -103,24 +103,54 @@ function venueMatchCount(
   // CHARGE-ON-CANCEL IS UNCHANGED. A cancelled match inside a collapsed slot does not create a
   // second reservation — it joins the same key, which is why the cancelled pass adds to the SAME
   // set rather than a separate counter.
+  return chargedUnitCount(data, venue, month);
+}
+
+/**
+ * THE ONE PLACE A VENUE'S COST-DRIVING UNIT COUNT IS DERIVED.
+ *
+ * Two cost paths need it and must never disagree:
+ *   · financeCosts.venueMatchCount → canonicalVenueCost → the Field Costs page, OpEx, Cash Flow
+ *   · financeStats.venueChargedMatchCountFor → groupPerMatchCostFor → the Cost page, Field Ranking
+ * Both call THIS. Implementing the collapse twice is how the two pages would drift by exactly the
+ * amount the flag is supposed to remove.
+ *
+ * FLAG OFF: a count of schedule ROWS, which is what both paths have always done.
+ * FLAG ON:  a count of DISTINCT (field, date, time) slots — a set, never a halving, because
+ *           Westlake carries slots with three and four matches at one time.
+ *
+ * THE CANCELLED PASS ADDS TO THE SAME SET. A cancelled match sitting in a collapsed slot is not a
+ * second reservation; it is the same booking. That is why this cannot be two counters summed.
+ *
+ * THE KEY IS ALREADY WALL CLOCK. match_date / match_time are built in useFinanceData by reading a
+ * Z-stamped wall-clock timestamp back through UTC accessors, which returns the hour on the pitch —
+ * verified identical to the veoSchedule.ts:15 local parse across 234 Westlake rows. Nothing here
+ * re-parses a date string, so an hour's drift cannot split one slot into two.
+ */
+export function chargedUnitCount(
+  data: FinanceData,
+  venue: FinVenue,
+  month: Q2Month,
+  /** Optional realized-through filter, mirroring the realized cost lenses. */
+  keep?: (s: FinMasterSchedule) => boolean,
+): number {
   const perReservation = venue.bills_per_reservation === true;
   const slots = perReservation ? new Set<string>() : null;
   const slotKey = (s: FinMasterSchedule) =>
     `${s.mdapi_field_id ?? "?"}|${s.match_date}|${s.match_time}`;
 
   let n = 0;
+  const take = (s: FinMasterSchedule) => {
+    if (slots) slots.add(slotKey(s)); else n += 1;
+  };
   for (const s of data.masterSchedule) {
     if (isEventSchedule(s)) continue;
-    if (s.venue_id === venue.id && s.month === month) {
-      if (slots) slots.add(slotKey(s)); else n += 1;
-    }
+    if (s.venue_id === venue.id && s.month === month && (!keep || keep(s))) take(s);
   }
   if (venue.charge_on_cancel) {
     for (const s of data.cancelledSchedule) {
       if (isEventSchedule(s)) continue;
-      if (s.venue_id === venue.id && s.month === month) {
-        if (slots) slots.add(slotKey(s)); else n += 1;
-      }
+      if (s.venue_id === venue.id && s.month === month && (!keep || keep(s))) take(s);
     }
   }
   return slots ? slots.size : n;
