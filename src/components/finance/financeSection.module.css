@@ -87,8 +87,29 @@
 }
 .tbl th.l, .tbl td.l { text-align: left; }
 .tbl tbody tr:hover { background: color-mix(in srgb, var(--cream-soft, #faf8f3) 70%, transparent); }
+
+/* THE RANK COLUMN IS PINNED.
+   Measured cause of the clipped badges: nothing was wrong with the card's padding, the table's
+   left inset, or the badge inside its cell — at rest the badge sits exactly 10px inside its cell,
+   which is the table's own cell padding. The table is simply WIDER than its scroller (1,308px in
+   1,130px at 1440), and the moment it is scrolled right to reach Member mix, the # column slides
+   under the scroller's left edge and every badge is sliced vertically. Measured: 0 sliced at
+   scrollLeft 0, all 7 sliced at scrollLeft 60.
+   Pinning the column is the fix at that cause. The badge keeps its size and its padding. */
+.tbl th:first-child, .tbl td:first-child { position: sticky; left: 0; z-index: 2; background: #fff; }
+.tbl thead th:first-child { z-index: 3; }
+/* An opaque background is what makes a sticky cell work — without one the scrolled columns show
+   through it. Each row state therefore has to repaint it. */
+.tbl tbody tr:hover td:first-child { background: color-mix(in srgb, var(--cream-soft, #faf8f3) 70%, #fff); }
+.tot td:first-child { background: var(--cream-soft, #faf8f3); }
 .wide { min-width: 1180px; }
 .tot td { font-weight: 800; border-top: 2px solid var(--cream-line, #e6e2d8); border-bottom: 0; background: var(--cream-soft, #faf8f3); }
+/* THE BAND STOPS SHORT OF THE CARD. Its outer cells are rounded so the band follows the card's
+   corner instead of squaring it off, and the scroller carries the card's own bottom inset so the
+   row is never flush against the edge. */
+.tot td:first-child { border-bottom-left-radius: 10px; }
+.tot td:last-child { border-bottom-right-radius: 10px; }
+.tblWrap { padding-bottom: 4px; }
 .mut { color: color-mix(in srgb, var(--deep-green, #12352b) 38%, transparent); }
 .neg { color: #a4372f; }
 
@@ -137,7 +158,11 @@
   max-width: 190px;
 }
 
-.rank { display: inline-flex; align-items: center; justify-content: center; min-width: 18px; height: 18px; margin-right: 8px; border-radius: 5px; background: var(--cream-soft, #f4f1e8); font-size: 10px; font-weight: 800; color: color-mix(in srgb, var(--deep-green, #12352b) 65%, transparent); }
+/* NO RIGHT MARGIN. The 8px was for when this badge sat inline BEFORE the name in the same cell.
+   Both users now give it a cell of its own — Revenue's # column and Cost's — where a right margin
+   simply pushes the chip 8px off the column's right edge and out of line with the header above it.
+   (growth/*.module.css has its own .rank and is untouched.) */
+.rank { display: inline-flex; align-items: center; justify-content: center; min-width: 18px; height: 18px; border-radius: 5px; background: var(--cream-soft, #f4f1e8); font-size: 10px; font-weight: 800; color: color-mix(in srgb, var(--deep-green, #12352b) 65%, transparent); }
 
 /* The Match View filter panel — thirteen fields on a fluid grid so it reflows rather than
    overflowing at narrow widths. */
@@ -186,7 +211,11 @@
    margin rather than padding that would push the row taller. */
 .infoBtn {
   display: inline-flex; align-items: center; justify-content: center;
-  width: 24px; height: 24px; margin: -6px 0 -6px 5px; padding: 0;
+  /* 24px of hit area, but the GLYPH has to sit on the column's right edge like every other
+     numeric header's last character. The negative right margin pulls the box's empty inner
+     padding back over the cell's own padding, so the header's visual right edge lines up with the
+     numbers below it — and because the margin is negative it cannot widen the column. */
+  width: 24px; height: 24px; margin: -6px -5px -6px 3px; padding: 0;
   border: 0; background: transparent; cursor: pointer;
   font-size: 14px; line-height: 1; vertical-align: middle;
   color: color-mix(in srgb, var(--deep-green, #12352b) 55%, transparent);

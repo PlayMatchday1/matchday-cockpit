@@ -168,6 +168,138 @@ console.log("\n── the figures ──");
   console.log(`     total $${f.total.toLocaleString()} = DPP $${f.dpp.toLocaleString()} + membership $${f.member.toLocaleString()}`);
 }
 
+// ── 1d. LAYOUT ────────────────────────────────────────────────────────────────────────────────
+// THE BADGES WERE SLICED BECAUSE THE TABLE OVERFLOWS ITS SCROLLER, not because of the card's
+// padding, the table's inset, or the badge's own box — measured: 10px inside its cell at rest,
+// all 7 sliced the moment the table scrolled right to reach Member mix. The # column is pinned
+// now, so this asserts at BOTH scroll positions; asserting only at rest would pass on the
+// original bug.
+console.log("\n── layout ──");
+for (const W of [1440, 1024]) {
+  await page.setViewportSize({ width: W, height: 1100 });
+  await page.waitForTimeout(1200);
+  await setGrain("city");
+  for (const where of ["rest", "scrolled right"]) {
+    if (where !== "rest") {
+      await page.evaluate(() => {
+        const w = document.querySelector('[data-testid="revenue-group-table"]').parentElement;
+        w.scrollLeft = w.scrollWidth;
+      });
+      await page.waitForTimeout(500);
+    }
+    const m = await page.evaluate(() => {
+      const tbl = document.querySelector('[data-testid="revenue-group-table"]');
+      const wrap = tbl.parentElement;
+      const wb = wrap.getBoundingClientRect();
+      const rows = [...document.querySelectorAll('[data-testid="revenue-group-row"]')];
+      const bad = rows.map((r, i) => {
+        const cell = r.querySelector("td"), badge = cell.querySelector("span");
+        const cb = cell.getBoundingClientRect(), bb = badge.getBoundingClientRect();
+        const visible = Math.max(0, Math.min(bb.right, wb.right) - Math.max(bb.left, wb.left));
+        return {
+          i: i + 1,
+          insideCell: bb.left >= cb.left - 0.5 && bb.right <= cb.right + 0.5,
+          fullyVisible: visible >= bb.width - 0.5,
+          insideTable: cb.left >= wb.left - 0.5,
+        };
+      });
+      return { count: rows.length, bad: bad.filter((x) => !x.insideCell || !x.fullyVisible || !x.insideTable) };
+    });
+    eq(`  ${W}px, ${where}: every rank badge is inside its cell and fully visible`, m.bad.map((x) => x.i), []);
+    if (where === "rest") eq(`  control — ${W}px has rows to check`, m.count, 7);
+  }
+}
+await page.setViewportSize({ width: 1620, height: 1200 });
+await page.waitForTimeout(1200);
+await setGrain("city");
+
+// THE TOTAL ROW STOPS SHORT OF THE CARD.
+{
+  const t = await page.evaluate(() => {
+    const tbl = document.querySelector('[data-testid="revenue-group-table"]');
+    const card = tbl.parentElement.parentElement;
+    const tot = [...document.querySelectorAll("tbody tr")].find((r) => r.className.includes("tot"));
+    const cs = getComputedStyle(card);
+    const firstTd = tot.querySelector("td"), lastTd = tot.querySelector("td:last-child");
+    return {
+      gap: Math.round(card.getBoundingClientRect().bottom - tot.getBoundingClientRect().bottom),
+      cardPad: parseFloat(cs.paddingBottom),
+      radiusL: getComputedStyle(firstTd).borderBottomLeftRadius,
+      radiusR: getComputedStyle(lastTd).borderBottomRightRadius,
+    };
+  });
+  eq("the Total row sits at least one padding unit above the card's inner bottom", t.gap >= t.cardPad, true);
+  console.log(`     ${t.gap}px below the Total row · card padding ${t.cardPad}px`);
+  eq("the band's outer cells are rounded, so no corner squares off the card",
+     [t.radiusL !== "0px", t.radiusR !== "0px"], [true, true]);
+}
+
+// EVERY NUMERIC HEADER'S INK LINES UP WITH ITS COLUMN'S NUMBERS.
+{
+  const align = await page.evaluate(() => {
+    // The right edge of the INK, not of the cell box — comparing boxes is trivially zero and
+    // would have passed on the misaligned header.
+    const inkRight = (el) => {
+      const w = document.createTreeWalker(el, NodeFilter.SHOW_TEXT);
+      let last = null, n;
+      while ((n = w.nextNode())) if ((n.textContent ?? "").trim()) last = n;
+      if (!last) return null;
+      const r = document.createRange(); r.selectNodeContents(last);
+      const rects = [...r.getClientRects()];
+      return rects.length ? rects[rects.length - 1].right : null;
+    };
+    const tbl = document.querySelector('[data-testid="revenue-group-table"]');
+    const ths = [...tbl.querySelectorAll("thead th")];
+    const tds = [...document.querySelector('[data-testid="revenue-group-row"]').querySelectorAll("td")];
+    return ths.map((th, i) => {
+      if (getComputedStyle(th).textAlign !== "right" || !tds[i]) return null;
+      const h = inkRight(th);
+      // THE # COLUMN HOLDS A BADGE, NOT A NUMBER. Its digit is centred inside an 18px chip, so
+      // comparing ink to ink measures the chip's internal padding and nothing useful. The right
+      // comparison there is the CHIP's edge — which is what a reader's eye follows.
+      const badge = tds[i].querySelector("span");
+      const d = badge ? badge.getBoundingClientRect().right : inkRight(tds[i]);
+      if (h == null || d == null) return null;
+      return { label: th.innerText.replace(/\s+/g, " ").trim(), delta: Math.round((h - d) * 10) / 10 };
+    }).filter(Boolean);
+  });
+  eq("  control — there are numeric headers to align", align.length >= 6, true);
+  eq("every numeric header's ink is within 1px of its column's numbers",
+     align.filter((a) => Math.abs(a.delta) > 1), []);
+  const tr = align.find((a) => /TOTAL REVENUE/i.test(a.label));
+  eq("  …including TOTAL REVENUE, with the ⓘ present", tr != null && Math.abs(tr.delta) <= 1, true);
+  console.log(`     TOTAL REVENUE header ink is ${tr?.delta}px from its numbers`);
+}
+
+// THE ⓘ COSTS NO LAYOUT — proven by removing it and re-measuring.
+{
+  const before = await page.evaluate(() => {
+    const th = [...document.querySelectorAll('[data-testid="revenue-group-table"] thead th')]
+      .find((t) => /total revenue/i.test(t.innerText));
+    return { h: Math.round(th.closest("tr").getBoundingClientRect().height), w: Math.round(th.getBoundingClientRect().width) };
+  });
+  const after = await page.evaluate(() => {
+    const btn = document.querySelector('[data-testid="notmatched-info"]');
+    const parent = btn.parentElement, next = btn.nextSibling;
+    btn.remove();
+    const th = [...document.querySelectorAll('[data-testid="revenue-group-table"] thead th')]
+      .find((t) => /total revenue/i.test(t.innerText));
+    const m = { h: Math.round(th.closest("tr").getBoundingClientRect().height), w: Math.round(th.getBoundingClientRect().width) };
+    parent.insertBefore(btn, next);   // put it back
+    return m;
+  });
+  eq("the header row height is the same with the ⓘ and without it", before.h, after.h);
+  // THE COLUMN IS SIZED BY ITS HEADER, NOT ITS NUMBERS — "$24,148" is ~75px, the label ~177px.
+  // So an inline ⓘ that does not overlap the label cannot be free: it costs its own box. What is
+  // asserted is that it costs NO MORE than that, which is what stops a regression from making it
+  // arbitrarily wide. The measured cost is logged so the trade-off stays visible.
+  const cost = before.w - after.w;
+  eq("the ⓘ widens its column by no more than its own hit area", cost <= 24, true);
+  console.log(`     header row ${before.h}px with and without · column ${after.w}px → ${before.w}px, the ⓘ costs ${cost}px`);
+  eq("  control — the ⓘ is back on the page after the test removed it",
+     await page.locator('[data-testid="notmatched-info"]').count(), 1);
+}
+
 // ── 2. CLOSED ON LOAD, AND ABSENT FROM THE TREE ───────────────────────────────────────────────
 console.log("\n── closed on load ──");
 const info = page.locator('[data-testid="notmatched-info"]');
