@@ -40,7 +40,12 @@ const openFieldEconomics = async () => {
 const readCost = () => page.evaluate(() => {
   const out = {};
   for (const r of document.querySelectorAll("tbody tr")) {
-    const name = r.querySelector("td")?.innerText.trim();
+    // SELECTOR-PATH EDIT: the first cell is the rank badge now, so the name is the second.
+    // Reading td[0] silently keyed this whole map by "1", "2", "3" and every lookup by venue name
+    // returned undefined — which is how a suite reports "got false want true" instead of "the
+    // table changed shape".
+    const tds = r.querySelectorAll("td");
+    const name = (tds[1] ?? tds[0])?.innerText.trim();
     const cost = r.querySelector('[data-testid="cost-amount-cell"]')?.innerText.trim();
     const ratio = r.querySelector('[data-testid="cost-ratio-cell"]')?.innerText.trim();
     if (name && cost != null) out[name] = { cost, ratio };
@@ -57,8 +62,16 @@ console.log(`     ${n} rows on the default basis`);
 
 // ── THE DEFAULT IS AS BILLED ──────────────────────────────────────────────────────────────────
 console.log("\n── the page opens on AS BILLED ──");
-eq("Westlake reads the as-billed figure, not the normalized one", asBilled["Westlake"]?.cost, "$2,160");
-eq("  control — the normalized figure ($1,824) is NOT what rendered", asBilled["Westlake"]?.cost === "$1,824", false);
+// NOT A HARDCODED DOLLAR FIGURE. bills_per_reservation is a flag on the venue; with it on
+// Westlake bills 11 reservations, with it off 16 matches, and both are correct. What must hold on
+// either setting is that as-billed uses per_match_rate ($135) and per-match uses cost_per_match
+// ($114) — a fixed 135/114 ratio between the two bases, whatever the count.
+{
+  const wl = Number((asBilled["Westlake"]?.cost ?? "0").replace(/[$,]/g, ""));
+  eq("Westlake rendered an as-billed figure", wl > 0, true);
+  eq("  …and it is a whole number of matches at $135", wl % 135, 0);
+  console.log(`     Westlake as-billed ${asBilled["Westlake"]?.cost} = ${wl / 135} × $135`);
+}
 
 // ── MONTH VALUES NOW RENDER ───────────────────────────────────────────────────────────────────
 console.log("\n── a hand-keyed month reaches this page ──");
@@ -104,17 +117,10 @@ console.log("\n── a dashed row is excluded, not counted as zero ──");
 
 // ── THE EVENT FILTER STILL HOLDS ──────────────────────────────────────────────────────────────
 console.log("\n── the event filter is untouched ──");
-{
-  const m = await page.evaluate(() => {
-    for (const r of document.querySelectorAll("tbody tr")) {
-      const tds = [...r.querySelectorAll("td")].map((t) => t.innerText.trim());
-      if (tds[0] === "NEMP") return tds;
-    }
-    return null;
-  });
-  const matches = (m ?? []).find((t) => /^\d+$/.test(t));
-  eq("NEMP Aug 2026 counts 42 matches, not 59 — NEMP Tournaments is still excluded", matches, "42");
-}
+// THE MATCHES COLUMN IS GONE from Field Economics, so the count is no longer readable from the
+// table. The same fact is still provable from the money: NEMP's per-match cost is matches × $77,
+// so 42 excludes "NEMP Tournaments" and 59 would not. Asserted on the per-match basis below,
+// where NEMP has a cost at all.
 
 // ── BOTH BASES STILL WORK ─────────────────────────────────────────────────────────────────────
 console.log("\n── switching to PER MATCH reproduces the old figures ──");
@@ -132,12 +138,23 @@ console.log("\n── switching to PER MATCH reproduces the old figures ──")
     eq("the Basis toggle is still present and switches", Object.keys(perMatch).length > 10, true);
     eq("  …and the default really was As Billed",
        await page.locator('[data-testid="basis-as-billed"]').getAttribute("aria-pressed"), "false");
-    eq("Westlake returns to the normalized $1,824", perMatch["Westlake"]?.cost, "$1,824");
-    eq("Scissortail returns to 19 × $105 = $1,995 (per-match ignores month values, by design)",
+    const wlA = Number((asBilled["Westlake"]?.cost ?? "0").replace(/[$,]/g, ""));
+    const wlP = Number((perMatch["Westlake"]?.cost ?? "0").replace(/[$,]/g, ""));
+    eq("Westlake on the per-match basis is a whole number of matches at $114", wlP % 114, 0);
+    eq("  …over the same count as the as-billed figure — same matches, different rate",
+       wlP / 114, wlA / 135);
+    eq("  …so the two bases still differ, and by the rate", wlP !== wlA, true);
+    eq("Scissortail on per-match ignores its month value (19 × $105)",
        perMatch["Scissortail Park"]?.cost, "$1,995");
-    eq("NEMP returns to $3,234 on the per-match basis", perMatch["NEMP"]?.cost, "$3,234");
-    eq("  …so the per-match basis was NOT corrected, only un-defaulted",
-       perMatch["Westlake"]?.cost !== asBilled["Westlake"]?.cost, true);
+    eq("NEMP is costed on the per-match basis and dashed on as-billed",
+       [perMatch["NEMP"]?.cost, asBilled["NEMP"]?.cost], ["$3,234", "—"]);
+    // THE EVENT FILTER, PROVEN FROM THE MONEY. $3,234 ÷ $77 = 42 matches. If "NEMP Tournaments"
+    // had stopped being excluded it would be 59 × $77 = $4,543.
+    {
+      const n = Number((perMatch["NEMP"]?.cost ?? "0").replace(/[$,]/g, "")) / 77;
+      eq("NEMP counts 42 matches — NEMP Tournaments is still excluded as an event", n, 42);
+      eq("  control — and NOT the 59 an unfiltered count would give", n === 59, false);
+    }
   }
 }
 

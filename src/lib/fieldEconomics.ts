@@ -70,14 +70,16 @@ export type CostBasis = "per_match" | "profit_share" | "monthly_flat";
  * every row. monthly_flat keeps a label because the type exists and a venue could be moved onto
  * it; it costs nothing to keep the branch.
  *
- * "Profit share" MATCHES FIELD COSTS. That page has always used that wording for the same
- * billing_type, and two labels for one arrangement is how someone concludes they are two
- * arrangements.
+ * EVERY LABEL MATCHES FIELD COSTS, and matches the DB value it describes. That page has always
+ * said "Profit share" and "Monthly flat" for these billing_types; two labels for one arrangement
+ * is how someone concludes they are two arrangements. No venue carries monthly_flat today, so
+ * aligning it changes nothing on screen — which is exactly why it was worth doing now rather
+ * than leaving a divergence for someone to find later.
  */
 export const COST_BASIS_LABEL: Record<CostBasis, string> = {
   per_match: "Per match",
   profit_share: "Profit share",
-  monthly_flat: "Monthly lease",
+  monthly_flat: "Monthly flat",
 };
 
 // Which canonical kinds mean "we do not know what this cost". Everything else is a real figure.

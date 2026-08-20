@@ -26,7 +26,7 @@ eq("55% is amber", ratioBand(0.55), "warn");
 console.log("\nthe labels match Field Costs:");
 eq("per_match", COST_BASIS_LABEL.per_match, "Per match");
 eq("profit_share reads the same word Field Costs uses", COST_BASIS_LABEL.profit_share, "Profit share");
-eq("monthly_flat keeps a branch though no venue carries it", COST_BASIS_LABEL.monthly_flat, "Monthly lease");
+eq("monthly_flat matches Field Costs too, though no venue carries it", COST_BASIS_LABEL.monthly_flat, "Monthly flat");
 
 console.log("\nprior windows are anchored on the period's first month:");
 eq("the month before Aug 2026", priorMonthOf("Aug 2026"), "Jul 2026");

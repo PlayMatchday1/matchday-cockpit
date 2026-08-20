@@ -68,7 +68,7 @@ eq("every Field row has 9 cells", [...new Set(field.rows.map((r) => r.cells))], 
 eq("COST STRUCTURE is plain text, not a badge",
    field.rows.every((r) => r.structure && !/PER MATCH|PROFIT SHARE/.test(r.structure)), true);
 eq("  …and reads the same words Field Costs uses",
-   [...new Set(field.rows.map((r) => r.structure))].every((v) => /^(Per match|Profit share|Monthly lease)( \+ (Per match|Profit share|Monthly lease))*$/.test(v)), true);
+   [...new Set(field.rows.map((r) => r.structure))].every((v) => /^(Per match|Profit share|Monthly flat)( \+ (Per match|Profit share|Monthly flat))*$/.test(v)), true);
 
 // ── 2. THE REMOVED STRINGS ────────────────────────────────────────────────────────────────────
 console.log("\n── what was removed stays removed ──");
