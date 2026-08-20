@@ -269,36 +269,57 @@ export function matchRange(start: Date, end: Date): { fromDate: string; toDate: 
 
 
 /* ── PACE TO MONTH END ───────────────────────────────────────────────────────────────────────
- * Days 1..excludedDays are excluded from the RATE — membership bills at the start of the month,
- * so those days are not a normal day — but NOT from revenue already collected, which is money
- * that happened and goes in at face value. Only days that have not happened yet are projected.
+ * TWO KINDS OF DAY ARE KEPT OUT OF THE RATE, and neither is kept out of revenue-so-far:
  *
- *     rate       = (soFar − revenue on the excluded days) ÷ (elapsed − excludedDays)
+ *   DAY 1 — membership bills at the start of the month. Measured across May-Aug 2026 it runs
+ *   5.8×-7.8× the median day, every month. Days 2 and 3 run 1.0×-1.5×, indistinguishable from
+ *   day 4, which is why the window is ONE day and not three: excluding them discarded two normal
+ *   days. The window is a parameter so the measurement can move it again.
+ *
+ *   TODAY — it is in progress. On 20 Aug the day stood at $585 against a $2,838 median, and a
+ *   part-day inside the rate drags every projection down for the whole day. Only applies to the
+ *   month in progress; a closed month has no current day.
+ *
+ *     rate       = (soFar − day 1 − today) ÷ (elapsed − 2)
  *     projection = soFar + remaining × rate
  *
- * Pure, and here rather than inline in the card, so the edges can be asserted directly: a month
- * three days old has no rate at all, and the last day of a month must project to exactly what has
- * been collected — not to that plus one more day.
+ * REVENUE ALREADY COLLECTED GOES IN AT FACE VALUE — day 1 and today included. It is money that
+ * arrived. And days remaining stays month length minus elapsed: excluding today from the RATE
+ * does not put it back on the calendar.
+ *
+ * Pure, and here rather than inline in the card, so the edges can be asserted directly — days 1
+ * and 2 have no window at all, and the last day of a month must project to EXACTLY what has been
+ * collected rather than that plus one more day.
  */
 export type MonthEndPace =
   | { ok: false; reason: "not-enough-days"; remaining: number }
-  | { ok: true; rate: number; rateDays: number; remaining: number; projection: number };
+  | { ok: true; rate: number; rateDays: number; remaining: number; projection: number; todayExcluded: boolean };
 
 export function projectMonthEnd(input: {
   soFar: number;
+  /** Revenue on days 1..excludedDays. */
   excludedRevenue: number;
+  /** Revenue on the current calendar day. Ignored unless isCurrentMonth. */
+  currentDayRevenue?: number;
   daysElapsed: number;
   daysInMonth: number;
   excludedDays: number;
+  isCurrentMonth?: boolean;
 }): MonthEndPace {
-  const { soFar, excludedRevenue, daysElapsed, daysInMonth, excludedDays } = input;
+  const {
+    soFar, excludedRevenue, currentDayRevenue = 0,
+    daysElapsed, daysInMonth, excludedDays, isCurrentMonth = false,
+  } = input;
   const remaining = Math.max(0, daysInMonth - daysElapsed);
-  const rateDays = daysElapsed - excludedDays;
-  // FEWER THAN excludedDays+1 ELAPSED: there is no rate. A projection off zero or one day is not
-  // a rougher estimate, it is not an estimate — the card shows a dash instead.
+  // ONLY SUBTRACT TODAY IF IT IS NOT ALREADY IN THE EXCLUDED WINDOW. On day 1 of a month "today"
+  // and "day 1" are the same day, and subtracting it twice would be a silent double-count.
+  const todayExcluded = isCurrentMonth && daysElapsed > excludedDays;
+  const rateDays = daysElapsed - excludedDays - (todayExcluded ? 1 : 0);
+  // No days left in the window: there is no rate. A projection off zero days is not a rougher
+  // estimate, it is not an estimate — the card shows a dash.
   if (rateDays < 1) return { ok: false, reason: "not-enough-days", remaining };
-  const rate = (soFar - excludedRevenue) / rateDays;
+  const rate = (soFar - excludedRevenue - (todayExcluded ? currentDayRevenue : 0)) / rateDays;
   // remaining === 0 makes this exactly soFar, which is what the last day of a month and a closed
   // month must both produce — to the cent, not to the nearest rounding.
-  return { ok: true, rate, rateDays, remaining, projection: soFar + remaining * rate };
+  return { ok: true, rate, rateDays, remaining, projection: soFar + remaining * rate, todayExcluded };
 }

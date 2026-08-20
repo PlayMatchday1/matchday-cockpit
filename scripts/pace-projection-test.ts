@@ -14,69 +14,91 @@ const eq = (n: string, got: unknown, want: unknown) =>
     : (fail++, console.log(`  ✗ ${n} — got ${JSON.stringify(got)} want ${JSON.stringify(want)}`));
 
 // August 2026's real shape: a $16,468 day 1, then ordinary days.
-const D1 = 16468, D2 = 2918, D3 = 3135, ORD = 2500;
+const D1 = 16468, D2 = 2918, D3 = 3135, ORD = 2500, TODAY = 585;
+const EX = 1;   // the window, as shipped: day 1 only
 
-console.log("the excluded days are in revenue, out of the rate:");
+console.log("day 1 and today are out of the rate, in revenue-so-far:");
 {
-  // 10 days elapsed: days 1-3 real, days 4-10 at $2,500.
-  const soFar = D1 + D2 + D3 + 7 * ORD;
-  const r = projectMonthEnd({ soFar, excludedRevenue: D1 + D2 + D3, daysElapsed: 10, daysInMonth: 31, excludedDays: 3 });
+  // 20 days elapsed: day 1 real, days 2-19 at $2,500, day 20 a part-day at $585.
+  const soFar = D1 + 18 * ORD + TODAY;
+  const r = projectMonthEnd({
+    soFar, excludedRevenue: D1, currentDayRevenue: TODAY,
+    daysElapsed: 20, daysInMonth: 31, excludedDays: EX, isCurrentMonth: true,
+  });
   eq("a rate exists", r.ok, true);
   if (r.ok) {
-    eq("the rate is the days-4-onward mean, not the plain mean", Math.round(r.rate), ORD);
-    eq("  …and the plain mean would have been much higher", Math.round(soFar / 10) > ORD + 500, true);
-    eq("the rate covers elapsed − 3 days", r.rateDays, 7);
-    eq("remaining is the days that have not happened", r.remaining, 21);
-    // soFar is the FULL figure including days 1-3 — that is the half a total-only test cannot see.
+    // THE DIVISOR, EXPLICITLY. elapsed 20, minus day 1, minus today = 18. An off-by-one here is
+    // invisible in the output — the rate just comes out slightly wrong.
+    eq("the divisor is elapsed − day 1 − today", r.rateDays, 18);
+    eq("the rate is the middle days' mean", Math.round(r.rate), ORD);
+    eq("  …and NOT dragged down by the part-day", Math.round((soFar - D1) / 19) < ORD, true);
+    eq("today is reported as excluded", r.todayExcluded, true);
+    eq("days remaining is unaffected by excluding today from the rate", r.remaining, 11);
     eq("the projection adds the rate only to the remaining days",
-       Math.round(r.projection), Math.round(soFar + 21 * ORD));
+       Math.round(r.projection), Math.round(soFar + 11 * ORD));
   }
 }
 
-console.log("\nfewer than four elapsed days — there is no rate:");
-for (const elapsed of [1, 2, 3]) {
-  const r = projectMonthEnd({ soFar: D1, excludedRevenue: D1, daysElapsed: elapsed, daysInMonth: 31, excludedDays: 3 });
-  eq(`  day ${elapsed} has no projection`, r.ok, false);
-  if (!r.ok) eq(`  day ${elapsed} still reports the days remaining`, r.remaining, 31 - elapsed);
+console.log("\nrevenue-so-far is the FULL elapsed total — the half that hides a cancelling error:");
+{
+  const soFar = D1 + 18 * ORD + TODAY;
+  const r = projectMonthEnd({
+    soFar, excludedRevenue: D1, currentDayRevenue: TODAY,
+    daysElapsed: 20, daysInMonth: 31, excludedDays: EX, isCurrentMonth: true,
+  });
+  if (r.ok) {
+    eq("the projection starts from the full total, day 1 and today included",
+       Math.round(r.projection - 11 * r.rate), Math.round(soFar));
+    // If soFar had been windowed too, the projection would be lower by day 1 + today.
+    eq("  …and NOT from the windowed figure",
+       Math.round(r.projection - 11 * r.rate) === Math.round(soFar - D1 - TODAY), false);
+  }
 }
 
-console.log("\nexactly four elapsed days — the rate is one day, and it computes:");
+console.log("\nthe first days of a month have no window:");
 {
-  const r = projectMonthEnd({ soFar: D1 + D2 + D3 + ORD, excludedRevenue: D1 + D2 + D3, daysElapsed: 4, daysInMonth: 31, excludedDays: 3 });
-  eq("day 4 DOES produce a projection", r.ok, true);
-  if (r.ok) {
-    eq("  …from exactly one day", r.rateDays, 1);
-    eq("  …at that day's own figure", Math.round(r.rate), ORD);
+  const d1 = projectMonthEnd({ soFar: D1, excludedRevenue: D1, currentDayRevenue: D1, daysElapsed: 1, daysInMonth: 31, excludedDays: EX, isCurrentMonth: true });
+  eq("day 1 — nothing to compute a rate from", d1.ok, false);
+  eq("  …and today is not double-subtracted, because it IS day 1", d1.ok === false, true);
+  const d2 = projectMonthEnd({ soFar: D1 + D2, excludedRevenue: D1, currentDayRevenue: D2, daysElapsed: 2, daysInMonth: 31, excludedDays: EX, isCurrentMonth: true });
+  eq("day 2 — day 1 out, today out, zero days left in the window", d2.ok, false);
+  const d3 = projectMonthEnd({ soFar: D1 + D2 + D3, excludedRevenue: D1, currentDayRevenue: D3, daysElapsed: 3, daysInMonth: 31, excludedDays: EX, isCurrentMonth: true });
+  eq("day 3 — exactly one day in the window, and it computes", d3.ok, true);
+  if (d3.ok) {
+    eq("  …from one day", d3.rateDays, 1);
+    eq("  …that day being day 2", Math.round(d3.rate), D2);
   }
 }
 
 console.log("\nthe last day of the month — nothing remains to project:");
 {
-  const soFar = D1 + D2 + D3 + 28 * ORD;
-  const r = projectMonthEnd({ soFar, excludedRevenue: D1 + D2 + D3, daysElapsed: 31, daysInMonth: 31, excludedDays: 3 });
+  const soFar = D1 + 29 * ORD + TODAY;
+  const r = projectMonthEnd({ soFar, excludedRevenue: D1, currentDayRevenue: TODAY, daysElapsed: 31, daysInMonth: 31, excludedDays: EX, isCurrentMonth: true });
   eq("remaining is zero", r.ok && r.remaining, 0);
-  // NOT soFar + one more day. This is the case where an off-by-one is a plausible-looking number.
+  // NOT soFar + one more day. This is where an off-by-one looks entirely plausible.
   eq("the projection is EXACTLY revenue so far", r.ok && r.projection, soFar);
   if (r.ok) eq("  …and not so far plus a day", r.projection === soFar + r.rate, false);
 }
 
-console.log("\na complete past month — the same formula, and it must not drift a cent:");
+console.log("\na CLOSED month — no current day at all:");
 {
-  const actual = D1 + D2 + D3 + 27 * ORD;
-  const r = projectMonthEnd({ soFar: actual, excludedRevenue: D1 + D2 + D3, daysElapsed: 30, daysInMonth: 30, excludedDays: 3 });
+  const actual = D1 + 29 * ORD;
+  const r = projectMonthEnd({ soFar: actual, excludedRevenue: D1, currentDayRevenue: 0, daysElapsed: 30, daysInMonth: 30, excludedDays: EX, isCurrentMonth: false });
   eq("projects to the month's actual total exactly", r.ok && r.projection, actual);
+  eq("  …and reports no current-day exclusion", r.ok && r.todayExcluded, false);
+  // The divisor uses every day except day 1 — today is not taken off a month that has no today.
+  eq("  …with a divisor of elapsed − day 1 only", r.ok && r.rateDays, 29);
 }
 
-console.log("\nthe excluded window is a parameter, not a hardcoded 3:");
+console.log("\nthe window is a parameter, and it is wired:");
 {
   const soFar = D1 + D2 + D3 + 7 * ORD;
   const one = projectMonthEnd({ soFar, excludedRevenue: D1, daysElapsed: 10, daysInMonth: 31, excludedDays: 1 });
   const three = projectMonthEnd({ soFar, excludedRevenue: D1 + D2 + D3, daysElapsed: 10, daysInMonth: 31, excludedDays: 3 });
-  eq("excluding day 1 only gives a different rate", one.ok && three.ok && Math.round(one.rate) !== Math.round(three.rate), true);
-  // Measured: the spike is day 1 alone (5.8×-7.8× median); days 2-3 are ordinary. Narrowing the
-  // window is a one-line change and this is what proves the function already supports it.
-  if (one.ok) eq("  …and day-1-only is the higher rate, because days 2-3 are ordinary days",
-                 one.rate > (three.ok ? three.rate : 0), true);
+  eq("1 and 3 produce different rates", one.ok && three.ok && Math.round(one.rate) !== Math.round(three.rate), true);
+  eq("  …and different divisors", [one.ok && one.rateDays, three.ok && three.rateDays], [9, 7]);
+  eq("  …so the constant is wired, not decoration",
+     one.ok && three.ok && Math.round(one.projection) !== Math.round(three.projection), true);
 }
 
 console.log(`\n${pass} passed, ${fail} failed`);

@@ -69,10 +69,13 @@ console.log(`     ${aug.pace?.sub}`);
 const days = byMonthDay["2026-08"] ?? {};
 const elapsed = Number((aug.avg?.sub ?? "").match(/over (\d+) day/)?.[1] ?? 0);
 eq("  control — the elapsed-day count was readable", elapsed > 3, true);
-let soFar = 0, first3 = 0;
-for (let d = 1; d <= elapsed; d++) { soFar += days[d] ?? 0; if (d <= 3) first3 += days[d] ?? 0; }
-const rateDays = elapsed - 3;
-const rate = (soFar - first3) / rateDays;
+let soFar = 0;
+for (let d = 1; d <= elapsed; d++) soFar += days[d] ?? 0;
+const day1 = days[1] ?? 0;
+const today = days[elapsed] ?? 0;
+// THE DIVISOR, STATED: every elapsed day except day 1 and the day in progress.
+const rateDays = elapsed - 2;
+const rate = (soFar - day1 - today) / rateDays;
 const totalDays = new Date(2026, 8, 0).getDate();
 const remaining = totalDays - elapsed;
 const expect = soFar + remaining * rate;
@@ -82,15 +85,21 @@ console.log("\n── the two halves that can cancel ──");
 {
   // (a) revenue-so-far INCLUDES days 1-3.
   const shown = money(aug.revenue?.value);
-  eq("revenue so far includes days 1–3 (it equals the full elapsed total)", Math.abs(shown - soFar) < 1, true);
-  eq(`  …and is NOT the days-4-onward figure`, Math.abs(shown - (soFar - first3)) < 1, false);
-  console.log(`     so far ${shown} · days 1–3 are ${Math.round(first3)} of it`);
+  eq("revenue so far includes day 1 and today (it equals the full elapsed total)", Math.abs(shown - soFar) < 1, true);
+  // THE CANCELLING-ERROR CATCH: if soFar had been windowed too, the total would still look close.
+  eq("  …and is NOT the windowed figure", Math.abs(shown - (soFar - day1 - today)) < 1, false);
+  console.log(`     so far ${shown} · day 1 ${Math.round(day1)} · today ${Math.round(today)}`);
 
   // (b) the RATE excludes them.
   const subRate = money((aug.pace?.sub ?? "").match(/×\s*(\$[\d,]+)/)?.[1]);
-  eq("the rate is the days-4-onward rate", Math.abs(subRate - rate) < 1, true);
+  eq("the rate excludes day 1 and today", Math.abs(subRate - rate) < 1, true);
   const naiveRate = soFar / elapsed;
-  eq(`  …and NOT the plain mean (${Math.round(naiveRate)})`, Math.abs(subRate - naiveRate) < 1, false);
+  eq(`  …and is NOT the plain mean (${Math.round(naiveRate)})`, Math.abs(subRate - naiveRate) < 1, false);
+  // An off-by-one in the divisor is invisible in the output, so both neighbours are ruled out.
+  const offByOne = (soFar - day1 - today) / (elapsed - 1);
+  const offByOneOther = (soFar - day1 - today) / (elapsed - 3);
+  eq("  …and NOT a divisor one too large", Math.abs(subRate - offByOne) < 1, false);
+  eq("  …nor one too small", Math.abs(subRate - offByOneOther) < 1, false);
   console.log(`     rate ${subRate}/day over ${rateDays} days · plain mean would be ${Math.round(naiveRate)}`);
 }
 
@@ -102,14 +111,14 @@ console.log("\n── the projection ──");
   console.log(`     ${Math.round(soFar)} + ${remaining} × ${Math.round(rate)} = ${Math.round(expect)} · rendered ${shown}`);
   const subDays = Number((aug.pace?.sub ?? "").match(/\+ (\d+) day/)?.[1]);
   eq("the subtitle's remaining-day count matches the month", subDays, remaining);
-  eq("the subtitle states the exclusion", /days 1–3 excluded/.test(aug.pace?.sub ?? ""), true);
+  eq("the subtitle names both exclusions", /day 1 and today excluded/.test(aug.pace?.sub ?? ""), true);
 }
 
 // ── 4. AVG DAILY IS UNTOUCHED ─────────────────────────────────────────────────────────────────
 console.log("\n── avg daily revenue is still the true mean ──");
 {
   const shownAvg = money(aug.avg?.value);
-  eq("avg daily is revenue so far ÷ elapsed days, days 1–3 included", Math.abs(shownAvg - soFar / elapsed) < 1, true);
+  eq("avg daily is revenue so far ÷ elapsed days, nothing excluded", Math.abs(shownAvg - soFar / elapsed) < 1, true);
   eq("  …so the two cards deliberately disagree", Math.abs(shownAvg - rate) > 100, true);
   eq("revenue so far on the pace card equals the revenue card, to the dollar",
      money(aug.revenue?.value), money((aug.pace?.sub ?? "").match(/(\$[\d,]+) so far/)?.[1]));
@@ -124,6 +133,8 @@ console.log("\n── a closed month ──");
   eq("July's pace equals July's actual revenue, to the cent", Math.abs(shown - actual) < 1, true);
   eq("  …and equals its own revenue tile", money(jul.revenue?.value), shown);
   eq("  …and says it is not a projection", /not a projection|Period closed/i.test(jul.pace?.sub ?? ""), true);
+  // A CLOSED MONTH HAS NO CURRENT DAY, so the clause must not appear at all.
+  eq("  …and carries no exclusion clause", /excluded/i.test(jul.pace?.sub ?? ""), false);
   console.log(`     July actual ${Math.round(actual)} · pace ${shown}`);
 }
 
@@ -132,12 +143,12 @@ console.log("\n── the rule is month-only ──");
 {
   const q = await goto("2026Q3");
   eq("the quarter period still renders a pace figure", money(q.pace?.value) > 0, true);
-  eq("  …and does NOT use the days 1–3 wording", /days 1–3 excluded/.test(q.pace?.sub ?? ""), false);
+  eq("  …and does NOT use the exclusion wording", /excluded/i.test(q.pace?.sub ?? ""), false);
   eq("  …it keeps the mean × total-days subtitle", /\/day ×/.test(q.pace?.sub ?? ""), true);
   console.log(`     Q3: ${q.pace?.value} — ${q.pace?.sub}`);
   const y = await goto("2026");
   eq("the year period still renders a pace figure", money(y.pace?.value) > 0, true);
-  eq("  …and does NOT use the days 1–3 wording", /days 1–3 excluded/.test(y.pace?.sub ?? ""), false);
+  eq("  …and does NOT use the exclusion wording", /excluded/i.test(y.pace?.sub ?? ""), false);
   console.log(`     2026: ${y.pace?.value} — ${y.pace?.sub}`);
 }
 

@@ -361,25 +361,32 @@ export default function RevenueSection() {
    * month inside a much longer window and excluding them means nothing, so those keep the plain
    * mean × total days.
    *
-   * MEASURED, AND THE MEASUREMENT DISAGREES WITH THE WINDOW. Across May-Aug 2026 the spike is day
-   * ONE and only day one: 5.8×-7.8× the median day, every month. Day 2 runs 1.0×-1.5×, day 3
-   * 0.9×-1.2×, day 4 0.6×-1.4× — days 2 and 3 are ordinary days. The window is a named constant
-   * so narrowing it to 1 is a one-line change once Ryan has read the figures.
+   * ONE DAY, NOT THREE, AND THE MEASUREMENT IS WHY. Across May-Aug 2026 day 1 runs 5.8×-7.8× the
+   * median day, every month; day 2 is 1.0×-1.5×, day 3 is 0.9×-1.2×, day 4 is 0.6×-1.4×. Days 2
+   * and 3 are ordinary days, so excluding them threw away real data. See projectMonthEnd.
    */
-  const RATE_EXCLUDED_DAYS = 3;
+  const RATE_EXCLUDED_DAYS = 1;
 
   const paceModel = useMemo(() => {
     if (!period.isCurrent || period.grain !== "month") return null;
     const anchorMonth = period.months[period.months.length - 1] ?? "";
     // Revenue on the excluded days, from the same gross rows every other figure on this card uses.
-    const excluded = (grossRows ?? [])
-      .filter((r) => monthOfDate(r.date) === anchorMonth && Number(r.date.slice(8, 10)) <= RATE_EXCLUDED_DAYS)
+    const dayOf = (d: string) => Number(d.slice(8, 10));
+    const inMonth = (grossRows ?? []).filter((r) => monthOfDate(r.date) === anchorMonth);
+    const excluded = inMonth
+      .filter((r) => dayOf(r.date) <= RATE_EXCLUDED_DAYS)
+      .reduce((a, r) => a + Number(r.gross ?? 0), 0);
+    // TODAY, whose revenue is still arriving. daysElapsed on a current month IS the day of the
+    // month, so this is the row set for the day in progress.
+    const currentDayRevenue = inMonth
+      .filter((r) => dayOf(r.date) === daysElapsed)
       .reduce((a, r) => a + Number(r.gross ?? 0), 0);
     const r = projectMonthEnd({
-      soFar: anchorValue, excludedRevenue: excluded,
+      soFar: anchorValue, excludedRevenue: excluded, currentDayRevenue,
       daysElapsed, daysInMonth, excludedDays: RATE_EXCLUDED_DAYS,
+      isCurrentMonth: true,
     });
-    return r.ok ? { ...r, excluded } : r;
+    return r.ok ? { ...r, excluded, currentDayRevenue } : r;
   // eslint-disable-next-line react-hooks/exhaustive-deps
   }, [period, grossRows, anchorValue, daysElapsed, daysInMonth]);
 
@@ -555,9 +562,14 @@ export default function RevenueSection() {
                   // THE SUBTITLE STATES THE ARITHMETIC IT USED, and nothing else — no explanation
                   // of why the days are out. It is also what reconciles this card with Avg daily
                   // revenue, which is the true mean and disagrees with it on purpose.
-                  ? `PROJECTED — ${fmtMoney(anchorValue)} so far + ${paceModel.remaining} ${paceModel.remaining === 1 ? "day" : "days"} × ${fmtMoney(paceModel.rate)} · days 1–${RATE_EXCLUDED_DAYS} excluded`
+                  ? `PROJECTED — ${fmtMoney(anchorValue)} so far + ${paceModel.remaining} ${paceModel.remaining === 1 ? "day" : "days"} × ${fmtMoney(paceModel.rate)}`
+                    // THE EXCLUSION CLAUSE ONLY EXISTS WHILE THERE IS SOMETHING TO EXCLUDE. A
+                    // closed month has no current day, and this branch only runs for the month in
+                    // progress — the closed case falls through to "Period closed" below.
+                    + ` · ${RATE_EXCLUDED_DAYS === 1 ? "day 1" : `days 1–${RATE_EXCLUDED_DAYS}`}`
+                    + (paceModel.todayExcluded ? " and today" : "") + " excluded"
                     + (paceModel.rateDays === 1 ? " · rate from one day" : "")
-                  : `Fewer than ${RATE_EXCLUDED_DAYS + 1} days elapsed — no rate to project from.`)
+                  : "Not enough elapsed days to project from.")
               : period.isCurrent
                 ? `PROJECTED — ${fmtMoney(avgDaily)}/day × ${daysInMonth} days. The only grossed-up number here.`
                 : "Period closed — this is the actual, not a projection."
