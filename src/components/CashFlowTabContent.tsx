@@ -1,26 +1,25 @@
 "use client";
 
 import { useState } from "react";
-import ExpenseForecastPanel from "@/components/ExpenseForecastPanel";
 import CashFlowLensNav, { type CashFlowLens } from "@/components/CashFlowLensNav";
 import FinanceInsightsGrid from "@/components/FinanceInsightsGrid";
 import FinanceMonthlyPL from "@/components/FinanceMonthlyPL";
 import FinanceTrendChart from "@/components/FinanceTrendChart";
 import RevenuePerMatchCard from "@/components/RevenuePerMatchCard";
 
-// Body-only Cash Flow tab content. Replaces the standalone page —
-// drops the back-link + h1, keeps the looking-ahead hero + internal
-// 3-lens nav (Cash Flow / Insights / Trend) + lens views.
+// Body-only Cash Flow tab content. Replaces the standalone page — drops the back-link + h1,
+// keeps the internal 3-lens nav (Cash Flow / Insights / Trend) + lens views.
+//
+// THE EXPENSE FORECAST CARD IS GONE, wrapper and all, so the lens nav is the first thing on the
+// page and there is no empty container or doubled gap where the card used to sit. Its whole
+// computation went with it — see the commit; expensesByCategory and expenseCategoryChildren
+// survive because monthOverMonthDeltas still calls them.
 
 export default function CashFlowTabContent() {
   const [lens, setLens] = useState<CashFlowLens>("cash-flow");
 
   return (
     <>
-      <div className="mb-8">
-        <ExpenseForecastPanel />
-      </div>
-
       <CashFlowLensNav value={lens} onChange={setLens} />
 
       {lens === "cash-flow" && (
