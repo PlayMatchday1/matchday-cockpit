@@ -34,15 +34,7 @@ import { downloadCsv, fmtMoney, fmtInt } from "@/components/growth/format";
 import DailyRevenuePace from "./DailyRevenuePace";
 import s from "./financeSection.module.css";
 
-type View = "both" | "dpp" | "membership";
-type CompareWith = "prev_month" | "prev_quarter_avg" | "prev_year_avg";
 type Grain = "city" | "field" | "match";
-
-const VIEW_LABEL: Record<View, string> = {
-  both: "DPP + Membership",
-  dpp: "DPP only",
-  membership: "Membership only",
-};
 
 const WEEKDAY = ["Sun", "Mon", "Tue", "Wed", "Thu", "Fri", "Sat"];
 const hourLabel = (d: Date) => {
@@ -80,8 +72,6 @@ export default function RevenueSection() {
     return () => { alive = false; };
   }, []);
 
-  const [view, setView] = useState<View>("both");
-  const [compare, setCompare] = useState<CompareWith>("prev_month");
   const [grain, setGrain] = useState<Grain>("city");
   const [cityFilter, setCityFilter] = useState<string>("all");
   const [fieldFilter, setFieldFilter] = useState<string>("all");
@@ -220,8 +210,12 @@ export default function RevenueSection() {
     });
   }, [data, periods, shownFields, membershipScoped, membershipCities]);
 
-  const valueOf = (p: { dpp: number; membership: number }) =>
-    view === "dpp" ? p.dpp : view === "membership" ? p.membership : p.dpp + p.membership;
+  // DPP + MEMBERSHIP, ALWAYS. This used to switch on a page-level VIEW control that no figure on
+  // the page actually read: the cards take anchorGross and only fall back to this when gross is
+  // missing, and the breakdown tables never used it at all. The one number it moved was the
+  // comparison BASIS — which made the delta compare a full-revenue anchor against a DPP-only or
+  // membership-only prior, a mixed-basis percentage. Removed with the control.
+  const valueOf = (p: { dpp: number; membership: number }) => p.dpp + p.membership;
 
   // ── AVERAGE DAILY REVENUE, DIVIDED BY THE RIGHT NUMBER ──────────────────────────────────────
   //
@@ -326,7 +320,7 @@ export default function RevenueSection() {
       } },
   ];
 
-  // The count beside the Breakdown segments, in the units of the view being shown.
+  // The count beside the Breakdown segments, in the units of the breakdown being shown.
   const breakdownCount = useMemo(() => {
     if (grain === "match") return `${shownMatches.length} ${shownMatches.length === 1 ? "match" : "matches"}`;
     const n = (grain === "city" ? byCity(shownFields) : byField(shownFields)).size;
@@ -407,7 +401,7 @@ export default function RevenueSection() {
       if (!best || value > best.value) best = { city: c, value };
     }
     return best;
-  }, [data, cities, cityFilter, shownFields, period, membershipScoped, view]);
+  }, [data, cities, cityFilter, shownFields, period, membershipScoped]);
 
   // ===== Comparison basis =====
   // THE OPTIONS FOLLOW THE GRAIN. Under the old quarter-only control these were fixed as
@@ -418,26 +412,17 @@ export default function RevenueSection() {
   // A PARTIAL PERIOD IS COMPARED ON PACE, not on its part-period total, or every mid-month visit
   // reports a collapse. The sub-line says which of the two is being compared.
   const comparison = useMemo((): { label: string; basis: number | null; note: string } => {
-    if (compare === "prev_year_avg") {
-      return { label: "Previous year", basis: null, note: "no comparable year on record" };
-    }
+    // THE PREVIOUS PERIOD, FULL STOP. The two other bases lived on a control that has been
+    // removed; "previous year" was permanently disabled anyway — the finance record starts March
+    // 2026, so a year-back comparison would read this month against an empty ledger.
     const idx = series.findIndex((p) => p.key === period.key);
-    if (compare === "prev_month") {
-      const prev = idx > 0 ? series[idx - 1] : undefined;
-      return {
-        label: prev ? prev.month : "Previous period",
-        basis: prev ? valueOf(prev) : null,
-        note: prev ? "" : `nothing before this on record`,
-      };
-    }
-    const priors = idx > 0 ? series.slice(0, idx) : [];
-    if (priors.length === 0) return { label: "Prior periods avg", basis: null, note: "nothing before this on record" };
+    const prev = idx > 0 ? series[idx - 1] : undefined;
     return {
-      label: `${priors.length} prior ${priors.length === 1 ? "period" : "periods"} avg`,
-      basis: priors.reduce((a, p) => a + valueOf(p), 0) / priors.length,
-      note: "",
+      label: prev ? prev.month : "Previous period",
+      basis: prev ? valueOf(prev) : null,
+      note: prev ? "" : `nothing before this on record`,
     };
-  }, [compare, series, period, view]);
+  }, [series, period]);
 
   const comparedValue = period.isCurrent ? pace : anchorValue;
   const delta =
@@ -492,38 +477,6 @@ export default function RevenueSection() {
 
   return (
     <div className={s.wrap} data-testid="finance-revenue">
-      <div className={s.ctrlRow}>
-        <div className={s.ctrlGroup}>
-          <span className={s.ctrlLab}>Compare with</span>
-          <div className={s.seg}>
-            {(["prev_month", "prev_quarter_avg", "prev_year_avg"] as const).map((o) => {
-              // The finance record begins March 2026 — fin_revenue holds two sparse months across
-              // the whole of 2025 ($7,711 between them) and nothing before. A year-ago figure
-              // would compare this month against an empty ledger, so the control is disabled and
-              // says why rather than rendering a −100%.
-              const off = o === "prev_year_avg";
-              return (
-                <button key={o} type="button" disabled={off}
-                  title={off ? "Disabled: the finance record starts March 2026, so there is no comparable month a year back." : undefined}
-                  className={compare === o ? s.on : ""} onClick={() => !off && setCompare(o)}>
-                  {o === "prev_month" ? "Previous period" : o === "prev_quarter_avg" ? "Prior periods avg" : "Previous year"}
-                </button>
-              );
-            })}
-          </div>
-        </div>
-        <div className={s.ctrlGroup}>
-          <span className={s.ctrlLab}>View</span>
-          <div className={s.seg}>
-            {(["both", "dpp", "membership"] as const).map((o) => (
-              <button key={o} type="button" className={view === o ? s.on : ""} onClick={() => setView(o)}>
-                {VIEW_LABEL[o]}
-              </button>
-            ))}
-          </div>
-        </div>
-      </div>
-
       <div className={s.tiles}>
         <Tile
           testid="tile-revenue"
