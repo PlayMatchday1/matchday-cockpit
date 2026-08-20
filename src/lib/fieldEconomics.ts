@@ -118,9 +118,19 @@ function groupCost(
       const info = canonicalVenueCost(data, leg.id, month);
       if (UNKNOWN_KINDS.has(info.kind)) continue;
       // THE $0-WEARING-A-MAPPED-KIND TRAP, as-billed only: autoCost computes
-      // `rate = per_match_rate ?? 0`, so a venue with neither rate column set returns kind
-      // "per_match" with amount 0 — a mapped-looking unknown. cityPnl.ts names this same trap.
-      if (info.kind === "per_match" && leg.per_match_rate == null && leg.cost_per_match == null) continue;
+      // `rate = per_match_rate ?? 0`, so a venue with no per_match_rate returns kind "per_match"
+      // with amount 0 — a mapped-looking unknown. cityPnl.ts names this same trap.
+      //
+      // cost_per_match IS NOT PART OF THIS TEST. It was, and that was the bug: NEMP carries
+      // cost_per_match $77 and no per_match_rate, so the old condition judged it "known" and
+      // rendered $0 — a venue that bills monthly, reading as free. On the as-billed basis
+      // cost_per_match drives nothing, so it cannot be evidence that an invoice exists.
+      //
+      // A MONTH VALUE STILL WINS, including one keyed at exactly $0: canonicalVenueCost returns
+      // kind "override" for those, so they never reach this line. That is what keeps "keyed zero"
+      // (Centennial Commons, Scissortail June — a real, deliberate $0) distinct from
+      // "nothing keyed" (NEMP August — unknown, and rendered as a dash).
+      if (info.kind === "per_match" && leg.per_match_rate == null) continue;
       known = true;
       sum += info.amount;
     }

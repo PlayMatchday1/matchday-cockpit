@@ -67,7 +67,10 @@ export default function CostSection() {
   // on. Offering only one would make this page disagree with Cities for four venues whose lumpy
   // invoices land in months other than the ones they cover (NEMP, Onion Creek, Bicentennial Park,
   // Lowell H. Strike), and the reader would have no way to see which number they were looking at.
-  const [mode, setMode] = useState<CostMode>("per_match");
+  // DEFAULT: AS BILLED — the same derivation Field Costs, OpEx and Cash Flow use, so the page
+  // opens on the number those three agree on. The per-match basis is unchanged and still one
+  // click away; the toggle is the explanation, so there is no sentence here saying so.
+  const [mode, setMode] = useState<CostMode>("as_billed");
 
   // THE PERIOD IS THE WINDOW. The tiles describe the whole of it, at whatever grain was asked
   // for, and it is partial exactly when the period bar says it is.
@@ -153,11 +156,13 @@ export default function CostSection() {
         <div className={s.ctrlGroup}>
           <span className={s.ctrlLab}>Basis</span>
           <div className={s.seg}>
-            <button type="button" className={mode === "per_match" ? s.on : ""} onClick={() => setMode("per_match")}
+            <button type="button" data-testid="basis-per-match" aria-pressed={mode === "per_match"}
+              className={mode === "per_match" ? s.on : ""} onClick={() => setMode("per_match")}
               title="cost_per_match × charged matches. Steady month to month — billing-timing lumps removed.">
               Per-Match
             </button>
-            <button type="button" className={mode === "as_billed" ? s.on : ""} onClick={() => setMode("as_billed")}
+            <button type="button" data-testid="basis-as-billed" aria-pressed={mode === "as_billed"}
+              className={mode === "as_billed" ? s.on : ""} onClick={() => setMode("as_billed")}
               title="What the venue invoiced: an override where one exists, else per_match_rate × matches.">
               As Billed
             </button>
