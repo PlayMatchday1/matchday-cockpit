@@ -55,6 +55,7 @@ type EditableField =
   | PriceField
   | "billing_type"
   | "charge_on_cancel"
+  | "bills_per_reservation"
   | "billing_cadence"
   | "billing_day"
   | "billing_anchor_month"
@@ -248,6 +249,12 @@ export default function FieldCostsView() {
 
   function saveChargeOnCancel(venueId: number, next: boolean): void {
     void saveVenueField(venueId, "charge_on_cancel", next, true);
+  }
+
+  // ONE RESERVATION PER TIME SLOT. Same write path as every other venue field — optimistic patch
+  // plus a fin_change_log entry, and fin_venues is already on that table's CHECK allowlist.
+  function savePerReservation(venueId: number, next: boolean): void {
+    void saveVenueField(venueId, "bills_per_reservation", next, true);
   }
 
   // OpEx billing-timing edits (migration 0069). These place a
@@ -766,6 +773,7 @@ export default function FieldCostsView() {
                       onSaveBillingType={(next) =>
                         saveBillingType(row.primaryVenueId, next)
                       }
+                      onSavePerReservation={(next) => savePerReservation(row.primaryVenueId, next)}
                       onSaveChargeOnCancel={(next) =>
                         saveChargeOnCancel(row.primaryVenueId, next)
                       }
@@ -887,6 +895,7 @@ function FieldCostTableRow({
   onSavePrice,
   onSaveBillingType,
   onSaveChargeOnCancel,
+  onSavePerReservation,
   dashboardDriven,
   onSaveBillingCadence,
   onSaveBillingDay,
@@ -909,6 +918,7 @@ function FieldCostTableRow({
   onSavePrice: (field: PriceField, raw: string) => void;
   onSaveBillingType: (next: FinVenue["billing_type"]) => void;
   onSaveChargeOnCancel: (next: boolean) => void;
+  onSavePerReservation: (next: boolean) => void;
   dashboardDriven: boolean;
   onSaveBillingCadence: (next: FinVenue["billing_cadence"]) => void;
   onSaveBillingDay: (raw: string) => void;
@@ -1007,7 +1017,19 @@ function FieldCostTableRow({
         </td>
 
         <td className={"px-3 py-2.5 text-right tabular-nums " + (row.matchCount === 0 ? "text-deep-green/30" : "text-deep-green")}>
-          {row.matchCount}
+          {/* WHEN THE VENUE BILLS PER RESERVATION, BOTH NUMBERS SHOW. A collapsed figure that
+              only printed the smaller number would be indistinguishable from a venue that simply
+              had fewer matches. */}
+          {row.perReservation ? (
+            <span data-testid="fc-matches">
+              {row.rawMatchCount}
+              <span className="ml-1 text-[11px] font-bold text-deep-green/45" data-testid="fc-reservations">
+                · {row.matchCount} reservation{row.matchCount === 1 ? "" : "s"}
+              </span>
+            </span>
+          ) : (
+            <span data-testid="fc-matches">{row.matchCount}</span>
+          )}
         </td>
 
         {/* MONTH COST — dim when zero. An amber sub-line only when the figure was entered by hand,
@@ -1082,6 +1104,7 @@ function FieldCostTableRow({
               cellState={cellState} onSavePrice={onSavePrice}
               onSaveBillingType={onSaveBillingType}
               onSaveChargeOnCancel={onSaveChargeOnCancel}
+              onSavePerReservation={onSavePerReservation}
               onSaveBillingDay={onSaveBillingDay}
               onSaveCustomAmount={onSaveCustomAmount}
               isOverride={isOverride}
@@ -1123,7 +1146,7 @@ function FieldCostTableRow({
 // labelled as not-a-cost, because it sat in the two widest columns of a cost table.
 function VenuePanel({
   row, venue, month, autoAmount, cellState, onSavePrice, onSaveBillingType,
-  onSaveChargeOnCancel, onSaveBillingDay, onSaveCustomAmount, isOverride, timing,
+  onSaveChargeOnCancel, onSaveBillingDay, onSaveCustomAmount, onSavePerReservation, isOverride, timing,
 }: {
   row: FieldCostRow;
   venue: FinVenue | null;
@@ -1135,12 +1158,14 @@ function VenuePanel({
   onSaveChargeOnCancel: (next: boolean) => void;
   onSaveBillingDay: (raw: string) => void;
   onSaveCustomAmount: (raw: string) => void;
+  onSavePerReservation: (next: boolean) => void;
   isOverride: boolean;
   timing: React.ReactNode;
 }) {
   // AUTO-BILL IS per_match_rate BEING SET AT ALL. NULL means "not auto-billed per match", which is
   // a real, deliberate state for six venues — the money arrives as a monthly override instead.
   const autoBill = (venue?.per_match_rate ?? null) !== null;
+  const perReservation = venue?.bills_per_reservation === true;
 
   // ONE RATE, TWO COLUMNS. The agreed rate always lands in cost_per_match. per_match_rate mirrors
   // it while auto-bill is on and is cleared when it is off, so the switch and the stored shape can
@@ -1231,6 +1256,26 @@ function VenuePanel({
             </div>
           </>
         )}
+        {/* ONE RESERVATION PER TIME SLOT. A property of the venue's booking arrangement, so it
+            sits with the other things MatchDay pays on — not in a filter and not behind a
+            tooltip. Off is the default and is stated, not implied by an unlit control. */}
+        <div className={fld}>
+          <label className={lab}>Slots</label>
+          <button type="button" role="switch" data-testid="fc-per-reservation"
+            aria-checked={perReservation}
+            onClick={() => onSavePerReservation(!perReservation)}
+            className={`relative h-[21px] w-9 flex-none rounded-full transition ${perReservation ? "bg-mint" : "bg-[#e6eae8]"}`}>
+            <span className={`absolute top-0.5 h-[17px] w-[17px] rounded-full bg-white shadow-sm transition ${perReservation ? "left-[17px]" : "left-0.5"}`} />
+          </button>
+          <span className="text-[12.5px] font-semibold text-deep-green/70">
+            One reservation per time slot
+          </span>
+        </div>
+        <div className="mb-2.5 ml-[116px] text-[11px] leading-snug text-deep-green/55" data-testid="fc-per-reservation-effect">
+          {perReservation
+            ? <>Two matches in one slot count once. {monthFull(month)}: <b className="text-deep-green">{row.rawMatchCount} matches</b> → <b className="text-deep-green">{row.matchCount} reservations</b>.</>
+            : <>Off — every match is billed. {monthFull(month)}: {row.rawMatchCount} matches, {row.rawMatchCount} billed.</>}
+        </div>
         <div className={fld}>
           <label className={lab}>Cancels</label>
           <select

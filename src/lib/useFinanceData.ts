@@ -118,6 +118,10 @@ export type FinMasterSchedule = {
 
 export type FinVenue = {
   id: number;
+  // ONE RESERVATION PER TIME SLOT. When true the per-match cost counts DISTINCT (field, date,
+  // time) slots rather than match rows — the venue books the pitch, not the fixture, so two
+  // matches in one slot are one thing we pay for. Default false everywhere; see migration 0129.
+  bills_per_reservation?: boolean;
   venue_name: string;       // canonical (post-alias)
   raw_venue_name: string;   // pre-alias — used for per-leg accounting on
                             // split-rate venues (ATH Katy / Sunday) where
@@ -769,6 +773,9 @@ async function load(quarter: QuarterInfo): Promise<void> {
       // opt out.
       charge_on_cancel:
         r.charge_on_cancel === false ? false : true,
+      // Migration 0129. Absent on cached rows fetched before the column landed → false, which is
+      // the same arithmetic the page has always done. Only an explicit true collapses anything.
+      bills_per_reservation: r.bills_per_reservation === true,
       // Billing timing (migration 0069). Pre-migration cached rows lack
       // these keys → default to monthly / undated so nothing breaks
       // before the columns land in prod.

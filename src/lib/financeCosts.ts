@@ -7,6 +7,7 @@ import type {
   FinanceData,
   FinVenue,
   FinVenueCostOverride,
+  FinMasterSchedule,
 } from "./useFinanceData";
 import type { Q2Month } from "./financeStats";
 import { getLegLabel, groupVenues, type VenueGroup } from "./venueGroups";
@@ -86,6 +87,55 @@ function venueMatchCount(
   // matches the venue charges for (only when venue.charge_on_cancel is
   // true). venue_id pre-resolved on both arrays in useFinanceData,
   // split-rate routing included.
+  // ONE RESERVATION PER TIME SLOT (fin_venues.bills_per_reservation, migration 0129).
+  //
+  // Where a venue books the PITCH rather than the fixture, two matches in one slot are one thing
+  // we pay for. With the flag on this counts DISTINCT (field, date, time) instead of rows — a
+  // distinct count, never a halving: Westlake has slots carrying three and four matches and ÷2
+  // would be wrong on every one of them.
+  //
+  // THE KEY IS ALREADY WALL-CLOCK. match_date and match_time are built in useFinanceData by
+  // reading the mdapi timestamp back through UTC accessors, which on a wall-clock-stamped-Z value
+  // returns the hour on the pitch. Verified against the veoSchedule.ts:15 local parse over 234
+  // Westlake rows: identical on every one. Nothing here re-parses a date string, so no drift can
+  // split one slot into two.
+  //
+  // CHARGE-ON-CANCEL IS UNCHANGED. A cancelled match inside a collapsed slot does not create a
+  // second reservation — it joins the same key, which is why the cancelled pass adds to the SAME
+  // set rather than a separate counter.
+  const perReservation = venue.bills_per_reservation === true;
+  const slots = perReservation ? new Set<string>() : null;
+  const slotKey = (s: FinMasterSchedule) =>
+    `${s.mdapi_field_id ?? "?"}|${s.match_date}|${s.match_time}`;
+
+  let n = 0;
+  for (const s of data.masterSchedule) {
+    if (isEventSchedule(s)) continue;
+    if (s.venue_id === venue.id && s.month === month) {
+      if (slots) slots.add(slotKey(s)); else n += 1;
+    }
+  }
+  if (venue.charge_on_cancel) {
+    for (const s of data.cancelledSchedule) {
+      if (isEventSchedule(s)) continue;
+      if (s.venue_id === venue.id && s.month === month) {
+        if (slots) slots.add(slotKey(s)); else n += 1;
+      }
+    }
+  }
+  return slots ? slots.size : n;
+}
+
+/**
+ * The RAW match count for a venue-month, ignoring the reservation flag. The page shows both
+ * numbers — "12 · 8 reservations" — so the collapse can never quietly produce a figure smaller
+ * than the match count implies.
+ */
+export function venueRawMatchCount(
+  data: FinanceData,
+  venue: FinVenue,
+  month: Q2Month,
+): number {
   let n = 0;
   for (const s of data.masterSchedule) {
     if (isEventSchedule(s)) continue;
@@ -142,7 +192,11 @@ function autoCost(
       totalHours: 0,
       formula:
         matchCount > 0
-          ? `${matchCount} ${matchCount === 1 ? "match" : "matches"} × $${rate}`
+          ? (venue.bills_per_reservation === true
+              // BOTH NUMBERS, ALWAYS. The collapse must never render a figure smaller than the
+              // match count implies without saying where the difference went.
+              ? `${matchCount} ${matchCount === 1 ? "reservation" : "reservations"} × $${rate} = $${(matchCount * rate).toLocaleString()} · ${venueRawMatchCount(data, venue, month)} matches`
+              : `${matchCount} ${matchCount === 1 ? "match" : "matches"} × $${rate}`)
           : "No matches scheduled",
       source: "Auto from schedule",
       override: null,
@@ -336,6 +390,10 @@ export type FieldCostRow = {
   secondaryVenueIds: number[];
   amount: number;
   matchCount: number;
+  /** The uncollapsed match count. Equals matchCount unless the venue bills per reservation. */
+  rawMatchCount: number;
+  /** True when this venue's cost counts reservations rather than matches. */
+  perReservation: boolean;
   totalHours: number;
   formula: string;
   source: string;
@@ -436,6 +494,9 @@ export function buildFieldCostRows(
         secondaryVenueIds: g.legs.slice(1).map((l) => l.id),
         amount,
         matchCount,
+        // Combined venues sum their legs; the raw count is the same sum, uncollapsed.
+        rawMatchCount: g.legs.reduce((n, l) => n + venueRawMatchCount(data, l, month), 0),
+        perReservation: g.legs.some((l) => l.bills_per_reservation === true),
         totalHours,
         formula: anyLegOverride ? combinedFormula(g, legInfos) : autoFormula,
         source: anyLegOverride
@@ -467,6 +528,8 @@ export function buildFieldCostRows(
       secondaryVenueIds: [],
       amount: info.amount,
       matchCount: info.matchCount,
+      rawMatchCount: venueRawMatchCount(data, primary, month),
+      perReservation: primary.bills_per_reservation === true,
       totalHours: info.totalHours,
       formula: info.formula,
       source: info.source,
