@@ -240,3 +240,32 @@
 .infoTbl { width: 100%; border-collapse: collapse; font-size: 12px; font-variant-numeric: tabular-nums; }
 .infoTbl td { padding: 3px 0; text-align: right; color: var(--deep-green, #12352b); font-weight: 700; }
 .infoTbl td.l { text-align: left; font-weight: 600; color: color-mix(in srgb, var(--deep-green, #12352b) 70%, transparent); }
+
+/* DAILY REVENUE PACE — hover readout. The wrapper is the positioning context AND the bound the
+   readout is kept inside; the tooltip is HTML rather than SVG text so it can wrap, use the
+   module's own type, and be measured by a test like any other element. */
+.paceWrap { position: relative; }
+.paceTip {
+  position: absolute; top: 10px; z-index: 5; pointer-events: none;
+  min-width: 168px; max-width: 240px;
+  background: #fff; border: 1px solid var(--cream-line, #e6e2d8); border-radius: 10px;
+  box-shadow: 0 8px 22px rgba(18, 53, 43, .14);
+  padding: 8px 10px 9px;
+}
+.paceTipDay {
+  font-size: 10px; font-weight: 800; letter-spacing: .06em; text-transform: uppercase;
+  color: color-mix(in srgb, var(--deep-green, #12352b) 55%, transparent); margin-bottom: 6px;
+}
+.paceTipRow {
+  display: flex; align-items: center; justify-content: space-between; gap: 14px;
+  font-size: 12px; padding: 2px 0; color: var(--deep-green, #12352b);
+  font-variant-numeric: tabular-nums;
+}
+.paceTipRow span { display: inline-flex; align-items: center; gap: 6px; font-weight: 600;
+  color: color-mix(in srgb, var(--deep-green, #12352b) 70%, transparent); }
+.paceTipRow b { font-weight: 800; }
+.paceTipDiff {
+  margin-top: 6px; padding-top: 6px; border-top: 1px solid var(--cream-line, #e6e2d8);
+  text-align: right; font-size: 12px; font-weight: 800; font-variant-numeric: tabular-nums;
+  color: color-mix(in srgb, var(--deep-green, #12352b) 75%, transparent);
+}

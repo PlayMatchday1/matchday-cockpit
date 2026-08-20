@@ -19,7 +19,7 @@
 // BOTH SERIES SHARE THE FILTERS. A city or field filter that moved one line and not the other would
 // be worse than no filter at all — it would invite a comparison between two different businesses.
 
-import { useEffect, useMemo, useState } from "react";
+import { useCallback, useEffect, useMemo, useRef, useState } from "react";
 import { supabase } from "@/lib/supabase";
 import { useFinancePeriod } from "@/lib/financePeriodContext";
 import { fmtMoney } from "@/components/growth/format";
@@ -164,6 +164,62 @@ export default function DailyRevenuePace() {
   const y = (v: number) => MT + plotH - (v / maxY) * plotH;
   const path = (d: number[]) => d.map((v, i) => `${i ? "L" : "M"}${x(i).toFixed(1)} ${y(v).toFixed(1)}`).join(" ");
 
+  /* ── HOVER READOUT ────────────────────────────────────────────────────────────────────────
+   * SNAPS TO THE NEAREST DAY FROM ANYWHERE IN THE PLOT, at any height. Hit-testing the line
+   * itself would be unusable — it is 2-3px wide across a 980-unit viewBox — so the whole plot is
+   * one target and the x position picks the day.
+   *
+   * PINNED is the touch path. A tap sets it; a tap on another day moves it; a tap outside clears
+   * it. Without that the chart is inert on a phone, where there is no hover at all.
+   */
+  const [hoverDay, setHoverDay] = useState<number | null>(null);
+  const [pinned, setPinned] = useState(false);
+  const svgRef = useRef<SVGSVGElement | null>(null);
+
+  // Pointer x → day index. The SVG scales to its container, so client pixels are converted back
+  // into viewBox units before comparing against the same x() the paths are drawn with.
+  const dayAt = useCallback((clientX: number): number | null => {
+    const el = svgRef.current;
+    if (!el) return null;
+    const r = el.getBoundingClientRect();
+    if (r.width === 0) return null;
+    const ux = (clientX - r.left) * (W / r.width);
+    if (ux < ML - 12 || ux > ML + plotW + 12) return null;
+    const i = nDays === 1 ? 0 : Math.round(((ux - ML) / plotW) * (nDays - 1));
+    return Math.max(0, Math.min(nDays - 1, i));
+  }, [W, ML, plotW, nDays]);
+
+  // Dismiss a pinned readout on any pointer-down outside the chart.
+  useEffect(() => {
+    if (!pinned) return;
+    const onDown = (e: PointerEvent) => {
+      if (svgRef.current?.contains(e.target as Node)) return;
+      setPinned(false);
+      setHoverDay(null);
+    };
+    document.addEventListener("pointerdown", onDown);
+    return () => document.removeEventListener("pointerdown", onDown);
+  }, [pinned]);
+
+  // THE READOUT'S VALUES COME FROM THE SERIES THE CHART WAS GIVEN, not from anything re-derived.
+  // The comparison is read UNTRUNCATED: the line stops at lastDay so a partial month cannot read
+  // as a collapse, but "what did that day take last month" is still a real question on day 25.
+  const readout = useMemo(() => {
+    if (hoverDay == null) return null;
+    const i = hoverDay;
+    const cur = i < lastDay ? current[i] ?? null : null;
+    const cmp = comp?.has ? comp.data[i] ?? null : null;
+    return {
+      i,
+      dayLabel: `${MONTH_SHORT[m0]} ${i + 1}`,
+      curLabel: anchor,
+      cmpLabel: comp?.label ?? null,
+      cur, cmp,
+      // CURRENT MINUS COMPARISON, in that order. Only when both sides exist.
+      diff: cur != null && cmp != null ? cur - cmp : null,
+    };
+  }, [hoverDay, current, lastDay, comp, m0, anchor]);
+
   const scope = field !== "All fields" ? field : city !== "All cities" ? city : "All Matchday";
   const kindLab = kind === "dpp" ? "DPP only" : kind === "member" ? "Membership only" : "DPP + Membership";
 
@@ -215,8 +271,24 @@ export default function DailyRevenuePace() {
       {rows === null ? (
         <div className={s.legend} data-testid="pace-loading">Loading…</div>
       ) : (
-        <svg viewBox={`0 0 ${W} ${H}`} width="100%" role="img" data-testid="pace-chart"
-          aria-label={`Daily revenue for ${anchor}, ${scope}`}>
+        <div className={s.paceWrap}>
+        <svg ref={svgRef} viewBox={`0 0 ${W} ${H}`} width="100%" role="img" data-testid="pace-chart"
+          aria-label={`Daily revenue for ${anchor}, ${scope}`}
+          // THE SERIES AS GIVEN, for assertions. The rendered path is rounded to 0.1 viewBox
+          // units — about $5 at a $20k axis — so a test that recovers values from `d` can never
+          // check them to the dollar. These are the exact arrays the readout reads.
+          data-current={JSON.stringify(current.slice(0, Math.max(lastDay, 1)))}
+          data-compare={JSON.stringify(comp?.has ? comp.data : [])}
+          onPointerMove={(e) => { if (!pinned) setHoverDay(dayAt(e.clientX)); }}
+          onPointerLeave={() => { if (!pinned) setHoverDay(null); }}
+          onPointerDown={(e) => {
+            // TAP TO PIN. A tap on another day moves it; a second tap on the same day releases it.
+            const d = dayAt(e.clientX);
+            if (d == null) return;
+            if (pinned && d === hoverDay) { setPinned(false); setHoverDay(null); return; }
+            setHoverDay(d);
+            setPinned(true);
+          }}>
           {[0, 1, 2, 3, 4].map((i) => {
             const yy = MT + (i * plotH) / 4;
             return (
@@ -237,7 +309,64 @@ export default function DailyRevenuePace() {
           )}
           <path d={path(current.slice(0, Math.max(lastDay, 1)))} fill="none" stroke="#2fa36b" strokeWidth={3}
             strokeLinecap="round" strokeLinejoin="round" data-testid="pace-line-current" />
+
+          {readout && (
+            <g data-testid="pace-crosshair" pointerEvents="none">
+              <line x1={x(readout.i)} y1={MT} x2={x(readout.i)} y2={MT + plotH}
+                stroke="#12352b" strokeOpacity={0.28} strokeWidth={1} strokeDasharray="3 3" />
+              {readout.cmp != null && (
+                <circle cx={x(readout.i)} cy={y(readout.cmp)} r={4.5} fill="#fff" stroke="#3f7fd6"
+                  strokeWidth={2.5} data-testid="pace-dot-compare" />
+              )}
+              {readout.cur != null && (
+                <circle cx={x(readout.i)} cy={y(readout.cur)} r={4.5} fill="#fff" stroke="#2fa36b"
+                  strokeWidth={2.5} data-testid="pace-dot-current" />
+              )}
+            </g>
+          )}
+
+          {/* THE WHOLE PLOT IS THE TARGET. Last in the SVG so it takes the events, transparent so
+              it changes nothing visually. Without it a pointer over empty plot space hits nothing
+              and the readout only appears on the 2px line. */}
+          <rect x={ML} y={MT} width={plotW} height={plotH} fill="transparent"
+            data-testid="pace-hit" style={{ cursor: "crosshair" }} />
         </svg>
+
+        {readout && (
+          <div className={s.paceTip} data-testid="pace-readout"
+            data-day={readout.i + 1}
+            // FOLLOWS THE CURSOR, STAYS INSIDE THE CHART. Positioned as a percentage of the same
+            // viewBox the crosshair uses, and flipped to the left of the crosshair once it would
+            // otherwise run past the right edge.
+            style={(() => {
+              const px = (x(readout.i) / W) * 100;
+              const flip = px > 62;
+              return flip
+                ? { right: `${100 - px}%`, marginRight: 10 }
+                : { left: `${px}%`, marginLeft: 10 };
+            })()}>
+            <div className={s.paceTipDay}>{readout.dayLabel}</div>
+            <div className={s.paceTipRow}>
+              <span><i className={s.dot} style={{ background: "#2fa36b" }} />{readout.curLabel}</span>
+              <b data-testid="pace-readout-current">{readout.cur == null ? "—" : fmtMoney(readout.cur)}</b>
+            </div>
+            {readout.cmpLabel && (
+              <div className={s.paceTipRow}>
+                <span><i className={s.dot} style={{ background: "#3f7fd6" }} />{readout.cmpLabel}</span>
+                <b data-testid="pace-readout-compare">{readout.cmp == null ? "—" : fmtMoney(readout.cmp)}</b>
+              </div>
+            )}
+            {/* NO DIFFERENCE ROW WHEN EITHER SIDE IS MISSING — a difference against nothing is not
+                zero, and printing $0 there would read as parity. */}
+            {readout.diff != null && (
+              <div className={s.paceTipDiff} data-testid="pace-readout-diff"
+                data-sign={readout.diff >= 0 ? "pos" : "neg"}>
+                {readout.diff >= 0 ? "+" : "−"}{fmtMoney(Math.abs(readout.diff))}
+              </div>
+            )}
+          </div>
+        )}
+        </div>
       )}
 
       <div className={s.legend}>
