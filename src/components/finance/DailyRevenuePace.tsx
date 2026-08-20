@@ -140,8 +140,12 @@ export default function DailyRevenuePace() {
       const { months, label: lab } = comparisonMonths(year, m0, mode);
       const series = months.map(([yy, mm]) => dailySeries(rows, yy, mm, city, field, kind));
       const width = Math.max(...series.map((x) => x.length), 0);
+      // NOT ROUNDED PER DAY. Rounding each of 31 days put the comparison series $2 away from the
+      // month's own gross — small, but it made "this line sums to what the card says" untrue, and
+      // an assertion that has to carry a tolerance stops catching the thing it is for. A
+      // single-month comparison is now exactly that month.
       const avg = Array.from({ length: width }, (_, d) =>
-        Math.round(series.reduce((sum, x) => sum + (x[d] ?? 0), 0) / series.length));
+        series.reduce((sum, x) => sum + (x[d] ?? 0), 0) / series.length);
       // A comparison is LIVE only if the months behind it carry revenue. An early-2023 month has no
       // prior year, and an empty average drawn as a flat $0 line reads as a real collapse.
       out[mode] = { label: lab, data: avg, has: series.some((x) => x.some((v) => v > 0)) };

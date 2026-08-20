@@ -230,6 +230,59 @@ for (const [key, label] of [["2026-07", "July"], ["2026-Q3", "Q3"]]) {
   }
 }
 
+// ── 7. GROSS AGAINST GROSS ────────────────────────────────────────────────────────────────────
+// The chart was never the problem: both its series read fin_revenue.gross. The CARD's comparison
+// basis was the roster-matched figure, divided into a gross anchor.
+console.log("\n── one basis, everywhere ──");
+{
+  await goto("2026-08");
+  const S = await page.evaluate(() => {
+    const c = document.querySelector('[data-testid="pace-chart"]');
+    return { cur: JSON.parse(c.getAttribute("data-current")), cmp: JSON.parse(c.getAttribute("data-compare")) };
+  });
+  const sum = (a) => a.reduce((x, y) => x + y, 0);
+  eq("  control — both series carry points", [S.cur.length > 0, S.cmp.length > 0], [true, true]);
+
+  // (a) + (b) EACH SERIES SUMS TO THE FIGURE THE CARDS SHOW.
+  const augCard = money(await page.evaluate(() =>
+    document.querySelector('[data-testid="tile-revenue"] [data-testid="revenue-tile-value"]')?.firstChild?.textContent?.trim()));
+  eq("the current series sums to the revenue card, to the dollar", Math.round(sum(S.cur)), Math.round(augCard));
+  eq("  …and to August gross in fin_revenue", Math.abs(sum(S.cur) - monthTotal("2026-08")) < 1, true);
+  eq("the comparison series sums to July gross, to the dollar", Math.abs(sum(S.cmp) - monthTotal("2026-07")) < 1, true);
+  console.log(`     current ${Math.round(sum(S.cur))} · comparison ${Math.round(sum(S.cmp))} · July gross ${Math.round(monthTotal("2026-07"))}`);
+
+  // (c) THE PERCENTAGE, FROM TWO FIGURES ON THE SAME FOOTING.
+  const sub = await page.evaluate(() =>
+    document.querySelector('[data-testid="tile-revenue"] [data-testid="revenue-tile-sub"]')?.innerText.trim());
+  const printed = Number((sub.match(/([+-]?[\d.]+)%/) ?? [])[1]);
+  eq("  control — a percentage is printed", Number.isFinite(printed), true);
+  // The compared value for a CURRENT period is the plain-mean pace: gross so far ÷ elapsed × month.
+  const chicago = new Date(new Date().toLocaleString("en-US", { timeZone: "America/Chicago" }));
+  const elapsed = chicago.getDate(), inMonth = new Date(2026, 8, 0).getDate();
+  const paceInternal = (monthTotal("2026-08") / elapsed) * inMonth;
+  const grossBasis = monthTotal("2026-07");
+  const expected = ((paceInternal - grossBasis) / grossBasis) * 100;
+  eq("the percentage is computed against the comparison month's GROSS",
+     Math.abs(printed - expected) < 0.06, true);
+  console.log(`     printed ${printed}% · gross-vs-gross ${expected.toFixed(2)}%`);
+
+  // THE NEGATIVE CONTROL THAT MATTERS: the roster-matched basis gives a materially different
+  // answer, so this assertion would have failed before the fix rather than passing either way.
+  const gapPct = await page.evaluate(async () => {
+    document.querySelector('[data-testid="notmatched-info"]')?.click();
+    await new Promise((r) => setTimeout(r, 500));
+    const row = document.querySelector('[data-testid="notmatched-row"][data-month="2026-07"]');
+    const v = row?.querySelector('[data-testid="notmatched-amount"]')?.textContent ?? null;
+    document.querySelector('[data-testid="notmatched-info"]')?.click();
+    return v;
+  });
+  const rosterBasis = grossBasis - money(gapPct);
+  const wrongWay = ((paceInternal - rosterBasis) / rosterBasis) * 100;
+  eq("  control — the roster basis is a real, different figure", money(gapPct) > 0, true);
+  eq("  …and it would have printed a materially different percentage", Math.abs(wrongWay - expected) > 5, true);
+  console.log(`     roster basis ${Math.round(rosterBasis)} would print ${wrongWay.toFixed(1)}% — a ${(wrongWay - expected).toFixed(1)} point error`);
+}
+
 console.log(`\n================ RESULT ================`);
 console.log(`Assertions: ${PASS} passed, ${FAIL} failed`);
 if (fails.length) { console.log("\nFAILURES:"); fails.forEach((f) => console.log("  " + f)); }

@@ -419,10 +419,19 @@ export default function RevenueSection() {
     const prev = idx > 0 ? series[idx - 1] : undefined;
     return {
       label: prev ? prev.month : "Previous period",
-      basis: prev ? valueOf(prev) : null,
+      // GROSS AGAINST GROSS. This used to be valueOf(prev) — the roster-matched figure — while the
+      // anchor it is divided into is anchorGross. July's roster figure is $83,732 against $97,024
+      // collected, so the delta was not merely overstated: it printed +12.8% where like-for-like
+      // is −2.7%. A percentage built from two bases is wrong at every value, and with the View
+      // control gone there is nothing left to make it obviously wrong.
+      //
+      // THE FALLBACK MATCHES THE ANCHOR'S. anchorValue is `anchorGross ?? valueOf(anchorPoint)`,
+      // so before fin_revenue lands both sides are roster and the ratio is still like-for-like.
+      basis: prev ? (grossFor(prev) ?? valueOf(prev)) : null,
       note: prev ? "" : `nothing before this on record`,
     };
-  }, [series, period]);
+  // eslint-disable-next-line react-hooks/exhaustive-deps
+  }, [series, period, grossRows]);
 
   const comparedValue = period.isCurrent ? pace : anchorValue;
   const delta =
