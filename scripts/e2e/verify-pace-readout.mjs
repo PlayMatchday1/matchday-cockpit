@@ -242,6 +242,128 @@ console.log("\n── it reads the same series the chart draws ──");
 }
 
 // ── 8. TOUCH ──────────────────────────────────────────────────────────────────────────────────
+// ── THE CAPTION AND THE VIEW LABEL ARE GONE ───────────────────────────────────────────────────
+// SCANNED IN ALL THREE VIEW POSITIONS. The stray label WAS the active view's name, so a scan in
+// one position proves nothing about the other two.
+console.log("\n── removed text ──");
+{
+  const KINDS = [["total", "DPP + Membership"], ["dpp", "DPP only"], ["member", "Membership only"]];
+  const scan = (needle) => page.evaluate((needle) => {
+    const out = { anywhere: 0, outsideControls: 0 };
+    const walk = (n) => {
+      for (const c of n.childNodes) {
+        if (c.nodeType === 3) {
+          if (c.textContent.toLowerCase().includes(needle.toLowerCase())) {
+            out.anywhere++;
+            // A CONTROL MAY NAME THE ACTIVE VIEW — that is what the select and the segmented
+            // buttons are for. What was removed was STATIC text saying it a second time, so the
+            // rule is "controls yes, prose no" rather than "this one select yes".
+            if (!c.parentElement.closest("select, option, button, [role='group']")) out.outsideControls++;
+          }
+        } else if (c.nodeType === 1 && !/^(script|style)$/i.test(c.tagName)) walk(c);
+      }
+    };
+    walk(document.body);
+    return out;
+  }, needle);
+
+  for (const [val, label] of KINDS) {
+    await page.selectOption('[data-testid="pace-kind"]', val);
+    await page.waitForTimeout(600);
+    // POSITIVE CONTROL ON THE SCAN ITSELF: the needle IS on the page, inside the control. Without
+    // this, a scan that silently found nothing would read exactly like a caption that was removed.
+    const active = await scan(label);
+    eq(`  control — "${label}" is found inside the View control`, active.anywhere > 0, true);
+    eq(`"${label}" appears in no static text — only in controls`, active.outsideControls, 0);
+    // AND SPECIFICALLY NOT IN THE LEGEND, which is where the removed label sat.
+    const inLegend = await page.evaluate((needle) => {
+      const row = document.querySelector('[data-testid="pace-card"] [class*="legend"]');
+      return row ? row.innerText.toLowerCase().includes(needle.toLowerCase()) : null;
+    }, label);
+    eq(`  …and not in the chart legend`, inLegend, false);
+    const cap = await scan("equal ground");
+    eq(`  the "equal ground" caption is absent in this view`, cap.anywhere, 0);
+    const drawn = await scan("Drawn to day");
+    eq(`  the "Drawn to day" caption is absent in this view`, drawn.anywhere, 0);
+  }
+  await page.selectOption('[data-testid="pace-kind"]', "total");
+  await page.waitForTimeout(600);
+
+  // BOTH LEGEND KEYS SURVIVE — the caption lived in the same row, so removing it could have taken
+  // them with it.
+  const legend = await page.evaluate(() => {
+    const dots = document.querySelectorAll('[data-testid="pace-card"] [class*="legend"] [class*="dot"]');
+    const row = document.querySelector('[data-testid="pace-card"] [class*="legend"]');
+    return { keys: dots.length, text: row?.innerText.replace(/\n/g, " | ") ?? "" };
+  });
+  eq("both legend keys survive", legend.keys, 2);
+  console.log(`     legend: ${legend.text}`);
+}
+
+// ── THE COMPARISON RUNS ITS WHOLE MONTH, THE CURRENT ONE STOPS ────────────────────────────────
+console.log("\n── two lines of different lengths ──");
+{
+  const S = await page.evaluate(() => {
+    const svg = document.querySelector('[data-testid="pace-chart"]');
+    const cur = JSON.parse(svg.getAttribute("data-current"));
+    const cmp = JSON.parse(svg.getAttribute("data-compare"));
+    // The axis labels are the gridline values; the first is the top of the scale.
+    const axis = [...svg.querySelectorAll("text")].map((t) => Number(t.textContent.replace(/[^0-9.]/g, "")))
+      .filter((n) => Number.isFinite(n));
+    return { cur: cur.length, cmp: cmp.length, cmpMax: Math.max(...cmp),
+             cmpMaxDay: cmp.indexOf(Math.max(...cmp)) + 1, axisTop: Math.max(...axis),
+             cmpTailMax: Math.max(...cmp.slice(cur.length)) };
+  });
+  eq("  control — both series carry points", [S.cur > 0, S.cmp > 0], [true, true]);
+  eq("the comparison runs the full month", S.cmp, new Date(2026, 7, 0).getDate());
+  eq("the current month stops at its last recorded day", S.cur < S.cmp, true);
+  eq("  …so the two counts differ", S.cur === S.cmp, false);
+  console.log(`     current ${S.cur} days · comparison ${S.cmp} days`);
+
+  // THE AXIS MUST COVER THE COMPARISON'S PEAK WHEREVER IT FALLS, including after the current
+  // month's last day — that stretch is newly drawn and was never on the scale before.
+  eq("the y-axis covers the comparison's maximum", S.axisTop >= S.cmpMax, true);
+  eq("  control — the axis top is a real number above zero", S.axisTop > 0, true);
+  console.log(`     axis top ${S.axisTop} · comparison peak ${S.cmpMax} on day ${S.cmpMaxDay} · peak after day ${S.cur} is ${S.cmpTailMax}`);
+}
+
+// ── THE READOUT PAST THE CURRENT MONTH'S DATA ─────────────────────────────────────────────────
+console.log("\n── days the current month has not reached ──");
+{
+  const at = async (d) => {
+    const box = await page.evaluate((d) => {
+      const svg = document.querySelector('[data-testid="pace-chart"]');
+      const r = svg.getBoundingClientRect();
+      const W = 980, ML = 68, MR = 24, plotW = W - ML - MR;
+      const n = Math.max(JSON.parse(svg.getAttribute("data-compare")).length,
+                         JSON.parse(svg.getAttribute("data-current")).length);
+      return { x: r.left + ((ML + ((d - 1) * plotW) / (n - 1)) * r.width) / W, y: r.top + r.height / 2 };
+    }, d);
+    await page.mouse.move(box.x, box.y);
+    await page.waitForTimeout(250);
+    return page.evaluate(() => {
+      const t = document.querySelector('[data-testid="pace-readout"]');
+      if (!t) return null;
+      return { day: Number(t.getAttribute("data-day")),
+               cur: t.querySelector('[data-testid="pace-readout-current"]')?.textContent ?? null,
+               cmp: t.querySelector('[data-testid="pace-readout-compare"]')?.textContent ?? null,
+               hasDiff: !!t.querySelector('[data-testid="pace-readout-diff"]') };
+      });
+  };
+  // POSITIVE CONTROL: a day the current month HAS reached shows a figure and a difference row, so
+  // the dashes below are the rule working rather than a readout that never populated.
+  const early = await at(10);
+  eq("  control — day 10 shows a figure for both series and a difference", 
+     [early?.cur !== "—", early?.cmp !== "—", early?.hasDiff], [true, true, true]);
+  for (const d of [25, 31]) {
+    const r = await at(d);
+    eq(`day ${d}: the current month reads "—"`, r?.cur, "—");
+    eq(`  …the comparison reads a real figure`, r?.cmp !== "—" && r?.cmp != null, true);
+    eq(`  …and there is no difference row`, r?.hasDiff, false);
+    console.log(`     day ${d}: current ${r?.cur} · comparison ${r?.cmp}`);
+  }
+}
+
 console.log("\n── tap to pin, at 390px ──");
 {
   await closeContext(ctx);

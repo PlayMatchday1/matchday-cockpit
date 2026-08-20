@@ -150,12 +150,15 @@ export default function DailyRevenuePace() {
   }, [rows, year, m0, city, field, kind]);
 
   const comp = comparisons?.[compare] ?? null;
-  const compData = comp && comp.has ? comp.data.slice(0, Math.max(lastDay, 1)) : [];
+  // DRAWN IN FULL, not cut to the current month's last recorded day. Two lines of different
+  // lengths is the point: the short one is what has happened, the long one is what it is being
+  // measured against for the rest of the month. Cutting the comparison to match hid the target.
+  const compData = comp && comp.has ? comp.data : [];
 
   // ── the plot ────────────────────────────────────────────────────────────────────────────────
   const W = 980, H = 260, ML = 68, MR = 24, MT = 18, MB = 34;
   const plotW = W - ML - MR, plotH = H - MT - MB;
-  const nDays = current.length || 31;
+  const nDays = Math.max(current.length || 31, compData.length);
   const peak = Math.max(1, ...current, ...compData);
   // A rounded ceiling, so the axis reads in round money rather than the exact maximum.
   const step = Math.pow(10, Math.max(0, String(Math.round(peak)).length - 2));
@@ -221,7 +224,6 @@ export default function DailyRevenuePace() {
   }, [hoverDay, current, lastDay, comp, m0, anchor]);
 
   const scope = field !== "All fields" ? field : city !== "All cities" ? city : "All Matchday";
-  const kindLab = kind === "dpp" ? "DPP only" : kind === "member" ? "Membership only" : "DPP + Membership";
 
   return (
     <div className={s.card} data-testid="pace-card">
@@ -376,14 +378,6 @@ export default function DailyRevenuePace() {
           : <span data-testid="pace-cmp-empty">
               No revenue on record for {comp?.label ?? "the comparison period"} — that comparison is unavailable, not zero.
             </span>}
-        {lastDay > 0 && lastDay < nDays && (
-          // Says why the lines stop, rather than letting a short line read as a fall in revenue.
-          <span data-testid="pace-partial">
-            Drawn to day {lastDay} — {anchor} has no revenue recorded after it, and the comparison is
-            cut to the same day so the two are read against equal ground.
-          </span>
-        )}
-        <span>{kindLab}</span>
       </div>
     </div>
   );

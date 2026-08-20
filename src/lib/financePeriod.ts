@@ -293,7 +293,11 @@ export function matchRange(start: Date, end: Date): { fromDate: string; toDate: 
  */
 export type MonthEndPace =
   | { ok: false; reason: "not-enough-days"; remaining: number }
-  | { ok: true; rate: number; rateDays: number; remaining: number; projection: number; todayExcluded: boolean };
+  | { ok: true; rate: number; rateDays: number; remaining: number; projection: number;
+      todayExcluded: boolean;
+      // THE MONEY THE RATE WAS AVERAGED OVER. Returned rather than recomputed by the caller, so a
+      // card that prints "X over N days" cannot pair a total with a divisor that never saw it.
+      windowRevenue: number };
 
 export function projectMonthEnd(input: {
   soFar: number;
@@ -318,8 +322,10 @@ export function projectMonthEnd(input: {
   // No days left in the window: there is no rate. A projection off zero days is not a rougher
   // estimate, it is not an estimate — the card shows a dash.
   if (rateDays < 1) return { ok: false, reason: "not-enough-days", remaining };
-  const rate = (soFar - excludedRevenue - (todayExcluded ? currentDayRevenue : 0)) / rateDays;
+  const windowRevenue = soFar - excludedRevenue - (todayExcluded ? currentDayRevenue : 0);
+  const rate = windowRevenue / rateDays;
   // remaining === 0 makes this exactly soFar, which is what the last day of a month and a closed
   // month must both produce — to the cent, not to the nearest rounding.
-  return { ok: true, rate, rateDays, remaining, projection: soFar + remaining * rate, todayExcluded };
+  return { ok: true, rate, rateDays, remaining, projection: soFar + remaining * rate, todayExcluded,
+           windowRevenue };
 }

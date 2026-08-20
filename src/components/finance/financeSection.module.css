@@ -240,6 +240,17 @@
 .infoTbl { width: 100%; border-collapse: collapse; font-size: 12px; font-variant-numeric: tabular-nums; }
 .infoTbl td { padding: 3px 0; text-align: right; color: var(--deep-green, #12352b); font-weight: 700; }
 .infoTbl td.l { text-align: left; font-weight: 600; color: color-mix(in srgb, var(--deep-green, #12352b) 70%, transparent); }
+/* The third column carries a qualifier — "excluded", "18 days" — not a figure, so it is quiet and
+   left-aligned against the number it annotates. Fixed-ish width so the money column cannot shift
+   between rows that have one and rows that do not. */
+.infoNote {
+  text-align: left !important; font-weight: 600 !important; font-size: 11px;
+  padding-left: 10px !important; white-space: nowrap;
+  color: color-mix(in srgb, var(--deep-green, #12352b) 52%, transparent) !important;
+}
+/* The rule above the derived rows. A bordered empty row rather than a border on the next row's
+   cells, so it spans the full panel width regardless of which optional rows rendered. */
+.infoRule td { padding: 0 !important; height: 1px; border-top: 1px solid var(--cream-line, #e6e2d8); }
 
 /* DAILY REVENUE PACE — hover readout. The wrapper is the positioning context AND the bound the
    readout is kept inside; the tooltip is HTML rather than SVG text so it can wrap, use the

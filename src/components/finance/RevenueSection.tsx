@@ -368,7 +368,10 @@ export default function RevenueSection() {
   const RATE_EXCLUDED_DAYS = 1;
 
   const paceModel = useMemo(() => {
-    if (!period.isCurrent || period.grain !== "month") return null;
+    // MONTH GRAIN, CURRENT OR CLOSED. It used to be current-only because only the pace card read
+    // it; AVG DAILY REVENUE now reads the same object, and a closed month still has a day 1 to
+    // leave out. isCurrentMonth is what decides whether there is a "today" at all.
+    if (period.grain !== "month") return null;
     const anchorMonth = period.months[period.months.length - 1] ?? "";
     // Revenue on the excluded days, from the same gross rows every other figure on this card uses.
     const dayOf = (d: string) => Number(d.slice(8, 10));
@@ -384,7 +387,7 @@ export default function RevenueSection() {
     const r = projectMonthEnd({
       soFar: anchorValue, excludedRevenue: excluded, currentDayRevenue,
       daysElapsed, daysInMonth, excludedDays: RATE_EXCLUDED_DAYS,
-      isCurrentMonth: true,
+      isCurrentMonth: period.isCurrent,
     });
     return r.ok ? { ...r, excluded, currentDayRevenue } : r;
   // eslint-disable-next-line react-hooks/exhaustive-deps
@@ -537,9 +540,21 @@ export default function RevenueSection() {
         <Tile
           testid="tile-avgdaily"
           label="Avg daily revenue"
-          value={fmtMoney(avgDaily)}
+          // THE PACE RATE, NOT THE PLAIN MEAN. Two daily rates on adjacent cards is how the wrong
+          // one gets quoted; this reads paceModel.rate, the same field the pace card projects from.
+          value={paceModel?.ok ? fmtMoney(paceModel.rate) : fmtMoney(avgDaily)}
           partial={period.isCurrent}
-          sub={`${fmtMoney(anchorValue)} over ${daysElapsed} ${daysElapsed === 1 ? "day" : "days"}`}
+          // THE SUBTITLE RECONCILES ON ITS FACE: the amount is the money the rate averaged, and the
+          // day count is the divisor it was averaged over — both out of the same call, so the
+          // division a reader does by hand is the division the code did.
+          sub={paceModel?.ok
+            ? `${fmtMoney(paceModel.windowRevenue)} over ${paceModel.rateDays} ${paceModel.rateDays === 1 ? "day" : "days"}`
+              + ` · ${RATE_EXCLUDED_DAYS === 1 ? "day 1" : `days 1–${RATE_EXCLUDED_DAYS}`}`
+              + (paceModel.todayExcluded ? " and today" : "") + " excluded"
+            : `${fmtMoney(anchorValue)} over ${daysElapsed} ${daysElapsed === 1 ? "day" : "days"}`}
+          // BOTH CARDS CARRY THE SAME ATTRIBUTE FROM THE SAME OBJECT, so a test can prove shared
+          // provenance rather than watching two independent numbers happen to agree.
+          rate={paceModel?.ok ? paceModel.rate : null}
         />
         <Tile
           label="Top revenue city"
@@ -550,30 +565,88 @@ export default function RevenueSection() {
         <Tile
           label="Pace to month end"
           testid="tile-pace"
+          // CLOSED MONTHS KEY OFF THE PERIOD, NOT OFF paceModel. paceModel now exists for closed
+          // months too (AVG DAILY reads its rate), so testing it for null here would have started
+          // printing "PROJECTED — … + 0 days ×" over a month that has already ended.
           value={
-            paceModel
-              ? (paceModel.ok ? fmtMoney(paceModel.projection) : "—")
-              : period.isCurrent ? fmtMoney(pace) : fmtMoney(anchorValue)
+            !period.isCurrent ? fmtMoney(anchorValue)
+              : paceModel ? (paceModel.ok ? fmtMoney(paceModel.projection) : "—")
+              : fmtMoney(pace)
           }
           partial={period.isCurrent}
+          rate={paceModel?.ok ? paceModel.rate : null}
           sub={
-            paceModel
-              ? (paceModel.ok
-                  // THE SUBTITLE STATES THE ARITHMETIC IT USED, and nothing else — no explanation
-                  // of why the days are out. It is also what reconciles this card with Avg daily
-                  // revenue, which is the true mean and disagrees with it on purpose.
-                  ? `PROJECTED — ${fmtMoney(anchorValue)} so far + ${paceModel.remaining} ${paceModel.remaining === 1 ? "day" : "days"} × ${fmtMoney(paceModel.rate)}`
-                    // THE EXCLUSION CLAUSE ONLY EXISTS WHILE THERE IS SOMETHING TO EXCLUDE. A
-                    // closed month has no current day, and this branch only runs for the month in
-                    // progress — the closed case falls through to "Period closed" below.
-                    + ` · ${RATE_EXCLUDED_DAYS === 1 ? "day 1" : `days 1–${RATE_EXCLUDED_DAYS}`}`
-                    + (paceModel.todayExcluded ? " and today" : "") + " excluded"
-                    + (paceModel.rateDays === 1 ? " · rate from one day" : "")
-                  : "Not enough elapsed days to project from.")
-              : period.isCurrent
-                ? `PROJECTED — ${fmtMoney(avgDaily)}/day × ${daysInMonth} days. The only grossed-up number here.`
-                : "Period closed — this is the actual, not a projection."
+            !period.isCurrent ? "Period closed — this is the actual, not a projection."
+              : paceModel
+                ? (paceModel.ok
+                    // THE SUBTITLE STATES THE ARITHMETIC IT USED, and nothing else — no explanation
+                    // of why the days are out. That is what the ⓘ is for.
+                    ? `PROJECTED — ${fmtMoney(anchorValue)} so far + ${paceModel.remaining} ${paceModel.remaining === 1 ? "day" : "days"} × ${fmtMoney(paceModel.rate)}`
+                      + ` · ${RATE_EXCLUDED_DAYS === 1 ? "day 1" : `days 1–${RATE_EXCLUDED_DAYS}`}`
+                      + (paceModel.todayExcluded ? " and today" : "") + " excluded"
+                      + (paceModel.rateDays === 1 ? " · rate from one day" : "")
+                    : "Not enough elapsed days to project from.")
+                : `PROJECTED — ${fmtMoney(avgDaily)}/day × ${daysInMonth} days`
           }
+          // ANCHORED TO THE CARD, NOT THE BUTTON. Hung off the ⓘ it opens directly over the figure
+          // it exists to explain.
+          info={paceModel?.ok && period.isCurrent
+            ? (cardRef) => (
+                <InfoPopover
+                  testid="pace-info"
+                  panelTestid="pace-info-panel"
+                  ariaLabel="How pace to month end is calculated"
+                  title="How this is calculated"
+                  width={300}
+                  anchorRef={cardRef}
+                >
+                  <tbody>
+                    <tr data-testid="pace-info-row" data-row="collected">
+                      <td className="l">Collected, days 1–{daysElapsed}</td>
+                      <td data-testid="pace-info-collected">{fmtMoney(anchorValue)}</td>
+                      {/* NO "excluded" HERE. Day 1's money is inside this total; marking the row
+                          would read as $17k lost rather than $17k left out of one divisor. */}
+                      <td />
+                    </tr>
+                    <tr data-testid="pace-info-row" data-row="day1">
+                      <td className="l">Day 1</td>
+                      <td data-testid="pace-info-day1">{fmtMoney(paceModel.excluded)}</td>
+                      <td className={s.infoNote}>excluded</td>
+                    </tr>
+                    {paceModel.todayExcluded && (
+                      <tr data-testid="pace-info-row" data-row="today">
+                        <td className="l">{(period.months[period.months.length - 1] ?? "").split(" ")[0]} {daysElapsed} · today</td>
+                        <td data-testid="pace-info-today">{fmtMoney(paceModel.currentDayRevenue)}</td>
+                        <td className={s.infoNote}>excluded</td>
+                      </tr>
+                    )}
+                    <tr className={s.infoRule}><td colSpan={3} /></tr>
+                    <tr data-testid="pace-info-row" data-row="rate">
+                      <td className="l">Daily rate</td>
+                      <td data-testid="pace-info-rate">{fmtMoney(paceModel.rate)}</td>
+                      <td className={s.infoNote}>{paceModel.rateDays} days</td>
+                    </tr>
+                    <tr data-testid="pace-info-row" data-row="forward">
+                      <td className="l">{paceModel.remaining} {paceModel.remaining === 1 ? "day" : "days"} remaining</td>
+                      {/* THE PANEL TIES TO THE HEADLINE, and that decides which of two identities
+                          survives rounding. Printing the exact forward would leave
+                          collected + forward one dollar off projected whenever the two fractions
+                          cross a dollar; deriving it as projected − collected makes that identity
+                          hold by construction and moves the drift onto "forward = remaining ×
+                          rate", where it is bounded by one dollar per remaining day — the rate
+                          itself is only printed to the dollar. */}
+                      <td data-testid="pace-info-forward">{fmtMoney(Math.round(paceModel.projection) - Math.round(anchorValue))}</td>
+                      <td />
+                    </tr>
+                    <tr data-testid="pace-info-row" data-row="projected">
+                      <td className="l">Projected</td>
+                      <td data-testid="pace-info-projected">{fmtMoney(paceModel.projection)}</td>
+                      <td />
+                    </tr>
+                  </tbody>
+                </InfoPopover>
+              )
+            : undefined}
         />
       </div>
 
@@ -742,12 +815,20 @@ export default function RevenueSection() {
   );
 }
 
-function Tile({ label, value, sub, partial, testid }: {
+function Tile({ label, value, sub, partial, testid, rate, info }: {
   label: string; value: string; sub: string; partial?: boolean; testid?: string;
+  // THE RATE THE CARD WAS BUILT FROM, verbatim. Two cards printing it prove they share a
+  // derivation; two cards printing the same rounded money only prove they agree this month.
+  rate?: number | null;
+  // The popover is handed the CARD's ref, not the button's, so it can anchor to the card edge
+  // without the Tile having to know what a popover is.
+  info?: (cardRef: React.RefObject<HTMLDivElement | null>) => React.ReactNode;
 }) {
+  const cardRef = useRef<HTMLDivElement | null>(null);
   return (
-    <div className={s.tile} data-testid={testid}>
-      <span className={s.tileLab}>{label}</span>
+    <div className={s.tile} data-testid={testid} ref={cardRef}
+         data-rate={rate == null ? undefined : String(rate)}>
+      <span className={s.tileLab}>{label}{info?.(cardRef)}</span>
       <span className={s.tileVal} data-testid="revenue-tile-value">
         {value}
         {partial && <i className={s.soFar} data-testid="revenue-tile-partial">so far</i>}
@@ -778,7 +859,15 @@ function BillingMark({ basis, unknown }: { basis: FieldMonth["basis"]; unknown: 
  * popover is open or shut; the panel itself is out of flow entirely, so no column can be widened
  * and no header row made taller by opening it.
  */
-function NotMatchedInfo({ rows }: { rows: { key: string; month: string; gap: number; pct: number }[] }) {
+function InfoPopover({ testid, panelTestid, ariaLabel, title, children, width = 260, anchorRef }: {
+  testid: string; panelTestid: string; ariaLabel: string; title: string;
+  children: React.ReactNode; width?: number;
+  // ANCHOR. Absent, the panel hangs off the trigger and its LEFT edges line up — what a column
+  // header wants. Given an element, it hangs off THAT element's bottom with the RIGHT edges
+  // flush, which is what a card wants: off the button it would land on top of the figure it is
+  // explaining.
+  anchorRef?: React.RefObject<HTMLElement | null>;
+}) {
   const [open, setOpen] = useState(false);
   const [pos, setPos] = useState<{ top: number; left: number } | null>(null);
   // WHO OWNS THE OPEN STATE. On a pointer device the mouse arrives before the click, so hover
@@ -790,16 +879,16 @@ function NotMatchedInfo({ rows }: { rows: { key: string; month: string; gap: num
   const panelRef = useRef<HTMLDivElement | null>(null);
 
   const place = useCallback(() => {
-    const b = btnRef.current;
-    if (!b) return;
-    const r = b.getBoundingClientRect();
-    const W = 260, MARGIN = 8;
-    // FLIP LEFT rather than run off the right edge.
-    let left = r.left;
+    const anchor = anchorRef?.current ?? btnRef.current;
+    if (!anchor) return;
+    const r = anchor.getBoundingClientRect();
+    const W = width, MARGIN = 8;
+    // FLIP LEFT rather than run off the right edge. Card-anchored starts flush right already.
+    let left = anchorRef ? r.right - W : r.left;
     if (left + W + MARGIN > window.innerWidth) left = r.right - W;
     left = Math.max(MARGIN, Math.min(left, window.innerWidth - W - MARGIN));
     setPos({ top: r.bottom + 6, left });
-  }, []);
+  }, [anchorRef, width]);
 
   useEffect(() => {
     if (!open) return;
@@ -837,8 +926,8 @@ function NotMatchedInfo({ rows }: { rows: { key: string; month: string; gap: num
       <button
         ref={btnRef}
         type="button"
-        data-testid="notmatched-info"
-        aria-label="Revenue not matched to a venue, by month"
+        data-testid={testid}
+        aria-label={ariaLabel}
         aria-expanded={open}
         className={s.infoBtn}
         // STOP PROPAGATION. These headers carry no sort handler today; if one is ever added, the
@@ -859,28 +948,40 @@ function NotMatchedInfo({ rows }: { rows: { key: string; month: string; gap: num
         <div
           ref={panelRef}
           role="dialog"
-          aria-label="Revenue not matched to a venue"
-          data-testid="notmatched-panel"
+          aria-label={ariaLabel}
+          data-testid={panelTestid}
           className={s.infoPanel}
-          style={{ top: pos.top, left: pos.left }}
+          style={{ top: pos.top, left: pos.left, width }}
           onMouseLeave={() => { if (hoverOwned.current) setOpen(false); }}
         >
-          <div className={s.infoHead}>Not matched to a venue</div>
-          <table className={s.infoTbl}>
-            <tbody>
-              {rows.map((r) => (
-                <tr key={r.key} data-testid="notmatched-row" data-month={r.key}>
-                  <td className="l">{r.month}</td>
-                  <td data-testid="notmatched-amount">{fmtMoney(r.gap)}</td>
-                  <td data-testid="notmatched-pct">{r.pct.toFixed(1)}%</td>
-                </tr>
-              ))}
-            </tbody>
-          </table>
+          <div className={s.infoHead}>{title}</div>
+          <table className={s.infoTbl}>{children}</table>
         </div>,
         document.body,
       )}
     </>
+  );
+}
+
+/** The original caller, now a body passed to the shared popover. */
+function NotMatchedInfo({ rows }: { rows: { key: string; month: string; gap: number; pct: number }[] }) {
+  return (
+    <InfoPopover
+      testid="notmatched-info"
+      panelTestid="notmatched-panel"
+      ariaLabel="Revenue not matched to a venue, by month"
+      title="Not matched to a venue"
+    >
+      <tbody>
+        {rows.map((r) => (
+          <tr key={r.key} data-testid="notmatched-row" data-month={r.key}>
+            <td className="l">{r.month}</td>
+            <td data-testid="notmatched-amount">{fmtMoney(r.gap)}</td>
+            <td data-testid="notmatched-pct">{r.pct.toFixed(1)}%</td>
+          </tr>
+        ))}
+      </tbody>
+    </InfoPopover>
   );
 }
 
