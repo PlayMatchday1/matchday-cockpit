@@ -1352,7 +1352,7 @@ function fieldCostsActualFor(
 // Per-venue realized-through-today cost. Same arithmetic as
 // fieldCostsActualFor but scoped to one venue id so per-leg + per-venue
 // rendering (Slate Review's embedded Field Ranking via the realized
-// costScope on buildRankingRows) reconciles to the aggregate by
+// the realized cost scope) reconciles to the aggregate by
 // construction:
 //
 //   sum over venues of venueRealizedCostFor(venue.id, m, now)
@@ -1622,7 +1622,7 @@ export function venueMatchCountFor(
 // the Slate Review embed: realized cost = realized charged count ×
 // rate. Past month → full count (assumes the month is closed).
 // Future month → 0. Current month → only schedule rows with
-// match_date <= today. Used only when buildRankingRows runs in
+// match_date <= today. Used only by the realized cost scope in
 // "realized" scope; standalone Field Ranking keeps the full-month
 // venueMatchCountFor.
 export function venueRealizedMatchCountFor(
@@ -1640,7 +1640,7 @@ export function venueRealizedMatchCountFor(
   // THE REALIZED LENS DOES NOT HONOUR bills_per_reservation, DELIBERATELY.
   //
   // This half and venueRealizedChargedCancelCountFor are SUMMED by their callers
-  // (buildRankingRows :2339-2344, groupPerMatchCostRealizedFor). Collapsing each half separately
+  // (groupPerMatchCostRealizedFor → cityPnl.ts:159 → Cities P&L). Collapsing each half separately
   // would still double-count a slot holding one alive and one cancelled match — two collapsed
   // halves are not a collapsed whole. Making it correct means routing the realized cost through a
   // single chargedUnitCount call with this date predicate, which changes the Slate Review realized
@@ -1728,8 +1728,7 @@ export function venueChargedMatchCountFor(
 // Per-leg per-match unit cost for the Per-Match normalized view. Single
 // source of truth for the three sites that used to inline this formula
 // (groupPerMatchCostFor, groupPerMatchCostRealizedFor, and
-// buildRankingRows' costPerMatchLegs subtitle) so the cost number and its
-// subtitle can't drift apart.
+// and groupPerMatchCostRealizedFor) so the two cannot drift apart.
 //
 // Resolution order:
 //   1. The leg's own operator-set cost_per_match wins.
@@ -1762,8 +1761,7 @@ function legPerMatchUnitCost(leg: FinVenue, primary: FinVenue): number {
 // cost stays stable month-over-month across the period in which the
 // bill actually lands.
 //
-// Shared by Field Ranking's Per-Match toggle (buildRankingRows.perMatchCost)
-// and CityPLCard's Per-Match mode so the two pages agree by construction.
+// Consumed by Cities P&L (cityPnl.ts:159), in both the projected and realized scopes.
 export function groupPerMatchCostFor(
   data: FinanceData,
   group: VenueGroup,
@@ -2222,233 +2220,6 @@ export function buildMdapiMemberSpotIndex(
 }
 
 // Field → venue resolution moved to venueNormalization.buildFieldToVenueIdMap.
-
-export type RankingRow = {
-  venue: string;
-  city: string;
-  launchDate: string | null;
-  launchedMs: number;
-  // Drop-in / per-player revenue — sum of match-registration
-  // DAILY-PAID matchPricePaid (excludes staff + match-canceled) plus
-  // fin_revenue Private Rental gross. NOT the fees-deducted fin_revenue
-  // DPP net. The Field Ranking table labels this column "DPP Revenue".
-  revenue: number;
-  // memberRev + revenue — the venue's total revenue per the partner
-  // formula. Surfaced as the leading money column on Field Ranking
-  // and the default sort key.
-  totalRevenue: number;
-  memberRev: number;
-  cityMbrPct: number;
-  mbrMixPct: number;
-  dppMixPct: number;
-  cost: number;
-  // Alive matches in the month (matches that actually ran). Drives the
-  // Matches column's leading number. Sort key for the column too.
-  matchCount: number;
-  // Cancelled matches the venue charges for. Renders as a "+N cxl"
-  // badge next to matchCount on the Matches column. Zero when the
-  // venue's charge_on_cancel is false or no matches were cancelled
-  // in the period — the badge is suppressed in either case.
-  chargedCancelCount: number;
-  billingType: FinanceData["venues"][number]["billing_type"] | null;
-  perMatchRate: number | null;
-  monthlyFlat: number | null;
-  // Per-leg matches × rate for combined split-rate groups (registered
-  // in venueGroups.COMBINE_BY_NAME — today: ATH Katy weekday $140 +
-  // Sunday $160). Populated only when the group has > 1 per_match leg
-  // so the table subtitle can render "12 × $140 + 5 × $160" instead
-  // of collapsing both legs into a single rate. Empty array on
-  // non-split rows. Legs come pre-sorted ASC by rate from groupVenues.
-  // Used by the As-Billed mode subtitle on Field Ranking.
-  perMatchLegs: Array<{ matchCount: number; rate: number }>;
-  // Per-leg matches × per-match unit cost for EVERY group (one entry per
-  // leg including single-leg venues). Drives the Per-Match mode subtitle
-  // on both Field Ranking and the Cities page so the uniform "N × $cpm"
-  // rendering matches across surfaces. cpm comes from legPerMatchUnitCost
-  // (same helper as groupPerMatchCostFor), so subtitle and cost agree by
-  // construction — including the split-rate case where a null secondary
-  // leg reflects its own per_match_rate.
-  // Filter to matchCount > 0 at render time to suppress zero-match legs.
-  costPerMatchLegs: Array<{ matchCount: number; cpm: number }>;
-  netPL: number;
-  margin: number;
-  // Alternative "per-match normalized" cost view. cost above is the
-  // as-billed amount (monthly_flat / profit_share lumps, per_match
-  // count × rate); these three fields restate it as
-  //   Σ (leg.cost_per_match × leg matches in month)
-  // so a venue's per-match cost stays steady month-over-month even when
-  // its billing lump lands in only one of three months. fin_venues
-  // .cost_per_match is the operator-set per-match unit cost (the same
-  // value rendered in the Cost/Match column on the Field Costs config
-  // table and consumed by matchPnL.ts). When a split-rate secondary leg's
-  // cost_per_match is null we fall back to that leg's own per_match_rate
-  // (see legPerMatchUnitCost) so a Sunday/tournament premium isn't rebilled
-  // at the primary's rate. Null on a single/primary leg → $0 ("blank = $0").
-  perMatchCost: number;
-  perMatchNetPL: number;
-  perMatchMargin: number;
-};
-
-export function buildRankingRows(
-  data: FinanceData,
-  matchRegistrations: JoinedMatchPlayerRow[],
-  month: Q2Month,
-  options: { costScope?: "projected" | "realized"; now?: Date } = {},
-): RankingRow[] {
-  const out: RankingRow[] = [];
-  const groups = groupVenues(data.venues);
-  // Cost scope. Default "projected" matches the standalone Field
-  // Ranking page (full-month canonical cost, supports forward-looking
-  // margin math). "realized" feeds the Slate Review embed: cost
-  // reflects only matches with date <= today during the current
-  // month; past months stay at canonical; future months return 0.
-  const scope = options.costScope ?? "projected";
-  const now = options.now ?? new Date();
-
-  for (const g of groups) {
-    const primary = g.legs[0];
-    // PR-E: keying on fin_venues.id. legVenueIds covers all legs in
-    // the group (e.g. ATH Katy weekday + ATH Katy Sunday). Each
-    // helper sums per-leg under the hood; the group iteration here
-    // sums per-leg explicitly for cost + match count + spots so
-    // split-rate legs accumulate independently.
-    const legVenueIds = new Set(g.legs.map((l) => l.id));
-    const revenue = venuePartnerRevenueFor(
-      data,
-      matchRegistrations,
-      legVenueIds,
-      month,
-    );
-    let memberRev = 0;
-    let cost = 0;
-    let matchCount = 0;
-    let chargedCancelCount = 0;
-    let memberSpots = 0;
-    let dppSpots = 0;
-    let otherSpots = 0;
-    // Track alive vs charged-cancelled per leg separately. Subtitles
-    // need charged-per-leg (so count × rate = cost arithmetic holds),
-    // while the Matches column shows alive with a "+cxl" badge.
-    const aliveLegCounts: number[] = [];
-    const cxlLegCounts: number[] = [];
-
-    for (const leg of g.legs) {
-      memberRev += venueAllocatedMemberRevenueFor(data, leg.id, month);
-      cost +=
-        scope === "realized"
-          ? venueRealizedCostFor(data, leg.id, month, now)
-          : canonicalVenueCost(data, leg.id, month).amount;
-      // Realized scope filters both alive and cancelled counts to
-      // match_date <= today during the current month so the subtitle's
-      // "N × $rate" reconciles to the realized cost number above.
-      // Past/future months pass through the same branches the realized
-      // helpers already handle (past → full count, future → 0).
-      const alive =
-        scope === "realized"
-          ? venueRealizedMatchCountFor(data, leg.id, month, now)
-          : venueMatchCountFor(data, leg.id, month);
-      const cxl =
-        scope === "realized"
-          ? venueRealizedChargedCancelCountFor(data, leg.id, month, now)
-          : venueChargedCancelCountFor(data, leg.id, month);
-      aliveLegCounts.push(alive);
-      cxlLegCounts.push(cxl);
-      matchCount += alive;
-      chargedCancelCount += cxl;
-      const spots = venueMemberSpotsFor(data, leg.id, month);
-      memberSpots += spots.member;
-      dppSpots += spots.dpp;
-      otherSpots += spots.other;
-    }
-    // Per-leg charged total (alive + charged-cancelled). Used for
-    // subtitle math so "N × $rate" on a per_match row always equals
-    // the cost number, regardless of cancellations.
-    const chargedLegCounts = aliveLegCounts.map(
-      (a, i) => a + cxlLegCounts[i],
-    );
-    // Per-leg subtitle data, only for combined per_match groups.
-    // Single-leg groups fall through to the existing single-rate
-    // subtitle on the table. Non-per_match billing types don't drive
-    // a count × rate formula, so they're skipped here too.
-    const perMatchLegs: Array<{ matchCount: number; rate: number }> =
-      g.isCombined && primary.billing_type === "per_match"
-        ? g.legs.map((leg, idx) => ({
-            // Charged per leg so "Na × $rateA + Nb × $rateB" reconciles
-            // to the as-billed cost (which includes cancelled charges).
-            matchCount: chargedLegCounts[idx],
-            rate: leg.per_match_rate ?? 0,
-          }))
-        : [];
-
-    // Per-leg cost_per_match breakdown for the Per-Match mode subtitle.
-    // Always populated — non-split venues collapse to one entry. Routes
-    // through the same legPerMatchUnitCost helper as groupPerMatchCostFor
-    // so the subtitle numbers reconcile against the swapped cost column
-    // (a null split-rate secondary leg reflects its own per_match_rate,
-    // not the primary's cpm). Charged counts here too — Per-Match cost is
-    // cpm × charged.
-    const costPerMatchLegs = g.legs.map((leg, idx) => ({
-      matchCount: chargedLegCounts[idx],
-      cpm: legPerMatchUnitCost(leg, primary),
-    }));
-
-    // Per-match normalized cost via the shared helper so Field Ranking
-    // and CityPLCard's Per-Match view agree by construction.
-    // Realized scope uses the through-today variant; projected uses the
-    // full-month one.
-    const perMatchCost =
-      scope === "realized"
-        ? groupPerMatchCostRealizedFor(data, g, month, now)
-        : groupPerMatchCostFor(data, g, month);
-
-    if (revenue === 0 && memberRev === 0 && cost === 0) continue;
-
-    const cityTotalMember = cityTotalMemberSpotsFor(data, g.city, month);
-    const totalSpots = memberSpots + dppSpots + otherSpots;
-    const cityMbrPct =
-      cityTotalMember > 0 ? memberSpots / cityTotalMember : 0;
-    const mbrMixPct = totalSpots > 0 ? memberSpots / totalSpots : 0;
-    const dppMixPct = totalSpots > 0 ? dppSpots / totalSpots : 0;
-    const totalRev = revenue + memberRev;
-    const netPL = totalRev - cost;
-    const margin = totalRev > 0 ? netPL / totalRev : 0;
-    const perMatchNetPL = totalRev - perMatchCost;
-    const perMatchMargin = totalRev > 0 ? perMatchNetPL / totalRev : 0;
-
-    let launchedMs = Number.POSITIVE_INFINITY;
-    if (primary.launch_date) {
-      const d = new Date(primary.launch_date);
-      if (!Number.isNaN(d.getTime())) launchedMs = d.getTime();
-    }
-
-    out.push({
-      venue: g.displayName,
-      city: g.city,
-      launchDate: primary.launch_date,
-      launchedMs,
-      revenue,
-      totalRevenue: revenue + memberRev,
-      memberRev,
-      cityMbrPct,
-      mbrMixPct,
-      dppMixPct,
-      cost,
-      matchCount,
-      chargedCancelCount,
-      billingType: primary.billing_type ?? null,
-      perMatchRate: primary.per_match_rate,
-      monthlyFlat: primary.monthly_flat,
-      perMatchLegs,
-      costPerMatchLegs,
-      netPL,
-      margin,
-      perMatchCost,
-      perMatchNetPL,
-      perMatchMargin,
-    });
-  }
-  return out;
-}
 
 export function relativeTimeFromDate(iso: string | null): string {
   if (!iso) return "—";
