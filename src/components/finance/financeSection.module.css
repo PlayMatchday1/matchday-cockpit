@@ -283,3 +283,34 @@
   text-align: right; font-size: 12px; font-weight: 800; font-variant-numeric: tabular-nums;
   color: color-mix(in srgb, var(--deep-green, #12352b) 75%, transparent);
 }
+
+/* ── THE BREAKDOWN CARD ─────────────────────────────────────────────────────────────────────
+   One card for one job: toggle, count, filters and table under a single border. The toggle used
+   to live at the foot of the MATCHDAY REVENUE card — a four-month summary it does not control —
+   with filters in a second card and the table in a third. */
+.brkHead {
+  display: flex; align-items: center; gap: 14px;
+  /* 11px, not 14px: the shared .seg is taller than the mockup's and 14px put this row at 74px,
+     over the 70px the header is allowed. */
+  padding: 11px 16px; flex-wrap: wrap;
+}
+/* The count is the TOGGLE'S OWN FEEDBACK, so it sits against it rather than out on the page. */
+.brkCount {
+  font-size: 11.5px; font-variant-numeric: tabular-nums;
+  color: color-mix(in srgb, var(--deep-green, #12352b) 48%, transparent);
+}
+.brkGrow { flex: 1 1 auto; }
+/* Filters appear only on the views where they can change the answer, so this row is ABSENT on
+   City View rather than disabled — a greyed control still asks to be read. */
+.brkFilters {
+  display: flex; align-items: center; gap: 8px;
+  padding: 0 16px 14px; flex-wrap: wrap;
+}
+.brkClear {
+  border: 0; background: none; font: inherit; font-size: 12.5px; padding: 5px 4px;
+  color: color-mix(in srgb, var(--deep-green, #12352b) 62%, transparent);
+  text-decoration: underline; cursor: pointer;
+}
+.brkClear:hover { color: var(--deep-green, #12352b); }
+/* The 13-select grid moves inside the card and loses its own border with it. */
+.brkGrid { padding: 0 16px 14px; }

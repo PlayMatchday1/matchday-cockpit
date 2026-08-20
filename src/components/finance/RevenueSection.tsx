@@ -74,7 +74,6 @@ export default function RevenueSection() {
 
   const [grain, setGrain] = useState<Grain>("city");
   const [cityFilter, setCityFilter] = useState<string>("all");
-  const [fieldFilter, setFieldFilter] = useState<string>("all");
 
   const cities = useMemo(
     () => CITY_DISPLAY_ORDER.filter((c) => !isCityHidden(c)).map(canonCity),
@@ -96,9 +95,9 @@ export default function RevenueSection() {
   const shownFields = useMemo(
     () => fieldRows.filter(
       (r) => (cityFilter === "all" || r.city === canonCity(cityFilter)) &&
-             (fieldFilter === "all" || r.key === fieldFilter),
+             true,
     ),
-    [fieldRows, cityFilter, fieldFilter],
+    [fieldRows, cityFilter],
   );
   // ── MATCH VIEW FILTERS (the mockup's panel) ─────────────────────────────────────────────────
   //
@@ -116,9 +115,9 @@ export default function RevenueSection() {
   const shownMatchesBase = useMemo(
     () => matchRows.filter(
       (r) => (cityFilter === "all" || r.city === canonCity(cityFilter)) &&
-             (fieldFilter === "all" || r.fieldKey === fieldFilter),
+             true,
     ),
-    [matchRows, cityFilter, fieldFilter],
+    [matchRows, cityFilter],
   );
 
   const HOUR = (d: Date) => `${((d.getHours() + 11) % 12) + 1}${d.getHours() < 12 ? "am" : "pm"}`;
@@ -142,7 +141,10 @@ export default function RevenueSection() {
   // Membership is a city fact, not a pitch fact, so the field filter cannot narrow it. When one
   // is applied the membership series is withheld rather than shown unnarrowed next to a narrowed
   // DPP series — two different scopes on one axis is how a chart starts lying.
-  const membershipScoped = fieldFilter === "all";
+  // ALWAYS SCOPED NOW. This was false only while a FIELD filter narrowed the table to one pitch,
+  // and that control is gone — membership is a city figure and Field View's rows are the fields,
+  // so the filter was redundant. The withheld note went with the state that could raise it.
+  const membershipScoped = true;
   const membershipCities = useMemo(
     () => (cityFilter === "all" ? cities : cities.filter((c) => c === canonCity(cityFilter))),
     [cities, cityFilter],
@@ -320,11 +322,25 @@ export default function RevenueSection() {
   ];
 
   // The count beside the Breakdown segments, in the units of the breakdown being shown.
+  /* ONE COUNT, AND IT IS THE TOGGLE'S. It changes with the view and with the filters, and when a
+   * filter is on it says what it is narrowed FROM — "412 of 1365 matches" — because a bare
+   * filtered figure and a bare unfiltered one are indistinguishable on screen. */
   const breakdownCount = useMemo(() => {
-    if (grain === "match") return `${shownMatches.length} ${shownMatches.length === 1 ? "match" : "matches"}`;
+    const noun = (n: number) =>
+      grain === "city" ? (n === 1 ? "city" : "cities")
+        : grain === "field" ? (n === 1 ? "field" : "fields")
+        : (n === 1 ? "match" : "matches");
+    if (grain === "match") {
+      const n = shownMatches.length, all = shownMatchesBase.length;
+      return n === all ? `${all} ${noun(all)}` : `${n} of ${all} ${noun(all)}`;
+    }
     const n = (grain === "city" ? byCity(shownFields) : byField(shownFields)).size;
-    return `${n} ${grain === "city" ? (n === 1 ? "city" : "cities") : (n === 1 ? "field" : "fields")}`;
-  }, [grain, shownFields, shownMatches]);
+    if (grain === "field" && cityFilter !== "all") {
+      const all = byField(fieldRows).size;
+      return `${n} of ${all} ${noun(all)}`;
+    }
+    return `${n} ${noun(n)}`;
+  }, [grain, shownFields, shownMatches, shownMatchesBase, cityFilter, fieldRows]);
 
   const anchorPoint = series.find((p) => p.key === period.key) ?? { month: period.label, key: period.key, dpp: 0, membership: 0 };
   // THE KPI CARDS READ GROSS TOO — they sat on the same roster-derived figure as the headline.
@@ -408,22 +424,34 @@ export default function RevenueSection() {
   }
   if (!data) return <div className={s.empty}>No finance data for this period.</div>;
 
-  const fieldOptions = [...byField(fieldRows).values()]
-    .map((g) => ({ key: g[0].key, label: g[0].field, city: g[0].city }))
-    .filter((f) => cityFilter === "all" || f.city === canonCity(cityFilter))
-    .sort((a, b) => a.label.localeCompare(b.label));
 
-  const filtersOn = cityFilter !== "all" || fieldFilter !== "all";
-  const clearFilters = () => { setCityFilter("all"); setFieldFilter("all"); };
+  /* SWITCHING VIEW KEEPS WHAT THE NEXT VIEW CAN STILL USE.
+   *   Field → Match  the city carries over onto the grid's own City select, which means the
+   *                  same thing; losing it would silently widen the table you were reading.
+   *   Match → Field  and back again, symmetrically.
+   *   → City         everything drops. City View has no filter, so a selection kept here would
+   *                  be invisible state that reappears the moment you leave. Coming back to
+   *                  Field therefore starts at All. */
+  const changeGrain = (next: Grain) => {
+    if (next === grain) return;
+    if (next === "city") { setCityFilter("all"); setMf({}); }
+    else if (next === "match") {
+      // HANDED OVER, NOT COPIED. Leaving cityFilter set as well would filter the match list twice
+      // — once by the chip that is no longer on screen and once by the grid's own City — and the
+      // count could then never say what it was narrowed FROM, because its unfiltered base was
+      // already narrowed. On Match View the grid IS the filtering.
+      const c = cityFilter;
+      setCityFilter("all");
+      if (c !== "all") setMf((m) => ({ ...m, city: c }));
+    } else if (next === "field") {
+      setCityFilter(mf.city ?? "all");
+      setMf({});   // the grid is not on screen here; leaving it set would be invisible state
+    }
+    setGrain(next);
+  };
 
   const max = Math.max(1, ...series.map((p) => valueOf(p)));
 
-  function exportChart() {
-    downloadCsv(`matchday-revenue-${period.key}.csv`, [
-      ["Period", "DPP revenue", "Membership revenue", "Total"],
-      ...series.map((p) => [p.month, p.dpp.toFixed(2), membershipScoped ? p.membership.toFixed(2) : "", (p.dpp + p.membership).toFixed(2)]),
-    ]);
-  }
 
   function exportTable() {
     if (grain === "match") {
@@ -565,8 +593,8 @@ export default function RevenueSection() {
               Current month and prior three months · oldest to newest
             </div>
           </div>
-          {/* ONE Export, ghost, in the table head — the mockup has one and the page had two. */}
-          <button type="button" className={s.btn} onClick={exportChart}>Export</button>
+          {/* NO EXPORT HERE. The one Export on the page sits on the card whose table it
+              exports, which is the breakdown card — not this four-month summary. */}
         </div>
 
         {/* THE FOUR-COLUMN SUMMARY replaces the stacked bar chart, which is not in the mockup and
@@ -601,26 +629,7 @@ export default function RevenueSection() {
           </table>
         </div>
 
-        {/* BREAKDOWN LIVES IN THE CARD, directly under the table, as the mockup places it — it was
-            floating below in its own row. The count sits beside the segments. */}
-        <div className={s.ctrlRow}>
-          <div className={s.ctrlGroup}>
-            <span className={s.ctrlLab}>Breakdown</span>
-            <div className={s.seg} role="group" aria-label="Breakdown">
-              {(["city", "field", "match"] as const).map((g) => (
-                <button key={g} type="button" data-testid={`breakdown-${g}`}
-                  aria-pressed={grain === g}
-                  className={grain === g ? s.on : ""} onClick={() => setGrain(g)}>
-                  {g === "city" ? "City View" : g === "field" ? "Field View" : "Match View"}
-                </button>
-              ))}
-            </div>
-            <span className={s.ctrlLab} data-testid="breakdown-count">{breakdownCount}</span>
-          </div>
-        </div>
-
         <div className={s.legend}>
-          {!membershipScoped && <span>Membership withheld — it is a city figure and cannot be narrowed to one pitch.</span>}
           {/* A table that quietly drew fewer months than asked would read as "this is all there
               was". It says so instead. */}
           {dropped > 0 && (
@@ -637,82 +646,101 @@ export default function RevenueSection() {
         </div>
       </div>
 
-      {/* THE CHIPS AND THE FIELD DROPDOWN STAY. The mockup replaces them with a Match-View-only
-          filter panel and leaves City and Field views unfilterable — that would be a real
-          regression on a working control, so they are kept and the panel is added alongside. */}
-      <div className={s.ctrlRow}>
-        <div className={s.ctrlGroup}>
-          <span className={s.ctrlLab}>City</span>
-          <div className={s.seg}>
-            <button type="button" className={cityFilter === "all" ? s.on : ""} onClick={() => { setCityFilter("all"); setFieldFilter("all"); }}>All</button>
-            {cities.map((c) => (
-              <button key={c} type="button" className={cityFilter === c ? s.on : ""} onClick={() => { setCityFilter(c); setFieldFilter("all"); }}>{c}</button>
+      {/* ── ONE CARD: TOGGLE, COUNT, FILTERS, TABLE ────────────────────────────────────────
+          Three bordered boxes doing one job became one. The toggle carries its own count and its
+          own Export; the filter row exists only on the views where a filter can change the
+          answer; the table sits under the same border rather than in a card of its own. */}
+      <div className={s.card} data-testid="breakdown-card">
+        <div className={s.brkHead}>
+          {/* "City View" inside a control labelled BREAKDOWN said view twice. */}
+          <div className={s.seg} role="group" aria-label="Breakdown">
+            {(["city", "field", "match"] as const).map((g) => (
+              <button key={g} type="button" data-testid={`breakdown-${g}`}
+                aria-pressed={grain === g}
+                className={grain === g ? s.on : ""} onClick={() => changeGrain(g)}>
+                {g === "city" ? "City" : g === "field" ? "Field" : "Match"}
+              </button>
             ))}
           </div>
+          {/* THE COUNT BELONGS TO THE TOGGLE — one place, and it moves with the view AND the
+              filters. Match View printed it twice, here and inside the select grid. */}
+          <span className={s.brkCount} data-testid="breakdown-count">{breakdownCount}</span>
+          <span className={s.brkGrow} />
+          <button type="button" className={s.btn} data-testid="breakdown-export"
+            onClick={exportTable}>Export</button>
         </div>
-        <div className={s.ctrlGroup}>
-          <span className={s.ctrlLab}>Field</span>
-          <select
-            className={s.btn}
-            value={fieldFilter}
-            onChange={(e) => setFieldFilter(e.target.value)}
-            aria-label="Field"
-          >
-            <option value="all">All fields</option>
-            {fieldOptions.map((f) => <option key={f.key} value={f.key}>{f.label}</option>)}
-          </select>
-        </div>
-        <div className={s.ctrlGroup}>
-          <button type="button" className={s.btn} onClick={clearFilters} disabled={!filtersOn}>Clear filters</button>
-        </div>
+
+        {/* CITY VIEW RENDERS NO FILTER ROW AT ALL. The rows ARE the cities, so a city chip either
+            does nothing or hides six of the seven rows the table was opened to compare. */}
+        {grain === "field" && (
+          <div className={s.brkFilters} data-testid="breakdown-filters">
+            <span className={s.ctrlLab}>City</span>
+            <div className={s.seg}>
+              <button type="button" data-testid="city-chip" data-city="all"
+                className={cityFilter === "all" ? s.on : ""}
+                onClick={() => setCityFilter("all")}>All</button>
+              {cities.map((c) => (
+                <button key={c} type="button" data-testid="city-chip" data-city={c}
+                  className={cityFilter === c ? s.on : ""}
+                  onClick={() => setCityFilter(c)}>{c}</button>
+              ))}
+            </div>
+            {/* Clear appears only when a filter is on, and hides itself again when cleared. */}
+            {cityFilter !== "all" && (
+              <button type="button" className={s.brkClear} data-testid="breakdown-clear"
+                onClick={() => setCityFilter("all")}>Clear</button>
+            )}
+          </div>
+        )}
+
+        {/* MATCH VIEW KEEPS ITS OWN GRID — that grid IS the filtering for this view. The chip bar
+            is dropped here rather than stacked on top of it: its CITY and FIELD duplicated the
+            grid's own City and Location, which is two controls for one thing. */}
+        {grain === "match" && (
+          <div className={s.brkGrid} data-testid="match-filter-panel">
+            <div className={s.filterGrid}>
+              {([
+                ["date", "Date", () => opts((r) => ymd(r.start))],
+                ["month", "Month", () => opts((r) => r.month)],
+                ["week", "Week", () => opts((r) => String(r.week))],
+                ["weekday", "Weekday", () => opts((r) => dayName(r.start))],
+                ["city", "City", () => opts((r) => r.city)],
+                ["location", "Location", () => opts((r) => r.location)],
+                ["hour", "Hour", () => opts((r) => HOUR(r.start))],
+                ["match", "Match", () => opts((r) => String(r.matchApiId))],
+                ["members", "Members Code", () => opts((r) => String(r.memberSpots))],
+                ["free", "Free Code", () => opts((r) => String(r.freeSpots))],
+                ["dpps", "DPP\u2019s", () => opts((r) => String(r.dppSpots))],
+                ["spots", "Total Spots", () => opts((r) => String(r.totalSpots))],
+                ["dpprev", "DPP Revenue", () => opts((r) => String(Math.round(r.dppRevenue)))],
+              ] as [string, string, () => string[]][]).map(([k, lab, get]) => (
+                <label key={k} className={s.filterField}>
+                  <span>{lab}</span>
+                  <select className={s.sel} data-testid={`mf-${k}`} value={mf[k] ?? "all"}
+                    onChange={(e) => setMF(k, e.target.value)}>
+                    <option value="all">All</option>
+                    {get().map((v) => <option key={v} value={v}>{v}</option>)}
+                  </select>
+                </label>
+              ))}
+            </div>
+            {/* ONE Clear. Two rendered here before, one per bar. */}
+            {matchFiltersOn && (
+              <button type="button" className={s.brkClear} data-testid="breakdown-clear"
+                onClick={clearMatchFilters}>Clear</button>
+            )}
+          </div>
+        )}
+
+        {grain === "match" ? (
+          <MatchTable rows={shownMatches} />
+        ) : (
+          <GroupTable rows={shownFields} grain={grain} month={period.months[period.months.length - 1] ?? ""}
+            gapRows={gapRows} launchOf={launchOf}
+            membershipOf={(c) => (data ? cityMembershipRevenueFor(data, c, period.months[period.months.length - 1] ?? "") : 0)}
+            membershipScoped={membershipScoped} />
+        )}
       </div>
-
-      {/* THE MOCKUP'S MATCH FILTER PANEL — Match View only. Thirteen fields, each backing a column
-          Match View actually renders, so nothing narrows the table for an invisible reason. */}
-      {grain === "match" && (
-        <div className={s.card} data-testid="match-filter-panel">
-          <div className={s.filterGrid}>
-            {([
-              ["date", "Date", () => opts((r) => ymd(r.start))],
-              ["month", "Month", () => opts((r) => r.month)],
-              ["week", "Week", () => opts((r) => String(r.week))],
-              ["weekday", "Weekday", () => opts((r) => dayName(r.start))],
-              ["city", "City", () => opts((r) => r.city)],
-              ["location", "Location", () => opts((r) => r.location)],
-              ["hour", "Hour", () => opts((r) => HOUR(r.start))],
-              ["match", "Match", () => opts((r) => String(r.matchApiId))],
-              ["members", "Members Code", () => opts((r) => String(r.memberSpots))],
-              ["free", "Free Code", () => opts((r) => String(r.freeSpots))],
-              ["dpps", "DPP\u2019s", () => opts((r) => String(r.dppSpots))],
-              ["spots", "Total Spots", () => opts((r) => String(r.totalSpots))],
-              ["dpprev", "DPP Revenue", () => opts((r) => String(Math.round(r.dppRevenue)))],
-            ] as [string, string, () => string[]][]).map(([k, lab, get]) => (
-              <label key={k} className={s.filterField}>
-                <span>{lab}</span>
-                <select className={s.sel} data-testid={`mf-${k}`} value={mf[k] ?? "all"}
-                  onChange={(e) => setMF(k, e.target.value)}>
-                  <option value="all">All</option>
-                  {get().map((v) => <option key={v} value={v}>{v}</option>)}
-                </select>
-              </label>
-            ))}
-          </div>
-          <div className={s.ctrlGroup}>
-            <button type="button" className={s.btn} data-testid="mf-clear"
-              onClick={clearMatchFilters} disabled={!matchFiltersOn}>Clear filters</button>
-            <span className={s.ctrlLab}>{shownMatches.length} of {shownMatchesBase.length} matches</span>
-          </div>
-        </div>
-      )}
-
-      {grain === "match" ? (
-        <MatchTable rows={shownMatches} />
-      ) : (
-        <GroupTable rows={shownFields} grain={grain} month={period.months[period.months.length - 1] ?? ""}
-          gapRows={gapRows} launchOf={launchOf}
-          membershipOf={(c) => (data ? cityMembershipRevenueFor(data, c, period.months[period.months.length - 1] ?? "") : 0)}
-          membershipScoped={membershipScoped} />
-      )}
     </div>
   );
 }
@@ -934,7 +962,7 @@ function GroupTable({ rows, grain, month, membershipOf, membershipScoped, gapRow
   const pct = (n: number, d: number) => `${((n / Math.max(1, d)) * 100).toFixed(1)}%`;
 
   return (
-    <div className={s.card}>
+    <>
       <div className={s.tblWrap}>
         <table className={s.tbl} data-testid="revenue-group-table">
           <thead>
@@ -994,7 +1022,7 @@ function GroupTable({ rows, grain, month, membershipOf, membershipScoped, gapRow
           </tbody>
         </table>
       </div>
-    </div>
+    </>
   );
 }
 
@@ -1009,7 +1037,7 @@ function MatchTable({ rows }: { rows: MatchRow[] }) {
     { member: 0, free: 0, dpp: 0, total: 0, rev: 0, cost: 0, unknown: 0 },
   );
   return (
-    <div className={s.card}>
+    <>
       <div className={s.tblWrap}>
         <table className={`${s.tbl} ${s.wide}`} data-testid="revenue-match-table">
           <thead>
@@ -1070,6 +1098,6 @@ function MatchTable({ rows }: { rows: MatchRow[] }) {
           </tbody>
         </table>
       </div>
-    </div>
+    </>
   );
 }
