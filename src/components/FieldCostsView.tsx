@@ -14,6 +14,7 @@ import {
 import AddVenueDialog, { type AddVenueDraft } from "@/components/AddVenueDialog";
 import ConfirmDeleteDialog from "@/components/ConfirmDeleteDialog";
 import { logChange } from "@/lib/financeAudit";
+import { venueCategory } from "@/lib/venueResolver";
 import {
   buildFieldCostRows,
   fieldCostsFor,
@@ -253,6 +254,70 @@ export default function FieldCostsView() {
 
   // ONE RESERVATION PER TIME SLOT. Same write path as every other venue field — optimistic patch
   // plus a fin_change_log entry, and fin_venues is already on that table's CHECK allowlist.
+  /* THE LINKS A VENUE IS MADE OF, and their classification. isEvent is read from the SAME regex
+   * the cost path uses (venueCategory) against the SAME title — reading it any other way here
+   * would let the panel say "counts" about a match the cost path is dropping. */
+  const fieldTitleById = useMemo(() => {
+    const m = new Map<number, string>();
+    for (const r of [...(data?.masterSchedule ?? []), ...(data?.cancelledSchedule ?? [])]) {
+      if (r.mdapi_field_id != null && r.field_title && !m.has(r.mdapi_field_id)) {
+        m.set(r.mdapi_field_id, r.field_title);
+      }
+    }
+    return m;
+  }, [data]);
+
+  function linksFor(venueId: number) {
+    return (data?.venueFieldLinks ?? [])
+      .filter((l) => l.fin_venue_id === venueId)
+      .map((l) => {
+        const title = fieldTitleById.get(l.mdapi_field_id) ?? l.field_title_at_link ?? `field ${l.mdapi_field_id}`;
+        return {
+          mdapi_field_id: l.mdapi_field_id,
+          title,
+          isEvent: venueCategory(title) === "event",
+          countsAsRegular: l.counts_as_regular_play,
+        };
+      })
+      .sort((a, b) => Number(a.isEvent) - Number(b.isEvent) || a.title.localeCompare(b.title));
+  }
+
+  /* THE EXCEPTION TOGGLE. fin_venue_fields, not fin_venues, so it does not go through
+   * saveVenueField — but it takes the same shape: write, then audit, and report the outcome.
+   * fin_venue_fields was added to the fin_change_log allowlist in 0130; without that the audit
+   * step would refuse the row and the write would be reported as failed. */
+  async function saveCountsAsRegular(fieldId: number, next: boolean): Promise<void> {
+    const email = appUser?.email;
+    if (!email) return;
+    const key = `link-${fieldId}`;
+    setEditState(key, { saving: true, error: null, flash: false });
+    try {
+      const { data: updated, error } = await supabase
+        .from("fin_venue_fields")
+        .update({ counts_as_regular_play: next })
+        .eq("mdapi_field_id", fieldId)
+        .select()
+        .single();
+      if (error) throw error;
+      await logChange({
+        tableName: "fin_venue_fields",
+        rowId: fieldId,
+        action: "update",
+        changedBy: email,
+        before: { mdapi_field_id: fieldId, counts_as_regular_play: !next },
+        after: updated as Record<string, unknown>,
+      });
+      setEditState(key, { saving: false, error: null, flash: true });
+      setTimeout(() => setEditState(key, null), 900);
+      // A COST RELOAD, NOT AN OPTIMISTIC PATCH. This flag changes `category` on every match at the
+      // field, which is upstream of every cost figure on the page — there is no single cell to
+      // swap, so the data is re-read.
+      await refetchFinanceData();
+    } catch (e) {
+      setEditState(key, { saving: false, error: e instanceof Error ? e.message : "Save failed.", flash: false });
+    }
+  }
+
   function savePerReservation(venueId: number, next: boolean): void {
     void saveVenueField(venueId, "bills_per_reservation", next, true);
   }
@@ -774,6 +839,8 @@ export default function FieldCostsView() {
                         saveBillingType(row.primaryVenueId, next)
                       }
                       onSavePerReservation={(next) => savePerReservation(row.primaryVenueId, next)}
+                      links={linksFor(row.primaryVenueId)}
+                      onSaveCountsAsRegular={(fid, next) => saveCountsAsRegular(fid, next)}
                       onSaveChargeOnCancel={(next) =>
                         saveChargeOnCancel(row.primaryVenueId, next)
                       }
@@ -895,7 +962,7 @@ function FieldCostTableRow({
   onSavePrice,
   onSaveBillingType,
   onSaveChargeOnCancel,
-  onSavePerReservation,
+  onSavePerReservation, links, onSaveCountsAsRegular,
   dashboardDriven,
   onSaveBillingCadence,
   onSaveBillingDay,
@@ -919,6 +986,8 @@ function FieldCostTableRow({
   onSaveBillingType: (next: FinVenue["billing_type"]) => void;
   onSaveChargeOnCancel: (next: boolean) => void;
   onSavePerReservation: (next: boolean) => void;
+  links: { mdapi_field_id: number; title: string; isEvent: boolean; countsAsRegular: boolean }[];
+  onSaveCountsAsRegular: (fieldId: number, next: boolean) => void;
   dashboardDriven: boolean;
   onSaveBillingCadence: (next: FinVenue["billing_cadence"]) => void;
   onSaveBillingDay: (raw: string) => void;
@@ -1105,6 +1174,7 @@ function FieldCostTableRow({
               onSaveBillingType={onSaveBillingType}
               onSaveChargeOnCancel={onSaveChargeOnCancel}
               onSavePerReservation={onSavePerReservation}
+              links={links} onSaveCountsAsRegular={onSaveCountsAsRegular}
               onSaveBillingDay={onSaveBillingDay}
               onSaveCustomAmount={onSaveCustomAmount}
               isOverride={isOverride}
@@ -1147,6 +1217,7 @@ function FieldCostTableRow({
 function VenuePanel({
   row, venue, month, autoAmount, cellState, onSavePrice, onSaveBillingType,
   onSaveChargeOnCancel, onSaveBillingDay, onSaveCustomAmount, onSavePerReservation, isOverride, timing,
+  links, onSaveCountsAsRegular,
 }: {
   row: FieldCostRow;
   venue: FinVenue | null;
@@ -1159,6 +1230,10 @@ function VenuePanel({
   onSaveBillingDay: (raw: string) => void;
   onSaveCustomAmount: (raw: string) => void;
   onSavePerReservation: (next: boolean) => void;
+  // What this venue is actually made of. Nobody caught ATH Pearland's zero for 26 months because
+  // the page never showed which mdapi fields a venue was built from.
+  links: { mdapi_field_id: number; title: string; isEvent: boolean; countsAsRegular: boolean }[];
+  onSaveCountsAsRegular: (fieldId: number, next: boolean) => void;
   isOverride: boolean;
   timing: React.ReactNode;
 }) {
@@ -1202,6 +1277,45 @@ function VenuePanel({
       {/* ── WHAT MATCHDAY PAYS ─────────────────────────────────────────────────────────────── */}
       <div className="border-b border-cream-line p-4 lg:border-b-0 lg:border-r">
         <div className={glab}>What MatchDay pays</div>
+
+        {/* ── FIELDS ─────────────────────────────────────────────────────────────────────────
+            One row per fin_venue_fields link. A venue whose links are all clean shows the titles
+            and no toggle at all — the control only appears where the marker has actually fired. */}
+        {links.length > 0 && (
+          <div className="mb-3" data-testid="venue-fields">
+            <label className={lab}>Fields</label>
+            <div className="mt-1 flex flex-col gap-1">
+              {links.map((l) => {
+                const counted = !l.isEvent || l.countsAsRegular;
+                return (
+                  <div key={l.mdapi_field_id} className="flex items-center gap-2 text-[12px]"
+                       data-testid="venue-field-row" data-field-id={l.mdapi_field_id}
+                       data-counted={counted ? "yes" : "no"}>
+                    <span className="min-w-0 flex-1 truncate text-deep-green" title={l.title}>{l.title}</span>
+                    <span className={counted ? "text-deep-green/55" : "text-deep-green/45"}
+                          data-testid="venue-field-status">
+                      {counted
+                        ? (l.isEvent ? "counts (exception)" : "counts")
+                        : "excluded as an event"}
+                    </span>
+                    {/* THE TOGGLE ONLY EXISTS WHERE THE MARKER FIRED. On a clean link there is
+                        nothing to except, and a control that can only be a no-op is noise. */}
+                    {l.isEvent && (
+                      <button
+                        type="button"
+                        data-testid="venue-field-toggle"
+                        onClick={() => onSaveCountsAsRegular(l.mdapi_field_id, !l.countsAsRegular)}
+                        className="shrink-0 rounded-[6px] border border-cream-line px-2 py-[3px] text-[11px] font-semibold text-deep-green hover:bg-cream-bg"
+                      >
+                        {l.countsAsRegular ? "exclude it" : "count it"}
+                      </button>
+                    )}
+                  </div>
+                );
+              })}
+            </div>
+          </div>
+        )}
         <div className={fld}>
           <label className={lab}>Billing</label>
           <select

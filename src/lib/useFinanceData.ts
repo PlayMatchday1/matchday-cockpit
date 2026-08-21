@@ -114,6 +114,10 @@ export type FinMasterSchedule = {
   // decision. They are dropped from the cost calc (venue_id forced null) and
   // this flag lets an assertion prove no event ever contributes cost.
   category: VenueCategory;
+  // THE STRING THE MARKER ACTUALLY TESTED. Carried through so the Field Costs panel can show the
+  // title the classification was made from, rather than fin_venue_fields' link-time copy — a
+  // field renamed upstream would otherwise be described by a name nothing reads any more.
+  field_title: string;
 };
 
 export type FinVenue = {
@@ -225,6 +229,16 @@ export type FinVenueCostOverride = {
   created_by: string;
 };
 
+/** One fin_venue_fields row: which mdapi field a venue is made of, and whether this link is
+ *  exempt from the event marker. The Field Costs panel lists these — the reason a venue could sit
+ *  at zero cost for 26 months is that the page never said which fields it was made of. */
+export type FinVenueFieldLink = {
+  fin_venue_id: number;
+  mdapi_field_id: number;
+  field_title_at_link: string;
+  counts_as_regular_play: boolean;
+};
+
 export type FinanceData = {
   revenue: FinRevenue[];
   expenses: FinExpense[];
@@ -251,6 +265,8 @@ export type FinanceData = {
   // fin_venue_fields (migration 0041). venueAliases stays for the
   // Stripe boundary (fin_revenue.venue is a normalized name string).
   venueFields: Map<number, number>;
+  // Every fin_venue_fields row, so the venue panel can show what a venue is actually made of.
+  venueFieldLinks: FinVenueFieldLink[];
   config: Record<string, string>;
   // Member-spot counts derived from mdapi_match_players, used as the
   // denominator for the member-revenue allocation helpers in
@@ -386,6 +402,7 @@ function mapMdapiRowToSchedule(
   venueFields: Map<number, number>,
   venues: FinVenue[],
   counters: { unresolved: number; specialEvent: number },
+  countsAsRegular: Set<number>,
 ): FinMasterSchedule {
   const startDate = cleanText(r.start_date);
   const matchDate = startDate
@@ -416,7 +433,14 @@ function mapMdapiRowToSchedule(
   // venue link stays intact for every consumer; cost is excluded downstream by
   // consulting this flag (see financeCosts.isEventSchedule), never by making
   // the match venue-less.
-  const category = venueCategory(cleanText(r.field_title));
+  // THE ONE PLACE THE EXCEPTION IS APPLIED. A link flagged counts_as_regular_play forces
+  // "regular" regardless of what EVENT_MARKERS makes of the title — the marker is matching a name
+  // and this says the name is wrong for this link. The regex itself is untouched: it is right
+  // about every other field it fires on, and five other venues carry links that really are events.
+  const category =
+    mdapiFieldId != null && countsAsRegular.has(mdapiFieldId)
+      ? "regular"
+      : venueCategory(cleanText(r.field_title));
   if (resolvedVenueId == null && initialVenueId == null) counters.unresolved += 1;
   const v =
     resolvedVenueId != null
@@ -437,6 +461,7 @@ function mapMdapiRowToSchedule(
     }
   }
   return {
+    field_title: cleanText(r.field_title),
     id: String(r.api_id ?? ""),
     city: v?.city ?? "",
     venue: v?.venue_name ?? "",
@@ -584,7 +609,7 @@ async function load(quarter: QuarterInfo): Promise<void> {
       selectAll<Record<string, unknown>>(() =>
         supabase
           .from("fin_venue_fields")
-          .select("fin_venue_id, mdapi_field_id")
+          .select("fin_venue_id, mdapi_field_id, field_title_at_link, counts_as_regular_play")
           .order("mdapi_field_id"),
       ),
       // Phase 3b: switched from fin_members to mdapi_subscriptions.
@@ -662,11 +687,24 @@ async function load(quarter: QuarterInfo): Promise<void> {
     if (alias && canonical) venueAliases.set(alias, canonical);
   }
   const venueFields = new Map<number, number>();
+  // THE PER-LINK EXCEPTION, RESOLVED ONCE. isEventSchedule has 24 call sites across five files;
+  // implementing the exception at any of them would mean implementing it at all of them. It is
+  // applied here instead, where `category` is decided — every consumer then reads a category that
+  // already accounts for it, and none of them needs to know this column exists.
+  const countsAsRegular = new Set<number>();
+  const venueFieldLinks: FinVenueFieldLink[] = [];
   for (const f of vfRows) {
     const fieldId = Number(f.mdapi_field_id);
     const venueId = Number(f.fin_venue_id);
     if (Number.isFinite(fieldId) && Number.isFinite(venueId)) {
       venueFields.set(fieldId, venueId);
+      if (f.counts_as_regular_play === true) countsAsRegular.add(fieldId);
+      venueFieldLinks.push({
+        fin_venue_id: venueId,
+        mdapi_field_id: fieldId,
+        field_title_at_link: cleanText(f.field_title_at_link),
+        counts_as_regular_play: f.counts_as_regular_play === true,
+      });
     }
   }
   // The single canonical resolver replaces the fin_venue_aliases (canonVenue)
@@ -807,7 +845,7 @@ async function load(quarter: QuarterInfo): Promise<void> {
   // the two are disjoint halves of mdapi_matches.
   const smCounters = { unresolved: 0, specialEvent: 0 };
   const masterSchedule: FinMasterSchedule[] = smsRows.map((r) =>
-    mapMdapiRowToSchedule(r, venueFields, venues, smCounters),
+    mapMdapiRowToSchedule(r, venueFields, venues, smCounters, countsAsRegular),
   );
   if (smCounters.unresolved > 0 && typeof console !== "undefined") {
     console.warn(
@@ -826,7 +864,7 @@ async function load(quarter: QuarterInfo): Promise<void> {
   // (alive) by construction, so no match is counted twice.
   const cmsCounters = { unresolved: 0, specialEvent: 0 };
   const cancelledSchedule: FinMasterSchedule[] = cmsRows.map((r) =>
-    mapMdapiRowToSchedule(r, venueFields, venues, cmsCounters),
+    mapMdapiRowToSchedule(r, venueFields, venues, cmsCounters, countsAsRegular),
   );
   if (cmsCounters.unresolved > 0 && typeof console !== "undefined") {
     console.warn(
@@ -958,6 +996,7 @@ async function load(quarter: QuarterInfo): Promise<void> {
       overrides,
       venueAliases,
       venueFields,
+      venueFieldLinks,
       config,
       mdapiMemberSpots,
       partnerDashboards,

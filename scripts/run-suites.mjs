@@ -18,11 +18,15 @@ const QUARANTINE_ONLY = process.argv.includes("--quarantine"); // run ONLY the q
 // why and what brings it back. Run them with `node scripts/run-suites.mjs --e2e --quarantine`
 // (npm run verify:e2e:quarantine). Each is quarantined, not fixed, because the fix is out of this
 // phase's scope; the reason + restore condition make the debt visible, not silent.
-// EMPTY. All five quarantined suites were Finance/partner/reviews/calendar screens — every one of
-// them outside the testing rule (the gate exists for writes to the MatchDay API), so they were
-// deleted rather than carried as debt. The drift guard below stays: it is what stops a suite
-// leaving the gate silently, and it will bind the moment anything is quarantined again.
-const QUARANTINE = new Map([]);
+// Two entries as of 2026-08-20. BOTH FAIL ON LIVE DATA, NOT ON A DEFECT — each pins a figure from
+// a month that is still filling up, and each was proved pre-existing by running it against a
+// stashed tree. They are quarantined rather than re-derived because rewriting an assertion body to
+// make it pass records the new behaviour instead of verifying the old one, and that is a decision
+// to take on its own, not inside an unrelated change.
+const QUARANTINE = new Map([
+  ["verify-cost-basis.mjs", "hardcodes live figures, drifts with data — see 2026-08-20"],
+  ["verify-cost-tables.mjs", "hardcodes live figures, drifts with data — see 2026-08-20"],
+]);
 
 // ── QUARANTINE DRIFT GUARD (Phase 21b item 1) ────────────────────────────────
 // A suite must never leave the gate silently. The set of quarantined suites is PINNED in
