@@ -7,11 +7,10 @@
 // there is no confined session to make the call. Those assertions are named at the end and skipped
 // out loud rather than quietly omitted.
 //
-// THE NUMBERS MOVED SINCE PART 1 AND THE SUITE FOLLOWS THE DATA, not the other way round. Part 1
-// reported 3 Warsaw players from an ad-hoc scan that truncated; the chunked query the route uses
-// finds 13 distinct roster user_ids, 12 of which resolve to a users row. So the split is 0
-// registered / 11 roster / 1 both, not 1 / 2 / 0. Every figure below is derived from the mirror at
-// run time — nothing here is a number written down.
+// ONE RULE: preferable_city_name. The roster half is gone and the counts are why — it added 11
+// rows to Warsaw's 1 and every one was a placeholder (Guest 1-7, NYCSC x3, Manager, all on
+// 5555555555, all registered to Atlanta or New York) parked on Warsaw matches to fill them.
+// Warsaw is 1 real signup. Every figure below is derived from the mirror at run time.
 //
 //   node scripts/e2e/verify-registered-players.mjs
 import { chromium } from "playwright";
@@ -32,28 +31,23 @@ const CITY = "WAW";
 const svc = createClient(process.env.NEXT_PUBLIC_SUPABASE_URL, process.env.SUPABASE_SERVICE_ROLE_KEY, { auth: { persistSession: false } });
 
 // ── THE TRUTH, FROM THE MIRROR, COMPUTED THE WAY THE ROUTE COMPUTES IT ─────────────────────────
-const { data: wawMatches, error: mErr } = await svc
-  .from("mdapi_matches").select("api_id, start_date").eq("city_identifier", CITY);
-if (mErr) throw new Error(mErr.message);
-const { data: rosterRows, error: rErr } = await svc
-  .from("mdapi_match_players").select("user_id")
-  .in("match_api_id", wawMatches.map((m) => m.api_id)).neq("user_is_fake_player", true);
+const CITY_NAME = "Warsaw";
+const { data: regRows, error: rErr } = await svc
+  .from("mdapi_users").select("id, first_name").eq("preferable_city_name", CITY_NAME).neq("is_fake_player", true);
 if (rErr) throw new Error(rErr.message);
-const rosterIds = new Set(rosterRows.map((r) => Number(r.user_id)));
-const { data: regRows } = await svc
-  .from("mdapi_users").select("id").eq("preferable_city_name", "Warsaw").neq("is_fake_player", true);
-const registeredIds = new Set((regRows ?? []).map((r) => Number(r.id)));
-const unionIds = [...new Set([...rosterIds, ...registeredIds])];
-const { data: resolvable } = await svc.from("mdapi_users").select("id, is_fake_player").in("id", unionIds);
-const resolvedIds = new Set((resolvable ?? []).filter((r) => r.is_fake_player !== true).map((r) => Number(r.id)));
-const EXPECT_TOTAL = resolvedIds.size;
-const EXPECT_SPLIT = { registered: 0, roster: 0, both: 0 };
-for (const id of resolvedIds) {
-  const reg = registeredIds.has(id), ros = rosterIds.has(id);
-  if (reg && ros) EXPECT_SPLIT.both++;
-  else if (reg) EXPECT_SPLIT.registered++;
-  else EXPECT_SPLIT.roster++;
-}
+const EXPECT_IDS = new Set(regRows.map((r) => Number(r.id)));
+const EXPECT_TOTAL = EXPECT_IDS.size;
+
+// THE PLACEHOLDERS THE ROSTER RULE USED TO DRAG IN — asserted ABSENT by id, not by count. Without
+// this the suite would pass on a route that quietly kept the union and simply returned more rows.
+const { data: wawMatches } = await svc
+  .from("mdapi_matches").select("api_id").eq("city_identifier", "WAW");
+const { data: rosterRows } = await svc
+  .from("mdapi_match_players").select("user_id")
+  .in("match_api_id", (wawMatches ?? []).map((m) => m.api_id));
+const ROSTER_ONLY = [...new Set((rosterRows ?? []).map((r) => Number(r.user_id)))]
+  .filter((id) => !EXPECT_IDS.has(id));
+
 const { count: EXPECT_ALL } = await svc
   .from("mdapi_users").select("id", { count: "exact", head: true }).neq("is_fake_player", true);
 const { data: fakeRow } = await svc.from("mdapi_users").select("id").eq("is_fake_player", true).limit(1);
@@ -62,8 +56,8 @@ const { data: outsider } = await svc
   .from("mdapi_users").select("id").eq("preferable_city_name", "Austin").neq("is_fake_player", true).limit(1);
 const KNOWN_NON_WARSAW = Number(outsider?.[0]?.id ?? 0);
 
-console.log(`\nfrom the mirror: WAW matches ${wawMatches.length} · union ${unionIds.length} ids · resolvable ${EXPECT_TOTAL}`);
-console.log(`  expected split: ${JSON.stringify(EXPECT_SPLIT)} · all-cities total ${EXPECT_ALL}`);
+console.log(`\nfrom the mirror: ${CITY_NAME} signups ${EXPECT_TOTAL} · roster-only placeholders ${ROSTER_ONLY.length} (must be absent)`);
+console.log(`  all-cities total ${EXPECT_ALL}`);
 
 const { storageState } = await storageStateFor("rmancuso@playmatchday.com", BASE);
 const browser = await chromium.launch();
@@ -93,27 +87,28 @@ console.log("\n── the Warsaw list ──");
   const r = await api(`?city=${CITY}&page=1&size=200`);
   eq("  control — the endpoint answered", r.status, 200);
   eq("  control — it returned rows", (r.body.players ?? []).length > 0, true);
-  eq("the total equals the resolvable union, not the id set", r.body.total, EXPECT_TOTAL);
-  eq("  …and equals the number of rows it can actually show", r.body.total, r.body.players.length);
-  eq("the basis split matches the mirror", r.body.basisCounts, EXPECT_SPLIT);
-  eq("  …and the split adds up to the total",
-     r.body.basisCounts.registered + r.body.basisCounts.roster + r.body.basisCounts.both, r.body.total);
-  console.log(`     ${r.body.total} players · ${JSON.stringify(r.body.basisCounts)}`);
+  eq("the total is the signup count", r.body.total, EXPECT_TOTAL);
+  eq("  …and equals the rows it can actually show", r.body.total, r.body.players.length);
+  eq("no basis column survives", r.body.players.every((p) => p.basis === undefined), true);
+  eq("no split is reported", r.body.basisCounts, undefined);
+  console.log(`     ${r.body.total} signups: ${r.body.players.map((p) => `${p.id} ${p.name ?? "—"}`).join(", ")}`);
 
-  // EVERY ROW MATCHES THE UNION RULE — the positive half is the assertion above (rows exist).
-  const offenders = r.body.players.filter((p) => !resolvedIds.has(p.id));
-  eq("every row matches the union rule", offenders.map((p) => p.id), []);
+  // EVERY ROW IS A SIGNUP IN THIS CITY.
+  const offenders = r.body.players.filter((p) => !EXPECT_IDS.has(p.id));
+  eq("every row is a signup in the city", offenders.map((p) => p.id), []);
 
-  // A KNOWN NON-WARSAW PLAYER IS ABSENT — the negative half, by id, not by count.
+  // THE PLACEHOLDERS ARE GONE — by id, and the control proves there were some to lose.
+  eq(`  control — the roster rule used to add ${ROSTER_ONLY.length} rows`, ROSTER_ONLY.length > 0, true);
+  const stillThere = r.body.players.filter((p) => ROSTER_ONLY.includes(p.id));
+  eq("no roster-only placeholder is in the list", stillThere.map((p) => p.id), []);
+
+  // A KNOWN NON-WARSAW PLAYER IS ABSENT — by id, not by count.
   eq(`  control — a known non-Warsaw player id was found (${KNOWN_NON_WARSAW})`, KNOWN_NON_WARSAW > 0, true);
   eq("a known non-Warsaw player is absent", r.body.players.some((p) => p.id === KNOWN_NON_WARSAW), false);
 
   // FAKE PLAYERS ARE ABSENT, asserted by a known id rather than by trusting the filter.
   eq(`  control — a known fake player id was found (${KNOWN_FAKE})`, KNOWN_FAKE > 0, true);
   eq("a known fake player is absent", r.body.players.some((p) => p.id === KNOWN_FAKE), false);
-
-  // BASIS IS NEVER NULL IN A SCOPED LIST — a null there means the column silently gave up.
-  eq("every scoped row carries a basis", r.body.players.every((p) => p.basis != null), true);
 }
 
 // ── 2. THE DASHES ──────────────────────────────────────────────────────────────────────────────
@@ -163,7 +158,7 @@ console.log("\n── all cities ──");
   const r = await api("?page=1&size=10");
   eq("the unconfined total is every non-fake player", r.body.total, EXPECT_ALL);
   eq("  …and it is greater than the scoped total", r.body.total > EXPECT_TOTAL, true);
-  eq("  …and carries no basis split, which is a city-scoped idea", r.body.basisCounts, null);
+  eq("  …and reports no basis split at all — the field is gone, not null", r.body.basisCounts, undefined);
   eq("a page is a page, not the whole table", r.body.players.length, 10);
   console.log(`     ${r.body.total} players across all cities vs ${EXPECT_TOTAL} in ${CITY}`);
 }
@@ -173,15 +168,15 @@ console.log("\n── naming a city ──");
 {
   const bad1 = await api("?city=NOPE");
   eq("an unknown city is refused, not widened back to everyone", bad1.status, 400);
-  // A LARGE CITY IS REFUSED WITH A REASON, NOT A TIMEOUT. The roster half walks match-by-match
-  // because mdapi_match_players has no FK to mdapi_matches; Austin's 6,614 matches used to return
-  // a 500 with an empty body. 501 and a sentence naming the missing key is recoverable; a 500 is
-  // not, and neither is a quietly partial list.
-  const big = await api("?city=ATX&page=1&size=3");
-  eq("a city over the walk ceiling is refused, not timed out", big.status, 501);
-  eq("  …and the refusal names the reason", /foreign key|no foreign key/i.test(big.body.error ?? ""), true);
-  eq("  …and does NOT return a partial list", big.body.players, undefined);
-  console.log(`     ATX: ${String(big.body.error).slice(0, 96)}…`);
+  // A LARGE CITY NOW WORKS. With the roster walk gone there is no match-by-match loop and no
+  // ceiling: this is a single .eq() with SQL paging, so Austin behaves exactly as Warsaw does.
+  // It used to 501 above 400 matches, and Austin has 6,614.
+  const big = await api("?city=ATX&page=1&size=5");
+  eq("a large city is served, not refused", big.status, 200);
+  eq("  …with a real total", big.body.total > 1000, true);
+  eq("  …and a page, not the whole city", big.body.players.length, 5);
+  eq("  …and it is a different city from Warsaw", big.body.total !== EXPECT_TOTAL, true);
+  console.log(`     ATX: ${big.body.total.toLocaleString()} signups, page of ${big.body.players.length}`);
 }
 
 // ── 6. THE MIRROR'S CLOCK IS ON SCREEN ─────────────────────────────────────────────────────────

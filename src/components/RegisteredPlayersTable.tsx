@@ -6,10 +6,10 @@
 // "who joined this week" while a city launches. Every column sorts, but that default is the point
 // of the thing.
 //
-// THE BASIS COLUMN IS NOT DECORATION. A confined city's list is a UNION — players who chose the
-// city at signup, plus players who turned up on one of its rosters under another city's flag. A
-// bare count of 3 hides that it is 1 registration and 2 walk-ins, and those two numbers move for
-// completely different reasons.
+// ONE RULE, SO NO BASIS COLUMN. The list was briefly a union — signups plus anyone on one of the
+// city's rosters — and the roster half turned out to be eleven placeholder accounts sitting on
+// Warsaw matches to fill them. With a single rule there is nothing to distinguish, so the column
+// and its split line are gone rather than left showing the same word on every row.
 //
 // EVERY EMPTY CELL IS A DASH, never blank: 6,437 of 30,387 players have no phone, and a player who
 // has never played gets a dash rather than a date. A blank cell reads as a rendering bug.
@@ -26,7 +26,6 @@ type Row = {
   last_match: string | null;
   member: boolean;
   city: string | null;
-  basis: "registered" | "roster" | "both" | null;
 };
 
 type Payload = {
@@ -39,7 +38,6 @@ type Payload = {
   sortNote: string | null;
   scope: string | null;
   scopeName: string | null;
-  basisCounts: { registered: number; roster: number; both: number } | null;
   syncedAt: string | null;
   error?: string;
 };
@@ -52,7 +50,6 @@ const COLUMNS: { key: string; label: string; align?: "right" | "left" }[] = [
   { key: "registered", label: "Registered" },
   { key: "last_match", label: "Last match" },
   { key: "member", label: "Member" },
-  { key: "basis", label: "Basis" },
 ];
 
 const fmtDate = (iso: string | null): string => {
@@ -130,15 +127,6 @@ export default function RegisteredPlayersTable({ onOpen }: { onOpen?: (id: numbe
         </span>
       </div>
 
-      {/* THE SPLIT, ON SCREEN. "3 players" is not the same fact as "1 registered, 2 roster". */}
-      {data?.basisCounts && (
-        <div className="rp-split" data-testid="registered-split">
-          <span data-testid="split-registered"><b>{data.basisCounts.registered}</b> registered</span>
-          <span data-testid="split-roster"><b>{data.basisCounts.roster}</b> roster</span>
-          <span data-testid="split-both"><b>{data.basisCounts.both}</b> both</span>
-        </div>
-      )}
-
       {/* THE MIRROR'S CLOCK. Without this, a registration from an hour ago that has not synced yet
           reads as a broken filter — and the person reading it is watching a city launch. */}
       <div className="rp-fresh" data-testid="registered-freshness">
@@ -186,7 +174,6 @@ export default function RegisteredPlayersTable({ onOpen }: { onOpen?: (id: numbe
                   <td data-testid="rp-lastmatch">{fmtDate(p.last_match)}</td>
                   {/* A PLAIN MARKER, not a badge — a badge here reads like an account status. */}
                   <td data-testid="rp-member">{p.member ? "yes" : "no"}</td>
-                  <td data-testid="rp-basis">{p.basis ?? "—"}</td>
                 </tr>
               ))}
               {data && data.players.length === 0 && !loading && (
@@ -206,8 +193,6 @@ export default function RegisteredPlayersTable({ onOpen }: { onOpen?: (id: numbe
       )}
 
       <style jsx>{`
-        .rp-split { display: flex; gap: 14px; padding: 0 14px 8px; font-size: 12px; color: #6d7a70; }
-        .rp-split b { color: #12291d; font-weight: 700; }
         .rp-fresh { padding: 0 14px 10px; font-size: 11px; color: #98a29b; line-height: 1.5; }
         .rp-refresh { border: 1px solid #e3e7e0; background: #fff; border-radius: 6px;
           padding: 2px 8px; font: inherit; font-size: 11px; color: #12291d; cursor: pointer; }

@@ -1,23 +1,28 @@
 // REGISTERED PLAYERS — the list under Player Lookup's search box.
 //
-// WHY THE MIRROR AND NOT THE API. GET /admin/players lists everyone (30,449) and pages and sorts,
-// but it REFUSES every city parameter — ?cityId, ?cityIdentifier and ?city each come back
-// 400 "property should not exist". Scoping it would mean paging all 30,449 rows on every request
-// and filtering locally, which is not a source, it is a workaround. mdapi_users carries every
-// column this table needs except last-match, and mdapi_match_players joins to mdapi_matches for
-// the city rule AND the date. So the filter is a real WHERE, the count is a real count, and a
-// page is two queries.
+// ONE RULE: mdapi_users where preferable_city_name is the account's city. These are SIGNUPS —
+// people we can approach — which is the whole point of the table.
 //
-// THE COST OF THE MIRROR IS STALENESS, and the page says so out loud: 30,387 mirrored against
-// 30,449 live when this was built. A registration from an hour ago is not here yet, and somebody
-// watching a city launch will read that as a broken filter rather than a stale table unless the
-// last sync time is on screen.
+// THE ROSTER UNION IS GONE, and the counts say why: it added 11 rows to Warsaw's 1 and every one
+// of them was a placeholder — Guest 1-7, NYCSC x3, Manager, all on 5555555555, all registered to
+// Atlanta or New York, all sitting on Warsaw rosters because somebody put them there to fill a
+// match. Warsaw is 1 real signup. A one-row table in a city that is three days old is the right
+// answer, and it will grow.
 //
-// THE UNION. This is a REGISTRATION list first: preferable_city_name is what the player chose at
-// signup, and it answers "how many registered this week". The roster half exists so nobody is
-// missed — a player who turned up to a Warsaw match without changing their profile is a Warsaw
-// player whatever their settings say. Deduped by id, and which half matched is a COLUMN, because
-// "3 players" hides that it is 1 registration and 2 walk-ins.
+// AND WITH THE ROSTER HALF GONE THERE IS NO SCALING LIMIT. The union needed a match-by-match walk,
+// because mdapi_match_players has no foreign key to mdapi_matches and PostgREST cannot embed the
+// join; that walk capped the feature at 400 matches and returned a 501 above it, which meant it
+// worked for Warsaw and nowhere else. This is a single .eq() with SQL paging, so Austin (12,477
+// signups), Houston (5,750) and San Antonio (3,317) work exactly as Warsaw does.
+//
+// WHY THE MIRROR AND NOT THE API. GET /admin/players lists everyone and pages and sorts, but it
+// REFUSES every city parameter — ?cityId, ?cityIdentifier and ?city each come back 400 "property
+// should not exist". Scoping it would mean paging all 30,449 rows on every request and filtering
+// locally, which is not a source. mdapi_users carries every column but last-match, and the filter
+// is a real WHERE, so the count is a real count.
+//
+// THE COST OF THE MIRROR IS STALENESS, and the page says so out loud — a registration from an hour
+// ago is not here yet, and somebody watching a city launch would read that as a broken filter.
 import { authenticateMatchOpsRead } from "@/lib/matchOpsAuth";
 import { assertScope } from "@/lib/cityConfinement";
 import { cityNameFor, resolveCityScope } from "@/lib/cityScope";
@@ -28,22 +33,12 @@ export const dynamic = "force-dynamic";
 const PAGE_SIZE = 50;
 const MAX_PAGE_SIZE = 200;
 
-/* THE SCOPED PATH HAS A CEILING, AND IT REFUSES RATHER THAN MELTS.
- *
- * The roster half of the union has to go match-by-match: mdapi_match_players has NO foreign key to
- * mdapi_matches, so PostgREST cannot embed the join ("Could not find a relationship"), and without
- * DDL there is no way to add one from here. So the route enumerates the city's matches and looks
- * up rosters in chunks — fine for a new city, hopeless for an old one. Austin has 6,614 matches and
- * ~130,000 roster rows; that attempt returned a 500 with an empty message, which is the worst of
- * both worlds: no data and no reason.
- *
- * ABOVE THIS LINE THE ROUTE SAYS SO. A refusal that names the limit is recoverable — somebody adds
- * the FK, or an RPC, and lifts it. A timeout is not. Warsaw is 3 matches; every city that needs
- * this today is far below the ceiling, and the day one is not, the message says exactly what to fix.
- */
-const MAX_SCOPE_MATCHES = 400;
+type SortKey = "id" | "name" | "email" | "phone" | "registered" | "last_match" | "member";
 
-type SortKey = "id" | "name" | "email" | "phone" | "registered" | "last_match" | "member" | "basis";
+/**
+ * Every sortable column except last_match maps to a real column, so the ORDER BY and the OFFSET
+ * both go into SQL and a page is a page whatever the city's size.
+ */
 const DB_SORT: Partial<Record<SortKey, string>> = {
   id: "id",
   name: "first_name",
@@ -93,7 +88,11 @@ export async function GET(req: Request) {
   // THE BOUNDARY, BEFORE ANY QUERY. A confined account naming another city is refused outright —
   // not silently re-pointed at its own, because a silent re-point teaches nothing and looks like
   // the feature working.
-  const scopeCheck = assertScope(auth.confinedCity, asked === "all" ? null : asked, auth.confinedCity !== null);
+  const scopeCheck = assertScope(
+    auth.confinedCity,
+    asked === "all" ? null : asked,
+    auth.confinedCity !== null,
+  );
   if (!scopeCheck.ok) {
     return Response.json({ error: scopeCheck.error }, { status: scopeCheck.status });
   }
@@ -118,117 +117,31 @@ export async function GET(req: Request) {
 
   try {
     const nowIso = new Date().toISOString();
+    const cityName = scope ? cityNameFor(scope) : null;
 
-    // ── THE ID SET, WHEN SCOPED ────────────────────────────────────────────────────────────────
-    // Two in-query filters, unioned by id. Only IDs are fetched here, never rows — the page's rows
-    // are fetched once the order and offset are known, so this stays cheap even for a large city.
-    let registeredIds: Set<number> | null = null;
-    let rosterIds: Set<number> | null = null;
-    if (scope) {
-      const cityName = cityNameFor(scope);
-      const regRows = await pageAll<{ id: number }>((f, t) =>
-        supabase
-          .from("mdapi_users")
-          .select("id")
-          .eq("preferable_city_name", cityName ?? " ")
-          .neq("is_fake_player", true)
-          .range(f, t),
-      );
-      registeredIds = new Set(regRows.map((r) => Number(r.id)));
-
-      const matchRows = await pageAll<{ api_id: number }>((f, t) =>
-        supabase.from("mdapi_matches").select("api_id").eq("city_identifier", scope).range(f, t),
-      );
-      const matchIds = matchRows.map((r) => Number(r.api_id));
-      if (matchIds.length > MAX_SCOPE_MATCHES) {
-        return Response.json({
-          error:
-            `${cityNameFor(scope) ?? scope} has ${matchIds.length.toLocaleString()} matches, over the ` +
-            `${MAX_SCOPE_MATCHES} this list can walk. The roster half of the union needs a match-by-match ` +
-            `lookup because mdapi_match_players has no foreign key to mdapi_matches, so PostgREST cannot ` +
-            `join them. Lifting this needs that key (or an RPC), not a bigger number here.`,
-        }, { status: 501 });
-      }
-      rosterIds = new Set<number>();
-      // .in() over a large id list would blow the URL, so the roster lookup is chunked.
-      for (let i = 0; i < matchIds.length; i += 200) {
-        const chunk = matchIds.slice(i, i + 200);
-        if (chunk.length === 0) continue;
-        const rp = await pageAll<{ user_id: number }>((f, t) =>
-          supabase
-            .from("mdapi_match_players")
-            .select("user_id")
-            .in("match_api_id", chunk)
-            .neq("user_is_fake_player", true)
-            .range(f, t),
-        );
-        for (const r of rp) if (r.user_id != null) rosterIds.add(Number(r.user_id));
-      }
-    }
-
-    let rows: UserRow[] = [];
-    let total = 0;
-    const basisCounts = { registered: 0, roster: 0, both: 0 };
-
-    if (scope) {
-      const union = new Set<number>([...(registeredIds ?? []), ...(rosterIds ?? [])]);
-      // A SCOPED SET IS SMALL ENOUGH TO ORDER WHOLE, so every column — including the two computed
-      // ones — sorts across the entire result rather than within a page.
-      const ids = [...union];
-      const all: UserRow[] = [];
-      for (let i = 0; i < ids.length; i += 200) {
-        const chunk = ids.slice(i, i + 200);
-        if (chunk.length === 0) continue;
-        const { data, error } = await supabase.from("mdapi_users").select(COLS).in("id", chunk);
-        if (error) throw new Error(error.message);
-        all.push(...((data ?? []) as unknown as UserRow[]));
-      }
-      rows = all;
-
-      /* THE COUNT IS THE ROWS THAT RESOLVED, NOT THE IDS THAT MATCHED.
-       *
-       * A roster carries user_ids that mdapi_users does not always have — measured on WAW: 13
-       * distinct roster user_ids, 12 of them present in the users mirror. Counting the id set
-       * would print "13 players" above a table that can only ever show 12, which is the same
-       * class of leak as a total that counts rows the viewer cannot see: a number nobody can
-       * reconcile against what is on screen.
-       *
-       * The basis split is counted off the SAME resolved rows, so the three figures always add up
-       * to the total printed beside them. */
-      total = rows.length;
-      for (const r of rows) {
-        const reg = registeredIds?.has(Number(r.id)) === true;
-        const ros = rosterIds?.has(Number(r.id)) === true;
-        if (reg && ros) basisCounts.both++;
-        else if (reg) basisCounts.registered++;
-        else basisCounts.roster++;
-      }
-    } else {
-      // UNSCOPED IS 30,179 ROWS, so the order and the offset go into the query. The two computed
-      // columns cannot be ordered in SQL here; asking for them falls back to registration order
-      // and the response says so rather than returning a page sorted by something else.
-      const col = DB_SORT[sort] ?? "created_at";
-      const { count, error: cErr } = await supabase
-        .from("mdapi_users")
-        .select("id", { count: "exact", head: true })
-        .neq("is_fake_player", true);
-      if (cErr) throw new Error(cErr.message);
-      total = count ?? 0;
-      const from = (page - 1) * size;
-      const { data, error } = await supabase
-        .from("mdapi_users")
-        .select(COLS)
-        .neq("is_fake_player", true)
-        .order(col, { ascending: dir === "asc" })
-        .range(from, from + size - 1);
-      if (error) throw new Error(error.message);
-      rows = (data ?? []) as unknown as UserRow[];
-    }
+    // ── THE FILTER, THE COUNT AND THE PAGE — all three in SQL ──────────────────────────────────
+    // The count is taken with the SAME predicate as the rows, so the number above the table is the
+    // number of rows the account can actually reach. A total counting people they cannot see is a
+    // leak that shows a figure instead of a row.
+    const col = DB_SORT[sort] ?? "created_at";
+    const from = (page - 1) * size;
+    let q = supabase
+      .from("mdapi_users")
+      .select(COLS, { count: "exact" })
+      .neq("is_fake_player", true);
+    if (cityName) q = q.eq("preferable_city_name", cityName);
+    const { data, count, error } = await q
+      .order(col, { ascending: dir === "asc" })
+      .range(from, from + size - 1);
+    if (error) throw new Error(error.message);
+    const rows = (data ?? []) as unknown as UserRow[];
+    const total = count ?? 0;
 
     // ── LAST MATCH PLAYED — one query for the page, never one per player ────────────────────────
-    // PLAYED means a start_date in the PAST. Warsaw's three matches are all in the future, so every
-    // Warsaw row reads a dash today. That is the honest answer; showing the next match instead
-    // would fill the column with dates that mean the opposite of what the header says.
+    // PLAYED means a start_date in the PAST: it answers "has this signup ever actually turned up",
+    // which is what you want to know before approaching them. Warsaw's three matches are all in
+    // the future, so its rows read a dash — showing the next match instead would fill the column
+    // with dates meaning the opposite of the header.
     const pageIds = rows.map((r) => Number(r.id));
     const lastPlayed = new Map<number, string>();
     if (pageIds.length > 0) {
@@ -244,12 +157,12 @@ export async function GET(req: Request) {
       for (let i = 0; i < matchIds.length; i += 300) {
         const chunk = matchIds.slice(i, i + 300);
         if (chunk.length === 0) continue;
-        const { data } = await supabase
+        const { data: ms } = await supabase
           .from("mdapi_matches")
           .select("api_id, start_date")
           .in("api_id", chunk)
           .lt("start_date", nowIso);
-        for (const m of (data ?? []) as { api_id: number; start_date: string }[]) {
+        for (const m of (ms ?? []) as { api_id: number; start_date: string }[]) {
           dateOf.set(Number(m.api_id), m.start_date);
         }
       }
@@ -261,14 +174,7 @@ export async function GET(req: Request) {
       }
     }
 
-    const basisOf = (id: number): "registered" | "roster" | "both" | null => {
-      if (!scope) return null;
-      const r = registeredIds?.has(id) === true;
-      const o = rosterIds?.has(id) === true;
-      return r && o ? "both" : r ? "registered" : "roster";
-    };
-
-    let out = rows.map((r) => ({
+    const players = rows.map((r) => ({
       id: Number(r.id),
       name: [r.first_name, r.last_name].filter(Boolean).join(" ").trim() || null,
       email: r.email ?? null,
@@ -277,48 +183,16 @@ export async function GET(req: Request) {
       last_match: lastPlayed.get(Number(r.id)) ?? null,
       member: r.is_member === true,
       city: r.preferable_city_name ?? null,
-      basis: basisOf(Number(r.id)),
     }));
 
-    let sortNote: string | null = null;
-    if (scope) {
-      const s = (x: string | null) => (x ?? "").toLowerCase();
-      const cmp = (a: (typeof out)[number], b: (typeof out)[number]): number => {
-        switch (sort) {
-          case "id":
-            return a.id - b.id;
-          case "name":
-            return s(a.name).localeCompare(s(b.name));
-          case "email":
-            return s(a.email).localeCompare(s(b.email));
-          case "phone":
-            return s(a.phone).localeCompare(s(b.phone));
-          case "member":
-            return Number(a.member) - Number(b.member);
-          case "basis":
-            return s(a.basis).localeCompare(s(b.basis));
-          // NULLS LAST in both directions — a player who has never played is not "earliest".
-          case "last_match": {
-            if (!a.last_match && !b.last_match) return 0;
-            if (!a.last_match) return 1;
-            if (!b.last_match) return -1;
-            return a.last_match < b.last_match ? -1 : 1;
-          }
-          default:
-            return s(a.registered) < s(b.registered) ? -1 : s(a.registered) > s(b.registered) ? 1 : 0;
-        }
-      };
-      const nullsLast = sort === "last_match";
-      out.sort((a, b) => {
-        const c = cmp(a, b);
-        if (nullsLast && (!a.last_match || !b.last_match)) return c;
-        return dir === "asc" ? c : -c;
-      });
-      const from = (page - 1) * size;
-      out = out.slice(from, from + size);
-    } else if (sort === "last_match" || sort === "basis") {
-      sortNote = `${sort} cannot be ordered across all cities — showing newest registration first.`;
-    }
+    // LAST MATCH IS THE ONE COLUMN SQL CANNOT ORDER — it is derived from two other tables. Sorting
+    // it would mean resolving it for every row in the city, not just the page, which is the kind
+    // of walk this route just got rid of. So the request is answered in registration order and the
+    // response SAYS SO rather than returning a page sorted by something the caller did not ask for.
+    const sortNote =
+      sort === "last_match"
+        ? "Last match is derived from the match mirror and cannot be ordered in the query — showing newest registration first."
+        : null;
 
     // ── THE MIRROR'S OWN CLOCK ─────────────────────────────────────────────────────────────────
     const { data: fresh } = await supabase
@@ -329,7 +203,7 @@ export async function GET(req: Request) {
     const syncedAt = ((fresh ?? [])[0] as { synced_at?: string } | undefined)?.synced_at ?? null;
 
     return Response.json({
-      players: out,
+      players,
       total,
       page,
       size,
@@ -337,8 +211,7 @@ export async function GET(req: Request) {
       dir,
       sortNote,
       scope: scope ?? null,
-      scopeName: scope ? cityNameFor(scope) : null,
-      basisCounts: scope ? basisCounts : null,
+      scopeName: cityName,
       syncedAt,
     });
   } catch (e) {
