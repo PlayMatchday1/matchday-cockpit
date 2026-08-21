@@ -6,7 +6,15 @@ import MatchEditor from "./MatchEditor";
 // and cannot overwrite anything the user did not edit.
 export const dynamic = "force-dynamic";
 
-export default async function StageMatchPage({ params }: { params: Promise<{ id: string }> }) {
+export default async function StageMatchPage({ params, searchParams }: {
+  params: Promise<{ id: string }>;
+  searchParams: Promise<Record<string, string | string[] | undefined>>;
+}) {
   const { id } = await params;
-  return <MatchEditor id={id} />;
+  const sp = await searchParams;
+  // STEP TWO OF A COPY arrives here with ?copyFrom=<sourceId>. It is an ORDINARY EDIT of a match
+  // that now exists — the only difference is that the source's remaining fields are staged as
+  // unsaved changes, so one Save carries what the nine-field create could not.
+  const copyFrom = typeof sp.copyFrom === "string" && sp.copyFrom ? sp.copyFrom : null;
+  return <MatchEditor id={id} sourceId={copyFrom} />;
 }

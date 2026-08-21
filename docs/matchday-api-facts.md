@@ -342,6 +342,36 @@ Full inventory: docs/retool-prod-inventory.md. Key points that touch this file:
   (`PRODUCTION_WRITES_ENABLED = true`, a hardcoded pass-through; see the bolt section
   below), so a confirmed cancel LANDS on production. It is NOT bolted.
 
+- **CREATE IS `POST /admin/matches`, and it WHITELISTS.** Probed on staging by sending bodies that
+  could never succeed (`name` omitted every time), so nothing was created. Nine required fields:
+
+      name (string) · description (string) · type (EVENT|REGULAR|BRACKET|GROUP)
+      startDate (Date) · endDate (Date) · fieldId (int) · maxPlayerCount (int)
+      teamNumbers (int) · isFreeMember (boolean)
+
+  **Per-instance fields are REFUSED BY NAME, not ignored** — `id`, `apiId`, `starRating`,
+  `starRatingCount`, `playerCount`, `fakePlayerCount`, `isCancelled`, `createdAt`, `updatedAt`,
+  `players`, `guestCount` each come back `"property X should not exist"`. So spreading a source
+  match into a create body FAILS LOUDLY; it cannot carry a roster, a rating or an id by accident.
+  Build the nine explicitly anyway.
+
+  **THE SHAPE MISMATCH.** Create takes 9 fields, the match editor edits 21, and only 6 overlap
+  (`name`, `description`, `type`, `fieldId`, `isFreeMember`, `maxPlayerCount`). A copy therefore
+  cannot carry the manager, prices, fake-spot schedule or auto-bump settings through the create
+  call — those need the PUT that already works, as a second step.
+
+- **DOUBLE-SUBMIT ON CREATE IS `UNKNOWN`.** Not "probably two matches" — UNKNOWN. There is no
+  Idempotency-Key and the payload carries nothing a server could dedupe on, but that was never
+  measured: measuring it means creating real matches on staging, and `DELETE /admin/matches/{id}`
+  is on this client's endpoint deny-list, so they could not be cleaned up. The probe was skipped
+  deliberately because it buys nothing — the guard is mandatory either way.
+
+  **THE GUARD DOES NOT DEPEND ON THE ANSWER.** A disabled button only stops a double-click; it
+  does not stop a refresh mid-save, a second tab, or a retry at a layer below us. So the create
+  path QUERIES FIRST for an existing match at the same `fieldId` and the same `startDate`, and
+  refuses with that match's id and a link. Overriding is deliberate and explicit. That makes the
+  server's dedupe behaviour irrelevant, which is the honest way to close an UNKNOWN.
+
 - COPY ENDPOINTS — NOT BUILT, warning for whoever builds them. The three copy
   endpoints have NO idempotency key and fan out server-side:
     - `POST /admin/matches/{id}/copy`

@@ -452,6 +452,19 @@ export default function VeoMasterSchedule() {
                 </div>
                 <button type="button" className="vms-navbtn" onClick={goNext} disabled={navBusy} aria-label="Next week" title="Next week">›</button>
                 <button type="button" data-testid="today" className={"vms-btn vms-todaybtn" + (isCurrentWeek ? "" : " vms-todaybtn-hot")} onClick={goToday} disabled={navBusy || isCurrentWeek} title="Jump to the current week">Today</button>
+                {/* COPY MATCH — one at a time, by construction: it acts on the SELECTED match, and
+                    only one card can be selected. It navigates to the create form and writes
+                    nothing; the copy exists only in that form until Create is pressed. */}
+                <button
+                  type="button"
+                  data-testid="copy-match"
+                  className="vms-btn"
+                  disabled={drawerId == null}
+                  title={drawerId == null ? "Select a match first" : `Copy match ${drawerId}`}
+                  onClick={() => { if (drawerId != null) window.location.href = `/match-ops/matches/new?from=${drawerId}`; }}
+                >
+                  {drawerId == null ? "Copy match" : `Copy match ${drawerId}`}
+                </button>
               </div>
             )}
             <span className="vms-control-label">View</span>

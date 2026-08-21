@@ -104,7 +104,25 @@ async function authFetch(path: string, init?: RequestInit): Promise<Response> {
 }
 const money = (cents: unknown) => "$" + (Number(cents ?? 0) / 100).toFixed(2);
 
-export default function MatchEditor({ id }: { id: string }) {
+/* ONE COMPONENT, TWO MODES — and the switch is deliberately small.
+ *
+ * EDIT (the Gameday Ops behaviour, unchanged): loads the match by id, start/end render as a
+ * disabled input with the sentence they have always carried.
+ *
+ * CREATE: no match to load. The nine fields POST /admin/matches requires are pre-filled from the
+ * SOURCE match, and start/end become REQUIRED inputs that arrive BLANK — a copy carrying last
+ * week's date is one careless save away from duplicating a match that already exists.
+ *
+ * COPY-STEP-TWO: an ordinary edit of the newly created match, with the source's remaining fields
+ * overlaid onto `state` so the diff shows them as changed and one save sends them. That is why
+ * create can take nine fields and a copy can still carry twenty-one.
+ */
+export default function MatchEditor({ id, mode = "edit", sourceId }: {
+  id: string;
+  mode?: "edit" | "create";
+  /** The match being copied FROM — pre-fills create, and step two's overlay. */
+  sourceId?: string | null;
+}) {
   const { appUser } = useAuth();
   const router = useRouter();
   const canEdit = canEditMatches(appUser); // courtesy gate; the server write path holds
@@ -133,13 +151,70 @@ export default function MatchEditor({ id }: { id: string }) {
     setMeta({ id: m.id, startDate: m.startDate, endDate: m.endDate, isCancelled: m.isCancelled, teams: m.teams, fieldTitle: m.fieldTitle, cityName: m.cityName, occupancy: m.occupancy, maxPlayerCount: m.maxPlayerCount });
   }, []);
 
+  // CREATE MODE'S OWN DATE STATE. Deliberately NOT part of `state`: the twenty-one editable keys
+  // are the PUT's business, and these two belong only to the create call.
+  const [startAt, setStartAt] = useState("");
+  const [endAt, setEndAt] = useState("");
+  const [dateErr, setDateErr] = useState<string | null>(null);
+  const [created, setCreated] = useState<{ id: number; outcome: string } | null>(null);
+  const [dupe, setDupe] = useState<{ id: number; name: string } | null>(null);
+
   const load = useCallback(async () => {
     setLoadErr(null); setMsg(null);
-    const res = await authFetch(`/api/matchday/${FULL_EDITOR_ENV}/matches/${id}`);
+    // In CREATE mode there is nothing at `id` yet — the source match is what gets read, and only
+    // to pre-fill. Nothing is written until Save.
+    const readId = mode === "create" ? sourceId : id;
+    if (!readId) { setLoadErr("No source match to copy from."); return; }
+    const res = await authFetch(`/api/matchday/${FULL_EDITOR_ENV}/matches/${readId}`);
     const json = await res.json().catch(() => ({}));
     if (!res.ok) { setLoadErr(json?.error ?? `HTTP ${res.status}`); return; }
-    setFields(json.fields ?? []); setPlayers(json.players ?? []); ingest(json.match);
-  }, [id, ingest]);
+    setFields(json.fields ?? []); setPlayers(mode === "create" ? [] : (json.players ?? []));
+    ingest(json.match);
+
+    /* STEP TWO OF A COPY. The create call could carry only nine fields, so the rest arrive here:
+     * the source's editable values are overlaid onto `state` (never onto `loaded`), which makes
+     * them show up as UNSAVED CHANGES in the diff the editor already renders. One Save sends them
+     * through the PUT that has always worked.
+     *
+     * EVERY editable key is overlaid, not a hand-listed subset. The nine that create already
+     * carried will equal what came back and simply will not appear in the diff — so the list
+     * cannot drift out of step with what create sends. */
+    if (mode === "edit" && sourceId) {
+      try {
+        const sres = await authFetch(`/api/matchday/${FULL_EDITOR_ENV}/matches/${sourceId}`);
+        const sjson = await sres.json().catch(() => ({}));
+        if (sres.ok && sjson?.match) {
+          const src = sjson.match as Data;
+          setState((cur) => {
+            if (!cur) return cur;
+            const next: Data = { ...cur };
+            for (const k of EDITABLE_KEYS) {
+              const v = src[k];
+              next[k] = v ?? (TOGGLE.has(k) ? false : null);
+            }
+            return next;
+          });
+          setMsg({ kind: "warn", text:
+            `Match ${id} was created. These are the copied settings from match ${sourceId}, NOT SAVED YET — ` +
+            `press Save to apply them.` });
+        } else {
+          // STEP ONE LANDED AND STEP TWO COULD NOT EVEN READ THE SOURCE. Say which half landed.
+          setMsg({ kind: "warn", text:
+            `Match ${id} WAS created, but the source match ${sourceId} could not be read, so none of its ` +
+            `other settings were copied. The match exists with defaults — edit it here.` });
+        }
+      } catch {
+        setMsg({ kind: "warn", text:
+          `Match ${id} WAS created. Copying the remaining settings from ${sourceId} failed — the match ` +
+          `exists with defaults and this editor is open on it.` });
+      }
+    }
+    if (mode === "create") {
+      // THE COPY ARRIVES WITHOUT A DATE, ON PURPOSE. Everything else is the source's.
+      setStartAt(""); setEndAt("");
+      setMeta((m) => ({ ...(m ?? {}), id: null, startDate: null, endDate: null }));
+    }
+  }, [id, mode, sourceId, ingest]);
   useEffect(() => { void load(); }, [load]);
 
   const changedKeys = useMemo(() => {
@@ -226,7 +301,63 @@ export default function MatchEditor({ id }: { id: string }) {
   };
   const inGroup = (g: Spec["group"]) => FIELDS.filter((f) => f.group === g);
 
+  /* CREATE — STEP ONE OF TWO.
+   *
+   * SINGLE-FIRE, AND NOT ONLY BY DISABLING THE BUTTON. `saving` stops a double click; the SERVER
+   * refuses a second match at the same field and time, which is what stops a refresh mid-save, a
+   * second tab, and a retry below us. Whether the API itself dedupes is UNKNOWN and this is how
+   * that stops mattering.
+   *
+   * A 2xx IS NOT PROOF: the route reads the new match back and returns LANDED / UNKNOWN, and the
+   * message says which. On success it hands straight to step two — the same editor, now editing
+   * the real match, with the source's remaining fields already staged as changes.
+   */
+  const createMatch = async (allowDuplicate = false) => {
+    if (saving) return;
+    if (!startAt || !endAt) {
+      setDateErr("Pick a start and end — the copy deliberately arrives without the original's date.");
+      return;
+    }
+    setSaving(true); setMsg(null); setDupe(null);
+    const iso = (local: string) => `${local.replace("T", "T")}:00.000Z`;
+    const body = {
+      match: {
+        name: String(state?.name ?? ""),
+        description: String(state?.description ?? ""),
+        type: String(state?.type ?? "REGULAR"),
+        startDate: iso(startAt),
+        endDate: iso(endAt),
+        fieldId: Number(state?.fieldId ?? 0),
+        maxPlayerCount: Number(meta?.maxPlayerCount ?? 0),
+        teamNumbers: Array.isArray(meta?.teams) ? (meta!.teams as Data[]).length : 2,
+        isFreeMember: state?.isFreeMember === true,
+      },
+      allowDuplicate,
+      source: "Copy match",
+    };
+    const res = await authFetch(`/api/matchday/${FULL_EDITOR_ENV}/matches/create`, {
+      method: "POST", body: JSON.stringify(body),
+    });
+    const json = await res.json().catch(() => ({}));
+    setSaving(false);
+    if (res.status === 409 && json?.duplicate) {
+      setDupe({ id: Number(json.duplicate.id), name: String(json.duplicate.name ?? "") });
+      return;
+    }
+    if (!res.ok) { setMsg({ kind: "err", text: json?.error ?? `HTTP ${res.status}` }); return; }
+    setCreated({ id: Number(json.id), outcome: String(json.outcome) });
+    if (json.outcome === "LANDED" && json.id) {
+      // STEP TWO. The remaining fields ride the PUT that already works.
+      router.push(`/match-ops/matches/${json.id}?copyFrom=${sourceId ?? ""}`);
+    } else {
+      setMsg({ kind: "warn", text:
+        `The create returned ${json.outcome}. It may or may not have landed — do NOT press it again; ` +
+        `check the schedule for ${String(body.match.name)} at ${startAt} before retrying.` });
+    }
+  };
+
   const save = async () => {
+    if (mode === "create") return createMatch();
     if (!changedKeys.length) return;
     setSaving(true); setMsg(null);
     const res = await authFetch(`/api/matchday/${FULL_EDITOR_ENV}/matches/${id}`, { method: "PUT", body: JSON.stringify({ changes: payload }) });
@@ -283,13 +414,51 @@ export default function MatchEditor({ id }: { id: string }) {
         </div>
       </div>
 
+      {/* THE DUPLICATE REFUSAL. Never a silent second create — it names the match that already
+          exists, links to it, and makes the override an explicit second action. */}
+      {dupe && (
+        <div className="dupe" data-testid="create-duplicate">
+          <b>A match already exists at this field and time: {dupe.id}</b>
+          {dupe.name ? <span> — {dupe.name}</span> : null}
+          <div className="dupe-actions">
+            <a href={`/match-ops/matches/${dupe.id}`} data-testid="create-duplicate-link">Open match {dupe.id}</a>
+            <button type="button" data-testid="create-duplicate-override" disabled={saving}
+              onClick={() => void createMatch(true)}>
+              {saving ? "Creating…" : "Create it anyway"}
+            </button>
+            <button type="button" data-testid="create-duplicate-cancel" onClick={() => setDupe(null)}>
+              Cancel
+            </button>
+          </div>
+        </div>
+      )}
+      {created && created.outcome !== "LANDED" && (
+        <div className="dupe" data-testid="create-unknown">
+          <b>The create returned {created.outcome}.</b> It may or may not have landed — do not press it
+          again. Check the schedule before retrying.
+        </div>
+      )}
+
       <div className="cols">
         <div>
           {/* Match */}
           <section className="card"><div className="ch"><h2>Match</h2><span className="cnt" data-testid="cnt-match">{groupCount("match") ? `${groupCount("match")} changed` : ""}</span></div>
             <div className="cb"><div className="grid">{inGroup("match").map(renderField)}
-              <div className="f"><label>Start and end<span className="hint">Set when the match was created; changing dates is its own action.</span></label>
-                <input type="text" disabled value={`${meta.startDate ? wallStamp(String(meta.startDate)) : "—"} → ${meta.endDate ? hhmm12(wallTime(String(meta.endDate))) : "—"}`} /></div>
+              {mode === "edit" ? (
+                <div className="f"><label>Start and end<span className="hint">Set when the match was created; changing dates is its own action.</span></label>
+                  <input type="text" disabled value={`${meta.startDate ? wallStamp(String(meta.startDate)) : "—"} → ${meta.endDate ? hhmm12(wallTime(String(meta.endDate))) : "—"}`} /></div>
+              ) : (
+                <>
+                  {/* BLANK ON PURPOSE, AND REQUIRED. The one field a copy must not inherit. */}
+                  <div className="f"><label>Start<span className="hint">Blank on purpose — a copy must not arrive carrying the original&rsquo;s date.</span></label>
+                    <input type="datetime-local" data-testid="in-startDate" value={startAt}
+                      onChange={(e) => { setStartAt(e.target.value); setDateErr(null); }} /></div>
+                  <div className="f"><label>End<span className="hint">Same day unless you say otherwise.</span></label>
+                    <input type="datetime-local" data-testid="in-endDate" value={endAt}
+                      onChange={(e) => { setEndAt(e.target.value); setDateErr(null); }} /></div>
+                  {dateErr && <div className="f" data-testid="create-dateerr" style={{ color: "#b3261e" }}>{dateErr}</div>}
+                </>
+              )}
             </div></div></section>
 
           {/* Teams (read-only this phase) */}
@@ -387,7 +556,11 @@ export default function MatchEditor({ id }: { id: string }) {
           {msg ? <span className="sbmsg" data-testid="sb-msg" style={{ color: msg.kind === "ok" ? "#046B45" : msg.kind === "warn" ? "#7A5200" : "#A83120" }}>{msg.kind === "warn" ? "⚠ " : ""}{msg.text}</span> : null}
           <span className="sbact">
             <button className="btn" data-testid="revert" disabled={!changedKeys.length || saving} onClick={revert}>Revert</button>
-            <button className="btn go" data-testid="save" disabled={!changedKeys.length || saving || !canEdit} onClick={save} title={!canEdit ? "Read-only — you don't have EDIT MATCHES" : undefined}>{saving ? "Saving…" : "Save"}</button>
+            <button className="btn go" data-testid="save"
+              disabled={saving || !canEdit || (mode === "edit" && !changedKeys.length)}
+              onClick={save} title={!canEdit ? "Read-only — you don't have EDIT MATCHES" : undefined}>
+              {saving ? (mode === "create" ? "Creating…" : "Saving…") : (mode === "create" ? "Create match" : "Save")}
+            </button>
           </span>
         </div>
       </div>
@@ -484,6 +657,14 @@ const CSS = `
 .me .di b{color:var(--blueInk)}
 .me .di s{color:var(--faint);text-decoration:line-through;font-weight:700}
 .me .diffnote{font-size:11px;color:var(--blueInk);margin-top:9px;line-height:1.5;font-weight:700}
+/* The duplicate refusal and the UNKNOWN outcome. Loud on purpose — both are states where pressing
+   the button again is the wrong instinct. */
+.me .dupe{margin:12px 0;padding:11px 13px;border:1.5px solid #e6c9a8;background:#fdf6ee;border-radius:12px;font-size:13px;color:#6b4a1f;line-height:1.55}
+.me .dupe b{color:#5a3a12}
+.me .dupe-actions{display:flex;gap:10px;align-items:center;margin-top:8px;flex-wrap:wrap}
+.me .dupe-actions a{font-weight:700;text-decoration:underline;color:#5a3a12}
+.me .dupe-actions button{border:1px solid #e6c9a8;background:#fff;border-radius:8px;padding:4px 10px;font:inherit;font-size:12.5px;cursor:pointer;color:#5a3a12}
+.me .dupe-actions button:disabled{opacity:.5;cursor:default}
 .me .sbin{max-width:1500px;margin:0 auto;padding:12px 24px;display:flex;align-items:center;gap:14px}
 .me .sbtxt{font-size:12.5px;font-weight:850;color:var(--muted)}
 .me .sbtxt b{color:var(--forest)}
