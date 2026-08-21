@@ -23,6 +23,19 @@ const MATCH = 2470;
 let PASS = 0, FAIL = 0; const fails = [];
 const ok = (n) => { PASS++; console.log(`  ✓ ${n}`); };
 const bad = (n, d = "") => { FAIL++; fails.push(`${n} — ${d}`); console.log(`  ✗ ${n} — ${d}`); };
+/* WAIT FOR THE PANEL TO FINISH LOADING, not for a fixed number of milliseconds.
+ * Stepping remounts the editor, which refetches; while that is in flight the title reads
+ * "Loading match NNNNN…" and the name box is empty. Typing into it then is typing into a box that
+ * the arriving payload overwrites — which is exactly how this suite reported the dirty guard
+ * broken while a live probe showed it holding. */
+const settle = async (page) => {
+  await page.waitForFunction(() => {
+    const t = document.querySelector('[data-testid="dr-title"]')?.textContent ?? "";
+    const n = document.querySelector('[data-testid="in-name"]')?.value ?? "";
+    return t && !/loading/i.test(t) && n.length > 0;
+  }, null, { timeout: 30000 });
+};
+
 const eq = (n, got, want) => (JSON.stringify(got) === JSON.stringify(want) ? ok(n) : bad(n, `got ${JSON.stringify(got)} want ${JSON.stringify(want)}`));
 
 const svc = createClient(process.env.NEXT_PUBLIC_SUPABASE_URL, process.env.SUPABASE_SERVICE_ROLE_KEY, { auth: { persistSession: false } });
@@ -64,9 +77,27 @@ console.log("\n── the page ──");
     time: !!document.querySelector('[data-testid="in-time"]'),
   }));
   eq("date and time are editable here now", [dates.date, dates.time], [true, true]);
-  const prod = await page.evaluate(() => document.querySelector('[data-testid="ed-envbadge"]')?.textContent ?? "");
-  eq("the production warning renders on the page", /PRODUCTION/i.test(prod), true);
-  console.log(`     env badge: ${prod.trim()}`);
+  /* THE ENVIRONMENT WARNING IS GONE, BY DECISION. Master Schedule and this editor cannot be
+   * pointed at different environments, so it fired on every match — and one that fires every time
+   * is read on none of them. The LIVE and ID pills stay: they identify the match. */
+  const pills = await page.evaluate(() => ({
+    env: !!document.querySelector('[data-testid="ed-envbadge"]'),
+    title: !!document.querySelector('[data-testid="title"]'),
+    prodText: /production|live edits/i.test(document.body.innerText),
+  }));
+  eq("no environment pill on the page", pills.env, false);
+  eq('  …and no "production"/"live edits" text anywhere on it', pills.prodText, false);
+  // THE PAGE STILL SUPPLIES ITS OWN TITLE BLOCK — nothing else does there.
+  eq("the page renders the editor's own title block", pills.title, true);
+
+  // AND THE PAGE STILL SCROLLS. Whatever the panel fix took must not break the variant with no
+  // panel chrome: there `.cols` is an ordinary block and the WINDOW scrolls.
+  const pageScroll = await page.evaluate(() => ({
+    panelMode: !!document.querySelector(".me-panel"),
+    canScroll: document.documentElement.scrollHeight > window.innerHeight,
+  }));
+  eq("  control — the page is NOT in panel mode", pageScroll.panelMode, false);
+  eq("the page itself scrolls", pageScroll.canScroll, true);
 }
 
 console.log("\n── the drawer ──");
@@ -97,10 +128,100 @@ console.log("\n── the drawer ──");
   });
   eq("the drawer renders the editor in PANEL mode", chrome.isPanel, true);
   eq("  …with no back button", chrome.back, false);
-  eq("  …a save bar sticky INSIDE the panel, not fixed to the viewport", chrome.barPos, "sticky");
+  /* THE SAVE BAR IS NOW A FLEX CHILD, NOT STICKY. Sticky worked only while the whole panel
+   * scrolled — which was the bug: everything below the date fields was unreachable. The panel is
+   * three parts now (header / scrolling body / save bar), so the bar is simply the last row and
+   * never moves. `static` here is the fix, not a regression. */
+  eq("  …a save bar that is a fixed part of the panel, not sticky inside a scrolling one", chrome.barPos, "static");
   eq("  …and it does not claim the viewport", chrome.minH === "100vh", false);
-  eq("the production warning renders in the panel too", /PRODUCTION/i.test(chrome.envBadge), true);
+  eq("no environment warning in the panel either", /PRODUCTION/i.test(chrome.envBadge), false);
   eq('"Open full editor" is gone — this IS the full editor', chrome.fullLink, false);
+}
+
+// ── 1b. THE PANEL SCROLLS: HEADER STAYS, BODY MOVES, SAVE BAR STAYS ───────────────────────────
+console.log("\n── the panel scrolls ──");
+{
+  await page.setViewportSize({ width: 1500, height: 900 });
+  await page.waitForTimeout(700);
+  const sc = await page.evaluate(() => {
+    const body = document.querySelector(".me-panel .cols");
+    const head = document.querySelector(".mdw-head");
+    const bar = document.querySelector(".me-panel .savebar");
+    if (!body || !head || !bar) return null;
+    const lastField = [...body.querySelectorAll("[data-f]")].pop();
+    const before = { head: head.getBoundingClientRect().top, bar: bar.getBoundingClientRect().top,
+                     last: lastField?.getBoundingClientRect().top ?? null };
+    body.scrollTop = body.scrollHeight;
+    const after = { head: head.getBoundingClientRect().top, bar: bar.getBoundingClientRect().top,
+                    last: lastField?.getBoundingClientRect().top ?? null,
+                    lastBottom: lastField?.getBoundingClientRect().bottom ?? null };
+    return {
+      scrollable: body.scrollHeight > body.clientHeight,
+      scrollHeight: body.scrollHeight, clientHeight: body.clientHeight,
+      scrolled: body.scrollTop > 0,
+      headMoved: before.head !== after.head,
+      barMoved: before.bar !== after.bar,
+      lastMoved: before.last !== after.last,
+      lastVisible: after.lastBottom != null && after.lastBottom <= window.innerHeight + 2,
+      barTop: after.bar, bodyBottom: body.getBoundingClientRect().bottom,
+    };
+  });
+  eq("  control — the three parts are all present", sc != null, true);
+  eq("the panel body is taller than its box, so it CAN scroll", sc.scrollable, true);
+  eq("  …and scrolling it actually moves", sc.scrolled, true);
+  eq("the last field is reachable by scrolling at 900px", sc.lastVisible, true);
+  eq("  …because the body moved it", sc.lastMoved, true);
+  // THE TWO THAT MUST NOT MOVE — this is what "three parts" means.
+  eq("the drawer header does NOT move", sc.headMoved, false);
+  eq("the save bar does NOT move", sc.barMoved, false);
+  console.log(`     body ${sc.scrollHeight}px in a ${sc.clientHeight}px box · header and save bar fixed`);
+}
+
+// ── 1c. ONE HEADER, AND NO ENVIRONMENT WARNING ────────────────────────────────────────────────
+console.log("\n── the seam is closed ──");
+{
+  const scan = (needle) => page.evaluate((needle) => {
+    let hits = 0;
+    const walk = (n) => {
+      for (const c of n.childNodes) {
+        if (c.nodeType === 3) { if (c.textContent.toLowerCase().includes(needle.toLowerCase())) hits++; }
+        else if (c.nodeType === 1 && !/^(script|style)$/i.test(c.tagName)) walk(c);
+      }
+    };
+    walk(document.body);
+    return hits;
+  }, needle);
+
+  // POSITIVE CONTROL: a pill that IS still there, so a zero below is absence rather than a dead scan.
+  eq("  control — the LIVE pill is on the page", await scan("Live") > 0, true);
+  eq('"Production" appears nowhere in the drawer', await scan("Production"), 0);
+  eq('"Live edits" appears nowhere either', await scan("Live edits"), 0);
+
+  // AND THE SCAN CATCHES A PLANTED COPY — otherwise the two zeros above prove nothing.
+  await page.evaluate(() => {
+    const d = document.createElement("div");
+    d.id = "planted-prod";
+    d.textContent = "PRODUCTION — LIVE EDITS";
+    document.querySelector('[data-testid="drawer"]').appendChild(d);
+  });
+  eq("  control — the scan catches a planted warning", await scan("Production") >= 1, true);
+  await page.evaluate(() => document.getElementById("planted-prod")?.remove());
+  eq("  …and the drawer is clean again", await scan("Production"), 0);
+
+  // ONE HEADER. The editor's title block does not render in panel mode; the drawer's does.
+  const once = await page.evaluate(() => ({
+    editorTitle: document.querySelectorAll('[data-testid="title"]').length,
+    drawerTitle: document.querySelectorAll('[data-testid="dr-title"]').length,
+    // LEAF NODES ONLY. The .mdw-chips CONTAINER also matches [class*="chip"], and its textContent
+    // begins with its first child's — so it counted itself as a second ID pill.
+    ids: [...document.querySelectorAll('[class*="chip"]')]
+      .filter((e) => e.children.length === 0 && /^ID \d/.test(e.textContent.trim())).length,
+    live: [...document.querySelectorAll('[data-testid="dr-livepill"]')].length,
+  }));
+  eq("the editor's own title block is ABSENT in the panel", once.editorTitle, 0);
+  eq("  …and the drawer's renders exactly once", once.drawerTitle, 1);
+  eq("the ID pill renders exactly once", once.ids, 1);
+  eq("the LIVE pill renders exactly once", once.live, 1);
 }
 
 // ── 2. SIBLING STEPPING, AND THE GUARD ────────────────────────────────────────────────────────
@@ -115,14 +236,14 @@ console.log("\n── sibling stepping ──");
     const ids = await page.evaluate(() => [...document.querySelectorAll('[data-testid="card"]')].map((c) => c.getAttribute("data-id")));
     for (const id of ids.slice(0, 12)) {
       await page.click(`[data-testid="card"][data-id="${id}"]`).catch(() => {});
-      await page.waitForTimeout(500);
+      await settle(page).catch(() => {});
       canStep = await page.evaluate(() => !document.querySelector('[data-testid="dr-next"]')?.disabled);
       if (canStep) break;
     }
   }
   if (canStep) {
     await page.click('[data-testid="dr-next"]');
-    await page.waitForTimeout(900);
+    await settle(page);
     const after = await titleOf();
     eq("stepping to the next match changes the match", before === after, false);
     eq("  …without closing the drawer", await page.locator('[data-testid="drawer"]').count(), 1);
@@ -134,8 +255,12 @@ console.log("\n── sibling stepping ──");
   // THE GUARD, which is the bug the consolidation introduced and this suite exists to hold:
   // the drawer used to compute its own dirtiness, which after the swap was permanently false —
   // so stepping would have silently discarded unsaved edits.
+  await settle(page);
   await page.fill('[data-testid="in-name"]', "one-editor dirty probe");
-  await page.waitForTimeout(400);
+  // A POSITIVE CONTROL FOR THE GUARD ITSELF: if the edit never registered, the assertions below
+  // would pass for the wrong reason — an unstepped drawer that was simply never dirty.
+  await page.waitForFunction(() => /changed/.test(document.querySelector('[data-testid="cnt-match"]')?.textContent ?? ""), null, { timeout: 10000 });
+  eq("  control — the typed edit registers as a change", await page.textContent('[data-testid="cnt-match"]'), "1 changed");
   const dirtyTitle = await titleOf();
   await page.click('[data-testid="dr-next"]').catch(() => {});
   await page.waitForTimeout(700);
@@ -143,6 +268,7 @@ console.log("\n── sibling stepping ──");
   eq("  …and the edit is still in the box", await page.inputValue('[data-testid="in-name"]'), "one-editor dirty probe");
   await page.click('[data-testid="revert"]');
   await page.waitForTimeout(300);
+  eq("  …and revert clears it", await page.textContent('[data-testid="cnt-match"]'), "");
 }
 
 // ── 3. THE DATE PAIR, WRITTEN AND READ BACK ───────────────────────────────────────────────────

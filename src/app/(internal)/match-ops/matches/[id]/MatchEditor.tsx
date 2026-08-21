@@ -19,7 +19,6 @@ import { useCallback, useEffect, useMemo, useState } from "react";
 import { useRouter } from "next/navigation";
 import { supabase } from "@/lib/supabase";
 import { EDITABLE_KEYS, MONEY_KEYS as MONEY, TOGGLE_KEYS as TOGGLE, NULLABLE_NUM, fieldChanged, diffKeys, pick } from "@/lib/matchEditModel";
-import { envBadge } from "@/lib/matchEnvBadge";
 import { FULL_EDITOR_ENV } from "@/lib/matchEnv";
 import { noteLogResponse } from "@/lib/logHealth";
 import LogHealthBanner from "@/components/LogHealthBanner";
@@ -339,7 +338,6 @@ export default function MatchEditor({ id, mode = "edit", sourceId, variant = "pa
   const descending = ladderVals.every((v, i) => i === 0 || v <= ladderVals[i - 1]);
   const teamCount = Array.isArray(meta.teams) && (meta.teams as unknown[]).length >= 4 ? 4 : 2;
   const capContradiction = capacityContradiction(state, teamCount);
-  const badge = envBadge(FULL_EDITOR_ENV); // derived from the env that routes the request
 
   // Blank/NaN numeric → empty box. A cleared numeric input stays "" in state, which
   // fieldChanged treats as no change, so it never reaches the diff or the body.
@@ -518,24 +516,25 @@ export default function MatchEditor({ id, mode = "edit", sourceId, variant = "pa
       <style>{CSS}</style>
       <LogHealthBanner />
 
-      {/* PANEL MODE DROPS THE BACK BUTTON ONLY. The rest of this header stays in both — the id,
-          the cancelled/live chip, the start stamp and, most of all, the PRODUCTION pill. That pill
-          is the last thing between a careless edit and forty players' phones, so it renders in
-          both presentations rather than being assumed to come from the drawer's framing. */}
+      {/* ONE HEADER, NOT TWO. In panel mode the drawer already carries the name, the id, the LIVE
+          pill, the close and the sibling arrows — rendering this block as well printed all of it
+          twice, which is the seam from putting one component into two presentations. On the PAGE
+          it still renders, because nothing else supplies it there. */}
+      {variant === "page" && (
       <div className="head">
         <div>
-          {variant === "page" && (
-            <button className="backb" data-testid="editor-back" onClick={goBack} aria-label="Back">‹ Back</button>
-          )}
+          <button className="backb" data-testid="editor-back" onClick={goBack} aria-label="Back">‹ Back</button>
           <h1 data-testid="title">{String(state.name)}</h1>
           <div className="hmeta">
             <span className="chip id">ID {String(meta.id)}</span>
             <span className={`chip ${meta.isCancelled ? "warn" : "live"}`}>{meta.isCancelled ? "Cancelled" : "Live"}</span>
             <span>{meta.startDate ? wallStamp(String(meta.startDate)) : "—"} · {String(meta.fieldTitle ?? "—")}{meta.cityName ? ` · ${String(meta.cityName)}` : ""}</span>
-            <span className={"chip " + (badge.tone === "prod" ? "prod" : "warn")} data-testid="ed-envbadge">{badge.tone === "prod" ? "● " : ""}{badge.label}</span>
+            {/* NO ENVIRONMENT PILL. Master Schedule and this editor cannot be pointed at different
+                environments any more, so it fired on every match and was read on none of them. */}
           </div>
         </div>
       </div>
+      )}
 
       {/* THE DUPLICATE REFUSAL. Never a silent second create — it names the match that already
           exists, links to it, and makes the override an explicit second action. */}
@@ -834,8 +833,16 @@ const CSS = `
 /* PANEL MODE — the same content in Master Schedule's drawer. Only chrome changes: the drawer
    supplies the header and the production framing, so this stops claiming the viewport and the
    save bar sticks to the PANEL rather than spanning the screen behind it. */
-.me.me-panel{min-height:0;max-width:none;margin:0;background:transparent;padding:0 0 8px}
-.me.me-panel .savebar{position:sticky;left:auto;right:auto;bottom:0;box-shadow:0 -6px 18px rgba(0,51,38,.08)}
+/* THREE PARTS: the drawer's header stays, the BODY scrolls, the save bar stays. The panel used to
+   be one long column inside a fixed-height drawer, so everything below Date and Start time was
+   simply unreachable — Save and Revert are pinned at the bottom, and the form between them had
+   nowhere to go. .cols is the body (a backtick here would END this template literal —
+   which is exactly how this broke the first time); min-height:0 lets a flex child actually shrink and
+   therefore scroll, and without it the column just grows and the overflow never engages. */
+.me.me-panel{min-height:0;max-width:none;margin:0;background:transparent;padding:0;
+  height:100%;display:flex;flex-direction:column}
+.me.me-panel .cols{flex:1 1 auto;min-height:0;overflow-y:auto;padding:0 14px 10px}
+.me.me-panel .savebar{position:static;flex:0 0 auto;box-shadow:0 -6px 18px rgba(0,51,38,.08)}
 .me.me-panel .savebar .diff,.me.me-panel .sbin{max-width:none;padding-left:14px;padding-right:14px}
 .me.me-panel .cols{grid-template-columns:1fr}
 .me.me-panel .wrap{padding-left:14px;padding-right:14px}

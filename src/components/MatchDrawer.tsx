@@ -19,7 +19,6 @@
 import { useCallback, useEffect, useMemo, useRef, useState } from "react";
 import { supabase } from "@/lib/supabase";
 import { tzLabelOfCity } from "@/lib/matchTimezone";
-import { envBadge } from "@/lib/matchEnvBadge";
 import MatchEditor from "@/app/(internal)/match-ops/matches/[id]/MatchEditor";
 import { DRAWER_ENV, FULL_EDITOR_ENV } from "@/lib/matchEnv";
 import { noteLogResponse } from "@/lib/logHealth";
@@ -132,14 +131,13 @@ export default function MatchDrawer({
   const cityName = m?.cityName ?? null;
   const tzLabel = tzLabelOfCity(cityName);
 
-  const badge = envBadge(DRAWER_ENV); // derived from the env that routes the request
   return (
     <aside
       ref={panelRef}
-      className={"mdw" + (badge.tone === "prod" ? " mdw-prod" : "")}
+      className="mdw"   /* no red framing: the panel is the app's normal chrome now */
       role="dialog"
       aria-modal="false"
-      aria-label={`${m ? "Edit" : ""} ${badge.tone === "prod" ? "PRODUCTION " : "staging "}match ${apiId}`.trim()}
+      aria-label={`${m ? "Edit " : ""}match ${apiId}`.trim()}
       tabIndex={-1}
       data-testid="drawer"
       data-env={DRAWER_ENV}
@@ -159,7 +157,14 @@ export default function MatchDrawer({
         <div className="mdw-chips">
           <span className="mdw-chip id">ID {apiId}</span>
           <span className="mdw-chip tz" data-testid="dr-tzchip">{tzLabel.toUpperCase()}</span>
-          <span className={"mdw-chip " + (badge.tone === "prod" ? "prod" : "stg")} data-testid="dr-envbadge">{badge.tone === "prod" ? "● " : ""}{badge.label}</span>
+          {/* THE LIVE / CANCELLED PILL, moved here from the editor's own header — which no longer
+              renders in panel mode. It identifies the match, so it has to survive the de-duplication.
+
+              "PRODUCTION — LIVE EDITS" is GONE. It earned its place when Master Schedule and the
+              editor could point at different environments; they cannot, so it fired on every single
+              match — and a warning that fires every time stops being read by the second one. */}
+          <span className={"mdw-chip " + (m?.isCancelled ? "warn" : "live")} data-testid="dr-livepill">
+            {m?.isCancelled ? "Cancelled" : "Live"}</span>
           {/* "Open full editor →" is gone: this IS the full editor now, in a panel. A link to a
               fuller one would have nowhere to go. */}
         </div>
@@ -194,6 +199,10 @@ const CSS = `
 .mdw:focus{outline:none}
 .mdw *{box-sizing:border-box}
 .mdw-head{background:#04291D;color:#fff;padding:15px 18px 16px;flex:0 0 auto}
+/* THE EDITOR GETS THE REMAINING HEIGHT, BOUNDED. Without min-height:0 the flex child grows to its
+   content and the panel scrolls as a whole — which is exactly the bug: the save bar rides off the
+   bottom of the screen and the fields above it cannot be reached. */
+.mdw > .me{flex:1 1 auto;min-height:0}
 .mdw-row1{display:flex;align-items:center;gap:8px;margin-bottom:9px}
 .mdw-crumb{font-size:12px;color:#9FC9B6;letter-spacing:.02em}
 .mdw-row1 .mdw-sp{margin-left:auto;display:flex;gap:6px}
@@ -204,16 +213,11 @@ const CSS = `
 .mdw-chips{display:flex;gap:6px;margin-top:9px;flex-wrap:wrap;align-items:center}
 .mdw-chip{font-size:10.5px;font-weight:700;letter-spacing:.07em;border-radius:20px;padding:3px 9px}
 .mdw-chip.id{background:#14432F;color:#B7DECB}
+.mdw-chip.live{background:#0F6B4F;color:#CFF3E3}
+.mdw-chip.warn{background:#5A3A12;color:#F4E3C4}
 .mdw-chip.tz{background:#14432F;color:#B7DECB}
-.mdw-chip.stg{background:#F2E31D;color:#231F00}
-/* PRODUCTION is unmistakable: solid red pill with a live dot + distinct label,
-   AND a red header ground + red left rail on the whole drawer — not a colour swap
-   on the same chip. */
-.mdw-chip.prod{background:#E5121B;color:#fff;font-weight:800;letter-spacing:.09em;box-shadow:0 0 0 2px rgba(229,18,27,.35)}
-.mdw.mdw-prod{border-left:5px solid #E5121B}
-.mdw.mdw-prod .mdw-head{background:#5A0B0F}
-.mdw-full{margin-left:auto;color:#2CDB87;font-size:12.5px;text-decoration:none;font-weight:600;white-space:nowrap}
-.mdw-full:hover{text-decoration:underline}
+/* The environment pill and its red framing are gone — both environments are production, so it
+   fired on every match. The full-editor link went with the drawer's form: this IS the editor. */
 .mdw-body{flex:1 1 auto;overflow-y:auto;padding:4px 18px 18px}
 .mdw-state{padding:26px 4px;font-size:13px;color:#5C6B62;font-weight:650}
 .mdw-inverted{margin:12px 0 0;background:#FDE9E5;border:1px solid #F3C4BB;color:#7a2415;border-radius:10px;padding:11px 13px;font-size:12.5px;line-height:1.5}
