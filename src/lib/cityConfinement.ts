@@ -151,3 +151,64 @@ export function confinementSummary(input: {
     ? `Confined to ${cityName} — ${pageCount} city manager ${pageCount === 1 ? "page" : "pages"} only`
     : `Confined to ${cityName} — ${pageCount} Match Ops ${pageCount === 1 ? "page" : "pages"} only`;
 }
+
+
+/**
+ * THE ROUTES THE SIX PAGES ACTUALLY CALL — and a confined account may reach NOTHING ELSE.
+ *
+ * WHY THIS EXISTS. The six pages gate on can_access_matchops and can_access_chats, and a confined
+ * account holds both. But those two capabilities also gate SEVENTEEN routes that belong to pages
+ * outside the six — /community/* (chat automation), /manager-pay/* (the city-manager ledger this
+ * account is explicitly meant never to touch), /partner-dashboards/*, /veo/codes/*, /inventory/*,
+ * /match-promotion, /slate-notes, and /admin/users/permissions. Every one of those PAGES bounces
+ * at the rail or an AdminGuard, and every one of those ROUTES would have answered.
+ *
+ * That is the failure this codebase has shipped twice and named as non-negotiable: a rail that
+ * hides an item the server still serves. Hiding a page is not refusing a request.
+ *
+ * DENY BY DEFAULT. This is an ALLOWLIST of prefixes, not a blocklist of known-bad ones — a route
+ * added tomorrow is refused until somebody puts it here on purpose, which is the only direction
+ * that fails safe.
+ */
+export const CONFINED_ROUTE_PREFIXES: readonly string[] = [
+  // Gameday Ops — the board, a match, its roster, its check-ins.
+  "/api/matchday/",
+  "/api/matchops/checkin/",
+  // Player Lookup — search, profile, the two panels, and the registered list.
+  "/api/lookup/",
+  "/api/players/registered",
+  // Promo Codes — reads only; every write route gates on managePromos, which this account lacks.
+  "/api/promos/list",
+  "/api/promos/detail/",
+  "/api/promos/check",
+  "/api/promos/fields",
+  "/api/promos/matches",
+  // Reviews.
+  "/api/reviews",
+  // Match Chats and Player Chats.
+  "/api/match-chats/",
+  "/api/crm/",
+];
+
+/**
+ * Is this path one of the six pages' routes?
+ *
+ * The pathname is taken from the REQUEST, so it cannot be spoofed by a body or a header, and the
+ * comparison is a plain prefix match on an allowlist — no regex to get subtly wrong.
+ */
+export function isConfinedRouteAllowed(pathname: string): boolean {
+  const p = (pathname || "").split("?")[0];
+  return CONFINED_ROUTE_PREFIXES.some((prefix) => p === prefix || p.startsWith(prefix));
+}
+
+/** The refusal for a route outside the six, with the path named so a 403 is debuggable. */
+export function assertConfinedRoute(
+  row: ConfinableRow | null | undefined,
+  reqUrl: string,
+): { ok: true } | { ok: false; status: number; error: string } {
+  if (!isConfined(row)) return { ok: true };
+  let pathname = reqUrl;
+  try { pathname = new URL(reqUrl).pathname; } catch { /* already a path */ }
+  if (isConfinedRouteAllowed(pathname)) return { ok: true };
+  return { ok: false, status: 403, error: CONFINED_ERROR };
+}

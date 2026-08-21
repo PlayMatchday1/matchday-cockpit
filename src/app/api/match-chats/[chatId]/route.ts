@@ -8,6 +8,7 @@
 // Auth: admin-only via src/lib/crmAuth.
 
 import { authenticateCrm } from "@/lib/crmAuth";
+import { assertMatchInScope } from "@/lib/matchOpsAuth";
 import { isValidChatId } from "@/lib/matchChats";
 
 export const runtime = "nodejs";
@@ -23,6 +24,16 @@ export async function GET(req: Request, ctx: RouteCtx) {
   const { supabase } = auth;
 
   const { chatId } = await ctx.params;
+
+  /* THE CITY BOUNDARY ON A CHAT. A chatId IS a match api_id, so this is the SAME derivation the
+   * match routes use — assertMatchInScope, one implementation, not a second rule that happens to
+   * agree. Deny-by-default is the point: a chat whose match the mirror does not carry cannot be
+   * proved in scope, so it is refused rather than served with a null match. Hiding a thread from
+   * a list does not stop its id being typed. */
+  {
+    const scope = await assertMatchInScope(auth.supabase, auth.confinedCity, chatId);
+    if (!scope.ok) return Response.json({ error: scope.error }, { status: scope.status });
+  }
   if (!chatId || !isValidChatId(chatId)) {
     return Response.json({ chat_id: chatId, match: null }, { status: 200 });
   }

@@ -12,7 +12,7 @@
 
 import { type SupabaseClient } from "@supabase/supabase-js";
 import { resolveSessionUser, deriveMatchOpsFlags, isCityManagerConfined, CITY_MANAGER_CONFINED_ERROR, type AppUserRow } from "./adminAuth";
-import { confinedCity, CONFINED_CITY_ERROR } from "./cityConfinement";
+import { confinedCity, assertConfinedRoute, CONFINED_CITY_ERROR } from "./cityConfinement";
 
 export type MatchOpsAuthResult =
   | { ok: true; supabase: SupabaseClient; appUserId: string; email: string; isAdmin: boolean;
@@ -56,6 +56,10 @@ export async function authenticateMatchOpsRead(req: Request): Promise<MatchOpsAu
   if (!r.ok) return r;
   const gate = matchOpsReadGate(r.row, r.email);
   if (!gate.ok) return gate;
+  // A CONFINED ACCOUNT HOLDS can_access_matchops, and that capability also opens routes belonging
+  // to pages outside its six. Hiding those pages is not refusing their requests — the allowlist is.
+  const route = assertConfinedRoute(r.row, req.url);
+  if (!route.ok) return route;
   return {
     ok: true,
     supabase: r.supabase,

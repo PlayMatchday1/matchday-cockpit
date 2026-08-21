@@ -11,7 +11,7 @@
 import { type SupabaseClient } from "@supabase/supabase-js";
 import { resolveSessionUser, type AppUserRow } from "./adminAuth";
 import { can, denial, type Capability } from "./capabilities";
-import { confinedCity } from "./cityConfinement";
+import { confinedCity, assertConfinedRoute } from "./cityConfinement";
 
 export type CapAuthResult =
   | {
@@ -31,6 +31,11 @@ export async function authenticateCapability(req: Request, cap: Capability): Pro
   if (!can(r.row, cap, r.email)) {
     return { ok: false, status: 403, error: denial(r.row, cap, r.email) ?? "Not permitted." };
   }
+  // THE SAME ALLOWLIST. "matchops" and "chats" gate seventeen routes outside the six pages —
+  // /community/*, /manager-pay/* (the ledger this account must never touch), /partner-dashboards/*,
+  // /veo/codes/*, /inventory/*, /match-promotion. The capability opens them; this closes them.
+  const route = assertConfinedRoute(r.row, req.url);
+  if (!route.ok) return route;
   return {
     ok: true,
     supabase: r.supabase,

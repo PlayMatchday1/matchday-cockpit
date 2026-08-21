@@ -3,7 +3,7 @@
 // THE ONE THAT MATTERS MOST is confinement-beats-is_admin. It is the opposite of the city-manager
 // rule and someone will eventually "fix" the inconsistency; this fails when they do.
 import assert from "node:assert/strict";
-import { isConfined, confinedCity, confinedCityName, assertConfinedScope, CONFINED_CAPABILITIES, CONFINED_RAIL_KEYS, confinementSummary } from "../src/lib/cityConfinement";
+import { isConfined, confinedCity, confinedCityName, assertConfinedScope, CONFINED_CAPABILITIES, CONFINED_RAIL_KEYS, confinementSummary, assertConfinedRoute, isConfinedRouteAllowed } from "../src/lib/cityConfinement";
 import { can } from "../src/lib/capabilities";
 
 let n = 0;
@@ -53,6 +53,46 @@ t("  …case and whitespace do not sneak through", () => assert.equal(assertConf
 t("naming nothing applies your own scope", () => assert.equal(assertConfinedScope(WAW, null).ok, true));
 t("an unconfined account is never refused", () => assert.equal(assertConfinedScope(FREE, "ATX").ok, true));
 t("a junk-confined account is refused any named city", () => assert.equal(assertConfinedScope(JUNK, "ATX").ok, false));
+
+console.log("\n── the route allowlist ──");
+// THE HOLE THIS CLOSES: can_access_matchops and can_access_chats gate seventeen routes belonging
+// to pages OUTSIDE the six. Every one of those pages bounces at the rail; every one of those
+// routes would have answered. Hiding a page is not refusing a request.
+{
+  const ALLOWED = [
+    "/api/matchday/production/gameday", "/api/matchops/checkin/18215",
+    "/api/lookup/production", "/api/players/registered",
+    "/api/promos/list", "/api/promos/detail/99", "/api/reviews",
+    "/api/match-chats/active", "/api/match-chats/18215/reply", "/api/crm/threads",
+  ];
+  const REFUSED = [
+    "/api/community/cities", "/api/community/settings", "/api/manager-pay/aliases",
+    "/api/manager-pay/share-token", "/api/partner-dashboards", "/api/partner-dashboards/preview",
+    "/api/veo/codes", "/api/inventory/7", "/api/match-promotion", "/api/slate-notes",
+    "/api/admin/users/permissions", "/api/promos/create", "/api/promos/delete/12",
+  ];
+  for (const p of ALLOWED) {
+    t(`allowed: ${p}`, () => assert.equal(isConfinedRouteAllowed(p), true));
+  }
+  for (const p of REFUSED) {
+    t(`REFUSED: ${p}`, () => assert.equal(isConfinedRouteAllowed(p), false));
+  }
+  // DENY BY DEFAULT — a route nobody has listed is refused, which is the only safe direction.
+  t("a route invented tomorrow is refused until listed", () =>
+    assert.equal(isConfinedRouteAllowed("/api/something-new/thing"), false));
+  // AND AN UNCONFINED ACCOUNT IS NEVER REFUSED, whatever the path.
+  t("an unconfined account reaches everything", () =>
+    assert.equal(assertConfinedRoute(FREE, "https://x/api/manager-pay/aliases").ok, true));
+  t("a confined account is refused the same path", () => {
+    const r = assertConfinedRoute(WAW, "https://x/api/manager-pay/aliases");
+    assert.equal(r.ok, false);
+    if (!r.ok) assert.equal(r.status, 403);
+  });
+  t("  …and allowed one of its own", () =>
+    assert.equal(assertConfinedRoute(WAW, "https://x/api/match-chats/active").ok, true));
+  t("a query string cannot smuggle a path past it", () =>
+    assert.equal(assertConfinedRoute(WAW, "https://x/api/manager-pay/aliases?x=/api/reviews").ok, false));
+}
 
 console.log("\n── the sentence on the User access screen ──");
 // THE SAME CITY, TWO SHAPES, TWO ANSWERS. A city manager gets the /city/* pages; a confined

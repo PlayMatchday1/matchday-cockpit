@@ -20,6 +20,8 @@ import { type MatchChatInboxRow } from "@/lib/matchChats";
 import { formatMatchTitle } from "@/lib/cityTimezones";
 import { KNOWN_CITY_CODES, HIDDEN_CITY_CODES } from "@/lib/cityNormalization";
 import { UNKNOWN_CITY } from "@/lib/cityColors";
+import { useAuth } from "@/lib/useAuth";
+import { isConfined } from "@/lib/cityConfinement";
 import MatchOpsMobileBar from "../MatchOpsMobileBar";
 
 export type InboxTab = "active" | "upcoming" | "past";
@@ -161,6 +163,12 @@ export default function MatchChatsInbox({
     [cities, onCitiesChange],
   );
 
+  // THE SAME PREDICATE THE SERVER USES, imported rather than restated. The rail, the routes and
+  // this control all read one implementation; a second "is this account bounded" test is how the
+  // chrome and the gate end up disagreeing.
+  const { appUser } = useAuth();
+  const bounded = isConfined(appUser ?? undefined);
+
   const cityLabel =
     cities.size === 0
       ? "All cities"
@@ -266,6 +274,11 @@ export default function MatchChatsInbox({
             /
           </kbd>
         </div>
+        {/* NO CITY FILTER FOR A CONFINED ACCOUNT. Every thread they can see is already in their
+            one city, so the control can only ever be a no-op or a way to hide their own inbox.
+            Absent, not disabled — a greyed control still asks to be read. The rows are scoped at
+            the SERVER regardless; this is only the courtesy half. */}
+        {!bounded && (
         <button
           type="button"
           onClick={() => setPopOpen((v) => !v)}
@@ -283,8 +296,9 @@ export default function MatchChatsInbox({
           </svg>
           {cityLabel}
         </button>
+        )}
 
-        {popOpen && (
+        {popOpen && !bounded && (
           <div
             className="absolute right-4 top-[42px] z-20 w-[274px] rounded-[14px] border p-[11px] shadow-[0_2px_5px_rgba(7,42,32,.07),0_22px_44px_-24px_rgba(7,42,32,.55)]"
             style={{ background: "#ffffff", borderColor: "#e6ebe8" }}

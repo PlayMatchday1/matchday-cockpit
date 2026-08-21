@@ -14,7 +14,7 @@ import "server-only";
 
 import { timingSafeEqual } from "node:crypto";
 import { createClient, type SupabaseClient } from "@supabase/supabase-js";
-import { confinedCity } from "./cityConfinement";
+import { confinedCity, assertConfinedRoute } from "./cityConfinement";
 
 export type CrmAuthOk = {
   ok: true;
@@ -124,6 +124,9 @@ export async function authenticateCrm(req: Request): Promise<CrmAuthResult> {
   // THE CITY BOUNDARY. Chats is one of the six a confined account keeps, so this does not refuse —
   // it hands the route the scope it must push into its query.
   const scopeCity = confinedCity(appUser.data);
+  // Chats is one of the six, but /api/crm/* is not the only thing this gate opens.
+  const routeCheck = assertConfinedRoute(appUser.data, req.url);
+  if (!routeCheck.ok) return { ok: false, status: routeCheck.status, error: routeCheck.error };
   // Chats access gates the CRM API at the application layer. RLS on
   // crm_* tables enforces the same OR-clause underneath so this can't
   // be bypassed even if a route forgets to call authenticateCrm.
