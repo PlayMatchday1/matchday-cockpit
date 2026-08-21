@@ -147,6 +147,25 @@ This corrects how the briefs have been written, not how the work has been done.
 Mutation tests and dual-breakpoint assertions have been demanded on changes that
 only delete paragraphs.
 
+## Reading what a tool actually said
+
+**An exit code from a pipeline is the LAST command's.** `npm run verify | tail -5`
+reports whether `tail` succeeded. A green "exit code 0" has already been reported
+here on a suite that failed. Run the command bare and read `$?`, or capture it
+before the pipe. The same applies to `PIPESTATUS` — read it, do not assume `[0]`.
+
+**Do not parse a column out of deploy status. Read the row.** Three times in one
+session a `vercel ls | awk '{print $N}'` reported stale or wrong deployment state,
+and every time the fix was to stop parsing and read the whole line. Column order
+and headers are not a contract. Print the row and quote it, or ask for a named
+field (`--json`, `-o json`) — never count spaces. **A tool that reports stale state
+is worse than checking by hand**, because checking by hand is known to be manual
+and its output is not.
+
+**A push is not landed until `git ls-remote origin refs/heads/main` says so.** A
+killed `git push` leaves the local tracking ref untouched and `git log` looking
+identical to success.
+
 ## Never
 
 - Echo, log, print or commit `MATCHDAY_STAGE_API_PASSWORD`,
