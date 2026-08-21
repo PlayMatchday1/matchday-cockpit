@@ -119,15 +119,19 @@ for (const [g, noun, wantChips, wantSelects] of [
     eq("field: no field select is rendered", R.selects, 0);
   }
   if (g === "match") {
-    // COUNT THE SELECTS, so a silent drop shows up rather than passing as "some are present".
-    eq("match: all 13 selects are present", R.selects, 13);
-    const labels = await page.evaluate(() => ["date","month","week","weekday","city","location","hour",
-      "match","members","free","dpps","spots","dpprev"].filter((k) => document.querySelector(`[data-testid="mf-${k}"]`)));
-    eq("match: and each one by name", labels.length, 13);
+    /* SIX SELECTS, NOT THIRTEEN — and that is the rebuild, not a regression. MATCH duplicated
+     * Kick-off and was deleted; MEMBERS CODE, FREE CODE, DPP'S, TOTAL SPOTS and DPP REVENUE became
+     * the lens and table columns. Counted by NAME so a silent drop still shows up. */
+    const labels = await page.evaluate(() => ["month", "weekof", "dow", "city", "field", "hour"]
+      .filter((k) => document.querySelector(`[data-testid="mv-${k}"]`)));
+    eq("match: the six selects are present, by name", labels, ["month", "weekof", "dow", "city", "field", "hour"]);
+    eq("  …and the deleted five are gone", await page.evaluate(() =>
+      ["members", "free", "dpps", "spots", "dpprev", "match"].filter((k) => document.querySelector(`[data-testid="mf-${k}"]`))), []);
     eq("match: no city chip is visible", R.chips, 0);
   }
   if (wantChips !== null) eq(`${g}: chip count`, R.chips, wantChips);
-  if (wantSelects !== null) eq(`${g}: select count`, R.selects, wantSelects);
+  // The old grid's mf-* selects are gone everywhere; Match View's own live under mv-*.
+  if (wantSelects !== null && g !== "match") eq(`${g}: select count`, R.selects, wantSelects);
 }
 
 // ── 3. FILTERING MOVES THE COUNT, THE ROWS AND THE TOTAL ──────────────────────────────────────
@@ -164,13 +168,22 @@ console.log("\n── carrying a selection across views ──");
   await page.click('[data-testid="city-chip"][data-city="Austin"]');
   await page.waitForTimeout(1300);
   await view("match");
-  const mfCity = await page.evaluate(() => document.querySelector('[data-testid="mf-city"]')?.value);
-  eq("field → match keeps the city, on the grid's own City select", mfCity, "Austin");
+  /* THE CITY LANDS IN MATCH VIEW'S OWN SELECT NOW. The thirteen-select grid (mf-*) is gone; Match
+   * View filters itself, so a city carried from Field View arrives as its city selection — visible,
+   * chipped and clearable — rather than being applied to the rows upstream where nothing showed it. */
+  const mfCity = await page.evaluate(() => document.querySelector('[data-testid="mv-city"]')?.value);
+  eq("field → match keeps the city, in Match View's own City select", mfCity, "Austin");
   const m = await read();
-  eq("  …and the count reflects it", /^\d+ of \d+ matches$/.test(m.count ?? ""), true);
-  eq("  …and it is not filtered twice (the base is the full list)",
-     Number((m.count ?? "").match(/of (\d+)/)?.[1]) > Number((m.count ?? "").match(/^(\d+)/)?.[1]), true);
-  eq("  …and exactly one clear control is offered", m.clears, 1);
+  /* THE TOGGLE SIZES THE DATASET; MATCH VIEW'S CONTEXT LINE STATES THE SELECTION. Two questions,
+   * two answers, both visible — not the duplicate count the old grid produced. */
+  eq("  …and the toggle counts the whole dataset", /^\d[\d,]* matches$/.test(m.count ?? ""), true);
+  const ctx = await page.evaluate(() => document.querySelector('[data-testid="mv-context"]')?.textContent ?? "");
+  eq("  …while Match View states the narrowed selection", /Austin/.test(ctx), true);
+  eq("  …and the two figures differ, so neither is a copy of the other",
+     Number((ctx.match(/Showing ([\d,]+)/) ?? [])[1]?.replace(/,/g, "")) < Number((m.count ?? "").replace(/[^0-9]/g, "")), true);
+  const clears = await page.evaluate(() =>
+    document.querySelectorAll('[data-testid="mv-clear-all"], [data-testid="breakdown-clear"]').length);
+  eq("  …and exactly one clear control is offered", clears, 1);
   console.log(`     match: ${m.count}`);
 
   await view("city");

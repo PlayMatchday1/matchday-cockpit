@@ -342,6 +342,33 @@ Full inventory: docs/retool-prod-inventory.md. Key points that touch this file:
   (`PRODUCTION_WRITES_ENABLED = true`, a hardcoded pass-through; see the bolt section
   below), so a confirmed cancel LANDS on production. It is NOT bolted.
 
+- **MEMBERSHIP ALLOCATES PER SPOT, and the convention is in the code — do not invent a new one.**
+  Asked as "can membership go to field grain?", the honest first answer is that it is not STORED
+  there: all 64 August membership rows in `fin_revenue` carry a `city` and `venue = null`, so
+  `cityMembershipRevenueFor` (financeStats.ts:1633) is a lookup, not a split. But an allocation
+  already exists, in two places, and both use the same rule:
+
+      share = city membership revenue × (that thing's MEMBER SPOTS ÷ the city-month's member spots)
+
+    · `matchAllocatedMemberRevenueFor` — financeStats.ts:1865, MATCH grain. The algebra is written
+      out at :1881: the venue-level count cancels, so only the city-month total is needed.
+    · `cityPnl.ts:231` — FIELD grain, and it says why it lives in the model: "computed here rather
+      than in the view so the pitch rows sum to the city row by construction — the view used to do
+      this arithmetic itself, which is how a drill-down starts disagreeing with the row it opened
+      from."
+
+  **THE DIVISOR IS MEMBER SPOTS ONLY** — not total, not paid. `financeStats.ts:1871` defines it as
+  "count of MEMBER-payment registrations at this match"; the denominator is
+  `mdapiMemberSpots.byCityMonth.get(city|month).member`. Per city-month.
+
+  **NULL, NEVER ZERO.** A field or match with no member spots gets `null` and renders "—". "$0"
+  would claim it earned no membership; the truth is that membership cannot be attributed to it.
+  ATH Pearland (0 matches, ~$7k revenue) is the standing example.
+
+  **A DPP-SHARE SPLIT WAS PROPOSED AND IS WRONG** — it would have invented a second basis for a
+  figure the app already derives, and the two would have disagreed at the first reconciliation.
+  Any new surface needing membership below city grain reads one of the two functions above.
+
 - **CREATE IS `POST /admin/matches`, and it WHITELISTS.** Probed on staging by sending bodies that
   could never succeed (`name` omitted every time), so nothing was created. Nine required fields:
 

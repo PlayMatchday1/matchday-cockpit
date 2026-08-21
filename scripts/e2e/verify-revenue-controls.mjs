@@ -408,6 +408,42 @@ console.log("\n── the four cards ──");
   console.log(`     panel ${P.collected} + ${P.forward} = ${P.projected} · headline ${P.headline}`);
 }
 
+// ── 9. A ZERO DENOMINATOR IS A DASH, NOT THE NUMERATOR ────────────────────────────────────────
+console.log("\n── per-match averages at the boundary ──");
+{
+  await goto("2026-08");
+  // THE BREAKDOWN TESTID, not the label — the segment reads "Field", and matching on "Field View"
+  // silently did nothing, leaving the table on City View. The control below caught it.
+  await page.click('[data-testid="breakdown-field"]');
+  await page.waitForTimeout(1800);
+  const rows = await page.evaluate(() => {
+    const tbl = [...document.querySelectorAll("table")].find((t) =>
+      [...t.querySelectorAll("tbody tr")].some((r) => r.className.includes("tot")));
+    return [...(tbl?.querySelectorAll("tbody tr") ?? [])]
+      .filter((r) => !r.className.includes("tot"))
+      .map((r) => {
+        const c = [...r.querySelectorAll("td,th")].map((x) => x.innerText.trim());
+        // Field View columns: # · Field · City · Launched · Matches · Total · Avg/match · …
+        return { name: c[1] ?? "", matches: Number((c[4] ?? "").replace(/[^0-9]/g, "")),
+                 total: c[5] ?? "", avg: c[6] ?? "" };
+      });
+  });
+  eq("  control — the field table rendered rows", rows.length > 0, true);
+
+  // THE BOUNDARY, BOTH SIDES. A guard that only checks "no rows" never fires here: the zero-match
+  // field HAS a row and HAS revenue, which is exactly how it printed its own total as an average.
+  const zero = rows.filter((r) => r.matches === 0);
+  const one = rows.filter((r) => r.matches >= 1);
+  eq("  control — a zero-match field exists to test", zero.length > 0, true);
+  eq("  control — and a field with matches, to prove the column still computes", one.length > 0, true);
+  eq("every zero-match row renders a dash for avg / match", zero.every((r) => r.avg === "—"), true);
+  eq("  …and none of them prints its own total instead", zero.some((r) => r.avg === r.total), false);
+  eq("every row WITH matches still prints a figure", one.every((r) => /^\$[\d,]+$/.test(r.avg)), true);
+  for (const r of zero.slice(0, 3)) console.log(`     ${r.name}: ${r.matches} matches · total ${r.total} · avg ${r.avg}`);
+  const sample = one[0];
+  console.log(`     ${sample.name}: ${sample.matches} matches · total ${sample.total} · avg ${sample.avg}`);
+}
+
 console.log(`\n================ RESULT ================`);
 console.log(`Assertions: ${PASS} passed, ${FAIL} failed`);
 if (fails.length) { console.log("\nFAILURES:"); fails.forEach((f) => console.log("  " + f)); }

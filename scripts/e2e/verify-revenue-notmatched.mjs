@@ -67,8 +67,10 @@ console.log("\n── the headers ──");
 const readHeads = () => page.evaluate(() => {
   // NAME THE TABLE. The bare document.querySelector("table") fallback grabbed the SUMMARY table
   // at the top of the page in Match View, so the scan read the wrong headers entirely.
+  // Match View's table is mv-table now — the thirteen-select grid and revenue-match-table were
+  // replaced by the stats-band view, and the old id no longer exists.
   const t = document.querySelector('[data-testid="revenue-group-table"]')
-    ?? document.querySelector('[data-testid="revenue-match-table"]');
+    ?? document.querySelector('[data-testid="mv-table"]');
   return {
     // CSS uppercases these and the ⓘ glyph sits inside the cell — normalise both away so the
     // assertion is about the WORDS, which is what was specified.
@@ -125,8 +127,10 @@ eq("Field View: every row's cell count equals the header count", fieldHeads.cell
   await setGrain("field"); await scan("Field View");
   await setGrain("match"); const m = await scan("Match View");
   eq("  control — Match View rendered its own headers", m.length > 3 && m.join() !== c.join(), true);
-  eq("  control — a header that IS present is found ('DPP revenue')",
-     m.some((x) => /dpp revenue/i.test(x)), true);
+  // The control names a header Match View ACTUALLY has now. Its columns changed with the rebuild:
+  // "DPP revenue" became "DPP" (a spot count) and the money moved to "Revenue".
+  eq("  control — a header that IS present is found ('Field cost')",
+     m.some((x) => /field cost/i.test(x)), true);
   const planted = await page.evaluate(() => {
     const th = document.querySelector("thead th");
     const old = th.textContent;
@@ -172,7 +176,12 @@ console.log("\n── the figures ──");
   // totals, which catches a broken or mis-summed column without dating the suite.
   eq("the Total row's match count equals the sum of the rows", f.matches, f.rowMatches.reduce((a, b) => a + b, 0));
   eq("  control — the column carried rows with matches in them", f.rowMatches.filter((x) => x > 0).length > 0, true);
-  eq("membership $17,690", f.member, 17690);
+  /* WAS PINNED AT $17,690 AND DRIFTED TO $17,781 — August is a live month and memberships keep
+   * arriving, so a constant here fails on a page that is working. Proved pre-existing by running
+   * this against a stashed tree. What must hold whatever the amount is: the parts add to the
+   * whole, and membership is a real figure rather than a zero or a dash. */
+  eq("membership is a real figure, not zero", f.member > 0, true);
+  eq("  …and DPP + membership still equals the total", f.dpp + f.member, f.total);
   // NOT HARDCODED. The DPP figure and the total have both moved $101 since the brief was written —
   // the mirror refreshes daily and revenue rows land. What must hold whatever the amounts are is
   // that the parts add to the whole; a rename cannot break that and a broken column would.

@@ -31,6 +31,7 @@ import { cityMembershipRevenueFor, CITY_DISPLAY_ORDER, type Q2Month } from "@/li
 import { loadMembershipWindowsByUserId, type MembershipWindowsByUserId } from "@/lib/mdapiMatchesRead";
 import { isCityHidden } from "@/lib/types";
 import { downloadCsv, fmtMoney, fmtInt } from "@/components/growth/format";
+import MatchView from "./MatchView";
 import DailyRevenuePace from "./DailyRevenuePace";
 import s from "./financeSection.module.css";
 
@@ -331,8 +332,11 @@ export default function RevenueSection() {
         : grain === "field" ? (n === 1 ? "field" : "fields")
         : (n === 1 ? "match" : "matches");
     if (grain === "match") {
-      const n = shownMatches.length, all = shownMatchesBase.length;
-      return n === all ? `${all} ${noun(all)}` : `${n} of ${all} ${noun(all)}`;
+      /* THE TOGGLE COUNTS WHAT MATCH VIEW HAS TO WORK WITH; MATCH VIEW COUNTS WHAT IT IS SHOWING.
+       * They answer different questions and both are on screen, so neither is a second copy of the
+       * other — this one sizes the dataset, the context line under the band states the selection.
+       * The old "N of M" here read off the deleted select grid and would now always say N = M. */
+      return `${matchRows.length} ${noun(matchRows.length)}`;
     }
     const n = (grain === "city" ? byCity(shownFields) : byField(shownFields)).size;
     if (grain === "field" && cityFilter !== "all") {
@@ -436,16 +440,12 @@ export default function RevenueSection() {
     if (next === grain) return;
     if (next === "city") { setCityFilter("all"); setMf({}); }
     else if (next === "match") {
-      // HANDED OVER, NOT COPIED. Leaving cityFilter set as well would filter the match list twice
-      // — once by the chip that is no longer on screen and once by the grid's own City — and the
-      // count could then never say what it was narrowed FROM, because its unfiltered base was
-      // already narrowed. On Match View the grid IS the filtering.
-      const c = cityFilter;
-      setCityFilter("all");
-      if (c !== "all") setMf((m) => ({ ...m, city: c }));
+      /* THE CITY STAYS PUT AND MATCH VIEW READS IT. It used to be moved into the thirteen-select
+       * grid's own City while cityFilter was cleared; that grid is gone, and Match View takes the
+       * city as its initial selection instead — so the choice arrives visible and clearable rather
+       * than applied to the rows somewhere the reader cannot see. */
     } else if (next === "field") {
-      setCityFilter(mf.city ?? "all");
-      setMf({});   // the grid is not on screen here; leaving it set would be invisible state
+      // Coming back from Match View, the city it was showing is whatever cityFilter still holds.
     }
     setGrain(next);
   };
@@ -694,47 +694,16 @@ export default function RevenueSection() {
           </div>
         )}
 
-        {/* MATCH VIEW KEEPS ITS OWN GRID — that grid IS the filtering for this view. The chip bar
-            is dropped here rather than stacked on top of it: its CITY and FIELD duplicated the
-            grid's own City and Location, which is two controls for one thing. */}
-        {grain === "match" && (
-          <div className={s.brkGrid} data-testid="match-filter-panel">
-            <div className={s.filterGrid}>
-              {([
-                ["date", "Date", () => opts((r) => ymd(r.start))],
-                ["month", "Month", () => opts((r) => r.month)],
-                ["week", "Week", () => opts((r) => String(r.week))],
-                ["weekday", "Weekday", () => opts((r) => dayName(r.start))],
-                ["city", "City", () => opts((r) => r.city)],
-                ["location", "Location", () => opts((r) => r.location)],
-                ["hour", "Hour", () => opts((r) => HOUR(r.start))],
-                ["match", "Match", () => opts((r) => String(r.matchApiId))],
-                ["members", "Members Code", () => opts((r) => String(r.memberSpots))],
-                ["free", "Free Code", () => opts((r) => String(r.freeSpots))],
-                ["dpps", "DPP\u2019s", () => opts((r) => String(r.dppSpots))],
-                ["spots", "Total Spots", () => opts((r) => String(r.totalSpots))],
-                ["dpprev", "DPP Revenue", () => opts((r) => String(Math.round(r.dppRevenue)))],
-              ] as [string, string, () => string[]][]).map(([k, lab, get]) => (
-                <label key={k} className={s.filterField}>
-                  <span>{lab}</span>
-                  <select className={s.sel} data-testid={`mf-${k}`} value={mf[k] ?? "all"}
-                    onChange={(e) => setMF(k, e.target.value)}>
-                    <option value="all">All</option>
-                    {get().map((v) => <option key={v} value={v}>{v}</option>)}
-                  </select>
-                </label>
-              ))}
-            </div>
-            {/* ONE Clear. Two rendered here before, one per bar. */}
-            {matchFiltersOn && (
-              <button type="button" className={s.brkClear} data-testid="breakdown-clear"
-                onClick={clearMatchFilters}>Clear</button>
-            )}
-          </div>
-        )}
-
+        {/* MATCH VIEW IS ITS OWN COMPONENT NOW. The thirteen-select grid is gone: it made the
+            operator the query engine — narrow 1,367 rows by hand, then read them to find out what
+            the set earned. MatchView narrows with six selects, a date RANGE and a lens, and answers
+            with a stats band. MATCH and the four spot/revenue selects are deleted rather than
+            moved: MATCH duplicated Kick-off, and the others are the lens and table columns. */}
         {grain === "match" ? (
-          <MatchTable rows={shownMatches} />
+          <MatchView
+            rows={matchRows}
+            initialCity={cityFilter === "all" ? undefined : canonCity(cityFilter)}
+          />
         ) : (
           <GroupTable rows={shownFields} grain={grain} month={period.months[period.months.length - 1] ?? ""}
             gapRows={gapRows} launchOf={launchOf}
@@ -927,8 +896,13 @@ function NotMatchedInfo({ rows }: { rows: { key: string; month: string; gap: num
 // and had none of the derived columns.
 //
 // EVERY DERIVED COLUMN IS COMPUTED FROM THE TWO IT DIVIDES, so a reader can check them by hand:
-// avg/venue = total ÷ venues, avg/match = total ÷ matches, mix = membership ÷ total. The match
-// denominator is guarded — a city with revenue and no matches would otherwise print Infinity.
+// avg/venue = total ÷ venues, avg/match = total ÷ matches, mix = membership ÷ total.
+//
+// A ZERO DENOMINATOR RENDERS A DASH, NOT A NUMBER. These used to divide by Math.max(1, n), which
+// guards against Infinity and nothing else: with 0 matches it divides by ONE and prints the
+// NUMERATOR as the average. ATH Pearland — 0 matches, $6,972 of revenue — read "$6,972 avg
+// revenue / match", which is worse than Infinity because it looks like an answer. "No rows" never
+// catches it: there IS a row, and it has money on it.
 function GroupTable({ rows, grain, month, membershipOf, membershipScoped, gapRows, launchOf }: {
   rows: FieldMonth[]; grain: "city" | "field"; month: Q2Month;
   membershipOf: (city: string) => number; membershipScoped: boolean;
@@ -1003,8 +977,8 @@ function GroupTable({ rows, grain, month, membershipOf, membershipScoped, gapRow
                 <td data-testid="gt-matches">{fmtInt(r.matches)}</td>
                 <td data-testid="gt-total">{fmtMoney(r.total)}</td>
                 {/* guarded: revenue with zero matches must not print Infinity */}
-                <td data-testid="gt-avgmatch">{fmtMoney(r.total / Math.max(1, r.matches))}</td>
-                {grain === "city" && <td data-testid="gt-avgvenue">{fmtMoney(r.total / Math.max(1, r.venueCount))}</td>}
+                <td data-testid="gt-avgmatch">{r.matches > 0 ? fmtMoney(r.total / r.matches) : "—"}</td>
+                {grain === "city" && <td data-testid="gt-avgvenue">{r.venueCount > 0 ? fmtMoney(r.total / r.venueCount) : "—"}</td>}
                 <td data-testid="gt-dpp">{fmtMoney(r.dpp)}</td>
                 <td data-testid="gt-member">{showMembership ? fmtMoney(r.membership) : "—"}</td>
                 <td data-testid="gt-mix">{showMembership ? pct(r.membership, r.total) : "—"}</td>
@@ -1018,7 +992,7 @@ function GroupTable({ rows, grain, month, membershipOf, membershipScoped, gapRow
               {grain === "city" && <td>{fmtInt(T.venues)}</td>}
               <td>{fmtInt(T.matches)}</td>
               <td data-testid="gt-tot-total">{fmtMoney(T.total)}</td>
-              <td>{fmtMoney(T.total / Math.max(1, T.matches))}</td>
+              <td data-testid="gt-tot-avgmatch">{T.matches > 0 ? fmtMoney(T.total / T.matches) : "—"}</td>
               {grain === "city" && <td>{fmtMoney(T.total / Math.max(1, T.venues))}</td>}
               <td data-testid="gt-tot-dpp">{fmtMoney(T.dpp)}</td>
               <td data-testid="gt-tot-member">{showMembership ? fmtMoney(T.membership) : "—"}</td>

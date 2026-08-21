@@ -32,6 +32,7 @@ import {
   cityMembershipRevenueFor,
   groupPerMatchCostFor,
   venuePartnerRevenueFor,
+  matchAllocatedMemberRevenueFor,
   type Q2Month,
 } from "./financeStats";
 import { normalizeCity } from "./cityMap";
@@ -325,6 +326,15 @@ export type MatchRow = {
   totalSpots: number;
   dppRevenue: number;
   fieldCost: number | null;
+  /* PROMO REDEMPTIONS ON THIS MATCH — registrations carrying a promocode. Counted here rather
+   * than in the view so it cannot drift from the spots it sits beside. It is NOT a lens figure:
+   * a code redeemed is a code redeemed whichever way you count the match. */
+  promos: number;
+  /* ALLOCATED member revenue. A pitch does not sell memberships — this is the city's member
+   * revenue times this match's share of the city-month's MEMBER SPOTS, which is the convention
+   * matchAllocatedMemberRevenueFor already implements (financeStats.ts:1865) and cityPnl uses one
+   * grain up. Derived, never looked up: there is no membership row carrying a venue. */
+  memberRevenue: number;
 };
 
 // ISO-8601 week: weeks start Monday and week 1 is the one containing the first Thursday.
@@ -379,10 +389,15 @@ export function buildMatchRows(
         fieldKey: fm.key,
         memberSpots: 0, freeSpots: 0, dppSpots: 0, totalSpots: 0,
         dppRevenue: 0,
+        promos: 0,
+        memberRevenue: 0,
         fieldCost: fm.costPerMatch,
       };
       acc.set(r.matchApiId, row);
     }
+
+    // A promocode on the registration is a redemption, whatever the payment type it produced.
+    if (r.promocode) row.promos += 1;
 
     const pt = r.paymentType;
     if (pt === "DAILY PAID") {
@@ -398,6 +413,18 @@ export function buildMatchRows(
       continue; // WAITING and anything else occupies no spot
     }
     row.totalSpots += 1;
+  }
+  /* MEMBER REVENUE, ALLOCATED ONCE THE SPOTS ARE COUNTED. It needs each match's member-spot count,
+   * so it cannot be done inside the registration loop — and it is computed here rather than in the
+   * view so the match rows sum to the city by construction, the same reason cityPnl allocates in
+   * the model and not the component. */
+  for (const row of acc.values()) {
+    row.memberRevenue = matchAllocatedMemberRevenueFor(data, {
+      city: row.city,
+      venueName: row.location,
+      matchStartIso: row.start.toISOString(),
+      memberSpots: row.memberSpots,
+    });
   }
   return [...acc.values()].sort((a, b) => b.start.getTime() - a.start.getTime());
 }
