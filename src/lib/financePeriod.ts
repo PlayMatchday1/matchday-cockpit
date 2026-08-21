@@ -183,20 +183,58 @@ export const canStepBack = (p: FinancePeriod) => {
 };
 
 // ── URL ────────────────────────────────────────────────────────────────────────────────────────
-// "2026-08" | "2026Q3" | "2026". Unparseable or below-floor values fall back to the default rather
-// than rendering an empty period.
-export function periodFromUrl(raw: string | null, now: Date): FinancePeriod {
+// "2026-08" | "2026Q3" | "2026" in `p`, and the ANCHOR in `a` as a plain YYYY-MM-DD.
+//
+// WHY `a` EXISTS. `p` cannot carry a point in time: "2026" is a year, and parsing it back has to
+// pick some day, which was always 1 January. That destroyed the anchor `changeGrain` exists to
+// carry, so August 2026 → Q3 → 2026 → Month landed on JANUARY 2026 and the reversible zoom
+// promised at the top of this file was never real. `a` is the day `p` cannot hold.
+//
+// `a` IS OPTIONAL AND ALWAYS HAS BEEN. A link without it — every bookmark and every URL shared
+// before this existed — falls back to the period's start, which is exactly what it did before.
+
+/** A YYYY-MM-DD anchor, or null. Rejects impossible dates (2026-02-31) by round-tripping it. */
+function parseAnchor(raw: string | null | undefined): Date | null {
+  const m = (raw ?? "").trim().match(/^(\d{4})-(\d{2})-(\d{2})$/);
+  if (!m) return null;
+  const y = +m[1], mi = +m[2] - 1, d = +m[3];
+  const dt = new Date(y, mi, d);
+  if (Number.isNaN(dt.getTime())) return null;
+  // 2026-02-31 constructs as 3 March; the round-trip is what catches it.
+  if (dt.getFullYear() !== y || dt.getMonth() !== mi || dt.getDate() !== d) return null;
+  return dt;
+}
+
+/* AN ANCHOR OUTSIDE ITS PERIOD IS CLAMPED TO THE START, not honoured. `?p=2026Q1&a=2026-08-21` is
+ * self-contradictory — hand-edited, or a stale `a` left on a link whose `p` was changed — and
+ * honouring it would build a period the URL does not describe. The start is what a link with no
+ * `a` at all would have given, so a contradictory pair degrades to the old behaviour. */
+const clampAnchor = (a: Date | null, start: Date, end: Date) =>
+  a && a >= start && a <= end ? a : start;
+
+/** The `a` value for a period — the anchor as a local civil date. */
+export const anchorParam = (p: FinancePeriod): string =>
+  `${p.anchor.getFullYear()}-${String(p.anchor.getMonth() + 1).padStart(2, "0")}-${String(p.anchor.getDate()).padStart(2, "0")}`;
+
+export function periodFromUrl(raw: string | null, now: Date, anchorRaw?: string | null): FinancePeriod {
   const s = (raw ?? "").trim();
+  const a = parseAnchor(anchorRaw);
   let m: RegExpMatchArray | null;
   if ((m = s.match(/^(\d{4})-(\d{2})$/))) {
     const y = +m[1], mi = +m[2] - 1;
-    if (mi >= 0 && mi <= 11 && !belowFloor(y, mi)) return periodFor("month", new Date(y, mi, 1), now);
+    if (mi >= 0 && mi <= 11 && !belowFloor(y, mi)) {
+      return periodFor("month", clampAnchor(a, new Date(y, mi, 1), new Date(y, mi + 1, 0)), now);
+    }
   } else if ((m = s.match(/^(\d{4})Q([1-4])$/i))) {
     const y = +m[1], q = +m[2] - 1;
-    if (!belowFloor(y, q * 3 + 2)) return periodFor("quarter", new Date(y, q * 3, 1), now);
+    if (!belowFloor(y, q * 3 + 2)) {
+      return periodFor("quarter", clampAnchor(a, new Date(y, q * 3, 1), new Date(y, q * 3 + 3, 0)), now);
+    }
   } else if ((m = s.match(/^(\d{4})$/))) {
     const y = +m[1];
-    if (!belowFloor(y, 11)) return periodFor("year", new Date(y, 0, 1), now);
+    if (!belowFloor(y, 11)) {
+      return periodFor("year", clampAnchor(a, new Date(y, 0, 1), new Date(y, 12, 0)), now);
+    }
   }
   // THE DEFAULT IS THE CURRENT MONTH — the question being asked nine times out of ten.
   return currentPeriod("month", now);

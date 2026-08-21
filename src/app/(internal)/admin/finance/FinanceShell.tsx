@@ -21,7 +21,7 @@
 // old in-page tab swap did — the same behaviour, minus the pretence that it was navigation.
 
 import { createContext, Suspense, useCallback, useContext, useEffect, useMemo, useRef, useState } from "react";
-import { usePathname, useRouter, useSearchParams } from "next/navigation";
+import { usePathname, useSearchParams } from "next/navigation";
 import PagePermissionGuard from "@/components/PagePermissionGuard";
 import ChatsRail from "../../match-ops/ChatsRail";
 import MatchOpsMobileBar from "../../match-ops/MatchOpsMobileBar";
@@ -29,7 +29,7 @@ import FinanceExecHero from "@/components/FinanceExecHero";
 import FinancePeriodBar from "@/components/finance/FinancePeriodBar";
 import { FinancePeriodProvider } from "@/lib/financePeriodContext";
 import {
-  changeGrain, containingQuarter, currentPeriod, periodFromUrl, stepPeriod,
+  anchorParam, changeGrain, containingQuarter, currentPeriod, periodFromUrl, stepPeriod,
   type FinancePeriod, type Grain,
 } from "@/lib/financePeriod";
 import { FinanceQuarterProvider } from "@/lib/financeQuarter";
@@ -55,7 +55,6 @@ export default function FinanceShell({ children }: { children: React.ReactNode }
 
 function FinanceShellInner({ children }: { children: React.ReactNode }) {
   const pathname = usePathname() ?? "";
-  const router = useRouter();
   const searchParams = useSearchParams();
 
   const [collapsed, setCollapsed] = useState(false);
@@ -80,20 +79,43 @@ function FinanceShellInner({ children }: { children: React.ReactNode }) {
   // to mint its own `new Date()`. Minting it once here is what lets the partial chip and the
   // realized-cost figures beside it agree about which day it is.
   const now = useMemo(() => new Date(), []);
+  // `a` CARRIES THE POINT IN TIME `p` CANNOT. Without it "2026" parses back with its anchor at
+  // 1 January, so widening to a year and narrowing again landed on January instead of the month you
+  // started from. Absent `a` falls back to that same start, so every link made before this works
+  // exactly as it did.
   const period = useMemo<FinancePeriod>(
-    () => periodFromUrl(searchParams?.get("p") ?? null, now),
+    () => periodFromUrl(searchParams?.get("p") ?? null, now, searchParams?.get("a") ?? null),
     [searchParams, now],
   );
+  /* ── THE URL IS WRITTEN WITH history.replaceState, NOT router.replace ────────────────────────
+   * MEASURED ON A PRODUCTION BUILD, which is the only place this shows. `/admin/finance/*` builds
+   * as ○ (Static), and on a statically prerendered route `router.replace()` to the same pathname
+   * with different search params DOES NOT NAVIGATE: it is called with the right href, Next writes a
+   * history entry holding the CURRENT url, and nothing changes. The whole period control — both
+   * steppers, This-month and all three grain buttons — was dead in production.
+   *
+   * It works in `next dev` because the route is dynamic there, which is why nothing caught it: the
+   * entire e2e lane runs against `npm run dev`.
+   *
+   * window.history.replaceState is Next's own supported way to update search params without a
+   * server round trip, and useSearchParams() reacts to it — proven on the production build, where
+   * a manual replaceState moved the label while router.replace could not. It creates no history
+   * entry, which is the same Back behaviour router.replace had. */
   const setPeriod = useCallback(
     (p: FinancePeriod) => {
       const qs = new URLSearchParams(searchParams?.toString() ?? "");
-      // The default (current month) drops the param, so the clean URL is the common case.
-      if (p.key === currentPeriod("month", now).key && p.grain === "month") qs.delete("p");
-      else qs.set("p", p.key);
+      // The default (current month) drops BOTH params, so the clean URL is still the common case.
+      if (p.key === currentPeriod("month", now).key && p.grain === "month") {
+        qs.delete("p");
+        qs.delete("a");
+      } else {
+        qs.set("p", p.key);
+        qs.set("a", anchorParam(p));
+      }
       const s = qs.toString();
-      router.replace(s ? `?${s}` : "?");
+      window.history.replaceState(null, "", s ? `${pathname}?${s}` : pathname);
     },
-    [router, searchParams, now],
+    [pathname, searchParams, now],
   );
   // The quarter CONTAINING the period, for the fifteen components that still read
   // useFinanceQuarter() and expect three months. They keep behaving exactly as before.

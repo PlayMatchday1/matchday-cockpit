@@ -1391,6 +1391,34 @@ It is not a proxy for risk or for line count. This has now been argued twice fro
 read is not one. Evidence: the Revenue-pace rebuild (four files, ~700 lines, a new `fin_revenue`
 read) routed TYPECHECK, and every path in it reports `matchday-url=false`.
 
+## `router.replace` does not navigate on a STATIC route — dev cannot see it (2026-08-21)
+
+**On a production build, `router.replace()` to the same pathname with different search params does
+not navigate on a statically prerendered route.** `/admin/finance/*` builds as `○ (Static)`. The
+call is made with the correct href, Next then writes a history entry holding the CURRENT url, and
+nothing changes.
+
+**Symptom:** the entire finance period control — both steppers, This-month and all three grain
+buttons — was dead in production. Reported from prod at `?p=2026`: clicking Quarter or Month did
+nothing, the URL never moved.
+
+**Why nothing caught it.** In `next dev` the route is dynamic and `router.replace` works. **The
+whole e2e lane runs against `npm run dev`**, so no suite in this repo can see this class of bug.
+
+**Evidence, on `next build && next start`:** `changeGrain` returned `{key: 2026-01, label: January
+2026, anchor: Thu Jan 01 2026, valid: true}`; `setPeriod` called `router.replace("?p=2026-01")`;
+`history.replaceState` was then called with `/admin/finance/revenue?p=2026-08`, and sampling
+`location.search` every 20ms showed it never left `?p=2026-08`. A manual
+`history.replaceState(null,"","?p=2026Q1")` moved the label immediately — so `useSearchParams()`
+reacts correctly and only the router call was broken. Ruled out first: the href form
+(pathname-absolute failed identically) and `src/proxy.ts` (narrowing its matcher changed nothing).
+
+**Fix:** write the URL with `window.history.replaceState`, which is Next's supported way to update
+search params without a server round trip. `FinanceShell.tsx` does this.
+
+**To reproduce any prod-only routing behaviour:** `npm run build && npx next start -p 3100`, then
+point a Playwright script at `BASE=http://localhost:3100`. Dev will not show it.
+
 ## Finance period: changing GRAIN loses the point in time (2026-08-21)
 
 `FinanceShell.tsx:84` derives the period from the URL alone — `periodFromUrl(searchParams.get("p"))`
@@ -1403,11 +1431,17 @@ change, because `p=2026` cannot encode it.
 back to August". It does not. The comment is the design; the URL round-trip is the implementation,
 and they disagree.
 
-The fix is carrying the anchor in the URL (`p=2026&a=2026-08` or similar). Not taken: it changes a
-shared shell that fifteen components read, and it is pre-existing — confirmed on `1f80da5`, before
-the pace rebuild, which touches none of the three files involved.
+**FIXED 2026-08-21** by carrying the anchor in a second param: `?p=2026&a=2026-08-21`. `a` is a
+plain `YYYY-MM-DD` inside the period. `periodFromUrl` uses it when present and falls back to the
+period's start when absent, so every link made before it existed behaves exactly as it did. Grain
+changes preserve it; the steppers reset it to the new period's start and This-month resets it to
+today. An `a` outside its `p` is clamped to the period's start rather than building a period the
+URL does not describe.
 
-**`verify-pace-grain.mjs` cannot catch a regression here.** It works around the drift by clicking
-`period-jump` after every grain change, because half of what it asserts — a running period, a
-partial trailing bucket — is only true of the current period. A fix or a regression in the anchor
-would leave that suite green either way.
+**Nothing outside `financePeriod.ts` reads `.anchor`** — all 22 components that call
+`useFinancePeriod`/`useFinanceQuarter` read the period only, so the fix touched the model and the
+shell and no consumer.
+
+Covered by `verify-period-anchor.mjs`. **`verify-pace-grain.mjs` still cannot catch a regression
+here** — it clicks `period-jump` after every grain change, because half of what it asserts is only
+true of the current period, so it would stay green either way.
