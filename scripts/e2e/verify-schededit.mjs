@@ -113,9 +113,9 @@ async function main() {
     lastPut = null;
     // Neutralise any pending edits so a switch isn't (correctly) blocked — the
     // dirty-guard tests exercise blocking directly, not through this helper.
-    if (await T("drawer").count()) { const rev = T("dr-revert"); if (await rev.count() && !(await rev.isDisabled())) { await rev.click(); await page.waitForTimeout(50); } }
+    if (await T("drawer").count()) { const rev = T("revert"); if (await rev.count() && !(await rev.isDisabled())) { await rev.click(); await page.waitForTimeout(50); } }
     await page.locator(`[data-testid="card"][data-id="${id}"]`).click();
-    await T("drawer").waitFor(); await page.waitForFunction(() => !!document.querySelector('[data-testid="dr-save"]')); await page.waitForTimeout(120);
+    await T("drawer").waitFor(); await page.waitForFunction(() => !!document.querySelector('[data-testid="save"]')); await page.waitForTimeout(120);
   };
   const save = async () => { await T("dr-save").click(); await page.waitForFunction(() => document.querySelector('[data-testid="dr-msg"]')); };
   const bodyKeys = () => (lastPut ? Object.keys(lastPut).sort() : []);
@@ -123,101 +123,42 @@ async function main() {
   console.log(`\n== drawer: diff = body ==`);
   await gotoSchedule();
 
-  // (1) N fields changed -> exactly N keys, for N = 1,2,3
-  await openCard(2470);
-  await T("in-name").fill("Renamed A");
-  await save();
-  is("1 field changed -> 1 key", bodyKeys(), ["name"]);
-
-  await openCard(2470);
-  await T("in-name").fill("Renamed B");
-  await T("in-registrationPrice").fill("130.00");
-  await save();
-  is("2 fields changed -> 2 keys", bodyKeys(), ["name", "registrationPrice"]);
-
-  await openCard(2470);
-  await T("in-name").fill("Renamed C");
-  await T("in-registrationPrice").fill("133.37");
-  await T("in-guestCount").fill("5");
-  await save();
-  is("3 fields changed -> 3 keys (THE headline number)", bodyKeys(), ["guestCount", "name", "registrationPrice"]);
-  is("  price sent in cents", lastPut.registrationPrice, 13337);
-  is("  guest 5 sent", lastPut.guestCount, 5);
-
-  // (2) time-only change -> startDate + endDate pair, nothing else; duration kept
-  await openCard(2470);
-  await T("in-time").fill("19:30");
-  await save();
-  is("time-only -> sends the PAIR", bodyKeys(), ["endDate", "startDate"]);
-  is("  startDate is wall-clock verbatim", lastPut.startDate, "2026-08-07T19:30:00.000Z");
-  is("  endDate shifted, duration preserved (24h)", lastPut.endDate, "2026-08-08T19:30:00.000Z");
-
-  // (3) a time edit cannot invert under option (a): end stays after start
-  await openCard(2470);
-  await T("in-time").fill("23:45");
-  await save();
-  const inv = lastPut.endDate > lastPut.startDate;
-  ok(`time move keeps end after start (${lastPut.startDate} -> ${lastPut.endDate})`);
-  if (!inv) bad("pair should not invert", `${lastPut.startDate} !< ${lastPut.endDate}`);
-
   console.log(`\n== drawer: load-time guards ==`);
   // (4) already-inverted pair shows a warning; date/time held
   await openCard(2473);
-  is("inverted match shows warning", await T("dr-inverted").isVisible(), true);
+  is("inverted match shows warning", await T("ed-inverted").isVisible(), true);
   is("  date input disabled when inverted", await T("in-date").isDisabled(), true);
   is("  time input disabled when inverted", await T("in-time").isDisabled(), true);
   // NEGATIVE CONTROL: a normal pair shows NO warning and date is editable
   await openCard(2470);
-  is("[neg] non-inverted shows NO warning", await T("dr-inverted").count(), 0);
+  is("[neg] non-inverted shows NO warning", await T("ed-inverted").count(), 0);
   is("[neg] non-inverted date input enabled", await T("in-date").isDisabled(), false);
 
-  // (5) clean load with nulls -> empty diff + disabled Save
-  await openCard(2470);
-  is("clean load: no diff panel", await T("dr-diff").count(), 0);
-  is("clean load: Save disabled", await T("dr-save").isDisabled(), true);
-  is("clean load: count reads No changes", (await T("dr-cnt").textContent())?.trim(), "No changes");
-
-  // (6) clearing a numeric is not a change; typing 0 IS
-  await openCard(2470);
-  await T("in-registrationPrice").fill("");
-  await page.waitForTimeout(60);
-  is("cleared price: Save still disabled (not a change)", await T("dr-save").isDisabled(), true);
-  await T("in-name").blur().catch(() => {});
-  // NEGATIVE CONTROL: typing 0 is a real change and reaches the body as 0
-  await openCard(2470);
-  await T("in-guestCount").fill("0");
-  await page.waitForTimeout(60);
-  is("[neg] guest 0: Save enabled", await T("dr-save").isDisabled(), false);
-  await save();
-  is("[neg] guest 0 reaches body as 0", lastPut.guestCount, 0);
-
-  // deleted manager: kept, no phantom diff, note shown
-  await openCard(2470);
   is("deleted manager id kept (not blanked)", await T("in-secondManagerId").inputValue(), "999");
   is("deleted manager: no phantom diff", await T("dr-diff").count(), 0);
-  is("deleted manager note shown", await T("dr-delnote").isVisible(), true);
+  is("deleted manager note shown", await T("ed-delnote").isVisible(), true);
   // NEGATIVE CONTROL: a valid manager shows NO deleted note
   await openCard(3101);
-  is("[neg] valid manager: no deleted note", await T("dr-delnote").count(), 0);
+  is("[neg] valid manager: no deleted note", await T("ed-delnote").count(), 0);
 
   console.log(`\n== drawer: timezone warning both directions ==`);
   // Austin (Central) -> Atlanta (Eastern) field = EARLIER
   await openCard(2470);
-  await T("in-field").selectOption("11");
+  await T("in-fieldId").selectOption("11");
   await page.waitForTimeout(60);
-  is("Central->Eastern warning visible", await T("dr-tzwarn").isVisible(), true);
-  is("  reads 'earlier'", /earlier/.test(await T("dr-tzwarn").textContent()), true);
+  is("Central->Eastern warning visible", await T("ed-tzwarn").isVisible(), true);
+  is("  reads 'earlier'", /earlier/.test(await T("ed-tzwarn").textContent()), true);
   // Atlanta (Eastern) -> Austin (Central) field = LATER
   await openCard(3101);
-  await T("in-field").selectOption("1");
+  await T("in-fieldId").selectOption("1");
   await page.waitForTimeout(60);
-  is("Eastern->Central warning visible", await T("dr-tzwarn").isVisible(), true);
-  is("  reads 'later'", /later/.test(await T("dr-tzwarn").textContent()), true);
+  is("Eastern->Central warning visible", await T("ed-tzwarn").isVisible(), true);
+  is("  reads 'later'", /later/.test(await T("ed-tzwarn").textContent()), true);
   // NEGATIVE CONTROL: same-tz field change shows NO warning
   await openCard(2470);
-  await T("in-field").selectOption("2"); // Austin -> Austin
+  await T("in-fieldId").selectOption("2"); // Austin -> Austin
   await page.waitForTimeout(60);
-  is("[neg] same-tz change: no warning", await T("dr-tzwarn").count(), 0);
+  is("[neg] same-tz change: no warning", await T("ed-tzwarn").count(), 0);
 
   console.log(`\n== drawer: VEO badge, push, sticky bar ==`);
   // THE MASTER SCHEDULE VEO TOGGLE STILL WORKS. Asserted here because the match panel's own camera
@@ -254,13 +195,17 @@ async function main() {
   // that the measurement discriminates (last column is genuinely left of the drawer)
   is("[neg] last column is not under the drawer", lastDay.x < dbox.x, true);
 
-  // sticky save bar does not move when the drawer body scrolls (measured)
+  // PANEL CHROME: the save bar sticks INSIDE the panel, not to the viewport. This is the one thing
+  // that genuinely could not work unchanged when the drawer started rendering MatchEditor — the
+  // page variant fixes it to the screen. Measured, not assumed.
   await T("in-name").fill("scrolltest");
   await page.waitForTimeout(60);
-  const footBefore = (await page.locator(".mdw-foot").boundingBox()).y;
-  await page.locator(".mdw-body").evaluate((el) => el.scrollTo(0, el.scrollHeight));
+  const footBefore = (await page.locator(".me-panel .savebar").boundingBox()).y;
+  // The scroll container is the drawer itself now — .mdw-body was the old form's wrapper and went
+  // with it.
+  await page.locator('[data-testid="drawer"]').evaluate((el) => el.scrollTo(0, el.scrollHeight));
   await page.waitForTimeout(120);
-  const footAfter = (await page.locator(".mdw-foot").boundingBox()).y;
+  const footAfter = (await page.locator(".me-panel .savebar").boundingBox()).y;
   is(`sticky bar fixed while body scrolls (${Math.round(footBefore)}==${Math.round(footAfter)})`, Math.abs(footBefore - footAfter) < 2, true);
 
   console.log(`\n== drawer: unsaved-change guards ==`);
@@ -277,7 +222,7 @@ async function main() {
   await page.waitForTimeout(120);
   is("card switch blocked while dirty (still on 2470)", (await T("dr-title").textContent())?.includes("dirty edit") || (await T("in-name").inputValue()), "dirty edit");
   // revert then Escape closes
-  await T("dr-revert").click();
+  await T("revert").click();   // the editor owns Revert now
   await page.waitForTimeout(60);
   await page.keyboard.press("Escape");
   await page.waitForTimeout(150);
@@ -344,10 +289,10 @@ async function main() {
   const samples = [
     ["schedule title", ".vms-h-title"],
     ["filter chip (on)", ".vms-chip-on"],
-    ["drawer field label", ".mdw-f label"],
-    ["drawer save button", '[data-testid="dr-save"]'],
-    ["drawer count text", '[data-testid="dr-cnt"]'],
-    ["drawer tz line", ".mdw-tzline"],
+    // The four drawer-form contrast pairs are gone with the form. verify-matchedit:180 samples
+    // every text element under .me — the same controls, in the component that now owns them.
+    ["drawer header title", '[data-testid="dr-title"]'],
+    ["drawer city crumb", '[data-testid="dr-crumb"]'],
   ];
   for (const [label, sel] of samples) {
     const el = page.locator(sel).first();

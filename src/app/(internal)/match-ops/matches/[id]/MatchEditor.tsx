@@ -24,7 +24,8 @@ import { FULL_EDITOR_ENV } from "@/lib/matchEnv";
 import { noteLogResponse } from "@/lib/logHealth";
 import LogHealthBanner from "@/components/LogHealthBanner";
 import { useAuth, canEditMatches } from "@/lib/useAuth";
-import { wallDate, wallTime } from "@/lib/matchWallClock";
+import { wallDate, wallTime, buildStartDate, shiftedEndDate, isInvertedPair } from "@/lib/matchWallClock";
+import { tzShift } from "@/lib/matchTimezone";
 
 // MatchDay startDate/endDate are WALL-CLOCK strings mislabelled "…Z" (the true instant is
 // startDateUtc). NEVER `new Date()` them — that re-shifts to the viewer's timezone and
@@ -44,15 +45,19 @@ const LADDER = ["fakeSpotLeft36h", "fakeSpotLeft24h", "fakeSpotLeft12h", "fakeSp
 const CATS: [string, string][] = [["OPEN", "Open — Open to all"], ["PREMIER", "Premier — four stars and up"], ["LEGENDS", "Legends"], ["ACADEMY", "Academy"], ["CO_ED", "Co-ed"], ["FEMINE", "Women’s"], ["TOURNAMENT", "Tournament"]];
 const TYPES: [string, string][] = [["REGULAR", "Regular"], ["EVENT", "Special event"], ["BRACKET", "Bracket"], ["GROUP", "Group"]];
 
-function specs(fields: FieldRow[]): Spec[] {
+function specs(fields: FieldRow[], managers: { id: number; name: string }[] = []): Spec[] {
   const fieldOpts: [number, string][] = fields.map((f) => [f.id, `${f.city ? f.city + " — " : ""}${f.title}`]);
+  const mgrOpts: [number, string][] = managers.map((m) => [m.id, m.name]);
   return [
     { key: "name", group: "match", kind: "text", label: "Name", wide: true },
     { key: "fieldId", group: "match", kind: "select", label: "Field", opts: fieldOpts },
     { key: "category", group: "match", kind: "select", label: "Category", opts: CATS },
     { key: "type", group: "match", kind: "select", label: "Type", opts: TYPES },
-    { key: "managerId", group: "match", kind: "number", label: "Manager 1 (id)" },
-    { key: "secondManagerId", group: "match", kind: "number", label: "Manager 2 (id)", hint: "Leave empty if only one" },
+    // A NAMED DROPDOWN, as the drawer had — not a raw id box. A currently-selected id that is NOT
+    // in the list stays selected and labelled; it is never blanked, because blanking would report
+    // a change nobody made and then save it.
+    { key: "managerId", group: "match", kind: "select", label: "Manager 1", opts: mgrOpts },
+    { key: "secondManagerId", group: "match", kind: "select", label: "Manager 2", opts: mgrOpts, hint: "Leave empty if only one" },
     { key: "description", group: "match", kind: "textarea", label: "Description", wide: true },
     { key: "managerIntro", group: "match", kind: "textarea", label: "Manager intro", wide: true },
     { key: "registrationPrice", group: "price", kind: "money", label: "Price" },
@@ -117,11 +122,30 @@ const money = (cents: unknown) => "$" + (Number(cents ?? 0) / 100).toFixed(2);
  * overlaid onto `state` so the diff shows them as changed and one save sends them. That is why
  * create can take nine fields and a copy can still carry twenty-one.
  */
-export default function MatchEditor({ id, mode = "edit", sourceId }: {
+export default function MatchEditor({ id, mode = "edit", sourceId, variant = "page", onDirtyChange, veo, onToggleVeo }: {
   id: string;
   mode?: "edit" | "create";
   /** The match being copied FROM — pre-fills create, and step two's overlay. */
   sourceId?: string | null;
+  /* ONE COMPONENT, TWO PRESENTATIONS — content identical, chrome different.
+   *
+   * page   the Gameday Ops route: its own header, a full-bleed background, a save bar fixed to
+   *        the viewport.
+   * panel  inside Master Schedule's drawer, which already supplies a header (sibling arrows,
+   *        close, the production framing). So panel mode drops this component's own header,
+   *        stops claiming the viewport, and makes the save bar STICKY WITHIN the panel instead
+   *        of fixed across the screen — which is the only thing that genuinely could not work
+   *        unchanged. No logic, no field and no validation differs between them.
+   */
+  variant?: "page" | "panel";
+  /** Panel mode reports dirtiness up so the drawer can block week-nav and card-switching. */
+  onDirtyChange?: (dirty: boolean) => void;
+  /* VEO COVERAGE, MOVED IN FROM THE DRAWER. Camera intent is a Clubhouse concept, not a MatchDay
+   * one: it posts to /api/veo/intent and is NOT part of the match PUT — a separate call, exactly
+   * as it was. The caller owns the value because it also owns the card badge that has to update;
+   * the editor owns the control and the wording. */
+  veo?: boolean;
+  onToggleVeo?: (next: boolean) => void;
 }) {
   const { appUser } = useAuth();
   const router = useRouter();
@@ -133,6 +157,10 @@ export default function MatchEditor({ id, mode = "edit", sourceId }: {
     else router.push("/match-ops/gameday");
   };
   const [fields, setFields] = useState<FieldRow[]>([]);
+  // THE ROUTE HAS ALWAYS RETURNED THESE; this component simply never read them, and rendered
+  // managerId as a raw id box while the drawer showed a name dropdown. The drawer's body is gone,
+  // so reading them here is what keeps that capability alive.
+  const [managers, setManagers] = useState<{ id: number; name: string }[]>([]);
   const [players, setPlayers] = useState<Data[]>([]);
   const [meta, setMeta] = useState<Data | null>(null); // read-only bits (start/end, teams, isCancelled, occupancy)
   const [loaded, setLoaded] = useState<Data | null>(null);
@@ -142,13 +170,21 @@ export default function MatchEditor({ id, mode = "edit", sourceId }: {
   const [msg, setMsg] = useState<{ kind: "ok" | "err" | "warn"; text: string } | null>(null);
   const [cancelArmed, setCancelArmed] = useState(false);
 
-  const FIELDS = useMemo(() => specs(fields), [fields]);
+  const FIELDS = useMemo(() => specs(fields, managers), [fields, managers]);
 
   const ingest = useCallback((m: Data) => {
     const ed: Data = {};
     for (const k of EDITABLE_KEYS) ed[k] = m[k] ?? (TOGGLE.has(k) ? false : null);
     setLoaded(ed); setState(JSON.parse(JSON.stringify(ed)));
     setMeta({ id: m.id, startDate: m.startDate, endDate: m.endDate, isCancelled: m.isCancelled, teams: m.teams, fieldTitle: m.fieldTitle, cityName: m.cityName, occupancy: m.occupancy, maxPlayerCount: m.maxPlayerCount });
+    // THE INVERTED-PAIR GUARD. A match whose end is on or before its start is reachable — the
+    // server does not validate it — so both inputs are HELD and the reason is shown. Editing a
+    // broken pair would rewrite it from a duration that is negative.
+    const si = String(m.startDate ?? ""), ei = String(m.endDate ?? "");
+    const bad = si && ei ? isInvertedPair(si, ei) : false;
+    setInverted(bad);
+    setDDate(si ? wallDate(si) : "");
+    setDTime(si ? wallTime(si) : "");
   }, []);
 
   // CREATE MODE'S OWN DATE STATE. Deliberately NOT part of `state`: the twenty-one editable keys
@@ -156,6 +192,11 @@ export default function MatchEditor({ id, mode = "edit", sourceId }: {
   const [startAt, setStartAt] = useState("");
   const [endAt, setEndAt] = useState("");
   const [dateErr, setDateErr] = useState<string | null>(null);
+  // EDIT MODE'S DATE AND TIME. UI-only, exactly as the drawer models them: they collapse into the
+  // startDate/endDate PAIR on save so a time move cannot silently change a match's length.
+  const [dDate, setDDate] = useState("");
+  const [dTime, setDTime] = useState("");
+  const [inverted, setInverted] = useState(false);
   const [created, setCreated] = useState<{ id: number; outcome: string } | null>(null);
   const [dupe, setDupe] = useState<{ id: number; name: string } | null>(null);
 
@@ -168,7 +209,8 @@ export default function MatchEditor({ id, mode = "edit", sourceId }: {
     const res = await authFetch(`/api/matchday/${FULL_EDITOR_ENV}/matches/${readId}`);
     const json = await res.json().catch(() => ({}));
     if (!res.ok) { setLoadErr(json?.error ?? `HTTP ${res.status}`); return; }
-    setFields(json.fields ?? []); setPlayers(mode === "create" ? [] : (json.players ?? []));
+    setFields(json.fields ?? []); setManagers(json.managers ?? []);
+    setPlayers(mode === "create" ? [] : (json.players ?? []));
     ingest(json.match);
 
     /* STEP TWO OF A COPY. The create call could carry only nine fields, so the rest arrive here:
@@ -217,13 +259,68 @@ export default function MatchEditor({ id, mode = "edit", sourceId }: {
   }, [id, mode, sourceId, ingest]);
   useEffect(() => { void load(); }, [load]);
 
+  // HAS THE DATE OR TIME MOVED? Compared against the loaded wall-clock values via wallDate and
+  // wallTime — never by constructing a Date from them, because the "Z" they carry is a lie and
+  // parsing it re-shifts the clock into the viewer's zone. (Phrased without the literal call so
+  // walltime-guard-test's source scan does not flag this comment as the very thing it warns about
+  // — the guard is deliberately literal, and it caught this text on the first run.)
+  /* MOVED IN FROM THE DRAWER — both of these existed ONLY there, and swapping the drawer's body
+   * for this component would have deleted them from the product.
+   *
+   * TIMEZONE SHIFT: moving a match to a field in another zone keeps the clock reading and changes
+   * the real instant. That warning belongs wherever the field can be changed alongside a time —
+   * which, now that dates are editable here, is this component.
+   *
+   * DELETED MANAGER: a managerId pointing at a deleted account is KEPT exactly as loaded, never
+   * blanked — blanking would report a change nobody made and then save it. */
+  const tzWarn = useMemo(() => {
+    if (!state || !loaded) return null;
+    const from = fields.find((f) => f.id === Number(loaded.fieldId))?.city ?? (meta?.cityName as string | undefined);
+    const to = fields.find((f) => f.id === Number(state.fieldId))?.city;
+    return tzShift(from, to);
+  }, [state, loaded, fields, meta]);
+
+  const deletedManagers = useMemo(() => {
+    const out: string[] = [];
+    const named = (v: unknown) => typeof v === "string" && v.trim().length > 0;
+    for (const [key, label] of [["managerId", "Manager"], ["secondManagerId", "Second manager"]] as const) {
+      const id = Number(loaded?.[key] ?? 0);
+      if (!id) continue;
+      // In the list => resolvable. Absent => deleted or unresolved.
+      const known = (managers as { id: number; name?: string }[]).some((x) => Number(x.id) === id && named(x.name));
+      if (!known) out.push(label);
+    }
+    return out;
+  }, [loaded, managers]);
+
+  const dateMoved = useMemo(() => {
+    if (mode !== "edit" || inverted || !meta?.startDate) return false;
+    const si = String(meta.startDate);
+    return (dDate !== "" && dDate !== wallDate(si)) || (dTime !== "" && dTime !== wallTime(si));
+  }, [mode, inverted, meta, dDate, dTime]);
+
   const changedKeys = useMemo(() => {
     if (!state || !loaded) return [];
-    return diffKeys(EDITABLE_KEYS, loaded, state);
-  }, [state, loaded]);
+    const keys = diffKeys(EDITABLE_KEYS, loaded, state);
+    // THE PAIR IS ONE CHANGE TO A READER AND TWO KEYS TO THE API. Both are listed so the diff the
+    // user reads is the request that is sent — the route refuses one without the other.
+    return dateMoved ? [...keys, "startDate", "endDate"] : keys;
+  }, [state, loaded, dateMoved]);
 
   // THE PAYLOAD — the same key set the diff shows. Shared pick() with the drawer.
-  const payload = useMemo(() => pick(state ?? {}, changedKeys), [changedKeys, state]);
+  const payload = useMemo(() => {
+    const p = pick(state ?? {}, changedKeys.filter((k) => k !== "startDate" && k !== "endDate"));
+    if (dateMoved && meta?.startDate && meta?.endDate) {
+      const newStart = buildStartDate(dDate, dTime);
+      p.startDate = newStart;
+      // DURATION PRESERVED, to the minute: the end moves by exactly what the start moved.
+      p.endDate = shiftedEndDate(String(meta.startDate), String(meta.endDate), newStart);
+    }
+    return p;
+  }, [changedKeys, state, dateMoved, dDate, dTime, meta]);
+
+  // THE DRAWER BLOCKS week-nav and card-switching while edits pend, so dirtiness is reported up.
+  useEffect(() => { onDirtyChange?.(changedKeys.length > 0); }, [changedKeys.length, onDirtyChange]);
 
   const fmt = (k: string, v: unknown) => TOGGLE.has(k) ? (v ? "on" : "off")
     : MONEY.has(k) ? money(v)
@@ -273,7 +370,21 @@ export default function MatchEditor({ id, mode = "edit", sourceId }: {
     const lbl = <label>{f.label}{f.hint ? <span className="hint">{f.hint}</span> : null}</label>;
     let ctl: React.ReactNode;
     if (f.kind === "select") ctl = (
-      <select data-k={f.key} data-testid={`in-${f.key}`} value={String(state[f.key] ?? "")} onChange={(e) => set(f.key, f.key === "fieldId" ? Number(e.target.value) : e.target.value)}>
+      <select data-k={f.key} data-testid={`in-${f.key}`} value={String(state[f.key] ?? "")}
+        onChange={(e) => set(f.key, e.target.value === "" ? null
+          : (f.key === "fieldId" || f.key === "managerId" || f.key === "secondManagerId") ? Number(e.target.value)
+          : e.target.value)}>
+        {/* A NULLABLE SELECT NEEDS A WAY BACK TO NONE. Manager 2 is legitimately empty. */}
+        {NULLABLE_NUM.has(f.key) && <option value="">— none —</option>}
+        {/* THE CURRENT VALUE ALWAYS HAS AN OPTION, EVEN IF THE LIST HAS NEVER HEARD OF IT.
+            Without this a managerId pointing at a deleted account silently becomes whichever id
+            happens to be first — a change nobody made, saved on the next press. The drawer had
+            this and porting the dropdown without it reintroduced exactly that bug; the assertion
+            that caught it is the one kept from verify-schededit. */}
+        {state[f.key] != null && String(state[f.key]) !== "" &&
+          !(f.opts ?? []).some(([v]) => String(v) === String(state[f.key])) && (
+          <option value={String(state[f.key])}>id {String(state[f.key])} — not in this list</option>
+        )}
         {(f.opts ?? []).map(([v, l]) => <option key={String(v)} value={String(v)}>{l}</option>)}
       </select>
     );
@@ -360,7 +471,13 @@ export default function MatchEditor({ id, mode = "edit", sourceId }: {
     if (mode === "create") return createMatch();
     if (!changedKeys.length) return;
     setSaving(true); setMsg(null);
-    const res = await authFetch(`/api/matchday/${FULL_EDITOR_ENV}/matches/${id}`, { method: "PUT", body: JSON.stringify({ changes: payload }) });
+    // A DISTINCT SOURCE PER SURFACE. Without one, the drawer's writes logged as the route's
+    // default and were indistinguishable from Match panel's — which is why an 8½-hour move on a
+    // production match could not be attributed to whoever made it.
+    const res = await authFetch(`/api/matchday/${FULL_EDITOR_ENV}/matches/${id}`, {
+      method: "PUT",
+      body: JSON.stringify({ changes: payload, source: variant === "panel" ? "Master Schedule drawer" : "Match editor" }),
+    });
     const json = await res.json().catch(() => ({}));
     setSaving(false);
     if (!res.ok) { setMsg({ kind: json?.ambiguous ? "warn" : "err", text: json?.error ?? `HTTP ${res.status}` }); return; }
@@ -397,13 +514,19 @@ export default function MatchEditor({ id, mode = "edit", sourceId }: {
   const playerCount = occupancy; // the cancel card's "N signed up" uses the real occupancy
 
   return (
-    <div className="me">
+    <div className={"me" + (variant === "panel" ? " me-panel" : "")}>
       <style>{CSS}</style>
       <LogHealthBanner />
 
+      {/* PANEL MODE DROPS THE BACK BUTTON ONLY. The rest of this header stays in both — the id,
+          the cancelled/live chip, the start stamp and, most of all, the PRODUCTION pill. That pill
+          is the last thing between a careless edit and forty players' phones, so it renders in
+          both presentations rather than being assumed to come from the drawer's framing. */}
       <div className="head">
         <div>
-          <button className="backb" data-testid="editor-back" onClick={goBack} aria-label="Back">‹ Back</button>
+          {variant === "page" && (
+            <button className="backb" data-testid="editor-back" onClick={goBack} aria-label="Back">‹ Back</button>
+          )}
           <h1 data-testid="title">{String(state.name)}</h1>
           <div className="hmeta">
             <span className="chip id">ID {String(meta.id)}</span>
@@ -445,8 +568,51 @@ export default function MatchEditor({ id, mode = "edit", sourceId }: {
           <section className="card"><div className="ch"><h2>Match</h2><span className="cnt" data-testid="cnt-match">{groupCount("match") ? `${groupCount("match")} changed` : ""}</span></div>
             <div className="cb"><div className="grid">{inGroup("match").map(renderField)}
               {mode === "edit" ? (
-                <div className="f"><label>Start and end<span className="hint">Set when the match was created; changing dates is its own action.</span></label>
-                  <input type="text" disabled value={`${meta.startDate ? wallStamp(String(meta.startDate)) : "—"} → ${meta.endDate ? hhmm12(wallTime(String(meta.endDate))) : "—"}`} /></div>
+                <>
+                  {/* DATE AND START TIME ARE EDITABLE. They were disabled here with a sentence
+                      telling you to fix a broken pair "in the full editor" — which was this page,
+                      the one place that could not. The API accepts the pair, the route enforces
+                      sending both together, and a production date change is on record as landed. */}
+                  <div className="f"><label htmlFor="ed-date">Date{inverted ? <span className="hint">Held — see below.</span> : null}</label>
+                    <input id="ed-date" data-testid="in-date" type="date" disabled={inverted}
+                      value={dDate} onChange={(e) => { setDDate(e.target.value); setDateErr(null); }} /></div>
+                  <div className="f"><label htmlFor="ed-time">Start time<span className="hint">The end moves with it — the match keeps its length.</span></label>
+                    <input id="ed-time" data-testid="in-time" type="time" disabled={inverted}
+                      value={dTime} onChange={(e) => { setDTime(e.target.value); setDateErr(null); }} /></div>
+                  <div className="f"><label>Ends</label>
+                    <input type="text" disabled data-testid="ed-endpreview"
+                      value={meta.endDate ? hhmm12(wallTime(String(meta.endDate))) : "—"} /></div>
+                  {inverted && (
+                    <div className="f" data-testid="ed-inverted" style={{ gridColumn: "1 / -1" }}>
+                      <div className="diffnote" style={{ color: "#8a4b12" }}>
+                        <b>This match ends before it starts.</b> Its end ({meta.endDate ? hhmm12(wallTime(String(meta.endDate))) : "—"}) is on
+                        or before its start ({meta.startDate ? hhmm12(wallTime(String(meta.startDate))) : "—"}). Date and time are held so an
+                        edit cannot rewrite a broken pair from a negative duration. TO FIX IT: cancel this match and copy it
+                        to the times you meant — Copy match on Master Schedule. Every other field here still saves.
+                      </div>
+                    </div>
+                  )}
+                  {/* MOVED IN FROM THE DRAWER — the clock stays, the real instant does not. */}
+                  {tzWarn && (
+                    <div className="f" data-testid="ed-tzwarn" style={{ gridColumn: "1 / -1" }}>
+                      <div className="diffnote" style={{ color: "#8a4b12" }}>
+                        Moving from {tzWarn.fromLabel} to {tzWarn.toLabel}. The clock stays {dTime ? hhmm12(dTime) : "the same"} — that is{" "}
+                        {tzWarn.hours === 1 ? "one hour" : `${tzWarn.hours} hours`} {tzWarn.direction} in real terms.
+                      </div>
+                    </div>
+                  )}
+                  {/* ALSO MOVED IN. The id is kept exactly as loaded, never blanked. */}
+                  {deletedManagers.length > 0 && (
+                    <div className="f" data-testid="ed-delnote" style={{ gridColumn: "1 / -1" }}>
+                      <div className="diffnote" style={{ color: "#8a4b12" }}>
+                        {deletedManagers.join(" and ")} {deletedManagers.length === 1 ? "points" : "point"} at a deleted or
+                        unresolved account. The id is kept exactly as loaded — nothing is blanked, so opening the match
+                        reports no change you did not make.
+                      </div>
+                    </div>
+                  )}
+                  {dateErr && <div className="f" data-testid="ed-dateerr" style={{ gridColumn: "1 / -1", color: "#b3261e" }}>{dateErr}</div>}
+                </>
               ) : (
                 <>
                   {/* BLANK ON PURPOSE, AND REQUIRED. The one field a copy must not inherit. */}
@@ -460,6 +626,22 @@ export default function MatchEditor({ id, mode = "edit", sourceId }: {
                 </>
               )}
             </div></div></section>
+
+          {/* VEO COVERAGE — a separate call from the match PUT, and it says so. */}
+          {typeof veo === "boolean" && onToggleVeo && (
+            <section className="card" data-testid="ed-veo"><div className="ch"><h2>Veo coverage</h2><span className="cnt" /></div>
+              <div className="cb"><div className="veorow">
+                <div>
+                  <div className="veolab">Camera assigned</div>
+                  <div className="veosub">{veo ? "Counted in this week's camera nights." : "This match is not covered."}</div>
+                </div>
+                <button type="button" role="switch" aria-checked={veo} data-testid="ed-veo-switch"
+                  aria-label="Camera assigned" className={"veosw" + (veo ? " on" : "")}
+                  onClick={() => onToggleVeo(!veo)}><i /></button>
+              </div>
+              <div className="veohint">Veo lives in Clubhouse, not the MatchDay API — it saves the instant you flip it and is not part of the list below.</div>
+              </div></section>
+          )}
 
           {/* Teams (read-only this phase) */}
           <section className="card"><div className="ch"><h2>Teams</h2><span className="cnt" data-testid="cnt-teams" /></div>
@@ -649,6 +831,23 @@ const CSS = `
 .me .cnt.cap.over{color:#A83120;font-weight:800}.me .cnt.cap.over b{color:#A83120}
 .me .pfoot{font-size:11px;color:var(--muted);margin-top:10px;line-height:1.5}
 .me .savebar{position:fixed;left:0;right:0;bottom:0;background:var(--paper);border-top:1px solid var(--line);box-shadow:0 -8px 24px rgba(0,51,38,.09);z-index:60}
+/* PANEL MODE — the same content in Master Schedule's drawer. Only chrome changes: the drawer
+   supplies the header and the production framing, so this stops claiming the viewport and the
+   save bar sticks to the PANEL rather than spanning the screen behind it. */
+.me.me-panel{min-height:0;max-width:none;margin:0;background:transparent;padding:0 0 8px}
+.me.me-panel .savebar{position:sticky;left:auto;right:auto;bottom:0;box-shadow:0 -6px 18px rgba(0,51,38,.08)}
+.me.me-panel .savebar .diff,.me.me-panel .sbin{max-width:none;padding-left:14px;padding-right:14px}
+.me.me-panel .cols{grid-template-columns:1fr}
+.me.me-panel .wrap{padding-left:14px;padding-right:14px}
+/* Veo coverage — moved in from the drawer, same switch, same wording. */
+.me .veorow{display:flex;align-items:center;justify-content:space-between;gap:12px;border:1px solid var(--line);border-radius:10px;padding:12px 13px;background:var(--slot)}
+.me .veolab{font-weight:700;font-size:13px}
+.me .veosub{font-size:11.5px;color:var(--muted);margin-top:2px}
+.me .veohint{font-size:11px;color:var(--faint);margin-top:8px;line-height:1.5}
+.me .veosw{width:44px;height:25px;border-radius:999px;border:1px solid var(--line);background:#E7EBE7;position:relative;cursor:pointer;flex:none}
+.me .veosw i{position:absolute;top:2px;left:2px;width:19px;height:19px;border-radius:50%;background:#fff;box-shadow:0 1px 3px rgba(0,0,0,.2);transition:left .15s}
+.me .veosw.on{background:#0F6B4F;border-color:#0F6B4F}
+.me .veosw.on i{left:22px}
 .me .savebar .diff{max-width:1500px;margin:0 auto;padding:12px 24px 0}
 .me .diffin{background:var(--blue);border:1px solid var(--blueEdge);border-radius:12px;padding:11px 14px}
 .me .diffin h3{margin:0 0 8px;font-size:10px;font-weight:900;letter-spacing:.8px;text-transform:uppercase;color:var(--blueInk)}

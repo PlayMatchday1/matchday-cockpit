@@ -56,6 +56,28 @@ function mutation<T>(name: string, real: T, broken: T, assertion: (impl: T) => b
   mutation("date-pair (shiftedEndDate preserves duration)", shiftedEndDate, brokenShift, assertion);
 }
 
+// ── date pair ACROSS A DAY BOUNDARY — ported from verify-schededit, not deleted with it ───────
+{
+  /* THE 2-HOUR CASE ABOVE WOULD NOT CATCH THIS. A naive shift that rebuilds the end from the
+   * start's DATE — rather than adding the duration in minutes — looks correct on a match that
+   * begins and ends on the same day, and silently collapses a 24-hour match to zero. The drawer
+   * suite asserted exactly this case; the drawer's own diff and save assertions were deleted when
+   * MatchEditor took them over, but this one had no equivalent anywhere, so it moved here instead
+   * — as a MUTATION test, which is stronger than the browser assertion it replaces. */
+  const start0 = "2026-08-07T19:30:00.000Z", end0 = "2026-08-08T19:30:00.000Z"; // exactly 24h
+  const newStart = buildStartDate("2026-08-07", "19:30");
+  // broken: keep the END's clock but rebuild it on the START's date — same-day matches unaffected.
+  const brokenShift = ((s0: string, e0: string, ns: string) =>
+    `${ns.slice(0, 10)}T${e0.slice(11)}`) as typeof shiftedEndDate;
+  const dur = (a: string, b: string) => Date.parse(b) - Date.parse(a);
+  const assertion = (sh: typeof shiftedEndDate) => {
+    const out = sh(start0, end0, newStart);
+    // Duration preserved to the minute AND the end still lands on the following day.
+    return dur(newStart, out) === dur(start0, end0) && out.slice(0, 10) === "2026-08-08";
+  };
+  mutation("date-pair across a DAY BOUNDARY (24h preserved, end stays on the next day)", shiftedEndDate, brokenShift, assertion);
+}
+
 // ── wall-clock: the value is the wall clock verbatim, never tz-converted ───────
 {
   // broken: convert as if through a Central Date object (subtract 6h) -> different digits

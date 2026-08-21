@@ -18,14 +18,11 @@
 
 import { useCallback, useEffect, useMemo, useRef, useState } from "react";
 import { supabase } from "@/lib/supabase";
-import { diffKeys, pick, MONEY_KEYS } from "@/lib/matchEditModel";
-import { buildStartDate, shiftedEndDate, isInvertedPair, wallDate, wallTime } from "@/lib/matchWallClock";
-import { tzLabelOfCity, tzShift } from "@/lib/matchTimezone";
+import { tzLabelOfCity } from "@/lib/matchTimezone";
 import { envBadge } from "@/lib/matchEnvBadge";
-import { centsToDollars, dollarsToCents } from "@/lib/matchMoney";
+import MatchEditor from "@/app/(internal)/match-ops/matches/[id]/MatchEditor";
 import { DRAWER_ENV, FULL_EDITOR_ENV } from "@/lib/matchEnv";
 import { noteLogResponse } from "@/lib/logHealth";
-import { useAuth, canEditMatches } from "@/lib/useAuth";
 
 export const DRAWER_W = 480;
 
@@ -68,17 +65,6 @@ async function authFetch(path: string, init?: RequestInit): Promise<Response> {
   const token = data.session?.access_token;
   return fetch(path, { ...init, headers: { ...(init?.headers ?? {}), ...(token ? { Authorization: `Bearer ${token}` } : {}), "Content-Type": "application/json" }, cache: "no-store" });
 }
-const money = (c: unknown) => "$" + centsToDollars(c);
-const dollars = centsToDollars;
-const centsOf = dollarsToCents;
-const hhmm12 = (t: string) => {
-  const [H, M] = t.split(":").map(Number);
-  const ap = H >= 12 ? "PM" : "AM";
-  const h = H % 12 === 0 ? 12 : H % 12;
-  return `${h}:${String(M).padStart(2, "0")} ${ap}`;
-};
-const mgrName = (m: Mgr): string | null => m ? (m.name ?? ([m.firstName, m.lastName].filter(Boolean).join(" ").trim() || null)) : null;
-const mgrDeleted = (m: Mgr, id: number | null) => id != null && (!m || !!m?.deletedAt || !mgrName(m));
 
 export default function MatchDrawer({
   apiId, cardVeo, siblings, onClose, onDirtyChange, onSaved, onToggleVeo, onStep, onToast,
@@ -91,79 +77,36 @@ export default function MatchDrawer({
   onStep: (targetId: number) => void;
   onToast: (msg: string, warn?: boolean) => void;
 }) {
-  const { appUser } = useAuth();
-  const canEdit = canEditMatches(appUser); // courtesy gate; the server write path holds
   const [detail, setDetail] = useState<Detail | null>(null);
   const [loadErr, setLoadErr] = useState<string | null>(null);
-  const [loaded, setLoaded] = useState<State | null>(null);
-  const [state, setState] = useState<State | null>(null);
-  const [saving, setSaving] = useState(false);
-  const [msg, setMsg] = useState<{ kind: "ok" | "err" | "warn"; text: string } | null>(null);
+  const [saving] = useState(false);   // header disables the arrows while a save is in flight
   const panelRef = useRef<HTMLDivElement | null>(null);
 
-  // Load the staging match detail whenever the open id changes.
+  /* THE DRAWER NO LONGER OWNS A FORM. It loads the match for THREE header facts only — the city
+   * crumb, the timezone chip and the title — and MatchEditor loads the match itself for editing.
+   * Two reads of the same id, deliberately: the alternative is threading a loaded match through a
+   * prop and having two components disagree about which one is authoritative.
+   *
+   * Everything that used to live here — its own state, diff, save, revert, date pair, manager
+   * dropdown, timezone warning and deleted-manager note — is GONE. The last three were not
+   * deleted but MOVED into MatchEditor, because they were capabilities rather than presentation. */
   useEffect(() => {
-    let alive = true;
-    setDetail(null); setLoaded(null); setState(null); setLoadErr(null); setMsg(null);
+    let live = true;
     (async () => {
+      setDetail(null); setLoadErr(null);
       const res = await authFetch(`/api/matchday/${DRAWER_ENV}/matches/${apiId}`);
       const json = await res.json().catch(() => ({}));
-      if (!alive) return;
+      if (!live) return;
       if (!res.ok) { setLoadErr(json?.error ?? `HTTP ${res.status}`); return; }
-      const d = json as Detail;
-      const m = d.match;
-      const start = m.startDate ?? "";
-      const base: State = {
-        date: start ? wallDate(start) : "", time: start ? wallTime(start) : "",
-        startDate: m.startDate, endDate: m.endDate,
-        fieldId: m.fieldId, name: m.name ?? "",
-        registrationPrice: m.registrationPrice, additionalSpotPrice: m.additionalSpotPrice, guestCount: m.guestCount,
-        managerId: m.managerId, secondManagerId: m.secondManagerId,
-      };
-      setDetail(d); setLoaded(base); setState(JSON.parse(JSON.stringify(base)));
+      setDetail(json as Detail);
     })();
-    return () => { alive = false; };
+    return () => { live = false; };
   }, [apiId]);
 
-  // Focus the panel (not an input) when it opens — landing in a time box reads
-  // like the field is already being edited.
-  useEffect(() => { if (loaded) panelRef.current?.focus(); }, [loaded]);
+  useEffect(() => { if (detail) panelRef.current?.focus(); }, [detail]);
 
-  const inverted = useMemo(() => {
-    const s = detail?.match.startDate, e = detail?.match.endDate;
-    return !!(s && e && isInvertedPair(s, e));
-  }, [detail]);
-
-  // changed keys for the UI (date/time separate + the seven real fields).
-  const uiChanged = useMemo(() => {
-    if (!loaded || !state) return [] as string[];
-    const out: string[] = [];
-    if (!inverted) {
-      if (state.date !== loaded.date) out.push("date");
-      if (state.time !== loaded.time) out.push("time");
-    }
-    out.push(...diffKeys(REAL_KEYS, loaded, state));
-    return out;
-  }, [loaded, state, inverted]);
-
-  const dirty = uiChanged.length > 0;
-  useEffect(() => { onDirtyChange(dirty); }, [dirty, onDirtyChange]);
-
-  // The request body: real changed fields (shared pick), plus — only if the day
-  // or time moved — the startDate/endDate PAIR, duration preserved.
-  const buildBody = useCallback((): Record<string, unknown> => {
-    if (!loaded || !state) return {};
-    const realChanged = diffKeys(REAL_KEYS, loaded, state);
-    const body = pick(state, realChanged);
-    if (!inverted && (state.date !== loaded.date || state.time !== loaded.time)) {
-      const newStart = buildStartDate(state.date, state.time);
-      body.startDate = newStart;
-      body.endDate = shiftedEndDate(String(loaded.startDate), String(loaded.endDate), newStart);
-    }
-    return body;
-  }, [loaded, state, inverted]);
-
-  const set = (k: string, v: unknown) => setState((s) => (s ? { ...s, [k]: v } : s));
+  const [dirty, setDirty] = useState(false);
+  const reportDirty = useCallback((d: boolean) => { setDirty(d); onDirtyChange(d); }, [onDirtyChange]);
 
   const requestClose = useCallback(() => {
     if (dirty) { onToast(`Save or revert match ${apiId} first.`, true); return; }
@@ -184,88 +127,10 @@ export default function MatchDrawer({
     return () => window.removeEventListener("keydown", onKey);
   }, [requestClose]);
 
-  const revert = () => { if (loaded) setState(JSON.parse(JSON.stringify(loaded))); };
-
-  const save = async () => {
-    const body = buildBody();
-    const keys = Object.keys(body);
-    if (!keys.length) return;
-    setSaving(true); setMsg(null);
-    const res = await authFetch(`/api/matchday/${DRAWER_ENV}/matches/${apiId}`, { method: "PUT", body: JSON.stringify({ changes: body }) });
-    const json = await res.json().catch(() => ({}));
-    setSaving(false);
-    if (!res.ok) { setMsg({ kind: json?.ambiguous ? "warn" : "err", text: json?.error ?? `HTTP ${res.status}` }); return; }
-    noteLogResponse(json); // the write landed; if the Change Log couldn't record it, make it loud
-    // Rebase loaded onto the saved match and patch the card in place (no refetch).
-    const m = (json.match ?? {}) as Detail["match"];
-    const nextStart = m.startDate ?? state!.startDate;
-    const rebased: State = {
-      ...state!, startDate: nextStart, endDate: m.endDate ?? state!.endDate,
-      date: nextStart ? wallDate(String(nextStart)) : state!.date, time: nextStart ? wallTime(String(nextStart)) : state!.time,
-    };
-    setDetail((d) => (d ? { ...d, match: { ...d.match, ...m } } : d));
-    setLoaded(JSON.parse(JSON.stringify(rebased))); setState(JSON.parse(JSON.stringify(rebased)));
-    setMsg({ kind: "ok", text: `Saved ${keys.length} field${keys.length === 1 ? "" : "s"} to match ${apiId}.` });
-    const f = detail?.fields.find((x) => x.id === Number(rebased.fieldId));
-    onSaved(apiId, {
-      name: String(rebased.name ?? ""), startDate: String(nextStart ?? ""),
-      fieldId: Number(rebased.fieldId), venue: f?.title ?? m.fieldTitle ?? null, city: f?.city ?? m.cityName ?? null,
-    });
-  };
-
-  // ---- render ----------------------------------------------------------------
+  // THE HEADER'S THREE FACTS, and nothing else. The form that used the rest is gone.
   const m = detail?.match;
-  const curField = detail?.fields.find((f) => f.id === Number(state?.fieldId));
-  const loadedField = detail?.fields.find((f) => f.id === Number(loaded?.fieldId));
-  const cityName = curField?.city ?? m?.cityName ?? null;
+  const cityName = m?.cityName ?? null;
   const tzLabel = tzLabelOfCity(cityName);
-  const shift = state && loaded ? tzShift(loadedField?.city ?? m?.cityName, curField?.city) : null;
-
-  const delManagers: string[] = [];
-  if (m) {
-    if (mgrDeleted(m.manager, Number(loaded?.managerId ?? m.managerId) || null)) delManagers.push("Manager");
-    if (mgrDeleted(m.secondManager, Number(loaded?.secondManagerId ?? m.secondManagerId) || null)) delManagers.push("Second manager");
-  }
-
-  // Manager dropdown scoped to the match's city (GET /city-managers/users). A
-  // currently-selected managerId that is NOT in the returned list stays selected
-  // and labelled — it is never blanked (blanking would report a change the admin
-  // did not make and then save it).
-  const managers = detail?.managers ?? [];
-  const managerSelect = (key: "managerId" | "secondManagerId", mgrObj: Mgr) => {
-    const cur = state?.[key] as number | null | undefined;
-    const curId = cur == null || cur === ("" as unknown) ? null : Number(cur);
-    const inList = curId == null || managers.some((x) => x.id === curId);
-    const outLabel = mgrName(mgrObj) ?? `id ${curId}`;
-    return (
-      <select data-testid={`in-${key}`} value={curId == null ? "" : String(curId)}
-        onChange={(e) => set(key, e.target.value === "" ? null : Number(e.target.value))}>
-        <option value="">— none —</option>
-        {!inList && curId != null && <option value={String(curId)}>{outLabel} (not in {cityName ?? "city"} list)</option>}
-        {managers.map((x) => <option key={x.id} value={String(x.id)}>{x.name}</option>)}
-      </select>
-    );
-  };
-
-  const showVal = (k: string, v: unknown) => {
-    if (v === null || v === "" || v === undefined) return "none";
-    if (k === "fieldId") return detail?.fields.find((f) => f.id === Number(v))?.title ?? String(v);
-    if (k === "time") return hhmm12(String(v));
-    if (MONEY_KEYS.has(k)) return money(v);
-    return String(v);
-  };
-  const blank = (v: unknown) => v === "" || v == null || (typeof v === "number" && Number.isNaN(v));
-
-  const numBlur = (k: string, fmt: (v: unknown) => string) => () => {
-    // A blank numeric box is a half-typed number, not a change (Revert stays
-    // disabled), so restore the loaded value on blur — otherwise it sits empty.
-    setState((s) => (s && (s[k] === "" || s[k] == null) ? { ...s, [k]: loaded![k] } : s));
-    void fmt;
-  };
-
-  const grp = (keys: string[]) => uiChanged.filter((k) => keys.includes(k)).length;
-  const grpTag = (keys: string[]) => { const n = grp(keys); return n ? <span className="mdw-n">{n} changed</span> : null; };
-  const dirtyCls = (k: string) => "mdw-f" + (uiChanged.includes(k) ? " mdw-dirty" : "");
 
   const badge = envBadge(DRAWER_ENV); // derived from the env that routes the request
   return (
@@ -290,135 +155,36 @@ export default function MatchDrawer({
             <button type="button" className="mdw-iconb" data-testid="dr-close" title="Close (Esc)" aria-label="Close" onClick={requestClose}>✕</button>
           </div>
         </div>
-        <h3 className="mdw-name" data-testid="dr-title">{m ? (String(loaded?.name ?? "") || "Untitled match") : `Loading match ${apiId}…`}</h3>
+        <h3 className="mdw-name" data-testid="dr-title">{m ? (String(m.name ?? "") || "Untitled match") : `Loading match ${apiId}…`}</h3>
         <div className="mdw-chips">
           <span className="mdw-chip id">ID {apiId}</span>
           <span className="mdw-chip tz" data-testid="dr-tzchip">{tzLabel.toUpperCase()}</span>
           <span className={"mdw-chip " + (badge.tone === "prod" ? "prod" : "stg")} data-testid="dr-envbadge">{badge.tone === "prod" ? "● " : ""}{badge.label}</span>
-          {SAME_ENV_AS_EDITOR ? <a className="mdw-full" data-testid="dr-fulleditor" href={`/match-ops/matches/${apiId}`}>Open full editor →</a> : null}
+          {/* "Open full editor →" is gone: this IS the full editor now, in a panel. A link to a
+              fuller one would have nowhere to go. */}
         </div>
       </div>
 
-      {loadErr ? (
-        <div className="mdw-body"><div className="mdw-state" data-testid="dr-error">Couldn’t load: {loadErr}</div></div>
-      ) : !m || !state || !loaded ? (
-        <div className="mdw-body"><div className="mdw-state">Loading…</div></div>
-      ) : (
-        <div className="mdw-body">
-          {inverted && (
-            <div className="mdw-inverted" data-testid="dr-inverted">
-              <b>This match ends before it starts.</b> Its end ({showTime(String(m.endDate))}) is on or before its start ({showTime(String(m.startDate))}). The date and time are held so an edit can’t quietly rewrite a broken pair — fix it in the full editor. Other fields still save.
-            </div>
-          )}
+      {/* ── ONE EDITOR, RENDERED IN A PANEL ───────────────────────────────────────────────────
+          This used to be a second form: nine fields against the full editor's twenty-one, its own
+          diff, its own save, and its own copy of the date rules. Two editors on one route is how
+          they drift — the date sentence in the full editor described a restriction this drawer
+          ignored, and its writes logged with no source so nobody could tell which one had moved a
+          production match by eight and a half hours.
 
-          <div className="mdw-sec">
-            <h5>WHEN {grpTag(["date", "time"])}</h5>
-            <div className="mdw-two">
-              <div className={dirtyCls("date")}><label htmlFor="i-date">DATE</label>
-                <input id="i-date" data-testid="in-date" type="date" disabled={inverted} value={String(state.date)} onChange={(e) => set("date", e.target.value)} /></div>
-              <div className={dirtyCls("time")}><label htmlFor="i-time">START TIME</label>
-                <input id="i-time" data-testid="in-time" type="time" disabled={inverted} value={String(state.time)} onChange={(e) => set("time", e.target.value)} /></div>
-            </div>
-            <div className="mdw-tzline">Entered as local wall-clock time in <b data-testid="dr-tzname">{cityName} ({tzLabel})</b>. The server derives UTC from the field’s timezone — Clubhouse never converts.</div>
-          </div>
+          The drawer keeps what only a week grid needs: the header, the sibling arrows, the close,
+          and the production framing. Everything below it is MatchEditor. Same fields, same
+          validation, same save path, same audit entry — the only difference is the chrome. */}
+      <MatchEditor
+        id={String(apiId)}
+        variant="panel"
+        onDirtyChange={reportDirty}
+        veo={cardVeo}
+        onToggleVeo={(next: boolean) => onToggleVeo(apiId, next)}
+      />
 
-          <div className="mdw-sec">
-            <h5>WHERE {grpTag(["fieldId", "name"])}</h5>
-            <div className={dirtyCls("fieldId")}><label htmlFor="i-field">FIELD</label>
-              <select id="i-field" data-testid="in-field" value={String(state.fieldId ?? "")} onChange={(e) => set("fieldId", Number(e.target.value))}>
-                {detail.fields.map((f) => <option key={f.id} value={f.id}>{f.title}{f.city ? ` — ${f.city}` : ""}</option>)}
-              </select>
-              {shift && (
-                <div className="mdw-hint warn" data-testid="dr-tzwarn">
-                  Moving from {shift.fromLabel} to {shift.toLabel}. The clock stays {hhmm12(String(state.time))} — that is {shift.hours === 1 ? "one hour" : `${shift.hours} hours`} {shift.direction} in real terms.
-                </div>
-              )}
-            </div>
-            <div className={dirtyCls("name")}><label htmlFor="i-name">MATCH NAME</label>
-              <input id="i-name" data-testid="in-name" type="text" value={String(state.name ?? "")} onChange={(e) => set("name", e.target.value)} /></div>
-          </div>
-
-          <div className="mdw-sec">
-            <h5>MONEY {grpTag(["registrationPrice", "additionalSpotPrice", "guestCount"])}</h5>
-            <div className="mdw-three">
-              <div className={dirtyCls("registrationPrice")}><label htmlFor="i-price">PRICE</label>
-                <div className="mdw-money"><span>$</span><input id="i-price" data-testid="in-registrationPrice" type="number" step="0.01" min="0"
-                  value={blank(state.registrationPrice) ? "" : dollars(state.registrationPrice)}
-                  onChange={(e) => set("registrationPrice", e.target.value === "" ? "" : centsOf(e.target.value))}
-                  onBlur={numBlur("registrationPrice", dollars)} /></div></div>
-              <div className={dirtyCls("additionalSpotPrice")}><label htmlFor="i-spot">SPOT PRICE</label>
-                <div className="mdw-money"><span>$</span><input id="i-spot" data-testid="in-additionalSpotPrice" type="number" step="0.01" min="0"
-                  value={blank(state.additionalSpotPrice) ? "" : dollars(state.additionalSpotPrice)}
-                  onChange={(e) => set("additionalSpotPrice", e.target.value === "" ? "" : centsOf(e.target.value))}
-                  onBlur={numBlur("additionalSpotPrice", dollars)} /></div></div>
-              <div className={dirtyCls("guestCount")}><label htmlFor="i-guest">GUEST COUNT</label>
-                <input id="i-guest" data-testid="in-guestCount" type="number" min="0" step="1"
-                  value={blank(state.guestCount) ? "" : String(state.guestCount)}
-                  onChange={(e) => set("guestCount", e.target.value === "" ? "" : Number(e.target.value))}
-                  onBlur={numBlur("guestCount", (v) => String(v))} /></div>
-            </div>
-            <div className="mdw-hint">Stored in cents. Clearing a box is not a change — type 0 to actually set a price to zero.</div>
-          </div>
-
-          <div className="mdw-sec">
-            <h5>WHO {grpTag(["managerId", "secondManagerId"])}</h5>
-            <div className="mdw-two">
-              <div className={dirtyCls("managerId")}><label htmlFor="i-mgr1">MANAGER</label>
-                {managerSelect("managerId", m.manager)}
-                {mgrName(m.manager) ? <div className="mdw-sub">{mgrName(m.manager)}</div> : null}</div>
-              <div className={dirtyCls("secondManagerId")}><label htmlFor="i-mgr2">SECOND MANAGER</label>
-                {managerSelect("secondManagerId", m.secondManager)}
-                {mgrName(m.secondManager) ? <div className="mdw-sub">{mgrName(m.secondManager)}</div> : null}</div>
-            </div>
-            {delManagers.length > 0 && (
-              <div className="mdw-hint warn" data-testid="dr-delnote">
-                {delManagers.join(" and ")} {delManagers.length === 1 ? "points" : "point"} at a deleted or unresolved account. The id is kept exactly as loaded — nothing is blanked, so opening the match reports no change you did not make.
-              </div>
-            )}
-          </div>
-
-          <div className="mdw-sec">
-            <h5>VEO COVERAGE</h5>
-            <div className="mdw-veorow">
-              <div><div className="mdw-lab">Camera assigned</div>
-                <div className="mdw-sub">{cardVeo ? "Counted in this week’s camera nights." : "This match is not covered."}</div></div>
-              <button type="button" className={"mdw-sw" + (cardVeo ? " on" : "")} role="switch" aria-checked={cardVeo} data-testid="dr-veo"
-                aria-label="Camera assigned" onClick={() => onToggleVeo(apiId, !cardVeo)}><i /></button>
-            </div>
-            <div className="mdw-hint">Veo lives in Clubhouse, not the MatchDay API — it saves the instant you flip it and stays out of the list below.</div>
-          </div>
-        </div>
-      )}
-
-      <div className="mdw-foot">
-        {dirty && loaded && state && (
-          <div className="mdw-diff" data-testid="dr-diff">
-            <div className="mdw-dt">ABOUT TO CHANGE</div>
-            <div className="mdw-chipsrow">
-              {uiChanged.map((k) => (
-                <span className="mdw-dchip" key={k} data-testid="dr-chip" data-key={k}>
-                  <b>{LABEL[k]}</b> <s>{showVal(k, loaded[k])}</s> → <em>{showVal(k, state[k])}</em>
-                </span>
-              ))}
-            </div>
-            <div className="mdw-fine">This list is the request. The API leaves out what you omit, so only these fields are sent — nothing you did not touch can be overwritten.{uiChanged.includes("date") || uiChanged.includes("time") ? " A time change sends startDate and endDate together to keep the match’s length." : ""}</div>
-          </div>
-        )}
-        <div className="mdw-acts">
-          <span className="mdw-cnt" data-testid="dr-cnt">{dirty ? `${uiChanged.length} ${uiChanged.length === 1 ? "change" : "changes"} not saved` : "No changes"}</span>
-          {msg && <span className="mdw-msg" data-testid="dr-msg" style={{ color: msg.kind === "ok" ? "#046B45" : msg.kind === "warn" ? "#7A5200" : "#A83120" }}>{msg.kind === "warn" ? "⚠ " : ""}{msg.text}</span>}
-          <div className="mdw-sp">
-            <button type="button" className="mdw-gh" data-testid="dr-revert" disabled={!dirty || saving} onClick={revert}>Revert</button>
-            <button type="button" className="mdw-go" data-testid="dr-save" disabled={!dirty || saving || !canEdit} onClick={save} title={!canEdit ? "Read-only — you don't have EDIT MATCHES" : undefined}>{saving ? "Saving…" : "Save"}</button>
-          </div>
-        </div>
-      </div>
     </aside>
   );
-}
-
-function showTime(iso: string): string {
-  return hhmm12(wallTime(iso)) + " " + wallDate(iso);
 }
 
 const CSS = `

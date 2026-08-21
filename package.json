@@ -11,7 +11,8 @@
     "verify:e2e": "node scripts/run-suites.mjs --e2e",
     "verify:e2e:quarantine": "node scripts/run-suites.mjs --e2e --quarantine",
     "postinstall": "git config core.hooksPath .githooks || true",
-    "check:copy-match": "node scripts/e2e/check-copy-match.mjs"
+    "check:copy-match": "node scripts/e2e/check-copy-match.mjs",
+    "check:one-editor": "node scripts/e2e/check-one-editor.mjs"
   },
   "dependencies": {
     "@supabase/supabase-js": "^2.104.1",
