@@ -289,14 +289,26 @@ console.log("\n── removed text ──");
   await page.selectOption('[data-testid="pace-kind"]', "total");
   await page.waitForTimeout(600);
 
-  // BOTH LEGEND KEYS SURVIVE — the caption lived in the same row, so removing it could have taken
+  // BOTH SERIES KEYS SURVIVE — the caption lived in the same row, so removing it could have taken
   // them with it.
+  //
+  // COUNTED AS SERIES KEYS ONLY, deliberately. The legend gained a THIRD key when partial buckets
+  // started being marked: a hollow dot explaining the hollow point on the line. A flat count of
+  // `[class*="dot"]` reads 3 now and would read 2 again if a series key were lost and the hollow
+  // one kept — the exact regression this line exists to catch. So the solid keys are counted apart
+  // from the hollow one.
   const legend = await page.evaluate(() => {
-    const dots = document.querySelectorAll('[data-testid="pace-card"] [class*="legend"] [class*="dot"]');
+    const all = [...document.querySelectorAll('[data-testid="pace-card"] [class*="legend"] [class*="dot"]')];
+    const hollow = all.filter((d) => /dotHollow/.test(d.className));
     const row = document.querySelector('[data-testid="pace-card"] [class*="legend"]');
-    return { keys: dots.length, text: row?.innerText.replace(/\n/g, " | ") ?? "" };
+    return { keys: all.length - hollow.length, hollow: hollow.length, text: row?.innerText.replace(/\n/g, " | ") ?? "" };
   });
-  eq("both legend keys survive", legend.keys, 2);
+  eq("both series legend keys survive", legend.keys, 2);
+  // The hollow key is present exactly when the chart drew a hollow point — never a stray key.
+  {
+    const dots = await page.locator('[data-testid="pace-dot-partial"]').count();
+    eq("  …and the hollow key appears exactly when a partial point is drawn", legend.hollow, dots > 0 ? 1 : 0);
+  }
   console.log(`     legend: ${legend.text}`);
 }
 

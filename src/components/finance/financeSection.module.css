@@ -292,6 +292,20 @@
   color: color-mix(in srgb, var(--deep-green, #12352b) 75%, transparent);
 }
 
+/* THE PARTIAL NOTE, in the readout and in the legend. Same idea as ReviewsClient's
+   "PARTIAL WEEK — VOLUME NOT COMPARABLE": the point sits low for a calendar reason, and the reason
+   has to be readable without hovering. The legend key is a HOLLOW dot so it matches the marker on
+   the line rather than describing it in words alone. */
+.paceTipPartial {
+  margin-top: 6px; padding-top: 6px; border-top: 1px solid var(--cream-line, #e6e2d8);
+  font-size: 10.5px; font-weight: 700; letter-spacing: .02em;
+  color: color-mix(in srgb, var(--deep-green, #12352b) 60%, transparent);
+}
+.dotHollow {
+  display: inline-block; width: 9px; height: 9px; border-radius: 999px; margin-right: 5px;
+  vertical-align: middle; background: #fff; border: 2px solid #2fa36b; box-sizing: border-box;
+}
+
 /* ── THE BREAKDOWN CARD ─────────────────────────────────────────────────────────────────────
    One card for one job: toggle, count, filters and table under a single border. The toggle used
    to live at the foot of the MATCHDAY REVENUE card — a four-month summary it does not control —

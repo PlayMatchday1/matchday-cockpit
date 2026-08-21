@@ -1380,3 +1380,34 @@ month totals, so the "so far" mark is measured, not projected.
 Gating on the finance half alone put a real-looking **$0** in the revenue column of every city
 until the second landed. `CityPnlTable` still gates on `useFinanceData` only and has the same
 transient — not fixed here, and worth fixing.
+
+## The gate router decides on reachability, not on size (2026-08-21)
+
+**Gate route is decided by reachability to the MatchDay API. A diff that touches only Supabase
+reads or presentation routes to TYPECHECK even when it is large.** `scripts/gate-scope.mjs` walks
+the import graph and asks one question — can this path reach the MatchDay API or the gate itself.
+It is not a proxy for risk or for line count. This has now been argued twice from CLAUDE.md's
+"the full gate runs when the diff touches … a query", which means a MatchDay query; a Supabase
+read is not one. Evidence: the Revenue-pace rebuild (four files, ~700 lines, a new `fin_revenue`
+read) routed TYPECHECK, and every path in it reports `matchday-url=false`.
+
+## Finance period: changing GRAIN loses the point in time (2026-08-21)
+
+`FinanceShell.tsx:84` derives the period from the URL alone — `periodFromUrl(searchParams.get("p"))`
+— and `periodFor("year", new Date(y, 0, 1), now)` (`financePeriod.ts:199`) rebuilds the anchor as
+the period's **start**. So the `anchor` that `changeGrain` exists to carry is destroyed on every
+change, because `p=2026` cannot encode it.
+
+**Measured:** August 2026 → Q3 2026 → 2026 → Month lands on **January 2026**, not August.
+`financePeriod.ts:8` states "August 2026 widens to Q3 2026 and then to 2026, and narrowing comes
+back to August". It does not. The comment is the design; the URL round-trip is the implementation,
+and they disagree.
+
+The fix is carrying the anchor in the URL (`p=2026&a=2026-08` or similar). Not taken: it changes a
+shared shell that fifteen components read, and it is pre-existing — confirmed on `1f80da5`, before
+the pace rebuild, which touches none of the three files involved.
+
+**`verify-pace-grain.mjs` cannot catch a regression here.** It works around the drift by clicking
+`period-jump` after every grain change, because half of what it asserts — a running period, a
+partial trailing bucket — is only true of the current period. A fix or a regression in the anchor
+would leave that suite green either way.

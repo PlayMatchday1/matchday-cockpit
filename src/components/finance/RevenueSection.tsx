@@ -423,10 +423,36 @@ export default function RevenueSection() {
   }, [data, cities, cityFilter, shownFields, period, membershipScoped]);
 
 
+  /* THE PACE CARD IS NOT GATED ON THIS SECTION'S DATA, because it does not read any of it. It goes
+   * straight to fin_revenue and holds its own module-level cache.
+   *
+   * MEASURED: a switch to Quarter blanks this section for about 20 SECONDS while useMatchRangeData
+   * pages mdapi_match_players ~160 times, and the early return took the pace chart down with it —
+   * so the card the operator was looking at vanished for twenty seconds and came back. It now
+   * renders in about a second, above the message, while the rest of the section loads behind it.
+   * Nothing else here can render early: every tile below reads `data`. */
+  /* THE PLACEHOLDER TILES ROW IS LOad-BEARING, not decoration. React reconciles these children by
+   * POSITION, so the pace card has to sit at the same index in the loading tree as in the loaded one
+   * or it is unmounted and remounted the moment `data` arrives — which wipes a pinned readout out
+   * from under whoever was reading it. Caught by verify-pace-readout, not by inspection. */
   if (matchLoading || (primaryLoading && !data)) {
-    return <div className={s.empty}>Loading…</div>;
+    return (
+      <div className={s.wrap} data-testid="finance-revenue-loading">
+        <div className={s.tiles} />
+        <DailyRevenuePace />
+        <div className={s.empty}>Loading…</div>
+      </div>
+    );
   }
-  if (!data) return <div className={s.empty}>No finance data for this period.</div>;
+  if (!data) {
+    return (
+      <div className={s.wrap} data-testid="finance-revenue-nodata">
+        <div className={s.tiles} />
+        <DailyRevenuePace />
+        <div className={s.empty}>No finance data for this period.</div>
+      </div>
+    );
+  }
 
 
   /* SWITCHING VIEW KEEPS WHAT THE NEXT VIEW CAN STILL USE.
